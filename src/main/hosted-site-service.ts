@@ -1,0 +1,499 @@
+import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { lstat, open, readdir, readFile, realpath } from "node:fs/promises";
+import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  checkHostedSitePath,
+  HOSTED_SITE_HOST_ID_HEADER,
+  HOSTED_SITE_HOST_TOKEN_HEADER,
+  HOSTED_SITE_MIME_TYPES,
+  HOSTED_SITE_UPLOAD_LIMITS,
+  type HostedSitePathProblem,
+  parseHostedSiteList,
+  parseHostedSiteSummary,
+} from "@openbot/contracts/hosted-sites";
+import type {
+  HostedSiteFramework,
+  HostedSiteList,
+  HostedSiteSummary,
+  PublishHostedSiteInput,
+  ReplaceHostedSiteInput,
+} from "@openbot/contracts/ipc";
+import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import { type SourceMessages, sourceText } from "@openbot/i18n/source";
+import { isMissingFileError } from "../backend/file-errors";
+
+const PATH_PROBLEM_KEYS = {
+  invalid: "error.site.unsafePath",
+  hidden: "error.site.hiddenFile",
+  unsafe: "error.site.unsafePath",
+  secret: "error.site.secretFile",
+  archive: "error.site.fileType",
+} as const satisfies Record<HostedSitePathProblem, keyof SourceMessages>;
+
+interface PreparedFile {
+  path: string;
+  size: number;
+  mimeType: string;
+  bytes: Uint8Array;
+}
+
+interface PreparedSite {
+  framework: HostedSiteFramework;
+  files: PreparedFile[];
+}
+
+interface UploadSession {
+  uploadId: string;
+  expiresAt: string;
+}
+
+interface PendingUpload {
+  uploadKey: string;
+  activationKey: string;
+  session: UploadSession | null;
+  uploadedPaths: Set<string>;
+  createdAt: number;
+  inFlight: Promise<HostedSiteSummary> | null;
+}
+
+export interface HostedSiteAuthClient {
+  requestAuthorized<T>(path: string, init: RequestInit, decoder: (value: unknown) => T, timeoutMs?: number): Promise<T>;
+}
+
+/** The registered server of this computer and its machine token. The token is a secret: never log it. */
+export interface HostedSiteServerCredential {
+  hostId: string;
+  machineToken: string;
+}
+
+const UNLINKED_SCOPE = "?scope=unlinked";
+
+/**
+ * The sites of this computer's server. A computer that is a registered server proves it with its machine
+ * token, and its new sites count against the server's plan. Without a credential, the account's unlinked
+ * bucket holds the sites. The list shows both, because the unlinked sites belong to this computer's account.
+ */
+export class HostedSiteDesktopService {
+  readonly #pendingUploads = new Map<string, PendingUpload>();
+
+  constructor(
+    private readonly auth: HostedSiteAuthClient,
+    private readonly serverCredential: () => HostedSiteServerCredential | null = () => null,
+  ) {}
+
+  async list(): Promise<HostedSiteList> {
+    const credential = this.serverCredential();
+    const unlinked = this.auth.requestAuthorized(`/v1/sites/${UNLINKED_SCOPE}`, { method: "GET" }, decodeSiteList);
+    if (!credential) return unlinked;
+    const [server, account] = await Promise.all([
+      this.auth.requestAuthorized("/v1/sites/", { method: "GET", headers: serverHeaders(credential) }, decodeSiteList),
+      unlinked,
+    ]);
+    // A Worker older than server scopes returns every site to both reads. Show each site once.
+    const shown = new Set(server.sites.map((site) => site.id));
+    const unlinkedSites = account.sites.filter((site) => !shown.has(site.id));
+    return { sites: [...server.sites, ...unlinkedSites], limit: server.limit, used: server.used };
+  }
+
+  publish(input: PublishHostedSiteInput, allowedRoots?: readonly string[]): Promise<HostedSiteSummary> {
+    return this.upload(input, null, allowedRoots);
+  }
+
+  replace(input: ReplaceHostedSiteInput, allowedRoots?: readonly string[]): Promise<HostedSiteSummary> {
+    return this.upload(input, input.siteId, allowedRoots);
+  }
+
+  /** Deletes a site of this server, or an unlinked site of this account. Only for this computer's own user. */
+  async delete(siteId: string): Promise<void> {
+    const key = operationKey("delete");
+    const credential = this.serverCredential();
+    if (credential) {
+      try {
+        await this.deleteSite(siteId, key, serverHeaders(credential));
+        return;
+      } catch (error) {
+        // An unlinked site is not the server's. The Worker refuses it before it claims the key.
+        if (!(error instanceof Error && "code" in error && error.code === "site_other_server")) throw error;
+      }
+    }
+    await this.deleteSite(siteId, key, {}, UNLINKED_SCOPE);
+  }
+
+  /**
+   * The sites of this server only, for a member on a joined server. The unlinked sites belong to the owner's
+   * account, not to the server, so a member never sees or deletes them.
+   */
+  async listServerSites(): Promise<HostedSiteList> {
+    const credential = this.requireServerCredential();
+    const list = await this.auth.requestAuthorized(
+      "/v1/sites/",
+      { method: "GET", headers: serverHeaders(credential) },
+      decodeSiteList,
+    );
+    // A Worker older than server scopes ignores the credential and returns every site of the account.
+    if (list.sites.some((site) => site.serverId !== credential.hostId))
+      throw new Error(sourceText("error.team.hostedSitesUnsupported"));
+    return list;
+  }
+
+  async deleteServerSite(siteId: string): Promise<void> {
+    // A Worker that ignores the credential deletes any site of the owner, also one that its list does not show.
+    const { sites } = await this.listServerSites();
+    if (!sites.some((site) => site.id === siteId)) throw new Error(sourceText("error.team.hostedSiteNotFound"));
+    return this.deleteSite(siteId, operationKey("delete"), serverHeaders(this.requireServerCredential()));
+  }
+
+  /**
+   * A site that this computer published before it was a registered server is in the account's unlinked
+   * bucket. The Worker refuses it in the server scope before it claims the key, so the same key can update it.
+   */
+  private async createSession(
+    create: (headers: Record<string, string>, query?: string) => Promise<UploadSession>,
+    siteId: string | null,
+  ): Promise<UploadSession> {
+    const credential = this.serverCredential();
+    if (!credential) return create({});
+    try {
+      return await create(serverHeaders(credential));
+    } catch (error) {
+      if (siteId === null || !(error instanceof Error && "code" in error && error.code === "site_other_server"))
+        throw error;
+      return create({}, UNLINKED_SCOPE);
+    }
+  }
+
+  private requireServerCredential(): HostedSiteServerCredential {
+    const credential = this.serverCredential();
+    if (!credential) throw new Error(sourceText("error.team.hostedSitesUnregistered"));
+    return credential;
+  }
+
+  private async deleteSite(siteId: string, key: string, headers: Record<string, string>, query = ""): Promise<void> {
+    await this.auth.requestAuthorized(
+      `/v1/sites/${encodeURIComponent(siteId)}${query}`,
+      { method: "DELETE", headers: { "Idempotency-Key": key, ...headers } },
+      decodeDeleteResult,
+    );
+  }
+
+  private async upload(
+    input: PublishHostedSiteInput,
+    siteId: string | null,
+    allowedRoots?: readonly string[],
+  ): Promise<HostedSiteSummary> {
+    const prepared = await prepareSite(input.sourcePath, allowedRoots);
+    this.prunePendingUploads();
+    const signature = uploadSignature(input, siteId, prepared);
+    let pending = this.#pendingUploads.get(signature);
+    if (!pending) {
+      pending = {
+        uploadKey: operationKey(siteId ? "replace" : "publish"),
+        activationKey: operationKey("activate"),
+        session: null,
+        uploadedPaths: new Set(),
+        createdAt: Date.now(),
+        inFlight: null,
+      };
+      this.#pendingUploads.set(signature, pending);
+    }
+    if (!pending.inFlight) pending.inFlight = this.performUpload(input, siteId, prepared, pending);
+    try {
+      const site = await pending.inFlight;
+      this.#pendingUploads.delete(signature);
+      return site;
+    } catch (error) {
+      pending.inFlight = null;
+      throw error;
+    }
+  }
+
+  private async performUpload(
+    input: PublishHostedSiteInput,
+    siteId: string | null,
+    prepared: PreparedSite,
+    pending: PendingUpload,
+  ): Promise<HostedSiteSummary> {
+    const createSession = (headers: Record<string, string>, query = "") =>
+      retryTransport(() =>
+        this.auth.requestAuthorized(
+          `/v1/sites/${query}`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": pending.uploadKey,
+              ...headers,
+            },
+            body: JSON.stringify({
+              title: input.title,
+              description: input.description,
+              framework: prepared.framework,
+              ...(siteId === null || input.spaFallback !== undefined
+                ? { spaFallback: input.spaFallback ?? false }
+                : {}),
+              siteId,
+              files: prepared.files.map(({ path, size, mimeType }) => ({ path, size, mimeType })),
+            }),
+          },
+          decodeUploadSession,
+        ),
+      );
+    const session = pending.session ?? (await this.createSession(createSession, siteId));
+    pending.session = session;
+    for (const file of prepared.files) {
+      if (pending.uploadedPaths.has(file.path)) continue;
+      await retryTransport(() =>
+        this.auth.requestAuthorized(
+          `/v1/sites/uploads/${encodeURIComponent(session.uploadId)}/file?path=${encodeURIComponent(file.path)}`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": file.mimeType,
+              "Content-Length": String(file.size),
+            },
+            body: arrayBuffer(file.bytes),
+          },
+          decodeUploadResult,
+          30_000,
+        ),
+      );
+      pending.uploadedPaths.add(file.path);
+    }
+    return retryTransport(() =>
+      this.auth.requestAuthorized(
+        `/v1/sites/uploads/${encodeURIComponent(session.uploadId)}/activate`,
+        { method: "POST", headers: { "Idempotency-Key": pending.activationKey } },
+        decodeSite,
+        30_000,
+      ),
+    );
+  }
+
+  private prunePendingUploads(): void {
+    const now = Date.now();
+    for (const [signature, pending] of this.#pendingUploads) {
+      const serverExpiry = pending.session ? Date.parse(pending.session.expiresAt) : Number.NaN;
+      const expiresAt = Number.isFinite(serverExpiry)
+        ? serverExpiry
+        : pending.createdAt + HOSTED_SITE_UPLOAD_LIMITS.uploadLifetimeMs;
+      if (pending.inFlight === null && expiresAt <= now) this.#pendingUploads.delete(signature);
+    }
+  }
+}
+
+export async function prepareSite(sourcePath: string, allowedRoots?: readonly string[]): Promise<PreparedSite> {
+  if (!isAbsolute(sourcePath)) throw new Error(sourceText("error.site.absolutePath"));
+  const selectedRoot = resolve(sourcePath);
+  const selectedRootStats = await lstat(selectedRoot);
+  if (selectedRootStats.isSymbolicLink()) throw new Error(sourceText("error.site.rootSymlink"));
+  if (!selectedRootStats.isDirectory()) throw new Error(sourceText("error.site.notDirectory"));
+  const root = await realpath(selectedRoot);
+  if (allowedRoots?.length) {
+    const roots = await Promise.all(allowedRoots.map((candidate) => realpath(resolve(candidate))));
+    if (!roots.some((candidate) => isInside(candidate, root))) {
+      throw new Error(sourceText("error.site.outsideWorkspace"));
+    }
+  }
+  const framework = await detectFramework(root);
+  const output = framework === "astro" ? await staticAstroOutput(root) : root;
+  return { framework, files: await collectFiles(output) };
+}
+
+async function detectFramework(root: string): Promise<HostedSiteFramework> {
+  const packagePath = join(root, "package.json");
+  try {
+    const value = JSON.parse(await readFile(packagePath, "utf8"));
+    if (
+      isDynamicRecord(value) &&
+      [value.dependencies, value.devDependencies].some((group) => isDynamicRecord(group) && isString(group.astro))
+    ) {
+      return "astro";
+    }
+  } catch (error) {
+    if (!isMissingFileError(error)) throw new Error(sourceText("error.site.packageJsonInvalid"));
+  }
+  for (const name of ["astro.config.mjs", "astro.config.js", "astro.config.ts"]) {
+    try {
+      await lstat(join(root, name));
+      return "astro";
+    } catch (error) {
+      if (!isMissingFileError(error)) throw error;
+    }
+  }
+  return "vanilla";
+}
+
+async function staticAstroOutput(root: string): Promise<string> {
+  const configPath = await firstExisting(
+    ["astro.config.mjs", "astro.config.js", "astro.config.ts"].map((name) => join(root, name)),
+  );
+  if (configPath) {
+    const config = await readFile(configPath, "utf8");
+    if (/output\s*:\s*["'](?:server|hybrid)["']/u.test(config))
+      throw new Error(sourceText("error.site.astroServerOutput"));
+    if (/adapter|@astrojs\/react|integrations\s*:\s*\[[^\]]*react/isu.test(config)) {
+      throw new Error(sourceText("error.site.astroAdapter"));
+    }
+  }
+  const forbidden = [join(root, "src", "pages", "api"), join(root, "src", "actions")];
+  for (const path of forbidden) {
+    if (await exists(path)) throw new Error(sourceText("error.site.astroApiRoutes"));
+  }
+  const sourceEntries = await readdir(join(root, "src"), { recursive: true }).catch(() => []);
+  if (sourceEntries.some((entry) => /(^|\/)(?:middleware|[^/]+\.server)\.[cm]?[jt]s$/u.test(String(entry)))) {
+    throw new Error(sourceText("error.site.astroMiddleware"));
+  }
+  const output = join(root, "dist");
+  const stats = await lstat(output).catch((error: unknown) => {
+    if (isMissingFileError(error)) throw new Error(sourceText("error.site.astroNotBuilt"));
+    throw error;
+  });
+  if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error(sourceText("error.site.astroDistNotDirectory"));
+  const canonicalOutput = await realpath(output);
+  if (!isInside(root, canonicalOutput)) throw new Error(sourceText("error.site.astroDistOutside"));
+  return canonicalOutput;
+}
+
+async function collectFiles(root: string): Promise<PreparedFile[]> {
+  const files: PreparedFile[] = [];
+  let total = 0;
+  async function visit(directory: string): Promise<void> {
+    const canonicalDirectory = await realpath(directory);
+    if (!isInside(root, canonicalDirectory)) throw new Error(sourceText("error.site.directoryOutsideRoot"));
+    const entries = await readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const absolute = join(directory, entry.name);
+      const stats = await lstat(absolute);
+      if (stats.isSymbolicLink()) throw new Error(sourceText("error.site.symlink", { name: entry.name }));
+      if (stats.isDirectory()) {
+        await visit(absolute);
+        continue;
+      }
+      if (!stats.isFile()) throw new Error(sourceText("error.site.unsupportedEntry", { name: entry.name }));
+      if (files.length >= HOSTED_SITE_UPLOAD_LIMITS.files) {
+        throw new Error(sourceText("error.site.tooManyFiles", { limit: HOSTED_SITE_UPLOAD_LIMITS.files }));
+      }
+      const path = relative(root, absolute).split("\\").join("/");
+      const checked = checkHostedSitePath(path);
+      if ("problem" in checked) throw new Error(sourceText(PATH_PROBLEM_KEYS[checked.problem], { path }));
+      const mimeType = HOSTED_SITE_MIME_TYPES[extname(path).slice(1).toLowerCase()]?.[0];
+      if (!mimeType) throw new Error(sourceText("error.site.fileType", { path }));
+      const handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const openedStats = await handle.stat();
+        const canonicalFile = await realpath(absolute);
+        if (!openedStats.isFile() || !isInside(root, canonicalFile) || canonicalFile !== absolute) {
+          throw new Error(sourceText("error.site.fileOutsideRoot", { path }));
+        }
+        if (openedStats.size > HOSTED_SITE_UPLOAD_LIMITS.fileBytes)
+          throw new Error(sourceText("error.site.fileTooLarge", { path }));
+        total += openedStats.size;
+        if (total > HOSTED_SITE_UPLOAD_LIMITS.totalBytes) throw new Error(sourceText("error.site.siteTooLarge"));
+        files.push({ path, size: openedStats.size, mimeType, bytes: new Uint8Array(await handle.readFile()) });
+      } finally {
+        await handle.close();
+      }
+    }
+  }
+  await visit(root);
+  if (!files.some((file) => file.path === "index.html")) throw new Error(sourceText("error.site.missingIndex"));
+  return files;
+}
+
+function decodeSiteList(value: unknown): HostedSiteList {
+  const list = parseHostedSiteList(value);
+  if (!list) throw new Error("The site list response is invalid.");
+  return list;
+}
+
+function serverHeaders(credential: HostedSiteServerCredential | null): Record<string, string> {
+  if (!credential) return {};
+  return { [HOSTED_SITE_HOST_ID_HEADER]: credential.hostId, [HOSTED_SITE_HOST_TOKEN_HEADER]: credential.machineToken };
+}
+
+function decodeSite(value: unknown): HostedSiteSummary {
+  const site = parseHostedSiteSummary(value);
+  if (!site) throw new Error("The site response is invalid.");
+  return site;
+}
+
+function decodeUploadSession(value: unknown): UploadSession {
+  if (!isDynamicRecord(value) || !isString(value.uploadId) || !isString(value.expiresAt)) {
+    throw new Error("The upload session response is invalid.");
+  }
+  return { uploadId: value.uploadId, expiresAt: value.expiresAt };
+}
+
+function decodeUploadResult(value: unknown): undefined {
+  if (!isDynamicRecord(value) || value.uploaded !== true) throw new Error("The file upload response is invalid.");
+  return undefined;
+}
+
+function decodeDeleteResult(value: unknown): undefined {
+  if (!isDynamicRecord(value) || value.deleted !== true) throw new Error("The site deletion response is invalid.");
+  return undefined;
+}
+
+function operationKey(operation: string): string {
+  return `desktop:${operation}:${randomUUID()}`;
+}
+
+function uploadSignature(input: PublishHostedSiteInput, siteId: string | null, prepared: PreparedSite): string {
+  const hash = createHash("sha256");
+  hash.update(
+    JSON.stringify({
+      siteId,
+      title: input.title,
+      description: input.description,
+      spaFallback: input.spaFallback,
+      framework: prepared.framework,
+      files: prepared.files.map(({ path, size, mimeType }) => ({ path, size, mimeType })),
+    }),
+  );
+  for (const file of prepared.files) hash.update(file.bytes);
+  return hash.digest("hex");
+}
+
+async function retryTransport<T>(request: () => Promise<T>): Promise<T> {
+  try {
+    return await request();
+  } catch (error) {
+    if (!isTransportFailure(error)) throw error;
+    return request();
+  }
+}
+
+function isTransportFailure(error: unknown): boolean {
+  return (
+    error instanceof TypeError ||
+    (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError"))
+  );
+}
+
+function arrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
+function isInside(root: string, target: string): boolean {
+  const path = relative(root, target);
+  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+}
+
+async function firstExisting(paths: string[]): Promise<string | null> {
+  for (const path of paths) if (await exists(path)) return path;
+  return null;
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (isMissingFileError(error)) return false;
+    throw error;
+  }
+}

@@ -1,0 +1,220 @@
+# Repository guidance
+
+## Communication
+
+Use ASD-STE100 Simplified Technical English for all text you write: questions, updates,
+explanations, final answers, commit messages, PR descriptions, and review comments. Be as concise as
+possible. Keep quotations, code, commands, paths, identifiers, and required technical terms unchanged.
+
+When a step doesn't need the developer's input, keep going. Put status notes in the same message as
+your next action. Stop and ask only when you can't continue without the developer, or before
+anything destructive: deleting data, force-pushing, or changing anything outside this repository.
+
+For work with more than a few steps, keep a checklist in `TASKS.md` at the worktree root (git
+ignores it). Tick each item when it is done, and add new items that you find. The file stays
+available after the context is summarized.
+
+For an audit or migration that divides into independent areas, give each area to its own subagent.
+Check the evidence in each subagent's report before you accept it. Finish with one table.
+
+Mark each claim that you could not confirm, and say where you looked.
+
+**Non-negotiable** rules protect user data, released contracts, and security. Change them only on
+an explicit developer decision. All other rules are defaults: follow the developer's preference
+and state which default you set aside. Do not argue by citing this file.
+
+## Non-negotiable
+
+- **Migrations are irreversible.** No backup of `openbot.db` is made before an upgrade. Preserve all
+  user data and support every shipped source schema. Never assume a backup exists.
+- **Released Team API adapters are permanent.** Do not change a shipped wire protocol's meaning.
+- **Keep the renderer-to-main trust boundary:** Electron sandboxing, context isolation, navigation
+  policy, IPC sender validation, and their tests. Coding agents already have `danger-full-access`.
+- **Redact secrets** on every log, export, and send path, including diagnostics and analytics.
+- **Keep PolyForm Noncommercial 1.0.0.** Do not add incompatible dependencies or relicense files.
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md#security-sensitive-changes) when a change touches the trust
+boundary or a security test, and [architecture change rules](docs/ARCHITECTURE.md#change-rules) when
+adding a module or moving ownership between workspaces.
+
+## Product constraints
+
+- Workspaces, conversations, attachments, browser data, and team data stay on the computer that
+  runs OpenBot. Providers, visited pages, and plugins can use the network.
+- Cloudflare holds accounts, avatars, host configuration, memberships, invitations, and logical
+  sessions; it does not hold chats, files, or commands.
+- The user's SQLite database is the source of truth, not a remote cache.
+- Agents keep their workspace, thread, and identity across provider switches and restarts.
+  Do not reset an agent to simplify state.
+
+## Shared UI
+
+`packages/ui` (`@openbot/ui`) owns shared SolidJS controls and feature components used by
+desktop, public web, and Storybook. Reuse these components before adding UI. Import primitives
+from `@openbot/ui` and feature components from explicit subpaths such as
+`@openbot/ui/features/sidebar/Sidebar`. Do not copy them back into an app.
+
+Keep shared components independent of application contexts, desktop storage, host connections,
+and `window.openbot`. Pass data and actions through typed props. Platform adapters and the main
+conversation controller stay in the renderer. Component extraction must preserve the existing
+UI, styles, and behavior unless the user requests a design change. Native mobile shares brand
+tokens and contracts; it does not render SolidJS DOM components.
+
+Read [packages/ui/AGENTS.md](packages/ui/AGENTS.md) before changing shared UI.
+
+## Interface text
+
+Text that a user reads comes from `@openbot/i18n` catalog keys, on desktop, web and mobile. Do not
+write a literal. Errors that the main process, backend or team client send use `sourceText(key)`.
+Read [docs/i18n.md](docs/i18n.md) before adding a key or a language.
+
+## Checks
+
+Do not run broad checks locally. They overload the user's computer. This explicit user preference
+replaces the previous full lint and typecheck defaults. Leave repository-wide lint, aggregate
+`bun run typecheck`, full UI checks, builds, and full test suites to CI. Do not request these checks
+as a routine completion or PR step.
+
+1. In a fresh worktree, run `bun install --frozen-lockfile` first.
+2. Run only the narrowest relevant test file and lint the changed files. Run checks one at a time, with one test worker where supported.
+   Use `bun run test:desktop -- <path>` for one desktop or mobile test file.
+3. To check types, run one project for the code you changed, one at a time:
+   `bun run typecheck:node` (`src/main`, `src/backend`, `src/preload`, `scripts`),
+   `bun run typecheck:renderer` (`src/renderer`, `packages/ui`), or the `typecheck` script of the
+   one package or app you changed. Each takes under 10 seconds. Do not run `bun run typecheck`, the
+   mobile typecheck, or parallel checks. Leave broad type validation to CI and state what remains
+   unverified.
+4. Do not run `bun run format`: it rewrites the whole repository. Use
+   `biome check --write --max-diagnostics=none <paths>` for changed files.
+5. The pre-commit hook (`.githooks/pre-commit`) runs `check:staged`, `check:ui`, and
+   `bun run typecheck` when the commit stages code. This is the only exception to rule 3. Do not run
+   these checks by hand, and do not bypass the hook with `--no-verify`. The hook also runs the schema
+   parity test when a database schema file in `src/backend` is staged. It stops the commit if Biome
+   fixes a file that also has unstaged changes; stage the fixes you want and commit again.
+
+[Check design notes](docs/development-checks.md#check-coverage) explain CI coverage, command aliases,
+and the separate Node and Bun type environments. Read them when changing checks or dependencies.
+
+## Surfaces to check
+
+State which surfaces a change touches. Check all affected consumers and reverse actions.
+
+- Desktop renderer (`src/renderer`), mobile (`apps/mobile`), public web (`apps/auth-api`; no separate
+  landing app), hosted-site routing (`apps/site-router`), and Signal (`remote/api`).
+- IPC contracts (`packages/contracts`) and their preview implementation
+  (`src/renderer/src/preview/mock-openbot.ts`).
+- Reverse actions: snooze/unsnooze, pause/resume, revoke/reconnect, mute/unmute.
+- Migrations and the separate latest schema for new databases.
+- Documentation: `README.md` commands, `docs/ARCHITECTURE.md`, and `PRIVACY.md` when outbound data
+  changes.
+
+## Development data and processes
+
+- `bun run dev:seed --dry-run` is read-only.
+- Never kill by process pattern, such as `pkill -f electron` or `pkill -f bun`. `bun run dev:stop`
+  stops only this worktree's stack; name another one with `--pid=<supervisor pid>` or `--all`.
+  For a process outside the registry, target a PID you started or ask.
+- Never drive another worktree's app. Use `bun run dev:automation` for smoke checks instead of
+  starting Electron directly; `snapshot` and `screenshot` are read-only, and `click` and `type`
+  need `--allow-mutations` and a named instance.
+- Do not delete a dead stack record you did not resolve. Stop keeps the record and exits non-zero
+  when it cannot confirm a PID's identity; resolve the process, then `bun run dev:forget`. Dead
+  records do not reserve ports.
+- Reuse a running dev instance, or use `bun run dev --isolated` for a profile tied to this worktree.
+  Use the ports the stack reports rather than a fixed port.
+
+See [README.md — Commands](README.md#commands) for the flags these commands take, and
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for why the registry works this way, when a dev command
+does not behave as expected.
+
+## Terms
+
+- **bot** is not for new product code. Released names stay: Team API v1-v3 `bot`/`botId`,
+  `bots.json`, `legacy-import:bots:v1`, and `~/OpenBot/Bots` path prefixes.
+- **teammate** and **group** are prompt and UI words, never types.
+
+Use [docs/glossary.md](docs/glossary.md) when naming a new type, table, IPC channel or product
+string, or when a term in the code disagrees with the UI.
+
+## Task-specific instructions
+
+Read the instruction file for each directory you change. Use the
+[workspace map](docs/ARCHITECTURE.md#workspace-map) to find its owner.
+
+| File | Scope |
+| --- | --- |
+| [src/renderer/AGENTS.md](src/renderer/AGENTS.md) | SolidJS, stores, components, palette |
+| [src/main/AGENTS.md](src/main/AGENTS.md) | Renderer-to-main boundary and main-process ownership |
+| [src/main/ipc/AGENTS.md](src/main/ipc/AGENTS.md) | Handler binding and endpoint registration |
+| [src/backend/AGENTS.md](src/backend/AGENTS.md) | SQLite migrations and database creation |
+| [packages/contracts/AGENTS.md](packages/contracts/AGENTS.md) | Frozen Team API protocols and IPC mirrors |
+| [apps/auth-api/AGENTS.md](apps/auth-api/AGENTS.md) | Account Worker and D1 deployment races |
+| [src/preload/AGENTS.md](src/preload/AGENTS.md) | Preload bridge and payload decoding |
+| [packages/ui/AGENTS.md](packages/ui/AGENTS.md) | Shared SolidJS controls and feature components |
+| [packages/team-client/AGENTS.md](packages/team-client/AGENTS.md) | Team WebRTC client and framing |
+| [apps/mobile/AGENTS.md](apps/mobile/AGENTS.md) | Expo and build/simulator permissions |
+| [remote/api/AGENTS.md](remote/api/AGENTS.md) | Signal and TURN credentials |
+
+Write release notes in a new `changelog.d/<branch>.md` file, not in `CHANGELOG.md`, as
+[docs/RELEASING.md](docs/RELEASING.md#release-notes) says. Notes for the iPhone app go in
+`apps/mobile/changelog.d/<branch>.md`. CI fails a PR with no notes unless it
+has the `no-changelog` label. A version bump with no notes fails.
+
+Before a version bump or tag, use
+[release-upgrade-safety](.agents/skills/release-upgrade-safety/SKILL.md) to audit upgrade and data-loss
+risks since the last release.
+
+## Tests
+
+- Keep tests minimal. Do not add a regression test by default. Add a test only when a bug can lose
+  user data, break a released protocol, weaken the trust boundary, or leak a secret, or when the
+  same bug came back.
+- A database migration always needs tests: data-preservation fixtures for every affected released
+  schema, plus the failure and rollback cases that [src/backend/AGENTS.md](src/backend/AGENTS.md)
+  lists.
+- Highly prefer E2E tests as the sole testing mechanism. Use them to verify complex features work.
+  At the end of E2E tests, produce a verifiable and repeatable artifact, such as a JSON report or a
+  screenshot under `.openbot-build/`.
+- If you must test a system in isolation, first write down all the ways it could fail, then write
+  the code. Put the list in the PR body under "Failure modes": one line per failure, with the test
+  that covers it.
+- Do not assert what TypeScript, Biome, or `check:ui` already enforce.
+- Wait for state, an event, or a promise, not elapsed time. A spy can provide the wait condition,
+  such as `await waitFor(() => expect(send).toHaveBeenCalled())`; assert the user consequence after
+  that wait. Do not remove synchronization because it uses a spy.
+- Assert behavior and data. Query accessible roles and names; use `toHaveFocus()` for focus.
+  Do not assert markup, classes, layout, animation timing, or snapshots. Use exact text only for
+  product contracts, error/security messages, serialized output, or localization keys.
+- Use Storybook for visual details only. Do not add story `play` functions: CI does not run them.
+  Do not add `data-testid` hooks; `check:ui` allows none.
+- `*.test.ts` uses Node; `*.test.tsx` uses JSX and jsdom; `*.dom.test.ts` uses DOM without a
+  component. Keep pure logic in Node tests.
+
+### Check rules
+
+- Fix errors. Assess warnings; do not make correct code worse to silence one. Do not add
+  `biome-ignore`. Explain retained warnings in the PR.
+- GritQL rules must match syntax, not infer domain decisions, and must not duplicate a built-in
+  Biome rule. Consider traversal cost before adding a rule.
+- Each rule in `tools/biome/anti-slop/rules` needs positive and negative fixtures in `../fixtures`.
+  Mark rejected lines with `// flag`; verify with `scripts/anti-slop-rules.test.ts`.
+- Each UI check needs both `renderer` and `renderer-clean` fixtures in `tools/ui-foundation/fixtures`.
+  Verify with `scripts/ui-foundation-check.test.ts`.
+
+Read [check design notes](docs/development-checks.md#lint-and-ui-rules) when changing these checks.
+They describe the enforced syntax, fixture behavior, and reasons for removed rules.
+
+## Pull requests
+
+- Open a PR only when asked.
+- For UI changes, show before and after. State the model and harness in the PR body.
+  Do not commit screenshots or other PR review image assets to the repository.
+- Choose the NorbiAI reviewer level from the riskiest file in the diff with the
+  [reviewer table](CONTRIBUTING.md#choosing-the-reviewer-for-one-pull-request). Put the
+  `NorbiAI-Model:` line in the PR body as an HTML comment; omit it for the default. Do not add
+  `NorbiAI-Effort:` with a `chatgpt-web/*` model: it has no effect.
+- Do not run wider checks locally before a PR. Report focused checks and leave broad checks to CI.
+- A PR needs a named reason and is not auto-approvable if it adds `biome-ignore`, `@ts-expect-error`,
+  or `@ts-ignore`; disables rules through `biome.json` overrides or removes a GritQL plugin; widens
+  a boundary to `any` or `unknown`; or uses an assertion to bypass a checker. Fix the domain issue,
+  or explain why the rule is wrong and let the developer decide.

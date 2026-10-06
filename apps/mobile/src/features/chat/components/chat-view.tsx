@@ -1,0 +1,698 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { isLiquidGlassAvailable } from "expo-glass-effect";
+import { router, useIsFocused } from "expo-router";
+import { Button, Typography } from "heroui-native";
+import { useThemeColor } from "heroui-native/hooks";
+import { ArrowDown } from "lucide-react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AccessibilityInfo, AppState, Keyboard, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { KeyboardController, KeyboardGestureArea } from "react-native-keyboard-controller";
+import Animated, { useSharedValue } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scheduleOnRN } from "react-native-worklets";
+import { MobileConversationAnalytics } from "@/features/analytics/conversation";
+import { mobileAnalytics } from "@/features/analytics/mobile-analytics";
+import { ChatComposer } from "@/features/chat/components/chat-composer";
+import { ChatGlassIconButton } from "@/features/chat/components/chat-glass-icon-button";
+import { ChatHeader } from "@/features/chat/components/chat-header";
+import { ChatMessageList } from "@/features/chat/components/chat-message-list";
+import { type ChatAttachment, useChatAttachments } from "@/features/chat/components/use-chat-attachments";
+import { useChatMotion } from "@/features/chat/components/use-chat-motion";
+import type { QuestionPromptController } from "@/features/chat/components/use-question-prompt";
+import { type ChatBubbleMessage, useMessageActions } from "@/features/chat/context/message-actions-context";
+import { usePublishedQueuedChat } from "@/features/chat/context/queued-messages-context";
+import { type ChatMessage, type PendingChatMessage, presentChatMessages } from "@/features/chat/model/chat-messages";
+import { ConnectionStatus } from "@/features/workspace/components/connection-status";
+import { useBrowserRequests } from "@/features/workspace/components/use-live-workspace";
+import type { MobileAgent } from "@/features/workspace/context/mobile-workspace-context";
+import { useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
+import type { MobileAgentActivity } from "@/features/workspace/model/agent-activity";
+import { haptics } from "@/shared/lib/haptics";
+import { isIOS } from "@/shared/lib/platform";
+import { useText } from "@/shared/lib/text";
+import { useAppForeground } from "@/shared/lib/use-app-foreground";
+import { mentionDraft } from "../model/chat-mentions";
+import type { ChatHistoryReceipt } from "../model/chat-messages";
+import type { ChatTarget } from "../model/chat-target";
+import { takeComposerFocus, takeComposerRequest, useComposerRequest } from "../model/composer-requests";
+import { queueReceiptMessages } from "../model/queue-edit-draft";
+import { retainConfirmedAttachments } from "../model/upload-chat-attachments";
+import { rememberImageDimensions } from "./attachment-preview";
+import { BrowserSecretCard } from "./browser-secret-card";
+import { ChatAttachmentPanel } from "./chat-attachment-panel";
+import { ChatQueueButton } from "./chat-queue-button";
+import type { ChatQueueController } from "./use-chat-queue";
+
+export interface ChatViewProps {
+  target: ChatTarget;
+  queue?: ChatQueueController;
+  agents: MobileAgent[];
+  mentionAgents: MobileAgent[];
+  projectedMessages: ChatMessage[];
+  referenceMessages: ChatMessage[];
+  ready: boolean;
+  historyLoadFailed: boolean;
+  canSend: boolean;
+  readOnly?: boolean;
+  activity?: MobileAgentActivity;
+  activities?: MobileAgentActivity[];
+  activeTurnId: string | null;
+  /** Absent for a surface that cannot stop a turn, such as a read-only channel. */
+  stopTurn?: (turnId: string) => Promise<void>;
+  questionForm?: QuestionPromptController;
+  onSelectQuestion?: (messageId: string) => void;
+  readBoundary: string | null;
+  markRead: () => void;
+  fetchHistory: () => void;
+  hasOlder: boolean;
+  olderLoading: boolean;
+  olderError: boolean;
+  loadOlder: () => void;
+  send: (
+    body: string,
+    files: ChatAttachment[],
+    replyToMessageId: string | null,
+    upload?: {
+      cancelled: () => boolean;
+      progress: (completed: number) => void;
+      fileProgress: (fraction: number) => void;
+    },
+  ) => Promise<string | null | ChatHistoryReceipt>;
+  needsAction?: boolean;
+  notice?: string;
+}
+
+const CHAT_BACK_EDGE_WIDTH = 24;
+
+function leaveConversation(): void {
+  void KeyboardController.dismiss();
+  if (router.canGoBack()) router.back();
+  else router.replace("/connected");
+}
+
+export function ChatView({
+  target,
+  queue,
+  agents: serverAgents,
+  mentionAgents,
+  projectedMessages,
+  referenceMessages,
+  ready,
+  historyLoadFailed,
+  canSend,
+  readOnly = false,
+  activity,
+  activities,
+  activeTurnId,
+  stopTurn,
+  questionForm,
+  onSelectQuestion,
+  readBoundary,
+  markRead,
+  fetchHistory,
+  hasOlder,
+  olderLoading,
+  olderError,
+  loadOlder,
+  send,
+  needsAction = false,
+  notice,
+}: ChatViewProps) {
+  const { t, errorMessage } = useText();
+  const { respondToBrowserSecret, respondToBrowserTakeover, attachmentSupport } = useMobileWorkspace();
+  const browserRequests = useBrowserRequests(target.serverId);
+  const isFocused = useIsFocused();
+  const foregroundVisit = useAppForeground();
+  const [conversationAnalytics] = useState(() => new MobileConversationAnalytics(mobileAnalytics));
+  const [appActive, setAppActive] = useState(AppState.currentState === "active");
+  const [reducedTransparency, setReducedTransparency] = useState(true);
+  const insets = useSafeAreaInsets();
+  const keyboardOffset = Math.max(insets.bottom, 10) - 10;
+  const [foreground, muted, fieldBackground, raised, action, actionForeground, background] = useThemeColor([
+    "foreground",
+    "muted",
+    "default",
+    "surface-tertiary",
+    "accent",
+    "accent-foreground",
+    "background",
+  ]);
+  const { select: selectMessageActions } = useMessageActions();
+  const [replyTarget, setReplyTarget] = useState<ChatBubbleMessage | null>(null);
+  const [replyFocusVersion, setReplyFocusVersion] = useState(0);
+  const [draft, setDraft] = useState("");
+  const [sendError, setSendError] = useState<{ agentId: string; message: string } | null>(null);
+  const [sending, setSending] = useState(false);
+  const [historyReceipt, setHistoryReceipt] = useState<ChatHistoryReceipt | null>(null);
+  const [refreshingHistory, setRefreshingHistory] = useState(false);
+  const [sendRetryVersion, setSendRetryVersion] = useState(0);
+  const sendingRef = useRef(false);
+  const uploadCancelled = useRef(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  // The sent fraction of the file uploading now. The peer reports it once per whole percent.
+  const [fileProgress, setFileProgress] = useState(0);
+  const [uploadCancelRequested, setUploadCancelRequested] = useState(false);
+  const [pendingInQueue, setPendingInQueue] = useState(false);
+  const queryClient = useQueryClient();
+  const composerAttachments = useChatAttachments([], undefined, () => attachmentSupport(target.serverId));
+  const attachments = composerAttachments;
+  const submittedFiles = useRef<ChatAttachment[]>([]);
+  const [pendingMessage, setPendingMessage] = useState<PendingChatMessage | null>(null);
+  const [messageAliases, setMessageAliases] = useState<ReadonlyMap<string, string>>(new Map());
+  const sendSequence = useRef(0);
+  const [showStarter, setShowStarter] = useState(true);
+  const { servers } = useMobileWorkspace();
+  const queuePending = useMemo(
+    () =>
+      pendingInQueue && sending && pendingMessage
+        ? {
+            message: pendingMessage.message,
+            progress: uploadProgress,
+            total: submittedFiles.current.length,
+            cancel: () => {
+              uploadCancelled.current = true;
+            },
+          }
+        : null,
+    [pendingInQueue, sending, pendingMessage, uploadProgress],
+  );
+  usePublishedQueuedChat(queue?.chatId ?? `${target.serverId}:${target.id}`, queue ?? null, queuePending);
+  const queuedMessageIds = useMemo(
+    () =>
+      new Set(
+        queue?.deliveries
+          // Like desktop, a routine instruction stays in the chat below its marker.
+          .filter((item) => (item.status === "queued" || item.status === "cancelled") && item.sender.kind !== "routine")
+          .map((item) => item.id) ?? [],
+      ),
+    [queue?.deliveries],
+  );
+  const messages = useMemo(
+    () =>
+      presentChatMessages(
+        projectedMessages.filter((item) => !queuedMessageIds.has(item.id)),
+        pendingInQueue || (pendingMessage?.serverId && queuedMessageIds.has(pendingMessage.serverId))
+          ? null
+          : pendingMessage,
+        messageAliases,
+      ),
+    [projectedMessages, pendingMessage, pendingInQueue, messageAliases, queuedMessageIds],
+  );
+  useEffect(() => {
+    if (!pendingMessage?.serverId) return;
+    if (
+      retainConfirmedAttachments(
+        [...projectedMessages, ...queueReceiptMessages(queue?.deliveries ?? [])],
+        pendingMessage.serverId,
+        submittedFiles.current,
+        (id, file) => {
+          queryClient.setQueryData(["chat-attachment", target.serverId, id], file);
+        },
+      )
+    ) {
+      submittedFiles.current = [];
+      setPendingMessage(null);
+    }
+  }, [pendingMessage, projectedMessages, queue?.deliveries, queryClient, target.serverId]);
+  // The composer answers only after the person chooses it in the form. A private answer has its
+  // own masked field in the form, never the composer.
+  const answersQuestion = Boolean(
+    questionForm?.question && !questionForm.question.isSecret && questionForm.replyInChat,
+  );
+  const [answerFocusVersion, setAnswerFocusVersion] = useState(0);
+  useEffect(() => {
+    if (answersQuestion) setAnswerFocusVersion((version) => version + 1);
+  }, [answersQuestion]);
+  // Another screen, such as Agent info > Skills, can put text in this composer and close itself.
+  // Only a chat in front takes it: a chat under that screen is not the one the user returns to.
+  const composerRequest = useComposerRequest((state) => state.request);
+  useEffect(() => {
+    if (!isFocused || !composerRequest || target.kind !== "agent") return;
+    const text = takeComposerRequest(target.serverId, target.id);
+    if (!text) return;
+    setDraft((current) => (current ? `${current}\n${text}` : text));
+  }, [isFocused, composerRequest, target.kind, target.serverId, target.id]);
+  const composerFocus = useComposerRequest((state) => state.focus);
+  const [handoffFocusVersion, setHandoffFocusVersion] = useState(0);
+  useEffect(() => {
+    if (!isFocused || !composerFocus || target.kind !== "agent") return;
+    if (takeComposerFocus(target.serverId, target.id)) setHandoffFocusVersion((version) => version + 1);
+  }, [isFocused, composerFocus, target.kind, target.serverId, target.id]);
+  const lastUserId =
+    messages.findLast((message) => message.kind === "message" && message.author === "user")?.id ?? null;
+  const motion = useChatMotion(
+    insets.top + 84,
+    keyboardOffset,
+    ready,
+    lastUserId,
+    questionForm?.question ? (questionForm.messageId ?? null) : null,
+  );
+  const atLatest = motion.atLatest;
+  const liquidGlassAvailable = isLiquidGlassAvailable() && !reducedTransparency;
+  const server = servers.find((server) => server.id === target.serverId);
+  const serverOnline = server?.state === "online";
+  useEffect(() => {
+    conversationAnalytics.update(
+      isFocused && foregroundVisit,
+      ready,
+      historyLoadFailed || (!serverOnline && server?.initialConnectionPending === false),
+    );
+  }, [
+    conversationAnalytics,
+    isFocused,
+    foregroundVisit,
+    ready,
+    historyLoadFailed,
+    serverOnline,
+    server?.initialConnectionPending,
+  ]);
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => setAppActive(state === "active"));
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    void AccessibilityInfo.isReduceTransparencyEnabled().then((value) => {
+      if (mounted) setReducedTransparency(value);
+    });
+    const subscription = AccessibilityInfo.addEventListener("reduceTransparencyChanged", setReducedTransparency);
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, []);
+
+  // Opening a chat reads it, as on desktop. After the user scrolls away, only the latest message in view reads it.
+  const seesLatest = atLatest || (motion.historyVisible && !motion.userScrolled);
+  useEffect(() => {
+    if (!pendingMessage && isFocused && appActive && seesLatest && serverOnline && readBoundary) markRead();
+  }, [pendingMessage, isFocused, appActive, seesLatest, serverOnline, readBoundary, markRead]);
+
+  // The attachment card must not rebuild this gesture. A new gesture object
+  // makes GestureDetector re-attach around the whole chat, the input inside it
+  // is recreated, and the keyboard goes with it. Read the card's state in the
+  // gesture instead, so opening the card leaves the detector untouched.
+  const menuOpenValue = useSharedValue(false);
+  // The card's own open progress, shared with the composer: the plus fades
+  // back in on the frames the card fades out, so the corner is never empty.
+  const menuProgress = useSharedValue(0);
+  useEffect(() => {
+    menuOpenValue.set(attachments.menuOpen);
+  }, [attachments.menuOpen, menuOpenValue]);
+  const edgeBackGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .enabled(!isIOS)
+        .hitSlop({ left: 0, width: CHAT_BACK_EDGE_WIDTH })
+        .activeOffsetX(12)
+        .failOffsetX(-8)
+        .failOffsetY([-16, 16])
+        .onEnd((event) => {
+          if (menuOpenValue.get()) return;
+          if (event.translationX >= 48 || event.velocityX >= 650) scheduleOnRN(leaveConversation);
+        }),
+    [menuOpenValue],
+  );
+
+  async function retryAcceptedHistory() {
+    if (!historyReceipt || refreshingHistory) return;
+    setRefreshingHistory(true);
+    try {
+      await historyReceipt.refreshHistory();
+      submittedFiles.current = [];
+      setPendingMessage(null);
+      setHistoryReceipt(null);
+      setSendError(null);
+      void haptics.notification("success");
+    } catch (error) {
+      void haptics.notification("error");
+      setSendError({ agentId: target.id, message: errorMessage(error, t("mobile.chat.history.refreshFailed")) });
+    } finally {
+      setRefreshingHistory(false);
+    }
+  }
+
+  // Hold the turn the stop was asked for, not a flag: the host clears the turn
+  // when the stop lands, and the next turn must not inherit a pending state.
+  const [stoppingTurnId, setStoppingTurnId] = useState<string | null>(null);
+  const stopping = stoppingTurnId !== null && stoppingTurnId === activeTurnId;
+
+  const requestStop = useMemo(() => {
+    if (!stopTurn || !activeTurnId) return undefined;
+    const turnId = activeTurnId;
+    return () => {
+      setStoppingTurnId(turnId);
+      setSendError(null);
+      void haptics.impact();
+      stopTurn(turnId).catch((error: unknown) => {
+        void haptics.notification("error");
+        setStoppingTurnId((current) => (current === turnId ? null : current));
+        setSendError({
+          agentId: target.id,
+          message: errorMessage(error, t("mobile.chat.composer.stopFailed")),
+        });
+      });
+    };
+  }, [stopTurn, activeTurnId, target.id, errorMessage, t]);
+
+  function sendMessage(value: string): void {
+    if (!serverOnline || !canSend || sendingRef.current || pendingMessage) return;
+    const body = value.trim();
+    if (!body && attachments.items.length === 0) return;
+    // While the agent asks a question, the composer text is the answer. Files still go as a message.
+    if (answersQuestion && questionForm && attachments.items.length === 0) {
+      if (!body || questionForm.disabled) return;
+      Keyboard.dismiss();
+      void haptics.impact();
+      setDraft("");
+      questionForm.answer([mentionDraft(body).text]);
+      return;
+    }
+
+    setSendError(null);
+    const queueSend = Boolean(queue && (activeTurnId || queue.queued.length || queue.replies.length));
+    setPendingInQueue(queueSend);
+    if (!queueSend) motion.beginSend();
+    Keyboard.dismiss();
+
+    void haptics.impact();
+    setShowStarter(false);
+    setDraft("");
+    sendingRef.current = true;
+    setSending(true);
+    const submittedReply = replyTarget;
+    setReplyTarget(null);
+    const files = attachments.items;
+    submittedFiles.current = files;
+    // The sending message draws these images before the host knows them, at their real shape.
+    for (const file of files) if (file.dimensions) rememberImageDimensions(file.id, file.dimensions);
+    uploadCancelled.current = false;
+    setUploadCancelRequested(false);
+    setUploadProgress(0);
+    setFileProgress(0);
+    const localId = `local-message-${++sendSequence.current}`;
+    setPendingMessage({
+      message: {
+        id: localId,
+        kind: "message",
+        author: "user",
+        body,
+        streaming: false,
+        replyToMessageId: submittedReply?.id ?? null,
+        attachments: files.map((file) => ({
+          id: file.id,
+          name: file.name,
+          mimeType: file.mimeType,
+          size: file.size,
+          kind: file.mimeType.startsWith("image/") ? "image" : "file",
+          previewKind: "none",
+          previewUrl: file.mimeType.startsWith("image/")
+            ? (file.uri ?? `data:${file.mimeType};base64,${file.base64}`)
+            : null,
+        })),
+      },
+      baseline: new Set(projectedMessages.map((message) => message.id)),
+      serverId: null,
+    });
+    void (async () => {
+      try {
+        const serverId = await send(body, files, submittedReply?.id ?? null, {
+          cancelled: () => uploadCancelled.current,
+          progress: setUploadProgress,
+          fileProgress: setFileProgress,
+        });
+        if (serverId && typeof serverId === "object") {
+          setHistoryReceipt(serverId);
+        } else if (serverId) {
+          setMessageAliases((current) => new Map(current).set(serverId, localId));
+          setPendingMessage((current) => (current?.message.id === localId ? { ...current, serverId } : current));
+        } else {
+          // Channel commands acknowledge the operation, without a message ID. Use the
+          // refreshed host transcript; never guess a receipt from matching message text.
+          submittedFiles.current = [];
+          setPendingMessage(null);
+        }
+        attachments.clear();
+      } catch (error) {
+        submittedFiles.current = [];
+        motion.cancelSend();
+        setPendingMessage((current) => (current?.message.id === localId ? null : current));
+        setReplyTarget((current) => current ?? submittedReply);
+        setDraft((current) => (current ? `${body}\n${current}` : body));
+        setSendRetryVersion((version) => version + 1);
+        // A cancelled upload is the user's own choice: the files and text are back in the
+        // composer, and no error is needed to explain it.
+        if (!uploadCancelled.current) {
+          void haptics.notification("error");
+          setSendError({
+            agentId: target.id,
+            message: errorMessage(error, t("mobile.chat.composer.sendFailed")),
+          });
+        }
+      } finally {
+        sendingRef.current = false;
+        setSending(false);
+      }
+    })();
+  }
+
+  const replyToMessage = !readOnly
+    ? (message: ChatBubbleMessage) => {
+        setReplyTarget(message);
+        setReplyFocusVersion((version) => version + 1);
+      }
+    : undefined;
+
+  return (
+    <GestureDetector gesture={edgeBackGesture}>
+      <View className="flex-1" style={{ backgroundColor: background }}>
+        <View
+          className="flex-1"
+          // Nothing here may switch on the card: this view is an ancestor of
+          // the focused input, and each of pointerEvents and
+          // accessibilityElementsHidden can take first responder with it, and
+          // the keyboard with that. The card's own backdrop absorbs the taps,
+          // and its accessibilityViewIsModal hides this from VoiceOver on iOS.
+          // Android has no such flag, so it keeps the one prop that is its own.
+          importantForAccessibility={attachments.menuOpen ? "no-hide-descendants" : "auto"}
+        >
+          <KeyboardGestureArea
+            style={{ flex: 1 }}
+            textInputNativeID="chat-composer-input"
+            interpolator="ios"
+            // No offset. KeyboardGestureArea turns one into an invisible
+            // inputAccessoryView on the focused input, which makes the strip
+            // over the composer part of the keyboard: iOS then refuses to put
+            // the attachment menu on the plus it belongs to and floats it above
+            // that strip instead. A swipe down still dismisses the keyboard
+            // from the message list, only not from the composer itself.
+            enableSwipeToDismiss
+          >
+            <ChatHeader
+              target={target}
+              readOnly={readOnly}
+              needsAction={needsAction}
+              fallbackBackground={fieldBackground}
+              foreground={foreground}
+              liquidGlassAvailable={liquidGlassAvailable}
+              topInset={insets.top}
+              onBack={leaveConversation}
+            />
+            <ChatMessageList
+              agents={serverAgents}
+              target={target}
+              motion={motion}
+              sending={sending}
+              keyboardOffset={keyboardOffset}
+              canSend={serverOnline && canSend}
+              online={serverOnline}
+              activity={activity}
+              activities={activities}
+              historyState={
+                ready
+                  ? "ready"
+                  : server?.initialConnectionPending
+                    ? "connecting"
+                    : !serverOnline
+                      ? "waiting"
+                      : historyLoadFailed
+                        ? "error"
+                        : "loading"
+              }
+              appActive={appActive}
+              activeTurnId={activeTurnId}
+              questionForm={questionForm}
+              onSelectQuestion={onSelectQuestion}
+              fieldBackground={fieldBackground}
+              foreground={foreground}
+              messages={messages}
+              messageAliases={messageAliases}
+              referenceMessages={referenceMessages}
+              hasOlder={hasOlder}
+              olderLoading={olderLoading}
+              olderError={olderError}
+              onLoadOlder={loadOlder}
+              onReply={replyToMessage}
+              onOpenActions={(message) => {
+                Keyboard.dismiss();
+                selectMessageActions({
+                  message,
+                  onReply: replyToMessage ? () => replyToMessage(message) : null,
+                });
+                router.push("/message-actions");
+              }}
+              muted={muted}
+              raised={raised}
+              showStarter={
+                showStarter && serverOnline && canSend && ready && !activity && projectedMessages.length === 0
+              }
+              topInset={insets.top}
+              onDismissStarter={() => setShowStarter(false)}
+              onSelectStarter={sendMessage}
+              onRetryHistory={fetchHistory}
+              upload={
+                sending && pendingMessage && !pendingInQueue && submittedFiles.current.length > 0
+                  ? {
+                      messageId: pendingMessage.message.id,
+                      completed: uploadProgress,
+                      current: fileProgress,
+                      cancelling: uploadCancelRequested,
+                      cancel: () => {
+                        uploadCancelled.current = true;
+                        setUploadCancelRequested(true);
+                      },
+                    }
+                  : null
+              }
+            />
+            <Animated.View
+              style={[{ position: "absolute", left: 0, right: 0, bottom: 0 }, motion.composerStyle]}
+              pointerEvents="box-none"
+              onLayout={motion.onComposerLayout}
+            >
+              {!atLatest && motion.historyVisible && messages.length > 0 ? (
+                <View className="absolute -top-14 self-center">
+                  <ChatGlassIconButton
+                    accessibilityLabel={t("mobile.chat.scrollToLatest")}
+                    fallbackBackground={fieldBackground}
+                    liquidGlassAvailable={liquidGlassAvailable}
+                    onPress={motion.scrollToLatest}
+                  >
+                    <ArrowDown color={String(foreground)} size={22} />
+                  </ChatGlassIconButton>
+                </View>
+              ) : null}
+              <ConnectionStatus server={server} />
+              {serverOnline && appActive && isFocused && !readOnly
+                ? browserRequests
+                    .filter((request) =>
+                      target.kind === "agent"
+                        ? request.agentId === target.id
+                        : target.members.some((member) => member.id === request.agentId),
+                    )
+                    .map((request) => (
+                      <BrowserSecretCard
+                        key={`${target.serverId}:${request.requestId}`}
+                        request={request}
+                        respond={(input) => respondToBrowserSecret(target.serverId, input)}
+                        respondToTakeover={(decision) =>
+                          respondToBrowserTakeover(target.serverId, { requestId: request.requestId, decision })
+                        }
+                      />
+                    ))
+                : null}
+              {sendError?.agentId === target.id ? (
+                <Typography.Paragraph accessibilityRole="alert" className="bg-background px-4 py-2 text-danger-text">
+                  {sendError.message}
+                </Typography.Paragraph>
+              ) : null}
+              {historyReceipt ? (
+                <View className="bg-background px-4 py-2">
+                  <Typography.Paragraph className="text-muted">
+                    {t("mobile.chat.history.sentRefresh")}
+                  </Typography.Paragraph>
+                  <Button
+                    variant="tertiary"
+                    isDisabled={!serverOnline || refreshingHistory}
+                    onPress={() => void retryAcceptedHistory()}
+                  >
+                    <Button.Label>
+                      {refreshingHistory ? t("mobile.chat.history.refreshing") : t("mobile.chat.history.refresh")}
+                    </Button.Label>
+                  </Button>
+                </View>
+              ) : null}
+              {notice ? (
+                <Typography.Paragraph align="center" className="bg-background px-4 py-2 text-muted">
+                  {notice}
+                </Typography.Paragraph>
+              ) : null}
+              {queue ? (
+                <ChatQueueButton
+                  queue={queue}
+                  pending={queuePending}
+                  liquidGlassAvailable={liquidGlassAvailable}
+                  fallbackBackground={fieldBackground}
+                />
+              ) : null}
+              {!readOnly ? (
+                <ChatComposer
+                  sendRetryVersion={sendRetryVersion}
+                  replyTarget={replyTarget}
+                  replyFocusVersion={replyFocusVersion}
+                  focusVersion={answerFocusVersion}
+                  handoffFocusVersion={handoffFocusVersion}
+                  onCancelReply={() => setReplyTarget(null)}
+                  mentionAgents={mentionAgents}
+                  key={target.id}
+                  action={action}
+                  actionForeground={actionForeground}
+                  agentName={target.name}
+                  placeholder={answersQuestion ? t("mobile.chat.question.answerPlaceholder") : undefined}
+                  bottomInset={insets.bottom}
+                  disabled={!serverOnline || !canSend}
+                  sending={sending || Boolean(pendingMessage)}
+                  attachments={attachments}
+                  draft={draft}
+                  fallbackBackground={fieldBackground}
+                  foreground={foreground}
+                  liquidGlassAvailable={liquidGlassAvailable}
+                  muted={muted}
+                  raised={raised}
+                  onChangeDraft={setDraft}
+                  onSend={sendMessage}
+                  onStop={requestStop}
+                  keyboardProgress={motion.keyboardProgress}
+                  menuOpen={attachments.menuOpen}
+                  menuProgress={menuProgress}
+                  stopping={stopping}
+                />
+              ) : null}
+            </Animated.View>
+          </KeyboardGestureArea>
+        </View>
+        {/* Not gated on `appActive`. The camera permission prompt makes iOS
+            report the app inactive, and unmounting the card under it lost the
+            selection that asked for the prompt: the card came back on the
+            options and the first Camera never opened. The card stays and stops
+            its preview instead. */}
+        {attachments.menuAnchor && isFocused ? (
+          <ChatAttachmentPanel
+            anchor={attachments.menuAnchor}
+            appActive={appActive}
+            attachments={attachments}
+            fallbackBackground={fieldBackground}
+            foreground={foreground}
+            keyboardHeight={motion.keyboardHeight}
+            keyboardOffset={keyboardOffset}
+            liquidGlassAvailable={liquidGlassAvailable}
+            onClose={attachments.closeMenu}
+            progress={menuProgress}
+          />
+        ) : null}
+      </View>
+    </GestureDetector>
+  );
+}

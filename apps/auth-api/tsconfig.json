@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web",
+    "paths": {
+      "@openbot/renderer-preview": ["./src/types/renderer-preview.d.ts"],
+      "@openbot/renderer-web": ["./src/types/renderer-web.d.ts"]
+    },
+    "types": ["@cloudflare/workers-types", "vite/client", "@testing-library/jest-dom"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "test/**/*.ts",
+    "test/**/*.tsx",
+    "vite.config.ts",
+    "renderer-preview-alias.ts",
+    "render-content-images.ts",
+    "vitest.config.ts",
+    "vitest.client.config.ts"
+  ]
+}

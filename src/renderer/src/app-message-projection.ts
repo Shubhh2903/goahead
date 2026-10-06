@@ -1,0 +1,390 @@
+import type { AgentSummary, ConversationMessage, QueueDeliveryStatus } from "@openbot/contracts/ipc";
+import {
+  CONVERSATION_PLAN_ITEM_TYPE,
+  hostedSiteConversationEvent,
+  isContextResetMarker,
+  marketplaceSuggestionEvent,
+  parseConversationPlanText,
+  routineConversationEvent,
+  routineRunConversationEvent,
+  skillConversationEvent,
+} from "@openbot/contracts/ipc";
+import { cleanAgentMessageText } from "@openbot/team-client/agent-message-text";
+import type {
+  AgentDeliveryMarkerStatus,
+  AgentMessage,
+  AgentMessagePlan,
+  AgentProfile,
+  ChatActionMarkerModel,
+} from "@openbot/ui/data";
+import { formatChatTimestamp } from "@openbot/ui/features/conversation/chat-timestamp";
+import type { TaskListItem } from "@openbot/ui/features/conversation/TaskList";
+import { currentText } from "@openbot/ui/text";
+import { isRoutineEventItem } from "./features/conversation/conversation-read-state";
+
+export function toAgentProfile(stored: AgentSummary): AgentProfile {
+  return {
+    id: stored.id,
+    name: stored.name,
+    title: stored.title,
+    description: stored.description,
+    notifications: stored.notifications,
+    provider: stored.provider,
+    model: stored.model,
+    reasoningEffort: stored.reasoningEffort,
+    access: stored.access,
+    computerUse: stored.computerUse,
+    allowAutomation: stored.allowAutomation,
+    threadId: stored.threadId,
+    workspacePath: stored.workspacePath,
+    avatarSeed: stored.avatarSeed,
+    avatarHue: stored.avatarHue,
+    avatarUrl: stored.avatarUrl,
+    marketplaceSource: stored.marketplaceSource,
+    updatedAt: stored.updatedAt,
+    time: stored.updatedAt ? formatTime(stored.updatedAt) : currentText().t("chat.day.now"),
+    preview: cleanPreview(stored.preview),
+  };
+}
+
+export function toAgentMessage(message: ConversationMessage, ownerAgentId?: string): AgentMessage {
+  const exchangeSenderId = message.senderAgentId ?? message.exchange?.senderAgentId;
+  const routineEvent = routineConversationEvent(message);
+  const routineRunEvent = routineRunConversationEvent(message);
+  const hostedSiteEvent = hostedSiteConversationEvent(message);
+  const actionMarker = chatActionMarker(message, ownerAgentId, routineEvent, routineRunEvent, hostedSiteEvent);
+  const plan = messagePlan(message);
+  return {
+    id: message.id,
+    turnId: message.turnId,
+    author: message.author === "user" ? "you" : "agent",
+    body: message.author === "user" ? message.text : cleanAgentMessageText(message.text),
+    time: formatMessageTime(message.createdAt),
+    createdAt: message.createdAt,
+    streaming: message.status === "streaming",
+    itemType: message.itemType,
+    kind: message.questionPrompt ? "question" : actionMarker ? "action-marker" : plan ? "plan" : "text",
+    senderAgentId: exchangeSenderId,
+    senderMember: message.author === "user" ? message.senderMember : undefined,
+    replyToMessageId: message.replyToMessageId,
+    attachments: message.attachments,
+    imageGeneration: message.imageGeneration,
+    questionPrompt: message.questionPrompt,
+    exchange: message.exchange,
+    reaction: message.reaction,
+    reactions:
+      message.reactions ?? (message.reaction ? [{ emoji: message.reaction, actor: { kind: "user" as const } }] : []),
+    routine: message.routine,
+    actionMarker: actionMarker ?? undefined,
+    plan: plan ?? undefined,
+    status:
+      message.exchange || message.routine
+        ? undefined
+        : message.delivery?.status === "queued"
+          ? `Queued #${message.delivery.position}`
+          : message.delivery?.status === "cancelled"
+            ? "Cancelled"
+            : message.status === "failed"
+              ? "Failed"
+              : message.status === "interrupted"
+                ? "Stopped"
+                : undefined,
+  };
+}
+
+/**
+ * The plan of a `plan` message. A peer on a released Team API protocol sends only the checklist
+ * text, so the plan is read back from it.
+ */
+export function messagePlan(message: ConversationMessage): AgentMessagePlan | null {
+  if (message.author !== "assistant" || message.itemType !== CONVERSATION_PLAN_ITEM_TYPE) return null;
+  const plan = message.plan ?? parseConversationPlanText(message.text);
+  if (!plan?.steps.length) return null;
+  return { ...plan, stopped: message.status === "interrupted" || message.status === "failed" };
+}
+
+/**
+ * The rows of a plan block. A step runs only while its turn runs: after the turn ends, a step that
+ * was not finished shows as not started.
+ */
+export function planItems(plan: AgentMessagePlan, streaming: boolean): TaskListItem[] {
+  return plan.steps.map((step) => {
+    const state =
+      step.status === "completed" ? "done" : step.status === "inProgress" && streaming ? "active" : "pending";
+    return { id: step.id, label: state === "active" ? (step.activeText ?? step.text) : step.text, state };
+  });
+}
+
+const PLAN_TITLE_LIMIT = 80;
+
+/** The header of a plan block: a short explanation, else "Tasks", or "Stopped" for a stopped plan. */
+export function planTitle(plan: AgentMessagePlan): string {
+  const { t } = currentText();
+  if (plan.stopped && plan.steps.some((step) => step.status !== "completed")) return t("chat.taskList.stopped");
+  if (plan.explanation && plan.explanation.length <= PLAN_TITLE_LIMIT) return plan.explanation;
+  return t("chat.taskList.title");
+}
+
+export function toAgentMessages(messages: ConversationMessage[], ownerAgentId?: string): AgentMessage[] {
+  const result: AgentMessage[] = [];
+  const thinkingByTurn = new Map<string, AgentMessage>();
+  for (const message of messages) {
+    if ((message.delivery?.status === "queued" || message.delivery?.status === "cancelled") && !message.routine) {
+      continue;
+    }
+    if (message.author !== "assistant" || message.itemType !== "commentary") {
+      result.push(toAgentMessage(message, ownerAgentId));
+      continue;
+    }
+
+    const key = message.turnId ?? message.id;
+    const existing = thinkingByTurn.get(key);
+    if (existing) {
+      const text = cleanAgentMessageText(message.text);
+      existing.items = [...(existing.items ?? []), text];
+      existing.itemIds = [...(existing.itemIds ?? []), message.id];
+      existing.streaming = existing.streaming || message.status === "streaming";
+      continue;
+    }
+
+    const text = cleanAgentMessageText(message.text);
+    const thinking: AgentMessage = {
+      id: `thinking:${key}`,
+      turnId: message.turnId,
+      author: "agent",
+      body: "",
+      time: formatMessageTime(message.createdAt),
+      createdAt: message.createdAt,
+      streaming: message.status === "streaming",
+      itemType: "commentary",
+      kind: "thinking",
+      items: [text],
+      itemIds: [message.id],
+    };
+    thinkingByTurn.set(key, thinking);
+    result.push(thinking);
+  }
+  return result;
+}
+
+export function agentProfilesEqual(left: AgentProfile, right: AgentProfile): boolean {
+  return (
+    left.id === right.id &&
+    left.name === right.name &&
+    left.title === right.title &&
+    left.description === right.description &&
+    left.notifications === right.notifications &&
+    left.provider === right.provider &&
+    left.model === right.model &&
+    left.reasoningEffort === right.reasoningEffort &&
+    left.access === right.access &&
+    left.computerUse === right.computerUse &&
+    left.threadId === right.threadId &&
+    left.avatarSeed === right.avatarSeed &&
+    left.avatarHue === right.avatarHue &&
+    left.avatarUrl === right.avatarUrl &&
+    marketplaceSourcesEqual(left.marketplaceSource, right.marketplaceSource) &&
+    left.updatedAt === right.updatedAt &&
+    left.time === right.time &&
+    left.preview === right.preview
+  );
+}
+
+function marketplaceSourcesEqual(
+  left: AgentProfile["marketplaceSource"],
+  right: AgentProfile["marketplaceSource"],
+): boolean {
+  if (!left || !right) return left === right;
+  return (
+    left.listingId === right.listingId &&
+    left.versionId === right.versionId &&
+    left.version === right.version &&
+    stringArraysEqual(left.skillIds, right.skillIds) &&
+    stringArraysEqual(left.routineIds, right.routineIds)
+  );
+}
+
+function stringArraysEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export function agentMessagesEqual(left: AgentMessage, right: AgentMessage): boolean {
+  return (
+    left.id === right.id &&
+    left.turnId === right.turnId &&
+    left.author === right.author &&
+    left.body === right.body &&
+    left.time === right.time &&
+    left.kind === right.kind &&
+    left.streaming === right.streaming &&
+    left.itemType === right.itemType &&
+    left.status === right.status &&
+    left.senderAgentId === right.senderAgentId &&
+    left.senderMember?.id === right.senderMember?.id &&
+    left.senderMember?.name === right.senderMember?.name &&
+    left.replyToMessageId === right.replyToMessageId &&
+    left.reaction === right.reaction &&
+    JSON.stringify(left.reactions) === JSON.stringify(right.reactions) &&
+    JSON.stringify(left.reactionSummary) === JSON.stringify(right.reactionSummary) &&
+    JSON.stringify(left.attachments) === JSON.stringify(right.attachments) &&
+    JSON.stringify(left.questionPrompt) === JSON.stringify(right.questionPrompt) &&
+    JSON.stringify(left.exchange) === JSON.stringify(right.exchange) &&
+    JSON.stringify(left.routine) === JSON.stringify(right.routine) &&
+    JSON.stringify(left.actionMarker) === JSON.stringify(right.actionMarker) &&
+    JSON.stringify(left.items) === JSON.stringify(right.items) &&
+    JSON.stringify(left.itemIds) === JSON.stringify(right.itemIds) &&
+    JSON.stringify(left.plan) === JSON.stringify(right.plan)
+  );
+}
+
+function chatActionMarker(
+  message: ConversationMessage,
+  ownerAgentId: string | undefined,
+  routineEvent: ReturnType<typeof routineConversationEvent>,
+  routineRunEvent: ReturnType<typeof routineRunConversationEvent>,
+  hostedSiteEvent: ReturnType<typeof hostedSiteConversationEvent>,
+): ChatActionMarkerModel | null {
+  if (message.exchange) {
+    const targetDeliveries = message.exchange.deliveries.map((delivery) => ({
+      agentId: delivery.recipientAgentId,
+      status: delivery.status,
+    }));
+    const status =
+      message.exchange.direction === "incoming"
+        ? deliveryStatus(message.delivery?.status ?? targetDeliveries[0]?.status)
+        : aggregateDeliveryStatus(targetDeliveries.map((delivery) => delivery.status));
+    return {
+      kind: "agent-message",
+      direction: message.exchange.direction,
+      sourceAgentId: message.exchange.senderAgentId,
+      targetDeliveries,
+      status,
+      timestamp: message.createdAt,
+      messageId: message.exchange.messageId,
+      replyToMessageId: message.exchange.replyToMessageId,
+      expectsReply: message.exchange.expectsReply !== false,
+    };
+  }
+  if (isContextResetMarker(message)) return { kind: "context-reset", timestamp: message.createdAt };
+  const skillEvent = skillConversationEvent(message);
+  if (skillEvent) return { ...skillEvent, kind: "skill-lifecycle", timestamp: message.createdAt };
+  const suggestion = marketplaceSuggestionEvent(message);
+  if (suggestion) return { kind: "marketplace-suggestion", appId: suggestion.appId, timestamp: message.createdAt };
+  if (routineEvent) {
+    return {
+      kind: "routine-lifecycle",
+      action: routineEvent.action,
+      sourceAgentId: ownerAgentId ?? null,
+      routineId: routineEvent.routineId,
+      routineName: routineEvent.routineName,
+      status: "completed",
+      timestamp: message.createdAt,
+    };
+  }
+  if (routineRunEvent) {
+    return {
+      kind: "routine-run",
+      sourceAgentId: ownerAgentId ?? null,
+      routineId: routineRunEvent.routineId,
+      runId: routineRunEvent.runId,
+      routineName: routineRunEvent.routineName,
+      status: routineRunEvent.status,
+      timestamp: message.createdAt,
+    };
+  }
+  if (message.routine) {
+    return {
+      kind: "routine-run",
+      sourceAgentId: ownerAgentId ?? null,
+      routineId: message.routine.routineId,
+      runId: message.routine.runId,
+      routineName: message.routine.name,
+      status: "queued",
+      timestamp: message.createdAt,
+    };
+  }
+  if (hostedSiteEvent) {
+    return {
+      kind: "hosted-site",
+      sourceAgentId: ownerAgentId ?? null,
+      action: hostedSiteEvent.action,
+      status: hostedSiteEvent.status,
+      operationId: hostedSiteEvent.operationId,
+      siteId: hostedSiteEvent.siteId,
+      title: hostedSiteEvent.title,
+      hostname: hostedSiteEvent.hostname,
+      url: hostedSiteEvent.url,
+      timestamp: message.createdAt,
+    };
+  }
+  if (isRoutineEventItem(message)) {
+    return { kind: "unavailable", label: currentText().t("app.action.unavailable"), timestamp: message.createdAt };
+  }
+  return null;
+}
+
+function aggregateDeliveryStatus(statuses: QueueDeliveryStatus[]): AgentDeliveryMarkerStatus {
+  if (statuses.length === 0) return "unavailable";
+  const normalized = statuses.map(deliveryStatus);
+  if (normalized.every((status) => status === "queued")) return "queued";
+  if (normalized.some((status) => status === "in-progress")) return "in-progress";
+  if (normalized.every((status) => status === "completed")) return "completed";
+  if (normalized.every((status) => status === "failed")) return "failed";
+  if (normalized.every((status) => status === "interrupted")) return "interrupted";
+  if (normalized.every((status) => status === "cancelled")) return "cancelled";
+  if (normalized.every((status) => ["completed", "failed", "interrupted", "cancelled"].includes(status))) {
+    return "partial";
+  }
+  return "in-progress";
+}
+
+function deliveryStatus(status: QueueDeliveryStatus | undefined): Exclude<AgentDeliveryMarkerStatus, "partial"> {
+  if (!status) return "unavailable";
+  if (status === "starting" || status === "running") return "in-progress";
+  return status;
+}
+
+export function retainThinkingMessages(previous: AgentMessage[], next: AgentMessage[]): AgentMessage[] {
+  const result = [...next];
+  const nextIds = new Set(result.map((message) => message.id));
+  for (const thinking of previous) {
+    if (thinking.kind !== "thinking" || nextIds.has(thinking.id) || !thinking.turnId) continue;
+    const sameTurnIndexes = result.flatMap((message, index) => (message.turnId === thinking.turnId ? [index] : []));
+    if (sameTurnIndexes.length === 0) continue;
+    const finalAnswerIndex = result.findIndex(
+      (message) => message.turnId === thinking.turnId && message.author === "agent" && message.kind !== "thinking",
+    );
+    const insertionIndex = finalAnswerIndex >= 0 ? finalAnswerIndex : (sameTurnIndexes.at(-1) ?? result.length - 1) + 1;
+    result.splice(insertionIndex, 0, { ...thinking, streaming: false });
+    nextIds.add(thinking.id);
+  }
+  return result;
+}
+
+export function withoutAgent<T>(values: Record<string, T>, agentId: string): Record<string, T> {
+  const next = { ...values };
+  delete next[agentId];
+  return next;
+}
+
+function cleanPreview(preview: string): string {
+  const cleaned = cleanAgentMessageText(preview)
+    .replace(/\binbox\s+at\s+zero\b[:,]?\s*/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return cleaned || currentText().t("app.agent.noMessages");
+}
+
+function formatTime(value: string): string {
+  const date = new Date(value);
+  const { t, format } = currentText();
+  if (Number.isNaN(date.getTime())) return t("chat.day.now");
+  return format.date(date, { hour: "2-digit", minute: "2-digit" });
+}
+
+export function formatMessageTime(value: string): string {
+  const date = new Date(value);
+  const { t, format } = currentText();
+  if (Number.isNaN(date.getTime())) return t("chat.day.now");
+  return formatChatTimestamp(date, format);
+}

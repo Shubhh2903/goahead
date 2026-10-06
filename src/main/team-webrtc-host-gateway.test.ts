@@ -1,0 +1,684 @@
+// @vitest-environment node
+
+import { generateKeyPairSync, sign } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import {
+  TEAM_AGENT_ACTIVITY_CAPABILITY,
+  TEAM_MODEL_SCOPED_USAGE_CAPABILITY,
+} from "@openbot/contracts/team-protocol/current";
+import { decodeTeamProtocolV1ClientEvent } from "@openbot/contracts/team-protocol/v1";
+import {
+  decodeTeamProtocolV2AuthFrame,
+  decodeTeamProtocolV2RpcFrame,
+  encodeTeamProtocolV2Frame,
+  teamProtocolV2AuthenticationTranscript,
+} from "@openbot/contracts/team-protocol/v2";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
+import opencodeAgents from "../../packages/contracts/src/team-protocol/fixtures/v4/host-http-response.json";
+import { createRemoteFileReceiver } from "../../packages/team-client/src/file-download";
+import { TeamStore } from "./team-store";
+import { TeamWebRtcBridge } from "./team-webrtc-bridge";
+import { TeamWebRtcHostGateway } from "./team-webrtc-host-gateway";
+
+const directories: string[] = [];
+const serverCleanups: Array<() => Promise<void>> = [];
+
+afterEach(async () => {
+  await Promise.all(serverCleanups.splice(0).map((cleanup) => cleanup()));
+  await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+class FakeBridge extends TeamWebRtcBridge {
+  readonly connections: Array<{ peerId: string; signalUrl: string; token: string; peer: "host" | "client" }> = [];
+  readonly disconnectedPeers: string[] = [];
+  readonly sent: Array<{ peerId: string; channel: string; data: string | ArrayBuffer }> = [];
+
+  override async connect(input: {
+    peerId: string;
+    signalUrl: string;
+    token: string;
+    peer: "host" | "client";
+  }): Promise<void> {
+    this.connections.push(input);
+    // A local Signal may be ready before the connect command acknowledges.
+    this.emit("signalReady", input.peerId);
+  }
+
+  override async disconnect(): Promise<void> {}
+
+  override async disconnectPeer(peerId: string): Promise<void> {
+    this.disconnectedPeers.push(peerId);
+  }
+
+  override async send(
+    peerId: string,
+    channel: "rpc" | "events" | "files" | "desktop",
+    data: string | ArrayBuffer,
+  ): Promise<void> {
+    this.sent.push({ peerId, channel, data });
+  }
+}
+
+describe("TeamWebRtcHostGateway", () => {
+  it("isolates devices' RPCs, live subscriptions and revocation while preserving authenticated reconnects", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "openbot-webrtc-host-gateway-"));
+    directories.push(directory);
+    const bridge = new FakeBridge();
+    const store = new TeamStore(join(directory, "team.json"));
+    await store.initialize();
+    await store.configureWithAccount("Test Host", {
+      id: "owner-account",
+      email: "owner@example.com",
+      name: "Owner",
+      avatarUrl: null,
+    });
+    const closeLocalSession = vi.spyOn(store, "closeRemoteSession");
+    const renewSignal = vi
+      .fn()
+      .mockResolvedValue({ signalUrl: "wss://signal.example.test/v1/signal", ticket: "fresh" });
+    const recoveryFailure = vi.fn();
+    const closeSession = vi.fn().mockResolvedValue(undefined);
+    const clientKeys = generateKeyPairSync("ed25519", {
+      publicKeyEncoding: { type: "spki", format: "pem" },
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    });
+    // Persistent sessions must not overflow Node's 32-bit setTimeout delay and disconnect immediately.
+    const sessionExpiresAt = 8_640_000_000_000;
+    const eventScopes: Array<
+      Extract<ReturnType<typeof decodeTeamProtocolV1ClientEvent>, { type: "agent-event-scope" }>
+    > = [];
+    const unreadState = { unreadCount: 1, firstUnreadMessageId: "reply-1", throughMessageId: null };
+    const localRequests: Array<{ path: string; protocol: string }> = [];
+    const scopedUsage = {
+      limits: [
+        {
+          id: "claude",
+          primary: null,
+          secondary: { usedPercent: 37, windowDurationMins: 10_080, resetsAt: 1_788_825_600 },
+        },
+      ],
+    };
+    const localServer = createServer((request, response) => {
+      localRequests.push({
+        path: request.url ?? "",
+        protocol: String(request.headers["openbot-protocol-version"] ?? ""),
+      });
+      if (request.url === "/v1/attachments/file-1") {
+        response.writeHead(200, {
+          "content-type": "application/json",
+          "content-disposition": "attachment; filename*=UTF-8''data.json",
+        });
+        response.end('{"file":true}');
+        return;
+      }
+      if (request.url === "/v1/agents/bot-1/conversation/unread") {
+        const supported = request.headers["openbot-protocol-version"] === "3";
+        response.writeHead(supported ? 200 : 400, { "content-type": "application/json" });
+        response.end(JSON.stringify(supported ? unreadState : { error: "Mark unread requires protocol 3." }));
+        return;
+      }
+      if (request.url === "/v1/agents") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(opencodeAgents));
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(request.url === "/v1/agents/research/usage" ? scopedUsage : {}));
+    });
+    const eventsServer = new WebSocketServer({ server: localServer });
+    eventsServer.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const event = decodeTeamProtocolV1ClientEvent(JSON.parse(data.toString()));
+        if (event.type === "agent-event-scope") eventScopes.push(event);
+      });
+    });
+    await new Promise<void>((resolve) => localServer.listen(0, "127.0.0.1", resolve));
+    const address = localServer.address();
+    if (!address || typeof address === "string") throw new Error("The local Team API did not open a TCP port.");
+    serverCleanups.push(
+      () =>
+        new Promise<void>((resolve) => {
+          for (const client of eventsServer.clients) client.terminate();
+          eventsServer.close(() => localServer.close(() => resolve()));
+        }),
+    );
+    const gateway = new TeamWebRtcHostGateway({
+      bridge,
+      store,
+      appVersion: "1.0.0",
+      transferDirectory: join(directory, "transfers"),
+      renewSignal,
+      onSignalRecoveryFailure: recoveryFailure,
+      closeSession,
+      verifyClientTicket: async (ticket) => ({
+        sessionId: ticket === "second-ticket" ? "session-2" : "session-1",
+        hostId: "host-1",
+        userId: "member-account",
+        membershipId: "membership-1",
+        role: "member",
+        authEpoch: 1,
+        sessionExpiresAt,
+        clientPublicKey: clientKeys.publicKey,
+      }),
+    });
+
+    const starting = gateway.start({
+      hostId: "host-1",
+      signalUrl: "wss://signal.example.test/v1/signal",
+      ticket: "initial",
+      localApiPort: address.port,
+    });
+    await vi.waitFor(() => expect(bridge.connections).toHaveLength(1));
+    await starting;
+
+    bridge.emit("error", "host-1", "session_revoked", "credential rotated");
+    await vi.waitFor(() => expect(bridge.connections).toHaveLength(2));
+    await vi.waitFor(() => expect(renewSignal).toHaveBeenCalledWith("host-1"));
+
+    expect(bridge.connections[1]).toMatchObject({ peerId: "host-1", token: "fresh", peer: "host" });
+    expect(recoveryFailure).not.toHaveBeenCalled();
+    bridge.emit("incoming", "peer-1", {
+      hostId: "host-1",
+      connectionId: "connection-1",
+      sessionId: "session-1",
+      userId: "member-account",
+      membershipId: "membership-1",
+      role: "member",
+      sessionExpiresAt,
+    });
+    bridge.emit("connected", "peer-1", {
+      localFingerprint: "HOST-FINGERPRINT",
+      remoteFingerprint: "CLIENT-FINGERPRINT",
+    });
+    const clientNonce = "c".repeat(43);
+    const ticket = "client-ticket";
+    bridge.emit(
+      "data",
+      "peer-1",
+      "rpc",
+      encodeTeamProtocolV2Frame({
+        version: 2,
+        type: "auth-init",
+        ticket,
+        clientPublicKey: clientKeys.publicKey,
+        clientNonce,
+        signature: sign(
+          null,
+          Buffer.from(
+            teamProtocolV2AuthenticationTranscript({
+              hostId: "host-1",
+              sessionId: "session-1",
+              ticket,
+              clientPublicKey: clientKeys.publicKey,
+              clientNonce,
+              clientFingerprint: "CLIENT-FINGERPRINT",
+              hostFingerprint: "HOST-FINGERPRINT",
+            }),
+          ),
+          clientKeys.privateKey,
+        ).toString("base64url"),
+      }),
+    );
+    await vi.waitFor(() => expect(bridge.sent.some((message) => message.channel === "rpc")).toBe(true));
+    const readyMessage = bridge.sent.find((message) => message.channel === "rpc");
+    if (!readyMessage) throw new Error("Missing authentication response.");
+    const ready = decodeTeamProtocolV2AuthFrame(readyMessage.data);
+    if (ready.type !== "auth-ready") throw new Error("Unexpected authentication response.");
+    bridge.emit(
+      "data",
+      "peer-1",
+      "rpc",
+      encodeTeamProtocolV2Frame({
+        version: 2,
+        type: "auth-complete",
+        clientNonce: ready.clientNonce,
+        hostNonce: ready.hostNonce,
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(
+        bridge.sent.some((message) => {
+          if (message.channel !== "rpc" || !isString(message.data)) return false;
+          try {
+            return decodeTeamProtocolV2AuthFrame(message.data).type === "auth-confirmed";
+          } catch {
+            return false;
+          }
+        }),
+      ).toBe(true),
+    );
+    bridge.emit(
+      "data",
+      "peer-1",
+      "events",
+      encodeTeamProtocolV2Frame({
+        version: 2,
+        type: "event-control",
+        control: { type: "runtime-snapshot-request" },
+      }),
+    );
+    await vi.waitFor(() => expect(eventScopes).toHaveLength(1));
+    expect(eventScopes[0]?.capabilities).toEqual([]);
+    bridge.emit(
+      "data",
+      "peer-1",
+      "rpc",
+      encodeTeamProtocolV2Frame({
+        version: 2,
+        type: "request",
+        requestId: "capability-request",
+        operation: "http.request",
+        payload: {
+          method: "GET",
+          path: "/v1/agents",
+          body: null,
+          capabilities: [TEAM_AGENT_ACTIVITY_CAPABILITY],
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(eventScopes).toHaveLength(2));
+    expect(eventScopes[1]?.capabilities).toContain(TEAM_AGENT_ACTIVITY_CAPABILITY);
+    bridge.emit(
+      "data",
+      "peer-1",
+      "rpc",
+      encodeTeamProtocolV2Frame({
+        version: 2,
+        type: "request",
+        requestId: "scoped-usage-request",
+        operation: "http.request",
+        payload: {
+          method: "GET",
+          path: "/v1/agents/research/usage",
+          body: {},
+          capabilities: [TEAM_MODEL_SCOPED_USAGE_CAPABILITY],
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(localRequests).toContainEqual({ path: "/v1/agents/research/usage", protocol: "3" }));
+    await vi.waitFor(() => {
+      const response = bridge.sent.find((message) => {
+        if (message.channel !== "rpc" || !isString(message.data)) return false;
+        try {
+          const frame = decodeTeamProtocolV2RpcFrame(message.data);
+          return frame.type === "response" && frame.requestId === "scoped-usage-request";
+        } catch {
+          return false;
+        }
+      });
+      if (!response || !isString(response.data)) throw new Error("Missing scoped usage response.");
+      const frame = decodeTeamProtocolV2RpcFrame(response.data);
+      expect(frame).toMatchObject({ type: "response", result: { status: 200, body: scopedUsage } });
+    });
+    const receiver = createRemoteFileReceiver(async (data) => {
+      bridge.emit("data", "peer-1", "files", data);
+    });
+    const originalSend = bridge.send.bind(bridge);
+    const fileSend = vi.spyOn(bridge, "send").mockImplementation(async (peerId, channel, data) => {
+      await originalSend(peerId, channel, data);
+      if (channel === "files") await receiver.receive(data);
+    });
+    bridge.emit(
+      "data",
+      "peer-1",
+      "rpc",
+      encodeTeamProtocolV2Frame({
+        version: 2,
+        type: "request",
+        requestId: "json-download",
+        operation: "http.request",
+        payload: { method: "GET", path: "/v1/attachments/file-1", body: null },
+      }),
+    );
+    let downloadedId = "";
+    await vi.waitFor(() => {
+      for (const message of bridge.sent) {
+        if (message.channel !== "rpc" || !isString(message.data)) continue;
+        const candidate = JSON.parse(message.data);
+        if (candidate.requestId !== "json-download") continue;
+        const frame = decodeTeamProtocolV2RpcFrame(message.data);
+        if (
+          frame.type !== "response" ||
+          !("result" in frame) ||
+          !isDynamicRecord(frame.result) ||
+          !isDynamicRecord(frame.result.file) ||
+          !isString(frame.result.file.transferId)
+        )
+          throw new Error("Missing file response");
+        downloadedId = frame.result.file.transferId;
+      }
+      expect(downloadedId).not.toBe("");
+    });
+    expect(await receiver.take(downloadedId)).toEqual({
+      name: "data.json",
+      mimeType: "application/json",
+      base64: btoa('{"file":true}'),
+    });
+    receiver.clear();
+    fileSend.mockRestore();
+    let resolveFetch!: (response: Response) => void;
+    const fetchRequest = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() => new Promise<Response>((resolve) => (resolveFetch = resolve)));
+    const duplicateRequest = encodeTeamProtocolV2Frame({
+      version: 2,
+      type: "request",
+      requestId: "duplicate-request",
+      operation: "http.request",
+      payload: { method: "POST", path: "/v1/browser/visible", body: { visible: true } },
+    });
+    bridge.emit("data", "peer-1", "rpc", duplicateRequest);
+    bridge.emit("data", "peer-1", "rpc", duplicateRequest);
+    await vi.waitFor(() => expect(fetchRequest).toHaveBeenCalledOnce());
+    resolveFetch(new Response(null, { status: 204 }));
+    await vi.waitFor(() =>
+      expect(
+        bridge.sent.filter((message) => {
+          if (message.channel !== "rpc" || !isString(message.data)) return false;
+          try {
+            const frame = decodeTeamProtocolV2RpcFrame(message.data);
+            return frame.type === "response" && frame.requestId === "duplicate-request";
+          } catch {
+            return false;
+          }
+        }),
+      ).toHaveLength(2),
+    );
+    fetchRequest.mockRestore();
+    bridge.emit(
+      "data",
+      "peer-1",
+      "rpc",
+      encodeTeamProtocolV2Frame({
+        version: 2,
+        type: "request",
+        requestId: "mark-unread",
+        operation: "http.request",
+        payload: {
+          method: "POST",
+          path: "/v1/agents/bot-1/conversation/unread",
+          body: {},
+          capabilities: [TEAM_AGENT_ACTIVITY_CAPABILITY, "conversation-unread"],
+        },
+      }),
+    );
+    const unreadReply = () =>
+      bridge.sent.find(
+        (message) => message.peerId === "peer-1" && isString(message.data) && message.data.includes('"mark-unread"'),
+      );
+    await vi.waitFor(() => expect(unreadReply()).toBeDefined());
+    expect(decodeTeamProtocolV2RpcFrame(unreadReply()?.data)).toMatchObject({
+      type: "response",
+      result: { status: 200, body: unreadState },
+    });
+    bridge.emit(
+      "data",
+      "peer-1",
+      "rpc",
+      encodeTeamProtocolV2Frame({
+        version: 2,
+        type: "request",
+        requestId: "opencode-agents",
+        operation: "http.request",
+        payload: { method: "GET", path: "/v1/agents", body: null, capabilities: ["opencode"] },
+      }),
+    );
+    const opencodeReply = () =>
+      bridge.sent.find(
+        (message) =>
+          message.peerId === "peer-1" && isString(message.data) && message.data.includes('"opencode-agents"'),
+      );
+    await vi.waitFor(() => expect(opencodeReply()).toBeDefined());
+    expect(decodeTeamProtocolV2RpcFrame(opencodeReply()?.data)).toMatchObject({
+      type: "response",
+      result: { status: 200, body: opencodeAgents },
+    });
+    expect(localRequests).toContainEqual({ path: "/v1/agents", protocol: "4" });
+    bridge.emit("incoming", "peer-1", {
+      hostId: "host-1",
+      connectionId: "connection-2",
+      sessionId: "session-1",
+      userId: "member-account",
+      membershipId: "membership-1",
+      role: "member",
+      sessionExpiresAt,
+    });
+    bridge.emit("connected", "peer-1", {
+      localFingerprint: "HOST-FINGERPRINT",
+      remoteFingerprint: "CLIENT-FINGERPRINT",
+    });
+    expect(closeLocalSession).not.toHaveBeenCalled();
+    expect(closeSession).not.toHaveBeenCalled();
+
+    await authenticatePhone(bridge, "peer-2", "session-2", "second-ticket", clientKeys);
+    const firstMessagesBeforeSecondRequest = bridge.sent.filter((message) => message.peerId === "peer-1").length;
+    const secondFetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        Response.json({ code: "action_denied", error: "This device's action was denied." }, { status: 403 }),
+      );
+    bridge.emit("data", "peer-2", "rpc", duplicateRequest);
+    await vi.waitFor(() => expect(secondFetch).toHaveBeenCalledOnce());
+    const secondReplies = () =>
+      bridge.sent.filter(
+        (message) =>
+          message.peerId === "peer-2" && isString(message.data) && message.data.includes('"duplicate-request"'),
+      );
+    await vi.waitFor(() => expect(secondReplies()).toHaveLength(1));
+    expect(secondReplies()[0]?.data).toContain('"status":403');
+    expect(bridge.sent.filter((message) => message.peerId === "peer-1")).toHaveLength(firstMessagesBeforeSecondRequest);
+    expect(
+      bridge.sent.filter(
+        (message) => message.peerId === "peer-1" && isString(message.data) && message.data.includes('"status":403'),
+      ),
+    ).toEqual([]);
+    secondFetch.mockRestore();
+    bridge.emit(
+      "data",
+      "peer-2",
+      "events",
+      encodeTeamProtocolV2Frame({ version: 2, type: "event-ack", throughSequence: 0 }),
+    );
+    await vi.waitFor(() => expect(eventsServer.clients.size).toBe(2));
+    // The events server stands in for the host, so the frame it sends is frozen wire JSON: `botId`.
+    for (const client of eventsServer.clients)
+      client.send(JSON.stringify({ type: "queue-invalidated", botId: "bot-1" }));
+    await vi.waitFor(() =>
+      expect(
+        bridge.sent.filter(
+          (message) =>
+            message.channel === "events" && isString(message.data) && message.data.includes("queue-invalidated"),
+        ),
+      ).toHaveLength(2),
+    );
+    expect(
+      new Set(
+        bridge.sent
+          .filter(
+            (message) =>
+              message.channel === "events" && isString(message.data) && message.data.includes("queue-invalidated"),
+          )
+          .map((message) => message.peerId),
+      ),
+    ).toEqual(new Set(["peer-1", "peer-2"]));
+    // `channels-changed` is outside the frozen v1 vocabulary, so the base event adapter throws on
+    // it. Without a host-side branch for the optional protocol the frame was dropped silently, and
+    // a remote client saw no incoming message or task update until its next refresh.
+    for (const client of eventsServer.clients)
+      client.send(JSON.stringify({ type: "channels-changed", channelId: "channel-1", revision: 2 }));
+    await vi.waitFor(() =>
+      expect(
+        bridge.sent.filter(
+          (message) =>
+            message.channel === "events" && isString(message.data) && message.data.includes("channels-changed"),
+        ),
+      ).toHaveLength(2),
+    );
+    const forwardedChannelEvent = bridge.sent.find(
+      (message) => message.channel === "events" && isString(message.data) && message.data.includes("channels-changed"),
+    );
+    expect(JSON.parse(isString(forwardedChannelEvent?.data) ? forwardedChannelEvent.data : "{}")).toMatchObject({
+      version: 2,
+      type: "event",
+      payload: { type: "channels-changed", channelId: "channel-1", revision: 2 },
+    });
+    for (const event of [
+      { type: "channel-memories-changed", channelId: "channel-1" },
+      { type: "channel-routines-changed", channelId: "channel-1" },
+      { type: "skills-changed", agentId: "agent-1" },
+    ] as const) {
+      for (const client of eventsServer.clients) client.send(JSON.stringify(event));
+      await vi.waitFor(() =>
+        expect(
+          bridge.sent.filter(
+            (message) => message.channel === "events" && isString(message.data) && message.data.includes(event.type),
+          ),
+        ).toHaveLength(2),
+      );
+      const forwarded = bridge.sent.find(
+        (message) => message.channel === "events" && isString(message.data) && message.data.includes(event.type),
+      );
+      expect(JSON.parse(isString(forwarded?.data) ? forwarded.data : "{}")).toMatchObject({
+        version: 2,
+        type: "event",
+        payload: event,
+      });
+    }
+    await gateway.revokeSession("session-2");
+    expect(closeLocalSession).toHaveBeenCalledExactlyOnceWith("session-2");
+    expect(bridge.disconnectedPeers).toEqual(["peer-2"]);
+    const beforeCachedReply = bridge.sent.length;
+    bridge.emit("data", "peer-1", "rpc", duplicateRequest);
+    await vi.waitFor(() => expect(bridge.sent.length).toBeGreaterThan(beforeCachedReply));
+    const lastReply = bridge.sent.at(-1);
+    expect(lastReply?.peerId).toBe("peer-1");
+    expect(lastReply?.data).toContain('"status":204');
+    bridge.emit("incoming", "peer-1", {
+      hostId: "host-1",
+      connectionId: "connection-3",
+      sessionId: "session-1",
+      userId: "member-account",
+      membershipId: "membership-1",
+      role: "member",
+      sessionExpiresAt,
+    });
+    bridge.emit("connected", "peer-1", {
+      localFingerprint: "HOST-FINGERPRINT",
+      remoteFingerprint: "DIFFERENT-CLIENT-FINGERPRINT",
+    });
+    expect(closeLocalSession).toHaveBeenCalledWith("session-1");
+    expect(closeSession).not.toHaveBeenCalled();
+    bridge.emit("data", "peer-1", "rpc", duplicateRequest);
+    await vi.waitFor(() => expect(bridge.disconnectedPeers).toContain("peer-1"));
+    await gateway.stop();
+    gateway.dispose();
+  });
+
+  it("drops only the active WebRTC peer after a malformed known frame", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "openbot-webrtc-host-protocol-"));
+    directories.push(directory);
+    const bridge = new FakeBridge();
+    const store = new TeamStore(join(directory, "team.json"));
+    await store.initialize();
+    const gateway = new TeamWebRtcHostGateway({
+      bridge,
+      store,
+      appVersion: "1.0.0",
+      transferDirectory: join(directory, "transfers"),
+    });
+
+    const starting = gateway.start({
+      hostId: "host-1",
+      signalUrl: "wss://signal.example.test/v1/signal",
+      ticket: "initial",
+      localApiPort: 0,
+    });
+    await vi.waitFor(() => expect(bridge.connections).toHaveLength(1));
+    await starting;
+    bridge.emit("incoming", "peer-1", {
+      hostId: "host-1",
+      connectionId: "connection-1",
+      sessionId: "session-1",
+      userId: "member-account",
+      membershipId: "membership-1",
+      role: "member",
+      sessionExpiresAt: 8_640_000_000_000,
+    });
+    bridge.emit("data", "peer-1", "rpc", "not-json");
+
+    await vi.waitFor(() => expect(bridge.disconnectedPeers).toEqual(["peer-1"]));
+    expect(bridge.connections).toHaveLength(1);
+    await gateway.stop();
+    gateway.dispose();
+  });
+});
+
+async function authenticatePhone(
+  bridge: FakeBridge,
+  peerId: string,
+  sessionId: string,
+  ticket: string,
+  keys: { publicKey: string; privateKey: string },
+): Promise<void> {
+  bridge.emit("incoming", peerId, {
+    hostId: "host-1",
+    connectionId: `connection-${peerId}`,
+    sessionId,
+    userId: "member-account",
+    membershipId: "membership-1",
+    role: "member",
+    sessionExpiresAt: 8_640_000_000_000,
+  });
+  bridge.emit("connected", peerId, { localFingerprint: "HOST-FINGERPRINT", remoteFingerprint: "CLIENT-FINGERPRINT" });
+  const clientNonce = "d".repeat(43);
+  const transcript = teamProtocolV2AuthenticationTranscript({
+    hostId: "host-1",
+    sessionId,
+    ticket,
+    clientPublicKey: keys.publicKey,
+    clientNonce,
+    clientFingerprint: "CLIENT-FINGERPRINT",
+    hostFingerprint: "HOST-FINGERPRINT",
+  });
+  bridge.emit(
+    "data",
+    peerId,
+    "rpc",
+    encodeTeamProtocolV2Frame({
+      version: 2,
+      type: "auth-init",
+      ticket,
+      clientPublicKey: keys.publicKey,
+      clientNonce,
+      signature: sign(null, Buffer.from(transcript), keys.privateKey).toString("base64url"),
+    }),
+  );
+  await vi.waitFor(() => expect(bridge.sent.some((message) => message.peerId === peerId)).toBe(true));
+  const message = bridge.sent.find((message) => message.peerId === peerId);
+  if (!message) throw new Error("No authentication challenge.");
+  const ready = decodeTeamProtocolV2AuthFrame(message.data);
+  if (ready.type !== "auth-ready") throw new Error("Wrong authentication challenge.");
+  bridge.emit(
+    "data",
+    peerId,
+    "rpc",
+    encodeTeamProtocolV2Frame({
+      version: 2,
+      type: "auth-complete",
+      clientNonce,
+      hostNonce: ready.hostNonce,
+    }),
+  );
+  await vi.waitFor(() =>
+    expect(
+      bridge.sent.some(
+        (message) => message.peerId === peerId && isString(message.data) && message.data.includes('"auth-confirmed"'),
+      ),
+    ).toBe(true),
+  );
+}

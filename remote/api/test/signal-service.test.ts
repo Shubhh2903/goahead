@@ -1,0 +1,450 @@
+import { describe, expect, it, vi } from "vitest";
+import type { RemoteTicketClaims } from "../src/protocol";
+import { SignalService, type SignalSocket } from "../src/signal-service";
+
+describe("SignalService", () => {
+  it("notifies only authenticated devices of the changed account without disconnecting them", async () => {
+    const service = new SignalService(fakeTokens(), 8);
+    const host = socket("host");
+    const phone = socket("phone");
+    const tablet = socket("tablet");
+    const anonymous = socket("anonymous");
+    await hello(service, host, "host-ticket", "host");
+    await hello(service, phone, "client-ticket", "client");
+    await hello(service, tablet, "second-client-ticket", "client");
+    service.connect(anonymous);
+    for (const peer of [host, phone, tablet, anonymous]) peer.messages.length = 0;
+    service.profileChanged("user-1");
+    const event = JSON.stringify({ type: "account-profile-changed", version: 1 });
+    expect(phone.messages).toEqual([event]);
+    expect(tablet.messages).toEqual([event]);
+    expect(host.messages).toEqual([]);
+    expect(anonymous.messages).toEqual([]);
+    expect(phone.closed).toBe(false);
+    expect(tablet.closed).toBe(false);
+  });
+
+  it("tells every device of the account that joined a server, and no one else", async () => {
+    const service = new SignalService(fakeTokens(), 8);
+    const desktop = socket("host");
+    const phone = socket("phone");
+    const otherAccount = socket("other");
+    await hello(service, desktop, "host-ticket", "host");
+    await hello(service, phone, "client-ticket", "client");
+    service.connect(otherAccount);
+    for (const peer of [desktop, phone, otherAccount]) peer.messages.length = 0;
+
+    // The desktop's own ticket carries the owner, the phone's carries the member who signed in.
+    service.serversChanged("owner-1");
+    service.serversChanged("user-1");
+
+    const event = JSON.stringify({ type: "account-servers-changed", version: 1 });
+    expect(desktop.messages).toEqual([event]);
+    expect(phone.messages).toEqual([event]);
+    expect(otherAccount.messages).toEqual([]);
+    expect(desktop.closed).toBe(false);
+    expect(phone.closed).toBe(false);
+  });
+
+  it("does not close active WebRTC when a Signal socket reconnects", async () => {
+    const service = new SignalService(fakeTokens(), 8);
+    const host = socket("host");
+    const client = socket("client");
+    await hello(service, host, "host-ticket", "host");
+    await hello(service, client, "client-ticket", "client");
+    expect(
+      client.messages.some((message) => message.includes('"type":"ready"') && message.includes('"connectionId":"')),
+    ).toBe(true);
+
+    service.disconnect(client);
+    expect(host.messages.some((message) => message.includes('"type":"disconnect"'))).toBe(false);
+
+    const resumed = socket("client-resumed");
+    await hello(service, resumed, "resume-client", "client");
+    expect(
+      resumed.messages.some((message) => message.includes('"type":"ready"') && message.includes('"connectionId":"')),
+    ).toBe(true);
+    expect(host.messages.filter((message) => message.includes('"type":"peer-ready"'))).toHaveLength(2);
+    expect(host.messages.at(-1)).toContain('"resumed":true');
+  });
+
+  it("marks a fresh ticket for the same logical session as a replacement", async () => {
+    const service = new SignalService(fakeTokens(), 8);
+    const host = socket("host");
+    const firstClient = socket("client");
+    await hello(service, host, "host-ticket", "host");
+    await hello(service, firstClient, "client-ticket", "client");
+
+    const replacement = socket("replacement");
+    await hello(service, replacement, "fresh-client-ticket", "client");
+
+    expect(firstClient.closed).toBe(true);
+    expect(host.messages.at(-1)).toContain('"type":"peer-ready"');
+    expect(host.messages.at(-1)).toContain('"resumed":false');
+  });
+
+  it("validates initial tickets while a restarted Signal can have missed revocations", async () => {
+    const tokens = fakeTokens();
+    tokens.validateClaims = vi.fn().mockResolvedValue(false);
+    const service = new SignalService(tokens, 8);
+    const host = socket("host");
+    await hello(service, host, "host-ticket", "host");
+    expect(tokens.validateClaims).toHaveBeenCalledOnce();
+    expect(host.messages.at(-1)).toContain('"code":"authentication_required"');
+    expect(host.closed).toBe(true);
+  });
+
+  it("expires an authenticated host before it can receive stale TURN credentials", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    try {
+      const tokens = fakeTokens();
+      const verifyTicket = tokens.verifyTicket;
+      tokens.verifyTicket = async (token) => ({
+        ...(await verifyTicket(token)),
+        sessionExpiresAt: Math.floor(Date.now() / 1_000) + 1,
+      });
+      const service = new SignalService(tokens, 8);
+      const host = socket("host");
+      await hello(service, host, "host-ticket", "host");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(host.messages.at(-1)).toContain('"code":"authentication_required"');
+      expect(host.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes TURN credentials while an authenticated host is idle", async () => {
+    const service = new SignalService(fakeTokens(), 8);
+    const host = socket("idle-host");
+    await hello(service, host, "host-ticket", "host");
+
+    await service.receive(host, JSON.stringify({ type: "turn-refresh", version: 1, connectionId: null }));
+
+    expect(host.messages.at(-1)).toContain('"type":"ready"');
+    expect(host.messages.at(-1)).toContain('"connectionId":null');
+    expect(host.closed).toBe(false);
+  });
+
+  it("restores the client mapping when only the host Signal socket reconnects", async () => {
+    const service = new SignalService(fakeTokens(), 8);
+    const host = socket("host");
+    const client = socket("client");
+    await hello(service, host, "host-ticket", "host");
+    await hello(service, client, "client-ticket", "client");
+
+    service.disconnect(host);
+    const resumedHost = socket("host-resumed");
+    await hello(service, resumedHost, "resume-host", "host");
+    const ready = [...client.messages]
+      .reverse()
+      .find((message) => message.includes('"type":"ready"') && message.includes('"connectionId":"'));
+    const connectionId = ready?.match(/"connectionId":"([A-Za-z0-9_-]+)"/u)?.[1];
+    expect(connectionId).toBeTruthy();
+    expect(resumedHost.messages.some((message) => message.includes('"type":"peer-ready"'))).toBe(true);
+    expect(resumedHost.messages.at(-1)).toContain('"resumed":true');
+
+    await service.receive(
+      client,
+      JSON.stringify({ type: "ice-restart", version: 1, connectionId: connectionId ?? "missing", channel: "team" }),
+    );
+    expect(resumedHost.messages.at(-1)).toContain('"type":"ice-restart"');
+    expect(client.closed).toBe(false);
+  });
+
+  it("sends a new client to the host socket that said hello last while the old socket is not closed", async () => {
+    const service = new SignalService(fakeTokens(), 8);
+    const stopped = socket("host-stopped");
+    await hello(service, stopped, "host-ticket", "host");
+    const restarted = socket("host-restarted");
+    await hello(service, restarted, "resume-host", "host");
+    const client = socket("client");
+    await hello(service, client, "client-ticket", "client");
+
+    expect(restarted.messages.some((message) => message.includes('"type":"peer-ready"'))).toBe(true);
+    expect(stopped.messages.some((message) => message.includes('"type":"peer-ready"'))).toBe(false);
+  });
+
+  it("notifies the host when an interrupted client does not reconnect", async () => {
+    vi.useFakeTimers();
+    try {
+      const service = new SignalService(fakeTokens(), 8);
+      const host = socket("host");
+      const client = socket("client");
+      await hello(service, host, "host-ticket", "host");
+      await hello(service, client, "client-ticket", "client");
+
+      service.disconnect(client);
+      expect(host.messages.some((message) => message.includes('"type":"disconnect"'))).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(host.messages.at(-1)).toContain('"type":"disconnect"');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects reuse of an initial ticket and closes revoked clients", async () => {
+    const service = new SignalService(fakeTokens(), 8);
+    const host = socket("host");
+    await hello(service, host, "host-ticket", "host");
+    const first = socket("client-one");
+    await hello(service, first, "client-ticket", "client");
+    const replay = socket("client-two");
+    await hello(service, replay, "client-ticket", "client");
+    expect(replay.messages.at(-1)).toContain('"code":"authentication_required"');
+    expect(replay.closed).toBe(true);
+
+    service.revoke("host-1", 2);
+    expect(first.messages.at(-1)).toContain('"code":"session_revoked"');
+    expect(first.closed).toBe(true);
+    expect(host.messages.some((message) => message.includes('"type":"disconnect"'))).toBe(true);
+    expect(host.messages.some((message) => message.includes('"code":"session_revoked"'))).toBe(true);
+    expect(host.closed).toBe(true);
+
+    const staleHost = socket("stale-host");
+    await hello(service, staleHost, "stale-host-ticket", "host");
+    expect(staleHost.messages.at(-1)).toContain('"code":"authentication_required"');
+    expect(staleHost.closed).toBe(true);
+  });
+
+  it("does not let an owner client ticket impersonate the host", async () => {
+    const service = new SignalService(fakeTokens(), 8);
+    const host = socket("fake-host");
+    await hello(service, host, "owner-ticket", "host");
+    expect(host.messages.at(-1)).toContain('"code":"authentication_required"');
+    expect(host.closed).toBe(true);
+  });
+
+  it("does not disconnect current sessions for a delayed older revocation", async () => {
+    const service = new SignalService(fakeTokens(), 8);
+    const host = socket("current-host");
+    const client = socket("current-client");
+    await hello(service, host, "current-host-ticket", "host");
+    await hello(service, client, "current-client-ticket", "client");
+
+    service.revoke("host-1", 1);
+
+    expect(host.closed).toBe(false);
+    expect(client.closed).toBe(false);
+    expect(service.metrics().activePeerConnections).toBe(1);
+  });
+
+  it.each([false, true])(
+    "keeps devices isolated across reconnect, revocation and host recovery (reverse order: %s)",
+    async (reverse) => {
+      const service = new SignalService(fakeTokens(), 8);
+      const host = socket("host");
+      await hello(service, host, "host-ticket", "host");
+      const first = socket("first-client");
+      const second = socket("second-client");
+      if (reverse) {
+        await hello(service, second, "second-client-ticket", "client");
+        await hello(service, first, "client-ticket", "client");
+      } else {
+        await hello(service, first, "client-ticket", "client");
+        await hello(service, second, "second-client-ticket", "client");
+      }
+      expect(first.closed).toBe(false);
+      expect(second.closed).toBe(false);
+      expect(service.metrics().activePeerConnections).toBe(2);
+      const secondId = JSON.parse(second.messages.at(-1) ?? "{}").connectionId;
+      expect(secondId).toEqual(expect.any(String));
+      await service.receive(
+        host,
+        JSON.stringify({ type: "offer", version: 1, channel: "team", connectionId: secondId, sdp: "second-only" }),
+      );
+      expect(second.messages.at(-1)).toContain("second-only");
+      expect(first.messages.some((message) => message.includes("second-only"))).toBe(false);
+      await service.receive(
+        first,
+        JSON.stringify({ type: "offer", version: 1, channel: "team", connectionId: secondId, sdp: "cross-device" }),
+      );
+      expect(first.messages.at(-1)).toContain('"code":"permission_denied"');
+
+      service.disconnect(first);
+      const resumed = socket("resumed-client");
+      await hello(service, resumed, "resume-client", "client");
+      expect(service.metrics().activePeerConnections).toBe(2);
+      expect(second.closed).toBe(false);
+      service.disconnect(host);
+      const recoveredHost = socket("recovered-host");
+      await hello(service, recoveredHost, "resume-host", "host");
+      expect(service.metrics().activePeerConnections).toBe(2);
+      expect(recoveredHost.messages.filter((message) => message.includes('"type":"peer-ready"'))).toHaveLength(2);
+
+      service.revokeSession("client-session");
+      expect(resumed.closed).toBe(true);
+      expect(second.closed).toBe(false);
+      expect(service.metrics().activePeerConnections).toBe(1);
+      const remainingId = JSON.parse(second.messages.at(-1) ?? "{}").connectionId;
+      await service.receive(
+        recoveredHost,
+        JSON.stringify({
+          type: "answer",
+          version: 1,
+          channel: "team",
+          connectionId: remainingId,
+          sdp: "still-connected",
+        }),
+      );
+      expect(second.messages.at(-1)).toContain("still-connected");
+    },
+  );
+
+  it("does not send a second phone to an older desktop without multiplex support", async () => {
+    const service = new SignalService(fakeTokens(), 8);
+    const host = socket("legacy-host");
+    service.connect(host);
+    await service.receive(host, JSON.stringify({ type: "hello", version: 1, peer: "host", token: "host-ticket" }));
+    const first = socket("first");
+    await hello(service, first, "client-ticket", "client");
+    const second = socket("second");
+    await hello(service, second, "second-client-ticket", "client");
+    expect(second.messages.at(-1)).toContain('"code":"host_busy"');
+    expect(first.closed).toBe(false);
+    expect(service.metrics().activePeerConnections).toBe(1);
+  });
+
+  it("registers no peer when the socket closes while the ticket is verified", async () => {
+    const tokens = fakeTokens();
+    // One connection per account, so a peer that outlives its socket refuses the next real device.
+    const service = new SignalService(tokens, 1);
+    const host = socket("host");
+    await hello(service, host, "host-ticket", "host");
+    const accepted = service.metrics().acceptedConnections;
+
+    // Hold the next verification open, so the socket can close in the middle of it.
+    const verifyTicket = tokens.verifyTicket;
+    const verification = deferred();
+    tokens.verifyTicket = vi.fn(async (token: string) => {
+      await verification.promise;
+      return await verifyTicket(token);
+    });
+
+    const client = socket("client");
+    service.connect(client);
+    const authenticating = service.receive(
+      client,
+      JSON.stringify({ type: "hello", version: 1, peer: "client", token: "client-ticket" }),
+    );
+    expect(tokens.verifyTicket).toHaveBeenCalledOnce();
+
+    // The teardown runs first. It finds no peer, because `#authenticate` has not registered one yet.
+    service.disconnect(client);
+    verification.resolve();
+    await authenticating;
+
+    expect(service.metrics().acceptedConnections).toBe(accepted);
+    expect(host.messages.some((message) => message.includes('"type":"peer-ready"'))).toBe(false);
+
+    // The account keeps its own connection limit for a device that is really there.
+    const phone = socket("phone");
+    await hello(service, phone, "second-client-ticket", "client");
+    expect(phone.messages.some((message) => message.includes('"type":"ready"'))).toBe(true);
+    expect(host.messages.filter((message) => message.includes('"type":"peer-ready"'))).toHaveLength(1);
+  });
+
+  it("limits unauthenticated sockets and revokes one logical session", async () => {
+    const service = new SignalService(fakeTokens(), 8, 1);
+    const pending = socket("pending", "192.0.2.10");
+    const rejected = socket("rejected", "192.0.2.10");
+    expect(service.connect(pending)).toBe(true);
+    expect(service.connect(rejected)).toBe(false);
+    expect(rejected.messages.at(-1)).toContain('"code":"rate_limited"');
+
+    service.disconnect(pending);
+    const host = socket("host");
+    const client = socket("client");
+    await hello(service, host, "host-ticket", "host");
+    await hello(service, client, "client-ticket", "client");
+    service.revokeSession("client-session");
+    expect(client.messages.at(-1)).toContain('"code":"session_revoked"');
+    expect(client.closed).toBe(true);
+    expect(host.messages.at(-1)).toContain('"type":"disconnect"');
+  });
+});
+
+function fakeTokens() {
+  const now = Math.floor(Date.now() / 1_000);
+  const claims = (
+    role: "host" | "owner" | "member",
+    jti: string,
+    sessionId = role === "host" ? "host-session" : "client-session",
+    authEpoch = 1,
+  ): RemoteTicketClaims => ({
+    aud: "openbot-remote",
+    jti,
+    sessionId,
+    hostId: "host-1",
+    userId: role === "host" ? "owner-1" : "user-1",
+    membershipId: role === "host" ? "host-1:host" : "member-1",
+    role,
+    authEpoch,
+    protocolMinimum: 2,
+    protocolMaximum: 2,
+    sessionExpiresAt: now + 86_400,
+    iat: now,
+    exp: now + 300,
+  });
+  return {
+    verifyTicket: async (token: string) => {
+      if (token === "host-ticket") return claims("host", "host-jti");
+      if (token === "stale-host-ticket") return claims("host", "stale-host-jti");
+      if (token === "client-ticket") return claims("member", "client-jti");
+      if (token === "fresh-client-ticket") return claims("member", "fresh-client-jti");
+      if (token === "second-client-ticket") return claims("member", "second-client-jti", "second-client-session");
+      if (token === "owner-ticket") return claims("owner", "owner-jti");
+      if (token === "current-host-ticket") return claims("host", "current-host-jti", "host-session", 2);
+      if (token === "current-client-ticket") return claims("member", "current-client-jti", "client-session", 2);
+      throw new Error("not an initial ticket");
+    },
+    verifyResumeToken: async (token: string) => {
+      if (token === "resume-client") return claims("member", "resume-jti");
+      if (token === "resume-host") return claims("host", "resume-host-jti");
+      throw new Error("not a resume token");
+    },
+    validateClaims: async () => true,
+    issueResumeToken: async (value: RemoteTicketClaims) => `resume-${value.role === "host" ? "host" : "client"}`,
+    iceServers: () => [{ urls: "stun:turn.example.com:3478" }],
+  };
+}
+
+interface TestSignalSocket extends SignalSocket {
+  messages: string[];
+  closed: boolean;
+}
+
+function socket(id: string, ip = `192.0.2.${id.length}`): TestSignalSocket {
+  const messages: string[] = [];
+  const target: TestSignalSocket = {
+    id,
+    ip,
+    messages,
+    closed: false,
+    send: (message) => {
+      messages.push(message);
+    },
+    close: () => {
+      target.closed = true;
+    },
+  };
+  return target;
+}
+
+/** A promise that the test opens by hand, so the code under test waits at a known point. */
+function deferred() {
+  let open: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, resolve: () => open() };
+}
+
+async function hello(service: SignalService, target: SignalSocket, token: string, peer: "host" | "client") {
+  service.connect(target);
+  await service.receive(
+    target,
+    JSON.stringify({ type: "hello", version: 1, peer, token, ...(peer === "host" ? { multiplex: true } : {}) }),
+  );
+}

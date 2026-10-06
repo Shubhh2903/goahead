@@ -1,0 +1,303 @@
+import type { AgentEvent, BrowserTab } from "@openbot/contracts/ipc";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AgentProvider } from "./agent-client";
+import type { AgentService } from "./agent-service";
+import {
+  CREATE_AGENT_INPUT,
+  createFakeClaude,
+  createTestService,
+  FakeAgentClient,
+  fakeBrowser,
+  notification,
+  startAgentTestFixture,
+  stopAgentTestFixture,
+  stores,
+  waitFor,
+} from "./agent-service-test-harness";
+
+function ownedTab(id: string, ownerThreadId: string, ownerAgentId: string): BrowserTab {
+  return { id, title: "Sign in", url: "https://example.com/login", loading: false, ownerThreadId, ownerAgentId };
+}
+
+function takeoverRequest(id: string, threadId: string, turnId: string, tabId: string) {
+  return {
+    method: "item/tool/call",
+    id,
+    params: {
+      threadId,
+      turnId,
+      callId: id,
+      namespace: "openbot_browser",
+      tool: "request_takeover",
+      arguments: { tabId, reason: "Sign in." },
+    },
+  };
+}
+
+let root: string;
+let service: AgentService | null = null;
+
+beforeEach(async () => {
+  ({ root } = await startAgentTestFixture());
+});
+
+afterEach(async () => {
+  await stopAgentTestFixture(root, service);
+  service = null;
+});
+
+describe.sequential("AgentService: questions", () => {
+  it("does not use a question prompt summary as the completed assistant reply", async () => {
+    const clients = new Map<AgentProvider, FakeAgentClient>();
+    const { store, mailbox } = stores(root);
+    service = createTestService({
+      store,
+      mailbox,
+      preferredProvider: "codex",
+      clientFactory: (provider) => {
+        const client = new FakeAgentClient(provider, "DONE", false);
+        clients.set(provider, client);
+        return client;
+      },
+    });
+    const events: AgentEvent[] = [];
+    service.on("event", (event) => events.push(event));
+    await service.initialize();
+    await service.sendMessage({ agentId: "chief", text: "Ask only one question" });
+    await waitFor(() => events.some((event) => event.type === "turn-started"));
+
+    const client = clients.get("codex");
+    const threadId = store.activeProviderSession("chief")?.externalSessionId;
+    const turnId = events.find((event) => event.type === "turn-started")?.turnId;
+    if (!client || !threadId || !turnId) throw new Error("The question-only turn did not start.");
+
+    client.emit("request", {
+      method: "item/tool/call",
+      id: "question-only-call",
+      params: {
+        threadId,
+        turnId,
+        callId: "question-only-call",
+        namespace: "openbot",
+        tool: "ask_user",
+        arguments: {
+          questions: [{ id: "scope", header: "Scope", question: "Which scope should we use?" }],
+        },
+      },
+    });
+    await waitFor(() => events.some((event) => event.type === "prompt"));
+    await service.respondToPrompt({ requestId: "question-only-call", answers: { scope: ["Small"] } });
+    const previewBeforeCompletion = service.listAgents().find((agent) => agent.id === "chief")?.preview;
+
+    client.emit(
+      "notification",
+      notification("turn/completed", { threadId, turn: { id: turnId, status: "completed" } }),
+    );
+    await waitFor(() => events.some((event) => event.type === "turn-completed"));
+
+    const previewAfterCompletion = service.listAgents().find((agent) => agent.id === "chief")?.preview;
+    expect(previewAfterCompletion).toBe(previewBeforeCompletion);
+    expect(previewAfterCompletion).not.toContain("Which scope should we use?");
+  });
+
+  it("keeps prompts, approvals and takeovers from a healthy provider active when another provider exits", async () => {
+    process.env.OPENBOT_CLAUDE_PATH = await createFakeClaude(root);
+    const clients = new Map<AgentProvider, FakeAgentClient>();
+    const tabs: BrowserTab[] = [];
+    const { store, mailbox } = stores(root);
+    service = createTestService({
+      store,
+      mailbox,
+      browser: fakeBrowser(tabs),
+      preferredProvider: "codex",
+      clientFactory: (provider) => {
+        const client = new FakeAgentClient(provider, "DONE", false);
+        clients.set(provider, client);
+        return client;
+      },
+    });
+    const events: AgentEvent[] = [];
+    service.on("event", (event) => events.push(event));
+    await service.initialize();
+    await service.sendMessage({ agentId: "chief", text: "Ask from Codex" });
+    await service.setPreferredProvider("claude");
+    const claudeAgent = await service.createAgent({
+      ...CREATE_AGENT_INPUT,
+      name: "Claude Prompt Agent",
+      avatarSeed: "setup:claude-prompt",
+    });
+    await service.sendMessage({ agentId: claudeAgent.id, text: "Ask from Claude" });
+    await waitFor(() => events.filter((event) => event.type === "turn-started").length === 2);
+
+    const codexClient = clients.get("codex");
+    const claudeClient = clients.get("claude");
+    const codexThreadId = store.activeProviderSession("chief")?.externalSessionId;
+    const claudeThreadId = store.activeProviderSession(claudeAgent.id)?.externalSessionId;
+    const codexTurn = events.find((event) => event.type === "turn-started" && event.agentId === "chief");
+    const claudeTurn = events.find((event) => event.type === "turn-started" && event.agentId === claudeAgent.id);
+    if (
+      !codexClient ||
+      !claudeClient ||
+      !codexThreadId ||
+      !claudeThreadId ||
+      codexTurn?.type !== "turn-started" ||
+      claudeTurn?.type !== "turn-started"
+    ) {
+      throw new Error("Both provider turns did not start.");
+    }
+
+    codexClient.emit("request", {
+      method: "item/tool/call",
+      id: "codex-provider-prompt",
+      params: {
+        threadId: codexThreadId,
+        turnId: codexTurn.turnId,
+        callId: "codex-provider-prompt",
+        namespace: "openbot",
+        tool: "ask_user",
+        arguments: { questions: [{ id: "codex", header: "Codex", question: "Codex question?" }] },
+      },
+    });
+    claudeClient.emit("request", {
+      method: "item/tool/call",
+      id: "claude-provider-prompt",
+      params: {
+        threadId: claudeThreadId,
+        turnId: claudeTurn.turnId,
+        callId: "claude-provider-prompt",
+        namespace: "openbot",
+        tool: "ask_user",
+        arguments: { questions: [{ id: "claude", header: "Claude", question: "Claude question?" }] },
+      },
+    });
+    await waitFor(() => events.filter((event) => event.type === "prompt").length === 2);
+    for (const [client, threadId, turnId, requestId] of [
+      [codexClient, codexThreadId, codexTurn.turnId, "codex-provider-approval"],
+      [claudeClient, claudeThreadId, claudeTurn.turnId, "claude-provider-approval"],
+    ] as const) {
+      client.emit("request", {
+        method: "item/commandExecution/requestApproval",
+        id: requestId,
+        params: { threadId, turnId, command: ["git", "status"], cwd: root, reason: "Inspect the worktree." },
+      });
+    }
+    await waitFor(() => events.filter((event) => event.type === "approval").length === 2);
+    tabs.push(ownedTab("claude-tab", claudeTurn.threadId, claudeAgent.id));
+    claudeClient.emit(
+      "request",
+      takeoverRequest("claude-provider-takeover", claudeThreadId, claudeTurn.turnId, "claude-tab"),
+    );
+    await waitFor(() => events.some((event) => event.type === "browser-takeover-requested"));
+
+    codexClient.emit("exit", new Error("Codex exited."));
+    await waitFor(() => events.some((event) => event.type === "error" && event.code === "codex_exited"));
+    // Remote clients drop a request only on its resolved event: a partial runtime snapshot keeps it.
+    expect(
+      events.flatMap((event) => (event.type === "agent-input-resolved" ? [[event.kind, event.requestId]] : [])),
+    ).toEqual([
+      ["prompt", "codex-provider-prompt"],
+      ["approval", "codex-provider-approval"],
+    ]);
+    expect(service.getRuntimeSnapshot().pendingBrowserTakeovers.map((takeover) => takeover.requestId)).toEqual([
+      "claude-provider-takeover",
+    ]);
+    expect(
+      (await service.readConversation("chief")).messages.find(
+        (message) => message.questionPrompt?.requestId === "codex-provider-prompt",
+      )?.questionPrompt?.resolution,
+    ).toEqual({ status: "expired" });
+    expect(
+      (await service.readConversation(claudeAgent.id)).messages.find(
+        (message) => message.questionPrompt?.requestId === "claude-provider-prompt",
+      )?.questionPrompt?.resolution,
+    ).toBeNull();
+
+    await service.respondToPrompt({ requestId: "claude-provider-prompt", answers: { claude: ["Still active"] } });
+    expect(claudeClient.responses.find((response) => response.id === "claude-provider-prompt")).toBeDefined();
+    await service.respondToApproval({ requestId: "claude-provider-approval", decision: "accept" });
+    expect(claudeClient.responses.find((response) => response.id === "claude-provider-approval")).toEqual({
+      id: "claude-provider-approval",
+      result: { decision: "accept" },
+    });
+  });
+
+  it("expires the requests of a provider that an account refresh finds signed out", async () => {
+    const clients = new Map<AgentProvider, FakeAgentClient>();
+    const tabs: BrowserTab[] = [];
+    const { store, mailbox } = stores(root);
+    service = createTestService({
+      store,
+      mailbox,
+      browser: fakeBrowser(tabs),
+      preferredProvider: "codex",
+      clientFactory: (provider) => {
+        const client = new FakeAgentClient(provider, "DONE", false);
+        clients.set(provider, client);
+        return client;
+      },
+    });
+    const events: AgentEvent[] = [];
+    service.on("event", (event) => events.push(event));
+    await service.initialize();
+    await service.sendMessage({ agentId: "chief", text: "Ask before the sign-out" });
+    await waitFor(() => events.some((event) => event.type === "turn-started"));
+
+    const client = clients.get("codex");
+    const threadId = store.activeProviderSession("chief")?.externalSessionId;
+    const started = events.find((event) => event.type === "turn-started");
+    const turnId = started?.turnId;
+    if (!client || !threadId || !turnId || started?.type !== "turn-started") {
+      throw new Error("The Codex turn did not start.");
+    }
+    tabs.push(ownedTab("signed-out-tab", started.threadId, "chief"));
+    client.emit("request", takeoverRequest("signed-out-takeover", threadId, turnId, "signed-out-tab"));
+    client.emit("request", {
+      method: "item/tool/call",
+      id: "signed-out-prompt",
+      params: {
+        threadId,
+        turnId,
+        callId: "signed-out-prompt",
+        namespace: "openbot",
+        tool: "ask_user",
+        arguments: { questions: [{ id: "scope", header: "Scope", question: "Which scope?" }] },
+      },
+    });
+    client.emit("request", {
+      method: "item/commandExecution/requestApproval",
+      id: "signed-out-approval",
+      params: { threadId, turnId, command: ["git", "status"], cwd: root, reason: "Inspect the worktree." },
+    });
+    await waitFor(
+      () =>
+        events.some((event) => event.type === "approval") &&
+        events.some((event) => event.type === "browser-takeover-requested"),
+    );
+
+    client.accountSignedIn = false;
+    await service.refreshProviders();
+    expect(client.running).toBe(false);
+    expect(events).toContainEqual({
+      type: "browser-takeover-resolved",
+      requestId: "signed-out-takeover",
+      agentId: "chief",
+    });
+    expect(service.getRuntimeSnapshot().pendingBrowserTakeovers).toEqual([]);
+    // The stopped process has nothing to answer.
+    expect(client.responses.some((response) => response.id === "signed-out-takeover")).toBe(false);
+    expect(
+      events.flatMap((event) => (event.type === "agent-input-resolved" ? [[event.kind, event.requestId]] : [])),
+    ).toEqual([
+      ["prompt", "signed-out-prompt"],
+      ["approval", "signed-out-approval"],
+    ]);
+    expect(
+      (await service.readConversation("chief")).messages.find(
+        (message) => message.questionPrompt?.requestId === "signed-out-prompt",
+      )?.questionPrompt?.resolution,
+    ).toEqual({ status: "expired" });
+    await expect(service.respondToApproval({ requestId: "signed-out-approval", decision: "accept" })).rejects.toThrow(
+      "This approval is no longer active.",
+    );
+  });
+});

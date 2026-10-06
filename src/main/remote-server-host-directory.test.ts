@@ -1,0 +1,203 @@
+// @vitest-environment node
+import { describe, expect, it, vi } from "vitest";
+import type { RemoteHostSummary } from "./central-auth-records";
+import { reconcileWebRtcHosts, watchRemoteHostDirectory } from "./remote-server-host-directory";
+import type { PreservedHostIdentity } from "./remote-server-store";
+import type { StoredRemoteServer } from "./remote-server-stored-shape";
+import { fingerprint } from "./team-store";
+
+function listedHost(hostId: string, overrides: Partial<RemoteHostSummary> = {}): RemoteHostSummary {
+  return {
+    hostId,
+    name: hostId,
+    logoKey: null,
+    devicePublicKey: `${hostId}-key`,
+    authEpoch: 1,
+    membershipId: `membership-${hostId}`,
+    role: "member",
+    ...overrides,
+  };
+}
+
+function storedHost(hostId: string, overrides: Partial<StoredRemoteServer> = {}): StoredRemoteServer {
+  return {
+    id: hostId,
+    name: hostId,
+    apiUrl: `webrtc://${hostId}`,
+    fingerprint: fingerprint(`${hostId}-key`),
+    publicKey: `${hostId}-key`,
+    username: "person@example.com",
+    encryptedToken: "",
+    remoteDesktopAvailable: false,
+    logoVersion: null,
+    role: "member",
+    transport: "webrtc-v2",
+    ...overrides,
+  };
+}
+
+function reconcile(input: {
+  hosts?: RemoteHostSummary[];
+  servers?: StoredRemoteServer[];
+  localHostId?: string | null;
+  preservedIdentities?: PreservedHostIdentity[];
+  hidden?: string[];
+  keepOtherTransports?: boolean;
+  connected?: string[];
+}) {
+  return reconcileWebRtcHosts({
+    hosts: input.hosts ?? [],
+    isConnected: (hostId) => (input.connected ?? []).includes(hostId),
+    servers: input.servers ?? [],
+    preservedIdentities: input.preservedIdentities ?? [],
+    localHostId: input.localHostId ?? null,
+    isHiddenHost: (hostId) => (input.hidden ?? []).includes(hostId),
+    username: "person@example.com",
+    keepOtherTransports: input.keepOtherTransports ?? false,
+  });
+}
+
+describe("reconcileWebRtcHosts", () => {
+  it("preserves observed desktop availability only while the same host stays connected", () => {
+    const servers = [
+      storedHost("online", { remoteDesktopAvailable: true }),
+      storedHost("offline", { remoteDesktopAvailable: true }),
+    ];
+    const result = reconcile({ hosts: [listedHost("online"), listedHost("offline")], servers, connected: ["online"] });
+    expect(result.servers.map((server) => [server.id, server.remoteDesktopAvailable])).toEqual([
+      ["online", true],
+      ["offline", false],
+    ]);
+  });
+
+  it("keeps the order the user arranged and appends hosts they have not seen", () => {
+    const result = reconcile({
+      hosts: [listedHost("first"), listedHost("second"), listedHost("third")],
+      servers: [storedHost("third"), storedHost("first")],
+    });
+
+    expect(result.servers.map((server) => server.id)).toEqual(["third", "first", "second"]);
+    expect(result.removedHostIds).toEqual([]);
+  });
+
+  // The entry is on disk and holds the fingerprint, but this build could not decode it, so it is
+  // absent from `servers` and the host looks new. Accepting the advertised key here would let a
+  // compromised account service re-key a machine the user pinned -- the whole point of the pin.
+  it("refuses an advertised key that disagrees with a pin it could not read", () => {
+    const result = reconcile({
+      hosts: [listedHost("host", { devicePublicKey: "attacker-key" })],
+      preservedIdentities: [{ hostId: "host", publicKey: null, fingerprint: fingerprint("trusted-key") }],
+    });
+
+    expect(result.servers[0]).toMatchObject({ id: "host", fingerprint: fingerprint("trusted-key") });
+    expect(result.servers[0]).not.toHaveProperty("publicKey");
+    expect(result.pinnedKeys).toEqual([]);
+  });
+
+  it("refuses an advertised key that disagrees with a fingerprint the user already trusts", () => {
+    const result = reconcile({
+      hosts: [listedHost("host", { devicePublicKey: "attacker-key" })],
+      servers: [storedHost("host", { publicKey: undefined, fingerprint: fingerprint("trusted-key") })],
+    });
+
+    expect(result.pinnedKeys).toEqual([]);
+    expect(result.servers[0]?.publicKey).toBeUndefined();
+    expect(result.servers[0]?.fingerprint).toBe(fingerprint("trusted-key"));
+  });
+
+  it("keeps a pinned key even when the directory advertises a different one", () => {
+    const result = reconcile({
+      hosts: [listedHost("host", { devicePublicKey: "attacker-key" })],
+      servers: [storedHost("host", { publicKey: "trusted-key", fingerprint: fingerprint("trusted-key") })],
+    });
+
+    expect(result.pinnedKeys).toEqual([{ hostId: "host", publicKey: "trusted-key" }]);
+    expect(result.servers[0]?.publicKey).toBe("trusted-key");
+  });
+
+  it("adopts the advertised key for a host with nothing pinned yet", () => {
+    const result = reconcile({ hosts: [listedHost("host")] });
+
+    expect(result.pinnedKeys).toEqual([{ hostId: "host", publicKey: "host-key" }]);
+    expect(result.servers[0]?.fingerprint).toBe(fingerprint("host-key"));
+  });
+
+  it("reports a host the directory dropped so the caller can disconnect it", () => {
+    const result = reconcile({ hosts: [listedHost("kept")], servers: [storedHost("kept"), storedHost("revoked")] });
+
+    expect(result.removedHostIds).toEqual(["revoked"]);
+    expect(result.servers.map((server) => server.id)).toEqual(["kept"]);
+  });
+
+  it("leaves out this computer's own host and the hosts the user removed by hand", () => {
+    const result = reconcile({
+      hosts: [listedHost("self"), listedHost("hidden"), listedHost("wanted")],
+      localHostId: "self",
+      hidden: ["hidden"],
+    });
+
+    expect(result.servers.map((server) => server.id)).toEqual(["wanted"]);
+  });
+
+  it("treats the directory as the whole answer unless development invites are allowed", () => {
+    const https = storedHost("https-server", { apiUrl: "https://api.example.com", transport: undefined });
+
+    const dropped = reconcile({ servers: [https] });
+    expect(dropped.servers).toEqual([]);
+    expect(dropped.staleTransportHostIds).toEqual(["https-server"]);
+    expect(reconcile({ servers: [https], keepOtherTransports: true }).servers.map((server) => server.id)).toEqual([
+      "https-server",
+    ]);
+  });
+
+  // A developer reaches their own host over HTTPS and then publishes it, and the directory lists it
+  // under that same id. Two entries with one id is a list the app cannot act on: disconnecting or
+  // forgetting the server leaves the other copy behind. The id surviving is what makes the report
+  // load-bearing -- the HTTPS event stream this entry opened outlives it otherwise, and the caller
+  // has nothing else to notice it by.
+  it("lists a host once when it is both stored over HTTPS and published over WebRTC", () => {
+    const result = reconcile({
+      hosts: [listedHost("host")],
+      servers: [storedHost("host", { apiUrl: "https://api.example.com", transport: undefined })],
+      keepOtherTransports: true,
+    });
+
+    expect(result.servers.map((server) => server.id)).toEqual(["host"]);
+    expect(result.servers[0]).toMatchObject({ apiUrl: "webrtc://host", transport: "webrtc-v2" });
+    expect(result.staleTransportHostIds).toEqual(["host"]);
+    expect(result.removedHostIds).toEqual([]);
+  });
+
+  it("refreshes the name and role the directory reports for a host already stored", () => {
+    const result = reconcile({
+      hosts: [listedHost("host", { name: "Renamed", role: "admin", logoKey: "logo-2" })],
+      servers: [storedHost("host", { name: "Old name", role: "member", logoVersion: "logo-1" })],
+    });
+
+    expect(result.servers[0]).toMatchObject({ name: "Renamed", role: "admin", logoVersion: "logo-2" });
+  });
+});
+
+it("refreshes cross-device memberships only while active and stops on shutdown", async () => {
+  vi.useFakeTimers();
+  let active = false;
+  const refresh = vi.fn(async () => undefined);
+  const stop = watchRemoteHostDirectory({ isActive: () => active, refresh });
+  try {
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    expect(refresh).not.toHaveBeenCalled();
+    active = true;
+    await vi.advanceTimersByTimeAsync(15 * 60_000 - 1);
+    expect(refresh).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(15 * 60_000 - 1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    stop();
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  } finally {
+    stop();
+    vi.useRealTimers();
+  }
+});

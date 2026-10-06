@@ -1,0 +1,1556 @@
+import { serializeAttachmentReference } from "@openbot/contracts/attachment-references";
+import { serializeChatTagReference } from "@openbot/contracts/chat-tag-references";
+import type { ConversationSnapshot, DirectConversationSnapshot, QueueDelivery } from "@openbot/contracts/ipc";
+import { fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
+import { assert, expect, it, vi } from "vitest";
+import { App } from "./App";
+import {
+  attachment,
+  confirmOnboardingModel,
+  emitAgentEvent,
+  emitAttachmentImport,
+  emitDirectMessage,
+  emitDirectTyping,
+  emitPresence,
+  installOpenbotStub,
+  presenceMember,
+  queuedDelivery,
+  testServer,
+  trackAnalytics,
+} from "./app-test-harness";
+import { TestResizeObserver } from "./setupTests";
+
+describe("OpenBot connected desktop shell", () => {
+  beforeEach(() => {
+    installOpenbotStub();
+  });
+
+  it("keeps a failed send in the composer and clears it only after a successful retry", async () => {
+    vi.mocked(window.openbot.agent.sendMessage).mockRejectedValueOnce(new Error("Mailbox unavailable"));
+    render(() => <App />);
+    await confirmOnboardingModel();
+    const composer = await screen.findByRole("textbox", { name: "Message Chief" });
+    composer.textContent = "Run this Monday";
+    await fireEvent.input(composer);
+    await waitFor(() =>
+      expect(window.openbot.servers.setTyping).toHaveBeenCalledWith({
+        agentId: "chief",
+        typing: true,
+      }),
+    );
+    await fireEvent.keyDown(composer, { key: "Enter" });
+    expect(await screen.findByText("Mailbox unavailable")).toBeInTheDocument();
+    expect(composer).toHaveTextContent("Run this Monday");
+
+    await fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() =>
+      expect(window.openbot.agent.sendMessage).toHaveBeenCalledWith(
+        { agentId: "chief", text: "Run this Monday", attachmentDraftIds: [] },
+        "local",
+      ),
+    );
+    await waitFor(() =>
+      expect(window.openbot.agent.markConversationRead).toHaveBeenCalledWith(
+        {
+          agentId: "chief",
+          throughMessageId: "delivery-1",
+        },
+        "local",
+      ),
+    );
+    await waitFor(() => expect(composer).toHaveTextContent(""));
+    expect(trackAnalytics).toHaveBeenCalledWith("message_send", {
+      provider: "codex",
+      model: "gpt-5.6-luna",
+      reasoning_effort: "medium",
+      server_kind: "local",
+      channel: "agent",
+      attachment_count: 0,
+      is_reply: false,
+      result: "succeeded",
+      delivery_count: 1,
+    });
+  });
+
+  it("does not read an earlier agent reply again after sending a message", async () => {
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    emitAgentEvent?.({
+      type: "conversation",
+      snapshot: {
+        agentId: "chief",
+        threadId: "thread-chief",
+        activeTurnId: null,
+        revision: 1,
+        messages: [
+          {
+            id: "assistant-before-send",
+            author: "assistant",
+            text: "Earlier agent reply",
+            createdAt: "2026-08-12T10:00:00.000Z",
+            status: "completed",
+          },
+        ],
+      },
+    });
+    await screen.findByText("Earlier agent reply");
+    await waitFor(() => expect(window.openbot.agent.markConversationRead).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    vi.mocked(window.openbot.agent.markConversationRead).mockClear();
+
+    const composer = screen.getByRole("textbox", { name: "Message Chief" });
+    composer.textContent = "Continue this work";
+    await fireEvent.input(composer);
+    await fireEvent.keyDown(composer, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(window.openbot.agent.markConversationRead).toHaveBeenCalledWith(
+        { agentId: "chief", throughMessageId: "delivery-1" },
+        "local",
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(vi.mocked(window.openbot.agent.markConversationRead).mock.calls).toEqual([
+      [{ agentId: "chief", throughMessageId: "delivery-1" }, "local"],
+    ]);
+  });
+
+  it("opens a private person thread and receives direct messages in real time", async () => {
+    vi.mocked(window.openbot.servers.markDirectRead).mockRejectedValueOnce(new Error("Read state unavailable"));
+    render(() => <App peopleEnabled />);
+    await screen.findByRole("heading", { name: "Chief" });
+    emitPresence?.({
+      serverId: "server-1",
+      updatedAt: "2026-08-19T10:00:00.000Z",
+      members: [
+        {
+          id: "member-self",
+          username: "person@example.com",
+          email: "person@example.com",
+          name: "Person",
+          role: "owner",
+          createdAt: "2026-08-18T10:00:00.000Z",
+          disabled: false,
+          online: true,
+          typingAgentId: null,
+        },
+        {
+          id: "member-alice",
+          username: "alice@example.com",
+          email: "alice@example.com",
+          name: "Alice",
+          role: "member",
+          createdAt: "2026-08-18T11:00:00.000Z",
+          disabled: false,
+          online: true,
+          typingAgentId: null,
+        },
+      ],
+    });
+
+    await fireEvent.click(await screen.findByRole("button", { name: /Alice/ }));
+    expect(await screen.findByRole("main", { name: "Direct conversation with Alice" })).toBeInTheDocument();
+    const input = screen.getByRole("textbox", { name: "Message Alice" });
+    await fireEvent.input(input, { target: { value: "Hello Alice" } });
+    await fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(window.openbot.servers.sendDirectMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ memberId: "member-alice", text: "Hello Alice" }),
+      ),
+    );
+    await waitFor(() =>
+      expect(window.openbot.servers.markDirectRead).toHaveBeenCalledWith({
+        memberId: "member-alice",
+        throughSequence: 1,
+      }),
+    );
+    expect(await screen.findByText("Hello Alice")).toBeInTheDocument();
+    await waitFor(() => expect(input).toHaveValue(""));
+    expect(await screen.findByText("Read state unavailable")).toBeInTheDocument();
+    expect(trackAnalytics).toHaveBeenCalledWith("message_send", {
+      channel: "direct",
+      attachment_count: 0,
+      is_reply: false,
+      result: "succeeded",
+      delivery_count: 1,
+      server_kind: "local",
+    });
+
+    emitDirectTyping?.({
+      type: "team-direct-typing",
+      senderMemberId: "member-alice",
+      recipientMemberId: "member-self",
+      typing: true,
+    });
+    expect(await screen.findByText("Alice is typing")).toBeInTheDocument();
+
+    emitDirectMessage?.({
+      type: "team-direct-message",
+      memberIds: ["member-alice", "member-self"],
+      message: {
+        id: "message-alice-1",
+        threadId: "thread-member-alice",
+        senderMemberId: "member-alice",
+        recipientMemberId: "member-self",
+        text: "Hi. I am here.",
+        createdAt: "2026-08-19T10:01:00.000Z",
+        sequence: 2,
+      },
+    });
+    const incomingMessage = await screen.findByText("Hi. I am here.");
+    expect(incomingMessage).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "1 new message" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("separator", { name: "New messages" })).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(window.openbot.servers.markDirectRead).toHaveBeenCalledWith({
+        memberId: "member-alice",
+        throughSequence: 2,
+      }),
+    );
+  });
+
+  it("does not expose team conversations when the signed-in account is not a member", async () => {
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    emitPresence?.({
+      serverId: "server-smoke",
+      updatedAt: "2026-08-19T10:00:00.000Z",
+      members: [presenceMember("member-smoke", "codex-smoke@example.invalid", "Codex Smoke")],
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /codex-smoke@example\.invalid/i })).not.toBeInTheDocument();
+    });
+    expect(window.openbot.servers.readDirectConversation).not.toHaveBeenCalled();
+    expect(window.openbot.servers.listDirectThreads).not.toHaveBeenCalled();
+  });
+
+  it("does not apply a stale direct-message load after another person is selected", async () => {
+    let resolveAlice: ((snapshot: DirectConversationSnapshot) => void) | undefined;
+    vi.mocked(window.openbot.servers.readDirectConversation).mockImplementation((memberId) => {
+      if (memberId === "member-alice") {
+        return new Promise((resolve) => {
+          resolveAlice = resolve;
+        });
+      }
+      return Promise.resolve({
+        threadId: "thread-member-bob",
+        otherMemberId: "member-bob",
+        messages: [
+          {
+            id: "message-bob",
+            threadId: "thread-member-bob",
+            senderMemberId: "member-bob",
+            recipientMemberId: "member-self",
+            text: "Bob history",
+            createdAt: "2026-08-19T09:00:00.000Z",
+            sequence: 1,
+          },
+        ],
+        revision: 1,
+      });
+    });
+    render(() => <App peopleEnabled />);
+    await screen.findByRole("heading", { name: "Chief" });
+    emitPresence?.({
+      serverId: "server-1",
+      updatedAt: "2026-08-19T10:00:00.000Z",
+      members: [
+        presenceMember("member-self", "person@example.com", "Person"),
+        presenceMember("member-alice", "alice@example.com", "Alice"),
+        presenceMember("member-bob", "bob@example.com", "Bob"),
+      ],
+    });
+
+    await fireEvent.click(await screen.findByRole("button", { name: /Alice/ }));
+    await fireEvent.click(screen.getByRole("button", { name: /Bob/ }));
+    expect(await screen.findByText("Bob history")).toBeInTheDocument();
+    resolveAlice?.({
+      threadId: "thread-member-alice",
+      otherMemberId: "member-alice",
+      messages: [],
+      revision: 0,
+    });
+
+    await waitFor(() => expect(screen.getByRole("main", { name: "Direct conversation with Bob" })).toBeInTheDocument());
+    expect(screen.getByText("Bob history")).toBeInTheDocument();
+  });
+
+  it("replies to a message through the composer and keeps the reference in the queued input", async () => {
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    // Wait for the agent list before the message reference resolves. The
+    // heading renders first, so without this the reference button flakes.
+    await screen.findByRole("button", { name: /Sales Outbound, Outbound specialist/ });
+    emitAgentEvent?.({
+      type: "conversation",
+      snapshot: {
+        agentId: "chief",
+        threadId: "thread-chief",
+        activeTurnId: null,
+        revision: 1,
+        messages: [
+          {
+            id: "assistant-1",
+            author: "assistant",
+            text: `Should ${serializeChatTagReference("agent", "Old Sales", "sales-outbound")} prepare the report?`,
+            createdAt: "2026-08-12T10:00:00.000Z",
+            status: "completed",
+          },
+        ],
+      },
+    });
+
+    await screen.findByRole("button", { name: "Open agent Sales Outbound" });
+    await fireEvent.click(screen.getByRole("button", { name: "Reply to Agent message" }));
+    expect(screen.getByText("Replying to Agent")).toBeInTheDocument();
+
+    const composer = screen.getByRole("textbox", { name: "Message Chief" });
+    composer.textContent = "Yes, today please";
+    await fireEvent.input(composer);
+    await fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() =>
+      expect(window.openbot.agent.sendMessage).toHaveBeenCalledWith(
+        {
+          agentId: "chief",
+          text: "Yes, today please",
+          attachmentDraftIds: [],
+          replyToMessageId: "assistant-1",
+        },
+        "local",
+      ),
+    );
+    await waitFor(() => expect(screen.queryByText("Replying to Agent")).not.toBeInTheDocument());
+  });
+
+  it("sends an action for selected agent text without clearing the composer draft", async () => {
+    const answer = "The launch note needs a friendlier closing sentence.";
+    const snapshot: ConversationSnapshot = {
+      agentId: "chief",
+      threadId: "thread-chief",
+      activeTurnId: null,
+      revision: 1,
+      messages: [
+        {
+          id: "assistant-selection",
+          author: "assistant",
+          text: answer,
+          createdAt: "2026-08-12T10:00:00.000Z",
+          status: "completed",
+        },
+      ],
+    };
+    // The message arrives through the read the chat itself makes, not through an event. An event
+    // has to reach a subscriber that is not there yet when the heading renders, and the moment it
+    // subscribes is not observable from here; the read is awaited by the chat that asked for it.
+    vi.mocked(window.openbot.agent.readConversation).mockImplementation(
+      async (agentId): Promise<ConversationSnapshot> =>
+        agentId === "chief" ? snapshot : { agentId, threadId: null, activeTurnId: null, revision: 0, messages: [] },
+    );
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    const message = await screen.findByText(answer);
+    const composer = screen.getByRole("textbox", { name: "Message Chief" });
+    composer.textContent = "Keep this draft";
+    await fireEvent.input(composer);
+
+    const text = message.firstChild;
+    if (!text) throw new Error("Agent message did not render a text node");
+    const quote = "friendlier closing sentence";
+    const start = answer.indexOf(quote);
+    const range = document.createRange();
+    range.setStart(text, start);
+    range.setEnd(text, start + quote.length);
+    Object.defineProperty(range, "getClientRects", {
+      configurable: true,
+      value: () => [{ top: 100, right: 320, bottom: 120, left: 120, width: 200, height: 20 }],
+    });
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    await fireEvent.pointerUp(message);
+
+    await fireEvent.click(await screen.findByRole("button", { name: "Improve" }));
+    await waitFor(() =>
+      expect(window.openbot.agent.sendMessage).toHaveBeenCalledWith(
+        {
+          agentId: "chief",
+          text: "Improve this selected text.\n\n> friendlier closing sentence",
+          attachmentDraftIds: [],
+          replyToMessageId: "assistant-selection",
+        },
+        "local",
+      ),
+    );
+    expect(composer).toHaveTextContent("Keep this draft");
+  });
+
+  it("reacts and copies resolved tags from message hover actions", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    vi.mocked(window.openbot.agent.listInstalledSkills).mockResolvedValue([
+      {
+        skillId: "skill-1",
+        slug: "release-notes",
+        name: "Release Notes",
+        installedVersion: 1,
+        availableVersion: 1,
+        state: "installed",
+      },
+    ]);
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    emitAgentEvent?.({
+      type: "conversation",
+      snapshot: {
+        agentId: "chief",
+        threadId: "thread-chief",
+        activeTurnId: null,
+        revision: 1,
+        messages: [
+          {
+            id: "assistant-actions",
+            author: "user",
+            text: `Ask ${serializeChatTagReference("agent", "Old Sales", "sales-outbound")} to use ${serializeChatTagReference("skill", "Old Skill", "skill-1")} and review ${serializeAttachmentReference("tagged file", "attachment-1")}.`,
+            createdAt: "2026-08-12T10:00:00.000Z",
+            status: "completed",
+            attachments: [attachment("attachment-1", "@[Ops](agent:ops)", "pdf")],
+          },
+        ],
+      },
+    });
+
+    await screen.findByRole("button", { name: "Open agent Sales Outbound" });
+    await fireEvent.pointerDown(screen.getByRole("button", { name: "Add reaction" }), { button: 0 });
+    await fireEvent.pointerUp(screen.getByRole("menuitemradio", { name: "React with ❤️" }), { button: 0 });
+    expect(window.openbot.agent.setMessageReaction).toHaveBeenCalledWith({
+      agentId: "chief",
+      messageId: "assistant-actions",
+      emoji: "❤️",
+    });
+    expect(trackAnalytics).toHaveBeenCalledWith("reaction_action", { action: "add", result: "succeeded" });
+
+    await fireEvent.pointerDown(screen.getByRole("button", { name: "More message actions" }), { button: 0 });
+    await fireEvent.pointerUp(screen.getByRole("menuitem", { name: "Copy" }), { button: 0 });
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        "Ask @Sales Outbound to use Release Notes (skill) and review @[Ops](agent:ops).",
+      ),
+    );
+  });
+
+  it("keeps an asynchronous pasted attachment on the server that received the paste", async () => {
+    const local = testServer("local", true);
+    const remote = testServer("remote-1", false);
+    vi.mocked(window.openbot.servers.list).mockResolvedValueOnce([local, remote]);
+    vi.mocked(window.openbot.servers.select).mockImplementation(async (serverId) => [
+      { ...local, active: serverId === "local" },
+      { ...remote, active: serverId === "remote-1" },
+    ]);
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+
+    emitAttachmentImport?.({ type: "started", requestId: "paste-server-switch", serverId: "local" });
+    await fireEvent.click(screen.getByRole("button", { name: "Studio Mac server" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Studio Mac server" })).toHaveAttribute("aria-pressed", "true"),
+    );
+    emitAttachmentImport?.({
+      type: "completed",
+      requestId: "paste-server-switch",
+      serverId: "local",
+      attachments: [attachment("pasted-local", "for-local.png", "image")],
+    });
+
+    expect(screen.queryByRole("button", { name: "Remove for-local.png" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Local server" }));
+    const removeAttachment = await screen.findByRole("button", { name: "Remove for-local.png" });
+    await fireEvent.click(removeAttachment);
+    expect(window.openbot.agent.discardDraftAttachment).toHaveBeenCalledWith("pasted-local", "local");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Remove for-local.png" })).not.toBeInTheDocument());
+  });
+
+  it("allows confirmed deletion while another device is editing", async () => {
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    const running = queuedDelivery("delivery-running", "Current work", null, {
+      status: "starting",
+      turnId: "turn-running",
+    });
+    const edited = queuedDelivery("delivery-edited", "Edited on phone", 1, { editing: true });
+    const next = queuedDelivery("delivery-next", "Next work", 2);
+
+    emitAgentEvent?.({
+      type: "queue-changed",
+      snapshot: { agentId: "chief", deliveries: [running, edited, next] },
+    });
+
+    // The row stays in place. Hiding it looked like the message was lost.
+    const row = await screen.findByRole("group", { name: "Queued message 1, editing: Edited on phone" });
+    expect(within(row).getByText("Editing")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Queued message 2: Next work" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Steer queued message 1" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit queued message 1" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete queued message 1" })).toBeEnabled();
+
+    // The edit stops the queue instead of starting message 1, and the panel stays on screen.
+    emitAgentEvent?.({
+      type: "turn-completed",
+      agentId: "chief",
+      threadId: "thread-chief",
+      turnId: "turn-running",
+      status: "completed",
+    });
+    emitAgentEvent?.({ type: "queue-changed", snapshot: { agentId: "chief", deliveries: [edited, next] } });
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("region", { name: "Message queue" }))
+          .getAllByLabelText(/^Queued message/u)
+          .map((element) => element.getAttribute("aria-label")),
+      ).toEqual(["Queued message 1, editing: Edited on phone", "Queued message 2: Next work"]),
+    );
+    await fireEvent.click(screen.getByRole("button", { name: "Delete queued message 1" }));
+    const confirmation = await screen.findByRole("alertdialog", { name: "Delete queued message?" });
+    expect(window.openbot.agent.cancelQueuedMessage).not.toHaveBeenCalled();
+    await fireEvent.click(within(confirmation).getByRole("button", { name: "Keep" }));
+    expect(window.openbot.agent.cancelQueuedMessage).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole("button", { name: "Delete queued message 1" }));
+    await fireEvent.click(
+      within(await screen.findByRole("alertdialog", { name: "Delete queued message?" })).getByRole("button", {
+        name: "Delete",
+      }),
+    );
+    await waitFor(() =>
+      expect(window.openbot.agent.cancelQueuedMessage).toHaveBeenCalledWith({
+        agentId: "chief",
+        deliveryId: "delivery-edited",
+      }),
+    );
+  });
+
+  it("keeps foreground starts out of Queue and hides waiting work between turns", async () => {
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    const firstStarting = queuedDelivery("delivery-starting", "Current work", null, { status: "starting" });
+    const second = queuedDelivery("delivery-next", "Next work", 1);
+    const third = queuedDelivery("delivery-later", "Later work", 2);
+
+    emitAgentEvent?.({
+      type: "queue-changed",
+      snapshot: { agentId: "chief", deliveries: [firstStarting] },
+    });
+    expect(screen.queryByRole("region", { name: "Message queue" })).not.toBeInTheDocument();
+
+    emitAgentEvent?.({
+      type: "queue-changed",
+      snapshot: { agentId: "chief", deliveries: [firstStarting, second] },
+    });
+    await screen.findByRole("group", { name: "Queued message 1: Next work" });
+    expect(screen.queryByRole("group", { name: /Current work/ })).not.toBeInTheDocument();
+
+    emitAgentEvent?.({ type: "turn-started", agentId: "chief", threadId: "thread-chief", turnId: "turn-live" });
+    emitAgentEvent?.({
+      type: "queue-changed",
+      snapshot: {
+        agentId: "chief",
+        deliveries: [
+          { ...firstStarting, status: "running", turnId: "turn-live" },
+          { ...second, status: "starting", position: null, turnId: "turn-live" },
+          third,
+        ],
+      },
+    });
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("region", { name: "Message queue" }))
+          .getAllByLabelText(/^Queued message/u)
+          .map((item) => item.getAttribute("aria-label")),
+      ).toEqual(["Queued message 2: Later work", "Queued message : Next work"]),
+    );
+
+    emitAgentEvent?.({
+      type: "turn-completed",
+      agentId: "chief",
+      threadId: "thread-chief",
+      turnId: "turn-live",
+      status: "completed",
+    });
+    emitAgentEvent?.({
+      type: "queue-changed",
+      snapshot: {
+        agentId: "chief",
+        deliveries: [
+          { ...second, position: 1, turnId: null },
+          { ...third, position: 2 },
+        ],
+      },
+    });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Message queue" })).not.toBeInTheDocument());
+
+    const secondStarting = { ...second, status: "starting" as const, position: null, turnId: "turn-next" };
+    emitAgentEvent?.({
+      type: "queue-changed",
+      snapshot: { agentId: "chief", deliveries: [secondStarting, third] },
+    });
+    await screen.findByRole("group", { name: "Queued message 2: Later work" });
+    expect(screen.queryByRole("group", { name: /Next work/ })).not.toBeInTheDocument();
+  });
+
+  it("shows the agent working on its channel task, and what waits behind it", async () => {
+    const waiting = queuedDelivery("delivery-held", "Read the report", 1);
+    const held = queuedDelivery("delivery-sales", "Draft the outreach", 1, { recipientAgentId: "sales-outbound" });
+    const hold = {
+      reason: "channel-task" as const,
+      channelId: "channel-1",
+      channelName: "Project launch",
+      agentId: "chief",
+    };
+    vi.mocked(window.openbot.agent.listQueue).mockImplementation(async (agentId) =>
+      agentId === "chief" ? { agentId, deliveries: [waiting], hold } : { agentId, deliveries: [held], hold },
+    );
+
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+
+    // Channel-task hold explains the idle agent with no delivery of its own.
+    emitAgentEvent?.({ type: "queue-changed", snapshot: { agentId: "chief", deliveries: [waiting], hold } });
+    const queue = await screen.findByRole("region", { name: "Message queue" });
+    within(queue).getByRole("group", { name: "Queued message 1: Read the report" });
+    expect(
+      await screen.findByRole("status", { name: "Chief is working: Working in Project launch" }),
+    ).toBeInTheDocument();
+
+    // Same hold reserves the host: only the owning agent reads as working.
+    await fireEvent.click(screen.getByRole("button", { name: /Sales Outbound, Outbound specialist/ }));
+    await screen.findByRole("heading", { name: "Sales Outbound" });
+    const salesQueue = await screen.findByRole("region", { name: "Message queue" });
+    expect(within(salesQueue).getByText("Waiting - Chief is working in Project launch")).toBeVisible();
+    expect(screen.queryByRole("status", { name: /^Sales Outbound is working/u })).not.toBeInTheDocument();
+
+    // Same wait survives a fresh queue read (reload/reconnect).
+    await fireEvent.click(screen.getByRole("button", { name: /Chief, Chief of staff/ }));
+    const reloaded = await screen.findByRole("region", { name: "Message queue" });
+    within(reloaded).getByRole("group", { name: "Queued message 1: Read the report" });
+    expect(
+      await screen.findByRole("status", { name: "Chief is working: Working in Project launch" }),
+    ).toBeInTheDocument();
+
+    // Channel work ended: the delivery is the agent's own running turn now.
+    emitAgentEvent?.({
+      type: "queue-changed",
+      snapshot: {
+        agentId: "chief",
+        deliveries: [{ ...waiting, status: "running", position: null, turnId: "turn-held" }],
+      },
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("status", { name: "Chief is working: Working in Project launch" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("keeps the complete agent draft when creation fails", async () => {
+    vi.mocked(window.openbot.agent.createAgent).mockRejectedValueOnce(
+      new Error("The first message could not be queued."),
+    );
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    await fireEvent.pointerDown(screen.getByRole("button", { name: "New agent or channel" }), { button: 0 });
+    await fireEvent.pointerUp(await screen.findByRole("menuitem", { name: "New agent" }), { button: 0 });
+    await fireEvent.click(await screen.findByRole("button", { name: /^Writing Partner\./ }));
+    const name = screen.getByRole("textbox", { name: "Name" });
+    const purpose = screen.getByRole("textbox", { name: "What should this agent help with?" });
+    await fireEvent.input(name, { target: { value: "My Writing Partner" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("The first message could not be queued.");
+    expect(name).toHaveValue("My Writing Partner");
+    expect(purpose).toHaveValue(
+      "Help me draft and improve messages and documents while keeping the writing clear and natural.",
+    );
+    expect(screen.getByRole("heading", { name: "Create a new agent" })).toBeInTheDocument();
+  });
+
+  it("answers model prompts from a separate card while composer remains a queue", async () => {
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    await confirmOnboardingModel();
+    emitAgentEvent?.({
+      type: "prompt",
+      requestId: "prompt-1",
+      agentId: "chief",
+      threadId: "thread-chief",
+      turnId: "turn-1",
+      questions: [
+        {
+          id: "account",
+          header: "Account",
+          question: "Which account?",
+          isSecret: false,
+          options: null,
+        },
+      ],
+    });
+    const answer = await screen.findByRole("textbox", {
+      name: "Custom answer for: Which account?",
+    });
+    const composer = screen.getByRole("textbox", { name: "Message Chief" });
+    composer.textContent = "Queue this while you wait";
+    await fireEvent.input(composer);
+    await fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() =>
+      expect(window.openbot.agent.sendMessage).toHaveBeenCalledWith(
+        { agentId: "chief", text: "Queue this while you wait", attachmentDraftIds: [] },
+        "local",
+      ),
+    );
+    await fireEvent.input(answer, { target: { value: "Acme" } });
+    await fireEvent.keyDown(answer, { key: "Enter" });
+    await waitFor(() =>
+      expect(window.openbot.agent.respondToPrompt).toHaveBeenCalledWith({
+        requestId: "prompt-1",
+        answers: { account: ["Acme"] },
+      }),
+    );
+    emitAgentEvent?.({
+      type: "conversation",
+      snapshot: {
+        agentId: "chief",
+        threadId: "thread-chief",
+        activeTurnId: "turn-1",
+        revision: 20,
+        messages: [
+          {
+            id: "question-prompt:turn-1:prompt-1",
+            turnId: "turn-1",
+            author: "assistant",
+            source: "assistant",
+            text: "",
+            createdAt: "2026-08-28T12:00:00.000Z",
+            status: "completed",
+            itemType: "question_prompt",
+            questionPrompt: {
+              requestId: "prompt-1",
+              questions: [
+                {
+                  id: "account",
+                  header: "Account",
+                  question: "Which account?",
+                  isSecret: false,
+                  options: null,
+                },
+              ],
+              resolution: {
+                status: "answered",
+                responses: { account: { status: "answered", answers: ["Acme"] } },
+              },
+            },
+          },
+        ],
+      },
+    });
+    await waitFor(() => expect(screen.getByRole("region", { name: "Answers sent" })).toBeVisible());
+    expect(screen.queryByRole("textbox", { name: "Custom answer for: Which account?" })).not.toBeInTheDocument();
+  });
+
+  it("keeps required input visible without taking over a reader's manual scroll", async () => {
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    await confirmOnboardingModel();
+    const scrollElement = document.querySelector<HTMLElement>(".conversation-scroll");
+    if (!scrollElement) throw new Error("Conversation scroll element is missing.");
+    let scrollHeight = 1_200;
+    Object.defineProperties(scrollElement, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      scrollTop: { configurable: true, value: 600, writable: true },
+    });
+    scrollElement.dispatchEvent(new Event("scroll"));
+
+    emitAgentEvent?.({
+      type: "prompt",
+      requestId: "prompt-follow",
+      agentId: "chief",
+      threadId: "thread-chief",
+      turnId: "turn-follow",
+      questions: [
+        {
+          id: "account",
+          header: "Account",
+          question: "Which account should continue?",
+          isSecret: false,
+          options: null,
+        },
+      ],
+    });
+    const firstAnswer = await screen.findByRole("textbox", {
+      name: "Custom answer for: Which account should continue?",
+    });
+    expect(firstAnswer).not.toHaveFocus();
+    const announcement = screen.getByText("Input required. Which account should continue?");
+    expect(announcement).toHaveAttribute("role", "status");
+    expect(announcement).toHaveAttribute("aria-live", "polite");
+
+    scrollHeight = 1_500;
+    const firstPrompt = firstAnswer.closest<HTMLDivElement>("[data-slot='bubble']");
+    if (!firstPrompt) throw new Error("Question prompt bubble is missing.");
+    TestResizeObserver.resize(firstPrompt, "content-box");
+    expect(scrollElement.scrollTop).toBe(1_500);
+
+    scrollElement.scrollTop = 200;
+    scrollElement.dispatchEvent(new Event("scroll"));
+    emitAgentEvent?.({
+      type: "prompt",
+      requestId: "prompt-preserve-scroll",
+      agentId: "chief",
+      threadId: "thread-chief",
+      turnId: "turn-preserve-scroll",
+      questions: [
+        {
+          id: "workspace",
+          header: "Workspace",
+          question: "Which workspace should continue?",
+          isSecret: false,
+          options: null,
+        },
+      ],
+    });
+    const secondAnswer = await screen.findByRole("textbox", {
+      name: "Custom answer for: Which workspace should continue?",
+    });
+    scrollHeight = 1_800;
+    const secondPrompt = secondAnswer.closest<HTMLDivElement>("[data-slot='bubble']");
+    if (!secondPrompt) throw new Error("Replacement question prompt bubble is missing.");
+    TestResizeObserver.resize(secondPrompt, "content-box");
+
+    expect(scrollElement.scrollTop).toBe(200);
+    expect(screen.getByRole("button", { name: "Scroll to latest message" })).toBeVisible();
+    expect(secondAnswer).not.toHaveFocus();
+  });
+
+  it("keeps the prompt active and reports a delivery failure", async () => {
+    vi.mocked(window.openbot.agent.respondToPrompt).mockRejectedValueOnce(new Error("Provider is offline."));
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    await confirmOnboardingModel();
+    emitAgentEvent?.({
+      type: "prompt",
+      requestId: "prompt-failure",
+      agentId: "chief",
+      threadId: "thread-chief",
+      turnId: "turn-failure",
+      questions: [
+        {
+          id: "account",
+          header: "Account",
+          question: "Which account?",
+          isSecret: false,
+          options: null,
+        },
+      ],
+    });
+
+    const answer = await screen.findByRole("textbox", { name: "Custom answer for: Which account?" });
+    await fireEvent.input(answer, { target: { value: "Acme" } });
+    await fireEvent.keyDown(answer, { key: "Enter" });
+
+    expect(await screen.findByText("Provider is offline.")).toBeVisible();
+    expect(screen.getByText("Answer failed")).toBeVisible();
+    expect(answer).toBeEnabled();
+  });
+
+  it("replaces an active prompt when its resolution arrives from another client", async () => {
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    await confirmOnboardingModel();
+    emitAgentEvent?.({
+      type: "prompt",
+      requestId: "prompt-external",
+      agentId: "chief",
+      threadId: "thread-chief",
+      turnId: "turn-external",
+      questions: [
+        {
+          id: "account",
+          header: "Account",
+          question: "Which external account?",
+          isSecret: false,
+          options: null,
+        },
+      ],
+    });
+    expect(await screen.findByRole("textbox", { name: "Custom answer for: Which external account?" })).toBeVisible();
+
+    emitAgentEvent?.({
+      type: "conversation",
+      snapshot: {
+        agentId: "chief",
+        threadId: "thread-chief",
+        activeTurnId: "turn-external",
+        revision: 20,
+        messages: [
+          {
+            id: "question-prompt:turn-external:prompt-external",
+            turnId: "turn-external",
+            author: "assistant",
+            source: "assistant",
+            text: "Question: Which external account?\nAnswer: External",
+            createdAt: "2026-08-28T12:00:00.000Z",
+            status: "completed",
+            itemType: "question_prompt",
+            questionPrompt: {
+              requestId: "prompt-external",
+              questions: [
+                {
+                  id: "account",
+                  header: "Account",
+                  question: "Which external account?",
+                  isSecret: false,
+                  options: null,
+                },
+              ],
+              resolution: {
+                status: "answered",
+                responses: { account: { status: "answered", answers: ["External"] } },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    await waitFor(() => expect(screen.getByRole("region", { name: "Answers sent" })).toBeVisible());
+    expect(
+      screen.queryByRole("textbox", { name: "Custom answer for: Which external account?" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides an unresolved history record and mounts a rapid follow-up prompt", async () => {
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    await confirmOnboardingModel();
+    emitAgentEvent?.({
+      type: "conversation",
+      snapshot: {
+        agentId: "chief",
+        threadId: "thread-chief",
+        activeTurnId: "turn-first",
+        revision: 20,
+        messages: [
+          {
+            id: "question-prompt:turn-first:prompt-first",
+            turnId: "turn-first",
+            author: "assistant",
+            source: "assistant",
+            text: "Question: First question?",
+            createdAt: "2026-08-28T12:00:00.000Z",
+            status: "completed",
+            itemType: "question_prompt",
+            questionPrompt: {
+              requestId: "prompt-first",
+              questions: [
+                {
+                  id: "first",
+                  header: "First",
+                  question: "First question?",
+                  isSecret: false,
+                  options: null,
+                },
+              ],
+              resolution: null,
+            },
+          },
+        ],
+      },
+    });
+    expect(screen.queryByRole("region", { name: "Questions expired" })).not.toBeInTheDocument();
+
+    emitAgentEvent?.({
+      type: "prompt",
+      requestId: "prompt-first",
+      agentId: "chief",
+      threadId: "thread-chief",
+      turnId: "turn-first",
+      questions: [
+        {
+          id: "first",
+          header: "First",
+          question: "First question?",
+          isSecret: false,
+          options: null,
+        },
+      ],
+    });
+    const firstAnswer = await screen.findByRole("textbox", { name: "Custom answer for: First question?" });
+    await fireEvent.input(firstAnswer, { target: { value: "First answer" } });
+    await fireEvent.keyDown(firstAnswer, { key: "Enter" });
+    await screen.findByRole("region", { name: "Answers sent" });
+
+    emitAgentEvent?.({
+      type: "conversation",
+      snapshot: {
+        agentId: "chief",
+        threadId: "thread-chief",
+        activeTurnId: "turn-first",
+        revision: 21,
+        messages: [
+          {
+            id: "question-prompt:turn-first:prompt-first",
+            turnId: "turn-first",
+            author: "assistant",
+            source: "assistant",
+            text: "Question: First question?\nAnswer: First answer",
+            createdAt: "2026-08-28T12:00:00.000Z",
+            status: "completed",
+            itemType: "question_prompt",
+            questionPrompt: {
+              requestId: "prompt-first",
+              questions: [
+                {
+                  id: "first",
+                  header: "First",
+                  question: "First question?",
+                  isSecret: false,
+                  options: null,
+                },
+              ],
+              resolution: {
+                status: "answered",
+                responses: { first: { status: "answered", answers: ["First answer"] } },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    emitAgentEvent?.({
+      type: "prompt",
+      requestId: "prompt-second",
+      agentId: "chief",
+      threadId: "thread-chief",
+      turnId: "turn-second",
+      questions: [
+        {
+          id: "second",
+          header: "Second",
+          question: "Second question?",
+          isSecret: false,
+          options: null,
+        },
+      ],
+    });
+
+    expect(await screen.findByRole("textbox", { name: "Custom answer for: Second question?" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Answers sent" })).not.toBeInTheDocument();
+  });
+
+  it("keeps an older resolved prompt when a new turn reuses its request ID", async () => {
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    await confirmOnboardingModel();
+    emitAgentEvent?.({
+      type: "conversation",
+      snapshot: {
+        agentId: "chief",
+        threadId: "thread-chief",
+        activeTurnId: null,
+        revision: 20,
+        messages: [
+          {
+            id: "question-prompt:turn-old:prompt-reused",
+            turnId: "turn-old",
+            author: "assistant",
+            source: "assistant",
+            text: "Question: Which account?\nAnswer: Acme",
+            createdAt: "2026-08-28T12:00:00.000Z",
+            status: "completed",
+            itemType: "question_prompt",
+            questionPrompt: {
+              requestId: "prompt-reused",
+              questions: [
+                {
+                  id: "account",
+                  header: "Account",
+                  question: "Which account?",
+                  isSecret: false,
+                  options: null,
+                },
+              ],
+              resolution: {
+                status: "answered",
+                responses: { account: { status: "answered", answers: ["Acme"] } },
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(await screen.findByRole("region", { name: "Answers sent" })).toBeVisible();
+
+    emitAgentEvent?.({
+      type: "prompt",
+      requestId: "prompt-reused",
+      agentId: "chief",
+      threadId: "thread-chief",
+      turnId: "turn-new",
+      questions: [
+        {
+          id: "goal",
+          header: "Goal",
+          question: "What should I do next?",
+          isSecret: false,
+          options: null,
+        },
+      ],
+    });
+
+    expect(await screen.findByRole("textbox", { name: "Custom answer for: What should I do next?" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Answers sent" })).toBeVisible();
+  });
+
+  it("renders command approvals and keeps the action pending while submitting", async () => {
+    let resolveApproval: (() => void) | undefined;
+    vi.mocked(window.openbot.agent.respondToApproval).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveApproval = resolve;
+        }),
+    );
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    await confirmOnboardingModel();
+    emitAgentEvent?.({
+      type: "approval",
+      approval: {
+        requestId: "approval-1",
+        agentId: "chief",
+        threadId: "thread-chief",
+        turnId: "turn-1",
+        kind: "command",
+        command: "npm test -- --runInBand",
+        cwd: "/Users/norbertbodziony/projects/openbot",
+        reason: "Run the verification suite.",
+        grantRoot: null,
+        permissions: null,
+      },
+    });
+
+    expect(await screen.findByText("Run a command")).toBeInTheDocument();
+    expect(screen.getByText("npm test -- --runInBand")).toBeInTheDocument();
+    expect(screen.getByText("Run the verification suite.")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    expect(screen.getByRole("button", { name: "Sending…" })).toBeDisabled();
+    expect(window.openbot.agent.respondToApproval).toHaveBeenCalledWith({
+      requestId: "approval-1",
+      decision: "accept",
+    });
+
+    resolveApproval?.();
+    await waitFor(() => expect(screen.queryByText("Run a command")).not.toBeInTheDocument());
+  });
+
+  // A queue belongs to one server, and a server switch now discards that
+  // server's whole subtree. The only thing that can bring the queue back is the
+  // seed the rebuilt scope takes from the Dynamic Island coordinator, which
+  // lives above the switch. Nothing else asserts that work queued on a server
+  // is still queued after a visit somewhere else.
+  it("restores the queue of a server the user comes back to", async () => {
+    const local = testServer("local", true);
+    const remote = testServer("remote-1", false);
+    vi.mocked(window.openbot.servers.list).mockResolvedValueOnce([local, remote]);
+    vi.mocked(window.openbot.servers.select).mockImplementation(async (serverId) => [
+      { ...local, active: serverId === "local" },
+      { ...remote, active: serverId === "remote-1" },
+    ]);
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+
+    emitAgentEvent?.({
+      type: "queue-changed",
+      snapshot: {
+        agentId: "chief",
+        deliveries: [
+          queuedDelivery("delivery-running", "Current work", null, { status: "starting" }),
+          queuedDelivery("delivery-next", "Next work", 1),
+        ],
+      },
+    });
+    await screen.findByRole("group", { name: "Queued message 1: Next work" });
+
+    await fireEvent.click(screen.getByRole("button", { name: "Studio Mac server" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Studio Mac server" })).toHaveAttribute("aria-pressed", "true"),
+    );
+    expect(screen.queryByRole("group", { name: "Queued message 1: Next work" })).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Local server" }));
+    expect(await screen.findByRole("group", { name: "Queued message 1: Next work" })).toBeInTheDocument();
+  });
+});
+
+describe("queue edit", () => {
+  beforeEach(() => {
+    installOpenbotStub();
+  });
+
+  /** One running turn the edit must leave alone, plus the deliveries the case is about. */
+  function queueWith(...deliveries: QueueDelivery[]): void {
+    vi.mocked(window.openbot.agent.listQueue).mockResolvedValue({
+      agentId: "chief",
+      deliveries: [
+        queuedDelivery("running", "Running", null, { status: "running", turnId: "turn-running" }),
+        ...deliveries,
+      ],
+    });
+  }
+
+  it("acquires a host hold before editing and uses its identity for save and cancel", async () => {
+    const delivery = queuedDelivery("shared-edit", "Original queue message", 1);
+    queueWith(delivery);
+    vi.mocked(window.openbot.agent.editQueuedMessage).mockResolvedValue({ agentId: "chief", deliveries: [delivery] });
+    render(() => <App />);
+    const composer = await screen.findByRole("textbox", { name: "Message Chief" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Edit queued message 1" }));
+    await screen.findByRole("button", { name: "Save queued message" });
+    const begin = vi.mocked(window.openbot.agent.editQueuedMessage).mock.calls[0]?.[0];
+    assert(begin);
+    expect(begin).toMatchObject({ action: "begin", agentId: "chief", deliveryId: delivery.id });
+    composer.textContent = "Changed safely";
+    await fireEvent.input(composer);
+    await fireEvent.click(screen.getByRole("button", { name: "Save queued message" }));
+    await waitFor(() =>
+      expect(window.openbot.agent.editQueuedMessage).toHaveBeenCalledWith(
+        {
+          agentId: "chief",
+          deliveryId: delivery.id,
+          editId: begin.editId,
+          action: "save",
+          text: "Changed safely",
+          keepAttachmentIds: [],
+          attachmentDraftIds: [],
+        },
+        "local",
+      ),
+    );
+    expect(window.openbot.agent.updateQueuedMessage).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Save queued message" })).not.toBeInTheDocument());
+    await fireEvent.click(await screen.findByRole("button", { name: "Edit queued message 1" }));
+    await screen.findByRole("button", { name: "Save queued message" });
+    // Save confirms the hold with the same identity first, so the second hold is calls[3].
+    const secondBegin = vi.mocked(window.openbot.agent.editQueuedMessage).mock.calls[3]?.[0];
+    assert(secondBegin);
+    await fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(window.openbot.agent.editQueuedMessage).toHaveBeenCalledWith(
+        { agentId: "chief", deliveryId: delivery.id, editId: secondBegin.editId, action: "cancel" },
+        "local",
+      ),
+    );
+  });
+
+  it("reuses the durable Save request after a lost response and blocks edits until retry", async () => {
+    const delivery = queuedDelivery("durable-save", "Original queue message", 1);
+    queueWith(delivery);
+    vi.mocked(window.openbot.agent.editQueuedMessage).mockResolvedValue({ agentId: "chief", deliveries: [delivery] });
+    render(() => <App />);
+    const composer = await screen.findByRole("textbox", { name: "Message Chief" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Edit queued message 1" }));
+    await screen.findByRole("button", { name: "Save queued message" });
+    const begin = vi.mocked(window.openbot.agent.editQueuedMessage).mock.calls[0]?.[0];
+    assert(begin);
+    composer.textContent = "First save";
+    await fireEvent.input(composer);
+    // The hold confirm succeeds; only the Save response is lost.
+    let saveAttempts = 0;
+    vi.mocked(window.openbot.agent.editQueuedMessage).mockImplementation(async (input) => {
+      if (input.action === "save" && saveAttempts++ === 0) throw new Error("Connection lost");
+      return { agentId: "chief", deliveries: [delivery] };
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Save queued message" }));
+    await screen.findByText("Connection lost");
+    // The exact Save request stays durable for retry, including after a restart.
+    const stored = window.localStorage.getItem("openbot:queue-edit");
+    expect(stored).toContain(begin.editId);
+    expect(stored).toContain("First save");
+    expect(stored).toContain("pendingSave");
+    // Changes stay blocked until the pending Save resolves, so a retry cannot fail the host check.
+    // The editor is disabled while the Save is pending; a programmatic input must not
+    // change the durable draft or the retry payload.
+    composer.textContent = "Changed after lost response";
+    await fireEvent.input(composer);
+    expect(window.localStorage.getItem("openbot:queue-edit")).toContain("First save");
+    expect(window.localStorage.getItem("openbot:queue-edit")).not.toContain("Changed after lost response");
+    await fireEvent.click(screen.getByRole("button", { name: "Save queued message" }));
+    await waitFor(() =>
+      expect(window.openbot.agent.editQueuedMessage).toHaveBeenCalledWith(
+        {
+          agentId: "chief",
+          deliveryId: delivery.id,
+          editId: begin.editId,
+          action: "save",
+          text: "First save",
+          keepAttachmentIds: [],
+          attachmentDraftIds: [],
+        },
+        "local",
+      ),
+    );
+    const saves = vi
+      .mocked(window.openbot.agent.editQueuedMessage)
+      .mock.calls.filter(([input]) => input.action === "save");
+    expect(saves).toHaveLength(2);
+    const [firstSave, secondSave] = saves;
+    assert(firstSave);
+    assert(secondSave);
+    expect(firstSave[0]).toEqual(secondSave[0]);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Save queued message" })).not.toBeInTheDocument());
+    expect(window.localStorage.getItem("openbot:queue-edit")).toBeNull();
+  });
+
+  it.each(["cancelled", "missing"] as const)(
+    "releases a desktop edit when its delivery is %s on another device",
+    async (state) => {
+      const delivery = queuedDelivery("deleted-edit", "Queued text", 1);
+      queueWith(delivery);
+      vi.mocked(window.openbot.agent.editQueuedMessage).mockResolvedValue({ agentId: "chief", deliveries: [delivery] });
+      render(() => <App />);
+      const composer = await screen.findByRole("textbox", { name: "Message Chief" });
+      composer.textContent = "My original draft";
+      await fireEvent.input(composer);
+      emitAttachmentImport?.({ type: "started", requestId: "deleted-backup", serverId: "local" });
+      emitAttachmentImport?.({
+        type: "completed",
+        requestId: "deleted-backup",
+        serverId: "local",
+        attachments: [attachment("deleted-backup", "backup.pdf", "pdf")],
+      });
+      await screen.findByRole("button", { name: "Remove backup.pdf" });
+      await fireEvent.click(await screen.findByRole("button", { name: "Edit queued message 1" }));
+      await screen.findByRole("button", { name: "Save queued message" });
+      await waitFor(() => expect(composer).toHaveTextContent("Queued text"));
+      // A deleted delivery no longer needs a host round trip, even if that host is unavailable.
+      vi.mocked(window.openbot.agent.editQueuedMessage).mockRejectedValue(new Error("Connection lost"));
+      emitAgentEvent?.({
+        type: "queue-changed",
+        snapshot: { agentId: "chief", deliveries: state === "cancelled" ? [{ ...delivery, status: "cancelled" }] : [] },
+      });
+      if (state === "missing") await fireEvent.keyDown(document, { key: "Escape" });
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Save queued message" })).not.toBeInTheDocument(),
+      );
+      expect(composer).toHaveTextContent("My original draft");
+      expect(screen.getByRole("button", { name: "Remove backup.pdf" })).toBeInTheDocument();
+      expect(window.localStorage.getItem("openbot:queue-edit")).toBeNull();
+      expect(vi.mocked(window.openbot.agent.editQueuedMessage).mock.calls.map(([input]) => input.action)).toEqual([
+        "begin",
+        "retain-attachments",
+      ]);
+    },
+  );
+
+  it("keeps the edit identity after a lost begin response and blocks replacement until release", async () => {
+    const first = queuedDelivery("lost-edit", "First draft", 1);
+    const second = queuedDelivery("next-edit", "Second draft", 2);
+    queueWith(first, second);
+    vi.mocked(window.openbot.agent.editQueuedMessage).mockRejectedValue(new Error("Connection lost"));
+    render(() => <App />);
+    await fireEvent.click(await screen.findByRole("button", { name: "Edit queued message 1" }));
+    await screen.findByText("Connection lost");
+    const begin = vi.mocked(window.openbot.agent.editQueuedMessage).mock.calls[0]?.[0];
+    assert(begin);
+    expect(window.localStorage.getItem("openbot:queue-edit")).toContain(begin.editId);
+    await fireEvent.click(screen.getByRole("button", { name: "Edit queued message 2" }));
+    await waitFor(() =>
+      expect(window.openbot.agent.editQueuedMessage).toHaveBeenCalledWith({ ...begin, action: "cancel" }, "local"),
+    );
+    expect(
+      vi.mocked(window.openbot.agent.editQueuedMessage).mock.calls.filter(([input]) => input.action === "begin"),
+    ).toHaveLength(1);
+    expect(window.localStorage.getItem("openbot:queue-edit")).toContain(begin.editId);
+    expect(screen.getByRole("textbox", { name: "Message Chief" })).toHaveTextContent("First draft");
+    vi.mocked(window.openbot.agent.editQueuedMessage).mockResolvedValue({ agentId: "chief", deliveries: [first] });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save queued message" })).toBeEnabled());
+    await fireEvent.click(screen.getByRole("button", { name: "Save queued message" }));
+    // Save confirms the lost hold with the same identity before sending the request.
+    await waitFor(() =>
+      expect(window.openbot.agent.editQueuedMessage).toHaveBeenCalledWith({ ...begin, action: "begin" }, "local"),
+    );
+    expect(
+      vi.mocked(window.openbot.agent.editQueuedMessage).mock.calls.filter(([input]) => input.action === "begin"),
+    ).toHaveLength(2);
+    await waitFor(() =>
+      expect(window.openbot.agent.editQueuedMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "save", editId: begin.editId, deliveryId: first.id }),
+        "local",
+      ),
+    );
+  });
+
+  it("uses the legacy queue update on a remote host without queue-edit-v1", async () => {
+    vi.mocked(window.openbot.servers.list).mockResolvedValue([testServer("remote-1", true)]);
+    const delivery = queuedDelivery("legacy-edit", "Legacy draft", 1);
+    queueWith(delivery);
+    render(() => <App />);
+    await fireEvent.click(await screen.findByRole("button", { name: "Edit queued message 1" }));
+    const composer = screen.getByRole("textbox", { name: "Message Chief" });
+    composer.textContent = "Legacy changed";
+    await fireEvent.input(composer);
+    await fireEvent.click(await screen.findByRole("button", { name: "Save queued message" }));
+    await waitFor(() =>
+      expect(window.openbot.agent.updateQueuedMessage).toHaveBeenCalledWith(
+        {
+          agentId: "chief",
+          deliveryId: delivery.id,
+          text: "Legacy changed",
+          keepAttachmentIds: [],
+          attachmentDraftIds: [],
+        },
+        "remote-1",
+      ),
+    );
+    expect(window.openbot.agent.editQueuedMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps an imported edit attachment busy until the host retains it", async () => {
+    const delivery = queuedDelivery("attachment-edit", "Original", 1);
+    queueWith(delivery);
+    vi.mocked(window.openbot.agent.editQueuedMessage).mockResolvedValue({ agentId: "chief", deliveries: [delivery] });
+    render(() => <App />);
+    await fireEvent.click(await screen.findByRole("button", { name: "Edit queued message 1" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save queued message" })).toBeEnabled());
+    const begin = vi.mocked(window.openbot.agent.editQueuedMessage).mock.calls[0]?.[0];
+    assert(begin);
+    let retain = () => {};
+    vi.mocked(window.openbot.agent.editQueuedMessage).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          retain = () => resolve({ agentId: "chief", deliveries: [] });
+        }),
+    );
+    emitAttachmentImport?.({ type: "started", requestId: "edit-paste", serverId: "local" });
+    emitAttachmentImport?.({
+      type: "completed",
+      requestId: "edit-paste",
+      serverId: "local",
+      attachments: [attachment("pasted", "pasted.pdf", "pdf")],
+    });
+    await waitFor(() =>
+      expect(window.openbot.agent.editQueuedMessage).toHaveBeenCalledWith(
+        { ...begin, action: "retain-attachments", attachmentDraftIds: ["pasted"] },
+        "local",
+      ),
+    );
+    expect(screen.getByRole("button", { name: "Save queued message" })).toBeDisabled();
+    retain();
+    await screen.findByText("pasted.pdf");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save queued message" })).toBeEnabled());
+    await fireEvent.click(screen.getByRole("button", { name: "Save queued message" }));
+    await waitFor(() =>
+      expect(window.openbot.agent.editQueuedMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "save", editId: begin.editId, attachmentDraftIds: ["pasted"] }),
+        "local",
+      ),
+    );
+  });
+
+  it("retains the composer backup attachments with the queue edit", async () => {
+    const delivery = queuedDelivery("backup-edit", "Original queue message", 1);
+    queueWith(delivery);
+    vi.mocked(window.openbot.agent.editQueuedMessage).mockResolvedValue({ agentId: "chief", deliveries: [delivery] });
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    emitAttachmentImport?.({ type: "started", requestId: "backup-paste", serverId: "local" });
+    emitAttachmentImport?.({
+      type: "completed",
+      requestId: "backup-paste",
+      serverId: "local",
+      attachments: [attachment("backup-1", "backup.pdf", "pdf")],
+    });
+    await screen.findByRole("button", { name: "Remove backup.pdf" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Edit queued message 1" }));
+    await screen.findByRole("button", { name: "Save queued message" });
+    const begin = vi.mocked(window.openbot.agent.editQueuedMessage).mock.calls[0]?.[0];
+    assert(begin);
+    await waitFor(() =>
+      expect(window.openbot.agent.editQueuedMessage).toHaveBeenCalledWith(
+        { ...begin, action: "retain-attachments", attachmentDraftIds: ["backup-1"] },
+        "local",
+      ),
+    );
+    await fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(window.openbot.agent.editQueuedMessage).toHaveBeenCalledWith(
+        { agentId: "chief", deliveryId: delivery.id, editId: begin.editId, action: "cancel" },
+        "local",
+      ),
+    );
+    expect(await screen.findByRole("button", { name: "Remove backup.pdf" })).toBeInTheDocument();
+  });
+
+  it.each(["save", "cancel"] as const)(
+    "recovers a failed backup retention through %s with the same identity",
+    async (action) => {
+      const delivery = queuedDelivery("retain-failed", "Queued text", 1);
+      queueWith(delivery);
+      vi.mocked(window.openbot.agent.editQueuedMessage).mockImplementation(async (input) => {
+        if (input.action !== "begin") throw new Error("Connection lost");
+        return { agentId: "chief", deliveries: [delivery] };
+      });
+      const view = render(() => <App />);
+      const composer = await screen.findByRole("textbox", { name: "Message Chief" });
+      composer.textContent = "Backup text";
+      await fireEvent.input(composer);
+      emitAttachmentImport?.({ type: "started", requestId: "backup-paste", serverId: "local" });
+      emitAttachmentImport?.({
+        type: "completed",
+        requestId: "backup-paste",
+        serverId: "local",
+        attachments: [attachment("backup-1", "backup.pdf", "pdf")],
+      });
+      await screen.findByRole("button", { name: "Remove backup.pdf" });
+      await fireEvent.click(await screen.findByRole("button", { name: "Edit queued message 1" }));
+      await screen.findByText("Connection lost");
+      const begin = vi.mocked(window.openbot.agent.editQueuedMessage).mock.calls[0]?.[0];
+      assert(begin);
+      expect(window.localStorage.getItem("openbot:queue-edit")).toContain(begin.editId);
+      expect(composer).toHaveTextContent("Queued text");
+      await fireEvent.keyDown(document, { key: "Escape" });
+      await waitFor(() =>
+        expect(window.openbot.agent.editQueuedMessage).toHaveBeenCalledWith({ ...begin, action: "cancel" }, "local"),
+      );
+      await waitFor(() => expect(screen.getByRole("button", { name: "Save queued message" })).toBeEnabled());
+      expect(window.localStorage.getItem("openbot:queue-edit")).toContain(begin.editId);
+      // A renderer restart must restore the same edit and its backup, not allocate another hold.
+      composer.textContent = "Still editing after connection loss";
+      await fireEvent.input(composer);
+      view.unmount();
+      vi.mocked(window.openbot.agent.editQueuedMessage).mockResolvedValue({ agentId: "chief", deliveries: [delivery] });
+      render(() => <App />);
+      const save = await screen.findByRole("button", { name: "Save queued message" });
+      expect(screen.getByRole("textbox", { name: "Message Chief" })).toHaveTextContent(
+        "Still editing after connection loss",
+      );
+      if (action === "save") await fireEvent.click(save);
+      else await fireEvent.keyDown(document, { key: "Escape" });
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Save queued message" })).not.toBeInTheDocument(),
+      );
+      expect(window.localStorage.getItem("openbot:queue-edit")).toBeNull();
+      const calls = vi.mocked(window.openbot.agent.editQueuedMessage).mock.calls;
+      expect(calls.every(([input]) => input.editId === begin.editId)).toBe(true);
+      if (action === "cancel") {
+        expect(screen.getByRole("textbox", { name: "Message Chief" })).toHaveTextContent("Backup text");
+        expect(screen.getByRole("button", { name: "Remove backup.pdf" })).toBeInTheDocument();
+      } else {
+        expect(calls.filter(([input]) => input.action === "retain-attachments")).toHaveLength(2);
+        expect(calls.some(([input]) => input.action === "save")).toBe(true);
+        expect(window.openbot.agent.discardDraftAttachment).toHaveBeenCalledWith("backup-1", "local");
+      }
+    },
+  );
+});

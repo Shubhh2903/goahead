@@ -1,0 +1,1428 @@
+import {
+  createHash,
+  generateKeyPairSync,
+  randomBytes,
+  randomUUID,
+  scrypt as scryptCallback,
+  sign,
+  timingSafeEqual,
+} from "node:crypto";
+import { constants } from "node:fs";
+import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { promisify } from "node:util";
+import { avatarFileExtension, isAvatarMimeType, isValidAvatarImage } from "@openbot/contracts/avatar-images";
+import { DEFAULT_TEAM_MEMBER_LIMIT, INPUT_LIMITS } from "@openbot/contracts/input-limits";
+import { permanentInviteExpiresAt } from "@openbot/contracts/invite-links";
+import type {
+  AvatarImageInput,
+  CentralAuthUser,
+  TeamInviteSummary,
+  TeamMemberSummary,
+  TeamRole,
+  TeamSessionSummary,
+} from "@openbot/contracts/ipc";
+import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import { normalizeEmailAddress, slugifyTeamServerName } from "@openbot/contracts/validation";
+import { sourceText } from "@openbot/i18n/source";
+import { writeFileAtomically, writeJsonFileAtomically } from "../backend/atomic-json-file";
+
+const scrypt = promisify(scryptCallback);
+const INVITE_TTL_MS = 24 * 60 * 60 * 1_000;
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
+
+export class TeamStoreError extends Error {}
+
+interface StoredMember extends TeamMemberSummary {
+  accountId?: string;
+  passwordSalt?: string;
+  passwordHash?: string;
+}
+
+interface StoredInvite {
+  id: string;
+  tokenHash: string;
+  role: Exclude<TeamRole, "owner">;
+  expiresAt: string;
+  usedAt: string | null;
+  email?: string | null;
+  // Optional so files written before permanent links still read. Absent means single-use.
+  permanent?: boolean;
+  useCount?: number;
+}
+
+interface StoredSession {
+  id: string;
+  memberId: string;
+  tokenHash: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+interface StoredTeam {
+  version: 1;
+  serverId: string;
+  serverName: string;
+  enabledOnLaunch: boolean;
+  publicKey: string;
+  privateKey: string;
+  serverLogo?: {
+    version: string;
+    mimeType: AvatarImageInput["mimeType"];
+  };
+  members: StoredMember[];
+  invites: StoredInvite[];
+  sessions: StoredSession[];
+}
+
+/**
+ * The file holds one host per OpenBot account, so switching accounts cannot hand the
+ * new account the previous one's server. `hosts` is append-only - a host is never
+ * removed when its owner signs out, because this file is user data with no backup.
+ */
+interface StoredTeamFile {
+  version: 2;
+  /** The account whose host is active, so a restart activates it before the network answers. */
+  activeAccountId: string | null;
+  hosts: StoredTeam[];
+  /**
+   * The legacy record this file last took in. A build without accounts that has written its
+   * own file since leaves a different fingerprint, which is how its work is noticed.
+   */
+  legacyImport?: { fingerprint: string; record: StoredTeam };
+  /**
+   * The one legacy record a reconcile had no baseline for, so it could not be merged without
+   * dropping the work on one side. Never activated; replaced rather than accumulated, since
+   * a merged host needs no copy - the merge is what keeps both sides.
+   */
+  replacedHosts?: StoredTeam[];
+}
+
+export interface TeamIdentity {
+  serverId: string;
+  serverName: string;
+  fingerprint: string;
+  publicKey: string;
+  enabledOnLaunch: boolean;
+  logoVersion: string | null;
+}
+
+export interface CreatedInvite {
+  id: string;
+  role: Exclude<TeamRole, "owner">;
+  token: string;
+  expiresAt: string;
+  email: string | null;
+  permanent: boolean;
+  useCount: number;
+}
+
+export interface TeamInvitePreview {
+  role: Exclude<TeamRole, "owner">;
+  expiresAt: string;
+  emailBound: boolean;
+  permanent: boolean;
+}
+
+export interface AuthenticatedMember {
+  member: TeamMemberSummary;
+  sessionToken: string;
+  sessionExpiresAt: string;
+}
+
+export interface RemoteDirectoryMember {
+  membershipId: string;
+  email: string;
+  name: string | null;
+  avatarUrl: string | null;
+  role: TeamRole;
+  status: "active" | "revoked";
+  createdAt: number;
+}
+
+export class TeamStore {
+  readonly #path: string;
+  /** Read once and never written: the file a build without this envelope still owns. */
+  readonly #legacyPath: string | null;
+  readonly #logoRoot: string;
+  readonly #legacyLogoRoot: string | null;
+  #file: StoredTeamFile = { version: 2, activeAccountId: null, hosts: [] };
+  /** The host of the signed-in account. Every other method reads this one, never `#file.hosts`. */
+  #state: StoredTeam | null = null;
+  readonly #remoteSessions = new Map<
+    string,
+    { member: TeamMemberSummary; sessionId: string; createdAt: string; sessionExpiresAt: string }
+  >();
+  #writeChain = Promise.resolve();
+  /**
+   * The file exists but is neither a v2 envelope nor a v1 record - a file a newer build
+   * wrote, or a damaged one. `#file` is empty only because something else owns this path,
+   * so writing would destroy the user's only copy. Nothing here is backed up.
+   */
+  #unreadableFile = false;
+
+  /**
+   * `legacyPath` is the single-host file shipped builds read and write. This store never
+   * writes it, so downgrading finds the host it had rather than a file it cannot parse and
+   * would overwrite - there is no backup of any of this.
+   */
+  constructor(path: string, legacyPath: string | null = null) {
+    this.#path = path;
+    this.#legacyPath = legacyPath;
+    // Each file owns its own assets. Sharing one directory would let either build delete a
+    // logo the other's record still points at, leaving it a host it cannot draw.
+    this.#logoRoot = join(dirname(path), `${basename(path)}.assets`, "logo");
+    this.#legacyLogoRoot = legacyPath ? join(dirname(legacyPath), `${basename(legacyPath)}.assets`, "logo") : null;
+  }
+
+  async initialize(): Promise<void> {
+    let migrated = false;
+    let found = false;
+    try {
+      const parsed = JSON.parse(await readFile(this.#path, "utf8"));
+      found = true;
+      if (isStoredTeamFile(parsed)) {
+        this.#file = parsed;
+      } else if (isStoredTeam(parsed)) {
+        this.#file = { version: 2, activeAccountId: ownerAccountId(parsed), hosts: [parsed] };
+        migrated = true;
+      } else {
+        this.#unreadableFile = true;
+      }
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    }
+    // Copied into this store's own file rather than replaced in place. Anything else there
+    // belongs to a build that is not this one, and is left for it.
+    const legacy = this.#unreadableFile ? null : await this.#readLegacyRecord();
+    if (legacy && !found) {
+      this.#file = {
+        version: 2,
+        activeAccountId: ownerAccountId(legacy.record),
+        hosts: [legacy.record],
+        // A copy of its own: the host below is edited from here on, and the baseline a later
+        // reconcile compares against has to stay the record as it was imported.
+        legacyImport: { fingerprint: legacy.fingerprint, record: structuredClone(legacy.record) },
+      };
+      migrated = true;
+    } else if (legacy && legacy.fingerprint !== this.#file.legacyImport?.fingerprint) {
+      // The older build has been run since it was imported. Neither copy of the host is a
+      // backup of the other - each holds work the other never saw - so they are reconciled
+      // against the record as it was imported rather than one replacing the other.
+      const baseline = this.#file.legacyImport?.record;
+      const index = this.#file.hosts.findIndex((host) => host.serverId === legacy.record.serverId);
+      const mine = index < 0 ? undefined : this.#file.hosts[index];
+      if (mine && baseline && baseline.serverId === legacy.record.serverId) {
+        this.#file.hosts[index] = reconcileHost(baseline, mine, legacy.record);
+      } else if (mine) {
+        // No baseline to reconcile against - an upgrade that never recorded one. Keeping
+        // this build's host and filing the other copy is the only choice that drops
+        // nothing. One record, not a growing pile: every write clones and serializes the
+        // whole file, and the next one to land here comes from the same file this did.
+        this.#file.replacedHosts = [legacy.record];
+      } else {
+        this.#file.hosts.push(legacy.record);
+      }
+      this.#file.legacyImport = { fingerprint: legacy.fingerprint, record: structuredClone(legacy.record) };
+      migrated = true;
+    }
+    const imported = this.#file.legacyImport?.record.serverId;
+    const importedHost = imported === undefined ? undefined : this.#file.hosts.find((h) => h.serverId === imported);
+    // Every start, not only the one that took the record in: a copy that failed once would
+    // otherwise leave the host without its logo for good, with the file still sitting there.
+    if (importedHost) await this.#adoptLegacyLogo(importedHost);
+    const activeAccountId = this.#file.activeAccountId;
+    this.#state =
+      (activeAccountId === null
+        ? // A host that predates accounts, or one upgraded from a file where the owner
+          // account was never recorded. Activating it keeps an offline upgrade showing the
+          // host it showed yesterday. A host left behind by a sign-out has an owner account,
+          // so signing out still unbinds it.
+          this.#file.hosts.find((host) => ownerAccountId(host) === null)
+        : this.#file.hosts.find((host) => ownerAccountId(host) === activeAccountId)) ?? null;
+    if (migrated) await this.#persistFile();
+    if (this.#state) await this.#prune();
+  }
+
+  /**
+   * Binds the store to `user`'s own host, adopting a host whose owner predates account
+   * sign-in. An account with no host leaves the store unconfigured rather than borrowing
+   * another account's.
+   */
+  async activateAccount(user: CentralAuthUser): Promise<void> {
+    const email = normalizeEmail(user.email);
+    const hosts = this.#file.hosts;
+    const unbound = hosts.find((host) => {
+      const owner = hostOwner(host);
+      return owner !== undefined && !owner.accountId && !owner.email;
+    });
+    // Everything below mutates in memory and is committed by the single write at the end,
+    // so a failed write can put the whole file back rather than leave half a switch applied
+    // with the status naming one account and every write going to another.
+    const rollback = structuredClone(this.#file);
+    this.#state =
+      hosts.find((host) => ownerAccountId(host) === user.id) ??
+      hosts.find((host) => {
+        const owner = hostOwner(host);
+        // Only a host whose owner predates accounts is matched by address. An email can be
+        // released and taken by somebody else, and it must not hand them a host that is
+        // already bound to the account that made it.
+        if (!owner || owner.accountId) return false;
+        return owner.email ? normalizeEmail(owner.email) === email : false;
+      }) ??
+      unbound ??
+      null;
+    this.#file.activeAccountId = user.id;
+    // A host configured before accounts existed has no owner email to match on next time,
+    // so adopting it has to write the binding rather than rely on `syncAccount`.
+    if (this.#state && this.#state === unbound) {
+      const owner = hostOwner(this.#state);
+      if (owner) {
+        owner.accountId = user.id;
+        owner.email = email;
+      }
+    }
+    if (this.#state) {
+      this.#applyAccount(user);
+      this.#dropExpired(this.#state);
+    }
+    try {
+      await this.#recordActiveAccount();
+    } catch (error) {
+      // The file keeps what it had, so nothing is lost. Memory does not go back to the
+      // previous account, though: central authentication has already moved on, and leaving
+      // its host answerable is the failure this whole change exists to prevent. Unbound
+      // until an auth event or a restart records the switch.
+      this.#file = rollback;
+      this.#state = null;
+      throw error;
+    }
+  }
+
+  /**
+   * Stops answering for the active host without touching the file. The renderer learns about
+   * a new account before the awaited teardown that follows can finish, so there has to be a
+   * way to stop serving the previous one immediately; `activateAccount` records the switch.
+   */
+  unbindActiveHost(): void {
+    this.#state = null;
+  }
+
+  /** Signing out unbinds the host without removing it - signing back in restores it. */
+  async deactivate(): Promise<void> {
+    const previousState = this.#state;
+    const previousAccountId = this.#file.activeAccountId;
+    this.#state = null;
+    this.#file.activeAccountId = null;
+    try {
+      await this.#recordActiveAccount();
+    } catch (error) {
+      this.#state = previousState;
+      this.#file.activeAccountId = previousAccountId;
+      throw error;
+    }
+  }
+
+  /**
+   * A file with no host records nothing an activation could change, so there is nothing to
+   * write - which is also what keeps signing in from failing, or from overwriting a file
+   * this store could not read. Configuring a server still refuses that file outright.
+   */
+  async #recordActiveAccount(): Promise<void> {
+    if (this.#file.hosts.length === 0) return;
+    await this.#persistFile();
+  }
+
+  get configured(): boolean {
+    return this.#state !== null;
+  }
+
+  getIdentity(): TeamIdentity | null {
+    return this.#state ? identityOf(this.#state) : null;
+  }
+
+  getOwnerEmail(): string | null {
+    return this.#state?.members.find((member) => member.role === "owner")?.email ?? null;
+  }
+
+  getOwnerMemberId(): string | null {
+    return this.#state?.members.find((member) => member.role === "owner")?.id ?? null;
+  }
+
+  getOwnerAnalyticsIdentity(): Pick<CentralAuthUser, "id" | "email"> | null {
+    const owner = this.#state?.members.find((member) => member.role === "owner");
+    return owner?.accountId && owner.email ? { id: owner.accountId, email: owner.email } : null;
+  }
+
+  assertOwnerAccount(user: CentralAuthUser): void {
+    const owner = this.#state?.members.find((member) => member.role === "owner");
+    if (!owner?.email) {
+      throw new TeamStoreError(sourceText("error.team.ownerNotLinked"));
+    }
+    // The account is the identity once one is recorded; the address is only what an owner
+    // from before accounts can be recognized by, and it can change hands.
+    const matches = owner.accountId
+      ? owner.accountId === user.id
+      : normalizeEmail(user.email) === normalizeEmail(owner.email);
+    if (!matches) {
+      throw new TeamStoreError(sourceText("error.team.ownerEmailRequired"));
+    }
+  }
+
+  getIdentityProof(challenge: string): (TeamIdentity & { challenge: string; signature: string }) | null {
+    const identity = this.getIdentity();
+    if (!identity || !this.#state || !/^[A-Za-z0-9_-]{16,128}$/.test(challenge)) return null;
+    const signature = sign(null, Buffer.from(challenge), this.#state.privateKey).toString("base64url");
+    return { ...identity, challenge, signature };
+  }
+
+  signRemoteAuthentication(transcript: string): string {
+    if (!this.#state) throw new TeamStoreError(sourceText("error.team.hostNotConfigured"));
+    return sign(null, Buffer.from(transcript), this.#state.privateKey).toString("base64url");
+  }
+
+  /**
+   * The password path, used by the development connection and by tests. It creates an
+   * owner-less host and deliberately leaves `activeAccountId` alone - no account owns it
+   * yet, and the first one to activate adopts it. `#assertNoHostFor` is what keeps a
+   * second owner-less host from being created beside it.
+   */
+  async configure(serverName: string, username: string, password: string): Promise<TeamIdentity> {
+    if (this.#state) throw new TeamStoreError(sourceText("error.team.alreadyConfigured"));
+    validateServerName(serverName);
+    validateUsername(username);
+    validatePassword(password);
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519", {
+      publicKeyEncoding: { type: "spki", format: "pem" },
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    });
+    const credentials = await hashPassword(password);
+    // Hashing yields, so a second request could have configured a host meanwhile.
+    if (this.#state) throw new TeamStoreError(sourceText("error.team.alreadyConfigured"));
+    this.#state = {
+      version: 1,
+      serverId: randomUUID(),
+      serverName: serverName.trim(),
+      enabledOnLaunch: false,
+      publicKey,
+      privateKey,
+      members: [
+        {
+          id: randomUUID(),
+          username: username.trim().toLowerCase(),
+          email: null,
+          name: null,
+          avatarUrl: null,
+          role: "owner",
+          disabled: false,
+          createdAt: new Date().toISOString(),
+          ...credentials,
+        },
+      ],
+      invites: [],
+      sessions: [],
+    };
+    this.#file.hosts.push(this.#state);
+    try {
+      await this.#persistFile();
+    } catch (error) {
+      this.#file.hosts.pop();
+      this.#state = null;
+      throw error;
+    }
+    const identity = this.getIdentity();
+    if (!identity) throw new Error(sourceText("error.team.identityCreateFailed"));
+    return identity;
+  }
+
+  async configureWithAccount(
+    serverName: string,
+    user: CentralAuthUser,
+    logo?: AvatarImageInput | null,
+    /** A hosted server gets its host ID from the account server, which reserves it for this account. */
+    options: { serverId?: string } = {},
+  ): Promise<TeamIdentity> {
+    const email = normalizeEmail(user.email);
+    this.#assertNoHostFor(user.id, email);
+    validateServerName(serverName);
+    // Both `activateAccount` and `deactivate` set this synchronously, so comparing it
+    // after the awaits below is a reliable answer to "is this still the account that
+    // asked?" - a configuration finishing under someone else's session would otherwise
+    // rebind the store to the account that has just signed out.
+    const activeAccountBefore = this.#file.activeAccountId;
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519", {
+      publicKeyEncoding: { type: "spki", format: "pem" },
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    });
+    const serverLogo = logo ? await this.#writeLogo(logo) : undefined;
+    try {
+      // `#writeLogo` yields, so two concurrent requests could both have passed the guard
+      // above. Re-checking is what stops one account owning two stored hosts, where a
+      // restart would activate the one the status never showed.
+      this.#assertNoHostFor(user.id, email);
+      if (this.#file.activeAccountId !== activeAccountBefore) {
+        throw new TeamStoreError(sourceText("error.team.accountChangedDuringCreate"));
+      }
+    } catch (error) {
+      if (serverLogo) await this.#removeLogo(serverLogo).catch(() => undefined);
+      throw error;
+    }
+    const created: StoredTeam = {
+      version: 1,
+      serverId: options.serverId ?? randomUUID(),
+      serverName: serverName.trim(),
+      enabledOnLaunch: false,
+      publicKey,
+      privateKey,
+      ...(serverLogo ? { serverLogo } : {}),
+      members: [
+        {
+          id: randomUUID(),
+          accountId: user.id,
+          username: email,
+          email,
+          name: normalizeName(user.name),
+          avatarUrl: normalizeAvatarUrl(user.avatarUrl),
+          role: "owner",
+          disabled: false,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      invites: [],
+      sessions: [],
+    };
+    this.#file.hosts.push(created);
+    const previousState = this.#state;
+    const previousAccountId = this.#file.activeAccountId;
+    this.#state = created;
+    this.#file.activeAccountId = user.id;
+    try {
+      await this.#persistFile();
+    } catch (error) {
+      this.#file.hosts = this.#file.hosts.filter((host) => host !== created);
+      if (this.#state === created) {
+        this.#state = previousState;
+        this.#file.activeAccountId = previousAccountId;
+      }
+      if (serverLogo) await this.#removeLogo(serverLogo).catch(() => undefined);
+      throw error;
+    }
+    // Writing the file yields as well. The host stays - it is on disk and it belongs to the
+    // account that asked for it - but the caller must not go on to apply this configuration,
+    // its logo and its remote registration, to whichever host is active now.
+    if (this.#state !== created) {
+      throw new TeamStoreError(sourceText("error.team.accountChangedDuringCreate"));
+    }
+    return identityOf(created);
+  }
+
+  async updateIdentity(input: { serverName?: string; logo?: AvatarImageInput | null }): Promise<TeamIdentity> {
+    const state = this.#requireState();
+    if (input.serverName !== undefined) validateServerName(input.serverName);
+    if (input.serverName === undefined && input.logo === undefined) {
+      const identity = this.getIdentity();
+      if (!identity) throw new TeamStoreError(sourceText("error.team.notConfigured"));
+      return identity;
+    }
+
+    const previousName = state.serverName;
+    const previousLogo = state.serverLogo;
+    const nextLogo =
+      input.logo === undefined ? previousLogo : input.logo === null ? undefined : await this.#writeLogo(input.logo);
+    // Writing the logo can outlive this host. `#persist` only requires *some* active host, so
+    // without this the name and image asked for here would land on whichever host became
+    // active meanwhile - and the caller would be handed that other account's identity back.
+    if (this.#state !== state) {
+      if (nextLogo && nextLogo.version !== previousLogo?.version) {
+        await this.#removeLogo(nextLogo).catch(() => undefined);
+      }
+      throw new TeamStoreError(sourceText("error.team.serverNotActive"));
+    }
+    if (input.serverName !== undefined) state.serverName = input.serverName.trim();
+    state.serverLogo = nextLogo;
+    try {
+      await this.#persist();
+    } catch (error) {
+      state.serverName = previousName;
+      state.serverLogo = previousLogo;
+      if (nextLogo && nextLogo.version !== previousLogo?.version) {
+        await this.#removeLogo(nextLogo).catch(() => undefined);
+      }
+      throw error;
+    }
+    if (previousLogo && previousLogo.version !== nextLogo?.version) {
+      await this.#removeLogo(previousLogo).catch(() => undefined);
+    }
+    // Writing the file yields as well. The change is on disk and belongs to the account that
+    // asked for it, but the caller must not go on to push it to the remote host under the
+    // authentication - and the owner membership - of whichever account is active now.
+    if (this.#state !== state) {
+      throw new TeamStoreError(sourceText("error.team.serverNotActive"));
+    }
+    return identityOf(state);
+  }
+
+  /** The record a build without accounts owns, with the fingerprint that dates it. */
+  async #readLegacyRecord(): Promise<{ record: StoredTeam; fingerprint: string } | null> {
+    if (!this.#legacyPath) return null;
+    let raw: string;
+    try {
+      raw = await readFile(this.#legacyPath, "utf8");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+      throw error;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (!isStoredTeam(parsed)) return null;
+    return { record: parsed, fingerprint: createHash("sha256").update(raw).digest("hex") };
+  }
+
+  /** Copied, never moved: the record left behind still points at the older build's own file. */
+  async #adoptLegacyLogo(record: StoredTeam): Promise<void> {
+    const logo = record.serverLogo;
+    if (!logo || !this.#legacyLogoRoot) return;
+    const name = `${logo.version}.${avatarFileExtension(logo.mimeType)}`;
+    await mkdir(this.#logoRoot, { recursive: true, mode: 0o700 });
+    // Never over this build's own copy, and a failure is left for the next start to retry
+    // rather than leaving the host pointing at a logo it has no file for.
+    await copyFile(join(this.#legacyLogoRoot, name), join(this.#logoRoot, name), constants.COPYFILE_EXCL).catch(
+      () => undefined,
+    );
+  }
+
+  resolveLogo(): { path: string; mimeType: AvatarImageInput["mimeType"]; version: string } | null {
+    const logo = this.#state?.serverLogo;
+    if (!logo) return null;
+    return {
+      path: join(this.#logoRoot, `${logo.version}.${avatarFileExtension(logo.mimeType)}`),
+      mimeType: logo.mimeType,
+      version: logo.version,
+    };
+  }
+
+  async #writeLogo(image: AvatarImageInput): Promise<NonNullable<StoredTeam["serverLogo"]>> {
+    if (!isValidAvatarImage(image.mimeType, image.bytes)) {
+      throw new TeamStoreError(sourceText("error.team.logoInvalid"));
+    }
+    const version = randomUUID();
+    const target = join(this.#logoRoot, `${version}.${avatarFileExtension(image.mimeType)}`);
+    await writeFileAtomically(target, image.bytes, { createDirectory: true });
+    return { version, mimeType: image.mimeType };
+  }
+
+  #removeLogo(logo: NonNullable<StoredTeam["serverLogo"]>): Promise<void> {
+    return rm(join(this.#logoRoot, `${logo.version}.${avatarFileExtension(logo.mimeType)}`), { force: true });
+  }
+
+  /**
+   * `serverId` names the host the caller decided this for. Publishing and unpublishing
+   * both span awaits an account switch can land in, and the launch preference of one
+   * account's host must never be written onto another's.
+   */
+  async setEnabledOnLaunch(serverId: string, enabled: boolean): Promise<void> {
+    const state = this.#requireState();
+    if (state.serverId !== serverId) {
+      throw new TeamStoreError(sourceText("error.team.serverNotActive"));
+    }
+    state.enabledOnLaunch = enabled;
+    await this.#persist();
+  }
+
+  listMembers(): TeamMemberSummary[] {
+    const members = this.#requireState().members.map(publicMember);
+    const known = new Set(members.map((member) => member.id));
+    for (const remote of this.#remoteSessions.values()) {
+      if (!known.has(remote.member.id) && Date.parse(remote.sessionExpiresAt) > Date.now()) {
+        members.push(structuredClone(remote.member));
+        known.add(remote.member.id);
+      }
+    }
+    return members;
+  }
+
+  /**
+   * `serverId` names the host the caller loaded this directory for. Signing into another
+   * account swaps the active host, so a directory that was already in flight would
+   * otherwise rewrite the new account's owner membership and disable its members.
+   */
+  async syncRemoteDirectory(serverId: string, remoteMembers: RemoteDirectoryMember[]): Promise<void> {
+    const state = this.#requireState();
+    if (state.serverId !== serverId) {
+      throw new TeamStoreError(sourceText("error.team.serverNotActive"));
+    }
+    const remoteOwner = remoteMembers.find((member) => member.role === "owner");
+    const localOwner = state.members.find((member) => member.role === "owner");
+    if (remoteOwner && localOwner && remoteOwner.membershipId !== localOwner.id) {
+      if (state.members.some((member) => member.id === remoteOwner.membershipId)) {
+        throw new TeamStoreError(sourceText("error.team.ownerMembershipConflict"));
+      }
+      const previousOwnerId = localOwner.id;
+      localOwner.id = remoteOwner.membershipId;
+      for (const session of state.sessions) {
+        if (session.memberId === previousOwnerId) session.memberId = remoteOwner.membershipId;
+      }
+    }
+    const remoteIds = new Set(remoteMembers.map((member) => member.membershipId));
+    for (const remote of remoteMembers) {
+      const member = state.members.find((candidate) => candidate.id === remote.membershipId);
+      if (!member) {
+        if (remote.role === "owner") throw new TeamStoreError(sourceText("error.team.ownerIdentityMismatch"));
+        state.members.push({
+          id: remote.membershipId,
+          username: normalizeEmail(remote.email),
+          email: normalizeEmail(remote.email),
+          name: normalizeName(remote.name),
+          avatarUrl: normalizeAvatarUrl(remote.avatarUrl),
+          role: remote.role,
+          disabled: remote.status !== "active",
+          createdAt: new Date(remote.createdAt).toISOString(),
+        });
+        continue;
+      }
+      member.username = normalizeEmail(remote.email);
+      member.email = normalizeEmail(remote.email);
+      member.name = normalizeName(remote.name);
+      member.avatarUrl = normalizeAvatarUrl(remote.avatarUrl);
+      member.role = remote.role;
+      member.disabled = remote.status !== "active";
+    }
+    for (const member of state.members) {
+      if (member.role !== "owner" && !remoteIds.has(member.id)) member.disabled = true;
+    }
+    await this.#persist();
+  }
+
+  openRemoteSession(input: {
+    sessionId: string;
+    membershipId: string;
+    userId: string;
+    role: TeamRole;
+    expiresAt?: number;
+  }): AuthenticatedMember {
+    const sessionToken = randomBytes(32).toString("base64url");
+    const sessionExpiresAt = new Date(input.expiresAt ?? Date.now() + SESSION_TTL_MS).toISOString();
+    const stored = this.#requireState().members.find((member) => member.id === input.membershipId);
+    const member: TeamMemberSummary = stored
+      ? { ...publicMember(stored), role: input.role, disabled: false }
+      : {
+          id: input.membershipId,
+          username: input.userId,
+          email: null,
+          name: null,
+          role: input.role,
+          createdAt: new Date().toISOString(),
+          disabled: false,
+        };
+    this.#remoteSessions.set(hashToken(sessionToken), {
+      member,
+      sessionId: input.sessionId,
+      createdAt: new Date().toISOString(),
+      sessionExpiresAt,
+    });
+    return { member: structuredClone(member), sessionToken, sessionExpiresAt };
+  }
+
+  closeRemoteSession(sessionId: string): void {
+    for (const [tokenHash, session] of this.#remoteSessions) {
+      if (session.sessionId === sessionId) this.#remoteSessions.delete(tokenHash);
+    }
+  }
+
+  getMember(memberId: string): TeamMemberSummary | null {
+    const member = this.#state?.members.find((candidate) => candidate.id === memberId);
+    return member ? publicMember(member) : null;
+  }
+
+  listInvites(): TeamInviteSummary[] {
+    return this.#requireState().invites.map((invite) => ({
+      id: invite.id,
+      role: invite.role,
+      expiresAt: invite.expiresAt,
+      usedAt: invite.usedAt,
+      email: invite.email ?? null,
+      permanent: invite.permanent ?? false,
+      useCount: invite.useCount ?? 0,
+    }));
+  }
+
+  listSessions(): TeamSessionSummary[] {
+    const state = this.#requireState();
+    const persisted = state.sessions.map((session) => ({
+      id: session.id,
+      memberId: session.memberId,
+      username: state.members.find((member) => member.id === session.memberId)?.username ?? "unknown",
+      createdAt: session.createdAt,
+      expiresAt: session.expiresAt,
+    }));
+    const now = Date.now();
+    const remote: TeamSessionSummary[] = [];
+    for (const [tokenHash, session] of this.#remoteSessions) {
+      if (Date.parse(session.sessionExpiresAt) <= now) {
+        this.#remoteSessions.delete(tokenHash);
+        continue;
+      }
+      remote.push({
+        id: session.sessionId,
+        memberId: session.member.id,
+        username: session.member.username,
+        createdAt: session.createdAt,
+        expiresAt: session.sessionExpiresAt,
+      });
+    }
+    return [...persisted, ...remote];
+  }
+
+  async createInvite(
+    role: Exclude<TeamRole, "owner">,
+    emailInput?: string,
+    options?: { permanent?: boolean },
+  ): Promise<CreatedInvite> {
+    if (role !== "admin" && role !== "member") throw new TeamStoreError("Invalid invite role.");
+    const permanent = options?.permanent ?? false;
+    const email = emailInput?.trim() ? normalizeEmail(emailInput) : null;
+    // A permanent link is a shareable URL, never an addressed message: binding it to an
+    // email would promise a restriction the token cannot enforce.
+    if (permanent && email) throw new TeamStoreError(sourceText("error.team.permanentInviteEmail"));
+    const state = this.#requireState();
+    if (permanent) {
+      const permanentInvites = state.invites.filter((invite) => invite.permanent === true).length;
+      if (permanentInvites >= INPUT_LIMITS.maxPermanentInvites) {
+        throw new TeamStoreError(
+          sourceText("error.team.permanentInviteLimit", { limit: INPUT_LIMITS.maxPermanentInvites }),
+        );
+      }
+    } else {
+      const activeInvites = state.invites.filter(
+        (invite) => invite.permanent !== true && invite.usedAt === null && Date.parse(invite.expiresAt) > Date.now(),
+      ).length;
+      if (activeInvites >= INPUT_LIMITS.activeInvites) {
+        throw new TeamStoreError(sourceText("error.team.activeInviteLimit", { limit: INPUT_LIMITS.activeInvites }));
+      }
+    }
+    const token = randomBytes(32).toString("base64url");
+    const invite: StoredInvite = {
+      id: randomUUID(),
+      tokenHash: hashToken(token),
+      role,
+      expiresAt: permanent ? permanentInviteExpiresAt() : new Date(Date.now() + INVITE_TTL_MS).toISOString(),
+      usedAt: null,
+      email,
+      permanent,
+      useCount: 0,
+    };
+    state.invites.push(invite);
+    await this.#persist();
+    return { id: invite.id, role, token, expiresAt: invite.expiresAt, email, permanent, useCount: 0 };
+  }
+
+  previewInvite(token: string): TeamInvitePreview {
+    const invite = this.#findUsableInvite(token);
+    if (!invite) throw new TeamStoreError(sourceText("error.team.inviteInvalid"));
+    return {
+      role: invite.role,
+      expiresAt: invite.expiresAt,
+      emailBound: Boolean(invite.email),
+      permanent: invite.permanent ?? false,
+    };
+  }
+
+  async acceptInviteWithAccount(token: string, user: CentralAuthUser): Promise<AuthenticatedMember> {
+    const state = this.#requireState();
+    const email = normalizeEmail(user.email);
+    const invite = this.#findUsableInvite(token);
+    if (!invite) throw new TeamStoreError(sourceText("error.team.inviteInvalid"));
+    if (invite.email && invite.email !== email) {
+      throw new TeamStoreError(sourceText("error.team.inviteEmailMismatch"));
+    }
+    const existingMember = state.members.find((member) => member.email === email || member.username === email);
+    if (existingMember) {
+      if (existingMember.disabled) throw new TeamStoreError(sourceText("error.team.memberDisabled"));
+      existingMember.email = email;
+      existingMember.accountId = user.id;
+      existingMember.username = email;
+      existingMember.name = normalizeName(user.name);
+      existingMember.avatarUrl = normalizeAvatarUrl(user.avatarUrl);
+      this.#consumeInvite(invite);
+      const result = this.#createSession(existingMember);
+      await this.#persist();
+      return result;
+    }
+    requireNewMemberSeat(state);
+    const member: StoredMember = {
+      id: randomUUID(),
+      accountId: user.id,
+      username: email,
+      email,
+      name: normalizeName(user.name),
+      avatarUrl: normalizeAvatarUrl(user.avatarUrl),
+      role: invite.role,
+      disabled: false,
+      createdAt: new Date().toISOString(),
+    };
+    this.#consumeInvite(invite);
+    state.members.push(member);
+    const result = this.#createSession(member);
+    await this.#persist();
+    return result;
+  }
+
+  async loginWithAccount(user: CentralAuthUser): Promise<AuthenticatedMember> {
+    const state = this.#requireState();
+    const email = normalizeEmail(user.email);
+    const member = state.members.find(
+      (candidate) => (candidate.email === email || candidate.username === email) && !candidate.disabled,
+    );
+    if (!member) throw new TeamStoreError(sourceText("error.team.accountNotMember"));
+    member.email = email;
+    member.accountId = user.id;
+    member.username = email;
+    member.name = normalizeName(user.name);
+    member.avatarUrl = normalizeAvatarUrl(user.avatarUrl);
+    const result = this.#createSession(member);
+    await this.#persist();
+    return result;
+  }
+
+  async acceptInvite(token: string, username: string, password: string): Promise<AuthenticatedMember> {
+    validateUsername(username);
+    validatePassword(password);
+    const state = this.#requireState();
+    const normalizedUsername = username.trim().toLowerCase();
+    const requireJoin = () => {
+      if (state.members.some((member) => member.username === normalizedUsername)) {
+        throw new TeamStoreError(sourceText("error.team.usernameTaken"));
+      }
+      const invite = this.#findUsableInvite(token);
+      if (!invite) throw new TeamStoreError(sourceText("error.team.inviteInvalid"));
+      if (invite.email) throw new TeamStoreError(sourceText("error.team.inviteRequiresAccount"));
+      requireNewMemberSeat(state);
+      return invite;
+    };
+    requireJoin();
+    const credentials = await hashPassword(password);
+    this.#requireUnchangedState(state);
+    // A concurrent join can take the username, the invitation or the last seat during the hash.
+    const invite = requireJoin();
+    const member: StoredMember = {
+      id: randomUUID(),
+      username: normalizedUsername,
+      email: null,
+      name: null,
+      avatarUrl: null,
+      role: invite.role,
+      disabled: false,
+      createdAt: new Date().toISOString(),
+      ...credentials,
+    };
+    this.#consumeInvite(invite);
+    state.members.push(member);
+    const result = this.#createSession(member);
+    await this.#persist();
+    return result;
+  }
+
+  async login(username: string, password: string): Promise<AuthenticatedMember> {
+    const state = this.#requireState();
+    const member = state.members.find(
+      (candidate) => candidate.username === username.trim().toLowerCase() && !candidate.disabled,
+    );
+    if (!member || !(await verifyPassword(password, member))) {
+      throw new TeamStoreError(sourceText("error.team.loginIncorrect"));
+    }
+    this.#requireUnchangedState(state);
+    const result = this.#createSession(member);
+    await this.#persist();
+    return result;
+  }
+
+  authenticate(token: string): TeamMemberSummary | null {
+    return this.authenticateSession(token)?.member ?? null;
+  }
+
+  authenticateSession(
+    token: string,
+  ): { member: TeamMemberSummary; sessionId: string; sessionExpiresAt: string } | null {
+    if (!this.#state || !token) return null;
+    const tokenHash = hashToken(token);
+    const remote = this.#remoteSessions.get(tokenHash);
+    if (remote) {
+      if (Date.parse(remote.sessionExpiresAt) > Date.now()) return structuredClone(remote);
+      this.#remoteSessions.delete(tokenHash);
+    }
+    const session = this.#state.sessions.find(
+      (candidate) => Date.parse(candidate.expiresAt) > Date.now() && safeTextEqual(candidate.tokenHash, tokenHash),
+    );
+    if (!session) return null;
+    const member = this.#state.members.find((candidate) => candidate.id === session.memberId && !candidate.disabled);
+    return member ? { member: publicMember(member), sessionId: session.id, sessionExpiresAt: session.expiresAt } : null;
+  }
+
+  async logout(token: string): Promise<void> {
+    const state = this.#requireState();
+    const tokenHash = hashToken(token);
+    state.sessions = state.sessions.filter((candidate) => !safeTextEqual(candidate.tokenHash, tokenHash));
+    await this.#persist();
+  }
+
+  async changePassword(memberId: string, currentPassword: string, nextPassword: string) {
+    validatePassword(nextPassword);
+    const state = this.#requireState();
+    const member = state.members.find((candidate) => candidate.id === memberId);
+    if (!member || !(await verifyPassword(currentPassword, member))) {
+      throw new TeamStoreError(sourceText("error.team.currentPasswordIncorrect"));
+    }
+    const credentials = await hashPassword(nextPassword);
+    this.#requireUnchangedState(state);
+    Object.assign(member, credentials);
+    state.sessions = state.sessions.filter((session) => session.memberId !== memberId);
+    await this.#persist();
+  }
+
+  async updateMember(
+    memberId: string,
+    patch: { role?: Exclude<TeamRole, "owner">; disabled?: boolean },
+  ): Promise<TeamMemberSummary> {
+    const state = this.#requireState();
+    const member = state.members.find((candidate) => candidate.id === memberId);
+    if (!member) throw new TeamStoreError(sourceText("error.team.memberNotFound"));
+    if (member.role === "owner") throw new TeamStoreError(sourceText("error.team.ownerCannotChange"));
+    if (patch.disabled === false && member.disabled) requireMemberSeat(state);
+    if (patch.role !== undefined) {
+      if (patch.role !== "admin" && patch.role !== "member") throw new TeamStoreError("Invalid role.");
+      member.role = patch.role;
+    }
+    if (patch.disabled !== undefined) member.disabled = patch.disabled;
+    if (member.disabled) {
+      state.sessions = state.sessions.filter((session) => session.memberId !== member.id);
+    }
+    await this.#persist();
+    return publicMember(member);
+  }
+
+  async removeMember(memberId: string): Promise<void> {
+    const state = this.#requireState();
+    const member = state.members.find((candidate) => candidate.id === memberId);
+    if (!member) throw new TeamStoreError(sourceText("error.team.memberNotFound"));
+    if (member.role === "owner") throw new TeamStoreError(sourceText("error.team.ownerCannotRemove"));
+    state.members = state.members.filter((candidate) => candidate.id !== memberId);
+    state.sessions = state.sessions.filter((session) => session.memberId !== memberId);
+    await this.#persist();
+  }
+
+  async revokeSession(sessionId: string): Promise<void> {
+    const state = this.#requireState();
+    state.sessions = state.sessions.filter((session) => session.id !== sessionId);
+    this.closeRemoteSession(sessionId);
+    await this.#persist();
+  }
+
+  async revokeInvite(inviteId: string): Promise<void> {
+    const state = this.#requireState();
+    state.invites = state.invites.filter((invite) => invite.id !== inviteId);
+    await this.#persist();
+  }
+
+  async syncAccount(user: CentralAuthUser): Promise<boolean> {
+    this.#requireState();
+    if (!this.#applyAccount(user)) return false;
+    await this.#persist();
+    return true;
+  }
+
+  /** The profile half of `syncAccount`, without its write. Reports whether anything moved. */
+  #applyAccount(user: CentralAuthUser): boolean {
+    const state = this.#requireState();
+    const email = normalizeEmail(user.email);
+    // By account first, so changing the address on an account keeps it matched to its own
+    // member rather than locking it out of the host it owns.
+    const member =
+      state.members.find((candidate) => candidate.accountId === user.id) ??
+      state.members.find((candidate) => candidate.email === email || candidate.username === email);
+    if (!member) return false;
+    const name = normalizeName(user.name);
+    const avatarUrl = normalizeAvatarUrl(user.avatarUrl);
+    if (
+      member.email === email &&
+      member.accountId === user.id &&
+      member.username === email &&
+      member.name === name &&
+      (member.avatarUrl ?? null) === avatarUrl
+    ) {
+      return false;
+    }
+    member.email = email;
+    member.accountId = user.id;
+    member.username = email;
+    member.name = name;
+    member.avatarUrl = avatarUrl;
+    return true;
+  }
+
+  #createSession(member: StoredMember): AuthenticatedMember {
+    const state = this.#requireState();
+    const memberSessions = state.sessions
+      .filter((session) => session.memberId === member.id)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    const excess = memberSessions.length - INPUT_LIMITS.sessionsPerMember + 1;
+    if (excess > 0) {
+      const removedIds = new Set(memberSessions.slice(0, excess).map((session) => session.id));
+      state.sessions = state.sessions.filter((session) => !removedIds.has(session.id));
+    }
+    const sessionToken = randomBytes(32).toString("base64url");
+    const sessionExpiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+    state.sessions.push({
+      id: randomUUID(),
+      memberId: member.id,
+      tokenHash: hashToken(sessionToken),
+      expiresAt: sessionExpiresAt,
+      createdAt: new Date().toISOString(),
+    });
+    return { member: publicMember(member), sessionToken, sessionExpiresAt };
+  }
+
+  #findUsableInvite(token: string): StoredInvite | undefined {
+    return this.#requireState().invites.find(
+      (candidate) =>
+        // A permanent link stays usable after joins; only expiry (never, by construction)
+        // or revocation (deletion) retires it.
+        (candidate.permanent === true || candidate.usedAt === null) &&
+        Date.parse(candidate.expiresAt) > Date.now() &&
+        safeTextEqual(candidate.tokenHash, hashToken(token)),
+    );
+  }
+
+  /**
+   * Records one join against an invitation. Single-use links burn; permanent links
+   * count the join and stay usable.
+   */
+  #consumeInvite(invite: StoredInvite): void {
+    if (invite.permanent === true) {
+      invite.useCount = (invite.useCount ?? 0) + 1;
+      return;
+    }
+    invite.usedAt = new Date().toISOString();
+  }
+
+  #requireState(): StoredTeam {
+    if (!this.#state) throw new TeamStoreError(sourceText("error.team.serverNotConfigured"));
+    return this.#state;
+  }
+
+  /**
+   * The host this request started on, still the one being served. Hashing a password takes
+   * long enough for an account switch to land in the middle of it, and the host captured
+   * before that await is still in the file: mutating it there would commit a change the
+   * caller is about to be told failed.
+   */
+  #requireUnchangedState(state: StoredTeam): void {
+    if (this.#state !== state) {
+      throw new TeamStoreError(sourceText("error.team.accountChangedDuringRequest"));
+    }
+  }
+
+  /**
+   * Rejects a second host for one account, and a second host beside an owner-less one.
+   * The owner-less check spans every stored host, not just the active one: an inactive
+   * one is exactly what the next `activateAccount` adopts, so letting a second accumulate
+   * would make that adoption a coin toss.
+   */
+  #assertNoHostFor(accountId: string, email: string): void {
+    const ownerless = this.#file.hosts.some((host) => {
+      const owner = hostOwner(host);
+      return owner !== undefined && !owner.accountId && !owner.email;
+    });
+    if (this.#hostFor(accountId, email) || ownerless) {
+      throw new TeamStoreError(sourceText("error.team.alreadyConfigured"));
+    }
+  }
+
+  #hostFor(accountId: string, email: string): StoredTeam | undefined {
+    return this.#file.hosts.find((host) => {
+      const owner = hostOwner(host);
+      if (!owner) return false;
+      // The same rule as `activateAccount`: an owner bound to an account is that account's
+      // alone, so whoever holds its old address is free to configure a host of their own.
+      if (owner.accountId) return owner.accountId === accountId;
+      return owner.email ? normalizeEmail(owner.email) === email : false;
+    });
+  }
+
+  async #prune(): Promise<void> {
+    if (!this.#state) return;
+    this.#dropExpired(this.#state);
+    await this.#persist();
+  }
+
+  /** The expiry half of `#prune`, without its write. */
+  #dropExpired(host: StoredTeam): void {
+    const now = Date.now();
+    host.sessions = host.sessions.filter((session) => Date.parse(session.expiresAt) > now);
+    host.invites = host.invites.filter((invite) => invite.usedAt !== null || Date.parse(invite.expiresAt) > now);
+  }
+
+  async #persist(): Promise<void> {
+    this.#requireState();
+    await this.#persistFile();
+  }
+
+  async #persistFile(): Promise<void> {
+    if (this.#unreadableFile) {
+      throw new TeamStoreError(sourceText("error.team.serverFileUnreadable"));
+    }
+    const snapshot = structuredClone(this.#file);
+    const operation = this.#writeChain.then(() => writeJsonFileAtomically(this.#path, snapshot));
+    this.#writeChain = operation.catch(() => undefined);
+    await operation;
+  }
+}
+
+export function fingerprint(publicKey: string): string {
+  return createHash("sha256").update(publicKey).digest("base64url");
+}
+
+async function hashPassword(password: string): Promise<{ passwordSalt: string; passwordHash: string }> {
+  const passwordSalt = randomBytes(16).toString("base64url");
+  const passwordHash = Buffer.from(await derivePasswordBytes(password, passwordSalt)).toString("base64url");
+  return { passwordSalt, passwordHash };
+}
+
+async function verifyPassword(password: string, member: StoredMember): Promise<boolean> {
+  if (!member.passwordSalt || !member.passwordHash) return false;
+  const candidate = Buffer.from(await derivePasswordBytes(password, member.passwordSalt));
+  const expected = Buffer.from(member.passwordHash, "base64url");
+  return candidate.length === expected.length && timingSafeEqual(candidate, expected);
+}
+
+async function derivePasswordBytes(password: string, salt: string): Promise<Uint8Array> {
+  const result = await scrypt(password, salt, 64);
+  if (!(result instanceof Uint8Array)) throw new Error("Password hashing returned invalid data.");
+  return result;
+}
+
+function hashToken(token: string): string {
+  return createHash("sha256").update(token).digest("base64url");
+}
+
+function safeTextEqual(left: string, right: string): boolean {
+  const leftBytes = Buffer.from(left);
+  const rightBytes = Buffer.from(right);
+  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
+}
+
+function publicMember(member: StoredMember): TeamMemberSummary {
+  return {
+    id: member.id,
+    username: member.username,
+    email: member.email ?? null,
+    name: member.name ?? null,
+    avatarUrl: member.avatarUrl ?? null,
+    role: member.role,
+    createdAt: member.createdAt,
+    disabled: member.disabled,
+  };
+}
+
+function normalizeEmail(value: string): string {
+  const normalized = normalizeEmailAddress(value);
+  if (!normalized) throw new TeamStoreError(sourceText("error.team.emailInvalid"));
+  return normalized;
+}
+
+function normalizeName(value: string | null): string | null {
+  const normalized = value?.trim() ?? "";
+  if (normalized.length > INPUT_LIMITS.accountName)
+    throw new TeamStoreError(sourceText("error.team.accountNameTooLong"));
+  return normalized || null;
+}
+
+function normalizeAvatarUrl(value: string | null): string | null {
+  if (!value) return null;
+  if (value.length > INPUT_LIMITS.avatarUrl) throw new TeamStoreError(sourceText("error.team.avatarUrlTooLong"));
+  const url = new URL(value);
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new TeamStoreError(sourceText("error.team.avatarUrlInvalid"));
+  }
+  return url.toString();
+}
+
+function validateServerName(value: string): void {
+  const normalized = value.trim();
+  if (normalized.length < INPUT_LIMITS.serverNameMin || normalized.length > INPUT_LIMITS.serverName) {
+    throw new TeamStoreError(
+      sourceText("error.team.serverNameLength", { min: INPUT_LIMITS.serverNameMin, max: INPUT_LIMITS.serverName }),
+    );
+  }
+  if (slugifyTeamServerName(normalized).length < INPUT_LIMITS.serverNameMin) {
+    throw new TeamStoreError(sourceText("error.team.serverNameHostname"));
+  }
+}
+
+function validateUsername(value: string): void {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}$/.test(value.trim())) {
+    throw new TeamStoreError(sourceText("error.team.usernameInvalid"));
+  }
+}
+
+function validatePassword(value: string): void {
+  if (value.length < 12 || value.length > 256) {
+    throw new TeamStoreError(sourceText("error.team.passwordLength"));
+  }
+}
+
+function identityOf(host: StoredTeam): TeamIdentity {
+  return {
+    serverId: host.serverId,
+    serverName: host.serverName,
+    fingerprint: fingerprint(host.publicKey),
+    publicKey: host.publicKey,
+    enabledOnLaunch: host.enabledOnLaunch,
+    logoVersion: host.serverLogo?.version ?? null,
+  };
+}
+
+/** A new member needs a stored record and a seat. */
+function requireNewMemberSeat(host: StoredTeam): void {
+  if (host.members.length >= INPUT_LIMITS.teamMembers) {
+    throw new TeamStoreError(sourceText("error.team.memberLimit", { limit: INPUT_LIMITS.teamMembers }));
+  }
+  requireMemberSeat(host);
+}
+
+/** Disabled members keep their record but not their seat, so a remote revoke frees one. */
+function requireMemberSeat(host: StoredTeam): void {
+  if (host.members.filter((member) => !member.disabled).length >= DEFAULT_TEAM_MEMBER_LIMIT) {
+    throw new TeamStoreError(sourceText("error.team.memberLimit", { limit: DEFAULT_TEAM_MEMBER_LIMIT }));
+  }
+}
+
+function hostOwner(host: StoredTeam): StoredMember | undefined {
+  return host.members.find((member) => member.role === "owner");
+}
+
+function ownerAccountId(host: StoredTeam): string | null {
+  return hostOwner(host)?.accountId ?? null;
+}
+
+/**
+ * Merges the two copies of one host against the record both started from: what either side
+ * added is kept, what either side removed stays removed, and a field one side changed wins
+ * over the value neither touched. Nothing here can drop work the user did in either build.
+ */
+function reconcileHost(baseline: StoredTeam, mine: StoredTeam, theirs: StoredTeam): StoredTeam {
+  return {
+    ...mine,
+    serverName: pickChanged(baseline.serverName, mine.serverName, theirs.serverName),
+    enabledOnLaunch: pickChanged(baseline.enabledOnLaunch, mine.enabledOnLaunch, theirs.enabledOnLaunch),
+    serverLogo: pickChanged(baseline.serverLogo, mine.serverLogo, theirs.serverLogo),
+    members: reconcileMembers(baseline.members, mine.members, theirs.members),
+    invites: reconcileEntries(baseline.invites, mine.invites, theirs.invites),
+    // A session missing on either side was signed out there, and `reconcileEntries` keeps
+    // it that way rather than handing back a token the user has already revoked.
+    sessions: reconcileEntries(baseline.sessions, mine.sessions, theirs.sessions),
+  };
+}
+
+/**
+ * Members, with one field held back from the merge. The older build binds a member to an
+ * account by email alone, so an address that has changed hands makes it write a different
+ * account's id onto the same member - and taking that back would hand the host, and the
+ * ownership check with it, to whoever holds the address now. An id is only taken from there
+ * for a member this build knows no account for.
+ */
+function reconcileMembers(baseline: StoredMember[], mine: StoredMember[], theirs: StoredMember[]): StoredMember[] {
+  return reconcileEntries(baseline, mine, theirs).map((member) => {
+    const ours = mine.find((candidate) => candidate.id === member.id);
+    return ours?.accountId ? { ...member, accountId: ours.accountId } : member;
+  });
+}
+
+/** The side that moved, or this build's value when the other side stood still. */
+function pickChanged<T>(baseline: T, mine: T, theirs: T): T {
+  return sameValue(theirs, baseline) ? mine : theirs;
+}
+
+function reconcileEntries<T extends { id: string }>(baseline: T[], mine: T[], theirs: T[]): T[] {
+  const before = new Map(baseline.map((entry) => [entry.id, entry]));
+  const merged: T[] = [];
+  const seen = new Set<string>();
+  for (const entry of [...mine, ...theirs]) {
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    const ours = mine.find((candidate) => candidate.id === entry.id);
+    const other = theirs.find((candidate) => candidate.id === entry.id);
+    const known = before.get(entry.id);
+    // Known to both and gone from one of them: removed there, so it stays removed.
+    if (known && (!ours || !other)) continue;
+    if (!ours || !other || !known) {
+      merged.push(ours ?? other ?? entry);
+      continue;
+    }
+    // Both builds have it. Taking the other side's entry whole would undo a field this one
+    // changed - a disabled member handed back their access, say - so each field is decided
+    // on its own.
+    merged.push(reconcileFields(known, ours, other));
+  }
+  return merged;
+}
+
+/** The entry field by field: whichever side moved a field, and this build's when neither did. */
+function reconcileFields<T extends object>(baseline: T, mine: T, theirs: T): T {
+  const merged = { ...mine };
+  const before = new Map(Object.entries(baseline));
+  const ours = new Map(Object.entries(mine));
+  for (const [key, other] of Object.entries(theirs)) {
+    Reflect.set(merged, key, sameValue(other, before.get(key)) ? ours.get(key) : other);
+  }
+  for (const key of ours.keys()) {
+    // Dropped there, and this build never touched it, so it goes.
+    if (!(key in theirs) && before.has(key) && sameValue(ours.get(key), before.get(key))) {
+      Reflect.deleteProperty(merged, key);
+    }
+  }
+  return merged;
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function isStoredTeamFile(value: unknown): value is StoredTeamFile {
+  if (!isDynamicRecord(value)) return false;
+  return (
+    value.version === 2 &&
+    (value.activeAccountId === null || isString(value.activeAccountId)) &&
+    Array.isArray(value.hosts) &&
+    value.hosts.every((host) => isStoredTeam(host)) &&
+    (value.legacyImport === undefined ||
+      (isDynamicRecord(value.legacyImport) &&
+        isString(value.legacyImport.fingerprint) &&
+        isStoredTeam(value.legacyImport.record))) &&
+    (value.replacedHosts === undefined ||
+      (Array.isArray(value.replacedHosts) && value.replacedHosts.every((host) => isStoredTeam(host))))
+  );
+}
+
+function isStoredTeam(value: unknown): value is StoredTeam {
+  if (!isDynamicRecord(value)) return false;
+  const record = value;
+  const logo = record.serverLogo;
+  const validLogo =
+    logo === undefined ||
+    (isDynamicRecord(logo) && isString(logo.version) && isString(logo.mimeType) && isAvatarMimeType(logo.mimeType));
+  return (
+    record.version === 1 &&
+    isString(record.serverId) &&
+    isString(record.serverName) &&
+    isString(record.publicKey) &&
+    isString(record.privateKey) &&
+    Array.isArray(record.members) &&
+    Array.isArray(record.invites) &&
+    Array.isArray(record.sessions) &&
+    validLogo
+  );
+}

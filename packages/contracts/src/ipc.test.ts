@@ -1,0 +1,1004 @@
+import { describe, expect, it } from "vitest";
+import { INPUT_LIMITS } from "./input-limits";
+import {
+  AGENT_RUNTIME_ATTENTION_LIMIT,
+  AGENT_RUNTIME_TEXT_LIMIT,
+  AGENT_RUNTIME_WORKING_ITEMS_LIMIT,
+  type AttachmentSummary,
+  agentAutoApprovalEnabled,
+  canPreviewAttachment,
+  channelRoutingConversationEvent,
+  channelRoutingConversationEventItemType,
+  decodeChannel,
+  decodeMcpServerConfigs,
+  hostedSiteConversationEvent,
+  hostedSiteConversationEventItemType,
+  hostedSiteConversationEventText,
+  isAccountUsage,
+  isAgentEvent,
+  isAgentMemory,
+  isAgentModelOption,
+  isAgentStatus,
+  isAgentSummary,
+  isAttachmentSummary,
+  isAvatarHue,
+  isAvatarSeed,
+  isConversationMessage,
+  isConversationWithReadState,
+  isCustomProviderResult,
+  isCustomProviderSummary,
+  isDynamicIslandAction,
+  isFilePreviewKind,
+  isHostedSiteConversationEventUrl,
+  isMcpServerConfig,
+  isMcpTestResult,
+  isMessageReaction,
+  isQueuedMessageReceipt,
+  isQueueSnapshot,
+  parseChannelRoutingConversationEventItemType,
+  parseHostedSiteConversationEventItemType,
+  parseRoutineConversationEventItemType,
+  parseRoutineRunConversationEventItemType,
+  routineConversationEvent,
+  routineConversationEventItemType,
+  routineRunConversationEvent,
+  routineRunConversationEventItemType,
+} from "./ipc";
+
+describe("Dynamic Island action validation", () => {
+  it("accepts approval decisions and rejects unknown decisions", () => {
+    const action = {
+      type: "respond-approval",
+      serverId: "local",
+      agentId: "chief",
+      requestId: "approval-1",
+      decision: "accept",
+    };
+    expect(isDynamicIslandAction(action)).toBe(true);
+    expect(isDynamicIslandAction({ ...action, decision: "always" })).toBe(false);
+  });
+});
+
+describe("question prompt message validation", () => {
+  const message = {
+    id: "question-prompt:turn-1:request-1",
+    turnId: "turn-1",
+    author: "assistant",
+    source: "assistant",
+    text: "",
+    createdAt: "2026-08-28T12:00:00.000Z",
+    status: "completed",
+    itemType: "question_prompt",
+    questionPrompt: {
+      requestId: "request-1",
+      questions: [
+        {
+          id: "scope",
+          header: "Scope",
+          question: "How broad should the change be?",
+          isSecret: false,
+          options: [{ label: "Small", description: "One focused change." }],
+        },
+      ],
+      resolution: null,
+    },
+  };
+
+  it("accepts pending, answered, cancelled, and expired prompt records", () => {
+    expect(isConversationMessage(message)).toBe(true);
+    expect(
+      isConversationMessage({
+        ...message,
+        questionPrompt: {
+          ...message.questionPrompt,
+          resolution: { status: "answered", responses: { scope: { status: "answered", answers: ["Small"] } } },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isConversationMessage({
+        ...message,
+        questionPrompt: { ...message.questionPrompt, resolution: { status: "cancelled" } },
+      }),
+    ).toBe(true);
+    expect(
+      isConversationMessage({
+        ...message,
+        questionPrompt: { ...message.questionPrompt, resolution: { status: "expired" } },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects malformed question and resolution data", () => {
+    expect(
+      isConversationMessage({
+        ...message,
+        questionPrompt: { ...message.questionPrompt, questions: [{ id: "scope" }] },
+      }),
+    ).toBe(false);
+    expect(
+      isConversationMessage({
+        ...message,
+        questionPrompt: { ...message.questionPrompt, resolution: { status: "answered", responses: [] } },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("message reaction validation", () => {
+  it("accepts one complete Unicode emoji sequence", () => {
+    expect(isMessageReaction("😀")).toBe(true);
+    expect(isMessageReaction("👋🏽")).toBe(true);
+    expect(isMessageReaction("👨‍👩‍👧‍👦")).toBe(true);
+    expect(isMessageReaction("🇵🇱")).toBe(true);
+    expect(isMessageReaction("1️⃣")).toBe(true);
+  });
+
+  it("rejects text, whitespace, and multiple emoji", () => {
+    expect(isMessageReaction("hello")).toBe(false);
+    expect(isMessageReaction(" 😀 ")).toBe(false);
+    expect(isMessageReaction("😀😀")).toBe(false);
+    expect(isMessageReaction("")).toBe(false);
+  });
+});
+
+describe("avatar IPC validation", () => {
+  it("accepts generated avatar seeds and rejects unsafe or oversized values", () => {
+    expect(isAvatarSeed("chief:avatar:12:4")).toBe(true);
+    expect(isAvatarSeed("Chief avatar")).toBe(false);
+    expect(isAvatarSeed("../chief")).toBe(false);
+    expect(isAvatarSeed("a".repeat(129))).toBe(false);
+  });
+
+  it("accepts only the supported hue presets", () => {
+    expect(isAvatarHue(215)).toBe(true);
+    expect(isAvatarHue(214)).toBe(false);
+    expect(isAvatarHue(null)).toBe(false);
+  });
+});
+
+describe("sidebar layout event validation", () => {
+  it("accepts a canonical sidebar layout event", () => {
+    expect(
+      isAgentEvent({
+        type: "sidebar-layout-changed",
+        layout: {
+          revision: 3,
+          sections: [{ id: "11111111-1111-4111-8111-111111111111", name: "Demo" }],
+          order: ["people", "11111111-1111-4111-8111-111111111111", "unassigned"],
+          agentAssignments: { chief: "11111111-1111-4111-8111-111111111111" },
+          agentOrder: ["chief"],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  // The renderer draws the sidebar by walking `order`, so a section left out of it is not drawn and
+  // every agent assigned to that section is off the screen -- while the agent, its chat and every
+  // message in it are intact. That is history the user cannot reach, from a layout a remote host is
+  // free to send, so the layout is rejected here rather than repaired downstream.
+  it("rejects a layout whose order leaves out a section that holds agents", () => {
+    expect(
+      isAgentEvent({
+        type: "sidebar-layout-changed",
+        layout: {
+          revision: 3,
+          sections: [{ id: "11111111-1111-4111-8111-111111111111", name: "Demo" }],
+          order: ["people", "unassigned"],
+          agentAssignments: { chief: "11111111-1111-4111-8111-111111111111" },
+          agentOrder: ["chief"],
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a layout whose order repeats a section", () => {
+    expect(
+      isAgentEvent({
+        type: "sidebar-layout-changed",
+        layout: {
+          revision: 3,
+          sections: [],
+          order: ["people", "unassigned", "unassigned"],
+          agentAssignments: {},
+          agentOrder: [],
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects malformed sidebar layout events", () => {
+    expect(
+      isAgentEvent({
+        type: "sidebar-layout-changed",
+        layout: {
+          revision: -1,
+          sections: [],
+          order: ["people", "people", "unassigned"],
+          agentAssignments: {},
+          agentOrder: [],
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("runtime snapshot event validation", () => {
+  it("accepts a complete snapshot and rejects malformed collections", () => {
+    const snapshot = {
+      agents: [],
+      activeTurns: [],
+      work: [],
+      latestMessages: [],
+      attentionComplete: true,
+      pendingPrompts: [],
+      pendingApprovals: [],
+      pendingBrowserTakeovers: [],
+      failedTurns: [],
+    };
+    expect(isAgentEvent({ type: "runtime-snapshot", snapshot })).toBe(true);
+    expect(isAgentEvent({ type: "runtime-snapshot", snapshot: { ...snapshot, attentionComplete: null } })).toBe(false);
+    expect(isAgentEvent({ type: "runtime-snapshot", snapshot: { ...snapshot, failedTurns: null } })).toBe(false);
+    expect(isAgentEvent({ type: "runtime-snapshot", snapshot: { ...snapshot, agents: [{}] } })).toBe(false);
+    expect(isAgentEvent({ type: "runtime-snapshot", snapshot: { ...snapshot, work: [{}] } })).toBe(false);
+    expect(
+      isAgentEvent({
+        type: "runtime-snapshot",
+        snapshot: {
+          ...snapshot,
+          agents: [
+            {
+              id: "chief",
+              name: "Chief",
+              notifications: true,
+              preview: "x".repeat(AGENT_RUNTIME_TEXT_LIMIT + 1),
+              updatedAt: null,
+              avatarSeed: "chief",
+              avatarHue: null,
+              avatarUrl: null,
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isAgentEvent({
+        type: "runtime-snapshot",
+        snapshot: {
+          ...snapshot,
+          work: Array.from(
+            { length: AGENT_RUNTIME_WORKING_ITEMS_LIMIT + AGENT_RUNTIME_ATTENTION_LIMIT + 1 },
+            (_, index) => ({
+              id: `delivery-${index}`,
+              agentId: `bot-${index}`,
+              text: "Work",
+              status: "running",
+              turnId: `turn-${index}`,
+              error: null,
+            }),
+          ),
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isAgentEvent({
+        type: "runtime-snapshot",
+        snapshot: {
+          ...snapshot,
+          pendingPrompts: [
+            {
+              requestId: "prompt-1",
+              agentId: "chief",
+              threadId: "thread-1",
+              turnId: "turn-1",
+              questions: [null],
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+    expect(isAgentEvent({ type: "runtime-snapshot", snapshot: { ...snapshot, pendingApprovals: [{}] } })).toBe(false);
+    expect(isAgentEvent({ type: "runtime-snapshot", snapshot: { ...snapshot, pendingBrowserTakeovers: [{}] } })).toBe(
+      false,
+    );
+    expect(
+      isAgentEvent({
+        type: "runtime-snapshot",
+        snapshot: {
+          ...snapshot,
+          pendingBrowserTakeovers: Array.from({ length: AGENT_RUNTIME_ATTENTION_LIMIT + 1 }, (_, index) => ({
+            requestId: `takeover-${index}`,
+            agentId: `bot-${index}`,
+            threadId: `thread-${index}`,
+            turnId: `turn-${index}`,
+            tabId: `tab-${index}`,
+          })),
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("agent input resolution event validation", () => {
+  it("accepts bounded prompt and approval resolutions", () => {
+    expect(
+      isAgentEvent({ type: "agent-input-resolved", kind: "prompt", requestId: "prompt-1", agentId: "chief" }),
+    ).toBe(true);
+    expect(isAgentEvent({ type: "agent-input-resolved", kind: "approval", requestId: 1, agentId: "chief" })).toBe(true);
+    expect(isAgentEvent({ type: "agent-input-resolved", kind: "other", requestId: 1, agentId: "chief" })).toBe(false);
+  });
+});
+
+describe("conversation event validation", () => {
+  it("accepts complete snapshots and rejects malformed messages", () => {
+    const snapshot = {
+      agentId: "chief",
+      threadId: "thread-1",
+      activeTurnId: null,
+      revision: 1,
+      messages: [
+        {
+          id: "message-1",
+          author: "assistant",
+          text: "Done",
+          createdAt: "2026-08-29T10:00:00.000Z",
+          status: "completed",
+        },
+      ],
+    };
+
+    expect(isAgentEvent({ type: "conversation", snapshot })).toBe(true);
+    expect(
+      isAgentEvent({
+        type: "conversation",
+        snapshot: {
+          ...snapshot,
+          messages: [
+            { ...snapshot.messages[0], text: "x".repeat(100_001) },
+            ...Array.from({ length: 10_000 }, () => snapshot.messages[0]),
+          ],
+        },
+      }),
+    ).toBe(true);
+    expect(isAgentEvent({ type: "conversation", snapshot: {} })).toBe(false);
+    expect(isAgentEvent({ type: "conversation", snapshot: { ...snapshot, messages: [null] } })).toBe(false);
+    expect(isAgentEvent({ type: "conversation-invalidated", agentId: "chief", revision: 2 })).toBe(true);
+    expect(isAgentEvent({ type: "queue-invalidated", agentId: "chief" })).toBe(true);
+    expect(
+      isAgentEvent({
+        type: "conversation-page",
+        page: {
+          ...snapshot,
+          references: {},
+          pageInfo: { hasOlder: true, olderCursor: "older" },
+        },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("routine conversation events", () => {
+  it("encodes and decodes a valid routine marker", () => {
+    const itemType = routineConversationEventItemType("updated", "routine-1");
+    const message = {
+      id: "event-1",
+      author: "system",
+      source: "system",
+      text: "Morning brief",
+      createdAt: "2026-08-31T12:00:00.000Z",
+      status: "completed",
+      itemType,
+    } as const;
+
+    expect(itemType).toBe("routine-event:updated:routine-1");
+    expect(parseRoutineConversationEventItemType(itemType)).toEqual({ action: "updated", routineId: "routine-1" });
+    expect(routineConversationEvent(message)).toEqual({
+      action: "updated",
+      routineId: "routine-1",
+      routineName: "Morning brief",
+    });
+    expect(isConversationMessage(message)).toBe(true);
+  });
+
+  it("rejects malformed routine marker metadata", () => {
+    expect(parseRoutineConversationEventItemType("routine-event:renamed:routine-1")).toBeNull();
+    expect(parseRoutineConversationEventItemType("routine-event:created:")).toBeNull();
+    expect(() => routineConversationEventItemType("created", "x".repeat(128))).toThrow(
+      "The routine event item type is too long.",
+    );
+  });
+});
+
+describe("channel routing conversation events", () => {
+  it("encodes and decodes a channel assignment marker", () => {
+    const itemType = channelRoutingConversationEventItemType("assigned", "builder");
+    // A channel writes its rows without a `source`, so the marker is recognised by author and type.
+    const message = {
+      id: "event-1",
+      author: "system",
+      text: "Assigned to Builder.",
+      createdAt: "2026-08-31T12:00:00.000Z",
+      status: "completed",
+      itemType,
+    } as const;
+
+    expect(itemType).toBe("channel-routing-event:assigned:builder");
+    expect(channelRoutingConversationEvent(message)).toEqual({ action: "assigned", agentId: "builder" });
+    expect(isConversationMessage(message)).toBe(true);
+  });
+
+  it("leaves an ordinary channel message and a malformed item type unmarked", () => {
+    expect(
+      channelRoutingConversationEvent({
+        id: "message-1",
+        author: "system",
+        text: "Assigned to Builder.",
+        createdAt: "2026-08-31T12:00:00.000Z",
+        status: "completed",
+      }),
+    ).toBeNull();
+    expect(parseChannelRoutingConversationEventItemType("channel-routing-event:paused:builder")).toBeNull();
+    expect(parseChannelRoutingConversationEventItemType("channel-routing-event:assigned:")).toBeNull();
+    expect(() => channelRoutingConversationEventItemType("assigned", "x".repeat(120))).toThrow(
+      "The channel routing event item type is too long.",
+    );
+  });
+});
+
+describe("routine run conversation events", () => {
+  it.each(["running", "needs-attention", "succeeded", "failed", "interrupted", "cancelled"] as const)(
+    "encodes and decodes the %s state",
+    (status) => {
+      const itemType = routineRunConversationEventItemType(status, "routine-1", "run-1");
+      const message = {
+        id: `event-${status}`,
+        author: "system",
+        source: "system",
+        text: "Morning brief",
+        createdAt: "2026-09-01T12:00:00.000Z",
+        status: "completed",
+        itemType,
+      } as const;
+
+      expect(parseRoutineRunConversationEventItemType(itemType)).toEqual({
+        status,
+        routineId: "routine-1",
+        runId: "run-1",
+      });
+      expect(routineRunConversationEvent(message)).toEqual({
+        status,
+        routineId: "routine-1",
+        runId: "run-1",
+        routineName: "Morning brief",
+      });
+      expect(isConversationMessage(message)).toBe(true);
+    },
+  );
+
+  it("rejects unknown, malformed, and oversized metadata", () => {
+    expect(parseRoutineRunConversationEventItemType("routine-run-event:queued:routine-1:run-1")).toBeNull();
+    expect(parseRoutineRunConversationEventItemType("routine-run-event:running:routine-1")).toBeNull();
+    expect(parseRoutineRunConversationEventItemType("routine-run-event:running::run-1")).toBeNull();
+    expect(parseRoutineRunConversationEventItemType("routine-run-event:running:routine-1:run-1:extra")).toBeNull();
+    expect(() => routineRunConversationEventItemType("running", "r".repeat(80), "x".repeat(80))).toThrow(
+      "The routine run event item type is too long.",
+    );
+  });
+});
+
+describe("hosted site conversation events", () => {
+  const publishedSite = {
+    siteId: "site-1",
+    title: "Launch page",
+    hostname: "launch-page-23456789ab.openbot.site",
+    url: "https://launch-page-23456789ab.openbot.site",
+  } as const;
+
+  it.each(["running", "succeeded", "failed", "interrupted", "cancelled"] as const)(
+    "encodes and decodes the publish %s state",
+    (status) => {
+      const details =
+        status === "succeeded"
+          ? publishedSite
+          : { siteId: null, title: publishedSite.title, hostname: null, url: null };
+      const itemType = hostedSiteConversationEventItemType("publish", status, "operation-1");
+      const message = {
+        id: `site-event-${status}`,
+        author: "system",
+        source: "system",
+        text: hostedSiteConversationEventText(details),
+        createdAt: "2026-09-01T12:00:00.000Z",
+        status: "completed",
+        itemType,
+      } as const;
+
+      expect(parseHostedSiteConversationEventItemType(itemType)).toEqual({
+        action: "publish",
+        status,
+        operationId: "operation-1",
+      });
+      expect(hostedSiteConversationEvent(message)).toEqual({
+        action: "publish",
+        status,
+        operationId: "operation-1",
+        ...details,
+      });
+      expect(isConversationMessage(message)).toBe(true);
+    },
+  );
+
+  it.each(["replace", "delete"] as const)("encodes every %s state with stored site data", (action) => {
+    for (const status of ["running", "succeeded", "failed", "interrupted", "cancelled"] as const) {
+      const itemType = hostedSiteConversationEventItemType(action, status, `operation-${status}`);
+      const message = {
+        id: `${action}-${status}`,
+        author: "system",
+        source: "system",
+        text: hostedSiteConversationEventText(publishedSite),
+        createdAt: "2026-09-01T12:00:00.000Z",
+        status: "completed",
+        itemType,
+      } as const;
+      expect(hostedSiteConversationEvent(message)).toMatchObject({ action, status, ...publishedSite });
+    }
+  });
+
+  it("accepts a matching local development URL for a canonical hosted-site hostname", () => {
+    const localUrl = "http://launch-page-23456789ab.openbot.localhost:3100/";
+    const details = { ...publishedSite, url: localUrl };
+    const message = {
+      id: "local-site-publish",
+      author: "system",
+      source: "system",
+      text: hostedSiteConversationEventText(details),
+      createdAt: "2026-09-01T12:00:00.000Z",
+      status: "completed",
+      itemType: hostedSiteConversationEventItemType("publish", "succeeded", "operation-local"),
+    } as const;
+
+    expect(hostedSiteConversationEvent(message)).toMatchObject({ ...details, status: "succeeded" });
+    expect(isHostedSiteConversationEventUrl(localUrl, publishedSite.hostname)).toBe(true);
+    expect(
+      isHostedSiteConversationEventUrl(
+        "http://different-page-23456789ab.openbot.localhost:3100/",
+        publishedSite.hostname,
+      ),
+    ).toBe(false);
+    expect(
+      isHostedSiteConversationEventUrl("http://launch-page-23456789ab.openbot.localhost/", publishedSite.hostname),
+    ).toBe(false);
+  });
+
+  it("keeps a terminal marker structured when legacy display metadata is unavailable", () => {
+    const details = { siteId: "site-1", title: "Hosted site", hostname: null, url: null };
+    const message = {
+      id: "legacy-delete",
+      author: "system",
+      source: "system",
+      text: hostedSiteConversationEventText(details),
+      createdAt: "2026-09-01T12:00:00.000Z",
+      status: "completed",
+      itemType: hostedSiteConversationEventItemType("delete", "succeeded", "operation-legacy"),
+    } as const;
+
+    expect(hostedSiteConversationEvent(message)).toMatchObject({
+      action: "delete",
+      status: "succeeded",
+      ...details,
+    });
+  });
+
+  it("rejects malformed metadata, invalid details, and unsafe links", () => {
+    expect(parseHostedSiteConversationEventItemType("hosted-site-event:deploy:running:operation-1")).toBeNull();
+    expect(parseHostedSiteConversationEventItemType("hosted-site-event:publish:queued:operation-1")).toBeNull();
+    expect(parseHostedSiteConversationEventItemType("hosted-site-event:publish:running:")).toBeNull();
+    expect(() => hostedSiteConversationEventItemType("publish", "running", "x".repeat(128))).toThrow(
+      "The hosted site event item type is too long.",
+    );
+    expect(() => hostedSiteConversationEventText({ ...publishedSite, title: "x".repeat(121) })).toThrow(
+      "Valid hosted site event details are required.",
+    );
+    expect(() => hostedSiteConversationEventText({ ...publishedSite, url: "https://example.com" })).toThrow(
+      "Valid hosted site event details are required.",
+    );
+    expect(
+      hostedSiteConversationEvent({
+        id: "bad-json",
+        author: "system",
+        source: "system",
+        text: "{",
+        createdAt: "2026-09-01T12:00:00.000Z",
+        status: "completed",
+        itemType: "hosted-site-event:publish:succeeded:operation-1",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("memory event validation", () => {
+  it("accepts only a memory event with an agent id", () => {
+    expect(isAgentEvent({ type: "memories-changed", agentId: "chief" })).toBe(true);
+    expect(isAgentEvent({ type: "memories-changed", agentId: "" })).toBe(false);
+    expect(isAgentEvent({ type: "memories-changed" })).toBe(false);
+  });
+
+  it("validates memory identifiers, text, and origin", () => {
+    const memory = {
+      id: "memory-1",
+      agentId: "chief",
+      text: "Uses metric units.",
+      origin: "manual",
+      sourceTurnId: null,
+      createdAt: "2026-08-25T12:00:00.000Z",
+      updatedAt: "2026-08-25T12:00:00.000Z",
+    };
+    expect(isAgentMemory(memory)).toBe(true);
+    expect(isAgentMemory({ ...memory, text: "" })).toBe(false);
+    expect(isAgentMemory({ ...memory, origin: "imported" })).toBe(false);
+  });
+});
+
+describe("channel decoding", () => {
+  const channel = {
+    id: "channel-1",
+    name: "Project Falcon",
+    title: "Ship the beta",
+    instructions: "Keep the release notes current.",
+    members: [{ agentId: "agent-1" }],
+    leadAgentId: "agent-1",
+    archived: false,
+    revision: 4,
+    createdAt: "2026-08-29T10:00:00.000Z",
+  };
+
+  it("reads a stored row that still carries the older purpose key", () => {
+    const { title: _title, instructions: _instructions, ...stored } = channel;
+    expect(decodeChannel({ ...stored, purpose: "Ship the beta" })).toMatchObject({
+      title: "",
+      instructions: "Ship the beta",
+    });
+    expect(decodeChannel(channel)).toMatchObject({
+      title: "Ship the beta",
+      instructions: "Keep the release notes current.",
+    });
+  });
+
+  it("refuses a row with no name", () => {
+    expect(() => decodeChannel({ ...channel, name: " " })).toThrow("Invalid channel response.");
+  });
+});
+
+describe("renderer-to-main boundary guards", () => {
+  const status = {
+    phase: "ready",
+    cliVersion: "1.4.0",
+    auth: { kind: "chatgpt", email: "pilot@example.com" },
+    capabilities: { chat: "ready", browser: "setup-required", computerUse: "unavailable" },
+    message: null,
+    fullAccess: true,
+  };
+
+  const agent = {
+    id: "bot-1",
+    name: "Chief",
+    title: "Lead engineer",
+    description: "Runs the shop.",
+    notifications: true,
+    provider: "codex",
+    model: "gpt-5-codex",
+    reasoningEffort: "high",
+    threadId: null,
+    workspacePath: "/Users/pilot/OpenBot/Agents/bot-1",
+    preview: "Done",
+    updatedAt: "2026-08-29T10:00:00.000Z",
+    avatarSeed: "chief-1",
+    avatarHue: 215,
+    avatarUrl: null,
+  };
+
+  const attachment = {
+    id: "attachment-1",
+    name: "notes.pdf",
+    size: 2048,
+    kind: "file",
+    mimeType: "application/pdf",
+    previewKind: "pdf",
+    previewUrl: null,
+  };
+
+  const snapshot = {
+    agentId: "bot-1",
+    threadId: "thread-1",
+    activeTurnId: null,
+    revision: 3,
+    messages: [
+      {
+        id: "message-1",
+        author: "assistant",
+        text: "Done",
+        createdAt: "2026-08-29T10:00:00.000Z",
+        status: "completed",
+      },
+    ],
+    readState: { unreadCount: 0, firstUnreadMessageId: null, throughMessageId: "message-1" },
+  };
+
+  it("narrows the agent phase and capability states to their unions", () => {
+    expect(isAgentStatus(status)).toBe(true);
+    expect(isAgentStatus({ ...status, phase: "sleeping" })).toBe(false);
+    expect(isAgentStatus({ ...status, capabilities: { ...status.capabilities, chat: "yes" } })).toBe(false);
+  });
+
+  it("keeps the agent auth kind open so a newer remote server still reports status", () => {
+    expect(isAgentStatus({ ...status, auth: { kind: "passkey" } })).toBe(true);
+    expect(isAgentStatus({ ...status, auth: "chatgpt" })).toBe(false);
+  });
+
+  it("keeps provider entries open so one unknown provider field does not reject the whole status", () => {
+    const providers = [
+      { id: "codex", state: "available", version: "1.0.0", message: null },
+      { id: "gemini", state: "rate-limited", version: null, message: null, connectionState: "reconnecting" },
+    ];
+    expect(isAgentStatus({ ...status, providers })).toBe(true);
+    expect(isAgentStatus({ ...status, providers: "codex" })).toBe(false);
+    // Open about values, not about shape: the renderer reads `id` and `state` off every entry.
+    expect(isAgentStatus({ ...status, providers: [null] })).toBe(false);
+    expect(isAgentStatus({ ...status, providers: [{ id: "codex" }] })).toBe(false);
+    // `cliSource` decides whether the picker offers the CLI's own updater. It stays open like the
+    // fields above - an owner we do not know simply matches nothing - but it has to be a string.
+    expect(isAgentStatus({ ...status, providers: [{ ...providers[0], cliSource: "system" }] })).toBe(true);
+    expect(isAgentStatus({ ...status, providers: [{ ...providers[0], cliSource: 1 }] })).toBe(false);
+  });
+
+  it("requires an agent provider and a well-formed avatar on every agent summary", () => {
+    expect(isAgentSummary(agent)).toBe(true);
+    const { provider, ...withoutProvider } = agent;
+    expect(isAgentSummary(withoutProvider)).toBe(false);
+    expect(isAgentSummary({ ...agent, provider: "gemini" })).toBe(false);
+    expect(isAgentSummary({ ...agent, avatarSeed: "Not A Seed!" })).toBe(false);
+    expect(isAgentSummary({ ...agent, avatarHue: 7 })).toBe(false);
+  });
+
+  it("validates every message inside a conversation, not just the array", () => {
+    expect(isConversationWithReadState(snapshot)).toBe(true);
+    expect(isConversationWithReadState({ ...snapshot, messages: [{ id: "message-1" }] })).toBe(false);
+    expect(isConversationWithReadState({ ...snapshot, readState: { unreadCount: -1 } })).toBe(false);
+    const { readState, ...withoutReadState } = snapshot;
+    expect(isConversationWithReadState(withoutReadState)).toBe(true);
+  });
+
+  it("narrows attachment kind and preview kind", () => {
+    expect(isAttachmentSummary(attachment)).toBe(true);
+    expect(isAttachmentSummary({ ...attachment, kind: "video" })).toBe(false);
+    expect(isAttachmentSummary({ ...attachment, previewKind: "html" })).toBe(false);
+  });
+
+  it("lets a surface show media that the wire reports as unpreviewable", () => {
+    const recording: AttachmentSummary = {
+      id: "attachment-2",
+      name: "standup.mp3",
+      size: 4096,
+      kind: "file",
+      mimeType: "audio/mpeg",
+      previewKind: "none",
+      previewUrl: null,
+    };
+    expect(canPreviewAttachment(recording)).toBe(true);
+    expect(canPreviewAttachment({ ...recording, name: "demo.mov", mimeType: "video/quicktime" })).toBe(true);
+    expect(
+      canPreviewAttachment({ ...recording, name: "notes.pdf", mimeType: "application/pdf", previewKind: "pdf" }),
+    ).toBe(true);
+    expect(
+      canPreviewAttachment({
+        ...recording,
+        name: "plan.xlsx",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts every file preview kind that the panel can show, and nothing else", () => {
+    for (const kind of ["markdown", "text", "image", "pdf", "audio", "video", "spreadsheet", "none"]) {
+      expect(isFilePreviewKind(kind)).toBe(true);
+    }
+    expect(isFilePreviewKind("html")).toBe(false);
+    expect(isFilePreviewKind(undefined)).toBe(false);
+  });
+
+  it("validates the usage windows inside an account usage limit", () => {
+    const limit = {
+      id: "codex",
+      primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: null },
+      secondary: null,
+    };
+    expect(isAccountUsage({ limits: [limit] })).toBe(true);
+    expect(isAccountUsage({ limits: [{ ...limit, primary: { usedPercent: "25" } }] })).toBe(false);
+    // A window that is numeric but not finite renders as "NaN% remaining"; the released Team v1
+    // validator rejects these for the same payload, so this guard has to agree with it.
+    const window = limit.primary;
+    expect(isAccountUsage({ limits: [{ ...limit, primary: { ...window, usedPercent: Number.NaN } }] })).toBe(false);
+    expect(isAccountUsage({ limits: [{ ...limit, primary: { ...window, windowDurationMins: -1 } }] })).toBe(false);
+    expect(isAccountUsage({ limits: [{ ...limit, primary: { ...window, resetsAt: Number.POSITIVE_INFINITY } }] })).toBe(
+      false,
+    );
+  });
+
+  it("validates every delivery inside a queue snapshot and a queued message receipt", () => {
+    const delivery = {
+      id: "delivery-1",
+      messageId: "message-1",
+      recipientAgentId: "bot-1",
+      sender: { kind: "user" },
+      text: "Ship it",
+      attachments: [attachment],
+      replyToMessageId: null,
+      status: "queued",
+      position: 1,
+      turnId: null,
+      error: null,
+      createdAt: "2026-08-29T10:00:00.000Z",
+    };
+    expect(isQueueSnapshot({ agentId: "bot-1", deliveries: [delivery] })).toBe(true);
+    expect(isQueueSnapshot({ agentId: "bot-1", deliveries: [{ ...delivery, status: "pending" }] })).toBe(false);
+    // `editing` is optional: a released Team API adapter projects a fixed key list and drops it.
+    expect(isQueueSnapshot({ agentId: "bot-1", deliveries: [{ ...delivery, editing: true }] })).toBe(true);
+    expect(isQueueSnapshot({ agentId: "bot-1", deliveries: [{ ...delivery, editing: "yes" }] })).toBe(false);
+
+    const receipt = {
+      messageId: "message-1",
+      deliveries: [{ id: "delivery-1", recipientAgentId: "bot-1", status: "queued", position: 1 }],
+    };
+    expect(isQueuedMessageReceipt(receipt)).toBe(true);
+    expect(isQueuedMessageReceipt({ ...receipt, deliveries: [{ id: "delivery-1" }] })).toBe(false);
+  });
+
+  it("requires the provider on every agent model option", () => {
+    const model = {
+      provider: "claude",
+      id: "claude-sonnet-5",
+      name: "Sonnet 5",
+      description: "Balanced reasoning.",
+      defaultReasoningEffort: "medium",
+      supportedReasoningEfforts: ["low", "medium", "high"],
+    };
+    expect(isAgentModelOption(model)).toBe(true);
+    const { provider, ...withoutProvider } = model;
+    expect(isAgentModelOption(withoutProvider)).toBe(false);
+    expect(isAgentModelOption({ ...model, supportedReasoningEfforts: ["low", "extreme"] })).toBe(false);
+  });
+
+  // The same argument one field over. Every model id is minted by a provider CLI, not by OpenBot, and
+  // the Claude CLI reports its 1M-context Fable variant as `claude-fable-5-1[1m]`. Both list decoders
+  // read this guard, so a charset without square brackets did not just hide that one model — it
+  // emptied the local picker and took a remote server offline for every route.
+  it("accepts a model id in the bracketed form a provider CLI reports", () => {
+    const model = {
+      provider: "claude",
+      id: "claude-fable-5-1[1m]",
+      name: "Fable",
+      description: "Claude model discovered from the local CLI.",
+      defaultReasoningEffort: "high",
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    };
+    expect(isAgentModelOption(model)).toBe(true);
+    // The Cursor CLI lists its variants with settings inside the brackets.
+    expect(
+      isAgentModelOption({ ...model, provider: "cursor", id: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]" }),
+    ).toBe(true);
+    expect(isAgentModelOption({ ...model, id: "claude fable 5" })).toBe(false);
+    expect(isAgentModelOption({ ...model, id: "" })).toBe(false);
+  });
+
+  // A model name is a CLI's `displayName`, which nothing bounds, and the released Team v1 adapter
+  // accepts 160 — so anything shorter here rejects a whole model list a shipped peer may send.
+  it("accepts a model name up to the length the released protocol allows", () => {
+    const model = {
+      provider: "claude",
+      id: "claude-sonnet-5",
+      name: "Sonnet 5",
+      description: "Balanced reasoning.",
+      defaultReasoningEffort: "medium",
+      supportedReasoningEfforts: ["low", "medium", "high"],
+    };
+    expect(isAgentModelOption({ ...model, name: "S".repeat(INPUT_LIMITS.modelName) })).toBe(true);
+    expect(isAgentModelOption({ ...model, name: "S".repeat(INPUT_LIMITS.modelName + 1) })).toBe(false);
+  });
+
+  // The API key of a custom endpoint is the one secret in this feature, and this guard is the only
+  // thing that makes "the renderer never sees it" a runtime fact rather than a convention: the
+  // preload runs it over every row main sends, and it fails closed on the whole list.
+  it("rejects a custom provider summary that carries an API key", () => {
+    const summary = {
+      id: "studio-local",
+      name: "Studio Local",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      hasApiKey: true,
+      models: [{ id: "qwen3-coder:30b", name: "Qwen3 Coder 30B" }],
+    };
+    expect(isCustomProviderSummary(summary)).toBe(true);
+    expect(isCustomProviderSummary({ ...summary, apiKey: "sk-not-for-the-renderer" })).toBe(false);
+    // Not just a truthy one: an entry whose key failed to decrypt would carry `null` here.
+    expect(isCustomProviderSummary({ ...summary, apiKey: null })).toBe(false);
+    expect(isCustomProviderSummary({ ...summary, headers: [] })).toBe(false);
+    expect(isCustomProviderSummary({ ...summary, hasApiKey: "yes" })).toBe(false);
+    expect(isCustomProviderSummary({ ...summary, id: "Studio/Local" })).toBe(false);
+    // The model list is part of the shape, so a row without one, or with a malformed entry, fails
+    // closed like every other field.
+    expect(isCustomProviderSummary({ ...summary, models: undefined })).toBe(false);
+    expect(isCustomProviderSummary({ ...summary, models: [{ id: "qwen3-coder:30b" }] })).toBe(false);
+  });
+
+  it("requires a known restart outcome on a custom provider result", () => {
+    const summary = {
+      id: "studio-local",
+      name: "Studio Local",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      hasApiKey: true,
+      models: [{ id: "qwen3-coder:30b", name: "Qwen3 Coder 30B" }],
+    };
+    expect(isCustomProviderResult({ providers: [summary], restart: "skipped-busy" })).toBe(true);
+    expect(isCustomProviderResult({ providers: [summary], restart: "queued" })).toBe(false);
+    expect(isCustomProviderResult({ providers: [{ ...summary, apiKey: "sk-live" }], restart: "restarted" })).toBe(
+      false,
+    );
+  });
+});
+
+describe("MCP server contracts", () => {
+  const config = {
+    id: "mcp-1",
+    name: "Filesystem",
+    transport: "stdio",
+    enabled: true,
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-filesystem"],
+    env: [{ key: "TOKEN", value: "secret" }],
+    envPassthrough: ["HOME"],
+    workingDirectory: "",
+    url: "",
+    headers: [],
+  };
+
+  it("accepts a configuration and a test result", () => {
+    expect(isMcpServerConfig(config)).toBe(true);
+    expect(isMcpTestResult({ toolCount: 4, error: null })).toBe(true);
+    expect(isMcpTestResult({ toolCount: 0, error: "Command not found: npx" })).toBe(true);
+  });
+
+  it("rejects an over-long name, an unknown transport and a non-string env value", () => {
+    expect(isMcpServerConfig({ ...config, name: "n".repeat(INPUT_LIMITS.mcpServerName + 1) })).toBe(false);
+    expect(isMcpServerConfig({ ...config, transport: "websocket" })).toBe(false);
+    expect(isMcpServerConfig({ ...config, env: [{ key: "TOKEN", value: 7 }] })).toBe(false);
+    expect(isMcpServerConfig({ ...config, args: "npx" })).toBe(false);
+  });
+
+  it("rejects a negative tool count and a missing error field on a test result", () => {
+    expect(isMcpTestResult({ toolCount: -1, error: null })).toBe(false);
+    expect(isMcpTestResult({ toolCount: 1 })).toBe(false);
+  });
+
+  // The list decoder is what a remote host's reply goes through, so it has to fail closed rather
+  // than hand a malformed row on to the panel.
+  it("decodes a list and throws on anything else", () => {
+    expect(decodeMcpServerConfigs([config])).toHaveLength(1);
+    expect(() => decodeMcpServerConfigs(config)).toThrow();
+    expect(() => decodeMcpServerConfigs([{ ...config, transport: "websocket" }])).toThrow();
+    expect(() => decodeMcpServerConfigs(new Array(INPUT_LIMITS.mcpServers + 1).fill(config))).toThrow();
+  });
+});
+
+describe("agent auto-approval", () => {
+  const preference = { turbo: false, defaultAutoApprove: true, autoApproveOverrides: { chief: false } };
+
+  it("uses the agent override, then the default, and ignores inherited keys", () => {
+    expect(agentAutoApprovalEnabled(preference, "chief")).toBe(false);
+    expect(agentAutoApprovalEnabled(preference, "writer")).toBe(true);
+    expect(agentAutoApprovalEnabled(preference, "toString")).toBe(true);
+    expect(agentAutoApprovalEnabled({ ...preference, turbo: true }, "chief")).toBe(true);
+  });
+
+  it("does not approve when an override is present but not true", () => {
+    const unvalidated = JSON.parse('{"turbo":false,"defaultAutoApprove":true,"autoApproveOverrides":{"chief":null}}');
+    expect(agentAutoApprovalEnabled(unvalidated, "chief")).toBe(false);
+  });
+});

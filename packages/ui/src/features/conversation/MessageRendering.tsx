@@ -1,0 +1,656 @@
+import { chatPreviewKind } from "@openbot/contracts/chat-preview";
+import type { AttachmentSummary, InstalledSkill, MessageReaction } from "@openbot/contracts/ipc";
+import { canPreviewAttachment, MESSAGE_REACTIONS, MORE_MESSAGE_REACTIONS } from "@openbot/contracts/ipc";
+import { type BubbleVariant, Button, DropdownMenu } from "@openbot/ui";
+import { prefersReducedMotion } from "@openbot/ui/utils";
+import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch, untrack } from "solid-js";
+import type { AgentMessage, AgentProfile } from "../../data";
+import { useText } from "../../text";
+import { AttachmentCards, AttachmentDownloadAll } from "./AttachmentCards";
+import { CodeBlock } from "./CodeBlock";
+import { CodePreview } from "./CodePreview";
+import { ComparisonTable } from "./ComparisonTable";
+import { CheckIcon, CopyIcon, MoreIcon, PlusIcon, ReactionIcon, ReplyIcon } from "./ConversationIcons";
+import { createSmoothHeightResize } from "./createSmoothHeightResize";
+import { DataTable, type MessageContentBlock, messageContentBlocks, reuseUnchangedBlocks } from "./DataTable";
+import { messageFileReferences } from "./FileReference";
+import { ImageGeneration } from "./ImageGeneration";
+import { ImageGallery, ImageLightbox, type ImageLightboxOpening, isLightboxImage } from "./ImageLightbox";
+import { MarkdownInlineText, MarkdownMessageText } from "./MarkdownMessageText";
+import { RichMessageText } from "./RichMessageText";
+import { parseSelectionInstruction } from "./SelectionActions";
+import {
+  nextStreamingReveal,
+  type StreamingRevealChunk,
+  StreamingRevealContext,
+  sameStreamingTailOffsets,
+  streamingTrailReach,
+} from "./streamingReveal";
+
+export function conversationBubbleVariant(message: AgentMessage): BubbleVariant {
+  if (message.author === "you") return "secondary";
+  if (message.imageGeneration || (!message.body.trim() && message.attachments?.length)) return "ghost";
+  const contentBlocks = messageContentBlocks(message.body, message.streaming === true);
+  if (contentBlocks.some((block) => block.type === "table" || block.type === "comparison-table")) return "muted";
+  return contentBlocks.some((block) => block.type !== "text") ? "ghost" : "muted";
+}
+
+function cssDurationMs(style: CSSStyleDeclaration, property: string, fallback: number): number {
+  const value = style.getPropertyValue(property).trim();
+  if (!value) return fallback;
+  const amount = Number.parseFloat(value);
+  if (!Number.isFinite(amount)) return fallback;
+  return value.endsWith("s") && !value.endsWith("ms") ? amount * 1000 : amount;
+}
+
+/* Read once per message: the tokens do not change while it streams, and reading computed style
+   on each step forces the browser to recalculate style. */
+function streamingTimings() {
+  const style = getComputedStyle(document.documentElement);
+  return {
+    stepMs: Math.max(16, cssDurationMs(style, "--stream-gap", 40)),
+    fadeMs: cssDurationMs(style, "--stream-fade", 300),
+    catchUpMs: cssDurationMs(style, "--stream-catch-up", 400),
+  };
+}
+
+function createStreamingBody(message: () => AgentMessage, animate?: boolean) {
+  const initialMessage = untrack(message);
+  const animateInitialText =
+    untrack(() => initialMessage.author === "agent" && (animate ?? initialMessage.animate) === true) &&
+    !prefersReducedMotion();
+  let targetBody = untrack(() => initialMessage.body);
+  let targetStreaming = untrack(() => initialMessage.author === "agent" && initialMessage.streaming === true);
+  /* A virtual chat row can show a different message later. The reveal buffer belongs to one
+     message id, so the row does not keep the text of the message it showed first. */
+  let shownId = untrack(() => initialMessage.id);
+  /* A plain copy of `body`, because the signal can still hold its earlier value until the
+     next flush. */
+  let shownBody = animateInitialText ? "" : targetBody;
+  const [buffer, setBuffer] = createSignal({ id: shownId, text: shownBody });
+  const [trail, setTrail] = createSignal<StreamingRevealChunk[]>([]);
+  const [animateTail, setAnimateTail] = createSignal(false);
+  const [smoothHeight, setSmoothHeight] = createSignal(targetStreaming || animateInitialText);
+  let smoothingActive = targetStreaming || animateInitialText;
+  let timings: ReturnType<typeof streamingTimings> | undefined;
+  const timing = () => {
+    timings ??= streamingTimings();
+    return timings;
+  };
+  let revealBudget = 0;
+  let revealTimer: number | undefined;
+  let smoothHeightTimer: number | undefined;
+
+  const showBody = (next: string) => {
+    shownBody = next;
+    setBuffer({ id: shownId, text: next });
+  };
+  const clearRevealTimer = () => {
+    if (revealTimer === undefined) return;
+    window.clearTimeout(revealTimer);
+    revealTimer = undefined;
+  };
+  const keepHeightSmoothingActive = () => {
+    if (smoothHeightTimer !== undefined) window.clearTimeout(smoothHeightTimer);
+    smoothHeightTimer = undefined;
+    setSmoothHeight(true);
+  };
+  const settleHeightSmoothing = () => {
+    if (smoothHeightTimer !== undefined) window.clearTimeout(smoothHeightTimer);
+    smoothHeightTimer = window.setTimeout(
+      () => {
+        smoothHeightTimer = undefined;
+        setSmoothHeight(false);
+        setAnimateTail(false);
+        setTrail([]);
+      },
+      Math.max(timing().stepMs * 2, timing().fadeMs),
+    );
+  };
+  const revealStep = () => {
+    const { stepMs, fadeMs, catchUpMs } = timing();
+    const step = nextStreamingReveal({
+      shownLength: shownBody.length,
+      target: targetBody,
+      streaming: targetStreaming,
+      budget: revealBudget,
+      stepMs,
+      catchUpMs,
+    });
+    revealBudget = step.budget;
+    if (step.length <= shownBody.length) return false;
+    const now = performance.now();
+    setTrail((steps) => [
+      ...steps.filter((chunk) => now - chunk.revealedAt < fadeMs),
+      { length: step.length - shownBody.length, revealedAt: now },
+    ]);
+    setAnimateTail(true);
+    showBody(targetBody.slice(0, step.length));
+    return true;
+  };
+  const scheduleReveal = () => {
+    if (revealTimer !== undefined) return;
+    revealTimer = window.setTimeout(() => {
+      revealTimer = undefined;
+      const advanced = revealStep();
+      if (shownBody !== targetBody) {
+        // With no step and no debt, the last word is still incomplete: the next body restarts this.
+        if (advanced || revealBudget < 0) scheduleReveal();
+      } else if (!targetStreaming) {
+        smoothingActive = false;
+        settleHeightSmoothing();
+      }
+    }, timing().stepMs);
+  };
+
+  createEffect(
+    () => ({
+      id: message().id,
+      body: message().body,
+      streaming: message().author === "agent" && message().streaming === true,
+    }),
+    ({ id, body: nextBody, streaming }) => {
+      const replaced = id !== shownId;
+      shownId = id;
+      targetBody = nextBody;
+      targetStreaming = streaming;
+      if (streaming) {
+        smoothingActive = true;
+        keepHeightSmoothingActive();
+      }
+      if (replaced || prefersReducedMotion() || !nextBody.startsWith(shownBody) || (!streaming && !smoothingActive)) {
+        clearRevealTimer();
+        revealBudget = 0;
+        setAnimateTail(false);
+        setTrail([]);
+        showBody(nextBody);
+        smoothingActive = false;
+        settleHeightSmoothing();
+        return;
+      }
+      if (shownBody !== nextBody) {
+        scheduleReveal();
+      } else if (!streaming) {
+        smoothingActive = false;
+        settleHeightSmoothing();
+      }
+    },
+  );
+  onCleanup(() => {
+    clearRevealTimer();
+    if (smoothHeightTimer !== undefined) window.clearTimeout(smoothHeightTimer);
+  });
+  /* The effect above runs after the render. Until it does, and if a later update does not reach
+     it, a buffer of another message, or one that is not the start of the body, shows the body. */
+  const body = createMemo(() => {
+    const current = message();
+    const shown = buffer();
+    return shown.id === current.id && current.body.startsWith(shown.text) ? shown.text : current.body;
+  });
+  const revealing = createMemo(() => message().streaming === true || body() !== message().body);
+  return { animateTail, body, smoothHeight, revealing, trail };
+}
+
+/**
+ * The characters of the body after each text block that the fading steps reach. The search for a
+ * block starts after the previous one, and a code block can hold the same text, so an offset can
+ * only be too large: that shows words without a fade instead of fading shown words again.
+ */
+function textBlockTailOffsets(body: string, blocks: readonly MessageContentBlock[], reach: number) {
+  let cursor = 0;
+  return blocks.map((block) => {
+    if (block.type !== "text") return undefined;
+    const start = body.indexOf(block.text, cursor);
+    if (start < 0) return undefined;
+    cursor = start + block.text.length;
+    const after = body.length - cursor;
+    return after < reach ? after : undefined;
+  });
+}
+
+const comparisonTableContent = (block: MessageContentBlock) => (block.type === "comparison-table" ? block : undefined);
+const dataTableContent = (block: MessageContentBlock) => (block.type === "table" ? block : undefined);
+const codeContent = (block: MessageContentBlock) => (block.type === "code" ? block : undefined);
+const textContent = (block: MessageContentBlock) => (block.type === "text" ? block : undefined);
+
+export function MessageBody(props: {
+  animate?: boolean;
+  message: AgentMessage;
+  referencedMessage?: AgentMessage;
+  /**
+   * Who wrote the quoted message. A chat with several authors has to name the one it quotes, and
+   * an agent chat names another person the reader quotes. Absent, the quote says "You" or "Agent".
+   */
+  referencedAuthorName?: string;
+  agents: AgentProfile[];
+  skills?: InstalledSkill[];
+  onSelectAgent: (agentId: string) => void;
+  onOpenLink: (url: string) => void;
+  onPreview: (attachment: AttachmentSummary) => void;
+  onAttachmentAction: (attachment: AttachmentSummary, action: "open" | "reveal" | "download") => void;
+  onOpenSharedFile?: (path: string) => void;
+  onOpenWorkspaceFile?: (path: string) => void;
+  onDownloadAttachments?: (attachments: AttachmentSummary[]) => Promise<void>;
+  onDownload?: (attachment: AttachmentSummary) => void;
+}) {
+  const { t } = useText();
+  const streamingBody = createStreamingBody(
+    () => props.message,
+    untrack(() => props.animate),
+  );
+  const streamedBody = streamingBody.body;
+  const selectionInstruction = createMemo(() =>
+    props.message.author === "you" && props.message.replyToMessageId
+      ? parseSelectionInstruction(props.message.body)
+      : null,
+  );
+  /* A finished image with no `previewUrl` (the web client) shows as a file card instead. */
+  const generatedImageShown = createMemo(() => {
+    if (!props.message.imageGeneration) return false;
+    const attachment = props.message.attachments?.[0];
+    return (
+      !attachment ||
+      Boolean(attachment.previewUrl) ||
+      imageGenerationStatus(props.message.streaming, props.message.status) !== "completed"
+    );
+  });
+  const standaloneAttachments = createMemo(() => {
+    const referencedIds = new Set(
+      messageFileReferences(props.message.body, props.message.attachments ?? [])
+        .filter((reference) => reference.kind === "attachment")
+        .map((reference) => reference.attachment.id),
+    );
+    const generatedAttachmentId = generatedImageShown() ? props.message.attachments?.[0]?.id : undefined;
+    return (props.message.attachments ?? []).filter(
+      (attachment) => !referencedIds.has(attachment.id) && attachment.id !== generatedAttachmentId,
+    );
+  });
+  const [downloadingAttachments, setDownloadingAttachments] = createSignal(false);
+  const standaloneImageAttachments = createMemo(() =>
+    props.message.author === "agent" ? standaloneAttachments().filter(isLightboxImage) : [],
+  );
+  const standaloneFileAttachments = createMemo(() =>
+    props.message.author === "agent"
+      ? standaloneAttachments().filter((attachment) => !isLightboxImage(attachment))
+      : standaloneAttachments(),
+  );
+  const contentBlocks = createMemo<MessageContentBlock[]>((previous) =>
+    reuseUnchangedBlocks(
+      previous ?? [],
+      props.message.author === "agent"
+        ? messageContentBlocks(streamedBody(), streamingBody.revealing())
+        : [{ type: "text", text: selectionInstruction()?.instruction ?? props.message.body }],
+    ),
+  );
+  const textTailAfter = createMemo(
+    () =>
+      streamingBody.animateTail()
+        ? textBlockTailOffsets(streamedBody(), contentBlocks(), streamingTrailReach(streamingBody.trail()))
+        : [],
+    { equals: sameStreamingTailOffsets },
+  );
+  const lastTextBlockIndex = createMemo(() => {
+    const blocks = contentBlocks();
+    for (let index = blocks.length - 1; index >= 0; index -= 1) {
+      if (blocks[index]?.type === "text") return index;
+    }
+    return -1;
+  });
+  let messageContentResize: HTMLDivElement | undefined;
+  let messageContent: HTMLDivElement | undefined;
+  createSmoothHeightResize({
+    container: () => messageContentResize,
+    content: () => messageContent,
+    enabled: () => props.message.author === "agent" && streamingBody.smoothHeight(),
+  });
+  const [lightbox, setLightbox] = createSignal<ImageLightboxOpening | null>(null);
+  const lightboxImages = createMemo(() => (props.message.attachments ?? []).filter(isLightboxImage));
+  /* An image opens in the viewer with the other images of its message. A quoted message's image
+     is not one of them, so it opens alone. Other files open in the preview panel. */
+  const openAttachment = (attachment: AttachmentSummary, origin?: HTMLElement) => {
+    if (isLightboxImage(attachment)) {
+      const siblings = lightboxImages();
+      const images = siblings.some((image) => image.id === attachment.id) ? siblings : [attachment];
+      setLightbox({ images, index: images.findIndex((image) => image.id === attachment.id), origin });
+    } else if (canPreviewAttachment(attachment)) {
+      props.onPreview(attachment);
+    } else {
+      props.onAttachmentAction(attachment, "open");
+    }
+  };
+  /* The images, the cards and the text blocks of one message share this parent. */
+  const imageThumbnail = (attachment: AttachmentSummary) =>
+    messageContentResize?.parentElement?.querySelector<HTMLElement>(
+      `[data-attachment-id="${CSS.escape(attachment.id)}"]`,
+    ) ?? undefined;
+  const renderMarkdownInline = (body: string) => (
+    <MarkdownInlineText
+      body={body}
+      agents={props.agents}
+      skills={props.skills}
+      attachments={props.message.attachments}
+      citations={props.message.citations}
+      onSelectAgent={props.onSelectAgent}
+      onOpenLink={props.onOpenLink}
+      onOpenAttachment={openAttachment}
+      onOpenSharedFile={props.onOpenSharedFile}
+      onOpenWorkspaceFile={props.onOpenWorkspaceFile}
+    />
+  );
+
+  return (
+    <>
+      {/*
+       * The generic delivery labels - Queued, Cancelled, Failed, Stopped - were taken off the
+       * bubble on purpose. This one stays, because an error bubble carries no other sign of what
+       * the user did: without it, "Provider is offline." reads as a sentence the agent said.
+       */}
+      <Show when={props.message.kind === "error" && props.message.status}>
+        {(status) => <p class="message-error-label">{status()}</p>}
+      </Show>
+      <Show when={props.referencedMessage}>
+        {(referenced) => (
+          <div class="message-reply-context">
+            <span>
+              {props.referencedAuthorName ??
+                (referenced().author === "you" ? t("chat.message.you") : t("chat.message.agentFallback"))}
+            </span>
+            <p>
+              <RichMessageText
+                body={referenced().body || t("chat.message.attachment")}
+                agents={props.agents}
+                skills={props.skills}
+                attachments={referenced().attachments}
+                citations={referenced().citations}
+                onSelectAgent={props.onSelectAgent}
+                onOpenLink={props.onOpenLink}
+                onOpenAttachment={openAttachment}
+                onOpenSharedFile={props.onOpenSharedFile}
+                onOpenWorkspaceFile={props.onOpenWorkspaceFile}
+                showCitationFooter={false}
+              />
+            </p>
+          </div>
+        )}
+      </Show>
+      <div class="message-content-resize" ref={(element) => (messageContentResize = element)}>
+        <div class="message-content-blocks" ref={(element) => (messageContent = element)}>
+          <StreamingRevealContext value={streamingBody.trail}>
+            <Show when={props.message.author === "agent" ? streamedBody() : props.message.body}>
+              {/* Unkeyed, so a growing reply keeps each block mounted and updates only the block that grew. */}
+              <For each={contentBlocks()} keyed={false}>
+                {(block, index) => (
+                  <Switch>
+                    <Match when={comparisonTableContent(block())}>
+                      {(table) => <ComparisonTable table={table()} renderCell={renderMarkdownInline} />}
+                    </Match>
+                    <Match when={dataTableContent(block())}>
+                      {(table) => <DataTable table={table()} renderCell={renderMarkdownInline} />}
+                    </Match>
+                    <Match when={codeContent(block())}>
+                      {(code) => (
+                        <Show
+                          when={chatPreviewKind(code().language)}
+                          fallback={
+                            <CodeBlock
+                              block={code()}
+                              streaming={streamingBody.revealing() && index === contentBlocks().length - 1}
+                            />
+                          }
+                        >
+                          {(preview) => (
+                            <CodePreview
+                              block={code()}
+                              kind={preview()}
+                              streaming={streamingBody.revealing() && index === contentBlocks().length - 1}
+                              onOpenLink={props.onOpenLink}
+                            />
+                          )}
+                        </Show>
+                      )}
+                    </Match>
+                    <Match when={textContent(block())}>
+                      {(text) => (
+                        <div
+                          class={`message-copy message-markdown${streamingBody.animateTail() ? " t-stream" : ""}`}
+                          data-selection-message-id={props.message.streaming !== true ? props.message.id : undefined}
+                        >
+                          <MarkdownMessageText
+                            body={text().text}
+                            agents={props.agents}
+                            skills={props.skills}
+                            attachments={props.message.attachments}
+                            citations={props.message.citations}
+                            onSelectAgent={props.onSelectAgent}
+                            onOpenLink={props.onOpenLink}
+                            onOpenAttachment={openAttachment}
+                            onOpenSharedFile={props.onOpenSharedFile}
+                            onOpenWorkspaceFile={props.onOpenWorkspaceFile}
+                            showCitationFooter={index === lastTextBlockIndex()}
+                            streaming={streamingBody.revealing() && index === contentBlocks().length - 1}
+                            streamingTailAfter={textTailAfter()[index]}
+                          />
+                        </div>
+                      )}
+                    </Match>
+                  </Switch>
+                )}
+              </For>
+              <Show when={selectionInstruction()}>
+                {(selection) => <blockquote class="message-selection-quote">{selection().quote}</blockquote>}
+              </Show>
+            </Show>
+          </StreamingRevealContext>
+        </div>
+      </div>
+      <Show when={generatedImageShown() && props.message.imageGeneration}>
+        {(imageGeneration) => (
+          <ImageGeneration
+            status={imageGenerationStatus(props.message.streaming, props.message.status)}
+            prompt={imageGeneration().prompt}
+            resolution={imageGeneration().resolution}
+            aspectRatio={imageGeneration().aspectRatio}
+            attachment={props.message.attachments?.[0]}
+            error={imageGeneration().error}
+            onPreview={openAttachment}
+            onDownload={props.onDownload}
+          />
+        )}
+      </Show>
+      <Switch>
+        <Match when={standaloneImageAttachments().length > 1}>
+          <ImageGallery images={standaloneImageAttachments()} onOpen={openAttachment} onDownload={props.onDownload} />
+        </Match>
+        <Match when={standaloneImageAttachments().length === 1}>
+          <div class="message-image-attachments">
+            <For each={standaloneImageAttachments()}>
+              {(attachment) => (
+                <ImageGeneration
+                  presentation="attachment"
+                  status="completed"
+                  prompt={attachment.name}
+                  aspectRatio="square"
+                  attachment={attachment}
+                  onPreview={openAttachment}
+                  onDownload={props.onDownload}
+                />
+              )}
+            </For>
+          </div>
+        </Match>
+      </Switch>
+      <Show when={standaloneFileAttachments().length > 0}>
+        <div class="message-attachments-group">
+          <Show when={(props.message.attachments?.length ?? 0) > 2 && props.onDownloadAttachments}>
+            <AttachmentDownloadAll
+              count={props.message.attachments?.length ?? 0}
+              pending={downloadingAttachments()}
+              onDownload={() => {
+                if (downloadingAttachments()) return;
+                setDownloadingAttachments(true);
+                void props
+                  .onDownloadAttachments?.(props.message.attachments ?? [])
+                  .finally(() => setDownloadingAttachments(false));
+              }}
+            />
+          </Show>
+          <AttachmentCards
+            attachments={standaloneFileAttachments()}
+            onPreview={openAttachment}
+            onAction={props.onAttachmentAction}
+          />
+        </div>
+      </Show>
+      <Show when={lightbox()}>
+        {(opening) => (
+          <ImageLightbox
+            opening={opening()}
+            thumbnail={imageThumbnail}
+            onDownload={props.onDownload}
+            onClose={() => setLightbox(null)}
+          />
+        )}
+      </Show>
+    </>
+  );
+}
+
+function imageGenerationStatus(
+  streaming: boolean | undefined,
+  status: string | undefined,
+): "generating" | "completed" | "failed" | "interrupted" {
+  if (streaming || status === "streaming") return "generating";
+  if (status === "Failed" || status === "failed") return "failed";
+  if (status === "Stopped" || status === "interrupted") return "interrupted";
+  return "completed";
+}
+
+export function MessageActions(props: {
+  message: AgentMessage;
+  /** Names the toolbar for a screen reader. A channel has more authors than "Agent". */
+  authorName?: string;
+  /**
+   * Whether the reaction button stands in the toolbar. A channel message has no owner to hold a
+   * reaction yet, so the chats share one toolbar and the channel leaves that button out.
+   */
+  reactions?: boolean;
+  pickerOpen: boolean;
+  moreOpen: boolean;
+  expandedEmoji: boolean;
+  copied: boolean;
+  onTogglePicker: () => void;
+  onToggleMore: () => void;
+  onExpandEmoji: () => void;
+  onReact: (emoji: MessageReaction | null) => void;
+  onReply?: () => void;
+  onCopy: () => void;
+}) {
+  const { t } = useText();
+  const authorName = () => props.authorName ?? t("chat.message.agentFallback");
+  return (
+    <div
+      class={["message-actions", { "message-actions-open": props.pickerOpen || props.moreOpen }]}
+      role="toolbar"
+      aria-label={
+        props.message.author === "you" ? t("chat.actions.userLabel") : t("chat.actions.label", { name: authorName() })
+      }
+    >
+      <Show when={props.reactions !== false}>
+        <div class="message-action-popover-anchor">
+          <DropdownMenu.Root
+            open={props.pickerOpen}
+            onOpenChange={props.onTogglePicker}
+            placement={untrack(() => props.message.author) === "you" ? "top-end" : "top-start"}
+            gutter={6}
+            modal={false}
+          >
+            <DropdownMenu.Trigger class="message-action-button" aria-label={t("chat.actions.addReaction")}>
+              <ReactionIcon />
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content
+              class="reaction-picker"
+              data-menu-layout="grid"
+              aria-label={t("chat.actions.chooseReaction")}
+              aria-hidden={props.pickerOpen ? undefined : "true"}
+            >
+              <div class="reaction-picker-row">
+                <DropdownMenu.RadioGroup class="reaction-picker-options" value={props.message.reaction ?? ""}>
+                  <For each={MESSAGE_REACTIONS}>
+                    {(emoji) => (
+                      <DropdownMenu.RadioItem
+                        value={emoji}
+                        aria-label={t("chat.actions.react", { emoji })}
+                        onSelect={() => props.onReact(props.message.reaction === emoji ? null : emoji)}
+                      >
+                        {emoji}
+                      </DropdownMenu.RadioItem>
+                    )}
+                  </For>
+                </DropdownMenu.RadioGroup>
+                <DropdownMenu.Item
+                  class="reaction-more-button"
+                  aria-label={t("chat.actions.moreEmoji")}
+                  closeOnSelect={false}
+                  onSelect={props.onExpandEmoji}
+                >
+                  <PlusIcon />
+                </DropdownMenu.Item>
+              </div>
+              <Show when={props.expandedEmoji}>
+                <div class="reaction-picker-row reaction-picker-more">
+                  <DropdownMenu.RadioGroup class="reaction-picker-options" value={props.message.reaction ?? ""}>
+                    <For each={MORE_MESSAGE_REACTIONS}>
+                      {(emoji) => (
+                        <DropdownMenu.RadioItem
+                          value={emoji}
+                          aria-label={t("chat.actions.react", { emoji })}
+                          onSelect={() => props.onReact(props.message.reaction === emoji ? null : emoji)}
+                        >
+                          {emoji}
+                        </DropdownMenu.RadioItem>
+                      )}
+                    </For>
+                  </DropdownMenu.RadioGroup>
+                </div>
+              </Show>
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+        </div>
+      </Show>
+      <Show when={props.onReply}>
+        <Button
+          variant="ghost"
+          type="button"
+          class="message-action-button"
+          aria-label={
+            props.message.author === "you"
+              ? t("chat.actions.replyUser")
+              : t("chat.actions.reply", { name: authorName() })
+          }
+          onClick={props.onReply}
+        >
+          <ReplyIcon />
+        </Button>
+      </Show>
+      <div class="message-action-popover-anchor">
+        <DropdownMenu.Root
+          open={props.moreOpen}
+          onOpenChange={props.onToggleMore}
+          placement="top-end"
+          gutter={6}
+          modal={false}
+        >
+          <DropdownMenu.Trigger class="message-action-button" aria-label={t("chat.actions.more")}>
+            <MoreIcon />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content class="message-more-menu" aria-hidden={props.moreOpen ? undefined : "true"}>
+            <DropdownMenu.Item onSelect={props.onCopy}>
+              {props.copied ? <CheckIcon /> : <CopyIcon />}
+              <span>{props.copied ? t("common.copied") : t("common.copy")}</span>
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
+      </div>
+    </div>
+  );
+}

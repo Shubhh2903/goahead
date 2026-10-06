@@ -1,0 +1,50 @@
+import { describe, expect, it, vi } from "vitest";
+import { OPENBOT_LINKS } from "../src/lib/landing-links";
+import { latestDownloadResponse } from "../src/server/latest-download";
+
+describe("latest download", () => {
+  it.each([
+    ["macos", "arm64", "latest-mac.yml", "OpenBot-0.1.11-arm64.dmg"],
+    ["macos", "x64", "latest-mac.yml", "OpenBot-0.1.11-x64.dmg"],
+    ["windows", "x64", "latest.yml", "OpenBot-0.1.11-x64.exe"],
+    // The AppImage extension is mixed case in the published manifest, and the match is lowercase.
+    ["linux", "x64", "latest-linux.yml", "OpenBot-0.1.11-x64.AppImage"],
+    ["linux", "arm64", "latest-linux-arm64.yml", "OpenBot-0.1.11-arm64.AppImage"],
+  ] as const)(
+    "redirects %s %s to its installer from the latest manifest",
+    async (platform, architecture, manifest, installer) => {
+      // The macOS manifest lists both architectures, so the other DMG comes first and must not win.
+      const assets =
+        platform === "macos"
+          ? [installer.replace(architecture, architecture === "x64" ? "arm64" : "x64"), installer]
+          : [installer];
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(`files:\n${assets.map((asset) => `  - url: ${asset}\n`).join("")}path: ignored.zip`, {
+          status: 200,
+        }),
+      );
+
+      const response = await latestDownloadResponse(platform, fetcher, architecture);
+
+      expect(fetcher).toHaveBeenCalledWith(
+        `https://github.com/nightly-labs/openbot/releases/latest/download/${manifest}`,
+        { headers: { accept: "text/yaml, text/plain" }, signal: expect.any(AbortSignal) },
+      );
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe(
+        `https://github.com/nightly-labs/openbot/releases/latest/download/${installer}`,
+      );
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    },
+  );
+
+  it.each([
+    new Response("Not found", { status: 404 }),
+    new Response("files:\n  - url: checksums.txt", { status: 200 }),
+  ])("falls back to the Releases page when no installer can be resolved", async (manifestResponse) => {
+    const response = await latestDownloadResponse("macos", vi.fn<typeof fetch>().mockResolvedValue(manifestResponse));
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(OPENBOT_LINKS.releases);
+  });
+});

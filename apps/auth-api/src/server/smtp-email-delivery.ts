@@ -1,0 +1,451 @@
+import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
+import { isCanonicalInviteUrl } from "@openbot/contracts/invite-links";
+import { isValidHostname as isSharedValidHostname } from "@openbot/contracts/validation";
+import { type RenderedEmail, renderSignInCodeEmail, renderTeamInviteEmail } from "./email-templates";
+
+export interface SmtpEmailConfig {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  from: string;
+}
+
+export interface SmtpEmailMessage {
+  email: string;
+  code: string;
+  expiresAt: number;
+}
+
+export interface SmtpTeamInviteMessage {
+  email: string;
+  inviterEmail: string;
+  serverName: string;
+  inviteUrl: string;
+  role: "admin" | "member";
+}
+
+interface PreparedEmailMessage {
+  email: string;
+  content: RenderedEmail;
+}
+
+interface SmtpAttemptState {
+  submissionStarted: boolean;
+  accepted: boolean;
+}
+
+interface SmtpSocket {
+  readable: ReadableStream<Uint8Array>;
+  writable: WritableStream<Uint8Array>;
+  opened: Promise<unknown>;
+  close(): void | Promise<void>;
+}
+
+// Carries the reply that refused a stage. `message` keeps the same `smtp_<stage>_failed` shape the
+// service logs and tests read, so only the added fields are new.
+class SmtpReplyError extends Error {
+  constructor(
+    readonly stage: string,
+    readonly replyCode: number,
+    readonly replyText: string,
+  ) {
+    super(`smtp_${stage}_failed`);
+  }
+}
+
+export type SmtpConnector = (
+  address: { hostname: string; port: number },
+  options: { secureTransport: "on"; allowHalfOpen: false },
+) => SmtpSocket;
+
+export const EMAIL_CODE_DELIVERY_BUDGET_MS = 25_000;
+// `auth-service` answers 429 for this message instead of a permanent 502. Every delivery method
+// raises it, so the service stays free of provider detail.
+export const RATE_LIMITED_DELIVERY_ERROR = "email_delivery_rate_limited";
+// A sender-limit refusal that arrives with a permanent 5xx reply. Namecheap Private Email answers
+// `554 5.7.1 <DATA>: Data command rejected: Reject: too many messages from sender in last 60
+// minutes` when the hourly quota of the sending mailbox is spent, which is a temporary condition
+// reported with a permanent code. Recipient-side limits such as `552 Mailbox quota exceeded` must
+// not match: the sender can do nothing about those, and a countdown would be a lie.
+const SENDER_LIMIT_REPLY = /too many (?:messages|emails|recipients)|(?:sending|send|message|rate) limit|rate limited/iu;
+const SMTP_TIMEOUT_MS = 7_500;
+const SMTP_CLOSE_TIMEOUT_MS = 250;
+const SMTP_MAX_ATTEMPTS = 3;
+const EMAIL_PATTERN = /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+$/iu;
+
+export async function sendPrivateEmailCode(
+  config: SmtpEmailConfig,
+  message: SmtpEmailMessage,
+  connector?: SmtpConnector,
+): Promise<void> {
+  validateConfig(config);
+  validateEmail(message.email, "recipient");
+  if (!/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}$/u.test(message.code)) {
+    throw new Error("smtp_invalid_code");
+  }
+
+  return sendPrivateEmail(
+    config,
+    {
+      email: message.email,
+      content: renderSignInCodeEmail({
+        code: message.code,
+        expiresInMinutes: Math.max(1, Math.ceil((message.expiresAt - Date.now()) / 60_000)),
+      }),
+    },
+    connector,
+  );
+}
+
+export function sendPrivateTeamInvite(
+  config: SmtpEmailConfig,
+  message: SmtpTeamInviteMessage,
+  connector?: SmtpConnector,
+): Promise<void> {
+  validateEmail(message.email, "recipient");
+  validateEmail(message.inviterEmail, "inviter");
+  if (
+    !message.serverName.trim() ||
+    message.serverName.length > INPUT_LIMITS.serverName ||
+    hasHeaderBreak(message.serverName)
+  ) {
+    throw new Error("smtp_invalid_server_name");
+  }
+  if (!isCanonicalInviteUrl(message.inviteUrl)) {
+    throw new Error("smtp_invalid_invite_url");
+  }
+  return sendPrivateEmail(
+    config,
+    {
+      email: message.email,
+      content: renderTeamInviteEmail({
+        inviterEmail: message.inviterEmail,
+        serverName: message.serverName,
+        inviteUrl: message.inviteUrl,
+        role: message.role,
+      }),
+    },
+    connector,
+  );
+}
+
+async function sendPrivateEmail(
+  config: SmtpEmailConfig,
+  message: PreparedEmailMessage,
+  connector?: SmtpConnector,
+): Promise<void> {
+  validateConfig(config);
+  validateEmail(message.email, "recipient");
+  const { subject } = message.content;
+  if (!subject || subject.length > 160 || hasHeaderBreak(subject)) {
+    throw new Error("smtp_invalid_subject");
+  }
+  const connect =
+    connector ??
+    (await loadCloudflareConnector().catch(() => {
+      throw wrapTransportError();
+    }));
+  for (let attempt = 1; attempt <= SMTP_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await sendPrivateEmailAttempt(config, message, connect);
+      return;
+    } catch (error) {
+      const smtpError = normalizeSmtpError(error);
+      if (smtpError instanceof SmtpReplyError && isSenderRateLimited(smtpError)) {
+        // The stage and reply code only. A reply can quote the recipient address, which belongs in
+        // the database and not in a log line.
+        console.warn("Email delivery refused by a sender limit:", {
+          stage: smtpError.stage,
+          replyCode: smtpError.replyCode,
+        });
+        throw new Error(RATE_LIMITED_DELIVERY_ERROR);
+      }
+      if (!isRetryableSmtpError(smtpError) || attempt === SMTP_MAX_ATTEMPTS) throw smtpError;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, attempt * 250));
+    }
+  }
+}
+
+async function sendPrivateEmailAttempt(
+  config: SmtpEmailConfig,
+  message: PreparedEmailMessage,
+  connect: SmtpConnector,
+): Promise<void> {
+  const socket = connect({ hostname: config.host, port: config.port }, { secureTransport: "on", allowHalfOpen: false });
+  const state: SmtpAttemptState = { submissionStarted: false, accepted: false };
+  let attemptError: Error | null = null;
+
+  try {
+    await withTimeout(runSmtpSession(socket, config, message, state), SMTP_TIMEOUT_MS);
+  } catch (error) {
+    const smtpError = normalizeSmtpError(error);
+    if (!state.accepted) {
+      attemptError =
+        state.submissionStarted && smtpError.message !== "smtp_message_failed"
+          ? new Error("smtp_delivery_unknown")
+          : smtpError;
+    }
+  }
+  const closeConfirmed = await closeSmtpSocket(socket);
+  if (state.accepted) return;
+  if (attemptError && !isRetryableSmtpError(attemptError)) throw attemptError;
+  if (state.submissionStarted || !closeConfirmed) throw new Error("smtp_delivery_unknown");
+  if (attemptError) throw attemptError;
+  throw new Error("smtp_delivery_unknown");
+}
+
+async function closeSmtpSocket(socket: SmtpSocket): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(() => socket.close())
+        .then(
+          () => true,
+          () => false,
+        ),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), SMTP_CLOSE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function normalizeSmtpError(error: unknown): Error {
+  if (error instanceof Error && /^smtp_[a-z_]+$/u.test(error.message)) return error;
+  return wrapTransportError();
+}
+
+function wrapTransportError(): Error {
+  return new Error("smtp_transport_failed");
+}
+
+// A 4xx reply is temporary by definition, so waiting is the right answer whichever stage refused.
+// A 5xx reply counts only when it names a sender-side message limit.
+function isSenderRateLimited(error: SmtpReplyError): boolean {
+  if (error.replyCode >= 400 && error.replyCode < 500) return true;
+  return SENDER_LIMIT_REPLY.test(error.replyText);
+}
+
+function isRetryableSmtpError(error: Error): boolean {
+  return ["smtp_transport_failed", "smtp_timeout", "smtp_connection_closed"].includes(error.message);
+}
+
+async function runSmtpSession(
+  socket: SmtpSocket,
+  config: SmtpEmailConfig,
+  message: PreparedEmailMessage,
+  state: SmtpAttemptState,
+): Promise<void> {
+  await socket.opened;
+  const reader = new SmtpResponseReader(socket.readable.getReader());
+  const writer = socket.writable.getWriter();
+
+  await reader.expect([220], "greeting");
+  await writeCommand(writer, "EHLO openbot.run");
+  await reader.expect([250], "ehlo");
+  await writeCommand(writer, "AUTH LOGIN");
+  await reader.expect([334], "auth_username");
+  await writeCommand(writer, encodeBase64(config.username));
+  await reader.expect([334], "auth_password");
+  await writeCommand(writer, encodeBase64(config.password));
+  await reader.expect([235], "auth");
+  await writeCommand(writer, `MAIL FROM:<${config.from}>`);
+  await reader.expect([250], "mail_from");
+  await writeCommand(writer, `RCPT TO:<${message.email}>`);
+  await reader.expect([250, 251], "recipient");
+  await writeCommand(writer, "DATA");
+  await reader.expect([354], "data");
+  state.submissionStarted = true;
+  await writeCommand(writer, `${createMimeMessage(config.from, message)}\r\n.`);
+  await reader.expect([250], "message");
+  state.accepted = true;
+  await writeCommand(writer, "QUIT");
+  await reader.expect([221], "quit");
+}
+
+class SmtpResponseReader {
+  readonly #decoder = new TextDecoder();
+  #buffer = "";
+
+  constructor(private readonly reader: ReadableStreamDefaultReader<Uint8Array>) {}
+
+  async expect(expectedCodes: number[], stage: string): Promise<void> {
+    let responseCode: number | null = null;
+    const lines: string[] = [];
+    while (true) {
+      const line = await this.#readLine();
+      const match = /^(\d{3})([ -])/u.exec(line);
+      if (!match) throw new Error(`smtp_${stage}_invalid_response`);
+      const lineCode = Number(match[1]);
+      responseCode ??= lineCode;
+      if (lineCode !== responseCode) throw new Error(`smtp_${stage}_invalid_response`);
+      lines.push(line);
+      if (match[2] === " ") break;
+    }
+    if (!expectedCodes.includes(responseCode)) {
+      throw new SmtpReplyError(stage, responseCode, lines.join(" "));
+    }
+  }
+
+  async #readLine(): Promise<string> {
+    while (true) {
+      const lineEnd = this.#buffer.indexOf("\r\n");
+      if (lineEnd >= 0) {
+        const line = this.#buffer.slice(0, lineEnd);
+        this.#buffer = this.#buffer.slice(lineEnd + 2);
+        return line;
+      }
+      const chunk = await this.reader.read();
+      if (chunk.done) throw new Error("smtp_connection_closed");
+      this.#buffer += this.#decoder.decode(chunk.value, { stream: true });
+      if (this.#buffer.length > 64 * 1024) throw new Error("smtp_response_too_large");
+    }
+  }
+}
+
+// Plain text first and HTML last: a client shows the last part it can render. Both parts are
+// quoted-printable, so the message is 7-bit clean and no line passes the 998-octet limit, whatever
+// the relay supports. `Auto-Submitted` (RFC 3834) and `X-Auto-Response-Suppress` (Exchange and
+// Outlook) stop vacation and out-of-office replies to the sending mailbox.
+function createMimeMessage(from: string, message: PreparedEmailMessage): string {
+  const boundary = `openbot-${crypto.randomUUID()}`;
+  return dotStuff(
+    [
+      `From: OpenBot <${from}>`,
+      `To: <${message.email}>`,
+      `Subject: ${encodeHeaderValue(message.content.subject)}`,
+      `Date: ${new Date().toUTCString()}`,
+      `Message-ID: <${crypto.randomUUID()}@openbot.run>`,
+      "Auto-Submitted: auto-generated",
+      "X-Auto-Response-Suppress: All",
+      "MIME-Version: 1.0",
+      "Content-Type: multipart/alternative;",
+      ` boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      'Content-Type: text/plain; charset="UTF-8"',
+      "Content-Transfer-Encoding: quoted-printable",
+      "",
+      encodeQuotedPrintable(message.content.text),
+      `--${boundary}`,
+      'Content-Type: text/html; charset="UTF-8"',
+      "Content-Transfer-Encoding: quoted-printable",
+      "",
+      encodeQuotedPrintable(message.content.html),
+      `--${boundary}--`,
+    ].join("\r\n"),
+  );
+}
+
+// RFC 2047 encoded words for a subject with non-ASCII text, such as a server name in Polish. Each
+// word holds whole characters and stays under the 75-character limit.
+function encodeHeaderValue(value: string): string {
+  if (/^[\x20-\x7e]*$/u.test(value)) return value;
+  const words: string[] = [];
+  let chunk = "";
+  for (const character of value) {
+    if (new TextEncoder().encode(chunk + character).length > 45) {
+      words.push(chunk);
+      chunk = "";
+    }
+    chunk += character;
+  }
+  if (chunk) words.push(chunk);
+  return words.map((word) => `=?UTF-8?B?${encodeBase64(word)}?=`).join("\r\n ");
+}
+
+// RFC 2045 quoted-printable over UTF-8, with lines of at most 76 characters.
+function encodeQuotedPrintable(value: string): string {
+  return value
+    .replace(/\r?\n/gu, "\n")
+    .split("\n")
+    .map((line) => {
+      const bytes = new TextEncoder().encode(line);
+      const tokens: string[] = [];
+      bytes.forEach((byte, index) => {
+        const isLast = index === bytes.length - 1;
+        const printable = byte >= 33 && byte <= 126 && byte !== 61;
+        const trailingSpace = (byte === 32 || byte === 9) && isLast;
+        tokens.push(
+          printable || ((byte === 32 || byte === 9) && !trailingSpace)
+            ? String.fromCharCode(byte)
+            : `=${byte.toString(16).toUpperCase().padStart(2, "0")}`,
+        );
+      });
+      const lines: string[] = [];
+      let current = "";
+      for (const token of tokens) {
+        if (current.length + token.length > 75) {
+          lines.push(`${current}=`);
+          current = "";
+        }
+        current += token;
+      }
+      lines.push(current);
+      return lines.join("\r\n");
+    })
+    .join("\r\n");
+}
+
+function dotStuff(value: string): string {
+  return value
+    .split("\r\n")
+    .map((line) => (line.startsWith(".") ? `.${line}` : line))
+    .join("\r\n");
+}
+
+async function writeCommand(writer: WritableStreamDefaultWriter<Uint8Array>, value: string): Promise<void> {
+  await writer.write(new TextEncoder().encode(`${value}\r\n`));
+}
+
+function validateConfig(config: SmtpEmailConfig): void {
+  if (!isValidHostname(config.host)) throw new Error("smtp_invalid_host");
+  if (config.port !== 465) throw new Error("smtp_port_must_be_465");
+  validateEmail(config.username, "username");
+  validateEmail(config.from, "sender");
+  if (!config.password || hasHeaderBreak(config.password)) throw new Error("smtp_invalid_password");
+}
+
+function validateEmail(value: string, field: string): void {
+  if (value.length > INPUT_LIMITS.email || hasHeaderBreak(value) || !EMAIL_PATTERN.test(value)) {
+    throw new Error(`smtp_invalid_${field}`);
+  }
+}
+
+function isValidHostname(value: string): boolean {
+  return !hasHeaderBreak(value) && isSharedValidHostname(value, false);
+}
+
+function hasHeaderBreak(value: string): boolean {
+  return value.includes("\r") || value.includes("\n");
+}
+
+function encodeBase64(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+async function loadCloudflareConnector(): Promise<SmtpConnector> {
+  const { connect } = await import("cloudflare:sockets");
+  return connect;
+}
+
+async function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("smtp_timeout")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}

@@ -1,0 +1,1348 @@
+import type {
+  AgentProviderId,
+  AgentStatus,
+  CustomProviderRestart,
+  HostedSiteSummary,
+  HostedSitesDesktopApi,
+  HostStatus,
+  McpServerConfig,
+  ProviderRuntimeStatus,
+  SaveCustomProviderInput,
+  ServerSummary,
+  TeamInviteSummary,
+  TeamPresenceMember,
+} from "@openbot/contracts/ipc";
+import { Toaster } from "@openbot/ui";
+import type { ProviderCodeLoginState } from "@openbot/ui/components/ProviderCodeLoginDialog";
+import { fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { createMockOpenBot } from "../../preview/mock-openbot";
+import type { HostProviderSettings } from "../settings/ProviderSettingsSection";
+import { mcpToolRuntimeNote as note } from "./mcp-servers";
+import { ServerSettingsModal, type ServerSettingsModalProps } from "./ServerSettingsModal";
+
+afterEach(() => vi.unstubAllGlobals());
+
+const localServer: ServerSummary = {
+  id: "local",
+  name: "Local",
+  logoUrl: null,
+  notificationsMuted: false,
+  notificationsMutedUntil: null,
+  notificationLevel: "all",
+  kind: "local",
+  state: "online",
+  apiUrl: null,
+  remoteDesktopAvailable: false,
+  role: null,
+  active: true,
+};
+
+const remoteServer: ServerSummary = {
+  id: "remote-1",
+  name: "Studio Team",
+  logoUrl: null,
+  notificationsMuted: false,
+  notificationsMutedUntil: null,
+  notificationLevel: "all",
+  kind: "remote",
+  state: "online",
+  apiUrl: "https://studio.example.com",
+  remoteDesktopAvailable: true,
+  role: "admin",
+  active: false,
+};
+
+const unconfiguredHost: HostStatus = {
+  phase: "unconfigured",
+  configured: false,
+  enabledOnLaunch: false,
+  serverId: null,
+  serverName: null,
+  logoUrl: null,
+  apiUrl: null,
+  apiOnline: false,
+  remoteDesktopReady: false,
+  remoteDesktopScreenRecordingDenied: false,
+  remoteDesktopUnattended: false,
+  remoteDesktopActiveSessions: 0,
+  remoteDesktopMaxSessions: 4,
+  message: null,
+};
+
+const configuredHost: HostStatus = {
+  ...unconfiguredHost,
+  phase: "online",
+  configured: true,
+  enabledOnLaunch: true,
+  serverId: "local",
+  serverName: "Local",
+  apiUrl: "https://team.example.com",
+  apiOnline: true,
+};
+
+const members: TeamPresenceMember[] = [
+  {
+    id: "owner-1",
+    username: "owner@example.com",
+    email: "owner@example.com",
+    name: "Server Owner",
+    role: "owner",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    disabled: false,
+    online: true,
+    typingAgentId: null,
+  },
+  {
+    id: "alice-1",
+    username: "alice",
+    email: "alice@example.com",
+    name: "Alice Chen",
+    role: "member",
+    createdAt: "2026-02-01T00:00:00.000Z",
+    disabled: false,
+    online: false,
+    typingAgentId: null,
+  },
+];
+
+const mcpServer: McpServerConfig = {
+  id: "mcp-1",
+  name: "Filesystem",
+  transport: "stdio",
+  enabled: true,
+  command: "npx",
+  args: [],
+  env: [],
+  envPassthrough: [],
+  workingDirectory: "",
+  url: "",
+  headers: [],
+};
+
+function props(overrides: Partial<ServerSettingsModalProps> = {}): ServerSettingsModalProps {
+  return {
+    open: true,
+    onOpenChange: vi.fn(),
+    platform: "darwin",
+    server: localServer,
+    hostStatus: unconfiguredHost,
+    members: [],
+    invites: [],
+    loading: false,
+    loadError: null,
+    onRetry: vi.fn(async () => undefined),
+    onSaveIdentity: vi.fn(async () => undefined),
+    onSetPublished: vi.fn(async () => undefined),
+    onSetMuted: vi.fn(async () => undefined),
+    onSetNotificationLevel: vi.fn(async () => undefined),
+    onCreateInvite: vi.fn(async (input) => ({
+      id: "invite-new",
+      role: input.role,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      usedAt: null,
+      inviteUrl: "https://studio.example.com/invite/new",
+      email: input.email ?? null,
+      permanent: input.permanent ?? false,
+      useCount: 0,
+    })),
+    onUpdateMember: vi.fn(async () => undefined),
+    onRemoveMember: vi.fn(async () => undefined),
+    onRevokeInvite: vi.fn(async () => undefined),
+    onOpenScreenRecordingSettings: vi.fn(async () => undefined),
+    onRecheckScreenRecording: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+describe("ServerSettingsModal", () => {
+  it("keeps account errors on account settings tabs", async () => {
+    render(() => (
+      <ServerSettingsModal {...props({ loadError: "The account cannot perform this remote operation." })} />
+    ));
+    expect(screen.getByText("Server settings unavailable")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote desktop" }));
+    expect(screen.queryByText("Server settings unavailable")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    expect(screen.getByText("Server settings unavailable")).toBeInTheDocument();
+  });
+
+  it.each(["Set up", "Later"])("offers optional desktop setup after publishing: %s", async (action) => {
+    const onSetPublished = vi.fn(async () => undefined);
+    render(() => (
+      <ServerSettingsModal
+        {...props({
+          hostStatus: { ...configuredHost, phase: "idle" },
+          onSetPublished,
+        })}
+      />
+    ));
+    expect(screen.queryByText("Set up remote desktop")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("switch", { name: "Publish this server" }));
+    const button = await screen.findByRole("button", { name: action });
+    expect(onSetPublished).toHaveBeenCalledWith(true);
+    await fireEvent.click(button);
+    expect(screen.queryByText("Set up remote desktop")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: action === "Set up" ? "Remote desktop" : "General" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(onSetPublished).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not offer desktop setup when publication fails", async () => {
+    const onSetPublished = vi.fn(async () => {
+      throw new Error("Publication failed");
+    });
+    render(() => (
+      <ServerSettingsModal {...props({ hostStatus: { ...configuredHost, phase: "idle" }, onSetPublished })} />
+    ));
+    await fireEvent.click(screen.getByRole("switch", { name: "Publish this server" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Publish this server" })).toBeEnabled());
+    expect(onSetPublished).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Set up remote desktop")).not.toBeInTheDocument();
+  });
+
+  it.each([true, false])("does not request an update for a compatible host with availability %s", async (ready) => {
+    render(() => (
+      <ServerSettingsModal
+        {...props({
+          server: {
+            ...remoteServer,
+            remoteDesktopAvailable: ready,
+            compatibility: {
+              localAppVersion: "0.5.0",
+              hostAppVersion: "0.5.0",
+              localProtocol: { minimum: 1, maximum: 3 },
+              hostProtocol: { minimum: 1, maximum: 3 },
+              negotiatedProtocol: 3,
+              capabilities: ["remote-desktop"],
+            },
+          },
+        })}
+      />
+    ));
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote desktop" }));
+    expect(await screen.findByText(ready ? "Service available" : "Service not ready")).toBeInTheDocument();
+    expect(screen.queryByText(/update required/iu)).not.toBeInTheDocument();
+  });
+
+  it.each(["client_update_required", "host_update_required"] as const)(
+    "identifies the end that needs an update: %s",
+    async (code) => {
+      const message = code === "client_update_required" ? "Update this OpenBot app." : "Update OpenBot on the host.";
+      render(() => (
+        <ServerSettingsModal
+          {...props({
+            server: {
+              ...remoteServer,
+              state: "incompatible",
+              remoteDesktopAvailable: false,
+              issue: { code, message, retryable: true },
+            },
+          })}
+        />
+      ));
+      await fireEvent.click(screen.getByRole("tab", { name: "Remote desktop" }));
+      expect(
+        await screen.findByText(code === "client_update_required" ? "Client update required" : "Host update required"),
+      ).toBeInTheDocument();
+      expect(screen.getByText(message)).toBeInTheDocument();
+    },
+  );
+
+  it.each([true, false])("offers both permissions before or after a refusal: %s", async (denied) => {
+    const mock = createMockOpenBot();
+    vi.stubGlobal("openbot", mock.api);
+    const open = vi.spyOn(mock.api.remoteDesktop, "openSetup");
+    render(() => (
+      <ServerSettingsModal
+        {...props({ hostStatus: { ...configuredHost, remoteDesktopScreenRecordingDenied: denied } })}
+      />
+    ));
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote desktop" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Grant Accessibility access" }));
+    await waitFor(() => expect(open).toHaveBeenCalledWith("accessibility"));
+    expect(screen.getByRole("button", { name: "Grant Screen Recording access" })).toBeEnabled();
+    expect(screen.getAllByText("Not checked")).toHaveLength(5);
+    mock.dispose();
+  });
+
+  it("reads Sunshine permissions again after the owner returns from macOS settings", async () => {
+    const mock = createMockOpenBot();
+    vi.stubGlobal("openbot", mock.api);
+    const check = vi.spyOn(mock.api.remoteDesktop, "checkSetup");
+    render(() => <ServerSettingsModal {...props({ hostStatus: configuredHost })} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote desktop" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+    expect(await screen.findByText("Blocked")).toBeInTheDocument();
+    expect(screen.getByText(/Mac mini · openbot/)).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Grant Accessibility access" }));
+    await fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+    mock.dispose();
+  });
+
+  it("does not offer client privacy settings for a remote Mac", async () => {
+    render(() => <ServerSettingsModal {...props({ server: remoteServer })} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote desktop" }));
+    expect(
+      await screen.findByText("Update OpenBot on the host to check permissions and test remote desktop."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Grant Accessibility access" })).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])(
+    "separates video confirmation from mouse and keyboard results and closes its test session",
+    async (localTest) => {
+      const mock = createMockOpenBot({ remoteDesktopSessions: [] });
+      vi.stubGlobal("openbot", mock.api);
+      const originalCheck = mock.api.remoteDesktop.checkSetup;
+      mock.api.remoteDesktop.checkSetup = async (serverId) => ({
+        ...(await originalCheck(serverId)),
+        accessibility: "allowed",
+      });
+      const test = vi.spyOn(mock.api.remoteDesktop, "test").mockImplementation(async (input) => ({
+        active: input.action !== "stop",
+        mouse: true,
+        keyboard: true,
+        code: "1234",
+      }));
+      const disconnect = vi.spyOn(mock.api.remoteDesktop, "disconnect");
+      const server: ServerSummary = {
+        ...remoteServer,
+        compatibility: {
+          localAppVersion: "0.5.0",
+          hostAppVersion: "0.5.0",
+          localProtocol: { minimum: 1, maximum: 4 },
+          hostProtocol: { minimum: 1, maximum: 4 },
+          negotiatedProtocol: 4,
+          capabilities: ["remote-desktop", "remote-desktop-setup"],
+        },
+      };
+      const targetServer = localTest ? localServer : server;
+      render(() => <ServerSettingsModal {...props({ server: targetServer, hostStatus: null })} />);
+      await fireEvent.click(screen.getByRole("tab", { name: "Remote desktop" }));
+      await fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+      const start = await screen.findByRole("button", { name: localTest ? "Test on this Mac" : "Test remote desktop" });
+      await waitFor(() => expect(start).toBeEnabled());
+      await fireEvent.click(start);
+      const confirm = await screen.findByRole("button", { name: "I can see the test panel" });
+      expect(confirm).toBeDisabled();
+      const frame = screen.getByTitle<HTMLIFrameElement>("Sunshine remote desktop");
+      const [session] = await mock.api.remoteDesktop.list();
+      assert(session);
+      await fireEvent(
+        window,
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          origin: new URL(session.viewerUrl).origin,
+          data: { source: "openbot-moonlight", type: "viewer-state", sessionId: session.id, state: "connected" },
+        }),
+      );
+      await waitFor(() => expect(confirm).toBeEnabled());
+      await fireEvent.click(confirm);
+      await fireEvent.click(screen.getByRole("button", { name: "Finish test" }));
+      await waitFor(() =>
+        expect(test).toHaveBeenCalledWith({ serverId: targetServer.id, sessionId: session.id, action: "stop" }),
+      );
+      expect(disconnect).toHaveBeenCalledWith(session.id);
+      expect(
+        await screen.findByText(/Video: received · Picture: confirmed · Mouse: received · Keyboard: received/u),
+      ).toBeInTheDocument();
+      mock.dispose();
+    },
+  );
+
+  it("runs a local video test without native permission diagnostics", async () => {
+    const mock = createMockOpenBot({ remoteDesktopSessions: [] });
+    vi.stubGlobal("openbot", mock.api);
+    window.openbot = mock.api;
+    const test = vi.spyOn(mock.api.remoteDesktop, "test");
+    const disconnect = vi.spyOn(mock.api.remoteDesktop, "disconnect");
+    render(() => <ServerSettingsModal {...props()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote desktop" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Test on this Mac" }));
+    const confirm = await screen.findByRole("button", { name: "I can see my desktop" });
+    expect(confirm).toBeDisabled();
+    expect(test).not.toHaveBeenCalled();
+    const frame = screen.getByTitle<HTMLIFrameElement>("Sunshine remote desktop");
+    expect(frame).toHaveAttribute("inert");
+    const [session] = await mock.api.remoteDesktop.list();
+    assert(session);
+    await fireEvent(
+      window,
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: new URL(session.viewerUrl).origin,
+        data: { source: "openbot-moonlight", type: "viewer-state", sessionId: session.id, state: "connected" },
+      }),
+    );
+    await waitFor(() => expect(confirm).toBeEnabled());
+    await fireEvent.click(confirm);
+    await fireEvent.click(screen.getByRole("button", { name: "Finish test" }));
+    await waitFor(() => expect(disconnect).toHaveBeenCalledWith(session.id));
+    expect(test).not.toHaveBeenCalled();
+    mock.dispose();
+  });
+
+  it("removes a previous allowed result when the next check fails", async () => {
+    const mock = createMockOpenBot();
+    vi.stubGlobal("openbot", mock.api);
+    const check = vi.spyOn(mock.api.remoteDesktop, "checkSetup");
+    render(() => <ServerSettingsModal {...props({ hostStatus: configuredHost })} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote desktop" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+    check.mockRejectedValueOnce(new Error("Host disconnected."));
+    await fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Host disconnected.");
+    expect(screen.queryByText("Allowed")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Check failed")).toHaveLength(5);
+    mock.dispose();
+  });
+
+  // `mcpServers` gates the tab and the panel together, so the prop is the whole feature gate: a
+  // member of a remote server is never handed one and never sees a tab that would answer 403.
+  it("shows the MCP and Storage tabs only when a caller supplies them", async () => {
+    render(() => <ServerSettingsModal {...props()} />);
+    expect(screen.queryByRole("tab", { name: "MCP" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Storage" })).not.toBeInTheDocument();
+  });
+
+  // The list is read when the section opens, not when the dialog does, because most visits to this
+  // dialog never reach it.
+  it("asks for the MCP list when the section is opened", async () => {
+    const onMcpSectionShown = vi.fn();
+    render(() => (
+      <ServerSettingsModal
+        {...props({
+          mcpServers: [mcpServer],
+          onMcpSectionShown,
+        })}
+      />
+    ));
+    expect(onMcpSectionShown).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
+    await waitFor(() => expect(onMcpSectionShown).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("Filesystem")).toBeInTheDocument();
+
+    // Leaving and coming back reads the list again; staying in the section does not.
+    await fireEvent.click(screen.getByRole("tab", { name: "General" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
+    await waitFor(() => expect(onMcpSectionShown).toHaveBeenCalledTimes(2));
+  });
+
+  // Storage is read for the server the dialog names, which need not be the selected one. Every
+  // member reads it; only an owner or admin is offered a clear, which reaches that same server.
+  it("reads a server's storage when the section opens and clears only for a manager", async () => {
+    const mock = createMockOpenBot();
+    vi.stubGlobal("openbot", mock.api);
+    const getUsage = vi.spyOn(mock.api.storage, "getUsage");
+    const clear = vi.spyOn(mock.api.storage, "clear");
+    const storage = { hostName: "Studio Team", onOpenAgent: vi.fn(), onShowMessage: vi.fn() };
+
+    const { unmount } = render(() => (
+      <ServerSettingsModal {...props({ server: remoteServer, storage: { ...storage, canManage: false } })} />
+    ));
+    expect(getUsage).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
+    await waitFor(() => expect(getUsage).toHaveBeenCalledWith({ scope: "host" }, "remote-1"));
+    expect(await screen.findByText("OpenBot on Studio Team")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Clean up" })).not.toBeInTheDocument();
+    unmount();
+
+    render(() => (
+      <ServerSettingsModal {...props({ server: remoteServer, storage: { ...storage, canManage: true } })} />
+    ));
+    await fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Clear Cached server files" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(clear).toHaveBeenCalledWith({ category: "caches" }, "remote-1"));
+  });
+
+  it("lists a server's sites with its plan limit, and deletes only for an owner or admin", async () => {
+    const site: HostedSiteSummary = {
+      id: "site-to-delete",
+      hostname: "temporary-project-site-23456789ab.openbot.site",
+      url: "https://temporary-project-site-23456789ab.openbot.site",
+      title: "Temporary project site",
+      description: "Verify deletion and list refresh.",
+      framework: "vanilla",
+      status: "active",
+      fileCount: 1,
+      size: 256,
+      expiresAt: "2026-09-30T12:00:00.000Z",
+      updatedAt: "2026-08-31T12:00:00.000Z",
+      serverId: "remote-1",
+    };
+    const unlinked: HostedSiteSummary = { ...site, id: "site-unlinked", hostname: "old.openbot.site", serverId: null };
+    const api = {
+      list: vi
+        .fn<HostedSitesDesktopApi["list"]>()
+        .mockResolvedValueOnce({ sites: [site, unlinked], limit: 3, used: 2 })
+        .mockResolvedValueOnce({ sites: [site, unlinked], limit: 3, used: 2 })
+        .mockResolvedValue({ sites: [unlinked], limit: 3, used: 1 }),
+      delete: vi.fn<HostedSitesDesktopApi["delete"]>(async () => undefined),
+    };
+    const track = vi.fn();
+    const hostedSites = { api, onOpenSite: vi.fn(), trackDelete: () => track };
+
+    const { unmount } = render(() => (
+      <ServerSettingsModal {...props({ server: { ...remoteServer, role: "member" }, hostedSites })} />
+    ));
+    await fireEvent.click(screen.getByRole("tab", { name: "Sites" }));
+    expect(await screen.findByText(site.hostname)).toBeInTheDocument();
+    expect(api.list).toHaveBeenCalledWith("remote-1");
+    expect(screen.getByText("2 of 3 sites")).toBeInTheDocument();
+    expect(screen.getByText("Not linked to a server")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: `Delete ${site.hostname}` })).not.toBeInTheDocument();
+    unmount();
+
+    render(() => <ServerSettingsModal {...props({ server: remoteServer, hostedSites })} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Sites" }));
+    await fireEvent.click(await screen.findByRole("button", { name: `Delete ${site.hostname}` }));
+    const confirmation = await screen.findByRole("alertdialog", { name: `Delete ${site.hostname}?` });
+    expect(confirmation).toHaveAccessibleDescription("This address will immediately return 410 Gone.");
+    await fireEvent.click(within(confirmation).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(api.delete).toHaveBeenCalledWith({ siteId: site.id }, "remote-1"));
+    await waitFor(() => expect(screen.queryByText(site.hostname)).not.toBeInTheDocument());
+    expect(screen.getByText("1 of 3 sites")).toBeInTheDocument();
+    expect(track).toHaveBeenCalledWith("succeeded");
+  });
+
+  // MCP servers belong to this machine and are started by the agents on it, so they are manageable
+  // before the user publishes a Team API host at all - unlike members, invites and the identity.
+  it("manages MCP servers on a local server with no host configured", async () => {
+    render(() => <ServerSettingsModal {...props({ hostStatus: unconfiguredHost, mcpServers: [] })} />);
+
+    await fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
+    expect(await screen.findByRole("button", { name: "Connect a custom MCP" })).toBeEnabled();
+  });
+
+  // "No MCP servers yet." says the server holds none. A failed read holds no such statement, and
+  // the user needs a way out of it that is not closing the dialog.
+  it("explains a failed MCP list read and offers a retry", async () => {
+    const onRetryMcpServers = vi.fn();
+    render(() => (
+      <ServerSettingsModal
+        {...props({ mcpServers: [], mcpLoadError: "The host is not reachable.", onRetryMcpServers })}
+      />
+    ));
+
+    await fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
+    expect(await screen.findByText("The host is not reachable.")).toBeInTheDocument();
+    expect(screen.queryByText("No MCP servers yet.")).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetryMcpServers).toHaveBeenCalledTimes(1);
+  });
+
+  // The runtime a STDIO server is started with is downloaded in the background, and a server that
+  // needs it cannot start before it arrives. Saying so here is the difference between "not yet" and
+  // a connection failure the user would otherwise go looking for in their own configuration.
+  it("says what the managed runtime under a STDIO server is doing", async () => {
+    const [status, setStatus] = createSignal<ProviderRuntimeStatus>({
+      phase: "downloading",
+      progress: 40,
+      message: null,
+      version: "1.4.2",
+    });
+    render(() => <ServerSettingsModal {...props({ mcpServers: [mcpServer] })} mcpToolRuntimeNote={note(status())} />);
+
+    await fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
+    expect(
+      await screen.findByText(/Downloading the runtime a STDIO server is started with \(40%\)/),
+    ).toBeInTheDocument();
+
+    // Ready is the ordinary state and says nothing: a note that never leaves is a note nobody reads.
+    setStatus({ phase: "ready", progress: 100, message: null, version: "1.4.2" });
+    await waitFor(() => expect(screen.queryByText(/Downloading the runtime/)).not.toBeInTheDocument());
+  });
+
+  // The same rule on a row: the answer names the endpoint that row held, so a saved edit - or a slow
+  // answer that lands after one - must not read as a working connection for the new one.
+  it("drops an MCP row's test result when that server changes", async () => {
+    const onTestMcpServer = vi.fn(async () => ({ toolCount: 3, error: null }));
+    const [servers, setServers] = createSignal<McpServerConfig[]>([mcpServer]);
+    render(() => <ServerSettingsModal {...props({ mcpServers: servers(), onTestMcpServer })} />);
+
+    await fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
+    const trigger = await screen.findByRole("button", { name: "Actions for Filesystem" });
+    await fireEvent.pointerDown(trigger, { button: 0 });
+    await fireEvent.pointerUp(trigger, { button: 0 });
+    await fireEvent.pointerUp(await screen.findByRole("menuitem", { name: "Test connection" }), { button: 0 });
+    expect(await screen.findByText("Connected · 3 tools")).toBeInTheDocument();
+
+    // Turning the server off keeps the answer: the switch decides who is given the server, not what
+    // the connection is.
+    setServers([{ ...mcpServer, enabled: false }]);
+    expect(screen.getByText("Connected · 3 tools")).toBeInTheDocument();
+
+    setServers([{ ...mcpServer, command: "/bin/other" }]);
+    await waitFor(() => expect(screen.queryByText("Connected · 3 tools")).not.toBeInTheDocument());
+    expect(onTestMcpServer).toHaveBeenCalledTimes(1);
+  });
+
+  // A test answers for the settings it was given. Left on screen after an edit it would report a
+  // working connection for a command nobody tried.
+  it("drops the MCP test result when the draft changes", async () => {
+    const onTestMcpServer = vi.fn(async () => ({ toolCount: 3, error: null }));
+    render(() => <ServerSettingsModal {...props({ mcpServers: [], onTestMcpServer })} />);
+
+    await fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Connect a custom MCP" }));
+    await fireEvent.input(screen.getByPlaceholderText("MCP server name"), { target: { value: "Filesystem" } });
+    await fireEvent.input(screen.getByPlaceholderText("openai-dev-mcp"), { target: { value: "/bin/echo" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText("Connected · 3 tools")).toBeInTheDocument();
+
+    await fireEvent.input(screen.getByPlaceholderText("openai-dev-mcp"), { target: { value: "/bin/other" } });
+    await waitFor(() => expect(screen.queryByText("Connected · 3 tools")).not.toBeInTheDocument());
+    expect(screen.getByText("Not tested yet.")).toBeInTheDocument();
+    expect(onTestMcpServer).toHaveBeenCalledTimes(1);
+  });
+
+  // The gate can close under an open form: a remote host that answers without the capability, or a
+  // role that loses it. The dialog keeps the breadcrumb and the save bar, so the panel has to take
+  // them back with it.
+  it("drops the MCP form's breadcrumb when the panel is no longer shown", async () => {
+    const [servers, setServers] = createSignal<McpServerConfig[] | undefined>([]);
+    render(() => <ServerSettingsModal {...props({ mcpServers: servers() })} />);
+
+    await fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Connect a custom MCP" }));
+    expect(await screen.findByText("Connect to a custom MCP")).toBeInTheDocument();
+
+    setServers(undefined);
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "MCP" })).not.toBeInTheDocument());
+
+    // The gate opens again on the next read, and the panel it builds starts on the list.
+    setServers([]);
+    await fireEvent.click(await screen.findByRole("tab", { name: "MCP" }));
+    expect(await screen.findByRole("button", { name: "Connect a custom MCP" })).toBeInTheDocument();
+    expect(screen.queryByText("Connect to a custom MCP")).not.toBeInTheDocument();
+  });
+
+  it("saves the first local identity without publishing it", async () => {
+    const onSaveIdentity = vi.fn(async () => undefined);
+    const onSetPublished = vi.fn(async () => undefined);
+    render(() => <ServerSettingsModal {...props({ onSaveIdentity, onSetPublished })} />);
+
+    const name = screen.getByRole("textbox", { name: "Server name" });
+    expect(name).toHaveValue("");
+    expect(screen.getByRole("switch", { name: "Publish this server" })).toBeDisabled();
+
+    await fireEvent.input(name, { target: { value: "Draft Team" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(name).toHaveValue("");
+    await fireEvent.input(name, { target: { value: "Studio Team" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSaveIdentity).toHaveBeenCalledWith({ serverName: "Studio Team" }));
+    expect(onSetPublished).not.toHaveBeenCalled();
+  });
+
+  it("clears a rejected server logo error when the draft is reset", async () => {
+    render(() => <ServerSettingsModal {...props()} />);
+
+    const name = screen.getByRole("textbox", { name: "Server name" });
+    await fireEvent.input(name, { target: { value: "Studio Team" } });
+    await fireEvent.change(screen.getByLabelText("Server logo"), {
+      target: { files: [new File(["not-an-image"], "logo.txt", { type: "text/plain" })] },
+    });
+
+    expect(await screen.findByText("Choose a PNG, JPEG, or WebP image.")).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(screen.queryByText("Choose a PNG, JPEG, or WebP image.")).not.toBeInTheDocument();
+    expect(screen.getByText("Shown to everyone who connects.")).toBeInTheDocument();
+  });
+
+  it("shows a failed identity action and keeps the draft", async () => {
+    const onSaveIdentity = vi.fn(async () => {
+      throw new Error("The identity could not save.");
+    });
+    render(() => (
+      <>
+        <ServerSettingsModal {...props({ onSaveIdentity })} />
+        <Toaster />
+      </>
+    ));
+
+    const name = screen.getByRole("textbox", { name: "Server name" });
+    await fireEvent.input(name, { target: { value: "Studio Team" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("Server action failed")).toBeInTheDocument();
+    expect(screen.getByText("The identity could not save.")).toBeInTheDocument();
+    expect(name).toHaveValue("Studio Team");
+  });
+
+  it("publishes a configured local server and keeps first setup disabled", async () => {
+    const onSetPublished = vi.fn(async () => undefined);
+    const { unmount } = render(() => (
+      <ServerSettingsModal {...props({ hostStatus: configuredHost, onSetPublished })} />
+    ));
+
+    const publishSwitch = screen.getByRole("switch", { name: "Publish this server" });
+    expect(publishSwitch).toBeEnabled();
+    await fireEvent.click(publishSwitch);
+    await waitFor(() => expect(onSetPublished).toHaveBeenCalledWith(false));
+
+    unmount();
+    render(() => <ServerSettingsModal {...props({ hostStatus: unconfiguredHost, onSetPublished })} />);
+    expect(screen.getByRole("switch", { name: "Publish this server" })).toBeDisabled();
+  });
+
+  it("mutes a server and reflects a server that is already muted", async () => {
+    const onSetMuted = vi.fn(async () => undefined);
+    const { unmount } = render(() => <ServerSettingsModal {...props({ onSetMuted })} />);
+
+    const muteSwitch = screen.getByRole("switch", { name: "Mute notifications" });
+    expect(muteSwitch).not.toBeChecked();
+    await fireEvent.click(muteSwitch);
+    await waitFor(() => expect(onSetMuted).toHaveBeenCalledWith(true));
+
+    unmount();
+    render(() => (
+      <ServerSettingsModal {...props({ server: { ...localServer, notificationsMuted: true }, onSetMuted })} />
+    ));
+    expect(screen.getByRole("switch", { name: "Mute notifications" })).toBeChecked();
+  });
+
+  it("validates the server name and returns an erased draft to its pristine state", async () => {
+    const onSaveIdentity = vi.fn(async () => undefined);
+    render(() => <ServerSettingsModal {...props({ onSaveIdentity })} />);
+
+    const name = screen.getByRole("textbox", { name: "Server name" });
+    await fireEvent.input(name, { target: { value: "Tiny" } });
+    await waitFor(() => expect(name).toHaveValue("Tiny"));
+    expect(screen.queryByText("Enter at least 6 characters.")).not.toBeInTheDocument();
+
+    await fireEvent.blur(name);
+    const error = screen.getByText("Enter at least 6 characters.");
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(name).toHaveAttribute("aria-describedby", error.id);
+    expect(screen.getByRole("region", { name: "Unsaved changes" })).toBeInTheDocument();
+
+    await fireEvent.input(name, { target: { value: "" } });
+    expect(screen.queryByText("Enter at least 6 characters.")).not.toBeInTheDocument();
+    // The bar shrinks back into the bottom edge before it leaves, so this waits for the close.
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument());
+    expect(name).not.toHaveAttribute("aria-invalid");
+
+    await fireEvent.input(name, { target: { value: "Tiny" } });
+    await fireEvent.blur(name);
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await fireEvent.input(name, { target: { value: "Studio Team" } });
+    expect(screen.queryByText("Enter at least 6 characters.")).not.toBeInTheDocument();
+    expect(name).not.toHaveAttribute("aria-invalid");
+    await fireEvent.keyDown(name, { key: "Enter" });
+    await waitFor(() => expect(onSaveIdentity).toHaveBeenCalledWith({ serverName: "Studio Team" }));
+  });
+
+  it("keeps remote member settings read-only", async () => {
+    render(() => (
+      <ServerSettingsModal {...props({ server: { ...remoteServer, role: "member" }, hostStatus: null, members })} />
+    ));
+
+    expect(screen.queryByRole("textbox", { name: "Server name" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    expect(screen.getByText("Alice Chen")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send invite" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Actions for Alice Chen" })).not.toBeInTheDocument();
+  });
+
+  it("moves through settings tabs with the keyboard", async () => {
+    render(() => <ServerSettingsModal {...props({ server: remoteServer, hostStatus: null, members })} />);
+
+    const generalTab = screen.getByRole("tab", { name: "General" });
+    generalTab.focus();
+    await fireEvent.keyDown(generalTab, { key: "ArrowDown" });
+
+    const membersTab = screen.getByRole("tab", { name: "Members" });
+    await waitFor(() => expect(membersTab).toHaveAttribute("aria-selected", "true"));
+    expect(screen.getByRole("heading", { name: "Members" })).toBeInTheDocument();
+  });
+
+  it("confirms member removal and keeps the member after cancellation", async () => {
+    const onRemoveMember = vi.fn(async () => undefined);
+    render(() => (
+      <ServerSettingsModal {...props({ server: remoteServer, hostStatus: null, members, onRemoveMember })} />
+    ));
+
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    const memberActions = screen.getByRole("button", { name: "Actions for Alice Chen" });
+
+    await fireEvent.pointerDown(memberActions, { button: 0 });
+    await fireEvent.pointerUp(memberActions, { button: 0 });
+    await fireEvent.pointerUp(await screen.findByRole("menuitem", { name: "Remove member" }), { button: 0 });
+    expect(await screen.findByRole("alertdialog", { name: "Remove Alice Chen?" })).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onRemoveMember).not.toHaveBeenCalled();
+
+    await fireEvent.pointerDown(memberActions, { button: 0 });
+    await fireEvent.pointerUp(memberActions, { button: 0 });
+    await fireEvent.pointerUp(await screen.findByRole("menuitem", { name: "Remove member" }), { button: 0 });
+    await fireEvent.click(await screen.findByRole("button", { name: "Remove member" }));
+
+    await waitFor(() => expect(onRemoveMember).toHaveBeenCalledWith("alice-1"));
+  });
+
+  it("offers Leave only for a joined server the account does not own", async () => {
+    const onLeaveServer = vi.fn(async () => undefined);
+    const local = render(() => <ServerSettingsModal {...props({ onLeaveServer })} />);
+    expect(screen.queryByRole("button", { name: "Leave server" })).not.toBeInTheDocument();
+    local.unmount();
+
+    const owner = render(() => (
+      <ServerSettingsModal
+        {...props({ server: { ...remoteServer, role: "owner" }, hostStatus: null, onLeaveServer })}
+      />
+    ));
+    expect(screen.queryByRole("button", { name: "Leave server" })).not.toBeInTheDocument();
+    owner.unmount();
+
+    render(() => <ServerSettingsModal {...props({ server: remoteServer, hostStatus: null })} />);
+    expect(screen.queryByRole("button", { name: "Leave server" })).not.toBeInTheDocument();
+  });
+
+  it("confirms leaving a server, keeps it after cancellation, and reports a failure", async () => {
+    const onLeaveServer = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("The account service is unavailable."))
+      .mockResolvedValueOnce(undefined);
+    render(() => (
+      <>
+        <ServerSettingsModal {...props({ server: remoteServer, hostStatus: null, onLeaveServer })} />
+        <Toaster />
+      </>
+    ));
+
+    await fireEvent.click(screen.getByRole("button", { name: "Leave server" }));
+    await fireEvent.click(
+      within(await screen.findByRole("alertdialog", { name: "Leave Studio Team?" })).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+    expect(onLeaveServer).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Leave server" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Leave Studio Team?" });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Leave server" }));
+    expect(await screen.findByText("The account service is unavailable.")).toBeInTheDocument();
+    expect(screen.getByRole("alertdialog", { name: "Leave Studio Team?" })).toBeInTheDocument();
+
+    await fireEvent.click(await within(dialog).findByRole("button", { name: "Leave server" }));
+    expect(await screen.findByText("You left Studio Team")).toBeInTheDocument();
+    expect(onLeaveServer).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a remote administrator invite, search, revoke, and change member roles", async () => {
+    const onCreateInvite = vi.fn(async (input: { role: "admin" | "member"; email?: string; permanent?: boolean }) => ({
+      id: "invite-new",
+      role: input.role,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      usedAt: null,
+      inviteUrl: "https://studio.example.com/invite/new",
+      email: input.email ?? null,
+      permanent: input.permanent ?? false,
+      useCount: 0,
+    }));
+    const onUpdateMember = vi.fn(async () => undefined);
+    const onRevokeInvite = vi.fn(async () => undefined);
+    render(() => (
+      <ServerSettingsModal
+        {...props({
+          server: remoteServer,
+          hostStatus: null,
+          members,
+          invites: [
+            {
+              id: "invite-old",
+              role: "member",
+              expiresAt: "2099-01-01T00:00:00.000Z",
+              usedAt: null,
+              email: "pending@example.com",
+              permanent: false,
+              useCount: 0,
+            },
+          ],
+          onCreateInvite,
+          onUpdateMember,
+          onRevokeInvite,
+        })}
+      />
+    ));
+
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    await fireEvent.input(screen.getByRole("textbox", { name: "Email address" }), {
+      target: { value: "new@example.com" },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
+    await waitFor(() => expect(onCreateInvite).toHaveBeenCalledWith({ role: "member", email: "new@example.com" }));
+
+    await fireEvent.input(screen.getByRole("searchbox", { name: "Search members" }), {
+      target: { value: "alice" },
+    });
+    expect(screen.getByText("Alice Chen")).toBeInTheDocument();
+    expect(screen.queryByText("Server Owner")).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(onRevokeInvite).toHaveBeenCalledWith("invite-old"));
+    const memberActions = screen.getByRole("button", { name: "Actions for Alice Chen" });
+    await fireEvent.pointerDown(memberActions, { button: 0 });
+    await fireEvent.pointerUp(memberActions, { button: 0 });
+    expect(screen.queryByRole("menuitem", { name: "Pause access" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Restore access" })).not.toBeInTheDocument();
+    await fireEvent.pointerUp(await screen.findByRole("menuitem", { name: "Make admin" }), { button: 0 });
+    await waitFor(() => expect(onUpdateMember).toHaveBeenCalledWith({ memberId: "alice-1", role: "admin" }));
+  });
+
+  it("hides removed members and excludes them from the member count", async () => {
+    render(() => (
+      <ServerSettingsModal
+        {...props({
+          server: { ...remoteServer, apiUrl: "webrtc://remote-1" },
+          hostStatus: null,
+          members: members.map((member) => ({ ...member, disabled: member.id === "alice-1" })),
+        })}
+      />
+    ));
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    expect(screen.getByText("Server Owner")).toBeInTheDocument();
+    expect(screen.queryByText("Alice Chen")).not.toBeInTheDocument();
+    expect(screen.getByText("1 member")).toBeInTheDocument();
+  });
+
+  it("lets the owner remove an inactive legacy member before inviting them again", async () => {
+    const [currentMembers, setCurrentMembers] = createSignal(
+      members.map((member) => ({ ...member, disabled: member.id === "alice-1" })),
+    );
+    const onRemoveMember = vi.fn(async (memberId: string) => {
+      setCurrentMembers((current) => current.filter((member) => member.id !== memberId));
+    });
+    render(() => (
+      <ServerSettingsModal
+        {...props({
+          server: { ...remoteServer, role: "owner" },
+          hostStatus: null,
+          members: currentMembers(),
+          onRemoveMember,
+        })}
+      />
+    ));
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    expect(screen.getByText("1 member")).toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "Actions for Alice Chen" });
+    await fireEvent.pointerDown(trigger, { button: 0 });
+    await fireEvent.pointerUp(trigger, { button: 0 });
+    expect(screen.queryByRole("menuitem", { name: "Restore access" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Make admin" })).not.toBeInTheDocument();
+    await fireEvent.pointerUp(await screen.findByRole("menuitem", { name: "Remove member" }), { button: 0 });
+    await fireEvent.click(await screen.findByRole("button", { name: "Remove member" }));
+    await waitFor(() => expect(onRemoveMember).toHaveBeenCalledWith("alice-1"));
+    await waitFor(() => expect(screen.queryByText("Alice Chen")).not.toBeInTheDocument());
+    expect(screen.getByText("Server Owner")).toBeInTheDocument();
+  });
+
+  it("shows when the invitation is accepted and stops offering its consumed QR", async () => {
+    const invite = {
+      id: "live-invite",
+      role: "member" as const,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      usedAt: null,
+      email: null,
+      permanent: false,
+      useCount: 0,
+      inviteUrl: "https://openbot.run/join?invite=live",
+    };
+    const [invites, setInvites] = createSignal<TeamInviteSummary[]>([invite]);
+    render(() => (
+      <ServerSettingsModal
+        {...props({ server: remoteServer, hostStatus: null, members, onCreateInvite: async () => invite })}
+        invites={invites()}
+      />
+    ));
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Invite link" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Create link" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Show invitation QR code" }));
+    await screen.findByRole("img", { name: "Invitation QR code" });
+    setInvites([{ ...invite, usedAt: "2026-09-08T12:00:00.000Z" }]);
+    expect(await screen.findByText("Invitation accepted")).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Invitation QR code" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create new invitation link" })).toBeEnabled();
+  });
+
+  it("associates invite validation with the email field and creates invite links", async () => {
+    const onCreateInvite = vi.fn(async (input: { role: "admin" | "member"; email?: string; permanent?: boolean }) => ({
+      id: "invite-new",
+      role: input.role,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      usedAt: null,
+      inviteUrl: "https://studio.example.com/invite/new",
+      email: input.email ?? null,
+      permanent: input.permanent ?? false,
+      useCount: 0,
+    }));
+    render(() => (
+      <ServerSettingsModal {...props({ server: remoteServer, hostStatus: null, members, onCreateInvite })} />
+    ));
+
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    const email = screen.getByRole("textbox", { name: "Email address" });
+    await fireEvent.input(email, { target: { value: "invalid" } });
+    await fireEvent.blur(email);
+
+    const error = screen.getByRole("alert");
+    expect(error).toHaveTextContent("Enter a valid email address.");
+    expect(email).toHaveAttribute("aria-invalid", "true");
+    expect(email).toHaveAttribute("aria-describedby", error.id);
+
+    await fireEvent.click(screen.getByRole("tab", { name: "Invite link" }));
+    expect(screen.queryByText("Enter a valid email address.")).not.toBeInTheDocument();
+    const inviteLink = screen.getByRole("textbox", { name: "Invitation link" });
+    expect(inviteLink).toHaveValue("");
+    await fireEvent.click(screen.getByRole("button", { name: "Create link" }));
+
+    await waitFor(() => expect(onCreateInvite).toHaveBeenCalledWith({ role: "member" }));
+    expect(await screen.findByRole("button", { name: "Copy link" })).toBeInTheDocument();
+    await waitFor(() => expect(inviteLink).toHaveValue("https://studio.example.com/invite/new"));
+    await fireEvent.click(screen.getByRole("button", { name: "Show invitation QR code" }));
+    expect(await screen.findByRole("img", { name: "Invitation QR code" })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Show invitation QR code" }));
+    expect(screen.queryByRole("img", { name: "Invitation QR code" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Create new invitation link" }));
+    await waitFor(() => expect(onCreateInvite).toHaveBeenCalledTimes(2));
+  });
+
+  it("creates a permanent link that lists as never expiring", async () => {
+    const onCreateInvite = vi.fn(async (input: { role: "admin" | "member"; email?: string; permanent?: boolean }) => ({
+      id: "invite-perma",
+      role: input.role,
+      expiresAt: "+275760-09-13T00:00:00.000Z",
+      usedAt: null,
+      inviteUrl: "https://studio.example.com/invite/perma",
+      email: null,
+      permanent: true,
+      useCount: 0,
+    }));
+    render(() => (
+      <ServerSettingsModal
+        {...props({
+          // An account-plane host reports no HTTP origin, which is what carries the flag.
+          server: { ...remoteServer, apiUrl: null },
+          hostStatus: null,
+          members,
+          invites: [
+            {
+              id: "invite-perma",
+              role: "member",
+              expiresAt: "+275760-09-13T00:00:00.000Z",
+              usedAt: null,
+              email: null,
+              permanent: true,
+              useCount: 3,
+            },
+          ],
+          onCreateInvite,
+        })}
+      />
+    ));
+
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Perma link" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Create link" }));
+    await waitFor(() => expect(onCreateInvite).toHaveBeenCalledWith({ role: "member", permanent: true }));
+
+    expect(await screen.findByText("Permanent invitation link")).toBeInTheDocument();
+    expect(screen.getByText(/Never expires · 3 joins/)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Copy link" })).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("hides the permanent tab on legacy HTTP hosts whose wire strips the flag", async () => {
+    render(() => <ServerSettingsModal {...props({ server: remoteServer, hostStatus: null, members })} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    expect(screen.getByRole("tab", { name: "Email" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Invite link" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Perma link" })).not.toBeInTheDocument();
+  });
+});
+
+/** Server settings opened on the Providers section of this computer. */
+function ProvidersSection(providers: HostProviderSettings) {
+  return <ServerSettingsModal {...props({ initialSection: "providers", providers })} />;
+}
+
+/**
+ * A custom endpoint runs inside OpenCode, so the AI providers section offers one only while that CLI
+ * can answer. Its own sign-in does not matter: the endpoint brings its own key.
+ */
+const openCodeReadyStatus: AgentStatus = {
+  phase: "ready",
+  cliVersion: "1.3.13",
+  auth: { kind: "chatgpt", email: "norbert@example.com" },
+  providers: [{ id: "opencode", state: "available", version: "1.3.13", message: null, cliSource: "system" }],
+  capabilities: { chat: "ready", browser: "ready", computerUse: "unavailable" },
+  message: null,
+  fullAccess: true,
+};
+
+/** ChatGPT installed and signed out: the state both sign-in buttons are offered from. */
+const codexSignedOutStatus: AgentStatus = {
+  phase: "ready",
+  cliVersion: "0.55.0",
+  auth: { kind: "signed-out" },
+  providers: [{ id: "codex", state: "sign-in-required", version: "0.55.0", message: null, cliSource: "system" }],
+  capabilities: { chat: "unavailable", browser: "unavailable", computerUse: "unavailable" },
+  message: null,
+  fullAccess: true,
+};
+
+describe("ServerSettingsModal providers", () => {
+  it("offers an update for a CLI the user installed, which has no managed download", async () => {
+    const onUpdateProvider = vi.fn(async () => undefined);
+    const agentStatus: AgentStatus = {
+      phase: "ready",
+      cliVersion: "0.146.0",
+      auth: { kind: "chatgpt", email: "norbert@example.com" },
+      providers: [
+        { id: "codex", state: "available", version: "0.146.0", message: null, cliSource: "system" },
+        { id: "claude", state: "available", version: "2.1.246", message: null, cliSource: "managed" },
+        { id: "grok", state: "not-installed", version: null, message: null },
+      ],
+      capabilities: { chat: "ready", browser: "ready", computerUse: "unavailable" },
+      message: null,
+      fullAccess: true,
+    };
+
+    render(() => (
+      <ProvidersSection
+        agentStatus={agentStatus}
+        providerRuntimeStatuses={{
+          codex: { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: "0.153.4" },
+          claude: { phase: "ready", progress: null, message: null, version: "2.1.246", availableVersion: "2.1.263" },
+        }}
+        providerAvailableVersions={{ codex: "0.153.4", claude: "2.1.263" }}
+        onUpdateProvider={onUpdateProvider}
+      />
+    ));
+
+    // The menu is a Kobalte trigger: it wants the pointer press as well as the click.
+    const moreActions = await screen.findByRole("button", { name: "More actions for ChatGPT" });
+    fireEvent.pointerDown(moreActions, { button: 0 });
+    fireEvent.click(moreActions);
+    fireEvent.pointerUp(await screen.findByRole("menuitem", { name: "Update to 0.153.4" }), { button: 0 });
+    await waitFor(() => expect(onUpdateProvider).toHaveBeenCalledWith("codex"));
+  });
+
+  // The endpoint the user typed carries an API key, so a failed save must not throw the form away:
+  // the previous version closed the dialog before the call and dropped the promise, which made a
+  // refused endpoint look like a saved one.
+  it("keeps the custom endpoint form open when the save fails, and closes it when the next one works", async () => {
+    const onAddCustomProvider = vi
+      .fn<(value: SaveCustomProviderInput) => Promise<CustomProviderRestart>>()
+      .mockRejectedValueOnce(new Error("Studio Local refused the API key."))
+      .mockResolvedValue("restarted");
+    render(() => (
+      <ProvidersSection
+        agentStatus={openCodeReadyStatus}
+        customProviders={[]}
+        onAddCustomProvider={onAddCustomProvider}
+      />
+    ));
+
+    await fireEvent.click(screen.getByRole("button", { name: "Add custom provider" }));
+    // A required field appends an aria-hidden asterisk to its label, so its name is not an exact match.
+    await fireEvent.input(await screen.findByLabelText(/^Provider ID/u), { target: { value: "studio-local" } });
+    await fireEvent.input(screen.getByLabelText(/^Display name/u), { target: { value: "Studio Local" } });
+    await fireEvent.input(screen.getByLabelText(/^Base URL/u), { target: { value: "http://127.0.0.1:11434/v1" } });
+    await fireEvent.input(screen.getByLabelText("Model 1 ID"), { target: { value: "glm-5-air" } });
+    await fireEvent.input(screen.getByLabelText("Model 1 display name"), { target: { value: "GLM 5 Air" } });
+    await fireEvent.input(screen.getByLabelText("API key"), { target: { value: "sk-test-key" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    expect(await screen.findByText("Studio Local refused the API key.")).toBeInTheDocument();
+    // Still open, still holding the endpoint: the user retries rather than types it again.
+    expect(screen.getByLabelText(/^Provider ID/u)).toHaveValue("studio-local");
+    await waitFor(() => expect(onAddCustomProvider).toHaveBeenCalledTimes(1));
+    expect(onAddCustomProvider).toHaveBeenCalledWith({
+      id: "studio-local",
+      name: "Studio Local",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      apiKey: "sk-test-key",
+      models: [{ id: "glm-5-air", name: "GLM 5 Air" }],
+      headers: [],
+    });
+
+    await fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(screen.queryByLabelText(/^Provider ID/u)).not.toBeInTheDocument());
+    expect(screen.getByRole("status")).toHaveTextContent("Saved. OpenBot is loading the models.");
+  });
+
+  // A removal discards the key and drops the models, and neither is undoable, so the callback must
+  // run only after the user answers the question.
+  it("removes a custom endpoint only after the confirmation is accepted", async () => {
+    const onDeleteCustomProvider = vi.fn<(id: string) => Promise<CustomProviderRestart>>(async () => "restarted");
+    render(() => (
+      <ProvidersSection
+        agentStatus={openCodeReadyStatus}
+        customProviders={[
+          {
+            id: "studio-local",
+            name: "Studio Local",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            hasApiKey: true,
+            models: [],
+          },
+        ]}
+        onAddCustomProvider={vi.fn(async () => "restarted" as const)}
+        onDeleteCustomProvider={onDeleteCustomProvider}
+      />
+    ));
+
+    // The endpoints are listed in a dialog now, which the count on the Custom provider row opens.
+    await fireEvent.click(screen.getByRole("button", { name: "Manage 1 endpoint" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Delete Studio Local" }));
+    const declined = await screen.findByRole("alertdialog", { name: "Remove Studio Local?" });
+    expect(declined).toHaveAccessibleDescription(
+      "Its API key is discarded, its models disappear from the picker, and any agent using one falls back to a default model.",
+    );
+    await fireEvent.click(within(declined).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(onDeleteCustomProvider).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Delete Studio Local" }));
+    const accepted = await screen.findByRole("alertdialog", { name: "Remove Studio Local?" });
+    await fireEvent.click(within(accepted).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(onDeleteCustomProvider).toHaveBeenCalledWith("studio-local"));
+    // The outcome is read inside the dialog, which stays open: the section behind it is hidden.
+    expect(await screen.findByRole("status")).toHaveTextContent("Removed. OpenBot is loading the models.");
+  });
+
+  // The custom row is one of the AI providers, so it takes the check mark like its neighbours and
+  // the provider that serves it gives it up. Nothing stores the choice yet; this is the row's state.
+  it("gives the custom provider row the check mark, and takes it from the provider rows", async () => {
+    render(() => (
+      <ProvidersSection
+        agentStatus={openCodeReadyStatus}
+        customProviders={[
+          {
+            id: "studio-local",
+            name: "Studio Local",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            hasApiKey: true,
+            models: [],
+          },
+        ]}
+        onAddCustomProvider={vi.fn(async () => "restarted" as const)}
+      />
+    ));
+
+    const custom = await screen.findByRole("radio", { name: /Custom provider/ });
+    const openCode = screen.getByRole("radio", { name: /OpenCode/ });
+    await fireEvent.click(openCode);
+    expect(openCode).toBeChecked();
+
+    await fireEvent.click(custom);
+    expect(custom).toBeChecked();
+    expect(openCode).not.toBeChecked();
+
+    await fireEvent.click(openCode);
+    expect(custom).not.toBeChecked();
+  });
+
+  // The runtime badge reports the CLI, so the row carries a tier badge only while it adds
+  // anything: "Free" with no key, gone once the key is saved and the runtime "Connected" speaks
+  // for the row. The status is re-read after the key dialog closes, so a save lands on the row
+  // without reopening Settings.
+  it("badges the OpenCode row with the account tier, and refreshes it after the key dialog closes", async () => {
+    const providerKeys = {
+      // Modal open, key dialog open: no key yet. Key dialog close: the save landed.
+      getProviderApiKeyState: vi
+        .fn()
+        .mockResolvedValueOnce({ provider: "opencode" as const, status: "missing" as const })
+        .mockResolvedValueOnce({ provider: "opencode" as const, status: "missing" as const })
+        .mockResolvedValue({ provider: "opencode" as const, status: "saved" as const }),
+      setProviderApiKey: vi.fn(async () => undefined),
+      clearProviderApiKey: vi.fn(async () => undefined),
+      openExternal: vi.fn(async () => undefined),
+    };
+    const onConnectProvider = vi.fn(async () => undefined);
+    render(() => (
+      <ProvidersSection
+        agentStatus={openCodeReadyStatus}
+        providerKeys={providerKeys}
+        onConnectProvider={onConnectProvider}
+      />
+    ));
+
+    await screen.findByText("Free");
+    expect(providerKeys.getProviderApiKeyState).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to OpenCode" }));
+    const input = await screen.findByLabelText("OpenCode Go key");
+    await waitFor(() => expect(input).toBeEnabled());
+    // The dialog reconnects without touching credentials. The row behind keeps its own
+    // "Connect OpenCode" button, so the name matches exactly.
+    fireEvent.click(screen.getByRole("button", { name: /^Reconnect$/ }));
+    await waitFor(() => expect(onConnectProvider).toHaveBeenCalledWith("opencode"));
+    fireEvent.input(input, { target: { value: "go-key-value" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+
+    await waitFor(() =>
+      expect(providerKeys.setProviderApiKey).toHaveBeenCalledWith({ provider: "opencode", key: "go-key-value" }),
+    );
+    // Modal open, key dialog open, key dialog close: the last read is the refresh the badge needs.
+    await waitFor(() => expect(providerKeys.getProviderApiKeyState).toHaveBeenCalledTimes(3));
+    // getAllByText only waits for the first match, so the count itself is what waits here: the
+    // Free badge is gone, leaving the single runtime Connected.
+    await waitFor(() => expect(screen.getAllByText("Connected")).toHaveLength(1));
+    expect(screen.queryByText("Free")).toBeNull();
+  });
+
+  // The second way in, for the computer whose browser cannot finish the first one. What Settings
+  // owns is the entry point and the dialog; the phase itself comes from main.
+  it("opens the code sign-in from the ChatGPT row and shows the code to type", async () => {
+    const [state, setState] = createSignal<ProviderCodeLoginState>({ phase: "starting" });
+    const [provider, setProvider] = createSignal<AgentProviderId | null>(null);
+    const codeLogin = {
+      providers: () => ["codex" as const],
+      provider,
+      state,
+      submit: vi.fn(),
+      start: vi.fn((id: AgentProviderId) => {
+        setProvider(id);
+        setState({
+          phase: "waiting",
+          userCode: "KTQ4-B62MX",
+          verificationUrl: "https://auth.openai.com/codex/device",
+          expiresAt: Date.now() + 600_000,
+        });
+      }),
+      cancel: vi.fn(() => setProvider(null)),
+      openVerificationUrl: vi.fn(),
+    };
+    render(() => <ProvidersSection agentStatus={codexSignedOutStatus} codeLogin={codeLogin} />);
+
+    // The menu is a Kobalte trigger: it wants the pointer press as well as the click.
+    const moreActions = await screen.findByRole("button", { name: "More actions for ChatGPT" });
+    fireEvent.pointerDown(moreActions, { button: 0 });
+    fireEvent.click(moreActions);
+    fireEvent.pointerUp(await screen.findByRole("menuitem", { name: "Log in with code" }), { button: 0 });
+
+    await waitFor(() => expect(codeLogin.start).toHaveBeenCalledWith("codex"));
+    expect(await screen.findByLabelText("Login code K T Q 4 - B 6 2 M X")).toHaveTextContent("KTQ4-B62MX");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close log in to ChatGPT" }));
+
+    await waitFor(() => expect(codeLogin.cancel).toHaveBeenCalledTimes(1));
+  });
+});

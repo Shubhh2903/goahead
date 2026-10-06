@@ -1,0 +1,343 @@
+import type { AgentPromptQuestion } from "@openbot/contracts/ipc";
+import {
+  ArrowUp,
+  Bubble,
+  BubbleContent,
+  Button,
+  ChevronDown,
+  Message,
+  MessageContent,
+  MessageFooter,
+  Plus,
+  Textarea,
+} from "@openbot/ui";
+import { QuestionPromptBubble, type QuestionPromptBubbleProps } from "@openbot/ui/components/QuestionPromptBubble";
+import { AgentAvatar } from "@openbot/ui/features/agents/AgentAvatar";
+import { fn } from "storybook/test";
+import type { Meta, StoryObj } from "storybook-solidjs-vite";
+
+const singleQuestion: AgentPromptQuestion[] = [
+  {
+    id: "reply",
+    header: "Message",
+    question: "Want me to send that reply?",
+    isSecret: false,
+    options: [
+      { label: "Send that reply", description: "Send the prepared message now." },
+      { label: "Hold off", description: "Keep the draft without sending it." },
+      { label: "Also message the second seller", description: "Send the same offer to both listings." },
+    ],
+  },
+];
+
+const multipleQuestions: AgentPromptQuestion[] = [
+  {
+    id: "approach",
+    header: "Approach",
+    question: "Which auth approach should we use?",
+    isSecret: false,
+    options: [
+      { label: "Session cookies", description: "Best fit for the desktop session." },
+      { label: "JWT bearer", description: "Useful for clients that manage their own token." },
+      { label: "OAuth only", description: "Require an external identity provider." },
+    ],
+  },
+  {
+    id: "secrets",
+    header: "Secrets",
+    question: "Where should local development secrets live?",
+    isSecret: false,
+    options: [
+      { label: "Environment file", description: "Keep secrets in an ignored local file." },
+      { label: "Secrets manager", description: "Read secrets from a managed vault." },
+      { label: "CI only", description: "Do not provide secrets to local runs." },
+    ],
+  },
+  {
+    id: "rollout",
+    header: "Rollout",
+    question: "How should we release the change?",
+    isSecret: false,
+    options: [
+      { label: "Gradual rollout", description: "Start with a small group and expand." },
+      { label: "Full release", description: "Enable the change for everyone at once." },
+    ],
+  },
+];
+
+const customQuestion: AgentPromptQuestion[] = [
+  {
+    id: "outcome",
+    header: "Outcome",
+    question: "What result should the agent produce?",
+    isSecret: false,
+    options: [
+      { label: "Implementation plan", description: "Prepare a decision-complete plan." },
+      { label: "Working prototype", description: "Build an interactive first version." },
+    ],
+  },
+];
+
+const secretQuestion: AgentPromptQuestion[] = [
+  {
+    id: "token",
+    header: "Private answer",
+    question: "Which temporary access token should the agent use?",
+    isSecret: true,
+    options: null,
+  },
+];
+
+function QuestionPromptChatPreview(props: QuestionPromptBubbleProps) {
+  return (
+    <section class="conversation-panel question-prompt-chat-preview" aria-label="Conversation preview">
+      <header class="conversation-header">
+        <div class="conversation-heading-group">
+          <Button variant="ghost" size="sm" type="button" class="conversation-title" aria-label="View Chief settings">
+            <AgentAvatar seed="chief" motion="idle" />
+            <h1>Chief</h1>
+          </Button>
+        </div>
+        <div class="conversation-header-actions">
+          <Button
+            variant="ghost"
+            size="sm"
+            type="button"
+            class="provider-model-trigger question-prompt-chat-model"
+            aria-label="Change model"
+          >
+            <span class="provider-model-trigger-name">GPT-5.6 Luna</span>
+            <ChevronDown aria-hidden="true" />
+          </Button>
+        </div>
+      </header>
+
+      <div class="conversation-scroll">
+        <div class="question-prompt-chat-thread">
+          <time class="time-marker" datetime="2026-08-28T10:00:00.000Z">
+            Today, 10:00
+          </time>
+
+          <Message role="article" align="end" class="message-entry message-entry-user" aria-label="You at 10:00">
+            <MessageContent>
+              <div class="message-shell">
+                <Bubble align="end" variant="secondary">
+                  <BubbleContent>Help me choose the safest auth setup for the launch.</BubbleContent>
+                </Bubble>
+              </div>
+              <MessageFooter>10:00</MessageFooter>
+            </MessageContent>
+          </Message>
+
+          <Message role="article" align="start" class="message-entry message-entry-agent" aria-label="Chief at 10:01">
+            <MessageContent>
+              <div class="message-shell">
+                <Bubble variant="muted">
+                  <BubbleContent>I need a few decisions before I finish the setup.</BubbleContent>
+                </Bubble>
+              </div>
+              <MessageFooter>10:01</MessageFooter>
+            </MessageContent>
+          </Message>
+
+          <Message
+            role="article"
+            align="start"
+            class="message-entry message-entry-agent question-prompt-chat-question"
+            aria-label="Chief asks questions at 10:01"
+          >
+            <MessageContent>
+              <QuestionPromptBubble {...props} />
+              <MessageFooter>10:01</MessageFooter>
+            </MessageContent>
+          </Message>
+        </div>
+      </div>
+
+      <div class="composer-wrap question-prompt-chat-composer-wrap">
+        <div class="composer" data-compact="">
+          <div class="composer-input-label">
+            <Textarea aria-label="Message Chief" placeholder="Message Chief" rows={1} />
+          </div>
+          <div class="composer-toolbar">
+            <Button
+              variant="ghost"
+              type="button"
+              class="composer-button"
+              aria-label="Add to prompt"
+              title="Add to prompt"
+            >
+              <Plus aria-hidden="true" />
+            </Button>
+            <div class="composer-primary-actions">
+              <Button
+                variant="ghost"
+                type="button"
+                class="voice-button"
+                aria-label="Send message"
+                title="Send message"
+                disabled
+              >
+                <ArrowUp aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const meta = {
+  title: "Conversation/QuestionPromptBubble",
+  component: QuestionPromptBubble,
+  args: {
+    questions: singleQuestion,
+    onSubmit: fn(async () => false),
+  },
+  decorators: [
+    (Story) => (
+      <main class="question-prompt-story-stage">
+        <Story />
+      </main>
+    ),
+  ],
+  parameters: { layout: "fullscreen", a11y: { test: "error" } },
+} satisfies Meta<typeof QuestionPromptBubble>;
+
+export default meta;
+type Story = StoryObj<typeof meta>;
+
+const renderInChat: Story["render"] = (args) => <QuestionPromptChatPreview {...args} />;
+
+export const InChat: Story = {
+  name: "In chat",
+  args: { questions: multipleQuestions, onSubmit: fn(async () => true) },
+  render: renderInChat,
+};
+
+export const SingleQuestion: Story = {
+  render: renderInChat,
+};
+
+export const MultipleQuestions: Story = {
+  args: { questions: multipleQuestions },
+  render: renderInChat,
+};
+
+export const CustomAnswer: Story = {
+  args: { questions: customQuestion },
+  render: renderInChat,
+};
+
+export const SecretAnswer: Story = {
+  args: { questions: secretQuestion },
+  render: renderInChat,
+};
+
+export const Sending: Story = {
+  args: { pending: true },
+  render: renderInChat,
+};
+
+export const Empty: Story = {
+  args: { questions: [] },
+  render: renderInChat,
+};
+
+export const Narrow: Story = {
+  args: { questions: multipleQuestions },
+  render: renderInChat,
+  decorators: [
+    (Story) => (
+      <div class="question-prompt-story-narrow">
+        <Story />
+      </div>
+    ),
+  ],
+};
+
+export const PersistedAnswered: Story = {
+  args: {
+    questions: multipleQuestions,
+    resolution: {
+      status: "answered",
+      responses: {
+        approach: { status: "answered", answers: ["Session cookies"] },
+        secrets: { status: "answered", answers: ["Environment file"] },
+        rollout: { status: "skipped" },
+      },
+    },
+  },
+  render: renderInChat,
+};
+
+export const PersistedExpired: Story = {
+  args: { questions: multipleQuestions, resolution: { status: "expired" } },
+  render: renderInChat,
+};
+
+export const PersistedSingleAnswer: Story = {
+  args: {
+    questions: singleQuestion,
+    resolution: {
+      status: "answered",
+      responses: { reply: { status: "answered", answers: ["Send that reply"] } },
+    },
+  },
+  render: renderInChat,
+};
+
+export const PersistedPrivateAnswer: Story = {
+  args: {
+    questions: secretQuestion,
+    resolution: {
+      status: "answered",
+      responses: { token: { status: "answered" } },
+    },
+  },
+  render: renderInChat,
+};
+
+export const PersistedLongAnswer: Story = {
+  args: {
+    questions: [
+      {
+        id: "outcome",
+        header: "Outcome",
+        question:
+          "What should the implementation plan include so that the team can review the authentication setup and release it safely?",
+        isSecret: false,
+        options: null,
+      },
+    ],
+    resolution: {
+      status: "answered",
+      responses: {
+        outcome: {
+          status: "answered",
+          answers: [
+            "Prepare a technical brief with the proposed approach, risks, owners, and steps to reverse the release. Include this reference: authentication-session-cookie-configuration-and-release-verification-checklist.",
+          ],
+        },
+      },
+    },
+  },
+  render: renderInChat,
+};
+
+export const PersistedLongAnswerNarrow: Story = {
+  ...PersistedLongAnswer,
+  decorators: [
+    (Story) => (
+      <div class="question-prompt-story-narrow">
+        <Story />
+      </div>
+    ),
+  ],
+};
+
+export const PreviewOnly: Story = {
+  args: { readOnly: true },
+  render: renderInChat,
+};

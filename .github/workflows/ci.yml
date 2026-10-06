@@ -1,0 +1,511 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
+jobs:
+  detect:
+    # Four lanes check workspaces that most pull requests do not touch, so a pull request runs each
+    # of them only when a path it reads changed. A path every workspace reads - the lockfile, a
+    # shared package, a workflow - runs all of them. A push to main and a manual run always run
+    # every lane: `deploy-production` needs them, and a skipped need would skip the deploy.
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sites: ${{ steps.lanes.outputs.sites }}
+      remote: ${{ steps.lanes.outputs.remote }}
+      storybook: ${{ steps.lanes.outputs.storybook }}
+      surfaces: ${{ steps.lanes.outputs.surfaces }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A pull request checks out its merge commit. Its first parent is the base branch, so the
+          # two commits hold exactly the changes the pull request brings.
+          fetch-depth: 2
+
+      - name: Select lanes
+        id: lanes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            changed="package.json"
+          else
+            changed="$(git diff --name-only HEAD^1 HEAD)"
+          fi
+          shared='^(package\.json|bun\.lock|bunfig\.toml|\.nvmrc|biome\.json|tsconfig[^/]*\.json|\.github/|packages/|patches/|tools/|vendor/)'
+          lane() {
+            if grep -Eq "$shared|$2" <<<"$changed"; then
+              echo "$1=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$1=false" >> "$GITHUB_OUTPUT"
+            fi
+          }
+          lane sites '^apps/site-router/'
+          lane remote '^(remote|scripts)/'
+          lane storybook '^(src|apps/auth-api|\.storybook|resources|marketplace|build)/'
+          lane surfaces '^(apps/mobile|apps/site-router|remote|scripts)/'
+          cat "$GITHUB_OUTPUT"
+
+  check:
+    # `check:desktop` is this job and `browser` together, in that order. The
+    # browser smoke test starts the real Electron binary under xvfb on another
+    # Ubuntu runner, so the two run side by side. The install here is the full
+    # one: this job builds with electron-vite, which resolves the `electron`
+    # package.
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Check unused files and dependencies
+        run: bun run knip:check
+
+      - name: Check image asset directories
+        run: bun run check:assets
+
+      - name: Check desktop application
+        run: bun run check:desktop:static
+
+      - name: Check ratcheted lint rules
+        run: bun run lint:ratchet
+
+      - name: Check translation catalogs
+        run: bun run i18n:check
+
+      - name: Check ratcheted TypeScript options
+        run: bun run types:ratchet
+
+  browser:
+    # The smoke test starts the real Electron binary and opens windows, so it
+    # needs a display. Ubuntu runners have none, so it runs under xvfb, where
+    # the queue is shorter and the boot faster than a macOS runner. The install
+    # is the default full one: it downloads the Electron binary the test
+    # starts, which `development-checks.md` measures as faster than restoring
+    # a binary cache.
+    name: Browser smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install a virtual display
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes xvfb
+
+      - name: Run the browser smoke test
+        run: xvfb-run -a bun run test:browser
+
+  tests-desktop:
+    # ubuntu-latest gives 4 vCPUs, so vitest runs 3 workers and the job is
+    # CPU-bound. The three test suites run in parallel jobs so the short
+    # site-router and remote suites no longer wait for the desktop suite.
+    #
+    # The desktop suite is the long pole of the three, so it is split again
+    # across shards that run as their own runners. The split is by recorded
+    # duration rather than vitest's own file-size one - see
+    # tools/vitest/balanced-sequencer.ts for why, and run `bun run
+    # test:durations` when the two shards below stop finishing together.
+    name: Tests (desktop ${{ matrix.shard }}/2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install: ignore-scripts
+
+      - name: Run desktop tests
+        run: bun run test:desktop -- --shard=${{ matrix.shard }}/2
+
+      # Written by the transfer budget tests in the shard that runs each one. The trusted
+      # budget-report.yml workflow compares these reports with the reports of main.
+      - name: Upload transfer budget report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: transfer-budget-${{ matrix.shard }}
+          path: .openbot-build/transfer-budget/
+          if-no-files-found: ignore
+
+  tests-sites:
+    name: Tests (sites)
+    needs: detect
+    if: needs.detect.outputs.sites == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install: ignore-scripts
+
+      - name: Run site router tests
+        run: bun run test:sites
+
+  tests-remote:
+    name: Tests (remote)
+    needs: detect
+    if: needs.detect.outputs.remote == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install: ignore-scripts
+
+      - name: Run remote API tests
+        run: bun run test:remote
+
+  surfaces:
+    # `desktop:typecheck` covers only the desktop projects, so without this job
+    # `apps/mobile`, `apps/site-router`, `packages/team-client`, `remote/api`,
+    # `packages/logging`, `packages/user-errors` and `packages/i18n`
+    # first break at release time rather than on the pull request that broke
+    # them. Mobile's typecheck generates `expo-env.d.ts` and the uniwind
+    # declarations first - both are gitignored, so a fresh checkout cannot
+    # resolve `global.css`. `remote/api` is typechecked through the workspace's
+    # own script rather than through `remote:check`, so that the tests it also
+    # runs stay in the Tests job; its `include` reaches `../scripts/*.ts`, so the
+    # stack scripts come with it. `remote:check:compose` is the rest of
+    # `remote:check`: `docker compose config` interpolates client-side and never
+    # opens a socket, so it validates both Compose files on a runner with no
+    # daemon.
+    name: Surfaces
+    needs: detect
+    if: needs.detect.outputs.surfaces == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install: ignore-scripts
+
+      - name: Typecheck mobile
+        run: bun run mobile:typecheck
+
+      - name: Typecheck site router
+        run: bun run typecheck:sites
+
+      - name: Typecheck team client
+        run: bun run typecheck:team-client
+
+      - name: Typecheck remote API
+        run: bun run typecheck:remote
+
+      - name: Typecheck logging, user errors and i18n
+        run: bun run --parallel typecheck:logging typecheck:user-errors typecheck:i18n
+
+      - name: Validate the remote Compose files
+        run: bun run remote:check:compose
+
+  api:
+    name: API
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install: ignore-scripts
+
+      - name: Check API
+        run: bun run check:api
+
+  storybook:
+    name: Storybook build
+    needs: detect
+    if: needs.detect.outputs.storybook == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install: ignore-scripts
+
+      - name: Build Storybook
+        run: bun run build-storybook
+        env:
+          # This output is not published. Skip Solid's per-component docgen analysis.
+          OPENBOT_STORYBOOK_CHECK: "true"
+
+  preview:
+    # This job builds the pull request's Worker with no secrets and no write token. The trusted
+    # `cloudflare-preview.yml` workflow uploads the build and comments on the pull request after
+    # this run completes; it runs code from `main` only. Forks get no preview.
+    name: Cloudflare preview build
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Build isolated preview
+        run: bun run api:build
+        env:
+          CLOUDFLARE_ENV: preview
+
+      - name: Upload preview build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cloudflare-preview
+          path: apps/auth-api/dist
+          # The build writes `.assetsignore`, which keeps the config out of the public assets.
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+  all-checks-pass:
+    # The one check branch protection requires. A lane that `detect` skipped counts as passed; a
+    # failed or cancelled job, including `detect` itself, fails this one.
+    name: All required checks pass
+    if: always()
+    needs: [detect, check, browser, tests-desktop, tests-sites, tests-remote, surfaces, api, storybook, preview]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail on a failed or cancelled job
+        shell: bash
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            case "$result" in
+              success | skipped) ;;
+              *)
+                echo "A required job ended as $result." >&2
+                exit 1
+                ;;
+            esac
+          done
+
+  deploy-production:
+    name: Deploy Cloudflare production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # `surfaces` gates the deploy even though the Worker it ships lives in
+    # `apps/auth-api`, which `api` already covers: mobile, the site router, the
+    # team client and the remote stack all consume the account API, so a red
+    # Surfaces is the signal that this deploy is the thing about to break them.
+    needs: [check, browser, tests-desktop, tests-sites, tests-remote, api, storybook, surfaces]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: cloudflare-production
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Build production Worker
+        run: bun run api:build
+
+      - name: Apply production D1 migrations
+        working-directory: apps/auth-api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PRODUCTION_DEPLOY_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: ../../node_modules/.bin/wrangler d1 migrations apply DB --remote --config wrangler.jsonc
+
+      - name: Deploy public site router
+        working-directory: apps/site-router
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_SITE_ROUTER_DEPLOY_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: ../../node_modules/.bin/wrangler deploy --config wrangler.jsonc --keep-vars
+
+      - name: Prepare runtime secrets
+        id: runtime-secrets
+        shell: bash
+        env:
+          EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
+          SKILLS_ADMIN_TOKEN: ${{ secrets.SKILLS_ADMIN_TOKEN }}
+          SITE_OPERATIONS_ADMIN_TOKEN: ${{ secrets.SITE_OPERATIONS_ADMIN_TOKEN }}
+          SITE_REPORT_HASH_SECRET: ${{ secrets.SITE_REPORT_HASH_SECRET }}
+          REMOTE_TICKET_PRIVATE_JWK: ${{ secrets.REMOTE_TICKET_PRIVATE_JWK }}
+          REMOTE_TICKET_PUBLIC_JWKS: ${{ secrets.REMOTE_TICKET_PUBLIC_JWKS }}
+          REMOTE_AUTH_WEBHOOK_SECRET: ${{ secrets.REMOTE_AUTH_WEBHOOK_SECRET }}
+          # Optional: an unset value keeps the value that the Worker has. See docs/hosted-servers.md.
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          BOAT_API_KEY: ${{ secrets.BOAT_API_KEY }}
+          BOAT_WEBHOOK_SECRET: ${{ secrets.BOAT_WEBHOOK_SECRET }}
+          OPENPANEL_CLIENT_ID: ${{ secrets.OPENPANEL_CLIENT_ID }}
+          OPENPANEL_CLIENT_SECRET: ${{ secrets.OPENPANEL_CLIENT_SECRET }}
+          # GitHub refuses an Actions secret name that starts with GITHUB_. The Worker name is GITHUB_APP_PRIVATE_KEY.
+          OPENBOT_GITHUB_APP_PRIVATE_KEY: ${{ secrets.OPENBOT_GITHUB_APP_PRIVATE_KEY }}
+          HOSTED_SERVER_TEMPLATE: ${{ vars.HOSTED_SERVER_TEMPLATE }}
+          APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
+          APNS_KEY_ID: ${{ secrets.APNS_KEY_ID }}
+        run: |
+          secrets_path="$RUNNER_TEMP/openbot-worker-secrets.json"
+          umask 077
+          SECRETS_PATH="$secrets_path" bun -e '
+            const smtp = process.env.EMAIL_SMTP_PASSWORD;
+            const skillsAdmin = process.env.SKILLS_ADMIN_TOKEN;
+            const siteOperationsAdmin = process.env.SITE_OPERATIONS_ADMIN_TOKEN;
+            const siteReportHash = process.env.SITE_REPORT_HASH_SECRET;
+            const remotePrivateJwk = process.env.REMOTE_TICKET_PRIVATE_JWK;
+            const remotePublicJwks = process.env.REMOTE_TICKET_PUBLIC_JWKS;
+            const remoteWebhookSecret = process.env.REMOTE_AUTH_WEBHOOK_SECRET;
+            const path = process.env.SECRETS_PATH;
+            if (
+              !smtp ||
+              !skillsAdmin ||
+              !siteReportHash ||
+              !remotePrivateJwk ||
+              !remotePublicJwks ||
+              !remoteWebhookSecret ||
+              !path
+            ) {
+              throw new Error("Required production secrets are missing.");
+            }
+            // A Stripe or boat key without its webhook secret takes payments or makes sandboxes that
+            // the Worker never sees, so each pair is set together or not at all.
+            const optional = {};
+            for (const names of [
+              ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"],
+              ["BOAT_API_KEY", "BOAT_WEBHOOK_SECRET"],
+              ["OPENPANEL_CLIENT_ID", "OPENPANEL_CLIENT_SECRET"],
+              ["HOSTED_SERVER_TEMPLATE"],
+              // The Live Activity relay stays off until both are set.
+              ["APNS_PRIVATE_KEY", "APNS_KEY_ID"],
+            ]) {
+              const present = names.filter((name) => process.env[name]?.trim());
+              if (present.length === 0) continue;
+              if (present.length !== names.length) throw new Error(`Set ${names.join(" and ")} together.`);
+              for (const name of names) optional[name] = process.env[name].trim();
+            }
+            const githubAppKey = process.env.OPENBOT_GITHUB_APP_PRIVATE_KEY?.trim();
+            if (githubAppKey) optional.GITHUB_APP_PRIVATE_KEY = githubAppKey;
+            const stripeKey = optional.STRIPE_SECRET_KEY;
+            if (stripeKey && !stripeKey.startsWith("sk_live_") && !stripeKey.startsWith("rk_live_")) {
+              throw new Error("STRIPE_SECRET_KEY is not a live key.");
+            }
+            const secrets = {
+              ...optional,
+              EMAIL_SMTP_PASSWORD: smtp,
+              SKILLS_ADMIN_TOKEN: skillsAdmin,
+              SITE_REPORT_HASH_SECRET: siteReportHash,
+              ...(siteOperationsAdmin ? { SITE_OPERATIONS_ADMIN_TOKEN: siteOperationsAdmin } : {}),
+              REMOTE_TICKET_PRIVATE_JWK: remotePrivateJwk,
+              REMOTE_TICKET_PUBLIC_JWKS: remotePublicJwks,
+              REMOTE_AUTH_WEBHOOK_SECRET: remoteWebhookSecret,
+            };
+            await Bun.write(path, JSON.stringify(secrets));
+          '
+          echo "path=$secrets_path" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy production Worker
+        working-directory: apps/auth-api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PRODUCTION_DEPLOY_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: ../../node_modules/.bin/wrangler deploy --config dist/server/wrangler.json --keep-vars --secrets-file "${{ steps.runtime-secrets.outputs.path }}"
+
+      - name: Remove temporary runtime secrets
+        if: always() && steps.runtime-secrets.outputs.path != ''
+        run: rm -f "${{ steps.runtime-secrets.outputs.path }}"
+
+      - name: Verify production deployment
+        shell: bash
+        env:
+          SITE_HOSTING_EXPECTED_ENABLED: ${{ vars.SITE_HOSTING_EXPECTED_ENABLED }}
+        run: |
+          verification_dir="$(mktemp -d)"
+          trap 'rm -rf "$verification_dir"' EXIT
+          curl --fail --silent --show-error --retry 5 --retry-all-errors https://openbot.run/ >/dev/null
+          join_status="$(curl --silent --show-error --retry 5 --retry-all-errors \
+            --max-redirs 0 --dump-header "$verification_dir/join.headers" \
+            --output "$verification_dir/join.html" --write-out '%{http_code}' \
+            https://openbot.run/join)"
+          test "$join_status" = "200"
+          tr -d '\r' < "$verification_dir/join.headers" | grep -Eiq '^cache-control:.*no-store'
+          tr -d '\r' < "$verification_dir/join.headers" | grep -Eiq '^referrer-policy:.*no-referrer'
+          association_status="$(curl --silent --show-error --retry 5 --retry-all-errors \
+            --max-redirs 0 --dump-header "$verification_dir/association.headers" \
+            --output "$verification_dir/association.json" --write-out '%{http_code}' \
+            https://openbot.run/.well-known/apple-app-site-association)"
+          test "$association_status" = "200"
+          tr -d '\r' < "$verification_dir/association.headers" | grep -Eiq '^content-type: application/json'
+          jq -e '.applinks.details == [{"appID":"ZTRDTUL87R.app.openbot.desktop","paths":["/join"]},{"appID":"ZTRDTUL87R.run.openbot.mobile","paths":["/join","/agents/*"]}]' \
+            "$verification_dir/association.json" >/dev/null
+          curl --fail --silent --show-error --retry 5 --retry-all-errors https://api.openbot.run/health/live >/dev/null
+          curl --fail --silent --show-error --retry 5 --retry-all-errors https://api.openbot.run/health/ready >/dev/null
+          site_status="$(curl --silent --show-error --retry 5 --retry-all-errors \
+            --max-redirs 0 --dump-header "$verification_dir/site-router.headers" \
+            --output "$verification_dir/site-router.txt" --write-out '%{http_code}' \
+            https://deployment-smoke-check.openbot.site/)"
+          case "$SITE_HOSTING_EXPECTED_ENABLED" in
+            true) test "$site_status" = "404" ;;
+            false) test "$site_status" = "503" ;;
+            *) echo "SITE_HOSTING_EXPECTED_ENABLED must be true or false." >&2; exit 1 ;;
+          esac
+          tr -d '\r' < "$verification_dir/site-router.headers" | grep -Eiq '^cache-control:.*no-store'
+          tr -d '\r' < "$verification_dir/site-router.headers" | grep -Eiq '^x-content-type-options:.*nosniff'
+          tr -d '\r' < "$verification_dir/site-router.headers" | grep -Eiq '^x-robots-tag:.*noindex'

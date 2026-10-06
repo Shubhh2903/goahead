@@ -1,0 +1,135 @@
+import { Link } from "expo-router";
+import { Typography } from "heroui-native";
+import { useThemeColor } from "heroui-native/hooks";
+import type { PropsWithChildren } from "react";
+import { View } from "react-native";
+import Animated, {
+  CurvedTransition,
+  Easing,
+  FadeIn,
+  FadeOut,
+  LinearTransition,
+  ReduceMotion,
+} from "react-native-reanimated";
+import { useAgentChatPreview } from "@/features/agents/components/agent-chat-preview";
+import { useAgentContextMenu } from "@/features/agents/components/agent-context-menu";
+import { AgentPinAvatar } from "@/features/agents/components/agent-pin-avatar";
+import { BloubAvatar } from "@/features/agents/components/bloub-avatar";
+import { ChatLinkPressable } from "@/features/agents/components/chat-link-pressable";
+import { useAgentUnread } from "@/features/workspace/components/use-live-workspace";
+import type { MobileAgent } from "@/features/workspace/context/mobile-workspace-context";
+import { useText } from "@/shared/lib/text";
+
+const EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1);
+const EASE_IN_OUT = Easing.bezier(0.77, 0, 0.175, 1);
+const PINNED_LAYOUT = LinearTransition.duration(220).easing(EASE_IN_OUT).reduceMotion(ReduceMotion.System);
+const PINNED_ITEM_LAYOUT = CurvedTransition.duration(240)
+  .easingX(EASE_IN_OUT)
+  .easingY(EASE_IN_OUT)
+  .reduceMotion(ReduceMotion.System);
+const PINNED_ENTER = FadeIn.duration(180).easing(EASE_OUT).reduceMotion(ReduceMotion.System);
+const PINNED_EXIT = FadeOut.duration(140).easing(EASE_OUT).reduceMotion(ReduceMotion.System);
+
+export function PinnedAgentsGrid({ agents, children }: PropsWithChildren<{ agents: MobileAgent[] }>) {
+  return (
+    <Animated.View layout={PINNED_LAYOUT}>
+      {agents.length > 0 || children ? (
+        <Animated.View exiting={PINNED_EXIT} style={{ width: "100%" }}>
+          <View
+            style={{
+              flexDirection: "row",
+              flexWrap: "wrap",
+              rowGap: 18,
+              paddingHorizontal: 12,
+              paddingVertical: 22,
+            }}
+          >
+            {agents.map((agent) => (
+              <PinnedAgentItem key={agent.id} agent={agent} />
+            ))}
+            {children}
+          </View>
+        </Animated.View>
+      ) : null}
+    </Animated.View>
+  );
+}
+
+function PinnedAgentItem({ agent }: { agent: MobileAgent }) {
+  const { t } = useText();
+  const [background, accent] = useThemeColor(["background", "accent"]);
+  const agentContextMenu = useAgentContextMenu(agent);
+  const agentChatPreview = useAgentChatPreview(agent);
+  const isUnread = useAgentUnread(agent.id);
+
+  return (
+    <PinnedChatItem>
+      <Link href={{ pathname: "/chat/[agentId]", params: { agentId: agent.id } }} asChild>
+        <Link.Trigger>
+          <ChatLinkPressable
+            chatId={agent.id}
+            accessibilityLabel={
+              agent.title.trim()
+                ? t("mobile.agent.list.openPinnedWithTitle", { name: agent.name, title: agent.title.trim() })
+                : t("mobile.agent.list.openPinned", { name: agent.name })
+            }
+            accessibilityRole="button"
+            className="w-full items-center gap-2 px-1"
+            onPressIn={agentChatPreview.onPressIn}
+            style={({ pressed }) => ({ opacity: pressed ? 0.58 : 1 })}
+          >
+            <Link.AppleZoom>
+              <AgentPinAvatar agentId={agent.id} location="pinned" size={64}>
+                <BloubAvatar
+                  agentId={agent.id}
+                  serverId={agent.serverId}
+                  hue={agent.avatarHue}
+                  seed={agent.avatarSeed}
+                  size={64}
+                  animateIdle={false}
+                />
+                {isUnread ? (
+                  <View
+                    className="absolute right-0 top-0 size-3.5 rounded-full border-2 bg-accent"
+                    style={{ borderColor: background, backgroundColor: accent }}
+                  />
+                ) : null}
+              </AgentPinAvatar>
+            </Link.AppleZoom>
+            <View className="w-full gap-0.5">
+              <Typography.Paragraph
+                type="body-xs"
+                align="center"
+                className="w-full text-text-secondary"
+                numberOfLines={1}
+              >
+                {agent.name}
+              </Typography.Paragraph>
+              {agent.title.trim() ? (
+                <Typography.Paragraph type="body-xs" align="center" className="w-full text-muted" numberOfLines={1}>
+                  {agent.title.trim()}
+                </Typography.Paragraph>
+              ) : null}
+            </View>
+            {agentChatPreview.measurer}
+          </ChatLinkPressable>
+        </Link.Trigger>
+        {agentChatPreview.preview}
+        {agentContextMenu}
+      </Link>
+    </PinnedChatItem>
+  );
+}
+
+export function PinnedChatItem({ children }: PropsWithChildren) {
+  return (
+    <Animated.View
+      entering={PINNED_ENTER}
+      exiting={PINNED_EXIT}
+      layout={PINNED_ITEM_LAYOUT}
+      style={{ width: "25%", alignItems: "center" }}
+    >
+      {children}
+    </Animated.View>
+  );
+}

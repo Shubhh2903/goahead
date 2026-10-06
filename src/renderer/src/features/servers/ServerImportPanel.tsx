@@ -1,0 +1,158 @@
+import type { AgentImportPreview, AgentImportResult, OpenBotDesktopApi } from "@openbot/contracts/ipc";
+import {
+  type AgentImportPhase,
+  type AgentImportSetup,
+  AgentImportView,
+} from "@openbot/ui/features/import/AgentImportView";
+import { useText } from "@openbot/ui/text";
+import { createSignal, createStore, onSettled } from "solid-js";
+import { actionToast } from "../../action-toast";
+
+/** The way into Grok Bot this viewer chose last, so a user who set up the skill starts there. */
+const SETUP_STORAGE_KEY = "openbot.agent-import.setup";
+
+function readSetup(): AgentImportSetup {
+  try {
+    return window.localStorage.getItem(SETUP_STORAGE_KEY) === "skill" ? "skill" : "agent";
+  } catch {
+    return "agent";
+  }
+}
+
+export type AgentImportCalls = OpenBotDesktopApi["agentImport"] & {
+  /** Opens the ready export agent's Grok Bot page. */
+  openExportAgent(): void;
+};
+
+export interface ServerImportOptions {
+  onOpenAgent: (agentId: string) => void;
+  /** Closes the settings the panel is in. */
+  onClose: () => void;
+  /** The calls of a client with no `window.openbot`, such as the web client. */
+  calls?: AgentImportCalls;
+}
+
+const desktopCalls = (): AgentImportCalls => ({
+  ...window.openbot.agentImport,
+  openExportAgent: () => void window.openbot.openExternal("grok-bot-export"),
+});
+
+interface ImportState {
+  phase: AgentImportPhase;
+  error: string | null;
+  preview: AgentImportPreview | null;
+  result: AgentImportResult | null;
+}
+
+/**
+ * Server settings > Import. On desktop, main opens the file dialog and the host keeps the export
+ * under a token, so the panel holds the preview and never a path. A preview left open when the panel
+ * closes is released.
+ */
+export function ServerImportPanel(props: ServerImportOptions & { serverId: string }) {
+  const { t, errorMessage } = useText();
+  const calls = props.calls ?? desktopCalls();
+  // The server the preview's token belongs to, fixed for the life of the panel.
+  const serverId = props.serverId;
+  const [state, setState] = createStore<ImportState>({ phase: "idle", error: null, preview: null, result: null });
+  const show = (next: ImportState) =>
+    setState((draft) => {
+      Object.assign(draft, next);
+    });
+
+  const release = () => {
+    const token = state.preview?.token;
+    if (token) void calls.discard(token, serverId).catch(() => undefined);
+  };
+  onSettled(() => release);
+
+  const [setup, setSetup] = createSignal(readSetup());
+  const changeSetup = (next: AgentImportSetup) => {
+    setSetup(next);
+    try {
+      window.localStorage.setItem(SETUP_STORAGE_KEY, next);
+    } catch {
+      // The choice is a convenience. Without storage, the panel opens on the default again.
+    }
+  };
+
+  // Read once: the skill ships with the app and does not change while it runs.
+  const [exportSkill, setExportSkill] = createSignal<string | null>(null);
+  onSettled(() => {
+    void calls
+      .readSkill()
+      .then(setExportSkill)
+      .catch(() => setExportSkill(null));
+  });
+
+  const saveSkill = async () => {
+    try {
+      await calls.saveSkill();
+    } catch (error) {
+      actionToast.error(t("server.import.skillSaveFailed"), {
+        description: errorMessage(error, t("server.import.tryAgain")),
+      });
+    }
+  };
+
+  const choose = async () => {
+    const open = state.preview;
+    setState((draft) => {
+      draft.phase = "reading";
+      draft.error = null;
+    });
+    try {
+      // Null when the user cancels the dialog. Main keeps the export that was open until then.
+      const preview = (await calls.choose(serverId)) ?? open;
+      show({ phase: preview ? "review" : "idle", error: null, preview, result: null });
+    } catch (error) {
+      // A check before the host read the new export can fail with the old one still open there.
+      // A released token makes the discard do nothing.
+      if (open) void calls.discard(open.token, serverId).catch(() => undefined);
+      show({ phase: "idle", error: errorMessage(error, t("server.import.readFailed")), preview: null, result: null });
+    }
+  };
+
+  const apply = async (keys: string[], channelKeys: string[]) => {
+    const preview = state.preview;
+    if (!preview) return;
+    setState((draft) => {
+      draft.phase = "importing";
+      draft.error = null;
+    });
+    try {
+      const result = await calls.apply({ token: preview.token, keys, channelKeys }, serverId);
+      show({ phase: "done", error: null, preview: null, result });
+    } catch (error) {
+      // The token is spent either way, so the user chooses the export again.
+      show({ phase: "idle", error: errorMessage(error, t("server.import.applyFailed")), preview: null, result: null });
+    }
+  };
+
+  const reset = () => {
+    release();
+    show({ phase: "idle", error: null, preview: null, result: null });
+  };
+
+  return (
+    <AgentImportView
+      phase={state.phase}
+      error={state.error}
+      preview={state.preview}
+      result={state.result}
+      setup={setup()}
+      exportSkill={exportSkill()}
+      onSetupChange={changeSetup}
+      onOpenExportAgent={() => calls.openExportAgent()}
+      onSaveExportSkill={() => void saveSkill()}
+      onChoose={() => void choose()}
+      onImport={(keys, channelKeys) => void apply(keys, channelKeys)}
+      onCancel={reset}
+      onDone={() => {
+        reset();
+        props.onClose();
+      }}
+      onOpenAgent={props.onOpenAgent}
+    />
+  );
+}

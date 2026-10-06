@@ -1,0 +1,60 @@
+node_modules/
+*.tsbuildinfo
+out/
+out-*/
+dist/
+apps/*/dist/
+apps/*/.wrangler/
+apps/*/worker-configuration.d.ts
+coverage/
+.DS_Store
+*.log
+*.local
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+!.env.example
+!apps/auth-api/.env.production
+!apps/auth-api/.env.shared
+!remote/.env.production
+*.key
+*.p12
+*.pem
+.idea/
+# Keep shared VS Code settings while ignoring other editor state.
+**/.vscode/*
+!/.vscode/settings.json
+!/.vscode/extensions.json
+!/apps/mobile/.vscode/settings.json
+!/apps/mobile/.vscode/extensions.json
+playwright-report/
+test-results/
+storybook-static/
+Shared/
+!apps/mobile/src/shared/
+!apps/mobile/src/shared/**
+index-*.css
+.openbot-browser-test/
+.openbot-build/
+.worktrees/
+# Claude Code creates git worktrees here; they carry a nested biome.json.
+.claude/worktrees/
+.claude/settings.local.json
+/build/cloudflared/
+/build/cua-driver/
+/build/codex/
+/build/claude/
+/build/grok/
+/build/remote-desktop-runtime/
+/build/remote-desktop-release/
+Bots
+# Local dev-profile agent workspaces; root only, so tracked */agents/ paths stay visible.
+/Agents/
+!apps/mobile/src/features/bots/
+!apps/mobile/src/features/bots/**
+mise.local.toml
+# Local provider credential export. Never commit.
+keys
+# Agent task checklist. Local to one worktree.
+/TASKS.md

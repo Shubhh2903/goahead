@@ -1,0 +1,160 @@
+import type {
+  AgentStatus,
+  ProviderRuntimeSnapshot,
+  ProviderRuntimeStatus,
+  ProviderRuntimesDesktopApi,
+} from "@openbot/contracts/ipc";
+import { Toaster } from "@openbot/ui";
+import type { ProviderUpdate } from "@openbot/ui/features/provider-updates/provider-update";
+import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { afterEach, expect, it, vi } from "vitest";
+import { HostProviderSettingsPanel } from "../settings/ProviderSettingsSection";
+import { createProviderRuntimeStore } from "./provider-runtime-store";
+import { dismissProviderUpdateToast } from "./provider-update-toast";
+
+const offer: ProviderUpdate = {
+  provider: "claude",
+  name: "Claude",
+  runtime: { phase: "ready", progress: null, message: null, version: "2.1.246" },
+  availableVersion: "2.1.250",
+};
+
+/** No provider signed in: the rows come from the runtime statuses alone. */
+const agentStatus: AgentStatus = {
+  phase: "ready",
+  cliVersion: null,
+  auth: { kind: "unknown" },
+  providers: [],
+  capabilities: { chat: "unavailable", browser: "unavailable", computerUse: "unavailable" },
+  message: null,
+  fullAccess: true,
+};
+
+afterEach(() => {
+  dismissProviderUpdateToast("claude");
+  dismissProviderUpdateToast("codex");
+  vi.useRealTimers();
+});
+
+function runtimeHarness(owners?: Parameters<typeof createProviderRuntimeStore>[1]) {
+  let snapshot: ProviderRuntimeSnapshot = {
+    revision: 1,
+    providers: {
+      codex: { ...offer.runtime, availableVersion: null },
+      claude: { ...offer.runtime, phase: "not-downloaded", availableVersion: offer.availableVersion },
+      grok: { ...offer.runtime, availableVersion: null },
+      opencode: { ...offer.runtime, availableVersion: null },
+      antigravity: { ...offer.runtime, availableVersion: null },
+      cursor: { ...offer.runtime, availableVersion: null },
+      cline: { ...offer.runtime, availableVersion: null },
+    },
+    toolRuntimes: { bun: { ...offer.runtime } },
+  };
+  let listener: ((snapshot: ProviderRuntimeSnapshot) => void) | undefined;
+  function emit(patch: Partial<ProviderRuntimeStatus>) {
+    snapshot = {
+      ...snapshot,
+      revision: snapshot.revision + 1,
+      providers: { ...snapshot.providers, claude: { ...snapshot.providers.claude, ...patch } },
+    };
+    listener?.(snapshot);
+    return snapshot;
+  }
+  const api: ProviderRuntimesDesktopApi = {
+    getStatus: async () => snapshot,
+    download: vi.fn(async () => emit({ phase: "downloading", progress: 0, message: null })),
+    cancel: async () => emit({ phase: "not-downloaded", progress: null }),
+    checkForUpdates: vi.fn(async () => snapshot),
+    onEvent: (next) => {
+      listener = next;
+      return () => {
+        listener = undefined;
+      };
+    },
+  };
+  let store: ReturnType<typeof createProviderRuntimeStore> | undefined;
+  render(() => {
+    const runtimes = createProviderRuntimeStore(() => api, owners);
+    store = runtimes;
+    return (
+      <>
+        <HostProviderSettingsPanel
+          selectMount={undefined}
+          agentStatus={agentStatus}
+          providerRuntimeStatuses={runtimes.providerRuntimeStatuses()}
+          providerAvailableVersions={runtimes.providerAvailableVersions()}
+          onUpdateProvider={runtimes.downloadProviderRuntime}
+          onDownloadProvider={runtimes.downloadProviderRuntime}
+          onCancelProviderDownload={runtimes.cancelProviderRuntimeDownload}
+        />
+        <Toaster />
+      </>
+    );
+  });
+  if (!store) throw new Error("The provider runtime store did not mount.");
+  return { store, api, emit };
+}
+
+it("announces an offer and follows only current snapshots", async () => {
+  const { store, emit } = runtimeHarness();
+  await waitFor(() => expect(store.providerAvailableVersions().claude).toBe("2.1.250"));
+  expect(await screen.findByText("Claude update available")).toBeInTheDocument();
+  // The row's offer is in its actions menu, a Kobalte trigger that wants the pointer press too.
+  const moreActions = await screen.findByRole("button", { name: "More actions for Claude" });
+  fireEvent.pointerDown(moreActions, { button: 0 });
+  fireEvent.click(moreActions);
+  fireEvent.pointerUp(await screen.findByRole("menuitem", { name: "Update to 2.1.250" }), { button: 0 });
+  expect(await screen.findByText("Updating Claude")).toBeInTheDocument();
+  const stale = emit({ phase: "downloading", progress: 42 });
+  emit({ phase: "ready", version: "2.1.250", availableVersion: null });
+  store.applyProviderRuntimeSnapshot(stale);
+  expect(await screen.findByText("Claude is up to date")).toBeInTheDocument();
+  expect(store.providerAvailableVersions().claude).toBeNull();
+});
+
+it("retries an update from the failure notification", async () => {
+  const { store, api, emit } = runtimeHarness();
+  await waitFor(() => expect(store.providerAvailableVersions().claude).toBe("2.1.250"));
+  await store.downloadProviderRuntime("claude");
+  emit({ phase: "download-error", message: "Connection lost." });
+  fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+  expect(await screen.findByText("Updating Claude")).toBeInTheDocument();
+  expect(api.download).toHaveBeenCalledTimes(2);
+  emit({ phase: "ready", version: "2.1.250", availableVersion: null });
+  expect(await screen.findByText("Claude is up to date")).toBeInTheDocument();
+});
+
+it("offers retry when the update request fails before progress starts", async () => {
+  const { store, api } = runtimeHarness();
+  await waitFor(() => expect(store.providerAvailableVersions().claude).toBe("2.1.250"));
+  vi.mocked(api.download).mockRejectedValueOnce(new Error("IPC request failed"));
+  await store.downloadProviderRuntime("claude");
+  expect(await screen.findByRole("button", { name: "Retry" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByText("Updating Claude")).toBeInTheDocument();
+  await store.cancelProviderRuntimeDownload("claude");
+  await waitFor(() => expect(screen.queryByText("Updating Claude")).not.toBeInTheDocument());
+  expect(store.providerAvailableVersions().claude).toBe("2.1.250");
+});
+
+it("checks for a newer version when none is offered, and offers what the check finds", async () => {
+  const { store, api, emit } = runtimeHarness();
+  await waitFor(() => expect(store.providerAvailableVersions().claude).toBe("2.1.250"));
+  emit({ phase: "ready", version: "2.1.250", availableVersion: null });
+  dismissProviderUpdateToast("claude");
+  vi.mocked(api.checkForUpdates).mockImplementationOnce(async () => emit({ availableVersion: "2.1.260" }));
+  await store.startProviderUpdate("claude");
+  expect(await screen.findByText("Claude update available")).toBeInTheDocument();
+  expect(screen.getByText("v2.1.250 → v2.1.260")).toBeInTheDocument();
+  expect(api.download).not.toHaveBeenCalled();
+});
+
+it("checks rather than downloads for a CLI the user installed that is already on the latest version", async () => {
+  const { store, api, emit } = runtimeHarness({ systemCliVersion: () => "2.1.250" });
+  await waitFor(() => expect(store.providerAvailableVersions().claude).toBe("2.1.250"));
+  emit({ version: null });
+  dismissProviderUpdateToast("claude");
+  await store.startProviderUpdate("claude");
+  expect(api.checkForUpdates).toHaveBeenCalled();
+  expect(api.download).not.toHaveBeenCalled();
+});

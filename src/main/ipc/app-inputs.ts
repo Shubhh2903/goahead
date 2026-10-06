@@ -1,0 +1,328 @@
+import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
+import type {
+  AgentProviderId,
+  DeleteHostedSiteInput,
+  DynamicIslandAction,
+  DynamicIslandPreference,
+  DynamicIslandPresentation,
+  ExternalDestination,
+  HostUpdateSettingsChange,
+  IdleRestartTarget,
+  InstallMarketplaceAgentInput,
+  InstallSkillInput,
+  MacPermissionId,
+  MarketplaceAgentQuery,
+  MarketplaceSkillQuery,
+  NotificationPreference,
+  PublishHostedSiteInput,
+  ReplaceHostedSiteInput,
+  SaveSetupInput,
+  SetAnalyticsPreferenceInput,
+  SetAppLanguagePreferenceInput,
+  SetAppLogoColorPreferenceInput,
+  SetApprovalAutomationInput,
+  SetDynamicIslandInteractiveInput,
+  SetEnabledSkillInput,
+  SubmitMarketplaceAgentInput,
+  SubmitSkillInput,
+  UninstallSkillInput,
+  UpdatePreferenceChange,
+  VerifyEmailCodeInput,
+} from "@openbot/contracts/ipc";
+import {
+  IDLE_RESTART_TARGETS,
+  isAgentModel,
+  isAgentProvider,
+  isAppLanguage,
+  isAppLogoColor,
+  isDynamicIslandAction,
+  isDynamicIslandInteractive,
+  isDynamicIslandPreference,
+  isDynamicIslandPresentation,
+  isSetApprovalAutomationInput,
+  isSkillCategory,
+} from "@openbot/contracts/ipc";
+import {
+  type DynamicRecord,
+  isBoolean,
+  isDynamicRecord,
+  isNumber,
+  isOneOf,
+  isString,
+} from "@openbot/contracts/runtime-values";
+import { validateProfileName } from "@openbot/contracts/validation";
+import { parseAvatarImage } from "./avatar-inputs";
+import { isObject, optionalBoolean, requireString } from "./validation";
+
+export function parseSetup(input: unknown): SaveSetupInput {
+  if (!isDynamicRecord(input)) throw new Error("Setup input is required.");
+  const provider = input.preferredProvider;
+  if (!isAgentProvider(provider)) throw new Error("Unknown provider.");
+  // `null` is the whole meaning of "no model chosen", so a missing field is not accepted in its
+  // place: setup is written from one screen that always knows which of the two it means.
+  const model = input.preferredModel;
+  if (model !== null && !isAgentModel(model)) throw new Error("Unknown model.");
+  return { preferredProvider: provider, preferredModel: model };
+}
+
+export function parseProviderId(input: unknown): AgentProviderId {
+  if (!isAgentProvider(input)) throw new Error("Unknown provider.");
+  return input;
+}
+
+export function parseAnalyticsPreference(input: unknown): SetAnalyticsPreferenceInput {
+  if (!isDynamicRecord(input) || !isBoolean(input.enabled)) throw new Error("Analytics preference is required.");
+  return { enabled: input.enabled };
+}
+
+export function parseApprovalAutomation(input: unknown): SetApprovalAutomationInput {
+  if (!isSetApprovalAutomationInput(input)) throw new Error("Approval automation preference is required.");
+  const parsed: SetApprovalAutomationInput = {};
+  if (input.turbo !== undefined) parsed.turbo = input.turbo;
+  if (input.agentId !== undefined && input.autoApprove !== undefined) {
+    parsed.agentId = input.agentId;
+    parsed.autoApprove = input.autoApprove;
+  }
+  return parsed;
+}
+
+export function parseAppLanguagePreference(input: unknown): SetAppLanguagePreferenceInput {
+  if (!isDynamicRecord(input) || !isAppLanguage(input.language)) throw new Error("Language preference is required.");
+  return { language: input.language };
+}
+
+export function parseAppLogoColorPreference(input: unknown): SetAppLogoColorPreferenceInput {
+  if (!isDynamicRecord(input) || !isAppLogoColor(input.color)) throw new Error("Logo color is required.");
+  return { color: input.color };
+}
+
+export function parseIdleRestartTarget(input: unknown): IdleRestartTarget {
+  if (!isOneOf(IDLE_RESTART_TARGETS, input)) throw new Error("A restart target is required.");
+  return input;
+}
+
+export function parseUpdatePreference(input: unknown): UpdatePreferenceChange {
+  return parseSwitches(input, ["autoDownload", "allowRemoteUpdates", "autoInstall"], "Update preference is required.");
+}
+
+/** The switches an admin of a joined server sets on its host. `allowRemoteUpdates` stays with the host user. */
+export function parseHostUpdateSettings(input: unknown): HostUpdateSettingsChange {
+  return parseSwitches(input, ["autoDownload", "autoInstall"], "Update settings are required.");
+}
+
+/** At least one of `keys`, each a boolean. An absent key stays absent. */
+function parseSwitches<Key extends string>(
+  input: unknown,
+  keys: readonly Key[],
+  message: string,
+): Partial<Record<Key, boolean>> {
+  if (!isDynamicRecord(input)) throw new Error(message);
+  const change: Partial<Record<Key, boolean>> = {};
+  for (const key of keys) {
+    const value = input[key];
+    if (value === undefined) continue;
+    if (!isBoolean(value)) throw new Error(message);
+    change[key] = value;
+  }
+  if (Object.keys(change).length === 0) throw new Error(message);
+  return change;
+}
+
+export function parseNotificationPreference(input: unknown): NotificationPreference {
+  if (!isDynamicRecord(input) || !isBoolean(input.desktopNotifications)) {
+    throw new Error("Notification preference is required.");
+  }
+  return { desktopNotifications: input.desktopNotifications };
+}
+
+export function parseDynamicIslandPreference(input: unknown): DynamicIslandPreference {
+  if (!isDynamicIslandPreference(input)) {
+    throw new Error("Dynamic Island preference is required.");
+  }
+  return input;
+}
+
+export function parseDynamicIslandInteractive(input: unknown): SetDynamicIslandInteractiveInput {
+  if (!isDynamicIslandInteractive(input)) {
+    throw new Error("Dynamic Island interaction state is required.");
+  }
+  return input;
+}
+
+export function parseDynamicIslandPresentation(input: unknown): DynamicIslandPresentation {
+  if (!isDynamicIslandPresentation(input)) throw new Error("Dynamic Island presentation is invalid.");
+  return input;
+}
+
+export function parseDynamicIslandAction(input: unknown): DynamicIslandAction {
+  if (isDynamicIslandAction(input)) return input;
+  throw new Error("Dynamic Island action is invalid.");
+}
+
+export function parseMacPermission(input: unknown): MacPermissionId {
+  if (input !== "screen-recording" && input !== "accessibility") {
+    throw new Error("Unknown macOS permission.");
+  }
+  return input;
+}
+
+export function parseExternalDestination(input: unknown): ExternalDestination {
+  if (
+    input !== "agent-setup" &&
+    input !== "claude-install" &&
+    input !== "opencode-install" &&
+    input !== "opencode-auth" &&
+    input !== "feedback" &&
+    input !== "message" &&
+    input !== "grok-bot-export" &&
+    input !== "hosted-server-contact" &&
+    input !== "mac-screen-recording"
+  ) {
+    throw new Error("Unknown external destination.");
+  }
+  return input;
+}
+
+export function parseEmailCodeVerification(input: unknown): VerifyEmailCodeInput {
+  if (!isObject(input)) throw new Error("Sign-in code details are required.");
+  return {
+    challengeId: requireString(input.challengeId, "challengeId", INPUT_LIMITS.identifier),
+    code: requireString(input.code, "code", 32),
+  };
+}
+
+export function parseProfileName(input: unknown): string {
+  const validation = validateProfileName(requireString(input, "name", INPUT_LIMITS.accountName));
+  if (validation.error) {
+    throw new Error(`name must contain ${INPUT_LIMITS.profileNameMin} to ${INPUT_LIMITS.profileName} safe characters.`);
+  }
+  return validation.name;
+}
+
+// The two marketplaces share query fields and validate their category filters at the boundary.
+// `query` is truncated rather than rejected, which is the behaviour these channels have always had.
+function parseMarketplaceQueryFields(input: DynamicRecord, sortError: string): MarketplaceAgentQuery {
+  if (input.sort !== undefined && input.sort !== "installs") throw new Error(sortError);
+  return {
+    ...(isString(input.query) ? { query: input.query.slice(0, 100) } : {}),
+    ...(input.featured === true ? { featured: true } : {}),
+    ...(input.sort === "installs" ? { sort: "installs" as const } : {}),
+    ...(isString(input.cursor) ? { cursor: input.cursor } : {}),
+    ...(isNumber(input.limit) ? { limit: input.limit } : {}),
+  };
+}
+
+export function parseMarketplaceSkillQuery(input: unknown): MarketplaceSkillQuery {
+  if (!isObject(input)) throw new Error("Invalid marketplace query.");
+  const category = input.category;
+  if (category !== undefined && !isSkillCategory(category)) throw new Error("Unknown skill category.");
+  return {
+    ...parseMarketplaceQueryFields(input, "Unknown skill sort order."),
+    ...(category ? { category } : {}),
+  };
+}
+
+export function parseMarketplaceAgentQuery(input: unknown): MarketplaceAgentQuery {
+  if (!isObject(input)) throw new Error("Invalid agent marketplace query.");
+  const category = input.category;
+  if (category !== undefined && !isSkillCategory(category)) throw new Error("Unknown agent category.");
+  return { ...parseMarketplaceQueryFields(input, "Unknown agent sort order."), ...(category ? { category } : {}) };
+}
+
+export function parseSubmitSkill(input: unknown): SubmitSkillInput {
+  if (!isObject(input) || !isSkillCategory(input.category)) throw new Error("Invalid skill submission.");
+  return {
+    draftId: requireString(input.draftId, "draftId"),
+    ...creatorAvatarOption(input),
+    category: input.category,
+    icon: parseAvatarImage(input.icon),
+    ...(input.skillId === undefined ? {} : { skillId: requireString(input.skillId, "skillId") }),
+  };
+}
+
+export function parseInstallSkill(input: unknown): InstallSkillInput {
+  if (!isObject(input)) throw new Error("Invalid skill installation.");
+  return {
+    agentId: requireString(input.agentId, "agentId"),
+    skillId: requireString(input.skillId, "skillId"),
+    ...(input.versionId === undefined ? {} : { versionId: requireString(input.versionId, "versionId") }),
+    ...(input.replaceModified === true ? { replaceModified: true } : {}),
+  };
+}
+
+export function parseUninstallSkill(input: unknown): UninstallSkillInput {
+  if (!isObject(input)) throw new Error("Invalid skill removal.");
+  return {
+    agentId: requireString(input.agentId, "agentId"),
+    skillId: requireString(input.skillId, "skillId"),
+    ...(input.removeModified === true ? { removeModified: true } : {}),
+  };
+}
+
+export function parseSetEnabledSkill(input: unknown): SetEnabledSkillInput {
+  if (!isObject(input)) throw new Error("Invalid skill enablement.");
+  const enabled = optionalBoolean(input.enabled, "enabled");
+  if (enabled === undefined) throw new Error("Invalid skill enablement.");
+  return {
+    agentId: requireString(input.agentId, "agentId"),
+    skillId: requireString(input.skillId, "skillId"),
+    enabled,
+  };
+}
+
+export function parsePublishHostedSite(input: unknown): PublishHostedSiteInput {
+  if (!isObject(input)) throw new Error("Invalid site publication.");
+  const spaFallback = optionalBoolean(input.spaFallback, "spaFallback");
+  return {
+    sourcePath: requireString(input.sourcePath, "sourcePath", INPUT_LIMITS.path),
+    title: requireString(input.title, "title", 120),
+    description: requireString(input.description, "description", 500),
+    ...(spaFallback !== undefined ? { spaFallback } : {}),
+  };
+}
+
+export function parseReplaceHostedSite(input: unknown): ReplaceHostedSiteInput {
+  if (!isObject(input)) throw new Error("Invalid site replacement.");
+  const spaFallback = optionalBoolean(input.spaFallback, "spaFallback");
+  return {
+    siteId: requireString(input.siteId, "siteId", INPUT_LIMITS.identifier),
+    sourcePath: requireString(input.sourcePath, "sourcePath", INPUT_LIMITS.path),
+    title: requireString(input.title, "title", 120),
+    description: requireString(input.description, "description", 500),
+    ...(spaFallback !== undefined ? { spaFallback } : {}),
+  };
+}
+
+export function parseDeleteHostedSite(input: unknown): DeleteHostedSiteInput {
+  if (!isObject(input)) throw new Error("Invalid site deletion.");
+  return { siteId: requireString(input.siteId, "siteId", INPUT_LIMITS.identifier) };
+}
+
+export function parseSubmitMarketplaceAgent(input: unknown): SubmitMarketplaceAgentInput {
+  if (!isObject(input)) throw new Error("Invalid agent submission.");
+  const category = input.category;
+  if (category !== undefined && !isSkillCategory(category)) throw new Error("Unknown agent category.");
+  return {
+    agentId: requireString(input.agentId, "agentId"),
+    ...(input.listingId === undefined ? {} : { listingId: requireString(input.listingId, "listingId") }),
+    ...(category ? { category } : {}),
+    ...creatorAvatarOption(input),
+  };
+}
+
+export function parseInstallMarketplaceAgent(input: unknown): InstallMarketplaceAgentInput {
+  if (!isObject(input)) throw new Error("Invalid agent installation.");
+  return {
+    listingId: requireString(input.listingId, "listingId"),
+    ...(input.agentId === undefined
+      ? {}
+      : { agentId: requireString(input.agentId, "agentId", INPUT_LIMITS.identifier) }),
+    timezone: requireString(input.timezone, "timezone", 255),
+    receiptId: requireString(input.receiptId, "receiptId", INPUT_LIMITS.identifier),
+  };
+}
+
+function creatorAvatarOption(input: DynamicRecord): { showCreatorAvatar?: boolean } {
+  const showCreatorAvatar = optionalBoolean(input.showCreatorAvatar, "showCreatorAvatar");
+  return showCreatorAvatar === undefined ? {} : { showCreatorAvatar };
+}

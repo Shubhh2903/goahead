@@ -1,0 +1,98 @@
+export const INPUT_LIMITS = {
+  identifier: 128,
+  email: 254,
+  accountName: 120,
+  profileNameMin: 3,
+  profileName: 20,
+  serverNameMin: 6,
+  serverName: 32,
+  inviteUrl: 4_096,
+  hostname: 253,
+  browserUrl: 8_192,
+  avatarUrl: 2_048,
+  browserActionText: 50_000,
+  agentName: 80,
+  // Model names come from a CLI's `displayName`, which nothing bounds, and the released Team v1
+  // adapter already accepts 160 — so the agent-name limit would reject a model list a shipped peer
+  // is entitled to send.
+  modelName: 160,
+  agentTitle: 120,
+  agentDescription: 2_000,
+  agentMemories: 64,
+  agentSkills: 32,
+  sharedTables: 64,
+  sharedTableName: 64,
+  // Half the agent cap. A channel packet is rebuilt every turn and the memories block is paid in
+  // full each time, against `ChannelHistory.prepare`'s hard character budget.
+  channelMemories: 32,
+  agentMemoryText: 500,
+  agentRoutines: 64,
+  routineName: 80,
+  routineInstruction: 100_000,
+  routineRunsPage: 100,
+  // The text a local script adds to a routine run through the automation server.
+  automationPayload: 4_000,
+  // Six weeks: the longest range the routine calendar reads, with room for a month view.
+  routineCalendarDays: 42,
+  routineCron: 255,
+  messageText: 100_000,
+  directMessageText: 20_000,
+  promptQuestions: 32,
+  promptOptions: 5,
+  promptHeader: 120,
+  promptQuestion: 2_000,
+  promptOptionLabel: 120,
+  promptOptionDescription: 2_000,
+  promptAnswersPerQuestion: 32,
+  promptAnswerText: 100_000,
+  promptAnswersTotalText: 100_000,
+  attachments: 10,
+  draftAttachments: 50,
+  messageRecipients: 32,
+  attachmentName: 255,
+  mimeType: 255,
+  path: 4_096,
+  agents: 100,
+  sidebarSections: 100,
+  sidebarSectionName: 40,
+  browserTabs: 25,
+  browserCoordinate: 100_000,
+  browserDimension: 16_384,
+  // MCP server configuration. `identifier` covers the id and `path` covers the working directory.
+  // The two value bounds are equal today and kept apart on purpose: an environment value and an
+  // HTTP header are different things, and only one of them has a protocol that bounds it.
+  mcpServers: 32,
+  mcpServerName: 80,
+  mcpCommand: 4_096,
+  mcpArgs: 64,
+  mcpArgValue: 4_096,
+  mcpEnvVariables: 64,
+  mcpEnvName: 255,
+  mcpEnvValue: 8_192,
+  mcpHeaders: 32,
+  mcpHeaderValue: 8_192,
+  mcpUrl: 2_048,
+  mcpToolCount: 10_000,
+  mcpErrorText: 2_000,
+  teamMembers: 100,
+  activeInvites: 100,
+  // Permanent links accept unlimited joins until revoked, so a leaked link is open
+  // enrollment. The cap stays small; single-use invitations keep the larger budget.
+  maxPermanentInvites: 5,
+  sessionsPerMember: 10,
+} as const;
+
+// Active members of one host with no plan, owner included: the owner and two others. A plan sets
+// its own limit (`memberLimitForPlan`). `INPUT_LIMITS.teamMembers` stays the wire cap for stored members.
+export const DEFAULT_TEAM_MEMBER_LIMIT = 3;
+
+export const ATTACHMENT_LIMITS = {
+  fileBytes: 100 * 1024 * 1024,
+  totalBytes: 250 * 1024 * 1024,
+} as const;
+
+export const AVATAR_IMAGE_LIMITS = {
+  sourceBytes: 10 * 1024 * 1024,
+  storedBytes: 512 * 1024,
+  outputPixels: 512,
+} as const;

@@ -1,0 +1,38 @@
+import { readFile } from "node:fs/promises";
+import { type AppLanguagePreference, DEFAULT_APP_LANGUAGE, isAppLanguage } from "@openbot/contracts/ipc";
+import { isDynamicRecord } from "@openbot/contracts/runtime-values";
+import { writeJsonFileAtomically } from "../backend/atomic-json-file";
+
+const DEFAULT_PREFERENCE: AppLanguagePreference = { language: DEFAULT_APP_LANGUAGE };
+
+/**
+ * The saved language, or the system default.
+ *
+ * A file that is missing, unreadable or names a language this build no longer ships reads as the
+ * system default. Unlike the analytics preference there is no safe-by-default direction to fall
+ * back to: an unreadable file must not leave the app with no language at all.
+ *
+ * Every read error is absorbed, not only a missing file. `createApplicationServices` awaits this
+ * before the first window opens and has no recovery, so a rethrown `EACCES` - a preference file
+ * left unreadable by a restore from backup, say - would show the startup error box and quit. Losing
+ * a language choice is a small fault; being unable to open the app at all is not.
+ */
+export async function readLanguagePreference(path: string): Promise<AppLanguagePreference> {
+  try {
+    const parsed = JSON.parse(await readFile(path, "utf8"));
+    if (!isDynamicRecord(parsed) || parsed.version !== 1 || !isAppLanguage(parsed.language)) {
+      return { ...DEFAULT_PREFERENCE };
+    }
+    return { language: parsed.language };
+  } catch {
+    return { ...DEFAULT_PREFERENCE };
+  }
+}
+
+export async function writeLanguagePreference(
+  path: string,
+  preference: AppLanguagePreference,
+): Promise<AppLanguagePreference> {
+  await writeJsonFileAtomically(path, { version: 1, language: preference.language });
+  return { language: preference.language };
+}

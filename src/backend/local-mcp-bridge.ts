@@ -1,0 +1,317 @@
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import {
+  CallToolRequestSchema,
+  type CallToolResult,
+  CancelledNotificationSchema,
+  type JSONRPCMessage,
+  JSONRPCMessageSchema,
+  ListToolsRequestSchema,
+  type RequestId,
+  type Tool,
+} from "@modelcontextprotocol/sdk/types.js";
+import { isString } from "@openbot/contracts/runtime-values";
+import type { DynamicToolResult } from "./protocol";
+
+interface DynamicToolDefinition {
+  type: "function";
+  name: string;
+  description?: string;
+  inputSchema: Tool["inputSchema"];
+}
+
+export interface DynamicToolNamespace {
+  type: "namespace";
+  name: string;
+  description?: string;
+  tools: DynamicToolDefinition[];
+}
+
+export interface LocalMcpSession {
+  readonly servers: Array<{
+    type: "http";
+    name: string;
+    url: string;
+    headers: Array<{ name: string; value: string }>;
+  }>;
+  setThreadId(threadId: string): void;
+  close(): void;
+}
+
+/**
+ * How often a tool call that is still running tells the client it is alive. An MCP client times out
+ * a call that sends nothing: opencode after 60 seconds, unless a progress notification resets the
+ * deadline. `ask_user` waits for the user, which can take much longer.
+ */
+export const LOCAL_MCP_PROGRESS_INTERVAL_MS = 20_000;
+
+interface BridgeRoute {
+  namespace: DynamicToolNamespace;
+  threadId: string;
+  /**
+   * `signal` aborts when the client abandons the call: it sent `notifications/cancelled` (an MCP
+   * client does this when its own timeout ends) or closed the response stream. Nothing reads the
+   * result after that, so the owner must stop waiting for the user.
+   */
+  call: (
+    params: {
+      threadId: string;
+      turnId: string;
+      callId: string;
+      namespace: string;
+      tool: string;
+      arguments: unknown;
+    },
+    signal: AbortSignal,
+  ) => Promise<DynamicToolResult>;
+  activeTurnId: () => string | null;
+  /**
+   * The calls still running, by JSON-RPC id. Each POST gets a new MCP server, so the POST that
+   * carries `notifications/cancelled` cannot reach the call through the SDK and finds it here.
+   */
+  running: Map<RequestId, AbortController>;
+}
+
+export class LocalMcpBridge {
+  #server: HttpServer | null = null;
+  #port: number | null = null;
+  #listening: Promise<void> | null = null;
+  /** Counts the closes, so a session asked for before a close does not register after it. */
+  #closes = 0;
+  #closing: Promise<void> | null = null;
+  readonly #routes = new Map<string, BridgeRoute>();
+
+  async createSession(
+    threadId: string,
+    namespaces: DynamicToolNamespace[],
+    activeTurnId: () => string | null,
+    call: BridgeRoute["call"],
+  ): Promise<LocalMcpSession> {
+    const closes = this.#closes;
+    if (this.#closing) throw new Error("The local OpenBot MCP bridge closed.");
+    await this.#listen();
+    if (closes !== this.#closes) throw new Error("The local OpenBot MCP bridge closed.");
+    const tokens: string[] = [];
+    const servers = namespaces.map((namespace) => {
+      const token = randomBytes(32).toString("base64url");
+      tokens.push(token);
+      this.#routes.set(token, { namespace, threadId, activeTurnId, call, running: new Map() });
+      return {
+        type: "http" as const,
+        name: namespace.name,
+        url: `http://127.0.0.1:${this.#port}/mcp`,
+        headers: [{ name: "Authorization", value: `Bearer ${token}` }],
+      };
+    });
+    return {
+      servers,
+      setThreadId: (nextThreadId) => {
+        for (const token of tokens) {
+          const route = this.#routes.get(token);
+          if (route) route.threadId = nextThreadId;
+        }
+      },
+      close: () => {
+        for (const token of tokens) this.#routes.delete(token);
+      },
+    };
+  }
+
+  async close(): Promise<void> {
+    this.#closes += 1;
+    this.#routes.clear();
+    const closing = this.#shutDown();
+    this.#closing = closing;
+    try {
+      await closing;
+    } finally {
+      if (this.#closing === closing) this.#closing = null;
+    }
+  }
+
+  /** Until the server is closed, no session may start a second bind: that server would stay open. */
+  async #shutDown(): Promise<void> {
+    // A bind still in flight sets the server when it ends, so it is awaited before the close.
+    await this.#listening?.catch(() => undefined);
+    const server = this.#server;
+    this.#server = null;
+    this.#port = null;
+    if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+    this.#listening = null;
+  }
+
+  /** One bind, however many sessions ask for it at once: a second would leave a server listening. */
+  #listen(): Promise<void> {
+    if (!this.#listening) {
+      const listening = this.#bind();
+      this.#listening = listening;
+      listening.catch(() => {
+        if (this.#listening === listening) this.#listening = null;
+      });
+    }
+    return this.#listening;
+  }
+
+  async #bind(): Promise<void> {
+    const server = createServer((request, response) => void this.#handle(request, response));
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const address = server.address();
+    if (!address || isString(address)) {
+      server.close();
+      throw new Error("Unable to bind the local OpenBot MCP bridge.");
+    }
+    this.#server = server;
+    this.#port = address.port;
+  }
+
+  async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const route = this.#authorize(request);
+    if (!route) {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (request.method !== "POST") {
+      response.writeHead(405, { allow: "POST" });
+      response.end();
+      return;
+    }
+
+    const mcp = new Server(
+      { name: route.namespace.name, version: "0.1.0" },
+      { capabilities: { tools: {} }, instructions: route.namespace.description },
+    );
+    mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: route.namespace.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      })),
+    }));
+    mcp.setRequestHandler(CallToolRequestSchema, async ({ params }, extra): Promise<CallToolResult> => {
+      const tool = route.namespace.tools.find((candidate) => candidate.name === params.name);
+      if (!tool) throw new Error(`Unknown ${route.namespace.name} tool: ${params.name}`);
+      // The SDK aborts `extra.signal` when this POST's transport closes, which follows a closed
+      // response stream. A cancel on another POST aborts `abandoned` through `route.running`.
+      const abandoned = new AbortController();
+      const abandon = () => abandoned.abort();
+      extra.signal.addEventListener("abort", abandon, { once: true });
+      route.running.set(extra.requestId, abandoned);
+      const progressToken = extra._meta?.progressToken;
+      let progress = 0;
+      const keepAlive =
+        progressToken === undefined
+          ? undefined
+          : setInterval(() => {
+              progress += 1;
+              extra
+                .sendNotification({ method: "notifications/progress", params: { progressToken, progress } })
+                .catch(() => undefined);
+            }, LOCAL_MCP_PROGRESS_INTERVAL_MS);
+      let result: DynamicToolResult;
+      try {
+        result = await route.call(
+          {
+            threadId: route.threadId,
+            turnId: route.activeTurnId() ?? randomUUID(),
+            callId: randomUUID(),
+            namespace: route.namespace.name,
+            tool: tool.name,
+            arguments: params.arguments ?? {},
+          },
+          abandoned.signal,
+        );
+      } finally {
+        clearInterval(keepAlive);
+        extra.signal.removeEventListener("abort", abandon);
+        if (route.running.get(extra.requestId) === abandoned) route.running.delete(extra.requestId);
+      }
+      const content: CallToolResult["content"] = [];
+      for (const item of result.contentItems) {
+        if (item.type === "inputText") {
+          content.push({ type: "text", text: item.text });
+          continue;
+        }
+        const [, mimeType, data] = item.imageUrl.match(/^data:([^;]+);base64,(.+)$/s) ?? [];
+        if (mimeType !== undefined && data !== undefined) content.push({ type: "image", mimeType, data });
+      }
+      return {
+        isError: !result.success,
+        content,
+      };
+    });
+
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    try {
+      await mcp.connect(transport);
+      const body = await readJsonBody(request);
+      for (const message of Array.isArray(body) ? body : body ? [body] : []) {
+        const cancelled = CancelledNotificationSchema.safeParse(message);
+        const requestId = cancelled.success ? cancelled.data.params.requestId : undefined;
+        if (requestId !== undefined) route.running.get(requestId)?.abort();
+      }
+      await transport.handleRequest(request, response, body);
+    } catch {
+      if (!response.headersSent) {
+        response.writeHead(500, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: null,
+            error: { code: -32603, message: "Internal MCP bridge error." },
+          }),
+        );
+      }
+    } finally {
+      await transport.close().catch(() => undefined);
+      await mcp.close().catch(() => undefined);
+    }
+  }
+
+  #authorize(request: IncomingMessage): BridgeRoute | null {
+    const header = request.headers.authorization;
+    if (!header?.startsWith("Bearer ")) return null;
+    const candidate = header.slice(7);
+    for (const [token, route] of this.#routes) {
+      const left = Buffer.from(candidate);
+      const right = Buffer.from(token);
+      if (left.length === right.length && timingSafeEqual(left, right)) return route;
+    }
+    return null;
+  }
+}
+
+/** The JSON-RPC messages of one MCP POST. It rejects a body larger than `maxBytes`. */
+export async function readJsonBody(
+  request: IncomingMessage,
+  maxBytes = 1_000_000,
+): Promise<JSONRPCMessage | JSONRPCMessage[] | undefined> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > maxBytes) throw new Error("MCP request body is too large.");
+    chunks.push(buffer);
+  }
+  if (chunks.length === 0) return undefined;
+  const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const parsed = JSONRPCMessageSchema.safeParse(item);
+      if (!parsed.success) throw new Error("Invalid MCP JSON-RPC message.");
+      return parsed.data;
+    });
+  }
+  const parsed = JSONRPCMessageSchema.safeParse(value);
+  if (!parsed.success) throw new Error("Invalid MCP JSON-RPC message.");
+  return parsed.data;
+}

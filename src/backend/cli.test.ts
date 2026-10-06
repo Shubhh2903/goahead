@@ -1,0 +1,459 @@
+// @vitest-environment node
+
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  bundledClaudeExecutable,
+  bundledCodexExecutable,
+  bundledGrokExecutable,
+  bundledOpencodeExecutable,
+  CodexCliError,
+  cliSpawnTarget,
+  commandPathFromShellOutput,
+  loginShellCommand,
+  parseClaudeVersion,
+  parseCodexVersion,
+  parseGrokVersion,
+  parseOpencodeVersion,
+  posixFallbackPaths,
+  resolveClaudeCli,
+  resolveCodexCli,
+  resolveGrokCli,
+  resolveOpencodeCli,
+  runInLoginShell,
+  windowsFallbackPaths,
+} from "./cli";
+
+const originalAppData = process.env.APPDATA;
+const originalLocalAppData = process.env.LOCALAPPDATA;
+const originalPath = process.env.PATH;
+const originalOpencodePath = process.env.OPENBOT_OPENCODE_PATH;
+const originalGrokPath = process.env.OPENBOT_GROK_PATH;
+const temporaryPaths: string[] = [];
+
+afterEach(async () => {
+  restoreEnvironment("APPDATA", originalAppData);
+  restoreEnvironment("LOCALAPPDATA", originalLocalAppData);
+  restoreEnvironment("PATH", originalPath);
+  restoreEnvironment("OPENBOT_GROK_PATH", originalGrokPath);
+  restoreEnvironment("OPENBOT_OPENCODE_PATH", originalOpencodePath);
+  await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { recursive: true })));
+});
+
+describe("Codex CLI version parsing", () => {
+  it("reads the installed CLI version format", () => {
+    expect(parseCodexVersion("codex-cli 0.144.1\n")).toBe("0.144.1");
+  });
+
+  it("fails closed on an unknown format", () => {
+    expect(() => parseCodexVersion("Codex development build")).toThrow(CodexCliError);
+  });
+});
+
+describe("bundled Codex resolution", () => {
+  it("resolves the packaged runtime path for supported targets", () => {
+    expect(bundledCodexExecutable("darwin", "arm64", "/Applications/OpenBot.app/Contents/Resources")).toBe(
+      "/Applications/OpenBot.app/Contents/Resources/codex/mac/arm64/bin/codex",
+    );
+    expect(bundledCodexExecutable("win32", "x64", "C:\\Program Files\\OpenBot\\resources")).toBe(
+      "C:\\Program Files\\OpenBot\\resources\\codex\\win\\x64\\bin\\codex.exe",
+    );
+    expect(bundledCodexExecutable("linux", "x64", "/resources")).toBe("/resources/codex/linux/x64/bin/codex");
+    expect(bundledCodexExecutable("linux", "arm64", "/resources")).toBe("/resources/codex/linux/arm64/bin/codex");
+    expect(bundledCodexExecutable("win32", "arm64", "C:\\resources")).toBeNull();
+    expect(bundledCodexExecutable("freebsd", "x64", "/resources")).toBeNull();
+  });
+
+  it("resolves the build runtime path during development", () => {
+    expect(bundledCodexExecutable("darwin", "arm64", null)).toBe(
+      join(process.cwd(), "build/codex/mac/arm64/bin/codex"),
+    );
+    expect(bundledCodexExecutable("darwin", "arm64", undefined)).toBe(
+      join(process.cwd(), "build/codex/mac/arm64/bin/codex"),
+    );
+  });
+
+  it.runIf(process.platform !== "win32")("prefers the managed CLI over a compatible system CLI", async () => {
+    const system = await createExecutable("system-codex", "codex-cli 0.148.0");
+    const bundled = await createExecutable("bundled-codex", "codex-cli 0.149.1");
+
+    await expect(resolveCodexCli({ systemCandidates: [system], bundledExecutable: bundled })).resolves.toEqual({
+      executable: bundled,
+      version: "0.149.1",
+      source: "managed",
+    });
+  });
+
+  it.runIf(process.platform !== "win32")("falls back when the system CLI is outdated or invalid", async () => {
+    const outdated = await createExecutable("old-codex", "codex-cli 0.120.0");
+    const invalid = await createExecutable("broken-codex", "not a version");
+    const bundled = await createExecutable("bundled-codex", "codex-cli 0.149.1");
+
+    await expect(
+      resolveCodexCli({ systemCandidates: [outdated, invalid], bundledExecutable: bundled }),
+    ).resolves.toEqual({
+      executable: bundled,
+      version: "0.149.1",
+      source: "managed",
+    });
+  });
+});
+
+describe("Claude CLI version parsing", () => {
+  it("reads the installed CLI version format", () => {
+    expect(parseClaudeVersion("2.1.231 (Claude Code)\n")).toBe("2.1.231");
+  });
+
+  it("fails closed on an unknown format", () => {
+    expect(() => parseClaudeVersion("Claude development build")).toThrow(CodexCliError);
+  });
+});
+
+describe("bundled Claude resolution", () => {
+  it("resolves the packaged runtime path for supported targets", () => {
+    expect(bundledClaudeExecutable("darwin", "arm64", "/Applications/OpenBot.app/Contents/Resources")).toBe(
+      "/Applications/OpenBot.app/Contents/Resources/claude/mac/arm64/bin/claude",
+    );
+    expect(bundledClaudeExecutable("win32", "x64", "C:\\Program Files\\OpenBot\\resources")).toBe(
+      "C:\\Program Files\\OpenBot\\resources\\claude\\win\\x64\\bin\\claude.exe",
+    );
+    expect(bundledClaudeExecutable("linux", "x64", "/resources")).toBe("/resources/claude/linux/x64/bin/claude");
+  });
+
+  it.runIf(process.platform !== "win32")("prefers the managed CLI over a compatible system CLI", async () => {
+    const system = await createExecutable("system-claude", "2.1.240 (Claude Code)");
+    const bundled = await createExecutable("bundled-claude", "2.1.246 (Claude Code)");
+
+    await expect(resolveClaudeCli({ systemCandidates: [system], bundledExecutable: bundled })).resolves.toEqual({
+      executable: bundled,
+      version: "2.1.246",
+      source: "managed",
+    });
+  });
+
+  it.runIf(process.platform !== "win32")("falls back when the system CLI is outdated or invalid", async () => {
+    const outdated = await createExecutable("old-claude", "2.0.0 (Claude Code)");
+    const invalid = await createExecutable("broken-claude", "not a version");
+    const bundled = await createExecutable("bundled-claude", "2.1.246 (Claude Code)");
+
+    await expect(
+      resolveClaudeCli({ systemCandidates: [outdated, invalid], bundledExecutable: bundled }),
+    ).resolves.toEqual({
+      executable: bundled,
+      version: "2.1.246",
+      source: "managed",
+    });
+  });
+});
+
+describe("login shell discovery", () => {
+  it("uses zsh on macOS and the user's own shell on Linux", () => {
+    expect(loginShellCommand("darwin", {})).toEqual({ command: "/bin/zsh", args: ["-lic"] });
+    expect(loginShellCommand("win32", {})).toEqual({ command: "/bin/zsh", args: ["-lic"] });
+    expect(loginShellCommand("linux", { SHELL: "/usr/bin/fish" })).toEqual({
+      command: "/usr/bin/fish",
+      args: ["-lic"],
+    });
+  });
+
+  it("falls back to a non-interactive /bin/sh when Linux has no usable login shell", () => {
+    // dash exits rather than running the command when it is given -i without a tty.
+    expect(loginShellCommand("linux", {})).toEqual({ command: "/bin/sh", args: ["-lc"] });
+    expect(loginShellCommand("linux", { SHELL: "  " })).toEqual({ command: "/bin/sh", args: ["-lc"] });
+    expect(loginShellCommand("linux", { SHELL: "/bin/sh" })).toEqual({ command: "/bin/sh", args: ["-lc"] });
+  });
+
+  it.runIf(process.platform !== "win32")("runs the shell in a process group of its own", async () => {
+    // An interactive bash in OpenBot's group stops the whole group with SIGTTIN when another
+    // lookup holds the terminal (#766).
+    const shell = { command: "/bin/sh", args: ["-c"] };
+    const [pid, group] = (await runInLoginShell('echo "$$ $(ps -o pgid= -p $$)"', shell)).trim().split(/\s+/u);
+    expect(group).toBe(pid);
+    await expect(runInLoginShell("exit 3", shell)).rejects.toThrow("code 3");
+  });
+
+  it.runIf(process.platform !== "win32")("finds the path after a profile that prints a greeting", async () => {
+    // A `.bashrc` that prints text hid every system CLI on Linux (#1073).
+    const shell = { command: "/bin/sh", args: ["-c"] };
+    const stdout = await runInLoginShell("echo 'Welcome back'; echo; command -v sh", shell);
+    expect(commandPathFromShellOutput(stdout)).toMatch(/^\/.*\/sh$/u);
+    expect(commandPathFromShellOutput("Welcome back\nalias ll='ls -l'\n")).toBeNull();
+  });
+});
+
+describe("bundled Grok CLI resolution", () => {
+  it("reads Grok versions and includes documented macOS and Windows locations", () => {
+    expect(parseGrokVersion("grok 1.0.5\n")).toBe("1.0.5");
+    expect(posixFallbackPaths("grok", "/Users/jane")).toEqual(
+      expect.arrayContaining(["/Users/jane/.grok/bin/grok", "/opt/homebrew/bin/grok", "/usr/bin/grok"]),
+    );
+    expect(
+      windowsFallbackPaths("grok", "C:\\Users\\Jane", {
+        LOCALAPPDATA: "C:\\Users\\Jane\\AppData\\Local",
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "C:\\Users\\Jane\\.grok\\bin\\grok.exe",
+        "C:\\Users\\Jane\\AppData\\Local\\Microsoft\\WinGet\\Links\\grok.exe",
+      ]),
+    );
+  });
+
+  it("resolves the packaged runtime path for supported targets", () => {
+    expect(bundledGrokExecutable("darwin", "arm64", "/Applications/OpenBot.app/Contents/Resources")).toBe(
+      "/Applications/OpenBot.app/Contents/Resources/grok/mac/arm64/bin/grok",
+    );
+    expect(bundledGrokExecutable("win32", "x64", "C:\\Program Files\\OpenBot\\resources")).toBe(
+      "C:\\Program Files\\OpenBot\\resources\\grok\\win\\x64\\bin\\grok.exe",
+    );
+    expect(bundledGrokExecutable("linux", "x64", "/resources")).toBe("/resources/grok/linux/x64/bin/grok");
+  });
+
+  it.runIf(process.platform !== "win32")("honors OPENBOT_GROK_PATH and probes --version", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openbot-grok-cli-test-"));
+    temporaryPaths.push(root);
+    const executable = join(root, "grok");
+    await writeFile(executable, "#!/bin/sh\nprintf 'grok 1.0.5\\n'\n");
+    await chmod(executable, 0o700);
+    process.env.OPENBOT_GROK_PATH = executable;
+
+    await expect(resolveGrokCli({ bundledExecutable: null })).resolves.toEqual({
+      executable,
+      version: "1.0.5",
+      source: "system",
+    });
+  });
+
+  it("does not fabricate an installed Grok CLI when the configured executable is missing", async () => {
+    process.env.OPENBOT_GROK_PATH = join(tmpdir(), `missing-grok-${Date.now()}`);
+    await expect(resolveGrokCli({ bundledExecutable: null })).rejects.toMatchObject({ code: "missing" });
+  });
+
+  it.runIf(process.platform !== "win32")("falls back when the system CLI is outdated or invalid", async () => {
+    const outdated = await createExecutable("old-grok", "grok 0.9.0");
+    const invalid = await createExecutable("broken-grok", "not a version");
+    const bundled = await createExecutable("bundled-grok", "grok 1.0.5");
+
+    await expect(
+      resolveGrokCli({ systemCandidates: [outdated, invalid], bundledExecutable: bundled }),
+    ).resolves.toEqual({
+      executable: bundled,
+      version: "1.0.5",
+      source: "managed",
+    });
+  });
+});
+
+describe("managed CLI selection", () => {
+  it.runIf(process.platform !== "win32")("keeps explicit overrides ahead of a managed CLI", async () => {
+    const system = await createExecutable("system-grok", "grok 1.0.5");
+    const managed = await createExecutable("managed-grok", "grok 1.0.22");
+    process.env.OPENBOT_GROK_PATH = system;
+    await expect(resolveGrokCli({ bundledExecutable: managed })).resolves.toMatchObject({
+      executable: system,
+      source: "system",
+    });
+  });
+
+  it.runIf(process.platform !== "win32")("uses the system CLI when the managed copy is missing", async () => {
+    const system = await createExecutable("system-grok", "grok 1.0.5");
+    await expect(
+      resolveGrokCli({ systemCandidates: [system], bundledExecutable: `${system}-missing` }),
+    ).resolves.toMatchObject({ executable: system, source: "system" });
+  });
+});
+
+describe("Windows CLI fallback paths", () => {
+  it("includes current installer paths", () => {
+    const environment = {
+      APPDATA: "C:\\Users\\Jane Doe\\AppData\\Roaming",
+      LOCALAPPDATA: "C:\\Users\\Jane Doe\\AppData\\Local",
+    };
+
+    expect(windowsFallbackPaths("codex", "C:\\Users\\Jane Doe", environment)).toContain(
+      "C:\\Users\\Jane Doe\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe",
+    );
+    expect(windowsFallbackPaths("claude", "C:\\Users\\Jane Doe", environment)).toEqual(
+      expect.arrayContaining([
+        "C:\\Users\\Jane Doe\\AppData\\Local\\Microsoft\\WinGet\\Links\\claude.exe",
+        "C:\\Users\\Jane Doe\\.local\\bin\\claude.exe",
+        "C:\\Users\\Jane Doe\\AppData\\Roaming\\npm\\claude.cmd",
+      ]),
+    );
+  });
+
+  it.runIf(process.platform === "win32")("runs npm command shims when the user profile contains a space", async () => {
+    await createWindowsNpmShims();
+    await expect(resolveCodexCli()).resolves.toMatchObject({ version: "0.144.1" });
+    await expect(resolveClaudeCli()).resolves.toMatchObject({ version: "2.1.232", source: "system" });
+  });
+
+  it.runIf(process.platform === "win32")("reports a CLI that exists but cannot start", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openbot-cli-test-"));
+    temporaryPaths.push(root);
+    const appData = join(root, "User Name", "AppData", "Roaming");
+    await mkdir(join(appData, "npm"), { recursive: true });
+    await writeFile(join(appData, "npm", "codex.cmd"), "@echo off\r\nexit /b 1\r\n");
+    useIsolatedWindowsEnvironment(appData, join(root, "missing-local-app-data"));
+
+    await expect(resolveCodexCli()).rejects.toMatchObject({
+      code: "invalid",
+      message: "Codex CLI was found but could not be started. Run `codex --version` in a new terminal.",
+    });
+  });
+});
+
+describe("CLI spawn target", () => {
+  it("starts a Windows executable whose path contains a space", () => {
+    // A managed CLI lives under `userData`. Through `cmd.exe` the unquoted path splits at the space
+    // and the downloaded CLI never connects, so a native executable must start with no shell.
+    const executable = "C:\\Users\\Jane Doe\\AppData\\Roaming\\OpenBot Dev\\provider-runtimes\\opencode.exe";
+
+    expect(cliSpawnTarget(executable, ["acp"], "win32")).toEqual({
+      command: executable,
+      args: ["acp"],
+      windowsVerbatimArguments: false,
+    });
+  });
+
+  it("runs a Windows command shim through the command processor", () => {
+    const target = cliSpawnTarget("C:\\Users\\Jane Doe\\AppData\\Roaming\\npm\\opencode.cmd", ["acp"], "win32");
+
+    expect(target.windowsVerbatimArguments).toBe(true);
+    expect(target.args).toEqual(["/d", "/s", "/c", '""C:\\Users\\Jane Doe\\AppData\\Roaming\\npm\\opencode.cmd" acp"']);
+  });
+
+  it("keeps each argument of a Windows command shim whole and inert", () => {
+    const target = cliSpawnTarget(
+      "C:\\tools\\agent.cmd",
+      ["-f", "C:\\Jane Doe\\.env.dev", 'a"b & calc', "%PATH%", "C:\\dir with space\\"],
+      "win32",
+    );
+
+    expect(target.args.at(-1)).toBe(
+      '""C:\\tools\\agent.cmd" -f "C:\\Jane Doe\\.env.dev" "a""b & calc" "%%cd:~,%PATH%%cd:~,%" "C:\\dir with space\\\\""',
+    );
+  });
+
+  it("uses no command processor away from Windows", () => {
+    expect(cliSpawnTarget("/opt/homebrew/bin/opencode", ["acp"], "darwin")).toEqual({
+      command: "/opt/homebrew/bin/opencode",
+      args: ["acp"],
+      windowsVerbatimArguments: false,
+    });
+  });
+});
+
+async function createWindowsNpmShims(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), "openbot-cli-test-"));
+  temporaryPaths.push(root);
+  const appData = join(root, "User Name", "AppData", "Roaming");
+  const npmDirectory = join(appData, "npm");
+  await mkdir(npmDirectory, { recursive: true });
+  await Promise.all([
+    writeFile(join(npmDirectory, "codex.cmd"), "@echo off\r\necho codex-cli 0.144.1\r\n"),
+    writeFile(join(npmDirectory, "claude.cmd"), "@echo off\r\necho 2.1.232 (Claude Code)\r\n"),
+  ]);
+  useIsolatedWindowsEnvironment(appData, join(root, "missing-local-app-data"));
+}
+
+async function createExecutable(name: string, versionOutput: string): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "openbot-cli-test-"));
+  temporaryPaths.push(root);
+  const path = join(root, name);
+  await writeFile(path, `#!/bin/sh\nprintf '%s\\n' '${versionOutput}'\n`);
+  await chmod(path, 0o755);
+  return path;
+}
+
+function useIsolatedWindowsEnvironment(appData: string, localAppData: string): void {
+  process.env.APPDATA = appData;
+  process.env.LOCALAPPDATA = localAppData;
+  process.env.PATH = "";
+}
+
+function restoreEnvironment(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+describe("OpenCode CLI version parsing", () => {
+  it("reads the bare version the CLI prints", () => {
+    // `verifyInstalledRuntime` compares this against the pinned version for exact equality, so the
+    // parser must not normalise `1.18.30` into anything else.
+    expect(parseOpencodeVersion("1.18.30\n")).toBe("1.18.30");
+    expect(parseOpencodeVersion("opencode v1.18.30")).toBe("1.18.30");
+  });
+
+  it("fails closed on an unknown format", () => {
+    expect(() => parseOpencodeVersion("opencode development build")).toThrow(CodexCliError);
+    expect(() => parseOpencodeVersion("opencode development build")).toThrowError(
+      expect.objectContaining({ code: "invalid" }),
+    );
+  });
+});
+
+describe("OpenCode CLI resolution", () => {
+  it("resolves the managed runtime path for supported targets", () => {
+    expect(bundledOpencodeExecutable("darwin", "arm64", "/Applications/OpenBot.app/Contents/Resources")).toBe(
+      "/Applications/OpenBot.app/Contents/Resources/opencode/mac/arm64/bin/opencode",
+    );
+    expect(bundledOpencodeExecutable("linux", "x64", "/resources")).toBe("/resources/opencode/linux/x64/bin/opencode");
+  });
+
+  it.runIf(process.platform !== "win32")("uses the installed CLI and reports a missing override", async () => {
+    const executable = await createExecutable("opencode", "1.3.13");
+    process.env.OPENBOT_OPENCODE_PATH = executable;
+    await expect(resolveOpencodeCli()).resolves.toEqual({ executable, version: "1.3.13", source: "system" });
+    process.env.OPENBOT_OPENCODE_PATH = join(executable, "missing");
+    await expect(resolveOpencodeCli()).rejects.toMatchObject({
+      code: "missing",
+      message: "OpenCode is not downloaded. Download it in OpenBot to continue.",
+    });
+  });
+
+  it.runIf(process.platform !== "win32")("prefers the managed runtime over a system install", async () => {
+    const system = await createExecutable("opencode", "1.3.13");
+    const managed = await createExecutable("opencode", "1.18.30");
+    await expect(resolveOpencodeCli({ systemCandidates: [system], bundledExecutable: managed })).resolves.toEqual({
+      executable: managed,
+      version: "1.18.30",
+      source: "managed",
+    });
+  });
+
+  /*
+   * The regression that keeps an existing install from being replaced by a ~46 MB download. The
+   * managed path is what a first run holds: a directory name no runtime has been staged into yet.
+   */
+  it.runIf(process.platform !== "win32")("keeps a system install when nothing is downloaded", async () => {
+    const system = await createExecutable("opencode", "1.3.13");
+    await expect(
+      resolveOpencodeCli({ systemCandidates: [system], bundledExecutable: join(system, "not-downloaded") }),
+    ).resolves.toEqual({ executable: system, version: "1.3.13", source: "system" });
+  });
+
+  it.runIf(process.platform !== "win32")("lets the path override win over the managed runtime", async () => {
+    const override = await createExecutable("opencode", "1.3.13");
+    const managed = await createExecutable("opencode", "1.18.30");
+    process.env.OPENBOT_OPENCODE_PATH = override;
+    await expect(resolveOpencodeCli({ bundledExecutable: managed })).resolves.toEqual({
+      executable: override,
+      version: "1.3.13",
+      source: "system",
+    });
+  });
+
+  it("reports a CLI that cannot be started apart from one that is absent", async () => {
+    const broken = await createExecutable("opencode", "not a version");
+    await expect(resolveOpencodeCli({ systemCandidates: [broken], bundledExecutable: null })).rejects.toMatchObject({
+      code: "invalid",
+      message: "OpenCode could not start. Run `opencode --version` in a terminal.",
+    });
+    await expect(resolveOpencodeCli({ systemCandidates: [], bundledExecutable: null })).rejects.toMatchObject({
+      code: "missing",
+    });
+  });
+});

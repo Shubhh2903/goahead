@@ -1,0 +1,746 @@
+import { createServer, type IncomingMessage } from "node:http";
+import { createRequire } from "node:module";
+import { connect } from "node:net";
+import { dirname, join } from "node:path";
+import type { Duplex } from "node:stream";
+import type { RemoteDesktopIceServer } from "@openbot/contracts/ipc";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import type * as Ws from "ws";
+import { z } from "zod";
+import { RemoteScreenGateway, type RemoteScreenRuntime } from "./remote-screen-gateway";
+import { SunshineApiError } from "./sunshine-moonlight-runtime";
+
+const displays = [
+  { id: "main", label: "Main", width: 1920, height: 1080, primary: true },
+  { id: "second", label: "Second", width: 1440, height: 900, primary: false },
+];
+const requireModule = createRequire(import.meta.url);
+const webSockets: typeof Ws = requireModule(join(dirname(requireModule.resolve("ws/package.json")), "index.js"));
+const runtimes: FakeRuntime[] = [];
+
+afterEach(async () => {
+  await Promise.all(runtimes.map((runtime) => runtime.stop()));
+  runtimes.length = 0;
+});
+
+describe("RemoteScreenGateway", () => {
+  it.each(["darwin", "win32", "linux"] as const)(
+    "allows a %s host with runtime components to create a session",
+    async (platform) => {
+      const gateway = createGateway({ platform, sessionEnvironment: { DISPLAY: ":99" } });
+      expect(gateway.capabilities().ready).toBe(true);
+      const session = await createSession(gateway, "http://127.0.0.1:9");
+      expect(session.phase).toBe("connecting");
+      await gateway.stop();
+    },
+  );
+
+  it.each(["darwin", "win32", "linux"] as const)(
+    "reports the setup failure for an unavailable %s host",
+    async (platform) => {
+      const gateway = createGateway({ platform, runtimeInstalled: false, sessionEnvironment: { DISPLAY: ":99" } });
+      expect(gateway.capabilities().ready).toBe(false);
+      await expect(createSession(gateway, "http://127.0.0.1:9")).rejects.toMatchObject({
+        code: "host_unavailable",
+        message:
+          "The Sunshine and Moonlight Web runtime is missing or is not supported on this host. Install the full OpenBot release on a Mac, a Windows x64 host or a Linux x64 host, then restart OpenBot.",
+      });
+      expect(gateway.list()).toEqual([]);
+      await gateway.stop();
+    },
+  );
+
+  it.each([{ XDG_SESSION_TYPE: "wayland", WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":0" }, { XDG_SESSION_TYPE: "tty" }])(
+    "refuses a Linux host with no X11 session (%o)",
+    async (sessionEnvironment) => {
+      const gateway = createGateway({ platform: "linux", sessionEnvironment });
+      expect(gateway.capabilities().ready).toBe(false);
+      await expect(createSession(gateway, "http://127.0.0.1:9")).rejects.toMatchObject({
+        code: "host_unavailable",
+        message: "Remote desktop on Linux needs an X11 session. Wayland is not supported.",
+      });
+      await gateway.stop();
+    },
+  );
+
+  it("serves a local test on loopback and closes its listener with the session", async () => {
+    const gateway = createGateway();
+    const session = await gateway.createLocalTestSession();
+    try {
+      expect(new URL(session.viewerUrl).hostname).toBe("127.0.0.1");
+      expect(session.serverId).toBe("local");
+      const response = await fetch(session.viewerUrl);
+      expect(response.status).toBe(200);
+      const authorized = await fetch(session.viewerUrl.replace(/viewer$/, "authorize"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ grant: session.viewerGrant }),
+      });
+      expect(authorized.status).toBe(204);
+      expect(authorized.headers.get("set-cookie")).toContain("HttpOnly; Secure; SameSite=None");
+      expect(() => gateway.testLocalSession("another-session", "start")).toThrow();
+    } finally {
+      await gateway.closeLocalTestSession(session.id);
+    }
+    expect(gateway.list()).toHaveLength(0);
+    await expect(fetch(session.viewerUrl)).rejects.toThrow();
+    await gateway.stop();
+  });
+
+  it.each([false, true])("rejects a malformed local request target (upgrade: %s)", async (upgrade) => {
+    const gateway = createGateway();
+    const session = await gateway.createLocalTestSession();
+    try {
+      const socket = connect({ host: "127.0.0.1", port: Number(new URL(session.viewerUrl).port) });
+      const response = await new Promise<string>((resolve, reject) => {
+        let received = "";
+        socket.on("error", reject);
+        socket.on("data", (chunk: Buffer) => {
+          received += chunk.toString("utf8");
+        });
+        socket.on("close", () => resolve(received));
+        socket.on("connect", () =>
+          socket.write(
+            [
+              "GET //[ HTTP/1.1",
+              "Host: 127.0.0.1",
+              ...(upgrade ? ["Connection: Upgrade", "Upgrade: websocket"] : ["Connection: close"]),
+              "",
+              "",
+            ].join("\r\n"),
+          ),
+        );
+      });
+      if (upgrade) expect(response).toBe("");
+      else expect(response).toMatch(/^HTTP\/1\.1 400 /);
+      expect((await fetch(session.viewerUrl)).status).toBe(200);
+    } finally {
+      await gateway.stop();
+    }
+  });
+
+  it("does not request account ICE settings for a local test", async () => {
+    const getIceServers = vi.fn(() => {
+      throw new Error("The remote host identity is unavailable.");
+    });
+    const gateway = createGateway({ getIceServers });
+    try {
+      await gateway.createLocalTestSession();
+      await expect(runtimes[0]?.getIceServers()).resolves.toEqual([]);
+      expect(getIceServers).not.toHaveBeenCalled();
+    } finally {
+      await gateway.stop();
+    }
+  });
+
+  it("keeps remote ICE settings while a local test shares the runtime", async () => {
+    const iceServers = [{ urls: "turn:relay.example", username: "user", credential: "password" }];
+    const getIceServers = vi.fn(async () => iceServers);
+    const gateway = createGateway({ getIceServers });
+    try {
+      await gateway.createLocalTestSession();
+      const remote = await createSession(gateway, "https://remote.example");
+      await expect(runtimes[0]?.getIceServers()).resolves.toEqual(iceServers);
+      expect(getIceServers).toHaveBeenCalledOnce();
+      await gateway.closeSession(remote.id);
+      await expect(runtimes[0]?.getIceServers()).resolves.toEqual([]);
+      expect(getIceServers).toHaveBeenCalledOnce();
+      expect(runtimes[0]?.stop).not.toHaveBeenCalled();
+    } finally {
+      await gateway.stop();
+    }
+  });
+
+  it("issues and consumes a one-time 60 second viewer grant", async () => {
+    const gateway = createGateway();
+    const { origin, close } = await serveGateway(gateway);
+    const session = await createSession(gateway, origin);
+    const viewer = await fetch(`${session.viewerUrl}#${session.viewerGrant}`);
+    expect(viewer.status).toBe(200);
+    expect(await viewer.text()).toContain("Moonlight");
+
+    const authorize = `${origin}/v1/remote-screen/sessions/${session.id}/authorize`;
+    const first = await fetch(authorize, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grant: session.viewerGrant }),
+    });
+    expect(first.status).toBe(204);
+    expect(first.headers.get("set-cookie")).toContain("openbotRemoteViewer=");
+    const viewerCookie = first.headers.get("set-cookie")?.split(";")[0] ?? "";
+    for (const blockedPath of ["admin.html", "index.html", "api/host/stream"]) {
+      const blocked = await fetch(`${origin}/v1/remote-screen/sessions/${session.id}/moonlight/${blockedPath}`, {
+        headers: { Cookie: viewerCookie },
+      });
+      expect(blocked.status).toBe(404);
+    }
+    const state = await fetch(`${origin}/v1/remote-screen/sessions/${session.id}/viewer-state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: viewerCookie },
+      body: JSON.stringify({
+        source: "openbot-moonlight",
+        type: "viewer-state",
+        sessionId: session.id,
+        state: "connected",
+        transport: "p2p",
+      }),
+    });
+    expect(state.status).toBe(204);
+    expect(gateway.list()[0]).toMatchObject({ phase: "connected", transport: "p2p" });
+    const second = await fetch(authorize, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grant: session.viewerGrant }),
+    });
+    expect(second.status).toBe(401);
+    await close();
+  });
+
+  it("refuses a session the host may not record, instead of opening one that never shows a frame", async () => {
+    // The refused member cannot grant anything on this computer, so the host owner is told as well.
+    const onScreenRecordingDenied = vi.fn();
+    const gateway = createGateway({ screenCaptureDenied: () => true, onScreenRecordingDenied });
+
+    await expect(createSession(gateway, "https://remote.example")).rejects.toMatchObject({
+      status: 503,
+      code: "host_permissions_required",
+    });
+    expect(gateway.list()).toEqual([]);
+    expect(gateway.screenRecordingDenied()).toBe(true);
+    expect(onScreenRecordingDenied).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  // The other half of that refusal, and the reason it is not a dead end: the error tells the member
+  // to grant screen recording and try again, and Sunshine only reads that grant when it starts. The
+  // fake models the same thing -- a runtime is denied for its whole life, and granting shows up as
+  // the next one started.
+  it("opens the session a host allows after the refusal that asked it to", async () => {
+    let deniedAtStartup = true;
+    const onScreenRecordingDenied = vi.fn();
+    const gateway = createGateway({ screenCaptureDenied: () => deniedAtStartup, onScreenRecordingDenied });
+    await expect(createSession(gateway, "https://remote.example")).rejects.toMatchObject({
+      code: "host_permissions_required",
+    });
+
+    deniedAtStartup = false;
+
+    await createSession(gateway, "https://remote.example");
+    expect(gateway.list()).toHaveLength(1);
+    // The grant took effect, so the host owner stops being asked to repair anything.
+    expect(gateway.screenRecordingDenied()).toBe(false);
+    expect(onScreenRecordingDenied.mock.calls).toEqual([[true], [false]]);
+  });
+
+  // Without this the host owner has to find a member willing to try again before they can see that
+  // the grant they just gave took effect.
+  it("reads the grant again for the host owner, and stops the runtime it started to read it", async () => {
+    let deniedAtStartup = true;
+    const onScreenRecordingDenied = vi.fn();
+    const gateway = createGateway({ screenCaptureDenied: () => deniedAtStartup, onScreenRecordingDenied });
+    await expect(createSession(gateway, "https://remote.example")).rejects.toMatchObject({
+      code: "host_permissions_required",
+    });
+
+    await expect(gateway.recheckScreenRecording()).resolves.toBe(true);
+    expect(gateway.screenRecordingDenied()).toBe(true);
+
+    deniedAtStartup = false;
+    await expect(gateway.recheckScreenRecording()).resolves.toBe(false);
+    expect(gateway.screenRecordingDenied()).toBe(false);
+    expect(onScreenRecordingDenied.mock.calls).toEqual([[true], [false]]);
+
+    // The check left no runtime behind, so a member still opens a session of their own.
+    await createSession(gateway, "https://remote.example");
+    expect(gateway.list()).toHaveLength(1);
+  });
+
+  it("checks the Sunshine user and permissions without interrupting a session", async () => {
+    let accessibility: "allowed" | "blocked" = "blocked";
+    const checkSetup = vi.fn(async () => ({
+      hostName: "Mac mini",
+      username: "tenant",
+      screenRecording: "allowed" as const,
+      accessibility,
+      guiSession: "allowed" as const,
+      displays: "allowed" as const,
+      restartRequired: false,
+    }));
+    const gateway = createGateway({ checkSetup });
+    await createSession(gateway, "https://remote.example");
+    const runtime = runtimes[0];
+    await expect(gateway.checkSetup()).resolves.toMatchObject({
+      username: "tenant",
+      accessibility: "blocked",
+      service: "allowed",
+      activeSessions: 1,
+    });
+    accessibility = "allowed";
+    await expect(gateway.checkSetup()).resolves.toMatchObject({ accessibility: "allowed" });
+    accessibility = "blocked";
+    await expect(gateway.checkSetup()).resolves.toMatchObject({ accessibility: "blocked" });
+    expect(runtime?.stop).not.toHaveBeenCalled();
+    await gateway.stop();
+  });
+
+  it("does not report permission approval from an absent endpoint or failed check", async () => {
+    await expect(createGateway().checkSetup()).resolves.toMatchObject({
+      screenRecording: "unavailable",
+      accessibility: "unavailable",
+    });
+    const gateway = createGateway({
+      checkSetup: async () => {
+        throw new Error("private native details");
+      },
+    });
+    const result = await gateway.checkSetup();
+    expect(result).toMatchObject({ screenRecording: "failed", accessibility: "failed", service: "allowed" });
+    expect(JSON.stringify(result)).not.toContain("private native details");
+    expect(runtimes.at(-1)?.stop).toHaveBeenCalledOnce();
+    await expect(createGateway({ runtimeInstalled: false }).checkSetup()).resolves.toMatchObject({
+      service: "unavailable",
+    });
+  });
+
+  it("reports an older native endpoint as unavailable", async () => {
+    const gateway = createGateway({
+      checkSetup: async () => {
+        throw new SunshineApiError(404);
+      },
+    });
+    await expect(gateway.checkSetup()).resolves.toMatchObject({
+      accessibility: "unavailable",
+      screenRecording: "unavailable",
+      service: "allowed",
+    });
+  });
+
+  it("rechecks permissions before starting a test and clears the test lock on refusal", async () => {
+    const test = vi.fn(async (action: "start" | "status" | "stop") => ({
+      active: action !== "stop",
+      mouse: false,
+      keyboard: false,
+      code: "1234",
+    }));
+    const gateway = createGateway({
+      test,
+      checkSetup: async () => ({
+        hostName: "Mac mini",
+        username: "tenant",
+        screenRecording: "allowed",
+        accessibility: "blocked",
+        guiSession: "allowed",
+        displays: "allowed",
+        restartRequired: false,
+      }),
+    });
+    const session = await createSession(gateway, "https://remote.example");
+    await expect(gateway.test(session.id, "member-a", "start")).rejects.toMatchObject({
+      code: "host_permissions_required",
+    });
+    expect(test).not.toHaveBeenCalledWith("start");
+    await createSession(gateway, "https://remote.example", "member-b");
+    expect(gateway.list()).toHaveLength(2);
+    await gateway.stop();
+  });
+
+  it("reports missing displays and inactive GUI sessions independently", async () => {
+    const gateway = createGateway({
+      checkSetup: async () => ({
+        hostName: "Mac mini",
+        username: "tenant",
+        screenRecording: "blocked",
+        accessibility: "allowed",
+        guiSession: "blocked",
+        displays: "unavailable",
+        restartRequired: false,
+      }),
+    });
+    await expect(gateway.checkSetup()).resolves.toMatchObject({
+      screenRecording: "blocked",
+      accessibility: "allowed",
+      guiSession: "blocked",
+      displays: "unavailable",
+    });
+  });
+
+  it("restricts a test to its session owner and releases the panel on disconnect", async () => {
+    const test = vi.fn(async (action: "start" | "status" | "stop") => ({
+      active: action !== "stop",
+      mouse: false,
+      keyboard: false,
+      code: "1234",
+    }));
+    const gateway = createGateway({
+      test,
+      checkSetup: async () => ({
+        hostName: "Mac mini",
+        username: "tenant",
+        screenRecording: "allowed",
+        accessibility: "allowed",
+        guiSession: "allowed",
+        displays: "allowed",
+        restartRequired: false,
+      }),
+    });
+    const session = await createSession(gateway, "https://remote.example");
+    await expect(gateway.test(session.id, "outsider", "start")).rejects.toMatchObject({ status: 404 });
+    expect(test).not.toHaveBeenCalled();
+    await expect(gateway.test(session.id, "member-a", "start")).resolves.toMatchObject({
+      active: true,
+      mouse: false,
+      keyboard: false,
+    });
+    await expect(createSession(gateway, "https://remote.example", "member-b")).rejects.toMatchObject({ status: 409 });
+    await gateway.closeSession(session.id);
+    expect(test).toHaveBeenLastCalledWith("stop");
+    expect(runtimes[0]?.stop).toHaveBeenCalledOnce();
+  });
+
+  it("does not start a test while another member has a session", async () => {
+    const test = vi.fn(async () => ({ active: true, mouse: false, keyboard: false, code: "1234" }));
+    const gateway = createGateway({
+      test,
+      checkSetup: async () => ({
+        hostName: "Mac mini",
+        username: "tenant",
+        screenRecording: "allowed",
+        accessibility: "allowed",
+        guiSession: "allowed",
+        displays: "allowed",
+        restartRequired: false,
+      }),
+    });
+    const session = await createSession(gateway, "https://remote.example");
+    await createSession(gateway, "https://remote.example", "member-b");
+    await expect(gateway.test(session.id, "member-a", "start")).rejects.toMatchObject({ status: 409 });
+    expect(test).not.toHaveBeenCalled();
+    expect(gateway.list()).toHaveLength(2);
+    await gateway.stop();
+  });
+
+  it("limits the host to four active sessions", async () => {
+    const gateway = createGateway();
+    for (let index = 0; index < 4; index += 1) await createSession(gateway, "https://remote.example");
+    await expect(createSession(gateway, "https://remote.example")).rejects.toMatchObject({
+      status: 429,
+      code: "session_capacity_reached",
+    });
+  });
+
+  it("rejects a viewer grant after 60 seconds", async () => {
+    let now = Date.parse("2026-08-21T12:00:00.000Z");
+    const gateway = createGateway({ now: () => now });
+    const { origin, close } = await serveGateway(gateway);
+    const session = await createSession(gateway, origin);
+    now += 60_001;
+
+    const response = await fetch(`${origin}/v1/remote-screen/sessions/${session.id}/authorize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grant: session.viewerGrant }),
+    });
+
+    expect(response.status).toBe(401);
+    await close();
+  });
+
+  it("releases an unused session when its viewer grant expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T12:00:00.000Z"));
+    const gateway = createGateway();
+    try {
+      await createSession(gateway, "https://remote.example");
+
+      await vi.advanceTimersByTimeAsync(60_001);
+
+      expect(gateway.list()).toHaveLength(0);
+      expect(runtimes[0]?.stop).toHaveBeenCalled();
+    } finally {
+      await gateway.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes an active remote stream when its team session expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T12:00:00.000Z"));
+    const gateway = createGateway();
+    try {
+      await createSession(gateway, "https://remote.example", "member-a", new Date(Date.now() + 5_000).toISOString());
+
+      await vi.advanceTimersByTimeAsync(5_001);
+
+      expect(gateway.list()).toHaveLength(0);
+      expect(runtimes[0]?.stop).toHaveBeenCalled();
+    } finally {
+      await gateway.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("forwards the client Init frame after the Moonlight socket finishes opening", async () => {
+    const upstreamServer = createServer();
+    const upstreamWebSockets = new webSockets.WebSocketServer({ noServer: true });
+    upstreamServer.on("upgrade", (request, socket, head) => {
+      setTimeout(
+        () =>
+          upstreamWebSockets.handleUpgrade(request, socket, head, (webSocket) =>
+            upstreamWebSockets.emit("connection", webSocket, request),
+          ),
+        50,
+      );
+    });
+    await new Promise<void>((resolve) => upstreamServer.listen(0, "127.0.0.1", resolve));
+    const upstreamAddress = z.object({ port: z.number().int() }).parse(upstreamServer.address());
+    const upstreamMessage = new Promise<string>((resolve) => {
+      upstreamWebSockets.once("connection", (socket) => socket.once("message", (data) => resolve(data.toString())));
+    });
+    const gateway = createGateway({ runtimeBaseUrl: `http://127.0.0.1:${upstreamAddress.port}` });
+    const { origin, close } = await serveGateway(gateway);
+    const session = await createSession(gateway, origin);
+    const client = new webSockets.WebSocket(
+      `${origin.replace(/^http/, "ws")}/v1/remote-screen/sessions/${session.id}/stream`,
+      { headers: { "X-OpenBot-WebRTC-Session": "team-member-a" } },
+    );
+    await new Promise<void>((resolve, reject) => {
+      client.once("open", resolve);
+      client.once("error", reject);
+    });
+    const init = JSON.stringify({ Init: { host_id: 12, app_id: 1 } });
+    client.send(init);
+
+    await expect(upstreamMessage).resolves.toBe(init);
+    client.close();
+    await gateway.stop();
+    upstreamWebSockets.close();
+    await close();
+    await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+  });
+
+  it("serializes concurrent Moonlight Init frames until the previous stream connects", async () => {
+    const upstreamServer = createServer();
+    const upstreamWebSockets = new webSockets.WebSocketServer({ noServer: true });
+    const upstreamMessages: Array<{ user: string; message: string }> = [];
+    upstreamServer.on("upgrade", (request, socket, head) => {
+      upstreamWebSockets.handleUpgrade(request, socket, head, (webSocket) => {
+        webSocket.on("message", (data) => {
+          upstreamMessages.push({
+            user: String(request.headers["x-openbot-remote-user"]),
+            message: data.toString(),
+          });
+        });
+      });
+    });
+    await new Promise<void>((resolve) => upstreamServer.listen(0, "127.0.0.1", resolve));
+    const upstreamAddress = z.object({ port: z.number().int() }).parse(upstreamServer.address());
+    const gateway = createGateway({ runtimeBaseUrl: `http://127.0.0.1:${upstreamAddress.port}` });
+    const { origin, close } = await serveGateway(gateway);
+    const sessions = [await createSession(gateway, origin), await createSession(gateway, origin, "member-b")];
+    const cookies = await Promise.all(
+      sessions.map(async (session) => {
+        const response = await fetch(`${origin}/v1/remote-screen/sessions/${session.id}/authorize`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ grant: session.viewerGrant }),
+        });
+        return response.headers.get("set-cookie")?.split(";")[0] ?? "";
+      }),
+    );
+    const clients = sessions.map(
+      (session, index) =>
+        new webSockets.WebSocket(`${origin.replace(/^http/, "ws")}/v1/remote-screen/sessions/${session.id}/stream`, {
+          headers: { Cookie: cookies[index] },
+        }),
+    );
+    await Promise.all(
+      clients.map(
+        (client) =>
+          new Promise<void>((resolve, reject) => {
+            client.once("open", resolve);
+            client.once("error", reject);
+          }),
+      ),
+    );
+    clients.forEach((client, index) => {
+      client.send(JSON.stringify({ Init: { host_id: 12 + index, app_id: 1 } }));
+    });
+
+    // Both Init frames are in flight together, so this only settles on a length of
+    // one while the gateway is holding the second back.
+    await vi.waitFor(() => expect(upstreamMessages).toHaveLength(1));
+    const firstSlot = Number(upstreamMessages[0]?.user.match(/(\d+)$/)?.[1]);
+    const firstIndex = firstSlot - 1;
+    const firstCookie = cookies[firstIndex];
+    assert(firstCookie !== undefined);
+    const connected = await fetch(`${origin}/v1/remote-screen/sessions/${sessions[firstIndex]?.id}/viewer-state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: firstCookie },
+      body: JSON.stringify({
+        source: "openbot-moonlight",
+        type: "viewer-state",
+        sessionId: sessions[firstIndex]?.id,
+        state: "connected",
+        transport: "p2p",
+      }),
+    });
+    expect(connected.status).toBe(204);
+    await vi.waitFor(() => expect(upstreamMessages).toHaveLength(2));
+    expect(new Set(upstreamMessages.map((message) => message.user)).size).toBe(2);
+
+    clients.forEach((client) => {
+      client.close();
+    });
+    await gateway.stop();
+    upstreamWebSockets.close();
+    await close();
+    await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+  });
+
+  it("revokes all sessions for a member immediately", async () => {
+    const gateway = createGateway();
+    await createSession(gateway, "https://remote.example", "member-a");
+    await createSession(gateway, "https://remote.example", "member-b");
+    await gateway.revokeMember("member-a");
+    expect(gateway.list()).toHaveLength(1);
+  });
+
+  it("switches the shared Sunshine monitor once", async () => {
+    const gateway = createGateway();
+    const session = await createSession(gateway, "https://remote.example");
+    const secondSession = await createSession(gateway, "https://remote.example", "member-b");
+    await gateway.selectDisplay("second");
+    expect(runtimes[0]?.selectedDisplays).toEqual(["second"]);
+    expect(gateway.list()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: session.id, selectedDisplayId: "second", phase: "connecting" }),
+        expect.objectContaining({ id: secondSession.id, selectedDisplayId: "second", phase: "connecting" }),
+      ]),
+    );
+    await expect(gateway.selectDisplay("missing")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects a second display change while Sunshine is restarting", async () => {
+    let releaseDisplayChange: (() => void) | undefined;
+    const gateway = createGateway({
+      selectDisplay: () =>
+        new Promise<void>((resolve) => {
+          releaseDisplayChange = resolve;
+        }),
+    });
+    await createSession(gateway, "https://remote.example");
+
+    const firstChange = gateway.selectDisplay("second");
+    await vi.waitFor(() => expect(runtimes[0]?.selectedDisplays).toEqual(["second"]));
+
+    await expect(gateway.selectDisplay("main")).rejects.toMatchObject({ status: 409 });
+    releaseDisplayChange?.();
+    await firstChange;
+  });
+});
+
+function createGateway(
+  options: {
+    getIceServers?: () => Promise<RemoteDesktopIceServer[]>;
+    checkSetup?: RemoteScreenRuntime["checkSetup"];
+    test?: RemoteScreenRuntime["test"];
+    platform?: "darwin" | "win32" | "linux";
+    sessionEnvironment?: Readonly<Record<string, string | undefined>>;
+    runtimeInstalled?: boolean;
+    now?: () => number;
+    runtimeBaseUrl?: string;
+    selectDisplay?: (displayId: string) => Promise<void>;
+    screenCaptureDenied?: () => boolean;
+    onScreenRecordingDenied?: (denied: boolean) => void;
+  } = {},
+): RemoteScreenGateway {
+  return new RemoteScreenGateway({
+    platform: options.platform ?? "darwin",
+    ...(options.sessionEnvironment ? { sessionEnvironment: options.sessionEnvironment } : {}),
+    unattended: true,
+    runtimePaths:
+      options.runtimeInstalled === false
+        ? null
+        : { sunshine: "/sunshine", moonlightWebServer: "/web-server", moonlightStreamer: "/streamer" },
+    runtimeStateDirectory: "/tmp/openbot-test-runtime",
+    getRuntimeCredentials: async () => ({ username: "openbot", password: "secret" }),
+    getDisplays: () => displays,
+    getIceServers: options.getIceServers ?? (async () => [{ urls: "stun:127.0.0.1:3478" }]),
+    ...(options.onScreenRecordingDenied ? { onScreenRecordingDenied: options.onScreenRecordingDenied } : {}),
+    ...(options.now ? { now: options.now } : {}),
+    createRuntime: ({ getIceServers }) => {
+      const runtime = new FakeRuntime(options.runtimeBaseUrl, options.selectDisplay, options.screenCaptureDenied?.());
+      runtime.getIceServers = getIceServers;
+      runtime.checkSetup = options.checkSetup;
+      runtime.test = options.test;
+      runtimes.push(runtime);
+      return runtime;
+    },
+  });
+}
+
+function createSession(
+  gateway: RemoteScreenGateway,
+  publicHttpBaseUrl: string,
+  memberId = "member-a",
+  teamSessionExpiresAt = new Date(Date.now() + 86_400_000).toISOString(),
+) {
+  return gateway.createSession({
+    serverId: "server-a",
+    memberId,
+    teamSessionId: `team-${memberId}`,
+    teamSessionExpiresAt,
+    publicHttpBaseUrl,
+  });
+}
+
+class FakeRuntime implements RemoteScreenRuntime {
+  getIceServers: () => Promise<RemoteDesktopIceServer[]> = async () => [];
+  checkSetup?: RemoteScreenRuntime["checkSetup"];
+  test?: RemoteScreenRuntime["test"];
+  selectedDisplays: string[] = [];
+  readonly stop = vi.fn(async () => undefined);
+
+  constructor(
+    private readonly baseUrl = "http://127.0.0.1:9",
+    private readonly selectDisplayHandler?: (displayId: string) => Promise<void>,
+    private readonly denied = false,
+  ) {}
+
+  screenCaptureDenied() {
+    return this.denied;
+  }
+
+  async start() {
+    return {
+      baseUrl: this.baseUrl,
+      authHeader: "X-OpenBot-Remote-User",
+      hostId: 12,
+      hostIds: [12, 13, 14, 15],
+      desktopAppId: 1,
+      displays,
+      selectedDisplayId: "main",
+    };
+  }
+
+  async selectDisplay(displayId: string) {
+    this.selectedDisplays.push(displayId);
+    await this.selectDisplayHandler?.(displayId);
+  }
+}
+
+async function serveGateway(gateway: RemoteScreenGateway) {
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    void gateway.handleHttp(request, response, url);
+  });
+  server.on("upgrade", (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    gateway.handleUpgrade(request, socket, head, url);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = z.object({ port: z.number().int() }).parse(server.address());
+  return {
+    origin: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}

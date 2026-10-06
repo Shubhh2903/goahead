@@ -1,0 +1,270 @@
+import { lstat, mkdir, readdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { agentProviderDescriptor } from "@openbot/contracts/agent-providers";
+import type { AgentSummary, InstalledSkill } from "@openbot/contracts/ipc";
+import { isDynamicRecord } from "@openbot/contracts/runtime-values";
+import { createOpenBotLogger, toLogValue } from "@openbot/logging";
+import { parse as parseYaml } from "yaml";
+import { isMissingFileError } from "../backend/file-errors";
+import { isPathInside } from "../backend/path-containment";
+
+const MANAGED_SKILL_SLUG = "openbot-site-hosting";
+export const OWNERSHIP_MARKER = ".openbot-managed.json";
+/** The workspace skill folders OpenBot writes. Each provider reads at least one of them. */
+export const MANAGED_SKILL_FOLDERS = [".agents/skills", ".claude/skills"] as const;
+
+const logger = createOpenBotLogger("managed-skill-service");
+
+interface SyncTargetsResult {
+  collisions: string[];
+  failures: { target: string; error: unknown }[];
+}
+
+export class ManagedSkillService {
+  #content: string | null = null;
+
+  constructor(
+    private readonly sourcePath: string,
+    private readonly reportCollision: (target: string) => void = (target) => {
+      logger.warn(`OpenBot preserved an unowned managed-skill collision at ${target}.`);
+    },
+    private readonly reportFailure: (target: string, error: unknown) => void = (target, error) => {
+      logger.error(`OpenBot could not synchronize the managed skill at ${target}.`, toLogValue(error));
+    },
+    private readonly slug = MANAGED_SKILL_SLUG,
+  ) {}
+
+  async syncAll(agents: AgentSummary[]): Promise<void> {
+    let content: string;
+    try {
+      content = await this.content();
+    } catch (error) {
+      this.reportFailure(this.sourcePath, error);
+      return;
+    }
+    const results = await Promise.allSettled(
+      agents.map((agent) => syncTargets(agent.workspacePath, content, this.slug)),
+    );
+    for (const [index, result] of results.entries()) {
+      if (result.status === "fulfilled") {
+        this.reportResult(result.value);
+      } else {
+        this.reportFailure(agents[index]?.workspacePath ?? "unknown workspace", result.reason);
+      }
+    }
+  }
+
+  async syncAgent(agent: AgentSummary): Promise<void> {
+    try {
+      this.reportResult(await syncTargets(agent.workspacePath, await this.content(), this.slug));
+    } catch (error) {
+      this.reportFailure(agent.workspacePath, error);
+    }
+  }
+
+  private async content(): Promise<string> {
+    if (this.#content !== null) return this.#content;
+    const content = await readFile(this.sourcePath, "utf8");
+    if (!content.startsWith(`---\nname: ${this.slug}\n`)) {
+      throw new Error("The managed site hosting skill is invalid.");
+    }
+    this.#content = content;
+    return content;
+  }
+
+  private reportResult(result: SyncTargetsResult): void {
+    for (const target of result.collisions) this.reportCollision(target);
+    for (const failure of result.failures) this.reportFailure(failure.target, failure.error);
+  }
+}
+
+async function syncTargets(workspacePath: string, content: string, slug: string): Promise<SyncTargetsResult> {
+  const workspaceRoot = await realpath(resolve(workspacePath));
+  const targets = MANAGED_SKILL_FOLDERS.map((folder) => join(workspacePath, folder, slug, "SKILL.md"));
+  const resolvedTargets = MANAGED_SKILL_FOLDERS.map((folder) => join(workspaceRoot, folder, slug, "SKILL.md"));
+  const results = await Promise.allSettled(
+    resolvedTargets.map((target) => syncTarget(workspaceRoot, target, content, slug)),
+  );
+  const collisions: string[] = [];
+  const failures: SyncTargetsResult["failures"] = [];
+  for (let index = 0; index < results.length; index += 1) {
+    const result = results[index];
+    const target = targets[index];
+    if (!result || !target) continue;
+    if (result.status === "rejected") failures.push({ target, error: result.reason });
+    else if (result.value === "collision") collisions.push(target);
+  }
+  return { collisions, failures };
+}
+
+async function syncTarget(
+  workspaceRoot: string,
+  target: string,
+  content: string,
+  slug: string,
+): Promise<"synced" | "collision"> {
+  const ownershipContent = `${JSON.stringify({ managedBy: "openbot", slug, version: 1 })}\n`;
+  const parent = dirname(target);
+  await ensureSafeDirectory(workspaceRoot, parent);
+  const marker = join(parent, OWNERSHIP_MARKER);
+  await rejectSymlink(target);
+  await rejectSymlink(marker);
+  if (await fileExists(target)) {
+    if ((await optionalText(marker)) !== ownershipContent) return "collision";
+    await atomicWrite(workspaceRoot, target, content);
+    return "synced";
+  }
+  try {
+    await verifySafeDirectory(workspaceRoot, parent);
+    await writeFile(target, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  } catch (error) {
+    if (isFileExistsError(error)) return "collision";
+    throw error;
+  }
+  try {
+    await atomicWrite(workspaceRoot, marker, ownershipContent);
+  } catch (error) {
+    await verifySafeDirectory(workspaceRoot, parent)
+      .then(() => unlink(target))
+      .catch(() => undefined);
+    throw error;
+  }
+  return "synced";
+}
+
+async function atomicWrite(workspaceRoot: string, target: string, content: string): Promise<void> {
+  const parent = dirname(target);
+  await verifySafeDirectory(workspaceRoot, parent);
+  const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  await writeFile(temporary, content, { encoding: "utf8", mode: 0o600 });
+  try {
+    await verifySafeDirectory(workspaceRoot, parent);
+    await rename(temporary, target);
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function ensureSafeDirectory(workspaceRoot: string, directory: string): Promise<void> {
+  const path = containedRelativePath(workspaceRoot, directory);
+  let current = workspaceRoot;
+  for (const segment of path.split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    try {
+      await mkdir(current, { mode: 0o700 });
+    } catch (error) {
+      if (!isFileExistsError(error)) throw error;
+    }
+    await requireRealDirectory(current);
+  }
+  await verifySafeDirectory(workspaceRoot, directory);
+}
+
+async function verifySafeDirectory(workspaceRoot: string, directory: string): Promise<void> {
+  const path = containedRelativePath(workspaceRoot, directory);
+  await requireRealDirectory(workspaceRoot);
+  let current = workspaceRoot;
+  for (const segment of path.split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    await requireRealDirectory(current);
+  }
+  const resolvedDirectory = await realpath(directory);
+  if (!isPathInside(workspaceRoot, resolvedDirectory)) {
+    throw new Error(`Managed skill target escapes its workspace: ${directory}`);
+  }
+}
+
+function containedRelativePath(workspaceRoot: string, candidate: string): string {
+  if (!isPathInside(workspaceRoot, candidate)) {
+    throw new Error(`Managed skill target escapes its workspace: ${candidate}`);
+  }
+  return relative(workspaceRoot, candidate);
+}
+
+async function requireRealDirectory(path: string): Promise<void> {
+  const stats = await lstat(path);
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error(`Managed skill path must be a real directory: ${path}`);
+  }
+}
+
+async function rejectSymlink(path: string): Promise<void> {
+  try {
+    if ((await lstat(path)).isSymbolicLink()) throw new Error(`Managed skill path cannot be a symlink: ${path}`);
+  } catch (error) {
+    if (isMissingFileError(error)) return;
+    throw error;
+  }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (isMissingFileError(error)) return false;
+    throw error;
+  }
+}
+
+async function optionalText(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if (isMissingFileError(error)) return null;
+    throw error;
+  }
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "EEXIST";
+}
+
+/** Read only OpenBot-owned skills from the active provider's skill folder. */
+export async function listManagedSkillsForChat(agent: AgentSummary): Promise<InstalledSkill[]> {
+  const root = await realpath(agent.workspacePath);
+  const reads = agentProviderDescriptor(agent.provider).skillFolders;
+  const directory = join(root, MANAGED_SKILL_FOLDERS.find((folder) => reads.includes(folder)) ?? reads[0]);
+  const skills: InstalledSkill[] = [];
+  try {
+    await verifySafeDirectory(root, directory);
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const folder = join(directory, entry.name);
+        await verifySafeDirectory(root, folder);
+        const marker = join(folder, OWNERSHIP_MARKER);
+        const file = join(folder, "SKILL.md");
+        await rejectSymlink(marker);
+        await rejectSymlink(file);
+        if (
+          (await optionalText(marker)) !== `${JSON.stringify({ managedBy: "openbot", slug: entry.name, version: 1 })}\n`
+        )
+          continue;
+        const content = await readFile(file, "utf8");
+        const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u.exec(content)?.[1];
+        if (!frontmatter) continue;
+        const metadata = parseYaml(frontmatter);
+        if (!isDynamicRecord(metadata) || metadata.name !== entry.name || typeof metadata.description !== "string")
+          continue;
+        skills.push({
+          skillId: entry.name,
+          slug: entry.name,
+          name: entry.name,
+          description: metadata.description,
+          installedVersion: 1,
+          availableVersion: 1,
+          enabled: true,
+          state: "installed",
+          origin: "managed",
+        });
+      } catch {
+        /* Missing or invalid managed files are not selectable. */
+      }
+    }
+  } catch {
+    /* The workspace can have no managed skills yet. */
+  }
+  return skills;
+}

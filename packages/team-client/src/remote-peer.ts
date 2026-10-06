@@ -1,0 +1,1311 @@
+import type { AgentEvent, TeamRealtimeEvent } from "@openbot/contracts/ipc";
+import { isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
+import { decodeSignalServerMessage } from "@openbot/contracts/signal-protocol/decode";
+import {
+  SIGNAL_PROTOCOL_VERSION,
+  SIGNAL_TURN_REFRESH_INTERVAL_MS,
+  type SignalClientMessage,
+  type SignalServerMessage,
+} from "@openbot/contracts/signal-protocol/messages";
+import { TEAM_API_ROUTES } from "@openbot/contracts/team-api-routes";
+import {
+  decodeTeamProtocolV2AuthFrame,
+  decodeTeamProtocolV2EventFrame,
+  decodeTeamProtocolV2RpcFrame,
+  decodeTeamProtocolV6CurrentEvent,
+  decodeTeamProtocolV6WebRtcHttpResponse,
+  encodeTeamProtocolV2Frame,
+  encodeTeamProtocolV6WebRtcHttpRequest,
+  TEAM_CURRENT_CAPABILITIES,
+  TEAM_PROTOCOL_V2_CHANNELS,
+  type TeamProtocolV2AuthFrame,
+  type TeamProtocolV2Json,
+  teamProtocolV2AuthenticationTranscript,
+} from "@openbot/contracts/team-protocol";
+import { optionalTeamEvent } from "@openbot/contracts/team-protocol/optional-events";
+import { teamSideRouteCodec } from "@openbot/contracts/team-protocol/side-routes";
+import {
+  type TeamProtocolV1CurrentEventControl,
+  toWireTeamProtocolV1ClientEvent,
+} from "@openbot/contracts/team-protocol/v1-adapter";
+import { sourceText } from "@openbot/i18n/source";
+import { createEd25519Identity, type Ed25519Identity, signEd25519, verifyEd25519Pem } from "./ed25519";
+import { createRemoteFileReceiver } from "./file-download";
+import { createRemoteFileSender, type RemoteFileUpload } from "./file-upload";
+
+export type { RemoteFileUpload } from "./file-upload";
+export { MOBILE_ATTACHMENT_BYTES } from "./file-upload";
+
+import { createTeamRequestId } from "./request-id";
+import { encodeTeamWebRtcPayload, TeamWebRtcPayloadDecoder } from "./webrtc-framing";
+export type RemoteTeamCommand =
+  | { id: string; type: "connect"; hostId: string; hostPublicKey: string }
+  | { id: string; type: "disconnect" }
+  | { id: string; type: "request"; method: string; path: string; body: TeamProtocolV2Json; upload?: RemoteFileUpload };
+
+export interface RemoteTeamBootstrapPayload {
+  sessionId: string;
+  signalUrl: string;
+  ticket: string;
+}
+
+export interface RemoteTeamCommandResult {
+  commandId: string;
+  ok: boolean;
+  status?: number;
+  body?: TeamProtocolV2Json;
+  error?: string;
+}
+
+/** Carries every outstanding command across the native/DOM bridge, keyed by request ID. */
+export function createRemoteCommandMailbox(publish: (commands: RemoteTeamCommand[]) => void) {
+  const pending = new Map<string, { command: RemoteTeamCommand; resolve: (result: RemoteTeamCommandResult) => void }>();
+  let target: { hostId: string; hostPublicKey: string } | null = null;
+  const cancel = () => {
+    for (const [commandId, entry] of pending) {
+      entry.resolve({ commandId, ok: false, error: sourceText("error.remote.serverConnectionReplaced") });
+    }
+    pending.clear();
+  };
+  return {
+    send(command: RemoteTeamCommand): Promise<RemoteTeamCommandResult> {
+      if (command.type === "disconnect") {
+        cancel();
+        target = null;
+      } else if (command.type === "connect") {
+        if (target?.hostId !== command.hostId || target.hostPublicKey !== command.hostPublicKey) cancel();
+        // A foreground refresh may reuse a healthy peer. Do not reject its live RPCs;
+        // the peer itself rejects them if this turns out to require a reconnect.
+        target = { hostId: command.hostId, hostPublicKey: command.hostPublicKey };
+      }
+      return new Promise((resolve) => {
+        pending.set(command.id, { command, resolve });
+        publish([...pending.values()].map((entry) => entry.command));
+      });
+    },
+    receive(result: RemoteTeamCommandResult) {
+      const entry = pending.get(result.commandId);
+      if (!entry) return;
+      pending.delete(result.commandId);
+      entry.resolve(result);
+      publish([...pending.values()].map((item) => item.command));
+    },
+    dispose: cancel,
+  };
+}
+
+export interface RemoteTeamConnectionUpdate {
+  hostId: string;
+  state: "connecting" | "online" | "offline";
+  message: string | null;
+  /**
+   * Set when no reconnect can fix this failure, because the two ends disagree about the wire rather
+   * than about whether there is one. A consumer that retries every offline update has to be told
+   * the difference, or it retries into the same frame forever.
+   */
+  code?: "protocol_error" | "session_revoked";
+  resync?: boolean;
+}
+
+/**
+ * One step of a connection, for the support log on the device. It names no ticket, token, address,
+ * candidate or content: `detail` is a fixed state, a number, or the English error the peer reports.
+ */
+export interface RemoteTeamDiagnostic {
+  hostId: string;
+  step:
+    | "signal-open"
+    | "signal-closed"
+    | "signal-ready"
+    | "signal-retry"
+    | "peer-state"
+    | "route"
+    | "ice-recovery"
+    | "channels-open"
+    | "authenticated"
+    | "failed";
+  detail?: string;
+}
+
+/** How much of one upload command's file has been sent. */
+export interface RemoteUploadProgress {
+  commandId: string;
+  sent: number;
+  total: number;
+}
+
+export interface RemoteTeamPeerActions {
+  onHostStreamData?: (data: string | ArrayBuffer) => void;
+  /** Hears upload progress, at most once per whole percent. Optional, and never affects the upload. */
+  onUploadProgress?: (progress: RemoteUploadProgress) => Promise<void>;
+  onAccountProfileChanged?: () => Promise<void>;
+  /** The account's server list changed on another device of this account. */
+  onAccountServersChanged?: () => Promise<void>;
+  /** `existingSessionId` is a session kept from a failed attempt on the same host; reuse it when it is still active. */
+  getBootstrap: (
+    hostId: string,
+    clientPublicKey: string,
+    existingSessionId: string | null,
+  ) => Promise<RemoteTeamBootstrapPayload>;
+  endSession: (sessionId: string) => Promise<void>;
+  onConnectionUpdate: (update: RemoteTeamConnectionUpdate) => Promise<void>;
+  /** Hears connection steps. Optional, and never affects the connection. */
+  onDiagnostic?: (diagnostic: RemoteTeamDiagnostic) => Promise<void>;
+  /** The platform reported that the network came back. A consumer that waits to retry can retry now. */
+  onNetworkRestored?: () => Promise<void>;
+  onTeamEvent: (hostId: string, event: AgentEvent | TeamRealtimeEvent) => Promise<void>;
+}
+interface ActionsRef {
+  current: RemoteTeamPeerActions;
+}
+type ChannelKind = "rpc" | "events" | "files" | "desktop";
+
+interface PendingRequest {
+  method: string;
+  path: string;
+  resolve: (value: { status: number; body: TeamProtocolV2Json }) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface PeerState {
+  generation: number;
+  hostId: string;
+  hostPublicKey: string;
+  sessionId: string;
+  ticket: string;
+  resumeToken: string | null;
+  signalUrl: string;
+  socket: WebSocket | null;
+  signalChain: Promise<void>;
+  connectionId: string | null;
+  connection: RTCPeerConnection | null;
+  channels: Partial<Record<ChannelKind, RTCDataChannel>>;
+  decoders: Partial<Record<ChannelKind, TeamWebRtcPayloadDecoder>>;
+  channelChains: Partial<Record<ChannelKind, Promise<void>>>;
+  identity: Ed25519Identity;
+  clientPublicKey: string;
+  clientNonce: string;
+  hostNonce: string | null;
+  binding: { clientFingerprint: string; hostFingerprint: string } | null;
+  authenticated: boolean;
+  closed: boolean;
+  reconnectAttempt: number;
+  reconnectTimer: ReturnType<typeof setTimeout> | null;
+  turnRefreshTimer: ReturnType<typeof setTimeout> | null;
+  /** When the TURN credentials must be renewed. Background time does not move it. */
+  turnRefreshDueAt: number;
+  iceServers: RTCIceServer[];
+  lastEventSequence: number;
+  needsResync: boolean;
+  connectedResolve: (() => void) | null;
+  connectedPromise: Promise<void> | null;
+  connectedReject: ((error: Error) => void) | null;
+  connectedTimer: ReturnType<typeof setTimeout> | null;
+  disconnectedTimer: ReturnType<typeof setTimeout> | null;
+  iceRecoveryTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Signal sent `ready` on the current socket. Signal gives each `hello` a new connection ID, so a
+   * frame sent before `ready` carries the old ID, and Signal rejects it.
+   */
+  signalReady: boolean;
+  /** The host answered a request on this peer, so its channels worked after authentication. */
+  answeredRequest: boolean;
+}
+
+const CHANNELS: ChannelKind[] = ["rpc", "events", "files", "desktop"];
+/** How long a peer with a lost ICE path can recover before it is replaced with a new session. */
+const DISCONNECT_GRACE_MS = 15_000;
+/** ICE often recovers a short loss by itself. After this wait, the peer restarts ICE. */
+const ICE_RESTART_DELAY_MS = 2_000;
+/** A Signal socket from before a network change can read as open and deliver nothing. */
+const SIGNAL_RENEW_DELAY_MS = 8_000;
+const COMPATIBILITY_REQUEST_TIMEOUT_MS = 3_000;
+/** The first read on a new peer also waits for a slow relay path, such as TURN over TLS on mobile data. */
+const FIRST_COMPATIBILITY_REQUEST_TIMEOUT_MS = 10_000;
+const REQUEST_TIMEOUT_MS = 10 * 60_000 + 30_000;
+
+export function createRemoteTeamPeer(actions: ActionsRef) {
+  let active = true;
+  let peer: PeerState | null = null;
+  let generation = 0;
+  const pendingRequests = new Map<string, PendingRequest>();
+  const files = createRemoteFileSender(
+    async (data) => {
+      const state = peer;
+      if (!state || !isPeerOnline(state)) throw new Error(sourceText("error.remote.selectedServerOffline"));
+      await sendPayload(state, "files", data);
+    },
+    () => createTeamRequestId((size) => crypto.getRandomValues(new Uint8Array(size))),
+  );
+  const downloads = createRemoteFileReceiver(async (data) => {
+    const state = peer;
+    if (!state || !isPeerOnline(state)) throw new Error(sourceText("error.remote.selectedServerOffline"));
+    await sendPayload(state, "files", data);
+  });
+  const closingSessions = new Map<string, Promise<void>>();
+  // A failed attempt keeps its session for the next attempt on the same host. Ending it each time
+  // made every recovery attempt a create, a ticket and an end on the account Worker.
+  let retainedSession: { hostId: string; sessionId: string } | null = null;
+
+  return {
+    async sendHostStreamData(data: string | ArrayBuffer) {
+      const state = peer;
+      if (!state || !isPeerOnline(state)) throw new Error(sourceText("error.remote.hostConnectionOffline"));
+      await sendPayload(state, "desktop", data);
+    },
+    cancelUpload: () => files.cancelUpload(),
+    /** Tells the host which agent this member is writing to. The host clears it after a few seconds. */
+    setTyping(agentId: string | null, typing: boolean) {
+      const state = peer;
+      if (!state || !isPeerOnline(state)) return;
+      void sendEventControl(state, { type: "team-typing", agentId, typing }).catch(() => undefined);
+    },
+    execute: (command: RemoteTeamCommand) => executeCommand(command, actions),
+    dispose: async () => {
+      active = false;
+      await closePeer(actions.current.endSession);
+      await releaseRetainedSession(actions.current.endSession);
+    },
+    setActive(value: boolean) {
+      active = value;
+      const state = peer;
+      if (!state) return;
+      if (!active) {
+        if (state.reconnectTimer !== null) clearTimeout(state.reconnectTimer);
+        if (state.turnRefreshTimer !== null) clearTimeout(state.turnRefreshTimer);
+        if (state.disconnectedTimer !== null) clearTimeout(state.disconnectedTimer);
+        if (state.iceRecoveryTimer !== null) clearTimeout(state.iceRecoveryTimer);
+        state.disconnectedTimer = null;
+        state.iceRecoveryTimer = null;
+        state.reconnectTimer = null;
+        state.turnRefreshTimer = null;
+        // The host can commit a sent write while the app is inactive. Keep its
+        // response registered so the caller does not offer to send it again.
+        state.needsResync ||= [...pendingRequests.values()].some(
+          (request) => request.method === "GET" || request.method === "HEAD",
+        );
+        rejectRequests(new Error(sourceText("error.remote.appInBackground")), true);
+        if (!state.authenticated) failPeer(state, new Error(sourceText("error.remote.appInBackground")), actions);
+      } else {
+        if (canRecoverPeer(state)) {
+          recoverIce(state, actions, 0);
+        } else if (!isPeerOnline(state)) {
+          failPeer(state, new Error(sourceText("error.remote.desktopRestoreNeeded")), actions);
+        } else {
+          resumeTurnRefresh(state);
+          if (!state.socket) openSignal(state, actions);
+          // The recovery owner reloads workspace reads on every foreground return.
+          // Do not request a second reload for reads canceled on background entry.
+          state.needsResync = false;
+        }
+      }
+    },
+    /**
+     * The platform saw the network come back, such as after a dead zone on mobile data. The path
+     * and the Signal socket from before can both be dead, so renew the socket: its `ready` restarts
+     * ICE on the authenticated peer. An attempt that is still connecting keeps its own deadline.
+     */
+    networkRestored() {
+      const state = peer;
+      if (active && state && !state.closed && state.authenticated) renewSignal(state, actions);
+      void actions.current.onNetworkRestored?.().catch(() => undefined);
+    },
+  };
+  function diagnose(state: PeerState, step: RemoteTeamDiagnostic["step"], detail?: string): void {
+    const diagnostic: RemoteTeamDiagnostic = { hostId: state.hostId, step, ...(detail ? { detail } : {}) };
+    void actions.current.onDiagnostic?.(diagnostic)?.catch(() => undefined);
+  }
+
+  /** The candidate types of the selected pair, such as `relay/udp -> host/udp`. Never the addresses. */
+  async function reportRoute(state: PeerState, connection: RTCPeerConnection): Promise<void> {
+    const stats = await connection.getStats();
+    let route: string | null = null;
+    stats.forEach((report) => {
+      if (route || report.type !== "candidate-pair" || report.state !== "succeeded" || !report.nominated) return;
+      route = `${candidateRoute(stats.get(report.localCandidateId))} -> ${candidateRoute(stats.get(report.remoteCandidateId))}`;
+    });
+    if (route) diagnose(state, "route", route);
+  }
+
+  function candidateRoute(candidate: { candidateType?: string; protocol?: string } | undefined): string {
+    return `${candidate?.candidateType ?? "unknown"}/${candidate?.protocol ?? "unknown"}`;
+  }
+
+  function isPeerOnline(state: PeerState): boolean {
+    return (
+      state.authenticated &&
+      state.connection?.connectionState === "connected" &&
+      CHANNELS.every((kind) => state.channels[kind]?.readyState === "open")
+    );
+  }
+  function canRecoverPeer(state: PeerState): boolean {
+    const connectionState = state.connection?.connectionState;
+    // An authenticated peer is `connecting` only during an ICE restart.
+    return (
+      state.authenticated &&
+      (connectionState === "disconnected" || connectionState === "failed" || connectionState === "connecting") &&
+      CHANNELS.every((kind) => state.channels[kind]?.readyState === "open")
+    );
+  }
+
+  /**
+   * A lost ICE path, such as a phone that moved from Wi-Fi to mobile data, keeps the authenticated
+   * session. Restart ICE on the current Signal socket first. If the path is still lost, open a new
+   * socket, because the old one can be half-open after a network change; its `ready` restarts ICE
+   * again. Only the grace deadline replaces the peer.
+   */
+  function recoverIce(state: PeerState, actions: ActionsRef, delay: number): void {
+    scheduleDisconnectedCheck(state, actions);
+    if (!active || state.iceRecoveryTimer !== null) return;
+    diagnose(state, "ice-recovery", `in ${delay} ms`);
+    // A restart moves the state to `connecting`, so wait for `online`, not for `disconnected`.
+    const canContinue = () => active && !state.closed && peer === state && state.authenticated && !isPeerOnline(state);
+    state.iceRecoveryTimer = setTimeout(() => {
+      state.iceRecoveryTimer = null;
+      if (!canContinue()) return;
+      // A socket that did not get `ready` yet restarts ICE when `ready` arrives.
+      if (canSignal(state)) void restartIce(state).catch(() => undefined);
+      else if (!state.socket) renewSignal(state, actions);
+      state.iceRecoveryTimer = setTimeout(() => {
+        state.iceRecoveryTimer = null;
+        if (canContinue()) renewSignal(state, actions);
+      }, SIGNAL_RENEW_DELAY_MS);
+    }, delay);
+  }
+
+  function renewSignal(state: PeerState, actions: ActionsRef): void {
+    if (state.reconnectTimer !== null) clearTimeout(state.reconnectTimer);
+    state.reconnectTimer = null;
+    const socket = state.socket;
+    // Clear it first, so the close handler does not schedule a second reconnect.
+    state.socket = null;
+    socket?.close();
+    openSignal(state, actions);
+  }
+
+  function scheduleDisconnectedCheck(state: PeerState, actions: ActionsRef): void {
+    if (!active || state.disconnectedTimer !== null) return;
+    state.disconnectedTimer = setTimeout(() => {
+      state.disconnectedTimer = null;
+      if (!isPeerOnline(state)) failPeer(state, new Error(sourceText("error.remote.desktopOffline")), actions);
+    }, DISCONNECT_GRACE_MS);
+  }
+
+  function resyncIfNeeded(state: PeerState, actions: ActionsRef): void {
+    if (!active || !isPeerOnline(state) || !state.needsResync) return;
+    state.needsResync = false;
+    void actions.current.onConnectionUpdate({ hostId: state.hostId, state: "online", message: null, resync: true });
+  }
+  async function executeCommand(command: RemoteTeamCommand, actions: ActionsRef): Promise<RemoteTeamCommandResult> {
+    let commandGeneration = generation;
+    try {
+      if (command.type === "connect") {
+        if (!active) throw new Error(sourceText("error.remote.appInBackground"));
+        if (peer && peer.hostId === command.hostId && peer.hostPublicKey === command.hostPublicKey) {
+          if (canRecoverPeer(peer)) {
+            const recovering = peer;
+            recoverIce(recovering, actions, 0);
+            recovering.connectedPromise ??= new Promise<void>((resolve, reject) => {
+              recovering.connectedResolve = resolve;
+              recovering.connectedReject = reject;
+            });
+          }
+          if (peer.connectedPromise) {
+            await peer.connectedPromise;
+            return { commandId: command.id, ok: true };
+          }
+        }
+        if (
+          peer &&
+          isPeerOnline(peer) &&
+          peer.hostId === command.hostId &&
+          peer.hostPublicKey === command.hostPublicKey
+        ) {
+          return { commandId: command.id, ok: true };
+        }
+        // Tear down locally now; connectPeer only waits for this host's cleanup.
+        void closePeer(actions.current.endSession);
+        const connecting = connectPeer(command.hostId, command.hostPublicKey, actions);
+        commandGeneration = generation;
+        await connecting;
+        return { commandId: command.id, ok: true };
+      }
+      if (command.type === "disconnect") {
+        await closePeer(actions.current.endSession);
+        await releaseRetainedSession(actions.current.endSession);
+        return { commandId: command.id, ok: true };
+      }
+      let reported = -1;
+      const response = await request(command.method, command.path, command.body, command.upload, (sent, total) => {
+        const percent = total > 0 ? Math.floor((sent / total) * 100) : 100;
+        if (percent === reported) return;
+        reported = percent;
+        void actions.current.onUploadProgress?.({ commandId: command.id, sent, total })?.catch(() => undefined);
+      });
+      return { commandId: command.id, ok: true, status: response.status, body: response.body };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : sourceText("error.remote.operationFailed");
+      if (command.type === "connect" && commandGeneration === generation) {
+        await actions.current.onConnectionUpdate({ hostId: command.hostId, state: "offline", message });
+      }
+      return {
+        commandId: command.id,
+        ok: false,
+        error: message,
+      };
+    }
+  }
+
+  async function connectPeer(hostId: string, hostPublicKey: string, actions: ActionsRef): Promise<void> {
+    if (!active) throw new Error(sourceText("error.remote.appInBackground"));
+    const currentGeneration = ++generation;
+    await actions.current.onConnectionUpdate({ hostId, state: "connecting", message: null });
+    const identity = await createEd25519Identity((size) => crypto.getRandomValues(new Uint8Array(size)));
+    // The account API reuses an active logical session. A same-host bootstrap
+    // must not race its revocation, even when failPeer already cleared `peer`.
+    // Cleanup for a different host must never block switching servers.
+    while (closingSessions.has(hostId)) await closingSessions.get(hostId);
+    if (currentGeneration !== generation || !active) throw new Error(sourceText("error.remote.connectionReplaced"));
+    const clientPublicKey = identity.publicKeyPem;
+    const existingSessionId = retainedSession?.hostId === hostId ? retainedSession.sessionId : null;
+    // Cleanup for a different host must never block switching servers.
+    void releaseRetainedSession(actions.current.endSession, hostId);
+    // A failed bootstrap keeps the session for the next attempt.
+    const bootstrap = await actions.current.getBootstrap(hostId, clientPublicKey, existingSessionId);
+    if (retainedSession?.sessionId === existingSessionId) retainedSession = null;
+    if (currentGeneration !== generation || !active) {
+      await actions.current.endSession(bootstrap.sessionId).catch(() => undefined);
+      throw new Error(sourceText("error.remote.connectionReplaced"));
+    }
+    const state: PeerState = {
+      generation: currentGeneration,
+      hostId,
+      hostPublicKey,
+      sessionId: bootstrap.sessionId,
+      ticket: bootstrap.ticket,
+      resumeToken: null,
+      signalUrl: bootstrap.signalUrl,
+      socket: null,
+      signalChain: Promise.resolve(),
+      connectionId: null,
+      connection: null,
+      channels: {},
+      decoders: {},
+      channelChains: {},
+      identity,
+      clientPublicKey,
+      clientNonce: randomBase64Url(32),
+      hostNonce: null,
+      binding: null,
+      authenticated: false,
+      closed: false,
+      reconnectAttempt: 0,
+      reconnectTimer: null,
+      turnRefreshTimer: null,
+      turnRefreshDueAt: 0,
+      iceServers: [],
+      lastEventSequence: 0,
+      needsResync: false,
+      connectedResolve: null,
+      connectedPromise: null,
+      connectedReject: null,
+      connectedTimer: null,
+      disconnectedTimer: null,
+      iceRecoveryTimer: null,
+      signalReady: false,
+      answeredRequest: false,
+    };
+    peer = state;
+    const connected = new Promise<void>((resolve, reject) => {
+      state.connectedResolve = resolve;
+      state.connectedReject = reject;
+      state.connectedTimer = setTimeout(
+        () => failPeer(state, new Error(sourceText("error.remote.desktopDidNotConnect")), actions),
+        30_000,
+      );
+    });
+    state.connectedPromise = connected;
+    try {
+      openSignal(state, actions);
+    } catch (error) {
+      failPeer(state, error, actions);
+    }
+    await connected;
+  }
+
+  function openSignal(state: PeerState, actions: ActionsRef): void {
+    if (!active || state.closed || peer !== state || state.socket) return;
+    const socket = new WebSocket(state.signalUrl);
+    state.socket = socket;
+    state.signalReady = false;
+    socket.onopen = () => {
+      if (state.closed || peer !== state || state.socket !== socket) return;
+      state.reconnectAttempt = 0;
+      diagnose(state, "signal-open");
+      const hello: SignalClientMessage = {
+        type: "hello",
+        version: SIGNAL_PROTOCOL_VERSION,
+        peer: "client",
+        token: state.resumeToken ?? state.ticket,
+      };
+      socket.send(JSON.stringify(hello));
+    };
+    socket.onmessage = (event) => {
+      if (!isString(event.data)) return;
+      const data = event.data;
+      state.signalChain = state.signalChain
+        .then(async () => {
+          // A frame still queued from a socket that `renewSignal` replaced belongs to a removed connection.
+          if (state.closed || peer !== state || state.socket !== socket) return;
+          let message: SignalServerMessage | null;
+          try {
+            message = decodeSignalServerMessage(JSON.parse(data));
+          } catch (error) {
+            // Where the two ends stop agreeing about the wire, and the service would send the same
+            // bytes to the reconnect this would otherwise ask for. `protocol_error` is what lets a
+            // consumer stop instead: every other failure here is a connection that a retry can fix,
+            // and a caller cannot tell them apart from an `offline` update alone.
+            return failPeer(state, error, actions, "protocol_error");
+          }
+          // A frame type this build does not know is a newer Signal service, not a broken connection.
+          if (message) await handleSignal(state, message, actions);
+        })
+        // Only what handling a frame this peer did read can throw -- an ICE or SDP operation the
+        // browser refused, or a host that said it went away. Those are connections failing.
+        .catch((error) => {
+          if (state.socket === socket) failPeer(state, error, actions);
+        });
+    };
+    socket.onerror = () => socket.close();
+    // The event is optional: a diagnostic that throws here would stop the reconnect.
+    socket.onclose = (event?: CloseEvent) => {
+      if (state.socket !== socket) return;
+      state.socket = null;
+      state.signalReady = false;
+      if (state.closed || peer !== state) return;
+      diagnose(state, "signal-closed", `code ${event?.code ?? "unknown"}`);
+      scheduleReconnect(state, actions);
+    };
+  }
+
+  async function handleSignal(state: PeerState, message: SignalServerMessage, actions: ActionsRef): Promise<void> {
+    if (state.closed || peer !== state) return;
+    if (message.type === "account-profile-changed") {
+      // Profile refresh failure must never break the RTC connection.
+      void actions.current.onAccountProfileChanged?.().catch(() => undefined);
+      return;
+    }
+    if (message.type === "account-servers-changed") {
+      // A server list this phone cannot re-read must not break the connection the notice arrived
+      // on either: that connection is to a server this phone already has.
+      void actions.current.onAccountServersChanged?.().catch(() => undefined);
+      return;
+    }
+    if (message.type === "error") {
+      if (message.code === "session_revoked")
+        return failPeer(state, new Error(message.message), actions, "session_revoked");
+      throw new Error(message.message);
+    }
+    if (message.type === "ready") {
+      state.resumeToken = message.resumeToken;
+      // Null on the `ready` that answers a TURN refresh: the credentials are new, the connection is
+      // the one already open.
+      state.connectionId = message.connectionId ?? state.connectionId;
+      state.iceServers = message.iceServers;
+      if (!state.connectionId || state.iceServers.length === 0)
+        throw new Error("Signal returned an incomplete connection.");
+      state.signalReady = true;
+      diagnose(state, "signal-ready", `${state.iceServers.length} ICE servers`);
+      scheduleTurnRefresh(state);
+      if (state.connection) {
+        state.connection.setConfiguration({ iceServers: state.iceServers, bundlePolicy: "max-bundle" });
+        await restartIce(state);
+      }
+      if (!state.connection) {
+        const connection = createPeerConnection(state, state.iceServers, actions);
+        for (const kind of CHANNELS)
+          bindChannel(state, kind, connection.createDataChannel(channelLabel(kind), { ordered: true }), actions);
+        const offer = await connection.createOffer();
+        await connection.setLocalDescription(offer);
+        sendSignal(state, {
+          type: "offer",
+          version: SIGNAL_PROTOCOL_VERSION,
+          connectionId: state.connectionId,
+          channel: "team",
+          sdp: requiredSdp(offer),
+        });
+      }
+      return;
+    }
+    if (message.type === "disconnect" && message.connectionId === state.connectionId) {
+      failPeer(state, new Error(sourceText("error.remote.desktopOffline")), actions);
+      return;
+    }
+    // `peer-ready`, `turn-refresh` and a `disconnect` for someone else carry nothing this peer acts
+    // on; only the relayed negotiation does, and only on the team channel.
+    if (message.type !== "answer" && message.type !== "ice-candidate" && message.type !== "ice-restart") return;
+    if (message.channel !== "team" || message.connectionId !== state.connectionId) return;
+    if (message.type === "answer") {
+      const previousFingerprint = state.binding?.hostFingerprint;
+      const nextFingerprint = message.sdp
+        .match(/^a=fingerprint:sha-256\s+([^\r\n]+)$/imu)?.[1]
+        ?.trim()
+        .toUpperCase();
+      if (previousFingerprint && nextFingerprint !== previousFingerprint) {
+        throw new Error(sourceText("error.remote.desktopRestarted"));
+      }
+      await state.connection?.setRemoteDescription({ type: "answer", sdp: message.sdp });
+    } else if (message.type === "ice-candidate") {
+      await state.connection?.addIceCandidate({
+        candidate: message.candidate,
+        sdpMid: message.sdpMid,
+        sdpMLineIndex: message.sdpMLineIndex,
+      });
+    } else {
+      await restartIce(state);
+    }
+  }
+
+  function createPeerConnection(state: PeerState, iceServers: RTCIceServer[], actions: ActionsRef): RTCPeerConnection {
+    const connection = new RTCPeerConnection({ iceServers, bundlePolicy: "max-bundle" });
+    state.connection = connection;
+    connection.onicecandidate = (event) => {
+      if (!event.candidate || !state.connectionId || !canSignal(state)) return;
+      sendSignal(state, {
+        type: "ice-candidate",
+        version: SIGNAL_PROTOCOL_VERSION,
+        connectionId: state.connectionId,
+        channel: "team",
+        candidate: event.candidate.candidate,
+        sdpMid: event.candidate.sdpMid,
+        sdpMLineIndex: event.candidate.sdpMLineIndex,
+      });
+    };
+    connection.ondatachannel = (event) => {
+      const kind = channelKind(event.channel.label);
+      if (kind) bindChannel(state, kind, event.channel, actions);
+    };
+    connection.onconnectionstatechange = () => {
+      if (state.connection !== connection || state.closed || peer !== state) return;
+      const connectionState = connection.connectionState;
+      diagnose(state, "peer-state", connectionState);
+      if (connectionState === "connected") void reportRoute(state, connection).catch(() => undefined);
+      // ICE can recover a network change without replacing the authenticated session. A failed
+      // path waits for nothing: only an ICE restart can recover it.
+      if (canRecoverPeer(state)) {
+        recoverIce(state, actions, connectionState === "failed" ? 0 : ICE_RESTART_DELAY_MS);
+        return;
+      }
+      if (connectionState === "disconnected") {
+        scheduleDisconnectedCheck(state, actions);
+        return;
+      }
+      if (connectionState === "connected") {
+        if (state.disconnectedTimer !== null) clearTimeout(state.disconnectedTimer);
+        if (state.iceRecoveryTimer !== null) clearTimeout(state.iceRecoveryTimer);
+        state.disconnectedTimer = null;
+        state.iceRecoveryTimer = null;
+      }
+      if (isPeerOnline(state)) {
+        if (active && state.turnRefreshTimer === null) resumeTurnRefresh(state);
+        settleConnected(state);
+        resyncIfNeeded(state, actions);
+      }
+      if (connectionState === "failed" || connectionState === "closed") {
+        failPeer(state, new Error(sourceText("error.remote.desktopOffline")), actions);
+      }
+    };
+    return connection;
+  }
+
+  function bindChannel(state: PeerState, kind: ChannelKind, channel: RTCDataChannel, actions: ActionsRef): void {
+    channel.binaryType = "arraybuffer";
+    channel.bufferedAmountLowThreshold = 1024 * 1024;
+    state.channels[kind] = channel;
+    state.decoders[kind] = new TeamWebRtcPayloadDecoder();
+    state.channelChains[kind] = Promise.resolve();
+    channel.onopen = () => {
+      if (CHANNELS.every((name) => state.channels[name]?.readyState === "open") && !state.binding) {
+        diagnose(state, "channels-open");
+        void beginAuthentication(state).catch((error) => failPeer(state, error, actions));
+      }
+    };
+    channel.onmessage = (event) => {
+      const data = event.data;
+      const previous = state.channelChains[kind] ?? Promise.resolve();
+      state.channelChains[kind] = previous
+        .then(async () => {
+          if (!isString(data) && !(data instanceof ArrayBuffer)) {
+            throw new Error("The host sent unsupported binary data.");
+          }
+          const decoded = state.decoders[kind]?.push(data);
+          if (decoded !== undefined) await handleChannelData(state, kind, decoded, actions);
+        })
+        .catch((error) => failPeer(state, error, actions));
+    };
+    channel.onerror = () => failPeer(state, new Error(sourceText("error.remote.dataChannelFailed", { kind })), actions);
+    channel.onclose = () => {
+      if (state.authenticated) failPeer(state, new Error(sourceText("error.remote.desktopOffline")), actions);
+    };
+  }
+
+  async function beginAuthentication(state: PeerState): Promise<void> {
+    const binding = {
+      clientFingerprint: descriptionFingerprint(state.connection?.localDescription ?? null),
+      hostFingerprint: descriptionFingerprint(state.connection?.remoteDescription ?? null),
+    };
+    state.binding = binding;
+    const transcript = teamProtocolV2AuthenticationTranscript({
+      hostId: state.hostId,
+      sessionId: state.sessionId,
+      ticket: state.ticket,
+      clientPublicKey: state.clientPublicKey,
+      clientNonce: state.clientNonce,
+      clientFingerprint: binding.clientFingerprint,
+      hostFingerprint: binding.hostFingerprint,
+    });
+    const signature = await signEd25519(new TextEncoder().encode(transcript), state.identity.secretKey);
+    await sendPayload(
+      state,
+      "rpc",
+      encodeTeamProtocolV2Frame({
+        version: 2,
+        type: "auth-init",
+        ticket: state.ticket,
+        clientPublicKey: state.clientPublicKey,
+        clientNonce: state.clientNonce,
+        signature: bytesToBase64Url(signature),
+      }),
+    );
+  }
+
+  async function handleChannelData(
+    state: PeerState,
+    kind: ChannelKind,
+    data: string | ArrayBuffer,
+    actions: ActionsRef,
+  ): Promise<void> {
+    if (state.closed || peer !== state) return;
+    if (kind === "desktop") {
+      if (!state.authenticated) throw new Error("The host sent stream data before authentication.");
+      actions.current.onHostStreamData?.(data);
+      return;
+    }
+    if (kind === "files") {
+      if (!state.authenticated) throw new Error(sourceText("error.remote.dataBeforeAuth"));
+      if (!(await downloads.receive(data)) && isString(data)) files.receive(data);
+      return;
+    }
+    if (!isString(data)) return;
+    if (kind === "rpc" && !state.authenticated) {
+      await handleAuthenticationFrame(state, decodeTeamProtocolV2AuthFrame(data), actions);
+      return;
+    }
+    if (!state.authenticated) throw new Error(sourceText("error.remote.dataBeforeAuth"));
+    if (kind === "rpc") {
+      const frame = decodeTeamProtocolV2RpcFrame(data);
+      if (frame.type !== "response") throw new Error("The host returned an invalid RPC frame.");
+      state.answeredRequest = true;
+      const pending = pendingRequests.get(frame.requestId);
+      if (!pending) return;
+      if ("error" in frame) pending.reject(new Error(frame.error.message));
+      else if (!isDynamicRecord(frame.result) || !isNumber(frame.result.status) || !("body" in frame.result)) {
+        pending.reject(new Error("The host returned an invalid response."));
+      } else if (isDynamicRecord(frame.result.file) && isString(frame.result.file.transferId)) {
+        // The RPC response arrived; the file receiver now owns the inactivity
+        // deadline. A download failure rejects this request, not the peer.
+        clearTimeout(pending.timer);
+        try {
+          const file = await downloads.take(frame.result.file.transferId);
+          pending.resolve({ status: frame.result.status, body: { ...file } });
+        } catch (error) {
+          pending.reject(
+            error instanceof Error ? error : new Error(sourceText("error.remote.attachmentDownloadFailed")),
+          );
+        }
+      } else {
+        const sideRoute = teamSideRouteCodec(pending.path);
+        pending.resolve({
+          status: frame.result.status,
+          body: sideRoute
+            ? sideRoute.response(pending.path, frame.result.status, frame.result.body)
+            : decodeTeamProtocolV6WebRtcHttpResponse(
+                pending.method,
+                pending.path,
+                frame.result.status,
+                frame.result.body,
+              ),
+        });
+      }
+      // Keep the request registered until decoding succeeds, so failPeer can
+      // reject the caller if a malformed response tears down the connection.
+      clearTimeout(pending.timer);
+      pendingRequests.delete(frame.requestId);
+      return;
+    }
+    if (kind !== "events") return;
+    const frame = decodeTeamProtocolV2EventFrame(data);
+    if (frame.type === "event-reset") {
+      state.lastEventSequence = frame.nextSequence - 1;
+      await actions.current.onConnectionUpdate({
+        hostId: state.hostId,
+        state: "online",
+        message: null,
+        resync: true,
+      });
+      await sendEventAck(state);
+      return;
+    }
+    if (frame.type !== "event") throw new Error("The host returned an invalid event frame.");
+    if (frame.sequence <= state.lastEventSequence) {
+      await sendEventAck(state);
+      return;
+    }
+    if (frame.sequence !== state.lastEventSequence + 1) throw new Error(sourceText("error.remote.eventStreamGap"));
+    const channel = optionalTeamEvent(frame.payload);
+    const decoded = channel ? { status: "known" as const, event: channel } : decodeTeamProtocolV6CurrentEvent(frame);
+    if (decoded.status === "invalid") throw new Error(sourceText("error.remote.malformedEvent"));
+    state.lastEventSequence = frame.sequence;
+    if (decoded.status === "known") await actions.current.onTeamEvent(state.hostId, decoded.event);
+    await sendEventAck(state);
+  }
+
+  async function handleAuthenticationFrame(
+    state: PeerState,
+    frame: TeamProtocolV2AuthFrame,
+    actions: ActionsRef,
+  ): Promise<void> {
+    if (frame.type === "auth-ready") {
+      if (!state.binding || frame.clientNonce !== state.clientNonce)
+        throw new Error("Host authentication did not match.");
+      const transcript = teamProtocolV2AuthenticationTranscript({
+        hostId: state.hostId,
+        sessionId: state.sessionId,
+        ticket: state.ticket,
+        clientPublicKey: state.clientPublicKey,
+        clientNonce: state.clientNonce,
+        hostNonce: frame.hostNonce,
+        clientFingerprint: state.binding.clientFingerprint,
+        hostFingerprint: state.binding.hostFingerprint,
+      });
+      const valid = await verifyEd25519Pem(
+        base64UrlToBytes(frame.signature),
+        new TextEncoder().encode(transcript),
+        state.hostPublicKey,
+      );
+      if (state.closed || peer !== state) return;
+      if (!valid) throw new Error(sourceText("error.remote.desktopIdentityNotVerified"));
+      state.hostNonce = frame.hostNonce;
+      await sendPayload(
+        state,
+        "rpc",
+        encodeTeamProtocolV2Frame({
+          version: 2,
+          type: "auth-complete",
+          clientNonce: state.clientNonce,
+          hostNonce: frame.hostNonce,
+        }),
+      );
+      return;
+    }
+    if (
+      frame.type !== "auth-confirmed" ||
+      frame.clientNonce !== state.clientNonce ||
+      frame.hostNonce !== state.hostNonce
+    ) {
+      throw new Error("The desktop returned an invalid authentication confirmation.");
+    }
+    state.authenticated = true;
+    diagnose(state, "authenticated");
+    settleConnected(state);
+    await sendEventAck(state);
+    await actions.current.onConnectionUpdate({ hostId: state.hostId, state: "online", message: null });
+  }
+
+  async function request(
+    method: string,
+    path: string,
+    body: TeamProtocolV2Json,
+    upload?: RemoteFileUpload,
+    onUploadProgress?: (sent: number, total: number) => void,
+  ) {
+    const state = peer;
+    if (!state || !isPeerOnline(state)) {
+      if (state && (method === "GET" || method === "HEAD")) state.needsResync = true;
+      throw new Error(sourceText("error.remote.selectedServerOffline"));
+    }
+    const delivery = upload && onUploadProgress ? trackUploadDelivery(state, onUploadProgress) : null;
+    let bodyTransferId: string | null = null;
+    try {
+      bodyTransferId = upload ? await files.upload(upload, delivery?.queued) : null;
+      if (peer !== state || !isPeerOnline(state))
+        throw new Error(sourceText("error.remote.attachmentConnectionChanged"));
+    } catch (error) {
+      delivery?.stop();
+      throw error;
+    }
+    // Validate before registering a pending promise. A rejected local payload must not leave
+    // an unobserved promise to reject again on timeout or disconnection.
+    const sideRoute = teamSideRouteCodec(path);
+    const payloadBody = upload
+      ? null
+      : sideRoute
+        ? sideRoute.request(path, body)
+        : // A caller names a provider and model on agent creation only when the host advertises
+          // `agent-create-model`, so the pair is kept whenever it is present.
+          encodeTeamProtocolV6WebRtcHttpRequest(method, path, body, {
+            preserveSemanticTags: true,
+            agentCreateModel: true,
+          });
+    const requestId = createTeamRequestId((size) => crypto.getRandomValues(new Uint8Array(size)));
+    const checksConnection = method === "GET" && path === TEAM_API_ROUTES.compatibility;
+    const compatibilityTimeout = state.answeredRequest
+      ? COMPATIBILITY_REQUEST_TIMEOUT_MS
+      : FIRST_COMPATIBILITY_REQUEST_TIMEOUT_MS;
+    const result = new Promise<{ status: number; body: TeamProtocolV2Json }>((resolve, reject) => {
+      const timer = setTimeout(
+        () => {
+          pendingRequests.delete(requestId);
+          const error = new Error(sourceText("error.remote.desktopRequestTimeout"));
+          reject(error);
+          // The required compatibility read also confirms that a reused peer can answer.
+          // Do not keep retrying reads on channels whose local state is stale.
+          if (checksConnection) failPeer(state, error, actions);
+        },
+        checksConnection ? compatibilityTimeout : REQUEST_TIMEOUT_MS,
+      );
+      pendingRequests.set(requestId, { method, path, resolve, reject, timer });
+    });
+    void sendPayload(
+      state,
+      "rpc",
+      encodeTeamProtocolV2Frame({
+        version: 2,
+        type: "request",
+        requestId,
+        operation: "http.request",
+        payload: {
+          method,
+          path,
+          body: payloadBody,
+          ...(bodyTransferId ? { bodyTransferId, contentType: upload?.mimeType } : {}),
+          capabilities: [...TEAM_CURRENT_CAPABILITIES],
+        },
+      }),
+    ).catch((error) => {
+      const pending = pendingRequests.get(requestId);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      pendingRequests.delete(requestId);
+      pending.reject(error instanceof Error ? error : new Error(sourceText("error.remote.requestNotSent")));
+    });
+    if (!delivery) return result;
+    return result.then(
+      (response) => {
+        // The host answers only once it holds every byte, so its answer completes the ring.
+        delivery.complete();
+        return response;
+      },
+      (error: unknown) => {
+        delivery.stop();
+        throw error;
+      },
+    );
+  }
+
+  /**
+   * Upload progress as bytes that have left the phone. A chunk counts once the data channel has
+   * sent it, not when it enters the channel's buffer: that buffer takes 4 MB before it pushes
+   * back, so a photo would read as done the moment it was queued, and then wait at 100 %.
+   */
+  function trackUploadDelivery(state: PeerState, onProgress: (sent: number, total: number) => void) {
+    let queued = 0;
+    let total = 0;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      if (timer !== null) clearInterval(timer);
+      timer = null;
+    };
+    const report = () => {
+      const buffered = state.channels.files?.bufferedAmount ?? 0;
+      // The buffer also holds frame headers, so this can read a little low, never high.
+      onProgress(Math.max(0, Math.min(total, queued - buffered)), total);
+      if (buffered === 0 && queued >= total) stop();
+    };
+    return {
+      queued(sent: number, size: number) {
+        queued = sent;
+        total = size;
+        report();
+        // Chunks stop arriving while the buffer drains, so read it until it is empty.
+        timer ??= setInterval(report, 100);
+      },
+      complete() {
+        stop();
+        if (total > 0) onProgress(total, total);
+      },
+      stop,
+    };
+  }
+
+  async function sendEventAck(state: PeerState): Promise<void> {
+    await sendPayload(
+      state,
+      "events",
+      encodeTeamProtocolV2Frame({ version: 2, type: "event-ack", throughSequence: state.lastEventSequence }),
+    );
+  }
+
+  async function sendEventControl(state: PeerState, control: TeamProtocolV1CurrentEventControl): Promise<void> {
+    await sendPayload(
+      state,
+      "events",
+      encodeTeamProtocolV2Frame({
+        version: 2,
+        type: "event-control",
+        control: toWireTeamProtocolV1ClientEvent(control),
+      }),
+    );
+  }
+
+  async function sendPayload(state: PeerState, kind: ChannelKind, data: string | ArrayBuffer): Promise<void> {
+    const channel = state.channels[kind];
+    if (channel?.readyState !== "open") throw new Error(sourceText("error.remote.channelNotOpen"));
+    const maximumMessageSize = state.connection?.sctp?.maxMessageSize ?? Number.POSITIVE_INFINITY;
+    for (const frame of encodeTeamWebRtcPayload(data, maximumMessageSize)) {
+      await waitForWritable(channel);
+      if (frame instanceof ArrayBuffer) channel.send(frame);
+      else channel.send(frame);
+    }
+  }
+
+  function waitForWritable(channel: RTCDataChannel): Promise<void> {
+    if (channel.bufferedAmount <= 4 * 1024 * 1024) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        channel.removeEventListener("bufferedamountlow", onLow);
+        reject(new Error(sourceText("error.remote.channelBackpressure")));
+      }, 60_000);
+      const onLow = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        channel.removeEventListener("bufferedamountlow", onLow);
+        resolve();
+      };
+      channel.addEventListener("bufferedamountlow", onLow);
+      if (channel.bufferedAmount <= channel.bufferedAmountLowThreshold) onLow();
+    });
+  }
+
+  async function restartIce(state: PeerState): Promise<void> {
+    const connection = state.connection;
+    if (!connection || !state.connectionId) return;
+    connection.restartIce();
+    const offer = await connection.createOffer({ iceRestart: true });
+    await connection.setLocalDescription(offer);
+    sendSignal(state, {
+      type: "offer",
+      version: SIGNAL_PROTOCOL_VERSION,
+      connectionId: state.connectionId,
+      channel: "team",
+      sdp: requiredSdp(offer),
+    });
+  }
+
+  function canSignal(state: PeerState): boolean {
+    return state.signalReady && state.socket?.readyState === WebSocket.OPEN;
+  }
+
+  function sendSignal(state: PeerState, message: SignalClientMessage): void {
+    const socket = state.socket;
+    if (!socket || !canSignal(state)) throw new Error(sourceText("error.remote.signalOffline"));
+    socket.send(JSON.stringify(message));
+  }
+
+  function scheduleReconnect(state: PeerState, actions: ActionsRef): void {
+    if (!active || state.reconnectTimer !== null) return;
+    // A signaling-only interruption can resume inside Signal's grace window while
+    // the data channels stay online. A peer that recovers its ICE path needs Signal
+    // for the restart. The recovery owner replaces dead peers.
+    const delay =
+      isPeerOnline(state) || canRecoverPeer(state) ? Math.min(30_000, 500 * 2 ** state.reconnectAttempt++) : 60_000;
+    diagnose(state, "signal-retry", `in ${delay} ms`);
+    state.reconnectTimer = setTimeout(() => {
+      state.reconnectTimer = null;
+      openSignal(state, actions);
+    }, delay);
+  }
+
+  /** Keeps the deadline from before background entry. A new 45-minute wait could pass the credentials' expiry. */
+  function resumeTurnRefresh(state: PeerState): void {
+    scheduleTurnRefresh(state, Math.max(0, state.turnRefreshDueAt - Date.now()));
+  }
+
+  function scheduleTurnRefresh(state: PeerState, delay = SIGNAL_TURN_REFRESH_INTERVAL_MS): void {
+    if (!active || state.closed || peer !== state) return;
+    if (state.turnRefreshTimer !== null) clearTimeout(state.turnRefreshTimer);
+    state.turnRefreshDueAt = Date.now() + delay;
+    state.turnRefreshTimer = setTimeout(() => {
+      state.turnRefreshTimer = null;
+      if (canSignal(state)) {
+        try {
+          sendSignal(state, {
+            type: "turn-refresh",
+            version: SIGNAL_PROTOCOL_VERSION,
+            connectionId: state.connectionId,
+          });
+        } catch {
+          // The reconnect path will request fresh TURN credentials.
+        }
+      }
+      scheduleTurnRefresh(state);
+    }, delay);
+  }
+
+  function failPeer(
+    state: PeerState,
+    error: unknown,
+    actions: ActionsRef,
+    code?: RemoteTeamConnectionUpdate["code"],
+  ): void {
+    if (state.closed || peer !== state) return;
+    const message = error instanceof Error ? error.message : sourceText("error.remote.webRtcConnectionFailed");
+    diagnose(state, "failed", code ? `${code}: ${message}` : message);
+    rejectConnection(state, new Error(message));
+    void actions.current.onConnectionUpdate({
+      hostId: state.hostId,
+      state: "offline",
+      message,
+      ...(code ? { code } : {}),
+    });
+    // A revoked session or a host that broke the protocol starts again from a new session.
+    void closePeer(actions.current.endSession, code === undefined);
+  }
+
+  function rejectRequests(error: Error, readsOnly = false): void {
+    for (const [id, pending] of pendingRequests) {
+      if (readsOnly && pending.method !== "GET" && pending.method !== "HEAD") continue;
+      pendingRequests.delete(id);
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+  }
+
+  /** Ends a kept session, unless it belongs to `keepHostId`. */
+  async function releaseRetainedSession(
+    endSession: (sessionId: string) => Promise<void>,
+    keepHostId?: string,
+  ): Promise<void> {
+    const retained = retainedSession;
+    if (!retained || retained.hostId === keepHostId) return;
+    retainedSession = null;
+    await endSession(retained.sessionId).catch(() => undefined);
+  }
+
+  async function closePeer(endSession: (sessionId: string) => Promise<void>, retainSession = false): Promise<void> {
+    files.cancel();
+    downloads.clear();
+    const state = peer;
+    peer = null;
+    generation += 1;
+    if (!state) return;
+    state.closed = true;
+    if (state.reconnectTimer !== null) clearTimeout(state.reconnectTimer);
+    if (state.turnRefreshTimer !== null) clearTimeout(state.turnRefreshTimer);
+    if (state.connectedTimer !== null) clearTimeout(state.connectedTimer);
+    if (state.disconnectedTimer !== null) clearTimeout(state.disconnectedTimer);
+    if (state.iceRecoveryTimer !== null) clearTimeout(state.iceRecoveryTimer);
+    state.socket?.close();
+    state.connection?.close();
+    for (const decoder of Object.values(state.decoders)) decoder?.reset();
+    state.channelChains = {};
+    rejectRequests(new Error(sourceText("error.remote.serverDisconnected")));
+    rejectConnection(state, new Error(sourceText("error.remote.serverDisconnected")));
+    if (retainSession) {
+      retainedSession = { hostId: state.hostId, sessionId: state.sessionId };
+      return;
+    }
+    const cleanup = (closingSessions.get(state.hostId) ?? Promise.resolve())
+      .then(() => endSession(state.sessionId))
+      .catch(() => undefined);
+    closingSessions.set(state.hostId, cleanup);
+    try {
+      await cleanup;
+    } finally {
+      if (closingSessions.get(state.hostId) === cleanup) closingSessions.delete(state.hostId);
+    }
+  }
+
+  function settleConnected(state: PeerState): void {
+    if (state.connectedTimer !== null) clearTimeout(state.connectedTimer);
+    state.connectedTimer = null;
+    state.connectedResolve?.();
+    state.connectedResolve = null;
+    state.connectedReject = null;
+    state.connectedPromise = null;
+  }
+
+  function rejectConnection(state: PeerState, error: Error): void {
+    if (state.connectedTimer !== null) clearTimeout(state.connectedTimer);
+    state.connectedTimer = null;
+    state.connectedReject?.(error);
+    state.connectedResolve = null;
+    state.connectedReject = null;
+    state.connectedPromise = null;
+  }
+
+  function channelLabel(kind: ChannelKind): string {
+    if (kind === "desktop") return "openbot.remote-desktop.signal.v1";
+    return TEAM_PROTOCOL_V2_CHANNELS[kind];
+  }
+
+  function channelKind(label: string): ChannelKind | null {
+    if (label === TEAM_PROTOCOL_V2_CHANNELS.rpc) return "rpc";
+    if (label === TEAM_PROTOCOL_V2_CHANNELS.events) return "events";
+    if (label === TEAM_PROTOCOL_V2_CHANNELS.files) return "files";
+    if (label === "openbot.remote-desktop.signal.v1") return "desktop";
+    return null;
+  }
+
+  function descriptionFingerprint(description: RTCSessionDescription | null): string {
+    const fingerprint = description?.sdp.match(/^a=fingerprint:sha-256\s+([^\r\n]+)$/imu)?.[1]?.trim();
+    if (!fingerprint) throw new Error("The WebRTC channel binding is unavailable.");
+    return fingerprint.toUpperCase();
+  }
+
+  function requiredSdp(description: RTCSessionDescriptionInit): string {
+    if (!description.sdp) throw new Error("WebRTC did not create a session description.");
+    return description.sdp;
+  }
+
+  function randomBase64Url(size: number): string {
+    return bytesToBase64Url(crypto.getRandomValues(new Uint8Array(size)));
+  }
+
+  function bytesToBase64Url(bytes: Uint8Array): string {
+    return bytesToBase64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+  }
+
+  function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
+    const padding = "=".repeat((4 - (value.length % 4)) % 4);
+    return base64ToBytes(value.replaceAll("-", "+").replaceAll("_", "/") + padding);
+  }
+
+  function bytesToBase64(bytes: Uint8Array): string {
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary);
+  }
+
+  function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  }
+}

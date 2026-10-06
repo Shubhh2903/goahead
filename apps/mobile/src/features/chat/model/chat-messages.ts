@@ -1,0 +1,491 @@
+import { sortConversationMessages } from "@openbot/contracts/conversation-order";
+import type {
+  AgentExchangeSummary,
+  AttachmentSummary,
+  ChannelMessage,
+  ChannelRoutingConversationEvent,
+  ConversationMessage,
+  ConversationMessageSender,
+  ConversationQuestionPrompt,
+  ImageGenerationInfo,
+  QueueDelivery,
+  RoutineConversationEventAction,
+  RoutineRunStatus,
+} from "@openbot/contracts/ipc";
+import {
+  CONVERSATION_PLAN_ITEM_TYPE,
+  channelRoutingConversationEvent,
+  parseConversationPlanText,
+  routineConversationEvent,
+  routineRunConversationEvent,
+} from "@openbot/contracts/ipc";
+import type { MobileTextKey } from "@openbot/i18n/mobile";
+
+export type RoutineMarkerEvent = RoutineConversationEventAction | RoutineRunStatus;
+
+export type ChatPlanStepState = "pending" | "active" | "done";
+
+export type ChatMessage =
+  | {
+      id: string;
+      kind: "channel-routing";
+      event:
+        | ChannelRoutingConversationEvent
+        | {
+            action: ChannelRoutingConversationEvent["action"];
+            agentId: null;
+            agentName: string;
+          };
+    }
+  | { id: string; kind: "exchange"; exchange: AgentExchangeSummary }
+  /** A routine created, changed, deleted, or run by the agent. The label matches the desktop marker. */
+  | { id: string; kind: "routine"; event: RoutineMarkerEvent; label: MobileTextKey; routineName: string }
+  | { id: string; kind: "question"; turnId: string | undefined; prompt: ConversationQuestionPrompt }
+  | {
+      id: string;
+      kind: "message";
+      author: "agent" | "user";
+      speaker?: ChannelMessage["author"];
+      /** Another person who wrote this message in an agent chat. The reader's own messages have none. */
+      sender?: ConversationMessageSender;
+      superseded?: boolean;
+      body: string;
+      streaming: boolean;
+      status?: ConversationMessage["status"];
+      replyToMessageId?: string | null;
+      attachments?: AttachmentSummary[];
+      /** An image the agent is generating or generated. Its first attachment is the image. */
+      imageGeneration?: ImageGenerationInfo;
+      /** Why the turn of a failed user message stopped, as the host reported it. */
+      failureReason?: string;
+    }
+  /** The task list of an agent plan. The header is `heading` when set, else a catalog title. */
+  | {
+      id: string;
+      kind: "plan";
+      heading: string | null;
+      /** An explanation too long for the header. */
+      explanation: string | null;
+      stopped: boolean;
+      steps: { id: string; text: string; state: ChatPlanStepState }[];
+    }
+  | { id: string; kind: "thinking"; turnId: string | undefined; steps: { id: string; text: string }[] };
+
+export interface PendingChatMessage {
+  message: Extract<ChatMessage, { kind: "message" }>;
+  baseline: Set<string>;
+  serverId: string | null;
+}
+
+export function indexChatMessages(
+  messages: readonly ChatMessage[],
+  aliases: ReadonlyMap<string, string>,
+  references: readonly ChatMessage[] = [],
+) {
+  const index = new Map([...references, ...messages].map((message) => [message.id, message]));
+  // Reply references use host IDs even when a delivered bubble keeps its local render key.
+  for (const [hostId, localId] of aliases) {
+    const message = index.get(localId);
+    if (message) index.set(hostId, message);
+  }
+  return index;
+}
+
+export function presentChatMessages(
+  messages: ChatMessage[],
+  pending: PendingChatMessage | null,
+  aliases: ReadonlyMap<string, string>,
+): ChatMessage[] {
+  // Events can precede the receipt. Wait for its ID rather than matching by text,
+  // which could incorrectly merge another member's identical message.
+  const visible =
+    pending && !pending.serverId ? messages.filter((message) => pending.baseline.has(message.id)) : messages;
+  const result = visible.map((message) => {
+    // Keep the local image mounted until the caller caches the final attachment IDs.
+    if (pending?.serverId === message.id) return pending.message;
+    const alias = aliases.get(message.id);
+    if (alias === undefined) return message;
+    let aliased = aliasedMessages.get(message);
+    if (aliased?.id !== alias) {
+      aliased = { ...message, id: alias };
+      aliasedMessages.set(message, aliased);
+    }
+    return aliased;
+  });
+  if (pending && !messages.some((message) => message.id === pending.serverId)) result.push(pending.message);
+  return result;
+}
+
+// The reader decides whether a user message is their own, so a bubble is kept for one reader.
+const projectedBubbles = new WeakMap<ConversationMessage, { readerKey: string; bubble: ChatMessage }>();
+const projectedExchanges = new WeakMap<ConversationMessage, ChatMessage>();
+const projectedQuestions = new WeakMap<ConversationMessage, ChatMessage>();
+const projectedRoutines = new WeakMap<ConversationMessage, ChatMessage>();
+
+const ROUTINE_RUN_LABELS = {
+  queued: "mobile.chat.routine.invoked",
+  running: "mobile.chat.routine.running",
+  "needs-attention": "mobile.chat.routine.needsAttention",
+  succeeded: "mobile.chat.routine.completed",
+  failed: "mobile.chat.routine.failed",
+  interrupted: "mobile.chat.routine.interrupted",
+  cancelled: "mobile.chat.routine.cancelled",
+} as const satisfies Record<RoutineRunStatus, MobileTextKey>;
+
+const ROUTINE_ACTION_LABELS = {
+  created: "mobile.chat.routine.created",
+  updated: "mobile.chat.routine.updated",
+  deleted: "mobile.chat.routine.deleted",
+} as const satisfies Record<RoutineConversationEventAction, MobileTextKey>;
+
+/** The routine marker of a host message. A run has one marker per state; `runId` groups them. */
+function routineMarker(message: ConversationMessage) {
+  const lifecycle = routineConversationEvent(message);
+  if (lifecycle) {
+    return {
+      runId: null,
+      event: lifecycle.action,
+      label: ROUTINE_ACTION_LABELS[lifecycle.action],
+      routineName: lifecycle.routineName,
+    };
+  }
+  const run = routineRunConversationEvent(message);
+  if (run)
+    return { runId: run.runId, event: run.status, label: ROUTINE_RUN_LABELS[run.status], routineName: run.routineName };
+  if (message.routine)
+    return {
+      runId: message.routine.runId,
+      event: "queued" as const,
+      label: ROUTINE_RUN_LABELS.queued,
+      routineName: message.routine.name,
+    };
+  return null;
+}
+
+/** Like desktop, a run shows only its latest state. Returns the ID of the latest message of each run. */
+function latestRoutineRunMessages(messages: readonly ConversationMessage[]) {
+  const latest = new Map<string, string>();
+  for (const message of messages) {
+    const runId = routineMarker(message)?.runId;
+    if (runId) latest.set(runId, message.id);
+  }
+  return new Set(latest.values());
+}
+
+function projectRoutineMarker(message: ConversationMessage, latestRuns: ReadonlySet<string>): ChatMessage | null {
+  const marker = routineMarker(message);
+  if (!marker || (marker.runId && !latestRuns.has(message.id))) return null;
+  return projectedMarker(projectedRoutines, message, () => ({
+    id: `routine:${message.id}`,
+    kind: "routine",
+    event: marker.event,
+    label: marker.label,
+    routineName: marker.routineName,
+  }));
+}
+const aliasedMessages = new WeakMap<ChatMessage, ChatMessage>();
+
+const PLAN_HEADING_LIMIT = 80;
+
+/**
+ * The task list of a `plan` message, as desktop shows it. A released host sends only the checklist
+ * text, so the plan is read back from it. The last line of a streaming text can be incomplete, so
+ * it is left out. Returns null when the text is not a checklist; the message then shows as text.
+ */
+function projectPlan(message: ConversationMessage): ChatMessage | null {
+  if (message.author !== "assistant" || message.itemType !== CONVERSATION_PLAN_ITEM_TYPE) return null;
+  const streaming = message.status === "streaming";
+  const lastLine = message.text.lastIndexOf("\n");
+  const plan =
+    message.plan ??
+    parseConversationPlanText(message.text) ??
+    (streaming && lastLine > 0 ? parseConversationPlanText(message.text.slice(0, lastLine)) : null);
+  if (!plan?.steps.length) return null;
+  // A step runs only while its turn runs. After the turn ends, an unfinished step is not started.
+  const steps = plan.steps.map((step) => {
+    const state: ChatPlanStepState =
+      step.status === "completed" ? "done" : step.status === "inProgress" && streaming ? "active" : "pending";
+    return { id: step.id, text: state === "active" ? (step.activeText ?? step.text) : step.text, state };
+  });
+  const short = plan.explanation !== null && plan.explanation.length <= PLAN_HEADING_LIMIT;
+  return {
+    id: message.id,
+    kind: "plan",
+    heading: short ? plan.explanation : null,
+    explanation: short ? null : plan.explanation,
+    stopped:
+      (message.status === "interrupted" || message.status === "failed") && steps.some((step) => step.state !== "done"),
+    steps,
+  };
+}
+
+/** Reuse the item projected from the same host message, so memoized rows skip unchanged items. */
+function projectedMarker(
+  cache: WeakMap<ConversationMessage, ChatMessage>,
+  message: ConversationMessage,
+  project: () => ChatMessage,
+) {
+  let item = cache.get(message);
+  if (!item) {
+    item = project();
+    cache.set(message, item);
+  }
+  return item;
+}
+
+/** The order of the last sorted transcript, and the fields that decided it. */
+let lastOrder: { key: string; ids: string[] } | null = null;
+
+/**
+ * The sort reads only these fields. A streamed chunk changes only text and status, so the order of
+ * the previous frame applies and the transcript is not sorted again.
+ */
+function sortedConversationMessages(messages: readonly ConversationMessage[]) {
+  const key = messages
+    .map(
+      (message) =>
+        `${message.id}\u0000${message.turnId ?? ""}\u0000${message.createdAt}\u0000${message.author}\u0000${message.itemType ?? ""}\u0000${message.exchange?.direction ?? ""}`,
+    )
+    .join("\u0001");
+  if (lastOrder?.key === key) {
+    const byId = new Map(messages.map((message) => [message.id, message]));
+    const ordered = lastOrder.ids.flatMap((id) => byId.get(id) ?? []);
+    if (byId.size === messages.length && ordered.length === messages.length) return ordered;
+  }
+  const sorted = sortConversationMessages([...messages]);
+  lastOrder = { key, ids: sorted.map((message) => message.id) };
+  return sorted;
+}
+
+/**
+ * `memberId` is the reader's membership on the server. A user message that another member wrote
+ * gets their name. A message with no sender, from before senders
+ * were kept, stays the reader's own, as it always showed.
+ *
+ * `accountUserId` is the reader's account. A host with no membership for its own user stamps
+ * `local-user:<account>`, so that sender is also the reader when they read their own server.
+ */
+export function projectChatMessages(
+  messages: ConversationMessage[],
+  memberId: string | null = null,
+  accountUserId: string | null = null,
+): ChatMessage[] {
+  // A server that is still connecting has an empty membership, which names no reader.
+  const reader = memberId || null;
+  const readerAccount = accountUserId ? `local-user:${accountUserId}` : null;
+  const readerKey = `${reader ?? ""}\n${readerAccount ?? ""}`;
+  const result: ChatMessage[] = [];
+  const thinkingByTurn = new Map<string, Extract<ChatMessage, { kind: "thinking" }>>();
+  const sorted = sortedConversationMessages(messages);
+  const latestRuns = latestRoutineRunMessages(sorted);
+  for (const message of sorted) {
+    // Routine events are system messages, skipped below. Like desktop, a routine instruction shows only as its marker.
+    const routine = projectRoutineMarker(message, latestRuns);
+    if (routine) result.push(routine);
+    if (message.routine) continue;
+    if (message.delivery?.status === "queued" || message.delivery?.status === "cancelled") continue;
+    if (message.exchange) {
+      const { exchange } = message;
+      result.push(
+        projectedMarker(projectedExchanges, message, () => ({
+          id: `exchange:${message.id}`,
+          kind: "exchange",
+          exchange,
+        })),
+      );
+      // Match desktop: exchanges have markers, not another agent's text bubble.
+      // Incoming attachments remain visible below their marker.
+      if (message.exchange.direction !== "incoming" || !message.attachments?.length) continue;
+    }
+    if (message.questionPrompt) {
+      const prompt = message.questionPrompt;
+      result.push(
+        projectedMarker(projectedQuestions, message, () => ({
+          id: message.id,
+          kind: "question",
+          turnId: message.turnId,
+          prompt,
+        })),
+      );
+      continue;
+    }
+    // A generation has no text or attachment until its image arrives, and it still needs its placeholder.
+    if (
+      (!message.text.trim() && !message.attachments?.length && !message.imageGeneration) ||
+      message.author === "system"
+    )
+      continue;
+    if (message.author === "assistant" && message.itemType === "commentary") {
+      const key = message.turnId ?? message.id;
+      let thinking = thinkingByTurn.get(key);
+      if (!thinking) {
+        thinking = { id: `thinking:${key}`, kind: "thinking", turnId: message.turnId, steps: [] };
+        thinkingByTurn.set(key, thinking);
+        result.push(thinking);
+      }
+      thinking.steps.push({ id: message.id, text: message.text });
+    } else {
+      const cached = projectedBubbles.get(message);
+      let bubble = cached?.readerKey === readerKey ? cached.bubble : undefined;
+      if (!bubble) {
+        const sender = message.author === "user" ? message.senderMember : undefined;
+        const otherMember =
+          sender !== undefined && reader !== null && sender.id !== reader && sender.id !== readerAccount;
+        bubble = projectPlan(message) ?? {
+          id: message.id,
+          kind: "message",
+          // Another person's message stays a person's bubble, on the right, and adds their name.
+          author: message.author === "user" ? "user" : "agent",
+          ...(otherMember ? { sender } : {}),
+          body: message.exchange ? "" : message.text,
+          streaming: message.status === "streaming",
+          status: message.status,
+          attachments: message.attachments,
+          imageGeneration: message.imageGeneration,
+          replyToMessageId: message.replyToMessageId,
+        };
+        projectedBubbles.set(message, { readerKey, bubble });
+      }
+      result.push(bubble);
+    }
+  }
+  return result;
+}
+
+const failedBubbles = new WeakMap<ChatMessage, ChatMessage>();
+
+/**
+ * Adds the reason the host keeps on each failed delivery to its user bubble. The conversation has
+ * only the status; the reason comes with the queue. A user bubble has the ID of its delivery.
+ */
+export function withFailureReasons(messages: ChatMessage[], deliveries: readonly QueueDelivery[]): ChatMessage[] {
+  const reasons = new Map<string, string>();
+  for (const delivery of deliveries) {
+    if (delivery.status === "failed" && delivery.error) reasons.set(delivery.id, delivery.error);
+  }
+  if (reasons.size === 0) return messages;
+  return messages.map((message) => {
+    if (message.kind !== "message" || message.author !== "user" || message.status !== "failed") return message;
+    const failureReason = reasons.get(message.id);
+    if (!failureReason) return message;
+    let failed = failedBubbles.get(message);
+    if (failed?.kind !== "message" || failed.failureReason !== failureReason) {
+      failed = { ...message, failureReason };
+      failedBubbles.set(message, failed);
+    }
+    return failed;
+  });
+}
+
+/** Like the host read state, a plan is not a readable message. */
+export function latestReadableMessage(messages: ConversationMessage[]) {
+  return messages.findLast(
+    (message) =>
+      Boolean(message.questionPrompt) ||
+      (message.author !== "system" &&
+        message.itemType !== CONVERSATION_PLAN_ITEM_TYPE &&
+        (message.text.trim().length > 0 || Boolean(message.attachments?.length) || Boolean(message.imageGeneration))),
+  );
+}
+
+const projectedChannelMessages = new WeakMap<
+  ChannelMessage,
+  { self: boolean; latest: boolean; message: ChatMessage | null }
+>();
+
+function projectChannelMessage(
+  entry: ChannelMessage,
+  self: boolean,
+  latestRuns: ReadonlySet<string>,
+): ChatMessage | null {
+  const routine = routineMarker(entry.message);
+  if (routine) {
+    if (routine.runId && !latestRuns.has(entry.message.id)) return null;
+    return {
+      id: entry.id,
+      kind: "routine",
+      event: routine.event,
+      label: routine.label,
+      routineName: routine.routineName,
+    };
+  }
+  if (entry.message.questionPrompt) {
+    return {
+      id: entry.id,
+      kind: "question",
+      turnId: entry.message.turnId,
+      prompt:
+        entry.superseded && !entry.message.questionPrompt.resolution
+          ? { ...entry.message.questionPrompt, resolution: { status: "expired" } }
+          : entry.message.questionPrompt,
+    };
+  }
+  const routing = channelRoutingConversationEvent(entry.message);
+  if (routing) return { id: entry.id, kind: "channel-routing", event: routing };
+  // Older hosts stored only the receipt text. Never reinterpret a typed event as legacy text.
+  if (
+    !entry.message.itemType &&
+    entry.author.kind === "agent" &&
+    entry.message.author === "system" &&
+    entry.message.status === "completed" &&
+    entry.taskId
+  ) {
+    const assigned = /^Assigned to (.+)\.$/.exec(entry.message.text);
+    const continued = /^Continuing existing work with (.+)\.$/.exec(entry.message.text);
+    const name = assigned?.[1] ?? continued?.[1];
+    if (name)
+      return {
+        id: entry.id,
+        kind: "channel-routing",
+        event: { action: assigned ? "assigned" : "continued", agentId: null, agentName: name },
+      };
+  }
+  if (entry.author.kind === "agent" && entry.message.itemType === "commentary" && !entry.superseded) {
+    return {
+      id: entry.id,
+      kind: "thinking",
+      turnId: entry.message.turnId,
+      steps: [{ id: entry.id, text: entry.message.text }],
+    };
+  }
+  return {
+    id: entry.id,
+    kind: "message",
+    author: self ? "user" : "agent",
+    speaker: entry.author,
+    superseded: entry.superseded,
+    body: entry.message.text,
+    streaming: entry.message.status === "streaming",
+    status: entry.message.status,
+    replyToMessageId: entry.message.replyToMessageId,
+    attachments: entry.message.attachments,
+    imageGeneration: entry.message.imageGeneration,
+  };
+}
+
+/** Keep channel authors explicit: another human member is not the current user. */
+export function projectChannelMessages(messages: ChannelMessage[], memberId: string | null): ChatMessage[] {
+  const latestRuns = latestRoutineRunMessages(messages.map((entry) => entry.message));
+  return messages
+    .filter(
+      (entry) =>
+        entry.message.questionPrompt ||
+        entry.message.imageGeneration ||
+        entry.message.text.trim() ||
+        entry.message.attachments?.length,
+    )
+    .flatMap((entry) => {
+      const self = entry.author.kind === "member" && entry.author.id === memberId;
+      const cached = projectedChannelMessages.get(entry);
+      const latest = latestRuns.has(entry.message.id);
+      if (cached && cached.self === self && cached.latest === latest) return cached.message ?? [];
+      const message = projectChannelMessage(entry, self, latestRuns);
+      projectedChannelMessages.set(entry, { self, latest, message });
+      return message ?? [];
+    });
+}
+
+/** The host accepted a send, but its transcript still needs a successful read. */
+export interface ChatHistoryReceipt {
+  refreshHistory: () => Promise<void>;
+}
