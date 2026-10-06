@@ -27,7 +27,7 @@ describe("installOnePasswordCli", () => {
         signal: new AbortController().signal,
         fetch: async () => tampered,
       }),
-    ).rejects.toThrow("OpenBot could not install the 1Password CLI");
+    ).rejects.toThrow("GoAhead could not install the 1Password CLI");
 
     expect(await installedManagedCli(directory, "darwin-arm64")).toBeNull();
     expect(await readdir(directory)).toEqual([]);

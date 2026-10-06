@@ -125,7 +125,7 @@ export class BootRecovery {
       const { delivery } = context;
       if (!this.#orphanedDeliveryIds.delete(delivery.id)) continue;
       let terminal: "completed" | "failed" | "interrupted" = "interrupted";
-      let reason = "OpenBot restarted before this delivery reached a confirmed terminal state.";
+      let reason = "GoAhead restarted before this delivery reached a confirmed terminal state.";
       try {
         const agent = this.#store.list().find((candidate) => candidate.id === delivery.recipientAgentId);
         const client = agent ? this.#providers.clientForAgent(agent) : null;

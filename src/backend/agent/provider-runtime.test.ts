@@ -1179,7 +1179,7 @@ describe.sequential("ProviderRuntime: account checks and login", () => {
     await service.initialize();
 
     const message =
-      "OpenBot could not update the Claude CLI. Claude stopped before it answered (exit code 3). Error: bad config";
+      "GoAhead could not update the Claude CLI. Claude stopped before it answered (exit code 3). Error: bad config";
     await expect(service.updateProviderCli("claude", async () => managed)).rejects.toThrow(message);
     expect(service.getStatus().providers).toContainEqual(
       expect.objectContaining({ id: "claude", state: "error", message }),
@@ -1224,7 +1224,7 @@ describe.sequential("ProviderRuntime: account checks and login", () => {
       headers: [],
     });
 
-    const message = `OpenBot could not update the Claude CLI. Claude stopped before it answered (exit code 3). ${"x".repeat(285)} rejected •••`;
+    const message = `GoAhead could not update the Claude CLI. Claude stopped before it answered (exit code 3). ${"x".repeat(285)} rejected •••`;
     await expect(service.updateProviderCli("claude", async () => managed)).rejects.toThrow(message);
     expect(service.getStatus().providers).toContainEqual(
       expect.objectContaining({ id: "claude", state: "available", message }),

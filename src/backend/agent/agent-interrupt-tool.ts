@@ -67,7 +67,7 @@ export class AgentInterruptTool {
     const { agentId, reason } = interruptAgentToolSchema.parse(params.arguments);
     if (agentId === callerAgentId) return openBotToolFailure(sourceText("error.backend.interruptSelf"));
     if (!this.#hooks.listAgents().some((agent) => agent.id === agentId)) {
-      throw new Error(`Unknown OpenBot agent: ${agentId}`);
+      throw new Error(`Unknown GoAhead agent: ${agentId}`);
     }
 
     // A delivery on its way to a turn has no turn id yet. Wait for the drain that starts it, as

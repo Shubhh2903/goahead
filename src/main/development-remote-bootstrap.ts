@@ -56,11 +56,11 @@ export async function applyDevelopmentRemoteAccount({
   setupCompleted,
 }: DevelopmentRemoteAccountOptions): Promise<void> {
   const email =
-    role === "host" ? (teamStore.getOwnerEmail() ?? "openbot-dev-host@example.com") : "openbot-dev-client@example.com";
+    role === "host" ? (teamStore.getOwnerEmail() ?? "goahead-dev-host@example.com") : "goahead-dev-client@example.com";
   const user = await ensureDevelopmentAccount(centralAuth, email);
   await teamStore.activateAccount(user);
   if (role === "host" && !teamStore.configured) {
-    await teamStore.configureWithAccount("OpenBot Local Dev Host", user);
+    await teamStore.configureWithAccount("GoAhead Local Dev Host", user);
   }
   if (role === "client" && !setupCompleted) {
     await writeSetupState(setupFile, { preferredProvider: "codex", preferredModel: null });

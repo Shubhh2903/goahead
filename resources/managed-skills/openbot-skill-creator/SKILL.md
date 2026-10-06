@@ -1,6 +1,6 @@
 ---
 name: openbot-skill-creator
-description: Create or revise a reusable local OpenBot skill when the user asks to save a workflow as a skill. Use the local skill tools to register it. Do not use for ordinary one-off tasks.
+description: Create or revise a reusable local GoAhead skill when the user asks to save a workflow as a skill. Use the local skill tools to register it. Do not use for ordinary one-off tasks.
 ---
 
 # Create a local skill

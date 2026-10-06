@@ -15,7 +15,7 @@ export const messages = {
   "error.connector.onePasswordCliMissing":
     "O GoAhead não encontrou a CLI do 1Password. Instale-a e ative a integração no app do 1Password, ou use um token de conta de serviço.",
   "error.connector.onePasswordCliInstallFailed":
-    "O OpenBot não conseguiu instalar a CLI do 1Password. Verifique a conexão com a internet e tente novamente.",
+    "O GoAhead não conseguiu instalar a CLI do 1Password. Verifique a conexão com a internet e tente novamente.",
   "error.connector.onePasswordCliSignedOut":
     "A CLI do 1Password não está conectada. Ative a integração no app do 1Password e conecte novamente.",
   "error.connector.onePasswordCliFailed": "A CLI do 1Password falhou: {detail}",

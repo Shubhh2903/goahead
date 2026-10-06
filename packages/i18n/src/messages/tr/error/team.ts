@@ -4,7 +4,7 @@ import type { messages as source } from "../../en/error/team";
 export const messages = {
   // Errors that the Team API and the team store send to clients.
   "error.team.ownerNotLinked": "Bu ana makine bir GoAhead sahibi hesabına bağlı değil.",
-  "error.team.ownerEmailRequired": "Bu ana makineyi oluşturan OpenBot e-postası ile oturum açın.",
+  "error.team.ownerEmailRequired": "Bu ana makineyi oluşturan GoAhead e-postası ile oturum açın.",
   "error.team.hostNotConfigured": "Ekip ana makinesi yapılandırılmamış.",
   "error.team.alreadyConfigured": "Ekip sunucusu zaten yapılandırılmış.",
   "error.team.identityCreateFailed": "Ekip kimliği oluşturulamadı.",
@@ -52,7 +52,7 @@ export const messages = {
   "error.team.hostUpdateRequired": "Bağlanmadan önce ana makinedeki GoAhead'i güncelleyin.",
   "error.team.sidebarLayoutUnavailable": "Kenar çubuğu düzeni kullanılamıyor.",
   "error.team.providersUnsupported": "Sağlayıcı ayarları bu bağlantı tarafından desteklenmiyor.",
-  "error.team.providerNotManaged": "OpenBot bu sağlayıcının CLI aracını yönetmiyor.",
+  "error.team.providerNotManaged": "GoAhead bu sağlayıcının CLI aracını yönetmiyor.",
   "error.team.channelsUnsupported": "Kanal sohbetleri bu bağlantı tarafından desteklenmiyor.",
   "error.team.channelDeleteUnsupported": "Kanal silme bu bağlantı tarafından desteklenmiyor.",
   "error.team.membersCannotDeleteChannels": "Üyeler kanalları silemez.",

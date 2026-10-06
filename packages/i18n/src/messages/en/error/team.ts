@@ -3,7 +3,7 @@ import { defineMessages } from "../../../message";
 export const messages = defineMessages("error.team", {
   // Errors that the Team API and the team store send to clients.
   "error.team.ownerNotLinked": "This host is not linked to a GoAhead owner account.",
-  "error.team.ownerEmailRequired": "Sign in with the OpenBot email that created this host.",
+  "error.team.ownerEmailRequired": "Sign in with the GoAhead email that created this host.",
   "error.team.hostNotConfigured": "The team host is not configured.",
   "error.team.alreadyConfigured": "The team server is already configured.",
   "error.team.identityCreateFailed": "The team identity could not be created.",
@@ -51,7 +51,7 @@ export const messages = defineMessages("error.team", {
   "error.team.hostUpdateRequired": "Update GoAhead on the host before connecting.",
   "error.team.sidebarLayoutUnavailable": "Sidebar layout is unavailable.",
   "error.team.providersUnsupported": "Provider settings are not supported by this connection.",
-  "error.team.providerNotManaged": "OpenBot does not manage this provider's CLI.",
+  "error.team.providerNotManaged": "GoAhead does not manage this provider's CLI.",
   "error.team.channelsUnsupported": "Channel chats are not supported by this connection.",
   "error.team.channelDeleteUnsupported": "Channel deletion is not supported by this connection.",
   "error.team.membersCannotDeleteChannels": "Members cannot delete channels.",

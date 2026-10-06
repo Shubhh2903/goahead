@@ -42,8 +42,8 @@ export function providerFailureStatus(
       const label = provider === "codex" ? "ChatGPT" : "Claude";
       const bundledMessage =
         error.code === "missing"
-          ? `OpenBot's included ${label} runtime is missing. Reinstall OpenBot.`
-          : `OpenBot could not start its included ${label} runtime. Update or reinstall OpenBot.`;
+          ? `GoAhead's included ${label} runtime is missing. Reinstall GoAhead.`
+          : `GoAhead could not start its included ${label} runtime. Update or reinstall GoAhead.`;
       return { state: "error", version: version ?? null, message: bundledMessage };
     }
     if (error.code === "missing") {

@@ -19,7 +19,7 @@ export const messages = {
   "status.remote.stageAgents": "Ajanlar yükleniyor: {reason}",
   "status.remote.stageReads": "Okuma durumu yükleniyor: {reason}",
   "status.remote.stageConversations": "Konuşmalar yükleniyor: {reason}",
-  "status.remote.suspendedDetail": "Bağlanmadan önce OpenBot Mobile veya masaüstü uygulamasını güncelleyin.\n{detail}",
+  "status.remote.suspendedDetail": "Bağlanmadan önce GoAhead Mobile veya masaüstü uygulamasını güncelleyin.\n{detail}",
   "status.remote.cooldownDetail":
     "{limit} denemeden sonra bağlantı başarısız oldu. {minutes}:{seconds} içinde yeniden deneniyor.\n{detail}",
   "status.remote.cooldown":

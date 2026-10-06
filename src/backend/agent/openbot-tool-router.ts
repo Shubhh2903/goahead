@@ -196,7 +196,7 @@ export class OpenBotToolRouter {
           if (!isDynamicToolCall(request.params)) throw new Error("Invalid dynamic tool request.");
           if (request.params.namespace === OPENBOT_BROWSER_NAMESPACE) {
             const agentId = this.#conversation.agentForThread(request.params.threadId);
-            if (!agentId) throw new Error("The browsing OpenBot agent is unknown.");
+            if (!agentId) throw new Error("The browsing GoAhead agent is unknown.");
             if (request.params.tool === "request_takeover" || request.params.tool === "submit_secret") {
               const result = await this.#attention.surfaceBrowserTakeover(client, request);
               // A takeover of a stopped client ends with a cancel, and that process has nothing to answer.
@@ -259,7 +259,7 @@ export class OpenBotToolRouter {
         default:
           client.respondError(request.id, {
             code: -32601,
-            message: `OpenBot does not implement server request ${request.method}.`,
+            message: `GoAhead does not implement server request ${request.method}.`,
           });
       }
     } catch (error) {
@@ -371,7 +371,7 @@ export class OpenBotToolRouter {
 
   async #handleOpenBotTool(params: DynamicToolCallParams): Promise<OpenBotToolResponse> {
     const senderAgentId = this.#conversation.agentForThread(params.threadId);
-    if (!senderAgentId) throw new Error("The sending OpenBot agent is unknown.");
+    if (!senderAgentId) throw new Error("The sending GoAhead agent is unknown.");
 
     if (LOCAL_SKILL_TOOL_DEFINITIONS.some((tool) => tool.name === params.tool)) {
       try {
@@ -720,7 +720,7 @@ export class OpenBotToolRouter {
     }
 
     if (params.tool !== "send_message" || !isRecord(params.arguments)) {
-      throw new Error(`Unsupported OpenBot tool: ${params.tool}`);
+      throw new Error(`Unsupported GoAhead tool: ${params.tool}`);
     }
     const recipientValues = params.arguments.recipientAgentIds;
     if (!Array.isArray(recipientValues) || !recipientValues.every((item) => isString(item))) {
@@ -732,7 +732,7 @@ export class OpenBotToolRouter {
     if (recipientValues.includes(senderAgentId)) throw new Error("An agent cannot message itself.");
     const knownIds = new Set(this.#hooks.listAgents().map((agent) => agent.id));
     for (const recipient of recipientValues) {
-      if (!knownIds.has(recipient)) throw new Error(`Unknown OpenBot agent: ${recipient}`);
+      if (!knownIds.has(recipient)) throw new Error(`Unknown GoAhead agent: ${recipient}`);
     }
     const paths = params.arguments.paths ?? [];
     if (!Array.isArray(paths) || !paths.every((item) => isString(item))) {

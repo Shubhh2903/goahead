@@ -51,7 +51,7 @@ describe("listSiblingOpenBotInstances", () => {
     );
     await expect(
       listSiblingOpenBotInstances({ executablePath: EXECUTABLE, currentPid: 101, platform: "darwin" }),
-    ).rejects.toThrow("Could not verify other OpenBot sessions");
+    ).rejects.toThrow("Could not verify other GoAhead sessions");
     expect(processMock.execFile).toHaveBeenCalledWith(
       "/bin/ps",
       ["-ax", "-o", "pid=,uid=,comm="],

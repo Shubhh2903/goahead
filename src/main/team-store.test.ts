@@ -699,7 +699,7 @@ describe("TeamStore", () => {
     await store.activateAccount(owner);
     expect(store.getIdentity()?.serverId).toBe(identity.serverId);
     // Nor may the address alone pass the ownership check on the host it names.
-    expect(() => store.assertOwnerAccount(stranger)).toThrow("Sign in with the OpenBot email");
+    expect(() => store.assertOwnerAccount(stranger)).toThrow("Sign in with the GoAhead email");
   });
 
   it("keeps the owner of a host after the account changes its address", async () => {
@@ -956,7 +956,7 @@ describe("TeamStore", () => {
     expect(await readStoredHosts(path)).toHaveLength(0);
   });
 
-  it("allows only the OpenBot email that created the host to own it", async () => {
+  it("allows only the GoAhead email that created the host to own it", async () => {
     const { store } = await createStore();
     await store.configureWithAccount("Studio Mac", {
       id: "owner-account",

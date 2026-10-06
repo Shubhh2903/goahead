@@ -526,7 +526,7 @@ describe("OpenBot connected desktop shell", () => {
     ],
     [
       "ENOSPC: write '/private/update.zip'",
-      "There is not enough storage space. Free some space on the computer running OpenBot, then try again.",
+      "There is not enough storage space. Free some space on the computer running GoAhead, then try again.",
       "Error invoking remote method 'update:download': Error: ECONNREFUSED 127.0.0.1:1234",
       "Could not connect. Check your connection and try again.",
     ],

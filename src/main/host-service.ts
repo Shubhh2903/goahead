@@ -658,7 +658,7 @@ export class HostService extends EventEmitter<HostEvents> {
   }
 
   async startDevelopmentLocal(): Promise<HostStatus> {
-    if (!this.#options.store.configured) throw new Error("Name this OpenBot before starting local development.");
+    if (!this.#options.store.configured) throw new Error("Name this GoAhead before starting local development.");
     if (this.#status.phase === "online") return this.getStatus();
     const apiPort = await this.#api.start();
     this.#setStatus({

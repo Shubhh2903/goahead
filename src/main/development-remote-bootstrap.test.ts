@@ -2,7 +2,7 @@ import type { CentralAuthState } from "@openbot/contracts/ipc";
 import { afterEach, expect, it, vi } from "vitest";
 import { ensureDevelopmentAccount } from "./development-remote-bootstrap";
 
-const email = "openbot-dev-host@example.com";
+const email = "goahead-dev-host@example.com";
 const user = { id: "seeded-owner", email, name: null, avatarUrl: null };
 const cooldown: CentralAuthState = {
   status: "error",

@@ -533,7 +533,7 @@ export class OnePasswordConnectorService implements PasswordVault {
               "create",
               ONEPASSWORD_SHARED_VAULT,
               "--description",
-              "Logins that OpenBot agents may use to sign in to sites.",
+              "Logins that GoAhead agents may use to sign in to sites.",
               ...scope,
               "--format",
               "json",
@@ -547,7 +547,7 @@ export class OnePasswordConnectorService implements PasswordVault {
         [
           "service-account",
           "create",
-          `OpenBot on ${this.#hostName}`,
+          `GoAhead on ${this.#hostName}`,
           "--vault",
           `${vaultId}:read_items`,
           ...scope,

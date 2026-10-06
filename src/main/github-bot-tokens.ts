@@ -114,7 +114,7 @@ export class GitHubBotTokens {
         this.#nextAt = this.#now() + RETRY_MS;
         return;
       }
-      if (!response.ok) throw new Error(`The OpenBot API refused the GitHub token request (HTTP ${response.status}).`);
+      if (!response.ok) throw new Error(`The GoAhead API refused the GitHub token request (HTTP ${response.status}).`);
       const answer = answerSchema.parse(await response.json());
       if (epoch !== this.#epoch) return;
       const next = new Map<string, GitHubBotToken>();

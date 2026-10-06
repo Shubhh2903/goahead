@@ -104,7 +104,7 @@ describe("McpServerStore", () => {
     for (let index = 0; index < INPUT_LIMITS.mcpServers; index += 1)
       store.save(stdioConfig({ name: `Server ${index}` }));
     expect(() => store.save(stdioConfig({ name: "One too many" }))).toThrow(
-      `OpenBot keeps up to ${INPUT_LIMITS.mcpServers} MCP servers.`,
+      `GoAhead keeps up to ${INPUT_LIMITS.mcpServers} MCP servers.`,
     );
   });
 

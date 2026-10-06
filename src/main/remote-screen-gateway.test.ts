@@ -43,7 +43,7 @@ describe("RemoteScreenGateway", () => {
       await expect(createSession(gateway, "http://127.0.0.1:9")).rejects.toMatchObject({
         code: "host_unavailable",
         message:
-          "The Sunshine and Moonlight Web runtime is missing or is not supported on this host. Install the full OpenBot release on a Mac, a Windows x64 host or a Linux x64 host, then restart OpenBot.",
+          "The Sunshine and Moonlight Web runtime is missing or is not supported on this host. Install the full GoAhead release on a Mac, a Windows x64 host or a Linux x64 host, then restart GoAhead.",
       });
       expect(gateway.list()).toEqual([]);
       await gateway.stop();

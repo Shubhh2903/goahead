@@ -849,7 +849,7 @@ describe("CentralAuthManager", () => {
       issue: {
         code: "auth_api_unavailable",
         message:
-          "A firewall or proxy on this network blocked OpenBot from reaching api.openbot.run. Ask your network administrator to allow api.openbot.run, then try again.",
+          "A firewall or proxy on this network blocked GoAhead from reaching api.openbot.run. Ask your network administrator to allow api.openbot.run, then try again.",
       },
     });
     await expect(readFile(storagePath, "utf8")).resolves.toBe(Buffer.from("session-token").toString("base64"));
@@ -858,7 +858,7 @@ describe("CentralAuthManager", () => {
     fetchMock.mockReset().mockRejectedValue(certificateError);
     await expect(manager.retry()).resolves.toMatchObject({
       status: "error",
-      issue: { message: expect.stringContaining("blocked OpenBot from reaching api.openbot.run") },
+      issue: { message: expect.stringContaining("blocked GoAhead from reaching api.openbot.run") },
     });
   });
 

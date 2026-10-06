@@ -5,7 +5,7 @@ export const messages = defineMessages("error.auth", {
   "error.auth.serviceUnavailable":
     "GoAhead could not reach the account service. Check that the API is running, then try again.",
   "error.auth.networkBlocked":
-    "A firewall or proxy on this network blocked OpenBot from reaching {host}. Ask your network administrator to allow {host}, then try again.",
+    "A firewall or proxy on this network blocked GoAhead from reaching {host}. Ask your network administrator to allow {host}, then try again.",
   "error.auth.signInFirst": "Sign in to GoAhead first.",
   "error.auth.signInRequired": "Sign in is required.",
   "error.auth.accountChangedDuringRegister": "The signed-in account changed while this server was being registered.",

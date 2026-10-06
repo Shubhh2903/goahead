@@ -1648,9 +1648,9 @@ export class ProviderRuntime implements ProviderPort {
     cliFailed = error instanceof AgentProcessExitError,
   ): void {
     const hasActiveClient = this.#clients.has(provider);
-    const fallbackMessage = `OpenBot could not connect ${providerLabel(provider)}. Try again.`;
+    const fallbackMessage = `GoAhead could not connect ${providerLabel(provider)}. Try again.`;
     const rawMessage = error instanceof Error ? error.message : String(error);
-    const message = /^(ChatGPT connection|OpenBot)/u.test(rawMessage) ? rawMessage : fallbackMessage;
+    const message = /^(ChatGPT connection|OpenBot|GoAhead)/u.test(rawMessage) ? rawMessage : fallbackMessage;
     const status = hasActiveClient
       ? {
           state: "available" as const,
@@ -2158,7 +2158,7 @@ export class ProviderRuntime implements ProviderPort {
               phase: "blocked",
               providers,
               capabilities: { ...this.#status.capabilities, chat: "unavailable" },
-              message: `${providerLabel(client.provider)} stopped repeatedly. Restart OpenBot after checking the CLI.`,
+              message: `${providerLabel(client.provider)} stopped repeatedly. Restart GoAhead after checking the CLI.`,
             },
       );
       return;

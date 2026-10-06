@@ -16,7 +16,7 @@ export const messages = {
   "error.remote.sessionCapacity": "Ana makinede zaten dört etkin oturum var.",
   "error.remote.linuxNeedsX11": "Linux'ta uzak masaüstü bir X11 oturumuna ihtiyaç duyar. Wayland desteklenmez.",
   "error.remote.runtimeMissing":
-    "Sunshine ve Moonlight Web çalışma zamanı eksik veya bu ana makinede desteklenmiyor. Mac, Windows x64 veya Linux x64 ana makinesine tam OpenBot sürümünü yükleyin, ardından OpenBot'u yeniden başlatın.",
+    "Sunshine ve Moonlight Web çalışma zamanı eksik veya bu ana makinede desteklenmiyor. Mac, Windows x64 veya Linux x64 ana makinesine tam GoAhead sürümünü yükleyin, ardından GoAhead'u yeniden başlatın.",
   "error.remote.testActive": "Bir uzak masaüstü testi etkin. Bittiğinde tekrar deneyin.",
   "error.remote.screenRecordingDenied":
     "Ana makine GoAhead'in ekranını kaydetmesine izin vermedi. Ana makinede ekran kaydı izni verin, ardından tekrar deneyin.",
@@ -123,7 +123,7 @@ export const messages = {
   "error.remote.permanentInviteNoEmail": "Kalıcı davetler e-posta ile gönderilemez.",
   "error.remote.selfHostedInviteNoEmail":
     "Kendi kendine barındırılan bir hesap servisinden gelen bir davet e-posta ile gönderilemez. Bağlantıyı kopyalayın.",
-  "error.remote.inviteOtherService": "Bu davet başka bir OpenBot servisine ait.",
+  "error.remote.inviteOtherService": "Bu davet başka bir GoAhead servisine ait.",
   "error.remote.inviteFingerprintMismatch": "Davet ana makine kimliği parmak iziyle eşleşmiyor.",
   "error.remote.inviteHostKeyMissing": "Davet ana makine anahtarı eksik.",
   "error.remote.inviteKeyConflict": "Davet güvenilen ana makine anahtarıyla çakışıyor.",
@@ -152,7 +152,7 @@ export const messages = {
   "error.remote.signalInvalidMessage": "Sinyal geçersiz bir mesaj döndürdü.",
   "error.remote.sessionInvalid": "Uzak oturum geçersiz.",
   "error.remote.ticketInvalid": "Bağlantı bileti geçersiz.",
-  "error.remote.mobileUpdateRequired": "Bağlanmadan önce OpenBot Mobile veya masaüstü uygulamasını güncelleyin.",
+  "error.remote.mobileUpdateRequired": "Bağlanmadan önce GoAhead Mobile veya masaüstü uygulamasını güncelleyin.",
   "error.remote.connectionStepFailed": "Bu bağlantı adımı tamamlanamadı.",
   "error.remote.signalNotConnected": "Sinyal bağlı değil.",
   "error.remote.signalFrameUnreadable": "Sinyal bu eşin okuyamayacağı bir çerçeve gönderdi.",

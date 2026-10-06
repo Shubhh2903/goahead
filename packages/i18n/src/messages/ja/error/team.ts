@@ -4,7 +4,7 @@ import type { messages as source } from "../../en/error/team";
 export const messages = {
   // Errors that the Team API and the team store send to clients.
   "error.team.ownerNotLinked": "このホストは GoAhead のオーナーアカウントにリンクされていません。",
-  "error.team.ownerEmailRequired": "このホストを作成した OpenBot のメールアドレスでサインインしてください。",
+  "error.team.ownerEmailRequired": "このホストを作成した GoAhead のメールアドレスでサインインしてください。",
   "error.team.hostNotConfigured": "チームのホストが設定されていません。",
   "error.team.alreadyConfigured": "チームのサーバーはすでに設定されています。",
   "error.team.identityCreateFailed": "チームの ID を作成できませんでした。",
@@ -52,7 +52,7 @@ export const messages = {
   "error.team.hostUpdateRequired": "接続する前に、ホストの GoAhead を更新してください。",
   "error.team.sidebarLayoutUnavailable": "サイドバーのレイアウトを利用できません。",
   "error.team.providersUnsupported": "この接続ではプロバイダーの設定を利用できません。",
-  "error.team.providerNotManaged": "OpenBot はこのプロバイダーの CLI を管理していません。",
+  "error.team.providerNotManaged": "GoAhead はこのプロバイダーの CLI を管理していません。",
   "error.team.channelsUnsupported": "この接続ではチャンネルのチャットを利用できません。",
   "error.team.channelDeleteUnsupported": "この接続ではチャンネルを削除できません。",
   "error.team.membersCannotDeleteChannels": "メンバーはチャンネルを削除できません。",

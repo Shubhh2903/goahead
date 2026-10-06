@@ -3,7 +3,7 @@ import type { messages as source } from "../../en/error/team";
 
 export const messages = {
   "error.team.ownerNotLinked": "Este computador anfitrião não está vinculado a uma conta de proprietário do GoAhead.",
-  "error.team.ownerEmailRequired": "Entre com o e-mail do OpenBot que criou este computador anfitrião.",
+  "error.team.ownerEmailRequired": "Entre com o e-mail do GoAhead que criou este computador anfitrião.",
   "error.team.hostNotConfigured": "O computador anfitrião da equipe não está configurado.",
   "error.team.alreadyConfigured": "O servidor da equipe já está configurado.",
   "error.team.identityCreateFailed": "Não foi possível criar a identidade da equipe.",
@@ -54,7 +54,7 @@ export const messages = {
   "error.team.hostUpdateRequired": "Atualize o GoAhead no computador anfitrião antes de conectar.",
   "error.team.sidebarLayoutUnavailable": "A organização da barra lateral está indisponível.",
   "error.team.providersUnsupported": "Esta conexão não oferece suporte às configurações de provedores.",
-  "error.team.providerNotManaged": "O OpenBot não gerencia a CLI deste provedor.",
+  "error.team.providerNotManaged": "O GoAhead não gerencia a CLI deste provedor.",
   "error.team.channelsUnsupported": "Esta conexão não oferece suporte a chats em canais.",
   "error.team.channelDeleteUnsupported": "Esta conexão não oferece suporte à exclusão de canais.",
   "error.team.membersCannotDeleteChannels": "Membros não podem excluir canais.",

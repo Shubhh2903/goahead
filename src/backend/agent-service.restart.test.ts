@@ -715,7 +715,7 @@ describe.sequential("AgentService: restart", () => {
     const threadId = store.activeProviderSession(agent.id)?.externalSessionId;
     if (!running?.turnId || !client || !threadId) throw new Error("The routine turn did not start.");
     const routineInput = firstInputText(client.requests.find((request) => request.method === "turn/start")?.params);
-    expect(routineInput).toContain("Execute one run of an existing OpenBot routine now.");
+    expect(routineInput).toContain("Execute one run of an existing GoAhead routine now.");
     expect(routineInput).toContain("Run type: manual Test run");
     expect(routineInput).toContain("Do not create, update, delete, list, or test routines during this run.");
     expect(routineInput).toContain("Report the action and result");

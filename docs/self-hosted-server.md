@@ -17,7 +17,7 @@ sudo openbot login
 ```
 
 `openbot login` asks for your email and the code that GoAhead sends to it. After the sign-in, the
-server shows in the server list of that account. Its name is "OpenBot"; give another one with
+server shows in the server list of that account. Its name is "GoAhead"; give another one with
 `sudo openbot login --name <name>` or `sudo openbot name <name>`. A name has 6 to 32 characters.
 Then connect a provider from the app, as on a hosted server (see
 [Providers](hosted-servers.md#providers)).

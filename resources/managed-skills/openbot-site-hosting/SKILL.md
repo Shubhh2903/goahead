@@ -1,9 +1,9 @@
 ---
 name: openbot-site-hosting
-description: Build, publish, replace, list, and delete small static websites hosted by OpenBot. Use when the user asks to host or manage a site on openbot.site.
+description: Build, publish, replace, list, and delete small static websites hosted by GoAhead. Use when the user asks to host or manage a site on openbot.site.
 ---
 
-# OpenBot site hosting
+# GoAhead site hosting
 
 Use vanilla HTML, CSS, and JavaScript by default. Prefer semantic HTML, CSS variables, native Web APIs, and Web Components. Do not add React, Vue, Svelte, jQuery, or another runtime framework. Do not add a library for one simple component. Do not use CDN scripts unless the user has a clear need.
 
@@ -16,7 +16,7 @@ Every site must contain `index.html`. Allowed files are HTML, CSS, JavaScript, J
 Use these tools:
 
 - `openbot.list_sites` lists the user's sites. Use it before a retry.
-- `openbot.publish_site` publishes a new site from this agent's workspace or OpenBot Shared.
+- `openbot.publish_site` publishes a new site from this agent's workspace or the GoAhead shared directory.
 - `openbot.replace_site` replaces one owned site and keeps its URL.
 - `openbot.delete_site` deletes one owned site and makes its URL return `410 Gone`.
 
