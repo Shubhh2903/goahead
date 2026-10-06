@@ -607,7 +607,7 @@ describe.sequential("AgentService: routines", () => {
       threadId,
       "attach_files_to_response",
       { paths: [outsidePath] },
-      "inside this agent's workspace or the OpenBot shared directory",
+      "inside this agent's workspace or the GoAhead shared directory",
       turnId,
     );
     const linkedPath = join(store.sharedRoot, "linked-outside.png");
@@ -617,7 +617,7 @@ describe.sequential("AgentService: routines", () => {
       threadId,
       "attach_files_to_response",
       { paths: [linkedPath] },
-      "inside this agent's workspace or the OpenBot shared directory",
+      "inside this agent's workspace or the GoAhead shared directory",
       turnId,
     );
     await expectOpenBotToolError(

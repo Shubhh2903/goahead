@@ -13,7 +13,7 @@ import {
 import { recordRestartActivity } from "../restart-activity";
 
 const CODEX_LOGIN_TIMEOUT_MS = 10 * 60_000;
-const UNVERIFIED_MESSAGE = "OpenBot could not verify the ChatGPT connection. Try again.";
+const UNVERIFIED_MESSAGE = "GoAhead could not verify the ChatGPT connection. Try again.";
 
 interface PendingCodexLogin {
   client: AgentClient;
@@ -84,7 +84,7 @@ export class CodexLoginFlow {
       try {
         await openExternal(login.authUrl);
       } catch {
-        await this.cancel("OpenBot could not open the ChatGPT connection page.");
+        await this.cancel("GoAhead could not open the ChatGPT connection page.");
         throw new Error(sourceText("error.provider.chatgptPageFailed"));
       }
     });

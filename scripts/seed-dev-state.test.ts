@@ -131,10 +131,10 @@ describe("development state seed", () => {
     expect(attachments.size).toBe(9);
     expect([...attachments.values()].map((attachment) => attachment.name).sort()).toEqual([
       "evidence-map.json",
+      "goahead-launch-concept.png",
       "invoice-2026-09.pdf",
       "launch-brief.md",
       "launch-metrics.csv",
-      "openbot-launch-concept.png",
       "operating-plan.xlsx",
       "provider-session.log",
       "standup-recap.mp3",
@@ -211,7 +211,7 @@ describe("development state seed", () => {
     await team.initialize();
     const members = team.listMembers();
     const owner = members.find((member) => member.role === "owner");
-    expect(owner?.email).toBe("openbot-dev-host@example.com");
+    expect(owner?.email).toBe("goahead-dev-host@example.com");
     expect(members).toHaveLength(2);
     expect(team.listInvites().filter((invite) => invite.usedAt === null)).toHaveLength(1);
     expect(team.listSessions()).toHaveLength(2);
@@ -299,7 +299,7 @@ describe("development state seed", () => {
     await symlink(`test-host-${process.pid}`, join(profilePath, "SingletonLock"));
 
     await expect(seedDevelopmentState({ appDataRoot, homeDirectory, agentModel: SEED_FALLBACK_AGENT })).rejects.toThrow(
-      "Quit the OpenBot dev app",
+      "Quit the GoAhead dev app",
     );
     await expect(readFile(sentinel, "utf8")).resolves.toBe("keep");
   });

@@ -18,7 +18,7 @@ export const messages = {
   "error.remote.linuxNeedsX11":
     "Linux のリモートデスクトップには X11 セッションが必要です。Wayland には対応していません。",
   "error.remote.runtimeMissing":
-    "Sunshine と Moonlight Web のランタイムがないか、このホストでは対応していません。Mac、Windows x64 または Linux x64 のホストに OpenBot のフルリリースをインストールしてから、OpenBot を再起動してください。",
+    "Sunshine と Moonlight Web のランタイムがないか、このホストでは対応していません。Mac、Windows x64 または Linux x64 のホストに GoAhead のフルリリースをインストールしてから、GoAhead を再起動してください。",
   "error.remote.testActive": "リモートデスクトップのテストを実行中です。終了してから再試行してください。",
   "error.remote.screenRecordingDenied":
     "ホストが GoAhead に画面の収録を許可していません。ホストで画面収録を許可してから、再試行してください。",
@@ -132,7 +132,7 @@ export const messages = {
   "error.remote.permanentInviteNoEmail": "永続的な招待はメールで送信できません。",
   "error.remote.selfHostedInviteNoEmail":
     "セルフホストのアカウントサービスの招待はメールで送信できません。リンクをコピーしてください。",
-  "error.remote.inviteOtherService": "この招待は別の OpenBot サービスのものです。",
+  "error.remote.inviteOtherService": "この招待は別の GoAhead サービスのものです。",
   "error.remote.inviteFingerprintMismatch": "招待のホストの ID がフィンガープリントと一致しません。",
   "error.remote.inviteHostKeyMissing": "招待のホストキーがありません。",
   "error.remote.inviteKeyConflict": "招待が信頼済みのホストキーと競合しています。",
@@ -161,7 +161,7 @@ export const messages = {
   "error.remote.signalInvalidMessage": "Signal が無効なメッセージを返しました。",
   "error.remote.sessionInvalid": "リモートセッションが無効です。",
   "error.remote.ticketInvalid": "接続チケットが無効です。",
-  "error.remote.mobileUpdateRequired": "接続する前に、OpenBot Mobile またはデスクトップアプリを更新してください。",
+  "error.remote.mobileUpdateRequired": "接続する前に、GoAhead Mobile またはデスクトップアプリを更新してください。",
   "error.remote.connectionStepFailed": "この接続ステップを完了できませんでした。",
   "error.remote.signalNotConnected": "Signal に接続していません。",
   "error.remote.signalFrameUnreadable": "Signal から、このピアが読み取れないフレームが送信されました。",

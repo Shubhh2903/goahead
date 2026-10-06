@@ -850,7 +850,7 @@ describe("UpdateService", () => {
     expect(service.getStatus()).toMatchObject({
       phase: "error",
       errorCode: "install_failed",
-      message: "Could not install the update. Quit and reopen OpenBot, then try again.",
+      message: "Could not install the update. Quit and reopen GoAhead, then try again.",
     });
     // Shutdown preparation is not transactional, so a second attempt would tear down services
     // concurrently with the first. The user is asked to relaunch instead.

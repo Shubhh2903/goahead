@@ -19,7 +19,7 @@ export const messages = defineMessages("status.remote", {
   "status.remote.stageAgents": "Loading agents: {reason}",
   "status.remote.stageReads": "Loading read status: {reason}",
   "status.remote.stageConversations": "Loading conversations: {reason}",
-  "status.remote.suspendedDetail": "Update OpenBot Mobile or the desktop app before connecting.\n{detail}",
+  "status.remote.suspendedDetail": "Update GoAhead Mobile or the desktop app before connecting.\n{detail}",
   "status.remote.cooldownDetail":
     "Connection failed after {limit} attempts. Retrying in {minutes}:{seconds}.\n{detail}",
   "status.remote.cooldown": "Connection failed after {limit} attempts. Retrying in {minutes}:{seconds}.",

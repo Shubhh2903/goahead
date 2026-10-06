@@ -250,8 +250,8 @@ export class AttachmentGateway {
     }
     throw new Error(
       scope.allowAnyReadablePath
-        ? "Upload files must exist, be regular files, and be readable by OpenBot."
-        : "Attachment files must exist inside this agent's workspace or the OpenBot shared directory.",
+        ? "Upload files must exist, be regular files, and be readable by GoAhead."
+        : "Attachment files must exist inside this agent's workspace or the GoAhead shared directory.",
     );
   }
 }

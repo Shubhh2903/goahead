@@ -51,7 +51,7 @@ describe("presentProviderUpdate", () => {
       update({ runtime: runtime({ phase: "download-error", message: "ENOSPC: write '/private/provider.zip'" }) }),
     );
     expect(failed.detail).toBe(
-      "There is not enough storage space. Free some space on the computer running OpenBot, then try again.",
+      "There is not enough storage space. Free some space on the computer running GoAhead, then try again.",
     );
   });
 

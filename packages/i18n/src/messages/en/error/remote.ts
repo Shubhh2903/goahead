@@ -15,7 +15,7 @@ export const messages = defineMessages("error.remote", {
   "error.remote.sessionCapacity": "The host already has four active sessions.",
   "error.remote.linuxNeedsX11": "Remote desktop on Linux needs an X11 session. Wayland is not supported.",
   "error.remote.runtimeMissing":
-    "The Sunshine and Moonlight Web runtime is missing or is not supported on this host. Install the full OpenBot release on a Mac, a Windows x64 host or a Linux x64 host, then restart OpenBot.",
+    "The Sunshine and Moonlight Web runtime is missing or is not supported on this host. Install the full GoAhead release on a Mac, a Windows x64 host or a Linux x64 host, then restart GoAhead.",
   "error.remote.testActive": "A remote desktop test is active. Try again when it ends.",
   "error.remote.screenRecordingDenied":
     "The host has not allowed GoAhead to record its screen. Grant screen recording on the host, then try again.",
@@ -126,7 +126,7 @@ export const messages = defineMessages("error.remote", {
   "error.remote.permanentInviteNoEmail": "Permanent invitations cannot be sent by email.",
   "error.remote.selfHostedInviteNoEmail":
     "An invitation from a self-hosted account service cannot be sent by email. Copy the link.",
-  "error.remote.inviteOtherService": "This invitation belongs to another OpenBot service.",
+  "error.remote.inviteOtherService": "This invitation belongs to another GoAhead service.",
   "error.remote.inviteFingerprintMismatch": "The invitation host identity does not match its fingerprint.",
   "error.remote.inviteHostKeyMissing": "The invitation host key is missing.",
   "error.remote.inviteKeyConflict": "The invitation conflicts with the trusted host key.",
@@ -155,7 +155,7 @@ export const messages = defineMessages("error.remote", {
   "error.remote.signalInvalidMessage": "Signal returned an invalid message.",
   "error.remote.sessionInvalid": "The remote session is invalid.",
   "error.remote.ticketInvalid": "The connection ticket is invalid.",
-  "error.remote.mobileUpdateRequired": "Update OpenBot Mobile or the desktop app before connecting.",
+  "error.remote.mobileUpdateRequired": "Update GoAhead Mobile or the desktop app before connecting.",
   "error.remote.connectionStepFailed": "Could not complete this connection step.",
   "error.remote.signalNotConnected": "Signal is not connected.",
   "error.remote.signalFrameUnreadable": "Signal sent a frame this peer cannot read.",

@@ -101,7 +101,7 @@ export const messages = {
   "error.provider.keyTooLong": "プロバイダーキーが長すぎます。",
   "error.provider.noModel": "選択したプロバイダーに使用できるモデルがありません。",
   "error.provider.noModelNamed": "{provider} に使用できるモデルがありません。",
-  "error.provider.acpNoModels": "ACP CLI が ACP モデルを通知しませんでした。OpenBot は代替モデルを推測しません。",
+  "error.provider.acpNoModels": "ACP CLI が ACP モデルを通知しませんでした。GoAhead は代替モデルを推測しません。",
   "error.provider.endpointRemoveBusy":
     "このエンドポイントを削除する前に、実行中のターンとキューが終わるまでお待ちください。",
   "error.provider.codexOutdated": "Codex CLI {version} は古すぎます。GoAhead には 0.144.1 以降が必要です。",
@@ -132,7 +132,7 @@ export const messages = {
   "error.provider.opencodeNotStarted":
     "OpenCode を起動できませんでした。ターミナルで `opencode --version` を実行してください。",
   "error.provider.opencodeMissing":
-    "OpenCode はダウンロードされていません。続けるには OpenBot でダウンロードしてください。",
+    "OpenCode はダウンロードされていません。続けるには GoAhead でダウンロードしてください。",
   "error.provider.codexVersionUnreadable": "Codex CLI のバージョンを読み取れません。",
   "error.provider.claudeVersionUnreadable": "Claude CLI のバージョンを読み取れません。",
   "error.provider.grokVersionUnreadable": "Grok CLI のバージョンを読み取れません。",
@@ -171,12 +171,12 @@ export const messages = {
     "モデルプロバイダー側で障害が発生しました。お使いの接続は原因ではありません。後でもう一度試すか、別のモデルを選んでください。\n{detail}",
   "error.provider.opencodeNetwork":
     "OpenCode がモデルプロバイダーに接続できませんでした。GoAhead を実行しているコンピューターのネットワーク接続を確認してから、もう一度お試しください。\n{detail}",
-  "error.provider.chatgptPageFailed": "OpenBot は ChatGPT の接続ページを開けませんでした。",
+  "error.provider.chatgptPageFailed": "GoAhead は ChatGPT の接続ページを開けませんでした。",
   "error.provider.noneReady": "準備ができているエージェントのプロバイダーがありません。",
   "error.provider.claudeTurnActive": "コンテキストを更新する前に、実行中の Claude のターンが終わるまでお待ちください。",
   "error.provider.codexLoginRequired":
     "Codex には ChatGPT サブスクリプションでのログインが必要です。`codex login` を実行してください。",
-  "error.provider.cliUpdateFailed": "OpenBot は {provider} CLI を更新できませんでした。{reason}",
+  "error.provider.cliUpdateFailed": "GoAhead は {provider} CLI を更新できませんでした。{reason}",
   "error.provider.tryAgain": "もう一度お試しください。",
   "error.provider.noAgentProcess": "{provider} には、このエージェント用に実行中のプロセスがありません。",
   "error.provider.stoppedBeforeAgentProcess": "エージェントのプロセスが開始する前に {provider} が停止しました。",

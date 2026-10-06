@@ -8,7 +8,7 @@ export const messages = {
   "error.update.notReady": "Une mise à jour n’est pas prête à être installée.",
   "error.update.restartFailed": "GoAhead n’a pas pu redémarrer pour installer la mise à jour.",
   "error.update.downloadStalled": "Le téléchargement de la mise à jour ne répond plus. Réessayez.",
-  "error.update.installFailed": "Impossible d’installer la mise à jour. Quittez puis rouvrez OpenBot, et réessayez.",
+  "error.update.installFailed": "Impossible d’installer la mise à jour. Quittez puis rouvrez GoAhead, et réessayez.",
   "error.update.downloadFailed": "Impossible de télécharger la mise à jour. Réessayez.",
   "error.update.checkFailed": "Impossible de rechercher des mises à jour. Réessayez.",
   "error.update.checkStalled": "La recherche de mise à jour ne répond plus. Réessayez.",
@@ -23,5 +23,5 @@ export const messages = {
   "error.update.siblingSession":
     "Une autre session GoAhead utilise encore cette application. Quittez d’abord GoAhead dans tous les autres comptes utilisateur macOS, puis installez de nouveau la mise à jour.",
   "error.update.siblingCheckFailed":
-    "Impossible de vérifier les autres sessions OpenBot. Réessayez avant l’installation.",
+    "Impossible de vérifier les autres sessions GoAhead. Réessayez avant l’installation.",
 } as const satisfies PartialTranslation<typeof source>;

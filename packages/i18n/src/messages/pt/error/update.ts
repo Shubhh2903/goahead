@@ -7,7 +7,7 @@ export const messages = {
   "error.update.restartFailed": "O GoAhead não conseguiu reiniciar para instalar a atualização.",
   "error.update.downloadStalled": "O download da atualização parou de responder. Tente novamente.",
   "error.update.installFailed":
-    "Não foi possível instalar a atualização. Encerre e abra o OpenBot novamente, depois tente outra vez.",
+    "Não foi possível instalar a atualização. Encerre e abra o GoAhead novamente, depois tente outra vez.",
   "error.update.downloadFailed": "Não foi possível baixar a atualização. Tente novamente.",
   "error.update.checkFailed": "Não foi possível verificar se há atualizações. Tente novamente.",
   "error.update.checkStalled": "A verificação de atualizações parou de responder. Tente novamente.",
@@ -22,7 +22,7 @@ export const messages = {
   "error.update.siblingSession":
     "Outra sessão do GoAhead ainda está em execução neste aplicativo. Encerre o GoAhead em todas as outras contas de usuário do macOS e instale a atualização novamente.",
   "error.update.siblingCheckFailed":
-    "Não foi possível verificar outras sessões do OpenBot. Tente novamente antes de instalar.",
+    "Não foi possível verificar outras sessões do GoAhead. Tente novamente antes de instalar.",
   "error.update.remoteDisabled":
     "As atualizações feitas por administradores do servidor estão desativadas neste computador.",
   "error.update.restartStarted": "O GoAhead já está reiniciando para instalar a atualização.",

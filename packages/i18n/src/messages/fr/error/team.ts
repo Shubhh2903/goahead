@@ -4,7 +4,7 @@ import type { messages as source } from "../../en/error/team";
 export const messages = {
   // Errors that the Team API and the team store send to clients.
   "error.team.ownerNotLinked": "Cet hôte n’est pas lié à un compte propriétaire GoAhead.",
-  "error.team.ownerEmailRequired": "Connectez-vous avec l’adresse e-mail OpenBot qui a créé cet hôte.",
+  "error.team.ownerEmailRequired": "Connectez-vous avec l’adresse e-mail GoAhead qui a créé cet hôte.",
   "error.team.hostNotConfigured": "L’hôte de l’équipe n’est pas configuré.",
   "error.team.alreadyConfigured": "Le serveur de l’équipe est déjà configuré.",
   "error.team.identityCreateFailed": "Impossible de créer l’identité de l’équipe.",
@@ -55,7 +55,7 @@ export const messages = {
   "error.team.hostUpdateRequired": "Mettez à jour GoAhead sur l’hôte avant de vous connecter.",
   "error.team.sidebarLayoutUnavailable": "La disposition de la barre latérale n’est pas disponible.",
   "error.team.providersUnsupported": "Les réglages des fournisseurs ne sont pas pris en charge par cette connexion.",
-  "error.team.providerNotManaged": "OpenBot ne gère pas la CLI de ce fournisseur.",
+  "error.team.providerNotManaged": "GoAhead ne gère pas la CLI de ce fournisseur.",
   "error.team.channelsUnsupported": "Les discussions de canal ne sont pas prises en charge par cette connexion.",
   "error.team.channelDeleteUnsupported": "La suppression de canaux n’est pas prise en charge par cette connexion.",
   "error.team.membersCannotDeleteChannels": "Les membres ne peuvent pas supprimer de canaux.",

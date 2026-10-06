@@ -1,13 +1,13 @@
 ---
 name: openbot-export
-description: Export the user's Grok Bot agents into one .zip file that OpenBot imports, with instructions, avatars, skills, routines, memories, group chats, and optional workspace files. Use when the user asks to export, move, or migrate their agents to OpenBot.
+description: Export the user's Grok Bot agents into one .zip file that GoAhead imports, with instructions, avatars, skills, routines, memories, group chats, and optional workspace files. Use when the user asks to export, move, or migrate their agents to GoAhead (formerly OpenBot).
 example-prompt: Export my agents for OpenBot
 ---
 
-# Export agents for OpenBot
+# Export agents for GoAhead
 
-Make one `.zip` file that the user opens in OpenBot at **Server settings → Import**. OpenBot reads
-it on the user's computer. Nothing is uploaded. The format is strict: OpenBot rejects the whole
+Make one `.zip` file that the user opens in GoAhead at **Server settings → Import**. GoAhead reads
+it on the user's computer. Nothing is uploaded. The format is strict: GoAhead rejects the whole
 file when the manifest is invalid, so follow the format below exactly.
 
 ## Workflow
@@ -24,7 +24,7 @@ file when the manifest is invalid, so follow the format below exactly.
    of the agent list and out of `openbot-import.json`, even when the user asks for all agents. Also
    leave this skill (`openbot-export`) out of every agent's skills.
 
-   Also list every group chat, where several agents talk together. OpenBot imports a group chat as a
+   Also list every group chat, where several agents talk together. GoAhead imports a group chat as a
    channel. For each group chat, collect:
    - name, one-line topic (title), and its shared instructions;
    - the agents in it, and the lead agent if it has one;
@@ -45,7 +45,7 @@ file when the manifest is invalid, so follow the format below exactly.
 
 4. **Remove secrets.** Do not export `.env` files, private keys, API keys, tokens, passwords, or
    cookies, in files or in instructions. Replace a secret in instructions with
-   `<ask the user for …>`. OpenBot rejects the archive if it contains a file named `.env*` or
+   `<ask the user for …>`. GoAhead rejects the archive if it contains a file named `.env*` or
    `*private*key*`, a nested archive (`.zip`, `.tar`, `.gz`, `.7z`, `.rar`), or a `.git` or
    `node_modules` folder, so leave those out.
 
@@ -54,10 +54,10 @@ file when the manifest is invalid, so follow the format below exactly.
 6. **Check it** with the checklist below. Then zip the folder contents into
    `~/Downloads/.openbot-export-<YYYY-MM-DD>.zip.part`. When the zip is complete, rename it to
    `~/Downloads/openbot-export-<YYYY-MM-DD>.zip`. The rename replaces an older export with the
-   same name in one step, so OpenBot never reads a half-written file.
+   same name in one step, so GoAhead never reads a half-written file.
 
 7. **Tell the user**, only after the rename, the path, the number of agents and group chats, and
-   anything you left out. Tell them to open OpenBot, go to **Server settings → Import**, and choose
+   anything you left out. Tell them to open GoAhead, go to **Server settings → Import**, and choose
    the file.
 
 ## Format
@@ -138,7 +138,7 @@ Field rules:
 | `skills` | Up to 32 folder paths. Each folder has `SKILL.md` at its root, which starts with YAML frontmatter that has `name` (80 characters or fewer) and `description`. Each skill folder is 10 MB and 200 files or fewer. |
 | `routines` | Up to 64. `name` is 80 characters or fewer. `instruction` is the prompt that runs. `timezone` is an IANA name, such as `America/New_York`. |
 | `memories` | Up to 64 strings, 500 characters or fewer each. |
-| `files` | Folder path or `null`. OpenBot copies it to `imported/` in the agent's workspace. |
+| `files` | Folder path or `null`. GoAhead copies it to `imported/` in the agent's workspace. |
 
 Channel field rules:
 
@@ -172,7 +172,7 @@ Use one of these shapes. Times are 24-hour `HH:MM` in the routine's time zone. D
 | Every N minutes, hours, or days | `{ "kind": "interval", "amount": 30, "unit": "minutes" }` |
 | Cron expression | `{ "kind": "custom", "expression": "0 9 * * 1-5" }` |
 
-When a schedule does not fit a shape, use `custom` with a cron expression. OpenBot skips a routine
+When a schedule does not fit a shape, use `custom` with a cron expression. GoAhead skips a routine
 with an invalid schedule and tells the user; the rest of the agent still imports.
 
 ## Checklist

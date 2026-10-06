@@ -7,7 +7,7 @@ export const messages = {
   "error.update.restartFailed": "アップデートをインストールするための再起動ができませんでした。",
   "error.update.downloadStalled": "アップデートのダウンロードが応答しなくなりました。もう一度お試しください。",
   "error.update.installFailed":
-    "アップデートをインストールできませんでした。OpenBot を終了してから開き直し、もう一度お試しください。",
+    "アップデートをインストールできませんでした。GoAhead を終了してから開き直し、もう一度お試しください。",
   "error.update.downloadFailed": "アップデートをダウンロードできませんでした。もう一度お試しください。",
   "error.update.checkFailed": "アップデートを確認できませんでした。もう一度お試しください。",
   "error.update.checkStalled": "アップデートの確認が応答しなくなりました。もう一度お試しください。",
@@ -22,5 +22,5 @@ export const messages = {
   "error.update.siblingSession":
     "このアプリケーションから別の GoAhead セッションがまだ実行中です。先に他のすべての macOS ユーザーアカウントで GoAhead を終了してから、アップデートをもう一度インストールしてください。",
   "error.update.siblingCheckFailed":
-    "他の OpenBot セッションを確認できませんでした。インストールする前にもう一度お試しください。",
+    "他の GoAhead セッションを確認できませんでした。インストールする前にもう一度お試しください。",
 } as const satisfies PartialTranslation<typeof source>;

@@ -22,7 +22,7 @@ export async function createHostedMobileConnect({
   centralAuth,
   host,
 }: MobileConnectHostDependencies): Promise<MobileConnectTicket> {
-  if (!host.getStatus().configured) await host.configure({ serverName: "OpenBot" });
+  if (!host.getStatus().configured) await host.configure({ serverName: "GoAhead" });
   const status = await host.start();
   if (!isPublishedHost(status)) {
     throw new Error(status.message ?? sourceText("error.host.mobileConnectPublishFailed"));

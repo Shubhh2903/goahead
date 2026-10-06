@@ -19,7 +19,7 @@ export const messages = {
   "error.remote.linuxNeedsX11":
     "Sous Linux, le bureau à distance nécessite une session X11. Wayland n’est pas pris en charge.",
   "error.remote.runtimeMissing":
-    "Le runtime Sunshine et Moonlight Web est absent ou n’est pas pris en charge sur cet hôte. Installez la version complète d’OpenBot sur un hôte Mac, Windows x64 ou Linux x64, puis redémarrez OpenBot.",
+    "Le runtime Sunshine et Moonlight Web est absent ou n’est pas pris en charge sur cet hôte. Installez la version complète d’GoAhead sur un hôte Mac, Windows x64 ou Linux x64, puis redémarrez GoAhead.",
   "error.remote.testActive": "Un test du bureau à distance est en cours. Réessayez quand il sera terminé.",
   "error.remote.screenRecordingDenied":
     "L’hôte n’a pas autorisé GoAhead à enregistrer son écran. Autorisez l’enregistrement de l’écran sur l’hôte, puis réessayez.",
@@ -134,7 +134,7 @@ export const messages = {
   "error.remote.permanentInviteNoEmail": "Les invitations permanentes ne peuvent pas être envoyées par e-mail.",
   "error.remote.selfHostedInviteNoEmail":
     "Une invitation d'un service de compte auto-hébergé ne peut pas être envoyée par e-mail. Copiez le lien.",
-  "error.remote.inviteOtherService": "Cette invitation appartient à un autre service OpenBot.",
+  "error.remote.inviteOtherService": "Cette invitation appartient à un autre service GoAhead.",
   "error.remote.inviteFingerprintMismatch": "L’identité de l’hôte de l’invitation ne correspond pas à son empreinte.",
   "error.remote.inviteHostKeyMissing": "La clé de l’hôte de l’invitation est absente.",
   "error.remote.inviteKeyConflict": "L’invitation est en conflit avec la clé d’hôte de confiance.",
@@ -163,7 +163,7 @@ export const messages = {
   "error.remote.signalInvalidMessage": "Signal a renvoyé un message non valide.",
   "error.remote.sessionInvalid": "La session distante n’est pas valide.",
   "error.remote.ticketInvalid": "Le ticket de connexion n’est pas valide.",
-  "error.remote.mobileUpdateRequired": "Mettez à jour OpenBot Mobile ou l’app de bureau avant de vous connecter.",
+  "error.remote.mobileUpdateRequired": "Mettez à jour GoAhead Mobile ou l’app de bureau avant de vous connecter.",
   "error.remote.connectionStepFailed": "Impossible de terminer cette étape de connexion.",
   "error.remote.signalNotConnected": "Signal n’est pas connecté.",
   "error.remote.signalFrameUnreadable": "Signal a envoyé une trame que ce pair ne peut pas lire.",

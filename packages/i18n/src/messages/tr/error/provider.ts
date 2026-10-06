@@ -100,7 +100,7 @@ export const messages = {
   "error.provider.keyTooLong": "Sağlayıcı anahtarı çok uzun.",
   "error.provider.noModel": "Seçilen sağlayıcının kullanılabilir modeli yok.",
   "error.provider.noModelNamed": "{provider} sağlayıcısının kullanılabilir modeli yok.",
-  "error.provider.acpNoModels": "ACP CLI hiçbir ACP modeli tanıtmadı. OpenBot bir yedek model tahmin etmeyecektir.",
+  "error.provider.acpNoModels": "ACP CLI hiçbir ACP modeli tanıtmadı. GoAhead bir yedek model tahmin etmeyecektir.",
   "error.provider.endpointRemoveBusy": "Bu uç noktayı kaldırmadan önce etkin turun ve kuyruğun bitmesini bekleyin.",
   "error.provider.codexOutdated": "Codex CLI {version} çok eski. GoAhead 0.144.1 veya daha yenisini gerektirir.",
   "error.provider.codexNotStarted": "Codex CLI bulundu ancak başlatılamadı.",
@@ -128,7 +128,7 @@ export const messages = {
   "error.provider.grokMissing": "Grok indirilmedi. Devam etmek için GoAhead içinde indirin.",
   "error.provider.opencodeNotStarted":
     "OpenCode başlatılamadı. Bir terminalde `opencode --version` komutunu çalıştırın.",
-  "error.provider.opencodeMissing": "OpenCode indirilmedi. Devam etmek için OpenBot içinde indirin.",
+  "error.provider.opencodeMissing": "OpenCode indirilmedi. Devam etmek için GoAhead içinde indirin.",
   "error.provider.codexVersionUnreadable": "Codex CLI sürümü okunamıyor.",
   "error.provider.claudeVersionUnreadable": "Claude CLI sürümü okunamıyor.",
   "error.provider.grokVersionUnreadable": "Grok CLI sürümü okunamıyor.",
@@ -170,12 +170,12 @@ export const messages = {
     "Model sağlayıcısı kendi tarafında başarısız oldu. Bağlantınız bunun nedeni değildir. Daha sonra tekrar deneyin veya başka bir model seçin.\n{detail}",
   "error.provider.opencodeNetwork":
     "OpenCode model sağlayıcısına bağlanamadı. GoAhead'i çalıştıran bilgisayarın ağ bağlantısını kontrol edin, ardından tekrar deneyin.\n{detail}",
-  "error.provider.chatgptPageFailed": "OpenBot ChatGPT bağlantı sayfasını açamadı.",
+  "error.provider.chatgptPageFailed": "GoAhead ChatGPT bağlantı sayfasını açamadı.",
   "error.provider.noneReady": "Hiçbir ajan sağlayıcısı hazır değil.",
   "error.provider.claudeTurnActive": "Bağlamını yenilemeden önce etkin Claude turunun bitmesini bekleyin.",
   "error.provider.codexLoginRequired":
     "Codex bir ChatGPT abonelik girişi gerektirir. `codex login` komutunu çalıştırın.",
-  "error.provider.cliUpdateFailed": "OpenBot {provider} CLI'sini güncelleyemedi. {reason}",
+  "error.provider.cliUpdateFailed": "GoAhead {provider} CLI'sini güncelleyemedi. {reason}",
   "error.provider.tryAgain": "Tekrar deneyin.",
   "error.provider.noAgentProcess": "{provider} bu ajan için çalışan bir işleme sahip değil.",
   "error.provider.stoppedBeforeAgentProcess": "{provider} ajanın işlemi başlamadan önce durdu.",

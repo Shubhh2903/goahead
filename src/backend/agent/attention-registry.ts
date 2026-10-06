@@ -580,7 +580,7 @@ export class AttentionRegistry {
         contentItems: [
           {
             type: "inputText",
-            text: "OpenBot could not create a user question.",
+            text: "GoAhead could not create a user question.",
           },
         ],
       });
@@ -658,7 +658,7 @@ export class AttentionRegistry {
       client.respond(request.id, { action: "decline", content: null, _meta: null });
       this.#emitError(
         "mcp_safety_handoff",
-        "A local plugin requested an unsupported security hand-off, so OpenBot declined it.",
+        "A local plugin requested an unsupported security hand-off, so GoAhead declined it.",
         agentId,
       );
       return;
@@ -815,7 +815,7 @@ export class AttentionRegistry {
     }
     if (request.method === "applyPatchApproval" || request.method === "execCommandApproval") {
       client.respond(request.id, {
-        decision: { denied: { rejection: "OpenBot could not identify this approval." } },
+        decision: { denied: { rejection: "GoAhead could not identify this approval." } },
       });
       return;
     }

@@ -18,7 +18,7 @@ export const messages = {
   "error.remote.linuxNeedsX11":
     "A área de trabalho remota no Linux precisa de uma sessão X11. Não há suporte para Wayland.",
   "error.remote.runtimeMissing":
-    "O ambiente de execução do Sunshine e do Moonlight Web está ausente ou não é compatível com este computador anfitrião. Instale a versão completa do OpenBot em um Mac, um computador anfitrião Windows x64 ou Linux x64 e reinicie o OpenBot.",
+    "O ambiente de execução do Sunshine e do Moonlight Web está ausente ou não é compatível com este computador anfitrião. Instale a versão completa do GoAhead em um Mac, um computador anfitrião Windows x64 ou Linux x64 e reinicie o GoAhead.",
   "error.remote.testActive": "Um teste de área de trabalho remota está ativo. Tente novamente quando terminar.",
   "error.remote.screenRecordingDenied":
     "O computador anfitrião não permitiu que o GoAhead grave a tela. Conceda a permissão de gravação de tela no computador anfitrião e tente novamente.",
@@ -134,7 +134,7 @@ export const messages = {
   "error.remote.permanentInviteNoEmail": "Convites permanentes não podem ser enviados por e-mail.",
   "error.remote.selfHostedInviteNoEmail":
     "Um convite de um serviço de conta auto-hospedado não pode ser enviado por e-mail. Copie o link.",
-  "error.remote.inviteOtherService": "Este convite pertence a outro serviço do OpenBot.",
+  "error.remote.inviteOtherService": "Este convite pertence a outro serviço do GoAhead.",
   "error.remote.inviteFingerprintMismatch":
     "A identidade do computador anfitrião do convite não corresponde à sua impressão digital.",
   "error.remote.inviteHostKeyMissing": "A chave do computador anfitrião do convite está ausente.",
@@ -164,7 +164,7 @@ export const messages = {
   "error.remote.signalInvalidMessage": "O Signal retornou uma mensagem inválida.",
   "error.remote.sessionInvalid": "A sessão remota é inválida.",
   "error.remote.ticketInvalid": "O tíquete de conexão é inválido.",
-  "error.remote.mobileUpdateRequired": "Atualize o OpenBot Mobile ou o aplicativo para computador antes de conectar.",
+  "error.remote.mobileUpdateRequired": "Atualize o GoAhead Mobile ou o aplicativo para computador antes de conectar.",
   "error.remote.connectionStepFailed": "Não foi possível concluir esta etapa de conexão.",
   "error.remote.signalNotConnected": "O Signal não está conectado.",
   "error.remote.signalFrameUnreadable": "O Signal enviou um quadro que este par não consegue ler.",

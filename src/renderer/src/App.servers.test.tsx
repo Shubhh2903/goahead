@@ -1215,7 +1215,7 @@ describe("OpenBot connected desktop shell", () => {
     ["The agent is busy.", "The agent is busy."],
     [
       "Error invoking remote method 'agent:duplicate': Error: EACCES: open '/private/workspace'",
-      "OpenBot does not have permission to complete this action. Check the file or folder permissions, then try again.",
+      "GoAhead does not have permission to complete this action. Check the file or folder permissions, then try again.",
     ],
   ])("keeps the current selection and explains duplication failures: %s", async (error, message) => {
     vi.mocked(window.openbot.agent.duplicateAgent).mockRejectedValueOnce(new Error(error));

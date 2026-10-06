@@ -495,7 +495,7 @@ describe("OpenCode ACP environment", () => {
     // OpenBot cannot drive, and guessing a model id here would send every prompt to a model the CLI
     // rejects. The provider row reports it as a failed connection.
     await expect(client.request("initialize", {}, decodeRecordResponse)).rejects.toThrow(
-      "ACP CLI did not advertise any ACP models. OpenBot will not guess a fallback model.",
+      "ACP CLI did not advertise any ACP models. GoAhead will not guess a fallback model.",
     );
   });
 

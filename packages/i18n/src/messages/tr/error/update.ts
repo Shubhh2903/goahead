@@ -7,7 +7,7 @@ export const messages = {
   "error.update.notReady": "Bir güncelleme yüklenmeye hazır değil.",
   "error.update.restartFailed": "GoAhead güncellemeyi yüklemek için yeniden başlatılamadı.",
   "error.update.downloadStalled": "Güncelleme indirmesi yanıt vermeyi durdurdu. Tekrar deneyin.",
-  "error.update.installFailed": "Güncelleme yüklenemedi. OpenBot'tan çıkıp yeniden açın, ardından tekrar deneyin.",
+  "error.update.installFailed": "Güncelleme yüklenemedi. GoAhead'tan çıkıp yeniden açın, ardından tekrar deneyin.",
   "error.update.downloadFailed": "Güncelleme indirilemedi. Tekrar deneyin.",
   "error.update.checkFailed": "Güncellemeler kontrol edilemedi. Tekrar deneyin.",
   "error.update.checkStalled": "Güncelleme kontrolü yanıt vermeyi durdurdu. Tekrar deneyin.",
@@ -21,7 +21,7 @@ export const messages = {
     "Bu Mac üzerindeki güncellemeler ana makine tarafından yüklenir. Güncelleme, ana makinenin bakımı çalışana kadar hazır kalır.",
   "error.update.siblingSession":
     "Bu uygulamadan çalışan başka bir GoAhead oturumu var. Önce diğer tüm macOS kullanıcı hesaplarında GoAhead'i durdurun, ardından güncellemeyi tekrar yükleyin.",
-  "error.update.siblingCheckFailed": "Diğer OpenBot oturumları doğrulanamadı. Yüklemeden önce tekrar deneyin.",
+  "error.update.siblingCheckFailed": "Diğer GoAhead oturumları doğrulanamadı. Yüklemeden önce tekrar deneyin.",
   // Katılınan bir sunucunun yöneticisi bunları ana makineden okur.
   "error.update.remoteDisabled": "Sunucu yöneticilerinden gelen güncellemeler bu bilgisayarda kapalı.",
   "error.update.restartStarted": "GoAhead, güncellemeyi yüklemek için zaten yeniden başlatılıyor.",

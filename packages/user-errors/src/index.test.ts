@@ -11,15 +11,15 @@ describe("user-facing errors", () => {
     ],
     [
       "EACCES: open '/home/person/private.txt'",
-      "OpenBot does not have permission to complete this action. Check the file or folder permissions, then try again.",
+      "GoAhead does not have permission to complete this action. Check the file or folder permissions, then try again.",
     ],
     [
       "EPERM: operation not permitted",
-      "OpenBot does not have permission to complete this action. Check the file or folder permissions, then try again.",
+      "GoAhead does not have permission to complete this action. Check the file or folder permissions, then try again.",
     ],
     [
       "ENOSPC: write failed",
-      "There is not enough storage space. Free some space on the computer running OpenBot, then try again.",
+      "There is not enough storage space. Free some space on the computer running GoAhead, then try again.",
     ],
     ["EROFS: open '/private/data'", "This folder is read-only. Choose a folder you can write to, then try again."],
     ["EEXIST: mkdir '/tmp/example'", "An item with this name already exists. Choose a different name, then try again."],
@@ -48,7 +48,7 @@ describe("user-facing errors", () => {
     "Choose a photo smaller than 512 KB.",
     "Stop the agent and cancel its queued messages before deleting it.",
     "Workspace file must be inside the agent workspace.",
-    "Quit and reopen OpenBot, then try the update again.",
+    "Quit and reopen GoAhead, then try the update again.",
   ])("keeps specific recovery and security guidance: %s", (message) => {
     expect(userErrorMessage(new Error(`Error invoking remote method 'test:action': Error: ${message}`), fallback)).toBe(
       message,

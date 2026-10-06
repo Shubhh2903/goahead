@@ -112,7 +112,7 @@ export const messages = {
   "error.provider.noModel": "Le fournisseur sélectionné n’a aucun modèle disponible.",
   "error.provider.noModelNamed": "{provider} n’a aucun modèle disponible.",
   "error.provider.acpNoModels":
-    "La CLI ACP n’a annoncé aucun modèle ACP. OpenBot ne choisira pas de modèle de secours au hasard.",
+    "La CLI ACP n’a annoncé aucun modèle ACP. GoAhead ne choisira pas de modèle de secours au hasard.",
   "error.provider.endpointRemoveBusy":
     "Attendez la fin du tour actif et de la file d’attente avant de supprimer ce point de terminaison.",
   "error.provider.codexOutdated":
@@ -144,7 +144,7 @@ export const messages = {
     "La CLI Grok a été trouvée mais n’a pas pu démarrer. Exécutez `grok --version` dans un nouveau terminal.",
   "error.provider.grokMissing": "Grok n’est pas téléchargé. Téléchargez-le dans GoAhead pour continuer.",
   "error.provider.opencodeNotStarted": "OpenCode n’a pas pu démarrer. Exécutez `opencode --version` dans un terminal.",
-  "error.provider.opencodeMissing": "OpenCode n’est pas téléchargé. Téléchargez-le dans OpenBot pour continuer.",
+  "error.provider.opencodeMissing": "OpenCode n’est pas téléchargé. Téléchargez-le dans GoAhead pour continuer.",
   "error.provider.codexVersionUnreadable": "Impossible de lire la version de la CLI Codex.",
   "error.provider.claudeVersionUnreadable": "Impossible de lire la version de la CLI Claude.",
   "error.provider.grokVersionUnreadable": "Impossible de lire la version de la CLI Grok.",
@@ -183,12 +183,12 @@ export const messages = {
     "Le fournisseur du modèle a échoué de son côté. Votre connexion n’en est pas la cause. Réessayez plus tard ou choisissez un autre modèle.\n{detail}",
   "error.provider.opencodeNetwork":
     "OpenCode n’a pas pu se connecter au fournisseur du modèle. Vérifiez la connexion réseau de l’ordinateur qui exécute GoAhead, puis réessayez.\n{detail}",
-  "error.provider.chatgptPageFailed": "OpenBot n’a pas pu ouvrir la page de connexion ChatGPT.",
+  "error.provider.chatgptPageFailed": "GoAhead n’a pas pu ouvrir la page de connexion ChatGPT.",
   "error.provider.noneReady": "Aucun fournisseur d’agent n’est prêt.",
   "error.provider.claudeTurnActive": "Attendez la fin du tour Claude actif avant d’actualiser son contexte.",
   "error.provider.codexLoginRequired":
     "Codex nécessite une connexion avec un abonnement ChatGPT. Exécutez `codex login`.",
-  "error.provider.cliUpdateFailed": "OpenBot n’a pas pu mettre à jour la CLI {provider}. {reason}",
+  "error.provider.cliUpdateFailed": "GoAhead n’a pas pu mettre à jour la CLI {provider}. {reason}",
   "error.provider.tryAgain": "Réessayez.",
   "error.provider.noAgentProcess": "{provider} n’a aucun processus en cours pour cet agent.",
   "error.provider.stoppedBeforeAgentProcess": "{provider} s’est arrêté avant le démarrage du processus de l’agent.",

@@ -827,7 +827,7 @@ describe("signing in to an http MCP server", () => {
       expect(await testMcpServer(config(server.url), 10_000, undefined, oauth)).toEqual({
         toolCount: 0,
         error:
-          "The sign-in server does not accept OpenBot as an app yet. Your account is not the cause. Use another way to connect, such as a local MCP server.",
+          "The sign-in server does not accept GoAhead as an app yet. Your account is not the cause. Use another way to connect, such as a local MCP server.",
       });
       expect(openExternal).not.toHaveBeenCalled();
     },

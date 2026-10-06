@@ -314,7 +314,7 @@ describe.sequential("Slack messaging end to end", () => {
 
     const [start] = turnStarts(client);
     const prompt = start ? promptOf(start) : "";
-    expect(prompt).toContain("Message from a Slack user. This person is not the OpenBot user.");
+    expect(prompt).toContain("Message from a Slack user. This person is not the GoAhead user.");
     expect(prompt).toContain("Author: Name UALICE (Slack user UALICE)");
     expect(prompt).toContain("--- message ---\nhello");
     // The earlier message of the thread is context; the agent's own and the current one are not.

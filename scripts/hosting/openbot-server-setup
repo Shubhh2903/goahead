@@ -77,4 +77,4 @@ fi
 systemctl start openbot.service
 # install_hosting only enables the timer, and the first boot is maybe a long time away.
 systemctl start openbot-update.timer
-echo "Installed OpenBot $version. It runs as the user $SERVICE_USER."
+echo "Installed GoAhead $version. It runs as the user $SERVICE_USER."

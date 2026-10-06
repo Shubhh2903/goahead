@@ -919,7 +919,7 @@ export class ThreadLifecycle {
     const fullText = rendered.join("\n\n");
     if (estimateTokens(fullText) <= budgetTokens) {
       return [
-        "Continue this OpenBot conversation. The following transcript is user-visible history from the previous provider, with the work steps it recorded.",
+        "Continue this GoAhead conversation. The following transcript is user-visible history from the previous provider, with the work steps it recorded.",
         HANDOFF_PRECEDENCE,
         "Do not repeat completed work unless the current message asks for it.",
         "--- previous transcript ---",
@@ -950,7 +950,7 @@ export class ThreadLifecycle {
       estimateTokens(summaryText),
     );
     return [
-      "Continue this OpenBot conversation. The oldest visible history was summarized because the provider handoff exceeded its context budget.",
+      "Continue this GoAhead conversation. The oldest visible history was summarized because the provider handoff exceeded its context budget.",
       HANDOFF_PRECEDENCE,
       "--- saved summary of older history ---",
       summaryText,

@@ -598,7 +598,7 @@ describe("OpenBot connected desktop shell", () => {
       cliVersion: "0.144.1",
       auth: { kind: "signed-out" },
       capabilities: { chat: "unavailable", browser: "ready", computerUse: "unavailable" },
-      message: "Run `codex login`, then restart OpenBot.",
+      message: "Run `codex login`, then restart GoAhead.",
       fullAccess: true,
     });
     render(() => <App />);

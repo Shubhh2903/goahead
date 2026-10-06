@@ -808,7 +808,7 @@ describe.sequential("AttentionRegistry: prompts, approvals and browser takeovers
     await waitFor(() => client.responses.length === 3);
     expect(client.responses[2]?.result).toEqual({
       success: false,
-      contentItems: [{ type: "inputText", text: "OpenBot could not create a browser takeover request." }],
+      contentItems: [{ type: "inputText", text: "GoAhead could not create a browser takeover request." }],
     });
     expect(events.filter((event) => event.type === "browser-takeover-requested")).toHaveLength(1);
     expect(control).toEqual(["begin:protected-tab"]);

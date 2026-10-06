@@ -17,7 +17,7 @@ export async function loadAvatarFile(path: string, workspacePath: string): Promi
 
 async function readSource(path: string): Promise<Buffer> {
   const file = await open(path, "r").catch(() => {
-    throw new Error("OpenBot could not open the avatar file. Use an existing local image path.");
+    throw new Error("GoAhead could not open the avatar file. Use an existing local image path.");
   });
   try {
     const metadata = await file.stat();

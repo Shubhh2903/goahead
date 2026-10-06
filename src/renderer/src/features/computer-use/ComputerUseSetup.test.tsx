@@ -91,13 +91,13 @@ describe("ComputerUseSetup", () => {
     mock.api.computerUse.getState = vi
       .fn()
       .mockResolvedValue(
-        state({ status: "driver-missing", message: "This build of OpenBot carries no Computer Use driver." }),
+        state({ status: "driver-missing", message: "This build of GoAhead carries no Computer Use driver." }),
       );
     window.openbot = mock.api;
     const view = render(() => <ComputerUseSetup variant="compact" />);
 
     expect(await view.findByText("Computer Use isn’t available yet")).toBeInTheDocument();
-    expect(view.getByText("This build of OpenBot carries no Computer Use driver.")).toBeInTheDocument();
+    expect(view.getByText("This build of GoAhead carries no Computer Use driver.")).toBeInTheDocument();
     expect(view.queryByText(/cua\.ai\/driver\/install/)).not.toBeInTheDocument();
     expect(view.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });

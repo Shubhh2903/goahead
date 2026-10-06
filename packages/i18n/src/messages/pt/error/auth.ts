@@ -5,7 +5,7 @@ export const messages = {
   "error.auth.serviceUnavailable":
     "O GoAhead não conseguiu acessar o serviço de contas. Verifique se a API está em execução e tente novamente.",
   "error.auth.networkBlocked":
-    "Um firewall ou proxy desta rede impediu o OpenBot de acessar {host}. Peça ao administrador da rede para permitir {host} e tente novamente.",
+    "Um firewall ou proxy desta rede impediu o GoAhead de acessar {host}. Peça ao administrador da rede para permitir {host} e tente novamente.",
   "error.auth.signInFirst": "Entre no GoAhead primeiro.",
   "error.auth.signInRequired": "É necessário entrar.",
   "error.auth.accountChangedDuringRegister": "A conta conectada mudou durante o registro deste servidor.",

@@ -410,7 +410,7 @@ describe("OpenCode CLI resolution", () => {
     process.env.OPENBOT_OPENCODE_PATH = join(executable, "missing");
     await expect(resolveOpencodeCli()).rejects.toMatchObject({
       code: "missing",
-      message: "OpenCode is not downloaded. Download it in OpenBot to continue.",
+      message: "OpenCode is not downloaded. Download it in GoAhead to continue.",
     });
   });
 

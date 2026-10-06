@@ -69,7 +69,7 @@ describe("RemoteTeamDirectoryClient", () => {
       fingerprint: HOST_FINGERPRINT,
       token: "t".repeat(32),
     });
-    await expect(client.previewInvite(foreign)).rejects.toThrow("another OpenBot service");
+    await expect(client.previewInvite(foreign)).rejects.toThrow("another GoAhead service");
     expect(fetch).toHaveBeenCalledOnce();
   });
   it("removes a revoked paired desktop while keeping the other memberships available", async () => {

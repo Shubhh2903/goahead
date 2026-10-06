@@ -16,7 +16,7 @@ export const messages = defineMessages("error.connector", {
   "error.connector.onePasswordCliMissing":
     "GoAhead cannot find the 1Password CLI. Install it and turn on its integration in the 1Password app, or use a service account token.",
   "error.connector.onePasswordCliInstallFailed":
-    "OpenBot could not install the 1Password CLI. Check the connection to the internet, then try again.",
+    "GoAhead could not install the 1Password CLI. Check the connection to the internet, then try again.",
   "error.connector.onePasswordCliSignedOut":
     "The 1Password CLI is not signed in. Turn on its integration in the 1Password app, then connect again.",
   "error.connector.onePasswordCliFailed": "The 1Password CLI failed: {detail}",

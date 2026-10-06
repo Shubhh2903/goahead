@@ -272,7 +272,7 @@ export function browserTakeoverResult(decision: RespondToBrowserTakeoverInput["d
 }
 
 export function browserTakeoverError(
-  message = "OpenBot could not create a browser takeover request.",
+  message = "GoAhead could not create a browser takeover request.",
 ): DynamicToolResult {
   return {
     success: false,

@@ -325,7 +325,7 @@ describe("remote connection recovery", () => {
     recovery.suspend(new Error("Signal returned an invalid message."));
     await vi.advanceTimersByTimeAsync(300_000);
     expect(attempts).toBe(1);
-    expect(messages.at(-1)).toBe("Update OpenBot Mobile or the desktop app before connecting.");
+    expect(messages.at(-1)).toBe("Update GoAhead Mobile or the desktop app before connecting.");
 
     // The desktop the user left to update is the reason the frame was unreadable, so returning to
     // the app is the way out of this state.

@@ -6,7 +6,7 @@ export const messages = defineMessages("error.update", {
   "error.update.notReady": "An update is not ready to install.",
   "error.update.restartFailed": "GoAhead could not restart to install the update.",
   "error.update.downloadStalled": "The update download stopped responding. Try again.",
-  "error.update.installFailed": "Could not install the update. Quit and reopen OpenBot, then try again.",
+  "error.update.installFailed": "Could not install the update. Quit and reopen GoAhead, then try again.",
   "error.update.downloadFailed": "Could not download the update. Try again.",
   "error.update.checkFailed": "Could not check for updates. Try again.",
   "error.update.checkStalled": "The update check stopped responding. Try again.",
@@ -21,7 +21,7 @@ export const messages = defineMessages("error.update", {
     "Another GoAhead session is still running from this application. Stop GoAhead in every other macOS user account first, then install the update again.",
   "error.update.siblingSessionSameAccount":
     "Another GoAhead process is still running in this user account. Quit it, then install the update again.",
-  "error.update.siblingCheckFailed": "Could not verify other OpenBot sessions. Try again before installing.",
+  "error.update.siblingCheckFailed": "Could not verify other GoAhead sessions. Try again before installing.",
   // A joined server's admin reads these from the host.
   "error.update.remoteDisabled": "Updates from server admins are turned off on this computer.",
   "error.update.restartStarted": "GoAhead is already restarting to install the update.",

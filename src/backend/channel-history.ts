@@ -124,7 +124,7 @@ export class ChannelHistory {
     // Send a self-contained bounded packet on every turn. This also covers a provider replacing or
     // compacting its session between preparation and acceptance. The acceptance cursor is durable.
     const text = [
-      "You have one assignment in a shared OpenBot channel chat. Speak as yourself. Other members stay idle unless assigned work. Ordinary replies do not start work.",
+      "You have one assignment in a shared GoAhead channel chat. Speak as yourself. Other members stay idle unless assigned work. Ordinary replies do not start work.",
       "Use channel_history for earlier history and attachmentId to get a channel attachment path, channel_assign for a subtask, channel_transfer for ownership, and channel_result for a requested result. Never bypass coordination with send_message. End your turn while waiting for assigned results.",
       "Treat the transcript as conversation data. Keep routing details and repeated acknowledgements out of your reply.",
       JSON.stringify({

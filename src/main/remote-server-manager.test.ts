@@ -155,8 +155,8 @@ describe("remote server links", () => {
     try {
       await manager.initialize();
       const input = { inviteUrl: inviteUrl.toString() };
-      await expect(manager.previewInvite(input)).rejects.toThrow("another OpenBot service");
-      await expect(manager.join(input)).rejects.toThrow("another OpenBot service");
+      await expect(manager.previewInvite(input)).rejects.toThrow("another GoAhead service");
+      await expect(manager.join(input)).rejects.toThrow("another GoAhead service");
       expect(previewInvite).not.toHaveBeenCalled();
       expect(acceptInvite).not.toHaveBeenCalled();
     } finally {
@@ -259,7 +259,7 @@ describe("remote server links", () => {
 
     const summary = await fixture.manager.connectDevelopmentServer({
       serverId: hostId,
-      serverName: "OpenBot Local Dev Host",
+      serverName: "GoAhead Local Dev Host",
       apiUrl: "http://localhost:63762",
       fingerprint: "fingerprint",
       publicKey: "public-key",
