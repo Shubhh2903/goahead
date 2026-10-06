@@ -1,11 +1,11 @@
 # Privacy
 
-OpenBot is local-first, but it is not offline-only. Agent workspaces, conversations, attachments,
-browser data, and team data stay on the computer that runs OpenBot. The optional OpenBot account
+GoAhead is local-first, but it is not offline-only. Agent workspaces, conversations, attachments,
+browser data, and team data stay on the computer that runs GoAhead. The optional GoAhead account
 service stores the minimum central data needed for email sign-in, account avatars, remote host
 configuration, memberships, invitations, and logical sessions.
 
-The optional browser client at `/app` connects to the computer that runs OpenBot. Conversation
+The optional browser client at `/app` connects to the computer that runs GoAhead. Conversation
 and attachment data travel through the existing encrypted host connection, not through the
 account Worker. The browser keeps chat pages, drafts, search results, and file previews in memory;
 it does not create a persistent offline chat cache. Files that the user downloads are saved by
@@ -15,7 +15,7 @@ user can also change the display name and avatar and disconnect account sessions
 these requests and the avatar image go to the same account Worker as from the desktop app. Host
 settings, such as MCP servers and the server's hosted sites, travel through the encrypted host
 connection. A hosted site belongs to the server that published it. When the computer that runs
-OpenBot is a registered server, its site requests to the account Worker also send that server's id and
+GoAhead is a registered server, its site requests to the account Worker also send that server's id and
 machine token. The account Worker already holds both, and uses them only to find the server and its
 plan's site limit.
 A Grok Bot export that a member imports into a joined server, from the desktop app or the browser, goes
@@ -37,7 +37,7 @@ state. Host identity pins remain so a later sign-in cannot silently trust a repl
 The web client adds no chat or account analytics events. It does not send email codes, credentials,
 message content, file content, or search queries to telemetry.
 
-Production builds of OpenBot desktop, the configured mobile app, and the website use a self-hosted OpenPanel service for product
+Production builds of GoAhead desktop, the configured mobile app, and the website use a self-hosted OpenPanel service for product
 analytics. Development builds, previews, tests, and Storybook do not send analytics.
 
 The production account service also sends OpenPanel an event when a paid plan or a hosted server
@@ -106,7 +106,7 @@ as a lowercase label of at most 64 characters made of letters, digits, dots, hyp
 underscores; any other value is dropped rather than shortened. No other query parameter, hash, or
 invitation value is sent. Session replay and automatic interaction capture are disabled.
 
-When a user signs in, OpenPanel receives the OpenBot account ID and normalized account email so UI
+When a user signs in, OpenPanel receives the GoAhead account ID and normalized account email so UI
 actions can be associated with the account that started them. The email is stored on the OpenPanel
 profile and is not copied into individual event properties. Agent lifecycle events are emitted once
 by the local host and associated with the host owner's account; clients that observe a remote host do
@@ -122,7 +122,7 @@ That path is a published article address and nothing else: it is matched against
 of articles, so no other part of a visited URL can be reported through it. Reading position is taken
 from where the article sits on screen, never from how long it was open. Referrals from openbot.run and its subdomains are omitted. OpenPanel can also derive
 session, device, browser, operating-system, network, and approximate geographic metadata from a
-request. The analytics service runs on OpenBot's self-hosted infrastructure and receives events
+request. The analytics service runs on GoAhead's self-hosted infrastructure and receives events
 through `analytics.openbot.run`.
 Analytics is enabled in production by default. Desktop users can disable it under **Settings →
 General → Privacy → Share product analytics**. The preference is stored locally and disables both UI
@@ -151,8 +151,8 @@ The local host also records how the agents are used:
 - **Tools.** When a turn completes, the host sends one count per kind of tool the agent used (for
   example command, file change, web search, browser, or MCP), how many of those calls failed (Claude
   does not report failed tool calls, so its count is 0), and
-  the plugin: the slug of an OpenBot catalog plugin, `builtin` for OpenBot's own tools, or `custom`.
-  The tool name is sent only for OpenBot's own tools and catalog plugins. The name, address and
+  the plugin: the slug of a GoAhead catalog plugin, `builtin` for GoAhead's own tools, or `custom`.
+  The tool name is sent only for GoAhead's own tools and catalog plugins. The name, address and
   command of a server the user added, the tool arguments and the tool results are not sent.
 - **Routine runs.** The host sends the outcome of a routine run, whether it was scheduled or manual,
   and its schedule type (for example daily or weekly). The routine name and instruction are not
@@ -219,7 +219,7 @@ the avatar without an account session.
 ## Hosted servers
 
 Each account can buy hosted servers. A hosted server is a Linux
-OpenBot computer that runs in a [boat](https://boat.dev) sandbox in the EU (Germany, Finland or
+GoAhead computer that runs in a [boat](https://boat.dev) sandbox in the EU (Germany, Finland or
 France). The sandbox holds the server's workspaces, conversations, attachments, browser data and
 team data, the same as your own computer would. The server stops 15 to 30 minutes after its last use and
 starts again when you press a key or click in an app that shows it, or a few minutes before its next
@@ -311,14 +311,14 @@ for on-device recognition. On iOS, this applies when the phone supports it for y
 Android, it applies when the language model is installed. Otherwise, or when on-device recognition
 fails before it recognizes any speech, the phone's recognition service, Apple or Google, receives the
 audio. The recognized text goes into the message field and is sent
-only when you send the message. OpenBot does not store or send the audio.
+only when you send the message. GoAhead does not store or send the audio.
 
 ## Email delivery and infrastructure providers
 
-OpenBot sends sign-in and team invitation messages through the configured SMTP provider. The
+GoAhead sends sign-in and team invitation messages through the configured SMTP provider. The
 provider receives the recipient address and the message content. A sign-in message contains the
 one-time code and its expiration time. A team invitation can contain the inviter address, team name,
-role, and invite URL. The HTML version of a message loads the OpenBot logo from `openbot.run` when
+role, and invite URL. The HTML version of a message loads the GoAhead logo from `openbot.run` when
 the mail client shows images. The image address is the same in every message and identifies no
 recipient.
 
@@ -328,9 +328,9 @@ Live Activity updates that it cannot read; see [iPhone Live Activity](#iphone-li
 agent's Slack app, it exchanges the Slack sign-in and serves the install page; see
 [Slack connections](#slack-connections). Cloudflare and the email provider can keep their own
 security, delivery, and network logs under their own policies. These provider logs are outside the
-OpenBot application database and its daily maintenance task.
+GoAhead application database and its daily maintenance task.
 
-Paid server plans use Stripe. You enter card and billing details on Stripe's pages, not in OpenBot.
+Paid server plans use Stripe. You enter card and billing details on Stripe's pages, not in GoAhead.
 Stripe sends the account service the subscription state, the plan, its price, the period, and the
 account and server IDs that the subscription names, never the card number. When you choose a plan
 for a new hosted server, the account service sends Stripe your account email and account ID (to
@@ -342,7 +342,7 @@ change or cancel, to open the Stripe Customer Portal (`billing.stripe.com`). Str
 customer, invoices and payment records under its own policy, also after the subscription ends.
 Billing is off, and Stripe receives nothing, when the account service has no Stripe key.
 
-## Data stored on the OpenBot computer
+## Data stored on the GoAhead computer
 
 - `~/OpenBot/Agents` contains one workspace per agent. A profile written by a release before the
   bot-to-agent rename holds them under `~/OpenBot/Bots`; the application moves them on first launch.
@@ -351,16 +351,16 @@ Billing is off, and Stripe receives nothing, when the account service has no Str
   Every agent on this computer can read and write every table in that file, and the user can delete any
   table in agent settings.
 - `~/OpenBot/Downloads` contains files downloaded by the embedded browser.
-- `~/Library/Application Support/OpenBot` contains the OpenBot SQLite database, agent metadata,
+- `~/Library/Application Support/OpenBot` contains the GoAhead SQLite database, agent metadata,
   conversations, message queues, direct messages, reactions, read state, attachment drafts and
   indexes, team configuration, local team members and sessions, the shared browser profile, cookies,
-  application preferences, and the provider CLIs OpenBot downloads. The downloaded CLIs are kept in
+  application preferences, and the provider CLIs GoAhead downloads. The downloaded CLIs are kept in
   one store for the whole computer, which no other profile data shares.
 - The local team configuration contains team member profiles, password hashes and salts when local
   password sign-in is used, invite and session token hashes, and the team identity key pair.
-- `~/.codex` is owned by Codex CLI and contains its login and thread data. OpenBot does not copy or
+- `~/.codex` is owned by Codex CLI and contains its login and thread data. GoAhead does not copy or
   manage Codex credentials.
-- `~/.claude` is owned by Claude CLI and contains its login and session data. OpenBot does not copy
+- `~/.claude` is owned by Claude CLI and contains its login and session data. GoAhead does not copy
   or manage Claude credentials.
 - The MCP sign-ins are kept in `~/Library/Application Support/OpenBot`, encrypted by the operating
   system's secret storage in the same way as provider API keys. One record per server address holds
@@ -371,13 +371,13 @@ Billing is off, and Stripe receives nothing, when the account service has no Str
   system's secret storage. It holds the GitHub access and refresh tokens, the account name, ID and
   avatar address, and the port and secret of the local GitHub MCP server.
   While the connection is on, `provider-state/github` in the same folder holds the access token and
-  the OpenBot GitHub App's installation tokens in plain text, with mode 0600, for `gh` and `git` in
-  agent tools. OpenBot deletes that folder when you disconnect and when the app closes; after a crash
+  the GoAhead GitHub App's installation tokens in plain text, with mode 0600, for `gh` and `git` in
+  agent tools. GoAhead deletes that folder when you disconnect and when the app closes; after a crash
   it stays until the next start. The tokens are redacted from logs, exports and diagnostics.
 - The 1Password connection (Marketplace > 1Password) is kept in
   `~/Library/Application Support/OpenBot/openbot-onepassword-connector-v1.json`, encrypted by the
   operating system's secret storage. It holds the service account token and the account ID only.
-  OpenBot keeps the list of logins (titles and web addresses) in memory, never on disk. A password
+  GoAhead keeps the list of logins (titles and web addresses) in memory, never on disk. A password
   or a one-time code is read from 1Password when the browser fills it, goes only to that page, and
   is never sent to an agent, a provider, a log or a team member. The token and each filled value
   are redacted from logs, exports and diagnostics.
@@ -388,17 +388,17 @@ Billing is off, and Stripe receives nothing, when the account service has no Str
   messages, URLs, paths, or identifiers, and it goes through log redaction before it is written. It
   is kept to two files of 2 MB each and is never sent.
 
-Attachments copied into OpenBot remain in managed storage after their original file is moved or
+Attachments copied into GoAhead remain in managed storage after their original file is moved or
 deleted. All agents share the embedded browser profile, including cookies and website sessions.
 
 ## Remote Team API
 
-When the owner publishes OpenBot, the app starts an authenticated Team API on a localhost port. The
-client and host use a separate OpenBot Signal service to establish WebRTC. Signal carries only
+When the owner publishes GoAhead, the app starts an authenticated Team API on a localhost port. The
+client and host use a separate GoAhead Signal service to establish WebRTC. Signal carries only
 short-lived authentication, SDP, and ICE messages. Team API data uses WebRTC DataChannels. Remote
 Desktop media and input use a separate WebRTC connection. The live browser view sends compressed
 images of the host's browser tab, and the watching member's pointer and key input, over that same
-media connection. ICE uses a direct peer-to-peer path when possible. If a direct path is not possible, encrypted WebRTC traffic uses an OpenBot coturn relay.
+media connection. ICE uses a direct peer-to-peer path when possible. If a direct path is not possible, encrypted WebRTC traffic uses a GoAhead coturn relay.
 
 Agents, conversations, queues, direct messages, attachments, browser data, prompts, approvals, and
 Remote Desktop data remain on the host. The central account service does not copy them into D1 or
@@ -425,24 +425,24 @@ Network traffic can also occur when:
 - a user submits text that is not a web address in the browser address bar, which sends the query to Google Search;
 - a locally installed Codex plugin connects to its service;
 - an MCP server the user enabled is reached at its own address, and, when that server asks for a
-  sign-in, OpenBot connects to the server's authorization service to register itself, to exchange
+  sign-in, GoAhead connects to the server's authorization service to register itself, to exchange
   the grant the browser returns, and to renew the token. Nothing about the user's agents,
   conversations or files is sent in those requests;
-- the user presses Install on the 1Password page. OpenBot downloads the 1Password CLI release that it
+- the user presses Install on the 1Password page. GoAhead downloads the 1Password CLI release that it
   pins from `cache.agilebits.com`, checks its SHA-256, and keeps it in
   `~/Library/Application Support/OpenBot/provider-state/1password-cli`. The request carries no user
   data;
 - the user connects 1Password. Connect runs the user's own 1Password CLI (`op`) on this computer to
-  create the vault "Shared with OpenBot" and a service account that can read only it. OpenBot then
+  create the vault "Shared with OpenBot" and a service account that can read only it. GoAhead then
   reads that vault from 1Password's servers with the token: the vault names, the login titles and
   web addresses, and, when an agent signs in to a site, that login's username and password or code.
   Nothing about the user's agents, conversations or files is sent to 1Password;
-- the user connects GitHub in Server settings. OpenBot asks `github.com` for a sign-in code and a
-  token, renews the token, and reads the account name and the repositories of the OpenBot GitHub App
+- the user connects GitHub in Server settings. GoAhead asks `github.com` for a sign-in code and a
+  token, renews the token, and reads the account name and the repositories of the GoAhead GitHub App
   from `api.github.com`. The GitHub page in Server settings loads the account picture from the
   address that GitHub gives, on GitHub's image host. Agents then reach the
   GitHub MCP server at `api.githubcopilot.com` and GitHub itself through `gh` and `git`, with that
-  token. So that GitHub shows the OpenBot app as the author of an agent's work, OpenBot sends that
+  token. So that GitHub shows the GoAhead app as the author of an agent's work, GoAhead sends that
   token to the central account service (`api.openbot.run`) about once an hour, and when you open the
   repository list. The service uses it
   only to ask GitHub which repositories you can push to, and gets back short-lived installation
@@ -450,7 +450,7 @@ Network traffic can also occur when:
   or commands. Agents reach the GitHub MCP server through a local server on `127.0.0.1`, which adds
   the right token to each call;
 - an installed build checks GitHub Releases for updates;
-- OpenBot checks for new provider CLI releases when it starts, once an hour, and when you select
+- GoAhead checks for new provider CLI releases when it starts, once an hour, and when you select
   `Check for updates`. It asks `api.github.com` for Codex, `registry.npmjs.org` for Claude,
   OpenCode and Cline, `x.ai/cli` for Grok, and `raw.githubusercontent.com/agentclientprotocol/registry` and
   `dl.google.com` (for the download size) for Gemini, and the same registry and
@@ -462,14 +462,14 @@ Network traffic can also occur when:
 
 ## Slack connections
 
-A workspace member installs the OpenBot Slack app in their workspace from OpenBot on their computer.
+A workspace member installs the GoAhead Slack app in their workspace from GoAhead on their computer.
 The account service exchanges that install with Slack, because the app's secret lives there. It
-records which OpenBot computer answers the workspace: the Slack workspace ID, the computer, the
-OpenBot account that connected it, and the Slack app and bot user IDs. It keeps no Slack token and no
+records which GoAhead computer answers the workspace: the Slack workspace ID, the computer, the
+GoAhead account that connected it, and the Slack app and bot user IDs. It keeps no Slack token and no
 message. It gives the bot token to the computer encrypted to a key that only that computer has.
 
-Slack sends the workspace's events, which contain the Slack messages in the channels OpenBot is in
-and its direct messages, to OpenBot's Signal service (`signal.openbot.run`). Signal checks Slack's
+Slack sends the workspace's events, which contain the Slack messages in the channels GoAhead is in
+and its direct messages, to GoAhead's Signal service (`signal.openbot.run`). Signal checks Slack's
 signature and reads only the app ID and the workspace ID, to find the computer. It passes each request to that
 computer over its Signal connection, in transit only: it does not store or log the message. The
 answers go from the computer to the Slack Web API directly.
@@ -481,11 +481,11 @@ answers go from the computer to the Slack Web API directly.
   agent, with the Slack display name of each author, and files people send are kept with the agent's
   attachments. Disconnect revokes and removes the token and keeps the conversations; deleting an
   agent removes its conversations.
-- **Read from Slack.** The messages that mention OpenBot, the replies in a thread an agent answers,
+- **Read from Slack.** The messages that mention GoAhead, the replies in a thread an agent answers,
   its direct messages, the files in them, the display names of their authors, the names of the
-  channels, and earlier messages of a thread as context. OpenBot joins every public channel of the
-  workspace, and Slack sends every message of each channel that OpenBot is in; the computer keeps
-  only the messages that address OpenBot or continue a conversation.
+  channels, and earlier messages of a thread as context. GoAhead joins every public channel of the
+  workspace, and Slack sends every message of each channel that GoAhead is in; the computer keeps
+  only the messages that address GoAhead or continue a conversation.
 - **Given to the Slack Orchestrator.** Every new Slack request goes first to the orchestrator agent,
   which runs on its provider like any other agent and passes the work to a teammate with the facts
   it needs.
@@ -502,39 +502,39 @@ Plugin pages on openbot.run show each listing's own icon. The page asks `openbot
 picture, and the website fetches it there from the address the plugin catalog holds, so reading a
 plugin page does not connect your browser to the plugin developer's servers.
 
-Account usage shown in OpenBot is requested through the local Codex App Server. OpenBot does not send
+Account usage shown in GoAhead is requested through the local Codex App Server. GoAhead does not send
 that usage to its maintainer.
 
 ## Agent access
 
 Agents currently use `danger-full-access` with `approvalPolicy: never`. They can read and modify local
-files, run programs, use the network, and control the embedded browser without an OpenBot confirmation
+files, run programs, use the network, and control the embedded browser without a GoAhead confirmation
 dialog. This is an explicit product behavior, not a host security boundary. Keep backups and do not
 give an agent a task you would not allow a local command-line tool to perform.
 
-On first launch, OpenBot explains this access and does not start the agent services until you
-explicitly accept it. The acceptance record stays in OpenBot's local application-support directory.
+On first launch, GoAhead explains this access and does not start the agent services until you
+explicitly accept it. The acceptance record stays in GoAhead's local application-support directory.
 
-Computer Use is provided by `cua-driver`, a local binary that OpenBot ships and starts as its own
+Computer Use is provided by `cua-driver`, a local binary that GoAhead ships and starts as its own
 child process. It starts only when you open the Computer Use panel or an agent uses the function, and
-it stops when OpenBot stops. Because OpenBot starts it directly, macOS attributes the Screen Recording
-and Accessibility grants to OpenBot, and macOS keeps control of the prompts. Windows and Linux ask for
+it stops when GoAhead stops. Because GoAhead starts it directly, macOS attributes the Screen Recording
+and Accessibility grants to GoAhead, and macOS keeps control of the prompts. Windows and Linux ask for
 no such grant. Screen contents and accessibility trees that an agent reads through the driver go to
 that agent's provider, the same as any other message content.
 
 The driver is third-party software with its own product analytics, which its vendor turns on by
-default and which are not OpenBot's. They would send the driver version, the operating system, a
+default and which are not GoAhead's. They would send the driver version, the operating system, a
 random installation identifier, and a bucketed record of each tool call to that vendor. They never
 send screen contents, window or application names, typed text, or the content of a tool result.
 
 On its own the driver also asks GitHub for a newer release each time it starts.
 
-**OpenBot stops both calls, always.** Every copy of the driver OpenBot starts gets
+**GoAhead stops both calls, always.** Every copy of the driver GoAhead starts gets
 `CUA_DRIVER_RS_TELEMETRY_ENABLED=0` and `CUA_DRIVER_RS_UPDATE_CHECK=0`, so it sends the vendor
-nothing and asks GitHub nothing. OpenBot pins the driver version it packages, so a release check
-could only offer you an update OpenBot would refuse. The driver reads the environment before its own
-configuration, and OpenBot sets both variables last, so nothing can turn them back on for a driver
-OpenBot started. OpenBot writes no file, so a driver you run yourself keeps the settings you gave
+nothing and asks GitHub nothing. GoAhead pins the driver version it packages, so a release check
+could only offer you an update GoAhead would refuse. The driver reads the environment before its own
+configuration, and GoAhead sets both variables last, so nothing can turn them back on for a driver
+GoAhead started. GoAhead writes no file, so a driver you run yourself keeps the settings you gave
 it.
 
 Auto approve also permits that agent to publish, update and delete public hosted sites without
@@ -555,9 +555,9 @@ contents, or local file paths.
 
 ## Delete local data
 
-Quit OpenBot, then remove the OpenBot folders listed above. Removing
+Quit GoAhead, then remove the GoAhead folders listed above. Removing
 `~/Library/Application Support/OpenBot` also removes the embedded browser's cookies and logins.
-Removing `~/OpenBot` removes agent workspaces, transfers, downloads, and the records the agents kept. OpenBot does not delete
+Removing `~/OpenBot` removes agent workspaces, transfers, downloads, and the records the agents kept. GoAhead does not delete
 `~/.codex` or `~/.claude`; use each CLI's own controls if you also want to remove its local data.
 
 Review folders before deleting them and keep a backup of anything you need.
@@ -568,22 +568,22 @@ Use [GitHub Discussions](https://github.com/nightly-labs/openbot/discussions) fo
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), without attaching
 credentials, conversations, or unrelated private files.
 
-When you ask OpenBot to generate or revise an agent profile, it sends your setup
+When you ask GoAhead to generate or revise an agent profile, it sends your setup
 prompt, the current profile draft (when present), and available sidebar section
 names and identifiers to the selected AI provider through its local CLI. This
 request does not include conversation history, saved memories, or workspace files.
-The draft is reviewed before OpenBot saves it; generating a draft does not create
-an OpenBot conversation or change an existing agent. The provider's own data and
+The draft is reviewed before GoAhead saves it; generating a draft does not create
+a GoAhead conversation or change an existing agent. The provider's own data and
 CLI retention policies still apply.
 
 When you change an agent's provider, the new provider receives the chat history with its first
 message. That history includes the work steps that the previous provider recorded: commands, the end
-of their output, changed file paths, tool names, searches and progress notes. OpenBot removes known
+of their output, changed file paths, tool names, searches and progress notes. GoAhead removes known
 secrets from these steps first. Command output can contain file contents. Reasoning, diffs and
 attachment contents are not sent.
 
 Publishing an agent template from the chat makes its instructions, skills, and routines public to
-anyone with the link at `openbot.run/agents/<id>`, with your account name as the creator. OpenBot
+anyone with the link at `openbot.run/agents/<id>`, with your account name as the creator. GoAhead
 stops the publish when a text field looks like a secret. Workspace files and memories are not sent.
 An owner or admin of a server can also publish, update or unpublish an agent of that server from the
 browser client. The host sends the template content and the agent's avatar to that browser for the
@@ -593,84 +593,84 @@ Marketplace submissions from the desktop app show the publisher’s current acco
 
 ### OpenCode
 
-OpenBot downloads the OpenCode CLI from `registry.npmjs.org` and its license from
+GoAhead downloads the OpenCode CLI from `registry.npmjs.org` and its license from
 `github.com/anomalyco/opencode`, then starts it with `opencode acp`. Prompts, attachments, and tool
 results go to that local process. OpenCode can send them to the model provider selected in its
 configuration. OpenCode's free models are the default, and they reach OpenCode Go with no account,
 so a first OpenCode turn leaves this computer without a sign-in.
 
-An OpenCode Go key is optional and unlocks the paid catalog. OpenBot encrypts it with the operating
+An OpenCode Go key is optional and unlocks the paid catalog. GoAhead encrypts it with the operating
 system's secret storage, writes it to a file that only your user account can read, and passes it
-to the local OpenCode process. To show the remaining Go quota in Usage, OpenBot also sends the key
+to the local OpenCode process. To show the remaining Go quota in Usage, GoAhead also sends the key
 to `opencode.ai/zen/go/v1/usage`; that request contains no conversation, file, or model data, and
-the response contains only the used percentage and reset time of each Go limit. OpenBot does not
+the response contains only the used percentage and reset time of each Go limit. GoAhead does not
 send that usage to its maintainer. No screen, log, data export, or diagnostics report contains the
-key; the data export lists it under `scope.excludes`. OpenBot does not copy OpenCode credentials or
+key; the data export lists it under `scope.excludes`. GoAhead does not copy OpenCode credentials or
 upload its session files. OpenCode manages its own login and resume state.
 
 ### Gemini
 
-OpenBot downloads Google's Antigravity ACP server from `dl.google.com` when you select Download on
+GoAhead downloads Google's Antigravity ACP server from `dl.google.com` when you select Download on
 the Gemini row. Each provider update check also asks `dl.google.com` for the size of the newest
-download, also when you do not use Gemini. Google's license does not let OpenBot include it in the application. OpenBot
+download, also when you do not use Gemini. Google's license does not let GoAhead include it in the application. GoAhead
 starts the server as a local process. Prompts, attachments, and tool results go to that process,
 and the server sends them to Google. Sign in opens Google's sign-in page in your browser. The
-server keeps its login and session files in `~/.gemini`, or in `$GEMINI_HOME`. OpenBot does not
+server keeps its login and session files in `~/.gemini`, or in `$GEMINI_HOME`. GoAhead does not
 read, copy, or upload these files. Google's terms apply: <https://antigravity.google/terms>.
-Gemini agents stay on this computer: OpenBot does not show them to team members.
+Gemini agents stay on this computer: GoAhead does not show them to team members.
 
 ### Cursor
 
-OpenBot downloads the Cursor CLI from `downloads.cursor.com` when you select Download on the Cursor
+GoAhead downloads the Cursor CLI from `downloads.cursor.com` when you select Download on the Cursor
 row. Each provider update check also asks `downloads.cursor.com` for the size of the newest
-download, also when you do not use Cursor. OpenBot starts the CLI as a local process. Prompts,
+download, also when you do not use Cursor. GoAhead starts the CLI as a local process. Prompts,
 attachments, and tool results go to that process, and the CLI sends them to Cursor. Sign in opens
 Cursor's sign-in page in your browser, or the CLI uses `CURSOR_API_KEY` from the environment that
-started OpenBot. OpenBot gives that key only to the local CLI, in its environment, and does
+started GoAhead. GoAhead gives that key only to the local CLI, in its environment, and does
 not store it. The CLI keeps its login and session files
-in `~/.cursor` (on Linux, the login is in `~/.config/cursor`). OpenBot does not read, copy, or
+in `~/.cursor` (on Linux, the login is in `~/.config/cursor`). GoAhead does not read, copy, or
 upload these files. Cursor's terms apply: <https://cursor.com/terms-of-service>. Team members see
 the host's Cursor agents, as for the other providers, when their app supports Cursor.
 
 ### Cline
 
-OpenBot downloads the Cline CLI from `registry.npmjs.org`, and its license file from `github.com`,
-when you select Download on the Cline row. OpenBot starts the CLI as a local process. Prompts,
+GoAhead downloads the Cline CLI from `registry.npmjs.org`, and its license file from `github.com`,
+when you select Download on the Cline row. GoAhead starts the CLI as a local process. Prompts,
 attachments, and tool results go to that process, and the CLI sends them to Cline and to the model
 provider you select in Cline. The provider of a free model can use your prompts to train models.
 Sign in opens Cline's sign-in page in your browser, or the CLI uses `CLINE_API_KEY` from the
-environment that started OpenBot. OpenBot gives that key only to the local CLI, in its environment,
+environment that started GoAhead. GoAhead gives that key only to the local CLI, in its environment,
 and does not store it. The CLI keeps its login and session files in `~/.cline`, or in `$CLINE_DIR`.
-OpenBot does not read, copy, or upload these files. Cline's terms apply:
+GoAhead does not read, copy, or upload these files. Cline's terms apply:
 <https://cline.bot/tos>. Team members see the host's Cline agents, as
 for the other providers, when their app supports Cline.
 
 ### Local model servers
 
 When Server settings shows the Providers section of this computer, and once on the onboarding
-provider step, OpenBot looks
+provider step, GoAhead looks
 for model servers on this computer. It sends `GET <address>/models` to
 `http://127.0.0.1:11434/v1` (Ollama), `http://127.0.0.1:1234/v1` (LM Studio), and each address you
 add under Local detection. These requests
-contain no key, header, conversation or file data, and OpenBot does not follow a redirect. A found
-server is only listed; OpenBot saves nothing until you select Add.
+contain no key, header, conversation or file data, and GoAhead does not follow a redirect. A found
+server is only listed; GoAhead saves nothing until you select Add.
 
 When you add or edit an endpoint, Load models sends the key and headers you typed to that address.
-For a saved endpoint, OpenBot sends the stored key and headers only to the same origin as the saved
+For a saved endpoint, GoAhead sends the stored key and headers only to the same origin as the saved
 address. Local detection can be turned off in Settings. Its switch, addresses, folders and hidden
 rows are in `openbot-provider-detection-v1.json` in the app profile.
 
 ### Custom agents
 
-A custom agent is an ACP program that you name. OpenBot starts it as a local process, and prompts, attachments, and tool results go to that process. What the program sends
+A custom agent is an ACP program that you name. GoAhead starts it as a local process, and prompts, attachments, and tool results go to that process. What the program sends
 to the network is its own choice. Check agent starts it once, sends only `initialize`, and stops it.
-To find agents, OpenBot looks up the names of known agents on your `PATH` and in the folders you
+To find agents, GoAhead looks up the names of known agents on your `PATH` and in the folders you
 add under Local detection. It does not start a file that it finds.
 
 The command, arguments, and environment names are in `custom-agents.json` in the app profile. The
 environment values are encrypted with the operating system's secret storage, go only to that
 process, and are not in a screen, log, data export, or diagnostics report; the data export lists
-them under `scope.excludes`. Custom agents stay on this computer: OpenBot does not show them to
+them under `scope.excludes`. Custom agents stay on this computer: GoAhead does not show them to
 team members.
 
 ## Shared desktop channels
@@ -726,7 +726,7 @@ and when the host stops.
 Each update contains the text that the view shows: agent names, the current task, the last reply,
 a question and its options, or a command that waits for approval. The host seals the update with
 keys made from the secret (an HMAC-SHA256 keystream and an HMAC-SHA256 tag) and sends it to the
-OpenBot account service, which sends it to Apple. The account service and Apple receive only the
+GoAhead account service, which sends it to Apple. The account service and Apple receive only the
 push token, the sealed bytes, the time, the priority, and the time when the content becomes out of
 date. They cannot read the content. The widget on the phone opens it and shows nothing with a
 wrong tag. The account service stores nothing from these requests and does not log them. It makes
@@ -747,7 +747,7 @@ An administrator can install a local Host Manager for several native macOS users
 registered UIDs, process IDs, application versions, restart readiness, timestamps, and health
 booleans through separate local status directories. It does not read or back up tenant homes,
 workspaces, databases, provider directories, browser data, or conversations. It requests release
-metadata and application downloads from the fixed OpenBot GitHub repository; those requests
+metadata and application downloads from the fixed GoAhead GitHub repository; those requests
 expose the host's network address to GitHub. It sends no tenant status or tenant content to GitHub.
 
 The separate, optional administrator account-setup command creates new local Standard users and
@@ -774,14 +774,14 @@ the authenticated Team API to the computer running the browser. The handoff does
 to chat, provider tool arguments, diagnostics, analytics, or a credential store. Input and submission
 values are held in memory for the operation; cancellation and submission clear the input.
 
-OpenBot blocks agent browser access while consent is pending. Before entering a submitted value, it
+GoAhead blocks agent browser access while consent is pending. Before entering a submitted value, it
 blocks image capture and live browser streams, and stops
 and discards the active browser recording before entry. After entry, protection stays until the
-browser replaces the document. After a same-page submission, OpenBot clears the filled fields and,
+browser replaces the document. After a same-page submission, GoAhead clears the filled fields and,
 when the value no longer appears in the page title, address, text, field values, or attributes, keeps
 the page, so a later login step on the same page stays available. Page code can still hold the
 value, so page evaluation and recording stay blocked in that tab and its connected popup or opener
-tabs until the page navigates. Otherwise OpenBot loads the current URL as a new
+tabs until the page navigates. Otherwise GoAhead loads the current URL as a new
 document with a GET request instead. Failed submission or reload requires manual takeover. Recording does not restart
 automatically, and the tab's back/forward history is cleared after replacement to prevent restoring
 the sensitive document. The destination site receives the value and controls its own processing.

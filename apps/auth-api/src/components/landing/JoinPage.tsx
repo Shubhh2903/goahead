@@ -36,9 +36,9 @@ export function JoinPage() {
 
   return (
     <main class="join-page">
-      <a class="landing-brand join-page-brand" href="/" aria-label="OpenBot home">
+      <a class="landing-brand join-page-brand" href="/" aria-label="GoAhead home">
         <AppLogo variant="production" class="landing-brand-logo" />
-        <span>OpenBot</span>
+        <span>GoAhead</span>
       </a>
 
       <section class="join-card" aria-labelledby="join-title">
@@ -49,9 +49,9 @@ export function JoinPage() {
         </div>
         <AppLogo variant="production" animation="blink" class="join-card-logo" />
         <p class="join-card-eyebrow">Private invitation</p>
-        <h1 id="join-title">Connect to an OpenBot host</h1>
+        <h1 id="join-title">Connect to a GoAhead host</h1>
         <p class="join-card-copy">
-          Open this invitation in OpenBot. The app will verify the host and ask for confirmation before it connects.
+          Open this invitation in GoAhead. The app will verify the host and ask for confirmation before it connects.
         </p>
 
         <Show
@@ -67,13 +67,13 @@ export function JoinPage() {
               when={openUrl()}
               fallback={
                 <span class="landing-button landing-button-primary landing-button-lg join-card-disabled">
-                  Open OpenBot
+                  Open GoAhead
                 </span>
               }
             >
               {(href) => (
                 <Button href={href()} variant="primary" size="lg" icon="open">
-                  Open OpenBot
+                  Open GoAhead
                 </Button>
               )}
             </Show>
@@ -86,7 +86,7 @@ export function JoinPage() {
             </Show>
             <Show when={!mobile()}>
               <Button href={downloadUrl()} variant="secondary" size="lg" icon="download">
-                Download OpenBot
+                Download GoAhead
               </Button>
             </Show>
           </div>
@@ -94,11 +94,11 @@ export function JoinPage() {
 
         <Show when={mobile()}>
           <p class="join-card-note">
-            If OpenBot is installed, tap Open OpenBot. You can also paste this link into Add server in the app.
+            If GoAhead is installed, tap Open GoAhead. You can also paste this link into Add server in the app.
           </p>
         </Show>
         <p class="join-card-note">
-          This link grants access to a host. Share it only with people you want to invite. OpenBot shows its expiry
+          This link grants access to a host. Share it only with people you want to invite. GoAhead shows its expiry
           before you join.
         </p>
       </section>

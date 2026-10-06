@@ -2,7 +2,7 @@ import { importPKCS8, SignJWT } from "jose";
 import { z } from "zod";
 
 /**
- * Installation tokens of the OpenBot GitHub App for one signed-in GitHub user.
+ * Installation tokens of the GoAhead GitHub App for one signed-in GitHub user.
  *
  * A user token (`ghu_`) makes GitHub show "user with OpenBotGit". An installation token (`ghs_`)
  * makes GitHub show `openbotgit[bot]`, but it needs the app's private key, which only this Worker
@@ -169,7 +169,7 @@ export class GitHubInstallationTokens {
       throw new GitHubInstallationTokensError(
         503,
         "github_app_unavailable",
-        "The OpenBot GitHub App key is not a PKCS #8 key.",
+        "The GoAhead GitHub App key is not a PKCS #8 key.",
       );
     }
     const seconds = Math.floor(this.#now() / 1000);
@@ -220,7 +220,7 @@ export class GitHubInstallationTokens {
         : new GitHubInstallationTokensError(
             503,
             "github_app_unavailable",
-            "GitHub refused the OpenBot GitHub App key.",
+            "GitHub refused the GoAhead GitHub App key.",
           );
     }
     if (!response.ok) {

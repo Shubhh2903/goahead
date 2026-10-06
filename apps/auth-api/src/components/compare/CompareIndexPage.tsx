@@ -32,7 +32,7 @@ export function CompareIndexPage(props: CompareIndexPageProps) {
           <header class="compare-index-hero" data-enter="post-copy">
             <div class="landing-hero-grid" aria-hidden="true" />
             <p class="compare-eyebrow">Compare</p>
-            <h1 class="compare-index-title">Compare OpenBot</h1>
+            <h1 class="compare-index-title">Compare GoAhead</h1>
             <p class="compare-index-description">{props.collection.indexDescription}</p>
           </header>
 
@@ -110,7 +110,7 @@ function CompareCardMarks(props: { page: ComparePage }) {
         <CompareMarks
           small
           sides={[
-            { side: "openbot", name: "OpenBot" },
+            { side: "openbot", name: "GoAhead" },
             { side: "rival", name: page.rival.name, mark: page.rival.mark },
           ]}
         />

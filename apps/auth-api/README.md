@@ -1,6 +1,6 @@
-# OpenBot Auth API
+# GoAhead Auth API
 
-This TanStack Start and Solid 2 package is the central OpenBot account API. It
+This TanStack Start and Solid 2 package is the central GoAhead account API. It
 runs on Cloudflare Workers, stores account and authentication records in D1,
 and stores account avatars in R2. Users sign in with an eight-character
 one-time email code. D1 stores hashes instead of plaintext codes, session tokens,
@@ -62,7 +62,7 @@ bunx dotenvx run -q -f apps/auth-api/.env.shared -fk .env.keys -- \
 The `portal` scenario prints a Customer Portal cancel page and then an update page, and waits until
 you use them. The report goes to `.openbot-build/stripe-flows-e2e.json`.
 
-The `boat` scenario runs only when you name it. It pays for a server, waits until OpenBot in the VM
+The `boat` scenario runs only when you name it. It pays for a server, waits until GoAhead in the VM
 signs in and publishes the host, restarts the service to check the stored session, and deletes the
 server. It needs the real `BOAT_API_KEY`, a template from `bun run hosting:template` whose
 `--auth-api-url` reaches your Worker (for example a `cloudflared tunnel --url` to its port), and
@@ -139,7 +139,7 @@ For a deployed Worker, `bun run api:deploy` decrypts `.env.production`. It sends
 `wrangler secret put` through standard input, and `GITHUB_APP_PRIVATE_KEY` when it is set. It then
 builds and deploys the Worker.
 
-`GITHUB_APP_PRIVATE_KEY` is the OpenBot GitHub App's private key as a PKCS #8 PEM. GitHub gives a
+`GITHUB_APP_PRIVATE_KEY` is the GoAhead GitHub App's private key as a PKCS #8 PEM. GitHub gives a
 PKCS #1 key; convert it with `openssl pkcs8 -topk8 -nocrypt -in <key>.pem`. With the key, the
 Worker gives the desktop installation tokens, so GitHub shows `openbotgit[bot]` as the author of an
 agent's work. With no key, the desktop acts as the signed-in user. In GitHub Actions the secret is
@@ -154,7 +154,7 @@ runtime secrets file.
 Use `bun run api:deploy:test` for the isolated `openbot-auth-api-test` Worker
 and the `openbot-auth-test` D1 database.
 
-As a fallback, set `EMAIL_DELIVERY_WEBHOOK_URL` to an HTTPS endpoint. OpenBot
+As a fallback, set `EMAIL_DELIVERY_WEBHOOK_URL` to an HTTPS endpoint. GoAhead
 sends this JSON:
 
 ```json

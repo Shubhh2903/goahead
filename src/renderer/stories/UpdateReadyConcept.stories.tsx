@@ -181,17 +181,17 @@ function RestartAnnouncement(props: { state: ScreenState; downloaded?: boolean }
   const message = () => {
     switch (props.state) {
       case "downloading":
-        return `Downloading OpenBot ${NEXT_VERSION}.`;
+        return `Downloading GoAhead ${NEXT_VERSION}.`;
       case "download-failed":
         return "The download stopped.";
       case "ready":
         return props.downloaded ? "The update is downloaded. Restart to install it." : "";
       case "restarting":
-        return "Restarting OpenBot to install the update.";
+        return "Restarting GoAhead to install the update.";
       case "slow":
         return "The restart takes longer than usual.";
       case "success":
-        return `OpenBot ${NEXT_VERSION} is installed.`;
+        return `GoAhead ${NEXT_VERSION} is installed.`;
       case "failed":
         return "The update did not install.";
       default:
@@ -206,7 +206,7 @@ function RestartAnnouncement(props: { state: ScreenState; downloaded?: boolean }
 }
 
 // ---------------------------------------------------------------------------------------------
-// Concept A: Focused. The layout from the issue reference, in OpenBot branding.
+// Concept A: Focused. The layout from the issue reference, in GoAhead branding.
 // ---------------------------------------------------------------------------------------------
 
 interface ConceptProps {
@@ -234,7 +234,7 @@ function FocusedConcept(props: ConceptProps) {
             </h1>
             <p class="update-ready__body">Restart to finish. It takes a few seconds.</p>
             <Progress class="update-ready__progress" value={100} aria-label="Update downloaded" />
-            <p class="update-ready__version">OpenBot {NEXT_VERSION}</p>
+            <p class="update-ready__version">GoAhead {NEXT_VERSION}</p>
             <div class="update-ready__actions">
               <Button size="lg" variant="ghost" onClick={props.onDismiss}>
                 Later
@@ -248,7 +248,7 @@ function FocusedConcept(props: ConceptProps) {
             <h1 id="update-focused-title" class="update-ready__title">
               Restarting…
             </h1>
-            <p class="update-ready__body">OpenBot closes and opens again on {NEXT_VERSION}.</p>
+            <p class="update-ready__body">GoAhead closes and opens again on {NEXT_VERSION}.</p>
             <Progress class="update-ready__progress" indeterminate aria-label="Restarting" />
             <p class="update-ready__version">
               {CURRENT_VERSION} → {NEXT_VERSION}
@@ -284,7 +284,7 @@ const NEXT_RELEASE: WhatsNewRelease = {
       type: "added",
       items: [
         "In an agent chat on a team, each message from another person stands on the right, with your messages, and shows their name. Their bubble has their own color, so it does not look like yours.",
-        "A hosted server updates itself. It downloads a new OpenBot release in the background and starts it at its next start, so an open session does not stop.",
+        "A hosted server updates itself. It downloads a new GoAhead release in the background and starts it at its next start, so an open session does not stop.",
       ],
     },
     {
@@ -301,13 +301,13 @@ const NEXT_RELEASE: WhatsNewRelease = {
       type: "fixed",
       items: [
         "In the browser live view of a remote server, Enter submits a form and breaks a line, and Backspace, Delete, Tab and the arrow keys work.",
-        "The Computer Use driver stops when OpenBot stops, also after a crash or an out-of-memory kill.",
-        "OpenBot uses less memory in long sessions. It no longer keeps a second copy of each conversation.",
+        "The Computer Use driver stops when GoAhead stops, also after a crash or an out-of-memory kill.",
+        "GoAhead uses less memory in long sessions. It no longer keeps a second copy of each conversation.",
         "The Dynamic Island shows new messages again when you have more than 10,000 unread replies.",
         "Each Dynamic Island window uses about half the memory.",
         "Sending a message, or a change to a queued message, no longer writes all message history to the database again.",
         'With Codex (GPT models), an agent now gets the tools of an MCP server whose name has a space, such as "Home Assistant".',
-        "With automatic downloads on, one restart now installs the newest OpenBot version.",
+        "With automatic downloads on, one restart now installs the newest GoAhead version.",
       ],
     },
   ],
@@ -344,7 +344,7 @@ function HandoffConcept(props: ConceptProps) {
             </span>
           </div>
           <h1 id="update-handoff-title" class="update-ready__title">
-            {download() === "done" ? `OpenBot ${NEXT_VERSION} is ready` : `Downloading OpenBot ${NEXT_VERSION}`}
+            {download() === "done" ? `GoAhead ${NEXT_VERSION} is ready` : `Downloading GoAhead ${NEXT_VERSION}`}
           </h1>
           <p class="update-ready__body">
             You are on {CURRENT_VERSION}.{" "}
@@ -451,9 +451,9 @@ function SafeRestartConcept(props: ConceptProps) {
             <AppLogo variant="production" animation={logoAnimation(state())} class="update-ready__logo" />
           </div>
           <h1 id="update-safe-title" class="update-ready__title">
-            Update ready: OpenBot {NEXT_VERSION}
+            Update ready: GoAhead {NEXT_VERSION}
           </h1>
-          <p class="update-ready__body">A restart stops the work below. OpenBot starts it again after the update.</p>
+          <p class="update-ready__body">A restart stops the work below. GoAhead starts it again after the update.</p>
 
           <ul class="update-safe__work" aria-label="Work that is running">
             <For each={RUNNING_WORK}>
@@ -472,7 +472,7 @@ function SafeRestartConcept(props: ConceptProps) {
             <ChoiceCard
               selected={choice() === "when-idle"}
               title="When the agents are idle"
-              detail="OpenBot waits for the work above, then restarts."
+              detail="GoAhead waits for the work above, then restarts."
               onSelect={() => setChoice("when-idle")}
             />
             <ChoiceCard
@@ -577,7 +577,7 @@ function SuccessPanel(props: { titleId: string; onDismiss: () => void }) {
         <CircleCheck />
       </span>
       <h1 id={props.titleId} class="update-ready__title">
-        OpenBot is up to date
+        GoAhead is up to date
       </h1>
       <p class="update-ready__body">
         Updated from {CURRENT_VERSION} to {NEXT_VERSION}. Your agents continue their work.
@@ -608,7 +608,7 @@ function FailurePanel(props: PanelProps) {
         The update did not install
       </h1>
       <p class="update-ready__body">
-        OpenBot is still on {CURRENT_VERSION}. Your chats and agents did not change. Quit and open OpenBot to try again.
+        GoAhead is still on {CURRENT_VERSION}. Your chats and agents did not change. Quit and open GoAhead to try again.
       </p>
       <div class="update-ready__actions">
         <Button size="lg" variant="ghost" onClick={props.onDismiss}>
@@ -641,7 +641,7 @@ function SlowRestartPanel(props: PanelProps) {
       </p>
       <div class="update-ready__actions">
         <Button size="lg" variant="ghost" onClick={props.onDismiss}>
-          Go back to OpenBot
+          Go back to GoAhead
         </Button>
         <Button size="lg" variant="outline" data-autofocus onClick={props.flow.restart}>
           Wait
@@ -814,7 +814,7 @@ function LaunchApp(props: LaunchAppProps) {
       <header class="update-launch-app__bar">
         <span class="update-launch-app__name">
           <AppLogo variant="production" animation="none" class="update-launch-app__logo" />
-          OpenBot {props.version}
+          GoAhead {props.version}
         </span>
         <Switch>
           <Match when={props.update === "downloading"}>

@@ -78,7 +78,7 @@ export const messages = {
   "sidebar.delete.pending": "削除しています…",
   "sidebar.delete.title": "{name} を削除しますか?",
   "sidebar.delete.agentDescription":
-    "エージェントとその OpenBot の会話をアプリから削除します。キュー、メモリー、ルーティン、ワークスペースも削除されます。接続した CLI プロバイダーが別に保存している履歴は削除されません。",
+    "エージェントとその GoAhead の会話をアプリから削除します。キュー、メモリー、ルーティン、ワークスペースも削除されます。接続した CLI プロバイダーが別に保存している履歴は削除されません。",
   "sidebar.delete.channelDescription":
     "チャンネルを停止します。履歴は「削除済みのチャンネル」にプレビュー専用で残ります。復元はできません。メンバーのエージェントは残ります。",
   "sidebar.delete.sectionDescription":
@@ -92,12 +92,12 @@ export const messages = {
   "sidebar.announce.movedPinned": "ピン留めしたチャットを {total} 件中 {position} 番目に移動しました。",
   "sidebar.announce.personFallback": "ユーザー",
   "sidebar.announce.chatFallback": "チャット",
-  "sidebar.mobileApp.title": "iPhone 版 OpenBot",
+  "sidebar.mobileApp.title": "iPhone 版 GoAhead",
   "sidebar.mobileApp.body": "iOS アプリの公開ベータを TestFlight で配信中です。",
   "sidebar.mobileApp.howToInstall": "インストール方法",
   "sidebar.mobileApp.dismiss": "iPhone アプリのお知らせを閉じる",
   "sidebar.mobileApp.qrLabel": "TestFlight 招待の QR コード",
-  "sidebar.mobileApp.dialog.title": "iPhone に OpenBot をインストール",
+  "sidebar.mobileApp.dialog.title": "iPhone に GoAhead をインストール",
   "sidebar.mobileApp.dialog.description": "iOS アプリは公開ベータ版です。Apple の TestFlight でインストールします。",
   "sidebar.mobileApp.dialog.copyLink": "リンクをコピー",
   "sidebar.mobileApp.dialog.linkCopied": "リンクをコピーしました",
@@ -108,5 +108,5 @@ export const messages = {
     "iPhone のカメラでこの QR コードを読み取るか、招待リンクをコピーして iPhone で開きます。",
   "sidebar.mobileApp.step.install": "TestFlight で「同意する」、次に「インストール」をタップします。",
   "sidebar.mobileApp.step.connect":
-    "iPhone で OpenBot を開きます。このコンピュータで「設定」>「モバイル接続」を開き、サインイン用のコードを読み取ります。",
+    "iPhone で GoAhead を開きます。このコンピュータで「設定」>「モバイル接続」を開き、サインイン用のコードを読み取ります。",
 } as const satisfies PartialTranslation<typeof source>;

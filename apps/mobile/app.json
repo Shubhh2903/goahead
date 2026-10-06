@@ -12,7 +12,8 @@
       "bundleIdentifier": "run.openbot.mobile",
       "associatedDomains": ["applinks:openbot.run"],
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Allow OpenBot to connect to your desktop during local development.",
+        "CFBundleDisplayName": "GoAhead",
+        "NSLocalNetworkUsageDescription": "Allow GoAhead to connect to your desktop during local development.",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         },
@@ -28,6 +29,7 @@
     },
     "plugins": [
       "./plugins/with-rocketsim",
+      ["./plugins/with-android-display-name", { "displayName": "GoAhead" }],
       "expo-router",
       [
         "expo-splash-screen",
@@ -44,8 +46,8 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow OpenBot to use your camera to scan QR codes.",
-          "microphonePermission": "Allow OpenBot to use the microphone to dictate messages.",
+          "cameraPermission": "Allow GoAhead to use your camera to scan QR codes.",
+          "microphonePermission": "Allow GoAhead to use the microphone to dictate messages.",
           "recordAudioAndroid": false,
           "barcodeScannerEnabled": true
         }
@@ -53,16 +55,16 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow OpenBot to access the photos you choose to share.",
-          "cameraPermission": "Allow OpenBot to use your camera to add photos.",
-          "microphonePermission": "Allow OpenBot to use the microphone to dictate messages."
+          "photosPermission": "Allow GoAhead to access the photos you choose to share.",
+          "cameraPermission": "Allow GoAhead to use your camera to add photos.",
+          "microphonePermission": "Allow GoAhead to use the microphone to dictate messages."
         }
       ],
       [
         "expo-media-library",
         {
-          "photosPermission": "Allow OpenBot to access the photos you choose to share.",
-          "savePhotosPermission": "Allow OpenBot to save images you download from a chat to your photo library.",
+          "photosPermission": "Allow GoAhead to access the photos you choose to share.",
+          "savePhotosPermission": "Allow GoAhead to save images you download from a chat to your photo library.",
           "granularPermissions": ["photo"]
         }
       ],
@@ -85,8 +87,8 @@
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "Allow OpenBot to use the microphone to dictate messages.",
-          "speechRecognitionPermission": "Allow OpenBot to turn your speech into message text."
+          "microphonePermission": "Allow GoAhead to use the microphone to dictate messages.",
+          "speechRecognitionPermission": "Allow GoAhead to turn your speech into message text."
         }
       ],
       [

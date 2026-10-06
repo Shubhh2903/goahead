@@ -243,7 +243,7 @@ describe("OpenBot connected desktop shell", () => {
     const settingsButton = screen.getByRole("button", { name: "Settings" });
     await fireEvent.click(settingsButton);
     const dialog = await screen.findByRole("dialog", { name: "General" });
-    const launchSwitch = within(dialog).getByRole("switch", { name: "Launch OpenBot at login" });
+    const launchSwitch = within(dialog).getByRole("switch", { name: "Launch GoAhead at login" });
     await fireEvent.click(launchSwitch);
     expect(launchSwitch).not.toBeChecked();
 
@@ -478,7 +478,7 @@ describe("OpenBot connected desktop shell", () => {
 
     await waitFor(() => expect(window.openbot.auth.logout).toHaveBeenCalledOnce());
     expect(trackAnalytics).toHaveBeenCalledWith("account_sign_out", { result: "succeeded" });
-    expect(await screen.findByRole("heading", { name: "Sign in to OpenBot" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Sign in to GoAhead" })).toBeInTheDocument();
     expect(window.openbot.agent.deleteAgent).not.toHaveBeenCalled();
   });
 
@@ -1103,7 +1103,7 @@ describe("OpenBot connected desktop shell", () => {
     await fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     const shortcut = () => screen.getByRole("button", { name: /Send shortcut/ });
     await waitFor(() => expect(shortcut()).toHaveTextContent("Enter to send"));
-    expect(await screen.findByRole("switch", { name: "Launch OpenBot at login" })).toBeChecked();
+    expect(await screen.findByRole("switch", { name: "Launch GoAhead at login" })).toBeChecked();
 
     await fireEvent.pointerDown(shortcut(), { pointerType: "mouse", button: 0 });
     await fireEvent.click(await screen.findByRole("option", { name: "⌘Enter to send" }));
@@ -1114,7 +1114,7 @@ describe("OpenBot connected desktop shell", () => {
     window.localStorage.setItem("openbot:send-shortcut-mode", "enter");
     window.dispatchEvent(new StorageEvent("storage", { key: "openbot:send-shortcut-mode" }));
     await waitFor(() => expect(shortcut()).toHaveTextContent("Enter to send"));
-    expect(await screen.findByRole("switch", { name: "Launch OpenBot at login" })).toBeChecked();
+    expect(await screen.findByRole("switch", { name: "Launch GoAhead at login" })).toBeChecked();
 
     // Reselecting through the settings path writes storage and refreshes the display.
     await fireEvent.pointerDown(shortcut(), { pointerType: "mouse", button: 0 });

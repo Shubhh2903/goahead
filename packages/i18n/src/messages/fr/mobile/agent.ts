@@ -59,7 +59,7 @@ export const messages = {
     "« {name} » est supprimé du disque. Les messages qui l’affichent restent dans la discussion, sans le fichier.",
   "mobile.agent.files.keep": "Conserver",
   "mobile.agent.files.deleteFailed": "Impossible de supprimer le fichier",
-  "mobile.agent.files.deleteFailedBody": "OpenBot n’a pas pu supprimer ce fichier.",
+  "mobile.agent.files.deleteFailedBody": "GoAhead n’a pas pu supprimer ce fichier.",
   "mobile.agent.files.downloading": "Téléchargement…",
   "mobile.agent.files.removeNamed": "Retirer {name}",
   "mobile.agent.files.deleteNamed": "Supprimer {name}",
@@ -112,13 +112,13 @@ export const messages = {
   "mobile.agent.info.noRoutines": "Aucune routine pour l’instant.",
   "mobile.agent.info.addRoutine": "Ajouter une routine",
   "mobile.agent.info.skillsUnsupported":
-    "Cet hôte ne prend pas en charge les compétences. Mettez à jour OpenBot sur l’hôte.",
+    "Cet hôte ne prend pas en charge les compétences. Mettez à jour GoAhead sur l’hôte.",
   "mobile.agent.info.noSkills": "Aucune compétence pour l’instant.",
   "mobile.agent.info.skillsManaged": "Les compétences de cet agent sont gérées sur l’hôte.",
   "mobile.agent.info.skillsAddOnComputer":
-    "Utilisez + pour créer une compétence avec cet agent. Ajoutez des compétences du marketplace dans OpenBot sur un ordinateur ou dans l’application web.",
+    "Utilisez + pour créer une compétence avec cet agent. Ajoutez des compétences du marketplace dans GoAhead sur un ordinateur ou dans l’application web.",
   "mobile.agent.info.filesUnsupported":
-    "Cet hôte ne prend pas en charge la gestion des fichiers. Mettez à jour OpenBot sur l’hôte.",
+    "Cet hôte ne prend pas en charge la gestion des fichiers. Mettez à jour GoAhead sur l’hôte.",
   "mobile.agent.info.memoryGone": "Ce souvenir n’est plus disponible.",
   "mobile.agent.info.routineGone": "Cette routine n’est plus disponible.",
   "mobile.agent.skill.workspaceFolder": "Dossier de l’espace de travail",
@@ -131,7 +131,7 @@ export const messages = {
   "mobile.agent.skill.uninstallNamed": "Désinstaller {name}",
   "mobile.agent.skill.uninstallTitle": "Désinstaller {name} ?",
   "mobile.agent.skill.uninstallBody":
-    "OpenBot va retirer cette compétence de l’agent. L’historique de discussion reste.",
+    "GoAhead va retirer cette compétence de l’agent. L’historique de discussion reste.",
   "mobile.agent.skill.uninstallModifiedBody":
     "Cette compétence a des modifications locales dans l’espace de travail de l’agent. La désinstallation supprime ces fichiers. L’historique de discussion reste.",
   "mobile.agent.skill.uninstalling": "Désinstallation…",
@@ -139,7 +139,7 @@ export const messages = {
   "mobile.agent.skill.enableFailed": "Impossible d’activer {name}.",
   "mobile.agent.skill.disableFailed": "Impossible de désactiver {name}.",
   "mobile.agent.skill.manageUnsupported":
-    "Cet hôte ne peut pas modifier les compétences. Mettez à jour OpenBot sur l’hôte.",
+    "Cet hôte ne peut pas modifier les compétences. Mettez à jour GoAhead sur l’hôte.",
   "mobile.agent.discard.title": "Abandonner les modifications ?",
   "mobile.agent.discard.body": "Vos modifications n’ont pas été enregistrées.",
   "mobile.agent.discard.keepEditing": "Continuer à modifier",
@@ -284,7 +284,7 @@ export const messages = {
   "mobile.agent.list.openWithTitle": "Ouvrir la discussion avec {name}, {title}",
   "mobile.agent.list.openPinned": "Ouvrir la discussion épinglée avec {name}",
   "mobile.agent.list.openPinnedWithTitle": "Ouvrir la discussion épinglée avec {name}, {title}",
-  "mobile.agent.add.failed": "OpenBot n’a pas pu créer cet agent.",
+  "mobile.agent.add.failed": "GoAhead n’a pas pu créer cet agent.",
   "mobile.agent.add.create": "Créer l’agent",
   "mobile.agent.add.creating": "Création…",
   "mobile.agent.form.name": "Nom",
@@ -295,7 +295,7 @@ export const messages = {
   "mobile.agent.add.nameRequired": "Saisissez un nom pour cet agent.",
   "mobile.agent.edit.loading": "Chargement de l’agent…",
   "mobile.agent.edit.gone": "Cet agent n’est plus disponible sur cet hôte.",
-  "mobile.agent.edit.failed": "OpenBot n’a pas pu mettre à jour cet agent.",
+  "mobile.agent.edit.failed": "GoAhead n’a pas pu mettre à jour cet agent.",
   "mobile.agent.edit.appearance": "Modifier l’apparence",
   "mobile.agent.edit.title": "Titre",
   "mobile.agent.edit.titlePlaceholder": "Décrivez ce que fait votre agent",

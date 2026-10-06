@@ -28,7 +28,7 @@ export const Route = createFileRoute("/compare/$slug")({
     if (!page) return head;
     const siteUrl = match.context.siteUrl;
     // Each app in a roundup points to its own entry on the page, so no two items share
-    // a URL. OpenBot points to the home page.
+    // a URL. GoAhead points to the home page.
     const pageUrl = articleUrl(COMPARE_COLLECTION, loaderData.slug, siteUrl);
     const itemList =
       page.kind === "roundup"

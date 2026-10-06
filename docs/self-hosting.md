@@ -16,7 +16,7 @@ self-hosted account service with its own keys. See
 - Invitations are `openbot://join` links. Copy a link from the app and send it yourself. The app
   does not send an invitation by email.
 - The browser client at `openbot.run/app` does not work with your service.
-- Hosted servers, the OpenBot GitHub App, Slack and the iPhone Live Activity relay stay off. Each
+- Hosted servers, the GoAhead GitHub App, Slack and the iPhone Live Activity relay stay off. Each
   needs secrets that only we have.
 - The other network connections in [PRIVACY.md](../PRIVACY.md) do not change.
 
@@ -26,7 +26,7 @@ self-hosted account service with its own keys. See
 - A Linux server with Docker Engine, Docker Compose and a static public IPv4 address. See the
   [Signal production requirements](../remote/README.md#production-requirements) for ports and DNS.
 - An SMTP account that accepts TLS on port 465. Sign-in sends a one-time code by email.
-- A clone of the OpenBot release that you run, and [Bun](https://bun.sh).
+- A clone of the GoAhead release that you run, and [Bun](https://bun.sh).
 
 In the examples, the account service is `api.example.com`, Signal is `signal.example.com` and TURN is
 `turn.example.com`. Use your own names.
@@ -163,6 +163,6 @@ a user name or password, or is set without `OPENBOT_AUTH_API_URL`.
 
 ## Updates
 
-After each OpenBot update, pull the same release, keep your `wrangler.jsonc` changes and deploy the
+After each GoAhead update, pull the same release, keep your `wrangler.jsonc` changes and deploy the
 Worker again. The deploy applies the new D1 migrations. Then rebuild Signal with the same
 `docker compose` command.

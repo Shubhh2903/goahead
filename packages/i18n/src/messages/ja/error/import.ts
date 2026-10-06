@@ -4,9 +4,9 @@ import type { messages as source } from "../../en/error/import";
 export const messages = {
   // Agent import errors and warnings.
   "error.import.manifestNotJson": "{manifest} は有効な JSON ではありません。",
-  "error.import.notAgentExport": "{manifest} は OpenBot のエージェントのエクスポートではありません。",
+  "error.import.notAgentExport": "{manifest} は GoAhead のエージェントのエクスポートではありません。",
   "error.import.newerExportSkill":
-    "このエクスポートは、より新しいエクスポート用スキルで作成されました。OpenBot をアップデートしてから、もう一度お試しください。",
+    "このエクスポートは、より新しいエクスポート用スキルで作成されました。GoAhead をアップデートしてから、もう一度お試しください。",
   "error.import.noAgents": "エクスポートにエージェントが含まれていません。",
   "error.import.tooManyAgents": "エクスポートに含まれるエージェントが {limit} 個を超えています。",
   "error.import.tooManyChannels": "エクスポートに含まれるチャンネルが {limit} 個を超えています。",

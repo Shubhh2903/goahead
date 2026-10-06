@@ -490,7 +490,7 @@ describe("AgentSettingsPanel", () => {
     expect(screen.queryByRole("button", { name: "More for deploy" })).not.toBeInTheDocument();
     await fireEvent.click(row);
     expect(
-      await screen.findByText("OpenBot did not install this skill. Edit or remove it in .agents/skills/deploy."),
+      await screen.findByText("GoAhead did not install this skill. Edit or remove it in .agents/skills/deploy."),
     ).toBeInTheDocument();
     expect(
       screen.getByText("Claude Code does not read .agents/skills. Copy this folder to .claude/skills."),

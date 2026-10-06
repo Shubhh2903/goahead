@@ -33,7 +33,7 @@ const CONCEPT_AGENT_NAMES = [
 ];
 
 const CONCEPT_SERVER_NAMES = [
-  "OpenBot team",
+  "GoAhead team",
   "Nightly Labs",
   "Product studio",
   "Research room",
@@ -292,7 +292,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The selected desktop account dock spans both navigation columns and uses the real OpenBot navigation, account popovers, and independent scroll containers.",
+          "The selected desktop account dock spans both navigation columns and uses the real GoAhead navigation, account popovers, and independent scroll containers.",
       },
     },
   },

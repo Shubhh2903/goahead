@@ -17,11 +17,11 @@ export const messages = {
   "connector.github.connectedAs": "@{login} olarak bağlandı",
   "connector.github.repositoriesTitle": "Depolar",
   "connector.github.repositoriesDescription":
-    "Ajanlar yalnızca OpenBot GitHub Uygulamasının yüklü olduğu depoları kullanabilir.",
+    "Ajanlar yalnızca GoAhead GitHub Uygulamasının yüklü olduğu depoları kullanabilir.",
   "connector.github.chooseRepositories": "Depoları seç",
   "connector.github.repositoriesLoading": "Depolar GitHub'dan okunuyor",
-  "connector.github.repositoriesFailed": "OpenBot depoları GitHub'dan okuyamadı.",
-  "connector.github.noRepositories": "OpenBot GitHub Uygulaması henüz bir depoya yüklenmedi.",
+  "connector.github.repositoriesFailed": "GoAhead depoları GitHub'dan okuyamadı.",
+  "connector.github.noRepositories": "GoAhead GitHub Uygulaması henüz bir depoya yüklenmedi.",
   // {count} bir sayıdır (örneğin 12).
   "connector.github.moreRepositories": {
     one: "Ve {count} depo daha",
@@ -35,7 +35,7 @@ export const messages = {
   "connector.github.expiredTitle": "GitHub bağlantısının süresi doldu",
   "connector.github.expiredDescription": "Ajanlara yeniden GitHub erişimi vermek için @{login} olarak tekrar bağlanın.",
   "connector.github.reconnect": "Yeniden Bağlan",
-  "connector.github.actionFailed": "OpenBot GitHub bağlantısını değiştiremedi.",
+  "connector.github.actionFailed": "GoAhead GitHub bağlantısını değiştiremedi.",
   // GitHub sayfasının üst kısmındaki adın yanındaki durum.
   "connector.github.statusConnected": "Bağlandı",
   "connector.github.statusConnecting": "Bağlanıyor",
@@ -53,7 +53,7 @@ export const messages = {
   // Bağlanma iletişim kutusu. Adımlar sayı olarak gösterilir; ekran okuyucular adları okur.
   "connector.github.stepSignIn": "Giriş yap",
   "connector.github.stepConnected": "Bağlandı",
-  "connector.github.requestingCode": "OpenBot GitHub'dan bir kod istiyor.",
+  "connector.github.requestingCode": "GoAhead GitHub'dan bir kod istiyor.",
   // {code} GitHub'a yazılacak koddur (örneğin WDJB-MJHT).
   "connector.github.codeLabel": "Kod {code}",
   "connector.github.failedTitle": "GitHub bağlanamadı",
@@ -69,7 +69,7 @@ export const messages = {
   "connector.github.disconnectConfirmTitle": "GitHub bağlantısı kesilsin mi?",
   "connector.github.disconnectConfirmDescription": "Bağlantıyı kesmek @{login} oturumunu bu bilgisayardan kaldırır.",
   "connector.github.disconnectEffectTools": "Tüm ajanlar GitHub araçlarını, gh ve git erişimini kaybeder.",
-  "connector.github.disconnectEffectRevoke": "Ardından OpenBot yetkisini kaldırabileceğiniz GitHub açılır.",
+  "connector.github.disconnectEffectRevoke": "Ardından GoAhead yetkisini kaldırabileceğiniz GitHub açılır.",
   "connector.github.disconnectEffectKept": "Sohbetler, dosyalar ve ajan hafızası bu bilgisayarda kalır.",
   "connector.github.keepConnected": "Bağlı kal",
   "connector.github.close": "Kapat",
@@ -91,7 +91,7 @@ export const messages = {
   // Düzenleyicisi ajanı her isteği alır, ekibe sorar ve yanıtlar.
   "connector.slack.title": "Slack",
   "connector.slack.description":
-    "Kullanıcılar Slack'te @OpenBot'tan bahseder veya doğrudan mesaj gönderir. Slack Düzenleyicisi doğru ajana sorar ve yanıtlar.",
+    "Kullanıcılar Slack'te @GoAhead'den bahseder veya doğrudan mesaj gönderir. Slack Düzenleyicisi doğru ajana sorar ve yanıtlar.",
   "connector.slack.statusNotSetUp": "Ayarlanmadı",
   "connector.slack.statusConnected": "Bağlandı",
   "connector.slack.statusAttention": "İlgilenilmesi gerekiyor",
@@ -107,11 +107,11 @@ export const messages = {
   "connector.slack.addAgent": "Ajan ekle",
   "connector.slack.actionFailed": "Slack değişikliği kabul etmedi",
   "connector.slack.workspaceTitle": "Çalışma alanı",
-  "connector.slack.workspaceDescription": "Kullanıcılar @OpenBot'tan bahseder veya doğrudan mesaj gönderir.",
+  "connector.slack.workspaceDescription": "Kullanıcılar @GoAhead'den bahseder veya doğrudan mesaj gönderir.",
   "connector.slack.disconnectWorkspace": "Bağlantıyı Kes",
   "connector.slack.missingScopes":
-    "OpenBot Slack'te şu izinlere sahip değil: {scopes}. Çalışma alanı bağlantısını kesin, ardından tekrar bağlayın.",
-  "connector.slack.retryAt": "Slack OpenBot'tan beklemesini istedi. {time} saatinde tekrar deneyecek.",
+    "GoAhead Slack'te şu izinlere sahip değil: {scopes}. Çalışma alanı bağlantısını kesin, ardından tekrar bağlayın.",
+  "connector.slack.retryAt": "Slack GoAhead'den beklemesini istedi. {time} saatinde tekrar deneyecek.",
   "connector.slack.reconnect": "Yeniden Bağlan",
   "connector.slack.resume": "Sürdür",
   // {action} Pause gibi bir düğmedir; {name} çalışma alanı adıdır.
@@ -122,13 +122,13 @@ export const messages = {
   "connector.slack.orchestratorNone": "Henüz yanıt veren bir ajan yok",
   "connector.slack.orchestratorNoneDescription": "Slack Düzenleyicisini ekleyin, aksi takdirde Slack yanıt alamaz.",
   "connector.slack.inviteNote":
-    "OpenBot her genel kanala ve her yeni kanala kendiliğinden katılır. Özel bir kanal için onu davet edin: /invite @OpenBot.",
+    "GoAhead her genel kanala ve her yeni kanala kendiliğinden katılır. Özel bir kanal için onu davet edin: /invite @GoAhead.",
   // Bağlanma iletişim kutusu. Adımlar sayı olarak gösterilir; ekran okuyucular adları okur.
   "connector.slack.stepWorkspace": "Çalışma alanı",
   "connector.slack.stepAgent": "Ajan",
   "connector.slack.connectTitle": "Bir Slack çalışma alanına bağlanın",
   "connector.slack.connectDescription":
-    "OpenBot çalışma alanına OpenBot adında bir uygulama yükler ve her genel kanala katılır.",
+    "GoAhead çalışma alanına GoAhead adında bir uygulama yükler ve her genel kanala katılır.",
   "connector.slack.connectStepBrowser": "Slack tarayıcınızda açılır",
   "connector.slack.connectStepAllow": "Sağ üst köşeden çalışma alanını seçin, ardından İzin Ver'e tıklayın",
   "connector.slack.connectStepReturn": "Slack işlemi tamamlandığında bu iletişim kutusu devam eder",
@@ -136,21 +136,21 @@ export const messages = {
   "connector.slack.connectWaiting": "Slack bekleniyor. Kurulumu tarayıcınızda tamamlayın.",
   "connector.slack.agentStepTitle": "Slack Düzenleyicisini ekleyin",
   // {workspace} Slack çalışma alanı adıdır.
-  "connector.slack.agentStepDescription": "Bu yeni ajan, {workspace} içinde @OpenBot'a gönderilen her şeyi yanıtlar.",
+  "connector.slack.agentStepDescription": "Bu yeni ajan, {workspace} içinde @GoAhead'e gönderilen her şeyi yanıtlar.",
   "connector.slack.orchestratorName": "Slack Düzenleyicisi",
   "connector.slack.orchestratorRole": "Slack'te yanıt verir ve ekibe sorar",
   "connector.slack.orchestratorDoesReceive": "Her Slack isteğini ilk olarak alır",
   "connector.slack.orchestratorDoesDelegate": "Her görevi en uygun ajana iletir",
   "connector.slack.orchestratorDoesAnswer": "Yanıtı Slack ileti dizisinde yayınlar",
   "connector.slack.orchestratorModel": "Model",
-  "connector.slack.doneTitle": "OpenBot {workspace} içinde",
-  "connector.slack.doneDescription": "Herhangi bir genel kanalda @OpenBot'tan bahsedin veya doğrudan mesaj gönderin.",
+  "connector.slack.doneTitle": "GoAhead {workspace} içinde",
+  "connector.slack.doneDescription": "Herhangi bir genel kanalda @GoAhead'den bahsedin veya doğrudan mesaj gönderin.",
   "connector.slack.done": "Bitti",
   "connector.slack.disconnectTitle": "{workspace} bağlantısı kesilsin mi?",
   "connector.slack.disconnectDescription":
-    "OpenBot {workspace} içinde yanıt vermeyi durdurur ve Slack token'ını bu bilgisayardan kaldırır.",
-  "connector.slack.disconnectEffect": "{workspace} içindeki kişiler artık @OpenBot aracılığıyla ajanlarınıza ulaşamaz.",
-  "connector.slack.removeEffectKept": "Konuşmalar ve Slack Düzenleyicisi OpenBot'ta kalır.",
+    "GoAhead {workspace} içinde yanıt vermeyi durdurur ve Slack token'ını bu bilgisayardan kaldırır.",
+  "connector.slack.disconnectEffect": "{workspace} içindeki kişiler artık @GoAhead aracılığıyla ajanlarınıza ulaşamaz.",
+  "connector.slack.removeEffectKept": "Konuşmalar ve Slack Düzenleyicisi GoAhead'de kalır.",
   "connector.slack.keep": "Bağlı tut",
   "connector.slack.close": "Kapat",
 } as const satisfies PartialTranslation<typeof source>;

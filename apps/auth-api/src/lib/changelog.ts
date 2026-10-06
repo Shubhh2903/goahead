@@ -17,9 +17,9 @@ import {
 } from "./site-metadata";
 
 export const CHANGELOG_ROUTE = "/changelog";
-const CHANGELOG_TITLE = "OpenBot Changelog: Release Notes for Every Version";
+const CHANGELOG_TITLE = "GoAhead Changelog: Release Notes for Every Version";
 export const CHANGELOG_DESCRIPTION =
-  "Every OpenBot release, newest first: new features, improvements and fixes, with what to do after you upgrade.";
+  "Every GoAhead release, newest first: new features, improvements and fixes, with what to do after you upgrade.";
 
 /** The app a changelog covers. The web client ships with the desktop app, so it has no own list. */
 export type ChangelogPlatform = "desktop" | "mobile";
@@ -200,7 +200,7 @@ export function changelogHead(siteUrl: string, platform: ChangelogPlatform = "de
       { title: CHANGELOG_TITLE },
       { name: "description", content: CHANGELOG_DESCRIPTION },
       { property: "og:type", content: "website" },
-      { property: "og:site_name", content: "OpenBot" },
+      { property: "og:site_name", content: "GoAhead" },
       { property: "og:locale", content: "en_US" },
       { property: "og:url", content: url },
       { property: "og:title", content: CHANGELOG_TITLE },

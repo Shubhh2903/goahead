@@ -36,9 +36,9 @@ export interface SitePluginSkill {
 export const PLUGIN_INDEX_ROUTE = "/plugins";
 export const PLUGIN_DETAIL_ROUTE = "/plugins/$slug";
 
-export const PLUGINS_TITLE = "OpenBot Plugins: Apps and Tools for Your AI Agents";
+export const PLUGINS_TITLE = "GoAhead Plugins: Apps and Tools for Your AI Agents";
 export const PLUGINS_DESCRIPTION =
-  "Apps and skills an OpenBot agent can use. Open a plugin in the app, and decide there what it connects to.";
+  "Apps and skills a GoAhead agent can use. Open a plugin in the app, and decide there what it connects to.";
 
 /** Newest listing first is not a thing here: the order is the order the index declares. */
 export const SITE_PLUGINS: readonly SitePlugin[] = PLUGIN_CATALOG_INDEX.plugins.flatMap((entry) => {

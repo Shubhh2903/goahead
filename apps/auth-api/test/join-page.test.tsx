@@ -22,16 +22,16 @@ describe("invitation landing page", () => {
     window.history.replaceState({}, "", INVITE_URL);
     render(() => <JoinPage />);
 
-    const openButton = await screen.findByRole("link", { name: "Open OpenBot" });
+    const openButton = await screen.findByRole("link", { name: "Open GoAhead" });
     await waitFor(() => expect(openButton).toHaveAttribute("href", expect.stringMatching(/^openbot:\/\/join\?/u)));
-    expect(screen.getByRole("link", { name: "Download OpenBot" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download GoAhead" })).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
   });
 
   it("does not promise that every invitation is single-use or expires in 24 hours", async () => {
     window.history.replaceState({}, "", INVITE_URL);
     render(() => <JoinPage />);
-    await screen.findByRole("link", { name: "Open OpenBot" });
+    await screen.findByRole("link", { name: "Open GoAhead" });
     expect(document.body).not.toHaveTextContent(/one-time|only once|24 hours/u);
   });
 
@@ -46,12 +46,12 @@ describe("invitation landing page", () => {
     window.history.replaceState({}, "", INVITE_URL);
     render(() => <JoinPage />);
     await waitFor(() =>
-      expect(screen.getByRole("link", { name: "Open OpenBot" })).toHaveAttribute(
+      expect(screen.getByRole("link", { name: "Open GoAhead" })).toHaveAttribute(
         "href",
         expect.stringMatching(/^openbot:\/\/join\?/u),
       ),
     );
-    expect(screen.queryByRole("link", { name: "Download OpenBot" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Download GoAhead" })).not.toBeInTheDocument();
   });
 
   it("does not create an app link for an invalid invitation", async () => {
@@ -61,6 +61,6 @@ describe("invitation landing page", () => {
     expect(
       await screen.findByText("This invitation link is invalid or incomplete. Ask the host for a new invitation."),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Open OpenBot" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open GoAhead" })).not.toBeInTheDocument();
   });
 });

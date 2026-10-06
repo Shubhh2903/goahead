@@ -100,6 +100,6 @@ describe("OtpInput", () => {
 
     renderOtp({ value: "ABCDEFGH", status: "success" });
     const message = screen.getByRole("status");
-    expect(message).toHaveTextContent("Verified. Opening OpenBot…");
+    expect(message).toHaveTextContent("Verified. Opening GoAhead…");
   });
 });

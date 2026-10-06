@@ -21,7 +21,7 @@ export const messages = {
     "Sunshine と Moonlight Web のランタイムがないか、このホストでは対応していません。Mac、Windows x64 または Linux x64 のホストに OpenBot のフルリリースをインストールしてから、OpenBot を再起動してください。",
   "error.remote.testActive": "リモートデスクトップのテストを実行中です。終了してから再試行してください。",
   "error.remote.screenRecordingDenied":
-    "ホストが OpenBot に画面の収録を許可していません。ホストで画面収録を許可してから、再試行してください。",
+    "ホストが GoAhead に画面の収録を許可していません。ホストで画面収録を許可してから、再試行してください。",
   "error.remote.teamSessionExpired": "チームのセッションの期限が切れました。",
   "error.remote.finishTestBeforeSwitch":
     "ディスプレイを切り替える前に、リモートデスクトップのテストを終了してください。",
@@ -35,7 +35,7 @@ export const messages = {
   "error.remote.moonlightStartFailed":
     "ホストで Moonlight Web を起動できませんでした。ホストのリモートデスクトップのログを確認してから、もう一度お試しください。",
   "error.remote.pairingFailed":
-    "ホストで Moonlight と Sunshine をペアリングできませんでした。もう一度お試しください。問題が続く場合は、ホストで OpenBot を再起動してください。",
+    "ホストで Moonlight と Sunshine をペアリングできませんでした。もう一度お試しください。問題が続く場合は、ホストで GoAhead を再起動してください。",
   "error.remote.runtimeStartFailed":
     "ホストでリモートデスクトップのランタイムを起動できませんでした。ホストのリモートデスクトップのログを確認してから、もう一度お試しください。",
   "error.remote.hostUnreachable": "ホストに接続できません。",
@@ -43,7 +43,7 @@ export const messages = {
   "error.remote.invalidData": "ホストが無効なデータを返しました。",
   "error.remote.unsafeData": "ホストが、このアプリで安全に使用できないデータを返しました。",
   "error.remote.requestFailedStatus": "リモートサーバーへのリクエストに失敗しました ({status})。",
-  "error.remote.appUpdateRequired": "ホストに接続する前に、この OpenBot アプリを更新してください。",
+  "error.remote.appUpdateRequired": "ホストに接続する前に、この GoAhead アプリを更新してください。",
   "error.remote.identityNotVerified": "サーバーの ID を確認できませんでした。",
   "error.remote.webRtcUnavailable": "WebRTC トランスポートを利用できません。",
   "error.remote.invalidCompatibility": "ホストが無効な互換性情報を返しました。",
@@ -62,9 +62,9 @@ export const messages = {
   "error.remote.inviteIdentityChanged": "招待の承認中に、ホストの ID が変わりました。",
   "error.remote.localServerRemove": "ローカルサーバーは削除できません。",
   "error.remote.desktopSetupHostUpdate":
-    "リモートデスクトップの設定を確認するには、ホストの OpenBot を更新してください。",
+    "リモートデスクトップの設定を確認するには、ホストの GoAhead を更新してください。",
   "error.remote.desktopTestHostUpdate":
-    "リモートデスクトップの設定をテストするには、ホストの OpenBot を更新してください。",
+    "リモートデスクトップの設定をテストするには、ホストの GoAhead を更新してください。",
   "error.remote.viewerProxyUnavailable": "リモートビューアーのローカルプロキシを利用できません。",
   "error.remote.viewerTransportInvalid": "リモートビューアーのトランスポートが無効です。",
   "error.remote.viewerProxyNoPort": "リモートビューアーのローカルプロキシがポートを取得できませんでした。",
@@ -136,7 +136,7 @@ export const messages = {
   "error.remote.inviteFingerprintMismatch": "招待のホストの ID がフィンガープリントと一致しません。",
   "error.remote.inviteHostKeyMissing": "招待のホストキーがありません。",
   "error.remote.inviteKeyConflict": "招待が信頼済みのホストキーと競合しています。",
-  "error.remote.serviceRequestFailed": "OpenBot サービスへのリクエストに失敗しました。",
+  "error.remote.serviceRequestFailed": "GoAhead サービスへのリクエストに失敗しました。",
   "error.remote.downloadTimeout": "添付ファイルのダウンロードがタイムアウトしました。再試行してください。",
   "error.remote.attachmentConnectionClosed": "添付ファイルの接続が閉じました。",
   "error.remote.tooManyDownloads": "添付ファイルのダウンロードが多すぎます。",

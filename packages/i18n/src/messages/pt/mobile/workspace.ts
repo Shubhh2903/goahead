@@ -18,7 +18,7 @@ export const messages = {
   "mobile.workspace.error.leaveOwnServer": "Só é possível sair de servidores remotos dos quais você participa.",
   "mobile.workspace.error.agentNotOnHost": "O agente não está neste computador anfitrião.",
   "mobile.workspace.error.filesUnsupported":
-    "Este computador anfitrião não permite gerenciar arquivos. Atualize o OpenBot nele.",
+    "Este computador anfitrião não permite gerenciar arquivos. Atualize o GoAhead nele.",
   "mobile.workspace.error.agentUnavailableOnHost": "O agente está indisponível neste computador anfitrião.",
   "mobile.workspace.error.agentUnavailable": "O agente está indisponível.",
   "mobile.workspace.error.formUnavailable": "Este formulário não está mais disponível.",

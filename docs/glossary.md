@@ -1,6 +1,6 @@
 # Glossary
 
-The product terms OpenBot uses, and the identifiers each one owns. Read this when naming a new type,
+The product terms GoAhead uses, and the identifiers each one owns. Read this when naming a new type,
 table, IPC channel or product string, or when a term in the code disagrees with the term in the UI.
 [AGENTS.md](../AGENTS.md#terms) carries the two naming rules that are decisions rather than lookup.
 
@@ -22,12 +22,12 @@ table, IPC channel or product string, or when a term in the code disagrees with 
   (`SidebarPinnedGroup`, `create_section`), an IPC endpoint group (`IpcEndpointGroup`,
   `define-ipc-group.ts`), or an ARIA `role="group"`. An IPC **channel** is the wire name of an
   endpoint in `IPC_ENDPOINTS` (`ipc-endpoints.ts`); the product contract is `ipc-chat-channels.ts`.
-- **connector**: a built-in sign-in to an outside service that OpenBot turns into agent tools, one
-  for each OpenBot computer (`GitHubConnectorService`, `github-connector:*`,
+- **connector**: a built-in sign-in to an outside service that GoAhead turns into agent tools, one
+  for each GoAhead computer (`GitHubConnectorService`, `github-connector:*`,
   `GITHUB_CONNECTOR_MCP_SERVER_ID`). A user-added MCP server or a marketplace plugin is not a
   connector.
 - **messaging connection**: one workspace of an external chat platform, today a Slack workspace that
-  installed the OpenBot app, where this computer's agents answer (`projection_messaging_connections`,
+  installed the GoAhead app, where this computer's agents answer (`projection_messaging_connections`,
   `MessagingConnection`, `messaging:*`). Its **Slack Orchestrator** is the agent that receives each
   new conversation and asks its teammates. A **messaging thread** is one external conversation (a Slack thread) that one agent
   answers in its own execution thread (`projection_messaging_threads`, `MessagingLink`). A Slack

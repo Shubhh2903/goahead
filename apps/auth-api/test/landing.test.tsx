@@ -6,7 +6,7 @@ describe("landing page", () => {
   it("serves the loading fallback and no hydrated content until the preview mounts", () => {
     const markup = renderToString(() => <AppPreviewPage />);
 
-    expect(markup).toContain('aria-label="Loading OpenBot preview"');
+    expect(markup).toContain('aria-label="Loading GoAhead preview"');
     expect(markup).not.toContain('aria-label="Agent navigation"');
   });
 });

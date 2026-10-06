@@ -7,10 +7,10 @@ export const messages = defineMessages("mcp", {
   "mcp.connect.close": "Close connect {name}",
   "mcp.connect.getKey": "Get a key",
   "mcp.connect.keyDescription":
-    "Paste a credential from your {name} account. OpenBot connects with it and keeps it on {host}.",
+    "Paste a credential from your {name} account. GoAhead connects with it and keeps it on {host}.",
   "mcp.connect.thisComputer": "this computer",
   "mcp.connect.noCredentialDescription":
-    "{name} asks for no credential. OpenBot connects once to see which tools it offers.",
+    "{name} asks for no credential. GoAhead connects once to see which tools it offers.",
   "mcp.connect.connect": "Connect",
   "mcp.connect.required": "Required.",
   "mcp.connect.keptOn": "Kept on {host}.",
@@ -21,7 +21,7 @@ export const messages = defineMessages("mcp", {
   "mcp.local.address": "Address",
   "mcp.local.docs": "Setup guide",
   "mcp.signIn.description":
-    "Sign in to your {name} account. OpenBot gets the tools that account can reach, and no password.",
+    "Sign in to your {name} account. GoAhead gets the tools that account can reach, and no password.",
   "mcp.signIn.waiting": "Waiting for the browser…",
   "mcp.signIn.continue": "Continue to {name}",
   "mcp.server.loadFailed": "The MCP servers could not load.",
@@ -49,7 +49,7 @@ export const messages = defineMessages("mcp", {
   "mcp.panel.empty": "No MCP servers yet.",
   "mcp.panel.enable": "Enable {name}",
   "mcp.panel.detailsTitle": "Details",
-  "mcp.panel.detailsDescription": "Name this server and choose how OpenBot reaches it.",
+  "mcp.panel.detailsDescription": "Name this server and choose how GoAhead reaches it.",
   "mcp.panel.transport": "Transport",
   "mcp.panel.name": "Name",
   "mcp.panel.namePlaceholder": "MCP server name",

@@ -62,7 +62,7 @@ export const messages = {
   "provider.aria.moreActions": "Autres actions pour {name}",
 
   "provider.codeLogin.title": "Se connecter à {name} avec un code",
-  "provider.codeLogin.description": "Terminez sur votre téléphone ou dans un autre navigateur. OpenBot attend ici.",
+  "provider.codeLogin.description": "Terminez sur votre téléphone ou dans un autre navigateur. GoAhead attend ici.",
   "provider.codeLogin.starting": "Obtention d’un code auprès de {name}…",
   "provider.codeLogin.qrLabel": "Code QR de la page de connexion de {name}",
   "provider.codeLogin.open": "Ouvrez",
@@ -79,7 +79,7 @@ export const messages = {
   "provider.codeLogin.pasteExpired": "Cette connexion s’est arrêtée.",
   "provider.codeLogin.pasteExpiresIn": "En attente. Cette connexion s’arrête dans {time}.",
   "provider.codeLogin.linkTitle": "Connectez-vous à {name} sur un autre appareil",
-  "provider.codeLogin.linkStep": "Connectez-vous à {name}. OpenBot continue tout seul.",
+  "provider.codeLogin.linkStep": "Connectez-vous à {name}. GoAhead continue tout seul.",
 
   "provider.picker.noEndpoints": "Aucun point de terminaison pour l’instant",
   "provider.picker.customCounts": "{endpoints} · {agents}",

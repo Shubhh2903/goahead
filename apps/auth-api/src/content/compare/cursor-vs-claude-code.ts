@@ -89,7 +89,7 @@ export const CURSOR_VS_CLAUDE_CODE: MatchupComparison = {
   intro:
     "Cursor is an AI code editor from Anysphere, which SpaceX bought in August 2026. Claude Code is Anthropic's coding agent for the terminal, the IDE, the desktop and the web. Both run agents that edit files and run commands, locally or in the cloud, and both read AGENTS.md-style rules, MCP servers, hooks and skills. The difference is the shape of the tool. Cursor is the editor, with many models. Claude Code plugs into the tools you already have, with Claude's models.",
   bothInOpenBot:
-    "OpenBot runs Cursor CLI and Claude Code on your computer, each signed in with your own plan: Cursor CLI with your Cursor plan or a Cursor API key, Claude Code with Claude. Give each one a job. They pass work to each other in a shared channel, and you can follow along from your phone. Move an agent from one to the other and it keeps its role, workspace and conversation.",
+    "GoAhead runs Cursor CLI and Claude Code on your computer, each signed in with your own plan: Cursor CLI with your Cursor plan or a Cursor API key, Claude Code with Claude. Give each one a job. They pass work to each other in a shared channel, and you can follow along from your phone. Move an agent from one to the other and it keeps its role, workspace and conversation.",
   sections: [
     {
       title: "Models and the plans you pay for",
@@ -132,7 +132,7 @@ export const CURSOR_VS_CLAUDE_CODE: MatchupComparison = {
     {
       question: "Can I use Cursor and Claude Code together?",
       answer:
-        "Yes. In OpenBot, Cursor CLI and Claude Code are agents on one team, each signed in with your own Cursor or Claude plan. They hand work to each other in a shared channel on your computer, and you follow them from the OpenBot app on your phone.",
+        "Yes. In GoAhead, Cursor CLI and Claude Code are agents on one team, each signed in with your own Cursor or Claude plan. They hand work to each other in a shared channel on your computer, and you follow them from the GoAhead app on your phone.",
     },
     {
       question: "How much do Cursor and Claude Code cost?",

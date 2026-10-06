@@ -252,7 +252,7 @@ describe("OpenBot connected desktop shell", () => {
 
     render(() => <App />);
 
-    expect(await screen.findByRole("heading", { name: "Update OpenBot on Studio Mac" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Update GoAhead on Studio Mac" })).toBeInTheDocument();
     expect(window.openbot.agent.listAgents).not.toHaveBeenCalled();
     await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(window.openbot.servers.retryConnection).toHaveBeenCalledWith("remote-1"));
@@ -374,7 +374,7 @@ describe("OpenBot connected desktop shell", () => {
     vi.mocked(window.openbot.servers.select).mockRejectedValueOnce(new Error("Workspace refresh failed"));
 
     render(() => <App />);
-    await screen.findByRole("heading", { name: "Update OpenBot on Studio Mac" });
+    await screen.findByRole("heading", { name: "Update GoAhead on Studio Mac" });
     await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     emitServers?.([local, online]);
     resolveRetry?.({ ...online, state: "connecting" });
@@ -402,15 +402,15 @@ describe("OpenBot connected desktop shell", () => {
     await screen.findByRole("heading", { name: "Chief" });
 
     emitServers?.([local, { ...remote, connectionSequence: 1 }]);
-    expect(await screen.findByText("Different OpenBot versions on Studio Mac")).toBeInTheDocument();
+    expect(await screen.findByText("Different GoAhead versions on Studio Mac")).toBeInTheDocument();
     // The host runs the older release, so the notice asks for the host update, not this app's.
     expect(
       screen.getByText(
-        "Update OpenBot on Studio Mac to use all features. The connection uses protocol 5. Client 0.25.1; host 0.24.0.",
+        "Update GoAhead on Studio Mac to use all features. The connection uses protocol 5. Client 0.25.1; host 0.24.0.",
       ),
     ).toBeInTheDocument();
     emitServers?.([local, { ...remote, connectionSequence: 2 }]);
-    await waitFor(() => expect(screen.getAllByText("Different OpenBot versions on Studio Mac")).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText("Different GoAhead versions on Studio Mac")).toHaveLength(2));
   });
 
   it("loads capability-gated state when a provisional handshake becomes ready", async () => {
@@ -870,7 +870,7 @@ describe("OpenBot connected desktop shell", () => {
       }
       await screen.findByTitle("Sunshine remote desktop");
       expect(screen.queryByText("Update required")).not.toBeInTheDocument();
-      await fireEvent.click(within(remoteDesktop).getByRole("button", { name: "Back to OpenBot" }));
+      await fireEvent.click(within(remoteDesktop).getByRole("button", { name: "Back to GoAhead" }));
       await waitFor(() => expect(appFrame.inert).toBe(false));
       // Hiding keeps the session alive, so resuming must not open a second one.
       expect(window.openbot.remoteDesktop.disconnect).not.toHaveBeenCalled();
@@ -930,7 +930,7 @@ describe("OpenBot connected desktop shell", () => {
     await screen.findByRole("heading", { name: "Chief" });
     await fireEvent.click(screen.getByRole("button", { name: "Open remote control" }));
     const workspace = await screen.findByRole("main", { name: "Remote control" });
-    await fireEvent.click(within(workspace).getByRole("button", { name: "Back to OpenBot" }));
+    await fireEvent.click(within(workspace).getByRole("button", { name: "Back to GoAhead" }));
     await fireEvent.click(screen.getByRole("button", { name: "Office PC server" }));
 
     await waitFor(() => expect(window.openbot.remoteDesktop.disconnect).toHaveBeenCalledWith("desktop-1"));
@@ -1240,7 +1240,7 @@ describe("OpenBot connected desktop shell", () => {
     await fireEvent.pointerUp(screen.getByRole("menuitem", { name: "Delete agent" }), { button: 0 });
     const dialog = screen.getByRole("alertdialog", { name: "Delete Sales Outbound?" });
     expect(dialog).toHaveTextContent(
-      "This removes the agent and its OpenBot conversation from the app. Its queue, memories, routines, and workspace are deleted. History stored separately by the connected CLI provider is not deleted.",
+      "This removes the agent and its GoAhead conversation from the app. Its queue, memories, routines, and workspace are deleted. History stored separately by the connected CLI provider is not deleted.",
     );
     await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(window.openbot.agent.deleteAgent).toHaveBeenCalledWith("sales-outbound"));

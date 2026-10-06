@@ -11,7 +11,7 @@ const secrets = { SLACK_CLIENT_ID: "client", SLACK_CLIENT_SECRET: "secret", SLAC
 // The bot token reads and writes a whole workspace, and the workspace link decides which computer
 // gets its messages. The Worker must never return the token in clear, must not act on a state it did
 // not sign, and must not let another account take a workspace from its host.
-describe("OpenBot Slack app install", () => {
+describe("GoAhead Slack app install", () => {
   it("seals the bot token to the host that asked and links the workspace to that host", async () => {
     const { service, database, fetch } = setup();
     const host = await createSlackWorkspaceKeyPair();

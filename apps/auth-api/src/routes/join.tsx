@@ -4,12 +4,12 @@ import { JoinPage } from "../components/landing/JoinPage";
 export const Route = createFileRoute("/join")({
   head: () => ({
     meta: [
-      { title: "Open an OpenBot invitation" },
+      { title: "Open a GoAhead invitation" },
       { name: "robots", content: "noindex, nofollow, noarchive" },
       { name: "referrer", content: "no-referrer" },
       {
         name: "description",
-        content: "Open a private host invitation in the OpenBot desktop app.",
+        content: "Open a private host invitation in the GoAhead desktop app.",
       },
     ],
   }),

@@ -19,7 +19,7 @@ export const messages = {
     "Sunshine ve Moonlight Web çalışma zamanı eksik veya bu ana makinede desteklenmiyor. Mac, Windows x64 veya Linux x64 ana makinesine tam OpenBot sürümünü yükleyin, ardından OpenBot'u yeniden başlatın.",
   "error.remote.testActive": "Bir uzak masaüstü testi etkin. Bittiğinde tekrar deneyin.",
   "error.remote.screenRecordingDenied":
-    "Ana makine OpenBot'un ekranını kaydetmesine izin vermedi. Ana makinede ekran kaydı izni verin, ardından tekrar deneyin.",
+    "Ana makine GoAhead'in ekranını kaydetmesine izin vermedi. Ana makinede ekran kaydı izni verin, ardından tekrar deneyin.",
   "error.remote.teamSessionExpired": "Ekip oturumunun süresi doldu.",
   "error.remote.finishTestBeforeSwitch": "Ekranları değiştirmeden önce uzak masaüstü testini tamamlayın.",
   "error.remote.displayNotFound": "Uzak ekran bulunamadı.",
@@ -32,7 +32,7 @@ export const messages = {
   "error.remote.invalidData": "Ana makine geçersiz veri döndürdü.",
   "error.remote.unsafeData": "Ana makine bu uygulamanın güvenle kullanamayacağı veri döndürdü.",
   "error.remote.requestFailedStatus": "Uzak sunucu isteği başarısız oldu ({status}).",
-  "error.remote.appUpdateRequired": "Ana makineye bağlanmadan önce bu OpenBot uygulamasını güncelleyin.",
+  "error.remote.appUpdateRequired": "Ana makineye bağlanmadan önce bu GoAhead uygulamasını güncelleyin.",
   "error.remote.identityNotVerified": "Sunucu kimliği doğrulanamadı.",
   "error.remote.webRtcUnavailable": "WebRTC iletimi kullanılamıyor.",
   "error.remote.invalidCompatibility": "Ana makine geçersiz uyumluluk bilgisi döndürdü.",
@@ -51,9 +51,9 @@ export const messages = {
   "error.remote.inviteIdentityChanged": "Davet ana makine kimliği kabul edilirken değişti.",
   "error.remote.localServerRemove": "Yerel sunucu kaldırılamaz.",
   "error.remote.desktopSetupHostUpdate":
-    "Uzak masaüstü kurulumunu kontrol etmek için ana makinedeki OpenBot'u güncelleyin.",
+    "Uzak masaüstü kurulumunu kontrol etmek için ana makinedeki GoAhead'i güncelleyin.",
   "error.remote.desktopTestHostUpdate":
-    "Uzak masaüstü kurulumunu test etmek için ana makinedeki OpenBot'u güncelleyin.",
+    "Uzak masaüstü kurulumunu test etmek için ana makinedeki GoAhead'i güncelleyin.",
   "error.remote.viewerProxyUnavailable": "Yerel uzak görüntüleyici vekili kullanılamıyor.",
   "error.remote.viewerTransportInvalid": "Uzak görüntüleyici iletimi geçersiz.",
   "error.remote.viewerProxyNoPort": "Yerel uzak görüntüleyici vekili bir bağlantı noktası alamadı.",
@@ -127,7 +127,7 @@ export const messages = {
   "error.remote.inviteFingerprintMismatch": "Davet ana makine kimliği parmak iziyle eşleşmiyor.",
   "error.remote.inviteHostKeyMissing": "Davet ana makine anahtarı eksik.",
   "error.remote.inviteKeyConflict": "Davet güvenilen ana makine anahtarıyla çakışıyor.",
-  "error.remote.serviceRequestFailed": "OpenBot servis isteği başarısız oldu.",
+  "error.remote.serviceRequestFailed": "GoAhead servis isteği başarısız oldu.",
   "error.remote.downloadTimeout": "Ek indirme zaman aşımına uğradı. Tekrar deneyin.",
   "error.remote.attachmentConnectionClosed": "Ek bağlantısı kapandı.",
   "error.remote.tooManyDownloads": "Çok fazla ek indirmesi.",

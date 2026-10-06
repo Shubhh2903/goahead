@@ -2,8 +2,8 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/server";
 
 export const messages = {
-  "server.compatibility.updateClientTitle": "この OpenBot アプリを更新してください",
-  "server.compatibility.updateHostTitle": "{name} の OpenBot を更新してください",
+  "server.compatibility.updateClientTitle": "この GoAhead アプリを更新してください",
+  "server.compatibility.updateHostTitle": "{name} の GoAhead を更新してください",
   "server.compatibility.unsafeDataTitle": "ホストが安全でないデータを返しました",
   "server.compatibility.cannotConnectTitle": "{name} に接続できません",
   "server.compatibility.updateClientDescription":
@@ -11,7 +11,7 @@ export const messages = {
   "server.compatibility.updateHostDescription":
     "ホストはこのアプリより古いプロトコルにのみ対応しています。ホストを更新してから、もう一度お試しください。",
   "server.compatibility.unsafeDataDescription":
-    "既知のペイロードが無効だったため、OpenBot はこの接続を停止しました。現在のワークスペースのデータは変更されていません。",
+    "既知のペイロードが無効だったため、GoAhead はこの接続を停止しました。現在のワークスペースのデータは変更されていません。",
   "server.compatibility.clientVersion": "クライアントのバージョン",
   "server.compatibility.hostVersion": "ホストのバージョン",
   "server.compatibility.negotiatedProtocol": "ネゴシエートされたプロトコル",
@@ -84,13 +84,13 @@ export const messages = {
   "server.settings.identityLocalOnly":
     "このサーバーの名前とロゴは、サーバーを実行しているコンピューターでのみ変更できます。",
   "server.settings.publicationLocalOnly": "公開設定はローカルサーバーでのみ変更できます。",
-  "server.compatibility.versionMismatchTitle": "{name} の OpenBot のバージョンが異なります",
+  "server.compatibility.versionMismatchTitle": "{name} の GoAhead のバージョンが異なります",
   "server.compatibility.versionMismatchDescription":
     "この接続はプロトコル {protocol} を使用しています。一部の新しい機能は使用できない場合があります。クライアント {clientVersion}、ホスト {hostVersion}。",
   "server.compatibility.versionMismatchUpdateHostDescription":
-    "すべての機能を使うには、{name} の OpenBot を更新してください。この接続はプロトコル {protocol} を使用しています。クライアント {clientVersion}、ホスト {hostVersion}。",
+    "すべての機能を使うには、{name} の GoAhead を更新してください。この接続はプロトコル {protocol} を使用しています。クライアント {clientVersion}、ホスト {hostVersion}。",
   "server.compatibility.versionMismatchUpdateClientDescription":
-    "すべての機能を使うには、この OpenBot アプリを更新してください。この接続はプロトコル {protocol} を使用しています。クライアント {clientVersion}、ホスト {hostVersion}。",
+    "すべての機能を使うには、この GoAhead アプリを更新してください。この接続はプロトコル {protocol} を使用しています。クライアント {clientVersion}、ホスト {hostVersion}。",
   "server.connection.failedTitle": "接続に失敗しました",
   "server.connection.failedDescription":
     "このサーバーに接続できませんでした。ホストがオンラインであることを確認して、もう一度お試しください。",
@@ -111,7 +111,7 @@ export const messages = {
   "server.settings.mcpDescription": "MCP サーバーを接続し、このサーバーのエージェントが使用できるものを選択します。",
   "server.settings.storageTitle": "ストレージ",
   "server.settings.storageDescription":
-    "OpenBot がこのサーバーのディスクに保存しているものを確認し、空き容量を増やします。",
+    "GoAhead がこのサーバーのディスクに保存しているものを確認し、空き容量を増やします。",
   "server.settings.hostedSitesTitle": "サイト",
   "server.settings.hostedSitesDescription": "このサーバーのエージェントが openbot.site に公開した静的サイト。",
   "server.settings.importTitle": "インポート",
@@ -120,9 +120,9 @@ export const messages = {
   "server.settings.nameTooLong": "{limit} 文字以内で入力してください。",
   "server.settings.actionFailedTitle": "サーバーの操作に失敗しました",
   "server.settings.actionFailed": "サーバーの操作に失敗しました。",
-  "server.settings.imageReadFailed": "OpenBot はこの画像を読み込めませんでした。",
+  "server.settings.imageReadFailed": "GoAhead はこの画像を読み込めませんでした。",
   "server.settings.copyFailedTitle": "コピーに失敗しました",
-  "server.settings.copyFailed": "OpenBot はこの値をコピーできませんでした。",
+  "server.settings.copyFailed": "GoAhead はこの値をコピーできませんでした。",
   "server.settings.close": "サーバーの設定を閉じる",
   "server.settings.unavailableTitle": "サーバーの設定を利用できません",
   "server.settings.unsavedMcpChanges": "未保存の MCP の変更",
@@ -214,7 +214,7 @@ export const messages = {
   "server.invite.full":
     "このサーバーのメンバーは上限の {limit} 人です。新しい人を招待するには、メンバーを削除してください。",
   "server.invite.qrLabel": "招待の QR コード",
-  "server.invite.qrDescription": "OpenBot Mobile でこのコードをスキャンすると、このサーバーに参加できます。",
+  "server.invite.qrDescription": "GoAhead Mobile でこのコードをスキャンすると、このサーバーに参加できます。",
   "server.invite.accepted": "招待が承諾されました",
   "server.invite.expired": "招待の期限が切れました",
   "server.invite.sent": "招待を送信しました",
@@ -222,7 +222,7 @@ export const messages = {
   "server.invite.acceptedDescription":
     "メンバーがこのサーバーに参加しました。別のユーザーを招待するには、新しいリンクを作成してください。",
   "server.invite.expiredDescription": "ユーザーを招待するには、新しいリンクを作成してください。",
-  "server.invite.linkReadyDescription": "リンクを共有するか、OpenBot Mobile で QR コードをスキャンしてください。",
+  "server.invite.linkReadyDescription": "リンクを共有するか、GoAhead Mobile で QR コードをスキャンしてください。",
   "server.invite.pendingTitle": "保留中の招待",
   "server.invite.pendingCount": "保留中 {total} 件",
   "server.invite.noPending": "保留中の招待はありません。",
@@ -242,7 +242,7 @@ export const messages = {
   "server.desktop.connectionUnavailable": "接続を利用できません",
   "server.desktop.hostOffline": "ホストはオフラインです",
   "server.desktop.hostOfflineDescription": "デスクトップを開く前に、ホストに再接続してください。",
-  "server.desktop.hostUpdateDescription": "リモート操作を使用するには、ホストの OpenBot を更新してください。",
+  "server.desktop.hostUpdateDescription": "リモート操作を使用するには、ホストの GoAhead を更新してください。",
   "server.desktop.serviceAvailable": "サービスを利用できます",
   "server.desktop.serviceAvailableDescription": "すべてのアクティブなメンバーが WebRTC による操作を使用できます。",
   "server.desktop.serviceNotReady": "サービスの準備ができていません",

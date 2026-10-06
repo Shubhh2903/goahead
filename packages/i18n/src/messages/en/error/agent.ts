@@ -46,10 +46,10 @@ export const messages = defineMessages("error.agent", {
   "error.agent.hostLimit": "A host can have up to {limit} agents.",
   "error.agent.changedWhileDuplicating": "The agent changed while it was being duplicated. Try again.",
   "error.agent.duplicatedAgentGone": "The duplicated agent no longer exists.",
-  "error.agent.stateCorrupt": "Agent state is corrupt or from a newer OpenBot version; refusing to overwrite it.",
-  "error.agent.oldRoleField": "Stored agent profiles use the old role field; update the data before starting OpenBot.",
+  "error.agent.stateCorrupt": "Agent state is corrupt or from a newer GoAhead version; refusing to overwrite it.",
+  "error.agent.oldRoleField": "Stored agent profiles use the old role field; update the data before starting GoAhead.",
   "error.agent.duplicateIds": "Agent state contains duplicate agent ids; refusing to overwrite it.",
-  "error.agent.copyNameFailed": "OpenBot could not create a unique agent copy name.",
+  "error.agent.copyNameFailed": "GoAhead could not create a unique agent copy name.",
   "error.agent.endpointRemoved": "The endpoint this agent used was removed. Choose another model for it.",
   "error.agent.selectedGone": "The selected agent no longer exists.",
   "error.agent.profileEndpointsChanged": "The custom endpoints changed while this was generating. Try again.",
@@ -70,9 +70,9 @@ export const messages = defineMessages("error.agent", {
   "error.agent.saveOtherAgent": "This save belongs to another agent.",
   "error.agent.savedGone": "The saved agent no longer exists.",
   "error.agent.storedProfileUnreadable":
-    'A stored agent profile has an unreadable "{field}" value; update the data before starting OpenBot.',
+    'A stored agent profile has an unreadable "{field}" value; update the data before starting GoAhead.',
   "error.agent.storedProfileUnreadableId":
-    'Stored agent profile {id} has an unreadable "{field}" value; update the data before starting OpenBot.',
+    'Stored agent profile {id} has an unreadable "{field}" value; update the data before starting GoAhead.',
   // Written by `QueueEditRejectedError` in @openbot/contracts, which cannot import this package.
   "error.agent.queueEditRejected": "Queue edit rejected: {reason}",
   "error.agent.computerUseLocalOnly": "Computer Use can only be changed on the computer that runs the agent.",
@@ -86,5 +86,5 @@ export const messages = defineMessages("error.agent", {
   "error.agent.lowMemory":
     "This server is low on memory. Your message waits in the queue and starts when memory is free. A larger plan gives the server more memory.",
   "error.agent.workspaceOnlyToolMissing":
-    "Workspace only needs {tool}, which OpenBot did not find. Install it, or choose Full access in the agent settings.",
+    "Workspace only needs {tool}, which GoAhead did not find. Install it, or choose Full access in the agent settings.",
 });

@@ -7,7 +7,7 @@ export const messages = {
   "notification.finished": "Terminou o trabalho.",
   "notification.failed": "Parou com um erro.",
   "notification.test": "As notificações estão funcionando.",
-  "notification.welcome": "O OpenBot avisará aqui quando um agente precisar de você.",
+  "notification.welcome": "O GoAhead avisará aqui quando um agente precisar de você.",
   "notification.toast.region": "Notificações",
   "notification.toast.close": "Fechar notificação",
 } as const satisfies PartialTranslation<typeof source>;

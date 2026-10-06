@@ -22,7 +22,7 @@ export const messages = {
     "Le runtime Sunshine et Moonlight Web est absent ou n’est pas pris en charge sur cet hôte. Installez la version complète d’OpenBot sur un hôte Mac, Windows x64 ou Linux x64, puis redémarrez OpenBot.",
   "error.remote.testActive": "Un test du bureau à distance est en cours. Réessayez quand il sera terminé.",
   "error.remote.screenRecordingDenied":
-    "L’hôte n’a pas autorisé OpenBot à enregistrer son écran. Autorisez l’enregistrement de l’écran sur l’hôte, puis réessayez.",
+    "L’hôte n’a pas autorisé GoAhead à enregistrer son écran. Autorisez l’enregistrement de l’écran sur l’hôte, puis réessayez.",
   "error.remote.teamSessionExpired": "La session de l’équipe a expiré.",
   "error.remote.finishTestBeforeSwitch": "Terminez le test du bureau à distance avant de changer d’écran.",
   "error.remote.displayNotFound": "Écran distant introuvable.",
@@ -35,7 +35,7 @@ export const messages = {
   "error.remote.moonlightStartFailed":
     "Moonlight Web n’a pas démarré sur l’hôte. Consultez les journaux du bureau à distance sur l’hôte, puis réessayez.",
   "error.remote.pairingFailed":
-    "Moonlight n’a pas pu s’associer à Sunshine sur l’hôte. Réessayez. Si le problème persiste, redémarrez OpenBot sur l’hôte.",
+    "Moonlight n’a pas pu s’associer à Sunshine sur l’hôte. Réessayez. Si le problème persiste, redémarrez GoAhead sur l’hôte.",
   "error.remote.runtimeStartFailed":
     "Le runtime du bureau à distance n’a pas démarré sur l’hôte. Consultez les journaux du bureau à distance sur l’hôte, puis réessayez.",
   "error.remote.hostUnreachable": "L’hôte est injoignable.",
@@ -43,7 +43,7 @@ export const messages = {
   "error.remote.invalidData": "L’hôte a renvoyé des données non valides.",
   "error.remote.unsafeData": "L’hôte a renvoyé des données que cette app ne peut pas utiliser en toute sécurité.",
   "error.remote.requestFailedStatus": "La requête au serveur distant a échoué ({status}).",
-  "error.remote.appUpdateRequired": "Mettez à jour cette app OpenBot avant de vous connecter à l’hôte.",
+  "error.remote.appUpdateRequired": "Mettez à jour cette app GoAhead avant de vous connecter à l’hôte.",
   "error.remote.identityNotVerified": "Impossible de vérifier l’identité du serveur.",
   "error.remote.webRtcUnavailable": "Le transport WebRTC n’est pas disponible.",
   "error.remote.invalidCompatibility": "L’hôte a renvoyé des informations de compatibilité non valides.",
@@ -62,9 +62,9 @@ export const messages = {
   "error.remote.inviteIdentityChanged": "L’identité de l’hôte de l’invitation a changé pendant son acceptation.",
   "error.remote.localServerRemove": "Le serveur local ne peut pas être supprimé.",
   "error.remote.desktopSetupHostUpdate":
-    "Mettez à jour OpenBot sur l’hôte pour vérifier la configuration du bureau à distance.",
+    "Mettez à jour GoAhead sur l’hôte pour vérifier la configuration du bureau à distance.",
   "error.remote.desktopTestHostUpdate":
-    "Mettez à jour OpenBot sur l’hôte pour tester la configuration du bureau à distance.",
+    "Mettez à jour GoAhead sur l’hôte pour tester la configuration du bureau à distance.",
   "error.remote.viewerProxyUnavailable": "Le proxy local de la visionneuse distante n’est pas disponible.",
   "error.remote.viewerTransportInvalid": "Le transport de la visionneuse distante n’est pas valide.",
   "error.remote.viewerProxyNoPort": "Le proxy local de la visionneuse distante n’a pas obtenu de port.",
@@ -138,7 +138,7 @@ export const messages = {
   "error.remote.inviteFingerprintMismatch": "L’identité de l’hôte de l’invitation ne correspond pas à son empreinte.",
   "error.remote.inviteHostKeyMissing": "La clé de l’hôte de l’invitation est absente.",
   "error.remote.inviteKeyConflict": "L’invitation est en conflit avec la clé d’hôte de confiance.",
-  "error.remote.serviceRequestFailed": "La requête au service OpenBot a échoué.",
+  "error.remote.serviceRequestFailed": "La requête au service GoAhead a échoué.",
   "error.remote.downloadTimeout": "Le téléchargement de la pièce jointe a expiré. Réessayez.",
   "error.remote.attachmentConnectionClosed": "La connexion de la pièce jointe s’est fermée.",
   "error.remote.tooManyDownloads": "Trop de téléchargements de pièces jointes.",

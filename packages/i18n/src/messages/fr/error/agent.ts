@@ -51,11 +51,11 @@ export const messages = {
   "error.agent.changedWhileDuplicating": "L’agent a changé pendant sa duplication. Réessayez.",
   "error.agent.duplicatedAgentGone": "L’agent dupliqué n’existe plus.",
   "error.agent.stateCorrupt":
-    "L’état des agents est corrompu ou provient d’une version plus récente d’OpenBot ; il ne sera pas écrasé.",
+    "L’état des agents est corrompu ou provient d’une version plus récente de GoAhead ; il ne sera pas écrasé.",
   "error.agent.oldRoleField":
-    "Les profils d’agent enregistrés utilisent l’ancien champ de rôle ; mettez à jour les données avant de démarrer OpenBot.",
+    "Les profils d’agent enregistrés utilisent l’ancien champ de rôle ; mettez à jour les données avant de démarrer GoAhead.",
   "error.agent.duplicateIds": "L’état des agents contient des ID d’agent en double ; il ne sera pas écrasé.",
-  "error.agent.copyNameFailed": "OpenBot n’a pas pu créer un nom unique pour la copie de l’agent.",
+  "error.agent.copyNameFailed": "GoAhead n’a pas pu créer un nom unique pour la copie de l’agent.",
   "error.agent.endpointRemoved":
     "Le point de terminaison utilisé par cet agent a été supprimé. Choisissez un autre modèle pour lui.",
   "error.agent.selectedGone": "L’agent sélectionné n’existe plus.",
@@ -80,9 +80,9 @@ export const messages = {
   "error.agent.saveOtherAgent": "Cet enregistrement appartient à un autre agent.",
   "error.agent.savedGone": "L’agent enregistré n’existe plus.",
   "error.agent.storedProfileUnreadable":
-    "Un profil d’agent enregistré a une valeur « {field} » illisible ; mettez à jour les données avant de démarrer OpenBot.",
+    "Un profil d’agent enregistré a une valeur « {field} » illisible ; mettez à jour les données avant de démarrer GoAhead.",
   "error.agent.storedProfileUnreadableId":
-    "Le profil d’agent enregistré {id} a une valeur « {field} » illisible ; mettez à jour les données avant de démarrer OpenBot.",
+    "Le profil d’agent enregistré {id} a une valeur « {field} » illisible ; mettez à jour les données avant de démarrer GoAhead.",
   "error.agent.queueEditRejected": "Modification de la file d’attente refusée : {reason}",
   "error.agent.computerUseLocalOnly": "Computer Use ne peut être modifié que sur l’ordinateur qui exécute l’agent.",
   "error.agent.workspaceOnlyMacOnly":
@@ -90,5 +90,5 @@ export const messages = {
   "error.agent.lowMemory":
     "Ce serveur manque de mémoire. Votre message attend dans la file et démarre quand la mémoire est libre. Une offre plus grande donne plus de mémoire au serveur.",
   "error.agent.workspaceOnlyToolMissing":
-    "« Espace de travail uniquement » nécessite {tool}, qu’OpenBot n’a pas trouvé. Installez-le, ou choisissez « Accès complet » dans les réglages de l’agent.",
+    "« Espace de travail uniquement » nécessite {tool}, que GoAhead n’a pas trouvé. Installez-le, ou choisissez « Accès complet » dans les réglages de l’agent.",
 } as const satisfies PartialTranslation<typeof source>;

@@ -9,8 +9,8 @@ export const messages = {
   "error.backend.browserViewLimit": "Há visualizações do navegador demais abertas neste computador anfitrião.",
   "error.backend.browserViewEnded": "A visualização ao vivo desta página terminou.",
   "error.backend.browserViewFailed": "A visualização ao vivo desta página falhou.",
-  "error.backend.windowTemporarilyUnavailable": "A janela do OpenBot está temporariamente indisponível.",
-  "error.backend.windowUnavailable": "A janela do OpenBot está indisponível.",
+  "error.backend.windowTemporarilyUnavailable": "A janela do GoAhead está temporariamente indisponível.",
+  "error.backend.windowUnavailable": "A janela do GoAhead está indisponível.",
   "error.backend.sunshineApiHttp": "A API do Sunshine falhou com HTTP {status}.",
   "error.backend.sunshinePortsUnavailable":
     "Não foi possível reservar um conjunto de portas livres do Sunshine para a área de trabalho remota.",
@@ -27,7 +27,7 @@ export const messages = {
   "error.backend.moonlightRejectedPairing": "O Moonlight rejeitou o pareamento com o Sunshine.",
   "error.backend.moonlightNoPin": "O Moonlight não retornou um PIN de pareamento.",
   "error.backend.moonlightPairingIncomplete": "O pareamento do Moonlight não foi concluído.",
-  "error.backend.moonlightWebNotEmbedded": "O Moonlight Web não é uma versão integrada ao OpenBot.",
+  "error.backend.moonlightWebNotEmbedded": "O Moonlight Web não é uma versão integrada ao GoAhead.",
   "error.backend.moonlightEmptyResponse": "O Moonlight retornou uma resposta vazia.",
   "error.backend.remoteDesktopTimeout": "O tempo da solicitação de área de trabalho remota esgotou.",
   "error.backend.moonlightApiHttp": "A API do Moonlight falhou com HTTP {status}.",
@@ -46,7 +46,7 @@ export const messages = {
   "error.backend.sunshineNotReadyReason": "O Sunshine não ficou pronto. {reason}",
   "error.backend.channelLeadModelUnavailable": "O modelo do líder do canal está indisponível.",
   "error.backend.sharedDataUnavailable": "Os dados compartilhados estão indisponíveis.",
-  "error.backend.shuttingDown": "O OpenBot está encerrando.",
+  "error.backend.shuttingDown": "O GoAhead está encerrando.",
   "error.backend.channelUnconfirmedStart":
     "O canal tem uma tarefa atribuída cujo início não foi confirmado. Verifique o resultado antes de excluí-lo.",
   "error.backend.channelNotFound": "Canal não encontrado.",
@@ -99,13 +99,13 @@ export const messages = {
   "error.backend.fileGone": "O arquivo não existe ou já foi excluído.",
   "error.backend.managedAttachmentChanged": "O anexo gerenciado não foi encontrado ou mudou: {name}",
   "error.backend.mailboxStateCorrupt":
-    "O estado da caixa de mensagens está corrompido ou é de uma versão mais recente do OpenBot; ele não será sobrescrito.",
+    "O estado da caixa de mensagens está corrompido ou é de uma versão mais recente do GoAhead; ele não será sobrescrito.",
   "error.backend.recipientDeleting": "O destinatário está sendo excluído. Tente novamente quando a exclusão terminar.",
   "error.backend.attachBetween": "Anexe de 1 a {limit} arquivos.",
   "error.backend.attachmentNotFile": "O anexo não é um arquivo: {path}",
   "error.backend.generatedImageTooLarge": "A imagem gerada excede o limite de 100 MB.",
   "error.backend.attachmentNotRegularFile": "Somente arquivos comuns podem ser anexados: {name}",
-  "error.backend.attachmentCopyFailed": "O OpenBot não conseguiu copiar {name}.",
+  "error.backend.attachmentCopyFailed": "O GoAhead não conseguiu copiar {name}.",
   "error.backend.routineNameRequired": "É necessário informar um nome para a rotina.",
   "error.backend.routineNameTooLong": "O nome da rotina é muito longo.",
   "error.backend.routineInstructionRequired": "É necessário informar uma instrução para a rotina.",
@@ -128,14 +128,14 @@ export const messages = {
   "error.backend.routineRunStarting":
     "Esta execução da rotina ainda está iniciando. Tente novamente após o início do turno.",
   "error.backend.routineRunNoSession":
-    "O OpenBot não pode interromper a execução ativa da rotina porque a sessão do provedor está indisponível.",
+    "O GoAhead não pode interromper a execução ativa da rotina porque a sessão do provedor está indisponível.",
   "error.backend.interruptSelf": "Um agente não pode interromper a si mesmo.",
   "error.backend.interruptOtherWork":
     "Este agente trabalha em uma tarefa que sua mensagem não iniciou. Somente o usuário ou quem enviou a tarefa pode interrompê-lo.",
   "error.backend.interruptStarting":
     "Este agente ainda está iniciando um turno. Tente novamente após o início do turno.",
   "error.backend.interruptNoSession":
-    "O OpenBot não pode interromper este agente porque a sessão do provedor está indisponível.",
+    "O GoAhead não pode interromper este agente porque a sessão do provedor está indisponível.",
   "error.backend.memoryTextRequired": "É necessário informar o texto da memória.",
   "error.backend.memoryTextTooLong": "O texto da memória é muito longo.",
   "error.backend.mcpServerGone": "Este servidor MCP não existe mais.",

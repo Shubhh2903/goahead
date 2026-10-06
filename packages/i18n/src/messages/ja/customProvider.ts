@@ -7,7 +7,7 @@ export const messages = {
     "小文字の英字、数字、ハイフン、アンダースコアを使い、英字か数字で始めてください。",
   "customProvider.error.providerIdLength": "プロバイダー ID は {max} 文字未満にしてください。",
   "customProvider.error.providerIdBuiltIn":
-    "OpenBot には {id} という名前のプロバイダーがすでにあります。別の ID を選んでください。",
+    "GoAhead には {id} という名前のプロバイダーがすでにあります。別の ID を選んでください。",
   "customProvider.error.providerIdSaved":
     "{id} という名前のエンドポイントはすでに保存されています。先に削除するか、別の ID を選んでください。",
   "customProvider.error.displayNameRequired": "表示名を入力してください。",
@@ -30,16 +30,16 @@ export const messages = {
   "customProvider.error.baseUrlProtocol": "http:// または https:// の URL を使ってください。",
   "customProvider.error.baseUrlCredential": "認証情報は URL ではなくヘッダーに入れてください。",
 
-  "customProvider.saved.restarted": "保存しました。OpenBot がモデルを読み込んでいます。",
+  "customProvider.saved.restarted": "保存しました。GoAhead がモデルを読み込んでいます。",
   "customProvider.saved.skippedBusy":
     "保存しました。OpenCode は現在のタスクが止まったあとで一覧を読み込みます。そのときに接続を押してください。",
   "customProvider.saved.notRunning": "保存しました。OpenCode は次回の起動時に一覧を読み込みます。",
-  "customProvider.removed.restarted": "削除しました。OpenBot がモデルを読み込んでいます。",
+  "customProvider.removed.restarted": "削除しました。GoAhead がモデルを読み込んでいます。",
   "customProvider.removed.skippedBusy":
     "削除しました。OpenCode は現在のタスクが止まったあとで一覧を読み込みます。そのときに接続を押してください。",
   "customProvider.removed.notRunning": "削除しました。OpenCode は次回の起動時に一覧を読み込みます。",
-  "customProvider.saveFailed": "OpenBot はこのエンドポイントを保存できませんでした。",
-  "customProvider.removeFailed": "OpenBot は {name} を削除できませんでした。",
+  "customProvider.saveFailed": "GoAhead はこのエンドポイントを保存できませんでした。",
+  "customProvider.removeFailed": "GoAhead は {name} を削除できませんでした。",
   "customProvider.saveUnavailable": "このビルドではエンドポイントを保存できません。",
   "customProvider.removeUnavailable": "このビルドではエンドポイントを削除できません。",
 
@@ -99,7 +99,7 @@ export const messages = {
   "customProvider.detected.title": "このコンピュータで見つかったもの",
   "customProvider.detected.scanning": "ローカルのモデルとエージェントを探しています。",
   "customProvider.detected.scanAgain": "再スキャン",
-  "customProvider.detected.empty": "OpenBot はローカルのモデルサーバーも ACP エージェントも見つけられませんでした。",
+  "customProvider.detected.empty": "GoAhead はローカルのモデルサーバーも ACP エージェントも見つけられませんでした。",
   "customProvider.detected.add": "追加",
   "customProvider.detected.addLabel": "{name} を追加",
   "customProvider.detected.added": "追加済み",
@@ -113,10 +113,10 @@ export const messages = {
 
   "customProvider.detection.title": "ローカル検出",
   "customProvider.detection.saveFailed": "検出の設定を保存できませんでした。",
-  "customProvider.detection.description": "OpenBot がローカルのモデルサーバーと ACP エージェントを探す場所です。",
+  "customProvider.detection.description": "GoAhead がローカルのモデルサーバーと ACP エージェントを探す場所です。",
   "customProvider.detection.enabled": "ローカルのモデルとエージェントを探す",
   "customProvider.detection.enabledDescription":
-    "OpenBot は Ollama と LM Studio のデフォルトのアドレスを確認し、PATH にある既知の ACP エージェントを探します。",
+    "GoAhead は Ollama と LM Studio のデフォルトのアドレスを確認し、PATH にある既知の ACP エージェントを探します。",
   "customProvider.detection.addresses": "その他のモデルサーバーのアドレス",
   "customProvider.detection.address.label": "アドレス {number}",
   "customProvider.detection.address.remove": "アドレス {number} を削除",
@@ -136,7 +136,7 @@ export const messages = {
   "customProvider.acp.agentId": "エージェント ID",
   "customProvider.acp.agentIdHint": "小文字の英字、数字、ハイフン。あとから変更できません。",
   "customProvider.acp.command": "コマンド",
-  "customProvider.acp.commandHint": "起動するプログラムです。OpenBot は PATH からこれを探します。",
+  "customProvider.acp.commandHint": "起動するプログラムです。GoAhead は PATH からこれを探します。",
   "customProvider.acp.args": "引数",
   "customProvider.acp.argsHint": "引数はスペースで区切ってください。スペースを含む引数は引用符で囲んでください。",
   "customProvider.acp.env": "環境変数",
@@ -146,7 +146,7 @@ export const messages = {
   "customProvider.acp.env.add": "変数を追加",
   "customProvider.acp.check": "接続",
   "customProvider.acp.checkRun": "エージェントを確認",
-  "customProvider.acp.checkIdle": "OpenBot はコマンドを一度起動して、応答することを確認します。",
+  "customProvider.acp.checkIdle": "GoAhead はコマンドを一度起動して、応答することを確認します。",
   "customProvider.acp.checking": "{command} を起動しています。",
   "customProvider.acp.checkOk": "{name} が応答しました",
   "customProvider.acp.checkOkVersion": "{name} {version} が応答しました",
@@ -154,7 +154,7 @@ export const messages = {
   "customProvider.acp.checkFailed": "エージェントが応答しませんでした",
   "customProvider.acp.trustTitle": "このコマンドはこのコンピュータで実行されます",
   "customProvider.acp.trustDescription":
-    "OpenBot はあなたのユーザーアカウントでこれを起動します。エージェントはファイルの読み取りと変更、コマンドの実行ができます。信頼できるエージェントだけを追加してください。",
+    "GoAhead はあなたのユーザーアカウントでこれを起動します。エージェントはファイルの読み取りと変更、コマンドの実行ができます。信頼できるエージェントだけを追加してください。",
   "customProvider.acp.submit": "エージェントを追加",
   "customProvider.acp.editTitle": "カスタム ACP エージェントを編集",
   "customProvider.acp.submitEdit": "エージェントを保存",
@@ -170,7 +170,7 @@ export const messages = {
     "小文字の英字、数字、ハイフンを使い、英字か数字で始めてください。40 文字以内にしてください。",
 
   "customProvider.agents.title": "カスタムエージェント",
-  "customProvider.agents.description": "OpenBot がこのコンピュータで起動する ACP エージェントです。",
+  "customProvider.agents.description": "GoAhead がこのコンピュータで起動する ACP エージェントです。",
   "customProvider.agents.empty": "カスタムエージェントはまだありません。",
   "customProvider.agents.add": "エージェントを追加",
   "customProvider.agents.commandMissing": "{command} · コマンドが見つかりません",
@@ -179,12 +179,12 @@ export const messages = {
   "customProvider.agents.deleteLabel": "{name} を削除",
   "customProvider.agents.confirmDescription":
     "保存した変数は破棄されます。これを使っているエージェントはデフォルトのモデルに移ります。",
-  "customProvider.agents.saveFailed": "OpenBot はこのエージェントを保存できませんでした。",
-  "customProvider.agents.saved.restarted": "保存しました。OpenBot はカスタムエージェントを再起動しました。",
+  "customProvider.agents.saveFailed": "GoAhead はこのエージェントを保存できませんでした。",
+  "customProvider.agents.saved.restarted": "保存しました。GoAhead はカスタムエージェントを再起動しました。",
   "customProvider.agents.saved.skippedBusy":
     "保存しました。カスタムエージェントは現在のタスクが止まったあとで再起動します。",
   "customProvider.agents.saved.notRunning": "保存しました。カスタムエージェントは次回の起動時に読み込みます。",
-  "customProvider.agents.removed.restarted": "削除しました。OpenBot はカスタムエージェントを再起動しました。",
+  "customProvider.agents.removed.restarted": "削除しました。GoAhead はカスタムエージェントを再起動しました。",
   "customProvider.agents.removed.skippedBusy":
     "削除しました。カスタムエージェントは現在のタスクが止まったあとで再起動します。",
   "customProvider.agents.removed.notRunning": "削除しました。カスタムエージェントは次回の起動時に読み込みます。",

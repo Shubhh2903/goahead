@@ -2,7 +2,7 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/webClient";
 
 export const messages = {
-  "webClient.loading": "Carregando o OpenBot…",
+  "webClient.loading": "Carregando o GoAhead…",
   "webClient.loadingLine.wake": "Acordando os agentes…",
   "webClient.loadingLine.coffee": "Servindo café para os agentes…",
   "webClient.loadingLine.tokens": "Contando tokens nos dedos…",
@@ -22,13 +22,13 @@ export const messages = {
   "webClient.notice.hostsFailed": "Não foi possível carregar seus computadores",
   "webClient.notice.connectComputer": "Conecte seu computador",
   "webClient.notice.keepOpen":
-    "Mantenha o OpenBot aberto no seu computador. Seu rascunho fica aqui enquanto você se reconecta.",
+    "Mantenha o GoAhead aberto no seu computador. Seu rascunho fica aqui enquanto você se reconecta.",
   "webClient.connect.description":
-    "Execute o OpenBot no seu computador para conversar com seus agentes neste navegador. Você também pode entrar em um computador com um convite.",
-  "webClient.connect.stepInstall": "Instale e abra o OpenBot no seu computador.",
+    "Execute o GoAhead no seu computador para conversar com seus agentes neste navegador. Você também pode entrar em um computador com um convite.",
+  "webClient.connect.stepInstall": "Instale e abra o GoAhead no seu computador.",
   "webClient.connect.stepSignIn": "Entre com seu e-mail.",
   "webClient.connect.stepRemote": "Ative o acesso remoto.",
-  "webClient.notice.download": "Baixar OpenBot",
+  "webClient.notice.download": "Baixar GoAhead",
   "webClient.notice.join": "Entrar com convite",
   "webClient.notice.reconnect": "Reconectar",
   "webClient.notice.refreshHosts": "Atualizar computadores anfitriões",
@@ -46,7 +46,7 @@ export const messages = {
   "webClient.error.usageOffline": "Conecte-se ao seu computador anfitrião para ver o uso.",
   "webClient.error.desktopOnly": "Esta ação está disponível no app para computador.",
   "webClient.settings.preferences.title": "Preferências",
-  "webClient.settings.preferences.description": "Escolha o idioma e os sons do OpenBot neste navegador.",
+  "webClient.settings.preferences.description": "Escolha o idioma e os sons do GoAhead neste navegador.",
   "webClient.error.checkConversation": "Verifique a conversa antes de enviar novamente.",
   "webClient.error.hostReported":
     "O computador anfitrião informou um erro. Verifique a conversa e o status do computador anfitrião.",
@@ -79,14 +79,14 @@ export const messages = {
   "webClient.error.identityChanged": "A identidade do computador anfitrião mudou. Conexão recusada.",
   "webClient.error.connectionUnavailable": "A conexão com o computador anfitrião está indisponível.",
   "webClient.error.incompatible":
-    "Este computador anfitrião não é compatível com o OpenBot web. Atualize-o e recarregue esta página.",
+    "Este computador anfitrião não é compatível com o GoAhead web. Atualize-o e recarregue esta página.",
   "webClient.error.sendUnconfirmed": "A entrega da mensagem não foi confirmada. Atualize antes de enviá-la novamente.",
   "webClient.error.fileType": "Atualize o computador anfitrião para anexar este tipo de arquivo.",
   "webClient.error.uploadCancelled": "O envio do anexo foi cancelado.",
   "webClient.error.duplication": "Este computador anfitrião não permite duplicar agentes.",
   "webClient.error.connectServerFirst": "Conecte-se a este servidor primeiro.",
   "webClient.error.agentInstallNotAllowed":
-    "Só um proprietário ou administrador pode adicionar um agente aqui, e o computador anfitrião deve executar uma versão atual do OpenBot.",
+    "Só um proprietário ou administrador pode adicionar um agente aqui, e o computador anfitrião deve executar uma versão atual do GoAhead.",
   "webClient.error.linkDesktopOnly": "Este link abre apenas no app para computador.",
   "webClient.error.saveEndpointOffline": "Conecte-se ao seu computador anfitrião para salvar um endpoint.",
   "webClient.error.removeEndpointOffline": "Conecte-se ao seu computador anfitrião para remover um endpoint.",

@@ -18,7 +18,7 @@ export const messages = defineMessages("error.remote", {
     "The Sunshine and Moonlight Web runtime is missing or is not supported on this host. Install the full OpenBot release on a Mac, a Windows x64 host or a Linux x64 host, then restart OpenBot.",
   "error.remote.testActive": "A remote desktop test is active. Try again when it ends.",
   "error.remote.screenRecordingDenied":
-    "The host has not allowed OpenBot to record its screen. Grant screen recording on the host, then try again.",
+    "The host has not allowed GoAhead to record its screen. Grant screen recording on the host, then try again.",
   "error.remote.teamSessionExpired": "The team session has expired.",
   "error.remote.finishTestBeforeSwitch": "Finish the remote desktop test before switching displays.",
   "error.remote.displayNotFound": "Remote display not found.",
@@ -31,7 +31,7 @@ export const messages = defineMessages("error.remote", {
   "error.remote.moonlightStartFailed":
     "Moonlight Web did not start on the host. Check the remote desktop logs on the host, then try again.",
   "error.remote.pairingFailed":
-    "Moonlight could not pair with Sunshine on the host. Try again. If the problem continues, restart OpenBot on the host.",
+    "Moonlight could not pair with Sunshine on the host. Try again. If the problem continues, restart GoAhead on the host.",
   "error.remote.runtimeStartFailed":
     "The remote desktop runtime did not start on the host. Check the remote desktop logs on the host, then try again.",
   "error.remote.hostUnreachable": "The host is not reachable.",
@@ -39,7 +39,7 @@ export const messages = defineMessages("error.remote", {
   "error.remote.invalidData": "The host returned invalid data.",
   "error.remote.unsafeData": "The host returned data that this app could not safely use.",
   "error.remote.requestFailedStatus": "Remote server request failed ({status}).",
-  "error.remote.appUpdateRequired": "Update this OpenBot app before connecting to the host.",
+  "error.remote.appUpdateRequired": "Update this GoAhead app before connecting to the host.",
   "error.remote.identityNotVerified": "The server identity could not be verified.",
   "error.remote.webRtcUnavailable": "The WebRTC transport is unavailable.",
   "error.remote.invalidCompatibility": "The host returned invalid compatibility information.",
@@ -57,8 +57,8 @@ export const messages = defineMessages("error.remote", {
   "error.remote.inviteAcceptedOtherHost": "The account service accepted a different host.",
   "error.remote.inviteIdentityChanged": "The invitation host identity changed while it was accepted.",
   "error.remote.localServerRemove": "The local server cannot be removed.",
-  "error.remote.desktopSetupHostUpdate": "Update OpenBot on the host to check remote desktop setup.",
-  "error.remote.desktopTestHostUpdate": "Update OpenBot on the host to test remote desktop setup.",
+  "error.remote.desktopSetupHostUpdate": "Update GoAhead on the host to check remote desktop setup.",
+  "error.remote.desktopTestHostUpdate": "Update GoAhead on the host to test remote desktop setup.",
   "error.remote.viewerProxyUnavailable": "The local remote viewer proxy is unavailable.",
   "error.remote.viewerTransportInvalid": "The remote viewer transport is invalid.",
   "error.remote.viewerProxyNoPort": "The local remote viewer proxy did not get a port.",
@@ -130,7 +130,7 @@ export const messages = defineMessages("error.remote", {
   "error.remote.inviteFingerprintMismatch": "The invitation host identity does not match its fingerprint.",
   "error.remote.inviteHostKeyMissing": "The invitation host key is missing.",
   "error.remote.inviteKeyConflict": "The invitation conflicts with the trusted host key.",
-  "error.remote.serviceRequestFailed": "The OpenBot service request failed.",
+  "error.remote.serviceRequestFailed": "The GoAhead service request failed.",
   "error.remote.downloadTimeout": "The attachment download timed out. Try again.",
   "error.remote.attachmentConnectionClosed": "The attachment connection closed.",
   "error.remote.tooManyDownloads": "Too many attachment downloads.",

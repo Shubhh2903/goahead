@@ -13,7 +13,7 @@ export const messages = {
   "skill.loadingDetails": "Ayrıntılar yükleniyor…",
   "skill.emptyEnabled": "Bu ajanın etkinleştirilmiş becerisi yok.",
   "skill.emptyAssigned": "Bu ajanın henüz atanmış becerisi yok.",
-  "skill.folderSkill": "OpenBot bu beceriyi yüklemedi. {location} içinde düzenleyin veya kaldırın.",
+  "skill.folderSkill": "GoAhead bu beceriyi yüklemedi. {location} içinde düzenleyin veya kaldırın.",
   "skill.localOnHost": "Bu yerel beceri ana makinede depolanır. Ayrıntılarını o bilgisayarda açın.",
   "skill.moreFor": "{name} için daha fazlası",
   "skill.update": "Güncelle",
@@ -35,7 +35,7 @@ export const messages = {
     "Bu beceriyi güncellemek, yerel dosyaları en son beceri paketiyle değiştirir. Bu beceri klasöründeki düzenlemeleriniz kaybolacaktır.",
   "skill.confirm.removeModifiedBody":
     "Bu becerinin ajan çalışma alanında yerel değişiklikleri var. Kaldır işlemi bu dosyaları siler. Orijinal sohbet mesajları kalır.",
-  "skill.confirm.removeBody": "OpenBot bu beceriyi ajandan kaldıracaktır. Sohbet geçmişi kalır.",
+  "skill.confirm.removeBody": "GoAhead bu beceriyi ajandan kaldıracaktır. Sohbet geçmişi kalır.",
   "skill.confirm.replace": "Beceriyi değiştir",
   "skill.confirm.remove": "Beceriyi kaldır",
   "skill.unavailable.readOnly": "Uzak beceriler salt okunurdur.",

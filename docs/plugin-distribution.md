@@ -88,7 +88,7 @@ correct: a change to the content gives a different URL.
 
 Each file has a `schemaVersion`. The index also has a `catalogVersion`, which always increases.
 If the `schemaVersion` is higher than the app knows, the app ignores the whole file and shows
-"Update OpenBot to see the newest plugins." The app must not read a part of a file it does not know.
+"Update GoAhead to see the newest plugins." The app must not read a part of a file it does not know.
 
 ### 2.3 The detail shape
 
@@ -188,7 +188,7 @@ Two controls protect the catalog:
 
 There is **no signature**. The party that holds a signing key would also be the party that deploys
 the Worker that serves the file. Thus a signature would protect against nothing new. Add a signature
-only if the catalog moves to a host that OpenBot does not control.
+only if the catalog moves to a host that GoAhead does not control.
 
 ### 2.6 Fetch and cache in the app
 
@@ -208,7 +208,7 @@ in.
 
 The renderer shows three failure states:
 
-- stale: "Showing the catalog from <time>. OpenBot could not reach openbot.run.";
+- stale: "Showing the catalog from <time>. GoAhead could not reach openbot.run.";
 - cold and offline: "Plugins need a connection to openbot.run the first time.";
 - wrong hash: "This plugin listing did not match its checksum. Try again later."
 
@@ -379,9 +379,9 @@ the install button and choose an agent.
 When the slug is not in the copy of the catalog, the main process reads it. The renderer does not
 fetch, so the `connect-src` policy does not change. Two states follow:
 
-- `missing`: "This plugin is not in the OpenBot catalog." This is final, and gives a button back to
+- `missing`: "This plugin is not in the GoAhead catalog." This is final, and gives a button back to
   the plugin list;
-- `offline`: "OpenBot cannot reach openbot.run. Check your connection." This gives "Try again".
+- `offline`: "GoAhead cannot reach openbot.run. Check your connection." This gives "Try again".
 
 ### 4.5 Copy link
 

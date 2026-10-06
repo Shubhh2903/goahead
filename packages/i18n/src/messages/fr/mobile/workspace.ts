@@ -19,7 +19,7 @@ export const messages = {
     "Vous pouvez quitter uniquement les serveurs distants que vous avez rejoints.",
   "mobile.workspace.error.agentNotOnHost": "L’agent n’est pas sur cet hôte.",
   "mobile.workspace.error.filesUnsupported":
-    "Cet hôte ne prend pas en charge la gestion des fichiers. Mettez à jour OpenBot sur l’hôte.",
+    "Cet hôte ne prend pas en charge la gestion des fichiers. Mettez à jour GoAhead sur l’hôte.",
   "mobile.workspace.error.agentUnavailableOnHost": "L’agent est indisponible sur cet hôte.",
   "mobile.workspace.error.agentUnavailable": "L’agent est indisponible.",
   "mobile.workspace.error.formUnavailable": "Ce formulaire n’est plus disponible.",

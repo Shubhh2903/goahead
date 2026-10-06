@@ -24,7 +24,7 @@ export const messages = {
   "marketplace.tab.agents": "エージェント",
   "marketplace.tab.skills": "スキル",
 
-  "marketplace.plugins.missing": "このプラグインは OpenBot のカタログにありません。",
+  "marketplace.plugins.missing": "このプラグインは GoAhead のカタログにありません。",
 
   "marketplace.agents.loadingDetail": "エージェントの詳細を読み込んでいます…",
   "marketplace.agents.skills": "スキル",
@@ -34,7 +34,7 @@ export const messages = {
 
   "marketplace.skill.loading": "スキルを読み込んでいます",
   "marketplace.skill.update": "スキルをアップデート",
-  "marketplace.try.readFailed": "OpenBot はこのエージェントのスキルを読み取れませんでした。もう一度お試しください。",
+  "marketplace.try.readFailed": "GoAhead はこのエージェントのスキルを読み取れませんでした。もう一度お試しください。",
   "marketplace.try.enable": "試すには、エージェントの設定でこのスキルを有効にしてください。",
   "marketplace.try.repair": "試すには、エージェントの設定でこのスキルを修復してください。",
   "marketplace.try.update": "このバージョンを試すには、スキルをアップデートしてください。",

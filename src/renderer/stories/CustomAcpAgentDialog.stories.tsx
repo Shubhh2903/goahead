@@ -74,7 +74,7 @@ export const AgentCheckPassed: Story = {
 export const AgentCheckFailed: Story = {
   args: {
     draft: { ...goose, command: "gooose" },
-    check: { status: "failed", message: "OpenBot could not find gooose on your PATH." },
+    check: { status: "failed", message: "GoAhead could not find gooose on your PATH." },
   },
 };
 

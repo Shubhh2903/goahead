@@ -57,9 +57,9 @@ export function SiteHeader(props: SiteHeaderProps) {
 
   return (
     <header class="landing-header" data-enter="header">
-      <Link class="landing-brand" to="/" aria-label="OpenBot home">
+      <Link class="landing-brand" to="/" aria-label="GoAhead home">
         <AppLogo variant="production" class="landing-brand-logo" />
-        <span>OpenBot</span>
+        <span>GoAhead</span>
       </Link>
       <SiteNavigationMenu />
       <div class="site-header-actions">

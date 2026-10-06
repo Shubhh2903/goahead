@@ -9,7 +9,7 @@ export const messages = {
   "remoteDesktop.workspaceLabel": "Uzaktan kontrol",
   "remoteDesktop.displayLabel": "Uzak ekran",
   "remoteDesktop.selectDisplay": "Ekran seçin",
-  "remoteDesktop.backToOpenBot": "OpenBot'a Dön",
+  "remoteDesktop.backToOpenBot": "GoAhead'e Dön",
   "remoteDesktop.disconnect": "Bağlantıyı kes",
   "remoteDesktop.viewerTitle": "Sunshine uzak masaüstü",
   "remoteDesktop.viewerLoadFailed": "Moonlight görüntüleyicisi yüklenemedi.",
@@ -20,7 +20,7 @@ export const messages = {
   "remoteDesktop.openFailed": "Masaüstü açılamadı",
   "remoteDesktop.notSharingTitle": "{name} ekranını paylaşmıyor",
   "remoteDesktop.notSharingDescription":
-    "Ana makine OpenBot'un ekranını kaydetmesini engelliyor. O bilgisayarda Sistem Ayarları → Gizlilik ve Güvenlik → Ekran Kaydı bölümünü açın, OpenBot'u etkinleştirin ve burada tekrar deneyin.",
+    "Ana makine GoAhead'in ekranını kaydetmesini engelliyor. O bilgisayarda Sistem Ayarları → Gizlilik ve Güvenlik → Ekran Kaydı bölümünü açın, GoAhead'i etkinleştirin ve burada tekrar deneyin.",
   "remoteDesktop.setup.check.screenRecording": "Ekran Kaydı",
   "remoteDesktop.setup.check.accessibility": "Erişilebilirlik",
   "remoteDesktop.setup.check.service": "Sunshine hizmeti",
@@ -41,7 +41,7 @@ export const messages = {
   "remoteDesktop.setup.startFailed": "Uzak masaüstü testi başlatılamadı.",
   "remoteDesktop.setup.connectionLost": "Test bağlantısı kesildi.",
   "remoteDesktop.setup.hostUpdateRequired":
-    "İzinleri kontrol etmek ve uzak masaüstünü test etmek için ana makinedeki OpenBot'u güncelleyin.",
+    "İzinleri kontrol etmek ve uzak masaüstünü test etmek için ana makinedeki GoAhead'i güncelleyin.",
   "remoteDesktop.setup.permissions": "İzinler",
   "remoteDesktop.setup.checked": "Denetlendi",
   "remoteDesktop.setup.checkAgain": "Tekrar denetle",

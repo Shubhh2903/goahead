@@ -47,11 +47,11 @@ export const messages = {
   "error.agent.changedWhileDuplicating": "O agente mudou durante a duplicação. Tente novamente.",
   "error.agent.duplicatedAgentGone": "O agente duplicado não existe mais.",
   "error.agent.stateCorrupt":
-    "O estado dos agentes está corrompido ou é de uma versão mais recente do OpenBot; ele não será sobrescrito.",
+    "O estado dos agentes está corrompido ou é de uma versão mais recente do GoAhead; ele não será sobrescrito.",
   "error.agent.oldRoleField":
-    "Os perfis de agente salvos usam o campo de função antigo; atualize os dados antes de iniciar o OpenBot.",
+    "Os perfis de agente salvos usam o campo de função antigo; atualize os dados antes de iniciar o GoAhead.",
   "error.agent.duplicateIds": "O estado dos agentes contém IDs de agente duplicados; ele não será sobrescrito.",
-  "error.agent.copyNameFailed": "O OpenBot não conseguiu criar um nome exclusivo para a cópia do agente.",
+  "error.agent.copyNameFailed": "O GoAhead não conseguiu criar um nome exclusivo para a cópia do agente.",
   "error.agent.endpointRemoved": "O endpoint usado por este agente foi removido. Escolha outro modelo para ele.",
   "error.agent.selectedGone": "O agente selecionado não existe mais.",
   "error.agent.profileEndpointsChanged": "Os endpoints personalizados mudaram durante a geração. Tente novamente.",
@@ -73,9 +73,9 @@ export const messages = {
   "error.agent.saveOtherAgent": "Este registro salvo pertence a outro agente.",
   "error.agent.savedGone": "O agente salvo não existe mais.",
   "error.agent.storedProfileUnreadable":
-    'Um perfil de agente salvo tem um valor "{field}" ilegível; atualize os dados antes de iniciar o OpenBot.',
+    'Um perfil de agente salvo tem um valor "{field}" ilegível; atualize os dados antes de iniciar o GoAhead.',
   "error.agent.storedProfileUnreadableId":
-    'O perfil de agente salvo {id} tem um valor "{field}" ilegível; atualize os dados antes de iniciar o OpenBot.',
+    'O perfil de agente salvo {id} tem um valor "{field}" ilegível; atualize os dados antes de iniciar o GoAhead.',
   "error.agent.queueEditRejected": "Edição da fila rejeitada: {reason}",
   "error.agent.computerUseLocalOnly": "Uso do computador só pode ser alterado no computador que executa o agente.",
   "error.agent.workspaceOnlyMacOnly":
@@ -83,5 +83,5 @@ export const messages = {
   "error.agent.lowMemory":
     "Este servidor está com pouca memória. Sua mensagem aguarda na fila e começa quando houver memória livre. Um plano maior oferece mais memória ao servidor.",
   "error.agent.workspaceOnlyToolMissing":
-    "Somente o espaço de trabalho exige {tool}, que o OpenBot não encontrou. Instale a ferramenta ou escolha Acesso completo nas configurações do agente.",
+    "Somente o espaço de trabalho exige {tool}, que o GoAhead não encontrou. Instale a ferramenta ou escolha Acesso completo nas configurações do agente.",
 } as const satisfies PartialTranslation<typeof source>;

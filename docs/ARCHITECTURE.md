@@ -1,6 +1,6 @@
-# OpenBot architecture
+# GoAhead architecture
 
-OpenBot is a Bun workspace with desktop, browser, and mobile applications, two Cloudflare Workers,
+GoAhead is a Bun workspace with desktop, browser, and mobile applications, two Cloudflare Workers,
 a self-hosted Signal service, and shared packages.
 
 ## Workspace map
@@ -144,7 +144,7 @@ the `media-attachments` capability; released protocol adapters keep their existi
 
 ## State ownership
 
-- `openbot.db` is the source of truth for OpenBot agents, conversations, queues, reactions,
+- `openbot.db` is the source of truth for GoAhead agents, conversations, queues, reactions,
   attachments, and provider-session bindings.
 - `MailboxStore` owns attachment records, staged generated attachments, mailbox commits, and the
   file-deletion outbox. `AttachmentFiles` owns draft and transfer files: copying, size limits,
@@ -152,7 +152,7 @@ the `media-attachments` capability; released protocol adapters keep their existi
   Generated response attachments become visible only after the conversation and mailbox commit
   succeeds. Agent deletion and queue edits record file removals in the mailbox transaction; the
   deletion outbox retries failed removals.
-- `~/.codex`, `~/.claude`, `~/.grok`, and `~/.gemini` are provider-owned login and resume state. They are not OpenBot
+- `~/.codex`, `~/.claude`, `~/.grok`, and `~/.gemini` are provider-owned login and resume state. They are not GoAhead
   conversation storage.
 - D1 is the source of truth for central accounts, remote membership, invitations, and logical sessions.
 - Stripe is the source of truth for paid plans. D1 `billing_subscriptions` is a copy that the Stripe
@@ -260,15 +260,15 @@ The `browser-view` capability says whether a host has both.
 
 ## Computer Use
 
-Computer Use is `cua-driver`, a third-party MIT binary, and OpenBot owns how it runs.
+Computer Use is `cua-driver`, a third-party MIT binary, and GoAhead owns how it runs.
 `cua-driver-runtime.ts` in the main process starts one long-lived `serve` daemon and holds it; each
 provider CLI spawns its own short-lived `cua-driver mcp --socket` proxy against that daemon. All
 screen capture, accessibility reads, and input posting happen inside the daemon, so the proxy's own
 identity does not matter.
 
 The daemon is spawned directly, and never through `open(1)` or `NSWorkspace`. macOS finds the
-responsible process by walking up the launch chain, so a direct spawn puts OpenBot at the top of it
-and the user grants Screen Recording and Accessibility to OpenBot rather than to somebody else's
+responsible process by walking up the launch chain, so a direct spawn puts GoAhead at the top of it
+and the user grants Screen Recording and Accessibility to GoAhead rather than to somebody else's
 helper. `CUA_DRIVER_EMBEDDED=1` tells the driver to stay on that path instead of relaunching itself
 as its own application. Anything that launches the daemon another way breaks the attribution, which
 is the reason the earlier Codex helper was replaced.
@@ -301,7 +301,7 @@ vanish for two providers with no error. Codex staleness needs no separate signal
 session. `onMcpServerChanged` is what refreshes the agent runtimes, which deactivates every
 stored provider session: the next turn starts a new one, which keeps the public thread and loses
 what the provider held privately. So it reports two moments only — the entry appearing on a start a
-user asked for, and the daemon dying under OpenBot. It is quiet for a grant given while the daemon
+user asked for, and the daemon dying under GoAhead. It is quiet for a grant given while the daemon
 serves, which changes the state and not the tool set; for the startup warm-up, which settles the
 entry the stored sessions already had; and for the stop at teardown, which happens at order 55,
 before the agent service at 110, and would otherwise deactivate on every quit the sessions the next
@@ -316,16 +316,16 @@ the other native runtimes rather than managed like a provider CLI. The pinned fi
 allowlist: `scripts/install-cua-driver.ts` copies only the named paths and checks each digest, so an
 upstream layout change fails the build instead of shipping a surprise file. Each installer carries
 only its own target. On macOS `mac.signIgnore` keeps the vendor's Developer ID signature, because
-re-signing under OpenBot's inherited entitlements would drop the Automation entitlement the driver
+re-signing under GoAhead's inherited entitlements would drop the Automation entitlement the driver
 needs. A packaged build reads the copy under `resources/cua-driver` and nothing else, because the release
 is pinned and signed against that build and an environment variable must not decide which program
 drives the user's desktop; a release without the binary reports no driver. In a checkout
 `resolveCuaDriver` also reads an override, an install directory and `PATH`, so a developer can point
 `OPENBOT_CUA_DRIVER_PATH` at another build.
 
-OpenBot draws the agent cursor in its own per-display overlays for every display layout. The
+GoAhead draws the agent cursor in its own per-display overlays for every display layout. The
 runtime starts `serve` with `--no-overlay`. The driver's overlay covers only the main display and
-cannot follow a display connected after startup. Keeping cursor ownership in OpenBot lets the
+cannot follow a display connected after startup. Keeping cursor ownership in GoAhead lets the
 highlight controller add, resize, and remove display overlays without restarting the daemon or
 changing provider sessions.
 
@@ -334,9 +334,9 @@ Because the driver draws no cursor, its motion styles do not apply. The renderer
 min-jerk glide, or a wide swoop for a move over 900 points. The tap does not delay a request, so the
 cursor shows where an action went, from 180 ms to about 1.1 s after the driver acts.
 
-Every copy OpenBot starts gets `CUA_DRIVER_RS_TELEMETRY_ENABLED=0` and
-`CUA_DRIVER_RS_UPDATE_CHECK=0`. OpenBot ships the driver, so its vendor analytics are not something
-a user chose, and OpenBot pins the version, so a release check could only offer an update OpenBot
+Every copy GoAhead starts gets `CUA_DRIVER_RS_TELEMETRY_ENABLED=0` and
+`CUA_DRIVER_RS_UPDATE_CHECK=0`. GoAhead ships the driver, so its vendor analytics are not something
+a user chose, and GoAhead pins the version, so a release check could only offer an update GoAhead
 would refuse.
 
 ## Local script runs
@@ -373,7 +373,7 @@ file it installed, and every start verifies that record and the binary's `--vers
 install is used. The newest version in the store that verifies is the one that runs.
 
 `provider-runtime-blocklist.json` on `main` names versions no installation may offer. It stops a
-broken upstream release without an OpenBot release. It suppresses an offer only: it does not remove
+broken upstream release without a GoAhead release. It suppresses an offer only: it does not remove
 a version a user already installed. A list that cannot be read blocks nothing.
 
 The provider runtime holds new turns while it installs and activates that managed executable. It
@@ -466,7 +466,7 @@ it compares a managed installation. The row and the notification therefore use t
 the one Update button, and one entry point in the runtime store, `startProviderUpdate`. One path
 runs behind it, whoever owns the CLI: the download installs the managed copy and
 `updateProviderCli` activates it, and CLI resolution then prefers that copy to the system install,
-which is left where it is. OpenBot never runs the CLI's own updater, so no version it offers depends
+which is left where it is. GoAhead never runs the CLI's own updater, so no version it offers depends
 on another release channel. An explicit `OPENBOT_*_PATH` suppresses the offer, because that path
 names the binary to run and the managed copy is not it. The owner comes from the last resolution of
 the binary, not from the client that runs it, so a provider that is signed out still reports its own
@@ -541,7 +541,7 @@ An agent that delegates work can follow and stop it. `openbot.list_agents` repor
 `status` (a starting delivery and a context compaction count as `working`), `queuedMessages`
 (channel work excluded), `turnStartedAt`, and `lastActivityAt`. The last two come from the provider
 notifications that `TurnLifecycle` sees; they are in memory only, so after a restart
-`lastActivityAt` falls back to the newest message for the agent. OpenBot does not record which
+`lastActivityAt` falls back to the newest message for the agent. GoAhead does not record which
 files a turn changed. `openbot.interrupt_agent` (`src/backend/agent/agent-interrupt-tool.ts`)
 refuses the caller itself, a channel turn, and a turn that any delivery other than the caller's
 started, so an agent cannot stop work from the user, a routine, or another agent. It cancels the
@@ -673,7 +673,7 @@ Current remote connections use Team API protocol v5 over three ordered WebRTC Da
 `events`, and `files`. A sandboxed hidden Chromium page owns each `RTCPeerConnection`. Electron main
 uses a `MessagePort` and transfers binary data as `ArrayBuffer`. Signal carries SDP and ICE only,
 except the Slack requests of an agent's Slack app (see [Messaging connections](#messaging-connections)).
-OpenBot Mobile uses the same ticket, authentication transcript, framing, RPC codec, and event stream.
+GoAhead Mobile uses the same ticket, authentication transcript, framing, RPC codec, and event stream.
 In Expo Go, an Expo DOM component owns the browser `RTCPeerConnection` inside a hidden WebView and
 passes only serializable, validated commands and events to the native React UI; no native WebRTC
 module or development build is required.
@@ -901,13 +901,13 @@ conversation. `openbot.create_agent` creates a persistent teammate with instruct
 task; `openbot.update_profile` changes an existing agent's name, title, instructions, generated
 or custom avatar, provider, model, reasoning effort, access, Computer Use, or notifications. `avatarPath` accepts a local PNG, JPEG, or WebP file up to 512 KB, with relative
 paths resolved from the calling agent’s workspace. The agent uses its available tools to resize or
-compress a copy when needed. OpenBot validates the prepared file before profile changes and copies
+compress a copy when needed. GoAhead validates the prepared file before profile changes and copies
 it into managed avatar storage. Generated avatar settings remove the custom image. Both run through
 the existing agent service and validate arguments before changing state.
 `openbot.create_agent` also accepts an optional `provider`, `model` and `reasoningEffort`. The
 read-only `openbot.list_models` returns the models of each provider that the model picker shows, with
 their reasoning efforts and the default model for a request that names only a provider. An unknown
-model or an unsupported effort is an error that names the valid values; OpenBot checks them before
+model or an unsupported effort is an error that names the valid values; GoAhead checks them before
 it creates the agent. Without a provider and a model, the new agent starts on the calling agent's
 provider, model and reasoning effort, so a team that one agent creates runs where that agent runs.
 When the caller's provider no longer lists its model, the new agent starts on the user's default.
@@ -944,7 +944,7 @@ Unchanged fingerprints resume the existing session. Pending history handoffs are
 the replacement is bound, reloaded after restart, and removed after a turn accepts the handoff.
 
 The same handoff carries a chat to another provider after a provider switch. It holds the user and
-assistant messages after the last context-reset marker, with attachment names only. OpenBot stores
+assistant messages after the last context-reset marker, with attachment names only. GoAhead stores
 no tool steps, so the work log comes from the providers. At the switch, before the old sessions are
 retired, `ThreadLifecycle.readWorkSteps` reads each active session with `thread/read` through the
 client that holds it, with a 10-second limit. The switch then checks again that no turn started.
@@ -1098,7 +1098,7 @@ is stored by the account service or Signal service.
 
 The desktop chart adapts Zaidan's chart and interactive area composition. The pinned
 `solid-recharts` dependency has a Solid 2 compatibility patch and uses the application's single
-Solid runtime. Chart colors use OpenBot tokens. Daily tables provide exact accessible values.
+Solid runtime. Chart colors use GoAhead tokens. Daily tables provide exact accessible values.
 
 ## Agent import
 
@@ -1293,10 +1293,10 @@ instead of the `host_unavailable` wait for 10 minutes, and web tries again every
 
 `src/backend/acp-client.ts` owns ACP process transport, model discovery, session start/load,
 streamed messages, permissions, tool bridging, and cancellation. `grok-client.ts` supplies xAI
-login and billing hooks. The OpenCode driver starts `opencode acp` on the runtime OpenBot pins and
+login and billing hooks. The OpenCode driver starts `opencode acp` on the runtime GoAhead pins and
 downloads, or on a CLI the user installed. Profile clients deny tool permissions.
 
-OpenCode has no login step OpenBot can drive, because the account is one environment variable: a
+OpenCode has no login step GoAhead can drive, because the account is one environment variable: a
 spawn without `OPENCODE_API_KEY` lists the free OpenCode Go models, and a spawn with one lists the
 paid catalog. So `AcpAgentClient` derives `#signedIn` from the models `session/new` returns, not
 from a credential, and a keyless OpenCode reports `available`. `AcpProviderOptions.extraEnv` is read
@@ -1312,9 +1312,9 @@ the provider's serialized connection command. It refuses a provider that is runn
 deliveries while it writes, and reports success only after a new process runs with the new key.
 
 That one variable turns on two products: OpenCode reports OpenCode Zen and OpenCode Go as a single
-catalog, on the separate endpoints `opencode.ai/zen/v1` and `opencode.ai/zen/go/v1`, and OpenBot
+catalog, on the separate endpoints `opencode.ai/zen/v1` and `opencode.ai/zen/go/v1`, and GoAhead
 supports only Go. So `isOpencodeModelUnusableWithStoredKey` in `src/backend/agent/provider-runtime.ts`
-drops the paid Zen models from `#refreshModelCatalog` while OpenBot is the one supplying the key;
+drops the paid Zen models from `#refreshModelCatalog` while GoAhead is the one supplying the key;
 with no key stored those models can only come from the user's own OpenCode sign-in, which does
 buy them. Neither `/models` endpoint authenticates, so entitlement cannot be read back and the
 split is a product rule rather than a check.
@@ -1322,7 +1322,7 @@ split is a product rule rather than a check.
 `PREFERRED_MODEL_ORDER` in the same pass reorders that catalog, because a provider with no
 `defaultProviderModel` runs the first model of its list and OpenCode reports the third-party
 services the user signed in to before its own — so the fallback used to pick a model behind a token
-OpenBot can neither see nor refresh. `opencodeModelRank` sorts free models first with Muse ahead of
+GoAhead can neither see nor refresh. `opencodeModelRank` sorts free models first with Muse ahead of
 the rest, then OpenCode's own paid models, then everything behind a separate sign-in. The sort is
 stable, so the CLI's order survives inside one tier.
 
@@ -1341,7 +1341,7 @@ The Gemini provider (id `antigravity`) starts Google's Antigravity ACP server
 downloads the zip on the user's computer. `extractZipFiles` in `src/main/provider-runtime-archive.ts`
 accepts only the server and `localharness_external`, which the server starts from its own folder.
 The server has no `--version`, so staging writes `antigravity-package.json` and
-`verifyInstalledRuntime` reads the version from that file (`versionFile`). OpenBot never searches
+`verifyInstalledRuntime` reads the version from that file (`versionFile`). GoAhead never searches
 `PATH`, because the Antigravity editor installs an `antigravity` command that is not this server.
 
 Sign in is an ACP `authenticate` call with `oauth-personal`, in a separate process
@@ -1394,7 +1394,7 @@ npm packages have no license file, so staging downloads `LICENSE` from the `cli-
 checks the pinned hash. `resolveClineCli` refuses a CLI older than 3.0.68.
 
 By default the CLI runs its sessions in a hub process that it detaches and that other Cline
-processes share. That process outlives OpenBot and is outside a Workspace only sandbox, so every
+processes share. That process outlives GoAhead and is outside a Workspace only sandbox, so every
 Cline process, the sign-in included, gets `CLINE_SESSION_BACKEND_MODE=local` and
 `CLINE_NO_AUTO_UPDATE=1` (`CLINE_ENV` in `provider-drivers.ts`). Sign in is an ACP `authenticate`
 call with `cline`, as for Gemini. `CLINE_API_KEY` in the environment also signs the CLI in.
@@ -1587,10 +1587,10 @@ No account API, Signal, IPC contract, or database migration changes are required
 
 The agents of a computer can answer in an external chat platform. Slack is the first platform;
 [messaging.md](messaging.md) has the setup, the limits and how to add a platform. Every workspace
-installs the one OpenBot Slack app (`apps/slack-app`), and the workspace is linked to the host that
+installs the one GoAhead Slack app (`apps/slack-app`), and the workspace is linked to the host that
 connected it. People mention @OpenBot or send it a direct message. The workspace's Slack Orchestrator,
 an agent that the connect dialog adds, receives each new conversation, asks its teammates and posts
-the answer. Every answer comes from OpenBot.
+the answer. Every answer comes from GoAhead.
 
 - **Install.** The desktop asks `POST /v2/slack/authorize` for Slack's install URL, with a one-use host
   key. The Worker exchanges the code at `/v2/slack/callback`, because the app's client secret lives
@@ -1655,7 +1655,7 @@ transport for its events. `messaging-types.ts` is the seam; the core never reads
 - **Approvals and stop.** An approval of a messaging thread is also posted with buttons. Only the
   Slack user whose message started the turn can answer or stop it; the host can always answer. The
   button value is a random token that exists only in memory.
-- **Channels.** When a connection starts, OpenBot joins every public channel it is not in
+- **Channels.** When a connection starts, GoAhead joins every public channel it is not in
   (`conversations.list`, `conversations.join`, scope `channels:join`), so people can mention it with
   no invitation. It joins each new public channel on `channel_created`. A private channel needs
   `/invite`.
@@ -1675,8 +1675,8 @@ A skill follows the [Agent Skills specification](https://agentskills.io/specific
 
 | Folder | Written by | Read by |
 | --- | --- | --- |
-| `<workspace>/.agents/skills/` | OpenBot, the user, the agent | Codex, Grok, OpenCode, Gemini, Cursor, Cline |
-| `<workspace>/.claude/skills/` | OpenBot, the user, the agent | Claude Code, OpenCode, Cursor |
+| `<workspace>/.agents/skills/` | GoAhead, the user, the agent | Codex, Grok, OpenCode, Gemini, Cursor, Cline |
+| `<workspace>/.claude/skills/` | GoAhead, the user, the agent | Claude Code, OpenCode, Cursor |
 | `<workspace>/.opencode/skills/` | the user, the agent | OpenCode |
 | `<workspace>/.gemini/skills/` | the user, the agent | Gemini |
 | `<workspace>/.cursor/skills/` | the user, the agent | Cursor |
@@ -1688,27 +1688,27 @@ A skill follows the [Agent Skills specification](https://agentskills.io/specific
 A confined agent (Grok, OpenCode, Gemini, Cursor or Cline, not in Full access) cannot write the workspace
 skill folders: `src/backend/process-confinement.ts` protects them as project settings.
 
-OpenBot writes each skill that it installs to both `.agents/skills/<slug>` and
+GoAhead writes each skill that it installs to both `.agents/skills/<slug>` and
 `.claude/skills/<slug>`, because Claude Code does not read `.agents/skills`. It copies the files and
 does not make links. `.openbot/skills-lock.json` in the workspace records the file hashes, and
 `.openbot/skills-disabled/` holds disabled skills. A bundled skill has an `.openbot-managed.json`
 marker.
 
 `src/main/skill-folder-discovery.ts` lists all other skills in the seven workspace folders as
-`workspace` skills. The list is read-only: OpenBot never writes, moves or deletes these folders, and
+`workspace` skills. The list is read-only: GoAhead never writes, moves or deletes these folders, and
 they do not count toward the agent's skill limit. A folder without `SKILL.md` is not a skill. A
 skill gets a `problem` when its `SKILL.md` does not follow the specification, or when it is in a
 folder that the agent's provider does not read. An agent keeps its workspace when its provider
 changes, so a skill in `.agents/skills` stops working after a change to Claude Code. A skill with a
 problem is not offered as a chat tag.
 
-OpenBot does not list the home-directory folders. They hold the host user's skills, which are the
+GoAhead does not list the home-directory folders. They hold the host user's skills, which are the
 same for every agent, and each provider CLI changes its home-folder rules without notice.
 
 MCP servers do not use folders. `projection_mcp_servers` in SQLite is the source of truth for the
 whole computer. No shared MCP file format exists: Claude Code reads `.mcp.json` and
 `~/.claude.json`, Codex reads `config.toml`, OpenCode reads `opencode.json`, and Cursor, Cline and
-Gemini CLI read their own folders. OpenBot writes none of these files. It gives the servers to each
+Gemini CLI read their own folders. GoAhead writes none of these files. It gives the servers to each
 provider when the session starts. Claude starts with `strictMcpConfig`, so it ignores `.mcp.json`
 and its user settings (see `plans/003-mcp-works-on-a-clean-machine.md`). The panel masks header and
 environment values, `src/backend/mcp-redaction.ts` removes them from logs, and OAuth tokens are in
@@ -1957,7 +1957,7 @@ unclear OAuth account selection, CAPTCHA, passkeys, and payment confirmation use
 ## Hosted servers
 
 A hosted server is one [boat](https://boat.dev) sandbox for one account. It runs the Linux
-OpenBot build under Xvfb and is a normal Remote host after its first start. The account Worker
+GoAhead build under Xvfb and is a normal Remote host after its first start. The account Worker
 owns the sandbox lifecycle: it creates, resumes and deletes sandboxes, and D1 keeps the desired
 and observed state. A server reports each minute while it is in use, and the Worker stops it after
 15 minutes with no report. boat also stops each sandbox at the end of a 2-hour lease that activity

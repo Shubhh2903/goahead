@@ -78,7 +78,7 @@ export const DarkWindow: Story = {
 };
 
 /**
- * The cursor OpenBot draws itself, which it does on every desktop of more than one display. The
+ * The cursor GoAhead draws itself, which it does on every desktop of more than one display. The
  * story places it over the field, where an agent that types there would have clicked first.
  */
 export const WithAgentCursor: Story = {

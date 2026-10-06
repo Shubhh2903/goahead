@@ -32,10 +32,10 @@ export interface MatchupPageProps {
   matchup: MatchupComparison;
 }
 
-// Two products that OpenBot runs, against each other. The page is neutral: neither
+// Two products that GoAhead runs, against each other. The page is neutral: neither
 // side is recommended and neither column is lit. After the table come the benchmark
 // numbers, when there are any, and then one section says what the page is for: you
-// do not have to choose, because OpenBot runs both.
+// do not have to choose, because GoAhead runs both.
 export function MatchupPage(props: MatchupPageProps) {
   const sideA = (): SideProps => ({ side: "a", ...props.matchup.products[0] });
   const sideB = (): SideProps => ({ side: "b", ...props.matchup.products[1] });

@@ -9,7 +9,7 @@ export const messages = {
   "remoteDesktop.workspaceLabel": "リモート操作",
   "remoteDesktop.displayLabel": "リモートディスプレイ",
   "remoteDesktop.selectDisplay": "ディスプレイを選択",
-  "remoteDesktop.backToOpenBot": "OpenBot に戻る",
+  "remoteDesktop.backToOpenBot": "GoAhead に戻る",
   "remoteDesktop.disconnect": "切断",
   "remoteDesktop.viewerTitle": "Sunshine リモートデスクトップ",
   "remoteDesktop.viewerLoadFailed": "Moonlight ビューアーを読み込めませんでした。",
@@ -20,7 +20,7 @@ export const messages = {
   "remoteDesktop.openFailed": "デスクトップを開けませんでした",
   "remoteDesktop.notSharingTitle": "{name} は画面を共有していません",
   "remoteDesktop.notSharingDescription":
-    "ホストが OpenBot による画面収録をブロックしています。そのコンピューターで「システム設定」→「プライバシーとセキュリティ」→「画面収録」を開き、OpenBot をオンにしてから、ここでもう一度お試しください。",
+    "ホストが GoAhead による画面収録をブロックしています。そのコンピューターで「システム設定」→「プライバシーとセキュリティ」→「画面収録」を開き、GoAhead をオンにしてから、ここでもう一度お試しください。",
   "remoteDesktop.setup.check.screenRecording": "画面収録",
   "remoteDesktop.setup.check.accessibility": "アクセシビリティ",
   "remoteDesktop.setup.check.service": "Sunshine サービス",
@@ -41,7 +41,7 @@ export const messages = {
   "remoteDesktop.setup.startFailed": "リモートデスクトップのテストを開始できませんでした。",
   "remoteDesktop.setup.connectionLost": "テスト接続が切れました。",
   "remoteDesktop.setup.hostUpdateRequired":
-    "権限を確認してリモートデスクトップをテストするには、ホストの OpenBot をアップデートしてください。",
+    "権限を確認してリモートデスクトップをテストするには、ホストの GoAhead をアップデートしてください。",
   "remoteDesktop.setup.permissions": "権限",
   "remoteDesktop.setup.checked": "確認日時",
   "remoteDesktop.setup.checkAgain": "もう一度確認",

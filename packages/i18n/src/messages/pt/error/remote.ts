@@ -21,7 +21,7 @@ export const messages = {
     "O ambiente de execução do Sunshine e do Moonlight Web está ausente ou não é compatível com este computador anfitrião. Instale a versão completa do OpenBot em um Mac, um computador anfitrião Windows x64 ou Linux x64 e reinicie o OpenBot.",
   "error.remote.testActive": "Um teste de área de trabalho remota está ativo. Tente novamente quando terminar.",
   "error.remote.screenRecordingDenied":
-    "O computador anfitrião não permitiu que o OpenBot grave a tela. Conceda a permissão de gravação de tela no computador anfitrião e tente novamente.",
+    "O computador anfitrião não permitiu que o GoAhead grave a tela. Conceda a permissão de gravação de tela no computador anfitrião e tente novamente.",
   "error.remote.teamSessionExpired": "A sessão da equipe expirou.",
   "error.remote.finishTestBeforeSwitch": "Conclua o teste de área de trabalho remota antes de trocar de tela.",
   "error.remote.displayNotFound": "Tela remota não encontrada.",
@@ -34,7 +34,7 @@ export const messages = {
   "error.remote.moonlightStartFailed":
     "O Moonlight Web não iniciou no host. Verifique os logs da área de trabalho remota no host e tente de novo.",
   "error.remote.pairingFailed":
-    "O Moonlight não conseguiu parear com o Sunshine no host. Tente de novo. Se o problema continuar, reinicie o OpenBot no host.",
+    "O Moonlight não conseguiu parear com o Sunshine no host. Tente de novo. Se o problema continuar, reinicie o GoAhead no host.",
   "error.remote.runtimeStartFailed":
     "O ambiente de execução da área de trabalho remota não iniciou no host. Verifique os logs da área de trabalho remota no host e tente de novo.",
   "error.remote.hostUnreachable": "Não é possível acessar o computador anfitrião.",
@@ -43,7 +43,7 @@ export const messages = {
   "error.remote.unsafeData":
     "O computador anfitrião retornou dados que este aplicativo não conseguiu usar com segurança.",
   "error.remote.requestFailedStatus": "A solicitação ao servidor remoto falhou ({status}).",
-  "error.remote.appUpdateRequired": "Atualize este aplicativo OpenBot antes de conectar ao computador anfitrião.",
+  "error.remote.appUpdateRequired": "Atualize este aplicativo GoAhead antes de conectar ao computador anfitrião.",
   "error.remote.identityNotVerified": "Não foi possível verificar a identidade do servidor.",
   "error.remote.webRtcUnavailable": "O transporte WebRTC está indisponível.",
   "error.remote.invalidCompatibility": "O computador anfitrião retornou informações de compatibilidade inválidas.",
@@ -62,9 +62,9 @@ export const messages = {
   "error.remote.inviteIdentityChanged": "A identidade do computador anfitrião mudou durante a aceitação do convite.",
   "error.remote.localServerRemove": "O servidor local não pode ser removido.",
   "error.remote.desktopSetupHostUpdate":
-    "Atualize o OpenBot no computador anfitrião para verificar a configuração da área de trabalho remota.",
+    "Atualize o GoAhead no computador anfitrião para verificar a configuração da área de trabalho remota.",
   "error.remote.desktopTestHostUpdate":
-    "Atualize o OpenBot no computador anfitrião para testar a configuração da área de trabalho remota.",
+    "Atualize o GoAhead no computador anfitrião para testar a configuração da área de trabalho remota.",
   "error.remote.viewerProxyUnavailable": "O proxy local do visualizador remoto está indisponível.",
   "error.remote.viewerTransportInvalid": "O transporte do visualizador remoto é inválido.",
   "error.remote.viewerProxyNoPort": "O proxy local do visualizador remoto não obteve uma porta.",
@@ -139,7 +139,7 @@ export const messages = {
     "A identidade do computador anfitrião do convite não corresponde à sua impressão digital.",
   "error.remote.inviteHostKeyMissing": "A chave do computador anfitrião do convite está ausente.",
   "error.remote.inviteKeyConflict": "O convite entra em conflito com a chave confiável do computador anfitrião.",
-  "error.remote.serviceRequestFailed": "A solicitação ao serviço do OpenBot falhou.",
+  "error.remote.serviceRequestFailed": "A solicitação ao serviço do GoAhead falhou.",
   "error.remote.downloadTimeout": "O tempo para baixar o anexo esgotou. Tente novamente.",
   "error.remote.attachmentConnectionClosed": "A conexão do anexo foi fechada.",
   "error.remote.tooManyDownloads": "Há downloads de anexos demais.",

@@ -3,7 +3,7 @@ import { defineMessages } from "../../../message";
 export const messages = defineMessages("mobile.chat", {
   "mobile.chat.dictation.microphoneOffTitle": "Microphone access is off",
   "mobile.chat.dictation.microphoneOffMessage":
-    "To dictate a message, allow OpenBot to use the microphone and speech recognition in Settings.",
+    "To dictate a message, allow GoAhead to use the microphone and speech recognition in Settings.",
   "mobile.chat.dictation.stopped": "Dictation stopped",
   "mobile.chat.dictation.tryAgain": "Try again.",
   "mobile.chat.dictation.unavailable": "Dictation is not available",
@@ -86,7 +86,7 @@ export const messages = defineMessages("mobile.chat", {
   "mobile.chat.attachment.unavailable": "The attachment is unavailable. Try again.",
   "mobile.chat.attachment.openFailed": "Could not open attachment",
   "mobile.chat.attachment.photosNeedUpdate": "Saving photos needs the latest version of the app.",
-  "mobile.chat.attachment.photosPermission": "Allow OpenBot to add photos in Settings to save this image.",
+  "mobile.chat.attachment.photosPermission": "Allow GoAhead to add photos in Settings to save this image.",
   "mobile.chat.attachment.imageUnavailable": "The image is unavailable. Try again.",
   "mobile.chat.attachment.saveImageFailed": "Could not save image",
   "mobile.chat.attachment.preview": "Preview {name}",
@@ -110,9 +110,9 @@ export const messages = defineMessages("mobile.chat", {
   "mobile.chat.attachment.unsupported":
     "{name}: choose images, MP3 audio, MOV video, PDF, Office documents, EML, text, Markdown, data, or source files.",
   "mobile.chat.attachment.hostRejectsType":
-    "{name}: the host computer does not accept {type} files. Update OpenBot there to attach them.",
+    "{name}: the host computer does not accept {type} files. Update GoAhead there to attach them.",
   "mobile.chat.attachment.hostRejects":
-    "{name}: the host computer does not accept these files. Update OpenBot there to attach them.",
+    "{name}: the host computer does not accept these files. Update GoAhead there to attach them.",
   "mobile.chat.attachment.nameTooLong": "Choose a file with a shorter name.",
   "mobile.chat.attachment.damaged": "The attachment is damaged. Select it again.",
   "mobile.chat.attachment.tooLarge": "{name} is larger than 10 MB.",
@@ -160,7 +160,7 @@ export const messages = defineMessages("mobile.chat", {
   "mobile.chat.browserSecret.authenticatorCode": "Authenticator code",
   "mobile.chat.browserSecret.oneTimeCode": "One-time code",
   "mobile.chat.browserSecret.takeoverTitle": "Browser takeover",
-  "mobile.chat.browserSecret.takeoverBody": "Complete this step in the browser on the computer running OpenBot.",
+  "mobile.chat.browserSecret.takeoverBody": "Complete this step in the browser on the computer running GoAhead.",
   "mobile.chat.browserSecret.takeoverReload": "Then reload the page before choosing I’m done.",
   "mobile.chat.browserSecret.takeoverFailed": "The request could not be completed.",
   "mobile.chat.browserSecret.done": "I'm done",
@@ -264,7 +264,7 @@ export const messages = defineMessages("mobile.chat", {
   "mobile.chat.queue.steerNeedsTurn": "Steer needs a running turn.",
   "mobile.chat.queue.stillHoldingTitle": "Still holding the message",
   "mobile.chat.queue.stillHoldingMessage":
-    "OpenBot could not release this message, so the agent keeps waiting for it. Try again after the phone reconnects.",
+    "GoAhead could not release this message, so the agent keeps waiting for it. Try again after the phone reconnects.",
   "mobile.chat.queue.keepEditing": "Keep editing",
   "mobile.chat.queue.leaveAnyway": "Leave anyway",
   "mobile.chat.queue.discardTitle": "Discard changes?",
@@ -272,7 +272,7 @@ export const messages = defineMessages("mobile.chat", {
   "mobile.chat.queue.discard": "Discard",
   "mobile.chat.queue.alreadyReceived": "The agent already received this message, so it cannot be changed.",
   "mobile.chat.queue.holding": "Holding the message for you…",
-  "mobile.chat.queue.holdFailed": "OpenBot could not hold this message for editing.",
+  "mobile.chat.queue.holdFailed": "GoAhead could not hold this message for editing.",
   "mobile.chat.queue.messageLabel": "Message",
   "mobile.chat.queue.messagePlaceholder": "Message text",
   "mobile.chat.queue.save": "Save queued message",

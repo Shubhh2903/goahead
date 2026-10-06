@@ -705,8 +705,8 @@ describe("OpenBot connected desktop shell", () => {
 
     await fireEvent.keyDown(window, { key: "k", metaKey: true });
 
-    const dialog = await screen.findByRole("dialog", { name: "Search OpenBot" });
-    const input = screen.getByRole("combobox", { name: "Search OpenBot" });
+    const dialog = await screen.findByRole("dialog", { name: "Search GoAhead" });
+    const input = screen.getByRole("combobox", { name: "Search GoAhead" });
     expect(dialog).toBeVisible();
 
     await fireEvent.click(screen.getByRole("tab", { name: "Messages" }));
@@ -731,7 +731,7 @@ describe("OpenBot connected desktop shell", () => {
 
     await fireEvent.keyDown(window, { key: "k", metaKey: true });
     await fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
-    const agentSearch = screen.getByRole("combobox", { name: "Search OpenBot" });
+    const agentSearch = screen.getByRole("combobox", { name: "Search GoAhead" });
     await fireEvent.input(agentSearch, { target: { value: "chief" } });
     await fireEvent.click(await screen.findByRole("option", { name: /Chief/ }));
     await screen.findByRole("heading", { name: "Chief" });
@@ -742,16 +742,16 @@ describe("OpenBot connected desktop shell", () => {
     await screen.findByRole("heading", { name: "Chief" });
 
     await fireEvent.keyDown(window, { key: "k", metaKey: true });
-    await screen.findByRole("dialog", { name: "Search OpenBot" });
-    await fireEvent.keyDown(screen.getByRole("combobox", { name: "Search OpenBot" }), { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search OpenBot" })).not.toBeInTheDocument());
+    await screen.findByRole("dialog", { name: "Search GoAhead" });
+    await fireEvent.keyDown(screen.getByRole("combobox", { name: "Search GoAhead" }), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search GoAhead" })).not.toBeInTheDocument());
 
     await fireEvent.keyDown(window, { key: "k", metaKey: true });
-    await screen.findByRole("dialog", { name: "Search OpenBot" });
+    await screen.findByRole("dialog", { name: "Search GoAhead" });
     // Kobalte attaches its outside-press listener on a later task, so press until it reacts.
     await waitFor(() => {
       fireEvent.pointerDown(document.body);
-      expect(screen.queryByRole("dialog", { name: "Search OpenBot" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: "Search GoAhead" })).not.toBeInTheDocument();
     });
   });
 

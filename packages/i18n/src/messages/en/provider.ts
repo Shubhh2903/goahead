@@ -62,7 +62,7 @@ export const messages = defineMessages("provider", {
 
   // The switch that turns a provider on or off in OpenBot. While an agent uses the provider, the
   // switch stays on and the row names the agents.
-  "provider.aria.use": "Use {name} in OpenBot",
+  "provider.aria.use": "Use {name} in GoAhead",
   "provider.use.inUse": {
     one: "{agents} uses {name}. Change the model of this agent, then turn {name} off.",
     other: "{agents} use {name}. Change the model of these agents, then turn {name} off.",
@@ -70,7 +70,7 @@ export const messages = defineMessages("provider", {
 
   // The dialog that signs in to a provider with a code on another device.
   "provider.codeLogin.title": "Log in to {name} with a code",
-  "provider.codeLogin.description": "Finish on your phone or another browser. OpenBot waits here.",
+  "provider.codeLogin.description": "Finish on your phone or another browser. GoAhead waits here.",
   "provider.codeLogin.starting": "Getting a code from {name}…",
   "provider.codeLogin.qrLabel": "QR code for the {name} login page",
   "provider.codeLogin.open": "Open",
@@ -87,7 +87,7 @@ export const messages = defineMessages("provider", {
   "provider.codeLogin.pasteExpired": "This login has stopped.",
   "provider.codeLogin.pasteExpiresIn": "Waiting for you. This login stops in {time}.",
   "provider.codeLogin.linkTitle": "Log in to {name} on another device",
-  "provider.codeLogin.linkStep": "Log in to {name}. OpenBot continues by itself.",
+  "provider.codeLogin.linkStep": "Log in to {name}. GoAhead continues by itself.",
 
   // The agent model picker.
   "provider.picker.noEndpoints": "No endpoints yet",

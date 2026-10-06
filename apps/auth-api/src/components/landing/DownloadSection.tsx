@@ -46,7 +46,7 @@ export function DownloadSection() {
     <section ref={sectionRef} id="download" class="landing-download" aria-labelledby="download-title">
       <div class="landing-download-inner">
         <header class="landing-download-heading" data-revealed={revealState()}>
-          <h2 id="download-title">Download OpenBot</h2>
+          <h2 id="download-title">Download GoAhead</h2>
           <p>Choose your platform. Run Codex, Claude, Gemini, Grok, OpenCode or your own model from one desktop app.</p>
         </header>
 

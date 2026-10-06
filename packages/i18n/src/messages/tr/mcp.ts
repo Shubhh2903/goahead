@@ -8,10 +8,10 @@ export const messages = {
   "mcp.connect.close": "{name} bağlantı penceresini kapat",
   "mcp.connect.getKey": "Bir anahtar al",
   "mcp.connect.keyDescription":
-    "{name} hesabınızdan bir kimlik bilgisi yapıştırın. OpenBot bununla bağlanır ve onu {host} üzerinde saklar.",
+    "{name} hesabınızdan bir kimlik bilgisi yapıştırın. GoAhead bununla bağlanır ve onu {host} üzerinde saklar.",
   "mcp.connect.thisComputer": "bu bilgisayar",
   "mcp.connect.noCredentialDescription":
-    "{name} kimlik bilgisi istemez. OpenBot sunduğu araçları görmek için bir kez bağlanır.",
+    "{name} kimlik bilgisi istemez. GoAhead sunduğu araçları görmek için bir kez bağlanır.",
   "mcp.connect.connect": "Bağlan",
   "mcp.connect.required": "Gereklidir.",
   "mcp.connect.keptOn": "{host} üzerinde tutulur.",
@@ -22,7 +22,7 @@ export const messages = {
   "mcp.local.address": "Adres",
   "mcp.local.docs": "Kurulum kılavuzu",
   "mcp.signIn.description":
-    "{name} hesabınıza giriş yapın. OpenBot, bu hesabın erişebildiği araçları alır ve şifre almaz.",
+    "{name} hesabınıza giriş yapın. GoAhead, bu hesabın erişebildiği araçları alır ve şifre almaz.",
   "mcp.signIn.waiting": "Tarayıcı bekleniyor…",
   "mcp.signIn.continue": "{name} ile devam et",
   "mcp.server.loadFailed": "MCP sunucuları yüklenemedi.",
@@ -50,7 +50,7 @@ export const messages = {
   "mcp.panel.empty": "Henüz MCP sunucusu yok.",
   "mcp.panel.enable": "{name} sunucusunu etkinleştir",
   "mcp.panel.detailsTitle": "Ayrıntılar",
-  "mcp.panel.detailsDescription": "Bu sunucuyu adlandırın ve OpenBot'un ona nasıl ulaşacağını seçin.",
+  "mcp.panel.detailsDescription": "Bu sunucuyu adlandırın ve GoAhead'in ona nasıl ulaşacağını seçin.",
   "mcp.panel.transport": "Aktarım",
   "mcp.panel.name": "Ad",
   "mcp.panel.namePlaceholder": "MCP sunucu adı",

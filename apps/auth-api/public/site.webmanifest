@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "OpenBot",
-  "short_name": "OpenBot",
+  "name": "GoAhead",
+  "short_name": "GoAhead",
   "description": "Run Codex and Claude side by side as persistent AI teammates, each with its own workspace, queue, and context.",
   "start_url": "/",
   "scope": "/",

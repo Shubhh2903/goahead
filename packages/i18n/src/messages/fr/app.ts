@@ -3,7 +3,7 @@ import type { messages as source } from "../en/app";
 
 export const messages = {
   // The app shell, shared state, and shared controls without a feature of their own.
-  "app.loading": "Chargement d’OpenBot",
+  "app.loading": "Chargement de GoAhead",
   "app.leftPanel.resize": "Redimensionner la barre latérale gauche",
   "app.host.thisMac": "Ce Mac",
   "app.host.thisComputer": "Cet ordinateur",
@@ -28,15 +28,15 @@ export const messages = {
   "app.provider.codeExpired": "Le code {name} a expiré",
   "app.provider.codeExpiredDescription": "Personne ne l’a saisi à temps. Ce code ne fonctionne plus.",
   "app.provider.connectFailed": "Impossible de connecter {name}",
-  "app.provider.connectFailedRetry": "OpenBot n’a pas pu connecter {name}. Réessayez.",
-  "app.provider.included": "{name} est inclus avec OpenBot.",
+  "app.provider.connectFailedRetry": "GoAhead n’a pas pu connecter {name}. Réessayez.",
+  "app.provider.included": "{name} est inclus avec GoAhead.",
   "app.clipboard.copyFailed": "Impossible de copier le texte.",
   "app.voice.tooLong": "Les enregistrements vocaux sont limités à deux minutes.",
   "app.avatar.type": "Choisissez une image PNG, JPEG ou WebP.",
   "app.avatar.size": "Choisissez une image de moins de 10 Mo.",
   "app.avatar.processingUnavailable": "Le traitement d’image n’est pas disponible.",
-  "app.avatar.tooLarge": "OpenBot n’a pas pu réduire suffisamment cette image. Choisissez une image plus simple.",
-  "app.avatar.processFailed": "OpenBot n’a pas pu traiter cette image.",
+  "app.avatar.tooLarge": "GoAhead n’a pas pu réduire suffisamment cette image. Choisissez une image plus simple.",
+  "app.avatar.processFailed": "GoAhead n’a pas pu traiter cette image.",
   "app.chart.total": "Total",
   "app.modelVariant.default": "Par défaut",
   "app.qrCode.label": "Code QR",

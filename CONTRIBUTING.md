@@ -1,6 +1,6 @@
-# Contributing to OpenBot
+# Contributing to GoAhead
 
-Thanks for helping improve OpenBot. Pull requests with clear verification are the easiest to
+Thanks for helping improve GoAhead. Pull requests with clear verification are the easiest to
 review.
 
 ## Before opening an issue
@@ -8,7 +8,7 @@ review.
 - Search existing issues first.
 - Use the security process in `SECURITY.md` for vulnerabilities.
 - Remove credentials, private file paths, conversation contents, and personal data from diagnostics.
-- Include the OpenBot version, macOS version, Mac architecture, provider, CLI version, and
+- Include the GoAhead version, macOS version, Mac architecture, provider, CLI version, and
   reproduction steps for bugs.
 
 ## Development setup
@@ -57,7 +57,7 @@ Public guides live in `apps/auth-api/src/content/guides/`. To add one:
 3. Run `bun run api:images` and commit the generated files in `apps/auth-api/content-art`.
 4. Open the guide in a local preview and check the guide index, article page, feed and social card.
 
-Write for someone who has OpenBot open and is trying to complete a task. Use short paragraphs, plain English and the
+Write for someone who has GoAhead open and is trying to complete a task. Use short paragraphs, plain English and the
 exact names of buttons, settings and files. Keep product claims tied to the current app. Use `ArticleImage`,
 `ArticleGif`, `ArticleClip` or `ArticleVideo` only when the media adds information that the text does not.
 

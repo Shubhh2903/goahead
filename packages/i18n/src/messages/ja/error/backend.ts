@@ -7,8 +7,8 @@ export const messages = {
   "error.backend.browserViewLimit": "このホストで開いているブラウザービューが多すぎます。",
   "error.backend.browserViewEnded": "このページのライブビューは終了しました。",
   "error.backend.browserViewFailed": "このページのライブビューは失敗しました。",
-  "error.backend.windowTemporarilyUnavailable": "OpenBot ウィンドウは一時的に使用できません。",
-  "error.backend.windowUnavailable": "OpenBot ウィンドウを使用できません。",
+  "error.backend.windowTemporarilyUnavailable": "GoAhead ウィンドウは一時的に使用できません。",
+  "error.backend.windowUnavailable": "GoAhead ウィンドウを使用できません。",
   "error.backend.sunshineApiHttp": "Sunshine API が HTTP {status} で失敗しました。",
   "error.backend.sunshinePortsUnavailable":
     "リモートデスクトップ用に空いている Sunshine のポート群を確保できませんでした。",
@@ -24,7 +24,7 @@ export const messages = {
   "error.backend.moonlightRejectedPairing": "Moonlight が Sunshine とのペアリングを拒否しました。",
   "error.backend.moonlightNoPin": "Moonlight がペアリング PIN を返しませんでした。",
   "error.backend.moonlightPairingIncomplete": "Moonlight のペアリングが完了しませんでした。",
-  "error.backend.moonlightWebNotEmbedded": "Moonlight Web は OpenBot 組み込みビルドではありません。",
+  "error.backend.moonlightWebNotEmbedded": "Moonlight Web は GoAhead 組み込みビルドではありません。",
   "error.backend.moonlightEmptyResponse": "Moonlight が空の応答を返しました。",
   "error.backend.remoteDesktopTimeout": "リモートデスクトップの要求がタイムアウトしました。",
   "error.backend.moonlightApiHttp": "Moonlight API が HTTP {status} で失敗しました。",
@@ -42,7 +42,7 @@ export const messages = {
   "error.backend.sunshineNotReadyReason": "Sunshine の準備ができませんでした。{reason}",
   "error.backend.channelLeadModelUnavailable": "チャンネルリードのモデルを使用できません。",
   "error.backend.sharedDataUnavailable": "共有データを使用できません。",
-  "error.backend.shuttingDown": "OpenBot を終了しています。",
+  "error.backend.shuttingDown": "GoAhead を終了しています。",
   "error.backend.channelUnconfirmedStart":
     "チャンネルに開始が未確認の割り当てがあります。削除する前に結果を確認してください。",
   "error.backend.channelNotFound": "チャンネルが見つかりません。",
@@ -96,13 +96,13 @@ export const messages = {
   "error.backend.fileGone": "ファイルが存在しないか、すでに削除されています。",
   "error.backend.managedAttachmentChanged": "管理対象の添付ファイルが見つからないか、変更されています: {name}",
   "error.backend.mailboxStateCorrupt":
-    "メールボックスの状態が破損しているか、新しいバージョンの OpenBot のものです。上書きしません。",
+    "メールボックスの状態が破損しているか、新しいバージョンの GoAhead のものです。上書きしません。",
   "error.backend.recipientDeleting": "受信者を削除中です。削除が終わってから再試行してください。",
   "error.backend.attachBetween": "1 〜 {limit} 個のファイルを添付してください。",
   "error.backend.attachmentNotFile": "添付ファイルがファイルではありません: {path}",
   "error.backend.generatedImageTooLarge": "生成された画像が 100 MB の上限を超えています。",
   "error.backend.attachmentNotRegularFile": "添付できるのは通常のファイルだけです: {name}",
-  "error.backend.attachmentCopyFailed": "OpenBot は {name} をコピーできませんでした。",
+  "error.backend.attachmentCopyFailed": "GoAhead は {name} をコピーできませんでした。",
   "error.backend.routineNameRequired": "ルーティン名が必要です。",
   "error.backend.routineNameTooLong": "ルーティン名が長すぎます。",
   "error.backend.routineInstructionRequired": "ルーティンの指示が必要です。",
@@ -124,14 +124,14 @@ export const messages = {
   "error.backend.routineRunStarting":
     "このルーティンの実行はまだ開始中です。ターンが始まってからもう一度お試しください。",
   "error.backend.routineRunNoSession":
-    "プロバイダーのセッションを使用できないため、OpenBot は実行中のルーティンを中断できません。",
+    "プロバイダーのセッションを使用できないため、GoAhead は実行中のルーティンを中断できません。",
   "error.backend.interruptSelf": "エージェントは自分自身を中断できません。",
   "error.backend.interruptOtherWork":
     "このエージェントは、あなたのメッセージで開始されていないタスクを実行中です。そのタスクを停止できるのは、ユーザーまたはそのタスクの送信者だけです。",
   "error.backend.interruptStarting":
     "このエージェントはまだターンを開始中です。ターンが始まってからもう一度お試しください。",
   "error.backend.interruptNoSession":
-    "プロバイダーのセッションを使用できないため、OpenBot はこのエージェントを中断できません。",
+    "プロバイダーのセッションを使用できないため、GoAhead はこのエージェントを中断できません。",
   "error.backend.memoryTextRequired": "メモリーのテキストが必要です。",
   "error.backend.memoryTextTooLong": "メモリーのテキストが長すぎます。",
   "error.backend.mcpServerGone": "この MCP サーバーはもう存在しません。",

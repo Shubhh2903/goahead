@@ -55,7 +55,7 @@ import { messages as window } from "./window";
  * vouvoiement (vous) throughout and never the familiar tu. Typography follows French convention:
  * a narrow no-break space is not used here, but the ellipsis is the single character … and the
  * apostrophe is the typographic ’ used by the other catalogs. Product names stay in Latin script:
- * OpenBot is the application name, and ZIP and JSON are the file formats a picker shows.
+ * GoAhead is the application name, and ZIP and JSON are the file formats a picker shows.
  *
  * This is the desktop catalog: shared keys, source text, and every desktop area.
  */

@@ -21,7 +21,7 @@ export const messages = {
   "plugin.uninstallDialog.appsLabel": "Apps à supprimer : {number}",
   "plugin.uninstallDialog.appsTitle": "Apps supprimées de cet hôte",
   "plugin.uninstallDialog.appsNote":
-    "Leurs outils ne sont plus disponibles, et OpenBot oublie les connexions qu’il gardait pour elles.",
+    "Leurs outils ne sont plus disponibles, et GoAhead oublie les connexions qu’il gardait pour elles.",
   "plugin.uninstallDialog.skillsLabel": "Compétences à supprimer : {number}",
   "plugin.uninstallDialog.skillsTitle": "Compétences supprimées de {agentName}",
 } as const satisfies PartialTranslation<typeof source>;

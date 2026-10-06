@@ -66,7 +66,7 @@ interface AccountDockProps {
   shelf?: boolean;
 }
 
-const PRODUCT_NAME = "OpenBot";
+const PRODUCT_NAME = "GoAhead";
 
 const USAGE_REFRESH_TIMEOUT_MS = 12_000;
 /** How old a reading may get while it is on screen before it is fetched again. */

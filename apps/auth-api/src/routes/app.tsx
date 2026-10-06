@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/solid-router";
 
 export const Route = createFileRoute("/app")({
-  head: () => ({ meta: [{ title: "OpenBot web" }, { name: "robots", content: "noindex, nofollow" }] }),
+  head: () => ({ meta: [{ title: "GoAhead web" }, { name: "robots", content: "noindex, nofollow" }] }),
   headers: () => ({
     "Cache-Control": "no-store",
     "X-Robots-Tag": "noindex, nofollow",

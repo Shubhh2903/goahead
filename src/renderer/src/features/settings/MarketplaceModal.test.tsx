@@ -162,7 +162,7 @@ describe("MarketplaceModal", () => {
 
       // A list that could not be read looks exactly like an empty one. Naming a missing skill here
       // sends the user to install what the agent may already have.
-      expect(await screen.findByText("OpenBot could not read this agent's skills. Try again.")).toBeInTheDocument();
+      expect(await screen.findByText("GoAhead could not read this agent's skills. Try again.")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Try skill" })).toBeDisabled();
       expect(screen.getByRole("alert")).toHaveTextContent("Skill list unavailable.");
     });
@@ -186,7 +186,7 @@ describe("MarketplaceModal", () => {
       await waitFor(() => expect(install).toHaveBeenCalledWith(expect.objectContaining({ agentId: "writer" })));
       fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       // The skill is installed, but the list on screen is older than the install.
-      expect(await screen.findByText("OpenBot could not read this agent's skills. Try again.")).toBeInTheDocument();
+      expect(await screen.findByText("GoAhead could not read this agent's skills. Try again.")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Try skill" })).toBeDisabled();
     });
 
@@ -728,7 +728,7 @@ describe("MarketplaceModal", () => {
     it("says a link names no listing this catalog holds, and shows the apps", async () => {
       renderMarketplace({ ...writer, plugins: [plugin], initialPluginSlug: "not-a-plugin" });
 
-      expect(await screen.findByText("This plugin is not in the OpenBot catalog.")).toBeInTheDocument();
+      expect(await screen.findByText("This plugin is not in the GoAhead catalog.")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Open Aave" })).toBeInTheDocument();
     });
 
@@ -770,7 +770,7 @@ describe("MarketplaceModal", () => {
       expect(await screen.findByText(plugin.description)).toBeInTheDocument();
 
       setSlug("not-a-plugin");
-      expect(await screen.findByText("This plugin is not in the OpenBot catalog.")).toBeInTheDocument();
+      expect(await screen.findByText("This plugin is not in the GoAhead catalog.")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Open Aave" })).toBeInTheDocument();
       expect(screen.queryByText(plugin.description)).toBeNull();
       expect(screen.queryByRole("button", { name: "Marketplace" })).toBeNull();

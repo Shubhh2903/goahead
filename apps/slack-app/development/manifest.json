@@ -1,7 +1,7 @@
 {
   "display_information": {
-    "name": "OpenBot (dev)",
-    "description": "Your OpenBot agents in Slack. Mention @OpenBot or send it a direct message."
+    "name": "GoAhead (dev)",
+    "description": "Your GoAhead agents in Slack. Mention @GoAhead or send it a direct message."
   },
   "features": {
     "app_home": {
@@ -10,7 +10,7 @@
       "messages_tab_read_only_enabled": false
     },
     "bot_user": {
-      "display_name": "OpenBot",
+      "display_name": "GoAhead",
       "always_online": true
     }
   },

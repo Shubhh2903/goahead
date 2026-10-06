@@ -767,12 +767,12 @@ export function SlackAddAgentPanel(props: { step: SlackStep; caption: string }) 
       case 2:
         return {
           title: "Create the Slack app",
-          description: "OpenBot fills in the app settings. You only confirm in Slack.",
+          description: "GoAhead fills in the app settings. You only confirm in Slack.",
         };
       case 3:
         return {
           title: "Install it in your workspace",
-          description: "Slack asks you to allow the app. OpenBot waits here.",
+          description: "Slack asks you to allow the app. GoAhead waits here.",
         };
       case 4:
         return { title: "Where does it listen?", description: "You can change channels later." };
@@ -914,7 +914,7 @@ export function DiscordAddAgentPanel(props: { step: 0 | 1 | 2 | 3; caption: stri
       case 1:
         return {
           title: "Paste the bot token",
-          description: "Bot → Reset Token in the Developer Portal. OpenBot keeps it on this computer.",
+          description: "Bot → Reset Token in the Developer Portal. GoAhead keeps it on this computer.",
         };
       case 2:
         return { title: "Invite Chief to your server", description: "Discord asks which server and what it can do." };
@@ -1031,7 +1031,7 @@ export function AgentConnectedApps(props: { agent: ConceptAgent }) {
       </div>
       <SettingsSection
         title="Connected apps"
-        description="What this agent can reach outside OpenBot."
+        description="What this agent can reach outside GoAhead."
         actions={
           <Button type="button" size="sm" variant="ghost">
             Open Integrations

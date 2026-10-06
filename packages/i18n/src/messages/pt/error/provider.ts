@@ -3,7 +3,7 @@ import type { messages as source } from "../../en/error/provider";
 
 export const messages = {
   "error.provider.endpointsReadOnly":
-    "Os endpoints salvos foram gravados por uma versão mais recente do OpenBot, ou o arquivo não pode ser lido. Atualize o OpenBot para alterá-los.",
+    "Os endpoints salvos foram gravados por uma versão mais recente do GoAhead, ou o arquivo não pode ser lido. Atualize o GoAhead para alterá-los.",
   "error.provider.endpointNoSecureStorage":
     "Este computador não tem armazenamento seguro, por isso não é possível salvar uma chave de API ou um cabeçalho. Remova esses dados ou use um endpoint que não exija credenciais.",
   "error.provider.endpointDuplicate":
@@ -14,14 +14,14 @@ export const messages = {
   "error.provider.endpointSecretUnreadable":
     "Este computador não consegue ler a chave de API e os cabeçalhos salvos. Digite a chave de API e os cabeçalhos novamente para que nenhum deles seja perdido.",
   "error.provider.discoveryTimeout": "{host} não respondeu a tempo.",
-  "error.provider.discoveryUnreachable": "O OpenBot não conseguiu se conectar a {host}.",
+  "error.provider.discoveryUnreachable": "O GoAhead não conseguiu se conectar a {host}.",
   "error.provider.discoveryRedirect": "{host} enviou um redirecionamento. Digite o endereço final do servidor.",
   "error.provider.discoveryRefused": "{host} recusou a solicitação. Verifique a chave de API e os cabeçalhos.",
   "error.provider.discoveryHttp": "{host} respondeu com HTTP {status}.",
   "error.provider.discoveryTooLarge": "A lista de modelos de {host} é muito grande.",
   "error.provider.discoveryInvalid": "{host} não enviou uma lista de modelos compatível com OpenAI.",
   "error.provider.detectionSettingsReadOnly":
-    "As configurações de detecção foram gravadas por uma versão mais recente do OpenBot, ou o arquivo não pode ser lido. Atualize o OpenBot para alterá-las.",
+    "As configurações de detecção foram gravadas por uma versão mais recente do GoAhead, ou o arquivo não pode ser lido. Atualize o GoAhead para alterá-las.",
   "error.provider.detectionEntryInvalid":
     "Um endereço deve ser uma URL http:// ou https:// sem senha, e uma pasta deve ser um caminho absoluto.",
   "error.provider.detectionEntriesTooMany": "Há endereços ou pastas demais.",
@@ -51,11 +51,11 @@ export const messages = {
   "error.provider.bunLicenseChecksum": "A soma de verificação da licença do Bun não corresponde.",
   "error.provider.bunxDamaged": "O executor do gerenciador de pacotes do Bun está ausente ou danificado.",
   "error.provider.releaseSourcesUnreachable":
-    "O OpenBot não conseguiu acessar as fontes de versões dos provedores. Verifique a conexão e tente novamente.",
+    "O GoAhead não conseguiu acessar as fontes de versões dos provedores. Verifique a conexão e tente novamente.",
   "error.provider.runtimesUnsupported":
     "Os ambientes de execução dos provedores não estão disponíveis nesta plataforma.",
-  "error.provider.closing": "O OpenBot está fechando.",
-  "error.provider.cliOverride": "Remova a substituição explícita do caminho da CLI antes de atualizar pelo OpenBot.",
+  "error.provider.closing": "O GoAhead está fechando.",
+  "error.provider.cliOverride": "Remova a substituição explícita do caminho da CLI antes de atualizar pelo GoAhead.",
   "error.provider.runtimeUpdateIncomplete": "A atualização do ambiente de execução não foi concluída.",
   "error.provider.downloadHttp": "O download do ambiente de execução falhou com HTTP {status}.",
   "error.provider.downloadNoData": "O download do ambiente de execução não retornou dados.",
@@ -104,11 +104,11 @@ export const messages = {
   "error.provider.acpNoModels":
     "A CLI ACP não anunciou nenhum modelo ACP. O OpenBot não vai escolher um modelo alternativo por suposição.",
   "error.provider.endpointRemoveBusy": "Aguarde o turno ativo e a fila terminarem antes de remover este endpoint.",
-  "error.provider.codexOutdated": "A CLI do Codex {version} é muito antiga. O OpenBot exige 0.144.1 ou posterior.",
+  "error.provider.codexOutdated": "A CLI do Codex {version} é muito antiga. O GoAhead exige 0.144.1 ou posterior.",
   "error.provider.codexNotStarted": "A CLI do Codex foi encontrada, mas não foi possível iniciá-la.",
   "error.provider.codexNotStartedHint":
     "A CLI do Codex foi encontrada, mas não foi possível iniciá-la. Execute `codex --version` em um novo terminal.",
-  "error.provider.codexMissing": "O ChatGPT não foi baixado. Baixe-o no OpenBot para continuar.",
+  "error.provider.codexMissing": "O ChatGPT não foi baixado. Baixe-o no GoAhead para continuar.",
   "error.provider.codexConfigIgnored": {
     one: "O Codex ignorou {count} configuração em seu arquivo: {settings}. Corrija ou remova essa configuração, ou atualize o Codex.",
     other:
@@ -119,16 +119,16 @@ export const messages = {
     other:
       "O Codex ignorou {count} configurações em seu arquivo. Corrija ou remova essas configurações, ou atualize o Codex.",
   },
-  "error.provider.claudeOutdated": "O Claude Code {version} é muito antigo. O OpenBot exige 2.1.232 ou posterior.",
+  "error.provider.claudeOutdated": "O Claude Code {version} é muito antigo. O GoAhead exige 2.1.232 ou posterior.",
   "error.provider.claudeNotStarted": "A CLI do Claude foi encontrada, mas não foi possível iniciá-la.",
   "error.provider.claudeNotStartedHint":
     "A CLI do Claude foi encontrada, mas não foi possível iniciá-la. Execute `claude --version` em um novo terminal.",
-  "error.provider.claudeMissing": "O Claude não foi baixado. Baixe-o no OpenBot para continuar.",
-  "error.provider.grokOutdated": "A CLI do Grok {version} é muito antiga. O OpenBot exige 1.0.5 ou posterior.",
+  "error.provider.claudeMissing": "O Claude não foi baixado. Baixe-o no GoAhead para continuar.",
+  "error.provider.grokOutdated": "A CLI do Grok {version} é muito antiga. O GoAhead exige 1.0.5 ou posterior.",
   "error.provider.grokNotStarted": "A CLI do Grok foi encontrada, mas não foi possível iniciá-la.",
   "error.provider.grokNotStartedHint":
     "A CLI do Grok foi encontrada, mas não foi possível iniciá-la. Execute `grok --version` em um novo terminal.",
-  "error.provider.grokMissing": "O Grok não foi baixado. Baixe-o no OpenBot para continuar.",
+  "error.provider.grokMissing": "O Grok não foi baixado. Baixe-o no GoAhead para continuar.",
   "error.provider.opencodeNotStarted": "O OpenCode não conseguiu iniciar. Execute `opencode --version` em um terminal.",
   "error.provider.opencodeMissing": "O OpenCode não foi baixado. Baixe-o no OpenBot para continuar.",
   "error.provider.codexVersionUnreadable": "Não foi possível ler a versão da CLI do Codex.",
@@ -149,9 +149,9 @@ export const messages = {
   "error.provider.cliBusyRetry": "A CLI de {provider} está executando um turno. Aguarde o término e tente novamente.",
   "error.provider.cliSigningIn": "A CLI de {provider} está entrando na conta. Conclua ou cancele a entrada e atualize.",
   "error.provider.cliBusyUpdate": "A CLI de {provider} está executando um turno. Aguarde o término e atualize.",
-  "error.provider.cliSelectFailed": "O OpenBot não conseguiu selecionar a CLI instalada e gerenciada.",
+  "error.provider.cliSelectFailed": "O GoAhead não conseguiu selecionar a CLI instalada e gerenciada.",
   "error.provider.noAuthenticatedAccount": "{provider} não retornou uma conta autenticada.",
-  "error.provider.cliActivateFailed": "O OpenBot não conseguiu ativar a CLI gerenciada.",
+  "error.provider.cliActivateFailed": "O GoAhead não conseguiu ativar a CLI gerenciada.",
   "error.provider.cliBusyReconnect": "A CLI de {provider} está executando um turno. Aguarde o término e reconecte.",
   "error.provider.opencodeCredentialsRejected":
     "O provedor do modelo recusou a chave de API. Corrija a chave do OpenCode em Configurações, ou a chave do provedor com `opencode auth login`. Depois, tente novamente ou escolha outro modelo.\n{detail}",
@@ -164,7 +164,7 @@ export const messages = {
   "error.provider.opencodeProviderFailed":
     "Ocorreu uma falha no provedor do modelo. Sua conexão não é a causa. Tente novamente mais tarde ou escolha outro modelo.\n{detail}",
   "error.provider.opencodeNetwork":
-    "O OpenCode não conseguiu se conectar ao provedor do modelo. Verifique a conexão de rede do computador que executa o OpenBot e tente novamente.\n{detail}",
+    "O OpenCode não conseguiu se conectar ao provedor do modelo. Verifique a conexão de rede do computador que executa o GoAhead e tente novamente.\n{detail}",
   "error.provider.chatgptPageFailed": "O OpenBot não conseguiu abrir a página de conexão do ChatGPT.",
   "error.provider.noneReady": "Nenhum provedor de agentes está pronto.",
   "error.provider.claudeTurnActive": "Aguarde o turno ativo do Claude terminar antes de atualizar seu contexto.",
@@ -178,14 +178,14 @@ export const messages = {
   "error.provider.antigravityArchivePath": "O arquivo compactado do Gemini contém um arquivo inesperado.",
   "error.provider.antigravityChecksum": "A soma de verificação do ambiente de execução do Gemini não corresponde.",
   "error.provider.antigravityReleaseShape": "A versão do Gemini tem um formato inesperado.",
-  "error.provider.antigravityMissing": "O Gemini não foi baixado. Baixe-o no OpenBot para continuar.",
+  "error.provider.antigravityMissing": "O Gemini não foi baixado. Baixe-o no GoAhead para continuar.",
   "error.provider.antigravityNotStarted": "O servidor do Gemini foi encontrado, mas não é possível ler sua versão.",
   "error.provider.antigravityVersionUnreadable": "Não foi possível ler a versão do servidor do Gemini.",
   "error.provider.antigravitySignIn": "Entre com o Google para usar o Gemini.",
   "error.provider.cursorArchivePath": "O arquivo compactado do Cursor contém um arquivo inesperado.",
   "error.provider.cursorChecksum": "A soma de verificação do ambiente de execução do Cursor não corresponde.",
   "error.provider.cursorReleaseShape": "A versão do Cursor tem um formato inesperado.",
-  "error.provider.cursorMissing": "O Cursor não foi baixado. Baixe-o no OpenBot para continuar.",
+  "error.provider.cursorMissing": "O Cursor não foi baixado. Baixe-o no GoAhead para continuar.",
   "error.provider.cursorNotStarted": "O agente do Cursor foi encontrado, mas não é possível ler sua versão.",
   "error.provider.cursorVersionUnreadable": "Não foi possível ler a versão do agente do Cursor.",
   "error.provider.cursorSignIn": "Entre com o Cursor ou defina CURSOR_API_KEY para usar o Cursor.",
@@ -193,18 +193,18 @@ export const messages = {
   "error.provider.clinePackageMismatch": "O pacote do Cline não corresponde ao catálogo de ambientes de execução.",
   "error.provider.clineChecksum": "A soma de verificação do ambiente de execução do Cline não corresponde.",
   "error.provider.clineLicenseChecksum": "A soma de verificação da licença do Cline não corresponde.",
-  "error.provider.clineMissing": "O Cline não foi baixado. Baixe-o no OpenBot para continuar.",
-  "error.provider.clineOutdated": "A CLI do Cline {version} é muito antiga. O OpenBot exige 3.0.68 ou posterior.",
+  "error.provider.clineMissing": "O Cline não foi baixado. Baixe-o no GoAhead para continuar.",
+  "error.provider.clineOutdated": "A CLI do Cline {version} é muito antiga. O GoAhead exige 3.0.68 ou posterior.",
   "error.provider.clineNotStarted": "Não foi possível iniciar o Cline. Execute `cline --version` em um terminal.",
   "error.provider.clineVersionUnreadable": "Não foi possível ler a versão da CLI do Cline.",
   "error.provider.clineSignIn": "Entre com o Cline ou defina CLINE_API_KEY para usar o Cline.",
   "error.provider.foreignReasoning":
-    "{provider} não aceitou o raciocínio anterior neste chat porque ele foi recebido por outra conta ou chave de API. O OpenBot iniciou uma nova sessão de {provider} com o histórico do chat. Tente novamente.",
+    "{provider} não aceitou o raciocínio anterior neste chat porque ele foi recebido por outra conta ou chave de API. O GoAhead iniciou uma nova sessão de {provider} com o histórico do chat. Tente novamente.",
   "error.provider.grokSignIn": "Execute `grok login` ou defina XAI_API_KEY para usar o Grok.",
   "error.provider.acpSignInTimedOut": "O tempo para entrar esgotou.",
   "error.provider.acpSignInStopped": "O processo de entrada parou antes de terminar.",
   "error.provider.acpSignInFailed": "O processo de entrada não foi concluído.",
-  "error.provider.messageTooLarge": "O OpenBot interrompeu {provider} porque enviou uma mensagem maior que {limit} MB.",
+  "error.provider.messageTooLarge": "O GoAhead interrompeu {provider} porque enviou uma mensagem maior que {limit} MB.",
   "error.provider.customAgentIdInvalid":
     "Um ID de agente deve conter letras minúsculas, dígitos ou `-`, e não pode ser o ID de um provedor integrado.",
   "error.provider.customAgentEnvInvalid":
@@ -216,10 +216,10 @@ export const messages = {
   "error.provider.customAgentWindowsScript":
     "Um comando .cmd ou .bat só aceita letras, números e - _ . , : = @ + / \\ em seus argumentos.",
   "error.provider.customAgentNotFound":
-    "O OpenBot não consegue encontrar {command}. Digite o caminho completo do comando.",
+    "O GoAhead não consegue encontrar {command}. Digite o caminho completo do comando.",
   "error.provider.customAgentCheckTimedOut": "O agente não respondeu em 20 segundos.",
   "error.provider.customAgentCheckStopped": "O agente parou antes de responder.",
-  "error.provider.customAgentProtocolVersion": "O agente usa a versão {version} do ACP. O OpenBot usa a versão 1.",
+  "error.provider.customAgentProtocolVersion": "O agente usa a versão {version} do ACP. O GoAhead usa a versão 1.",
   "error.provider.customAgentCheckFailed": "O agente não respondeu como um agente ACP.",
   "error.provider.customAgentRemoveBusy":
     "Aguarde o turno ativo e a fila terminarem antes de remover este agente personalizado.",
@@ -227,7 +227,7 @@ export const messages = {
   "error.provider.customAgentMissing": "Este agente personalizado não está salvo agora. Escolha outro modelo.",
   "error.provider.customAgentSignIn": "Entre com o comando do próprio agente e tente novamente.",
   "error.provider.customAgentsReadOnly":
-    "Os agentes personalizados salvos foram gravados por uma versão mais recente do OpenBot, ou o arquivo não pode ser lido. Atualize o OpenBot para alterá-los.",
+    "Os agentes personalizados salvos foram gravados por uma versão mais recente do GoAhead, ou o arquivo não pode ser lido. Atualize o GoAhead para alterá-los.",
   "error.provider.customAgentNoSecureStorage":
     "Este computador não tem armazenamento seguro, por isso não é possível salvar os valores das variáveis de ambiente. Remova-os e tente novamente.",
   "error.provider.customAgentNotSaved": "Este agente personalizado não está salvo. Atualize a lista e tente novamente.",

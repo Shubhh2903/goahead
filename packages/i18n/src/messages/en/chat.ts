@@ -234,5 +234,5 @@ export const messages = defineMessages("chat", {
   "chat.suggestion.dismissed": "{name} suggestion dismissed.",
   "chat.suggestion.undo": "Undo",
   "chat.suggestion.githubLocalOnly": "Connect GitHub on the computer that runs this server.",
-  "chat.suggestion.githubUnavailable": "This OpenBot build cannot connect GitHub.",
+  "chat.suggestion.githubUnavailable": "This GoAhead build cannot connect GitHub.",
 });

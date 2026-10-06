@@ -8,10 +8,10 @@ export const messages = {
   "mcp.connect.close": "{name} への接続を閉じる",
   "mcp.connect.getKey": "キーを取得",
   "mcp.connect.keyDescription":
-    "{name} アカウントの認証情報を貼り付けてください。OpenBot はそれを使って接続し、{host} に保存します。",
+    "{name} アカウントの認証情報を貼り付けてください。GoAhead はそれを使って接続し、{host} に保存します。",
   "mcp.connect.thisComputer": "このコンピューター",
   "mcp.connect.noCredentialDescription":
-    "{name} は認証情報を必要としません。OpenBot は一度接続して、提供されるツールを確認します。",
+    "{name} は認証情報を必要としません。GoAhead は一度接続して、提供されるツールを確認します。",
   "mcp.connect.connect": "接続",
   "mcp.connect.required": "必須です。",
   "mcp.connect.keptOn": "{host} に保存されます。",
@@ -22,7 +22,7 @@ export const messages = {
   "mcp.local.address": "アドレス",
   "mcp.local.docs": "セットアップガイド",
   "mcp.signIn.description":
-    "{name} アカウントにサインインしてください。OpenBot はそのアカウントで使えるツールを取得し、パスワードは取得しません。",
+    "{name} アカウントにサインインしてください。GoAhead はそのアカウントで使えるツールを取得し、パスワードは取得しません。",
   "mcp.signIn.waiting": "ブラウザーを待っています…",
   "mcp.signIn.continue": "{name} に進む",
   "mcp.server.loadFailed": "MCP サーバーを読み込めませんでした。",
@@ -51,7 +51,7 @@ export const messages = {
   "mcp.panel.empty": "MCP サーバーはまだありません。",
   "mcp.panel.enable": "{name} を有効にする",
   "mcp.panel.detailsTitle": "詳細",
-  "mcp.panel.detailsDescription": "このサーバーに名前を付け、OpenBot の接続方法を選んでください。",
+  "mcp.panel.detailsDescription": "このサーバーに名前を付け、GoAhead の接続方法を選んでください。",
   "mcp.panel.transport": "トランスポート",
   "mcp.panel.name": "名前",
   "mcp.panel.namePlaceholder": "MCP サーバー名",

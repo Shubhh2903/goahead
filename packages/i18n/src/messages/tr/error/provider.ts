@@ -4,7 +4,7 @@ import type { messages as source } from "../../en/error/provider";
 export const messages = {
   // Provider, provider runtime and custom endpoint errors.
   "error.provider.endpointsReadOnly":
-    "Kayıtlı uç noktalar OpenBot'un daha yeni bir sürümü tarafından yazılmış veya dosya okunamıyor. Bunları değiştirmek için OpenBot'u güncelleyin.",
+    "Kayıtlı uç noktalar GoAhead'in daha yeni bir sürümü tarafından yazılmış veya dosya okunamıyor. Bunları değiştirmek için GoAhead'i güncelleyin.",
   "error.provider.endpointNoSecureStorage":
     "Bu bilgisayarda güvenli depolama alanı yok, bu nedenle bir API anahtarı veya üstbilgi kaydedilemez. Bunları kaldırın veya kimlik bilgisi gerektirmeyen bir uç nokta kullanın.",
   "error.provider.endpointDuplicate":
@@ -15,14 +15,14 @@ export const messages = {
   "error.provider.endpointSecretUnreadable":
     "Bu bilgisayar kayıtlı API anahtarını ve üstbilgileri okuyamıyor. Hiçbirinin kaybolmaması için API anahtarını ve üstbilgileri tekrar girin.",
   "error.provider.discoveryTimeout": "{host} zamanında yanıt vermedi.",
-  "error.provider.discoveryUnreachable": "OpenBot {host} adresine bağlanamadı.",
+  "error.provider.discoveryUnreachable": "GoAhead {host} adresine bağlanamadı.",
   "error.provider.discoveryRedirect": "{host} bir yönlendirme gönderdi. Sunucunun nihai adresini girin.",
   "error.provider.discoveryRefused": "{host} isteği reddetti. API anahtarını ve üstbilgileri denetleyin.",
   "error.provider.discoveryHttp": "{host} HTTP {status} ile yanıt verdi.",
   "error.provider.discoveryTooLarge": "{host} kaynağından gelen model listesi çok büyük.",
   "error.provider.discoveryInvalid": "{host} OpenAI uyumlu bir model listesi göndermedi.",
   "error.provider.detectionSettingsReadOnly":
-    "Algılama ayarları OpenBot'un daha yeni bir sürümü tarafından yazılmış veya dosya okunamıyor. Bunları değiştirmek için OpenBot'u güncelleyin.",
+    "Algılama ayarları GoAhead'in daha yeni bir sürümü tarafından yazılmış veya dosya okunamıyor. Bunları değiştirmek için GoAhead'i güncelleyin.",
   "error.provider.detectionEntryInvalid":
     "Bir adres şifre içermeyen bir http:// veya https:// URL'si olmalı ve bir klasör mutlak bir yol olmalıdır.",
   "error.provider.detectionEntriesTooMany": "Çok fazla adres veya klasör var.",
@@ -50,10 +50,10 @@ export const messages = {
   "error.provider.bunLicenseChecksum": "Bun lisansı sağlama toplamı (checksum) eşleşmiyor.",
   "error.provider.bunxDamaged": "Bun paket yöneticisi çalıştırıcısı eksik veya hasarlı.",
   "error.provider.releaseSourcesUnreachable":
-    "OpenBot sağlayıcı sürüm kaynaklarına ulaşamadı. Bağlantıyı kontrol edip tekrar deneyin.",
+    "GoAhead sağlayıcı sürüm kaynaklarına ulaşamadı. Bağlantıyı kontrol edip tekrar deneyin.",
   "error.provider.runtimesUnsupported": "Sağlayıcı çalışma zamanları bu platformda kullanılamıyor.",
-  "error.provider.closing": "OpenBot kapanıyor.",
-  "error.provider.cliOverride": "OpenBot'ta güncelleme yapmadan önce açık CLI yolu geçersiz kılmasını kaldırın.",
+  "error.provider.closing": "GoAhead kapanıyor.",
+  "error.provider.cliOverride": "GoAhead'de güncelleme yapmadan önce açık CLI yolu geçersiz kılmasını kaldırın.",
   "error.provider.runtimeUpdateIncomplete": "Çalışma zamanı güncellemesi tamamlanmadı.",
   "error.provider.downloadHttp": "Çalışma zamanı indirmesi HTTP {status} ile başarısız oldu.",
   "error.provider.downloadNoData": "Çalışma zamanı indirmesi veri döndürmedi.",
@@ -102,11 +102,11 @@ export const messages = {
   "error.provider.noModelNamed": "{provider} sağlayıcısının kullanılabilir modeli yok.",
   "error.provider.acpNoModels": "ACP CLI hiçbir ACP modeli tanıtmadı. OpenBot bir yedek model tahmin etmeyecektir.",
   "error.provider.endpointRemoveBusy": "Bu uç noktayı kaldırmadan önce etkin turun ve kuyruğun bitmesini bekleyin.",
-  "error.provider.codexOutdated": "Codex CLI {version} çok eski. OpenBot 0.144.1 veya daha yenisini gerektirir.",
+  "error.provider.codexOutdated": "Codex CLI {version} çok eski. GoAhead 0.144.1 veya daha yenisini gerektirir.",
   "error.provider.codexNotStarted": "Codex CLI bulundu ancak başlatılamadı.",
   "error.provider.codexNotStartedHint":
     "Codex CLI bulundu ancak başlatılamadı. Yeni bir terminalde `codex --version` komutunu çalıştırın.",
-  "error.provider.codexMissing": "ChatGPT indirilmedi. Devam etmek için OpenBot içinde indirin.",
+  "error.provider.codexMissing": "ChatGPT indirilmedi. Devam etmek için GoAhead içinde indirin.",
   "error.provider.codexConfigIgnored": {
     one: "Codex yapılandırmasındaki {count} ayarı yok saydı: {settings}. Düzeltin veya kaldırın ya da Codex'i güncelleyin.",
     other:
@@ -116,16 +116,16 @@ export const messages = {
     one: "Codex yapılandırmasındaki {count} ayarı yok saydı. Düzeltin veya kaldırın ya da Codex'i güncelleyin.",
     other: "Codex yapılandırmasındaki {count} ayarı yok saydı. Düzeltin veya kaldırın ya da Codex'i güncelleyin.",
   },
-  "error.provider.claudeOutdated": "Claude Code {version} çok eski. OpenBot 2.1.232 veya daha yenisini gerektirir.",
+  "error.provider.claudeOutdated": "Claude Code {version} çok eski. GoAhead 2.1.232 veya daha yenisini gerektirir.",
   "error.provider.claudeNotStarted": "Claude CLI bulundu ancak başlatılamadı.",
   "error.provider.claudeNotStartedHint":
     "Claude CLI bulundu ancak başlatılamadı. Yeni bir terminalde `claude --version` komutunu çalıştırın.",
-  "error.provider.claudeMissing": "Claude indirilmedi. Devam etmek için OpenBot içinde indirin.",
-  "error.provider.grokOutdated": "Grok CLI {version} çok eski. OpenBot 1.0.5 veya daha yenisini gerektirir.",
+  "error.provider.claudeMissing": "Claude indirilmedi. Devam etmek için GoAhead içinde indirin.",
+  "error.provider.grokOutdated": "Grok CLI {version} çok eski. GoAhead 1.0.5 veya daha yenisini gerektirir.",
   "error.provider.grokNotStarted": "Grok CLI bulundu ancak başlatılamadı.",
   "error.provider.grokNotStartedHint":
     "Grok CLI bulundu ancak başlatılamadı. Yeni bir terminalde `grok --version` komutunu çalıştırın.",
-  "error.provider.grokMissing": "Grok indirilmedi. Devam etmek için OpenBot içinde indirin.",
+  "error.provider.grokMissing": "Grok indirilmedi. Devam etmek için GoAhead içinde indirin.",
   "error.provider.opencodeNotStarted":
     "OpenCode başlatılamadı. Bir terminalde `opencode --version` komutunu çalıştırın.",
   "error.provider.opencodeMissing": "OpenCode indirilmedi. Devam etmek için OpenBot içinde indirin.",
@@ -137,7 +137,7 @@ export const messages = {
   "error.provider.connectBeforeProfile": "Bir profil oluşturmadan önce seçilen sağlayıcıyı bağlayın.",
   "error.provider.cliNotReady": "{provider} CLI hazır değil veya oturum açılmamış.",
   "error.provider.cliTimedOut":
-    "{provider} zamanında yanıt vermedi. Bilgisayar meşgul olabilir. OpenBot tekrar deneyecek.",
+    "{provider} zamanında yanıt vermedi. Bilgisayar meşgul olabilir. GoAhead tekrar deneyecek.",
   "error.provider.cliTimedOutRefresh":
     "{provider} zamanında yanıt vermedi. Bilgisayar meşgul olabilir. Tekrar denemek için sağlayıcıları yenileyin.",
   "error.provider.noCodeSignIn": "{provider} bir kod ile oturum açamaz.",
@@ -153,9 +153,9 @@ export const messages = {
     "{provider} CLI oturum açıyor. Oturum açmayı tamamlayın veya iptal edin, ardından güncelleyin.",
   "error.provider.cliBusyUpdate":
     "{provider} CLI bir tur üzerinde çalışıyor. Bitmesini bekleyin, ardından güncelleyin.",
-  "error.provider.cliSelectFailed": "OpenBot kurulu yönetilen CLI'yi seçemedi.",
+  "error.provider.cliSelectFailed": "GoAhead kurulu yönetilen CLI'yi seçemedi.",
   "error.provider.noAuthenticatedAccount": "{provider} kimliği doğrulanmış bir hesap döndürmedi.",
-  "error.provider.cliActivateFailed": "OpenBot yönetilen CLI'yi etkinleştiremedi.",
+  "error.provider.cliActivateFailed": "GoAhead yönetilen CLI'yi etkinleştiremedi.",
   "error.provider.cliBusyReconnect":
     "{provider} CLI bir tur üzerinde çalışıyor. Bitmesini bekleyin, ardından tekrar bağlanın.",
   "error.provider.opencodeCredentialsRejected":
@@ -169,7 +169,7 @@ export const messages = {
   "error.provider.opencodeProviderFailed":
     "Model sağlayıcısı kendi tarafında başarısız oldu. Bağlantınız bunun nedeni değildir. Daha sonra tekrar deneyin veya başka bir model seçin.\n{detail}",
   "error.provider.opencodeNetwork":
-    "OpenCode model sağlayıcısına bağlanamadı. OpenBot'u çalıştıran bilgisayarın ağ bağlantısını kontrol edin, ardından tekrar deneyin.\n{detail}",
+    "OpenCode model sağlayıcısına bağlanamadı. GoAhead'i çalıştıran bilgisayarın ağ bağlantısını kontrol edin, ardından tekrar deneyin.\n{detail}",
   "error.provider.chatgptPageFailed": "OpenBot ChatGPT bağlantı sayfasını açamadı.",
   "error.provider.noneReady": "Hiçbir ajan sağlayıcısı hazır değil.",
   "error.provider.claudeTurnActive": "Bağlamını yenilemeden önce etkin Claude turunun bitmesini bekleyin.",
@@ -183,14 +183,14 @@ export const messages = {
   "error.provider.antigravityArchivePath": "Gemini arşivi beklenmeyen bir dosya içeriyor.",
   "error.provider.antigravityChecksum": "Gemini çalışma zamanı sağlama toplamı (checksum) eşleşmiyor.",
   "error.provider.antigravityReleaseShape": "Gemini sürümü beklenmeyen bir yapıya sahip.",
-  "error.provider.antigravityMissing": "Gemini indirilmedi. Devam etmek için OpenBot içinde indirin.",
+  "error.provider.antigravityMissing": "Gemini indirilmedi. Devam etmek için GoAhead içinde indirin.",
   "error.provider.antigravityNotStarted": "Gemini sunucusu bulundu ancak sürümü okunamıyor.",
   "error.provider.antigravityVersionUnreadable": "Gemini sunucu sürümü okunamıyor.",
   "error.provider.antigravitySignIn": "Gemini'yi kullanmak için Google ile oturum açın.",
   "error.provider.cursorArchivePath": "Cursor arşivi beklenmeyen bir dosya içeriyor.",
   "error.provider.cursorChecksum": "Cursor çalışma zamanı sağlama toplamı (checksum) eşleşmiyor.",
   "error.provider.cursorReleaseShape": "Cursor sürümü beklenmeyen bir yapıya sahip.",
-  "error.provider.cursorMissing": "Cursor indirilmedi. Devam etmek için OpenBot içinde indirin.",
+  "error.provider.cursorMissing": "Cursor indirilmedi. Devam etmek için GoAhead içinde indirin.",
   "error.provider.cursorNotStarted": "Cursor ajanı bulundu ancak sürümü okunamıyor.",
   "error.provider.cursorVersionUnreadable": "Cursor ajan sürümü okunamıyor.",
   "error.provider.cursorSignIn": "Cursor'ı kullanmak için Cursor ile oturum açın veya CURSOR_API_KEY ayarlayın.",
@@ -198,19 +198,19 @@ export const messages = {
   "error.provider.clinePackageMismatch": "Cline paketi çalışma zamanı kataloğuyla eşleşmiyor.",
   "error.provider.clineChecksum": "Cline çalışma zamanı sağlama toplamı (checksum) eşleşmiyor.",
   "error.provider.clineLicenseChecksum": "Cline lisansı sağlama toplamı (checksum) eşleşmiyor.",
-  "error.provider.clineMissing": "Cline indirilmedi. Devam etmek için OpenBot içinde indirin.",
-  "error.provider.clineOutdated": "Cline CLI {version} çok eski. OpenBot 3.0.68 veya daha yenisini gerektirir.",
+  "error.provider.clineMissing": "Cline indirilmedi. Devam etmek için GoAhead içinde indirin.",
+  "error.provider.clineOutdated": "Cline CLI {version} çok eski. GoAhead 3.0.68 veya daha yenisini gerektirir.",
   "error.provider.clineNotStarted": "Cline başlatılamadı. Bir terminalde `cline --version` komutunu çalıştırın.",
   "error.provider.clineVersionUnreadable": "Cline CLI sürümü okunamıyor.",
   "error.provider.clineSignIn": "Cline'ı kullanmak için Cline ile oturum açın veya CLINE_API_KEY ayarlayın.",
   "error.provider.foreignReasoning":
-    "Farklı bir hesap veya API anahtarı aldığı için {provider} bu sohbetteki önceki akıl yürütmeyi kabul etmedi. OpenBot sohbet geçmişiyle yeni bir {provider} oturumu başlattı. Tekrar deneyin.",
+    "Farklı bir hesap veya API anahtarı aldığı için {provider} bu sohbetteki önceki akıl yürütmeyi kabul etmedi. GoAhead sohbet geçmişiyle yeni bir {provider} oturumu başlattı. Tekrar deneyin.",
   "error.provider.grokSignIn": "Grok'u kullanmak için `grok login` komutunu çalıştırın veya XAI_API_KEY ayarlayın.",
   "error.provider.acpSignInTimedOut": "Oturum açma zaman aşımına uğradı.",
   "error.provider.acpSignInStopped": "Oturum açma tamamlanmadan önce durdu.",
   "error.provider.acpSignInFailed": "Oturum açma tamamlanmadı.",
   "error.provider.messageTooLarge":
-    "OpenBot, {limit} MB'tan daha büyük bir mesaj gönderdiği için {provider} sağlayıcısını durdurdu.",
+    "GoAhead, {limit} MB'tan daha büyük bir mesaj gönderdiği için {provider} sağlayıcısını durdurdu.",
   "error.provider.customAgentIdInvalid":
     "Bir ajan kimliği küçük harfler, rakamlar veya `-` olmalıdır ve yerleşik bir sağlayıcının kimliği olamaz.",
   "error.provider.customAgentEnvInvalid":
@@ -221,17 +221,17 @@ export const messages = {
     "Bir bağımsız değişken satır sonu içeremez. En fazla 32 bağımsız değişken kullanın.",
   "error.provider.customAgentWindowsScript":
     "Bir .cmd veya .bat komutu bağımsız değişkenlerinde yalnızca harfler, rakamlar ve - _ . , : = @ + / \\ alabilir.",
-  "error.provider.customAgentNotFound": "OpenBot {command} komutunu bulamıyor. Komutun tam yolunu girin.",
+  "error.provider.customAgentNotFound": "GoAhead {command} komutunu bulamıyor. Komutun tam yolunu girin.",
   "error.provider.customAgentCheckTimedOut": "Ajan 20 saniye içinde yanıt vermedi.",
   "error.provider.customAgentCheckStopped": "Ajan yanıt vermeden önce durdu.",
-  "error.provider.customAgentProtocolVersion": "Ajan ACP sürüm {version} kullanıyor. OpenBot sürüm 1 kullanır.",
+  "error.provider.customAgentProtocolVersion": "Ajan ACP sürüm {version} kullanıyor. GoAhead sürüm 1 kullanır.",
   "error.provider.customAgentCheckFailed": "Ajan bir ACP ajanı olarak yanıt vermedi.",
   "error.provider.customAgentRemoveBusy": "Bu özel ajanı kaldırmadan önce etkin turun ve kuyruğun bitmesini bekleyin.",
   "error.provider.customAgentNone": "Hiçbir özel ajan kayıtlı değil.",
   "error.provider.customAgentMissing": "Bu özel ajan şu anda kayıtlı değil. Başka bir model seçin.",
   "error.provider.customAgentSignIn": "Ajanın kendi komutuyla oturum açın, ardından tekrar deneyin.",
   "error.provider.customAgentsReadOnly":
-    "Kayıtlı özel ajanlar OpenBot'un daha yeni bir sürümü tarafından yazılmış veya dosya okunamıyor. Bunları değiştirmek için OpenBot'u güncelleyin.",
+    "Kayıtlı özel ajanlar GoAhead'in daha yeni bir sürümü tarafından yazılmış veya dosya okunamıyor. Bunları değiştirmek için GoAhead'i güncelleyin.",
   "error.provider.customAgentNoSecureStorage":
     "Bu bilgisayarda güvenli depolama alanı yok, bu nedenle ortam değerleri kaydedilemez. Bunları kaldırıp tekrar deneyin.",
   "error.provider.customAgentNotSaved": "Bu özel ajan kayıtlı değil. Listeyi yenileyip tekrar deneyin.",

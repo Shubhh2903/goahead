@@ -45,7 +45,7 @@ export function createMockProviderRuntimes(options: MockProviderRuntimeOptions, 
     // The preview has no upstream to ask: every offer it makes is already in the snapshot.
     checkForUpdates: async () => clone(runtimeSnapshot),
     download: async (provider) => {
-      if (!isManagedRuntimeProvider(provider)) throw new Error("OpenBot does not manage this provider's CLI.");
+      if (!isManagedRuntimeProvider(provider)) throw new Error("GoAhead does not manage this provider's CLI.");
       const installed = runtimeSnapshot.providers[provider];
       if (runtimeTransfers.has(provider) || (installed.phase === "ready" && !installed.availableVersion))
         return clone(runtimeSnapshot);
@@ -87,7 +87,7 @@ export function createMockProviderRuntimes(options: MockProviderRuntimeOptions, 
       return clone(runtimeSnapshot);
     },
     cancel: async (provider) => {
-      if (!isManagedRuntimeProvider(provider)) throw new Error("OpenBot does not manage this provider's CLI.");
+      if (!isManagedRuntimeProvider(provider)) throw new Error("GoAhead does not manage this provider's CLI.");
       const current = runtimeSnapshot.providers[provider];
       if (current.phase !== "downloading") return clone(runtimeSnapshot);
       runtimeTransfers.delete(provider);

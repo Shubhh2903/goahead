@@ -38,7 +38,7 @@ export const CliMissing: Story = { args: args({}) };
 
 export const CliInstalling: Story = { args: args({ setup: { ...MISSING, cli: "installing" } }) };
 
-/** OpenBot has no CLI build for this computer, so the user installs it. */
+/** GoAhead has no CLI build for this computer, so the user installs it. */
 export const CliManualInstall: Story = { args: args({ setup: { ...MISSING, canInstall: false } }) };
 
 /** Step 2: the CLI is in place, and the 1Password app does not let it in yet. */
@@ -72,6 +72,6 @@ export const ConnectedLoading: Story = {
 
 export const InstallFailed: Story = {
   args: args({
-    error: "OpenBot could not install the 1Password CLI. Check the connection to the internet, then try again.",
+    error: "GoAhead could not install the 1Password CLI. Check the connection to the internet, then try again.",
   }),
 };

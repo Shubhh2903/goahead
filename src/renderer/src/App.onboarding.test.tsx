@@ -88,9 +88,9 @@ describe("OpenBot connected desktop shell", () => {
     });
     render(() => <App />);
 
-    expect(await screen.findByRole("heading", { name: "Meet OpenBot" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Where will OpenBot run?" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Verified. Opening OpenBot…")).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Meet GoAhead" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Where will GoAhead run?" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Verified. Opening GoAhead…")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Chief" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
 
@@ -101,7 +101,7 @@ describe("OpenBot connected desktop shell", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    await fireEvent.click(screen.getByRole("button", { name: "Open OpenBot" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Open GoAhead" }));
     expect(window.openbot.saveSetup).toHaveBeenCalledWith({ preferredProvider: "claude", preferredModel: null });
     expect(await screen.findByRole("heading", { name: "Chief" })).toBeInTheDocument();
   });
@@ -298,7 +298,7 @@ describe("OpenBot connected desktop shell", () => {
 
     await fireEvent.click(await screen.findByRole("button", { name: "Connect ChatGPT" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("OpenBot could not connect ChatGPT. Try again.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("GoAhead could not connect ChatGPT. Try again.");
     expect(screen.getByRole("alert")).not.toHaveTextContent("Raw IPC failure");
     expect(trackAnalytics).toHaveBeenCalledWith("provider_action", {
       provider: "codex",
@@ -421,7 +421,7 @@ describe("OpenBot connected desktop shell", () => {
     vi.mocked(window.openbot.auth.getState).mockResolvedValueOnce({ status: "signed_out" });
     render(() => <App />);
 
-    expect(await screen.findByRole("heading", { name: "Sign in to OpenBot" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Sign in to GoAhead" })).toBeInTheDocument();
     expect(screen.queryByRole("radiogroup", { name: "Default provider" })).not.toBeInTheDocument();
 
     await fireEvent.input(screen.getByRole("textbox", { name: "Email" }), {
@@ -435,21 +435,21 @@ describe("OpenBot connected desktop shell", () => {
     expect(window.openbot.auth.verifyEmailCode).toHaveBeenCalledWith({ challengeId: "challenge-1", code: "ABCD-EFGH" });
     expect(trackAnalytics).toHaveBeenCalledWith("account_sign_in_started", { result: "code_sent" });
     expect(trackAnalytics).toHaveBeenCalledWith("account_sign_in_completed", { result: "succeeded" });
-    expect(await screen.findByText("Verified. Opening OpenBot…")).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Where will OpenBot run?" })).not.toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: "Meet OpenBot" })).toBeInTheDocument();
+    expect(await screen.findByText("Verified. Opening GoAhead…")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Where will GoAhead run?" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Meet GoAhead" })).toBeInTheDocument();
   });
 
   it("shows a soft loader until the account API becomes available", async () => {
     vi.mocked(window.openbot.auth.getState).mockResolvedValueOnce({ status: "loading" });
     render(() => <App />);
 
-    expect(await screen.findByRole("heading", { name: "Connecting to OpenBot" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Connecting to GoAhead" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Connecting securely…");
     expect(screen.queryByRole("textbox", { name: "Email" })).not.toBeInTheDocument();
 
     emitAuth?.({ status: "signed_out" });
-    expect(await screen.findByRole("heading", { name: "Sign in to OpenBot" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Sign in to GoAhead" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Email" })).toBeInTheDocument();
   });
 
@@ -459,7 +459,7 @@ describe("OpenBot connected desktop shell", () => {
     vi.mocked(window.openbot.servers.takePendingInvite).mockResolvedValueOnce(inviteUrl);
     render(() => <App />);
 
-    expect(await screen.findByRole("heading", { name: "Sign in to OpenBot" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Sign in to GoAhead" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Chief" })).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Join a server" })).not.toBeInTheDocument();
 

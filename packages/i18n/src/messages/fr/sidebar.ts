@@ -81,7 +81,7 @@ export const messages = {
   "sidebar.delete.pending": "Suppression…",
   "sidebar.delete.title": "Supprimer {name} ?",
   "sidebar.delete.agentDescription":
-    "Cette action retire l’agent et sa conversation OpenBot de l’application. Sa file d’attente, ses souvenirs, ses routines et son espace de travail sont supprimés. L’historique conservé séparément par le fournisseur CLI connecté n’est pas supprimé.",
+    "Cette action retire l’agent et sa conversation GoAhead de l’application. Sa file d’attente, ses souvenirs, ses routines et son espace de travail sont supprimés. L’historique conservé séparément par le fournisseur CLI connecté n’est pas supprimé.",
   "sidebar.delete.channelDescription":
     "Cette action arrête le canal. Son historique reste dans Canaux supprimés, en aperçu uniquement. Vous ne pouvez pas le restaurer. Les agents membres sont conservés.",
   "sidebar.delete.sectionDescription":
@@ -95,12 +95,12 @@ export const messages = {
   "sidebar.announce.movedPinned": "Discussion épinglée déplacée en position {position} sur {total}.",
   "sidebar.announce.personFallback": "personne",
   "sidebar.announce.chatFallback": "discussion",
-  "sidebar.mobileApp.title": "OpenBot pour iPhone",
+  "sidebar.mobileApp.title": "GoAhead pour iPhone",
   "sidebar.mobileApp.body": "L'app iOS est en bêta publique sur TestFlight.",
   "sidebar.mobileApp.howToInstall": "Comment l'installer",
   "sidebar.mobileApp.dismiss": "Masquer l'annonce de l'app iPhone",
   "sidebar.mobileApp.qrLabel": "Code QR de l'invitation TestFlight",
-  "sidebar.mobileApp.dialog.title": "Installer OpenBot sur votre iPhone",
+  "sidebar.mobileApp.dialog.title": "Installer GoAhead sur votre iPhone",
   "sidebar.mobileApp.dialog.description": "L'app iOS est en bêta publique. Apple TestFlight l'installe.",
   "sidebar.mobileApp.dialog.copyLink": "Copier le lien",
   "sidebar.mobileApp.dialog.linkCopied": "Lien copié",
@@ -111,5 +111,5 @@ export const messages = {
     "Scannez ce code QR avec l'appareil photo de l'iPhone, ou copiez le lien d'invitation et ouvrez-le sur votre iPhone.",
   "sidebar.mobileApp.step.install": "Dans TestFlight, touchez Accepter, puis Installer.",
   "sidebar.mobileApp.step.connect":
-    "Ouvrez OpenBot sur votre iPhone. Sur cet ordinateur, allez dans Réglages > Connexion mobile et scannez le code de connexion.",
+    "Ouvrez GoAhead sur votre iPhone. Sur cet ordinateur, allez dans Réglages > Connexion mobile et scannez le code de connexion.",
 } as const satisfies PartialTranslation<typeof source>;

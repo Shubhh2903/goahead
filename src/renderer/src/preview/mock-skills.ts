@@ -188,7 +188,7 @@ export function createMockSkills(options: MockSkillsOptions, onChanged: (agentId
     },
     uninstall: async ({ agentId, skillId }) => {
       const skill = readInstalledSkills(agentId).find((item) => item.skillId === skillId);
-      if (skill?.origin === "managed") throw new Error("This skill is managed by OpenBot.");
+      if (skill?.origin === "managed") throw new Error("This skill is managed by GoAhead.");
       writeInstalled(
         agentId,
         readInstalledSkills(agentId).filter((item) => item.skillId !== skillId),
@@ -198,7 +198,7 @@ export function createMockSkills(options: MockSkillsOptions, onChanged: (agentId
       const current = readInstalledSkills(agentId);
       const skill = current.find((item) => item.skillId === skillId);
       if (!skill) throw new Error("Skill not found.");
-      if (skill.origin === "managed") throw new Error("This skill is managed by OpenBot.");
+      if (skill.origin === "managed") throw new Error("This skill is managed by GoAhead.");
       const next: InstalledSkill = { ...skill, enabled };
       writeInstalled(
         agentId,

@@ -3,7 +3,7 @@ import type { messages as source } from "../en/app";
 
 export const messages = {
   // The app shell, shared state, and shared controls without a feature of their own.
-  "app.loading": "OpenBot を読み込んでいます",
+  "app.loading": "GoAhead を読み込んでいます",
   "app.leftPanel.resize": "左サイドバーのサイズを変更",
   "app.host.thisMac": "この Mac",
   "app.host.thisComputer": "このコンピュータ",
@@ -28,15 +28,15 @@ export const messages = {
   "app.provider.codeExpired": "{name} のコードの有効期限が切れました",
   "app.provider.codeExpiredDescription": "時間内に入力されませんでした。このコードはもう使えません。",
   "app.provider.connectFailed": "{name} に接続できませんでした",
-  "app.provider.connectFailedRetry": "OpenBot は {name} に接続できませんでした。もう一度お試しください。",
-  "app.provider.included": "{name} は OpenBot に含まれています。",
+  "app.provider.connectFailedRetry": "GoAhead は {name} に接続できませんでした。もう一度お試しください。",
+  "app.provider.included": "{name} は GoAhead に含まれています。",
   "app.clipboard.copyFailed": "テキストをコピーできませんでした。",
   "app.voice.tooLong": "音声の録音は 2 分までです。",
   "app.avatar.type": "PNG、JPEG、または WebP の画像を選んでください。",
   "app.avatar.size": "10 MB より小さい画像を選んでください。",
   "app.avatar.processingUnavailable": "画像を処理できません。",
-  "app.avatar.tooLarge": "OpenBot はこの画像を十分に小さくできませんでした。よりシンプルな画像を選んでください。",
-  "app.avatar.processFailed": "OpenBot はこの画像を処理できませんでした。",
+  "app.avatar.tooLarge": "GoAhead はこの画像を十分に小さくできませんでした。よりシンプルな画像を選んでください。",
+  "app.avatar.processFailed": "GoAhead はこの画像を処理できませんでした。",
   "app.chart.total": "合計",
   "app.modelVariant.default": "デフォルト",
   "app.qrCode.label": "QR コード",

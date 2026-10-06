@@ -4,7 +4,7 @@ import { SlackConnectPage } from "../../components/landing/SlackConnectPage";
 export const Route = createFileRoute("/slack/connect")({
   head: () => ({
     meta: [
-      { title: "Return to OpenBot" },
+      { title: "Return to GoAhead" },
       { name: "robots", content: "noindex, nofollow, noarchive" },
       { name: "referrer", content: "no-referrer" },
     ],

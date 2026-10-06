@@ -23,11 +23,11 @@ Rules for a new entry:
 - `http` servers take a `url`. `stdio` servers take a `command` and `args`.
   No `workingDirectory`: the provider drops such servers.
 - A `command` can start with `~/` to name a program that a desktop app installs
-  in the home folder, as the Paper listing does. OpenBot expands `~` on the
+  in the home folder, as the Paper listing does. GoAhead expands `~` on the
   computer that runs the server, before any provider starts it.
 - Names must pass `mcpConfigErrors` and must not be reserved (`openbot`).
 - OAuth-only vendors install as a plain `http` server with a `link` flow, the
-  same shape the Canva listing uses. OpenBot signs in itself: the main process
+  same shape the Canva listing uses. GoAhead signs in itself: the main process
   holds the MCP OAuth client, keeps the tokens in encrypted storage, and adds
   the `Authorization` header at hand-off. No bridge program is installed, and
   no listing may name one.

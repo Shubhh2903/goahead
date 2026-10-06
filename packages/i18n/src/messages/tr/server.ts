@@ -2,8 +2,8 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/server";
 
 export const messages = {
-  "server.compatibility.updateClientTitle": "Bu OpenBot uygulamasını güncelleyin",
-  "server.compatibility.updateHostTitle": "{name} üzerindeki OpenBot'u güncelleyin",
+  "server.compatibility.updateClientTitle": "Bu GoAhead uygulamasını güncelleyin",
+  "server.compatibility.updateHostTitle": "{name} üzerindeki GoAhead'i güncelleyin",
   "server.compatibility.unsafeDataTitle": "Ana makine güvenli olmayan veri döndürdü",
   "server.compatibility.cannotConnectTitle": "{name} ile bağlantı kurulamıyor",
   "server.compatibility.updateClientDescription":
@@ -11,7 +11,7 @@ export const messages = {
   "server.compatibility.updateHostDescription":
     "Ana makine yalnızca bu uygulamadan daha eski protokolleri destekliyor. Ana makineyi güncelleyin, ardından tekrar deneyin.",
   "server.compatibility.unsafeDataDescription":
-    "Bilinen bir veri yükü geçersiz olduğu için OpenBot bu bağlantıyı durdurdu. Geçerli çalışma alanı verileriniz değiştirilmedi.",
+    "Bilinen bir veri yükü geçersiz olduğu için GoAhead bu bağlantıyı durdurdu. Geçerli çalışma alanı verileriniz değiştirilmedi.",
   "server.compatibility.clientVersion": "İstemci sürümü",
   "server.compatibility.hostVersion": "Ana makine sürümü",
   "server.compatibility.negotiatedProtocol": "Anlaşılan protokol",
@@ -39,8 +39,8 @@ export const messages = {
   "server.join.emailBound": "Bu davet yalnızca e-posta alıcısı için geçerlidir.",
   "server.join.unknownDate": "Bilinmiyor",
   // Sunucu çubuğundaki artı düğmesinin açtığı iletişim kutusu. {price} "€20" gibi biçimlendirilmiş bir tutardır.
-  "server.add.title": "OpenBot'u bulutta çalıştırın",
-  "server.add.description": "OpenBot sunucuyu sizin için çalıştırır. Başlamak için bir plan seçin.",
+  "server.add.title": "GoAhead'i bulutta çalıştırın",
+  "server.add.description": "GoAhead sunucuyu sizin için çalıştırır. Başlamak için bir plan seçin.",
   "server.add.billing.label": "Faturalandırma dönemi",
   "server.add.currency.label": "Para birimi",
   "server.add.billing.monthly": "Aylık",
@@ -56,7 +56,7 @@ export const messages = {
   // Planların altındaki alt bilgi; planların karşılamadığı gereksinimler içindir.
   "server.add.custom.title": "Bir Mac'e veya özel bir kuruluma mı ihtiyacınız var?",
   "server.add.custom.description":
-    "OpenBot'u özel bir Mac mini üzerinde çalıştırabilir veya şirketiniz için özel bir plan hazırlayabiliriz.",
+    "GoAhead'i özel bir Mac mini üzerinde çalıştırabilir veya şirketiniz için özel bir plan hazırlayabiliriz.",
   "server.add.custom.action": "Bize ulaşın",
   "server.add.join.title": "Davetiniz var mı?",
   "server.add.join.action": "Bir sunucuya katılın",
@@ -79,14 +79,14 @@ export const messages = {
   "server.hosted.defaultName": "Bulut sunucusu",
   "server.hosted.defaultNameNumbered": "Bulut sunucusu {number}",
   "server.hosted.step.create": "Makineyi oluştur",
-  "server.hosted.step.start": "OpenBot'u başlat",
+  "server.hosted.step.start": "GoAhead'i başlat",
   "server.hosted.step.connect": "Hesabınıza bağlanın",
   "server.hosted.detail.create.reserve": "Özel bir makine ayrılıyor",
-  "server.hosted.detail.create.copy": "OpenBot makineye kopyalanıyor",
+  "server.hosted.detail.create.copy": "GoAhead makineye kopyalanıyor",
   "server.hosted.detail.create.key": "Tek seferlik giriş anahtarı ekleniyor",
   "server.hosted.detail.start.boot": "Makine açılıyor",
-  "server.hosted.detail.start.app": "OpenBot başlatılıyor",
-  "server.hosted.detail.start.wait": "OpenBot'un yanıt vermesi bekleniyor",
+  "server.hosted.detail.start.app": "GoAhead başlatılıyor",
+  "server.hosted.detail.start.wait": "GoAhead'in yanıt vermesi bekleniyor",
   "server.hosted.detail.connect.signIn": "Sizin adınıza giriş yapılıyor",
   "server.hosted.detail.connect.publish": "Sunucu hesabınıza ekleniyor",
   "server.hosted.detail.connect.check": "Bağlantı kontrol ediliyor",
@@ -147,13 +147,13 @@ export const messages = {
   "server.settings.identityLocalOnly":
     "Bu sunucunun adı ve logosu yalnızca onu çalıştıran bilgisayarda değiştirilebilir.",
   "server.settings.publicationLocalOnly": "Yayımlama durumunu yalnızca yerel sunucu değiştirebilir.",
-  "server.compatibility.versionMismatchTitle": "{name} üzerinde farklı OpenBot sürümleri",
+  "server.compatibility.versionMismatchTitle": "{name} üzerinde farklı GoAhead sürümleri",
   "server.compatibility.versionMismatchDescription":
     "Bağlantı {protocol} protokolünü kullanıyor. Bazı yeni özellikler kullanılamayabilir. İstemci {clientVersion}; ana makine {hostVersion}.",
   "server.compatibility.versionMismatchUpdateHostDescription":
-    "Tüm özellikleri kullanmak için {name} üzerindeki OpenBot'u güncelleyin. Bağlantı {protocol} protokolünü kullanıyor. İstemci {clientVersion}; ana makine {hostVersion}.",
+    "Tüm özellikleri kullanmak için {name} üzerindeki GoAhead'i güncelleyin. Bağlantı {protocol} protokolünü kullanıyor. İstemci {clientVersion}; ana makine {hostVersion}.",
   "server.compatibility.versionMismatchUpdateClientDescription":
-    "Tüm özellikleri kullanmak için bu OpenBot uygulamasını güncelleyin. Bağlantı {protocol} protokolünü kullanıyor. İstemci {clientVersion}; ana makine {hostVersion}.",
+    "Tüm özellikleri kullanmak için bu GoAhead uygulamasını güncelleyin. Bağlantı {protocol} protokolünü kullanıyor. İstemci {clientVersion}; ana makine {hostVersion}.",
   "server.connection.failedTitle": "Bağlantı başarısız oldu",
   "server.connection.failedDescription":
     "Bu sunucuya bağlanılamadı. Ana makinenin çevrim içi olduğunu kontrol edip tekrar deneyin.",
@@ -174,7 +174,7 @@ export const messages = {
   "server.settings.mcpDescription":
     "MCP sunucularını bağlayın ve bu sunucunun ajanlarının hangilerini kullanabileceğini seçin.",
   "server.settings.storageTitle": "Depolama",
-  "server.settings.storageDescription": "OpenBot'un bu sunucunun diskinde ne sakladığını ve boş alanı görün.",
+  "server.settings.storageDescription": "GoAhead'in bu sunucunun diskinde ne sakladığını ve boş alanı görün.",
   "server.settings.hostedSitesTitle": "Siteler",
   "server.settings.hostedSitesDescription": "Bu sunucudaki ajanların openbot.site üzerinde yayımladığı statik siteler.",
   "server.settings.importTitle": "İçe aktar",
@@ -185,9 +185,9 @@ export const messages = {
   "server.settings.nameTooLong": "En fazla {limit} karakter kullanın.",
   "server.settings.actionFailedTitle": "Sunucu eylemi başarısız oldu",
   "server.settings.actionFailed": "Sunucu eylemi başarısız oldu.",
-  "server.settings.imageReadFailed": "OpenBot bu görseli okuyamadı.",
+  "server.settings.imageReadFailed": "GoAhead bu görseli okuyamadı.",
   "server.settings.copyFailedTitle": "Kopyalama başarısız oldu",
-  "server.settings.copyFailed": "OpenBot bu değeri kopyalayamadı.",
+  "server.settings.copyFailed": "GoAhead bu değeri kopyalayamadı.",
   "server.settings.close": "Sunucu ayarlarını kapat",
   "server.settings.unavailableTitle": "Sunucu ayarları kullanılamıyor",
   "server.settings.unsavedMcpChanges": "Kaydedilmemiş MCP değişiklikleri",
@@ -284,7 +284,7 @@ export const messages = {
     "Süresi asla dolmaz ve birçok kez kullanılabilir. Bu bağlantıya sahip olan herkes katılabilir; devre dışı bırakmak için iptal edin.",
   "server.invite.full": "Bu sunucu {limit} üye sınırına ulaştı. Yeni bir kişiyi davet etmek için bir üyeyi kaldırın.",
   "server.invite.qrLabel": "Davet QR kodu",
-  "server.invite.qrDescription": "Bu sunucuya katılmak için bu kodu OpenBot Mobile uygulamasında tarayın.",
+  "server.invite.qrDescription": "Bu sunucuya katılmak için bu kodu GoAhead Mobile uygulamasında tarayın.",
   "server.invite.accepted": "Davet kabul edildi",
   "server.invite.expired": "Davetin süresi doldu",
   "server.invite.sent": "Davet gönderildi",
@@ -292,7 +292,7 @@ export const messages = {
   "server.invite.acceptedDescription":
     "Üye bu sunucuya katıldı. Başka birini davet etmek için yeni bir bağlantı oluşturun.",
   "server.invite.expiredDescription": "Birini davet etmek için yeni bir bağlantı oluşturun.",
-  "server.invite.linkReadyDescription": "Bağlantıyı paylaşın veya QR kodunu OpenBot Mobile uygulamasında tarayın.",
+  "server.invite.linkReadyDescription": "Bağlantıyı paylaşın veya QR kodunu GoAhead Mobile uygulamasında tarayın.",
   "server.invite.pendingTitle": "Bekleyen davetler",
   "server.invite.pendingCount": "{total} bekliyor",
   "server.invite.noPending": "Bekleyen davet yok.",
@@ -315,7 +315,7 @@ export const messages = {
   "server.desktop.connectionUnavailable": "Bağlantı kullanılamıyor",
   "server.desktop.hostOffline": "Ana makine çevrim dışı",
   "server.desktop.hostOfflineDescription": "Masaüstünü açmadan önce ana makineye yeniden bağlanın.",
-  "server.desktop.hostUpdateDescription": "Uzaktan kontrolü kullanmak için ana makinedeki OpenBot'u güncelleyin.",
+  "server.desktop.hostUpdateDescription": "Uzaktan kontrolü kullanmak için ana makinedeki GoAhead'i güncelleyin.",
   "server.desktop.serviceAvailable": "Hizmet kullanılabilir",
   "server.desktop.serviceAvailableDescription": "WebRTC kontrolü tüm etkin üyeler için kullanılabilir.",
   "server.desktop.serviceNotReady": "Hizmet hazır değil",
@@ -329,9 +329,9 @@ export const messages = {
   "server.settings.providersSwitch": "Bu sunucuya geç",
   // Sunucu Ayarları > Güncellemeler: Katılınan bir sunucunun ana makinesinin OpenBot güncellemesi. {name} sunucudur.
   "server.settings.updatesTitle": "Güncellemeler",
-  "server.settings.updatesDescription": "Bu sunucuyu çalıştıran bilgisayardaki OpenBot'u güncelleyin.",
-  "server.update.hostTitle": "{name} üzerinde OpenBot",
-  "server.update.version": "OpenBot {version}",
+  "server.settings.updatesDescription": "Bu sunucuyu çalıştıran bilgisayardaki GoAhead'i güncelleyin.",
+  "server.update.hostTitle": "{name} üzerinde GoAhead",
+  "server.update.version": "GoAhead {version}",
   "server.update.status.idle": "En son sürümü bulmak için güncellemeleri kontrol edin.",
   "server.update.status.checking": "Güncellemeler kontrol ediliyor…",
   "server.update.status.available": "{version} sürümü mevcut.",
@@ -339,11 +339,11 @@ export const messages = {
   "server.update.status.downloading": "{version} indiriliyor · {progress}",
   "server.update.status.ready": "{version} indirildi.",
   "server.update.status.installing": "{name}, güncellemeyi yüklemek için yeniden başlatılıyor.",
-  "server.update.status.upToDate": "{name} üzerinde OpenBot güncel.",
+  "server.update.status.upToDate": "{name} üzerinde GoAhead güncel.",
   "server.update.status.checkFailed": "{name} güncellemeleri kontrol edemedi. Tekrar deneyin.",
   "server.update.status.downloadFailed": "{name} güncellemeyi indiremedi. Tekrar deneyin.",
   "server.update.status.installFailed":
-    "{name} güncellemeyi yükleyemedi. O bilgisayarın başka hiçbir kullanıcısının OpenBot çalıştırmadığından emin olun, ardından tekrar deneyin.",
+    "{name} güncellemeyi yükleyemedi. O bilgisayarın başka hiçbir kullanıcısının GoAhead çalıştırmadığından emin olun, ardından tekrar deneyin.",
   "server.update.check": "Güncellemeleri kontrol et",
   "server.update.start": "Boşta olduğunda güncelle",
   "server.update.restartNow": "Şimdi yeniden başlat",
@@ -353,20 +353,20 @@ export const messages = {
   "server.update.requestedBy": "{member} bu güncellemeyi istedi.",
   "server.update.automatic": "{name} güncellemeleri otomatik olarak yükler.",
   "server.update.autoDownloadTitle": "Güncellemeleri otomatik olarak indir",
-  "server.update.autoDownloadDescription": "{name}, OpenBot'un her yeni sürümü çıktığında indirir.",
+  "server.update.autoDownloadDescription": "{name}, GoAhead'in her yeni sürümü çıktığında indirir.",
   "server.update.autoInstallTitle": "Güncellemeleri otomatik olarak yükle",
   "server.update.autoInstallDescription":
     "{name}, ajanları boşta olduğunda indirilen güncellemeyle yeniden başlar. Üyelerin bağlantısı kısa bir süre için kesilir ve otomatik olarak tekrar bağlanır.",
   "server.update.waitingFor": "{reasons} bekleniyor.",
   "server.update.disabledTitle": "Uzaktan güncellemeler kapalı",
   "server.update.disabledDescription":
-    "{name} kullanıcısı, sunucu yöneticilerinden gelen güncellemeleri kapattı. Onlardan OpenBot'u güncellemelerini veya bu ayarı açmalarını isteyin.",
+    "{name} kullanıcısı, sunucu yöneticilerinden gelen güncellemeleri kapattı. Onlardan GoAhead'i güncellemelerini veya bu ayarı açmalarını isteyin.",
   "server.update.managedTitle": "Güncellemeleri bir Ana Makine Yöneticisi kontrol ediyor",
   "server.update.managedDescription":
-    "OpenBot Ana Makine Yöneticisi {name} makinesini günceller. Ana makine yöneticisiyle iletişime geçin.",
+    "GoAhead Ana Makine Yöneticisi {name} makinesini günceller. Ana makine yöneticisiyle iletişime geçin.",
   "server.update.unsupportedTitle": "{name} kendini güncelleyemiyor",
   "server.update.unsupportedDescription":
-    "Bu OpenBot derlemesinde güncelleyici yok. {name} üzerine yeni bir sürüm yükleyin.",
+    "Bu GoAhead derlemesinde güncelleyici yok. {name} üzerine yeni bir sürüm yükleyin.",
   "server.update.restartConfirmTitle": "{name} şimdi yeniden başlatılsın mı?",
   "server.update.restartConfirmDescription":
     "{name} üzerinde çalışan ajan turları ve diğer işlemler durur. Yeniden başlatmanın ardından üyeler tekrar bağlanır.",
@@ -374,9 +374,9 @@ export const messages = {
   "server.update.loadFailed": "{name} güncelleme durumu yüklenemedi.",
   "server.update.hostAction": "Ana makineyi güncelle",
   // Sunucu Ayarları dışındaki bir sunucu yöneticisi için bildirimler.
-  "server.update.progressTitle": "{name} üzerinde OpenBot güncelleniyor",
+  "server.update.progressTitle": "{name} üzerinde GoAhead güncelleniyor",
   "server.update.availableTitle": "{name} için güncelleme mevcut",
-  "server.update.availableDescription": "OpenBot {version} mevcut. {name}, OpenBot {current} çalıştırıyor.",
+  "server.update.availableDescription": "GoAhead {version} mevcut. {name}, GoAhead {current} çalıştırıyor.",
   // Yeniden başlatmanın beklediği işlemler, "{reasons} bekleniyor" içinde yer alır.
   "server.update.reason.agentTurn": "bir ajan turu",
   "server.update.reason.queuedDelivery": "kuyruktaki bir mesaj",
@@ -389,14 +389,14 @@ export const messages = {
   "server.update.reason.fileTransfer": "bir dosya aktarımı",
   "server.update.reason.browserControl": "bir ajan tarafından tarayıcı kontrolü",
   "server.update.reason.updateOperation": "başka bir güncelleme adımı",
-  "server.update.reason.initialization": "OpenBot'un başlatılması",
+  "server.update.reason.initialization": "GoAhead'in başlatılması",
   "server.update.reason.other": "diğer çalışmalar",
   // Katılınan bir sunucu bir güncellemeye yeniden başladığında her üyeye bir bildirim. {name} sunucudur.
   "server.restartNotice.waitingTitle": "{name}, bir güncellemeyi yüklemek için yeniden başlatılacak",
-  "server.restartNotice.waitingVersionTitle": "{name}, OpenBot {version} sürümünü yüklemek için yeniden başlatılacak",
+  "server.restartNotice.waitingVersionTitle": "{name}, GoAhead {version} sürümünü yüklemek için yeniden başlatılacak",
   "server.restartNotice.waitingDescription":
-    "Yeniden başlatma, ajanları boşta kalana kadar bekler. Kısa bir süre için bağlantınız kesilir, ardından OpenBot otomatik olarak tekrar bağlanır.",
+    "Yeniden başlatma, ajanları boşta kalana kadar bekler. Kısa bir süre için bağlantınız kesilir, ardından GoAhead otomatik olarak tekrar bağlanır.",
   "server.restartNotice.restartingTitle": "{name}, güncellemeyi yüklemek için yeniden başlatılıyor",
-  "server.restartNotice.restartingDescription": "{name} geri geldiğinde OpenBot otomatik olarak tekrar bağlanır.",
+  "server.restartNotice.restartingDescription": "{name} geri geldiğinde GoAhead otomatik olarak tekrar bağlanır.",
   "server.restartNotice.backTitle": "{name} tekrar çevrim içi",
 } as const satisfies PartialTranslation<typeof source>;

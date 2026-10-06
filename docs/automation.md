@@ -1,6 +1,6 @@
 # Local script runs
 
-A script on the computer that runs OpenBot can run a routine of an agent and give it a payload. Use
+A script on the computer that runs GoAhead can run a routine of an agent and give it a payload. Use
 this to wake an agent when work outside its turn ends: a build, a download, a long test run.
 
 ```sh
@@ -10,7 +10,7 @@ long-job; curl -sS -X POST "$(cat "$OPENBOT_AUTOMATION/url")/v1/agents/<agentId>
   -d '{"payload":"long-job ended with code 0"}'
 ```
 
-`$OPENBOT_AUTOMATION` is not set by OpenBot. It stands for the folder below.
+`$OPENBOT_AUTOMATION` is not set by GoAhead. It stands for the folder below.
 
 ## Turn it on
 
@@ -24,7 +24,7 @@ so it can start a long command in the background and ask to be woken when it end
 
 ## Files
 
-While at least one agent allows local scripts, OpenBot listens on `127.0.0.1` on a free port and
+While at least one agent allows local scripts, GoAhead listens on `127.0.0.1` on a free port and
 writes three files in `<userData>/automation/`:
 
 | File | Contents |
@@ -33,12 +33,12 @@ writes three files in `<userData>/automation/`:
 | `token` | The bearer token |
 | `headers` | `Authorization: Bearer <token>`, for `curl -H @headers` |
 
-The folder is `0700` and the files are `0600`, so only the same OS user can read them. OpenBot
+The folder is `0700` and the files are `0600`, so only the same OS user can read them. GoAhead
 makes a new token and a new port at each start. A command reads the files when it runs, so a
 command that you copied before a restart still works. When the last agent turns the setting off, or
-OpenBot quits, OpenBot stops listening and deletes the files.
+GoAhead quits, GoAhead stops listening and deletes the files.
 
-`<userData>` is the OpenBot application data folder:
+`<userData>` is the GoAhead application data folder:
 
 - macOS: `~/Library/Application Support/OpenBot`
 - Linux: `~/.config/OpenBot`
@@ -94,12 +94,12 @@ Invoke-RestMethod -Method Post `
 
 - The listener binds only `127.0.0.1`. Other computers cannot reach it.
 - A request with an `Origin` header, or with a `Host` other than `127.0.0.1:<port>`, gets 403 before
-  OpenBot reads the token. A web page cannot use it through DNS rebinding.
-- The token is a secret: OpenBot redacts it from logs and never puts it in a prompt. The agent gets
+  GoAhead reads the token. A web page cannot use it through DNS rebinding.
+- The token is a secret: GoAhead redacts it from logs and never puts it in a prompt. The agent gets
   only the file paths.
 - Do not put the token in a command's arguments, for example with `-H "Authorization: Bearer
   $(cat token)"`. On Linux, other users can read the arguments of a running process. Use
   `-H @headers`.
-- OpenBot logs the agent and the routine of each run, never the payload.
+- GoAhead logs the agent and the routine of each run, never the payload.
 - A process that runs as the same OS user can read the token. Turn the setting on only for agents
   that you want such processes to wake.

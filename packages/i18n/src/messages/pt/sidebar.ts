@@ -78,7 +78,7 @@ export const messages = {
   "sidebar.delete.pending": "Excluindo…",
   "sidebar.delete.title": "Excluir {name}?",
   "sidebar.delete.agentDescription":
-    "Isso remove o agente e sua conversa no OpenBot do aplicativo. A fila, as memórias, as rotinas e o espaço de trabalho são excluídos. O histórico armazenado separadamente pelo provedor de CLI conectado não é excluído.",
+    "Isso remove o agente e sua conversa no GoAhead do aplicativo. A fila, as memórias, as rotinas e o espaço de trabalho são excluídos. O histórico armazenado separadamente pelo provedor de CLI conectado não é excluído.",
   "sidebar.delete.channelDescription":
     "Isso para o canal. O histórico continua em Canais excluídos, somente para visualização. Você não pode restaurá-lo. Os agentes membros são mantidos.",
   "sidebar.delete.sectionDescription":
@@ -92,12 +92,12 @@ export const messages = {
   "sidebar.announce.movedPinned": "Chat fixado movido para a posição {position} de {total}.",
   "sidebar.announce.personFallback": "pessoa",
   "sidebar.announce.chatFallback": "chat",
-  "sidebar.mobileApp.title": "OpenBot para iPhone",
+  "sidebar.mobileApp.title": "GoAhead para iPhone",
   "sidebar.mobileApp.body": "O aplicativo para iOS já está em beta público no TestFlight.",
   "sidebar.mobileApp.howToInstall": "Como instalar",
   "sidebar.mobileApp.dismiss": "Dispensar anúncio do aplicativo para iPhone",
   "sidebar.mobileApp.qrLabel": "Código QR do convite do TestFlight",
-  "sidebar.mobileApp.dialog.title": "Instale o OpenBot no seu iPhone",
+  "sidebar.mobileApp.dialog.title": "Instale o GoAhead no seu iPhone",
   "sidebar.mobileApp.dialog.description":
     "O aplicativo para iOS está em beta público. O Apple TestFlight faz a instalação.",
   "sidebar.mobileApp.dialog.copyLink": "Copiar link",
@@ -109,5 +109,5 @@ export const messages = {
     "Leia este código QR com a câmera do iPhone ou copie o link do convite e abra no seu iPhone.",
   "sidebar.mobileApp.step.install": "No TestFlight, toque em Aceitar e depois em Instalar.",
   "sidebar.mobileApp.step.connect":
-    "Abra o OpenBot no seu iPhone. Neste computador, vá a Configurações > Conectar celular e leia o código de acesso.",
+    "Abra o GoAhead no seu iPhone. Neste computador, vá a Configurações > Conectar celular e leia o código de acesso.",
 } as const satisfies PartialTranslation<typeof source>;

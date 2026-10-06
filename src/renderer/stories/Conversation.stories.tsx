@@ -265,7 +265,7 @@ const agentMessageGalleryMessages: RendererAgentMessage[] = [
     body: [
       "## Links and references",
       "",
-      "Review [OpenBot documentation](https://openbot.run/docs), the [Kobalte guide](https://kobalte.dev/docs/core/overview/introduction), and https://zaidan.carere.dev/docs/components/kobalte/bubble.",
+      "Review [GoAhead documentation](https://openbot.run/docs), the [Kobalte guide](https://kobalte.dev/docs/core/overview/introduction), and https://zaidan.carere.dev/docs/components/kobalte/bubble.",
       "",
       "You can also open [ConversationView.tsx](/Users/test/OpenBot/src/renderer/src/features/conversation/ConversationView.tsx), ask @Research, or inspect the attached source file below.",
       "",

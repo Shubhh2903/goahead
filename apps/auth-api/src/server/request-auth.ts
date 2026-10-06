@@ -121,7 +121,7 @@ export function requestGitHubInstallationTokens(): GitHubInstallationTokens {
   const clientId = bindings.GITHUB_APP_CLIENT_ID?.trim();
   const privateKey = bindings.GITHUB_APP_PRIVATE_KEY?.trim();
   if (!clientId || !privateKey) {
-    throw new GitHubInstallationTokensError(503, "github_app_unavailable", "The OpenBot GitHub App is not configured.");
+    throw new GitHubInstallationTokensError(503, "github_app_unavailable", "The GoAhead GitHub App is not configured.");
   }
   const key = `${clientId}\u0000${privateKey}`;
   if (githubInstallationTokens?.key !== key) {

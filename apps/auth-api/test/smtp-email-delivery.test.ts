@@ -55,7 +55,7 @@ describe("Private Email SMTP delivery", () => {
     );
 
     expect(writes).toContain("RCPT TO:<alice@example.com>\r\n");
-    expect(writes[7]).toContain("Subject: Join Studio Mac on OpenBot");
+    expect(writes[7]).toContain("Subject: Join Studio Mac on GoAhead");
     expect(writes[7]).toContain("owner@example.com invited you");
     expect(writes[7]).toContain("https://openbot.run/join?");
   });
@@ -101,13 +101,13 @@ describe("Private Email SMTP delivery", () => {
     const message = (writes[7] ?? "").replace(/\r\n\.\r\n$/u, "").replaceAll("\r\n..", "\r\n.");
     expect(message.split("\r\n").every((line) => line.length <= 998 && /^[\x20-\x7e]*$/u.test(line))).toBe(true);
     const subject = /^Subject: (.*(?:\r\n .*)*)$/mu.exec(message)?.[1] ?? "";
-    expect(decodeEncodedWords(subject)).toBe(`Join ${serverName} on OpenBot`);
+    expect(decodeEncodedWords(subject)).toBe(`Join ${serverName} on GoAhead`);
 
     const boundary = /boundary="([^"]+)"/u.exec(message)?.[1] ?? "";
     const parts = message.split(`--${boundary}`).slice(1, -1);
     const [text, html] = parts.map((part) => decodeQuotedPrintable(part.split("\r\n\r\n").slice(1).join("\r\n\r\n")));
     expect(parts.map((part) => /Content-Type: ([^;]+)/u.exec(part)?.[1])).toEqual(["text/plain", "text/html"]);
-    expect(text).toContain(`owner@example.com invited you to join ${serverName} on OpenBot.`);
+    expect(text).toContain(`owner@example.com invited you to join ${serverName} on GoAhead.`);
     expect(html).toContain("Zespół &lt;a href=//x.pl&gt;Kraków");
     expect(html).not.toContain("<a href=//x.pl>");
     expect(html).toContain(
@@ -170,7 +170,7 @@ describe("Private Email SMTP delivery", () => {
       "DATA\r\n",
       expect.stringContaining("ABCD-EFGH"),
     ]);
-    expect(writes[7]).toContain("Subject: Your OpenBot sign-in code");
+    expect(writes[7]).toContain("Subject: Your GoAhead sign-in code");
     expect(writes[7]?.endsWith("\r\n.\r\n")).toBe(true);
     expect(writes[8]).toBe("QUIT\r\n");
     expect(closed).toBe(true);

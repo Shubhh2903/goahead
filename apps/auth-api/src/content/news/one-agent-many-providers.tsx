@@ -11,7 +11,7 @@ export function OneAgentManyProviders() {
 
       <h2>What an agent keeps</h2>
       <p>
-        In OpenBot an agent owns three things that outlive any provider it runs on: a workspace on disk, a thread of
+        In GoAhead an agent owns three things that outlive any provider it runs on: a workspace on disk, a thread of
         everything it has done, and an identity of its own. Point the same agent at{" "}
         <a href={OPENBOT_LINKS.codex} target="_blank" rel={EXTERNAL_LINK_REL}>
           Codex

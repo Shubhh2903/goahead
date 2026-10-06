@@ -95,7 +95,7 @@ export const messages = {
   "agentSettings.runtime.workspaceEnforcedClaude":
     "Une modification de fichier à l’extérieur vous demande d’abord, même quand l’approbation automatique est activée. Une commande ne peut pas écrire à l’extérieur.",
   "agentSettings.runtime.workspaceUnlimited":
-    "Computer Use et le navigateur OpenBot ne sont pas limités ; vous pouvez désactiver Computer Use ci-dessous.",
+    "Computer Use et le navigateur GoAhead ne sont pas limités ; vous pouvez désactiver Computer Use ci-dessous.",
   "agentSettings.computerUse.title": "Computer Use",
   "agentSettings.computerUse.description": "Autoriser cet agent à contrôler les apps de cet ordinateur",
   "agentSettings.runtime.workspaceEnforcedProcess":

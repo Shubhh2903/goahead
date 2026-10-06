@@ -19,12 +19,12 @@ export interface RoundupPageProps {
   roundup: RoundupComparison;
 }
 
-/** OpenBot's entry draws its own logo, which `SideMark` draws when no mark is given. */
+/** GoAhead's entry draws its own logo, which `SideMark` draws when no mark is given. */
 function appMark(app: RoundupApp) {
   return app.mark === "openbot" ? undefined : app.mark;
 }
 
-// Many apps in one list. OpenBot is first, and the page says that we make it. Each
+// Many apps in one list. GoAhead is first, and the page says that we make it. Each
 // other entry links to the comparisons that include it, where its sources are. The
 // summary table is a real table, for the same reason as on a comparison.
 export function RoundupPage(props: RoundupPageProps) {
@@ -55,7 +55,7 @@ export function RoundupPage(props: RoundupPageProps) {
       <RevealSection class="compare-answer" titleId="compare-answer-title" title="The short answer">
         <p class="compare-answer-text">{props.roundup.answer}</p>
         <p class="compare-roundup-disclosure">
-          We make OpenBot, so it's first on the list. Every other entry links to a comparison with its sources.
+          We make GoAhead, so it's first on the list. Every other entry links to a comparison with its sources.
         </p>
       </RevealSection>
 

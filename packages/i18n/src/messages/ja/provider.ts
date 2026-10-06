@@ -53,7 +53,7 @@ export const messages = {
   "provider.aria.moreActions": "{name} のその他の操作",
 
   "provider.codeLogin.title": "コードで {name} にログイン",
-  "provider.codeLogin.description": "スマートフォンか別のブラウザで完了してください。OpenBot はここで待機します。",
+  "provider.codeLogin.description": "スマートフォンか別のブラウザで完了してください。GoAhead はここで待機します。",
   "provider.codeLogin.starting": "{name} からコードを取得しています…",
   "provider.codeLogin.qrLabel": "{name} のログインページの QR コード",
   "provider.codeLogin.open": "開く",
@@ -70,7 +70,7 @@ export const messages = {
   "provider.codeLogin.pasteExpired": "このログインは停止しました。",
   "provider.codeLogin.pasteExpiresIn": "待機しています。このログインは残り {time} で停止します。",
   "provider.codeLogin.linkTitle": "別のデバイスで {name} にログイン",
-  "provider.codeLogin.linkStep": "{name} にログインします。OpenBot は自動で続行します。",
+  "provider.codeLogin.linkStep": "{name} にログインします。GoAhead は自動で続行します。",
 
   "provider.picker.noEndpoints": "エンドポイントはまだありません",
   "provider.picker.customCounts": "{endpoints} · {agents}",

@@ -128,7 +128,7 @@ const CONNECTING_STATUS: AgentStatus = {
  * What the web client reports as its build. The browser has no main process to ask, and the web frame
  * uses the macOS geometry: the account dock beside the rail is the hybrid one.
  */
-const WEB_APP_INFO: AppInfo = { name: "OpenBot", version: "web", platform: "darwin", variant: "production" };
+const WEB_APP_INFO: AppInfo = { name: "GoAhead", version: "web", platform: "darwin", variant: "production" };
 /** Below this width the web shows one pane at a time; see `web-client.css`. */
 const PHONE_QUERY = "(max-width: 720px)";
 /** The account whose queue edit the browser may hold under `QUEUE_EDIT_STORAGE_KEY`. */
@@ -1143,7 +1143,7 @@ function WebWorkspaceFrame(props: WebWorkspaceProps) {
                 }
                 // The browser client does not know the unread counts of agent chats it has not opened.
                 hasUnread
-                serverName={workspace.state.host?.name ?? "OpenBot"}
+                serverName={workspace.state.host?.name ?? "GoAhead"}
                 serverMenu={{
                   servers: servers(),
                   view: layout.serverView(),

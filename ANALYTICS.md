@@ -1,6 +1,6 @@
 # Product analytics
 
-OpenBot uses a self-hosted OpenPanel project for production product analytics. This document is the
+GoAhead uses a self-hosted OpenPanel project for production product analytics. This document is the
 contract for event meaning, attribution, privacy, and reporting. Changes to an event name, property,
 or success definition require an analytics schema version bump and corresponding test updates.
 
@@ -70,7 +70,7 @@ lifecycle. A malformed preference fails closed; a missing preference uses the do
 
 | Event | Product question | Success definition |
 |---|---|---|
-| `desktop_app_opened` | How many accounts/devices open OpenBot? | App state and identity have loaded |
+| `desktop_app_opened` | How many accounts/devices open GoAhead? | App state and identity have loaded |
 | `app_updated` | Did an update actually take effect? | A new version is observed on the next launch |
 | `account_sign_in_started` | Can visitors start authentication? | A code was sent |
 | `account_sign_in_completed` | Can visitors become verified accounts? | Verified signed-in state returned |

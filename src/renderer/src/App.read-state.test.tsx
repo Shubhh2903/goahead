@@ -1139,7 +1139,7 @@ describe("OpenBot connected desktop shell", () => {
     // the match, and a read behind the report is a read of messages nobody saw.
     await fireEvent.keyDown(window, { key: "k", metaKey: true });
     await fireEvent.click(await screen.findByRole("tab", { name: "Messages" }));
-    await fireEvent.input(screen.getByRole("combobox", { name: "Search OpenBot" }), { target: { value: "report" } });
+    await fireEvent.input(screen.getByRole("combobox", { name: "Search GoAhead" }), { target: { value: "report" } });
     await fireEvent.click(await screen.findByRole("option", { name: /Found while the report was open/ }));
 
     expect(await screen.findByRole("heading", { name: "Sales Outbound" })).toBeInTheDocument();

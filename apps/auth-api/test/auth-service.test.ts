@@ -308,7 +308,7 @@ describe("email one-time codes", () => {
     }
   });
 
-  it("signs in once and stores an OpenBot session", async () => {
+  it("signs in once and stores a GoAhead session", async () => {
     const repository = new MemoryAuthRepository();
     let deliveredCode = "";
     const profileChanged = vi.fn(async (_userId: string) => undefined);
@@ -685,17 +685,17 @@ describe("email one-time codes", () => {
   });
 
   it("gives every email path the same answer for a refused mailbox", () => {
-    expect(emailDeliveryFailure("email_delivery_rate_limited", "OpenBot could not send the invitation.")).toMatchObject(
+    expect(emailDeliveryFailure("email_delivery_rate_limited", "GoAhead could not send the invitation.")).toMatchObject(
       {
         status: 429,
         code: "email_delivery_rate_limited",
         retryAfterSeconds: 300,
       },
     );
-    expect(emailDeliveryFailure("smtp_message_failed", "OpenBot could not send the invitation.")).toMatchObject({
+    expect(emailDeliveryFailure("smtp_message_failed", "GoAhead could not send the invitation.")).toMatchObject({
       status: 502,
       code: "email_delivery_failed",
-      message: "OpenBot could not send the invitation.",
+      message: "GoAhead could not send the invitation.",
     });
     expect(isEmailDeliveryFailure(new Error("email_delivery_rate_limited"))).toBe(true);
     expect(isEmailDeliveryFailure(new Error("smtp_message_failed"))).toBe(true);

@@ -2,8 +2,8 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/server";
 
 export const messages = {
-  "server.compatibility.updateClientTitle": "Mettez à jour cette application OpenBot",
-  "server.compatibility.updateHostTitle": "Mettez à jour OpenBot sur {name}",
+  "server.compatibility.updateClientTitle": "Mettez à jour cette application GoAhead",
+  "server.compatibility.updateHostTitle": "Mettez à jour GoAhead sur {name}",
   "server.compatibility.unsafeDataTitle": "L’hôte a renvoyé des données non sûres",
   "server.compatibility.cannotConnectTitle": "Impossible de se connecter à {name}",
   "server.compatibility.updateClientDescription":
@@ -11,19 +11,19 @@ export const messages = {
   "server.compatibility.updateHostDescription":
     "L’hôte prend en charge uniquement des protocoles plus anciens que ceux de cette application. Mettez à jour l’hôte, puis réessayez.",
   "server.compatibility.unsafeDataDescription":
-    "OpenBot a arrêté cette connexion, car des données connues étaient invalides. Les données de votre espace de travail actuel n’ont pas été modifiées.",
+    "GoAhead a arrêté cette connexion, car des données connues étaient invalides. Les données de votre espace de travail actuel n’ont pas été modifiées.",
   "server.compatibility.clientVersion": "Version du client",
   "server.compatibility.hostVersion": "Version de l’hôte",
   "server.compatibility.negotiatedProtocol": "Protocole négocié",
   "server.compatibility.unknown": "Inconnu",
   "server.compatibility.none": "Aucun",
-  "server.compatibility.versionMismatchTitle": "Versions d’OpenBot différentes sur {name}",
+  "server.compatibility.versionMismatchTitle": "Versions de GoAhead différentes sur {name}",
   "server.compatibility.versionMismatchDescription":
     "La connexion utilise le protocole {protocol}. Certaines fonctions récentes peuvent être indisponibles. Client {clientVersion} ; hôte {hostVersion}.",
   "server.compatibility.versionMismatchUpdateHostDescription":
-    "Mettez à jour OpenBot sur {name} pour utiliser toutes les fonctions. La connexion utilise le protocole {protocol}. Client {clientVersion} ; hôte {hostVersion}.",
+    "Mettez à jour GoAhead sur {name} pour utiliser toutes les fonctions. La connexion utilise le protocole {protocol}. Client {clientVersion} ; hôte {hostVersion}.",
   "server.compatibility.versionMismatchUpdateClientDescription":
-    "Mettez à jour cette application OpenBot pour utiliser toutes les fonctions. La connexion utilise le protocole {protocol}. Client {clientVersion} ; hôte {hostVersion}.",
+    "Mettez à jour cette application GoAhead pour utiliser toutes les fonctions. La connexion utilise le protocole {protocol}. Client {clientVersion} ; hôte {hostVersion}.",
   "server.join.title": "Rejoindre un serveur",
   "server.join.verifiedFrom": "Invitation vérifiée de {hostname}.",
   "server.join.pasteToContinue": "Collez un lien d’invitation pour continuer.",
@@ -111,7 +111,7 @@ export const messages = {
     "Connectez des serveurs MCP et choisissez ceux que les agents de ce serveur peuvent utiliser.",
   "server.settings.storageTitle": "Stockage",
   "server.settings.storageDescription":
-    "Voyez ce qu’OpenBot conserve sur le disque de ce serveur et libérez de l’espace.",
+    "Voyez ce que GoAhead conserve sur le disque de ce serveur et libérez de l’espace.",
   "server.settings.hostedSitesTitle": "Sites",
   "server.settings.hostedSitesDescription":
     "Les sites statiques que les agents de ce serveur ont publiés sur openbot.site.",
@@ -121,9 +121,9 @@ export const messages = {
   "server.settings.nameTooLong": "N’utilisez pas plus de {limit} caractères.",
   "server.settings.actionFailedTitle": "L’action sur le serveur a échoué",
   "server.settings.actionFailed": "L’action sur le serveur a échoué.",
-  "server.settings.imageReadFailed": "OpenBot n’a pas pu lire cette image.",
+  "server.settings.imageReadFailed": "GoAhead n’a pas pu lire cette image.",
   "server.settings.copyFailedTitle": "Échec de la copie",
-  "server.settings.copyFailed": "OpenBot n’a pas pu copier cette valeur.",
+  "server.settings.copyFailed": "GoAhead n’a pas pu copier cette valeur.",
   "server.settings.close": "Fermer les réglages du serveur",
   "server.settings.unavailableTitle": "Réglages du serveur indisponibles",
   "server.settings.unsavedMcpChanges": "Modifications MCP non enregistrées",
@@ -216,7 +216,7 @@ export const messages = {
   "server.invite.full":
     "Ce serveur a atteint la limite de {limit} membres. Retirez un membre pour inviter une nouvelle personne.",
   "server.invite.qrLabel": "Code QR de l’invitation",
-  "server.invite.qrDescription": "Scannez ce code dans OpenBot Mobile pour rejoindre ce serveur.",
+  "server.invite.qrDescription": "Scannez ce code dans GoAhead Mobile pour rejoindre ce serveur.",
   "server.invite.accepted": "Invitation acceptée",
   "server.invite.expired": "Invitation expirée",
   "server.invite.sent": "Invitation envoyée",
@@ -224,7 +224,7 @@ export const messages = {
   "server.invite.acceptedDescription":
     "Le membre a rejoint ce serveur. Créez un nouveau lien pour inviter une autre personne.",
   "server.invite.expiredDescription": "Créez un nouveau lien pour inviter quelqu’un.",
-  "server.invite.linkReadyDescription": "Partagez le lien ou scannez le code QR dans OpenBot Mobile.",
+  "server.invite.linkReadyDescription": "Partagez le lien ou scannez le code QR dans GoAhead Mobile.",
   "server.invite.pendingTitle": "Invitations en attente",
   "server.invite.pendingCount": "{total} en attente",
   "server.invite.noPending": "Aucune invitation en attente.",
@@ -247,7 +247,7 @@ export const messages = {
   "server.desktop.connectionUnavailable": "Connexion indisponible",
   "server.desktop.hostOffline": "L’hôte est hors ligne",
   "server.desktop.hostOfflineDescription": "Reconnectez-vous à l’hôte avant d’ouvrir son bureau.",
-  "server.desktop.hostUpdateDescription": "Mettez à jour OpenBot sur l’hôte pour utiliser le contrôle à distance.",
+  "server.desktop.hostUpdateDescription": "Mettez à jour GoAhead sur l’hôte pour utiliser le contrôle à distance.",
   "server.desktop.serviceAvailable": "Service disponible",
   "server.desktop.serviceAvailableDescription": "Le contrôle WebRTC est disponible pour tous les membres actifs.",
   "server.desktop.serviceNotReady": "Service pas prêt",

@@ -4,7 +4,7 @@ export function YourWorkStaysOnYourComputer() {
   return (
     <>
       <p>
-        OpenBot keeps your workspaces, conversations, attachments, browser data and team data on the computer that runs
+        GoAhead keeps your workspaces, conversations, attachments, browser data and team data on the computer that runs
         it. They go into a SQLite database in your own home directory. There is no copy on our side, because there is no
         place on our side to put one.
       </p>
@@ -13,7 +13,7 @@ export function YourWorkStaysOnYourComputer() {
       <p>
         We cannot read your chats. We cannot hand them to anyone who asks us, because we do not hold them. If you delete
         the database, the conversation is gone rather than merely hidden. And the application keeps working when our
-        servers do not: OpenBot runs without an account at all.
+        servers do not: GoAhead runs without an account at all.
       </p>
       <p>
         It also changes who is responsible for backups. Nothing is uploaded, so nothing is restored for you. That trade
@@ -27,7 +27,7 @@ export function YourWorkStaysOnYourComputer() {
         load from the internet. Plugins can still make requests.
       </p>
       <p>
-        The honest version of the promise is narrower than the slogan: OpenBot adds no hop of its own. We wrote down
+        The honest version of the promise is narrower than the slogan: GoAhead adds no hop of its own. We wrote down
         exactly which data leaves your machine and why in the{" "}
         <a href={OPENBOT_LINKS.privacy} target="_blank" rel={EXTERNAL_LINK_REL}>
           privacy notes

@@ -30,7 +30,7 @@ export function ContentCallToAction() {
       </p>
       <div class="post-cta-actions">
         <ButtonLink to="/" hash="download" variant="primary" size="lg" icon="download">
-          Download OpenBot
+          Download GoAhead
         </ButtonLink>
         <Button
           href={OPENBOT_LINKS.contact}

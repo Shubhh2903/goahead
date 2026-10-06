@@ -58,7 +58,7 @@ export const ErrorState: Story = {
   args: {
     inviteUrl: "",
     onPreview: async () => {
-      throw new Error("The OpenBot invitation link is invalid.");
+      throw new Error("The GoAhead invitation link is invalid.");
     },
   },
 };
@@ -72,7 +72,7 @@ export const Joining: Story = {
 export const JoinError: Story = {
   args: {
     onJoin: async () => {
-      throw new Error("OpenBot could not connect to this host.");
+      throw new Error("GoAhead could not connect to this host.");
     },
   },
 };

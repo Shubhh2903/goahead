@@ -105,7 +105,7 @@ export function LandingAppPreview() {
       data-preview-state="idle"
     >
       <h2 id="app-preview-title" class="landing-visually-hidden">
-        Interactive OpenBot application preview
+        Interactive GoAhead application preview
       </h2>
       <span class="landing-preview-window-controls" aria-hidden="true">
         <i />
@@ -116,12 +116,12 @@ export function LandingAppPreview() {
         ref={placeholder}
         class="landing-preview-placeholder t-skel-skeleton"
         role="status"
-        aria-label="Loading OpenBot preview"
+        aria-label="Loading GoAhead preview"
       />
       <div class="landing-preview-stage t-skel-content">
         <iframe
           ref={iframe}
-          title="Interactive OpenBot application preview"
+          title="Interactive GoAhead application preview"
           sandbox="allow-forms allow-same-origin allow-scripts"
         />
       </div>

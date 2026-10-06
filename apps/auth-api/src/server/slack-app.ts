@@ -1,5 +1,5 @@
-// The OpenBot Slack app's OAuth install. One app serves every workspace: a workspace member installs
-// it once, and the workspace is linked to one OpenBot host, which answers all of its messages. The
+// The GoAhead Slack app's OAuth install. One app serves every workspace: a workspace member installs
+// it once, and the workspace is linked to one GoAhead host, which answers all of its messages. The
 // Worker exchanges the code because the client secret lives here, records only which host answers
 // the workspace, and seals the bot token to the host's key. It keeps no token. The sealed grant goes
 // back to the desktop in the URL fragment of `/slack/connect`.
@@ -63,7 +63,7 @@ export class SlackAppService {
     const clientSecret = bindings.SLACK_CLIENT_SECRET?.trim();
     const stateSecret = bindings.SLACK_STATE_SECRET?.trim();
     if (!clientId || !clientSecret || !stateSecret || new TextEncoder().encode(stateSecret).byteLength < 32) {
-      throw new SlackAppError(503, "slack_not_configured", "The OpenBot Slack app is not configured.");
+      throw new SlackAppError(503, "slack_not_configured", "The GoAhead Slack app is not configured.");
     }
     this.#database = bindings.DB;
     this.#clientId = clientId;
@@ -191,7 +191,7 @@ export class SlackAppService {
       throw new SlackAppError(
         409,
         "slack_workspace_taken",
-        "Another OpenBot server answers this Slack workspace. Disconnect it there first.",
+        "Another GoAhead server answers this Slack workspace. Disconnect it there first.",
       );
     }
     return {

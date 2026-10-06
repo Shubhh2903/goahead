@@ -6,7 +6,7 @@ export const messages = defineMessages("customProvider", {
   "customProvider.error.providerIdPattern":
     "Use lowercase letters, numbers, hyphens or underscores, starting with a letter or number.",
   "customProvider.error.providerIdLength": "Keep the provider ID under {max} characters.",
-  "customProvider.error.providerIdBuiltIn": "OpenBot already has a provider called {id}. Choose another ID.",
+  "customProvider.error.providerIdBuiltIn": "GoAhead already has a provider called {id}. Choose another ID.",
   "customProvider.error.providerIdSaved":
     "An endpoint called {id} is already saved. Remove it first, or choose another ID.",
   "customProvider.error.displayNameRequired": "Enter a display name.",
@@ -29,16 +29,16 @@ export const messages = defineMessages("customProvider", {
   "customProvider.error.baseUrlCredential": "Put the credential in a header, not in the URL.",
 
   // The note after a save or a removal. It tells the user when OpenCode reads the new list.
-  "customProvider.saved.restarted": "Saved. OpenBot is loading the models.",
+  "customProvider.saved.restarted": "Saved. GoAhead is loading the models.",
   "customProvider.saved.skippedBusy":
     "Saved. OpenCode reads the list after the current task stops. Press Connect then.",
   "customProvider.saved.notRunning": "Saved. OpenCode reads the list when it next starts.",
-  "customProvider.removed.restarted": "Removed. OpenBot is loading the models.",
+  "customProvider.removed.restarted": "Removed. GoAhead is loading the models.",
   "customProvider.removed.skippedBusy":
     "Removed. OpenCode reads the list after the current task stops. Press Connect then.",
   "customProvider.removed.notRunning": "Removed. OpenCode reads the list when it next starts.",
-  "customProvider.saveFailed": "OpenBot could not save this endpoint.",
-  "customProvider.removeFailed": "OpenBot could not remove {name}.",
+  "customProvider.saveFailed": "GoAhead could not save this endpoint.",
+  "customProvider.removeFailed": "GoAhead could not remove {name}.",
   "customProvider.saveUnavailable": "This build cannot save an endpoint.",
   "customProvider.removeUnavailable": "This build cannot remove an endpoint.",
 
@@ -103,7 +103,7 @@ export const messages = defineMessages("customProvider", {
   "customProvider.detected.title": "Found on this computer",
   "customProvider.detected.scanning": "Looking for local models and agents.",
   "customProvider.detected.scanAgain": "Scan again",
-  "customProvider.detected.empty": "OpenBot found no local model server or ACP agent.",
+  "customProvider.detected.empty": "GoAhead found no local model server or ACP agent.",
   "customProvider.detected.add": "Add",
   "customProvider.detected.addLabel": "Add {name}",
   "customProvider.detected.added": "Added",
@@ -121,10 +121,10 @@ export const messages = defineMessages("customProvider", {
   // Where the scan looks. The default addresses and PATH are always part of it.
   "customProvider.detection.title": "Local detection",
   "customProvider.detection.saveFailed": "Could not save the detection settings.",
-  "customProvider.detection.description": "Where OpenBot looks for local model servers and ACP agents.",
+  "customProvider.detection.description": "Where GoAhead looks for local model servers and ACP agents.",
   "customProvider.detection.enabled": "Look for local models and agents",
   "customProvider.detection.enabledDescription":
-    "OpenBot checks the default addresses of Ollama and LM Studio, and looks for known ACP agents on your PATH.",
+    "GoAhead checks the default addresses of Ollama and LM Studio, and looks for known ACP agents on your PATH.",
   "customProvider.detection.addresses": "Other model server addresses",
   "customProvider.detection.address.label": "Address {number}",
   "customProvider.detection.address.remove": "Remove address {number}",
@@ -145,7 +145,7 @@ export const messages = defineMessages("customProvider", {
   "customProvider.acp.agentId": "Agent ID",
   "customProvider.acp.agentIdHint": "Lowercase letters, numbers, or hyphens. You cannot change it later.",
   "customProvider.acp.command": "Command",
-  "customProvider.acp.commandHint": "The program to start. OpenBot looks for it on your PATH.",
+  "customProvider.acp.commandHint": "The program to start. GoAhead looks for it on your PATH.",
   "customProvider.acp.args": "Arguments",
   "customProvider.acp.argsHint": "Separate arguments with spaces. Put quotes around an argument that has spaces.",
   "customProvider.acp.env": "Environment variables",
@@ -155,7 +155,7 @@ export const messages = defineMessages("customProvider", {
   "customProvider.acp.env.add": "Add variable",
   "customProvider.acp.check": "Connection",
   "customProvider.acp.checkRun": "Check agent",
-  "customProvider.acp.checkIdle": "OpenBot starts the command once to make sure that it answers.",
+  "customProvider.acp.checkIdle": "GoAhead starts the command once to make sure that it answers.",
   "customProvider.acp.checking": "Starting {command}.",
   "customProvider.acp.checkOk": "{name} answered",
   "customProvider.acp.checkOkVersion": "{name} {version} answered",
@@ -163,7 +163,7 @@ export const messages = defineMessages("customProvider", {
   "customProvider.acp.checkFailed": "The agent did not answer",
   "customProvider.acp.trustTitle": "This command runs on your computer",
   "customProvider.acp.trustDescription":
-    "OpenBot starts it with your user account. The agent can read and change files and run commands. Add only an agent that you trust.",
+    "GoAhead starts it with your user account. The agent can read and change files and run commands. Add only an agent that you trust.",
   "customProvider.acp.submit": "Add agent",
   "customProvider.acp.editTitle": "Edit a custom ACP agent",
   "customProvider.acp.submitEdit": "Save agent",
@@ -180,7 +180,7 @@ export const messages = defineMessages("customProvider", {
 
   // The user's own ACP agents in Settings. Each is a command that OpenBot starts on this computer.
   "customProvider.agents.title": "Custom agents",
-  "customProvider.agents.description": "ACP agents that OpenBot starts on this computer.",
+  "customProvider.agents.description": "ACP agents that GoAhead starts on this computer.",
   "customProvider.agents.empty": "No custom agents yet.",
   "customProvider.agents.add": "Add agent",
   "customProvider.agents.restart": "Restart agents",
@@ -192,11 +192,11 @@ export const messages = defineMessages("customProvider", {
   "customProvider.agents.deleteLabel": "Delete {name}",
   "customProvider.agents.confirmDescription":
     "Its saved variables are discarded, and each agent that uses it moves to a default model.",
-  "customProvider.agents.saveFailed": "OpenBot could not save this agent.",
-  "customProvider.agents.saved.restarted": "Saved. OpenBot restarted the custom agents.",
+  "customProvider.agents.saveFailed": "GoAhead could not save this agent.",
+  "customProvider.agents.saved.restarted": "Saved. GoAhead restarted the custom agents.",
   "customProvider.agents.saved.skippedBusy": "Saved. The custom agents restart after the current task stops.",
   "customProvider.agents.saved.notRunning": "Saved. The custom agents read it when they next start.",
-  "customProvider.agents.removed.restarted": "Removed. OpenBot restarted the custom agents.",
+  "customProvider.agents.removed.restarted": "Removed. GoAhead restarted the custom agents.",
   "customProvider.agents.removed.skippedBusy": "Removed. The custom agents restart after the current task stops.",
   "customProvider.agents.removed.notRunning": "Removed. The custom agents read it when they next start.",
 

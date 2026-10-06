@@ -33,12 +33,12 @@ describe("browser account UI", () => {
         }}
       />
     ));
-    expect(await screen.findByRole("link", { name: "Download OpenBot" })).toHaveAttribute("href", "/#download");
+    expect(await screen.findByRole("link", { name: "Download GoAhead" })).toHaveAttribute("href", "/#download");
     expect(screen.getByRole("button", { name: "Join with invitation" })).toBeEnabled();
     await waitFor(() => expect(screen.getByRole("button", { name: "Refresh hosts" })).toBeEnabled());
     await fireEvent.click(screen.getByRole("button", { name: "Refresh hosts" }));
     await screen.findByRole("button", { name: "View agent settings" });
-    expect(screen.queryByRole("link", { name: "Download OpenBot" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Download GoAhead" })).not.toBeInTheDocument();
   });
   it("reads the host models after a connect that the user started", async () => {
     setup();

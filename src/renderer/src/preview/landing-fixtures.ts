@@ -208,7 +208,7 @@ const LANDING_PREVIEW_SERVERS: ServerSummary[] = [
   },
   {
     id: "team",
-    name: "OpenBot team",
+    name: "GoAhead team",
     logoUrl: productionLogoUrl,
     notificationsMuted: false,
     notificationsMutedUntil: null,

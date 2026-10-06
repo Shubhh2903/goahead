@@ -460,7 +460,7 @@ export class BillingService {
       parseBillingLookupKey(`openbot_${price?.metadata.openbot_plan}_${price?.metadata.openbot_interval}`);
     const currency = subscription.currency.toLowerCase();
     if (!key || !isBillingCurrency(currency) || !isOneOf(BILLING_SUBSCRIPTION_STATUSES, subscription.status)) {
-      console.warn("billing: subscription is not an OpenBot plan", { subscriptionId });
+      console.warn("billing: subscription is not a GoAhead plan", { subscriptionId });
       return null;
     }
     const ownerId = await this.#subscriptionOwner(subscription, customerId);
@@ -582,7 +582,7 @@ export class BillingService {
       ? await this.#database.prepare("SELECT id FROM users WHERE id = ?").bind(userId).first<{ id: string }>()
       : null;
     if (!user) {
-      console.warn("billing: subscription names no OpenBot account", { subscriptionId: subscription.id });
+      console.warn("billing: subscription names no GoAhead account", { subscriptionId: subscription.id });
       return null;
     }
     const now = this.#now();

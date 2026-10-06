@@ -166,7 +166,7 @@ describe("plugin catalog validation", () => {
 
   it("refuses a reserved server name", () => {
     const reserved = pluginWithServer({ ...httpServer, name: "openbot" });
-    expect(() => validatePlugin("example", reserved, false, updatedAt)).toThrow("OpenBot already uses the name");
+    expect(() => validatePlugin("example", reserved, false, updatedAt)).toThrow("GoAhead already uses the name");
   });
 
   it("refuses a second app", () => {

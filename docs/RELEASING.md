@@ -1,23 +1,23 @@
-# Releasing OpenBot
+# Releasing GoAhead
 
 For iOS builds uploaded to TestFlight through GitHub Actions, see
 [the mobile release guide](../apps/mobile/README.md#github-actions-testflight-release).
 The mobile workflow is separate from the desktop tag release described below.
 
-OpenBot updates are published through GitHub Releases and installed with `electron-updater`.
+GoAhead updates are published through GitHub Releases and installed with `electron-updater`.
 macOS requires every auto-updatable build to be signed with a Developer ID Application certificate.
 The release workflow also notarizes and staples the macOS application before publishing it. A Windows
 x64 tag release is signed with Azure Artifact Signing (see [Windows signing](#windows-signing)). Linux
 releases are unsigned, and the Linux AppImage carries no signature.
 All three platforms must pass before one release is published. A release also requires the pinned
 Sunshine and Moonlight Web runtime artifacts. GitHub Actions downloads those artifacts, checks SHA-256, and
-verifies their native executables as part of the final OpenBot package. Release packages are not built
+verifies their native executables as part of the final GoAhead package. Release packages are not built
 on a developer machine.
 
 Codex, Claude, and Grok runtimes are optional downloads. They are not part of the application package.
 Release CI downloads the pinned macOS, Windows, and Linux provider artifacts as control artifacts. It
 checks their SHA-256 values, versions, licenses, and vendor signatures without copying them into
-OpenBot. Linux has no code-signature contract to check, so its provider artifacts are verified by
+GoAhead. Linux has no code-signature contract to check, so its provider artifacts are verified by
 SHA-256 and version only.
 
 Installed apps do not wait for a release to get a new provider CLI: they offer the latest upstream
@@ -86,7 +86,7 @@ certificate builds download reputation.
 ## Build the remote desktop runtime
 
 `native-runtime.lock.json` pins the upstream source for Sunshine `v2026.516.143833` and Moonlight Web
-`v2.10.0` by full commit and source archive SHA-256. Each entry also records the reviewable OpenBot
+`v2.10.0` by full commit and source archive SHA-256. Each entry also records the reviewable GoAhead
 patch applied to that source. Build on the target platform:
 
 ```bash
@@ -103,7 +103,7 @@ Use this source build only to make or reproduce a runtime version. The
 `.github/workflows/remote-desktop-runtime.yml` workflow builds macOS ARM64, macOS x64 and Windows x64 when the
 recipe or a pinned input changes. It publishes an immutable GitHub prerelease named
 `remote-desktop-runtime-<input-digest>`. The prerelease contains the three deterministic archives, SPDX
-SBOMs, build provenance, and `remote-desktop-runtime-manifest.json`. It is not an OpenBot application
+SBOMs, build provenance, and `remote-desktop-runtime-manifest.json`. It is not a GoAhead application
 update and it must never contain `latest.yml`.
 
 PR pushes do not cancel an active runtime build. The next run reuses a successful native build
@@ -151,7 +151,7 @@ assets in an existing runtime prerelease. Increase `recipeVersion` when the buil
 ### Sunshine security backports (runtime recipe 12)
 
 The Sunshine upstream base remains `v2026.516.143833` to keep the tested macOS input backend.
-The OpenBot patch includes these upstream security changes and regression tests:
+The GoAhead patch includes these upstream security changes and regression tests:
 
 - `1583e7c4a7e99538c7700315a1d2a2101c6d2812`: validate input packets before queueing and
   dispatch (GHSA-26q2-58j6-qmvv and GHSA-6w33-pjh7-p77c).
@@ -165,16 +165,16 @@ The OpenBot patch includes these upstream security changes and regression tests:
 Backport adaptations retain the older platform APIs and test fixtures. Native CI builds and runs
 only the relevant packet, pairing, REST authorization, and certificate regression tests. The local
 Moonlight client uses a random pairing name and approves only its matching loopback request ID.
-Moonlight now builds from the same upstream commit with the existing OpenBot patch and a fix
+Moonlight now builds from the same upstream commit with the existing GoAhead patch and a fix
 that sends the configured pairing name instead of the upstream hard-coded name.
 The published runtime uses a new recipe/input digest; no existing release assets are replaced.
 The Linux GUI capability advisory GHSA-fp6g-27w5-489j does not apply: the Linux runtime is built
-with the tray off, and OpenBot gives Sunshine no file capabilities.
+with the tray off, and GoAhead gives Sunshine no file capabilities.
 
 ### Linux runtime (recipe 14)
 
 The `linux-x64` target builds on Ubuntu 24.04 with GCC 14, X11 capture and software encoding only
-(CUDA, DRM, KWin, VAAPI, Vulkan, Wayland, portal and tray are off). The OpenBot patch adds an XTest
+(CUDA, DRM, KWin, VAAPI, Vulkan, Wayland, portal and tray are off). The GoAhead patch adds an XTest
 input backend, because Xvfb does not read uinput devices. It also links libcap when DRM is off and
 adds a `vaMapBuffer2` shim, because the prebuilt FFmpeg needs libva 2.21 and Ubuntu 24.04 has 2.20.
 The runtime uses the system libraries of Ubuntu 24.04; the hosted server template installs them.
@@ -210,7 +210,7 @@ packages have no license file, so set `licenseSha256` to the SHA-256 of `LICENSE
 
 ## Pin the OpenCode CLI
 
-`native-runtime.lock.json` also pins the OpenCode CLI that OpenBot downloads for the OpenCode
+`native-runtime.lock.json` also pins the OpenCode CLI that GoAhead downloads for the OpenCode
 provider before its first update check answers, by npm platform package, asset SHA-256, extracted binary SHA-256, byte counts, and the
 MIT license file it fetches from `github.com/anomalyco/opencode`. Codex, Claude, and Grok are pinned
 in the same file by hand; OpenCode has a script, because the version, both platform packages, and
@@ -237,7 +237,7 @@ before release.
 ## Pin the Computer Use driver
 
 `native-runtime.lock.json` pins `cua-driver`, the third-party binary that gives every provider
-Computer Use, by release tag, asset SHA-256, and one SHA-256 for each file OpenBot ships. Unlike the
+Computer Use, by release tag, asset SHA-256, and one SHA-256 for each file GoAhead ships. Unlike the
 provider CLIs, the driver is packaged rather than downloaded on demand, so the release carries it and
 the user installs nothing.
 
@@ -260,7 +260,7 @@ check both that the driver is present and that no other platform's is. The macOS
 `dist:linux`.
 
 On macOS the driver arrives signed by Cua AI with the hardened runtime, a secure timestamp, and the
-Automation entitlement. `mac.signIgnore` keeps that signature: re-signing it under OpenBot's
+Automation entitlement. `mac.signIgnore` keeps that signature: re-signing it under GoAhead's
 inherited entitlements would drop the entitlement and break the driver's Automation route.
 Notarization accepts a nested binary signed by another Developer ID team, and
 `verify-macos-package.ts` fails if the Cua AI authority or the hardened runtime flag is ever lost.
@@ -289,8 +289,8 @@ an older machine with an illegal instruction and no message, which would reach t
 server that never starts.
 
 Move this pin at release preparation, with the release-upgrade-safety audit, and not on a schedule:
-a pinned runtime is OpenBot's supply chain, and a Bun security release only reaches users through an
-OpenBot release. One reviewed commit per release.
+a pinned runtime is GoAhead's supply chain, and a Bun security release only reaches users through an
+GoAhead release. One reviewed commit per release.
 
 ## Release notes
 
@@ -426,7 +426,7 @@ It logs in to Azure, then signs a throwaway executable once immediately and once
 the delay between login and signing in a release build. It uploads and publishes nothing. Run it once
 after a change to the Azure setup or to `electron-builder.windows-signing.yml`, before the next tag.
 
-Installed OpenBot builds check for updates shortly after launch and every four minutes. New versions
+Installed GoAhead builds check for updates shortly after launch and every four minutes. New versions
 download automatically while **Automatically download updates** is on, which is the default and is
 persisted per user in `openbot-update-preference-v1.json`; with the setting off, a download starts
 only on a user action. The account popover shows the current state and lets the user download an
@@ -438,7 +438,7 @@ check, download, or restart reports an actionable error and can be retried in pl
 
 The Whisper executable is part of the macOS and Windows applications. Linux ships no Whisper binary
 and no remote desktop runtime, so voice prompts and remote desktop report themselves as unavailable
-there. The `ggml-medium-q5_0.bin` model is not part of an application or update artifact. OpenBot downloads the pinned model on first voice use, checks its size
+there. The `ggml-medium-q5_0.bin` model is not part of an application or update artifact. GoAhead downloads the pinned model on first voice use, checks its size
 and SHA-256, and keeps the verified file in the user data directory for later offline use.
 
 The release workflow stops if the macOS update ZIP, the Windows NSIS installer, or the Linux AppImage

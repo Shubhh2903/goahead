@@ -2,7 +2,7 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/app";
 
 export const messages = {
-  "app.loading": "OpenBot Yükleniyor",
+  "app.loading": "GoAhead Yükleniyor",
   "app.leftPanel.resize": "Sol kenar çubuğunu yeniden boyutlandır",
   "app.host.thisMac": "Bu Mac",
   "app.host.thisComputer": "Bu bilgisayar",
@@ -27,15 +27,15 @@ export const messages = {
   "app.provider.codeExpired": "{name} kodunun süresi doldu",
   "app.provider.codeExpiredDescription": "Kimse zamanında girmedi. Bu kod artık geçerli değil.",
   "app.provider.connectFailed": "{name} bağlanamadı",
-  "app.provider.connectFailedRetry": "OpenBot {name} sağlayıcısına bağlanamadı. Tekrar deneyin.",
-  "app.provider.included": "{name}, OpenBot ile birlikte gelir.",
+  "app.provider.connectFailedRetry": "GoAhead {name} sağlayıcısına bağlanamadı. Tekrar deneyin.",
+  "app.provider.included": "{name}, GoAhead ile birlikte gelir.",
   "app.clipboard.copyFailed": "Metin kopyalanamadı.",
   "app.voice.tooLong": "Ses kayıtları iki dakika ile sınırlıdır.",
   "app.avatar.type": "Bir PNG, JPEG veya WebP görseli seçin.",
   "app.avatar.size": "10 MB'tan küçük bir görsel seçin.",
   "app.avatar.processingUnavailable": "Görsel işleme kullanılamıyor.",
-  "app.avatar.tooLarge": "OpenBot bu görseli yeterince küçültemedi. Daha sade bir görsel seçin.",
-  "app.avatar.processFailed": "OpenBot bu görseli işleyemedi.",
+  "app.avatar.tooLarge": "GoAhead bu görseli yeterince küçültemedi. Daha sade bir görsel seçin.",
+  "app.avatar.processFailed": "GoAhead bu görseli işleyemedi.",
   "app.chart.total": "Toplam",
   "app.modelVariant.default": "Varsayılan",
   "app.qrCode.label": "QR kodu",

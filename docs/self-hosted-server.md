@@ -1,6 +1,6 @@
 # Self-hosted servers
 
-A self-hosted server is the Linux OpenBot build on your own computer with no screen: a VPS, a home
+A self-hosted server is the Linux GoAhead build on your own computer with no screen: a VPS, a home
 server or a cloud VM. It is a normal Remote host of your account. You use it from the desktop app,
 the iPhone app or `openbot.run/app`, as you use a [hosted server](hosted-servers.md). You install
 and control it from a terminal.
@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/nightly-labs/openbot/main/scripts/i
 sudo openbot login
 ```
 
-`openbot login` asks for your email and the code that OpenBot sends to it. After the sign-in, the
+`openbot login` asks for your email and the code that GoAhead sends to it. After the sign-in, the
 server shows in the server list of that account. Its name is "OpenBot"; give another one with
 `sudo openbot login --name <name>` or `sudo openbot name <name>`. A name has 6 to 32 characters.
 Then connect a provider from the app, as on a hosted server (see
@@ -26,12 +26,12 @@ Install options go after `sudo bash -s --`:
 
 | Option | Default | Use |
 | --- | --- | --- |
-| `--user <name>` | the installed user, else `openbot` | The user that runs OpenBot and its agents. The install makes it when it does not exist, with its home folder in `/var/lib/<name>`. |
+| `--user <name>` | the installed user, else `openbot` | The user that runs GoAhead and its agents. The install makes it when it does not exist, with its home folder in `/var/lib/<name>`. |
 | `--auth-api-url <origin>` | the installed one, else the URL in the build | Another account server, for example the `test` Worker or a [self-hosted account service](self-hosting.md). |
 
 Run the install again to reinstall or upgrade. The data stays in the home folder of the service
 user. A reinstall keeps the user and the account server, because the sign-in belongs to them, and
-refuses another `--user`. The install refuses an older release than the installed one, because an older OpenBot cannot
+refuses another `--user`. The install refuses an older release than the installed one, because an older GoAhead cannot
 open a database that a newer one migrated. It also refuses a computer that is a hosted server.
 
 ## Commands
@@ -45,7 +45,7 @@ open a database that a newer one migrated. It also refuses a computer that is a 
 | `openbot logs [-f]` | Show the journal of `openbot.service`. |
 | `sudo openbot start\|stop\|restart` | Control `openbot.service`. |
 | `sudo openbot update` | Download, check and install the newest release now. |
-| `sudo openbot uninstall` | Sign out and remove OpenBot. The data stays (see [Remove](#remove)). |
+| `sudo openbot uninstall` | Sign out and remove GoAhead. The data stays (see [Remove](#remove)). |
 | `openbot version` | Show the installed version. |
 
 Run the account commands with `sudo` or as the service user. Other users cannot open the control
@@ -79,7 +79,7 @@ scripts, the AppArmor profile and the units. It writes `self` to `/opt/OpenBot/h
 links `/usr/local/bin/openbot`.
 
 With `mode` set to `self`, `openbot-hosted-server` does not wait for a claim or for a boat desktop.
-It starts a D-Bus session with an unlocked keyring, as on a hosted server, and runs OpenBot under
+It starts a D-Bus session with an unlocked keyring, as on a hosted server, and runs GoAhead under
 Xvfb with `OPENBOT_SERVER=1`. Main (`src/main/server-mode.ts`) then opens the control socket
 `/run/openbot/control.sock` and publishes the host after each sign-in.
 
@@ -99,7 +99,7 @@ Threat model:
   Main refuses to listen when the directory belongs to another user or other users can enter it. It
   never removes a file at the socket path that is not a socket.
 - Only the service user and root can connect. Agents run as the service user and already have full
-  access to its files, its keyring and the OpenBot database, so the socket gives them nothing new.
+  access to its files, its keyring and the GoAhead database, so the socket gives them nothing new.
 - The socket answers a closed list of requests. It never sends the session token or the sign-in
   code back, and a value cannot add a line to an answer. A body is at most 4 KiB.
 - Server mode starts only in a packaged Linux build with `OPENBOT_SERVER=1`, and never on a hosted

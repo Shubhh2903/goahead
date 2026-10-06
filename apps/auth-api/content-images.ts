@@ -60,13 +60,13 @@ export interface ContentImageJob {
   markRow?: readonly ContentImageMark[] | undefined;
 }
 
-/** A compared product's mark, or OpenBot's own logo. */
+/** A compared product's mark, or GoAhead's own logo. */
 export type ContentImageMark = RivalMarkName | "openbot";
 
 export interface ContentImageLockup {
   rivalMark: RivalMarkName;
   rivalName: string;
-  /** The left side when it is not OpenBot: a matchup of two other products. */
+  /** The left side when it is not GoAhead: a matchup of two other products. */
   left?: { mark: RivalMarkName; name: string } | undefined;
 }
 

@@ -36,7 +36,7 @@ export interface WorkerBindings {
   /** Signs Slack route tickets. Its public key must also be in `REMOTE_TICKET_PUBLIC_JWKS`. */
   SLACK_ROUTE_PRIVATE_JWK?: string;
   SLACK_ROUTE_KEY_ID?: string;
-  /** The OpenBot Slack app, which every workspace installs. */
+  /** The GoAhead Slack app, which every workspace installs. */
   SLACK_CLIENT_ID?: string;
   SLACK_CLIENT_SECRET?: string;
   /** Signs the OAuth `state` of the Slack install. At least 32 bytes. */
@@ -58,9 +58,9 @@ export interface WorkerBindings {
   /** An OpenPanel server client and its write-only secret, for account events. Set only in production. */
   OPENPANEL_CLIENT_ID?: string;
   OPENPANEL_CLIENT_SECRET?: string;
-  /** The public Client ID of the OpenBot GitHub App. */
+  /** The public Client ID of the GoAhead GitHub App. */
   GITHUB_APP_CLIENT_ID?: string;
-  /** The private key of the OpenBot GitHub App as a PKCS #8 PEM. Without it, no installation token is issued. */
+  /** The private key of the GoAhead GitHub App as a PKCS #8 PEM. Without it, no installation token is issued. */
   GITHUB_APP_PRIVATE_KEY?: string;
   /** The Apple Push Notification service key (`.p8`, PEM text). The Live Activity relay is off without it. */
   APNS_PRIVATE_KEY?: string;

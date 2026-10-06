@@ -5,7 +5,7 @@ export const Route = createFileRoute("/v1/team-hosts/ice-servers")({
   server: {
     handlers: {
       POST: () =>
-        apiError(426, "host_update_required", "Update OpenBot on the host to get ICE credentials from Remote Signal."),
+        apiError(426, "host_update_required", "Update GoAhead on the host to get ICE credentials from Remote Signal."),
     },
   },
 });

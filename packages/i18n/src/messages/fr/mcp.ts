@@ -8,10 +8,10 @@ export const messages = {
   "mcp.connect.close": "Fermer la connexion à {name}",
   "mcp.connect.getKey": "Obtenir une clé",
   "mcp.connect.keyDescription":
-    "Collez un identifiant de votre compte {name}. OpenBot se connecte avec et le conserve sur {host}.",
+    "Collez un identifiant de votre compte {name}. GoAhead se connecte avec et le conserve sur {host}.",
   "mcp.connect.thisComputer": "cet ordinateur",
   "mcp.connect.noCredentialDescription":
-    "{name} ne demande aucun identifiant. OpenBot se connecte une fois pour voir les outils proposés.",
+    "{name} ne demande aucun identifiant. GoAhead se connecte une fois pour voir les outils proposés.",
   "mcp.connect.connect": "Connecter",
   "mcp.connect.required": "Obligatoire.",
   "mcp.connect.keptOn": "Conservé sur {host}.",
@@ -22,7 +22,7 @@ export const messages = {
   "mcp.local.address": "Adresse",
   "mcp.local.docs": "Guide d'installation",
   "mcp.signIn.description":
-    "Connectez-vous à votre compte {name}. OpenBot obtient les outils accessibles à ce compte, sans mot de passe.",
+    "Connectez-vous à votre compte {name}. GoAhead obtient les outils accessibles à ce compte, sans mot de passe.",
   "mcp.signIn.waiting": "En attente du navigateur…",
   "mcp.signIn.continue": "Continuer vers {name}",
   "mcp.server.loadFailed": "Impossible de charger les serveurs MCP.",
@@ -51,7 +51,7 @@ export const messages = {
   "mcp.panel.empty": "Aucun serveur MCP pour le moment.",
   "mcp.panel.enable": "Activer {name}",
   "mcp.panel.detailsTitle": "Détails",
-  "mcp.panel.detailsDescription": "Nommez ce serveur et choisissez comment OpenBot le joint.",
+  "mcp.panel.detailsDescription": "Nommez ce serveur et choisissez comment GoAhead le joint.",
   "mcp.panel.transport": "Transport",
   "mcp.panel.name": "Nom",
   "mcp.panel.namePlaceholder": "Nom du serveur MCP",

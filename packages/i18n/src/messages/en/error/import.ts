@@ -3,8 +3,8 @@ import { defineMessages } from "../../../message";
 export const messages = defineMessages("error.import", {
   // Agent import errors and warnings.
   "error.import.manifestNotJson": "{manifest} is not valid JSON.",
-  "error.import.notAgentExport": "{manifest} is not an OpenBot agent export.",
-  "error.import.newerExportSkill": "This export was made by a newer export skill. Update OpenBot and try again.",
+  "error.import.notAgentExport": "{manifest} is not a GoAhead agent export.",
+  "error.import.newerExportSkill": "This export was made by a newer export skill. Update GoAhead and try again.",
   "error.import.noAgents": "The export contains no agents.",
   "error.import.tooManyAgents": "The export contains more than {limit} agents.",
   "error.import.tooManyChannels": "The export contains more than {limit} channels.",

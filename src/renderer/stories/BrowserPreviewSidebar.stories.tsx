@@ -8,7 +8,7 @@ import { createMockOpenBot } from "./mock-openbot";
 const tabs = [
   {
     id: "docs",
-    title: "OpenBot documentation",
+    title: "GoAhead documentation",
     url: "https://openbot.run/docs",
     loading: false,
     ownerThreadId: "chief",

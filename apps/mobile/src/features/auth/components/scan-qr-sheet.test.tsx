@@ -261,7 +261,7 @@ describe("scanner sheet lifecycle", () => {
       expect(screen.getByRole("button", { name: "Scan QR code" })).toBeTruthy();
       expect(screen.queryByText("2. Go to Settings → Mobile Connect.")).toBeNull();
       await act(() => fireEvent.click(screen.getByRole("button", { name: "Where is the QR code?" })));
-      expect(screen.getByText("1. Open OpenBot on your computer.")).toBeTruthy();
+      expect(screen.getByText("1. Open GoAhead on your computer.")).toBeTruthy();
       expect(screen.getByText("2. Go to Settings → Mobile Connect.")).toBeTruthy();
       expect(screen.getByText("3. Choose Generate QR code, then scan it here.")).toBeTruthy();
       await act(() => fireEvent.click(screen.getByRole("button", { name: "Where is the QR code?" })));

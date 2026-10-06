@@ -22,7 +22,7 @@ function LaunchStage(props: { variant: ProductHuntLaunchVariant }) {
   return (
     <div class="ph-story-stage">
       <div class="ph-story-page" aria-hidden="true">
-        <span class="ph-story-headline">Meet OpenBot</span>
+        <span class="ph-story-headline">Meet GoAhead</span>
       </div>
       <dialog open class="ph-dialog ph-story-dialog" aria-labelledby={titleId}>
         <ProductHuntLaunchPanel variant={props.variant} titleId={titleId} onDismiss={() => {}} />
@@ -31,7 +31,7 @@ function LaunchStage(props: { variant: ProductHuntLaunchVariant }) {
   );
 }
 
-/** OpenBot beside an upvote tile, with confetti rising behind them. */
+/** GoAhead beside an upvote tile, with confetti rising behind them. */
 export const LaunchPad: Story = { render: () => <LaunchStage variant="launch-pad" /> };
 
 /** The live design: a torn launch-day ticket that admits one upvote. */

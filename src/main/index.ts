@@ -567,7 +567,7 @@ function requestDesktopNotificationPermission(
     preference,
     showWelcome: () => {
       if (!Notification.isSupported()) return;
-      showRetainedNotification(new Notification({ title: "OpenBot", body: translate("notification.welcome") }));
+      showRetainedNotification(new Notification({ title: "GoAhead", body: translate("notification.welcome") }));
     },
   });
 }

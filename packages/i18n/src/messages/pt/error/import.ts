@@ -3,9 +3,9 @@ import type { messages as source } from "../../en/error/import";
 
 export const messages = {
   "error.import.manifestNotJson": "{manifest} não é um JSON válido.",
-  "error.import.notAgentExport": "{manifest} não é uma exportação de agente do OpenBot.",
+  "error.import.notAgentExport": "{manifest} não é uma exportação de agente do GoAhead.",
   "error.import.newerExportSkill":
-    "Esta exportação foi feita por uma habilidade de exportação mais recente. Atualize o OpenBot e tente novamente.",
+    "Esta exportação foi feita por uma habilidade de exportação mais recente. Atualize o GoAhead e tente novamente.",
   "error.import.noAgents": "A exportação não contém agentes.",
   "error.import.tooManyAgents": "A exportação contém mais de {limit} agentes.",
   "error.import.tooManyChannels": "A exportação contém mais de {limit} canais.",

@@ -18,7 +18,7 @@ export const messages = {
   "mobile.settings.home.preferences": "Préférences",
   "mobile.settings.home.generalHint": "Apparence et conversations",
   "mobile.settings.home.general": "Général",
-  "mobile.settings.home.about": "À propos d’OpenBot",
+  "mobile.settings.home.about": "À propos de GoAhead",
   "mobile.settings.home.support": "Assistance",
   "mobile.settings.home.supportHint": "Obtenir de l’aide et enregistrer un journal d’assistance",
   "mobile.settings.support.help": "Obtenir de l’aide",
@@ -33,7 +33,7 @@ export const messages = {
   "mobile.settings.support.clearTitle": "Effacer le journal d’assistance ?",
   "mobile.settings.support.clearBody": "Tous les événements du journal seront supprimés de ce téléphone.",
   "mobile.settings.support.logFooter":
-    "Le journal reste sur ce téléphone et OpenBot ne l’envoie pas. Il enregistre les étapes de connexion, les requêtes et les erreurs. Il n’enregistre ni les messages ni les fichiers, et il masque les mots de passe et les jetons. Lisez le fichier avant de le partager.",
+    "Le journal reste sur ce téléphone et GoAhead ne l’envoie pas. Il enregistre les étapes de connexion, les requêtes et les erreurs. Il n’enregistre ni les messages ni les fichiers, et il masque les mots de passe et les jetons. Lisez le fichier avant de le partager.",
   "mobile.settings.support.saveFailed": "Impossible d’enregistrer le fichier du journal. Réessayez.",
   "mobile.settings.support.sharingUnavailable": "Le partage n’est pas disponible sur ce téléphone.",
   "mobile.settings.support.recent": "Événements récents",
@@ -75,7 +75,7 @@ export const messages = {
   "mobile.settings.feedback.retry": "Réessayer d’enregistrer le réglage haptique",
   "mobile.settings.liveActivities.title": "Activités en direct",
   "mobile.settings.liveActivities.footer":
-    "Affiche le travail, les messages, les questions et les approbations des agents sur l’écran verrouillé et dans la Dynamic Island pendant qu’OpenBot est ouvert.",
+    "Affiche le travail, les messages, les questions et les approbations des agents sur l’écran verrouillé et dans la Dynamic Island pendant que GoAhead est ouvert.",
   "mobile.settings.liveActivities.toggle": "Afficher l’activité des agents",
   "mobile.settings.liveActivities.retry": "Réessayer d’enregistrer le réglage des activités en direct",
   "mobile.settings.privacy.title": "Confidentialité",
@@ -102,6 +102,6 @@ export const messages = {
   "mobile.settings.profile.accountSessions": "Sessions du compte",
   "mobile.settings.profile.signOutTitle": "Se déconnecter ?",
   "mobile.settings.profile.signOutBody":
-    "Reconnectez-vous en scannant un nouveau code depuis OpenBot sur votre ordinateur.",
+    "Reconnectez-vous en scannant un nouveau code depuis GoAhead sur votre ordinateur.",
   "mobile.settings.profile.signOut": "Se déconnecter",
 } as const satisfies PartialTranslation<typeof source>;

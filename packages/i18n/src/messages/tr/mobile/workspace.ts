@@ -18,7 +18,7 @@ export const messages = {
   "mobile.workspace.error.leaveOwnServer": "Yalnızca katılınan uzak sunuculardan ayrılınabilir.",
   "mobile.workspace.error.agentNotOnHost": "Ajan bu ana makinede değil.",
   "mobile.workspace.error.filesUnsupported":
-    "Bu ana makine dosya yönetimini desteklemiyor. Ana makinedeki OpenBot'u güncelleyin.",
+    "Bu ana makine dosya yönetimini desteklemiyor. Ana makinedeki GoAhead'i güncelleyin.",
   "mobile.workspace.error.agentUnavailableOnHost": "Ajan bu ana makinede kullanılamıyor.",
   "mobile.workspace.error.agentUnavailable": "Ajan kullanılamıyor.",
   "mobile.workspace.error.formUnavailable": "Bu form artık kullanılamıyor.",

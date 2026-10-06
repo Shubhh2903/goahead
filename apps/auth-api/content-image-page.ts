@@ -168,7 +168,7 @@ function drawLockup(context: CanvasRenderingContext2D, job: ContentImageJob, loc
   context.fillStyle = "rgba(255, 255, 255, 0.86)";
   context.textAlign = "center";
   const nameBaseline = logoTop + logoSize + nameGap + nameSize * 0.9;
-  context.fillText(lockup.left?.name ?? "OpenBot", left + logoSize / 2, nameBaseline);
+  context.fillText(lockup.left?.name ?? "GoAhead", left + logoSize / 2, nameBaseline);
   context.fillText(lockup.rivalName, right + logoSize / 2, nameBaseline);
 
   // The hairline, broken around "vs".

@@ -28,34 +28,34 @@ export function SlackConnectPage() {
   return <SlackConnectView openUrl={openUrl()} failure={failure()} />;
 }
 
-/** The page's card: the link back to OpenBot, or why Slack did not finish. */
+/** The page's card: the link back to GoAhead, or why Slack did not finish. */
 export function SlackConnectView(props: { openUrl: string; failure: string | null }) {
   return (
     <main class="join-page">
-      <a class="landing-brand join-page-brand" href="/" aria-label="OpenBot home">
+      <a class="landing-brand join-page-brand" href="/" aria-label="GoAhead home">
         <AppLogo variant="production" class="landing-brand-logo" />
-        <span>OpenBot</span>
+        <span>GoAhead</span>
       </a>
       <section class="join-card" aria-labelledby="slack-connect-title">
         <AppLogo variant="production" animation="blink" class="join-card-logo" />
         <p class="join-card-eyebrow">Slack</p>
-        <h1 id="slack-connect-title">Return to OpenBot</h1>
+        <h1 id="slack-connect-title">Return to GoAhead</h1>
         <Show
           when={!props.failure}
           fallback={
             <p class="join-card-error">
               {props.failure === "slack_workspace_taken"
-                ? "Another OpenBot server already answers this Slack workspace. Disconnect it on that server, then try again."
-                : "Slack did not finish the connection. Go back to OpenBot and start again."}
+                ? "Another GoAhead server already answers this Slack workspace. Disconnect it on that server, then try again."
+                : "Slack did not finish the connection. Go back to GoAhead and start again."}
             </p>
           }
         >
-          <p class="join-card-copy">OpenBot finishes the Slack connection on your computer.</p>
+          <p class="join-card-copy">GoAhead finishes the Slack connection on your computer.</p>
           <Show when={props.openUrl}>
             {(href) => (
               <div class="join-card-actions join-card-actions-single">
                 <Button href={href()} variant="primary" size="lg" icon="open">
-                  Open OpenBot
+                  Open GoAhead
                 </Button>
               </div>
             )}

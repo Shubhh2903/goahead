@@ -2,8 +2,8 @@ import { createFileRoute } from "@tanstack/solid-router";
 import { requestSlackApp } from "../../../server/request-auth";
 import { SlackAppError } from "../../../server/slack-app";
 
-// Slack returns here after the OpenBot app's install. The sealed grant goes to `/slack/connect` in
-// the URL fragment, which the browser does not send to any server, and that page opens OpenBot.
+// Slack returns here after the GoAhead app's install. The sealed grant goes to `/slack/connect` in
+// the URL fragment, which the browser does not send to any server, and that page opens GoAhead.
 export const Route = createFileRoute("/v2/slack/callback")({
   server: {
     handlers: {

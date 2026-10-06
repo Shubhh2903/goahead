@@ -133,7 +133,7 @@ describe("plugin page", () => {
     const plugin = firstPlugin();
     renderPage(() => <PluginPage plugin={plugin} />);
 
-    expect(screen.getByRole("link", { name: "Open in OpenBot" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Open in GoAhead" })).toHaveAttribute(
       "href",
       `openbot://plugins/${plugin.slug}`,
     );
@@ -175,7 +175,7 @@ describe("plugin page", () => {
 
     expect(screen.queryByRole("link", { name: /^Download for / })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("link", { name: "Open in OpenBot" }));
+    fireEvent.click(screen.getByRole("link", { name: "Open in GoAhead" }));
     vi.advanceTimersByTime(2000);
     flush();
 
@@ -191,7 +191,7 @@ describe("plugin page", () => {
     const plugin = firstPlugin();
     renderPage(() => <PluginPage plugin={plugin} />);
 
-    fireEvent.click(screen.getByRole("link", { name: "Open in OpenBot" }));
+    fireEvent.click(screen.getByRole("link", { name: "Open in GoAhead" }));
     window.dispatchEvent(new Event("pagehide"));
     vi.advanceTimersByTime(2000);
     flush();

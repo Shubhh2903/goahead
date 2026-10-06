@@ -128,7 +128,7 @@ async function drawColumn(
   await drawLogo(context, x, 92, 44, colors);
   context.fillStyle = colors.primary;
   context.font = `600 28px ${FONT}`;
-  context.fillText("OpenBot", x + 58, 124);
+  context.fillText("GoAhead", x + 58, 124);
 
   // `y` is always the baseline of the last line drawn.
   let y = 154;
@@ -157,7 +157,7 @@ async function drawColumn(
     y += lineHeight;
   }
 
-  const label = "Add to OpenBot";
+  const label = "Add to GoAhead";
   context.font = `600 24px ${FONT}`;
   const pillWidth = context.measureText(label).width + 64;
   context.fillStyle = colors.primary;

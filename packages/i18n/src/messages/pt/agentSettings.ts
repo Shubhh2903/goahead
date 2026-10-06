@@ -87,7 +87,7 @@ export const messages = {
   "agentSettings.runtime.workspaceEnforcedClaude":
     "A edição de um arquivo fora desses locais pede sua aprovação, mesmo com Aprovação automática ativada. Um comando não pode gravar fora desses locais.",
   "agentSettings.runtime.workspaceUnlimited":
-    "O Uso do computador e o navegador do OpenBot não são limitados; você pode desativar o Uso do computador abaixo.",
+    "O Uso do computador e o navegador do GoAhead não são limitados; você pode desativar o Uso do computador abaixo.",
   "agentSettings.computerUse.title": "Uso do computador",
   "agentSettings.computerUse.description": "Permitir que este agente controle aplicativos neste computador",
   "agentSettings.runtime.workspaceEnforcedProcess":

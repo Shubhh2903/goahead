@@ -17,11 +17,11 @@ export interface PluginOpenButtonsProps {
 const DOWNLOAD_HINT_DELAY_MS = 1200;
 
 /**
- * `Open in OpenBot` (or the label the page gives), and the download offer that appears only after it is pressed.
+ * `Open in GoAhead` (or the label the page gives), and the download offer that appears only after it is pressed.
  *
  * The page cannot ask whether the app is installed, and it must not try: a hidden frame that probes
  * the scheme is a fingerprint. So the offer is a reveal on a timer, cancelled when the tab is hidden
- * - which is what happens when the app really does take over. A visitor who has OpenBot never sees
+ * - which is what happens when the app really does take over. A visitor who has GoAhead never sees
  * it, and a visitor who does not sees it a moment later. Neither is redirected anywhere.
  *
  * The offer is a modal `<dialog>` rather than a line on the page. A visitor sees it only after the

@@ -4,13 +4,13 @@ import type { messages as source } from "../en/settings";
 export const messages = {
   // The language setting itself.
   "settings.language.title": "Langue",
-  "settings.language.description": "OpenBot affiche les menus, les boutons et les messages dans cette langue.",
+  "settings.language.description": "GoAhead affiche les menus, les boutons et les messages dans cette langue.",
   "settings.language.system": "Langue du système",
   // The logo color setting, General tab.
   "settings.appearance.title": "Apparence",
   "settings.logoColor.title": "Couleur du logo",
   "settings.logoColor.description":
-    "La couleur du logo OpenBot dans le Dock,\nla barre des tâches et la Dynamic Island.",
+    "La couleur du logo GoAhead dans le Dock,\nla barre des tâches et la Dynamic Island.",
   "settings.logoColor.buildNote":
     "Cette version garde sa propre couleur de logo. Le choix s’applique à l’application publiée.",
   "settings.logoColor.lavender": "Lavande",
@@ -26,9 +26,9 @@ export const messages = {
   // The Settings window, General tab.
   "settings.providers.title": "Fournisseurs d’IA",
   "settings.appBehavior.title": "Comportement de l’application",
-  "settings.launchAtLogin.title": "Lancer OpenBot à l’ouverture de session",
+  "settings.launchAtLogin.title": "Lancer GoAhead à l’ouverture de session",
   "settings.launchAtLogin.description": "Ouvrir l’application lorsque vous vous connectez à cet ordinateur.",
-  "settings.keepRunning.title": "Garder OpenBot actif en arrière-plan",
+  "settings.keepRunning.title": "Garder GoAhead actif en arrière-plan",
   "settings.keepRunning.description": "Poursuivre les tâches en cours après la fermeture de la fenêtre.",
   "settings.workspace.title": "Espace de travail",
   "settings.restoreWorkspace.title": "Restaurer le dernier espace de travail au lancement",
@@ -37,7 +37,7 @@ export const messages = {
   "settings.externalLinks.description": "Choisir où s’ouvrent les liens provenant des conversations.",
   // The two link targets. The saved value stays in English; only the label is translated.
   "settings.externalLinks.defaultBrowser": "Navigateur par défaut",
-  "settings.externalLinks.openbot": "OpenBot",
+  "settings.externalLinks.openbot": "GoAhead",
   "settings.autonomy.title": "Autonomie de l’agent",
   "settings.turbo.title": "Mode Turbo",
   "settings.turbo.description":
@@ -53,7 +53,7 @@ export const messages = {
   "settings.desktopNotifications.description": "Afficher une notification lorsqu’un agent a besoin d’attention.",
   "settings.testNotification.title": "Notification de test",
   "settings.testNotification.description":
-    "En afficher une maintenant. Si elle n’apparaît pas, autorisez les notifications d’OpenBot dans les réglages du système.",
+    "En afficher une maintenant. Si elle n’apparaît pas, autorisez les notifications de GoAhead dans les réglages du système.",
   "settings.testNotification.action": "Envoyer un test",
   "settings.testNotification.failed": "Impossible d’afficher une notification.",
   "settings.testNotification.openSettings": "Ouvrir les réglages du système",
@@ -79,7 +79,7 @@ export const messages = {
   "settings.notch.show.description":
     "Afficher l’activité des agents et les éléments nécessitant votre attention en haut de chaque écran.",
   "settings.notch.idle.title": "Afficher l’îlot au repos",
-  "settings.notch.idle.description": "Afficher le logo OpenBot et un message d’accueil lorsqu’aucun état n’est actif.",
+  "settings.notch.idle.description": "Afficher le logo GoAhead et un message d’accueil lorsqu’aucun état n’est actif.",
   "settings.notch.displays.title": "Afficher sur les écrans supplémentaires",
   "settings.notch.displays.description": "Afficher l’îlot dynamique sur les écrans externes connectés.",
   "settings.notch.haptics.title": "Retour haptique",
@@ -95,21 +95,21 @@ export const messages = {
   "settings.privacy.title": "Confidentialité",
   "settings.analytics.title": "Partager les données analytiques du produit",
   "settings.analytics.description":
-    "Envoyer des métadonnées d’utilisation et de fiabilité, avec l’identifiant et l’e-mail de votre compte, aux services analytiques auto-hébergés d’OpenBot.",
+    "Envoyer des métadonnées d’utilisation et de fiabilité, avec l’identifiant et l’e-mail de votre compte, aux services analytiques auto-hébergés de GoAhead.",
   // The Settings window shell: its tab list, headers and save bar.
   "settings.tab.general.title": "Général",
-  "settings.tab.general.description": "Contrôler le comportement d’OpenBot sur cet ordinateur.",
+  "settings.tab.general.description": "Contrôler le comportement de GoAhead sur cet ordinateur.",
   "settings.tab.computerUse.title": "Computer Use",
   "settings.tab.computerUse.description":
-    "Autoriser OpenBot à voir et à interagir avec les applications de cet ordinateur.",
+    "Autoriser GoAhead à voir et à interagir avec les applications de cet ordinateur.",
   "settings.tab.profile.title": "Profil",
-  "settings.tab.profile.description": "Gérer votre apparence dans OpenBot.",
+  "settings.tab.profile.description": "Gérer votre apparence dans GoAhead.",
   "settings.tab.mobileConnect.title": "Connexion mobile",
   "settings.tab.mobileConnect.description": "Se connecter en toute sécurité depuis votre téléphone.",
   "settings.tab.dynamicIsland.title": "Îlot dynamique",
   "settings.tab.dynamicIsland.description": "Choisir quand l’îlot s’affiche et sa taille.",
   "settings.tab.updates.title": "Mises à jour",
-  "settings.tab.updates.description": "Garder OpenBot à jour sur cet ordinateur.",
+  "settings.tab.updates.description": "Garder GoAhead à jour sur cet ordinateur.",
   "settings.tab.billing.title": "Facturation",
   "settings.tab.billing.description": "Offres des serveurs, moyen de paiement et factures.",
   "settings.sections.label": "Sections des réglages",
@@ -128,7 +128,7 @@ export const messages = {
   "settings.mobileConnect.title": "Connecter votre téléphone",
   "settings.mobileConnect.iosApp.title": "App iPhone",
   "settings.mobileConnect.iosApp.description":
-    "OpenBot pour iPhone est en bêta publique sur TestFlight. Installez-la, puis connectez-vous ci-dessous.",
+    "GoAhead pour iPhone est en bêta publique sur TestFlight. Installez-la, puis connectez-vous ci-dessous.",
   "settings.mobileConnect.iosApp.copyLink": "Copier le lien",
   "settings.mobileConnect.iosApp.linkCopied": "Lien copié",
   "settings.mobileConnect.iosApp.qrLabel": "Code QR de l'invitation TestFlight",
@@ -137,9 +137,9 @@ export const messages = {
     "Scannez ce code QR avec l'appareil photo de l'iPhone, ou copiez le lien d'invitation et ouvrez-le sur votre iPhone.",
   "settings.mobileConnect.iosApp.step.install": "Dans TestFlight, touchez Accepter, puis Installer.",
   "settings.mobileConnect.iosApp.step.signIn":
-    "Ouvrez OpenBot sur votre iPhone. Générez un code QR ci-dessous et scannez-le pour vous connecter.",
+    "Ouvrez GoAhead sur votre iPhone. Générez un code QR ci-dessous et scannez-le pour vous connecter.",
   "settings.mobileConnect.description":
-    "Scannez un code à usage unique avec l’application mobile OpenBot pour utiliser ce compte sur votre téléphone.",
+    "Scannez un code à usage unique avec l’application mobile GoAhead pour utiliser ce compte sur votre téléphone.",
   "settings.mobileConnect.signIn.title": "Connexion mobile",
   "settings.mobileConnect.signIn.description":
     "Le code expire après deux minutes et cesse de fonctionner après le premier scan réussi.",
@@ -149,11 +149,11 @@ export const messages = {
   "settings.mobileConnect.expired.title": "Ce code a expiré",
   "settings.mobileConnect.expired.description": "Générez un nouveau code pour connecter votre téléphone.",
   "settings.mobileConnect.qrLabel": "Code QR de connexion Mobile Connect",
-  "settings.mobileConnect.scan.title": "Ouvrez OpenBot sur votre téléphone",
+  "settings.mobileConnect.scan.title": "Ouvrez GoAhead sur votre téléphone",
   "settings.mobileConnect.scan.description": "Choisissez Scanner un code QR et pointez l’appareil photo vers ce code.",
   "settings.mobileConnect.expiresIn": "Expire dans {time}",
   "settings.mobileConnect.connected.title": "Téléphone connecté",
-  "settings.mobileConnect.connected.description": "{name} est prêt à utiliser OpenBot.",
+  "settings.mobileConnect.connected.description": "{name} est prêt à utiliser GoAhead.",
   "settings.mobileConnect.devices.title": "Appareils connectés",
   "settings.mobileConnect.devices.refreshing": "Actualisation…",
   "settings.mobileConnect.disconnectInfo.title": "Déconnecter un appareil",
@@ -185,7 +185,7 @@ export const messages = {
   "settings.profile.name.tooLong": "Utilisez au plus {limit} caractères.",
   "settings.profile.name.saveFailed": "Impossible de mettre à jour votre nom d’affichage.",
   "settings.profile.photo.title": "Photo de profil",
-  "settings.profile.photo.description": "Affichée avec votre profil dans OpenBot.",
+  "settings.profile.photo.description": "Affichée avec votre profil dans GoAhead.",
   "settings.profile.photo.upload": "Importer une photo de profil",
   "settings.profile.photo.add": "Ajouter une photo de profil",
   "settings.profile.photo.edit": "Modifier la photo de profil",
@@ -194,7 +194,7 @@ export const messages = {
   "settings.profile.photo.processFailed": "Impossible de traiter votre photo de profil.",
   "settings.profile.account.title": "Compte",
   "settings.profile.email.title": "E-mail",
-  "settings.profile.email.description": "Utilisé pour vous connecter à OpenBot.",
+  "settings.profile.email.description": "Utilisé pour vous connecter à GoAhead.",
   "settings.profile.sessions.title": "Sessions du compte",
   "settings.profile.sessions.description":
     "Les sessions restent connectées jusqu’à ce que vous vous déconnectiez ou que vous les déconnectiez. La déconnexion met aussi fin aux connexions distantes actives de ce compte.",
@@ -207,9 +207,9 @@ export const messages = {
   "settings.profile.sessions.disconnectLabel": "Déconnecter la session {name} ouverte le {signedIn}",
   "settings.profile.sessions.loadFailed": "Impossible de charger les sessions du compte. Réessayez.",
   "settings.profile.sessions.disconnectFailed": "Impossible de déconnecter cette session. Réessayez.",
-  "settings.updates.title": "Mises à jour d’OpenBot",
+  "settings.updates.title": "Mises à jour de GoAhead",
   "settings.updates.track.title": "Canal de mise à jour",
-  "settings.updates.track.description": "Le canal Stable reçoit les versions testées d’OpenBot.",
+  "settings.updates.track.description": "Le canal Stable reçoit les versions testées de GoAhead.",
   "settings.updates.track.stable": "Stable",
   "settings.updates.version": "Version {version}",
   "settings.updates.versionUnknown": "Inconnue",
@@ -219,9 +219,9 @@ export const messages = {
   "settings.updates.autoDownload.description": "Télécharger les nouvelles versions dès qu’elles sont disponibles.",
   "settings.updates.managed.title": "Géré par l’hôte",
   "settings.updates.managed.description":
-    "Les mises à jour de ce Mac sont gérées automatiquement par OpenBot Host Manager. Tous les utilisateurs partagent la même application OpenBot et sont mis à jour ensemble lorsque les utilisateurs enregistrés sont inactifs.",
-  "settings.updates.target.latest": "La dernière mise à jour d’OpenBot",
-  "settings.updates.host.upToDate": "À jour. OpenBot Host Manager maintient ce Mac à jour.",
+    "Les mises à jour de ce Mac sont gérées automatiquement par GoAhead Host Manager. Tous les utilisateurs partagent la même application GoAhead et sont mis à jour ensemble lorsque les utilisateurs enregistrés sont inactifs.",
+  "settings.updates.target.latest": "La dernière mise à jour de GoAhead",
+  "settings.updates.host.upToDate": "À jour. GoAhead Host Manager maintient ce Mac à jour.",
   "settings.updates.host.ready":
     "{target} est téléchargée. En attente de l’inactivité des autres utilisateurs de ce Mac.",
   "settings.updates.host.installing": "Installation de {target}…",
@@ -233,10 +233,10 @@ export const messages = {
   "settings.updates.status.downloadingProgress": "Téléchargement de {target} · {progress}",
   "settings.updates.status.ready": "{target} est prête. Redémarrez pour l’appliquer.",
   "settings.updates.status.installing": "Redémarrage pour appliquer {target}…",
-  "settings.updates.status.upToDate": "OpenBot est à jour sur le canal Stable.",
-  "settings.updates.status.checkFailed": "OpenBot n’a pas pu rechercher les mises à jour. Réessayez.",
+  "settings.updates.status.upToDate": "GoAhead est à jour sur le canal Stable.",
+  "settings.updates.status.checkFailed": "GoAhead n’a pas pu rechercher les mises à jour. Réessayez.",
   "settings.updates.status.unsupported": "Les mises à jour ne sont pas disponibles dans cette version.",
-  "settings.updates.actionFailed": "Impossible de mettre à jour OpenBot.",
+  "settings.updates.actionFailed": "Impossible de mettre à jour GoAhead.",
   "settings.hostedSites.title": "Sites publiés",
   "settings.hostedSites.unavailable": "L’hébergement de sites n’est pas disponible.",
   "settings.hostedSites.usage": { one: "{used} sur {count} site", other: "{used} sur {count} sites" },

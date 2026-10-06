@@ -4,26 +4,26 @@ import githubPlugin from "./media/openbot-marketplace/github-plugin.png";
 import marketplace from "./media/openbot-marketplace/marketplace.png";
 import marketplaceMenu from "./media/openbot-marketplace/marketplace-menu.png";
 
-const GUIDE_TITLE = "How to Use the OpenBot Marketplace: Agents, Skills, and Plugins";
+const GUIDE_TITLE = "How to Use the GoAhead Marketplace: Agents, Skills, and Plugins";
 
 export function OpenBotMarketplace() {
   return (
     <>
       <p>
         A useful agent takes more than a name. It needs instructions for the work it does, and it may have skills or
-        routines too. The OpenBot Marketplace lets you add an agent someone else has shared, find plugins and skills for
+        routines too. The GoAhead Marketplace lets you add an agent someone else has shared, find plugins and skills for
         your own agents, or submit an agent you have built.
       </p>
 
       <h2>Browse the Marketplace</h2>
       <p>
-        In the desktop app, click the puzzle-piece icon at the top of OpenBot’s sidebar. The Marketplace has three tabs:{" "}
+        In the desktop app, click the puzzle-piece icon at the top of GoAhead’s sidebar. The Marketplace has three tabs:{" "}
         <strong>Agents</strong>, <strong>Plugins</strong>, and <strong>Skills</strong>. You can browse the listings by
         category or search for a creator or item by name. Open a listing to see what it does before adding it.
       </p>
       <ArticleImage
         src={marketplace}
-        alt="OpenBot Marketplace with the Agents tab selected and the Plugins and Skills tabs visible. Agent listings are grouped by category."
+        alt="GoAhead Marketplace with the Agents tab selected and the Plugins and Skills tabs visible. Agent listings are grouped by category."
         width={2052}
         height={1374}
         mountOn={GUIDE_TITLE}
@@ -45,7 +45,7 @@ export function OpenBotMarketplace() {
         caption="Read the agent’s instructions and check its included skills and routines before installing."
       />
       <p>
-        If the setup fits, select <strong>Install agent</strong>. OpenBot adds a copy of the agent setup, not the
+        If the setup fits, select <strong>Install agent</strong>. GoAhead adds a copy of the agent setup, not the
         creator’s conversations, memories, model settings, or workspace files. Choose the provider you want to use and
         adjust the instructions for your project. Check its routines too: ones marked active in the shared setup stay
         active when installed.
@@ -55,7 +55,7 @@ export function OpenBotMarketplace() {
       <p>
         A plugin connects an agent to an app or service. Open a plugin listing to see what it can do and the example
         tasks it supports. Choose an agent, then select <strong>Install plugin</strong>. If the plugin includes skills,
-        those are added to the agent you chose. The app connection itself is saved on the computer running OpenBot. Some
+        those are added to the agent you chose. The app connection itself is saved on the computer running GoAhead. Some
         plugins also need you to sign in or provide a credential before they can work.
       </p>
       <ArticleImage

@@ -6,5 +6,5 @@ export const messages = {
   "error.messaging.notConnected": "Bu Slack çalışma alanı bağlı değil.",
   "error.messaging.unsupported": "Bu bilgisayar Slack'e bağlanamıyor.",
   "error.messaging.relayUnavailable":
-    "OpenBot bu bilgisayarda Slack etkinliklerini alamıyor. Oturum açın, bu bilgisayara bir ad verin ve tekrar deneyin.",
+    "GoAhead bu bilgisayarda Slack etkinliklerini alamıyor. Oturum açın, bu bilgisayara bir ad verin ve tekrar deneyin.",
 } as const satisfies PartialTranslation<typeof source>;

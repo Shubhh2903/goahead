@@ -7,7 +7,7 @@ import { LANDING_FAQ_STRUCTURED_DATA } from "./landing-faq";
 import { OPENBOT_ALTERNATE_DOWNLOAD_LINKS, OPENBOT_DOWNLOAD_LINKS } from "./landing-links";
 
 export const OPENBOT_SITE_URL = "https://openbot.run/";
-export const OPENBOT_SITE_TITLE = "OpenBot: Run a team of AI agents on your computer";
+export const OPENBOT_SITE_TITLE = "GoAhead: Run a team of AI agents on your computer";
 export const OPENBOT_SITE_DESCRIPTION =
   "A free desktop app that runs AI agents as a team on your own computer, with the ChatGPT, Claude, Gemini or Grok plan you already pay for, or your own model.";
 export const OPENBOT_SOCIAL_IMAGE_URL = `${OPENBOT_SITE_URL}openbot-social.png`;
@@ -17,7 +17,7 @@ const OPENBOT_X_URL = "https://x.com/OpenBot_";
 const OPENBOT_REPOSITORY_URL = "https://github.com/nightly-labs/openbot";
 /** Square, as schema.org wants for a publisher logo. */
 export const OPENBOT_LOGO_URL = `${OPENBOT_SITE_URL}icon-512x512.png`;
-export const OPENBOT_SOCIAL_IMAGE_ALT = "Meet OpenBot on a dark grid background";
+export const OPENBOT_SOCIAL_IMAGE_ALT = "Meet GoAhead on a dark grid background";
 
 /** The Open Graph tags of the site's own social card, which is 1600x900. */
 export const OPENBOT_SOCIAL_IMAGE_META = [
@@ -46,7 +46,7 @@ export function siteUrlForPage(pageUrl: URL): string {
 export const OPENBOT_SOFTWARE_APPLICATION = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
-  name: "OpenBot",
+  name: "GoAhead",
   url: OPENBOT_SITE_URL,
   image: OPENBOT_SOCIAL_IMAGE_URL,
   description: OPENBOT_SITE_DESCRIPTION,
@@ -84,7 +84,7 @@ export const OPENBOT_SOFTWARE_APPLICATION = {
 const OPENBOT_ORGANIZATION = {
   "@context": "https://schema.org",
   "@type": "Organization",
-  name: "OpenBot",
+  name: "GoAhead",
   url: OPENBOT_SITE_URL,
   logo: OPENBOT_LOGO_URL,
   sameAs: [OPENBOT_REPOSITORY_URL, OPENBOT_X_URL],
@@ -93,7 +93,7 @@ const OPENBOT_ORGANIZATION = {
 const OPENBOT_WEBSITE = {
   "@context": "https://schema.org",
   "@type": "WebSite",
-  name: "OpenBot",
+  name: "GoAhead",
   url: OPENBOT_SITE_URL,
 } as const;
 
@@ -120,7 +120,7 @@ export function openBotRootHead(interLatinFont: string) {
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: OPENBOT_SITE_TITLE },
       { name: "description", content: OPENBOT_SITE_DESCRIPTION },
-      { name: "application-name", content: "OpenBot" },
+      { name: "application-name", content: "GoAhead" },
       { name: "color-scheme", content: "dark" },
       { name: "theme-color", content: "#1a1a1a" },
     ],
@@ -147,7 +147,7 @@ export function openBotHomeHead() {
       { "script:ld+json": OPENBOT_ORGANIZATION },
       { "script:ld+json": OPENBOT_WEBSITE },
       { property: "og:type", content: "website" },
-      { property: "og:site_name", content: "OpenBot" },
+      { property: "og:site_name", content: "GoAhead" },
       { property: "og:locale", content: "en_US" },
       { property: "og:url", content: OPENBOT_SITE_URL },
       { property: "og:title", content: OPENBOT_SITE_TITLE },

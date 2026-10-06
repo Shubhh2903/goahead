@@ -55,7 +55,7 @@ export function LandingPage() {
               {/* The spaces do not render in the flex row. They keep the words apart in
                   the text that search engines read, which was "MeetOpenBot". */}
               <span>Meet</span> <AppLogo variant="production" animation="blink" interactive class="landing-hero-logo" />{" "}
-              <span>OpenBot</span>
+              <span>GoAhead</span>
             </h1>
 
             <p class="landing-description landing-hero-line" style={{ "--landing-hero-line": 2 }}>

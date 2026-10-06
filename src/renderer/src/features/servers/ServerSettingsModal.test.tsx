@@ -288,7 +288,7 @@ describe("ServerSettingsModal", () => {
     render(() => <ServerSettingsModal {...props({ server: remoteServer })} />);
     await fireEvent.click(screen.getByRole("tab", { name: "Remote desktop" }));
     expect(
-      await screen.findByText("Update OpenBot on the host to check permissions and test remote desktop."),
+      await screen.findByText("Update GoAhead on the host to check permissions and test remote desktop."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Grant Accessibility access" })).not.toBeInTheDocument();
   });
@@ -450,7 +450,7 @@ describe("ServerSettingsModal", () => {
     expect(getUsage).not.toHaveBeenCalled();
     await fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
     await waitFor(() => expect(getUsage).toHaveBeenCalledWith({ scope: "host" }, "remote-1"));
-    expect(await screen.findByText("OpenBot on Studio Team")).toBeInTheDocument();
+    expect(await screen.findByText("GoAhead on Studio Team")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Clean up" })).not.toBeInTheDocument();
     unmount();
 
@@ -1184,7 +1184,7 @@ describe("ServerSettingsModal providers", () => {
 
     await fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => expect(screen.queryByLabelText(/^Provider ID/u)).not.toBeInTheDocument());
-    expect(screen.getByRole("status")).toHaveTextContent("Saved. OpenBot is loading the models.");
+    expect(screen.getByRole("status")).toHaveTextContent("Saved. GoAhead is loading the models.");
   });
 
   // A removal discards the key and drops the models, and neither is undoable, so the callback must
@@ -1224,7 +1224,7 @@ describe("ServerSettingsModal providers", () => {
     await fireEvent.click(within(accepted).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(onDeleteCustomProvider).toHaveBeenCalledWith("studio-local"));
     // The outcome is read inside the dialog, which stays open: the section behind it is hidden.
-    expect(await screen.findByRole("status")).toHaveTextContent("Removed. OpenBot is loading the models.");
+    expect(await screen.findByRole("status")).toHaveTextContent("Removed. GoAhead is loading the models.");
   });
 
   // The custom row is one of the AI providers, so it takes the check mark like its neighbours and

@@ -895,7 +895,7 @@ it("lists the host skills read-only and hides built-in skills", async () => {
   client.clear();
   workspace.loadAgentSkills.mockResolvedValue(null);
   await renderSheet("skills");
-  await screen.findByText("This host does not support skills. Update OpenBot on the host.");
+  await screen.findByText("This host does not support skills. Update GoAhead on the host.");
 });
 
 it("lets an admin turn a skill off and on, and puts the old state back when the host refuses", async () => {
@@ -998,7 +998,7 @@ it("uninstalls a skill after confirmation and keeps it when the host refuses", a
   await click("Uninstall Writer");
   expect(mocks.alert).toHaveBeenLastCalledWith(
     "Uninstall Writer?",
-    "OpenBot will remove this skill from the agent. Chat history stays.",
+    "GoAhead will remove this skill from the agent. Chat history stays.",
     expect.any(Array),
   );
   expect(workspace.uninstallAgentSkill).not.toHaveBeenCalled();
@@ -2000,7 +2000,7 @@ it("keeps the form unchanged when photo selection is canceled or the file is too
   expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
   mocks.fileSize = 600_000;
   await click("Add photo");
-  expect(screen.getByText("OpenBot could not make this photo small enough. Choose a simpler photo.")).toBeTruthy();
+  expect(screen.getByText("GoAhead could not make this photo small enough. Choose a simpler photo.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
   expect(workspace.setAgentAvatar).not.toHaveBeenCalled();
 });

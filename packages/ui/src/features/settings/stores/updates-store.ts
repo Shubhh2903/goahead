@@ -28,7 +28,7 @@ export function createSettingsUpdatesStore(props: UpdatesStoreProps) {
     props.updateStatus.currentVersion || props.appInfo?.version || currentText().t("settings.updates.versionUnknown");
   const targetUpdate = () =>
     props.updateStatus.availableVersion
-      ? `OpenBot v${props.updateStatus.availableVersion}`
+      ? `GoAhead v${props.updateStatus.availableVersion}`
       : currentText().t("settings.updates.target.latest");
   /**
    * Host phases arrive mapped onto the shared update phases, so the managed wording says what the

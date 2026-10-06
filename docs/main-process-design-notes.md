@@ -79,10 +79,10 @@ the application.
 
 ## MCP sign-in redirect address
 
-An MCP server that asks its users to sign in sends the grant back to a redirect address. OpenBot
+An MCP server that asks its users to sign in sends the grant back to a redirect address. GoAhead
 registers that address with the authorization server (RFC 7591) and sends it again at `/authorize`
 and at `/token`. The three must agree, or the authorization server stops the sign-in on its own
-page, where OpenBot can see nothing and can explain nothing. Canva does this: it accepts
+page, where GoAhead can see nothing and can explain nothing. Canva does this: it accepts
 `openbot://mcp-auth` at registration and then answers `Invalid redirect URI.` at `/authorize`.
 
 So `src/main/mcp-oauth-redirect-server.ts` listens on `127.0.0.1` and the address it listens on is

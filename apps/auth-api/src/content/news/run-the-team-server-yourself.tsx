@@ -2,7 +2,7 @@ export function RunTheTeamServerYourself() {
   return (
     <>
       <p>
-        OpenBot works with no account at all. Everything that makes the app useful on your own machine — agents,
+        GoAhead works with no account at all. Everything that makes the app useful on your own machine — agents,
         threads, workspaces, files — is there the moment you open it, and none of it needs us.
       </p>
 

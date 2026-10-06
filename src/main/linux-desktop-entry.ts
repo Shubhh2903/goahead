@@ -24,7 +24,7 @@ export function linuxDesktopEntry(appImagePath: string, iconPath: string): strin
   return `${[
     "[Desktop Entry]",
     "Type=Application",
-    "Name=OpenBot",
+    "Name=GoAhead",
     "Comment=A local-first multi-agent desktop workspace.",
     `Exec=${quoteExecutable(appImagePath)} %U`,
     `Icon=${iconPath}`,

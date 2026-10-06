@@ -26,7 +26,7 @@ export const messages = defineMessages("marketplace", {
   "marketplace.tab.skills": "Skills",
 
   // A plugin link.
-  "marketplace.plugins.missing": "This plugin is not in the OpenBot catalog.",
+  "marketplace.plugins.missing": "This plugin is not in the GoAhead catalog.",
 
   // The agent page.
   "marketplace.agents.loadingDetail": "Loading agent details…",
@@ -38,7 +38,7 @@ export const messages = defineMessages("marketplace", {
   // The skill page, and why Try is off.
   "marketplace.skill.loading": "Loading skill",
   "marketplace.skill.update": "Update skill",
-  "marketplace.try.readFailed": "OpenBot could not read this agent's skills. Try again.",
+  "marketplace.try.readFailed": "GoAhead could not read this agent's skills. Try again.",
   "marketplace.try.enable": "Enable this skill in agent settings to try it.",
   "marketplace.try.repair": "Repair this skill in agent settings to try it.",
   "marketplace.try.update": "Update this skill to try this version.",

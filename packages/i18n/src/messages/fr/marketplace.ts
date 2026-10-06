@@ -24,7 +24,7 @@ export const messages = {
   "marketplace.tab.agents": "Agents",
   "marketplace.tab.skills": "Compétences",
 
-  "marketplace.plugins.missing": "Ce plugin n’est pas dans le catalogue OpenBot.",
+  "marketplace.plugins.missing": "Ce plugin n’est pas dans le catalogue GoAhead.",
 
   "marketplace.agents.loadingDetail": "Chargement des détails de l’agent…",
   "marketplace.agents.skills": "Compétences",
@@ -34,7 +34,7 @@ export const messages = {
 
   "marketplace.skill.loading": "Chargement de la compétence",
   "marketplace.skill.update": "Mettre à jour la compétence",
-  "marketplace.try.readFailed": "OpenBot n’a pas pu lire les compétences de cet agent. Réessayez.",
+  "marketplace.try.readFailed": "GoAhead n’a pas pu lire les compétences de cet agent. Réessayez.",
   "marketplace.try.enable": "Activez cette compétence dans les réglages de l’agent pour l’essayer.",
   "marketplace.try.repair": "Réparez cette compétence dans les réglages de l’agent pour l’essayer.",
   "marketplace.try.update": "Mettez à jour cette compétence pour essayer cette version.",

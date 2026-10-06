@@ -163,5 +163,5 @@ function isLoopbackHost(host: string | undefined): boolean {
  * nothing from the authorization server reaches the markup.
  */
 function page(locale: string, message: string): string {
-  return `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"><title>OpenBot</title></head><body style="font-family:system-ui;padding:2rem"><p>${message}</p></body></html>`;
+  return `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"><title>GoAhead</title></head><body style="font-family:system-ui;padding:2rem"><p>${message}</p></body></html>`;
 }

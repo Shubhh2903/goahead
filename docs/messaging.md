@@ -6,26 +6,26 @@ in [apps/slack-app/LAUNCH.md](../apps/slack-app/LAUNCH.md).
 
 ## Connect Slack
 
-A workspace installs the one OpenBot Slack app. People mention @OpenBot or send it a direct message,
-and the Slack Orchestrator, an agent that OpenBot adds, asks the right agent and answers. This needs an OpenBot account and a name for this
-computer (**Server settings**), because Slack sends the workspace's events to OpenBot's Signal
+A workspace installs the one GoAhead Slack app. People mention @OpenBot or send it a direct message,
+and the Slack Orchestrator, an agent that GoAhead adds, asks the right agent and answers. This needs a GoAhead account and a name for this
+computer (**Server settings**), because Slack sends the workspace's events to GoAhead's Signal
 service, which passes them to this computer.
 
 1. Open **Server settings → Connectors → Slack**.
 2. Select **Connect Slack**, then **Connect in Slack**. Slack opens in the browser. Select the
    workspace in the top-right corner, and select **Allow**. The dialog continues by itself.
-3. Pick the model of the Slack Orchestrator, and select **Add agent**. OpenBot adds the agent, with its
+3. Pick the model of the Slack Orchestrator, and select **Add agent**. GoAhead adds the agent, with its
    instructions and the facts it starts with, in a sidebar section named **Integrations**, which starts
    collapsed. You can rename it or change its model in agent settings.
 4. In Slack, mention @OpenBot in any public channel, or send it a direct message.
 
-OpenBot joins every public channel of the workspace when it connects, and each public channel that is
+GoAhead joins every public channel of the workspace when it connects, and each public channel that is
 created later. Slack shows "joined #channel" in each one. A private channel needs an invitation:
 `/invite @OpenBot`.
 
-A workspace answers to one OpenBot server. Another account cannot connect a workspace that your
+A workspace answers to one GoAhead server. Another account cannot connect a workspace that your
 server answers until you disconnect it. **Disconnect** revokes the token, removes it from this
-computer and unlinks the workspace; the conversations stay in OpenBot, and a later **Connect Slack**
+computer and unlinks the workspace; the conversations stay in GoAhead, and a later **Connect Slack**
 gives them back their agents.
 
 Only the computer that runs the agents can connect Slack, because Slack returns to that computer's
@@ -35,18 +35,18 @@ browser. A joined server shows no Slack page.
 
 - A mention in a channel starts, or continues, a conversation in that thread. A reply in that thread
   reaches the same agent without a mention.
-- A direct message always reaches OpenBot. OpenBot answers in a thread under it, so each direct
+- A direct message always reaches GoAhead. GoAhead answers in a thread under it, so each direct
   message is its own conversation.
 - A new conversation goes to the Slack Orchestrator. It answers short requests itself, and gives other
   work to the one agent that fits best. That agent's answer comes back to the thread, and the
   orchestrator posts it. Until you add the orchestrator, Slack gets "No agent can answer here yet".
-- Each conversation is its own OpenBot thread of that agent, so it does not mix with the agent's own
+- Each conversation is its own GoAhead thread of that agent, so it does not mix with the agent's own
   chat.
 - The agent sees earlier messages of the thread as context, and the files of the message.
 - 👀 means the message arrived. "Working on it…" is replaced by the answer. ✅, ❌ or ⏹ shows the end.
-  Every post comes from OpenBot and names no agent.
+  Every post comes from GoAhead and names no agent.
 - An approval appears in the thread with **Approve** and **Deny**. Only the person who wrote the
-  message can answer it there. The OpenBot host can always answer it.
+  message can answer it there. The GoAhead host can always answer it.
 - `stop` or `cancel` in the thread, or the **Stop** button, stops the request of the person who
   sends it.
 
@@ -71,7 +71,7 @@ local Signal and gives it the development app's signing secret.
 The install itself needs an account API that Slack can send the browser back to over HTTPS. Use the
 test Worker (`bun run deploy:test`) with the development app's `SLACK_CLIENT_ID` and
 `SLACK_CLIENT_SECRET`. Not confirmed: a local install that returns to a dev app on a computer that
-also has an installed OpenBot. The operating system sends `openbot://` to the installed app.
+also has an installed GoAhead. The operating system sends `openbot://` to the installed app.
 
 ## Troubleshooting
 
@@ -79,13 +79,13 @@ The workspace row says what is wrong.
 
 | Problem | Cause | Action |
 | --- | --- | --- |
-| Token not accepted | Slack refused the token, or OpenBot was uninstalled from the workspace. | **Connect Slack** again. |
-| Missing permissions | The install has fewer scopes than OpenBot asks for. | **Disconnect**, then **Connect Slack** again. |
-| Waiting for Slack | Slack rate-limited OpenBot. | Nothing. The host tries again at the time shown. |
+| Token not accepted | Slack refused the token, or GoAhead was uninstalled from the workspace. | **Connect Slack** again. |
+| Missing permissions | The install has fewer scopes than GoAhead asks for. | **Disconnect**, then **Connect Slack** again. |
+| Waiting for Slack | Slack rate-limited GoAhead. | Nothing. The host tries again at the time shown. |
 | Tokens unreadable | The host cannot decrypt the stored token. | **Disconnect**, then **Connect Slack** again. |
 | Reconnecting | The host lost the connection. | Nothing, or **Reconnect** after the network is back. |
-| Cannot receive events | This computer cannot reach Signal: it is signed out, has no name, or Signal is down. | Sign in, name this computer in **Server settings**, keep OpenBot open. |
-| "Another OpenBot server already answers this Slack workspace" | Another account connected the workspace. | Disconnect it on that server, then try again. |
+| Cannot receive events | This computer cannot reach Signal: it is signed out, has no name, or Signal is down. | Sign in, name this computer in **Server settings**, keep GoAhead open. |
+| "Another GoAhead server already answers this Slack workspace" | Another account connected the workspace. | Disconnect it on that server, then try again. |
 
 ## Limits
 
@@ -94,16 +94,16 @@ The workspace row says what is wrong.
 - An agent runs one turn at a time. A Slack request waits behind the agent's own work and behind
   channel work, and the thread shows that it waits. One agent keeps at most 20 Slack requests waiting,
   and one person at most 2.
-- Slack sends every message of every channel that OpenBot is in to this computer, through Signal.
-  Since OpenBot is in every public channel, a busy workspace sends many events. The host keeps only
-  the messages that address OpenBot or continue a conversation it has.
-- Until the Slack Marketplace approves OpenBot, Slack limits reading a thread to 1 request per minute
+- Slack sends every message of every channel that GoAhead is in to this computer, through Signal.
+  Since GoAhead is in every public channel, a busy workspace sends many events. The host keeps only
+  the messages that address GoAhead or continue a conversation it has.
+- Until the Slack Marketplace approves GoAhead, Slack limits reading a thread to 1 request per minute
   and 15 messages, so an agent can see less context.
 - Anyone who can post in the workspace, guests and Slack Connect members included, can give the
   agents work. They run with the access you gave them. With Turbo or **Always allow**, they run
   commands without asking.
 - A hosted server stays awake while a Slack connection is live.
-- When an agent asks another OpenBot agent for something in a Slack conversation, the reply comes
+- When an agent asks another GoAhead agent for something in a Slack conversation, the reply comes
   back to that conversation. The agent then posts its answer in the same thread, and the original
   message keeps its reactions.
 - A question the agent asks is answered on the host. Slack shows nothing for it.

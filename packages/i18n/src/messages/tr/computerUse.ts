@@ -3,14 +3,14 @@ import type { messages as source } from "../en/computerUse";
 
 export const messages = {
   "computerUse.permission.screenRecording.title": "Ekran Kaydı",
-  "computerUse.permission.screenRecording.description": "OpenBot'un uygulama pencerelerini görmesini sağlar.",
+  "computerUse.permission.screenRecording.description": "GoAhead'in uygulama pencerelerini görmesini sağlar.",
   "computerUse.permission.screenRecording.pane": "Ekran ve Sistem Sesi Kaydı",
   "computerUse.permission.accessibility.title": "Erişilebilirlik",
-  "computerUse.permission.accessibility.description": "OpenBot'un tıklamasını ve yazmasını sağlar.",
+  "computerUse.permission.accessibility.description": "GoAhead'in tıklamasını ve yazmasını sağlar.",
   "computerUse.permission.accessibility.pane": "Erişilebilirlik",
-  "computerUse.error.check": "OpenBot, Bilgisayar Kullanımını denetleyemedi.",
-  "computerUse.error.openSettings": "OpenBot, Sistem Ayarlarını açamadı.",
-  "computerUse.error.startDriver": "OpenBot, Bilgisayar Kullanımı sürücüsünü başlatamadı.",
+  "computerUse.error.check": "GoAhead, Bilgisayar Kullanımını denetleyemedi.",
+  "computerUse.error.openSettings": "GoAhead, Sistem Ayarlarını açamadı.",
+  "computerUse.error.startDriver": "GoAhead, Bilgisayar Kullanımı sürücüsünü başlatamadı.",
   "computerUse.checkAgain": "Tekrar kontrol et",
   "computerUse.checking": "Bilgisayar Kullanımı denetleniyor",
   "computerUse.unavailable.title": "Bilgisayar Kullanımı henüz mevcut değil",
@@ -18,11 +18,11 @@ export const messages = {
   "computerUse.permissions.description": "İzinler macOS tarafından yönetilir.",
   "computerUse.ready.title": "Bilgisayar Kullanımı hazır",
   "computerUse.ready.description":
-    "OpenBot bu bilgisayardaki uygulamaları görebilir ve onlarla etkileşime girebilir. Bu sistem fazladan izin istemez.",
+    "GoAhead bu bilgisayardaki uygulamaları görebilir ve onlarla etkileşime girebilir. Bu sistem fazladan izin istemez.",
   "computerUse.openSettingsFailed.title": "Sistem Ayarları açılamadı",
   "computerUse.compact.title": "Bilgisayar Kullanımını Etkinleştir",
   "computerUse.compact.description":
-    "OpenBot'un bu bilgisayardaki uygulamaları görmesine ve etkileşime girmesine izin verin.",
+    "GoAhead'in bu bilgisayardaki uygulamaları görmesine ve etkileşime girmesine izin verin.",
   "computerUse.granted": "Verildi",
   "computerUse.opening": "Açılıyor…",
   "computerUse.manage": "Yönet",
@@ -39,5 +39,5 @@ export const messages = {
   "computerUse.help.showInFinder": "Finder'da Göster",
   "computerUse.help.revealFailed": "Uygulama Finder'da gösterilemedi.",
   "computerUse.help.dragFailed": "Uygulama sürüklenemedi.",
-  "computerUse.highlight.working": "OpenBot {title} içinde çalışıyor",
+  "computerUse.highlight.working": "GoAhead {title} içinde çalışıyor",
 } as const satisfies PartialTranslation<typeof source>;

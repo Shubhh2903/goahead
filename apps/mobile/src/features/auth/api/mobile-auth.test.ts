@@ -216,7 +216,7 @@ describe("Mobile Connect redemption", () => {
   it("releases the shared lock after validation and network failures", async () => {
     native.storage.clear();
     native.storage.set("openbot.mobile.device-id.v1", "existing-device");
-    await expect(redeemMobileConnectUrl("invalid")).rejects.toThrow("not a valid OpenBot Mobile Connect code");
+    await expect(redeemMobileConnectUrl("invalid")).rejects.toThrow("not a valid GoAhead Mobile Connect code");
     native.fetch.mockRejectedValueOnce(new Error("Offline"));
     await expect(redeemMobileConnectUrl(qrCode)).rejects.toThrow("could not reach the account service");
     native.fetch.mockResolvedValueOnce(Response.json(session));

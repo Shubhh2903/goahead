@@ -1,4 +1,4 @@
-# OpenBot site hosting deployment
+# GoAhead site hosting deployment
 
 This Worker is the public, read-only application path for `*.openbot.site`. The Auth API is the only application component that writes or deletes site objects. Do not enable an R2 public development URL or a custom R2 domain.
 

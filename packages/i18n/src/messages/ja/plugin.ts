@@ -21,7 +21,7 @@ export const messages = {
   "plugin.uninstallDialog.appsLabel": "削除するアプリ：{number} 件",
   "plugin.uninstallDialog.appsTitle": "このホストから削除するアプリ",
   "plugin.uninstallDialog.appsNote":
-    "それらのツールは使えなくなり、OpenBot が保存していたサインイン情報も削除されます。",
+    "それらのツールは使えなくなり、GoAhead が保存していたサインイン情報も削除されます。",
   "plugin.uninstallDialog.skillsLabel": "削除するスキル：{number} 件",
   "plugin.uninstallDialog.skillsTitle": "{agentName} から削除するスキル",
 } as const satisfies PartialTranslation<typeof source>;

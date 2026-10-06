@@ -1,6 +1,6 @@
 # Docker
 
-The OpenBot image is the Linux release, run as a [self-hosted server](self-hosted-server.md) in a
+The GoAhead image is the Linux release, run as a [self-hosted server](self-hosted-server.md) in a
 container. It is a normal Remote host of your account. You use it from the desktop app, the iPhone
 app or `openbot.run/app`. The image is `ghcr.io/nightly-labs/openbot`, for `linux/amd64` and
 `linux/arm64`.
@@ -28,7 +28,7 @@ docker run -d --name openbot --restart unless-stopped \
 docker exec -it openbot openbot login
 ```
 
-`openbot login` asks for your email and the code that OpenBot sends to it. After the sign-in, the
+`openbot login` asks for your email and the code that GoAhead sends to it. After the sign-in, the
 server shows in the server list of that account. Then connect a provider from the app, as on a
 [hosted server](hosted-servers.md#providers).
 
@@ -38,10 +38,10 @@ The options in both examples are necessary:
 | --- | --- |
 | `seccomp=seccomp.json` | The Electron sandbox makes user namespaces. The default seccomp profile of Docker refuses them, and the container stops with a message. See [Security](#security). |
 | `--shm-size 1g` | Chromium uses shared memory. The Docker default of 64 MB is too small. |
-| `--stop-timeout 60` | OpenBot stops its agents and closes its database before it exits. |
+| `--stop-timeout 60` | GoAhead stops its agents and closes its database before it exits. |
 | `-v openbot-data:/data` | All data is in `/data`. Without a volume, it goes away with the container. |
 
-The container publishes no port. OpenBot only connects out: to the account server, to the providers,
+The container publishes no port. GoAhead only connects out: to the account server, to the providers,
 and to Signal and TURN for remote use. The Team API listens on `127.0.0.1` in the container.
 
 ## Tags
@@ -55,7 +55,7 @@ and to Signal and TURN for remote use. The Team API listens on `127.0.0.1` in th
 
 ## Data
 
-`/data` is the home folder of the user `openbot` (UID 1000, GID 1000). OpenBot and its agents run as
+`/data` is the home folder of the user `openbot` (UID 1000, GID 1000). GoAhead and its agents run as
 that user and keep everything there:
 
 | Path | Contents |
@@ -91,13 +91,13 @@ In the container, `openbot status`, `login`, `logout`, `name` and `version` work
 
 ## Upgrades
 
-OpenBot does not update itself in a container. A new image replaces it. Do not go back to an older
-tag: an older OpenBot cannot open a database that a newer one migrated, so it does not start.
+GoAhead does not update itself in a container. A new image replaces it. Do not go back to an older
+tag: an older GoAhead cannot open a database that a newer one migrated, so it does not start.
 
 ## Environment
 
 Pass these with `-e` or the `environment` of the Compose file, never in an image. Agents inherit the
-environment of OpenBot, so they can read these values.
+environment of GoAhead, so they can read these values.
 
 | Variable | Use |
 | --- | --- |
@@ -134,7 +134,7 @@ the images to GHCR only after the GitHub Release is published.
 
 `tini` is process 1. It starts `resources/hosting/openbot-container` from the release, which checks
 that it can make a user namespace, starts D-Bus, a virtual display and the keyring, and then becomes
-OpenBot with `OPENBOT_SERVER=1`. On a stop, tini gives the signal to OpenBot and waits for it.
+GoAhead with `OPENBOT_SERVER=1`. On a stop, tini gives the signal to GoAhead and waits for it.
 `/opt/OpenBot/hosted/mode` is `container`, so the `openbot` command talks to the control socket and
 does not use systemd.
 

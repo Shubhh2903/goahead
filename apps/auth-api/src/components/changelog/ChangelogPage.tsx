@@ -16,7 +16,7 @@ import { ChangelogRelease } from "./ChangelogRelease";
 import { ChangelogSwap, createPlatformSwap } from "./ChangelogSwap";
 
 /** The seed for the hero's colours: the Sunset family, the one the featured article on /news uses. */
-const HERO_GRADIENT_SEED = "OpenBot releases";
+const HERO_GRADIENT_SEED = "GoAhead releases";
 
 /** A release becomes current once its heading passes this share of the window's height. */
 const ACTIVE_LINE = 0.3;
@@ -34,8 +34,8 @@ interface ReleaseMonth {
 
 /** The name of the app in each release title. */
 const PRODUCT_NAMES: Record<ChangelogPlatform, string> = {
-  desktop: "OpenBot",
-  mobile: "OpenBot for iPhone",
+  desktop: "GoAhead",
+  mobile: "GoAhead for iPhone",
 };
 
 /** The index in months, so 57 rows read as a few short runs rather than one column of numbers. */
@@ -147,7 +147,7 @@ export function ChangelogPage(props: ChangelogPageProps) {
             <div class="changelog-hero-copy" data-enter="post-copy">
               <p class="changelog-eyebrow">Changelog</p>
               <h1 class="changelog-title" id="changelog-title">
-                What's new in OpenBot
+                What's new in GoAhead
               </h1>
               <p class="changelog-lede">
                 New providers, new ways to work as a team, and the fixes that make each release steadier. Every release

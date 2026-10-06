@@ -124,8 +124,8 @@ export function PluginPage(props: PluginPageProps) {
               <PluginOpenButtons
                 href={createOpenBotPluginUrl(props.plugin.slug)}
                 browserHref={createWebAppPluginPath(props.plugin.slug)}
-                label="Open in OpenBot"
-                downloadCopy={`${props.plugin.name} installs from inside OpenBot. Get the app, then open this plugin from its Apps tab.`}
+                label="Open in GoAhead"
+                downloadCopy={`${props.plugin.name} installs from inside GoAhead. Get the app, then open this plugin from its Apps tab.`}
               />
             </div>
           </header>

@@ -18,7 +18,7 @@ export const messages = {
   "mobile.settings.home.preferences": "Tercihler",
   "mobile.settings.home.generalHint": "Görünüm ve konuşmalar",
   "mobile.settings.home.general": "Genel",
-  "mobile.settings.home.about": "OpenBot Hakkında",
+  "mobile.settings.home.about": "GoAhead Hakkında",
   "mobile.settings.home.support": "Destek",
   "mobile.settings.home.supportHint": "Yardım alın ve destek günlüğünü kaydedin",
   "mobile.settings.support.help": "Yardım alın",
@@ -33,7 +33,7 @@ export const messages = {
   "mobile.settings.support.clearTitle": "Destek günlüğü temizlensin mi?",
   "mobile.settings.support.clearBody": "Bu işlem, bu telefondaki günlükten tüm olayları kaldırır.",
   "mobile.settings.support.logFooter":
-    "Günlük bu telefonda kalır ve OpenBot onu göndermez. Bağlantı adımlarını, istekleri ve hataları kaydeder. Mesajları ve dosyaları kaydetmez; parolaları ve belirteçleri gizler. Paylaşmadan önce dosyayı okuyun.",
+    "Günlük bu telefonda kalır ve GoAhead onu göndermez. Bağlantı adımlarını, istekleri ve hataları kaydeder. Mesajları ve dosyaları kaydetmez; parolaları ve belirteçleri gizler. Paylaşmadan önce dosyayı okuyun.",
   "mobile.settings.support.saveFailed": "Günlük dosyası kaydedilemedi. Tekrar deneyin.",
   "mobile.settings.support.sharingUnavailable": "Bu telefonda paylaşım kullanılamıyor.",
   "mobile.settings.support.recent": "Son olaylar",
@@ -73,7 +73,7 @@ export const messages = {
   "mobile.settings.feedback.retry": "Dokunsal ayarını kaydetmeyi tekrar dene",
   "mobile.settings.liveActivities.title": "Canlı Etkinlikler",
   "mobile.settings.liveActivities.footer":
-    "OpenBot çalışırken Kilit Ekranında ve Dinamik Adada ajan çalışmasını, mesajları, soruları ve onayları gösterir.",
+    "GoAhead çalışırken Kilit Ekranında ve Dinamik Adada ajan çalışmasını, mesajları, soruları ve onayları gösterir.",
   "mobile.settings.liveActivities.toggle": "Ajan etkinliğini göster",
   "mobile.settings.liveActivities.retry": "Canlı Etkinlikler ayarını kaydetmeyi tekrar dene",
   "mobile.settings.privacy.title": "Gizlilik",
@@ -99,6 +99,6 @@ export const messages = {
   "mobile.settings.profile.security": "Güvenlik",
   "mobile.settings.profile.accountSessions": "Hesap oturumları",
   "mobile.settings.profile.signOutTitle": "Oturum kapatılsın mı?",
-  "mobile.settings.profile.signOutBody": "Masaüstünüzdeki OpenBot'tan yeni bir kod tarayarak yeniden bağlanın.",
+  "mobile.settings.profile.signOutBody": "Masaüstünüzdeki GoAhead'den yeni bir kod tarayarak yeniden bağlanın.",
   "mobile.settings.profile.signOut": "Oturumu kapat",
 } as const satisfies PartialTranslation<typeof source>;

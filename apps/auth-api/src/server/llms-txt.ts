@@ -1,5 +1,5 @@
 // `/llms.txt` (llmstxt.org): the site as one short Markdown file, for an assistant
-// that answers a question about OpenBot. Built from the same registries as the
+// that answers a question about GoAhead. Built from the same registries as the
 // sitemap, so a new article or comparison is in it with no edit here.
 
 import { COMPARISONS } from "../content/compare";
@@ -23,15 +23,15 @@ function absolute(path: string): string {
 
 function llmsTxt(): string {
   const lines = [
-    "# OpenBot",
+    "# GoAhead",
     "",
     `> ${OPENBOT_SITE_DESCRIPTION}`,
     "",
-    "OpenBot is a desktop app for macOS, Windows and Linux. Each agent has its own workspace, thread and history, and keeps them when you change its provider or restart the app. Agents can give work to other agents. Chats, files and workspaces stay on your computer; OpenBot has no server that holds them. The app is free for noncommercial use, and it works with no account. iPhone and Android apps connect to OpenBot on your own computer.",
+    "GoAhead is a desktop app for macOS, Windows and Linux. Each agent has its own workspace, thread and history, and keeps them when you change its provider or restart the app. Agents can give work to other agents. Chats, files and workspaces stay on your computer; GoAhead has no server that holds them. The app is free for noncommercial use, and it works with no account. iPhone and Android apps connect to GoAhead on your own computer.",
     "",
     "## Models and plans",
     "",
-    "OpenBot sells no model. Each agent uses a plan or a key you already have:",
+    "GoAhead sells no model. Each agent uses a plan or a key you already have:",
     "",
     ...OPENBOT_PLANS.map((plan) => `- ${plan.name}: ${plan.plan}`),
     "",

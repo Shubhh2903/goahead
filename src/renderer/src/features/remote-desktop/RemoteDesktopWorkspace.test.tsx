@@ -76,7 +76,7 @@ describe("RemoteDesktopWorkspace", () => {
     expect(frame).toHaveAttribute("src", `${session.viewerUrl}#${session.viewerGrant}`);
     expect(frame).toHaveAttribute("sandbox", expect.stringContaining("allow-pointer-lock"));
 
-    await fireEvent.click(screen.getByRole("button", { name: "Back to OpenBot" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Back to GoAhead" }));
     expect(onHide).toHaveBeenCalledOnce();
     expect(onDisconnect).not.toHaveBeenCalled();
     expect(workspace).toHaveAttribute("aria-hidden", "true");

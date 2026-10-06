@@ -4713,7 +4713,7 @@ a {
    Reading progress, on news, guides and comparisons.
 
    One segment per section, as long as the section. The part the reader has
-   passed is OpenBot's lilac, and the segment they are in glows at the point
+   passed is GoAhead's lilac, and the segment they are in glows at the point
    they have reached. Pointing at the rail brings in the titles through the
    same blur as the header menu, over a scrim with no edge.
    ------------------------------------------------------------------------- */
@@ -5004,8 +5004,8 @@ a {
    rather than prose: the two marks side by side over the artwork, the short
    answer, a table, a pair of cards per topic, the questions, and the sources.
    Each side keeps one accent the whole way down (`--compare-accent`), so a reader
-   can tell which column is which without reading the label again. OpenBot's is
-   its own lilac and the rival's is a quiet grey, so OpenBot is the side the eye
+   can tell which column is which without reading the label again. GoAhead's is
+   its own lilac and the rival's is a quiet grey, so GoAhead is the side the eye
    goes to. Where one side is better, the page marks it in green
    (`--openbot-success`), with a check and a word, never with colour alone.
    A page that compares two other apps (sides "a" and "b") gives both sides the
@@ -5534,7 +5534,7 @@ a {
   height: 22px;
 }
 
-/* OpenBot's column is lit the whole way down, the way a pricing table marks the
+/* GoAhead's column is lit the whole way down, the way a pricing table marks the
    plan it recommends. */
 .compare-table thead th[data-side="openbot"] {
   box-shadow: inset 0 2px 0 var(--compare-accent);
@@ -6147,7 +6147,7 @@ a {
   }
 
   /* Out of the grid but still in the table, so the brand headers keep their
-     columns: removed, "OpenBot" would head the topic column. */
+     columns: removed, "GoAhead" would head the topic column. */
   .compare-table thead th:first-child {
     position: absolute;
     width: 1px;
@@ -7941,7 +7941,7 @@ html:has(.ph-dialog:modal) {
   }
 }
 
-/* 404. The "0" is the OpenBot logo: it looks around while the page is idle,
+/* 404. The "0" is the GoAhead logo: it looks around while the page is idle,
    and follows the pointer while it moves. A search log types out below. */
 .not-found-main {
   position: relative;

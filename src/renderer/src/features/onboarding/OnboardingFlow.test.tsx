@@ -64,9 +64,9 @@ describe("OnboardingFlow", () => {
     await fireEvent.click(claude);
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
 
-    expect(await view.findByRole("heading", { name: "OpenBot might control your computer" })).toBeInTheDocument();
+    expect(await view.findByRole("heading", { name: "GoAhead might control your computer" })).toBeInTheDocument();
     await fireEvent.click(view.getByRole("button", { name: "Back" }));
-    expect(await view.findByRole("heading", { name: "Meet OpenBot" })).toBeInTheDocument();
+    expect(await view.findByRole("heading", { name: "Meet GoAhead" })).toBeInTheDocument();
     expect(claude).toBeChecked();
   });
 
@@ -77,7 +77,7 @@ describe("OnboardingFlow", () => {
     await fireEvent.click(within(providers).getByRole("radio", { name: /Grok/ }));
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
-    await fireEvent.click(view.getByRole("button", { name: "Open OpenBot" }));
+    await fireEvent.click(view.getByRole("button", { name: "Open GoAhead" }));
 
     // A built-in provider records no model: it keeps its own default.
     await waitFor(() => expect(onSave).toHaveBeenCalledWith("grok", null));
@@ -87,7 +87,7 @@ describe("OnboardingFlow", () => {
     const view = renderFlow();
     const openPermission = vi.spyOn((activeMock?.api ?? window.openbot).computerUse, "openPermissionPane");
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
-    expect(await view.findByRole("heading", { name: "OpenBot might control your computer" })).toBeInTheDocument();
+    expect(await view.findByRole("heading", { name: "GoAhead might control your computer" })).toBeInTheDocument();
     await waitFor(() => expect(view.getByRole("button", { name: "Grant Screen Recording" })).toBeInTheDocument());
     expect(view.getByRole("button", { name: "Grant Accessibility" })).toBeInTheDocument();
 
@@ -105,7 +105,7 @@ describe("OnboardingFlow", () => {
     const view = renderFlow({ onSave });
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
-    await fireEvent.click(view.getByRole("button", { name: "Open OpenBot" }));
+    await fireEvent.click(view.getByRole("button", { name: "Open GoAhead" }));
 
     expect(await view.findByRole("alert")).toHaveTextContent("Setup failed.");
     expect(view.getByRole("heading", { name: "Give each agent a job" })).toBeInTheDocument();
@@ -169,7 +169,7 @@ describe("OnboardingFlow", () => {
     // is what makes it the model a new agent starts on: the provider alone cannot name it.
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
-    await fireEvent.click(view.getByRole("button", { name: "Open OpenBot" }));
+    await fireEvent.click(view.getByRole("button", { name: "Open GoAhead" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith("opencode", "studio-local/glm-5-air"));
   });
 
@@ -233,7 +233,7 @@ describe("OnboardingFlow", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument());
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
-    await fireEvent.click(view.getByRole("button", { name: "Open OpenBot" }));
+    await fireEvent.click(view.getByRole("button", { name: "Open GoAhead" }));
     // The removed endpoint's model is gone from setup; the endpoint still saved supplies the model
     // instead, because the custom row is still the choice and a choice with no model would start the
     // first agent on a hosted one.
@@ -270,7 +270,7 @@ describe("OnboardingFlow", () => {
     await fireEvent.click(within(providers).getByRole("radio", { name: /Custom provider/ }));
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
-    await fireEvent.click(view.getByRole("button", { name: "Open OpenBot" }));
+    await fireEvent.click(view.getByRole("button", { name: "Open GoAhead" }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalledWith("opencode", "house-router/gpt-oss-120b"));
   });
@@ -503,7 +503,7 @@ describe("OnboardingFlow", () => {
     await fireEvent.click(view.getByRole("button", { name: "Next" }));
     expect(onConnectProvider).toHaveBeenCalledWith("opencode");
     await fireEvent.click(await view.findByRole("button", { name: "Next" }));
-    await fireEvent.click(view.getByRole("button", { name: "Open OpenBot" }));
+    await fireEvent.click(view.getByRole("button", { name: "Open GoAhead" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith("opencode", null));
   });
 

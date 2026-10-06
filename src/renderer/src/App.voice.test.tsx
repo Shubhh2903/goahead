@@ -17,7 +17,7 @@ describe("OpenBot connected desktop shell", () => {
 
     expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({ audio: true, video: false });
     expect(
-      await screen.findByText("Microphone access is blocked. Allow OpenBot to use the microphone in system settings."),
+      await screen.findByText("Microphone access is blocked. Allow GoAhead to use the microphone in system settings."),
     ).toBeInTheDocument();
 
     installVoiceRecordingMocks();

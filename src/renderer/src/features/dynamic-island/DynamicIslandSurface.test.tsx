@@ -30,14 +30,14 @@ describe("DynamicIslandSurface", () => {
   it("cancels pending hover expansion when the main window takes focus and allows a new hover", async () => {
     const mock = createQuestionMock(questionPresentation("focus-question", [sourceQuestion()]));
     render(() => <DynamicIslandSurface />);
-    const island = await screen.findByRole("region", { name: "OpenBot question from AI" });
+    const island = await screen.findByRole("region", { name: "GoAhead question from AI" });
     vi.useFakeTimers();
 
     await fireEvent.mouseEnter(island);
     await fireEvent(window, new Event("blur"));
     await vi.runAllTimersAsync();
 
-    expect(screen.getByRole("button", { name: "Expand OpenBot question from AI" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Expand GoAhead question from AI" })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
@@ -50,7 +50,7 @@ describe("DynamicIslandSurface", () => {
 
     await fireEvent(window, new Event("blur"));
     await vi.runAllTimersAsync();
-    expect(screen.getByRole("button", { name: "Expand OpenBot question from AI" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Expand GoAhead question from AI" })).toBeVisible();
     await fireEvent.mouseEnter(island);
     await vi.runAllTimersAsync();
     expect(screen.getByRole("button", { name: "Official data. Use the public dataset" })).toBeVisible();
@@ -76,7 +76,7 @@ describe("DynamicIslandSurface", () => {
     Object.defineProperty(window, "openbot", { configurable: true, value: mock.api });
     render(() => <DynamicIslandSurface />);
 
-    expect(await screen.findByRole("button", { name: "Expand Open OpenBot" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Expand Open GoAhead" })).toBeVisible();
     flush(() =>
       updatePreference?.({
         enabled: true,
@@ -87,10 +87,10 @@ describe("DynamicIslandSurface", () => {
         heightPercent: 100,
       }),
     );
-    expect(screen.queryByRole("button", { name: "Expand Open OpenBot" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Expand Open GoAhead" })).not.toBeInTheDocument();
 
     flush(() => publish?.({ serverId: "local", mode: "working", working: [] }));
-    expect(screen.getByRole("button", { name: "Expand OpenBot working status" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Expand GoAhead working status" })).toBeVisible();
     mock.dispose();
   });
 
@@ -108,7 +108,7 @@ describe("DynamicIslandSurface", () => {
     const mock = createQuestionMock(questionPresentation("research-questions", [sourceQuestion(), formatQuestion]));
     render(() => <DynamicIslandSurface />);
 
-    await fireEvent.mouseEnter(await screen.findByRole("region", { name: "OpenBot question from AI" }));
+    await fireEvent.mouseEnter(await screen.findByRole("region", { name: "GoAhead question from AI" }));
     await fireEvent.click(await screen.findByRole("button", { name: "Official data. Use the public dataset" }));
     expect(await screen.findByText("How should I present the result?")).toBeVisible();
     expect(mock.performAction).not.toHaveBeenCalled();
@@ -143,11 +143,11 @@ describe("DynamicIslandSurface", () => {
     const mock = createQuestionMock(presentation);
     render(() => <DynamicIslandSurface />);
 
-    await fireEvent.mouseEnter(await screen.findByRole("region", { name: "OpenBot question from AI" }));
-    await screen.findByRole("button", { name: "Answer in OpenBot" });
+    await fireEvent.mouseEnter(await screen.findByRole("region", { name: "GoAhead question from AI" }));
+    await screen.findByRole("button", { name: "Answer in GoAhead" });
 
     expect(screen.queryByRole("button", { name: "Saved token. Use the stored credential" })).not.toBeInTheDocument();
-    await fireEvent.click(screen.getByRole("button", { name: "Answer in OpenBot" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Answer in GoAhead" }));
     await waitFor(() =>
       expect(mock.performAction).toHaveBeenCalledWith({
         type: "review-attention",
@@ -169,16 +169,16 @@ describe("DynamicIslandSurface", () => {
       };
     };
     render(() => <DynamicIslandSurface />);
-    await screen.findByRole("region", { name: "OpenBot question from AI" });
+    await screen.findByRole("region", { name: "GoAhead question from AI" });
     const anchor = screen.getByRole("group", { name: "Dynamic Island interaction area" });
     await fireEvent.mouseOver(anchor);
 
     flush(() => publish?.(approvalPresentation("approval-queued")));
-    expect(screen.getByRole("region", { name: "OpenBot question from AI" })).toBeVisible();
-    expect(screen.queryByRole("region", { name: "OpenBot approval needed" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "GoAhead question from AI" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "GoAhead approval needed" })).not.toBeInTheDocument();
 
     await fireEvent.mouseOut(anchor);
-    expect(await screen.findByRole("region", { name: "OpenBot approval request" })).toBeVisible();
+    expect(await screen.findByRole("region", { name: "GoAhead approval request" })).toBeVisible();
     mock.dispose();
   });
 
@@ -193,23 +193,23 @@ describe("DynamicIslandSurface", () => {
     };
     render(() => <DynamicIslandSurface />);
 
-    const expand = await screen.findByRole("button", { name: "Expand OpenBot question from AI" });
+    const expand = await screen.findByRole("button", { name: "Expand GoAhead question from AI" });
     expand.focus();
     await fireEvent.click(expand, { detail: 0 });
-    expect(screen.getByRole("button", { name: "Collapse OpenBot question from AI" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Collapse GoAhead question from AI" })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
 
     flush(() => publish?.(approvalPresentation("approval-after-keyboard")));
-    expect(screen.getByRole("region", { name: "OpenBot question from AI" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "GoAhead question from AI" })).toBeVisible();
 
-    const collapse = screen.getByRole("button", { name: "Collapse OpenBot question from AI" });
+    const collapse = screen.getByRole("button", { name: "Collapse GoAhead question from AI" });
     await fireEvent.click(collapse, { detail: 0 });
-    expect(screen.getByRole("region", { name: "OpenBot question from AI" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "GoAhead question from AI" })).toBeVisible();
 
     await fireEvent.focusOut(collapse, { relatedTarget: document.body });
-    expect(await screen.findByRole("region", { name: "OpenBot approval request" })).toBeVisible();
+    expect(await screen.findByRole("region", { name: "GoAhead approval request" })).toBeVisible();
     mock.dispose();
   });
 
@@ -218,11 +218,11 @@ describe("DynamicIslandSurface", () => {
     mock.performAction.mockRejectedValueOnce(new Error("The request is no longer active."));
     render(() => <DynamicIslandSurface />);
 
-    await fireEvent.mouseEnter(await screen.findByRole("region", { name: "OpenBot question from AI" }));
+    await fireEvent.mouseEnter(await screen.findByRole("region", { name: "GoAhead question from AI" }));
     await fireEvent.click(await screen.findByRole("button", { name: "Official data. Use the public dataset" }));
 
     await waitFor(() => expect(mock.performAction).toHaveBeenCalledOnce());
-    expect(screen.getByRole("button", { name: "Collapse OpenBot question from AI" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Collapse GoAhead question from AI" })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
@@ -234,7 +234,7 @@ describe("DynamicIslandSurface", () => {
     presentation.item.truncated = true;
     renderControlledIsland(presentation, "expanded", vi.fn());
 
-    expect(screen.getByRole("button", { name: "Review in OpenBot" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review in GoAhead" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
 });

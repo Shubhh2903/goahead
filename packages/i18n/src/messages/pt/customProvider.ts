@@ -6,7 +6,7 @@ export const messages = {
   "customProvider.error.providerIdPattern":
     "Use letras minúsculas, números, hífens ou sublinhados, começando com uma letra ou um número.",
   "customProvider.error.providerIdLength": "Use menos de {max} caracteres no ID do provedor.",
-  "customProvider.error.providerIdBuiltIn": "O OpenBot já tem um provedor chamado {id}. Escolha outro ID.",
+  "customProvider.error.providerIdBuiltIn": "O GoAhead já tem um provedor chamado {id}. Escolha outro ID.",
   "customProvider.error.providerIdSaved":
     "Já existe um endpoint salvo com o nome {id}. Remova-o primeiro ou escolha outro ID.",
   "customProvider.error.displayNameRequired": "Digite um nome de exibição.",
@@ -28,16 +28,16 @@ export const messages = {
   "customProvider.error.baseUrlInvalid": "Digite uma URL completa, como {example}.",
   "customProvider.error.baseUrlProtocol": "Use uma URL http:// ou https://.",
   "customProvider.error.baseUrlCredential": "Coloque a credencial em um cabeçalho, não na URL.",
-  "customProvider.saved.restarted": "Salvo. O OpenBot está carregando os modelos.",
+  "customProvider.saved.restarted": "Salvo. O GoAhead está carregando os modelos.",
   "customProvider.saved.skippedBusy":
     "Salvo. O OpenCode lê a lista após a tarefa atual parar. Pressione Conectar nesse momento.",
   "customProvider.saved.notRunning": "Salvo. O OpenCode lê a lista na próxima vez que iniciar.",
-  "customProvider.removed.restarted": "Removido. O OpenBot está carregando os modelos.",
+  "customProvider.removed.restarted": "Removido. O GoAhead está carregando os modelos.",
   "customProvider.removed.skippedBusy":
     "Removido. O OpenCode lê a lista após a tarefa atual parar. Pressione Conectar nesse momento.",
   "customProvider.removed.notRunning": "Removido. O OpenCode lê a lista na próxima vez que iniciar.",
-  "customProvider.saveFailed": "O OpenBot não conseguiu salvar este endpoint.",
-  "customProvider.removeFailed": "O OpenBot não conseguiu remover {name}.",
+  "customProvider.saveFailed": "O GoAhead não conseguiu salvar este endpoint.",
+  "customProvider.removeFailed": "O GoAhead não conseguiu remover {name}.",
   "customProvider.saveUnavailable": "Esta versão não pode salvar um endpoint.",
   "customProvider.removeUnavailable": "Esta versão não pode remover um endpoint.",
   "customProvider.form.title": "Adicionar um provedor personalizado",
@@ -94,7 +94,7 @@ export const messages = {
   "customProvider.detected.title": "Encontrados neste computador",
   "customProvider.detected.scanning": "Buscando modelos e agentes locais.",
   "customProvider.detected.scanAgain": "Buscar novamente",
-  "customProvider.detected.empty": "O OpenBot não encontrou nenhum servidor de modelos local ou agente ACP.",
+  "customProvider.detected.empty": "O GoAhead não encontrou nenhum servidor de modelos local ou agente ACP.",
   "customProvider.detected.add": "Adicionar",
   "customProvider.detected.addLabel": "Adicionar {name}",
   "customProvider.detected.added": "Adicionado",
@@ -110,10 +110,10 @@ export const messages = {
   "customProvider.detected.showHidden": "Mostrar ocultos ({count})",
   "customProvider.detection.title": "Detecção local",
   "customProvider.detection.saveFailed": "Não foi possível salvar as configurações de detecção.",
-  "customProvider.detection.description": "Onde o OpenBot busca servidores de modelos locais e agentes ACP.",
+  "customProvider.detection.description": "Onde o GoAhead busca servidores de modelos locais e agentes ACP.",
   "customProvider.detection.enabled": "Buscar modelos e agentes locais",
   "customProvider.detection.enabledDescription":
-    "O OpenBot verifica os endereços padrão do Ollama e do LM Studio e busca agentes ACP conhecidos no seu PATH.",
+    "O GoAhead verifica os endereços padrão do Ollama e do LM Studio e busca agentes ACP conhecidos no seu PATH.",
   "customProvider.detection.addresses": "Outros endereços de servidores de modelos",
   "customProvider.detection.address.label": "Endereço {number}",
   "customProvider.detection.address.remove": "Remover endereço {number}",
@@ -132,7 +132,7 @@ export const messages = {
   "customProvider.acp.agentId": "ID do agente",
   "customProvider.acp.agentIdHint": "Letras minúsculas, números ou hífens. Você não pode alterá-lo depois.",
   "customProvider.acp.command": "Comando",
-  "customProvider.acp.commandHint": "O programa a iniciar. O OpenBot o busca no seu PATH.",
+  "customProvider.acp.commandHint": "O programa a iniciar. O GoAhead o busca no seu PATH.",
   "customProvider.acp.args": "Argumentos",
   "customProvider.acp.argsHint":
     "Separe os argumentos com espaços. Coloque entre aspas um argumento que contenha espaços.",
@@ -143,7 +143,7 @@ export const messages = {
   "customProvider.acp.env.add": "Adicionar variável",
   "customProvider.acp.check": "Conexão",
   "customProvider.acp.checkRun": "Verificar agente",
-  "customProvider.acp.checkIdle": "O OpenBot inicia o comando uma vez para confirmar que ele responde.",
+  "customProvider.acp.checkIdle": "O GoAhead inicia o comando uma vez para confirmar que ele responde.",
   "customProvider.acp.checking": "Iniciando {command}.",
   "customProvider.acp.checkOk": "{name} respondeu",
   "customProvider.acp.checkOkVersion": "{name} {version} respondeu",
@@ -151,7 +151,7 @@ export const messages = {
   "customProvider.acp.checkFailed": "O agente não respondeu",
   "customProvider.acp.trustTitle": "Este comando é executado no seu computador",
   "customProvider.acp.trustDescription":
-    "O OpenBot o inicia com sua conta de usuário. O agente pode ler e alterar arquivos e executar comandos. Adicione somente um agente em que você confia.",
+    "O GoAhead o inicia com sua conta de usuário. O agente pode ler e alterar arquivos e executar comandos. Adicione somente um agente em que você confia.",
   "customProvider.acp.submit": "Adicionar agente",
   "customProvider.acp.editTitle": "Editar um agente ACP personalizado",
   "customProvider.acp.submitEdit": "Salvar agente",
@@ -166,7 +166,7 @@ export const messages = {
   "customProvider.acp.error.agentIdPattern":
     "Use letras minúsculas, números ou hífens, começando com uma letra ou um número. Use no máximo 40 caracteres.",
   "customProvider.agents.title": "Agentes personalizados",
-  "customProvider.agents.description": "Agentes ACP que o OpenBot inicia neste computador.",
+  "customProvider.agents.description": "Agentes ACP que o GoAhead inicia neste computador.",
   "customProvider.agents.empty": "Nenhum agente personalizado ainda.",
   "customProvider.agents.add": "Adicionar agente",
   "customProvider.agents.commandMissing": "{command} · Comando não encontrado",
@@ -175,12 +175,12 @@ export const messages = {
   "customProvider.agents.deleteLabel": "Excluir {name}",
   "customProvider.agents.confirmDescription":
     "As variáveis salvas são descartadas e cada agente que o usa passa para um modelo padrão.",
-  "customProvider.agents.saveFailed": "O OpenBot não conseguiu salvar este agente.",
-  "customProvider.agents.saved.restarted": "Salvo. O OpenBot reiniciou os agentes personalizados.",
+  "customProvider.agents.saveFailed": "O GoAhead não conseguiu salvar este agente.",
+  "customProvider.agents.saved.restarted": "Salvo. O GoAhead reiniciou os agentes personalizados.",
   "customProvider.agents.saved.skippedBusy": "Salvo. Os agentes personalizados reiniciam após a tarefa atual parar.",
   "customProvider.agents.saved.notRunning":
     "Salvo. Os agentes personalizados leem a alteração na próxima vez que iniciarem.",
-  "customProvider.agents.removed.restarted": "Removido. O OpenBot reiniciou os agentes personalizados.",
+  "customProvider.agents.removed.restarted": "Removido. O GoAhead reiniciou os agentes personalizados.",
   "customProvider.agents.removed.skippedBusy":
     "Removido. Os agentes personalizados reiniciam após a tarefa atual parar.",
   "customProvider.agents.removed.notRunning":

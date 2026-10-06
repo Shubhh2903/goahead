@@ -1,6 +1,6 @@
 # Multi-tenant hosting on one Mac
 
-Use one native macOS **Standard user** and one OpenBot instance per tenant. The shared
+Use one native macOS **Standard user** and one GoAhead instance per tenant. The shared
 application is `/Applications/OpenBot.app`. Client connections use the existing Team API,
 WebRTC, and the operator's STUN/TURN infrastructure. No VM or Docker is involved.
 
@@ -17,7 +17,7 @@ owner is that tenant, mode `0700`, and no ACL that grants another tenant access.
 metadata without opening tenant content. Do not share writable groups or grant Full Disk Access
 or administrator rights to tenants. Do not enable shared folders for tenant content.
 
-The home boundary protects `~/OpenBot`, OpenBot's database and browser profiles under
+The home boundary protects `~/OpenBot`, GoAhead's database and browser profiles under
 `~/Library/Application Support/OpenBot`, `.codex`, `.claude`, credentials, and conversations.
 A tenant can deliberately share its own files; that is outside the private-account policy.
 
@@ -42,13 +42,13 @@ A standalone compiled helper runs as the root LaunchDaemon `app.openbot.host-man
 Its entry point is `scripts/host-manager.ts`. It owns only these functions:
 
 1. Read the admin configuration and non-sensitive tenant status.
-2. Download the latest stable Apple Silicon release from the fixed OpenBot GitHub repository.
+2. Download the latest stable Apple Silicon release from the fixed GoAhead GitHub repository.
 3. Check code signing, notarization assessment, bundle version, ownership, and permissions.
 4. Wait for every registered tenant to report safe status for five minutes.
 5. Publish a stop request; each tenant rechecks its own state and quits itself.
-6. Verify through the OS process list that all OpenBot main processes have exited.
+6. Verify through the OS process list that all GoAhead main processes have exited.
 7. Replace the shared bundle, then verify its signature, permissions, and installed version.
-8. Publish `released`; per-user LaunchAgents start OpenBot in their existing Aqua sessions.
+8. Publish `released`; per-user LaunchAgents start GoAhead in their existing Aqua sessions.
 9. Collect fresh health reports, or record a host error.
 
 The helper never opens a tenant home, workspace, database, provider directory, browser profile,
@@ -97,11 +97,11 @@ standalone ARM64 executables, the global Aqua LaunchAgent, the root LaunchDaemon
 Node, Xcode, or compilation.
 
 1. Download the normal DMG and the Host PKG from the same release.
-2. Open the DMG and copy OpenBot.app to `/Applications`. Quit OpenBot before initial host setup.
+2. Open the DMG and copy OpenBot.app to `/Applications`. Quit GoAhead before initial host setup.
 3. Open the Host PKG in Installer, or run the command below with the downloaded filename.
 4. Create and register the new Standard accounts. Save the passwords shown at completion.
-5. Log into `client-acme` once and sign into that client's OpenBot and providers.
-6. Use Fast User Switching, log into `client-bravo`, and configure that client's OpenBot.
+5. Log into `client-acme` once and sign into that client's GoAhead and providers.
+6. Use Fast User Switching, log into `client-bravo`, and configure that client's GoAhead.
 7. Run verification as the host administrator.
 
 ```sh
@@ -210,7 +210,7 @@ A staged version is named only while one is pending, because the host keeps its 
 a finished update. A failed process scan makes `status` fail and `watch` report the reading as
 unavailable; it never becomes an empty process list. A tenant gets a blocker only in `waiting`,
 `stopping`, and `released`, the phases whose rules read that information; in every other phase its
-report is still shown, but it blocks nothing. An OpenBot process under an unregistered UID is always
+report is still shown, but it blocks nothing. A GoAhead process under an unregistered UID is always
 listed on its own line, helpers included, because a helper alone still holds the bundle during
 `stopping`. That process becomes the summary only in `waiting`, and only for a main process,
 the one case the host treats as a blocker. When a `waiting` or `stopping` state stops

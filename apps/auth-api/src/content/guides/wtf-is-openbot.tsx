@@ -4,15 +4,15 @@ export function WtfIsOpenBot() {
   return (
     <>
       <p>
-        At first glance, OpenBot might look like another app for chatting with AI. But it is not a model or a chatbot on
+        At first glance, GoAhead might look like another app for chatting with AI. But it is not a model or a chatbot on
         its own. It is a workspace that brings the models and agents you already use into one place, together with their
         files, conversations, and context.
       </p>
       <p>To understand how it works, it helps to separate those pieces first.</p>
 
-      <h2>OpenBot Is Not a Model</h2>
+      <h2>GoAhead Is Not a Model</h2>
       <p>
-        OpenBot does not create its own AI model. It also does not replace tools like Codex, Claude Code, Grok CLI,
+        GoAhead does not create its own AI model. It also does not replace tools like Codex, Claude Code, Grok CLI,
         OpenCode, or models that you host yourself.
       </p>
       <p>
@@ -21,17 +21,17 @@ export function WtfIsOpenBot() {
       </p>
       <p>
         Codex, Claude Code, Grok CLI, OpenCode, and similar tools act as provider integrations or runtimes. They connect
-        OpenBot to a model and handle the communication, authentication, and provider-specific parts of the process.
+        GoAhead to a model and handle the communication, authentication, and provider-specific parts of the process.
       </p>
       <p>
-        OpenBot is the workspace around that process. It gives agents a role, a workspace, a conversation, a queue, and
+        GoAhead is the workspace around that process. It gives agents a role, a workspace, a conversation, a queue, and
         a way to keep context, exchange files, and work with other agents.
       </p>
 
       <h2>Model, Provider, Agent: What’s the Difference?</h2>
       <p>A model generates the response.</p>
       <p>
-        A provider integration or runtime connects that model to OpenBot. It can be Codex, Claude Code, Grok CLI,
+        A provider integration or runtime connects that model to GoAhead. It can be Codex, Claude Code, Grok CLI,
         OpenCode, or another configured runtime.
       </p>
       <p>
@@ -53,7 +53,7 @@ export function WtfIsOpenBot() {
 
       <h2>What an Agent Actually Owns</h2>
       <p>
-        An agent in OpenBot is more than a name attached to a model. It is a persistent setup for a particular kind of
+        An agent in GoAhead is more than a name attached to a model. It is a persistent setup for a particular kind of
         work.
       </p>
       <p>
@@ -67,7 +67,7 @@ export function WtfIsOpenBot() {
 
       <h2>Where the Work Happens</h2>
       <p>
-        OpenBot runs on your computer, so an agent’s workspace is a local folder rather than a chat that disappears when
+        GoAhead runs on your computer, so an agent’s workspace is a local folder rather than a chat that disappears when
         you close a browser tab. Its conversations, queues, attachments, and other app data stay with the desktop app
         and the machine that hosts it.
       </p>
@@ -77,11 +77,11 @@ export function WtfIsOpenBot() {
         network.
       </p>
       <p>
-        Local-first describes where OpenBot keeps your project and agent state. It does not mean that the entire setup
+        Local-first describes where GoAhead keeps your project and agent state. It does not mean that the entire setup
         has to work offline.
       </p>
       <p>
-        You can also keep OpenBot running on one computer, such as a Mac mini, and connect to it from other devices. The
+        You can also keep GoAhead running on one computer, such as a Mac mini, and connect to it from other devices. The
         host remains the place where the agents and their workspaces live, while the other devices give you a way to
         follow the work.
       </p>
@@ -89,7 +89,7 @@ export function WtfIsOpenBot() {
       <h2>A Task From Start to Finish</h2>
       <p>Imagine asking a research agent to prepare a short report.</p>
       <p>
-        You give it the task in its conversation, and OpenBot runs it with the agent’s instructions, workspace, context,
+        You give it the task in its conversation, and GoAhead runs it with the agent’s instructions, workspace, context,
         and selected provider. The agent can inspect local files, use the embedded browser, save notes, and return the
         result in the same thread.
       </p>
@@ -101,7 +101,7 @@ export function WtfIsOpenBot() {
         Each agent can keep its own role and conversation, while the project stays in one place. You can follow the work
         as it happens, send another instruction, pause a task, or redirect it when the plan changes.
       </p>
-      <p>The models still do the actual work. OpenBot keeps the tasks, files, conversations, and handoffs connected.</p>
+      <p>The models still do the actual work. GoAhead keeps the tasks, files, conversations, and handoffs connected.</p>
 
       <h2>Why Use More Than One Agent?</h2>
       <p>
@@ -110,7 +110,7 @@ export function WtfIsOpenBot() {
       </p>
       <p>Instead of asking one assistant to change roles constantly, you can give each agent a more focused job.</p>
       <p>
-        OpenBot lets agents exchange messages and files, pass work between their conversations, and work together in
+        GoAhead lets agents exchange messages and files, pass work between their conversations, and work together in
         shared channels. A research agent can gather information, a writing agent can turn it into a draft, and a review
         agent can check the result.
       </p>
@@ -119,9 +119,9 @@ export function WtfIsOpenBot() {
         setup becomes useful when the work has clear stages, needs different perspectives, or has to continue over time.
       </p>
 
-      <h2>Who Is OpenBot Actually Built For?</h2>
+      <h2>Who Is GoAhead Actually Built For?</h2>
       <p>
-        OpenBot is for people who want AI work to continue beyond a single answer. It makes the most sense when a task
+        GoAhead is for people who want AI work to continue beyond a single answer. It makes the most sense when a task
         involves files, ongoing context, repeated steps, or more than one role.
       </p>
       <p>
@@ -130,34 +130,34 @@ export function WtfIsOpenBot() {
       </p>
       <p>An individual might keep an agent running recurring tasks instead of rebuilding the same setup every time.</p>
       <p>
-        If you only need a quick answer, a regular chatbot may be faster. OpenBot becomes useful when the work starts to
+        If you only need a quick answer, a regular chatbot may be faster. GoAhead becomes useful when the work starts to
         look more like a project than a conversation.
       </p>
       <p>
-        It is also worth remembering that OpenBot is still a development preview. Agents can access files, run commands,
+        It is also worth remembering that GoAhead is still a development preview. Agents can access files, run commands,
         use the network, and control the browser, so you should only give them tasks you trust and keep backups of
         important work.
       </p>
 
       <h2>More Than a Chat Window</h2>
       <p>
-        OpenBot is not a model and not just another chat app. It is a local-first workspace that keeps agents, models,
+        GoAhead is not a model and not just another chat app. It is a local-first workspace that keeps agents, models,
         files, conversations, and tasks connected.
       </p>
       <p>
-        The model provides the responses. The provider integration connects it to OpenBot. The agent keeps the work
-        around the task. OpenBot brings these pieces together so you can keep working instead of starting from a blank
+        The model provides the responses. The provider integration connects it to GoAhead. The agent keeps the work
+        around the task. GoAhead brings these pieces together so you can keep working instead of starting from a blank
         chat each time.
       </p>
-      <p>That is the idea behind OpenBot: turning separate AI tools into persistent teammates for real work.</p>
+      <p>That is the idea behind GoAhead: turning separate AI tools into persistent teammates for real work.</p>
       <p>
         If you want to see how it works in practice, start with{" "}
         <Link to="/guides/$slug" params={{ slug: "openbot-101" }}>
-          OpenBot 101
+          GoAhead 101
         </Link>
         . To see how it differs from an agent app that runs in the cloud, read{" "}
         <Link to="/compare/$slug" params={{ slug: "grok-bot" }}>
-          OpenBot vs Grok Bot
+          GoAhead vs Grok Bot
         </Link>
         .
       </p>

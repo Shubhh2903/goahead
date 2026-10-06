@@ -4,7 +4,7 @@ import type { messages as source } from "../../en/mobile/chat";
 export const messages = {
   "mobile.chat.dictation.microphoneOffTitle": "O acesso ao microfone está desativado",
   "mobile.chat.dictation.microphoneOffMessage":
-    "Para ditar uma mensagem, permita que o OpenBot use o microfone e o reconhecimento de fala em Configurações.",
+    "Para ditar uma mensagem, permita que o GoAhead use o microfone e o reconhecimento de fala em Configurações.",
   "mobile.chat.dictation.stopped": "Ditado interrompido",
   "mobile.chat.dictation.tryAgain": "Tente novamente.",
   "mobile.chat.dictation.unavailable": "O ditado está indisponível",
@@ -89,7 +89,7 @@ export const messages = {
   "mobile.chat.attachment.openFailed": "Não foi possível abrir o anexo",
   "mobile.chat.attachment.photosNeedUpdate": "Para salvar fotos, é necessário ter a versão mais recente do app.",
   "mobile.chat.attachment.photosPermission":
-    "Permita que o OpenBot adicione fotos em Configurações para salvar esta imagem.",
+    "Permita que o GoAhead adicione fotos em Configurações para salvar esta imagem.",
   "mobile.chat.attachment.imageUnavailable": "A imagem está indisponível. Tente novamente.",
   "mobile.chat.attachment.saveImageFailed": "Não foi possível salvar a imagem",
   "mobile.chat.attachment.preview": "Visualizar {name}",
@@ -113,9 +113,9 @@ export const messages = {
   "mobile.chat.attachment.unsupported":
     "{name}: escolha imagens, áudio MP3, vídeo MOV, PDF, documentos do Office, EML, texto, Markdown, dados ou arquivos de código-fonte.",
   "mobile.chat.attachment.hostRejectsType":
-    "{name}: o computador anfitrião não aceita arquivos {type}. Atualize o OpenBot nele para anexá-los.",
+    "{name}: o computador anfitrião não aceita arquivos {type}. Atualize o GoAhead nele para anexá-los.",
   "mobile.chat.attachment.hostRejects":
-    "{name}: o computador anfitrião não aceita estes arquivos. Atualize o OpenBot nele para anexá-los.",
+    "{name}: o computador anfitrião não aceita estes arquivos. Atualize o GoAhead nele para anexá-los.",
   "mobile.chat.attachment.nameTooLong": "Escolha um arquivo com um nome mais curto.",
   "mobile.chat.attachment.damaged": "O anexo está danificado. Selecione-o novamente.",
   "mobile.chat.attachment.tooLarge": "{name} tem mais de 10 MB.",
@@ -164,7 +164,7 @@ export const messages = {
   "mobile.chat.browserSecret.authenticatorCode": "Código do autenticador",
   "mobile.chat.browserSecret.oneTimeCode": "Código de uso único",
   "mobile.chat.browserSecret.takeoverTitle": "Assumir controle do navegador",
-  "mobile.chat.browserSecret.takeoverBody": "Conclua esta etapa no navegador do computador que executa o OpenBot.",
+  "mobile.chat.browserSecret.takeoverBody": "Conclua esta etapa no navegador do computador que executa o GoAhead.",
   "mobile.chat.browserSecret.takeoverReload": "Depois, recarregue a página antes de escolher Concluí.",
   "mobile.chat.browserSecret.takeoverFailed": "Não foi possível concluir a solicitação.",
   "mobile.chat.browserSecret.done": "Concluí",
@@ -269,7 +269,7 @@ export const messages = {
   "mobile.chat.queue.steerNeedsTurn": "Orientar precisa de um turno em execução.",
   "mobile.chat.queue.stillHoldingTitle": "A mensagem continua retida",
   "mobile.chat.queue.stillHoldingMessage":
-    "O OpenBot não conseguiu liberar esta mensagem, então o agente continua aguardando. Tente novamente depois que o celular se reconectar.",
+    "O GoAhead não conseguiu liberar esta mensagem, então o agente continua aguardando. Tente novamente depois que o celular se reconectar.",
   "mobile.chat.queue.keepEditing": "Continuar editando",
   "mobile.chat.queue.leaveAnyway": "Sair mesmo assim",
   "mobile.chat.queue.discardTitle": "Descartar alterações?",
@@ -277,7 +277,7 @@ export const messages = {
   "mobile.chat.queue.discard": "Descartar",
   "mobile.chat.queue.alreadyReceived": "O agente já recebeu esta mensagem, então ela não pode ser alterada.",
   "mobile.chat.queue.holding": "Retendo a mensagem para você…",
-  "mobile.chat.queue.holdFailed": "O OpenBot não conseguiu reter esta mensagem para edição.",
+  "mobile.chat.queue.holdFailed": "O GoAhead não conseguiu reter esta mensagem para edição.",
   "mobile.chat.queue.messageLabel": "Mensagem",
   "mobile.chat.queue.messagePlaceholder": "Texto da mensagem",
   "mobile.chat.queue.save": "Salvar mensagem da fila",

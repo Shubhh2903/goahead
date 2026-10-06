@@ -3,13 +3,13 @@ import type { Comparison } from "./comparison";
 
 // Every statement about Muse here is taken from Meta's own pages, and each page used
 // is in `sources`. Where Meta states nothing, the text says so. Check them again, and
-// move `checkedAt`, whenever this file changes. Statements about OpenBot follow its
+// move `checkedAt`, whenever this file changes. Statements about GoAhead follow its
 // privacy notes and the remote connection that `remote/README.md` describes.
 
 export const MUSE_COMPARISON: Comparison = {
   rival: { name: "Muse", mark: "muse" },
   answer:
-    "For most people who want agents for their work, OpenBot is the better choice: your agents use the AI plans you already pay for, such as ChatGPT, Claude, Gemini or Grok, or your own model. They run on your own computer, and the app is free and needs no account. Choose Muse if you want one personal assistant from Meta that runs on Meta's cloud and helps with email and purchases.",
+    "For most people who want agents for their work, GoAhead is the better choice: your agents use the AI plans you already pay for, such as ChatGPT, Claude, Gemini or Grok, or your own model. They run on your own computer, and the app is free and needs no account. Choose Muse if you want one personal assistant from Meta that runs on Meta's cloud and helps with email and purchases.",
   chooseOpenBot: [
     "You already pay for ChatGPT, Claude, Gemini, Grok or Cursor, or you run your own model.",
     "Your files and chats must stay on your own computer, not on Meta's cloud.",
@@ -35,7 +35,7 @@ export const MUSE_COMPARISON: Comparison = {
     {
       icon: "laptop",
       topic: "Where agents work",
-      openbot: "On the computer that runs OpenBot.",
+      openbot: "On the computer that runs GoAhead.",
       rival:
         "On a dedicated cloud computer that Meta hosts, the Muse Secure VM. With your permission, Muse for Mac can also use the apps on your Mac.",
       better: "openbot",
@@ -44,7 +44,7 @@ export const MUSE_COMPARISON: Comparison = {
       icon: "cloud",
       topic: "When your computer is off",
       openbot:
-        "Agents keep working on the computer or server that runs OpenBot, and routines start them on a schedule. If you do not want to keep a computer on, use a hosted OpenBot server in the EU, from €20 or $25 a month.",
+        "Agents keep working on the computer or server that runs GoAhead, and routines start them on a schedule. If you do not want to keep a computer on, use a hosted GoAhead server in the EU, from €20 or $25 a month.",
       rival: "Muse keeps working after you close the app. You keep no computer on.",
     },
     {
@@ -85,7 +85,7 @@ export const MUSE_COMPARISON: Comparison = {
       icon: "globe",
       topic: "Where you can use it",
       openbot:
-        "In any country: OpenBot has no region lock. The desktop app is in English, French, Japanese and Turkish, and hosted servers run in the EU. Each AI provider sets the countries for its own plan.",
+        "In any country: GoAhead has no region lock. The desktop app is in English, French, Japanese and Turkish, and hosted servers run in the EU. Each AI provider sets the countries for its own plan.",
       rival:
         "Only in the US and Canada, for people 18 and over. Meta says Muse comes to more markets, but gives no countries or dates.",
       better: "openbot",
@@ -106,12 +106,12 @@ export const MUSE_COMPARISON: Comparison = {
     },
   ],
   intro:
-    "Both products give you an AI agent that does the work, not only answers: it keeps a memory, works on long tasks and comes back to you. The difference is who the agent works for, where it runs, and which model does the thinking. Muse is one personal assistant on Meta's cloud. OpenBot is a team of agents on your own computer, with the AI plans you choose.",
+    "Both products give you an AI agent that does the work, not only answers: it keeps a memory, works on long tasks and comes back to you. The difference is who the agent works for, where it runs, and which model does the thinking. Muse is one personal assistant on Meta's cloud. GoAhead is a team of agents on your own computer, with the AI plans you choose.",
   sections: [
     {
       title: "Models and the plans you pay for",
       openbot:
-        "OpenBot runs the provider tools you already use, with the plans you already pay for: Codex with your ChatGPT plan, Claude Code with your Claude plan, Gemini with your Google AI Pro or Ultra plan, Grok CLI with your Grok account or an xAI API key, and Cursor CLI with your Cursor plan or a Cursor API key. OpenCode runs free models, or your own model on any OpenAI-compatible server, also one on your computer. You choose the provider, the model and the reasoning effort for each agent. When you move an agent to a different provider, it keeps its role, workspace and conversation.",
+        "GoAhead runs the provider tools you already use, with the plans you already pay for: Codex with your ChatGPT plan, Claude Code with your Claude plan, Gemini with your Google AI Pro or Ultra plan, Grok CLI with your Grok account or an xAI API key, and Cursor CLI with your Cursor plan or a Cursor API key. OpenCode runs free models, or your own model on any OpenAI-compatible server, also one on your computer. You choose the provider, the model and the reasoning effort for each agent. When you move an agent to a different provider, it keeps its role, workspace and conversation.",
       rival:
         "Muse runs on Muse Spark, Meta's own model, and Meta states no way to use a different one. You pay Meta for use: Muse is free with a weekly limit, and the Power and Maximum plans give more Muse tokens each week. A plan that you already pay for at another AI company does not apply.",
       better: "openbot",
@@ -119,7 +119,7 @@ export const MUSE_COMPARISON: Comparison = {
     {
       title: "Where the work happens",
       openbot:
-        "OpenBot runs on the computer that hosts it. Agent workspaces, conversations and app data stay on that computer, so it must stay on while its agents work. Run it on a desktop or a server that stays on, and your agents keep working while your laptop is closed. If you do not want to keep a computer on, use a hosted OpenBot server. It is a Linux server in the EU (Germany, Finland or France), from €20 or $25 a month, and it keeps the workspaces and chats of its agents. Local-first is not offline: an agent that uses a hosted provider still sends its requests to that provider.",
+        "GoAhead runs on the computer that hosts it. Agent workspaces, conversations and app data stay on that computer, so it must stay on while its agents work. Run it on a desktop or a server that stays on, and your agents keep working while your laptop is closed. If you do not want to keep a computer on, use a hosted GoAhead server. It is a Linux server in the EU (Germany, Finland or France), from €20 or $25 a month, and it keeps the workspaces and chats of its agents. Local-first is not offline: an agent that uses a hosted provider still sends its requests to that provider.",
       rival:
         "Each Muse lives on its own cloud computer, the Muse Secure VM: a Linux computer with a browser and storage that Meta hosts. Your data and the sign-ins of the services you connect are kept there. Muse keeps working after you close the app. With your permission, Muse for Mac can also use the apps on your Mac.",
       better: "openbot",
@@ -127,7 +127,7 @@ export const MUSE_COMPARISON: Comparison = {
     {
       title: "Phones and remote access",
       openbot:
-        "The OpenBot apps for iPhone and Android connect to the computer that runs your agents. From anywhere, you chat with them, follow their progress and send files. The connection goes directly between your devices when it can, it is encrypted, and no cloud stores your chats or files. Remote access needs an OpenBot account.",
+        "The GoAhead apps for iPhone and Android connect to the computer that runs your agents. From anywhere, you chat with them, follow their progress and send files. The connection goes directly between your devices when it can, it is encrypted, and no cloud stores your chats or files. Remote access needs a GoAhead account.",
       rival:
         "Muse has apps for iPhone and Android, a web app, a Mac app, and a chat in WhatsApp. Meta says Muse comes to its AI glasses in the coming months. Muse itself and your data stay on your cloud computer at Meta.",
       better: "openbot",
@@ -135,7 +135,7 @@ export const MUSE_COMPARISON: Comparison = {
     {
       title: "One assistant or a team",
       openbot:
-        "In OpenBot, each agent has a name, a job and its own workspace. A lead agent can give parts of a task to other agents in a shared channel. You follow their work and step in when a decision needs you. For a team of people, one computer runs the host and the others join it; the chats and files stay on the host.",
+        "In GoAhead, each agent has a name, a job and its own workspace. A lead agent can give parts of a task to other agents in a shared channel. You follow their work and step in when a decision needs you. For a team of people, one computer runs the host and the others join it; the chats and files stay on the host.",
       rival:
         "Muse is one personal agent for each person. Side chats keep separate topics apart. Meta describes no way to run several agents, to let agents work together, or to share an agent with coworkers.",
       better: "openbot",
@@ -143,7 +143,7 @@ export const MUSE_COMPARISON: Comparison = {
     {
       title: "Data and privacy",
       openbot:
-        "OpenBot keeps workspaces, conversations, attachments and browser data in a SQLite database on the computer that runs it. OpenBot keeps no other copy. On a hosted OpenBot server, the database is on that server in the EU. An account holds only your profile, team memberships, invitations, sign-in sessions and the settings that let devices find each other.",
+        "GoAhead keeps workspaces, conversations, attachments and browser data in a SQLite database on the computer that runs it. GoAhead keeps no other copy. On a hosted GoAhead server, the database is on that server in the EU. An account holds only your profile, team memberships, invitations, sign-in sessions and the settings that let devices find each other.",
       rival:
         "Muse keeps your data on your cloud computer at Meta. A separate agent, Sentinel, must approve each action through a connected service and all network traffic, and Muse asks you before sensitive actions such as an email or a purchase. By default, Meta can use your conversations to train its models; you can turn this off in Settings. Meta says it does not give Muse conversations or VM data to its ad systems. A Confidential VM that stops Meta from reading the data in your VM is planned for later in 2026.",
       better: "openbot",
@@ -151,19 +151,19 @@ export const MUSE_COMPARISON: Comparison = {
   ],
   faq: [
     {
-      question: "Is OpenBot an alternative to Meta's Muse?",
+      question: "Is GoAhead an alternative to Meta's Muse?",
       answer:
-        "Yes, if you want your agents on your own computer. Both give you AI agents that do the work and remember it. OpenBot runs a team of agents on your computer with the AI plans you choose. Muse is one personal agent on a cloud computer that Meta hosts, with Meta's own model.",
+        "Yes, if you want your agents on your own computer. Both give you AI agents that do the work and remember it. GoAhead runs a team of agents on your computer with the AI plans you choose. Muse is one personal agent on a cloud computer that Meta hosts, with Meta's own model.",
     },
     {
-      question: "Why choose OpenBot over Muse?",
+      question: "Why choose GoAhead over Muse?",
       answer:
-        "Your agents use the AI plans you already pay for, such as ChatGPT, Claude, Gemini or Grok, or your own model. OpenBot keeps your workspaces, chats and files on your own computer, it runs a team of agents instead of one, and it has desktop apps for macOS, Windows and Linux with no country limit. The app is free, works without an account, and its source code is on GitHub. Muse is the better fit when you want a personal assistant with no computer to keep on.",
+        "Your agents use the AI plans you already pay for, such as ChatGPT, Claude, Gemini or Grok, or your own model. GoAhead keeps your workspaces, chats and files on your own computer, it runs a team of agents instead of one, and it has desktop apps for macOS, Windows and Linux with no country limit. The app is free, works without an account, and its source code is on GitHub. Muse is the better fit when you want a personal assistant with no computer to keep on.",
     },
     {
-      question: "Can I use my ChatGPT, Claude or Gemini subscription with OpenBot?",
+      question: "Can I use my ChatGPT, Claude or Gemini subscription with GoAhead?",
       answer:
-        "Yes. OpenBot signs in to each provider tool with your own account: your ChatGPT plan for Codex, your Claude plan for Claude Code, and a Google AI Pro or Ultra plan for Gemini. Grok CLI uses your Grok account or an xAI API key, and Cursor CLI your Cursor plan. OpenBot adds no charge of its own.",
+        "Yes. GoAhead signs in to each provider tool with your own account: your ChatGPT plan for Codex, your Claude plan for Claude Code, and a Google AI Pro or Ultra plan for Gemini. Grok CLI uses your Grok account or an xAI API key, and Cursor CLI your Cursor plan. GoAhead adds no charge of its own.",
     },
     {
       question: "Which model does Muse use?",
@@ -178,27 +178,27 @@ export const MUSE_COMPARISON: Comparison = {
     {
       question: "Does Meta train its models on my Muse chats?",
       answer:
-        "By default, Meta can use your Muse conversations to train and improve its AI models. You can turn this off in the Muse settings. Meta says it does not give Muse conversations or VM data to its ad systems. OpenBot keeps your chats on your computer, and only the provider you choose gets the requests your agents send.",
+        "By default, Meta can use your Muse conversations to train and improve its AI models. You can turn this off in the Muse settings. Meta says it does not give Muse conversations or VM data to its ad systems. GoAhead keeps your chats on your computer, and only the provider you choose gets the requests your agents send.",
     },
     {
-      question: "Do my chats leave my computer with OpenBot?",
+      question: "Do my chats leave my computer with GoAhead?",
       answer:
-        "OpenBot keeps workspaces, conversations and files in a database on the computer that runs it, and OpenBot holds no copy. The provider you choose still gets the requests that your agents send to it.",
+        "GoAhead keeps workspaces, conversations and files in a database on the computer that runs it, and GoAhead holds no copy. The provider you choose still gets the requests that your agents send to it.",
     },
     {
       question: "Do agents keep working when my laptop is closed?",
       answer:
-        "Yes, with both. With OpenBot, run it on a desktop or a server that stays on, or on a hosted OpenBot server, and connect from your laptop or phone. Only that computer must stay on. Muse keeps working on its cloud computer after you close the app.",
+        "Yes, with both. With GoAhead, run it on a desktop or a server that stays on, or on a hosted GoAhead server, and connect from your laptop or phone. Only that computer must stay on. Muse keeps working on its cloud computer after you close the app.",
     },
     {
       question: "Can I use Muse in Europe?",
       answer:
-        "Not for now. Meta offers Muse in the US and Canada, to people aged 18 or more, and says it is working to bring Muse to more markets, with no countries or dates. OpenBot has no country limit: it runs on your computer in any country, hosted OpenBot servers run in the EU, and each provider tool follows its own availability.",
+        "Not for now. Meta offers Muse in the US and Canada, to people aged 18 or more, and says it is working to bring Muse to more markets, with no countries or dates. GoAhead has no country limit: it runs on your computer in any country, hosted GoAhead servers run in the EU, and each provider tool follows its own availability.",
     },
     {
-      question: "How much do OpenBot and Muse cost?",
+      question: "How much do GoAhead and Muse cost?",
       answer:
-        "OpenBot is free for noncommercial use, and commercial use needs a separate license. Each provider tool uses its own plan or API key. Muse is free with a weekly usage limit. The Power plan costs $20 a month for 500 million Muse tokens a week, and the Maximum plan costs $100 a month for 3 billion.",
+        "GoAhead is free for noncommercial use, and commercial use needs a separate license. Each provider tool uses its own plan or API key. Muse is free with a weekly usage limit. The Power plan costs $20 a month for 500 million Muse tokens a week, and the Maximum plan costs $100 a month for 3 billion.",
     },
   ],
   sources: [
@@ -217,8 +217,8 @@ export const MUSE_COMPARISON: Comparison = {
     { label: "Muse side chats", url: "https://www.meta.com/help/artificial-intelligence/1331373868832401/" },
     { label: "Muse Privacy Policy", url: "https://muse.ai/privacy" },
     { label: "Muse Terms", url: "https://muse.ai/terms" },
-    { label: "OpenBot privacy notes", url: OPENBOT_LINKS.privacy },
-    { label: "OpenBot source code", url: OPENBOT_LINKS.repository },
+    { label: "GoAhead privacy notes", url: OPENBOT_LINKS.privacy },
+    { label: "GoAhead source code", url: OPENBOT_LINKS.repository },
   ],
   checkedAt: "2026-10-02",
 };

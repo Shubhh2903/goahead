@@ -15,19 +15,19 @@ export const NEWS_COLLECTION: ContentCollection<"news"> = {
   indexRoute: "/news",
   articleRoute: "/news/$slug",
   name: "News",
-  indexTitle: "OpenBot News: Updates on the Local AI Agent App",
+  indexTitle: "GoAhead News: Updates on the Local AI Agent App",
   indexDescription:
-    "Notes on building OpenBot: local-first storage, agents that outlive their provider, and how the pieces fit together.",
-  feedTitle: "OpenBot news",
+    "Notes on building GoAhead: local-first storage, agents that outlive their provider, and how the pieces fit together.",
+  feedTitle: "GoAhead news",
   backLabel: "All news",
-  moreTitle: "More from OpenBot",
+  moreTitle: "More from GoAhead",
   imageEyebrow: "OPENBOT · NEWS",
   articles: publishedFirst([
     {
       slug: "introducing-openbot",
-      title: "Introducing OpenBot: A Shared Workspace for AI Agents",
+      title: "Introducing GoAhead: A Shared Workspace for AI Agents",
       description:
-        "Meet OpenBot, a local-first workspace where the AI models you already use can work as a team of agents, alongside you and your coworkers.",
+        "Meet GoAhead, a local-first workspace where the AI models you already use can work as a team of agents, alongside you and your coworkers.",
       publishedAt: "2026-09-14",
       author: NEWS_AUTHOR,
     },

@@ -20,9 +20,9 @@ import { ArticleImage } from "./ArticleMedia";
 // The string the mount's colours are drawn from. A real article passes its own
 // title, so a mounted picture matches the artwork on the card the reader arrived
 // from; here it is a control, so the colour families can be compared.
-const ARTICLE_TITLE = "OpenBot 101";
+const ARTICLE_TITLE = "GoAhead 101";
 const GUIDE = GUIDES_COLLECTION.articles.find((article) => article.slug === "openbot-101");
-if (!GUIDE) throw new Error("OpenBot 101 must be in the guides registry.");
+if (!GUIDE) throw new Error("GoAhead 101 must be in the guides registry.");
 
 const meta = {
   title: "Site/Article media",
@@ -34,9 +34,9 @@ type Story = StoryObj<typeof meta>;
 function StoryHeader() {
   return (
     <header class="landing-header">
-      <a class="landing-brand" href="/" aria-label="OpenBot home">
+      <a class="landing-brand" href="/" aria-label="GoAhead home">
         <AppLogo variant="production" class="landing-brand-logo" />
-        <span>OpenBot</span>
+        <span>GoAhead</span>
       </a>
       <div class="site-header-actions">
         <Button
@@ -116,7 +116,7 @@ export const InTheArticle: Story = {
           </div>
           <div class="post-prose">
             <p>
-              I built OpenBot because I wanted teammates, not chats. A chat window forgets. A teammate keeps the folder
+              I built GoAhead because I wanted teammates, not chats. A chat window forgets. A teammate keeps the folder
               it works in, the history of what it did, and a name you can call it by.
             </p>
             <p>
@@ -143,7 +143,7 @@ export const InTheArticle: Story = {
             <h2>Install it, then connect a provider</h2>
             <p>
               Take the installer from GitHub Releases. Then give it a provider. In onboarding, in Settings or in the
-              model picker, select a provider and press Download: OpenBot installs and pins its own managed copy of that
+              model picker, select a provider and press Download: GoAhead installs and pins its own managed copy of that
               command-line tool.
             </p>
             <ArticleImage
@@ -237,7 +237,7 @@ export const MountPad: Story = {
 export const ColourFamilies: Story = {
   render: () => (
     <ProseColumn>
-      {["OpenBot 101", "WTF Is OpenBot?", "One agent, many providers", "Run the team server yourself"].map((title) => (
+      {["GoAhead 101", "WTF Is GoAhead?", "One agent, many providers", "Run the team server yourself"].map((title) => (
         <ArticleImage
           src={pickAModel}
           alt="The model picker open on the ChatGPT tab, showing the installed Codex CLI version and a list of GPT models."

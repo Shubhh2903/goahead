@@ -48,7 +48,7 @@ export async function sendTeamInviteEmail(
     });
   } catch (error) {
     if (isEmailDeliveryFailure(error))
-      throw emailDeliveryFailure(error.message, "OpenBot could not send the invitation.");
+      throw emailDeliveryFailure(error.message, "GoAhead could not send the invitation.");
     throw error;
   }
 }

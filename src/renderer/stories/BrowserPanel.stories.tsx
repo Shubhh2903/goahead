@@ -6,7 +6,7 @@ import type { Meta, StoryObj } from "storybook-solidjs-vite";
 
 const tab: BrowserTab = {
   id: "tab-docs",
-  title: "OpenBot documentation",
+  title: "GoAhead documentation",
   url: "https://openbot.run/docs",
   loading: false,
   ownerThreadId: "thread-chief",

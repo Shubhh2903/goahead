@@ -109,7 +109,7 @@ export type {
 const NO_IDS: string[] = [];
 const EMPTY_SERVER: MobileServer = {
   id: "unavailable",
-  name: "OpenBot",
+  name: "GoAhead",
   logoKey: null,
   kind: "local",
   state: "connecting",

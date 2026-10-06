@@ -8,10 +8,10 @@ export const messages = {
   "mcp.connect.close": "Fechar conexão de {name}",
   "mcp.connect.getKey": "Obter uma chave",
   "mcp.connect.keyDescription":
-    "Cole uma credencial da sua conta de {name}. O OpenBot usa a credencial para conectar. Local de armazenamento: {host}.",
+    "Cole uma credencial da sua conta de {name}. O GoAhead usa a credencial para conectar. Local de armazenamento: {host}.",
   "mcp.connect.thisComputer": "este computador",
   "mcp.connect.noCredentialDescription":
-    "{name} não exige credenciais. O OpenBot conecta uma vez para ver as ferramentas disponíveis.",
+    "{name} não exige credenciais. O GoAhead conecta uma vez para ver as ferramentas disponíveis.",
   "mcp.connect.connect": "Conectar",
   "mcp.connect.required": "Obrigatório.",
   "mcp.connect.keptOn": "Local de armazenamento: {host}.",
@@ -22,7 +22,7 @@ export const messages = {
   "mcp.local.address": "Endereço",
   "mcp.local.docs": "Guia de configuração",
   "mcp.signIn.description":
-    "Entre na sua conta de {name}. O OpenBot obtém as ferramentas que essa conta pode acessar, sem receber sua senha.",
+    "Entre na sua conta de {name}. O GoAhead obtém as ferramentas que essa conta pode acessar, sem receber sua senha.",
   "mcp.signIn.waiting": "Aguardando o navegador…",
   "mcp.signIn.continue": "Continuar para {name}",
   "mcp.server.loadFailed": "Não foi possível carregar os servidores MCP.",
@@ -51,7 +51,7 @@ export const messages = {
   "mcp.panel.empty": "Nenhum servidor MCP ainda.",
   "mcp.panel.enable": "Ativar {name}",
   "mcp.panel.detailsTitle": "Detalhes",
-  "mcp.panel.detailsDescription": "Dê um nome a este servidor e escolha como o OpenBot o acessa.",
+  "mcp.panel.detailsDescription": "Dê um nome a este servidor e escolha como o GoAhead o acessa.",
   "mcp.panel.transport": "Transporte",
   "mcp.panel.name": "Nome",
   "mcp.panel.namePlaceholder": "Nome do servidor MCP",

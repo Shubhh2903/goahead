@@ -87,7 +87,7 @@ describe("McpServerStore", () => {
     expect(() => store.save(stdioConfig({ name: "Local SQLite" }))).toThrow(
       "An MCP server named Local SQLite already exists.",
     );
-    expect(() => store.save(stdioConfig({ name: "openbot" }))).toThrow("OpenBot already uses the name openbot.");
+    expect(() => store.save(stdioConfig({ name: "openbot" }))).toThrow("GoAhead already uses the name openbot.");
   });
 
   it("omits a disabled server from the enabled list", async () => {

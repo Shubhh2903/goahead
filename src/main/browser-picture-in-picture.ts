@@ -55,7 +55,7 @@ export class BrowserPictureInPicture {
       maximizable: false,
       skipTaskbar: true,
       backgroundColor: "#111415",
-      title: "OpenBot Browser",
+      title: "GoAhead Browser",
       icon: this.#options.iconPath,
       webPreferences: {
         preload: this.#options.preloadPath,

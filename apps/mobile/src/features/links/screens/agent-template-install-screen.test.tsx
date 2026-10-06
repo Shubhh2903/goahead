@@ -256,7 +256,7 @@ it("previews the template and installs it only on an eligible server the user ch
     "Lab",
   ]);
   expect(screen.getByRole("radio", { name: "Old" })).toHaveProperty("disabled", true);
-  expect(screen.getByText("Update OpenBot on this server to add shared agents.")).toBeTruthy();
+  expect(screen.getByText("Update GoAhead on this server to add shared agents.")).toBeTruthy();
   expect(screen.getByText("Only servers where you are an owner or admin are listed.")).toBeTruthy();
   expect(state.install).not.toHaveBeenCalled();
 

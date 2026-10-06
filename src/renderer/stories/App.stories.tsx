@@ -116,7 +116,7 @@ export const IncompatibleRemoteHost: Story = {
             },
             issue: {
               code: "host_update_required",
-              message: "Update OpenBot on the host.",
+              message: "Update GoAhead on the host.",
               retryable: true,
             },
           },

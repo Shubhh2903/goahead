@@ -78,7 +78,7 @@ export const messages = {
   "sidebar.delete.pending": "Siliniyor…",
   "sidebar.delete.title": "{name} silinsin mi?",
   "sidebar.delete.agentDescription":
-    "Bu işlem ajanı ve OpenBot konuşmasını uygulamadan kaldırır. Kuyruğu, bellekleri, rutinleri ve çalışma alanı silinir. Bağlı CLI sağlayıcısı tarafından ayrı depolanan geçmiş silinmez.",
+    "Bu işlem ajanı ve GoAhead konuşmasını uygulamadan kaldırır. Kuyruğu, bellekleri, rutinleri ve çalışma alanı silinir. Bağlı CLI sağlayıcısı tarafından ayrı depolanan geçmiş silinmez.",
   "sidebar.delete.channelDescription":
     "Bu işlem kanalı durdurur. Geçmişi yalnızca önizleme amacıyla Silinen kanallar bölümünde kalır. Geri yükleyemezsiniz. Üye ajanlar korunur.",
   "sidebar.delete.sectionDescription": "Bu bölümdeki ajanlar Atanmamış bölümüne taşınır. Hiçbir ajan silinmez.",
@@ -91,12 +91,12 @@ export const messages = {
   "sidebar.announce.movedPinned": "Sabitlenen sohbet, {total} konumundan {position}. konuma taşındı.",
   "sidebar.announce.personFallback": "kişi",
   "sidebar.announce.chatFallback": "sohbet",
-  "sidebar.mobileApp.title": "iPhone için OpenBot",
+  "sidebar.mobileApp.title": "iPhone için GoAhead",
   "sidebar.mobileApp.body": "iOS uygulaması şimdi TestFlight'ta genel betada.",
   "sidebar.mobileApp.howToInstall": "Nasıl yüklenir",
   "sidebar.mobileApp.dismiss": "iPhone uygulaması duyurusunu kapat",
   "sidebar.mobileApp.qrLabel": "TestFlight davet QR kodu",
-  "sidebar.mobileApp.dialog.title": "OpenBot'u iPhone'unuza yükleyin",
+  "sidebar.mobileApp.dialog.title": "GoAhead'i iPhone'unuza yükleyin",
   "sidebar.mobileApp.dialog.description": "iOS uygulaması genel betadadır. Apple TestFlight ile yüklenir.",
   "sidebar.mobileApp.dialog.copyLink": "Bağlantıyı kopyala",
   "sidebar.mobileApp.dialog.linkCopied": "Bağlantı kopyalandı",
@@ -107,5 +107,5 @@ export const messages = {
     "Bu QR kodunu iPhone kamerasıyla tarayın veya davet bağlantısını kopyalayıp iPhone'unuzda açın.",
   "sidebar.mobileApp.step.install": "TestFlight'ta Kabul Et'e, ardından Yükle'ye dokunun.",
   "sidebar.mobileApp.step.connect":
-    "iPhone'unuzda OpenBot'u açın. Bu bilgisayarda Ayarlar > Mobil Bağlantı'ya gidin ve giriş kodunu tarayın.",
+    "iPhone'unuzda GoAhead'i açın. Bu bilgisayarda Ayarlar > Mobil Bağlantı'ya gidin ve giriş kodunu tarayın.",
 } as const satisfies PartialTranslation<typeof source>;

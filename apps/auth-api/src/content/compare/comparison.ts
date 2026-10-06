@@ -4,7 +4,7 @@ import type { LandingIconName } from "../../components/landing/LandingIcon";
 
 // One comparison page, as data. The page draws every part from it, and the FAQ
 // structured data is built from the same questions, so the two can not disagree.
-// There are three kinds: OpenBot against one rival, two other products against
+// There are three kinds: GoAhead against one rival, two other products against
 // each other (a matchup), and a roundup of many apps.
 
 type ComparisonSide = "openbot" | "rival";
@@ -33,7 +33,7 @@ interface ComparisonSource {
   url: string;
 }
 
-/** A plan or a model that an OpenBot agent can run on. The same on every comparison. */
+/** A plan or a model that a GoAhead agent can run on. The same on every comparison. */
 export interface OpenBotPlan {
   /** The provider whose logo the page shows, or `custom` for a model server of your own. */
   provider: ProviderLogoVariant | "custom";
@@ -54,7 +54,7 @@ export const OPENBOT_PLANS: readonly OpenBotPlan[] = [
   { provider: "custom", name: "Your own model", plan: "Any OpenAI-compatible server, also one on your computer." },
 ];
 
-/** OpenBot against one rival. The kind is optional, so the first pages need no edit. */
+/** GoAhead against one rival. The kind is optional, so the first pages need no edit. */
 export interface Comparison {
   kind?: "openbot";
   rival: {
@@ -123,13 +123,13 @@ interface MatchupProduct {
   /** The product's own spelling. */
   name: string;
   mark: RivalMarkName;
-  /** The OpenBot plan that runs this product, which the page shows first. */
+  /** The GoAhead plan that runs this product, which the page shows first. */
   provider: ProviderLogoVariant;
 }
 
 /**
- * Two products that OpenBot runs, against each other. Neither side is OpenBot, and
- * neither is recommended: the page compares them, then says that OpenBot runs both.
+ * Two products that GoAhead runs, against each other. Neither side is GoAhead, and
+ * neither is recommended: the page compares them, then says that GoAhead runs both.
  */
 export interface MatchupComparison {
   kind: "matchup";
@@ -140,7 +140,7 @@ export interface MatchupComparison {
   chooseB: readonly string[];
   rows: readonly ComparisonRow<MatchupSide>[];
   intro: string;
-  /** How OpenBot runs both products, with the plans you have, as one team. */
+  /** How GoAhead runs both products, with the plans you have, as one team. */
   bothInOpenBot: string;
   /** Not given when the benchmark does not test one of the two products. */
   benchmark?: Benchmark;
@@ -163,7 +163,7 @@ export interface RoundupApp {
   summary: string;
 }
 
-/** Many apps in one list, each with the comparisons that include it. OpenBot is first, and the page says who wrote it. */
+/** Many apps in one list, each with the comparisons that include it. GoAhead is first, and the page says who wrote it. */
 export interface RoundupComparison {
   kind: "roundup";
   answer: string;
@@ -206,7 +206,7 @@ export function roundupAppAnchor(app: RoundupApp): string {
 
 /**
  * schema.org `ItemList` of a roundup, in the order the page shows. No rating or
- * review: OpenBot is on the list, and a maker does not review its own app.
+ * review: GoAhead is on the list, and a maker does not review its own app.
  */
 export function roundupItemListStructuredData(
   roundup: RoundupComparison,

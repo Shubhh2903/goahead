@@ -18,7 +18,7 @@ export const messages = {
   "mobile.settings.home.preferences": "Preferências",
   "mobile.settings.home.generalHint": "Aparência e conversas",
   "mobile.settings.home.general": "Geral",
-  "mobile.settings.home.about": "Sobre o OpenBot",
+  "mobile.settings.home.about": "Sobre o GoAhead",
   "mobile.settings.home.support": "Suporte",
   "mobile.settings.home.supportHint": "Obter ajuda e salvar um registro de suporte",
   "mobile.settings.support.help": "Obter ajuda",
@@ -33,7 +33,7 @@ export const messages = {
   "mobile.settings.support.clearTitle": "Limpar o registro de suporte?",
   "mobile.settings.support.clearBody": "Isso remove todos os eventos do registro neste celular.",
   "mobile.settings.support.logFooter":
-    "O registro fica neste celular e o OpenBot não o envia. Ele registra etapas de conexão, solicitações e erros. Ele não registra mensagens nem arquivos e oculta senhas e tokens. Leia o arquivo antes de compartilhá-lo.",
+    "O registro fica neste celular e o GoAhead não o envia. Ele registra etapas de conexão, solicitações e erros. Ele não registra mensagens nem arquivos e oculta senhas e tokens. Leia o arquivo antes de compartilhá-lo.",
   "mobile.settings.support.saveFailed": "Não foi possível salvar o arquivo de registro. Tente novamente.",
   "mobile.settings.support.sharingUnavailable": "O compartilhamento não está disponível neste celular.",
   "mobile.settings.support.recent": "Eventos recentes",
@@ -74,7 +74,7 @@ export const messages = {
   "mobile.settings.feedback.retry": "Tentar salvar a configuração de resposta tátil novamente",
   "mobile.settings.liveActivities.title": "Atividades ao Vivo",
   "mobile.settings.liveActivities.footer":
-    "Mostra o trabalho dos agentes, mensagens, perguntas e aprovações na Tela Bloqueada e na Dynamic Island enquanto o OpenBot está em execução.",
+    "Mostra o trabalho dos agentes, mensagens, perguntas e aprovações na Tela Bloqueada e na Dynamic Island enquanto o GoAhead está em execução.",
   "mobile.settings.liveActivities.toggle": "Mostrar atividade dos agentes",
   "mobile.settings.liveActivities.retry": "Tentar salvar a configuração de Atividades ao Vivo novamente",
   "mobile.settings.privacy.title": "Privacidade",
@@ -100,6 +100,6 @@ export const messages = {
   "mobile.settings.profile.security": "Segurança",
   "mobile.settings.profile.accountSessions": "Sessões da conta",
   "mobile.settings.profile.signOutTitle": "Sair?",
-  "mobile.settings.profile.signOutBody": "Reconecte-se lendo um novo código do OpenBot no computador.",
+  "mobile.settings.profile.signOutBody": "Reconecte-se lendo um novo código do GoAhead no computador.",
   "mobile.settings.profile.signOut": "Sair",
 } as const satisfies PartialTranslation<typeof source>;

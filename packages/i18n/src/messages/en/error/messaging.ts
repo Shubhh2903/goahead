@@ -5,5 +5,5 @@ export const messages = defineMessages("error.messaging", {
   "error.messaging.notConnected": "This Slack workspace is not connected.",
   "error.messaging.unsupported": "This computer cannot connect to Slack.",
   "error.messaging.relayUnavailable":
-    "OpenBot cannot receive Slack events on this computer. Sign in, give this computer a name, and try again.",
+    "GoAhead cannot receive Slack events on this computer. Sign in, give this computer a name, and try again.",
 });

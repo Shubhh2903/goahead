@@ -118,13 +118,13 @@ describe("SettingsModal", () => {
       </>
     ));
 
-    const launchSwitch = screen.getByRole("switch", { name: "Launch OpenBot at login" });
+    const launchSwitch = screen.getByRole("switch", { name: "Launch GoAhead at login" });
     await fireEvent.click(launchSwitch);
     expect(value().launchAtLogin).toBe(false);
 
     const select = screen.getByRole("button", { name: /^Open external links in/ });
     await fireEvent.pointerDown(select, { pointerType: "mouse", button: 0 });
-    await fireEvent.click(screen.getByRole("option", { name: "OpenBot" }));
+    await fireEvent.click(screen.getByRole("option", { name: "GoAhead" }));
     expect(value().externalLinkTarget).toBe("OpenBot");
     await fireEvent.click(screen.getByRole("switch", { name: "Share product analytics" }));
     expect(value().productAnalytics).toBe(false);
@@ -133,8 +133,8 @@ describe("SettingsModal", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "General" })).not.toBeInTheDocument());
     await fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
 
-    expect(await screen.findByRole("switch", { name: "Launch OpenBot at login" })).not.toBeChecked();
-    expect(screen.getByRole("button", { name: /^Open external links in/ })).toHaveTextContent("OpenBot");
+    expect(await screen.findByRole("switch", { name: "Launch GoAhead at login" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /^Open external links in/ })).toHaveTextContent("GoAhead");
     expect(screen.getByRole("switch", { name: "Share product analytics" })).not.toBeChecked();
 
     await fireEvent.click(screen.getByRole("tab", { name: "Updates" }));
@@ -194,7 +194,7 @@ describe("SettingsModal", () => {
     await fireEvent.click(screen.getByRole("tab", { name: "Updates" }));
     await fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
     await waitFor(() => expect(onUpdateAction).toHaveBeenCalledOnce());
-    expect(await screen.findByText("OpenBot is up to date on the Stable track.")).toBeInTheDocument();
+    expect(await screen.findByText("GoAhead is up to date on the Stable track.")).toBeInTheDocument();
   });
 
   it("reports host management instead of tenant update controls on a managed host", async () => {
@@ -216,7 +216,7 @@ describe("SettingsModal", () => {
 
     await fireEvent.click(screen.getByRole("tab", { name: "Updates" }));
     expect(await screen.findByText("Managed by Host")).toBeInTheDocument();
-    expect(screen.getByText(/managed automatically by OpenBot Host Manager/)).toBeInTheDocument();
+    expect(screen.getByText(/managed automatically by GoAhead Host Manager/)).toBeInTheDocument();
     expect(screen.getByText(/Up to date/)).toBeInTheDocument();
     // The host owns both the shared application and the download schedule, so neither the manual
     // action nor the per-user download preference can change anything.
@@ -253,13 +253,13 @@ describe("SettingsModal", () => {
     ));
 
     await fireEvent.click(screen.getByRole("tab", { name: "Updates" }));
-    expect(await screen.findByText(/Downloading OpenBot v0.17.0 · 42%/)).toBeInTheDocument();
+    expect(await screen.findByText(/Downloading GoAhead v0.17.0 · 42%/)).toBeInTheDocument();
 
     setStatus((current) => ({ ...current, phase: "ready", progress: null }));
     expect(await screen.findByText(/Waiting for the other users of this Mac to be idle/)).toBeInTheDocument();
 
     setStatus((current) => ({ ...current, phase: "installing" }));
-    expect(await screen.findByText("Installing OpenBot v0.17.0…")).toBeInTheDocument();
+    expect(await screen.findByText("Installing GoAhead v0.17.0…")).toBeInTheDocument();
     expect(screen.getByText("Managed by Host")).toBeInTheDocument();
   });
 
@@ -476,7 +476,7 @@ describe("SettingsModal", () => {
       expect(onListMobileConnectedDevices).toHaveBeenCalledTimes(requestsBeforePolling + 1);
 
       expect(screen.getByText("Phone connected")).toBeInTheDocument();
-      expect(screen.getByText("Norbert’s iPhone is ready to use OpenBot.")).toBeInTheDocument();
+      expect(screen.getByText("Norbert’s iPhone is ready to use GoAhead.")).toBeInTheDocument();
       expect(screen.getByRole("table")).toBeInTheDocument();
 
       await vi.advanceTimersByTimeAsync(1_200);

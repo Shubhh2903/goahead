@@ -80,7 +80,7 @@ export const messages = defineMessages("sidebar", {
   "sidebar.delete.pending": "Deleting…",
   "sidebar.delete.title": "Delete {name}?",
   "sidebar.delete.agentDescription":
-    "This removes the agent and its OpenBot conversation from the app. Its queue, memories, routines, and workspace are deleted. History stored separately by the connected CLI provider is not deleted.",
+    "This removes the agent and its GoAhead conversation from the app. Its queue, memories, routines, and workspace are deleted. History stored separately by the connected CLI provider is not deleted.",
   "sidebar.delete.channelDescription":
     "This stops the channel. Its history stays in Deleted channels for preview only. You cannot restore it. Member agents are kept.",
   "sidebar.delete.sectionDescription": "Agents in this section will move to Unassigned. No agents will be deleted.",
@@ -93,12 +93,12 @@ export const messages = defineMessages("sidebar", {
   "sidebar.announce.movedPinned": "Moved pinned chat to position {position} of {total}.",
   "sidebar.announce.personFallback": "person",
   "sidebar.announce.chatFallback": "chat",
-  "sidebar.mobileApp.title": "OpenBot for iPhone",
+  "sidebar.mobileApp.title": "GoAhead for iPhone",
   "sidebar.mobileApp.body": "The iOS app is now in public beta on TestFlight.",
   "sidebar.mobileApp.howToInstall": "How to install",
   "sidebar.mobileApp.dismiss": "Dismiss the iPhone app announcement",
   "sidebar.mobileApp.qrLabel": "TestFlight invite QR code",
-  "sidebar.mobileApp.dialog.title": "Install OpenBot on your iPhone",
+  "sidebar.mobileApp.dialog.title": "Install GoAhead on your iPhone",
   "sidebar.mobileApp.dialog.description": "The iOS app is in public beta. Apple TestFlight installs it.",
   "sidebar.mobileApp.dialog.copyLink": "Copy link",
   "sidebar.mobileApp.dialog.linkCopied": "Link copied",
@@ -109,5 +109,5 @@ export const messages = defineMessages("sidebar", {
     "Scan this QR code with the iPhone camera, or copy the invite link and open it on your iPhone.",
   "sidebar.mobileApp.step.install": "In TestFlight, tap Accept, then Install.",
   "sidebar.mobileApp.step.connect":
-    "Open OpenBot on your iPhone. On this computer, go to Settings > Mobile Connect and scan the sign-in code.",
+    "Open GoAhead on your iPhone. On this computer, go to Settings > Mobile Connect and scan the sign-in code.",
 });

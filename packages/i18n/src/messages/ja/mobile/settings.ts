@@ -18,7 +18,7 @@ export const messages = {
   "mobile.settings.home.preferences": "環境設定",
   "mobile.settings.home.generalHint": "外観と会話",
   "mobile.settings.home.general": "一般",
-  "mobile.settings.home.about": "OpenBot について",
+  "mobile.settings.home.about": "GoAhead について",
   "mobile.settings.home.support": "サポート",
   "mobile.settings.home.supportHint": "ヘルプとサポートログの保存",
   "mobile.settings.support.help": "ヘルプ",
@@ -33,7 +33,7 @@ export const messages = {
   "mobile.settings.support.clearTitle": "サポートログを消去しますか？",
   "mobile.settings.support.clearBody": "このスマートフォンのログから、すべてのイベントを削除します。",
   "mobile.settings.support.logFooter":
-    "ログはこのスマートフォンに保存され、OpenBot が送信することはありません。接続の手順、リクエスト、エラーを記録します。メッセージやファイルは記録せず、パスワードとトークンは伏せて記録します。共有する前にファイルの内容を確認してください。",
+    "ログはこのスマートフォンに保存され、GoAhead が送信することはありません。接続の手順、リクエスト、エラーを記録します。メッセージやファイルは記録せず、パスワードとトークンは伏せて記録します。共有する前にファイルの内容を確認してください。",
   "mobile.settings.support.saveFailed": "ログファイルを保存できませんでした。もう一度お試しください。",
   "mobile.settings.support.sharingUnavailable": "このスマートフォンでは共有を利用できません。",
   "mobile.settings.support.recent": "最近のイベント",
@@ -75,7 +75,7 @@ export const messages = {
   "mobile.settings.feedback.retry": "触覚フィードバックの設定をもう一度保存",
   "mobile.settings.liveActivities.title": "ライブアクティビティ",
   "mobile.settings.liveActivities.footer":
-    "OpenBot の実行中、エージェントの作業、メッセージ、質問、承認をロック画面と Dynamic Island に表示します。",
+    "GoAhead の実行中、エージェントの作業、メッセージ、質問、承認をロック画面と Dynamic Island に表示します。",
   "mobile.settings.liveActivities.toggle": "エージェントのアクティビティを表示",
   "mobile.settings.liveActivities.retry": "ライブアクティビティの設定をもう一度保存",
   "mobile.settings.privacy.title": "プライバシー",
@@ -101,6 +101,6 @@ export const messages = {
   "mobile.settings.profile.security": "セキュリティ",
   "mobile.settings.profile.accountSessions": "アカウントのセッション",
   "mobile.settings.profile.signOutTitle": "サインアウトしますか？",
-  "mobile.settings.profile.signOutBody": "デスクトップの OpenBot で新しいコードをスキャンして再接続してください。",
+  "mobile.settings.profile.signOutBody": "デスクトップの GoAhead で新しいコードをスキャンして再接続してください。",
   "mobile.settings.profile.signOut": "サインアウト",
 } as const satisfies PartialTranslation<typeof source>;

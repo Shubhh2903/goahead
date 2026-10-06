@@ -30,12 +30,12 @@ const LAUNCH_COPY: Record<ProductHuntLaunchVariant, LaunchCopy> = {
   "launch-pad": {
     eyebrow: "Live today",
     title: "We're live on Product Hunt",
-    copy: "OpenBot is a small, independent project. One upvote takes five seconds and helps more people find persistent AI teammates that run on their own computer.",
+    copy: "GoAhead is a small, independent project. One upvote takes five seconds and helps more people find persistent AI teammates that run on their own computer.",
   },
   ticket: {
     eyebrow: "Launch day",
     title: "You're on the list",
-    copy: "OpenBot is live on Product Hunt today. Your upvote is the ticket that puts it in front of more people.",
+    copy: "GoAhead is live on Product Hunt today. Your upvote is the ticket that puts it in front of more people.",
   },
   "team-chat": {
     eyebrow: "Message from the team",
@@ -45,12 +45,12 @@ const LAUNCH_COPY: Record<ProductHuntLaunchVariant, LaunchCopy> = {
   "big-arrow": {
     eyebrow: "Live on Product Hunt",
     title: "One click. Big help.",
-    copy: "OpenBot launched on Product Hunt today. An upvote puts it in front of more people who want AI teammates on their own computer.",
+    copy: "GoAhead launched on Product Hunt today. An upvote puts it in front of more people who want AI teammates on their own computer.",
   },
   terminal: {
     eyebrow: "Shipped",
     title: "Now it's your turn",
-    copy: "OpenBot is live on Product Hunt. One upvote helps more developers find it.",
+    copy: "GoAhead is live on Product Hunt. One upvote helps more developers find it.",
   },
 };
 
@@ -109,7 +109,7 @@ function LaunchArt(props: { variant: ProductHuntLaunchVariant }) {
               <span class="ph-ticket-kicker">Product Hunt · Launch day</span>
               <span class="ph-ticket-name">
                 <AppLogo variant="production" class="ph-ticket-logo" />
-                OpenBot
+                GoAhead
               </span>
               <span class="ph-ticket-fine">Admit one upvote</span>
             </span>
@@ -216,7 +216,7 @@ export function ProductHuntLaunchPanel(props: ProductHuntLaunchPanelProps) {
           class="ph-dialog-upvote-button"
           onClick={() => props.onDismiss()}
         >
-          Upvote OpenBot
+          Upvote GoAhead
         </Button>
       </div>
     </div>

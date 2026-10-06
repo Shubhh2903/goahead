@@ -2,7 +2,7 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/app";
 
 export const messages = {
-  "app.loading": "Carregando OpenBot",
+  "app.loading": "Carregando GoAhead",
   "app.leftPanel.resize": "Redimensionar barra lateral esquerda",
   "app.host.thisMac": "Este Mac",
   "app.host.thisComputer": "Este computador",
@@ -27,15 +27,15 @@ export const messages = {
   "app.provider.codeExpired": "O código de {name} expirou",
   "app.provider.codeExpiredDescription": "Ninguém o inseriu a tempo. Esse código não funciona mais.",
   "app.provider.connectFailed": "Não foi possível conectar {name}",
-  "app.provider.connectFailedRetry": "O OpenBot não conseguiu conectar {name}. Tente novamente.",
-  "app.provider.included": "{name} está incluído no OpenBot.",
+  "app.provider.connectFailedRetry": "O GoAhead não conseguiu conectar {name}. Tente novamente.",
+  "app.provider.included": "{name} está incluído no GoAhead.",
   "app.clipboard.copyFailed": "Não foi possível copiar o texto.",
   "app.voice.tooLong": "As gravações de voz são limitadas a dois minutos.",
   "app.avatar.type": "Escolha uma imagem PNG, JPEG ou WebP.",
   "app.avatar.size": "Escolha uma imagem menor que 10 MB.",
   "app.avatar.processingUnavailable": "O processamento de imagem está indisponível.",
-  "app.avatar.tooLarge": "O OpenBot não conseguiu reduzir esta imagem o suficiente. Escolha uma imagem mais simples.",
-  "app.avatar.processFailed": "O OpenBot não conseguiu processar esta imagem.",
+  "app.avatar.tooLarge": "O GoAhead não conseguiu reduzir esta imagem o suficiente. Escolha uma imagem mais simples.",
+  "app.avatar.processFailed": "O GoAhead não conseguiu processar esta imagem.",
   "app.chart.total": "Total",
   "app.modelVariant.default": "Padrão",
   "app.qrCode.label": "Código QR",

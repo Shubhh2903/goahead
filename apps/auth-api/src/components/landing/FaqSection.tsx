@@ -48,7 +48,7 @@ export function FaqSection() {
           </div>
         </div>
         <nav class="landing-compare-links" aria-labelledby="landing-compare-title">
-          <h3 id="landing-compare-title">Compare OpenBot</h3>
+          <h3 id="landing-compare-title">Compare GoAhead</h3>
           <ul>
             <For each={LANDING_COMPARISON_LINKS}>
               {(comparison, index) => {

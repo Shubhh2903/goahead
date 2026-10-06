@@ -7,7 +7,7 @@ export const messages = {
   "notification.finished": "Çalışmayı tamamladı.",
   "notification.failed": "Bir hatayla durdu.",
   "notification.test": "Bildirimler çalışıyor.",
-  "notification.welcome": "Bir ajanın size ihtiyacı olduğunda OpenBot burada bildirecektir.",
+  "notification.welcome": "Bir ajanın size ihtiyacı olduğunda GoAhead burada bildirecektir.",
   "notification.toast.region": "Bildirimler",
   "notification.toast.close": "Bildirimi kapat",
 } as const satisfies PartialTranslation<typeof source>;

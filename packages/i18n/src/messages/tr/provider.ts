@@ -54,7 +54,7 @@ export const messages = {
   "provider.aria.moreActions": "{name} için diğer eylemler",
 
   "provider.codeLogin.title": "Bir kod ile {name} hesabına giriş yapın",
-  "provider.codeLogin.description": "Telefonunuzda veya başka bir tarayıcıda tamamlayın. OpenBot burada bekler.",
+  "provider.codeLogin.description": "Telefonunuzda veya başka bir tarayıcıda tamamlayın. GoAhead burada bekler.",
   "provider.codeLogin.starting": "{name} kaynağından bir kod alınıyor…",
   "provider.codeLogin.qrLabel": "{name} giriş sayfası için QR kodu",
   "provider.codeLogin.open": "Aç",
@@ -71,7 +71,7 @@ export const messages = {
   "provider.codeLogin.pasteExpired": "Bu giriş işlemi durduruldu.",
   "provider.codeLogin.pasteExpiresIn": "Sizi bekliyor. Bu giriş işlemi {time} içinde sona erecek.",
   "provider.codeLogin.linkTitle": "{name} hesabına başka bir cihazda giriş yapın",
-  "provider.codeLogin.linkStep": "{name} hesabına giriş yapın. OpenBot kendiliğinden devam eder.",
+  "provider.codeLogin.linkStep": "{name} hesabına giriş yapın. GoAhead kendiliğinden devam eder.",
 
   "provider.picker.noEndpoints": "Henüz uç nokta yok",
   "provider.picker.customCounts": "{endpoints} · {agents}",

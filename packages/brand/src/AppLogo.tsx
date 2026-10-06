@@ -94,7 +94,7 @@ export function AppLogo(props: AppLogoProps) {
       data-variant={props.variant}
       viewBox={`0 0 ${APP_LOGO_SIZE} ${APP_LOGO_SIZE}`}
       aria-hidden={props.interactive ? undefined : "true"}
-      aria-label={props.interactive ? "Animate OpenBot logo" : undefined}
+      aria-label={props.interactive ? "Animate GoAhead logo" : undefined}
       role={props.interactive ? "button" : undefined}
       tabindex={props.interactive ? 0 : undefined}
       onClick={handleClick}

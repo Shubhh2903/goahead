@@ -10,7 +10,7 @@ import { createMockBilling } from "../src/preview/mock-billing";
 import { createMockOpenBot } from "./mock-openbot";
 import { previewStorySoundSettings } from "./sound-feedback-fixture";
 
-const storyAppInfo = { name: "OpenBot", version: "0.2.1", platform: "darwin", variant: "dev" } as const;
+const storyAppInfo = { name: "GoAhead", version: "0.2.1", platform: "darwin", variant: "dev" } as const;
 const storyAccount: CentralAuthUser = {
   id: "user-1",
   email: "person@example.com",

@@ -27,7 +27,7 @@ export const messages = {
   "marketplace.tab.skills": "Beceriler",
 
   // A plugin link.
-  "marketplace.plugins.missing": "Bu eklenti OpenBot kataloğunda yok.",
+  "marketplace.plugins.missing": "Bu eklenti GoAhead kataloğunda yok.",
 
   // The agent page.
   "marketplace.agents.loadingDetail": "Ajan ayrıntıları yükleniyor…",
@@ -39,7 +39,7 @@ export const messages = {
   // The skill page, and why Try is off.
   "marketplace.skill.loading": "Beceri yükleniyor",
   "marketplace.skill.update": "Beceriyi güncelle",
-  "marketplace.try.readFailed": "OpenBot bu ajanın becerilerini okuyamadı. Tekrar deneyin.",
+  "marketplace.try.readFailed": "GoAhead bu ajanın becerilerini okuyamadı. Tekrar deneyin.",
   "marketplace.try.enable": "Bu beceriyi denemek için ajan ayarlarından etkinleştirin.",
   "marketplace.try.repair": "Bu beceriyi denemek için ajan ayarlarından onarın.",
   "marketplace.try.update": "Bu sürümü denemek için bu beceriyi güncelleyin.",

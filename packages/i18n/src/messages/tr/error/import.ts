@@ -4,9 +4,9 @@ import type { messages as source } from "../../en/error/import";
 export const messages = {
   // Agent import errors and warnings.
   "error.import.manifestNotJson": "{manifest} geçerli bir JSON değil.",
-  "error.import.notAgentExport": "{manifest} bir OpenBot ajan dışa aktarımı değil.",
+  "error.import.notAgentExport": "{manifest} bir GoAhead ajan dışa aktarımı değil.",
   "error.import.newerExportSkill":
-    "Bu dışa aktarım daha yeni bir dışa aktarma becerisi tarafından yapıldı. OpenBot'u güncelleyip tekrar deneyin.",
+    "Bu dışa aktarım daha yeni bir dışa aktarma becerisi tarafından yapıldı. GoAhead'i güncelleyip tekrar deneyin.",
   "error.import.noAgents": "Dışa aktarım hiçbir ajan içermiyor.",
   "error.import.tooManyAgents": "Dışa aktarım {limit} ajandan fazlasını içeriyor.",
   "error.import.tooManyChannels": "Dışa aktarım {limit} kanaldan fazlasını içeriyor.",

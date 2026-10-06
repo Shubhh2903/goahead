@@ -1,4 +1,4 @@
-# OpenBot team launch catalog
+# GoAhead team launch catalog
 
 Version v2 contains 20 Skills and 15 Agents. Four Skills and four Agents are featured on first publication. All entries show the public OpenBot logo as their creator badge, use the publisher **OpenBot**, start with zero installs, and include no scheduled routines. They work from supplied material and available tools; they do not assume a connected inbox, CRM, ad account, or phone service.
 
@@ -86,7 +86,7 @@ Do not use the separate `skills:seed`, `agents:seed`, or `dev:seed` demo scripts
 
 ## Attribution
 
-The 15 original OpenBot team Skills use the repository PolyForm Noncommercial 1.0.0 license. The five existing adapted Skills retain their pinned OpenAI or Anthropic source attribution and Apache-2.0 license. Each generated bundle contains the applicable LICENSE.txt and NOTICE.txt; the build also produces UPSTREAM_NOTICES.md.
+The 15 original GoAhead team Skills use the repository PolyForm Noncommercial 1.0.0 license. The five existing adapted Skills retain their pinned OpenAI or Anthropic source attribution and Apache-2.0 license. Each generated bundle contains the applicable LICENSE.txt and NOTICE.txt; the build also produces UPSTREAM_NOTICES.md.
 
 ## Check Agent preview switching
 

@@ -1,15 +1,15 @@
-# Launch OpenBot in Slack (production)
+# Launch GoAhead in Slack (production)
 
 Checked against Slack docs and the Slack API Terms of Service on 2026-09-30. Sources are at the end.
 
 ## The design
 
-One Slack app, `OpenBot`, for every workspace. A workspace installs it one time from OpenBot
+One Slack app, `GoAhead`, for every workspace. A workspace installs it one time from GoAhead
 (**Server settings → Connectors → Slack → Connect Slack**), and the workspace is linked to that
-OpenBot server. People mention @OpenBot in a channel or send it a direct message. The Slack
+GoAhead server. People mention @GoAhead in a channel or send it a direct message. The Slack
 Orchestrator, an agent that the connect dialog adds, receives each new request, gives the work to the
-agent that fits best, and posts the answer in the thread. Every answer comes from OpenBot, with the
-OpenBot name and icon.
+agent that fits best, and posts the answer in the thread. Every answer comes from GoAhead, with the
+GoAhead name and icon.
 
 This needs no Slack approval to work: it uses only normal bot scopes. The design that gave each agent
 its own app needed Slack's manager-app enrollment, which is only for Slack partners, so it is gone.
@@ -18,7 +18,7 @@ its own app needed Slack's manager-app enrollment, which is only for Slack partn
 
 1. **Permission to distribute commercially.** The API Terms forbid commercial distribution "unless
    you are authorized to do so under a separate agreement with Slack". This includes "a free App that
-   connects to a paid product or service". OpenBot has paid plans, so this applies. There are two
+   connects to a paid product or service". GoAhead has paid plans, so this applies. There are two
    ways to get it:
    - **The Slack Marketplace** (Marketplace Agreement and review). Slack does not charge for it.
    - **A partner agreement** with Slack or Salesforce.
@@ -31,10 +31,10 @@ its own app needed Slack's manager-app enrollment, which is only for Slack partn
          can be wrong; no training on Slack data.
    - [ ] Ask Slack before you submit: the guidelines list apps that "enable remote execution on a
          server via a downloadable third party script e.g terminal commands from Slack" as not
-         suitable. OpenBot agents run tools on the user's computer from a Slack message.
+         suitable. GoAhead agents run tools on the user's computer from a Slack message.
 
 Until the Marketplace approves the app, `conversations.replies` gives 1 request per minute and 15
-messages. OpenBot reads the thread as context with a 5 second limit, so answers still work, with less
+messages. GoAhead reads the thread as context with a 5 second limit, so answers still work, with less
 context.
 
 ## Rollout
@@ -97,12 +97,12 @@ First with the test Worker and the development app, in a separate workspace:
 
 - [ ] Turn on distribution for the development app, so the test workspace can install it.
 - [ ] **Connect Slack**: Slack's install page, then the workspace shows **Connected**.
-- [ ] OpenBot joins every public channel. Mention @OpenBot in one, and send it a direct message. The
+- [ ] GoAhead joins every public channel. Mention @GoAhead in one, and send it a direct message. The
       orchestrator answers or asks a teammate, and the answer comes in the thread.
 - [ ] A follow-up in the same thread goes to the same agent.
 - [ ] **Approve** and **Deny** work only for the person who asked. **Stop** stops the turn.
 - [ ] Before **Add agent**: Slack answers "No agent can answer here yet". After it: the orchestrator answers.
-- [ ] Quit OpenBot, send a message, start OpenBot within 5 minutes: the message gets an answer.
+- [ ] Quit GoAhead, send a message, start GoAhead within 5 minutes: the message gets an answer.
 - [ ] Uninstall the app in Slack: the workspace shows **Token not accepted**. Connect it again: the
       old threads keep their agents.
 - [ ] **Disconnect**: the token is revoked, and Signal no longer routes the workspace here.
@@ -112,7 +112,7 @@ Then the same with production, in the unlisted pilot.
 
 ## Open questions for Slack
 
-- Must a workspace with app approval approve OpenBot before **Connect Slack** works? The docs do not
+- Must a workspace with app approval approve GoAhead before **Connect Slack** works? The docs do not
   say. The approval flow is Slack's usual one for any app.
 - The manifest docs say a `request_url` must be verified manually. Signal answers Slack's
   `url_verification`, so the check in the app settings passes. Confirm that a `manifest sync` keeps

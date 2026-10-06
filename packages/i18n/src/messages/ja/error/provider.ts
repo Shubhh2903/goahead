@@ -3,7 +3,7 @@ import type { messages as source } from "../../en/error/provider";
 
 export const messages = {
   "error.provider.endpointsReadOnly":
-    "保存されたエンドポイントは新しいバージョンの OpenBot で書き込まれたか、ファイルを読み取れません。変更するには OpenBot を更新してください。",
+    "保存されたエンドポイントは新しいバージョンの GoAhead で書き込まれたか、ファイルを読み取れません。変更するには GoAhead を更新してください。",
   "error.provider.endpointNoSecureStorage":
     "このコンピューターには安全なストレージがないため、API キーやヘッダーを保存できません。それらを削除するか、認証情報が不要なエンドポイントを使用してください。",
   "error.provider.endpointDuplicate":
@@ -14,7 +14,7 @@ export const messages = {
   "error.provider.endpointSecretUnreadable":
     "このコンピューターは保存済みの API キーとヘッダーを読み取れません。失われないように、API キーとヘッダーをもう一度入力してください。",
   "error.provider.discoveryTimeout": "{host} から時間内に応答がありませんでした。",
-  "error.provider.discoveryUnreachable": "OpenBot は {host} に接続できませんでした。",
+  "error.provider.discoveryUnreachable": "GoAhead は {host} に接続できませんでした。",
   "error.provider.discoveryRedirect":
     "{host} がリダイレクトを返しました。サーバーの最終的なアドレスを入力してください。",
   "error.provider.discoveryRefused": "{host} がリクエストを拒否しました。API キーとヘッダーを確認してください。",
@@ -22,7 +22,7 @@ export const messages = {
   "error.provider.discoveryTooLarge": "{host} のモデル一覧が大きすぎます。",
   "error.provider.discoveryInvalid": "{host} は OpenAI 互換のモデル一覧を返しませんでした。",
   "error.provider.detectionSettingsReadOnly":
-    "検出の設定は新しいバージョンの OpenBot で書き込まれたか、ファイルを読み取れません。変更するには OpenBot を更新してください。",
+    "検出の設定は新しいバージョンの GoAhead で書き込まれたか、ファイルを読み取れません。変更するには GoAhead を更新してください。",
   "error.provider.detectionEntryInvalid":
     "アドレスはパスワードを含まない http:// または https:// の URL に、フォルダーは絶対パスにしてください。",
   "error.provider.detectionEntriesTooMany": "アドレスまたはフォルダーが多すぎます。",
@@ -50,10 +50,10 @@ export const messages = {
   "error.provider.bunLicenseChecksum": "Bun ライセンスのチェックサムが一致しません。",
   "error.provider.bunxDamaged": "Bun パッケージマネージャーの実行ツールが見つからないか、破損しています。",
   "error.provider.releaseSourcesUnreachable":
-    "OpenBot はプロバイダーのリリース元に接続できませんでした。接続を確認して、もう一度お試しください。",
+    "GoAhead はプロバイダーのリリース元に接続できませんでした。接続を確認して、もう一度お試しください。",
   "error.provider.runtimesUnsupported": "このプラットフォームではプロバイダーのランタイムを使用できません。",
-  "error.provider.closing": "OpenBot を終了しています。",
-  "error.provider.cliOverride": "OpenBot で更新する前に、明示的な CLI パスの指定を削除してください。",
+  "error.provider.closing": "GoAhead を終了しています。",
+  "error.provider.cliOverride": "GoAhead で更新する前に、明示的な CLI パスの指定を削除してください。",
   "error.provider.runtimeUpdateIncomplete": "ランタイムの更新が完了しませんでした。",
   "error.provider.downloadHttp": "ランタイムのダウンロードが HTTP {status} で失敗しました。",
   "error.provider.downloadNoData": "ランタイムのダウンロードでデータが返されませんでした。",
@@ -104,12 +104,12 @@ export const messages = {
   "error.provider.acpNoModels": "ACP CLI が ACP モデルを通知しませんでした。OpenBot は代替モデルを推測しません。",
   "error.provider.endpointRemoveBusy":
     "このエンドポイントを削除する前に、実行中のターンとキューが終わるまでお待ちください。",
-  "error.provider.codexOutdated": "Codex CLI {version} は古すぎます。OpenBot には 0.144.1 以降が必要です。",
+  "error.provider.codexOutdated": "Codex CLI {version} は古すぎます。GoAhead には 0.144.1 以降が必要です。",
   "error.provider.codexNotStarted": "Codex CLI は見つかりましたが、起動できませんでした。",
   "error.provider.codexNotStartedHint":
     "Codex CLI は見つかりましたが、起動できませんでした。新しいターミナルで `codex --version` を実行してください。",
   "error.provider.codexMissing":
-    "ChatGPT はダウンロードされていません。続けるには OpenBot でダウンロードしてください。",
+    "ChatGPT はダウンロードされていません。続けるには GoAhead でダウンロードしてください。",
   "error.provider.codexConfigIgnored": {
     other:
       "Codex は設定ファイルの {count} 件の設定を無視しました: {settings}。設定を修正または削除するか、Codex を更新してください。",
@@ -118,17 +118,17 @@ export const messages = {
     other:
       "Codex は設定ファイルの {count} 件の設定を無視しました。設定を修正または削除するか、Codex を更新してください。",
   },
-  "error.provider.claudeOutdated": "Claude Code {version} は古すぎます。OpenBot には 2.1.232 以降が必要です。",
+  "error.provider.claudeOutdated": "Claude Code {version} は古すぎます。GoAhead には 2.1.232 以降が必要です。",
   "error.provider.claudeNotStarted": "Claude CLI は見つかりましたが、起動できませんでした。",
   "error.provider.claudeNotStartedHint":
     "Claude CLI は見つかりましたが、起動できませんでした。新しいターミナルで `claude --version` を実行してください。",
   "error.provider.claudeMissing":
-    "Claude はダウンロードされていません。続けるには OpenBot でダウンロードしてください。",
-  "error.provider.grokOutdated": "Grok CLI {version} は古すぎます。OpenBot には 1.0.5 以降が必要です。",
+    "Claude はダウンロードされていません。続けるには GoAhead でダウンロードしてください。",
+  "error.provider.grokOutdated": "Grok CLI {version} は古すぎます。GoAhead には 1.0.5 以降が必要です。",
   "error.provider.grokNotStarted": "Grok CLI は見つかりましたが、起動できませんでした。",
   "error.provider.grokNotStartedHint":
     "Grok CLI は見つかりましたが、起動できませんでした。新しいターミナルで `grok --version` を実行してください。",
-  "error.provider.grokMissing": "Grok はダウンロードされていません。続けるには OpenBot でダウンロードしてください。",
+  "error.provider.grokMissing": "Grok はダウンロードされていません。続けるには GoAhead でダウンロードしてください。",
   "error.provider.opencodeNotStarted":
     "OpenCode を起動できませんでした。ターミナルで `opencode --version` を実行してください。",
   "error.provider.opencodeMissing":
@@ -141,7 +141,7 @@ export const messages = {
   "error.provider.connectBeforeProfile": "プロフィールを生成する前に、選択したプロバイダーに接続してください。",
   "error.provider.cliNotReady": "{provider} CLI の準備ができていないか、サインインしていません。",
   "error.provider.cliTimedOut":
-    "{provider} が時間内に応答しませんでした。コンピューターの負荷が高い可能性があります。OpenBot が再試行します。",
+    "{provider} が時間内に応答しませんでした。コンピューターの負荷が高い可能性があります。GoAhead が再試行します。",
   "error.provider.cliTimedOutRefresh":
     "{provider} が時間内に応答しませんでした。コンピューターの負荷が高い可能性があります。プロバイダーを更新して再試行してください。",
   "error.provider.noCodeSignIn": "{provider} にはコードでサインインできません。",
@@ -155,9 +155,9 @@ export const messages = {
   "error.provider.cliSigningIn":
     "{provider} CLI はサインイン中です。サインインを完了するかキャンセルしてから更新してください。",
   "error.provider.cliBusyUpdate": "{provider} CLI はターンを処理中です。終わるまで待ってから更新してください。",
-  "error.provider.cliSelectFailed": "OpenBot はインストール済みの管理対象 CLI を選択できませんでした。",
+  "error.provider.cliSelectFailed": "GoAhead はインストール済みの管理対象 CLI を選択できませんでした。",
   "error.provider.noAuthenticatedAccount": "{provider} は認証済みのアカウントを返しませんでした。",
-  "error.provider.cliActivateFailed": "OpenBot は管理対象 CLI を有効にできませんでした。",
+  "error.provider.cliActivateFailed": "GoAhead は管理対象 CLI を有効にできませんでした。",
   "error.provider.cliBusyReconnect": "{provider} CLI はターンを処理中です。終わるまで待ってから再接続してください。",
   "error.provider.opencodeCredentialsRejected":
     "モデルプロバイダーが API キーを拒否しました。設定で OpenCode のキーを修正するか、`opencode auth login` でプロバイダーのキーを修正してください。その後、もう一度お試しいただくか、別のモデルを選択してください。\n{detail}",
@@ -170,7 +170,7 @@ export const messages = {
   "error.provider.opencodeProviderFailed":
     "モデルプロバイダー側で障害が発生しました。お使いの接続は原因ではありません。後でもう一度試すか、別のモデルを選んでください。\n{detail}",
   "error.provider.opencodeNetwork":
-    "OpenCode がモデルプロバイダーに接続できませんでした。OpenBot を実行しているコンピューターのネットワーク接続を確認してから、もう一度お試しください。\n{detail}",
+    "OpenCode がモデルプロバイダーに接続できませんでした。GoAhead を実行しているコンピューターのネットワーク接続を確認してから、もう一度お試しください。\n{detail}",
   "error.provider.chatgptPageFailed": "OpenBot は ChatGPT の接続ページを開けませんでした。",
   "error.provider.noneReady": "準備ができているエージェントのプロバイダーがありません。",
   "error.provider.claudeTurnActive": "コンテキストを更新する前に、実行中の Claude のターンが終わるまでお待ちください。",
@@ -185,7 +185,7 @@ export const messages = {
   "error.provider.antigravityChecksum": "Gemini ランタイムのチェックサムが一致しません。",
   "error.provider.antigravityReleaseShape": "Gemini のリリースの形式が予期しないものです。",
   "error.provider.antigravityMissing":
-    "Gemini はダウンロードされていません。続けるには OpenBot でダウンロードしてください。",
+    "Gemini はダウンロードされていません。続けるには GoAhead でダウンロードしてください。",
   "error.provider.antigravityNotStarted": "Gemini サーバーは見つかりましたが、バージョンを読み取れません。",
   "error.provider.antigravityVersionUnreadable": "Gemini サーバーのバージョンを読み取れません。",
   "error.provider.antigravitySignIn": "Gemini を使うには Google でサインインしてください。",
@@ -193,7 +193,7 @@ export const messages = {
   "error.provider.cursorChecksum": "Cursor ランタイムのチェックサムが一致しません。",
   "error.provider.cursorReleaseShape": "Cursor のリリースの形式が予期しないものです。",
   "error.provider.cursorMissing":
-    "Cursor はダウンロードされていません。続けるには OpenBot でダウンロードしてください。",
+    "Cursor はダウンロードされていません。続けるには GoAhead でダウンロードしてください。",
   "error.provider.cursorNotStarted": "Cursor エージェントは見つかりましたが、バージョンを読み取れません。",
   "error.provider.cursorVersionUnreadable": "Cursor エージェントのバージョンを読み取れません。",
   "error.provider.cursorSignIn": "Cursor を使うには Cursor でサインインするか、CURSOR_API_KEY を設定してください。",
@@ -201,19 +201,19 @@ export const messages = {
   "error.provider.clinePackageMismatch": "Cline のパッケージがランタイムカタログと一致しません。",
   "error.provider.clineChecksum": "Cline ランタイムのチェックサムが一致しません。",
   "error.provider.clineLicenseChecksum": "Cline のライセンスのチェックサムが一致しません。",
-  "error.provider.clineMissing": "Cline はダウンロードされていません。続けるには OpenBot でダウンロードしてください。",
-  "error.provider.clineOutdated": "Cline CLI {version} は古すぎます。OpenBot には 3.0.68 以降が必要です。",
+  "error.provider.clineMissing": "Cline はダウンロードされていません。続けるには GoAhead でダウンロードしてください。",
+  "error.provider.clineOutdated": "Cline CLI {version} は古すぎます。GoAhead には 3.0.68 以降が必要です。",
   "error.provider.clineNotStarted": "Cline を起動できませんでした。ターミナルで `cline --version` を実行してください。",
   "error.provider.clineVersionUnreadable": "Cline CLI のバージョンを読み取れません。",
   "error.provider.clineSignIn": "Cline を使うには Cline でサインインするか、CLINE_API_KEY を設定してください。",
   "error.provider.foreignReasoning":
-    "別のアカウントまたは API キーが受け取ったため、{provider} はこのチャットの以前の推論を受け付けませんでした。OpenBot はチャット履歴を引き継いだ新しい {provider} セッションを開始しました。もう一度お試しください。",
+    "別のアカウントまたは API キーが受け取ったため、{provider} はこのチャットの以前の推論を受け付けませんでした。GoAhead はチャット履歴を引き継いだ新しい {provider} セッションを開始しました。もう一度お試しください。",
   "error.provider.grokSignIn": "Grok を使うには `grok login` を実行するか、XAI_API_KEY を設定してください。",
   "error.provider.acpSignInTimedOut": "サインインがタイムアウトしました。",
   "error.provider.acpSignInStopped": "サインインが完了する前に停止しました。",
   "error.provider.acpSignInFailed": "サインインが完了しませんでした。",
   "error.provider.messageTooLarge":
-    "{limit} MB を超えるメッセージを送信したため、OpenBot は {provider} を停止しました。",
+    "{limit} MB を超えるメッセージを送信したため、GoAhead は {provider} を停止しました。",
   "error.provider.customAgentIdInvalid":
     "エージェント ID には英小文字、数字、`-` のみを使用してください。組み込みプロバイダーの ID は使用できません。",
   "error.provider.customAgentEnvInvalid":
@@ -224,11 +224,11 @@ export const messages = {
   "error.provider.customAgentWindowsScript":
     ".cmd または .bat のコマンドの引数には、英字、数字、および - _ . , : = @ + / \\ のみを使用できます。",
   "error.provider.customAgentNotFound":
-    "OpenBot は {command} を見つけられません。コマンドの完全なパスを入力してください。",
+    "GoAhead は {command} を見つけられません。コマンドの完全なパスを入力してください。",
   "error.provider.customAgentCheckTimedOut": "エージェントは 20 秒以内に応答しませんでした。",
   "error.provider.customAgentCheckStopped": "エージェントは応答する前に停止しました。",
   "error.provider.customAgentProtocolVersion":
-    "このエージェントは ACP バージョン {version} を使用しています。OpenBot はバージョン 1 を使用します。",
+    "このエージェントは ACP バージョン {version} を使用しています。GoAhead はバージョン 1 を使用します。",
   "error.provider.customAgentCheckFailed": "エージェントは ACP エージェントとして応答しませんでした。",
   "error.provider.customAgentRemoveBusy":
     "このカスタムエージェントを削除する前に、実行中のターンとキューが終わるまでお待ちください。",
@@ -236,7 +236,7 @@ export const messages = {
   "error.provider.customAgentMissing": "このカスタムエージェントは現在保存されていません。別のモデルを選んでください。",
   "error.provider.customAgentSignIn": "エージェント自身のコマンドでサインインしてから、もう一度お試しください。",
   "error.provider.customAgentsReadOnly":
-    "保存されたカスタムエージェントは新しいバージョンの OpenBot で書き込まれたか、ファイルを読み取れません。変更するには OpenBot を更新してください。",
+    "保存されたカスタムエージェントは新しいバージョンの GoAhead で書き込まれたか、ファイルを読み取れません。変更するには GoAhead を更新してください。",
   "error.provider.customAgentNoSecureStorage":
     "このコンピューターには安全なストレージがないため、環境変数の値を保存できません。値を削除して、もう一度お試しください。",
   "error.provider.customAgentNotSaved":

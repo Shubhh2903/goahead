@@ -2,7 +2,7 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/webClient";
 
 export const messages = {
-  "webClient.loading": "Chargement d’OpenBot…",
+  "webClient.loading": "Chargement de GoAhead…",
   "webClient.loadingLine.wake": "Réveil des agents…",
   "webClient.loadingLine.coffee": "Café servi aux agents…",
   "webClient.loadingLine.tokens": "On compte les jetons sur les doigts…",
@@ -22,13 +22,13 @@ export const messages = {
   "webClient.notice.hostsFailed": "Impossible de charger vos ordinateurs",
   "webClient.notice.connectComputer": "Connectez votre ordinateur",
   "webClient.notice.keepOpen":
-    "Gardez OpenBot ouvert sur votre ordinateur. Votre brouillon reste ici pendant la reconnexion.",
+    "Gardez GoAhead ouvert sur votre ordinateur. Votre brouillon reste ici pendant la reconnexion.",
   "webClient.connect.description":
-    "Lancez OpenBot sur votre ordinateur pour discuter avec vos agents depuis ce navigateur. Vous pouvez aussi rejoindre un ordinateur avec une invitation.",
-  "webClient.connect.stepInstall": "Installez et ouvrez OpenBot sur votre ordinateur.",
+    "Lancez GoAhead sur votre ordinateur pour discuter avec vos agents depuis ce navigateur. Vous pouvez aussi rejoindre un ordinateur avec une invitation.",
+  "webClient.connect.stepInstall": "Installez et ouvrez GoAhead sur votre ordinateur.",
   "webClient.connect.stepSignIn": "Connectez-vous avec votre adresse e-mail.",
   "webClient.connect.stepRemote": "Activez l’accès à distance.",
-  "webClient.notice.download": "Télécharger OpenBot",
+  "webClient.notice.download": "Télécharger GoAhead",
   "webClient.notice.join": "Rejoindre avec une invitation",
   "webClient.notice.reconnect": "Se reconnecter",
   "webClient.notice.refreshHosts": "Actualiser les hôtes",
@@ -46,7 +46,7 @@ export const messages = {
   "webClient.error.usageOffline": "Connectez-vous à votre hôte pour voir l’utilisation.",
   "webClient.error.desktopOnly": "Cette action est disponible dans l’application de bureau.",
   "webClient.settings.preferences.title": "Préférences",
-  "webClient.settings.preferences.description": "Choisissez la langue et les sons d’OpenBot dans ce navigateur.",
+  "webClient.settings.preferences.description": "Choisissez la langue et les sons de GoAhead dans ce navigateur.",
   "webClient.error.checkConversation": "Vérifiez la conversation avant d’envoyer à nouveau.",
   "webClient.error.hostReported": "L’hôte a signalé une erreur. Vérifiez la conversation et l’état de l’hôte.",
   "webClient.error.requestFailed": "La requête a échoué.",
@@ -75,7 +75,7 @@ export const messages = {
   "webClient.error.identityChanged": "L’identité de l’hôte a changé. Connexion refusée.",
   "webClient.error.connectionUnavailable": "La connexion à l’hôte n’est pas disponible.",
   "webClient.error.incompatible":
-    "Cet hôte n’est pas compatible avec OpenBot web. Mettez l’hôte à jour et rechargez cette page.",
+    "Cet hôte n’est pas compatible avec GoAhead web. Mettez l’hôte à jour et rechargez cette page.",
   "webClient.error.sendUnconfirmed":
     "La livraison du message n’est pas confirmée. Actualisez avant de l’envoyer à nouveau.",
   "webClient.error.fileType": "Mettez l’hôte à jour pour joindre ce type de fichier.",
@@ -83,7 +83,7 @@ export const messages = {
   "webClient.error.duplication": "Cet hôte ne prend pas en charge la duplication d’agents.",
   "webClient.error.connectServerFirst": "Connectez-vous d’abord à ce serveur.",
   "webClient.error.agentInstallNotAllowed":
-    "Seul un propriétaire ou un administrateur peut ajouter un agent ici, et l’hôte doit exécuter une version récente d’OpenBot.",
+    "Seul un propriétaire ou un administrateur peut ajouter un agent ici, et l’hôte doit exécuter une version récente de GoAhead.",
   "webClient.error.linkDesktopOnly": "Ce lien s’ouvre uniquement dans l’app de bureau.",
   "webClient.error.saveEndpointOffline": "Connectez-vous à votre hôte pour enregistrer un point de terminaison.",
   "webClient.error.removeEndpointOffline": "Connectez-vous à votre hôte pour supprimer un point de terminaison.",

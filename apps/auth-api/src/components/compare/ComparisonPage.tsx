@@ -35,7 +35,7 @@ export interface ComparisonPageProps {
 // in words as well as with a mark, and the summary over the table counts it.
 export function ComparisonPage(props: ComparisonPageProps) {
   const rival = () => props.comparison.rival;
-  const openbot: SideProps = { side: "openbot", name: "OpenBot" };
+  const openbot: SideProps = { side: "openbot", name: "GoAhead" };
   const rivalSide = (): SideProps => ({ side: "rival", name: rival().name, mark: rival().mark });
   const score = () => comparisonScore(props.comparison.rows, ["openbot", "rival"]);
   const topics = () => props.comparison.rows.length;
@@ -79,7 +79,7 @@ export function ComparisonPage(props: ComparisonPageProps) {
       {/* The first reason to switch: the plans people already pay for. */}
       <RevealSection class="compare-plans" titleId="compare-plans-title" title="Use the plans you already pay for">
         <p class="compare-plans-lead">
-          OpenBot sells you no model. Sign in to the AI plans you already have, or connect your own model, and give each
+          GoAhead sells you no model. Sign in to the AI plans you already have, or connect your own model, and give each
           agent the one that fits its job.
         </p>
         <ul class="compare-plans-grid">
@@ -95,12 +95,12 @@ export function ComparisonPage(props: ComparisonPageProps) {
 
       <RevealSection class="compare-glance" titleId="compare-glance-title" title="At a glance">
         <p class="compare-glance-summary">
-          OpenBot is better on {score()[0]} of {topics()} topics, and {rival().name} on {score()[1]}.
+          GoAhead is better on {score()[0]} of {topics()} topics, and {rival().name} on {score()[1]}.
         </p>
         <div class="compare-table-frame">
           <table class="compare-table">
             <caption class="landing-visually-hidden">
-              OpenBot and {rival().name} compared, as checked on {formatArticleDate(props.comparison.checkedAt)}
+              GoAhead and {rival().name} compared, as checked on {formatArticleDate(props.comparison.checkedAt)}
             </caption>
             <thead>
               <tr>

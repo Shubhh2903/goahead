@@ -78,7 +78,7 @@ describe("normalizeAvatarFile", () => {
     });
 
     await expect(normalizeAvatarFile(new File([ANIMATED_WEBP], "avatar.webp", { type: "image/webp" }))).rejects.toThrow(
-      "OpenBot could not make this image small enough. Choose a simpler image.",
+      "GoAhead could not make this image small enough. Choose a simpler image.",
     );
     // Two frames for each of the four output sizes, not all 100 frames four times.
     expect(decode).toHaveBeenCalledTimes(8);

@@ -59,14 +59,14 @@ const COLOR = {
 
 export function renderSignInCodeEmail(input: SignInCodeEmailInput): RenderedEmail {
   const minutes = `${input.expiresInMinutes} minute${input.expiresInMinutes === 1 ? "" : "s"}`;
-  const subject = "Your OpenBot sign-in code";
-  const preheader = `${input.code} is your OpenBot sign-in code. It expires in ${minutes}.`;
+  const subject = "Your GoAhead sign-in code";
+  const preheader = `${input.code} is your GoAhead sign-in code. It expires in ${minutes}.`;
   const footer = "If you did not request this code, you can ignore this email. Nobody can sign in without it.";
   return {
     subject,
     preheader,
     text: textBody(
-      ["Use this code to sign in to OpenBot:", "", input.code, "", `This code expires in ${minutes} and works once.`],
+      ["Use this code to sign in to GoAhead:", "", input.code, "", `This code expires in ${minutes} and works once.`],
       footer,
     ),
     html: renderLayout({
@@ -74,7 +74,7 @@ export function renderSignInCodeEmail(input: SignInCodeEmailInput): RenderedEmai
       preheader,
       body: [
         heading("Your sign-in code"),
-        paragraph("Enter this code in OpenBot to finish signing in."),
+        paragraph("Enter this code in GoAhead to finish signing in."),
         codeBlock(input.code),
         paragraph(`The code expires in ${minutes} and works once.`, { muted: true, last: true }),
       ].join(""),
@@ -86,7 +86,7 @@ export function renderSignInCodeEmail(input: SignInCodeEmailInput): RenderedEmai
 export function renderTeamInviteEmail(input: TeamInviteEmailInput): RenderedEmail {
   const serverName = input.serverName.trim();
   const access = input.role === "admin" ? "Admin" : "Member";
-  const subject = `Join ${serverName} on OpenBot`;
+  const subject = `Join ${serverName} on GoAhead`;
   const preheader = `${input.inviterEmail} invited you to join ${serverName}.`;
   const footer = "If you did not expect this invitation, you can ignore this email.";
   return {
@@ -94,7 +94,7 @@ export function renderTeamInviteEmail(input: TeamInviteEmailInput): RenderedEmai
     preheader,
     text: textBody(
       [
-        `${input.inviterEmail} invited you to join ${serverName} on OpenBot.`,
+        `${input.inviterEmail} invited you to join ${serverName} on GoAhead.`,
         "",
         `Access: ${access}`,
         "",
@@ -111,7 +111,7 @@ export function renderTeamInviteEmail(input: TeamInviteEmailInput): RenderedEmai
       body: [
         heading(`Join ${escapeHtml(serverName)}`),
         paragraph(
-          `<strong style="color:${COLOR.text};font-weight:600;">${escapeHtml(input.inviterEmail)}</strong> invited you to a team on OpenBot.`,
+          `<strong style="color:${COLOR.text};font-weight:600;">${escapeHtml(input.inviterEmail)}</strong> invited you to a team on GoAhead.`,
         ),
         detailRow("Access", access),
         button("Accept invitation", input.inviteUrl),
@@ -132,7 +132,7 @@ function textBody(lines: string[], footer: string): string {
     footer,
     "",
     "-- ",
-    `OpenBot · ${SITE_URL}`,
+    `GoAhead · ${SITE_URL}`,
     FOOTER_LINKS.slice(1)
       .map((link) => `${link.label}: ${link.href}`)
       .join(" · "),
@@ -198,7 +198,7 @@ function renderLayout(input: LayoutInput): string {
         <tr>
           <td style="padding:0 4px 20px;">
             <a href="${SITE_URL}" style="text-decoration:none;">
-              <img src="${LOGO_URL}" width="32" height="32" alt="OpenBot" style="display:block;border:0;outline:none;border-radius:8px;font-family:${FONT_STACK};font-size:15px;font-weight:600;line-height:32px;color:${COLOR.text};">
+              <img src="${LOGO_URL}" width="32" height="32" alt="GoAhead" style="display:block;border:0;outline:none;border-radius:8px;font-family:${FONT_STACK};font-size:15px;font-weight:600;line-height:32px;color:${COLOR.text};">
             </a>
           </td>
         </tr>

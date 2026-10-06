@@ -46,7 +46,7 @@ const Platform = createSimpleContext({
           })
           .catch(() =>
             setAppInfo({
-              name: "OpenBot",
+              name: "GoAhead",
               version: "unavailable",
               platform: "darwin",
               variant: "production",

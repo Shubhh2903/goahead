@@ -17,7 +17,7 @@ export const messages = defineMessages("mobile.settings", {
   "mobile.settings.home.preferences": "Preferences",
   "mobile.settings.home.generalHint": "Appearance and conversations",
   "mobile.settings.home.general": "General",
-  "mobile.settings.home.about": "About OpenBot",
+  "mobile.settings.home.about": "About GoAhead",
   "mobile.settings.home.support": "Support",
   "mobile.settings.home.supportHint": "Get help and save a support log",
   "mobile.settings.support.help": "Get help",
@@ -32,7 +32,7 @@ export const messages = defineMessages("mobile.settings", {
   "mobile.settings.support.clearTitle": "Clear the support log?",
   "mobile.settings.support.clearBody": "This removes all events from the log on this phone.",
   "mobile.settings.support.logFooter":
-    "The log stays on this phone, and OpenBot does not send it. It records connection steps, requests and errors. It does not record messages or files, and it masks passwords and tokens. Read the file before you share it.",
+    "The log stays on this phone, and GoAhead does not send it. It records connection steps, requests and errors. It does not record messages or files, and it masks passwords and tokens. Read the file before you share it.",
   "mobile.settings.support.saveFailed": "Could not save the log file. Try again.",
   "mobile.settings.support.sharingUnavailable": "Sharing is not available on this phone.",
   "mobile.settings.support.recent": "Recent events",
@@ -72,7 +72,7 @@ export const messages = defineMessages("mobile.settings", {
   "mobile.settings.feedback.retry": "Retry saving haptics setting",
   "mobile.settings.liveActivities.title": "Live Activities",
   "mobile.settings.liveActivities.footer":
-    "Shows agent work, messages, questions, and approvals on the Lock Screen and in the Dynamic Island while OpenBot runs.",
+    "Shows agent work, messages, questions, and approvals on the Lock Screen and in the Dynamic Island while GoAhead runs.",
   "mobile.settings.liveActivities.toggle": "Show agent activity",
   "mobile.settings.liveActivities.retry": "Retry saving Live Activities setting",
   "mobile.settings.privacy.title": "Privacy",
@@ -98,6 +98,6 @@ export const messages = defineMessages("mobile.settings", {
   "mobile.settings.profile.security": "Security",
   "mobile.settings.profile.accountSessions": "Account sessions",
   "mobile.settings.profile.signOutTitle": "Sign out?",
-  "mobile.settings.profile.signOutBody": "Reconnect by scanning a new code from OpenBot on your desktop.",
+  "mobile.settings.profile.signOutBody": "Reconnect by scanning a new code from GoAhead on your desktop.",
   "mobile.settings.profile.signOut": "Sign out",
 });

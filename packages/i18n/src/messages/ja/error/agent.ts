@@ -50,11 +50,11 @@ export const messages = {
   "error.agent.changedWhileDuplicating": "複製中にエージェントが変更されました。もう一度お試しください。",
   "error.agent.duplicatedAgentGone": "複製したエージェントはもう存在しません。",
   "error.agent.stateCorrupt":
-    "エージェントの状態が破損しているか、新しいバージョンの OpenBot のものです。上書きしません。",
+    "エージェントの状態が破損しているか、新しいバージョンの GoAhead のものです。上書きしません。",
   "error.agent.oldRoleField":
-    "保存されたエージェントのプロフィールは古い role フィールドを使用しています。OpenBot を起動する前にデータを更新してください。",
+    "保存されたエージェントのプロフィールは古い role フィールドを使用しています。GoAhead を起動する前にデータを更新してください。",
   "error.agent.duplicateIds": "エージェントの状態に重複したエージェント ID があります。上書きしません。",
-  "error.agent.copyNameFailed": "OpenBot はエージェントのコピーに固有の名前を作成できませんでした。",
+  "error.agent.copyNameFailed": "GoAhead はエージェントのコピーに固有の名前を作成できませんでした。",
   "error.agent.endpointRemoved":
     "このエージェントが使用していたエンドポイントは削除されました。別のモデルを選択してください。",
   "error.agent.selectedGone": "選択したエージェントはもう存在しません。",
@@ -77,9 +77,9 @@ export const messages = {
   "error.agent.saveOtherAgent": "この保存は別のエージェントのものです。",
   "error.agent.savedGone": "保存したエージェントはもう存在しません。",
   "error.agent.storedProfileUnreadable":
-    "保存されたエージェントのプロフィールに読み取れない「{field}」の値があります。OpenBot を起動する前にデータを更新してください。",
+    "保存されたエージェントのプロフィールに読み取れない「{field}」の値があります。GoAhead を起動する前にデータを更新してください。",
   "error.agent.storedProfileUnreadableId":
-    "保存されたエージェントのプロフィール {id} に読み取れない「{field}」の値があります。OpenBot を起動する前にデータを更新してください。",
+    "保存されたエージェントのプロフィール {id} に読み取れない「{field}」の値があります。GoAhead を起動する前にデータを更新してください。",
   "error.agent.queueEditRejected": "キューの編集が拒否されました: {reason}",
   "error.agent.computerUseLocalOnly": "Computer Use は、エージェントを実行しているコンピューターでのみ変更できます。",
   "error.agent.workspaceOnlyMacOnly":
@@ -87,5 +87,5 @@ export const messages = {
   "error.agent.lowMemory":
     "このサーバーはメモリが不足しています。メッセージはキューで待機し、メモリが空くと開始します。より大きいプランにすると、サーバーのメモリが増えます。",
   "error.agent.workspaceOnlyToolMissing":
-    "「ワークスペースのみ」には {tool} が必要ですが、OpenBot は見つけられませんでした。インストールするか、エージェントの設定で「フルアクセス」を選んでください。",
+    "「ワークスペースのみ」には {tool} が必要ですが、GoAhead は見つけられませんでした。インストールするか、エージェントの設定で「フルアクセス」を選んでください。",
 } as const satisfies PartialTranslation<typeof source>;

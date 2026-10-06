@@ -315,7 +315,7 @@ function createMimeMessage(from: string, message: PreparedEmailMessage): string 
   const boundary = `openbot-${crypto.randomUUID()}`;
   return dotStuff(
     [
-      `From: OpenBot <${from}>`,
+      `From: GoAhead <${from}>`,
       `To: <${message.email}>`,
       `Subject: ${encodeHeaderValue(message.content.subject)}`,
       `Date: ${new Date().toUTCString()}`,

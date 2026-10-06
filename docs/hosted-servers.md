@@ -1,8 +1,8 @@
 # Hosted servers
 
-A hosted server is an OpenBot server that runs in a [boat](https://boat.dev) sandbox, so it works
+A hosted server is a GoAhead server that runs in a [boat](https://boat.dev) sandbox, so it works
 when the user's computer is off. Each server is one boat sandbox for one account. The sandbox runs
-the Linux build of OpenBot on the boat desktop. The server runs while it is in use. After 15 minutes with no
+the Linux build of GoAhead on the boat desktop. The server runs while it is in use. After 15 minutes with no
 use, the Worker stops it and keeps its data. The next client starts it again, and the Worker cron
 starts it before its next routine run. A connected client counts as use for 5 minutes after its
 last user action (`CLIENT_USE_WINDOW_MS`): a request that changes data, or a typing event. Reads and
@@ -76,10 +76,10 @@ when a server is idle or boat stops a sandbox; and `error` and `deleted`. The Wo
 3. **Env handoff.** boat puts the sandbox env in the setup script, not in systemd. The Worker sends
    `setupScript: exec /opt/OpenBot/hosted/openbot-hosted-env`. That helper writes the two values to
    `~/.config/openbot-hosted/env` (mode 0600). `openbot.service` waits for this file.
-4. **First boot.** OpenBot starts with `OPENBOT_HOSTED_SERVER=1`. It redeems the claim at
+4. **First boot.** GoAhead starts with `OPENBOT_HOSTED_SERVER=1`. It redeems the claim at
    `POST /v2/hosting/claims/redeem`, signs in as the owner, keeps the host ID, and publishes the
    host. `registerHost` refuses the host ID for any other account.
-5. **In use.** OpenBot checks each minute whether the server is in use: an agent works, a remote
+5. **In use.** GoAhead checks each minute whether the server is in use: an agent works, a remote
    desktop view is open, a file moves, or a remote client is connected (an open Team API event
    stream) and sent a user action or a typing event in the last 5 minutes. A key press or pointer
    input in a browser view is a user action. An open browser view with no input does not count,
@@ -103,7 +103,7 @@ when a server is idle or boat stops a sandbox; and `error` and `deleted`. The Wo
    **Scheduled start.** The cron starts an idle server when its `next_run_at` is less than 10 minutes
    away (one cron interval and the start time), with the wake reason `schedule`. It clears
    `next_run_at` in the same update, so a server that does not report again starts only once for
-   that run. After the start, OpenBot runs each routine that is due, and each run that it missed
+   that run. After the start, GoAhead runs each routine that is due, and each run that it missed
    becomes one run.
 
    **Lease.** boat has no idle timer, and a boat trial refuses a sandbox with no auto-stop. Each
@@ -168,7 +168,7 @@ when a server is idle or boat stops a sandbox; and `error` and `deleted`. The Wo
 
 ## Providers
 
-OpenBot ships no AI subscription, so a new server has no provider connected. When its owner or an
+GoAhead ships no AI subscription, so a new server has no provider connected. When its owner or an
 admin opens a server with no agent, the app shows a provider step before the first-agent form. The
 sandbox browser is on Xvfb, where nobody can see it, so each sign-in finishes on the user's own device
 over `providers-v3` and `providers-v4`: Codex, Grok and Cline show a device code, Claude shows a page
@@ -317,10 +317,10 @@ named snapshot access. The script:
    libraries), checks the AppImage SHA-256, unpacks the AppImage to `/opt/OpenBot/app`, adds an
    AppArmor profile that lets Chromium make user namespaces, and enables `openbot.service` and the
    [update](#updates) units;
-3. checks that OpenBot did not start and that no profile or claim exists;
+3. checks that GoAhead did not start and that no profile or claim exists;
 4. saves the builder as `openbot-server-<version>` and deletes the builder.
 
-The builder never starts OpenBot, so the template has no host identity and no session. boat keeps
+The builder never starts GoAhead, so the template has no host identity and no session. boat keeps
 at most 10 named snapshots for each account.
 
 ### Updates
@@ -334,7 +334,7 @@ On a server, root runs `openbot-hosted-update`:
    AppImage, checks its SHA-512 against the manifest, unpacks it in `/var/tmp`, checks that it has
    all hosting files, installs the packages in the `packages.txt` of that release, and copies it
    to `/opt/OpenBot/staged`.
-   `staged.ready` comes after the last file. OpenBot keeps running. The download and unpack use
+   `staged.ready` comes after the last file. GoAhead keeps running. The download and unpack use
    idle CPU and disk priority.
 2. `openbot-update-apply.service` runs `apply` at boot, before `openbot.service`. boat stop and resume
    work like a reboot, so the new release starts at the next wake of the server, not during use. It
@@ -351,13 +351,13 @@ with a probe; not in boat documentation.]
 
 boat resumes a server on a machine that booted before, restores the disk lazily, and starts the
 units before the restore ends. `stage` waits until the restore ends (at most 4 minutes). `apply`
-waits only when it finds `staged.ready` or `.applying`, because OpenBot starts after it. When the
+waits only when it finds `staged.ready` or `.applying`, because GoAhead starts after it. When the
 restore does not show a staged release yet, the release applies at the next boot.
 [Not confirmed in boat documentation: the `active` and `hydration-done` files in
 `/var/lib/ascii-lazy` that mark the restore. Observed on a boat VM.] `apply` never removes a staged
 release that is not complete.
 
-A server only moves to a newer version: an older OpenBot cannot open a database that a newer one
+A server only moves to a newer version: an older GoAhead cannot open a database that a newer one
 migrated. `stage` stops when it cannot read the installed version, and `provision.sh` stops when the
 installed version is newer. A staged release that is no longer the latest one, for example a
 withdrawn release, is removed at the next `stage` run. A server that starts before that run applies
@@ -370,11 +370,11 @@ https://api.openbot.run` as a detached command, and start the service again. The
 folder and in `/srv` stays.
 
 On a server, `openbot-hosted-server` starts a D-Bus session, unlocks a gnome-keyring with a
-random password for each server (so `safeStorage` can keep the account session), and runs OpenBot
-with `--password-store=gnome-libsecret`. OpenBot uses the boat desktop: the lightdm session of the
-sandbox user on `:0`, with openbox. So boat's desktop viewer and OpenBot remote desktop show the same
+random password for each server (so `safeStorage` can keep the account session), and runs GoAhead
+with `--password-store=gnome-libsecret`. GoAhead uses the boat desktop: the lightdm session of the
+sandbox user on `:0`, with openbox. So boat's desktop viewer and GoAhead remote desktop show the same
 screen, and a click moves the keyboard focus to another window. After a resume, the script waits up
-to 2 minutes for that session. With no session, OpenBot runs under `xvfb-run`. The keyring files are
+to 2 minutes for that session. With no session, GoAhead runs under `xvfb-run`. The keyring files are
 in `/srv/openbot-hosted/keyrings`:
 
 - not in `~/.local/share/keyrings`: the boat image has a locked `default` keyring there, and a
@@ -385,7 +385,7 @@ in `/srv/openbot-hosted/keyrings`:
   them through the slow mount for 25 s. boat keeps changes in `/srv` (not in `/var/lib`), and `/srv`
   is on the disk before the service starts.
 
-OpenBot redeems the claim only when `safeStorage` works. After the first redeem the claim works
+GoAhead redeems the claim only when `safeStorage` works. After the first redeem the claim works
 for 10 more minutes, so a server whose response was lost can redeem it again; each redeem revokes the
 session of the one before. After that, a session that is only in memory would leave the server
 signed out after its next start.
@@ -402,7 +402,7 @@ again with backoff (30 s to 10 min) and then publishes the host.
 
 ## Memory
 
-One systemd unit holds OpenBot, its browser tabs and every agent process: one `claude` process for
+One systemd unit holds GoAhead, its browser tabs and every agent process: one `claude` process for
 each thread, and one set of MCP servers for each ACP session. A Starter server has 4 GB. The guards
 are only on a hosted server; the desktop app does not change.
 
@@ -462,13 +462,13 @@ The `boat` scenario of `scripts/stripe-flows-e2e.ts` (see `apps/auth-api/README.
 - the builder user has passwordless `sudo`, and AppArmor is enabled in the boat VM;
 - boat runs `setupScript` for a sandbox created from a named snapshot, and systemd starts
   `openbot.service` after a create;
-- OpenBot redeems its claim, publishes the host with the server name, and signs in again from the
+- GoAhead redeems its claim, publishes the host with the server name, and signs in again from the
   stored session after a restart (`safeStorage` with gnome-keyring under Xvfb);
 - a delete through the Worker removes the sandbox.
 
 A resume test on 2026-09-28 (one sandbox with the 0.24.0 AppImage, 6 resumes, each on another
 machine) confirmed that systemd starts `openbot.service` again after a resume, and that a keyring
-secret in `/srv` stays. From the resume call to the OpenBot start took 7 to 34 s; the keyring start
+secret in `/srv` stays. From the resume call to the GoAhead start took 7 to 34 s; the keyring start
 took 40 ms. Most of the time is boat: it restores the disk and then starts the enabled units, 5 to
 20 s after the sandbox is `idle`.
 

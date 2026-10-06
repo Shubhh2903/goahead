@@ -30,27 +30,27 @@ export const messages = defineMessages("update", {
   "update.provider.hideDetails": "Hide details",
 
   // An update that an admin of this server asked for. {name} is the admin.
-  "update.scheduled.title": "{name} scheduled an OpenBot update",
+  "update.scheduled.title": "{name} scheduled a GoAhead update",
   // The same notice when "Install updates automatically" scheduled the restart.
-  "update.scheduled.automaticTitle": "OpenBot installs an update",
-  "update.scheduled.whenIdle": "OpenBot restarts when the agents are idle.",
-  "update.scheduled.now": "OpenBot restarts when the update is downloaded.",
+  "update.scheduled.automaticTitle": "GoAhead installs an update",
+  "update.scheduled.whenIdle": "GoAhead restarts when the agents are idle.",
+  "update.scheduled.now": "GoAhead restarts when the update is downloaded.",
   "update.scheduled.cancel": "Cancel update",
   "update.scheduled.cancelFailed": "The update could not be cancelled.",
 
   // A restart that the user of this computer asked for. It waits until no work runs.
-  "update.idleRestart.relaunchTitle": "OpenBot restarts when the agents are idle",
-  "update.idleRestart.updateTitle": "OpenBot installs the update when the agents are idle",
+  "update.idleRestart.relaunchTitle": "GoAhead restarts when the agents are idle",
+  "update.idleRestart.updateTitle": "GoAhead installs the update when the agents are idle",
   "update.idleRestart.description": "New routine runs wait until the restart.",
   "update.idleRestart.waitingFor": "Waiting for {reasons}.",
   "update.idleRestart.cancel": "Cancel restart",
   "update.idleRestart.cancelFailed": "The restart could not be cancelled.",
   "update.idleRestart.requestFailed": "The restart could not be scheduled.",
-  "update.idleRestart.failedTitle": "OpenBot did not restart",
+  "update.idleRestart.failedTitle": "GoAhead did not restart",
 
   // The "What's new" dialog after an app update.
-  "update.whatsNew.title": "What’s new in OpenBot",
-  "update.whatsNew.description": "The new features and changes in this version of OpenBot.",
+  "update.whatsNew.title": "What’s new in GoAhead",
+  "update.whatsNew.description": "The new features and changes in this version of GoAhead.",
   "update.whatsNew.version": "Version {version}",
   "update.whatsNew.updatedFrom": "Updated from {from} to {to}",
   "update.whatsNew.group.added": "New",

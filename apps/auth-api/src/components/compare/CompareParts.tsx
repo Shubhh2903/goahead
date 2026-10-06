@@ -8,7 +8,7 @@ import { createLandingReveal } from "../landing/createLandingReveal";
 import { LandingIcon } from "../landing/LandingIcon";
 import { RivalMark, type RivalMarkName } from "./RivalMark";
 
-// The parts that every kind of comparison page draws: OpenBot against a rival, two
+// The parts that every kind of comparison page draws: GoAhead against a rival, two
 // other products against each other, and a roundup of many apps.
 
 /** A section with a heading that comes in as it scrolls into view. */
@@ -38,14 +38,14 @@ export function RevealSection(props: {
   );
 }
 
-/** One side of a comparison. A side with no `mark` is OpenBot, drawn with its own logo. */
+/** One side of a comparison. A side with no `mark` is GoAhead, drawn with its own logo. */
 export interface SideProps {
   side: string;
   name: string;
   mark?: RivalMarkName | undefined;
 }
 
-/** The mark of one side: OpenBot's logo, or the compared product's mark. */
+/** The mark of one side: GoAhead's logo, or the compared product's mark. */
 export function SideMark(props: { mark?: RivalMarkName | undefined; class: string; blink?: boolean }) {
   return (
     <Show
