@@ -32,7 +32,7 @@
     "@paper-design/shaders": "catalog:",
     "@solidjs/signals": "catalog:",
     "@solidjs/web": "catalog:",
-    "@tanstack/solid-router": "2.0.0-rc.0",
+    "@tanstack/solid-router": "2.0.0-rc.8",
     "@tanstack/solid-start": "2.0.0-rc.0",
     "class-variance-authority": "catalog:",
     "fflate": "catalog:",
