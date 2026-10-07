@@ -135,9 +135,9 @@ describe("plugin page", () => {
 
     expect(screen.getByRole("link", { name: "Open in GoAhead" })).toHaveAttribute(
       "href",
-      `openbot://plugins/${plugin.slug}`,
+      `goahead://plugins/${plugin.slug}`,
     );
-    expect(createOpenBotPluginUrl(plugin.slug)).toBe(`openbot://plugins/${plugin.slug}`);
+    expect(createOpenBotPluginUrl(plugin.slug)).toBe(`goahead://plugins/${plugin.slug}`);
   });
 
   /* The catalog becomes a fetched document, and a link row is the only place a listing's own string

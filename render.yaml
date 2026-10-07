@@ -1,0 +1,47 @@
+# Render Blueprint for GoAhead's Signal service (internal build). See docs/goahead-internal-release.md,
+# section 4b. Free plan: it sleeps after 15 minutes without traffic, so an external monitor calls
+# /health/live every 10 minutes. Signal keeps routes in memory: run one instance only.
+services:
+  - type: web
+    name: goahead-signal
+    runtime: docker
+    plan: free
+    region: oregon
+    # The Dockerfile copies workspace packages, so the build context is the repository root.
+    dockerfilePath: ./remote/api/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/ready
+    numInstances: 1
+    autoDeploy: false
+    domains:
+      - goahead-signal.multicodegenius.com
+    envVars:
+      # Render gives HTTPS; Signal listens on Render's port without its own TLS.
+      - key: PORT
+        value: "10000"
+      - key: REMOTE_SIGNAL_PORT
+        value: "10000"
+      - key: REMOTE_HEALTH_PORT
+        value: "8080"
+      - key: REMOTE_TLS_DISABLED
+        value: "true"
+      - key: REMOTE_TRUST_PROXY
+        value: "true"
+      - key: REMOTE_CONTROL_PLANE_URL
+        value: https://goahead-api.multicodegenius.com
+      - key: REMOTE_TICKET_JWKS_URL
+        value: https://goahead-api.multicodegenius.com/.well-known/jwks.json
+      # Required by the configuration; there is no TURN server on Render (no UDP).
+      - key: TURN_HOST
+        value: goahead-turn.multicodegenius.com
+      # Secrets: set in the Render dashboard, never in this file.
+      - key: REMOTE_SESSION_SECRET
+        sync: false
+      - key: REMOTE_AUTH_WEBHOOK_SECRET
+        sync: false
+      - key: TURN_SHARED_SECRET
+        sync: false
+      - key: REMOTE_METRICS_TOKEN
+        sync: false
+      - key: SLACK_SIGNING_SECRET
+        sync: false

@@ -2,6 +2,7 @@ import { AppLogo } from "@openbot/brand";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import { isNeverExpiringInvite } from "@openbot/contracts/invite-links";
 import type { InvitePreview, JoinServerInput } from "@openbot/contracts/ipc";
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import type { AppFormat, AppTranslate } from "@openbot/i18n";
 import {
   Alert,
@@ -33,7 +34,7 @@ interface JoinServerDialogProps {
 
 type DialogPhase = "idle" | "previewing" | "joining";
 
-const INVITE_URL_PLACEHOLDER = "https://openbot.run/join?…";
+const INVITE_URL_PLACEHOLDER = `${PRODUCT_IDENTITY.siteOrigin}/join?…`;
 
 export function JoinServerDialog(props: JoinServerDialogProps) {
   const { t, errorMessage } = useText();

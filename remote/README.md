@@ -110,3 +110,6 @@ See [the issue #325 deployment procedure](../docs/remote-session-deployment.md) 
 a Signal-only update, rollback commands, and the required desktop/mobile checks.
 
 To run Signal with your own account service, see [Self-hosted remote access](../docs/self-hosting.md).
+
+The company's GoAhead servers on `multicodegenius.com` use `nginx/goahead-signal.multicodegenius.com.conf`
+and the steps in [GoAhead internal release](../docs/goahead-internal-release.md).

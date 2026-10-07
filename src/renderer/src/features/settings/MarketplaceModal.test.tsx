@@ -354,7 +354,7 @@ describe("MarketplaceModal", () => {
       installs: 0,
       featured: true,
       updatedAt: "2026-09-18T00:00:00.000Z",
-      shareUrl: "https://openbot.run/plugins/aave",
+      shareUrl: "https://goahead.multicodegenius.com/plugins/aave",
       prompts: [],
       apps: [
         {
@@ -783,7 +783,7 @@ describe("MarketplaceModal", () => {
       await openAppPage();
       fireEvent.click(await screen.findByRole("button", { name: "Copy link" }));
 
-      await waitFor(() => expect(writeText).toHaveBeenCalledWith("https://openbot.run/plugins/aave"));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("https://goahead.multicodegenius.com/plugins/aave"));
     });
 
     it("reports a link copy that the clipboard refuses", async () => {

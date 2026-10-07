@@ -26,6 +26,7 @@ import {
   OAuthTokensSchema,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { sourceText } from "@openbot/i18n/source";
 import { z } from "zod";
 import { withTimeout } from "./with-timeout";
@@ -398,8 +399,8 @@ class McpOAuthClientProvider implements OAuthClientProvider {
    */
   get clientMetadata(): OAuthClientMetadata {
     return {
-      client_name: "OpenBot",
-      client_uri: "https://openbot.run",
+      client_name: PRODUCT_IDENTITY.name,
+      client_uri: PRODUCT_IDENTITY.siteOrigin,
       redirect_uris: [this.#options.redirectUrl],
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],

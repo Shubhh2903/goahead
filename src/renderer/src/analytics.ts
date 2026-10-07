@@ -8,6 +8,7 @@ import {
   type CentralAuthUser,
   isAgentModel,
 } from "@openbot/contracts/ipc";
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { isBoolean, isDynamicRecord, isFunction, isNumber, isString } from "@openbot/contracts/runtime-values";
 import { normalizeEmailAddress } from "@openbot/contracts/validation";
 import { OpenPanelBase, type OpenPanelOptions } from "@openpanel/web";
@@ -666,4 +667,5 @@ function normalizeAnalyticsIdentity(user: AnalyticsIdentity): AnalyticsIdentity 
   return id && email ? { id, email } : null;
 }
 
-export const desktopAnalytics = new DesktopAnalytics();
+// `PRODUCT_IDENTITY.analytics` is off in this build, so the client is never made: nothing is sent.
+export const desktopAnalytics = new DesktopAnalytics(undefined, PRODUCT_IDENTITY.analytics && import.meta.env.PROD);

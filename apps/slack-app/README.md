@@ -9,8 +9,15 @@ asks the right agent and answers. No code runs here: each directory holds only t
 | --- | --- | --- | --- | --- |
 | `production` | `GoAhead` | `A0C5H5C95NH` | `openbotdev` (`T0C5B1XG542`) | `https://api.openbot.run/v2/slack/callback` |
 | `development` | `GoAhead (dev)` | `A0C5G5XGS83` | `openbotdev` (`T0C5B1XG542`) | `https://goahead-dev-api.multicodegenius.com/v2/slack/callback` |
+| `internal` | `GoAhead` | `A0C860EFP6C` | Multi Code Genius | `https://goahead-api.multicodegenius.com/v2/slack/callback` |
 
 `.slack/apps.json` links each directory to its app. Run the Slack CLI from inside a directory.
+
+The `internal` app is the company's own app on its own servers (see
+`docs/goahead-internal-release.md`). It sends events and button presses to
+`https://goahead-signal.multicodegenius.com/v1/slack/events`. A Slack app has one request URL: when
+`A0C860EFP6C` uses the internal servers, `bun run dev:slack` needs another Slack app for development.
+`internal` has no `.slack/apps.json`; give the app with `--app A0C860EFP6C`.
 
 The production app sends events and button presses to `https://signal.openbot.run/v1/slack/events`. The development app sends them to `https://goahead-dev.multicodegenius.com/v1/slack/events`, the named Cloudflare tunnel that `bun run dev:slack` runs (see `docs/messaging.md`).
 

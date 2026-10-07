@@ -27,13 +27,13 @@ describe("the deep link router", () => {
     expect(parseDeepLink(createOpenBotAgentTemplateUrl(id))).toEqual({ kind: "agent-template", id });
     expect(parseDeepLink(createAgentTemplateShareUrl(id))).toEqual({ kind: "agent-template", id });
     expect(parseDeepLink(`${createOpenBotAgentTemplateUrl(id)}?code=grant-abc&state=run-xyz`)).toBeNull();
-    expect(parseDeepLink("openbot://agents/short")).toBeNull();
+    expect(parseDeepLink("goahead://agents/short")).toBeNull();
   });
 
   it.each([
     ["an unknown openbot:// host", "openbot://something-else/aave"],
     ["a bare scheme", "openbot://"],
-    ["an ordinary web page", "https://openbot.run/news"],
+    ["an ordinary web page", "https://goahead.multicodegenius.com/news"],
     ["a command-line argument", "--enable-logging"],
     ["an empty string", ""],
   ])("gives nothing for %s", (_reason, value) => {
@@ -44,7 +44,7 @@ describe("the deep link router", () => {
      invitation's token in it. */
   it("never reads an invitation as a plugin", () => {
     expect(parseDeepLink(inviteUrl)?.kind).toBe("invite");
-    expect(parseDeepLink("openbot://join")).toBeNull();
+    expect(parseDeepLink("goahead://join")).toBeNull();
   });
 
   it("refuses a local development invitation unless that is allowed", () => {
@@ -73,7 +73,7 @@ describe("the deep link router", () => {
       ["no state", `${MCP_OAUTH_REDIRECT_URL}?code=grant-abc`],
       ["an error instead of a grant", `${MCP_OAUTH_REDIRECT_URL}?error=access_denied&state=run-xyz`],
       ["nothing at all", MCP_OAUTH_REDIRECT_URL],
-      ["another scheme", "https://openbot.run/mcp-auth?code=grant-abc&state=run-xyz"],
+      ["another scheme", "https://goahead.multicodegenius.com/mcp-auth?code=grant-abc&state=run-xyz"],
     ])("gives nothing for %s", (_reason, value) => {
       expect(parseDeepLink(value)).toBeNull();
     });
@@ -81,13 +81,15 @@ describe("the deep link router", () => {
     /* A sealed Slack bot token is a secret too. It is its own kind, which `index.ts` keeps in main,
        and never another scheme or a half link. */
     it("reads the Slack install link as its own kind", () => {
-      expect(parseDeepLink("openbot://slack-workspace?nonce=nonce-1&grant=sealed")).toEqual({
+      expect(parseDeepLink("goahead://slack-workspace?nonce=nonce-1&grant=sealed")).toEqual({
         kind: "slack-workspace",
         nonce: "nonce-1",
         grant: "sealed",
       });
-      expect(parseDeepLink("openbot://slack-workspace?nonce=nonce-1")).toBeNull();
-      expect(parseDeepLink("https://openbot.run/slack-workspace?nonce=nonce-1&grant=sealed")).toBeNull();
+      expect(parseDeepLink("goahead://slack-workspace?nonce=nonce-1")).toBeNull();
+      expect(
+        parseDeepLink("https://goahead.multicodegenius.com/slack-workspace?nonce=nonce-1&grant=sealed"),
+      ).toBeNull();
     });
 
     /* A plugin link carries no query, so the host it owns cannot be reached with a grant on it -

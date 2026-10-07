@@ -7,6 +7,7 @@
  */
 
 import type { McpServerConfig } from "@openbot/contracts/ipc";
+import { OPENBOT_PLUGIN_ORIGIN, OPENBOT_PLUGIN_PATH_PREFIX } from "@openbot/contracts/plugin-links";
 import type { MarketplacePluginApp, MarketplacePluginDetail } from "@openbot/ui/features/settings/marketplace-plugins";
 
 /**
@@ -73,7 +74,7 @@ const AAVE: MarketplacePluginDetail = {
   installs: 0,
   featured: true,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/aave",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}aave`,
 };
 
 const CANVA: MarketplacePluginDetail = {
@@ -114,7 +115,7 @@ const CANVA: MarketplacePluginDetail = {
   installs: 0,
   featured: true,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/canva",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}canva`,
 };
 
 const LINEAR: MarketplacePluginDetail = {
@@ -155,7 +156,7 @@ const LINEAR: MarketplacePluginDetail = {
   installs: 0,
   featured: false,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/linear",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}linear`,
 };
 
 const NOTION: MarketplacePluginDetail = {
@@ -196,7 +197,7 @@ const NOTION: MarketplacePluginDetail = {
   installs: 0,
   featured: true,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/notion",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}notion`,
 };
 
 const FIGMA: MarketplacePluginDetail = {
@@ -251,7 +252,7 @@ const FIGMA: MarketplacePluginDetail = {
   installs: 0,
   featured: true,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/figma",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}figma`,
 };
 
 const PAPER: MarketplacePluginDetail = {
@@ -287,7 +288,7 @@ const PAPER: MarketplacePluginDetail = {
   installs: 0,
   featured: false,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/paper",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}paper`,
 };
 
 const SENTRY: MarketplacePluginDetail = {
@@ -327,7 +328,7 @@ const SENTRY: MarketplacePluginDetail = {
   installs: 0,
   featured: false,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/sentry",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}sentry`,
 };
 
 const CONTEXT7: MarketplacePluginDetail = {
@@ -362,7 +363,7 @@ const CONTEXT7: MarketplacePluginDetail = {
   installs: 0,
   featured: false,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/context7",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}context7`,
 };
 
 const STRIPE: MarketplacePluginDetail = {
@@ -402,7 +403,7 @@ const STRIPE: MarketplacePluginDetail = {
   installs: 0,
   featured: false,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/stripe",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}stripe`,
 };
 
 const POSTHOG: MarketplacePluginDetail = {
@@ -460,7 +461,7 @@ const POSTHOG: MarketplacePluginDetail = {
   installs: 0,
   featured: false,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/posthog",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}posthog`,
 };
 
 const AIRTABLE: MarketplacePluginDetail = {
@@ -510,7 +511,7 @@ const AIRTABLE: MarketplacePluginDetail = {
   installs: 0,
   featured: false,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/airtable",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}airtable`,
 };
 
 const FIRECRAWL: MarketplacePluginDetail = {
@@ -568,7 +569,7 @@ const FIRECRAWL: MarketplacePluginDetail = {
   installs: 0,
   featured: false,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/firecrawl",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}firecrawl`,
 };
 
 const BRAVE_SEARCH: MarketplacePluginDetail = {
@@ -620,7 +621,7 @@ const BRAVE_SEARCH: MarketplacePluginDetail = {
   installs: 0,
   featured: false,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/brave-search",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}brave-search`,
 };
 
 const RESEND: MarketplacePluginDetail = {
@@ -672,7 +673,7 @@ const RESEND: MarketplacePluginDetail = {
   installs: 0,
   featured: false,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/resend",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}resend`,
 };
 
 const COMPOSIO: MarketplacePluginDetail = {
@@ -736,7 +737,7 @@ const COMPOSIO: MarketplacePluginDetail = {
   installs: 0,
   featured: false,
   updatedAt: "2026-09-30T00:00:00.000Z",
-  shareUrl: "https://openbot.run/plugins/composio",
+  shareUrl: `${OPENBOT_PLUGIN_ORIGIN}${OPENBOT_PLUGIN_PATH_PREFIX}composio`,
 };
 
 export const MARKETPLACE_PLUGINS: MarketplacePluginDetail[] = [

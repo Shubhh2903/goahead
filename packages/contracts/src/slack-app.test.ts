@@ -6,7 +6,7 @@ import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "./slack-app";
 // The Worker asks Slack for the contract's scopes, and Slack grants only what the app's manifest
 // lists. A scope missing from a manifest makes every install of that app lack it.
 describe("Slack app manifests", () => {
-  for (const app of ["development", "production"]) {
+  for (const app of ["development", "production", "internal"]) {
     it(`${app} lists the contract's bot and user scopes`, () => {
       const manifest = JSON.parse(
         readFileSync(resolve(import.meta.dirname, `../../../apps/slack-app/${app}/manifest.json`), "utf8"),

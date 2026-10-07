@@ -21,6 +21,7 @@
     "./hosted-sites": "./src/hosted-sites.ts",
     "./input-limits": "./src/input-limits.ts",
     "./invite-links": "./src/invite-links.ts",
+    "./product-identity": "./src/product-identity.ts",
     "./landing-preview-messages": "./src/landing-preview-messages.ts",
     "./markdown-lists": "./src/markdown-lists.ts",
     "./ipc": "./src/ipc.ts",

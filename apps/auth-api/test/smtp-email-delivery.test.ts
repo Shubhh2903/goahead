@@ -48,7 +48,7 @@ describe("Private Email SMTP delivery", () => {
         inviterEmail: "owner@example.com",
         serverName: "Studio Mac",
         inviteUrl:
-          "https://openbot.run/join?api=https%3A%2F%2Fstudio-mac-k7m4q2pz-host.openbot.run%2F&server=00000000-0000-4000-8000-000000000000&fingerprint=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&invite=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "https://goahead.multicodegenius.com/join?api=https%3A%2F%2Fstudio-mac-k7m4q2pz-host.openbot.run%2F&server=00000000-0000-4000-8000-000000000000&fingerprint=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&invite=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         role: "member",
       },
       connector,
@@ -57,7 +57,7 @@ describe("Private Email SMTP delivery", () => {
     expect(writes).toContain("RCPT TO:<alice@example.com>\r\n");
     expect(writes[7]).toContain("Subject: Join Studio Mac on GoAhead");
     expect(writes[7]).toContain("owner@example.com invited you");
-    expect(writes[7]).toContain("https://openbot.run/join?");
+    expect(writes[7]).toContain("https://goahead.multicodegenius.com/join?");
   });
 
   it("sends plain text and HTML that decode back without markup from the server name", async () => {
@@ -92,7 +92,7 @@ describe("Private Email SMTP delivery", () => {
         inviterEmail: "owner@example.com",
         serverName,
         inviteUrl:
-          "https://openbot.run/join?api=https%3A%2F%2Fstudio-mac-k7m4q2pz-host.openbot.run%2F&server=00000000-0000-4000-8000-000000000000&fingerprint=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&invite=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "https://goahead.multicodegenius.com/join?api=https%3A%2F%2Fstudio-mac-k7m4q2pz-host.openbot.run%2F&server=00000000-0000-4000-8000-000000000000&fingerprint=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&invite=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         role: "member",
       },
       connector,
@@ -111,7 +111,7 @@ describe("Private Email SMTP delivery", () => {
     expect(html).toContain("Zespół &lt;a href=//x.pl&gt;Kraków");
     expect(html).not.toContain("<a href=//x.pl>");
     expect(html).toContain(
-      'href="https://openbot.run/join?api=https%3A%2F%2Fstudio-mac-k7m4q2pz-host.openbot.run%2F&amp;server=',
+      'href="https://goahead.multicodegenius.com/join?api=https%3A%2F%2Fstudio-mac-k7m4q2pz-host.openbot.run%2F&amp;server=',
     );
   });
 

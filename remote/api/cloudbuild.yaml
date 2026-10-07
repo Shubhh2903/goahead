@@ -1,0 +1,8 @@
+# Builds the Signal image for Google Cloud Run. Run from the repository root, because the Dockerfile
+# copies workspace packages:
+#   gcloud builds submit --config remote/api/cloudbuild.yaml \
+#     --substitutions _IMAGE=<region>-docker.pkg.dev/<project>/goahead/signal:<version> .
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "remote/api/Dockerfile", "-t", "$_IMAGE", "."]
+images: ["$_IMAGE"]

@@ -1,9 +1,11 @@
-appId: app.openbot.desktop
-productName: OpenBot
+# The GoAhead identity. It matches `PRODUCT_IDENTITY` in `packages/contracts/src/product-identity.ts`;
+# YAML cannot import it, so keep the two the same.
+appId: com.multicodegenius.goahead
+productName: GoAhead
 protocols:
-  - name: OpenBot invitations
+  - name: GoAhead links
     schemes:
-      - openbot
+      - goahead
 asar: true
 artifactName: ${productName}-${version}-${arch}.${ext}
 electronUpdaterCompatibility: ">=2.16"
@@ -17,10 +19,13 @@ electronFuses:
   onlyLoadAppFromAsar: true
   loadBrowserProcessSpecificV8Snapshot: false
   grantFileProtocolExtraPrivileges: false
+# Releases go to the repository that builds them (the tag workflow passes `$GITHUB_REPOSITORY`).
+# The internal build does not update itself: `src/main/update-service.ts` keeps automatic updates off
+# until GoAhead has an update feed of its own, so no installed app ever updates from another product.
 publish:
   provider: github
-  owner: nightly-labs
-  repo: openbot
+  owner: Shubhh2903
+  repo: goahead
 files:
   - out/**/*
   - package.json
@@ -83,7 +88,7 @@ mac:
     - from: build/cua-driver/darwin/${arch}
       to: cua-driver/darwin/${arch}
   # The Computer Use driver arrives signed by Cua AI with the hardened runtime, a secure timestamp
-  # and `com.apple.security.automation.apple-events`. Re-signing it with OpenBot's inherited
+  # and `com.apple.security.automation.apple-events`. Re-signing it with GoAhead's inherited
   # entitlements would drop that entitlement and break the driver's Automation route, so its own
   # Developer ID signature is kept. Notarization accepts a nested binary signed by another team.
   signIgnore:
@@ -91,13 +96,15 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist
   darkModeSupport: true
+  # `ElectronTeamID` is the Apple Team ID of the company Developer ID certificate (not a secret). The
+  # tag workflow also passes it from the `APPLE_TEAM_ID` secret, which wins when the two differ.
   extendInfo:
-    ElectronTeamID: ZTRDTUL87R
-    NSMicrophoneUsageDescription: OpenBot uses the microphone to transcribe voice prompts locally on this Mac.
-    # Computer Use runs the driver as a child process, so macOS asks for both grants in OpenBot's
+    ElectronTeamID: S29HD2MDR4
+    NSMicrophoneUsageDescription: GoAhead uses the microphone to transcribe voice prompts locally on this Mac.
+    # Computer Use runs the driver as a child process, so macOS asks for both grants in GoAhead's
     # name and shows these sentences.
-    NSScreenCaptureUsageDescription: OpenBot captures the screen so an agent can see the app windows you ask it to control.
-    NSAppleEventsUsageDescription: OpenBot sends Automation events so an agent can control the apps you ask it to control.
+    NSScreenCaptureUsageDescription: GoAhead captures the screen so an agent can see the app windows you ask it to control.
+    NSAppleEventsUsageDescription: GoAhead sends Automation events so an agent can control the apps you ask it to control.
     NSUserActivityTypes:
       - NSUserActivityTypeBrowsingWeb
   # No `arch` here: a target's own `arch` list replaces the one given on the command line, so

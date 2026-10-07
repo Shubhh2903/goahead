@@ -1057,12 +1057,18 @@ describe("supportsInstalledUpdates", () => {
     ["win32", true],
     ["linux", false],
   ] as const)("returns %s support as %s", (platform, expected) => {
-    expect(supportsInstalledUpdates(platform, {})).toBe(expected);
+    expect(supportsInstalledUpdates(platform, {}, true)).toBe(expected);
   });
 
   // Only the AppImage runtime can replace itself, and `APPIMAGE` is how it says it is the one running.
   it("supports a Linux build only when it runs from an AppImage", () => {
-    expect(supportsInstalledUpdates("linux", { APPIMAGE: "/tmp/OpenBot-0.8.0-x64.AppImage" })).toBe(true);
-    expect(supportsInstalledUpdates("linux", { APPIMAGE: "  " })).toBe(false);
+    expect(supportsInstalledUpdates("linux", { APPIMAGE: "/tmp/GoAhead-0.8.0-x64.AppImage" }, true)).toBe(true);
+    expect(supportsInstalledUpdates("linux", { APPIMAGE: "  " }, true)).toBe(false);
+  });
+
+  // Without a GoAhead feed, another product's releases must never install over GoAhead.
+  it("turns installed updates off on every platform while GoAhead has no feed of its own", () => {
+    for (const platform of ["darwin", "win32", "linux"] as const)
+      expect(supportsInstalledUpdates(platform, { APPIMAGE: "/tmp/GoAhead.AppImage" })).toBe(false);
   });
 });

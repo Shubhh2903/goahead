@@ -26,6 +26,21 @@ first-install fallback. To stop a broken upstream release, add its version to th
 `provider-runtime-blocklist.json` and merge it to `main`. Apps read the list at their next check. A
 blocked version is no longer offered, but it stays on the computers that already installed it.
 
+## Internal GoAhead build
+
+The company builds GoAhead for internal use. It differs from the upstream release in these ways:
+
+- **Identity:** `com.multicodegenius.goahead`, product name GoAhead, link scheme `goahead://`
+  (`packages/contracts/src/product-identity.ts`; `electron-builder.yml` repeats the values).
+- **Apple team:** `S29HD2MDR4`, the company Developer ID. The workflow also reads `APPLE_TEAM_ID`.
+- **No associated domains:** no Universal Links, so `MAC_PROVISIONING_PROFILE` is optional and the
+  workflow does not check an apple-app-site-association file.
+- **No automatic updates:** `INSTALLED_UPDATE_FEED_CONFIGURED` in `src/main/update-service.ts` is
+  false until GoAhead has its own feed. People install each new DMG themselves.
+- **No Host installer:** it is built only when the repository variable `BUILD_HOST_INSTALLER` is
+  `true` (it still pins the upstream team in `scripts/host-installation.ts`).
+- **Default branch:** the tag must be on the repository's default branch (`master`).
+
 ## One-time GitHub setup
 
 Create the `release` environment in `nightly-labs/openbot`, then add these environment secrets:
@@ -335,7 +350,7 @@ Start from a clean, up-to-date `main` branch. For the first release, `package.js
 `CHANGELOG.md` are already prepared as `0.1.0`; after CI passes, create its annotated tag directly:
 
 ```bash
-git tag -a v0.1.0 -m "OpenBot v0.1.0"
+git tag -a v0.1.0 -m "GoAhead v0.1.0"
 git push origin v0.1.0
 ```
 
@@ -357,7 +372,7 @@ git add package.json CHANGELOG.md changelog.d
 git commit -m "release: prepare vX.Y.Z"
 git push origin main
 bun run release:preflight
-git tag -a vX.Y.Z -m "OpenBot vX.Y.Z"
+git tag -a vX.Y.Z -m "GoAhead vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
@@ -512,19 +527,19 @@ or checksum generation fails; it never publishes a release with the Host package
 Expected macOS assets:
 
 ```text
-OpenBot-<VERSION>-arm64.dmg
-OpenBot-<VERSION>-arm64.zip
+GoAhead-<VERSION>-arm64.dmg
+GoAhead-<VERSION>-arm64.zip
 OpenBot-Host-<VERSION>-arm64.pkg
 latest-mac.yml
 SHA256SUMS-macos.txt
-OpenBot-<VERSION>-macos.spdx.json
+GoAhead-<VERSION>-macos.spdx.json
 OpenBot-Host-<VERSION>-macos.spdx.json
-OpenBot-<VERSION>-macos.sigstore.json
-OpenBot-<VERSION>-x64.dmg
-OpenBot-<VERSION>-x64.zip
+GoAhead-<VERSION>-macos.sigstore.json
+GoAhead-<VERSION>-x64.dmg
+GoAhead-<VERSION>-x64.zip
 SHA256SUMS-macos-x64.txt
-OpenBot-<VERSION>-macos-x64.spdx.json
-OpenBot-<VERSION>-macos-x64.sigstore.json
+GoAhead-<VERSION>-macos-x64.spdx.json
+GoAhead-<VERSION>-macos-x64.sigstore.json
 ```
 
 The macOS checksum file covers the DMG, ZIP, and Host PKG. The existing provenance step consumes

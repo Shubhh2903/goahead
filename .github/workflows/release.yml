@@ -57,10 +57,11 @@ jobs:
         if: github.event_name == 'push'
         shell: bash
         run: |
-          git fetch origin main --no-tags
+          default_branch="${{ github.event.repository.default_branch }}"
+          git fetch origin "$default_branch" --no-tags
           release_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
-          if ! git merge-base --is-ancestor "$release_commit" origin/main; then
-            echo "Release tag $GITHUB_REF_NAME does not point to a commit on origin/main." >&2
+          if ! git merge-base --is-ancestor "$release_commit" "origin/$default_branch"; then
+            echo "Release tag $GITHUB_REF_NAME does not point to a commit on origin/$default_branch." >&2
             exit 1
           fi
 
@@ -83,25 +84,9 @@ jobs:
           echo "version=$package_version" >> "$GITHUB_OUTPUT"
           echo "tag=v$package_version" >> "$GITHUB_OUTPUT"
 
-      - name: Require deployed Universal Links support
-        shell: bash
-        run: |
-          verification_dir="$(mktemp -d)"
-          trap 'rm -rf "$verification_dir"' EXIT
-          join_status="$(curl --silent --show-error --retry 5 --retry-all-errors \
-            --max-redirs 0 --dump-header "$verification_dir/join.headers" \
-            --output "$verification_dir/join.html" --write-out '%{http_code}' \
-            https://openbot.run/join)"
-          test "$join_status" = "200"
-          tr -d '\r' < "$verification_dir/join.headers" | grep -Eiq '^cache-control:.*no-store'
-          association_status="$(curl --silent --show-error --retry 5 --retry-all-errors \
-            --max-redirs 0 --dump-header "$verification_dir/association.headers" \
-            --output "$verification_dir/association.json" --write-out '%{http_code}' \
-            https://openbot.run/.well-known/apple-app-site-association)"
-          test "$association_status" = "200"
-          tr -d '\r' < "$verification_dir/association.headers" | grep -Eiq '^content-type: application/json'
-          jq -e '.applinks.details == [{"appID":"ZTRDTUL87R.app.openbot.desktop","paths":["/join"]},{"appID":"ZTRDTUL87R.run.openbot.mobile","paths":["/join","/agents/*"]}]' \
-            "$verification_dir/association.json" >/dev/null
+      # The internal GoAhead build has no associated domains (no Universal Links, no provisioning
+      # profile), so there is no apple-app-site-association file to check. Add the check back with
+      # the entitlement when GoAhead serves one.
 
   host-signing:
     name: Check Host signing keychain
@@ -290,7 +275,8 @@ jobs:
           MAC_PROVISIONING_PROFILE: ${{ secrets.MAC_PROVISIONING_PROFILE }}
         run: |
           missing=()
-          for name in CSC_LINK CSC_KEY_PASSWORD CSC_INSTALLER_LINK CSC_INSTALLER_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID MAC_PROVISIONING_PROFILE; do
+          # MAC_PROVISIONING_PROFILE is optional: the internal build has no associated domains.
+          for name in CSC_LINK CSC_KEY_PASSWORD CSC_INSTALLER_LINK CSC_INSTALLER_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
             if [[ -z "${!name}" ]]; then missing+=("$name"); fi
           done
           if (( ${#missing[@]} > 0 )); then
@@ -324,8 +310,13 @@ jobs:
         shell: bash
         env:
           MAC_PROVISIONING_PROFILE: ${{ secrets.MAC_PROVISIONING_PROFILE }}
+        # Optional: only an app with associated domains needs a provisioning profile.
         run: |
-          profile_path="$RUNNER_TEMP/OpenBot.provisionprofile"
+          if [[ -z "$MAC_PROVISIONING_PROFILE" ]]; then
+            echo "No provisioning profile: the app is built without associated domains."
+            exit 0
+          fi
+          profile_path="$RUNNER_TEMP/GoAhead.provisionprofile"
           printf '%s' "$MAC_PROVISIONING_PROFILE" | /usr/bin/base64 -D > "$profile_path"
           security cms -D -i "$profile_path" >/dev/null
           echo "OPENBOT_PROVISIONING_PROFILE=$profile_path" >> "$GITHUB_ENV"
@@ -345,9 +336,13 @@ jobs:
           bun run voice:prepare-runtime
           bun run build
           log="$RUNNER_TEMP/electron-builder-mac.log"
+          # The team id comes from the secret, not from electron-builder.yml.
+          builder_args=(--mac --${{ matrix.arch }} --publish never "--config.mac.extendInfo.ElectronTeamID=$APPLE_TEAM_ID")
+          if [[ -n "${OPENBOT_PROVISIONING_PROFILE:-}" ]]; then
+            builder_args+=("--config.mac.provisioningProfile=$OPENBOT_PROVISIONING_PROFILE")
+          fi
           for attempt in 1 2 3; do
-            if bun x electron-builder --mac --${{ matrix.arch }} --publish never \
-              --config.mac.provisioningProfile="$OPENBOT_PROVISIONING_PROFILE" 2>&1 | tee "$log"; then
+            if bun x electron-builder "${builder_args[@]}" 2>&1 | tee "$log"; then
               exit 0
             fi
             if ! grep -Eq 'hdiutil: create failed - (Device not configured|Resource busy)' "$log"; then
@@ -359,12 +354,16 @@ jobs:
           exit 1
 
       - name: Verify packaged application metadata and launch
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: bun run verify:package
 
       - name: Verify application signature and notarization
         shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          app_path="dist/${{ matrix.app_dir }}/OpenBot.app"
+          app_path="dist/${{ matrix.app_dir }}/GoAhead.app"
           test -d "$app_path"
           codesign --verify --deep --strict --verbose=2 "$app_path"
           runtime_path="$app_path/Contents/Resources/remote-desktop-runtime/darwin/${{ matrix.arch }}"
@@ -380,19 +379,17 @@ jobs:
           verify_provider_signature build/codex/mac/${{ matrix.arch }}/bin/codex 2DC432GLL2
           verify_provider_signature build/claude/mac/${{ matrix.arch }}/bin/claude Q6L2SF6YDW
           verify_provider_signature build/grok/mac/${{ matrix.arch }}/bin/grok 5Y6N3AJ54S
-          test -f "$app_path/Contents/embedded.provisionprofile"
+          if [[ -n "${OPENBOT_PROVISIONING_PROFILE:-}" ]]; then test -f "$app_path/Contents/embedded.provisionprofile"; fi
           codesign -d --entitlements :- "$app_path" > "$RUNNER_TEMP/openbot-entitlements.plist"
           test -s "$RUNNER_TEMP/openbot-entitlements.plist"
           plutil -lint "$RUNNER_TEMP/openbot-entitlements.plist"
-          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.associated-domains:0' \
-            "$RUNNER_TEMP/openbot-entitlements.plist" | grep -Fx 'applinks:openbot.run'
-          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.team-identifier' \
-            "$RUNNER_TEMP/openbot-entitlements.plist" | grep -Fx 'ZTRDTUL87R'
+          # The signature's team must be the release secret's team.
+          codesign -d --verbose=4 "$app_path" 2>&1 | grep -Fx "TeamIdentifier=$APPLE_TEAM_ID"
           /usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' \
             "$RUNNER_TEMP/openbot-entitlements.plist" | grep -Fx 'true'
           plutil -extract NSUserActivityTypes.0 raw "$app_path/Contents/Info.plist" \
             | grep -Fx 'NSUserActivityTypeBrowsingWeb'
-          plutil -extract ElectronTeamID raw "$app_path/Contents/Info.plist" | grep -Fx 'ZTRDTUL87R'
+          plutil -extract ElectronTeamID raw "$app_path/Contents/Info.plist" | grep -Fx "$APPLE_TEAM_ID"
           spctl --assess --type execute --verbose=2 "$app_path"
           xcrun stapler validate "$app_path"
 
@@ -420,6 +417,8 @@ jobs:
           fi
           # v0.1.21 shipped only an ARM64 ZIP, so only that one has a size to stay under.
           if [[ "${{ matrix.arch }}" != "arm64" ]]; then exit 0; fi
+          # A repository without the old release has nothing to compare with.
+          if ! gh release view v0.1.21 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then exit 0; fi
           mkdir -p "$RUNNER_TEMP/openbot-0.1.21"
           gh release download v0.1.21 --repo "$GITHUB_REPOSITORY" --pattern '*.zip' \
             --dir "$RUNNER_TEMP/openbot-0.1.21"
@@ -440,8 +439,10 @@ jobs:
           xcrun swiftc -parse-as-library -D TENANT_SETUP_TESTS scripts/macos-tenant-setup.swift scripts/macos-tenant-setup-tests.swift -o "$RUNNER_TEMP/openbot-tenant-setup-tests"
           "$RUNNER_TEMP/openbot-tenant-setup-tests"
 
+      # The Host installer pins the upstream team and bundle id in scripts/host-installation.ts, and the
+      # internal build does not need it. Set the repository variable BUILD_HOST_INSTALLER=true to build it.
       - name: Build, sign, notarize, and verify Host installer
-        if: matrix.arch == 'arm64'
+        if: matrix.arch == 'arm64' && vars.BUILD_HOST_INSTALLER == 'true'
         shell: bash
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -471,22 +472,22 @@ jobs:
         run: |
           cd dist
           shopt -s nullglob
-          artifacts=("OpenBot-$RELEASE_VERSION-${{ matrix.arch }}.dmg" "OpenBot-$RELEASE_VERSION-${{ matrix.arch }}.zip")
-          if [[ "${{ matrix.arch }}" == "arm64" ]]; then artifacts+=("OpenBot-Host-$RELEASE_VERSION-arm64.pkg"); fi
+          artifacts=("GoAhead-$RELEASE_VERSION-${{ matrix.arch }}.dmg" "GoAhead-$RELEASE_VERSION-${{ matrix.arch }}.zip")
+          if [[ "${{ matrix.arch }}" == "arm64" && -f "OpenBot-Host-$RELEASE_VERSION-arm64.pkg" ]]; then artifacts+=("OpenBot-Host-$RELEASE_VERSION-arm64.pkg"); fi
           shasum -a 256 "${artifacts[@]}" > "SHA256SUMS-${{ matrix.suffix }}.txt"
 
       - name: Generate macOS release SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          path: dist/${{ matrix.app_dir }}/OpenBot.app
+          path: dist/${{ matrix.app_dir }}/GoAhead.app
           format: spdx-json
-          output-file: dist/OpenBot-${{ env.RELEASE_VERSION }}-${{ matrix.suffix }}.spdx.json
-          artifact-name: OpenBot-${{ env.RELEASE_VERSION }}-${{ matrix.suffix }}-SBOM
+          output-file: dist/GoAhead-${{ env.RELEASE_VERSION }}-${{ matrix.suffix }}.spdx.json
+          artifact-name: GoAhead-${{ env.RELEASE_VERSION }}-${{ matrix.suffix }}-SBOM
           upload-artifact: false
           upload-release-assets: false
 
       - name: Generate Host package SBOM
-        if: matrix.arch == 'arm64'
+        if: matrix.arch == 'arm64' && vars.BUILD_HOST_INSTALLER == 'true'
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           path: dist/host-sbom
@@ -505,7 +506,7 @@ jobs:
       - name: Include macOS provenance bundle
         env:
           BUNDLE_PATH: ${{ steps.macos-provenance.outputs.bundle-path }}
-        run: cp "$BUNDLE_PATH" "dist/OpenBot-$RELEASE_VERSION-${{ matrix.suffix }}.sigstore.json"
+        run: cp "$BUNDLE_PATH" "dist/GoAhead-$RELEASE_VERSION-${{ matrix.suffix }}.sigstore.json"
 
       - name: Upload macOS release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -614,11 +615,11 @@ jobs:
           if ($installers.Count -ne 1 -or -not (Test-Path dist/latest.yml)) {
             Write-Error "Expected one EXE installer and latest.yml."
           }
-          # The package verifier ties the signer of OpenBot.exe to the publisher in app-update.yml.
+          # The package verifier ties the signer of GoAhead.exe to the publisher in app-update.yml.
           # A signed install verifies the next update's installer against that publisher.
           $signature = Get-AuthenticodeSignature -LiteralPath $installers[0].FullName
           if ($env:WINDOWS_SIGNED -eq "true") {
-            $applicationSigner = (Get-AuthenticodeSignature -LiteralPath dist/win-unpacked/OpenBot.exe).SignerCertificate.Subject
+            $applicationSigner = (Get-AuthenticodeSignature -LiteralPath dist/win-unpacked/GoAhead.exe).SignerCertificate.Subject
             if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -ne $applicationSigner) {
               Write-Error "The installer signer differs from the application signer: $($signature.Status) $($signature.SignerCertificate.Subject)."
             }
@@ -665,8 +666,8 @@ jobs:
         with:
           path: dist/win-unpacked
           format: spdx-json
-          output-file: dist/OpenBot-${{ env.RELEASE_VERSION }}-windows.spdx.json
-          artifact-name: OpenBot-${{ env.RELEASE_VERSION }}-Windows-SBOM
+          output-file: dist/GoAhead-${{ env.RELEASE_VERSION }}-windows.spdx.json
+          artifact-name: GoAhead-${{ env.RELEASE_VERSION }}-Windows-SBOM
           upload-artifact: false
           upload-release-assets: false
 
@@ -807,8 +808,8 @@ jobs:
         with:
           path: dist/${{ matrix.suffix }}-unpacked
           format: spdx-json
-          output-file: dist/OpenBot-${{ env.RELEASE_VERSION }}-${{ matrix.suffix }}.spdx.json
-          artifact-name: OpenBot-${{ env.RELEASE_VERSION }}-${{ matrix.suffix }}-SBOM
+          output-file: dist/GoAhead-${{ env.RELEASE_VERSION }}-${{ matrix.suffix }}.spdx.json
+          artifact-name: GoAhead-${{ env.RELEASE_VERSION }}-${{ matrix.suffix }}-SBOM
           upload-artifact: false
           upload-release-assets: false
 
@@ -1012,7 +1013,7 @@ jobs:
               --generate-notes \
               --latest \
               --repo "$GITHUB_REPOSITORY" \
-              --title "OpenBot $RELEASE_TAG"
+              --title "GoAhead $RELEASE_TAG"
           fi
 
   # Pushes the images that the `docker` job checked, after the GitHub Release exists, so `latest` on

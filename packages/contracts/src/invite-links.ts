@@ -1,8 +1,9 @@
+import { PRODUCT_IDENTITY, PRODUCT_LINK_PREFIX, PRODUCT_LINK_PROTOCOL } from "./product-identity";
 import { isOpenBotTeamApiHostname } from "./validation";
 
-export const OPENBOT_INVITE_ORIGIN = "https://openbot.run";
+export const OPENBOT_INVITE_ORIGIN = PRODUCT_IDENTITY.siteOrigin;
 export const OPENBOT_INVITE_PATH = "/join";
-export const OPENBOT_CONTROL_PLANE_ORIGIN = "https://api.openbot.run";
+export const OPENBOT_CONTROL_PLANE_ORIGIN = PRODUCT_IDENTITY.controlPlaneOrigin;
 
 /**
  * The finite deadline a permanent invitation carries. Invitation expiry travels the
@@ -88,7 +89,7 @@ export function createInviteUrl(payload: InviteLinkPayload, options: InviteLinkO
 
 export function createOpenBotInviteUrl(payload: InviteLinkPayload, options: InviteLinkOptions = {}): string {
   validatePayload(payload, options);
-  const url = new URL("openbot://join");
+  const url = new URL(`${PRODUCT_LINK_PREFIX}join`);
   writePayload(url, payload);
   return url.toString();
 }
@@ -147,7 +148,7 @@ export function parseInviteUrl(value: string, options: InviteLinkOptions = {}): 
   const canonical =
     url.protocol === "https:" && url.origin === OPENBOT_INVITE_ORIGIN && url.pathname === OPENBOT_INVITE_PATH;
   const customScheme =
-    url.protocol === "openbot:" && url.hostname === "join" && (url.pathname === "" || url.pathname === "/");
+    url.protocol === PRODUCT_LINK_PROTOCOL && url.hostname === "join" && (url.pathname === "" || url.pathname === "/");
   if (
     (!canonical && !customScheme) ||
     url.username !== "" ||

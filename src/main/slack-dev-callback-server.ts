@@ -10,6 +10,7 @@
 
 import { createServer, type Server } from "node:http";
 import type { Socket } from "node:net";
+import { PRODUCT_LINK_PREFIX } from "@openbot/contracts/product-identity";
 import { sourceText } from "@openbot/i18n/source";
 import { parseDeepLink } from "./deep-link-router";
 
@@ -54,7 +55,7 @@ async function answer(
   receive: (nonce: string, grant: string) => Promise<boolean>,
 ): Promise<boolean> {
   if (method !== "GET" || !url?.startsWith(SLACK_DEV_CALLBACK_PATH)) return false;
-  const link = parseDeepLink(`openbot://${url.replace(/^\/+/u, "")}`);
+  const link = parseDeepLink(`${PRODUCT_LINK_PREFIX}${url.replace(/^\/+/u, "")}`);
   if (link?.kind !== "slack-workspace") return false;
   return receive(link.nonce, link.grant).catch(() => false);
 }

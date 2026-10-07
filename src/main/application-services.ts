@@ -1,4 +1,5 @@
 import { isManagedRuntimeProvider } from "@openbot/contracts/agent-providers";
+import { PRODUCT_IDENTITY, PRODUCT_LINK_PREFIX } from "@openbot/contracts/product-identity";
 import { AgentDatabaseSupervisor } from "../backend/agent-data/agent-database-supervisor";
 import { AgentTables } from "../backend/agent-data/agent-tables";
 import { type AgentAdminSettingsService, createAgentAdminSettings } from "./agent-admin-settings";
@@ -225,7 +226,8 @@ const ONEPASSWORD_CONNECTOR_FILE = "openbot-onepassword-connector-v1.json";
  * the Electron binary - which is also the name macOS shows in the Privacy & Security panes, and the
  * reason a dev grant does not carry over to a packaged build.
  */
-const PACKAGED_BUNDLE_IDENTIFIER = "app.openbot.desktop";
+// The packaged app's bundle id, which the Computer Use driver checks permissions and windows against.
+const PACKAGED_BUNDLE_IDENTIFIER = PRODUCT_IDENTITY.appId;
 const DEVELOPMENT_BUNDLE_IDENTIFIER = "com.github.Electron";
 
 const TEARDOWN_ORDER = {
@@ -434,7 +436,7 @@ export async function createApplicationServices({
   teardown.push(TEARDOWN_ORDER.dynamicIsland, "the Dynamic Island", () => dynamicIsland.destroy());
   const centralAuthApiUrl = readCentralAuthApiUrl(
     process.env.OPENBOT_AUTH_API_URL,
-    app.isPackaged ? "https://api.openbot.run" : "http://127.0.0.1:3100",
+    app.isPackaged ? PRODUCT_IDENTITY.controlPlaneOrigin : "http://127.0.0.1:3100",
   );
   const centralAuth = new CentralAuthManager({
     apiUrl: centralAuthApiUrl,
@@ -707,7 +709,7 @@ export async function createApplicationServices({
     },
   }).catch((error: unknown) => {
     logger.warn(
-      "OpenBot could not listen for MCP sign-ins on this machine, so the openbot:// link is used instead. Servers that refuse it cannot be signed in to:",
+      `${PRODUCT_IDENTITY.name} could not listen for MCP sign-ins on this machine, so the ${PRODUCT_LINK_PREFIX} link is used instead. Servers that refuse it cannot be signed in to:`,
       toLogValue(error),
     );
     return null;
@@ -1354,7 +1356,7 @@ export async function createApplicationServices({
     catalogPluginServers = servers;
   });
   const analytics = new HostAnalytics({
-    enabled: app.isPackaged && appVariant === "production",
+    enabled: PRODUCT_IDENTITY.analytics && app.isPackaged && appVariant === "production",
     trackingEnabled: analyticsPreference.enabled,
     appVersion: app.getVersion(),
     platform: analyticsPlatform,
@@ -1551,7 +1553,9 @@ export async function createApplicationServices({
     logDirectory: join(app.getPath("userData"), "logs", "update"),
     // Squirrel.Mac only. The path is meaningless under a Linux or Windows home directory.
     shipItDirectory:
-      process.platform === "darwin" ? join(homedir(), "Library", "Caches", "app.openbot.desktop.ShipIt") : undefined,
+      process.platform === "darwin"
+        ? join(homedir(), "Library", "Caches", `${PRODUCT_IDENTITY.appId}.ShipIt`)
+        : undefined,
   });
   teardown.push(TEARDOWN_ORDER.updater, "the update service", () => updater.stop());
   const agentInitialization = new AgentInitializationGate(async () => {

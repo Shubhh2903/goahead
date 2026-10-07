@@ -1,3 +1,4 @@
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { createAccountAnalytics } from "./account-analytics";
 import { BillingService } from "./billing-service";
 import {
@@ -28,8 +29,9 @@ export function createHostedBilling(
     schedule: (work: Promise<void>) => void;
   },
 ): { billing: BillingService | null; hosting: HostedServerService } {
+  // Without a client id nothing is sent, and `PRODUCT_IDENTITY.analytics` is off in this build.
   const analytics = createAccountAnalytics({
-    clientId: bindings.OPENPANEL_CLIENT_ID,
+    clientId: PRODUCT_IDENTITY.analytics ? bindings.OPENPANEL_CLIENT_ID : undefined,
     clientSecret: bindings.OPENPANEL_CLIENT_SECRET,
     fetch: (input, init) => fetch(input, init),
     schedule: options.schedule,

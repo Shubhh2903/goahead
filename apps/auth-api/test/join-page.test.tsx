@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { JoinPage } from "../src/components/landing/JoinPage";
 
 const INVITE_URL =
-  "https://openbot.run/join?api=https%3A%2F%2Fstudio-mac-k7m4q2pz-host.openbot.run%2F&server=00000000-0000-4000-8000-000000000000&fingerprint=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&invite=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  "https://goahead.multicodegenius.com/join?api=https%3A%2F%2Fstudio-mac-k7m4q2pz-host.openbot.run%2F&server=00000000-0000-4000-8000-000000000000&fingerprint=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&invite=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(navigator, "platform");
 const touchDescriptor = Object.getOwnPropertyDescriptor(navigator, "maxTouchPoints");
@@ -23,7 +23,7 @@ describe("invitation landing page", () => {
     render(() => <JoinPage />);
 
     const openButton = await screen.findByRole("link", { name: "Open GoAhead" });
-    await waitFor(() => expect(openButton).toHaveAttribute("href", expect.stringMatching(/^openbot:\/\/join\?/u)));
+    await waitFor(() => expect(openButton).toHaveAttribute("href", expect.stringMatching(/^goahead:\/\/join\?/u)));
     expect(screen.getByRole("link", { name: "Download GoAhead" })).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
   });
@@ -48,7 +48,7 @@ describe("invitation landing page", () => {
     await waitFor(() =>
       expect(screen.getByRole("link", { name: "Open GoAhead" })).toHaveAttribute(
         "href",
-        expect.stringMatching(/^openbot:\/\/join\?/u),
+        expect.stringMatching(/^goahead:\/\/join\?/u),
       ),
     );
     expect(screen.queryByRole("link", { name: "Download GoAhead" })).not.toBeInTheDocument();

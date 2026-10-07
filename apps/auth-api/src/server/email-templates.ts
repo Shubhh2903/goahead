@@ -1,3 +1,4 @@
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { OPENBOT_LINKS } from "../lib/landing-links";
 
 // HTML and plain-text bodies for account email. Mail clients render HTML very differently, so the
@@ -32,10 +33,10 @@ export interface TeamInviteEmailInput {
   role: "admin" | "member";
 }
 
-const SITE_URL = "https://openbot.run";
+const SITE_URL = PRODUCT_IDENTITY.siteOrigin;
 const LOGO_URL = `${SITE_URL}/icon-192x192.png`;
 const FOOTER_LINKS = [
-  { label: "openbot.run", href: SITE_URL },
+  { label: new URL(SITE_URL).host, href: SITE_URL },
   { label: "X", href: OPENBOT_LINKS.contact },
   { label: "GitHub", href: OPENBOT_LINKS.repository },
 ] as const;

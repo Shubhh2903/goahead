@@ -1,6 +1,7 @@
 import { join, resolve } from "node:path";
 import { parseInviteUrl, selfHostedApiOrigin } from "@openbot/contracts/invite-links";
 import { type AppLogoColor, type CentralAuthState, IPC_ENDPOINTS } from "@openbot/contracts/ipc";
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { createFormat, resolveLocale, translateFor } from "@openbot/i18n";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { createRemoteDirectoryRefresh } from "@openbot/team-client/remote-directory";
@@ -156,9 +157,11 @@ if (commandLineUserDataDirectory) {
     ),
   );
 }
-app.setName("OpenBot");
+// A packaged build keeps its data in the user data folder of this name: `~/Library/Application
+// Support/GoAhead` on macOS. Development profiles set their own folder above.
+app.setName(PRODUCT_IDENTITY.name);
 app.enableSandbox();
-if (process.platform === "win32") app.setAppUserModelId("app.openbot.desktop");
+if (process.platform === "win32") app.setAppUserModelId(PRODUCT_IDENTITY.appId);
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const appVariant = readAppVariant(process.env.OPENBOT_APP_VARIANT, app.isPackaged);
 if (!app.isPackaged) guardDevelopmentOutput([process.stdout, process.stderr], () => app.quit());
@@ -794,8 +797,10 @@ if (!hasSingleInstanceLock) {
       // instead.
       await installLinuxDesktopEntry({ platform: process.platform, environment: process.env, iconPath: appIconPath });
       if (process.platform === "darwin" || process.platform === "linux") {
-        if (!app.setAsDefaultProtocolClient("openbot")) {
-          logger.warn("Unable to register the openbot:// scheme. Invitation links will not open OpenBot.");
+        if (!app.setAsDefaultProtocolClient(PRODUCT_IDENTITY.linkScheme)) {
+          logger.warn(
+            `Unable to register the ${PRODUCT_IDENTITY.linkScheme}:// scheme. Invitation links will not open ${PRODUCT_IDENTITY.name}.`,
+          );
         }
       }
       if (process.platform === "darwin") app.dock?.setIcon(appIconPath);

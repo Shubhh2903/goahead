@@ -12,15 +12,17 @@ const id = "Ab3_-xYz0123456789abcd";
 
 describe("OpenBot agent template links", () => {
   it("reads back the id it wrote, in either form", () => {
-    expect(createAgentTemplateShareUrl(id)).toBe(`https://openbot.run/agents/${id}`);
-    expect(createOpenBotAgentTemplateUrl(id)).toBe(`openbot://agents/${id}`);
+    expect(createAgentTemplateShareUrl(id)).toBe(`https://goahead.multicodegenius.com/agents/${id}`);
+    expect(createOpenBotAgentTemplateUrl(id)).toBe(`goahead://agents/${id}`);
     expect(parseAgentTemplateUrl(createAgentTemplateShareUrl(id))).toBe(id);
     expect(parseAgentTemplateUrl(createOpenBotAgentTemplateUrl(id))).toBe(id);
   });
 
   it("uses a local Worker in development and openbot.run otherwise", () => {
     expect(agentTemplateShareOrigin("http://127.0.0.1:3100")).toBe("http://127.0.0.1:3100");
-    expect(agentTemplateShareOrigin("https://api.openbot.run")).toBe("https://openbot.run");
+    expect(agentTemplateShareOrigin("https://goahead-api.multicodegenius.com")).toBe(
+      "https://goahead.multicodegenius.com",
+    );
     expect(createAgentTemplateShareUrl(id, "http://localhost:3100")).toBe(`http://localhost:3100/agents/${id}`);
   });
 
@@ -37,17 +39,17 @@ describe("OpenBot agent template links", () => {
 
   it.each([
     ["a foreign origin", `https://evil.example/agents/${id}`],
-    ["a host that only ends in the real one", `https://openbot.run.example.com/agents/${id}`],
+    ["a host that only ends in the real one", `https://goahead.multicodegenius.com.example.com/agents/${id}`],
     ["http", `http://openbot.run/agents/${id}`],
-    ["a second path segment", `https://openbot.run/agents/${id}/install`],
-    ["a query", `https://openbot.run/agents/${id}?install=1`],
-    ["a hash", `openbot://agents/${id}#install`],
-    ["a custom-scheme query", `openbot://agents/${id}?install=1`],
-    ["a short id", "openbot://agents/abc"],
-    ["a path in the id", "openbot://agents/..%2F..%2Fetc"],
+    ["a second path segment", `https://goahead.multicodegenius.com/agents/${id}/install`],
+    ["a query", `https://goahead.multicodegenius.com/agents/${id}?install=1`],
+    ["a hash", `goahead://agents/${id}#install`],
+    ["a custom-scheme query", `goahead://agents/${id}?install=1`],
+    ["a short id", "goahead://agents/abc"],
+    ["a path in the id", "goahead://agents/..%2F..%2Fetc"],
     ["another custom-scheme host", `openbot://agent/${id}`],
     ["a plugin link", createPluginShareUrl("aave")],
-    ["an invitation", "openbot://join"],
+    ["an invitation", "goahead://join"],
   ])("refuses %s", (_reason, value) => {
     expect(() => parseAgentTemplateUrl(value)).toThrow();
   });

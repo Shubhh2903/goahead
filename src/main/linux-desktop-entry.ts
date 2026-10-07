@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 
 const logger = createOpenBotLogger("linux-desktop-entry");
@@ -15,7 +16,7 @@ const ICON_FILE_NAME = "openbot.png";
 const WM_CLASS = "openbot";
 
 /**
- * The desktop entry that makes an `openbot://` link reach the app.
+ * The desktop entry that makes a `goahead://` link reach the app.
  *
  * `Exec` names the AppImage itself, because that is the only path that survives a restart, and `%U`
  * is what passes the invitation URL to it.
@@ -31,7 +32,7 @@ export function linuxDesktopEntry(appImagePath: string, iconPath: string): strin
     "Terminal=false",
     "Categories=Development;",
     `StartupWMClass=${WM_CLASS}`,
-    "MimeType=x-scheme-handler/openbot;",
+    `MimeType=x-scheme-handler/${PRODUCT_IDENTITY.linkScheme};`,
   ].join("\n")}\n`;
 }
 

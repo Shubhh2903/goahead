@@ -20,7 +20,9 @@
  * rule becomes weaker.
  */
 
-export const OPENBOT_PLUGIN_ORIGIN = "https://openbot.run";
+import { PRODUCT_IDENTITY, PRODUCT_LINK_PREFIX, PRODUCT_LINK_PROTOCOL } from "./product-identity";
+
+export const OPENBOT_PLUGIN_ORIGIN = PRODUCT_IDENTITY.siteOrigin;
 export const OPENBOT_PLUGIN_PATH_PREFIX = "/plugins/";
 export const OPENBOT_PLUGIN_HOST = "plugins";
 export const WEB_APP_PLUGIN_PARAM = "plugin";
@@ -59,7 +61,7 @@ export function pluginSlugFromWebAppSearch(search: string): string | null {
 /** The link the page's button opens, which raises the app on this listing. */
 export function createOpenBotPluginUrl(slug: string): string {
   assertPluginSlug(slug);
-  return `openbot://${OPENBOT_PLUGIN_HOST}/${slug}`;
+  return `${PRODUCT_LINK_PREFIX}${OPENBOT_PLUGIN_HOST}/${slug}`;
 }
 
 /**
@@ -94,7 +96,7 @@ export function parsePluginUrl(value: string): string {
     url.protocol === "https:" &&
     url.origin === OPENBOT_PLUGIN_ORIGIN &&
     url.pathname.startsWith(OPENBOT_PLUGIN_PATH_PREFIX);
-  const customScheme = url.protocol === "openbot:" && url.hostname === OPENBOT_PLUGIN_HOST;
+  const customScheme = url.protocol === PRODUCT_LINK_PROTOCOL && url.hostname === OPENBOT_PLUGIN_HOST;
   if (
     (!canonical && !customScheme) ||
     url.username !== "" ||

@@ -13,8 +13,8 @@ describe("site metadata", () => {
   });
 
   it("names openbot.run on a production host and the serving site on any other", () => {
-    expect(siteUrlForPage(new URL("https://openbot.run/guides/a-guide"))).toBe(OPENBOT_SITE_URL);
-    expect(siteUrlForPage(new URL("https://api.openbot.run/guides/a-guide"))).toBe(OPENBOT_SITE_URL);
+    expect(siteUrlForPage(new URL("https://goahead.multicodegenius.com/guides/a-guide"))).toBe(OPENBOT_SITE_URL);
+    expect(siteUrlForPage(new URL("https://goahead-api.multicodegenius.com/guides/a-guide"))).toBe(OPENBOT_SITE_URL);
     expect(siteUrlForPage(new URL("https://pr-451-openbot-landing-preview.example.workers.dev/guides/a-guide"))).toBe(
       "https://pr-451-openbot-landing-preview.example.workers.dev/",
     );

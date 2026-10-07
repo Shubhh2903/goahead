@@ -1,4 +1,8 @@
 import { isMobileConnectDevelopmentHost } from "@openbot/contracts/mobile-connect";
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
+
+/** The production Signal, as a WebSocket origin. */
+const SIGNAL_SOURCE = PRODUCT_IDENTITY.signalOrigin.replace(/^https:/u, "wss:");
 
 export function buildContentSecurityPolicy(
   packaged: boolean,
@@ -20,10 +24,11 @@ export function buildContentSecurityPolicy(
     // The lightbox plays a recording from the attachment scheme, and the preview panel plays one
     // from an object URL of the bytes that the main process sent. Neither matches `default-src`.
     "media-src 'self' blob: openbot-attachment: openbot-remote-attachment:",
-    `connect-src 'self' openbot-attachment: openbot-remote-attachment: https://analytics.openbot.run ws://127.0.0.1:* wss://*.openbot.run${selfHostedSignalSource}${developmentSources}`,
+    // Product analytics are off (`PRODUCT_IDENTITY.analytics`), so no analytics origin is allowed.
+    `connect-src 'self' openbot-attachment: openbot-remote-attachment: ws://127.0.0.1:* ${SIGNAL_SOURCE}${selfHostedSignalSource}${developmentSources}`,
     "object-src 'none'",
     // The remote desktop viewer uses a loopback proxy in packaged apps too.
-    "frame-src 'self' openbot-attachment: openbot-remote-attachment: https://*.openbot.run http://127.0.0.1:* http://localhost:*",
+    `frame-src 'self' openbot-attachment: openbot-remote-attachment: ${PRODUCT_IDENTITY.siteOrigin} http://127.0.0.1:* http://localhost:*`,
     "base-uri 'none'",
   ].join("; ");
 }

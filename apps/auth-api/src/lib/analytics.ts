@@ -1,3 +1,4 @@
+import { PRODUCT_IDENTITY, PRODUCT_LINK_PREFIX } from "@openbot/contracts/product-identity";
 import { isBoolean, isOneOf } from "@openbot/contracts/runtime-values";
 import { OpenPanel, OpenPanelBase, type OpenPanelOptions, type TrackProperties } from "@openpanel/web";
 import { CONTENT_COLLECTIONS } from "./content";
@@ -207,7 +208,7 @@ const EVENT_PROPERTY_ALLOWLIST = {
 const PENDING_EVENT_LIMIT = 4;
 
 export function shouldEnableLandingAnalytics(hostname: string, productionBuild: boolean): boolean {
-  return productionBuild && hostname === "openbot.run";
+  return productionBuild && hostname === new URL(PRODUCT_IDENTITY.siteOrigin).hostname;
 }
 
 export class LandingAnalytics {
@@ -274,7 +275,7 @@ export class LandingAnalytics {
     const handleClick = (event: MouseEvent) => {
       const target = event.target;
       const link = target instanceof Element ? target.closest<HTMLAnchorElement>("a[href]") : null;
-      if (link?.getAttribute("href")?.startsWith("openbot://")) {
+      if (link?.getAttribute("href")?.startsWith(PRODUCT_LINK_PREFIX)) {
         this.#track("join_page_action", { action: "open_app" });
         return;
       }
@@ -544,4 +545,5 @@ function landingPlacement(link: HTMLAnchorElement): LandingPlacement {
   return "other";
 }
 
-export const landingAnalytics = new LandingAnalytics();
+// `PRODUCT_IDENTITY.analytics` is off in this build, so the client is never made: nothing is sent.
+export const landingAnalytics = new LandingAnalytics(undefined, PRODUCT_IDENTITY.analytics && import.meta.env.PROD);

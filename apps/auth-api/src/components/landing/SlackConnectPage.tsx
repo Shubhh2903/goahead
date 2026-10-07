@@ -1,4 +1,5 @@
 import { AppLogo } from "@openbot/brand";
+import { PRODUCT_LINK_PREFIX } from "@openbot/contracts/product-identity";
 import { createSignal, onSettled, Show } from "solid-js";
 import { Button } from "../ui/button";
 
@@ -69,5 +70,5 @@ export function SlackConnectView(props: { openUrl: string; failure: string | nul
 function slackDeepLink(fragment: URLSearchParams): string | null {
   const nonce = fragment.get("nonce");
   const grant = fragment.get("grant");
-  return nonce && grant ? `openbot://slack-workspace?${new URLSearchParams({ nonce, grant })}` : null;
+  return nonce && grant ? `${PRODUCT_LINK_PREFIX}slack-workspace?${new URLSearchParams({ nonce, grant })}` : null;
 }

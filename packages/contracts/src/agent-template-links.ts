@@ -13,7 +13,9 @@
  * installing is still a press of Install there.
  */
 
-export const OPENBOT_AGENT_TEMPLATE_ORIGIN = "https://openbot.run";
+import { PRODUCT_IDENTITY, PRODUCT_LINK_PREFIX, PRODUCT_LINK_PROTOCOL } from "./product-identity";
+
+export const OPENBOT_AGENT_TEMPLATE_ORIGIN = PRODUCT_IDENTITY.siteOrigin;
 export const OPENBOT_AGENT_TEMPLATE_PATH_PREFIX = "/agents/";
 export const OPENBOT_AGENT_TEMPLATE_HOST = "agents";
 export const WEB_APP_AGENT_TEMPLATE_PARAM = "agent";
@@ -74,7 +76,7 @@ export function agentTemplateIdFromWebAppSearch(search: string): string | null {
 
 export function createOpenBotAgentTemplateUrl(id: string): string {
   assertAgentTemplateId(id);
-  return `openbot://${OPENBOT_AGENT_TEMPLATE_HOST}/${id}`;
+  return `${PRODUCT_LINK_PREFIX}${OPENBOT_AGENT_TEMPLATE_HOST}/${id}`;
 }
 
 /** The template id a link names, in either form. Throws for anything else. */
@@ -91,7 +93,7 @@ export function parseAgentTemplateUrl(value: string): string {
     url.protocol === "https:" &&
     url.origin === OPENBOT_AGENT_TEMPLATE_ORIGIN &&
     url.pathname.startsWith(OPENBOT_AGENT_TEMPLATE_PATH_PREFIX);
-  const customScheme = url.protocol === "openbot:" && url.hostname === OPENBOT_AGENT_TEMPLATE_HOST;
+  const customScheme = url.protocol === PRODUCT_LINK_PROTOCOL && url.hostname === OPENBOT_AGENT_TEMPLATE_HOST;
   if (
     (!canonical && !customScheme) ||
     url.username !== "" ||

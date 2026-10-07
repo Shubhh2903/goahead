@@ -148,10 +148,19 @@ const DEFAULT_PHASE_TIMEOUTS: Record<UpdateBusyPhase, number> = {
  * is the thing that says so, through `APPIMAGE`. An unpacked or repackaged Linux build has nothing
  * to write back to, so it reports no updates rather than failing at install time.
  */
+/**
+ * Whether GoAhead has an update feed of its own. The internal GoAhead build has none yet: the feed of
+ * the project it came from would offer that product's releases, which must never install over
+ * GoAhead. Set this to true only when `publish` in electron-builder.yml names GoAhead's own feed.
+ */
+export const INSTALLED_UPDATE_FEED_CONFIGURED = false;
+
 export function supportsInstalledUpdates(
   platform: NodeJS.Platform,
   environment: NodeJS.ProcessEnv = process.env,
+  feedConfigured: boolean = INSTALLED_UPDATE_FEED_CONFIGURED,
 ): boolean {
+  if (!feedConfigured) return false;
   if (platform === "linux") return Boolean(environment.APPIMAGE?.trim());
   return platform === "darwin" || platform === "win32";
 }

@@ -1,0 +1,77 @@
+{
+  "display_information": {
+    "name": "GoAhead",
+    "description": "Your GoAhead agents in Slack. Mention @GoAhead or send it a direct message."
+  },
+  "features": {
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "bot_user": {
+      "display_name": "GoAhead",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "redirect_urls": ["https://goahead-api.multicodegenius.com/v2/slack/callback"],
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "channels:join",
+        "channels:read",
+        "chat:write",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:write",
+        "reactions:write",
+        "users:read"
+      ],
+      "user": [
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:read",
+        "reactions:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://goahead-signal.multicodegenius.com/v1/slack/events",
+      "bot_events": [
+        "app_mention",
+        "channel_created",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "app_uninstalled",
+        "tokens_revoked"
+      ],
+      "user_events": ["message.channels", "message.groups", "message.im", "message.mpim"]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://goahead-signal.multicodegenius.com/v1/slack/events"
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

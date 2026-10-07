@@ -1,3 +1,4 @@
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { createFileRoute } from "@tanstack/solid-router";
 import { isSameOriginReportRequest } from "../../../server/hosted-site-report-request";
 import { readRequestBytes } from "../../../server/json-body";
@@ -16,7 +17,11 @@ export const Route = createFileRoute("/v1/sites/reports")({
       POST: async ({ request }) => {
         try {
           if (!isSameOriginReportRequest(request)) {
-            return apiError(403, "invalid_report_origin", "Open the report form on openbot.run.");
+            return apiError(
+              403,
+              "invalid_report_origin",
+              `Open the report form on ${new URL(PRODUCT_IDENTITY.siteOrigin).host}.`,
+            );
           }
           const sourceIp = requestSourceIp(request);
           await enforceHostedSiteReportRateLimit(sourceIp);

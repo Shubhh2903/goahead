@@ -33,7 +33,7 @@ const localDevelopmentOptions = { allowLocalDevelopmentApiUrl: true };
 describe("OpenBot invite links", () => {
   it("creates and parses the canonical HTTPS invitation", () => {
     const url = createInviteUrl(payload);
-    expect(url).toMatch(/^https:\/\/openbot\.run\/join\?/u);
+    expect(url).toMatch(/^https:\/\/goahead\.multicodegenius\.com\/join\?/u);
     expect(parseInviteUrl(url)).toEqual(payload);
     expect(isCanonicalInviteUrl(url)).toBe(true);
     expect(isCanonicalInviteUrl(createOpenBotInviteUrl(payload))).toBe(false);
@@ -48,20 +48,22 @@ describe("OpenBot invite links", () => {
     const inviteUrl = createInviteUrl(payload);
     const path = createWebAppInvitePath(inviteUrl);
     expect(path.startsWith("/app?")).toBe(true);
-    expect(inviteUrlFromWebAppSearch(new URL(path, "https://openbot.run").search)).toBe(inviteUrl);
-    expect(inviteUrlFromWebAppSearch(`${new URL(path, "https://openbot.run").search}&agent=x`)).toBe(inviteUrl);
+    expect(inviteUrlFromWebAppSearch(new URL(path, "https://goahead.multicodegenius.com").search)).toBe(inviteUrl);
+    expect(inviteUrlFromWebAppSearch(`${new URL(path, "https://goahead.multicodegenius.com").search}&agent=x`)).toBe(
+      inviteUrl,
+    );
     expect(inviteUrlFromWebAppSearch("?agent=x")).toBeNull();
 
-    const foreign = new URL(path, "https://openbot.run");
+    const foreign = new URL(path, "https://goahead.multicodegenius.com");
     foreign.searchParams.set("api", "https://example.com/");
     expect(inviteUrlFromWebAppSearch(foreign.search)).toBeNull();
-    const repeated = new URL(path, "https://openbot.run");
+    const repeated = new URL(path, "https://goahead.multicodegenius.com");
     repeated.searchParams.append("invite", "c".repeat(43));
     expect(inviteUrlFromWebAppSearch(repeated.search)).toBeNull();
   });
 
   it("accepts approved root tunnel URLs only", () => {
-    expect(isValidRemoteApiUrl("https://api.openbot.run/")).toBe(true);
+    expect(isValidRemoteApiUrl("https://goahead-api.multicodegenius.com/")).toBe(true);
     expect(isValidRemoteApiUrl("https://team-host.trycloudflare.com/")).toBe(true);
     expect(isValidRemoteApiUrl(payload.apiUrl)).toBe(true);
     expect(isValidRemoteApiUrl("http://team-host.trycloudflare.com/")).toBe(false);
@@ -78,12 +80,12 @@ describe("OpenBot invite links", () => {
     expect(parseInviteUrl(url, options)).toEqual(selfHosted);
     expect(() => parseInviteUrl(url)).toThrow("invalid");
     expect(() => parseInviteUrl(url, { selfHostedApiOrigin: "https://other.example.com" })).toThrow("invalid");
-    expect(createInviteUrl(payload, options)).toMatch(/^https:\/\/openbot\.run\/join\?/u);
+    expect(createInviteUrl(payload, options)).toMatch(/^https:\/\/goahead\.multicodegenius\.com\/join\?/u);
   });
 
   it.each([
-    "https://api.openbot.run",
-    "https://openbot.run",
+    "https://goahead-api.multicodegenius.com",
+    "https://goahead.multicodegenius.com",
     "https://team-host.trycloudflare.com",
     "http://api.example.com",
     "not a url",
@@ -112,9 +114,9 @@ describe("OpenBot invite links", () => {
 
   it.each([
     "https://evil.example/join",
-    "https://openbot.run/other",
-    "https://openbot.run/join/",
-    "https://openbot.run:444/join",
+    "https://goahead.multicodegenius.com/other",
+    "https://goahead.multicodegenius.com/join/",
+    "https://goahead.multicodegenius.com:444/join",
     "https://user@openbot.run/join",
     missingTokenUrl.toString(),
     `${createInviteUrl(payload)}#fragment`,

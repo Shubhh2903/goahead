@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [solidPlugin()],
   test: {
     environment: "jsdom",
-    environmentOptions: { jsdom: { url: "https://openbot.run/" } },
+    environmentOptions: { jsdom: { url: "https://goahead.multicodegenius.com/" } },
     setupFiles: ["@testing-library/jest-dom/vitest", "./test/dialog-methods.ts"],
     include: [
       "test/analytics.test.ts",

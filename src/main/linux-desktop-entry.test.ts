@@ -25,7 +25,7 @@ describe("linux desktop entry", () => {
     expect(path).toBe(join(home, ".local/share/applications/openbot.desktop"));
     const entry = await readFile(String(path), "utf8");
     expect(entry).toContain('Exec="/home/jane/Applications/OpenBot-0.8.0-x86_64.AppImage" %U');
-    expect(entry).toContain("MimeType=x-scheme-handler/openbot;");
+    expect(entry).toContain("MimeType=x-scheme-handler/goahead;");
     expect((await stat(String(path))).mode & 0o777).toBe(0o644);
   });
 

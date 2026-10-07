@@ -2,6 +2,7 @@
 // comes from the release configuration, README.md or docs/TROUBLESHOOTING.md. Keep it to what the
 // released app does, because these pages are what a search engine shows for "GoAhead for Linux".
 
+import { PRODUCT_LINK_PREFIX } from "@openbot/contracts/product-identity";
 import type { DownloadPlatform } from "./download-platforms";
 import { LANDING_FAQ, type LandingQuestion } from "./landing-faq";
 import { OPENBOT_ALTERNATE_DOWNLOAD_LINKS, OPENBOT_DOWNLOAD_LINKS, OPENBOT_DOWNLOAD_PAGE_LINKS } from "./landing-links";
@@ -223,7 +224,7 @@ export const DOWNLOAD_PAGES: Record<DownloadPlatform, DownloadPageContent> = {
       },
       { text: "Make the AppImage executable.", code: "chmod +x OpenBot-*.AppImage" },
       {
-        text: "Run it. On the first start, GoAhead adds itself to your app launcher, so that openbot:// links open it.",
+        text: `Run it. On the first start, GoAhead adds itself to your app launcher, so that ${PRODUCT_LINK_PREFIX} links open it.`,
         code: "./OpenBot-*.AppImage",
       },
       CONNECT_STEP,

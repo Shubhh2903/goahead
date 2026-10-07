@@ -11,8 +11,8 @@ const invitePayload = {
 
 describe("OpenBot plugin links", () => {
   it("builds both forms from a slug", () => {
-    expect(createPluginShareUrl("aave")).toBe("https://openbot.run/plugins/aave");
-    expect(createOpenBotPluginUrl("aave")).toBe("openbot://plugins/aave");
+    expect(createPluginShareUrl("aave")).toBe("https://goahead.multicodegenius.com/plugins/aave");
+    expect(createOpenBotPluginUrl("aave")).toBe("goahead://plugins/aave");
   });
 
   it("reads back the slug it wrote, in either form", () => {
@@ -27,23 +27,23 @@ describe("OpenBot plugin links", () => {
 
   it.each([
     ["a foreign origin", "https://evil.example/plugins/aave"],
-    ["a host that only ends in the real one", "https://openbot.run.example.com/plugins/aave"],
+    ["a host that only ends in the real one", "https://goahead.multicodegenius.com.example.com/plugins/aave"],
     ["the lookalike host the app once used", "https://openbot.app/plugins/aave"],
     ["http", "http://openbot.run/plugins/aave"],
-    ["another path", "https://openbot.run/other/aave"],
-    ["no slug", "https://openbot.run/plugins/"],
-    ["a second path segment", "https://openbot.run/plugins/aave/install"],
-    ["a trailing slash", "https://openbot.run/plugins/aave/"],
-    ["a query", "https://openbot.run/plugins/aave?install=1"],
-    ["a hash", "https://openbot.run/plugins/aave#install"],
-    ["a port", "https://openbot.run:444/plugins/aave"],
+    ["another path", "https://goahead.multicodegenius.com/other/aave"],
+    ["no slug", "https://goahead.multicodegenius.com/plugins/"],
+    ["a second path segment", "https://goahead.multicodegenius.com/plugins/aave/install"],
+    ["a trailing slash", "https://goahead.multicodegenius.com/plugins/aave/"],
+    ["a query", "https://goahead.multicodegenius.com/plugins/aave?install=1"],
+    ["a hash", "https://goahead.multicodegenius.com/plugins/aave#install"],
+    ["a port", "https://goahead.multicodegenius.com:444/plugins/aave"],
     ["a user name", "https://user@openbot.run/plugins/aave"],
-    ["an upper-case slug", "https://openbot.run/plugins/Aave"],
-    ["a slug with a dot", "https://openbot.run/plugins/catalog.json"],
-    ["an over-long slug", `https://openbot.run/plugins/${"a".repeat(64)}`],
+    ["an upper-case slug", "https://goahead.multicodegenius.com/plugins/Aave"],
+    ["a slug with a dot", "https://goahead.multicodegenius.com/plugins/catalog.json"],
+    ["an over-long slug", `https://goahead.multicodegenius.com/plugins/${"a".repeat(64)}`],
     ["another custom-scheme host", "openbot://plugin/aave"],
-    ["a custom-scheme link with a query", "openbot://plugins/aave?install=1"],
-    ["a custom-scheme link with no slug", "openbot://plugins"],
+    ["a custom-scheme link with a query", "goahead://plugins/aave?install=1"],
+    ["a custom-scheme link with no slug", "goahead://plugins"],
     ["nonsense", "not a url"],
   ])("refuses %s", (_reason, value) => {
     expect(() => parsePluginUrl(value)).toThrow();
@@ -54,6 +54,6 @@ describe("OpenBot plugin links", () => {
      its own. `join` is the invite's host and `/join` is its path. */
   it("refuses an invitation link", () => {
     expect(isPluginUrl(createInviteUrl(invitePayload))).toBe(false);
-    expect(isPluginUrl("openbot://join")).toBe(false);
+    expect(isPluginUrl("goahead://join")).toBe(false);
   });
 });

@@ -10,6 +10,7 @@ import {
   selfHostedApiOrigin,
 } from "@openbot/contracts/invite-links";
 import type { MobileConnectHostBinding } from "@openbot/contracts/mobile-connect";
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { decodeRemoteSession, decodeRemoteSessionTicket } from "@openbot/contracts/remote-control-plane";
 import { isBoolean, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
@@ -315,8 +316,8 @@ export class RemoteTeamDirectoryClient {
     // These production origins serve the same account Worker. Requests still use this client's origin.
     const publicWebsiteInvite =
       this.#authentication.kind === "browser" &&
-      origin === "https://openbot.run" &&
-      inviteOrigin === "https://api.openbot.run";
+      origin === PRODUCT_IDENTITY.siteOrigin &&
+      inviteOrigin === PRODUCT_IDENTITY.controlPlaneOrigin;
     if (inviteOrigin !== origin && !publicWebsiteInvite) {
       throw new Error(sourceText("error.remote.inviteOtherService"));
     }

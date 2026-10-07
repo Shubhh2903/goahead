@@ -22,6 +22,7 @@
 import { parseAgentTemplateUrl } from "@openbot/contracts/agent-template-links";
 import { type InviteLinkOptions, parseInviteUrl } from "@openbot/contracts/invite-links";
 import { parsePluginUrl } from "@openbot/contracts/plugin-links";
+import { PRODUCT_LINK_PREFIX, PRODUCT_LINK_PROTOCOL } from "@openbot/contracts/product-identity";
 
 export type DeepLink =
   | { kind: "invite"; url: string }
@@ -38,7 +39,7 @@ export type DeepLink =
  * after they accept it at registration. This stays as the fallback, and for the servers that take
  * it, it is the shorter path: the operating system hands the link straight to the running app.
  */
-export const MCP_OAUTH_REDIRECT_URL = "openbot://mcp-auth";
+export const MCP_OAUTH_REDIRECT_URL = `${PRODUCT_LINK_PREFIX}mcp-auth`;
 
 const MCP_OAUTH_HOST = "mcp-auth";
 const SLACK_WORKSPACE_HOST = "slack-workspace";
@@ -78,7 +79,7 @@ function parseSlackUrl(value: string): DeepLink | null {
   } catch {
     return null;
   }
-  if (url.protocol !== "openbot:") return null;
+  if (url.protocol !== PRODUCT_LINK_PROTOCOL) return null;
   if (url.hostname === SLACK_WORKSPACE_HOST) {
     const nonce = url.searchParams.get("nonce");
     const grant = url.searchParams.get("grant");
@@ -103,7 +104,7 @@ function parseMcpAuthUrl(value: string): DeepLink | null {
   } catch {
     return null;
   }
-  if (url.protocol !== "openbot:" || url.hostname !== MCP_OAUTH_HOST) return null;
+  if (url.protocol !== PRODUCT_LINK_PROTOCOL || url.hostname !== MCP_OAUTH_HOST) return null;
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   if (!code || !state) return null;
