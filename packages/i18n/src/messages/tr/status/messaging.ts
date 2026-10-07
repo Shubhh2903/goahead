@@ -34,4 +34,10 @@ export const messages = {
   // The page a development Slack install ends on.
   "status.messaging.signInReceived": "GoAhead Slack kurulumunu aldı. Bu sekmeyi kapatabilirsiniz.",
   "status.messaging.signInUnknown": "GoAhead bu Slack kurulumunu başlatmadı. GoAhead içinde tekrar başlatın.",
+  "status.messaging.sendDraftTitle": "GoAhead bir mesaj göndermek için onay istiyor.",
+  "status.messaging.sendDraftTo": "Kime: {to}",
+  "status.messaging.sendAsUser": "Gönderen: {user}",
+  "status.messaging.sendAsBot": "GoAhead uygulaması tarafından gönderilir, sizin adınıza değil.",
+  "status.messaging.sent": "Gönderildi. {user} onayladı.",
+  "status.messaging.sendFailed": "Gönderilmedi: {reason}",
 } as const satisfies PartialTranslation<typeof source>;

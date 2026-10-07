@@ -57,6 +57,8 @@ export interface MessagingOrigin {
   authorId: string;
   authorName: string;
   platformMessageId: string;
+  /** True when the message answers a message OpenBot sent for the user, from somebody else. */
+  isReply?: boolean;
 }
 
 interface StoredMessage {

@@ -32,4 +32,10 @@ export const messages = {
   "status.messaging.signInReceived": "O GoAhead recebeu a instalação do Slack. Você pode fechar esta aba.",
   "status.messaging.signInUnknown":
     "O GoAhead não iniciou esta instalação do Slack. Inicie a instalação novamente no GoAhead.",
+  "status.messaging.sendDraftTitle": "O GoAhead pede aprovação para enviar uma mensagem.",
+  "status.messaging.sendDraftTo": "Para: {to}",
+  "status.messaging.sendAsUser": "Como: {user}",
+  "status.messaging.sendAsBot": "Enviada pelo aplicativo GoAhead, não como você.",
+  "status.messaging.sent": "Enviada. Aprovada por {user}.",
+  "status.messaging.sendFailed": "Não enviada: {reason}",
 } as const satisfies PartialTranslation<typeof source>;

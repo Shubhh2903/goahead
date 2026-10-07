@@ -8,6 +8,7 @@ import {
   type ContextEntry,
   type InboundFile,
   type MessageBody,
+  type MessageSender,
   type MessageTarget,
   type MessagingAdapter,
   MessagingConnectionError,
@@ -24,6 +25,8 @@ import { SlackApiError, SlackWebApi } from "./slack-web-api";
 /** Slack's own limit for one uploaded file is 1 GB; the host holds its uploads to this. */
 const UPLOAD_BYTES = 100 * 1024 * 1024;
 const HISTORY_LIMIT = 100;
+/** What `conversations.info` answers with the bot token for a conversation that the bot is not in. */
+const NOT_OWN_CONVERSATION = new Set(["channel_not_found", "not_in_channel"]);
 const CHANNEL_PAGE_LIMIT = 200;
 
 const REACTIONS: Record<StatusReaction, string> = {
@@ -49,6 +52,7 @@ class SlackAdapter implements MessagingAdapter {
   readonly #userApi: SlackWebApi | null;
   readonly #names = new Map<string, Promise<string>>();
   readonly #places = new Map<string, Promise<string>>();
+  readonly #own = new Map<string, Promise<boolean>>();
   #botUserId = "";
 
   constructor(
@@ -223,6 +227,62 @@ class SlackAdapter implements MessagingAdapter {
 
   download(file: InboundFile, destination: string, maxBytes: number): Promise<void> {
     return this.#api.download(file.url, destination, maxBytes);
+  }
+
+  async openDirectMessage(userId: string, as: MessageSender): Promise<string> {
+    const response = await this.#apiFor(as).call("conversations.open", { users: userId });
+    const channel = isDynamicRecord(response.channel) ? response.channel.id : undefined;
+    if (!isString(channel)) throw new SlackApiError("conversations.open", "no_channel");
+    return channel;
+  }
+
+  async postAs(target: MessageTarget, markdown: string, as: MessageSender): Promise<string> {
+    const [first = "", ...rest] = slackChunks(slackMrkdwn(markdown));
+    const api = this.#apiFor(as);
+    const post = async (text: string) => {
+      const response = await api.call("chat.postMessage", {
+        channel: target.platformChannelId,
+        thread_ts: target.replyThreadId ?? undefined,
+        text,
+        unfurl_links: false,
+        unfurl_media: false,
+      });
+      if (!isString(response.ts)) throw new SlackApiError("chat.postMessage", "no_ts");
+      return response.ts;
+    };
+    const ts = await post(first);
+    for (const chunk of rest) await post(chunk);
+    return ts;
+  }
+
+  async permalink(platformChannelId: string, messageId: string): Promise<string | null> {
+    try {
+      const response = await this.#api.call("chat.getPermalink", { channel: platformChannelId, message_ts: messageId });
+      return isString(response.permalink) ? response.permalink : null;
+    } catch {
+      return null;
+    }
+  }
+
+  isOwnConversation(platformChannelId: string): Promise<boolean> {
+    let own = this.#own.get(platformChannelId);
+    if (!own) {
+      // The bot token sees only the conversations the bot is in. Any other failure keeps the
+      // conversation the bot's, as before user events existed.
+      own = this.#api
+        .call("conversations.info", { channel: platformChannelId })
+        .then(() => true)
+        .catch((error) => !(error instanceof SlackApiError && NOT_OWN_CONVERSATION.has(error.code)));
+      this.#own.set(platformChannelId, own);
+    }
+    return own;
+  }
+
+  /** The user token is only there when the install gave one; a send as the user without it fails. */
+  #apiFor(as: MessageSender): SlackWebApi {
+    if (as === "bot") return this.#api;
+    if (!this.#userApi) throw new SlackApiError("chat.postMessage", "no_user_token");
+    return this.#userApi;
   }
 
   authorName(userId: string): Promise<string> {

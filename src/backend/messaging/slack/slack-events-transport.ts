@@ -75,7 +75,8 @@ export class SlackEventsTransport implements MessagingTransport {
     if (isString(body.event_id) && this.#remember(body.event_id)) return OK;
     const event = body.event;
     if (isDynamicRecord(event) && (event.type === "app_uninstalled" || event.type === "tokens_revoked")) {
-      sink.state("invalid_token");
+      if (sink.revoked) sink.revoked();
+      else sink.state("invalid_token");
       return OK;
     }
     if (isDynamicRecord(event) && event.type === "channel_created") {

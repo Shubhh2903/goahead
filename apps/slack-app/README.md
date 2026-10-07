@@ -8,13 +8,11 @@ asks the right agent and answers. No code runs here: each directory holds only t
 | Directory | App | App ID | Home team | Redirect URL |
 | --- | --- | --- | --- | --- |
 | `production` | `GoAhead` | `A0C5H5C95NH` | `openbotdev` (`T0C5B1XG542`) | `https://api.openbot.run/v2/slack/callback` |
-| `development` | `GoAhead (dev)` | `A0C5G5XGS83` | `openbotdev` (`T0C5B1XG542`) | Test Worker (`bun run deploy:test`) |
+| `development` | `GoAhead (dev)` | `A0C5G5XGS83` | `openbotdev` (`T0C5B1XG542`) | `https://goahead-dev-api.multicodegenius.com/v2/slack/callback` |
 
 `.slack/apps.json` links each directory to its app. Run the Slack CLI from inside a directory.
 
-Both apps send events and button presses to `https://signal.openbot.run/v1/slack/events`. For local
-work, `bun run dev:slack` prints a tunnel address: set it as the development app's request URL while
-you test.
+The production app sends events and button presses to `https://signal.openbot.run/v1/slack/events`. The development app sends them to `https://goahead-dev.multicodegenius.com/v1/slack/events`, the named Cloudflare tunnel that `bun run dev:slack` runs (see `docs/messaging.md`).
 
 ## Apply a manifest
 

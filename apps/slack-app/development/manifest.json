@@ -15,7 +15,7 @@
     }
   },
   "oauth_config": {
-    "redirect_urls": ["https://openbot-auth-api-test.internal9671.workers.dev/v2/slack/callback"],
+    "redirect_urls": ["https://goahead-dev-api.multicodegenius.com/v2/slack/callback"],
     "scopes": {
       "bot": [
         "app_mentions:read",
@@ -42,6 +42,7 @@
         "groups:read",
         "im:history",
         "im:read",
+        "im:write",
         "mpim:history",
         "mpim:read",
         "reactions:write",
@@ -51,7 +52,7 @@
   },
   "settings": {
     "event_subscriptions": {
-      "request_url": "https://signal.openbot.run/v1/slack/events",
+      "request_url": "https://goahead-dev.multicodegenius.com/v1/slack/events",
       "bot_events": [
         "app_mention",
         "channel_created",
@@ -61,11 +62,12 @@
         "message.mpim",
         "app_uninstalled",
         "tokens_revoked"
-      ]
+      ],
+      "user_events": ["message.channels", "message.groups", "message.im", "message.mpim"]
     },
     "interactivity": {
       "is_enabled": true,
-      "request_url": "https://signal.openbot.run/v1/slack/events"
+      "request_url": "https://goahead-dev.multicodegenius.com/v1/slack/events"
     },
     "org_deploy_enabled": false,
     "socket_mode_enabled": false,

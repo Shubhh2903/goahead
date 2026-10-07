@@ -876,6 +876,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       sidebarLayout: this.#sidebarLayout,
       localSkillTools: this.#localSkillTools,
       approvalAutomation: options.approvalAutomation,
+      messaging: this.messaging,
       hooks: {
         listAgents: () => this.listAgents(),
         listModels: () => this.listModels(),

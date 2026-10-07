@@ -63,6 +63,30 @@ export interface MessagingPromptContext {
   skippedFiles: string[];
 }
 
+/** An agent's request to send a new message, from the execution thread of an external conversation. */
+export interface MessagingSendRequest {
+  agentId: string;
+  /** The execution thread the agent runs in. It names the conversation, and so the workspace. */
+  threadId: string;
+  /** A person or channel of the platform, as the agent saw it, such as `<@U0123>` or `C0123`. */
+  to: string;
+  text: string;
+  /** A thread of the target channel to reply in, when the agent names one. */
+  threadKey: string | null;
+}
+
+/** What the agent learns: the draft waits for the approval of one person. */
+export interface MessagingSendReceipt {
+  /** `sent` when the connected person asked for it themselves; otherwise it waits for their approval. */
+  status: "sent" | "waiting_for_approval";
+  draftId: string;
+  sender: "user" | "bot";
+  /** The platform user id of the connected person, the only one who can approve. */
+  approverId: string;
+  /** A link to the sent message, when it was sent and the platform gives one. */
+  link: string | null;
+}
+
 export interface MessagingThreadsHooks {
   schedule(agentId: string): void;
   busy(agentId: string): boolean;
@@ -95,6 +119,7 @@ export class MessagingThreads {
   /** The external message each running turn answers, by turn id. */
   readonly #turnOrigins = new Map<string, { origin: MessagingOrigin | null; followUp: boolean }>();
   #contextSource: ((link: MessagingLink, origin: MessagingOrigin) => Promise<MessagingPromptContext>) | null = null;
+  #sender: ((request: MessagingSendRequest) => Promise<MessagingSendReceipt>) | null = null;
 
   constructor(database: OpenBotDatabase, mailbox: MailboxStore, hooks: MessagingThreadsHooks) {
     this.store = new MessagingStore(database);
@@ -112,6 +137,17 @@ export class MessagingThreads {
     source: ((link: MessagingLink, origin: MessagingOrigin) => Promise<MessagingPromptContext>) | null,
   ): void {
     this.#contextSource = source;
+  }
+
+  /** The platform side takes the send requests of agents. Without it, no agent can send. */
+  setMessageSender(sender: ((request: MessagingSendRequest) => Promise<MessagingSendReceipt>) | null): void {
+    this.#sender = sender;
+  }
+
+  /** An agent asks to send a new message. The platform side makes a draft that a person approves. */
+  requestSend(request: MessagingSendRequest): Promise<MessagingSendReceipt> {
+    if (!this.#sender) throw new Error(sourceText("error.messaging.sendUnavailable"));
+    return this.#sender(request);
   }
 
   async receive(input: MessagingReceiveInput): Promise<MessagingReceiveResult> {
@@ -196,6 +232,7 @@ export class MessagingThreads {
         place: prompt.place,
         authorName: origin.authorName,
         authorId: origin.authorId,
+        isReply: origin.isReply === true,
         text: context.delivery.text,
         context: prompt.messages,
         skippedFiles: prompt.skippedFiles,

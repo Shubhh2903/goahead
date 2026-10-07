@@ -28,6 +28,8 @@ import { OPENBOT_BROWSER_NAMESPACE } from "../browser-tools";
 import type { ChannelService } from "../channel-service";
 import type { MailboxStore } from "../mailbox-store";
 import { agentMcpServers } from "../mcp-provider-shapes";
+import { SLACK_SEND_MESSAGE_TOOL, slackSendMessageSchema } from "../messaging/messaging-send-tool";
+import type { MessagingThreads } from "../messaging/messaging-threads";
 import { type AppServerRequest, type DynamicToolCallParams, isRecord } from "../protocol";
 import { AgentInterruptTool } from "./agent-interrupt-tool";
 import type { AgentMemories } from "./agent-memories";
@@ -109,6 +111,8 @@ export interface OpenBotToolRouterOptions {
   sidebarLayout: AgentSidebar | null;
   localSkillTools?: () => LocalSkillTools;
   approvalAutomation?: ApprovalAutomationPolicy;
+  /** The external conversations, which take an agent's request to send a message. */
+  messaging: MessagingThreads;
   hooks: OpenBotToolRouterHooks;
 }
 
@@ -137,6 +141,7 @@ export class OpenBotToolRouter {
   readonly #sidebarLayout: AgentSidebar | null;
   readonly #localSkillTools?: () => LocalSkillTools;
   readonly #approvalAutomation: ApprovalAutomationPolicy;
+  readonly #messaging: MessagingThreads;
   readonly #hooks: OpenBotToolRouterHooks;
   readonly #interruptTool: AgentInterruptTool;
 
@@ -158,6 +163,7 @@ export class OpenBotToolRouter {
     this.#sidebarLayout = options.sidebarLayout;
     this.#localSkillTools = options.localSkillTools;
     this.#approvalAutomation = options.approvalAutomation ?? NO_APPROVAL_AUTOMATION;
+    this.#messaging = options.messaging;
     this.#hooks = options.hooks;
     this.#interruptTool = new AgentInterruptTool({
       store: options.store,
@@ -448,6 +454,38 @@ export class OpenBotToolRouter {
     }
 
     if (isHostedSiteMutationTool(params.tool)) throw new Error("Hosted site changes require user approval.");
+
+    if (params.tool === SLACK_SEND_MESSAGE_TOOL.name) {
+      const args = slackSendMessageSchema.parse(params.arguments ?? {});
+      try {
+        const receipt = await this.#messaging.requestSend({
+          agentId: senderAgentId,
+          threadId: this.#conversation.publicThreadId(senderAgentId, params.threadId),
+          to: args.to,
+          text: args.text,
+          threadKey: args.threadTs ?? null,
+        });
+        const sentAs = receipt.sender === "user" ? "the GoAhead user" : "GoAhead";
+        return openBotToolResult(
+          receipt.status === "sent"
+            ? {
+                status: "sent",
+                sentAs,
+                link: receipt.link,
+                note: "The message was sent. Confirm it in one short line.",
+              }
+            : {
+                status: "waiting_for_approval",
+                draftId: receipt.draftId,
+                sentAs,
+                approver: receipt.approverId,
+                note: "Nothing was sent. The GoAhead user must press Approve on the draft in Slack. Tell the person that the message waits for approval.",
+              },
+        );
+      } catch (error) {
+        return openBotToolFailure(error instanceof Error ? error.message : "The message could not be drafted.");
+      }
+    }
 
     if (params.tool === "attach_files_to_response") {
       const args = params.arguments;

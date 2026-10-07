@@ -37,6 +37,8 @@ export interface InboundMessage {
   authorId: string;
   text: string;
   files: InboundFile[];
+  /** Set for a reply to a message OpenBot sent as the user, already turned into a message of its conversation. */
+  observed?: boolean;
 }
 
 export type InboundAction =
@@ -64,6 +66,9 @@ export interface MessageBody {
 }
 
 export type StatusReaction = "received" | "done" | "failed" | "stopped";
+
+/** Whose token a post uses: the person who connected the workspace, or the OpenBot bot. */
+export type MessageSender = "user" | "bot";
 
 export interface ConnectionIdentity {
   workspaceId: string;
@@ -103,6 +108,17 @@ export interface MessagingAdapter {
   postAnswer(target: MessageTarget, markdown: string, replaceMessageId: string | null): Promise<void>;
   /** Uploads files to the conversation, and returns the names it did not send. */
   upload(target: MessageTarget, files: MessagingAnswerFile[]): Promise<string[]>;
+  /** The direct message with one person, opened when needed, as the sender. Returns its channel id. */
+  openDirectMessage?(userId: string, as: MessageSender): Promise<string>;
+  /** Posts markdown text as the sender, outside the status flow. Returns the message id. */
+  postAs?(target: MessageTarget, markdown: string, as: MessageSender): Promise<string>;
+  /** A link to one posted message, or null when the platform gives none. */
+  permalink?(platformChannelId: string, messageId: string): Promise<string | null>;
+  /**
+   * Whether OpenBot's bot is in the conversation. With the user's events, a direct message between
+   * the user and someone else arrives too, and it must never be answered as a request to OpenBot.
+   */
+  isOwnConversation?(platformChannelId: string): Promise<boolean>;
   /** Earlier messages of the conversation, oldest first, after `afterId` and before `beforeId`. */
   history(
     platformChannelId: string,
@@ -127,6 +143,12 @@ export interface TransportSink {
   action(action: InboundAction): void;
   /** A public place was created that OpenBot can join. */
   placeCreated?(platformChannelId: string): void;
+  /**
+   * The platform says that a token was revoked or the app was removed. The event can be late: a
+   * disconnect revokes the old tokens, and the event can arrive after a new install. Without this
+   * hook the transport reports `invalid_token` at once.
+   */
+  revoked?(): void;
 }
 
 export interface MessagingTransport {

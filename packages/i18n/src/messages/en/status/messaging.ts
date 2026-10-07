@@ -25,6 +25,13 @@ export const messages = defineMessages("status.messaging", {
   "status.messaging.onlyRequester": "Only {user} can do this. The GoAhead host can also answer.",
   "status.messaging.hostOnly": "Only the GoAhead host can answer this request.",
   "status.messaging.filesSkipped": "Some files were not sent: {names}.",
+  // A message an agent drafted for a person or channel. {to} and {user} are Slack mentions.
+  "status.messaging.sendDraftTitle": "GoAhead asks for approval to send a message.",
+  "status.messaging.sendDraftTo": "To: {to}",
+  "status.messaging.sendAsUser": "As: {user}",
+  "status.messaging.sendAsBot": "Sent by the GoAhead app, not as you.",
+  "status.messaging.sent": "Sent. Approved by {user}.",
+  "status.messaging.sendFailed": "Not sent: {reason}",
   // The name and title of the agent that OpenBot adds to answer in Slack. The user can rename it.
   "status.messaging.orchestratorName": "Slack Orchestrator",
   "status.messaging.orchestratorTitle": "Answers in Slack and asks the team",

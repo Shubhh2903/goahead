@@ -83,6 +83,28 @@ class FakeSignal {
 
   /** One Slack request that Signal checked, as it passes it to the host, and the host's answer. */
   deliver(teamId: string, payload: DynamicRecord): Promise<Answer> {
+    return this.#send(
+      teamId,
+      "events",
+      JSON.stringify({ type: "event_callback", team_id: teamId, api_app_id: "A1", ...payload }),
+    );
+  }
+
+  /** One button press on an OpenBot message, as Slack's interactivity request. */
+  press(teamId: string, press: { userId: string; channel: string; actionId: string; value: string }): Promise<Answer> {
+    const payload = {
+      type: "block_actions",
+      api_app_id: "A1",
+      team: { id: teamId },
+      user: { id: press.userId },
+      channel: { id: press.channel },
+      message: { ts: "draft.000" },
+      actions: [{ action_id: press.actionId, value: press.value }],
+    };
+    return this.#send(teamId, "interactivity", `payload=${encodeURIComponent(JSON.stringify(payload))}`);
+  }
+
+  #send(teamId: string, kind: "events" | "interactivity", body: string): Promise<Answer> {
     const socket = this.#socket;
     if (!socket) throw new Error("The host has no ingress socket.");
     const requestId = randomUUID().replaceAll("-", "");
@@ -94,12 +116,10 @@ class FakeSignal {
           version: 1,
           requestId,
           teamId,
-          kind: "events",
+          kind,
           retryNum: null,
           retryReason: null,
-          bodyBase64: Buffer.from(
-            JSON.stringify({ type: "event_callback", team_id: teamId, api_app_id: "A1", ...payload }),
-          ).toString("base64"),
+          bodyBase64: Buffer.from(body).toString("base64"),
         }),
       );
     });
@@ -109,6 +129,8 @@ class FakeSignal {
 /** Slack's Web API for the bot of the OpenBot app in one workspace, and for the person who installed it. */
 class FakeSlack {
   readonly calls: Array<{ method: string; token: string | undefined; params: Record<string, string> }> = [];
+  /** Tokens that Slack no longer accepts, such as after an uninstall. */
+  readonly revoked = new Set<string>();
   #server: Server | null = null;
   #ts = 1000;
   origin = "";
@@ -126,7 +148,7 @@ class FakeSlack {
         response.setHeader("content-type", "application/json");
         response.end(JSON.stringify({ ok: true, ...value }));
       };
-      if (![BOT_TOKEN, USER_TOKEN, OTHER_WORKSPACE_USER_TOKEN].includes(token ?? ""))
+      if (![BOT_TOKEN, USER_TOKEN, OTHER_WORKSPACE_USER_TOKEN].includes(token ?? "") || this.revoked.has(token ?? ""))
         return response.end(JSON.stringify({ ok: false, error: "invalid_auth" }));
       switch (method) {
         case "auth.test":
@@ -143,7 +165,10 @@ class FakeSlack {
           return reply({ bot: { app_id: "A1" } });
         case "users.info":
           return reply({ user: { name: "alice", profile: { display_name: "Alice" } } });
+        // The bot is not in the direct messages between the user and other people.
         case "conversations.info":
+          if (token === BOT_TOKEN && params.channel?.startsWith("D-"))
+            return response.end(JSON.stringify({ ok: false, error: "channel_not_found" }));
           return reply({ channel: { name: "general" } });
         // Two pages of public channels; OpenBot is already in C2.
         case "conversations.list":
@@ -158,6 +183,10 @@ class FakeSlack {
               });
         case "conversations.replies":
           return reply({ messages: [] });
+        case "conversations.open":
+          return reply({ channel: { id: `D-${params.users}` } });
+        case "chat.getPermalink":
+          return reply({ permalink: `https://slack.test/archives/${params.channel}/p${params.message_ts}` });
         case "chat.postMessage":
           this.#ts += 1;
           return reply({ ts: `${this.#ts}.000` });
@@ -324,6 +353,19 @@ describe.sequential("OpenBot Slack app end to end", () => {
     const [link] = started.service.messaging.store.links(orchestratorId);
     if (!link) throw new Error("The mention has no conversation.");
 
+    // An agent's request to message a person. Connected as the bot alone, nobody can approve a send
+    // in Slack, so there is no draft: a stranger's word must never make OpenBot message people.
+    const requestSend = (to: string, text: string) =>
+      started.service.messaging.requestSend({
+        agentId: orchestratorId,
+        threadId: link.threadId,
+        to,
+        text,
+        threadKey: null,
+      });
+    await expect(requestSend("<@UPREET>", "The GoAhead bot works with Slack now.")).rejects.toThrow();
+    // The user reads the conversation itself; a message to them is refused.
+
     // OpenBot is in every public channel without an invitation, and in each new one.
     const joined = () => slack.of("conversations.join").map((call) => call.params.channel);
     await waitFor(() => joined().includes("C3"));
@@ -334,12 +376,23 @@ describe.sequential("OpenBot Slack app end to end", () => {
     ).toEqual({ status: 200 });
     await waitFor(() => joined().includes("C4"));
 
-    // Slack uninstalled OpenBot: the connection stops, and Signal stops routing the workspace here.
+    // A late uninstall event while the tokens still work, as after a disconnect and a new install,
+    // changes nothing: the workspace stays connected and linked.
+    expect(await signal.deliver("T1", { event_id: "Ev5", event: { type: "tokens_revoked" } })).toEqual({ status: 200 });
+    await waitFor(() => slack.of("auth.test").length >= 2);
+    expect(connection()?.state).toBe("connected");
+    expect(unlinked).toEqual([]);
+
+    // Slack uninstalled OpenBot and refuses its token: the connection stops, and Signal stops
+    // routing the workspace here.
+    slack.revoked.add(BOT_TOKEN);
     expect(await signal.deliver("T1", { event_id: "Ev3", event: { type: "app_uninstalled" } })).toEqual({
       status: 200,
     });
     await waitFor(() => connection()?.state === "invalid_token");
     expect(unlinked).toEqual(["T1"]);
+    // A new install gives working tokens again.
+    slack.revoked.clear();
 
     // A user token for another workspace does not connect: the host only acts as a person in the
     // workspace that the bot is in.
@@ -355,6 +408,109 @@ describe.sequential("OpenBot Slack app end to end", () => {
     expect(slack.of("auth.test").map((call) => call.token)).toContain(USER_TOKEN);
     expect(started.service.messaging.store.links(orchestratorId).map((item) => item.linkId)).toEqual([link.linkId]);
     expect(connection()?.orchestratorAgentId).toBe(orchestratorId);
+
+    // Connected as the person, the request becomes a draft with buttons in the thread. Only the
+    // connected person may approve; an approved draft is sent once, as the person; a denied one never.
+    const userPosts = () => slack.of("chat.postMessage").filter((call) => call.token === USER_TOKEN);
+    const buttons = () => {
+      const post = slack.of("chat.postMessage").at(-1);
+      const blocks = JSON.parse(post?.params.blocks ?? "[]");
+      const actions = Array.isArray(blocks)
+        ? blocks.filter(isDynamicRecord).find((block) => block.type === "actions")
+        : undefined;
+      const elements = Array.isArray(actions?.elements) ? actions.elements.filter(isDynamicRecord) : [];
+      const value = (actionId: string) => String(elements.find((element) => element.action_id === actionId)?.value);
+      return {
+        channel: String(post?.params.channel),
+        accept: value("openbot_accept"),
+        decline: value("openbot_decline"),
+      };
+    };
+    await expect(requestSend("<@UME>", "Preet replied.")).rejects.toThrow("Answer here instead");
+    const receipt = await requestSend("<@UPREET>", "The GoAhead bot works with Slack now.");
+    expect(receipt).toMatchObject({ status: "waiting_for_approval", sender: "user", approverId: "UME" });
+    const draft = buttons();
+    expect(
+      await signal.press("T1", {
+        userId: "UALICE",
+        channel: draft.channel,
+        actionId: "openbot_accept",
+        value: draft.accept,
+      }),
+    ).toEqual({ status: 200 });
+    await waitFor(() => slack.of("chat.postEphemeral").length > 0);
+    expect(userPosts()).toHaveLength(0);
+    expect(
+      await signal.press("T1", {
+        userId: "UME",
+        channel: draft.channel,
+        actionId: "openbot_accept",
+        value: draft.accept,
+      }),
+    ).toEqual({ status: 200 });
+    await waitFor(() => userPosts().length === 1);
+    expect(slack.of("conversations.open").map((call) => [call.token, call.params.users])).toEqual([
+      [USER_TOKEN, "UPREET"],
+    ]);
+    expect(userPosts()[0]?.params).toMatchObject({
+      channel: "D-UPREET",
+      text: "The GoAhead bot works with Slack now.",
+    });
+    await waitFor(() => started.service.messaging.store.sends().length === 1);
+
+    // Preet's answer in that direct message comes back to the thread where the user asked, as a new
+    // turn of the same agent. The user's own words there, and a direct message from someone OpenBot
+    // never wrote to, start nothing: the user's private messages never reach an agent.
+    const turnCount = () => started.client.requests.filter((request) => request.method === "turn/start").length;
+    const before = turnCount();
+    const dm = (eventId: string, channel: string, user: string, text: string, ts: string) =>
+      signal.deliver("T1", {
+        event_id: eventId,
+        event: { type: "message", channel_type: "im", channel, user, text, ts },
+      });
+    expect(await dm("Ev10", "D-UPREET", "UME", "my own words", "300.000")).toEqual({ status: 200 });
+    expect(await dm("Ev11", "D-UCAROL", "UCAROL", "a private message", "301.000")).toEqual({ status: 200 });
+    expect(await dm("Ev12", "D-UPREET", "UPREET", "I am working on it", "302.000")).toEqual({ status: 200 });
+    await waitFor(() => turnCount() === before + 1);
+    const replyTurn = JSON.stringify(
+      started.client.requests.filter((request) => request.method === "turn/start").at(-1),
+    );
+    expect(replyTurn).toContain("I am working on it");
+    expect(replyTurn).toContain("replied to a message that was sent for the GoAhead user");
+    expect(replyTurn).not.toContain("a private message");
+    expect(started.service.messaging.store.links(orchestratorId).map((item) => item.linkId)).toEqual([link.linkId]);
+    expect(started.service.messaging.store.sends()[0]).toMatchObject({
+      approvedBy: "UME",
+      sender: "user",
+      to: "user:UPREET",
+      platformChannelId: "D-UPREET",
+      link: expect.stringContaining("https://slack.test/"),
+    });
+    // The same button again sends nothing more.
+    expect(
+      await signal.press("T1", {
+        userId: "UME",
+        channel: draft.channel,
+        actionId: "openbot_accept",
+        value: draft.accept,
+      }),
+    ).toEqual({ status: 200 });
+    await waitFor(() => slack.of("chat.update").length >= 2);
+    expect(userPosts()).toHaveLength(1);
+    // A denied draft sends nothing.
+    await requestSend("C1", "Hello channel");
+    const second = buttons();
+    expect(
+      await signal.press("T1", {
+        userId: "UME",
+        channel: second.channel,
+        actionId: "openbot_decline",
+        value: second.decline,
+      }),
+    ).toEqual({ status: 200 });
+    await waitFor(() => slack.of("chat.update").length >= 3);
+    expect(userPosts()).toHaveLength(1);
+    expect(started.service.messaging.store.sends()).toHaveLength(1);
 
     // Disconnect revokes both tokens, forgets them, and unlinks the workspace.
     await messaging.disconnectSlackWorkspace("T1");
@@ -375,6 +531,8 @@ describe.sequential("OpenBot Slack app end to end", () => {
           uninstalledUnlinked: true,
           otherWorkspaceUserTokenRefused: true,
           connectedAsUser: true,
+          sendDraft: { botOnlyRefused: true, strangerCannotApprove: true, sentOnce: true, deniedNotSent: true },
+          replies: { backToAskingThread: true, ownWordsIgnored: true, unrelatedDirectMessageIgnored: true },
           conversationKept: true,
           revoked: slack.of("auth.revoke").length,
         },

@@ -42,6 +42,7 @@
         "groups:read",
         "im:history",
         "im:read",
+        "im:write",
         "mpim:history",
         "mpim:read",
         "reactions:write",
@@ -61,7 +62,8 @@
         "message.mpim",
         "app_uninstalled",
         "tokens_revoked"
-      ]
+      ],
+      "user_events": ["message.channels", "message.groups", "message.im", "message.mpim"]
     },
     "interactivity": {
       "is_enabled": true,

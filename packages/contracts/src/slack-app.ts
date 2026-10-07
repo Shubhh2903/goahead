@@ -36,6 +36,7 @@ export const SLACK_USER_SCOPES = [
   "groups:read",
   "im:history",
   "im:read",
+  "im:write",
   "mpim:history",
   "mpim:read",
   "reactions:write",

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { MESSAGING_PLATFORMS, type MessagingPlatform } from "@openbot/contracts/ipc";
-import { type DynamicRecord, isOneOf } from "@openbot/contracts/runtime-values";
+import { type DynamicRecord, isDynamicRecord, isOneOf, isString } from "@openbot/contracts/runtime-values";
 import {
   databaseRow,
   databaseRows,
@@ -50,7 +50,27 @@ export interface MessagingLinkInput {
   title: string;
 }
 
+/** One message that OpenBot sent on an agent's request, after a person approved it. */
+export interface MessagingSendRecord {
+  draftId: string;
+  connectionId: string;
+  /** The conversation where the user asked for the send. A reply goes back there. Null in old records. */
+  linkId: string | null;
+  agentId: string;
+  /** The platform user who approved, and when. */
+  approvedBy: string;
+  approvedAt: string;
+  sender: "user" | "bot";
+  to: string;
+  platformChannelId: string;
+  platformMessageId: string;
+  text: string;
+  link: string | null;
+}
+
 const LINK_LIST_LIMIT = 200;
+const SEND_AGGREGATE = "messaging_send";
+const SEND_EVENT = "messaging_send_sent";
 
 /**
  * Owns `projection_messaging_connections` and `projection_messaging_threads`. It never stores a
@@ -291,6 +311,41 @@ export class MessagingStore {
     );
   }
 
+  /** The audit log entry of one send, in the event log, so it survives like every other decision. */
+  recordSend(record: MessagingSendRecord): void {
+    this.#database.dispatch(
+      `messaging-send:${record.draftId}`,
+      [{ aggregateType: SEND_AGGREGATE, aggregateId: record.draftId, eventType: SEND_EVENT, payload: record }],
+      () => null,
+    );
+  }
+
+  /** The newest send to one platform conversation of a connection, or null. */
+  latestSendTo(connectionId: string, platformChannelId: string): MessagingSendRecord | null {
+    const row = databaseRows(
+      this.#database.connection
+        .prepare(
+          `SELECT payload_json FROM orchestration_events
+           WHERE aggregate_type = ? AND json_extract(payload_json, '$.connectionId') = ?
+             AND json_extract(payload_json, '$.platformChannelId') = ?
+           ORDER BY sequence DESC LIMIT 1`,
+        )
+        .all(SEND_AGGREGATE, connectionId, platformChannelId),
+    )[0];
+    return row ? decodeSendRecord(JSON.parse(String(row.payload_json))) : null;
+  }
+
+  /** Every send on record, oldest first. */
+  sends(): MessagingSendRecord[] {
+    return databaseRows(
+      this.#database.connection
+        .prepare("SELECT payload_json FROM orchestration_events WHERE aggregate_type = ? ORDER BY sequence")
+        .all(SEND_AGGREGATE),
+    )
+      .map((row) => decodeSendRecord(JSON.parse(String(row.payload_json))))
+      .filter((record) => record !== null);
+  }
+
   threadIdsForAgent(agentId: string): string[] {
     return databaseRows(
       this.#database.connection
@@ -346,5 +401,39 @@ function decodeLink(row: DynamicRecord): MessagingLink {
     title: requiredStringColumn(row, "title"),
     historyCursor: optionalStringColumn(row, "history_cursor"),
     updatedAt: requiredStringColumn(row, "updated_at"),
+  };
+}
+
+function decodeSendRecord(value: unknown): MessagingSendRecord | null {
+  if (
+    !isDynamicRecord(value) ||
+    !isString(value.draftId) ||
+    !isString(value.connectionId) ||
+    (value.linkId !== undefined && value.linkId !== null && !isString(value.linkId)) ||
+    !isString(value.agentId) ||
+    !isString(value.approvedBy) ||
+    !isString(value.approvedAt) ||
+    !isOneOf(["user", "bot"] as const, value.sender) ||
+    !isString(value.to) ||
+    !isString(value.platformChannelId) ||
+    !isString(value.platformMessageId) ||
+    !isString(value.text) ||
+    (value.link !== null && !isString(value.link))
+  ) {
+    return null;
+  }
+  return {
+    draftId: value.draftId,
+    connectionId: value.connectionId,
+    linkId: isString(value.linkId) ? value.linkId : null,
+    agentId: value.agentId,
+    approvedBy: value.approvedBy,
+    approvedAt: value.approvedAt,
+    sender: value.sender,
+    to: value.to,
+    platformChannelId: value.platformChannelId,
+    platformMessageId: value.platformMessageId,
+    text: value.text,
+    link: value.link,
   };
 }

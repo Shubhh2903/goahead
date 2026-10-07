@@ -22,14 +22,21 @@ import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, redactText } from "@openbot/logging";
 import type { MessagingOrigin } from "../mailbox-store";
 import type { SidebarLayoutStore } from "../sidebar-layout-store";
+import { parseSlackSendTarget, type SlackSendTarget } from "./messaging-send-tool";
 import type { MessagingConnectionRecord, MessagingLink } from "./messaging-store";
-import type { MessagingActivity, MessagingThreads } from "./messaging-threads";
+import type {
+  MessagingActivity,
+  MessagingSendReceipt,
+  MessagingSendRequest,
+  MessagingThreads,
+} from "./messaging-threads";
 import {
   type ConnectionIdentity,
   type InboundAction,
   type InboundMessage,
   type IngressAnswer,
   type IngressDelivery,
+  type MessageSender,
   type MessageTarget,
   type MessagingAdapter,
   MessagingConnectionError,
@@ -104,21 +111,51 @@ interface StatusPost {
   stopToken: string | null;
 }
 
-interface PendingApproval {
-  requestId: string | number;
+/** A post with Approve and Deny buttons, and who may press them. */
+interface PendingBase {
   connectionId: string;
   target: MessageTarget;
   /** Null until Slack answers the post. A button press can arrive first, and it names its message. */
   messageId: string | null;
-  /** The Slack user whose message started the turn. Null when it is not known, then only the host answers. */
+  /** The only Slack user who may press. Null when it is not known, then only the host answers. */
   allowedUserId: string | null;
   text: string;
   answered: boolean;
 }
 
+/** An agent's approval request, answered through the agent service. The requester may press. */
+interface PendingAgentApproval extends PendingBase {
+  kind: "agent";
+  requestId: string | number;
+}
+
+/**
+ * A message an agent drafted, sent by this service once approved. Only the person who connected the
+ * workspace may press: the message goes out as them, or as OpenBot, and never on a stranger's word.
+ */
+interface PendingSend extends PendingBase {
+  kind: "send";
+  draft: SendDraft;
+}
+
+interface SendDraft {
+  draftId: string;
+  linkId: string;
+  agentId: string;
+  to: SlackSendTarget;
+  text: string;
+  threadKey: string | null;
+  sender: MessageSender;
+}
+
+type PendingApproval = PendingAgentApproval | PendingSend;
+
 const FATAL_STATES = new Set<MessagingConnectionState>(["invalid_token"]);
 const LIVE_STATES = new Set<MessagingConnectionState>(["connecting", "connected", "reconnecting", "rate_limited"]);
 const APPROVAL_TEXT_LIMIT = 2_500;
+/** How long a reply to a message OpenBot sent as the user still comes back to the conversation. */
+const REPLY_WATCH_MS = 14 * 24 * 60 * 60_000;
+const SENT_PREVIEW = 300;
 const CANCEL_TEXT = /^(cancel|stop)$/i;
 const RECENT_MESSAGES = 2_000;
 /** How long a connection waits before it tries Slack again after Slack was unreachable. */
@@ -175,6 +212,7 @@ export class MessagingService {
       this.#agents.onEvent((event) => this.#agentEvent(event)),
     );
     this.#threads.setContextSource((link, origin) => this.#promptContext(link, origin));
+    this.#threads.setMessageSender((request) => this.#requestSend(request));
     this.#ingress?.handle((workspaceId, delivery) => this.deliverSlack(workspaceId, delivery));
     const records = this.#threads.store.connections();
     await this.#credentials.retain(new Set(records.map((record) => record.connectionId)));
@@ -185,6 +223,7 @@ export class MessagingService {
     this.#started = false;
     for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
     this.#threads.setContextSource(null);
+    this.#threads.setMessageSender(null);
     this.#ingress?.handle(null);
     await Promise.all([...this.#live.values()].map((live) => live.transport?.stop()));
     this.#live.clear();
@@ -395,10 +434,58 @@ export class MessagingService {
       action: (action) => void this.#action(live, action).catch((error) => this.#warn(error)),
       placeCreated: (platformChannelId) =>
         void live.adapter.joinPlace?.(platformChannelId).catch((error) => this.#warn(error)),
+      revoked: () => void this.#verifyTokens(live).catch((error) => this.#warn(error)),
     });
     // So people can mention OpenBot in any public channel without inviting it first. Channels made
     // while the host was off are joined here too.
     void live.adapter.joinPublicPlaces?.().catch((error) => this.#warn(error));
+  }
+
+  /**
+   * Slack said that a token was revoked or the app was removed. Only the current tokens decide: a
+   * late event about the tokens of an earlier install must not stop the connection and unlink the
+   * workspace that was just connected again. A refused token stops it, as before.
+   */
+  async #verifyTokens(live: LiveConnection): Promise<void> {
+    try {
+      await live.adapter.identify();
+    } catch (error) {
+      if (this.#live.get(live.record.connectionId) !== live) return;
+      if (error instanceof MessagingConnectionError) this.#setState(live, error.state);
+      else throw error;
+    }
+  }
+
+  /**
+   * A message that does not address OpenBot. When it answers a message OpenBot sent as the user (in
+   * that direct message, or in the thread under a channel post), it goes to the conversation where
+   * the user asked for the send, so the agent tells the user there. Anything else is dropped.
+   */
+  async #observe(live: LiveConnection, message: InboundMessage): Promise<void> {
+    const user = live.identity?.user;
+    if (!user || message.authorId === user.id || message.authorId === live.identity?.botUserId) return;
+    const sent = this.#threads.store.latestSendTo(live.record.connectionId, message.platformChannelId);
+    if (!sent?.linkId || Date.now() - Date.parse(sent.approvedAt) > REPLY_WATCH_MS) return;
+    if (!message.isDirect && message.threadKey !== sent.platformMessageId) return;
+    const link = this.#threads.store.link(sent.linkId);
+    if (!link) return;
+    const authorName = await live.adapter.authorName(message.authorId);
+    await this.#receive(live, {
+      dedupKey: `reply:${message.dedupKey}`,
+      platformChannelId: link.platformChannelId,
+      threadKey: link.threadKey,
+      target: linkTarget(link),
+      platformMessageId: message.platformMessageId,
+      isDirect: link.isDirect,
+      requiresLink: true,
+      authorId: message.authorId,
+      text: [
+        `${authorName} replied to the message that was sent for the GoAhead user ("${sent.text.slice(0, SENT_PREVIEW)}"):`,
+        message.text || "(The reply has no text.)",
+      ].join("\n"),
+      files: [],
+      observed: true,
+    });
   }
 
   async #restart(connectionId: string): Promise<void> {
@@ -453,12 +540,24 @@ export class MessagingService {
 
   async #receive(live: LiveConnection, message: InboundMessage): Promise<void> {
     if (!live.identity) return;
-    // Before any await: a redelivered event can arrive while the first copy is still downloading its
-    // files, before the mailbox holds its idempotency key. The mailbox key covers a restart.
+    // With the user's events, a direct message between the user and someone else arrives like one
+    // to OpenBot. It is never a request: at most a reply to a message OpenBot sent as the user.
+    if (
+      !message.observed &&
+      message.isDirect &&
+      live.identity.user &&
+      !(await (live.adapter.isOwnConversation?.(message.platformChannelId) ?? Promise.resolve(true)))
+    )
+      return this.#observe(live, message);
+    // Before any await below: a redelivered event can arrive while the first copy is still
+    // downloading its files, before the mailbox holds its idempotency key. The mailbox key covers a restart.
     const store = this.#threads.store;
     const existing = store.linkByKey(live.record.connectionId, message.platformChannelId, message.threadKey);
     // Before the dedup key: a reply with a mention also arrives as `app_mention`, which must still run.
-    if (message.requiresLink && !existing) return;
+    if (message.requiresLink && !existing) {
+      if (!message.observed) await this.#observe(live, message);
+      return;
+    }
     const dedupKey = `${live.record.connectionId}:${message.dedupKey}`;
     if (this.#recent.has(dedupKey)) return;
     this.#recent.add(dedupKey);
@@ -497,7 +596,12 @@ export class MessagingService {
         title: message.isDirect ? authorName : `${place} · ${message.text.slice(0, 80) || authorName}`,
         text,
         sourcePaths: paths,
-        origin: { authorId: message.authorId, authorName, platformMessageId: message.platformMessageId },
+        origin: {
+          authorId: message.authorId,
+          authorName,
+          platformMessageId: message.platformMessageId,
+          ...(message.observed ? { isReply: true } : {}),
+        },
         idempotencyKey: `messaging:${live.record.connectionId}:${message.dedupKey}`,
       });
       if (result.status === "duplicate") return;
@@ -684,10 +788,9 @@ export class MessagingService {
     ]
       .filter(Boolean)
       .join("\n");
-    const accept = token();
-    const decline = token();
     // Known before the post: a person can press a button before Slack's answer to the post arrives.
-    const pending: PendingApproval = {
+    await this.#postWithButtons(live, {
+      kind: "agent",
       requestId: approval.requestId,
       connectionId: live.record.connectionId,
       target,
@@ -695,12 +798,18 @@ export class MessagingService {
       allowedUserId: running?.origin.authorId ?? null,
       text,
       answered: false,
-    };
+    });
+  }
+
+  /** Posts a request with Approve and Deny, and keeps it under both button tokens. */
+  async #postWithButtons(live: LiveConnection, pending: PendingApproval): Promise<void> {
+    const accept = token();
+    const decline = token();
     this.#approvals.set(accept, pending);
     this.#approvals.set(decline, pending);
     try {
-      pending.messageId = await live.adapter.post(target, {
-        text,
+      pending.messageId = await live.adapter.post(pending.target, {
+        text: pending.text,
         buttons: [
           { action: "accept", label: sourceText("status.messaging.approve"), token: accept, style: "primary" },
           { action: "decline", label: sourceText("status.messaging.deny"), token: decline, style: "danger" },
@@ -713,8 +822,115 @@ export class MessagingService {
     }
   }
 
+  /**
+   * An agent asks to send a new message. It needs a Slack conversation, so the draft has a place to
+   * ask for approval, and a workspace connected as a person, who is the only one allowed to approve.
+   */
+  async #requestSend(request: MessagingSendRequest): Promise<MessagingSendReceipt> {
+    const link = this.#threads.store.linkForThread(request.threadId);
+    if (!link) throw new Error(sourceText("error.messaging.sendNeedsSlack"));
+    const live = this.#live.get(link.connectionId);
+    if (!live?.identity) throw new Error(sourceText("error.messaging.notConnected"));
+    const credentials = this.#credentials.get(link.connectionId);
+    const approverId = credentials?.userId;
+    if (!approverId) throw new Error(sourceText("error.messaging.sendNeedsUser"));
+    const to = parseSlackSendTarget(request.to);
+    if (!to) throw new Error(sourceText("error.messaging.sendTargetInvalid"));
+    // The user reads the conversation the agent answers in: a message to them is that answer.
+    if (to.kind === "user" && to.id === approverId) throw new Error(sourceText("error.messaging.sendToSelf"));
+    const text = request.text.replace(MENTION_MARKERS, "").trim().slice(0, INPUT_LIMITS.messageText);
+    if (!text) throw new Error(sourceText("error.messaging.sendTextEmpty"));
+    const sender: MessageSender = credentials.userToken ? "user" : "bot";
+    const { adapter } = live;
+    const running = this.#threads.runningOrigin(link.linkId);
+    const draftId = randomUUID();
+    const draft: SendDraft = {
+      draftId,
+      linkId: link.linkId,
+      agentId: request.agentId,
+      to,
+      text,
+      threadKey: request.threadKey,
+      sender,
+    };
+    // The connected person asked for it themselves: their own request is their approval. Anyone
+    // else's request, or a turn with no known author, waits for them to press Approve.
+    if (running?.origin.authorId === approverId) {
+      const sentLink = await this.#deliver(live, draft, approverId);
+      return { status: "sent", draftId, sender, approverId, link: sentLink };
+    }
+    const key = running ? `${link.linkId}:${running.origin.platformMessageId}` : null;
+    const target = (key && this.#targets.get(key)) || (key && this.#posts.get(key)?.target) || linkTarget(link);
+    const toLabel = to.kind === "user" ? adapter.mention(to.id) : await adapter.placeName(to.id);
+    const draftText = [
+      sourceText("status.messaging.sendDraftTitle"),
+      sourceText("status.messaging.sendDraftTo", { to: toLabel }),
+      sender === "user"
+        ? sourceText("status.messaging.sendAsUser", { user: adapter.mention(approverId) })
+        : sourceText("status.messaging.sendAsBot"),
+      `\`\`\`\n${redactText(text).slice(0, APPROVAL_TEXT_LIMIT)}\n\`\`\``,
+    ].join("\n");
+    await this.#postWithButtons(live, {
+      kind: "send",
+      connectionId: live.record.connectionId,
+      target,
+      messageId: null,
+      allowedUserId: approverId,
+      text: draftText,
+      answered: false,
+      draft,
+    });
+    return { status: "waiting_for_approval", draftId, sender, approverId, link: null };
+  }
+
+  /** Sends a draft once and records it. Returns the link to the sent message, when Slack gives one. */
+  async #deliver(live: LiveConnection, draft: SendDraft, approvedBy: string): Promise<string | null> {
+    const { adapter } = live;
+    if (!adapter.postAs) throw new Error(sourceText("error.messaging.unsupported"));
+    const channel =
+      draft.to.kind === "user" ? await adapter.openDirectMessage?.(draft.to.id, draft.sender) : draft.to.id;
+    if (!channel) throw new Error(sourceText("error.messaging.unsupported"));
+    const messageId = await adapter.postAs(
+      { platformChannelId: channel, replyThreadId: draft.threadKey },
+      draft.text,
+      draft.sender,
+    );
+    const link = (await adapter.permalink?.(channel, messageId)) ?? null;
+    this.#threads.store.recordSend({
+      draftId: draft.draftId,
+      connectionId: live.record.connectionId,
+      linkId: draft.linkId,
+      agentId: draft.agentId,
+      approvedBy,
+      approvedAt: new Date().toISOString(),
+      sender: draft.sender,
+      to: `${draft.to.kind}:${draft.to.id}`,
+      platformChannelId: channel,
+      platformMessageId: messageId,
+      text: draft.text,
+      link,
+    });
+    return link;
+  }
+
+  /** Sends an approved draft once, and returns the line that replaces the buttons. */
+  async #sendDraft(live: LiveConnection, pending: PendingSend, approvedBy: string): Promise<string> {
+    try {
+      const link = await this.#deliver(live, pending.draft, approvedBy);
+      const sent = sourceText("status.messaging.sent", { user: live.adapter.mention(approvedBy) });
+      return link ? `${sent}\n${link}` : sent;
+    } catch (error) {
+      this.#warn(error);
+      return sourceText("status.messaging.sendFailed", {
+        reason: redactText(error instanceof Error ? error.message : String(error)),
+      });
+    }
+  }
+
   async #approvalResolved(requestId: string | number): Promise<void> {
-    const entries = [...this.#approvals.entries()].filter(([, pending]) => pending.requestId === requestId);
+    const entries = [...this.#approvals.entries()].filter(
+      ([, pending]) => pending.kind === "agent" && pending.requestId === requestId,
+    );
     const pending = entries[0]?.[1];
     for (const [key] of entries) this.#approvals.delete(key);
     if (!pending || pending.answered) return;
@@ -742,7 +958,8 @@ export class MessagingService {
       return;
     }
     const pending = this.#approvals.get(action.token);
-    if (!pending || pending.connectionId !== live.record.connectionId) {
+    // A second press while the first one still runs must not send or answer twice.
+    if (!pending || pending.connectionId !== live.record.connectionId || pending.answered) {
       await adapter
         .edit(action.target, action.platformMessageId, { text: sourceText("status.messaging.requestInactive") })
         .catch(() => undefined);
@@ -760,13 +977,21 @@ export class MessagingService {
     }
     pending.answered = true;
     let outcome: string;
-    try {
-      await this.#agents.respondToApproval({ requestId: pending.requestId, decision: action.decision });
-      outcome = sourceText(action.decision === "accept" ? "status.messaging.approvedBy" : "status.messaging.deniedBy", {
-        user: adapter.mention(action.actorId),
-      });
-    } catch {
-      outcome = sourceText("status.messaging.requestInactive");
+    if (pending.kind === "send") {
+      outcome =
+        action.decision === "accept"
+          ? await this.#sendDraft(live, pending, action.actorId)
+          : sourceText("status.messaging.deniedBy", { user: adapter.mention(action.actorId) });
+    } else {
+      try {
+        await this.#agents.respondToApproval({ requestId: pending.requestId, decision: action.decision });
+        outcome = sourceText(
+          action.decision === "accept" ? "status.messaging.approvedBy" : "status.messaging.deniedBy",
+          { user: adapter.mention(action.actorId) },
+        );
+      } catch {
+        outcome = sourceText("status.messaging.requestInactive");
+      }
     }
     for (const [key, candidate] of this.#approvals) if (candidate === pending) this.#approvals.delete(key);
     await adapter.edit(pending.target, pending.messageId ?? action.platformMessageId, {
