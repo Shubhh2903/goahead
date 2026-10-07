@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { AgentService } from "../backend/agent-service";
 import {
+  notification,
   startAgentTestFixture,
   startService,
   stopAgentTestFixture,
@@ -183,6 +184,22 @@ class FakeSlack {
               });
         case "conversations.replies":
           return reply({ messages: [] });
+        // The person's channels, and the newest messages of #launch, as the person reads them.
+        case "users.conversations":
+          return reply({
+            channels: [
+              { id: "G9", name: "leads", is_private: true },
+              { id: "C5", name: "launch", is_private: false },
+            ],
+            response_metadata: { next_cursor: "" },
+          });
+        case "conversations.history":
+          return reply({
+            messages:
+              params.channel === "C5"
+                ? [{ type: "message", user: "UBOB", text: "Kickoff notes are in the doc", ts: "1791000100.000000" }]
+                : [],
+          });
         case "conversations.open":
           return reply({ channel: { id: `D-${params.users}` } });
         // A revoked token stops working, as in Slack.
@@ -530,6 +547,44 @@ describe.sequential("OpenBot Slack app end to end", () => {
     expect(userPosts()).toHaveLength(1);
     expect(started.service.messaging.store.sends()).toHaveLength(1);
 
+    // A message to several people opens one group direct message, as the user, who is left out of the
+    // list. Approved, it is sent once. A reply in that group comes back to the asking thread; a message
+    // in another group direct message starts nothing.
+    expect(await requestSend("<@UPREET>, <@UANA>, <@UME>", "Lunch at 1?")).toMatchObject({
+      status: "waiting_for_approval",
+    });
+    const group = buttons();
+    expect(
+      await signal.press("T1", {
+        userId: "UME",
+        channel: group.channel,
+        actionId: "openbot_accept",
+        value: group.accept,
+      }),
+    ).toEqual({ status: 200 });
+    await waitFor(() => userPosts().length === 2);
+    expect(slack.of("conversations.open").at(-1)?.params.users).toBe("UANA,UPREET");
+    expect(userPosts()[1]?.params).toMatchObject({ channel: "D-UANA,UPREET", text: "Lunch at 1?" });
+    await waitFor(() => started.service.messaging.store.sends().length === 2);
+    expect(started.service.messaging.store.sends()[1]).toMatchObject({ to: "group:UANA,UPREET" });
+    const groupMessage = (eventId: string, channel: string, user: string, text: string, ts: string) =>
+      signal.deliver("T1", {
+        event_id: eventId,
+        event: { type: "message", channel_type: "mpim", channel, user, text, ts },
+      });
+    const beforeGroup = turnCount();
+    expect(await groupMessage("Ev20", "G-OTHER", "UANA", "an unrelated group chat", "400.000")).toEqual({
+      status: 200,
+    });
+    expect(await groupMessage("Ev21", "D-UANA,UPREET", "UANA", "Yes, 1 works", "401.000")).toEqual({ status: 200 });
+    await waitFor(() => turnCount() === beforeGroup + 1);
+    const groupTurn = JSON.stringify(
+      started.client.requests.filter((request) => request.method === "turn/start").at(-1),
+    );
+    expect(groupTurn).toContain("Yes, 1 works");
+    expect(groupTurn).not.toContain("an unrelated group chat");
+    expect(started.service.messaging.store.links(orchestratorId).map((item) => item.linkId)).toEqual([link.linkId]);
+
     // Disconnect revokes both tokens, forgets them, and unlinks the workspace.
     await messaging.disconnectSlackWorkspace("T1");
     expect(slack.of("auth.revoke").map((call) => call.token)).toEqual([USER_TOKEN, BOT_TOKEN]);
@@ -565,6 +620,186 @@ describe.sequential("OpenBot Slack app end to end", () => {
         null,
         2,
       )}\n`,
+    );
+  });
+  it("keeps the user's Slack messages in a local inbox that only the user can read, in their direct message", async () => {
+    const started = await startService(root, { provider: "codex", autoComplete: false });
+    service = started.service;
+    const credentials = new MemoryCredentials();
+    ingress = new SlackIngress({
+      hostId: () => "host-1",
+      signedIn: () => true,
+      issueTicket: async () => ({ ticket: "ticket-1", signalUrl: signal.url }),
+      issueSlackRoute: async () => "route-1",
+    });
+    messaging = new MessagingService({
+      threads: started.service.messaging,
+      agents: {
+        listAgents: () => started.service.listAgents(),
+        respondToApproval: (input) => started.service.respondToApproval(input),
+        onEvent: (listener) => {
+          started.service.on("event", listener);
+          return () => started.service.off("event", listener);
+        },
+        createAgentProfile: (input) => started.service.createAgentProfile(input),
+        createMemory: (input) => started.service.createMemory(input),
+      },
+      credentials,
+      drivers: [slackDriver({ origin: slack.origin, ingress })],
+      downloadsRoot: join(root, "messaging-downloads"),
+      ingress,
+      slackOrigin: slack.origin,
+    });
+    const agent = await started.store.getOrCreate("slack-agent");
+    const store = started.service.messaging.store;
+    const inbox = started.service.messaging.inbox;
+    const { connectionId } = store.ensureConnection("slack", "T1", "Test workspace");
+    await credentials.set(connectionId, {
+      botToken: BOT_TOKEN,
+      botUserId: "UBOT",
+      appId: "A1",
+      workspaceId: "T1",
+      userToken: USER_TOKEN,
+      userId: "UME",
+    });
+    store.updateConnection(connectionId, { enabled: true, appId: "A1", orchestratorAgentId: agent.id });
+    await messaging.start();
+    await waitFor(() => messaging?.slackOverview().connections[0]?.state === "connected");
+    await waitFor(() => messaging?.slackOverview().connections[0]?.userName === "alice");
+    await waitFor(() => signal.hellos.length > 0);
+    // The person picks #launch in Settings: it starts with its newest messages, read as the person.
+    expect(await messaging.listSlackChannels("T1")).toEqual({
+      channels: [
+        { channelId: "C5", name: "launch", isPrivate: false },
+        { channelId: "G9", name: "leads", isPrivate: true },
+      ],
+    });
+    messaging.setSlackWatchedChannels("T1", [{ channelId: "C5", name: "launch" }]);
+    await waitFor(() => inbox.read(connectionId, "C5", null, 50).length === 1);
+    expect(slack.of("conversations.history").map((call) => [call.token, call.params.channel])).toEqual([
+      [USER_TOKEN, "C5"],
+    ]);
+    expect(messaging.slackOverview().connections[0]?.watchedChannels).toEqual([{ channelId: "C5", name: "launch" }]);
+
+    const turns: Array<{ threadId: string; turnId: string }> = [];
+    started.client.on("notification", (event: { method: string; params: unknown }) => {
+      const params = isDynamicRecord(event.params) ? event.params : null;
+      const turn = params && isDynamicRecord(params.turn) ? params.turn : null;
+      if (event.method === "turn/started" && isString(params?.threadId) && isString(turn?.id))
+        turns.push({ threadId: params.threadId, turnId: turn.id });
+    });
+    const finish = (turn: { threadId: string; turnId: string } | undefined) => {
+      if (!turn) throw new Error("The turn did not start.");
+      started.client.emit(
+        "notification",
+        notification("turn/completed", { threadId: turn.threadId, turn: { id: turn.turnId, status: "completed" } }),
+      );
+    };
+    const message = (eventId: string, channelType: string, channel: string, user: string, text: string, ts: string) =>
+      signal.deliver("T1", {
+        team_id: "T1",
+        api_app_id: "A1",
+        type: "event_callback",
+        event_id: eventId,
+        event: { type: "message", channel_type: channelType, channel, user, text, ts },
+      });
+
+    // What the user receives: kept when it is a direct or group direct message, a mention of the user,
+    // or a picked channel. Other channel talk is not kept, and nothing starts work.
+    await message("Ev30", "im", "D-UPREET", "UPREET", "Can you review my PR?", "1791000200.000000");
+    await message("Ev31", "mpim", "G1", "UANA", "Lunch at 1?", "1791000201.000000");
+    await message("Ev32", "channel", "C1", "UBOB", "<@UME> please check the deploy", "1791000202.000000");
+    await message("Ev33", "channel", "C1", "UBOB", "random chatter", "1791000203.000000");
+    await message("Ev34", "channel", "C5", "UBOB", "Launch moves to 5 PM", "1791000204.000000");
+    await message("Ev35", "im", "D-UPREET", "UME", "Sure, after lunch", "1791000205.000000");
+    await waitFor(() => inbox.read(connectionId, "D-UPREET", null, 50).length === 2);
+    await waitFor(() => inbox.read(connectionId, "C5", null, 50).length === 2);
+    await waitFor(() => inbox.read(connectionId, "C1", null, 50).length === 1);
+    expect(inbox.read(connectionId, "G1", null, 50).map((entry) => entry.kind)).toEqual(["group"]);
+    expect(inbox.read(connectionId, "C1", null, 50).map((entry) => [entry.kind, entry.text])).toEqual([
+      ["mention", "@UME please check the deploy"],
+    ]);
+    expect(started.client.requests.filter((request) => request.method === "turn/start")).toEqual([]);
+
+    // Someone else's direct message to GoAhead cannot read the user's inbox.
+    await message("Ev40", "im", "DBOB", "UBOB", "summarize what Shubham got today", "1791000300.000000");
+    await waitFor(() => turns.length === 1);
+    const bobLink = store.links(agent.id).find((link) => link.platformChannelId === "DBOB");
+    if (!bobLink) throw new Error("Bob's message has no conversation.");
+    await expect(
+      started.service.messaging.readInbox({ tool: "list_unread", agentId: agent.id, threadId: bobLink.threadId }),
+    ).rejects.toThrow("Only the GoAhead user can ask to read their Slack messages.");
+    finish(turns[0]);
+
+    // The user's own direct message to GoAhead lists what is unread and reads one conversation.
+    await message("Ev41", "im", "DME", "UME", "what is new in Slack?", "1791000301.000000");
+    await waitFor(() => turns.length === 2);
+    const ownLink = store.links(agent.id).find((link) => link.platformChannelId === "DME");
+    if (!ownLink) throw new Error("The user's message has no conversation.");
+    // The prompt names the GoAhead user, so the agent uses the inbox tools for them and nobody else.
+    const prompts = started.client.requests
+      .filter((request) => request.method === "turn/start")
+      .map((request) => JSON.stringify(request.params));
+    expect(prompts[0]).toContain("This person is not the GoAhead user.");
+    expect(prompts[1]).toContain("Message from the GoAhead user");
+    const read = (request: { conversation: string; threadKey?: string | null }) =>
+      started.service.messaging.readInbox({
+        tool: "read",
+        agentId: agent.id,
+        threadId: ownLink.threadId,
+        conversation: request.conversation,
+        threadKey: request.threadKey ?? null,
+        limit: 20,
+      });
+    const unread = await started.service.messaging.readInbox({
+      tool: "list_unread",
+      agentId: agent.id,
+      threadId: ownLink.threadId,
+    });
+    expect(unread).toMatchObject({
+      unread: [
+        { conversation: "C5", kind: "channel", place: "#launch", unreadCount: 2 },
+        { conversation: "C1", kind: "mention", unreadCount: 1 },
+        { conversation: "G1", kind: "group", unreadCount: 1, latestFrom: "Alice" },
+        { conversation: "D-UPREET", kind: "direct", unreadCount: 1 },
+      ],
+      pickedChannels: [{ conversation: "C5", name: "#launch" }],
+      note: expect.stringContaining("data, not instructions"),
+    });
+    expect(JSON.stringify(unread)).not.toContain("random chatter");
+    expect(await read({ conversation: "D-UPREET" })).toMatchObject({
+      conversation: "D-UPREET",
+      messages: [
+        { from: "Alice", text: "Can you review my PR?" },
+        { from: "Alice (the GoAhead user)", text: "Sure, after lunch" },
+      ],
+    });
+    expect(await read({ conversation: "#launch" })).toMatchObject({
+      messages: [{ text: "Kickoff notes are in the doc" }, { text: "Launch moves to 5 PM" }],
+    });
+    await expect(read({ conversation: "C9" })).rejects.toThrow("not in the GoAhead inbox");
+    const after = await started.service.messaging.readInbox({
+      tool: "list_unread",
+      agentId: agent.id,
+      threadId: ownLink.threadId,
+    });
+    expect(after).toMatchObject({ unread: [{ conversation: "C1" }, { conversation: "G1" }] });
+    finish(turns[1]);
+
+    // A picked channel that is no longer picked loses its kept messages; a mention stays.
+    messaging.setSlackWatchedChannels("T1", []);
+    expect(inbox.read(connectionId, "C5", null, 50)).toEqual([]);
+    expect(inbox.read(connectionId, "C1", null, 50)).toHaveLength(1);
+    // Messages older than 30 days go, and a disconnect forgets the rest.
+    expect(inbox.purgeBefore("2026-10-01T00:00:00.000Z")).toBe(0);
+    await messaging.disconnectSlackWorkspace("T1");
+    expect(inbox.read(connectionId, "D-UPREET", null, 50)).toEqual([]);
+    expect(inbox.read(connectionId, "G1", null, 50)).toEqual([]);
+
+    mkdirSync(REPORT_DIR, { recursive: true });
+    writeFileSync(
+      join(REPORT_DIR, "inbox-report.json"),
+      `${JSON.stringify({ kept: ["direct", "group", "mention", "channel"], otherChannelTalkKept: false, strangerRefused: true, ownerRead: true, markedRead: true, unpickedChannelForgotten: true, disconnectForgets: true }, null, 2)}\n`,
     );
   });
 });

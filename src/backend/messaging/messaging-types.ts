@@ -45,6 +45,28 @@ export interface InboundMessage {
   files: InboundFile[];
   /** Set for a reply to a message OpenBot sent as the user, already turned into a message of its conversation. */
   observed?: boolean;
+  /**
+   * A message in a group direct message that does not name OpenBot. It never starts a conversation;
+   * it only comes back as a reply after OpenBot sent a message to that group.
+   */
+  groupDirect?: boolean;
+}
+
+/**
+ * A message that the connected person can see, before the inbox decides to keep it. It does not
+ * address OpenBot and starts no work.
+ */
+export interface InboxCandidate {
+  platformChannelId: string;
+  platformMessageId: string;
+  /** The thread the message is in, or null at the top of the conversation. */
+  threadKey: string | null;
+  place: "direct" | "group" | "channel";
+  authorId: string;
+  text: string;
+  sentAt: string;
+  /** The people the text mentions, by platform user id. */
+  mentionedUserIds: string[];
 }
 
 export type InboundAction =
@@ -114,12 +136,19 @@ export interface MessagingAdapter {
   postAnswer(target: MessageTarget, markdown: string, replaceMessageId: string | null): Promise<void>;
   /** Uploads files to the conversation, and returns the names it did not send. */
   upload(target: MessageTarget, files: MessagingAnswerFile[]): Promise<string[]>;
-  /** The direct message with one person, opened when needed, as the sender. Returns its channel id. */
-  openDirectMessage?(userId: string, as: MessageSender): Promise<string>;
+  /**
+   * The direct message with one person, or the group direct message with several (ids joined with
+   * commas), opened when needed, as the sender. Returns its channel id.
+   */
+  openDirectMessage?(userIds: string, as: MessageSender): Promise<string>;
   /** Posts markdown text as the sender, outside the status flow. Returns the message id. */
   postAs?(target: MessageTarget, markdown: string, as: MessageSender): Promise<string>;
   /** A link to one posted message, or null when the platform gives none. */
   permalink?(platformChannelId: string, messageId: string): Promise<string | null>;
+  /** The channels the connected person is in, read as them. */
+  listPersonPlaces?(): Promise<Array<{ id: string; name: string; isPrivate: boolean }>>;
+  /** The newest messages at the top of one channel, read as the connected person, newest first. */
+  recentMessages?(platformChannelId: string, limit: number): Promise<InboxCandidate[]>;
   /**
    * Whether OpenBot's bot is in the conversation. With the user's events, a direct message between
    * the user and someone else arrives too, and it must never be answered as a request to OpenBot.
@@ -149,6 +178,8 @@ export interface TransportSink {
   action(action: InboundAction): void;
   /** A public place was created that OpenBot can join. */
   placeCreated?(platformChannelId: string): void;
+  /** A message the connected person can see. The inbox decides whether to keep it. */
+  inbox?(candidate: InboxCandidate): void;
   /**
    * The platform says that a token was revoked or the app was removed. The event can be late: a
    * disconnect revokes the old tokens, and the event can arrive after a new install. Without this

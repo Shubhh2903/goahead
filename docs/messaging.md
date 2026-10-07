@@ -40,6 +40,21 @@ browser. A joined server shows no Slack page.
   as separate conversations.
 - The desktop sidebar lists each conversation under the agent that answers it. Opening one shows it
   read-only.
+
+### The local Slack inbox
+
+When a workspace is connected as the person, GoAhead keeps a local inbox
+(`projection_messaging_inbox`, migration 28): their direct and group direct messages, messages that
+mention them, and the channels they pick in Settings > Connectors > Slack. It fills from the user
+events GoAhead already receives, not from history calls: Slack allows apps outside its Marketplace one
+`conversations.history` call a minute, of at most 15 messages. A newly picked channel gets one such
+call, and the calls of one workspace wait a minute between them. Rows older than 30 days are deleted
+every 6 hours; disconnect deletes the workspace's inbox.
+
+The agent tools `slack_list_unread` and `slack_read_conversation` read it. They work only in the
+person's own direct message with GoAhead, while a turn that the person started runs, because an
+answer in a channel is public and a request from anyone else must never read their messages.
+"Unread" is GoAhead's own read mark per conversation; reading a conversation moves it.
 - A new conversation goes to the Slack Orchestrator. It answers short requests itself, and gives other
   work to the one agent that fits best. That agent's answer comes back to the thread, and the
   orchestrator posts it. Until you add the orchestrator, Slack gets "No agent can answer here yet".

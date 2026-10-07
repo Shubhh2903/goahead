@@ -14,19 +14,25 @@ import type {
   MessagingPlatform,
   MessagingThreadSummary,
   RespondToApprovalInput,
+  SlackChannelChoice,
+  SlackChannelList,
   SlackOverview,
 } from "@openbot/contracts/ipc";
-import { MESSAGING_CONNECTION_STATES } from "@openbot/contracts/ipc";
+import { MESSAGING_CONNECTION_STATES, MESSAGING_LIMITS } from "@openbot/contracts/ipc";
 import { isDynamicRecord, isOneOf, isString } from "@openbot/contracts/runtime-values";
 import { SLACK_ORCHESTRATOR_AVATAR } from "@openbot/contracts/slack-app";
 import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, redactText } from "@openbot/logging";
 import type { MessagingOrigin } from "../mailbox-store";
 import type { SidebarLayoutStore } from "../sidebar-layout-store";
-import { parseSlackSendTarget, type SlackSendTarget } from "./messaging-send-tool";
+import type { InboxKind } from "./messaging-inbox-store";
+import { SLACK_INBOX_UNTRUSTED_NOTE } from "./messaging-read-tools";
+import { parseSlackSendTarget, type SlackSendTarget, slackTargetPeople } from "./messaging-send-tool";
 import type { MessagingConnectionRecord, MessagingLink } from "./messaging-store";
 import type {
   MessagingActivity,
+  MessagingInboxRequest,
+  MessagingInboxResult,
   MessagingSendReceipt,
   MessagingSendRequest,
   MessagingThreads,
@@ -36,6 +42,7 @@ import {
   DIRECT_CONVERSATION_KEY,
   type InboundAction,
   type InboundMessage,
+  type InboxCandidate,
   type IngressAnswer,
   type IngressDelivery,
   type MessageSender,
@@ -162,6 +169,15 @@ const CANCEL_TEXT = /^(cancel|stop)$/i;
 const RECENT_MESSAGES = 2_000;
 /** How long a connection waits before it tries Slack again after Slack was unreachable. */
 const IDENTIFY_RETRY_MS = 30_000;
+/** How long the local inbox keeps a message, and how often it deletes older ones. */
+const INBOX_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const INBOX_PURGE_INTERVAL_MS = 6 * 60 * 60_000;
+/**
+ * A newly picked channel starts with its newest messages. Slack allows apps outside its Marketplace
+ * one history call a minute, of at most 15 messages, so the fills of one workspace wait in line.
+ */
+const HISTORY_FILL_MESSAGES = 15;
+const HISTORY_FILL_SPACING_MS = 61_000;
 /** The marker `mention` uses. Text that did not come from the host has it taken out. */
 const MENTION_MARKERS = /[\uE000-\uE001]/g;
 
@@ -187,6 +203,8 @@ export class MessagingService {
   readonly #stops = new Map<string, { linkId: string; authorId: string; connectionId: string }>();
   readonly #chains = new Map<string, Promise<void>>();
   readonly #recent = new Set<string>();
+  /** The history fills of each connection, one after the other. */
+  readonly #fills = new Map<string, Promise<void>>();
   readonly #unsubscribe: Array<() => void> = [];
   readonly #ingress: MessagingIngress | null;
   readonly #connect: SlackConnect | null;
@@ -215,7 +233,12 @@ export class MessagingService {
     );
     this.#threads.setContextSource((link, origin) => this.#promptContext(link, origin));
     this.#threads.setMessageSender((request) => this.#requestSend(request));
+    this.#threads.setInboxReader((request) => this.#readInbox(request));
     this.#ingress?.handle((workspaceId, delivery) => this.deliverSlack(workspaceId, delivery));
+    this.#purgeInbox();
+    const purge = setInterval(() => this.#purgeInbox(), INBOX_PURGE_INTERVAL_MS);
+    purge.unref?.();
+    this.#unsubscribe.push(() => clearInterval(purge));
     const records = this.#threads.store.connections();
     await this.#credentials.retain(new Set(records.map((record) => record.connectionId)));
     await Promise.all(records.filter((record) => record.enabled).map((record) => this.#startConnection(record)));
@@ -226,6 +249,7 @@ export class MessagingService {
     for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
     this.#threads.setContextSource(null);
     this.#threads.setMessageSender(null);
+    this.#threads.setInboxReader(null);
     this.#ingress?.handle(null);
     await Promise.all([...this.#live.values()].map((live) => live.transport?.stop()));
     this.#live.clear();
@@ -274,6 +298,36 @@ export class MessagingService {
         .filter((record) => record.platform === "slack" && this.#credentials.status(record.connectionId) !== "missing")
         .map((record) => this.#summary(record)),
     };
+  }
+
+  /** The channels the connected person is in, for the inbox picker. Read from Slack as the person. */
+  async listSlackChannels(workspaceId: string): Promise<SlackChannelList> {
+    const live = this.#personConnection(workspaceId);
+    if (!live.adapter.listPersonPlaces) throw new Error(sourceText("error.messaging.unsupported"));
+    const places = await live.adapter.listPersonPlaces();
+    return {
+      channels: places
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .slice(0, MESSAGING_LIMITS.channelOptions)
+        .map((place) => ({ channelId: place.id, name: place.name, isPrivate: place.isPrivate })),
+    };
+  }
+
+  /**
+   * Replaces the channels the inbox keeps. A channel no longer picked loses its kept messages; a new
+   * one starts with its newest messages, read in the background.
+   */
+  setSlackWatchedChannels(workspaceId: string, channels: SlackChannelChoice[]): void {
+    const live = this.#personConnection(workspaceId);
+    const connectionId = live.record.connectionId;
+    const added = this.#threads.inbox.setWatched(
+      connectionId,
+      channels.map((channel) => ({
+        platformChannelId: channel.channelId,
+        name: `#${channel.name.replace(/^#/u, "")}`,
+      })),
+    );
+    for (const channel of added) this.#fillHistory(live, channel.platformChannelId);
   }
 
   async reconnect(workspaceId: string): Promise<void> {
@@ -387,6 +441,8 @@ export class MessagingService {
           .call("auth.revoke")
           .catch((error) => this.#warn(error));
     await this.#credentials.clear(record.connectionId);
+    // The inbox is a copy of the person's Slack messages, read with the access this revokes.
+    this.#threads.inbox.deleteForConnection(record.connectionId);
     this.#threads.store.updateConnection(record.connectionId, { enabled: false, lastErrorCode: null });
     await this.#connect?.unlink(workspaceId).catch((error) => this.#warn(error));
     this.#ingress?.reconnect();
@@ -461,6 +517,7 @@ export class MessagingService {
       action: (action) => void this.#action(live, action).catch((error) => this.#warn(error)),
       placeCreated: (platformChannelId) =>
         void live.adapter.joinPlace?.(platformChannelId).catch((error) => this.#warn(error)),
+      inbox: (candidate) => void this.#keep(live, candidate).catch((error) => this.#warn(error)),
       revoked: () => void this.#verifyTokens(live).catch((error) => this.#warn(error)),
     });
     // So people can mention OpenBot in any public channel without inviting it first. Channels made
@@ -493,7 +550,8 @@ export class MessagingService {
     if (!user || message.authorId === user.id || message.authorId === live.identity?.botUserId) return;
     const sent = this.#threads.store.latestSendTo(live.record.connectionId, message.platformChannelId);
     if (!sent?.linkId || Date.now() - Date.parse(sent.approvedAt) > REPLY_WATCH_MS) return;
-    if (!message.isDirect && message.threadKey !== sent.platformMessageId) return;
+    // A direct or group direct message is one conversation; in a channel, only the thread under the send.
+    if (!message.isDirect && !message.groupDirect && message.threadKey !== sent.platformMessageId) return;
     const link = this.#threads.store.link(sent.linkId);
     if (!link) return;
     const authorName = await live.adapter.authorName(message.authorId);
@@ -513,6 +571,137 @@ export class MessagingService {
       files: [],
       observed: true,
     });
+  }
+
+  /**
+   * Keeps a message in the person's local inbox when it is theirs to read: a direct message with
+   * someone other than OpenBot, a group direct message, a message that mentions them, or a message in
+   * a channel they picked. Without the person's own connection, nothing is kept.
+   */
+  async #keep(live: LiveConnection, candidate: InboxCandidate): Promise<void> {
+    const user = live.identity?.user;
+    if (!user) return;
+    const inbox = this.#threads.inbox;
+    const connectionId = live.record.connectionId;
+    let kind: InboxKind | null = null;
+    if (candidate.place === "group") kind = "group";
+    else if (candidate.place === "direct") {
+      // The direct message with OpenBot is an agent conversation already.
+      const withOpenBot = await (live.adapter.isOwnConversation?.(candidate.platformChannelId) ??
+        Promise.resolve(true));
+      if (!withOpenBot) kind = "direct";
+    } else if (inbox.isWatched(connectionId, candidate.platformChannelId)) kind = "channel";
+    else if (candidate.mentionedUserIds.includes(user.id)) kind = "mention";
+    if (!kind) return;
+    inbox.add({
+      connectionId,
+      platformChannelId: candidate.platformChannelId,
+      platformMessageId: candidate.platformMessageId,
+      threadKey: candidate.threadKey,
+      kind,
+      authorId: candidate.authorId,
+      authorName: await live.adapter.authorName(candidate.authorId),
+      text: candidate.text,
+      sentAt: candidate.sentAt,
+    });
+  }
+
+  /**
+   * An agent's read of the person's inbox. Only the connected person may ask, and only in their direct
+   * message with OpenBot: anyone else who mentions OpenBot must never read their private messages, and
+   * an answer in a channel is posted where everyone there reads it.
+   */
+  async #readInbox(request: MessagingInboxRequest): Promise<MessagingInboxResult> {
+    const link = this.#threads.store.linkForThread(request.threadId);
+    if (!link?.isDirect) throw new Error(sourceText("error.messaging.inboxNeedsSlack"));
+    const live = this.#live.get(link.connectionId);
+    const user = live?.identity?.user;
+    if (!live || !user) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
+    if (this.#threads.runningOrigin(link.linkId)?.origin.authorId !== user.id)
+      throw new Error(sourceText("error.messaging.inboxOwnerOnly"));
+    const inbox = this.#threads.inbox;
+    const connectionId = link.connectionId;
+    const watched = inbox.watched(connectionId);
+    const place = async (platformChannelId: string, kind: InboxKind, fallback: string) =>
+      kind === "direct" || kind === "group"
+        ? fallback
+        : (watched.find((channel) => channel.platformChannelId === platformChannelId)?.name ??
+          (await live.adapter.placeName(platformChannelId)));
+    if (request.tool === "list_unread") {
+      const unread = inbox.unread(connectionId, user.id);
+      return {
+        unread: await Promise.all(
+          unread.map(async (item) => ({
+            conversation: item.platformChannelId,
+            kind: item.kind,
+            place: await place(item.platformChannelId, item.kind, item.latestAuthorName),
+            unreadCount: item.count,
+            latestFrom: item.latestAuthorName,
+            latestAt: item.latestAt,
+          })),
+        ),
+        pickedChannels: watched.map((channel) => ({ conversation: channel.platformChannelId, name: channel.name })),
+        note: SLACK_INBOX_UNTRUSTED_NOTE,
+      };
+    }
+    const conversation = inboxConversation(request.conversation, watched);
+    if (!conversation) throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
+    const messages = inbox.read(connectionId, conversation, request.threadKey, request.limit);
+    if (messages.length === 0 && !watched.some((channel) => channel.platformChannelId === conversation))
+      throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
+    const newest = messages.at(-1);
+    if (newest && !request.threadKey) inbox.markRead(connectionId, conversation, newest.platformMessageId);
+    const kind = messages[0]?.kind ?? "channel";
+    const other = messages.find((message) => message.authorId !== user.id)?.authorName ?? "";
+    return {
+      conversation,
+      place: await place(conversation, kind, other),
+      messages: messages.map((message) => ({
+        id: message.platformMessageId,
+        thread: message.threadKey,
+        from: message.authorId === user.id ? `${message.authorName} (the GoAhead user)` : message.authorName,
+        sentAt: message.sentAt,
+        text: message.text,
+      })),
+      note: SLACK_INBOX_UNTRUSTED_NOTE,
+    };
+  }
+
+  /** The live connection of a workspace that is connected as the person. */
+  #personConnection(workspaceId: string): LiveConnection {
+    const record = this.#requireConnection(workspaceId);
+    const live = this.#live.get(record.connectionId);
+    if (!live?.identity?.user) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
+    return live;
+  }
+
+  /** Reads a newly picked channel's newest messages into the inbox, after the fills before it. */
+  #fillHistory(live: LiveConnection, platformChannelId: string): void {
+    const connectionId = live.record.connectionId;
+    const previous = this.#fills.get(connectionId) ?? Promise.resolve();
+    const next = previous.then(async () => {
+      if (this.#live.get(connectionId) !== live || !live.adapter.recentMessages) return;
+      if (!this.#threads.inbox.isWatched(connectionId, platformChannelId)) return;
+      const messages = await live.adapter.recentMessages(platformChannelId, HISTORY_FILL_MESSAGES).catch((error) => {
+        this.#warn(error);
+        return [];
+      });
+      for (const candidate of messages) await this.#keep(live, candidate).catch((error) => this.#warn(error));
+      await new Promise((resolve) => setTimeout(resolve, HISTORY_FILL_SPACING_MS).unref?.());
+    });
+    const settled = next.catch((error) => this.#warn(error));
+    this.#fills.set(connectionId, settled);
+    void settled.then(() => {
+      if (this.#fills.get(connectionId) === settled) this.#fills.delete(connectionId);
+    });
+  }
+
+  #purgeInbox(): void {
+    try {
+      this.#threads.inbox.purgeBefore(new Date(Date.now() - INBOX_RETENTION_MS).toISOString());
+    } catch (error) {
+      this.#warn(error);
+    }
   }
 
   async #restart(connectionId: string): Promise<void> {
@@ -560,6 +749,10 @@ export class MessagingService {
       retryAt: state === "rate_limited" ? (live?.retryAt ?? null) : null,
       credentials,
       orchestratorAgentId: record.orchestratorAgentId,
+      watchedChannels: this.#threads.inbox.watched(record.connectionId).map((channel) => ({
+        channelId: channel.platformChannelId,
+        name: channel.name.replace(/^#/u, ""),
+      })),
     };
   }
 
@@ -710,7 +903,14 @@ export class MessagingService {
         : await live.adapter
             .history(link.platformChannelId, link.threadKey, link.historyCursor, origin.platformMessageId)
             .catch(() => []);
-    return { workspaceName, place, messages, cursor: origin.platformMessageId, skippedFiles: [] };
+    return {
+      workspaceName,
+      place,
+      messages,
+      cursor: origin.platformMessageId,
+      skippedFiles: [],
+      ownerId: live.identity?.user?.id ?? null,
+    };
   }
 
   // Outbound.
@@ -865,10 +1065,18 @@ export class MessagingService {
     const credentials = this.#credentials.get(link.connectionId);
     const approverId = credentials?.userId;
     if (!approverId) throw new Error(sourceText("error.messaging.sendNeedsUser"));
-    const to = parseSlackSendTarget(request.to);
-    if (!to) throw new Error(sourceText("error.messaging.sendTargetInvalid"));
-    // The user reads the conversation the agent answers in: a message to them is that answer.
-    if (to.kind === "user" && to.id === approverId) throw new Error(sourceText("error.messaging.sendToSelf"));
+    const parsed = parseSlackSendTarget(request.to);
+    if (!parsed) throw new Error(sourceText("error.messaging.sendTargetInvalid"));
+    // The user reads the conversation the agent answers in: a message to them is that answer. In a
+    // group, the sender is always a member, so naming them changes nothing.
+    const others = slackTargetPeople(parsed).filter((id) => id !== approverId);
+    if (parsed.kind !== "channel" && others.length === 0) throw new Error(sourceText("error.messaging.sendToSelf"));
+    const to: SlackSendTarget =
+      parsed.kind === "channel"
+        ? parsed
+        : others.length === 1
+          ? { kind: "user", id: others[0] ?? "" }
+          : { kind: "group", id: others.join(",") };
     const text = request.text.replace(MENTION_MARKERS, "").trim().slice(0, INPUT_LIMITS.messageText);
     if (!text) throw new Error(sourceText("error.messaging.sendTextEmpty"));
     const sender: MessageSender = credentials.userToken ? "user" : "bot";
@@ -892,7 +1100,12 @@ export class MessagingService {
     }
     const key = running ? `${link.linkId}:${running.origin.platformMessageId}` : null;
     const target = (key && this.#targets.get(key)) || (key && this.#posts.get(key)?.target) || linkTarget(link);
-    const toLabel = to.kind === "user" ? adapter.mention(to.id) : await adapter.placeName(to.id);
+    const toLabel =
+      to.kind === "channel"
+        ? await adapter.placeName(to.id)
+        : slackTargetPeople(to)
+            .map((id) => adapter.mention(id))
+            .join(", ");
     const draftText = [
       sourceText("status.messaging.sendDraftTitle"),
       sourceText("status.messaging.sendDraftTo", { to: toLabel }),
@@ -919,7 +1132,7 @@ export class MessagingService {
     const { adapter } = live;
     if (!adapter.postAs) throw new Error(sourceText("error.messaging.unsupported"));
     const channel =
-      draft.to.kind === "user" ? await adapter.openDirectMessage?.(draft.to.id, draft.sender) : draft.to.id;
+      draft.to.kind === "channel" ? draft.to.id : await adapter.openDirectMessage?.(draft.to.id, draft.sender);
     if (!channel) throw new Error(sourceText("error.messaging.unsupported"));
     const messageId = await adapter.postAs(
       { platformChannelId: channel, replyThreadId: draft.threadKey },
@@ -1066,6 +1279,17 @@ export class MessagingService {
       ...(code ? { code } : {}),
     });
   }
+}
+
+/** The conversation id that an agent names: an id, a channel link, or a picked channel's name. */
+function inboxConversation(value: string, watched: Array<{ platformChannelId: string; name: string }>): string | null {
+  const trimmed = value.trim();
+  const link = /^<#([A-Z0-9]+)(?:\|[^>]*)?>$/u.exec(trimmed)?.[1];
+  if (link) return link;
+  // Only looked up in the local inbox, so a stricter id check would protect nothing.
+  if (/^[A-Z0-9][A-Z0-9-]{1,63}$/u.test(trimmed)) return trimmed;
+  const name = trimmed.replace(/^#/u, "").toLowerCase();
+  return watched.find((channel) => channel.name.replace(/^#/u, "").toLowerCase() === name)?.platformChannelId ?? null;
 }
 
 /** Where to answer when the message that started the work is not known: the conversation's thread. */

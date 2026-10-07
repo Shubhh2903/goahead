@@ -16,6 +16,7 @@ import {
 } from "./agent/sidebar-tools";
 import { LOCAL_SKILL_TOOL_DEFINITIONS } from "./agent/skill-tools";
 import { CHANNEL_TOOL_DEFINITIONS } from "./channel-tools";
+import { SLACK_LIST_UNREAD_TOOL, SLACK_READ_CONVERSATION_TOOL } from "./messaging/messaging-read-tools";
 import { SLACK_SEND_MESSAGE_TOOL } from "./messaging/messaging-send-tool";
 import { routineScheduleZodSchema } from "./routine-tool-schema";
 
@@ -31,6 +32,8 @@ export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
   ...DATA_TOOL_DEFINITIONS,
   ...LOCAL_SKILL_TOOL_DEFINITIONS,
   SLACK_SEND_MESSAGE_TOOL,
+  SLACK_LIST_UNREAD_TOOL,
+  SLACK_READ_CONVERSATION_TOOL,
   {
     name: "list_sites",
     description:

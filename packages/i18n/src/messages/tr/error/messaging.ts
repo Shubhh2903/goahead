@@ -16,4 +16,10 @@ export const messages = {
     "GoAhead kullanıcısı bu konuşmayı okuyor. Ona mesaj göndermek yerine burada yanıtlayın.",
   "error.messaging.sendTextEmpty": "Mesajın metni yok.",
   "error.messaging.threadUnavailable": "Bu Slack konuşması kullanılamıyor.",
+  "error.messaging.inboxNeedsSlack": "Slack mesajları yalnızca GoAhead ile doğrudan mesajınızda okunabilir.",
+  "error.messaging.inboxNeedsUser":
+    "Ajanların Slack mesajlarınızı okuyabilmesi için Slack çalışma alanını GoAhead'de kendiniz olarak bağlayın.",
+  "error.messaging.inboxOwnerOnly": "Slack mesajlarının okunmasını yalnızca GoAhead kullanıcısı isteyebilir.",
+  "error.messaging.inboxUnknownConversation":
+    "Bu Slack konuşması GoAhead gelen kutusunda yok. Tuttuğu konuşmaları görmek için slack_list_unread kullanın.",
 } as const satisfies PartialTranslation<typeof source>;

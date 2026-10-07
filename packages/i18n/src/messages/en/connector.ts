@@ -149,6 +149,28 @@ export const messages = defineMessages("connector", {
     "GoAhead stops answering in {workspace} and removes its Slack token from this computer.",
   "connector.slack.disconnectEffect": "People in {workspace} can no longer reach your agents through @GoAhead.",
   "connector.slack.disconnectEffectUser": "GoAhead can no longer read or reply as you in Slack.",
+  "connector.slack.disconnectEffectInbox": "The Slack messages GoAhead kept on this computer are deleted.",
+  // The local Slack inbox: what GoAhead keeps for summaries, and the channels the person picks.
+  "connector.slack.inboxTitle": "Slack inbox",
+  "connector.slack.inboxDescription":
+    "GoAhead keeps your direct messages, group messages and mentions on this computer for 30 days. Agents read them only when you ask in your direct message with GoAhead. Pick channels to keep too.",
+  "connector.slack.inboxChannelsNone": "No channels picked",
+  "connector.slack.inboxChannels": { one: "{count} channel: {names}", other: "{count} channels: {names}" },
+  "connector.slack.chooseChannels": "Choose channels",
+  "connector.slack.channelsTitle": "Channels for the Slack inbox",
+  "connector.slack.channelsDescription":
+    "GoAhead keeps the messages of the channels you pick, starting with the newest 15 of each. A channel you remove loses its kept messages.",
+  "connector.slack.channelsSearch": "Search channels",
+  "connector.slack.channelsLoading": "Loading your channels…",
+  "connector.slack.channelsFailed": "Your Slack channels did not load.",
+  "connector.slack.channelsEmpty": "No channel matches.",
+  "connector.slack.channelsLimit": {
+    one: "You can pick up to {count} channel.",
+    other: "You can pick up to {count} channels.",
+  },
+  "connector.slack.channelPrivate": "Private channel",
+  "connector.slack.channelsSave": "Save",
+  "connector.slack.channelsCancel": "Cancel",
   "connector.slack.removeEffectKept": "The conversations and the Slack Orchestrator stay in GoAhead.",
   "connector.slack.keep": "Keep connected",
   "connector.slack.close": "Close",

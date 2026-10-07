@@ -1,4 +1,4 @@
-import type { SlackOverview } from "@openbot/contracts/ipc";
+import type { SlackChannelChoice, SlackChannelOption, SlackOverview } from "@openbot/contracts/ipc";
 import type {
   SlackOrchestratorChoice,
   SlackOrchestratorModels,
@@ -24,6 +24,9 @@ export interface SlackConnectorController {
   /** The catalog for the orchestrator's model picker, or undefined to start on a new agent's default. */
   models: () => SlackOrchestratorModels | undefined;
   addOrchestrator: (workspaceId: string, choice: SlackOrchestratorChoice | null) => void;
+  /** The channels the person is in, for the inbox picker. The picker shows a failure itself. */
+  listChannels: (workspaceId: string) => Promise<SlackChannelOption[]>;
+  setWatchedChannels: (workspaceId: string, channels: SlackChannelChoice[]) => void;
 }
 
 /**
@@ -87,6 +90,12 @@ export function createSlackConnector(
     reconnect: (workspaceId) => run(() => messaging().reconnectSlackWorkspace({ workspaceId })),
     setEnabled: (workspaceId, enabled) => run(() => messaging().setSlackEnabled({ workspaceId, enabled })),
     models,
+    listChannels: (workspaceId) =>
+      messaging()
+        .listSlackChannels({ workspaceId })
+        .then((list) => list.channels),
+    setWatchedChannels: (workspaceId, channels) =>
+      run(() => messaging().setSlackWatchedChannels({ workspaceId, channels })),
     addOrchestrator: (workspaceId, choice) =>
       run(async () => {
         const { sectionId } = await messaging().addSlackOrchestrator({ workspaceId, ...(choice ?? {}) });

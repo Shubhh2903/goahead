@@ -28,6 +28,11 @@ import { OPENBOT_BROWSER_NAMESPACE } from "../browser-tools";
 import type { ChannelService } from "../channel-service";
 import type { MailboxStore } from "../mailbox-store";
 import { agentMcpServers } from "../mcp-provider-shapes";
+import {
+  SLACK_LIST_UNREAD_TOOL,
+  SLACK_READ_CONVERSATION_TOOL,
+  slackReadConversationSchema,
+} from "../messaging/messaging-read-tools";
 import { SLACK_SEND_MESSAGE_TOOL, slackSendMessageSchema } from "../messaging/messaging-send-tool";
 import type { MessagingThreads } from "../messaging/messaging-threads";
 import { type AppServerRequest, type DynamicToolCallParams, isRecord } from "../protocol";
@@ -484,6 +489,29 @@ export class OpenBotToolRouter {
         );
       } catch (error) {
         return openBotToolFailure(error instanceof Error ? error.message : "The message could not be drafted.");
+      }
+    }
+
+    if (params.tool === SLACK_LIST_UNREAD_TOOL.name || params.tool === SLACK_READ_CONVERSATION_TOOL.name) {
+      const threadId = this.#conversation.publicThreadId(senderAgentId, params.threadId);
+      try {
+        if (params.tool === SLACK_LIST_UNREAD_TOOL.name)
+          return openBotToolResult(
+            await this.#messaging.readInbox({ tool: "list_unread", agentId: senderAgentId, threadId }),
+          );
+        const args = slackReadConversationSchema.parse(params.arguments ?? {});
+        return openBotToolResult(
+          await this.#messaging.readInbox({
+            tool: "read",
+            agentId: senderAgentId,
+            threadId,
+            conversation: args.conversation,
+            threadKey: args.thread ?? null,
+            limit: args.limit ?? 20,
+          }),
+        );
+      } catch (error) {
+        return openBotToolFailure(error instanceof Error ? error.message : "The Slack inbox could not be read.");
       }
     }
 

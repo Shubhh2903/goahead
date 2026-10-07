@@ -208,6 +208,8 @@ import type {
   MessagingThreadSummary,
   MessagingThreadsChanged,
   SetSlackEnabledInput,
+  SetSlackWatchedChannelsInput,
+  SlackChannelList,
   SlackOverview,
   SlackWorkspaceInput,
 } from "./ipc-messaging";
@@ -604,6 +606,9 @@ export const IPC_ENDPOINTS = {
     readThreadPage: request<MessagingThreadPageInput, ConversationPage>()("messaging:read-thread-page"),
     markThreadRead: request<MarkMessagingThreadReadInput, ConversationReadState>()("messaging:mark-thread-read"),
     threadsChanged: event<MessagingThreadsChanged>()("messaging:threads-changed"),
+    // The channels the person picks for GoAhead's local inbox. Listing them reads Slack as the person.
+    listSlackChannels: request<SlackWorkspaceInput, SlackChannelList>()("messaging:list-slack-channels"),
+    setSlackWatchedChannels: request<SetSlackWatchedChannelsInput, void>()("messaging:set-slack-watched-channels"),
   },
   // The server name, logo and app update of one server's host. `host.updateIdentity` and `update`
   // reach this computer only; these take the server, so a remote admin reaches the host. The

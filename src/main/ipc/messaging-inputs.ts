@@ -6,9 +6,16 @@ import type {
   MarkMessagingThreadReadInput,
   MessagingThreadPageInput,
   SetSlackEnabledInput,
+  SetSlackWatchedChannelsInput,
   SlackWorkspaceInput,
 } from "@openbot/contracts/ipc";
-import { isAgentModel, isAgentProvider, isReasoningEffort } from "@openbot/contracts/ipc";
+import {
+  isAgentModel,
+  isAgentProvider,
+  isReasoningEffort,
+  isSlackChannelChoice,
+  MESSAGING_LIMITS,
+} from "@openbot/contracts/ipc";
 import { isBoolean, isString } from "@openbot/contracts/runtime-values";
 import { parsePageAnchor, parsePageLimit } from "./agent-inputs";
 import { isObject, requireString } from "./validation";
@@ -58,5 +65,19 @@ export function parseMarkMessagingThreadReadInput(value: unknown): MarkMessaging
     threadId: requireString(value.threadId, "Thread id", INPUT_LIMITS.identifier),
     throughMessageId:
       throughMessageId === null ? null : requireString(throughMessageId, "Message id", INPUT_LIMITS.identifier),
+  };
+}
+
+export function parseSetSlackWatchedChannelsInput(value: unknown): SetSlackWatchedChannelsInput {
+  if (
+    !isObject(value) ||
+    !Array.isArray(value.channels) ||
+    value.channels.length > MESSAGING_LIMITS.watchedChannels ||
+    !value.channels.every(isSlackChannelChoice)
+  )
+    throw new Error("A messaging request is invalid.");
+  return {
+    workspaceId: requireString(value.workspaceId, "Workspace id"),
+    channels: value.channels.map((channel) => ({ channelId: channel.channelId, name: channel.name })),
   };
 }

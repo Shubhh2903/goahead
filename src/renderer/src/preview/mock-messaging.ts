@@ -88,6 +88,7 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
         retryAt: null,
         credentials: "saved",
         orchestratorAgentId: null,
+        watchedChannels: [],
       });
     },
     disconnectSlackWorkspace: async ({ workspaceId }) => {
@@ -104,6 +105,18 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
         for (const listener of changeListeners) listener({ threadId: summary.threadId });
       return { agentId, sectionId: null };
     },
+    listSlackChannels: async ({ workspaceId }) => {
+      if (!connections.has(workspaceId)) throw new Error(sourceText("error.messaging.notConnected"));
+      return {
+        channels: [
+          { channelId: "C0PREVIEWGEN", name: "general", isPrivate: false },
+          { channelId: "C0PREVIEWLAU", name: "launch", isPrivate: false },
+          { channelId: "C0PREVIEWLEA", name: "leadership", isPrivate: true },
+          { channelId: "C0PREVIEWRAN", name: "random", isPrivate: false },
+        ],
+      };
+    },
+    setSlackWatchedChannels: async ({ workspaceId, channels }) => change(workspaceId, { watchedChannels: channels }),
     listThreads: async () => clone(threads.map((candidate) => candidate.summary)),
     readThreadPage: async ({ threadId }): Promise<ConversationPage> => {
       const { summary, messages } = findThread(threadId);

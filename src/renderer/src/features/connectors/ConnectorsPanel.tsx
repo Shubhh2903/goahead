@@ -159,6 +159,8 @@ export function ConnectorsPanel(props: {
                   onReconnect={slack().reconnect}
                   onSetEnabled={slack().setEnabled}
                   onAddOrchestrator={slack().addOrchestrator}
+                  onListChannels={slack().listChannels}
+                  onSetWatchedChannels={slack().setWatchedChannels}
                 />
               )}
             </Show>

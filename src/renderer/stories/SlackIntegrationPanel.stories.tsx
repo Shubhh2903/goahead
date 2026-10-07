@@ -49,6 +49,7 @@ function workspace(update: Partial<MessagingConnection> = {}): MessagingConnecti
     retryAt: null,
     credentials: "saved",
     orchestratorAgentId: ORCHESTRATOR.id,
+    watchedChannels: [{ channelId: "C0LAUNCH", name: "launch" }],
     ...update,
   };
 }
@@ -62,6 +63,12 @@ const args = (connections: MessagingConnection[], busy = false) => ({
   onReconnect: fn(),
   onSetEnabled: fn(),
   onAddOrchestrator: fn(),
+  onListChannels: async () => [
+    { channelId: "C0GENERAL", name: "general", isPrivate: false },
+    { channelId: "C0LAUNCH", name: "launch", isPrivate: false },
+    { channelId: "C0LEADS", name: "leadership", isPrivate: true },
+  ],
+  onSetWatchedChannels: fn(),
 });
 
 /** No workspace yet: Connect Slack opens the dialog. */

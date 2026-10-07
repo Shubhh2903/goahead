@@ -7,6 +7,7 @@ import {
   type ConnectionIdentity,
   type ContextEntry,
   type InboundFile,
+  type InboxCandidate,
   type MessageBody,
   type MessageSender,
   type MessageTarget,
@@ -17,7 +18,7 @@ import {
   type MessagingIngress,
   type StatusReaction,
 } from "../messaging-types";
-import { plainText, SLACK_ACTION_IDS } from "./slack-events";
+import { plainText, SLACK_ACTION_IDS, slackInboxCandidate } from "./slack-events";
 import { SlackEventsTransport } from "./slack-events-transport";
 import { slackChunks, slackMrkdwn } from "./slack-render";
 import { SlackApiError, SlackWebApi } from "./slack-web-api";
@@ -28,6 +29,8 @@ const HISTORY_LIMIT = 100;
 /** What `conversations.info` answers with the bot token for a conversation that the bot is not in. */
 const NOT_OWN_CONVERSATION = new Set(["channel_not_found", "not_in_channel"]);
 const CHANNEL_PAGE_LIMIT = 200;
+/** Pages of 200 channels: enough for a person, and a bound for a very large workspace. */
+const PERSON_PLACE_PAGES = 5;
 
 const REACTIONS: Record<StatusReaction, string> = {
   received: "eyes",
@@ -54,6 +57,7 @@ class SlackAdapter implements MessagingAdapter {
   readonly #places = new Map<string, Promise<string>>();
   readonly #own = new Map<string, Promise<boolean>>();
   #botUserId = "";
+  #workspaceId = "";
 
   constructor(
     tokens: { botToken: string; userToken: string | undefined },
@@ -75,6 +79,7 @@ class SlackAdapter implements MessagingAdapter {
     const bot = await this.#api.call("bots.info", { bot: botId });
     const appId = isDynamicRecord(bot.bot) && isString(bot.bot.app_id) ? bot.bot.app_id : "";
     this.#botUserId = botUserId;
+    this.#workspaceId = workspaceId;
     const person = await this.#identifyUser(workspaceId);
     return {
       workspaceId,
@@ -229,8 +234,8 @@ class SlackAdapter implements MessagingAdapter {
     return this.#api.download(file.url, destination, maxBytes);
   }
 
-  async openDirectMessage(userId: string, as: MessageSender): Promise<string> {
-    const response = await this.#apiFor(as).call("conversations.open", { users: userId });
+  async openDirectMessage(userIds: string, as: MessageSender): Promise<string> {
+    const response = await this.#apiFor(as).call("conversations.open", { users: userIds });
     const channel = isDynamicRecord(response.channel) ? response.channel.id : undefined;
     if (!isString(channel)) throw new SlackApiError("conversations.open", "no_channel");
     return channel;
@@ -253,6 +258,49 @@ class SlackAdapter implements MessagingAdapter {
     const ts = await post(first);
     for (const chunk of rest) await post(chunk);
     return ts;
+  }
+
+  async listPersonPlaces(): Promise<Array<{ id: string; name: string; isPrivate: boolean }>> {
+    const api = this.#apiFor("user");
+    const places: Array<{ id: string; name: string; isPrivate: boolean }> = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < PERSON_PLACE_PAGES; page += 1) {
+      const response = await api.call("users.conversations", {
+        types: "public_channel,private_channel",
+        exclude_archived: "true",
+        limit: "200",
+        ...(cursor ? { cursor } : {}),
+      });
+      const channels = Array.isArray(response.channels) ? response.channels.filter(isDynamicRecord) : [];
+      for (const channel of channels)
+        if (isString(channel.id) && isString(channel.name))
+          places.push({ id: channel.id, name: channel.name, isPrivate: channel.is_private === true });
+      const next = isDynamicRecord(response.response_metadata) ? response.response_metadata.next_cursor : undefined;
+      if (!isString(next) || !next) break;
+      cursor = next;
+    }
+    return places;
+  }
+
+  // Slack allows apps outside its Marketplace one `conversations.history` call a minute, of at most 15
+  // messages. The caller spaces the calls.
+  async recentMessages(platformChannelId: string, limit: number): Promise<InboxCandidate[]> {
+    const response = await this.#apiFor("user").call("conversations.history", {
+      channel: platformChannelId,
+      limit: String(limit),
+    });
+    const messages = Array.isArray(response.messages) ? response.messages.filter(isDynamicRecord) : [];
+    return messages.flatMap((message) => {
+      const candidate = slackInboxCandidate(
+        {
+          team_id: this.#workspaceId,
+          event: { ...message, type: "message", channel: platformChannelId, channel_type: "channel" },
+        },
+        this.#workspaceId,
+        this.#botUserId,
+      );
+      return candidate ? [candidate] : [];
+    });
   }
 
   async permalink(platformChannelId: string, messageId: string): Promise<string | null> {

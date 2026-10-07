@@ -10,6 +10,7 @@ import {
   parseMarkMessagingThreadReadInput,
   parseMessagingThreadPageInput,
   parseSetSlackEnabledInput,
+  parseSetSlackWatchedChannelsInput,
   parseSlackWorkspaceInput,
 } from "./messaging-inputs";
 
@@ -24,6 +25,8 @@ interface MessagingIpcDependencies {
     | "addOrchestrator"
     | "threadSummaries"
     | "threadAgent"
+    | "listSlackChannels"
+    | "setSlackWatchedChannels"
   >;
   agents: Pick<AgentService, "readThreadPageFor" | "threadReadState" | "markThreadRead">;
   host: Pick<HostService, "agentReaderId">;
@@ -59,6 +62,12 @@ export function messagingIpcHandlers({
       }),
       readThreadPage: payloadHandler(parseMessagingThreadPageInput, ({ threadId, anchor, limit }) =>
         agents.readThreadPageFor(messaging.threadAgent(threadId), threadId, host.agentReaderId(), anchor, limit),
+      ),
+      listSlackChannels: payloadHandler(parseSlackWorkspaceInput, ({ workspaceId }) =>
+        messaging.listSlackChannels(workspaceId),
+      ),
+      setSlackWatchedChannels: payloadHandler(parseSetSlackWatchedChannelsInput, ({ workspaceId, channels }) =>
+        messaging.setSlackWatchedChannels(workspaceId, channels),
       ),
       markThreadRead: payloadHandler(parseMarkMessagingThreadReadInput, ({ threadId, throughMessageId }) =>
         agents.markThreadRead(messaging.threadAgent(threadId), threadId, host.agentReaderId(), throughMessageId),

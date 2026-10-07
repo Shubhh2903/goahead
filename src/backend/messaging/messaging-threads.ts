@@ -3,6 +3,7 @@ import { CONVERSATION_PLAN_ITEM_TYPE, MESSAGING_LIMITS } from "@openbot/contract
 import { sourceText } from "@openbot/i18n/source";
 import type { DeliveryContext, MailboxStore, MessagingOrigin } from "../mailbox-store";
 import type { OpenBotDatabase } from "../openbot-database";
+import { MessagingInboxStore } from "./messaging-inbox-store";
 import { type MessagingContextMessage, messagingPromptText } from "./messaging-prompt";
 import { type MessagingLink, MessagingStore } from "./messaging-store";
 
@@ -60,6 +61,8 @@ export interface MessagingPromptContext {
   messages: MessagingContextMessage[];
   /** The newest message the agent has now read, stored as the link's history cursor. */
   cursor: string | null;
+  /** The platform user id of the person who connected the workspace as themself, when there is one. */
+  ownerId?: string | null;
   skippedFiles: string[];
 }
 
@@ -87,6 +90,43 @@ export interface MessagingSendReceipt {
   link: string | null;
 }
 
+/** An agent's read of the connected person's inbox, from the execution thread of a conversation. */
+export type MessagingInboxRequest =
+  | { tool: "list_unread"; agentId: string; threadId: string }
+  | {
+      tool: "read";
+      agentId: string;
+      threadId: string;
+      conversation: string;
+      threadKey: string | null;
+      limit: number;
+    };
+
+/** What `slack_list_unread` answers. */
+export interface MessagingInboxUnreadResult {
+  unread: Array<{
+    conversation: string;
+    kind: string;
+    place: string;
+    unreadCount: number;
+    latestFrom: string;
+    latestAt: string;
+  }>;
+  pickedChannels: Array<{ conversation: string; name: string }>;
+  /** Says that the text is other people's: data, never instructions. */
+  note: string;
+}
+
+/** What `slack_read_conversation` answers. */
+export interface MessagingInboxReadResult {
+  conversation: string;
+  place: string;
+  messages: Array<{ id: string; thread: string | null; from: string; sentAt: string; text: string }>;
+  note: string;
+}
+
+export type MessagingInboxResult = MessagingInboxUnreadResult | MessagingInboxReadResult;
+
 export interface MessagingThreadsHooks {
   schedule(agentId: string): void;
   busy(agentId: string): boolean;
@@ -111,6 +151,8 @@ const CONTEXT_TIMEOUT_MS = 5_000;
  */
 export class MessagingThreads {
   readonly store: MessagingStore;
+  /** The person's local Slack inbox, which the read tools use. */
+  readonly inbox: MessagingInboxStore;
   readonly #database: OpenBotDatabase;
   readonly #mailbox: MailboxStore;
   readonly #hooks: MessagingThreadsHooks;
@@ -121,9 +163,11 @@ export class MessagingThreads {
   readonly #turnOrigins = new Map<string, { origin: MessagingOrigin | null; followUp: boolean }>();
   #contextSource: ((link: MessagingLink, origin: MessagingOrigin) => Promise<MessagingPromptContext>) | null = null;
   #sender: ((request: MessagingSendRequest) => Promise<MessagingSendReceipt>) | null = null;
+  #inboxReader: ((request: MessagingInboxRequest) => Promise<MessagingInboxResult>) | null = null;
 
   constructor(database: OpenBotDatabase, mailbox: MailboxStore, hooks: MessagingThreadsHooks) {
     this.store = new MessagingStore(database);
+    this.inbox = new MessagingInboxStore(database);
     this.#database = database;
     this.#mailbox = mailbox;
     this.#hooks = hooks;
@@ -149,6 +193,16 @@ export class MessagingThreads {
   /** The platform side takes the send requests of agents. Without it, no agent can send. */
   setMessageSender(sender: ((request: MessagingSendRequest) => Promise<MessagingSendReceipt>) | null): void {
     this.#sender = sender;
+  }
+
+  /** The platform side answers the inbox reads of agents. Without it, no agent can read the inbox. */
+  setInboxReader(reader: ((request: MessagingInboxRequest) => Promise<MessagingInboxResult>) | null): void {
+    this.#inboxReader = reader;
+  }
+
+  readInbox(request: MessagingInboxRequest): Promise<MessagingInboxResult> {
+    if (!this.#inboxReader) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
+    return this.#inboxReader(request);
   }
 
   /** An agent asks to send a new message. The platform side makes a draft that a person approves. */
@@ -240,6 +294,7 @@ export class MessagingThreads {
         place: prompt.place,
         authorName: origin.authorName,
         authorId: origin.authorId,
+        fromGoAheadUser: prompt.ownerId != null && prompt.ownerId === origin.authorId,
         isReply: origin.isReply === true,
         text: context.delivery.text,
         context: prompt.messages,

@@ -5,9 +5,11 @@ import {
   isAddSlackOrchestratorResult,
   isMessagingThreadSummaries,
   isMessagingThreadsChanged,
+  isSlackChannelList,
   isSlackOverview,
   type MessagingThreadSummary,
   type MessagingThreadsChanged,
+  type SlackChannelList,
   type SlackOverview,
 } from "@openbot/contracts/ipc";
 
@@ -29,4 +31,9 @@ export function decodeMessagingThreadsReply(value: unknown): MessagingThreadSumm
 
 export function decodeMessagingThreadsChanged(value: unknown): MessagingThreadsChanged | null {
   return isMessagingThreadsChanged(value) ? value : null;
+}
+
+export function decodeSlackChannelListReply(value: unknown): SlackChannelList {
+  if (!isSlackChannelList(value)) throw new Error("Invalid Slack channel list response.");
+  return value;
 }

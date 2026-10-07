@@ -1,5 +1,11 @@
 import { type DynamicRecord, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
-import { DIRECT_CONVERSATION_KEY, type InboundAction, type InboundFile, type InboundMessage } from "../messaging-types";
+import {
+  DIRECT_CONVERSATION_KEY,
+  type InboundAction,
+  type InboundFile,
+  type InboundMessage,
+  type InboxCandidate,
+} from "../messaging-types";
 
 /** The Block Kit action ids of the buttons the agent posts. */
 export const SLACK_ACTION_IDS = {
@@ -14,6 +20,8 @@ export const SLACK_ACTION_IDS = {
  * - `app_mention` in a channel starts or continues the thread it is in.
  * - A direct message always addresses OpenBot. OpenBot answers in a thread under it, but every
  *   direct message from one person is one conversation (`DIRECT_CONVERSATION_KEY`), with one agent.
+ * - A message in a group direct message without a mention never starts a conversation
+ *   (`groupDirect`). It comes back only as a reply to a message OpenBot sent to that group.
  * - A reply in a thread without a mention counts only in a thread that an agent already answers
  *   (`requiresLink`). A reply with a mention also arrives as `app_mention`, and both have the same
  *   dedup key, so it runs once.
@@ -58,6 +66,17 @@ export function slackInboundMessage(payload: unknown, workspaceId: string, botUs
       requiresLink: false,
     };
   }
+  if (event.channel_type === "mpim") {
+    const threadKey = threadTs ?? ts;
+    return {
+      ...base,
+      threadKey,
+      target: { platformChannelId: channel, replyThreadId: threadKey },
+      isDirect: false,
+      requiresLink: true,
+      groupDirect: true,
+    };
+  }
   if (!threadTs || threadTs === ts) return null;
   return {
     ...base,
@@ -65,6 +84,43 @@ export function slackInboundMessage(payload: unknown, workspaceId: string, botUs
     target: { platformChannelId: channel, replyThreadId: threadTs },
     isDirect: false,
     requiresLink: true,
+  };
+}
+
+const INBOX_PLACES: Record<string, InboxCandidate["place"]> = {
+  im: "direct",
+  mpim: "group",
+  channel: "channel",
+  group: "channel",
+};
+
+/**
+ * One `message` event as a message for the person's inbox, or null. Bots, OpenBot itself, edits,
+ * deletions and joins are left out. A reply shared to the channel counts like a reply.
+ */
+export function slackInboxCandidate(payload: unknown, workspaceId: string, botUserId: string): InboxCandidate | null {
+  if (!isDynamicRecord(payload) || payload.team_id !== workspaceId) return null;
+  const event = payload.event;
+  if (!isDynamicRecord(event) || event.type !== "message") return null;
+  const { channel, ts, user } = event;
+  if (!isString(channel) || !isString(ts) || !isString(user)) return null;
+  if (event.bot_id !== undefined || user === botUserId) return null;
+  if (event.subtype !== undefined && event.subtype !== "file_share" && event.subtype !== "thread_broadcast")
+    return null;
+  const place = isString(event.channel_type) ? INBOX_PLACES[event.channel_type] : undefined;
+  if (!place) return null;
+  const raw = isString(event.text) ? event.text : "";
+  const threadTs = isString(event.thread_ts) && event.thread_ts !== ts ? event.thread_ts : null;
+  const seconds = Number(ts);
+  return {
+    platformChannelId: channel,
+    platformMessageId: ts,
+    threadKey: threadTs,
+    place,
+    authorId: user,
+    text: plainText(raw, botUserId),
+    sentAt: Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : new Date().toISOString(),
+    mentionedUserIds: [...raw.matchAll(/<@([A-Z0-9]+)(?:\|[^>]*)?>/g)].flatMap((match) => (match[1] ? [match[1]] : [])),
   };
 }
 

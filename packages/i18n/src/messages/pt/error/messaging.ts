@@ -15,4 +15,10 @@ export const messages = {
     "O usuário do GoAhead lê esta conversa. Responda aqui em vez de enviar uma mensagem para ele.",
   "error.messaging.sendTextEmpty": "A mensagem não tem texto.",
   "error.messaging.threadUnavailable": "Esta conversa do Slack não está disponível.",
+  "error.messaging.inboxNeedsSlack": "As mensagens do Slack só podem ser lidas na sua mensagem direta com o GoAhead.",
+  "error.messaging.inboxNeedsUser":
+    "Conecte o espaço de trabalho do Slack como você no GoAhead antes que os agentes possam ler suas mensagens do Slack.",
+  "error.messaging.inboxOwnerOnly": "Só o usuário do GoAhead pode pedir para ler as mensagens do Slack dele.",
+  "error.messaging.inboxUnknownConversation":
+    "Essa conversa do Slack não está na caixa de entrada do GoAhead. Use slack_list_unread para ver as conversas que ele guarda.",
 } as const satisfies PartialTranslation<typeof source>;

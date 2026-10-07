@@ -39,6 +39,9 @@ export const MESSAGING_LIMITS = {
   scopes: 32,
   connections: 32,
   threads: 200,
+  /** The channels the person can pick for the inbox, and how many they may pick. */
+  channelOptions: 1_000,
+  watchedChannels: 50,
 } as const;
 
 export interface MessagingConnection {
@@ -59,6 +62,29 @@ export interface MessagingConnection {
   credentials: MessagingCredentialState;
   /** The agent that receives every new conversation. Null until the user adds it: nothing answers. */
   orchestratorAgentId: string | null;
+  /** The channels the person picked for GoAhead's local inbox, besides their direct messages and mentions. */
+  watchedChannels: SlackChannelChoice[];
+}
+
+/** A channel of the person's workspace, by id and name (without the #). */
+export interface SlackChannelChoice {
+  channelId: string;
+  name: string;
+}
+
+/** A channel the person is in, which they can pick for the inbox. */
+export interface SlackChannelOption extends SlackChannelChoice {
+  isPrivate: boolean;
+}
+
+export interface SlackChannelList {
+  channels: SlackChannelOption[];
+}
+
+/** Replaces the picked channels. A channel left out loses the messages GoAhead kept from it. */
+export interface SetSlackWatchedChannelsInput {
+  workspaceId: string;
+  channels: SlackChannelChoice[];
 }
 
 /** The Slack workspaces connected on this computer. */
@@ -149,6 +175,21 @@ export function isMessagingThreadsChanged(value: unknown): value is MessagingThr
   return isDynamicRecord(value) && isIdentifier(value.threadId);
 }
 
+export function isSlackChannelChoice(value: unknown): value is SlackChannelChoice {
+  return isDynamicRecord(value) && isIdentifier(value.channelId) && isBoundedString(value.name, MESSAGING_LIMITS.name);
+}
+
+export function isSlackChannelList(value: unknown): value is SlackChannelList {
+  return (
+    isDynamicRecord(value) &&
+    Array.isArray(value.channels) &&
+    value.channels.length <= MESSAGING_LIMITS.channelOptions &&
+    value.channels.every(
+      (channel) => isSlackChannelChoice(channel) && isDynamicRecord(channel) && isBoolean(channel.isPrivate),
+    )
+  );
+}
+
 function isScopeList(value: unknown): value is string[] {
   return (
     Array.isArray(value) &&
@@ -171,7 +212,10 @@ export function isMessagingConnection(value: unknown): value is MessagingConnect
     isScopeList(value.missingScopes) &&
     isNullableBoundedString(value.retryAt, 64) &&
     isOneOf(MESSAGING_CREDENTIAL_STATES, value.credentials) &&
-    (value.orchestratorAgentId === null || isIdentifier(value.orchestratorAgentId))
+    (value.orchestratorAgentId === null || isIdentifier(value.orchestratorAgentId)) &&
+    Array.isArray(value.watchedChannels) &&
+    value.watchedChannels.length <= MESSAGING_LIMITS.watchedChannels &&
+    value.watchedChannels.every(isSlackChannelChoice)
   );
 }
 

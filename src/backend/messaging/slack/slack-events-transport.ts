@@ -8,7 +8,7 @@ import type {
   MessagingTransport,
   TransportSink,
 } from "../messaging-types";
-import { slackInboundAction, slackInboundMessage } from "./slack-events";
+import { slackInboundAction, slackInboundMessage, slackInboxCandidate } from "./slack-events";
 
 /** Slack sends a request again when the answer is late, with the same `event_id`. */
 const RECENT_EVENTS = 2_000;
@@ -83,6 +83,9 @@ export class SlackEventsTransport implements MessagingTransport {
       if (isDynamicRecord(event.channel) && isString(event.channel.id)) sink.placeCreated?.(event.channel.id);
       return OK;
     }
+    // The inbox and the request path are separate: a message can be kept, start work, or both.
+    const candidate = slackInboxCandidate(body, this.#identity.workspaceId, this.#identity.botUserId);
+    if (candidate) sink.inbox?.(candidate);
     const message = slackInboundMessage(body, this.#identity.workspaceId, this.#identity.botUserId);
     if (message) sink.message(message);
     return OK;

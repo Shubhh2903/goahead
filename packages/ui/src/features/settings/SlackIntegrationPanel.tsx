@@ -6,7 +6,10 @@ import type {
   CustomAgentSummary,
   CustomProviderSummary,
   MessagingConnection,
+  SlackChannelChoice,
+  SlackChannelOption,
 } from "@openbot/contracts/ipc";
+import { MESSAGING_LIMITS } from "@openbot/contracts/ipc";
 import { SLACK_ORCHESTRATOR_AVATAR } from "@openbot/contracts/slack-app";
 import type { AppTextKey } from "@openbot/i18n";
 import {
@@ -17,7 +20,10 @@ import {
   AlertTitle,
   Button,
   Check,
+  Checkbox,
   ExternalLink,
+  Hash,
+  Input,
   Item,
   ItemActions,
   ItemContent,
@@ -26,12 +32,13 @@ import {
   ItemMedia,
   ItemTitle,
   Link2Off,
+  Lock,
   SettingsSection,
   Spinner,
   Text,
   TriangleAlert,
 } from "@openbot/ui";
-import { createEffect, createSignal, For, Match, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createSignal, createStore, For, Match, Show, Switch } from "solid-js";
 import { ProviderModelPicker } from "../../components/ProviderModelPicker";
 import { useText } from "../../text";
 import { AgentAvatar } from "../agents/AgentAvatar";
@@ -76,6 +83,9 @@ export interface SlackIntegrationPanelProps {
   onReconnect: (workspaceId: string) => void;
   onSetEnabled: (workspaceId: string, enabled: boolean) => void;
   onAddOrchestrator: (workspaceId: string, choice: SlackOrchestratorChoice | null) => void;
+  /** Reads the channels the person is in, for the inbox picker. Without it and the save, no picker shows. */
+  onListChannels?: (workspaceId: string) => Promise<SlackChannelOption[]>;
+  onSetWatchedChannels?: (workspaceId: string, channels: SlackChannelChoice[]) => void;
 }
 
 /** What a workspace row can do. */
@@ -132,6 +142,7 @@ export function SlackIntegrationPanel(props: SlackIntegrationPanelProps) {
   const { t } = useText();
   const [dialogOpen, setDialogOpen] = createSignal(false);
   const [disconnecting, setDisconnecting] = createSignal<MessagingConnection | null>(null);
+  const [picking, setPicking] = createSignal<MessagingConnection | null>(null);
   const state = () => slackIntegrationState(props.connections, props.agents);
   const first = () => props.connections[0] ?? null;
   /** Until the first workspace has its orchestrator, the header offers the next step of the dialog. */
@@ -236,6 +247,22 @@ export function SlackIntegrationPanel(props: SlackIntegrationPanelProps) {
         )}
       </For>
 
+      {/* The inbox reads Slack as the person, so it needs their connection. */}
+      <Show when={props.onListChannels && props.onSetWatchedChannels}>
+        <For each={props.connections.filter((connection) => connection.userId)}>
+          {(connection) => (
+            <SettingsSection
+              title={t("connector.slack.inboxTitle")}
+              description={t("connector.slack.inboxDescription")}
+            >
+              <ItemGroup class="settings-modal-card">
+                <InboxRow connection={connection} busy={props.busy} onChoose={() => setPicking(connection)} />
+              </ItemGroup>
+            </SettingsSection>
+          )}
+        </For>
+      </Show>
+
       <SlackConnectDialog
         open={dialogOpen()}
         connection={first()}
@@ -246,6 +273,19 @@ export function SlackIntegrationPanel(props: SlackIntegrationPanelProps) {
         onAddOrchestrator={props.onAddOrchestrator}
         onClose={() => setDialogOpen(false)}
       />
+      <Show when={props.onListChannels}>
+        {(load) => (
+          <ChannelPickerDialog
+            connection={picking()}
+            load={load()}
+            onSave={(workspaceId, channels) => {
+              setPicking(null);
+              props.onSetWatchedChannels?.(workspaceId, channels);
+            }}
+            onClose={() => setPicking(null)}
+          />
+        )}
+      </Show>
       <DisconnectDialog
         connection={disconnecting()}
         onConfirm={(workspaceId) => {
@@ -569,6 +609,12 @@ function DisconnectDialog(props: {
             </span>
             {t("connector.slack.disconnectEffectUser")}
           </li>
+          <li data-tone="danger">
+            <span class="slack-effect-icon" aria-hidden="true">
+              <Link2Off />
+            </span>
+            {t("connector.slack.disconnectEffectInbox")}
+          </li>
         </Show>
         <li data-tone="success">
           <span class="slack-effect-icon" aria-hidden="true">
@@ -577,6 +623,200 @@ function DisconnectDialog(props: {
           {t("connector.slack.removeEffectKept")}
         </li>
       </ul>
+    </WizardDialog>
+  );
+}
+
+function InboxRow(props: { connection: MessagingConnection; busy: boolean; onChoose: () => void }) {
+  const { t, format } = useText();
+  const summary = () => {
+    const channels = props.connection.watchedChannels;
+    if (channels.length === 0) return t("connector.slack.inboxChannelsNone");
+    return t("connector.slack.inboxChannels", {
+      count: channels.length,
+      names: format.list(channels.map((channel) => `#${channel.name}`)),
+    });
+  };
+  return (
+    <Item class="settings-modal-row">
+      <ItemMedia>
+        <LogoTile>
+          <Hash />
+        </LogoTile>
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle>{summary()}</ItemTitle>
+      </ItemContent>
+      <ItemActions>
+        <Button type="button" size="sm" variant="outline" disabled={props.busy} onClick={props.onChoose}>
+          {t("connector.slack.chooseChannels")}
+        </Button>
+      </ItemActions>
+    </Item>
+  );
+}
+
+interface ChannelPickerState {
+  status: "loading" | "ready" | "failed";
+  options: SlackChannelOption[];
+  selected: string[];
+  query: string;
+}
+
+/**
+ * Picks the channels of the local Slack inbox, from the channels the person is in. It opens with the
+ * channels picked now, and saves the whole set.
+ */
+function ChannelPickerDialog(props: {
+  connection: MessagingConnection | null;
+  load: (workspaceId: string) => Promise<SlackChannelOption[]>;
+  onSave: (workspaceId: string, channels: SlackChannelChoice[]) => void;
+  onClose: () => void;
+}) {
+  const { t } = useText();
+  const [state, setState] = createStore<ChannelPickerState>({
+    status: "loading",
+    options: [],
+    selected: [],
+    query: "",
+  });
+  let reads = 0;
+  createEffect(
+    () => props.connection,
+    (connection) => {
+      if (!connection) return;
+      const read = ++reads;
+      setState((draft) => {
+        draft.status = "loading";
+        draft.options = [];
+        draft.selected = connection.watchedChannels.map((channel) => channel.channelId);
+        draft.query = "";
+      });
+      void props
+        .load(connection.workspaceId)
+        .then((options) => {
+          if (read !== reads) return;
+          setState((draft) => {
+            draft.options = options;
+            draft.status = "ready";
+          });
+        })
+        .catch(() => {
+          if (read !== reads) return;
+          setState((draft) => {
+            draft.status = "failed";
+          });
+        });
+    },
+  );
+  const visible = createMemo(() => {
+    const query = state.query.trim().replace(/^#/u, "").toLowerCase();
+    return query ? state.options.filter((option) => option.name.toLowerCase().includes(query)) : state.options;
+  });
+  const full = () => state.selected.length >= MESSAGING_LIMITS.watchedChannels;
+  const toggle = (channelId: string, on: boolean) =>
+    setState((draft) => {
+      draft.selected = on
+        ? [...new Set([...draft.selected, channelId])]
+        : draft.selected.filter((selected) => selected !== channelId);
+    });
+  const save = () => {
+    const connection = props.connection;
+    if (!connection) return;
+    const names = new Map(connection.watchedChannels.map((channel) => [channel.channelId, channel.name]));
+    for (const option of state.options) names.set(option.channelId, option.name);
+    props.onSave(
+      connection.workspaceId,
+      state.selected.map((channelId) => ({ channelId, name: names.get(channelId) ?? channelId })),
+    );
+  };
+  return (
+    <WizardDialog
+      open={props.connection !== null}
+      closeLabel={t("connector.slack.close")}
+      onClose={props.onClose}
+      logo={<SlackMark />}
+      link="connected"
+      title={t("connector.slack.channelsTitle")}
+      description={t("connector.slack.channelsDescription")}
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={props.onClose}>
+            {t("connector.slack.channelsCancel")}
+          </Button>
+          <Button type="button" disabled={state.status !== "ready"} onClick={save}>
+            {t("connector.slack.channelsSave")}
+          </Button>
+        </>
+      }
+    >
+      <div class="slack-channel-picker">
+        <Input
+          type="search"
+          aria-label={t("connector.slack.channelsSearch")}
+          placeholder={t("connector.slack.channelsSearch")}
+          value={state.query}
+          onValueChange={(query) =>
+            setState((draft) => {
+              draft.query = query;
+            })
+          }
+        />
+        <Switch>
+          <Match when={state.status === "loading"}>
+            <Text variant="caption" tone="muted" role="status">
+              <Spinner size="sm" /> {t("connector.slack.channelsLoading")}
+            </Text>
+          </Match>
+          <Match when={state.status === "failed"}>
+            <Text variant="caption" tone="muted" role="alert">
+              {t("connector.slack.channelsFailed")}
+            </Text>
+          </Match>
+          <Match when={state.status === "ready"}>
+            <Show when={full()}>
+              <Text variant="caption" tone="muted">
+                {t("connector.slack.channelsLimit", { count: MESSAGING_LIMITS.watchedChannels })}
+              </Text>
+            </Show>
+            <Show
+              when={visible().length > 0}
+              fallback={
+                <Text variant="caption" tone="muted">
+                  {t("connector.slack.channelsEmpty")}
+                </Text>
+              }
+            >
+              <ul class="slack-channel-options">
+                <For each={visible()} keyed={(option) => option.channelId}>
+                  {(option) => {
+                    const checked = () => state.selected.includes(option().channelId);
+                    const id = () => `slack-channel-${option().channelId}`;
+                    return (
+                      <li class="slack-channel-option">
+                        <Checkbox
+                          id={id()}
+                          checked={checked()}
+                          disabled={!checked() && full()}
+                          onChange={(event) => toggle(option().channelId, event.currentTarget.checked)}
+                        />
+                        <label class="slack-channel-option-name" for={id()}>
+                          #{option().name}
+                        </label>
+                        <Show when={option().isPrivate}>
+                          <span class="slack-channel-option-private" title={t("connector.slack.channelPrivate")}>
+                            <Lock aria-label={t("connector.slack.channelPrivate")} />
+                          </span>
+                        </Show>
+                      </li>
+                    );
+                  }}
+                </For>
+              </ul>
+            </Show>
+          </Match>
+        </Switch>
+      </div>
     </WizardDialog>
   );
 }

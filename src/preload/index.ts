@@ -139,6 +139,7 @@ import {
   decodeAddSlackOrchestratorReply,
   decodeMessagingThreadsChanged,
   decodeMessagingThreadsReply,
+  decodeSlackChannelListReply,
   decodeSlackOverviewReply,
 } from "./messaging-decoding";
 import { decodeProviderRuntimeSnapshot } from "./provider-runtime";
@@ -631,6 +632,8 @@ const openbotApi: OpenBotDesktopApi = {
     readThreadPage: decodeConversationPageFromMain,
     markThreadRead: decodeReadState,
     threadsChanged: dropInvalid(decodeMessagingThreadsChanged),
+    listSlackChannels: decodeSlackChannelListReply,
+    setSlackWatchedChannels: decodeVoid,
   }),
   hostAdmin: bridgeGroup(IPC_ENDPOINTS.hostAdmin, {
     updateIdentity: decodeServer,

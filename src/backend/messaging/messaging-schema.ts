@@ -43,3 +43,44 @@ export const MESSAGING_SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS messaging_threads_agent ON projection_messaging_threads(agent_id, updated_at DESC);
 `;
+
+// Migration 28, and the tail of the latest schema after `MESSAGING_SCHEMA_SQL`. IF NOT EXISTS
+// throughout, for the same reason.
+//
+// The inbox keeps the Slack messages that the connected person receives and GoAhead may read: their
+// direct and group direct messages, messages that mention them, and the channels they pick. It is a
+// copy of Slack text on this computer only, so rows are written directly and never go to the event
+// log, which is append-only. Rows older than 30 days are deleted, and a disconnect deletes its
+// workspace's rows. `kind` and `platform` have no CHECK, so a new kind needs no table rebuild.
+//
+// A watched channel is one the person picked in Settings. A read mark is the newest message GoAhead
+// has read in one conversation; "unread" means newer than that.
+export const MESSAGING_INBOX_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS projection_messaging_inbox (
+    connection_id TEXT NOT NULL REFERENCES projection_messaging_connections(connection_id) ON DELETE CASCADE,
+    platform_channel_id TEXT NOT NULL,
+    platform_message_id TEXT NOT NULL,
+    thread_key TEXT,
+    kind TEXT NOT NULL,
+    author_id TEXT NOT NULL,
+    author_name TEXT NOT NULL,
+    text TEXT NOT NULL,
+    sent_at TEXT NOT NULL,
+    PRIMARY KEY(connection_id, platform_channel_id, platform_message_id)
+  );
+  CREATE INDEX IF NOT EXISTS messaging_inbox_sent ON projection_messaging_inbox(sent_at);
+  CREATE TABLE IF NOT EXISTS projection_messaging_watched_channels (
+    connection_id TEXT NOT NULL REFERENCES projection_messaging_connections(connection_id) ON DELETE CASCADE,
+    platform_channel_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(connection_id, platform_channel_id)
+  );
+  CREATE TABLE IF NOT EXISTS projection_messaging_inbox_reads (
+    connection_id TEXT NOT NULL REFERENCES projection_messaging_connections(connection_id) ON DELETE CASCADE,
+    platform_channel_id TEXT NOT NULL,
+    through_message_id TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(connection_id, platform_channel_id)
+  );
+`;

@@ -132,6 +132,27 @@ export const messages = {
   "connector.slack.disconnectEffect":
     "As pessoas em {workspace} não poderão mais acessar seus agentes por meio de @GoAhead.",
   "connector.slack.disconnectEffectUser": "O GoAhead não pode mais ler nem responder como você no Slack.",
+  "connector.slack.disconnectEffectInbox": "As mensagens do Slack que o GoAhead guardou neste computador são apagadas.",
+  "connector.slack.inboxTitle": "Caixa de entrada do Slack",
+  "connector.slack.inboxDescription":
+    "O GoAhead guarda suas mensagens diretas, mensagens de grupo e menções neste computador por 30 dias. Os agentes só as leem quando você pede na sua mensagem direta com o GoAhead. Escolha canais para guardar também.",
+  "connector.slack.inboxChannelsNone": "Nenhum canal escolhido",
+  "connector.slack.inboxChannels": { one: "{count} canal: {names}", other: "{count} canais: {names}" },
+  "connector.slack.chooseChannels": "Escolher canais",
+  "connector.slack.channelsTitle": "Canais da caixa de entrada do Slack",
+  "connector.slack.channelsDescription":
+    "O GoAhead guarda as mensagens dos canais que você escolher, começando pelas 15 mais recentes de cada um. Um canal removido perde as mensagens guardadas.",
+  "connector.slack.channelsSearch": "Pesquisar canais",
+  "connector.slack.channelsLoading": "Carregando seus canais…",
+  "connector.slack.channelsFailed": "Seus canais do Slack não carregaram.",
+  "connector.slack.channelsEmpty": "Nenhum canal corresponde.",
+  "connector.slack.channelsLimit": {
+    one: "Você pode escolher até {count} canal.",
+    other: "Você pode escolher até {count} canais.",
+  },
+  "connector.slack.channelPrivate": "Canal privado",
+  "connector.slack.channelsSave": "Salvar",
+  "connector.slack.channelsCancel": "Cancelar",
   "connector.slack.removeEffectKept": "As conversas e o Orquestrador do Slack continuam no GoAhead.",
   "connector.slack.keep": "Manter conectado",
   "connector.slack.close": "Fechar",
