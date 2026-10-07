@@ -30,6 +30,8 @@ export const messages = defineMessages("status.messaging", {
   "status.messaging.sendDraftTo": "To: {to}",
   "status.messaging.sendAsUser": "As: {user}",
   "status.messaging.sendAsBot": "Sent by the GoAhead app, not as you.",
+  // The first line of a message that the GoAhead app sends for someone other than the GoAhead user.
+  "status.messaging.sentFor": "{name} asked me to send this:",
   "status.messaging.sent": "Sent. Approved by {user}.",
   "status.messaging.sendFailed": "Not sent: {reason}",
   // The name and title of the agent that OpenBot adds to answer in Slack. The user can rename it.

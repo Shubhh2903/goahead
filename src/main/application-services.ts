@@ -54,6 +54,7 @@ import { AgentStore } from "../backend/agent-store";
 import { BrowserHost } from "../backend/browser-host";
 import { MailboxStore } from "../backend/mailbox-store";
 import { McpOAuth } from "../backend/mcp-oauth-provider";
+import { MessagingSendGuardStore } from "../backend/messaging/messaging-send-guards";
 import { MessagingService } from "../backend/messaging/messaging-service";
 import { slackDriver } from "../backend/messaging/slack/slack-driver";
 import { SidebarLayoutStore } from "../backend/sidebar-layout-store";
@@ -194,6 +195,7 @@ const NOTIFICATION_PREFERENCE_FILE = "openbot-notification-preference-v1.json";
 const DYNAMIC_ISLAND_PREFERENCE_FILE = "openbot-dynamic-island-preference-v1.json";
 const BROWSER_STATE_FILE = "openbot-browser-state-v1.json";
 const SIDEBAR_LAYOUT_FILE = "openbot-sidebar-layout-v1.json";
+const MESSAGING_SEND_GUARDS_FILE = "openbot-messaging-send-guards-v1.json";
 const TEAM_FILE = "openbot-team-server-v1.json";
 /** One host per account. The v1 file above stays as the last build without accounts left it. */
 const TEAM_FILE_V2 = "openbot-team-server-v2.json";
@@ -988,6 +990,7 @@ export async function createApplicationServices({
     downloadsRoot: join(app.getPath("userData"), "messaging-downloads"),
     ingress: slackIngress,
     sidebar: sidebarLayout,
+    sendGuards: new MessagingSendGuardStore(join(app.getPath("userData"), MESSAGING_SEND_GUARDS_FILE)),
     slackApp: {
       authorize: (input) => {
         const hostId = slackIngressHostId();

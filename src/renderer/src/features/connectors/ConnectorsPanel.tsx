@@ -161,6 +161,7 @@ export function ConnectorsPanel(props: {
                   onAddOrchestrator={slack().addOrchestrator}
                   onListChannels={slack().listChannels}
                   onSetWatchedChannels={slack().setWatchedChannels}
+                  onSetSendGuards={slack().setSendGuards}
                 />
               )}
             </Show>

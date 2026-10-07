@@ -3,9 +3,11 @@
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
   AddSlackOrchestratorInput,
+  AnswerMessagingDraftInput,
   MarkMessagingThreadReadInput,
   MessagingThreadPageInput,
   SetSlackEnabledInput,
+  SetSlackSendGuardsInput,
   SetSlackWatchedChannelsInput,
   SlackWorkspaceInput,
 } from "@openbot/contracts/ipc";
@@ -14,6 +16,7 @@ import {
   isAgentProvider,
   isReasoningEffort,
   isSlackChannelChoice,
+  isSlackQuietHours,
   MESSAGING_LIMITS,
 } from "@openbot/contracts/ipc";
 import { isBoolean, isString } from "@openbot/contracts/runtime-values";
@@ -80,4 +83,30 @@ export function parseSetSlackWatchedChannelsInput(value: unknown): SetSlackWatch
     workspaceId: requireString(value.workspaceId, "Workspace id"),
     channels: value.channels.map((channel) => ({ channelId: channel.channelId, name: channel.name })),
   };
+}
+
+export function parseAnswerMessagingDraftInput(value: unknown): AnswerMessagingDraftInput {
+  if (!isObject(value) || (value.decision !== "approve" && value.decision !== "deny"))
+    throw new Error("A messaging request is invalid.");
+  const result: AnswerMessagingDraftInput = {
+    draftId: requireString(value.draftId, "Draft id", INPUT_LIMITS.identifier),
+    decision: value.decision,
+  };
+  if (value.text !== undefined) result.text = requireString(value.text, "Text", INPUT_LIMITS.messageText);
+  return result;
+}
+
+export function parseSetSlackSendGuardsInput(value: unknown): SetSlackSendGuardsInput {
+  if (!isObject(value)) throw new Error("A messaging request is invalid.");
+  const result: SetSlackSendGuardsInput = { workspaceId: requireString(value.workspaceId, "Workspace id") };
+  if (value.paused !== undefined) {
+    if (!isBoolean(value.paused)) throw new Error("A messaging request is invalid.");
+    result.paused = value.paused;
+  }
+  if (value.quietHours !== undefined) {
+    if (value.quietHours !== null && !isSlackQuietHours(value.quietHours))
+      throw new Error("A messaging request is invalid.");
+    result.quietHours = value.quietHours === null ? null : { start: value.quietHours.start, end: value.quietHours.end };
+  }
+  return result;
 }

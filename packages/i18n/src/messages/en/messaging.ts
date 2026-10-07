@@ -14,4 +14,16 @@ export const messages = defineMessages("messaging", {
   "messaging.thread.slackPerson": "Slack user",
   "messaging.thread.empty": "No messages yet.",
   "messaging.thread.loadFailed": "The Slack conversation did not load.",
+  // A message an agent drafted, which waits for the person on the desktop.
+  "messaging.draft.label": "Message draft to {recipient}",
+  "messaging.draft.title": "Message waits for your approval",
+  "messaging.draft.to": "To {recipient}",
+  "messaging.draft.asUser": "sends as you",
+  "messaging.draft.asBot": "sends as GoAhead",
+  "messaging.draft.requestedBy": "{name} asked for it",
+  "messaging.draft.textLabel": "Message text",
+  "messaging.draft.approve": "Approve and send",
+  "messaging.draft.deny": "Deny",
+  "messaging.draft.sending": "Sending…",
+  "messaging.draft.failed": "The draft could not be answered.",
 });

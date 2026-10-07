@@ -5,6 +5,7 @@
  * computer that runs the agents. Tokens travel only towards that host; no result carries one.
  */
 
+import { INPUT_LIMITS } from "./input-limits";
 import type { AgentModelId, AgentReasoningEffort } from "./ipc-agent-identity";
 import type { AgentProviderId } from "./ipc-agent-status";
 import { isBoundedString, isIdentifier, isNullableBoundedString } from "./ipc-bounded-values";
@@ -42,6 +43,7 @@ export const MESSAGING_LIMITS = {
   /** The channels the person can pick for the inbox, and how many they may pick. */
   channelOptions: 1_000,
   watchedChannels: 50,
+  drafts: 100,
 } as const;
 
 export interface MessagingConnection {
@@ -64,6 +66,57 @@ export interface MessagingConnection {
   orchestratorAgentId: string | null;
   /** The channels the person picked for GoAhead's local inbox, besides their direct messages and mentions. */
   watchedChannels: SlackChannelChoice[];
+  sendGuards: SlackSendGuards;
+}
+
+/** A daily time range in the host computer's time zone, as `HH:MM`. It can cross midnight. */
+export interface SlackQuietHours {
+  start: string;
+  end: string;
+}
+
+/** What limits the messages GoAhead sends in a workspace. */
+export interface SlackSendGuards {
+  /** Nothing is sent while it is set. */
+  paused: boolean;
+  /** Null when the person set none. In them, sends wait as drafts and approvals wait too. */
+  quietHours: SlackQuietHours | null;
+  /** The most messages GoAhead sends in any hour, and how many it sent in the last one. */
+  hourlyLimit: number;
+  sentLastHour: number;
+}
+
+export interface SetSlackSendGuardsInput {
+  workspaceId: string;
+  paused?: boolean;
+  quietHours?: SlackQuietHours | null;
+}
+
+const QUIET_TIME = /^([01]\d|2[0-3]):[0-5]\d$/u;
+
+export function isSlackQuietHours(value: unknown): value is SlackQuietHours {
+  return (
+    isDynamicRecord(value) &&
+    typeof value.start === "string" &&
+    typeof value.end === "string" &&
+    QUIET_TIME.test(value.start) &&
+    QUIET_TIME.test(value.end) &&
+    value.start !== value.end
+  );
+}
+
+function isCount(value: unknown): value is number {
+  return isNumber(value) && Number.isInteger(value) && value >= 0;
+}
+
+export function isSlackSendGuards(value: unknown): value is SlackSendGuards {
+  return (
+    isDynamicRecord(value) &&
+    isBoolean(value.paused) &&
+    (value.quietHours === null || isSlackQuietHours(value.quietHours)) &&
+    isCount(value.hourlyLimit) &&
+    isCount(value.sentLastHour)
+  );
 }
 
 /** A channel of the person's workspace, by id and name (without the #). */
@@ -132,6 +185,36 @@ export interface MessagingThreadSummary {
   /** The newest activity, as an ISO time. The list is newest first. */
   updatedAt: string;
   unreadCount: number;
+  /** Messages an agent drafted from this conversation that wait for the person's approval. */
+  pendingDrafts: number;
+}
+
+/**
+ * A message an agent drafted to send in Slack, which waits for the person who connected the
+ * workspace. The desktop and the Slack buttons answer the same draft; the first answer counts.
+ */
+export interface MessagingDraft {
+  draftId: string;
+  workspaceId: string;
+  /** The conversation where the agent was asked, and where the answer is posted. */
+  threadId: string;
+  agentId: string;
+  /** Who gets the message: people's names, or a channel such as #general. */
+  recipient: string;
+  /** `user`: it goes out as the person; `bot`: as GoAhead. */
+  sender: "user" | "bot";
+  /** Who asked the agent for the message, when it is known. */
+  requestedBy: string | null;
+  text: string;
+  /** ISO time. */
+  createdAt: string;
+}
+
+/** Approves a draft, with the person's edited text when given, or denies it. */
+export interface AnswerMessagingDraftInput {
+  draftId: string;
+  decision: "approve" | "deny";
+  text?: string;
 }
 
 export interface MessagingThreadPageInput {
@@ -163,8 +246,30 @@ export function isMessagingThreadSummary(value: unknown): value is MessagingThre
     isBoundedString(value.updatedAt, 64) &&
     isNumber(value.unreadCount) &&
     Number.isInteger(value.unreadCount) &&
-    value.unreadCount >= 0
+    value.unreadCount >= 0 &&
+    isNumber(value.pendingDrafts) &&
+    Number.isInteger(value.pendingDrafts) &&
+    value.pendingDrafts >= 0
   );
+}
+
+export function isMessagingDraft(value: unknown): value is MessagingDraft {
+  return (
+    isDynamicRecord(value) &&
+    isIdentifier(value.draftId) &&
+    isIdentifier(value.workspaceId) &&
+    isIdentifier(value.threadId) &&
+    isIdentifier(value.agentId) &&
+    isBoundedString(value.recipient, MESSAGING_LIMITS.name * 4) &&
+    isOneOf(["user", "bot"] as const, value.sender) &&
+    isNullableBoundedString(value.requestedBy, MESSAGING_LIMITS.name) &&
+    isBoundedString(value.text, INPUT_LIMITS.messageText) &&
+    isBoundedString(value.createdAt, 64)
+  );
+}
+
+export function isMessagingDrafts(value: unknown): value is MessagingDraft[] {
+  return Array.isArray(value) && value.length <= MESSAGING_LIMITS.drafts && value.every(isMessagingDraft);
 }
 
 export function isMessagingThreadSummaries(value: unknown): value is MessagingThreadSummary[] {
@@ -215,7 +320,8 @@ export function isMessagingConnection(value: unknown): value is MessagingConnect
     (value.orchestratorAgentId === null || isIdentifier(value.orchestratorAgentId)) &&
     Array.isArray(value.watchedChannels) &&
     value.watchedChannels.length <= MESSAGING_LIMITS.watchedChannels &&
-    value.watchedChannels.every(isSlackChannelChoice)
+    value.watchedChannels.every(isSlackChannelChoice) &&
+    isSlackSendGuards(value.sendGuards)
   );
 }
 

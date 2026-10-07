@@ -115,4 +115,8 @@ export const messages = {
   "sidebar.messagingThreads.unread": { one: "{count} mensagem não lida", other: "{count} mensagens não lidas" },
   "sidebar.messagingThreads.showMore": { one: "Mostrar mais {count}", other: "Mostrar mais {count}" },
   "sidebar.messagingThreads.showLess": "Mostrar menos",
+  "sidebar.messagingThreads.draftWaiting": {
+    one: "{count} mensagem aguarda sua aprovação",
+    other: "{count} mensagens aguardam sua aprovação",
+  },
 } as const satisfies PartialTranslation<typeof source>;

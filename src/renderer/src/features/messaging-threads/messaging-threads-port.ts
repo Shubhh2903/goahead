@@ -4,7 +4,7 @@ import type { OpenBotDesktopApi } from "@openbot/contracts/ipc";
 export interface MessagingThreadsPort {
   messaging: Pick<
     OpenBotDesktopApi["messaging"],
-    "listThreads" | "readThreadPage" | "markThreadRead" | "onThreadsChanged"
+    "listThreads" | "readThreadPage" | "markThreadRead" | "onThreadsChanged" | "listDrafts" | "answerDraft"
   >;
   openAttachment: OpenBotDesktopApi["agent"]["openAttachment"];
   openUrl: OpenBotDesktopApi["openUrl"];

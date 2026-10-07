@@ -370,6 +370,35 @@ export class MessagingStore {
     return row ? decodeSendRecord(JSON.parse(String(row.payload_json))) : null;
   }
 
+  /** Whether GoAhead ever sent to this recipient (`user:U1`, `group:U1,U2`, `channel:C1`) in the workspace. */
+  hasSentTo(connectionId: string, to: string): boolean {
+    return (
+      databaseRows(
+        this.#database.connection
+          .prepare(
+            `SELECT 1 FROM orchestration_events
+             WHERE aggregate_type = ? AND json_extract(payload_json, '$.connectionId') = ?
+               AND json_extract(payload_json, '$.to') = ? LIMIT 1`,
+          )
+          .all(SEND_AGGREGATE, connectionId, to),
+      ).length > 0
+    );
+  }
+
+  /** How many messages GoAhead sent in the workspace since the time. */
+  sendsSince(connectionId: string, since: string): number {
+    const row = databaseRow(
+      this.#database.connection
+        .prepare(
+          `SELECT COUNT(*) AS count FROM orchestration_events
+           WHERE aggregate_type = ? AND json_extract(payload_json, '$.connectionId') = ?
+             AND json_extract(payload_json, '$.approvedAt') >= ?`,
+        )
+        .get(SEND_AGGREGATE, connectionId, since),
+    );
+    return row ? requiredNumberColumn(row, "count") : 0;
+  }
+
   /** Every send on record, oldest first. */
   sends(): MessagingSendRecord[] {
     return databaseRows(

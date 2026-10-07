@@ -14,6 +14,11 @@ export const messages = {
   "error.messaging.sendToSelf":
     "O usuário do GoAhead lê esta conversa. Responda aqui em vez de enviar uma mensagem para ele.",
   "error.messaging.sendTextEmpty": "A mensagem não tem texto.",
+  "error.messaging.sendPaused": "Os envios do Slack estão pausados no GoAhead. Nada foi enviado.",
+  "error.messaging.sendRateLimited":
+    "O GoAhead enviou {limit} mensagens do Slack na última hora, o máximo que ele envia. Nada foi enviado. Tente mais tarde.",
+  "error.messaging.sendQuietHours":
+    "Horário de silêncio: o GoAhead não envia mensagens do Slack até {time}. O rascunho aguarda.",
   "error.messaging.threadUnavailable": "Esta conversa do Slack não está disponível.",
   "error.messaging.inboxNeedsSlack": "As mensagens do Slack só podem ser lidas na sua mensagem direta com o GoAhead.",
   "error.messaging.inboxNeedsUser":

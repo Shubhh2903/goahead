@@ -4,7 +4,7 @@
  * room for them.
  */
 
-import { Badge, Button, Hash, MessageCircle } from "@openbot/ui";
+import { Badge, Button, Clock3, Hash, MessageCircle } from "@openbot/ui";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { AgentProfile } from "../../data";
 import { useText } from "../../text";
@@ -20,12 +20,14 @@ export function SidebarMessagingThreads(threadProps: { agent: AgentProfile }) {
   const threads = createMemo(() =>
     (props.messagingThreads ?? []).filter((thread) => thread.agentId === threadProps.agent.id),
   );
-  // The open conversation stays in the list even when it is older than the visible few.
+  // The open conversation, and one with a draft that waits for the person, stay in the list even when
+  // they are older than the visible few.
   const visible = createMemo(() =>
     expanded()
       ? threads()
       : threads().filter(
-          (thread, index) => index < VISIBLE_THREADS || thread.threadId === props.activeMessagingThreadId,
+          (thread, index) =>
+            index < VISIBLE_THREADS || thread.threadId === props.activeMessagingThreadId || thread.pendingDrafts > 0,
         ),
   );
   const hidden = () => threads().length - visible().length;
@@ -39,6 +41,7 @@ export function SidebarMessagingThreads(threadProps: { agent: AgentProfile }) {
           {(thread) => {
             const active = () => props.activeMessagingThreadId === thread().threadId;
             const unread = () => thread().unreadCount;
+            const drafts = () => thread().pendingDrafts;
             return (
               <li>
                 <Button
@@ -53,7 +56,9 @@ export function SidebarMessagingThreads(threadProps: { agent: AgentProfile }) {
                   ]}
                   aria-label={`${t("sidebar.messagingThreads.row", { title: thread().title })}${
                     thread().preview ? `. ${thread().preview}` : ""
-                  }${unread() > 0 ? `. ${t("sidebar.messagingThreads.unread", { count: unread() })}` : ""}`}
+                  }${unread() > 0 ? `. ${t("sidebar.messagingThreads.unread", { count: unread() })}` : ""}${
+                    drafts() > 0 ? `. ${t("sidebar.messagingThreads.draftWaiting", { count: drafts() })}` : ""
+                  }`}
                   aria-pressed={active() ? "true" : "false"}
                   data-cuelume-navigate=""
                   onClick={(event: MouseEvent) => {
@@ -70,6 +75,14 @@ export function SidebarMessagingThreads(threadProps: { agent: AgentProfile }) {
                     {(preview) => <span class="sidebar-messaging-thread-preview">{preview()}</span>}
                   </Show>
                   <span class="sidebar-messaging-thread-time">{sidebarMessageTime(thread().updatedAt, format)}</span>
+                  <Show when={drafts() > 0}>
+                    <span
+                      class="sidebar-messaging-thread-waiting"
+                      title={t("sidebar.messagingThreads.draftWaiting", { count: drafts() })}
+                    >
+                      <Clock3 aria-hidden="true" />
+                    </span>
+                  </Show>
                   <Show when={unread() > 0}>
                     <Badge class="sidebar-messaging-thread-badge" tone="accent" shape="pill" aria-hidden="true">
                       {Math.min(unread(), 99)}

@@ -38,4 +38,5 @@ export const messages = {
   "status.messaging.sendAsBot": "Enviada pelo aplicativo GoAhead, não como você.",
   "status.messaging.sent": "Enviada. Aprovada por {user}.",
   "status.messaging.sendFailed": "Não enviada: {reason}",
+  "status.messaging.sentFor": "{name} me pediu para enviar isto:",
 } as const satisfies PartialTranslation<typeof source>;

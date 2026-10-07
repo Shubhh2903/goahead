@@ -492,8 +492,9 @@ answers go from the computer to the Slack Web API directly.
   mention you, and the channels you pick in Settings > Connectors > Slack, with each author's display
   name. A newly picked channel starts with its newest 15 messages, read from Slack as you. Messages
   older than 30 days are deleted, a channel you remove loses its messages, and disconnect deletes the
-  whole inbox. Agents read the inbox only when you ask in your own direct message with GoAhead, and a
-  message sent as you goes out only when you asked for it or approved it. Nothing in the inbox leaves
+  whole inbox. Agents read the inbox only when you ask in your own direct message with GoAhead. A
+  message goes out as you only when you asked for it yourself; when someone else asks, it goes out
+  from the GoAhead app after you approve it, and its first line names who asked. Nothing in the inbox leaves
   the computer, except the parts an agent reads, which go to that agent's provider.
 - **Given to the Slack Orchestrator.** Every new Slack request goes first to the orchestrator agent,
   which runs on its provider like any other agent and passes the work to a teammate with the facts

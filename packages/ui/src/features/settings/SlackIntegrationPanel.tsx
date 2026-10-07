@@ -8,6 +8,7 @@ import type {
   MessagingConnection,
   SlackChannelChoice,
   SlackChannelOption,
+  SlackQuietHours,
 } from "@openbot/contracts/ipc";
 import { MESSAGING_LIMITS } from "@openbot/contracts/ipc";
 import { SLACK_ORCHESTRATOR_AVATAR } from "@openbot/contracts/slack-app";
@@ -35,6 +36,7 @@ import {
   Lock,
   SettingsSection,
   Spinner,
+  SwitchField,
   Text,
   TriangleAlert,
 } from "@openbot/ui";
@@ -86,6 +88,8 @@ export interface SlackIntegrationPanelProps {
   /** Reads the channels the person is in, for the inbox picker. Without it and the save, no picker shows. */
   onListChannels?: (workspaceId: string) => Promise<SlackChannelOption[]>;
   onSetWatchedChannels?: (workspaceId: string, channels: SlackChannelChoice[]) => void;
+  /** Changes the pause or the quiet hours of a workspace's sends. Without it, no Sending section shows. */
+  onSetSendGuards?: (workspaceId: string, change: { paused?: boolean; quietHours?: SlackQuietHours | null }) => void;
 }
 
 /** What a workspace row can do. */
@@ -246,6 +250,21 @@ export function SlackIntegrationPanel(props: SlackIntegrationPanelProps) {
           </SettingsSection>
         )}
       </For>
+
+      {/* Sends go out as the person or as the app; the person limits both. */}
+      <Show when={props.onSetSendGuards}>
+        {(onSet) => (
+          <For each={props.connections.filter((connection) => connection.userId)}>
+            {(connection) => (
+              <SendGuardsSection
+                connection={connection}
+                busy={props.busy}
+                onChange={(change) => onSet()(connection.workspaceId, change)}
+              />
+            )}
+          </For>
+        )}
+      </Show>
 
       {/* The inbox reads Slack as the person, so it needs their connection. */}
       <Show when={props.onListChannels && props.onSetWatchedChannels}>
@@ -818,5 +837,77 @@ function ChannelPickerDialog(props: {
         </Switch>
       </div>
     </WizardDialog>
+  );
+}
+
+const DEFAULT_QUIET_HOURS: SlackQuietHours = { start: "22:00", end: "08:00" };
+const TIME_VALUE = /^([01]\d|2[0-3]):[0-5]\d$/u;
+
+/** The pause switch, the quiet hours, and how many messages went out in the last hour. */
+function SendGuardsSection(props: {
+  connection: MessagingConnection;
+  busy: boolean;
+  onChange: (change: { paused?: boolean; quietHours?: SlackQuietHours | null }) => void;
+}) {
+  const { t } = useText();
+  const guards = () => props.connection.sendGuards;
+  const setTime = (edge: "start" | "end", value: string) => {
+    const current = guards().quietHours;
+    if (!current || !TIME_VALUE.test(value)) return;
+    const next = { ...current, [edge]: value };
+    if (next.start !== next.end) props.onChange({ quietHours: next });
+  };
+  return (
+    <SettingsSection
+      title={t("connector.slack.sendingTitle")}
+      description={t("connector.slack.sendingDescription", { limit: guards().hourlyLimit })}
+    >
+      <ItemGroup class="settings-modal-card slack-send-guards">
+        <SwitchField
+          checked={guards().paused}
+          disabled={props.busy}
+          onChange={(paused: boolean) => props.onChange({ paused })}
+          label={t("connector.slack.pauseTitle")}
+          description={t("connector.slack.pauseDescription")}
+        />
+        <SwitchField
+          checked={guards().quietHours !== null}
+          disabled={props.busy}
+          onChange={(on: boolean) => props.onChange({ quietHours: on ? DEFAULT_QUIET_HOURS : null })}
+          label={t("connector.slack.quietTitle")}
+          description={t("connector.slack.quietDescription")}
+        />
+        <Show when={guards().quietHours}>
+          {(quietHours) => (
+            <div class="slack-quiet-hours">
+              <Input
+                type="time"
+                aria-label={t("connector.slack.quietStart")}
+                value={quietHours().start}
+                disabled={props.busy}
+                onChange={(event: Event & { currentTarget: HTMLInputElement }) =>
+                  setTime("start", event.currentTarget.value)
+                }
+              />
+              <Text variant="caption" tone="muted">
+                {t("connector.slack.quietUntil")}
+              </Text>
+              <Input
+                type="time"
+                aria-label={t("connector.slack.quietEnd")}
+                value={quietHours().end}
+                disabled={props.busy}
+                onChange={(event: Event & { currentTarget: HTMLInputElement }) =>
+                  setTime("end", event.currentTarget.value)
+                }
+              />
+            </div>
+          )}
+        </Show>
+        <Text class="slack-send-count" variant="caption" tone="muted" role="status">
+          {t("connector.slack.sentLastHour", { count: guards().sentLastHour, limit: guards().hourlyLimit })}
+        </Text>
+      </ItemGroup>
+    </SettingsSection>
   );
 }

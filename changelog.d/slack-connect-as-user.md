@@ -8,7 +8,9 @@
 - Agents can send a new Slack message to a person or a channel for you. When you ask @GoAhead
   yourself, the message goes out at once, as you, with only the words you asked for. When someone
   else asks, the message waits in the Slack thread with Approve and Deny buttons, and only you can
-  approve it. Each send is kept in the audit log.
+  approve it. It then goes out from the GoAhead app, not as you, and its first line names who asked.
+  Their recipient's answer comes back to the conversation where they asked. Each send is kept in the
+  audit log.
 - When someone answers a message that GoAhead sent for you, the answer comes back to the Slack
   thread where you asked, and the agent tells you who replied and what they said. Only answers to
   messages GoAhead sent are picked up; your other Slack messages never reach an agent.
@@ -27,6 +29,14 @@
   messages, mentions, and the channels you pick in Settings > Connectors > Slack. Messages are kept
   for 30 days and deleted when you disconnect. Only you can ask an agent to read them, in your own
   direct message with GoAhead.
+
+- A message an agent drafts for you also waits in GoAhead on your computer. The Slack conversation
+  shows a mark in the sidebar, and opening it shows the draft: change the text if you want, then
+  approve or deny it. The Slack buttons answer the same draft; the first answer counts.
+
+- Guards for Slack sends, in Settings > Connectors > Slack > Sending: pause all sends at once, set
+  quiet hours (sends wait as drafts), and a limit of 10 messages an hour per workspace. A message to
+  someone GoAhead never wrote to always waits for your approval, even when you asked for it.
 
 ### Fixed
 

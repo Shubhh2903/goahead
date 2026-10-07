@@ -113,4 +113,8 @@ export const messages = {
   "sidebar.messagingThreads.unread": { one: "{count} okunmamış mesaj", other: "{count} okunmamış mesaj" },
   "sidebar.messagingThreads.showMore": { one: "{count} tane daha göster", other: "{count} tane daha göster" },
   "sidebar.messagingThreads.showLess": "Daha az göster",
+  "sidebar.messagingThreads.draftWaiting": {
+    one: "{count} mesaj onayınızı bekliyor",
+    other: "{count} mesaj onayınızı bekliyor",
+  },
 } as const satisfies PartialTranslation<typeof source>;

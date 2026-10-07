@@ -203,11 +203,14 @@ import type {
 import type {
   AddSlackOrchestratorInput,
   AddSlackOrchestratorResult,
+  AnswerMessagingDraftInput,
   MarkMessagingThreadReadInput,
+  MessagingDraft,
   MessagingThreadPageInput,
   MessagingThreadSummary,
   MessagingThreadsChanged,
   SetSlackEnabledInput,
+  SetSlackSendGuardsInput,
   SetSlackWatchedChannelsInput,
   SlackChannelList,
   SlackOverview,
@@ -609,6 +612,11 @@ export const IPC_ENDPOINTS = {
     // The channels the person picks for GoAhead's local inbox. Listing them reads Slack as the person.
     listSlackChannels: request<SlackWorkspaceInput, SlackChannelList>()("messaging:list-slack-channels"),
     setSlackWatchedChannels: request<SetSlackWatchedChannelsInput, void>()("messaging:set-slack-watched-channels"),
+    // The messages agents drafted, which wait for the person. A change comes as `threadsChanged`.
+    listDrafts: request<undefined, MessagingDraft[]>()("messaging:list-drafts"),
+    // Pause and quiet hours. A pause holds at once, before it is saved.
+    setSlackSendGuards: request<SetSlackSendGuardsInput, void>()("messaging:set-slack-send-guards"),
+    answerDraft: request<AnswerMessagingDraftInput, void>()("messaging:answer-draft"),
   },
   // The server name, logo and app update of one server's host. `host.updateIdentity` and `update`
   // reach this computer only; these take the server, so a remote admin reaches the host. The

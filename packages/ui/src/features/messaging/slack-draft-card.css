@@ -1,0 +1,29 @@
+/* A message an agent drafted, which waits for the person's approval. */
+.slack-draft-card {
+  display: grid;
+  gap: var(--openbot-space-3);
+  margin: var(--openbot-space-3) var(--openbot-space-4) 0;
+  padding: var(--openbot-space-4);
+}
+
+.slack-draft-card-head {
+  display: grid;
+  gap: 2px;
+}
+
+.slack-draft-card-title {
+  margin: 0;
+  font-size: var(--openbot-text-lg);
+  line-height: var(--openbot-leading-lg);
+}
+
+.slack-draft-card-text {
+  width: 100%;
+  resize: vertical;
+}
+
+.slack-draft-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--openbot-space-2);
+}

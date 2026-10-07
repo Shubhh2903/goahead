@@ -3,10 +3,12 @@
 import {
   type AddSlackOrchestratorResult,
   isAddSlackOrchestratorResult,
+  isMessagingDrafts,
   isMessagingThreadSummaries,
   isMessagingThreadsChanged,
   isSlackChannelList,
   isSlackOverview,
+  type MessagingDraft,
   type MessagingThreadSummary,
   type MessagingThreadsChanged,
   type SlackChannelList,
@@ -35,5 +37,10 @@ export function decodeMessagingThreadsChanged(value: unknown): MessagingThreadsC
 
 export function decodeSlackChannelListReply(value: unknown): SlackChannelList {
   if (!isSlackChannelList(value)) throw new Error("Invalid Slack channel list response.");
+  return value;
+}
+
+export function decodeMessagingDraftsReply(value: unknown): MessagingDraft[] {
+  if (!isMessagingDrafts(value)) throw new Error("Invalid Slack draft list response.");
   return value;
 }

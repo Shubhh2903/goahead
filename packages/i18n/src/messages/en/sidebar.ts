@@ -116,4 +116,8 @@ export const messages = defineMessages("sidebar", {
   "sidebar.messagingThreads.unread": { one: "{count} unread message", other: "{count} unread messages" },
   "sidebar.messagingThreads.showMore": { one: "Show {count} more", other: "Show {count} more" },
   "sidebar.messagingThreads.showLess": "Show less",
+  "sidebar.messagingThreads.draftWaiting": {
+    one: "{count} message waits for your approval",
+    other: "{count} messages wait for your approval",
+  },
 });

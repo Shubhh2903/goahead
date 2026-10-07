@@ -137,6 +137,7 @@ import {
 } from "./dynamic-island-decoding";
 import {
   decodeAddSlackOrchestratorReply,
+  decodeMessagingDraftsReply,
   decodeMessagingThreadsChanged,
   decodeMessagingThreadsReply,
   decodeSlackChannelListReply,
@@ -634,6 +635,9 @@ const openbotApi: OpenBotDesktopApi = {
     threadsChanged: dropInvalid(decodeMessagingThreadsChanged),
     listSlackChannels: decodeSlackChannelListReply,
     setSlackWatchedChannels: decodeVoid,
+    listDrafts: decodeMessagingDraftsReply,
+    setSlackSendGuards: decodeVoid,
+    answerDraft: decodeVoid,
   }),
   hostAdmin: bridgeGroup(IPC_ENDPOINTS.hostAdmin, {
     updateIdentity: decodeServer,

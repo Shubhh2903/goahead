@@ -167,3 +167,20 @@
   width: 14px;
   height: 14px;
 }
+
+/* The send guards: pause, quiet hours, and the hourly count. */
+.slack-send-guards {
+  display: grid;
+  gap: var(--openbot-space-3);
+  padding: var(--openbot-space-3) var(--openbot-space-4);
+}
+
+.slack-quiet-hours {
+  display: flex;
+  align-items: center;
+  gap: var(--openbot-space-2);
+}
+
+.slack-quiet-hours .ui-input {
+  width: 120px;
+}

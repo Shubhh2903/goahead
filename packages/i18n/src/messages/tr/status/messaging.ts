@@ -40,4 +40,5 @@ export const messages = {
   "status.messaging.sendAsBot": "GoAhead uygulaması tarafından gönderilir, sizin adınıza değil.",
   "status.messaging.sent": "Gönderildi. {user} onayladı.",
   "status.messaging.sendFailed": "Gönderilmedi: {reason}",
+  "status.messaging.sentFor": "{name} bunu göndermemi istedi:",
 } as const satisfies PartialTranslation<typeof source>;

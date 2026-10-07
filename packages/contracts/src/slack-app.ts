@@ -19,6 +19,8 @@ export const SLACK_BOT_SCOPES = [
   "im:read",
   "im:write",
   "mpim:history",
+  // A group direct message that the bot sends for someone other than the person who connected it.
+  "mpim:write",
   "reactions:write",
   "users:read",
 ] as const;

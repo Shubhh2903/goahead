@@ -469,6 +469,11 @@ export class MessagingThreads {
     for (const listener of this.#listeners) listener(activity);
   }
 
+  /** Tells the thread list that a conversation changed outside its messages, such as a new draft. */
+  notifyChanged(threadId: string): void {
+    this.#changed(threadId);
+  }
+
   #changed(threadId: string): void {
     for (const listener of this.#changeListeners) listener(threadId);
   }

@@ -55,6 +55,23 @@ The agent tools `slack_list_unread` and `slack_read_conversation` read it. They 
 person's own direct message with GoAhead, while a turn that the person started runs, because an
 answer in a channel is public and a request from anyone else must never read their messages.
 "Unread" is GoAhead's own read mark per conversation; reading a conversation moves it.
+
+### Send guards
+
+Every message GoAhead sends in Slack passes the same checks, when the agent asks, when the person
+approves (in Slack or on the desktop), and again right before the post:
+
+- Only the connected person's own request goes out at once, as them, and only to someone GoAhead
+  already wrote to. A new recipient, anyone else's request, and every send in quiet hours become a
+  draft that only the connected person can approve. Anyone else's request goes out as the app.
+- **Pause** (Settings > Connectors > Slack > Sending) refuses every send and every approval. It holds
+  in memory at once and is saved to `openbot-messaging-send-guards-v1.json` in the app's user data.
+- **Quiet hours** turn every send into a draft, and an approval waits until they end.
+- **Hourly limit:** at most 10 sends per workspace in any hour, counted from the send audit log.
+
+Prompt-injection cases are covered in `src/main/slack-workspace.test.ts` ("guards every Slack send"),
+which drives the attack through the real tool-call path and writes `guards-report.json` under
+`.openbot-build/slack-workspace-e2e/`.
 - A new conversation goes to the Slack Orchestrator. It answers short requests itself, and gives other
   work to the one agent that fits best. That agent's answer comes back to the thread, and the
   orchestrator posts it. Until you add the orchestrator, Slack gets "No agent can answer here yet".

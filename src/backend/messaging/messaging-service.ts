@@ -11,6 +11,7 @@ import type {
   MessagingConnection,
   MessagingConnectionState,
   MessagingCredentialState,
+  MessagingDraft,
   MessagingPlatform,
   MessagingThreadSummary,
   RespondToApprovalInput,
@@ -27,6 +28,13 @@ import type { MessagingOrigin } from "../mailbox-store";
 import type { SidebarLayoutStore } from "../sidebar-layout-store";
 import type { InboxKind } from "./messaging-inbox-store";
 import { SLACK_INBOX_UNTRUSTED_NOTE } from "./messaging-read-tools";
+import {
+  inQuietHours,
+  MessagingSendGuardStore,
+  type QuietHours,
+  SEND_HOURLY_LIMIT,
+  SEND_LIMIT_WINDOW_MS,
+} from "./messaging-send-guards";
 import { parseSlackSendTarget, type SlackSendTarget, slackTargetPeople } from "./messaging-send-tool";
 import type { MessagingConnectionRecord, MessagingLink } from "./messaging-store";
 import type {
@@ -101,6 +109,8 @@ export interface MessagingServiceOptions {
   slackOrigin?: string;
   /** Where the Slack Orchestrator goes in the sidebar: an Integrations section. */
   sidebar?: Pick<SidebarLayoutStore, "getSnapshot" | "mutate">;
+  /** The person's send guards: pause and quiet hours. Without it, they live in memory only. */
+  sendGuards?: MessagingSendGuardStore;
 }
 
 interface LiveConnection {
@@ -155,6 +165,15 @@ interface SendDraft {
   text: string;
   threadKey: string | null;
   sender: MessageSender;
+  /** For the desktop card: who gets it, by name, and who asked. */
+  recipient: string;
+  requestedBy: string | null;
+  /**
+   * Someone other than the connected person asked for it: it goes out as the GoAhead app, and its
+   * first line names them, so nobody reads it as the person's own words.
+   */
+  onBehalfOf: string | null;
+  createdAt: string;
 }
 
 type PendingApproval = PendingAgentApproval | PendingSend;
@@ -165,6 +184,8 @@ const APPROVAL_TEXT_LIMIT = 2_500;
 /** How long a reply to a message OpenBot sent as the user still comes back to the conversation. */
 const REPLY_WATCH_MS = 14 * 24 * 60 * 60_000;
 const SENT_PREVIEW = 300;
+/** How long every direct message after a send by the app counts as an answer to it. */
+const APP_SEND_REPLY_MS = 24 * 60 * 60_000;
 const CANCEL_TEXT = /^(cancel|stop)$/i;
 const RECENT_MESSAGES = 2_000;
 /** How long a connection waits before it tries Slack again after Slack was unreachable. */
@@ -210,6 +231,7 @@ export class MessagingService {
   readonly #connect: SlackConnect | null;
   readonly #slackOrigin: string | undefined;
   readonly #sidebar: Pick<SidebarLayoutStore, "getSnapshot" | "mutate"> | null;
+  readonly #guards: MessagingSendGuardStore;
   #started = false;
 
   constructor(options: MessagingServiceOptions) {
@@ -222,11 +244,13 @@ export class MessagingService {
     this.#connect = options.ingress && options.slackApp ? new SlackConnect(options.slackApp) : null;
     this.#slackOrigin = options.slackOrigin;
     this.#sidebar = options.sidebar ?? null;
+    this.#guards = options.sendGuards ?? new MessagingSendGuardStore(null);
   }
 
   async start(): Promise<void> {
     if (this.#started) return;
     this.#started = true;
+    await this.#guards.load();
     this.#unsubscribe.push(
       this.#threads.onActivity((activity) => this.#serial(activity.link.linkId, () => this.#activity(activity))),
       this.#agents.onEvent((event) => this.#agentEvent(event)),
@@ -276,7 +300,59 @@ export class MessagingService {
       preview: link.preview,
       isDirect: link.isDirect,
       updatedAt: link.updatedAt,
+      pendingDrafts: this.#pendingSends().filter((pending) => pending.draft.linkId === link.linkId).length,
     }));
+  }
+
+  /** The drafts that wait for the person, oldest first, for the desktop. */
+  listDrafts(): MessagingDraft[] {
+    return this.#pendingSends().flatMap((pending) => {
+      const record = this.#threads.store.connection(pending.connectionId);
+      const link = this.#threads.store.link(pending.draft.linkId);
+      if (!record || !link) return [];
+      const { draft } = pending;
+      return [
+        {
+          draftId: draft.draftId,
+          workspaceId: record.workspaceId,
+          threadId: link.threadId,
+          agentId: draft.agentId,
+          recipient: draft.recipient,
+          sender: draft.sender,
+          requestedBy: draft.requestedBy,
+          text: draft.text,
+          createdAt: draft.createdAt,
+        },
+      ];
+    });
+  }
+
+  /**
+   * The person answers a draft on the desktop: the same answer as their Slack button. Approved, it
+   * is sent once, with their edited text when they changed it. The draft post in Slack shows the
+   * result. A draft that was answered already is refused.
+   */
+  async answerDraft(draftId: string, decision: "approve" | "deny", editedText?: string): Promise<void> {
+    const pending = this.#pendingSends().find((candidate) => candidate.draft.draftId === draftId);
+    if (!pending) throw new Error(sourceText("status.messaging.requestInactive"));
+    const live = this.#live.get(pending.connectionId);
+    const approverId = this.#credentials.get(pending.connectionId)?.userId;
+    if (!live || !approverId) throw new Error(sourceText("error.messaging.notConnected"));
+    const blocked = decision === "approve" ? this.#sendBlock(live.record) : null;
+    if (blocked) throw new Error(blocked);
+    if (decision === "approve" && editedText !== undefined) {
+      const text = editedText.replace(MENTION_MARKERS, "").trim().slice(0, INPUT_LIMITS.messageText);
+      if (!text) throw new Error(sourceText("error.messaging.sendTextEmpty"));
+      pending.draft.text = text;
+    }
+    await this.#finishApproval(live, pending, decision === "approve" ? "accept" : "decline", approverId, null);
+  }
+
+  #pendingSends(): PendingSend[] {
+    const unique = new Set<PendingSend>();
+    for (const pending of this.#approvals.values())
+      if (pending.kind === "send" && !pending.answered) unique.add(pending);
+    return [...unique].sort((left, right) => left.draft.createdAt.localeCompare(right.draft.createdAt));
   }
 
   /** The agent that answers one external conversation. Any other thread id is refused. */
@@ -328,6 +404,23 @@ export class MessagingService {
       })),
     );
     for (const channel of added) this.#fillHistory(live, channel.platformChannelId);
+  }
+
+  /**
+   * Changes the person's send guards. The change holds at once, so a pause stops the next send before
+   * the setting reaches the disk.
+   */
+  async setSendGuards(
+    workspaceId: string,
+    change: { paused?: boolean; quietHours?: QuietHours | null },
+  ): Promise<void> {
+    const record = this.#requireConnection(workspaceId);
+    await this.#guards
+      .set(record.workspaceId, {
+        ...(change.paused === undefined ? {} : { paused: change.paused }),
+        ...(change.quietHours === undefined ? {} : { quietHours: change.quietHours }),
+      })
+      .catch((error) => this.#warn(error));
   }
 
   async reconnect(workspaceId: string): Promise<void> {
@@ -545,6 +638,19 @@ export class MessagingService {
    * that direct message, or in the thread under a channel post), it goes to the conversation where
    * the user asked for the send, so the agent tells the user there. Anything else is dropped.
    */
+  /**
+   * Whether a direct message answers a message that OpenBot sent there as the app: a reply in the
+   * thread under it, or any message in the next day. After that, the person talks to OpenBot again.
+   */
+  #answersAppSend(live: LiveConnection, message: InboundMessage): boolean {
+    const user = live.identity?.user;
+    if (!user || message.authorId === user.id) return false;
+    const sent = this.#threads.store.latestSendTo(live.record.connectionId, message.platformChannelId);
+    if (sent?.sender !== "bot" || !sent.linkId) return false;
+    if (message.target.replyThreadId === sent.platformMessageId) return true;
+    return Date.now() - Date.parse(sent.approvedAt) <= APP_SEND_REPLY_MS;
+  }
+
   async #observe(live: LiveConnection, message: InboundMessage): Promise<void> {
     const user = live.identity?.user;
     if (!user || message.authorId === user.id || message.authorId === live.identity?.botUserId) return;
@@ -749,6 +855,14 @@ export class MessagingService {
       retryAt: state === "rate_limited" ? (live?.retryAt ?? null) : null,
       credentials,
       orchestratorAgentId: record.orchestratorAgentId,
+      sendGuards: {
+        ...this.#guards.get(record.workspaceId),
+        hourlyLimit: SEND_HOURLY_LIMIT,
+        sentLastHour: this.#threads.store.sendsSince(
+          record.connectionId,
+          new Date(Date.now() - SEND_LIMIT_WINDOW_MS).toISOString(),
+        ),
+      },
       watchedChannels: this.#threads.inbox.watched(record.connectionId).map((channel) => ({
         channelId: channel.platformChannelId,
         name: channel.name.replace(/^#/u, ""),
@@ -768,6 +882,10 @@ export class MessagingService {
       live.identity.user &&
       !(await (live.adapter.isOwnConversation?.(message.platformChannelId) ?? Promise.resolve(true)))
     )
+      return this.#observe(live, message);
+    // OpenBot sent a message here for someone, as the app, a moment ago: an answer goes back to where
+    // the send was asked for, not to a new conversation with OpenBot.
+    if (!message.observed && (message.isDirect || message.groupDirect) && this.#answersAppSend(live, message))
       return this.#observe(live, message);
     // Before any await below: a redelivered event can arrive while the first copy is still
     // downloading its files, before the mailbox holds its idempotency key. The mailbox key covers a restart.
@@ -1079,9 +1197,18 @@ export class MessagingService {
           : { kind: "group", id: others.join(",") };
     const text = request.text.replace(MENTION_MARKERS, "").trim().slice(0, INPUT_LIMITS.messageText);
     if (!text) throw new Error(sourceText("error.messaging.sendTextEmpty"));
-    const sender: MessageSender = credentials.userToken ? "user" : "bot";
+    // A pause or a spent hour refuses at once, with no draft: the agent learns that nothing went out.
+    const refused = this.#sendRefusal(live.record);
+    if (refused) throw new Error(refused);
     const { adapter } = live;
     const running = this.#threads.runningOrigin(link.linkId);
+    // Only the person's own request goes out as them. Anyone else's goes out as the GoAhead app.
+    const ownRequest = running?.origin.authorId === approverId;
+    // Even the person's own request waits for them when it goes to someone GoAhead never wrote to, or
+    // in quiet hours: an agent that a message tricked must not reach a stranger as them.
+    const quiet = inQuietHours(this.#guards.get(live.record.workspaceId).quietHours, new Date());
+    const known = this.#threads.store.hasSentTo(live.record.connectionId, `${to.kind}:${to.id}`);
+    const sender: MessageSender = ownRequest && credentials.userToken ? "user" : "bot";
     const draftId = randomUUID();
     const draft: SendDraft = {
       draftId,
@@ -1091,10 +1218,17 @@ export class MessagingService {
       text,
       threadKey: request.threadKey,
       sender,
+      recipient:
+        to.kind === "channel"
+          ? await adapter.placeName(to.id)
+          : (await Promise.all(slackTargetPeople(to).map((id) => adapter.authorName(id)))).join(", "),
+      requestedBy: running?.origin.authorName ?? null,
+      onBehalfOf: ownRequest ? null : (running?.origin.authorName ?? null),
+      createdAt: new Date().toISOString(),
     };
     // The connected person asked for it themselves: their own request is their approval. Anyone
     // else's request, or a turn with no known author, waits for them to press Approve.
-    if (running?.origin.authorId === approverId) {
+    if (ownRequest && known && !quiet) {
       const sentLink = await this.#deliver(live, draft, approverId);
       return { status: "sent", draftId, sender, approverId, link: sentLink };
     }
@@ -1124,19 +1258,26 @@ export class MessagingService {
       answered: false,
       draft,
     });
+    this.#threads.notifyChanged(link.threadId);
     return { status: "waiting_for_approval", draftId, sender, approverId, link: null };
   }
 
   /** Sends a draft once and records it. Returns the link to the sent message, when Slack gives one. */
   async #deliver(live: LiveConnection, draft: SendDraft, approvedBy: string): Promise<string | null> {
+    // The last check, right before the post: a pause set a moment ago stops this send too.
+    const blocked = this.#sendBlock(live.record);
+    if (blocked) throw new Error(blocked);
     const { adapter } = live;
     if (!adapter.postAs) throw new Error(sourceText("error.messaging.unsupported"));
     const channel =
       draft.to.kind === "channel" ? draft.to.id : await adapter.openDirectMessage?.(draft.to.id, draft.sender);
     if (!channel) throw new Error(sourceText("error.messaging.unsupported"));
+    const text = draft.onBehalfOf
+      ? `${sourceText("status.messaging.sentFor", { name: draft.onBehalfOf })}\n${draft.text}`
+      : draft.text;
     const messageId = await adapter.postAs(
       { platformChannelId: channel, replyThreadId: draft.threadKey },
-      draft.text,
+      text,
       draft.sender,
     );
     const link = (await adapter.permalink?.(channel, messageId)) ?? null;
@@ -1151,7 +1292,7 @@ export class MessagingService {
       to: `${draft.to.kind}:${draft.to.id}`,
       platformChannelId: channel,
       platformMessageId: messageId,
-      text: draft.text,
+      text,
       link,
     });
     return link;
@@ -1219,28 +1360,70 @@ export class MessagingService {
       );
       return;
     }
+    // An approval that cannot send now leaves the draft waiting; a denial always counts.
+    const blocked = pending.kind === "send" && action.decision === "accept" ? this.#sendBlock(live.record) : null;
+    if (blocked) {
+      await adapter.postPrivate(action.target, action.actorId, blocked);
+      return;
+    }
+    await this.#finishApproval(live, pending, action.decision, action.actorId, action.platformMessageId);
+  }
+
+  /** Why no send can go out now: the pause or the hourly limit. Quiet hours turn sends into drafts. */
+  #sendRefusal(record: MessagingConnectionRecord): string | null {
+    if (this.#guards.get(record.workspaceId).paused) return sourceText("error.messaging.sendPaused");
+    const since = new Date(Date.now() - SEND_LIMIT_WINDOW_MS).toISOString();
+    if (this.#threads.store.sendsSince(record.connectionId, since) >= SEND_HOURLY_LIMIT)
+      return sourceText("error.messaging.sendRateLimited", { limit: SEND_HOURLY_LIMIT });
+    return null;
+  }
+
+  /** Why a message cannot be sent now, approved or not. */
+  #sendBlock(record: MessagingConnectionRecord): string | null {
+    const refused = this.#sendRefusal(record);
+    if (refused) return refused;
+    const quietHours = this.#guards.get(record.workspaceId).quietHours;
+    return quietHours && inQuietHours(quietHours, new Date())
+      ? sourceText("error.messaging.sendQuietHours", { time: quietHours.end })
+      : null;
+  }
+
+  /**
+   * Answers one approval once, from a Slack button or the desktop, and shows the result in place of
+   * the buttons. `answered` is set before any await, so a second answer finds it taken.
+   */
+  async #finishApproval(
+    live: LiveConnection,
+    pending: PendingApproval,
+    decision: "accept" | "decline",
+    actorId: string,
+    pressedMessageId: string | null,
+  ): Promise<void> {
+    const { adapter } = live;
     pending.answered = true;
     let outcome: string;
     if (pending.kind === "send") {
       outcome =
-        action.decision === "accept"
-          ? await this.#sendDraft(live, pending, action.actorId)
-          : sourceText("status.messaging.deniedBy", { user: adapter.mention(action.actorId) });
+        decision === "accept"
+          ? await this.#sendDraft(live, pending, actorId)
+          : sourceText("status.messaging.deniedBy", { user: adapter.mention(actorId) });
     } else {
       try {
-        await this.#agents.respondToApproval({ requestId: pending.requestId, decision: action.decision });
-        outcome = sourceText(
-          action.decision === "accept" ? "status.messaging.approvedBy" : "status.messaging.deniedBy",
-          { user: adapter.mention(action.actorId) },
-        );
+        await this.#agents.respondToApproval({ requestId: pending.requestId, decision });
+        outcome = sourceText(decision === "accept" ? "status.messaging.approvedBy" : "status.messaging.deniedBy", {
+          user: adapter.mention(actorId),
+        });
       } catch {
         outcome = sourceText("status.messaging.requestInactive");
       }
     }
     for (const [key, candidate] of this.#approvals) if (candidate === pending) this.#approvals.delete(key);
-    await adapter.edit(pending.target, pending.messageId ?? action.platformMessageId, {
-      text: `${pending.text}\n${outcome}`,
-    });
+    if (pending.kind === "send") {
+      const link = this.#threads.store.link(pending.draft.linkId);
+      if (link) this.#threads.notifyChanged(link.threadId);
+    }
+    const messageId = pending.messageId ?? pressedMessageId;
+    if (messageId) await adapter.edit(pending.target, messageId, { text: `${pending.text}\n${outcome}` });
   }
 
   // Helpers.

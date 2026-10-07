@@ -32,6 +32,7 @@ function previewThreads(agentId: string): Array<{ summary: MessagingThreadSummar
       isDirect,
       updatedAt: minutesAgo(age),
       unreadCount,
+      pendingDrafts: id === "preet" ? 1 : 0,
     },
     messages: texts.map(([author, text], index) => ({
       id: `preview-slack-${id}-${index}`,
@@ -63,6 +64,7 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
   const connections = new Map<string, MessagingConnection>();
   let threads: ReturnType<typeof previewThreads> = [];
   const changeListeners = new Set<(change: MessagingThreadsChanged) => void>();
+  const answered = new Set<string>();
   const findThread = (threadId: string) => {
     const found = threads.find((candidate) => candidate.summary.threadId === threadId);
     if (!found) throw new Error(sourceText("error.messaging.threadUnavailable"));
@@ -89,6 +91,7 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
         credentials: "saved",
         orchestratorAgentId: null,
         watchedChannels: [],
+        sendGuards: { paused: false, quietHours: null, hourlyLimit: 10, sentLastHour: 0 },
       });
     },
     disconnectSlackWorkspace: async ({ workspaceId }) => {
@@ -117,6 +120,35 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
       };
     },
     setSlackWatchedChannels: async ({ workspaceId, channels }) => change(workspaceId, { watchedChannels: channels }),
+    setSlackSendGuards: async ({ workspaceId, ...guards }) => {
+      const current = connections.get(workspaceId);
+      if (!current) throw new Error(sourceText("error.messaging.notConnected"));
+      change(workspaceId, { sendGuards: { ...current.sendGuards, ...guards } });
+    },
+    listDrafts: async () =>
+      clone(
+        threads
+          .filter((candidate) => candidate.summary.pendingDrafts > 0 && !answered.has(candidate.summary.threadId))
+          .map((candidate) => ({
+            draftId: `draft-${candidate.summary.threadId}`,
+            workspaceId: PREVIEW_WORKSPACE.workspaceId,
+            threadId: candidate.summary.threadId,
+            agentId: candidate.summary.agentId,
+            recipient: "Ana",
+            sender: "user" as const,
+            requestedBy: candidate.summary.title,
+            text: "The release notes are in the shared folder.",
+            createdAt: candidate.summary.updatedAt,
+          })),
+      ),
+    answerDraft: async ({ draftId }) => {
+      const found = threads.find((candidate) => `draft-${candidate.summary.threadId}` === draftId);
+      if (!found || answered.has(found.summary.threadId))
+        throw new Error(sourceText("status.messaging.requestInactive"));
+      answered.add(found.summary.threadId);
+      found.summary = { ...found.summary, pendingDrafts: 0 };
+      for (const listener of changeListeners) listener({ threadId: found.summary.threadId });
+    },
     listThreads: async () => clone(threads.map((candidate) => candidate.summary)),
     readThreadPage: async ({ threadId }): Promise<ConversationPage> => {
       const { summary, messages } = findThread(threadId);

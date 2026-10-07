@@ -25,7 +25,7 @@ export interface SlackSendTarget {
 export const SLACK_SEND_MESSAGE_TOOL = {
   name: "slack_send_message",
   description:
-    'Send a new Slack message to a person, a channel, or a group direct message with several people, in the workspace this conversation is in. Call it once for each recipient; for a group direct message, call it once with every person in `to`. The text is the exact message the recipient reads, and it goes out as the GoAhead user: write only the content that was asked for, with no "From …" line, no signature, and no mention of GoAhead or of who asked. The result says `sent`, or `waiting_for_approval` when the GoAhead user must press Approve in Slack first. Report what the result says, nothing more.',
+    'Send a new Slack message to a person, a channel, or a group direct message with several people, in the workspace this conversation is in. Call it once for each recipient; for a group direct message, call it once with every person in `to`. The text is the exact message the recipient reads: write only the content that was asked for, with no "From …" line, no signature, and no mention of GoAhead or of who asked. It goes out as the GoAhead user when they asked for it themselves; otherwise GoAhead sends it as the app, with a first line that names who asked. The result says `sent`, or `waiting_for_approval` when the GoAhead user must press Approve in Slack first. Report what the result says, nothing more.',
   shape: {
     to: z
       .string()

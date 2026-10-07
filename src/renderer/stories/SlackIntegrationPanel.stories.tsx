@@ -50,6 +50,7 @@ function workspace(update: Partial<MessagingConnection> = {}): MessagingConnecti
     credentials: "saved",
     orchestratorAgentId: ORCHESTRATOR.id,
     watchedChannels: [{ channelId: "C0LAUNCH", name: "launch" }],
+    sendGuards: { paused: false, quietHours: { start: "22:00", end: "08:00" }, hourlyLimit: 10, sentLastHour: 3 },
     ...update,
   };
 }
@@ -69,6 +70,7 @@ const args = (connections: MessagingConnection[], busy = false) => ({
     { channelId: "C0LEADS", name: "leadership", isPrivate: true },
   ],
   onSetWatchedChannels: fn(),
+  onSetSendGuards: fn(),
 });
 
 /** No workspace yet: Connect Slack opens the dialog. */

@@ -153,6 +153,22 @@ export const messages = {
   "connector.slack.channelPrivate": "Canal privado",
   "connector.slack.channelsSave": "Salvar",
   "connector.slack.channelsCancel": "Cancelar",
+  "connector.slack.sendingTitle": "Envio",
+  "connector.slack.sendingDescription":
+    "O GoAhead envia no máximo {limit} mensagens por hora neste espaço de trabalho. Uma mensagem para alguém a quem ele nunca escreveu sempre aguarda sua aprovação.",
+  "connector.slack.pauseTitle": "Pausar todos os envios do Slack",
+  "connector.slack.pauseDescription":
+    "Nada é enviado, nem um rascunho aprovado. Os agentes ainda respondem nas próprias conversas.",
+  "connector.slack.quietTitle": "Horário de silêncio",
+  "connector.slack.quietDescription":
+    "Nesse horário, todo envio aguarda como rascunho, e as aprovações aguardam até o horário terminar.",
+  "connector.slack.quietStart": "Início do horário de silêncio",
+  "connector.slack.quietEnd": "Fim do horário de silêncio",
+  "connector.slack.quietUntil": "até",
+  "connector.slack.sentLastHour": {
+    one: "{count} de {limit} mensagens enviadas na última hora",
+    other: "{count} de {limit} mensagens enviadas na última hora",
+  },
   "connector.slack.removeEffectKept": "As conversas e o Orquestrador do Slack continuam no GoAhead.",
   "connector.slack.keep": "Manter conectado",
   "connector.slack.close": "Fechar",

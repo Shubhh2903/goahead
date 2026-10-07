@@ -1,6 +1,7 @@
 import type { AttachmentSummary } from "@openbot/contracts/ipc";
 import { Button, Hash, MessageCircle } from "@openbot/ui";
 import { type ChatMessageAuthor, ChatMessageRow } from "@openbot/ui/features/conversation/ChatMessageRow";
+import { SlackDraftCard } from "@openbot/ui/features/messaging/SlackDraftCard";
 import { useText } from "@openbot/ui/text";
 import { createMemo, For, Show } from "solid-js";
 import { toAgentMessages } from "../../app-message-projection";
@@ -103,6 +104,16 @@ export function MessagingThreadConversation() {
           </For>
         </div>
       </section>
+      <For each={threads.state.drafts.filter((draft) => draft.threadId === threads.state.selectedId)}>
+        {(draft) => (
+          <SlackDraftCard
+            draft={draft}
+            busy={threads.state.answering.includes(draft.draftId)}
+            onApprove={(text) => threads.answerDraft(draft.draftId, "approve", text)}
+            onDeny={() => threads.answerDraft(draft.draftId, "deny")}
+          />
+        )}
+      </For>
       <p class="messaging-thread-readonly" role="note">
         {t("messaging.thread.readOnly")}
       </p>
