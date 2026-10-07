@@ -1787,6 +1787,30 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     return this.#reader.readPageFor(agentId, memberId, anchor, limit, options);
   }
 
+  /** An execution thread that is not the agent's chat. The caller checks that it may be read. */
+  readThreadPageFor(
+    agentId: string,
+    threadId: string,
+    memberId: string,
+    anchor?: ConversationPageAnchor,
+    limit?: number,
+  ): ConversationPage {
+    return this.#reader.readThreadPageFor(agentId, threadId, memberId, anchor, limit);
+  }
+
+  threadReadState(memberId: string, threadId: string): ConversationReadState {
+    return this.#reader.threadReadState(memberId, threadId);
+  }
+
+  markThreadRead(
+    agentId: string,
+    threadId: string,
+    memberId: string,
+    throughMessageId: string | null,
+  ): ConversationReadState {
+    return this.#reader.markThreadRead(agentId, threadId, memberId, throughMessageId);
+  }
+
   searchConversationMessages(query: string, agentId?: string, cursor?: string, limit?: number): ConversationSearchPage {
     return this.#reader.search(query, agentId, cursor, limit);
   }

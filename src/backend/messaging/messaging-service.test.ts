@@ -466,6 +466,14 @@ describe.sequential("Slack messaging end to end", () => {
     await waitFor(() => slack.of("chat.update").some((call) => call.params.text === "CODEX_DONE"));
     const answer = slack.of("chat.postMessage").find((call) => call.params.text === "Working on it…");
     expect(answer?.params).toMatchObject({ channel: "D1", thread_ts: "810.000" });
+    // A second direct message from the same person continues that conversation, and its answer goes
+    // under the new message.
+    await slack.send("events_api", slack.direct("and what else", "811.000"));
+    await waitFor(() => turnStarts(client).length === 2);
+    expect(service?.messaging.store.links(orchestratorId)).toHaveLength(1);
+    await waitFor(() =>
+      slack.of("chat.postMessage").some((call) => call.params.channel === "D1" && call.params.thread_ts === "811.000"),
+    );
     report.orchestrator = { refusedWithout: true, memories: memories.length, answeredDirect: true };
   });
 

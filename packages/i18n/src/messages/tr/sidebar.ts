@@ -108,4 +108,9 @@ export const messages = {
   "sidebar.mobileApp.step.install": "TestFlight'ta Kabul Et'e, ardından Yükle'ye dokunun.",
   "sidebar.mobileApp.step.connect":
     "iPhone'unuzda GoAhead'i açın. Bu bilgisayarda Ayarlar > Mobil Bağlantı'ya gidin ve giriş kodunu tarayın.",
+  "sidebar.messagingThreads.label": "{name} adlı ajanın Slack konuşmaları",
+  "sidebar.messagingThreads.row": "{title}, Slack konuşması",
+  "sidebar.messagingThreads.unread": { one: "{count} okunmamış mesaj", other: "{count} okunmamış mesaj" },
+  "sidebar.messagingThreads.showMore": { one: "{count} tane daha göster", other: "{count} tane daha göster" },
+  "sidebar.messagingThreads.showLess": "Daha az göster",
 } as const satisfies PartialTranslation<typeof source>;

@@ -15,4 +15,6 @@ export const messages = defineMessages("error.messaging", {
   "error.messaging.sendToSelf":
     "The GoAhead user reads this conversation. Answer here instead of sending them a message.",
   "error.messaging.sendTextEmpty": "The message has no text.",
+  // A Slack conversation that the sidebar asked for is gone or is not a Slack conversation.
+  "error.messaging.threadUnavailable": "This Slack conversation is not available.",
 });

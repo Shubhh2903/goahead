@@ -110,4 +110,9 @@ export const messages = {
   "sidebar.mobileApp.step.install": "No TestFlight, toque em Aceitar e depois em Instalar.",
   "sidebar.mobileApp.step.connect":
     "Abra o GoAhead no seu iPhone. Neste computador, vá a Configurações > Conectar celular e leia o código de acesso.",
+  "sidebar.messagingThreads.label": "Conversas do Slack de {name}",
+  "sidebar.messagingThreads.row": "{title}, conversa do Slack",
+  "sidebar.messagingThreads.unread": { one: "{count} mensagem não lida", other: "{count} mensagens não lidas" },
+  "sidebar.messagingThreads.showMore": { one: "Mostrar mais {count}", other: "Mostrar mais {count}" },
+  "sidebar.messagingThreads.showLess": "Mostrar menos",
 } as const satisfies PartialTranslation<typeof source>;

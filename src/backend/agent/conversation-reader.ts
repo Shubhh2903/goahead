@@ -82,6 +82,35 @@ export class ConversationReader {
     };
   }
 
+  /**
+   * One execution thread of an agent that is not its chat, such as a Slack conversation. The caller
+   * checks that the thread belongs to the agent and may be read.
+   */
+  readThreadPageFor(
+    agentId: string,
+    threadId: string,
+    memberId: string,
+    anchor: ConversationPageAnchor = { type: "latest" },
+    limit = 50,
+  ): ConversationPage {
+    const page = this.#store.database.readConversationPage(agentId, threadId, anchor, limit);
+    return { ...page, readState: this.#reads.readStateForThread(memberId, threadId) };
+  }
+
+  threadReadState(memberId: string, threadId: string): ConversationReadState {
+    return this.#reads.readStateForThread(memberId, threadId);
+  }
+
+  markThreadRead(
+    agentId: string,
+    threadId: string,
+    memberId: string,
+    throughMessageId: string | null,
+  ): ConversationReadState {
+    const snapshot = this.#store.database.readConversation(agentId, threadId);
+    return this.#reads.markRead(memberId, snapshot, throughMessageId);
+  }
+
   search(query: string, agentId?: string, cursor?: string, limit = 100): ConversationSearchPage {
     return this.#store.database.searchConversationMessages(query, agentId, cursor, limit);
   }

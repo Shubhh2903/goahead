@@ -9,6 +9,7 @@ import { useAgents } from "./features/agents/agents-context";
 import { useChannels } from "./features/channels/channels-context";
 import { useConversation } from "./features/conversation/conversation-context";
 import { useDirectMessages } from "./features/conversation/direct-messages-context";
+import { useMessagingThreads } from "./features/messaging-threads/messaging-threads-context";
 import { useServers } from "./features/servers/servers-context";
 import { usePresence } from "./features/team/team-context";
 import { useUsage } from "./features/usage/usage-context";
@@ -41,6 +42,7 @@ const Navigation = createSimpleContext({
     } = useAgents();
     const { setDirectTyping, clearDirectSelection, openDirectConversation } = useDirectMessages();
     const channels = useChannels();
+    const messagingThreads = useMessagingThreads();
     const { dismissUsage } = useUsage();
     const scopeIsCurrent = createScopeGuard();
     const {
@@ -68,8 +70,9 @@ const Navigation = createSimpleContext({
       dismissUsage();
       // An open channel covers the workspace the same way the report does, so it has to leave here
       // rather than in each caller: Edit agent and a global-search result open a chat that would
-      // otherwise stay hidden under it.
+      // otherwise stay hidden under it. An open Slack conversation covers it too.
       channels.close();
+      messagingThreads.close();
       const previousAgentId = activeAgentId();
       if (previousAgentId && previousAgentId !== agentId) pruneInactiveAgentHistory(previousAgentId);
       setAgentSetupOpen(false);
@@ -88,6 +91,7 @@ const Navigation = createSimpleContext({
       // Past the guards, so a call that opens nothing leaves the report or the channel alone.
       dismissUsage();
       channels.close();
+      messagingThreads.close();
       const previousAgentId = activeAgentId();
       if (previousAgentId) pruneInactiveAgentHistory(previousAgentId);
       setExplicitlyOpenedAgentChatId(null);

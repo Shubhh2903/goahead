@@ -1,5 +1,5 @@
 import { type DynamicRecord, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
-import type { InboundAction, InboundFile, InboundMessage } from "../messaging-types";
+import { DIRECT_CONVERSATION_KEY, type InboundAction, type InboundFile, type InboundMessage } from "../messaging-types";
 
 /** The Block Kit action ids of the buttons the agent posts. */
 export const SLACK_ACTION_IDS = {
@@ -12,8 +12,8 @@ export const SLACK_ACTION_IDS = {
  * One Events API payload as a message for OpenBot, or null when it does not address OpenBot.
  *
  * - `app_mention` in a channel starts or continues the thread it is in.
- * - A direct message always addresses OpenBot. OpenBot answers in a thread under it, so each
- *   top-level direct message is its own conversation, and the router picks its agent.
+ * - A direct message always addresses OpenBot. OpenBot answers in a thread under it, but every
+ *   direct message from one person is one conversation (`DIRECT_CONVERSATION_KEY`), with one agent.
  * - A reply in a thread without a mention counts only in a thread that an agent already answers
  *   (`requiresLink`). A reply with a mention also arrives as `app_mention`, and both have the same
  *   dedup key, so it runs once.
@@ -50,11 +50,10 @@ export function slackInboundMessage(payload: unknown, workspaceId: string, botUs
   }
   if (event.type !== "message") return null;
   if (event.channel_type === "im") {
-    const threadKey = threadTs ?? ts;
     return {
       ...base,
-      threadKey,
-      target: { platformChannelId: channel, replyThreadId: threadKey },
+      threadKey: DIRECT_CONVERSATION_KEY,
+      target: { platformChannelId: channel, replyThreadId: threadTs ?? ts },
       isDirect: true,
       requiresLink: false,
     };

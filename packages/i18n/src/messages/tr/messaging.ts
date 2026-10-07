@@ -9,4 +9,9 @@ export const messages = {
     "GoAhead bu bilgisayardaki kayıtlı token'ları okuyamıyor. Çalışma alanı bağlantısını kesin, ardından tekrar bağlayın.",
   "messaging.help.relay_unavailable":
     "GoAhead bu bilgisayarda Slack etkinliklerini alamıyor. Oturum açın, Sunucu ayarlarından bu bilgisayara bir ad verin ve GoAhead'i açık tutun.",
+  "messaging.thread.label": "Slack konuşması: {title}",
+  "messaging.thread.readOnly": "Salt okunur. Ajan bu konuşmayı Slack'te yanıtlar.",
+  "messaging.thread.slackPerson": "Slack kullanıcısı",
+  "messaging.thread.empty": "Henüz mesaj yok.",
+  "messaging.thread.loadFailed": "Slack konuşması yüklenmedi.",
 } as const satisfies PartialTranslation<typeof source>;

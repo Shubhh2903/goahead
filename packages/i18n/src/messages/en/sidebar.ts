@@ -110,4 +110,10 @@ export const messages = defineMessages("sidebar", {
   "sidebar.mobileApp.step.install": "In TestFlight, tap Accept, then Install.",
   "sidebar.mobileApp.step.connect":
     "Open GoAhead on your iPhone. On this computer, go to Settings > Mobile Connect and scan the sign-in code.",
+  // Slack conversations, as rows under the agent that answers them.
+  "sidebar.messagingThreads.label": "Slack conversations of {name}",
+  "sidebar.messagingThreads.row": "{title}, Slack conversation",
+  "sidebar.messagingThreads.unread": { one: "{count} unread message", other: "{count} unread messages" },
+  "sidebar.messagingThreads.showMore": { one: "Show {count} more", other: "Show {count} more" },
+  "sidebar.messagingThreads.showLess": "Show less",
 });

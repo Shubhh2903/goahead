@@ -3,7 +3,11 @@
 import {
   type AddSlackOrchestratorResult,
   isAddSlackOrchestratorResult,
+  isMessagingThreadSummaries,
+  isMessagingThreadsChanged,
   isSlackOverview,
+  type MessagingThreadSummary,
+  type MessagingThreadsChanged,
   type SlackOverview,
 } from "@openbot/contracts/ipc";
 
@@ -16,4 +20,13 @@ export function decodeAddSlackOrchestratorReply(value: unknown): AddSlackOrchest
 export function decodeSlackOverviewReply(value: unknown): SlackOverview {
   if (!isSlackOverview(value)) throw new Error("Invalid Slack overview response.");
   return value;
+}
+
+export function decodeMessagingThreadsReply(value: unknown): MessagingThreadSummary[] {
+  if (!isMessagingThreadSummaries(value)) throw new Error("Invalid Slack thread list response.");
+  return value;
+}
+
+export function decodeMessagingThreadsChanged(value: unknown): MessagingThreadsChanged | null {
+  return isMessagingThreadsChanged(value) ? value : null;
 }

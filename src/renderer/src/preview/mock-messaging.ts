@@ -1,13 +1,73 @@
-import type { MessagingConnection, MessagingDesktopApi } from "@openbot/contracts/ipc";
+import type {
+  ConversationMessage,
+  ConversationPage,
+  MessagingConnection,
+  MessagingDesktopApi,
+  MessagingThreadSummary,
+  MessagingThreadsChanged,
+} from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import { clone } from "./mock-support";
 
 const PREVIEW_WORKSPACE = { workspaceId: "T0PREVIEW", workspaceName: "Preview workspace" };
 
+/** The Slack conversations the preview orchestrator answered, with their messages. */
+function previewThreads(agentId: string): Array<{ summary: MessagingThreadSummary; messages: ConversationMessage[] }> {
+  const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const thread = (
+    id: string,
+    title: string,
+    isDirect: boolean,
+    age: number,
+    unreadCount: number,
+    texts: Array<[ConversationMessage["author"], string]>,
+  ) => ({
+    summary: {
+      threadId: `preview-slack-${id}`,
+      agentId,
+      workspaceId: PREVIEW_WORKSPACE.workspaceId,
+      platform: "slack" as const,
+      title,
+      preview: texts.at(-1)?.[1] ?? null,
+      isDirect,
+      updatedAt: minutesAgo(age),
+      unreadCount,
+    },
+    messages: texts.map(([author, text], index) => ({
+      id: `preview-slack-${id}-${index}`,
+      author,
+      text,
+      createdAt: minutesAgo(age + texts.length - index),
+      status: "completed" as const,
+    })),
+  });
+  return [
+    thread("deploy", "#general · Why did the deploy fail?", false, 2, 1, [
+      ["user", "Why did the deploy fail?"],
+      ["assistant", "The build step ran out of disk space. I asked the infrastructure agent to clean the cache."],
+    ]),
+    thread("preet", "Preet", true, 60, 0, [
+      ["user", "Can you send me the release notes?"],
+      ["assistant", "Here they are. The draft is in the shared folder."],
+    ]),
+    thread("ana", "Ana", true, 1_440, 0, [
+      ["user", "Is the demo still on for Friday?"],
+      ["assistant", "Yes. It starts at 10:00."],
+    ]),
+  ];
+}
+
 /** The Slack workspaces of the preview host. Connecting Slack connects a preview workspace at once. */
 /** `orchestrator` names the preview agent that stands in for the Slack Orchestrator. */
 export function createMockMessaging(orchestrator: () => string): MessagingDesktopApi {
   const connections = new Map<string, MessagingConnection>();
+  let threads: ReturnType<typeof previewThreads> = [];
+  const changeListeners = new Set<(change: MessagingThreadsChanged) => void>();
+  const findThread = (threadId: string) => {
+    const found = threads.find((candidate) => candidate.summary.threadId === threadId);
+    if (!found) throw new Error(sourceText("error.messaging.threadUnavailable"));
+    return found;
+  };
   const change = (workspaceId: string, update: Partial<MessagingConnection>) => {
     const current = connections.get(workspaceId);
     if (!current) throw new Error(sourceText("error.messaging.notConnected"));
@@ -39,7 +99,38 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
     addSlackOrchestrator: async ({ workspaceId }) => {
       const agentId = orchestrator();
       change(workspaceId, { orchestratorAgentId: agentId });
+      threads = previewThreads(agentId);
+      for (const { summary } of threads)
+        for (const listener of changeListeners) listener({ threadId: summary.threadId });
       return { agentId, sectionId: null };
+    },
+    listThreads: async () => clone(threads.map((candidate) => candidate.summary)),
+    readThreadPage: async ({ threadId }): Promise<ConversationPage> => {
+      const { summary, messages } = findThread(threadId);
+      return clone({
+        agentId: summary.agentId,
+        threadId,
+        activeTurnId: null,
+        revision: messages.length,
+        messages,
+        references: {},
+        pageInfo: { hasOlder: false, olderCursor: null },
+        readState: {
+          unreadCount: summary.unreadCount,
+          firstUnreadMessageId: summary.unreadCount > 0 ? (messages.at(-summary.unreadCount)?.id ?? null) : null,
+          throughMessageId: null,
+        },
+      });
+    },
+    markThreadRead: async ({ threadId, throughMessageId }) => {
+      const found = findThread(threadId);
+      found.summary = { ...found.summary, unreadCount: 0 };
+      for (const listener of changeListeners) listener({ threadId });
+      return { unreadCount: 0, firstUnreadMessageId: null, throughMessageId };
+    },
+    onThreadsChanged: (listener) => {
+      changeListeners.add(listener);
+      return () => changeListeners.delete(listener);
     },
   };
 }

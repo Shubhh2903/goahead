@@ -246,6 +246,47 @@ describe("AgentStore", () => {
     expect(restored.database.unclaimedThreads()).toEqual([]);
   });
 
+  // A Slack thread belongs to the orchestrator but is never its chat. A new orchestrator has no chat,
+  // so without this the next start would make one Slack thread its chat.
+  it("does not reclaim a messaging thread as an agent chat", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openbot-store-"));
+    temporaryRoots.push(root);
+    const userData = join(root, "user-data");
+    const home = join(root, "home");
+    const store = new AgentStore(userData, home);
+    await store.initialize();
+    const agent = await store.getOrCreate("chief");
+    const slackThreadId = "openbot-thread-slack-chief";
+    const now = "2026-09-01T12:00:00.000Z";
+    store.database.connection
+      .prepare(
+        `INSERT INTO projection_threads
+           (thread_id, agent_id, title, active_turn_id, created_at, updated_at, last_event_sequence)
+         VALUES (?, ?, ?, NULL, ?, ?, 0)`,
+      )
+      .run(slackThreadId, agent.id, "Preet", now, now);
+    store.database.connection
+      .prepare(
+        `INSERT INTO projection_messaging_connections
+           (connection_id, platform, workspace_id, workspace_name, enabled, orchestrator_agent_id, created_at, updated_at)
+         VALUES ('connection-1', 'slack', 'T1', 'Acme', 1, ?, ?, ?)`,
+      )
+      .run(agent.id, now, now);
+    store.database.connection
+      .prepare(
+        `INSERT INTO projection_messaging_threads
+           (link_id, connection_id, agent_id, platform_channel_id, thread_key, is_direct, thread_id, title, created_at, updated_at)
+         VALUES ('link-1', 'connection-1', ?, 'D1', '1.0', 1, ?, 'Preet', ?, ?)`,
+      )
+      .run(agent.id, slackThreadId, now, now);
+
+    const restored = new AgentStore(userData, home);
+    await restored.initialize();
+
+    expect(restored.list().find((candidate) => candidate.id === agent.id)?.threadId).toBeNull();
+    expect(restored.database.unclaimedThreads()).toEqual([]);
+  });
+
   it("rebuilds a roster its projection lost from the event log", async () => {
     const root = await mkdtemp(join(tmpdir(), "openbot-store-"));
     temporaryRoots.push(root);

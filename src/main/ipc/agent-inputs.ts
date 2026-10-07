@@ -418,7 +418,7 @@ export function parseSearchConversationFiles(value: unknown): SearchConversation
   };
 }
 
-function parsePageAnchor(value: unknown): ReadConversationPageInput["anchor"] {
+export function parsePageAnchor(value: unknown): ReadConversationPageInput["anchor"] {
   if (value === undefined) return { type: "latest" };
   if (!isObject(value) || !isString(value.type)) throw new Error("Invalid conversation page anchor.");
   if (value.type === "latest") return { type: "latest" };
@@ -429,7 +429,7 @@ function parsePageAnchor(value: unknown): ReadConversationPageInput["anchor"] {
   throw new Error("Invalid conversation page anchor.");
 }
 
-function parsePageLimit(value: unknown): number {
+export function parsePageLimit(value: unknown): number {
   if (value === undefined) return 50;
   if (!isNumber(value) || !Number.isInteger(value) || value < 1 || value > 100) {
     throw new Error("The conversation page limit must be between 1 and 100.");

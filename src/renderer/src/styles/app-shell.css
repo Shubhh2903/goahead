@@ -1813,6 +1813,93 @@ textarea {
   margin-top: 4px;
 }
 
+/* Slack conversations under the agent that answers them, indented to the agent's name. */
+.sidebar-messaging-threads {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 0;
+  padding: 0 0 0 44px;
+  list-style: none;
+}
+
+.sidebar-messaging-thread.ui-button {
+  display: flex;
+  width: 100%;
+  height: 28px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  border-radius: var(--openbot-radius-sm);
+  padding: 0 6px;
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-md);
+  font-weight: 400;
+  line-height: var(--openbot-leading-md);
+  text-align: left;
+}
+
+.sidebar-messaging-thread.ui-button:hover {
+  background: var(--openbot-hover);
+}
+
+.sidebar-messaging-thread-active.ui-button {
+  background: var(--openbot-bg-surface);
+  color: var(--openbot-text-primary);
+}
+
+.sidebar-messaging-thread-unread .sidebar-messaging-thread-title {
+  color: var(--openbot-text-primary);
+  font-weight: 600;
+}
+
+.sidebar-messaging-thread-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.sidebar-messaging-thread-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-messaging-thread-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The newest message after the name, so two conversations with one name read apart. */
+.sidebar-messaging-thread-preview {
+  min-width: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  color: var(--openbot-text-readable);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-messaging-thread-with-preview .sidebar-messaging-thread-title {
+  max-width: 60%;
+  flex: 0 1 auto;
+}
+
+.sidebar-messaging-thread-time {
+  flex: 0 0 auto;
+  color: var(--openbot-text-readable);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-sm);
+  white-space: nowrap;
+}
+
+.sidebar-messaging-thread-more.ui-button {
+  height: 24px;
+  padding: 0 6px;
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+}
+
 .sidebar-agent-item-dragging {
   will-change: transform;
 }

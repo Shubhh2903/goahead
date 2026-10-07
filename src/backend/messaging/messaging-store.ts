@@ -69,6 +69,8 @@ export interface MessagingSendRecord {
 }
 
 const LINK_LIST_LIMIT = 200;
+/** As long as a title: the row shows one line of it. */
+const PREVIEW_LIMIT = 256;
 const SEND_AGGREGATE = "messaging_send";
 const SEND_EVENT = "messaging_send_sent";
 
@@ -191,6 +193,39 @@ export class MessagingStore {
         )
         .all(agentId, LINK_LIST_LIMIT),
     ).map(decodeLink);
+  }
+
+  /**
+   * The newest links of every connection, with the workspace each one belongs to and the start of
+   * the newest message that either side wrote (not the agent's work notes).
+   */
+  recentLinks(): Array<MessagingLink & { workspaceId: string; platform: MessagingPlatform; preview: string | null }> {
+    return databaseRows(
+      this.#database.connection
+        .prepare(
+          `SELECT t.*, c.workspace_id, c.platform,
+             (SELECT substr(json_extract(m.message_json, '$.text'), 1, ?) FROM projection_thread_messages m
+              WHERE m.thread_id = t.thread_id AND m.author IN ('user', 'assistant')
+                AND COALESCE(m.item_type, '') NOT IN ('commentary', 'plan')
+              ORDER BY m.created_at DESC, m.ordinal DESC LIMIT 1) AS preview
+           FROM projection_messaging_threads t
+           JOIN projection_messaging_connections c ON c.connection_id = t.connection_id
+           ORDER BY t.updated_at DESC, t.link_id LIMIT ?`,
+        )
+        .all(PREVIEW_LIMIT, LINK_LIST_LIMIT),
+    ).flatMap((row) => {
+      const platform = requiredStringColumn(row, "platform");
+      if (!isOneOf(MESSAGING_PLATFORMS, platform)) return [];
+      const preview = optionalStringColumn(row, "preview");
+      return [
+        {
+          ...decodeLink(row),
+          workspaceId: requiredStringColumn(row, "workspace_id"),
+          platform,
+          preview: preview ? preview.replace(/\s+/g, " ").trim() || null : null,
+        },
+      ];
+    });
   }
 
   /** The agent id and thread id of every link, for boot recovery. */
