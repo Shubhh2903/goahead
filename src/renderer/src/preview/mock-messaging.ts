@@ -22,6 +22,8 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
         enabled: true,
         state: "connected",
         botUserId: "U0PREVIEW",
+        userId: "U0PREVIEWME",
+        userName: "you",
         missingScopes: [],
         retryAt: null,
         credentials: "saved",

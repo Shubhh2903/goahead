@@ -33,6 +33,19 @@
         "mpim:history",
         "reactions:write",
         "users:read"
+      ],
+      "user": [
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "mpim:history",
+        "mpim:read",
+        "reactions:write",
+        "users:read"
       ]
     }
   },

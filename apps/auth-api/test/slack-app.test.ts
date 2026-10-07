@@ -27,7 +27,7 @@ describe("GoAhead Slack app install", () => {
     expect(fetch).not.toHaveBeenCalled();
 
     const result = await service.complete({ code: "code", state, redirectUri });
-    expect(JSON.stringify(result)).not.toContain("xoxb");
+    expect(JSON.stringify(result)).not.toContain("xox");
     expect(result.nonce).toBe(nonce);
     await expect(openSlackWorkspaceGrant(host.privateKey, nonce, result.grant)).resolves.toEqual({
       botToken: "xoxb-bot-secret",
@@ -35,6 +35,7 @@ describe("GoAhead Slack app install", () => {
       appId: "A1",
       workspaceId: "T1",
       workspaceName: "Acme",
+      user: { token: "xoxp-user-secret", id: "UME" },
     });
     expect(database.prepare("SELECT team_id, host_id, account_id FROM slack_workspace_routes").all()).toEqual([
       { team_id: "T1", host_id: "host-1", account_id: "owner" },
@@ -63,6 +64,23 @@ describe("GoAhead Slack app install", () => {
     ).rejects.toMatchObject({ code: "slack_workspace_taken" });
     expect(database.prepare("SELECT host_id FROM slack_workspace_routes").all()).toEqual([{ host_id: "host-2" }]);
     expect(revocations(database)).toHaveLength(2);
+  });
+
+  // The app asks for user scopes, but an install made before they were applied to the app, or by a
+  // Slack that gives no user token, still connects the bot.
+  it("seals a bot-only grant when the install gives no user token", async () => {
+    const { service } = setup({ authed_user: { id: "UME", scope: "identify" } });
+    const host = await createSlackWorkspaceKeyPair();
+    const nonce = "nonce-0123456789abcdef";
+    const result = await service.complete({
+      code: "code",
+      state: await stateOf(service, owner, "host-1", nonce, host.publicKey),
+      redirectUri,
+    });
+    await expect(openSlackWorkspaceGrant(host.privateKey, nonce, result.grant)).resolves.toMatchObject({
+      botToken: "xoxb-bot-secret",
+      user: null,
+    });
   });
 
   it("refuses an install for a whole Enterprise organization", async () => {
@@ -108,7 +126,7 @@ function revocations(database: ReturnType<typeof migratedDatabase>) {
     .map((row) => JSON.parse(String(row.payload)));
 }
 
-function setup(extra: { is_enterprise_install?: boolean } = {}, developmentOrigin?: string) {
+function setup(extra: { is_enterprise_install?: boolean; authed_user?: unknown } = {}, developmentOrigin?: string) {
   const database = migratedDatabase();
   database.exec(`
     INSERT INTO users(id, identity_key, email, created_at, updated_at)
@@ -125,6 +143,7 @@ function setup(extra: { is_enterprise_install?: boolean } = {}, developmentOrigi
       bot_user_id: "UBOT",
       app_id: "A1",
       team: { id: "T1", name: "Acme" },
+      authed_user: { id: "UME", scope: "chat:write,im:history", access_token: "xoxp-user-secret", token_type: "user" },
       ...extra,
     }),
   );
@@ -145,6 +164,7 @@ async function stateOf(
 ): Promise<string> {
   const url = new URL(await service.authorizeUrl(user, { hostId, hostNonce, hostPublicKey, redirectUri }));
   expect(url.searchParams.get("scope")).toContain("chat:write");
+  expect(url.searchParams.get("user_scope")).toContain("im:history");
   const state = url.searchParams.get("state");
   if (!state) throw new Error("The authorize URL has no state.");
   return state;

@@ -18,7 +18,7 @@ you test.
 
 ## Apply a manifest
 
-The manifest uses only normal bot scopes, so Slack does not need to approve anything. Signal must
+The manifest uses only normal bot and user scopes, so Slack does not need to approve anything. Signal must
 serve `/v1/slack/events` first: Slack checks the request URL.
 
 ```sh
@@ -28,7 +28,9 @@ slack manifest sync --app A0C5H5C95NH
 ```
 
 Do the same in `development` with `--app A0C5G5XGS83`. Keep the bot scopes the same as
-`SLACK_BOT_SCOPES` in `packages/contracts/src/slack-app.ts`.
+`SLACK_BOT_SCOPES`, and the user scopes the same as `SLACK_USER_SCOPES`, in
+`packages/contracts/src/slack-app.ts`. The user scopes let the server read what the person who
+installed the app can see, and reply as them after they approve.
 
 ## Manual settings
 

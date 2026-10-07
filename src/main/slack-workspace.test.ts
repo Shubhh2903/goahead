@@ -13,8 +13,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { join, resolve } from "node:path";
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
-import { SLACK_BOT_SCOPES } from "@openbot/contracts/slack-app";
-import { sealSlackWorkspaceGrant } from "@openbot/contracts/slack-workspace-grant";
+import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-app";
+import { type SlackUserGrant, sealSlackWorkspaceGrant } from "@openbot/contracts/slack-workspace-grant";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { AgentService } from "../backend/agent-service";
@@ -30,6 +30,10 @@ import { SlackIngress } from "./slack-ingress";
 
 const REPORT_DIR = resolve(import.meta.dirname, "../../.openbot-build/slack-workspace-e2e");
 const BOT_TOKEN = "xoxb-9999-8888-openbotbottoken";
+const USER_TOKEN = "xoxp-9999-8888-openbotusertoken";
+/** A user token that Slack issued for another workspace. */
+const OTHER_WORKSPACE_USER_TOKEN = "xoxp-7777-6666-otherworkspaceuser";
+const USER: SlackUserGrant = { token: USER_TOKEN, id: "UME" };
 
 interface Answer {
   status: number;
@@ -102,7 +106,7 @@ class FakeSignal {
   }
 }
 
-/** Slack's Web API for the bot of the OpenBot app in one workspace. */
+/** Slack's Web API for the bot of the OpenBot app in one workspace, and for the person who installed it. */
 class FakeSlack {
   readonly calls: Array<{ method: string; token: string | undefined; params: Record<string, string> }> = [];
   #server: Server | null = null;
@@ -122,12 +126,18 @@ class FakeSlack {
         response.setHeader("content-type", "application/json");
         response.end(JSON.stringify({ ok: true, ...value }));
       };
-      if (token !== BOT_TOKEN) return response.end(JSON.stringify({ ok: false, error: "invalid_auth" }));
+      if (![BOT_TOKEN, USER_TOKEN, OTHER_WORKSPACE_USER_TOKEN].includes(token ?? ""))
+        return response.end(JSON.stringify({ ok: false, error: "invalid_auth" }));
       switch (method) {
         case "auth.test":
+          if (token === BOT_TOKEN)
+            return reply(
+              { team_id: "T1", team: "Test workspace", user_id: "UBOT", bot_id: "B1" },
+              { "x-oauth-scopes": SLACK_BOT_SCOPES.join(",") },
+            );
           return reply(
-            { team_id: "T1", team: "Test workspace", user_id: "UBOT", bot_id: "B1" },
-            { "x-oauth-scopes": SLACK_BOT_SCOPES.join(",") },
+            { team_id: token === USER_TOKEN ? "T1" : "T2", team: "Test workspace", user_id: "UME", user: "alice" },
+            { "x-oauth-scopes": SLACK_USER_SCOPES.join(",") },
           );
         case "bots.info":
           return reply({ bot: { app_id: "A1" } });
@@ -270,8 +280,8 @@ describe.sequential("OpenBot Slack app end to end", () => {
     });
     await messaging.start();
 
-    // The install: the bot token comes back sealed to this connect's key, and only this run opens it.
-    const connect = async () => {
+    // The install: the tokens come back sealed to this connect's key, and only this run opens them.
+    const connect = async (user: SlackUserGrant | null) => {
       await messaging?.connectSlackWorkspace();
       const authorization = authorizations.at(-1);
       if (!authorization) throw new Error("The connect did not start.");
@@ -281,15 +291,25 @@ describe.sequential("OpenBot Slack app end to end", () => {
         appId: "A1",
         workspaceId: "T1",
         workspaceName: "Test workspace",
+        user,
       });
       expect(await messaging?.completeSlackWorkspace("another-nonce", grant)).toBe(false);
       expect(await messaging?.completeSlackWorkspace(authorization.hostNonce, grant)).toBe(true);
     };
-    await connect();
+    // A bot-only grant, as a Worker from before the user token wrote it, connects the bot alone.
+    await connect(null);
     const connection = () => messaging?.slackOverview().connections[0];
+    const stored = () => [...credentials.values.values()][0] ?? {};
     const { agentId: orchestratorId } = await messaging.addOrchestrator({ workspaceId: "T1" });
     await waitFor(() => connection()?.state === "connected");
-    expect(connection()).toMatchObject({ workspaceId: "T1", workspaceName: "Test workspace", credentials: "saved" });
+    expect(connection()).toMatchObject({
+      workspaceId: "T1",
+      workspaceName: "Test workspace",
+      credentials: "saved",
+      userId: null,
+      userName: null,
+    });
+    expect(stored().userToken).toBeUndefined();
     // The socket told Signal its workspaces with a new route ticket after the connect.
     await waitFor(() => signal.hellos.some((hello) => hello.slackRoute === "route-2"));
     expect(signal.hellos.every((hello) => hello.peer === "ingress" && hello.token === "ticket-1")).toBe(true);
@@ -321,17 +341,26 @@ describe.sequential("OpenBot Slack app end to end", () => {
     await waitFor(() => connection()?.state === "invalid_token");
     expect(unlinked).toEqual(["T1"]);
 
-    // Connected again, the workspace keeps its conversation and its agent.
-    await connect();
+    // A user token for another workspace does not connect: the host only acts as a person in the
+    // workspace that the bot is in.
+    await connect({ token: OTHER_WORKSPACE_USER_TOKEN, id: "UME" });
+    await waitFor(() => connection()?.state === "invalid_token");
+    expect(unlinked).toEqual(["T1", "T1"]);
+
+    // Connected again, as the person too, the workspace keeps its conversation and its agent.
+    await connect(USER);
     await waitFor(() => connection()?.state === "connected");
+    expect(connection()).toMatchObject({ userId: "UME", userName: "alice", missingScopes: [] });
+    expect(stored().userToken).toBe(USER_TOKEN);
+    expect(slack.of("auth.test").map((call) => call.token)).toContain(USER_TOKEN);
     expect(started.service.messaging.store.links(orchestratorId).map((item) => item.linkId)).toEqual([link.linkId]);
     expect(connection()?.orchestratorAgentId).toBe(orchestratorId);
 
-    // Disconnect revokes the bot token, forgets it, and unlinks the workspace.
+    // Disconnect revokes both tokens, forgets them, and unlinks the workspace.
     await messaging.disconnectSlackWorkspace("T1");
-    expect(slack.of("auth.revoke").map((call) => call.token)).toEqual([BOT_TOKEN]);
+    expect(slack.of("auth.revoke").map((call) => call.token)).toEqual([USER_TOKEN, BOT_TOKEN]);
     expect(credentials.values.size).toBe(0);
-    expect(unlinked).toEqual(["T1", "T1"]);
+    expect(unlinked).toEqual(["T1", "T1", "T1"]);
     expect(messaging.slackOverview().connections).toEqual([]);
 
     mkdirSync(REPORT_DIR, { recursive: true });
@@ -344,6 +373,8 @@ describe.sequential("OpenBot Slack app end to end", () => {
           turns: turns.length,
           unknownWorkspace: 404,
           uninstalledUnlinked: true,
+          otherWorkspaceUserTokenRefused: true,
+          connectedAsUser: true,
           conversationKept: true,
           revoked: slack.of("auth.revoke").length,
         },

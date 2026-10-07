@@ -1,5 +1,5 @@
 // The OpenBot Slack app: one app for every workspace. `apps/slack-app/*/manifest.json` must list the
-// same bot scopes and events.
+// same bot scopes, user scopes and events.
 
 /**
  * What OpenBot asks from a workspace. The Worker requests them in the OAuth install, and the host
@@ -19,6 +19,25 @@ export const SLACK_BOT_SCOPES = [
   "im:read",
   "im:write",
   "mpim:history",
+  "reactions:write",
+  "users:read",
+] as const;
+
+/**
+ * What OpenBot asks from the person who installs the app, so it can read what they can see and
+ * reply as them. The Worker requests them as `user_scope` in the same install, and the host compares
+ * them with what `auth.test` reports for the user token.
+ */
+export const SLACK_USER_SCOPES = [
+  "channels:history",
+  "channels:read",
+  "chat:write",
+  "groups:history",
+  "groups:read",
+  "im:history",
+  "im:read",
+  "mpim:history",
+  "mpim:read",
   "reactions:write",
   "users:read",
 ] as const;

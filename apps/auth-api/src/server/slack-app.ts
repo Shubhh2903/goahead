@@ -1,12 +1,16 @@
 // The GoAhead Slack app's OAuth install. One app serves every workspace: a workspace member installs
 // it once, and the workspace is linked to one GoAhead host, which answers all of its messages. The
 // Worker exchanges the code because the client secret lives here, records only which host answers
-// the workspace, and seals the bot token to the host's key. It keeps no token. The sealed grant goes
-// back to the desktop in the URL fragment of `/slack/connect`.
+// the workspace, and seals the bot token and the installer's user token to the host's key. It keeps
+// no token. The sealed grant goes back to the desktop in the URL fragment of `/slack/connect`.
 
 import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
-import { SLACK_BOT_SCOPES } from "@openbot/contracts/slack-app";
-import { isRawP256PublicKey, sealSlackWorkspaceGrant } from "@openbot/contracts/slack-workspace-grant";
+import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-app";
+import {
+  isRawP256PublicKey,
+  type SlackUserGrant,
+  sealSlackWorkspaceGrant,
+} from "@openbot/contracts/slack-workspace-grant";
 import { hmacSha256 } from "./crypto";
 import { authEventStatement } from "./remote-control-plane";
 import type { AuthUser, WorkerBindings } from "./types";
@@ -116,14 +120,17 @@ export class SlackAppService {
     const url = new URL("https://slack.com/oauth/v2/authorize");
     url.searchParams.set("client_id", this.#clientId);
     url.searchParams.set("scope", SLACK_BOT_SCOPES.join(","));
+    url.searchParams.set("user_scope", SLACK_USER_SCOPES.join(","));
     url.searchParams.set("redirect_uri", input.redirectUri);
     url.searchParams.set("state", state);
     return url.toString();
   }
 
   /**
-   * Exchanges the code, links the workspace to the host in `state`, and seals the bot token to the
-   * host key. Returns what the desktop needs: the nonce, to find its connect, and the sealed grant.
+   * Exchanges the code, links the workspace to the host in `state`, and seals the bot token and the
+   * installer's user token to the host key. Returns what the desktop needs: the nonce, to find its
+   * connect, and the sealed grant. An install that gives no user token, such as one made before the
+   * app had user scopes, gives a bot-only grant.
    *
    * A workspace answers to one host. The account that connected it can move it to another of its
    * hosts; another account gets `slack_workspace_taken` until the first host disconnects.
@@ -203,6 +210,7 @@ export class SlackAppService {
         appId: body.app_id,
         workspaceId: team.id,
         workspaceName: isString(team.name) ? team.name : team.id,
+        user: userGrant(body.authed_user),
       }),
     };
   }
@@ -253,6 +261,19 @@ export class SlackAppService {
       ...(isString(payload.r) ? { r: payload.r } : {}),
     };
   }
+}
+
+/** The installer's token, when Slack gave one: `authed_user` names the person in every install. */
+function userGrant(value: unknown): SlackUserGrant | null {
+  if (
+    !isDynamicRecord(value) ||
+    value.token_type !== "user" ||
+    !isString(value.access_token) ||
+    !isString(value.id) ||
+    !SLACK_ID_PATTERN.test(value.id)
+  )
+    return null;
+  return { token: value.access_token, id: value.id };
 }
 
 function invalidState(): SlackAppError {

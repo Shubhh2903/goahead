@@ -47,6 +47,10 @@ export interface MessagingConnection {
   workspaceName: string;
   /** The platform user that OpenBot posts as. */
   botUserId: string | null;
+  /** The person who connected the workspace, when the install gave their token: the host can act as them. */
+  userId: string | null;
+  /** That person's handle, known while the connection is live. */
+  userName: string | null;
   missingScopes: string[];
   /** When the connection tries again after a rate limit, as an ISO time. */
   retryAt: string | null;
@@ -100,6 +104,8 @@ export function isMessagingConnection(value: unknown): value is MessagingConnect
     isOneOf(MESSAGING_CONNECTION_STATES, value.state) &&
     isBoundedString(value.workspaceName, MESSAGING_LIMITS.name) &&
     isNullableBoundedString(value.botUserId, MESSAGING_LIMITS.name) &&
+    isNullableBoundedString(value.userId, MESSAGING_LIMITS.name) &&
+    isNullableBoundedString(value.userName, MESSAGING_LIMITS.name) &&
     isScopeList(value.missingScopes) &&
     isNullableBoundedString(value.retryAt, 64) &&
     isOneOf(MESSAGING_CREDENTIAL_STATES, value.credentials) &&
