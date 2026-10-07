@@ -60,13 +60,42 @@ local Signal and gives it the development app's signing secret.
    ```
    OPENBOT_DEV_SLACK_SIGNING_SECRET='…'
    ```
-   The value is the signing secret of `OpenBot (dev)` (`A0C5G5XGS83`), under **Basic Information**
-   at <https://api.slack.com/apps>.
+   The value is the signing secret of `GoAhead (dev)` (`A0C5G5XGS83`), under **Basic Information**
+   at <https://api.slack.com/apps>. Without access to that app, create your own app in your
+   workspace from `apps/slack-app/development/manifest.json`, and add its app ID:
+   ```
+   OPENBOT_DEV_SLACK_APP_ID='A…'
+   ```
+   Signal accepts the events of one app only, so this must be the app whose secret is above.
 3. In `apps/auth-api/.env.dev`, add `SLACK_ROUTE_PRIVATE_JWK` with the same value as
    `REMOTE_TICKET_PRIVATE_JWK`, and `SLACK_ROUTE_KEY_ID=openbot-remote-1`. Development only: the
    ticket key's public key is already in the JWKS that Signal loads.
 4. Run `bun run dev:slack` (add `--isolated` for a profile of this worktree). Set the printed address
-   as the development app's request URL, for events and interactivity. It changes on each start.
+   as the development app's request URL, for events and interactivity. It changes on each start. The
+   app's own socket to Signal goes through the same tunnel; the script passes the tunnel address as
+   `OPENBOT_REMOTE_SIGNAL_URL`, so the content security policy allows it.
+
+A quick tunnel gets a new address at each start, so the app's URLs must follow each time. A named
+Cloudflare tunnel on a domain of yours keeps its addresses. Set it up once:
+
+```sh
+cloudflared tunnel login                      # opens the browser; pick the zone of your domain
+cloudflared tunnel create goahead-dev
+cloudflared tunnel route dns goahead-dev signal-dev.example.com
+cloudflared tunnel route dns goahead-dev api-dev.example.com
+```
+
+Then add to `.env.slack-dev`:
+
+```
+OPENBOT_DEV_SLACK_TUNNEL='goahead-dev'
+OPENBOT_DEV_SLACK_SIGNAL_HOSTNAME='signal-dev.example.com'
+OPENBOT_DEV_SLACK_API_HOSTNAME='api-dev.example.com'
+```
+
+`bun run dev:slack` then runs that tunnel with the stack's ports, and the app's request URL
+(`https://signal-dev.example.com/v1/slack/events`) and redirect URL
+(`https://api-dev.example.com/v2/slack/callback`) stay the same across restarts.
 
 The install itself needs an account API that Slack can send the browser back to over HTTPS. Use the
 test Worker (`bun run deploy:test`) with the development app's `SLACK_CLIENT_ID` and

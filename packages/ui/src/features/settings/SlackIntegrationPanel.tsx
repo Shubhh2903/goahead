@@ -288,7 +288,10 @@ function WorkspaceRow(props: {
         time: format.date(new Date(current.retryAt), { hour: "numeric", minute: "2-digit" }),
       });
     const help = STATE_HELP[current.state];
-    return help ? t(help) : t("connector.slack.workspaceDescription");
+    if (help) return t(help);
+    if (current.userName) return t("connector.slack.connectedAs", { name: current.userName });
+    if (!current.userId && kind() === "live") return t("connector.slack.connectAsYou");
+    return t("connector.slack.workspaceDescription");
   };
   const label = (action: string) => t("connector.slack.rowAction", { action, name: props.connection.workspaceName });
   const action = (text: string, onClick: () => void) => (
@@ -559,6 +562,14 @@ function DisconnectDialog(props: {
           </span>
           {t("connector.slack.disconnectEffect", { workspace: workspace() })}
         </li>
+        <Show when={props.connection?.userId}>
+          <li data-tone="danger">
+            <span class="slack-effect-icon" aria-hidden="true">
+              <Link2Off />
+            </span>
+            {t("connector.slack.disconnectEffectUser")}
+          </li>
+        </Show>
         <li data-tone="success">
           <span class="slack-effect-icon" aria-hidden="true">
             <Check />

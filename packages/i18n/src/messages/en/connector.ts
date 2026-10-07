@@ -101,6 +101,10 @@ export const messages = defineMessages("connector", {
   "connector.slack.actionFailed": "Slack did not accept the change",
   "connector.slack.workspaceTitle": "Workspace",
   "connector.slack.workspaceDescription": "People mention @GoAhead or send it a direct message.",
+  // {name} is the Slack handle of the person who connected the workspace.
+  "connector.slack.connectedAs": "Connected as @{name}. People mention @GoAhead or send it a direct message.",
+  "connector.slack.connectAsYou":
+    "Reconnect to also connect as you, so your agents can read what you see and reply as you after you approve.",
   "connector.slack.disconnectWorkspace": "Disconnect",
   "connector.slack.missingScopes":
     "GoAhead does not have these permissions in Slack: {scopes}. Disconnect the workspace, then connect it again.",
@@ -121,7 +125,7 @@ export const messages = defineMessages("connector", {
   "connector.slack.stepAgent": "Agent",
   "connector.slack.connectTitle": "Connect a Slack workspace",
   "connector.slack.connectDescription":
-    "GoAhead installs one app in the workspace, named GoAhead, and it joins every public channel.",
+    "GoAhead installs one app in the workspace, named GoAhead, and it joins every public channel. It also connects as you, so your agents can read what you see and reply as you after you approve.",
   "connector.slack.connectStepBrowser": "Slack opens in your browser",
   "connector.slack.connectStepAllow": "Select the workspace in the top-right corner, then Allow",
   "connector.slack.connectStepReturn": "This dialog continues when Slack is done",
@@ -144,6 +148,7 @@ export const messages = defineMessages("connector", {
   "connector.slack.disconnectDescription":
     "GoAhead stops answering in {workspace} and removes its Slack token from this computer.",
   "connector.slack.disconnectEffect": "People in {workspace} can no longer reach your agents through @GoAhead.",
+  "connector.slack.disconnectEffectUser": "GoAhead can no longer read or reply as you in Slack.",
   "connector.slack.removeEffectKept": "The conversations and the Slack Orchestrator stay in GoAhead.",
   "connector.slack.keep": "Keep connected",
   "connector.slack.close": "Close",

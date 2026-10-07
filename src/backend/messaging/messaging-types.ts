@@ -71,6 +71,8 @@ export interface ConnectionIdentity {
   botUserId: string;
   appId: string;
   missingScopes: string[];
+  /** The person whose token came with the install, when there is one: the host can act as them. */
+  user: { id: string; name: string } | null;
 }
 
 export interface ContextEntry {

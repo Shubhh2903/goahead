@@ -1,4 +1,4 @@
-// The hand-off of the OpenBot Slack app's bot token from the account Worker to one desktop host.
+// The hand-off of the OpenBot Slack app's tokens from the account Worker to one desktop host.
 //
 // The OpenBot Slack app's client secret lives only on the Worker (`apps/auth-api`), so the Worker
 // exchanges the OAuth code. It must not keep the token, and the browser that carries the
@@ -16,13 +16,26 @@ export const SLACK_WORKSPACE_GRANT_VERSION = 2;
 const HKDF_INFO = "openbot-slack-workspace-grant-v2";
 const RAW_P256_PUBLIC_KEY_BYTES = 65;
 
-/** What the OpenBot app's OAuth install gives the host: the bot token for one workspace. */
+/** The token of the person who installed the app, so the host can read and reply as them. */
+export interface SlackUserGrant {
+  token: string;
+  /** The Slack user id of the person. */
+  id: string;
+}
+
+/**
+ * What the OpenBot app's OAuth install gives the host: the bot token for one workspace, and the user
+ * token of the person who installed it. `user` is null when the install gave no user token. The
+ * sealed form has no `user` key then, which is also what a Worker from before the user token wrote,
+ * so a host of any age opens a bot-only grant, and a host from before the user token drops `user`.
+ */
 export interface SlackWorkspaceGrant {
   botToken: string;
   botUserId: string;
   appId: string;
   workspaceId: string;
   workspaceName: string;
+  user: SlackUserGrant | null;
 }
 
 export function isRawP256PublicKey(value: string): boolean {
@@ -56,7 +69,8 @@ export async function sealSlackWorkspaceGrant(
   const ephemeralPublic = new Uint8Array(await crypto.subtle.exportKey("raw", ephemeral.publicKey));
   const key = await contentKey(ephemeral.privateKey, recipient, ephemeralPublic);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = new TextEncoder().encode(JSON.stringify(grant));
+  const { user, ...bot } = grant;
+  const plaintext = new TextEncoder().encode(JSON.stringify(user ? { ...bot, user } : bot));
   const ciphertext = new Uint8Array(
     await crypto.subtle.encrypt(
       { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(nonce) },
@@ -113,7 +127,8 @@ export async function openSlackWorkspaceGrant(
     !isString(grant.botUserId) ||
     !isString(grant.appId) ||
     !isString(grant.workspaceId) ||
-    !isString(grant.workspaceName)
+    !isString(grant.workspaceName) ||
+    (grant.user !== undefined && !isUserGrant(grant.user))
   ) {
     throw new Error("The Slack workspace grant is invalid.");
   }
@@ -123,7 +138,12 @@ export async function openSlackWorkspaceGrant(
     appId: grant.appId,
     workspaceId: grant.workspaceId,
     workspaceName: grant.workspaceName,
+    user: grant.user ? { token: grant.user.token, id: grant.user.id } : null,
   };
+}
+
+function isUserGrant(value: unknown): value is SlackUserGrant {
+  return isDynamicRecord(value) && isString(value.token) && isString(value.id);
 }
 
 async function contentKey(

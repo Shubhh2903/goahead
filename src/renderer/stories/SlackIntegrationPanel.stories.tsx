@@ -43,6 +43,8 @@ function workspace(update: Partial<MessagingConnection> = {}): MessagingConnecti
     state: "connected",
     workspaceName: "Acme Inc.",
     botUserId: "U0STORY",
+    userId: "U0ALICE",
+    userName: "alice",
     missingScopes: [],
     retryAt: null,
     credentials: "saved",
@@ -70,6 +72,9 @@ export const Connected: Story = { args: args([workspace()]) };
 
 /** The workspace is connected, and no agent answers yet. */
 export const NoOrchestrator: Story = { args: args([workspace({ orchestratorAgentId: null })]) };
+
+/** Connected before the app asked for the person's token: only the bot is connected. */
+export const BotOnly: Story = { args: args([workspace({ userId: null, userName: null })]) };
 
 export const Paused: Story = { args: args([workspace({ enabled: false, state: "paused" })]) };
 

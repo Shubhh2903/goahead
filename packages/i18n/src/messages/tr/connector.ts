@@ -108,6 +108,10 @@ export const messages = {
   "connector.slack.actionFailed": "Slack değişikliği kabul etmedi",
   "connector.slack.workspaceTitle": "Çalışma alanı",
   "connector.slack.workspaceDescription": "Kullanıcılar @GoAhead'den bahseder veya doğrudan mesaj gönderir.",
+  "connector.slack.connectedAs":
+    "@{name} olarak bağlı. Kullanıcılar @GoAhead'den bahseder veya doğrudan mesaj gönderir.",
+  "connector.slack.connectAsYou":
+    "Sizin adınıza da bağlanmak için yeniden bağlanın; ajanlarınız gördüklerinizi okur ve onayınızdan sonra sizin adınıza yanıtlar.",
   "connector.slack.disconnectWorkspace": "Bağlantıyı Kes",
   "connector.slack.missingScopes":
     "GoAhead Slack'te şu izinlere sahip değil: {scopes}. Çalışma alanı bağlantısını kesin, ardından tekrar bağlayın.",
@@ -128,7 +132,7 @@ export const messages = {
   "connector.slack.stepAgent": "Ajan",
   "connector.slack.connectTitle": "Bir Slack çalışma alanına bağlanın",
   "connector.slack.connectDescription":
-    "GoAhead çalışma alanına GoAhead adında bir uygulama yükler ve her genel kanala katılır.",
+    "GoAhead çalışma alanına GoAhead adında bir uygulama yükler ve her genel kanala katılır. Ayrıca sizin adınıza da bağlanır; böylece ajanlarınız gördüklerinizi okur ve onayınızdan sonra sizin adınıza yanıtlar.",
   "connector.slack.connectStepBrowser": "Slack tarayıcınızda açılır",
   "connector.slack.connectStepAllow": "Sağ üst köşeden çalışma alanını seçin, ardından İzin Ver'e tıklayın",
   "connector.slack.connectStepReturn": "Slack işlemi tamamlandığında bu iletişim kutusu devam eder",
@@ -150,6 +154,7 @@ export const messages = {
   "connector.slack.disconnectDescription":
     "GoAhead {workspace} içinde yanıt vermeyi durdurur ve Slack token'ını bu bilgisayardan kaldırır.",
   "connector.slack.disconnectEffect": "{workspace} içindeki kişiler artık @GoAhead aracılığıyla ajanlarınıza ulaşamaz.",
+  "connector.slack.disconnectEffectUser": "GoAhead artık Slack'te sizin adınıza okuyamaz veya yanıt veremez.",
   "connector.slack.removeEffectKept": "Konuşmalar ve Slack Düzenleyicisi GoAhead'de kalır.",
   "connector.slack.keep": "Bağlı tut",
   "connector.slack.close": "Kapat",

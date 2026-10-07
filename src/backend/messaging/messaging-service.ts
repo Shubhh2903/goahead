@@ -277,8 +277,9 @@ export class MessagingService {
   }
 
   /**
-   * Saves the bot token of a workspace that installed the OpenBot app, and starts its connection. A
-   * workspace connected before keeps its conversations. False for a link that this run did not start.
+   * Saves the tokens of a workspace that installed the OpenBot app, the bot's and the installer's
+   * when the install gave one, and starts its connection. A workspace connected before keeps its
+   * conversations. False for a link that this run did not start.
    */
   async completeSlackWorkspace(nonce: string, grant: string): Promise<boolean> {
     const opened = await this.#requireConnect().complete(nonce, grant);
@@ -290,6 +291,7 @@ export class MessagingService {
       botUserId: opened.botUserId,
       appId: opened.appId,
       workspaceId: opened.workspaceId,
+      ...(opened.user ? { userToken: opened.user.token, userId: opened.user.id } : {}),
     });
     this.#threads.store.updateConnection(record.connectionId, {
       enabled: true,
@@ -306,17 +308,18 @@ export class MessagingService {
   }
 
   /**
-   * Stops the workspace's connection, asks Slack to revoke the bot token, removes it, and unlinks the
-   * workspace from this host. The conversations stay, for a later connect.
+   * Stops the workspace's connection, asks Slack to revoke the user token and the bot token, removes
+   * them, and unlinks the workspace from this host. The conversations stay, for a later connect.
    */
   async disconnectSlackWorkspace(workspaceId: string): Promise<void> {
     const record = this.#requireConnection(workspaceId);
     await this.#stopConnection(record.connectionId);
-    const botToken = this.#credentials.get(record.connectionId)?.botToken;
-    if (botToken)
-      await new SlackWebApi({ token: botToken, origin: this.#slackOrigin })
-        .call("auth.revoke")
-        .catch((error) => this.#warn(error));
+    const values = this.#credentials.get(record.connectionId);
+    for (const token of [values?.userToken, values?.botToken])
+      if (token)
+        await new SlackWebApi({ token, origin: this.#slackOrigin })
+          .call("auth.revoke")
+          .catch((error) => this.#warn(error));
     await this.#credentials.clear(record.connectionId);
     this.#threads.store.updateConnection(record.connectionId, { enabled: false, lastErrorCode: null });
     await this.#connect?.unlink(workspaceId).catch((error) => this.#warn(error));
@@ -437,6 +440,8 @@ export class MessagingService {
       state,
       workspaceName: record.workspaceName,
       botUserId: record.botUserId,
+      userId: values?.userId ?? null,
+      userName: live?.identity?.user?.name ?? null,
       missingScopes: live?.identity?.missingScopes ?? [],
       retryAt: state === "rate_limited" ? (live?.retryAt ?? null) : null,
       credentials,

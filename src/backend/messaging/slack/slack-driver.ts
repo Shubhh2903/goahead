@@ -1,19 +1,20 @@
 import { readFile } from "node:fs/promises";
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
-import { SLACK_BOT_SCOPES } from "@openbot/contracts/slack-app";
+import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-app";
 import { sourceText } from "@openbot/i18n/source";
 import type { MessagingAnswerFile } from "../messaging-threads";
-import type {
-  ConnectionIdentity,
-  ContextEntry,
-  InboundFile,
-  MessageBody,
-  MessageTarget,
-  MessagingAdapter,
-  MessagingDriver,
-  MessagingDriverOptions,
-  MessagingIngress,
-  StatusReaction,
+import {
+  type ConnectionIdentity,
+  type ContextEntry,
+  type InboundFile,
+  type MessageBody,
+  type MessageTarget,
+  type MessagingAdapter,
+  MessagingConnectionError,
+  type MessagingDriver,
+  type MessagingDriverOptions,
+  type MessagingIngress,
+  type StatusReaction,
 } from "../messaging-types";
 import { plainText, SLACK_ACTION_IDS } from "./slack-events";
 import { SlackEventsTransport } from "./slack-events-transport";
@@ -38,16 +39,26 @@ const BUTTON_ACTIONS = {
   stop: SLACK_ACTION_IDS.stop,
 } as const;
 
-/** The Slack Web API side of one connection. It never logs message text or a response body. */
+/**
+ * The Slack Web API side of one connection: the bot's token, and the token of the person who
+ * installed the app when the install gave one. It never logs message text or a response body.
+ */
 class SlackAdapter implements MessagingAdapter {
   readonly platform = "slack" as const;
   readonly #api: SlackWebApi;
+  readonly #userApi: SlackWebApi | null;
   readonly #names = new Map<string, Promise<string>>();
   readonly #places = new Map<string, Promise<string>>();
   #botUserId = "";
 
-  constructor(botToken: string, options: MessagingDriverOptions & { origin?: string | undefined }) {
-    this.#api = new SlackWebApi({ token: botToken, origin: options.origin, rateLimited: options.rateLimited });
+  constructor(
+    tokens: { botToken: string; userToken: string | undefined },
+    options: MessagingDriverOptions & { origin?: string | undefined },
+  ) {
+    this.#api = new SlackWebApi({ token: tokens.botToken, origin: options.origin, rateLimited: options.rateLimited });
+    this.#userApi = tokens.userToken
+      ? new SlackWebApi({ token: tokens.userToken, origin: options.origin, rateLimited: options.rateLimited })
+      : null;
   }
 
   async identify(): Promise<ConnectionIdentity> {
@@ -60,13 +71,33 @@ class SlackAdapter implements MessagingAdapter {
     const bot = await this.#api.call("bots.info", { bot: botId });
     const appId = isDynamicRecord(bot.bot) && isString(bot.bot.app_id) ? bot.bot.app_id : "";
     this.#botUserId = botUserId;
+    const person = await this.#identifyUser(workspaceId);
     return {
       workspaceId,
       workspaceName: isString(payload.team) ? payload.team : workspaceId,
       botUserId,
       appId,
-      missingScopes: SLACK_BOT_SCOPES.filter((scope) => !scopes.includes(scope)),
+      missingScopes: [
+        ...new Set([
+          ...SLACK_BOT_SCOPES.filter((scope) => !scopes.includes(scope)),
+          ...SLACK_USER_SCOPES.filter((scope) => person !== null && !person.scopes.includes(scope)),
+        ]),
+      ],
+      user: person && { id: person.id, name: person.name },
     };
+  }
+
+  /**
+   * The person whose token came with the install. A token for another workspace is refused as a
+   * whole: the host acts as a person only in the workspace that the bot is in, and a connect that
+   * gives both tokens again is the way back.
+   */
+  async #identifyUser(workspaceId: string): Promise<{ id: string; name: string; scopes: string[] } | null> {
+    if (!this.#userApi) return null;
+    const { payload, scopes } = await this.#userApi.authTest();
+    const id = payload.user_id;
+    if (payload.team_id !== workspaceId || !isString(id)) throw new MessagingConnectionError("invalid_token");
+    return { id, name: isString(payload.user) ? payload.user : id, scopes };
   }
 
   async post(target: MessageTarget, body: MessageBody): Promise<string> {
@@ -313,7 +344,10 @@ export function slackDriver(options: SlackDriverOptions = {}): MessagingDriver {
   return {
     platform: "slack",
     createAdapter(credentials, driverOptions) {
-      return new SlackAdapter(credentials.botToken ?? "", { ...driverOptions, origin: options.origin });
+      return new SlackAdapter(
+        { botToken: credentials.botToken ?? "", userToken: credentials.userToken },
+        { ...driverOptions, origin: options.origin },
+      );
     },
     createTransport(_credentials, identity) {
       if (!options.ingress) throw new Error(sourceText("error.messaging.unsupported"));
