@@ -22,6 +22,12 @@ export interface InboundFile {
   url: string;
 }
 
+/**
+ * The key of a direct message conversation: one per person, so every direct message from them goes
+ * to the same agent thread. It is not a platform message id: the answer still goes under each message.
+ */
+export const DIRECT_CONVERSATION_KEY = "direct";
+
 /** One message that addresses OpenBot, in the same shape for every platform. */
 export interface InboundMessage {
   /** Stable for one message across redeliveries. */

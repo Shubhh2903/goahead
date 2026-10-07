@@ -791,6 +791,11 @@ export class HostService extends EventEmitter<HostEvents> {
     this.#api.setLocalTyping(input.agentId, input.typing);
   }
 
+  /** The member whose read cursors this computer's desktop uses. */
+  agentReaderId(): string {
+    return this.#currentAgentReaderId();
+  }
+
   readAgentConversation(agentId: string): Promise<ConversationWithReadState> {
     return this.#options.agents.readConversationFor(agentId, this.#currentAgentReaderId());
   }

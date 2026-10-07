@@ -203,6 +203,10 @@ import type {
 import type {
   AddSlackOrchestratorInput,
   AddSlackOrchestratorResult,
+  MarkMessagingThreadReadInput,
+  MessagingThreadPageInput,
+  MessagingThreadSummary,
+  MessagingThreadsChanged,
   SetSlackEnabledInput,
   SlackOverview,
   SlackWorkspaceInput,
@@ -595,6 +599,11 @@ export const IPC_ENDPOINTS = {
     addSlackOrchestrator: request<AddSlackOrchestratorInput, AddSlackOrchestratorResult>()(
       "messaging:add-slack-orchestrator",
     ),
+    // The external conversations the agents answer, read-only. Only a linked thread can be read here.
+    listThreads: request<undefined, MessagingThreadSummary[]>()("messaging:list-threads"),
+    readThreadPage: request<MessagingThreadPageInput, ConversationPage>()("messaging:read-thread-page"),
+    markThreadRead: request<MarkMessagingThreadReadInput, ConversationReadState>()("messaging:mark-thread-read"),
+    threadsChanged: event<MessagingThreadsChanged>()("messaging:threads-changed"),
   },
   // The server name, logo and app update of one server's host. `host.updateIdentity` and `update`
   // reach this computer only; these take the server, so a remote admin reaches the host. The

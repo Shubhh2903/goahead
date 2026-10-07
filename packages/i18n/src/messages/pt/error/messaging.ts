@@ -14,4 +14,5 @@ export const messages = {
   "error.messaging.sendToSelf":
     "O usuário do GoAhead lê esta conversa. Responda aqui em vez de enviar uma mensagem para ele.",
   "error.messaging.sendTextEmpty": "A mensagem não tem texto.",
+  "error.messaging.threadUnavailable": "Esta conversa do Slack não está disponível.",
 } as const satisfies PartialTranslation<typeof source>;

@@ -16,6 +16,7 @@ import { useAgents } from "../agents/agents-context";
 import { useChannels } from "../channels/channels-context";
 import { useConversation } from "../conversation/conversation-context";
 import { useDirectMessages } from "../conversation/direct-messages-context";
+import { useMessagingThreads } from "../messaging-threads/messaging-threads-context";
 import { useServerActions } from "../servers/server-actions";
 import { useServerSettings } from "../servers/server-settings";
 import { useServers } from "../servers/servers-context";
@@ -41,6 +42,7 @@ export function WorkspaceSidebar(props: { peopleEnabled: boolean }) {
   const layout = useLayout();
   const platform = usePlatform();
   const channels = useChannels();
+  const messagingThreads = useMessagingThreads();
   const { activeServer, activeServerSupportsCapability } = useServers();
   const { openServerSettings } = useServerSettings();
   const serverActions = useServerActions();
@@ -118,7 +120,10 @@ export function WorkspaceSidebar(props: { peopleEnabled: boolean }) {
       channels={visibleChannels()}
       deletedChannels={channels.supported() ? channels.state.channels.filter((channel) => channel.archived) : []}
       activeChannelId={channels.state.selectedId}
-      onSelectChannel={(id) => void channels.open(id)}
+      onSelectChannel={(id) => {
+        messagingThreads.close();
+        void channels.open(id);
+      }}
       onEditChannel={(id) => void channels.editChannel(id)}
       onDeleteChannel={channels.deletionSupported() ? channels.remove : undefined}
       showingArchivedChannels={channels.state.archived}
@@ -148,7 +153,14 @@ export function WorkspaceSidebar(props: { peopleEnabled: boolean }) {
           : undefined
       }
       agents={agentList()}
-      activeAgentId={activeDirectMember() || channels.state.selectedId ? "" : (activeAgent()?.id ?? "")}
+      activeAgentId={
+        activeDirectMember() || channels.state.selectedId || messagingThreads.state.selectedId
+          ? ""
+          : (activeAgent()?.id ?? "")
+      }
+      messagingThreads={messagingThreads.state.threads}
+      activeMessagingThreadId={messagingThreads.state.selectedId}
+      onSelectMessagingThread={messagingThreads.open}
       showPeople={props.peopleEnabled}
       people={directPeople()}
       directThreads={directThreads()}
@@ -171,6 +183,7 @@ export function WorkspaceSidebar(props: { peopleEnabled: boolean }) {
       onPreloadDirectConversation={props.peopleEnabled ? () => void DirectConversation.preload() : undefined}
       onCreateAgent={() => {
         channels.close();
+        messagingThreads.close();
         openBotSetup();
       }}
       onEditAgent={editAgent}

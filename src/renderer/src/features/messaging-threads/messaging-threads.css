@@ -1,0 +1,35 @@
+/* The read-only view of one Slack conversation. The header and the list reuse the channel's. */
+.messaging-thread-heading {
+  align-items: center;
+  gap: var(--openbot-space-2);
+}
+
+.messaging-thread-icon {
+  display: inline-flex;
+  color: var(--openbot-text-muted);
+}
+
+.messaging-thread-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.messaging-thread-messages {
+  display: grid;
+  gap: var(--openbot-space-2);
+  padding: var(--openbot-space-4);
+}
+
+.messaging-thread-empty,
+.messaging-thread-readonly {
+  margin: 0;
+  padding: var(--openbot-space-3) var(--openbot-space-4);
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-sm);
+  text-align: center;
+}
+
+.messaging-thread-readonly {
+  border-top: 1px solid var(--openbot-border);
+}

@@ -265,6 +265,7 @@ const {
   forwardProviderRuntimeStatus,
   forwardGitHubConnectorStatus,
   forwardOnePasswordConnectorStatus,
+  forwardMessagingThreadsChanged,
   forwardHostStatus,
   forwardRemoteDesktopSessions,
   forwardServers,
@@ -535,7 +536,7 @@ function registerIpcHandlers({
       customProviders: customProviderChanges,
       remoteServers,
     }),
-    ...messagingIpcHandlers({ messaging }),
+    ...messagingIpcHandlers({ messaging, agents: service, host }),
     ...mcpServerIpcHandlers({
       service,
       remoteServers,
@@ -872,6 +873,7 @@ if (!hasSingleInstanceLock) {
       remoteDesktop.on("changed", forwardRemoteDesktopSessions);
       built.githubConnector.onChanged(forwardGitHubConnectorStatus);
       built.onePasswordConnector.onChanged(forwardOnePasswordConnectorStatus);
+      built.messaging.onThreadChanged((threadId) => forwardMessagingThreadsChanged({ threadId }));
       remoteServers.on("changed", forwardServers);
       remoteServers.on("agent", (serverId, event, bufferedLive) => {
         forwardAgentEvent(serverId, event, bufferedLive);

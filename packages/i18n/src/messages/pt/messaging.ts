@@ -8,4 +8,9 @@ export const messages = {
     "O GoAhead não consegue ler os tokens salvos neste computador. Desconecte o espaço de trabalho e conecte-o novamente.",
   "messaging.help.relay_unavailable":
     "O GoAhead não consegue receber eventos do Slack neste computador. Entre na sua conta, dê um nome a este computador nas configurações do servidor e mantenha o GoAhead aberto.",
+  "messaging.thread.label": "Conversa do Slack: {title}",
+  "messaging.thread.readOnly": "Somente leitura. O agente responde a esta conversa no Slack.",
+  "messaging.thread.slackPerson": "Usuário do Slack",
+  "messaging.thread.empty": "Ainda não há mensagens.",
+  "messaging.thread.loadFailed": "A conversa do Slack não carregou.",
 } as const satisfies PartialTranslation<typeof source>;

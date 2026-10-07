@@ -35,8 +35,11 @@ browser. A joined server shows no Slack page.
 
 - A mention in a channel starts, or continues, a conversation in that thread. A reply in that thread
   reaches the same agent without a mention.
-- A direct message always reaches GoAhead. GoAhead answers in a thread under it, so each direct
-  message is its own conversation.
+- A direct message always reaches GoAhead. GoAhead answers in a thread under it. All direct messages
+  from one person are one conversation, with one agent. Direct messages from before this change stay
+  as separate conversations.
+- The desktop sidebar lists each conversation under the agent that answers it. Opening one shows it
+  read-only.
 - A new conversation goes to the Slack Orchestrator. It answers short requests itself, and gives other
   work to the one agent that fits best. That agent's answer comes back to the thread, and the
   orchestrator posts it. Until you add the orchestrator, Slack gets "No agent can answer here yet".

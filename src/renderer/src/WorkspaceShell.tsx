@@ -8,6 +8,8 @@ import { WorkspaceChannelConversation } from "./features/channels/WorkspaceChann
 import { useDirectMessages } from "./features/conversation/direct-messages-context";
 import { WorkspaceConversation } from "./features/conversation/WorkspaceConversation";
 import { WorkspaceDirectConversation } from "./features/conversation/WorkspaceDirectConversation";
+import { MessagingThreadConversation } from "./features/messaging-threads/MessagingThreadConversation";
+import { useMessagingThreads } from "./features/messaging-threads/messaging-threads-context";
 import { WorkspaceServerOnboarding } from "./features/onboarding/WorkspaceServerOnboarding";
 import { useRemoteDesktop } from "./features/remote-desktop/remote-desktop-context";
 import { SchedulePanel } from "./features/schedule/SchedulePanel";
@@ -36,13 +38,16 @@ import { WorkspaceOverlays } from "./WorkspaceOverlays";
  * The order of the children is the paint order the stylesheet expects, and the
  * middle-pane `<Show>`s are mutually exclusive by construction: a blocked remote
  * server wins over everything, then a joined server's provider step, then the
- * Agent form, then a channel, then a
+ * Agent form, then a channel, then a Slack conversation, then a
  * person, then a Agent. The usage panel sits outside that group and inerts it.
  */
 export function WorkspaceShell(props: { account: () => CentralAuthUser }) {
   const platform = usePlatform();
   const channels = useChannels();
   const channelOpen = () => channels.state.selectedId !== null;
+  const messagingThreads = useMessagingThreads();
+  // A channel wins over a Slack conversation, which wins over a person and an agent.
+  const threadOpen = () => !channelOpen() && messagingThreads.state.selectedId !== null;
   const usage = useUsage();
   const layout = useLayout();
   const { activeServer, activeServerSupportsCapability, retryServerConnection, servers } = useServers();
@@ -105,10 +110,16 @@ export function WorkspaceShell(props: { account: () => CentralAuthUser }) {
       <Show when={agentSetupOpen() && !serverOnboardingOpen()}>
         <WorkspaceAgentSetup />
       </Show>
-      <Show when={activePeopleEnabled() && !agentSetupOpen() && !channelOpen() && activeDirectMember()} keyed>
+      <Show when={!agentSetupOpen() && threadOpen()}>
+        <MessagingThreadConversation />
+      </Show>
+      <Show
+        when={activePeopleEnabled() && !agentSetupOpen() && !channelOpen() && !threadOpen() && activeDirectMember()}
+        keyed
+      >
         {(member) => <WorkspaceDirectConversation member={member} />}
       </Show>
-      <Show when={!agentSetupOpen() && !channelOpen() && !activeDirectMember()}>
+      <Show when={!agentSetupOpen() && !channelOpen() && !threadOpen() && !activeDirectMember()}>
         <WorkspaceConversation account={props.account} />
       </Show>
       <Show when={!agentSetupOpen() && channelOpen()}>

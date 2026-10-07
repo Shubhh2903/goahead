@@ -12,6 +12,7 @@ import type {
   MessagingConnectionState,
   MessagingCredentialState,
   MessagingPlatform,
+  MessagingThreadSummary,
   RespondToApprovalInput,
   SlackOverview,
 } from "@openbot/contracts/ipc";
@@ -32,6 +33,7 @@ import type {
 } from "./messaging-threads";
 import {
   type ConnectionIdentity,
+  DIRECT_CONVERSATION_KEY,
   type InboundAction,
   type InboundMessage,
   type IngressAnswer,
@@ -237,6 +239,31 @@ export class MessagingService {
 
   hasLiveConnection(): boolean {
     return [...this.#live.values()].some((live) => LIVE_STATES.has(live.state));
+  }
+
+  /** The external conversations, newest first. The caller adds each one's read state. */
+  threadSummaries(): Array<Omit<MessagingThreadSummary, "unreadCount">> {
+    return this.#threads.store.recentLinks().map((link) => ({
+      threadId: link.threadId,
+      agentId: link.agentId,
+      workspaceId: link.workspaceId,
+      platform: link.platform,
+      title: link.title,
+      preview: link.preview,
+      isDirect: link.isDirect,
+      updatedAt: link.updatedAt,
+    }));
+  }
+
+  /** The agent that answers one external conversation. Any other thread id is refused. */
+  threadAgent(threadId: string): string {
+    const link = this.#threads.store.linkForThread(threadId);
+    if (!link) throw new Error(sourceText("error.messaging.threadUnavailable"));
+    return link.agentId;
+  }
+
+  onThreadChanged(listener: (threadId: string) => void): () => void {
+    return this.#threads.onThreadChanged(listener);
   }
 
   /** The Slack workspaces of this computer, for Server settings > Connectors. A disconnected one is left out. */
@@ -676,9 +703,13 @@ export class MessagingService {
     const workspaceName = live?.record.workspaceName ?? null;
     if (!live) return { workspaceName, place: link.title, messages: [], cursor: null, skippedFiles: [] };
     const place = link.isDirect ? "direct message" : await live.adapter.placeName(link.platformChannelId);
-    const messages = await live.adapter
-      .history(link.platformChannelId, link.threadKey, link.historyCursor, origin.platformMessageId)
-      .catch(() => []);
+    // Every message of a person's direct message conversation already reached the agent's thread.
+    const messages =
+      link.threadKey === DIRECT_CONVERSATION_KEY
+        ? []
+        : await live.adapter
+            .history(link.platformChannelId, link.threadKey, link.historyCursor, origin.platformMessageId)
+            .catch(() => []);
     return { workspaceName, place, messages, cursor: origin.platformMessageId, skippedFiles: [] };
   }
 
@@ -1039,7 +1070,11 @@ export class MessagingService {
 
 /** Where to answer when the message that started the work is not known: the conversation's thread. */
 function linkTarget(link: MessagingLink): MessageTarget {
-  return { platformChannelId: link.platformChannelId, replyThreadId: link.threadKey };
+  return {
+    platformChannelId: link.platformChannelId,
+    // A person's direct message conversation is not one Slack thread: answer in the direct message.
+    replyThreadId: link.threadKey === DIRECT_CONVERSATION_KEY ? null : link.threadKey,
+  };
 }
 
 function token(): string {

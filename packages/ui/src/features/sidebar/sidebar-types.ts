@@ -2,6 +2,7 @@ import type {
   AvatarHue,
   ChannelSummary,
   DirectThreadSummary,
+  MessagingThreadSummary,
   SidebarLayoutAction,
   SidebarLayoutSnapshot,
   TeamPresenceMember,
@@ -40,6 +41,10 @@ export interface SidebarProps {
   serverMenu?: Omit<ServerMenuProps, "serverName" | "compact">;
   agents: AgentProfile[];
   activeAgentId: string;
+  /** Slack conversations, newest first. Each one shows as a row under the agent that answers it. */
+  messagingThreads?: MessagingThreadSummary[];
+  activeMessagingThreadId?: string | null;
+  onSelectMessagingThread?: (threadId: string) => void;
   showPeople?: boolean;
   people: TeamPresenceMember[];
   directThreads: DirectThreadSummary[];

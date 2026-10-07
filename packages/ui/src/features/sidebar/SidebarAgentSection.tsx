@@ -55,7 +55,7 @@ export function SidebarAgentSection(sectionProps: { sectionId: string }) {
               {(chat) => (
                 <Switch>
                   <Match when={chat.kind === "agent" ? chat.agent : undefined}>
-                    {(agent) => <SidebarAgentRow agent={agent()} />}
+                    {(agent) => <SidebarAgentRow agent={agent()} threads />}
                   </Match>
                   <Match when={chat.kind === "channel" ? chat.channel : undefined}>
                     {(channel) => <SidebarChannelRow channel={channel()} />}

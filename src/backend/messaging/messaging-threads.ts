@@ -115,6 +115,7 @@ export class MessagingThreads {
   readonly #mailbox: MailboxStore;
   readonly #hooks: MessagingThreadsHooks;
   readonly #listeners = new Set<(activity: MessagingActivity) => void>();
+  readonly #changeListeners = new Set<(threadId: string) => void>();
   readonly #admissions = new Map<string, Promise<unknown>>();
   /** The external message each running turn answers, by turn id. */
   readonly #turnOrigins = new Map<string, { origin: MessagingOrigin | null; followUp: boolean }>();
@@ -131,6 +132,12 @@ export class MessagingThreads {
   onActivity(listener: (activity: MessagingActivity) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  /** A linked thread was created or got new messages. The thread list reads again. */
+  onThreadChanged(listener: (threadId: string) => void): () => void {
+    this.#changeListeners.add(listener);
+    return () => this.#changeListeners.delete(listener);
   }
 
   setContextSource(
@@ -198,6 +205,7 @@ export class MessagingThreads {
     const deliveryId = receipt.deliveries[0]?.id;
     if (!deliveryId) throw new Error(sourceText("error.agent.queuedMessageCreateFailed"));
     this.store.touch(link.linkId);
+    this.#changed(link.threadId);
     this.#hooks.schedule(agentId);
     return { status: "queued", link, deliveryId, waiting };
   }
@@ -273,8 +281,12 @@ export class MessagingThreads {
    */
   event(event: AgentEvent): boolean {
     switch (event.type) {
-      case "conversation":
-        return event.snapshot.threadId !== null && this.store.linkForThread(event.snapshot.threadId) !== null;
+      case "conversation": {
+        const threadId = event.snapshot.threadId;
+        if (threadId === null || this.store.linkForThread(threadId) === null) return false;
+        this.#changed(threadId);
+        return true;
+      }
       case "conversation-delta":
       case "turn-progress":
         return this.store.linkForThread(event.threadId) !== null;
@@ -400,6 +412,10 @@ export class MessagingThreads {
 
   #publish(activity: MessagingActivity): void {
     for (const listener of this.#listeners) listener(activity);
+  }
+
+  #changed(threadId: string): void {
+    for (const listener of this.#changeListeners) listener(threadId);
   }
 }
 

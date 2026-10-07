@@ -15,4 +15,5 @@ export const messages = {
   "error.messaging.sendToSelf":
     "GoAhead kullanıcısı bu konuşmayı okuyor. Ona mesaj göndermek yerine burada yanıtlayın.",
   "error.messaging.sendTextEmpty": "Mesajın metni yok.",
+  "error.messaging.threadUnavailable": "Bu Slack konuşması kullanılamıyor.",
 } as const satisfies PartialTranslation<typeof source>;

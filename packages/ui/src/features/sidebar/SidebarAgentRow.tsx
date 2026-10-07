@@ -14,6 +14,7 @@ import { AgentAvatar } from "../agents/AgentAvatar";
 import { agentAccessLockLabel } from "../agents/agent-access";
 import { SidebarAgentContextMenu } from "./SidebarAgentContextMenu";
 import { SidebarAgentIndicator, SidebarWaitIcon } from "./SidebarAgentIndicator";
+import { SidebarMessagingThreads } from "./SidebarMessagingThreads";
 import {
   SIDEBAR_WAIT_ACTION,
   SIDEBAR_WAIT_HINT,
@@ -31,7 +32,7 @@ const SIDEBAR_WAIT_TOOLTIP_OPEN_DELAY = 350;
  * `waiting` is set by the "Needs you" group. The row reads it rather than the agent's state, because
  * the group holds its members still during a drag while the state moves on.
  */
-export function SidebarAgentRow(rowProps: { agent: AgentProfile; waiting?: boolean }) {
+export function SidebarAgentRow(rowProps: { agent: AgentProfile; waiting?: boolean; threads?: boolean }) {
   const {
     dragOffset,
     draggedChatId,
@@ -201,6 +202,9 @@ export function SidebarAgentRow(rowProps: { agent: AgentProfile; waiting?: boole
             </Tooltip.Portal>
           </Tooltip.Root>
         )}
+      </Show>
+      <Show when={rowProps.threads}>
+        <SidebarMessagingThreads agent={rowProps.agent} />
       </Show>
     </div>
   );

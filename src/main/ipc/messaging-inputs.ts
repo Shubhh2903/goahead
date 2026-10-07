@@ -1,8 +1,16 @@
 // The messaging payloads. No message here quotes the input.
 
-import type { AddSlackOrchestratorInput, SetSlackEnabledInput, SlackWorkspaceInput } from "@openbot/contracts/ipc";
+import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
+import type {
+  AddSlackOrchestratorInput,
+  MarkMessagingThreadReadInput,
+  MessagingThreadPageInput,
+  SetSlackEnabledInput,
+  SlackWorkspaceInput,
+} from "@openbot/contracts/ipc";
 import { isAgentModel, isAgentProvider, isReasoningEffort } from "@openbot/contracts/ipc";
-import { isBoolean } from "@openbot/contracts/runtime-values";
+import { isBoolean, isString } from "@openbot/contracts/runtime-values";
+import { parsePageAnchor, parsePageLimit } from "./agent-inputs";
 import { isObject, requireString } from "./validation";
 
 export function parseSlackWorkspaceInput(value: unknown): SlackWorkspaceInput {
@@ -31,4 +39,24 @@ export function parseAddSlackOrchestratorInput(value: unknown): AddSlackOrchestr
     result.reasoningEffort = value.reasoningEffort;
   }
   return result;
+}
+
+export function parseMessagingThreadPageInput(value: unknown): MessagingThreadPageInput {
+  if (!isObject(value)) throw new Error("A messaging request is invalid.");
+  return {
+    threadId: requireString(value.threadId, "Thread id", INPUT_LIMITS.identifier),
+    anchor: parsePageAnchor(value.anchor),
+    limit: parsePageLimit(value.limit),
+  };
+}
+
+export function parseMarkMessagingThreadReadInput(value: unknown): MarkMessagingThreadReadInput {
+  if (!isObject(value)) throw new Error("A messaging request is invalid.");
+  const throughMessageId = value.throughMessageId;
+  if (throughMessageId !== null && !isString(throughMessageId)) throw new Error("A messaging request is invalid.");
+  return {
+    threadId: requireString(value.threadId, "Thread id", INPUT_LIMITS.identifier),
+    throughMessageId:
+      throughMessageId === null ? null : requireString(throughMessageId, "Message id", INPUT_LIMITS.identifier),
+  };
 }

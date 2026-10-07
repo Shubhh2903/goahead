@@ -185,6 +185,10 @@ class FakeSlack {
           return reply({ messages: [] });
         case "conversations.open":
           return reply({ channel: { id: `D-${params.users}` } });
+        // A revoked token stops working, as in Slack.
+        case "auth.revoke":
+          if (token) this.revoked.add(token);
+          return reply({ revoked: true });
         case "chat.getPermalink":
           return reply({ permalink: `https://slack.test/archives/${params.channel}/p${params.message_ts}` });
         case "chat.postMessage":
@@ -353,6 +357,20 @@ describe.sequential("OpenBot Slack app end to end", () => {
     const [link] = started.service.messaging.store.links(orchestratorId);
     if (!link) throw new Error("The mention has no conversation.");
 
+    // The sidebar lists the conversation under the orchestrator and reads it, read-only. Only an
+    // external conversation can be read this way: the agent's own chat is refused.
+    const reader = "local-user:reader";
+    expect(messaging.threadSummaries()).toEqual([
+      expect.objectContaining({ threadId: link.threadId, agentId: orchestratorId, workspaceId: "T1", isDirect: false }),
+    ]);
+    expect(messaging.threadAgent(link.threadId)).toBe(orchestratorId);
+    const orchestratorChat = await started.store.ensureThreadId(orchestratorId);
+    expect(() => messaging?.threadAgent(orchestratorChat)).toThrow("This Slack conversation is not available.");
+    const page = started.service.readThreadPageFor(orchestratorId, link.threadId, reader);
+    expect(page.readState?.unreadCount).toBeGreaterThan(0);
+    started.service.markThreadRead(orchestratorId, link.threadId, reader, page.messages.at(-1)?.id ?? null);
+    expect(started.service.threadReadState(reader, link.threadId).unreadCount).toBe(0);
+
     // An agent's request to message a person. Connected as the bot alone, nobody can approve a send
     // in Slack, so there is no draft: a stranger's word must never make OpenBot message people.
     const requestSend = (to: string, text: string) =>
@@ -515,6 +533,14 @@ describe.sequential("OpenBot Slack app end to end", () => {
     // Disconnect revokes both tokens, forgets them, and unlinks the workspace.
     await messaging.disconnectSlackWorkspace("T1");
     expect(slack.of("auth.revoke").map((call) => call.token)).toEqual([USER_TOKEN, BOT_TOKEN]);
+    // After the disconnect, Slack refuses both tokens.
+    for (const revokedToken of [USER_TOKEN, BOT_TOKEN]) {
+      const check = await fetch(`${slack.origin}/api/auth.test`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${revokedToken}` },
+      });
+      expect(await check.json()).toMatchObject({ ok: false, error: "invalid_auth" });
+    }
     expect(credentials.values.size).toBe(0);
     expect(unlinked).toEqual(["T1", "T1", "T1"]);
     expect(messaging.slackOverview().connections).toEqual([]);
