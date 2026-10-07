@@ -8,6 +8,7 @@ import { WorkspaceChannelConversation } from "./features/channels/WorkspaceChann
 import { useDirectMessages } from "./features/conversation/direct-messages-context";
 import { WorkspaceConversation } from "./features/conversation/WorkspaceConversation";
 import { WorkspaceDirectConversation } from "./features/conversation/WorkspaceDirectConversation";
+import { MessagingInboxView } from "./features/messaging-threads/MessagingInboxView";
 import { MessagingThreadConversation } from "./features/messaging-threads/MessagingThreadConversation";
 import { useMessagingThreads } from "./features/messaging-threads/messaging-threads-context";
 import { WorkspaceServerOnboarding } from "./features/onboarding/WorkspaceServerOnboarding";
@@ -47,7 +48,9 @@ export function WorkspaceShell(props: { account: () => CentralAuthUser }) {
   const channelOpen = () => channels.state.selectedId !== null;
   const messagingThreads = useMessagingThreads();
   // A channel wins over a Slack conversation, which wins over a person and an agent.
-  const threadOpen = () => !channelOpen() && messagingThreads.state.selectedId !== null;
+  // The Slack inbox and a Slack conversation take the same place; opening one closes the other.
+  const inboxOpen = () => !channelOpen() && messagingThreads.inbox.open;
+  const threadOpen = () => !channelOpen() && (messagingThreads.state.selectedId !== null || inboxOpen());
   const usage = useUsage();
   const layout = useLayout();
   const { activeServer, activeServerSupportsCapability, retryServerConnection, servers } = useServers();
@@ -110,8 +113,11 @@ export function WorkspaceShell(props: { account: () => CentralAuthUser }) {
       <Show when={agentSetupOpen() && !serverOnboardingOpen()}>
         <WorkspaceAgentSetup />
       </Show>
-      <Show when={!agentSetupOpen() && threadOpen()}>
+      <Show when={!agentSetupOpen() && threadOpen() && !inboxOpen()}>
         <MessagingThreadConversation />
+      </Show>
+      <Show when={!agentSetupOpen() && inboxOpen()}>
+        <MessagingInboxView />
       </Show>
       <Show
         when={activePeopleEnabled() && !agentSetupOpen() && !channelOpen() && !threadOpen() && activeDirectMember()}

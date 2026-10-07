@@ -31,12 +31,49 @@ export function SidebarMessagingThreads(threadProps: { agent: AgentProfile }) {
         ),
   );
   const hidden = () => threads().length - visible().length;
+  const inbox = () => (props.messagingInbox?.agentId === threadProps.agent.id ? props.messagingInbox : null);
   return (
-    <Show when={!props.compact && threads().length > 0}>
+    <Show when={!props.compact && (threads().length > 0 || inbox())}>
       <ul
         class="sidebar-messaging-threads"
         aria-label={t("sidebar.messagingThreads.label", { name: threadProps.agent.name })}
       >
+        <Show when={inbox()}>
+          {(current) => (
+            <li>
+              <Button
+                variant="ghost"
+                class={[
+                  "sidebar-messaging-thread sidebar-messaging-inbox",
+                  {
+                    "sidebar-messaging-thread-active": props.messagingInboxActive === true,
+                    "sidebar-messaging-thread-unread": current().unreadCount > 0,
+                  },
+                ]}
+                aria-label={`${t("sidebar.messagingInbox.row")}${
+                  current().unreadCount > 0
+                    ? `. ${t("sidebar.messagingInbox.unread", { count: current().unreadCount })}`
+                    : ""
+                }`}
+                aria-pressed={props.messagingInboxActive ? "true" : "false"}
+                data-cuelume-navigate=""
+                onClick={(event: MouseEvent) => {
+                  if (!sidebarClickIsSuppressed(event)) props.onSelectMessagingInbox?.();
+                }}
+              >
+                <span class="sidebar-messaging-thread-icon" aria-hidden="true">
+                  <MessageCircle />
+                </span>
+                <span class="sidebar-messaging-thread-title">{t("sidebar.messagingInbox.row")}</span>
+                <Show when={current().unreadCount > 0}>
+                  <Badge class="sidebar-messaging-thread-badge" tone="accent" shape="pill" aria-hidden="true">
+                    {Math.min(current().unreadCount, 99)}
+                  </Badge>
+                </Show>
+              </Button>
+            </li>
+          )}
+        </Show>
         <For each={visible()} keyed={(thread) => thread.threadId}>
           {(thread) => {
             const active = () => props.activeMessagingThreadId === thread().threadId;

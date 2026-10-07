@@ -30,6 +30,36 @@ Do the same in `development` with `--app A0C5G5XGS83`. Keep the bot scopes the s
 `packages/contracts/src/slack-app.ts`. The user scopes let the server read what the person who
 installed the app can see, and reply as them after they approve.
 
+## Apply the production manifest
+
+The repository changed the production manifest after it was last applied: user scopes, user events,
+and the bot scope `mpim:write`. A person with admin access to `A0C5H5C95NH` applies it. No agent and
+no CI job does this step.
+
+1. Check first: `bun run test:desktop -- packages/contracts/src/slack-app.test.ts` passes, and the
+   production manifest points at `signal.openbot.run` and `api.openbot.run`, not at the dev tunnel.
+2. Make sure that Signal at `https://signal.openbot.run` serves `/v1/slack/events` with this branch's
+   user event routing. Slack checks the request URL when you apply.
+3. Apply: `cd apps/slack-app/production`, then `slack manifest validate --app A0C5H5C95NH` and
+   `slack manifest sync --app A0C5H5C95NH`. Or paste `manifest.json` in the app's settings page >
+   App Manifest.
+4. Existing installs keep their old tokens. Each workspace must connect again from GoAhead
+   (Settings > Connectors > Slack) to get the user scopes, the user events and `mpim:write`.
+5. Verify with a release build in a test workspace:
+   - Settings > Connectors > Slack shows "Connected as @name" and no missing scope.
+   - A direct message to the person shows in the local inbox ("what is new in Slack?" in the direct
+     message with GoAhead lists it).
+   - A send that the person asks for goes out as them; a send that someone else asks for goes out from
+     the GoAhead app after approval.
+
+### Slack review and the Marketplace
+
+Turning on distribution needs no Slack review. But Slack gives apps that are distributed outside the
+Marketplace only 1 request per minute, of at most 15 messages, for `conversations.history` and
+`conversations.replies` (see `LAUNCH.md`). The local inbox fills from events, so GoAhead works with this
+limit; a newly picked channel gets only its newest 15 messages. Marketplace approval removes the limit.
+`LAUNCH.md` lists the Marketplace steps and links.
+
 ## Manual settings
 
 The manifest cannot set these. Use `slack app settings --app <id>`:

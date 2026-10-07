@@ -43,6 +43,17 @@ export function WorkspaceSidebar(props: { peopleEnabled: boolean }) {
   const platform = usePlatform();
   const channels = useChannels();
   const messagingThreads = useMessagingThreads();
+  /* The inbox row sits under the orchestrator of the first workspace connected as the person, with
+   * the unread count of every workspace. */
+  const messagingInboxRow = createMemo(() => {
+    const workspaces = messagingThreads.inbox.workspaces;
+    const agentId = workspaces.find((workspace) => workspace.agentId)?.agentId;
+    if (!agentId) return null;
+    const unreadCount = workspaces
+      .flatMap((workspace) => workspace.conversations)
+      .reduce((total, conversation) => total + conversation.unreadCount, 0);
+    return { agentId, unreadCount };
+  });
   const { activeServer, activeServerSupportsCapability } = useServers();
   const { openServerSettings } = useServerSettings();
   const serverActions = useServerActions();
@@ -154,13 +165,19 @@ export function WorkspaceSidebar(props: { peopleEnabled: boolean }) {
       }
       agents={agentList()}
       activeAgentId={
-        activeDirectMember() || channels.state.selectedId || messagingThreads.state.selectedId
+        activeDirectMember() ||
+        channels.state.selectedId ||
+        messagingThreads.state.selectedId ||
+        messagingThreads.inbox.open
           ? ""
           : (activeAgent()?.id ?? "")
       }
       messagingThreads={messagingThreads.state.threads}
       activeMessagingThreadId={messagingThreads.state.selectedId}
       onSelectMessagingThread={messagingThreads.open}
+      messagingInbox={messagingInboxRow()}
+      messagingInboxActive={messagingThreads.inbox.open}
+      onSelectMessagingInbox={messagingThreads.openInbox}
       showPeople={props.peopleEnabled}
       people={directPeople()}
       directThreads={directThreads()}

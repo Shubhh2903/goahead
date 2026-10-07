@@ -206,9 +206,13 @@ import type {
   AnswerMessagingDraftInput,
   MarkMessagingThreadReadInput,
   MessagingDraft,
+  MessagingInboxChanged,
+  MessagingInboxPage,
+  MessagingInboxWorkspace,
   MessagingThreadPageInput,
   MessagingThreadSummary,
   MessagingThreadsChanged,
+  ReadInboxConversationInput,
   SetSlackEnabledInput,
   SetSlackSendGuardsInput,
   SetSlackWatchedChannelsInput,
@@ -617,6 +621,12 @@ export const IPC_ENDPOINTS = {
     // Pause and quiet hours. A pause holds at once, before it is saved.
     setSlackSendGuards: request<SetSlackSendGuardsInput, void>()("messaging:set-slack-send-guards"),
     answerDraft: request<AnswerMessagingDraftInput, void>()("messaging:answer-draft"),
+    // The person's local Slack inbox, read-only. Reading a conversation marks it read for GoAhead.
+    listInbox: request<undefined, MessagingInboxWorkspace[]>()("messaging:list-inbox"),
+    readInboxConversation: request<ReadInboxConversationInput, MessagingInboxPage>()(
+      "messaging:read-inbox-conversation",
+    ),
+    inboxChanged: event<MessagingInboxChanged>()("messaging:inbox-changed"),
   },
   // The server name, logo and app update of one server's host. `host.updateIdentity` and `update`
   // reach this computer only; these take the server, so a remote admin reaches the host. The

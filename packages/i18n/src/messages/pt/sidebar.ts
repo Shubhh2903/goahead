@@ -119,4 +119,6 @@ export const messages = {
     one: "{count} mensagem aguarda sua aprovação",
     other: "{count} mensagens aguardam sua aprovação",
   },
+  "sidebar.messagingInbox.row": "Caixa de entrada do Slack",
+  "sidebar.messagingInbox.unread": { one: "{count} mensagem não lida", other: "{count} mensagens não lidas" },
 } as const satisfies PartialTranslation<typeof source>;

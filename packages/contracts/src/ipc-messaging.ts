@@ -44,6 +44,8 @@ export const MESSAGING_LIMITS = {
   channelOptions: 1_000,
   watchedChannels: 50,
   drafts: 100,
+  inboxConversations: 200,
+  inboxMessages: 100,
 } as const;
 
 export interface MessagingConnection {
@@ -251,6 +253,121 @@ export function isMessagingThreadSummary(value: unknown): value is MessagingThre
     Number.isInteger(value.pendingDrafts) &&
     value.pendingDrafts >= 0
   );
+}
+
+export const MESSAGING_INBOX_KINDS = ["direct", "group", "mention", "channel"] as const;
+export type MessagingInboxKind = (typeof MESSAGING_INBOX_KINDS)[number];
+
+/**
+ * One conversation of the person's local Slack inbox, for the desktop: a direct or group direct
+ * message, the messages that mention them in a channel, or a channel they picked.
+ */
+export interface MessagingInboxConversation {
+  conversation: string;
+  kind: MessagingInboxKind;
+  /** A person's name for a direct message, or a channel such as #general. */
+  place: string;
+  unreadCount: number;
+  latestAt: string;
+  /** The newest author other than the person. */
+  latestFrom: string;
+  preview: string;
+}
+
+/** The inbox of one workspace connected as the person. */
+export interface MessagingInboxWorkspace {
+  workspaceId: string;
+  workspaceName: string;
+  /** The agent whose sidebar row holds the inbox: the workspace's orchestrator. */
+  agentId: string | null;
+  conversations: MessagingInboxConversation[];
+}
+
+export interface ReadInboxConversationInput {
+  workspaceId: string;
+  conversation: string;
+  limit?: number;
+}
+
+export interface MessagingInboxMessage {
+  id: string;
+  from: string;
+  /** Written by the person who connected the workspace. */
+  isOwn: boolean;
+  text: string;
+  sentAt: string;
+  /** The thread the message is in, or null at the top of the conversation. */
+  thread: string | null;
+}
+
+/** The newest messages of one inbox conversation, oldest first. Reading them marks them read. */
+export interface MessagingInboxPage {
+  workspaceId: string;
+  conversation: string;
+  place: string;
+  messages: MessagingInboxMessage[];
+}
+
+/** The inbox of a workspace got a new message. The desktop reads it again. */
+export interface MessagingInboxChanged {
+  workspaceId: string;
+}
+
+function isInboxConversation(value: unknown): value is MessagingInboxConversation {
+  return (
+    isDynamicRecord(value) &&
+    isIdentifier(value.conversation) &&
+    isOneOf(MESSAGING_INBOX_KINDS, value.kind) &&
+    isBoundedString(value.place, MESSAGING_LIMITS.name * 4) &&
+    isNumber(value.unreadCount) &&
+    Number.isInteger(value.unreadCount) &&
+    value.unreadCount >= 0 &&
+    isBoundedString(value.latestAt, 64) &&
+    isBoundedString(value.latestFrom, MESSAGING_LIMITS.name) &&
+    isBoundedString(value.preview, INPUT_LIMITS.messageText)
+  );
+}
+
+export function isMessagingInbox(value: unknown): value is MessagingInboxWorkspace[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MESSAGING_LIMITS.connections &&
+    value.every(
+      (workspace) =>
+        isDynamicRecord(workspace) &&
+        isIdentifier(workspace.workspaceId) &&
+        isBoundedString(workspace.workspaceName, MESSAGING_LIMITS.name) &&
+        (workspace.agentId === null || isIdentifier(workspace.agentId)) &&
+        Array.isArray(workspace.conversations) &&
+        workspace.conversations.length <= MESSAGING_LIMITS.inboxConversations &&
+        workspace.conversations.every(isInboxConversation),
+    )
+  );
+}
+
+export function isMessagingInboxPage(value: unknown): value is MessagingInboxPage {
+  return (
+    isDynamicRecord(value) &&
+    isIdentifier(value.workspaceId) &&
+    isIdentifier(value.conversation) &&
+    isBoundedString(value.place, MESSAGING_LIMITS.name * 4) &&
+    Array.isArray(value.messages) &&
+    value.messages.length <= MESSAGING_LIMITS.inboxMessages &&
+    value.messages.every(
+      (message) =>
+        isDynamicRecord(message) &&
+        isIdentifier(message.id) &&
+        isBoundedString(message.from, MESSAGING_LIMITS.name * 2) &&
+        isBoolean(message.isOwn) &&
+        isBoundedString(message.text, INPUT_LIMITS.messageText) &&
+        isBoundedString(message.sentAt, 64) &&
+        (message.thread === null || isIdentifier(message.thread)),
+    )
+  );
+}
+
+export function isMessagingInboxChanged(value: unknown): value is MessagingInboxChanged {
+  return isDynamicRecord(value) && isIdentifier(value.workspaceId);
 }
 
 export function isMessagingDraft(value: unknown): value is MessagingDraft {

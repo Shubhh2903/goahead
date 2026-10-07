@@ -4,11 +4,17 @@ import {
   type AddSlackOrchestratorResult,
   isAddSlackOrchestratorResult,
   isMessagingDrafts,
+  isMessagingInbox,
+  isMessagingInboxChanged,
+  isMessagingInboxPage,
   isMessagingThreadSummaries,
   isMessagingThreadsChanged,
   isSlackChannelList,
   isSlackOverview,
   type MessagingDraft,
+  type MessagingInboxChanged,
+  type MessagingInboxPage,
+  type MessagingInboxWorkspace,
   type MessagingThreadSummary,
   type MessagingThreadsChanged,
   type SlackChannelList,
@@ -43,4 +49,18 @@ export function decodeSlackChannelListReply(value: unknown): SlackChannelList {
 export function decodeMessagingDraftsReply(value: unknown): MessagingDraft[] {
   if (!isMessagingDrafts(value)) throw new Error("Invalid Slack draft list response.");
   return value;
+}
+
+export function decodeMessagingInboxReply(value: unknown): MessagingInboxWorkspace[] {
+  if (!isMessagingInbox(value)) throw new Error("Invalid Slack inbox response.");
+  return value;
+}
+
+export function decodeMessagingInboxPageReply(value: unknown): MessagingInboxPage {
+  if (!isMessagingInboxPage(value)) throw new Error("Invalid Slack inbox conversation response.");
+  return value;
+}
+
+export function decodeMessagingInboxChanged(value: unknown): MessagingInboxChanged | null {
+  return isMessagingInboxChanged(value) ? value : null;
 }

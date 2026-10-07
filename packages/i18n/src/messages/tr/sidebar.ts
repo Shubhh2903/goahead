@@ -117,4 +117,6 @@ export const messages = {
     one: "{count} mesaj onayınızı bekliyor",
     other: "{count} mesaj onayınızı bekliyor",
   },
+  "sidebar.messagingInbox.row": "Slack gelen kutusu",
+  "sidebar.messagingInbox.unread": { one: "{count} okunmamış mesaj", other: "{count} okunmamış mesaj" },
 } as const satisfies PartialTranslation<typeof source>;

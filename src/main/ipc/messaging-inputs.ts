@@ -6,6 +6,7 @@ import type {
   AnswerMessagingDraftInput,
   MarkMessagingThreadReadInput,
   MessagingThreadPageInput,
+  ReadInboxConversationInput,
   SetSlackEnabledInput,
   SetSlackSendGuardsInput,
   SetSlackWatchedChannelsInput,
@@ -108,5 +109,15 @@ export function parseSetSlackSendGuardsInput(value: unknown): SetSlackSendGuards
       throw new Error("A messaging request is invalid.");
     result.quietHours = value.quietHours === null ? null : { start: value.quietHours.start, end: value.quietHours.end };
   }
+  return result;
+}
+
+export function parseReadInboxConversationInput(value: unknown): ReadInboxConversationInput {
+  if (!isObject(value)) throw new Error("A messaging request is invalid.");
+  const result: ReadInboxConversationInput = {
+    workspaceId: requireString(value.workspaceId, "Workspace id"),
+    conversation: requireString(value.conversation, "Conversation", INPUT_LIMITS.identifier),
+  };
+  if (value.limit !== undefined) result.limit = parsePageLimit(value.limit);
   return result;
 }

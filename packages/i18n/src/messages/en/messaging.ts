@@ -26,4 +26,14 @@ export const messages = defineMessages("messaging", {
   "messaging.draft.deny": "Deny",
   "messaging.draft.sending": "Sending…",
   "messaging.draft.failed": "The draft could not be answered.",
+  // The read-only view of the person's local Slack inbox.
+  "messaging.inbox.title": "Slack inbox",
+  "messaging.inbox.conversations": "Inbox conversations",
+  "messaging.inbox.messages": "Messages",
+  "messaging.inbox.empty":
+    "No Slack messages yet. GoAhead keeps your direct messages, group messages, mentions and the channels you pick.",
+  "messaging.inbox.choose": "Choose a conversation to read it.",
+  "messaging.inbox.loadFailed": "The Slack inbox did not load.",
+  "messaging.inbox.unread": { one: "{count} unread", other: "{count} unread" },
+  "messaging.inbox.readOnly": "Read-only. Answer in Slack, or ask GoAhead in your direct message with it.",
 });

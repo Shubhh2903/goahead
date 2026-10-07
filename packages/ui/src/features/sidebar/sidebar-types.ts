@@ -45,6 +45,10 @@ export interface SidebarProps {
   messagingThreads?: MessagingThreadSummary[];
   activeMessagingThreadId?: string | null;
   onSelectMessagingThread?: (threadId: string) => void;
+  /** The person's local Slack inbox, as the first row under the agent that holds it. */
+  messagingInbox?: { agentId: string; unreadCount: number } | null;
+  messagingInboxActive?: boolean;
+  onSelectMessagingInbox?: () => void;
   showPeople?: boolean;
   people: TeamPresenceMember[];
   directThreads: DirectThreadSummary[];

@@ -38,7 +38,17 @@
   quiet hours (sends wait as drafts), and a limit of 10 messages an hour per workspace. A message to
   someone GoAhead never wrote to always waits for your approval, even when you asked for it.
 
+- A "Slack inbox" row under the Slack Orchestrator in the sidebar shows the Slack messages GoAhead
+  keeps for you, with unread counts. Open it to read your direct messages, group messages, mentions
+  and picked channels on your computer. New messages show as they arrive.
+
 ### Fixed
 
 - After a restart, a Slack conversation could become the Slack Orchestrator's own chat when you had
   not opened that chat yet. Slack conversations now stay separate.
+
+### Security
+
+- When another person in your Slack workspace also authorizes the GoAhead app, their private direct
+  and group messages can reach your computer. GoAhead now keeps only conversations that Slack confirms
+  you are in, and drops the rest.

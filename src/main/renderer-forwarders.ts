@@ -176,6 +176,12 @@ export function createRendererForwarders({
     sendToRenderer(window, IPC_ENDPOINTS.messaging.threadsChanged, change);
   }
 
+  function forwardMessagingInboxChanged(change: import("@openbot/contracts/ipc").MessagingInboxChanged): void {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) return;
+    sendToRenderer(window, IPC_ENDPOINTS.messaging.inboxChanged, change);
+  }
+
   function forwardHostStatus(status: import("@openbot/contracts/ipc").HostStatus): void {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) return;
@@ -240,6 +246,7 @@ export function createRendererForwarders({
     forwardGitHubConnectorStatus,
     forwardOnePasswordConnectorStatus,
     forwardMessagingThreadsChanged,
+    forwardMessagingInboxChanged,
     forwardHostStatus,
     forwardRemoteDesktopSessions,
     forwardServers,

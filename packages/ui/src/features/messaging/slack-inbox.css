@@ -1,0 +1,104 @@
+/* The person's local Slack inbox: a list of conversations beside the messages of the open one. */
+.slack-inbox-layout {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+}
+
+.slack-inbox-list {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  margin: 0;
+  overflow-y: auto;
+  padding: var(--openbot-space-2);
+  border-right: 1px solid var(--openbot-border);
+  list-style: none;
+}
+
+.slack-inbox-row.ui-button {
+  display: flex;
+  width: 100%;
+  height: auto;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: var(--openbot-space-2);
+  border-radius: var(--openbot-radius-sm);
+  padding: var(--openbot-space-2);
+  font-weight: 400;
+  text-align: left;
+}
+
+.slack-inbox-row-active.ui-button {
+  background: var(--openbot-bg-surface);
+}
+
+.slack-inbox-row-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding-top: 2px;
+  color: var(--openbot-text-muted);
+}
+
+.slack-inbox-row-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.slack-inbox-row-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 2px;
+}
+
+.slack-inbox-row-heading {
+  display: flex;
+  min-width: 0;
+  gap: var(--openbot-space-2);
+}
+
+.slack-inbox-row-place {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: var(--openbot-text-md);
+  line-height: var(--openbot-leading-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slack-inbox-row-unread .slack-inbox-row-place {
+  font-weight: 600;
+}
+
+.slack-inbox-row-time {
+  flex: 0 0 auto;
+  color: var(--openbot-text-readable);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-sm);
+}
+
+.slack-inbox-row-preview {
+  overflow: hidden;
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slack-inbox-messages {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.slack-inbox-note {
+  margin: 0;
+  padding: var(--openbot-space-4);
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-sm);
+}

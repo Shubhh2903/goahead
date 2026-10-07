@@ -2,6 +2,8 @@ import {
   type ConversationPage,
   LOCAL_SERVER_ID,
   type MessagingDraft,
+  type MessagingInboxPage,
+  type MessagingInboxWorkspace,
   type MessagingThreadSummary,
 } from "@openbot/contracts/ipc";
 import { currentText } from "@openbot/ui/text";
@@ -31,6 +33,17 @@ interface MessagingThreadsState {
   answering: string[];
 }
 
+interface MessagingInboxState {
+  /** One entry per workspace connected as the person. */
+  workspaces: MessagingInboxWorkspace[];
+  /** The inbox covers the workspace pane. */
+  open: boolean;
+  selection: { workspaceId: string; conversation: string } | null;
+  /** The open conversation, null while it loads or before one is chosen. */
+  page: MessagingInboxPage | null;
+  failed: boolean;
+}
+
 /**
  * The Slack conversations that this computer's agents answer, and the one the user opened. The view
  * is read-only: the agent answers in Slack, and approvals stay on the Slack buttons. Only the local
@@ -57,10 +70,57 @@ const MessagingThreads = createSimpleContext({
       drafts: [],
       answering: [],
     });
+    const [inbox, setInbox] = createStore<MessagingInboxState>({
+      workspaces: [],
+      open: false,
+      selection: null,
+      page: null,
+      failed: false,
+    });
     let disposed = false;
     // Each read replaces the one before it, so a slow answer never overwrites a newer one.
     let listReads = 0;
     let pageReads = 0;
+    let inboxReads = 0;
+    let inboxPageReads = 0;
+
+    // A failed read keeps the last inbox. The next change reads again.
+    const reloadInbox = () => {
+      if (!supported) return;
+      const read = ++inboxReads;
+      void port()
+        .listInbox()
+        .then((workspaces) => {
+          if (disposed || read !== inboxReads) return;
+          setInbox((draft) => {
+            draft.workspaces = workspaces;
+          });
+        })
+        .catch(() => undefined);
+    };
+
+    /** Reads one inbox conversation. Main marks it read, so the list reads again after it. */
+    const loadInboxPage = (workspaceId: string, conversation: string) => {
+      const read = ++inboxPageReads;
+      setInbox((draft) => {
+        draft.failed = false;
+      });
+      void port()
+        .readInboxConversation({ workspaceId, conversation, limit: PAGE_LIMIT })
+        .then((page) => {
+          if (disposed || read !== inboxPageReads) return;
+          setInbox((draft) => {
+            draft.page = page;
+          });
+          reloadInbox();
+        })
+        .catch(() => {
+          if (disposed || read !== inboxPageReads) return;
+          setInbox((draft) => {
+            draft.failed = true;
+          });
+        });
+    };
 
     // A failed read keeps the last list. The next change reads again. A draft changes its thread, so
     // the drafts are read with the list.
@@ -173,19 +233,64 @@ const MessagingThreads = createSimpleContext({
         if (state.selectedId === threadId) loadPage(threadId);
       });
       onCleanup(unsubscribe);
+      // A new message shows at once. The open conversation reads again only while the person can see
+      // it, because reading marks it read.
+      const stopInbox = port().onInboxChanged(({ workspaceId }) => {
+        reloadInbox();
+        const selection = inbox.selection;
+        if (inbox.open && selection?.workspaceId === workspaceId && document.hasFocus() && !usage.state.serverId)
+          loadInboxPage(selection.workspaceId, selection.conversation);
+      });
+      onCleanup(stopInbox);
       reloadList();
+      reloadInbox();
     }
     onCleanup(() => {
       disposed = true;
     });
 
-    /** Opens one conversation over the workspace, as a channel does, and closes what it covers. */
-    function open(threadId: string): void {
+    /** Closes what a Slack view covers, as opening a channel does. */
+    function coverWorkspace(): void {
       setAgentSetupOpen(false);
       setDirectTyping(false);
       clearDirectSelection();
       usage.dismissUsage();
       channels.close();
+    }
+
+    function closeInbox(): void {
+      if (!inbox.open) return;
+      inboxPageReads += 1;
+      setInbox((draft) => {
+        draft.open = false;
+        draft.selection = null;
+        draft.page = null;
+        draft.failed = false;
+      });
+    }
+
+    /** Opens the inbox over the workspace. No conversation is read until the person picks one. */
+    function openInbox(): void {
+      coverWorkspace();
+      closeThread();
+      setInbox((draft) => {
+        draft.open = true;
+      });
+      reloadInbox();
+    }
+
+    function selectInboxConversation(workspaceId: string, conversation: string): void {
+      setInbox((draft) => {
+        draft.selection = { workspaceId, conversation };
+        draft.page = null;
+      });
+      loadInboxPage(workspaceId, conversation);
+    }
+
+    /** Opens one conversation over the workspace, as a channel does, and closes what it covers. */
+    function open(threadId: string): void {
+      coverWorkspace();
+      closeInbox();
       setState((draft) => {
         draft.selectedId = threadId;
         draft.page = null;
@@ -193,7 +298,13 @@ const MessagingThreads = createSimpleContext({
       loadPage(threadId);
     }
 
+    /** Closes the open thread and the inbox. */
     function close(): void {
+      closeThread();
+      closeInbox();
+    }
+
+    function closeThread(): void {
       if (state.selectedId === null) return;
       pageReads += 1;
       setState((draft) => {
@@ -214,6 +325,14 @@ const MessagingThreads = createSimpleContext({
       },
       selectedThread: () => state.threads.find((thread) => thread.threadId === state.selectedId),
       answerDraft,
+      inbox,
+      openInbox,
+      selectInboxConversation,
+      retryInbox: () => {
+        const selection = inbox.selection;
+        if (selection) loadInboxPage(selection.workspaceId, selection.conversation);
+        else reloadInbox();
+      },
     };
   },
 });

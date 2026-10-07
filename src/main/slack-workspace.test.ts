@@ -135,6 +135,8 @@ class FakeSlack {
   readonly revoked = new Set<string>();
   /** Direct messages the bot is in, such as one it opened to send a message for someone. */
   readonly botMember = new Set<string>();
+  /** Conversations the connected person is not in, such as another person's direct messages. */
+  readonly notPersonMember = new Set<string>();
   #server: Server | null = null;
   #ts = 1000;
   origin = "";
@@ -171,6 +173,8 @@ class FakeSlack {
           return reply({ user: { name: "alice", profile: { display_name: "Alice" } } });
         // The bot is not in the direct messages between the user and other people.
         case "conversations.info":
+          if (token === USER_TOKEN && this.notPersonMember.has(params.channel ?? ""))
+            return response.end(JSON.stringify({ ok: false, error: "channel_not_found" }));
           if (token === BOT_TOKEN && params.channel?.startsWith("D-") && !this.botMember.has(params.channel))
             return response.end(JSON.stringify({ ok: false, error: "channel_not_found" }));
           return reply({ channel: { name: "general" } });
@@ -788,10 +792,18 @@ describe.sequential("OpenBot Slack app end to end", () => {
     await message("Ev33", "channel", "C1", "UBOB", "random chatter", "1791000203.000000");
     await message("Ev34", "channel", "C5", "UBOB", "Launch moves to 5 PM", "1791000204.000000");
     await message("Ev35", "im", "D-UPREET", "UME", "Sure, after lunch", "1791000205.000000");
+    // Another installed person's private messages reach this host too, and are never kept.
+    slack.notPersonMember.add("D-PREET-ANA");
+    slack.notPersonMember.add("G-PREET-ANA");
+    await message("Ev36", "im", "D-PREET-ANA", "UANA", "Preet, the salary letter is ready", "1791000206.000000");
+    await message("Ev37", "mpim", "G-PREET-ANA", "UANA", "Private plans", "1791000207.000000");
     await waitFor(() => inbox.read(connectionId, "D-UPREET", null, 50).length === 2);
     await waitFor(() => inbox.read(connectionId, "C5", null, 50).length === 2);
     await waitFor(() => inbox.read(connectionId, "C1", null, 50).length === 1);
     expect(inbox.read(connectionId, "G1", null, 50).map((entry) => entry.kind)).toEqual(["group"]);
+    await waitFor(() => slack.of("conversations.info").some((call) => call.params.channel === "G-PREET-ANA"));
+    expect(inbox.read(connectionId, "D-PREET-ANA", null, 50)).toEqual([]);
+    expect(inbox.read(connectionId, "G-PREET-ANA", null, 50)).toEqual([]);
     expect(inbox.read(connectionId, "C1", null, 50).map((entry) => [entry.kind, entry.text])).toEqual([
       ["mention", "@UME please check the deploy"],
     ]);
@@ -916,6 +928,33 @@ describe.sequential("OpenBot Slack app end to end", () => {
     });
     expect(after).toMatchObject({ unread: [{ conversation: "C1" }, { conversation: "G1" }] });
     finish(turns[2]);
+
+    // The desktop shows the inbox, read-only. A kept message tells the desktop at once; other channel
+    // talk is not in it; reading a conversation there marks it read.
+    const inboxChanges: string[] = [];
+    const stopWatching = messaging.onInboxChanged((workspaceId) => inboxChanges.push(workspaceId));
+    await message("Ev60", "channel", "C1", "UBOB", "more random chatter", "1791000500.000000");
+    await message("Ev61", "im", "D-UDAN", "UDAN", "Are you free at 3?", "1791000501.000000");
+    await waitFor(() => inboxChanges.includes("T1"));
+    stopWatching();
+    const [desktopInbox] = await messaging.listInbox();
+    expect(desktopInbox).toMatchObject({ workspaceId: "T1", workspaceName: "Test workspace", agentId: agent.id });
+    expect(desktopInbox?.conversations[0]).toMatchObject({
+      conversation: "D-UDAN",
+      kind: "direct",
+      place: "Alice",
+      unreadCount: 1,
+      preview: "Are you free at 3?",
+    });
+    expect(JSON.stringify(desktopInbox)).not.toContain("more random chatter");
+    expect(await messaging.readInboxConversation("T1", "D-UDAN")).toMatchObject({
+      place: "Alice",
+      messages: [{ isOwn: false, text: "Are you free at 3?" }],
+    });
+    expect(
+      (await messaging.listInbox())[0]?.conversations.find((item) => item.conversation === "D-UDAN")?.unreadCount,
+    ).toBe(0);
+    await expect(messaging.readInboxConversation("T1", "C9")).rejects.toThrow("not in the GoAhead inbox");
 
     // A picked channel that is no longer picked loses its kept messages; a mention stays.
     messaging.setSlackWatchedChannels("T1", []);

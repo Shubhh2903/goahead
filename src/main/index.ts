@@ -266,6 +266,7 @@ const {
   forwardGitHubConnectorStatus,
   forwardOnePasswordConnectorStatus,
   forwardMessagingThreadsChanged,
+  forwardMessagingInboxChanged,
   forwardHostStatus,
   forwardRemoteDesktopSessions,
   forwardServers,
@@ -874,6 +875,7 @@ if (!hasSingleInstanceLock) {
       built.githubConnector.onChanged(forwardGitHubConnectorStatus);
       built.onePasswordConnector.onChanged(forwardOnePasswordConnectorStatus);
       built.messaging.onThreadChanged((threadId) => forwardMessagingThreadsChanged({ threadId }));
+      built.messaging.onInboxChanged((workspaceId) => forwardMessagingInboxChanged({ workspaceId }));
       remoteServers.on("changed", forwardServers);
       remoteServers.on("agent", (serverId, event, bufferedLive) => {
         forwardAgentEvent(serverId, event, bufferedLive);

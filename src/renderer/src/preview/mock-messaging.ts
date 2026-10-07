@@ -58,6 +58,49 @@ function previewThreads(agentId: string): Array<{ summary: MessagingThreadSummar
   ];
 }
 
+/** The preview person's local Slack inbox: a direct message, a mention and a picked channel. */
+function previewInbox() {
+  const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const message = (id: string, from: string, text: string, minutes: number, isOwn = false) => ({
+    id,
+    from,
+    isOwn,
+    text,
+    sentAt: at(minutes),
+    thread: null,
+  });
+  return [
+    {
+      workspaceId: PREVIEW_WORKSPACE.workspaceId,
+      conversation: "D0PREVIEWPREET",
+      kind: "direct" as const,
+      place: "Preet",
+      unreadCount: 1,
+      latestAt: at(3),
+      latestFrom: "Preet",
+      preview: "Are you free at 3?",
+      messages: [
+        message("1.000001", "you", "Lunch at 1?", 40, true),
+        message("1.000002", "Preet", "Are you free at 3?", 3),
+      ],
+    },
+    {
+      workspaceId: PREVIEW_WORKSPACE.workspaceId,
+      conversation: "C0PREVIEWLAU",
+      kind: "channel" as const,
+      place: "#launch",
+      unreadCount: 2,
+      latestAt: at(12),
+      latestFrom: "Ana",
+      preview: "The demo moves to Friday.",
+      messages: [
+        message("2.000001", "Ana", "Kickoff notes are in the doc.", 30),
+        message("2.000002", "Ana", "The demo moves to Friday.", 12),
+      ],
+    },
+  ];
+}
+
 /** The Slack workspaces of the preview host. Connecting Slack connects a preview workspace at once. */
 /** `orchestrator` names the preview agent that stands in for the Slack Orchestrator. */
 export function createMockMessaging(orchestrator: () => string): MessagingDesktopApi {
@@ -65,6 +108,9 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
   let threads: ReturnType<typeof previewThreads> = [];
   const changeListeners = new Set<(change: MessagingThreadsChanged) => void>();
   const answered = new Set<string>();
+  const inbox = previewInbox();
+  const inboxRead = new Set<string>();
+  const inboxListeners = new Set<(change: { workspaceId: string }) => void>();
   const findThread = (threadId: string) => {
     const found = threads.find((candidate) => candidate.summary.threadId === threadId);
     if (!found) throw new Error(sourceText("error.messaging.threadUnavailable"));
@@ -124,6 +170,33 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
       const current = connections.get(workspaceId);
       if (!current) throw new Error(sourceText("error.messaging.notConnected"));
       change(workspaceId, { sendGuards: { ...current.sendGuards, ...guards } });
+    },
+    listInbox: async () =>
+      clone(
+        [...connections.values()]
+          .filter((connection) => connection.userId)
+          .map((connection) => ({
+            workspaceId: connection.workspaceId,
+            workspaceName: connection.workspaceName,
+            agentId: connection.orchestratorAgentId,
+            conversations: inbox
+              .filter((item) => item.workspaceId === connection.workspaceId)
+              .map(({ messages, workspaceId: _workspace, ...conversation }) => ({
+                ...conversation,
+                unreadCount: inboxRead.has(conversation.conversation) ? 0 : conversation.unreadCount,
+              })),
+          })),
+      ),
+    readInboxConversation: async ({ workspaceId, conversation }) => {
+      const found = inbox.find((item) => item.workspaceId === workspaceId && item.conversation === conversation);
+      if (!found) throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
+      inboxRead.add(conversation);
+      for (const listener of inboxListeners) listener({ workspaceId });
+      return clone({ workspaceId, conversation, place: found.place, messages: found.messages });
+    },
+    onInboxChanged: (listener) => {
+      inboxListeners.add(listener);
+      return () => inboxListeners.delete(listener);
     },
     listDrafts: async () =>
       clone(

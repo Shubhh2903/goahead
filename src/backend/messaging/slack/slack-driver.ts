@@ -56,6 +56,7 @@ class SlackAdapter implements MessagingAdapter {
   readonly #names = new Map<string, Promise<string>>();
   readonly #places = new Map<string, Promise<string>>();
   readonly #own = new Map<string, Promise<boolean>>();
+  readonly #personIn = new Map<string, boolean>();
   #botUserId = "";
   #workspaceId = "";
 
@@ -324,6 +325,25 @@ class SlackAdapter implements MessagingAdapter {
       this.#own.set(platformChannelId, own);
     }
     return own;
+  }
+
+  /**
+   * Fails closed: without the person's token, or on any failure, the answer is no. Only a clear answer
+   * is remembered, so a network error does not drop the conversation for good.
+   */
+  async isPersonConversation(platformChannelId: string): Promise<boolean> {
+    const known = this.#personIn.get(platformChannelId);
+    if (known !== undefined) return known;
+    if (!this.#userApi) return false;
+    try {
+      await this.#userApi.call("conversations.info", { channel: platformChannelId });
+      this.#personIn.set(platformChannelId, true);
+      return true;
+    } catch (error) {
+      if (error instanceof SlackApiError && NOT_OWN_CONVERSATION.has(error.code))
+        this.#personIn.set(platformChannelId, false);
+      return false;
+    }
   }
 
   /** The user token is only there when the install gave one; a send as the user without it fails. */

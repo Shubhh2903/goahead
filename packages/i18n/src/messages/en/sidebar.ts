@@ -120,4 +120,6 @@ export const messages = defineMessages("sidebar", {
     one: "{count} message waits for your approval",
     other: "{count} messages wait for your approval",
   },
+  "sidebar.messagingInbox.row": "Slack inbox",
+  "sidebar.messagingInbox.unread": { one: "{count} unread message", other: "{count} unread messages" },
 });

@@ -24,4 +24,13 @@ export const messages = {
   "messaging.draft.deny": "Recusar",
   "messaging.draft.sending": "Enviando…",
   "messaging.draft.failed": "Não foi possível responder ao rascunho.",
+  "messaging.inbox.title": "Caixa de entrada do Slack",
+  "messaging.inbox.conversations": "Conversas da caixa de entrada",
+  "messaging.inbox.messages": "Mensagens",
+  "messaging.inbox.empty":
+    "Ainda não há mensagens do Slack. O GoAhead guarda suas mensagens diretas, mensagens de grupo, menções e os canais que você escolher.",
+  "messaging.inbox.choose": "Escolha uma conversa para lê-la.",
+  "messaging.inbox.loadFailed": "A caixa de entrada do Slack não carregou.",
+  "messaging.inbox.unread": { one: "{count} não lida", other: "{count} não lidas" },
+  "messaging.inbox.readOnly": "Somente leitura. Responda no Slack ou peça ao GoAhead na sua mensagem direta com ele.",
 } as const satisfies PartialTranslation<typeof source>;

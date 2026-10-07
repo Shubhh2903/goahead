@@ -10,6 +10,7 @@ import {
   parseAnswerMessagingDraftInput,
   parseMarkMessagingThreadReadInput,
   parseMessagingThreadPageInput,
+  parseReadInboxConversationInput,
   parseSetSlackEnabledInput,
   parseSetSlackSendGuardsInput,
   parseSetSlackWatchedChannelsInput,
@@ -32,6 +33,8 @@ interface MessagingIpcDependencies {
     | "listDrafts"
     | "answerDraft"
     | "setSendGuards"
+    | "listInbox"
+    | "readInboxConversation"
   >;
   agents: Pick<AgentService, "readThreadPageFor" | "threadReadState" | "markThreadRead">;
   host: Pick<HostService, "agentReaderId">;
@@ -75,6 +78,11 @@ export function messagingIpcHandlers({
         messaging.setSlackWatchedChannels(workspaceId, channels),
       ),
       listDrafts: handler(() => messaging.listDrafts()),
+      // Read-only: the inbox never sends.
+      listInbox: handler(() => messaging.listInbox()),
+      readInboxConversation: payloadHandler(parseReadInboxConversationInput, ({ workspaceId, conversation, limit }) =>
+        messaging.readInboxConversation(workspaceId, conversation, limit),
+      ),
       setSlackSendGuards: payloadHandler(parseSetSlackSendGuardsInput, ({ workspaceId, ...change }) =>
         messaging.setSendGuards(workspaceId, change),
       ),

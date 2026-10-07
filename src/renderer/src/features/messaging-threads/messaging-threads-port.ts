@@ -4,7 +4,15 @@ import type { OpenBotDesktopApi } from "@openbot/contracts/ipc";
 export interface MessagingThreadsPort {
   messaging: Pick<
     OpenBotDesktopApi["messaging"],
-    "listThreads" | "readThreadPage" | "markThreadRead" | "onThreadsChanged" | "listDrafts" | "answerDraft"
+    | "listThreads"
+    | "readThreadPage"
+    | "markThreadRead"
+    | "onThreadsChanged"
+    | "listDrafts"
+    | "answerDraft"
+    | "listInbox"
+    | "readInboxConversation"
+    | "onInboxChanged"
   >;
   openAttachment: OpenBotDesktopApi["agent"]["openAttachment"];
   openUrl: OpenBotDesktopApi["openUrl"];

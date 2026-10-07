@@ -154,6 +154,11 @@ export interface MessagingAdapter {
    * the user and someone else arrives too, and it must never be answered as a request to OpenBot.
    */
   isOwnConversation?(platformChannelId: string): Promise<boolean>;
+  /**
+   * Whether the connected person is in the conversation. Slack sends one workspace's user events to
+   * one host, so another installed person's private messages can arrive too; they must never be kept.
+   */
+  isPersonConversation?(platformChannelId: string): Promise<boolean>;
   /** Earlier messages of the conversation, oldest first, after `afterId` and before `beforeId`. */
   history(
     platformChannelId: string,

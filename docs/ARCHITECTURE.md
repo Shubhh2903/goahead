@@ -1622,9 +1622,10 @@ transport for its events. `messaging-types.ts` is the seam; the core never reads
 
 - **Storage.** Migration 25 adds `projection_messaging_connections` (one per workspace, with its
   orchestrator agent) and `projection_messaging_threads` (one per external conversation, with the
-  agent that answers it).
-  Tokens are not in the database: `MessagingCredentialStore` keeps the bot token encrypted by
-  `safeStorage`, keyed by connection, and only its state crosses IPC.
+  agent that answers it). Migration 28 adds the local inbox (below).
+  Tokens are not in the database: `MessagingCredentialStore` keeps the bot token, and the user token
+  when the install gave one, encrypted by `safeStorage`, keyed by connection, and only its state
+  crosses IPC.
 - **Orchestrator.** A message in a thread that has a link goes to the link's agent. A new conversation
   goes to the workspace's orchestrator; without one, Slack is told that no agent answers. The
   orchestrator is a normal agent (`slack-orchestrator.ts`): its description is its standing remit, and
@@ -1636,7 +1637,7 @@ transport for its events. `messaging-types.ts` is the seam; the core never reads
   that section collapsed.
 - **Execution threads.** Each Slack thread is a link with its own execution thread in
   `projection_threads`, as a channel-agent pair is. A direct message is answered in a thread under
-  it, so each one is its own conversation. `MessagingThreads.event` takes that thread's conversation
+  it, but all direct messages from one person are one conversation (`DIRECT_CONVERSATION_KEY`). `MessagingThreads.event` takes that thread's conversation
   and turn events, so the public chat, the renderer and Team peers never see them. Approvals still
   reach the host.
 - **Deliveries.** An external message is a mailbox message from `user` with a `messaging` origin
@@ -1661,11 +1662,50 @@ transport for its events. `messaging-types.ts` is the seam; the core never reads
   `/invite`.
 - **Deduplication.** An in-memory set drops a redelivered event at once; the mailbox idempotency key
   covers a restart. Events that arrive while no socket is open are lost after Slack's retries.
+- **Local inbox.** With the user token, Slack also sends the messages the person can see. The
+  transport turns each one into a candidate (`slackInboxCandidate`), apart from the request path, and
+  `MessagingService.#keep` decides: direct and group direct messages (not the one with GoAhead),
+  mentions of the person, and the channels they pick. `MessagingInboxStore`
+  (`messaging-inbox-store.ts`) owns `projection_messaging_inbox`,
+  `projection_messaging_watched_channels` and `projection_messaging_inbox_reads` (GoAhead's read mark
+  per conversation). Rows hold Slack text, so they are written directly and never go to the event log.
+  Rows older than 30 days are deleted every 6 hours; disconnect deletes the workspace's rows. A newly
+  picked channel is filled once from `conversations.history` (`recentMessages`), one call a minute per
+  workspace, because of Slack's limit for apps outside its Marketplace.
+- **Read tools.** `slack_list_unread` and `slack_read_conversation` (`messaging-read-tools.ts`) go
+  through `MessagingThreads.readInbox` to the reader that `MessagingService` sets with
+  `setInboxReader`. They answer only in the connected person's own direct message with GoAhead, while
+  a turn that person started runs: an answer in a channel is public, and nobody else may read the
+  inbox. Each result carries `SLACK_INBOX_UNTRUSTED_NOTE`.
+- **Sends.** `slack_send_message` goes through `MessagingThreads.requestSend` to `MessagingService`,
+  which owns the drafts, in memory. The connected person's own request to someone GoAhead already
+  wrote to goes out at once, as them. Every other send is a draft that only that person approves,
+  with a Slack button or on the desktop (`listDrafts`, `answerDraft`); both reach `#finishApproval`,
+  and the first answer counts. Anyone else's request goes out as the app, with a first line that names
+  who asked. An answer in that conversation comes back to the asking thread (`#answersAppSend`,
+  `#observe`). Each send is recorded in `orchestration_events` (`messaging_send`).
+- **Send guards.** `MessagingSendGuardStore` (`messaging-send-guards.ts`) keeps the pause and quiet
+  hours per workspace in `openbot-messaging-send-guards-v1.json` in the user data folder; a change
+  holds in memory before it is saved. `#sendBlock` checks the pause, quiet hours and
+  `SEND_HOURLY_LIMIT` (counted from the audit log) when a send is asked for, when it is approved, and
+  right before the post. A blocked approval keeps the draft. Behavior: [messaging.md](messaging.md).
 - **Screen.** **Server settings → Connectors → Slack** on the computer that runs the agents shows each
   workspace and its orchestrator, and a two-step dialog connects the workspace and adds the
-  orchestrator on the model the user picks (`messaging:*`). A remote server shows
-  no Slack page, because the install returns to the host's own browser. A live connection counts as
-  use, so a hosted server does not idle out.
+  orchestrator on the model the user picks. It also shows the inbox channel picker and the send
+  guards. A remote server shows no Slack page, because the install returns to the host's own browser.
+  A live connection counts as use, so a hosted server does not idle out.
+- **Desktop conversations.** The sidebar lists each Slack conversation under the agent that answers
+  it (`SidebarMessagingThreads.tsx`), with unread and waiting-draft marks. Opening one shows it
+  read-only (`src/renderer/src/features/messaging-threads/`), with a `SlackDraftCard`
+  (`@openbot/ui`) for each draft that waits. These use the `messaging` IPC group, which only the
+  host's own desktop has: `list-threads`, `read-thread-page`, `mark-thread-read`, the
+  `threads-changed` event, `list-slack-channels`, `set-slack-watched-channels`, `list-drafts`,
+  `answer-draft`, `set-slack-send-guards`, `list-inbox`, `read-inbox-conversation` and the
+  `inbox-changed` event. `read-thread-page` refuses a thread that is not a Slack conversation.
+- **Desktop inbox.** A "Slack inbox" row is the first child of the orchestrator in the sidebar. It
+  opens a read-only pane (`MessagingInboxView.tsx`, with `SlackInboxList` from `@openbot/ui`) over the
+  same local inbox. `inbox-changed` fires when a new message is kept. Reading a conversation there
+  moves the same read mark that `slack_list_unread` uses. These calls only read; none sends.
 
 ## Skill folders and MCP configuration
 

@@ -36,6 +36,20 @@ export interface InboxUnread {
   latestAuthorName: string;
 }
 
+/** One conversation of the inbox, for the desktop list. */
+export interface InboxConversation {
+  platformChannelId: string;
+  kind: InboxKind;
+  unreadCount: number;
+  latestAt: string;
+  latestFrom: string;
+  /** The newest message, from either side. */
+  preview: string;
+}
+
+/** The desktop list shows at most this many conversations of one workspace. */
+const CONVERSATION_LIST_LIMIT = 200;
+
 export interface WatchedChannel {
   platformChannelId: string;
   name: string;
@@ -53,9 +67,9 @@ export class MessagingInboxStore {
     this.#database = database;
   }
 
-  /** Keeps one message. The same message from a second event changes nothing. */
-  add(entry: InboxEntry): void {
-    this.#database.connection
+  /** Keeps one message, and says whether it is new. The same message from a second event changes nothing. */
+  add(entry: InboxEntry): boolean {
+    const result = this.#database.connection
       .prepare(
         `INSERT OR IGNORE INTO projection_messaging_inbox
            (connection_id, platform_channel_id, platform_message_id, thread_key, kind, author_id, author_name,
@@ -73,6 +87,7 @@ export class MessagingInboxStore {
         entry.text,
         entry.sentAt,
       );
+    return Number(result.changes) > 0;
   }
 
   /** Deletes every message sent before the time, and returns how many went. */
@@ -179,6 +194,50 @@ export class MessagingInboxStore {
           count: requiredNumberColumn(row, "count"),
           latestAt: requiredStringColumn(row, "latest_at"),
           latestAuthorName: optionalStringColumn(row, "latest_author_name") ?? "",
+        },
+      ];
+    });
+  }
+
+  /**
+   * Every conversation of the inbox, for the desktop: the ones with unread messages first, then the
+   * newest. The person's own messages never count as unread. `latestFrom` is the newest author other
+   * than the person, so a direct message names the other side.
+   */
+  conversations(connectionId: string, ownUserId: string): InboxConversation[] {
+    return databaseRows(
+      this.#database.connection
+        .prepare(
+          `SELECT m.platform_channel_id, MAX(m.kind) AS kind, MAX(m.sent_at) AS latest_at,
+             SUM(CASE WHEN m.author_id != ? AND (r.through_message_id IS NULL OR m.platform_message_id > r.through_message_id)
+                 THEN 1 ELSE 0 END) AS unread_count,
+             (SELECT n.text FROM projection_messaging_inbox n
+              WHERE n.connection_id = m.connection_id AND n.platform_channel_id = m.platform_channel_id
+              ORDER BY n.platform_message_id DESC LIMIT 1) AS preview,
+             (SELECT n.author_name FROM projection_messaging_inbox n
+              WHERE n.connection_id = m.connection_id AND n.platform_channel_id = m.platform_channel_id
+                AND n.author_id != ?
+              ORDER BY n.platform_message_id DESC LIMIT 1) AS latest_from
+           FROM projection_messaging_inbox m
+           LEFT JOIN projection_messaging_inbox_reads r
+             ON r.connection_id = m.connection_id AND r.platform_channel_id = m.platform_channel_id
+           WHERE m.connection_id = ?
+           GROUP BY m.platform_channel_id
+           ORDER BY (unread_count > 0) DESC, latest_at DESC
+           LIMIT ?`,
+        )
+        .all(ownUserId, ownUserId, connectionId, CONVERSATION_LIST_LIMIT),
+    ).flatMap((row) => {
+      const kind = requiredStringColumn(row, "kind");
+      if (!isOneOf(INBOX_KINDS, kind)) return [];
+      return [
+        {
+          platformChannelId: requiredStringColumn(row, "platform_channel_id"),
+          kind,
+          unreadCount: requiredNumberColumn(row, "unread_count"),
+          latestAt: requiredStringColumn(row, "latest_at"),
+          latestFrom: optionalStringColumn(row, "latest_from") ?? "",
+          preview: optionalStringColumn(row, "preview") ?? "",
         },
       ];
     });
