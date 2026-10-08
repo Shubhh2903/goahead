@@ -527,9 +527,6 @@ jobs:
   windows:
     name: Build ${{ github.event_name == 'push' && 'signed' || 'unsigned' }} Windows x64 release
     needs: validate
-    # GoAhead ships macOS only. Windows signing here belongs to upstream's Azure tenant, so this job
-    # runs only when the repository variable `BUILD_OTHER_PLATFORMS` is `true`.
-    if: vars.BUILD_OTHER_PLATFORMS == 'true'
     runs-on: windows-2025
     timeout-minutes: 35
     # This job reads no secrets. The environment limits a tag build to tags, and the Azure federated
@@ -696,9 +693,6 @@ jobs:
   linux:
     name: Build unsigned Linux ${{ matrix.arch }} release
     needs: validate
-    # GoAhead ships macOS only. Linux and Docker builds are off by default: this job runs only when
-    # the repository variable `BUILD_OTHER_PLATFORMS` is `true`.
-    if: vars.BUILD_OTHER_PLATFORMS == 'true'
     # Each architecture builds on a native runner: the launch check runs the packaged binary, and
     # the provider checks run each pinned CLI's `--version`, so neither can cross-build.
     # `suffix` is electron-builder's own name for the target: it names the unpacked directory
@@ -844,7 +838,6 @@ jobs:
   docker:
     name: Build Docker image ${{ matrix.platform }}
     needs: [validate, linux]
-    if: vars.BUILD_OTHER_PLATFORMS == 'true'
     strategy:
       fail-fast: true
       matrix:
@@ -934,13 +927,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: [validate, macos, windows, linux, docker]
-    # A skipped need skips this job by default, so the condition names each result. With the other
-    # platforms off, only the two signed macOS builds must succeed.
-    if: >-
-      github.event_name == 'push' && !cancelled() &&
-      needs.validate.result == 'success' && needs.macos.result == 'success' &&
-      (vars.BUILD_OTHER_PLATFORMS != 'true' ||
-        (needs.windows.result == 'success' && needs.linux.result == 'success' && needs.docker.result == 'success'))
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -982,21 +969,18 @@ jobs:
           rm release-assets/macos/latest-mac.yml release-assets/macos-x64/latest-mac.yml
 
       - name: Download Windows release assets
-        if: vars.BUILD_OTHER_PLATFORMS == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-windows
           path: release-assets/windows
 
       - name: Download Linux x64 release assets
-        if: vars.BUILD_OTHER_PLATFORMS == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-linux
           path: release-assets/linux
 
       - name: Download Linux arm64 release assets
-        if: vars.BUILD_OTHER_PLATFORMS == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-linux-arm64
@@ -1004,17 +988,13 @@ jobs:
 
       - name: Generate combined checksums
         shell: bash
-        env:
-          BUILD_OTHER_PLATFORMS: ${{ vars.BUILD_OTHER_PLATFORMS }}
         run: |
-          # `cat` fails on a missing file, so each platform that was built must have its checksums.
-          sums=(release-assets/macos/SHA256SUMS-macos.txt release-assets/macos-x64/SHA256SUMS-macos-x64.txt)
-          if [[ "$BUILD_OTHER_PLATFORMS" == "true" ]]; then
-            sums+=(release-assets/windows/SHA256SUMS-windows.txt \
-              release-assets/linux/SHA256SUMS-linux.txt \
-              release-assets/linux-arm64/SHA256SUMS-linux-arm64.txt)
-          fi
-          cat "${sums[@]}" > release-assets/SHA256SUMS.txt
+          cat release-assets/macos/SHA256SUMS-macos.txt \
+            release-assets/macos-x64/SHA256SUMS-macos-x64.txt \
+            release-assets/windows/SHA256SUMS-windows.txt \
+            release-assets/linux/SHA256SUMS-linux.txt \
+            release-assets/linux-arm64/SHA256SUMS-linux-arm64.txt \
+            > release-assets/SHA256SUMS.txt
 
       # Only this step gets the write token: the steps before it run dependency code.
       - name: Publish GitHub Release
@@ -1042,7 +1022,7 @@ jobs:
   docker-publish:
     name: Publish Docker image
     needs: [validate, docker, publish]
-    if: github.event_name == 'push' && vars.BUILD_OTHER_PLATFORMS == 'true'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
