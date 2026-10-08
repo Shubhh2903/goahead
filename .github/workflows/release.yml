@@ -297,6 +297,10 @@ jobs:
       # The code is the same for both architectures, so the check runs once.
       - name: Run repository check
         if: matrix.arch == 'arm64'
+        # The account site's `vite build` needs more than Node's default heap of about 2 GB on this
+        # runner. The runner image also sets `--max-http-header-size`; keep it.
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768 --max-old-space-size=4096
         run: |
           bun run check:desktop
           bun run test:desktop -- --maxWorkers=2
