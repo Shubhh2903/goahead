@@ -20,7 +20,7 @@ import {
   type RemoteSession,
   type RemoteSessionTicket,
 } from "@openbot/contracts/remote-control-plane";
-import { isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
+import { isBoolean, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import {
   REMOTE_TICKET_AUDIENCE,
   type RemoteMemberRole,
@@ -358,18 +358,52 @@ export class CentralAuthManager extends EventEmitter<CentralAuthEvents> {
     );
   }
 
-  /** Unlinks a Slack workspace from this host, so Signal stops routing its events here. */
-  async unlinkSlackWorkspace(hostId: string, teamId: string): Promise<void> {
+  /**
+   * Unlinks a Slack workspace from this host, so Signal stops routing its events here. With
+   * `slackUserId`, only that person leaves, and the workspace's other people keep their routes.
+   */
+  async unlinkSlackWorkspace(
+    hostId: string,
+    teamId: string,
+    slackUserId?: string,
+  ): Promise<{ workspaceRemains: boolean }> {
     const machineToken = this.#teamHostTokens.get(hostId.toLowerCase());
     if (!machineToken) throw new Error(sourceText("error.auth.hostCredentialUnavailable"));
-    await this.#request(
+    return this.#request(
       `/v2/remote/hosts/${encodeURIComponent(hostId)}/slack-disconnect`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ machineToken, teamId }),
+        body: JSON.stringify({ machineToken, teamId, ...(slackUserId ? { slackUserId } : {}) }),
       },
-      () => undefined,
+      decodeSlackUnlinked,
+    );
+  }
+
+  /**
+   * Whether this host answers the people of a Slack workspace who do not use GoAhead, and the other
+   * connected people of the workspace.
+   */
+  slackDefaultStatus(hostId: string, teamId: string): Promise<SlackDefaultStatusReply> {
+    return this.#slackDefault(hostId, { teamId });
+  }
+
+  /** The default's owner hands the default over to another connected person. Answers the status after. */
+  handOverSlackDefault(hostId: string, teamId: string, slackUserId: string): Promise<SlackDefaultStatusReply> {
+    return this.#slackDefault(hostId, { teamId, slackUserId });
+  }
+
+  #slackDefault(hostId: string, body: { teamId: string; slackUserId?: string }): Promise<SlackDefaultStatusReply> {
+    const machineToken = this.#teamHostTokens.get(hostId.toLowerCase());
+    if (!machineToken) throw new Error(sourceText("error.auth.hostCredentialUnavailable"));
+    return this.#request(
+      `/v2/remote/hosts/${encodeURIComponent(hostId)}/slack-default`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ machineToken, ...body }),
+      },
+      decodeSlackDefaultStatus,
     );
   }
 
@@ -1046,6 +1080,31 @@ export class CentralAuthManager extends EventEmitter<CentralAuthEvents> {
       },
     });
   }
+}
+
+/** The account service's answer about a Slack workspace's default computer. */
+export interface SlackDefaultStatusReply {
+  isDefault: boolean;
+  people: Array<{ slackUserId: string }>;
+}
+
+// An account service from before multi-user Slack answers 204. The host then cannot know whether
+// other people still use the workspace, so it keeps the shared bot token.
+function decodeSlackUnlinked(value: unknown): { workspaceRemains: boolean } {
+  if (value === undefined) return { workspaceRemains: true };
+  const record = decodeRecord(value, "Slack unlink");
+  return { workspaceRemains: record.workspaceRemains !== false };
+}
+
+function decodeSlackDefaultStatus(value: unknown): SlackDefaultStatusReply {
+  const record = decodeRecord(value, "Slack default");
+  if (!isBoolean(record.isDefault) || !Array.isArray(record.people)) throw new Error("Invalid Slack default.");
+  return {
+    isDefault: record.isDefault,
+    people: record.people.map((person) => ({
+      slackUserId: requiredString(decodeRecord(person, "Slack person"), "slackUserId"),
+    })),
+  };
 }
 
 export function readCentralAuthApiUrl(value: string | undefined, fallback = "http://127.0.0.1:3100"): string {

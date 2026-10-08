@@ -33,3 +33,28 @@
 .messaging-thread-readonly {
   border-top: 1px solid var(--openbot-border);
 }
+
+/* The box that replies as the person in the open inbox conversation. */
+.messaging-inbox-reply {
+  display: grid;
+  gap: var(--openbot-space-2);
+  padding: var(--openbot-space-3) var(--openbot-space-4);
+  border-top: 1px solid var(--openbot-border);
+}
+
+.messaging-inbox-reply-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--openbot-space-2);
+}
+
+.messaging-inbox-reply-row .ui-textarea {
+  flex: 1;
+}
+
+.messaging-inbox-reply-error {
+  margin: 0;
+  color: var(--openbot-danger);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-sm);
+}

@@ -13,7 +13,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { join, resolve } from "node:path";
 import type { AgentEvent, AgentSummary } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isString } from "@openbot/contracts/runtime-values";
-import { SLACK_BOT_SCOPES } from "@openbot/contracts/slack-app";
+import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-app";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentService } from "../agent-service";
 import {
@@ -27,16 +27,20 @@ import {
   waitFor,
 } from "../agent-service-test-harness";
 import { SidebarLayoutStore } from "../sidebar-layout-store";
-import { type MessagingCredentials, MessagingService } from "./messaging-service";
+import { type MessagingCredentials, MessagingService, type SlackRoutingPort } from "./messaging-service";
 import type { MessagingIngress } from "./messaging-types";
+import type { SlackAppPort } from "./slack/slack-connect";
 import { slackDriver } from "./slack/slack-driver";
 
 const REPORT_DIR = resolve(import.meta.dirname, "../../../.openbot-build/slack-e2e");
 const BOT_TOKEN = "xoxb-1111-2222-testbottoken";
+const USER_TOKEN = "xoxp-1111-3333-testusertoken";
 
 interface SlackCall {
   method: string;
   params: Record<string, string>;
+  /** Which token made the call. */
+  as: "bot" | "user" | "none";
 }
 
 /** A Slack workspace that installed the OpenBot app: the Web API over HTTP, and its events. */
@@ -144,7 +148,8 @@ class FakeSlack {
     }
     const method = url.pathname.replace("/api/", "");
     const params = Object.fromEntries(new URLSearchParams(body.toString()));
-    this.calls.push({ method, params });
+    const token = request.headers.authorization?.replace("Bearer ", "");
+    this.calls.push({ method, params, as: token === BOT_TOKEN ? "bot" : token === USER_TOKEN ? "user" : "none" });
     if (this.rateLimitOnce === method) {
       this.rateLimitOnce = null;
       response.statusCode = 429;
@@ -152,7 +157,6 @@ class FakeSlack {
       response.end();
       return;
     }
-    const token = request.headers.authorization?.replace("Bearer ", "");
     const reply = (value: DynamicRecord, headers: Record<string, string> = {}) => {
       for (const [name, header] of Object.entries(headers)) response.setHeader(name, header);
       response.setHeader("content-type", "application/json");
@@ -162,7 +166,12 @@ class FakeSlack {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ ok: false, error }));
     };
-    if (token !== BOT_TOKEN || this.rejectBotToken) return fail("invalid_auth");
+    if (token === USER_TOKEN && method === "auth.test")
+      return reply(
+        { team_id: "T1", team: "Test workspace", user_id: "UOWNER", user: "owner" },
+        { "x-oauth-scopes": SLACK_USER_SCOPES.join(",") },
+      );
+    if ((token !== BOT_TOKEN && token !== USER_TOKEN) || this.rejectBotToken) return fail("invalid_auth");
     switch (method) {
       case "auth.test":
         return reply(
@@ -246,7 +255,15 @@ afterEach(async () => {
  * A workspace that installed the OpenBot app, as `completeSlackWorkspace` leaves it, with `agent` as
  * its orchestrator unless `orchestrator` is false.
  */
-async function connected(options: { autoComplete?: boolean; orchestrator?: boolean } = {}) {
+async function connected(
+  options: {
+    autoComplete?: boolean;
+    orchestrator?: boolean;
+    user?: boolean;
+    routing?: SlackRoutingPort;
+    slackApp?: SlackAppPort;
+  } = {},
+) {
   const started = await startService(root, { provider: "codex", autoComplete: options.autoComplete ?? true });
   service = started.service;
   const agent: AgentSummary = await started.store.getOrCreate("slack-agent");
@@ -272,10 +289,18 @@ async function connected(options: { autoComplete?: boolean; orchestrator?: boole
     drivers: [slackDriver({ origin: slack.origin, ingress: onlineIngress })],
     downloadsRoot: join(root, "messaging-downloads"),
     ingress: onlineIngress,
+    ...(options.routing ? { slackRouting: options.routing } : {}),
+    ...(options.slackApp ? { slackApp: options.slackApp } : {}),
   });
   const store = started.service.messaging.store;
   const { connectionId } = store.ensureConnection("slack", "T1", "Test workspace");
-  await credentials.set(connectionId, { botToken: BOT_TOKEN, botUserId: "UBOT", appId: "A1", workspaceId: "T1" });
+  await credentials.set(connectionId, {
+    botToken: BOT_TOKEN,
+    botUserId: "UBOT",
+    appId: "A1",
+    workspaceId: "T1",
+    ...(options.user ? { userToken: USER_TOKEN, userId: "UOWNER" } : {}),
+  });
   store.updateConnection(connectionId, {
     enabled: true,
     appId: "A1",
@@ -283,7 +308,22 @@ async function connected(options: { autoComplete?: boolean; orchestrator?: boole
   });
   await messaging.start();
   await waitFor(() => workspace()?.state === "connected");
-  return { ...started, agent, credentials, events, overview: workspace() };
+  return { ...started, agent, credentials, events, connectionId, overview: workspace() };
+}
+
+/** A direct message from Alice to the connected person, as the inbox keeps it. */
+function keepDirect(started: Awaited<ReturnType<typeof connected>>) {
+  started.service.messaging.inbox.add({
+    connectionId: started.connectionId,
+    platformChannelId: "D2",
+    platformMessageId: "900.000",
+    threadKey: null,
+    kind: "direct",
+    authorId: "UALICE",
+    authorName: "Alice",
+    text: "Are you there?",
+    sentAt: new Date().toISOString(),
+  });
 }
 
 function workspace() {
@@ -544,6 +584,86 @@ describe.sequential("Slack messaging end to end", () => {
     );
     expect(done).toHaveLength(1);
     report.teammateAnswer = { followUpInSlackThread: true, doneReactions: done.length };
+  });
+
+  it("reply goes out as the owner even when sends are paused", async () => {
+    const started = await connected({ user: true });
+    keepDirect(started);
+    await messaging?.setSendGuards("T1", { paused: true });
+
+    await messaging?.sendInboxReply({
+      workspaceId: "T1",
+      conversation: "D2",
+      threadKey: "900.000",
+      text: "  On my way  ",
+    });
+    const [reply] = slack.of("chat.postMessage");
+    expect(reply).toMatchObject({ as: "user", params: { channel: "D2", thread_ts: "900.000", text: "On my way" } });
+    // The send is on record, as each send is.
+    expect(started.service.messaging.store.sends().map((send) => [send.sender, send.platformChannelId])).toEqual([
+      ["user", "D2"],
+    ]);
+    report.inboxReply = { asUser: reply?.as === "user", whilePaused: true };
+  });
+
+  it("reply over 4000 characters is refused", async () => {
+    const started = await connected({ user: true });
+    keepDirect(started);
+    await expect(
+      messaging?.sendInboxReply({ workspaceId: "T1", conversation: "D2", text: "x".repeat(4_001) }),
+    ).rejects.toThrow();
+    await expect(messaging?.sendInboxReply({ workspaceId: "T1", conversation: "D2", text: "   " })).rejects.toThrow(
+      "The message has no text.",
+    );
+    expect(slack.of("chat.postMessage")).toEqual([]);
+  });
+
+  it("reply without a user token is refused", async () => {
+    const started = await connected();
+    keepDirect(started);
+    await expect(messaging?.sendInboxReply({ workspaceId: "T1", conversation: "D2", text: "Hello" })).rejects.toThrow(
+      "Connect the Slack workspace as you in GoAhead",
+    );
+    expect(slack.of("chat.postMessage")).toEqual([]);
+  });
+
+  it("disconnect sends the owner's Slack user id", async () => {
+    const left: Array<[string, string]> = [];
+    const routing: SlackRoutingPort = {
+      unlinkPerson: async (workspaceId, slackUserId) => {
+        left.push([workspaceId, slackUserId]);
+        return { workspaceRemains: true };
+      },
+      status: async () => ({ isDefault: true, people: [{ slackUserId: "UOWNER" }, { slackUserId: "UPREET" }] }),
+      handOver: async () => ({ isDefault: false, people: [] }),
+    };
+    await connected({ user: true, routing });
+    // The owner is left out of the people to hand over to; the others get their Slack name.
+    expect(await messaging?.slackRouting("T1")).toEqual({
+      isDefault: true,
+      people: [{ slackUserId: "UPREET", displayName: "Name UPREET" }],
+    });
+    expect(await messaging?.handOverSlackDefault("T1", "UPREET")).toEqual({ isDefault: false, people: [] });
+
+    await messaging?.disconnectSlackWorkspace("T1");
+    expect(left).toEqual([["T1", "UOWNER"]]);
+  });
+
+  it("bot-only disconnect keeps the bot token when others remain", async () => {
+    const unlinked: string[] = [];
+    const slackApp: SlackAppPort = {
+      authorize: async () => "https://slack.com/oauth/v2/authorize",
+      unlink: async (workspaceId) => {
+        unlinked.push(workspaceId);
+        return { workspaceRemains: true };
+      },
+      openExternal: async () => undefined,
+    };
+    await connected({ slackApp });
+    await messaging?.disconnectSlackWorkspace("T1");
+    expect(unlinked).toEqual(["T1"]);
+    // Another host still answers the workspace with the shared bot token.
+    expect(slack.of("auth.revoke")).toEqual([]);
   });
 
   it("writes the report", () => {

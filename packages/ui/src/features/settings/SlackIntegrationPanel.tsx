@@ -9,6 +9,7 @@ import type {
   SlackChannelChoice,
   SlackChannelOption,
   SlackQuietHours,
+  SlackRoutingStatus,
 } from "@openbot/contracts/ipc";
 import { MESSAGING_LIMITS } from "@openbot/contracts/ipc";
 import { SLACK_ORCHESTRATOR_AVATAR } from "@openbot/contracts/slack-app";
@@ -20,8 +21,10 @@ import {
   AlertIcon,
   AlertTitle,
   Button,
+  buttonVariants,
   Check,
   Checkbox,
+  DropdownMenu,
   ExternalLink,
   Hash,
   Input,
@@ -90,6 +93,10 @@ export interface SlackIntegrationPanelProps {
   onSetWatchedChannels?: (workspaceId: string, channels: SlackChannelChoice[]) => void;
   /** Changes the pause or the quiet hours of a workspace's sends. Without it, no Sending section shows. */
   onSetSendGuards?: (workspaceId: string, change: { paused?: boolean; quietHours?: SlackQuietHours | null }) => void;
+  /** Which computer answers people without GoAhead, per workspace id. A workspace without an entry shows no line. */
+  routing?: Readonly<Record<string, SlackRoutingStatus>>;
+  /** Makes another connected person's computer the default. Without it, no "Hand over…" shows. */
+  onHandOverDefault?: (workspaceId: string, slackUserId: string) => void;
 }
 
 /** What a workspace row can do. */
@@ -190,13 +197,28 @@ export function SlackIntegrationPanel(props: SlackIntegrationPanelProps) {
           <ItemGroup class="settings-modal-card">
             <For each={props.connections}>
               {(connection) => (
-                <WorkspaceRow
-                  connection={connection}
-                  busy={props.busy}
-                  onReconnect={() => props.onReconnect(connection.workspaceId)}
-                  onSetEnabled={(enabled) => props.onSetEnabled(connection.workspaceId, enabled)}
-                  onDisconnect={() => setDisconnecting(connection)}
-                />
+                <>
+                  <WorkspaceRow
+                    connection={connection}
+                    busy={props.busy}
+                    onReconnect={() => props.onReconnect(connection.workspaceId)}
+                    onSetEnabled={(enabled) => props.onSetEnabled(connection.workspaceId, enabled)}
+                    onDisconnect={() => setDisconnecting(connection)}
+                  />
+                  <Show when={props.routing?.[connection.workspaceId]}>
+                    {(routing) => (
+                      <DefaultRow
+                        routing={routing()}
+                        busy={props.busy}
+                        onHandOver={
+                          props.onHandOverDefault
+                            ? (slackUserId) => props.onHandOverDefault?.(connection.workspaceId, slackUserId)
+                            : undefined
+                        }
+                      />
+                    )}
+                  </Show>
+                </>
               )}
             </For>
           </ItemGroup>
@@ -387,6 +409,54 @@ function WorkspaceRow(props: {
           {t("connector.slack.disconnectWorkspace")}
         </Button>
       </ItemActions>
+    </Item>
+  );
+}
+
+/**
+ * Whether this computer answers the people of the workspace who do not use GoAhead. The default's owner
+ * can hand it to another connected person.
+ */
+function DefaultRow(props: {
+  routing: SlackRoutingStatus;
+  busy: boolean;
+  onHandOver: ((slackUserId: string) => void) | undefined;
+}) {
+  const { t } = useText();
+  const canHandOver = () => props.routing.isDefault && props.routing.people.length > 0 && props.onHandOver;
+  return (
+    <Item class="settings-modal-row">
+      <ItemContent>
+        <ItemDescription>
+          {props.routing.isDefault ? t("connector.slack.defaultOn") : t("connector.slack.defaultOff")}
+        </ItemDescription>
+      </ItemContent>
+      <Show when={canHandOver()}>
+        {(handOver) => (
+          <ItemActions>
+            <DropdownMenu.Root placement="bottom-end" gutter={4}>
+              <DropdownMenu.Trigger
+                class={buttonVariants({ variant: "outline", size: "sm" })}
+                disabled={props.busy}
+                title={t("connector.slack.handOverTitle")}
+              >
+                {t("connector.slack.handOver")}
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content aria-label={t("connector.slack.handOverTitle")}>
+                  <For each={props.routing.people}>
+                    {(person) => (
+                      <DropdownMenu.Item onSelect={() => handOver()(person.slackUserId)}>
+                        {person.displayName}
+                      </DropdownMenu.Item>
+                    )}
+                  </For>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          </ItemActions>
+        )}
+      </Show>
     </Item>
   );
 }

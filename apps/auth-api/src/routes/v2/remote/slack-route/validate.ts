@@ -1,4 +1,7 @@
-import { SLACK_ROUTE_TEAMS_LIMIT } from "@openbot/contracts/signal-protocol/slack-route";
+import {
+  SLACK_ROUTE_ROUTED_USERS_LIMIT,
+  SLACK_ROUTE_TEAMS_LIMIT,
+} from "@openbot/contracts/signal-protocol/slack-route";
 import { createFileRoute } from "@tanstack/solid-router";
 import { z } from "zod";
 import { JSON_BODY_LIMIT, readRequestBytes } from "../../../../server/json-body";
@@ -18,6 +21,14 @@ const slackRouteSchema = z.object({
         id: z.string().min(1).max(128),
         appId: z.string().min(1).max(128),
         linkedAt: z.number().int().nonnegative(),
+        // Absent in route tickets made before multi-user Slack.
+        isDefault: z.boolean().optional(),
+        users: z
+          .array(z.object({ id: z.string().min(1).max(64), linkedAt: z.number().int().nonnegative() }))
+          .max(64)
+          .optional(),
+        // On a default entry: the people with an own route. Absent in older tickets.
+        routedUsers: z.array(z.string().min(1).max(64)).max(SLACK_ROUTE_ROUTED_USERS_LIMIT).optional(),
       }),
     )
     .max(SLACK_ROUTE_TEAMS_LIMIT),
@@ -41,7 +52,8 @@ export const Route = createFileRoute("/v2/remote/slack-route/validate")({
             return apiError(400, "invalid_slack_route", "The Slack route is invalid.");
           }
           if (!parsed.success) return apiError(400, "invalid_slack_route", "The Slack route is invalid.");
-          return json({ teams: await requestRemoteControlPlane().validateSlackRoute(parsed.data) });
+          // `teams` keeps its meaning for Signal before multi-user Slack; `routes` adds the people.
+          return json(await requestRemoteControlPlane().validateSlackRoute(parsed.data));
         } catch (error) {
           return remoteControlPlaneErrorResponse(error);
         }

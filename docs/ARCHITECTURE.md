@@ -1587,33 +1587,61 @@ No account API, Signal, IPC contract, or database migration changes are required
 
 The agents of a computer can answer in an external chat platform. Slack is the first platform;
 [messaging.md](messaging.md) has the setup, the limits and how to add a platform. Every workspace
-installs the one GoAhead Slack app (`apps/slack-app`), and the workspace is linked to the host that
-connected it. People mention @OpenBot or send it a direct message. The workspace's Slack Orchestrator,
-an agent that the connect dialog adds, receives each new conversation, asks its teammates and posts
-the answer. Every answer comes from GoAhead.
+installs the one GoAhead Slack app (`apps/slack-app`). Each person who connects links their own
+Slack user to their own host; the first host that connected the workspace is its default. People
+mention @OpenBot or send it a direct message. The workspace's Slack Orchestrator, an agent that the
+connect dialog adds, receives each new conversation, asks its teammates and posts the answer. Every
+answer comes from GoAhead.
 
 - **Install.** The desktop asks `POST /v2/slack/authorize` for Slack's install URL, with a one-use host
   key. The Worker exchanges the code at `/v2/slack/callback`, because the app's client secret lives
   there. It links the workspace to the host in D1 (`slack_workspace_routes`: team, host, account; no
   token) and seals the bot token to the host key (`@openbot/contracts/slack-workspace-grant`). The
-  page `/slack/connect` opens `openbot://slack-workspace`. Only the account that linked a workspace
-  can move it to another of its hosts; another account gets `slack_workspace_taken`.
+  page `/slack/connect` opens `openbot://slack-workspace`.
+- **Default and person routes.** `slack_workspace_routes` is the workspace's default route: the
+  host that answers people without GoAhead. `slack_person_routes` (migration `0026`: team, Slack
+  user, host, account, `connected_at`) links each connected person to their own host. The first
+  connect of a workspace makes both rows. Another person must give user access
+  (`authed_user.token_type === "user"`), or the callback refuses with
+  `slack_user_access_required`; it adds or moves only that person's row. A person's disconnect
+  deletes their row and revokes their user token. When the default's owner disconnects, the default
+  moves to the person with the earliest `connected_at`; with no person left, the workspace row goes
+  and the bot token is revoked. The default's owner can move the default to another person of the
+  team (`/v2/remote/hosts/$hostId/slack-default`). `app_uninstalled` deletes every row of the team.
 - **Events.** Slack posts every workspace's events and button presses to one URL,
   `https://signal.openbot.run/v1/slack/events`. Signal checks Slack's signature with the app's
-  signing secret, answers `url_verification`, and reads only the app ID and the workspace ID. Each
-  signing secret is bound to its app, and a route is one app in one workspace, so the production and
-  development apps can share a workspace. It passes the exact body to the `ingress` socket (`SlackIngress` in main, a plain `ws` client: no WebRTC, so no hidden
+  signing secret, answers `url_verification`, and reads the app ID, the workspace ID and the
+  routing fields below. Each signing secret is bound to its app, and a route is one app in one
+  workspace, so the production and development apps can share a workspace. It passes the exact
+  body to the `ingress` socket (`SlackIngress` in main, a plain `ws` client: no WebRTC, so no hidden
   window) that holds a route ticket for that workspace, and returns the host's answer within 2.5 s,
   or 503 so that Slack sends it again. The route ticket is an ES256 JWT that `apps/auth-api` signs
   with its own key for a host that proves its machine token. It names only the workspaces that D1
   links to that host, expires after 5 minutes, and the host asks for a new one each time the socket
-  connects. Each workspace in the ticket carries the time D1 linked it. When a workspace is unlinked
-  or moved, the Worker sends Signal `slack-route-revoked` through the signed auth-event outbox:
+  connects. Each workspace in the ticket carries the time D1 linked it, whether the host is its
+  default (`isDefault`), and the Slack users that D1 links to the host (`users`). A ticket without
+  these fields keeps its old meaning: the host is the workspace's default. When a workspace is
+  unlinked or moved, the Worker sends Signal `slack-route-revoked`, and for one person
+  `slack-person-route-revoked`, through the signed auth-event outbox:
   Signal drops the route and refuses tickets with that link or an older one, so a host that lost the
   workspace cannot keep it with the ticket it holds. Signal keeps these revocations in memory, so for
   one ticket lifetime after it starts it asks the Worker (`/v2/remote/slack-route/validate`, signed
   like `/v2/remote/resume/validate`) which links of each ticket D1 still has. The host trusts a delivery because Signal checked the signature; no host has the
   signing secret.
+- **Routing.** Signal keeps two maps from route tickets: `appId:teamId` to the default socket and
+  `appId:teamId:userId` to a person's socket (`slack-targets.ts`). `app_mention` goes to the
+  author's host, else the default. Every `message` event, a direct message with the bot included,
+  asks Slack's `apps.event.authorizations.list` for its `event_context` (`slack-authorizations.ts`,
+  with the app-level token `SLACK_APP_TOKEN` and a cache per `event_id` for 10 minutes). When the
+  list includes the bot user and the message is a person's direct message, the message goes to the
+  author's host, else the default. Otherwise it goes to the host of each listed person with a
+  route, so a private conversation reaches only its members' hosts. A message without
+  `event_context` goes nowhere. A button press with an owner `block_id` (`slackOwnerBlockId`) goes
+  only to the draft owner's host, with no default fallback; without it, to the clicker's host, else
+  the default. `tokens_revoked` goes to the hosts of the listed user tokens, and to every host when
+  it lists bot tokens. `app_uninstalled` and other events go to every host of the team. Signal sends
+  to all targets in parallel and answers Slack 200 only when each one accepted, else 503; hosts drop
+  a repeat `event_id`. A host refuses a button press on a draft that is not its owner's.
 
 The code has two halves. `MessagingThreads` (`src/backend/messaging/`) is built by `AgentService`
 beside `ChannelService` and knows no platform. `MessagingService` is built in the main process and
@@ -1700,12 +1728,18 @@ transport for its events. `messaging-types.ts` is the seam; the core never reads
   (`@openbot/ui`) for each draft that waits. These use the `messaging` IPC group, which only the
   host's own desktop has: `list-threads`, `read-thread-page`, `mark-thread-read`, the
   `threads-changed` event, `list-slack-channels`, `set-slack-watched-channels`, `list-drafts`,
-  `answer-draft`, `set-slack-send-guards`, `list-inbox`, `read-inbox-conversation` and the
-  `inbox-changed` event. `read-thread-page` refuses a thread that is not a Slack conversation.
+  `answer-draft`, `set-slack-send-guards`, `list-inbox`, `read-inbox-conversation`,
+  `send-inbox-reply`, `get-slack-routing`, `hand-over-slack-default` and the `inbox-changed`
+  event. `read-thread-page` refuses a thread that is not a Slack conversation.
 - **Desktop inbox.** A "Slack inbox" row is the first child of the orchestrator in the sidebar. It
-  opens a read-only pane (`MessagingInboxView.tsx`, with `SlackInboxList` from `@openbot/ui`) over the
+  opens a pane (`MessagingInboxView.tsx`, with `SlackInboxList` from `@openbot/ui`) over the
   same local inbox. `inbox-changed` fires when a new message is kept. Reading a conversation there
-  moves the same read mark that `slack_list_unread` uses. These calls only read; none sends.
+  moves the same read mark that `slack_list_unread` uses. With the user token, the open conversation
+  has a reply box: `send-inbox-reply` posts the typed text as the person (`chat.postMessage` with
+  the user token) in the conversation or its open thread, with no approval, and records it in the
+  audit log. Pause, quiet hours and the hourly limit apply only to agent sends. The Slack connector
+  page shows whether this host is the default (`get-slack-routing`), and the default's owner can
+  hand it over (`hand-over-slack-default`).
 
 ## Skill folders and MCP configuration
 

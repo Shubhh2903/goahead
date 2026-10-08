@@ -85,6 +85,20 @@ export const NoOrchestrator: Story = { args: args([workspace({ orchestratorAgent
 /** Connected before the app asked for the person's token: only the bot is connected. */
 export const BotOnly: Story = { args: args([workspace({ userId: null, userName: null })]) };
 
+/** This computer answers people without GoAhead, and can hand that to another connected person. */
+export const DefaultComputer: Story = {
+  args: {
+    ...args([workspace()]),
+    routing: { T0STORY: { isDefault: true, people: [{ slackUserId: "U0BOB", displayName: "Bob" }] } },
+    onHandOverDefault: fn(),
+  },
+};
+
+/** Another person's computer answers people without GoAhead. */
+export const OtherDefault: Story = {
+  args: { ...args([workspace()]), routing: { T0STORY: { isDefault: false, people: [] } } },
+};
+
 export const Paused: Story = { args: args([workspace({ enabled: false, state: "paused" })]) };
 
 export const Uninstalled: Story = { args: args([workspace({ state: "invalid_token" })]) };

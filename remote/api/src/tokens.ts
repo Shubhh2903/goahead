@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   SLACK_ROUTE_AUDIENCE,
+  SLACK_ROUTE_ROUTED_USERS_LIMIT,
   SLACK_ROUTE_TEAMS_LIMIT,
   type SlackRouteTeam,
 } from "@openbot/contracts/signal-protocol/slack-route";
@@ -25,7 +26,7 @@ import {
   type RemoteTicketClaims,
   SIGNAL_TURN_CREDENTIAL_TTL_SECONDS,
 } from "./protocol";
-import type { SlackRoute } from "./signal-service";
+import type { SlackRoute, SlackRouteValidation } from "./signal-service";
 
 // The resume token is this service's own, minted and verified here and never seen by the account
 // API, so its audience stays local while the ticket's comes from the shared contract.
@@ -55,12 +56,30 @@ const identifierSchema = z
   .min(1)
   .max(128)
   .regex(/^[A-Za-z0-9_-]+$/u);
+// The most people of one workspace that one route ticket entry names. The account service checks the
+// same limit when it confirms a route.
+const SLACK_ROUTE_USERS_LIMIT = 64;
+/** One route ticket entry. `isDefault` and `users` are absent in tickets made before multi-user Slack. */
+export const slackRouteTeamSchema = z.object({
+  id: identifierSchema,
+  appId: identifierSchema,
+  linkedAt: z.number().int().nonnegative(),
+  isDefault: z.boolean().optional(),
+  users: z
+    .array(z.object({ id: identifierSchema, linkedAt: z.number().int().nonnegative() }))
+    .max(SLACK_ROUTE_USERS_LIMIT)
+    .optional(),
+  routedUsers: z.array(identifierSchema).max(SLACK_ROUTE_ROUTED_USERS_LIMIT).optional(),
+}) satisfies z.ZodType<SlackRouteTeam>;
 const slackRouteClaimsSchema = z.object({
   hid: identifierSchema,
-  teams: z
-    .array(z.object({ id: identifierSchema, appId: identifierSchema, linkedAt: z.number().int().nonnegative() }))
-    .max(SLACK_ROUTE_TEAMS_LIMIT),
+  teams: z.array(slackRouteTeamSchema).max(SLACK_ROUTE_TEAMS_LIMIT),
 });
+/** The account service's answer to `/v2/remote/slack-route/validate`. */
+export const slackRouteValidationSchema = z.object({
+  teams: z.array(z.string()),
+  routes: z.array(slackRouteTeamSchema).max(SLACK_ROUTE_TEAMS_LIMIT).optional(),
+}) satisfies z.ZodType<SlackRouteValidation>;
 const SLACK_SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
 
 export class RemoteTokenService {
@@ -72,7 +91,7 @@ export class RemoteTokenService {
   readonly #turnPort: number;
   readonly #turnTlsPort: number;
   readonly #validateResumeClaims: (claims: RemoteTicketClaims) => Promise<boolean>;
-  readonly #validateSlackRoute: (hostId: string, teams: SlackRouteTeam[]) => Promise<string[]>;
+  readonly #validateSlackRoute: (hostId: string, teams: SlackRouteTeam[]) => Promise<SlackRouteValidation>;
   readonly #trustedResumeTokens = new Map<
     string,
     { expiresAt: number; hostId: string; sessionId: string; authEpoch: number }
@@ -87,7 +106,7 @@ export class RemoteTokenService {
     options: {
       fetch?: FetchImplementation;
       // Asks the account service which links of a route are current. Without it, none is.
-      validateSlackRoute?: (hostId: string, teams: SlackRouteTeam[]) => Promise<string[]>;
+      validateSlackRoute?: (hostId: string, teams: SlackRouteTeam[]) => Promise<SlackRouteValidation>;
     } = {},
   ) {
     if (config.ticketJwks) {
@@ -107,7 +126,7 @@ export class RemoteTokenService {
     this.#turnPort = config.turnPort;
     this.#turnTlsPort = config.turnTlsPort;
     this.#validateResumeClaims = validateResumeClaims;
-    this.#validateSlackRoute = options.validateSlackRoute ?? (async () => []);
+    this.#validateSlackRoute = options.validateSlackRoute ?? (async () => ({ teams: [] }));
   }
 
   async initialize(): Promise<void> {
@@ -143,7 +162,7 @@ export class RemoteTokenService {
     return { teams: claims.teams };
   }
 
-  validateSlackRoute(hostId: string, teams: SlackRouteTeam[]): Promise<string[]> {
+  validateSlackRoute(hostId: string, teams: SlackRouteTeam[]): Promise<SlackRouteValidation> {
     return this.#validateSlackRoute(hostId, teams);
   }
 

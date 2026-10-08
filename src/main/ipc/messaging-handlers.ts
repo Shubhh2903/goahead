@@ -8,9 +8,11 @@ import { handler, type IpcGroupHandlers, payloadHandler } from "./define-ipc-gro
 import {
   parseAddSlackOrchestratorInput,
   parseAnswerMessagingDraftInput,
+  parseHandOverSlackDefaultInput,
   parseMarkMessagingThreadReadInput,
   parseMessagingThreadPageInput,
   parseReadInboxConversationInput,
+  parseSendInboxReplyInput,
   parseSetSlackEnabledInput,
   parseSetSlackSendGuardsInput,
   parseSetSlackWatchedChannelsInput,
@@ -35,6 +37,9 @@ interface MessagingIpcDependencies {
     | "setSendGuards"
     | "listInbox"
     | "readInboxConversation"
+    | "sendInboxReply"
+    | "slackRouting"
+    | "handOverSlackDefault"
   >;
   agents: Pick<AgentService, "readThreadPageFor" | "threadReadState" | "markThreadRead">;
   host: Pick<HostService, "agentReaderId">;
@@ -78,10 +83,17 @@ export function messagingIpcHandlers({
         messaging.setSlackWatchedChannels(workspaceId, channels),
       ),
       listDrafts: handler(() => messaging.listDrafts()),
-      // Read-only: the inbox never sends.
+      // Read-only: the inbox list never sends. Only `sendInboxReply` posts, as the person.
       listInbox: handler(() => messaging.listInbox()),
       readInboxConversation: payloadHandler(parseReadInboxConversationInput, ({ workspaceId, conversation, limit }) =>
         messaging.readInboxConversation(workspaceId, conversation, limit),
+      ),
+      sendInboxReply: payloadHandler(parseSendInboxReplyInput, (input) => messaging.sendInboxReply(input)),
+      getSlackRouting: payloadHandler(parseSlackWorkspaceInput, ({ workspaceId }) =>
+        messaging.slackRouting(workspaceId),
+      ),
+      handOverSlackDefault: payloadHandler(parseHandOverSlackDefaultInput, ({ workspaceId, slackUserId }) =>
+        messaging.handOverSlackDefault(workspaceId, slackUserId),
       ),
       setSlackSendGuards: payloadHandler(parseSetSlackSendGuardsInput, ({ workspaceId, ...change }) =>
         messaging.setSendGuards(workspaceId, change),

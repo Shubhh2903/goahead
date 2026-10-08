@@ -11,6 +11,7 @@ import {
   isMessagingThreadsChanged,
   isSlackChannelList,
   isSlackOverview,
+  isSlackRoutingStatus,
   type MessagingDraft,
   type MessagingInboxChanged,
   type MessagingInboxPage,
@@ -19,6 +20,7 @@ import {
   type MessagingThreadsChanged,
   type SlackChannelList,
   type SlackOverview,
+  type SlackRoutingStatus,
 } from "@openbot/contracts/ipc";
 
 /** The orchestrator that main created, and the sidebar section it went to. */
@@ -63,4 +65,9 @@ export function decodeMessagingInboxPageReply(value: unknown): MessagingInboxPag
 
 export function decodeMessagingInboxChanged(value: unknown): MessagingInboxChanged | null {
   return isMessagingInboxChanged(value) ? value : null;
+}
+
+export function decodeSlackRoutingStatusReply(value: unknown): SlackRoutingStatus {
+  if (!isSlackRoutingStatus(value)) throw new Error("Invalid Slack routing response.");
+  return value;
 }

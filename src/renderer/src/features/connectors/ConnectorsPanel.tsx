@@ -162,6 +162,8 @@ export function ConnectorsPanel(props: {
                   onListChannels={slack().listChannels}
                   onSetWatchedChannels={slack().setWatchedChannels}
                   onSetSendGuards={slack().setSendGuards}
+                  routing={slack().routing()}
+                  onHandOverDefault={slack().handOverDefault}
                 />
               )}
             </Show>

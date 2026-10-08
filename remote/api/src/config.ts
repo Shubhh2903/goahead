@@ -21,12 +21,22 @@ export interface RemoteApiConfig {
   // The signing secret of each OpenBot Slack app, production and development, which share this
   // Signal. A request must name the app whose secret signed it. Without one, the Slack route answers 503.
   slackSigningSecrets: SlackSigningSecret[];
+  // The app-level token (`xapp-…`, scope `authorizations:read`) of each Slack app. Signal asks Slack
+  // with it who may see a message event. Without one, such an event answers 503.
+  slackAppTokens: SlackAppToken[];
 }
 
 interface SlackSigningSecret {
   appId: string;
   secret: string;
 }
+
+export interface SlackAppToken {
+  appId: string;
+  token: string;
+}
+
+const SLACK_APP_ID_PATTERN = /^A[A-Z0-9]{1,31}$/u;
 
 /**
  * `SLACK_SIGNING_SECRET` is a comma-separated list of `<app ID>:<signing secret>`. A malformed value
@@ -37,13 +47,33 @@ function readSlackSigningSecrets(value: string | undefined): SlackSigningSecret[
   for (const entry of (value ?? "").split(",").map((part) => part.trim())) {
     if (!entry) continue;
     const [appId, secret] = entry.split(":", 2).map((part) => part.trim());
-    if (!appId || !secret || !/^A[A-Z0-9]{1,31}$/u.test(appId)) {
+    if (!appId || !secret || !SLACK_APP_ID_PATTERN.test(appId)) {
       console.error("SLACK_SIGNING_SECRET must list <app ID>:<signing secret> pairs. The Slack route is off.");
       return [];
     }
     secrets.push({ appId, secret });
   }
   return secrets;
+}
+
+/**
+ * `SLACK_APP_TOKEN` is a comma-separated list of `<app ID>:<app-level token>`. A malformed value turns
+ * off only the lookup of who may see an event. The message never contains the value.
+ */
+function readSlackAppTokens(value: string | undefined): SlackAppToken[] {
+  const tokens: SlackAppToken[] = [];
+  for (const entry of (value ?? "").split(",").map((part) => part.trim())) {
+    if (!entry) continue;
+    const separator = entry.indexOf(":");
+    const appId = separator > 0 ? entry.slice(0, separator).trim() : "";
+    const token = separator > 0 ? entry.slice(separator + 1).trim() : "";
+    if (!SLACK_APP_ID_PATTERN.test(appId) || !/^xapp-\S+$/u.test(token)) {
+      console.error("SLACK_APP_TOKEN must list <app ID>:<app-level token> pairs. Slack message events answer 503.");
+      return [];
+    }
+    tokens.push({ appId, token });
+  }
+  return tokens;
 }
 
 export function readRemoteApiConfig(environment: Record<string, string | undefined> = process.env): RemoteApiConfig {
@@ -73,6 +103,7 @@ export function readRemoteApiConfig(environment: Record<string, string | undefin
     maximumMessagesPerMinute: positiveInteger(environment.REMOTE_MAX_MESSAGES_PER_MINUTE, 600),
     trustProxy: environment.REMOTE_TRUST_PROXY === "true",
     slackSigningSecrets: readSlackSigningSecrets(environment.SLACK_SIGNING_SECRET),
+    slackAppTokens: readSlackAppTokens(environment.SLACK_APP_TOKEN),
   };
 }
 

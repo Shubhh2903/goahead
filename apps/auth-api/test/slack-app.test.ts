@@ -13,7 +13,7 @@ const secrets = { SLACK_CLIENT_ID: "client", SLACK_CLIENT_SECRET: "secret", SLAC
 // not sign, and must not let another account take a workspace from its host.
 describe("GoAhead Slack app install", () => {
   it("seals the bot token to the host that asked and links the workspace to that host", async () => {
-    const { service, database, fetch } = setup();
+    const { service, database, fetch, respond } = setup();
     const host = await createSlackWorkspaceKeyPair();
     const nonce = "nonce-0123456789abcdef";
 
@@ -55,15 +55,128 @@ describe("GoAhead Slack app install", () => {
     ]);
 
     // Another account cannot take it.
+    respond({ authed_user: { id: "UOTHER", scope: "identify" } });
     await expect(
       service.complete({
         code: "code",
         state: await stateOf(service, other, "host-3", nonce, host.publicKey),
         redirectUri,
       }),
-    ).rejects.toMatchObject({ code: "slack_workspace_taken" });
+    ).rejects.toMatchObject({ code: "slack_user_access_required" });
     expect(database.prepare("SELECT host_id FROM slack_workspace_routes").all()).toEqual([{ host_id: "host-2" }]);
     expect(revocations(database)).toHaveLength(2);
+  });
+
+  // A second person in the workspace gets their own route; the first installer's host stays the
+  // workspace's default.
+  it("second account connects the same team", async () => {
+    const { service, database, respond } = setup();
+    const host = await createSlackWorkspaceKeyPair();
+    const nonce = "nonce-0123456789abcdef";
+    await service.complete({
+      code: "code",
+      state: await stateOf(service, owner, "host-1", nonce, host.publicKey),
+      redirectUri,
+    });
+
+    respond({ authed_user: secondUser });
+    const result = await service.complete({
+      code: "code",
+      state: await stateOf(service, other, "host-3", nonce, host.publicKey),
+      redirectUri,
+    });
+    expect(JSON.stringify(result)).not.toContain("xox");
+    await expect(openSlackWorkspaceGrant(host.privateKey, nonce, result.grant)).resolves.toMatchObject({
+      workspaceId: "T1",
+      user: { token: "xoxp-other-secret", id: "UOTHER" },
+    });
+    expect(database.prepare("SELECT team_id, host_id, account_id FROM slack_workspace_routes").all()).toEqual([
+      { team_id: "T1", host_id: "host-1", account_id: "owner" },
+    ]);
+    expect(personRoutes(database)).toEqual([
+      { team_id: "T1", slack_user_id: "UME", host_id: "host-1", account_id: "owner" },
+      { team_id: "T1", slack_user_id: "UOTHER", host_id: "host-3", account_id: "other" },
+    ]);
+    // The default route does not change; Signal drops only an older route of the new person.
+    expect(revocations(database)).toHaveLength(1);
+    expect(personRevocations(database)).toEqual([
+      { type: "slack-person-route-revoked", appId: "A1", teamId: "T1", userId: "UME", through: expect.any(Number) },
+      { type: "slack-person-route-revoked", appId: "A1", teamId: "T1", userId: "UOTHER", through: expect.any(Number) },
+    ]);
+  });
+
+  it("second account without user token is refused", async () => {
+    const { service, database, respond } = setup();
+    const host = await createSlackWorkspaceKeyPair();
+    const nonce = "nonce-0123456789abcdef";
+    await service.complete({
+      code: "code",
+      state: await stateOf(service, owner, "host-1", nonce, host.publicKey),
+      redirectUri,
+    });
+    const before = database.prepare("SELECT payload FROM remote_auth_events").all();
+
+    respond({ authed_user: { id: "UOTHER", scope: "identify" } });
+    await expect(
+      service.complete({
+        code: "code",
+        state: await stateOf(service, other, "host-3", nonce, host.publicKey),
+        redirectUri,
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "slack_user_access_required" });
+    expect(database.prepare("SELECT team_id, host_id, account_id FROM slack_workspace_routes").all()).toEqual([
+      { team_id: "T1", host_id: "host-1", account_id: "owner" },
+    ]);
+    expect(personRoutes(database)).toEqual([
+      { team_id: "T1", slack_user_id: "UME", host_id: "host-1", account_id: "owner" },
+    ]);
+    expect(database.prepare("SELECT payload FROM remote_auth_events").all()).toEqual(before);
+  });
+
+  it("same person reconnects on another host", async () => {
+    const { service, database, respond } = setup();
+    const host = await createSlackWorkspaceKeyPair();
+    const nonce = "nonce-0123456789abcdef";
+    await service.complete({
+      code: "code",
+      state: await stateOf(service, owner, "host-1", nonce, host.publicKey),
+      redirectUri,
+    });
+    respond({ authed_user: secondUser });
+    await service.complete({
+      code: "code",
+      state: await stateOf(service, other, "host-3", nonce, host.publicKey),
+      redirectUri,
+    });
+
+    // The second person moves to their other host. The default stays where it is.
+    await service.complete({
+      code: "code",
+      state: await stateOf(service, other, "host-4", nonce, host.publicKey),
+      redirectUri,
+    });
+    expect(database.prepare("SELECT host_id FROM slack_workspace_routes").all()).toEqual([{ host_id: "host-1" }]);
+    expect(personRoutes(database)).toEqual([
+      { team_id: "T1", slack_user_id: "UME", host_id: "host-1", account_id: "owner" },
+      { team_id: "T1", slack_user_id: "UOTHER", host_id: "host-4", account_id: "other" },
+    ]);
+    expect(revocations(database)).toHaveLength(1);
+    expect(personRevocations(database).filter((event) => event.userId === "UOTHER")).toHaveLength(2);
+
+    // The default's owner moves: the person row and the workspace row go with them.
+    respond({});
+    await service.complete({
+      code: "code",
+      state: await stateOf(service, owner, "host-2", nonce, host.publicKey),
+      redirectUri,
+    });
+    expect(database.prepare("SELECT host_id FROM slack_workspace_routes").all()).toEqual([{ host_id: "host-2" }]);
+    expect(personRoutes(database)).toEqual([
+      { team_id: "T1", slack_user_id: "UME", host_id: "host-2", account_id: "owner" },
+      { team_id: "T1", slack_user_id: "UOTHER", host_id: "host-4", account_id: "other" },
+    ]);
+    expect(revocations(database)).toHaveLength(2);
+    expect(personRevocations(database).filter((event) => event.userId === "UME")).toHaveLength(2);
   });
 
   // The app asks for user scopes, but an install made before they were applied to the app, or by a
@@ -119,11 +232,33 @@ describe("GoAhead Slack app install", () => {
   });
 });
 
+const secondUser = {
+  id: "UOTHER",
+  scope: "chat:write,im:history",
+  access_token: "xoxp-other-secret",
+  token_type: "user",
+};
+
 function revocations(database: ReturnType<typeof migratedDatabase>) {
   return database
-    .prepare("SELECT payload FROM remote_auth_events WHERE payload LIKE '%slack-route-revoked%'")
+    .prepare("SELECT payload FROM remote_auth_events WHERE payload LIKE '%\"slack-route-revoked\"%'")
     .all()
     .map((row) => JSON.parse(String(row.payload)));
+}
+
+function personRevocations(database: ReturnType<typeof migratedDatabase>) {
+  return database
+    .prepare("SELECT payload FROM remote_auth_events WHERE payload LIKE '%\"slack-person-route-revoked\"%'")
+    .all()
+    .map((row) => JSON.parse(String(row.payload)));
+}
+
+function personRoutes(database: ReturnType<typeof migratedDatabase>) {
+  return database
+    .prepare(
+      "SELECT team_id, slack_user_id, host_id, account_id FROM slack_person_routes ORDER BY team_id, slack_user_id",
+    )
+    .all();
 }
 
 function setup(extra: { is_enterprise_install?: boolean; authed_user?: unknown } = {}, developmentOrigin?: string) {
@@ -133,8 +268,14 @@ function setup(extra: { is_enterprise_install?: boolean; authed_user?: unknown }
       VALUES ('owner', 'email:owner@example.com', 'owner@example.com', 1, 1),
              ('other', 'email:other@example.com', 'other@example.com', 1, 1);
     INSERT INTO remote_hosts(host_id, owner_user_id, name, created_at, updated_at)
-      VALUES ('host-1', 'owner', 'Mac', 1, 1), ('host-2', 'owner', 'Server', 1, 1), ('host-3', 'other', 'Other', 1, 1);
+      VALUES ('host-1', 'owner', 'Mac', 1, 1), ('host-2', 'owner', 'Server', 1, 1), ('host-3', 'other', 'Other', 1, 1),
+             ('host-4', 'other', 'Other laptop', 1, 1);
   `);
+  // Each later install answers with `response`; `respond` changes it, such as for another person.
+  let response: { is_enterprise_install?: boolean; authed_user?: unknown } = extra;
+  const respond = (next: typeof response) => {
+    response = next;
+  };
   const fetch = vi.fn(async () =>
     Response.json({
       ok: true,
@@ -144,7 +285,7 @@ function setup(extra: { is_enterprise_install?: boolean; authed_user?: unknown }
       app_id: "A1",
       team: { id: "T1", name: "Acme" },
       authed_user: { id: "UME", scope: "chat:write,im:history", access_token: "xoxp-user-secret", token_type: "user" },
-      ...extra,
+      ...response,
     }),
   );
   const bindings = {
@@ -152,7 +293,7 @@ function setup(extra: { is_enterprise_install?: boolean; authed_user?: unknown }
     ...secrets,
     ...(developmentOrigin ? { SLACK_DEV_PUBLIC_ORIGIN: developmentOrigin } : {}),
   };
-  return { service: new SlackAppService(bindings, { fetch }), database, fetch };
+  return { service: new SlackAppService(bindings, { fetch }), database, fetch, respond };
 }
 
 async function stateOf(

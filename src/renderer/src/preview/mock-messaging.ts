@@ -3,8 +3,10 @@ import type {
   ConversationPage,
   MessagingConnection,
   MessagingDesktopApi,
+  MessagingInboxMessage,
   MessagingThreadSummary,
   MessagingThreadsChanged,
+  SlackRoutingStatus,
 } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import { clone } from "./mock-support";
@@ -61,7 +63,7 @@ function previewThreads(agentId: string): Array<{ summary: MessagingThreadSummar
 /** The preview person's local Slack inbox: a direct message, a mention and a picked channel. */
 function previewInbox() {
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
-  const message = (id: string, from: string, text: string, minutes: number, isOwn = false) => ({
+  const message = (id: string, from: string, text: string, minutes: number, isOwn = false): MessagingInboxMessage => ({
     id,
     from,
     isOwn,
@@ -111,6 +113,15 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
   const inbox = previewInbox();
   const inboxRead = new Set<string>();
   const inboxListeners = new Set<(change: { workspaceId: string }) => void>();
+  // The preview computer answers the people without GoAhead until it hands that to Preet.
+  const routing = new Map<string, SlackRoutingStatus>();
+  const routingOf = (workspaceId: string): SlackRoutingStatus => {
+    if (!connections.has(workspaceId)) throw new Error(sourceText("error.messaging.notConnected"));
+    return (
+      routing.get(workspaceId) ?? { isDefault: true, people: [{ slackUserId: "U0PREVIEWPREET", displayName: "Preet" }] }
+    );
+  };
+  let replies = 0;
   const findThread = (threadId: string) => {
     const found = threads.find((candidate) => candidate.summary.threadId === threadId);
     if (!found) throw new Error(sourceText("error.messaging.threadUnavailable"));
@@ -193,6 +204,35 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
       inboxRead.add(conversation);
       for (const listener of inboxListeners) listener({ workspaceId });
       return clone({ workspaceId, conversation, place: found.place, messages: found.messages });
+    },
+    sendInboxReply: async ({ workspaceId, conversation, threadKey, text }) => {
+      if (!connections.get(workspaceId)?.userId) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
+      const found = inbox.find((item) => item.workspaceId === workspaceId && item.conversation === conversation);
+      if (!found) throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
+      const trimmed = text.trim();
+      if (!trimmed) throw new Error(sourceText("error.messaging.sendTextEmpty"));
+      replies += 1;
+      const sentAt = new Date().toISOString();
+      found.messages.push({
+        id: `9.${String(replies).padStart(6, "0")}`,
+        from: "you",
+        isOwn: true,
+        text: trimmed,
+        sentAt,
+        thread: threadKey ?? null,
+      });
+      found.latestAt = sentAt;
+      found.latestFrom = "you";
+      found.preview = trimmed;
+      for (const listener of inboxListeners) listener({ workspaceId });
+    },
+    getSlackRouting: async ({ workspaceId }) => clone(routingOf(workspaceId)),
+    handOverSlackDefault: async ({ workspaceId, slackUserId }) => {
+      const current = routingOf(workspaceId);
+      if (!current.isDefault || !current.people.some((person) => person.slackUserId === slackUserId))
+        throw new Error(sourceText("error.messaging.notConnected"));
+      routing.set(workspaceId, { isDefault: false, people: [] });
+      return clone(routingOf(workspaceId));
     },
     onInboxChanged: (listener) => {
       inboxListeners.add(listener);

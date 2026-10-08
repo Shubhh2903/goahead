@@ -204,6 +204,7 @@ import type {
   AddSlackOrchestratorInput,
   AddSlackOrchestratorResult,
   AnswerMessagingDraftInput,
+  HandOverSlackDefaultInput,
   MarkMessagingThreadReadInput,
   MessagingDraft,
   MessagingInboxChanged,
@@ -213,11 +214,14 @@ import type {
   MessagingThreadSummary,
   MessagingThreadsChanged,
   ReadInboxConversationInput,
+  SendInboxReplyInput,
   SetSlackEnabledInput,
   SetSlackSendGuardsInput,
   SetSlackWatchedChannelsInput,
   SlackChannelList,
   SlackOverview,
+  SlackRoutingStatus,
+  SlackRoutingWorkspaceInput,
   SlackWorkspaceInput,
 } from "./ipc-messaging";
 import type { NotificationOpenedEvent, NotificationPreference } from "./ipc-notifications";
@@ -627,6 +631,13 @@ export const IPC_ENDPOINTS = {
       "messaging:read-inbox-conversation",
     ),
     inboxChanged: event<MessagingInboxChanged>()("messaging:inbox-changed"),
+    // A reply that the person types in an inbox conversation. It goes out as the person, with no
+    // approval; pause, quiet hours and the hourly limit hold agent sends only.
+    sendInboxReply: request<SendInboxReplyInput, void>()("messaging:send-inbox-reply"),
+    // Whether this computer answers the workspace's people who do not use GoAhead, and to whom its
+    // owner can hand that over.
+    getSlackRouting: request<SlackRoutingWorkspaceInput, SlackRoutingStatus>()("messaging:get-slack-routing"),
+    handOverSlackDefault: request<HandOverSlackDefaultInput, SlackRoutingStatus>()("messaging:hand-over-slack-default"),
   },
   // The server name, logo and app update of one server's host. `host.updateIdentity` and `update`
   // reach this computer only; these take the server, so a remote admin reaches the host. The

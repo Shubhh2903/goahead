@@ -33,5 +33,4 @@ export const messages = {
   "messaging.inbox.choose": "Okumak için bir konuşma seçin.",
   "messaging.inbox.loadFailed": "Slack gelen kutusu yüklenmedi.",
   "messaging.inbox.unread": { one: "{count} okunmamış", other: "{count} okunmamış" },
-  "messaging.inbox.readOnly": "Salt okunur. Slack'te yanıtlayın veya GoAhead'e doğrudan mesajınızda sorun.",
 } as const satisfies PartialTranslation<typeof source>;

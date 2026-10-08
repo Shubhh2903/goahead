@@ -14,4 +14,8 @@ export type RemoteAuthEvent =
   // A Slack workspace was unlinked from an app or moved to another host. Signal drops that app's route
   // of the workspace when its link is from `through` (milliseconds) or before, and refuses route
   // tickets with such a link.
-  | { type: "slack-route-revoked"; appId: string; teamId: string; through: number };
+  | { type: "slack-route-revoked"; appId: string; teamId: string; through: number }
+  // One person's route in a Slack workspace was removed or moved to another host. Signal drops that
+  // person's route when its link is from `through` (milliseconds) or before, and refuses route
+  // tickets with such a link. The workspace's default route does not change.
+  | { type: "slack-person-route-revoked"; appId: string; teamId: string; userId: string; through: number };

@@ -8,15 +8,23 @@
 // Only the provider is faked, as in every agent service test. Writes
 // .openbot-build/slack-workspace-e2e/report.json.
 
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { join, resolve } from "node:path";
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import type { SlackRouteTeam } from "@openbot/contracts/signal-protocol/slack-route";
 import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-app";
 import { type SlackUserGrant, sealSlackWorkspaceGrant } from "@openbot/contracts/slack-workspace-grant";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
+import { readRemoteApiConfig } from "../../remote/api/src/config";
+import { handleAuthEvent, handleSlackEvents } from "../../remote/api/src/http-routes";
+import type { RemoteTicketClaims } from "../../remote/api/src/protocol";
+import { type RemoteTokenProvider, SignalService } from "../../remote/api/src/signal-service";
+import { SlackAuthorizations } from "../../remote/api/src/slack-authorizations";
+import { RemoteTokenService, signServiceRequest } from "../../remote/api/src/tokens";
 import type { AgentService } from "../backend/agent-service";
 import {
   notification,
@@ -26,7 +34,12 @@ import {
   waitFor,
 } from "../backend/agent-service-test-harness";
 import { MessagingSendGuardStore } from "../backend/messaging/messaging-send-guards";
-import { type MessagingCredentials, MessagingService } from "../backend/messaging/messaging-service";
+import {
+  type MessagingCredentials,
+  MessagingService,
+  type SlackDefaultStatus,
+  type SlackRoutingPort,
+} from "../backend/messaging/messaging-service";
 import { slackDriver } from "../backend/messaging/slack/slack-driver";
 import { SlackIngress } from "./slack-ingress";
 
@@ -36,6 +49,8 @@ const USER_TOKEN = "xoxp-9999-8888-openbotusertoken";
 /** A user token that Slack issued for another workspace. */
 const OTHER_WORKSPACE_USER_TOKEN = "xoxp-7777-6666-otherworkspaceuser";
 const USER: SlackUserGrant = { token: USER_TOKEN, id: "UME" };
+/** The app-level token (`xapp-…`) with which Signal asks Slack who may see a message. */
+const APP_TOKEN = "xapp-1-A1-1-openbotapptoken";
 
 interface Answer {
   status: number;
@@ -137,6 +152,12 @@ class FakeSlack {
   readonly botMember = new Set<string>();
   /** Conversations the connected person is not in, such as another person's direct messages. */
   readonly notPersonMember = new Set<string>();
+  /** The person of each user token in this workspace. */
+  readonly people = new Map<string, string>([[USER_TOKEN, "UME"]]);
+  /** The members of a direct message between people: another person's user token is not in it. */
+  readonly members = new Map<string, Set<string>>();
+  /** Who may see an event, by its `event_context`, as `apps.event.authorizations.list` answers. */
+  readonly audiences = new Map<string, Array<{ user_id: string; is_bot: boolean }>>();
   #server: Server | null = null;
   #ts = 1000;
   origin = "";
@@ -154,8 +175,15 @@ class FakeSlack {
         response.setHeader("content-type", "application/json");
         response.end(JSON.stringify({ ok: true, ...value }));
       };
-      if (![BOT_TOKEN, USER_TOKEN, OTHER_WORKSPACE_USER_TOKEN].includes(token ?? "") || this.revoked.has(token ?? ""))
+      const known = [BOT_TOKEN, OTHER_WORKSPACE_USER_TOKEN, APP_TOKEN].includes(token ?? "");
+      if ((!known && !this.people.has(token ?? "")) || this.revoked.has(token ?? ""))
         return response.end(JSON.stringify({ ok: false, error: "invalid_auth" }));
+      const person = this.people.get(token ?? "");
+      // Only the app-level token reads who may see an event, and it does nothing else.
+      if ((method === "apps.event.authorizations.list") !== (token === APP_TOKEN))
+        return response.end(JSON.stringify({ ok: false, error: "not_allowed_token_type" }));
+      if (method === "apps.event.authorizations.list")
+        return reply({ authorizations: this.audiences.get(params.event_context ?? "") ?? [] });
       switch (method) {
         case "auth.test":
           if (token === BOT_TOKEN)
@@ -164,7 +192,7 @@ class FakeSlack {
               { "x-oauth-scopes": SLACK_BOT_SCOPES.join(",") },
             );
           return reply(
-            { team_id: token === USER_TOKEN ? "T1" : "T2", team: "Test workspace", user_id: "UME", user: "alice" },
+            { team_id: person ? "T1" : "T2", team: "Test workspace", user_id: person ?? "UME", user: "alice" },
             { "x-oauth-scopes": SLACK_USER_SCOPES.join(",") },
           );
         case "bots.info":
@@ -174,6 +202,8 @@ class FakeSlack {
         // The bot is not in the direct messages between the user and other people.
         case "conversations.info":
           if (token === USER_TOKEN && this.notPersonMember.has(params.channel ?? ""))
+            return response.end(JSON.stringify({ ok: false, error: "channel_not_found" }));
+          if (person && this.members.get(params.channel ?? "")?.has(person) === false)
             return response.end(JSON.stringify({ ok: false, error: "channel_not_found" }));
           if (token === BOT_TOKEN && params.channel?.startsWith("D-") && !this.botMember.has(params.channel))
             return response.end(JSON.stringify({ ok: false, error: "channel_not_found" }));
@@ -259,6 +289,235 @@ class MemoryCredentials implements MessagingCredentials {
   }
 }
 
+/** Slack's signing secret of the app `A1`, which Signal checks on each request. */
+const SIGNING_SECRET = "8f742231b10e8888abcd99yyyzzz85a5";
+const WEBHOOK_SECRET = "w".repeat(32);
+
+/**
+ * The account service's Slack routes of workspace T1, as the Worker keeps them after migration 0026:
+ * the workspace's default route and one route per person. It signs route tickets as the Worker does,
+ * and tells Signal when a person leaves. The Worker's own rules are tested in
+ * `apps/auth-api/test/remote-control-plane.test.ts`.
+ */
+class FakeAccountService {
+  readonly events: DynamicRecord[] = [];
+  readonly #people = new Map<string, { hostId: string; linkedAt: number }>();
+  #default: { hostId: string; linkedAt: number } | null = null;
+  #clock = 1_000;
+  readonly #privateKey: CryptoKey;
+  readonly #notify: (event: DynamicRecord) => Promise<void>;
+
+  constructor(privateKey: CryptoKey, notify: (event: DynamicRecord) => Promise<void>) {
+    this.#privateKey = privateKey;
+    this.#notify = notify;
+  }
+
+  /** A person's install. The first install of the workspace also takes the default route. */
+  link(hostId: string, slackUserId: string): void {
+    this.#clock += 1_000;
+    this.#default ??= { hostId, linkedAt: this.#clock };
+    this.#people.set(slackUserId, { hostId, linkedAt: this.#clock });
+  }
+
+  routes(hostId: string): SlackRouteTeam[] {
+    const users = [...this.#people]
+      .filter(([, person]) => person.hostId === hostId)
+      .map(([id, person]) => ({ id, linkedAt: person.linkedAt }));
+    const isDefault = this.#default?.hostId === hostId;
+    const linkedAt = isDefault ? this.#default?.linkedAt : users[0]?.linkedAt;
+    return linkedAt === undefined ? [] : [{ id: "T1", appId: "A1", linkedAt, isDefault, users }];
+  }
+
+  issueSlackRoute(hostId: string): Promise<string> {
+    const now = Math.floor(Date.now() / 1_000);
+    return new SignJWT({ hid: hostId, teams: this.routes(hostId) })
+      .setProtectedHeader({ alg: "ES256", kid: "slack-route-1" })
+      .setAudience("openbot-slack-route")
+      .setIssuedAt(now)
+      .setExpirationTime(now + 3_600)
+      .sign(this.#privateKey);
+  }
+
+  /** The host's side of the routes: `POST slack-disconnect` and `slack-default`. */
+  routing(hostId: string): SlackRoutingPort {
+    return {
+      unlinkPerson: async (workspaceId, slackUserId) => {
+        if (workspaceId !== "T1" || this.#people.get(slackUserId)?.hostId !== hostId)
+          throw new Error("The person is not linked to this host.");
+        // Only a person without the default leaves in this test; the Worker test moves the default.
+        if (this.#default?.hostId === hostId) throw new Error("The default's owner does not leave in this test.");
+        this.#people.delete(slackUserId);
+        this.#clock += 1_000;
+        const event = { type: "slack-person-route-revoked", appId: "A1", teamId: "T1", userId: slackUserId };
+        this.events.push(event);
+        await this.#notify({ ...event, through: this.#clock });
+        return { workspaceRemains: this.#default !== null || this.#people.size > 0 };
+      },
+      status: async () => this.#status(hostId),
+      handOver: async () => {
+        throw new Error("Hand over is not part of this test.");
+      },
+    };
+  }
+
+  #status(hostId: string): SlackDefaultStatus {
+    const isDefault = this.#default?.hostId === hostId;
+    return { isDefault, people: isDefault ? [...this.#people.keys()].map((slackUserId) => ({ slackUserId })) : [] };
+  }
+}
+
+/**
+ * Signal itself, in process: its Slack request route with the signature check, its routing rules,
+ * and its `ingress` sockets on a local WebSocket server. It asks the fake Slack who may see a message.
+ * Any host ticket names the host it was made for; the route ticket is checked with the account
+ * service's key.
+ */
+class InProcessSignal {
+  /** The event IDs that Signal passed to each host. */
+  readonly deliveries = new Map<string, string[]>();
+  readonly service: SignalService;
+  readonly #audience: SlackAuthorizations;
+  readonly #config: ReturnType<typeof readRemoteApiConfig>;
+  #server: WebSocketServer | null = null;
+  url = "";
+
+  constructor(
+    publicJwks: string,
+    validate: NonNullable<RemoteTokenProvider["validateSlackRoute"]>,
+    slackOrigin: string,
+  ) {
+    this.#config = readRemoteApiConfig({
+      REMOTE_TICKET_PUBLIC_JWKS: publicJwks,
+      REMOTE_TLS_DISABLED: "true",
+      REMOTE_CONTROL_PLANE_URL: "http://127.0.0.1:3100",
+      REMOTE_SESSION_SECRET: "s".repeat(32),
+      REMOTE_AUTH_WEBHOOK_SECRET: WEBHOOK_SECRET,
+      TURN_SHARED_SECRET: "t".repeat(32),
+      TURN_HOST: "localhost",
+      SLACK_SIGNING_SECRET: `A1:${SIGNING_SECRET}`,
+      SLACK_APP_TOKEN: `A1:${APP_TOKEN}`,
+    });
+    const routes = new RemoteTokenService(this.#config);
+    const claims = (token: string): RemoteTicketClaims => {
+      const now = Math.floor(Date.now() / 1_000);
+      const hostId = token.replace(/^ticket-/u, "");
+      return {
+        aud: "openbot-remote",
+        jti: randomUUID(),
+        sessionId: `${hostId}-session`,
+        hostId,
+        userId: `${hostId}-owner`,
+        membershipId: `${hostId}:host`,
+        role: "host",
+        authEpoch: 1,
+        protocolMinimum: 2,
+        protocolMaximum: 2,
+        sessionExpiresAt: now + 86_400,
+        iat: now,
+        exp: now + 300,
+      };
+    };
+    this.service = new SignalService(
+      {
+        verifyTicket: async (token) => claims(token),
+        verifyResumeToken: async (token) => claims(token),
+        validateClaims: async () => true,
+        issueResumeToken: async () => "resume-host",
+        iceServers: () => [],
+        verifySlackRoute: (token, hostId) => routes.verifySlackRoute(token, hostId),
+        validateSlackRoute: validate,
+      },
+      8,
+    );
+    const appTokens = this.#config.slackAppTokens;
+    this.#audience = new SlackAuthorizations({
+      appToken: (appId) => appTokens.find((entry) => entry.appId === appId)?.token ?? null,
+      fetch: (_url, init) => fetch(`${slackOrigin}/api/apps.event.authorizations.list`, init),
+    });
+  }
+
+  async start(): Promise<void> {
+    this.#server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    this.#server.on("connection", (socket) => {
+      let hostId = "";
+      const peer = {
+        id: randomUUID(),
+        ip: "127.0.0.1",
+        send: (message: string) => {
+          const frame = JSON.parse(message);
+          if (isDynamicRecord(frame) && frame.type === "slack-delivery" && isString(frame.bodyBase64)) {
+            const body = JSON.parse(Buffer.from(frame.bodyBase64, "base64").toString());
+            if (isDynamicRecord(body) && isString(body.event_id))
+              this.deliveries.set(hostId, [...(this.deliveries.get(hostId) ?? []), body.event_id]);
+          }
+          socket.send(message);
+        },
+        close: (code: number, reason: string) => socket.close(code, reason),
+      };
+      this.service.connect(peer);
+      socket.on("message", (data) => {
+        const text = data.toString();
+        const frame = JSON.parse(text);
+        if (isDynamicRecord(frame) && frame.type === "hello" && isString(frame.token))
+          hostId = frame.token.replace(/^ticket-/u, "");
+        void this.service.receive(peer, text);
+      });
+      socket.on("close", () => this.service.disconnect(peer));
+    });
+    await new Promise<void>((resolve) => this.#server?.once("listening", resolve));
+    const address = this.#server.address();
+    if (!address || typeof address === "string") throw new Error("Signal has no port.");
+    this.url = `ws://127.0.0.1:${address.port}`;
+  }
+
+  async stop(): Promise<void> {
+    for (const client of this.#server?.clients ?? []) client.terminate();
+    await new Promise<void>((resolve) => this.#server?.close(() => resolve()));
+  }
+
+  /** One request that Slack signed with the app's signing secret. */
+  post(payload: DynamicRecord): Promise<Response> {
+    const body = JSON.stringify(payload);
+    const timestamp = String(Math.floor(Date.now() / 1_000));
+    const signature = `v0=${createHmac("sha256", SIGNING_SECRET).update(`v0:${timestamp}:${body}`).digest("hex")}`;
+    return handleSlackEvents(
+      new Request("http://signal.test/v1/slack/events", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Slack-Request-Timestamp": timestamp,
+          "X-Slack-Signature": signature,
+        },
+        body,
+      }),
+      this.#config,
+      this.service,
+      this.#audience,
+      () => "127.0.0.1",
+    );
+  }
+
+  /** An event that the account service signed, such as a revoked person route. */
+  async authEvent(event: DynamicRecord): Promise<void> {
+    const body = JSON.stringify(event);
+    const timestamp = String(Math.floor(Date.now() / 1_000));
+    const response = await handleAuthEvent(
+      new Request("http://signal.test/internal/auth-events", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "OpenBot-Timestamp": timestamp,
+          "OpenBot-Signature": signServiceRequest(body, timestamp, WEBHOOK_SECRET),
+        },
+        body,
+      }),
+      this.#config,
+      this.service,
+    );
+    if (response.status !== 204) throw new Error(`Signal refused the auth event: ${response.status}`);
+  }
+}
+
 function mention(eventId: string, ts: string): DynamicRecord {
   return {
     event_id: eventId,
@@ -272,6 +531,20 @@ let messaging: MessagingService | null = null;
 let ingress: SlackIngress | null = null;
 let signal: FakeSignal;
 let slack: FakeSlack;
+/** What a test with several computers stops after it, newest first. */
+const cleanups: Array<() => Promise<void>> = [];
+
+/** One more computer of the workspace, connected to Signal in process. */
+interface ComputerOptions {
+  root: string;
+  hostId: string;
+  user: SlackUserGrant;
+  signalUrl: string;
+  route(hostId: string): Promise<string>;
+  routing: SlackRoutingPort;
+  /** True when Signal holds this computer's routes. */
+  ready(): boolean;
+}
 
 beforeEach(async () => {
   ({ root } = await startAgentTestFixture());
@@ -286,6 +559,7 @@ afterEach(async () => {
   messaging = null;
   ingress?.dispose();
   ingress = null;
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   await slack.stop();
   await signal.stop();
   await stopAgentTestFixture(root, service);
@@ -296,16 +570,19 @@ afterEach(async () => {
  * A workspace connected as the person (`UME`), with `slack-agent` as its orchestrator. The agent's
  * turns stay open until `finish`, so a test can act inside a turn, as a tool call would.
  */
-async function connectedAsUser(options: { guardsPath?: string } = {}) {
-  const started = await startService(root, { provider: "codex", autoComplete: false });
-  service = started.service;
-  const credentials = new MemoryCredentials();
-  ingress = new SlackIngress({
-    hostId: () => "host-1",
+async function connectedAsUser(options: { guardsPath?: string; host?: ComputerOptions } = {}) {
+  const host = options.host;
+  const started = await startService(host?.root ?? root, { provider: "codex", autoComplete: false });
+  const hostIngress = new SlackIngress({
+    hostId: () => host?.hostId ?? "host-1",
     signedIn: () => true,
-    issueTicket: async () => ({ ticket: "ticket-1", signalUrl: signal.url }),
-    issueSlackRoute: async () => "route-1",
+    issueTicket: async () => ({
+      ticket: host ? `ticket-${host.hostId}` : "ticket-1",
+      signalUrl: host?.signalUrl ?? signal.url,
+    }),
+    issueSlackRoute: host?.route ?? (async () => "route-1"),
   });
+  const credentials = new MemoryCredentials();
   const slackMessaging = new MessagingService({
     threads: started.service.messaging,
     agents: {
@@ -319,13 +596,24 @@ async function connectedAsUser(options: { guardsPath?: string } = {}) {
       createMemory: (input) => started.service.createMemory(input),
     },
     credentials,
-    drivers: [slackDriver({ origin: slack.origin, ingress })],
-    downloadsRoot: join(root, "messaging-downloads"),
-    ingress,
+    drivers: [slackDriver({ origin: slack.origin, ingress: hostIngress })],
+    downloadsRoot: join(host?.root ?? root, "messaging-downloads"),
+    ingress: hostIngress,
     slackOrigin: slack.origin,
     sendGuards: new MessagingSendGuardStore(options.guardsPath ?? null),
+    ...(host ? { slackRouting: host.routing } : {}),
   });
-  messaging = slackMessaging;
+  if (host)
+    cleanups.push(async () => {
+      await slackMessaging.stop();
+      hostIngress.dispose();
+      await started.service.stop();
+    });
+  else {
+    service = started.service;
+    ingress = hostIngress;
+    messaging = slackMessaging;
+  }
   const agent = await started.store.getOrCreate("slack-agent");
   const store = started.service.messaging.store;
   const inbox = started.service.messaging.inbox;
@@ -335,14 +623,14 @@ async function connectedAsUser(options: { guardsPath?: string } = {}) {
     botUserId: "UBOT",
     appId: "A1",
     workspaceId: "T1",
-    userToken: USER_TOKEN,
-    userId: "UME",
+    userToken: host?.user.token ?? USER_TOKEN,
+    userId: host?.user.id ?? "UME",
   });
   store.updateConnection(connectionId, { enabled: true, appId: "A1", orchestratorAgentId: agent.id });
   await slackMessaging.start();
   await waitFor(() => slackMessaging.slackOverview().connections[0]?.state === "connected");
   await waitFor(() => slackMessaging.slackOverview().connections[0]?.userName === "alice");
-  await waitFor(() => signal.hellos.length > 0);
+  await waitFor(host?.ready ?? (() => signal.hellos.length > 0));
   const turns: Array<{ threadId: string; turnId: string }> = [];
   started.client.on("notification", (event: { method: string; params: unknown }) => {
     const params = isDynamicRecord(event.params) ? event.params : null;
@@ -422,6 +710,8 @@ describe.sequential("OpenBot Slack app end to end", () => {
         },
         unlink: async (workspaceId) => {
           unlinked.push(workspaceId);
+          // No other host answers the workspace: the bot token is revoked.
+          return { workspaceRemains: false };
         },
         openExternal: async () => undefined,
       },
@@ -1095,5 +1385,182 @@ describe.sequential("OpenBot Slack app end to end", () => {
         2,
       )}\n`,
     );
+  });
+  it("two people, one workspace", async () => {
+    // Shubham (U1) connects first, so his computer is the workspace's default. Preet (U2) connects
+    // second. Carol (U3) does not use GoAhead.
+    const [U1, U2, U3] = ["U01SHUBHAM", "U02PREET", "U03CAROL"];
+    const shubhamToken = "xoxp-9999-1111-shubhamusertoken";
+    const preetToken = "xoxp-9999-2222-preetusertoken";
+    slack.people.set(shubhamToken, U1);
+    slack.people.set(preetToken, U2);
+    const keys = await generateKeyPair("ES256", { extractable: true });
+    const publicJwk = { ...(await exportJWK(keys.publicKey)), kid: "slack-route-1", alg: "ES256", use: "sig" };
+    const account = new FakeAccountService(keys.privateKey, (event) => relay.authEvent(event));
+    const relay = new InProcessSignal(
+      JSON.stringify({ keys: [publicJwk] }),
+      async (hostId) => {
+        const routes = account.routes(hostId);
+        return { teams: routes.filter((team) => team.isDefault).map((team) => team.id), routes };
+      },
+      slack.origin,
+    );
+    await relay.start();
+    cleanups.push(() => relay.stop());
+    const sockets = (target: { kind: "default" } | { kind: "person"; userId: string }) =>
+      relay.service.slackSockets("A1", "T1", target);
+    const computer = (hostId: string, user: SlackUserGrant) =>
+      connectedAsUser({
+        host: {
+          root: join(root, hostId),
+          hostId,
+          user,
+          signalUrl: relay.url,
+          route: (id) => account.issueSlackRoute(id),
+          routing: account.routing(hostId),
+          ready: () => sockets({ kind: "person", userId: user.id }).length === 1,
+        },
+      });
+    account.link("host-a", U1);
+    const shubham = await computer("host-a", { token: shubhamToken, id: U1 });
+    account.link("host-b", U2);
+    const preet = await computer("host-b", { token: preetToken, id: U2 });
+    expect(sockets({ kind: "default" })).toEqual(sockets({ kind: "person", userId: U1 }));
+
+    // One message event as Slack sends it. Slack's `apps.event.authorizations.list` names who may see
+    // it: the people who installed the app, and the bot when the message is to the bot.
+    const message = async (eventId: string, channel: string, user: string, text: string, audience: string[]) => {
+      slack.audiences.set(
+        `EC-${eventId}`,
+        audience.map((id) => ({ user_id: id, is_bot: id === "UBOT" })),
+      );
+      const response = await relay.post({
+        type: "event_callback",
+        api_app_id: "A1",
+        team_id: "T1",
+        event_id: eventId,
+        event_context: `EC-${eventId}`,
+        authorizations: [{ team_id: "T1", user_id: "UBOT", is_bot: true }],
+        event: {
+          type: "message",
+          channel_type: "im",
+          channel,
+          user,
+          text,
+          ts: `${1791000600 + Number(eventId.slice(2))}.000000`,
+        },
+      });
+      return response.status;
+    };
+    const reached = (eventId: string) =>
+      ["host-a", "host-b"].filter((hostId) => relay.deliveries.get(hostId)?.includes(eventId));
+    const prompt = (host: typeof shubham, index: number) =>
+      JSON.stringify(host.started.client.requests.filter((request) => request.method === "turn/start")[index]);
+    const answered = (channel: string) =>
+      slack.calls.some(
+        (call) => call.method.startsWith("chat.") && call.params.channel === channel && call.token === BOT_TOKEN,
+      );
+    const inbox = (host: typeof shubham, channel: string) =>
+      host.inbox.read(host.connectionId, channel, null, 50).map((entry) => entry.text);
+
+    // Preet's direct message to GoAhead reaches only his computer, which answers it.
+    expect(await message("Ev1", "DPREETBOT", U2, "what is new for me?", [U2, "UBOT"])).toBe(200);
+    expect(reached("Ev1")).toEqual(["host-b"]);
+    await waitFor(() => preet.turns.length === 1);
+    expect(prompt(preet, 0)).toContain("Message from the GoAhead user");
+    preet.finish(preet.turns[0]);
+    await waitFor(() => answered("DPREETBOT"));
+    expect(shubham.turns).toEqual([]);
+
+    // Carol has no GoAhead: the default computer answers her.
+    expect(await message("Ev2", "DCAROLBOT", U3, "who can help me?", [U3, "UBOT"])).toBe(200);
+    expect(reached("Ev2")).toEqual(["host-a"]);
+    await waitFor(() => shubham.turns.length === 1);
+    expect(prompt(shubham, 0)).toContain("This person is not the GoAhead user.");
+    shubham.finish(shubham.turns[0]);
+    await waitFor(() => answered("DCAROLBOT"));
+    expect(preet.turns).toHaveLength(1);
+
+    // A direct message between Shubham and Preet goes to both their computers, not only to the
+    // default, and lands in both inboxes. It starts no work.
+    slack.members.set("D-SHUBHAM-PREET", new Set([U1, U2]));
+    expect(await message("Ev3", "D-SHUBHAM-PREET", U2, "Can you review my PR?", [U1, U2])).toBe(200);
+    expect(reached("Ev3")).toEqual(["host-a", "host-b"]);
+    await waitFor(() => inbox(shubham, "D-SHUBHAM-PREET").length === 1);
+    await waitFor(() => inbox(preet, "D-SHUBHAM-PREET").length === 1);
+    expect(inbox(shubham, "D-SHUBHAM-PREET")).toEqual(["Can you review my PR?"]);
+
+    // A direct message between Preet and Carol is Preet's only: the default never receives it.
+    slack.members.set("D-PREET-CAROL", new Set([U2, U3]));
+    expect(await message("Ev4", "D-PREET-CAROL", U3, "Lunch tomorrow?", [U2])).toBe(200);
+    expect(reached("Ev4")).toEqual(["host-b"]);
+    await waitFor(() => inbox(preet, "D-PREET-CAROL").length === 1);
+    expect(inbox(shubham, "D-PREET-CAROL")).toEqual([]);
+    expect(shubham.turns).toHaveLength(1);
+    expect(preet.turns).toHaveLength(1);
+
+    // Preet answers from his inbox: the reply goes out with his own user token.
+    await preet.messaging.sendInboxReply({ workspaceId: "T1", conversation: "D-PREET-CAROL", text: "Yes, at noon" });
+    expect(slack.of("chat.postMessage").at(-1)).toMatchObject({
+      token: preetToken,
+      params: { channel: "D-PREET-CAROL", text: "Yes, at noon" },
+    });
+
+    // Preet disconnects. Only his route goes, and only his user token is revoked: the bot token is
+    // the workspace's, and Shubham's computer keeps it.
+    const revokedBefore = slack.of("auth.revoke").length;
+    await preet.messaging.disconnectSlackWorkspace("T1");
+    expect(account.events).toEqual([{ type: "slack-person-route-revoked", appId: "A1", teamId: "T1", userId: U2 }]);
+    await waitFor(() => sockets({ kind: "person", userId: U2 }).length === 0);
+    expect(await shubham.messaging.slackRouting("T1")).toEqual({ isDefault: true, people: [] });
+    expect(sockets({ kind: "default" })).toEqual(sockets({ kind: "person", userId: U1 }));
+
+    // Shubham's computer stays the default and still answers Carol.
+    expect(await message("Ev5", "DCAROLBOT", U3, "are you still there?", [U3, "UBOT"])).toBe(200);
+    expect(reached("Ev5")).toEqual(["host-a"]);
+    await waitFor(() => shubham.turns.length === 2);
+    shubham.finish(shubham.turns[1]);
+    expect(shubham.messaging.slackOverview().connections[0]?.state).toBe("connected");
+    // The tokens Preet's disconnect revoked, by kind: never the token itself in the report.
+    const revoked = slack
+      .of("auth.revoke")
+      .slice(revokedBefore)
+      .map((call) => (call.token === preetToken ? "preet-user" : call.token === BOT_TOKEN ? "bot" : "other"));
+    // Shubham's computer posts its answers with the workspace's bot token.
+    const botCheck = await fetch(`${slack.origin}/api/auth.test`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${BOT_TOKEN}` },
+    });
+    const botTokenWorks = isDynamicRecord(await botCheck.json()) && !slack.revoked.has(BOT_TOKEN);
+
+    mkdirSync(REPORT_DIR, { recursive: true });
+    writeFileSync(
+      join(REPORT_DIR, "two-people.json"),
+      `${JSON.stringify(
+        {
+          hosts: { "host-a": { person: U1, isDefault: true }, "host-b": { person: U2, isDefault: false } },
+          deliveries: Object.fromEntries(relay.deliveries),
+          directToBot: { fromPreet: "host-b", fromCarolWithoutGoAhead: "host-a", answeredWhereReceived: true },
+          privateDirectMessages: {
+            shubhamAndPreet: { reached: reached("Ev3"), inInboxOf: ["host-a", "host-b"] },
+            preetAndCarol: { reached: reached("Ev4"), inInboxOf: ["host-b"] },
+          },
+          inboxReply: { postedWithOwnersUserToken: true },
+          afterPreetDisconnects: {
+            personRouteRevoked: true,
+            revokedTokens: revoked,
+            shubhamStaysDefault: true,
+            defaultStillReceivesAndStartsWork: true,
+            defaultBotTokenWorks: botTokenWorks,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    // Spec, "Disconnect and revocation": a person's disconnect revokes only their user token. The bot
+    // token is revoked only when nobody of the workspace remains.
+    expect(revoked).toEqual(["preet-user"]);
+    expect(botTokenWorks).toBe(true);
   });
 });

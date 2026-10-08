@@ -46,6 +46,8 @@ export const MESSAGING_LIMITS = {
   drafts: 100,
   inboxConversations: 200,
   inboxMessages: 100,
+  /** The longest reply, in characters after trim, that the person can send from the inbox. */
+  inboxReply: 4_000,
 } as const;
 
 export interface MessagingConnection {
@@ -308,6 +310,42 @@ export interface MessagingInboxPage {
   messages: MessagingInboxMessage[];
 }
 
+/**
+ * A reply that the person types in an inbox conversation. It goes out as the person, with their user
+ * token, and needs no approval. Without `threadKey` it goes to the top of the conversation.
+ */
+export interface SendInboxReplyInput {
+  workspaceId: string;
+  /** The inbox conversation, as in `ReadInboxConversationInput`. */
+  conversation: string;
+  threadKey?: string;
+  /** 1 to `MESSAGING_LIMITS.inboxReply` characters after trim. */
+  text: string;
+}
+
+export interface SlackRoutingWorkspaceInput {
+  workspaceId: string;
+}
+
+/** The other connected person that the default computer's owner can hand the default to. */
+export interface SlackRoutingPerson {
+  slackUserId: string;
+  displayName: string;
+}
+
+/** Which computer answers the people of a workspace who do not use GoAhead. */
+export interface SlackRoutingStatus {
+  /** This computer answers people without GoAhead. */
+  isDefault: boolean;
+  /** Other connected people the default can be handed to. Empty unless `isDefault`. */
+  people: SlackRoutingPerson[];
+}
+
+export interface HandOverSlackDefaultInput {
+  workspaceId: string;
+  slackUserId: string;
+}
+
 /** The inbox of a workspace got a new message. The desktop reads it again. */
 export interface MessagingInboxChanged {
   workspaceId: string;
@@ -454,5 +492,20 @@ export function isSlackOverview(value: unknown): value is SlackOverview {
 export function isAddSlackOrchestratorResult(value: unknown): value is AddSlackOrchestratorResult {
   return (
     isDynamicRecord(value) && isIdentifier(value.agentId) && (value.sectionId === null || isIdentifier(value.sectionId))
+  );
+}
+
+export function isSlackRoutingStatus(value: unknown): value is SlackRoutingStatus {
+  return (
+    isDynamicRecord(value) &&
+    isBoolean(value.isDefault) &&
+    Array.isArray(value.people) &&
+    value.people.length <= MESSAGING_LIMITS.connections &&
+    value.people.every(
+      (person) =>
+        isDynamicRecord(person) &&
+        isIdentifier(person.slackUserId) &&
+        isBoundedString(person.displayName, MESSAGING_LIMITS.name),
+    )
   );
 }

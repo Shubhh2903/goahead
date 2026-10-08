@@ -45,3 +45,6 @@ services:
         sync: false
       - key: SLACK_SIGNING_SECRET
         sync: false
+      # <app ID>:<app-level token with authorizations:read>, comma-separated.
+      - key: SLACK_APP_TOKEN
+        sync: false

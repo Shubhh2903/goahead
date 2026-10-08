@@ -13,11 +13,16 @@ import {
   RemoteTicketSigner,
   verifyRemoteServiceSignature,
 } from "../src/server/remote-control-plane";
-import { sqliteD1 } from "./sqlite-d1";
+import { migratedDatabase, sqliteD1 } from "./sqlite-d1";
 
 /** The account server reads the plan of a host for its member limit, and its Slack workspaces. */
 function applyPlanMigrations(database: DatabaseSync): void {
-  for (const name of ["0022_billing.sql", "0023_hosted_servers.sql", "0025_slack_workspace_routes.sql"]) {
+  for (const name of [
+    "0022_billing.sql",
+    "0023_hosted_servers.sql",
+    "0025_slack_workspace_routes.sql",
+    "0026_slack_person_routes.sql",
+  ]) {
     database.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
   }
 }
@@ -604,17 +609,17 @@ describe("RemoteControlPlane", () => {
           { id: "T2", appId: "A1", linkedAt: 1 },
         ],
       }),
-    ).resolves.toEqual(["T1"]);
+    ).resolves.toMatchObject({ teams: ["T1"] });
     await expect(
       controlPlane.validateSlackRoute({ hostId: "host-1", teams: [{ id: "T1", appId: "A1", linkedAt: 0 }] }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ teams: [], routes: [] });
     await expect(
       controlPlane.validateSlackRoute({ hostId: "host-2", teams: [{ id: "T1", appId: "A1", linkedAt: 1 }] }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ teams: [], routes: [] });
     // Another app's link to the same workspace is not this one.
     await expect(
       controlPlane.validateSlackRoute({ hostId: "host-1", teams: [{ id: "T1", appId: "A2", linkedAt: 1 }] }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ teams: [], routes: [] });
     const revocations = () =>
       webhookBodies.map((body) => JSON.parse(body)).filter((event) => event.type === "slack-route-revoked");
     await controlPlane.disconnectSlackWorkspace("host-1", registration.machineToken, "T1");
@@ -625,7 +630,7 @@ describe("RemoteControlPlane", () => {
     ]);
     await expect(
       controlPlane.validateSlackRoute({ hostId: "host-1", teams: [{ id: "T1", appId: "A1", linkedAt: 1 }] }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ teams: [], routes: [] });
     await controlPlane.disconnectSlackWorkspace("host-1", registration.machineToken, "T1");
     expect(revocations()).toHaveLength(1);
     expect(database.prepare("SELECT membership_id FROM remote_memberships WHERE user_id = 'owner'").get()).toEqual({
@@ -1182,6 +1187,319 @@ describe("member limits per plan", () => {
           .all()
           .map((row) => row.userId),
       ).toEqual(["owner", ...users.slice(0, 8)].sort());
+    } finally {
+      database.close();
+    }
+  });
+});
+
+/**
+ * Three hosts, one for each person, and one Slack workspace `T1`. Host A holds the workspace's
+ * default route. Each host proves itself with `token-<letter>`.
+ */
+async function slackPeople(now = 1_000) {
+  const database = migratedDatabase();
+  database.exec(`
+    INSERT INTO users(id, identity_key, email, created_at, updated_at) VALUES
+      ('shubham', 'email:shubham@example.com', 'shubham@example.com', 1, 1),
+      ('preet', 'email:preet@example.com', 'preet@example.com', 1, 1),
+      ('third', 'email:third@example.com', 'third@example.com', 1, 1);
+  `);
+  const insertHost = database.prepare(
+    `INSERT INTO remote_hosts(host_id, owner_user_id, name, machine_token_hash, auth_epoch, created_at, updated_at)
+     VALUES (?, ?, 'Desktop', ?, 1, 1, 1)`,
+  );
+  insertHost.run("host-a", "shubham", await sha256("token-a"));
+  insertHost.run("host-b", "preet", await sha256("token-b"));
+  insertHost.run("host-c", "third", await sha256("token-c"));
+  database.exec(`
+    INSERT INTO slack_workspace_routes(team_id, host_id, account_id, app_id, bot_user_id, connected_at)
+    VALUES ('T1', 'host-a', 'shubham', 'A1', 'UBOT', 5);
+  `);
+  const pair = await generateKeyPair("ES256", { extractable: true });
+  const privateJwk = JSON.stringify({ ...(await exportJWK(pair.privateKey)), kid: "slack-key", alg: "ES256" });
+  const publicJwk = { ...(await exportJWK(pair.publicKey)), kid: "slack-key", use: "sig", alg: "ES256" };
+  const events: { type: string }[] = [];
+  const controlPlane = new RemoteControlPlane(
+    {
+      DB: sqliteD1(database),
+      REMOTE_TICKET_PRIVATE_JWK: privateJwk,
+      REMOTE_TICKET_PUBLIC_JWKS: JSON.stringify({ keys: [publicJwk] }),
+      REMOTE_TICKET_KEY_ID: "slack-key",
+      REMOTE_AUTH_WEBHOOK_URL: "https://signal.example.test/internal/auth-events",
+      REMOTE_AUTH_WEBHOOK_SECRET: "s".repeat(32),
+      SLACK_ROUTE_PRIVATE_JWK: privateJwk,
+      SLACK_ROUTE_KEY_ID: "slack-key",
+    },
+    {
+      now: () => now,
+      fetch: async (_input, init) => {
+        events.push(JSON.parse(String(init?.body)));
+        return new Response(null, { status: 204 });
+      },
+    },
+  );
+  const addPerson = (slackUserId: string, hostId: string, accountId: string, connectedAt: number) =>
+    database
+      .prepare(
+        "INSERT INTO slack_person_routes(team_id, slack_user_id, host_id, account_id, connected_at) VALUES ('T1', ?, ?, ?, ?)",
+      )
+      .run(slackUserId, hostId, accountId, connectedAt);
+  const workspaceRow = () =>
+    database.prepare("SELECT host_id, account_id, connected_at FROM slack_workspace_routes WHERE team_id = 'T1'").get();
+  const personIds = () =>
+    database
+      .prepare("SELECT slack_user_id FROM slack_person_routes WHERE team_id = 'T1' ORDER BY slack_user_id")
+      .all()
+      .map((row) => row.slack_user_id);
+  return { database, controlPlane, events, addPerson, workspaceRow, personIds };
+}
+
+describe("Slack person routes", () => {
+  it("ticket lists default and person routes", async () => {
+    const { database, controlPlane, addPerson } = await slackPeople();
+    try {
+      addPerson("USHUBHAM", "host-a", "shubham", 5);
+      addPerson("UPREET", "host-b", "preet", 7);
+      const defaultRoute = await controlPlane.issueSlackRoute("host-a", "token-a");
+      expect(defaultRoute.teams).toEqual(["T1"]);
+      expect(decodeJwt(defaultRoute.ticket).teams).toEqual([
+        {
+          id: "T1",
+          appId: "A1",
+          linkedAt: 5,
+          isDefault: true,
+          users: [{ id: "USHUBHAM", linkedAt: 5 }],
+          routedUsers: ["USHUBHAM", "UPREET"],
+        },
+      ]);
+      const personRoute = await controlPlane.issueSlackRoute("host-b", "token-b");
+      expect(personRoute.teams).toEqual(["T1"]);
+      expect(decodeJwt(personRoute.ticket).teams).toEqual([
+        { id: "T1", appId: "A1", linkedAt: 7, isDefault: false, users: [{ id: "UPREET", linkedAt: 7 }] },
+      ]);
+      expect((await controlPlane.issueSlackRoute("host-c", "token-c")).teams).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("default ticket lists routed users", async () => {
+    const { database, controlPlane, addPerson } = await slackPeople();
+    try {
+      addPerson("USHUBHAM", "host-a", "shubham", 5);
+      addPerson("UPREET", "host-b", "preet", 7);
+      addPerson("UTHIRD", "host-c", "third", 9);
+      const route = await controlPlane.issueSlackRoute("host-a", "token-a");
+      expect(decodeJwt(route.ticket).teams).toMatchObject([
+        { id: "T1", isDefault: true, routedUsers: ["USHUBHAM", "UPREET", "UTHIRD"] },
+      ]);
+      // A person-only entry has no list: only the default needs it.
+      expect(decodeJwt((await controlPlane.issueSlackRoute("host-b", "token-b")).ticket).teams).toEqual([
+        { id: "T1", appId: "A1", linkedAt: 7, isDefault: false, users: [{ id: "UPREET", linkedAt: 7 }] },
+      ]);
+      // Signal keeps the signed list of a default link that still holds.
+      const validated = await controlPlane.validateSlackRoute({
+        hostId: "host-a",
+        teams: [{ id: "T1", appId: "A1", linkedAt: 5, isDefault: true, users: [], routedUsers: ["UPREET"] }],
+      });
+      expect(validated.routes).toEqual([
+        { id: "T1", appId: "A1", linkedAt: 5, isDefault: true, users: [], routedUsers: ["UPREET"] },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("a default host without a person row gets a legacy entry", async () => {
+    const { database, controlPlane, addPerson } = await slackPeople();
+    try {
+      // Host A connected before multi-user Slack: it is the default, with no person row.
+      addPerson("UPREET", "host-b", "preet", 7);
+      const route = await controlPlane.issueSlackRoute("host-a", "token-a");
+      const entry = { id: "T1", appId: "A1", linkedAt: 5, users: [], routedUsers: ["UPREET"] };
+      expect(decodeJwt(route.ticket).teams).toEqual([entry]);
+      // The legacy entry still validates as the default.
+      await expect(controlPlane.validateSlackRoute({ hostId: "host-a", teams: [entry] })).resolves.toEqual({
+        teams: ["T1"],
+        routes: [{ id: "T1", appId: "A1", linkedAt: 5, isDefault: true, users: [], routedUsers: ["UPREET"] }],
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("ticket without people validates as today", async () => {
+    const { database, controlPlane, addPerson } = await slackPeople();
+    try {
+      addPerson("USHUBHAM", "host-a", "shubham", 5);
+      const result = await controlPlane.validateSlackRoute({
+        hostId: "host-a",
+        teams: [{ id: "T1", appId: "A1", linkedAt: 5 }],
+      });
+      expect(result.teams).toEqual(["T1"]);
+      expect(result.routes).toEqual([{ id: "T1", appId: "A1", linkedAt: 5 }]);
+      expect(result.routes[0]).not.toHaveProperty("users");
+      await expect(
+        controlPlane.validateSlackRoute({ hostId: "host-b", teams: [{ id: "T1", appId: "A1", linkedAt: 5 }] }),
+      ).resolves.toEqual({ teams: [], routes: [] });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("validate drops a moved person", async () => {
+    const { database, controlPlane, addPerson } = await slackPeople();
+    try {
+      addPerson("USHUBHAM", "host-a", "shubham", 5);
+      addPerson("UPREET", "host-c", "preet", 9);
+      const result = await controlPlane.validateSlackRoute({
+        hostId: "host-b",
+        teams: [{ id: "T1", appId: "A1", linkedAt: 7, isDefault: false, users: [{ id: "UPREET", linkedAt: 7 }] }],
+      });
+      expect(result).toEqual({ teams: [], routes: [] });
+      const kept = await controlPlane.validateSlackRoute({
+        hostId: "host-a",
+        teams: [
+          {
+            id: "T1",
+            appId: "A1",
+            linkedAt: 5,
+            isDefault: true,
+            users: [
+              { id: "USHUBHAM", linkedAt: 5 },
+              { id: "UPREET", linkedAt: 9 },
+            ],
+          },
+        ],
+      });
+      expect(kept).toEqual({
+        teams: ["T1"],
+        routes: [{ id: "T1", appId: "A1", linkedAt: 5, isDefault: true, users: [{ id: "USHUBHAM", linkedAt: 5 }] }],
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("person disconnect keeps the bot for others", async () => {
+    const { database, controlPlane, events, addPerson, workspaceRow, personIds } = await slackPeople();
+    try {
+      addPerson("USHUBHAM", "host-a", "shubham", 5);
+      addPerson("UPREET", "host-b", "preet", 7);
+      // The leaving host must keep the shared bot token: another host still answers the workspace.
+      expect(await controlPlane.disconnectSlackWorkspace("host-b", "token-b", "T1", "UPREET")).toEqual({
+        workspaceRemains: true,
+      });
+      expect(personIds()).toEqual(["USHUBHAM"]);
+      expect(workspaceRow()).toEqual({ host_id: "host-a", account_id: "shubham", connected_at: 5 });
+      expect(events).toEqual([
+        { type: "slack-person-route-revoked", appId: "A1", teamId: "T1", userId: "UPREET", through: 1_000 },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("default moves to earliest person", async () => {
+    const { database, controlPlane, events, addPerson, workspaceRow, personIds } = await slackPeople();
+    try {
+      addPerson("USHUBHAM", "host-a", "shubham", 5);
+      addPerson("UTHIRD", "host-c", "third", 20);
+      addPerson("UPREET", "host-b", "preet", 10);
+      await controlPlane.disconnectSlackWorkspace("host-a", "token-a", "T1", "USHUBHAM");
+      expect(personIds()).toEqual(["UPREET", "UTHIRD"]);
+      expect(workspaceRow()).toEqual({ host_id: "host-b", account_id: "preet", connected_at: 1_000 });
+      // Both events share one timestamp, so Signal may get them in either order.
+      expect(events).toHaveLength(2);
+      expect(events).toEqual(
+        expect.arrayContaining([
+          { type: "slack-person-route-revoked", appId: "A1", teamId: "T1", userId: "USHUBHAM", through: 1_000 },
+          { type: "slack-route-revoked", appId: "A1", teamId: "T1", through: 999 },
+        ]),
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("last person disconnect deletes the workspace row", async () => {
+    const { database, controlPlane, events, addPerson, workspaceRow, personIds } = await slackPeople();
+    try {
+      addPerson("USHUBHAM", "host-a", "shubham", 5);
+      expect(await controlPlane.disconnectSlackWorkspace("host-a", "token-a", "T1", "USHUBHAM")).toEqual({
+        workspaceRemains: false,
+      });
+      expect(personIds()).toEqual([]);
+      expect(workspaceRow()).toBeUndefined();
+      expect(events).toHaveLength(2);
+      expect(events).toEqual(
+        expect.arrayContaining([
+          { type: "slack-person-route-revoked", appId: "A1", teamId: "T1", userId: "USHUBHAM", through: 1_000 },
+          { type: "slack-route-revoked", appId: "A1", teamId: "T1", through: 1_000 },
+        ]),
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("host disconnect without person moves the default", async () => {
+    const { database, controlPlane, events, addPerson, workspaceRow, personIds } = await slackPeople();
+    try {
+      addPerson("UPREET", "host-b", "preet", 7);
+      await controlPlane.disconnectSlackWorkspace("host-a", "token-a", "T1");
+      expect(personIds()).toEqual(["UPREET"]);
+      expect(workspaceRow()).toEqual({ host_id: "host-b", account_id: "preet", connected_at: 1_000 });
+      expect(events).toEqual([{ type: "slack-route-revoked", appId: "A1", teamId: "T1", through: 999 }]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("handover moves the default", async () => {
+    const { database, controlPlane, events, addPerson, workspaceRow } = await slackPeople();
+    try {
+      addPerson("USHUBHAM", "host-a", "shubham", 5);
+      addPerson("UPREET", "host-b", "preet", 7);
+      await expect(controlPlane.slackRoutingStatus("host-a", "token-a", "T1")).resolves.toEqual({
+        isDefault: true,
+        people: [{ slackUserId: "UPREET" }],
+      });
+      await expect(controlPlane.slackRoutingStatus("host-b", "token-b", "T1")).resolves.toEqual({
+        isDefault: false,
+        people: [],
+      });
+      await controlPlane.handOverSlackDefault("host-a", "token-a", "T1", "UPREET");
+      expect(workspaceRow()).toEqual({ host_id: "host-b", account_id: "preet", connected_at: 1_000 });
+      expect(events).toEqual([{ type: "slack-route-revoked", appId: "A1", teamId: "T1", through: 999 }]);
+      await expect(controlPlane.slackRoutingStatus("host-b", "token-b", "T1")).resolves.toEqual({
+        isDefault: true,
+        people: [{ slackUserId: "USHUBHAM" }],
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("handover refused when not default", async () => {
+    const { database, controlPlane, events, addPerson, workspaceRow } = await slackPeople();
+    try {
+      addPerson("USHUBHAM", "host-a", "shubham", 5);
+      addPerson("UPREET", "host-b", "preet", 7);
+      await expect(controlPlane.handOverSlackDefault("host-b", "token-b", "T1", "USHUBHAM")).rejects.toMatchObject({
+        status: 409,
+        code: "slack_default_not_owned",
+      });
+      await expect(controlPlane.handOverSlackDefault("host-a", "token-a", "T1", "UNOBODY")).rejects.toMatchObject({
+        status: 404,
+        code: "slack_person_not_found",
+      });
+      await expect(controlPlane.handOverSlackDefault("host-a", "token-b", "T1", "UPREET")).rejects.toMatchObject({
+        code: "host_unauthorized",
+      });
+      expect(workspaceRow()).toEqual({ host_id: "host-a", account_id: "shubham", connected_at: 5 });
+      expect(events).toEqual([]);
     } finally {
       database.close();
     }

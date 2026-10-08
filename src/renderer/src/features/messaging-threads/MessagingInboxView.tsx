@@ -6,12 +6,14 @@ import { useText } from "@openbot/ui/text";
 import { createMemo, For, Show } from "solid-js";
 import { formatMessageTime } from "../../app-message-projection";
 import { useAgents } from "../agents/agents-context";
+import { MessagingInboxReply } from "./MessagingInboxReply";
 import { useMessagingThreads } from "./messaging-threads-context";
 import { messagingThreadsPort } from "./messaging-threads-port";
 
 /**
- * The person's local Slack inbox, read-only: the conversations on the left, the messages of the open
- * one on the right. Reading a conversation marks it read for GoAhead. Nothing here sends.
+ * The person's local Slack inbox: the conversations on the left, the messages of the open one on the
+ * right, and a box that replies as the person. Reading a conversation marks it read for GoAhead. Every
+ * inbox workspace is connected as the person, so each one can send the reply.
  */
 export function MessagingInboxView() {
   const { t } = useText();
@@ -92,9 +94,10 @@ export function MessagingInboxView() {
               }}
             </For>
           </div>
-          <p class="messaging-thread-readonly" role="note">
-            {t("messaging.inbox.readOnly")}
-          </p>
+          {/* A new conversation starts with an empty box. With no open conversation, the "choose" note above is enough. */}
+          <Show keyed when={activeKey()}>
+            <MessagingInboxReply onSend={threads.sendInboxReply} />
+          </Show>
         </section>
       </div>
     </main>

@@ -465,14 +465,24 @@ Network traffic can also occur when:
 A workspace member installs the GoAhead Slack app in their workspace from GoAhead on their computer.
 The account service exchanges that install with Slack, because the app's secret lives there. It
 records which GoAhead computer answers the workspace: the Slack workspace ID, the computer, the
-GoAhead account that connected it, and the Slack app and bot user IDs. It keeps no Slack token and no
-message. It gives the bot token to the computer encrypted to a key that only that computer has.
+GoAhead account that connected it, and the Slack app and bot user IDs. When more than one person in
+a workspace connects, it also records, for each person, their Slack user ID, their computer, their
+GoAhead account and the time they connected. The first computer that connected the workspace
+answers people who do not use GoAhead. It keeps no Slack token and no message. It gives the bot
+token to the computer encrypted to a key that only that computer has.
 
 Slack sends the workspace's events, which contain the Slack messages in the channels GoAhead is in
 and its direct messages, to GoAhead's Signal service (`signal.openbot.run`). Signal checks Slack's
-signature and reads only the app ID and the workspace ID, to find the computer. It passes each request to that
-computer over its Signal connection, in transit only: it does not store or log the message. The
-answers go from the computer to the Slack Web API directly.
+signature and reads the app ID, the workspace ID, the event ID and context, and these Slack user
+IDs: the author's, the clicker's, the draft owner's from the button's `block_id`, and the users in
+a `tokens_revoked` event. It uses them only to find the computers. For each message event,
+including direct messages with GoAhead, Signal sends the event context to Slack's
+`apps.event.authorizations.list`, with the app-level token, to learn which connected people may see
+the message. It keeps that answer, a list of Slack user IDs, in memory for 10 minutes and does not
+write it to disk. It passes each request only to the computers of those people, over their Signal
+connections, in transit only: it does not store or log the message. A private conversation between
+people therefore reaches only their own computers. The answers go from the computer to the Slack
+Web API directly.
 
 - **Stored on the host.** The bot token is encrypted by the operating system's secret storage, like
   provider API keys, and redacted from logs, exports and diagnostics. The database holds the
@@ -494,8 +504,9 @@ answers go from the computer to the Slack Web API directly.
   older than 30 days are deleted, a channel you remove loses its messages, and disconnect deletes the
   whole inbox. Agents read the inbox only when you ask in your own direct message with GoAhead. A
   message goes out as you only when you asked for it yourself; when someone else asks, it goes out
-  from the GoAhead app after you approve it, and its first line names who asked. Nothing in the inbox leaves
-  the computer, except the parts an agent reads, which go to that agent's provider.
+  from the GoAhead app after you approve it, and its first line names who asked. A reply that you
+  type in the inbox goes to Slack as you, with no approval, and is kept in the audit log. Nothing in
+  the inbox leaves the computer, except the parts an agent reads, which go to that agent's provider.
 - **Given to the Slack Orchestrator.** Every new Slack request goes first to the orchestrator agent,
   which runs on its provider like any other agent and passes the work to a teammate with the facts
   it needs.

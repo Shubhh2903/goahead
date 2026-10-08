@@ -17,9 +17,11 @@ import type {
   MessagingPlatform,
   MessagingThreadSummary,
   RespondToApprovalInput,
+  SendInboxReplyInput,
   SlackChannelChoice,
   SlackChannelList,
   SlackOverview,
+  SlackRoutingStatus,
 } from "@openbot/contracts/ipc";
 import { MESSAGING_CONNECTION_STATES, MESSAGING_LIMITS } from "@openbot/contracts/ipc";
 import { isDynamicRecord, isOneOf, isString } from "@openbot/contracts/runtime-values";
@@ -97,6 +99,27 @@ export interface MessagingAgents {
   createMemory(input: { agentId: string; text: string }): unknown;
 }
 
+/** What the account service says about a workspace's default computer, before names are added. */
+export interface SlackDefaultStatus {
+  isDefault: boolean;
+  people: Array<{ slackUserId: string }>;
+}
+
+/**
+ * The account service half of a workspace with several people: which computer answers the people
+ * who do not use GoAhead, and the person routes of this host.
+ */
+export interface SlackRoutingPort {
+  /**
+   * Unlinks only this person from the workspace. The default moves on when they had it.
+   * `workspaceRemains` is true when another host still answers the workspace, or when it is unknown.
+   */
+  unlinkPerson(workspaceId: string, slackUserId: string): Promise<{ workspaceRemains: boolean }>;
+  status(workspaceId: string): Promise<SlackDefaultStatus>;
+  /** The default's owner gives the default to another connected person. Answers the status after. */
+  handOver(workspaceId: string, slackUserId: string): Promise<SlackDefaultStatus>;
+}
+
 export interface MessagingServiceOptions {
   threads: MessagingThreads;
   agents: MessagingAgents;
@@ -113,6 +136,8 @@ export interface MessagingServiceOptions {
   sidebar?: Pick<SidebarLayoutStore, "getSnapshot" | "mutate">;
   /** The person's send guards: pause and quiet hours. Without it, they live in memory only. */
   sendGuards?: MessagingSendGuardStore;
+  /** Without it, a disconnect unlinks the whole host, and the routing status is not available. */
+  slackRouting?: SlackRoutingPort;
 }
 
 interface LiveConnection {
@@ -238,6 +263,7 @@ export class MessagingService {
   readonly #slackOrigin: string | undefined;
   readonly #sidebar: Pick<SidebarLayoutStore, "getSnapshot" | "mutate"> | null;
   readonly #guards: MessagingSendGuardStore;
+  readonly #routing: SlackRoutingPort | null;
   #started = false;
 
   constructor(options: MessagingServiceOptions) {
@@ -251,6 +277,7 @@ export class MessagingService {
     this.#slackOrigin = options.slackOrigin;
     this.#sidebar = options.sidebar ?? null;
     this.#guards = options.sendGuards ?? new MessagingSendGuardStore(null);
+    this.#routing = options.slackRouting ?? null;
   }
 
   async start(): Promise<void> {
@@ -529,25 +556,135 @@ export class MessagingService {
   }
 
   /**
-   * Stops the workspace's connection, asks Slack to revoke the user token and the bot token, removes
-   * them, and unlinks the workspace from this host. The conversations stay, for a later connect.
+   * Stops the workspace's connection, asks Slack to revoke the person's user token, removes the
+   * tokens, and unlinks the workspace from this host. The conversations stay, for a later connect.
+   * The bot token is shared by every host of the workspace: it is revoked only when the account
+   * service says that no host answers the workspace any more.
    */
   async disconnectSlackWorkspace(workspaceId: string): Promise<void> {
     const record = this.#requireConnection(workspaceId);
     await this.#stopConnection(record.connectionId);
     const values = this.#credentials.get(record.connectionId);
-    for (const token of [values?.userToken, values?.botToken])
-      if (token)
-        await new SlackWebApi({ token, origin: this.#slackOrigin })
-          .call("auth.revoke")
-          .catch((error) => this.#warn(error));
+    const revoke = (token: string | undefined) =>
+      token
+        ? new SlackWebApi({ token, origin: this.#slackOrigin }).call("auth.revoke").then(
+            () => undefined,
+            (error) => this.#warn(error),
+          )
+        : Promise.resolve();
+    await revoke(values?.userToken);
+    // Connected as a person, only that person leaves: the other people of the workspace keep their routes.
+    const owner = values?.userId;
+    let workspaceRemains = false;
+    if (owner && this.#routing) {
+      // Unknown (the account service did not answer) counts as "remains": a lost shared bot token
+      // stops every other person's GoAhead.
+      workspaceRemains = await this.#routing.unlinkPerson(workspaceId, owner).then(
+        (result) => result.workspaceRemains,
+        (error) => {
+          this.#warn(error);
+          return true;
+        },
+      );
+    } else {
+      // A bot-only disconnect: the bot token is revoked only when the account service says that no
+      // other host answers the workspace. Unknown keeps it.
+      const connect = this.#connect;
+      workspaceRemains = connect
+        ? await connect.unlink(workspaceId).then(
+            (result) => result.workspaceRemains,
+            (error) => {
+              this.#warn(error);
+              return true;
+            },
+          )
+        : true;
+    }
+    if (!workspaceRemains) await revoke(values?.botToken);
     await this.#credentials.clear(record.connectionId);
     // The inbox is a copy of the person's Slack messages, read with the access this revokes.
     this.#threads.inbox.deleteForConnection(record.connectionId);
     this.#inboxChanged(record.workspaceId);
     this.#threads.store.updateConnection(record.connectionId, { enabled: false, lastErrorCode: null });
-    await this.#connect?.unlink(workspaceId).catch((error) => this.#warn(error));
     this.#ingress?.reconnect();
+  }
+
+  /**
+   * Whether this computer answers the workspace's people who do not use GoAhead, and the other
+   * connected people its owner can hand that to, with their Slack names.
+   */
+  async slackRouting(workspaceId: string): Promise<SlackRoutingStatus> {
+    const record = this.#requireConnection(workspaceId);
+    return this.#routingStatus(record, await this.#requireRouting().status(workspaceId));
+  }
+
+  /** The default's owner gives the default to another connected person of the workspace. */
+  async handOverSlackDefault(workspaceId: string, slackUserId: string): Promise<SlackRoutingStatus> {
+    const record = this.#requireConnection(workspaceId);
+    const status = await this.#requireRouting().handOver(workspaceId, slackUserId);
+    // The route ticket of this host changes: Signal learns it when the socket connects again.
+    this.#ingress?.reconnect();
+    return this.#routingStatus(record, status);
+  }
+
+  async #routingStatus(record: MessagingConnectionRecord, status: SlackDefaultStatus): Promise<SlackRoutingStatus> {
+    const live = this.#live.get(record.connectionId);
+    const owner = this.#credentials.get(record.connectionId)?.userId;
+    const people = status.isDefault
+      ? status.people.filter((person) => person.slackUserId !== owner).slice(0, MESSAGING_LIMITS.connections)
+      : [];
+    return {
+      isDefault: status.isDefault,
+      people: await Promise.all(
+        people.map(async ({ slackUserId }) => ({
+          slackUserId,
+          displayName: (
+            (await live?.adapter.authorName(slackUserId).catch((error) => {
+              this.#warn(error);
+              return null;
+            })) || slackUserId
+          ).slice(0, MESSAGING_LIMITS.name),
+        })),
+      ),
+    };
+  }
+
+  /**
+   * A reply that the person typed in an inbox conversation, posted as them. Their own words need no
+   * approval, so pause, quiet hours and the hourly limit do not hold it. The send is on record.
+   */
+  async sendInboxReply(input: SendInboxReplyInput): Promise<void> {
+    const live = this.#personConnection(input.workspaceId);
+    const user = live.identity?.user;
+    if (!user || !live.adapter.postAsUser) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
+    const text = input.text.trim();
+    if (!text) throw new Error(sourceText("error.messaging.sendTextEmpty"));
+    // Only a malformed request gets here: the desktop box stops at the limit.
+    if (text.length > MESSAGING_LIMITS.inboxReply) throw new Error("The reply is too long.");
+    const connectionId = live.record.connectionId;
+    // Only a conversation the inbox holds: the person answers what they read.
+    if (this.#threads.inbox.read(connectionId, input.conversation, null, 1).length === 0)
+      throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
+    const { ts } = await live.adapter.postAsUser({
+      channel: input.conversation,
+      ...(input.threadKey ? { threadTs: input.threadKey } : {}),
+      text,
+    });
+    const now = new Date().toISOString();
+    this.#threads.store.recordSend({
+      draftId: randomUUID(),
+      connectionId,
+      linkId: null,
+      agentId: "",
+      approvedBy: user.id,
+      approvedAt: now,
+      sender: "user",
+      to: `channel:${input.conversation}`,
+      platformChannelId: input.conversation,
+      platformMessageId: ts,
+      text,
+      link: null,
+    });
   }
 
   /**
@@ -1549,6 +1686,11 @@ export class MessagingService {
     const record = this.#threads.store.connectionForWorkspace("slack", workspaceId);
     if (!record) throw new Error(sourceText("error.messaging.notConnected"));
     return record;
+  }
+
+  #requireRouting(): SlackRoutingPort {
+    if (!this.#routing) throw new Error(sourceText("error.messaging.unsupported"));
+    return this.#routing;
   }
 
   #requireConnect(): SlackConnect {

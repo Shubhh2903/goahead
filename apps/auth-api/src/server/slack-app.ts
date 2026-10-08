@@ -1,8 +1,9 @@
-// The GoAhead Slack app's OAuth install. One app serves every workspace: a workspace member installs
-// it once, and the workspace is linked to one GoAhead host, which answers all of its messages. The
-// Worker exchanges the code because the client secret lives here, records only which host answers
-// the workspace, and seals the bot token and the installer's user token to the host's key. It keeps
-// no token. The sealed grant goes back to the desktop in the URL fragment of `/slack/connect`.
+// The GoAhead Slack app's OAuth install. One app serves every workspace. The first person who
+// installs it links the workspace to their GoAhead host: that host is the workspace's default and
+// answers people without GoAhead. Each other person who connects gets a person route to their own
+// host. The Worker exchanges the code because the client secret lives here, records only which host
+// answers whom, and seals the bot token and the person's user token to the host's key. It keeps no
+// token. The sealed grant goes back to the desktop in the URL fragment of `/slack/connect`.
 
 import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-app";
@@ -132,8 +133,10 @@ export class SlackAppService {
    * connect, and the sealed grant. An install that gives no user token, such as one made before the
    * app had user scopes, gives a bot-only grant.
    *
-   * A workspace answers to one host. The account that connected it can move it to another of its
-   * hosts; another account gets `slack_workspace_taken` until the first host disconnects.
+   * The workspace's default route belongs to the account that connected it first; that account can
+   * move it to another of its hosts. Every connect with a user token also adds or moves the person
+   * route of that Slack user. Another account must give a user token, or it gets
+   * `slack_user_access_required`: a bot-only connect would give it nothing to route.
    */
   async complete(input: {
     code: string;
@@ -187,10 +190,11 @@ export class SlackAppService {
         host: state.h,
       });
     }
-    // One statement, so two connects at once cannot both win. Another account's row stays as it is.
-    // When the link is made, Signal drops any older route of the workspace: a host that the workspace
-    // moved away from cannot keep it with the ticket it holds.
+    // One batch, so two connects at once cannot both win the default. Another account's default
+    // stays as it is. When a link is made, Signal drops any older route of the same workspace or
+    // person: a host that the route moved away from cannot keep it with the ticket it holds.
     const now = this.#now();
+    const user = userGrant(body.authed_user);
     const [linked] = await this.#database.batch([
       this.#database
         .prepare(
@@ -210,13 +214,38 @@ export class SlackAppService {
           binds: [team.id, state.u, now],
         },
       ),
+      ...(user
+        ? [
+            this.#database
+              .prepare(
+                `INSERT INTO slack_person_routes (team_id, slack_user_id, host_id, account_id, connected_at)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(team_id, slack_user_id) DO UPDATE SET host_id = excluded.host_id,
+                   account_id = excluded.account_id, connected_at = excluded.connected_at`,
+              )
+              .bind(team.id, user.id, state.h, state.u, now),
+            authEventStatement(
+              this.#database,
+              {
+                type: "slack-person-route-revoked",
+                appId: body.app_id,
+                teamId: team.id,
+                userId: user.id,
+                through: now - 1,
+              },
+              now,
+            ),
+          ]
+        : []),
     ]);
     await this.#flushAuthEvents();
-    if (!linked || linked.meta.changes === 0) {
+    // Without a user token, another account's connect changed nothing: the batch had only the
+    // default's upsert, which the other account's row refused.
+    if (!user && (!linked || linked.meta.changes === 0)) {
       throw new SlackAppError(
         409,
-        "slack_workspace_taken",
-        "Another GoAhead server answers this Slack workspace. Disconnect it there first.",
+        "slack_user_access_required",
+        "Connect Slack again and allow GoAhead to act as you. Another person already connected this workspace.",
       );
     }
     return {
@@ -228,7 +257,7 @@ export class SlackAppService {
         appId: body.app_id,
         workspaceId: team.id,
         workspaceName: isString(team.name) ? team.name : team.id,
-        user: userGrant(body.authed_user),
+        user,
       }),
     };
   }

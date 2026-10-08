@@ -145,6 +145,7 @@ import {
   decodeMessagingThreadsReply,
   decodeSlackChannelListReply,
   decodeSlackOverviewReply,
+  decodeSlackRoutingStatusReply,
 } from "./messaging-decoding";
 import { decodeProviderRuntimeSnapshot } from "./provider-runtime";
 import {
@@ -644,6 +645,9 @@ const openbotApi: OpenBotDesktopApi = {
     inboxChanged: dropInvalid(decodeMessagingInboxChanged),
     setSlackSendGuards: decodeVoid,
     answerDraft: decodeVoid,
+    sendInboxReply: decodeVoid,
+    getSlackRouting: decodeSlackRoutingStatusReply,
+    handOverSlackDefault: decodeSlackRoutingStatusReply,
   }),
   hostAdmin: bridgeGroup(IPC_ENDPOINTS.hostAdmin, {
     updateIdentity: decodeServer,

@@ -113,6 +113,7 @@ import { Route as V2HostingServersServerIdWakeRouteImport } from './routes/v2/ho
 import { Route as V2RemoteHostsHostIdInvitesRouteImport } from './routes/v2/remote/hosts/$hostId/invites'
 import { Route as V2RemoteHostsHostIdLiveActivityRouteImport } from './routes/v2/remote/hosts/$hostId/live-activity'
 import { Route as V2RemoteHostsHostIdLogoRouteImport } from './routes/v2/remote/hosts/$hostId/logo'
+import { Route as V2RemoteHostsHostIdSlackDefaultRouteImport } from './routes/v2/remote/hosts/$hostId/slack-default'
 import { Route as V2RemoteHostsHostIdSlackDisconnectRouteImport } from './routes/v2/remote/hosts/$hostId/slack-disconnect'
 import { Route as V2RemoteHostsHostIdSlackRouteRouteImport } from './routes/v2/remote/hosts/$hostId/slack-route'
 import { Route as V2RemoteHostsHostIdTicketRouteImport } from './routes/v2/remote/hosts/$hostId/ticket'
@@ -670,6 +671,12 @@ const V2RemoteHostsHostIdLogoRoute = V2RemoteHostsHostIdLogoRouteImport.update({
   path: '/v2/remote/hosts/$hostId/logo',
   getParentRoute: () => rootRouteImport,
 } as any)
+const V2RemoteHostsHostIdSlackDefaultRoute =
+  V2RemoteHostsHostIdSlackDefaultRouteImport.update({
+    id: '/v2/remote/hosts/$hostId/slack-default',
+    path: '/v2/remote/hosts/$hostId/slack-default',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const V2RemoteHostsHostIdSlackDisconnectRoute =
   V2RemoteHostsHostIdSlackDisconnectRouteImport.update({
     id: '/v2/remote/hosts/$hostId/slack-disconnect',
@@ -835,6 +842,7 @@ export interface FileRoutesByFullPath {
   '/v2/remote/hosts/$hostId/invites': typeof V2RemoteHostsHostIdInvitesRoute
   '/v2/remote/hosts/$hostId/live-activity': typeof V2RemoteHostsHostIdLiveActivityRoute
   '/v2/remote/hosts/$hostId/logo': typeof V2RemoteHostsHostIdLogoRoute
+  '/v2/remote/hosts/$hostId/slack-default': typeof V2RemoteHostsHostIdSlackDefaultRoute
   '/v2/remote/hosts/$hostId/slack-disconnect': typeof V2RemoteHostsHostIdSlackDisconnectRoute
   '/v2/remote/hosts/$hostId/slack-route': typeof V2RemoteHostsHostIdSlackRouteRoute
   '/v2/remote/hosts/$hostId/ticket': typeof V2RemoteHostsHostIdTicketRoute
@@ -951,6 +959,7 @@ export interface FileRoutesByTo {
   '/v2/remote/hosts/$hostId/invites': typeof V2RemoteHostsHostIdInvitesRoute
   '/v2/remote/hosts/$hostId/live-activity': typeof V2RemoteHostsHostIdLiveActivityRoute
   '/v2/remote/hosts/$hostId/logo': typeof V2RemoteHostsHostIdLogoRoute
+  '/v2/remote/hosts/$hostId/slack-default': typeof V2RemoteHostsHostIdSlackDefaultRoute
   '/v2/remote/hosts/$hostId/slack-disconnect': typeof V2RemoteHostsHostIdSlackDisconnectRoute
   '/v2/remote/hosts/$hostId/slack-route': typeof V2RemoteHostsHostIdSlackRouteRoute
   '/v2/remote/hosts/$hostId/ticket': typeof V2RemoteHostsHostIdTicketRoute
@@ -1068,6 +1077,7 @@ export interface FileRoutesById {
   '/v2/remote/hosts/$hostId/invites': typeof V2RemoteHostsHostIdInvitesRoute
   '/v2/remote/hosts/$hostId/live-activity': typeof V2RemoteHostsHostIdLiveActivityRoute
   '/v2/remote/hosts/$hostId/logo': typeof V2RemoteHostsHostIdLogoRoute
+  '/v2/remote/hosts/$hostId/slack-default': typeof V2RemoteHostsHostIdSlackDefaultRoute
   '/v2/remote/hosts/$hostId/slack-disconnect': typeof V2RemoteHostsHostIdSlackDisconnectRoute
   '/v2/remote/hosts/$hostId/slack-route': typeof V2RemoteHostsHostIdSlackRouteRoute
   '/v2/remote/hosts/$hostId/ticket': typeof V2RemoteHostsHostIdTicketRoute
@@ -1186,6 +1196,7 @@ export interface FileRouteTypes {
     | '/v2/remote/hosts/$hostId/invites'
     | '/v2/remote/hosts/$hostId/live-activity'
     | '/v2/remote/hosts/$hostId/logo'
+    | '/v2/remote/hosts/$hostId/slack-default'
     | '/v2/remote/hosts/$hostId/slack-disconnect'
     | '/v2/remote/hosts/$hostId/slack-route'
     | '/v2/remote/hosts/$hostId/ticket'
@@ -1302,6 +1313,7 @@ export interface FileRouteTypes {
     | '/v2/remote/hosts/$hostId/invites'
     | '/v2/remote/hosts/$hostId/live-activity'
     | '/v2/remote/hosts/$hostId/logo'
+    | '/v2/remote/hosts/$hostId/slack-default'
     | '/v2/remote/hosts/$hostId/slack-disconnect'
     | '/v2/remote/hosts/$hostId/slack-route'
     | '/v2/remote/hosts/$hostId/ticket'
@@ -1418,6 +1430,7 @@ export interface FileRouteTypes {
     | '/v2/remote/hosts/$hostId/invites'
     | '/v2/remote/hosts/$hostId/live-activity'
     | '/v2/remote/hosts/$hostId/logo'
+    | '/v2/remote/hosts/$hostId/slack-default'
     | '/v2/remote/hosts/$hostId/slack-disconnect'
     | '/v2/remote/hosts/$hostId/slack-route'
     | '/v2/remote/hosts/$hostId/ticket'
@@ -1521,6 +1534,7 @@ export interface RootRouteChildren {
   V2RemoteHostsHostIdInvitesRoute: typeof V2RemoteHostsHostIdInvitesRoute
   V2RemoteHostsHostIdLiveActivityRoute: typeof V2RemoteHostsHostIdLiveActivityRoute
   V2RemoteHostsHostIdLogoRoute: typeof V2RemoteHostsHostIdLogoRoute
+  V2RemoteHostsHostIdSlackDefaultRoute: typeof V2RemoteHostsHostIdSlackDefaultRoute
   V2RemoteHostsHostIdSlackDisconnectRoute: typeof V2RemoteHostsHostIdSlackDisconnectRoute
   V2RemoteHostsHostIdSlackRouteRoute: typeof V2RemoteHostsHostIdSlackRouteRoute
   V2RemoteHostsHostIdTicketRoute: typeof V2RemoteHostsHostIdTicketRoute
@@ -2262,6 +2276,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof V2RemoteHostsHostIdLogoRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/v2/remote/hosts/$hostId/slack-default': {
+      id: '/v2/remote/hosts/$hostId/slack-default'
+      path: '/v2/remote/hosts/$hostId/slack-default'
+      fullPath: '/v2/remote/hosts/$hostId/slack-default'
+      preLoaderRoute: typeof V2RemoteHostsHostIdSlackDefaultRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/v2/remote/hosts/$hostId/slack-disconnect': {
       id: '/v2/remote/hosts/$hostId/slack-disconnect'
       path: '/v2/remote/hosts/$hostId/slack-disconnect'
@@ -2553,6 +2574,7 @@ const rootRouteChildren: RootRouteChildren = {
   V2RemoteHostsHostIdInvitesRoute: V2RemoteHostsHostIdInvitesRoute,
   V2RemoteHostsHostIdLiveActivityRoute: V2RemoteHostsHostIdLiveActivityRoute,
   V2RemoteHostsHostIdLogoRoute: V2RemoteHostsHostIdLogoRoute,
+  V2RemoteHostsHostIdSlackDefaultRoute: V2RemoteHostsHostIdSlackDefaultRoute,
   V2RemoteHostsHostIdSlackDisconnectRoute:
     V2RemoteHostsHostIdSlackDisconnectRoute,
   V2RemoteHostsHostIdSlackRouteRoute: V2RemoteHostsHostIdSlackRouteRoute,

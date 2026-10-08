@@ -4,9 +4,11 @@ import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
   AddSlackOrchestratorInput,
   AnswerMessagingDraftInput,
+  HandOverSlackDefaultInput,
   MarkMessagingThreadReadInput,
   MessagingThreadPageInput,
   ReadInboxConversationInput,
+  SendInboxReplyInput,
   SetSlackEnabledInput,
   SetSlackSendGuardsInput,
   SetSlackWatchedChannelsInput,
@@ -120,4 +122,25 @@ export function parseReadInboxConversationInput(value: unknown): ReadInboxConver
   };
   if (value.limit !== undefined) result.limit = parsePageLimit(value.limit);
   return result;
+}
+
+export function parseSendInboxReplyInput(value: unknown): SendInboxReplyInput {
+  if (!isObject(value)) throw new Error("A messaging request is invalid.");
+  const result: SendInboxReplyInput = {
+    workspaceId: requireString(value.workspaceId, "Workspace id"),
+    conversation: requireString(value.conversation, "Conversation", INPUT_LIMITS.identifier),
+    // Untrimmed: the service trims and then holds the reply to `MESSAGING_LIMITS.inboxReply`.
+    text: requireString(value.text, "Text", INPUT_LIMITS.messageText),
+  };
+  if (value.threadKey !== undefined)
+    result.threadKey = requireString(value.threadKey, "Thread", INPUT_LIMITS.identifier);
+  return result;
+}
+
+export function parseHandOverSlackDefaultInput(value: unknown): HandOverSlackDefaultInput {
+  if (!isObject(value)) throw new Error("A messaging request is invalid.");
+  return {
+    workspaceId: requireString(value.workspaceId, "Workspace id"),
+    slackUserId: requireString(value.slackUserId, "Slack user id", INPUT_LIMITS.identifier),
+  };
 }

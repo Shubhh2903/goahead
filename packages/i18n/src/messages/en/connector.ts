@@ -191,6 +191,13 @@ export const messages = defineMessages("connector", {
   "connector.slack.removeEffectKept": "The conversations and the Slack Orchestrator stay in GoAhead.",
   "connector.slack.keep": "Keep connected",
   "connector.slack.close": "Close",
+  // Which computer answers the people of a workspace who do not use GoAhead.
+  "connector.slack.defaultOn": "This computer answers people who do not use GoAhead.",
+  "connector.slack.defaultOff": "Another person's computer answers people who do not use GoAhead.",
+  "connector.slack.handOver": "Hand over…",
+  "connector.slack.handOverTitle": "Answer people who do not use GoAhead from another computer",
+  "connector.slack.userAccessRequired":
+    "Connect Slack again and allow GoAhead to act as you. Another person already connected this workspace.",
   // Marketplace > 1Password: a vault that the user shares with OpenBot through a service account.
   "connector.onePassword.title": "1Password",
   "connector.onePassword.description":

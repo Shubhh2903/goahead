@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import { slackOwnerBlockId } from "@openbot/contracts/signal-protocol/slack-route";
 import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-app";
 import { sourceText } from "@openbot/i18n/source";
 import type { MessagingAnswerFile } from "../messaging-threads";
@@ -49,7 +50,7 @@ const BUTTON_ACTIONS = {
  * The Slack Web API side of one connection: the bot's token, and the token of the person who
  * installed the app when the install gave one. It never logs message text or a response body.
  */
-class SlackAdapter implements MessagingAdapter {
+export class SlackAdapter implements MessagingAdapter {
   readonly platform = "slack" as const;
   readonly #api: SlackWebApi;
   readonly #userApi: SlackWebApi | null;
@@ -59,6 +60,8 @@ class SlackAdapter implements MessagingAdapter {
   readonly #personIn = new Map<string, boolean>();
   #botUserId = "";
   #workspaceId = "";
+  /** The connected person's Slack user id, known after `identify` when the install gave a user token. */
+  #ownerUserId: string | null = null;
 
   constructor(
     tokens: { botToken: string; userToken: string | undefined },
@@ -82,6 +85,7 @@ class SlackAdapter implements MessagingAdapter {
     this.#botUserId = botUserId;
     this.#workspaceId = workspaceId;
     const person = await this.#identifyUser(workspaceId);
+    this.#ownerUserId = person?.id ?? null;
     return {
       workspaceId,
       workspaceName: isString(payload.team) ? payload.team : workspaceId,
@@ -261,6 +265,22 @@ class SlackAdapter implements MessagingAdapter {
     return ts;
   }
 
+  /**
+   * A reply that the person typed in GoAhead, posted as them with the user token. The text is sent as
+   * they wrote it, only escaped, so it cannot ping a workspace. A failure names only Slack's error code.
+   */
+  async postAsUser(input: { channel: string; threadTs?: string; text: string }): Promise<{ ts: string }> {
+    const response = await this.#apiFor("user").call("chat.postMessage", {
+      channel: input.channel,
+      thread_ts: input.threadTs,
+      text: input.text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
+      unfurl_links: false,
+      unfurl_media: false,
+    });
+    if (!isString(response.ts)) throw new SlackApiError("chat.postMessage", "no_ts");
+    return { ts: response.ts };
+  }
+
   async listPersonPlaces(): Promise<Array<{ id: string; name: string; isPrivate: boolean }>> {
     const api = this.#apiFor("user");
     const places: Array<{ id: string; name: string; isPrivate: boolean }> = [];
@@ -437,7 +457,10 @@ class SlackAdapter implements MessagingAdapter {
     });
   }
 
-  /** Status text is written by the host, so it is only escaped. Buttons become Block Kit. */
+  /**
+   * Status text is written by the host, so it is only escaped. Buttons become Block Kit. The actions
+   * block names the draft's owner, so Signal sends a click to the owner's computer.
+   */
   #content(body: MessageBody): DynamicRecord {
     const text = this.#statusText(body.text);
     if (!body.buttons?.length) return { text, blocks: [] };
@@ -447,6 +470,7 @@ class SlackAdapter implements MessagingAdapter {
         { type: "section", text: { type: "mrkdwn", text } },
         {
           type: "actions",
+          ...(this.#ownerUserId ? { block_id: slackOwnerBlockId(this.#ownerUserId) } : {}),
           elements: body.buttons.map((button) => ({
             type: "button",
             action_id: BUTTON_ACTIONS[button.action],

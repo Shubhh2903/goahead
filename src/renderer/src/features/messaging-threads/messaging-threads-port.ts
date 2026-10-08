@@ -1,6 +1,6 @@
 import type { OpenBotDesktopApi } from "@openbot/contracts/ipc";
 
-/** What the Slack conversation list and its read-only view reach in main. */
+/** What the Slack conversation list, the inbox and its reply box reach in main. */
 export interface MessagingThreadsPort {
   messaging: Pick<
     OpenBotDesktopApi["messaging"],
@@ -13,6 +13,9 @@ export interface MessagingThreadsPort {
     | "listInbox"
     | "readInboxConversation"
     | "onInboxChanged"
+    | "sendInboxReply"
+    | "getSlackRouting"
+    | "handOverSlackDefault"
   >;
   openAttachment: OpenBotDesktopApi["agent"]["openAttachment"];
   openUrl: OpenBotDesktopApi["openUrl"];

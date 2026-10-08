@@ -1,4 +1,10 @@
-import type { SlackChannelChoice, SlackChannelOption, SlackOverview, SlackQuietHours } from "@openbot/contracts/ipc";
+import type {
+  SlackChannelChoice,
+  SlackChannelOption,
+  SlackOverview,
+  SlackQuietHours,
+  SlackRoutingStatus,
+} from "@openbot/contracts/ipc";
 import type {
   SlackOrchestratorChoice,
   SlackOrchestratorModels,
@@ -28,6 +34,9 @@ export interface SlackConnectorController {
   listChannels: (workspaceId: string) => Promise<SlackChannelOption[]>;
   setWatchedChannels: (workspaceId: string, channels: SlackChannelChoice[]) => void;
   setSendGuards: (workspaceId: string, change: { paused?: boolean; quietHours?: SlackQuietHours | null }) => void;
+  /** Which computer answers people without GoAhead, per workspace connected as the person. */
+  routing: () => Readonly<Record<string, SlackRoutingStatus>>;
+  handOverDefault: (workspaceId: string, slackUserId: string) => void;
 }
 
 /**
@@ -42,9 +51,30 @@ export function createSlackConnector(
 ): SlackConnectorController {
   const [overview, setOverview] = createSignal<SlackOverview | null>(null);
   const [busy, setBusy] = createSignal(false);
+  const [routing, setRouting] = createSignal<Readonly<Record<string, SlackRoutingStatus>>>({});
+  /** The workspaces whose routing was asked for. The account service is asked once per page, not per poll. */
+  const routingAsked = new Set<string>();
   let disposed = false;
   /** Each read replaces the one before it, so a slow answer never overwrites a newer one. */
   let reads = 0;
+
+  const putRouting = (workspaceId: string, status: SlackRoutingStatus) => {
+    if (!disposed) setRouting((current) => ({ ...current, [workspaceId]: status }));
+  };
+
+  // The routing lives in the account service. Only a workspace connected as the person has a route of
+  // its own. A failed read shows no line and asks again on the next page.
+  const readRouting = (next: SlackOverview) => {
+    for (const connection of next.connections) {
+      if (!connection.userId || routingAsked.has(connection.workspaceId)) continue;
+      const { workspaceId } = connection;
+      routingAsked.add(workspaceId);
+      void port()
+        .messaging.getSlackRouting({ workspaceId })
+        .then((status) => putRouting(workspaceId, status))
+        .catch(() => routingAsked.delete(workspaceId));
+    }
+  };
 
   // A failed read keeps the last overview. The next poll or action reads again.
   const reload = () => {
@@ -52,7 +82,9 @@ export function createSlackConnector(
     void port()
       .messaging.getSlackOverview()
       .then((next) => {
-        if (!disposed && read === reads) setOverview(next);
+        if (disposed || read !== reads) return;
+        setOverview(next);
+        readRouting(next);
       })
       .catch(() => undefined);
   };
@@ -82,6 +114,7 @@ export function createSlackConnector(
     overview,
     busy,
     watch: () => {
+      routingAsked.clear();
       reload();
       const timer = setInterval(reload, POLL_MS);
       return () => clearInterval(timer);
@@ -98,6 +131,9 @@ export function createSlackConnector(
     setWatchedChannels: (workspaceId, channels) =>
       run(() => messaging().setSlackWatchedChannels({ workspaceId, channels })),
     setSendGuards: (workspaceId, change) => run(() => messaging().setSlackSendGuards({ workspaceId, ...change })),
+    routing,
+    handOverDefault: (workspaceId, slackUserId) =>
+      run(async () => putRouting(workspaceId, await messaging().handOverSlackDefault({ workspaceId, slackUserId }))),
     addOrchestrator: (workspaceId, choice) =>
       run(async () => {
         const { sectionId } = await messaging().addSlackOrchestrator({ workspaceId, ...(choice ?? {}) });

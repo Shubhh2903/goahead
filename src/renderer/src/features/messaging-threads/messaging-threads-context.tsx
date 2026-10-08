@@ -45,9 +45,10 @@ interface MessagingInboxState {
 }
 
 /**
- * The Slack conversations that this computer's agents answer, and the one the user opened. The view
- * is read-only: the agent answers in Slack, and approvals stay on the Slack buttons. Only the local
- * host has these, so on a remote server the list stays empty.
+ * The Slack conversations that this computer's agents answer, and the one the user opened. The thread
+ * view is read-only: the agent answers in Slack, and approvals stay on the Slack buttons. In the inbox
+ * the person can reply as themselves. Only the local host has these, so on a remote server the list
+ * stays empty.
  */
 const MessagingThreads = createSimpleContext({
   name: "MessagingThreads",
@@ -287,6 +288,23 @@ const MessagingThreads = createSimpleContext({
       loadInboxPage(workspaceId, conversation);
     }
 
+    /**
+     * Sends a reply as the person to the top of the open inbox conversation, then reads the conversation
+     * again. A failure rejects, so the reply box keeps the text.
+     */
+    async function sendInboxReply(text: string): Promise<void> {
+      const selection = inbox.selection;
+      if (!selection) throw new Error("No inbox conversation is open.");
+      await port().sendInboxReply({ workspaceId: selection.workspaceId, conversation: selection.conversation, text });
+      const current = inbox.selection;
+      if (
+        !disposed &&
+        current?.workspaceId === selection.workspaceId &&
+        current.conversation === selection.conversation
+      )
+        loadInboxPage(selection.workspaceId, selection.conversation);
+    }
+
     /** Opens one conversation over the workspace, as a channel does, and closes what it covers. */
     function open(threadId: string): void {
       coverWorkspace();
@@ -328,6 +346,7 @@ const MessagingThreads = createSimpleContext({
       inbox,
       openInbox,
       selectInboxConversation,
+      sendInboxReply,
       retryInbox: () => {
         const selection = inbox.selection;
         if (selection) loadInboxPage(selection.workspaceId, selection.conversation);

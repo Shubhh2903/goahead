@@ -1,5 +1,6 @@
 import { AppLogo } from "@openbot/brand";
 import { PRODUCT_LINK_PREFIX } from "@openbot/contracts/product-identity";
+import { useText } from "@openbot/ui/text";
 import { createSignal, onSettled, Show } from "solid-js";
 import { Button } from "../ui/button";
 
@@ -31,6 +32,13 @@ export function SlackConnectPage() {
 
 /** The page's card: the link back to GoAhead, or why Slack did not finish. */
 export function SlackConnectView(props: { openUrl: string; failure: string | null }) {
+  const { t } = useText();
+  const failureText = () => {
+    if (props.failure === "slack_user_access_required") return t("connector.slack.userAccessRequired");
+    return props.failure === "slack_workspace_taken"
+      ? "Another GoAhead server already answers this Slack workspace. Disconnect it on that server, then try again."
+      : "Slack did not finish the connection. Go back to GoAhead and start again.";
+  };
   return (
     <main class="join-page">
       <a class="landing-brand join-page-brand" href="/" aria-label="GoAhead home">
@@ -41,16 +49,7 @@ export function SlackConnectView(props: { openUrl: string; failure: string | nul
         <AppLogo variant="production" animation="blink" class="join-card-logo" />
         <p class="join-card-eyebrow">Slack</p>
         <h1 id="slack-connect-title">Return to GoAhead</h1>
-        <Show
-          when={!props.failure}
-          fallback={
-            <p class="join-card-error">
-              {props.failure === "slack_workspace_taken"
-                ? "Another GoAhead server already answers this Slack workspace. Disconnect it on that server, then try again."
-                : "Slack did not finish the connection. Go back to GoAhead and start again."}
-            </p>
-          }
-        >
+        <Show when={!props.failure} fallback={<p class="join-card-error">{failureText()}</p>}>
           <p class="join-card-copy">GoAhead finishes the Slack connection on your computer.</p>
           <Show when={props.openUrl}>
             {(href) => (

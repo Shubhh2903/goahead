@@ -1,4 +1,8 @@
-import { SLACK_ROUTE_TTL_SECONDS, type SlackRouteTeam } from "@openbot/contracts/signal-protocol/slack-route";
+import {
+  isDefaultSlackRoute,
+  SLACK_ROUTE_TTL_SECONDS,
+  type SlackRouteTeam,
+} from "@openbot/contracts/signal-protocol/slack-route";
 import {
   decodeSignalClientMessage,
   encodeSignalServerMessage,
@@ -11,10 +15,22 @@ import {
   type SlackDeliveryKind,
   type SlackDeliveryStatus,
 } from "./protocol";
+import type { SlackAuthorizations } from "./slack-authorizations";
+import type { SlackTarget } from "./slack-targets";
 
 /** The workspaces a verified route ticket names, each with the time it was linked to the host. */
 export interface SlackRoute {
   teams: SlackRouteTeam[];
+}
+
+/**
+ * The account service's answer for a route ticket while Signal starts. `teams` lists the workspaces
+ * where the host is still the default. `routes`, absent from an account service made before
+ * multi-user Slack, reduces each ticket entry to the default link and the people that still hold.
+ */
+export interface SlackRouteValidation {
+  teams: string[];
+  routes?: SlackRouteTeam[];
 }
 
 export interface RemoteTokenProvider {
@@ -25,8 +41,8 @@ export interface RemoteTokenProvider {
   iceServers(claims: RemoteTicketClaims): IceServer[];
   /** The Slack workspaces a route ticket links to the host. Without it, no `ingress` socket connects. */
   verifySlackRoute?(token: string, hostId: string): Promise<SlackRoute>;
-  /** The workspaces of a route that the account service still links to the host, with the same link. */
-  validateSlackRoute?(hostId: string, teams: SlackRouteTeam[]): Promise<string[]>;
+  /** The parts of a route that the account service still links to the host, with the same link. */
+  validateSlackRoute?(hostId: string, teams: SlackRouteTeam[]): Promise<SlackRouteValidation>;
   revokeHost?(hostId: string, authEpoch: number): void;
   revokeSession?(sessionId: string): void;
 }
@@ -45,9 +61,10 @@ interface AuthenticatedPeer {
   connectionId: string | null;
   resumed: boolean;
   multiplex: boolean;
-  // `ingress` only: the Slack workspaces whose requests this socket receives.
-  // The routes this socket holds: `<app ID>:<workspace ID>`.
-  slackTeams: string[];
+  // `ingress` only: the routes this socket holds. Default routes are `<app ID>:<workspace ID>`;
+  // person routes are `<app ID>:<workspace ID>:<Slack user ID>`.
+  slackDefaults: string[];
+  slackPeople: string[];
 }
 
 interface ActiveConnection {
@@ -75,6 +92,19 @@ export interface SlackDelivery {
   retryNum: number | null;
   retryReason: string | null;
   body: Uint8Array;
+}
+
+/** A Slack request with the event ID that keys Slack's list of who may see it. */
+export interface SlackTargetedDelivery extends SlackDelivery {
+  eventId: string | null;
+}
+
+/** Who may see one event, from `apps.event.authorizations.list` (see `slack-authorizations.ts`). */
+export type SlackAudienceLookup = Pick<SlackAuthorizations, "usersFor">;
+
+interface SlackFanOut {
+  sockets: string[];
+  defaultSocket: string | null;
 }
 
 export interface SlackDeliveryResponse {
@@ -129,12 +159,27 @@ export class SignalService {
   readonly #sockets = new Map<string, SignalSocket>();
   readonly #peers = new Map<string, AuthenticatedPeer>();
   readonly #hosts = new Map<string, Set<string>>();
-  // Slack workspace ID to the `ingress` socket that said hello last with a route ticket for it.
-  readonly #slackTeams = new Map<string, string>();
-  // The oldest link that each workspace still accepts: the link of its current route, or the moment
-  // after the account service revoked it. A host that lost a workspace keeps its last ticket until it
-  // expires; this keeps that ticket from taking the route back.
+  // `<app ID>:<workspace ID>` to the `ingress` socket of the workspace's default computer: the newest
+  // route ticket that names this host as the default. It answers people without their own route.
+  readonly #slackDefaults = new Map<string, string>();
+  // `<app ID>:<workspace ID>:<Slack user ID>` to the `ingress` socket of that person's own host.
+  readonly #slackPeople = new Map<string, string>();
+  // The oldest link that each route (of both kinds) still accepts: the link of its current route, or
+  // the moment after the account service revoked it. A host that lost a route keeps its last ticket
+  // until it expires; this keeps that ticket from taking the route back.
   readonly #slackRouteFloor = new Map<string, number>();
+  // The default routes (`<app ID>:<workspace ID>`) held by a ticket entry without `isDefault`, from a
+  // host made before multi-user Slack. Such a host still gets the people's messages of every person
+  // who never had an own route in the workspace, as it did then.
+  readonly #slackLegacyDefaults = new Set<string>();
+  // `<app ID>:<workspace ID>` to the people with an own route (on any host), from the ticket entry of
+  // the socket that holds the default route. It keeps the default from answering them after a
+  // restart, when the route floors are empty.
+  readonly #slackRoutedUsers = new Map<string, Set<string>>();
+  // The person routes that a host registered and the account service did not revoke since. A person
+  // stays here while their host is offline, so the default does not answer them; a revoke (the person
+  // left or moved) removes them, and a move registers them again from the new host.
+  readonly #slackKnownPeople = new Set<string>();
   readonly #pendingDeliveries = new Map<string, PendingDelivery>();
   readonly #slackLimits: SlackDeliveryLimits;
   readonly #connections = new Map<string, ActiveConnection>();
@@ -273,8 +318,15 @@ export class SignalService {
       if (hostSockets?.size === 0) this.#hosts.delete(peer.claims.hostId);
     }
     if (peer.peer === "ingress") {
-      for (const route of peer.slackTeams) {
-        if (this.#slackTeams.get(route) === socket.id) this.#slackTeams.delete(route);
+      for (const route of peer.slackDefaults) {
+        if (this.#slackDefaults.get(route) === socket.id) {
+          this.#slackDefaults.delete(route);
+          this.#slackLegacyDefaults.delete(route);
+          this.#slackRoutedUsers.delete(route);
+        }
+      }
+      for (const route of peer.slackPeople) {
+        if (this.#slackPeople.get(route) === socket.id) this.#slackPeople.delete(route);
       }
       for (const [requestId, pending] of [...this.#pendingDeliveries]) {
         if (pending.socketId === socket.id) this.#settleDelivery(requestId, this.#unavailable());
@@ -336,14 +388,57 @@ export class SignalService {
     }
   }
 
-  /** The account service unlinked a Slack workspace, or moved it, after `through`'s link. */
+  /**
+   * The account service unlinked a Slack workspace's default computer, or moved it, after
+   * `through`'s link. People's own routes stay.
+   */
   revokeSlackRoute(appId: string, teamId: string, through: number): void {
     const route = slackRouteKey(appId, teamId);
+    if (this.#revokeSlackRouteKey(this.#slackDefaults, route, through)) {
+      this.#slackLegacyDefaults.delete(route);
+      this.#slackRoutedUsers.delete(route);
+    }
+  }
+
+  /** The account service unlinked one person of a Slack workspace from their host, or moved them. */
+  revokeSlackPersonRoute(appId: string, teamId: string, userId: string, through: number): void {
+    const route = slackPersonKey(appId, teamId, userId);
+    if (!this.#revokeSlackRouteKey(this.#slackPeople, route, through)) return;
+    this.#slackKnownPeople.delete(route);
+    this.#slackRoutedUsers.get(slackRouteKey(appId, teamId))?.delete(userId);
+  }
+
+  /** Returns true when the route was revoked, false when a newer link already holds it. */
+  #revokeSlackRouteKey(routes: Map<string, string>, route: string, through: number): boolean {
     const floor = this.#slackRouteFloor.get(route) ?? 0;
-    // A newer link already holds the route.
-    if (floor > through) return;
+    if (floor > through) return false;
     this.#slackRouteFloor.set(route, through + 1);
-    this.#slackTeams.delete(route);
+    routes.delete(route);
+    return true;
+  }
+
+  /**
+   * The `ingress` sockets that one Slack target names, without repeats; empty when no host holds it.
+   * `people` resolves to the person routes of `users`, the people Slack lists for the event.
+   */
+  slackSockets(appId: string, teamId: string, target: SlackTarget, users: readonly string[] = []): string[] {
+    const sockets = new Set<string>();
+    const add = (socketId: string | undefined) => {
+      if (socketId && this.#peers.has(socketId)) sockets.add(socketId);
+    };
+    const addPeople = (userIds: readonly string[]) => {
+      for (const userId of userIds) add(this.#slackPeople.get(slackPersonKey(appId, teamId, userId)));
+    };
+    if (target.kind === "default") add(this.#slackDefaults.get(slackRouteKey(appId, teamId)));
+    else if (target.kind === "person") addPeople([target.userId]);
+    else if (target.kind === "people") addPeople(users);
+    else if (target.kind === "persons") addPeople(target.userIds);
+    else {
+      add(this.#slackDefaults.get(slackRouteKey(appId, teamId)));
+      const prefix = slackPersonKey(appId, teamId, "");
+      for (const [route, socketId] of this.#slackPeople) if (route.startsWith(prefix)) add(socketId);
+    }
+    return [...sockets];
   }
 
   revokeSession(sessionId: string): void {
@@ -361,13 +456,114 @@ export class SignalService {
   }
 
   /**
-   * Passes one signed Slack request to the `ingress` socket of the workspace's host and waits for
-   * its answer. It resolves 503 when no host holds the workspace, the host is too busy, or it does
-   * not answer in time: Slack then sends the request again, so nothing needs to be kept here.
+   * Passes one signed Slack request to the `ingress` sockets that the routing targets name, in
+   * parallel, and waits for their answers. It resolves 503 when a target that must answer has no
+   * host, Slack's list of who may see the event is not available, or a host is too busy, refuses or
+   * does not answer in time: Slack then sends the request again to every host, and hosts drop the
+   * repeat by `event_id`. Nothing needs to be kept here.
    */
-  deliverSlack(appId: string, teamId: string, delivery: SlackDelivery): Promise<SlackDeliveryResponse> {
-    const socketId = this.#slackTeams.get(slackRouteKey(appId, teamId));
-    const ingress = socketId ? this.#peers.get(socketId) : undefined;
+  async deliverSlack(
+    appId: string,
+    teamId: string,
+    targets: readonly SlackTarget[],
+    delivery: SlackTargetedDelivery,
+    authorizations?: SlackAudienceLookup,
+  ): Promise<SlackDeliveryResponse> {
+    let fanOut: SlackFanOut | null;
+    try {
+      fanOut = await this.#slackFanOut(appId, teamId, targets, delivery.eventId, authorizations);
+    } catch {
+      return this.#unavailable();
+    }
+    if (!fanOut) return this.#unavailable();
+    // Nobody with a host may see the event, so there is nothing to deliver.
+    if (fanOut.sockets.length === 0) return { status: 200 };
+    const responses = await Promise.all(
+      fanOut.sockets.map((socketId) => this.#deliverToSocket(socketId, teamId, delivery)),
+    );
+    const failed = responses.find((response) => response.status !== 200);
+    if (failed) return failed;
+    if (responses.length === 1) return responses[0] ?? { status: 200 };
+    // Only one host can answer Slack with a body: the default, when it was a target.
+    const defaultIndex = fanOut.defaultSocket ? fanOut.sockets.indexOf(fanOut.defaultSocket) : -1;
+    return responses[defaultIndex] ?? { status: 200 };
+  }
+
+  /**
+   * The sockets that receive one request, or null when a target that must answer has no host.
+   * Rules 1 and 2 (only `person` and `default` targets) take the first target with a host. The other
+   * targets are used whole: `people` asks Slack who may see the event.
+   */
+  async #slackFanOut(
+    appId: string,
+    teamId: string,
+    targets: readonly SlackTarget[],
+    eventId: string | null,
+    authorizations: SlackAudienceLookup | undefined,
+  ): Promise<SlackFanOut | null> {
+    const defaultSocket = this.slackSockets(appId, teamId, { kind: "default" })[0] ?? null;
+    // A person with an own route is answered only by their own host: when it is offline, the
+    // request waits for it (null) and does not fall back to the default.
+    const firstHeld = (candidates: readonly SlackTarget[]) => {
+      for (const candidate of candidates) {
+        const sockets = this.slackSockets(appId, teamId, candidate);
+        if (sockets.length > 0) return sockets;
+        if (candidate.kind === "person" && this.#hasOwnRoute(appId, teamId, candidate.userId)) return null;
+      }
+      return null;
+    };
+    if (targets.every((target) => target.kind === "person" || target.kind === "default")) {
+      if (targets.length === 0) return { sockets: [], defaultSocket };
+      const sockets = firstHeld(targets);
+      return sockets ? { sockets, defaultSocket } : null;
+    }
+    const sockets = new Set<string>();
+    for (const target of targets) {
+      if (target.kind === "people") {
+        if (!authorizations) return null;
+        const audience = await authorizations.usersFor(appId, eventId ?? target.eventContext, target.eventContext);
+        if (audience.includesBot && target.directAuthor) {
+          // A DM with @GoAhead: rule 1 for its author.
+          const held = firstHeld([{ kind: "person", userId: target.directAuthor }, { kind: "default" }]);
+          if (!held) return null;
+          for (const socketId of held) sockets.add(socketId);
+        } else {
+          for (const socketId of this.slackSockets(appId, teamId, target, audience.users)) sockets.add(socketId);
+          if (defaultSocket && this.#legacyDefaultServes(appId, teamId, audience.users)) sockets.add(defaultSocket);
+        }
+      } else {
+        const held = this.slackSockets(appId, teamId, target);
+        // A workspace event with no host at all waits for one, as before multi-user Slack.
+        if (target.kind === "all" && held.length === 0) return null;
+        for (const socketId of held) sockets.add(socketId);
+      }
+    }
+    return { sockets: [...sockets], defaultSocket };
+  }
+
+  /**
+   * A default route from a host made before multi-user Slack also stands for each listed person who
+   * has no own route in the workspace. The check does not use live sockets, so the message of a
+   * person whose own host is offline does not go to the legacy host.
+   */
+  #legacyDefaultServes(appId: string, teamId: string, users: readonly string[]): boolean {
+    if (!this.#slackLegacyDefaults.has(slackRouteKey(appId, teamId))) return false;
+    return users.some((userId) => !this.#hasOwnRoute(appId, teamId, userId));
+  }
+
+  /**
+   * True when the person has an own route in the workspace: a host registered it and it was not
+   * revoked since, or the default's ticket lists the person. Such a person is never answered by the
+   * default.
+   */
+  #hasOwnRoute(appId: string, teamId: string, userId: string): boolean {
+    if (this.#slackKnownPeople.has(slackPersonKey(appId, teamId, userId))) return true;
+    return this.#slackRoutedUsers.get(slackRouteKey(appId, teamId))?.has(userId) === true;
+  }
+
+  /** Sends one request to one `ingress` socket and waits for its answer, within the host's limits. */
+  #deliverToSocket(socketId: string, teamId: string, delivery: SlackDelivery): Promise<SlackDeliveryResponse> {
+    const ingress = this.#peers.get(socketId);
     if (!ingress) return Promise.resolve(this.#unavailable());
     const hostId = ingress.claims.hostId;
     let hostPending = 0;
@@ -414,6 +610,17 @@ export class SignalService {
    */
   acceptSlackRequest(key: `team:${string}` | `address:${string}`): boolean {
     return this.#acceptRateKey(`slack-${key}`, Date.now(), key.startsWith("team:") ? SLACK_TEAM_RATE_FACTOR : 1);
+  }
+
+  /**
+   * A route goes to the socket with the newest link that is not older than the route's floor.
+   * Returns true when this socket now holds the route.
+   */
+  #holdSlackRoute(routes: Map<string, string>, route: string, linkedAt: number, socketId: string): boolean {
+    if (linkedAt < (this.#slackRouteFloor.get(route) ?? 0)) return false;
+    this.#slackRouteFloor.set(route, linkedAt);
+    routes.set(route, socketId);
+    return true;
   }
 
   #settleDelivery(requestId: string, response: SlackDeliveryResponse): void {
@@ -463,8 +670,8 @@ export class SignalService {
         slackRoute = await this.#tokens.verifySlackRoute(message.slackRoute, claims.hostId);
         if (Date.now() < this.#validateSlackRoutesUntil) {
           if (!this.#tokens.validateSlackRoute) throw new Error("Slack route validation required.");
-          const linked = new Set(await this.#tokens.validateSlackRoute(claims.hostId, slackRoute.teams));
-          slackRoute = { teams: slackRoute.teams.filter((team) => linked.has(team.id)) };
+          const validation = await this.#tokens.validateSlackRoute(claims.hostId, slackRoute.teams);
+          slackRoute = { teams: confirmedSlackRoutes(slackRoute.teams, validation) };
         }
       }
       this.#pruneReplayCache();
@@ -498,7 +705,12 @@ export class SignalService {
       connectionId: null,
       resumed: !usedInitialTicket,
       multiplex: message.peer === "host" && message.multiplex === true,
-      slackTeams: slackRoute.teams.map((team) => slackRouteKey(team.appId, team.id)),
+      slackDefaults: slackRoute.teams
+        .filter((team) => isDefaultSlackRoute(team))
+        .map((team) => slackRouteKey(team.appId, team.id)),
+      slackPeople: slackRoute.teams.flatMap((team) =>
+        (team.users ?? []).map((user) => slackPersonKey(team.appId, team.id, user.id)),
+      ),
     };
     this.#peers.set(socket.id, peer);
     this.#schedulePeerExpiration(peer);
@@ -507,10 +719,21 @@ export class SignalService {
     const resumeToken = await this.#tokens.issueResumeToken(claims);
     if (message.peer === "ingress") {
       for (const team of slackRoute.teams) {
-        const route = slackRouteKey(team.appId, team.id);
-        if (team.linkedAt < (this.#slackRouteFloor.get(route) ?? 0)) continue;
-        this.#slackRouteFloor.set(route, team.linkedAt);
-        this.#slackTeams.set(route, socket.id);
+        // An entry without `isDefault` comes from a host made before multi-user Slack: it owns the
+        // workspace route, as it did then.
+        if (isDefaultSlackRoute(team)) {
+          const route = slackRouteKey(team.appId, team.id);
+          if (this.#holdSlackRoute(this.#slackDefaults, route, team.linkedAt, socket.id)) {
+            if (team.isDefault === undefined) this.#slackLegacyDefaults.add(route);
+            else this.#slackLegacyDefaults.delete(route);
+            this.#slackRoutedUsers.set(route, new Set(team.routedUsers ?? []));
+          }
+        }
+        for (const user of team.users ?? []) {
+          const route = slackPersonKey(team.appId, team.id, user.id);
+          if (this.#holdSlackRoute(this.#slackPeople, route, user.linkedAt, socket.id))
+            this.#slackKnownPeople.add(route);
+        }
       }
       this.#send(socket, {
         type: "ready",
@@ -799,4 +1022,50 @@ function randomIdentifier(): string {
 /** One Slack app in one workspace. The production and development apps can share a workspace. */
 function slackRouteKey(appId: string, teamId: string): string {
   return `${appId}:${teamId}`;
+}
+
+function slackPersonKey(appId: string, teamId: string, userId: string): string {
+  return `${appId}:${teamId}:${userId}`;
+}
+
+/**
+ * The parts of a ticket's entries that the account service confirmed. Signal takes no more than the
+ * signed ticket names: `routes` can only remove a default link or people from an entry. An answer
+ * without `routes` comes from an account service made before multi-user Slack, which confirms only
+ * workspace links; the people of such an entry are then not taken.
+ */
+function confirmedSlackRoutes(teams: SlackRouteTeam[], validation: SlackRouteValidation): SlackRouteTeam[] {
+  if (!validation.routes) {
+    const linked = new Set(validation.teams);
+    return teams
+      .filter((team) => linked.has(team.id))
+      .map((team) => ({
+        id: team.id,
+        appId: team.appId,
+        linkedAt: team.linkedAt,
+        ...(team.isDefault === undefined ? {} : { isDefault: team.isDefault }),
+        ...(team.routedUsers && isDefaultSlackRoute(team) ? { routedUsers: team.routedUsers } : {}),
+      }));
+  }
+  const confirmed = new Map(validation.routes.map((route) => [slackRouteKey(route.appId, route.id), route]));
+  const result: SlackRouteTeam[] = [];
+  for (const team of teams) {
+    const route = confirmed.get(slackRouteKey(team.appId, team.id));
+    if (!route || route.linkedAt !== team.linkedAt) continue;
+    const confirmedUsers = new Set((route.users ?? []).map((user) => `${user.id}:${user.linkedAt}`));
+    const users = (team.users ?? []).filter((user) => confirmedUsers.has(`${user.id}:${user.linkedAt}`));
+    const isDefault = isDefaultSlackRoute(team) && isDefaultSlackRoute(route);
+    if (!isDefault && users.length === 0) continue;
+    // An entry without `isDefault` keeps that form, so that Signal still knows it as a legacy route.
+    result.push({
+      id: team.id,
+      appId: team.appId,
+      linkedAt: team.linkedAt,
+      ...(isDefault && team.isDefault === undefined ? {} : { isDefault }),
+      users,
+      // Signed data: the default link holds, so its list of routed people stands too.
+      ...(isDefault && team.routedUsers ? { routedUsers: team.routedUsers } : {}),
+    });
+  }
+  return result;
 }

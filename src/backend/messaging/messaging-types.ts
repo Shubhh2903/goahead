@@ -127,6 +127,8 @@ export interface MessagingAdapter {
   identify(): Promise<ConnectionIdentity>;
   post(target: MessageTarget, body: MessageBody): Promise<string>;
   edit(target: MessageTarget, messageId: string, body: MessageBody): Promise<void>;
+  /** Posts a reply that the person typed, as them, with the user token. Only Slack has it. */
+  postAsUser?(input: { channel: string; threadTs?: string; text: string }): Promise<{ ts: string }>;
   postPrivate(target: MessageTarget, userId: string, text: string): Promise<void>;
   react(target: MessageTarget, messageId: string, reaction: StatusReaction, on: boolean): Promise<void>;
   /**

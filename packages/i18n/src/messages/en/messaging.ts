@@ -35,5 +35,8 @@ export const messages = defineMessages("messaging", {
   "messaging.inbox.choose": "Choose a conversation to read it.",
   "messaging.inbox.loadFailed": "The Slack inbox did not load.",
   "messaging.inbox.unread": { one: "{count} unread", other: "{count} unread" },
-  "messaging.inbox.readOnly": "Read-only. Answer in Slack, or ask GoAhead in your direct message with it.",
+  // The box that sends a reply as the person in the open inbox conversation.
+  "messaging.inbox.reply.placeholder": "Reply as you",
+  "messaging.inbox.reply.send": "Send",
+  "messaging.inbox.reply.failed": "Slack did not accept the reply.",
 });

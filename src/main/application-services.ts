@@ -1015,9 +1015,29 @@ export async function createApplicationServices({
       },
       unlink: async (workspaceId) => {
         const hostId = slackIngressHostId();
-        if (hostId) await centralAuth.unlinkSlackWorkspace(hostId, workspaceId);
+        // Without a host ID the account service cannot be asked: keep the shared bot token.
+        if (!hostId) return { workspaceRemains: true };
+        return centralAuth.unlinkSlackWorkspace(hostId, workspaceId);
       },
       openExternal: (url) => shell.openExternal(url),
+    },
+    slackRouting: {
+      unlinkPerson: async (workspaceId, slackUserId) => {
+        const hostId = slackIngressHostId();
+        // Without a host ID the account service cannot be asked: keep the shared bot token.
+        if (!hostId) return { workspaceRemains: true };
+        return centralAuth.unlinkSlackWorkspace(hostId, workspaceId, slackUserId);
+      },
+      status: (workspaceId) => {
+        const hostId = slackIngressHostId();
+        if (!hostId) throw new Error(sourceText("error.messaging.relayUnavailable"));
+        return centralAuth.slackDefaultStatus(hostId, workspaceId);
+      },
+      handOver: (workspaceId, slackUserId) => {
+        const hostId = slackIngressHostId();
+        if (!hostId) throw new Error(sourceText("error.messaging.relayUnavailable"));
+        return centralAuth.handOverSlackDefault(hostId, workspaceId, slackUserId);
+      },
     },
   });
   // Not awaited: a connection waits for Slack, and the app does not wait for it.

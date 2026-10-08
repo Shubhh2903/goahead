@@ -12,8 +12,11 @@ const PENDING_TTL_MS = 15 * 60_000;
 export interface SlackAppPort {
   /** The Slack install URL for one connect of this host, which seals the bot token to `hostPublicKey`. */
   authorize(input: { hostNonce: string; hostPublicKey: string }): Promise<string>;
-  /** Unlinks a workspace from this host in the account service, so Signal stops routing it here. */
-  unlink(workspaceId: string): Promise<void>;
+  /**
+   * Unlinks a workspace from this host in the account service, so Signal stops routing it here.
+   * `workspaceRemains` is true while another host still answers the workspace.
+   */
+  unlink(workspaceId: string): Promise<{ workspaceRemains: boolean }>;
   openExternal(url: string): Promise<void>;
 }
 
@@ -49,7 +52,7 @@ export class SlackConnect {
     return openSlackWorkspaceGrant(pending.privateKey, nonce, grant);
   }
 
-  unlink(workspaceId: string): Promise<void> {
+  unlink(workspaceId: string): Promise<{ workspaceRemains: boolean }> {
     return this.#port.unlink(workspaceId);
   }
 

@@ -50,6 +50,7 @@ Make each other secret with `openssl rand -base64 48`.
 | `SLACK_ROUTE_PRIVATE_JWK`, `SLACK_ROUTE_KEY_ID` | Worker. The Slack route key pair. |
 | `REMOTE_SESSION_SECRET`, `TURN_SHARED_SECRET`, `REMOTE_METRICS_TOKEN` | Signal |
 | `SLACK_SIGNING_SECRET` | Signal, as `A0C860EFP6C:<signing secret>`. From the Slack app > Basic Information. |
+| `SLACK_APP_TOKEN` | Signal, as `A0C860EFP6C:<xapp-…>`. An app-level token with the `authorizations:read` scope; see [section 5](#5-slack-app-human). Signal uses it to find which connected people may see a message. |
 
 Keep every private key and secret in a password manager. With the private JWK, a person can open
 each host that uses these servers.
@@ -128,7 +129,9 @@ The cheapest option. `render.yaml` at the repository root describes the service.
 2. Set the five secrets that the file marks `sync: false`: `REMOTE_SESSION_SECRET`,
    `REMOTE_AUTH_WEBHOOK_SECRET` (the same value as the Worker's), `TURN_SHARED_SECRET` (any strong
    value; unused without TURN), `REMOTE_METRICS_TOKEN`, and `SLACK_SIGNING_SECRET` as
-   `A0C860EFP6C:<signing secret>`.
+   `A0C860EFP6C:<signing secret>`. Also set `SLACK_APP_TOKEN` as `A0C860EFP6C:<xapp-…>`
+   (section 5, step 1). If `render.yaml` does not list it, add it as an environment variable in the
+   dashboard.
 3. Deploy. Check `curl -fsS https://goahead-signal.onrender.com/health/ready` (use the `onrender.com`
    address Render shows).
 4. Custom domain: Render > the service > Settings > Custom Domains > `goahead-signal.multicodegenius.com`.
@@ -233,7 +236,14 @@ open ports: TCP 443, TCP/UDP 3478, TCP 5349 and UDP 49152-65535.
 
 Signal must answer first: Slack checks the request URL when you apply the manifest.
 
-1. Apply `apps/slack-app/internal/manifest.json` to `A0C860EFP6C`:
+1. Make the app-level token for Signal: the app settings > Basic Information > App-Level Tokens >
+   Generate Token and Scopes, with the one scope `authorizations:read`. Set it on Signal as
+   `SLACK_APP_TOKEN=A0C860EFP6C:<xapp-…>` (on Render: the service > Environment) and deploy Signal
+   again. The manifest does not change. Without this token, Signal cannot route message events:
+   direct messages to GoAhead get no answer, and no inbox receives messages. Mentions of @GoAhead
+   still work.
+
+2. Apply `apps/slack-app/internal/manifest.json` to `A0C860EFP6C`:
 
    ```sh
    cd apps/slack-app/internal
@@ -243,11 +253,37 @@ Signal must answer first: Slack checks the request URL when you apply the manife
 
    Or paste the file in the app settings > App Manifest.
 
-2. A Slack app has one request URL. After this step, `bun run dev:slack` no longer reaches this app.
+3. A Slack app has one request URL. After this step, `bun run dev:slack` no longer reaches this app.
    For development, make a second Slack app from `apps/slack-app/development/manifest.json`.
 
-3. Each person connects the workspace again in GoAhead (Settings > Connectors > Slack), so the new
-   servers link the workspace. Today one person per workspace can connect; see the multi-user plan.
+4. Each person connects the workspace again in GoAhead (Settings > Connectors > Slack), so the new
+   servers link the workspace. More than one person in a workspace can connect. Each person after
+   the first must give their own Slack access in the install; without it, the connect fails with
+   `slack_user_access_required` ("Connect Slack again and allow GoAhead to act as you. Another
+   person already connected this workspace.").
+   The first person who connects the workspace has the **default** computer: it answers people
+   who do not use GoAhead. Its owner can move the default to another connected person with
+   "Hand over…".
+
+### Update an existing install to several people per workspace **[Human]**
+
+Do the steps in this order. The old Signal refuses an auth event type that it does not know, and it
+reads a route ticket that has only a person route as "this host owns the workspace".
+
+1. D1: apply migration `0026_slack_person_routes` only. It only adds a table; the workspace routes
+   stay as they are. The running Worker does not read the new table. In `apps/auth-api`:
+
+   ```sh
+   bunx wrangler d1 migrations apply DB --remote --env goahead
+   ```
+
+2. Signal: set `SLACK_APP_TOKEN` (step 1 above) and deploy the new Signal.
+3. Worker: deploy (section 3, step 4). The script applies the migrations again; it finds none to
+   apply.
+4. GoAhead: release the new app (section 7). **Each person connects Slack again once** after the
+   update, so that their computer receives their own messages. Until a person connects again,
+   mentions of @GoAhead and direct messages to GoAhead go to the default computer, but that person's
+   inbox does not receive new messages.
 
 ## 6. Apple Developer **[Human]**
 
@@ -290,6 +326,9 @@ Signal must answer first: Slack checks the request URL when you apply the manife
       receive Slack events on this computer".
 - [ ] Settings > Connectors > Slack connects the workspace, and shows "Connected as @name".
 - [ ] A direct message to GoAhead in Slack gets an answer.
+- [ ] A second person in the same workspace connects Slack on their own computer. A direct message
+      to GoAhead from each person is answered by that person's computer, and a message from a person
+      without GoAhead is answered by the default computer.
 - [ ] A second computer joins a server with an invitation link.
 - [ ] Nothing reaches `openbot.run`: check with a network monitor, such as Little Snitch, for a few
       minutes of use.

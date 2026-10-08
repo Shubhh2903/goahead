@@ -3,7 +3,9 @@ import type { MobileConnectHostBinding } from "@openbot/contracts/mobile-connect
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import type { RemoteAuthEvent } from "@openbot/contracts/signal-protocol/auth-events";
 import {
+  isDefaultSlackRoute,
   SLACK_ROUTE_AUDIENCE,
+  SLACK_ROUTE_ROUTED_USERS_LIMIT,
   SLACK_ROUTE_TEAMS_LIMIT,
   SLACK_ROUTE_TTL_SECONDS,
   type SlackRouteTeam,
@@ -1153,63 +1155,318 @@ export class RemoteControlPlane {
   }
 
   /**
-   * The route ticket that the host's Signal `ingress` socket presents: the Slack workspaces linked to
-   * this host, signed. The host asks for a new one each time the socket connects.
+   * The route ticket that the host's Signal `ingress` socket presents: the Slack workspaces where
+   * this host is the default computer, and the people of each workspace whose own host it is,
+   * signed. The host asks for a new one each time the socket connects.
    */
   async issueSlackRoute(hostId: string, machineToken: string): Promise<{ ticket: string; teams: string[] }> {
     if (!this.#slackRouteSigner) {
       throw new RemoteControlPlaneError(503, "slack_not_configured", "Slack routing is not configured.");
     }
     await this.authenticateHost(hostId, machineToken);
-    const rows = await this.#database
-      .prepare(
-        "SELECT team_id, app_id, connected_at FROM slack_workspace_routes WHERE host_id = ? ORDER BY connected_at DESC LIMIT ?",
-      )
-      .bind(hostId, SLACK_ROUTE_TEAMS_LIMIT)
-      .all<{ team_id: string; app_id: string; connected_at: number }>();
-    const teams = rows.results.map((row) => ({ id: row.team_id, appId: row.app_id, linkedAt: row.connected_at }));
+    const links = await this.#slackLinks(hostId);
+    const byTeam = new Map<string, SlackRouteTeam>();
+    for (const row of links.defaults) {
+      // A default host with no person row in the workspace connected before multi-user Slack. Its
+      // entry keeps the legacy form (no `isDefault`), so Signal still sends it the messages of every
+      // person without an own route until it reconnects.
+      const hasPersonRow = links.people.some((person) => person.team_id === row.team_id);
+      byTeam.set(row.team_id, {
+        id: row.team_id,
+        appId: row.app_id,
+        linkedAt: row.connected_at,
+        ...(hasPersonRow ? { isDefault: true } : {}),
+        users: [],
+        routedUsers: await this.#slackRoutedUsers(row.team_id),
+      });
+    }
+    for (const row of links.people) {
+      const team = byTeam.get(row.team_id) ?? {
+        id: row.team_id,
+        appId: row.app_id,
+        linkedAt: 0,
+        isDefault: false,
+        users: [],
+      };
+      team.users = [...(team.users ?? []), { id: row.slack_user_id, linkedAt: row.connected_at }];
+      // A person-only entry carries its newest person link, so Signal keeps the newest ticket.
+      if (!isDefaultSlackRoute(team)) team.linkedAt = Math.max(team.linkedAt, row.connected_at);
+      byTeam.set(row.team_id, team);
+    }
+    const teams = [...byTeam.values()]
+      .sort((first, second) => second.linkedAt - first.linkedAt)
+      .slice(0, SLACK_ROUTE_TEAMS_LIMIT);
     return {
       ticket: await this.#slackRouteSigner.issue({ hostId, teams, now: this.#now() }),
       teams: teams.map((team) => team.id),
     };
   }
 
-  /** The workspaces of a route ticket that D1 still links to the host, with the same link. */
-  async validateSlackRoute(input: { hostId: string; teams: SlackRouteTeam[] }): Promise<string[]> {
-    if (input.teams.length === 0) return [];
-    const rows = await this.#database
-      .prepare("SELECT team_id, app_id, connected_at FROM slack_workspace_routes WHERE host_id = ?")
-      .bind(input.hostId)
-      .all<{ team_id: string; app_id: string; connected_at: number }>();
-    const linked = new Map(rows.results.map((row) => [row.team_id, row]));
-    return input.teams
-      .filter((team) => {
-        const row = linked.get(team.id);
-        return row?.app_id === team.appId && row.connected_at === team.linkedAt;
-      })
-      .map((team) => team.id);
+  /**
+   * The parts of a route ticket that D1 still links to the host, with the same link. `teams` keeps
+   * its old meaning for Signal before multi-user Slack: the workspaces where the host is still the
+   * default. `routes` reduces each entry to the default link and the people that still hold. An
+   * entry without `isDefault` and `users` validates as before.
+   */
+  async validateSlackRoute(input: {
+    hostId: string;
+    teams: SlackRouteTeam[];
+  }): Promise<{ teams: string[]; routes: SlackRouteTeam[] }> {
+    if (input.teams.length === 0) return { teams: [], routes: [] };
+    const links = await this.#slackLinks(input.hostId);
+    const defaults = new Map(links.defaults.map((row) => [row.team_id, row]));
+    const people = new Map(links.people.map((row) => [`${row.team_id}:${row.slack_user_id}`, row]));
+    const routes: SlackRouteTeam[] = [];
+    for (const team of input.teams) {
+      const link = defaults.get(team.id);
+      const holdsDefault =
+        isDefaultSlackRoute(team) && link?.app_id === team.appId && link.connected_at === team.linkedAt;
+      const users = team.users?.filter((user) => {
+        const row = people.get(`${team.id}:${user.id}`);
+        return row?.app_id === team.appId && row.connected_at === user.linkedAt;
+      });
+      if (!holdsDefault && !users?.length) continue;
+      const route: SlackRouteTeam = { id: team.id, appId: team.appId, linkedAt: team.linkedAt };
+      if (team.isDefault !== undefined || users) route.isDefault = holdsDefault;
+      if (users) route.users = users;
+      // Signed data of a default link that still holds: Signal keeps it to stop the default
+      // answering people who have an own route.
+      if (holdsDefault && team.routedUsers) route.routedUsers = team.routedUsers;
+      routes.push(route);
+    }
+    return { teams: routes.filter((route) => isDefaultSlackRoute(route)).map((route) => route.id), routes };
   }
 
-  /** Unlinks a Slack workspace from this host, after the host disconnected it or Slack uninstalled it. */
-  async disconnectSlackWorkspace(hostId: string, machineToken: string, teamId: string): Promise<void> {
+  /**
+   * Unlinks Slack from this host, after the host disconnected it or Slack uninstalled it. With
+   * `slackUserId`, only that person leaves: when this host was the workspace's default, the default
+   * moves to the person who connected first, so people without GoAhead still get an answer. Without
+   * it, the host and all its people leave the workspace, and the default moves in the same way.
+   */
+  async disconnectSlackWorkspace(
+    hostId: string,
+    machineToken: string,
+    teamId: string,
+    slackUserId?: string,
+  ): Promise<{ workspaceRemains: boolean }> {
+    await this.authenticateHost(hostId, machineToken);
+    const appId = await this.#slackAppId(teamId);
+    const link = await this.#database
+      .prepare("SELECT app_id FROM slack_workspace_routes WHERE team_id = ? AND host_id = ?")
+      .bind(teamId, hostId)
+      .first<{ app_id: string }>();
+    const leaving = await this.#database
+      .prepare(
+        `SELECT slack_user_id FROM slack_person_routes
+          WHERE team_id = ? AND host_id = ? AND (? IS NULL OR slack_user_id = ?)`,
+      )
+      .bind(teamId, hostId, slackUserId ?? null, slackUserId ?? null)
+      .all<{ slack_user_id: string }>();
+    if (!link && leaving.results.length === 0) return { workspaceRemains: await this.#slackWorkspaceRemains(teamId) };
+    const now = this.#now();
+    const statements: D1PreparedStatement[] = [];
+    for (const person of leaving.results) {
+      if (appId) {
+        statements.push(
+          this.#authEventStatement(
+            { type: "slack-person-route-revoked", appId, teamId, userId: person.slack_user_id, through: now },
+            now,
+            {
+              sql: "EXISTS (SELECT 1 FROM slack_person_routes WHERE team_id = ? AND slack_user_id = ? AND host_id = ?)",
+              binds: [teamId, person.slack_user_id, hostId],
+            },
+          ),
+        );
+      }
+      statements.push(
+        this.#database
+          .prepare("DELETE FROM slack_person_routes WHERE team_id = ? AND slack_user_id = ? AND host_id = ?")
+          .bind(teamId, person.slack_user_id, hostId),
+      );
+    }
+    if (link) {
+      // A host that leaves without a person (an older GoAhead) also hands the default on, so the
+      // people on other hosts keep their routes and people without GoAhead still get an answer.
+      const next = await this.#database
+        .prepare(
+          `SELECT slack_user_id, host_id, account_id FROM slack_person_routes
+            WHERE team_id = ? AND host_id <> ?
+            ORDER BY connected_at, slack_user_id LIMIT 1`,
+        )
+        .bind(teamId, hostId)
+        .first<{ slack_user_id: string; host_id: string; account_id: string }>();
+      statements.push(
+        ...(next
+          ? this.#moveSlackDefaultStatements({ teamId, appId: link.app_id, fromHostId: hostId, to: next, now })
+          : [
+              // Signal drops the route now, so the host cannot keep the workspace with the ticket it holds.
+              this.#authEventStatement({ type: "slack-route-revoked", appId: link.app_id, teamId, through: now }, now, {
+                sql: "EXISTS (SELECT 1 FROM slack_workspace_routes WHERE team_id = ? AND host_id = ?)",
+                binds: [teamId, hostId],
+              }),
+              this.#database
+                .prepare("DELETE FROM slack_workspace_routes WHERE team_id = ? AND host_id = ?")
+                .bind(teamId, hostId),
+            ]),
+      );
+    }
+    await this.#database.batch(statements);
+    await this.#flushAuthEvents();
+    return { workspaceRemains: await this.#slackWorkspaceRemains(teamId) };
+  }
+
+  /**
+   * Whether any host still answers the Slack workspace. The leaving host revokes the shared bot token
+   * only when none does: the other people's hosts post with the same token.
+   */
+  async #slackWorkspaceRemains(teamId: string): Promise<boolean> {
+    const row = await this.#database
+      .prepare(
+        `SELECT EXISTS (SELECT 1 FROM slack_workspace_routes WHERE team_id = ?)
+             OR EXISTS (SELECT 1 FROM slack_person_routes WHERE team_id = ?) AS remains`,
+      )
+      .bind(teamId, teamId)
+      .first<{ remains: number }>();
+    return row?.remains === 1;
+  }
+
+  /**
+   * Whether this host is the Slack workspace's default computer and, when it is, the other people
+   * who connected their own GoAhead, to whom its owner can hand the default over.
+   */
+  async slackRoutingStatus(
+    hostId: string,
+    machineToken: string,
+    teamId: string,
+  ): Promise<{ isDefault: boolean; people: { slackUserId: string }[] }> {
+    await this.authenticateHost(hostId, machineToken);
+    const link = await this.#database
+      .prepare("SELECT 1 AS linked FROM slack_workspace_routes WHERE team_id = ? AND host_id = ?")
+      .bind(teamId, hostId)
+      .first<{ linked: number }>();
+    if (!link) return { isDefault: false, people: [] };
+    const people = await this.#database
+      .prepare(
+        `SELECT slack_user_id FROM slack_person_routes
+          WHERE team_id = ? AND host_id <> ? ORDER BY connected_at, slack_user_id`,
+      )
+      .bind(teamId, hostId)
+      .all<{ slack_user_id: string }>();
+    return { isDefault: true, people: people.results.map((row) => ({ slackUserId: row.slack_user_id })) };
+  }
+
+  /** Moves the Slack workspace's default from this host to another person's host of the workspace. */
+  async handOverSlackDefault(hostId: string, machineToken: string, teamId: string, slackUserId: string): Promise<void> {
     await this.authenticateHost(hostId, machineToken);
     const link = await this.#database
       .prepare("SELECT app_id FROM slack_workspace_routes WHERE team_id = ? AND host_id = ?")
       .bind(teamId, hostId)
       .first<{ app_id: string }>();
-    if (!link) return;
-    const now = this.#now();
-    // Signal drops the route now, so the host cannot keep the workspace with the ticket it holds.
-    await this.#database.batch([
-      this.#authEventStatement({ type: "slack-route-revoked", appId: link.app_id, teamId, through: now }, now, {
-        sql: "EXISTS (SELECT 1 FROM slack_workspace_routes WHERE team_id = ? AND host_id = ?)",
-        binds: [teamId, hostId],
+    if (!link) {
+      throw new RemoteControlPlaneError(
+        409,
+        "slack_default_not_owned",
+        "This computer does not answer this Slack workspace.",
+      );
+    }
+    const target = await this.#database
+      .prepare(
+        `SELECT slack_user_id, host_id, account_id FROM slack_person_routes
+          WHERE team_id = ? AND slack_user_id = ? AND host_id <> ?`,
+      )
+      .bind(teamId, slackUserId, hostId)
+      .first<{ slack_user_id: string; host_id: string; account_id: string }>();
+    if (!target) {
+      throw new RemoteControlPlaneError(
+        404,
+        "slack_person_not_found",
+        "This person has not connected GoAhead to this Slack workspace.",
+      );
+    }
+    await this.#database.batch(
+      this.#moveSlackDefaultStatements({
+        teamId,
+        appId: link.app_id,
+        fromHostId: hostId,
+        to: target,
+        now: this.#now(),
       }),
-      this.#database
-        .prepare("DELETE FROM slack_workspace_routes WHERE team_id = ? AND host_id = ?")
-        .bind(teamId, hostId),
-    ]);
+    );
     await this.#flushAuthEvents();
+  }
+
+  /** The workspaces where the host is the default, and its person links with their workspace's app. */
+  async #slackLinks(hostId: string) {
+    const defaults = await this.#database
+      .prepare("SELECT team_id, app_id, connected_at FROM slack_workspace_routes WHERE host_id = ?")
+      .bind(hostId)
+      .all<{ team_id: string; app_id: string; connected_at: number }>();
+    const people = await this.#database
+      .prepare(
+        `SELECT p.team_id, p.slack_user_id, p.connected_at, w.app_id
+           FROM slack_person_routes p JOIN slack_workspace_routes w ON w.team_id = p.team_id
+          WHERE p.host_id = ?
+          ORDER BY p.connected_at, p.slack_user_id`,
+      )
+      .bind(hostId)
+      .all<{ team_id: string; slack_user_id: string; connected_at: number; app_id: string }>();
+    return { defaults: defaults.results, people: people.results };
+  }
+
+  /** The Slack user IDs of every person in the workspace with an own route, on any host. */
+  async #slackRoutedUsers(teamId: string): Promise<string[]> {
+    const rows = await this.#database
+      .prepare(
+        `SELECT slack_user_id FROM slack_person_routes
+          WHERE team_id = ?
+          ORDER BY connected_at, slack_user_id
+          LIMIT ?`,
+      )
+      .bind(teamId, SLACK_ROUTE_ROUTED_USERS_LIMIT)
+      .all<{ slack_user_id: string }>();
+    return rows.results.map((row) => row.slack_user_id);
+  }
+
+  async #slackAppId(teamId: string): Promise<string | null> {
+    const row = await this.#database
+      .prepare("SELECT app_id FROM slack_workspace_routes WHERE team_id = ?")
+      .bind(teamId)
+      .first<{ app_id: string }>();
+    return row?.app_id ?? null;
+  }
+
+  /**
+   * Moves the workspace row to another person's host with a new link time. Signal drops the old
+   * default's link through the moment before, so the new default's ticket, issued now, stays valid.
+   * The move and its event happen only while the target person is still on the host read before
+   * the batch, so a concurrent disconnect or reconnect cannot give the default to the wrong host.
+   */
+  #moveSlackDefaultStatements(input: {
+    teamId: string;
+    appId: string;
+    fromHostId: string;
+    to: { slack_user_id: string; host_id: string; account_id: string };
+    now: number;
+  }): D1PreparedStatement[] {
+    const targetStillThere =
+      "EXISTS (SELECT 1 FROM slack_person_routes WHERE team_id = ? AND slack_user_id = ? AND host_id = ?)";
+    const targetBinds = [input.teamId, input.to.slack_user_id, input.to.host_id];
+    return [
+      this.#authEventStatement(
+        { type: "slack-route-revoked", appId: input.appId, teamId: input.teamId, through: input.now - 1 },
+        input.now,
+        {
+          sql: `EXISTS (SELECT 1 FROM slack_workspace_routes WHERE team_id = ? AND host_id = ?) AND ${targetStillThere}`,
+          binds: [input.teamId, input.fromHostId, ...targetBinds],
+        },
+      ),
+      this.#database
+        .prepare(
+          `UPDATE slack_workspace_routes SET host_id = ?, account_id = ?, connected_at = ?
+            WHERE team_id = ? AND host_id = ? AND ${targetStillThere}`,
+        )
+        .bind(input.to.host_id, input.to.account_id, input.now, input.teamId, input.fromHostId, ...targetBinds),
+    ];
   }
 
   /** Checks the credential that a host received when it registered. */

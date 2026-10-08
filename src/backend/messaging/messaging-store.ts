@@ -385,14 +385,18 @@ export class MessagingStore {
     );
   }
 
-  /** How many messages GoAhead sent in the workspace since the time. */
+  /**
+   * How many messages agents sent in the workspace since the time. A reply that the person typed in
+   * GoAhead has no agent and does not count: the hourly limit is for agent sends only.
+   */
   sendsSince(connectionId: string, since: string): number {
     const row = databaseRow(
       this.#database.connection
         .prepare(
           `SELECT COUNT(*) AS count FROM orchestration_events
            WHERE aggregate_type = ? AND json_extract(payload_json, '$.connectionId') = ?
-             AND json_extract(payload_json, '$.approvedAt') >= ?`,
+             AND json_extract(payload_json, '$.approvedAt') >= ?
+             AND json_extract(payload_json, '$.agentId') != ''`,
         )
         .get(SEND_AGGREGATE, connectionId, since),
     );

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { createRemoteApiApp, prometheusMetrics } from "./app";
 import { readRemoteApiConfig } from "./config";
 import { SignalService } from "./signal-service";
-import { RemoteTokenService, signServiceRequest } from "./tokens";
+import { RemoteTokenService, signServiceRequest, slackRouteValidationSchema } from "./tokens";
 
 const config = readRemoteApiConfig();
 /** A request to the account service, signed with the auth webhook secret. */
@@ -33,7 +33,8 @@ const tokens = new RemoteTokenService(
     validateSlackRoute: async (hostId, teams) => {
       const response = await askControlPlane("/v2/remote/slack-route/validate", { hostId, teams });
       if (!response.ok) throw new Error("The account service did not confirm the Slack route.");
-      return z.object({ teams: z.array(z.string()) }).parse(await response.json()).teams;
+      // `routes` adds the people of each entry; an account service before multi-user Slack omits it.
+      return slackRouteValidationSchema.parse(await response.json());
     },
   },
 );

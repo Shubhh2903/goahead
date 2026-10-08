@@ -32,5 +32,4 @@ export const messages = {
   "messaging.inbox.choose": "Escolha uma conversa para lê-la.",
   "messaging.inbox.loadFailed": "A caixa de entrada do Slack não carregou.",
   "messaging.inbox.unread": { one: "{count} não lida", other: "{count} não lidas" },
-  "messaging.inbox.readOnly": "Somente leitura. Responda no Slack ou peça ao GoAhead na sua mensagem direta com ele.",
 } as const satisfies PartialTranslation<typeof source>;
