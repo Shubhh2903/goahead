@@ -40,6 +40,10 @@ The company builds GoAhead for internal use. It differs from the upstream releas
 - **No Host installer:** it is built only when the repository variable `BUILD_HOST_INSTALLER` is
   `true` (it still pins the upstream team in `scripts/host-installation.ts`).
 - **Default branch:** the tag must be on the repository's default branch (`master`).
+- **macOS only:** a tag builds the signed Apple silicon and Intel DMGs. The Windows, Linux and
+  Docker jobs run only when the repository variable `BUILD_OTHER_PLATFORMS` is `true`. Windows
+  signing in `release.yml` still names upstream's Azure tenant, so set that variable only after
+  GoAhead has its own Windows signing.
 
 ## One-time GitHub setup
 
