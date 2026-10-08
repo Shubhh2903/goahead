@@ -13,6 +13,8 @@ export const messages = {
   "update.upToDate": "À jour",
 
   "update.provider.update": "Mettre à jour",
+  "update.app.ready": "Mise à jour de {name} prête",
+  "update.app.restart": "Redémarrer",
   "update.provider.upToDate": "{name} est à jour",
   "update.provider.checking": "Recherche de mises à jour pour {name}",
   "update.provider.available": "Mise à jour de {name} disponible",

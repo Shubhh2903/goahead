@@ -35,8 +35,11 @@ The company builds GoAhead for internal use. It differs from the upstream releas
 - **Apple team:** `S29HD2MDR4`, the company Developer ID. The workflow also reads `APPLE_TEAM_ID`.
 - **No associated domains:** no Universal Links, so `MAC_PROVISIONING_PROFILE` is optional and the
   workflow does not check an apple-app-site-association file.
-- **No automatic updates:** `INSTALLED_UPDATE_FEED_CONFIGURED` in `src/main/update-service.ts` is
-  false until GoAhead has its own feed. People install each new DMG themselves.
+- **Updates:** the updater reads the GitHub releases of `Shubhh2903/goahead` (`publish` in
+  `electron-builder.yml`; `src/main/update-service.test.ts` pins it). While the repository is
+  private, the app cannot read the feed and Settings > Updates offers "Open releases page"
+  (`PRODUCT_IDENTITY.releasesUrl`). When the repository is public, in-app updates work with no change.
+  Each release must be published as the latest release, not a draft or a pre-release.
 - **No Host installer:** it is built only when the repository variable `BUILD_HOST_INSTALLER` is
   `true` (it still pins the upstream team in `scripts/host-installation.ts`).
 - **Default branch:** the tag must be on the repository's default branch (`master`).

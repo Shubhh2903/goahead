@@ -12,6 +12,8 @@ export const messages = {
   "update.managedByHost": "Gerenciado pelo computador anfitrião",
   "update.upToDate": "Atualizado",
   "update.provider.update": "Atualizar",
+  "update.app.ready": "Atualização de {name} pronta",
+  "update.app.restart": "Reiniciar",
   "update.provider.upToDate": "{name} está atualizado",
   "update.provider.checking": "Buscando atualizações de {name}",
   "update.provider.available": "Atualização de {name} disponível",

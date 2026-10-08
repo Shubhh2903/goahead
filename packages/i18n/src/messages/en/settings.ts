@@ -220,6 +220,7 @@ export const messages = defineMessages("settings", {
   "settings.updates.track.description": "Stable receives tested GoAhead releases.",
   "settings.updates.track.stable": "Stable",
   "settings.updates.version": "Version {version}",
+  "settings.updates.openReleases": "Open releases page",
   "settings.updates.versionUnknown": "Unknown",
   "settings.updates.followsStable": "Updates follow the Stable track.",
   "settings.updates.unavailable": "Updates unavailable",

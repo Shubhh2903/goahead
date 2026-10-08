@@ -29,6 +29,10 @@ export const messages = defineMessages("update", {
   "update.provider.showDetails": "Show details",
   "update.provider.hideDetails": "Hide details",
 
+  // The update notification of the app itself. {name} is the product name.
+  "update.app.ready": "{name} update ready",
+  "update.app.restart": "Restart",
+
   // An update that an admin of this server asked for. {name} is the admin.
   "update.scheduled.title": "{name} scheduled a GoAhead update",
   // The same notice when "Install updates automatically" scheduled the restart.

@@ -149,11 +149,11 @@ const DEFAULT_PHASE_TIMEOUTS: Record<UpdateBusyPhase, number> = {
  * to write back to, so it reports no updates rather than failing at install time.
  */
 /**
- * Whether GoAhead has an update feed of its own. The internal GoAhead build has none yet: the feed of
- * the project it came from would offer that product's releases, which must never install over
- * GoAhead. Set this to true only when `publish` in electron-builder.yml names GoAhead's own feed.
+ * Whether GoAhead has an update feed of its own: the GitHub releases of GoAhead's repository, as
+ * `publish` in electron-builder.yml names it. Never point it at the feed of the project GoAhead came
+ * from: that product's releases must never install over GoAhead.
  */
-export const INSTALLED_UPDATE_FEED_CONFIGURED = false;
+export const INSTALLED_UPDATE_FEED_CONFIGURED = true;
 
 export function supportsInstalledUpdates(
   platform: NodeJS.Platform,
@@ -758,6 +758,8 @@ const CHECK_STALLED_MESSAGE = sourceText("error.update.checkStalled");
 const CHECK_OFFLINE_MESSAGE = sourceText("error.update.checkOffline");
 const CHECK_SERVICE_MESSAGE = sourceText("error.update.checkUnavailable");
 const CHECK_NO_RELEASE_MESSAGE = sourceText("error.update.checkNoRelease");
+// GitHub answers 404 for the releases of a private repository: the app cannot read them.
+const CHECK_FEED_PRIVATE_MESSAGE = sourceText("error.update.feedPrivate");
 
 /**
  * Node reports a link that never carried the request through `error.code`. electron-updater wraps
@@ -800,6 +802,7 @@ function describeCheckFailure(error: unknown) {
   const status =
     typeof error === "object" && error !== null && "statusCode" in error ? Number(error.statusCode) : Number.NaN;
   if (status === 429 || status >= 500) return CHECK_SERVICE_MESSAGE;
+  if (status === 404 || /\b404\b/u.test(text)) return CHECK_FEED_PRIVATE_MESSAGE;
   // ERR_UPDATER_LATEST_VERSION_NOT_FOUND wraps whatever the release lookup threw, so it only lands
   // here once the causes above have been ruled out of its message.
   if (code === "ERR_UPDATER_LATEST_VERSION_NOT_FOUND") return CHECK_SERVICE_MESSAGE;

@@ -13,6 +13,8 @@ export const messages = {
   "update.upToDate": "最新です",
 
   "update.provider.update": "アップデート",
+  "update.app.ready": "{name} のアップデートの準備ができました",
+  "update.app.restart": "再起動",
   "update.provider.upToDate": "{name} は最新です",
   "update.provider.checking": "{name} のアップデートを確認しています",
   "update.provider.available": "{name} のアップデートがあります",

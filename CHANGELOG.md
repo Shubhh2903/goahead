@@ -15,6 +15,10 @@ All notable changes to OpenBot will be documented here. The project follows
   People who do not use GoAhead are answered by the computer that connected the workspace first.
   **Connect Slack again once after you update**, so your computer receives your own messages.
 - Reply to a Slack conversation from the Slack inbox in GoAhead. The reply goes out as you.
+- GoAhead checks for new versions from its GitHub releases. Settings > Updates downloads a new
+  version and restarts into it. While the release repository is private, GoAhead cannot read it:
+  Settings > Updates then shows **Open releases page**, where you download the new version.
+  **Install this version by hand once**; versions before it do not look for updates.
 
 ## [0.31.0] - 2026-10-08
 

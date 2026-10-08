@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1067,8 +1068,15 @@ describe("supportsInstalledUpdates", () => {
   });
 
   // Without a GoAhead feed, another product's releases must never install over GoAhead.
-  it("turns installed updates off on every platform while GoAhead has no feed of its own", () => {
+  it("turns installed updates off on every platform when GoAhead has no feed of its own", () => {
     for (const platform of ["darwin", "win32", "linux"] as const)
-      expect(supportsInstalledUpdates(platform, { APPIMAGE: "/tmp/GoAhead.AppImage" })).toBe(false);
+      expect(supportsInstalledUpdates(platform, { APPIMAGE: "/tmp/GoAhead.AppImage" }, false)).toBe(false);
+  });
+
+  // The feed that the updater reads is the `publish` target that electron-builder writes into the app.
+  it("reads updates only from GoAhead's own repository", () => {
+    const config = readFileSync(join(process.cwd(), "electron-builder.yml"), "utf8");
+    const publish = /^publish:\n {2}provider: (\S+)\n {2}owner: (\S+)\n {2}repo: (\S+)$/mu.exec(config);
+    expect(publish?.slice(1)).toEqual(["github", "Shubhh2903", "goahead"]);
   });
 });

@@ -3,6 +3,7 @@ import { createSignal, flush, onSettled } from "solid-js";
 import { desktopAnalytics } from "../../analytics";
 import { FALLBACK_UPDATE_STATUS } from "../../app-defaults";
 import { createSimpleContext } from "../../simple-context";
+import { createAppUpdateToast } from "./app-update-toast";
 import { createIdleRestartToast } from "./idle-restart-toast";
 import { createScheduledUpdateToast } from "./scheduled-update-toast";
 import { updatesPort } from "./updates-port";
@@ -104,6 +105,7 @@ const Updates = createSimpleContext({
     }
 
     createIdleRestartToast({ status, cancel: cancelIdleRestart });
+    createAppUpdateToast({ status, act: runAction });
 
     return { status, runAction, cancelScheduledRestart, restartWhenIdle, cancelIdleRestart };
   },

@@ -8,6 +8,13 @@
   fill: var(--openbot-provider-current);
 }
 
+/* The GoAhead mark in the same slot, for the update of GoAhead itself (`updates/app-update-toast.tsx`).
+   That notification uses the classes in this file too. The mark keeps its own colours. */
+.app-update-toast-logo {
+  width: var(--openbot-icon-md);
+  height: var(--openbot-icon-md);
+}
+
 /* The action sits beside the words it acts on, centred on the title and the version line, rather than
    in a row of its own under them. The words stop at the button while it is there; a state with no
    button gives them the full width, so the running update's bar reaches the right edge. */

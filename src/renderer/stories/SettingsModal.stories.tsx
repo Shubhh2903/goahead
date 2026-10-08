@@ -34,6 +34,8 @@ function SettingsModalStory(props: {
   initialTab?: SettingsTab;
   /** A restart that a server admin asked for. */
   scheduledRestart?: UpdateStatus["scheduledRestart"];
+  /** The check failed because the release feed is private: Settings offers the release page. */
+  feedPrivate?: boolean;
 }) {
   const previousApi = window.openbot;
   const billingApi = createMockBilling();
@@ -49,7 +51,14 @@ function SettingsModalStory(props: {
   const [updateStatus, setUpdateStatus] = createSignal<UpdateStatus>(
     props.scheduledRestart
       ? { ...storyUpdateStatus, phase: "ready", availableVersion: "0.3.0", scheduledRestart: props.scheduledRestart }
-      : storyUpdateStatus,
+      : props.feedPrivate
+        ? {
+            ...storyUpdateStatus,
+            phase: "error",
+            errorCode: "check_failed",
+            message: "GoAhead cannot read its release feed. Open the releases page to download the new version.",
+          }
+        : storyUpdateStatus,
   );
   const [account, setAccount] = createSignal<CentralAuthUser>({ ...storyAccount });
   const [mobileDevices, setMobileDevices] = createSignal<MobileConnectedDevice[]>([
@@ -121,6 +130,7 @@ function SettingsModalStory(props: {
             setMobileDevices((current) => current.filter((device) => device.sessionId !== sessionId));
           }}
           onUpdateAction={runUpdateAction}
+          onOpenReleases={fn()}
           billingApi={billingApi}
           hostedServersApi={props.hostedServers ? mock.api.hostedServers : undefined}
           onAddHostedServer={props.hostedServers ? fn() : undefined}
@@ -203,6 +213,10 @@ export const ScheduledRemoteUpdate: Story = {
       scheduledRestart={{ requestedBy: "Ada Lovelace", mode: "when-idle", waitingFor: ["agent-turn"] }}
     />
   ),
+};
+
+export const UpdateFeedPrivate: Story = {
+  render: () => <SettingsModalStory initialOpen initialTab="updates" feedPrivate />,
 };
 
 export const Interactive: Story = {

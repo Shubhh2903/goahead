@@ -13,6 +13,8 @@ export const messages = defineMessages("error.update", {
   "error.update.checkOffline": "Could not reach the update service. Check your internet connection, then try again.",
   "error.update.checkUnavailable":
     "The update service did not answer. GoAhead tries again on its own in a few minutes.",
+  "error.update.feedPrivate":
+    "GoAhead cannot read its release feed. Open the releases page to download the new version.",
   "error.update.checkNoRelease":
     "No published update was found for this platform. GoAhead tries again on its own in a few minutes.",
   "error.update.managedByHost":
@@ -26,4 +28,6 @@ export const messages = defineMessages("error.update", {
   "error.update.remoteDisabled": "Updates from server admins are turned off on this computer.",
   "error.update.restartStarted": "GoAhead is already restarting to install the update.",
   "error.update.alreadyRestarting": "GoAhead is already restarting.",
+  // Development builds only, when OPENBOT_DEV_UPDATE_SIMULATION=1 shows a simulated update.
+  "error.update.simulationInstall": "This is a simulated update. Nothing was installed.",
 });

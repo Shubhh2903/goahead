@@ -180,6 +180,12 @@ import {
   UpdateService,
 } from "./update-service";
 import { listSiblingOpenBotInstances } from "./update-sibling-instances";
+import {
+  DEV_UPDATE_SIMULATION_ENV,
+  devUpdateSimulationEnabled,
+  SimulatedUpdater,
+  SimulatedUpdateService,
+} from "./update-simulation";
 import { WHISPER_MODEL_NAME, WHISPER_MODEL_URL } from "./voice-model-service";
 import { VoiceTranscriptionService } from "./voice-transcription-service";
 
@@ -1545,9 +1551,19 @@ export async function createApplicationServices({
       logger.warn("OpenBot updates are disabled: electron-updater failed to load");
     }
   }
-  const updater = new UpdateService(updateAdapter, {
+  // Development only: `OPENBOT_DEV_UPDATE_SIMULATION=1` offers a simulated update, so the update
+  // notification can be seen without a packaged build. It downloads, writes and installs nothing.
+  const simulateUpdates = devUpdateSimulationEnabled(app.isPackaged);
+  if (simulateUpdates) {
+    updateAdapter = new SimulatedUpdater(currentVersion);
+    updaterEnabled = true;
+    logger.info(`OpenBot updates are simulated: ${DEV_UPDATE_SIMULATION_ENV}=1`);
+  }
+  const UpdateServiceClass = simulateUpdates ? SimulatedUpdateService : UpdateService;
+  const updater = new UpdateServiceClass(updateAdapter, {
     currentVersion,
     enabled: updaterEnabled,
+    ...(simulateUpdates ? { initialCheckDelayMs: 3_000 } : {}),
     autoDownload: updatePreference.autoDownload,
     beforeInstall: prepareForUpdateInstall,
     // Packaged runs share one application bundle across macOS users. Installing while another

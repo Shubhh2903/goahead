@@ -395,6 +395,11 @@ machine running several worktrees those kill the other checkouts' work mid-write
 Set `OPENBOT_DEV_ICE_TRANSPORT_POLICY=relay` before this command to force Team API traffic through
 coturn. This test option works only with the development renderer. Production always starts with `all`.
 
+Set `OPENBOT_DEV_UPDATE_SIMULATION=1` before `bun run dev` (or `bun run dev:slack`) to see the app
+update notification without a packaged build. The development app offers the next patch version a
+few seconds after it starts, and the download only reports progress. Restart installs nothing: it
+says that the update is simulated. Packaged builds ignore the variable.
+
 The normal `check` command is offline and uses a fake App Server. Manual smoke scripts may use the
 signed-in subscription and must not run in CI.
 

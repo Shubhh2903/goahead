@@ -1,4 +1,5 @@
 import type { CentralAuthUser, ServerSummary } from "@openbot/contracts/ipc";
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import type { CustomAgentSettingsApi } from "@openbot/ui/features/custom-providers/CustomAgentSettings";
 import { providerDiagnosticsText } from "@openbot/ui/features/provider-diagnostics/provider-diagnostics";
 import type { HostedSiteDeleteResult } from "@openbot/ui/features/settings/stores/hosted-sites-store";
@@ -604,6 +605,7 @@ function AppSettings(props: AccountProps) {
         onCancelScheduledRestart={updates.cancelScheduledRestart}
         onRestartWhenIdle={updates.restartWhenIdle}
         onCancelIdleRestart={updates.cancelIdleRestart}
+        onOpenReleases={() => void appPort().openUrl(PRODUCT_IDENTITY.releasesUrl)}
         account={props.account()}
         onUpdateAccountName={auth.updateAccountName}
         onUpdateAccountAvatar={auth.updateAccountAvatar}

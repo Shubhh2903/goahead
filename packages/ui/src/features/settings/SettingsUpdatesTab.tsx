@@ -166,6 +166,11 @@ export function SettingsUpdatesTab(props: SettingsUpdatesTabProps) {
                   ? props.store.presentation().actionLabel
                   : t("settings.updates.unavailable")}
               </Button>
+              <Show when={props.store.releasesOffered()}>
+                <Button variant="outline" type="button" size="sm" onClick={() => props.store.openReleases()}>
+                  {t("settings.updates.openReleases")}
+                </Button>
+              </Show>
             </ItemActions>
           </Show>
         </Item>

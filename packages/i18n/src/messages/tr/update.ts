@@ -13,6 +13,8 @@ export const messages = {
   "update.upToDate": "Güncel",
 
   "update.provider.update": "Güncelle",
+  "update.app.ready": "{name} güncellemesi hazır",
+  "update.app.restart": "Yeniden başlat",
   "update.provider.upToDate": "{name} güncel",
   "update.provider.checking": "{name} güncellemeleri denetleniyor",
   "update.provider.available": "{name} güncellemesi mevcut",

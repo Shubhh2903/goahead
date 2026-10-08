@@ -19,6 +19,11 @@ export const PRODUCT_IDENTITY = {
   /** Signal: the relay for remote sessions and the Slack events of the Slack app. */
   signalOrigin: "https://goahead-signal.multicodegenius.com",
   /**
+   * The release page. The updater reads the same repository (`publish` in electron-builder.yml). While
+   * the repository is private the updater cannot read it, so Settings offers this page instead.
+   */
+  releasesUrl: "https://github.com/Shubhh2903/goahead/releases/latest",
+  /**
    * Product analytics. Off in this build: the OpenPanel project in the code belongs to another
    * product, so nothing is sent. Turn it on only with an analytics service of our own.
    */
