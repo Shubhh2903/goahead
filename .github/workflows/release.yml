@@ -56,9 +56,15 @@ jobs:
       - name: Require release commit on main
         if: github.event_name == 'push'
         shell: bash
+        # The checkout keeps no credentials, and a private repository refuses an anonymous fetch. The
+        # read-only job token goes to this one command only.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           default_branch="${{ github.event.repository.default_branch }}"
-          git fetch origin "$default_branch" --no-tags
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch origin "$default_branch" --no-tags
           release_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
           if ! git merge-base --is-ancestor "$release_commit" "origin/$default_branch"; then
             echo "Release tag $GITHUB_REF_NAME does not point to a commit on origin/$default_branch." >&2
