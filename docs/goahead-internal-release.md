@@ -285,6 +285,9 @@ Signal must answer first: Slack checks the request URL when you apply the manife
       context:primary-signature -v GoAhead-*.dmg` says `accepted`.
 - [ ] The app is named GoAhead in the Dock and in the menu bar.
 - [ ] Sign-in sends the one-time code from the company's email address.
+- [ ] Server settings > General: give this computer a server name and save it **before** connecting
+      Slack. Without a name the computer has no host ID, and Slack connect says "GoAhead cannot
+      receive Slack events on this computer".
 - [ ] Settings > Connectors > Slack connects the workspace, and shows "Connected as @name".
 - [ ] A direct message to GoAhead in Slack gets an answer.
 - [ ] A second computer joins a server with an invitation link.

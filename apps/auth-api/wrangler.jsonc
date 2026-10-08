@@ -158,10 +158,10 @@
       // No GitHub App and no iPhone Live Activity relay: both need keys of other products.
       "vars": {
         "AUTH_EXPOSE_DEVELOPMENT_CODE": "false",
-        "EMAIL_SMTP_HOST": "REPLACE_SMTP_HOST",
+        "EMAIL_SMTP_HOST": "smtp.zoho.in",
         "EMAIL_SMTP_PORT": "465",
-        "EMAIL_SMTP_USERNAME": "REPLACE_SMTP_USERNAME",
-        "EMAIL_FROM": "REPLACE_EMAIL_FROM",
+        "EMAIL_SMTP_USERNAME": "no-reply@multicodegenius.com",
+        "EMAIL_FROM": "no-reply@multicodegenius.com",
         "SITE_PUBLISH_ENABLED": "false",
         "SITE_COOKIE_ISOLATION_READY": "false",
         "REMOTE_TICKET_KEY_ID": "goahead-remote-1",
@@ -173,7 +173,7 @@
         {
           "binding": "DB",
           "database_name": "goahead-auth",
-          "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+          "database_id": "25cbcb89-43ec-447e-82fb-f34030ecbc03",
           "migrations_dir": "migrations"
         }
       ],
