@@ -4,6 +4,12 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  OPENBOT_CONTROL_PLANE_ORIGIN,
+  OPENBOT_INVITE_ORIGIN,
+  OPENBOT_INVITE_PATH,
+} from "@openbot/contracts/invite-links";
+import { PRODUCT_LINK_PREFIX } from "@openbot/contracts/product-identity";
 import { TEAM_CURRENT_CAPABILITIES } from "@openbot/contracts/team-protocol/current";
 import type { TeamProtocolV2Json } from "@openbot/contracts/team-protocol/v2";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -111,7 +117,7 @@ describe("remote server links", () => {
       updateMember: async () => undefined,
       removeMember: async () => undefined,
       getPrincipalId: () => "person-1",
-      controlPlaneUrl: "https://api.openbot.run",
+      controlPlaneUrl: OPENBOT_CONTROL_PLANE_ORIGIN,
       downloadHostLogo: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
       transferDirectory: join(directory, "transfers"),
     });
@@ -121,8 +127,8 @@ describe("remote server links", () => {
       { createTeamAuthTicket: async () => "ticket", getEmail: () => "person@example.com" },
       { webrtcTransport: transport },
     );
-    const inviteUrl = new URL("https://openbot.run/join");
-    inviteUrl.searchParams.set("api", "https://api.openbot.run");
+    const inviteUrl = new URL(OPENBOT_INVITE_PATH, OPENBOT_INVITE_ORIGIN);
+    inviteUrl.searchParams.set("api", OPENBOT_CONTROL_PLANE_ORIGIN);
     inviteUrl.searchParams.set("server", hostId);
     inviteUrl.searchParams.set("fingerprint", fingerprint("attacker-public-key"));
     inviteUrl.searchParams.set("invite", "b".repeat(43));
@@ -147,8 +153,8 @@ describe("remote server links", () => {
       { createTeamAuthTicket: async () => "ticket", getEmail: () => "person@example.com" },
       { webrtcTransport: transport, selfHostedApiOrigin: "https://api.example.com" },
     );
-    const inviteUrl = new URL("https://openbot.run/join");
-    inviteUrl.searchParams.set("api", "https://api.openbot.run/");
+    const inviteUrl = new URL(OPENBOT_INVITE_PATH, OPENBOT_INVITE_ORIGIN);
+    inviteUrl.searchParams.set("api", `${OPENBOT_CONTROL_PLANE_ORIGIN}/`);
     inviteUrl.searchParams.set("server", "00000000-0000-4000-8000-000000000000");
     inviteUrl.searchParams.set("fingerprint", "a".repeat(43));
     inviteUrl.searchParams.set("invite", "b".repeat(43));
@@ -227,7 +233,7 @@ describe("remote server links", () => {
       updateMember: async () => undefined,
       removeMember: async () => undefined,
       getPrincipalId: () => "person-1",
-      controlPlaneUrl: "https://api.openbot.run",
+      controlPlaneUrl: OPENBOT_CONTROL_PLANE_ORIGIN,
       downloadHostLogo: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
       transferDirectory: join(directory, "transfers"),
     });
@@ -345,7 +351,7 @@ describe("remote server links", () => {
       updateMember: async () => undefined,
       removeMember,
       getPrincipalId: () => "person-1",
-      controlPlaneUrl: "https://api.openbot.run",
+      controlPlaneUrl: OPENBOT_CONTROL_PLANE_ORIGIN,
       downloadHostLogo: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
       transferDirectory: join(directory, "transfers"),
     });
@@ -513,7 +519,7 @@ describe("remote server links", () => {
       updateMember: async () => undefined,
       removeMember: async () => undefined,
       getPrincipalId: () => "person-1",
-      controlPlaneUrl: "https://api.openbot.run",
+      controlPlaneUrl: OPENBOT_CONTROL_PLANE_ORIGIN,
       downloadHostLogo: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
       transferDirectory: join(directory, "transfers"),
     });
@@ -957,7 +963,7 @@ describe("remote control capability discovery", () => {
     const { publicKey, privateKey } = generateKeyPairSync("ed25519");
     const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
     const expectedFingerprint = fingerprint(publicKeyPem);
-    const inviteUrl = new URL("openbot://join");
+    const inviteUrl = new URL(`${PRODUCT_LINK_PREFIX}join`);
     inviteUrl.searchParams.set("api", apiUrl);
     inviteUrl.searchParams.set("server", serverId);
     inviteUrl.searchParams.set("fingerprint", expectedFingerprint);

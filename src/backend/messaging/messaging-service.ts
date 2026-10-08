@@ -923,9 +923,12 @@ export class MessagingService {
   }
 
   #setState(live: LiveConnection, state: MessagingConnectionState): void {
+    const wasFatal = FATAL_STATES.has(live.state);
     live.state = state;
     if (FATAL_STATES.has(state)) {
       this.#threads.store.updateConnection(live.record.connectionId, { lastErrorCode: state });
+      // A second fatal report for a stopped connection must not unlink the workspace again.
+      if (wasFatal) return;
       logger.warn("A messaging connection stopped.", { platform: live.record.platform, state });
       // The workspace uninstalled OpenBot or revoked its token: Signal stops routing it here.
       void this.#connect?.unlink(live.record.workspaceId).catch((error) => this.#warn(error));

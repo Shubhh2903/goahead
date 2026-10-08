@@ -1,4 +1,9 @@
-import { createInviteUrl, PERMANENT_INVITE_EXPIRES_AT_MS } from "@openbot/contracts/invite-links";
+import {
+  createInviteUrl,
+  OPENBOT_CONTROL_PLANE_ORIGIN,
+  OPENBOT_INVITE_ORIGIN,
+  PERMANENT_INVITE_EXPIRES_AT_MS,
+} from "@openbot/contracts/invite-links";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -8,7 +13,7 @@ import {
   watchRemoteDirectory,
 } from "./remote-directory";
 
-const API_URL = "https://api.openbot.run";
+const API_URL = OPENBOT_CONTROL_PLANE_ORIGIN;
 const HOST_ID = "11111111-1111-4111-8111-111111111111";
 const HOST_KEY = "desktop-public-key";
 const HOST_FINGERPRINT = "AqBeU6SSjNMMzQkof9ad85KzSTI7kiNWQtfzR-sbXsU";
@@ -32,13 +37,13 @@ describe("RemoteTeamDirectoryClient", () => {
   it("uses same-origin browser cookies and CSRF headers without a bearer token", async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ hosts: [] }));
     const client = new RemoteTeamDirectoryClient({
-      apiUrl: "https://openbot.run",
+      apiUrl: OPENBOT_INVITE_ORIGIN,
       authentication: { kind: "browser" },
       fetch,
     });
     await client.listHosts();
     expect(fetch).toHaveBeenLastCalledWith(
-      new URL("https://openbot.run/api/browser/v2/remote/hosts/"),
+      new URL(`${OPENBOT_INVITE_ORIGIN}/api/browser/v2/remote/hosts/`),
       expect.objectContaining({
         credentials: "same-origin",
         headers: { "X-OpenBot-Browser": "1", "Content-Type": "application/json" },
@@ -47,20 +52,20 @@ describe("RemoteTeamDirectoryClient", () => {
     fetch.mockResolvedValue(Response.json({ ended: true }));
     await client.endSession("session");
     expect(fetch).toHaveBeenLastCalledWith(
-      new URL("https://openbot.run/api/browser/v2/remote/sessions/session/end"),
+      new URL(`${OPENBOT_INVITE_ORIGIN}/api/browser/v2/remote/sessions/session/end`),
       expect.objectContaining({ method: "POST", body: "{}" }),
     );
   });
   it("accepts production account invitations on the public web origin without sending credentials to the API origin", async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json(PREVIEW));
     const client = new RemoteTeamDirectoryClient({
-      apiUrl: "https://openbot.run",
+      apiUrl: OPENBOT_INVITE_ORIGIN,
       authentication: { kind: "browser" },
       fetch,
     });
     await expect(client.previewInvite(INVITE)).resolves.toMatchObject({ hostId: HOST_ID });
     expect(fetch).toHaveBeenCalledWith(
-      new URL("https://openbot.run/api/browser/v2/remote/invites/preview"),
+      new URL(`${OPENBOT_INVITE_ORIGIN}/api/browser/v2/remote/invites/preview`),
       expect.objectContaining({ credentials: "same-origin" }),
     );
     const foreign = createInviteUrl({
@@ -207,9 +212,7 @@ describe("RemoteTeamDirectoryClient", () => {
         role: "owner",
       },
     ]);
-    expect(requests).toEqual([
-      { authorization: "Bearer mobile-session", url: "https://api.openbot.run/v2/remote/hosts/" },
-    ]);
+    expect(requests).toEqual([{ authorization: "Bearer mobile-session", url: `${API_URL}/v2/remote/hosts/` }]);
   });
 
   it("ends the logical session when ticket creation fails", async () => {

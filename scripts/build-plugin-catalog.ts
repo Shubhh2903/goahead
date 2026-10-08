@@ -582,17 +582,20 @@ function constName(slug: string): string {
 }
 
 function renderRendererModule(plugins: PluginDetail[]): string {
+  // The share link is code, not data, so it follows the product identity in `@openbot/contracts/plugin-links`.
+  const shareUrlMarker = "__plugin_share_url__";
   const blocks = plugins.map((plugin) => {
     const { featured: _featured, updatedAt: _updatedAt, ...detail } = plugin;
-    return `const ${constName(plugin.slug)}: MarketplacePluginDetail = ${tsLiteral({
+    const literal = tsLiteral({
       id: `plugin-${plugin.slug}`,
       ...detail,
       skills: [],
       installs: 0,
       featured: plugin.featured,
       updatedAt: plugin.updatedAt,
-      shareUrl: `https://openbot.run/plugins/${plugin.slug}`,
-    })};`;
+      shareUrl: shareUrlMarker,
+    }).replace(tsString(shareUrlMarker), `\`\${OPENBOT_PLUGIN_ORIGIN}\${OPENBOT_PLUGIN_PATH_PREFIX}${plugin.slug}\``);
+    return `const ${constName(plugin.slug)}: MarketplacePluginDetail = ${literal};`;
   });
   const list = plugins.map((plugin) => constName(plugin.slug)).join(",\n  ");
   return `/**
@@ -604,6 +607,7 @@ function renderRendererModule(plugins: PluginDetail[]): string {
  */
 
 import type { McpServerConfig } from "@openbot/contracts/ipc";
+import { OPENBOT_PLUGIN_ORIGIN, OPENBOT_PLUGIN_PATH_PREFIX } from "@openbot/contracts/plugin-links";
 import type { MarketplacePluginApp, MarketplacePluginDetail } from "@openbot/ui/features/settings/marketplace-plugins";
 
 /**
