@@ -1,15 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { stat } from "node:fs/promises";
 import { sortConversationMessages } from "@openbot/contracts/conversation-order";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
   AccountUsage,
   AgentAnalyticsInput,
   AgentEvent,
+  AgentHandoff,
   AgentMemory,
   AgentModelId,
   AgentModelOption,
   AgentProfileDraft,
+  AgentProjectFolder,
+  AgentProjectFolderState,
   AgentRuntimeSnapshot,
   AgentStatus,
   AgentSummary,
@@ -50,7 +54,9 @@ import type {
   ProviderCodeLoginStart,
   QueuedMessageReceipt,
   QueueSnapshot,
+  RemoveAgentProjectFolderInput,
   RemoveMcpServerInput,
+  RenameAgentProjectFolderInput,
   ReorderQueueInput,
   RespondToApprovalInput,
   RespondToBrowserSecretInput,
@@ -87,7 +93,7 @@ import {
 import { ContextResetBusyError } from "@openbot/contracts/team-protocol/context-reset-v1";
 import type { QueueEditRequest } from "@openbot/contracts/team-protocol/queue-edit-v1";
 import { sourceText } from "@openbot/i18n/source";
-import { createOpenBotLogger } from "@openbot/logging";
+import { createOpenBotLogger, redactText } from "@openbot/logging";
 import { AgentMemories } from "./agent/agent-memories";
 import { AgentRemoval } from "./agent/agent-removal";
 import type { ApprovalAutomationPolicy } from "./agent/approval-automation";
@@ -103,6 +109,7 @@ import { agentNamesById, displayMessageReferences } from "./agent/delivery-conte
 import { DeltaBuffer } from "./agent/delta-buffer";
 import { DrainScheduler } from "./agent/drain-scheduler";
 import { DuplicationGate } from "./agent/duplication-gate";
+import { HandoffActivity, type HandoffRecord } from "./agent/handoff-activity";
 import { decodeProviderTurns } from "./agent/handoff-tool-steps";
 import { type AgentHostedSites, HostedSiteCoordinator } from "./agent/hosted-site-coordinator";
 import { ImageGenRuntime } from "./agent/image-gen-runtime";
@@ -121,6 +128,7 @@ import { OpenBotToolRouter } from "./agent/openbot-tool-router";
 import { ProfileClients } from "./agent/profile-clients";
 import { GenerationUsageLimitError, generateProfile, generateTextWithoutTools } from "./agent/profile-generation";
 import { ProfileSave } from "./agent/profile-save";
+import { projectFolderStates, projectMapLine } from "./agent/project-folders";
 import { isPlanLimitDiagnostic } from "./agent/provider-diagnostics";
 import { type AgentClientFactory, ProviderRuntime } from "./agent/provider-runtime";
 import { QueueControls } from "./agent/queue-controls";
@@ -168,6 +176,8 @@ const logger = createOpenBotLogger("agent-service");
  * application, and an unset entry keeps that copy in the search.
  */
 const DEFAULT_BUNDLED_EXECUTABLES: BundledProviderExecutables = { claude: null, grok: null };
+/** How many local-owner delivery ids to keep; an older one only fails closed. */
+const LOCAL_OWNER_DELIVERY_LIMIT = 10_000;
 
 export type { TestMcpServerOptions } from "./agent/mcp-gateway";
 export type { RoutineMutationOptions } from "./agent/routine-scheduler";
@@ -177,6 +187,8 @@ interface AgentServiceEvents {
   event: [event: AgentEvent];
   /** Finished tool steps for the local host's product analytics. Never forwarded to a client. */
   toolUsage: [usage: ToolUsageSignal];
+  /** The hand-offs this agent sent changed. Local only: no Team API event carries it. */
+  handoffs: [agentId: string];
 }
 
 export interface AgentServiceOptions {
@@ -270,6 +282,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   readonly #boot: BootRecovery;
   readonly #deltas: DeltaBuffer;
   readonly #turn: TurnLifecycle;
+  readonly #handoffs: HandoffActivity;
   readonly #compaction: ContextCompaction;
   readonly #duplication: DuplicationGate;
   readonly #removal: AgentRemoval;
@@ -277,6 +290,11 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   readonly #sidebarLayout: AgentSidebar | null;
   readonly #localSkillTools?: () => LocalSkillTools;
   readonly #developmentDefaults: boolean;
+  /**
+   * The deliveries that the person at this computer sent from the desktop app, newest last. Only in
+   * memory: after a restart, a turn is not proven to be the local owner's, and a check fails closed.
+   */
+  readonly #localOwnerDeliveries = new Set<string>();
   #initialized = false;
   #stopping = false;
 
@@ -745,6 +763,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         Boolean(this.#conversation.workingSnapshot(agentId)?.activeTurnId || this.#mailbox.nextQueued(agentId)),
       interrupt: (agentId, turnId, threadId) => this.interrupt(agentId, turnId, threadId),
       forgetThread: (threadId) => this.#forgetExecutionThread(threadId),
+      projectMap: () => this.projectMap(),
     });
     this.#memoryHold = new MemoryHold({
       memory: hostMemory,
@@ -792,6 +811,12 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         isStopping: () => this.#stopping,
         servesModel: (model) => this.#endpoints.serves(model),
         requeueChannelDelivery: (deliveryId) => this.#requeueChannelDelivery(deliveryId),
+        // Only the owner's own messages in the app: a Slack message frames the map itself, and
+        // asking Chief from the inbox adds it to its prompt.
+        turnContext: (agentId, deliveryIds) =>
+          deliveryIds.some((id) => this.#localOwnerDeliveries.has(id))
+            ? this.messaging.orchestratorProjectMap(agentId)
+            : null,
       },
     });
     this.#browser.onControlChanged((state) => {
@@ -808,6 +833,13 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       routines: this.#routines,
       hooks: {
         channelAssignment: (deliveryId) => this.channels.store.assignmentForDelivery(deliveryId),
+      },
+    });
+    this.#handoffs = new HandoffActivity({
+      mailbox,
+      hooks: {
+        redact: (text) => this.#mcp.redact(redactText(text)),
+        changed: (agentId) => this.emit("handoffs", agentId),
       },
     });
     this.#turn = new TurnLifecycle({
@@ -833,6 +865,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         listAgents: () => this.listAgents(),
         redactMcp: (text) => this.#mcp.redact(text),
         emitToolUsage: (usage) => this.emit("toolUsage", usage),
+        toolStep: (agentId, turnId, item) => this.#handoffs.recordStep(agentId, turnId, item),
         turnModel: (agentId, turnId) => this.#drain.modelForTurn(agentId, turnId),
         requeueChannelDelivery: (deliveryId) => this.#requeueChannelDelivery(deliveryId),
       },
@@ -888,6 +921,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         emitError: (code, error, agentId) => this.#emitError(code, error, agentId),
         redactMcp: (text) => this.#mcp.redact(text),
         runsTurn: (agentId) => this.#runsTurn(agentId),
+        isLocalOwnerTurn: (agentId, turnId) => this.#isLocalOwnerTurn(agentId, turnId),
         interrupt: (agentId, turnId, mayStop) => this.#interruptTurn(agentId, turnId, undefined, mayStop),
         turnActivity: (agentId, turnId) => ({
           startedAt: turnId ? this.#turn.turnStartedAt(turnId) : null,
@@ -1515,6 +1549,44 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     return agent;
   }
 
+  /** Every local agent's existing project folders as one prompt line, or null when none has one. */
+  projectMap(): string | null {
+    return projectMapLine(this.#store.list());
+  }
+
+  /** The agent's project folders, each marked when it no longer exists. */
+  listProjectFolders(agentId: string): AgentProjectFolderState[] {
+    return projectFolderStates(this.#store.projectFolders(agentId));
+  }
+
+  /** Adds a folder the user picked in the main process's folder picker. */
+  async addProjectFolder(agentId: string, path: string): Promise<AgentProjectFolderState[]> {
+    const info = await stat(path).catch(() => null);
+    if (!info?.isDirectory()) throw new Error(sourceText("error.agent.projectFolderNotFolder"));
+    return this.#projectFoldersChanged(agentId, this.#store.addProjectFolder(agentId, path));
+  }
+
+  renameProjectFolder(input: RenameAgentProjectFolderInput): AgentProjectFolderState[] {
+    return this.#projectFoldersChanged(
+      input.agentId,
+      this.#store.renameProjectFolder(input.agentId, input.folderId, input.name),
+    );
+  }
+
+  removeProjectFolder(input: RemoveAgentProjectFolderInput): AgentProjectFolderState[] {
+    return this.#projectFoldersChanged(input.agentId, this.#store.removeProjectFolder(input.agentId, input.folderId));
+  }
+
+  /**
+   * The folders are working folders and a line of the standing instructions, so the next turn
+   * re-resumes, as after a profile edit.
+   */
+  #projectFoldersChanged(agentId: string, folders: AgentProjectFolder[]): AgentProjectFolderState[] {
+    this.#conversation.unloadAgentThreads(agentId);
+    this.#emit({ type: "agents-changed", agents: this.listAgents() });
+    return projectFolderStates(folders);
+  }
+
   refreshAgentRuntime(agentId: string): void {
     this.#threads.refreshAgentRuntime(agentId);
   }
@@ -1855,6 +1927,16 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     return this.#mailbox.discardDraft(id);
   }
 
+  /** The newest hand-offs this agent sent to teammates, oldest first. */
+  listHandoffs(agentId: string): AgentHandoff[] {
+    return this.#handoffs.list(agentId);
+  }
+
+  /** The same hand-offs with the external conversation each answer goes back to. Backend only. */
+  handoffRecords(agentId: string): HandoffRecord[] {
+    return this.#handoffs.records(agentId);
+  }
+
   listQueue(agentId: string): QueueSnapshot {
     return this.#mailboxSync.queueSnapshot(agentId);
   }
@@ -1904,16 +1986,26 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     }
   }
 
-  /** A saved edit is the editor's text, so `sender` becomes the sender of the message. */
+  /**
+   * A saved edit is the editor's text, so `sender` becomes the sender of the message. `localOwner` is
+   * true only on the desktop app's IPC path; any other editor removes the local-owner proof.
+   */
   editQueuedMessage(
     agentId: string,
     input: QueueEditRequest,
     sender?: ConversationMessageSender,
+    localOwner = false,
   ): Promise<QueueSnapshot> {
+    if (input.action === "save" && !localOwner) this.#localOwnerDeliveries.delete(input.deliveryId);
     return this.#queue.edit(agentId, input, sender);
   }
 
-  updateQueuedMessage(input: UpdateQueuedMessageInput, sender?: ConversationMessageSender): Promise<void> {
+  updateQueuedMessage(
+    input: UpdateQueuedMessageInput,
+    sender?: ConversationMessageSender,
+    localOwner = false,
+  ): Promise<void> {
+    if (!localOwner) this.#localOwnerDeliveries.delete(input.deliveryId);
     return this.#queue.update(input, sender);
   }
 
@@ -1930,10 +2022,34 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
    * that input, a renderer or a Team API body, never names who it is. `timezone` is the zone of a
    * Team API member's client, when it sent one.
    */
-  async sendMessage(
+  sendMessage(
     input: SendMessageInput,
     sender?: ConversationMessageSender,
     timezone?: string,
+  ): Promise<QueuedMessageReceipt> {
+    return this.#sendMessage(input, sender, timezone, false);
+  }
+
+  /**
+   * A message that the person at this computer sent from the desktop app, through the trusted IPC
+   * channel. Only this path marks a turn as the local owner's: a Team API member, a remote client, a
+   * Slack message or a routine never comes here.
+   */
+  sendLocalOwnerMessage(input: SendMessageInput, sender?: ConversationMessageSender): Promise<QueuedMessageReceipt> {
+    return this.#sendMessage(input, sender, undefined, true);
+  }
+
+  /** True only when every delivery of the running turn is one that the local owner sent from the app. */
+  #isLocalOwnerTurn(agentId: string, turnId: string): boolean {
+    const deliveries = this.#mailbox.findDeliveriesByTurn(agentId, turnId);
+    return deliveries.length > 0 && deliveries.every(({ delivery }) => this.#localOwnerDeliveries.has(delivery.id));
+  }
+
+  async #sendMessage(
+    input: SendMessageInput,
+    sender: ConversationMessageSender | undefined,
+    timezone: string | undefined,
+    localOwner: boolean,
   ): Promise<QueuedMessageReceipt> {
     const validateRecipient = this.#mailbox.prepareDelivery([input.agentId]);
     if (this.#duplication.isPending(input.agentId))
@@ -1953,6 +2069,12 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     const delivery = queued ? this.#mailbox.getDelivery(queued.id) : null;
     if (!delivery) throw new Error(sourceText("error.agent.queuedMessageCreateFailed"));
     if (timezone !== undefined) this.#routines.noteDeliveryTimezone(delivery.delivery.id, timezone);
+    if (localOwner) {
+      this.#localOwnerDeliveries.add(delivery.delivery.id);
+      const [oldest] = this.#localOwnerDeliveries;
+      if (this.#localOwnerDeliveries.size > LOCAL_OWNER_DELIVERY_LIMIT && oldest !== undefined)
+        this.#localOwnerDeliveries.delete(oldest);
+    }
     const snapshot = this.#conversation.ensureSnapshot(agent.id, agent.threadId);
     this.#mailboxSync.syncMailboxMessages(snapshot);
     await this.#store.updatePreview(
@@ -2078,6 +2200,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
 
   #emit(event: AgentEvent): void {
     recordAgentRestartActivity(event);
+    this.#handoffs?.event(event);
     if (this.channels?.event(event) || this.messaging?.event(event)) return;
     this.emit("event", event);
   }

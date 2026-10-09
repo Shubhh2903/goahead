@@ -87,4 +87,10 @@ export const messages = defineMessages("error.agent", {
     "This server is low on memory. Your message waits in the queue and starts when memory is free. A larger plan gives the server more memory.",
   "error.agent.workspaceOnlyToolMissing":
     "Workspace only needs {tool}, which GoAhead did not find. Install it, or choose Full access in the agent settings.",
+  "error.agent.projectFoldersLocalOnly": "Project folders can only be changed on the computer that runs the agent.",
+  "error.agent.projectFolderLimit": "An agent can have at most {limit} project folders.",
+  "error.agent.projectFolderNameInvalid": "A project folder name must have 1 to {limit} characters.",
+  "error.agent.projectFolderNameTaken": "Another project folder of this agent has the name {name}.",
+  "error.agent.projectFolderGone": "This project folder is no longer in the agent settings.",
+  "error.agent.projectFolderNotFolder": "The chosen item is not a folder.",
 });

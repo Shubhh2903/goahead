@@ -4,7 +4,9 @@ import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
   AddSlackOrchestratorInput,
   AnswerMessagingDraftInput,
+  AskOrchestratorAboutInboxInput,
   HandOverSlackDefaultInput,
+  HideMessagingThreadsInput,
   MarkMessagingThreadReadInput,
   MessagingThreadPageInput,
   ReadInboxConversationInput,
@@ -74,6 +76,19 @@ export function parseMarkMessagingThreadReadInput(value: unknown): MarkMessaging
   };
 }
 
+export function parseHideMessagingThreadsInput(value: unknown): HideMessagingThreadsInput {
+  if (
+    !isObject(value) ||
+    !Array.isArray(value.threadIds) ||
+    value.threadIds.length === 0 ||
+    value.threadIds.length > MESSAGING_LIMITS.hiddenThreads
+  )
+    throw new Error("A messaging request is invalid.");
+  return {
+    threadIds: value.threadIds.map((threadId) => requireString(threadId, "Thread id", INPUT_LIMITS.identifier)),
+  };
+}
+
 export function parseSetSlackWatchedChannelsInput(value: unknown): SetSlackWatchedChannelsInput {
   if (
     !isObject(value) ||
@@ -130,6 +145,19 @@ export function parseSendInboxReplyInput(value: unknown): SendInboxReplyInput {
     workspaceId: requireString(value.workspaceId, "Workspace id"),
     conversation: requireString(value.conversation, "Conversation", INPUT_LIMITS.identifier),
     // Untrimmed: the service trims and then holds the reply to `MESSAGING_LIMITS.inboxReply`.
+    text: requireString(value.text, "Text", INPUT_LIMITS.messageText),
+  };
+  if (value.threadKey !== undefined)
+    result.threadKey = requireString(value.threadKey, "Thread", INPUT_LIMITS.identifier);
+  return result;
+}
+
+export function parseAskOrchestratorAboutInboxInput(value: unknown): AskOrchestratorAboutInboxInput {
+  if (!isObject(value)) throw new Error("A messaging request is invalid.");
+  const result: AskOrchestratorAboutInboxInput = {
+    workspaceId: requireString(value.workspaceId, "Workspace id"),
+    conversation: requireString(value.conversation, "Conversation", INPUT_LIMITS.identifier),
+    // Untrimmed: the service takes the `@chief` prefix off and trims.
     text: requireString(value.text, "Text", INPUT_LIMITS.messageText),
   };
   if (value.threadKey !== undefined)

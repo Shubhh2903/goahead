@@ -45,6 +45,8 @@ export interface SidebarProps {
   messagingThreads?: MessagingThreadSummary[];
   activeMessagingThreadId?: string | null;
   onSelectMessagingThread?: (threadId: string) => void;
+  /** Hides Slack conversations from the sidebar. Nothing is deleted; a newer message shows one again. */
+  onHideMessagingThreads?: (threadIds: string[]) => Promise<void>;
   /** The person's local Slack inbox, as the first row under the agent that holds it. */
   messagingInbox?: { agentId: string; unreadCount: number } | null;
   messagingInboxActive?: boolean;

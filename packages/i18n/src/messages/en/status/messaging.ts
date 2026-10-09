@@ -34,6 +34,18 @@ export const messages = defineMessages("status.messaging", {
   "status.messaging.sentFor": "{name} asked me to send this:",
   "status.messaging.sent": "Sent. Approved by {user}.",
   "status.messaging.sendFailed": "Not sent: {reason}",
+  // One status message in a Slack thread while a teammate works on a request from it. Each hand-off
+  // has two lines: who asked whom to do what, and how far the teammate is. {from} and {agent} are
+  // agent names; {name} is a program, a file name or a tool, never its arguments.
+  "status.messaging.handoffTask": "{from} → {agent}: {task}",
+  "status.messaging.handoffQueued": "{agent}: waiting to start",
+  "status.messaging.handoffThinking": "{agent}: thinking…",
+  "status.messaging.handoffRunning": "{agent}: running {name}…",
+  "status.messaging.handoffEditing": "{agent}: editing {name}…",
+  "status.messaging.handoffSearching": "{agent}: searching the web…",
+  "status.messaging.handoffUsing": "{agent}: using {name}…",
+  "status.messaging.handoffDone": "{agent}: done",
+  "status.messaging.handoffFailed": "{agent}: stopped before it finished",
   // The name and title of the agent that OpenBot adds to answer in Slack. The user can rename it.
   "status.messaging.orchestratorName": "Slack Orchestrator",
   "status.messaging.orchestratorTitle": "Answers in Slack and asks the team",

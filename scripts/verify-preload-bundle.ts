@@ -31,6 +31,7 @@ const GROUP_PATHS: Readonly<Record<IpcGroupName, string | null>> = {
   customAgents: "customAgents",
   providerAdmin: "providerAdmin",
   messaging: "messaging",
+  handoffs: "handoffs",
   hostAdmin: "hostAdmin",
   hostedSites: "hostedSites",
   githubConnector: "githubConnector",

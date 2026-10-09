@@ -100,4 +100,12 @@ export const messages = defineMessages("agentSettings", {
   "agentSettings.automation.description": "Let scripts on this computer run this agent's routines",
   "agentSettings.runtime.workspaceEnforcedProcess":
     "The whole {provider} process runs in a sandbox, so a write outside fails. Available on macOS only.",
+  "agentSettings.projectFolders.title": "Project folders",
+  "agentSettings.projectFolders.description": "Folders on this computer that this agent also works in.",
+  "agentSettings.projectFolders.add": "Add folder…",
+  "agentSettings.projectFolders.nameLabel": "Name of the project folder {path}",
+  "agentSettings.projectFolders.remove": "Remove",
+  "agentSettings.projectFolders.removeLabel": "Remove project folder {name}",
+  "agentSettings.projectFolders.missing": "Missing",
+  "agentSettings.projectFolders.saveFailed": "Could not change the project folders.",
 });

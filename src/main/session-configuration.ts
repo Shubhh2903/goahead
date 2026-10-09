@@ -16,6 +16,7 @@ import { LOCAL_SERVER_ID } from "@openbot/contracts/ipc";
 import { app, session } from "electron";
 import type { AgentService } from "../backend/agent-service";
 import type { MailboxStore } from "../backend/mailbox-store";
+import type { MessagingService } from "../backend/messaging/messaging-service";
 import { buildContentSecurityPolicy, readSelfHostedSignalOrigin } from "./content-security-policy";
 import { fileResponse } from "./file-response";
 import type { RemoteServerManager } from "./remote-server-manager";
@@ -58,12 +59,22 @@ export interface AttachmentProtocolDependencies {
   mailbox: MailboxStore;
   agents: AgentService;
   remoteServers: RemoteServerManager;
+  /** The images that Slack messages in the person's inbox shared. */
+  slackInboxFiles: Pick<MessagingService, "resolveInboxFile">;
 }
 
-export function configureAttachmentProtocol({ mailbox, agents, remoteServers }: AttachmentProtocolDependencies): void {
+export function configureAttachmentProtocol({
+  mailbox,
+  agents,
+  remoteServers,
+  slackInboxFiles,
+}: AttachmentProtocolDependencies): void {
   session.defaultSession.protocol.handle("openbot-attachment", async (request) => {
     try {
       const url = new URL(request.url);
+      // `openbot-attachment://slack/<workspace>/<file>`: only an image file of an inbox message, which
+      // main downloaded from Slack with the person's token. The renderer names ids, never an address.
+      if (url.hostname === "slack") return await slackInboxFileResponse(url, slackInboxFiles);
       const id = url.pathname.split("/").filter(Boolean).at(-1);
       const attachment = id ? await mailbox.resolveAttachment(id) : null;
       if (!attachment) return new Response("Not found", { status: 404 });
@@ -137,6 +148,22 @@ export function configureAttachmentProtocol({ mailbox, agents, remoteServers }: 
     } catch {
       return new Response("Not found", { status: 404 });
     }
+  });
+}
+
+async function slackInboxFileResponse(
+  url: URL,
+  files: AttachmentProtocolDependencies["slackInboxFiles"],
+): Promise<Response> {
+  const [workspaceId, fileId, ...rest] = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  if (!workspaceId || !fileId || rest.length > 0) return new Response("Not found", { status: 404 });
+  const image = await files.resolveInboxFile(workspaceId, fileId);
+  if (!image) return new Response("Not found", { status: 404 });
+  return fileResponse(image.path, {
+    "Content-Type": image.mimeType,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Disposition": "inline",
   });
 }
 

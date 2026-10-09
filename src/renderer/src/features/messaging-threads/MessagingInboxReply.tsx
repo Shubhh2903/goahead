@@ -3,32 +3,56 @@ import { Button, Textarea } from "@openbot/ui";
 import { useText } from "@openbot/ui/text";
 import { createStore, Show } from "solid-js";
 
+/** Text that starts with `@chief`, then a space or nothing, goes to the Slack Orchestrator. */
+const CHIEF_PREFIX = /^@chief(?:\s|$)/i;
+
 /**
- * The box that sends a reply as the person in the open inbox conversation. It needs no approval. A
- * failed send keeps the text, so the person can send it again.
+ * The box that sends a reply as the person in the open inbox conversation. It needs no approval. Text
+ * that starts with `@chief` is not sent: it goes to the Slack Orchestrator as an instruction. A
+ * failure gives the text back, so the person can try again.
  */
-export function MessagingInboxReply(props: { onSend: (text: string) => Promise<void> }) {
-  const { t } = useText();
-  const [reply, setReply] = createStore({ text: "", sending: false, failed: false });
-  const ready = () => !reply.sending && reply.text.trim().length > 0;
+export function MessagingInboxReply(props: {
+  onSend: (text: string) => Promise<void>;
+  onAsk: (text: string) => Promise<void>;
+}) {
+  const { t, errorMessage } = useText();
+  const [reply, setReply] = createStore<{ text: string; sending: boolean; error: string | null }>({
+    text: "",
+    sending: false,
+    error: null,
+  });
+  const asksChief = () => CHIEF_PREFIX.test(reply.text.trim());
+  const ready = () => {
+    const text = reply.text.trim();
+    if (reply.sending || !text) return false;
+    return !asksChief() || text.replace(CHIEF_PREFIX, "").trim().length > 0;
+  };
 
   const send = () => {
     if (!ready()) return;
     const text = reply.text.trim();
+    const ask = asksChief();
+    // A reply shows in the conversation at once, so the box clears at once. An `@chief` instruction
+    // keeps its text until the orchestrator has it.
     setReply((draft) => {
       draft.sending = true;
-      draft.failed = false;
+      draft.error = null;
+      if (!ask) draft.text = "";
     });
-    props.onSend(text).then(
+    (ask ? props.onAsk(text) : props.onSend(text)).then(
       () =>
         setReply((draft) => {
-          draft.text = "";
+          if (ask) draft.text = "";
           draft.sending = false;
         }),
-      () =>
+      (error: unknown) =>
         setReply((draft) => {
           draft.sending = false;
-          draft.failed = true;
+          // Text typed while the reply was on its way stays after the failed reply.
+          if (!ask) draft.text = draft.text ? `${text}\n${draft.text}` : text;
+          draft.error = ask
+            ? errorMessage(error, t("messaging.inbox.reply.askFailed"))
+            : t("messaging.inbox.reply.failed");
         }),
     );
   };
@@ -41,10 +65,12 @@ export function MessagingInboxReply(props: { onSend: (text: string) => Promise<v
         send();
       }}
     >
-      <Show when={reply.failed}>
-        <p role="alert" class="messaging-inbox-reply-error">
-          {t("messaging.inbox.reply.failed")}
-        </p>
+      <Show when={reply.error}>
+        {(error) => (
+          <p role="alert" class="messaging-inbox-reply-error">
+            {error()}
+          </p>
+        )}
       </Show>
       <div class="messaging-inbox-reply-row">
         <Textarea
@@ -65,9 +91,10 @@ export function MessagingInboxReply(props: { onSend: (text: string) => Promise<v
           }}
         />
         <Button type="submit" size="sm" disabled={!ready()}>
-          {t("messaging.inbox.reply.send")}
+          {asksChief() ? t("messaging.inbox.reply.askChief") : t("messaging.inbox.reply.send")}
         </Button>
       </div>
+      <p class="messaging-inbox-reply-hint">{t("messaging.inbox.reply.chiefHint")}</p>
     </form>
   );
 }

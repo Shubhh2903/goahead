@@ -1,10 +1,10 @@
 /**
  * The Slack conversations an agent answers, as rows under its own row. The newest few show; the
- * rest open with "Show more". A row opens the conversation read-only. The compact sidebar has no
- * room for them.
+ * rest open with "Show more". A row opens the conversation read-only, and its right-click menu hides
+ * it until a newer message arrives. The compact sidebar has no room for them.
  */
 
-import { Badge, Button, Clock3, Hash, MessageCircle } from "@openbot/ui";
+import { Badge, Button, buttonVariants, Clock3, ContextMenu, EyeOff, Hash, MessageCircle } from "@openbot/ui";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { AgentProfile } from "../../data";
 import { useText } from "../../text";
@@ -81,51 +81,70 @@ export function SidebarMessagingThreads(threadProps: { agent: AgentProfile }) {
             const drafts = () => thread().pendingDrafts;
             return (
               <li>
-                <Button
-                  variant="ghost"
-                  class={[
-                    "sidebar-messaging-thread",
-                    {
-                      "sidebar-messaging-thread-active": active(),
-                      "sidebar-messaging-thread-unread": unread() > 0,
-                      "sidebar-messaging-thread-with-preview": Boolean(thread().preview),
-                    },
-                  ]}
-                  aria-label={`${t("sidebar.messagingThreads.row", { title: thread().title })}${
-                    thread().preview ? `. ${thread().preview}` : ""
-                  }${unread() > 0 ? `. ${t("sidebar.messagingThreads.unread", { count: unread() })}` : ""}${
-                    drafts() > 0 ? `. ${t("sidebar.messagingThreads.draftWaiting", { count: drafts() })}` : ""
-                  }`}
-                  aria-pressed={active() ? "true" : "false"}
-                  data-cuelume-navigate=""
-                  onClick={(event: MouseEvent) => {
-                    if (!sidebarClickIsSuppressed(event)) props.onSelectMessagingThread?.(thread().threadId);
-                  }}
-                >
-                  <span class="sidebar-messaging-thread-icon" aria-hidden="true">
-                    <Show when={thread().isDirect} fallback={<Hash />}>
-                      <MessageCircle />
-                    </Show>
-                  </span>
-                  <span class="sidebar-messaging-thread-title">{thread().title}</span>
-                  <Show when={thread().preview}>
-                    {(preview) => <span class="sidebar-messaging-thread-preview">{preview()}</span>}
-                  </Show>
-                  <span class="sidebar-messaging-thread-time">{sidebarMessageTime(thread().updatedAt, format)}</span>
-                  <Show when={drafts() > 0}>
-                    <span
-                      class="sidebar-messaging-thread-waiting"
-                      title={t("sidebar.messagingThreads.draftWaiting", { count: drafts() })}
-                    >
-                      <Clock3 aria-hidden="true" />
+                <ContextMenu.Root modal={false}>
+                  <ContextMenu.Trigger
+                    as="button"
+                    type="button"
+                    class={[
+                      buttonVariants({ variant: "ghost" }),
+                      "sidebar-messaging-thread",
+                      {
+                        "sidebar-messaging-thread-active": active(),
+                        "sidebar-messaging-thread-unread": unread() > 0,
+                        "sidebar-messaging-thread-with-preview": Boolean(thread().preview),
+                      },
+                    ]}
+                    aria-label={`${t("sidebar.messagingThreads.row", { title: thread().title })}${
+                      thread().preview ? `. ${thread().preview}` : ""
+                    }${unread() > 0 ? `. ${t("sidebar.messagingThreads.unread", { count: unread() })}` : ""}${
+                      drafts() > 0 ? `. ${t("sidebar.messagingThreads.draftWaiting", { count: drafts() })}` : ""
+                    }`}
+                    aria-pressed={active() ? "true" : "false"}
+                    data-cuelume-navigate=""
+                    onClick={(event: MouseEvent) => {
+                      if (!sidebarClickIsSuppressed(event)) props.onSelectMessagingThread?.(thread().threadId);
+                    }}
+                  >
+                    <span class="sidebar-messaging-thread-icon" aria-hidden="true">
+                      <Show when={thread().isDirect} fallback={<Hash />}>
+                        <MessageCircle />
+                      </Show>
                     </span>
+                    <span class="sidebar-messaging-thread-title">{thread().title}</span>
+                    <Show when={thread().preview}>
+                      {(preview) => <span class="sidebar-messaging-thread-preview">{preview()}</span>}
+                    </Show>
+                    <span class="sidebar-messaging-thread-time">{sidebarMessageTime(thread().updatedAt, format)}</span>
+                    <Show when={drafts() > 0}>
+                      <span
+                        class="sidebar-messaging-thread-waiting"
+                        title={t("sidebar.messagingThreads.draftWaiting", { count: drafts() })}
+                      >
+                        <Clock3 aria-hidden="true" />
+                      </span>
+                    </Show>
+                    <Show when={unread() > 0}>
+                      <Badge class="sidebar-messaging-thread-badge" tone="accent" shape="pill" aria-hidden="true">
+                        {Math.min(unread(), 99)}
+                      </Badge>
+                    </Show>
+                  </ContextMenu.Trigger>
+                  <Show when={props.onHideMessagingThreads}>
+                    {(hide) => (
+                      <ContextMenu.Portal>
+                        <ContextMenu.Content
+                          class="agent-context-menu"
+                          aria-label={t("sidebar.messagingThreads.row", { title: thread().title })}
+                        >
+                          <ContextMenu.Item onSelect={() => void hide()([thread().threadId]).catch(() => undefined)}>
+                            <EyeOff class="agent-context-icon size-4" aria-hidden="true" />
+                            <span>{t("sidebar.messagingThreads.hide")}</span>
+                          </ContextMenu.Item>
+                        </ContextMenu.Content>
+                      </ContextMenu.Portal>
+                    )}
                   </Show>
-                  <Show when={unread() > 0}>
-                    <Badge class="sidebar-messaging-thread-badge" tone="accent" shape="pill" aria-hidden="true">
-                      {Math.min(unread(), 99)}
-                    </Badge>
-                  </Show>
-                </Button>
+                </ContextMenu.Root>
               </li>
             );
           }}

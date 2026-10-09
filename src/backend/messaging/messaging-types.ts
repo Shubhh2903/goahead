@@ -67,6 +67,22 @@ export interface InboxCandidate {
   sentAt: string;
   /** The people the text mentions, by platform user id. */
   mentionedUserIds: string[];
+  /** The files the message shared. */
+  files?: InboxFile[];
+}
+
+/** A file that a message in the person's inbox shared, as the platform described it. */
+export interface InboxFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  /** The private address of the whole file. It needs the token. */
+  url: string;
+  /** A smaller image of an image file, or null. It needs the token too. */
+  thumbnailUrl: string | null;
+  /** The file's page on the platform, for a browser. */
+  permalink: string | null;
 }
 
 export type InboundAction =
@@ -129,6 +145,8 @@ export interface MessagingAdapter {
   edit(target: MessageTarget, messageId: string, body: MessageBody): Promise<void>;
   /** Posts a reply that the person typed, as them, with the user token. Only Slack has it. */
   postAsUser?(input: { channel: string; threadTs?: string; text: string }): Promise<{ ts: string }>;
+  /** Moves the person's read mark of a conversation to `ts`, with the user token. Only Slack has it. */
+  markReadAsUser?(channel: string, ts: string): Promise<void>;
   postPrivate(target: MessageTarget, userId: string, text: string): Promise<void>;
   react(target: MessageTarget, messageId: string, reaction: StatusReaction, on: boolean): Promise<void>;
   /**
@@ -161,6 +179,11 @@ export interface MessagingAdapter {
    * one host, so another installed person's private messages can arrive too; they must never be kept.
    */
   isPersonConversation?(platformChannelId: string): Promise<boolean>;
+  /**
+   * The Slack user ids of a direct or group direct message, read as the connected person. Null for a
+   * channel, or when the people cannot be read.
+   */
+  conversationPeople?(platformChannelId: string): Promise<string[] | null>;
   /** Earlier messages of the conversation, oldest first, after `afterId` and before `beforeId`. */
   history(
     platformChannelId: string,
@@ -170,6 +193,16 @@ export interface MessagingAdapter {
   ): Promise<ContextEntry[]>;
   /** Downloads one file to `destination`. Refuses a file larger than `maxBytes`. */
   download(file: InboundFile, destination: string, maxBytes: number): Promise<void>;
+  /**
+   * Downloads a file of the person's inbox to `destination`, with the person's token first and then
+   * the bot's. Refuses an address that is not the platform's, a page instead of a file, and a file
+   * larger than `maxBytes`.
+   */
+  downloadInboxFile?(url: string, destination: string, maxBytes: number): Promise<void>;
+  /** The workspace's own emoji: an https image address or `alias:<name>`, by name. Empty when not readable. */
+  customEmoji?(): Promise<Record<string, string>>;
+  /** Inbox text, kept in the platform's markup, as plain text for an agent or a preview. */
+  plainText?(text: string): string;
   authorName(userId: string): Promise<string>;
   placeName(platformChannelId: string): Promise<string>;
   mention(userId: string): string;

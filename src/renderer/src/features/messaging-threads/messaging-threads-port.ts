@@ -7,6 +7,7 @@ export interface MessagingThreadsPort {
     | "listThreads"
     | "readThreadPage"
     | "markThreadRead"
+    | "hideThreads"
     | "onThreadsChanged"
     | "listDrafts"
     | "answerDraft"
@@ -14,6 +15,7 @@ export interface MessagingThreadsPort {
     | "readInboxConversation"
     | "onInboxChanged"
     | "sendInboxReply"
+    | "askOrchestratorAboutInbox"
     | "getSlackRouting"
     | "handOverSlackDefault"
   >;

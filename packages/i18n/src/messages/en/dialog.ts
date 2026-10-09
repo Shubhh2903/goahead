@@ -13,4 +13,5 @@ export const messages = defineMessages("dialog", {
   "dialog.chooseAgentExport": "Choose an agent export",
   "dialog.filter.agentExports": "Agent exports",
   "dialog.saveExportSkill": "Save the export skill",
+  "dialog.chooseProjectFolder": "Choose a project folder",
 });

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { redactText } from "@openbot/logging";
@@ -47,6 +47,19 @@ describe("MessagingCredentialStore", () => {
 
     await store.set("connection-1", TOKENS);
     expect(store.status("connection-1")).toBe("saved");
+  });
+
+  it("clear with discardUnreadable removes an unreadable file", async () => {
+    const { path } = await createStore();
+    await writeFile(path, "{ not json");
+    const store = new MessagingCredentialStore(path, cipher);
+    await store.load();
+
+    await store.clear("connection-1");
+    expect(store.status("connection-1")).toBe("unreadable");
+    await store.clear("connection-1", { discardUnreadable: true });
+    expect(store.status("connection-1")).toBe("missing");
+    await expect(access(path)).rejects.toThrow();
   });
 
   it("drops the tokens of connections that no longer exist", async () => {

@@ -92,6 +92,8 @@ export interface OpenBotToolRouterHooks {
   redactMcp(text: string): string;
   /** True while the provider runs a turn for this agent, a context compaction included. */
   runsTurn(agentId: string): boolean;
+  /** True only when the person at this computer started this turn in the desktop app. */
+  isLocalOwnerTurn(agentId: string, turnId: string): boolean;
   /** `false` when the turn no longer runs or `mayStop` refuses, so no stop was sent. */
   interrupt(agentId: string, turnId: string, mayStop: () => boolean): Promise<boolean>;
   /** Epoch milliseconds from the turn lifecycle; null when this process has not seen the event. */
@@ -494,10 +496,11 @@ export class OpenBotToolRouter {
 
     if (params.tool === SLACK_LIST_UNREAD_TOOL.name || params.tool === SLACK_READ_CONVERSATION_TOOL.name) {
       const threadId = this.#conversation.publicThreadId(senderAgentId, params.threadId);
+      const localOwnerTurn = this.#hooks.isLocalOwnerTurn(senderAgentId, params.turnId);
       try {
         if (params.tool === SLACK_LIST_UNREAD_TOOL.name)
           return openBotToolResult(
-            await this.#messaging.readInbox({ tool: "list_unread", agentId: senderAgentId, threadId }),
+            await this.#messaging.readInbox({ tool: "list_unread", agentId: senderAgentId, threadId, localOwnerTurn }),
           );
         const args = slackReadConversationSchema.parse(params.arguments ?? {});
         return openBotToolResult(
@@ -505,6 +508,7 @@ export class OpenBotToolRouter {
             tool: "read",
             agentId: senderAgentId,
             threadId,
+            localOwnerTurn,
             conversation: args.conversation,
             threadKey: args.thread ?? null,
             limit: args.limit ?? 20,

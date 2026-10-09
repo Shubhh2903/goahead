@@ -36,6 +36,7 @@ import {
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   decodeAccountUsageFromMain,
+  decodeAddedProjectFolders,
   decodeAgent,
   decodeAgentAnalyticsFromMain,
   decodeAgentModels,
@@ -46,6 +47,7 @@ import {
   decodeHostAnalyticsFromMain,
   decodeMemories,
   decodeMemory,
+  decodeProjectFolders,
   decodeProviderApiKeyState,
   decodeProviderCodeLoginStart,
   decodeRoutine,
@@ -135,8 +137,10 @@ import {
   decodeDynamicIslandPreference,
   decodeDynamicIslandPresentation,
 } from "./dynamic-island-decoding";
+import { decodeAgentHandoffsChanged, decodeAgentHandoffsReply } from "./handoff-decoding";
 import {
   decodeAddSlackOrchestratorReply,
+  decodeAskOrchestratorAboutInboxReply,
   decodeMessagingDraftsReply,
   decodeMessagingInboxChanged,
   decodeMessagingInboxPageReply,
@@ -387,6 +391,10 @@ const agentGroup = bridgeGroup(IPC_ENDPOINTS.agent, {
   updateAgent: decodeAgent,
   setAvatar: decodeAgent,
   deleteAgent: decodeVoid,
+  listProjectFolders: decodeProjectFolders,
+  addProjectFolder: decodeAddedProjectFolders,
+  renameProjectFolder: decodeProjectFolders,
+  removeProjectFolder: decodeProjectFolders,
   readConversation: decodeConversation,
   readConversationPage: decodeConversationPageFromMain,
   searchConversationMessages: decodeConversationSearchPageFromMain,
@@ -636,6 +644,7 @@ const openbotApi: OpenBotDesktopApi = {
     listThreads: decodeMessagingThreadsReply,
     readThreadPage: decodeConversationPageFromMain,
     markThreadRead: decodeReadState,
+    hideThreads: decodeVoid,
     threadsChanged: dropInvalid(decodeMessagingThreadsChanged),
     listSlackChannels: decodeSlackChannelListReply,
     setSlackWatchedChannels: decodeVoid,
@@ -646,8 +655,13 @@ const openbotApi: OpenBotDesktopApi = {
     setSlackSendGuards: decodeVoid,
     answerDraft: decodeVoid,
     sendInboxReply: decodeVoid,
+    askOrchestratorAboutInbox: decodeAskOrchestratorAboutInboxReply,
     getSlackRouting: decodeSlackRoutingStatusReply,
     handOverSlackDefault: decodeSlackRoutingStatusReply,
+  }),
+  handoffs: bridgeGroup(IPC_ENDPOINTS.handoffs, {
+    list: decodeAgentHandoffsReply,
+    changed: dropInvalid(decodeAgentHandoffsChanged),
   }),
   hostAdmin: bridgeGroup(IPC_ENDPOINTS.hostAdmin, {
     updateIdentity: decodeServer,

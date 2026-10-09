@@ -1,4 +1,7 @@
-/** The sidebar's agent, channel and section confirmations share one pending delete state. */
+/**
+ * The sidebar's agent, channel and section confirmations, and the Slack history clear, share one
+ * pending state.
+ */
 
 import { ConfirmDialog } from "@openbot/ui";
 import { Show } from "solid-js";
@@ -10,12 +13,14 @@ import { useSidebarScope } from "./sidebar-scope";
 export function SidebarDialogs() {
   const {
     closeDelete,
+    confirmClearHistory,
     confirmDelete,
     confirmSectionDelete,
     deleteError,
     deleteTarget,
     channelDeleteTarget,
     deleting,
+    historyClearTarget,
     props,
     sectionDeleteTarget,
   } = useSidebarScope();
@@ -58,6 +63,24 @@ export function SidebarDialogs() {
             title={t("sidebar.delete.title", { name: channel().name })}
             description={t("sidebar.delete.channelDescription")}
             onConfirm={confirmDelete}
+          />
+        )}
+      </Show>
+
+      <Show when={historyClearTarget()}>
+        {(agent) => (
+          <ConfirmDialog
+            open
+            pending={deleting()}
+            error={deleteError()}
+            media={<AgentAvatar agent={agent()} style={{ width: "44px", height: "44px" }} />}
+            tone="default"
+            title={t("sidebar.clearHistory.title")}
+            description={t("sidebar.clearHistory.description", { agent: agent().name })}
+            confirmLabel={t("sidebar.clearHistory.confirm")}
+            pendingLabel={t("sidebar.clearHistory.pending")}
+            onCancel={closeDelete}
+            onConfirm={confirmClearHistory}
           />
         )}
       </Show>

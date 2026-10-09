@@ -5,7 +5,7 @@ import { MessagingInboxReply } from "./MessagingInboxReply";
 describe("MessagingInboxReply", () => {
   it("Send posts the reply and clears the box", async () => {
     const sendInboxReply = vi.fn(async (_text: string) => undefined);
-    render(() => <MessagingInboxReply onSend={sendInboxReply} />);
+    render(() => <MessagingInboxReply onSend={sendInboxReply} onAsk={vi.fn(async (_text: string) => undefined)} />);
 
     const box = screen.getByRole("textbox", { name: "Reply as you" });
     await fireEvent.input(box, { target: { value: "  On my way  " } });
@@ -16,9 +16,37 @@ describe("MessagingInboxReply", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("@chief text asks the orchestrator and is not sent", async () => {
+    const sendInboxReply = vi.fn(async (_text: string) => undefined);
+    const ask = vi.fn(async (_text: string) => undefined);
+    render(() => <MessagingInboxReply onSend={sendInboxReply} onAsk={ask} />);
+
+    const box = screen.getByRole("textbox", { name: "Reply as you" });
+    await fireEvent.input(box, { target: { value: "@Chief draft an answer" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Ask Chief" }));
+
+    await waitFor(() => expect(ask).toHaveBeenCalledWith("@Chief draft an answer"));
+    await waitFor(() => expect(box).toHaveValue(""));
+    expect(sendInboxReply).not.toHaveBeenCalled();
+  });
+
+  it("plain text still sends", async () => {
+    const sendInboxReply = vi.fn(async (_text: string) => undefined);
+    const ask = vi.fn(async (_text: string) => undefined);
+    render(() => <MessagingInboxReply onSend={sendInboxReply} onAsk={ask} />);
+
+    await fireEvent.input(screen.getByRole("textbox", { name: "Reply as you" }), {
+      target: { value: "@chiefly speaking, yes" },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(sendInboxReply).toHaveBeenCalledWith("@chiefly speaking, yes"));
+    expect(ask).not.toHaveBeenCalled();
+  });
+
   it("Send is disabled for empty text", async () => {
     const sendInboxReply = vi.fn(async (_text: string) => undefined);
-    render(() => <MessagingInboxReply onSend={sendInboxReply} />);
+    render(() => <MessagingInboxReply onSend={sendInboxReply} onAsk={vi.fn(async (_text: string) => undefined)} />);
 
     const send = screen.getByRole("button", { name: "Send" });
     expect(send).toBeDisabled();
@@ -30,7 +58,7 @@ describe("MessagingInboxReply", () => {
     const sendInboxReply = vi.fn(async (_text: string) => {
       throw new Error("not_in_channel");
     });
-    render(() => <MessagingInboxReply onSend={sendInboxReply} />);
+    render(() => <MessagingInboxReply onSend={sendInboxReply} onAsk={vi.fn(async (_text: string) => undefined)} />);
 
     const box = screen.getByRole("textbox", { name: "Reply as you" });
     await fireEvent.input(box, { target: { value: "Hello" } });

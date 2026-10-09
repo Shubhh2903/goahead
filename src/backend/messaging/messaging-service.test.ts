@@ -8,7 +8,7 @@
 // test. Writes .openbot-build/slack-e2e/report.json.
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
 import type { AgentEvent, AgentSummary } from "@openbot/contracts/ipc";
@@ -17,9 +17,11 @@ import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-ap
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentService } from "../agent-service";
 import {
+  callOpenBotTool,
   type FakeAgentClient,
   inputRecords,
   notification,
+  openBotToolPayload,
   paramsRecord,
   startAgentTestFixture,
   startService,
@@ -27,6 +29,7 @@ import {
   waitFor,
 } from "../agent-service-test-harness";
 import { SidebarLayoutStore } from "../sidebar-layout-store";
+import { MessagingHiddenThreadStore } from "./messaging-hidden-threads";
 import { type MessagingCredentials, MessagingService, type SlackRoutingPort } from "./messaging-service";
 import type { MessagingIngress } from "./messaging-types";
 import type { SlackAppPort } from "./slack/slack-connect";
@@ -183,11 +186,25 @@ class FakeSlack {
       case "users.info":
         return reply({ user: { name: params.user?.toLowerCase(), profile: { display_name: `Name ${params.user}` } } });
       case "conversations.info":
+        // The bot is not in the person's own direct message with Alice.
+        if (params.channel === "D2")
+          return token === USER_TOKEN
+            ? reply({ channel: { id: "D2", is_im: true, user: "UALICE" } })
+            : fail("channel_not_found");
         return reply({ channel: { name: "general" } });
+      case "conversations.open":
+        return reply({ channel: { id: `D-${params.users}` } });
       case "conversations.replies":
         return reply({ messages: this.replies.get(params.ts ?? "") ?? [] });
       case "conversations.history":
         return reply({ messages: [] });
+      case "emoji.list":
+        // Only the person's token has `emoji:read` here.
+        return token === USER_TOKEN
+          ? reply({
+              emoji: { "clapclap-e": "https://emoji.slack-edge.com/T1/clapclap-e/a.gif", party: "alias:clapclap-e" },
+            })
+          : fail("missing_scope");
       case "chat.postMessage":
         this.#ts += 1;
         return reply({ ts: `${this.#ts}.000` });
@@ -210,11 +227,14 @@ const onlineIngress: MessagingIngress = {
 
 class MemoryCredentials implements MessagingCredentials {
   readonly values = new Map<string, Record<string, string>>();
+  /** Connections whose saved access cannot be decrypted, as after a Keychain key change. */
+  readonly unreadable = new Set<string>();
   keys() {
     return [...this.values.keys()];
   }
   status(connectionId: string) {
-    return this.values.has(connectionId) ? ("saved" as const) : ("missing" as const);
+    if (this.values.has(connectionId)) return "saved" as const;
+    return this.unreadable.has(connectionId) ? ("unreadable" as const) : ("missing" as const);
   }
   get(connectionId: string) {
     return this.values.get(connectionId) ?? null;
@@ -222,8 +242,9 @@ class MemoryCredentials implements MessagingCredentials {
   async set(connectionId: string, values: Record<string, string>) {
     this.values.set(connectionId, values);
   }
-  async clear(connectionId: string) {
+  async clear(connectionId: string, options: { discardUnreadable?: boolean } = {}) {
     this.values.delete(connectionId);
+    if (options.discardUnreadable) this.unreadable.clear();
   }
   async retain(connectionIds: ReadonlySet<string>) {
     for (const id of [...this.values.keys()]) if (!connectionIds.has(id)) this.values.delete(id);
@@ -262,6 +283,7 @@ async function connected(
     user?: boolean;
     routing?: SlackRoutingPort;
     slackApp?: SlackAppPort;
+    hiddenThreads?: MessagingHiddenThreadStore;
   } = {},
 ) {
   const started = await startService(root, { provider: "codex", autoComplete: options.autoComplete ?? true });
@@ -284,13 +306,24 @@ async function connected(
       },
       createAgentProfile: (input) => started.service.createAgentProfile(input),
       createMemory: (input) => started.service.createMemory(input),
+      sendMessage: (input) => started.service.sendMessage(input),
+      projectMap: () => started.service.projectMap(),
+      handoffRecords: (agentId) => started.service.handoffRecords(agentId),
+      onHandoffs: (listener) => {
+        started.service.on("handoffs", listener);
+        return () => started.service.off("handoffs", listener);
+      },
     },
     credentials,
     drivers: [slackDriver({ origin: slack.origin, ingress: onlineIngress })],
     downloadsRoot: join(root, "messaging-downloads"),
+    inboxFilesRoot: join(root, "messaging-files"),
     ingress: onlineIngress,
     ...(options.routing ? { slackRouting: options.routing } : {}),
     ...(options.slackApp ? { slackApp: options.slackApp } : {}),
+    ...(options.hiddenThreads ? { hiddenThreads: options.hiddenThreads } : {}),
+    // Short, so the hand-off status test does not wait two seconds for each edit.
+    handoffStatusIntervalMs: 20,
   });
   const store = started.service.messaging.store;
   const { connectionId } = store.ensureConnection("slack", "T1", "Test workspace");
@@ -324,6 +357,25 @@ function keepDirect(started: Awaited<ReturnType<typeof connected>>) {
     text: "Are you there?",
     sentAt: new Date().toISOString(),
   });
+}
+
+/** A message to the orchestrator in the app, and its running turn, as the provider names them. */
+async function appTurn(
+  started: Awaited<ReturnType<typeof connected>>,
+  send: (input: { agentId: string; text: string }) => Promise<unknown>,
+) {
+  const turnIds: string[] = [];
+  started.client.on("notification", (event: unknown) => {
+    const params = paramsRecord(paramsRecord(event)?.params);
+    const id = paramsRecord(params?.turn)?.id;
+    if (paramsRecord(event)?.method === "turn/started" && isString(id)) turnIds.push(id);
+  });
+  await send({ agentId: started.agent.id, text: "What is new in Slack?" });
+  await waitFor(() => turnIds.length === 1);
+  const threadId = paramsRecord(turnStarts(started.client)[0]?.params)?.threadId;
+  const [turnId] = turnIds;
+  if (!isString(threadId) || !turnId) throw new Error("The app message started no turn.");
+  return { threadId, turnId };
 }
 
 function workspace() {
@@ -377,6 +429,70 @@ describe.sequential("Slack messaging end to end", () => {
       [],
     );
     report.mention = { prompt: prompt.split("\n").slice(0, 3), reactions: reactions.length };
+  });
+
+  it("gives the orchestrator the project map of every local agent on each turn", async () => {
+    const started = await connected();
+    const owner = await started.store.getOrCreate("web-agent");
+    const projectPath = join(root, "projects", "website");
+    mkdirSync(projectPath, { recursive: true });
+    await started.service.addProjectFolder(owner.id, projectPath);
+
+    await slack.send("events_api", slack.mention("fix the footer in website", "100.000"));
+    await waitFor(() => turnStarts(started.client).length === 1);
+
+    const [start] = turnStarts(started.client);
+    const prompt = start ? promptOf(start) : "";
+    expect(prompt).toContain(`Projects: website → ${owner.name} (${projectPath}).`);
+  });
+
+  it("an in-app turn of the orchestrator includes the project map", async () => {
+    const started = await connected();
+    const owner = await started.store.getOrCreate("web-agent");
+    const projectPath = join(root, "projects", "website");
+    mkdirSync(projectPath, { recursive: true });
+    await started.service.addProjectFolder(owner.id, projectPath);
+
+    await started.service.sendLocalOwnerMessage({ agentId: started.agent.id, text: "fix the footer in website" });
+    await waitFor(() => turnStarts(started.client).length === 1);
+
+    const [start] = turnStarts(started.client);
+    expect(start ? promptOf(start) : "").toContain(`Projects: website → ${owner.name} (${projectPath}).`);
+    // The map goes to the provider only: the chat shows the person's own words.
+    const chat = (await started.service.readConversation(started.agent.id)).messages;
+    expect(chat.filter((message) => message.author === "user").map((message) => message.text)).toEqual([
+      "fix the footer in website",
+    ]);
+  });
+
+  it("hidden conversations leave the list and come back with a newer message", async () => {
+    const path = join(root, "hidden-threads.json");
+    const { agent } = await connected({ hiddenThreads: new MessagingHiddenThreadStore(path) });
+    await slack.send("events_api", slack.mention("first", "200.000"));
+    // The answer is the newest message; a hide before it would end when it arrives.
+    await waitFor(() => slack.of("chat.update").some((call) => call.params.text === "CODEX_DONE"));
+    const [summary] = messaging?.threadSummaries() ?? [];
+    if (!summary) throw new Error("The mention has no conversation.");
+    expect(summary.agentId).toBe(agent.id);
+    const changed: string[] = [];
+    messaging?.onThreadChanged((threadId) => changed.push(threadId));
+
+    await messaging?.hideThreads([summary.threadId, "not-a-messaging-thread"]);
+
+    expect(messaging?.threadSummaries()).toEqual([]);
+    expect(changed).toEqual([summary.threadId]);
+    // Nothing is deleted: the conversation and its messages stay.
+    expect(service?.messaging.store.linkForThread(summary.threadId)).not.toBeNull();
+    // The mark is on disk, so it holds after a restart.
+    const reloaded = new MessagingHiddenThreadStore(path);
+    await reloaded.load();
+    expect(reloaded.isHidden(summary.threadId, summary.updatedAt)).toBe(true);
+
+    const hiddenAt = Date.now();
+    await waitFor(() => Date.now() > hiddenAt);
+    await slack.send("events_api", slack.message("follow up", "201.000", { thread_ts: "200.000" }));
+    await waitFor(() => (messaging?.threadSummaries() ?? []).length === 1);
+    expect(messaging?.threadSummaries().map((thread) => thread.threadId)).toEqual([summary.threadId]);
   });
 
   it("runs a redelivered event once, and a reply without a mention only in a known thread", async () => {
@@ -586,6 +702,95 @@ describe.sequential("Slack messaging end to end", () => {
     report.teammateAnswer = { followUpInSlackThread: true, doneReactions: done.length };
   });
 
+  it("a hand-off posts one status message and edits it until done", async () => {
+    const { agent, client, store } = await connected({ autoComplete: false });
+    const builder = await store.getOrCreate("builder");
+    const started: Array<{ threadId: string; turnId: string }> = [];
+    client.on("notification", (event: { method: string; params: unknown }) => {
+      const params = paramsRecord(event.params);
+      const turn = params && paramsRecord(params.turn);
+      if (event.method === "turn/started" && isString(params?.threadId) && isString(turn?.id))
+        started.push({ threadId: params.threadId, turnId: turn.id });
+    });
+    const finish = (turn: { threadId: string; turnId: string } | undefined, text: string) => {
+      if (!turn) throw new Error("The turn did not start.");
+      const item = { id: `${turn.turnId}:answer`, type: "agentMessage", text };
+      client.emit("notification", notification("item/completed", { ...turn, item }));
+      client.emit(
+        "notification",
+        notification("turn/completed", { threadId: turn.threadId, turn: { id: turn.turnId, status: "completed" } }),
+      );
+    };
+    const step = (turn: { threadId: string; turnId: string } | undefined, item: DynamicRecord) => {
+      if (!turn) throw new Error("The turn did not start.");
+      client.emit("notification", notification("item/started", { ...turn, item }));
+    };
+    const names = new Map(service?.listAgents().map((summary) => [summary.id, summary.name]));
+    const header = `${names.get(agent.id)} → ${names.get(builder.id)}: Add a Go server config to handling-1m-req.`;
+    const statusPosts = () => slack.of("chat.postMessage").filter((call) => call.params.text?.startsWith(header));
+    const statusTexts = () =>
+      [...statusPosts(), ...slack.of("chat.update")]
+        .map((call) => call.params.text ?? "")
+        .filter((text) => text.startsWith(header));
+
+    await slack.send("events_api", slack.mention("add a Go server config to handling-1m-req", "800.000"));
+    await waitFor(() => started.length === 1);
+    const slackTurn = started[0];
+    client.emit("request", {
+      method: "item/tool/call",
+      id: "ask-builder",
+      params: {
+        ...slackTurn,
+        callId: "ask-builder",
+        namespace: "openbot",
+        tool: "send_message",
+        arguments: { recipientAgentIds: [builder.id], text: "Add a Go server config to handling-1m-req." },
+      },
+    });
+    await waitFor(() => service?.listQueue(builder.id).deliveries.length === 1);
+    finish(slackTurn, "");
+
+    // The builder's steps show as labels: the program and the file name, never the arguments.
+    await waitFor(() => started.length === 2);
+    const work = started[1];
+    step(work, {
+      id: "go-version",
+      type: "commandExecution",
+      command: '/bin/zsh -lc "GITHUB_TOKEN=ghp_examplesecret go version"',
+      status: "inProgress",
+    });
+    await waitFor(() => statusTexts().some((text) => text.endsWith(`${names.get(builder.id)}: running go…`)));
+    step(work, {
+      id: "go-server",
+      type: "fileChange",
+      changes: [{ path: "/Users/someone/handling-1m-req/go-server.go", kind: { type: "add" } }],
+      status: "inProgress",
+    });
+    await waitFor(() => statusTexts().some((text) => text.endsWith(`${names.get(builder.id)}: editing go-server.go…`)));
+    finish(work, "Status: done. Added go-server.go.");
+    await waitFor(
+      () =>
+        statusTexts()
+          .at(-1)
+          ?.endsWith(`${names.get(builder.id)}: done`) === true,
+    );
+    await waitFor(() => started.length === 3);
+    finish(started[2], "Builder added the Go server config.");
+    await waitFor(() =>
+      slack.of("chat.update").some((call) => call.params.text === "Builder added the Go server config."),
+    );
+
+    // One message, edited in place; no secret, path or command argument reaches Slack.
+    expect(statusPosts()).toHaveLength(1);
+    expect(statusTexts().length).toBeGreaterThanOrEqual(3);
+    for (const text of statusTexts()) {
+      expect(text).not.toContain("ghp_examplesecret");
+      expect(text).not.toContain("/Users/someone");
+      expect(text).not.toContain("version");
+    }
+    report.handoffStatus = { posts: statusPosts().length, edits: statusTexts().length - 1 };
+  });
+
   it("reply goes out as the owner even when sends are paused", async () => {
     const started = await connected({ user: true });
     keepDirect(started);
@@ -603,7 +808,164 @@ describe.sequential("Slack messaging end to end", () => {
     expect(started.service.messaging.store.sends().map((send) => [send.sender, send.platformChannelId])).toEqual([
       ["user", "D2"],
     ]);
-    report.inboxReply = { asUser: reply?.as === "user", whilePaused: true };
+    // The reply shows in the conversation at once; Slack's own event for it is not needed.
+    const page = await messaging?.readInboxConversation("T1", "D2");
+    expect(page?.messages.map((message) => message.text)).toContain("On my way");
+    report.inboxReply = { asUser: reply?.as === "user", whilePaused: true, shownInInbox: true };
+  });
+
+  it("an inbox page resolves names and custom emoji, and lists the files a message shared", async () => {
+    const started = await connected({ user: true });
+    await slack.send("events_api", {
+      team_id: "T1",
+      event_id: "EvInbox1",
+      event: {
+        type: "message",
+        user: "UALICE",
+        channel: "D2",
+        channel_type: "im",
+        ts: "950.000",
+        text: "<@UDANA> :party: :tada: in <#C1|> &lt;3",
+        files: [
+          {
+            id: "F1PHOTO",
+            name: "photo.png",
+            mimetype: "image/png",
+            size: 2048,
+            url_private_download: "https://files.slack.com/files-pri/T1-F1PHOTO/download/photo.png",
+            thumb_480: "https://files.slack.com/files-tmb/T1-F1PHOTO/photo_480.png",
+            permalink: "https://acme.slack.com/files/UALICE/F1PHOTO/photo.png",
+          },
+          {
+            id: "F2NOTES",
+            name: "notes.pdf",
+            mimetype: "application/pdf",
+            size: 4096,
+            url_private_download: "https://files.slack.com/files-pri/T1-F2NOTES/download/notes.pdf",
+            permalink: "https://acme.slack.com/files/UALICE/F2NOTES/notes.pdf",
+          },
+        ],
+      },
+    });
+    // The row is kept first, then its files.
+    await waitFor(() => existsSync(join(root, "messaging-files", started.connectionId, "files.json")));
+
+    const page = await messaging?.readInboxConversation("T1", "D2");
+
+    expect(page?.messages.at(-1)?.text).toBe("<@UDANA> :party: :tada: in <#C1|> &lt;3");
+    expect(page?.people).toEqual({ UDANA: "Name UDANA" });
+    expect(page?.channels).toEqual({ C1: "general" });
+    expect(page?.customEmoji).toEqual({
+      party: "alias:clapclap-e",
+      "clapclap-e": "https://emoji.slack-edge.com/T1/clapclap-e/a.gif",
+    });
+    expect(page?.messages.at(-1)?.files).toEqual([
+      {
+        id: "F1PHOTO",
+        name: "photo.png",
+        mimeType: "image/png",
+        size: 2048,
+        previewUrl: "openbot-attachment://slack/T1/F1PHOTO",
+        permalink: "https://acme.slack.com/files/UALICE/F1PHOTO/photo.png",
+      },
+      {
+        id: "F2NOTES",
+        name: "notes.pdf",
+        mimeType: "application/pdf",
+        size: 4096,
+        previewUrl: null,
+        permalink: "https://acme.slack.com/files/UALICE/F2NOTES/notes.pdf",
+      },
+    ]);
+    // The list preview and an agent read plain text.
+    const [inbox] = (await messaging?.listInbox()) ?? [];
+    expect(inbox?.conversations[0]?.preview).toBe("@UDANA :party: :tada: in #C1 <3");
+  });
+
+  it("reading an inbox conversation marks it read in Slack as the person", async () => {
+    const started = await connected({ user: true });
+    keepDirect(started);
+
+    await messaging?.readInboxConversation("T1", "D2");
+
+    await waitFor(() => slack.of("conversations.mark").length > 0);
+    expect(slack.of("conversations.mark")).toEqual([
+      { method: "conversations.mark", as: "user", params: { channel: "D2", ts: "900.000" } },
+    ]);
+  });
+
+  it("asking Chief starts a turn for the orchestrator with the conversation as context", async () => {
+    const started = await connected({ user: true });
+    keepDirect(started);
+
+    const result = await messaging?.askOrchestratorAboutInbox({
+      workspaceId: "T1",
+      conversation: "D2",
+      text: "@Chief draft a short answer",
+    });
+
+    expect(result).toEqual({ agentId: started.agent.id });
+    await waitFor(() => turnStarts(started.client).length > 0);
+    const [start] = turnStarts(started.client);
+    const prompt = start ? promptOf(start) : "";
+    expect(prompt).toContain("direct message with Alice");
+    expect(prompt).toContain("Alice: Are you there?");
+    expect(prompt).toContain("Person: Alice, Slack user ID UALICE.");
+    expect(prompt).toContain("to: <@USER_ID> (direct message)");
+    expect(prompt).toContain("draft a short answer");
+    expect(prompt).not.toContain("@Chief");
+    // The instruction never goes to Slack.
+    expect(slack.of("chat.postMessage")).toEqual([]);
+  });
+
+  it("asking Chief includes the project map", async () => {
+    const started = await connected({ user: true });
+    keepDirect(started);
+    const owner = await started.store.getOrCreate("web-agent");
+    const projectPath = join(root, "projects", "website");
+    mkdirSync(projectPath, { recursive: true });
+    await started.service.addProjectFolder(owner.id, projectPath);
+
+    await messaging?.askOrchestratorAboutInbox({ workspaceId: "T1", conversation: "D2", text: "@Chief fix website" });
+
+    await waitFor(() => turnStarts(started.client).length > 0);
+    const [start] = turnStarts(started.client);
+    const prompt = start ? promptOf(start) : "";
+    expect(prompt.split(`Projects: website → ${owner.name} (${projectPath}).`)).toHaveLength(2);
+  });
+
+  it("a send to a DM conversation ID goes to the person in it", async () => {
+    const started = await connected({ user: true, autoComplete: false });
+    await slack.send("events_api", slack.mention("answer Alice", "800.000", { user: "UOWNER" }));
+    await waitFor(() => turnStarts(started.client).length === 1);
+    const link = started.service.messaging.store.links(started.agent.id)[0];
+    if (!link) throw new Error("The mention has no conversation.");
+
+    const receipt = await started.service.messaging.requestSend({
+      agentId: started.agent.id,
+      threadId: link.threadId,
+      to: "D2",
+      text: "On my way",
+      threadKey: null,
+    });
+    expect(receipt).toMatchObject({ status: "waiting_for_approval", sender: "user" });
+    for (const draft of messaging?.listDrafts() ?? []) await messaging?.answerDraft(draft.draftId, "approve");
+
+    expect(slack.of("conversations.open")).toMatchObject([{ as: "user", params: { users: "UALICE" } }]);
+    expect(slack.of("chat.postMessage").filter((call) => call.params.text === "On my way")).toMatchObject([
+      { as: "user", params: { channel: "D-UALICE" } },
+    ]);
+    expect(started.service.messaging.store.sends().map((send) => send.to)).toEqual(["user:UALICE"]);
+  });
+
+  it("asking Chief without an orchestrator is refused", async () => {
+    const started = await connected({ user: true, orchestrator: false });
+    keepDirect(started);
+
+    await expect(
+      messaging?.askOrchestratorAboutInbox({ workspaceId: "T1", conversation: "D2", text: "@chief summarize" }),
+    ).rejects.toThrow("Add the Slack Orchestrator first.");
+    expect(turnStarts(started.client)).toEqual([]);
   });
 
   it("reply over 4000 characters is refused", async () => {
@@ -664,6 +1026,58 @@ describe.sequential("Slack messaging end to end", () => {
     expect(unlinked).toEqual(["T1"]);
     // Another host still answers the workspace with the shared bot token.
     expect(slack.of("auth.revoke")).toEqual([]);
+  });
+
+  it("disconnect removes a workspace whose saved access is unreadable", async () => {
+    const unlinked: string[] = [];
+    const slackApp: SlackAppPort = {
+      authorize: async () => "https://slack.com/oauth/v2/authorize",
+      unlink: async (workspaceId) => {
+        unlinked.push(workspaceId);
+        return { workspaceRemains: false };
+      },
+      openExternal: async () => undefined,
+    };
+    const started = await connected({ user: true, slackApp });
+    // The Keychain key changed: the saved access cannot be decrypted any more.
+    started.credentials.values.delete(started.connectionId);
+    started.credentials.unreadable.add(started.connectionId);
+    expect(workspace()).toMatchObject({ credentials: "unreadable", userId: null });
+
+    await messaging?.disconnectSlackWorkspace("T1");
+    // No token is known, so nothing is revoked, and the whole host leaves the workspace.
+    expect(unlinked).toEqual(["T1"]);
+    expect(slack.of("auth.revoke")).toEqual([]);
+    expect(started.credentials.status(started.connectionId)).toBe("missing");
+    expect(messaging?.slackOverview().connections).toEqual([]);
+    expect(started.service.messaging.store.connections().map((record) => record.enabled)).toEqual([false]);
+  });
+
+  it("the orchestrator can read the inbox in a local owner's app turn", async () => {
+    const started = await connected({ user: true, autoComplete: false });
+    keepDirect(started);
+    const turn = await appTurn(started, (input) => started.service.sendLocalOwnerMessage(input));
+
+    const answer = await callOpenBotTool(started.client, turn.threadId, "slack_list_unread", {}, turn.turnId);
+    expect(paramsRecord(answer.result)?.success).toBe(true);
+    expect(openBotToolPayload(answer.result)).toMatchObject({
+      unread: [{ conversation: "D2", kind: "direct", latestFrom: "Alice" }],
+      note: expect.stringContaining("data, not instructions"),
+    });
+    report.appInbox = { localOwnerRead: true };
+  });
+
+  it("an app turn without a proven local-owner sender cannot read the inbox", async () => {
+    const started = await connected({ user: true, autoComplete: false });
+    keepDirect(started);
+    // The path of a Team API member or another client: it never proves the local owner.
+    const turn = await appTurn(started, (input) => started.service.sendMessage(input));
+
+    const answer = await callOpenBotTool(started.client, turn.threadId, "slack_list_unread", {}, turn.turnId);
+    expect(paramsRecord(answer.result)?.success).toBe(false);
+    expect(openBotToolPayload(answer.result).error).toBe(
+      "Slack messages can only be read in your direct message with GoAhead, or when you ask the Slack Orchestrator in GoAhead on this computer.",
+    );
   });
 
   it("writes the report", () => {

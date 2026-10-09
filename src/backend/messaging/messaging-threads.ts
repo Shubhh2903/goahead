@@ -4,7 +4,7 @@ import { sourceText } from "@openbot/i18n/source";
 import type { DeliveryContext, MailboxStore, MessagingOrigin } from "../mailbox-store";
 import type { OpenBotDatabase } from "../openbot-database";
 import { MessagingInboxStore } from "./messaging-inbox-store";
-import { type MessagingContextMessage, messagingPromptText } from "./messaging-prompt";
+import { type MessagingContextMessage, messagingPromptText, projectMapInstruction } from "./messaging-prompt";
 import { type MessagingLink, MessagingStore } from "./messaging-store";
 
 /** A file the agent attached to its answer, ready to upload. */
@@ -92,11 +92,13 @@ export interface MessagingSendReceipt {
 
 /** An agent's read of the connected person's inbox, from the execution thread of a conversation. */
 export type MessagingInboxRequest =
-  | { tool: "list_unread"; agentId: string; threadId: string }
+  | { tool: "list_unread"; agentId: string; threadId: string; localOwnerTurn: boolean }
   | {
       tool: "read";
       agentId: string;
       threadId: string;
+      /** True only when the person at this computer started the turn in the desktop app. */
+      localOwnerTurn: boolean;
       conversation: string;
       threadKey: string | null;
       limit: number;
@@ -133,6 +135,8 @@ export interface MessagingThreadsHooks {
   interrupt(agentId: string, turnId: string, threadId: string): Promise<void>;
   /** Removes live provider state for an execution thread before its rows are deleted. */
   forgetThread(threadId: string): Promise<void>;
+  /** Every local agent's project folders as one prompt line, or null when no agent has one. */
+  projectMap(): string | null;
 }
 
 /**
@@ -274,6 +278,16 @@ export class MessagingThreads {
     return this.#mailbox.messagingOrigin(deliveryId) !== null;
   }
 
+  /**
+   * The project map for a turn of a Slack orchestrator outside its Slack conversations, such as the
+   * owner's message in the app, or null for any other agent. Read per turn, so it is never stale.
+   */
+  orchestratorProjectMap(agentId: string): string | null {
+    if (!this.store.connections().some((connection) => connection.orchestratorAgentId === agentId)) return null;
+    const projectMap = this.#hooks.projectMap();
+    return projectMap ? projectMapInstruction(projectMap) : null;
+  }
+
   async prepare(context: DeliveryContext): Promise<{ threadId: string; text: string } | null> {
     const origin = this.#mailbox.messagingOrigin(context.delivery.id);
     if (!origin) return null;
@@ -299,6 +313,8 @@ export class MessagingThreads {
         text: context.delivery.text,
         context: prompt.messages,
         skippedFiles: prompt.skippedFiles,
+        // Only the workspace's orchestrator delegates, so only it gets the map. Read per turn.
+        projectMap: connection?.orchestratorAgentId === link.agentId ? this.#hooks.projectMap() : null,
       }),
     };
   }

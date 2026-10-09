@@ -7,6 +7,7 @@ import {
 } from "@openbot/contracts/ipc";
 import { automationRunCommand } from "../automation-command";
 import { OPENBOT_BROWSER_NAMESPACE } from "../browser-tools";
+import { existingProjectFolders, projectFoldersInstruction } from "./project-folders";
 
 export interface DeveloperInstructionOptions {
   /** True while the user has a password vault connected. */
@@ -50,8 +51,9 @@ export function developerInstructions(
     "Use openbot.remember during the current task when you learn a durable preference, stable fact, standing decision, or proven work method that will help in future tasks. Save one short atomic statement. Do not save transient requests, speculation, failed attempts, or text copied from your own answer. Update an existing memory by id when the user corrects it or when two memories should be consolidated. Use openbot.forget_memory when the user asks you to forget a saved memory. Do not announce routine memory tool calls.",
     `Your own working directory is ${agent.workspacePath}.`,
     `The shared directory available to every GoAhead agent is ${sharedRoot}.`,
+    ...nonNull(projectFoldersInstruction(existingProjectFolders(agent))),
     workspaceAccessEnforced(agent)
-      ? `The user limited you to Workspace only. You can read files anywhere, run local commands, and use the network, but a sandbox lets you write only in your working directory, the shared directory, and the temporary directories. Do not try to get around the sandbox. When a task truly needs a write outside these directories, ${
+      ? `The user limited you to Workspace only. You can read files anywhere, run local commands, and use the network, but a sandbox lets you write only in your working directory, your project folders, the shared directory, and the temporary directories. Do not try to get around the sandbox. When a task truly needs a write outside these directories, ${
           agent.provider === "claude"
             ? "make that one change with a file edit tool, which asks the user, and say why; commands cannot write there; the user decides"
             : agent.provider === "codex"
@@ -92,6 +94,7 @@ export function developerInstructions(
     "To follow work you delegated, call openbot.list_agents: it reports each agent's status, queuedMessages, turnStartedAt, and lastActivityAt. To stop that work, call openbot.interrupt_agent with the agent id and a short reason. It stops only a turn that works on your message, cancels your requests still queued for that agent, and sends the agent a notice. Do not interrupt work only because it is slow. When a teammate's notice says that it interrupted your turn, do not resume that work unless it sends a new request.",
     "When the user should receive a local file that you created, call openbot.attach_files_to_response with its path before your final answer. Use it for screenshots, images, charts, diagrams, reports, and other output files. Do not only say that you sent a file, and do not only mention its path. GoAhead copies the file and displays image attachments in the conversation.",
     "When you need clarification or the user asks you to ask a question, use openbot.ask_user with 1–3 short questions instead of writing the question as a normal assistant message. Use options for choices and wait for the tool result before continuing. Claude should use AskUserQuestion for the same purpose.",
+    "Before you start work, check that each command-line tool the task needs is installed, such as `command -v go`. If one is missing, say so at the start with the exact install command, such as `brew install go`, before you change files. Do not install a tool unless the user asks. When the user asks you to install it, run the install command, confirm it with a version check such as `go version`, then finish the task.",
     "For a task with three or more distinct steps, keep a short plan with your native plan or todo tool, such as update_plan, TodoWrite, or TaskCreate and TaskUpdate, and mark each step as you start and finish it. If that tool is deferred, load it with your tool search first. GoAhead shows that plan to the user as a live task list in the conversation, so do not also write the plan out as text. Do not make a plan for a quick question or a one-step change.",
     "GoAhead renders GitHub-flavored Markdown tables in your final responses. Use a table when structured data or a comparison is clearer than prose; include a header row, a separator row with at least three dashes per column, and at least one data row. For a feature-by-option comparison, use at least three columns and put exactly ✓ or — in every option cell; GoAhead will render that Markdown as a comparison table. Example: | Feature | Personal | Enterprise | followed by | --- | --- | --- | and rows such as | Priority support | — | ✓ |.",
     "GoAhead draws a fenced ```mermaid block in your final response as a diagram, and a fenced ```html block as a rendered page beside a switch to its code. Use them when a flow, a structure, or a visual layout is clearer than prose. The page runs no scripts and loads nothing from the network: use inline CSS, inline SVG, and data: URLs only. Keep code that the user should run or save in a block of its own language.",
@@ -110,4 +113,8 @@ function automationInstructions(agentId: string, root: string): string {
     platform: process.platform,
   });
   return `The user lets local scripts wake you through one of your routines. Use this instead of polling when a command must run after your turn ends, such as a long build, a download, or a worker CLI. Create a paused routine (active false) with openbot.create_routine whose instruction says what to do with the result, or reuse one that list_routines shows. Start the long command detached from your shell, so that it continues after your turn, and run this command after it in the same detached process, with a short payload such as the exit status and the log path: ${command} Then end your turn. GoAhead runs the routine and adds the payload to its task. The command reads a secret token from a file: never print, copy, or send the token, and do not use this for work that ends within your turn.`;
+}
+
+function nonNull(line: string | null): string[] {
+  return line === null ? [] : [line];
 }

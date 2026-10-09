@@ -1,5 +1,4 @@
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
-import { createOpenBotLogger } from "@openbot/logging";
 import type {
   ConnectionIdentity,
   IngressAnswer,
@@ -10,10 +9,6 @@ import type {
   TransportSink,
 } from "../messaging-types";
 import { slackInboundAction, slackInboundMessage, slackInboxCandidate } from "./slack-events";
-
-// SPIKE (CP6 multi-user), development only: who Slack says each event is for. IDs only, no text.
-// Remove after the spike.
-const spikeLogger = process.env.OPENBOT_DEV_SLACK_SPIKE === "1" ? createOpenBotLogger("slack-spike") : null;
 
 /** Slack sends a request again when the answer is late, with the same `event_id`. */
 const RECENT_EVENTS = 2_000;
@@ -79,18 +74,6 @@ export class SlackEventsTransport implements MessagingTransport {
     if (body.api_app_id !== this.#identity.appId) return { status: 404 };
     if (isString(body.event_id) && this.#remember(body.event_id)) return OK;
     const event = body.event;
-    if (spikeLogger && isDynamicRecord(event))
-      spikeLogger.info("event", {
-        eventId: body.event_id,
-        type: event.type,
-        channelType: event.channel_type,
-        from: event.user,
-        authorizations: Array.isArray(body.authorizations)
-          ? body.authorizations.filter(isDynamicRecord).map((item) => ({ user: item.user_id, isBot: item.is_bot }))
-          : [],
-        isExtSharedChannel: body.is_ext_shared_channel,
-        eventContext: body.event_context,
-      });
     if (isDynamicRecord(event) && (event.type === "app_uninstalled" || event.type === "tokens_revoked")) {
       if (sink.revoked) sink.revoked();
       else sink.state("invalid_token");

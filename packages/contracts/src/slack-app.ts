@@ -33,14 +33,22 @@ export const SLACK_BOT_SCOPES = [
 export const SLACK_USER_SCOPES = [
   "channels:history",
   "channels:read",
+  // `conversations.mark`: a conversation read in GoAhead shows read in Slack too.
+  "channels:write",
   "chat:write",
+  // `emoji.list`: the workspace's own emoji in the Slack inbox.
+  "emoji:read",
+  // `files.info` and file downloads: images shared in direct messages show in the Slack inbox.
+  "files:read",
   "groups:history",
   "groups:read",
+  "groups:write",
   "im:history",
   "im:read",
   "im:write",
   "mpim:history",
   "mpim:read",
+  "mpim:write",
   "reactions:write",
   "users:read",
 ] as const;

@@ -28,8 +28,10 @@ import { isDynamicRecord } from "@openbot/contracts/runtime-values";
 import { TEAM_API_ROUTES } from "@openbot/contracts/team-api-routes";
 import { CHANNEL_ROUTES } from "@openbot/contracts/team-protocol/channels-v1";
 import { CONTEXT_RESET_CAPABILITY, CONTEXT_RESET_ROUTES } from "@openbot/contracts/team-protocol/context-reset-v1";
+import type { AppTranslate } from "@openbot/i18n";
 import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger } from "@openbot/logging";
+import { type BrowserWindow, dialog, type OpenDialogOptions } from "electron";
 import { duplicateAgentIntoLayout } from "../../backend/agent/duplication-gate";
 import type { AgentService } from "../../backend/agent-service";
 import type { SidebarLayoutStore } from "../../backend/sidebar-layout-store";
@@ -65,6 +67,8 @@ import {
   parsePromptResponse,
   parseQueueEdit,
   parseReadConversationPage,
+  parseRemoveProjectFolder,
+  parseRenameProjectFolder,
   parseReorderQueue,
   parseSearchConversationFiles,
   parseSearchConversationMessages,
@@ -105,6 +109,13 @@ export interface AgentIpcDependencies {
   host: HostService;
   remoteServers: RemoteServerManager;
   skills: SkillMarketplaceService;
+  getMainWindow: () => BrowserWindow | null;
+  translate: AppTranslate;
+}
+
+/** Project folders are paths on this computer. The Team API does not carry them, in either direction. */
+function projectFoldersLocalOnly(): never {
+  throw new Error(sourceText("error.agent.projectFoldersLocalOnly"));
 }
 
 export function agentIpcHandlers({
@@ -113,7 +124,20 @@ export function agentIpcHandlers({
   host,
   remoteServers,
   skills,
+  getMainWindow,
+  translate,
 }: AgentIpcDependencies): Pick<IpcGroupHandlers, "agent"> {
+  /** The folder picker runs here, in main, so a stored path is always one the user picked. */
+  async function chooseProjectFolder(): Promise<string | null> {
+    const mainWindow = getMainWindow();
+    const options: OpenDialogOptions = {
+      title: translate("dialog.chooseProjectFolder"),
+      properties: ["openDirectory", "createDirectory"],
+    };
+    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  }
+
   return {
     agent: {
       getStatus: scopedQueryHandler({
@@ -272,6 +296,27 @@ export function agentIpcHandlers({
           await remoteServers.request(serverId, TEAM_API_ROUTES.agent.one(agentId), decodeVoid, { method: "DELETE" });
         },
       }),
+      listProjectFolders: scopedHandler(parseAgentId, {
+        local: (agentId) => service.listProjectFolders(agentId),
+        remote: projectFoldersLocalOnly,
+      }),
+      addProjectFolder: scopedHandler(parseAgentId, {
+        local: async (agentId) => {
+          // Fails before the picker opens for an agent this computer does not have.
+          service.listProjectFolders(agentId);
+          const path = await chooseProjectFolder();
+          return path === null ? null : service.addProjectFolder(agentId, path);
+        },
+        remote: projectFoldersLocalOnly,
+      }),
+      renameProjectFolder: scopedHandler(parseRenameProjectFolder, {
+        local: (input) => service.renameProjectFolder(input),
+        remote: projectFoldersLocalOnly,
+      }),
+      removeProjectFolder: scopedHandler(parseRemoveProjectFolder, {
+        local: (input) => service.removeProjectFolder(input),
+        remote: projectFoldersLocalOnly,
+      }),
       readConversation: scopedHandler(parseAgentId, {
         local: (agentId) => host.readAgentConversation(agentId),
         remote: (agentId, serverId) => remoteServers.readAgentConversation(agentId, serverId),
@@ -305,7 +350,7 @@ export function agentIpcHandlers({
         remote: (parsed, serverId) => remoteServers.markAgentConversationRead(parsed, serverId),
       }),
       sendMessage: scopedHandler(parseSendMessage, {
-        local: (input) => service.sendMessage(input, host.conversationSender()),
+        local: (input) => service.sendLocalOwnerMessage(input, host.conversationSender()),
         remote: (input, serverId) =>
           remoteServers.request(serverId, TEAM_API_ROUTES.agent.messages(input.agentId), decodeQueuedMessageReceipt, {
             method: "POST",
@@ -351,7 +396,7 @@ export function agentIpcHandlers({
           }),
       }),
       editQueuedMessage: scopedHandler(parseQueueEdit, {
-        local: ({ agentId, ...input }) => service.editQueuedMessage(agentId, input, host.conversationSender()),
+        local: ({ agentId, ...input }) => service.editQueuedMessage(agentId, input, host.conversationSender(), true),
         remote: ({ agentId, ...input }, serverId) =>
           remoteServers.request(serverId, TEAM_API_ROUTES.agent.queueEdit(agentId), decodeQueueSnapshot, {
             method: "POST",
@@ -359,7 +404,7 @@ export function agentIpcHandlers({
           }),
       }),
       updateQueuedMessage: scopedHandler(parseUpdateQueuedMessage, {
-        local: (parsed) => service.updateQueuedMessage(parsed, host.conversationSender()),
+        local: (parsed) => service.updateQueuedMessage(parsed, host.conversationSender(), true),
         remote: (parsed, serverId) =>
           remoteServers.request(serverId, TEAM_API_ROUTES.agent.queueUpdate(parsed.agentId), decodeVoid, {
             method: "POST",

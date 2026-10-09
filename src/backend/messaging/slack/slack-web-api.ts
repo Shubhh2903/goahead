@@ -140,7 +140,12 @@ export class SlackWebApi {
    * Downloads a private Slack file to `destination`. The token goes only to Slack's own https hosts,
    * a redirect is followed only to another of them, and the body is cut off at `maxBytes`.
    */
-  async download(url: string, destination: string, maxBytes: number): Promise<void> {
+  async download(
+    url: string,
+    destination: string,
+    maxBytes: number,
+    options: { refusePage?: boolean } = {},
+  ): Promise<void> {
     let current = url;
     for (let redirects = 0; ; redirects += 1) {
       if (!this.#trusted(current)) throw new SlackApiError("files.download", "untrusted_file_url");
@@ -158,6 +163,11 @@ export class SlackWebApi {
       if (!response.ok || !response.body) {
         await response.body?.cancel();
         throw new SlackApiError("files.download", `http_${response.status}`);
+      }
+      // Without the right scope Slack answers a file address with its sign-in page, not an error.
+      if (options.refusePage && (response.headers.get("content-type") ?? "").toLowerCase().startsWith("text/html")) {
+        await response.body.cancel();
+        throw new SlackApiError("files.download", "not_a_file");
       }
       const declared = Number(response.headers.get("content-length") ?? "0");
       if (declared > maxBytes) {

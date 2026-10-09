@@ -17,10 +17,13 @@ import type { SidebarProps } from "../sidebar-types";
 interface SidebarPendingDelete {
   deleting: boolean;
   error: string | null;
-  /** The agent, channel or section, whichever `kind` names. */
+  /** The agent, channel or section, whichever `kind` names. `history` names the agent. */
   id: string;
-  /** Which confirmation is on screen. Each dialog renders from one arm. */
-  kind: "agent" | "channel" | "section";
+  /**
+   * Which confirmation is on screen. Each dialog renders from one arm. `history` hides the agent's
+   * Slack conversations; it deletes nothing, but it shares the one confirmation slot.
+   */
+  kind: "agent" | "channel" | "section" | "history";
 }
 
 /** What the section editor is editing: a section about to exist, or the one being renamed. */
@@ -65,6 +68,10 @@ export function createSidebarPendingStore(deps: {
     const deletion = pending.deletion;
     return deletion?.kind === "channel" ? props.channels?.find((channel) => channel.id === deletion.id) : undefined;
   });
+  const historyClearTarget = createMemo(() => {
+    const deletion = pending.deletion;
+    return deletion?.kind === "history" ? props.agents.find((agent) => agent.id === deletion.id) : undefined;
+  });
   const sectionDeleteTarget = createMemo(() => {
     const deletion = pending.deletion;
     return deletion?.kind === "section"
@@ -100,8 +107,27 @@ export function createSidebarPendingStore(deps: {
       if (!state.deletion) return;
       state.deletion.deleting = false;
       const text = currentText();
-      state.deletion.error = text.errorMessage(cause, text.t("sidebar.delete.failed"));
+      state.deletion.error = text.errorMessage(
+        cause,
+        text.t(state.deletion.kind === "history" ? "sidebar.clearHistory.failed" : "sidebar.delete.failed"),
+      );
     });
+  }
+
+  /** Hides every Slack conversation of the agent the confirmation names. */
+  async function confirmClearHistory() {
+    const deletion = pending.deletion;
+    if (deletion?.kind !== "history" || deletion.deleting || !props.onHideMessagingThreads) return;
+    const threadIds = (props.messagingThreads ?? [])
+      .filter((thread) => thread.agentId === deletion.id)
+      .map((thread) => thread.threadId);
+    beginDelete();
+    try {
+      if (threadIds.length > 0) await props.onHideMessagingThreads(threadIds);
+      closeDelete();
+    } catch (error) {
+      failDelete(error);
+    }
   }
 
   async function confirmDelete() {
@@ -245,12 +271,14 @@ export function createSidebarPendingStore(deps: {
   return {
     cancelSectionEditor,
     closeDelete,
+    confirmClearHistory,
     confirmDelete,
     confirmSectionDelete,
     deleteError,
     deleteTarget,
     channelDeleteTarget,
     deleting,
+    historyClearTarget,
     openDelete,
     pending,
     releaseSectionNameInput,

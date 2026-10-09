@@ -55,10 +55,14 @@ export function groupAgentMessageMarkers(
   return rows;
 }
 
-/** A message with attachments draws them under its marker, so it keeps a row of its own. */
+/**
+ * A message with attachments draws them under its marker, so it keeps a row of its own. So does a
+ * request this agent sent to teammates: it can draw hand-off cards with their live status.
+ */
 function groupableMarker(message: AgentMessage): AgentMessageMarkerModel | null {
   if (message.actionMarker?.kind !== "agent-message") return null;
   if (message.exchange?.direction === "incoming" && (message.attachments?.length ?? 0) > 0) return null;
+  if (message.exchange?.direction === "outgoing" && message.exchange.replyToMessageId === null) return null;
   return message.actionMarker;
 }
 

@@ -7,11 +7,15 @@ import type {
   AddSlackOrchestratorResult,
   AgentApproval,
   AgentEvent,
+  AgentHandoff,
   AgentSummary,
+  AskOrchestratorAboutInboxInput,
+  AskOrchestratorAboutInboxResult,
   MessagingConnection,
   MessagingConnectionState,
   MessagingCredentialState,
   MessagingDraft,
+  MessagingInboxFile,
   MessagingInboxPage,
   MessagingInboxWorkspace,
   MessagingPlatform,
@@ -28,9 +32,13 @@ import { isDynamicRecord, isOneOf, isString } from "@openbot/contracts/runtime-v
 import { SLACK_ORCHESTRATOR_AVATAR } from "@openbot/contracts/slack-app";
 import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, redactText } from "@openbot/logging";
+import type { HandoffRecord } from "../agent/handoff-activity";
 import type { MessagingOrigin } from "../mailbox-store";
 import type { SidebarLayoutStore } from "../sidebar-layout-store";
+import { MessagingHiddenThreadStore } from "./messaging-hidden-threads";
+import { type InboxImage, isInboxImage, MessagingInboxFiles } from "./messaging-inbox-files";
 import type { InboxKind } from "./messaging-inbox-store";
+import { projectMapInstruction } from "./messaging-prompt";
 import { SLACK_INBOX_UNTRUSTED_NOTE } from "./messaging-read-tools";
 import {
   inQuietHours,
@@ -55,6 +63,7 @@ import {
   type InboundAction,
   type InboundMessage,
   type InboxCandidate,
+  type InboxFile,
   type IngressAnswer,
   type IngressDelivery,
   type MessageSender,
@@ -77,7 +86,8 @@ export interface MessagingCredentials {
   status(connectionId: string): MessagingCredentialState;
   get(connectionId: string): Record<string, string> | null;
   set(connectionId: string, values: Record<string, string>): Promise<void>;
-  clear(connectionId: string): Promise<void>;
+  /** `discardUnreadable` also drops a file that cannot be decrypted; see `MessagingCredentialStore.clear`. */
+  clear(connectionId: string, options?: { discardUnreadable?: boolean }): Promise<void>;
   /** Removes the tokens of every key that is not listed. */
   retain(connectionIds: ReadonlySet<string>): Promise<void>;
 }
@@ -97,6 +107,14 @@ export interface MessagingAgents {
     },
   ): Promise<AgentSummary>;
   createMemory(input: { agentId: string; text: string }): unknown;
+  /** A message from the local person to the agent's own conversation, as the desktop sends one. */
+  sendMessage(input: { agentId: string; text: string }): Promise<unknown>;
+  /** Every local agent's project folders as one prompt line, or null when no agent has one. */
+  projectMap?(): string | null;
+  /** The newest hand-offs an agent sent, each with the conversation its answer goes back to. */
+  handoffRecords?(agentId: string): HandoffRecord[];
+  /** Calls `listener` with the sender whose hand-offs changed. */
+  onHandoffs?(listener: (agentId: string) => void): () => void;
 }
 
 /** What the account service says about a workspace's default computer, before names are added. */
@@ -127,6 +145,11 @@ export interface MessagingServiceOptions {
   drivers: readonly MessagingDriver[];
   /** A private folder for files that arrive, until the mailbox has copied them. */
   downloadsRoot: string;
+  /**
+   * A private folder for what the inbox knows about files that Slack messages shared, and their
+   * cached image bytes. Without it the inbox shows no files.
+   */
+  inboxFilesRoot?: string;
   /** The Signal relay of the OpenBot Slack app. Without it and `slackApp`, no workspace can connect. */
   ingress?: MessagingIngress;
   slackApp?: SlackAppPort;
@@ -136,8 +159,12 @@ export interface MessagingServiceOptions {
   sidebar?: Pick<SidebarLayoutStore, "getSnapshot" | "mutate">;
   /** The person's send guards: pause and quiet hours. Without it, they live in memory only. */
   sendGuards?: MessagingSendGuardStore;
+  /** The conversations the person hid from the sidebar. Without it, they live in memory only. */
+  hiddenThreads?: MessagingHiddenThreadStore;
   /** Without it, a disconnect unlinks the whole host, and the routing status is not available. */
   slackRouting?: SlackRoutingPort;
+  /** The shortest time between two edits of one hand-off status message. Only tests change this. */
+  handoffStatusIntervalMs?: number;
 }
 
 interface LiveConnection {
@@ -155,6 +182,25 @@ interface StatusPost {
   target: MessageTarget;
   messageId: string | null;
   stopToken: string | null;
+}
+
+/**
+ * The one status message of a conversation while teammates work on requests from it. Each change
+ * edits it, at most once per interval.
+ */
+interface HandoffStatusPost {
+  connectionId: string;
+  target: MessageTarget;
+  messageId: string | null;
+  /** The hand-offs it shows, by delivery id: only the ones seen before they ended. */
+  shown: Set<string>;
+  text: string;
+  sentText: string | null;
+  lastSentAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  sending: boolean;
+  /** Every hand-off it shows has ended. After the last edit, the post is forgotten. */
+  finished: boolean;
 }
 
 /** A post with Approve and Deny buttons, and who may press them. */
@@ -208,6 +254,10 @@ type PendingApproval = PendingAgentApproval | PendingSend;
 const FATAL_STATES = new Set<MessagingConnectionState>(["invalid_token"]);
 const LIVE_STATES = new Set<MessagingConnectionState>(["connecting", "connected", "reconnecting", "rate_limited"]);
 const APPROVAL_TEXT_LIMIT = 2_500;
+/** At most one edit of a hand-off status message in this time. Slack limits edits per channel. */
+const HANDOFF_STATUS_INTERVAL_MS = 2_000;
+/** The most characters of a task that a status line shows. */
+const HANDOFF_TASK_CHARACTERS = 120;
 /** How long a reply to a message OpenBot sent as the user still comes back to the conversation. */
 const REPLY_WATCH_MS = 14 * 24 * 60 * 60_000;
 const SENT_PREVIEW = 300;
@@ -216,6 +266,10 @@ const PREVIEW_CHARACTERS = 200;
 /** How long every direct message after a send by the app counts as an answer to it. */
 const APP_SEND_REPLY_MS = 24 * 60 * 60_000;
 const CANCEL_TEXT = /^(cancel|stop)$/i;
+/** The prefix of an inbox text that asks the Slack Orchestrator instead of sending to Slack. */
+const CHIEF_PREFIX = /^@chief(?:\s|$)/i;
+/** How many of the conversation's newest inbox messages an `@chief` instruction carries. */
+const CHIEF_CONTEXT_MESSAGES = 20;
 const RECENT_MESSAGES = 2_000;
 /** How long a connection waits before it tries Slack again after Slack was unreachable. */
 const IDENTIFY_RETRY_MS = 30_000;
@@ -228,6 +282,8 @@ const INBOX_PURGE_INTERVAL_MS = 6 * 60 * 60_000;
  */
 const HISTORY_FILL_MESSAGES = 15;
 const HISTORY_FILL_SPACING_MS = 61_000;
+/** The most people, channels and emoji one inbox page looks up. */
+const INBOX_LOOKUPS = 50;
 /** The marker `mention` uses. Text that did not come from the host has it taken out. */
 const MENTION_MARKERS = /[\uE000-\uE001]/g;
 
@@ -249,6 +305,9 @@ export class MessagingService {
   readonly #posts = new Map<string, StatusPost>();
   /** The reply target of each external message, by `linkId:platformMessageId`. */
   readonly #targets = new Map<string, MessageTarget>();
+  /** The hand-off status message of each conversation, by link id. */
+  readonly #handoffPosts = new Map<string, HandoffStatusPost>();
+  readonly #handoffIntervalMs: number;
   readonly #approvals = new Map<string, PendingApproval>();
   readonly #stops = new Map<string, { linkId: string; authorId: string; connectionId: string }>();
   readonly #chains = new Map<string, Promise<void>>();
@@ -263,7 +322,9 @@ export class MessagingService {
   readonly #slackOrigin: string | undefined;
   readonly #sidebar: Pick<SidebarLayoutStore, "getSnapshot" | "mutate"> | null;
   readonly #guards: MessagingSendGuardStore;
+  readonly #hidden: MessagingHiddenThreadStore;
   readonly #routing: SlackRoutingPort | null;
+  readonly #inboxFiles: MessagingInboxFiles | null;
   #started = false;
 
   constructor(options: MessagingServiceOptions) {
@@ -277,16 +338,21 @@ export class MessagingService {
     this.#slackOrigin = options.slackOrigin;
     this.#sidebar = options.sidebar ?? null;
     this.#guards = options.sendGuards ?? new MessagingSendGuardStore(null);
+    this.#hidden = options.hiddenThreads ?? new MessagingHiddenThreadStore(null);
     this.#routing = options.slackRouting ?? null;
+    this.#inboxFiles = options.inboxFilesRoot ? new MessagingInboxFiles(options.inboxFilesRoot) : null;
+    this.#handoffIntervalMs = options.handoffStatusIntervalMs ?? HANDOFF_STATUS_INTERVAL_MS;
   }
 
   async start(): Promise<void> {
     if (this.#started) return;
     this.#started = true;
     await this.#guards.load();
+    await this.#hidden.load();
     this.#unsubscribe.push(
       this.#threads.onActivity((activity) => this.#serial(activity.link.linkId, () => this.#activity(activity))),
       this.#agents.onEvent((event) => this.#agentEvent(event)),
+      this.#agents.onHandoffs?.((agentId) => this.#handoffsChanged(agentId)) ?? (() => undefined),
     );
     this.#threads.setContextSource((link, origin) => this.#promptContext(link, origin));
     this.#threads.setMessageSender((request) => this.#requestSend(request));
@@ -304,6 +370,8 @@ export class MessagingService {
   async stop(): Promise<void> {
     this.#started = false;
     for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
+    for (const post of this.#handoffPosts.values()) if (post.timer) clearTimeout(post.timer);
+    this.#handoffPosts.clear();
     this.#threads.setContextSource(null);
     this.#threads.setMessageSender(null);
     this.#threads.setInboxReader(null);
@@ -322,9 +390,15 @@ export class MessagingService {
     return [...this.#live.values()].some((live) => LIVE_STATES.has(live.state));
   }
 
-  /** The external conversations, newest first. The caller adds each one's read state. */
+  /**
+   * The external conversations, newest first, without the ones the person hid. The caller adds each
+   * one's read state.
+   */
   threadSummaries(): Array<Omit<MessagingThreadSummary, "unreadCount">> {
-    return this.#threads.store.recentLinks().map((link) => ({
+    const links = this.#threads.store
+      .recentLinks()
+      .filter((link) => !this.#hidden.isHidden(link.threadId, link.updatedAt));
+    return links.map((link) => ({
       threadId: link.threadId,
       agentId: link.agentId,
       workspaceId: link.workspaceId,
@@ -389,6 +463,18 @@ export class MessagingService {
   }
 
   /** The agent that answers one external conversation. Any other thread id is refused. */
+  /**
+   * Hides the conversations from the sidebar. Nothing is deleted, and a conversation shows again
+   * when a newer message arrives. An id that is not an external conversation is skipped.
+   */
+  async hideThreads(threadIds: readonly string[]): Promise<void> {
+    const known = threadIds.filter((threadId) => this.#threads.store.linkForThread(threadId) !== null);
+    if (known.length === 0) return;
+    const saved = this.#hidden.hide(known);
+    for (const threadId of known) this.#threads.notifyChanged(threadId);
+    await saved;
+  }
+
   threadAgent(threadId: string): string {
     const link = this.#threads.store.linkForThread(threadId);
     if (!link) throw new Error(sourceText("error.messaging.threadUnavailable"));
@@ -489,7 +575,8 @@ export class MessagingService {
       ...SLACK_ORCHESTRATOR_AVATAR,
       ...(input.provider ? { provider: input.provider } : {}),
       ...(input.model ? { model: input.model } : {}),
-      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+      // The orchestrator answers in chat: medium effort keeps it quick. The user can change it.
+      reasoningEffort: input.reasoningEffort ?? "medium",
     });
     for (const text of slackOrchestratorMemories(record.workspaceName))
       this.#agents.createMemory({ agentId: agent.id, text });
@@ -563,7 +650,30 @@ export class MessagingService {
    */
   async disconnectSlackWorkspace(workspaceId: string): Promise<void> {
     const record = this.#requireConnection(workspaceId);
+    const unreadable = this.#credentials.status(record.connectionId) === "unreadable";
     await this.#stopConnection(record.connectionId);
+    if (unreadable) await this.#discardUnreadableAccess(record);
+    else await this.#revokeAndUnlink(record);
+    // The inbox is a copy of the person's Slack messages, read with the access this revokes.
+    this.#threads.inbox.deleteForConnection(record.connectionId);
+    await this.#inboxFiles?.deleteForConnection(record.connectionId).catch((error) => this.#warn(error));
+    this.#inboxChanged(record.workspaceId);
+    this.#threads.store.updateConnection(record.connectionId, { enabled: false, lastErrorCode: null });
+    this.#ingress?.reconnect();
+  }
+
+  /**
+   * The saved access cannot be decrypted on this computer, for example after the Keychain key changed.
+   * No token is known, so nothing is revoked, and no person id is known, so this host unlinks the whole
+   * workspace. The unreadable file goes too: nothing in it can be read again.
+   */
+  async #discardUnreadableAccess(record: MessagingConnectionRecord): Promise<void> {
+    await this.#connect?.unlink(record.workspaceId).catch((error) => this.#warn(error));
+    await this.#credentials.clear(record.connectionId, { discardUnreadable: true });
+  }
+
+  async #revokeAndUnlink(record: MessagingConnectionRecord): Promise<void> {
+    const workspaceId = record.workspaceId;
     const values = this.#credentials.get(record.connectionId);
     const revoke = (token: string | undefined) =>
       token
@@ -602,11 +712,6 @@ export class MessagingService {
     }
     if (!workspaceRemains) await revoke(values?.botToken);
     await this.#credentials.clear(record.connectionId);
-    // The inbox is a copy of the person's Slack messages, read with the access this revokes.
-    this.#threads.inbox.deleteForConnection(record.connectionId);
-    this.#inboxChanged(record.workspaceId);
-    this.#threads.store.updateConnection(record.connectionId, { enabled: false, lastErrorCode: null });
-    this.#ingress?.reconnect();
   }
 
   /**
@@ -663,14 +768,30 @@ export class MessagingService {
     if (text.length > MESSAGING_LIMITS.inboxReply) throw new Error("The reply is too long.");
     const connectionId = live.record.connectionId;
     // Only a conversation the inbox holds: the person answers what they read.
-    if (this.#threads.inbox.read(connectionId, input.conversation, null, 1).length === 0)
-      throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
+    const [latest] = this.#threads.inbox.read(connectionId, input.conversation, null, 1);
+    if (!latest) throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
     const { ts } = await live.adapter.postAsUser({
       channel: input.conversation,
       ...(input.threadKey ? { threadTs: input.threadKey } : {}),
       text,
     });
     const now = new Date().toISOString();
+    // The reply shows in the conversation at once. Slack may also send it back as an event later;
+    // the inbox keeps one row per message ID, so that copy changes nothing.
+    this.#threads.inbox.add({
+      connectionId,
+      platformChannelId: input.conversation,
+      platformMessageId: ts,
+      threadKey: input.threadKey ?? null,
+      kind: latest.kind,
+      authorId: user.id,
+      authorName: user.name,
+      // Kept as Slack keeps it, escaped, as every inbox text is.
+      text: text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
+      sentAt: now,
+    });
+    this.#markInboxRead(live, input.conversation, ts);
+    this.#inboxChanged(live.record.workspaceId);
     this.#threads.store.recordSend({
       draftId: randomUUID(),
       connectionId,
@@ -738,6 +859,8 @@ export class MessagingService {
       return this.#setState(live, "reconnecting");
     }
     if (this.#live.get(record.connectionId) !== live) return;
+    // A connection as the person adds a Slack inbox: the desktop reads the inbox list again.
+    if (live.identity.user) this.#inboxChanged(record.workspaceId);
     const identity = live.identity;
     this.#threads.store.updateConnection(record.connectionId, {
       workspaceName: identity.workspaceName,
@@ -863,24 +986,36 @@ export class MessagingService {
       text: candidate.text,
       sentAt: candidate.sentAt,
     });
+    if (candidate.files?.length)
+      await this.#inboxFiles
+        ?.remember(
+          connectionId,
+          candidate.platformChannelId,
+          candidate.platformMessageId,
+          candidate.sentAt,
+          candidate.files,
+        )
+        .catch((error) => this.#warn(error));
     if (added) this.#inboxChanged(live.record.workspaceId);
   }
 
+  /** Inbox text in the platform's markup, as plain text for an agent or a preview. */
+  #readable(live: LiveConnection, text: string): string {
+    return live.adapter.plainText?.(text) ?? text;
+  }
+
   /**
-   * An agent's read of the person's inbox. Only the connected person may ask, and only in their direct
-   * message with OpenBot: anyone else who mentions OpenBot must never read their private messages, and
-   * an answer in a channel is posted where everyone there reads it.
+   * An agent's read of the person's inbox. Only the connected person may ask: in their direct message
+   * with OpenBot, or in the app, to the workspace's orchestrator, in a turn that the person at this
+   * computer started. Anyone else who mentions OpenBot must never read their private messages, and an
+   * answer in a channel is posted where everyone there reads it.
    */
   async #readInbox(request: MessagingInboxRequest): Promise<MessagingInboxResult> {
-    const link = this.#threads.store.linkForThread(request.threadId);
-    if (!link?.isDirect) throw new Error(sourceText("error.messaging.inboxNeedsSlack"));
-    const live = this.#live.get(link.connectionId);
-    const user = live?.identity?.user;
-    if (!live || !user) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
-    if (this.#threads.runningOrigin(link.linkId)?.origin.authorId !== user.id)
-      throw new Error(sourceText("error.messaging.inboxOwnerOnly"));
+    const live = this.#inboxConnection(request);
+    const user = live.identity?.user;
+    if (!user) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
     const inbox = this.#threads.inbox;
-    const connectionId = link.connectionId;
+    const connectionId = live.record.connectionId;
     const watched = inbox.watched(connectionId);
     const place = this.#inboxPlace(live, watched);
     if (request.tool === "list_unread") {
@@ -917,10 +1052,94 @@ export class MessagingService {
         thread: message.threadKey,
         from: message.authorId === user.id ? `${message.authorName} (the GoAhead user)` : message.authorName,
         sentAt: message.sentAt,
-        text: message.text,
+        text: this.#readable(live, message.text),
       })),
       note: SLACK_INBOX_UNTRUSTED_NOTE,
     };
+  }
+
+  /** The connection whose inbox this request may read. Each case that is not proven fails closed. */
+  #inboxConnection(request: MessagingInboxRequest): LiveConnection {
+    const link = this.#threads.store.linkForThread(request.threadId);
+    if (link?.isDirect) {
+      const live = this.#live.get(link.connectionId);
+      const user = live?.identity?.user;
+      if (!live || !user) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
+      if (this.#threads.runningOrigin(link.linkId)?.origin.authorId !== user.id)
+        throw new Error(sourceText("error.messaging.inboxOwnerOnly"));
+      return live;
+    }
+    // In the app: only a turn that the person at this computer started, never a Slack thread, a Team
+    // API member, a remote client or a routine. The agent must be the orchestrator of one workspace.
+    if (link || !request.localOwnerTurn) throw new Error(sourceText("error.messaging.inboxNeedsSlack"));
+    const owned = [...this.#live.values()].filter(
+      (candidate) => candidate.record.platform === "slack" && candidate.record.orchestratorAgentId === request.agentId,
+    );
+    const [live] = owned;
+    if (owned.length !== 1 || !live) throw new Error(sourceText("error.messaging.inboxNeedsSlack"));
+    return live;
+  }
+
+  /**
+   * Marks an inbox conversation read for GoAhead, then in Slack as the person, so Slack shows it read
+   * too. The Slack mark does not wait and is not retried: a failure, such as a missing scope, only warns.
+   */
+  #markInboxRead(live: LiveConnection, conversation: string, throughMessageId: string): void {
+    this.#threads.inbox.markRead(live.record.connectionId, conversation, throughMessageId);
+    if (!live.identity?.user || !live.adapter.markReadAsUser) return;
+    void live.adapter.markReadAsUser(conversation, throughMessageId).catch((error) => this.#warn(error));
+  }
+
+  /**
+   * An `@chief` instruction that the person typed in an inbox conversation. Nothing goes to Slack: the
+   * workspace's orchestrator gets the instruction in its own conversation, with the conversation's
+   * newest messages as context. The orchestrator's own rules decide what it does next.
+   */
+  async askOrchestratorAboutInbox(input: AskOrchestratorAboutInboxInput): Promise<AskOrchestratorAboutInboxResult> {
+    const live = this.#personConnection(input.workspaceId);
+    const user = live.identity?.user;
+    if (!user) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
+    const instruction = input.text.trim().replace(CHIEF_PREFIX, "").trim();
+    if (!instruction) throw new Error(sourceText("error.messaging.sendTextEmpty"));
+    const connectionId = live.record.connectionId;
+    const inbox = this.#threads.inbox;
+    const messages = inbox.read(connectionId, input.conversation, input.threadKey ?? null, CHIEF_CONTEXT_MESSAGES);
+    if (messages.length === 0) throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
+    const agentId = this.#orchestrator(live.record);
+    if (!agentId) throw new Error(sourceText("error.messaging.inboxNeedsOrchestrator"));
+    const kind = messages[0]?.kind ?? "channel";
+    const other = messages.find((message) => message.authorId !== user.id)?.authorName ?? "";
+    const place = await this.#inboxPlace(live, inbox.watched(connectionId))(input.conversation, kind, other);
+    const where =
+      kind === "direct"
+        ? `direct message with ${place}`
+        : kind === "group"
+          ? `group direct message with ${place}`
+          : `channel ${place}`;
+    const people = new Map<string, string>();
+    for (const message of messages)
+      if (message.authorId !== user.id && !people.has(message.authorId))
+        people.set(message.authorId, message.authorName);
+    const projectMap = this.#agents.projectMap?.() ?? null;
+    const text = [
+      `The GoAhead user asks about a Slack conversation in ${live.record.workspaceName}: ${where} (conversation ${input.conversation}${input.threadKey ? `, thread ${input.threadKey}` : ""}).`,
+      kind === "channel" ? `Channel ID: ${input.conversation}.` : "",
+      ...[...people].map(([id, name]) => `Person: ${name}, Slack user ID ${id}.`),
+      "To answer in this conversation, call openbot.slack_send_message with to: <@USER_ID> (direct message) or <#CHANNEL_ID> (channel).",
+      SLACK_INBOX_UNTRUSTED_NOTE,
+      projectMap ? projectMapInstruction(projectMap) : "",
+      "--- newest messages, oldest first ---",
+      ...messages.map(
+        (message) =>
+          `${message.authorId === user.id ? `${message.authorName} (the GoAhead user)` : message.authorName}: ${this.#readable(live, message.text)}`,
+      ),
+      "--- the GoAhead user's instruction ---",
+      instruction,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    await this.#agents.sendMessage({ agentId, text });
+    return { agentId };
   }
 
   /** The live connection of a workspace that is connected as the person. */
@@ -983,7 +1202,7 @@ export class MessagingService {
           unreadCount: item.unreadCount,
           latestAt: item.latestAt,
           latestFrom: item.latestFrom,
-          preview: item.preview.slice(0, PREVIEW_CHARACTERS),
+          preview: this.#readable(live, item.preview).slice(0, PREVIEW_CHARACTERS),
         })),
       );
       workspaces.push({
@@ -1009,8 +1228,23 @@ export class MessagingService {
     const messages = inbox.read(connectionId, conversation, null, Math.min(limit, MESSAGING_LIMITS.inboxMessages));
     if (messages.length === 0) throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
     const newest = messages.at(-1);
-    if (newest) inbox.markRead(connectionId, conversation, newest.platformMessageId);
+    if (newest) this.#markInboxRead(live, conversation, newest.platformMessageId);
     const other = messages.find((message) => message.authorId !== user.id)?.authorName ?? "";
+    const files =
+      (await this.#inboxFiles
+        ?.forMessages(
+          connectionId,
+          conversation,
+          messages.map((message) => message.platformMessageId),
+        )
+        .catch((error) => {
+          this.#warn(error);
+          return null;
+        })) ?? new Map<string, InboxFile[]>();
+    const lookups = await this.#inboxLookups(
+      live,
+      messages.map((message) => message.text),
+    );
     return {
       workspaceId,
       conversation,
@@ -1019,15 +1253,74 @@ export class MessagingService {
         messages[0]?.kind ?? "channel",
         other,
       ),
-      messages: messages.map((message) => ({
-        id: message.platformMessageId,
-        from: message.authorName,
-        isOwn: message.authorId === user.id,
-        text: message.text,
-        sentAt: message.sentAt,
-        thread: message.threadKey,
-      })),
+      messages: messages.map((message) => {
+        const shared = files.get(message.platformMessageId) ?? [];
+        return {
+          id: message.platformMessageId,
+          from: message.authorName,
+          isOwn: message.authorId === user.id,
+          text: message.text,
+          sentAt: message.sentAt,
+          thread: message.threadKey,
+          ...(shared.length
+            ? { files: shared.slice(0, MESSAGING_LIMITS.inboxFiles).map((file) => inboxFileView(workspaceId, file)) }
+            : {}),
+        };
+      }),
+      ...lookups,
     };
+  }
+
+  /**
+   * The names of the people and channels the texts mention, and the workspace emoji they use, so the
+   * desktop shows them as Slack does. Each lookup is cached per connection by the adapter; an id
+   * that cannot be read is left out, and the desktop shows the id.
+   */
+  async #inboxLookups(
+    live: LiveConnection,
+    texts: readonly string[],
+  ): Promise<Pick<MessagingInboxPage, "people" | "channels" | "customEmoji">> {
+    const references = inboxReferences(texts);
+    const people: Record<string, string> = {};
+    const channels: Record<string, string> = {};
+    await Promise.all([
+      ...[...references.users].slice(0, INBOX_LOOKUPS).map(async (id) => {
+        const name = await live.adapter.authorName(id).catch(() => id);
+        if (name && name !== id) people[id] = name;
+      }),
+      ...[...references.channels].slice(0, INBOX_LOOKUPS).map(async (id) => {
+        const name = (await live.adapter.placeName(id).catch(() => id)).replace(/^#/u, "");
+        if (name && name !== id) channels[id] = name;
+      }),
+    ]);
+    const customEmoji: Record<string, string> = {};
+    if (references.emoji.size > 0 && live.adapter.customEmoji) {
+      const all: Record<string, string> = await live.adapter.customEmoji().catch(() => ({}));
+      // Only the emoji on the page, and the emoji an alias of theirs names.
+      const wanted = [...references.emoji];
+      for (let index = 0; index < wanted.length && index < INBOX_LOOKUPS; index += 1) {
+        const name = wanted[index] ?? "";
+        const value = Object.hasOwn(all, name) ? all[name] : undefined;
+        if (value === undefined || Object.hasOwn(customEmoji, name)) continue;
+        customEmoji[name] = value;
+        if (value.startsWith("alias:")) wanted.push(value.slice("alias:".length));
+      }
+    }
+    return { people, channels, customEmoji };
+  }
+
+  /**
+   * The cached image of a file that an inbox message shared, downloaded with the person's token the
+   * first time. Null for a workspace that is not connected as the person, a file the inbox does not
+   * hold, or a file that is not an image.
+   */
+  async resolveInboxFile(workspaceId: string, fileId: string): Promise<InboxImage | null> {
+    const live = [...this.#live.values()].find(
+      (candidate) => candidate.record.workspaceId === workspaceId && candidate.identity?.user,
+    );
+    const download = live?.adapter.downloadInboxFile?.bind(live.adapter);
+    if (!live || !download || !this.#inboxFiles) return null;
+    return this.#inboxFiles.image(live.record.connectionId, fileId, download);
   }
 
   onInboxChanged(listener: (workspaceId: string) => void): () => void {
@@ -1041,7 +1334,9 @@ export class MessagingService {
 
   #purgeInbox(): void {
     try {
-      this.#threads.inbox.purgeBefore(new Date(Date.now() - INBOX_RETENTION_MS).toISOString());
+      const before = new Date(Date.now() - INBOX_RETENTION_MS).toISOString();
+      this.#threads.inbox.purgeBefore(before);
+      void this.#inboxFiles?.purgeBefore(before).catch((error) => this.#warn(error));
     } catch (error) {
       this.#warn(error);
     }
@@ -1348,6 +1643,99 @@ export class MessagingService {
     else await adapter.post(target, { text });
   }
 
+  /**
+   * Keeps one status message per Slack conversation in step with the teammates that work on its
+   * requests. Only labels go out: names, the start of the task, and a program, file or tool name.
+   * A hand-off that had ended before this service saw it, such as after a restart, is not posted.
+   */
+  #handoffsChanged(agentId: string): void {
+    const byLink = new Map<string, HandoffRecord[]>();
+    for (const record of this.#agents.handoffRecords?.(agentId) ?? []) {
+      if (!record.messagingReturn) continue;
+      const records = byLink.get(record.messagingReturn.linkId) ?? [];
+      records.push(record);
+      byLink.set(record.messagingReturn.linkId, records);
+    }
+    for (const [linkId, records] of byLink) {
+      const link = this.#threads.store.link(linkId);
+      const live = link ? this.#live.get(link.connectionId) : undefined;
+      if (!link || !live) continue;
+      const running = records.filter((record) => !handoffEnded(record.handoff));
+      let post = this.#handoffPosts.get(linkId);
+      if (!post) {
+        const first = running[0]?.messagingReturn;
+        if (!first) continue;
+        post = {
+          connectionId: live.record.connectionId,
+          target: this.#targets.get(`${linkId}:${first.platformMessageId}`) ?? linkTarget(link),
+          messageId: null,
+          shown: new Set(),
+          text: "",
+          sentText: null,
+          lastSentAt: 0,
+          timer: null,
+          sending: false,
+          finished: false,
+        };
+        this.#handoffPosts.set(linkId, post);
+      }
+      for (const record of running) post.shown.add(record.handoff.id);
+      const shown = records.filter((record) => post.shown.has(record.handoff.id)).map((record) => record.handoff);
+      post.text = this.#handoffText(shown);
+      post.finished = shown.every(handoffEnded);
+      this.#flushHandoffPost(linkId);
+    }
+  }
+
+  #handoffText(handoffs: AgentHandoff[]): string {
+    const names = new Map(this.#agents.listAgents().map((agent) => [agent.id, agent.name]));
+    const lines = handoffs.flatMap((handoff) => {
+      const agent = names.get(handoff.toAgentId) ?? handoff.toAgentId;
+      const from = names.get(handoff.fromAgentId) ?? handoff.fromAgentId;
+      return [
+        sourceText("status.messaging.handoffTask", { from, agent, task: handoffTaskLine(handoff.task) }),
+        handoffStateLine(handoff, agent),
+      ];
+    });
+    // The hand-off view already redacted each part. Slack is outside this computer, so once more.
+    return redactText(lines.join("\n"));
+  }
+
+  /** Posts or edits the status message, at most once per interval; later changes join the next edit. */
+  #flushHandoffPost(linkId: string): void {
+    const post = this.#handoffPosts.get(linkId);
+    if (!post || post.timer || post.sending) return;
+    if (post.text === post.sentText) {
+      if (post.finished) this.#handoffPosts.delete(linkId);
+      return;
+    }
+    const wait = post.lastSentAt + this.#handoffIntervalMs - Date.now();
+    if (wait > 0) {
+      post.timer = setTimeout(() => {
+        post.timer = null;
+        this.#flushHandoffPost(linkId);
+      }, wait);
+      post.timer.unref?.();
+      return;
+    }
+    post.sending = true;
+    const text = post.text;
+    this.#serial(linkId, async () => {
+      try {
+        const adapter = this.#live.get(post.connectionId)?.adapter;
+        if (!adapter) return;
+        if (post.messageId) await adapter.edit(post.target, post.messageId, { text });
+        else post.messageId = await adapter.post(post.target, { text });
+      } finally {
+        // Also after a failure: the next change tries again, and a failing edit is not repeated.
+        post.sentText = text;
+        post.lastSentAt = Date.now();
+        post.sending = false;
+        this.#flushHandoffPost(linkId);
+      }
+    });
+  }
+
   #agentEvent(event: AgentEvent): void {
     if (event.type === "approval") void this.#approval(event.approval).catch((error) => this.#warn(error));
     else if (event.type === "agent-input-resolved" && event.kind === "approval")
@@ -1423,7 +1811,7 @@ export class MessagingService {
     const credentials = this.#credentials.get(link.connectionId);
     const approverId = credentials?.userId;
     if (!approverId) throw new Error(sourceText("error.messaging.sendNeedsUser"));
-    const parsed = parseSlackSendTarget(request.to);
+    const parsed = await this.#sendTargetPeople(live, credentials.userToken, parseSlackSendTarget(request.to));
     if (!parsed) throw new Error(sourceText("error.messaging.sendTargetInvalid"));
     // The user reads the conversation the agent answers in: a message to them is that answer. In a
     // group, the sender is always a member, so naming them changes nothing.
@@ -1460,7 +1848,7 @@ export class MessagingService {
       sender,
       recipient:
         to.kind === "channel"
-          ? await adapter.placeName(to.id)
+          ? await adapter.placeName(to.id).catch(() => to.id)
           : (await Promise.all(slackTargetPeople(to).map((id) => adapter.authorName(id)))).join(", "),
       requestedBy: running?.origin.authorName ?? null,
       onBehalfOf: ownRequest ? null : (running?.origin.authorName ?? null),
@@ -1476,7 +1864,7 @@ export class MessagingService {
     const target = (key && this.#targets.get(key)) || (key && this.#posts.get(key)?.target) || linkTarget(link);
     const toLabel =
       to.kind === "channel"
-        ? await adapter.placeName(to.id)
+        ? await adapter.placeName(to.id).catch(() => to.id)
         : slackTargetPeople(to)
             .map((id) => adapter.mention(id))
             .join(", ");
@@ -1500,6 +1888,25 @@ export class MessagingService {
     });
     this.#threads.notifyChanged(link.threadId);
     return { status: "waiting_for_approval", draftId, sender, approverId, link: null };
+  }
+
+  /**
+   * A direct or group direct message that an agent names by its conversation id becomes its people:
+   * the bot is not in the person's own direct messages, so only a send to the people reaches them.
+   * Without the person's token, a target stays as the agent named it.
+   */
+  async #sendTargetPeople(
+    live: LiveConnection,
+    userToken: string | undefined,
+    parsed: SlackSendTarget | null,
+  ): Promise<SlackSendTarget | null> {
+    if (parsed?.kind !== "channel" || !userToken || !live.adapter.conversationPeople) return parsed;
+    const people = [...new Set(await live.adapter.conversationPeople(parsed.id))].sort();
+    if (people.length === 0) {
+      if (parsed.id.startsWith("D")) throw new Error(sourceText("error.messaging.sendDirectNeedsUser"));
+      return parsed;
+    }
+    return people.length === 1 ? { kind: "user", id: people[0] ?? "" } : { kind: "group", id: people.join(",") };
   }
 
   /** Sends a draft once and records it. Returns the link to the sent message, when Slack gives one. */
@@ -1729,6 +2136,77 @@ function linkTarget(link: MessagingLink): MessageTarget {
   };
 }
 
+/** The first line of a task, short enough for one status line. */
+function handoffTaskLine(task: string): string {
+  const line =
+    task
+      .split("\n")
+      .find((candidate) => candidate.trim())
+      ?.trim() ?? "";
+  return line.length > HANDOFF_TASK_CHARACTERS ? `${line.slice(0, HANDOFF_TASK_CHARACTERS - 1)}…` : line;
+}
+
+function handoffEnded(handoff: AgentHandoff): boolean {
+  return handoff.status === "done" || handoff.status === "failed";
+}
+
+function handoffStateLine(handoff: AgentHandoff, agent: string): string {
+  if (handoff.status === "queued") return sourceText("status.messaging.handoffQueued", { agent });
+  if (handoff.status === "done") return sourceText("status.messaging.handoffDone", { agent });
+  if (handoff.status === "failed") return sourceText("status.messaging.handoffFailed", { agent });
+  const step = handoff.steps.at(-1);
+  if (!step) return sourceText("status.messaging.handoffThinking", { agent });
+  switch (step.kind) {
+    case "command":
+      return sourceText("status.messaging.handoffRunning", { agent, name: step.name });
+    case "edit":
+      return sourceText("status.messaging.handoffEditing", { agent, name: step.name });
+    case "search":
+      return sourceText("status.messaging.handoffSearching", { agent });
+    default:
+      return sourceText("status.messaging.handoffUsing", { agent, name: step.name });
+  }
+}
+
 function token(): string {
   return randomBytes(16).toString("hex");
+}
+
+/**
+ * The user and channel ids and the emoji names that inbox texts name, in Slack's markup or in the
+ * plain form older rows keep (`@U…`). Code is not read: Slack does not render markup inside it.
+ */
+function inboxReferences(texts: readonly string[]): { users: Set<string>; channels: Set<string>; emoji: Set<string> } {
+  const references = { users: new Set<string>(), channels: new Set<string>(), emoji: new Set<string>() };
+  for (const text of texts) {
+    const outsideCode = text.replace(/```[\s\S]*?```|`[^`\n]*`/gu, " ");
+    for (const match of outsideCode.matchAll(
+      /<@([UWB][A-Z0-9]+)(?:\|[^>]*)?>|(?<![\p{L}\p{N}])@([UW][A-Z0-9]{6,})(?![A-Za-z0-9])/gu,
+    )) {
+      const id = match[1] ?? match[2];
+      if (id) references.users.add(id);
+    }
+    for (const match of outsideCode.matchAll(
+      /<#([CGD][A-Z0-9]+)(?:\|[^>]*)?>|(?<![\p{L}\p{N}])#([CG][A-Z0-9]{6,})(?![A-Za-z0-9])/gu,
+    )) {
+      const id = match[1] ?? match[2];
+      if (id) references.channels.add(id);
+    }
+    for (const match of outsideCode.matchAll(/:([a-z0-9_+'-]+):/gu)) if (match[1]) references.emoji.add(match[1]);
+  }
+  return references;
+}
+
+/** A file for the desktop. Only an image gets a preview, served by main from its own cache. */
+function inboxFileView(workspaceId: string, file: InboxFile): MessagingInboxFile {
+  return {
+    id: file.id,
+    name: file.name.slice(0, MESSAGING_LIMITS.name * 2),
+    mimeType: file.mimeType.slice(0, 255),
+    size: file.size,
+    previewUrl: isInboxImage(file.mimeType)
+      ? `openbot-attachment://slack/${encodeURIComponent(workspaceId)}/${encodeURIComponent(file.id)}`
+      : null,
+    permalink: file.permalink?.startsWith("https://") ? file.permalink : null,
+  };
 }

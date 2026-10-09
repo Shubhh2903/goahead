@@ -71,6 +71,8 @@ export interface TurnHooks {
   redactMcp(text: string): string;
   /** A finished tool step, for product analytics only. It never reaches a renderer or a remote client. */
   emitToolUsage(usage: ToolUsageSignal): void;
+  /** A tool step started in a turn. The hand-off view keeps its label. */
+  toolStep(agentId: string, turnId: string, item: ThreadItem): void;
   /** The model this turn was started with, or null when the drain no longer knows it. */
   turnModel(agentId: string, turnId: string): string | null;
   /**
@@ -684,6 +686,7 @@ export class TurnLifecycle {
   #applyItem(agentId: string, threadId: string, turnId: string, item: ThreadItem, completed: boolean): void {
     const usage = completed ? toolUsage(item) : null;
     if (usage) this.#hooks.emitToolUsage({ ...usage, agentId, turnId });
+    if (!completed) this.#hooks.toolStep(agentId, turnId, item);
     if (this.#images.handleItem(agentId, threadId, turnId, item, completed)) return;
     const toolProgress = toolProgressText(item, completed);
     if (toolProgress) {

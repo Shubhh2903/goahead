@@ -23,6 +23,7 @@ import { continuesSenderRun } from "./chat-grouping";
 import { conversationRuntime } from "./conversation-runtime";
 import { useConversationViewScope } from "./conversation-scope";
 import type { ConversationProps } from "./conversation-types";
+import { HandoffChatCard } from "./HandoffChatCard";
 import { MarketplaceSuggestionChatCard, marketplaceSuggestionKnown } from "./MarketplaceSuggestionChatCard";
 import { RoutineChatCard } from "./RoutineChatCard";
 
@@ -49,6 +50,15 @@ function rowDrawsTime(message: AgentMessage): boolean {
 function markerRowEndsWithMarker(message: AgentMessage): boolean {
   if (!markerOnlyMessage(message)) return false;
   return !(message.exchange?.direction === "incoming" && (message.attachments?.length ?? 0) > 0);
+}
+
+/** A request this agent sent to teammates, which a hand-off card can show. */
+function handoffRequest(
+  marker: ChatActionMarkerModel,
+): Extract<ChatActionMarkerModel, { kind: "agent-message" }> | undefined {
+  return marker.kind === "agent-message" && marker.direction === "outgoing" && marker.replyToMessageId === null
+    ? marker
+    : undefined;
 }
 
 function routineMarkerAvailable(
@@ -372,16 +382,41 @@ export function ConversationTimeline() {
                                   <Show
                                     when={suggestionMarker(marker())}
                                     fallback={
-                                      <ChatActionMarker
-                                        onOpenSkill={props.server?.id === "local" ? openSkillSettings : undefined}
-                                        marker={marker()}
-                                        agents={props.agents}
-                                        announce={animateEntrance}
-                                        routineAvailable={routineMarkerAvailable(marker(), props.availableRoutineIds)}
-                                        onSelectAgent={props.onSelectAgent}
-                                        onOpenRoutine={openRoutineSettings}
-                                        onOpenHostedSite={(url) => void openExternalMessageUrl(url)}
-                                      />
+                                      <Show
+                                        when={props.server?.kind === "local" && handoffRequest(marker())}
+                                        fallback={
+                                          <ChatActionMarker
+                                            onOpenSkill={props.server?.id === "local" ? openSkillSettings : undefined}
+                                            marker={marker()}
+                                            agents={props.agents}
+                                            announce={animateEntrance}
+                                            routineAvailable={routineMarkerAvailable(
+                                              marker(),
+                                              props.availableRoutineIds,
+                                            )}
+                                            onSelectAgent={props.onSelectAgent}
+                                            onOpenRoutine={openRoutineSettings}
+                                            onOpenHostedSite={(url) => void openExternalMessageUrl(url)}
+                                          />
+                                        }
+                                      >
+                                        {(request) => (
+                                          <HandoffChatCard
+                                            agentId={request().sourceAgentId}
+                                            messageId={request().messageId}
+                                            agents={props.agents}
+                                            onSelectAgent={props.onSelectAgent}
+                                            fallback={
+                                              <ChatActionMarker
+                                                marker={request()}
+                                                agents={props.agents}
+                                                announce={animateEntrance}
+                                                onSelectAgent={props.onSelectAgent}
+                                              />
+                                            }
+                                          />
+                                        )}
+                                      </Show>
                                     }
                                   >
                                     {(suggestion) => (

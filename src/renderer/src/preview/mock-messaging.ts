@@ -96,8 +96,13 @@ function previewInbox() {
       latestFrom: "Ana",
       preview: "The demo moves to Friday.",
       messages: [
-        message("2.000001", "Ana", "Kickoff notes are in the doc.", 30),
-        message("2.000002", "Ana", "The demo moves to Friday.", 12),
+        message("2.000001", "Ana", "Kickoff notes are in <https://example.com/notes|the doc> :tada:", 30),
+        message(
+          "2.000002",
+          "Ana",
+          "<@U0PREVIEWPREET> *The demo* moves to _Friday_ in <#C0PREVIEWLAU|launch>. :+1::skin-tone-3:",
+          12,
+        ),
       ],
     },
   ];
@@ -203,7 +208,15 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
       if (!found) throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
       inboxRead.add(conversation);
       for (const listener of inboxListeners) listener({ workspaceId });
-      return clone({ workspaceId, conversation, place: found.place, messages: found.messages });
+      return clone({
+        workspaceId,
+        conversation,
+        place: found.place,
+        messages: found.messages,
+        people: { U0PREVIEWPREET: "Preet" },
+        channels: { C0PREVIEWLAU: "launch" },
+        customEmoji: {},
+      });
     },
     sendInboxReply: async ({ workspaceId, conversation, threadKey, text }) => {
       if (!connections.get(workspaceId)?.userId) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
@@ -225,6 +238,22 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
       found.latestFrom = "you";
       found.preview = trimmed;
       for (const listener of inboxListeners) listener({ workspaceId });
+    },
+    // The preview has no agent turn: it only checks what main checks and names the orchestrator.
+    askOrchestratorAboutInbox: async ({ workspaceId, conversation, text }) => {
+      const connection = connections.get(workspaceId);
+      if (!connection?.userId) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
+      if (!inbox.some((item) => item.workspaceId === workspaceId && item.conversation === conversation))
+        throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
+      if (
+        !text
+          .trim()
+          .replace(/^@chief/i, "")
+          .trim()
+      )
+        throw new Error(sourceText("error.messaging.sendTextEmpty"));
+      if (!connection.orchestratorAgentId) throw new Error(sourceText("error.messaging.inboxNeedsOrchestrator"));
+      return { agentId: connection.orchestratorAgentId };
     },
     getSlackRouting: async ({ workspaceId }) => clone(routingOf(workspaceId)),
     handOverSlackDefault: async ({ workspaceId, slackUserId }) => {
@@ -285,6 +314,11 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
       found.summary = { ...found.summary, unreadCount: 0 };
       for (const listener of changeListeners) listener({ threadId });
       return { unreadCount: 0, firstUnreadMessageId: null, throughMessageId };
+    },
+    hideThreads: async ({ threadIds }) => {
+      const hidden = new Set(threadIds);
+      threads = threads.filter((candidate) => !hidden.has(candidate.summary.threadId));
+      for (const threadId of hidden) for (const listener of changeListeners) listener({ threadId });
     },
     onThreadsChanged: (listener) => {
       changeListeners.add(listener);

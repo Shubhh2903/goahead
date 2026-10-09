@@ -360,8 +360,11 @@ function WorkspaceRow(props: {
 }) {
   const { t, format } = useText();
   const kind = () => rowKind(props.connection);
+  // The saved access cannot be decrypted here: only Disconnect, then a new connect, helps.
+  const unreadable = () => props.connection.credentials === "unreadable";
   const note = () => {
     const current = props.connection;
+    if (unreadable()) return t("connector.slack.accessUnreadable");
     if (current.missingScopes.length > 0)
       return t("connector.slack.missingScopes", { scopes: format.list(current.missingScopes) });
     if (current.retryAt)
@@ -393,8 +396,10 @@ function WorkspaceRow(props: {
       </ItemContent>
       <ItemActions>
         <Switch>
-          <Match when={kind() === "attention"}>{action(t("connector.slack.reconnect"), props.onReconnect)}</Match>
-          <Match when={kind() === "paused"}>
+          <Match when={!unreadable() && kind() === "attention"}>
+            {action(t("connector.slack.reconnect"), props.onReconnect)}
+          </Match>
+          <Match when={!unreadable() && kind() === "paused"}>
             {action(t("connector.slack.resume"), () => props.onSetEnabled(true))}
           </Match>
         </Switch>

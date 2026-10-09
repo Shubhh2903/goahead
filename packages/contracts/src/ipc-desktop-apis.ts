@@ -116,6 +116,7 @@ export type HostAdminDesktopApi = GroupApi<IpcEndpoints["hostAdmin"]>;
 
 /** The Slack workspaces where this computer's agents answer. */
 export type MessagingDesktopApi = GroupApi<IpcEndpoints["messaging"]>;
+export type HandoffsDesktopApi = GroupApi<IpcEndpoints["handoffs"]>;
 
 /**
  * Storage and files of one host. Every scoped method names its server, because the settings modal can
@@ -142,6 +143,7 @@ export interface OpenBotDesktopApi extends GroupApi<IpcEndpoints["app"]>, GroupA
   providerAdmin: ProviderAdminDesktopApi;
   hostAdmin: HostAdminDesktopApi;
   messaging: MessagingDesktopApi;
+  handoffs: HandoffsDesktopApi;
   storage: StorageDesktopApi;
   agentImport: AgentImportDesktopApi;
   hostedSites: HostedSitesDesktopApi;

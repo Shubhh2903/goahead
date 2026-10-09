@@ -156,6 +156,14 @@ linux:
         - x64
         - arm64
 dmg:
+  # Sign the DMG with the Developer ID Application identity, so Gatekeeper accepts the disk image and
+  # not only the app in it. `dist:mac` passes `--config.mac.identity=null`, and electron-builder then
+  # skips this signature. electron-builder notarizes only the app: the tag workflow notarizes and
+  # staples the DMG after the build.
+  sign: true
+  # Stapling changes the DMG bytes after the build. Keep the DMG out of `latest-mac.yml` and give it no
+  # block map, so no file records an old hash. electron-updater on macOS reads only the ZIP.
+  writeUpdateInfo: false
   title: ${productName} ${version}
   background: build/dmg-background.png
   iconSize: 128

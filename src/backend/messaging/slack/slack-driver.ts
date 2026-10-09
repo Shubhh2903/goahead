@@ -32,6 +32,9 @@ const NOT_OWN_CONVERSATION = new Set(["channel_not_found", "not_in_channel"]);
 const CHANNEL_PAGE_LIMIT = 200;
 /** Pages of 200 channels: enough for a person, and a bound for a very large workspace. */
 const PERSON_PLACE_PAGES = 5;
+/** How long the workspace's own emoji are kept before `emoji.list` is read again. */
+const EMOJI_CACHE_MS = 60 * 60_000;
+const EMOJI_RETRY_MS = 5 * 60_000;
 
 const REACTIONS: Record<StatusReaction, string> = {
   received: "eyes",
@@ -58,6 +61,7 @@ export class SlackAdapter implements MessagingAdapter {
   readonly #places = new Map<string, Promise<string>>();
   readonly #own = new Map<string, Promise<boolean>>();
   readonly #personIn = new Map<string, boolean>();
+  #emoji: { value: Promise<Record<string, string>>; until: number } | null = null;
   #botUserId = "";
   #workspaceId = "";
   /** The connected person's Slack user id, known after `identify` when the install gave a user token. */
@@ -239,6 +243,63 @@ export class SlackAdapter implements MessagingAdapter {
     return this.#api.download(file.url, destination, maxBytes);
   }
 
+  /**
+   * A file of the person's inbox. The person's token reads their direct messages; the bot's reads the
+   * channels it is in. Each refuses an address outside Slack, a sign-in page and a file over the cap.
+   */
+  async downloadInboxFile(url: string, destination: string, maxBytes: number): Promise<void> {
+    const apis = this.#userApi ? [this.#userApi, this.#api] : [this.#api];
+    let failure: unknown = null;
+    for (const api of apis) {
+      try {
+        await api.download(url, destination, maxBytes, { refusePage: true });
+        return;
+      } catch (error) {
+        failure = error;
+        // A file that is too large or not Slack's is the same for each token.
+        if (error instanceof SlackApiError && ["too_large", "untrusted_file_url"].includes(error.code)) break;
+      }
+    }
+    throw failure;
+  }
+
+  /**
+   * The workspace's own emoji, read once an hour. `emoji.list` needs `emoji:read`, which the person's
+   * token has only when the install asked for it; without it the inbox shows the `:name:` text.
+   */
+  customEmoji(): Promise<Record<string, string>> {
+    const now = Date.now();
+    if (this.#emoji && this.#emoji.until > now) return this.#emoji.value;
+    const value = this.#readCustomEmoji();
+    this.#emoji = { value, until: now + EMOJI_CACHE_MS };
+    void value.then((emoji) => {
+      // A failure is tried again sooner than a success.
+      if (Object.keys(emoji).length === 0 && this.#emoji?.value === value)
+        this.#emoji = { value, until: now + EMOJI_RETRY_MS };
+    });
+    return value;
+  }
+
+  async #readCustomEmoji(): Promise<Record<string, string>> {
+    for (const api of this.#userApi ? [this.#userApi, this.#api] : [this.#api]) {
+      try {
+        const response = await api.call("emoji.list");
+        const emoji = isDynamicRecord(response.emoji) ? response.emoji : {};
+        const result: Record<string, string> = {};
+        for (const [name, value] of Object.entries(emoji))
+          if (isString(value) && (value.startsWith("alias:") || value.startsWith("https://"))) result[name] = value;
+        return result;
+      } catch {
+        // `missing_scope` with one token can still work with the other.
+      }
+    }
+    return {};
+  }
+
+  plainText(text: string): string {
+    return plainText(text, this.#botUserId);
+  }
+
   async openDirectMessage(userIds: string, as: MessageSender): Promise<string> {
     const response = await this.#apiFor(as).call("conversations.open", { users: userIds });
     const channel = isDynamicRecord(response.channel) ? response.channel.id : undefined;
@@ -279,6 +340,12 @@ export class SlackAdapter implements MessagingAdapter {
     });
     if (!isString(response.ts)) throw new SlackApiError("chat.postMessage", "no_ts");
     return { ts: response.ts };
+  }
+
+  /** Marks the conversation read up to `ts` for the person in Slack too, with the user token. */
+  async markReadAsUser(channel: string, ts: string): Promise<void> {
+    if (!this.#userApi) return;
+    await this.#userApi.call("conversations.mark", { channel, ts });
   }
 
   async listPersonPlaces(): Promise<Array<{ id: string; name: string; isPrivate: boolean }>> {
@@ -366,6 +433,26 @@ export class SlackAdapter implements MessagingAdapter {
     }
   }
 
+  /**
+   * The people of a direct or group direct message, read with the person's token: the bot is not in
+   * the person's own direct messages. Null for any other conversation, without the token, or on error.
+   */
+  async conversationPeople(platformChannelId: string): Promise<string[] | null> {
+    if (!this.#userApi) return null;
+    try {
+      const response = await this.#userApi.call("conversations.info", { channel: platformChannelId });
+      const channel = isDynamicRecord(response.channel) ? response.channel : {};
+      const owner = this.#ownerUserId ? [this.#ownerUserId] : [];
+      if (channel.is_im === true) return isString(channel.user) ? [channel.user, ...owner] : null;
+      if (channel.is_mpim !== true) return null;
+      const members = await this.#userApi.call("conversations.members", { channel: platformChannelId, limit: "100" });
+      const people = Array.isArray(members.members) ? members.members.filter(isString) : [];
+      return people.length > 0 ? people : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** The user token is only there when the install gave one; a send as the user without it fails. */
   #apiFor(as: MessageSender): SlackWebApi {
     if (as === "bot") return this.#api;
@@ -391,16 +478,18 @@ export class SlackAdapter implements MessagingAdapter {
     return name;
   }
 
+  /** The bot reads the channels it is in; the person's token reads the private ones the bot is not in. */
   placeName(platformChannelId: string): Promise<string> {
     let name = this.#places.get(platformChannelId);
     if (!name) {
-      name = this.#api
-        .call("conversations.info", { channel: platformChannelId })
-        .then((response) =>
-          isDynamicRecord(response.channel) && isString(response.channel.name)
-            ? `#${response.channel.name}`
-            : platformChannelId,
-        )
+      const read = (api: SlackWebApi) =>
+        api.call("conversations.info", { channel: platformChannelId }).then((response) => {
+          if (isDynamicRecord(response.channel) && isString(response.channel.name)) return `#${response.channel.name}`;
+          throw new SlackApiError("conversations.info", "no_name");
+        });
+      const userApi = this.#userApi;
+      name = read(this.#api)
+        .catch((error) => (userApi ? read(userApi) : Promise.reject(error)))
         .catch(() => platformChannelId);
       this.#places.set(platformChannelId, name);
     }

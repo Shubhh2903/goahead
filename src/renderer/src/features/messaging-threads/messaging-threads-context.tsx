@@ -7,7 +7,7 @@ import {
   type MessagingThreadSummary,
 } from "@openbot/contracts/ipc";
 import { currentText } from "@openbot/ui/text";
-import { createStore, onCleanup, untrack } from "solid-js";
+import { createStore, onCleanup, reconcile, untrack } from "solid-js";
 import { actionToast } from "../../action-toast";
 import { createSimpleContext } from "../../simple-context";
 import { useAgents } from "../agents/agents-context";
@@ -18,6 +18,44 @@ import { useUsage } from "../usage/usage-context";
 import { messagingThreadsPort } from "./messaging-threads-port";
 
 const PAGE_LIMIT = 50;
+
+/**
+ * A reply that the person sent from the inbox. It shows at once and stays until a read of its
+ * conversation brings the stored message.
+ */
+export interface MessagingInboxOutgoing {
+  id: string;
+  workspaceId: string;
+  conversation: string;
+  text: string;
+  /** Before Slack got the reply, so the stored message is not older. */
+  startedAt: string;
+  /** Slack has not answered yet. */
+  sending: boolean;
+}
+
+/** The workspaces and the conversations of the inbox list keep their rows across reads. */
+const inboxListKey = (item: { workspaceId?: string; conversation?: string }) => item.workspaceId ?? item.conversation;
+
+const samePlace = (
+  a: { workspaceId: string; conversation: string } | null,
+  b: { workspaceId: string; conversation: string } | null,
+) => a !== null && b !== null && a.workspaceId === b.workspaceId && a.conversation === b.conversation;
+
+/** The outgoing replies that `page` does not hold yet. Each stored reply settles one outgoing reply. */
+function unsettledOutgoing(outgoing: readonly MessagingInboxOutgoing[], page: MessagingInboxPage) {
+  const settled = new Set<string>();
+  return outgoing.filter((item) => {
+    if (!samePlace(item, page)) return true;
+    const stored = page.messages.find(
+      (message) =>
+        message.isOwn && message.text === item.text && message.sentAt >= item.startedAt && !settled.has(message.id),
+    );
+    if (!stored) return true;
+    settled.add(stored.id);
+    return false;
+  });
+}
 
 interface MessagingThreadsState {
   /** Newest first, across every agent. The sidebar puts each one under its agent. */
@@ -39,9 +77,14 @@ interface MessagingInboxState {
   /** The inbox covers the workspace pane. */
   open: boolean;
   selection: { workspaceId: string; conversation: string } | null;
-  /** The open conversation, null while it loads or before one is chosen. */
+  /**
+   * The last conversation read. It stays while the next one loads, so the view does not go blank; it
+   * is null only before the first read.
+   */
   page: MessagingInboxPage | null;
   failed: boolean;
+  /** Replies the person sent that no read has brought yet, oldest first. */
+  outgoing: MessagingInboxOutgoing[];
 }
 
 /**
@@ -77,32 +120,61 @@ const MessagingThreads = createSimpleContext({
       selection: null,
       page: null,
       failed: false,
+      outgoing: [],
     });
     let disposed = false;
     // Each read replaces the one before it, so a slow answer never overwrites a newer one.
     let listReads = 0;
     let pageReads = 0;
-    let inboxReads = 0;
     let inboxPageReads = 0;
+    let outgoingIds = 0;
+    // One list read at a time. A change during a read asks for one more read after it.
+    let inboxListReading = false;
+    let inboxListAgain = false;
+    // One read of a conversation at a time, for the same reason.
+    let inboxPageRead: { workspaceId: string; conversation: string; again: boolean } | null = null;
 
     // A failed read keeps the last inbox. The next change reads again.
     const reloadInbox = () => {
-      if (!supported) return;
-      const read = ++inboxReads;
+      if (!supported || disposed) return;
+      if (inboxListReading) {
+        inboxListAgain = true;
+        return;
+      }
+      inboxListReading = true;
+      inboxListAgain = false;
       void port()
         .listInbox()
         .then((workspaces) => {
-          if (disposed || read !== inboxReads) return;
+          if (disposed) return;
           setInbox((draft) => {
-            draft.workspaces = workspaces;
+            reconcile(workspaces, inboxListKey)(draft.workspaces);
           });
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+          inboxListReading = false;
+          if (inboxListAgain) reloadInbox();
+        });
     };
 
-    /** Reads one inbox conversation. Main marks it read, so the list reads again after it. */
+    const unreadIn = (workspaceId: string, conversation: string) =>
+      inbox.workspaces
+        .find((workspace) => workspace.workspaceId === workspaceId)
+        ?.conversations.find((item) => item.conversation === conversation)?.unreadCount ?? 0;
+
+    /**
+     * Reads one inbox conversation into the open page. Rows that did not change stay. Main marks it
+     * read, so the list reads again when its count can be out of date.
+     */
     const loadInboxPage = (workspaceId: string, conversation: string) => {
+      if (samePlace(inboxPageRead, { workspaceId, conversation })) {
+        if (inboxPageRead) inboxPageRead.again = true;
+        return;
+      }
       const read = ++inboxPageReads;
+      const current = { workspaceId, conversation, again: false };
+      inboxPageRead = current;
       setInbox((draft) => {
         draft.failed = false;
       });
@@ -111,15 +183,24 @@ const MessagingThreads = createSimpleContext({
         .then((page) => {
           if (disposed || read !== inboxPageReads) return;
           setInbox((draft) => {
-            draft.page = page;
+            if (draft.page && samePlace(draft.page, page)) reconcile(page, "id")(draft.page);
+            else draft.page = page;
+            draft.outgoing = unsettledOutgoing(draft.outgoing, page);
           });
-          reloadInbox();
+          if (inboxListReading || unreadIn(workspaceId, conversation) > 0) reloadInbox();
         })
         .catch(() => {
           if (disposed || read !== inboxPageReads) return;
           setInbox((draft) => {
             draft.failed = true;
+            // Messages of another conversation would read as this one's.
+            if (draft.page && !samePlace(draft.page, current)) draft.page = null;
           });
+        })
+        .finally(() => {
+          if (inboxPageRead !== current) return;
+          inboxPageRead = null;
+          if (current.again && !disposed && read === inboxPageReads) loadInboxPage(workspaceId, conversation);
         });
     };
 
@@ -262,11 +343,14 @@ const MessagingThreads = createSimpleContext({
     function closeInbox(): void {
       if (!inbox.open) return;
       inboxPageReads += 1;
+      inboxPageRead = null;
       setInbox((draft) => {
         draft.open = false;
         draft.selection = null;
         draft.page = null;
         draft.failed = false;
+        // Slack holds the sent replies, so the next read shows them.
+        draft.outgoing = draft.outgoing.filter((item) => item.sending);
       });
     }
 
@@ -281,28 +365,73 @@ const MessagingThreads = createSimpleContext({
     }
 
     function selectInboxConversation(workspaceId: string, conversation: string): void {
+      // The page on screen stays until the new one arrives, so the view does not go blank.
       setInbox((draft) => {
         draft.selection = { workspaceId, conversation };
-        draft.page = null;
       });
       loadInboxPage(workspaceId, conversation);
     }
 
     /**
-     * Sends a reply as the person to the top of the open inbox conversation, then reads the conversation
-     * again. A failure rejects, so the reply box keeps the text.
+     * Sends a reply as the person to the top of the open inbox conversation. The reply shows at once.
+     * Main stores it, marks the conversation read and reports the change, so the read that follows
+     * brings the stored reply in its place. A failure removes it and rejects, so the reply box gets
+     * the text back.
      */
     async function sendInboxReply(text: string): Promise<void> {
       const selection = inbox.selection;
       if (!selection) throw new Error("No inbox conversation is open.");
-      await port().sendInboxReply({ workspaceId: selection.workspaceId, conversation: selection.conversation, text });
-      const current = inbox.selection;
-      if (
-        !disposed &&
-        current?.workspaceId === selection.workspaceId &&
-        current.conversation === selection.conversation
-      )
-        loadInboxPage(selection.workspaceId, selection.conversation);
+      const id = `outgoing-${++outgoingIds}`;
+      setInbox((draft) => {
+        draft.outgoing.push({ id, ...selection, text, startedAt: new Date().toISOString(), sending: true });
+      });
+      try {
+        await port().sendInboxReply({ workspaceId: selection.workspaceId, conversation: selection.conversation, text });
+      } catch (error) {
+        if (!disposed)
+          setInbox((draft) => {
+            draft.outgoing = draft.outgoing.filter((item) => item.id !== id);
+          });
+        throw error;
+      }
+      if (disposed) return;
+      setInbox((draft) => {
+        const sent = draft.outgoing.find((item) => item.id === id);
+        if (sent) sent.sending = false;
+      });
+    }
+
+    /**
+     * Gives an `@chief` instruction about the open inbox conversation to the workspace's Slack
+     * Orchestrator. Nothing goes to Slack. Answers the orchestrator, so the caller can open it.
+     */
+    async function askOrchestratorAboutInbox(text: string): Promise<string> {
+      const selection = inbox.selection;
+      if (!selection) throw new Error("No inbox conversation is open.");
+      const { agentId } = await port().askOrchestratorAboutInbox({
+        workspaceId: selection.workspaceId,
+        conversation: selection.conversation,
+        text,
+      });
+      return agentId;
+    }
+
+    /**
+     * Hides conversations from the sidebar until a newer message arrives. Nothing is deleted. A
+     * failure shows a toast and rejects, so a confirmation can stay open.
+     */
+    async function hideThreads(threadIds: string[]): Promise<void> {
+      try {
+        await port().hideThreads({ threadIds });
+      } catch (error) {
+        const { t, errorMessage } = currentText();
+        actionToast.error(t("sidebar.clearHistory.failed"), {
+          description: errorMessage(error, t("sidebar.clearHistory.failed")),
+        });
+        throw error;
+      }
+      if (state.selectedId && threadIds.includes(state.selectedId)) closeThread();
+      reloadList();
     }
 
     /** Opens one conversation over the workspace, as a channel does, and closes what it covers. */
@@ -343,10 +472,12 @@ const MessagingThreads = createSimpleContext({
       },
       selectedThread: () => state.threads.find((thread) => thread.threadId === state.selectedId),
       answerDraft,
+      hideThreads,
       inbox,
       openInbox,
       selectInboxConversation,
       sendInboxReply,
+      askOrchestratorAboutInbox,
       retryInbox: () => {
         const selection = inbox.selection;
         if (selection) loadInboxPage(selection.workspaceId, selection.conversation);

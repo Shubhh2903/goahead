@@ -33,10 +33,15 @@ export const messages = defineMessages("messaging", {
   "messaging.inbox.empty":
     "No Slack messages yet. GoAhead keeps your direct messages, group messages, mentions and the channels you pick.",
   "messaging.inbox.choose": "Choose a conversation to read it.",
+  "messaging.inbox.file.open": "Open {name} in Slack",
   "messaging.inbox.loadFailed": "The Slack inbox did not load.",
   "messaging.inbox.unread": { one: "{count} unread", other: "{count} unread" },
   // The box that sends a reply as the person in the open inbox conversation.
   "messaging.inbox.reply.placeholder": "Reply as you",
   "messaging.inbox.reply.send": "Send",
   "messaging.inbox.reply.failed": "Slack did not accept the reply.",
+  // Text that starts with `@chief` goes to the Slack Orchestrator, not to Slack.
+  "messaging.inbox.reply.askChief": "Ask Chief",
+  "messaging.inbox.reply.chiefHint": "Start with @chief to ask the Slack Orchestrator instead of sending.",
+  "messaging.inbox.reply.askFailed": "The Slack Orchestrator did not get the request.",
 });

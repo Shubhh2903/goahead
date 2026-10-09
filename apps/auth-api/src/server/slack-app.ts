@@ -172,24 +172,6 @@ export class SlackAppService {
     ) {
       throw new SlackAppError(502, "slack_exchange_failed", "Slack did not accept the install.");
     }
-    // SPIKE (CP6 multi-user), development only: which person installed, and whether two installs get
-    // the same bot token. Only IDs and a short hash; never a token. Remove after the spike.
-    if (this.#developmentOrigin) {
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body.access_token));
-      const botTokenHash = [...new Uint8Array(digest)]
-        .slice(0, 6)
-        .map((byte) => byte.toString(16).padStart(2, "0"))
-        .join("");
-      console.info("[slack-spike] install", {
-        teamId: team.id,
-        installedBy: isDynamicRecord(body.authed_user) ? body.authed_user.id : null,
-        userToken: isDynamicRecord(body.authed_user) && isString(body.authed_user.access_token),
-        botUserId: body.bot_user_id,
-        botTokenHash,
-        account: state.u,
-        host: state.h,
-      });
-    }
     // One batch, so two connects at once cannot both win the default. Another account's default
     // stays as it is. When a link is made, Signal drops any older route of the same workspace or
     // person: a host that the route moved away from cannot keep it with the ticket it holds.

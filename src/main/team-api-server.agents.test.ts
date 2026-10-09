@@ -454,6 +454,36 @@ describe("TeamApiServer agents", () => {
     expect(updateAgent).toHaveBeenCalledWith({ agentId: source.id, name: "Renamed" });
   });
 
+  it("keeps an agent's project folders off the wire for a joined server", async () => {
+    const fixture = opencodeFixture[0];
+    if (!isAgentSummary(fixture)) throw new Error("Invalid agent fixture.");
+    const projectPath = "/Users/owner/Projects/private-website";
+    // Claude, so every protocol from 1 can describe the agent.
+    const source: AgentSummary = {
+      ...fixture,
+      provider: "claude",
+      model: "claude-opus-5-5",
+      projectFolders: [{ id: "folder-1", name: "website", path: projectPath }],
+    };
+    const { start, signIn } = await createTeamApiFixture("agent-project-folders", { configure: true });
+    const { base } = await start({ appVersion: "1.0.0", agents: createAgents({ listAgents: () => [source] }) });
+    const token = await signIn({ protocol: 4, appVersion: "1.0.0" });
+    for (const protocol of [1, 4, 6]) {
+      const response = await fetch(`${base}/v1/agents`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          [TEAM_PROTOCOL_VERSION_HEADER]: String(protocol),
+          [TEAM_APP_VERSION_HEADER]: "1.0.0",
+        },
+      });
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(JSON.parse(body)).toHaveLength(1);
+      expect(body).not.toContain(projectPath);
+      expect(body).not.toContain("projectFolders");
+    }
+  });
+
   it("hides only the agent a client's protocol cannot describe", async () => {
     const source = opencodeFixture[0];
     if (!isAgentSummary(source)) throw new Error("Invalid agent fixture.");

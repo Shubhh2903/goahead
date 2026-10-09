@@ -52,9 +52,27 @@
   flex: 1;
 }
 
+.messaging-inbox-reply-hint {
+  margin: 0;
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-sm);
+}
+
 .messaging-inbox-reply-error {
   margin: 0;
   color: var(--openbot-danger);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-sm);
+}
+
+/* A reply the person sent, while Slack has not answered. */
+.messaging-inbox-message-sending {
+  opacity: 0.6;
+}
+
+.messaging-inbox-sending-note {
+  color: var(--openbot-text-muted);
   font-size: var(--openbot-text-sm);
   line-height: var(--openbot-leading-sm);
 }

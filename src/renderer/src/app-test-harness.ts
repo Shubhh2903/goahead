@@ -845,6 +845,10 @@ export function installOpenbotStub(): void {
         avatarUrl: input.image ? "openbot-avatar://agent/chief?v=test" : null,
       })),
       deleteAgent: vi.fn().mockResolvedValue(undefined),
+      listProjectFolders: vi.fn().mockResolvedValue([]),
+      addProjectFolder: notStubbed("agent.addProjectFolder"),
+      renameProjectFolder: notStubbed("agent.renameProjectFolder"),
+      removeProjectFolder: notStubbed("agent.removeProjectFolder"),
       readConversation: vi.fn().mockImplementation(async (agentId) => ({
         agentId,
         threadId: null,
@@ -1175,6 +1179,7 @@ export function installOpenbotStub(): void {
     providerAdmin: stubGroup(IPC_ENDPOINTS.providerAdmin, "providerAdmin", {}),
     hostAdmin: stubGroup(IPC_ENDPOINTS.hostAdmin, "hostAdmin", {}),
     messaging: stubGroup(IPC_ENDPOINTS.messaging, "messaging", {}),
+    handoffs: stubGroup(IPC_ENDPOINTS.handoffs, "handoffs", { list: vi.fn().mockResolvedValue([]) }),
     // `providerRuntimes` stays out: the renderer shows the sign-in and Refresh flow when it is
     // absent, and these tests cover that flow. A stub member switches every screen to downloads.
   } satisfies Omit<OpenBotDesktopApi, "providerRuntimes">;

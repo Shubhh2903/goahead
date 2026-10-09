@@ -163,6 +163,26 @@ export interface DeliveryContext {
   managedAttachments: Array<AttachmentSummary & { path: string }>;
 }
 
+/** A request one agent sent to teammates, with each delivery and the answer it got. */
+export interface TeammateRequest {
+  messageId: string;
+  senderAgentId: string;
+  text: string;
+  createdAt: string;
+  /** The sender's turn that sent it, when the tool call named it. */
+  sourceTurnId: string | null;
+  /** The external conversation the answer goes back to, such as a Slack thread. */
+  messagingReturn: MessagingOrigin | null;
+  deliveries: Array<{
+    id: string;
+    recipientAgentId: string;
+    status: QueueDeliveryStatus;
+    turnId: string | null;
+  }>;
+  /** The newest answer of each recipient, by recipient id. */
+  replies: Record<string, { text: string; createdAt: string }>;
+}
+
 const EMPTY_STATE: StoredState = {
   version: 3,
   messages: [],
@@ -1039,6 +1059,70 @@ export class MailboxStore {
         (delivery) => delivery.messageId === message.id && delivery.recipientAgentId === recipientAgentId,
       );
     });
+  }
+
+  /**
+   * The newest requests that agents sent to teammates, oldest first. An answer is not a request: a
+   * message that replies to another, or that an agent sent to the teammate whose message its turn
+   * handled, is read as that request's answer.
+   */
+  teammateRequests(limit: number): TeammateRequest[] {
+    const turnByMessage = new Map<string, string>();
+    for (const [key, messageId] of Object.entries(this.#state.idempotency)) {
+      const parts = key.split(":");
+      const turnId = parts.length >= 3 ? parts.at(-2) : undefined;
+      if (turnId) turnByMessage.set(messageId, turnId);
+    }
+    const messages = new Map(this.#state.messages.map((message) => [message.id, message]));
+    const deliveriesByMessage = new Map<string, StoredDelivery[]>();
+    /** The agent sender of the delivery each agent's turn handled, by `<agentId>:<turnId>`. */
+    const turnRequesters = new Map<string, { messageId: string; senderAgentId: string }>();
+    for (const delivery of this.#state.deliveries) {
+      const list = deliveriesByMessage.get(delivery.messageId) ?? [];
+      list.push(delivery);
+      deliveriesByMessage.set(delivery.messageId, list);
+      const sender = messages.get(delivery.messageId)?.sender;
+      if (delivery.turnId && sender?.kind === "agent") {
+        turnRequesters.set(`${delivery.recipientAgentId}:${delivery.turnId}`, {
+          messageId: delivery.messageId,
+          senderAgentId: sender.agentId,
+        });
+      }
+    }
+    const requests = new Map<string, TeammateRequest>();
+    for (const message of this.#state.messages) {
+      if (message.sender.kind !== "agent" || message.channelId) continue;
+      const senderAgentId = message.sender.agentId;
+      const sourceTurnId = turnByMessage.get(message.id) ?? null;
+      const handled = sourceTurnId ? turnRequesters.get(`${senderAgentId}:${sourceTurnId}`) : undefined;
+      const answered =
+        (message.replyToMessageId ? messages.get(message.replyToMessageId) : undefined) ??
+        (handled &&
+        (deliveriesByMessage.get(message.id) ?? []).some((d) => d.recipientAgentId === handled.senderAgentId)
+          ? messages.get(handled.messageId)
+          : undefined);
+      if (answered || message.replyToMessageId) {
+        const request = answered ? requests.get(answered.id) : undefined;
+        if (request) request.replies[senderAgentId] = { text: message.text, createdAt: message.createdAt };
+        continue;
+      }
+      requests.set(message.id, {
+        messageId: message.id,
+        senderAgentId,
+        text: message.text,
+        createdAt: message.createdAt,
+        sourceTurnId,
+        messagingReturn: message.messagingReturn ? structuredClone(message.messagingReturn) : null,
+        deliveries: (deliveriesByMessage.get(message.id) ?? []).map((delivery) => ({
+          id: delivery.id,
+          recipientAgentId: delivery.recipientAgentId,
+          status: delivery.status,
+          turnId: delivery.turnId,
+        })),
+        replies: {},
+      });
+    }
+    return [...requests.values()].slice(-limit);
   }
 
   async markStarting(deliveryId: string): Promise<void> {

@@ -1,5 +1,6 @@
 import type {
   AccountUsage,
+  AgentHandoff,
   AgentModelOption,
   AgentStatus,
   AgentSubmission,
@@ -445,6 +446,37 @@ export const STORY_SNAPSHOTS: Record<string, ConversationSnapshot> = Object.from
     },
   ]),
 );
+
+/** The work Chief gave in the story conversation: one answered, one still running. */
+export const STORY_HANDOFFS: Record<string, AgentHandoff[]> = {
+  chief: [
+    {
+      id: "delivery-research",
+      messageId: "message-exchange",
+      fromAgentId: "chief",
+      toAgentId: "research",
+      task: "Verify the sources for the launch plan and list any claim that has no source.",
+      startedAt: "2026-08-19T09:44:00.000Z",
+      status: "done",
+      steps: [
+        { kind: "search", name: "web" },
+        { kind: "edit", name: "sources.md" },
+      ],
+      reply: "Status: done. Eleven of twelve claims have a source. The pricing claim has none.",
+    },
+    {
+      id: "delivery-sales",
+      messageId: "message-exchange",
+      fromAgentId: "chief",
+      toAgentId: "sales",
+      task: "Verify the sources for the launch plan and list any claim that has no source.",
+      startedAt: "2026-08-19T09:44:00.000Z",
+      status: "working",
+      steps: [{ kind: "command", name: "rg" }],
+      reply: null,
+    },
+  ],
+};
 
 export const STORY_PRESENCE: TeamPresenceSnapshot = {
   serverId: "team",

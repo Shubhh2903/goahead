@@ -110,6 +110,8 @@ export const messages = {
   "connector.slack.workspaceDescription": "Kullanıcılar @GoAhead'den bahseder veya doğrudan mesaj gönderir.",
   "connector.slack.connectedAs":
     "@{name} olarak bağlı. Kullanıcılar @GoAhead'den bahseder veya doğrudan mesaj gönderir.",
+  "connector.slack.accessUnreadable":
+    "GoAhead bu bilgisayarda kayıtlı Slack erişimini okuyamıyor. Bağlantıyı kesin, sonra yeniden bağlanın.",
   "connector.slack.connectAsYou":
     "Sizin adınıza da bağlanmak için yeniden bağlanın; ajanlarınız gördüklerinizi okur ve onayınızdan sonra sizin adınıza yanıtlar.",
   "connector.slack.disconnectWorkspace": "Bağlantıyı Kes",

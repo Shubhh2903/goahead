@@ -46,8 +46,15 @@ export const MESSAGING_LIMITS = {
   drafts: 100,
   inboxConversations: 200,
   inboxMessages: 100,
+  /** The files one inbox message shows. */
+  inboxFiles: 20,
+  /** The names, channels and emoji one inbox page looks up. */
+  inboxLookups: 500,
+  emojiUrl: 1_024,
   /** The longest reply, in characters after trim, that the person can send from the inbox. */
   inboxReply: 4_000,
+  /** The most conversations one hide request names: every conversation of one agent. */
+  hiddenThreads: 500,
 } as const;
 
 export interface MessagingConnection {
@@ -232,6 +239,11 @@ export interface MarkMessagingThreadReadInput {
   throughMessageId: string | null;
 }
 
+/** Conversations to hide from the sidebar. Nothing is deleted; a newer message shows one again. */
+export interface HideMessagingThreadsInput {
+  threadIds: string[];
+}
+
 /** A messaging thread got new messages or a new title. The renderer reads the list again. */
 export interface MessagingThreadsChanged {
   threadId: string;
@@ -300,6 +312,22 @@ export interface MessagingInboxMessage {
   sentAt: string;
   /** The thread the message is in, or null at the top of the conversation. */
   thread: string | null;
+  /** The files the message shared, when the inbox kept them. */
+  files?: MessagingInboxFile[];
+}
+
+/**
+ * A file that a Slack message shared. Its bytes stay in Slack: `previewUrl` is an
+ * `openbot-attachment://slack/…` address that main serves from its own cache, only for an image.
+ */
+export interface MessagingInboxFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  previewUrl: string | null;
+  /** The file's page in Slack, which opens in the browser. */
+  permalink: string | null;
 }
 
 /** The newest messages of one inbox conversation, oldest first. Reading them marks them read. */
@@ -308,6 +336,12 @@ export interface MessagingInboxPage {
   conversation: string;
   place: string;
   messages: MessagingInboxMessage[];
+  /** Display names of the Slack users the messages mention, by user id. An unknown id is left out. */
+  people?: Record<string, string>;
+  /** Names of the channels the messages link, by channel id, without `#`. */
+  channels?: Record<string, string>;
+  /** Workspace emoji the messages use: an https image address, or `alias:<name>`. */
+  customEmoji?: Record<string, string>;
 }
 
 /**
@@ -321,6 +355,24 @@ export interface SendInboxReplyInput {
   threadKey?: string;
   /** 1 to `MESSAGING_LIMITS.inboxReply` characters after trim. */
   text: string;
+}
+
+/**
+ * An instruction that the person types in an inbox conversation, which starts with `@chief`. It goes
+ * to the workspace's Slack Orchestrator, with the conversation as context, and not to Slack.
+ */
+export interface AskOrchestratorAboutInboxInput {
+  workspaceId: string;
+  /** The inbox conversation, as in `ReadInboxConversationInput`. */
+  conversation: string;
+  threadKey?: string;
+  /** The text as typed, with its `@chief` prefix. */
+  text: string;
+}
+
+/** The orchestrator that got the instruction, so the desktop can open its conversation. */
+export interface AskOrchestratorAboutInboxResult {
+  agentId: string;
 }
 
 export interface SlackRoutingWorkspaceInput {
@@ -399,7 +451,56 @@ export function isMessagingInboxPage(value: unknown): value is MessagingInboxPag
         isBoolean(message.isOwn) &&
         isBoundedString(message.text, INPUT_LIMITS.messageText) &&
         isBoundedString(message.sentAt, 64) &&
-        (message.thread === null || isIdentifier(message.thread)),
+        (message.thread === null || isIdentifier(message.thread)) &&
+        (message.files === undefined ||
+          (Array.isArray(message.files) &&
+            message.files.length <= MESSAGING_LIMITS.inboxFiles &&
+            message.files.every(isInboxFile))),
+    ) &&
+    isOptionalNameMap(value.people, MESSAGING_LIMITS.name) &&
+    isOptionalNameMap(value.channels, MESSAGING_LIMITS.name) &&
+    isOptionalNameMap(value.customEmoji, MESSAGING_LIMITS.emojiUrl, isCustomEmojiValue)
+  );
+}
+
+/** `previewUrl` names only main's own Slack image scheme, so the renderer loads nothing else from it. */
+const INBOX_FILE_PREVIEW = /^openbot-attachment:\/\/slack\/[^/?#]+\/[^/?#]+$/u;
+
+function isInboxFile(value: unknown): boolean {
+  return (
+    isDynamicRecord(value) &&
+    isIdentifier(value.id) &&
+    isBoundedString(value.name, MESSAGING_LIMITS.name * 2) &&
+    isBoundedString(value.mimeType, 255) &&
+    isNumber(value.size) &&
+    value.size >= 0 &&
+    (value.previewUrl === null ||
+      (isBoundedString(value.previewUrl, 1_024) && INBOX_FILE_PREVIEW.test(value.previewUrl))) &&
+    (value.permalink === null || (isBoundedString(value.permalink, 2_048) && isHttpsUrl(value.permalink)))
+  );
+}
+
+function isCustomEmojiValue(value: string): boolean {
+  return value.startsWith("alias:") || isHttpsUrl(value);
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isOptionalNameMap(value: unknown, maximum: number, check: (entry: string) => boolean = () => true): boolean {
+  if (value === undefined) return true;
+  if (!isDynamicRecord(value)) return false;
+  const entries = Object.entries(value);
+  return (
+    entries.length <= MESSAGING_LIMITS.inboxLookups &&
+    entries.every(
+      ([key, entry]) =>
+        key.length > 0 && key.length <= MESSAGING_LIMITS.name && isBoundedString(entry, maximum) && check(entry),
     )
   );
 }
@@ -493,6 +594,10 @@ export function isAddSlackOrchestratorResult(value: unknown): value is AddSlackO
   return (
     isDynamicRecord(value) && isIdentifier(value.agentId) && (value.sectionId === null || isIdentifier(value.sectionId))
   );
+}
+
+export function isAskOrchestratorAboutInboxResult(value: unknown): value is AskOrchestratorAboutInboxResult {
+  return isDynamicRecord(value) && isIdentifier(value.agentId);
 }
 
 export function isSlackRoutingStatus(value: unknown): value is SlackRoutingStatus {

@@ -120,6 +120,15 @@ export const messages = defineMessages("sidebar", {
     one: "{count} message waits for your approval",
     other: "{count} messages wait for your approval",
   },
+  "sidebar.messagingThreads.hide": "Hide",
+  // Hides every Slack conversation of the Slack Orchestrator. Nothing is deleted.
+  "sidebar.clearHistory.action": "Clear history",
+  "sidebar.clearHistory.title": "Clear Slack history?",
+  "sidebar.clearHistory.description":
+    "Hide all Slack conversations of {agent} from the sidebar. Nothing is deleted. A conversation comes back when a new message arrives.",
+  "sidebar.clearHistory.confirm": "Clear",
+  "sidebar.clearHistory.pending": "Clearing…",
+  "sidebar.clearHistory.failed": "Could not hide the Slack conversations.",
   "sidebar.messagingInbox.row": "Slack inbox",
   "sidebar.messagingInbox.unread": { one: "{count} unread message", other: "{count} unread messages" },
 });

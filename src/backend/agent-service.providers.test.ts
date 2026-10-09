@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readdir, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { serializeAttachmentReference } from "@openbot/contracts/attachment-references";
 import { serializeChatTagReference } from "@openbot/contracts/chat-tag-references";
@@ -1366,6 +1366,8 @@ describe.sequential("AgentService: providers", () => {
         expect(instructions).toContain("If the user asks for a detailed coordination report, provide it");
         expect(instructions).toContain("send the result back in the Status/Result/Evidence format");
         expect(instructions).toContain("Do not create acknowledgement loops");
+        expect(instructions).toContain("check that each command-line tool the task needs is installed");
+        expect(instructions).toContain("Do not install a tool unless the user asks");
         expect(instructions).not.toContain("When you receive a reply, summarize it for the user");
         await service.stop();
       }
@@ -2777,6 +2779,35 @@ describe.sequential("AgentService: providers", () => {
       expect(params.runtimeWorkspaceRoots).toEqual([params.cwd, store.sharedRoot]);
     }
     expect((await store.getOrCreate("chief")).threadId).not.toBe((await store.getOrCreate("sales-outbound")).threadId);
+  });
+
+  it("passes the agent's existing project folders as working folders and skips missing ones", async () => {
+    const { service: agentService, store } = await startService(root);
+    service = agentService;
+    const kept = join(root, "projects", "website");
+    const gone = join(root, "projects", "old-app");
+    await mkdir(kept, { recursive: true });
+    await mkdir(gone, { recursive: true });
+    await store.getOrCreate("chief");
+    await service.addProjectFolder("chief", kept);
+    await service.addProjectFolder("chief", gone);
+    await rm(gone, { recursive: true });
+    expect(service.listProjectFolders("chief").map(({ name, missing }) => ({ name, missing }))).toEqual([
+      { name: "website", missing: false },
+      { name: "old-app", missing: true },
+    ]);
+
+    await service.sendMessage({ agentId: "chief", text: "Fix the footer in website" });
+    await waitFor(async () => (await protocolMessages(logPath)).some((item) => item.method === "turn/start"));
+
+    const requests = await protocolMessages(logPath);
+    const start = paramsRecord(requests.find((message) => message.method === "thread/start")?.params);
+    const turn = paramsRecord(requests.find((message) => message.method === "turn/start")?.params);
+    // Claude and the ACP clients read these roots as their additional directories.
+    expect(start?.runtimeWorkspaceRoots).toEqual([start?.cwd, store.sharedRoot, kept]);
+    expect(turn?.runtimeWorkspaceRoots).toEqual([turn?.cwd, store.sharedRoot, kept]);
+    expect(start?.developerInstructions).toContain(`Project folders: website → ${kept}.`);
+    expect(start?.developerInstructions).not.toContain(gone);
   });
 
   it("reads usage for the selected agent provider and prefers its model-specific bucket", async () => {

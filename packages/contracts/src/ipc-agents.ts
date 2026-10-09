@@ -11,7 +11,7 @@ import {
 import { type AgentProviderId, isAgentProvider } from "./ipc-agent-status";
 import { isBoundedString, isIdentifier } from "./ipc-bounded-values";
 import type { SidebarLayoutSnapshot } from "./ipc-sidebar-layout";
-import { isBoolean, isDynamicRecord, isNumber, isOneOf } from "./runtime-values";
+import { isBoolean, isDynamicRecord, isNumber, isOneOf, isString } from "./runtime-values";
 
 /**
  * How far an agent may reach on this computer. `workspace` limits writes to the agent's workspace, the
@@ -84,6 +84,11 @@ export interface AgentSummary {
    * like `access`. Absent means off; see `agentAutomationAllowed`.
    */
   allowAutomation?: boolean;
+  /**
+   * Folders on this computer that the user picked for this agent to work in. Local-only, like
+   * `access`: the Team API agent allowlist does not carry it, so an agent read from a remote host has none.
+   */
+  projectFolders?: AgentProjectFolder[];
   threadId: string | null;
   workspacePath: string;
   preview: string;
@@ -114,6 +119,7 @@ export function isAgentSummary(value: unknown): value is AgentSummary {
     (value.access === undefined || isAgentAccess(value.access)) &&
     (value.computerUse === undefined || isBoolean(value.computerUse)) &&
     (value.allowAutomation === undefined || isBoolean(value.allowAutomation)) &&
+    (value.projectFolders === undefined || isAgentProjectFolderList(value.projectFolders)) &&
     (value.threadId === null || isIdentifier(value.threadId)) &&
     isBoundedString(value.workspacePath, INPUT_LIMITS.path) &&
     isBoundedString(value.preview, INPUT_LIMITS.messageText) &&
@@ -123,6 +129,54 @@ export function isAgentSummary(value: unknown): value is AgentSummary {
     (value.avatarUrl === null || isBoundedString(value.avatarUrl, INPUT_LIMITS.avatarUrl)) &&
     (value.marketplaceSource === undefined || isMarketplaceSource(value.marketplaceSource))
   );
+}
+
+/** One folder the user picked for an agent. `id` stays the same when the folder is renamed. */
+export interface AgentProjectFolder {
+  id: string;
+  name: string;
+  path: string;
+}
+
+/** A project folder as the settings panel shows it: `missing` is true when the folder no longer exists. */
+export interface AgentProjectFolderState extends AgentProjectFolder {
+  missing: boolean;
+}
+
+export interface RenameAgentProjectFolderInput {
+  agentId: string;
+  folderId: string;
+  name: string;
+}
+
+export interface RemoveAgentProjectFolderInput {
+  agentId: string;
+  folderId: string;
+}
+
+/** A trimmed name of 1 to `projectFolderName` characters. */
+export function isProjectFolderName(value: unknown): value is string {
+  return (
+    isString(value) && value.length > 0 && value.length <= INPUT_LIMITS.projectFolderName && value.trim() === value
+  );
+}
+
+export function isAgentProjectFolder(value: unknown): value is AgentProjectFolder {
+  return (
+    isDynamicRecord(value) &&
+    isIdentifier(value.id) &&
+    isProjectFolderName(value.name) &&
+    isBoundedString(value.path, INPUT_LIMITS.path) &&
+    value.path.length > 0
+  );
+}
+
+function isAgentProjectFolderList(value: unknown): value is AgentProjectFolder[] {
+  return Array.isArray(value) && value.length <= INPUT_LIMITS.agentProjectFolders && value.every(isAgentProjectFolder);
+}
+
+export function isAgentProjectFolderState(value: unknown): value is AgentProjectFolderState {
+  return isDynamicRecord(value) && isBoolean(value.missing) && isAgentProjectFolder(value);
 }
 
 export interface CreateAgentInput {

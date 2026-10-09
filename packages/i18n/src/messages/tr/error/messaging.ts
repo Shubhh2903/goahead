@@ -21,7 +21,8 @@ export const messages = {
   "error.messaging.sendQuietHours":
     "Sessiz saatler: GoAhead {time} saatine kadar Slack mesajı göndermez. Taslak bekler.",
   "error.messaging.threadUnavailable": "Bu Slack konuşması kullanılamıyor.",
-  "error.messaging.inboxNeedsSlack": "Slack mesajları yalnızca GoAhead ile doğrudan mesajınızda okunabilir.",
+  "error.messaging.inboxNeedsSlack":
+    "Slack mesajları yalnızca GoAhead ile doğrudan mesajınızda veya bu bilgisayardaki GoAhead'te Slack Orchestrator'a sorduğunuzda okunabilir.",
   "error.messaging.inboxNeedsUser":
     "Ajanların Slack mesajlarınızı okuyabilmesi için Slack çalışma alanını GoAhead'de kendiniz olarak bağlayın.",
   "error.messaging.inboxOwnerOnly": "Slack mesajlarının okunmasını yalnızca GoAhead kullanıcısı isteyebilir.",

@@ -3,7 +3,7 @@
  * away is `SidebarMoveToSubmenu`, which the channel menu shows too; everything here is agent-only.
  */
 
-import { ContextMenu, Copy, Pin, PinOff } from "@openbot/ui";
+import { ContextMenu, Copy, Eraser, Pin, PinOff } from "@openbot/ui";
 import { Show } from "solid-js";
 import type { AgentProfile } from "../../data";
 import { useText } from "../../text";
@@ -16,6 +16,10 @@ export function SidebarAgentContextMenu(menuProps: { agent: AgentProfile; pinned
   const { openDelete, props } = useSidebarScope();
   const { t } = useText();
   const ref = (): SidebarPinnedItem => ({ kind: "agent", id: menuProps.agent.id });
+  // The Slack Orchestrator is the agent that answers Slack conversations, so it has rows to clear.
+  const hasSlackHistory = () =>
+    Boolean(props.onHideMessagingThreads) &&
+    (props.messagingThreads ?? []).some((thread) => thread.agentId === menuProps.agent.id);
   return (
     <ContextMenu.Portal>
       <ContextMenu.Content class="agent-context-menu" aria-label={t("sidebar.agentMenu.label")}>
@@ -44,6 +48,12 @@ export function SidebarAgentContextMenu(menuProps: { agent: AgentProfile; pinned
                 ? t("sidebar.agentMenu.duplicating")
                 : t("sidebar.agentMenu.duplicate")}
             </span>
+          </ContextMenu.Item>
+        </Show>
+        <Show when={hasSlackHistory()}>
+          <ContextMenu.Item onSelect={() => openDelete("history", menuProps.agent.id)}>
+            <Eraser class="agent-context-icon size-4" aria-hidden="true" />
+            <span>{t("sidebar.clearHistory.action")}</span>
           </ContextMenu.Item>
         </Show>
         <Show when={props.deleteSupported !== false}>

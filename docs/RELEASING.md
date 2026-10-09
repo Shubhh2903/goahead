@@ -6,7 +6,7 @@ The mobile workflow is separate from the desktop tag release described below.
 
 GoAhead updates are published through GitHub Releases and installed with `electron-updater`.
 macOS requires every auto-updatable build to be signed with a Developer ID Application certificate.
-The release workflow also notarizes and staples the macOS application before publishing it. A Windows
+The release workflow also notarizes and staples the macOS application and the DMG before publishing them. A Windows
 x64 tag release is signed with Azure Artifact Signing (see [Windows signing](#windows-signing)). Linux
 releases are unsigned, and the Linux AppImage carries no signature.
 All three platforms must pass before one release is published. A release also requires the pinned
@@ -398,7 +398,13 @@ The workflow:
    architecture builds on its own runner, because the Whisper and remote desktop builds run on the
    build machine. The Host PKG is ARM64 only;
    when `hdiutil create` fails with "Device not configured" or "Resource busy", it builds again,
-   up to 3 attempts, because that runner error is not caused by the app;
+   up to 3 attempts, because that runner error is not caused by the app.
+   electron-builder signs the DMG with the Developer ID Application identity (`dmg.sign: true`) but
+   notarizes only the app. The next step submits the DMG to `notarytool`, staples it, and requires
+   `stapler validate` and `spctl --assess --type open --context context:primary-signature` to pass.
+   Stapling changes the DMG bytes, so `dmg.writeUpdateInfo: false` keeps the DMG out of
+   `latest-mac.yml` and gives it no block map, and the checksums are made after stapling.
+   `dist:mac` passes `--config.mac.identity=null`, so electron-builder does not sign the local DMG;
 5. builds a signed Windows x64 NSIS installer on a GitHub Windows runner (unsigned in a dry run);
 6. builds unsigned Linux x64 and arm64 AppImages on GitHub Ubuntu 24.04 runners of each architecture,
    with the launch check under `xvfb-run`;
@@ -549,11 +555,11 @@ GoAhead-<VERSION>-macos-x64.spdx.json
 GoAhead-<VERSION>-macos-x64.sigstore.json
 ```
 
-The macOS checksum file covers the DMG, ZIP, and Host PKG. The existing provenance step consumes
+The macOS checksum file covers the stapled DMG, ZIP, and Host PKG. The existing provenance step consumes
 that file, so all three artifacts are attested against the same tag, commit, and release run.
 The publish job downloads `release-macos` and `release-macos-x64` and publishes the PKG with the
 other assets. `SHA256SUMS-macos-x64.txt` covers the x64 DMG and ZIP.
-`latest-mac.yml` still describes only Electron application updates; a `.pkg` reference is rejected.
+`latest-mac.yml` lists only the ZIPs. A `.dmg` or `.pkg` reference in it stops the release.
 
 After verifying OpenBot.app, the macOS job:
 

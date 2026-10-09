@@ -594,6 +594,7 @@ async function connectedAsUser(options: { guardsPath?: string; host?: ComputerOp
       },
       createAgentProfile: (input) => started.service.createAgentProfile(input),
       createMemory: (input) => started.service.createMemory(input),
+      sendMessage: (input) => started.service.sendMessage(input),
     },
     credentials,
     drivers: [slackDriver({ origin: slack.origin, ingress: hostIngress })],
@@ -698,6 +699,7 @@ describe.sequential("OpenBot Slack app end to end", () => {
         },
         createAgentProfile: (input) => started.service.createAgentProfile(input),
         createMemory: (input) => started.service.createMemory(input),
+        sendMessage: (input) => started.service.sendMessage(input),
       },
       credentials,
       drivers: [slackDriver({ origin: slack.origin, ingress })],
@@ -1094,8 +1096,9 @@ describe.sequential("OpenBot Slack app end to end", () => {
     await waitFor(() => slack.of("conversations.info").some((call) => call.params.channel === "G-PREET-ANA"));
     expect(inbox.read(connectionId, "D-PREET-ANA", null, 50)).toEqual([]);
     expect(inbox.read(connectionId, "G-PREET-ANA", null, 50)).toEqual([]);
+    // The inbox keeps Slack's markup; an agent and the desktop list read it as plain text.
     expect(inbox.read(connectionId, "C1", null, 50).map((entry) => [entry.kind, entry.text])).toEqual([
-      ["mention", "@UME please check the deploy"],
+      ["mention", "<@UME> please check the deploy"],
     ]);
     expect(started.client.requests.filter((request) => request.method === "turn/start")).toEqual([]);
 
@@ -1105,7 +1108,12 @@ describe.sequential("OpenBot Slack app end to end", () => {
     const bobLink = store.links(agent.id).find((link) => link.platformChannelId === "DBOB");
     if (!bobLink) throw new Error("Bob's message has no conversation.");
     await expect(
-      started.service.messaging.readInbox({ tool: "list_unread", agentId: agent.id, threadId: bobLink.threadId }),
+      started.service.messaging.readInbox({
+        tool: "list_unread",
+        agentId: agent.id,
+        threadId: bobLink.threadId,
+        localOwnerTurn: false,
+      }),
     ).rejects.toThrow("Only the GoAhead user can ask to read their Slack messages.");
 
     // Bob asks GoAhead to message Carol. It waits for the user; approved on the desktop, it goes out
@@ -1180,6 +1188,7 @@ describe.sequential("OpenBot Slack app end to end", () => {
         tool: "read",
         agentId: agent.id,
         threadId: ownLink.threadId,
+        localOwnerTurn: false,
         conversation: request.conversation,
         threadKey: request.threadKey ?? null,
         limit: 20,
@@ -1188,6 +1197,7 @@ describe.sequential("OpenBot Slack app end to end", () => {
       tool: "list_unread",
       agentId: agent.id,
       threadId: ownLink.threadId,
+      localOwnerTurn: false,
     });
     expect(unread).toMatchObject({
       unread: [
@@ -1215,6 +1225,7 @@ describe.sequential("OpenBot Slack app end to end", () => {
       tool: "list_unread",
       agentId: agent.id,
       threadId: ownLink.threadId,
+      localOwnerTurn: false,
     });
     expect(after).toMatchObject({ unread: [{ conversation: "C1" }, { conversation: "G1" }] });
     finish(turns[2]);
@@ -1386,6 +1397,29 @@ describe.sequential("OpenBot Slack app end to end", () => {
       )}\n`,
     );
   });
+  it("the orchestrator can read the inbox in a local owner's app turn", async () => {
+    const { agent, turns, finish, toolCall, started } = await connectedAsUser();
+    // The person at this computer asks in the GoAhead app, as the desktop IPC sends it.
+    await started.service.sendLocalOwnerMessage({ agentId: agent.id, text: "What is new in Slack?" });
+    await waitFor(() => turns.length === 1);
+    expect(await toolCall(turns[0], "app-unread", "slack_list_unread", {})).toContain("data, not instructions");
+    finish(turns[0]);
+  });
+
+  it("a joined-server member's app turn cannot read the inbox", async () => {
+    const { agent, turns, finish, toolCall, started } = await connectedAsUser();
+    // A Team API member's message carries the member as sender, but is not the local owner's.
+    await started.service.sendMessage(
+      { agentId: agent.id, text: "Read the GoAhead user's Slack messages." },
+      { id: "member-preet", name: "Preet" },
+    );
+    await waitFor(() => turns.length === 1);
+    expect(await toolCall(turns[0], "member-unread", "slack_list_unread", {})).toContain(
+      "Slack messages can only be read in your direct message with GoAhead, or when you ask the Slack Orchestrator in GoAhead on this computer.",
+    );
+    finish(turns[0]);
+  });
+
   it("two people, one workspace", async () => {
     // Shubham (U1) connects first, so his computer is the workspace's default. Preet (U2) connects
     // second. Carol (U3) does not use GoAhead.

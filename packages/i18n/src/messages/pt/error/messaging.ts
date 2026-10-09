@@ -20,7 +20,8 @@ export const messages = {
   "error.messaging.sendQuietHours":
     "Horário de silêncio: o GoAhead não envia mensagens do Slack até {time}. O rascunho aguarda.",
   "error.messaging.threadUnavailable": "Esta conversa do Slack não está disponível.",
-  "error.messaging.inboxNeedsSlack": "As mensagens do Slack só podem ser lidas na sua mensagem direta com o GoAhead.",
+  "error.messaging.inboxNeedsSlack":
+    "As mensagens do Slack só podem ser lidas na sua mensagem direta com o GoAhead ou quando você pede ao Slack Orchestrator no GoAhead neste computador.",
   "error.messaging.inboxNeedsUser":
     "Conecte o espaço de trabalho do Slack como você no GoAhead antes que os agentes possam ler suas mensagens do Slack.",
   "error.messaging.inboxOwnerOnly": "Só o usuário do GoAhead pode pedir para ler as mensagens do Slack dele.",

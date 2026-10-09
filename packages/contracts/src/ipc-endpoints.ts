@@ -60,10 +60,13 @@ import type {
   PublishAgentTemplateInput,
 } from "./ipc-agent-templates";
 import type {
+  AgentProjectFolderState,
   AgentSummary,
   AvatarImageInput,
   CreateAgentInput,
   DuplicateAgentResult,
+  RemoveAgentProjectFolderInput,
+  RenameAgentProjectFolderInput,
   SetAgentAvatarInput,
   UpdateAgentInput,
 } from "./ipc-agents";
@@ -174,6 +177,7 @@ import type {
   SetDynamicIslandPreferenceInput,
 } from "./ipc-dynamic-island";
 import type { GitHubConnectorRepositories, GitHubConnectorStatus } from "./ipc-github-connector";
+import type { AgentHandoff, AgentHandoffsChanged } from "./ipc-handoffs";
 import type { HostAnalytics, HostAnalyticsInput } from "./ipc-host-analytics";
 import type {
   DeleteHostedSiteInput,
@@ -204,7 +208,10 @@ import type {
   AddSlackOrchestratorInput,
   AddSlackOrchestratorResult,
   AnswerMessagingDraftInput,
+  AskOrchestratorAboutInboxInput,
+  AskOrchestratorAboutInboxResult,
   HandOverSlackDefaultInput,
+  HideMessagingThreadsInput,
   MarkMessagingThreadReadInput,
   MessagingDraft,
   MessagingInboxChanged,
@@ -616,6 +623,8 @@ export const IPC_ENDPOINTS = {
     listThreads: request<undefined, MessagingThreadSummary[]>()("messaging:list-threads"),
     readThreadPage: request<MessagingThreadPageInput, ConversationPage>()("messaging:read-thread-page"),
     markThreadRead: request<MarkMessagingThreadReadInput, ConversationReadState>()("messaging:mark-thread-read"),
+    // Hides conversations from the sidebar until a newer message arrives. Nothing is deleted.
+    hideThreads: request<HideMessagingThreadsInput, void>()("messaging:hide-threads"),
     threadsChanged: event<MessagingThreadsChanged>()("messaging:threads-changed"),
     // The channels the person picks for GoAhead's local inbox. Listing them reads Slack as the person.
     listSlackChannels: request<SlackWorkspaceInput, SlackChannelList>()("messaging:list-slack-channels"),
@@ -634,6 +643,10 @@ export const IPC_ENDPOINTS = {
     // A reply that the person types in an inbox conversation. It goes out as the person, with no
     // approval; pause, quiet hours and the hourly limit hold agent sends only.
     sendInboxReply: request<SendInboxReplyInput, void>()("messaging:send-inbox-reply"),
+    // An inbox text that starts with `@chief`. It goes to the Slack Orchestrator, never to Slack.
+    askOrchestratorAboutInbox: request<AskOrchestratorAboutInboxInput, AskOrchestratorAboutInboxResult>()(
+      "messaging:ask-orchestrator-about-inbox",
+    ),
     // Whether this computer answers the workspace's people who do not use GoAhead, and to whom its
     // owner can hand that over.
     getSlackRouting: request<SlackRoutingWorkspaceInput, SlackRoutingStatus>()("messaging:get-slack-routing"),
@@ -642,6 +655,11 @@ export const IPC_ENDPOINTS = {
   // The server name, logo and app update of one server's host. `host.updateIdentity` and `update`
   // reach this computer only; these take the server, so a remote admin reaches the host. The
   // identity result is the server as the list shows it after the change.
+  // The work this computer's agents gave to teammates. Local only: no Team API protocol carries it.
+  handoffs: {
+    list: request<string, AgentHandoff[]>()("handoffs:list"),
+    changed: event<AgentHandoffsChanged>()("handoffs:changed"),
+  },
   hostAdmin: {
     updateIdentity: scopedRequest<UpdateHostIdentityInput, ServerSummary, "required">()("host-admin:update-identity"),
     getUpdateStatus: scopedQuery<HostUpdateStatus, "required">()("host-admin:get-update-status"),
@@ -786,6 +804,16 @@ export const IPC_ENDPOINTS = {
     updateAgent: scopedRequest<UpdateAgentInput, AgentSummary>()("agent:update"),
     setAvatar: scopedRequest<SetAgentAvatarInput, AgentSummary>()("agent:set-avatar"),
     deleteAgent: scopedRequest<string, void>()("agent:delete"),
+    // Project folders are local-only. Main opens the folder picker for `addProjectFolder`, so a stored
+    // path is always one the user picked; the payload is only the agent id. `null` means cancelled.
+    listProjectFolders: scopedRequest<string, AgentProjectFolderState[]>()("agent:list-project-folders"),
+    addProjectFolder: scopedRequest<string, AgentProjectFolderState[] | null>()("agent:add-project-folder"),
+    renameProjectFolder: scopedRequest<RenameAgentProjectFolderInput, AgentProjectFolderState[]>()(
+      "agent:rename-project-folder",
+    ),
+    removeProjectFolder: scopedRequest<RemoveAgentProjectFolderInput, AgentProjectFolderState[]>()(
+      "agent:remove-project-folder",
+    ),
     readConversation: scopedRequest<string, ConversationWithReadState>()("agent:read-conversation"),
     readConversationPage: scopedRequest<ReadConversationPageInput, ConversationPage>()("agent:read-conversation-page"),
     searchConversationMessages: scopedRequest<SearchConversationMessagesInput, ConversationSearchPage>()(

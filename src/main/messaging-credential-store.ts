@@ -81,8 +81,16 @@ export class MessagingCredentialStore implements MessagingCredentials {
     });
   }
 
-  async clear(connectionId: string): Promise<void> {
-    await this.#edit((next) => next.delete(connectionId));
+  /**
+   * Removes one connection's tokens. A file that cannot be decrypted is left unchanged unless the
+   * caller passes `discardUnreadable`: the file is then removed or rewritten without its unreadable
+   * content. The unreadable entries of other connections are lost too, but they cannot be decrypted
+   * on this computer anyway.
+   */
+  async clear(connectionId: string, options: { discardUnreadable?: boolean } = {}): Promise<void> {
+    await this.#edit(
+      (next) => next.delete(connectionId) || (options.discardUnreadable === true && this.#loadError !== null),
+    );
   }
 
   async retain(connectionIds: ReadonlySet<string>): Promise<void> {

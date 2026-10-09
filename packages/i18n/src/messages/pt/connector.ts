@@ -87,6 +87,8 @@ export const messages = {
   "connector.slack.workspaceDescription": "As pessoas mencionam @GoAhead ou enviam uma mensagem direta para ele.",
   "connector.slack.connectedAs":
     "Conectado como @{name}. As pessoas mencionam @GoAhead ou enviam uma mensagem direta para ele.",
+  "connector.slack.accessUnreadable":
+    "O GoAhead não consegue ler o acesso ao Slack salvo neste computador. Desconecte e conecte de novo.",
   "connector.slack.connectAsYou":
     "Reconecte para também conectar como você: seus agentes leem o que você vê e respondem como você depois da sua aprovação.",
   "connector.slack.disconnectWorkspace": "Desconectar",

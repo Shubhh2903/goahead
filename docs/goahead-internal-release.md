@@ -311,14 +311,16 @@ reads a route ticket that has only a person route as "this host owns the workspa
    branch and push.
 4. Run `bun run release:preflight`. It checks the branch, the tag and the release secrets.
 5. **[Human]** Tag and push: `git tag -a vX.Y.Z -m "GoAhead vX.Y.Z"` and `git push origin vX.Y.Z`. The
-   tag workflow builds, signs and notarizes the DMG.
+   tag workflow builds, signs and notarizes the app and the DMG, and staples both.
 
 ## 8. Check the release **[Human]**
 
 - [ ] `https://goahead-api.multicodegenius.com/health/live` and
       `https://goahead-signal.multicodegenius.com/health/ready` return `200`.
 - [ ] The DMG opens with no Gatekeeper warning: `spctl --assess --type open --context
-      context:primary-signature -v GoAhead-*.dmg` says `accepted`.
+      context:primary-signature -v GoAhead-*.dmg` says `accepted` and
+      `xcrun stapler validate GoAhead-*.dmg` says `The validate action worked!`. The release job runs
+      the same checks; a release made before this check (v0.31.0) has an unsigned DMG.
 - [ ] The app is named GoAhead in the Dock and in the menu bar.
 - [ ] Sign-in sends the one-time code from the company's email address.
 - [ ] Server settings > General: give this computer a server name and save it **before** connecting

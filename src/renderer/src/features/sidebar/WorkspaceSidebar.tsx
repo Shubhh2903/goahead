@@ -175,6 +175,7 @@ export function WorkspaceSidebar(props: { peopleEnabled: boolean }) {
       messagingThreads={messagingThreads.state.threads}
       activeMessagingThreadId={messagingThreads.state.selectedId}
       onSelectMessagingThread={messagingThreads.open}
+      onHideMessagingThreads={messagingThreads.hideThreads}
       messagingInbox={messagingInboxRow()}
       messagingInboxActive={messagingThreads.inbox.open}
       onSelectMessagingInbox={messagingThreads.openInbox}

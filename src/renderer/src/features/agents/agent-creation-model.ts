@@ -47,3 +47,24 @@ export function resolveCreationModel(
   }
   return null;
 }
+
+/** Sonnet 5.5 first; until the catalog lists it, the newest Sonnet it lists. */
+const ORCHESTRATOR_MODELS = /^claude-sonnet-(\d+)(?:-(\d+))?$/u;
+
+/**
+ * The model a new Slack Orchestrator starts on: Claude Sonnet, which routes and drafts fast enough
+ * for chat, when the catalog lists it; else the model a new agent starts on.
+ */
+export function resolveOrchestratorModel(
+  setup: CreationPreference | null,
+  modelOptions: AgentModelOption[],
+): CreationModelChoice | null {
+  const sonnet = modelOptions
+    .filter((option) => option.provider === "claude" && ORCHESTRATOR_MODELS.test(option.id))
+    .map((option) => {
+      const [, major = "0", minor = "0"] = ORCHESTRATOR_MODELS.exec(option.id) ?? [];
+      return { option, rank: Number(major) * 100 + Number(minor) };
+    })
+    .sort((left, right) => right.rank - left.rank)[0]?.option;
+  return sonnet ? { provider: "claude", model: sonnet.id } : resolveCreationModel(setup, modelOptions);
+}

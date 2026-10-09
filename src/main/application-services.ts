@@ -55,6 +55,7 @@ import { AgentStore } from "../backend/agent-store";
 import { BrowserHost } from "../backend/browser-host";
 import { MailboxStore } from "../backend/mailbox-store";
 import { McpOAuth } from "../backend/mcp-oauth-provider";
+import { MessagingHiddenThreadStore } from "../backend/messaging/messaging-hidden-threads";
 import { MessagingSendGuardStore } from "../backend/messaging/messaging-send-guards";
 import { MessagingService } from "../backend/messaging/messaging-service";
 import { slackDriver } from "../backend/messaging/slack/slack-driver";
@@ -203,6 +204,7 @@ const DYNAMIC_ISLAND_PREFERENCE_FILE = "openbot-dynamic-island-preference-v1.jso
 const BROWSER_STATE_FILE = "openbot-browser-state-v1.json";
 const SIDEBAR_LAYOUT_FILE = "openbot-sidebar-layout-v1.json";
 const MESSAGING_SEND_GUARDS_FILE = "openbot-messaging-send-guards-v1.json";
+const MESSAGING_HIDDEN_THREADS_FILE = "openbot-messaging-hidden-threads-v1.json";
 const TEAM_FILE = "openbot-team-server-v1.json";
 /** One host per account. The v1 file above stays as the last build without accounts left it. */
 const TEAM_FILE_V2 = "openbot-team-server-v2.json";
@@ -992,13 +994,22 @@ export async function createApplicationServices({
       },
       createAgentProfile: (input) => service.createAgentProfile(input),
       createMemory: (input) => service.createMemory(input),
+      sendMessage: (input) => service.sendMessage(input, host.conversationSender()),
+      projectMap: () => service.projectMap(),
+      handoffRecords: (agentId) => service.handoffRecords(agentId),
+      onHandoffs: (listener) => {
+        service.on("handoffs", listener);
+        return () => service.off("handoffs", listener);
+      },
     },
     credentials: messagingCredentials,
     drivers: [slackDriver({ ingress: slackIngress })],
     downloadsRoot: join(app.getPath("userData"), "messaging-downloads"),
+    inboxFilesRoot: join(app.getPath("userData"), "messaging-files"),
     ingress: slackIngress,
     sidebar: sidebarLayout,
     sendGuards: new MessagingSendGuardStore(join(app.getPath("userData"), MESSAGING_SEND_GUARDS_FILE)),
+    hiddenThreads: new MessagingHiddenThreadStore(join(app.getPath("userData"), MESSAGING_HIDDEN_THREADS_FILE)),
     slackApp: {
       authorize: (input) => {
         const hostId = slackIngressHostId();
@@ -1487,7 +1498,7 @@ export async function createApplicationServices({
       remoteServers,
     });
   }
-  configureAttachmentProtocol({ mailbox, agents: service, remoteServers });
+  configureAttachmentProtocol({ mailbox, agents: service, remoteServers, slackInboxFiles: messaging });
   configureServerLogoProtocols({ teamStore, remoteServers });
   // After the servers: the view it opens belongs to one of them, and it has to stop before they do.
   const browserView = new BrowserViewClient({

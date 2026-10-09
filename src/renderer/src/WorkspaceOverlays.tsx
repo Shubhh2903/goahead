@@ -9,7 +9,7 @@ import { actionToast } from "./action-toast";
 import { desktopAnalytics } from "./analytics";
 import { appPort } from "./app-port";
 import { useAuth } from "./features/account/account-context";
-import { resolveCreationModel } from "./features/agents/agent-creation-model";
+import { resolveOrchestratorModel } from "./features/agents/agent-creation-model";
 import { useAgents } from "./features/agents/agents-context";
 import { createGitHubConnector, type GitHubConnectorController } from "./features/connectors/github-connector";
 import {
@@ -355,7 +355,7 @@ function ServerSettings(props: {
       return {
         modelOptions: options,
         agentStatus: agentStatus(),
-        initial: resolveCreationModel(serverSetupChoice() ?? setupState(), options),
+        initial: resolveOrchestratorModel(serverSetupChoice() ?? setupState(), options),
         customProviders: localEndpoints.customProviders(),
         customAgents: localAgents.customAgents(),
       };

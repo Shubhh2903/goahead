@@ -765,6 +765,25 @@ describe("AgentStore", () => {
     );
   });
 
+  it("a duplicated agent keeps its project folders", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openbot-store-duplicate-folders-"));
+    temporaryRoots.push(root);
+    const userData = join(root, "user-data");
+    const home = join(root, "home");
+    const store = new AgentStore(userData, home);
+    await store.initialize();
+    const source = await store.getOrCreate("chief");
+    const project = join(root, "website");
+    await mkdir(project);
+    store.addProjectFolder(source.id, project);
+
+    const duplicate = await store.duplicateAgent(source.id);
+
+    expect(store.projectFolders(duplicate.id).map(({ name, path }) => ({ name, path }))).toEqual([
+      { name: "website", path: project },
+    ]);
+  });
+
   it("removes a durable pending duplicate during restart recovery", async () => {
     const root = await mkdtemp(join(tmpdir(), "openbot-store-duplicate-recovery-"));
     temporaryRoots.push(root);

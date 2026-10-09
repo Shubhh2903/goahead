@@ -103,6 +103,8 @@ export const messages = defineMessages("connector", {
   "connector.slack.workspaceDescription": "People mention @GoAhead or send it a direct message.",
   // {name} is the Slack handle of the person who connected the workspace.
   "connector.slack.connectedAs": "Connected as @{name}. People mention @GoAhead or send it a direct message.",
+  "connector.slack.accessUnreadable":
+    "GoAhead cannot read the saved Slack access on this computer. Disconnect, then connect again.",
   "connector.slack.connectAsYou":
     "Reconnect to also connect as you, so your agents can read what you see and reply as you after you approve.",
   "connector.slack.disconnectWorkspace": "Disconnect",

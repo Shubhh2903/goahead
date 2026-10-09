@@ -8,7 +8,9 @@ import { handler, type IpcGroupHandlers, payloadHandler } from "./define-ipc-gro
 import {
   parseAddSlackOrchestratorInput,
   parseAnswerMessagingDraftInput,
+  parseAskOrchestratorAboutInboxInput,
   parseHandOverSlackDefaultInput,
+  parseHideMessagingThreadsInput,
   parseMarkMessagingThreadReadInput,
   parseMessagingThreadPageInput,
   parseReadInboxConversationInput,
@@ -30,6 +32,7 @@ interface MessagingIpcDependencies {
     | "addOrchestrator"
     | "threadSummaries"
     | "threadAgent"
+    | "hideThreads"
     | "listSlackChannels"
     | "setSlackWatchedChannels"
     | "listDrafts"
@@ -38,6 +41,7 @@ interface MessagingIpcDependencies {
     | "listInbox"
     | "readInboxConversation"
     | "sendInboxReply"
+    | "askOrchestratorAboutInbox"
     | "slackRouting"
     | "handOverSlackDefault"
   >;
@@ -73,6 +77,7 @@ export function messagingIpcHandlers({
           unreadCount: agents.threadReadState(readerId, summary.threadId).unreadCount,
         }));
       }),
+      hideThreads: payloadHandler(parseHideMessagingThreadsInput, ({ threadIds }) => messaging.hideThreads(threadIds)),
       readThreadPage: payloadHandler(parseMessagingThreadPageInput, ({ threadId, anchor, limit }) =>
         agents.readThreadPageFor(messaging.threadAgent(threadId), threadId, host.agentReaderId(), anchor, limit),
       ),
@@ -89,6 +94,10 @@ export function messagingIpcHandlers({
         messaging.readInboxConversation(workspaceId, conversation, limit),
       ),
       sendInboxReply: payloadHandler(parseSendInboxReplyInput, (input) => messaging.sendInboxReply(input)),
+      // Never posts to Slack: the instruction goes to the orchestrator's own conversation.
+      askOrchestratorAboutInbox: payloadHandler(parseAskOrchestratorAboutInboxInput, (input) =>
+        messaging.askOrchestratorAboutInbox(input),
+      ),
       getSlackRouting: payloadHandler(parseSlackWorkspaceInput, ({ workspaceId }) =>
         messaging.slackRouting(workspaceId),
       ),

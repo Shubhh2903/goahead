@@ -2,7 +2,9 @@
 
 import {
   type AddSlackOrchestratorResult,
+  type AskOrchestratorAboutInboxResult,
   isAddSlackOrchestratorResult,
+  isAskOrchestratorAboutInboxResult,
   isMessagingDrafts,
   isMessagingInbox,
   isMessagingInboxChanged,
@@ -26,6 +28,12 @@ import {
 /** The orchestrator that main created, and the sidebar section it went to. */
 export function decodeAddSlackOrchestratorReply(value: unknown): AddSlackOrchestratorResult {
   if (!isAddSlackOrchestratorResult(value)) throw new Error("Invalid Slack orchestrator response.");
+  return value;
+}
+
+/** The orchestrator that got an `@chief` instruction from the inbox. */
+export function decodeAskOrchestratorAboutInboxReply(value: unknown): AskOrchestratorAboutInboxResult {
+  if (!isAskOrchestratorAboutInboxResult(value)) throw new Error("Invalid Slack Orchestrator response.");
   return value;
 }
 

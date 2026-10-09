@@ -1,8 +1,10 @@
 import {
   type AccountUsage,
   type AgentEvent,
+  type AgentHandoff,
   type AgentMemory,
   type AgentModelOption,
+  type AgentProjectFolderState,
   type AgentProviderId,
   type AgentStatus,
   type AgentSubmission,
@@ -83,6 +85,7 @@ import {
   STORY_AGENT_SUBMISSIONS,
   STORY_AGENT_SUMMARIES,
   STORY_APP_INFO,
+  STORY_HANDOFFS,
   STORY_HOSTED_SITES,
   STORY_MARKETPLACE_AGENT_DETAILS,
   STORY_MARKETPLACE_AGENTS,
@@ -100,6 +103,7 @@ import { createMockBilling } from "./mock-billing";
 import { createMockBrowser, type MockBrowserOptions } from "./mock-browser";
 import { createMockChannels } from "./mock-channels";
 import { createMockGitHubConnector } from "./mock-github-connector";
+import { createMockHandoffs } from "./mock-handoffs";
 import { createMockHostUpdate, type MockHostUpdateOptions } from "./mock-host-update";
 import { createMockHostedServers } from "./mock-hosted-servers";
 import { createMockMessaging } from "./mock-messaging";
@@ -135,6 +139,8 @@ export interface MockOpenBotOptions
   tables?: SharedTable[];
   routines?: Record<string, Routine[]>;
   customProviders?: CustomProviderSummary[];
+  /** The hand-offs each agent sent. The story's when the preview uses the story conversations. */
+  handoffs?: Record<string, AgentHandoff[]>;
 }
 
 /** Custom models compose as `<provider>/<model>`; preview builds `listModels()` from these. */
@@ -175,6 +181,7 @@ export interface MockOpenBotControls {
   emitInvite: (inviteUrl: string) => void;
   emitHostStatus: (status: HostStatus) => void;
   emitRemoteDesktopSessions: (sessions: RemoteDesktopSession[]) => void;
+  setHandoffs: (agentId: string, handoffs: AgentHandoff[]) => void;
   dispose: () => void;
 }
 
@@ -222,6 +229,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
   let dynamicIslandPresentation: DynamicIslandPresentation = { serverId: "local", mode: "idle" };
   const agentStatus = clone(options.agentStatus ?? STORY_AGENT_STATUS);
   let agents = clone(options.agents ?? STORY_AGENT_SUMMARIES);
+  const projectFolders = new Map<string, AgentProjectFolderState[]>();
   let mcpServers = clone(STORY_MCP_SERVERS);
   let sidebarLayout: SidebarLayoutSnapshot = {
     revision: 0,
@@ -416,6 +424,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
   const { installedSkills, readInstalledSkills } = mockSkills;
   const mockBrowser = createMockBrowser(options, runtime, emitAgentEvent);
   const mockTeam = createMockTeam(options, runtime, emitAgentEvent, () => agents);
+  const mockHandoffs = createMockHandoffs(options.handoffs ?? (options.snapshots ? {} : STORY_HANDOFFS));
 
   const api: OpenBotDesktopApi = {
     getAppInfo: async () => clone(appInfo),
@@ -693,6 +702,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     // Preview has one host, so every server answers for the same agents.
     // The Slack Orchestrator of the preview is its first agent.
     messaging: createMockMessaging(() => agents[0]?.id ?? "preview-agent"),
+    handoffs: mockHandoffs.api,
     // Preview has one host, so every server answers from the same providers as this computer.
     providerAdmin: {
       // A host signs Claude in with a code its page shows, which the user pastes back, and Cursor
@@ -1139,7 +1149,37 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
         emitAgentEvent({ type: "agents-changed", agents });
         return clone(updated);
       },
+      listProjectFolders: async (agentId: string) => clone(projectFolders.get(agentId) ?? []),
+      // The real picker runs in main. The preview adds the next sample folder instead.
+      addProjectFolder: async (agentId: string) => {
+        const current = projectFolders.get(agentId) ?? [];
+        const index = current.length + 1;
+        const next = [
+          ...current,
+          {
+            id: crypto.randomUUID(),
+            name: `project-${index}`,
+            path: `/Users/preview/Projects/project-${index}`,
+            missing: false,
+          },
+        ];
+        projectFolders.set(agentId, next);
+        return clone(next);
+      },
+      renameProjectFolder: async ({ agentId, folderId, name }) => {
+        const next = (projectFolders.get(agentId) ?? []).map((folder) =>
+          folder.id === folderId ? { ...folder, name: name.trim() } : folder,
+        );
+        projectFolders.set(agentId, next);
+        return clone(next);
+      },
+      removeProjectFolder: async ({ agentId, folderId }) => {
+        const next = (projectFolders.get(agentId) ?? []).filter((folder) => folder.id !== folderId);
+        projectFolders.set(agentId, next);
+        return clone(next);
+      },
       deleteAgent: async (agentId) => {
+        projectFolders.delete(agentId);
         agents = agents.filter((agent) => agent.id !== agentId);
         queues.delete(agentId);
         memories.delete(agentId);
@@ -1722,6 +1762,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     emitInvite: mockTeam.emitInvite,
     emitHostStatus: mockTeam.emitHostStatus,
     emitRemoteDesktopSessions: mockTeam.emitRemoteDesktopSessions,
+    setHandoffs: mockHandoffs.setHandoffs,
     dispose: () => {
       for (const timer of timers) clearTimeout(timer);
       timers.clear();

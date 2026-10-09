@@ -86,6 +86,7 @@
     "./features/conversation/ChatActionCard": "./src/features/conversation/ChatActionCard.tsx",
     "./features/conversation/MarketplaceSuggestionCard": "./src/features/conversation/MarketplaceSuggestionCard.tsx",
     "./features/conversation/ChatActionMarker": "./src/features/conversation/ChatActionMarker.tsx",
+    "./features/conversation/HandoffCard": "./src/features/conversation/HandoffCard.tsx",
     "./features/conversation/ChatRowBoundary": "./src/features/conversation/ChatRowBoundary.tsx",
     "./features/conversation/ChatMessageRow": "./src/features/conversation/ChatMessageRow.tsx",
     "./features/conversation/ChatSearch": "./src/features/conversation/ChatSearch.tsx",
@@ -163,6 +164,7 @@
     "./features/marketplace/marketplace-view": "./src/features/marketplace/marketplace-view.ts",
     "./features/messaging/SlackDraftCard": "./src/features/messaging/SlackDraftCard.tsx",
     "./features/messaging/SlackInboxList": "./src/features/messaging/SlackInboxList.tsx",
+    "./features/messaging/SlackMessageContent": "./src/features/messaging/SlackMessageContent.tsx",
     "./features/settings/LogoColorPicker": "./src/features/settings/LogoColorPicker.tsx",
     "./features/settings/SoundThemePicker": "./src/features/settings/SoundThemePicker.tsx",
     "./features/settings/SendShortcutSelect": "./src/features/settings/SendShortcutSelect.tsx",
@@ -293,6 +295,7 @@
     "./features/conversation/conversation.css": "./src/features/conversation/conversation.css",
     "./features/files/files.css": "./src/features/files/files.css",
     "./features/import/agent-import.css": "./src/features/import/agent-import.css",
+    "./features/conversation/AgentProjectFolders": "./src/features/conversation/AgentProjectFolders.tsx",
     "./features/conversation/AgentSettingsPanel": "./src/features/conversation/AgentSettingsPanel.tsx",
     "./features/conversation/ConversationHeader": "./src/features/conversation/ConversationHeader.tsx"
   },

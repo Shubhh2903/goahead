@@ -1,7 +1,8 @@
 import { tmpdir } from "node:os";
 import { type AgentSummary, workspaceAccessEnforced } from "@openbot/contracts/ipc";
+import { existingProjectFolders } from "./project-folders";
 
-type SandboxedAgent = Pick<AgentSummary, "access" | "provider" | "workspacePath">;
+type SandboxedAgent = Pick<AgentSummary, "access" | "provider" | "workspacePath" | "projectFolders">;
 
 /**
  * The sandbox mode sent with each thread. A `workspace` agent can write only in its workspace, the
@@ -17,9 +18,17 @@ export function codexSandboxMode(agent: SandboxedAgent): "workspace-write" | "da
   return workspaceAccessEnforced(agent) ? "workspace-write" : "danger-full-access";
 }
 
-/** The folders a Workspace only agent may write, besides the temporary folders. */
-export function workspaceWritableRoots(agent: Pick<AgentSummary, "workspacePath">, sharedRoot: string) {
-  return [agent.workspacePath, sharedRoot];
+/**
+ * The folders a Workspace only agent may write, besides the temporary folders. The same list is each
+ * provider's working folders: Claude and the ACP clients get it as additional directories, and
+ * `ProviderRuntime` confines a `confined-process` provider to it. Project folders that no longer exist
+ * are left out.
+ */
+export function workspaceWritableRoots(
+  agent: Pick<AgentSummary, "workspacePath" | "projectFolders">,
+  sharedRoot: string,
+) {
+  return [agent.workspacePath, sharedRoot, ...existingProjectFolders(agent).map((folder) => folder.path)];
 }
 
 export type CodexSandboxPolicy =

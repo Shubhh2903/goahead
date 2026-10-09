@@ -50,6 +50,7 @@ import { customProviderIpcHandlers } from "./ipc/custom-provider-handlers";
 import { registerIpcGroups } from "./ipc/define-ipc-group";
 import { dynamicIslandIpcHandlers } from "./ipc/dynamic-island-handlers";
 import { githubConnectorIpcHandlers } from "./ipc/github-connector-handlers";
+import { handoffIpcHandlers } from "./ipc/handoff-handlers";
 import { hostAdminIpcHandlers } from "./ipc/host-admin-handlers";
 import { hostedServerIpcHandlers } from "./ipc/hosted-server-handlers";
 import { hostedSiteIpcHandlers } from "./ipc/hosted-site-handlers";
@@ -270,6 +271,7 @@ const {
   forwardOnePasswordConnectorStatus,
   forwardMessagingThreadsChanged,
   forwardMessagingInboxChanged,
+  forwardHandoffsChanged,
   forwardHostStatus,
   forwardRemoteDesktopSessions,
   forwardServers,
@@ -541,6 +543,7 @@ function registerIpcHandlers({
       remoteServers,
     }),
     ...messagingIpcHandlers({ messaging, agents: service, host }),
+    ...handoffIpcHandlers({ agents: service }),
     ...mcpServerIpcHandlers({
       service,
       remoteServers,
@@ -558,7 +561,15 @@ function registerIpcHandlers({
       agents: () => service.listAgents(),
       openPath: (path) => shell.openPath(path),
     }),
-    ...agentIpcHandlers({ service, sidebarLayout, host, remoteServers, skills }),
+    ...agentIpcHandlers({
+      service,
+      sidebarLayout,
+      host,
+      remoteServers,
+      skills,
+      getMainWindow,
+      translate: language.translate,
+    }),
     ...browserIpcHandlers({ browserPictureInPicture, browser, remoteServers, browserView }),
   });
 }
@@ -865,6 +876,8 @@ if (!hasSingleInstanceLock) {
       // Internal usage signals for analytics only. They are not agent events, so the renderer and
       // Team API clients never receive them.
       service.on("toolUsage", (usage) => built.analytics.handleToolUsage(usage));
+      // Local only, like the other forwarders here: no Team API client receives hand-offs.
+      service.on("handoffs", (agentId) => forwardHandoffsChanged({ agentId }));
       built.browser.onSiteVisited((visit) => built.analytics.handleSiteVisit(visit));
       sidebarLayout.on("changed", (layout) => forwardAgentEvent("local", { type: "sidebar-layout-changed", layout }));
       built.approvalAutomation.subscribe((preference) => {

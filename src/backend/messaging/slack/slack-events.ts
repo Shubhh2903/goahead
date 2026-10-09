@@ -5,6 +5,7 @@ import {
   type InboundFile,
   type InboundMessage,
   type InboxCandidate,
+  type InboxFile,
 } from "../messaging-types";
 
 /** The Block Kit action ids of the buttons the agent posts. */
@@ -118,10 +119,34 @@ export function slackInboxCandidate(payload: unknown, workspaceId: string, botUs
     threadKey: threadTs,
     place,
     authorId: user,
-    text: plainText(raw, botUserId),
+    // Kept in Slack's markup, so the desktop can show names, links and emoji as Slack does. An agent
+    // and the list preview read it through `plainText`.
+    text: raw,
     sentAt: Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : new Date().toISOString(),
     mentionedUserIds: [...raw.matchAll(/<@([A-Z0-9]+)(?:\|[^>]*)?>/g)].flatMap((match) => (match[1] ? [match[1]] : [])),
+    files: inboxFiles(event.files),
   };
+}
+
+/** The files of an inbox message. Slack's own addresses are kept; each needs the token. */
+function inboxFiles(value: unknown): InboxFile[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isDynamicRecord).flatMap((file: DynamicRecord) => {
+    const url = isString(file.url_private_download) ? file.url_private_download : file.url_private;
+    if (!isString(file.id) || !isString(url)) return [];
+    const thumbnail = [file.thumb_480, file.thumb_360, file.thumb_720].find(isString) ?? null;
+    return [
+      {
+        id: file.id,
+        name: isString(file.name) ? file.name : isString(file.title) ? file.title : file.id,
+        mimeType: isString(file.mimetype) ? file.mimetype : "application/octet-stream",
+        size: isNumber(file.size) ? file.size : 0,
+        url,
+        thumbnailUrl: thumbnail,
+        permalink: isString(file.permalink) ? file.permalink : null,
+      },
+    ];
+  });
 }
 
 /** One `block_actions` payload as a button press on an OpenBot message, or null. */
@@ -180,7 +205,7 @@ export function plainText(text: string, botUserId: string): string {
   return text
     .replaceAll(`<@${botUserId}>`, "")
     .replace(/<@([A-Z0-9]+)(?:\|[^>]*)?>/g, "@$1")
-    .replace(/<#[A-Z0-9]+\|([^>]*)>/g, "#$1")
+    .replace(/<#([A-Z0-9]+)(?:\|([^>]*))?>/g, (_match, id: string, name: string | undefined) => `#${name || id}`)
     .replace(/<!(here|channel|everyone)>/g, "@$1")
     .replace(/<(https?:[^|>]+)\|([^>]+)>/g, "$2 ($1)")
     .replace(/<(https?:[^>]+)>/g, "$1")

@@ -26,6 +26,9 @@ export const INPUT_LIMITS = {
   // full each time, against `ChannelHistory.prepare`'s hard character budget.
   channelMemories: 32,
   agentMemoryText: 500,
+  // Folders on this computer that an agent works in besides its workspace.
+  agentProjectFolders: 10,
+  projectFolderName: 40,
   agentRoutines: 64,
   routineName: 80,
   routineInstruction: 100_000,

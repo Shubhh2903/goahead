@@ -502,7 +502,11 @@ Web API directly.
   mention you, and the channels you pick in Settings > Connectors > Slack, with each author's display
   name. A newly picked channel starts with its newest 15 messages, read from Slack as you. Messages
   older than 30 days are deleted, a channel you remove loses its messages, and disconnect deletes the
-  whole inbox. Agents read the inbox only when you ask in your own direct message with GoAhead. A
+  whole inbox. When you open or answer an inbox conversation in GoAhead, GoAhead also tells Slack, as
+  you, that you read it up to its newest message (`conversations.mark`), so Slack's unread mark
+  matches. A reply that starts with `@chief` is not sent to Slack: it goes, with the conversation's
+  last 20 messages, to the Slack Orchestrator agent on your computer. Agents read the inbox only
+  when you ask in your own direct message with GoAhead. A
   message goes out as you only when you asked for it yourself; when someone else asks, it goes out
   from the GoAhead app after you approve it, and its first line names who asked. A reply that you
   type in the inbox goes to Slack as you, with no approval, and is kept in the audit log. Nothing in
@@ -512,7 +516,10 @@ Web API directly.
   it needs.
 - **Sent to Slack.** The agents' answers and the files they attach, short status posts ("Working on
   it…"), reactions, and approval requests with the command, folder and
-  reason the provider gave, redacted. A failed request posts a fixed sentence, never the provider's
+  reason the provider gave, redacted. While a teammate works on a request from a Slack thread, one
+  status message in that thread names the two agents, the first line of the task (redacted, at most
+  120 characters), and the teammate's current step as a label only: a program name, a file name or a
+  tool name, never its arguments, file contents or output. A failed request posts a fixed sentence, never the provider's
   error.
 
 Anyone who can post in the Slack workspace, guests and Slack Connect members included, can give the

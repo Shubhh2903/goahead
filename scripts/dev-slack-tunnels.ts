@@ -11,6 +11,8 @@
 //
 //   OPENBOT_DEV_SLACK_SIGNING_SECRET='…'   (the development app, api.slack.com/apps > Basic Information)
 //   OPENBOT_DEV_SLACK_APP_ID='A…'          (only for a Slack app of your own; absent, the shared dev app)
+//   OPENBOT_DEV_SLACK_APP_TOKEN='xapp-…'   (the development app's app-level token with `authorizations:read`;
+//                                           Signal asks Slack who may see a message, so DMs need it)
 //
 // A quick tunnel gets a new address at each start, and the Slack app's URLs must follow. A named
 // Cloudflare tunnel on a domain of yours keeps its addresses. Create it once (docs/messaging.md),
@@ -33,6 +35,7 @@ const SLACK_FILE = ".env.slack-dev";
 const SLACK_KEYS = [
   "OPENBOT_DEV_SLACK_SIGNING_SECRET",
   "OPENBOT_DEV_SLACK_APP_ID",
+  "OPENBOT_DEV_SLACK_APP_TOKEN",
   "OPENBOT_DEV_SLACK_TUNNEL",
   "OPENBOT_DEV_SLACK_SIGNAL_HOSTNAME",
   "OPENBOT_DEV_SLACK_API_HOSTNAME",
@@ -111,10 +114,17 @@ export async function attachSlackTunnels(specs: TunnelledSpec[], projectRoot: st
       OPENBOT_REMOTE_SIGNAL_URL: tunnelledSignalUrl,
       // Signal binds each signing secret to its app.
       SLACK_SIGNING_SECRET: `${appId}:${values.OPENBOT_DEV_SLACK_SIGNING_SECRET}`,
+      ...(values.OPENBOT_DEV_SLACK_APP_TOKEN
+        ? { SLACK_APP_TOKEN: `${appId}:${values.OPENBOT_DEV_SLACK_APP_TOKEN}` }
+        : {}),
       SLACK_DEV_PUBLIC_ORIGIN: apiUrl,
       OPENBOT_DEV_SLACK_CALLBACK_PORT: callbackPort,
     };
     for (const spec of specs) Object.assign(spec.env, tunnelled);
+    if (!values.OPENBOT_DEV_SLACK_APP_TOKEN)
+      logger.warn(
+        `OPENBOT_DEV_SLACK_APP_TOKEN is not in ${SLACK_FILE}: Signal cannot route direct messages and inbox messages.`,
+      );
     logger.info(
       `Set the development Slack app's request URL to ${signalUrl}/v1/slack/events and its redirect URL to ${apiUrl}/v2/slack/callback.`,
     );

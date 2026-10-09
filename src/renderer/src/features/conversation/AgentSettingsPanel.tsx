@@ -1,6 +1,11 @@
-import { agentAutomationAllowed, type MarketplaceSkillDetail } from "@openbot/contracts/ipc";
+import {
+  type AgentProjectFolderState,
+  agentAutomationAllowed,
+  type MarketplaceSkillDetail,
+} from "@openbot/contracts/ipc";
 import { SettingsLinkGroup, SettingsLinkRow } from "@openbot/ui/components/SettingsPanel";
 import type { AgentProfile } from "@openbot/ui/data";
+import { AgentProjectFolders } from "@openbot/ui/features/conversation/AgentProjectFolders";
 import SharedAgentSettingsPanel, {
   type AgentSettingsPanelProps as SharedAgentSettingsPanelProps,
 } from "@openbot/ui/features/conversation/AgentSettingsPanel";
@@ -23,8 +28,10 @@ import { SharedTablesModal } from "./SharedTablesModal";
 interface AgentSettingsPanelProps
   extends Omit<
     SharedAgentSettingsPanelProps,
-    "width" | "onResize" | "onResizeEnd" | "links" | "detailOpen" | "children"
+    "width" | "onResize" | "onResizeEnd" | "links" | "detailOpen" | "children" | "projectFolders"
   > {
+  /** The server on this computer that runs the agent. Project folders are local-only, so a remote server has none. */
+  projectFoldersServerId?: string;
   remoteClient?: boolean;
   /** The web client's host calls. A remote client shows only Skills and Tables, and only with these. */
   adminCalls?: ConversationRuntime["admin"];
@@ -51,8 +58,14 @@ interface AgentSettingsPanelProps
 
 export type { AgentSkillsMode };
 
+interface ProjectFoldersDraft {
+  items: AgentProjectFolderState[];
+  busy: boolean;
+  error: string | null;
+}
+
 export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
-  const { t } = useText();
+  const { t, errorMessage } = useText();
   const [panelWidth, setPanelWidth] = createSettingsPanelWidth();
   const [draft, setDraft] = createStore({
     tables: { count: 0, open: false },
@@ -61,6 +74,40 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     files: { open: false },
     skills: { count: 0, open: false, reopenAfterMarketplace: false },
   });
+  const [projectFolders, setProjectFolders] = createStore<ProjectFoldersDraft>({
+    items: [],
+    busy: false,
+    error: null,
+  });
+
+  /** Runs one folder change and shows its result, unless the panel moved to another agent meanwhile. */
+  async function changeProjectFolders(
+    agentId: string,
+    change: (serverId: string) => Promise<AgentProjectFolderState[] | null>,
+  ): Promise<void> {
+    const serverId = props.projectFoldersServerId;
+    if (!serverId) return;
+    setProjectFolders((state) => {
+      state.busy = true;
+      state.error = null;
+    });
+    try {
+      const items = await change(serverId);
+      if (props.agent.id !== agentId) return;
+      setProjectFolders((state) => {
+        if (items) state.items = items;
+      });
+    } catch (error) {
+      if (props.agent.id !== agentId) return;
+      setProjectFolders((state) => {
+        state.error = errorMessage(error, t("agentSettings.projectFolders.saveFailed"));
+      });
+    } finally {
+      setProjectFolders((state) => {
+        state.busy = false;
+      });
+    }
+  }
   const memoriesPort = createMemo(() => agentMemoriesPort(props.agent.id, props.agent.name));
   const routinesPort = createMemo(() =>
     agentRoutinesPort(
@@ -108,6 +155,22 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
           });
       }
       void untrack(() => loadSkillsCount(agentId));
+      setProjectFolders((state) => {
+        state.items = [];
+        state.error = null;
+      });
+      const projectFoldersServerId = untrack(() => props.projectFoldersServerId);
+      if (projectFoldersServerId) {
+        void conversationPort()
+          .agent.listProjectFolders(agentId, projectFoldersServerId)
+          .catch(() => [])
+          .then((items) => {
+            if (untrack(() => props.agent.id) !== agentId) return;
+            setProjectFolders((state) => {
+              state.items = items;
+            });
+          });
+      }
       if (!props.remoteClient) {
         void conversationPort()
           .agent.listMemories(agentId)
@@ -203,6 +266,33 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
       onResize={setPanelWidth}
       onResizeEnd={saveSettingsPanelWidth}
       detailOpen={draft.routines.open || draft.files.open}
+      projectFolders={
+        <Show when={props.projectFoldersServerId}>
+          <AgentProjectFolders
+            folders={projectFolders.items}
+            busy={projectFolders.busy}
+            error={projectFolders.error}
+            onAdd={() => {
+              const agentId = props.agent.id;
+              void changeProjectFolders(agentId, (serverId) =>
+                conversationPort().agent.addProjectFolder(agentId, serverId),
+              );
+            }}
+            onRename={(folderId, name) => {
+              const agentId = props.agent.id;
+              void changeProjectFolders(agentId, (serverId) =>
+                conversationPort().agent.renameProjectFolder({ agentId, folderId, name }, serverId),
+              );
+            }}
+            onRemove={(folderId) => {
+              const agentId = props.agent.id;
+              void changeProjectFolders(agentId, (serverId) =>
+                conversationPort().agent.removeProjectFolder({ agentId, folderId }, serverId),
+              );
+            }}
+          />
+        </Show>
+      }
       links={
         <Show when={!props.remoteClient || skillsMode() !== "hidden" || props.tablesVisible !== false}>
           <SettingsLinkGroup>

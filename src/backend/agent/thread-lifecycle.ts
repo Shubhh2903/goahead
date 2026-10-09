@@ -48,6 +48,7 @@ import {
   type ProviderTurnSteps,
   renderTurnSteps,
 } from "./handoff-tool-steps";
+import { existingProjectFolders } from "./project-folders";
 import { isArchivedThreadError, isMissingProviderSessionError } from "./thread-items";
 import { codexSandboxConfig, codexSandboxMode, workspaceWritableRoots } from "./workspace-sandbox";
 
@@ -546,6 +547,10 @@ export class ThreadLifecycle {
             agent.description,
             ...(workspaceAccessEnforced(agent) ? ["workspace"] : []),
             ...(agentAutomationAllowed(agent) ? ["automation"] : []),
+            // Only an agent with project folders adds a value, for the same reason.
+            ...(agent.projectFolders?.length
+              ? [existingProjectFolders(agent).map((folder) => [folder.name, folder.path])]
+              : []),
           ],
           ...(Object.keys(environment).length > 0 ? [Object.entries(environment).sort()] : []),
         ]),

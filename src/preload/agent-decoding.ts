@@ -8,6 +8,7 @@ import {
   type AccountUsage,
   type AgentMemory,
   type AgentModelOption,
+  type AgentProjectFolderState,
   type AgentStatus,
   type AgentSummary,
   type DuplicateAgentResult,
@@ -16,6 +17,7 @@ import {
   isAccountUsage,
   isAgentMemory,
   isAgentModelOption,
+  isAgentProjectFolderState,
   isAgentProvider,
   isAgentStatus,
   isAgentSummary,
@@ -113,6 +115,18 @@ export function decodeAgents(value: unknown): AgentSummary[] {
     throw new Error("Invalid agent list response.");
   }
   return value;
+}
+
+export function decodeProjectFolders(value: unknown): AgentProjectFolderState[] {
+  if (!Array.isArray(value) || !value.every(isAgentProjectFolderState)) {
+    throw new Error("Invalid project folder response.");
+  }
+  return value;
+}
+
+/** `null` when the user closed the folder picker. */
+export function decodeAddedProjectFolders(value: unknown): AgentProjectFolderState[] | null {
+  return value === null ? null : decodeProjectFolders(value);
 }
 
 export function decodeMemory(value: unknown): AgentMemory {

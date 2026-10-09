@@ -42,6 +42,11 @@ export interface DrainHooks {
   redactMcp(text: string): string;
   /** Gives a channel task back to its channel after a spent plan refused it; false when it cannot go back. */
   requeueChannelDelivery(deliveryId: string): boolean;
+  /**
+   * A context line for the start of a turn, read when the turn starts, or null. The provider gets it
+   * in front of the message; the conversation shows only the message.
+   */
+  turnContext(agentId: string, deliveryIds: readonly string[]): string | null;
 }
 
 export interface DrainSchedulerOptions {
@@ -395,10 +400,24 @@ export class DrainScheduler {
         [...requestIds].flatMap((requestId) => this.#mailbox.unansweredRecipients(requestId)),
         agentNames,
       );
+      const turnContext =
+        channelDelivery || messagingDelivery
+          ? null
+          : this.#hooks.turnContext(
+              agent.id,
+              batch.map((item) => item.delivery.id),
+            );
+      const framed = turnContext
+        ? input.map((item, index) =>
+            index === 0 && item.type === "text"
+              ? { ...item, text: `${turnContext}\n--- message ---\n${item.text}` }
+              : item,
+          )
+        : input;
       const inputForThread = (providerThreadId: string): typeof input => {
         const handoff = this.#threads.consumePendingHandoff(providerThreadId);
-        if (!handoff) return input;
-        return input.map((item, index) =>
+        if (!handoff) return framed;
+        return framed.map((item, index) =>
           index === 0 && item.type === "text"
             ? { ...item, text: `${handoff}\n\n--- current message ---\n${item.text}` }
             : item,

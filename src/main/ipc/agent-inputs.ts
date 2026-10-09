@@ -32,6 +32,8 @@ import {
   type OpenSharedFileInput,
   type OpenWorkspaceFileInput,
   type ReadConversationPageInput,
+  type RemoveAgentProjectFolderInput,
+  type RenameAgentProjectFolderInput,
   type ReorderQueueInput,
   type RespondToApprovalInput,
   type RespondToBrowserTakeoverInput,
@@ -698,6 +700,24 @@ function parseIdentifierList(value: unknown, label: string): string[] {
   }
   if (new Set(value).size !== value.length) throw new Error(`Duplicate ${label}.`);
   return value;
+}
+
+export function parseRenameProjectFolder(value: unknown): RenameAgentProjectFolderInput {
+  if (!isObject(value)) throw new Error("Invalid project folder rename.");
+  return {
+    agentId: requireString(value.agentId, "agentId", INPUT_LIMITS.identifier),
+    folderId: requireString(value.folderId, "folderId", INPUT_LIMITS.identifier),
+    // Trimmed and checked for length and uniqueness by the store, which has the other names.
+    name: requireString(value.name, "name", INPUT_LIMITS.projectFolderName * 4),
+  };
+}
+
+export function parseRemoveProjectFolder(value: unknown): RemoveAgentProjectFolderInput {
+  if (!isObject(value)) throw new Error("Invalid project folder removal.");
+  return {
+    agentId: requireString(value.agentId, "agentId", INPUT_LIMITS.identifier),
+    folderId: requireString(value.folderId, "folderId", INPUT_LIMITS.identifier),
+  };
 }
 
 export function parseInterrupt(value: unknown): InterruptTurnInput {

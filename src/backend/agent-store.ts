@@ -23,6 +23,7 @@ import {
   AGENT_PROVIDERS,
   type AgentAccess,
   type AgentModelId,
+  type AgentProjectFolder,
   type AgentProviderId,
   type AgentReasoningEffort,
   type AgentSummary,
@@ -35,8 +36,10 @@ import {
   defaultProviderModel,
   isAgentAccess,
   isAgentModel,
+  isAgentProjectFolder,
   isAvatarHue,
   isAvatarSeed,
+  isProjectFolderName,
   isReasoningEffort,
   isSidebarLayoutSnapshot,
   providerForLegacyModel,
@@ -331,6 +334,8 @@ export class AgentStore {
     record.computerUse = source.computerUse;
     record.avatarSeed = source.avatarSeed;
     record.avatarHue = source.avatarHue;
+    // The folders stay where they are: the copy works in the same projects, not in copies of them.
+    if (source.projectFolders?.length) record.projectFolders = source.projectFolders.map((folder) => ({ ...folder }));
 
     const stagedWorkspace = `${record.workspacePath}.openbot-stage`;
     const avatarDirectory = join(this.#avatarsRoot, record.id);
@@ -585,6 +590,71 @@ export class AgentStore {
       throw error;
     }
     return { ...agent };
+  }
+
+  /** The agent's project folders, as stored. */
+  projectFolders(agentId: string): AgentProjectFolder[] {
+    return (this.#requireAgent(agentId).projectFolders ?? []).map((folder) => ({ ...folder }));
+  }
+
+  /**
+   * Adds a folder the user picked, named after its last segment. A folder the agent has already is
+   * returned unchanged. The caller checks that the path is a folder on this computer.
+   */
+  addProjectFolder(agentId: string, path: string): AgentProjectFolder[] {
+    const agent = this.#requireAgent(agentId);
+    const folders = agent.projectFolders ?? [];
+    if (!isAbsolute(path) || path.length > INPUT_LIMITS.path) throw new Error("Invalid project folder path.");
+    if (folders.some((folder) => folder.path === path)) return this.projectFolders(agentId);
+    if (folders.length >= INPUT_LIMITS.agentProjectFolders) {
+      throw new Error(sourceText("error.agent.projectFolderLimit", { limit: INPUT_LIMITS.agentProjectFolders }));
+    }
+    const folder = { id: `folder-${randomUUID()}`, name: uniqueProjectFolderName(folders, basename(path)), path };
+    this.#writeProjectFolders(agent, [...folders, folder]);
+    return this.projectFolders(agentId);
+  }
+
+  renameProjectFolder(agentId: string, folderId: string, name: string): AgentProjectFolder[] {
+    const agent = this.#requireAgent(agentId);
+    const folders = agent.projectFolders ?? [];
+    const trimmed = name.trim();
+    if (!isProjectFolderName(trimmed)) {
+      throw new Error(sourceText("error.agent.projectFolderNameInvalid", { limit: INPUT_LIMITS.projectFolderName }));
+    }
+    if (!folders.some((folder) => folder.id === folderId)) throw new Error(sourceText("error.agent.projectFolderGone"));
+    const key = trimmed.toLocaleLowerCase();
+    if (folders.some((folder) => folder.id !== folderId && folder.name.toLocaleLowerCase() === key)) {
+      throw new Error(sourceText("error.agent.projectFolderNameTaken", { name: trimmed }));
+    }
+    this.#writeProjectFolders(
+      agent,
+      folders.map((folder) => (folder.id === folderId ? { ...folder, name: trimmed } : folder)),
+    );
+    return this.projectFolders(agentId);
+  }
+
+  removeProjectFolder(agentId: string, folderId: string): AgentProjectFolder[] {
+    const agent = this.#requireAgent(agentId);
+    const folders = agent.projectFolders ?? [];
+    if (!folders.some((folder) => folder.id === folderId)) return this.projectFolders(agentId);
+    this.#writeProjectFolders(
+      agent,
+      folders.filter((folder) => folder.id !== folderId),
+    );
+    return this.projectFolders(agentId);
+  }
+
+  #writeProjectFolders(agent: StoredAgent, folders: AgentProjectFolder[]): void {
+    const previous = agent.projectFolders;
+    if (folders.length > 0) agent.projectFolders = folders;
+    else delete agent.projectFolders;
+    try {
+      this.#persist("agent.project-folders-updated");
+    } catch (error) {
+      if (previous === undefined) delete agent.projectFolders;
+      else agent.projectFolders = previous;
+      throw error;
+    }
   }
 
   setMarketplaceSource(agentId: string, source: NonNullable<AgentSummary["marketplaceSource"]>): AgentSummary {
@@ -1343,6 +1413,17 @@ function titleFromId(id: string): string {
     .join(" ");
 }
 
+/** A default name for a new folder that no other folder of the agent has, ignoring case. */
+function uniqueProjectFolderName(folders: readonly AgentProjectFolder[], base: string): string {
+  const stem = (base.trim() || "Project").slice(0, INPUT_LIMITS.projectFolderName - 4).trim() || "Project";
+  const taken = new Set(folders.map((folder) => folder.name.toLocaleLowerCase()));
+  if (!taken.has(stem.toLocaleLowerCase())) return stem;
+  for (let index = 2; ; index += 1) {
+    const candidate = `${stem} ${index}`;
+    if (!taken.has(candidate.toLocaleLowerCase())) return candidate;
+  }
+}
+
 function isStoredAgentBase(value: unknown): value is StoredAgentBase {
   return (
     isRecord(value) &&
@@ -1369,6 +1450,8 @@ function isStoredAgent(value: unknown): value is PersistedStoredAgent {
     (record.access === undefined || isAgentAccess(record.access)) &&
     (record.computerUse === undefined || isBoolean(record.computerUse)) &&
     (record.allowAutomation === undefined || isBoolean(record.allowAutomation)) &&
+    (record.projectFolders === undefined ||
+      (Array.isArray(record.projectFolders) && record.projectFolders.every(isAgentProjectFolder))) &&
     isAvatarSeed(record.avatarSeed) &&
     (record.avatarHue === null || isAvatarHue(record.avatarHue)) &&
     isMarketplaceSource(record.marketplaceSource)
@@ -1427,6 +1510,14 @@ function readStoredAgent(value: unknown): ReadStoredAgent | UnreadableStoredAgen
     value.allowAutomation === undefined || isBoolean(value.allowAutomation)
       ? value.allowAutomation
       : reset("allowAutomation", undefined);
+  // Each folder is read on its own: one damaged entry must not cost the user the others.
+  let projectFolders: AgentProjectFolder[] | undefined;
+  if (value.projectFolders !== undefined) {
+    const entries = Array.isArray(value.projectFolders) ? value.projectFolders : [];
+    projectFolders = entries.filter(isAgentProjectFolder).slice(0, INPUT_LIMITS.agentProjectFolders);
+    if (projectFolders.length !== entries.length || !Array.isArray(value.projectFolders)) reset("projectFolders", null);
+    if (projectFolders.length === 0) projectFolders = undefined;
+  }
   let marketplaceSource: StoredAgent["marketplaceSource"];
   if (value.marketplaceSource !== undefined) {
     if (isMarketplaceSource(value.marketplaceSource)) {
@@ -1459,6 +1550,7 @@ function readStoredAgent(value: unknown): ReadStoredAgent | UnreadableStoredAgen
     ...(access === undefined ? {} : { access }),
     ...(computerUse === undefined ? {} : { computerUse }),
     ...(allowAutomation === undefined ? {} : { allowAutomation }),
+    ...(projectFolders === undefined ? {} : { projectFolders }),
     ...(marketplaceSource === undefined ? {} : { marketplaceSource }),
   };
   return { agent, repaired };

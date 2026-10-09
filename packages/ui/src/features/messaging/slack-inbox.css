@@ -102,3 +102,95 @@
   font-size: var(--openbot-text-sm);
   line-height: var(--openbot-leading-sm);
 }
+
+/* One Slack message, drawn from its mrkdwn: line ends stay, and code keeps its spaces. */
+.slack-message {
+  display: grid;
+  gap: var(--openbot-space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.slack-message-line,
+.slack-message-quote {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.slack-message-quote {
+  border-left: 3px solid var(--openbot-border);
+  padding-left: var(--openbot-space-2);
+  color: var(--openbot-text-muted);
+}
+
+.slack-message-code {
+  margin: 0;
+  overflow-x: auto;
+  border-radius: var(--openbot-radius-sm);
+  padding: var(--openbot-space-2);
+  background: var(--openbot-bg-surface);
+  font-family: var(--openbot-font-mono);
+  font-size: var(--openbot-text-sm);
+  white-space: pre;
+}
+
+.slack-message-inline-code {
+  border-radius: var(--openbot-radius-xs);
+  padding: 0 var(--openbot-space-1);
+  background: var(--openbot-bg-surface);
+  font-family: var(--openbot-font-mono);
+  font-size: var(--openbot-text-sm);
+}
+
+.slack-message-link {
+  color: var(--openbot-accent-text);
+  text-decoration: underline;
+}
+
+.slack-message-mention {
+  border-radius: var(--openbot-radius-xs);
+  padding: 0 2px;
+  background: var(--openbot-accent-soft);
+  color: var(--openbot-accent-text);
+}
+
+.slack-message-emoji-image {
+  width: 1.375em;
+  height: 1.375em;
+  object-fit: contain;
+  vertical-align: middle;
+}
+
+.slack-message-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--openbot-space-2);
+}
+
+.slack-message-image.ui-button {
+  height: auto;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--openbot-radius-md);
+}
+
+.slack-message-image img {
+  display: block;
+  max-width: min(360px, 100%);
+  max-height: 280px;
+  object-fit: contain;
+}
+
+.slack-message-file.ui-button {
+  height: auto;
+  max-width: 100%;
+  gap: var(--openbot-space-2);
+  padding: var(--openbot-space-2) var(--openbot-space-3);
+}
+
+.slack-message-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

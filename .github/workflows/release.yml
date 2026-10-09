@@ -403,6 +403,39 @@ jobs:
           spctl --assess --type execute --verbose=2 "$app_path"
           xcrun stapler validate "$app_path"
 
+      # electron-builder signs the DMG (`dmg.sign`) but notarizes only the app. Stapling changes the
+      # DMG bytes, so this step runs before the checksums, and `dmg.writeUpdateInfo: false` keeps the
+      # DMG out of `latest-mac.yml` and the block maps.
+      - name: Notarize, staple, and verify DMG
+        shell: bash
+        env:
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          dmg_path="dist/GoAhead-$RELEASE_VERSION-${{ matrix.arch }}.dmg"
+          test -f "$dmg_path"
+          if grep -F '.dmg' dist/latest-mac.yml; then
+            echo "latest-mac.yml lists the DMG. Stapling would make its hash wrong." >&2
+            exit 1
+          fi
+          if [[ -e "$dmg_path.blockmap" ]]; then
+            echo "The DMG has a block map. Stapling would make it wrong." >&2
+            exit 1
+          fi
+          codesign --verify --strict --verbose=2 "$dmg_path"
+          codesign -d --verbose=4 "$dmg_path" 2>&1 | grep -Fx "TeamIdentifier=$APPLE_TEAM_ID"
+          xcrun notarytool submit "$dmg_path" --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait --timeout 20m --output-format json > "$RUNNER_TEMP/dmg-notarization.json"
+          if ! jq -e '.status == "Accepted"' "$RUNNER_TEMP/dmg-notarization.json" >/dev/null; then
+            cat "$RUNNER_TEMP/dmg-notarization.json" >&2
+            exit 1
+          fi
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$dmg_path"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg_path"
+
       - name: Verify updater metadata
         shell: bash
         env:
