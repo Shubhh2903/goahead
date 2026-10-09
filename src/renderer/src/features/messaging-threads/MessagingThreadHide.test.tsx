@@ -1,8 +1,14 @@
 import type { MessagingThreadSummary } from "@openbot/contracts/ipc";
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { App } from "../../App";
 import { installOpenbotStub } from "../../app-test-harness";
+import { AccountDock } from "../../lazy-views";
+
+// The App loads the account dock lazily; load it first so no import runs after the test environment closes.
+beforeAll(async () => {
+  await AccountDock.preload();
+});
 
 function thread(threadId: string, title: string): MessagingThreadSummary {
   return {
