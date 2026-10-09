@@ -139,6 +139,7 @@ describe("OpenBotDatabase", () => {
       { version: 26 },
       { version: 27 },
       { version: 28 },
+      { version: 29 },
     ]);
     database.close();
   });
@@ -1132,6 +1133,7 @@ describe("OpenBotDatabase", () => {
       { version: 26 },
       { version: 27 },
       { version: 28 },
+      { version: 29 },
     ]);
     expect(migrated.connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     migrated.close();
@@ -1199,10 +1201,12 @@ describe("OpenBotDatabase", () => {
       ALTER TABLE projection_provider_sessions_v18 RENAME TO projection_provider_sessions;
       CREATE INDEX provider_sessions_thread
         ON projection_provider_sessions(thread_id, provider, state);
+      DROP TABLE slack_messages;
+      DROP TABLE slack_conversations;
       DROP TABLE projection_messaging_inbox_reads;
       DROP TABLE projection_messaging_watched_channels;
       DROP TABLE projection_messaging_inbox;
-      DELETE FROM schema_migrations WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28);
+      DELETE FROM schema_migrations WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29);
       PRAGMA foreign_keys = ON;
     `);
     legacy.close();
@@ -1230,7 +1234,7 @@ describe("OpenBotDatabase", () => {
         .get(),
     ).toMatchObject({ sql: expect.stringContaining("'opencode'") });
     expect(migrated.connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-      version: 28,
+      version: 29,
     });
     migrated.close();
   });
@@ -1248,10 +1252,12 @@ describe("OpenBotDatabase", () => {
     const legacy = new DatabaseSync(database.path);
     legacy.exec(`
       DROP TABLE projection_mcp_servers;
+      DROP TABLE slack_messages;
+      DROP TABLE slack_conversations;
       DROP TABLE projection_messaging_inbox_reads;
       DROP TABLE projection_messaging_watched_channels;
       DROP TABLE projection_messaging_inbox;
-      DELETE FROM schema_migrations WHERE version IN (20, 21, 22, 23, 24, 25, 26, 27, 28);
+      DELETE FROM schema_migrations WHERE version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29);
     `);
     legacy.close();
 
@@ -1276,7 +1282,7 @@ describe("OpenBotDatabase", () => {
       { name: "Filesystem" },
     ]);
     expect(reopened.connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-      version: 28,
+      version: 29,
     });
     reopened.close();
   });
@@ -1312,12 +1318,14 @@ describe("OpenBotDatabase", () => {
       // A version 24 database: neither the tables of migration 25 nor its marker.
       const legacy = new DatabaseSync(database.path);
       legacy.exec(`
+        DROP TABLE slack_messages;
+        DROP TABLE slack_conversations;
         DROP TABLE projection_messaging_inbox_reads;
         DROP TABLE projection_messaging_watched_channels;
         DROP TABLE projection_messaging_inbox;
         DROP TABLE projection_messaging_threads;
         DROP TABLE projection_messaging_connections;
-        DELETE FROM schema_migrations WHERE version IN (25, 26, 27, 28);
+        DELETE FROM schema_migrations WHERE version IN (25, 26, 27, 28, 29);
       `);
       // The squatted name is the index's: the tables use IF NOT EXISTS, so only the index can collide.
       if (failFirst) legacy.exec("CREATE TABLE messaging_threads_agent (conflict TEXT)");
@@ -1340,7 +1348,7 @@ describe("OpenBotDatabase", () => {
       expect(migrated.listAgents()).toEqual([agent]);
       expect(migrated.readConversation(agent.id, agent.threadId).messages).toEqual(conversation.messages);
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 28,
+        version: 29,
       });
       expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -1423,10 +1431,12 @@ describe("OpenBotDatabase", () => {
       // A version 27 database: neither the tables of migration 28 nor its marker.
       const legacy = new DatabaseSync(database.path);
       legacy.exec(`
+        DROP TABLE slack_messages;
+        DROP TABLE slack_conversations;
         DROP TABLE projection_messaging_inbox_reads;
         DROP TABLE projection_messaging_watched_channels;
         DROP TABLE projection_messaging_inbox;
-        DELETE FROM schema_migrations WHERE version = 28;
+        DELETE FROM schema_migrations WHERE version IN (28, 29);
       `);
       // The squatted name is the index's: the tables use IF NOT EXISTS, so only the index can collide.
       if (failFirst) legacy.exec("CREATE TABLE messaging_inbox_sent (conflict TEXT)");
@@ -1464,7 +1474,7 @@ describe("OpenBotDatabase", () => {
         connection.prepare("SELECT link_id, thread_key, history_cursor FROM projection_messaging_threads").all(),
       ).toEqual([{ link_id: "link-1", thread_key: "direct", history_cursor: "100.000" }]);
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 28,
+        version: 29,
       });
       expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -1488,6 +1498,202 @@ describe("OpenBotDatabase", () => {
       expect(reopened.connection.prepare("SELECT platform_message_id FROM projection_messaging_inbox").all()).toEqual([
         { platform_message_id: "200.000" },
       ]);
+      reopened.close();
+    },
+  );
+
+  it.each([false, true])(
+    "adds the Slack client cache to a version 28 database and copies inbox rows (failed attempt=%s)",
+    async (failFirst) => {
+      const root = await mkdtemp(join(tmpdir(), "openbot-db-v28-slack-client-"));
+      roots.push(root);
+      const database = new OpenBotDatabase(root);
+      await database.initialize();
+      const agent = testAgent();
+      if (!agent.threadId) throw new Error("The test agent has no thread.");
+      database.replaceAgents("agents-import", [agent], "agents.imported");
+      const now = "2026-10-08T12:00:00.000Z";
+      const addConnection = database.connection.prepare(
+        `INSERT INTO projection_messaging_connections
+           (connection_id, platform, workspace_id, workspace_name, enabled, orchestrator_agent_id, created_at, updated_at)
+         VALUES (?, 'slack', ?, 'Acme', 1, ?, ?, ?)`,
+      );
+      addConnection.run("connection-1", "T1", agent.id, now, now);
+      addConnection.run("connection-2", "T2", agent.id, now, now);
+      database.close();
+
+      // A version 28 database: neither the tables of migration 29 nor its marker, and an inbox with rows.
+      const legacy = new DatabaseSync(database.path);
+      legacy.exec(`
+        DROP TABLE slack_messages;
+        DROP TABLE slack_conversations;
+        DELETE FROM schema_migrations WHERE version = 29;
+      `);
+      const addInbox = legacy.prepare(
+        `INSERT INTO projection_messaging_inbox
+           (connection_id, platform_channel_id, platform_message_id, thread_key, kind, author_id, author_name,
+            text, sent_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      addInbox.run("connection-1", "D1", "1700000001.000100", null, "direct", "UPREET", "Preet", "Lunch at 1?", now);
+      addInbox.run(
+        "connection-1",
+        "D1",
+        "1700000002.000200",
+        "1700000001.000100",
+        "direct",
+        "UPREET",
+        "Preet",
+        "Or 2?",
+        "2026-10-08T12:01:00.000Z",
+      );
+      addInbox.run("connection-1", "G1", "1700000003.000300", null, "group", "UANA", "Ana", "Hi all", now);
+      addInbox.run("connection-1", "C1", "1700000004.000400", null, "mention", "UANA", "Ana", "<@UME> look", now);
+      addInbox.run("connection-1", "C1", "1700000005.000500", null, "channel", "UBO", "Bo", "Deploy done", now);
+      addInbox.run("connection-2", "D1", "1700000006.000600", null, "direct", "UCY", "Cy", "Other workspace", now);
+      legacy
+        .prepare(
+          `INSERT INTO projection_messaging_inbox_reads (connection_id, platform_channel_id, through_message_id, updated_at)
+           VALUES ('connection-1', 'D1', '1700000001.000100', ?)`,
+        )
+        .run(now);
+      // The squatted name is an index's: the tables use IF NOT EXISTS, so only an index can collide.
+      if (failFirst) legacy.exec("CREATE TABLE slack_messages_thread (conflict TEXT)");
+      legacy.close();
+
+      if (failFirst) {
+        await expect(new OpenBotDatabase(root).initialize()).rejects.toThrow("migration to version 29 failed");
+        const rolledBack = new DatabaseSync(database.path);
+        expect(
+          rolledBack
+            .prepare("SELECT name FROM sqlite_master WHERE name IN ('slack_messages', 'slack_conversations')")
+            .all(),
+        ).toEqual([]);
+        expect(rolledBack.prepare("SELECT 1 FROM schema_migrations WHERE version = 29").get()).toBeUndefined();
+        expect(rolledBack.prepare("SELECT COUNT(*) AS count FROM projection_messaging_inbox").get()).toEqual({
+          count: 6,
+        });
+        rolledBack.exec("DROP TABLE slack_messages_thread");
+        rolledBack.close();
+      }
+
+      const migrated = new OpenBotDatabase(root);
+      await migrated.initialize();
+      const connection = migrated.connection;
+      expect(migrated.listAgents()).toEqual([agent]);
+      expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
+        version: 29,
+      });
+      expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+      expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      // The old inbox stays as it was.
+      expect(connection.prepare("SELECT COUNT(*) AS count FROM projection_messaging_inbox").get()).toEqual({
+        count: 6,
+      });
+      expect(
+        connection
+          .prepare(
+            `SELECT connection_id, channel_id, ts, thread_ts, reply_count, latest_reply_ts, author_id, text,
+                    files_json, reactions_json, edited_at, deleted, subtype, cached_at
+             FROM slack_messages ORDER BY connection_id, channel_id, ts`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          connection_id: "connection-1",
+          channel_id: "C1",
+          ts: "1700000004.000400",
+          thread_ts: null,
+          reply_count: 0,
+          latest_reply_ts: null,
+          author_id: "UANA",
+          text: "<@UME> look",
+          files_json: "[]",
+          reactions_json: "[]",
+          edited_at: null,
+          deleted: 0,
+          subtype: null,
+          cached_at: now,
+        },
+        expect.objectContaining({ channel_id: "C1", ts: "1700000005.000500", author_id: "UBO", text: "Deploy done" }),
+        expect.objectContaining({ channel_id: "D1", ts: "1700000001.000100", thread_ts: null, text: "Lunch at 1?" }),
+        expect.objectContaining({
+          channel_id: "D1",
+          ts: "1700000002.000200",
+          thread_ts: "1700000001.000100",
+          text: "Or 2?",
+          cached_at: "2026-10-08T12:01:00.000Z",
+        }),
+        expect.objectContaining({ channel_id: "G1", ts: "1700000003.000300", text: "Hi all" }),
+        expect.objectContaining({ connection_id: "connection-2", channel_id: "D1", text: "Other workspace" }),
+      ]);
+      expect(
+        connection
+          .prepare(
+            `SELECT connection_id, channel_id, kind, name, member_ids_json, is_member, last_read_ts, unread_count,
+                    last_activity_ts, last_opened_at, oldest_loaded_ts, newest_loaded_ts, has_more_history
+             FROM slack_conversations ORDER BY connection_id, channel_id`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          connection_id: "connection-1",
+          channel_id: "C1",
+          kind: "channel",
+          name: "",
+          member_ids_json: "[]",
+          is_member: 1,
+          last_read_ts: null,
+          unread_count: 0,
+          last_activity_ts: "1700000005.000500",
+          last_opened_at: null,
+          oldest_loaded_ts: null,
+          newest_loaded_ts: null,
+          has_more_history: 1,
+        },
+        expect.objectContaining({
+          channel_id: "D1",
+          kind: "im",
+          last_read_ts: null,
+          last_activity_ts: "1700000002.000200",
+          oldest_loaded_ts: null,
+        }),
+        expect.objectContaining({ channel_id: "G1", kind: "mpim", oldest_loaded_ts: null }),
+        expect.objectContaining({ connection_id: "connection-2", channel_id: "D1", kind: "im" }),
+      ]);
+      expect(() =>
+        connection
+          .prepare(
+            `INSERT INTO slack_messages
+               (connection_id, channel_id, ts, author_id, text, files_json, reactions_json, deleted, reply_count, cached_at)
+             VALUES ('missing-connection', 'C9', '1.000001', 'U1', 'x', '[]', '[]', 0, 0, ?)`,
+          )
+          .run(now),
+      ).toThrow(/FOREIGN KEY constraint failed/u);
+      migrated.close();
+
+      // A second start runs nothing and keeps the rows.
+      const reopened = new OpenBotDatabase(root);
+      await reopened.initialize();
+      expect(reopened.connection.prepare("SELECT COUNT(*) AS count FROM slack_messages").get()).toEqual({ count: 6 });
+      expect(reopened.connection.prepare("SELECT COUNT(*) AS count FROM slack_conversations").get()).toEqual({
+        count: 4,
+      });
+      // A disconnect that deletes the connection deletes its cache.
+      reopened.connection
+        .prepare("DELETE FROM projection_messaging_connections WHERE connection_id = 'connection-2'")
+        .run();
+      expect(
+        reopened.connection
+          .prepare("SELECT COUNT(*) AS count FROM slack_messages WHERE connection_id = 'connection-2'")
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(
+        reopened.connection
+          .prepare("SELECT COUNT(*) AS count FROM slack_conversations WHERE connection_id = 'connection-2'")
+          .get(),
+      ).toEqual({ count: 0 });
       reopened.close();
     },
   );
@@ -1525,10 +1731,12 @@ describe("OpenBotDatabase", () => {
          '2026-09-14T10:00:00.000Z', '2026-09-14T10:00:00.000Z'),
         ('mcp-2', 'computer_use_saved', 'stdio', 1, 'other', '[]', '[]', '[]', '', '', '[]', 1,
          '2026-09-14T10:00:00.000Z', '2026-09-14T10:00:00.000Z');
+      DROP TABLE slack_messages;
+      DROP TABLE slack_conversations;
       DROP TABLE projection_messaging_inbox_reads;
       DROP TABLE projection_messaging_watched_channels;
       DROP TABLE projection_messaging_inbox;
-      DELETE FROM schema_migrations WHERE version IN (21, 22, 23, 24, 25, 26, 27, 28);
+      DELETE FROM schema_migrations WHERE version IN (21, 22, 23, 24, 25, 26, 27, 28, 29);
     `);
     legacy.close();
 
@@ -1614,6 +1822,7 @@ describe("OpenBotDatabase", () => {
       { version: 26 },
       { version: 27 },
       { version: 28 },
+      { version: 29 },
     ]);
     migrated.close();
   });
@@ -1700,6 +1909,7 @@ describe("OpenBotDatabase", () => {
       { version: 26 },
       { version: 27 },
       { version: 28 },
+      { version: 29 },
     ]);
     retried.close();
   });
@@ -2439,7 +2649,7 @@ describe("OpenBotDatabase", () => {
       expect(migrated.connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(migrated.connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(migrated.connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 28,
+        version: 29,
       });
       expect(
         migrated.connection.prepare("SELECT provider_session_id FROM projection_turns WHERE turn_id = ?").get("turn-1"),
@@ -2589,7 +2799,7 @@ describe("OpenBotDatabase", () => {
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 28,
+        version: 29,
       });
       expect(
         connection.prepare("SELECT provider_session_id FROM projection_turns WHERE turn_id = ?").get("turn-1"),
@@ -2749,7 +2959,7 @@ describe("OpenBotDatabase", () => {
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 28,
+        version: 29,
       });
       expect(
         connection.prepare("SELECT provider_session_id FROM projection_turns WHERE turn_id = ?").get("turn-1"),
@@ -2922,7 +3132,7 @@ describe("OpenBotDatabase", () => {
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 28,
+        version: 29,
       });
       expect(
         connection.prepare("SELECT provider_session_id FROM projection_turns WHERE turn_id = ?").get("turn-1"),
@@ -3085,7 +3295,7 @@ describe("OpenBotDatabase", () => {
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 28,
+        version: 29,
       });
       const agentRoutines = new AgentRoutineStore(migrated);
       expect(agentRoutines.get(agent.id, agentRoutine.id)?.limitPolicy).toBe("wait");

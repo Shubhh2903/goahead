@@ -12,6 +12,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { join, resolve } from "node:path";
+import type { SlackClientChanged } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import type { SlackRouteTeam } from "@openbot/contracts/signal-protocol/slack-route";
 import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-app";
@@ -158,6 +159,12 @@ class FakeSlack {
   readonly members = new Map<string, Set<string>>();
   /** Who may see an event, by its `event_context`, as `apps.event.authorizations.list` answers. */
   readonly audiences = new Map<string, Array<{ user_id: string; is_bot: boolean }>>();
+  /** More of the person's conversations, after #leads and #launch, as `users.conversations` lists them. */
+  readonly clientConversations: DynamicRecord[] = [];
+  /** A conversation's messages, newest first, that `conversations.history` pages through with `latest`. */
+  readonly histories = new Map<string, Array<DynamicRecord & { ts: string }>>();
+  /** A thread's parent and replies, by `channel\0thread ts`, as `conversations.replies` answers. */
+  readonly threads = new Map<string, DynamicRecord[]>();
   #server: Server | null = null;
   #ts = 1000;
   origin = "";
@@ -220,23 +227,33 @@ class FakeSlack {
                 response_metadata: { next_cursor: "page-2" },
               });
         case "conversations.replies":
-          return reply({ messages: [] });
+          return reply({ messages: this.threads.get(`${params.channel}\0${params.ts}`) ?? [] });
         // The person's channels, and the newest messages of #launch, as the person reads them.
         case "users.conversations":
           return reply({
             channels: [
               { id: "G9", name: "leads", is_private: true },
               { id: "C5", name: "launch", is_private: false },
+              ...this.clientConversations,
             ],
             response_metadata: { next_cursor: "" },
           });
-        case "conversations.history":
+        case "conversations.history": {
+          // A paged conversation: the messages before `latest`, not including it, as Slack pages.
+          const paged = this.histories.get(params.channel ?? "");
+          if (paged) {
+            const latest = params.latest;
+            const before = latest ? paged.filter((entry) => entry.ts < latest) : paged;
+            const limit = Number(params.limit ?? "100");
+            return reply({ messages: before.slice(0, limit), has_more: before.length > limit });
+          }
           return reply({
             messages:
               params.channel === "C5"
                 ? [{ type: "message", user: "UBOB", text: "Kickoff notes are in the doc", ts: "1791000100.000000" }]
                 : [],
           });
+        }
         case "conversations.open":
           return reply({ channel: { id: `D-${params.users}` } });
         // A revoked token stops working, as in Slack.
@@ -1596,5 +1613,150 @@ describe.sequential("OpenBot Slack app end to end", () => {
     // token is revoked only when nobody of the workspace remains.
     expect(revoked).toEqual(["preet-user"]);
     expect(botTokenWorks).toBe(true);
+  });
+
+  it("the Slack client pages history, opens a thread, edits and deletes own messages, and takes a reaction event", async () => {
+    // #design has 150 messages; every third is the person's (UME). The newest one starts a thread.
+    const ts = (n: number) => `${1792000000 + n}.000000`;
+    const parentTs = ts(150);
+    const history = Array.from({ length: 150 }, (_, index) => {
+      const n = 150 - index;
+      return {
+        type: "message",
+        ts: ts(n),
+        user: n % 3 === 0 ? "UME" : "UBOB",
+        text: `Message ${n}`,
+        ...(n === 150 ? { thread_ts: parentTs, reply_count: 2, latest_reply: "1792000150.000200" } : {}),
+      };
+    });
+    slack.clientConversations.push({ id: "C7", name: "design", is_private: false });
+    slack.histories.set("C7", history);
+    slack.threads.set(`C7\0${parentTs}`, [
+      history[0] ?? {},
+      { type: "message", ts: "1792000150.000100", thread_ts: parentTs, user: "UBOB", text: "Reply one" },
+      { type: "message", ts: "1792000150.000200", thread_ts: parentTs, user: "UME", text: "Reply two" },
+    ]);
+    const { messaging } = await connectedAsUser();
+    const changes: SlackClientChanged[] = [];
+    const stopWatching = messaging.onSlackClientChanged((change) => changes.push(change));
+    const place = { workspaceId: "T1", channelId: "C7" };
+    const open = () => messaging.slackClientOpen(place);
+
+    // The list is the person's own, read at connect.
+    await waitFor(async () =>
+      (await messaging.slackClientConversations({ workspaceId: "T1" })).some((entry) => entry.channelId === "C7"),
+    );
+
+    // Opening answers from the cache at once and reads the newest page in the background; the view
+    // hears of it. Scrolling up reads the page before the oldest loaded message.
+    await open();
+    await waitFor(async () => (await open()).messages.length === 100);
+    expect(changes).toContainEqual(place);
+    const first = await open();
+    expect(first.hasOlder).toBe(true);
+    const oldestLoaded = first.messages[0]?.ts;
+    if (!oldestLoaded) throw new Error("The first page is empty.");
+    const second = await messaging.slackClientOlder({ ...place, beforeTs: oldestLoaded });
+    expect(second.messages).toHaveLength(50);
+    expect(second.hasOlder).toBe(false);
+    const loaded = [...second.messages, ...first.messages].map((message) => message.ts);
+    // No gap and no duplicate across the page boundary, oldest first.
+    expect(loaded).toEqual(history.map((message) => message.ts).reverse());
+    expect(slack.of("conversations.history").map((call) => [call.token, call.params.latest ?? null])).toEqual([
+      [USER_TOKEN, null],
+      [USER_TOKEN, oldestLoaded],
+    ]);
+    expect(first.messages.find((message) => message.ts === ts(147))?.mine).toBe(true);
+    expect(first.messages.find((message) => message.ts === ts(149))?.mine).toBe(false);
+
+    // A cached thread parent opens at once; its replies come from Slack, read as the person.
+    await messaging.slackClientThread({ ...place, threadTs: parentTs });
+    await waitFor(
+      async () => (await messaging.slackClientThread({ ...place, threadTs: parentTs })).replies.length === 2,
+    );
+    const thread = await messaging.slackClientThread({ ...place, threadTs: parentTs });
+    expect(thread.parent).toMatchObject({ ts: parentTs, replyCount: 2 });
+    expect(thread.replies.map((reply) => [reply.text, reply.mine])).toEqual([
+      ["Reply one", false],
+      ["Reply two", true],
+    ]);
+    expect(slack.of("conversations.replies").map((call) => [call.token, call.params.channel, call.params.ts])).toEqual([
+      [USER_TOKEN, "C7", parentTs],
+    ]);
+
+    // Another person's message cannot be edited or deleted: refused before any Slack call.
+    const notYours = "You can only edit or delete your own messages.";
+    await expect(messaging.slackClientEdit({ ...place, ts: ts(149), text: "Not mine" })).rejects.toThrow(notYours);
+    await expect(messaging.slackClientDelete({ ...place, ts: ts(149) })).rejects.toThrow(notYours);
+    expect(slack.of("chat.update")).toEqual([]);
+    expect(slack.of("chat.delete")).toEqual([]);
+
+    // The person's own messages: edited and deleted as them, with their user token.
+    await messaging.slackClientEdit({ ...place, ts: ts(147), text: "Message 147, updated" });
+    await messaging.slackClientDelete({ ...place, ts: ts(144) });
+    expect(slack.of("chat.update").map((call) => [call.token, call.params])).toEqual([
+      [USER_TOKEN, { channel: "C7", ts: ts(147), text: "Message 147, updated" }],
+    ]);
+    expect(slack.of("chat.delete").map((call) => [call.token, call.params])).toEqual([
+      [USER_TOKEN, { channel: "C7", ts: ts(144) }],
+    ]);
+    const changed = await open();
+    const edited = changed.messages.find((message) => message.ts === ts(147));
+    expect(edited).toMatchObject({ text: "Message 147, updated", mine: true });
+    expect(edited?.editedAt).not.toBeNull();
+    expect(changed.messages.some((message) => message.ts === ts(144))).toBe(false);
+
+    // Bob reacts in Slack: the event reaches the cache through Signal. The person adds the same
+    // reaction, and Slack's echo of it does not count twice.
+    const reaction = (eventId: string, user: string) =>
+      signal.deliver("T1", {
+        event_id: eventId,
+        event: {
+          type: "reaction_added",
+          user,
+          reaction: "tada",
+          item: { type: "message", channel: "C7", ts: parentTs },
+          event_ts: "1792000300.000000",
+        },
+      });
+    const parentReactions = async () =>
+      (await open()).messages.find((message) => message.ts === parentTs)?.reactions ?? [];
+    expect((await reaction("Ev70", "UBOB")).status).toBe(200);
+    await waitFor(async () => (await parentReactions()).length === 1);
+    expect(await parentReactions()).toEqual([{ name: "tada", count: 1, mine: false }]);
+    await messaging.slackClientReact({ ...place, ts: parentTs, name: "tada", on: true });
+    expect(slack.of("reactions.add").map((call) => [call.token, call.params])).toEqual([
+      [USER_TOKEN, { channel: "C7", timestamp: parentTs, name: "tada" }],
+    ]);
+    expect((await reaction("Ev71", "UME")).status).toBe(200);
+    expect(await parentReactions()).toEqual([{ name: "tada", count: 2, mine: true }]);
+    stopWatching();
+
+    // Nothing the renderer receives holds a Slack token.
+    const received = JSON.stringify([first, second, thread, changed, await open()]);
+    expect(received).not.toContain("xox");
+
+    mkdirSync(REPORT_DIR, { recursive: true });
+    writeFileSync(
+      join(REPORT_DIR, "slack-client.json"),
+      `${JSON.stringify(
+        {
+          history: {
+            pages: [first.messages.length, second.messages.length],
+            loaded: loaded.length,
+            unique: new Set(loaded).size,
+            inOrder: true,
+            hasOlderAfterSecondPage: second.hasOlder,
+          },
+          thread: { replies: thread.replies.length, readAsPerson: true },
+          ownMessages: { edited: edited?.text === "Message 147, updated", deleted: true },
+          otherPersonsMessage: { editRefusedBeforeSlack: true, deleteRefusedBeforeSlack: true },
+          reaction: { fromEvent: true, ownAdded: true, echoCountedOnce: true },
+          tokenInRendererData: received.includes("xox"),
+        },
+        null,
+        2,
+      )}\n`,
+    );
   });
 });

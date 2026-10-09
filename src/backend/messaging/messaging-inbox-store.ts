@@ -6,6 +6,7 @@ import {
   requiredStringColumn,
 } from "../database/database-rows";
 import type { OpenBotDatabase } from "../openbot-database";
+import { SlackCacheStore } from "./slack-client/cache-store";
 
 /** Why the inbox keeps a message. */
 export const INBOX_KINDS = ["direct", "group", "mention", "channel"] as const;
@@ -61,10 +62,13 @@ export interface WatchedChannel {
  * go to the event log. Message ids compare as text: a Slack `ts` has a fixed width.
  */
 export class MessagingInboxStore {
+  /** The Slack client's cache. Agent reads use it first: it keeps more of each conversation. */
+  readonly cache: SlackCacheStore;
   readonly #database: OpenBotDatabase;
 
   constructor(database: OpenBotDatabase) {
     this.#database = database;
+    this.cache = new SlackCacheStore(database);
   }
 
   /** Keeps one message, and says whether it is new. The same message from a second event changes nothing. */
@@ -245,9 +249,124 @@ export class MessagingInboxStore {
 
   /**
    * The newest messages of one conversation, oldest first. With a thread, only that thread: its
-   * first message and the replies.
+   * first message and the replies. Only the inbox: the desktop inbox view and its replies use it.
    */
   read(connectionId: string, platformChannelId: string, threadKey: string | null, limit: number): InboxEntry[] {
+    return this.#readInbox(connectionId, platformChannelId, threadKey, limit);
+  }
+
+  /**
+   * The newest messages of one conversation for an agent or `@chief`, oldest first: the inbox rows
+   * and the Slack client cache rows together, one entry per message `ts`. The cache gives the text
+   * and removes a message it marks deleted; the inbox gives the names. So a message that only one
+   * of the two holds still shows. A name the inbox does not know comes from the author's newest
+   * inbox message, and else is the author id.
+   */
+  readForAgent(connectionId: string, platformChannelId: string, threadKey: string | null, limit: number): InboxEntry[] {
+    const inboxEntries = this.#readInbox(connectionId, platformChannelId, threadKey, limit);
+    const kind = this.#cachedKind(connectionId, platformChannelId);
+    if (!kind) return inboxEntries;
+    const db = this.#database.connection;
+    const cached = this.#cachedMessages(connectionId, platformChannelId, threadKey, limit);
+    const isDeleted = db.prepare(
+      "SELECT 1 FROM slack_messages WHERE connection_id = ? AND channel_id = ? AND ts = ? AND deleted = 1",
+    );
+    const byTs = new Map<string, InboxEntry>();
+    for (const entry of inboxEntries) {
+      if (isDeleted.get(connectionId, platformChannelId, entry.platformMessageId) !== undefined) continue;
+      byTs.set(entry.platformMessageId, { ...entry, kind });
+    }
+    const nameOf = db.prepare(
+      `SELECT author_name FROM projection_messaging_inbox
+       WHERE connection_id = ? AND author_id = ? ORDER BY sent_at DESC LIMIT 1`,
+    );
+    for (const message of cached) {
+      const known = byTs.get(message.ts);
+      if (known) {
+        byTs.set(message.ts, { ...known, text: message.text });
+        continue;
+      }
+      const named = message.authorId ? databaseRows(nameOf.all(connectionId, message.authorId))[0] : undefined;
+      byTs.set(message.ts, {
+        connectionId,
+        platformChannelId,
+        platformMessageId: message.ts,
+        threadKey: message.threadTs === message.ts ? null : message.threadTs,
+        kind,
+        authorId: message.authorId,
+        authorName: (named ? optionalStringColumn(named, "author_name") : null) || message.authorId,
+        text: message.text,
+        sentAt: tsTime(message.ts),
+      });
+    }
+    // A Slack `ts` has a fixed width, so it sorts as text.
+    return [...byTs.values()]
+      .sort((a, b) =>
+        a.platformMessageId < b.platformMessageId ? -1 : a.platformMessageId > b.platformMessageId ? 1 : 0,
+      )
+      .slice(-limit);
+  }
+
+  /** The newest `limit` cached messages that are not deleted: of the conversation, or of one thread. */
+  #cachedMessages(
+    connectionId: string,
+    channelId: string,
+    threadKey: string | null,
+    limit: number,
+  ): Array<{ ts: string; threadTs: string | null; authorId: string; text: string }> {
+    const db = this.#database.connection;
+    const rows = threadKey
+      ? db
+          .prepare(
+            `SELECT ts, thread_ts, author_id, text FROM slack_messages
+             WHERE connection_id = ? AND channel_id = ? AND (ts = ? OR thread_ts = ?) AND deleted = 0
+             ORDER BY ts DESC LIMIT ?`,
+          )
+          .all(connectionId, channelId, threadKey, threadKey, limit)
+      : db
+          .prepare(
+            `SELECT ts, thread_ts, author_id, text FROM slack_messages
+             WHERE connection_id = ? AND channel_id = ? AND deleted = 0
+             ORDER BY ts DESC LIMIT ?`,
+          )
+          .all(connectionId, channelId, limit);
+    return databaseRows(rows).map((row) => ({
+      ts: requiredStringColumn(row, "ts"),
+      threadTs: optionalStringColumn(row, "thread_ts"),
+      authorId: requiredStringColumn(row, "author_id"),
+      text: requiredStringColumn(row, "text"),
+    }));
+  }
+
+  /**
+   * The kind of a conversation the cache knows, or null. A direct or group direct message has that
+   * kind. A channel is a `mention` only when the inbox keeps it for mentions alone, not as a picked channel.
+   */
+  #cachedKind(connectionId: string, channelId: string): InboxKind | null {
+    const row = databaseRows(
+      this.#database.connection
+        .prepare(
+          `SELECT c.kind AS cache_kind,
+             EXISTS(SELECT 1 FROM projection_messaging_inbox i
+              WHERE i.connection_id = c.connection_id AND i.platform_channel_id = c.channel_id
+                AND i.kind = 'mention') AS has_mention,
+             EXISTS(SELECT 1 FROM projection_messaging_inbox i
+              WHERE i.connection_id = c.connection_id AND i.platform_channel_id = c.channel_id
+                AND i.kind = 'channel') AS has_channel
+           FROM slack_conversations c WHERE c.connection_id = ? AND c.channel_id = ?`,
+        )
+        .all(connectionId, channelId),
+    )[0];
+    if (!row) return null;
+    const cacheKind = requiredStringColumn(row, "cache_kind");
+    if (cacheKind === "im") return "direct";
+    if (cacheKind === "mpim") return "group";
+    return requiredNumberColumn(row, "has_mention") === 1 && requiredNumberColumn(row, "has_channel") === 0
+      ? "mention"
+      : "channel";
+  }
+
+  #readInbox(connectionId: string, platformChannelId: string, threadKey: string | null, limit: number): InboxEntry[] {
     const rows = threadKey
       ? this.#database.connection
           .prepare(
@@ -296,4 +415,10 @@ export class MessagingInboxStore {
       )
       .run(connectionId, platformChannelId, throughMessageId, new Date().toISOString());
   }
+}
+
+/** A Slack `ts` (seconds since 1970, then a sequence) as an ISO time. */
+function tsTime(ts: string): string {
+  const seconds = Number(ts.split(".")[0]);
+  return new Date(Number.isFinite(seconds) ? seconds * 1000 : 0).toISOString();
 }

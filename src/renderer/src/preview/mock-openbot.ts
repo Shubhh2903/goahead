@@ -112,6 +112,7 @@ import { createMockProviderRuntimes, type MockProviderRuntimeOptions } from "./m
 import { mockRoutineCalendar } from "./mock-routine-calendar";
 import { applySidebarLayoutAction } from "./mock-sidebar-layout";
 import { createMockSkills, type MockSkillsOptions } from "./mock-skills";
+import { createMockSlackClient } from "./mock-slack-client";
 import { createMockStorage } from "./mock-storage";
 import { clone, type Listener, type MockRuntime, matchesQuery } from "./mock-support";
 import { createMockTeam, type MockTeamOptions } from "./mock-team";
@@ -702,6 +703,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     // Preview has one host, so every server answers for the same agents.
     // The Slack Orchestrator of the preview is its first agent.
     messaging: createMockMessaging(() => agents[0]?.id ?? "preview-agent"),
+    slackClient: createMockSlackClient(),
     handoffs: mockHandoffs.api,
     // Preview has one host, so every server answers from the same providers as this computer.
     providerAdmin: {

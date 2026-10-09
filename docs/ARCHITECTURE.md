@@ -1698,8 +1698,10 @@ transport for its events. `messaging-types.ts` is the seam; the core never reads
   `projection_messaging_watched_channels` and `projection_messaging_inbox_reads` (GoAhead's read mark
   per conversation). Rows hold Slack text, so they are written directly and never go to the event log.
   Rows older than 30 days are deleted every 6 hours; disconnect deletes the workspace's rows. A newly
-  picked channel is filled once from `conversations.history` (`recentMessages`), one call a minute per
-  workspace, because of Slack's limit for apps outside its Marketplace.
+  picked channel is filled once from `conversations.history` (`recentMessages`), through the Slack
+  client request queue (below). From migration 29 this table is the second store: the Slack client
+  view and the agent read tools read `slack_messages` (next items), and read this table only when
+  the cache has no rows. The 30-day delete applies only to this table, not to `slack_messages`.
 - **Read tools.** `slack_list_unread` and `slack_read_conversation` (`messaging-read-tools.ts`) go
   through `MessagingThreads.readInbox` to the reader that `MessagingService` sets with
   `setInboxReader`. They answer only in the connected person's own direct message with GoAhead, while
@@ -1739,7 +1741,44 @@ transport for its events. `messaging-types.ts` is the seam; the core never reads
   the user token) in the conversation or its open thread, with no approval, and records it in the
   audit log. Pause, quiet hours and the hourly limit apply only to agent sends. The Slack connector
   page shows whether this host is the default (`get-slack-routing`), and the default's owner can
-  hand it over (`hand-over-slack-default`).
+  hand it over (`hand-over-slack-default`). The row now opens the Slack client (next item) in place
+  of this pane.
+- **Slack client cache.** With the user token, the "Slack inbox" row opens a Slack client
+  (`src/renderer/src/features/slack-client/`, panes from `@openbot/ui/features/slack-client/*`):
+  a conversation list, a message pane and a thread panel. It uses the `slackClient` IPC group
+  (`packages/contracts/src/ipc-slack-client.ts`). The data lives in two tables of migration 29:
+  `slack_conversations` (one row per conversation of the person: kind, name, members, unread count,
+  read mark, oldest loaded `ts`, `has_more_history`, `last_opened_at`) and `slack_messages` (one row
+  per cached message: thread, author, raw mrkdwn, files, reactions, edited, deleted). Both cascade
+  from `projection_messaging_connections`. Migration 29 copies every `projection_messaging_inbox`
+  row into `slack_messages`; the old table stays, and `MessagingInboxStore` still writes it as in
+  the "Local inbox" item. `slack_messages` has no time limit; only the 1 GB eviction and disconnect
+  delete its rows. The owners in `src/backend/messaging/slack-client/` are:
+  - `cache-store.ts`: pages by `ts` (merge without gaps or duplicates), threads, edits, deletes,
+    reactions, unread, and eviction. Above 1 GB per workspace (messages and cached images) it
+    evicts the conversations with the oldest `last_opened_at`. Disconnect clears the workspace.
+  - `request-queue.ts`: one queue per workspace for history-type calls, at most 40 a minute, visible
+    work before background work. A 429 pauses the queue for `Retry-After` and retries the call. The
+    fill of a newly picked channel also goes through this queue. GoAhead's Slack apps are installed
+    only in the company workspace, so Slack's 2025 limit for apps outside its Marketplace does not
+    apply to them.
+  - `sync-service.ts`: `users.conversations` at connect and every 10 minutes; open shows the cache at
+    once, then merges the newest `conversations.history` page; scroll loads older pages with
+    `latest` until `has_more` is false and skips Slack when the cache has the rows;
+    `conversations.replies` for a thread; `conversations.info` for the read mark. A network error
+    sets the offline flag and the view shows the cache.
+  - `events.ts`: `message_changed`, `message_deleted`, `reaction_added`, `reaction_removed`,
+    `member_joined_channel` and `channel_left` update the cache and emit a change. They start no
+    agent turn.
+  - `actions.ts`: the person's send, thread reply (with `reply_broadcast`), edit, delete, reaction
+    and file upload (`files.getUploadURLExternal`, then `files.completeUploadExternal`, at most
+    50 MB), all with the user token and no approval. Edit and delete are refused before any Slack
+    call unless the cached author is the connected person. Each action changes the cache at once
+    and reverts it, with the error text, when Slack refuses.
+
+  Tokens and Slack file URLs stay in main and the backend; images reach the renderer only as
+  `openbot-attachment://slack/…`. The agent read tools and `@chief` read the cache, with the
+  owner-only rules above, and fall back to the old inbox table when the cache has no rows.
 
 ## Skill folders and MCP configuration
 

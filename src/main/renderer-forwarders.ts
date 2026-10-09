@@ -182,6 +182,12 @@ export function createRendererForwarders({
     sendToRenderer(window, IPC_ENDPOINTS.messaging.inboxChanged, change);
   }
 
+  function forwardSlackClientChanged(change: import("@openbot/contracts/ipc").SlackClientChanged): void {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) return;
+    sendToRenderer(window, IPC_ENDPOINTS.slackClient.changed, change);
+  }
+
   function forwardHandoffsChanged(change: import("@openbot/contracts/ipc").AgentHandoffsChanged): void {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) return;
@@ -253,6 +259,7 @@ export function createRendererForwarders({
     forwardOnePasswordConnectorStatus,
     forwardMessagingThreadsChanged,
     forwardMessagingInboxChanged,
+    forwardSlackClientChanged,
     forwardHandoffsChanged,
     forwardHostStatus,
     forwardRemoteDesktopSessions,

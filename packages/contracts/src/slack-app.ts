@@ -40,6 +40,8 @@ export const SLACK_USER_SCOPES = [
   "emoji:read",
   // `files.info` and file downloads: images shared in direct messages show in the Slack inbox.
   "files:read",
+  // `files.getUploadURLExternal` and `files.completeUploadExternal`: files the person attaches in the Slack client.
+  "files:write",
   "groups:history",
   "groups:read",
   "groups:write",
@@ -49,6 +51,8 @@ export const SLACK_USER_SCOPES = [
   "mpim:history",
   "mpim:read",
   "mpim:write",
+  // Reactions on the messages the Slack client shows, and the person's own reactions among them.
+  "reactions:read",
   "reactions:write",
   "users:read",
 ] as const;

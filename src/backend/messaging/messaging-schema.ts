@@ -84,3 +84,50 @@ export const MESSAGING_INBOX_SCHEMA_SQL = `
     PRIMARY KEY(connection_id, platform_channel_id)
   );
 `;
+
+// Migration 29, and the tail of the latest schema after `MESSAGING_INBOX_SCHEMA_SQL`. IF NOT EXISTS
+// throughout, for the same reason.
+//
+// The Slack client cache: every conversation the connected person can see, and the messages loaded
+// for it. Like the inbox, it is a copy of Slack data on this computer only, written directly and never
+// to the event log. Rows go with their connection, and a cache past its size limit drops the
+// conversations opened least recently. `kind` has no CHECK, so a new kind needs no table rebuild.
+// `ts` values compare as text: a Slack `ts` has a fixed width. The primary key of `slack_messages`
+// is also its `(connection_id, channel_id, ts)` index.
+export const SLACK_CLIENT_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS slack_conversations (
+    connection_id TEXT NOT NULL REFERENCES projection_messaging_connections(connection_id) ON DELETE CASCADE,
+    channel_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    member_ids_json TEXT NOT NULL,
+    is_member INTEGER NOT NULL CHECK(is_member IN (0, 1)),
+    last_read_ts TEXT,
+    unread_count INTEGER NOT NULL,
+    last_activity_ts TEXT,
+    last_opened_at TEXT,
+    oldest_loaded_ts TEXT,
+    newest_loaded_ts TEXT,
+    has_more_history INTEGER NOT NULL CHECK(has_more_history IN (0, 1)),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(connection_id, channel_id)
+  );
+  CREATE TABLE IF NOT EXISTS slack_messages (
+    connection_id TEXT NOT NULL REFERENCES projection_messaging_connections(connection_id) ON DELETE CASCADE,
+    channel_id TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    thread_ts TEXT,
+    reply_count INTEGER NOT NULL,
+    latest_reply_ts TEXT,
+    author_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    files_json TEXT NOT NULL,
+    reactions_json TEXT NOT NULL,
+    edited_at TEXT,
+    deleted INTEGER NOT NULL CHECK(deleted IN (0, 1)),
+    subtype TEXT,
+    cached_at TEXT NOT NULL,
+    PRIMARY KEY(connection_id, channel_id, ts)
+  );
+  CREATE INDEX IF NOT EXISTS slack_messages_thread ON slack_messages(connection_id, channel_id, thread_ts);
+`;

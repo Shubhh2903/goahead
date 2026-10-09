@@ -8,7 +8,6 @@ import { WorkspaceChannelConversation } from "./features/channels/WorkspaceChann
 import { useDirectMessages } from "./features/conversation/direct-messages-context";
 import { WorkspaceConversation } from "./features/conversation/WorkspaceConversation";
 import { WorkspaceDirectConversation } from "./features/conversation/WorkspaceDirectConversation";
-import { MessagingInboxView } from "./features/messaging-threads/MessagingInboxView";
 import { MessagingThreadConversation } from "./features/messaging-threads/MessagingThreadConversation";
 import { useMessagingThreads } from "./features/messaging-threads/messaging-threads-context";
 import { WorkspaceServerOnboarding } from "./features/onboarding/WorkspaceServerOnboarding";
@@ -17,6 +16,7 @@ import { SchedulePanel } from "./features/schedule/SchedulePanel";
 import { useServers } from "./features/servers/servers-context";
 import { WorkspaceServerRail } from "./features/servers/WorkspaceServerRail";
 import { WorkspaceSidebar } from "./features/sidebar/WorkspaceSidebar";
+import { SlackClientView } from "./features/slack-client/SlackClientView";
 import { AgentUsagePanel } from "./features/usage/AgentUsagePanel";
 import { useUsage } from "./features/usage/usage-context";
 import { useLayout } from "./layout";
@@ -48,7 +48,8 @@ export function WorkspaceShell(props: { account: () => CentralAuthUser }) {
   const channelOpen = () => channels.state.selectedId !== null;
   const messagingThreads = useMessagingThreads();
   // A channel wins over a Slack conversation, which wins over a person and an agent.
-  // The Slack inbox and a Slack conversation take the same place; opening one closes the other.
+  // The Slack client (the "Slack inbox" row) and a Slack conversation take the same place; opening one
+  // closes the other.
   const inboxOpen = () => !channelOpen() && messagingThreads.inbox.open;
   const threadOpen = () => !channelOpen() && (messagingThreads.state.selectedId !== null || inboxOpen());
   const usage = useUsage();
@@ -117,7 +118,7 @@ export function WorkspaceShell(props: { account: () => CentralAuthUser }) {
         <MessagingThreadConversation />
       </Show>
       <Show when={!agentSetupOpen() && inboxOpen()}>
-        <MessagingInboxView />
+        <SlackClientView />
       </Show>
       <Show
         when={activePeopleEnabled() && !agentSetupOpen() && !channelOpen() && !threadOpen() && activeDirectMember()}

@@ -1,0 +1,198 @@
+/* The messages of the open Slack conversation. */
+.slack-message-pane {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.slack-message-pane-header {
+  padding: var(--openbot-space-2) var(--openbot-space-3);
+  border-bottom: 1px solid var(--openbot-border);
+}
+
+.slack-message-pane-title {
+  margin: 0;
+  font-size: var(--openbot-text-lg);
+}
+
+/* The frame keeps the reading position itself when older messages arrive above it. */
+.slack-message-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-anchor: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-bottom: var(--openbot-space-3);
+}
+
+.slack-message-older {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+}
+
+.slack-message-list {
+  position: relative;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.slack-message-row {
+  position: absolute;
+  inset: 0 0 auto;
+  width: 100%;
+}
+
+.slack-message-list-static .slack-message-row {
+  position: relative;
+  inset: auto;
+}
+
+.slack-message-day {
+  margin: var(--openbot-space-3) var(--openbot-space-3) var(--openbot-space-1);
+  padding-bottom: var(--openbot-space-1);
+  border-bottom: 1px solid var(--openbot-border);
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  font-weight: 600;
+}
+
+.slack-message-item {
+  position: relative;
+  display: grid;
+  gap: var(--openbot-space-2);
+  grid-template-columns: 32px minmax(0, 1fr);
+  padding: var(--openbot-space-2) var(--openbot-space-3) var(--openbot-space-0-5);
+}
+
+.slack-message-item-grouped {
+  padding-top: var(--openbot-space-0-5);
+}
+
+.slack-message-item:hover,
+.slack-message-item:focus-within {
+  background: var(--openbot-bg-control-hover);
+}
+
+.slack-message-item-pending {
+  opacity: 0.6;
+}
+
+.slack-message-avatar {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--openbot-radius-sm);
+  background: var(--openbot-bg-control-active);
+  color: var(--openbot-text-secondary);
+  font-size: var(--openbot-text-sm);
+  font-weight: 600;
+}
+
+.slack-message-body {
+  display: grid;
+  min-width: 0;
+  gap: var(--openbot-space-1);
+}
+
+.slack-message-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--openbot-space-2);
+}
+
+.slack-message-meta time,
+.slack-message-edited {
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+}
+
+.slack-message-deleted {
+  color: var(--openbot-text-muted);
+  font-style: italic;
+}
+
+.slack-message-replies {
+  justify-self: start;
+}
+
+/* Edit and Delete show on hover and on keyboard focus; they are in the tab order at all times. */
+.slack-message-actions {
+  position: absolute;
+  top: var(--openbot-space-1);
+  right: var(--openbot-space-3);
+  display: flex;
+  gap: var(--openbot-space-1);
+  border-radius: var(--openbot-radius-sm);
+  background: var(--openbot-bg-control);
+  opacity: 0;
+  box-shadow: 0 0 0 1px var(--openbot-border);
+}
+
+.slack-message-item:hover .slack-message-actions,
+.slack-message-item:focus-within .slack-message-actions {
+  opacity: 1;
+}
+
+.slack-message-editor {
+  display: grid;
+  gap: var(--openbot-space-1);
+}
+
+.slack-message-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--openbot-space-1);
+}
+
+/* Reaction chips under a message, and the "+" that opens the emoji picker. */
+.slack-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--openbot-space-1);
+}
+
+.slack-reaction-chip {
+  gap: var(--openbot-space-1);
+  border-radius: var(--openbot-radius-sm);
+  box-shadow: 0 0 0 1px var(--openbot-border);
+}
+
+.slack-reaction-chip[aria-pressed="true"] {
+  box-shadow: 0 0 0 1px var(--openbot-accent);
+}
+
+/* A message with no reaction shows "+" only on hover or focus. */
+.slack-reactions:not(:has(.slack-reaction-chip)) .slack-reaction-add {
+  opacity: 0;
+}
+
+.slack-message-item:hover .slack-reaction-add,
+.slack-message-item:focus-within .slack-reaction-add,
+.slack-reaction-add[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.slack-emoji-picker {
+  display: grid;
+  width: 288px;
+  gap: var(--openbot-space-2);
+  padding: var(--openbot-space-2);
+}
+
+.slack-emoji-picker-grid {
+  display: grid;
+  max-height: 200px;
+  grid-template-columns: repeat(8, 1fr);
+  overflow-y: auto;
+}

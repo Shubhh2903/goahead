@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import { SLACK_CLIENT_LIMITS } from "@openbot/contracts/ipc";
+import { type DynamicRecord, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import { slackOwnerBlockId } from "@openbot/contracts/signal-protocol/slack-route";
 import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-app";
 import { sourceText } from "@openbot/i18n/source";
@@ -7,8 +8,17 @@ import type { MessagingAnswerFile } from "../messaging-threads";
 import {
   type ConnectionIdentity,
   type ContextEntry,
+  type HistoryConversation,
+  type HistoryConversationPage,
+  type HistoryConversationState,
+  type HistoryMessage,
+  type HistoryPage,
+  type HistoryReaction,
+  type HistoryThreadPage,
+  type HistoryUpload,
   type InboundFile,
   type InboxCandidate,
+  type InboxFile,
   type MessageBody,
   type MessageSender,
   type MessageTarget,
@@ -22,7 +32,7 @@ import {
 import { plainText, SLACK_ACTION_IDS, slackInboxCandidate } from "./slack-events";
 import { SlackEventsTransport } from "./slack-events-transport";
 import { slackChunks, slackMrkdwn } from "./slack-render";
-import { SlackApiError, SlackWebApi } from "./slack-web-api";
+import { SlackApiError, type SlackCallOptions, SlackWebApi } from "./slack-web-api";
 
 /** Slack's own limit for one uploaded file is 1 GB; the host holds its uploads to this. */
 const UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -35,6 +45,14 @@ const PERSON_PLACE_PAGES = 5;
 /** How long the workspace's own emoji are kept before `emoji.list` is read again. */
 const EMOJI_CACHE_MS = 60 * 60_000;
 const EMOJI_RETRY_MS = 5 * 60_000;
+/** Reads of the Slack client go through its own queue, which waits on a 429. */
+const QUEUED: SlackCallOptions = { retryRateLimit: false };
+/** 50 pages of 200 people for the mention picker. */
+const PEOPLE_PAGES = 50;
+const PEOPLE_CACHE_MS = 60 * 60_000;
+/** After a failed `users.list` read, searches answer with that failure this long before a new read. */
+const PEOPLE_RETRY_MS = 60_000;
+const PEOPLE_MATCHES = 20;
 
 const REACTIONS: Record<StatusReaction, string> = {
   received: "eyes",
@@ -62,6 +80,7 @@ export class SlackAdapter implements MessagingAdapter {
   readonly #own = new Map<string, Promise<boolean>>();
   readonly #personIn = new Map<string, boolean>();
   #emoji: { value: Promise<Record<string, string>>; until: number } | null = null;
+  #people: { value: Promise<Array<{ id: string; names: string[]; name: string }>>; until: number } | null = null;
   #botUserId = "";
   #workspaceId = "";
   /** The connected person's Slack user id, known after `identify` when the install gave a user token. */
@@ -69,12 +88,15 @@ export class SlackAdapter implements MessagingAdapter {
 
   constructor(
     tokens: { botToken: string; userToken: string | undefined },
-    options: MessagingDriverOptions & { origin?: string | undefined },
+    options: MessagingDriverOptions & {
+      origin?: string | undefined;
+      /** Waits between rate-limit retries. Only tests replace it. */
+      delay?: ((milliseconds: number) => Promise<void>) | undefined;
+    },
   ) {
-    this.#api = new SlackWebApi({ token: tokens.botToken, origin: options.origin, rateLimited: options.rateLimited });
-    this.#userApi = tokens.userToken
-      ? new SlackWebApi({ token: tokens.userToken, origin: options.origin, rateLimited: options.rateLimited })
-      : null;
+    const shared = { origin: options.origin, rateLimited: options.rateLimited, delay: options.delay };
+    this.#api = new SlackWebApi({ token: tokens.botToken, ...shared });
+    this.#userApi = tokens.userToken ? new SlackWebApi({ token: tokens.userToken, ...shared }) : null;
   }
 
   async identify(): Promise<ConnectionIdentity> {
@@ -301,7 +323,7 @@ export class SlackAdapter implements MessagingAdapter {
   }
 
   async openDirectMessage(userIds: string, as: MessageSender): Promise<string> {
-    const response = await this.#apiFor(as).call("conversations.open", { users: userIds });
+    const response = await this.#apiFor(as, "conversations.open").call("conversations.open", { users: userIds });
     const channel = isDynamicRecord(response.channel) ? response.channel.id : undefined;
     if (!isString(channel)) throw new SlackApiError("conversations.open", "no_channel");
     return channel;
@@ -309,7 +331,7 @@ export class SlackAdapter implements MessagingAdapter {
 
   async postAs(target: MessageTarget, markdown: string, as: MessageSender): Promise<string> {
     const [first = "", ...rest] = slackChunks(slackMrkdwn(markdown));
-    const api = this.#apiFor(as);
+    const api = this.#apiFor(as, "chat.postMessage");
     const post = async (text: string) => {
       const response = await api.call("chat.postMessage", {
         channel: target.platformChannelId,
@@ -328,13 +350,22 @@ export class SlackAdapter implements MessagingAdapter {
 
   /**
    * A reply that the person typed in GoAhead, posted as them with the user token. The text is sent as
-   * they wrote it, only escaped, so it cannot ping a workspace. A failure names only Slack's error code.
+   * they wrote it, only escaped, so it cannot ping a workspace. With `keepMentions` the text is client
+   * text (see `clientText`): user mentions stay. `broadcast` also shows a thread reply in the
+   * conversation (`reply_broadcast`). A failure names only Slack's error code.
    */
-  async postAsUser(input: { channel: string; threadTs?: string; text: string }): Promise<{ ts: string }> {
-    const response = await this.#apiFor("user").call("chat.postMessage", {
+  async postAsUser(input: {
+    channel: string;
+    threadTs?: string;
+    text: string;
+    keepMentions?: boolean;
+    broadcast?: boolean;
+  }): Promise<{ ts: string }> {
+    const response = await this.#apiFor("user", "chat.postMessage").call("chat.postMessage", {
       channel: input.channel,
       thread_ts: input.threadTs,
-      text: input.text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
+      reply_broadcast: input.broadcast && input.threadTs ? "true" : undefined,
+      text: input.keepMentions ? clientText(input.text) : escapeText(input.text),
       unfurl_links: false,
       unfurl_media: false,
     });
@@ -349,7 +380,7 @@ export class SlackAdapter implements MessagingAdapter {
   }
 
   async listPersonPlaces(): Promise<Array<{ id: string; name: string; isPrivate: boolean }>> {
-    const api = this.#apiFor("user");
+    const api = this.#apiFor("user", "users.conversations");
     const places: Array<{ id: string; name: string; isPrivate: boolean }> = [];
     let cursor: string | undefined;
     for (let page = 0; page < PERSON_PLACE_PAGES; page += 1) {
@@ -373,7 +404,7 @@ export class SlackAdapter implements MessagingAdapter {
   // Slack allows apps outside its Marketplace one `conversations.history` call a minute, of at most 15
   // messages. The caller spaces the calls.
   async recentMessages(platformChannelId: string, limit: number): Promise<InboxCandidate[]> {
-    const response = await this.#apiFor("user").call("conversations.history", {
+    const response = await this.#apiFor("user", "conversations.history").call("conversations.history", {
       channel: platformChannelId,
       limit: String(limit),
     });
@@ -453,10 +484,191 @@ export class SlackAdapter implements MessagingAdapter {
     }
   }
 
-  /** The user token is only there when the install gave one; a send as the user without it fails. */
-  #apiFor(as: MessageSender): SlackWebApi {
+  async listConversations(cursor?: string): Promise<HistoryConversationPage> {
+    const response = await this.#apiFor("user", "users.conversations").call(
+      "users.conversations",
+      {
+        types: "public_channel,private_channel,im,mpim",
+        exclude_archived: "true",
+        limit: String(CHANNEL_PAGE_LIMIT),
+        cursor,
+      },
+      QUEUED,
+    );
+    const channels = Array.isArray(response.channels) ? response.channels.filter(isDynamicRecord) : [];
+    const conversations = channels.flatMap((channel): HistoryConversation[] => {
+      if (!isString(channel.id)) return [];
+      if (channel.is_im === true) {
+        const people = [channel.user, this.#ownerUserId].filter(isString);
+        return [{ channelId: channel.id, kind: "im", name: "", memberIds: people, isMember: true }];
+      }
+      return [
+        {
+          channelId: channel.id,
+          kind: channel.is_mpim === true ? "mpim" : channel.is_private === true ? "private" : "channel",
+          name: isString(channel.name) ? channel.name : "",
+          memberIds: [],
+          // `users.conversations` lists only the conversations the person is in.
+          isMember: channel.is_member !== false,
+        },
+      ];
+    });
+    return { conversations, nextCursor: nextCursor(response) };
+  }
+
+  async historyPage(channel: string, options: { latest?: string; limit: number }): Promise<HistoryPage> {
+    const response = await this.#apiFor("user", "conversations.history").call(
+      "conversations.history",
+      { channel, latest: options.latest, limit: String(options.limit), inclusive: "false" },
+      QUEUED,
+    );
+    return { messages: this.#historyMessages(response.messages), hasMore: response.has_more === true };
+  }
+
+  /** One page of a thread. The caller runs each page as its own queued call, so a 429 repeats one page. */
+  async threadReplies(channel: string, threadTs: string, cursor?: string): Promise<HistoryThreadPage> {
+    const response = await this.#apiFor("user", "conversations.replies").call(
+      "conversations.replies",
+      { channel, ts: threadTs, limit: String(CHANNEL_PAGE_LIMIT), cursor },
+      QUEUED,
+    );
+    return { messages: this.#historyMessages(response.messages), nextCursor: nextCursor(response) };
+  }
+
+  async conversationInfo(channel: string): Promise<HistoryConversationState> {
+    const response = await this.#apiFor("user", "conversations.info").call("conversations.info", { channel }, QUEUED);
+    const info = isDynamicRecord(response.channel) ? response.channel : {};
+    return {
+      lastReadTs: isString(info.last_read) && info.last_read ? info.last_read : null,
+      unreadCount: isNumber(info.unread_count_display) ? info.unread_count_display : null,
+    };
+  }
+
+  async conversationMembers(channel: string): Promise<string[]> {
+    const response = await this.#apiFor("user", "conversations.members").call(
+      "conversations.members",
+      { channel, limit: "100" },
+      QUEUED,
+    );
+    return Array.isArray(response.members) ? response.members.filter(isString) : [];
+  }
+
+  /** `text` is client text (see `clientText`): user mentions stay, all other markup is escaped. */
+  async updateAsUser(channel: string, ts: string, text: string): Promise<void> {
+    await this.#apiFor("user", "chat.update").call("chat.update", { channel, ts, text: clientText(text) });
+  }
+
+  async deleteAsUser(channel: string, ts: string): Promise<void> {
+    await this.#apiFor("user", "chat.delete").call("chat.delete", { channel, ts });
+  }
+
+  async reactAsUser(channel: string, ts: string, name: string, on: boolean): Promise<void> {
+    try {
+      const method = on ? "reactions.add" : "reactions.remove";
+      await this.#apiFor("user", method).call(method, { channel, timestamp: ts, name });
+    } catch (error) {
+      if (!(error instanceof SlackApiError && ["already_reacted", "no_reaction"].includes(error.code))) throw error;
+    }
+  }
+
+  /**
+   * `files.getUploadURLExternal`, the bytes to that Slack address (without the token), then
+   * `files.completeUploadExternal`, which shares the file in the conversation as the person.
+   */
+  async uploadFileAsUser(input: HistoryUpload): Promise<{ fileId: string }> {
+    const api = this.#apiFor("user", "files.getUploadURLExternal");
+    if (input.bytes.byteLength === 0) throw new SlackApiError("files.upload", "empty_file");
+    if (input.bytes.byteLength > SLACK_CLIENT_LIMITS.uploadBytes) throw new SlackApiError("files.upload", "too_large");
+    const ticket = await api.call("files.getUploadURLExternal", {
+      filename: input.name,
+      length: String(input.bytes.byteLength),
+    });
+    if (!isString(ticket.upload_url) || !isString(ticket.file_id))
+      throw new SlackApiError("files.getUploadURLExternal", "no_upload_url");
+    await api.uploadBytes(ticket.upload_url, input.bytes, input.mimeType ?? "application/octet-stream");
+    await api.call("files.completeUploadExternal", {
+      files: [{ id: ticket.file_id, title: input.name }],
+      channel_id: input.channel,
+      thread_ts: input.threadTs,
+      initial_comment: input.initialComment ? clientText(input.initialComment) : undefined,
+    });
+    return { fileId: ticket.file_id };
+  }
+
+  /**
+   * Matches the start of any word of a name, without case. `users.list` is read once an hour. A failed
+   * read is kept for `PEOPLE_RETRY_MS`, so each keystroke of the picker does not read it again.
+   */
+  async searchPeople(query: string): Promise<Array<{ id: string; name: string }>> {
+    const needle = query.trim().toLowerCase();
+    const people = await this.#peopleList();
+    return people
+      .filter((person) =>
+        person.names.some(
+          (name) => name.split(/[\s._-]+/u).some((word) => word.startsWith(needle)) || name.startsWith(needle),
+        ),
+      )
+      .slice(0, PEOPLE_MATCHES)
+      .map(({ id, name }) => ({ id, name }));
+  }
+
+  #peopleList(): Promise<Array<{ id: string; names: string[]; name: string }>> {
+    const now = Date.now();
+    if (this.#people && this.#people.until > now) return this.#people.value;
+    const value = this.#readPeople();
+    this.#people = { value, until: now + PEOPLE_CACHE_MS };
+    value.catch(() => {
+      if (this.#people?.value === value) this.#people = { value, until: Date.now() + PEOPLE_RETRY_MS };
+    });
+    return value;
+  }
+
+  /**
+   * Not queued: `users.list` is Tier 2. Each page waits Slack's `Retry-After` on a 429 and tries that page
+   * again, so a 429 never reads the pages before it again.
+   */
+  async #readPeople(): Promise<Array<{ id: string; names: string[]; name: string }>> {
+    const people: Array<{ id: string; names: string[]; name: string }> = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < PEOPLE_PAGES; page += 1) {
+      const response = await this.#api.call("users.list", { limit: String(CHANNEL_PAGE_LIMIT), cursor });
+      const members = Array.isArray(response.members) ? response.members.filter(isDynamicRecord) : [];
+      for (const member of members) {
+        if (!isString(member.id) || member.deleted === true || member.is_bot === true) continue;
+        const profile = isDynamicRecord(member.profile) ? member.profile : {};
+        const names = [profile.display_name, profile.real_name, member.real_name, member.name]
+          .filter(isString)
+          .map((name) => name.trim())
+          .filter(Boolean);
+        const name = names[0] ?? member.id;
+        if (!this.#names.has(member.id)) this.#names.set(member.id, Promise.resolve(name));
+        people.push({ id: member.id, name, names: names.map((entry) => entry.toLowerCase()) });
+      }
+      const next = nextCursor(response);
+      if (!next) break;
+      cursor = next;
+    }
+    return people;
+  }
+
+  #historyMessages(value: unknown): HistoryMessage[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter(isDynamicRecord)
+      .flatMap((message) => {
+        const mapped = historyMessage(message, this.#ownerUserId);
+        return mapped ? [mapped] : [];
+      })
+      .sort(byTsAscending);
+  }
+
+  /**
+   * The user token is only there when the install gave one; a call as the user without it fails, and
+   * the error names `method`, the Slack method that the caller was about to call.
+   */
+  #apiFor(as: MessageSender, method: string): SlackWebApi {
     if (as === "bot") return this.#api;
-    if (!this.#userApi) throw new SlackApiError("chat.postMessage", "no_user_token");
+    if (!this.#userApi) throw new SlackApiError(method, "no_user_token");
     return this.#userApi;
   }
 
@@ -571,6 +783,95 @@ export class SlackAdapter implements MessagingAdapter {
       ],
     };
   }
+}
+
+/** Escaped so the text cannot ping a workspace: the person's own text, as they typed it. */
+function escapeText(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+/** A user mention as Slack writes it: `<@U…>` or `<@W…>`, with no label. */
+const USER_MENTION = /<@[UW][A-Z0-9]+>/g;
+
+/**
+ * Client text: what the Slack client's composer sends. It is plain text, plus user mention tokens
+ * `<@U…>` that the mention picker inserted. Those stay; all other `&`, `<` and `>` are escaped, so
+ * `<!here>`, `<!channel>`, `<!everyone>` and links cannot ping a workspace or change the text.
+ */
+export function clientText(text: string): string {
+  let result = "";
+  let last = 0;
+  for (const match of text.matchAll(USER_MENTION)) {
+    result += escapeText(text.slice(last, match.index)) + match[0];
+    last = match.index + match[0].length;
+  }
+  return result + escapeText(text.slice(last));
+}
+
+function nextCursor(response: DynamicRecord): string | null {
+  const next = isDynamicRecord(response.response_metadata) ? response.response_metadata.next_cursor : undefined;
+  return isString(next) && next ? next : null;
+}
+
+function byTsAscending(left: { ts: string }, right: { ts: string }): number {
+  return Number(left.ts) - Number(right.ts) || left.ts.localeCompare(right.ts);
+}
+
+function slackTime(ts: string): string | null {
+  const seconds = Number(ts);
+  return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString() : null;
+}
+
+/** One raw Slack message as the client's cache keeps it, or null without a `ts`. */
+function historyMessage(message: DynamicRecord, ownerUserId: string | null): HistoryMessage | null {
+  const ts = message.ts;
+  if (!isString(ts)) return null;
+  const author = [message.user, message.bot_id].find(isString) ?? "";
+  const edited = isDynamicRecord(message.edited) && isString(message.edited.ts) ? slackTime(message.edited.ts) : null;
+  const subtype = isString(message.subtype) ? message.subtype : null;
+  return {
+    ts,
+    threadTs: isString(message.thread_ts) && message.thread_ts !== ts ? message.thread_ts : null,
+    replyCount: isNumber(message.reply_count) ? message.reply_count : 0,
+    latestReplyTs: isString(message.latest_reply) ? message.latest_reply : null,
+    authorId: author,
+    text: isString(message.text) ? message.text : "",
+    files: historyFiles(message.files),
+    reactions: historyReactions(message.reactions, ownerUserId),
+    editedAt: edited,
+    deleted: subtype === "tombstone",
+    subtype,
+  };
+}
+
+function historyReactions(value: unknown, ownerUserId: string | null): HistoryReaction[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isDynamicRecord).flatMap((reaction): HistoryReaction[] => {
+    if (!isString(reaction.name)) return [];
+    const userIds = Array.isArray(reaction.users) ? reaction.users.filter(isString) : [];
+    const count = isNumber(reaction.count) ? reaction.count : userIds.length;
+    return [{ name: reaction.name, count, userIds, mine: ownerUserId !== null && userIds.includes(ownerUserId) }];
+  });
+}
+
+/** The files of a history message. Slack's private addresses stay here, in the backend. */
+function historyFiles(value: unknown): InboxFile[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isDynamicRecord).flatMap((file): InboxFile[] => {
+    const url = [file.url_private_download, file.url_private].find(isString);
+    if (!isString(file.id) || !url) return [];
+    return [
+      {
+        id: file.id,
+        name: [file.name, file.title].find(isString) ?? file.id,
+        mimeType: isString(file.mimetype) ? file.mimetype : "application/octet-stream",
+        size: isNumber(file.size) ? file.size : 0,
+        url,
+        thumbnailUrl: [file.thumb_480, file.thumb_360, file.thumb_720].find(isString) ?? null,
+        permalink: isString(file.permalink) ? file.permalink : null,
+      },
+    ];
+  });
 }
 
 export interface SlackDriverOptions {

@@ -5,7 +5,7 @@
 // opens. A Discord driver would use the Gateway and a Telegram driver long polling (`getUpdates`).
 // No transport needs a public endpoint on the host.
 
-import type { MessagingConnectionState, MessagingPlatform } from "@openbot/contracts/ipc";
+import type { MessagingConnectionState, MessagingPlatform, SlackConversationKind } from "@openbot/contracts/ipc";
 import type { MessagingAnswerFile } from "./messaging-threads";
 
 /** Where a post goes: a platform channel, and the thread in it or the top level. */
@@ -85,6 +85,110 @@ export interface InboxFile {
   permalink: string | null;
 }
 
+/** One emoji reaction on a history message. `userIds` can be shorter than `count`: Slack cuts the list. */
+export interface HistoryReaction {
+  name: string;
+  count: number;
+  userIds: string[];
+  /** The connected person reacted with it. */
+  mine: boolean;
+}
+
+/**
+ * One message of a conversation's history, as the Slack client's cache keeps it. `text` stays in
+ * Slack's markup. The files keep the platform's private addresses: they stay in main and backend.
+ */
+export interface HistoryMessage {
+  ts: string;
+  /** The thread the message replies in, or null at the top of the conversation and for a thread parent. */
+  threadTs: string | null;
+  replyCount: number;
+  latestReplyTs: string | null;
+  /** A user id, or a bot id for a bot message, or empty when the platform gives neither. */
+  authorId: string;
+  text: string;
+  files: InboxFile[];
+  reactions: HistoryReaction[];
+  /** ISO time of the last edit, or null. */
+  editedAt: string | null;
+  /** A deleted thread parent that Slack keeps as a placeholder. */
+  deleted: boolean;
+  subtype: string | null;
+}
+
+/** One conversation the connected person is in. */
+export interface HistoryConversation {
+  channelId: string;
+  kind: SlackConversationKind;
+  /** The channel name. Empty for a direct message: the caller names it from `memberIds`. */
+  name: string;
+  /**
+   * The people of a direct message (the other person, then the connected person). Empty otherwise,
+   * and empty for a group DM until `conversationMembers` reads them.
+   */
+  memberIds: string[];
+  isMember: boolean;
+}
+
+export interface HistoryConversationPage {
+  conversations: HistoryConversation[];
+  nextCursor: string | null;
+}
+
+export interface HistoryPage {
+  /** Oldest first. */
+  messages: HistoryMessage[];
+  hasMore: boolean;
+}
+
+/** One page of a thread: the parent is on the first page. Pass `nextCursor` back for the next page. */
+export interface HistoryThreadPage {
+  /** Oldest first. */
+  messages: HistoryMessage[];
+  nextCursor: string | null;
+}
+
+export interface HistoryConversationState {
+  lastReadTs: string | null;
+  /** Null when the platform does not give it for this conversation. */
+  unreadCount: number | null;
+}
+
+/**
+ * A live change to the history the Slack client keeps: a new message, an edit, a deletion, a
+ * reaction, or the connected person joining or leaving a conversation. It updates the cache only;
+ * it never starts an agent turn.
+ */
+export type HistoryEvent =
+  | { type: "message"; channelId: string; message: HistoryMessage }
+  | { type: "edited"; channelId: string; ts: string; text: string; editedAt: string }
+  | { type: "deleted"; channelId: string; ts: string }
+  | {
+      type: "reaction";
+      channelId: string;
+      ts: string;
+      name: string;
+      userId: string;
+      on: boolean;
+      /** The connected person, whose own reaction sets `mine`. */
+      ownerUserId: string | null;
+    }
+  | { type: "membership"; channelId: string; kind: SlackConversationKind; isMember: boolean };
+
+export interface HistoryUpload {
+  channel: string;
+  threadTs?: string;
+  name: string;
+  bytes: Uint8Array;
+  mimeType?: string;
+  /**
+   * The text of the message that shares the file, as client text: plain text plus `<@U…>` user
+   * mentions. Every other `<`, `>` and `&` is escaped. A send with a file is this one call; no later
+   * post attaches the file.
+   */
+  initialComment?: string;
+}
+
 export type InboundAction =
   | {
       type: "approval";
@@ -143,8 +247,18 @@ export interface MessagingAdapter {
   identify(): Promise<ConnectionIdentity>;
   post(target: MessageTarget, body: MessageBody): Promise<string>;
   edit(target: MessageTarget, messageId: string, body: MessageBody): Promise<void>;
-  /** Posts a reply that the person typed, as them, with the user token. Only Slack has it. */
-  postAsUser?(input: { channel: string; threadTs?: string; text: string }): Promise<{ ts: string }>;
+  /**
+   * Posts a reply that the person typed, as them, with the user token. Only Slack has it. The text is
+   * escaped as a whole; with `keepMentions` it is client text, and `<@U…>` user mentions stay. With
+   * `broadcast`, a thread reply also shows in the conversation.
+   */
+  postAsUser?(input: {
+    channel: string;
+    threadTs?: string;
+    text: string;
+    keepMentions?: boolean;
+    broadcast?: boolean;
+  }): Promise<{ ts: string }>;
   /** Moves the person's read mark of a conversation to `ts`, with the user token. Only Slack has it. */
   markReadAsUser?(channel: string, ts: string): Promise<void>;
   postPrivate(target: MessageTarget, userId: string, text: string): Promise<void>;
@@ -206,6 +320,30 @@ export interface MessagingAdapter {
   authorName(userId: string): Promise<string>;
   placeName(platformChannelId: string): Promise<string>;
   mention(userId: string): string;
+  // The Slack client. Every method below acts as the connected person, with the user token, and fails
+  // without it. Reads throw `SlackRateLimitError` on a 429 at once, so the client's queue waits; each
+  // read is one Slack call, so the queue schedules and repeats one page at a time. Text that these
+  // methods send is client text: plain text plus `<@U…>` user mentions, with all other markup escaped.
+  /** One page of the person's conversations of every kind. */
+  listConversations?(cursor?: string): Promise<HistoryConversationPage>;
+  /** Messages before `latest` (all the newest without it), oldest first. */
+  historyPage?(channel: string, options: { latest?: string; limit: number }): Promise<HistoryPage>;
+  /** One page of a thread (the parent and replies), oldest first. Without `cursor`, the first page. */
+  threadReplies?(channel: string, threadTs: string, cursor?: string): Promise<HistoryThreadPage>;
+  /** The person's read mark and unread count of one conversation. */
+  conversationInfo?(channel: string): Promise<HistoryConversationState>;
+  /** The people of a group DM (at most 100; a group DM has at most 9). */
+  conversationMembers?(channel: string): Promise<string[]>;
+  /** Changes the text of one of the person's own messages. The caller checks the author first. */
+  updateAsUser?(channel: string, ts: string, text: string): Promise<void>;
+  /** Deletes one of the person's own messages. The caller checks the author first. */
+  deleteAsUser?(channel: string, ts: string): Promise<void>;
+  /** Adds or removes the person's reaction. A reaction already in that state is not an error. */
+  reactAsUser?(channel: string, ts: string, name: string, on: boolean): Promise<void>;
+  /** Uploads one file and shares it in the conversation as the person. Refuses a file over the client limit. */
+  uploadFileAsUser?(input: HistoryUpload): Promise<{ fileId: string }>;
+  /** People of the workspace whose names match `query`, for a mention. Not queued: it waits on a 429 itself. */
+  searchPeople?(query: string): Promise<Array<{ id: string; name: string }>>;
   /** Joins every public place the platform lets OpenBot join without an invitation. */
   joinPublicPlaces?(): Promise<void>;
   /** Joins one public place, such as a channel that was just created. */
@@ -220,6 +358,8 @@ export interface TransportSink {
   placeCreated?(platformChannelId: string): void;
   /** A message the connected person can see. The inbox decides whether to keep it. */
   inbox?(candidate: InboxCandidate): void;
+  /** A live change to a conversation's history, for the Slack client's cache. Only Slack has it. */
+  history?(event: HistoryEvent): void;
   /**
    * The platform says that a token was revoked or the app was removed. The event can be late: a
    * disconnect revokes the old tokens, and the event can arrive after a new install. Without this

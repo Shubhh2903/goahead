@@ -21,6 +21,35 @@ export class SlackApiError extends Error {
   }
 }
 
+/**
+ * Slack answered 429 and this client did not wait. `retryAfterSeconds` is Slack's `Retry-After`; a
+ * request queue pauses that long and tries again. It names no token and no request body.
+ */
+export class SlackRateLimitError extends SlackApiError {
+  readonly status = 429;
+
+  constructor(
+    method: string,
+    readonly retryAfterSeconds: number,
+  ) {
+    super(method, "ratelimited");
+  }
+}
+
+export interface SlackCallOptions {
+  /**
+   * False throws `SlackRateLimitError` on the first 429, for a caller that queues its own retries.
+   * By default the call waits `Retry-After` and tries again, and throws only when the retries run out.
+   */
+  retryRateLimit?: boolean;
+}
+
+/** Slack's `Retry-After` in whole seconds, at least 1. */
+function retryAfterSeconds(response: Response): number {
+  const seconds = Number(response.headers.get("retry-after") ?? "1");
+  return Number.isFinite(seconds) ? Math.max(1, Math.ceil(seconds)) : 1;
+}
+
 export interface SlackWebApiOptions {
   token: string;
   /** Only tests change this. The token is never sent to another origin. */
@@ -48,13 +77,13 @@ export class SlackWebApi {
     this.#delay = options.delay ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   }
 
-  async call(method: string, params: DynamicRecord = {}): Promise<SlackResponse> {
+  async call(method: string, params: DynamicRecord = {}, options: SlackCallOptions = {}): Promise<SlackResponse> {
     const body = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
       if (value === undefined || value === null) continue;
       body.set(key, typeof value === "string" ? value : JSON.stringify(value));
     }
-    const { payload } = await this.#send(method, body);
+    const { payload } = await this.#send(method, body, options.retryRateLimit ?? true);
     return payload;
   }
 
@@ -85,7 +114,7 @@ export class SlackWebApi {
 
   /** `auth.test` with the granted scopes, which Slack sends only as a response header. */
   async authTest(): Promise<{ payload: SlackResponse; scopes: string[] }> {
-    const { payload, response } = await this.#send("auth.test", new URLSearchParams());
+    const { payload, response } = await this.#send("auth.test", new URLSearchParams(), true);
     const scopes = (response.headers.get("x-oauth-scopes") ?? "")
       .split(",")
       .map((scope) => scope.trim())
@@ -93,7 +122,11 @@ export class SlackWebApi {
     return { payload, scopes };
   }
 
-  async #send(method: string, body: URLSearchParams): Promise<{ payload: SlackResponse; response: Response }> {
+  async #send(
+    method: string,
+    body: URLSearchParams,
+    retryRateLimit: boolean,
+  ): Promise<{ payload: SlackResponse; response: Response }> {
     for (let attempt = 0; ; attempt += 1) {
       const response = await fetch(`${this.#origin}/api/${method}`, {
         method: "POST",
@@ -105,10 +138,12 @@ export class SlackWebApi {
         body,
         redirect: "error",
       });
-      if (response.status === 429 && attempt < RATE_LIMIT_RETRIES) {
-        const waitMs = Math.max(1, Number(response.headers.get("retry-after") ?? "1")) * 1000;
-        if (waitMs > RATE_LIMIT_NOTICE_MS) this.#rateLimited(new Date(Date.now() + waitMs).toISOString());
+      if (response.status === 429) {
+        const seconds = retryAfterSeconds(response);
         await response.body?.cancel();
+        if (!retryRateLimit || attempt >= RATE_LIMIT_RETRIES) throw new SlackRateLimitError(method, seconds);
+        const waitMs = seconds * 1000;
+        if (waitMs > RATE_LIMIT_NOTICE_MS) this.#rateLimited(new Date(Date.now() + waitMs).toISOString());
         await this.#delay(waitMs);
         continue;
       }

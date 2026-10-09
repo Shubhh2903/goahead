@@ -5,7 +5,11 @@ import { isGeneratedAgentId } from "@openbot/contracts/validation";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { CHANNEL_SCHEMA_SQL, CHANNEL_SETTINGS_SCHEMA_SQL } from "./channel-schema";
 import { MCP_SERVERS_SCHEMA_SQL } from "./mcp-schema";
-import { MESSAGING_INBOX_SCHEMA_SQL, MESSAGING_SCHEMA_SQL } from "./messaging/messaging-schema";
+import {
+  MESSAGING_INBOX_SCHEMA_SQL,
+  MESSAGING_SCHEMA_SQL,
+  SLACK_CLIENT_SCHEMA_SQL,
+} from "./messaging/messaging-schema";
 
 const BASELINE_SCHEMA_VERSION = 8;
 
@@ -410,7 +414,8 @@ const LATEST_SCHEMA_SQL =
   ) +
   MCP_SERVERS_SCHEMA_SQL +
   MESSAGING_SCHEMA_SQL +
-  MESSAGING_INBOX_SCHEMA_SQL;
+  MESSAGING_INBOX_SCHEMA_SQL +
+  SLACK_CLIENT_SCHEMA_SQL;
 
 /** The end of a routine table with the migration 27 column after its last one. */
 function withRoutineLimitPolicy(tableEnd: string): string {
@@ -551,6 +556,12 @@ const MIGRATIONS: readonly OpenBotMigration[] = [
     version: 28,
     // Only creates tables and an index, as migration 25 does: no foreign-key pause and no vacuum.
     up: (db) => db.exec(MESSAGING_INBOX_SCHEMA_SQL),
+  },
+  {
+    version: 29,
+    // Creates tables and an index and copies rows into them: no rebuild, so no foreign-key pause and
+    // no vacuum. The inbox rows stay where they are.
+    up: addSlackClientCache,
   },
 ];
 
@@ -837,6 +848,39 @@ function addRoutineLimitPolicy(db: DatabaseSync): void {
     if (columns.some((column) => isDynamicRecord(column) && column.name === "limit_policy")) continue;
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${V27_ROUTINE_LIMIT_POLICY_COLUMN_SQL}`);
   }
+}
+
+// Migration 29 adds the Slack client cache. Every inbox message becomes a cached message, and every
+// inbox conversation a cached conversation. Slack sync fills the names, members, files and reactions
+// later; until then a conversation has an empty name. The person received each of these messages, so
+// they are a member. OR IGNORE keeps a row that a development profile which ran this version before it
+// shipped already has. last_read_ts stays NULL: the inbox read mark is GoAhead's, not the person's Slack
+// read mark. Sync fills it from conversations.info. The loaded range stays NULL: the inbox kept only
+// some messages, so the copied rows are not a range with no gap. The first open reads the newest page.
+function addSlackClientCache(db: DatabaseSync, appliedAt: string): void {
+  db.exec(SLACK_CLIENT_SCHEMA_SQL);
+  db.exec(`
+    INSERT OR IGNORE INTO slack_messages
+      (connection_id, channel_id, ts, thread_ts, author_id, text, files_json, reactions_json, deleted, subtype,
+       reply_count, cached_at)
+    SELECT connection_id, platform_channel_id, platform_message_id, thread_key, author_id, text, '[]', '[]', 0, NULL,
+      0, sent_at
+    FROM projection_messaging_inbox
+  `);
+  db.prepare(
+    `INSERT OR IGNORE INTO slack_conversations
+       (connection_id, channel_id, kind, name, member_ids_json, is_member, last_read_ts, unread_count,
+        last_activity_ts, last_opened_at, oldest_loaded_ts, newest_loaded_ts, has_more_history, updated_at)
+     SELECT m.connection_id, m.platform_channel_id,
+       CASE
+         WHEN SUM(m.kind = 'direct') > 0 THEN 'im'
+         WHEN SUM(m.kind = 'group') > 0 THEN 'mpim'
+         ELSE 'channel'
+       END,
+       '', '[]', 1, NULL, 0, MAX(m.platform_message_id), NULL, NULL, NULL, 1, ?
+     FROM projection_messaging_inbox m
+     GROUP BY m.connection_id, m.platform_channel_id`,
+  ).run(appliedAt);
 }
 
 // Migrations 17, 22, 23, 24 and 26 share this SQL. Each migration gives its own CHECK line and staging table name, so the

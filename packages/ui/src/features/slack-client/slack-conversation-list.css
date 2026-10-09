@@ -1,0 +1,102 @@
+/* The conversation list of the Slack client: a search field, then the Unreads, Channels and Direct messages sections. */
+.slack-conversation-list {
+  display: grid;
+  align-content: start;
+  gap: var(--openbot-space-3);
+  padding: var(--openbot-space-2);
+}
+
+.slack-conversation-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.slack-conversation-search-icon {
+  position: absolute;
+  left: var(--openbot-space-2);
+  width: 14px;
+  height: 14px;
+  color: var(--openbot-text-muted);
+  pointer-events: none;
+}
+
+.slack-conversation-search .slack-conversation-search-input {
+  width: 100%;
+  padding-left: calc(var(--openbot-space-2) * 2 + 14px);
+}
+
+.slack-conversation-section {
+  display: grid;
+  gap: 2px;
+}
+
+.slack-conversation-section-title {
+  margin: 0;
+  padding: 0 var(--openbot-space-2);
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  font-weight: 600;
+  line-height: var(--openbot-leading-sm);
+}
+
+.slack-conversation-rows {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.slack-conversation-list .slack-conversation-row {
+  display: flex;
+  width: 100%;
+  height: auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--openbot-space-2);
+  border-radius: var(--openbot-radius-sm);
+  padding: var(--openbot-space-1) var(--openbot-space-2);
+  font-weight: 400;
+  text-align: left;
+}
+
+.slack-conversation-list .slack-conversation-row-active {
+  background: var(--openbot-bg-surface);
+}
+
+.slack-conversation-row-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--openbot-text-muted);
+}
+
+.slack-conversation-row-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.slack-conversation-row-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: var(--openbot-text-md);
+  line-height: var(--openbot-leading-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slack-conversation-row-unread .slack-conversation-row-name {
+  font-weight: 600;
+}
+
+.slack-conversation-row-workspace {
+  flex: 0 0 auto;
+  color: var(--openbot-text-readable);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-sm);
+}
+
+.slack-conversation-row-badge {
+  flex: 0 0 auto;
+}

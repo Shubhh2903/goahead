@@ -1,0 +1,33 @@
+/* The thread panel of the Slack client. */
+.slack-thread-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.slack-thread-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--openbot-space-2) var(--openbot-space-3);
+  border-bottom: 1px solid var(--openbot-border);
+}
+
+.slack-thread-body {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-content: start;
+  gap: var(--openbot-space-2);
+  padding: var(--openbot-space-3);
+  overflow-y: auto;
+}
+
+.slack-thread-replies {
+  display: grid;
+  gap: var(--openbot-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

@@ -33,4 +33,10 @@ export const messages = defineMessages("error.messaging", {
     "That Slack conversation is not in the GoAhead inbox. Use slack_list_unread to see the conversations it keeps.",
   // An `@chief` instruction from the inbox when the workspace has no Slack Orchestrator.
   "error.messaging.inboxNeedsOrchestrator": "Add the Slack Orchestrator first.",
+  // The Slack client: a read or an action of the person that is refused before Slack is called.
+  "error.messaging.clientNeedsUser": "Connect the Slack workspace as you in GoAhead to use its messages here.",
+  "error.messaging.clientNeedsUserRead": "Connect the Slack workspace as you in GoAhead to read your conversations.",
+  "error.messaging.clientNotYours": "You can only edit or delete your own messages.",
+  "error.messaging.clientTextTooLong": "The message is longer than {limit} characters. Nothing was sent.",
+  "error.messaging.clientFileTooLarge": "The file is larger than {limit} MB. Nothing was sent.",
 });

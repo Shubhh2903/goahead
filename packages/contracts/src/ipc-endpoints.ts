@@ -286,6 +286,25 @@ import type {
   UninstallSkillInput,
 } from "./ipc-skills";
 import type {
+  SlackClientChanged,
+  SlackClientConversation,
+  SlackClientDeleteInput,
+  SlackClientEditInput,
+  SlackClientListInput,
+  SlackClientMentionCandidate,
+  SlackClientMentionInput,
+  SlackClientOlderInput,
+  SlackClientOpenInput,
+  SlackClientPage,
+  SlackClientReactInput,
+  SlackClientSendInput,
+  SlackClientThread,
+  SlackClientThreadInput,
+  SlackClientUploadBytesInput,
+  SlackClientUploadInput,
+  SlackClientUploadResult,
+} from "./ipc-slack-client";
+import type {
   ClearStorageInput,
   DeleteStoredFileInput,
   GetStorageUsageInput,
@@ -651,6 +670,26 @@ export const IPC_ENDPOINTS = {
     // owner can hand that over.
     getSlackRouting: request<SlackRoutingWorkspaceInput, SlackRoutingStatus>()("messaging:get-slack-routing"),
     handOverSlackDefault: request<HandOverSlackDefaultInput, SlackRoutingStatus>()("messaging:hand-over-slack-default"),
+  },
+  // The Slack client of a workspace connected as the person: their conversations from this
+  // computer's cache, loaded from Slack on demand. Local only. Actions go out as the person, with no
+  // approval. No result carries a token or a Slack file address.
+  slackClient: {
+    listConversations: request<SlackClientListInput, SlackClientConversation[]>()("slack-client:list-conversations"),
+    open: request<SlackClientOpenInput, SlackClientPage>()("slack-client:open"),
+    older: request<SlackClientOlderInput, SlackClientPage>()("slack-client:older"),
+    thread: request<SlackClientThreadInput, SlackClientThread>()("slack-client:thread"),
+    send: request<SlackClientSendInput, void>()("slack-client:send"),
+    edit: request<SlackClientEditInput, void>()("slack-client:edit"),
+    delete: request<SlackClientDeleteInput, void>()("slack-client:delete"),
+    react: request<SlackClientReactInput, void>()("slack-client:react"),
+    // Main opens the file picker. Null when the person cancels it.
+    upload: request<SlackClientUploadInput, SlackClientUploadResult | null>()("slack-client:upload"),
+    uploadBytes: request<SlackClientUploadBytesInput, SlackClientUploadResult>()("slack-client:upload-bytes"),
+    mentionCandidates: request<SlackClientMentionInput, SlackClientMentionCandidate[]>()(
+      "slack-client:mention-candidates",
+    ),
+    changed: event<SlackClientChanged>()("slack-client:changed"),
   },
   // The server name, logo and app update of one server's host. `host.updateIdentity` and `update`
   // reach this computer only; these take the server, so a remote admin reaches the host. The

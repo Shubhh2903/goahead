@@ -497,20 +497,35 @@ Web API directly.
   workspace, and Slack sends every message of each channel that GoAhead is in; the computer keeps
   only the messages that address GoAhead or continue a conversation.
 - **Connected as you (optional).** When the install also gives your own Slack access, its token is
-  stored and redacted like the bot token, and Slack also sends the messages you can see. The computer
-  keeps a local Slack inbox in its database: your direct and group direct messages, messages that
-  mention you, and the channels you pick in Settings > Connectors > Slack, with each author's display
-  name. A newly picked channel starts with its newest 15 messages, read from Slack as you. Messages
-  older than 30 days are deleted, a channel you remove loses its messages, and disconnect deletes the
-  whole inbox. When you open or answer an inbox conversation in GoAhead, GoAhead also tells Slack, as
+  stored and redacted like the bot token, and Slack also sends the messages you can see. The
+  computer keeps a local Slack inbox in its database (from v0.35.0, the Slack client cache in the
+  next item also keeps your messages, with its own rules): your direct and group direct messages,
+  messages that mention you, and the channels you pick in Settings > Connectors > Slack, with each
+  author's display name. A newly picked channel starts with its newest 15 messages, read from
+  Slack as you. Messages of this inbox older than 30 days are deleted (this does not apply to the
+  Slack client cache), a channel you remove loses its messages, and disconnect deletes the whole
+  inbox. When you open or answer an inbox conversation in GoAhead, GoAhead also tells Slack, as
   you, that you read it up to its newest message (`conversations.mark`), so Slack's unread mark
-  matches. A reply that starts with `@chief` is not sent to Slack: it goes, with the conversation's
-  last 20 messages, to the Slack Orchestrator agent on your computer. Agents read the inbox only
-  when you ask in your own direct message with GoAhead. A
-  message goes out as you only when you asked for it yourself; when someone else asks, it goes out
-  from the GoAhead app after you approve it, and its first line names who asked. A reply that you
-  type in the inbox goes to Slack as you, with no approval, and is kept in the audit log. Nothing in
-  the inbox leaves the computer, except the parts an agent reads, which go to that agent's provider.
+  matches. A reply that starts with `@chief` is not sent to Slack: it goes, with the
+  conversation's last 20 messages, to the Slack Orchestrator agent on your computer. Agents read
+  the inbox only when you ask in your own direct message with GoAhead. A message goes out as you
+  only when you asked for it yourself; when someone else asks, it goes out from the GoAhead app
+  after you approve it, and its first line names who asked. A reply that you type in the inbox
+  goes to Slack as you, with no approval, and is kept in the audit log. Nothing in the inbox
+  leaves the computer, except the parts an agent reads, which go to that agent's provider.
+- **Slack client (connected as you).** The Slack inbox shows all your channels, direct messages and
+  group direct messages. GoAhead reads from Slack, as you, the list of your conversations, the
+  history of a conversation when you open it or scroll back, the replies of a thread when you open
+  it, the reactions, and your read mark. It keeps these messages and their reactions in a local
+  cache in its database, and the images in them as files in its data folder, on this computer, with
+  no time limit. The cache of one workspace has a size limit of 1 GB; above it, GoAhead deletes the
+  conversations you opened least recently, and reads them again from Slack when you open them.
+  Disconnect deletes the whole cache of that workspace. The upgrade copies the messages of the old
+  inbox into the cache. When you ask an agent about Slack (in your own direct message with GoAhead, or
+  in GoAhead on this computer), it can read every cached conversation, private channels included. What you do in the client goes to Slack as you, with no approval: your
+  messages and thread replies, your edits and deletes of your own messages, your reactions, and the
+  files you attach. An attached file goes to Slack (at most 50 MB) and is not kept by GoAhead.
+  Agents read the cache with the same rules as the inbox.
 - **Given to the Slack Orchestrator.** Every new Slack request goes first to the orchestrator agent,
   which runs on its provider like any other agent and passes the work to a teammate with the facts
   it needs.

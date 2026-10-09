@@ -285,6 +285,36 @@ reads a route ticket that has only a person route as "this host owns the workspa
    mentions of @GoAhead and direct messages to GoAhead go to the default computer, but that person's
    inbox does not receive new messages.
 
+### Update an existing install to the Slack client **[Human]**
+
+The Slack client (v0.35.0) needs two more user scopes and four more user events. The three
+manifests and `SLACK_USER_SCOPES` (`packages/contracts/src/slack-app.ts`) have them:
+
+- User scopes: `files:write` (attach files) and `reactions:read` (show reactions).
+- User events: `reaction_added`, `reaction_removed`, `member_joined_channel` and `channel_left`.
+
+The auth-api Worker builds the Slack authorize URL from `SLACK_USER_SCOPES`
+(`apps/auth-api/src/server/slack-app.ts`), so it must be deployed again. Signal and D1 do not
+change. Do the steps in this order:
+
+1. Apply the updated manifests, as in step 2 of section 5: `apps/slack-app/internal/manifest.json`
+   to `A0C860EFP6C`, and `apps/slack-app/development/manifest.json` to the development app. For the
+   production app, see `apps/slack-app/README.md`. Do this first: Slack refuses a `user_scope` that
+   the app's manifest does not have.
+2. Deploy the auth-api Worker (section 3, step 4). Until then, a new connect asks for the old
+   scopes.
+3. Release GoAhead v0.35.0 (section 7).
+4. **Each person connects Slack again once** (Settings > Connectors > Slack) after installing
+   v0.35.0, so that their user token gets the new scopes. Until then, attaching a file fails and
+   reactions made in Slack do not reach GoAhead. Edits and deletes made in Slack still reach
+   GoAhead: they come as `message_changed` and `message_deleted` in the `message.*` events that the
+   token already has. **Not confirmed:** whether `conversations.history` returns reactions without
+   `reactions:read`, so whether reactions show in the client before the reconnect. Not tested
+   against Slack.
+
+The first start of v0.35.0 runs database migration 29. It copies the messages of the local Slack
+inbox into the Slack client cache and keeps the old inbox table.
+
 ## 6. Apple Developer **[Human]**
 
 1. In the company's Apple Developer account, make:

@@ -24,6 +24,21 @@ import type {
   SendInboxReplyInput,
   SlackChannelChoice,
   SlackChannelList,
+  SlackClientChanged,
+  SlackClientConversation,
+  SlackClientDeleteInput,
+  SlackClientEditInput,
+  SlackClientListInput,
+  SlackClientMentionCandidate,
+  SlackClientMentionInput,
+  SlackClientOlderInput,
+  SlackClientOpenInput,
+  SlackClientPage,
+  SlackClientReactInput,
+  SlackClientSendInput,
+  SlackClientThread,
+  SlackClientThreadInput,
+  SlackClientUploadResult,
   SlackOverview,
   SlackRoutingStatus,
 } from "@openbot/contracts/ipc";
@@ -60,6 +75,7 @@ import type {
 import {
   type ConnectionIdentity,
   DIRECT_CONVERSATION_KEY,
+  type HistoryEvent,
   type InboundAction,
   type InboundMessage,
   type InboxCandidate,
@@ -77,6 +93,10 @@ import {
 import { type SlackAppPort, SlackConnect } from "./slack/slack-connect";
 import { slackOrchestratorMemories, slackOrchestratorProfile } from "./slack/slack-orchestrator";
 import { SlackWebApi } from "./slack/slack-web-api";
+import { SlackClientActions, type SlackClientUploadAction } from "./slack-client/actions";
+import { applySlackClientEvent } from "./slack-client/events";
+import { SlackRequestQueue } from "./slack-client/request-queue";
+import { SlackClientSync } from "./slack-client/sync-service";
 
 const logger = createOpenBotLogger("messaging");
 
@@ -276,16 +296,16 @@ const IDENTIFY_RETRY_MS = 30_000;
 /** How long the local inbox keeps a message, and how often it deletes older ones. */
 const INBOX_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const INBOX_PURGE_INTERVAL_MS = 6 * 60 * 60_000;
-/**
- * A newly picked channel starts with its newest messages. Slack allows apps outside its Marketplace
- * one history call a minute, of at most 15 messages, so the fills of one workspace wait in line.
- */
+/** A newly picked channel starts with its newest messages, read in the workspace's request queue. */
 const HISTORY_FILL_MESSAGES = 15;
-const HISTORY_FILL_SPACING_MS = 61_000;
+/** History-type calls of one workspace, as the Slack client's request queue allows them. */
+const SLACK_HISTORY_CALLS_PER_MINUTE = 40;
 /** The most people, channels and emoji one inbox page looks up. */
 const INBOX_LOOKUPS = 50;
 /** The marker `mention` uses. Text that did not come from the host has it taken out. */
 const MENTION_MARKERS = /[\uE000-\uE001]/g;
+/** The most people one `@` search of the Slack client offers. */
+const MENTION_CANDIDATES = 20;
 
 /**
  * Owns the live connections to chat platform workspaces: it starts and stops each one's transport,
@@ -314,8 +334,16 @@ export class MessagingService {
   readonly #recent = new Set<string>();
   /** Who hears that a workspace's inbox got a new message. */
   readonly #inboxListeners = new Set<(workspaceId: string) => void>();
-  /** The history fills of each connection, one after the other. */
-  readonly #fills = new Map<string, Promise<void>>();
+  /** The request queue of each connection's history-type Slack calls. */
+  readonly #slackQueues = new Map<string, SlackRequestQueue>();
+  /** The Slack client's loads from Slack into the cache, for every connection. */
+  readonly #slackSync: SlackClientSync;
+  /** The person's own actions in the Slack client, by connection. */
+  readonly #slackActions = new Map<string, SlackClientActions>();
+  /** How many times each connection was disconnected: an action that outlives one clears what it cached. */
+  readonly #slackDisconnects = new Map<string, number>();
+  /** Who hears that a workspace's Slack client cache changed. */
+  readonly #slackClientListeners = new Set<(change: SlackClientChanged) => void>();
   readonly #unsubscribe: Array<() => void> = [];
   readonly #ingress: MessagingIngress | null;
   readonly #connect: SlackConnect | null;
@@ -342,6 +370,17 @@ export class MessagingService {
     this.#routing = options.slackRouting ?? null;
     this.#inboxFiles = options.inboxFilesRoot ? new MessagingInboxFiles(options.inboxFilesRoot) : null;
     this.#handoffIntervalMs = options.handoffStatusIntervalMs ?? HANDOFF_STATUS_INTERVAL_MS;
+    this.#slackSync = new SlackClientSync({
+      store: this.#threads.inbox.cache,
+      queueFor: (connectionId) => this.#slackQueue(connectionId),
+      adapterFor: (connectionId) => this.#slackClientLive(connectionId)?.adapter ?? null,
+      names: {
+        workspaceId: (connectionId) => this.#threads.store.connection(connectionId)?.workspaceId ?? null,
+        ownerUserId: (connectionId) => this.#slackOwner(connectionId),
+      },
+      onChanged: (change) => this.#slackClientChanged(change),
+      warn: (error) => this.#warn(error),
+    });
   }
 
   async start(): Promise<void> {
@@ -376,6 +415,7 @@ export class MessagingService {
     this.#threads.setMessageSender(null);
     this.#threads.setInboxReader(null);
     this.#ingress?.handle(null);
+    for (const connectionId of this.#live.keys()) this.#slackSync.stop(connectionId);
     await Promise.all([...this.#live.values()].map((live) => live.transport?.stop()));
     this.#live.clear();
   }
@@ -581,6 +621,8 @@ export class MessagingService {
     for (const text of slackOrchestratorMemories(record.workspaceName))
       this.#agents.createMemory({ agentId: agent.id, text });
     this.#threads.store.updateConnection(record.connectionId, { orchestratorAgentId: agent.id });
+    // The Slack inbox row sits under the orchestrator: the desktop reads the inbox list again.
+    this.#inboxChanged(record.workspaceId);
     // A sidebar it cannot reach leaves the agent where new agents go; the orchestrator still answers.
     const sectionId = await this.#placeInIntegrations(agent.id).catch((error) => {
       this.#warn(error);
@@ -651,13 +693,20 @@ export class MessagingService {
   async disconnectSlackWorkspace(workspaceId: string): Promise<void> {
     const record = this.#requireConnection(workspaceId);
     const unreadable = this.#credentials.status(record.connectionId) === "unreadable";
+    this.#slackDisconnects.set(record.connectionId, (this.#slackDisconnects.get(record.connectionId) ?? 0) + 1);
+    // Stops the Slack client's reads too: a read that is queued or in flight writes nothing after this.
     await this.#stopConnection(record.connectionId);
     if (unreadable) await this.#discardUnreadableAccess(record);
     else await this.#revokeAndUnlink(record);
     // The inbox is a copy of the person's Slack messages, read with the access this revokes.
     this.#threads.inbox.deleteForConnection(record.connectionId);
     await this.#inboxFiles?.deleteForConnection(record.connectionId).catch((error) => this.#warn(error));
+    // The Slack client's cache too, and its timers, actions and request queue.
+    this.#slackActions.delete(record.connectionId);
+    this.#slackQueues.delete(record.connectionId);
+    this.#threads.inbox.cache.clearConnection(record.connectionId);
     this.#inboxChanged(record.workspaceId);
+    this.#slackClientChanged({ workspaceId: record.workspaceId, channelId: null });
     this.#threads.store.updateConnection(record.connectionId, { enabled: false, lastErrorCode: null });
     this.#ingress?.reconnect();
   }
@@ -859,8 +908,12 @@ export class MessagingService {
       return this.#setState(live, "reconnecting");
     }
     if (this.#live.get(record.connectionId) !== live) return;
-    // A connection as the person adds a Slack inbox: the desktop reads the inbox list again.
-    if (live.identity.user) this.#inboxChanged(record.workspaceId);
+    // A connection as the person adds a Slack inbox: the desktop reads the inbox list again, and the
+    // Slack client reads the person's conversation list.
+    if (live.identity.user) {
+      this.#inboxChanged(record.workspaceId);
+      void this.#slackSync.refreshConversations(record.connectionId).catch((error) => this.#warn(error));
+    }
     const identity = live.identity;
     this.#threads.store.updateConnection(record.connectionId, {
       workspaceName: identity.workspaceName,
@@ -880,6 +933,7 @@ export class MessagingService {
       placeCreated: (platformChannelId) =>
         void live.adapter.joinPlace?.(platformChannelId).catch((error) => this.#warn(error)),
       inbox: (candidate) => void this.#keep(live, candidate).catch((error) => this.#warn(error)),
+      history: (event) => this.#slackHistory(live, event),
       revoked: () => void this.#verifyTokens(live).catch((error) => this.#warn(error)),
     });
     // So people can mention OpenBot in any public channel without inviting it first. Channels made
@@ -1037,7 +1091,7 @@ export class MessagingService {
     }
     const conversation = inboxConversation(request.conversation, watched);
     if (!conversation) throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
-    const messages = inbox.read(connectionId, conversation, request.threadKey, request.limit);
+    const messages = inbox.readForAgent(connectionId, conversation, request.threadKey, request.limit);
     if (messages.length === 0 && !watched.some((channel) => channel.platformChannelId === conversation))
       throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
     const newest = messages.at(-1);
@@ -1103,7 +1157,12 @@ export class MessagingService {
     if (!instruction) throw new Error(sourceText("error.messaging.sendTextEmpty"));
     const connectionId = live.record.connectionId;
     const inbox = this.#threads.inbox;
-    const messages = inbox.read(connectionId, input.conversation, input.threadKey ?? null, CHIEF_CONTEXT_MESSAGES);
+    const messages = inbox.readForAgent(
+      connectionId,
+      input.conversation,
+      input.threadKey ?? null,
+      CHIEF_CONTEXT_MESSAGES,
+    );
     if (messages.length === 0) throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
     const agentId = this.#orchestrator(live.record);
     if (!agentId) throw new Error(sourceText("error.messaging.inboxNeedsOrchestrator"));
@@ -1150,24 +1209,175 @@ export class MessagingService {
     return live;
   }
 
-  /** Reads a newly picked channel's newest messages into the inbox, after the fills before it. */
+  /** The request queue of one connection's history-type Slack calls, shared with the Slack client. */
+  #slackQueue(connectionId: string): SlackRequestQueue {
+    let queue = this.#slackQueues.get(connectionId);
+    if (!queue) {
+      queue = new SlackRequestQueue({ perMinute: SLACK_HISTORY_CALLS_PER_MINUTE });
+      this.#slackQueues.set(connectionId, queue);
+    }
+    return queue;
+  }
+
+  /** Reads a newly picked channel's newest messages into the inbox, as background work in the queue. */
   #fillHistory(live: LiveConnection, platformChannelId: string): void {
     const connectionId = live.record.connectionId;
-    const previous = this.#fills.get(connectionId) ?? Promise.resolve();
-    const next = previous.then(async () => {
-      if (this.#live.get(connectionId) !== live || !live.adapter.recentMessages) return;
-      if (!this.#threads.inbox.isWatched(connectionId, platformChannelId)) return;
-      const messages = await live.adapter.recentMessages(platformChannelId, HISTORY_FILL_MESSAGES).catch((error) => {
-        this.#warn(error);
-        return [];
-      });
-      for (const candidate of messages) await this.#keep(live, candidate).catch((error) => this.#warn(error));
-      await new Promise((resolve) => setTimeout(resolve, HISTORY_FILL_SPACING_MS).unref?.());
+    const recentMessages = live.adapter.recentMessages?.bind(live.adapter);
+    if (!recentMessages) return;
+    const fill = this.#slackQueue(connectionId).run("background", async () => {
+      if (this.#live.get(connectionId) !== live) return [];
+      if (!this.#threads.inbox.isWatched(connectionId, platformChannelId)) return [];
+      return recentMessages(platformChannelId, HISTORY_FILL_MESSAGES);
     });
-    const settled = next.catch((error) => this.#warn(error));
-    this.#fills.set(connectionId, settled);
-    void settled.then(() => {
-      if (this.#fills.get(connectionId) === settled) this.#fills.delete(connectionId);
+    void fill
+      .then(async (messages) => {
+        for (const candidate of messages) await this.#keep(live, candidate).catch((error) => this.#warn(error));
+      })
+      .catch((error) => this.#warn(error));
+  }
+
+  // The Slack client: the person's conversations from the local cache, loaded from Slack on demand.
+  // Every method needs a workspace connected as the person. Reads work offline from the cache.
+
+  /** The person's conversations, newest activity first. */
+  async slackClientConversations({ workspaceId }: SlackClientListInput): Promise<SlackClientConversation[]> {
+    return this.#slackSync.listConversations(this.#slackClientConnection(workspaceId));
+  }
+
+  /** The newest page of a conversation from the cache; the newest messages from Slack follow as a change. */
+  async slackClientOpen({ workspaceId, channelId }: SlackClientOpenInput): Promise<SlackClientPage> {
+    return this.#slackSync.open(this.#slackClientConnection(workspaceId), channelId);
+  }
+
+  async slackClientOlder({ workspaceId, channelId, beforeTs }: SlackClientOlderInput): Promise<SlackClientPage> {
+    return this.#slackSync.older(this.#slackClientConnection(workspaceId), channelId, beforeTs);
+  }
+
+  async slackClientThread({ workspaceId, channelId, threadTs }: SlackClientThreadInput): Promise<SlackClientThread> {
+    return this.#slackSync.thread(this.#slackClientConnection(workspaceId), channelId, threadTs);
+  }
+
+  /**
+   * Sends as the person, with no approval and no send guard: the person writes it in GoAhead. A file
+   * goes with `slackClientUpload`, which takes the text.
+   */
+  async slackClientSend({ workspaceId, channelId, text, threadTs, broadcast }: SlackClientSendInput): Promise<void> {
+    await this.#slackClientAct(workspaceId, (actions) =>
+      actions.send({
+        channelId,
+        text,
+        ...(threadTs === undefined ? {} : { threadTs }),
+        ...(broadcast === undefined ? {} : { broadcast }),
+      }),
+    );
+  }
+
+  /** Refused before any Slack call unless the cached message is the person's own. */
+  async slackClientEdit({ workspaceId, channelId, ts, text }: SlackClientEditInput): Promise<void> {
+    await this.#slackClientAct(workspaceId, (actions) => actions.edit({ channelId, ts, text }));
+  }
+
+  /** Refused before any Slack call unless the cached message is the person's own. */
+  async slackClientDelete({ workspaceId, channelId, ts }: SlackClientDeleteInput): Promise<void> {
+    await this.#slackClientAct(workspaceId, (actions) => actions.delete({ channelId, ts }));
+  }
+
+  async slackClientReact({ workspaceId, channelId, ts, name, on }: SlackClientReactInput): Promise<void> {
+    await this.#slackClientAct(workspaceId, (actions) => actions.react({ channelId, ts, name, on }));
+  }
+
+  /**
+   * Shares a file as the person, with an optional text, in the channel or a thread: a path main
+   * picked, or the name and bytes of a file the person dropped.
+   */
+  async slackClientUpload(workspaceId: string, upload: SlackClientUploadAction): Promise<SlackClientUploadResult> {
+    return this.#slackClientAct(workspaceId, (actions) => actions.upload(upload));
+  }
+
+  /** People whose name matches, for an `@` mention. Empty while Slack cannot be read. */
+  async slackClientMentionCandidates({
+    workspaceId,
+    query,
+  }: SlackClientMentionInput): Promise<SlackClientMentionCandidate[]> {
+    const live = this.#slackClientLive(this.#slackClientConnection(workspaceId));
+    const search = live?.adapter.searchPeople?.bind(live.adapter);
+    if (!search) return [];
+    return (await search(query.trim())).slice(0, MENTION_CANDIDATES);
+  }
+
+  onSlackClientChanged(listener: (change: SlackClientChanged) => void): () => void {
+    this.#slackClientListeners.add(listener);
+    return () => this.#slackClientListeners.delete(listener);
+  }
+
+  #slackClientChanged(change: SlackClientChanged): void {
+    for (const listener of this.#slackClientListeners) listener(change);
+  }
+
+  /** The connection of a workspace connected as the person, connected now or not. */
+  #slackClientConnection(workspaceId: string): string {
+    const record = this.#requireConnection(workspaceId);
+    if (record.platform !== "slack" || !this.#slackOwner(record.connectionId))
+      throw new Error(sourceText("error.messaging.clientNeedsUser"));
+    return record.connectionId;
+  }
+
+  /** The live connection as the person, or null while it is not connected. */
+  #slackClientLive(connectionId: string): LiveConnection | null {
+    const live = this.#live.get(connectionId);
+    return live?.identity?.user ? live : null;
+  }
+
+  /** The person who connected the workspace. The saved access names them while Slack is unreachable. */
+  #slackOwner(connectionId: string): string | null {
+    return this.#live.get(connectionId)?.identity?.user?.id ?? this.#credentials.get(connectionId)?.userId ?? null;
+  }
+
+  /**
+   * Runs one action of the person. An action can write the cache after its Slack call; when the
+   * workspace was disconnected meanwhile and is not connected again, that write is removed, so a
+   * disconnected workspace keeps no cached messages.
+   */
+  async #slackClientAct<T>(workspaceId: string, act: (actions: SlackClientActions) => Promise<T>): Promise<T> {
+    const connectionId = this.#slackClientConnection(workspaceId);
+    const disconnects = this.#slackDisconnects.get(connectionId) ?? 0;
+    try {
+      return await act(this.#slackClientActions(workspaceId, connectionId));
+    } finally {
+      if ((this.#slackDisconnects.get(connectionId) ?? 0) !== disconnects && !this.#slackClientLive(connectionId))
+        this.#threads.inbox.cache.clearConnection(connectionId);
+    }
+  }
+
+  #slackClientActions(workspaceId: string, connectionId: string): SlackClientActions {
+    let actions = this.#slackActions.get(connectionId);
+    if (!actions) {
+      actions = new SlackClientActions({
+        connectionId,
+        store: this.#threads.inbox.cache,
+        adapter: () => this.#slackClientLive(connectionId)?.adapter ?? null,
+        ownerUserId: () => this.#slackOwner(connectionId),
+        onChanged: (channelId) => this.#slackClientChanged({ workspaceId, channelId }),
+      });
+      this.#slackActions.set(connectionId, actions);
+    }
+    return actions;
+  }
+
+  /** A live change from Slack: the cache takes it, and the open view hears of it. Never an agent turn. */
+  #slackHistory(live: LiveConnection, event: HistoryEvent): void {
+    const connectionId = live.record.connectionId;
+    if (this.#live.get(connectionId) !== live || !live.identity?.user) return;
+    try {
+      if (!applySlackClientEvent(this.#threads.inbox.cache, connectionId, event)) return;
+    } catch (error) {
+      this.#warn(error);
+      return;
+    }
+    // A joined or left conversation changes the list; anything else changes one conversation.
+    this.#slackClientChanged({
+      workspaceId: live.record.workspaceId,
+      channelId: event.type === "membership" ? null : event.channelId,
     });
   }
 
@@ -1320,7 +1530,20 @@ export class MessagingService {
     );
     const download = live?.adapter.downloadInboxFile?.bind(live.adapter);
     if (!live || !download || !this.#inboxFiles) return null;
-    return this.#inboxFiles.image(live.record.connectionId, fileId, download);
+    const connectionId = live.record.connectionId;
+    const image = await this.#inboxFiles.image(connectionId, fileId, download);
+    if (image) return image;
+    // An image of a Slack client conversation the inbox does not keep: the file index learns it from
+    // the cached message, so the same download, size cap and Slack-host check apply. It ages from now.
+    const cached = this.#threads.inbox.cache.messageWithFile(connectionId, fileId);
+    if (!cached) return null;
+    const indexed = (await this.#inboxFiles.forMessages(connectionId, cached.channelId, [cached.ts])).get(cached.ts);
+    // The index holds this file already, so its download failed: do not try again here.
+    if (indexed?.some((file) => file.id === fileId)) return null;
+    const known = new Set(indexed?.map((file) => file.id));
+    const files = [...(indexed ?? []), ...cached.files.filter((file) => !known.has(file.id))];
+    await this.#inboxFiles.remember(connectionId, cached.channelId, cached.ts, new Date().toISOString(), files);
+    return this.#inboxFiles.image(connectionId, fileId, download);
   }
 
   onInboxChanged(listener: (workspaceId: string) => void): () => void {
@@ -1351,6 +1574,7 @@ export class MessagingService {
   async #stopConnection(connectionId: string): Promise<void> {
     const live = this.#live.get(connectionId);
     this.#live.delete(connectionId);
+    this.#slackSync.stop(connectionId);
     await live?.transport?.stop();
   }
 

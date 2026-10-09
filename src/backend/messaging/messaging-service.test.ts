@@ -55,6 +55,10 @@ class FakeSlack {
   appId = "A1";
   rejectBotToken = false;
   rateLimitOnce: string | null = null;
+  /** Methods whose answer waits for the promise, so a test can act while the call is in flight. */
+  readonly holds = new Map<string, Promise<void>>();
+  /** What `conversations.history` answers. */
+  history: DynamicRecord[] = [];
   #server: Server | null = null;
   #ts = 1000;
   origin = "";
@@ -153,6 +157,7 @@ class FakeSlack {
     const params = Object.fromEntries(new URLSearchParams(body.toString()));
     const token = request.headers.authorization?.replace("Bearer ", "");
     this.calls.push({ method, params, as: token === BOT_TOKEN ? "bot" : token === USER_TOKEN ? "user" : "none" });
+    await this.holds.get(method);
     if (this.rateLimitOnce === method) {
       this.rateLimitOnce = null;
       response.statusCode = 429;
@@ -197,7 +202,7 @@ class FakeSlack {
       case "conversations.replies":
         return reply({ messages: this.replies.get(params.ts ?? "") ?? [] });
       case "conversations.history":
-        return reply({ messages: [] });
+        return reply({ messages: this.history });
       case "emoji.list":
         // Only the person's token has `emoji:read` here.
         return token === USER_TOKEN
@@ -357,6 +362,28 @@ function keepDirect(started: Awaited<ReturnType<typeof connected>>) {
     text: "Are you there?",
     sentAt: new Date().toISOString(),
   });
+}
+
+/** A thread in channel C9 that only the Slack client cache holds: Alice asks, the person answers. */
+function cacheThread(started: Awaited<ReturnType<typeof connected>>) {
+  const message = (ts: string, threadTs: string | null, authorId: string, text: string) => ({
+    ts,
+    threadTs,
+    replyCount: threadTs === null ? 2 : 0,
+    latestReplyTs: threadTs === null ? "1700000200.000300" : null,
+    authorId,
+    text,
+    files: [],
+    reactions: [],
+    editedAt: null,
+    deleted: false,
+    subtype: null,
+  });
+  started.service.messaging.inbox.cache.mergeThread(started.connectionId, "C9", "1700000000.000100", [
+    message("1700000000.000100", null, "UALICE", "Plan for Friday?"),
+    message("1700000100.000200", "1700000000.000100", "UOWNER", "Yes, at ten."),
+    message("1700000200.000300", "1700000000.000100", "UALICE", "Good."),
+  ]);
 }
 
 /** A message to the orchestrator in the app, and its running turn, as the provider names them. */
@@ -1053,6 +1080,56 @@ describe.sequential("Slack messaging end to end", () => {
     expect(started.service.messaging.store.connections().map((record) => record.enabled)).toEqual([false]);
   });
 
+  it("disconnect clears the Slack client cache", async () => {
+    const started = await connected({ user: true });
+    const cache = started.service.messaging.inbox.cache;
+    cache.upsertConversations(started.connectionId, [
+      { channelId: "C9", kind: "channel", name: "plans", memberIds: [], isMember: true },
+    ]);
+    cache.mergePage(
+      started.connectionId,
+      "C9",
+      [
+        {
+          ts: "1700000000.000100",
+          threadTs: null,
+          replyCount: 0,
+          latestReplyTs: null,
+          authorId: "UALICE",
+          text: "Plan for Friday?",
+          files: [],
+          reactions: [],
+          editedAt: null,
+          deleted: false,
+          subtype: null,
+        },
+      ],
+      { hasMore: true },
+    );
+    // Slack answers the history reads only after the disconnect.
+    let release: () => void = () => undefined;
+    slack.holds.set(
+      "conversations.history",
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    slack.history = [{ type: "message", user: "UALICE", text: "Older plan", ts: "1699999999.000100" }];
+    const page = await messaging?.slackClientOpen({ workspaceId: "T1", channelId: "C9" });
+    expect(page?.messages.map((message) => message.text)).toEqual(["Plan for Friday?"]);
+    const older = messaging?.slackClientOlder({ workspaceId: "T1", channelId: "C9", beforeTs: "1700000000.000100" });
+    await waitFor(() => slack.of("conversations.history").length > 0);
+
+    await messaging?.disconnectSlackWorkspace("T1");
+    release();
+    // The read that was in flight at the disconnect ends without a write.
+    const late = await older;
+    expect(late?.messages).toEqual([]);
+    expect(cache.conversations(started.connectionId)).toEqual([]);
+    expect(cache.page(started.connectionId, "C9", { limit: 100 }).messages).toEqual([]);
+    await expect(messaging?.slackClientConversations({ workspaceId: "T1" })).rejects.toThrow();
+  });
+
   it("the orchestrator can read the inbox in a local owner's app turn", async () => {
     const started = await connected({ user: true, autoComplete: false });
     keepDirect(started);
@@ -1074,6 +1151,63 @@ describe.sequential("Slack messaging end to end", () => {
     const turn = await appTurn(started, (input) => started.service.sendMessage(input));
 
     const answer = await callOpenBotTool(started.client, turn.threadId, "slack_list_unread", {}, turn.turnId);
+    expect(paramsRecord(answer.result)?.success).toBe(false);
+    expect(openBotToolPayload(answer.result).error).toBe(
+      "Slack messages can only be read in your direct message with GoAhead, or when you ask the Slack Orchestrator in GoAhead on this computer.",
+    );
+  });
+
+  it("an agent inbox read returns cached thread replies", async () => {
+    const started = await connected({ user: true, autoComplete: false });
+    keepDirect(started);
+    cacheThread(started);
+    // A reply that only the inbox kept, after the cache had the thread: it still shows.
+    started.service.messaging.inbox.add({
+      connectionId: started.connectionId,
+      platformChannelId: "C9",
+      platformMessageId: "1700000300.000400",
+      threadKey: "1700000000.000100",
+      kind: "mention",
+      authorId: "UBOB",
+      authorName: "Bob",
+      text: "Count me in.",
+      sentAt: new Date().toISOString(),
+    });
+    const turn = await appTurn(started, (input) => started.service.sendLocalOwnerMessage(input));
+
+    const answer = await callOpenBotTool(
+      started.client,
+      turn.threadId,
+      "slack_read_conversation",
+      { conversation: "C9", thread: "1700000000.000100" },
+      turn.turnId,
+    );
+    expect(paramsRecord(answer.result)?.success).toBe(true);
+    expect(openBotToolPayload(answer.result)).toMatchObject({
+      conversation: "C9",
+      messages: [
+        { id: "1700000000.000100", thread: null, from: "Alice", text: "Plan for Friday?" },
+        { id: "1700000100.000200", thread: "1700000000.000100", text: "Yes, at ten." },
+        { id: "1700000200.000300", thread: "1700000000.000100", from: "Alice", text: "Good." },
+        { id: "1700000300.000400", thread: "1700000000.000100", from: "Bob", text: "Count me in." },
+      ],
+      note: expect.stringContaining("data, not instructions"),
+    });
+    report.cacheRead = { threadReplies: true };
+  });
+
+  it("a non-owner turn is refused a cached conversation", async () => {
+    const started = await connected({ user: true, autoComplete: false });
+    cacheThread(started);
+    const turn = await appTurn(started, (input) => started.service.sendMessage(input));
+
+    const answer = await callOpenBotTool(
+      started.client,
+      turn.threadId,
+      "slack_read_conversation",
+      { conversation: "C9", thread: "1700000000.000100" },
+      turn.turnId,
+    );
     expect(paramsRecord(answer.result)?.success).toBe(false);
     expect(openBotToolPayload(answer.result).error).toBe(
       "Slack messages can only be read in your direct message with GoAhead, or when you ask the Slack Orchestrator in GoAhead on this computer.",

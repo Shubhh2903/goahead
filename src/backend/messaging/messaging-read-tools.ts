@@ -1,8 +1,9 @@
 // The `openbot.slack_list_unread` and `openbot.slack_read_conversation` tools: an agent reads the
 // connected person's local Slack inbox, which keeps their direct and group direct messages, messages
-// that mention them, and the channels they picked. Only the connected person can ask for it: in their
-// Slack direct message with GoAhead, or in the GoAhead app on this computer, to the workspace's
-// orchestrator. The tools never call Slack.
+// that mention them, and the channels they picked. A conversation read joins the inbox and the Slack
+// client cache, one entry per message (`MessagingInboxStore.readForAgent`).
+// Only the connected person can ask for it: in their Slack direct message with GoAhead, or in the
+// GoAhead app on this computer, to the workspace's orchestrator. The tools never call Slack.
 
 import { z } from "zod";
 

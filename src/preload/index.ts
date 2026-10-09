@@ -172,6 +172,15 @@ import {
   decodeSubmissions,
 } from "./skills-decoding";
 import {
+  decodeSlackClientChanged,
+  decodeSlackClientConversationsReply,
+  decodeSlackClientMentionCandidatesReply,
+  decodeSlackClientPageReply,
+  decodeSlackClientThreadReply,
+  decodeSlackClientUploadBytesReply,
+  decodeSlackClientUploadReply,
+} from "./slack-client-decoding";
+import {
   decodeDirectConversation,
   decodeDirectConversationPage,
   decodeDirectMessage,
@@ -658,6 +667,20 @@ const openbotApi: OpenBotDesktopApi = {
     askOrchestratorAboutInbox: decodeAskOrchestratorAboutInboxReply,
     getSlackRouting: decodeSlackRoutingStatusReply,
     handOverSlackDefault: decodeSlackRoutingStatusReply,
+  }),
+  slackClient: bridgeGroup(IPC_ENDPOINTS.slackClient, {
+    listConversations: decodeSlackClientConversationsReply,
+    open: decodeSlackClientPageReply,
+    older: decodeSlackClientPageReply,
+    thread: decodeSlackClientThreadReply,
+    send: decodeVoid,
+    edit: decodeVoid,
+    delete: decodeVoid,
+    react: decodeVoid,
+    upload: decodeSlackClientUploadReply,
+    uploadBytes: decodeSlackClientUploadBytesReply,
+    mentionCandidates: decodeSlackClientMentionCandidatesReply,
+    changed: dropInvalid(decodeSlackClientChanged),
   }),
   handoffs: bridgeGroup(IPC_ENDPOINTS.handoffs, {
     list: decodeAgentHandoffsReply,

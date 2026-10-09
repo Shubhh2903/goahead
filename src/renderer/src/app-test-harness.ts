@@ -1179,6 +1179,7 @@ export function installOpenbotStub(): void {
     providerAdmin: stubGroup(IPC_ENDPOINTS.providerAdmin, "providerAdmin", {}),
     hostAdmin: stubGroup(IPC_ENDPOINTS.hostAdmin, "hostAdmin", {}),
     messaging: stubGroup(IPC_ENDPOINTS.messaging, "messaging", {}),
+    slackClient: stubGroup(IPC_ENDPOINTS.slackClient, "slackClient", {}),
     handoffs: stubGroup(IPC_ENDPOINTS.handoffs, "handoffs", { list: vi.fn().mockResolvedValue([]) }),
     // `providerRuntimes` stays out: the renderer shows the sign-in and Refresh flow when it is
     // absent, and these tests cover that flow. A stub member switches every screen to downloads.

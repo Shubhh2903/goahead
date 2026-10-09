@@ -1,6 +1,8 @@
 import { type DynamicRecord, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import {
   DIRECT_CONVERSATION_KEY,
+  type HistoryEvent,
+  type HistoryMessage,
   type InboundAction,
   type InboundFile,
   type InboundMessage,
@@ -126,6 +128,113 @@ export function slackInboxCandidate(payload: unknown, workspaceId: string, botUs
     mentionedUserIds: [...raw.matchAll(/<@([A-Z0-9]+)(?:\|[^>]*)?>/g)].flatMap((match) => (match[1] ? [match[1]] : [])),
     files: inboxFiles(event.files),
   };
+}
+
+/** `message` subtypes that change another message, or that Slack sends only to update a thread. */
+const CHANGE_SUBTYPES = new Set(["message_changed", "message_deleted", "message_replied"]);
+
+/**
+ * One Events API payload as a live change for the Slack client's cache, or null. Every message the
+ * person can see counts, bots and OpenBot included, as Slack shows them. An edit, a deletion, a
+ * reaction and the person joining or leaving a channel never reach an agent. `ownerUserId` is the
+ * connected person.
+ */
+export function slackHistoryEvent(
+  payload: unknown,
+  workspaceId: string,
+  ownerUserId: string | null,
+): HistoryEvent | null {
+  if (!isDynamicRecord(payload) || payload.team_id !== workspaceId) return null;
+  const event = payload.event;
+  if (!isDynamicRecord(event)) return null;
+  switch (event.type) {
+    case "message":
+      return historyMessageEvent(event);
+    case "reaction_added":
+    case "reaction_removed": {
+      const { item, user, reaction } = event;
+      if (!isDynamicRecord(item) || item.type !== "message" || !isString(item.channel) || !isString(item.ts))
+        return null;
+      if (!isString(user) || !isString(reaction)) return null;
+      return {
+        type: "reaction",
+        channelId: item.channel,
+        ts: item.ts,
+        name: reaction,
+        userId: user,
+        on: event.type === "reaction_added",
+        ownerUserId,
+      };
+    }
+    case "member_joined_channel":
+      // Slack also sends it when another person joins a channel the person is in.
+      if (!isString(event.channel) || ownerUserId === null || event.user !== ownerUserId) return null;
+      return { type: "membership", channelId: event.channel, kind: channelKind(event.channel_type), isMember: true };
+    case "channel_left":
+      // A user event: it comes only for the person who left.
+      if (!isString(event.channel)) return null;
+      return { type: "membership", channelId: event.channel, kind: channelKind(event.channel_type), isMember: false };
+    case "group_left":
+      // The private-channel form of channel_left. Follow-up: the manifests do not subscribe to it yet.
+      if (!isString(event.channel)) return null;
+      return { type: "membership", channelId: event.channel, kind: "private", isMember: false };
+    default:
+      return null;
+  }
+}
+
+function historyMessageEvent(event: DynamicRecord): HistoryEvent | null {
+  const channelId = event.channel;
+  if (!isString(channelId)) return null;
+  if (event.subtype === "message_deleted")
+    return isString(event.deleted_ts) ? { type: "deleted", channelId, ts: event.deleted_ts } : null;
+  if (event.subtype === "message_changed") {
+    const changed = event.message;
+    if (!isDynamicRecord(changed) || !isString(changed.ts)) return null;
+    // A thread parent deleted in Slack stays as a placeholder.
+    if (changed.subtype === "tombstone") return { type: "deleted", channelId, ts: changed.ts };
+    // Other changes, such as a link preview, are not edits.
+    const editedAt =
+      isDynamicRecord(changed.edited) && isString(changed.edited.ts) ? slackTime(changed.edited.ts) : null;
+    if (editedAt === null) return null;
+    return { type: "edited", channelId, ts: changed.ts, text: isString(changed.text) ? changed.text : "", editedAt };
+  }
+  if (isString(event.subtype) && CHANGE_SUBTYPES.has(event.subtype)) return null;
+  if (event.hidden === true) return null;
+  const message = historyMessage(event);
+  return message ? { type: "message", channelId, message } : null;
+}
+
+/**
+ * A new message from an event. It has no reactions yet. Follow-up: slack-driver.ts has a copy of this
+ * mapper and of slackTime; move both to one module that does not import the transport.
+ */
+function historyMessage(event: DynamicRecord): HistoryMessage | null {
+  const ts = event.ts;
+  if (!isString(ts)) return null;
+  return {
+    ts,
+    threadTs: isString(event.thread_ts) && event.thread_ts !== ts ? event.thread_ts : null,
+    replyCount: isNumber(event.reply_count) ? event.reply_count : 0,
+    latestReplyTs: isString(event.latest_reply) ? event.latest_reply : null,
+    authorId: [event.user, event.bot_id].find(isString) ?? "",
+    text: isString(event.text) ? event.text : "",
+    files: inboxFiles(event.files),
+    reactions: [],
+    editedAt: null,
+    deleted: false,
+    subtype: isString(event.subtype) ? event.subtype : null,
+  };
+}
+
+/** Slack's `channel_type` of a membership event: `G` is a private channel. */
+function channelKind(value: unknown): "channel" | "private" {
+  return value === "G" ? "private" : "channel";
+}
+
+function slackTime(ts: string): string | null {
+  const seconds = Number(ts);
+  return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString() : null;
 }
 
 /** The files of an inbox message. Slack's own addresses are kept; each needs the token. */

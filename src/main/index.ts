@@ -67,6 +67,7 @@ import { providerIpcHandlers } from "./ipc/provider-handlers";
 import { routineIpcHandlers } from "./ipc/routine-handlers";
 import { sharedTableIpcHandlers } from "./ipc/shared-table-handlers";
 import { skillIpcHandlers } from "./ipc/skill-handlers";
+import { slackClientIpcHandlers } from "./ipc/slack-client-handlers";
 import { storageIpcHandlers } from "./ipc/storage-handlers";
 import { teamIpcHandlers } from "./ipc/team-handlers";
 import { updateIpcHandlers } from "./ipc/update-handlers";
@@ -271,6 +272,7 @@ const {
   forwardOnePasswordConnectorStatus,
   forwardMessagingThreadsChanged,
   forwardMessagingInboxChanged,
+  forwardSlackClientChanged,
   forwardHandoffsChanged,
   forwardHostStatus,
   forwardRemoteDesktopSessions,
@@ -543,6 +545,7 @@ function registerIpcHandlers({
       remoteServers,
     }),
     ...messagingIpcHandlers({ messaging, agents: service, host }),
+    ...slackClientIpcHandlers({ messaging, getMainWindow }),
     ...handoffIpcHandlers({ agents: service }),
     ...mcpServerIpcHandlers({
       service,
@@ -894,6 +897,7 @@ if (!hasSingleInstanceLock) {
       built.onePasswordConnector.onChanged(forwardOnePasswordConnectorStatus);
       built.messaging.onThreadChanged((threadId) => forwardMessagingThreadsChanged({ threadId }));
       built.messaging.onInboxChanged((workspaceId) => forwardMessagingInboxChanged({ workspaceId }));
+      built.messaging.onSlackClientChanged(forwardSlackClientChanged);
       remoteServers.on("changed", forwardServers);
       remoteServers.on("agent", (serverId, event, bufferedLive) => {
         forwardAgentEvent(serverId, event, bufferedLive);
