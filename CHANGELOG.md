@@ -6,6 +6,13 @@ All notable changes to OpenBot will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-10-09
+
+### Removed
+
+- GoAhead for Intel Macs. This release and later releases are for Apple silicon Macs only. An Intel
+  Mac gets no update offer and stays on the last Intel version.
+
 ## [0.33.0] - 2026-10-09
 
 ### Added
