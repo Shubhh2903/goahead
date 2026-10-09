@@ -374,6 +374,78 @@ body:has(.dynamic-island-surface),
   transition: opacity var(--openbot-duration-fast) var(--openbot-ease-out);
 }
 
+/* In compact working mode the emotion face takes the logo place, and the avatars and the name
+   move after it. Expanded, the avatars go back to the place the rows expect, and the face stays on
+   the first row with the avatars as small badges. */
+.dynamic-island-surface-compact-emotion {
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  width: 26px;
+  height: 26px;
+  transition: opacity var(--openbot-duration-fast) var(--openbot-ease-out);
+}
+
+.dynamic-island-surface-compact-identity[data-island-emotion] .dynamic-island-surface-avatar-stack,
+.dynamic-island-surface-compact-identity[data-island-emotion] .dynamic-island-surface-compact-name {
+  translate: calc(20px + var(--openbot-space-1-5)) 0;
+  transition:
+    opacity var(--openbot-duration-fast) var(--openbot-ease-out),
+    translate 450ms var(--dynamic-island-shared-ease);
+}
+
+/* A status that names one agent keeps its avatar while compact. Expanded, the face takes the
+   identity place and the avatar shrinks to a badge on its lower right corner, so the user still
+   sees who it is. */
+.dynamic-island-surface-identity-emotion {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity var(--openbot-duration-fast) var(--openbot-ease-out);
+}
+
+.dynamic-island-surface-compact-identity[data-island-identity-emotion] .dynamic-island-surface-avatar,
+.dynamic-island-surface-compact-identity[data-island-emotion] .dynamic-island-surface-avatar {
+  transform-origin: 100% 100%;
+  transition: scale 450ms var(--dynamic-island-shared-ease);
+}
+
+.dynamic-island[data-state="expanded"] .dynamic-island-surface-identity-emotion {
+  opacity: 1;
+  scale: 1.25;
+}
+
+.dynamic-island[data-state="expanded"]
+  .dynamic-island-surface-compact-identity[data-island-identity-emotion]
+  .dynamic-island-surface-avatar,
+.dynamic-island-working[data-state="expanded"]
+  .dynamic-island-surface-compact-identity[data-island-emotion]
+  .dynamic-island-surface-avatar {
+  scale: 0.7;
+  translate: 35% 35%;
+}
+
+.dynamic-island-working[data-state="expanded"]
+  .dynamic-island-surface-compact-identity[data-island-emotion]
+  .dynamic-island-surface-avatar-stack {
+  translate: 0 0;
+}
+
+/* The kit face has thin features: in the 32px bar it fills 26px of the 20px logo place, centered. */
+.dynamic-island-emotion-face.dynamic-island-surface-logo {
+  width: 130%;
+  height: 130%;
+  margin: -15%;
+}
+
+.dynamic-island-emotion-face {
+  display: block;
+  user-select: none;
+  cursor: pointer;
+}
+
 .dynamic-island-surface-status-badge {
   font-weight: var(--openbot-weight-semibold);
 }
@@ -432,6 +504,11 @@ body:has(.dynamic-island-surface),
 @media (prefers-reduced-motion: reduce) {
   .dynamic-island-surface-avatar-stack > * {
     transition-duration: var(--openbot-duration-hover);
+  }
+
+  .dynamic-island-surface-compact-identity[data-island-emotion] .dynamic-island-surface-avatar-stack,
+  .dynamic-island-surface-compact-identity[data-island-emotion] .dynamic-island-surface-compact-name {
+    transition-duration: var(--openbot-duration-fast), var(--openbot-duration-hover);
   }
 }
 

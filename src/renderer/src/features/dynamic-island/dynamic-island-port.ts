@@ -11,6 +11,7 @@ export interface DynamicIslandPort {
     | "getPreference"
     | "getPresentation"
     | "onAction"
+    | "onGaze"
     | "onGeometry"
     | "onPreference"
     | "onPresentation"

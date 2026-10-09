@@ -1475,6 +1475,9 @@ server mute and per-agent notification settings apply. Unread state is unchanged
 not deliver system notifications; it shows agent state in its Live Activity. Mute settings are not
 synchronized between devices.
 
+`src/main/emotion-engine.ts` turns agent events into one emotion for the desktop Dynamic Island
+face and the macOS Dock icon; the island window receives only the emotion ID.
+
 ## iPhone Live Activity updates
 
 The phone and a host build the same Live Activity view with `@openbot/team-client`:

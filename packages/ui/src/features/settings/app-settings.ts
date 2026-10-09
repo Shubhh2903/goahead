@@ -21,6 +21,8 @@ export interface GeneralSettingsValue {
   macBookNotchHaptics: boolean;
   macBookNotchIdle: boolean;
   macBookNotchAdditionalDisplays: boolean;
+  /** Shows the face that follows what agents do, in the island and the Dock. */
+  macBookNotchEmotions: boolean;
   /** The compact Dynamic Island size, as percents of the default. */
   macBookNotchWidthPercent: number;
   macBookNotchHeightPercent: number;
@@ -53,6 +55,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettingsValue = {
   macBookNotchHaptics: true,
   macBookNotchIdle: true,
   macBookNotchAdditionalDisplays: true,
+  macBookNotchEmotions: true,
   macBookNotchWidthPercent: 100,
   macBookNotchHeightPercent: 100,
   taskCompletionSound: true,

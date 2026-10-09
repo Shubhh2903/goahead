@@ -1,6 +1,6 @@
 import { join, resolve } from "node:path";
 import { parseInviteUrl, selfHostedApiOrigin } from "@openbot/contracts/invite-links";
-import { type AppLogoColor, type CentralAuthState, IPC_ENDPOINTS } from "@openbot/contracts/ipc";
+import { type AppLogoColor, type CentralAuthState, IPC_ENDPOINTS, LOCAL_SERVER_ID } from "@openbot/contracts/ipc";
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { createFormat, resolveLocale, translateFor } from "@openbot/i18n";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
@@ -30,6 +30,8 @@ import {
   readDevelopmentRemoteDebuggingPort,
   shouldAutoStartHost,
 } from "./development-profile";
+import { createDockEmotion, type DockEmotion, resolveEmotionDockIconPath } from "./dock-emotion";
+import { createEmotionFaces } from "./emotion-faces";
 import { hostAllowsTenantLaunch } from "./host-update-coordinator";
 import { takeHostedServerEnvironment } from "./hosted-server-bootstrap";
 import { takeHostingDeveloperKey } from "./hosted-server-service";
@@ -317,6 +319,8 @@ const windows = createMainWindowController({
 });
 
 let appIconColorImage: NativeImage | undefined;
+// The emotion face on the Dock. While it shows a face, a logo color change waits for it to end.
+let dockEmotion: DockEmotion | undefined;
 
 /**
  * Shows the chosen logo color on the Dock icon, or on each window icon where there is no Dock. A dev
@@ -337,7 +341,7 @@ function applyAppIconColor(color: AppLogoColor): void {
   );
   if (icon.isEmpty()) return;
   if (process.platform === "darwin") {
-    app.dock?.setIcon(icon);
+    if (!dockEmotion?.active) app.dock?.setIcon(icon);
     return;
   }
   // A window takes `appIconPath` when it is created, so a window opened after the choice gets the
@@ -873,6 +877,55 @@ if (!hasSingleInstanceLock) {
       } = built;
 
       crashTrace = trace;
+      dockEmotion = createDockEmotion({
+        platform: process.platform,
+        resolveIconPath: (emotion) =>
+          resolveEmotionDockIconPath({
+            emotion,
+            isPackaged: app.isPackaged,
+            resourcesPath: process.resourcesPath,
+            sourceRoot: resolve(__dirname, "../.."),
+          }),
+        setIcon: (path) => {
+          const image = nativeImage.createFromPath(path);
+          if (image.isEmpty()) return false;
+          app.dock?.setIcon(image);
+          return true;
+        },
+        restoreIcon: () => {
+          app.dock?.setIcon(appIconPath);
+          applyAppIconColor(logoColor.preference.color);
+        },
+        now: Date.now,
+        schedule: (run, delayMs) => {
+          const timer = setTimeout(run, delayMs);
+          timer.unref();
+          return { cancel: () => clearTimeout(timer) };
+        },
+      });
+      const emotionFaces = createEmotionFaces({
+        island: dynamicIsland,
+        dock: dockEmotion,
+        now: Date.now,
+        random: Math.random,
+        every: (run, intervalMs) => {
+          const timer = setInterval(run, intervalMs);
+          timer.unref();
+          return { cancel: () => clearInterval(timer) };
+        },
+      });
+      teardown.push(0, "emotion faces", () => {
+        emotionFaces.dispose();
+        dockEmotion?.dispose();
+      });
+      dynamicIsland.onPresentationChange((presentation) => emotionFaces.presentation(presentation));
+      dynamicIsland.onPreferenceChange((preference) => emotionFaces.preference(preference));
+      service.on("event", (event) => emotionFaces.agentEvent(LOCAL_SERVER_ID, event));
+      service.on("toolUsage", (usage) => emotionFaces.toolUse(LOCAL_SERVER_ID, usage.agentId));
+      service.on("handoffs", (agentId) => emotionFaces.handoffsChanged(agentId, service.listHandoffs(agentId)));
+      remoteServers.on("agent", (serverId, event) => emotionFaces.agentEvent(serverId, event));
+      remoteServers.on("changed", (servers) => emotionFaces.serversChanged(servers));
+      app.on("browser-window-focus", () => emotionFaces.activity());
       setIpcCallObserver((call) => trace.record({ kind: "ipc", ...call }));
       service.on("event", (event) => trace.observeAgentEvent(event));
       service.on("event", (event) => forwardAgentEvent("local", event));

@@ -85,6 +85,13 @@ export function SettingsDynamicIslandTab(props: SettingsDynamicIslandTabProps) {
             description={i18n.t("settings.notch.displays.description")}
           />
           <SwitchField
+            checked={props.value.macBookNotchEmotions}
+            disabled={!props.value.macBookNotch}
+            onChange={(checked) => props.onUpdateSetting("macBookNotchEmotions", checked)}
+            label={i18n.t("settings.dynamicIsland.emotions.title")}
+            description={i18n.t("settings.dynamicIsland.emotions.description")}
+          />
+          <SwitchField
             checked={props.value.macBookNotchHaptics}
             disabled={!props.value.macBookNotch}
             onChange={(checked) => props.onUpdateSetting("macBookNotchHaptics", checked)}

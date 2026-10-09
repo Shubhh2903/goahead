@@ -6,7 +6,7 @@ import type {
 } from "@openbot/contracts/ipc";
 import type { DynamicIslandViewState } from "@openbot/ui";
 import { OpenBotDynamicIsland } from "@openbot/ui/features/dynamic-island/OpenBotDynamicIsland";
-import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockOpenBot } from "../../preview/mock-openbot";
@@ -227,6 +227,31 @@ describe("DynamicIslandSurface", () => {
       "true",
     );
     mock.dispose();
+  });
+
+  it("shows the emotion face and the agent in the open message island, and a face click only reacts", async () => {
+    const onAction = vi.fn();
+    renderControlledIsland(
+      {
+        serverId: "local",
+        mode: "message",
+        unreadCount: 1,
+        emotion: "neutral",
+        message: { agent: RESEARCH, messageId: "m-1", text: "The report is ready.", createdAt: "2026-10-09T10:00:00Z" },
+      },
+      "expanded",
+      onAction,
+    );
+
+    // The compact ear that holds the face is aria-hidden, so the query includes hidden elements.
+    const face = await screen.findByRole("img", { name: "GoAhead: neutral", hidden: true });
+    expect(within(screen.getByRole("article")).getByText("Research")).toBeVisible();
+    expect(screen.getByRole("button", { name: /Open chat/ })).toBeVisible();
+
+    await fireEvent.click(face);
+    expect(await screen.findByRole("img", { name: "GoAhead: happy", hidden: true })).toBeInTheDocument();
+    expect(onAction).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /^Collapse/ })).toHaveAttribute("aria-expanded", "true");
   });
 
   it("requires opening OpenBot before approving truncated requests", () => {

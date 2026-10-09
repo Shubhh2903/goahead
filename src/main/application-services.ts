@@ -48,7 +48,7 @@ import { decodeRecord, requiredString } from "@openbot/contracts/ipc-decoding";
 import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { REMOTE_ACCOUNT_CHECK_INTERVAL_MS } from "@openbot/team-client";
-import { app, type BrowserWindow, nativeImage, safeStorage, screen, shell } from "electron";
+import { app, type BrowserWindow, nativeImage, safeStorage, screen, shell, systemPreferences } from "electron";
 import { pasteCodeLoginSupported } from "../backend/agent/cli-code-login";
 import { AgentService } from "../backend/agent-service";
 import { AgentStore } from "../backend/agent-store";
@@ -435,6 +435,15 @@ export async function createApplicationServices({
     ensureMainWindow: windows.ensureMainWindow,
     presentMainWindow: showMainWindow,
     performHaptic: () => macHapticFeedback.performAlignment(),
+    gaze: {
+      getCursorScreenPoint: () => screen.getCursorScreenPoint(),
+      prefersReducedMotion: () => systemPreferences.getAnimationSettings().prefersReducedMotion,
+      every: (run, intervalMs) => {
+        const timer = setInterval(run, intervalMs);
+        timer.unref();
+        return { cancel: () => clearInterval(timer) };
+      },
+    },
     performCriticalAction: async (action) => {
       if (!criticalActionTargets) throw new Error(sourceText("error.app.notReady"));
       const { agents, remoteServers } = criticalActionTargets;

@@ -1,0 +1,228 @@
+{
+  "version": "1.0.0",
+  "viewBox": "0 0 128 128",
+  "yellow": "#F5C84C",
+  "ink": "#080609",
+  "emotions": [
+    {
+      "id": "neutral",
+      "label": "NEUTRAL",
+      "animated": "animated/neutral.svg",
+      "static": "static/neutral.svg",
+      "eyesOnly": "eyes-only/neutral.svg",
+      "durationMs": 5200,
+      "loop": true,
+      "description": "Occasional soft blink"
+    },
+    {
+      "id": "happy",
+      "label": "HAPPY",
+      "animated": "animated/happy.svg",
+      "static": "static/happy.svg",
+      "eyesOnly": "eyes-only/happy.svg",
+      "durationMs": 2400,
+      "loop": true,
+      "description": "Smiling eyes lift gently"
+    },
+    {
+      "id": "joy",
+      "label": "JOY",
+      "animated": "animated/joy.svg",
+      "static": "static/joy.svg",
+      "eyesOnly": "eyes-only/joy.svg",
+      "durationMs": 1400,
+      "loop": true,
+      "description": "Delighted bounce and open smile"
+    },
+    {
+      "id": "cute",
+      "label": "CUTE",
+      "animated": "animated/cute.svg",
+      "static": "static/cute.svg",
+      "eyesOnly": "eyes-only/cute.svg",
+      "durationMs": 3200,
+      "loop": true,
+      "description": "Shy head tilt and tiny smile"
+    },
+    {
+      "id": "wink",
+      "label": "WINK",
+      "animated": "animated/wink.svg",
+      "static": "static/wink.svg",
+      "eyesOnly": "eyes-only/wink.svg",
+      "durationMs": 3800,
+      "loop": true,
+      "description": "One open scribbled eye and a playful wink"
+    },
+    {
+      "id": "loved",
+      "label": "LOVED",
+      "animated": "animated/loved.svg",
+      "static": "static/loved.svg",
+      "eyesOnly": "eyes-only/loved.svg",
+      "durationMs": 1800,
+      "loop": true,
+      "description": "Heart eyes pulse softly"
+    },
+    {
+      "id": "listening",
+      "label": "LISTENING",
+      "animated": "animated/listening.svg",
+      "static": "static/listening.svg",
+      "eyesOnly": "eyes-only/listening.svg",
+      "durationMs": 2400,
+      "loop": true,
+      "description": "Attentive eyes respond in turn"
+    },
+    {
+      "id": "thinking",
+      "label": "THINKING",
+      "animated": "animated/thinking.svg",
+      "static": "static/thinking.svg",
+      "eyesOnly": "eyes-only/thinking.svg",
+      "durationMs": 3600,
+      "loop": true,
+      "description": "Eyes glance side to side"
+    },
+    {
+      "id": "focused",
+      "label": "FOCUSED",
+      "animated": "animated/focused.svg",
+      "static": "static/focused.svg",
+      "eyesOnly": "eyes-only/focused.svg",
+      "durationMs": 2600,
+      "loop": true,
+      "description": "Narrow determined eyes"
+    },
+    {
+      "id": "curious",
+      "label": "CURIOUS",
+      "animated": "animated/curious.svg",
+      "static": "static/curious.svg",
+      "eyesOnly": "eyes-only/curious.svg",
+      "durationMs": 2800,
+      "loop": true,
+      "description": "Uneven eyes tilt inquisitively"
+    },
+    {
+      "id": "confused",
+      "label": "CONFUSED",
+      "animated": "animated/confused.svg",
+      "static": "static/confused.svg",
+      "eyesOnly": "eyes-only/confused.svg",
+      "durationMs": 2800,
+      "loop": true,
+      "description": "Uneven eyes drift uncertainly"
+    },
+    {
+      "id": "surprised",
+      "label": "SURPRISED",
+      "animated": "animated/surprised.svg",
+      "static": "static/surprised.svg",
+      "eyesOnly": "eyes-only/surprised.svg",
+      "durationMs": 2800,
+      "loop": true,
+      "description": "Eyes widen with a tiny O mouth"
+    },
+    {
+      "id": "doubtful",
+      "label": "DOUBTFUL",
+      "animated": "animated/doubtful.svg",
+      "static": "static/doubtful.svg",
+      "eyesOnly": "eyes-only/doubtful.svg",
+      "durationMs": 3000,
+      "loop": true,
+      "description": "Angled lids and skeptical tilt"
+    },
+    {
+      "id": "unamused",
+      "label": "UNAMUSED",
+      "animated": "animated/unamused.svg",
+      "static": "static/unamused.svg",
+      "eyesOnly": "eyes-only/unamused.svg",
+      "durationMs": 4000,
+      "loop": true,
+      "description": "Flat eyes with a slow subtle drift"
+    },
+    {
+      "id": "strain",
+      "label": "STRAIN",
+      "animated": "animated/strain.svg",
+      "static": "static/strain.svg",
+      "eyesOnly": "eyes-only/strain.svg",
+      "durationMs": 800,
+      "loop": true,
+      "description": "Squeezed eyes tremble briefly"
+    },
+    {
+      "id": "sad",
+      "label": "SAD",
+      "animated": "animated/sad.svg",
+      "static": "static/sad.svg",
+      "eyesOnly": "eyes-only/sad.svg",
+      "durationMs": 3400,
+      "loop": true,
+      "description": "Drooping T eyes"
+    },
+    {
+      "id": "oops",
+      "label": "OOPS",
+      "animated": "animated/oops.svg",
+      "static": "static/oops.svg",
+      "eyesOnly": "eyes-only/oops.svg",
+      "durationMs": 2400,
+      "loop": true,
+      "description": "Crossed eyes with a quick recoil"
+    },
+    {
+      "id": "dizzy",
+      "label": "DIZZY",
+      "animated": "animated/dizzy.svg",
+      "static": "static/dizzy.svg",
+      "eyesOnly": "eyes-only/dizzy.svg",
+      "durationMs": 3200,
+      "loop": true,
+      "description": "Spiral eyes rotate independently"
+    },
+    {
+      "id": "sleepy",
+      "label": "SLEEPY",
+      "animated": "animated/sleepy.svg",
+      "static": "static/sleepy.svg",
+      "eyesOnly": "eyes-only/sleepy.svg",
+      "durationMs": 4600,
+      "loop": true,
+      "description": "Closed eyes breathe; a small Z rises"
+    },
+    {
+      "id": "learned",
+      "label": "LEARNED",
+      "animated": "animated/learned.svg",
+      "static": "static/learned.svg",
+      "eyesOnly": "eyes-only/learned.svg",
+      "durationMs": 2000,
+      "loop": true,
+      "description": "Aha star eyes sparkle"
+    },
+    {
+      "id": "money",
+      "label": "MONEY",
+      "animated": "animated/money.svg",
+      "static": "static/money.svg",
+      "eyesOnly": "eyes-only/money.svg",
+      "durationMs": 2400,
+      "loop": true,
+      "description": "Dollar eyes nod with delight"
+    },
+    {
+      "id": "needs-you",
+      "label": "NEEDS YOU",
+      "animated": "animated/needs-you.svg",
+      "static": "static/needs-you.svg",
+      "eyesOnly": "eyes-only/needs-you.svg",
+      "durationMs": 2800,
+      "loop": true,
+      "description": "Question mark and hopeful attention pulse"
+    }
+  ]
+}

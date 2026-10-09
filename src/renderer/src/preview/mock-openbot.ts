@@ -493,6 +493,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
       onPreference: () => () => undefined,
       onPresentation: () => () => undefined,
       onGeometry: () => () => undefined,
+      onGaze: () => () => undefined,
       performAction: async () => undefined,
       performHaptic: async () => undefined,
       onAction: () => () => undefined,

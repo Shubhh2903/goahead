@@ -3,11 +3,13 @@ import type {
   DynamicIslandAgentIdentity,
   DynamicIslandPresentation,
   DynamicIslandPromptItem,
+  EmotionId,
 } from "@openbot/contracts/ipc";
+import { EMOTION_IDS } from "@openbot/contracts/ipc";
 import type { DynamicIslandViewState } from "@openbot/ui";
 import { OpenBotDynamicIsland } from "@openbot/ui/features/dynamic-island/OpenBotDynamicIsland";
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal } from "solid-js";
+import { createMemo, createSignal, For } from "solid-js";
 import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
 import { DynamicIslandDisplayComparison } from "./DynamicIslandDisplayComparison";
@@ -22,6 +24,8 @@ interface DynamicIslandDemoProps {
   questionVariant?: QuestionVariant;
   workingVariant?: WorkingVariant;
   defaultState?: DynamicIslandViewState;
+  /** The face that replaces the logo. None shows the logo, as with emotions turned off. */
+  emotion?: EmotionId | "none";
   onAction: (action: DynamicIslandAction) => void;
 }
 
@@ -29,9 +33,14 @@ const AGENT_IDENTITIES = storyIslandAgents();
 const SCENARIOS: Scenario[] = ["idle", "working", "chat", "question", "approval", "takeover", "failed"];
 
 function DynamicIslandDemo(props: DynamicIslandDemoProps): JSX.Element {
-  const presentation = createMemo(() =>
-    presentationFor(props.scenario, props.questionVariant ?? "standard", props.workingVariant ?? "multiple"),
-  );
+  const presentation = createMemo((): DynamicIslandPresentation => {
+    const base = presentationFor(
+      props.scenario,
+      props.questionVariant ?? "standard",
+      props.workingVariant ?? "multiple",
+    );
+    return props.emotion && props.emotion !== "none" ? { ...base, emotion: props.emotion } : base;
+  });
 
   return (
     <DynamicIslandDisplayComparison
@@ -275,6 +284,7 @@ const meta = {
     questionVariant: { control: "select", options: ["standard", "short", "long", "multiple"] },
     workingVariant: { control: "select", options: ["single", "multiple"] },
     defaultState: { control: "select", options: ["compact", "expanded"] },
+    emotion: { control: "select", options: ["none", ...EMOTION_IDS] },
   },
   parameters: { layout: "fullscreen", a11y: { test: "error" } },
 } satisfies Meta<typeof DynamicIslandDemo>;
@@ -283,6 +293,18 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Playground: Story = {};
+
+export const OpenChatWithEmotion: Story = {
+  args: { scenario: "chat", defaultState: "expanded", emotion: "happy" },
+  parameters: {
+    docs: {
+      description: {
+        story:
+          "The open message island shows the face as the identity, with the agent avatar as a small badge. Hover the face to make it wiggle; click it to make it react.",
+      },
+    },
+  },
+};
 
 export const OpenChatReturnsToIdle: Story = {
   render: () => (
@@ -311,6 +333,32 @@ export const OpenChatReturnsToIdle: Story = {
       description: {
         story:
           "Click Open chat on each display. The island must collapse and show its idle icons inside the black surface.",
+      },
+    },
+  },
+};
+
+export const Emotions: Story = {
+  render: () => (
+    <div class="grid gap-12 p-6">
+      <For each={EMOTION_IDS}>
+        {(emotion) => (
+          <OpenBotDynamicIsland
+            presentation={{ serverId: "local", mode: "idle", emotion }}
+            state="compact"
+            displayMode="island"
+            suppressInitialHover
+            onStateChange={() => undefined}
+            onAction={() => undefined}
+          />
+        )}
+      </For>
+    </div>
+  ),
+  parameters: {
+    docs: {
+      description: {
+        story: "Each emotion face in the compact idle island. Reduce Motion shows the static faces.",
       },
     },
   },

@@ -5,10 +5,12 @@
 
 import {
   type DynamicIslandAction,
+  type DynamicIslandGaze,
   type DynamicIslandGeometry,
   type DynamicIslandPreference,
   type DynamicIslandPresentation,
   isDynamicIslandAction,
+  isDynamicIslandGaze,
   isDynamicIslandNotchSize,
   isDynamicIslandPreference,
   isDynamicIslandPresentation,
@@ -22,6 +24,11 @@ export function decodeDynamicIslandPreference(value: unknown): DynamicIslandPref
 export function decodeDynamicIslandGeometry(value: unknown): DynamicIslandGeometry {
   if (value === null) return null;
   if (!isDynamicIslandNotchSize(value)) throw new Error("Invalid Dynamic Island geometry.");
+  return value;
+}
+
+export function decodeDynamicIslandGaze(value: unknown): DynamicIslandGaze {
+  if (!isDynamicIslandGaze(value)) throw new Error("Invalid Dynamic Island gaze.");
   return value;
 }
 

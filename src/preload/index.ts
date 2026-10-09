@@ -133,6 +133,7 @@ import {
 } from "./conversation-decoding";
 import {
   decodeDynamicIslandAction,
+  decodeDynamicIslandGaze,
   decodeDynamicIslandGeometry,
   decodeDynamicIslandPreference,
   decodeDynamicIslandPresentation,
@@ -510,6 +511,7 @@ const openbotApi: OpenBotDesktopApi = {
     preference: decodeDynamicIslandPreference,
     presentation: decodeDynamicIslandPresentation,
     geometry: decodeDynamicIslandGeometry,
+    gaze: decodeDynamicIslandGaze,
     getBuiltInDisplayGeometry: decodeDynamicIslandGeometry,
     performAction: decodeVoid,
     performHaptic: decodeVoid,

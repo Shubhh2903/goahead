@@ -45,6 +45,8 @@ export async function readDynamicIslandPreference(path: string): Promise<Dynamic
       heightPercent: isDynamicIslandSizePercent(parsed.heightPercent, DYNAMIC_ISLAND_SIZE_LIMITS.heightPercent)
         ? parsed.heightPercent
         : DEFAULT_DYNAMIC_ISLAND_PREFERENCE.heightPercent,
+      // Optional for the same reason. A file without it keeps emotions on.
+      ...(isBoolean(parsed.emotionsEnabled) ? { emotionsEnabled: parsed.emotionsEnabled } : {}),
     };
   } catch (error) {
     if (isMissingFileError(error) || error instanceof SyntaxError) return { ...DEFAULT_DYNAMIC_ISLAND_PREFERENCE };

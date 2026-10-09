@@ -1,6 +1,7 @@
 import type {
   AppVariant,
   DynamicIslandAction,
+  DynamicIslandGaze,
   DynamicIslandPreference,
   DynamicIslandPresentation,
 } from "@openbot/contracts/ipc";
@@ -35,6 +36,7 @@ export function DynamicIslandSurface() {
     ...DEFAULT_DYNAMIC_ISLAND_PREFERENCE,
   });
   const [viewState, setViewState] = createSignal<DynamicIslandViewState>("compact");
+  const [gaze, setGaze] = createSignal<DynamicIslandGaze>();
   let pointerInside = false;
   let focusInside = false;
   let queuedPresentation: DynamicIslandPresentation | undefined;
@@ -158,6 +160,7 @@ export function DynamicIslandSurface() {
     const stopPreference = dynamicIslandPort().dynamicIsland.onPreference(applyPreference);
     const stopPresentation = dynamicIslandPort().dynamicIsland.onPresentation(applyPresentation);
     const stopGeometry = dynamicIslandPort().dynamicIsland.onGeometry((next) => setNotchSize(next ?? undefined));
+    const stopGaze = dynamicIslandPort().dynamicIsland.onGaze(setGaze);
     const close = () => {
       pointerInside = false;
       focusInside = false;
@@ -170,6 +173,7 @@ export function DynamicIslandSurface() {
       stopPreference();
       stopPresentation();
       stopGeometry();
+      stopGaze();
       window.removeEventListener("blur", close);
     };
   });
@@ -198,6 +202,7 @@ export function DynamicIslandSurface() {
             onStateChange={changeViewState}
             onAction={perform}
             onHaptic={performHaptic}
+            gaze={gaze()}
           />
         </fieldset>
       </Show>

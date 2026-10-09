@@ -12,6 +12,59 @@ export interface DynamicIslandPreference {
   widthPercent: number;
   /** The compact island height, as a percent of its default height. It never gets lower than a notch. */
   heightPercent: number;
+  /**
+   * Shows the face that follows what agents do, in the island and in the Dock. Older preference
+   * files do not have this field: read it with `dynamicIslandEmotionsEnabled`, which treats a
+   * missing value as on.
+   */
+  emotionsEnabled?: boolean;
+}
+
+/** Each face that the island and the Dock can show. The order is the order of the asset kit. */
+export const EMOTION_IDS = [
+  "neutral",
+  "happy",
+  "joy",
+  "cute",
+  "wink",
+  "loved",
+  "listening",
+  "thinking",
+  "focused",
+  "curious",
+  "confused",
+  "surprised",
+  "doubtful",
+  "unamused",
+  "strain",
+  "sad",
+  "oops",
+  "dizzy",
+  "sleepy",
+  "learned",
+  "money",
+  "needs-you",
+] as const;
+
+export type EmotionId = (typeof EMOTION_IDS)[number];
+
+const EMOTION_ID_SET: ReadonlySet<string> = new Set(EMOTION_IDS);
+
+export function isEmotionId(value: unknown): value is EmotionId {
+  return isString(value) && EMOTION_ID_SET.has(value);
+}
+
+/**
+ * The file name of the Dock icon of a face: in `build/emotions` in the repository, and in
+ * `icons/emotions` of the packaged resources.
+ */
+export function emotionDockIconFileName(id: EmotionId): string {
+  return `emotion-${id}-macos-safe-area.png`;
+}
+
+/** Emotions are on unless the user turned them off. A preference file from an older build has no field. */
+export function dynamicIslandEmotionsEnabled(preference: Pick<DynamicIslandPreference, "emotionsEnabled">): boolean {
+  return preference.emotionsEnabled !== false;
 }
 
 /** Limits keep the island large enough to find and to click, whatever the stored value says. */
@@ -118,6 +171,8 @@ export interface DynamicIslandFailureItem {
 
 interface DynamicIslandPresentationBase {
   serverId: string;
+  /** The face to show. Main sets it; it is absent when emotions are off. */
+  emotion?: EmotionId;
 }
 
 export type DynamicIslandPresentation =
@@ -170,6 +225,16 @@ export interface DynamicIslandNotchSize {
 
 export type DynamicIslandGeometry = DynamicIslandNotchSize | null;
 
+/**
+ * Where the face looks: the direction from the face to the pointer, each axis from -1 to 1, with
+ * `y` down. `near` is true when the pointer is close to the face. Main sends no screen position.
+ */
+export interface DynamicIslandGaze {
+  x: number;
+  y: number;
+  near: boolean;
+}
+
 export const IDLE_DYNAMIC_ISLAND_PRESENTATION: DynamicIslandPresentation = { serverId: "local", mode: "idle" };
 
 export function isDynamicIslandPreference(value: unknown): value is DynamicIslandPreference {
@@ -180,7 +245,8 @@ export function isDynamicIslandPreference(value: unknown): value is DynamicIslan
     isBoolean(value.idleVisible) &&
     isBoolean(value.additionalDisplaysEnabled) &&
     isDynamicIslandSizePercent(value.widthPercent, DYNAMIC_ISLAND_SIZE_LIMITS.widthPercent) &&
-    isDynamicIslandSizePercent(value.heightPercent, DYNAMIC_ISLAND_SIZE_LIMITS.heightPercent)
+    isDynamicIslandSizePercent(value.heightPercent, DYNAMIC_ISLAND_SIZE_LIMITS.heightPercent) &&
+    (value.emotionsEnabled === undefined || isBoolean(value.emotionsEnabled))
   );
 }
 
@@ -205,8 +271,17 @@ export function isDynamicIslandNotchSize(value: unknown): value is DynamicIsland
   return isDynamicRecord(value) && isPositiveFiniteNumber(value.width) && isPositiveFiniteNumber(value.height);
 }
 
+export function isDynamicIslandGaze(value: unknown): value is DynamicIslandGaze {
+  return isDynamicRecord(value) && isGazeAxis(value.x) && isGazeAxis(value.y) && isBoolean(value.near);
+}
+
+function isGazeAxis(value: unknown): value is number {
+  return isNumber(value) && value >= -1 && value <= 1;
+}
+
 export function isDynamicIslandPresentation(value: unknown): value is DynamicIslandPresentation {
   if (!isDynamicRecord(value) || !isShortString(value.serverId, 160)) return false;
+  if (value.emotion !== undefined && !isEmotionId(value.emotion)) return false;
   if (value.mode === "idle") return true;
   if (value.mode === "working") {
     return Array.isArray(value.working) && value.working.length <= 3 && value.working.every(isWorkingItem);

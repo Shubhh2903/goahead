@@ -5,9 +5,11 @@ import type {
   DynamicIslandAgentIdentity,
   DynamicIslandApprovalItem,
   DynamicIslandFailureItem,
+  DynamicIslandGaze,
   DynamicIslandPresentation,
   DynamicIslandPromptItem,
   DynamicIslandTakeoverItem,
+  EmotionId,
 } from "@openbot/contracts/ipc";
 import {
   DEFAULT_DYNAMIC_ISLAND_PREFERENCE,
@@ -50,6 +52,7 @@ import {
   untrack,
 } from "solid-js";
 import { AgentAvatar } from "../agents/AgentAvatar";
+import { EmotionFace } from "./EmotionFace";
 import { playIdleGreetingMotion } from "./idle-greeting-motion";
 import {
   animateModeLayers,
@@ -82,6 +85,8 @@ export interface OpenBotDynamicIslandProps {
   onStateChange: (state: DynamicIslandViewState, reason: DynamicIslandStateChangeReason) => void;
   onAction: (action: DynamicIslandAction) => void | Promise<void>;
   onHaptic?: () => void;
+  /** Where the pointer is, from main. The emotion face looks toward it. */
+  gaze?: DynamicIslandGaze;
 }
 
 const COMPACT_INDICES = [0, 1, 2] as const;
@@ -296,7 +301,10 @@ function compactStatusGeometry(
   const measuredNameWidth = agent ? measureCompactText(agent.name, 600) : 0;
   const notchNameWidth = Math.min(STATUS_COMPACT_NAME_MAX_WIDTH.notch, Math.ceil(measuredNameWidth));
   const islandNameWidth = Math.min(STATUS_COMPACT_NAME_MAX_WIDTH.island, Math.ceil(measuredNameWidth));
+  // In working mode the emotion face stands before the avatar stack.
+  const workingEmotionWidth = presentation.emotion ? COMPACT_LEADING_SIZE + STATUS_COMPACT_IDENTITY_GAP : 0;
   const workingAvatarStackWidth =
+    workingEmotionWidth +
     STATUS_COMPACT_AVATAR_WIDTH +
     Math.max(0, workingAvatarCount - 1) * (STATUS_COMPACT_AVATAR_WIDTH - STATUS_COMPACT_AVATAR_OVERLAP);
   const notchLeadingContentWidth = agent
@@ -651,13 +659,19 @@ export function OpenBotDynamicIsland(props: OpenBotDynamicIslandProps): JSX.Elem
             presentation={visiblePresentation()}
             outgoingPresentation={outgoingPresentation()}
             renderOutgoing={(presentation) => (
-              <CompactLeading presentation={presentation} displayMode={props.displayMode} variant={props.variant} />
+              <CompactLeading
+                presentation={presentation}
+                displayMode={props.displayMode}
+                variant={props.variant}
+                gaze={props.gaze}
+              />
             )}
           >
             <CompactLeading
               presentation={visiblePresentation()}
               displayMode={props.displayMode}
               variant={props.variant}
+              gaze={props.gaze}
             />
           </IslandModeSwap>
         }
@@ -741,6 +755,7 @@ function CompactLeading(props: {
   presentation: DynamicIslandPresentation;
   displayMode?: "notch" | "island";
   variant?: AppVariant;
+  gaze?: DynamicIslandGaze;
 }): JSX.Element {
   const statusAgent = () => compactStatusAgent(props.presentation);
   const working = () => (props.presentation.mode === "working" ? props.presentation.working : []);
@@ -749,7 +764,18 @@ function CompactLeading(props: {
       <Switch
         fallback={
           <span class="dynamic-island-surface-leading-anchor" data-island-spatial-anchor="center">
-            <AppLogo variant={props.variant ?? "production"} animation="blink" class="dynamic-island-surface-logo" />
+            <Show
+              when={props.presentation.emotion}
+              fallback={
+                <AppLogo
+                  variant={props.variant ?? "production"}
+                  animation="blink"
+                  class="dynamic-island-surface-logo"
+                />
+              }
+            >
+              {(emotion) => <EmotionFace emotion={emotion()} gaze={props.gaze} class="dynamic-island-surface-logo" />}
+            </Show>
           </span>
         }
       >
@@ -757,7 +783,13 @@ function CompactLeading(props: {
           <span
             class="dynamic-island-surface-leading-anchor dynamic-island-surface-compact-identity"
             data-island-spatial-anchor="center"
+            data-island-emotion={props.presentation.emotion ? "" : undefined}
           >
+            <Show when={props.presentation.emotion}>
+              {(emotion) => (
+                <EmotionFace emotion={emotion()} gaze={props.gaze} class="dynamic-island-surface-compact-emotion" />
+              )}
+            </Show>
             <span class="dynamic-island-surface-avatar-stack">
               <For each={COMPACT_INDICES}>
                 {(index) => (
@@ -777,7 +809,14 @@ function CompactLeading(props: {
           </span>
         </Match>
         <Match when={statusAgent()}>
-          {(agent) => <CompactAgentIdentity agent={agent()} displayMode={props.displayMode} />}
+          {(agent) => (
+            <CompactAgentIdentity
+              agent={agent()}
+              displayMode={props.displayMode}
+              emotion={props.presentation.emotion}
+              gaze={props.gaze}
+            />
+          )}
         </Match>
       </Switch>
     </span>
@@ -801,12 +840,21 @@ function CompactAgentIdentity(props: {
   agent: DynamicIslandAgentIdentity;
   displayMode?: "notch" | "island";
   working?: boolean;
+  emotion?: EmotionId;
+  gaze?: DynamicIslandGaze;
 }): JSX.Element {
   return (
     <span
       class="dynamic-island-surface-leading-anchor dynamic-island-surface-compact-identity"
       data-island-spatial-anchor="center"
+      data-island-identity-emotion={props.emotion ? "" : undefined}
     >
+      {/* Expanded, the face is the identity and the avatar is a small badge on it (CSS). */}
+      <Show when={props.emotion}>
+        {(emotion) => (
+          <EmotionFace emotion={emotion()} gaze={props.gaze} class="dynamic-island-surface-identity-emotion" />
+        )}
+      </Show>
       <IslandAvatar agent={props.agent} working={props.working} />
       <CompactAgentName name={props.agent.name} displayMode={props.displayMode} />
     </span>

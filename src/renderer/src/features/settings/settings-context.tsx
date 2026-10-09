@@ -2,6 +2,7 @@ import {
   type ApprovalAutomationPreference,
   agentAutoApprovalEnabled,
   type DynamicIslandGeometry,
+  dynamicIslandEmotionsEnabled,
 } from "@openbot/contracts/ipc";
 import { DEFAULT_GENERAL_SETTINGS, type GeneralSettingsValue } from "@openbot/ui/features/settings/app-settings";
 import { currentText } from "@openbot/ui/text";
@@ -232,6 +233,7 @@ const Settings = createSimpleContext({
         previous.macBookNotchHaptics !== value.macBookNotchHaptics ||
         previous.macBookNotchIdle !== value.macBookNotchIdle ||
         previous.macBookNotchAdditionalDisplays !== value.macBookNotchAdditionalDisplays ||
+        previous.macBookNotchEmotions !== value.macBookNotchEmotions ||
         previous.macBookNotchWidthPercent !== value.macBookNotchWidthPercent ||
         previous.macBookNotchHeightPercent !== value.macBookNotchHeightPercent
       ) {
@@ -244,6 +246,7 @@ const Settings = createSimpleContext({
             hapticsEnabled: value.macBookNotchHaptics,
             idleVisible: value.macBookNotchIdle,
             additionalDisplaysEnabled: value.macBookNotchAdditionalDisplays,
+            emotionsEnabled: value.macBookNotchEmotions,
             widthPercent: value.macBookNotchWidthPercent,
             heightPercent: value.macBookNotchHeightPercent,
           })
@@ -255,6 +258,7 @@ const Settings = createSimpleContext({
               macBookNotchHaptics: preference.hapticsEnabled,
               macBookNotchIdle: preference.idleVisible,
               macBookNotchAdditionalDisplays: preference.additionalDisplaysEnabled,
+              macBookNotchEmotions: dynamicIslandEmotionsEnabled(preference),
               macBookNotchWidthPercent: preference.widthPercent,
               macBookNotchHeightPercent: preference.heightPercent,
             }));
@@ -267,6 +271,7 @@ const Settings = createSimpleContext({
               macBookNotchHaptics: previous.macBookNotchHaptics,
               macBookNotchIdle: previous.macBookNotchIdle,
               macBookNotchAdditionalDisplays: previous.macBookNotchAdditionalDisplays,
+              macBookNotchEmotions: previous.macBookNotchEmotions,
               macBookNotchWidthPercent: previous.macBookNotchWidthPercent,
               macBookNotchHeightPercent: previous.macBookNotchHeightPercent,
             }));
@@ -381,6 +386,7 @@ const Settings = createSimpleContext({
             macBookNotchHaptics: preference.hapticsEnabled,
             macBookNotchIdle: preference.idleVisible,
             macBookNotchAdditionalDisplays: preference.additionalDisplaysEnabled,
+            macBookNotchEmotions: dynamicIslandEmotionsEnabled(preference),
             macBookNotchWidthPercent: preference.widthPercent,
             macBookNotchHeightPercent: preference.heightPercent,
           })),

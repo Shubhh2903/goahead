@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title"><title id="title">Sleepy</title><desc>Closed eyes breathe; a small Z rises. Yellow logo emotion.</desc><style>.eye{transform-box:fill-box;transform-origin:center}.face{transform-origin:64px 64px}.zzz{transform-origin:center}.mouth{transform-origin:64px 94px}
+@keyframes blink{0%,42%,48%,100%{transform:scaleY(1)}45%{transform:scaleY(.08)}}
+@keyframes float{0%,100%{transform:translateY(1px)}50%{transform:translateY(-3px)}}
+@keyframes bounce{0%,100%{transform:translateY(0)}40%{transform:translateY(-5px)}65%{transform:translateY(1px)}}
+@keyframes tilt{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg)}}
+@keyframes pulse{0%,100%{transform:scale(1)}35%{transform:scale(1.1)}60%{transform:scale(.98)}}
+@keyframes listen{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.12)}}
+@keyframes look{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}65%{transform:translateX(4px)}}
+@keyframes focus{0%,100%{transform:scaleX(1)}50%{transform:scaleX(.85)}}
+@keyframes curious{0%,100%{transform:rotate(0)}45%{transform:rotate(-7deg)}}
+@keyframes shake{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}}
+@keyframes surprise{0%,100%{transform:scaleY(.92)}30%{transform:scaleY(1.12)}65%{transform:scaleY(1)}}
+@keyframes doubt{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px) rotate(5deg)}}
+@keyframes deadpan{0%,100%{transform:translateX(0)}50%{transform:translateX(2px)}}
+@keyframes strain{0%,100%{transform:translateX(0)}25%{transform:translateX(-1px)}75%{transform:translateX(1px)}}
+@keyframes sad{0%,100%{transform:translateY(0)}50%{transform:translateY(3px)}}
+@keyframes oops{0%,75%,100%{transform:rotate(0)}12%{transform:rotate(-5deg)}25%{transform:rotate(4deg)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes sleep{0%,100%{transform:translateY(0)}50%{transform:translateY(2px)}}
+@keyframes rise{0%{opacity:0;transform:translateY(3px)}40%{opacity:1}100%{opacity:0;transform:translateY(-5px)}}
+@keyframes spark{0%,100%{transform:scale(.95) rotate(-5deg)}50%{transform:scale(1.1) rotate(6deg)}}
+@keyframes money{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+@keyframes beckon{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}
+.face{animation:sleep 4.6s ease-in-out infinite}.zzz{animation:rise 4.6s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){*{animation:none!important}}</style><rect x="8" y="8" width="112" height="112" rx="24" fill="#F5C84C"/><g class="face" fill="#080609"><g transform="translate(40 63)"><g class="eye left"><path class="" d="M-12 3 L12 3" fill="none" stroke="#080609" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round"/></g></g><g transform="translate(88 63)"><g class="eye right"><path class="" d="M-12 3 L12 3" fill="none" stroke="#080609" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round"/></g></g><path class="zzz" d="M96 30 H103 L96 38 H103" fill="none" stroke="#080609" stroke-width="2.4" stroke-linejoin="round"/></g></svg>

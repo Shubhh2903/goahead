@@ -4,10 +4,12 @@ import type {
   DynamicIslandNotchSize,
   DynamicIslandPreference,
   DynamicIslandPresentation,
+  EmotionId,
 } from "@openbot/contracts/ipc";
 import {
   DEFAULT_DYNAMIC_ISLAND_PREFERENCE,
   dynamicIslandCompactHeight,
+  dynamicIslandEmotionsEnabled,
   IDLE_DYNAMIC_ISLAND_PRESENTATION,
   IPC_ENDPOINTS,
 } from "@openbot/contracts/ipc";
@@ -15,6 +17,7 @@ import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, type Logger, toLogValue } from "@openbot/logging";
 import type { BrowserWindow, Display, Rectangle } from "electron";
 import { readDynamicIslandPreference, writeDynamicIslandPreference } from "./dynamic-island-preference-store";
+import { createEmotionGaze, type EmotionGaze, type EmotionGazeOptions, type EmotionGazeTarget } from "./emotion-gaze";
 import { sendToRenderer } from "./renderer-ipc";
 
 const logger = createOpenBotLogger("dynamic-island-window");
@@ -28,6 +31,12 @@ const DYNAMIC_ISLAND_COMPACT_WINDOW_HOVER_ROOM = 18;
 // dropping to the compact height on the same tick guillotines the still-tall island - the lower
 // half disappears at once while the top morphs. Hold the tall window until the shell has landed.
 export const DYNAMIC_ISLAND_COLLAPSE_SETTLE_MS = 700;
+
+// The face sits in the left ear of the island, about this far left of the notch edge.
+const EMOTION_FACE_NOTCH_OFFSET = 26;
+const EMOTION_FACE_SIZE = 20;
+const EMOTION_FACE_TOP = 6;
+const EMOTION_FACE_DEFAULT_NOTCH_WIDTH = 192;
 
 const MACBOOK_NOTCH_REFERENCE = {
   displayWidth: 1512,
@@ -51,12 +60,18 @@ export interface DynamicIslandWindowControllerOptions {
     action: Extract<DynamicIslandAction, { type: "answer-prompt" | "respond-approval" }>,
   ) => Promise<void>;
   logger?: Logger;
+  /** Lets the face follow the pointer. Without it, the face does not look around. */
+  gaze?: Omit<EmotionGazeOptions, "targets">;
 }
 
 export class DynamicIslandWindowController {
   readonly #options: DynamicIslandWindowControllerOptions;
   #preference: DynamicIslandPreference = { ...DEFAULT_DYNAMIC_ISLAND_PREFERENCE };
-  #presentation = IDLE_DYNAMIC_ISLAND_PRESENTATION;
+  // The presentation from the main renderer, with no face: main owns the face.
+  #presentation: DynamicIslandPresentation = IDLE_DYNAMIC_ISLAND_PRESENTATION;
+  #emotion: EmotionId | undefined;
+  readonly #presentationListeners = new Set<(presentation: DynamicIslandPresentation) => void>();
+  readonly #preferenceListeners = new Set<(preference: DynamicIslandPreference) => void>();
   readonly #windows = new Map<number, BrowserWindow>();
   readonly #interactiveDisplays = new Set<number>();
   readonly #criticalActions = new Map<string, Promise<void>>();
@@ -65,22 +80,70 @@ export class DynamicIslandWindowController {
   #preferenceMutation = Promise.resolve();
   #windowReconciliation = Promise.resolve();
   #destroyed = false;
+  readonly #gaze: EmotionGaze | undefined;
 
   constructor(options: DynamicIslandWindowControllerOptions) {
     this.#options = options;
+    this.#gaze = options.gaze && createEmotionGaze({ ...options.gaze, targets: () => this.#gazeTargets() });
+  }
+
+  /** The visible island windows that show a face, with about where the face is on the screen. */
+  #gazeTargets(): EmotionGazeTarget[] {
+    if (this.presentation.emotion === undefined) return [];
+    const targets: EmotionGazeTarget[] = [];
+    for (const [displayId, window] of this.#windows) {
+      if (window.isDestroyed() || !window.isVisible()) continue;
+      const bounds = window.getBounds();
+      const notchWidth = this.#notchSizes.get(displayId)?.width ?? EMOTION_FACE_DEFAULT_NOTCH_WIDTH;
+      targets.push({
+        id: window.webContents.id,
+        face: {
+          x: bounds.x + bounds.width / 2 - notchWidth / 2 - EMOTION_FACE_NOTCH_OFFSET,
+          y: bounds.y + EMOTION_FACE_TOP,
+          width: EMOTION_FACE_SIZE,
+          height: EMOTION_FACE_SIZE,
+        },
+        send: (gaze) => sendToRenderer(window, IPC_ENDPOINTS.dynamicIsland.gaze, gaze),
+      });
+    }
+    return targets;
   }
 
   async initialize(): Promise<void> {
     this.#preference = await readDynamicIslandPreference(this.#options.preferencePath);
     await this.reconcileWindow();
+    this.#notifyPreference();
   }
 
   get preference(): DynamicIslandPreference {
     return { ...this.#preference };
   }
 
+  /** The presentation that the island windows show, with the face when emotions are on. */
   get presentation(): DynamicIslandPresentation {
-    return this.#presentation;
+    if (this.#emotion === undefined || !dynamicIslandEmotionsEnabled(this.#preference)) return this.#presentation;
+    return { ...this.#presentation, emotion: this.#emotion };
+  }
+
+  /** Calls `listener` when the main renderer publishes a different presentation. */
+  onPresentationChange(listener: (presentation: DynamicIslandPresentation) => void): () => void {
+    this.#presentationListeners.add(listener);
+    return () => this.#presentationListeners.delete(listener);
+  }
+
+  /** Calls `listener` with the preference after it is read and after each change. */
+  onPreferenceChange(listener: (preference: DynamicIslandPreference) => void): () => void {
+    this.#preferenceListeners.add(listener);
+    return () => this.#preferenceListeners.delete(listener);
+  }
+
+  /** Sets the face that the island shows. Undefined shows the logo. */
+  setEmotion(emotion: EmotionId | undefined): void {
+    if (this.#emotion === emotion) return;
+    const previous = this.presentation;
+    this.#emotion = emotion;
+    this.#sendPresentationIfChanged(previous);
+    this.#gaze?.refresh();
   }
 
   /** The notch of the built-in display, or null when there is no built-in display or it has no notch. */
@@ -104,9 +167,13 @@ export class DynamicIslandWindowController {
     let savedPreference: DynamicIslandPreference | undefined;
     const mutation = this.#preferenceMutation.then(async () => {
       savedPreference = await writeDynamicIslandPreference(this.#options.preferencePath, preference);
+      const previousPresentation = this.presentation;
       this.#preference = savedPreference;
       await this.reconcileWindow();
       this.publishPreference();
+      this.#sendPresentationIfChanged(previousPresentation);
+      this.#notifyPreference();
+      this.#gaze?.refresh();
     });
     this.#preferenceMutation = mutation.catch(() => undefined);
     await mutation;
@@ -119,11 +186,26 @@ export class DynamicIslandWindowController {
   }
 
   publish(presentation: DynamicIslandPresentation): void {
-    if (isDeepStrictEqual(this.#presentation, presentation)) return;
-    this.#presentation = presentation;
+    // Main owns the face, so a face from the renderer is ignored.
+    const { emotion: _rendererEmotion, ...withoutEmotion } = presentation;
+    const next: DynamicIslandPresentation = withoutEmotion;
+    if (isDeepStrictEqual(this.#presentation, next)) return;
+    const previous = this.presentation;
+    this.#presentation = next;
+    this.#sendPresentationIfChanged(previous);
+    for (const listener of this.#presentationListeners) listener(next);
+  }
+
+  #sendPresentationIfChanged(previous: DynamicIslandPresentation): void {
+    const current = this.presentation;
+    if (isDeepStrictEqual(previous, current)) return;
     for (const window of this.#windows.values()) {
-      sendToRenderer(window, IPC_ENDPOINTS.dynamicIsland.presentation, presentation);
+      sendToRenderer(window, IPC_ENDPOINTS.dynamicIsland.presentation, current);
     }
+  }
+
+  #notifyPreference(): void {
+    for (const listener of this.#preferenceListeners) listener({ ...this.#preference });
   }
 
   setInteractive(rendererId: number, interactive: boolean): void {
@@ -210,7 +292,10 @@ export class DynamicIslandWindowController {
   }
 
   reconcileWindow(): Promise<void> {
-    const reconciliation = this.#windowReconciliation.then(() => this.#reconcileWindows());
+    const reconciliation = this.#windowReconciliation.then(async () => {
+      await this.#reconcileWindows();
+      this.#gaze?.refresh();
+    });
     this.#windowReconciliation = reconciliation.catch(() => undefined);
     return reconciliation;
   }
@@ -284,7 +369,7 @@ export class DynamicIslandWindowController {
     window.webContents.on("did-finish-load", () => {
       if (this.#windows.get(display.id) !== window || window.isDestroyed()) return;
       const currentDisplay = this.#options.getDisplays().find((candidate) => candidate.id === display.id) ?? display;
-      sendToRenderer(window, IPC_ENDPOINTS.dynamicIsland.presentation, this.#presentation);
+      sendToRenderer(window, IPC_ENDPOINTS.dynamicIsland.presentation, this.presentation);
       sendToRenderer(window, IPC_ENDPOINTS.dynamicIsland.preference, this.#preference);
       const notchSize = notchSizeForDisplay(currentDisplay);
       if (sendToRenderer(window, IPC_ENDPOINTS.dynamicIsland.geometry, notchSize ?? null)) {
@@ -296,6 +381,8 @@ export class DynamicIslandWindowController {
       window.showInactive();
     });
     window.on("blur", () => this.setInteractive(window.webContents.id, false));
+    window.on("show", () => this.#gaze?.refresh());
+    window.on("hide", () => this.#gaze?.refresh());
     window.on("closed", () => {
       if (this.#windows.get(display.id) === window) {
         this.#windows.delete(display.id);
@@ -316,6 +403,7 @@ export class DynamicIslandWindowController {
 
   destroy(): void {
     this.#destroyed = true;
+    this.#gaze?.dispose();
     this.destroyWindows();
   }
 
