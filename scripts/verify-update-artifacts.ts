@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import { createOpenBotLogger } from "@openbot/logging";
 import { parse } from "yaml";
@@ -54,7 +55,13 @@ if (platform === "linux" || platform === "linux-arm64") {
 // Each macOS job builds its own architecture, and electron-builder writes x64 to `dist/mac`.
 const resourcesRoot =
   platform === "macos"
-    ? join(distRoot, process.arch === "arm64" ? "mac-arm64" : "mac", "OpenBot.app", "Contents", "Resources")
+    ? join(
+        distRoot,
+        process.arch === "arm64" ? "mac-arm64" : "mac",
+        `${PRODUCT_IDENTITY.name}.app`,
+        "Contents",
+        "Resources",
+      )
     : join(distRoot, platform === "windows" ? "win-unpacked" : `${platform}-unpacked`, "resources");
 if (existsSync(join(resourcesRoot, "whisper", "model"))) {
   throw new Error("The packaged application contains the on-demand Whisper model.");

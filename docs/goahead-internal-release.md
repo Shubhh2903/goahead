@@ -292,26 +292,30 @@ reads a route ticket that has only a person route as "this host owns the workspa
    - a **Developer ID Installer** certificate, exported the same way;
    - an **app-specific password** for the Apple ID that notarizes;
    - note the **Team ID** (10 characters).
-2. In the company's GitHub repository, make an environment named `release` with these secrets:
+2. On the company Apple silicon Mac that builds releases, import both certificates (with their
+   private keys) into the login keychain. `security find-identity -v` must list
+   "Developer ID Application: … (S29HD2MDR4)" and "Developer ID Installer: … (S29HD2MDR4)".
+3. Copy `.env.release.example` to `.env.release` at the repository root (git ignores it) and set
+   `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` (`S29HD2MDR4`). No GitHub secret is
+   needed: GoAhead has no GitHub Actions workflows.
 
-   | Secret | Value |
-   | --- | --- |
-   | `CSC_LINK`, `CSC_KEY_PASSWORD` | The Developer ID Application `.p12` as base64, and its password |
-   | `CSC_INSTALLER_LINK`, `CSC_INSTALLER_KEY_PASSWORD` | The Developer ID Installer `.p12` as base64, and its password |
-   | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` (`S29HD2MDR4`) | The notarization Apple ID, its app-specific password, and the Team ID |
-   | `MAC_PROVISIONING_PROFILE` | Only when the app keeps associated domains (universal links). See `docs/RELEASING.md`. |
+## 7. Release
 
-   `docs/RELEASING.md` lists how CI reads each one.
-
-## 7. First release
+Releases are built on the release Mac, for Apple silicon (arm64) only. No GitHub Actions workflow
+runs. Intel Macs are not supported from the release after v0.33.0: they get no update offer and must
+stay on the last Intel build.
 
 1. Check that `changelog.d/` has the notes of every change (`scripts/check-release-notes.ts`).
 2. Run the `release-upgrade-safety` audit (`.agents/skills/release-upgrade-safety/SKILL.md`).
-3. Bump the version: `bun run release:minor`. Commit it as `release: prepare vX.Y.Z` on the main
-   branch and push.
-4. Run `bun run release:preflight`. It checks the branch, the tag and the release secrets.
-5. **[Human]** Tag and push: `git tag -a vX.Y.Z -m "GoAhead vX.Y.Z"` and `git push origin vX.Y.Z`. The
-   tag workflow builds, signs and notarizes the app and the DMG, and staples both.
+3. Bump the version: `bun run release:minor`. Commit it as `release: prepare vX.Y.Z` on `master`
+   and push.
+4. Run `bun run release:preflight`. It checks the branch, the version, the notes and the local
+   signing and notarization credentials.
+5. **[Human]** Tag and push: `git tag -a vX.Y.Z -m "GoAhead vX.Y.Z" && git push origin vX.Y.Z`.
+6. **[Human]** Run `bun run release:local`. It builds, signs and notarizes the app and the DMG,
+   staples both, verifies them, and publishes the GitHub release as the latest release. Use
+   `bun run release:local -- --dry-run` first to check without a build. See
+   [Local release](RELEASING.md#local-release).
 
 ## 8. Check the release **[Human]**
 
@@ -319,7 +323,7 @@ reads a route ticket that has only a person route as "this host owns the workspa
       `https://goahead-signal.multicodegenius.com/health/ready` return `200`.
 - [ ] The DMG opens with no Gatekeeper warning: `spctl --assess --type open --context
       context:primary-signature -v GoAhead-*.dmg` says `accepted` and
-      `xcrun stapler validate GoAhead-*.dmg` says `The validate action worked!`. The release job runs
+      `xcrun stapler validate GoAhead-*.dmg` says `The validate action worked!`. `release:local` runs
       the same checks; a release made before this check (v0.31.0) has an unsigned DMG.
 - [ ] The app is named GoAhead in the Dock and in the menu bar.
 - [ ] Sign-in sends the one-time code from the company's email address.

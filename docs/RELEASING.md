@@ -11,8 +11,10 @@ x64 tag release is signed with Azure Artifact Signing (see [Windows signing](#wi
 releases are unsigned, and the Linux AppImage carries no signature.
 All three platforms must pass before one release is published. A release also requires the pinned
 Sunshine and Moonlight Web runtime artifacts. GitHub Actions downloads those artifacts, checks SHA-256, and
-verifies their native executables as part of the final GoAhead package. Release packages are not built
-on a developer machine.
+verifies their native executables as part of the final GoAhead package. GoAhead has no GitHub Actions
+workflows: its release is built, signed and published on a company Apple silicon Mac with
+`bun run release:local` (see [Internal GoAhead build](#internal-goahead-build)). The workflow text
+below describes the upstream release and is kept for reference.
 
 Codex, Claude, and Grok runtimes are optional downloads. They are not part of the application package.
 Release CI downloads the pinned macOS, Windows, and Linux provider artifacts as control artifacts. It
@@ -32,9 +34,11 @@ The company builds GoAhead for internal use. It differs from the upstream releas
 
 - **Identity:** `com.multicodegenius.goahead`, product name GoAhead, link scheme `goahead://`
   (`packages/contracts/src/product-identity.ts`; `electron-builder.yml` repeats the values).
-- **Apple team:** `S29HD2MDR4`, the company Developer ID. The workflow also reads `APPLE_TEAM_ID`.
-- **No associated domains:** no Universal Links, so `MAC_PROVISIONING_PROFILE` is optional and the
-  workflow does not check an apple-app-site-association file.
+- **Apple team:** `S29HD2MDR4`, the company Developer ID. `release:local` requires
+  `APPLE_TEAM_ID` to be this value.
+- **No associated domains:** no Universal Links, so a provisioning profile is optional
+  (`OPENBOT_PROVISIONING_PROFILE=<path>` when one is needed) and the release does not check an
+  apple-app-site-association file.
 - **Updates:** the updater reads the GitHub releases of `Shubhh2903/goahead` (`publish` in
   `electron-builder.yml`; `src/main/update-service.test.ts` pins it). While the repository is
   private, the app cannot read the feed and Settings > Updates offers "Open releases page"
@@ -43,10 +47,60 @@ The company builds GoAhead for internal use. It differs from the upstream releas
 - **No Host installer:** it is built only when the repository variable `BUILD_HOST_INSTALLER` is
   `true` (it still pins the upstream team in `scripts/host-installation.ts`).
 - **Default branch:** the tag must be on the repository's default branch (`master`).
-- **macOS only:** a tag builds the signed Apple silicon and Intel DMGs. The Windows, Linux and
-  Docker jobs run only when the repository variable `BUILD_OTHER_PLATFORMS` is `true`. Windows
-  signing in `release.yml` still names upstream's Azure tenant, so set that variable only after
-  GoAhead has its own Windows signing.
+- **macOS Apple silicon only, built on a Mac:** no GitHub Actions workflow runs. The release is
+  built, signed, notarized, verified and published on a company Apple silicon Mac with
+  `bun run release:local` (`scripts/release-local.ts`). It builds only the arm64 DMG and ZIP.
+  **Intel Macs are not supported from the release after v0.33.0.** An Intel Mac does not get an
+  update offer from an arm64-only `latest-mac.yml` (electron-updater skips arm64 files there); its
+  users must stay on the last Intel build. There are no Windows, Linux, Docker or Host builds.
+
+### Local release
+
+One-time setup on the release Mac:
+
+1. Import the **Developer ID Application** and **Developer ID Installer** certificates of team
+   `S29HD2MDR4` (with their private keys) into the login keychain. `security find-identity -v` must
+   list both.
+2. Copy `.env.release.example` to `.env.release` at the repository root and set `APPLE_ID`,
+   `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`. Git ignores `.env.release`
+   (`git check-ignore .env.release` prints it). A variable in the environment wins over the file.
+3. `gh auth login` with write access to `Shubhh2903/goahead`.
+
+Each release, on `master`:
+
+```sh
+bun run release:minor            # or release:patch, release:major
+git add package.json CHANGELOG.md changelog.d
+git commit -m "release: prepare vX.Y.Z"
+git push origin master
+git tag -a vX.Y.Z -m "GoAhead vX.Y.Z"
+git push origin vX.Y.Z
+bun run release:local -- --dry-run   # optional: checks only, prints the plan
+bun run release:local
+```
+
+`release:local` stops at the first failure. It:
+
+1. checks that the branch is `master`, the working tree is clean, HEAD is `origin/master`, the tag
+   `vX.Y.Z` on origin points at HEAD, the GitHub release has no assets yet, and the release notes
+   pass `scripts/check-release-notes.ts`;
+2. checks both Developer ID identities and the three notarization variables. It never prints a value;
+3. deletes `dist/`, installs the provider, remote desktop, Computer Use and voice runtimes, builds,
+   and runs `electron-builder --mac --arm64` with the keychain identity (`CSC_NAME`) and
+   notarization;
+4. runs `verify:package`, the `codesign`, `spctl` and `stapler` checks of the app, notarizes and
+   staples the DMG, and checks the updater metadata (`latest-mac.yml` lists only the ZIP;
+   `verify:update-artifacts`);
+5. writes `dist/SHA256SUMS.txt` after stapling;
+6. publishes the DMG, ZIP, block map, `latest-mac.yml` and `SHA256SUMS.txt` with
+   `gh release create --generate-notes --latest`.
+
+`--skip-build` reuses `dist/` and still verifies and publishes. `--replace` uploads over a release
+that already has assets. `bun run release:preflight` runs before the tag: it checks the version,
+notes, branch and the local credentials (`--skip-credentials` leaves out the credential check).
+
+The release does not run the repository check, the full tests, an SBOM or a provenance attestation.
+Run the focused checks for the changes in the release before you tag.
 
 ## One-time GitHub setup
 
@@ -382,6 +436,9 @@ bun run release:preflight
 git tag -a vX.Y.Z -m "GoAhead vX.Y.Z"
 git push origin vX.Y.Z
 ```
+
+GoAhead: after the tag, run `bun run release:local` (see [Local release](#local-release)). The text
+below describes the upstream tag workflow, which GoAhead no longer has.
 
 Pushing the version tag runs `.github/workflows/release.yml`.
 The tag workflow starts only after `https://openbot.run/join` and the Apple association file return
