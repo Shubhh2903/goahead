@@ -34,6 +34,9 @@ export const messages = defineMessages("status.messaging", {
   "status.messaging.sentFor": "{name} asked me to send this:",
   "status.messaging.sent": "Sent. Approved by {user}.",
   "status.messaging.sendFailed": "Not sent: {reason}",
+  // The Slack Orchestrator tells the GoAhead user this in GoAhead. {conversation} is a person or channel name.
+  "status.messaging.autoReplyLoopPaused":
+    "Auto-reply paused in {conversation}: it looks like a reply loop. Check it, then tell me to continue.",
   // One status message in a Slack thread while a teammate works on a request from it. Each hand-off
   // has two lines: who asked whom to do what, and how far the teammate is. {from} and {agent} are
   // agent names; {name} is a program, a file name or a tool, never its arguments.

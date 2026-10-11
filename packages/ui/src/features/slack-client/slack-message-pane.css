@@ -7,8 +7,16 @@
 }
 
 .slack-message-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--openbot-space-3);
   padding: var(--openbot-space-2) var(--openbot-space-3);
   border-bottom: 1px solid var(--openbot-border);
+}
+
+.slack-message-pane-auto-reply {
+  flex: 0 1 auto;
 }
 
 .slack-message-pane-title {
@@ -114,6 +122,10 @@
 .slack-message-edited {
   color: var(--openbot-text-muted);
   font-size: var(--openbot-text-sm);
+}
+
+.slack-message-auto-sent {
+  margin-inline-start: var(--openbot-space-1);
 }
 
 .slack-message-deleted {

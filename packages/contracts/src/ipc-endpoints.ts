@@ -287,6 +287,7 @@ import type {
   UninstallSkillInput,
 } from "./ipc-skills";
 import type {
+  SlackClientAutoReplyInput,
   SlackClientChanged,
   SlackClientConversation,
   SlackClientDeleteInput,
@@ -663,7 +664,7 @@ export const IPC_ENDPOINTS = {
     ),
     inboxChanged: event<MessagingInboxChanged>()("messaging:inbox-changed"),
     // A reply that the person types in an inbox conversation. It goes out as the person, with no
-    // approval; pause, quiet hours and the hourly limit hold agent sends only.
+    // approval; pause and quiet hours hold agent sends only.
     sendInboxReply: request<SendInboxReplyInput, void>()("messaging:send-inbox-reply"),
     // An inbox text that starts with `@chief`. It goes to the Slack Orchestrator, never to Slack.
     askOrchestratorAboutInbox: request<AskOrchestratorAboutInboxInput, AskOrchestratorAboutInboxResult>()(
@@ -686,6 +687,8 @@ export const IPC_ENDPOINTS = {
     edit: request<SlackClientEditInput, void>()("slack-client:edit"),
     delete: request<SlackClientDeleteInput, void>()("slack-client:delete"),
     react: request<SlackClientReactInput, void>()("slack-client:react"),
+    // The person's auto-reply list: an agent's message to a conversation on it is sent with no approval.
+    setAutoReply: request<SlackClientAutoReplyInput, void>()("slack-client:set-auto-reply"),
     // Main opens the file picker. Null when the person cancels it.
     upload: request<SlackClientUploadInput, SlackClientUploadResult | null>()("slack-client:upload"),
     uploadBytes: request<SlackClientUploadBytesInput, SlackClientUploadResult>()("slack-client:upload-bytes"),

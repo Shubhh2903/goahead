@@ -175,8 +175,7 @@ export const messages = defineMessages("connector", {
   "connector.slack.channelsCancel": "Cancel",
   // The guards of the messages GoAhead sends in a workspace.
   "connector.slack.sendingTitle": "Sending",
-  "connector.slack.sendingDescription":
-    "GoAhead sends at most {limit} messages an hour in this workspace. A message to someone it never wrote to always waits for your approval.",
+  "connector.slack.sendingDescription": "A message to someone GoAhead never wrote to always waits for your approval.",
   "connector.slack.pauseTitle": "Pause all Slack sends",
   "connector.slack.pauseDescription":
     "Nothing goes out, not even an approved draft. Agents still answer in their own conversations.",
@@ -186,9 +185,9 @@ export const messages = defineMessages("connector", {
   "connector.slack.quietStart": "Quiet hours start",
   "connector.slack.quietEnd": "Quiet hours end",
   "connector.slack.quietUntil": "until",
-  "connector.slack.sentLastHour": {
-    one: "{count} of {limit} messages sent in the last hour",
-    other: "{count} of {limit} messages sent in the last hour",
+  "connector.slack.sentInLastHour": {
+    one: "Sent in the last hour: {count}",
+    other: "Sent in the last hour: {count}",
   },
   "connector.slack.removeEffectKept": "The conversations and the Slack Orchestrator stay in GoAhead.",
   "connector.slack.keep": "Keep connected",

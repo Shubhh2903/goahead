@@ -50,7 +50,7 @@ function workspace(update: Partial<MessagingConnection> = {}): MessagingConnecti
     credentials: "saved",
     orchestratorAgentId: ORCHESTRATOR.id,
     watchedChannels: [{ channelId: "C0LAUNCH", name: "launch" }],
-    sendGuards: { paused: false, quietHours: { start: "22:00", end: "08:00" }, hourlyLimit: 10, sentLastHour: 3 },
+    sendGuards: { paused: false, quietHours: { start: "22:00", end: "08:00" }, hourlyLimit: null, sentLastHour: 3 },
     ...update,
   };
 }

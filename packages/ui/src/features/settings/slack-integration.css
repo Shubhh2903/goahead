@@ -168,7 +168,7 @@
   height: 14px;
 }
 
-/* The send guards: pause, quiet hours, and the hourly count. */
+/* The send guards: pause, quiet hours, and the count of the last hour. */
 .slack-send-guards {
   display: grid;
   gap: var(--openbot-space-3);

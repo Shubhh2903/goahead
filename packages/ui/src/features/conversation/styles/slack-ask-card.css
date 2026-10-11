@@ -1,0 +1,90 @@
+/* Slack ask card: a message that GoAhead wrote to a Slack Orchestrator, drawn short. */
+
+.slack-ask-card.conversation-interaction-card {
+  display: grid;
+  width: 100%;
+  max-width: 520px;
+  gap: var(--openbot-space-2);
+  padding: var(--openbot-space-3);
+}
+
+.slack-ask-card-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--openbot-space-2);
+  font-size: var(--openbot-text-sm);
+}
+
+.slack-ask-card-mark {
+  width: var(--openbot-icon-sm);
+  height: var(--openbot-icon-sm);
+  flex: none;
+  color: var(--openbot-text-muted);
+}
+
+.slack-ask-card-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--openbot-text-primary);
+  font-weight: var(--openbot-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slack-ask-card-time {
+  flex: none;
+  color: var(--openbot-text-muted);
+}
+
+.slack-ask-card-messages {
+  display: grid;
+  gap: var(--openbot-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.slack-ask-card-message {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--openbot-text-primary);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-md);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+.slack-ask-card-author {
+  font-weight: var(--openbot-weight-medium);
+}
+
+.slack-ask-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--openbot-space-1);
+}
+
+.slack-ask-card .slack-ask-card-action {
+  gap: var(--openbot-space-1);
+  color: var(--openbot-text-muted);
+}
+
+.slack-ask-card-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.slack-ask-card-context {
+  margin: 0;
+  padding-top: var(--openbot-space-2);
+  border-top: 1px solid var(--openbot-border);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--openbot-text-secondary);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-md);
+}

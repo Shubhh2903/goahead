@@ -24,6 +24,7 @@ import type {
   SendInboxReplyInput,
   SlackChannelChoice,
   SlackChannelList,
+  SlackClientAutoReplyInput,
   SlackClientChanged,
   SlackClientConversation,
   SlackClientDeleteInput,
@@ -31,6 +32,7 @@ import type {
   SlackClientListInput,
   SlackClientMentionCandidate,
   SlackClientMentionInput,
+  SlackClientMessage,
   SlackClientOlderInput,
   SlackClientOpenInput,
   SlackClientPage,
@@ -42,7 +44,15 @@ import type {
   SlackOverview,
   SlackRoutingStatus,
 } from "@openbot/contracts/ipc";
-import { MESSAGING_CONNECTION_STATES, MESSAGING_LIMITS } from "@openbot/contracts/ipc";
+import {
+  type ConversationSlackAsk,
+  MESSAGING_CONNECTION_STATES,
+  MESSAGING_LIMITS,
+  SLACK_ASK_PLACE_LIMIT,
+  SLACK_ASK_TEXT_LIMIT,
+  SLACK_ASK_TRIGGER_LIMIT,
+  type SlackAskKind,
+} from "@openbot/contracts/ipc";
 import { isDynamicRecord, isOneOf, isString } from "@openbot/contracts/runtime-values";
 import { SLACK_ORCHESTRATOR_AVATAR } from "@openbot/contracts/slack-app";
 import { sourceText } from "@openbot/i18n/source";
@@ -50,18 +60,14 @@ import { createOpenBotLogger, redactText } from "@openbot/logging";
 import type { HandoffRecord } from "../agent/handoff-activity";
 import type { MessagingOrigin } from "../mailbox-store";
 import type { SidebarLayoutStore } from "../sidebar-layout-store";
+import { MessagingAutoReplyLoop } from "./messaging-auto-reply-loop";
+import type { SendDraft } from "./messaging-draft-store";
 import { MessagingHiddenThreadStore } from "./messaging-hidden-threads";
 import { type InboxImage, isInboxImage, MessagingInboxFiles } from "./messaging-inbox-files";
 import type { InboxKind } from "./messaging-inbox-store";
 import { projectMapInstruction } from "./messaging-prompt";
 import { SLACK_INBOX_UNTRUSTED_NOTE } from "./messaging-read-tools";
-import {
-  inQuietHours,
-  MessagingSendGuardStore,
-  type QuietHours,
-  SEND_HOURLY_LIMIT,
-  SEND_LIMIT_WINDOW_MS,
-} from "./messaging-send-guards";
+import { inQuietHours, MessagingSendGuardStore, type QuietHours, SEND_COUNT_WINDOW_MS } from "./messaging-send-guards";
 import { parseSlackSendTarget, type SlackSendTarget, slackTargetPeople } from "./messaging-send-tool";
 import type { MessagingConnectionRecord, MessagingLink } from "./messaging-store";
 import type {
@@ -91,7 +97,11 @@ import {
   type MessagingTransport,
 } from "./messaging-types";
 import { type SlackAppPort, SlackConnect } from "./slack/slack-connect";
-import { slackOrchestratorMemories, slackOrchestratorProfile } from "./slack/slack-orchestrator";
+import {
+  slackOrchestratorMemories,
+  slackOrchestratorProfile,
+  upgradeSlackOrchestratorDescription,
+} from "./slack/slack-orchestrator";
 import { SlackWebApi } from "./slack/slack-web-api";
 import { SlackClientActions, type SlackClientUploadAction } from "./slack-client/actions";
 import { applySlackClientEvent } from "./slack-client/events";
@@ -127,8 +137,16 @@ export interface MessagingAgents {
     },
   ): Promise<AgentSummary>;
   createMemory(input: { agentId: string; text: string }): unknown;
-  /** A message from the local person to the agent's own conversation, as the desktop sends one. */
-  sendMessage(input: { agentId: string; text: string }): Promise<unknown>;
+  /**
+   * Changes only the agent's description. The agent keeps its id, thread and workspace. Without it,
+   * an orchestrator keeps the rules of the build that added it.
+   */
+  updateAgentDescription?(agentId: string, description: string): Promise<unknown>;
+  /**
+   * A message from the local person to the agent's own conversation, as the desktop sends one. The
+   * agent gets `text`; the chat shows `slackAsk`, when there is one, as a card.
+   */
+  sendMessage(input: { agentId: string; text: string; slackAsk?: ConversationSlackAsk }): Promise<unknown>;
   /** Every local agent's project folders as one prompt line, or null when no agent has one. */
   projectMap?(): string | null;
   /** The newest hand-offs an agent sent, each with the conversation its answer goes back to. */
@@ -185,6 +203,42 @@ export interface MessagingServiceOptions {
   slackRouting?: SlackRoutingPort;
   /** The shortest time between two edits of one hand-off status message. Only tests change this. */
   handoffStatusIntervalMs?: number;
+  /** The timers of the auto-reply wait. Only tests change this. */
+  autoReplyTimers?: AutoReplyTimers;
+}
+
+/** Starts a timer and returns what cancels it. */
+export interface AutoReplyTimers {
+  start(callback: () => void, delayMs: number): () => void;
+}
+
+const REAL_TIMERS: AutoReplyTimers = {
+  start(callback, delayMs) {
+    const timer = setTimeout(callback, delayMs);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  },
+};
+
+/**
+ * New messages from other people in one auto-reply conversation, until the orchestrator gets one
+ * turn for them. At most one turn runs; messages during it wait for one more.
+ */
+interface AutoReplyWait {
+  connectionId: string;
+  channelId: string;
+  /** The threads the new messages are in; null is the top of the conversation. */
+  threadKeys: Set<string | null>;
+  /** The people who wrote since the last turn started. */
+  authorIds: Set<string>;
+  /** The messages that came since the last turn started, which its card shows. */
+  messageIds: Set<string>;
+  /** When the first message of this wait arrived: the wait never lasts longer than the cap. */
+  firstAt: number | null;
+  cancelWait: (() => void) | null;
+  running: { agentId: string; turnId: string | null; cancelLimit: () => void } | null;
+  /** A message arrived while the turn ran: one more turn follows it. */
+  again: boolean;
 }
 
 interface LiveConnection {
@@ -247,29 +301,14 @@ interface PendingAgentApproval extends PendingBase {
  */
 interface PendingSend extends PendingBase {
   kind: "send";
+  allowedUserId: string;
   draft: SendDraft;
 }
 
-interface SendDraft {
-  draftId: string;
-  linkId: string;
-  agentId: string;
-  to: SlackSendTarget;
-  text: string;
-  threadKey: string | null;
-  sender: MessageSender;
-  /** For the desktop card: who gets it, by name, and who asked. */
-  recipient: string;
-  requestedBy: string | null;
-  /**
-   * Someone other than the connected person asked for it: it goes out as the GoAhead app, and its
-   * first line names them, so nobody reads it as the person's own words.
-   */
-  onBehalfOf: string | null;
-  createdAt: string;
-}
-
 type PendingApproval = PendingAgentApproval | PendingSend;
+
+/** A draft as it is sent. An auto-reply from the orchestrator's app conversation has no Slack conversation. */
+type DeliveryDraft = Omit<SendDraft, "linkId"> & { linkId: string | null };
 
 const FATAL_STATES = new Set<MessagingConnectionState>(["invalid_token"]);
 const LIVE_STATES = new Set<MessagingConnectionState>(["connecting", "connected", "reconnecting", "rate_limited"]);
@@ -306,6 +345,12 @@ const INBOX_LOOKUPS = 50;
 const MENTION_MARKERS = /[\uE000-\uE001]/g;
 /** The most people one `@` search of the Slack client offers. */
 const MENTION_CANDIDATES = 20;
+/** How long an auto-reply conversation waits after a new message, so several quick messages get one turn. */
+const AUTO_REPLY_WAIT_MS = 10_000;
+/** The longest wait from the first message, however many follow. */
+const AUTO_REPLY_WAIT_CAP_MS = 60_000;
+/** After this, an auto-reply turn whose end GoAhead did not see no longer holds the conversation. */
+const AUTO_REPLY_TURN_LIMIT_MS = 15 * 60_000;
 
 /**
  * Owns the live connections to chat platform workspaces: it starts and stops each one's transport,
@@ -353,6 +398,11 @@ export class MessagingService {
   readonly #hidden: MessagingHiddenThreadStore;
   readonly #routing: SlackRoutingPort | null;
   readonly #inboxFiles: MessagingInboxFiles | null;
+  readonly #autoReplyTimers: AutoReplyTimers;
+  /** The auto-reply waits and turns, by `connectionId\nchannelId`. */
+  readonly #autoReplyWaits = new Map<string, AutoReplyWait>();
+  /** Fast auto-reply exchanges, by the same key. A loop pauses auto-reply in its conversation. */
+  readonly #autoReplyLoop = new MessagingAutoReplyLoop();
   #started = false;
 
   constructor(options: MessagingServiceOptions) {
@@ -370,6 +420,7 @@ export class MessagingService {
     this.#routing = options.slackRouting ?? null;
     this.#inboxFiles = options.inboxFilesRoot ? new MessagingInboxFiles(options.inboxFilesRoot) : null;
     this.#handoffIntervalMs = options.handoffStatusIntervalMs ?? HANDOFF_STATUS_INTERVAL_MS;
+    this.#autoReplyTimers = options.autoReplyTimers ?? REAL_TIMERS;
     this.#slackSync = new SlackClientSync({
       store: this.#threads.inbox.cache,
       queueFor: (connectionId) => this.#slackQueue(connectionId),
@@ -388,9 +439,11 @@ export class MessagingService {
     this.#started = true;
     await this.#guards.load();
     await this.#hidden.load();
+    this.#loadDrafts();
     this.#unsubscribe.push(
       this.#threads.onActivity((activity) => this.#serial(activity.link.linkId, () => this.#activity(activity))),
       this.#agents.onEvent((event) => this.#agentEvent(event)),
+      this.#threads.onLocalOwnerMessage((agentId) => this.#localOwnerMessage(agentId)),
       this.#agents.onHandoffs?.((agentId) => this.#handoffsChanged(agentId)) ?? (() => undefined),
     );
     this.#threads.setContextSource((link, origin) => this.#promptContext(link, origin));
@@ -402,6 +455,7 @@ export class MessagingService {
     purge.unref?.();
     this.#unsubscribe.push(() => clearInterval(purge));
     const records = this.#threads.store.connections();
+    await this.#upgradeOrchestrators(records);
     await this.#credentials.retain(new Set(records.map((record) => record.connectionId)));
     await Promise.all(records.filter((record) => record.enabled).map((record) => this.#startConnection(record)));
   }
@@ -411,6 +465,7 @@ export class MessagingService {
     for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
     for (const post of this.#handoffPosts.values()) if (post.timer) clearTimeout(post.timer);
     this.#handoffPosts.clear();
+    this.#clearAutoReplyWaits(() => true);
     this.#threads.setContextSource(null);
     this.#threads.setMessageSender(null);
     this.#threads.setInboxReader(null);
@@ -493,6 +548,28 @@ export class MessagingService {
       pending.draft.text = text;
     }
     await this.#finishApproval(live, pending, decision === "approve" ? "accept" : "decline", approverId, null);
+  }
+
+  /**
+   * Puts the drafts that waited through a restart back under their Slack button tokens, so the
+   * desktop lists them and a press or an approval still finds them. A draft already here is kept.
+   */
+  #loadDrafts(): void {
+    for (const stored of this.#threads.drafts.all()) {
+      if (this.#approvals.has(stored.acceptToken)) continue;
+      const pending: PendingSend = {
+        kind: "send",
+        connectionId: stored.connectionId,
+        target: stored.target,
+        messageId: stored.messageId,
+        allowedUserId: stored.allowedUserId,
+        text: stored.postText,
+        answered: false,
+        draft: stored.draft,
+      };
+      this.#approvals.set(stored.acceptToken, pending);
+      this.#approvals.set(stored.declineToken, pending);
+    }
   }
 
   #pendingSends(): PendingSend[] {
@@ -632,6 +709,26 @@ export class MessagingService {
   }
 
   /**
+   * Gives each orchestrator that an earlier build added the current built-in rules. Text the person
+   * wrote around the rules stays, and rules the person changed stay as they are. One agent that
+   * cannot be changed does not stop the others or the start.
+   */
+  async #upgradeOrchestrators(records: readonly MessagingConnectionRecord[]): Promise<void> {
+    if (!this.#agents.updateAgentDescription) return;
+    const ids = new Set(records.map((record) => record.orchestratorAgentId).filter((id) => id !== null));
+    for (const agent of this.#agents.listAgents()) {
+      if (!ids.has(agent.id)) continue;
+      const upgrade = upgradeSlackOrchestratorDescription(agent.description);
+      if (upgrade.status === "edited")
+        logger.info("The Slack Orchestrator keeps its changed rules.", { agentId: agent.id });
+      if (upgrade.status !== "upgraded") continue;
+      await this.#agents
+        .updateAgentDescription?.(agent.id, upgrade.description)
+        .catch((error: unknown) => this.#warn(error));
+    }
+  }
+
+  /**
    * Puts the orchestrator in the sidebar's Integrations section, which it creates the first time, so
    * the agents that serve an integration stay apart from the user's own. Returns the section id.
    */
@@ -705,6 +802,8 @@ export class MessagingService {
     this.#slackActions.delete(record.connectionId);
     this.#slackQueues.delete(record.connectionId);
     this.#threads.inbox.cache.clearConnection(record.connectionId);
+    this.#threads.autoReply.clearConnection(record.connectionId);
+    this.#autoReplyLoop.forget((key) => key.startsWith(`${record.connectionId}\n`));
     this.#inboxChanged(record.workspaceId);
     this.#slackClientChanged({ workspaceId: record.workspaceId, channelId: null });
     this.#threads.store.updateConnection(record.connectionId, { enabled: false, lastErrorCode: null });
@@ -805,7 +904,7 @@ export class MessagingService {
 
   /**
    * A reply that the person typed in an inbox conversation, posted as them. Their own words need no
-   * approval, so pause, quiet hours and the hourly limit do not hold it. The send is on record.
+   * approval, so pause and quiet hours do not hold it. The send is on record.
    */
   async sendInboxReply(input: SendInboxReplyInput): Promise<void> {
     const live = this.#personConnection(input.workspaceId);
@@ -932,7 +1031,10 @@ export class MessagingService {
       action: (action) => void this.#action(live, action).catch((error) => this.#warn(error)),
       placeCreated: (platformChannelId) =>
         void live.adapter.joinPlace?.(platformChannelId).catch((error) => this.#warn(error)),
-      inbox: (candidate) => void this.#keep(live, candidate).catch((error) => this.#warn(error)),
+      inbox: (candidate) => {
+        void this.#keep(live, candidate).catch((error) => this.#warn(error));
+        this.#autoReplyHeard(live, candidate);
+      },
       history: (event) => this.#slackHistory(live, event),
       revoked: () => void this.#verifyTokens(live).catch((error) => this.#warn(error)),
     });
@@ -1151,24 +1253,49 @@ export class MessagingService {
    */
   async askOrchestratorAboutInbox(input: AskOrchestratorAboutInboxInput): Promise<AskOrchestratorAboutInboxResult> {
     const live = this.#personConnection(input.workspaceId);
-    const user = live.identity?.user;
-    if (!user) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
     const instruction = input.text.trim().replace(CHIEF_PREFIX, "").trim();
     if (!instruction) throw new Error(sourceText("error.messaging.sendTextEmpty"));
+    const agentId = await this.#askOrchestrator(live, {
+      conversation: input.conversation,
+      threadKey: input.threadKey ?? null,
+      lead: "The GoAhead user asks about a Slack conversation",
+      instructionTitle: "the GoAhead user's instruction",
+      instruction,
+      card: "inbox-ask",
+    });
+    return { agentId };
+  }
+
+  /**
+   * Gives the workspace's orchestrator one instruction about one conversation, in its own
+   * conversation, with the conversation's newest messages as context. Answers the orchestrator's id.
+   */
+  async #askOrchestrator(
+    live: LiveConnection,
+    ask: {
+      conversation: string;
+      threadKey: string | null;
+      lead: string;
+      instructionTitle: string;
+      /** The text, or a function that writes it with the conversation's name. */
+      instruction: string | ((place: string) => string);
+      /** The card that the orchestrator's chat shows in place of the text. */
+      card: SlackAskKind;
+      /** For an auto-reply: the new messages, which the card shows. */
+      newMessageIds?: ReadonlySet<string>;
+    },
+  ): Promise<string> {
+    const user = live.identity?.user;
+    if (!user) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
     const connectionId = live.record.connectionId;
     const inbox = this.#threads.inbox;
-    const messages = inbox.readForAgent(
-      connectionId,
-      input.conversation,
-      input.threadKey ?? null,
-      CHIEF_CONTEXT_MESSAGES,
-    );
+    const messages = inbox.readForAgent(connectionId, ask.conversation, ask.threadKey, CHIEF_CONTEXT_MESSAGES);
     if (messages.length === 0) throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
     const agentId = this.#orchestrator(live.record);
     if (!agentId) throw new Error(sourceText("error.messaging.inboxNeedsOrchestrator"));
     const kind = messages[0]?.kind ?? "channel";
     const other = messages.find((message) => message.authorId !== user.id)?.authorName ?? "";
-    const place = await this.#inboxPlace(live, inbox.watched(connectionId))(input.conversation, kind, other);
+    const place = await this.#inboxPlace(live, inbox.watched(connectionId))(ask.conversation, kind, other);
     const where =
       kind === "direct"
         ? `direct message with ${place}`
@@ -1181,8 +1308,8 @@ export class MessagingService {
         people.set(message.authorId, message.authorName);
     const projectMap = this.#agents.projectMap?.() ?? null;
     const text = [
-      `The GoAhead user asks about a Slack conversation in ${live.record.workspaceName}: ${where} (conversation ${input.conversation}${input.threadKey ? `, thread ${input.threadKey}` : ""}).`,
-      kind === "channel" ? `Channel ID: ${input.conversation}.` : "",
+      `${ask.lead} in ${live.record.workspaceName}: ${where} (conversation ${ask.conversation}${ask.threadKey ? `, thread ${ask.threadKey}` : ""}).`,
+      kind === "channel" ? `Channel ID: ${ask.conversation}.` : "",
       ...[...people].map(([id, name]) => `Person: ${name}, Slack user ID ${id}.`),
       "To answer in this conversation, call openbot.slack_send_message with to: <@USER_ID> (direct message) or <#CHANNEL_ID> (channel).",
       SLACK_INBOX_UNTRUSTED_NOTE,
@@ -1192,13 +1319,220 @@ export class MessagingService {
         (message) =>
           `${message.authorId === user.id ? `${message.authorName} (the GoAhead user)` : message.authorName}: ${this.#readable(live, message.text)}`,
       ),
-      "--- the GoAhead user's instruction ---",
-      instruction,
+      `--- ${ask.instructionTitle} ---`,
+      typeof ask.instruction === "function" ? ask.instruction(place) : ask.instruction,
     ]
       .filter(Boolean)
       .join("\n");
-    await this.#agents.sendMessage({ agentId, text });
-    return { agentId };
+    const clip = (value: string, limit: number) => (value.length > limit ? `${value.slice(0, limit - 1)}…` : value);
+    const line = (author: string, value: string) => ({
+      author: clip(author, INPUT_LIMITS.accountName),
+      text: clip(value, SLACK_ASK_TEXT_LIMIT),
+    });
+    // The new messages of an auto-reply. When the context does not hold them, the newest from
+    // someone else stands in.
+    const listed = messages.filter((message) => ask.newMessageIds?.has(message.platformMessageId));
+    const fromOthers = messages.filter((message) => message.authorId !== user.id);
+    const newMessages = ask.card !== "auto-reply" ? [] : listed.length > 0 ? listed : fromOthers.slice(-1);
+    const slackAsk: ConversationSlackAsk = {
+      kind: ask.card,
+      workspaceId: live.record.workspaceId,
+      channelId: ask.conversation,
+      place: clip(place, SLACK_ASK_PLACE_LIMIT),
+      trigger:
+        ask.card === "inbox-ask" && typeof ask.instruction === "string"
+          ? [line(user.name, ask.instruction)]
+          : newMessages
+              .slice(-SLACK_ASK_TRIGGER_LIMIT)
+              .map((message) => line(message.authorName, this.#readable(live, message.text))),
+    };
+    await this.#agents.sendMessage({ agentId, text, slackAsk });
+    return agentId;
+  }
+
+  /**
+   * A new message from someone else in a conversation on the auto-reply list. It waits a short time,
+   * so several quick messages get one orchestrator turn. A paused workspace, quiet hours, the person's
+   * own messages and GoAhead's sends as them start nothing; bots and edits never reach here. In a
+   * conversation that a reply loop paused, the messages wait for the end of the pause.
+   */
+  #autoReplyHeard(live: LiveConnection, candidate: InboxCandidate): void {
+    const user = live.identity?.user;
+    const connectionId = live.record.connectionId;
+    if (!user || this.#live.get(connectionId) !== live || !this.#started) return;
+    const key = `${connectionId}\n${candidate.platformChannelId}`;
+    if (candidate.authorId === user.id) {
+      this.#ownSlackMessage(connectionId, key, candidate);
+      return;
+    }
+    if (candidate.authorId === live.identity?.botUserId) return;
+    if (!this.#autoReplyAllowed(live, candidate.platformChannelId)) return;
+    this.#autoReplyLoop.heard(key, Date.now());
+    let wait = this.#autoReplyWaits.get(key);
+    if (!wait) {
+      wait = {
+        connectionId,
+        channelId: candidate.platformChannelId,
+        threadKeys: new Set(),
+        authorIds: new Set(),
+        messageIds: new Set(),
+        firstAt: null,
+        cancelWait: null,
+        running: null,
+        again: false,
+      };
+      this.#autoReplyWaits.set(key, wait);
+    }
+    wait.authorIds.add(candidate.authorId);
+    wait.messageIds.add(candidate.platformMessageId);
+    wait.threadKeys.add(candidate.threadKey);
+    if (wait.running) wait.again = true;
+    else if (!this.#autoReplyLoop.isPaused(key)) this.#restartAutoReplyWait(key, wait);
+  }
+
+  /**
+   * The person's own message in a conversation starts the loop count again and ends a loop pause.
+   * GoAhead's sends as the person come back the same way, so a message while an auto-reply turn runs
+   * there, or one on record as auto-sent, is not counted as the person's.
+   */
+  #ownSlackMessage(connectionId: string, key: string, candidate: InboxCandidate): void {
+    if (this.#autoReplyWaits.get(key)?.running) return;
+    const autoSent = this.#threads.store.autoSentMessageIds(connectionId, candidate.platformChannelId);
+    if (autoSent.has(candidate.platformMessageId)) return;
+    if (this.#autoReplyLoop.reset(key)) this.#autoReplyResumed(key);
+  }
+
+  /** The person wrote to an orchestrator in GoAhead: every loop pause in its workspaces ends. */
+  #localOwnerMessage(agentId: string): void {
+    for (const key of this.#autoReplyLoop.pausedKeys()) {
+      const record = this.#threads.store.connection(key.split("\n")[0] ?? "");
+      if (!record || this.#orchestrator(record) !== agentId) continue;
+      this.#autoReplyLoop.reset(key);
+      this.#autoReplyResumed(key);
+    }
+  }
+
+  /** After a loop pause, the messages that came during it get one turn. */
+  #autoReplyResumed(key: string): void {
+    const wait = this.#autoReplyWaits.get(key);
+    if (wait && !wait.running && !wait.cancelWait && wait.authorIds.size > 0) this.#restartAutoReplyWait(key, wait);
+  }
+
+  /** An auto-reply went out. The reply that completes a loop pauses the conversation and tells the person. */
+  #autoReplySent(live: LiveConnection, channelId: string): void {
+    if (!this.#autoReplyLoop.replied(`${live.record.connectionId}\n${channelId}`, Date.now())) return;
+    void this.#askOrchestrator(live, {
+      conversation: channelId,
+      threadKey: null,
+      lead: "GoAhead paused auto-reply in a Slack conversation",
+      instructionTitle: "GoAhead's instruction",
+      card: "auto-reply-paused",
+      instruction: (place) =>
+        `Do not reply in Slack. Tell the GoAhead user this in one line, as it is: ${sourceText("status.messaging.autoReplyLoopPaused", { conversation: place })}`,
+    }).catch((error) => this.#warn(error));
+  }
+
+  /** Whether an auto-reply turn may start in the conversation now. */
+  #autoReplyAllowed(live: LiveConnection, channelId: string): boolean {
+    const record = live.record;
+    if (!this.#credentials.get(record.connectionId)?.userToken || !this.#orchestrator(record)) return false;
+    if (!this.#threads.autoReply.isOn(record.connectionId, channelId)) return false;
+    const guards = this.#guards.get(record.workspaceId);
+    return !guards.paused && !inQuietHours(guards.quietHours, new Date());
+  }
+
+  #restartAutoReplyWait(key: string, wait: AutoReplyWait): void {
+    wait.cancelWait?.();
+    const now = Date.now();
+    wait.firstAt ??= now;
+    const delay = Math.max(0, Math.min(AUTO_REPLY_WAIT_MS, wait.firstAt + AUTO_REPLY_WAIT_CAP_MS - now));
+    wait.cancelWait = this.#autoReplyTimers.start(
+      () => void this.#startAutoReplyTurn(key, wait).catch((error) => this.#warn(error)),
+      delay,
+    );
+  }
+
+  async #startAutoReplyTurn(key: string, wait: AutoReplyWait): Promise<void> {
+    wait.cancelWait = null;
+    wait.firstAt = null;
+    // A loop pause keeps the messages for one turn after it ends.
+    if (this.#autoReplyLoop.isPaused(key) && this.#autoReplyWaits.get(key) === wait) return;
+    const live = this.#live.get(wait.connectionId);
+    const agentId = live ? this.#orchestrator(live.record) : null;
+    if (this.#autoReplyWaits.get(key) !== wait || !live || !agentId || !this.#autoReplyAllowed(live, wait.channelId)) {
+      if (this.#autoReplyWaits.get(key) === wait) this.#autoReplyWaits.delete(key);
+      return;
+    }
+    const authorIds = [...wait.authorIds];
+    const threads = [...wait.threadKeys].filter((threadKey) => threadKey !== null);
+    // One thread: its messages are the context. Otherwise the top of the conversation is.
+    const threadKey = wait.threadKeys.size === 1 ? (threads[0] ?? null) : null;
+    const newMessageIds = new Set(wait.messageIds);
+    wait.messageIds.clear();
+    wait.authorIds.clear();
+    wait.threadKeys.clear();
+    wait.running = {
+      agentId,
+      turnId: null,
+      cancelLimit: this.#autoReplyTimers.start(() => this.#autoReplyTurnEnded(key, wait), AUTO_REPLY_TURN_LIMIT_MS),
+    };
+    try {
+      const names = (await Promise.all(authorIds.map((id) => live.adapter.authorName(id)))).join(", ");
+      const thread =
+        threads.length > 0
+          ? ` New messages are in ${threads.length === 1 ? "the thread" : "the threads"} ${threads.join(", ")}: to reply in a thread, pass its threadTs.`
+          : "";
+      await this.#askOrchestrator(live, {
+        conversation: wait.channelId,
+        threadKey,
+        lead: "Auto-reply is on for a Slack conversation",
+        instructionTitle: "GoAhead's instruction",
+        card: "auto-reply",
+        newMessageIds,
+        instruction: `Auto-reply is on for this conversation. Read the new messages from ${names} and reply in this conversation as the GoAhead user, the way they would answer in chat: a short, natural reply to every message written to them.${thread} Send nothing anywhere else. Send nothing only when the new messages are just an acknowledgement, such as an emoji, "ok", "thanks" or a thumbs up.`,
+      });
+    } catch (error) {
+      this.#autoReplyTurnEnded(key, wait);
+      throw error;
+    }
+  }
+
+  /** The orchestrator's turns: the first one that starts after an auto-reply request is that request's. */
+  #autoReplyTurn(event: Extract<AgentEvent, { type: "turn-started" | "turn-completed" }>): void {
+    for (const [key, wait] of this.#autoReplyWaits) {
+      const running = wait.running;
+      if (running?.agentId !== event.agentId) continue;
+      if (event.type === "turn-started" && running.turnId === null) running.turnId = event.turnId;
+      else if (event.type === "turn-completed" && running.turnId === event.turnId) this.#autoReplyTurnEnded(key, wait);
+    }
+  }
+
+  #autoReplyTurnEnded(key: string, wait: AutoReplyWait): void {
+    if (this.#autoReplyWaits.get(key) !== wait || !wait.running) return;
+    wait.running.cancelLimit();
+    wait.running = null;
+    if (wait.again) {
+      wait.again = false;
+      this.#restartAutoReplyWait(key, wait);
+    } else if (!wait.cancelWait) this.#autoReplyWaits.delete(key);
+  }
+
+  /** Forgets the waits and turns that `match` names, and cancels their timers. */
+  #clearAutoReplyWaits(match: (wait: AutoReplyWait) => boolean): void {
+    for (const [key, wait] of this.#autoReplyWaits) {
+      if (!match(wait)) continue;
+      wait.cancelWait?.();
+      wait.running?.cancelLimit();
+      this.#autoReplyWaits.delete(key);
+    }
+  }
+
+  /** The auto-reply turn that runs now for this agent in this conversation, if any. */
+  #runningAutoReply(agentId: string, connectionId: string, channelId: string): AutoReplyWait | null {
+    for (const wait of this.#autoReplyWaits.values())
+      if (wait.running?.agentId === agentId && wait.connectionId === connectionId && wait.channelId === channelId)
+        return wait;
+    return null;
   }
 
   /** The live connection of a workspace that is connected as the person. */
@@ -1246,15 +1580,48 @@ export class MessagingService {
 
   /** The newest page of a conversation from the cache; the newest messages from Slack follow as a change. */
   async slackClientOpen({ workspaceId, channelId }: SlackClientOpenInput): Promise<SlackClientPage> {
-    return this.#slackSync.open(this.#slackClientConnection(workspaceId), channelId);
+    const connectionId = this.#slackClientConnection(workspaceId);
+    return this.#withAutoReply(connectionId, await this.#slackSync.open(connectionId, channelId));
   }
 
   async slackClientOlder({ workspaceId, channelId, beforeTs }: SlackClientOlderInput): Promise<SlackClientPage> {
-    return this.#slackSync.older(this.#slackClientConnection(workspaceId), channelId, beforeTs);
+    const connectionId = this.#slackClientConnection(workspaceId);
+    return this.#withAutoReply(connectionId, await this.#slackSync.older(connectionId, channelId, beforeTs));
   }
 
   async slackClientThread({ workspaceId, channelId, threadTs }: SlackClientThreadInput): Promise<SlackClientThread> {
-    return this.#slackSync.thread(this.#slackClientConnection(workspaceId), channelId, threadTs);
+    const connectionId = this.#slackClientConnection(workspaceId);
+    const thread = await this.#slackSync.thread(connectionId, channelId, threadTs);
+    const autoSent = this.#threads.store.autoSentMessageIds(connectionId, channelId);
+    return {
+      ...thread,
+      parent: markAutoSent(thread.parent, autoSent),
+      replies: thread.replies.map((reply) => markAutoSent(reply, autoSent)),
+    };
+  }
+
+  /**
+   * Puts one of the person's conversations on the auto-reply list, or takes it off. Only a workspace
+   * connected as the person has a list, so only that person changes it. The next agent send reads it.
+   */
+  async slackClientSetAutoReply({ workspaceId, channelId, on }: SlackClientAutoReplyInput): Promise<void> {
+    const connectionId = this.#slackClientConnection(workspaceId);
+    if (on && !this.#threads.inbox.cache.conversations(connectionId).some((item) => item.channelId === channelId))
+      throw new Error(sourceText("error.messaging.threadUnavailable"));
+    this.#threads.autoReply.set(connectionId, channelId, on);
+    this.#autoReplyLoop.reset(`${connectionId}\n${channelId}`);
+    if (!on) this.#clearAutoReplyWaits((wait) => wait.connectionId === connectionId && wait.channelId === channelId);
+    this.#slackClientChanged({ workspaceId, channelId });
+  }
+
+  /** The page with its conversation's auto-reply state, and the messages that went out with no approval. */
+  #withAutoReply(connectionId: string, page: SlackClientPage): SlackClientPage {
+    const autoSent = this.#threads.store.autoSentMessageIds(connectionId, page.channelId);
+    return {
+      ...page,
+      messages: page.messages.map((message) => markAutoSent(message, autoSent)),
+      autoReply: this.#threads.autoReply.isOn(connectionId, page.channelId),
+    };
   }
 
   /**
@@ -1574,6 +1941,7 @@ export class MessagingService {
   async #stopConnection(connectionId: string): Promise<void> {
     const live = this.#live.get(connectionId);
     this.#live.delete(connectionId);
+    this.#clearAutoReplyWaits((wait) => wait.connectionId === connectionId);
     this.#slackSync.stop(connectionId);
     await live?.transport?.stop();
   }
@@ -1616,10 +1984,10 @@ export class MessagingService {
       orchestratorAgentId: record.orchestratorAgentId,
       sendGuards: {
         ...this.#guards.get(record.workspaceId),
-        hourlyLimit: SEND_HOURLY_LIMIT,
+        hourlyLimit: null,
         sentLastHour: this.#threads.store.sendsSince(
           record.connectionId,
-          new Date(Date.now() - SEND_LIMIT_WINDOW_MS).toISOString(),
+          new Date(Date.now() - SEND_COUNT_WINDOW_MS).toISOString(),
         ),
       },
       watchedChannels: this.#threads.inbox.watched(record.connectionId).map((channel) => ({
@@ -1961,6 +2329,7 @@ export class MessagingService {
   }
 
   #agentEvent(event: AgentEvent): void {
+    if (event.type === "turn-started" || event.type === "turn-completed") this.#autoReplyTurn(event);
     if (event.type === "approval") void this.#approval(event.approval).catch((error) => this.#warn(error));
     else if (event.type === "agent-input-resolved" && event.kind === "approval")
       void this.#approvalResolved(event.requestId).catch((error) => this.#warn(error));
@@ -2008,6 +2377,18 @@ export class MessagingService {
     const decline = token();
     this.#approvals.set(accept, pending);
     this.#approvals.set(decline, pending);
+    // A draft is stored before its post, so a press that arrives before Slack's answer finds it too.
+    if (pending.kind === "send")
+      this.#threads.drafts.add({
+        connectionId: pending.connectionId,
+        acceptToken: accept,
+        declineToken: decline,
+        target: pending.target,
+        messageId: null,
+        allowedUserId: pending.allowedUserId,
+        postText: pending.text,
+        draft: pending.draft,
+      });
     try {
       pending.messageId = await live.adapter.post(pending.target, {
         text: pending.text,
@@ -2016,9 +2397,12 @@ export class MessagingService {
           { action: "decline", label: sourceText("status.messaging.deny"), token: decline, style: "danger" },
         ],
       });
+      if (pending.kind === "send" && pending.messageId && !pending.answered)
+        this.#threads.drafts.setMessageId(pending.draft.draftId, pending.messageId);
     } catch (error) {
       this.#approvals.delete(accept);
       this.#approvals.delete(decline);
+      if (pending.kind === "send") this.#threads.drafts.claim(pending.draft.draftId);
       throw error;
     }
   }
@@ -2029,27 +2413,14 @@ export class MessagingService {
    */
   async #requestSend(request: MessagingSendRequest): Promise<MessagingSendReceipt> {
     const link = this.#threads.store.linkForThread(request.threadId);
-    if (!link) throw new Error(sourceText("error.messaging.sendNeedsSlack"));
+    if (!link) return this.#autoReplyFromApp(request);
     const live = this.#live.get(link.connectionId);
     if (!live?.identity) throw new Error(sourceText("error.messaging.notConnected"));
     const credentials = this.#credentials.get(link.connectionId);
     const approverId = credentials?.userId;
     if (!approverId) throw new Error(sourceText("error.messaging.sendNeedsUser"));
-    const parsed = await this.#sendTargetPeople(live, credentials.userToken, parseSlackSendTarget(request.to));
-    if (!parsed) throw new Error(sourceText("error.messaging.sendTargetInvalid"));
-    // The user reads the conversation the agent answers in: a message to them is that answer. In a
-    // group, the sender is always a member, so naming them changes nothing.
-    const others = slackTargetPeople(parsed).filter((id) => id !== approverId);
-    if (parsed.kind !== "channel" && others.length === 0) throw new Error(sourceText("error.messaging.sendToSelf"));
-    const to: SlackSendTarget =
-      parsed.kind === "channel"
-        ? parsed
-        : others.length === 1
-          ? { kind: "user", id: others[0] ?? "" }
-          : { kind: "group", id: others.join(",") };
-    const text = request.text.replace(MENTION_MARKERS, "").trim().slice(0, INPUT_LIMITS.messageText);
-    if (!text) throw new Error(sourceText("error.messaging.sendTextEmpty"));
-    // A pause or a spent hour refuses at once, with no draft: the agent learns that nothing went out.
+    const { to, text } = await this.#sendTarget(live, credentials, approverId, request);
+    // A pause refuses at once, with no draft: the agent learns that nothing went out.
     const refused = this.#sendRefusal(live.record);
     if (refused) throw new Error(refused);
     const { adapter } = live;
@@ -2060,7 +2431,11 @@ export class MessagingService {
     // in quiet hours: an agent that a message tricked must not reach a stranger as them.
     const quiet = inQuietHours(this.#guards.get(live.record.workspaceId).quietHours, new Date());
     const known = this.#threads.store.hasSentTo(live.record.connectionId, `${to.kind}:${to.id}`);
-    const sender: MessageSender = ownRequest && credentials.userToken ? "user" : "bot";
+    // The person put the conversation on the auto-reply list: the message goes out as them with no
+    // approval, whoever asked. Quiet hours still hold it as a draft.
+    const autoReplyChannel = quiet ? null : await this.#autoReplyChannel(live, credentials.userToken, to);
+    const autoReply = autoReplyChannel !== null;
+    const sender: MessageSender = (ownRequest || autoReply) && credentials.userToken ? "user" : "bot";
     const draftId = randomUUID();
     const draft: SendDraft = {
       draftId,
@@ -2075,9 +2450,14 @@ export class MessagingService {
           ? await adapter.placeName(to.id).catch(() => to.id)
           : (await Promise.all(slackTargetPeople(to).map((id) => adapter.authorName(id)))).join(", "),
       requestedBy: running?.origin.authorName ?? null,
-      onBehalfOf: ownRequest ? null : (running?.origin.authorName ?? null),
+      onBehalfOf: ownRequest || autoReply ? null : (running?.origin.authorName ?? null),
       createdAt: new Date().toISOString(),
     };
+    if (autoReplyChannel !== null) {
+      const sentLink = await this.#deliver(live, draft, approverId, true);
+      this.#autoReplySent(live, autoReplyChannel);
+      return { status: "sent", draftId, sender, approverId, link: sentLink, autoSent: true };
+    }
     // The connected person asked for it themselves: their own request is their approval. Anyone
     // else's request, or a turn with no known author, waits for them to press Approve.
     if (ownRequest && known && !quiet) {
@@ -2114,6 +2494,85 @@ export class MessagingService {
     return { status: "waiting_for_approval", draftId, sender, approverId, link: null };
   }
 
+  /** Who a send goes to, with the person left out, and its clean text. */
+  async #sendTarget(
+    live: LiveConnection,
+    credentials: Record<string, string>,
+    approverId: string,
+    request: MessagingSendRequest,
+  ): Promise<{ to: SlackSendTarget; text: string }> {
+    const parsed = await this.#sendTargetPeople(live, credentials.userToken, parseSlackSendTarget(request.to));
+    if (!parsed) throw new Error(sourceText("error.messaging.sendTargetInvalid"));
+    // The user reads the conversation the agent answers in: a message to them is that answer. In a
+    // group, the sender is always a member, so naming them changes nothing.
+    const others = slackTargetPeople(parsed).filter((id) => id !== approverId);
+    if (parsed.kind !== "channel" && others.length === 0) throw new Error(sourceText("error.messaging.sendToSelf"));
+    const to: SlackSendTarget =
+      parsed.kind === "channel"
+        ? parsed
+        : others.length === 1
+          ? { kind: "user", id: others[0] ?? "" }
+          : { kind: "group", id: others.join(",") };
+    const text = request.text.replace(MENTION_MARKERS, "").trim().slice(0, INPUT_LIMITS.messageText);
+    if (!text) throw new Error(sourceText("error.messaging.sendTextEmpty"));
+    return { to, text };
+  }
+
+  /**
+   * A send from the orchestrator's own conversation in the app, which has no Slack conversation for
+   * a draft. Only an auto-reply turn that GoAhead started may send from there, and only to the
+   * conversation it is about, while that conversation is still on the auto-reply list. Anything else
+   * is refused as before.
+   */
+  async #autoReplyFromApp(request: MessagingSendRequest): Promise<MessagingSendReceipt> {
+    const live = [...this.#live.values()].find(
+      (candidate) =>
+        candidate.record.platform === "slack" &&
+        candidate.record.orchestratorAgentId === request.agentId &&
+        [...this.#autoReplyWaits.values()].some(
+          (wait) => wait.connectionId === candidate.record.connectionId && wait.running?.agentId === request.agentId,
+        ),
+    );
+    if (!live?.identity) throw new Error(sourceText("error.messaging.sendNeedsSlack"));
+    const connectionId = live.record.connectionId;
+    const credentials = this.#credentials.get(connectionId);
+    const approverId = credentials?.userId;
+    if (!approverId || !credentials.userToken) throw new Error(sourceText("error.messaging.sendNeedsUser"));
+    const { to, text } = await this.#sendTarget(live, credentials, approverId, request);
+    const channelId =
+      to.kind === "channel" ? to.id : await live.adapter.openDirectMessage?.(to.id, "user").catch(() => undefined);
+    if (
+      !channelId ||
+      !this.#runningAutoReply(request.agentId, connectionId, channelId) ||
+      !this.#threads.autoReply.isOn(connectionId, channelId)
+    )
+      throw new Error(sourceText("error.messaging.sendNeedsSlack"));
+    // A pause or quiet hours refuse at once: with no Slack conversation, no draft can wait.
+    const blocked = this.#sendBlock(live.record);
+    if (blocked) throw new Error(blocked);
+    const recipient =
+      to.kind === "channel"
+        ? await live.adapter.placeName(to.id).catch(() => to.id)
+        : (await Promise.all(slackTargetPeople(to).map((id) => live.adapter.authorName(id)))).join(", ");
+    const draftId = randomUUID();
+    const draft: DeliveryDraft = {
+      draftId,
+      linkId: null,
+      agentId: request.agentId,
+      to,
+      text,
+      threadKey: request.threadKey,
+      sender: "user",
+      recipient,
+      requestedBy: null,
+      onBehalfOf: null,
+      createdAt: new Date().toISOString(),
+    };
+    const sentLink = await this.#deliver(live, draft, approverId, true);
+    this.#autoReplySent(live, channelId);
+    return { status: "sent", draftId, sender: "user", approverId, link: sentLink, autoSent: true };
+  }
+
   /**
    * A direct or group direct message that an agent names by its conversation id becomes its people:
    * the bot is not in the person's own direct messages, so only a send to the people reaches them.
@@ -2133,8 +2592,30 @@ export class MessagingService {
     return people.length === 1 ? { kind: "user", id: people[0] ?? "" } : { kind: "group", id: people.join(",") };
   }
 
+  /**
+   * The conversation that a send goes to, when it is on the person's auto-reply list; else null. A
+   * direct or group direct message is the person's own conversation with those people. Any doubt is
+   * null, so the send waits for approval.
+   */
+  async #autoReplyChannel(
+    live: LiveConnection,
+    userToken: string | undefined,
+    to: SlackSendTarget,
+  ): Promise<string | null> {
+    const connectionId = live.record.connectionId;
+    if (!userToken || !this.#threads.autoReply.hasAny(connectionId)) return null;
+    const channelId =
+      to.kind === "channel" ? to.id : await live.adapter.openDirectMessage?.(to.id, "user").catch(() => undefined);
+    return channelId && this.#threads.autoReply.isOn(connectionId, channelId) ? channelId : null;
+  }
+
   /** Sends a draft once and records it. Returns the link to the sent message, when Slack gives one. */
-  async #deliver(live: LiveConnection, draft: SendDraft, approvedBy: string): Promise<string | null> {
+  async #deliver(
+    live: LiveConnection,
+    draft: DeliveryDraft,
+    approvedBy: string,
+    autoSent = false,
+  ): Promise<string | null> {
     // The last check, right before the post: a pause set a moment ago stops this send too.
     const blocked = this.#sendBlock(live.record);
     if (blocked) throw new Error(blocked);
@@ -2165,6 +2646,7 @@ export class MessagingService {
       platformMessageId: messageId,
       text,
       link,
+      ...(autoSent ? { autoSent: true as const } : {}),
     });
     return link;
   }
@@ -2240,13 +2722,9 @@ export class MessagingService {
     await this.#finishApproval(live, pending, action.decision, action.actorId, action.platformMessageId);
   }
 
-  /** Why no send can go out now: the pause or the hourly limit. Quiet hours turn sends into drafts. */
+  /** Why no send can go out now: the pause. Quiet hours turn sends into drafts. Sends have no count limit. */
   #sendRefusal(record: MessagingConnectionRecord): string | null {
-    if (this.#guards.get(record.workspaceId).paused) return sourceText("error.messaging.sendPaused");
-    const since = new Date(Date.now() - SEND_LIMIT_WINDOW_MS).toISOString();
-    if (this.#threads.store.sendsSince(record.connectionId, since) >= SEND_HOURLY_LIMIT)
-      return sourceText("error.messaging.sendRateLimited", { limit: SEND_HOURLY_LIMIT });
-    return null;
+    return this.#guards.get(record.workspaceId).paused ? sourceText("error.messaging.sendPaused") : null;
   }
 
   /** Why a message cannot be sent now, approved or not. */
@@ -2271,11 +2749,15 @@ export class MessagingService {
     pressedMessageId: string | null,
   ): Promise<void> {
     const { adapter } = live;
+    // A stored draft is taken from the database first: if its row is gone, another answer, before or
+    // after a restart, already took it, and it must not be sent again.
+    const claimed = pending.kind !== "send" || this.#threads.drafts.claim(pending.draft.draftId);
     pending.answered = true;
     let outcome: string;
     if (pending.kind === "send") {
-      outcome =
-        decision === "accept"
+      outcome = !claimed
+        ? sourceText("status.messaging.requestInactive")
+        : decision === "accept"
           ? await this.#sendDraft(live, pending, actorId)
           : sourceText("status.messaging.deniedBy", { user: adapter.mention(actorId) });
     } else {
@@ -2352,6 +2834,11 @@ function inboxConversation(value: string, watched: Array<{ platformChannelId: st
 }
 
 /** Where to answer when the message that started the work is not known: the conversation's thread. */
+/** Marks a message that an agent sent as the person with no approval. */
+function markAutoSent(message: SlackClientMessage, autoSent: ReadonlySet<string>): SlackClientMessage {
+  return autoSent.has(message.ts) ? { ...message, autoSent: true } : message;
+}
+
 function linkTarget(link: MessagingLink): MessageTarget {
   return {
     platformChannelId: link.platformChannelId,

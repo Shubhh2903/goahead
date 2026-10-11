@@ -16,8 +16,6 @@ export const messages = {
     "GoAhead kullanıcısı bu konuşmayı okuyor. Ona mesaj göndermek yerine burada yanıtlayın.",
   "error.messaging.sendTextEmpty": "Mesajın metni yok.",
   "error.messaging.sendPaused": "Slack gönderimleri GoAhead'de duraklatıldı. Hiçbir şey gönderilmedi.",
-  "error.messaging.sendRateLimited":
-    "GoAhead son bir saatte gönderebileceği en fazla sayı olan {limit} Slack mesajını gönderdi. Hiçbir şey gönderilmedi. Daha sonra tekrar deneyin.",
   "error.messaging.sendQuietHours":
     "Sessiz saatler: GoAhead {time} saatine kadar Slack mesajı göndermez. Taslak bekler.",
   "error.messaging.threadUnavailable": "Bu Slack konuşması kullanılamıyor.",

@@ -227,4 +227,11 @@ export const messages = {
   "chat.actions.reactionFailed": "Não foi possível atualizar a reação. Tente novamente.",
   "chat.actions.copyFailed": "Não foi possível copiar a mensagem.",
   "chat.unread.markReadFailed": "Não foi possível marcar as mensagens como lidas.",
+  "chat.slackAsk.autoReply": "Resposta automática · {place}",
+  "chat.slackAsk.inboxAsk": "Pedido da caixa de entrada do Slack · {place}",
+  "chat.slackAsk.autoReplyPaused": "Resposta automática pausada · {place}",
+  "chat.slackAsk.messages": "Novas mensagens",
+  "chat.slackAsk.openConversation": "Abrir conversa",
+  "chat.slackAsk.showContext": "Mostrar contexto",
+  "chat.slackAsk.hideContext": "Ocultar contexto",
 } as const satisfies PartialTranslation<typeof source>;

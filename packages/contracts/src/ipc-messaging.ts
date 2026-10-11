@@ -86,14 +86,18 @@ export interface SlackQuietHours {
   end: string;
 }
 
-/** What limits the messages GoAhead sends in a workspace. */
+/** What holds the messages GoAhead sends in a workspace. */
 export interface SlackSendGuards {
   /** Nothing is sent while it is set. */
   paused: boolean;
   /** Null when the person set none. In them, sends wait as drafts and approvals wait too. */
   quietHours: SlackQuietHours | null;
-  /** The most messages GoAhead sends in any hour, and how many it sent in the last one. */
-  hourlyLimit: number;
+  /**
+   * The most messages agents send in any hour. Null means no limit; this version always sends null.
+   * An earlier version sent a number.
+   */
+  hourlyLimit: number | null;
+  /** How many messages agents sent in the last hour. */
   sentLastHour: number;
 }
 
@@ -125,7 +129,7 @@ export function isSlackSendGuards(value: unknown): value is SlackSendGuards {
     isDynamicRecord(value) &&
     isBoolean(value.paused) &&
     (value.quietHours === null || isSlackQuietHours(value.quietHours)) &&
-    isCount(value.hourlyLimit) &&
+    (value.hourlyLimit === null || isCount(value.hourlyLimit)) &&
     isCount(value.sentLastHour)
   );
 }

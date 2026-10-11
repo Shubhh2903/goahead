@@ -66,6 +66,8 @@ export interface MessagingSendRecord {
   platformMessageId: string;
   text: string;
   link: string | null;
+  /** Sent with no approval, because the conversation was on the auto-reply list. Absent in old records. */
+  autoSent?: true;
 }
 
 const LINK_LIST_LIMIT = 200;
@@ -370,6 +372,22 @@ export class MessagingStore {
     return row ? decodeSendRecord(JSON.parse(String(row.payload_json))) : null;
   }
 
+  /** The ids of the messages that went out in one platform conversation with no approval (auto-reply). */
+  autoSentMessageIds(connectionId: string, platformChannelId: string): Set<string> {
+    return new Set(
+      databaseRows(
+        this.#database.connection
+          .prepare(
+            `SELECT json_extract(payload_json, '$.platformMessageId') AS message_id FROM orchestration_events
+             WHERE aggregate_type = ? AND json_extract(payload_json, '$.connectionId') = ?
+               AND json_extract(payload_json, '$.platformChannelId') = ?
+               AND json_extract(payload_json, '$.autoSent') = 1`,
+          )
+          .all(SEND_AGGREGATE, connectionId, platformChannelId),
+      ).map((row) => requiredStringColumn(row, "message_id")),
+    );
+  }
+
   /** Whether GoAhead ever sent to this recipient (`user:U1`, `group:U1,U2`, `channel:C1`) in the workspace. */
   hasSentTo(connectionId: string, to: string): boolean {
     return (
@@ -387,7 +405,7 @@ export class MessagingStore {
 
   /**
    * How many messages agents sent in the workspace since the time. A reply that the person typed in
-   * GoAhead has no agent and does not count: the hourly limit is for agent sends only.
+   * GoAhead has no agent and does not count. Settings show this count; it limits nothing.
    */
   sendsSince(connectionId: string, since: string): number {
     const row = databaseRow(
@@ -503,5 +521,6 @@ function decodeSendRecord(value: unknown): MessagingSendRecord | null {
     platformMessageId: value.platformMessageId,
     text: value.text,
     link: value.link,
+    ...(value.autoSent === true ? { autoSent: true as const } : {}),
   };
 }

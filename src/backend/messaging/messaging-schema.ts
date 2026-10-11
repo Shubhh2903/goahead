@@ -131,3 +131,44 @@ export const SLACK_CLIENT_SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS slack_messages_thread ON slack_messages(connection_id, channel_id, thread_ts);
 `;
+
+// Migration 30, and the tail of the latest schema after `SLACK_CLIENT_SCHEMA_SQL`. IF NOT EXISTS
+// throughout, for the same reason.
+//
+// A draft is a message that an agent asked to send and that waits for the connected person's
+// approval. It is kept here so that it is still listed, and can be approved, after a restart. Like
+// the inbox, it holds external text on this computer only, so rows are written directly and never go
+// to the event log. Approve or deny deletes the row before anything is sent: a row that is gone was
+// answered, which is what keeps one draft from going out twice. The tokens are the ones on the Slack
+// buttons of the draft post, so a press after a restart still finds it.
+export const MESSAGING_DRAFTS_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS projection_messaging_drafts (
+    draft_id TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL REFERENCES projection_messaging_connections(connection_id) ON DELETE CASCADE,
+    link_id TEXT NOT NULL REFERENCES projection_messaging_threads(link_id) ON DELETE CASCADE,
+    accept_token TEXT NOT NULL UNIQUE,
+    decline_token TEXT NOT NULL UNIQUE,
+    target_json TEXT NOT NULL CHECK(json_valid(target_json)),
+    message_id TEXT,
+    allowed_user_id TEXT NOT NULL,
+    post_text TEXT NOT NULL,
+    draft_json TEXT NOT NULL CHECK(json_valid(draft_json)),
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS messaging_drafts_link ON projection_messaging_drafts(link_id);
+`;
+
+// Migration 31, and the tail of the latest schema after `MESSAGING_DRAFTS_SCHEMA_SQL`. IF NOT EXISTS
+// throughout, for the same reason.
+//
+// The auto-reply allow list: the conversations where the connected person lets an agent's message go
+// out as them with no approval. A conversation that is not here needs approval, so an empty table is
+// the safe default. It holds ids only, no text. Rows go with their connection.
+export const MESSAGING_AUTO_REPLY_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS projection_messaging_auto_reply (
+    connection_id TEXT NOT NULL REFERENCES projection_messaging_connections(connection_id) ON DELETE CASCADE,
+    platform_channel_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(connection_id, platform_channel_id)
+  );
+`;

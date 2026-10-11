@@ -56,6 +56,8 @@ export interface ConversationProps {
    * pressed Connect or Install on the card: the page then starts the connect step.
    */
   onOpenMarketplaceApp?: (request: { appId: string; connect: boolean }) => void;
+  /** Opens one Slack conversation in the Slack inbox, from a Slack ask card. Only the local host has Slack. */
+  onOpenSlackConversation?: (place: { workspaceId: string; channelId: string }) => void;
   platform?: import("@openbot/contracts/ipc").AppInfo["platform"];
 
   agentStatus: AgentStatus;

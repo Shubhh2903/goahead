@@ -933,10 +933,7 @@ function SendGuardsSection(props: {
     if (next.start !== next.end) props.onChange({ quietHours: next });
   };
   return (
-    <SettingsSection
-      title={t("connector.slack.sendingTitle")}
-      description={t("connector.slack.sendingDescription", { limit: guards().hourlyLimit })}
-    >
+    <SettingsSection title={t("connector.slack.sendingTitle")} description={t("connector.slack.sendingDescription")}>
       <ItemGroup class="settings-modal-card slack-send-guards">
         <SwitchField
           checked={guards().paused}
@@ -980,7 +977,7 @@ function SendGuardsSection(props: {
           )}
         </Show>
         <Text class="slack-send-count" variant="caption" tone="muted" role="status">
-          {t("connector.slack.sentLastHour", { count: guards().sentLastHour, limit: guards().hourlyLimit })}
+          {t("connector.slack.sentInLastHour", { count: guards().sentLastHour })}
         </Text>
       </ItemGroup>
     </SettingsSection>

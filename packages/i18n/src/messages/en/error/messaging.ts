@@ -18,8 +18,6 @@ export const messages = defineMessages("error.messaging", {
   "error.messaging.sendTextEmpty": "The message has no text.",
   // A send that the person's guards stop. The agent reads these, and so does the person.
   "error.messaging.sendPaused": "Slack sends are paused in GoAhead. Nothing was sent.",
-  "error.messaging.sendRateLimited":
-    "GoAhead sent {limit} Slack messages in the last hour, the most it sends. Nothing was sent. Try again later.",
   "error.messaging.sendQuietHours": "Quiet hours: GoAhead sends no Slack messages until {time}. The draft waits.",
   // A Slack conversation that the sidebar asked for is gone or is not a Slack conversation.
   "error.messaging.threadUnavailable": "This Slack conversation is not available.",

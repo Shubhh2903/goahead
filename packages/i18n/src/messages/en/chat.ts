@@ -255,4 +255,13 @@ export const messages = defineMessages("chat", {
   "chat.handoff.showSteps": { one: "Show {count} step", other: "Show {count} steps" },
   "chat.handoff.hideSteps": { one: "Hide {count} step", other: "Hide {count} steps" },
   "chat.handoff.steps": "Steps",
+  // A card for a message that GoAhead wrote to a Slack Orchestrator for the person. {place} is a
+  // Slack conversation name, such as #general or a person's name.
+  "chat.slackAsk.autoReply": "Auto-reply · {place}",
+  "chat.slackAsk.inboxAsk": "Asked from Slack inbox · {place}",
+  "chat.slackAsk.autoReplyPaused": "Auto-reply paused · {place}",
+  "chat.slackAsk.messages": "New messages",
+  "chat.slackAsk.openConversation": "Open conversation",
+  "chat.slackAsk.showContext": "Show context",
+  "chat.slackAsk.hideContext": "Hide context",
 });

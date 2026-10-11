@@ -1719,9 +1719,12 @@ transport for its events. `messaging-types.ts` is the seam; the core never reads
   `#observe`). Each send is recorded in `orchestration_events` (`messaging_send`).
 - **Send guards.** `MessagingSendGuardStore` (`messaging-send-guards.ts`) keeps the pause and quiet
   hours per workspace in `openbot-messaging-send-guards-v1.json` in the user data folder; a change
-  holds in memory before it is saved. `#sendBlock` checks the pause, quiet hours and
-  `SEND_HOURLY_LIMIT` (counted from the audit log) when a send is asked for, when it is approved, and
-  right before the post. A blocked approval keeps the draft. Behavior: [messaging.md](messaging.md).
+  holds in memory before it is saved. `#sendBlock` checks the pause and quiet hours when a send is
+  asked for, when it is approved, and right before the post. A blocked approval keeps the draft.
+  Sends have no count limit; settings show the agent sends of the last hour (counted from the audit
+  log). `MessagingAutoReplyLoop` (in memory) pauses auto-reply in one conversation after 10 fast
+  auto-replies in a row; the orchestrator tells the person, and their next desktop message to it, or
+  their own Slack message there, ends the pause. The auto-reply setting stays on. Behavior: [messaging.md](messaging.md).
 - **Screen.** **Server settings → Connectors → Slack** on the computer that runs the agents shows each
   workspace and its orchestrator, and a two-step dialog connects the workspace and adds the
   orchestrator on the model the user picks. It also shows the inbox channel picker and the send
@@ -1742,7 +1745,7 @@ transport for its events. `messaging-types.ts` is the seam; the core never reads
   moves the same read mark that `slack_list_unread` uses. With the user token, the open conversation
   has a reply box: `send-inbox-reply` posts the typed text as the person (`chat.postMessage` with
   the user token) in the conversation or its open thread, with no approval, and records it in the
-  audit log. Pause, quiet hours and the hourly limit apply only to agent sends. The Slack connector
+  audit log. Pause and quiet hours apply only to agent sends. The Slack connector
   page shows whether this host is the default (`get-slack-routing`), and the default's owner can
   hand it over (`hand-over-slack-default`). The row now opens the Slack client (next item) in place
   of this pane.

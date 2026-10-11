@@ -12,6 +12,7 @@ import type {
   ConversationPlan,
   ConversationQuestionPrompt,
   ConversationReaction,
+  ConversationSlackAsk,
   HostedSiteConversationEvent,
   ImageGenerationInfo,
   MessageReaction,
@@ -163,6 +164,8 @@ export interface AgentMessage {
   items?: string[];
   itemIds?: string[];
   plan?: AgentMessagePlan;
+  /** A message that GoAhead wrote to a Slack Orchestrator: the chat draws a card, not the text. */
+  slackAsk?: ConversationSlackAsk;
 }
 
 export interface AgentProfile {

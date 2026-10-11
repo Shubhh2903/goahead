@@ -3,9 +3,8 @@ import { dirname } from "node:path";
 import { isSlackQuietHours, type SlackQuietHours } from "@openbot/contracts/ipc";
 import { isBoolean, isDynamicRecord } from "@openbot/contracts/runtime-values";
 
-/** How many messages GoAhead sends in one workspace in any hour. Another send is refused. */
-export const SEND_HOURLY_LIMIT = 10;
-export const SEND_LIMIT_WINDOW_MS = 60 * 60_000;
+/** Settings show how many messages agents sent in this window. Sends have no limit. */
+export const SEND_COUNT_WINDOW_MS = 60 * 60_000;
 
 /** A daily time range in this computer's time zone, as `HH:MM`. It can cross midnight. */
 export type QuietHours = SlackQuietHours;

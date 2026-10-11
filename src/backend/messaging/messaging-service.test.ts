@@ -30,10 +30,17 @@ import {
 } from "../agent-service-test-harness";
 import { SidebarLayoutStore } from "../sidebar-layout-store";
 import { MessagingHiddenThreadStore } from "./messaging-hidden-threads";
-import { type MessagingCredentials, MessagingService, type SlackRoutingPort } from "./messaging-service";
+import {
+  type AutoReplyTimers,
+  type MessagingCredentials,
+  MessagingService,
+  type SlackRoutingPort,
+} from "./messaging-service";
 import type { MessagingIngress } from "./messaging-types";
 import type { SlackAppPort } from "./slack/slack-connect";
 import { slackDriver } from "./slack/slack-driver";
+import { slackOrchestratorProfile } from "./slack/slack-orchestrator";
+import { PREVIOUS_SLACK_ORCHESTRATOR_DESCRIPTIONS } from "./slack/slack-orchestrator-history";
 
 const REPORT_DIR = resolve(import.meta.dirname, "../../../.openbot-build/slack-e2e");
 const BOT_TOKEN = "xoxb-1111-2222-testbottoken";
@@ -191,10 +198,16 @@ class FakeSlack {
       case "users.info":
         return reply({ user: { name: params.user?.toLowerCase(), profile: { display_name: `Name ${params.user}` } } });
       case "conversations.info":
-        // The bot is not in the person's own direct message with Alice.
-        if (params.channel === "D2")
+        // The bot is not in the person's own direct messages: with Alice (D2), or opened as `D-<user>`.
+        if (params.channel === "D2" || params.channel?.startsWith("D-"))
           return token === USER_TOKEN
-            ? reply({ channel: { id: "D2", is_im: true, user: "UALICE" } })
+            ? reply({
+                channel: {
+                  id: params.channel,
+                  is_im: true,
+                  user: params.channel === "D2" ? "UALICE" : params.channel.slice(2),
+                },
+              })
             : fail("channel_not_found");
         return reply({ channel: { name: "general" } });
       case "conversations.open":
@@ -256,6 +269,36 @@ class MemoryCredentials implements MessagingCredentials {
   }
 }
 
+/** Timers that run only when the test says so. */
+class ManualTimers implements AutoReplyTimers {
+  readonly #timers: Array<{ callback: () => void; delayMs: number; active: boolean }> = [];
+
+  start(callback: () => void, delayMs: number): () => void {
+    const timer = { callback, delayMs, active: true };
+    this.#timers.push(timer);
+    return () => {
+      timer.active = false;
+    };
+  }
+
+  /** The delays of the auto-reply waits that are set, not the turn limits. */
+  waits(): number[] {
+    return this.#due().map((timer) => timer.delayMs);
+  }
+
+  /** Ends every wait that is set. */
+  elapse(): void {
+    for (const timer of this.#due()) {
+      timer.active = false;
+      timer.callback();
+    }
+  }
+
+  #due() {
+    return this.#timers.filter((timer) => timer.active && timer.delayMs <= 60_000);
+  }
+}
+
 let root: string;
 let service: AgentService | null = null;
 let messaging: MessagingService | null = null;
@@ -289,11 +332,16 @@ async function connected(
     routing?: SlackRoutingPort;
     slackApp?: SlackAppPort;
     hiddenThreads?: MessagingHiddenThreadStore;
+    /** The orchestrator's description before the service starts. */
+    description?: string;
+    autoReplyTimers?: AutoReplyTimers;
   } = {},
 ) {
   const started = await startService(root, { provider: "codex", autoComplete: options.autoComplete ?? true });
   service = started.service;
-  const agent: AgentSummary = await started.store.getOrCreate("slack-agent");
+  let agent: AgentSummary = await started.store.getOrCreate("slack-agent");
+  if (options.description !== undefined)
+    agent = await started.service.updateAgent({ agentId: agent.id, description: options.description });
   const credentials = new MemoryCredentials();
   const events: AgentEvent[] = [];
   started.service.on("event", (event) => events.push(event));
@@ -311,7 +359,9 @@ async function connected(
       },
       createAgentProfile: (input) => started.service.createAgentProfile(input),
       createMemory: (input) => started.service.createMemory(input),
-      sendMessage: (input) => started.service.sendMessage(input),
+      updateAgentDescription: (agentId, description) => started.service.updateAgent({ agentId, description }),
+      sendMessage: ({ slackAsk, ...input }) =>
+        slackAsk ? started.service.sendSlackAskMessage(input, slackAsk) : started.service.sendMessage(input),
       projectMap: () => started.service.projectMap(),
       handoffRecords: (agentId) => started.service.handoffRecords(agentId),
       onHandoffs: (listener) => {
@@ -327,6 +377,7 @@ async function connected(
     ...(options.routing ? { slackRouting: options.routing } : {}),
     ...(options.slackApp ? { slackApp: options.slackApp } : {}),
     ...(options.hiddenThreads ? { hiddenThreads: options.hiddenThreads } : {}),
+    ...(options.autoReplyTimers ? { autoReplyTimers: options.autoReplyTimers } : {}),
     // Short, so the hand-off status test does not wait two seconds for each edit.
     handoffStatusIntervalMs: 20,
   });
@@ -615,6 +666,14 @@ describe.sequential("Slack messaging end to end", () => {
     expect(credentials.values.size).toBe(1);
     expect(workspace()?.orchestratorAgentId).toBeNull();
     report.deletion = { credentialsLeft: credentials.values.size };
+  });
+
+  it("gives an orchestrator from an earlier build the current rules, and keeps the agent and the person's text", async () => {
+    const released = PREVIOUS_SLACK_ORCHESTRATOR_DESCRIPTIONS[0] ?? "";
+    const { agent } = await connected({ description: `${released}\n\nSign as Ana.` });
+    const upgraded = service?.listAgents().find((one) => one.id === agent.id);
+    expect(upgraded?.description).toBe(`${slackOrchestratorProfile().description}\n\nSign as Ana.`);
+    expect(upgraded).toMatchObject({ name: agent.name, threadId: agent.threadId, workspacePath: agent.workspacePath });
   });
 
   it("answers only after the user adds the orchestrator, which then takes every new conversation", async () => {
@@ -943,6 +1002,25 @@ describe.sequential("Slack messaging end to end", () => {
     expect(prompt).not.toContain("@Chief");
     // The instruction never goes to Slack.
     expect(slack.of("chat.postMessage")).toEqual([]);
+
+    // The chat shows a card with the instruction; the agent got the full text. Both stay after a restart.
+    const card = {
+      kind: "inbox-ask",
+      workspaceId: "T1",
+      channelId: "D2",
+      place: "Alice",
+      trigger: [{ author: expect.any(String), text: "draft a short answer" }],
+    };
+    const asked = (await started.service.readConversation(started.agent.id)).messages.find((item) => item.slackAsk);
+    expect(asked?.slackAsk).toEqual(card);
+    expect(asked?.text).toContain("Alice: Are you there?");
+    expect(asked?.text).toContain("--- the GoAhead user's instruction ---\ndraft a short answer");
+    await messaging?.stop();
+    await service?.stop();
+    service = null;
+    const second = await connected({ user: true });
+    const kept = (await second.service.readConversation(second.agent.id)).messages.find((item) => item.slackAsk);
+    expect(kept).toMatchObject({ id: asked?.id, text: asked?.text, slackAsk: card });
   });
 
   it("asking Chief includes the project map", async () => {
@@ -983,6 +1061,115 @@ describe.sequential("Slack messaging end to end", () => {
       { as: "user", params: { channel: "D-UALICE" } },
     ]);
     expect(started.service.messaging.store.sends().map((send) => send.to)).toEqual(["user:UALICE"]);
+  });
+
+  it("a waiting draft is still listed after a restart, and is sent once when approved", async () => {
+    const first = await connected({ user: true, autoComplete: false });
+    await slack.send("events_api", slack.mention("tell Alice", "810.000", { user: "UOWNER" }));
+    await waitFor(() => turnStarts(first.client).length === 1);
+    const link = first.service.messaging.store.links(first.agent.id)[0];
+    if (!link) throw new Error("The mention has no conversation.");
+    const receipt = await first.service.messaging.requestSend({
+      agentId: first.agent.id,
+      threadId: link.threadId,
+      to: "UALICE",
+      text: "Back at five",
+      threadKey: null,
+    });
+    expect(receipt).toMatchObject({ status: "waiting_for_approval" });
+    const before = messaging?.listDrafts() ?? [];
+    expect(before).toMatchObject([{ draftId: receipt.draftId, text: "Back at five", threadId: link.threadId }]);
+
+    // A restart: the messaging service and the agent service go, and new ones open the same database.
+    await messaging?.stop();
+    await service?.stop();
+    service = null;
+    const second = await connected({ user: true, autoComplete: false });
+    expect(messaging?.listDrafts()).toEqual(before);
+
+    await messaging?.answerDraft(receipt.draftId, "approve");
+    expect(slack.of("chat.postMessage").filter((call) => call.params.text === "Back at five")).toHaveLength(1);
+    expect(second.service.messaging.store.sends().map((send) => send.draftId)).toEqual([receipt.draftId]);
+    expect(messaging?.listDrafts()).toEqual([]);
+    // A second answer finds nothing to send, and no stored draft is left for the next start.
+    await expect(messaging?.answerDraft(receipt.draftId, "approve")).rejects.toThrow(
+      "This request is no longer active.",
+    );
+    expect(second.service.messaging.drafts.all()).toEqual([]);
+    expect(slack.of("chat.postMessage").filter((call) => call.params.text === "Back at five")).toHaveLength(1);
+  });
+
+  it("auto-reply sends only in a conversation on the list, marks the message, and survives a restart", async () => {
+    const first = await connected({ user: true, autoComplete: false });
+    // Alice asks, not the person: without auto-reply, the send waits for the person's approval.
+    await slack.send("events_api", slack.mention("tell the person", "820.000"));
+    await waitFor(() => turnStarts(first.client).length === 1);
+    const link = first.service.messaging.store.links(first.agent.id)[0];
+    if (!link) throw new Error("The mention has no conversation.");
+    const ask = (started: Awaited<ReturnType<typeof connected>>, text: string) =>
+      started.service.messaging.requestSend({
+        agentId: started.agent.id,
+        threadId: link.threadId,
+        to: "UALICE",
+        text,
+        threadKey: null,
+      });
+    const posted = (text: string) => slack.of("chat.postMessage").filter((call) => call.params.text === text);
+    const conversation = { workspaceId: "T1", channelId: "D-UALICE" };
+    first.service.messaging.inbox.cache.upsertConversations(first.connectionId, [
+      { channelId: "D-UALICE", kind: "im", name: "", memberIds: ["UALICE", "UOWNER"], isMember: true },
+    ]);
+
+    // Off by default: a draft that waits, and nothing goes to Slack.
+    expect(await ask(first, "Not on the list")).toMatchObject({ status: "waiting_for_approval" });
+    expect(posted("Not on the list")).toEqual([]);
+    expect((await messaging?.slackClientOpen(conversation))?.autoReply).toBe(false);
+
+    // On the list: sent at once, as the person, in that conversation, and marked.
+    await messaging?.slackClientSetAutoReply({ ...conversation, on: true });
+    expect(await ask(first, "Auto reply")).toMatchObject({ status: "sent", sender: "user", autoSent: true });
+    expect(posted("Auto reply")).toMatchObject([{ as: "user", params: { channel: "D-UALICE" } }]);
+    const record = first.service.messaging.store.sends().find((send) => send.text === "Auto reply");
+    expect(record).toMatchObject({ autoSent: true, platformChannelId: "D-UALICE", approvedBy: "UOWNER" });
+    if (!record) throw new Error("The auto-sent message has no record.");
+    first.service.messaging.inbox.cache.mergePage(
+      first.connectionId,
+      "D-UALICE",
+      [
+        {
+          ts: record.platformMessageId,
+          threadTs: null,
+          replyCount: 0,
+          latestReplyTs: null,
+          authorId: "UOWNER",
+          text: "Auto reply",
+          files: [],
+          reactions: [],
+          editedAt: null,
+          deleted: false,
+          subtype: null,
+        },
+      ],
+      { hasMore: false },
+    );
+    const page = await messaging?.slackClientOpen(conversation);
+    expect(page?.autoReply).toBe(true);
+    // The person can still edit or delete it: it is their own message.
+    expect(page?.messages).toMatchObject([{ ts: record.platformMessageId, mine: true, autoSent: true }]);
+
+    // A restart keeps the list.
+    await messaging?.stop();
+    await service?.stop();
+    service = null;
+    const second = await connected({ user: true, autoComplete: false });
+    expect(await ask(second, "After the restart")).toMatchObject({ status: "sent", autoSent: true });
+    expect(posted("After the restart")).toHaveLength(1);
+
+    // Off again: the next send waits for approval.
+    await messaging?.slackClientSetAutoReply({ ...conversation, on: false });
+    expect(await ask(second, "Off again")).toMatchObject({ status: "waiting_for_approval" });
+    expect(posted("Off again")).toEqual([]);
+    expect((await messaging?.slackClientOpen(conversation))?.autoReply).toBe(false);
   });
 
   it("asking Chief without an orchestrator is refused", async () => {
@@ -1212,6 +1399,192 @@ describe.sequential("Slack messaging end to end", () => {
     expect(openBotToolPayload(answer.result).error).toBe(
       "Slack messages can only be read in your direct message with GoAhead, or when you ask the Slack Orchestrator in GoAhead on this computer.",
     );
+  });
+
+  it("auto-reply starts one orchestrator turn for new messages from someone else, and its reply goes out", async () => {
+    const timers = new ManualTimers();
+    const started = await connected({ user: true, autoComplete: false, autoReplyTimers: timers });
+    const turns: Array<{ threadId: string; turnId: string }> = [];
+    started.client.on("notification", (event: { method: string; params: unknown }) => {
+      const params = paramsRecord(event.params);
+      const turn = params && paramsRecord(params.turn);
+      if (event.method === "turn/started" && isString(params?.threadId) && isString(turn?.id))
+        turns.push({ threadId: params.threadId, turnId: turn.id });
+    });
+    for (const channelId of ["D-UPREET", "D-UALICE"])
+      started.service.messaging.inbox.cache.upsertConversations(started.connectionId, [
+        { channelId, kind: "im", name: "", memberIds: [channelId.slice(2), "UOWNER"], isMember: true },
+      ]);
+    const preet = { workspaceId: "T1", channelId: "D-UPREET" };
+    await messaging?.slackClientSetAutoReply({ ...preet, on: true });
+    const direct = (channel: string, user: string, text: string, ts: string, extra: DynamicRecord = {}) =>
+      slack.send("events_api", {
+        team_id: "T1",
+        event: { type: "message", user, text, ts, channel, channel_type: "im", ...extra },
+      });
+
+    // The person's own message, a bot's message, and a message in a conversation not on the list wait for nothing.
+    await direct("D-UPREET", "UOWNER", "Hi Preet", "1700000001.000100");
+    await direct("D-UPREET", "UPREETBOT", "Build passed", "1700000002.000100", {
+      bot_id: "B2",
+      subtype: "bot_message",
+    });
+    await direct("D-UALICE", "UALICE", "Lunch?", "1700000003.000100");
+    expect(timers.waits()).toEqual([]);
+
+    // Two quick messages from Preet: one wait, then one turn.
+    await direct("D-UPREET", "UPREET", "how are you?", "1700000004.000100");
+    await direct("D-UPREET", "UPREET", "free later?", "1700000005.000100");
+    expect(timers.waits()).toEqual([10_000]);
+    timers.elapse();
+    await waitFor(() => turns.length === 1);
+    const prompt = promptOf(turnStarts(started.client)[0] ?? { params: null });
+    expect(prompt).toContain("Auto-reply is on for this conversation.");
+    expect(prompt).toContain("how are you?");
+    expect(prompt).toContain("free later?");
+    // The chat card shows only the new messages, not the person's own one before them.
+    const asked = (await started.service.readConversation(started.agent.id)).messages.find((item) => item.slackAsk);
+    expect(asked?.slackAsk).toMatchObject({
+      kind: "auto-reply",
+      workspaceId: "T1",
+      channelId: "D-UPREET",
+      trigger: [{ text: "how are you?" }, { text: "free later?" }],
+    });
+    expect(asked?.text).toContain("Hi Preet");
+    expect(asked?.text).toContain("Auto-reply is on for this conversation.");
+    const [turn] = turns;
+    if (!turn) throw new Error("The auto-reply turn did not start.");
+
+    // A message while the turn runs waits for the turn to end.
+    await direct("D-UPREET", "UPREET", "also, the report?", "1700000006.000100");
+    expect(timers.waits()).toEqual([]);
+
+    // The reply goes out as the person in that conversation, with no approval, marked auto-sent.
+    const answer = await callOpenBotTool(
+      started.client,
+      turn.threadId,
+      "slack_send_message",
+      { to: "<@UPREET>", text: "Good, thanks!" },
+      turn.turnId,
+    );
+    expect(openBotToolPayload(answer.result)).toMatchObject({ status: "sent", autoSent: true });
+    expect(slack.of("chat.postMessage").filter((call) => call.params.text === "Good, thanks!")).toMatchObject([
+      { as: "user", params: { channel: "D-UPREET" } },
+    ]);
+    expect(started.service.messaging.store.sends()).toMatchObject([
+      { autoSent: true, platformChannelId: "D-UPREET", linkId: null, sender: "user" },
+    ]);
+    // The turn may not send to another conversation.
+    const elsewhere = await callOpenBotTool(
+      started.client,
+      turn.threadId,
+      "slack_send_message",
+      { to: "<@UALICE>", text: "Hello" },
+      turn.turnId,
+    );
+    expect(paramsRecord(elsewhere.result)?.success).toBe(false);
+
+    started.client.emit(
+      "notification",
+      notification("turn/completed", { threadId: turn.threadId, turn: { id: turn.turnId, status: "completed" } }),
+    );
+    await waitFor(() => timers.waits().length === 1);
+
+    // Auto-reply off during the wait: no turn.
+    await messaging?.slackClientSetAutoReply({ ...preet, on: false });
+    expect(timers.waits()).toEqual([]);
+    await direct("D-UPREET", "UPREET", "hello?", "1700000007.000100");
+    expect(timers.waits()).toEqual([]);
+    expect(turnStarts(started.client)).toHaveLength(1);
+    report.autoReply = { turns: 1, autoSent: true };
+  });
+
+  it("a fast reply loop pauses auto-reply in its conversation until the person says to continue", async () => {
+    const timers = new ManualTimers();
+    const started = await connected({ user: true, autoComplete: false, autoReplyTimers: timers });
+    const turns: Array<{ threadId: string; turnId: string }> = [];
+    started.client.on("notification", (event: { method: string; params: unknown }) => {
+      const params = paramsRecord(event.params);
+      const turn = params && paramsRecord(params.turn);
+      if (event.method === "turn/started" && isString(params?.threadId) && isString(turn?.id))
+        turns.push({ threadId: params.threadId, turnId: turn.id });
+    });
+    started.service.messaging.inbox.cache.upsertConversations(started.connectionId, [
+      { channelId: "D-UPREET", kind: "im", name: "", memberIds: ["UPREET", "UOWNER"], isMember: true },
+    ]);
+    const preet = { workspaceId: "T1", channelId: "D-UPREET" };
+    await messaging?.slackClientSetAutoReply({ ...preet, on: true });
+    let ts = 1700000100;
+    const direct = (user: string, text: string) =>
+      slack.send("events_api", {
+        team_id: "T1",
+        event: { type: "message", user, text, ts: `${ts++}.000100`, channel: "D-UPREET", channel_type: "im" },
+      });
+    const complete = async (turn: { threadId: string; turnId: string } | undefined) => {
+      if (!turn) throw new Error("The turn did not start.");
+      started.client.emit(
+        "notification",
+        notification("turn/completed", { threadId: turn.threadId, turn: { id: turn.turnId, status: "completed" } }),
+      );
+      await waitFor(() =>
+        started.events.some((event) => event.type === "turn-completed" && event.turnId === turn.turnId),
+      );
+    };
+    // Preet writes, the wait ends, the orchestrator's turn replies at once, and the turn ends.
+    let pings = 0;
+    const exchange = async () => {
+      pings += 1;
+      await direct("UPREET", `ping ${pings}`);
+      expect(timers.waits()).toEqual([10_000]);
+      timers.elapse();
+      // Each exchange is one turn: a notice turn in between would break the count.
+      await waitFor(() => turns.length === pings && turnStarts(started.client).length === pings);
+      expect(promptOf(turnStarts(started.client).at(-1) ?? { params: null })).toContain("Auto-reply is on");
+      const turn = turns.at(-1);
+      if (!turn) throw new Error("The auto-reply turn did not start.");
+      const answer = await callOpenBotTool(
+        started.client,
+        turn.threadId,
+        "slack_send_message",
+        { to: "<@UPREET>", text: `pong ${pings}` },
+        turn.turnId,
+      );
+      expect(openBotToolPayload(answer.result)).toMatchObject({ status: "sent", autoSent: true });
+      await complete(turn);
+    };
+
+    // Nine fast replies, then the person writes in the conversation: the count starts again.
+    for (let index = 0; index < 9; index += 1) await exchange();
+    await direct("UOWNER", "sorry, I am here");
+    for (let index = 0; index < 9; index += 1) await exchange();
+    const beforeLoop = turnStarts(started.client).length;
+    expect(beforeLoop).toBe(18);
+
+    // The tenth fast reply in a row pauses auto-reply there. The toggle stays on, and the
+    // orchestrator tells the person in GoAhead.
+    await exchange();
+    await waitFor(() => turnStarts(started.client).length === beforeLoop + 2);
+    const notice = promptOf(turnStarts(started.client).at(-1) ?? { params: null });
+    expect(notice).toContain("Auto-reply paused in");
+    expect(notice).toContain("it looks like a reply loop");
+    expect((await messaging?.slackClientOpen(preet))?.autoReply).toBe(true);
+    await waitFor(() => turns.length === beforeLoop + 2);
+    await complete(turns.at(-1));
+
+    // A new message during the pause starts no turn.
+    await direct("UPREET", "ping again");
+    expect(timers.waits()).toEqual([]);
+    expect(turnStarts(started.client)).toHaveLength(beforeLoop + 2);
+
+    // The person tells the orchestrator to continue: the waiting message gets one turn.
+    await started.service.sendLocalOwnerMessage({ agentId: started.agent.id, text: "ok continue" });
+    expect(timers.waits()).toEqual([10_000]);
+    await waitFor(() => turns.length === beforeLoop + 3);
+    await complete(turns.at(-1));
+    timers.elapse();
+    await waitFor(() => turnStarts(started.client).length === beforeLoop + 4);
+    expect(promptOf(turnStarts(started.client).at(-1) ?? { params: null })).toContain("ping again");
+    report.autoReplyLoop = { pausedAfter: 10, toggleStaysOn: true, resetByOwnMessage: true, resumed: true };
   });
 
   it("writes the report", () => {

@@ -3,6 +3,8 @@ import { CONVERSATION_PLAN_ITEM_TYPE, MESSAGING_LIMITS } from "@openbot/contract
 import { sourceText } from "@openbot/i18n/source";
 import type { DeliveryContext, MailboxStore, MessagingOrigin } from "../mailbox-store";
 import type { OpenBotDatabase } from "../openbot-database";
+import { MessagingAutoReplyStore } from "./messaging-auto-reply-store";
+import { MessagingDraftStore } from "./messaging-draft-store";
 import { MessagingInboxStore } from "./messaging-inbox-store";
 import { type MessagingContextMessage, messagingPromptText, projectMapInstruction } from "./messaging-prompt";
 import { type MessagingLink, MessagingStore } from "./messaging-store";
@@ -88,6 +90,8 @@ export interface MessagingSendReceipt {
   approverId: string;
   /** A link to the sent message, when it was sent and the platform gives one. */
   link: string | null;
+  /** Sent with no approval, because the person put the conversation on the auto-reply list. */
+  autoSent?: true;
 }
 
 /** An agent's read of the connected person's inbox, from the execution thread of a conversation. */
@@ -157,11 +161,16 @@ export class MessagingThreads {
   readonly store: MessagingStore;
   /** The person's local Slack inbox, which the read tools use. */
   readonly inbox: MessagingInboxStore;
+  /** The drafts that wait for the person's approval, kept across a restart. */
+  readonly drafts: MessagingDraftStore;
+  /** The conversations where an agent's message goes out with no approval. */
+  readonly autoReply: MessagingAutoReplyStore;
   readonly #database: OpenBotDatabase;
   readonly #mailbox: MailboxStore;
   readonly #hooks: MessagingThreadsHooks;
   readonly #listeners = new Set<(activity: MessagingActivity) => void>();
   readonly #changeListeners = new Set<(threadId: string) => void>();
+  readonly #ownerMessageListeners = new Set<(agentId: string) => void>();
   readonly #admissions = new Map<string, Promise<unknown>>();
   /** The external message each running turn answers, by turn id. */
   readonly #turnOrigins = new Map<string, { origin: MessagingOrigin | null; followUp: boolean }>();
@@ -172,6 +181,8 @@ export class MessagingThreads {
   constructor(database: OpenBotDatabase, mailbox: MailboxStore, hooks: MessagingThreadsHooks) {
     this.store = new MessagingStore(database);
     this.inbox = new MessagingInboxStore(database);
+    this.drafts = new MessagingDraftStore(database);
+    this.autoReply = new MessagingAutoReplyStore(database);
     this.#database = database;
     this.#mailbox = mailbox;
     this.#hooks = hooks;
@@ -180,6 +191,17 @@ export class MessagingThreads {
   onActivity(listener: (activity: MessagingActivity) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  /** The person at this computer sent a message to the agent from the desktop app. */
+  onLocalOwnerMessage(listener: (agentId: string) => void): () => void {
+    this.#ownerMessageListeners.add(listener);
+    return () => this.#ownerMessageListeners.delete(listener);
+  }
+
+  /** Only the trusted desktop path calls this, after the message is queued. */
+  localOwnerMessage(agentId: string): void {
+    for (const listener of this.#ownerMessageListeners) listener(agentId);
   }
 
   /** A linked thread was created or got new messages. The thread list reads again. */

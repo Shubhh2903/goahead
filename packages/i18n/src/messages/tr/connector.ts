@@ -180,7 +180,7 @@ export const messages = {
   "connector.slack.channelsCancel": "İptal",
   "connector.slack.sendingTitle": "Gönderim",
   "connector.slack.sendingDescription":
-    "GoAhead bu çalışma alanında saatte en fazla {limit} mesaj gönderir. Daha önce hiç yazmadığı birine giden mesaj her zaman onayınızı bekler.",
+    "GoAhead'in daha önce hiç yazmadığı birine giden mesaj her zaman onayınızı bekler.",
   "connector.slack.pauseTitle": "Tüm Slack gönderimlerini duraklat",
   "connector.slack.pauseDescription":
     "Onaylanmış bir taslak bile gönderilmez. Ajanlar kendi konuşmalarında yanıt vermeye devam eder.",
@@ -190,9 +190,9 @@ export const messages = {
   "connector.slack.quietStart": "Sessiz saatlerin başlangıcı",
   "connector.slack.quietEnd": "Sessiz saatlerin bitişi",
   "connector.slack.quietUntil": "ile",
-  "connector.slack.sentLastHour": {
-    one: "Son bir saatte {limit} mesajdan {count} tanesi gönderildi",
-    other: "Son bir saatte {limit} mesajdan {count} tanesi gönderildi",
+  "connector.slack.sentInLastHour": {
+    one: "Son bir saatte gönderilen: {count}",
+    other: "Son bir saatte gönderilen: {count}",
   },
   "connector.slack.removeEffectKept": "Konuşmalar ve Slack Düzenleyicisi GoAhead'de kalır.",
   "connector.slack.keep": "Bağlı tut",

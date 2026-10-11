@@ -1290,7 +1290,7 @@ describe.sequential("OpenBot Slack app end to end", () => {
       `${JSON.stringify({ kept: ["direct", "group", "mention", "channel"], otherChannelTalkKept: false, strangerRefused: true, ownerRead: true, markedRead: true, unpickedChannelForgotten: true, disconnectForgets: true }, null, 2)}\n`,
     );
   });
-  it("guards every Slack send: injected requests, new people, pause, quiet hours and the hourly limit", async () => {
+  it("guards every Slack send: injected requests, new people, pause and quiet hours, with no hourly limit", async () => {
     const guardsPath = join(root, "send-guards.json");
     const { messaging, agent, store, turns, finish, message, toolCall, started, connectionId } = await connectedAsUser({
       guardsPath,
@@ -1372,7 +1372,7 @@ describe.sequential("OpenBot Slack app end to end", () => {
     const reloaded = new MessagingSendGuardStore(guardsPath);
     await reloaded.load();
     expect(reloaded.get("T1")).toEqual({ paused: true, quietHours: null });
-    expect(messaging.slackOverview().connections[0]?.sendGuards).toMatchObject({ paused: true, hourlyLimit: 10 });
+    expect(messaging.slackOverview().connections[0]?.sendGuards).toMatchObject({ paused: true, hourlyLimit: null });
     await messaging.setSendGuards("T1", { paused: false });
     await approveAll();
     expect(sentTo("D-UZED")).toHaveLength(1);
@@ -1390,12 +1390,11 @@ describe.sequential("OpenBot Slack app end to end", () => {
     await messaging.setSendGuards("T1", { quietHours: null });
     await approveAll();
 
-    // The hourly limit: once GoAhead sent 10 messages in the last hour, the next send is refused.
+    // No hourly limit: more than 10 agent sends in one hour all go out.
     const since = () => new Date(Date.now() - 60 * 60_000).toISOString();
-    while (store.sendsSince(connectionId, since()) < 10)
+    while (store.sendsSince(connectionId, since()) < 12)
       expect(await ownSend("<@UPREET>", "one more")).toMatchObject({ status: "sent" });
-    await expect(ownSend("<@UPREET>", "one too many")).rejects.toThrow("GoAhead sent 10 Slack messages");
-    expect(messaging.slackOverview().connections[0]?.sendGuards.sentLastHour).toBe(10);
+    expect(messaging.slackOverview().connections[0]?.sendGuards.sentLastHour).toBe(12);
     finish(turns[1]);
 
     mkdirSync(REPORT_DIR, { recursive: true });
@@ -1407,7 +1406,7 @@ describe.sequential("OpenBot Slack app end to end", () => {
           ownTurnInjection: { newRecipientIsDraft: true, sent: false },
           pause: { refusesWithinMs: 1000, approvalWaits: true, persisted: true },
           quietHours: { sendIsDraft: true, approvalWaits: true },
-          hourlyLimit: { limit: 10, eleventhRefused: true },
+          hourlyLimit: { limit: null, sentInOneHour: 12, allSent: true },
         },
         null,
         2,

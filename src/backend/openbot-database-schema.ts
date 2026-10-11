@@ -6,6 +6,8 @@ import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { CHANNEL_SCHEMA_SQL, CHANNEL_SETTINGS_SCHEMA_SQL } from "./channel-schema";
 import { MCP_SERVERS_SCHEMA_SQL } from "./mcp-schema";
 import {
+  MESSAGING_AUTO_REPLY_SCHEMA_SQL,
+  MESSAGING_DRAFTS_SCHEMA_SQL,
   MESSAGING_INBOX_SCHEMA_SQL,
   MESSAGING_SCHEMA_SQL,
   SLACK_CLIENT_SCHEMA_SQL,
@@ -415,7 +417,9 @@ const LATEST_SCHEMA_SQL =
   MCP_SERVERS_SCHEMA_SQL +
   MESSAGING_SCHEMA_SQL +
   MESSAGING_INBOX_SCHEMA_SQL +
-  SLACK_CLIENT_SCHEMA_SQL;
+  SLACK_CLIENT_SCHEMA_SQL +
+  MESSAGING_DRAFTS_SCHEMA_SQL +
+  MESSAGING_AUTO_REPLY_SCHEMA_SQL;
 
 /** The end of a routine table with the migration 27 column after its last one. */
 function withRoutineLimitPolicy(tableEnd: string): string {
@@ -562,6 +566,18 @@ const MIGRATIONS: readonly OpenBotMigration[] = [
     // Creates tables and an index and copies rows into them: no rebuild, so no foreign-key pause and
     // no vacuum. The inbox rows stay where they are.
     up: addSlackClientCache,
+  },
+  {
+    version: 30,
+    // Only creates a table and an index, as migration 25 does: no foreign-key pause and no vacuum.
+    // Drafts were kept in memory before, so there are no rows to copy.
+    up: (db) => db.exec(MESSAGING_DRAFTS_SCHEMA_SQL),
+  },
+  {
+    version: 31,
+    // Only creates a table, as migration 30 does: no foreign-key pause and no vacuum. The list starts
+    // empty, so every conversation still needs approval after the upgrade.
+    up: (db) => db.exec(MESSAGING_AUTO_REPLY_SCHEMA_SQL),
   },
 ];
 

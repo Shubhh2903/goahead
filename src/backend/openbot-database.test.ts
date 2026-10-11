@@ -17,6 +17,9 @@ import { afterEach, assert, describe, expect, it } from "vitest";
 import { AgentRoutineStore } from "./agent-routine-store";
 import { ChannelRoutineStore } from "./channel-routine-store";
 import { ChannelStore } from "./channel-store";
+import { MessagingAutoReplyStore } from "./messaging/messaging-auto-reply-store";
+import { MessagingDraftStore } from "./messaging/messaging-draft-store";
+import { MessagingStore } from "./messaging/messaging-store";
 import { OpenBotDatabase } from "./openbot-database";
 
 const roots: string[] = [];
@@ -140,6 +143,8 @@ describe("OpenBotDatabase", () => {
       { version: 27 },
       { version: 28 },
       { version: 29 },
+      { version: 30 },
+      { version: 31 },
     ]);
     database.close();
   });
@@ -1134,6 +1139,8 @@ describe("OpenBotDatabase", () => {
       { version: 27 },
       { version: 28 },
       { version: 29 },
+      { version: 30 },
+      { version: 31 },
     ]);
     expect(migrated.connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     migrated.close();
@@ -1201,12 +1208,14 @@ describe("OpenBotDatabase", () => {
       ALTER TABLE projection_provider_sessions_v18 RENAME TO projection_provider_sessions;
       CREATE INDEX provider_sessions_thread
         ON projection_provider_sessions(thread_id, provider, state);
+      DROP TABLE projection_messaging_auto_reply;
+      DROP TABLE projection_messaging_drafts;
       DROP TABLE slack_messages;
       DROP TABLE slack_conversations;
       DROP TABLE projection_messaging_inbox_reads;
       DROP TABLE projection_messaging_watched_channels;
       DROP TABLE projection_messaging_inbox;
-      DELETE FROM schema_migrations WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29);
+      DELETE FROM schema_migrations WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31);
       PRAGMA foreign_keys = ON;
     `);
     legacy.close();
@@ -1234,7 +1243,7 @@ describe("OpenBotDatabase", () => {
         .get(),
     ).toMatchObject({ sql: expect.stringContaining("'opencode'") });
     expect(migrated.connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-      version: 29,
+      version: 31,
     });
     migrated.close();
   });
@@ -1252,12 +1261,14 @@ describe("OpenBotDatabase", () => {
     const legacy = new DatabaseSync(database.path);
     legacy.exec(`
       DROP TABLE projection_mcp_servers;
+      DROP TABLE projection_messaging_auto_reply;
+      DROP TABLE projection_messaging_drafts;
       DROP TABLE slack_messages;
       DROP TABLE slack_conversations;
       DROP TABLE projection_messaging_inbox_reads;
       DROP TABLE projection_messaging_watched_channels;
       DROP TABLE projection_messaging_inbox;
-      DELETE FROM schema_migrations WHERE version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29);
+      DELETE FROM schema_migrations WHERE version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31);
     `);
     legacy.close();
 
@@ -1282,7 +1293,7 @@ describe("OpenBotDatabase", () => {
       { name: "Filesystem" },
     ]);
     expect(reopened.connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-      version: 29,
+      version: 31,
     });
     reopened.close();
   });
@@ -1318,6 +1329,8 @@ describe("OpenBotDatabase", () => {
       // A version 24 database: neither the tables of migration 25 nor its marker.
       const legacy = new DatabaseSync(database.path);
       legacy.exec(`
+        DROP TABLE projection_messaging_auto_reply;
+        DROP TABLE projection_messaging_drafts;
         DROP TABLE slack_messages;
         DROP TABLE slack_conversations;
         DROP TABLE projection_messaging_inbox_reads;
@@ -1325,7 +1338,7 @@ describe("OpenBotDatabase", () => {
         DROP TABLE projection_messaging_inbox;
         DROP TABLE projection_messaging_threads;
         DROP TABLE projection_messaging_connections;
-        DELETE FROM schema_migrations WHERE version IN (25, 26, 27, 28, 29);
+        DELETE FROM schema_migrations WHERE version IN (25, 26, 27, 28, 29, 30, 31);
       `);
       // The squatted name is the index's: the tables use IF NOT EXISTS, so only the index can collide.
       if (failFirst) legacy.exec("CREATE TABLE messaging_threads_agent (conflict TEXT)");
@@ -1348,7 +1361,7 @@ describe("OpenBotDatabase", () => {
       expect(migrated.listAgents()).toEqual([agent]);
       expect(migrated.readConversation(agent.id, agent.threadId).messages).toEqual(conversation.messages);
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 29,
+        version: 31,
       });
       expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -1431,12 +1444,14 @@ describe("OpenBotDatabase", () => {
       // A version 27 database: neither the tables of migration 28 nor its marker.
       const legacy = new DatabaseSync(database.path);
       legacy.exec(`
+        DROP TABLE projection_messaging_auto_reply;
+        DROP TABLE projection_messaging_drafts;
         DROP TABLE slack_messages;
         DROP TABLE slack_conversations;
         DROP TABLE projection_messaging_inbox_reads;
         DROP TABLE projection_messaging_watched_channels;
         DROP TABLE projection_messaging_inbox;
-        DELETE FROM schema_migrations WHERE version IN (28, 29);
+        DELETE FROM schema_migrations WHERE version IN (28, 29, 30, 31);
       `);
       // The squatted name is the index's: the tables use IF NOT EXISTS, so only the index can collide.
       if (failFirst) legacy.exec("CREATE TABLE messaging_inbox_sent (conflict TEXT)");
@@ -1474,7 +1489,7 @@ describe("OpenBotDatabase", () => {
         connection.prepare("SELECT link_id, thread_key, history_cursor FROM projection_messaging_threads").all(),
       ).toEqual([{ link_id: "link-1", thread_key: "direct", history_cursor: "100.000" }]);
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 29,
+        version: 31,
       });
       expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -1525,9 +1540,11 @@ describe("OpenBotDatabase", () => {
       // A version 28 database: neither the tables of migration 29 nor its marker, and an inbox with rows.
       const legacy = new DatabaseSync(database.path);
       legacy.exec(`
+        DROP TABLE projection_messaging_auto_reply;
+        DROP TABLE projection_messaging_drafts;
         DROP TABLE slack_messages;
         DROP TABLE slack_conversations;
-        DELETE FROM schema_migrations WHERE version = 29;
+        DELETE FROM schema_migrations WHERE version IN (29, 30, 31);
       `);
       const addInbox = legacy.prepare(
         `INSERT INTO projection_messaging_inbox
@@ -1582,7 +1599,7 @@ describe("OpenBotDatabase", () => {
       const connection = migrated.connection;
       expect(migrated.listAgents()).toEqual([agent]);
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 29,
+        version: 31,
       });
       expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -1698,6 +1715,310 @@ describe("OpenBotDatabase", () => {
     },
   );
 
+  it.each([false, true])(
+    "adds the draft table to a version 29 database and keeps its data (failed attempt=%s)",
+    async (failFirst) => {
+      const root = await mkdtemp(join(tmpdir(), "openbot-db-v29-drafts-"));
+      roots.push(root);
+      const database = new OpenBotDatabase(root);
+      await database.initialize();
+      const agent = testAgent();
+      database.replaceAgents("agents-import", [agent], "agents.imported");
+      const store = new MessagingStore(database);
+      const { connectionId } = store.ensureConnection("slack", "T1", "Acme");
+      store.updateConnection(connectionId, { enabled: true, orchestratorAgentId: agent.id });
+      const link = store.ensureLink({
+        connectionId,
+        agentId: agent.id,
+        platformChannelId: "D1",
+        threadKey: "100.000",
+        isDirect: true,
+        title: "Preet",
+      });
+      store.recordSend({
+        draftId: "sent-draft",
+        connectionId,
+        linkId: link.linkId,
+        agentId: agent.id,
+        approvedBy: "UOWNER",
+        approvedAt: "2026-10-09T12:00:00.000Z",
+        sender: "user",
+        to: "user:UPREET",
+        platformChannelId: "D1",
+        platformMessageId: "101.000",
+        text: "Sent before the upgrade",
+        link: null,
+      });
+      database.close();
+
+      // A version 29 database: no draft table and no marker of migration 30.
+      const legacy = new DatabaseSync(database.path);
+      legacy.exec(`
+        DROP TABLE projection_messaging_auto_reply;
+        DROP TABLE projection_messaging_drafts;
+        DELETE FROM schema_migrations WHERE version IN (30, 31);
+      `);
+      legacy
+        .prepare(
+          `INSERT INTO projection_messaging_inbox
+             (connection_id, platform_channel_id, platform_message_id, thread_key, kind, author_id, author_name,
+              text, sent_at)
+           VALUES (?, 'D1', '100.000', NULL, 'direct', 'UPREET', 'Preet', 'Lunch at 1?', '2026-10-09T11:00:00.000Z')`,
+        )
+        .run(connectionId);
+      // The squatted name is the index's: the table uses IF NOT EXISTS, so only the index can collide.
+      if (failFirst) legacy.exec("CREATE TABLE messaging_drafts_link (conflict TEXT)");
+      legacy.close();
+
+      if (failFirst) {
+        await expect(new OpenBotDatabase(root).initialize()).rejects.toThrow("migration to version 30 failed");
+        const rolledBack = new DatabaseSync(database.path);
+        expect(
+          rolledBack.prepare("SELECT name FROM sqlite_master WHERE name = 'projection_messaging_drafts'").all(),
+        ).toEqual([]);
+        expect(rolledBack.prepare("SELECT 1 FROM schema_migrations WHERE version = 30").get()).toBeUndefined();
+        expect(rolledBack.prepare("SELECT COUNT(*) AS count FROM projection_messaging_inbox").get()).toEqual({
+          count: 1,
+        });
+        rolledBack.exec("DROP TABLE messaging_drafts_link");
+        rolledBack.close();
+      }
+
+      const migrated = new OpenBotDatabase(root);
+      await migrated.initialize();
+      const connection = migrated.connection;
+      expect(migrated.listAgents()).toEqual([agent]);
+      expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
+        version: 31,
+      });
+      expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+      expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      const migratedStore = new MessagingStore(migrated);
+      expect(migratedStore.connection(connectionId)).toMatchObject({ enabled: true, orchestratorAgentId: agent.id });
+      expect(migratedStore.link(link.linkId)).toMatchObject({ threadId: link.threadId, title: "Preet" });
+      expect(migratedStore.sends().map((send) => send.text)).toEqual(["Sent before the upgrade"]);
+      expect(connection.prepare("SELECT text FROM projection_messaging_inbox").all()).toEqual([
+        { text: "Lunch at 1?" },
+      ]);
+
+      const drafts = new MessagingDraftStore(migrated);
+      expect(drafts.all()).toEqual([]);
+      const waiting = {
+        connectionId,
+        acceptToken: "accept-1",
+        declineToken: "decline-1",
+        target: { platformChannelId: "D1", replyThreadId: "100.000" },
+        messageId: "102.000",
+        allowedUserId: "UOWNER",
+        postText: "Approve this send?",
+        draft: {
+          draftId: "draft-1",
+          linkId: link.linkId,
+          agentId: agent.id,
+          to: { kind: "user" as const, id: "UPREET" },
+          text: "See you at 1",
+          threadKey: null,
+          sender: "user" as const,
+          recipient: "Preet",
+          requestedBy: "Owner",
+          onBehalfOf: null,
+          createdAt: "2026-10-09T12:30:00.000Z",
+        },
+      };
+      drafts.add(waiting);
+      expect(() =>
+        drafts.add({
+          ...waiting,
+          acceptToken: "accept-2",
+          declineToken: "decline-2",
+          draft: { ...waiting.draft, draftId: "draft-2", linkId: "missing-link" },
+        }),
+      ).toThrow(/FOREIGN KEY constraint failed/u);
+      migrated.close();
+
+      // A second start runs nothing and keeps the waiting draft. Only the first claim takes it.
+      const reopened = new OpenBotDatabase(root);
+      await reopened.initialize();
+      const reopenedDrafts = new MessagingDraftStore(reopened);
+      expect(reopenedDrafts.all()).toEqual([waiting]);
+      expect(reopenedDrafts.claim("draft-1")).toBe(true);
+      expect(reopenedDrafts.claim("draft-1")).toBe(false);
+      expect(reopenedDrafts.all()).toEqual([]);
+      // A conversation that goes takes its drafts with it.
+      reopenedDrafts.add(waiting);
+      new MessagingStore(reopened).deleteForAgent(agent.id);
+      expect(reopenedDrafts.all()).toEqual([]);
+      reopened.close();
+    },
+  );
+
+  it.each([false, true])(
+    "adds the auto-reply table to a version 30 database and keeps its data (failed attempt=%s)",
+    async (failFirst) => {
+      const root = await mkdtemp(join(tmpdir(), "openbot-db-v30-auto-reply-"));
+      roots.push(root);
+      const database = new OpenBotDatabase(root);
+      await database.initialize();
+      const agent = testAgent();
+      database.replaceAgents("agents-import", [agent], "agents.imported");
+      const store = new MessagingStore(database);
+      const { connectionId } = store.ensureConnection("slack", "T1", "Acme");
+      store.updateConnection(connectionId, { enabled: true, orchestratorAgentId: agent.id });
+      const link = store.ensureLink({
+        connectionId,
+        agentId: agent.id,
+        platformChannelId: "D1",
+        threadKey: "100.000",
+        isDirect: true,
+        title: "Preet",
+      });
+      store.recordSend({
+        draftId: "sent-draft",
+        connectionId,
+        linkId: link.linkId,
+        agentId: agent.id,
+        approvedBy: "UOWNER",
+        approvedAt: "2026-10-09T12:00:00.000Z",
+        sender: "user",
+        to: "user:UPREET",
+        platformChannelId: "D1",
+        platformMessageId: "101.000",
+        text: "Sent before the upgrade",
+        link: null,
+      });
+      const waiting = {
+        connectionId,
+        acceptToken: "accept-1",
+        declineToken: "decline-1",
+        target: { platformChannelId: "D1", replyThreadId: "100.000" },
+        messageId: "102.000",
+        allowedUserId: "UOWNER",
+        postText: "Approve this send?",
+        draft: {
+          draftId: "draft-1",
+          linkId: link.linkId,
+          agentId: agent.id,
+          to: { kind: "user" as const, id: "UPREET" },
+          text: "See you at 1",
+          threadKey: null,
+          sender: "user" as const,
+          recipient: "Preet",
+          requestedBy: "Owner",
+          onBehalfOf: null,
+          createdAt: "2026-10-09T12:30:00.000Z",
+        },
+      };
+      new MessagingDraftStore(database).add(waiting);
+      database.close();
+
+      // A version 30 database: no auto-reply table and no marker of migration 31.
+      const legacy = new DatabaseSync(database.path);
+      legacy.exec(`
+        DROP TABLE projection_messaging_auto_reply;
+        DELETE FROM schema_migrations WHERE version = 31;
+      `);
+      legacy
+        .prepare(
+          `INSERT INTO slack_conversations
+             (connection_id, channel_id, kind, name, member_ids_json, is_member, last_read_ts, unread_count,
+              last_activity_ts, last_opened_at, oldest_loaded_ts, newest_loaded_ts, has_more_history, updated_at)
+           VALUES (?, 'D1', 'im', '', '["UPREET"]', 1, NULL, 0, '101.000', NULL, NULL, NULL, 0,
+              '2026-10-09T12:00:00.000Z')`,
+        )
+        .run(connectionId);
+      // An index that holds the table's name: CREATE TABLE IF NOT EXISTS still fails on it.
+      if (failFirst) legacy.exec("CREATE INDEX projection_messaging_auto_reply ON slack_conversations(updated_at)");
+      legacy.close();
+
+      if (failFirst) {
+        await expect(new OpenBotDatabase(root).initialize()).rejects.toThrow("migration to version 31 failed");
+        const rolledBack = new DatabaseSync(database.path);
+        expect(
+          rolledBack
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projection_messaging_auto_reply'")
+            .all(),
+        ).toEqual([]);
+        expect(rolledBack.prepare("SELECT 1 FROM schema_migrations WHERE version = 31").get()).toBeUndefined();
+        expect(rolledBack.prepare("SELECT COUNT(*) AS count FROM projection_messaging_drafts").get()).toEqual({
+          count: 1,
+        });
+        rolledBack.exec("DROP INDEX projection_messaging_auto_reply");
+        rolledBack.close();
+      }
+
+      const migrated = new OpenBotDatabase(root);
+      await migrated.initialize();
+      const connection = migrated.connection;
+      expect(migrated.listAgents()).toEqual([agent]);
+      expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
+        version: 31,
+      });
+      expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+      expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      const migratedStore = new MessagingStore(migrated);
+      expect(migratedStore.connection(connectionId)).toMatchObject({ enabled: true, orchestratorAgentId: agent.id });
+      expect(migratedStore.link(link.linkId)).toMatchObject({ threadId: link.threadId, title: "Preet" });
+      expect(migratedStore.sends()).toMatchObject([{ text: "Sent before the upgrade" }]);
+      expect(migratedStore.sends()[0]).not.toHaveProperty("autoSent");
+      expect(new MessagingDraftStore(migrated).all()).toEqual([waiting]);
+      expect(connection.prepare("SELECT channel_id FROM slack_conversations").all()).toEqual([{ channel_id: "D1" }]);
+
+      // Off by default: an upgrade puts no conversation on the list.
+      const autoReply = new MessagingAutoReplyStore(migrated);
+      expect(autoReply.hasAny(connectionId)).toBe(false);
+      autoReply.set(connectionId, "D1", true);
+      autoReply.set(connectionId, "D1", true);
+      expect(() => autoReply.set("missing-connection", "D1", true)).toThrow(/FOREIGN KEY constraint failed/u);
+      migrated.close();
+
+      // A second start runs nothing and keeps the list.
+      const reopened = new OpenBotDatabase(root);
+      await reopened.initialize();
+      const reopenedList = new MessagingAutoReplyStore(reopened);
+      expect(reopenedList.isOn(connectionId, "D1")).toBe(true);
+      expect(reopenedList.isOn(connectionId, "D2")).toBe(false);
+      reopenedList.set(connectionId, "D1", false);
+      expect(reopenedList.hasAny(connectionId)).toBe(false);
+      // A connection that goes takes its list with it.
+      reopenedList.set(connectionId, "D1", true);
+      reopened.connection.prepare("DELETE FROM projection_messaging_drafts").run();
+      reopened.connection.prepare("DELETE FROM projection_messaging_threads").run();
+      reopened.connection.prepare("DELETE FROM projection_messaging_connections").run();
+      expect(reopenedList.hasAny(connectionId)).toBe(false);
+      reopened.close();
+    },
+  );
+
+  it("refuses a v31 database whose history has lost migration 30", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openbot-db-gap-30-"));
+    roots.push(root);
+    const database = new OpenBotDatabase(root);
+    await database.initialize();
+    database.close();
+
+    const incomplete = new DatabaseSync(database.path);
+    incomplete.prepare("DELETE FROM schema_migrations WHERE version = 30").run();
+    incomplete.close();
+
+    await expect(new OpenBotDatabase(root).initialize()).rejects.toThrow("migration history is missing version 30");
+  });
+
+  it("refuses a v30 database whose history has lost migration 29", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openbot-db-gap-29-"));
+    roots.push(root);
+    const database = new OpenBotDatabase(root);
+    await database.initialize();
+    database.close();
+
+    const incomplete = new DatabaseSync(database.path);
+    incomplete.prepare("DELETE FROM schema_migrations WHERE version = 29").run();
+    incomplete.close();
+
+    await expect(new OpenBotDatabase(root).initialize()).rejects.toThrow("migration history is missing version 29");
+  });
+
   it("refuses a v28 database whose history has lost migration 27", async () => {
     const root = await mkdtemp(join(tmpdir(), "openbot-db-gap-27-"));
     roots.push(root);
@@ -1731,12 +2052,14 @@ describe("OpenBotDatabase", () => {
          '2026-09-14T10:00:00.000Z', '2026-09-14T10:00:00.000Z'),
         ('mcp-2', 'computer_use_saved', 'stdio', 1, 'other', '[]', '[]', '[]', '', '', '[]', 1,
          '2026-09-14T10:00:00.000Z', '2026-09-14T10:00:00.000Z');
+      DROP TABLE projection_messaging_auto_reply;
+      DROP TABLE projection_messaging_drafts;
       DROP TABLE slack_messages;
       DROP TABLE slack_conversations;
       DROP TABLE projection_messaging_inbox_reads;
       DROP TABLE projection_messaging_watched_channels;
       DROP TABLE projection_messaging_inbox;
-      DELETE FROM schema_migrations WHERE version IN (21, 22, 23, 24, 25, 26, 27, 28, 29);
+      DELETE FROM schema_migrations WHERE version IN (21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31);
     `);
     legacy.close();
 
@@ -1823,6 +2146,8 @@ describe("OpenBotDatabase", () => {
       { version: 27 },
       { version: 28 },
       { version: 29 },
+      { version: 30 },
+      { version: 31 },
     ]);
     migrated.close();
   });
@@ -1910,6 +2235,8 @@ describe("OpenBotDatabase", () => {
       { version: 27 },
       { version: 28 },
       { version: 29 },
+      { version: 30 },
+      { version: 31 },
     ]);
     retried.close();
   });
@@ -2649,7 +2976,7 @@ describe("OpenBotDatabase", () => {
       expect(migrated.connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(migrated.connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(migrated.connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 29,
+        version: 31,
       });
       expect(
         migrated.connection.prepare("SELECT provider_session_id FROM projection_turns WHERE turn_id = ?").get("turn-1"),
@@ -2799,7 +3126,7 @@ describe("OpenBotDatabase", () => {
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 29,
+        version: 31,
       });
       expect(
         connection.prepare("SELECT provider_session_id FROM projection_turns WHERE turn_id = ?").get("turn-1"),
@@ -2959,7 +3286,7 @@ describe("OpenBotDatabase", () => {
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 29,
+        version: 31,
       });
       expect(
         connection.prepare("SELECT provider_session_id FROM projection_turns WHERE turn_id = ?").get("turn-1"),
@@ -3132,7 +3459,7 @@ describe("OpenBotDatabase", () => {
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 29,
+        version: 31,
       });
       expect(
         connection.prepare("SELECT provider_session_id FROM projection_turns WHERE turn_id = ?").get("turn-1"),
@@ -3295,7 +3622,7 @@ describe("OpenBotDatabase", () => {
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 29,
+        version: 31,
       });
       const agentRoutines = new AgentRoutineStore(migrated);
       expect(agentRoutines.get(agent.id, agentRoutine.id)?.limitPolicy).toBe("wait");

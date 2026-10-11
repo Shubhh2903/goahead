@@ -153,7 +153,7 @@ export function createMockMessaging(orchestrator: () => string): MessagingDeskto
         credentials: "saved",
         orchestratorAgentId: null,
         watchedChannels: [],
-        sendGuards: { paused: false, quietHours: null, hourlyLimit: 10, sentLastHour: 0 },
+        sendGuards: { paused: false, quietHours: null, hourlyLimit: null, sentLastHour: 0 },
       });
     },
     disconnectSlackWorkspace: async ({ workspaceId }) => {

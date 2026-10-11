@@ -30,6 +30,7 @@ import type {
   ConversationPageAnchor,
   ConversationReadState,
   ConversationSearchPage,
+  ConversationSlackAsk,
   ConversationSnapshot,
   ConversationWithReadState,
   CreateAgentInput,
@@ -2031,6 +2032,19 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   }
 
   /**
+   * A message that GoAhead wrote to a Slack orchestrator for the person. The agent gets the full
+   * text; the chat shows a card from `slackAsk`. Only the backend calls this: no IPC or Team API
+   * input names a card.
+   */
+  sendSlackAskMessage(
+    input: SendMessageInput,
+    slackAsk: ConversationSlackAsk,
+    sender?: ConversationMessageSender,
+  ): Promise<QueuedMessageReceipt> {
+    return this.#sendMessage(input, sender, undefined, false, slackAsk);
+  }
+
+  /**
    * A message that the person at this computer sent from the desktop app, through the trusted IPC
    * channel. Only this path marks a turn as the local owner's: a Team API member, a remote client, a
    * Slack message or a routine never comes here.
@@ -2050,6 +2064,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     sender: ConversationMessageSender | undefined,
     timezone: string | undefined,
     localOwner: boolean,
+    slackAsk?: ConversationSlackAsk,
   ): Promise<QueuedMessageReceipt> {
     const validateRecipient = this.#mailbox.prepareDelivery([input.agentId]);
     if (this.#duplication.isPending(input.agentId))
@@ -2060,6 +2075,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     const receipt = await this.#mailbox.enqueue({
       sender: { kind: "user" },
       ...(sender ? { senderMember: sender } : {}),
+      ...(slackAsk ? { slackAsk } : {}),
       recipientAgentIds: [agent.id],
       text: input.text,
       draftIds: input.attachmentDraftIds ?? [],
@@ -2089,6 +2105,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     this.#conversation.emitConversation(snapshot);
     this.#mailboxSync.emitQueue(agent.id);
     this.#drain.scheduleDrain(agent.id);
+    if (localOwner) this.messaging.localOwnerMessage(agent.id);
     return receipt;
   }
 

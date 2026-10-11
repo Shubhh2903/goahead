@@ -236,4 +236,11 @@ export const messages = {
   "chat.actions.reactionFailed": "Tepki güncellenemedi. Tekrar deneyin.",
   "chat.actions.copyFailed": "Mesaj kopyalanamadı.",
   "chat.unread.markReadFailed": "Mesajlar okundu olarak işaretlenemedi.",
+  "chat.slackAsk.autoReply": "Otomatik yanıt · {place}",
+  "chat.slackAsk.inboxAsk": "Slack gelen kutusundan istendi · {place}",
+  "chat.slackAsk.autoReplyPaused": "Otomatik yanıt duraklatıldı · {place}",
+  "chat.slackAsk.messages": "Yeni mesajlar",
+  "chat.slackAsk.openConversation": "Konuşmayı aç",
+  "chat.slackAsk.showContext": "Bağlamı göster",
+  "chat.slackAsk.hideContext": "Bağlamı gizle",
 } as const satisfies PartialTranslation<typeof source>;

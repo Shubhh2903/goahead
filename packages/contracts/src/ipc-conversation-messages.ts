@@ -179,6 +179,50 @@ export function conversationMessageSender(id: string, name: string): Conversatio
   return isIdentifier(id) ? { id, name: name.slice(0, INPUT_LIMITS.accountName) } : undefined;
 }
 
+export const SLACK_ASK_KINDS = ["auto-reply", "inbox-ask", "auto-reply-paused"] as const;
+export type SlackAskKind = (typeof SLACK_ASK_KINDS)[number];
+
+/** The most new Slack messages that one ask card shows. */
+export const SLACK_ASK_TRIGGER_LIMIT = 10;
+/** The most characters of one Slack message, or of the instruction, that an ask card keeps. */
+export const SLACK_ASK_TEXT_LIMIT = 2_000;
+/** The most characters of the conversation name that an ask card keeps. */
+export const SLACK_ASK_PLACE_LIMIT = 200;
+
+/**
+ * Display data for a message that GoAhead wrote to a Slack orchestrator for the person: an
+ * auto-reply request, an `@chief` instruction from the Slack inbox, or a loop-pause note. The agent
+ * got the full text; the chat shows a short card from this data. It is plain text only.
+ */
+export interface ConversationSlackAsk {
+  kind: SlackAskKind;
+  workspaceId: string;
+  /** The Slack conversation id, which the card opens. */
+  channelId: string;
+  /** The conversation's name as the person reads it, such as `#general` or a person's name. */
+  place: string;
+  /** The new messages that started an auto-reply, or the person's instruction. Oldest first. */
+  trigger: Array<{ author: string; text: string }>;
+}
+
+export function isConversationSlackAsk(value: unknown): value is ConversationSlackAsk {
+  return (
+    isDynamicRecord(value) &&
+    isOneOf(SLACK_ASK_KINDS, value.kind) &&
+    isIdentifier(value.workspaceId) &&
+    isIdentifier(value.channelId) &&
+    isBoundedString(value.place, SLACK_ASK_PLACE_LIMIT) &&
+    Array.isArray(value.trigger) &&
+    value.trigger.length <= SLACK_ASK_TRIGGER_LIMIT &&
+    value.trigger.every(
+      (line) =>
+        isDynamicRecord(line) &&
+        isBoundedString(line.author, INPUT_LIMITS.accountName) &&
+        isBoundedString(line.text, SLACK_ASK_TEXT_LIMIT),
+    )
+  );
+}
+
 export interface ConversationMessage {
   id: string;
   turnId?: string;
@@ -207,6 +251,8 @@ export interface ConversationMessage {
   questionPrompt?: ConversationQuestionPrompt;
   /** Set on the one `plan` message of a turn. The text holds the same plan as a checklist. */
   plan?: ConversationPlan;
+  /** Set on a user message that GoAhead wrote to a Slack orchestrator. The chat draws a card. */
+  slackAsk?: ConversationSlackAsk;
 }
 
 export function isConversationMessage(value: unknown): value is ConversationMessage {
@@ -249,7 +295,8 @@ export function isConversationMessage(value: unknown): value is ConversationMess
         isBoundedString(value.routine.scheduledFor, 160))) &&
     (value.imageGeneration === undefined || isImageGenerationInfo(value.imageGeneration)) &&
     (value.questionPrompt === undefined || isConversationQuestionPrompt(value.questionPrompt)) &&
-    (value.plan === undefined || isConversationPlan(value.plan))
+    (value.plan === undefined || isConversationPlan(value.plan)) &&
+    (value.slackAsk === undefined || isConversationSlackAsk(value.slackAsk))
   );
 }
 

@@ -10,6 +10,7 @@ import { ChatSearch } from "@openbot/ui/features/conversation/ChatSearch";
 import { BrowserTakeoverCard } from "@openbot/ui/features/conversation/ConversationPrompts";
 import { ScrollToLatestButton } from "@openbot/ui/features/conversation/MessageNavigation";
 import { MessageActions } from "@openbot/ui/features/conversation/MessageRendering";
+import { SlackAskCard } from "@openbot/ui/features/conversation/SlackAskCard";
 import { TaskList } from "@openbot/ui/features/conversation/TaskList";
 import { UnreadMessagesBanner, UnreadMessagesDivider } from "@openbot/ui/features/conversation/UnreadMessages";
 import { teamMemberName } from "@openbot/ui/features/team/TeamPersonAvatar";
@@ -568,72 +569,102 @@ export function ConversationTimeline() {
                         when={message()?.questionPrompt}
                         keyed
                         fallback={
-                          <ChatMessageRow
-                            message={message() ?? initialMessage}
-                            author={author()}
-                            showAuthor={author().kind === "member" ? !continuesRun() : undefined}
-                            showTime={!continuesRun()}
-                            animate={animateEntrance}
-                            agents={props.agents}
-                            skills={installedSkills()}
-                            referencedMessage={referencedMessage()}
-                            referencedAuthorName={referencedAuthorName()}
-                            reactions={displayedReactions()}
-                            reactionOverflowCount={message()?.reactionSummary?.overflowCount}
-                            onRemoveReaction={() => {
-                              const currentMessage = message();
-                              if (currentMessage) void reactToMessage(currentMessage, null);
-                            }}
-                            data-chat-search-message={message()?.id}
-                            onSelectAgent={props.onSelectAgent}
-                            onOpenLink={(url) => void openExternalMessageUrl(url)}
-                            onPreview={(attachment) => void previewAttachment(attachment)}
-                            onAttachmentAction={attachmentAction}
-                            onOpenSharedFile={openSharedFile}
-                            onOpenWorkspaceFile={openWorkspaceFile}
-                            onDownloadAttachments={props.runtime ? undefined : downloadAttachments}
-                            onDownload={(attachment) => attachmentAction(attachment, "download")}
-                            actions={
-                              <MessageActions
+                          <Show
+                            when={message()?.slackAsk}
+                            fallback={
+                              <ChatMessageRow
                                 message={message() ?? initialMessage}
-                                pickerOpen={openReactionMessageId() === message()?.id}
-                                moreOpen={openMoreMessageId() === message()?.id}
-                                expandedEmoji={expandedEmojiMessageId() === message()?.id}
-                                copied={copiedMessageId() === message()?.id}
-                                onTogglePicker={() => {
-                                  const messageId = message()?.id;
-                                  if (!messageId) return;
-                                  setOpenReactionMessageId((current) => (current === messageId ? null : messageId));
-                                  setOpenMoreMessageId(null);
-                                  setExpandedEmojiMessageId(null);
-                                }}
-                                onToggleMore={() => {
-                                  const messageId = message()?.id;
-                                  if (!messageId) return;
-                                  setOpenMoreMessageId((current) => (current === messageId ? null : messageId));
-                                  setOpenReactionMessageId(null);
-                                  setExpandedEmojiMessageId(null);
-                                }}
-                                onExpandEmoji={() => {
-                                  const messageId = message()?.id;
-                                  if (!messageId) return;
-                                  setExpandedEmojiMessageId((current) => (current === messageId ? null : messageId));
-                                }}
-                                onReact={(emoji) => {
+                                author={author()}
+                                showAuthor={author().kind === "member" ? !continuesRun() : undefined}
+                                showTime={!continuesRun()}
+                                animate={animateEntrance}
+                                agents={props.agents}
+                                skills={installedSkills()}
+                                referencedMessage={referencedMessage()}
+                                referencedAuthorName={referencedAuthorName()}
+                                reactions={displayedReactions()}
+                                reactionOverflowCount={message()?.reactionSummary?.overflowCount}
+                                onRemoveReaction={() => {
                                   const currentMessage = message();
-                                  if (currentMessage) void reactToMessage(currentMessage, emoji);
+                                  if (currentMessage) void reactToMessage(currentMessage, null);
                                 }}
-                                onReply={() => {
-                                  const currentMessage = message();
-                                  if (currentMessage) replyToMessage(currentMessage);
-                                }}
-                                onCopy={() => {
-                                  const currentMessage = message();
-                                  if (currentMessage) void copyMessage(currentMessage);
-                                }}
+                                data-chat-search-message={message()?.id}
+                                onSelectAgent={props.onSelectAgent}
+                                onOpenLink={(url) => void openExternalMessageUrl(url)}
+                                onPreview={(attachment) => void previewAttachment(attachment)}
+                                onAttachmentAction={attachmentAction}
+                                onOpenSharedFile={openSharedFile}
+                                onOpenWorkspaceFile={openWorkspaceFile}
+                                onDownloadAttachments={props.runtime ? undefined : downloadAttachments}
+                                onDownload={(attachment) => attachmentAction(attachment, "download")}
+                                actions={
+                                  <MessageActions
+                                    message={message() ?? initialMessage}
+                                    pickerOpen={openReactionMessageId() === message()?.id}
+                                    moreOpen={openMoreMessageId() === message()?.id}
+                                    expandedEmoji={expandedEmojiMessageId() === message()?.id}
+                                    copied={copiedMessageId() === message()?.id}
+                                    onTogglePicker={() => {
+                                      const messageId = message()?.id;
+                                      if (!messageId) return;
+                                      setOpenReactionMessageId((current) => (current === messageId ? null : messageId));
+                                      setOpenMoreMessageId(null);
+                                      setExpandedEmojiMessageId(null);
+                                    }}
+                                    onToggleMore={() => {
+                                      const messageId = message()?.id;
+                                      if (!messageId) return;
+                                      setOpenMoreMessageId((current) => (current === messageId ? null : messageId));
+                                      setOpenReactionMessageId(null);
+                                      setExpandedEmojiMessageId(null);
+                                    }}
+                                    onExpandEmoji={() => {
+                                      const messageId = message()?.id;
+                                      if (!messageId) return;
+                                      setExpandedEmojiMessageId((current) =>
+                                        current === messageId ? null : messageId,
+                                      );
+                                    }}
+                                    onReact={(emoji) => {
+                                      const currentMessage = message();
+                                      if (currentMessage) void reactToMessage(currentMessage, emoji);
+                                    }}
+                                    onReply={() => {
+                                      const currentMessage = message();
+                                      if (currentMessage) replyToMessage(currentMessage);
+                                    }}
+                                    onCopy={() => {
+                                      const currentMessage = message();
+                                      if (currentMessage) void copyMessage(currentMessage);
+                                    }}
+                                  />
+                                }
                               />
                             }
-                          />
+                          >
+                            {(slackAsk) => (
+                              <article
+                                data-chat-search-message={message()?.id}
+                                class={["slack-ask-entry", { "message-entry-animated": animateEntrance }]}
+                              >
+                                <SlackAskCard
+                                  slackAsk={slackAsk()}
+                                  text={message()?.body ?? ""}
+                                  time={message()?.time ?? ""}
+                                  createdAt={message()?.createdAt}
+                                  onOpenConversation={
+                                    props.onOpenSlackConversation
+                                      ? () =>
+                                          props.onOpenSlackConversation?.({
+                                            workspaceId: slackAsk().workspaceId,
+                                            channelId: slackAsk().channelId,
+                                          })
+                                      : undefined
+                                  }
+                                />
+                              </article>
+                            )}
+                          </Show>
                         }
                       >
                         {(questionPrompt) => (

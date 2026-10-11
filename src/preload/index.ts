@@ -679,6 +679,7 @@ const openbotApi: OpenBotDesktopApi = {
     edit: decodeVoid,
     delete: decodeVoid,
     react: decodeVoid,
+    setAutoReply: decodeVoid,
     upload: decodeSlackClientUploadReply,
     uploadBytes: decodeSlackClientUploadBytesReply,
     mentionCandidates: decodeSlackClientMentionCandidatesReply,

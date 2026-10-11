@@ -77,6 +77,8 @@ interface MessagingInboxState {
   /** The inbox covers the workspace pane. */
   open: boolean;
   selection: { workspaceId: string; conversation: string } | null;
+  /** The Slack conversation that the Slack client opens, when a card asked for one. */
+  focus: { workspaceId: string; channelId: string } | null;
   /**
    * The last conversation read. It stays while the next one loads, so the view does not go blank; it
    * is null only before the first read.
@@ -118,6 +120,7 @@ const MessagingThreads = createSimpleContext({
       workspaces: [],
       open: false,
       selection: null,
+      focus: null,
       page: null,
       failed: false,
       outgoing: [],
@@ -347,6 +350,7 @@ const MessagingThreads = createSimpleContext({
       setInbox((draft) => {
         draft.open = false;
         draft.selection = null;
+        draft.focus = null;
         draft.page = null;
         draft.failed = false;
         // Slack holds the sent replies, so the next read shows them.
@@ -354,12 +358,16 @@ const MessagingThreads = createSimpleContext({
       });
     }
 
-    /** Opens the inbox over the workspace. No conversation is read until the person picks one. */
-    function openInbox(): void {
+    /**
+     * Opens the inbox over the workspace. With `focus`, the Slack client opens that conversation;
+     * without it, no conversation is read until the person picks one.
+     */
+    function openInbox(focus?: { workspaceId: string; channelId: string }): void {
       coverWorkspace();
       closeThread();
       setInbox((draft) => {
         draft.open = true;
+        draft.focus = focus ? { workspaceId: focus.workspaceId, channelId: focus.channelId } : null;
       });
       reloadInbox();
     }

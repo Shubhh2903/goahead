@@ -77,6 +77,7 @@ export function toAgentMessage(message: ConversationMessage, ownerAgentId?: stri
     routine: message.routine,
     actionMarker: actionMarker ?? undefined,
     plan: plan ?? undefined,
+    slackAsk: message.author === "user" ? message.slackAsk : undefined,
     status:
       message.exchange || message.routine
         ? undefined
@@ -233,7 +234,8 @@ export function agentMessagesEqual(left: AgentMessage, right: AgentMessage): boo
     JSON.stringify(left.actionMarker) === JSON.stringify(right.actionMarker) &&
     JSON.stringify(left.items) === JSON.stringify(right.items) &&
     JSON.stringify(left.itemIds) === JSON.stringify(right.itemIds) &&
-    JSON.stringify(left.plan) === JSON.stringify(right.plan)
+    JSON.stringify(left.plan) === JSON.stringify(right.plan) &&
+    JSON.stringify(left.slackAsk) === JSON.stringify(right.slackAsk)
   );
 }
 

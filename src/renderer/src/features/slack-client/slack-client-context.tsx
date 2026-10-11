@@ -374,6 +374,13 @@ const SlackClient = createSimpleContext({
       () => workspaceIds().join("\n"),
       () => reloadList(),
     );
+    // A Slack ask card in an orchestrator's chat opens its conversation here.
+    createEffect(
+      () => messagingThreads.inbox.focus,
+      (focus) => {
+        if (focus) select(focus.workspaceId, focus.channelId);
+      },
+    );
 
     function select(workspaceId: string, channelId: string): void {
       const place = { workspaceId, channelId };
@@ -459,6 +466,27 @@ const SlackClient = createSimpleContext({
     const remove = (ts: string) => changeMessage(ts, { kind: "delete" }, (place) => port().delete({ ...place, ts }));
     const react = (ts: string, name: string, on: boolean) =>
       changeMessage(ts, { kind: "react", name, on }, (place) => port().react({ ...place, ts, name, on }));
+
+    /**
+     * Puts the open conversation on the auto-reply list, or takes it off. The switch moves at once; a
+     * refusal moves it back. Main decides at each agent send, so the change counts from the next one.
+     */
+    async function setAutoReply(on: boolean): Promise<void> {
+      const place = state.selection;
+      if (!place) throw new Error("No Slack conversation is open.");
+      const show = (value: boolean) =>
+        setState((draft) => {
+          if (draft.page && samePlace(draft.page, place)) draft.page.autoReply = value;
+        });
+      const before = state.page && samePlace(state.page, place) ? (state.page.autoReply ?? false) : false;
+      show(on);
+      try {
+        await act(() => port().setAutoReply({ ...place, on }));
+      } catch (error) {
+        if (!disposed) show(before);
+        throw error;
+      }
+    }
 
     /** Sends as the person, in the open conversation or in `threadTs`. The message shows at once. */
     async function send(input: { text: string; threadTs?: string; broadcast?: boolean }): Promise<void> {
@@ -653,6 +681,7 @@ const SlackClient = createSimpleContext({
       edit,
       remove,
       react,
+      setAutoReply,
       attach,
       uploadFile,
       mentionCandidates,

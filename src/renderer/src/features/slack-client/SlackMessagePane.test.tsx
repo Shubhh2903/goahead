@@ -58,6 +58,8 @@ function renderPane(overrides: Partial<SlackMessagePaneProps> = {}) {
     onDelete: vi.fn().mockResolvedValue(undefined),
     onReact: vi.fn().mockResolvedValue(undefined),
     onOpenLink: vi.fn(),
+    autoReply: false,
+    onAutoReplyChange: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   render(() => <SlackMessagePane {...props} />);

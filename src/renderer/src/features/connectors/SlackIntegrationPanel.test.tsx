@@ -17,7 +17,7 @@ const connection: MessagingConnection = {
   credentials: "saved",
   orchestratorAgentId: null,
   watchedChannels: [],
-  sendGuards: { paused: false, quietHours: null, hourlyLimit: 20, sentLastHour: 0 },
+  sendGuards: { paused: false, quietHours: null, hourlyLimit: null, sentLastHour: 0 },
 };
 
 function renderPanel(isDefault: boolean, onHandOverDefault = vi.fn()) {

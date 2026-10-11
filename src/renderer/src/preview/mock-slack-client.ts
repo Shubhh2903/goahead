@@ -96,6 +96,8 @@ function previewConversations(): MockConversation[] {
     conversation("D0PREET", "im", "Preet", ["U0PREET"], 1, [
       message(ts(120), ME, "Can you send me the release notes?"),
       message(ts(10), "U0PREET", "Here they are. The draft is in the shared folder."),
+      // The preview puts this conversation on the auto-reply list: the agent's answer went out with no approval.
+      message(ts(8), ME, "Thanks, I will read them today.", { autoSent: true }),
     ]),
     conversation("M0GROUP", "mpim", "Ana, Sam", ["U0ANA", "U0SAM"], 0, [message(ts(2_000), "U0ANA", "Lunch?")]),
   ];
@@ -109,6 +111,8 @@ function isTopLevel(candidate: SlackClientMessage): boolean {
 export function createMockSlackClient(): SlackClientDesktopApi {
   const conversations = previewConversations();
   const listeners = new Set<(change: SlackClientChanged) => void>();
+  /** The conversations on the auto-reply list. */
+  const autoReply = new Set<string>(["D0PREET"]);
   let uploads = 0;
 
   const changed = (channelId: string | null) => {
@@ -173,6 +177,7 @@ export function createMockSlackClient(): SlackClientDesktopApi {
       channels: CHANNELS,
       customEmoji: {},
       offline: false,
+      autoReply: autoReply.has(found.conversation.channelId),
     });
   };
   const checkText = (text: string) => {
@@ -265,6 +270,12 @@ export function createMockSlackClient(): SlackClientDesktopApi {
         current.mine = false;
         if (current.count === 0) found.reactions = found.reactions.filter((reaction) => reaction !== current);
       }
+      changed(channelId);
+    },
+    setAutoReply: async ({ workspaceId, channelId, on }) => {
+      find(workspaceId, channelId);
+      if (on) autoReply.add(channelId);
+      else autoReply.delete(channelId);
       changed(channelId);
     },
     // The preview has no file picker: each upload is the same small file.

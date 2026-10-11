@@ -1003,7 +1003,11 @@ export async function createApplicationServices({
       },
       createAgentProfile: (input) => service.createAgentProfile(input),
       createMemory: (input) => service.createMemory(input),
-      sendMessage: (input) => service.sendMessage(input, host.conversationSender()),
+      updateAgentDescription: (agentId, description) => service.updateAgent({ agentId, description }),
+      sendMessage: ({ slackAsk, ...input }) =>
+        slackAsk
+          ? service.sendSlackAskMessage(input, slackAsk, host.conversationSender())
+          : service.sendMessage(input, host.conversationSender()),
       projectMap: () => service.projectMap(),
       handoffRecords: (agentId) => service.handoffRecords(agentId),
       onHandoffs: (listener) => {

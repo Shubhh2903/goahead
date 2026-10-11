@@ -1,5 +1,6 @@
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import { sourceText } from "@openbot/i18n/source";
+import { PREVIOUS_SLACK_ORCHESTRATOR_DESCRIPTIONS } from "./slack-orchestrator-history";
 
 /**
  * The Slack Orchestrator: the agent that receives every new Slack conversation of a workspace. It
@@ -10,6 +11,9 @@ import { sourceText } from "@openbot/i18n/source";
  * The description is the agent's standing remit, which the developer instructions put in its
  * profile, so the rules live there. Memories are shown to the model as data, never as
  * instructions, so the seeded memories are facts only.
+ *
+ * When you change this text, append the previous text to `PREVIOUS_SLACK_ORCHESTRATOR_DESCRIPTIONS`,
+ * so that orchestrators added before get the new text on their next start.
  */
 const SLACK_ORCHESTRATOR_DESCRIPTION = `You are the Slack Orchestrator of this GoAhead team. Every message that people send to @GoAhead in Slack comes to you first, and Slack shows your replies as "GoAhead".
 
@@ -48,4 +52,33 @@ export function slackOrchestratorProfile(): { name: string; title: string; descr
     title: sourceText("status.messaging.orchestratorTitle"),
     description: SLACK_ORCHESTRATOR_DESCRIPTION,
   };
+}
+
+/**
+ * The result of `upgradeSlackOrchestratorDescription`. `current`: the description already holds the
+ * current rules. `upgraded`: it held an earlier built-in text, and `description` holds the current
+ * rules in its place. `edited`: it holds no built-in text, because the person changed the rules.
+ */
+export type SlackOrchestratorDescriptionUpgrade =
+  | { status: "current" }
+  | { status: "upgraded"; description: string }
+  | { status: "edited" };
+
+/**
+ * Replaces an exact copy of an earlier built-in description with the current one. The text that the
+ * person wrote before or after the built-in text stays. A changed built-in text is the person's own
+ * text: it is never overwritten.
+ */
+export function upgradeSlackOrchestratorDescription(description: string): SlackOrchestratorDescriptionUpgrade {
+  if (description.includes(SLACK_ORCHESTRATOR_DESCRIPTION)) return { status: "current" };
+  // Newest first: the text of a newer build is the more specific match.
+  for (const previous of [...PREVIOUS_SLACK_ORCHESTRATOR_DESCRIPTIONS].reverse()) {
+    const start = description.indexOf(previous);
+    if (start < 0) continue;
+    return {
+      status: "upgraded",
+      description: `${description.slice(0, start)}${SLACK_ORCHESTRATOR_DESCRIPTION}${description.slice(start + previous.length)}`,
+    };
+  }
+  return { status: "edited" };
 }

@@ -3,6 +3,7 @@
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   SLACK_CLIENT_LIMITS,
+  type SlackClientAutoReplyInput,
   type SlackClientDeleteInput,
   type SlackClientEditInput,
   type SlackClientListInput,
@@ -131,6 +132,12 @@ export function parseSlackClientReactInput(value: unknown): SlackClientReactInpu
     name,
     on: input.on,
   };
+}
+
+export function parseSlackClientAutoReplyInput(value: unknown): SlackClientAutoReplyInput {
+  const input = record(value);
+  if (!isBoolean(input.on)) throw invalid();
+  return { workspaceId: workspaceId(input.workspaceId), channelId: channelId(input.channelId), on: input.on };
 }
 
 export function parseSlackClientUploadInput(value: unknown): SlackClientUploadInput {

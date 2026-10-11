@@ -479,7 +479,12 @@ export class OpenBotToolRouter {
                 status: "sent",
                 sentAs,
                 link: receipt.link,
-                note: "The message was sent. Confirm it in one short line.",
+                ...(receipt.autoSent
+                  ? {
+                      autoSent: true,
+                      note: "The message was auto-sent with no approval: the GoAhead user turned on auto-reply for this conversation. Confirm it in one short line and say it was auto-sent.",
+                    }
+                  : { note: "The message was sent. Confirm it in one short line." }),
               }
             : {
                 status: "waiting_for_approval",

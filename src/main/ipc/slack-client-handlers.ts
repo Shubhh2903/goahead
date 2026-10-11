@@ -5,6 +5,7 @@ import { type BrowserWindow, dialog, type OpenDialogOptions } from "electron";
 import type { MessagingService } from "../../backend/messaging/messaging-service";
 import { type IpcGroupHandlers, payloadHandler } from "./define-ipc-group";
 import {
+  parseSlackClientAutoReplyInput,
   parseSlackClientDeleteInput,
   parseSlackClientEditInput,
   parseSlackClientListInput,
@@ -29,6 +30,7 @@ export interface SlackClientIpcDependencies {
     | "slackClientEdit"
     | "slackClientDelete"
     | "slackClientReact"
+    | "slackClientSetAutoReply"
     | "slackClientUpload"
     | "slackClientMentionCandidates"
   >;
@@ -60,6 +62,9 @@ export function slackClientIpcHandlers({
       edit: payloadHandler(parseSlackClientEditInput, (input) => messaging.slackClientEdit(input)),
       delete: payloadHandler(parseSlackClientDeleteInput, (input) => messaging.slackClientDelete(input)),
       react: payloadHandler(parseSlackClientReactInput, (input) => messaging.slackClientReact(input)),
+      // The sender check runs first, as for every handler. The service refuses a workspace that is not
+      // connected as the person, so only the person who owns the connection changes the list.
+      setAutoReply: payloadHandler(parseSlackClientAutoReplyInput, (input) => messaging.slackClientSetAutoReply(input)),
       upload: payloadHandler(parseSlackClientUploadInput, async ({ workspaceId, channelId, threadTs, text }) => {
         const path = await chooseFile();
         if (!path) return null;

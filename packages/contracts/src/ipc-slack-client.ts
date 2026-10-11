@@ -61,6 +61,8 @@ export interface SlackClientMessage {
   mine: boolean;
   /** Set only in the renderer, for an optimistic action that Slack has not confirmed. */
   pending?: (typeof SLACK_CLIENT_PENDING)[number];
+  /** An agent sent it as the person with no approval, because the conversation is on the auto-reply list. */
+  autoSent?: boolean;
 }
 
 /** Messages of one conversation, oldest first, with the names they need. */
@@ -80,6 +82,8 @@ export interface SlackClientPage {
   offline: boolean;
   /** Slack refused the last read of the newest messages: the messages come from the cache only. */
   loadError?: boolean;
+  /** An agent's message to this conversation goes out as the person with no approval. Off when absent. */
+  autoReply?: boolean;
 }
 
 export interface SlackClientThread {
@@ -122,6 +126,12 @@ export interface SlackClientSendInput {
   threadTs?: string;
   /** Also send a thread reply to the channel. A file goes with an upload, which takes the text. */
   broadcast?: boolean;
+}
+/** Puts the conversation on the auto-reply list, or takes it off. Main checks the person owns the workspace. */
+export interface SlackClientAutoReplyInput {
+  workspaceId: string;
+  channelId: string;
+  on: boolean;
 }
 export interface SlackClientEditInput {
   workspaceId: string;
@@ -265,7 +275,8 @@ export function isSlackClientMessage(value: unknown): value is SlackClientMessag
     isNullableBoundedString(value.editedAt, 64) &&
     isBoolean(value.deleted) &&
     isBoolean(value.mine) &&
-    (value.pending === undefined || isOneOf(SLACK_CLIENT_PENDING, value.pending))
+    (value.pending === undefined || isOneOf(SLACK_CLIENT_PENDING, value.pending)) &&
+    (value.autoSent === undefined || isBoolean(value.autoSent))
   );
 }
 
@@ -304,7 +315,8 @@ export function isSlackClientPage(value: unknown): value is SlackClientPage {
     isBoolean(value.hasOlder) &&
     hasLookups(value) &&
     isBoolean(value.offline) &&
-    (value.loadError === undefined || isBoolean(value.loadError))
+    (value.loadError === undefined || isBoolean(value.loadError)) &&
+    (value.autoReply === undefined || isBoolean(value.autoReply))
   );
 }
 

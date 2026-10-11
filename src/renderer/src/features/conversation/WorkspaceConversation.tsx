@@ -13,6 +13,7 @@ import { createRemoteAgentAdmin, updateRemoteAgent } from "../agents/remote-agen
 import { useBrowserTabs } from "../browser/browser-context";
 import { useCustomAgents } from "../custom-agents/custom-agents-context";
 import { useCustomProviders } from "../custom-providers/custom-providers-context";
+import { useMessagingThreads } from "../messaging-threads/messaging-threads-context";
 import { useRemoteDesktop } from "../remote-desktop/remote-desktop-context";
 import { serverSupportsCapability } from "../servers/server-capabilities";
 import { useServerSettings } from "../servers/server-settings";
@@ -39,6 +40,7 @@ import { useConversation } from "./conversation-context";
 export function WorkspaceConversation(props: { account: () => CentralAuthUser }) {
   const scopeIsCurrent = createScopeGuard();
   const platform = usePlatform();
+  const messagingThreads = useMessagingThreads();
   const { activeServer, activeServerSupportsCapability, joinServerOpen } = useServers();
   const { serverSettingsOpen } = useServerSettings();
   const {
@@ -222,6 +224,9 @@ export function WorkspaceConversation(props: { account: () => CentralAuthUser })
         setPendingPluginSlug(request.appId);
         setSkillsMarketplaceOpen(true);
       }}
+      onOpenSlackConversation={
+        activeServer()?.kind === "local" ? (place) => messagingThreads.openInbox(place) : undefined
+      }
       onOpenUsage={(trigger) => usage.openUsage(activeServer()?.id ?? "local", trigger, activeAgent()?.id)}
       agentStatus={agentStatus()}
       accountUsage={auth.accountUsage()}

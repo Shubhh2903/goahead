@@ -96,6 +96,8 @@ function SlackClientLayout() {
             onRetry={client.retry}
             onLoadOlder={client.loadOlder}
             onOpenThread={client.openThread}
+            autoReply={client.page()?.autoReply ?? false}
+            onAutoReplyChange={client.setAutoReply}
           />
           {/* A new conversation starts with an empty composer. */}
           <Show keyed when={activeKey()}>

@@ -87,6 +87,7 @@
     "./features/conversation/MarketplaceSuggestionCard": "./src/features/conversation/MarketplaceSuggestionCard.tsx",
     "./features/conversation/ChatActionMarker": "./src/features/conversation/ChatActionMarker.tsx",
     "./features/conversation/HandoffCard": "./src/features/conversation/HandoffCard.tsx",
+    "./features/conversation/SlackAskCard": "./src/features/conversation/SlackAskCard.tsx",
     "./features/conversation/ChatRowBoundary": "./src/features/conversation/ChatRowBoundary.tsx",
     "./features/conversation/ChatMessageRow": "./src/features/conversation/ChatMessageRow.tsx",
     "./features/conversation/ChatSearch": "./src/features/conversation/ChatSearch.tsx",

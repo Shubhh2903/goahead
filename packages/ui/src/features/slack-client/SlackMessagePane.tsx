@@ -6,7 +6,7 @@
  */
 
 import type { MessagingInboxFile, SlackClientConversation, SlackClientMessage } from "@openbot/contracts/ipc";
-import { Button, ConfirmDialog, Textarea, UserAvatar } from "@openbot/ui";
+import { Badge, Button, ConfirmDialog, SwitchField, Textarea, UserAvatar } from "@openbot/ui";
 import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { useText } from "../../text";
@@ -35,6 +35,10 @@ export interface SlackMessagePaneProps extends SlackMessageActions {
   onRetry: () => void;
   onLoadOlder: () => void;
   onOpenThread: (threadTs: string) => void;
+  /** An agent's message to this conversation goes out as the person with no approval. */
+  autoReply: boolean;
+  /** The person switched auto-reply for the open conversation. The store reports a refusal itself. */
+  onAutoReplyChange: (on: boolean) => Promise<void>;
 }
 
 /** The reader is at the newest message when less than this many pixels are below the view. */
@@ -151,6 +155,14 @@ export function SlackMessagePane(props: SlackMessagePaneProps): JSX.Element {
         {(conversation) => (
           <header class="slack-message-pane-header">
             <h2 class="slack-message-pane-title">{conversation().name}</h2>
+            <SwitchField
+              class="slack-message-pane-auto-reply"
+              size="sm"
+              checked={props.autoReply}
+              onChange={(on: boolean) => void props.onAutoReplyChange(on).catch(() => undefined)}
+              label={t("messaging.client.autoReply.label")}
+              description={t("messaging.client.autoReply.description")}
+            />
           </header>
         )}
       </Show>
@@ -342,6 +354,11 @@ export function SlackMessageItem(props: SlackMessageItemProps): JSX.Element {
               />
               <Show when={props.message.editedAt !== null}>
                 <span class="slack-message-edited">{t("messaging.client.message.edited")}</span>
+              </Show>
+              <Show when={props.message.autoSent}>
+                <Badge variant="info-light" class="slack-message-auto-sent">
+                  {t("messaging.client.message.autoSent")}
+                </Badge>
               </Show>
             </Show>
           }
