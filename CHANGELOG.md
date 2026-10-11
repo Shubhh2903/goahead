@@ -6,6 +6,52 @@ All notable changes to OpenBot will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-10-11
+
+### Added
+
+- The Slack inbox is now a Slack client. It shows all your channels, direct messages and group
+  direct messages in sections with unread counts, and you can find a conversation by name.
+- Scroll up in a Slack conversation to load older messages, back to its first message. GoAhead keeps
+  the messages on this computer, up to 1 GB for each workspace, and shows them when you are offline.
+- Open a thread in a side panel, answer in it, and also send the answer to the channel.
+- Add and remove reactions, attach files of up to 50 MB, mention people with `@`, and edit or delete
+  your own messages. Edits, deletes and reactions made in Slack show in GoAhead within seconds.
+- **Connect Slack again in Settings > Connectors > Slack after you upgrade.** GoAhead needs two new
+  Slack permissions for attachments and reactions. You keep your conversations, agents, drafts and
+  settings. Until you connect again, attachments fail and reactions made in Slack do not show.
+- On macOS, the GoAhead face in the Dynamic Island and the Dock icon shows what your agents do. For
+  example, it thinks while an agent thinks, focuses while it uses tools, and asks for you when an
+  agent needs your approval or input. When the agents are idle, it shows a calm face.
+- Settings > Dynamic Island has a "Show emotions" switch. Turn it off to show the GoAhead logo and
+  the normal app icon.
+- The face in the Dynamic Island follows the pointer with its eyes, looks around when it is idle, and
+  reacts when you point at it or click it. The open island shows the face with a small avatar of the
+  agent. Reduce Motion keeps the face still.
+- Auto-reply for one Slack conversation. Turn it on in the conversation header of the Slack inbox.
+  Then the Slack Orchestrator replies to new messages from other people in that conversation, and
+  agent replies there are sent as you without approval. GoAhead marks each one "Auto-sent". You can still edit or delete them. Auto-reply is off for every conversation until
+  you turn it on, and other conversations still need your approval.
+
+### Changed
+
+- Auto-replies and inbox requests show as a short card in the orchestrator's conversation.
+- Agents can send any number of Slack messages; auto-reply stops in a conversation that looks like a
+  reply loop. After 10 fast auto-replies in a row, auto-reply pauses there and the Slack Orchestrator
+  asks you to check it. Your next message to the orchestrator, or your own message in that
+  conversation, starts auto-reply again.
+
+### Fixed
+
+- A Slack Orchestrator that an earlier version added now gets the current rules when GoAhead starts.
+  If you changed its rules, GoAhead keeps your text. Text that you added before or after the rules
+  also stays.
+- Slack drafts that wait for your approval stay after you restart GoAhead. You can still approve or
+  deny them, and an approved draft is sent only once.
+- When Slack stops accepting GoAhead's access (for example, the app was removed from the workspace),
+  GoAhead turns auto-reply off in every conversation of that workspace. After you connect again, you
+  turn it on again where you want it.
+
 ## [0.34.0] - 2026-10-09
 
 ### Removed
