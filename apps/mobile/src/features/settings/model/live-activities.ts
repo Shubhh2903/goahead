@@ -1,7 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 import { create } from "zustand";
 
-const key = "openbot.mobile.live-activities.v1";
+const key = "goahead.mobile.live-activities.v1";
 export const useLiveActivitiesPreference = create<{ enabled: boolean; ready: boolean; saving: boolean }>(() => ({
   enabled: true,
   ready: false,

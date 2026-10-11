@@ -14,7 +14,7 @@ describe("dev:mobile", () => {
 
   it("waits for the OpenBot runtime, not any app on Metro", () => {
     expect(hasMobileRuntime([{ appId: "com.example.other" }])).toBe(false);
-    expect(hasMobileRuntime([{ appId: "run.openbot.mobile" }])).toBe(true);
+    expect(hasMobileRuntime([{ appId: "com.multicodegenius.goahead.mobile" }])).toBe(true);
   });
 
   it("confirms pairing only from an iOS session created after the link was sent", () => {

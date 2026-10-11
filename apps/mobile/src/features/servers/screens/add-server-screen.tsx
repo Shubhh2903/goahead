@@ -1,4 +1,5 @@
 import { type InviteLinkOptions, parseInviteUrl, selfHostedApiOrigin } from "@openbot/contracts/invite-links";
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import type { AppFormat, MobileTranslate } from "@openbot/i18n/mobile";
 import type { RemoteInvitePreview } from "@openbot/team-client/remote-directory";
 import * as Clipboard from "expo-clipboard";
@@ -9,7 +10,6 @@ import { useThemeColor } from "heroui-native/hooks";
 import { CircleCheck, ClipboardPaste, ScanLine, Server } from "lucide-react-native";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { AppState, Keyboard, Pressable, View } from "react-native";
-
 import { useMobileSession } from "@/features/auth/context/mobile-session-context";
 import { SERVER_ROLE_KEYS } from "@/features/servers/model/server-role";
 import { useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
@@ -19,7 +19,7 @@ import { haptics } from "@/shared/lib/haptics";
 import { isIOS } from "@/shared/lib/platform";
 import { currentText, useText } from "@/shared/lib/text";
 
-const INVITE_PLACEHOLDER = "https://openbot.run/join?…";
+const INVITE_PLACEHOLDER = `${PRODUCT_IDENTITY.siteOrigin}/join?…`;
 
 function normalizeInviteUrl(value: string, options: InviteLinkOptions): string | null {
   const invite = value.trim();

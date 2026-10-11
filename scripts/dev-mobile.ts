@@ -15,7 +15,7 @@ import { connectToDevApp } from "./dev-automation/cdp-client";
 import { type DevInstanceRecord, readDevInstanceRecords, selectDevInstance } from "./dev-automation/instance-registry";
 
 const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const MOBILE_BUNDLE_ID = "run.openbot.mobile";
+const MOBILE_BUNDLE_ID = "com.multicodegenius.goahead.mobile";
 const DEFAULT_METRO_PORT = 8081;
 const DESKTOP_TIMEOUT_MS = 5 * 60_000;
 // The first native build takes minutes.
@@ -198,13 +198,13 @@ async function selectSimulator(requested: string | null): Promise<string> {
       await runCommand("xcrun", ["simctl", "get_app_container", udid, MOBILE_BUNDLE_ID]);
       withApp.push(udid);
     } catch {
-      // OpenBot is not installed on this simulator.
+      // GoAhead is not installed on this simulator.
     }
   }
   const [udid, ...extra] = withApp;
-  if (!udid) throw new Error("No booted simulator has OpenBot installed. Run without --pair-only to build it.");
+  if (!udid) throw new Error("No booted simulator has GoAhead installed. Run without --pair-only to build it.");
   if (extra.length > 0) {
-    throw new Error(`Several booted simulators have OpenBot. Pass --simulator=<udid>: ${withApp.join(", ")}`);
+    throw new Error(`Several booted simulators have GoAhead. Pass --simulator=<udid>: ${withApp.join(", ")}`);
   }
   return udid;
 }

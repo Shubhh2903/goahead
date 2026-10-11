@@ -94,6 +94,8 @@ export function redirectIncomingLink(path: string): string {
   if (path === PRODUCT_LINK_PREFIX || path === `${PRODUCT_LINK_PREFIX}/` || path === PRODUCT_LINK_PROTOCOL) return "/";
   // Expo Go and ordinary internal routes retain Expo Router's normal behavior.
   if (/^exps?:\/\//u.test(path)) return path;
+  // A development build is opened with `exp+<scheme>://expo-development-client`: it only names Metro.
+  if (/^exp\+[a-z0-9.+-]+:\/\/expo-development-client(?:[/?#]|$)/iu.test(path)) return "/";
   if (path.startsWith("/") && !path.startsWith("//")) {
     const url = new URL(path, PRODUCT_IDENTITY.siteOrigin);
     if (

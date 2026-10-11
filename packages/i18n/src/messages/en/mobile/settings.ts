@@ -12,7 +12,6 @@ export const messages = defineMessages("mobile.settings", {
   "mobile.settings.about.openFailed": "Could not open the link. Try again.",
   "mobile.settings.about.resources": "Resources",
   "mobile.settings.about.website": "Website",
-  "mobile.settings.about.privacy": "Privacy policy",
   "mobile.settings.home.profile": "Profile",
   "mobile.settings.home.preferences": "Preferences",
   "mobile.settings.home.generalHint": "Appearance and conversations",
@@ -21,7 +20,6 @@ export const messages = defineMessages("mobile.settings", {
   "mobile.settings.home.support": "Support",
   "mobile.settings.home.supportHint": "Get help and save a support log",
   "mobile.settings.support.help": "Get help",
-  "mobile.settings.support.message": "Message us on X",
   "mobile.settings.support.issues": "Report a problem on GitHub",
   "mobile.settings.support.helpFooter":
     "Tell us what happened and when. Attach the support log file to your GitHub issue.",

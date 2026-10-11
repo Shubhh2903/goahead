@@ -13,7 +13,6 @@ export const messages = {
   "mobile.settings.about.openFailed": "Não foi possível abrir o link. Tente novamente.",
   "mobile.settings.about.resources": "Recursos",
   "mobile.settings.about.website": "Site",
-  "mobile.settings.about.privacy": "Política de privacidade",
   "mobile.settings.home.profile": "Perfil",
   "mobile.settings.home.preferences": "Preferências",
   "mobile.settings.home.generalHint": "Aparência e conversas",
@@ -22,7 +21,6 @@ export const messages = {
   "mobile.settings.home.support": "Suporte",
   "mobile.settings.home.supportHint": "Obter ajuda e salvar um registro de suporte",
   "mobile.settings.support.help": "Obter ajuda",
-  "mobile.settings.support.message": "Fale conosco no X",
   "mobile.settings.support.issues": "Relatar um problema no GitHub",
   "mobile.settings.support.helpFooter":
     "Conte o que aconteceu e quando. Anexe o arquivo de registro de suporte à sua issue no GitHub.",

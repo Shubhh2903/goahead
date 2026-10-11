@@ -7,7 +7,7 @@ const { mergeContents, removeContents } = require("@expo/config-plugins/build/ut
  * @param {string | undefined} frameworkPath
  */
 function addRocketSim(contents, frameworkPath) {
-  if (!frameworkPath) return removeContents({ src: contents, tag: "openbot-rocketsim" }).contents;
+  if (!frameworkPath) return removeContents({ src: contents, tag: "goahead-rocketsim" }).contents;
   // JSON string escapes are also valid Swift escapes for local paths, except control characters.
   if (Array.from(frameworkPath).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
     throw new Error("RocketSim path contains control characters.");
@@ -20,7 +20,7 @@ function addRocketSim(contents, frameworkPath) {
   return mergeContents({
     src: contents,
     newSrc: connect,
-    tag: "openbot-rocketsim",
+    tag: "goahead-rocketsim",
     anchor: /\) -> Bool \{/,
     offset: 1,
     comment: "//",

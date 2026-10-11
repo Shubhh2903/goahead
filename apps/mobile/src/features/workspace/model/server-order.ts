@@ -15,7 +15,7 @@ export function serverAccent(serverId: string): string {
 }
 
 export function serverOrderKey(apiUrl: string, userId: string): string {
-  return `openbot.server-order.v1.${remoteHostFingerprint(JSON.stringify([new URL(apiUrl).origin, userId]))}`;
+  return `goahead.server-order.v1.${remoteHostFingerprint(JSON.stringify([new URL(apiUrl).origin, userId]))}`;
 }
 
 export function decodeServerOrder(stored: string | null): string[] {

@@ -17,6 +17,20 @@ const native = vi.hoisted(
     active: new Set<(state: string) => void>(),
   }),
 );
+// The build turns analytics off. These tests turn it on to check the client, and one test checks the off build.
+const product = vi.hoisted(() => ({ analytics: true }));
+vi.mock("@openbot/contracts/product-identity", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openbot/contracts/product-identity")>();
+  return {
+    ...actual,
+    PRODUCT_IDENTITY: {
+      ...actual.PRODUCT_IDENTITY,
+      get analytics() {
+        return product.analytics;
+      },
+    },
+  };
+});
 vi.mock("react-native", () => ({
   Platform: { OS: "android" },
   AppState: {
@@ -53,6 +67,7 @@ beforeEach(() => {
   native.readFails = false;
   native.writeFails = false;
   native.active.clear();
+  product.analytics = true;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -289,12 +304,13 @@ describe("installed React Native SDK", () => {
     });
   });
 
-  it.each(["development", "preview", "missing_credentials", "dev_runtime"])(
+  it.each(["development", "preview", "missing_credentials", "dev_runtime", "product_analytics_off"])(
     "does not create network traffic for %s",
     async (mode) => {
       const requests = captureRequests();
       if (mode === "missing_credentials") vi.stubEnv("EXPO_PUBLIC_OPENPANEL_CLIENT_SECRET", "");
       else if (mode === "dev_runtime") vi.stubGlobal("__DEV__", true);
+      else if (mode === "product_analytics_off") product.analytics = false;
       else vi.stubEnv("EXPO_PUBLIC_APP_ENV", mode);
       const { mobileAnalytics } = await import("./mobile-analytics");
       mobileAnalytics.setEnabled(true);

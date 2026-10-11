@@ -1,7 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 import { create } from "zustand";
 
-const key = "openbot.mobile.agent-color-messages.v1";
+const key = "goahead.mobile.agent-color-messages.v1";
 /** When enabled, the user's messages in an agent chat use that agent's color. */
 export const useAgentColorMessages = create<{ enabled: boolean; ready: boolean; saving: boolean }>(() => ({
   enabled: true,

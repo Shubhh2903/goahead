@@ -2,7 +2,7 @@ import * as SecureStore from "expo-secure-store";
 import { create } from "zustand";
 import { mobileAnalytics } from "./mobile-analytics";
 
-const key = "openbot.mobile.analytics.v1";
+const key = "goahead.mobile.analytics.v1";
 export const useAnalyticsPreference = create<{ enabled: boolean; ready: boolean; saving: boolean }>(() => ({
   enabled: false,
   ready: false,

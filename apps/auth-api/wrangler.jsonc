@@ -62,7 +62,10 @@
     // GITHUB_APP_PRIVATE_KEY (PKCS #8). Without the key, agents act on GitHub as the signed-in user.
     "GITHUB_APP_CLIENT_ID": "Iv23lik5pzHz70cb0RUL",
     "APNS_TEAM_ID": "ZTRDTUL87R",
-    "APNS_TOPIC": "run.openbot.mobile"
+    "APNS_TOPIC": "run.openbot.mobile",
+    // The apps that open universal links (`/.well-known/apple-app-site-association`).
+    "APPLE_DESKTOP_APP_ID": "ZTRDTUL87R.app.openbot.desktop",
+    "APPLE_MOBILE_APP_ID": "ZTRDTUL87R.run.openbot.mobile"
   },
   "d1_databases": [
     {
@@ -155,7 +158,8 @@
           "REMOTE_AUTH_WEBHOOK_SECRET"
         ]
       },
-      // No GitHub App and no iPhone Live Activity relay: both need keys of other products.
+      // No GitHub App: it needs keys of another product. The iPhone Live Activity relay stays off until
+      // the deploy env file has APNS_PRIVATE_KEY and APNS_KEY_ID of the GoAhead Apple team.
       "vars": {
         "AUTH_EXPOSE_DEVELOPMENT_CODE": "false",
         "EMAIL_SMTP_HOST": "smtp.zoho.in",
@@ -167,7 +171,12 @@
         "REMOTE_TICKET_KEY_ID": "goahead-remote-1",
         "REMOTE_SIGNAL_URL": "wss://goahead-signal.multicodegenius.com/v1/signal",
         "REMOTE_AUTH_WEBHOOK_URL": "https://goahead-signal.multicodegenius.com/internal/auth-events",
-        "HOSTED_SERVERS_ENABLED": "false"
+        "HOSTED_SERVERS_ENABLED": "false",
+        // The GoAhead phone app opens `/join` and `/agents/*` links. The desktop has no Associated
+        // Domains entitlement, so it has no entry.
+        "APPLE_MOBILE_APP_ID": "S29HD2MDR4.com.multicodegenius.goahead.mobile",
+        "APNS_TEAM_ID": "S29HD2MDR4",
+        "APNS_TOPIC": "com.multicodegenius.goahead.mobile"
       },
       "d1_databases": [
         {
@@ -245,7 +254,9 @@
         "SITE_COOKIE_ISOLATION_READY": "false",
         "REMOTE_TICKET_KEY_ID": "openbot-remote-1",
         "REMOTE_SIGNAL_URL": "ws://127.0.0.1:8081/v1/signal",
-        "REMOTE_AUTH_WEBHOOK_URL": "http://127.0.0.1:8081/internal/auth-events"
+        "REMOTE_AUTH_WEBHOOK_URL": "http://127.0.0.1:8081/internal/auth-events",
+        "APPLE_DESKTOP_APP_ID": "ZTRDTUL87R.app.openbot.desktop",
+        "APPLE_MOBILE_APP_ID": "ZTRDTUL87R.run.openbot.mobile"
       },
       "d1_databases": [
         {
@@ -340,7 +351,9 @@
         "HOSTED_SERVERS_ENABLED": "true",
         "GITHUB_APP_CLIENT_ID": "Iv23lik5pzHz70cb0RUL",
         "APNS_TEAM_ID": "ZTRDTUL87R",
-        "APNS_TOPIC": "run.openbot.mobile"
+        "APNS_TOPIC": "run.openbot.mobile",
+        "APPLE_DESKTOP_APP_ID": "ZTRDTUL87R.app.openbot.desktop",
+        "APPLE_MOBILE_APP_ID": "ZTRDTUL87R.run.openbot.mobile"
       },
       "d1_databases": [
         {

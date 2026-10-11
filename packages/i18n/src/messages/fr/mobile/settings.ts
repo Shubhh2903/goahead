@@ -13,7 +13,6 @@ export const messages = {
   "mobile.settings.about.openFailed": "Impossible d’ouvrir le lien. Réessayez.",
   "mobile.settings.about.resources": "Ressources",
   "mobile.settings.about.website": "Site web",
-  "mobile.settings.about.privacy": "Politique de confidentialité",
   "mobile.settings.home.profile": "Profil",
   "mobile.settings.home.preferences": "Préférences",
   "mobile.settings.home.generalHint": "Apparence et conversations",
@@ -22,7 +21,6 @@ export const messages = {
   "mobile.settings.home.support": "Assistance",
   "mobile.settings.home.supportHint": "Obtenir de l’aide et enregistrer un journal d’assistance",
   "mobile.settings.support.help": "Obtenir de l’aide",
-  "mobile.settings.support.message": "Nous écrire sur X",
   "mobile.settings.support.issues": "Signaler un problème sur GitHub",
   "mobile.settings.support.helpFooter":
     "Dites-nous ce qui s’est passé et quand. Joignez le fichier du journal d’assistance à votre ticket GitHub.",

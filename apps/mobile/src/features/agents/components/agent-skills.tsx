@@ -65,7 +65,7 @@ export function CreateSkillAction({ agent }: { agent: MobileAgent }) {
 
 /**
  * Agent info > Skills. An owner or admin turns a skill on or off and uninstalls it, as in the
- * desktop agent settings; a skill in a folder that OpenBot does not manage stays read-only.
+ * desktop agent settings; a skill in a folder that GoAhead does not manage stays read-only.
  */
 export function AgentSkills({
   agent,

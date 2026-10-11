@@ -21,7 +21,15 @@ describe("Mobile Connect URLs", () => {
   it("round-trips an HTTPS account API and one-time ticket", () => {
     const url = createMobileConnectUrl({ apiUrl: "https://api.openbot.run", ticket });
 
+    expect(url.startsWith("goahead://mobile-connect?")).toBe(true);
     expect(parseMobileConnectUrl(url)).toEqual({ apiUrl: "https://api.openbot.run", ticket });
+  });
+
+  it("reads the code of a released desktop that still shows the openbot scheme", () => {
+    expect(parseMobileConnectUrl(`openbot://mobile-connect?api=https://api.openbot.run&ticket=${ticket}`)).toEqual({
+      apiUrl: "https://api.openbot.run",
+      ticket,
+    });
   });
 
   it("allows HTTP only for loopback and private LAN development APIs", () => {
@@ -42,10 +50,10 @@ describe("Mobile Connect URLs", () => {
 
   it("rejects other schemes, hosts, parameters, and malformed tickets", () => {
     expect(parseMobileConnectUrl(`https://mobile-connect?api=https://api.openbot.run&ticket=${ticket}`)).toBeNull();
-    expect(parseMobileConnectUrl(`openbot://other?api=https://api.openbot.run&ticket=${ticket}`)).toBeNull();
+    expect(parseMobileConnectUrl(`goahead://other?api=https://api.openbot.run&ticket=${ticket}`)).toBeNull();
     expect(
       parseMobileConnectUrl(
-        `openbot://mobile-connect?api=https://api.openbot.run&ticket=${ticket}&redirect=https://evil.example`,
+        `goahead://mobile-connect?api=https://api.openbot.run&ticket=${ticket}&redirect=https://evil.example`,
       ),
     ).toBeNull();
     expect(parseMobileConnectUrl("openbot://mobile-connect?api=https://api.openbot.run&ticket=short")).toBeNull();

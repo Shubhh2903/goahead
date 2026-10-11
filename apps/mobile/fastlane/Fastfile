@@ -16,7 +16,7 @@ platform :ios do
     upload_to_testflight(
       api_key: api_key,
       ipa: ipa,
-      app_identifier: "run.openbot.mobile",
+      app_identifier: "com.multicodegenius.goahead.mobile",
       skip_waiting_for_build_processing: true,
       distribute_external: false
     )

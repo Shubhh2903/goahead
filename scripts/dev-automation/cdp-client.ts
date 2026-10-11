@@ -4,6 +4,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import type { Logger } from "@openbot/logging";
 import { type Browser, chromium, type Page } from "playwright-core";
@@ -90,7 +91,7 @@ export interface AutomationSession {
 // The token is gone from new builds, so this now only gates ports no live
 // record owns; record-owned ports prove ownership through the process tree.
 export function isOpenBotBrowser(userAgent: string): boolean {
-  return userAgent.includes("OpenBot/");
+  return userAgent.includes(`${PRODUCT_IDENTITY.name}/`);
 }
 
 /**
@@ -344,7 +345,7 @@ export async function openDevBrowser(
     if (ownerPid === null || !(await verifyBrowserOwnership(browser, ownerPid))) {
       await browser.close();
       throw new ForeignBrowserError(
-        `Port ${port} does not belong to OpenBot. Pass --port=<OPENBOT_DEV_REMOTE_DEBUGGING_PORT> of the instance you mean to drive.`,
+        `Port ${port} does not belong to ${PRODUCT_IDENTITY.name}. Pass --port=<OPENBOT_DEV_REMOTE_DEBUGGING_PORT> of the instance you mean to drive.`,
       );
     }
     logger.info(`Port :${port} answers without the build token; the listener belongs to the recorded instance.`);
@@ -380,7 +381,7 @@ export async function connectToDevApp(
       );
     }
     throw new Error(
-      `Connected over CDP but found no OpenBot main window on :${port}` +
+      `Connected over CDP but found no ${PRODUCT_IDENTITY.name} main window on :${port}` +
         (expectedRendererPort === null ? ". " : ` serving renderer :${expectedRendererPort}. `) +
         (expectedRendererPort === null
           ? "Open the app window, or aim at another target with --page=<target-id|url-substring> " +

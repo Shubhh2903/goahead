@@ -26,7 +26,7 @@ import {
 
 describe("isOpenBotBrowser", () => {
   it("accepts the Electron user agent", () => {
-    expect(isOpenBotBrowser("Mozilla/5.0 OpenBot/44.0.0 Chrome/152 Electron/44.0.0")).toBe(true);
+    expect(isOpenBotBrowser("Mozilla/5.0 GoAhead/44.0.0 Chrome/152 Electron/44.0.0")).toBe(true);
   });
 
   it("rejects foreign Chromium instances sharing the machine", () => {

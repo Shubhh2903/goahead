@@ -4,6 +4,7 @@ import type {
   DynamicIslandAgentIdentity,
   DynamicIslandPresentation,
 } from "@openbot/contracts/ipc";
+import { PRODUCT_LINK_PREFIX } from "@openbot/contracts/product-identity";
 import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import type { MobileTranslate } from "@openbot/i18n/mobile";
 import type { DynamicIslandText } from "./dynamic-island-presentation";
@@ -116,7 +117,7 @@ export interface LiveActivityViewInput {
  * ActivityKit fixes the URL of an activity when it starts, but the activity shows different chats
  * over its life. So the activity sets its tap link from the props, and each link says what it opens.
  */
-export const LIVE_ACTIVITY_URL = "openbot://live-activity";
+export const LIVE_ACTIVITY_URL = `${PRODUCT_LINK_PREFIX}live-activity`;
 /** Opens the chat list. It starts no action, so it needs no signature. */
 export const LIVE_ACTIVITY_LIST_URL = `${LIVE_ACTIVITY_URL}?list=1`;
 
@@ -499,7 +500,7 @@ export type LiveActivityLink =
   | { type: "action"; action: LiveActivityAction; command: string | null };
 
 /**
- * Reads a Live Activity link. Any app can open an `openbot://` link, so a link that changes host
+ * Reads a Live Activity link. Any app can open a `goahead://` link, so a link that changes host
  * state counts only with a valid signature. The key is the one of the host that the action goes to,
  * so one host cannot sign an action for another. Without a key, or with a wrong signature, the link
  * opens the list.

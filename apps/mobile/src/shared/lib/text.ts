@@ -24,7 +24,7 @@ export function currentLocale(): TranslatedLocale {
 
 export function useText(): MobileText {
   const language = useAppLanguage((state) => state.value);
-  // The phone's language can change in iOS Settings while OpenBot is in the background, so it is
+  // The phone's language can change in iOS Settings while GoAhead is in the background, so it is
   // read again each time the app becomes active.
   const [systemLocale, setSystemLocale] = useState(phoneLocale);
   useEffect(() => {

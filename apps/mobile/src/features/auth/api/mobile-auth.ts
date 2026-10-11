@@ -8,6 +8,7 @@ import {
   parseMobileConnectUrl,
   validateMobileConnectHostBinding,
 } from "@openbot/contracts/mobile-connect";
+import { PRODUCT_LINK_PREFIX } from "@openbot/contracts/product-identity";
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { validateProfileName } from "@openbot/contracts/validation";
 import * as Crypto from "expo-crypto";
@@ -19,9 +20,9 @@ import { currentText } from "@/shared/lib/text";
 // Relative: the Node test project resolves no `@/` path that the test does not mock.
 import { fetch } from "../../support/model/logged-fetch";
 
-const MOBILE_SESSION_KEY = "openbot.mobile.session.v1";
-const MOBILE_REVOCATIONS_KEY = "openbot.mobile.pending-revocations.v1";
-const MOBILE_DEVICE_ID_KEY = "openbot.mobile.device-id.v1";
+const MOBILE_SESSION_KEY = "goahead.mobile.session.v1";
+const MOBILE_REVOCATIONS_KEY = "goahead.mobile.pending-revocations.v1";
+const MOBILE_DEVICE_ID_KEY = "goahead.mobile.device-id.v1";
 const MOBILE_AUTH_REQUEST_TIMEOUT_MS = 10_000;
 
 let mobileSessionStorageTail = Promise.resolve();
@@ -562,7 +563,7 @@ function decodeStoredMobileCredential(value: unknown): MobileCredential {
   )
     throw new Error("Invalid stored mobile credential.");
   const parsed = parseMobileConnectUrl(
-    `openbot://mobile-connect?api=${encodeURIComponent(value.apiUrl)}&ticket=${"x".repeat(32)}`,
+    `${PRODUCT_LINK_PREFIX}mobile-connect?api=${encodeURIComponent(value.apiUrl)}&ticket=${"x".repeat(32)}`,
   );
   if (!parsed) throw new Error("Invalid stored account API.");
   return { apiUrl: parsed.apiUrl, sessionToken: value.sessionToken };

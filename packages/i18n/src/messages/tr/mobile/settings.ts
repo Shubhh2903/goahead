@@ -13,7 +13,6 @@ export const messages = {
   "mobile.settings.about.openFailed": "Bağlantı açılamadı. Tekrar deneyin.",
   "mobile.settings.about.resources": "Kaynaklar",
   "mobile.settings.about.website": "Web sitesi",
-  "mobile.settings.about.privacy": "Gizlilik politikası",
   "mobile.settings.home.profile": "Profil",
   "mobile.settings.home.preferences": "Tercihler",
   "mobile.settings.home.generalHint": "Görünüm ve konuşmalar",
@@ -22,7 +21,6 @@ export const messages = {
   "mobile.settings.home.support": "Destek",
   "mobile.settings.home.supportHint": "Yardım alın ve destek günlüğünü kaydedin",
   "mobile.settings.support.help": "Yardım alın",
-  "mobile.settings.support.message": "Bize X üzerinden yazın",
   "mobile.settings.support.issues": "GitHub'da sorun bildirin",
   "mobile.settings.support.helpFooter":
     "Ne olduğunu ve ne zaman olduğunu bize anlatın. Destek günlüğü dosyasını GitHub kaydınıza ekleyin.",

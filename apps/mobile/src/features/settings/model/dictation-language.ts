@@ -4,7 +4,7 @@ import { create } from "zustand";
 /** Follow the phone's language list. Any other value is a locale the recognizer listed. */
 export const AUTOMATIC_DICTATION_LANGUAGE = "automatic";
 
-const key = "openbot.mobile.dictation-language.v1";
+const key = "goahead.mobile.dictation-language.v1";
 export const useDictationLanguage = create<{ value: string; ready: boolean; saving: boolean }>(() => ({
   value: AUTOMATIC_DICTATION_LANGUAGE,
   ready: false,

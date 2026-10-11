@@ -70,6 +70,10 @@ export interface WorkerBindings {
   APNS_TOPIC?: string;
   /** Local development only: the development server that forwards to Apple over HTTP/2. */
   APNS_ORIGIN?: string;
+  /** `<team ID>.<bundle ID>` of the signed desktop app that opens `/join` links. Unset: no desktop entry. */
+  APPLE_DESKTOP_APP_ID?: string;
+  /** `<team ID>.<bundle ID>` of the phone app that opens `/join` and `/agents/*` links. Unset: no phone entry. */
+  APPLE_MOBILE_APP_ID?: string;
 }
 
 function isWorkerBindings(value: unknown): value is WorkerBindings {

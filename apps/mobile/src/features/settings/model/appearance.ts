@@ -3,7 +3,7 @@ import { Uniwind } from "uniwind";
 import { create } from "zustand";
 
 export type Appearance = "system" | "light" | "dark";
-const key = "openbot.mobile.appearance.v1";
+const key = "goahead.mobile.appearance.v1";
 export const useAppearance = create<{ value: Appearance; ready: boolean; saving: boolean }>(() => ({
   value: "system",
   ready: false,

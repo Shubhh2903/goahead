@@ -1,3 +1,4 @@
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { OpenPanel, type TrackHandlerPayload } from "@openpanel/react-native";
 import * as Application from "expo-application";
 import { Platform } from "react-native";
@@ -42,7 +43,9 @@ export function filterMobilePayload(event: TrackHandlerPayload): boolean {
 export const mobileAnalytics = new MobileAnalytics(() => {
   const clientId = process.env.EXPO_PUBLIC_OPENPANEL_CLIENT_ID;
   const clientSecret = process.env.EXPO_PUBLIC_OPENPANEL_CLIENT_SECRET;
+  // `PRODUCT_IDENTITY.analytics` is off in this build: no client is made, so nothing is sent.
   if (
+    !PRODUCT_IDENTITY.analytics ||
     __DEV__ ||
     process.env.EXPO_PUBLIC_APP_ENV !== "production" ||
     !clientId ||

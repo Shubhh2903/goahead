@@ -75,7 +75,7 @@ describe("Live Activity buttons", () => {
       unreadCount: 3,
       message: { agent, messageId: "message-1", text: "Hej!", createdAt: "2026-09-24T10:00:00.000Z" },
     };
-    const row = (name: string) => ({ name, count: 1, avatar: "", url: `openbot://live-activity?agent=${name}` });
+    const row = (name: string) => ({ name, count: 1, avatar: "", url: `goahead://live-activity?agent=${name}` });
     const view = (count: number) =>
       liveActivityProps(
         message,

@@ -1,4 +1,8 @@
-const MOBILE_CONNECT_PROTOCOL = "openbot:";
+import { PRODUCT_LINK_PROTOCOL } from "./product-identity";
+
+const MOBILE_CONNECT_PROTOCOL = PRODUCT_LINK_PROTOCOL;
+/** Released OpenBot-branded desktops (v0.35.0 and earlier) show `openbot://mobile-connect` codes. */
+const LEGACY_MOBILE_CONNECT_PROTOCOL = "openbot:";
 const MOBILE_CONNECT_HOST = "mobile-connect";
 
 export interface MobileConnectHostBinding {
@@ -79,7 +83,7 @@ export function parseMobileConnectUrl(value: string): MobileConnectPayload | nul
   try {
     const url = new URL(value);
     if (
-      url.protocol !== MOBILE_CONNECT_PROTOCOL ||
+      (url.protocol !== MOBILE_CONNECT_PROTOCOL && url.protocol !== LEGACY_MOBILE_CONNECT_PROTOCOL) ||
       url.hostname !== MOBILE_CONNECT_HOST ||
       (url.pathname !== "" && url.pathname !== "/") ||
       url.hash !== "" ||

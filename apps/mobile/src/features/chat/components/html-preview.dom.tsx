@@ -107,8 +107,8 @@ function placePage(frame: HTMLIFrameElement | null, top: number, bottom: number)
   const body = frame?.contentDocument?.body;
   if (!body) return;
   const own = getComputedStyle(body);
-  body.dataset.openbotPaddingTop ??= own.paddingTop;
-  body.dataset.openbotPaddingBottom ??= own.paddingBottom;
-  body.style.paddingTop = `calc(${body.dataset.openbotPaddingTop} + ${top}px)`;
-  body.style.paddingBottom = `calc(${body.dataset.openbotPaddingBottom} + ${bottom}px)`;
+  body.dataset.goaheadPaddingTop ??= own.paddingTop;
+  body.dataset.goaheadPaddingBottom ??= own.paddingBottom;
+  body.style.paddingTop = `calc(${body.dataset.goaheadPaddingTop} + ${top}px)`;
+  body.style.paddingBottom = `calc(${body.dataset.goaheadPaddingBottom} + ${bottom}px)`;
 }

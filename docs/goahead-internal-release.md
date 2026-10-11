@@ -329,6 +329,39 @@ inbox into the Slack client cache and keeps the old inbox table.
    `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` (`S29HD2MDR4`). No GitHub secret is
    needed: GoAhead has no GitHub Actions workflows.
 
+## 6b. Phone app (GoAhead) **[Human]**
+
+The phone app in `apps/mobile` uses the bundle id `com.multicodegenius.goahead.mobile`, the Apple
+team `S29HD2MDR4`, the link scheme `goahead://` and the universal links of
+`goahead.multicodegenius.com`. It is a new app, not an update of the OpenBot phone app: install it,
+then scan the QR code of the GoAhead desktop once (Settings > Mobile). Settings and the session of
+the OpenBot phone app do not move to it.
+
+1. In the Apple Developer account (team `S29HD2MDR4`), Identifiers, make two App IDs:
+   - `com.multicodegenius.goahead.mobile` with **Associated Domains**, **App Groups** and **Push
+     Notifications**;
+   - `com.multicodegenius.goahead.mobile.ExpoWidgetsTarget` (the Live Activity widget) with **App
+     Groups** and **Push Notifications**.
+2. Make the App Group `group.com.multicodegenius.goahead.mobile` and add it to both App IDs.
+3. In App Store Connect, make a new app record for the bundle id
+   `com.multicodegenius.goahead.mobile`, and a TestFlight group.
+4. In App Store Connect > Users and Access > Integrations, make a team API key with the App Manager
+   role. The `beta` lane of `apps/mobile/fastlane/Fastfile` reads `ASC_KEY_ID`, `ASC_ISSUER_ID`,
+   `ASC_PRIVATE_KEY` (the full `.p8` text) and `IPA_PATH`.
+5. In `apps/mobile`, run `bunx eas-cli@latest init` with the company's Expo account. It makes a new
+   EAS project and writes `extra.eas.projectId` and `owner` to `app.json`. The OpenBot EAS project
+   values are removed. If you use EAS Update, also run `bunx eas-cli@latest update:configure` to
+   write `updates.url`. Commit the changes in `app.json`. Then let EAS make the distribution
+   certificate and the provisioning profiles of both targets on the first build.
+6. Deploy the account service again (section 3). The `goahead` env serves
+   `/.well-known/apple-app-site-association` for `S29HD2MDR4.com.multicodegenius.goahead.mobile`
+   (`APPLE_MOBILE_APP_ID` in `apps/auth-api/wrangler.jsonc`), with the paths `/join` and
+   `/agents/*`. Check it: `curl https://goahead.multicodegenius.com/.well-known/apple-app-site-association`.
+7. Optional, for Live Activity pushes: make an APNs key (`.p8`) in Keys, and put `APNS_PRIVATE_KEY`
+   (the PEM text) and `APNS_KEY_ID` in `apps/auth-api/.env.goahead`. `APNS_TEAM_ID` (`S29HD2MDR4`)
+   and `APNS_TOPIC` (`com.multicodegenius.goahead.mobile`) are set in the `goahead` env of
+   `wrangler.jsonc`. Deploy again. Without the key, the relay stays off.
+
 ## 7. Release
 
 Releases are built on the release Mac, for Apple silicon (arm64) only. No GitHub Actions workflow

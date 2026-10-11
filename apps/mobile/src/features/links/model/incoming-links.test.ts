@@ -120,6 +120,9 @@ describe("incoming mobile links", () => {
     forgetIncomingLink(requestId(path));
     expect(redirectIncomingLink("/connected")).toBe("/connected");
     expect(redirectIncomingLink("exp://localhost:8081/--/connected")).toBe("exp://localhost:8081/--/connected");
+    expect(redirectIncomingLink("exp+goahead://expo-development-client/?url=http%3A%2F%2F192.168.0.137%3A8081")).toBe(
+      "/",
+    );
   });
 
   it("coalesces repeated delivery without copying the bearer token into navigation", () => {

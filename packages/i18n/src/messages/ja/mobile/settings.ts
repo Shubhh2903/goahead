@@ -13,7 +13,6 @@ export const messages = {
   "mobile.settings.about.openFailed": "リンクを開けませんでした。もう一度お試しください。",
   "mobile.settings.about.resources": "リソース",
   "mobile.settings.about.website": "Web サイト",
-  "mobile.settings.about.privacy": "プライバシーポリシー",
   "mobile.settings.home.profile": "プロフィール",
   "mobile.settings.home.preferences": "環境設定",
   "mobile.settings.home.generalHint": "外観と会話",
@@ -22,7 +21,6 @@ export const messages = {
   "mobile.settings.home.support": "サポート",
   "mobile.settings.home.supportHint": "ヘルプとサポートログの保存",
   "mobile.settings.support.help": "ヘルプ",
-  "mobile.settings.support.message": "X でメッセージを送る",
   "mobile.settings.support.issues": "GitHub で問題を報告",
   "mobile.settings.support.helpFooter":
     "何がいつ起きたかをお知らせください。GitHub の Issue にサポートログのファイルを添付してください。",

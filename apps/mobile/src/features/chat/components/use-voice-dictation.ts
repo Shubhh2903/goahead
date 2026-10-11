@@ -73,7 +73,7 @@ function supportedLocales(module: Recognizer): Promise<SupportedLocales> {
 }
 
 async function recognitionOptions(module: Recognizer, supported: Promise<SupportedLocales>) {
-  // The phone's language list, not the app's locale. OpenBot has one
+  // The phone's language list, not the app's locale. GoAhead has one
   // localization, so the app's own locale can be English on a Polish phone.
   const chosen = useDictationLanguage.getState().value;
   const preferred =

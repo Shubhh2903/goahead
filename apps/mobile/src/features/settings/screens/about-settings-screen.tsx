@@ -1,3 +1,4 @@
+import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import * as Application from "expo-application";
 import Constants from "expo-constants";
 import { Typography } from "heroui-native";
@@ -11,8 +12,6 @@ import {
   SettingsSection,
 } from "@/features/settings/components/settings-content";
 import { useText } from "@/shared/lib/text";
-
-const PRODUCT_NAME = "GoAhead";
 
 export function AboutSettingsScreen() {
   const { t } = useText();
@@ -28,11 +27,8 @@ export function AboutSettingsScreen() {
   return (
     <SettingsContent>
       <SettingsSection title={t("mobile.settings.about.resources")}>
-        <SettingsRow onPress={() => open("https://openbot.run")}>
+        <SettingsRow onPress={() => open(PRODUCT_IDENTITY.siteOrigin)}>
           <Typography.Paragraph type="body-sm">{t("mobile.settings.about.website")}</Typography.Paragraph>
-        </SettingsRow>
-        <SettingsRow onPress={() => open("https://github.com/nightly-labs/openbot/blob/main/PRIVACY.md")}>
-          <Typography.Paragraph type="body-sm">{t("mobile.settings.about.privacy")}</Typography.Paragraph>
         </SettingsRow>
         {error ? <SettingsNote>{error}</SettingsNote> : null}
       </SettingsSection>
@@ -40,7 +36,7 @@ export function AboutSettingsScreen() {
         <AppLogo size={56} interactive />
         <View className="items-center gap-1">
           <Typography.Heading type="h4" align="center">
-            {PRODUCT_NAME}
+            {PRODUCT_IDENTITY.name}
           </Typography.Heading>
           <Typography.Paragraph type="body-xs" align="center" className="text-grouped-secondary" selectable>
             {versionLabel}

@@ -84,7 +84,7 @@ describe("iOS release", () => {
       end
       def upload_to_testflight(**options)
         expected = {api_key: {token: "fake-token"}, ipa: ENV.fetch("IPA_PATH"),
-          app_identifier: "run.openbot.mobile", skip_waiting_for_build_processing: true, distribute_external: false}
+          app_identifier: "com.multicodegenius.goahead.mobile", skip_waiting_for_build_processing: true, distribute_external: false}
         raise "Wrong upload destination or options" unless options == expected
         raise "Apple rejected the upload" if ENV["TEST_UPLOAD_FAILURE"] == "1"
         puts "uploaded"

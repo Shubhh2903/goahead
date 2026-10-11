@@ -35,7 +35,7 @@ describe("development Mobile Connect links", () => {
     expect(acceptDevelopmentConnectLink(lanLink, true)).toBe(true);
     expect(takeMobileConnectLink()).toBe(lanLink);
     expect(takeMobileConnectLink()).toBeNull();
-    expect(acceptDevelopmentConnectLink("openbot://agents/1", true)).toBe(false);
+    expect(acceptDevelopmentConnectLink("goahead://agents/1", true)).toBe(false);
   });
 
   it("matches a stored session of the same account service and desktop", () => {

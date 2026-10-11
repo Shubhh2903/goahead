@@ -1,16 +1,17 @@
 {
   "expo": {
-    "name": "OpenBot",
-    "slug": "openbot",
+    "name": "GoAhead",
+    "slug": "goahead",
     "platforms": ["ios", "android"],
     "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icons/app-icon.png",
-    "scheme": "openbot",
+    "scheme": "goahead",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "run.openbot.mobile",
-      "associatedDomains": ["applinks:openbot.run"],
+      "bundleIdentifier": "com.multicodegenius.goahead.mobile",
+      "appleTeamId": "S29HD2MDR4",
+      "associatedDomains": ["applinks:goahead.multicodegenius.com"],
       "infoPlist": {
         "CFBundleDisplayName": "GoAhead",
         "NSLocalNetworkUsageDescription": "Allow GoAhead to connect to your desktop during local development.",
@@ -22,7 +23,7 @@
       "icon": "./assets/icons/app-icon.icon"
     },
     "android": {
-      "package": "run.openbot.mobile",
+      "package": "com.multicodegenius.goahead.mobile",
       "icon": "./assets/icons/app-icon.png",
       "predictiveBackGestureEnabled": false,
       "permissions": ["android.permission.CAMERA"]
@@ -94,8 +95,8 @@
       [
         "expo-widgets",
         {
-          "bundleIdentifier": "run.openbot.mobile.ExpoWidgetsTarget",
-          "groupIdentifier": "group.run.openbot.mobile",
+          "bundleIdentifier": "com.multicodegenius.goahead.mobile.ExpoWidgetsTarget",
+          "groupIdentifier": "group.com.multicodegenius.goahead.mobile",
           "enablePushNotifications": true,
           "frequentUpdates": true
         }
@@ -106,17 +107,10 @@
       "reactCompiler": true
     },
     "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "eeec730f-c8f4-42c0-a750-64df8af14940"
-      }
+      "router": {}
     },
-    "owner": "openbot",
     "runtimeVersion": {
       "policy": "fingerprint"
-    },
-    "updates": {
-      "url": "https://u.expo.dev/eeec730f-c8f4-42c0-a750-64df8af14940"
     }
   }
 }
