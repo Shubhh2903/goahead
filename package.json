@@ -209,6 +209,7 @@
     "skills:seed": "bun scripts/seed-marketplace-skills.ts",
     "release:preflight": "bun scripts/release-preflight.ts",
     "release:local": "bun scripts/release-local.ts",
+    "release:mobile:local": "bun scripts/release-mobile-local.ts",
     "release:patch": "bun scripts/prepare-release.ts patch",
     "release:minor": "bun scripts/prepare-release.ts minor",
     "release:major": "bun scripts/prepare-release.ts major",

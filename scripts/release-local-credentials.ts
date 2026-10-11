@@ -27,21 +27,7 @@ export type LocalCredentials = {
  */
 export function checkLocalCredentials(): LocalCredentials {
   const problems: string[] = [];
-  const fileValues = readReleaseEnvFile(problems);
-
-  const notarization: Partial<Record<NotarizationVariable, string>> = {};
-  for (const name of NOTARIZATION_VARIABLES) {
-    const value = process.env[name]?.trim() || fileValues.get(name)?.trim();
-    if (!value) {
-      problems.push(`${name} is not set in the environment or in ${RELEASE_ENV_FILE}`);
-      continue;
-    }
-    if (name !== "APPLE_TEAM_ID") registerSecretValue(value);
-    notarization[name] = value;
-  }
-  if (notarization.APPLE_TEAM_ID !== undefined && notarization.APPLE_TEAM_ID !== RELEASE_TEAM_ID) {
-    problems.push(`APPLE_TEAM_ID is not the company team ${RELEASE_TEAM_ID}`);
-  }
+  const notarization = readAppleVariables(problems);
 
   let identities: DeveloperIdIdentities = { application: null, installer: null };
   try {
@@ -59,6 +45,38 @@ export function checkLocalCredentials(): LocalCredentials {
     problems.push(`no valid "Developer ID Installer: … (${RELEASE_TEAM_ID})" identity in the keychain`);
   }
   return { problems, applicationIdentity: identities.application, notarization };
+}
+
+export type AppleUploadCredentials = {
+  problems: string[];
+  values: Partial<Record<NotarizationVariable, string>>;
+};
+
+/**
+ * Checks only the Apple ID variables, for an upload that signs with Xcode and needs no Developer ID
+ * identity (`bun run release:mobile:local`). Each value except the team id is registered as a secret.
+ */
+export function checkAppleUploadCredentials(): AppleUploadCredentials {
+  const problems: string[] = [];
+  return { problems, values: readAppleVariables(problems) };
+}
+
+function readAppleVariables(problems: string[]): Partial<Record<NotarizationVariable, string>> {
+  const fileValues = readReleaseEnvFile(problems);
+  const values: Partial<Record<NotarizationVariable, string>> = {};
+  for (const name of NOTARIZATION_VARIABLES) {
+    const value = process.env[name]?.trim() || fileValues.get(name)?.trim();
+    if (!value) {
+      problems.push(`${name} is not set in the environment or in ${RELEASE_ENV_FILE}`);
+      continue;
+    }
+    if (name !== "APPLE_TEAM_ID") registerSecretValue(value);
+    values[name] = value;
+  }
+  if (values.APPLE_TEAM_ID !== undefined && values.APPLE_TEAM_ID !== RELEASE_TEAM_ID) {
+    problems.push(`APPLE_TEAM_ID is not the company team ${RELEASE_TEAM_ID}`);
+  }
+  return values;
 }
 
 function readReleaseEnvFile(problems: string[]): Map<string, string> {

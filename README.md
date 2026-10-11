@@ -343,6 +343,7 @@ See [web client delivery](docs/web-client.md) for the release gate and focused c
 | `bun scripts/create-github-app.ts [--org <org>]` | Create the GoAhead GitHub App from `scripts/github-app/manifest.json` with the manifest flow. Prints the Client ID for `src/main/github-connector-config.ts` and writes the app secrets to `~/.config/openbot/github-app-<slug>.json` (mode 0600). Enable Device Flow in the app settings after the run. |
 | `bun run release:preflight` | Verify version, Git state, and the local signing and notarization credentials before tagging. |
 | `bun run release:local` | Build, sign, notarize, verify, and publish the macOS arm64 release on this Mac after the tag is pushed. `-- --dry-run` checks only. See [Local release](docs/RELEASING.md#local-release). |
+| `bun run release:mobile:local` | Build, sign, and upload the GoAhead phone app to TestFlight on this Mac with Xcode and the Apple ID in `.env.release`. `-- --dry-run` checks only; `-- --build-number=<n>` sets the build number. See [Local TestFlight release](docs/goahead-internal-release.md#local-testflight-release-goahead). |
 | `bun run dist:mac` | Build unsigned local DMG and ZIP update artifacts for this Mac. |
 | `bun run dist:win` | Build an unsigned Windows x64 NSIS installer on Windows. |
 | `bun run dist:linux` | Build an unsigned Linux x64 AppImage on Linux. |

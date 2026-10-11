@@ -362,6 +362,26 @@ the OpenBot phone app do not move to it.
    and `APNS_TOPIC` (`com.multicodegenius.goahead.mobile`) are set in the `goahead` env of
    `wrangler.jsonc`. Deploy again. Without the key, the relay stays off.
 
+### Local TestFlight release (GoAhead)
+
+The App Store Connect app record is "GoAhead by Multi Code Genius". `bun run release:mobile:local`
+uploads a new build to it from this Mac. It does not need an App Store Connect API key: Xcode signs
+with automatic signing, and `xcrun altool` uploads with `APPLE_ID` and `APPLE_APP_SPECIFIC_PASSWORD`
+from `.env.release` (see `.env.release.example`; `APPLE_TEAM_ID` is `S29HD2MDR4`).
+
+The script needs macOS, Xcode, CocoaPods (`brew install cocoapods`) and a clean working tree. It
+runs Expo prebuild and `pod install`, sets the version and build number in the app and widget
+`Info.plist` files, archives, exports and verifies the IPA, and uploads it. The files go to
+`.openbot-build/mobile-testflight/<build>/`.
+
+- The version is `expo.version` in `apps/mobile/app.json`.
+- The build number is the UTC time as `YYMMDDHHmm`, for example `2610111530`. Each upload must use
+  a larger number than the last one (the first upload was build `1`). `--build-number=<n>` sets it.
+- `-- --dry-run` checks the preconditions and credentials and prints the steps. It runs none of them.
+
+After the upload, Apple processes the build in 10-30 minutes. Then open TestFlight > Internal
+Testing and add the build to the group.
+
 ## 7. Release
 
 Releases are built on the release Mac, for Apple silicon (arm64) only. No GitHub Actions workflow
