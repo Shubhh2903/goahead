@@ -20,3 +20,6 @@
   also stays.
 - Slack drafts that wait for your approval stay after you restart GoAhead. You can still approve or
   deny them, and an approved draft is sent only once.
+- When Slack stops accepting GoAhead's access (for example, the app was removed from the workspace),
+  GoAhead turns auto-reply off in every conversation of that workspace. After you connect again, you
+  turn it on again where you want it.

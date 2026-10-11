@@ -7,4 +7,6 @@
 - Open a thread in a side panel, answer in it, and also send the answer to the channel.
 - Add and remove reactions, attach files of up to 50 MB, mention people with `@`, and edit or delete
   your own messages. Edits, deletes and reactions made in Slack show in GoAhead within seconds.
-- **Connect Slack again in Settings > Connectors > Slack after you upgrade.**
+- **Connect Slack again in Settings > Connectors > Slack after you upgrade.** GoAhead needs two new
+  Slack permissions for attachments and reactions. You keep your conversations, agents, drafts and
+  settings. Until you connect again, attachments fail and reactions made in Slack do not show.

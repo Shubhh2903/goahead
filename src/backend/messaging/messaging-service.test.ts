@@ -668,6 +668,23 @@ describe.sequential("Slack messaging end to end", () => {
     report.deletion = { credentialsLeft: credentials.values.size };
   });
 
+  it("clears the auto-reply list when Slack no longer accepts the token", async () => {
+    const started = await connected({ user: true });
+    started.service.messaging.inbox.cache.upsertConversations(started.connectionId, [
+      { channelId: "D-UALICE", kind: "im", name: "", memberIds: ["UALICE", "UOWNER"], isMember: true },
+    ]);
+    await messaging?.slackClientSetAutoReply({ workspaceId: "T1", channelId: "D-UALICE", on: true });
+    expect(started.service.messaging.autoReply.isOn(started.connectionId, "D-UALICE")).toBe(true);
+
+    slack.rejectBotToken = true;
+    await messaging?.reconnect("T1");
+    await waitFor(() => workspace()?.state === "invalid_token");
+    slack.rejectBotToken = false;
+
+    // A later connect, perhaps as another person, must not send without approval.
+    expect(started.service.messaging.autoReply.hasAny(started.connectionId)).toBe(false);
+  });
+
   it("gives an orchestrator from an earlier build the current rules, and keeps the agent and the person's text", async () => {
     const released = PREVIOUS_SLACK_ORCHESTRATOR_DESCRIPTIONS[0] ?? "";
     const { agent } = await connected({ description: `${released}\n\nSign as Ana.` });

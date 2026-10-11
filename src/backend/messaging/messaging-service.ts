@@ -1954,6 +1954,9 @@ export class MessagingService {
       // A second fatal report for a stopped connection must not unlink the workspace again.
       if (wasFatal) return;
       logger.warn("A messaging connection stopped.", { platform: live.record.platform, state });
+      // As on a disconnect: a later connect, perhaps as another person, must not auto-send.
+      this.#threads.autoReply.clearConnection(live.record.connectionId);
+      this.#autoReplyLoop.forget((key) => key.startsWith(`${live.record.connectionId}\n`));
       // The workspace uninstalled OpenBot or revoked its token: Signal stops routing it here.
       void this.#connect?.unlink(live.record.workspaceId).catch((error) => this.#warn(error));
     }
