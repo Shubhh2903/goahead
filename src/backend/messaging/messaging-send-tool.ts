@@ -32,9 +32,15 @@ export const SLACK_SEND_MESSAGE_TOOL = {
       .min(1)
       .max(400)
       .describe(
-        "The Slack user id (U…) or channel id (C…) to send to, as it appears in the conversation, such as <@U0123>. For a group direct message, up to 8 user ids separated by commas, such as <@U0123>, <@U0456>.",
+        "Who gets it. Use the person's or channel's name, such as Harsh Patel or #general; ids are not required. A Slack user id (U…) or channel id (C…), such as <@U0123>, also works. For a group direct message, up to 8 user ids separated by commas, such as <@U0123>, <@U0456>.",
       ),
-    text: z.string().min(1).max(INPUT_LIMITS.messageText).describe("The message, in plain text or simple markdown."),
+    text: z
+      .string()
+      .min(1)
+      .max(INPUT_LIMITS.messageText)
+      .describe(
+        "The message, in plain text or simple markdown. When the GoAhead user asked in GoAhead, write @Name, such as @Harsh Patel, to mention a person.",
+      ),
     threadTs: z
       .string()
       .max(64)

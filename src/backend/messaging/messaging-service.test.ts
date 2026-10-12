@@ -66,6 +66,19 @@ class FakeSlack {
   readonly holds = new Map<string, Promise<void>>();
   /** What `conversations.history` answers. */
   history: DynamicRecord[] = [];
+  /** What `users.list` answers: the workspace's people, a deleted one and a bot among them. */
+  members: DynamicRecord[] = [
+    {
+      id: "UHARSH",
+      name: "harsh.p",
+      real_name: "Harsh Patel",
+      profile: { display_name: "harsh", real_name: "Harsh Patel", first_name: "Harsh", title: "Engineer" },
+    },
+    { id: "UPRIYA1", name: "priya.s", profile: { real_name: "Priya Shah", first_name: "Priya", title: "Design" } },
+    { id: "UPRIYA2", name: "priya.m", profile: { real_name: "Priya Mehta", first_name: "Priya", title: "Sales" } },
+    { id: "UGONE", name: "ghost", deleted: true, profile: { real_name: "Ghost Writer" } },
+    { id: "UBUILD", name: "builder", is_bot: true, profile: { real_name: "Builder Bot" } },
+  ];
   #server: Server | null = null;
   #ts = 1000;
   origin = "";
@@ -195,6 +208,8 @@ class FakeSlack {
         );
       case "bots.info":
         return reply({ bot: { app_id: "A1" } });
+      case "users.list":
+        return reply({ members: this.members });
       case "users.info":
         return reply({ user: { name: params.user?.toLowerCase(), profile: { display_name: `Name ${params.user}` } } });
       case "conversations.info":
@@ -454,6 +469,18 @@ async function appTurn(
   const [turnId] = turnIds;
   if (!isString(threadId) || !turnId) throw new Error("The app message started no turn.");
   return { threadId, turnId };
+}
+
+/** The turns that the fake provider starts, in order. */
+function trackTurns(client: FakeAgentClient) {
+  const turns: Array<{ threadId: string; turnId: string }> = [];
+  client.on("notification", (event: { method: string; params: unknown }) => {
+    const params = paramsRecord(event.params);
+    const turn = params && paramsRecord(params.turn);
+    if (event.method === "turn/started" && isString(params?.threadId) && isString(turn?.id))
+      turns.push({ threadId: params.threadId, turnId: turn.id });
+  });
+  return turns;
 }
 
 function workspace() {
@@ -1602,6 +1629,199 @@ describe.sequential("Slack messaging end to end", () => {
     await waitFor(() => turnStarts(started.client).length === beforeLoop + 4);
     expect(promptOf(turnStarts(started.client).at(-1) ?? { params: null })).toContain("ping again");
     report.autoReplyLoop = { pausedAfter: 10, toggleStaysOn: true, resetByOwnMessage: true, resumed: true };
+  });
+
+  it("the orchestrator sends as the person when they ask in GoAhead, and the send is marked", async () => {
+    const started = await connected({ user: true, autoComplete: false });
+    const turn = await appTurn(started, (input) => started.service.sendLocalOwnerMessage(input));
+
+    const answer = await callOpenBotTool(
+      started.client,
+      turn.threadId,
+      "slack_send_message",
+      { to: "<@UHARSH>", text: "The plan: ship on Friday." },
+      turn.turnId,
+    );
+    expect(openBotToolPayload(answer.result)).toMatchObject({
+      status: "sent",
+      sentAs: "the GoAhead user",
+      to: "Name UHARSH",
+    });
+    expect(
+      slack.of("chat.postMessage").filter((call) => call.params.text === "The plan: ship on Friday."),
+    ).toMatchObject([{ as: "user", params: { channel: "D-UHARSH" } }]);
+    const [record] = started.service.messaging.store.sends();
+    expect(record).toMatchObject({ fromGoAhead: true, sender: "user", linkId: null, to: "user:UHARSH" });
+    expect(record?.autoSent).toBeUndefined();
+    report.goAheadSend = { asUser: true, fromGoAhead: true };
+  });
+
+  it("a hand-off of the person's request from Chief sends to a channel with a mention", async () => {
+    const started = await connected({ user: true, autoComplete: false });
+    const chief = await started.store.getOrCreate("chief");
+    const turns = trackTurns(started.client);
+    await started.service.sendLocalOwnerMessage({ agentId: chief.id, text: "tell Harsh Patel the plan" });
+    await waitFor(() => turns.length === 1);
+    const [chiefTurn] = turns;
+    if (!chiefTurn) throw new Error("Chief did not start a turn.");
+    await callOpenBotTool(
+      started.client,
+      chiefTurn.threadId,
+      "send_message",
+      { recipientAgentIds: [started.agent.id], text: "Tell Harsh Patel the plan in #general." },
+      chiefTurn.turnId,
+    );
+    await waitFor(() => turns.length === 2);
+    const handOff = turns[1];
+    if (!handOff) throw new Error("The orchestrator did not start a turn.");
+
+    const answer = await callOpenBotTool(
+      started.client,
+      handOff.threadId,
+      "slack_send_message",
+      { to: "<#C7>", text: "<@UHARSH> the plan is ready. <!here>" },
+      handOff.turnId,
+    );
+    expect(openBotToolPayload(answer.result)).toMatchObject({ status: "sent", to: "#general" });
+    expect(slack.of("chat.postMessage").filter((call) => call.params.channel === "C7")).toMatchObject([
+      // The user mention pings; `<!here>` stays inert.
+      { as: "user", params: { text: "<@UHARSH> the plan is ready. &lt;!here&gt;" } },
+    ]);
+    expect(started.service.messaging.store.sends()).toMatchObject([{ fromGoAhead: true, to: "channel:C7" }]);
+  });
+
+  it("a GoAhead send is refused while sends are paused, and in quiet hours", async () => {
+    const started = await connected({ user: true, autoComplete: false });
+    const turn = await appTurn(started, (input) => started.service.sendLocalOwnerMessage(input));
+    const send = () =>
+      callOpenBotTool(
+        started.client,
+        turn.threadId,
+        "slack_send_message",
+        { to: "<@UHARSH>", text: "Hello" },
+        turn.turnId,
+      );
+
+    await messaging?.setSendGuards("T1", { paused: true });
+    expect(openBotToolPayload((await send()).result).error).toBe(
+      "Slack sends are paused in GoAhead. Nothing was sent.",
+    );
+
+    const now = new Date();
+    const time = (date: Date) =>
+      `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+    const end = time(new Date(now.getTime() + 60 * 60_000));
+    await messaging?.setSendGuards("T1", { paused: false, quietHours: { start: time(now), end } });
+    expect(openBotToolPayload((await send()).result).error).toBe(
+      `Quiet hours: GoAhead sends no Slack messages until ${end}. Nothing was sent. Ask again after ${end}.`,
+    );
+    expect(slack.of("chat.postMessage").filter((call) => call.params.text === "Hello")).toEqual([]);
+    expect(started.service.messaging.store.sends()).toEqual([]);
+    expect(messaging?.listDrafts()).toEqual([]);
+  });
+
+  it("a GoAhead send needs the orchestrator and the person's own turn", async () => {
+    const started = await connected({ user: true, autoComplete: false });
+    const chief = await started.store.getOrCreate("chief");
+    const turns = trackTurns(started.client);
+    // Another agent in the person's own turn.
+    await started.service.sendLocalOwnerMessage({ agentId: chief.id, text: "tell Harsh" });
+    await waitFor(() => turns.length === 1);
+    const [chiefTurn] = turns;
+    if (!chiefTurn) throw new Error("Chief did not start a turn.");
+    const refused = await callOpenBotTool(
+      started.client,
+      chiefTurn.threadId,
+      "slack_send_message",
+      { to: "<@UHARSH>", text: "Hello" },
+      chiefTurn.turnId,
+    );
+    // Chief learns to hand the message to the orchestrator; it gets no send rights.
+    expect(openBotToolPayload(refused.result).error).toBe(
+      `Only the ${started.agent.name} sends Slack messages from GoAhead. Nothing was sent. Give it the message and the recipient with send_message (agent id ${started.agent.id}).`,
+    );
+
+    // The orchestrator in a turn that the person did not start, as from a Team API member.
+    await started.service.sendMessage({ agentId: started.agent.id, text: "tell Harsh" });
+    await waitFor(() => turns.length === 2);
+    const other = turns[1];
+    if (!other) throw new Error("The orchestrator did not start a turn.");
+    const notOwner = await callOpenBotTool(
+      started.client,
+      other.threadId,
+      "slack_send_message",
+      { to: "<@UHARSH>", text: "Hello" },
+      other.turnId,
+    );
+    expect(openBotToolPayload(notOwner.result).error).toBe("A message can only be drafted from a Slack conversation.");
+    expect(slack.of("chat.postMessage").filter((call) => call.params.text === "Hello")).toEqual([]);
+  });
+
+  it("an orchestrator added after the connection sends a hand-off by name, with a mention in the text", async () => {
+    const started = await connected({ user: true, autoComplete: false, orchestrator: false });
+    // Added while the workspace is live, as in the app: the live connection must learn about it.
+    const added = await messaging?.addOrchestrator({ workspaceId: "T1" });
+    if (!added) throw new Error("No orchestrator was added.");
+    const chief = await started.store.getOrCreate("chief");
+    const turns = trackTurns(started.client);
+    await started.service.sendLocalOwnerMessage({ agentId: chief.id, text: "tell Harsh Patel the plan" });
+    await waitFor(() => turns.length === 1);
+    const [chiefTurn] = turns;
+    if (!chiefTurn) throw new Error("Chief did not start a turn.");
+    await callOpenBotTool(
+      started.client,
+      chiefTurn.threadId,
+      "send_message",
+      { recipientAgentIds: [added.agentId], text: "Send Harsh Patel: the plan is ready." },
+      chiefTurn.turnId,
+    );
+    await waitFor(() => turns.length === 2);
+    const handOff = turns[1];
+    if (!handOff) throw new Error("The orchestrator did not start a turn.");
+    // Harsh is in no cached conversation: only `users.list` knows him.
+    expect(started.service.messaging.inbox.cache.conversations(started.connectionId)).toEqual([]);
+
+    const answer = await callOpenBotTool(
+      started.client,
+      handOff.threadId,
+      "slack_send_message",
+      { to: "Harsh Patel", text: "The plan is ready, @Harsh. @Priya please review." },
+      handOff.turnId,
+    );
+    expect(openBotToolPayload(answer.result)).toMatchObject({ status: "sent", ambiguousMentions: ["Priya"] });
+    expect(slack.of("chat.postMessage").filter((call) => call.params.channel === "D-UHARSH")).toMatchObject([
+      { as: "user", params: { text: "The plan is ready, <@UHARSH>. @Priya please review." } },
+    ]);
+    expect(started.service.messaging.store.sends()).toMatchObject([{ fromGoAhead: true, to: "user:UHARSH" }]);
+    report.goAheadHandOff = { byName: true, mention: true };
+  });
+
+  it("a GoAhead send by name refuses a shared or unknown name, and finds a channel by name", async () => {
+    const started = await connected({ user: true, autoComplete: false });
+    started.service.messaging.inbox.cache.upsertConversations(started.connectionId, [
+      { channelId: "C7", kind: "channel", name: "general", memberIds: [], isMember: true },
+    ]);
+    const turn = await appTurn(started, (input) => started.service.sendLocalOwnerMessage(input));
+    const send = async (to: string) =>
+      openBotToolPayload(
+        (await callOpenBotTool(started.client, turn.threadId, "slack_send_message", { to, text: "Hi" }, turn.turnId))
+          .result,
+      );
+
+    expect((await send("priya")).error).toBe(
+      'More than one match in Slack for "priya": Priya Shah (Design), Priya Mehta (Sales). Nothing was sent. Ask the GoAhead user which one they mean.',
+    );
+    // A deleted person and a bot are not people to send to.
+    expect((await send("Ghost Writer")).error).toBe(
+      'No one in the Slack workspace is named "Ghost Writer". Nothing was sent. Ask the GoAhead user for the full name.',
+    );
+    expect((await send("Builder Bot")).error).toContain("No one in the Slack workspace");
+    expect(slack.of("chat.postMessage").filter((call) => call.params.text === "Hi")).toEqual([]);
+
+    expect(await send("#general")).toMatchObject({ status: "sent", to: "#general" });
+    expect(slack.of("chat.postMessage").filter((call) => call.params.text === "Hi")).toMatchObject([
+      { as: "user", params: { channel: "C7" } },
+    ]);
   });
 
   it("writes the report", () => {

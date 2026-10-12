@@ -19,6 +19,17 @@ export const messages = defineMessages("error.messaging", {
   // A send that the person's guards stop. The agent reads these, and so does the person.
   "error.messaging.sendPaused": "Slack sends are paused in GoAhead. Nothing was sent.",
   "error.messaging.sendQuietHours": "Quiet hours: GoAhead sends no Slack messages until {time}. The draft waits.",
+  "error.messaging.sendQuietHoursNoDraft":
+    "Quiet hours: GoAhead sends no Slack messages until {time}. Nothing was sent. Ask again after {time}.",
+  "error.messaging.sendNameUnknown":
+    'No one in the Slack workspace is named "{name}". Nothing was sent. Ask the GoAhead user for the full name.',
+  "error.messaging.sendNameAmbiguous":
+    'More than one match in Slack for "{name}": {people}. Nothing was sent. Ask the GoAhead user which one they mean.',
+  "error.messaging.sendChannelUnknown": 'No Slack channel is named "#{name}". Nothing was sent.',
+  "error.messaging.sendUseOrchestrator":
+    "Only the {name} sends Slack messages from GoAhead. Nothing was sent. Give it the message and the recipient with send_message (agent id {agentId}).",
+  "error.messaging.sendWorkspaceUnclear":
+    "The recipient is not in exactly one of your Slack workspaces. Nothing was sent. Use a user or channel ID from one workspace.",
   // A Slack conversation that the sidebar asked for is gone or is not a Slack conversation.
   "error.messaging.threadUnavailable": "This Slack conversation is not available.",
   // An agent's read of the GoAhead user's local Slack inbox that is refused.

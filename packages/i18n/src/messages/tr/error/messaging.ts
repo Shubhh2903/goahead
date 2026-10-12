@@ -18,6 +18,10 @@ export const messages = {
   "error.messaging.sendPaused": "Slack gönderimleri GoAhead'de duraklatıldı. Hiçbir şey gönderilmedi.",
   "error.messaging.sendQuietHours":
     "Sessiz saatler: GoAhead {time} saatine kadar Slack mesajı göndermez. Taslak bekler.",
+  "error.messaging.sendQuietHoursNoDraft":
+    "Sessiz saatler: GoAhead {time} saatine kadar Slack mesajı göndermez. Hiçbir şey gönderilmedi. {time} sonrasında tekrar isteyin.",
+  "error.messaging.sendWorkspaceUnclear":
+    "Alıcı, Slack çalışma alanlarınızdan tam olarak birinde değil. Hiçbir şey gönderilmedi. Tek bir çalışma alanından bir kullanıcı veya kanal kimliği kullanın.",
   "error.messaging.threadUnavailable": "Bu Slack konuşması kullanılamıyor.",
   "error.messaging.inboxNeedsSlack":
     "Slack mesajları yalnızca GoAhead ile doğrudan mesajınızda veya bu bilgisayardaki GoAhead'te Slack Orchestrator'a sorduğunuzda okunabilir.",

@@ -345,6 +345,8 @@ const INBOX_LOOKUPS = 50;
 const MENTION_MARKERS = /[\uE000-\uE001]/g;
 /** The most people one `@` search of the Slack client offers. */
 const MENTION_CANDIDATES = 20;
+/** An `@` that starts a name in message text: at the start, or after a space or an opening bracket. */
+const TEXT_MENTION = /(?:^|[\s(])@(?=[^\s@<>])/u;
 /** How long an auto-reply conversation waits after a new message, so several quick messages get one turn. */
 const AUTO_REPLY_WAIT_MS = 10_000;
 /** The longest wait from the first message, however many follow. */
@@ -698,6 +700,10 @@ export class MessagingService {
     for (const text of slackOrchestratorMemories(record.workspaceName))
       this.#agents.createMemory({ agentId: agent.id, text });
     this.#threads.store.updateConnection(record.connectionId, { orchestratorAgentId: agent.id });
+    // The live connection keeps its own copy of the record: without this, it knows no orchestrator
+    // until the next restart, and the new orchestrator cannot send or read the inbox.
+    const live = this.#live.get(record.connectionId);
+    if (live) live.record = this.#threads.store.connection(record.connectionId) ?? live.record;
     // The Slack inbox row sits under the orchestrator: the desktop reads the inbox list again.
     this.#inboxChanged(record.workspaceId);
     // A sidebar it cannot reach leaves the agent where new agents go; the orchestrator still answers.
@@ -2416,13 +2422,16 @@ export class MessagingService {
    */
   async #requestSend(request: MessagingSendRequest): Promise<MessagingSendReceipt> {
     const link = this.#threads.store.linkForThread(request.threadId);
-    if (!link) return this.#autoReplyFromApp(request);
+    if (!link) return request.ownerTurn ? this.#sendFromGoAhead(request) : this.#autoReplyFromApp(request);
     const live = this.#live.get(link.connectionId);
     if (!live?.identity) throw new Error(sourceText("error.messaging.notConnected"));
     const credentials = this.#credentials.get(link.connectionId);
     const approverId = credentials?.userId;
     if (!approverId) throw new Error(sourceText("error.messaging.sendNeedsUser"));
-    const { to, text } = await this.#sendTarget(live, credentials, approverId, request);
+    const { to, text } = await this.#sendTarget(live, credentials, approverId, {
+      ...request,
+      to: await this.#namedTarget(live, request.to),
+    });
     // A pause refuses at once, with no draft: the agent learns that nothing went out.
     const refused = this.#sendRefusal(live.record);
     if (refused) throw new Error(refused);
@@ -2457,7 +2466,7 @@ export class MessagingService {
       createdAt: new Date().toISOString(),
     };
     if (autoReplyChannel !== null) {
-      const sentLink = await this.#deliver(live, draft, approverId, true);
+      const sentLink = await this.#deliver(live, draft, approverId, "autoSent");
       this.#autoReplySent(live, autoReplyChannel);
       return { status: "sent", draftId, sender, approverId, link: sentLink, autoSent: true };
     }
@@ -2571,9 +2580,213 @@ export class MessagingService {
       onBehalfOf: null,
       createdAt: new Date().toISOString(),
     };
-    const sentLink = await this.#deliver(live, draft, approverId, true);
+    const sentLink = await this.#deliver(live, draft, approverId, "autoSent");
     this.#autoReplySent(live, channelId);
     return { status: "sent", draftId, sender: "user", approverId, link: sentLink, autoSent: true };
+  }
+
+  /**
+   * The person asked the orchestrator in GoAhead, in its own conversation or through another agent's
+   * hand-off: the message goes out as them, at once, as if they sent it in Slack. A pause refuses.
+   * Quiet hours refuse too: with no Slack conversation, there is no place for a draft to wait.
+   */
+  async #sendFromGoAhead(request: MessagingSendRequest): Promise<MessagingSendReceipt> {
+    const owned = [...this.#live.values()].filter(
+      (candidate) =>
+        candidate.record.platform === "slack" &&
+        candidate.record.orchestratorAgentId === request.agentId &&
+        candidate.identity !== null,
+    );
+    if (owned.length === 0) throw new Error(this.#notOrchestratorError());
+    const asUser = owned.filter((candidate) => {
+      const credentials = this.#credentials.get(candidate.record.connectionId);
+      return Boolean(credentials?.userId && credentials.userToken);
+    });
+    const [only] = asUser;
+    if (!only) throw new Error(sourceText("error.messaging.sendNeedsUser"));
+    const chosen = asUser.length === 1 ? { live: only, to: await this.#namedTarget(only, request.to) } : null;
+    const { live, to: target } = chosen ?? (await this.#workspaceOfTarget(asUser, request));
+    const credentials = this.#credentials.get(live.record.connectionId) ?? {};
+    const approverId = credentials.userId ?? "";
+    const refused = this.#sendRefusal(live.record);
+    if (refused) throw new Error(refused);
+    const quietHours = this.#guards.get(live.record.workspaceId).quietHours;
+    if (quietHours && inQuietHours(quietHours, new Date()))
+      throw new Error(sourceText("error.messaging.sendQuietHoursNoDraft", { time: quietHours.end }));
+    const mentions = await this.#textMentions(live, request.text);
+    const { to, text } = await this.#sendTarget(live, credentials, approverId, {
+      ...request,
+      to: target,
+      text: mentions.text,
+    });
+    const recipient = await this.#recipientName(live, to);
+    const draftId = randomUUID();
+    const draft: DeliveryDraft = {
+      draftId,
+      linkId: null,
+      agentId: request.agentId,
+      to,
+      text,
+      threadKey: request.threadKey,
+      sender: "user",
+      recipient,
+      requestedBy: null,
+      onBehalfOf: null,
+      createdAt: new Date().toISOString(),
+    };
+    const sentLink = await this.#deliver(live, draft, approverId, "fromGoAhead");
+    return {
+      status: "sent",
+      draftId,
+      sender: "user",
+      approverId,
+      link: sentLink,
+      fromGoAhead: true,
+      recipient,
+      ...(mentions.ambiguous.length > 0 ? { ambiguousMentions: mentions.ambiguous } : {}),
+    };
+  }
+
+  /**
+   * The one workspace, of several that the agent orchestrates, that knows every person or the
+   * channel of the target. Slack ids do not name their workspace, so a lookup decides. Any doubt refuses.
+   */
+  async #workspaceOfTarget(
+    candidates: LiveConnection[],
+    request: MessagingSendRequest,
+  ): Promise<{ live: LiveConnection; to: string }> {
+    const known = await Promise.all(
+      candidates.map(async (live) => {
+        const credentials = this.#credentials.get(live.record.connectionId) ?? {};
+        try {
+          const target = await this.#namedTarget(live, request.to);
+          const { to } = await this.#sendTarget(live, credentials, credentials.userId ?? "", {
+            ...request,
+            to: target,
+          });
+          const ids = to.kind === "channel" ? [to.id] : slackTargetPeople(to);
+          const names = await Promise.all(
+            ids.map((id) => (to.kind === "channel" ? live.adapter.placeName(id) : live.adapter.authorName(id))),
+          );
+          return names.every((name, index) => name !== ids[index]) ? { live, to: target } : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    const matches = known.filter((match) => match !== null);
+    const [match] = matches;
+    if (matches.length !== 1 || !match) throw new Error(sourceText("error.messaging.sendWorkspaceUnclear"));
+    return match;
+  }
+
+  /**
+   * A person or channel that the agent names, such as "Harsh Patel" or "#general", becomes its id:
+   * people from the workspace's member list, read from Slack, channels from the person's conversation
+   * list. A target that is already an id stays. No match, or several, refuses with the names.
+   */
+  async #namedTarget(live: LiveConnection, to: string): Promise<string> {
+    if (parseSlackSendTarget(to)) return to;
+    const trimmed = to.trim();
+    if (trimmed.startsWith("#")) return `<#${await this.#namedChannel(live, trimmed.slice(1).trim())}>`;
+    const name = trimmed.replace(/^@/u, "").trim();
+    if (!name || !live.adapter.findPeople) throw new Error(sourceText("error.messaging.sendTargetInvalid"));
+    const people = await live.adapter.findPeople(name);
+    const [person] = people;
+    if (!person) throw new Error(sourceText("error.messaging.sendNameUnknown", { name }));
+    if (people.length > 1)
+      throw new Error(
+        sourceText("error.messaging.sendNameAmbiguous", {
+          name,
+          people: people.map((match) => (match.title ? `${match.name} (${match.title})` : match.name)).join(", "),
+        }),
+      );
+    return `<@${person.id}>`;
+  }
+
+  /** The one channel of the person's conversation list with this name. The list is read again on a miss. */
+  async #namedChannel(live: LiveConnection, name: string): Promise<string> {
+    const connectionId = live.record.connectionId;
+    const needle = name.toLowerCase();
+    const matches = () =>
+      this.#threads.inbox.cache
+        .conversations(connectionId)
+        .filter((conversation) => conversation.name && conversation.name.toLowerCase() === needle);
+    let found = matches();
+    if (found.length === 0) {
+      await this.#slackSync.refreshConversations(connectionId, "visible");
+      found = matches();
+    }
+    const [channel] = found;
+    if (!channel) throw new Error(sourceText("error.messaging.sendChannelUnknown", { name }));
+    if (found.length > 1)
+      throw new Error(sourceText("error.messaging.sendNameAmbiguous", { name, people: `#${name}` }));
+    return channel.channelId;
+  }
+
+  /**
+   * Turns `@Name` in the text into a real mention, `<@U…>`, when exactly one person of the workspace
+   * has that name. Up to four words after `@` are tried, longest first. A name that several people
+   * share stays as written, and is returned so the agent can tell the person.
+   */
+  async #textMentions(live: LiveConnection, text: string): Promise<{ text: string; ambiguous: string[] }> {
+    const find = live.adapter.findPeople?.bind(live.adapter);
+    if (!find) return { text, ambiguous: [] };
+    const ambiguous: string[] = [];
+    let result = "";
+    let rest = text;
+    for (let at = rest.search(TEXT_MENTION); at >= 0; at = rest.search(TEXT_MENTION)) {
+      const start = at + (rest[at] === "@" ? 0 : 1);
+      result += rest.slice(0, start);
+      const words = rest
+        .slice(start + 1)
+        .split(/(\s+)/u)
+        .slice(0, 7);
+      let replaced = false;
+      for (let count = 4; count >= 1 && !replaced; count -= 1) {
+        const phrase = words.slice(0, count * 2 - 1).join("");
+        const name = phrase.replace(/[,.:;!?)]+$/u, "");
+        if (!name || words.length < count * 2 - 1) continue;
+        const people = await find(name);
+        if (people.length === 0) continue;
+        const [person] = people;
+        if (people.length === 1 && person) {
+          result += `<@${person.id}>`;
+          rest = rest.slice(start + 1 + name.length);
+        } else {
+          ambiguous.push(name);
+          result += `@${name}`;
+          rest = rest.slice(start + 1 + name.length);
+        }
+        replaced = true;
+      }
+      if (!replaced) {
+        result += "@";
+        rest = rest.slice(start + 1);
+      }
+    }
+    return { text: result + rest, ambiguous };
+  }
+
+  /**
+   * The send error for an agent that is not the orchestrator of a live workspace. In the person's own
+   * request, it names the orchestrator, so the agent hands the message on instead of giving up.
+   */
+  #notOrchestratorError(): string {
+    const orchestrator = [...this.#live.values()]
+      .map((live) => live.record.orchestratorAgentId)
+      .map((id) => this.#agents.listAgents().find((agent) => agent.id === id))
+      .find((agent) => agent !== undefined);
+    return orchestrator
+      ? sourceText("error.messaging.sendUseOrchestrator", { name: orchestrator.name, agentId: orchestrator.id })
+      : sourceText("error.messaging.sendNeedsSlack");
+  }
+
+  /** The name of a send target for the agent and the desktop: a channel name, or the people's names. */
+  async #recipientName(live: LiveConnection, to: SlackSendTarget): Promise<string> {
+    return to.kind === "channel"
+      ? await live.adapter.placeName(to.id).catch(() => to.id)
+      : (await Promise.all(slackTargetPeople(to).map((id) => live.adapter.authorName(id)))).join(", ");
   }
 
   /**
@@ -2617,7 +2830,7 @@ export class MessagingService {
     live: LiveConnection,
     draft: DeliveryDraft,
     approvedBy: string,
-    autoSent = false,
+    mark: "autoSent" | "fromGoAhead" | null = null,
   ): Promise<string | null> {
     // The last check, right before the post: a pause set a moment ago stops this send too.
     const blocked = this.#sendBlock(live.record);
@@ -2634,6 +2847,8 @@ export class MessagingService {
       { platformChannelId: channel, replyThreadId: draft.threadKey },
       text,
       draft.sender,
+      // The person asked in GoAhead for this message: its user mentions ping, as their own would.
+      { keepMentions: mark === "fromGoAhead" },
     );
     const link = (await adapter.permalink?.(channel, messageId)) ?? null;
     this.#threads.store.recordSend({
@@ -2649,7 +2864,8 @@ export class MessagingService {
       platformMessageId: messageId,
       text,
       link,
-      ...(autoSent ? { autoSent: true as const } : {}),
+      ...(mark === "autoSent" ? { autoSent: true as const } : {}),
+      ...(mark === "fromGoAhead" ? { fromGoAhead: true as const } : {}),
     });
     return link;
   }

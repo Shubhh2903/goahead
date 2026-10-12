@@ -53,6 +53,17 @@ const PEOPLE_CACHE_MS = 60 * 60_000;
 /** After a failed `users.list` read, searches answer with that failure this long before a new read. */
 const PEOPLE_RETRY_MS = 60_000;
 const PEOPLE_MATCHES = 20;
+/** A send by name reads `users.list` again when the list is older than this, or on a miss after a minute. */
+const PEOPLE_SEND_MAX_AGE_MS = 5 * 60_000;
+const PEOPLE_MISS_MAX_AGE_MS = 60_000;
+
+interface SlackPerson {
+  id: string;
+  /** The lower-case display, real, first and handle names, for a match. */
+  names: string[];
+  name: string;
+  title: string;
+}
 
 const REACTIONS: Record<StatusReaction, string> = {
   received: "eyes",
@@ -80,7 +91,7 @@ export class SlackAdapter implements MessagingAdapter {
   readonly #own = new Map<string, Promise<boolean>>();
   readonly #personIn = new Map<string, boolean>();
   #emoji: { value: Promise<Record<string, string>>; until: number } | null = null;
-  #people: { value: Promise<Array<{ id: string; names: string[]; name: string }>>; until: number } | null = null;
+  #people: { value: Promise<SlackPerson[]>; until: number; readAt: number } | null = null;
   #botUserId = "";
   #workspaceId = "";
   /** The connected person's Slack user id, known after `identify` when the install gave a user token. */
@@ -329,8 +340,17 @@ export class SlackAdapter implements MessagingAdapter {
     return channel;
   }
 
-  async postAs(target: MessageTarget, markdown: string, as: MessageSender): Promise<string> {
-    const [first = "", ...rest] = slackChunks(slackMrkdwn(markdown));
+  async postAs(
+    target: MessageTarget,
+    markdown: string,
+    as: MessageSender,
+    options: { keepMentions?: boolean } = {},
+  ): Promise<string> {
+    const converted = slackMrkdwn(markdown);
+    // Only user mentions come back: `<!here>`, `<!channel>` and links stay inert.
+    const [first = "", ...rest] = slackChunks(
+      options.keepMentions ? converted.replace(/&lt;@([UW][A-Z0-9]+)&gt;/g, "<@$1>") : converted,
+    );
     const api = this.#apiFor(as, "chat.postMessage");
     const post = async (text: string) => {
       const response = await api.call("chat.postMessage", {
@@ -612,13 +632,28 @@ export class SlackAdapter implements MessagingAdapter {
       .map(({ id, name }) => ({ id, name }));
   }
 
-  #peopleList(): Promise<Array<{ id: string; names: string[]; name: string }>> {
+  /**
+   * The people of the workspace whose display, real, first or handle name is `name`, without case.
+   * The list is read again when it is a few minutes old, and on a miss when it is older than a
+   * minute, so a person who joined, or whom the person never wrote to, is found too.
+   */
+  async findPeople(name: string): Promise<Array<{ id: string; name: string; title: string }>> {
+    const needle = name.trim().toLowerCase();
+    const match = (people: SlackPerson[]) =>
+      people.filter((person) => person.names.includes(needle)).map(({ id, name, title }) => ({ id, name, title }));
+    const found = match(await this.#peopleList(PEOPLE_SEND_MAX_AGE_MS));
+    if (found.length > 0 || Date.now() - (this.#people?.readAt ?? 0) < PEOPLE_MISS_MAX_AGE_MS) return found;
+    return match(await this.#peopleList(0));
+  }
+
+  #peopleList(maxAgeMs = PEOPLE_CACHE_MS): Promise<SlackPerson[]> {
     const now = Date.now();
-    if (this.#people && this.#people.until > now) return this.#people.value;
+    if (this.#people && this.#people.until > now && now - this.#people.readAt < maxAgeMs) return this.#people.value;
     const value = this.#readPeople();
-    this.#people = { value, until: now + PEOPLE_CACHE_MS };
+    this.#people = { value, until: now + PEOPLE_CACHE_MS, readAt: now };
     value.catch(() => {
-      if (this.#people?.value === value) this.#people = { value, until: Date.now() + PEOPLE_RETRY_MS };
+      if (this.#people?.value === value)
+        this.#people = { value, until: Date.now() + PEOPLE_RETRY_MS, readAt: Date.now() };
     });
     return value;
   }
@@ -627,14 +662,15 @@ export class SlackAdapter implements MessagingAdapter {
    * Not queued: `users.list` is Tier 2. Each page waits Slack's `Retry-After` on a 429 and tries that page
    * again, so a 429 never reads the pages before it again.
    */
-  async #readPeople(): Promise<Array<{ id: string; names: string[]; name: string }>> {
-    const people: Array<{ id: string; names: string[]; name: string }> = [];
+  async #readPeople(): Promise<SlackPerson[]> {
+    const people: SlackPerson[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < PEOPLE_PAGES; page += 1) {
       const response = await this.#api.call("users.list", { limit: String(CHANNEL_PAGE_LIMIT), cursor });
       const members = Array.isArray(response.members) ? response.members.filter(isDynamicRecord) : [];
       for (const member of members) {
-        if (!isString(member.id) || member.deleted === true || member.is_bot === true) continue;
+        if (!isString(member.id) || member.deleted === true || member.is_bot === true || member.id === "USLACKBOT")
+          continue;
         const profile = isDynamicRecord(member.profile) ? member.profile : {};
         const names = [profile.display_name, profile.real_name, member.real_name, member.name]
           .filter(isString)
@@ -642,7 +678,13 @@ export class SlackAdapter implements MessagingAdapter {
           .filter(Boolean);
         const name = names[0] ?? member.id;
         if (!this.#names.has(member.id)) this.#names.set(member.id, Promise.resolve(name));
-        people.push({ id: member.id, name, names: names.map((entry) => entry.toLowerCase()) });
+        const firstName = isString(profile.first_name) ? profile.first_name.trim() : "";
+        people.push({
+          id: member.id,
+          name,
+          names: [...names, ...(firstName ? [firstName] : [])].map((entry) => entry.toLowerCase()),
+          title: isString(profile.title) ? profile.title.trim() : "",
+        });
       }
       const next = nextCursor(response);
       if (!next) break;

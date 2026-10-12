@@ -68,6 +68,8 @@ export interface MessagingSendRecord {
   link: string | null;
   /** Sent with no approval, because the conversation was on the auto-reply list. Absent in old records. */
   autoSent?: true;
+  /** Sent as the person because they asked in GoAhead, with no Slack conversation. Absent in old records. */
+  fromGoAhead?: true;
 }
 
 const LINK_LIST_LIMIT = 200;
@@ -522,5 +524,6 @@ function decodeSendRecord(value: unknown): MessagingSendRecord | null {
     text: value.text,
     link: value.link,
     ...(value.autoSent === true ? { autoSent: true as const } : {}),
+    ...(value.fromGoAhead === true ? { fromGoAhead: true as const } : {}),
   };
 }

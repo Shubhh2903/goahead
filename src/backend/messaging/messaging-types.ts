@@ -275,8 +275,16 @@ export interface MessagingAdapter {
    * commas), opened when needed, as the sender. Returns its channel id.
    */
   openDirectMessage?(userIds: string, as: MessageSender): Promise<string>;
-  /** Posts markdown text as the sender, outside the status flow. Returns the message id. */
-  postAs?(target: MessageTarget, markdown: string, as: MessageSender): Promise<string>;
+  /**
+   * Posts markdown text as the sender, outside the status flow. Returns the message id. With
+   * `keepMentions`, user mentions such as `<@U0123>` ping; all other markup stays escaped.
+   */
+  postAs?(
+    target: MessageTarget,
+    markdown: string,
+    as: MessageSender,
+    options?: { keepMentions?: boolean },
+  ): Promise<string>;
   /** A link to one posted message, or null when the platform gives none. */
   permalink?(platformChannelId: string, messageId: string): Promise<string | null>;
   /** The channels the connected person is in, read as them. */
@@ -344,6 +352,11 @@ export interface MessagingAdapter {
   uploadFileAsUser?(input: HistoryUpload): Promise<{ fileId: string }>;
   /** People of the workspace whose names match `query`, for a mention. Not queued: it waits on a 429 itself. */
   searchPeople?(query: string): Promise<Array<{ id: string; name: string }>>;
+  /**
+   * People of the workspace whose display, real, first or handle name is `name`, without case.
+   * Deleted people and bots are left out. Read from the platform, not only from a local cache.
+   */
+  findPeople?(name: string): Promise<Array<{ id: string; name: string; title: string }>>;
   /** Joins every public place the platform lets OpenBot join without an invitation. */
   joinPublicPlaces?(): Promise<void>;
   /** Joins one public place, such as a channel that was just created. */

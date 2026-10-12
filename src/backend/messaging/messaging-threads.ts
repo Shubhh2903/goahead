@@ -78,6 +78,11 @@ export interface MessagingSendRequest {
   text: string;
   /** A thread of the target channel to reply in, when the agent names one. */
   threadKey: string | null;
+  /**
+   * True only when the person at this computer started the turn in GoAhead, directly or through an
+   * agent's hand-off from such a turn. Absent is false.
+   */
+  ownerTurn?: boolean;
 }
 
 /** What the agent learns: the draft waits for the approval of one person. */
@@ -92,6 +97,12 @@ export interface MessagingSendReceipt {
   link: string | null;
   /** Sent with no approval, because the person put the conversation on the auto-reply list. */
   autoSent?: true;
+  /** Sent as the person, because they asked in GoAhead, not in a Slack conversation. */
+  fromGoAhead?: true;
+  /** Who got it, by name, when it was sent from GoAhead. */
+  recipient?: string;
+  /** `@Name`s in the text that several people share, left as plain text. */
+  ambiguousMentions?: string[];
 }
 
 /** An agent's read of the connected person's inbox, from the execution thread of a conversation. */

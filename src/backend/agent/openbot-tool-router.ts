@@ -94,6 +94,10 @@ export interface OpenBotToolRouterHooks {
   runsTurn(agentId: string): boolean;
   /** True only when the person at this computer started this turn in the desktop app. */
   isLocalOwnerTurn(agentId: string, turnId: string): boolean;
+  /** True when the person at this computer started this turn, directly or through an agent's hand-off. */
+  isOwnerOriginTurn(agentId: string, turnId: string): boolean;
+  /** An agent's `send_message` in a turn of the person carries that origin to its recipients. */
+  noteHandOff(agentId: string, turnId: string, deliveryIds: readonly string[]): void;
   /** `false` when the turn no longer runs or `mayStop` refuses, so no stop was sent. */
   interrupt(agentId: string, turnId: string, mayStop: () => boolean): Promise<boolean>;
   /** Epoch milliseconds from the turn lifecycle; null when this process has not seen the event. */
@@ -471,6 +475,7 @@ export class OpenBotToolRouter {
           to: args.to,
           text: args.text,
           threadKey: args.threadTs ?? null,
+          ownerTurn: this.#hooks.isOwnerOriginTurn(senderAgentId, params.turnId),
         });
         const sentAs = receipt.sender === "user" ? "the GoAhead user" : "GoAhead";
         return openBotToolResult(
@@ -484,7 +489,19 @@ export class OpenBotToolRouter {
                       autoSent: true,
                       note: "The message was auto-sent with no approval: the GoAhead user turned on auto-reply for this conversation. Confirm it in one short line and say it was auto-sent.",
                     }
-                  : { note: "The message was sent. Confirm it in one short line." }),
+                  : receipt.fromGoAhead
+                    ? {
+                        to: receipt.recipient,
+                        ...(receipt.ambiguousMentions
+                          ? {
+                              ambiguousMentions: receipt.ambiguousMentions,
+                              note: "The message was sent as the GoAhead user. These @names match several people, so they stayed plain text and ping no one. Confirm the send in one short line, and say which names did not become mentions.",
+                            }
+                          : {
+                              note: "The message was sent as the GoAhead user, because they asked in GoAhead. Confirm it in one short line: to whom, and the link when there is one.",
+                            }),
+                      }
+                    : { note: "The message was sent. Confirm it in one short line." }),
               }
             : {
                 status: "waiting_for_approval",
@@ -838,6 +855,11 @@ export class OpenBotToolRouter {
       ...(messagingReturn ? { messagingReturn } : {}),
       idempotencyKey: `${params.threadId}:${params.turnId}:${params.callId}`,
     });
+    this.#hooks.noteHandOff(
+      senderAgentId,
+      params.turnId,
+      receipt.deliveries.map((delivery) => delivery.id),
+    );
     for (const recipient of recipientValues) {
       this.#mailboxSync.emitQueue(recipient);
       this.#drain.scheduleDrain(recipient);

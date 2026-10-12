@@ -17,6 +17,10 @@ export const messages = {
   "error.messaging.sendPaused": "Os envios do Slack estão pausados no GoAhead. Nada foi enviado.",
   "error.messaging.sendQuietHours":
     "Horário de silêncio: o GoAhead não envia mensagens do Slack até {time}. O rascunho aguarda.",
+  "error.messaging.sendQuietHoursNoDraft":
+    "Horário de silêncio: o GoAhead não envia mensagens do Slack até {time}. Nada foi enviado. Peça de novo depois das {time}.",
+  "error.messaging.sendWorkspaceUnclear":
+    "O destinatário não está em exatamente um dos seus workspaces do Slack. Nada foi enviado. Use um ID de usuário ou de canal de um workspace.",
   "error.messaging.threadUnavailable": "Esta conversa do Slack não está disponível.",
   "error.messaging.inboxNeedsSlack":
     "As mensagens do Slack só podem ser lidas na sua mensagem direta com o GoAhead ou quando você pede ao Slack Orchestrator no GoAhead neste computador.",

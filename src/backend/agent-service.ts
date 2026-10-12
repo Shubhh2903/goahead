@@ -296,6 +296,8 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
    * memory: after a restart, a turn is not proven to be the local owner's, and a check fails closed.
    */
   readonly #localOwnerDeliveries = new Set<string>();
+  /** Deliveries that an agent sent in a turn of the local owner, to pass on the owner's request. */
+  readonly #ownerHandOffDeliveries = new Set<string>();
   #initialized = false;
   #stopping = false;
 
@@ -923,6 +925,8 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         redactMcp: (text) => this.#mcp.redact(text),
         runsTurn: (agentId) => this.#runsTurn(agentId),
         isLocalOwnerTurn: (agentId, turnId) => this.#isLocalOwnerTurn(agentId, turnId),
+        isOwnerOriginTurn: (agentId, turnId) => this.#isOwnerOriginTurn(agentId, turnId),
+        noteHandOff: (agentId, turnId, deliveryIds) => this.#noteHandOff(agentId, turnId, deliveryIds),
         interrupt: (agentId, turnId, mayStop) => this.#interruptTurn(agentId, turnId, undefined, mayStop),
         turnActivity: (agentId, turnId) => ({
           startedAt: turnId ? this.#turn.turnStartedAt(turnId) : null,
@@ -1997,7 +2001,10 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     sender?: ConversationMessageSender,
     localOwner = false,
   ): Promise<QueueSnapshot> {
-    if (input.action === "save" && !localOwner) this.#localOwnerDeliveries.delete(input.deliveryId);
+    if (input.action === "save" && !localOwner) {
+      this.#localOwnerDeliveries.delete(input.deliveryId);
+      this.#ownerHandOffDeliveries.delete(input.deliveryId);
+    }
     return this.#queue.edit(agentId, input, sender);
   }
 
@@ -2006,7 +2013,10 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     sender?: ConversationMessageSender,
     localOwner = false,
   ): Promise<void> {
-    if (!localOwner) this.#localOwnerDeliveries.delete(input.deliveryId);
+    if (!localOwner) {
+      this.#localOwnerDeliveries.delete(input.deliveryId);
+      this.#ownerHandOffDeliveries.delete(input.deliveryId);
+    }
     return this.#queue.update(input, sender);
   }
 
@@ -2057,6 +2067,32 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   #isLocalOwnerTurn(agentId: string, turnId: string): boolean {
     const deliveries = this.#mailbox.findDeliveriesByTurn(agentId, turnId);
     return deliveries.length > 0 && deliveries.every(({ delivery }) => this.#localOwnerDeliveries.has(delivery.id));
+  }
+
+  /** True when every delivery of the running turn is the local owner's own, or a hand-off of their request. */
+  #isOwnerOriginTurn(agentId: string, turnId: string): boolean {
+    const deliveries = this.#mailbox.findDeliveriesByTurn(agentId, turnId);
+    return (
+      deliveries.length > 0 &&
+      deliveries.every(
+        ({ delivery }) => this.#localOwnerDeliveries.has(delivery.id) || this.#ownerHandOffDeliveries.has(delivery.id),
+      )
+    );
+  }
+
+  /**
+   * An agent hands the local owner's request to teammates: their deliveries keep that origin, so the
+   * Slack Orchestrator can send as the person when Chief passes on "tell Harsh …". In memory only, as
+   * the local-owner proof: after a restart, a waiting hand-off loses it.
+   */
+  #noteHandOff(agentId: string, turnId: string, deliveryIds: readonly string[]): void {
+    if (!this.#isOwnerOriginTurn(agentId, turnId)) return;
+    for (const id of deliveryIds) {
+      this.#ownerHandOffDeliveries.add(id);
+      const [oldest] = this.#ownerHandOffDeliveries;
+      if (this.#ownerHandOffDeliveries.size > LOCAL_OWNER_DELIVERY_LIMIT && oldest !== undefined)
+        this.#ownerHandOffDeliveries.delete(oldest);
+    }
   }
 
   async #sendMessage(
