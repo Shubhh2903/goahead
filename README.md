@@ -415,15 +415,15 @@ directories when the provider and operating system allow it.
 
 For each macOS account, log in to its GUI session and open **Server Settings → Remote desktop access**.
 Select **Check again** to read Sunshine's Screen Recording and Accessibility permissions, display availability,
-and GUI session status. The panel names the Mac and the account that runs Sunshine. Grant permissions in
-that account, including when the account was created with the tenant setup script.
+and GUI session status. The panel names the Mac and the macOS account that runs GoAhead and Sunshine. Grant
+permissions in that account, including when the account was created with the tenant setup script.
 
 After you publish a server on a Mac, an optional **Set up remote desktop** prompt opens this panel. Select **Later** to keep using the published server without remote desktop setup.
 
-Use the permission buttons to open **System Settings → Privacy & Security** on the host. If Sunshine is
-missing from a list, select **Show Sunshine in Finder** and add the bundled `Sunshine.app` with the **+** button.
-macOS can attribute access to the application that starts Sunshine; enable the application named by the
-system prompt. Return to GoAhead to check again. If a restart is required, end remote sessions first.
+Use the permission buttons to open **System Settings → Privacy & Security** on the host. macOS checks the
+app that starts Sunshine, not Sunshine: allow **GoAhead** in Screen & System Audio Recording and in
+Accessibility. A development build is started by another app, such as Terminal; allow that app instead.
+Return to GoAhead to check again. If a restart is required, end remote sessions first.
 A check never restarts an active session.
 
 Select **Test on this Mac** for a local test. If native checks are unavailable, it tests video only and disables viewer input. After the checks pass, it can test mouse and keyboard too. Select **Test remote desktop** from another computer for a remote test.

@@ -416,6 +416,7 @@ export function createMockTeam(
       restartRequired: false,
       activeSessions: remoteDesktopSessions.length,
       message: null,
+      permissionApp: "goahead",
     }),
     openSetup: async () => undefined,
     test: async (input) => ({ active: input.action !== "stop", mouse: false, keyboard: false, code: "1234" }),

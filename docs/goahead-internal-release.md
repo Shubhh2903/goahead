@@ -398,7 +398,9 @@ stay on the last Intel build.
 6. **[Human]** Run `bun run release:local`. It builds, signs and notarizes the app and the DMG,
    staples both, verifies them, and publishes the GitHub release as the latest release. Use
    `bun run release:local -- --dry-run` first to check without a build. See
-   [Local release](RELEASING.md#local-release).
+   [Local release](RELEASING.md#local-release). It builds the remote desktop runtime from source, so
+   the Mac needs `brew install cmake ninja miniupnpc` and Rust from `rustup` (`~/.cargo/bin` on
+   `PATH`).
 
 ## 8. Check the release **[Human]**
 

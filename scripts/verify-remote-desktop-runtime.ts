@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, readdir, readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -5,6 +6,14 @@ import { createOpenBotLogger } from "@openbot/logging";
 import { bundledLibraryLicense, isPortableLoadPath, readMachOLoadPaths } from "./mac-runtime-dylibs";
 import { createRemoteDesktopInputDigest, loadNativeRuntimeLock } from "./native-runtime-lock";
 import { runtimeTarget } from "./remote-desktop-runtime-release";
+import {
+  DEVELOPMENT_SUNSHINE_BUNDLE_ID,
+  PINNED_SUNSHINE_BUNDLE_ID,
+  readSunshineIdentityRecord,
+  SUNSHINE_VARIANT_ENVIRONMENT,
+  sunshineDigestOverrides,
+  sunshineVariantFromEnvironment,
+} from "./sunshine-bundle-identity";
 
 const logger = createOpenBotLogger("verify-remote-desktop-runtime");
 
@@ -56,8 +65,14 @@ if (embeddedStreamSource.includes("WebSocketTransport") || embeddedStreamSource.
   throw new Error("The embedded viewer still contains a WebSocket or audio media pipeline.");
 }
 
-const checksumEntries = await verifyChecksums(root, "SHA256SUMS.txt");
-const distributionChecksumEntries = await verifyChecksums(distributionRoot, "DISTRIBUTION-SHA256SUMS.txt");
+const sunshineIdentity = platform === "darwin" ? await readSunshineIdentityRecord(root) : null;
+if (platform === "darwin") verifySunshineIdentity();
+const checksumEntries = await verifyChecksums(root, "SHA256SUMS.txt", sunshineDigestOverrides(sunshineIdentity));
+const distributionChecksumEntries = await verifyChecksums(
+  distributionRoot,
+  "DISTRIBUTION-SHA256SUMS.txt",
+  sunshineDigestOverrides(sunshineIdentity, `${platform}/${architecture}/`),
+);
 for (const name of names) {
   if (!checksumEntries.some((entry) => entry.name === name)) throw new Error(`Missing runtime checksum for ${name}.`);
 }
@@ -130,7 +145,31 @@ async function machOLibraries(directory: string, prefix = ""): Promise<string[]>
   return libraries;
 }
 
-async function verifyChecksums(checksumRoot: string, fileName: string) {
+/**
+ * A packaged build sets the release variant: Sunshine.app must be the pinned bundle, unchanged. Only a
+ * development copy has a local identity record and the development bundle id.
+ */
+function verifySunshineIdentity(): void {
+  const requested = process.env[SUNSHINE_VARIANT_ENVIRONMENT] ? sunshineVariantFromEnvironment() : null;
+  if (requested === "release" && sunshineIdentity) {
+    throw new Error("Sunshine.app is the development copy. Run install:remote-desktop-runtime for the release.");
+  }
+  if (requested === "development" && !sunshineIdentity) {
+    throw new Error("Sunshine.app has no development bundle id. Run install:remote-desktop-runtime.");
+  }
+  const expected = sunshineIdentity ? DEVELOPMENT_SUNSHINE_BUNDLE_ID : PINNED_SUNSHINE_BUNDLE_ID;
+  if (sunshineIdentity && sunshineIdentity.bundleId !== expected) {
+    throw new Error(`Unexpected Sunshine bundle id record: ${sunshineIdentity.bundleId}`);
+  }
+  const bundleId = execFileSync(
+    "/usr/libexec/PlistBuddy",
+    ["-c", "Print :CFBundleIdentifier", join(root, "Sunshine.app/Contents/Info.plist")],
+    { encoding: "utf8" },
+  ).trim();
+  if (bundleId !== expected) throw new Error(`Unexpected Sunshine bundle id: ${bundleId}`);
+}
+
+async function verifyChecksums(checksumRoot: string, fileName: string, overrides: ReadonlyMap<string, string>) {
   const checksums = await readFile(join(checksumRoot, fileName), "utf8");
   const entries = checksums
     .trim()
@@ -144,7 +183,7 @@ async function verifyChecksums(checksumRoot: string, fileName: string) {
     const digest = createHash("sha256")
       .update(await readFile(join(checksumRoot, ...name.split("/"))))
       .digest("hex");
-    if (digest !== expectedDigest) throw new Error(`Invalid runtime checksum for ${name}.`);
+    if (digest !== (overrides.get(name) ?? expectedDigest)) throw new Error(`Invalid runtime checksum for ${name}.`);
   }
   return entries;
 }

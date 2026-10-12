@@ -5,7 +5,6 @@ export const messages = {
   // Errors from host setup, publishing, and host maintenance.
   "error.host.iceServersMissing": "Uzak Sinyal ICE sunucuları sağlamadı.",
   "error.host.webRtcNotConfigured": "WebRTC ana makine hizmeti yapılandırılmamış.",
-  "error.host.runtimeNotInstalled": "Uzak masaüstü çalışma zamanı kurulu değil.",
   "error.host.setupUnavailable": "İzin kurulumu kullanılamıyor.",
   "error.host.accountChangedDuringUpdate": "Bu sunucu güncellenirken oturum açmış hesap değişti.",
   "error.host.nameBeforePublish": "Yayınlamadan önce bu GoAhead'e bir ad verin.",

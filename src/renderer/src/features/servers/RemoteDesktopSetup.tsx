@@ -2,6 +2,7 @@ import {
   LOCAL_SERVER_ID,
   REMOTE_DESKTOP_SETUP_CAPABILITY,
   type RemoteDesktopCheckState,
+  type RemoteDesktopPermissionApp,
   type RemoteDesktopSession,
   type RemoteDesktopSetupAction,
   type RemoteDesktopSetupStatus,
@@ -44,6 +45,15 @@ const LABELS = {
   unavailable: "remoteDesktop.setup.state.unavailable",
   failed: "remoteDesktop.setup.state.failed",
 } as const satisfies Record<RemoteDesktopCheckState, AppTextKey>;
+
+/** Product names, not translated. `development` names no app: its text comes from the catalog. */
+const PERMISSION_APP_NAMES = {
+  goahead: "GoAhead",
+  terminal: "Terminal",
+  iterm: "iTerm",
+  vscode: "Visual Studio Code",
+  development: null,
+} as const satisfies Record<RemoteDesktopPermissionApp, string | null>;
 
 interface SetupState {
   result: RemoteDesktopSetupStatus | null;
@@ -116,7 +126,7 @@ export function RemoteDesktopSetup(props: { server: ServerSummary; platform: "da
       Object.assign(draft, { busy: true, error: null });
     });
     try {
-      returnFromSettings = action !== "reveal";
+      returnFromSettings = true;
       await serversPort().remoteDesktop.openSetup(action);
     } catch (error) {
       setState((draft) => {
@@ -261,6 +271,10 @@ export function RemoteDesktopSetup(props: { server: ServerSummary; platform: "da
     };
   });
 
+  // macOS checks the responsible app, not Sunshine. A host older than this field runs a packaged GoAhead.
+  const permissionApp = () => state.result?.permissionApp ?? "goahead";
+  const permissionAppName = () => PERMISSION_APP_NAMES[permissionApp()] ?? t("remoteDesktop.setup.developmentApp");
+
   const canTest = () =>
     state.result?.platform === "darwin" &&
     CHECKS.every(([key]) => state.result?.[key] === "allowed") &&
@@ -342,7 +356,20 @@ export function RemoteDesktopSetup(props: { server: ServerSummary; platform: "da
           </For>
           <Item>
             <ItemContent>
-              <ItemDescription>{t("remoteDesktop.setup.grantHelp")}</ItemDescription>
+              <Show
+                when={state.result}
+                fallback={<ItemDescription>{t("remoteDesktop.setup.checkToSeeApp")}</ItemDescription>}
+              >
+                <ItemDescription>
+                  {local()
+                    ? t("remoteDesktop.setup.allowApp", { app: permissionAppName() })
+                    : t("remoteDesktop.setup.allowAppRemote", { app: permissionAppName() })}
+                </ItemDescription>
+                <Show when={permissionApp() !== "goahead"}>
+                  <ItemDescription>{t("remoteDesktop.setup.developmentNote")}</ItemDescription>
+                </Show>
+              </Show>
+              <ItemDescription>{t("remoteDesktop.setup.sessionNote")}</ItemDescription>
               <Show when={state.result?.restartRequired}>
                 <ItemDescription>{t("remoteDesktop.setup.restartRequired")}</ItemDescription>
               </Show>
@@ -350,13 +377,6 @@ export function RemoteDesktopSetup(props: { server: ServerSummary; platform: "da
                 <ItemDescription>{sourceText(state.result?.message ?? "")}</ItemDescription>
               </Show>
             </ItemContent>
-            <Show when={local()}>
-              <ItemActions>
-                <Button size="sm" variant="ghost" disabled={state.busy} onClick={() => void open("reveal")}>
-                  {t("remoteDesktop.setup.showInFinder")}
-                </Button>
-              </ItemActions>
-            </Show>
           </Item>
           <Item>
             <ItemContent>

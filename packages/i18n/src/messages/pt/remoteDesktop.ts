@@ -47,11 +47,8 @@ export const messages = {
   "remoteDesktop.setup.checkAgain": "Verificar novamente",
   "remoteDesktop.setup.grantAccess": "Conceder acesso a {name}",
   "remoteDesktop.setup.grant": "Conceder",
-  "remoteDesktop.setup.grantHelp":
-    "Mantenha a conta do Sunshine conectada no Mac. Nessa conta, conceda acesso em Ajustes do Sistema → Privacidade e Segurança. O botão Conceder abre uma janela auxiliar. Arraste Sunshine.app para a lista de permissões.",
   "remoteDesktop.setup.restartRequired":
     "O Sunshine precisa reiniciar. Encerre as sessões ativas de área de trabalho remota e verifique novamente. As sessões ativas não serão reiniciadas.",
-  "remoteDesktop.setup.showInFinder": "Mostrar Sunshine no Finder",
   "remoteDesktop.setup.liveTest": "Teste de conexão ao vivo",
   "remoteDesktop.setup.liveTestLocal": "Teste a imagem, o mouse e o teclado neste Mac.",
   "remoteDesktop.setup.liveTestRemote":

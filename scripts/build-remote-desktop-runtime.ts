@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { type BundledLibrary, bundledLibraryLicenses, bundleMacDynamicLibraries } from "./mac-runtime-dylibs";
 import { createRemoteDesktopSourceManifest, loadNativeRuntimeLock } from "./native-runtime-lock";
+import { sunshineVariantFromEnvironment } from "./sunshine-bundle-identity";
 
 const platform =
   process.platform === "darwin" || process.platform === "win32" || process.platform === "linux"
@@ -107,6 +108,13 @@ try {
   ]);
   await writeChecksums(outputRoot);
   await writeChecksums(resolve("build/remote-desktop-runtime"), "DISTRIBUTION-SHA256SUMS.txt");
+  // The checksums above describe the pinned Sunshine.app. A development build then gets the same
+  // bundle id and signature as an installed development copy. A release build and a CI build (the
+  // archive that gets published) stay as pinned.
+  if (platform === "darwin" && !process.env.CI && sunshineVariantFromEnvironment() === "development") {
+    const { developmentSunshineIdentity } = await import("./install-remote-desktop-runtime");
+    await developmentSunshineIdentity().apply(outputRoot);
+  }
   console.log(`Built the pinned Sunshine and Moonlight Web runtime in ${outputRoot}`);
 } finally {
   await rm(workRoot, { recursive: true, force: true });

@@ -44,11 +44,17 @@ export const messages = defineMessages("remoteDesktop", {
   "remoteDesktop.setup.checkAgain": "Check again",
   "remoteDesktop.setup.grantAccess": "Grant {name} access",
   "remoteDesktop.setup.grant": "Grant",
-  "remoteDesktop.setup.grantHelp":
-    "Keep the Sunshine account logged in on the Mac. In that account, grant access in System Settings → Privacy & Security. Grant opens a helper window. Drag Sunshine.app into the permission list.",
+  "remoteDesktop.setup.allowApp":
+    "Grant opens System Settings → Privacy & Security. Allow {app} in Screen & System Audio Recording and in Accessibility. Then come back here.",
+  "remoteDesktop.setup.allowAppRemote":
+    "On that Mac, allow {app} in System Settings → Privacy & Security → Screen & System Audio Recording and Accessibility.",
+  "remoteDesktop.setup.developmentApp": "the app that started GoAhead, for example Terminal",
+  "remoteDesktop.setup.developmentNote":
+    "This is a development build. macOS checks the app that started GoAhead, not GoAhead.",
+  "remoteDesktop.setup.checkToSeeApp": "Select Check again to see which app to allow.",
+  "remoteDesktop.setup.sessionNote": "Keep the macOS user that runs GoAhead logged in on the Mac.",
   "remoteDesktop.setup.restartRequired":
     "Sunshine needs a restart. End active remote desktop sessions, then check again. Active sessions will not be restarted.",
-  "remoteDesktop.setup.showInFinder": "Show Sunshine in Finder",
   "remoteDesktop.setup.liveTest": "Live connection test",
   "remoteDesktop.setup.liveTestLocal": "Test the picture, mouse, and keyboard on this Mac.",
   "remoteDesktop.setup.liveTestRemote":

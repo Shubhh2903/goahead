@@ -284,6 +284,29 @@ describe("ServerSettingsModal", () => {
     mock.dispose();
   });
 
+  it.each([
+    ["goahead", /Allow GoAhead in Screen & System Audio Recording and in Accessibility/u],
+    ["terminal", /Allow Terminal in Screen & System Audio Recording and in Accessibility/u],
+  ] as const)("names the app that macOS checks: %s", async (permissionApp, allow) => {
+    const mock = createMockOpenBot();
+    vi.stubGlobal("openbot", mock.api);
+    const checkSetup = mock.api.remoteDesktop.checkSetup;
+    vi.spyOn(mock.api.remoteDesktop, "checkSetup").mockImplementation(async (serverId) => ({
+      ...(await checkSetup(serverId)),
+      permissionApp,
+    }));
+    const open = vi.spyOn(mock.api.remoteDesktop, "openSetup");
+    render(() => <ServerSettingsModal {...props({ hostStatus: configuredHost })} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote desktop" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+    expect(await screen.findByText(allow)).toBeInTheDocument();
+    expect(screen.queryByText(/This is a development build/u) !== null).toBe(permissionApp !== "goahead");
+    expect(screen.queryByText(/Sunshine\.app/u)).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Grant Screen Recording access" }));
+    await waitFor(() => expect(open).toHaveBeenCalledWith("screen-recording"));
+    mock.dispose();
+  });
+
   it("does not offer client privacy settings for a remote Mac", async () => {
     render(() => <ServerSettingsModal {...props({ server: remoteServer })} />);
     await fireEvent.click(screen.getByRole("tab", { name: "Remote desktop" }));

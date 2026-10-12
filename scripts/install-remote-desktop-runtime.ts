@@ -15,6 +15,16 @@ import {
   runtimeTargetParts,
   sha256,
 } from "./remote-desktop-runtime-release";
+import {
+  applySunshineIdentity,
+  chooseSunshineSigner,
+  DEVELOPMENT_SUNSHINE_BUNDLE_ID,
+  isSunshineIdentityCurrent,
+  readSunshineIdentityRecord,
+  type SunshineIdentityPlan,
+  sunshineDigestOverrides,
+  sunshineVariantFromEnvironment,
+} from "./sunshine-bundle-identity";
 
 const githubReleaseSchema = z.object({
   tag_name: z.string(),
@@ -34,6 +44,11 @@ export async function installRemoteDesktopRuntime(
     target?: RemoteDesktopTarget;
     fetchImpl?: typeof fetch;
     githubToken?: string;
+    /**
+     * macOS development only: the bundle id and signature that Sunshine.app gets after its checksums
+     * pass. Without it, Sunshine.app stays exactly as pinned.
+     */
+    sunshineIdentity?: { plan: SunshineIdentityPlan; apply: (architectureRoot: string) => Promise<void> };
   } = {},
 ): Promise<"installed" | "current"> {
   const sourceRoot = input.sourceRoot ?? process.cwd();
@@ -46,7 +61,7 @@ export async function installRemoteDesktopRuntime(
   const githubToken = input.githubToken ?? process.env.GITHUB_TOKEN;
   if (!release || !artifact) throw new Error(`No published remote desktop runtime is pinned for ${target}.`);
 
-  if (await isCurrentInstallation(outputRoot, target, lock)) {
+  if (await isCurrentInstallation(outputRoot, target, lock, input.sunshineIdentity?.plan)) {
     logger.info(`The ${target} remote desktop runtime is current.`);
     return "current";
   }
@@ -87,6 +102,9 @@ export async function installRemoteDesktopRuntime(
     const extractedRuntime = join(extracted, "remote-desktop-runtime");
     await rejectNonRegularFiles(extractedRuntime);
     await verifyRuntimeTree(extractedRuntime, target, lock);
+    // The pinned archive and tree are verified above. Only now does Sunshine.app change.
+    const { platform, architecture } = runtimeTargetParts(target);
+    await input.sunshineIdentity?.apply(join(extractedRuntime, platform, architecture));
     await installValidatedTree(extractedRuntime, outputRoot, target);
     await verifyRuntimeTree(outputRoot, target, lock);
   } finally {
@@ -134,6 +152,8 @@ export async function verifyRuntimeTree(
   lock: NativeRuntimeLock,
 ): Promise<void> {
   const { platform, architecture } = runtimeTargetParts(target);
+  const architectureRoot = join(root, platform, architecture);
+  const identity = await readSunshineIdentityRecord(architectureRoot);
   const sourceManifest = JSON.parse(await readFile(join(root, "source-manifest.json"), "utf8"));
   if (
     sourceManifest.inputDigest !== createRemoteDesktopInputDigest(lock) ||
@@ -142,8 +162,12 @@ export async function verifyRuntimeTree(
   ) {
     throw new Error("The installed runtime source manifest does not match the lock file.");
   }
-  await verifyChecksumFile(root, "DISTRIBUTION-SHA256SUMS.txt");
-  await verifyChecksumFile(join(root, platform, architecture), "SHA256SUMS.txt");
+  await verifyChecksumFile(
+    root,
+    "DISTRIBUTION-SHA256SUMS.txt",
+    sunshineDigestOverrides(identity, `${platform}/${architecture}/`),
+  );
+  await verifyChecksumFile(architectureRoot, "SHA256SUMS.txt", sunshineDigestOverrides(identity));
   const required = [
     ...lock.remoteDesktop.targets[target],
     "static/stream.html",
@@ -157,10 +181,15 @@ async function isCurrentInstallation(
   root: string,
   target: RemoteDesktopTarget,
   lock: NativeRuntimeLock,
+  sunshineIdentity: SunshineIdentityPlan | undefined,
 ): Promise<boolean> {
   try {
     await verifyRuntimeTree(root, target, lock);
-    return true;
+    const { platform, architecture } = runtimeTargetParts(target);
+    const record = await readSunshineIdentityRecord(join(root, platform, architecture));
+    // A release needs the pinned Sunshine.app, so a changed development copy is not current.
+    if (!sunshineIdentity) return record === null;
+    return isSunshineIdentityCurrent(record, sunshineIdentity);
   } catch {
     return false;
   }
@@ -178,7 +207,11 @@ function findAsset(release: GitHubRelease, name: string): GitHubReleaseAsset {
   return asset;
 }
 
-async function verifyChecksumFile(root: string, fileName: string): Promise<void> {
+async function verifyChecksumFile(
+  root: string,
+  fileName: string,
+  overrides: ReadonlyMap<string, string> = new Map(),
+): Promise<void> {
   const contents = await readFile(join(root, fileName), "utf8");
   for (const line of contents.trim().split("\n")) {
     const match = /^([0-9a-f]{64}) {2}(.+)$/u.exec(line);
@@ -194,7 +227,8 @@ async function verifyChecksumFile(root: string, fileName: string): Promise<void>
       throw new Error(`Unsafe checksum path: ${name}`);
     }
     const path = join(root, ...name.split("/"));
-    if (sha256(await readFile(path)) !== match[1]) throw new Error(`Invalid runtime checksum for ${name}.`);
+    if (sha256(await readFile(path)) !== (overrides.get(name) ?? match[1]))
+      throw new Error(`Invalid runtime checksum for ${name}.`);
   }
 }
 
@@ -223,5 +257,41 @@ async function installValidatedTree(source: string, destination: string, target:
 if (import.meta.main) {
   const platform = process.argv[2] ?? process.platform;
   const architecture = process.argv[3] ?? process.arch;
-  await installRemoteDesktopRuntime({ target: runtimeTarget(platform, architecture) });
+  const target = runtimeTarget(platform, architecture);
+  await installRemoteDesktopRuntime({
+    target,
+    sunshineIdentity:
+      target.startsWith("darwin-") &&
+      process.platform === "darwin" &&
+      sunshineVariantFromEnvironment() === "development"
+        ? developmentSunshineIdentity()
+        : undefined,
+  });
+}
+
+/** The development bundle id and signature. `build-remote-desktop-runtime.ts` uses it for a local build too. */
+export function developmentSunshineIdentity(): {
+  plan: SunshineIdentityPlan;
+  apply: (architectureRoot: string) => Promise<void>;
+} {
+  const signer = chooseSunshineSigner(() =>
+    execFileSync("security", ["find-identity", "-v", "-p", "codesigning"], { encoding: "utf8" }),
+  );
+  const plan: SunshineIdentityPlan = { bundleId: DEVELOPMENT_SUNSHINE_BUNDLE_ID, signer };
+  return {
+    plan,
+    apply: async (architectureRoot) => {
+      await applySunshineIdentity({
+        architectureRoot,
+        plan,
+        entitlements: resolve("build/entitlements.mac.inherit.plist"),
+        run: (command, args) => execFileSync(command, args, { stdio: "inherit" }),
+      });
+      if (signer.kind === "identity") {
+        logger.info(`Signed Sunshine.app as ${plan.bundleId} with "${signer.name}".`);
+      } else {
+        logger.warn(`No Apple Development identity: Sunshine.app (${plan.bundleId}) is signed ad hoc.`);
+      }
+    },
+  };
 }

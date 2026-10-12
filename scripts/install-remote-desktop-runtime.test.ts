@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { installRemoteDesktopRuntime, validateManifest } from "./install-remote-desktop-runtime";
+import { installRemoteDesktopRuntime, validateManifest, verifyRuntimeTree } from "./install-remote-desktop-runtime";
 import {
   createRemoteDesktopInputDigest,
   createRemoteDesktopReleaseTag,
@@ -16,6 +17,9 @@ import {
   sha256,
   validateArchivePath,
 } from "./remote-desktop-runtime-release";
+import { applySunshineIdentity, DEVELOPMENT_SUNSHINE_BUNDLE_ID } from "./sunshine-bundle-identity";
+
+const ADHOC = { kind: "adhoc" as const };
 
 describe("remote desktop runtime installer", () => {
   it("downloads, verifies, installs, and then reuses a current runtime", async () => {
@@ -43,6 +47,52 @@ describe("remote desktop runtime installer", () => {
       }),
     ).resolves.toBe("current");
     expect(requestCount).toBe(3);
+  });
+
+  it("changes Sunshine.app only after the pinned checksums pass, then reuses it", async () => {
+    const fixture = await createFixture();
+    const fetchImpl = createFixtureFetch(fixture);
+    const plan = { bundleId: DEVELOPMENT_SUNSHINE_BUNDLE_ID, signer: ADHOC };
+    const commands: string[] = [];
+    const sunshineIdentity = {
+      plan,
+      apply: async (architectureRoot: string) => {
+        // The bundle on disk still has its pinned bytes when the change starts.
+        await expect(readFile(join(architectureRoot, "Sunshine.app/Contents/MacOS/Sunshine"), "utf8")).resolves.toBe(
+          "sunshine",
+        );
+        await applySunshineIdentity({
+          architectureRoot,
+          plan,
+          entitlements: "/entitlements.plist",
+          run: (command) => {
+            commands.push(command);
+            if (command === "codesign")
+              writeFileSync(join(architectureRoot, "Sunshine.app/Contents/MacOS/Sunshine"), "signed");
+          },
+        });
+      },
+    };
+    const install = () =>
+      installRemoteDesktopRuntime({
+        sourceRoot: fixture.sourceRoot,
+        outputRoot: fixture.outputRoot,
+        target: "darwin-arm64",
+        fetchImpl,
+        sunshineIdentity,
+      });
+
+    await expect(install()).resolves.toBe("installed");
+    expect(commands).toEqual(["/usr/libexec/PlistBuddy", "codesign"]);
+    await expect(
+      readFile(join(fixture.outputRoot, "darwin/arm64/Sunshine.app/Contents/MacOS/Sunshine"), "utf8"),
+    ).resolves.toBe("signed");
+    await expect(install()).resolves.toBe("current");
+    // A file outside Sunshine.app keeps its pinned checksum.
+    await writeFile(join(fixture.outputRoot, "darwin/arm64/web-server"), "changed");
+    await expect(verifyRuntimeTree(fixture.outputRoot, "darwin-arm64", fixture.lock)).rejects.toThrow(
+      "Invalid runtime checksum for darwin/arm64/web-server",
+    );
   });
 
   it("rejects a damaged archive", async () => {

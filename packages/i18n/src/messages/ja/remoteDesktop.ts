@@ -47,11 +47,8 @@ export const messages = {
   "remoteDesktop.setup.checkAgain": "もう一度確認",
   "remoteDesktop.setup.grantAccess": "{name} へのアクセスを許可",
   "remoteDesktop.setup.grant": "許可",
-  "remoteDesktop.setup.grantHelp":
-    "Mac で Sunshine アカウントにログインしたままにしてください。そのアカウントで「システム設定」→「プライバシーとセキュリティ」からアクセスを許可します。「許可」を押すとヘルパーウインドウが開きます。Sunshine.app を権限のリストにドラッグしてください。",
   "remoteDesktop.setup.restartRequired":
     "Sunshine の再起動が必要です。実行中のリモートデスクトップセッションを終了してから、もう一度確認してください。実行中のセッションは再起動されません。",
-  "remoteDesktop.setup.showInFinder": "Finder で Sunshine を表示",
   "remoteDesktop.setup.liveTest": "ライブ接続テスト",
   "remoteDesktop.setup.liveTestLocal": "この Mac で映像、マウス、キーボードをテストします。",
   "remoteDesktop.setup.liveTestRemote":

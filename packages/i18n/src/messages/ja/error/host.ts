@@ -5,7 +5,6 @@ export const messages = {
   // Errors from host setup, publishing, and host maintenance.
   "error.host.iceServersMissing": "Remote Signal が ICE サーバーを提供していません。",
   "error.host.webRtcNotConfigured": "WebRTC ホストサービスが設定されていません。",
-  "error.host.runtimeNotInstalled": "リモートデスクトップのランタイムがインストールされていません。",
   "error.host.setupUnavailable": "権限の設定を利用できません。",
   "error.host.accountChangedDuringUpdate": "このサーバーの更新中に、サインイン中のアカウントが変わりました。",
   "error.host.nameBeforePublish": "公開する前に、この GoAhead に名前を付けてください。",

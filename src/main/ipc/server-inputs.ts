@@ -221,7 +221,7 @@ export function parseSetServerNotificationLevel(value: unknown): SetServerNotifi
 }
 
 export function parseRemoteDesktopSetupAction(value: unknown): RemoteDesktopSetupAction {
-  if (value !== "screen-recording" && value !== "accessibility" && value !== "reveal")
+  if (value !== "screen-recording" && value !== "accessibility")
     throw new Error("Unknown remote desktop setup action.");
   return value;
 }

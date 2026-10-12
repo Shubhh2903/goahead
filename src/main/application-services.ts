@@ -7,6 +7,7 @@ import { spawnAgentDatabaseHost } from "./agent-database-host-process";
 import { LocalSkillLibrary } from "./local-skill-library";
 import { localSkillTools } from "./local-skill-tools";
 import { MAC_PERMISSION_URLS } from "./mac-permission-urls";
+import { remoteDesktopPermissionApp } from "./remote-desktop-permission-app";
 /**
  * The composition root. Every long-lived service the desktop app owns is built here, in one
  * function, in dependency order, and handed back as a single record.
@@ -1345,12 +1346,12 @@ export async function createApplicationServices({
     platform: process.platform === "darwin" || process.platform === "win32" ? process.platform : "linux",
     unattended: false,
     remoteDesktopRuntimePaths: remoteDesktopRuntime,
-    openRemoteDesktopSetup: async (action, appPath) => {
-      if (action === "reveal") shell.showItemInFolder(appPath);
-      else {
-        await shell.openExternal(MAC_PERMISSION_URLS[action]);
-        await computerUsePermissionHelp.show(action, appPath);
-      }
+    // macOS asks about the responsible app, not Sunshine. A packaged GoAhead asks for Accessibility
+    // itself, so it appears in the list; a development build lists the app that started it.
+    remoteDesktopPermissionApp: remoteDesktopPermissionApp(app.isPackaged, process.env),
+    openRemoteDesktopSetup: async (action) => {
+      if (action === "accessibility" && app.isPackaged) systemPreferences.isTrustedAccessibilityClient(true);
+      await shell.openExternal(MAC_PERMISSION_URLS[action]);
     },
     remoteDesktopStateDirectory: join(app.getPath("userData"), "remote-desktop-runtime"),
     getRemoteDesktopRuntimeCredentials: () => {

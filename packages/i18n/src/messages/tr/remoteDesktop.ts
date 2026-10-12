@@ -47,11 +47,8 @@ export const messages = {
   "remoteDesktop.setup.checkAgain": "Tekrar denetle",
   "remoteDesktop.setup.grantAccess": "{name} erişimine izin ver",
   "remoteDesktop.setup.grant": "İzin ver",
-  "remoteDesktop.setup.grantHelp":
-    "Sunshine hesabını Mac'te açık tutun. Bu hesapta Sistem Ayarları → Gizlilik ve Güvenlik bölümünden erişim izni verin. İzin Ver seçeneği bir yardımcı pencere açar. Sunshine.app uygulamasını izin listesine sürükleyin.",
   "remoteDesktop.setup.restartRequired":
     "Sunshine yeniden başlatma gerektiriyor. Etkin uzak masaüstü oturumlarını sonlandırın, ardından tekrar kontrol edin. Etkin oturumlar yeniden başlatılmayacaktır.",
-  "remoteDesktop.setup.showInFinder": "Sunshine'ı Finder'da Göster",
   "remoteDesktop.setup.liveTest": "Canlı bağlantı testi",
   "remoteDesktop.setup.liveTestLocal": "Bu Mac'te görüntüyü, fareyi ve klavyeyi test edin.",
   "remoteDesktop.setup.liveTestRemote":

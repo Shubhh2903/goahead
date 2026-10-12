@@ -1177,7 +1177,7 @@ describe("remote desktop setup input", () => {
   it("accepts only named local setup actions", () => {
     expect(parseRemoteDesktopSetupAction("accessibility")).toBe("accessibility");
     expect(parseRemoteDesktopSetupAction("screen-recording")).toBe("screen-recording");
-    expect(parseRemoteDesktopSetupAction("reveal")).toBe("reveal");
+    expect(() => parseRemoteDesktopSetupAction("reveal")).toThrow();
     expect(() => parseRemoteDesktopSetupAction("file:///private")).toThrow();
   });
   it("requires a server, a session, and a known test action", () => {

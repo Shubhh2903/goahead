@@ -23,6 +23,7 @@ import {
   resolvePlaceholders,
   tagCommands,
 } from "./release-local-lib";
+import { PINNED_SUNSHINE_BUNDLE_ID, SUNSHINE_VARIANT_ENVIRONMENT } from "./sunshine-bundle-identity";
 
 const logger = createOpenBotLogger("release-local");
 
@@ -206,6 +207,8 @@ function notarizationEnv(credentials: LocalCredentials): Env {
 
 function buildSteps(credentials: LocalCredentials): Step[] {
   const profile = process.env.OPENBOT_PROVISIONING_PROFILE?.trim();
+  // Sunshine.app stays as pinned, not the development copy of this checkout.
+  const releaseRuntimeEnv: Env = { [SUNSHINE_VARIANT_ENVIRONMENT]: "release" };
   const builderArgs = [
     "bun",
     "x",
@@ -241,10 +244,18 @@ function buildSteps(credentials: LocalCredentials): Step[] {
     { kind: "run", label: "Install Grok runtime", argv: ["bun", "run", "install:grok-runtime"] },
     {
       kind: "run",
-      label: "Install remote desktop runtime",
-      argv: ["bun", "run", "install:remote-desktop-runtime"],
+      label: "Prepare remote desktop runtime",
+      // Downloads the pinned runtime, or builds it from source when the lock pins none (GoAhead's
+      // patched Sunshine has no published archive). Needs cmake, ninja, miniupnpc and Rust.
+      argv: ["bun", "run", "prepare:remote-desktop-runtime"],
+      env: { ...releaseRuntimeEnv, OPENBOT_ALLOW_RUNTIME_SOURCE_BUILD: "1" },
     },
-    { kind: "run", label: "Verify remote desktop runtime", argv: ["bun", "run", "verify:remote-desktop-runtime"] },
+    {
+      kind: "run",
+      label: "Verify remote desktop runtime",
+      argv: ["bun", "run", "verify:remote-desktop-runtime"],
+      env: releaseRuntimeEnv,
+    },
     { kind: "run", label: "Prepare Computer Use driver", argv: ["bun", "run", "prepare:cua-driver"] },
     ...(profile
       ? [{ kind: "run" as const, label: "Check provisioning profile", argv: ["security", "cms", "-D", "-i", profile] }]
@@ -324,6 +335,18 @@ function verifySteps(release: Release, credentials: LocalCredentials): Step[] {
     codesign("Verify Sunshine signature", `${runtimePath}/Sunshine.app`, true),
     codesign("Verify web-server signature", `${runtimePath}/web-server`),
     codesign("Verify streamer signature", `${runtimePath}/streamer`),
+    {
+      kind: "check",
+      label: "Verify Sunshine team and bundle id",
+      describe: `Sunshine.app has TeamIdentifier=${RELEASE_TEAM_ID} and CFBundleIdentifier=${PINNED_SUNSHINE_BUNDLE_ID}`,
+      check: () => {
+        requireTeam(`${runtimePath}/Sunshine.app`, RELEASE_TEAM_ID);
+        const plist = `${runtimePath}/Sunshine.app/Contents/Info.plist`;
+        if (capture(["plutil", "-extract", "CFBundleIdentifier", "raw", plist]) !== PINNED_SUNSHINE_BUNDLE_ID) {
+          throw new ReleaseStop(`Sunshine.app is not ${PINNED_SUNSHINE_BUNDLE_ID}.`);
+        }
+      },
+    },
     ...providers.flatMap(([path, team]): Step[] => [
       codesign(`Verify ${basename(path)} signature`, path),
       {

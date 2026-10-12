@@ -4,7 +4,6 @@ import type { messages as source } from "../../en/error/host";
 export const messages = {
   "error.host.iceServersMissing": "O Remote Signal não forneceu servidores ICE.",
   "error.host.webRtcNotConfigured": "O serviço WebRTC do computador anfitrião não está configurado.",
-  "error.host.runtimeNotInstalled": "O ambiente de execução da área de trabalho remota não está instalado.",
   "error.host.setupUnavailable": "A configuração de permissões não está disponível.",
   "error.host.accountChangedDuringUpdate": "A conta conectada mudou durante a atualização deste servidor.",
   "error.host.nameBeforePublish": "Dê um nome a este GoAhead antes de publicá-lo.",

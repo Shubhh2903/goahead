@@ -4,7 +4,6 @@ export const messages = defineMessages("error.host", {
   // Errors from host setup, publishing, and host maintenance.
   "error.host.iceServersMissing": "Remote Signal has not supplied ICE servers.",
   "error.host.webRtcNotConfigured": "The WebRTC host service is not configured.",
-  "error.host.runtimeNotInstalled": "The remote desktop runtime is not installed.",
   "error.host.setupUnavailable": "Permission setup is not available.",
   "error.host.accountChangedDuringUpdate": "The signed-in account changed while this server was being updated.",
   "error.host.nameBeforePublish": "Name this GoAhead before publishing it.",

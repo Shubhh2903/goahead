@@ -65,6 +65,12 @@ One-time setup on the release Mac:
    `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`. Git ignores `.env.release`
    (`git check-ignore .env.release` prints it). A variable in the environment wins over the file.
 3. `gh auth login` with write access to `Shubhh2903/goahead`.
+4. Install the remote desktop build tools: `brew install cmake ninja miniupnpc`, and Rust with
+   `rustup` (`~/.cargo/bin` on `PATH`). GoAhead patches Sunshine and publishes no runtime archive,
+   so `native-runtime.lock.json` pins none. `release:local` then runs
+   `prepare:remote-desktop-runtime` with `OPENBOT_ALLOW_RUNTIME_SOURCE_BUILD=1`, which builds the
+   runtime from source (it takes a long time). With the release variant, `Sunshine.app` keeps the
+   pinned bundle id and electron-builder signs it.
 
 Each release, on `master`:
 
@@ -174,6 +180,18 @@ The command writes binaries, the static Moonlight viewer, GPL-3.0 licenses, corr
 metadata, and SHA-256 checksums under `build/remote-desktop-runtime/<platform>/<arch>`. Publish the
 exact corresponding source for both GPL components with every binary release. A release must stop if
 a binary, license, source manifest, checksum, platform signature, or notarization result is missing.
+
+A local source build on macOS without `OPENBOT_REMOTE_DESKTOP_VARIANT=release` (and without `CI`)
+then gives `Sunshine.app` the development bundle id and signature described below, so it can replace
+a downloaded development copy.
+
+`install:remote-desktop-runtime` checks the pinned archive. With `OPENBOT_REMOTE_DESKTOP_VARIANT=release`
+(`package`, `dist:mac`, `dist:release` and `release:local` set it), `Sunshine.app` stays as pinned
+(`dev.lizardbyte.app.Sunshine`) and electron-builder signs it with the Developer ID. Without it, the
+command sets the development bundle id `com.multicodegenius.goahead.sunshine.dev` and signs the copy with
+the first Apple Development identity in the keychain, or ad hoc. macOS gives Screen Recording and
+Accessibility to the responsible app (GoAhead, or the app that started a development stack), not to
+Sunshine.
 
 Use this source build only to make or reproduce a runtime version. The
 `.github/workflows/remote-desktop-runtime.yml` workflow builds macOS ARM64, macOS x64 and Windows x64 when the

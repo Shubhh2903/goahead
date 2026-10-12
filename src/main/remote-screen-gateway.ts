@@ -9,6 +9,7 @@ import type {
   RemoteDesktopCapabilities,
   RemoteDesktopDisplay,
   RemoteDesktopIceServer,
+  RemoteDesktopPermissionApp,
   RemoteDesktopSession,
   RemoteDesktopSetupStatus,
   RemoteDesktopTestStatus,
@@ -60,6 +61,8 @@ interface RemoteScreenGatewayOptions {
   // Read for a Linux host only. Defaults to the environment of this process.
   sessionEnvironment?: Readonly<Record<string, string | undefined>>;
   unattended: boolean;
+  /** The app that the setup check tells the user to allow. Defaults to `goahead`. */
+  permissionApp?: RemoteDesktopPermissionApp;
   runtimePaths: RemoteDesktopRuntimePaths | null;
   runtimeStateDirectory: string;
   getRuntimeCredentials: () => Promise<{ username: string; password: string }>;
@@ -191,6 +194,7 @@ export class RemoteScreenGateway {
       restartRequired: false,
       activeSessions: this.#sessions.size,
       message: null,
+      permissionApp: this.#options.permissionApp ?? "goahead",
     };
     if (this.#options.platform !== "darwin" || !this.#options.runtimePaths) {
       result.message =

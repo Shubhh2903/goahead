@@ -10,6 +10,13 @@ export const REMOTE_DESKTOP_CHECK_STATES = [
   "failed",
 ] as const;
 export type RemoteDesktopCheckState = (typeof REMOTE_DESKTOP_CHECK_STATES)[number];
+/**
+ * The app that macOS checks for Screen Recording and Accessibility. macOS asks about the responsible
+ * app, not Sunshine: GoAhead in a packaged build, and the app that started a development build.
+ * `development` means a development build whose starting app is not known.
+ */
+export const REMOTE_DESKTOP_PERMISSION_APPS = ["goahead", "terminal", "iterm", "vscode", "development"] as const;
+export type RemoteDesktopPermissionApp = (typeof REMOTE_DESKTOP_PERMISSION_APPS)[number];
 
 export interface RemoteDesktopSetupStatus {
   platform: "darwin" | "win32" | "linux";
@@ -24,6 +31,8 @@ export interface RemoteDesktopSetupStatus {
   restartRequired: boolean;
   activeSessions: number;
   message: string | null;
+  /** Absent from a host older than this field: read it as `goahead`. */
+  permissionApp?: RemoteDesktopPermissionApp;
 }
 
 export interface RemoteDesktopTestStatus {
@@ -39,7 +48,7 @@ export interface RemoteDesktopTestInput {
   action: "start" | "status" | "stop";
 }
 
-export type RemoteDesktopSetupAction = "screen-recording" | "accessibility" | "reveal";
+export type RemoteDesktopSetupAction = "screen-recording" | "accessibility";
 
 export function isRemoteDesktopSetupStatus(value: unknown): value is RemoteDesktopSetupStatus {
   return (
@@ -60,7 +69,8 @@ export function isRemoteDesktopSetupStatus(value: unknown): value is RemoteDeskt
     typeof value.activeSessions === "number" &&
     Number.isSafeInteger(value.activeSessions) &&
     value.activeSessions >= 0 &&
-    (value.message === null || (typeof value.message === "string" && value.message.length <= 1000))
+    (value.message === null || (typeof value.message === "string" && value.message.length <= 1000)) &&
+    (value.permissionApp === undefined || isOneOf(REMOTE_DESKTOP_PERMISSION_APPS, value.permissionApp))
   );
 }
 

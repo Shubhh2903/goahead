@@ -7,6 +7,7 @@ import { FuseV1Options, getCurrentFuseWire } from "@electron/fuses";
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { isDynamicRecord } from "@openbot/contracts/runtime-values";
 import { createOpenBotLogger } from "@openbot/logging";
+import { PINNED_SUNSHINE_BUNDLE_ID } from "./sunshine-bundle-identity";
 
 const logger = createOpenBotLogger("verify-macos-package");
 /** The Apple Team ID of the company Developer ID certificate. A team id is not a secret. */
@@ -141,6 +142,17 @@ if (existsSync(whisperModelPath)) throw new Error("The on-demand Whisper model m
 for (const name of ["Sunshine.app", "web-server", "streamer"]) {
   run("codesign", ["--verify", "--strict", "--verbose=2", resolve(remoteRuntimePath, name)]);
 }
+// A release ships Sunshine.app as pinned. The development copy has a different bundle id.
+expectEqual(
+  run("plutil", [
+    "-extract",
+    "CFBundleIdentifier",
+    "raw",
+    resolve(remoteRuntimePath, "Sunshine.app/Contents/Info.plist"),
+  ]),
+  PINNED_SUNSHINE_BUNDLE_ID,
+  "Sunshine bundle identifier",
+);
 
 const fuses = await getCurrentFuseWire(executablePath);
 const expectedFuses: Array<[FuseV1Options, number]> = [

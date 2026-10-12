@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { createInviteUrl, selfHostedApiOrigin } from "@openbot/contracts/invite-links";
 import type {
   AvatarImageInput,
@@ -29,6 +29,7 @@ import type {
   MarkDirectReadInput,
   RemoteDesktopDisplay,
   RemoteDesktopIceServer,
+  RemoteDesktopPermissionApp,
   RemoteDesktopSetupAction,
   SendDirectMessageInput,
   SetTeamTypingInput,
@@ -108,7 +109,9 @@ interface HostServiceOptions {
     inviteUrl: string;
     role: "admin" | "member";
   }) => Promise<void>;
-  openRemoteDesktopSetup?: (action: RemoteDesktopSetupAction, appPath: string) => Promise<void>;
+  openRemoteDesktopSetup?: (action: RemoteDesktopSetupAction) => Promise<void>;
+  /** The app that macOS checks for Screen Recording and Accessibility. Defaults to `goahead`. */
+  remoteDesktopPermissionApp?: RemoteDesktopPermissionApp;
   remoteDesktopRuntimePaths?: RemoteDesktopRuntimePaths | null;
   remoteDesktopStateDirectory?: string;
   /** Only a test supplies this. The gateway builds the real Sunshine and Moonlight runtime itself. */
@@ -191,6 +194,7 @@ export class HostService extends EventEmitter<HostEvents> {
     this.#remoteScreen = new RemoteScreenGateway({
       platform: options.platform ?? normalizeRemoteDesktopPlatform(process.platform),
       unattended: options.unattended ?? false,
+      ...(options.remoteDesktopPermissionApp ? { permissionApp: options.remoteDesktopPermissionApp } : {}),
       runtimePaths: options.remoteDesktopRuntimePaths ?? null,
       runtimeStateDirectory: options.remoteDesktopStateDirectory ?? ".openbot-remote-desktop",
       getRuntimeCredentials:
@@ -344,11 +348,8 @@ export class HostService extends EventEmitter<HostEvents> {
 
   async openRemoteDesktopSetup(action: RemoteDesktopSetupAction): Promise<void> {
     if (process.platform !== "darwin") throw new Error(sourceText("status.remote.setupMacOnly"));
-    const executable = this.#options.remoteDesktopRuntimePaths?.sunshine;
-    if (!executable) throw new Error(sourceText("error.host.runtimeNotInstalled"));
-    const appPath = dirname(dirname(dirname(executable)));
     if (!this.#options.openRemoteDesktopSetup) throw new Error(sourceText("error.host.setupUnavailable"));
-    await this.#options.openRemoteDesktopSetup(action, appPath);
+    await this.#options.openRemoteDesktopSetup(action);
   }
 
   async recheckScreenRecording(): Promise<HostStatus> {
