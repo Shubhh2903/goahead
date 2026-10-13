@@ -1,1 +1,0 @@
-These archives are the corresponding source used to build the bundled GPL-3.0 Sunshine and Moonlight Web programs. Both archives already contain the OpenBot changes. The separate patches show those changes against the pinned upstream versions.

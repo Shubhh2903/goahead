@@ -14,7 +14,7 @@ export const Route = createFileRoute("/v1/marketplace/agents/admin/submissions/$
   server: {
     handlers: {
       PATCH: async ({ request, params }) => {
-        if (!requireSkillsAdmin(request)) return apiError(401, "unauthorized", "Admin access is required.");
+        if (!(await requireSkillsAdmin(request))) return apiError(401, "unauthorized", "Admin access is required.");
         try {
           await enforceMarketplaceMutationRateLimit("mutation", "marketplace-admin");
           const value = await readJsonObject(request);

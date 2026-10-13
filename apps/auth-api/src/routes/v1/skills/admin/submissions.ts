@@ -12,7 +12,7 @@ export const Route = createFileRoute("/v1/skills/admin/submissions")({
     handlers: {
       GET: async ({ request }) => {
         try {
-          return requireSkillsAdmin(request)
+          return (await requireSkillsAdmin(request))
             ? json(await requestSkillMarketplace().pending())
             : apiError(401, "unauthorized", "An admin token is required.");
         } catch (error) {

@@ -47,7 +47,9 @@ index-*.css
 /build/codex/
 /build/claude/
 /build/grok/
+/build/remote-desktop-cache/
 /build/remote-desktop-runtime/
+/build/*.old/
 /build/remote-desktop-release/
 Bots
 # Local dev-profile agent workspaces; root only, so tracked */agents/ paths stay visible.

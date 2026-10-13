@@ -1,11 +1,19 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { accessSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { type BundledLibrary, bundledLibraryLicenses, bundleMacDynamicLibraries } from "./mac-runtime-dylibs";
 import { createRemoteDesktopSourceManifest, loadNativeRuntimeLock } from "./native-runtime-lock";
+import {
+  archiveCachePath,
+  ensureMirror,
+  populateSubmodulesFromCache,
+  readCachedArchive,
+  remoteDesktopCacheRoot,
+  withRetries,
+} from "./remote-desktop-cache";
 import { sunshineVariantFromEnvironment } from "./sunshine-bundle-identity";
 
 const platform =
@@ -37,6 +45,9 @@ const LINUX_SUNSHINE_OPTIONS = [
   "-DSUNSHINE_ENABLE_WAYLAND=OFF",
   "-DSUNSHINE_ENABLE_X11=ON",
 ];
+
+/** `--no-cache` restores the uncached build: fresh downloads and clones from GitHub. */
+const cacheRoot = process.argv.includes("--no-cache") ? null : remoteDesktopCacheRoot();
 
 const lock = await loadNativeRuntimeLock();
 const outputRoot = resolve("build/remote-desktop-runtime", platform, architecture);
@@ -175,10 +186,22 @@ async function packageCorrespondingSource(
 
 async function downloadAndExtract(url: string, expectedSha256: string, destination: string): Promise<string> {
   const archive = `${destination}.tar.gz`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Runtime source download failed with HTTP ${response.status}.`);
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (sha256(bytes) !== expectedSha256) throw new Error(`Runtime source checksum failed for ${url}.`);
+  let bytes = cacheRoot ? await readCachedArchive(cacheRoot, expectedSha256) : null;
+  if (!bytes) {
+    const downloaded = await withRetries(async () => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Runtime source download failed with HTTP ${response.status}.`);
+      return Buffer.from(await response.arrayBuffer());
+    });
+    if (sha256(downloaded) !== expectedSha256) throw new Error(`Runtime source checksum failed for ${url}.`);
+    bytes = downloaded;
+    if (cacheRoot) {
+      const cached = archiveCachePath(cacheRoot, expectedSha256);
+      await mkdir(dirname(cached), { recursive: true });
+      await writeFile(`${cached}.partial`, bytes);
+      await rename(`${cached}.partial`, cached);
+    }
+  }
   await writeFile(archive, bytes);
   await mkdir(destination, { recursive: true });
   execFileSync(tarExecutable, ["-xzf", archive, "--strip-components=1", "-C", destination], { stdio: "inherit" });
@@ -194,19 +217,41 @@ async function preparePinnedCheckout(
     throw new Error(`Runtime license checksum failed for ${runtime.repository}.`);
   }
   await rm(source, { recursive: true, force: true });
-  execFileSync("git", ["clone", "--quiet", "--filter=blob:none", "--no-checkout", runtime.repository, source]);
-  execFileSync("git", ["fetch", "--quiet", "--depth", "1", "origin", runtime.commit], { cwd: source });
-  execFileSync("git", ["checkout", "--quiet", "--detach", "FETCH_HEAD"], { cwd: source });
+  if (cacheRoot) {
+    const mirror = await ensureMirror(cacheRoot, runtime.repository, runtime.commit);
+    execFileSync("git", ["-c", "protocol.file.allow=always", "clone", "--quiet", "--no-checkout", mirror, source]);
+    execFileSync("git", ["checkout", "--quiet", "--detach", runtime.commit], { cwd: source });
+    execFileSync("git", ["remote", "set-url", "origin", runtime.repository], { cwd: source });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: source, encoding: "utf8" }).trim();
+    if (head !== runtime.commit) throw new Error(`Unexpected commit for ${runtime.repository}.`);
+  } else {
+    execFileSync("git", ["clone", "--quiet", "--filter=blob:none", "--no-checkout", runtime.repository, source]);
+    execFileSync("git", ["fetch", "--quiet", "--depth", "1", "origin", runtime.commit], { cwd: source });
+    execFileSync("git", ["checkout", "--quiet", "--detach", "FETCH_HEAD"], { cwd: source });
+  }
   if (requiredSubmodules.length === 0) return;
   const rootSubmodules = requiredSubmodules.filter(
     (path) => !requiredSubmodules.some((candidate) => candidate !== path && path.startsWith(`${candidate}/`)),
   );
-  execFileSync("git", ["submodule", "update", "--init", ...rootSubmodules], { cwd: source, stdio: "inherit" });
+  if (cacheRoot) {
+    await populateSubmodulesFromCache(cacheRoot, source, rootSubmodules, (path) => runtime.submodules[path]);
+  } else {
+    execFileSync("git", ["submodule", "update", "--init", ...rootSubmodules], { cwd: source, stdio: "inherit" });
+  }
   for (const root of rootSubmodules) {
     const nested = requiredSubmodules
       .filter((path) => path.startsWith(`${root}/`))
       .map((path) => path.slice(root.length + 1));
-    if (nested.length > 0) {
+    if (nested.length === 0) continue;
+    if (cacheRoot) {
+      await populateSubmodulesFromCache(
+        cacheRoot,
+        join(source, root),
+        nested,
+        (path) => runtime.submodules[path],
+        `${root}/`,
+      );
+    } else {
       execFileSync("git", ["submodule", "update", "--init", ...nested], { cwd: join(source, root), stdio: "inherit" });
     }
   }

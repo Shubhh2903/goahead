@@ -4181,16 +4181,25 @@ index 00000000..9e539d1e
 +}
 diff --git a/tests/unit/test_openbot_setup.mm b/tests/unit/test_openbot_setup.mm
 new file mode 100644
-index 00000000..5132aca2
+index 00000000..a54b139e
 --- /dev/null
 +++ b/tests/unit/test_openbot_setup.mm
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,134 @@
 +// OpenBot additions to Sunshine, distributed under GPL-3.0.
 +#import <AppKit/AppKit.h>
 +#include <stdexcept>
++#include <string>
 +#include "../../src/platform/macos/openbot_setup.mm"
 +namespace platf { bool is_screen_capture_allowed() { return false; } }
-+#define require(condition) do { if (!(condition)) throw std::runtime_error(#condition); } while (false)
++#define require(condition) do { if (!(condition)) throw std::runtime_error(std::string(#condition) + " (test_openbot_setup.mm:" + std::to_string(__LINE__) + ")"); } while (false)
++// A key event from the default source gets the modifier keys that the user holds now. With Shift,
++// charactersIgnoringModifiers gives "!" for the 1 key. Use a private source and no modifier flags.
++static CGEventRef key_event(CGKeyCode key_code) {
++  static CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStatePrivate);
++  CGEventRef event = CGEventCreateKeyboardEvent(source, key_code, true);
++  CGEventSetFlags(event, 0);
++  return event;
++}
 +int main() {
 +  @autoreleasepool {
 +    [NSApplication sharedApplication];
@@ -4200,7 +4209,7 @@ index 00000000..5132aca2
 +    require(platf::openbot_test_status()["active"] == true);
 +    require(!panel.movable);
 +    auto view = (OpenBotTestView *)panel.contentView;
-+    CGEventRef native = CGEventCreateKeyboardEvent(nullptr, 18, true);
++    CGEventRef native = key_event(18);
 +    NSEvent *event = [NSEvent eventWithCGEvent:native];
 +    require(![view remoteEvent:event]);
 +    [view keyDown:event];
@@ -4222,7 +4231,7 @@ index 00000000..5132aca2
 +    require(!clicked);
 +    [view acceptMouse:click point:NSMakePoint(50, 130)];
 +    require(clicked);
-+    CGEventRef key = CGEventCreateKeyboardEvent(nullptr, 18, true);
++    CGEventRef key = key_event(18);
 +    for (NSUInteger i = 0; i < code.length; i++) {
 +      [view acceptKey:[NSEvent eventWithCGEvent:key] characters:[code substringWithRange:NSMakeRange(i, 1)]];
 +    }
@@ -4258,7 +4267,7 @@ index 00000000..5132aca2
 +    require(clicked);
 +    const CGKeyCode digits[] = {29, 18, 19, 20, 21, 23, 22, 26, 28, 25};
 +    for (NSUInteger i = 0; i < code.length; i++) {
-+      CGEventRef digit = CGEventCreateKeyboardEvent(nullptr, digits[[code characterAtIndex:i] - '0'], true);
++      CGEventRef digit = key_event(digits[[code characterAtIndex:i] - '0']);
 +      require(platf::openbot_test_input(digit));
 +      [view acceptKey:[NSEvent eventWithCGEvent:digit] characters:[code substringWithRange:NSMakeRange(i, 1)]];
 +      CFRelease(digit);
@@ -4289,7 +4298,7 @@ index 00000000..5132aca2
 +      entered = @"";
 +      for (NSUInteger i = 0; i < code.length; i++) {
 +        const CGKeyCode key_code = digits[[code characterAtIndex:i] - '0'];
-+        CGEventRef digit = CGEventCreateKeyboardEvent(nullptr, key_code, true);
++        CGEventRef digit = key_event(key_code);
 +        if (with_window) {
 +          CFRelease(digit);
 +          NSEvent *local = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:panel.windowNumber context:nil characters:[code substringWithRange:NSMakeRange(i, 1)] charactersIgnoringModifiers:[code substringWithRange:NSMakeRange(i, 1)] isARepeat:NO keyCode:key_code];

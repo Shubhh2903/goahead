@@ -181,6 +181,13 @@ metadata, and SHA-256 checksums under `build/remote-desktop-runtime/<platform>/<
 exact corresponding source for both GPL components with every binary release. A release must stop if
 a binary, license, source manifest, checksum, platform signature, or notarization result is missing.
 
+The build keeps a cache in `build/remote-desktop-cache/` (git ignores it): source archives named by
+SHA-256, and bare git mirrors of the Sunshine and Moonlight repositories and of each Sunshine
+submodule. A repeat build skips the downloads and clones, and fetches only when a pinned commit is
+missing. The cache is not trusted: an archive is used only when its SHA-256 equals the lock, and each
+submodule HEAD must equal its pinned commit. Network steps retry 3 times. Pass `--no-cache` to
+`build:remote-desktop-runtime` for the old behavior, or delete the folder to start over.
+
 A local source build on macOS without `OPENBOT_REMOTE_DESKTOP_VARIANT=release` (and without `CI`)
 then gives `Sunshine.app` the development bundle id and signature described below, so it can replace
 a downloaded development copy.

@@ -15,7 +15,7 @@ export const Route = createFileRoute("/v1/skills/admin/featured/$skillId")({
     handlers: {
       POST: async ({ request, params }) => {
         try {
-          if (!requireSkillsAdmin(request)) return apiError(401, "unauthorized", "An admin token is required.");
+          if (!(await requireSkillsAdmin(request))) return apiError(401, "unauthorized", "An admin token is required.");
           await enforceMarketplaceMutationRateLimit("mutation", "marketplace-admin");
           const value = await readJsonObject(request);
           if (!isDynamicRecord(value) || !isBoolean(value.featured)) {
