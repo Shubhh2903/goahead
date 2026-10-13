@@ -37,7 +37,14 @@ export interface AnalyticsModel extends AnalyticsTotals {
 export interface AnalyticsAgent extends AnalyticsTotals {
   agentId: string;
   share: number;
+  /**
+   * The model ids the agent used in the range, most tokens first. Optional: a host before this
+   * field does not send it, and the report then names no model for the agent.
+   */
+  models?: string[];
 }
+/** The most model ids one agent row carries. */
+export const ANALYTICS_AGENT_MODELS_LIMIT = 32;
 // One cell of the daily-by-provider grid. The chart reads exactly these two measures, so
 // the cell carries them rather than the eleven other fields of AnalyticsTotals: at the
 // 367-day cap a full-totals cell per provider is four times the payload for nothing.
@@ -226,8 +233,23 @@ export function decodeAnalyticsAgents(value: unknown): AnalyticsAgent[] {
     if (!isDynamicRecord(agent) || !isString(agent.agentId) || !agent.agentId || agent.agentId.length > 256)
       throw new Error("Invalid agent analytics row.");
     if (number(agent.share) > 1) throw new Error("Invalid agent analytics row.");
-    return { ...totals(agent), agentId: agent.agentId, share: number(agent.share) };
+    return {
+      ...totals(agent),
+      agentId: agent.agentId,
+      share: number(agent.share),
+      ...(agent.models === undefined ? {} : { models: analyticsAgentModels(agent.models) }),
+    };
   });
+}
+
+function analyticsAgentModels(value: unknown): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > ANALYTICS_AGENT_MODELS_LIMIT ||
+    !value.every((model) => isString(model) && model.length > 0 && model.length <= 256)
+  )
+    throw new Error("Invalid agent analytics models.");
+  return [...value];
 }
 
 // The daily grid is host-only for the same reason as the agent split, and it is a

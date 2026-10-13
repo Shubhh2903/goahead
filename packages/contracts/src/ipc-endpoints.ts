@@ -109,6 +109,7 @@ import type {
   OpenSharedFileInput,
   OpenWorkspaceFileInput,
 } from "./ipc-attachments";
+import type { BitwardenConnectorStatus } from "./ipc-bitwarden-connector";
 import type {
   BrowserBounds,
   BrowserControlState,
@@ -242,6 +243,7 @@ import type {
 } from "./ipc-provider-detection";
 import type {
   AcknowledgeFailedTurnInput,
+  BusyMessageModePreference,
   CancelQueuedMessageInput,
   EditQueuedMessageInput,
   InterruptTurnInput,
@@ -350,7 +352,13 @@ import type {
   UpdateHostIdentityInput,
   UpdateTeamMemberInput,
 } from "./ipc-team-host";
-import type { VoiceModelStatus, VoiceTranscriptionInput, VoiceTranscriptionResult } from "./ipc-voice";
+import type {
+  VoiceModelRequest,
+  VoiceModelStatus,
+  VoiceSettings,
+  VoiceTranscriptionInput,
+  VoiceTranscriptionResult,
+} from "./ipc-voice";
 import type { AccountSession, MobileConnectedDevice, MobileConnectTicket } from "./mobile-connect";
 
 declare const payloadType: unique symbol;
@@ -449,6 +457,10 @@ export const IPC_ENDPOINTS = {
     // A remote owner or admin can change a grant from a phone or the web client, so main tells the
     // window instead of the window only reading the value at start.
     approvalAutomation: event<ApprovalAutomationPreference>()("app:approval-automation"),
+    getBusyMessageModePreference: request<undefined, BusyMessageModePreference>()("app:get-busy-message-mode"),
+    setBusyMessageModePreference: request<BusyMessageModePreference, BusyMessageModePreference>()(
+      "app:set-busy-message-mode",
+    ),
     getAppLanguagePreference: request<undefined, AppLanguagePreference>()("app:get-language-preference"),
     setAppLanguagePreference: request<SetAppLanguagePreferenceInput, AppLanguagePreference>()(
       "app:set-language-preference",
@@ -519,8 +531,18 @@ export const IPC_ENDPOINTS = {
     event: event<ProviderRuntimeSnapshot>()("provider-runtimes:event"),
   },
   voice: {
+    /** The status of the model in use. */
     getModelStatus: request<undefined, VoiceModelStatus>()("voice:get-model-status"),
+    /** One status for each model in `VOICE_MODELS`, in the same order. */
+    getModelStatuses: request<undefined, VoiceModelStatus[]>()("voice:get-model-statuses"),
+    /** Downloads the model in use when it is missing. Answers when it is ready or failed. */
     prepareModel: request<undefined, VoiceModelStatus>()("voice:prepare-model"),
+    /** Downloads one model. Answers when it is ready, failed, or cancelled. */
+    downloadModel: request<VoiceModelRequest, VoiceModelStatus>()("voice:download-model"),
+    /** Stops a download. The model is missing again; a later download starts from the first file not complete. */
+    cancelModelDownload: request<VoiceModelRequest, VoiceModelStatus>()("voice:cancel-model-download"),
+    getSettings: request<undefined, VoiceSettings>()("voice:get-settings"),
+    setSettings: request<VoiceSettings, VoiceSettings>()("voice:set-settings"),
     transcribe: request<VoiceTranscriptionInput, VoiceTranscriptionResult>()("voice:transcribe"),
     modelStatus: event<VoiceModelStatus>()("voice:model-status"),
   },
@@ -726,6 +748,14 @@ export const IPC_ENDPOINTS = {
     openVerification: request<undefined, void>()("github-connector:open-verification"),
     openInstall: request<undefined, void>()("github-connector:open-install"),
     changed: event<GitHubConnectorStatus>()("github-connector:changed"),
+  },
+  // The Bitwarden connection of this computer. Local only, like `githubConnector`. The CLI session
+  // key goes from the renderer to main once, in `connect`; every answer is the status only.
+  bitwardenConnector: {
+    status: request<undefined, BitwardenConnectorStatus>()("bitwarden-connector:status"),
+    connect: request<string, BitwardenConnectorStatus>()("bitwarden-connector:connect"),
+    disconnect: request<undefined, BitwardenConnectorStatus>()("bitwarden-connector:disconnect"),
+    changed: event<BitwardenConnectorStatus>()("bitwarden-connector:changed"),
   },
   // The 1Password connection of this computer. Local only, like `githubConnector`. The token goes
   // from the renderer to main once, in `connectWithToken`; every answer is the status only.

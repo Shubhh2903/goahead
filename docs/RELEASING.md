@@ -147,9 +147,10 @@ A tag build signs the Windows release with Azure Artifact Signing. It needs no s
   `bun run dist:win --config electron-builder.windows-signing.yml`, then runs `az account clear`, so
   the steps after the build have no Azure session. That overlay adds
   `win.azureSignOptions` and `forceCodeSigning`. electron-builder signs `OpenBot.exe`, every `.exe` from
-  `extraResources` (Whisper, the remote desktop runtime, and the Computer Use driver), the NSIS
-  installer, and its uninstaller. The provider CLIs are not packaged on Windows, so their vendor
-  signatures do not change.
+  `extraResources` (the remote desktop runtime and the Computer Use driver), the NSIS
+  installer, and its uninstaller. It does not sign the `.node` and `.dll` files of the voice runtime,
+  because the overlay sets no `win.signExts`. The provider CLIs are not packaged on Windows, so their
+  vendor signatures do not change.
 - `verify:package:win --require-signature` requires a valid signature with the `app-update.yml`
   publisher on each of those executables, and the next step requires the same signer on the
   installer. A dry run requires `NotSigned` instead.
@@ -430,6 +431,31 @@ group, a placeholder such as `TODO`, or a heading with no real date. These steps
   `no-changelog` label. Use the label when a user sees no change.
 - `bun run release:preflight` and the tag workflow check the section of the `package.json` version.
 
+### Post-update notes
+
+After a desktop update, GoAhead shows the notes of the new version in a dialog. The dialog reads
+`CHANGELOG.md`, which the build bundles (`src/renderer/src/features/updates/whats-new-releases.ts`).
+It does not read OpenBot's notes, GitHub releases or a remote service, so it sends no data and needs
+no network. A release writes its notes one time, in `changelog.d/`, and the version bump moves them
+into `CHANGELOG.md` as usual. Write each item for a user: the dialog shows it as it is.
+
+The dialog shows the `### Added`, `### Changed` and `### Fixed` items. It shows `### Removed` and
+`### Deprecated` items as changes and `### Security` items as fixes. A bold step after the upgrade
+shows under "Do this after the update". Unreleased notes and prerelease versions are not shown.
+When an update skips versions, the dialog shows the notes of each skipped version together.
+"Full changelog" opens `/changelog` on the GoAhead site.
+
+The installed desktop version comes from `AppInfo`, not an available update or a remote server.
+In development, `AppInfo` uses `package.json`; Electron otherwise reports its own version.
+The local app profile keeps the highest shown version in `openbot:whats-new-version`. On the first
+launch of this feature, an existing `openbot:analytics-app-version` gives the previous version. A
+profile with no previous version gets a silent baseline, so a new installation starts without the
+dialog. Downgrades do not lower the marker. The marker is saved before the dialog opens. An update
+with no notes is consumed without a dialog. Settings > Updates can open the notes again.
+
+To see the dialog in development, set `openbot:whats-new-version` in the renderer's local storage
+to an earlier version than `package.json`, then reload the window.
+
 ## Publish a version
 
 Start from a clean, up-to-date `main` branch. For the first release, `package.json` and
@@ -477,8 +503,8 @@ The workflow:
 3. runs the complete offline repository check;
 4. builds signed and notarized ARM64 DMG and ZIP artifacts plus a separately signed/notarized Host PKG on a GitHub Apple silicon runner,
    and signed and notarized x64 DMG and ZIP artifacts on a GitHub Intel runner (`macos-15-intel`). Each
-   architecture builds on its own runner, because the Whisper and remote desktop builds run on the
-   build machine. The Host PKG is ARM64 only;
+   architecture builds on its own runner, because the voice runtime and the remote desktop runtime
+   are prepared for the architecture of the build machine. The Host PKG is ARM64 only;
    when `hdiutil create` fails with "Device not configured" or "Resource busy", it builds again,
    up to 3 attempts, because that runner error is not caused by the app.
    electron-builder signs the DMG with the Developer ID Application identity (`dmg.sign: true`) but
@@ -546,14 +572,18 @@ explicit action, because `autoInstallOnAppQuit` stays off so shutdown preparatio
 stage the user waits on is bounded by a timeout and recorded in `logs/update/update.log`, so a failed
 check, download, or restart reports an actionable error and can be retried in place.
 
-The Whisper executable is part of the macOS and Windows applications. Linux ships no Whisper binary
-and no remote desktop runtime, so voice prompts and remote desktop report themselves as unavailable
-there. The `ggml-medium-q5_0.bin` model is not part of an application or update artifact. GoAhead downloads the pinned model on first voice use, checks its size
-and SHA-256, and keeps the verified file in the user data directory for later offline use.
+The voice runtime (the sherpa-onnx N-API addon and ONNX Runtime, from the pinned `sherpa-onnx-*`
+npm packages) is part of the macOS and Windows applications, in `voice/runtime`. Linux ships no voice
+runtime and no remote desktop runtime, so voice prompts and remote desktop report themselves as
+unavailable there. The NVIDIA Parakeet TDT 0.6B v3 int8 model is not part of an application or update
+artifact. GoAhead downloads its four pinned files on first voice use, checks the size and SHA-256 of
+each, and keeps the verified files in `runtimes/parakeet-tdt-0.6b-v3-int8` in the user data directory
+for later offline use. Parakeet is the only dictation model, and dictation is in English. At startup,
+a packaged application removes the old Whisper model directory `runtimes/whisper` if it exists.
 
 The release workflow stops if the macOS update ZIP, the Windows NSIS installer, or the Linux AppImage
 is larger than 700 MiB, or if the DMG is larger than 750 MiB. It also stops if update metadata has a wrong size or SHA-512, if
-the Whisper model is present, or if the application contains a second native Claude runtime.
+a voice model is present, or if the application contains a second native Claude runtime.
 
 If a release is bad, publish a newer patch version. Do not replace an already published version with
 different binaries.

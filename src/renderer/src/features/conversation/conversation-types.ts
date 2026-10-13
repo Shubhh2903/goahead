@@ -8,6 +8,7 @@ import type {
   AvatarImageInput,
   BrowserControlState,
   BrowserTab,
+  BusyMessageMode,
   CustomAgentSummary,
   CustomProviderSummary,
   DraftAttachment,
@@ -44,6 +45,11 @@ export interface AgentSettingsRequest {
 export interface ConversationTarget {
   agentId: string;
   serverId: string;
+}
+
+/** What was said so far in a recording, and the conversation it is dictated into. */
+export interface VoiceLiveTranscript extends ConversationTarget {
+  text: string;
 }
 
 export interface ConversationProps {
@@ -151,12 +157,17 @@ export interface ConversationProps {
   onSelectAgent: (agentId: string) => void;
   onUpdateAgent: (agentId: string, updates: Omit<UpdateAgentInput, "agentId">) => Promise<void>;
   onSetAgentAvatar: (agentId: string, image: AvatarImageInput | null) => Promise<void>;
+  /**
+   * Sends one message. `clientMessageId` names it for the host, so a retry with the same id
+   * returns the first receipt; the answer carries the host's id for the message, or why it failed.
+   */
   onSendMessage: (
     body: string,
     attachmentDraftIds: string[],
     replyToMessageId: string | null,
     target?: ConversationTarget,
-  ) => Promise<boolean>;
+    clientMessageId?: string,
+  ) => Promise<SendMessageResult>;
   onMarkRead: () => Promise<void>;
   onLoadOlder?: () => void;
   onLoadLatest?: () => Promise<void>;
@@ -179,6 +190,8 @@ export interface ConversationProps {
   agentAutoApproves?: boolean;
   /** Turbo mode covers every agent, so the per-agent switch is read-only while it is on. */
   agentAutoApproveLocked?: boolean;
+  /** The app default an agent without its own busy-message setting follows. Local agents only. */
+  defaultBusyMessageMode?: BusyMessageMode;
   /** Absent for a remote agent: its own computer holds that choice. */
   onSetAgentAutoApprove?: (autoApprove: boolean) => Promise<void>;
   /** Starts a new chat with the agent. Absent when its host does not serve `context-reset-v1`. */
@@ -199,6 +212,9 @@ export interface ConversationProps {
   onOpenRemoteDesktop: (serverId: string, trigger: HTMLElement) => Promise<void>;
   onStop: () => void;
 }
+
+/** `messageId` is the conversation message the host stored: the delivery id of the receipt. */
+export type SendMessageResult = { messageId: string } | { error: string };
 
 export interface ComposerDraft {
   text: string;

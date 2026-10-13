@@ -20,6 +20,9 @@ export default defineConfig({
           // The database host is its own process. Its runtime imports are `node:*` only, so it
           // emits a standalone chunk that `utilityProcess.fork` can load by path.
           "agent-database-host": resolve("src/backend/agent-data/agent-database-host.ts"),
+          // The voice host is its own process too. It imports only node:* and loads the speech
+          // recognition addon by path.
+          "voice-transcription-host": resolve("src/main/voice-transcription-host.ts"),
         },
       },
     },

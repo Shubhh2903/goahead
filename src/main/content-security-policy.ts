@@ -28,7 +28,7 @@ export function buildContentSecurityPolicy(
     `connect-src 'self' openbot-attachment: openbot-remote-attachment: ws://127.0.0.1:* ${SIGNAL_SOURCE}${selfHostedSignalSource}${developmentSources}`,
     "object-src 'none'",
     // The remote desktop viewer uses a loopback proxy in packaged apps too.
-    `frame-src 'self' openbot-attachment: openbot-remote-attachment: ${PRODUCT_IDENTITY.siteOrigin} http://127.0.0.1:* http://localhost:*`,
+    `frame-src 'self' openbot-attachment: openbot-remote-attachment: openbot-visual: openbot-remote-visual: ${PRODUCT_IDENTITY.siteOrigin} http://127.0.0.1:* http://localhost:*`,
     "base-uri 'none'",
   ].join("; ");
 }

@@ -85,6 +85,8 @@ export interface SidebarProps {
   footer?: JSX.Element;
   onExpand: () => void;
   onOpenMarketplace: () => void;
+  /** Opens the usage report of the active server. Without it, the topbar shows no usage button. */
+  onOpenUsage?: ((trigger: HTMLElement) => void) | undefined;
   emptyAction?:
     | {
         label: string;

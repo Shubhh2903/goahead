@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { chatVisualItemType } from "@openbot/contracts/chat-visual";
+import { sortConversationMessages } from "@openbot/contracts/conversation-order";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
   AgentModelOption,
@@ -35,7 +37,8 @@ import {
 } from "../messaging/messaging-read-tools";
 import { SLACK_SEND_MESSAGE_TOOL, slackSendMessageSchema } from "../messaging/messaging-send-tool";
 import type { MessagingThreads } from "../messaging/messaging-threads";
-import { type AppServerRequest, type DynamicToolCallParams, isRecord } from "../protocol";
+import { CHAT_VISUAL_PREVIEW_DEFAULT_WIDTH, htmlPreviewToolSchema, htmlRenderToolSchema } from "../openbot-tools";
+import { type AppServerRequest, type DynamicToolCallParams, type DynamicToolResult, isRecord } from "../protocol";
 import { AgentInterruptTool } from "./agent-interrupt-tool";
 import type { AgentMemories } from "./agent-memories";
 import { type ApprovalAutomationPolicy, NO_APPROVAL_AUTOMATION } from "./approval-automation";
@@ -43,9 +46,10 @@ import type { AttachmentGateway } from "./attachment-gateway";
 import type { AttentionRegistry } from "./attention-registry";
 import { loadAvatarFile } from "./avatar-file";
 import type { BrowserUploads } from "./browser-uploads";
+import { ChatVisualPreviewFailed, type ChatVisualPreviewHost } from "./chat-visual-preview";
 import type { ConversationRuntime } from "./conversation-runtime";
 import { handleDataTool } from "./data-tools";
-import { responseAttachmentMessageId } from "./delivery-content";
+import { responseAttachmentMessageId, visualReplyFileName, visualReplyMessageId } from "./delivery-content";
 import type { DrainScheduler } from "./drain-scheduler";
 import type { HostedSiteCoordinator } from "./hosted-site-coordinator";
 import { isHostedSiteMutationTool } from "./hosted-site-events";
@@ -124,6 +128,8 @@ export interface OpenBotToolRouterOptions {
   approvalAutomation?: ApprovalAutomationPolicy;
   /** The external conversations, which take an agent's request to send a message. */
   messaging: MessagingThreads;
+  /** Draws pages for `html_preview`; null where no window can draw one. */
+  visualPreview?: ChatVisualPreviewHost | null;
   hooks: OpenBotToolRouterHooks;
 }
 
@@ -153,6 +159,7 @@ export class OpenBotToolRouter {
   readonly #localSkillTools?: () => LocalSkillTools;
   readonly #approvalAutomation: ApprovalAutomationPolicy;
   readonly #messaging: MessagingThreads;
+  readonly #visualPreview: ChatVisualPreviewHost | null;
   readonly #hooks: OpenBotToolRouterHooks;
   readonly #interruptTool: AgentInterruptTool;
 
@@ -175,6 +182,7 @@ export class OpenBotToolRouter {
     this.#localSkillTools = options.localSkillTools;
     this.#approvalAutomation = options.approvalAutomation ?? NO_APPROVAL_AUTOMATION;
     this.#messaging = options.messaging;
+    this.#visualPreview = options.visualPreview ?? null;
     this.#hooks = options.hooks;
     this.#interruptTool = new AgentInterruptTool({
       store: options.store,
@@ -386,7 +394,96 @@ export class OpenBotToolRouter {
     return { reasoningEffort: request.reasoningEffort };
   }
 
-  async #handleOpenBotTool(params: DynamicToolCallParams): Promise<OpenBotToolResponse> {
+  /**
+   * `html_render`: stores the page as an HTML attachment and adds a visual reply message, which the
+   * app shows in a sandboxed frame above the final answer. A retried call finds its message by id.
+   */
+  async #renderVisual(
+    params: DynamicToolCallParams,
+    senderAgentId: string,
+    executionThreadId: string,
+  ): Promise<OpenBotToolResponse> {
+    // The agent can correct its page, so it gets the reason. The reason does not repeat the page.
+    const parsed = htmlRenderToolSchema.safeParse(params.arguments, { reportInput: true });
+    if (!parsed.success) return openBotToolFailure(profileToolErrorMessage(parsed.error));
+    const args = parsed.data;
+    const messageId = visualReplyMessageId(params.threadId, params.turnId, params.callId);
+    if (
+      this.#conversation.ensureSnapshot(senderAgentId, executionThreadId).messages.some(({ id }) => id === messageId)
+    ) {
+      return openBotToolResult({ status: "shown", messageId });
+    }
+    // The page and its message are saved together, so a failed save keeps no page and a retry stores one.
+    const attachment = await this.#mailbox.stageGeneratedBytes({
+      bytes: new TextEncoder().encode(args.html),
+      name: `${visualReplyFileName(args.title)}.html`,
+      mimeType: "text/html",
+      ownerAgentId: senderAgentId,
+      ownerThreadId: executionThreadId,
+    });
+    // A concurrent `attach_files_to_response` keeps the live snapshot while it reads files, then saves
+    // it. A replaced snapshot would make that save delete this message, so the message goes in place.
+    const snapshot = this.#conversation.ensureSnapshot(senderAgentId, executionThreadId);
+    snapshot.messages.push({
+      id: messageId,
+      turnId: params.turnId,
+      author: "assistant",
+      source: "assistant",
+      text: args.title,
+      createdAt: new Date().toISOString(),
+      status: "completed",
+      itemType: chatVisualItemType(args.height),
+      attachments: [attachment],
+    });
+    sortConversationMessages(snapshot.messages);
+    try {
+      const persisted = this.#mailbox.persistGeneratedAttachmentsWithConversation(
+        snapshot,
+        "response.visual-added",
+        { turnId: params.turnId, messageId, attachmentId: attachment.id },
+        [attachment.id],
+      );
+      snapshot.revision = persisted.revision;
+    } catch (error) {
+      const messageIndex = snapshot.messages.findIndex((candidate) => candidate.id === messageId);
+      if (messageIndex >= 0) snapshot.messages.splice(messageIndex, 1);
+      await this.#mailbox.discardStagedGeneratedAttachments([attachment.id]);
+      throw error;
+    }
+    this.#conversation.publishConversation(snapshot);
+    return openBotToolResult({ status: "shown", messageId });
+  }
+
+  /**
+   * `html_preview`: draws the page out of view and gives the agent the image, the content height and
+   * the console output. A page that fails to draw is a result the agent can correct.
+   */
+  async #previewVisual(params: DynamicToolCallParams): Promise<OpenBotToolResponse | DynamicToolResult> {
+    const parsed = htmlPreviewToolSchema.safeParse(params.arguments, { reportInput: true });
+    if (!parsed.success) return openBotToolFailure(profileToolErrorMessage(parsed.error));
+    const args = parsed.data;
+    const preview = this.#visualPreview;
+    if (!preview) return openBotToolFailure("This GoAhead cannot draw a page. Call html_render without a preview.");
+    try {
+      const { imageUrl, contentHeight, console } = await preview.capture({
+        html: args.html,
+        width: args.width ?? CHAT_VISUAL_PREVIEW_DEFAULT_WIDTH,
+        appearance: args.appearance ?? "dark",
+      });
+      return {
+        success: true,
+        contentItems: [
+          { type: "inputText", text: JSON.stringify({ contentHeight, console }) },
+          { type: "inputImage", imageUrl },
+        ],
+      };
+    } catch (error) {
+      if (error instanceof ChatVisualPreviewFailed) return openBotToolFailure(error.reason);
+      throw error;
+    }
+  }
+
+  async #handleOpenBotTool(params: DynamicToolCallParams): Promise<OpenBotToolResponse | DynamicToolResult> {
     const senderAgentId = this.#conversation.agentForThread(params.threadId);
     if (!senderAgentId) throw new Error("The sending GoAhead agent is unknown.");
 
@@ -458,6 +555,19 @@ export class OpenBotToolRouter {
           },
         ],
       };
+    }
+
+    if (params.tool === "html_preview") {
+      return this.#previewVisual(params);
+    }
+
+    if (params.tool === "html_render") {
+      if (channelId)
+        return openBotToolFailure("A channel cannot show an HTML page. Send the result as text or a file.");
+      // The answer of an external conversation goes to Slack, where the page cannot run.
+      if (this.#messaging.store.linkForThread(executionThreadId))
+        return openBotToolFailure("This conversation cannot show an HTML page. Send the result as text or a file.");
+      return this.#renderVisual(params, senderAgentId, executionThreadId);
     }
 
     if (params.tool === "list_sites") {

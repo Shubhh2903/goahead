@@ -221,4 +221,18 @@ export const messages = {
   "connector.onePassword.statusConnected": "Conectado",
   "connector.onePassword.statusConnecting": "Conectando",
   "connector.onePassword.statusNotSetUp": "Não configurado",
+  "connector.bitwarden.title": "Bitwarden",
+  "connector.bitwarden.description": "Preencher logins do navegador a partir do Bitwarden.",
+  "connector.bitwarden.setup":
+    "Instale a CLI do Bitwarden e entre com bw login. Crie uma pasta chamada Shared with OpenBot e coloque nela apenas os logins que os agentes podem usar. Execute bw unlock --raw e cole a chave de sessão abaixo. Não cole sua senha mestra.",
+  "connector.bitwarden.scope":
+    "Todos os agentes deste computador podem usar logins correspondentes em Shared with OpenBot. O GoAhead usa origens HTTPS exatas. Ele não usa itens que exigem senha mestra ou regra personalizada de URI.",
+  "connector.bitwarden.session":
+    "A chave de sessão fica na memória. Conecte de novo após 8 horas sem uso do cofre ou após o GoAhead fechar. Desconectar interrompe o acesso do GoAhead; não bloqueia outros clientes Bitwarden.",
+  "connector.bitwarden.sessionKey": "Chave de sessão do Bitwarden",
+  "connector.bitwarden.connect": "Conectar Bitwarden",
+  "connector.bitwarden.disconnect": "Desconectar Bitwarden",
+  "connector.bitwarden.connected": "Conectado",
+  "connector.bitwarden.disconnected": "Não conectado",
+  "connector.bitwarden.failed": "Não foi possível conectar ao Bitwarden.",
 } as const satisfies PartialTranslation<typeof source>;

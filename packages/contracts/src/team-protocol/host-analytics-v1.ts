@@ -14,6 +14,14 @@ function number(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("Invalid analytics number.");
   return value;
 }
+function modelList(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 32) throw new Error("Invalid analytics models.");
+  return value.map((model) => {
+    const id = text(model);
+    if (!id) throw new Error("Invalid analytics models.");
+    return id;
+  });
+}
 function totals(value: unknown): TeamProtocolV1JsonObject {
   const input = record(value);
   const output: TeamProtocolV1JsonObject = {};
@@ -63,7 +71,14 @@ export function decodeHostAnalyticsV1Response(value: unknown): TeamProtocolV1Jso
       const agent = record(value);
       const share = number(agent.share);
       if (share > 1) throw new Error("Invalid analytics share.");
-      return { ...totals(agent), agentId: text(agent.agentId), share };
+      // `models` is optional and additive: a host before it does not send it, and a client
+      // before it drops it, so neither side changes the meaning of the other fields.
+      return {
+        ...totals(agent),
+        agentId: text(agent.agentId),
+        share,
+        ...(agent.models === undefined ? {} : { models: modelList(agent.models) }),
+      };
     }),
     // A cell of the daily-by-provider grid carries only the two measures the chart draws,
     // so it does not go through totals().

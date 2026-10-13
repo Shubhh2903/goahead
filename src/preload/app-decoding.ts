@@ -23,6 +23,8 @@ import {
   type AppLogoColorPreference,
   type ApprovalAutomationPreference,
   type AppSetupState,
+  type BitwardenConnectorStatus,
+  type BusyMessageModePreference,
   type CentralAuthIssue,
   type CentralAuthState,
   type CentralAuthUser,
@@ -47,6 +49,7 @@ import {
   isAppLanguage,
   isAppLogoColor,
   isApprovalAutomationPreference,
+  isBusyMessageMode,
   isCustomAgentCheckResult,
   isCustomAgentResult,
   isCustomAgentSummary,
@@ -58,6 +61,7 @@ import {
   isProviderDetectionSettings,
   isRemoteDesktopSetupStatus,
   isRemoteDesktopTestStatus,
+  isVoiceModelId,
   type MobileConnectedDevice,
   type MobileConnectTicket,
   type NotificationOpenedEvent,
@@ -73,6 +77,7 @@ import {
   type UpdatePreference,
   type UpdateStatus,
   type VoiceModelStatus,
+  type VoiceSettings,
   type VoiceTranscriptionResult,
 } from "@openbot/contracts/ipc";
 import {
@@ -113,6 +118,12 @@ export const decodeApprovalAutomationPreference: (value: unknown) => ApprovalAut
   isApprovalAutomationPreference,
   "approval automation preference",
 );
+
+export function decodeBusyMessageModePreference(value: unknown): BusyMessageModePreference {
+  const preference = decodeRecord(value, "busy message mode preference");
+  if (!isBusyMessageMode(preference.mode)) throw new Error("Invalid busy message mode.");
+  return { mode: preference.mode };
+}
 
 export function decodeAppLanguagePreference(value: unknown): AppLanguagePreference {
   const preference = decodeRecord(value, "language preference");
@@ -269,11 +280,21 @@ const VOICE_MODEL_PHASES: readonly VoiceModelStatus["phase"][] = ["missing", "do
 
 export function decodeVoiceModelStatus(value: unknown): VoiceModelStatus {
   const status = decodeRecord(value, "voice model status");
-  const { phase, progress } = status;
-  if (!isOneOf(VOICE_MODEL_PHASES, phase) || (progress !== null && !isNumber(progress))) {
+  const { modelId, phase, progress } = status;
+  if (!isVoiceModelId(modelId) || !isOneOf(VOICE_MODEL_PHASES, phase) || (progress !== null && !isNumber(progress))) {
     throw new Error("Invalid voice model status.");
   }
-  return { phase, progress, message: nullableString(status, "message") };
+  return { modelId, phase, progress, message: nullableString(status, "message") };
+}
+
+export function decodeVoiceModelStatuses(value: unknown): VoiceModelStatus[] {
+  return decodeList(value, "voice model status list", decodeVoiceModelStatus);
+}
+
+export function decodeVoiceSettings(value: unknown): VoiceSettings {
+  const { modelId } = decodeRecord(value, "voice settings");
+  if (!isVoiceModelId(modelId)) throw new Error("Invalid voice settings.");
+  return { modelId };
 }
 
 export function decodeVoiceTranscriptionResult(value: unknown): VoiceTranscriptionResult {
@@ -331,6 +352,13 @@ export function decodeOnePasswordConnectorStatus(value: unknown): OnePasswordCon
   const status = parseOnePasswordConnectorStatus(value);
   if (!status) throw new Error("Invalid 1Password connector response.");
   return status;
+}
+
+/** Only the connection state crosses from main. Any other field, such as a key, is dropped. */
+export function decodeBitwardenConnectorStatus(value: unknown): BitwardenConnectorStatus {
+  if (!value || typeof value !== "object" || !("connected" in value) || typeof value.connected !== "boolean")
+    throw new Error("Invalid Bitwarden connector response.");
+  return { connected: value.connected };
 }
 
 export function decodeBillingState(value: unknown): BillingState {

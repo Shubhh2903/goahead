@@ -1,8 +1,14 @@
 // @vitest-environment node
 
-import type { VoiceModelStatus, VoiceTranscriptionInput, VoiceTranscriptionResult } from "@openbot/contracts/ipc";
+import type {
+  VoiceModelStatus,
+  VoiceSettings,
+  VoiceTranscriptionInput,
+  VoiceTranscriptionResult,
+} from "@openbot/contracts/ipc";
 import { describe, expect, it, vi } from "vitest";
 import { handler, payloadHandler, registerIpcGroup } from "./define-ipc-group";
+import { parseVoiceModelRequest, parseVoiceSettings } from "./voice-inputs";
 
 // Same reason as trusted-ipc.test.ts: electron cannot be imported outside an Electron process, and
 // ipcMain is the only thing the wrappers touch, so registrations are captured rather than performed.
@@ -21,18 +27,25 @@ vi.mock("electron", () => ({
 const TRUSTED_EVENT = { senderFrame: { url: "openbot-app://app/index.html" } };
 const UNTRUSTED_EVENT = { senderFrame: { url: "https://evil.example/index.html" } };
 
-const READY: VoiceModelStatus = { phase: "ready", progress: null, message: null };
+const READY: VoiceModelStatus = { modelId: "parakeet-tdt-0.6b-v3", phase: "ready", progress: null, message: null };
+
+const SETTINGS: VoiceSettings = { modelId: "parakeet-tdt-0.6b-v3" };
 
 function decodeNote(value: unknown): VoiceTranscriptionInput {
   return { audio: new TextEncoder().encode(String(value)) };
 }
 
-// `voice` is the group under test because it is the smallest with all three shapes: a request that
-// takes nothing, a request that takes a payload, and an event the main process only ever sends.
+// `voice` is the group under test because it has all three shapes: a request that takes nothing, a
+// request that takes a payload, and an event the main process only ever sends.
 function registerVoice(transcribe: (input: VoiceTranscriptionInput) => VoiceTranscriptionResult): void {
   registerIpcGroup("voice", {
     getModelStatus: handler(() => READY),
+    getModelStatuses: handler(() => [READY]),
     prepareModel: handler(() => READY),
+    downloadModel: payloadHandler(parseVoiceModelRequest, () => READY),
+    cancelModelDownload: payloadHandler(parseVoiceModelRequest, () => READY),
+    getSettings: handler(() => SETTINGS),
+    setSettings: payloadHandler(parseVoiceSettings, (settings) => settings),
     transcribe: payloadHandler(decodeNote, transcribe),
   });
 }

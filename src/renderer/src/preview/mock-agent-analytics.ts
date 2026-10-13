@@ -132,6 +132,10 @@ export function mockHostAnalytics(
         ...report.totals,
         agentId: report.agentId,
         share: totals.processedTokens ? report.totals.processedTokens / totals.processedTokens : 0,
+        models: [...report.models]
+          .sort((a, b) => b.processedTokens - a.processedTokens)
+          .map((model) => model.model)
+          .filter(Boolean),
       }))
       .sort((a, b) => b.processedTokens - a.processedTokens || a.agentId.localeCompare(b.agentId)),
     providerDaily: [...providerDays.values()].sort(

@@ -56,6 +56,64 @@ describe("MailboxStore", () => {
     await expect(readFile(saved?.path ?? "", "utf8")).resolves.toBe("Pasted bytes");
   });
 
+  it("shows a steered message at its steering time across restart and keeps the send time", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-01T10:01:00.000Z"));
+      const receipt = await store.enqueue({
+        sender: { kind: "agent", agentId: "research" },
+        recipientAgentIds: ["chief", "sales"],
+        text: "Steer",
+      });
+      const id = required(receipt.deliveries[0]).id;
+      const sentAt = required(store.getDelivery(id)).delivery.createdAt;
+      vi.setSystemTime(new Date("2026-10-01T10:06:00.000Z"));
+      await store.markSteering(id, "turn-1");
+      await store.markRunning(id, "turn-1");
+      await store.markTerminal(id, "completed");
+      const restored = new MailboxStore(join(root, "user-data"), join(root, "Shared"));
+      await restored.initialize();
+      expect(restored.conversationMessages("chief").find((message) => message.id === id)?.createdAt).toBe(
+        "2026-10-01T10:06:00.000Z",
+      );
+      expect(restored.getDelivery(id)?.delivery.createdAt).toBe(sentAt);
+      expect(restored.getDelivery(id)?.delivery).not.toHaveProperty("steeredAt");
+      expect(restored.conversationMessages("research")[0]?.createdAt).toBe(sentAt);
+      expect(restored.conversationMessages("sales")[0]?.createdAt).toBe(sentAt);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restores the send time after a refused steer and uses the time of a later retry", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-01T10:00:00.000Z"));
+      const receipt = await store.enqueue({ sender: { kind: "user" }, recipientAgentIds: ["chief"], text: "Steer" });
+      const id = required(receipt.deliveries[0]).id;
+      const sentAt = required(store.getDelivery(id)).delivery.createdAt;
+      await store.markSteering(id, "turn-1");
+      expect(store.conversationMessages("chief")[0]?.createdAt).toBe(sentAt);
+      await store.restoreUnsteered(id, "turn-1");
+      expect(store.conversationMessages("chief")[0]).toMatchObject({
+        createdAt: sentAt,
+        delivery: { status: "queued" },
+      });
+      vi.setSystemTime(new Date("2026-10-01T10:06:00.000Z"));
+      await store.markSteering(id, "turn-2");
+      expect(store.conversationMessages("chief")[0]?.createdAt).toBe("2026-10-01T10:06:00.000Z");
+      await store.restoreUnsteered(id, "turn-2");
+      const restored = new MailboxStore(join(root, "user-data"), join(root, "Shared"));
+      await restored.initialize();
+      expect(restored.conversationMessages("chief")[0]).toMatchObject({
+        createdAt: sentAt,
+        delivery: { status: "queued" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retains a composer backup across restart and releases it when the edit ends", async () => {
     const file = join(root, "backup.txt");
     await writeFile(file, "Backup bytes");

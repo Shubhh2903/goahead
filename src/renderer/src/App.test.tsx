@@ -1,9 +1,10 @@
-import type {
-  AgentStatus,
-  AgentSummary,
-  ConversationPage,
-  ConversationSnapshot,
-  Routine,
+import {
+  type AgentStatus,
+  type AgentSummary,
+  type ConversationPage,
+  type ConversationSnapshot,
+  emptyAnalyticsTotals,
+  type Routine,
 } from "@openbot/contracts/ipc";
 import { Toaster, toast } from "@openbot/ui";
 import { fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
@@ -218,6 +219,93 @@ describe("OpenBot connected desktop shell", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Back" }));
     await waitFor(() => expect(server).toHaveFocus());
     expect(screen.getByRole("textbox", { name: "Message Chief" })).toHaveTextContent("Keep this conversation draft");
+  });
+
+  it("opens Claude usage from the sidebar with the plan limits and the Claude agents", async () => {
+    const research: AgentSummary = {
+      ...AGENTS[0],
+      id: "research",
+      name: "Research",
+      provider: "claude",
+      model: "claude-sonnet-5",
+    };
+    vi.mocked(window.openbot.agent.listAgents).mockResolvedValue([...AGENTS, research]);
+    const now = Date.now() / 1_000;
+    vi.mocked(window.openbot.agent.getUsage).mockResolvedValue({
+      limits: [
+        {
+          id: "claude",
+          primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: now + 7_200 },
+          secondary: { usedPercent: 18, windowDurationMins: 10_080, resetsAt: now + 3 * 86_400 },
+        },
+        {
+          id: "claude-opus-weekly",
+          primary: null,
+          secondary: { usedPercent: 64, windowDurationMins: 10_080, resetsAt: now + 3 * 86_400 },
+        },
+        {
+          id: "claude-sonnet-weekly",
+          primary: null,
+          secondary: { usedPercent: 27, windowDurationMins: 10_080, resetsAt: now + 3 * 86_400 },
+        },
+      ],
+    });
+    vi.mocked(window.openbot.agent.getHostAnalytics).mockImplementation(async (input) => ({
+      ...input,
+      collectionStartedAt: new Date().toISOString(),
+      updatedAt: null,
+      totals: { ...emptyAnalyticsTotals(), processedTokens: 1_500 },
+      daily: [],
+      providerDaily: [],
+      models: [
+        {
+          ...emptyAnalyticsTotals(),
+          provider: "claude",
+          model: "claude-sonnet-5",
+          processedTokens: 1_000,
+          share: 0.67,
+        },
+        { ...emptyAnalyticsTotals(), provider: "codex", model: "gpt-5.6-luna", processedTokens: 500, share: 0.33 },
+      ],
+      agents: [
+        { ...emptyAnalyticsTotals(), agentId: "chief", processedTokens: 500, share: 0.33, models: ["gpt-5.6-luna"] },
+        {
+          ...emptyAnalyticsTotals(),
+          agentId: "research",
+          processedTokens: 150_000,
+          output: 200,
+          share: 0.67,
+          models: ["claude-opus-5", "claude-sonnet-5"],
+        },
+      ],
+    }));
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Chief" });
+    await fireEvent.click(screen.getByRole("button", { name: "Open usage" }));
+    const usage = await screen.findByRole("region", { name: "Agent usage" });
+    expect(await within(usage).findByRole("progressbar", { name: "5-hour limit" })).toHaveAttribute(
+      "aria-valuenow",
+      "42",
+    );
+    expect(within(usage).getByRole("progressbar", { name: "Weekly limit" })).toHaveAttribute("aria-valuenow", "18");
+    expect(within(usage).getByRole("progressbar", { name: "Weekly · Opus limit" })).toHaveAttribute(
+      "aria-valuenow",
+      "64",
+    );
+    expect(within(usage).getByRole("progressbar", { name: "Weekly · Sonnet limit" })).toHaveAttribute(
+      "aria-valuenow",
+      "27",
+    );
+    // One row per agent, most tokens first: its name, its total, and the models it used.
+    const tokens = await within(usage).findByRole("list", { name: "Token usage by agent" });
+    const [first, second] = within(tokens).getAllByRole("listitem");
+    if (!first || !second) throw new Error("The token list has no two agent rows.");
+    expect(first).toHaveTextContent("Research");
+    expect(within(first).getByText("150K tokens")).toBeInTheDocument();
+    expect(within(first).getByText("Claude Opus 5, Claude Sonnet 5")).toBeInTheDocument();
+    expect(second).toHaveTextContent("Chief");
+    expect(second).toHaveTextContent("500 tokens");
+    expect(within(second).getByText("GPT-5.6 Luna")).toBeInTheDocument();
   });
 
   it("keeps shell state and subscriptions when a view boundary remounts", async () => {

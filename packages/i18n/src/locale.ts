@@ -5,22 +5,28 @@ export const TRANSLATED_LOCALES = ["en", "fr", "ja", "pt", "tr"] as const;
 
 export type TranslatedLocale = (typeof TRANSLATED_LOCALES)[number];
 
-function isTranslatedLocale(value: string): value is TranslatedLocale {
-  return TRANSLATED_LOCALES.some((locale) => locale === value);
+/**
+ * The locales the interface draws in. GoAhead is English only for now. The other catalogs stay in
+ * the build, but a saved preference or a computer language that names one of them reads English.
+ */
+const OFFERED_LOCALES: readonly TranslatedLocale[] = ["en"];
+
+function isOfferedLocale(value: string): value is TranslatedLocale {
+  return OFFERED_LOCALES.some((locale) => locale === value);
 }
 
 /**
  * The locale to draw in, given the saved preference and the computer's own language.
  *
- * A system locale is matched on its language subtag, so `ja-JP` and `ja` both read Japanese, and
- * anything without a catalog falls back to English rather than to a half-translated screen.
+ * A system locale is matched on its language subtag. Anything that is not an offered locale falls
+ * back to English rather than to a half-translated screen.
  */
 export function resolveLocale(language: AppLanguage, systemLocale: string): TranslatedLocale {
   if (language !== "system") {
-    return isTranslatedLocale(language) ? language : "en";
+    return isOfferedLocale(language) ? language : "en";
   }
   const subtag = systemLocale.split("-")[0]?.toLowerCase() ?? "";
-  return isTranslatedLocale(subtag) ? subtag : "en";
+  return isOfferedLocale(subtag) ? subtag : "en";
 }
 
 /**

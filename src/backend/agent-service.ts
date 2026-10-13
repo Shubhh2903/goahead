@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { stat } from "node:fs/promises";
+import { agentProviderDescriptor } from "@openbot/contracts/agent-providers";
 import { sortConversationMessages } from "@openbot/contracts/conversation-order";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
@@ -87,8 +88,11 @@ import type {
 } from "@openbot/contracts/ipc";
 import {
   agentAutomationAllowed,
+  type BusyMessageMode,
   CONTEXT_RESET_ITEM_TYPE,
+  DEFAULT_BUSY_MESSAGE_MODE,
   isContextResetMarker,
+  type QueueSteerFallback,
   workspaceAccessEnforced,
 } from "@openbot/contracts/ipc";
 import { ContextResetBusyError } from "@openbot/contracts/team-protocol/context-reset-v1";
@@ -102,6 +106,7 @@ import { AttachmentGateway } from "./agent/attachment-gateway";
 import { AttentionRegistry } from "./agent/attention-registry";
 import { BootRecovery } from "./agent/boot-recovery";
 import { BrowserUploads } from "./agent/browser-uploads";
+import type { ChatVisualPreviewHost } from "./agent/chat-visual-preview";
 import { ContextCompaction } from "./agent/context-compaction";
 import { ConversationReader } from "./agent/conversation-reader";
 import { ConversationRuntime } from "./agent/conversation-runtime";
@@ -204,6 +209,8 @@ export interface AgentServiceOptions {
   bundledExecutables?: BundledProviderExecutables;
   prepareAgentWorkspace?: (agent: AgentSummary) => Promise<void>;
   hostedSites?: AgentHostedSites | null;
+  /** Draws pages for `html_preview`. Without it the tool tells the agent to show the page unchecked. */
+  visualPreview?: ChatVisualPreviewHost | null;
   sidebarLayout?: AgentSidebar | null;
   /**
    * What a spawned CLI is given beyond its own binary: the stored keys, and the user's own model
@@ -217,6 +224,11 @@ export interface AgentServiceOptions {
    * is a property of this computer and never crosses the Team API. Omitted, every approval asks.
    */
   approvalAutomation?: ApprovalAutomationPolicy;
+  /**
+   * The app default for a message sent while its agent works. The main process owns the preference.
+   * Omitted, such a message waits in the queue, as every one did before the setting existed.
+   */
+  busyMessageMode?: () => BusyMessageMode;
   deleteWithRevokedApproval?: (agentId: string, remove: () => Promise<void>) => Promise<void>;
   /**
    * The shared database agents keep their tables in. Injected because the host child's packaged
@@ -250,11 +262,16 @@ export interface AgentServiceOptions {
   hostMemory?: HostMemory | null;
 }
 
+/** How long a user send's `clientMessageId` answers a retry. A retry follows a lost reply, not a day. */
+const USER_SEND_RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export class AgentService extends EventEmitter<AgentServiceEvents> {
   readonly channels: ChannelService;
   readonly messaging: MessagingThreads;
   readonly #profileSave: ProfileSave;
   readonly #profileClients = new ProfileClients();
+  /** User sends still before their mailbox write, by idempotency key: a retry joins the first call. */
+  readonly #pendingUserSends = new Map<string, Promise<QueuedMessageReceipt>>();
   readonly #store: AgentStore;
   readonly #mailbox: MailboxStore;
   readonly #browser: AgentBrowserHost;
@@ -298,6 +315,9 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   readonly #localOwnerDeliveries = new Set<string>();
   /** Deliveries that an agent sent in a turn of the local owner, to pass on the owner's request. */
   readonly #ownerHandOffDeliveries = new Set<string>();
+  readonly #busyMessageMode: () => BusyMessageMode;
+  /** The last turn of each agent's chat that the user stopped. One per agent, so it needs no clean-up. */
+  readonly #stoppedTurns = new Map<string, string>();
   #initialized = false;
   #stopping = false;
 
@@ -321,8 +341,10 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       computerUseMcpServer = () => null,
       githubConnector = null,
       hostMemory = null,
+      busyMessageMode = () => DEFAULT_BUSY_MESSAGE_MODE,
     } = options;
     this.#developmentDefaults = developmentDefaults;
+    this.#busyMessageMode = busyMessageMode;
     this.#localSkillTools = localSkillTools;
     this.#store = store;
     // First of the sub-objects, because `#emitError` reads it to redact and every one of them is
@@ -913,6 +935,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       localSkillTools: this.#localSkillTools,
       approvalAutomation: options.approvalAutomation,
       messaging: this.messaging,
+      visualPreview: options.visualPreview,
       hooks: {
         listAgents: () => this.listAgents(),
         listModels: () => this.listModels(),
@@ -2038,7 +2061,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     sender?: ConversationMessageSender,
     timezone?: string,
   ): Promise<QueuedMessageReceipt> {
-    return this.#sendMessage(input, sender, timezone, false);
+    return this.#sendOnce(input, sender, timezone, false);
   }
 
   /**
@@ -2060,7 +2083,35 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
    * Slack message or a routine never comes here.
    */
   sendLocalOwnerMessage(input: SendMessageInput, sender?: ConversationMessageSender): Promise<QueuedMessageReceipt> {
-    return this.#sendMessage(input, sender, undefined, true);
+    return this.#sendOnce(input, sender, undefined, true);
+  }
+
+  /**
+   * A `clientMessageId` that the same sender used for this agent within a day returns the first
+   * receipt. The key is a hash, so it fits the identifier bound whatever the ids are, and has no
+   * `:`-separated turn id for the mailbox to read.
+   */
+  #sendOnce(
+    input: SendMessageInput,
+    sender: ConversationMessageSender | undefined,
+    timezone: string | undefined,
+    localOwner: boolean,
+  ): Promise<QueuedMessageReceipt> {
+    if (!input.clientMessageId) return this.#sendMessage(input, sender, timezone, localOwner);
+    const idempotencyKey = `user-send:${createHash("sha256")
+      .update(JSON.stringify([sender?.id ?? null, input.agentId, input.clientMessageId]))
+      .digest("hex")}`;
+    // Every user message adds a key, and the map is persisted whole, so keys older than the window go.
+    this.#mailbox.forgetIdempotencyKeys("user-send:", new Date(Date.now() - USER_SEND_RETRY_WINDOW_MS));
+    const stored = this.#mailbox.receiptForKey(idempotencyKey);
+    if (stored) return Promise.resolve(stored);
+    const pending = this.#pendingUserSends.get(idempotencyKey);
+    if (pending) return pending;
+    const send = this.#sendMessage(input, sender, timezone, localOwner, undefined, idempotencyKey).finally(() => {
+      this.#pendingUserSends.delete(idempotencyKey);
+    });
+    this.#pendingUserSends.set(idempotencyKey, send);
+    return send;
   }
 
   /** True only when every delivery of the running turn is one that the local owner sent from the app. */
@@ -2101,6 +2152,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     timezone: string | undefined,
     localOwner: boolean,
     slackAsk?: ConversationSlackAsk,
+    idempotencyKey?: string,
   ): Promise<QueuedMessageReceipt> {
     const validateRecipient = this.#mailbox.prepareDelivery([input.agentId]);
     if (this.#duplication.isPending(input.agentId))
@@ -2116,6 +2168,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       text: input.text,
       draftIds: input.attachmentDraftIds ?? [],
       replyToMessageId: input.replyToMessageId ?? null,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
     });
     const [queued] = receipt.deliveries;
     const delivery = queued ? this.#mailbox.getDelivery(queued.id) : null;
@@ -2137,12 +2190,56 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         agentNamesById(this.#store.list()),
       ) || delivery.delivery.attachments.map((item) => item.name).join(", "),
     );
+    // A turn the user stopped is ending, and a message steered into it would end with it. A message
+    // steers only into a turn of the same origin: a local owner turn keeps its proof, and a message
+    // from Slack, a teammate or a Team API member does not get that proof from the turn it joins.
+    const steerTurnId =
+      snapshot.activeTurnId &&
+      snapshot.activeTurnId !== this.#stoppedTurns.get(agent.id) &&
+      (agent.busyMessageMode ?? this.#busyMessageMode()) === "steer" &&
+      !slackAsk &&
+      this.#isLocalOwnerTurn(agent.id, snapshot.activeTurnId) === localOwner
+        ? snapshot.activeTurnId
+        : null;
+    const steers = steerTurnId !== null && agentProviderDescriptor(providerForAgent(agent)).steer === "native";
+    if (steerTurnId && !steers) await this.#markSteerFallback(agent.id, delivery.delivery.id, "provider-unsupported");
     this.#emit({ type: "agents-changed", agents: this.listAgents() });
     this.#conversation.emitConversation(snapshot);
     this.#mailboxSync.emitQueue(agent.id);
+    // Not awaited: the message is already queued, and the sender is answered without the wait for
+    // the provider.
+    if (steerTurnId && steers) void this.#steerSentMessage(agent, delivery.delivery.id, steerTurnId);
     this.#drain.scheduleDrain(agent.id);
     if (localOwner) this.messaging.localOwnerMessage(agent.id);
     return receipt;
+  }
+
+  /**
+   * Takes a message the user sent while the agent works into the running turn. The message is
+   * queued before this runs, so a refusal leaves it there: it says why on its row and starts when
+   * the turn ends. Only a provider that reads a message at its next step is asked; the ACP ones can
+   * hold a second prompt until the turn ends, which is a queue the user cannot see.
+   */
+  async #steerSentMessage(agent: AgentSummary, deliveryId: string, turnId: string): Promise<void> {
+    try {
+      await this.#queue.steer({ agentId: agent.id, deliveryId, expectedTurnId: turnId });
+    } catch (error) {
+      logger.warn("A message sent to steer the running turn waits in the queue.", { agentId: agent.id, error });
+      // When the turn ended in between, the message starts as the next turn or waits behind it
+      // like any other, which is no fallback worth naming.
+      if (this.#conversation.ensureSnapshot(agent.id, agent.threadId).activeTurnId !== turnId) return;
+      await this.#markSteerFallback(agent.id, deliveryId, "steer-failed");
+      this.#mailboxSync.emitQueue(agent.id);
+    }
+  }
+
+  /** The reason is a label on the queue row, so a failed write leaves the message queued without it. */
+  async #markSteerFallback(agentId: string, deliveryId: string, reason: QueueSteerFallback): Promise<void> {
+    try {
+      await this.#mailbox.markSteerFallback(deliveryId, reason);
+    } catch (error) {
+      logger.warn("Could not record why a message waits in the queue.", { agentId, error });
+    }
   }
 
   async setMessageReaction(input: SetMessageReactionInput): Promise<void> {
@@ -2161,6 +2258,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   }
 
   async interrupt(agentId: string, turnId: string, executionThreadId?: string): Promise<void> {
+    if (!executionThreadId) this.#stoppedTurns.set(agentId, turnId);
     await this.#interruptTurn(agentId, turnId, executionThreadId);
   }
 

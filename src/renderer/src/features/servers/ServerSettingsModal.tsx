@@ -34,6 +34,7 @@ import {
   UsersRound,
 } from "@openbot/ui";
 import type { AgentProfile } from "@openbot/ui/data";
+import type { BitwardenConnectorPanelProps } from "@openbot/ui/features/settings/BitwardenConnectorPanel";
 import { SaveBarDock, SettingsDialogShell } from "@openbot/ui/features/settings/SettingsDialogShell";
 import { SettingsHostedSitesTab } from "@openbot/ui/features/settings/SettingsHostedSitesTab";
 import {
@@ -147,6 +148,8 @@ export interface ServerSettingsModalProps {
   githubConnector?: GitHubConnectorController | undefined;
   /** This computer's 1Password connection. A remote server passes none. */
   onePasswordConnector?: OnePasswordConnectorController | undefined;
+  /** This computer's Bitwarden connection. A remote server passes none. */
+  bitwardenConnector?: BitwardenConnectorPanelProps | undefined;
   slackConnector?: SlackConnectorController | undefined;
   /** This computer's agents, for the Slack page. */
   connectorAgents?: AgentProfile[] | undefined;
@@ -553,7 +556,11 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
                 <span>{t(sections.import.title)}</span>
               </Tabs.Trigger>
             </Show>
-            <Show when={props.githubConnector || props.onePasswordConnector || props.slackConnector}>
+            <Show
+              when={
+                props.githubConnector || props.onePasswordConnector || props.bitwardenConnector || props.slackConnector
+              }
+            >
               <Tabs.Trigger class="settings-modal-nav-item" value="connectors">
                 <Plug aria-hidden="true" />
                 <span>{t(sections.connectors.title)}</span>
@@ -669,11 +676,14 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
             </Tabs.Content>
           )}
         </Show>
-        <Show when={props.githubConnector || props.onePasswordConnector || props.slackConnector}>
+        <Show
+          when={props.githubConnector || props.onePasswordConnector || props.bitwardenConnector || props.slackConnector}
+        >
           <Tabs.Content value="connectors" class="settings-modal-tab-panel server-settings-panel" data-tab="connectors">
             <ConnectorsPanel
               github={props.githubConnector}
               onePassword={props.onePasswordConnector}
+              bitwarden={props.bitwardenConnector}
               slack={props.slackConnector}
               agents={props.connectorAgents ?? []}
             />

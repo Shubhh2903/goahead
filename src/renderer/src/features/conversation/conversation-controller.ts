@@ -18,8 +18,16 @@ import {
   readStoredQueueEdit,
   type StoredQueueEdit,
 } from "./composer-draft";
+import { type StoredComposerDrafts, writeComposerDraftsOnChange } from "./composer-draft-storage";
 import { composerDraftKey } from "./conversation-keys";
-import type { ComposerDraft, ConversationProps, RightPanelMode, SidebarFilePreview } from "./conversation-types";
+import type {
+  ComposerDraft,
+  ConversationProps,
+  RightPanelMode,
+  SidebarFilePreview,
+  VoiceLiveTranscript,
+} from "./conversation-types";
+import { createPendingSendStore } from "./stores/pending-send-store";
 
 const SETTINGS_PANEL_DEFAULT = 296;
 const BROWSER_PANEL_DEFAULT = 380;
@@ -54,6 +62,10 @@ interface ConversationResources {
   voiceRecordingTimer: ReturnType<typeof setTimeout> | undefined;
   voiceElapsedTimer: ReturnType<typeof setInterval> | undefined;
   voiceChunks: Blob[];
+  /** The live transcription in flight, so the final pass waits for it instead of racing it. */
+  voiceLiveRequest: Promise<void> | undefined;
+  /** Stops the microphone level meter that draws the recording waveform. */
+  voiceMeterStop: (() => void) | undefined;
   voiceAgentId: string | undefined;
   voiceServerId: string | undefined;
   voiceSubmitRequest:
@@ -91,14 +103,23 @@ interface ConversationResources {
  * switch would throw away typing the user still expects to find, so this owner
  * sits above the keyed scope in `app-providers.tsx` and lives as long as the app.
  *
- * Every signal here is keyed by `serverId:agentId` (`composerDraftKey`) or carries
- * its server in the value, which is what makes the shared lifetime safe.
+ * Every signal here is keyed by `serverId:agentId` (`composerDraftKey`), by a
+ * channel UUID, or carries its server in the value, which is what makes the shared
+ * lifetime safe.
  */
-export function createStableConversationState(props: Pick<ConversationProps, "onTypingChange">, persistDrafts = true) {
+export function createStableConversationState(
+  props: Pick<ConversationProps, "onTypingChange">,
+  persistDrafts = true,
+  storedDrafts: StoredComposerDrafts | null = null,
+) {
   const restoredEdit = persistDrafts ? readStoredQueueEdit() : null;
-  const [drafts, setDrafts] = createSignal<Record<string, ComposerDraft>>(
-    restoredEdit ? { [composerDraftKey(restoredEdit)]: restoredEdit.draft } : {},
-  );
+  // A restored queue edit wins over the composer draft stored for the same agent.
+  const [drafts, setDrafts] = createSignal<Record<string, ComposerDraft>>({
+    ...storedDrafts?.agents,
+    ...(restoredEdit ? { [composerDraftKey(restoredEdit)]: restoredEdit.draft } : {}),
+  });
+  /** Keyed by channel id. A channel id is a UUID, so it does not need its server in the key. */
+  const [channelDrafts, setChannelDrafts] = createSignal<Record<string, ComposerDraft>>(storedDrafts?.channels ?? {});
   const [editingAgentId, setEditingAgentId] = createSignal<string | null>(restoredEdit?.agentId ?? null);
   const [editingServerId, setEditingServerId] = createSignal<string | null>(restoredEdit?.serverId ?? null);
   const [editingEditId, setEditingEditId] = createSignal<string | null>(restoredEdit?.editId ?? null);
@@ -111,6 +132,8 @@ export function createStableConversationState(props: Pick<ConversationProps, "on
     restoredEdit?.pendingSave ?? null,
   );
   const [composerFocusRequest, setComposerFocusRequest] = createSignal(0);
+  // A send in flight belongs to the server it was sent to, so it outlives a server switch.
+  const pendingSends = createPendingSendStore();
   const [conversationErrors, setConversationErrors] = createSignal<Record<string, string>>({});
   createEffect(
     () => {
@@ -167,12 +190,23 @@ export function createStableConversationState(props: Pick<ConversationProps, "on
       };
     },
   );
+  if (storedDrafts)
+    writeComposerDraftsOnChange({
+      drafts,
+      channelDrafts,
+      editingAgentId,
+      editingServerId,
+      editingDraftBackup,
+      unsentTexts: pendingSends.unsentTexts,
+    });
   const [composerErrors, setComposerErrors] = createSignal<Record<string, string>>({});
   const [voicePhase, setVoicePhase] = createSignal<"idle" | "preparing" | "requesting" | "recording" | "transcribing">(
     "idle",
   );
   const [voiceModelProgress, setVoiceModelProgress] = createSignal<number | null>(null);
   const [voiceElapsedSeconds, setVoiceElapsedSeconds] = createSignal(0);
+  const [voiceLiveTranscript, setVoiceLiveTranscript] = createSignal<VoiceLiveTranscript | null>(null);
+  const [voiceLevels, setVoiceLevels] = createSignal<number[]>([]);
   const [browserPipBounds, setBrowserPipBounds] = createSignal<BrowserBounds | null>(readBrowserPipBounds());
   const [settingsPanelWidth, setSettingsPanelWidth] = createSignal(SETTINGS_PANEL_DEFAULT);
   const [browserPanelWidth, setBrowserPanelWidth] = createSignal(BROWSER_PANEL_DEFAULT);
@@ -188,6 +222,8 @@ export function createStableConversationState(props: Pick<ConversationProps, "on
     voiceRecordingTimer: undefined,
     voiceElapsedTimer: undefined,
     voiceChunks: [],
+    voiceLiveRequest: undefined,
+    voiceMeterStop: undefined,
     voiceAgentId: undefined,
     voiceServerId: undefined,
     voiceSubmitRequest: undefined,
@@ -222,6 +258,7 @@ export function createStableConversationState(props: Pick<ConversationProps, "on
     if (resources.voiceElapsedTimer) clearInterval(resources.voiceElapsedTimer);
     if (resources.voiceRecorder?.state === "recording") resources.voiceRecorder.stop();
     for (const track of resources.voiceStream?.getTracks() ?? []) track.stop();
+    resources.voiceMeterStop?.();
     stopComposerTyping();
   });
 
@@ -244,6 +281,8 @@ export function createStableConversationState(props: Pick<ConversationProps, "on
     stopComposerTyping,
     drafts,
     setDrafts,
+    channelDrafts,
+    setChannelDrafts,
     editingAgentId,
     setEditingAgentId,
     editingServerId,
@@ -260,6 +299,7 @@ export function createStableConversationState(props: Pick<ConversationProps, "on
     setEditingPendingSave,
     composerFocusRequest,
     setComposerFocusRequest,
+    pendingSends,
     conversationErrors,
     setConversationErrors,
     composerErrors,
@@ -270,6 +310,10 @@ export function createStableConversationState(props: Pick<ConversationProps, "on
     setVoiceModelProgress,
     voiceElapsedSeconds,
     setVoiceElapsedSeconds,
+    voiceLiveTranscript,
+    setVoiceLiveTranscript,
+    voiceLevels,
+    setVoiceLevels,
     browserPipBounds,
     setBrowserPipBounds,
     settingsPanelWidth,
@@ -290,7 +334,7 @@ export function createStableConversationState(props: Pick<ConversationProps, "on
  * shared owner would carry "the computer panel is open for chief" from one
  * server to the next and open the wrong panel on arrival.
  *
- * `attachmentBusy`, `submitting` and `selectionSending` are
+ * `attachmentBusy` and `submitting` are
  * here for the same reason by a different route: they carry no key at all. Each
  * describes the composer on screen right now - "a send is in flight" - so a
  * shared owner would disable the arriving server's composer for the length of
@@ -306,7 +350,6 @@ export function createServerConversationState() {
   const [showComposerActions, setShowComposerActions] = createSignal(false);
   const [attachmentBusy, setAttachmentBusy] = createSignal(false);
   const [submitting, setSubmitting] = createSignal(false);
-  const [selectionSending, setSelectionSending] = createSignal(false);
   const [markingRead, setMarkingRead] = createSignal(false);
   const [dropActive, setDropActive] = createSignal(false);
   const [rightPanels, setRightPanels] = createSignal<Record<string, RightPanelMode>>({});
@@ -336,8 +379,6 @@ export function createServerConversationState() {
     setAttachmentBusy,
     submitting,
     setSubmitting,
-    selectionSending,
-    setSelectionSending,
     markingRead,
     setMarkingRead,
     dropActive,

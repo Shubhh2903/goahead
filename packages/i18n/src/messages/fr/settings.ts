@@ -99,6 +99,8 @@ export const messages = {
   // The Settings window shell: its tab list, headers and save bar.
   "settings.tab.general.title": "Général",
   "settings.tab.general.description": "Contrôler le comportement de GoAhead sur cet ordinateur.",
+  "settings.tab.voice.title": "Voix",
+  "settings.tab.voice.description": "Dictée dans la zone de message. Elle s’exécute sur cet ordinateur.",
   "settings.tab.computerUse.title": "Computer Use",
   "settings.tab.computerUse.description":
     "Autoriser GoAhead à voir et à interagir avec les applications de cet ordinateur.",
@@ -255,4 +257,22 @@ export const messages = {
   "settings.hostedSites.loadFailed": "Impossible de charger les sites hébergés.",
   "settings.hostedSites.deleteFailed": "Impossible de supprimer le site.",
   "settings.hostedSites.reloadFailed": "Impossible de recharger les sites hébergés.",
+  "settings.busyMessage.title": "Orienter les agents pendant leur travail",
+  "settings.busyMessage.description":
+    "Un message envoyé pendant le travail d’un agent rejoint son travail en cours à l’étape suivante, au lieu d’attendre dans la file. ChatGPT et Claude peuvent orienter ; les autres fournisseurs mettent le message en attente.",
+  "settings.voice.models.title": "Modèle de dictée",
+  "settings.voice.model.size": "Taille du téléchargement : {size}",
+  "settings.voice.model.downloading": "Téléchargement · {received} sur {total}",
+  "settings.voice.model.failed": "Le téléchargement s’est arrêté. Vérifiez la connexion et réessayez.",
+  "settings.voice.model.progressLabel": "Téléchargement de {name}",
+  "settings.voice.model.use": "Utiliser",
+  "settings.voice.model.inUse": "Utilisé",
+  "settings.voice.model.downloadLabel": "Télécharger {name}",
+  "settings.voice.model.cancelLabel": "Arrêter le téléchargement de {name}",
+  "settings.voice.model.retryLabel": "Télécharger {name} à nouveau",
+  "settings.voice.model.useLabel": "Utiliser {name} pour la dictée",
+  "settings.voice.loadFailed": "Impossible de lire les modèles vocaux.",
+  "settings.voice.saveFailed": "Impossible d’enregistrer le réglage vocal. Réessayez.",
+  "settings.voice.downloadFailed": "Impossible de lancer le téléchargement. Réessayez.",
+  "settings.voice.cancelFailed": "Impossible d’arrêter le téléchargement.",
 } as const satisfies PartialTranslation<typeof source>;

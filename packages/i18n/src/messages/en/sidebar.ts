@@ -17,6 +17,8 @@ export const messages = defineMessages("sidebar", {
   "sidebar.topbar.expand": "Expand sidebar",
   "sidebar.topbar.openMarketplace": "Open Marketplace",
   "sidebar.topbar.marketplace": "Marketplace",
+  "sidebar.topbar.openUsage": "Open usage",
+  "sidebar.topbar.usage": "Usage",
   "sidebar.search.label": "Search chats",
   "sidebar.search.expand": "Expand sidebar and search chats",
   "sidebar.empty.noMatches": "No matches",

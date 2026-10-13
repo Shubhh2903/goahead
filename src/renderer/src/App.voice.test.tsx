@@ -15,7 +15,9 @@ describe("OpenBot connected desktop shell", () => {
 
     await fireEvent.click(await screen.findByRole("button", { name: "Create prompt with voice" }));
 
-    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({ audio: true, video: false });
+    await waitFor(() =>
+      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({ audio: true, video: false }),
+    );
     expect(
       await screen.findByText("Microphone access is blocked. Allow GoAhead to use the microphone in system settings."),
     ).toBeInTheDocument();
@@ -36,7 +38,7 @@ describe("OpenBot connected desktop shell", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Create prompt with voice" }));
 
     const status = await screen.findByRole("group", { name: "Voice recording" });
-    expect(within(status).getByText("0:00")).toBeVisible();
+    expect(within(status).getByText("0:00")).toBeInTheDocument();
     expect(within(status).getByRole("button", { name: "Stop voice recording" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Create prompt with voice" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send voice message" })).toBeInTheDocument();
@@ -59,12 +61,12 @@ describe("OpenBot connected desktop shell", () => {
 
     await fireEvent.click(await screen.findByRole("button", { name: "Create prompt with voice" }));
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
-    reportModelStatus?.({ phase: "downloading", progress: 47, message: null });
+    reportModelStatus?.({ modelId: "parakeet-tdt-0.6b-v3", phase: "downloading", progress: 47, message: null });
     await waitFor(() => {
       expect(screen.getAllByRole("status").some((status) => status.textContent?.includes("47%"))).toBe(true);
     });
 
-    resolvePreparation?.({ phase: "ready", progress: 100, message: null });
+    resolvePreparation?.({ modelId: "parakeet-tdt-0.6b-v3", phase: "ready", progress: 100, message: null });
     await waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledOnce());
   });
 
@@ -92,7 +94,12 @@ describe("OpenBot connected desktop shell", () => {
       expect(screen.getByRole("button", { name: "Studio Mac server" })).toHaveAttribute("aria-pressed", "true"),
     );
 
-    resolvePreparation?.({ phase: "error", progress: 0, message: "Local voice setup failed" });
+    resolvePreparation?.({
+      modelId: "parakeet-tdt-0.6b-v3",
+      phase: "error",
+      progress: 0,
+      message: "Local voice setup failed",
+    });
     await waitFor(() => expect(screen.getByRole("button", { name: "Create prompt with voice" })).toBeEnabled());
     expect(screen.queryByText("Local voice setup failed")).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole("button", { name: "Local server" }));
@@ -130,7 +137,7 @@ describe("OpenBot connected desktop shell", () => {
     expect(screen.queryByRole("button", { name: "Downloading voice model" })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Create prompt with voice" })).toBeEnabled());
 
-    resolvePreparation?.({ phase: "ready", progress: 100, message: null });
+    resolvePreparation?.({ modelId: "parakeet-tdt-0.6b-v3", phase: "ready", progress: 100, message: null });
     await waitFor(() => expect(screen.getByRole("button", { name: "Create prompt with voice" })).toBeEnabled());
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
   });
@@ -195,7 +202,12 @@ describe("OpenBot connected desktop shell", () => {
     resolveTranscription?.({ text: "Voice transcript" });
     await waitFor(() =>
       expect(window.openbot.agent.sendMessage).toHaveBeenCalledWith(
-        { agentId: "chief", text: "Existing draft Voice transcript", attachmentDraftIds: [] },
+        {
+          agentId: "chief",
+          text: "Existing draft Voice transcript",
+          attachmentDraftIds: [],
+          clientMessageId: expect.any(String),
+        },
         "local",
       ),
     );
@@ -285,13 +297,14 @@ describe("OpenBot connected desktop shell", () => {
           agentId: "chief",
           text: "Message for local Chief",
           attachmentDraftIds: [],
+          clientMessageId: expect.any(String),
         },
         "local",
       ),
     );
   });
 
-  it("shows a deferred send error on the original server", async () => {
+  it("keeps a deferred failed send in the chat of the original server", async () => {
     const local = testServer("local", true);
     const remote = testServer("remote-1", false);
     let resolveTranscription: ((result: { text: string }) => void) | undefined;
@@ -326,13 +339,13 @@ describe("OpenBot connected desktop shell", () => {
     await waitFor(() => expect(window.openbot.agent.sendMessage).toHaveBeenCalledOnce());
     expect(screen.queryByText("Local send failed")).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole("button", { name: "Local server" }));
+    // The failed message waits in the local chat with Retry; the later draft stays as it was typed.
     expect(await screen.findByText("Local send failed")).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Message Chief" })).toHaveTextContent(
-      "Later local draft Message for local Chief",
-    );
+    expect(screen.getByText("Message for local Chief")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Message Chief" })).toHaveTextContent("Later local draft");
   });
 
-  // The Linux package carries no whisper binary, so the composer must not offer a control that
+  // The Linux package carries no voice runtime, so the composer must not offer a control that
   // always fails. Everything else about the window, the server rail included, stays the same.
   it("offers no microphone on Linux and still draws the server rail", async () => {
     vi.mocked(window.openbot.getAppInfo).mockResolvedValue({

@@ -7,7 +7,7 @@ import { mockHostAnalytics } from "../src/preview/mock-agent-analytics";
 import { createMockOpenBot } from "./mock-openbot";
 
 function UsageStory(props: {
-  state: "ready" | "empty" | "partial" | "loading" | "error" | "unsupported" | "large" | "small" | "long";
+  state: "ready" | "empty" | "partial" | "loading" | "error" | "unsupported" | "large" | "small" | "long" | "models";
   narrow?: boolean;
   agentId?: string;
 }) {
@@ -37,6 +37,11 @@ function UsageStory(props: {
     data.agents = data.agents.map((agent) => ({
       ...agent,
       estimatedCostUsd: agent.estimatedCostUsd === null ? null : agent.estimatedCostUsd * factor,
+      // One agent that changed model in the range names both, most tokens first.
+      models:
+        props.state === "models" && agent.agentId === "research"
+          ? ["claude-opus-5-5", "claude-sonnet-5"]
+          : agent.models,
     }));
     data.providerDaily = data.providerDaily.map((cell) => ({
       ...cell,
@@ -74,6 +79,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 export const Usage: Story = {};
 export const Empty: Story = { args: { state: "empty" } };
+export const AgentWithTwoModels: Story = { args: { state: "models" } };
 export const Partial: Story = { args: { state: "partial" } };
 export const Loading: Story = { args: { state: "loading" } };
 export const ErrorState: Story = { args: { state: "error" } };

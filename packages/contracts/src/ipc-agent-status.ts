@@ -115,6 +115,14 @@ export interface AccountUsage {
   limits: AccountUsageLimit[];
 }
 
+/**
+ * Extra limits of the account-wide Claude reading: the weekly window of one model family, in
+ * `secondary`. A consumer that reads only the provider ids ignores them, so an older peer keeps
+ * the same meaning. A host that does not send them leaves the rows out.
+ */
+export const CLAUDE_WEEKLY_OPUS_LIMIT_ID = "claude-opus-weekly";
+export const CLAUDE_WEEKLY_SONNET_LIMIT_ID = "claude-sonnet-weekly";
+
 export function isAccountUsage(value: unknown): value is AccountUsage {
   return (
     isDynamicRecord(value) &&

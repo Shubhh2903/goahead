@@ -123,7 +123,12 @@ export function createWebConversationRuntime(
       reload: (tabId) => remote.reloadBrowserTab(tabId),
       setVisible: async () => {},
     },
-    voice: { onModelStatus: () => () => {}, prepareModel: unavailable, transcribe: unavailable },
+    voice: {
+      getSettings: unavailable,
+      onModelStatus: () => () => {},
+      prepareModel: unavailable,
+      transcribe: unavailable,
+    },
     openUrl: openWebLink,
     previewAttachment: files.preview,
     async importFiles(files) {

@@ -10,6 +10,7 @@ import {
 } from "./ipc-agent-identity";
 import { type AgentProviderId, isAgentProvider } from "./ipc-agent-status";
 import { isBoundedString, isIdentifier } from "./ipc-bounded-values";
+import { type BusyMessageMode, isBusyMessageMode } from "./ipc-queue";
 import type { SidebarLayoutSnapshot } from "./ipc-sidebar-layout";
 import { isBoolean, isDynamicRecord, isNumber, isOneOf, isString } from "./runtime-values";
 
@@ -89,6 +90,11 @@ export interface AgentSummary {
    * `access`: the Team API agent allowlist does not carry it, so an agent read from a remote host has none.
    */
   projectFolders?: AgentProjectFolder[];
+  /**
+   * What a message sent while the agent is busy does. Local-only, like `access`. Absent means the
+   * app default.
+   */
+  busyMessageMode?: BusyMessageMode;
   threadId: string | null;
   workspacePath: string;
   preview: string;
@@ -120,6 +126,7 @@ export function isAgentSummary(value: unknown): value is AgentSummary {
     (value.computerUse === undefined || isBoolean(value.computerUse)) &&
     (value.allowAutomation === undefined || isBoolean(value.allowAutomation)) &&
     (value.projectFolders === undefined || isAgentProjectFolderList(value.projectFolders)) &&
+    (value.busyMessageMode === undefined || isBusyMessageMode(value.busyMessageMode)) &&
     (value.threadId === null || isIdentifier(value.threadId)) &&
     isBoundedString(value.workspacePath, INPUT_LIMITS.path) &&
     isBoundedString(value.preview, INPUT_LIMITS.messageText) &&
@@ -208,6 +215,8 @@ export interface UpdateAgentInput {
   access?: AgentAccess;
   computerUse?: boolean;
   allowAutomation?: boolean;
+  /** `null` returns the agent to the app default. */
+  busyMessageMode?: BusyMessageMode | null;
   avatarSeed?: string;
   avatarHue?: AvatarHue | null;
 }

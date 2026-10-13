@@ -60,6 +60,7 @@ import { MessagingHiddenThreadStore } from "../backend/messaging/messaging-hidde
 import { MessagingSendGuardStore } from "../backend/messaging/messaging-send-guards";
 import { MessagingService } from "../backend/messaging/messaging-service";
 import { slackDriver } from "../backend/messaging/slack/slack-driver";
+import { passwordVaultRouter } from "../backend/password-vault-router";
 import { SidebarLayoutStore } from "../backend/sidebar-layout-store";
 import { StorageUsageScanner, StorageUsageService } from "../backend/storage-usage";
 import { TeamChatStore } from "../backend/team-chat-store";
@@ -79,9 +80,12 @@ import { readAnalyticsPreference } from "./analytics-preference-store";
 import { ApprovalAutomation, readApprovalAutomation } from "./approval-automation-store";
 import { AutomationServer } from "./automation-server";
 import { BillingDesktopService } from "./billing-service";
+import { BitwardenConnectorService } from "./bitwarden-connector-service";
 import { BrowserPictureInPicture } from "./browser-picture-in-picture";
 import { BrowserViewClient } from "./browser-view-client";
+import { BusyMessageModePreferenceStore } from "./busy-message-mode-preference-store";
 import { CentralAuthManager, readCentralAuthApiUrl, readMobileConnectApiUrl } from "./central-auth-manager";
+import { ChatVisualPreviewer } from "./chat-visual-preview";
 import { ComputerUseHighlightController } from "./computer-use-highlight-window";
 import { applicationBundlePath, applicationIconName } from "./computer-use-permission-app";
 import { ComputerUsePermissionHelpWindowController } from "./computer-use-permission-help-window";
@@ -148,6 +152,7 @@ import { createProviderDetection, type ProviderDetection } from "./provider-dete
 import { PROVIDER_DETECTION_SETTINGS_FILE, ProviderDetectionSettingsStore } from "./provider-detection-settings-store";
 import { startProviderLog } from "./provider-log";
 import { ProviderRuntimeManager, providerRuntimeRoot, runtimeTarget } from "./provider-runtime-manager";
+import { decodeQueuedMessageReceipt } from "./remote-agent-decoding";
 import { RemoteDesktopManager } from "./remote-desktop-manager";
 import { resolveRemoteDesktopRuntime } from "./remote-desktop-runtime-artifact";
 import { loadOrCreateRemoteDesktopCredentials } from "./remote-desktop-secret-store";
@@ -188,7 +193,9 @@ import {
   SimulatedUpdater,
   SimulatedUpdateService,
 } from "./update-simulation";
-import { WHISPER_MODEL_NAME, WHISPER_MODEL_URL } from "./voice-model-service";
+import { PARAKEET_MODEL_DIRECTORY, removeLegacyWhisperCache } from "./voice-model-service";
+import { VoicePreferenceStore } from "./voice-preference-store";
+import { spawnVoiceTranscriptionHost } from "./voice-transcription-host-process";
 import { VoiceTranscriptionService } from "./voice-transcription-service";
 
 const logger = createOpenBotLogger("application-services");
@@ -201,6 +208,7 @@ const LANGUAGE_PREFERENCE_FILE = "openbot-language-preference-v1.json";
 const LOGO_COLOR_PREFERENCE_FILE = "openbot-logo-color-preference-v1.json";
 const UPDATE_PREFERENCE_FILE = "openbot-update-preference-v1.json";
 const NOTIFICATION_PREFERENCE_FILE = "openbot-notification-preference-v1.json";
+const BUSY_MESSAGE_MODE_PREFERENCE_FILE = "openbot-busy-message-mode-v1.json";
 const DYNAMIC_ISLAND_PREFERENCE_FILE = "openbot-dynamic-island-preference-v1.json";
 const BROWSER_STATE_FILE = "openbot-browser-state-v1.json";
 const SIDEBAR_LAYOUT_FILE = "openbot-sidebar-layout-v1.json";
@@ -272,6 +280,8 @@ const TEARDOWN_ORDER = {
   automation: 108,
   // Before the agent service. It holds no file an agent reads; only a CLI run that waits is stopped.
   onePasswordConnector: 109,
+  // Before the agent service. It holds no file; it ends the session and waits for a running CLI call.
+  bitwardenConnector: 109.5,
   service: 110,
   // Last, so the turns that end while the services stop are still written.
   trace: 120,
@@ -317,6 +327,7 @@ export interface ApplicationServices {
   mcpOAuth: McpOAuth;
   githubConnector: GitHubConnectorService;
   onePasswordConnector: OnePasswordConnectorService;
+  bitwardenConnector: BitwardenConnectorService;
   mailbox: MailboxStore;
   storageUsage: StorageUsageService;
   browser: BrowserHost;
@@ -338,6 +349,7 @@ export interface ApplicationServices {
   language: LanguageService;
   logoColor: LogoColorService;
   notificationPreference: NotificationPreferenceStore;
+  busyMessageMode: BusyMessageModePreferenceStore;
   agentInitialization: AgentInitializationGate;
   sidebarLayout: SidebarLayoutStore;
   host: HostService;
@@ -425,7 +437,8 @@ export async function createApplicationServices({
   // startup because its window must be able to appear immediately, but the two services its
   // critical actions drive are built hundreds of lines below. A single named local rather than
   // two lazy getters, so the gap is visible and bounded.
-  let criticalActionTargets: { agents: AgentService; remoteServers: RemoteServerManager } | null = null;
+  let criticalActionTargets: { agents: AgentService; host: HostService; remoteServers: RemoteServerManager } | null =
+    null;
   const dynamicIsland = new DynamicIslandWindowController({
     platform: process.platform,
     preferencePath: join(app.getPath("userData"), DYNAMIC_ISLAND_PREFERENCE_FILE),
@@ -447,8 +460,14 @@ export async function createApplicationServices({
     },
     performCriticalAction: async (action) => {
       if (!criticalActionTargets) throw new Error(sourceText("error.app.notReady"));
-      const { agents, remoteServers } = criticalActionTargets;
-      await performDynamicIslandCriticalAction(action, agents, remoteServers, decodeVoid);
+      const { agents, host, remoteServers } = criticalActionTargets;
+      await performDynamicIslandCriticalAction(
+        action,
+        agents,
+        remoteServers,
+        { decodeVoid, decodeQueuedMessageReceipt },
+        () => host.conversationSender(),
+      );
     },
   });
   teardown.push(TEARDOWN_ORDER.dynamicIsland, "the Dynamic Island", () => dynamicIsland.destroy());
@@ -610,6 +629,10 @@ export async function createApplicationServices({
     join(app.getPath("userData"), NOTIFICATION_PREFERENCE_FILE),
   );
   await notificationPreference.load();
+  const busyMessageMode = new BusyMessageModePreferenceStore(
+    join(app.getPath("userData"), BUSY_MESSAGE_MODE_PREFERENCE_FILE),
+  );
+  await busyMessageMode.load();
   const updatePreference = await readUpdatePreference(updatePreferenceFile);
   const approvalAutomationFile = join(app.getPath("userData"), APPROVAL_AUTOMATION_FILE);
   const approvalAutomation = new ApprovalAutomation({
@@ -772,6 +795,9 @@ export async function createApplicationServices({
   });
   await onePasswordConnector.load();
   teardown.push(TEARDOWN_ORDER.onePasswordConnector, "the 1Password connection", () => onePasswordConnector.dispose());
+  /* The Bitwarden connection. Its session key is in memory only, so each start is disconnected. */
+  const bitwardenConnector = new BitwardenConnectorService();
+  teardown.push(TEARDOWN_ORDER.bitwardenConnector, "the Bitwarden connection", () => bitwardenConnector.dispose());
   const tables = new AgentTables({
     sharedRoot: store.sharedRoot,
     supervisor: new AgentDatabaseSupervisor({ spawnHost: spawnAgentDatabaseHost }),
@@ -900,6 +926,7 @@ export async function createApplicationServices({
     store,
     mailbox,
     browser,
+    visualPreview: new ChatVisualPreviewer(),
     hostMemory,
     requestTimeoutMs: 30_000,
     preferredProvider: setupState.preferredProvider ?? "codex",
@@ -941,9 +968,10 @@ export async function createApplicationServices({
     // handing every provider a command it cannot start.
     computerUseMcpServer: () => cuaDriver.mcpServerForProviders(),
     githubConnector,
-    passwordVault: onePasswordConnector,
+    passwordVault: passwordVaultRouter(onePasswordConnector, bitwardenConnector),
     localSkillTools: () => localSkillTools(skills),
     approvalAutomation,
+    busyMessageMode: () => busyMessageMode.get().mode,
     deleteWithRevokedApproval: (agentId, remove) => approvalAutomation.deleteAgent(agentId, remove),
     tables,
   });
@@ -1501,7 +1529,7 @@ export async function createApplicationServices({
   teamWebRtcBridge.on("accountServersChanged", () => remoteServers.invalidateDirectory());
   teardown.push(TEARDOWN_ORDER.remoteServers, "the remote servers", () => remoteServers.stop());
   await remoteServers.initialize();
-  criticalActionTargets = { agents: service, remoteServers };
+  criticalActionTargets = { agents: service, host, remoteServers };
   // After `remoteServers.initialize()`. The client half polls for the host's connection file and
   // throws when it never appears, before any window is shown - see the module it lives in.
   if (developmentRemoteRole) {
@@ -1539,13 +1567,25 @@ export async function createApplicationServices({
     },
   });
   teardown.push(TEARDOWN_ORDER.remoteDesktop, "remote desktop", () => remoteDesktop.stop());
+  const voicePreferences = new VoicePreferenceStore(join(app.getPath("userData"), "voice-preference.json"));
+  await voicePreferences.load();
   const voice = new VoiceTranscriptionService({
-    resourcesRoot: app.isPackaged ? join(process.resourcesPath, "whisper") : resolve(".openbot-build/whisper"),
-    modelPath: app.isPackaged
-      ? join(app.getPath("userData"), "runtimes", "whisper", WHISPER_MODEL_NAME)
-      : resolve(".openbot-build/whisper/model", WHISPER_MODEL_NAME),
-    modelDownloadUrl: WHISPER_MODEL_URL,
+    resourcesRoot: app.isPackaged ? join(process.resourcesPath, "voice") : resolve(".openbot-build/voice"),
+    // `voice:prepare` puts Parakeet in `.openbot-build/voice/model` for development.
+    modelDirectories: {
+      "parakeet-tdt-0.6b-v3": app.isPackaged
+        ? join(app.getPath("userData"), "runtimes", PARAKEET_MODEL_DIRECTORY)
+        : resolve(".openbot-build/voice/model"),
+    },
+    preferences: voicePreferences,
+    spawnHost: spawnVoiceTranscriptionHost,
   });
+  if (app.isPackaged) {
+    // Parakeet replaced Whisper. The Whisper model is an application download, not user data.
+    void removeLegacyWhisperCache(join(app.getPath("userData"), "runtimes", "whisper")).catch((error: unknown) =>
+      logger.warn("Could not remove the old Whisper model cache.", toLogValue(error)),
+    );
+  }
   teardown.push(TEARDOWN_ORDER.voice, "voice transcription", () => voice.shutdown());
   voice.on("modelStatus", forwardVoiceModelStatus);
   const currentVersion = app.getVersion();
@@ -1774,6 +1814,7 @@ export async function createApplicationServices({
     mcpOAuth,
     githubConnector,
     onePasswordConnector,
+    bitwardenConnector,
     mailbox,
     storageUsage,
     browser,
@@ -1788,6 +1829,7 @@ export async function createApplicationServices({
     language,
     logoColor,
     notificationPreference,
+    busyMessageMode,
     agentInitialization,
     hostUpdateCoordinator,
     requestedUpdate: remoteUpdate,

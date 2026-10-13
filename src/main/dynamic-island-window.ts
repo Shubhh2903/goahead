@@ -16,6 +16,7 @@ import {
 import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, type Logger, toLogValue } from "@openbot/logging";
 import type { BrowserWindow, Display, Rectangle } from "electron";
+import type { CriticalAction } from "./dynamic-island-actions";
 import { readDynamicIslandPreference, writeDynamicIslandPreference } from "./dynamic-island-preference-store";
 import { createEmotionGaze, type EmotionGaze, type EmotionGazeOptions, type EmotionGazeTarget } from "./emotion-gaze";
 import { sendToRenderer } from "./renderer-ipc";
@@ -56,9 +57,7 @@ export interface DynamicIslandWindowControllerOptions {
   ensureMainWindow?: () => Promise<BrowserWindow>;
   presentMainWindow: (window: BrowserWindow) => void;
   performHaptic: () => void;
-  performCriticalAction: (
-    action: Extract<DynamicIslandAction, { type: "answer-prompt" | "respond-approval" }>,
-  ) => Promise<void>;
+  performCriticalAction: (action: CriticalAction) => Promise<void>;
   logger?: Logger;
   /** Lets the face follow the pointer. Without it, the face does not look around. */
   gaze?: Omit<EmotionGazeOptions, "targets">;
@@ -208,7 +207,7 @@ export class DynamicIslandWindowController {
     for (const listener of this.#preferenceListeners) listener({ ...this.#preference });
   }
 
-  setInteractive(rendererId: number, interactive: boolean): void {
+  setInteractive(rendererId: number, interactive: boolean, keyboard = false): void {
     const entry = [...this.#windows].find(
       ([, candidate]) => !candidate.isDestroyed() && candidate.webContents.id === rendererId,
     );
@@ -220,9 +219,13 @@ export class DynamicIslandWindowController {
     const bounds = display ? dynamicIslandWindowBounds(display) : undefined;
     this.#cancelCollapse(displayId);
     if (interactive && bounds) window.setBounds(bounds, false);
-    // On macOS, focusability also allows the panel to become a main window in AltTab.
-    // Keep it non-focusable; mouse interaction does not require keyboard focus.
     window.setIgnoreMouseEvents(!interactive, { forward: true });
+    // On macOS, focusability also allows the panel to become a main window in AltTab. The panel is
+    // focusable only while a text field on it needs key input. A panel becomes key without
+    // activating the app, so the main window stays where it is.
+    const wantsKeyboard = interactive && keyboard;
+    window.setFocusable(wantsKeyboard);
+    if (wantsKeyboard && !window.isFocused()) window.focus();
     if (interactive || !bounds) return;
     this.#collapseTimers.set(
       displayId,
@@ -259,14 +262,16 @@ export class DynamicIslandWindowController {
   }
 
   async performAction(action: DynamicIslandAction): Promise<void> {
-    if (action.type === "answer-prompt" || action.type === "respond-approval") {
+    if (
+      action.type === "answer-prompt" ||
+      action.type === "respond-approval" ||
+      action.type === "send-message" ||
+      action.type === "stop-agent"
+    ) {
       const key = criticalActionKey(action);
       const existing = this.#criticalActions.get(key);
       if (existing) return existing;
-      const pending = this.#ensureMainWindow().then(async (window) => {
-        await this.#options.performCriticalAction(action);
-        sendToRenderer(window, IPC_ENDPOINTS.dynamicIsland.action, action);
-      });
+      const pending = this.#runCriticalAction(action);
       this.#criticalActions.set(key, pending);
       try {
         await pending;
@@ -281,6 +286,15 @@ export class DynamicIslandWindowController {
     if (action.type !== "open-app" && !sendToRenderer(window, IPC_ENDPOINTS.dynamicIsland.action, action)) {
       throw new Error(sourceText("error.backend.windowTemporarilyUnavailable"));
     }
+  }
+
+  async #runCriticalAction(action: CriticalAction): Promise<void> {
+    // The main renderer clears an answered request at once. A reply or a stop changes only the
+    // agent: its events reach the main window by themselves, so the island does not need it.
+    const window =
+      action.type === "answer-prompt" || action.type === "respond-approval" ? await this.#ensureMainWindow() : null;
+    await this.#options.performCriticalAction(action);
+    if (window) sendToRenderer(window, IPC_ENDPOINTS.dynamicIsland.action, action);
   }
 
   async #ensureMainWindow(): Promise<BrowserWindow> {
@@ -455,10 +469,14 @@ function notchSizeChanged(
   return previous?.width !== next?.width || previous?.height !== next?.height;
 }
 
-function criticalActionKey(
-  action: Extract<DynamicIslandAction, { type: "answer-prompt" | "respond-approval" }>,
-): string {
-  return [action.type, action.serverId, action.agentId, String(action.requestId)].join("\u0000");
+function criticalActionKey(action: CriticalAction): string {
+  const id =
+    action.type === "send-message"
+      ? action.clientMessageId
+      : action.type === "stop-agent"
+        ? action.turnId
+        : String(action.requestId);
+  return [action.type, action.serverId, action.agentId, id].join("\u0000");
 }
 
 function dynamicIslandWindowBounds(display: Pick<Display, "bounds">): Rectangle {

@@ -22,6 +22,7 @@ import { useServerSettings } from "../servers/server-settings";
 import { useServers } from "../servers/servers-context";
 import { useSettings } from "../settings/settings-context";
 import { usePresence } from "../team/team-context";
+import { useUsage } from "../usage/usage-context";
 import { useSidebar } from "./sidebar-context";
 
 /** Dismissing the iOS beta card is a choice of this computer, like the sidebar width. */
@@ -58,6 +59,7 @@ export function WorkspaceSidebar(props: { peopleEnabled: boolean }) {
   const { openServerSettings } = useServerSettings();
   const serverActions = useServerActions();
   const { setSkillsMarketplaceOpen } = useSettings();
+  const { openUsage } = useUsage();
   const { agentList, activeAgent, agentSetupDraft, duplicatingAgentIds, openBotSetup } = useAgents();
   const { editAgent, duplicateAgent, deleteAgent } = useAgentActions();
   const { activeTurns, queues, failedTurns, usageLimits, pendingPrompts, pendingApprovals } = useTurns();
@@ -223,6 +225,7 @@ export function WorkspaceSidebar(props: { peopleEnabled: boolean }) {
         </Show>
       }
       onOpenMarketplace={() => setSkillsMarketplaceOpen(true)}
+      onOpenUsage={(trigger) => openUsage(activeServer()?.id ?? "local", trigger)}
       emptyAction={
         agentList().length === 0
           ? {

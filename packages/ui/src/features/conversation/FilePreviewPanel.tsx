@@ -1,15 +1,24 @@
 import type { FilePreview } from "@openbot/contracts/ipc";
-import { Button, Download, ExternalLink, File, FolderOpen, X } from "@openbot/ui";
+import { Button, Code, CopyButton, Download, ExternalLink, File, FolderOpen, WrapText, X } from "@openbot/ui";
 import { PanelResizer } from "@openbot/ui/components/PanelResizer";
 import type { AgentProfile } from "@openbot/ui/data";
+import { ChatVisual } from "@openbot/ui/features/conversation/ChatVisual";
+import { type CodeToken, fileCodeLanguage, highlightedCodeLines } from "@openbot/ui/features/conversation/CodeBlock";
 import { MarkdownFilePreview } from "@openbot/ui/features/conversation/MarkdownFilePreview";
 import { SpreadsheetFilePreview } from "@openbot/ui/features/conversation/SpreadsheetFilePreview";
 import { useText } from "@openbot/ui/text";
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
 
 const PANEL_MIN = 220;
 const PANEL_MAX = 1600;
 const TEXT_LIMIT = 1_000_000;
+/** Longer text shows as plain text, so the panel stays responsive. */
+const HIGHLIGHT_LIMIT = 200_000;
+/**
+ * Text with a longer line also shows as plain text. The tokenizer time for one string literal
+ * grows with the square of its length, and a long string is usually on one line.
+ */
+const HIGHLIGHT_LINE_LIMIT = 5_000;
 /** Kinds the panel hands to the browser as an object URL instead of decoding itself. */
 const BLOB_PREVIEW_KINDS = new Set<FilePreview["previewKind"]>(["image", "pdf", "audio", "video"]);
 
@@ -17,6 +26,8 @@ interface FilePreviewPanelProps {
   readWidth: (fallback: number, min: number, max: number) => number;
   onResizeEnd: (width: number) => void;
   onResetWidth: () => void;
+  readWrapLines: () => boolean;
+  onWrapLinesChange: (wrap: boolean) => void;
   preview: FilePreview;
   agents: AgentProfile[];
   defaultWidth: () => number;
@@ -27,6 +38,11 @@ interface FilePreviewPanelProps {
   onOpenWorkspaceFile: (path: string) => void;
   /** Set when the file already has a URL the panel can point at, as an attachment does. */
   sourceUrl?: string | null;
+  /**
+   * Set for an HTML file that the app can serve as a sandboxed page with its scripts. The panel
+   * shows the page, and the source on request. Without it the panel shows the source.
+   */
+  pageUrl?: string | null | undefined;
   onOpenExternally: () => void;
   allowExternalOpen?: boolean;
   /** Present for an attachment, which the user can also save or locate. A file already has a path. */
@@ -43,19 +59,28 @@ export default function FilePreviewPanel(props: FilePreviewPanelProps) {
   // The panel mounts when a file opens, so it has to paint its closed state
   // first. Two frames guarantee that paint before the open state applies.
   const [revealed, setRevealed] = createSignal(false);
+  const [wrapLines, setWrapLines] = createSignal(untrack(() => props.readWrapLines()));
+  const [rawSource, setRawSource] = createSignal(false);
   let currentPreviewUrl: string | null = null;
-  const text = createMemo(() => {
-    if (!props.preview.bytes || (props.preview.previewKind !== "text" && props.preview.previewKind !== "markdown")) {
-      return { value: "", truncated: false };
-    }
-    const value = new TextDecoder().decode(props.preview.bytes);
-    return { value: value.slice(0, TEXT_LIMIT), truncated: value.length > TEXT_LIMIT };
+  const pageUrl = () => (props.preview.previewKind === "text" ? props.pageUrl : null) ?? null;
+  /** The whole text of a text or Markdown file. Copy takes all of it; the view shows up to `TEXT_LIMIT`. */
+  const source = createMemo(() => {
+    const preview = props.preview;
+    if (!preview.bytes || (preview.previewKind !== "text" && preview.previewKind !== "markdown")) return "";
+    return new TextDecoder().decode(preview.bytes);
   });
+  const text = createMemo(() => ({ value: source().slice(0, TEXT_LIMIT), truncated: source().length > TEXT_LIMIT }));
 
   createEffect(
     () => panelWidth(),
     (width) => {
       props.onWidthChange(width);
+    },
+  );
+  createEffect(
+    () => props.preview,
+    () => {
+      setRawSource(false);
     },
   );
   createEffect(
@@ -87,6 +112,12 @@ export default function FilePreviewPanel(props: FilePreviewPanelProps) {
       });
     });
     onCleanup(() => cancelAnimationFrame(frame));
+  };
+
+  const toggleWrapLines = () => {
+    const wrap = !wrapLines();
+    setWrapLines(wrap);
+    props.onWrapLinesChange(wrap);
   };
 
   const resizeDefaultPanel = () => {
@@ -121,6 +152,40 @@ export default function FilePreviewPanel(props: FilePreviewPanelProps) {
       <header class="file-preview-header">
         <File class="file-preview-file-icon" />
         <h2 title={props.preview.name}>{props.preview.name}</h2>
+        <Show when={pageUrl()}>
+          <Button
+            variant="ghost"
+            type="button"
+            class="browser-toolbar-button"
+            aria-label={t("preview.panel.rawHtml")}
+            aria-pressed={rawSource() ? "true" : "false"}
+            onClick={() => setRawSource((raw) => !raw)}
+          >
+            <Code class="browser-toolbar-icon" />
+          </Button>
+        </Show>
+        <Show when={props.preview.previewKind === "text"}>
+          <Button
+            variant="ghost"
+            type="button"
+            class="browser-toolbar-button"
+            aria-label={t("preview.panel.wrapLines")}
+            aria-pressed={wrapLines() ? "true" : "false"}
+            onClick={toggleWrapLines}
+          >
+            <WrapText class="browser-toolbar-icon" />
+          </Button>
+        </Show>
+        <Show when={source()}>
+          {(value) => (
+            <CopyButton
+              class="browser-toolbar-button file-preview-copy"
+              value={value()}
+              label={t("preview.panel.copy")}
+              iconOnly
+            />
+          )}
+        </Show>
         <Show when={props.allowExternalOpen !== false}>
           <Button
             variant="ghost"
@@ -185,8 +250,11 @@ export default function FilePreviewPanel(props: FilePreviewPanelProps) {
             onOpenWorkspaceFile={props.onOpenWorkspaceFile}
           />
         </Show>
-        <Show when={props.preview.previewKind === "text"}>
-          <pre class="file-preview-text">{text().value}</pre>
+        <Show when={!rawSource() && pageUrl()}>
+          {(url) => <ChatVisual fill src={url()} title={props.preview.name} onOpenLink={props.onOpenLink} />}
+        </Show>
+        <Show when={props.preview.previewKind === "text" && (rawSource() || !pageUrl())}>
+          <FileSourceText name={props.preview.name} text={text().value} wrap={wrapLines()} />
           <Show when={text().truncated}>
             <p class="file-preview-truncated">{t("preview.truncated", { limit: format.number(TEXT_LIMIT) })}</p>
           </Show>
@@ -228,5 +296,38 @@ export default function FilePreviewPanel(props: FilePreviewPanelProps) {
         </Show>
       </div>
     </aside>
+  );
+}
+
+/** The text of a file, highlighted as code when its name gives a language that chat code blocks highlight. */
+function FileSourceText(props: { name: string; text: string; wrap: boolean }) {
+  const [tokens, setTokens] = createSignal<CodeToken[] | null>(null);
+  let highlightRun = 0;
+
+  createEffect(
+    () => ({ language: fileCodeLanguage(props.name), text: props.text }),
+    ({ language, text }) => {
+      const run = ++highlightRun;
+      setTokens(null);
+      if (language === "plain" || text.length > HIGHLIGHT_LIMIT) return;
+      if (text.split("\n").some((line) => line.length > HIGHLIGHT_LINE_LIMIT)) return;
+      void highlightedCodeLines(text, language).then((lines) => {
+        if (run !== highlightRun) return;
+        setTokens(lines.flatMap((line, index) => (index === 0 ? line : [{ text: "\n" }, ...line])));
+      });
+    },
+  );
+  onCleanup(() => {
+    highlightRun += 1;
+  });
+
+  return (
+    <pre class={{ "file-preview-text": true, "file-preview-text-wrap": props.wrap }}>
+      <Show when={tokens()} fallback={props.text}>
+        {(highlighted) => (
+          <For each={highlighted()}>{(token) => <span data-code-token={token.type}>{token.text}</span>}</For>
+        )}
+      </Show>
+    </pre>
   );
 }

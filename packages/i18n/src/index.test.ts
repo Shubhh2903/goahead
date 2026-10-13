@@ -3,26 +3,18 @@ import { resolveLocale, translateFor } from "./index";
 import { createTranslate } from "./message";
 
 describe("resolveLocale", () => {
-  it("reads a system locale by its language subtag", () => {
-    expect(resolveLocale("system", "fr-FR")).toBe("fr");
-    expect(resolveLocale("system", "fr")).toBe("fr");
-    expect(resolveLocale("system", "ja-JP")).toBe("ja");
-    expect(resolveLocale("system", "ja")).toBe("ja");
-    expect(resolveLocale("system", "pt-BR")).toBe("pt");
-    expect(resolveLocale("system", "pt-PT")).toBe("pt");
-    expect(resolveLocale("system", "tr-TR")).toBe("tr");
-    expect(resolveLocale("system", "tr")).toBe("tr");
-  });
-
-  it("falls back to English for a language no catalog covers", () => {
+  it("draws in English for every system locale while the app is English only", () => {
+    expect(resolveLocale("system", "en-GB")).toBe("en");
+    expect(resolveLocale("system", "fr-FR")).toBe("en");
+    expect(resolveLocale("system", "ja-JP")).toBe("en");
     expect(resolveLocale("system", "fi-FI")).toBe("en");
   });
 
-  it("lets an explicit choice override the computer", () => {
-    expect(resolveLocale("fr", "ja-JP")).toBe("fr");
-    expect(resolveLocale("ja", "en-US")).toBe("ja");
-    expect(resolveLocale("pt", "en-US")).toBe("pt");
-    expect(resolveLocale("tr", "en-US")).toBe("tr");
+  it("reads a saved French, Japanese, Portuguese or Turkish preference as English", () => {
+    expect(resolveLocale("fr", "ja-JP")).toBe("en");
+    expect(resolveLocale("ja", "en-US")).toBe("en");
+    expect(resolveLocale("pt", "en-US")).toBe("en");
+    expect(resolveLocale("tr", "en-US")).toBe("en");
     expect(resolveLocale("en", "ja-JP")).toBe("en");
   });
 });

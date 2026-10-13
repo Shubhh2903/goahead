@@ -97,6 +97,7 @@ const Settings = createSimpleContext({
     let allowRemoteUpdatesChanged = false;
     let autoInstallUpdatesChanged = false;
     let desktopNotificationsChanged = false;
+    let busyMessageModeChanged = false;
     let turboModeChanged = false;
     const [turboModePending, setTurboModePending] = createSignal(false);
 
@@ -227,6 +228,13 @@ const Settings = createSimpleContext({
           .catch(() =>
             setGeneralSettings((current) => ({ ...current, desktopNotifications: previous.desktopNotifications })),
           );
+      }
+      if (previous.busyMessageMode !== value.busyMessageMode) {
+        busyMessageModeChanged = true;
+        void settingsPort()
+          .setBusyMessageModePreference({ mode: value.busyMessageMode })
+          .then((preference) => setGeneralSettings((current) => ({ ...current, busyMessageMode: preference.mode })))
+          .catch(() => setGeneralSettings((current) => ({ ...current, busyMessageMode: previous.busyMessageMode })));
       }
       if (
         previous.macBookNotch !== value.macBookNotch ||
@@ -368,6 +376,13 @@ const Settings = createSimpleContext({
             allowRemoteUpdates: allowRemoteUpdatesChanged ? current.allowRemoteUpdates : preference.allowRemoteUpdates,
             autoInstallUpdates: autoInstallUpdatesChanged ? current.autoInstallUpdates : preference.autoInstall,
           }));
+        })
+        .catch(() => undefined);
+      void settingsPort()
+        .getBusyMessageModePreference()
+        .then((preference) => {
+          if (busyMessageModeChanged) return;
+          setGeneralSettings((current) => ({ ...current, busyMessageMode: preference.mode }));
         })
         .catch(() => undefined);
       void settingsPort()

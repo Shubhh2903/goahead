@@ -4,10 +4,13 @@ import type { messages as source } from "../en/preview";
 export const messages = {
   "preview.panel.label": "Aperçu du fichier",
   "preview.panel.resize": "Redimensionner l’aperçu du fichier",
+  "preview.panel.copy": "Copier le texte du fichier",
+  "preview.panel.wrapLines": "Renvoyer les longues lignes à la ligne",
   "preview.panel.openExternally": "Ouvrir le fichier dans une autre application",
   "preview.panel.download": "Télécharger le fichier",
   "preview.panel.reveal": "Afficher le fichier dans le Finder",
   "preview.panel.close": "Fermer l’aperçu du fichier",
+  "preview.panel.rawHtml": "Afficher la source HTML",
   "preview.truncated": "Aperçu tronqué après {limit} caractères.",
   "preview.unavailable": "Aperçu indisponible.",
   "preview.unsupported.title": "Aperçu indisponible",

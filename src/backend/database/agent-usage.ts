@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   type AgentAnalytics,
   type AgentAnalyticsInput,
+  ANALYTICS_AGENT_MODELS_LIMIT,
   type AnalyticsProviderDay,
   type AnalyticsTotals,
   analyticsDate,
@@ -198,6 +199,8 @@ export class AgentUsage {
       days.set(date.toISOString().slice(0, 10), bucket());
     const models = new Map<string, { provider: string; model: string; bucket: Bucket }>();
     const agents = new Map<string, Bucket>();
+    // The tokens of each model per agent, so an agent row can name the models it used.
+    const agentModels = new Map<string, Map<string, number>>();
     // The chart reads two measures per [date, provider], and a Bucket would allocate three
     // Sets per cell - about 3,300 at the 367-day cap - for fields this row never carries.
     const providerDays = new Map<string, AnalyticsProviderDay>();
@@ -237,6 +240,15 @@ export class AgentUsage {
       const tokens = decodeUsageTokens(JSON.parse(requiredStringColumn(row, "tokens_json")));
       const turn = JSON.stringify([row.agent_id, row.provider, row.session_id, row.turn_id]);
       const scope = targets(row);
+      if (scope.targets.length > 0) {
+        const agentId = requiredStringColumn(row, "agent_id");
+        const model = requiredStringColumn(row, "model");
+        const byModel = agentModels.get(agentId) ?? new Map<string, number>();
+        let modelTokens = byModel.get(model) ?? 0;
+        for (const key of TOKEN_KEYS) modelTokens += tokens[key] ?? 0;
+        byModel.set(model, modelTokens);
+        agentModels.set(agentId, byModel);
+      }
       for (const target of scope.targets) {
         if (TOKEN_KEYS.some((key) => tokens[key] !== null)) target.usageTurns.add(turn);
         target.sessions.add(JSON.stringify([row.agent_id, row.provider, row.session_id]));
@@ -289,6 +301,11 @@ export class AgentUsage {
           agentId,
           ...finish(item),
           share: summary.processedTokens ? item.values.processedTokens / summary.processedTokens : 0,
+          models: [...(agentModels.get(agentId) ?? [])]
+            .filter(([model]) => model.length > 0)
+            .sort(([leftModel, left], [rightModel, right]) => right - left || leftModel.localeCompare(rightModel))
+            .slice(0, ANALYTICS_AGENT_MODELS_LIMIT)
+            .map(([model]) => model),
         }))
         // Agent ids are unique, so the tiebreak makes the order of two equal rows a
         // decision rather than a consequence of the unordered SELECT above.

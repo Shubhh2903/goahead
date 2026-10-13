@@ -148,3 +148,33 @@
   max-width: 72ch;
   line-height: 1.6;
 }
+
+/* Claude plan limits sit above the report, one bar per window, in the card of a Settings tab. */
+.claude-plan-limits [data-usage-high] .ui-progress-fill {
+  background: var(--openbot-warning);
+}
+.agent-usage-tokens-note {
+  font-size: var(--openbot-text-sm);
+  color: var(--openbot-text-muted);
+}
+.agent-usage-tokens {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openbot-space-3);
+}
+/* The rows take the sidebar agent row anatomy from the app shell; the list only drops its bullets. */
+.agent-usage-agent-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.agent-usage-agent-models {
+  display: flex;
+  align-items: center;
+  gap: var(--openbot-space-1-5);
+}
+.agent-usage-agent-models > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

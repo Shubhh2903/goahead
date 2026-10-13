@@ -4,10 +4,13 @@ import type { messages as source } from "../en/preview";
 export const messages = {
   "preview.panel.label": "ファイルのプレビュー",
   "preview.panel.resize": "ファイルのプレビューのサイズを変更",
+  "preview.panel.copy": "ファイルのテキストをコピー",
+  "preview.panel.wrapLines": "長い行を折り返す",
   "preview.panel.openExternally": "ファイルを外部アプリで開く",
   "preview.panel.download": "ファイルをダウンロード",
   "preview.panel.reveal": "ファイルを Finder で表示",
   "preview.panel.close": "ファイルのプレビューを閉じる",
+  "preview.panel.rawHtml": "HTML のソースを表示",
   "preview.truncated": "プレビューは {limit} 文字までです。",
   "preview.unavailable": "プレビューを表示できません。",
   "preview.unsupported.title": "プレビューを表示できません",

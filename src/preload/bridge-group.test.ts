@@ -45,7 +45,7 @@ function send(channel: string, payload: unknown): void {
   for (const handler of bridge.listeners.get(channel) ?? []) handler(null, payload);
 }
 
-const status = { phase: "ready", progress: 100, message: null };
+const status = { modelId: "parakeet-tdt-0.6b-v3", phase: "ready", progress: 100, message: null };
 
 beforeEach(() => {
   bridge.invoke.mockReset();

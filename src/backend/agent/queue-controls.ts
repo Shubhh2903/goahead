@@ -1,3 +1,4 @@
+import { agentProviderDescriptor } from "@openbot/contracts/agent-providers";
 import type {
   ConversationMessageSender,
   QueueSnapshot,
@@ -18,6 +19,7 @@ import { type DrainScheduler, REMOVED_ENDPOINT_MESSAGE } from "./drain-scheduler
 import type { MailboxSync } from "./mailbox-sync";
 import type { ProviderRuntime } from "./provider-runtime";
 import type { RoutineScheduler } from "./routine-scheduler";
+import { providerForAgent } from "./thread-items";
 
 export interface QueueControlsHooks {
   /** The channel task that owns a delivery. Read late: the channel service is built after this. */
@@ -187,6 +189,13 @@ export class QueueControls {
     if (!this.#endpoints.serves(this.#drain.modelForTurn(agent.id, turnId) ?? agent.model)) {
       throw new Error(REMOVED_ENDPOINT_MESSAGE);
     }
+    // An ACP provider has no steer request, and a second prompt can stop the running turn. The
+    // message stays in the queue with the reason, and starts when the turn ends.
+    if (agentProviderDescriptor(providerForAgent(agent)).steer !== "native") {
+      await this.#mailbox.markSteerFallback(input.deliveryId, "provider-unsupported");
+      this.#mailboxSync.emitQueue(agent.id);
+      throw new Error(sourceText("error.backend.steerUnsupported"));
+    }
     await this.#mailbox.markSteering(input.deliveryId, turnId);
     this.#mailboxSync.emitQueue(agent.id);
     try {
@@ -205,14 +214,18 @@ export class QueueControls {
         },
         decodeRecordResponse,
       );
-      await this.#mailbox.markRunning(input.deliveryId, turnId);
+    } catch (error) {
+      // The turn may have ended while the request was in flight, and found nothing else to start
+      // with this message out of the queue, so the drain is asked again.
+      await this.#mailbox.restoreUnsteered(input.deliveryId, turnId);
       this.#mailboxSync.syncMailboxMessages(snapshot);
       this.#mailboxSync.emitQueue(agent.id);
-      this.#conversation.emitConversation(snapshot, "queue.message-steered", { deliveryId: input.deliveryId });
-    } catch (error) {
-      await this.#mailbox.restoreQueued(input.deliveryId);
-      this.#mailboxSync.emitQueue(agent.id);
+      this.#drain.scheduleDrain(agent.id);
       throw error;
     }
+    await this.#mailbox.markRunning(input.deliveryId, turnId);
+    this.#mailboxSync.syncMailboxMessages(snapshot);
+    this.#mailboxSync.emitQueue(agent.id);
+    this.#conversation.emitConversation(snapshot, "queue.message-steered", { deliveryId: input.deliveryId });
   }
 }

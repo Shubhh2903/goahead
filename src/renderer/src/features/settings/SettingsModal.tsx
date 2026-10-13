@@ -27,9 +27,12 @@ import { createSettingsUpdatesStore } from "@openbot/ui/features/settings/stores
 import { createEffect, createSignal, Show, untrack } from "solid-js";
 import { useI18n } from "../../i18n-context";
 import { ComputerUseSetup } from "../computer-use/ComputerUseSetup";
+import { voiceSupported } from "../conversation/voice-status";
 import { SettingsDynamicIslandTab } from "./SettingsDynamicIslandTab";
 import { SettingsGeneralTab } from "./SettingsGeneralTab";
+import { SettingsVoiceTab } from "./SettingsVoiceTab";
 import { navItem, navItems, type SettingsTab } from "./settings-tabs";
+import { createSettingsVoiceStore } from "./settings-voice-store";
 
 export interface SettingsModalProps {
   open: boolean;
@@ -41,6 +44,7 @@ export interface SettingsModalProps {
   builtInDisplayGeometry?: DynamicIslandGeometry | undefined;
   updateStatus: UpdateStatus;
   onUpdateAction: () => Promise<void>;
+  onOpenWhatsNew?: (() => void) | undefined;
   onCancelScheduledRestart?: () => Promise<void>;
   onRestartWhenIdle?: () => Promise<void>;
   onCancelIdleRestart?: () => Promise<void>;
@@ -91,9 +95,12 @@ export function SettingsModal(props: SettingsModalProps) {
     () => props.open && activeTab() === "billing",
   );
   const hostedServers = createSettingsHostedServersStore(props, () => activeTab() === "hosted-servers");
+  const voice = createSettingsVoiceStore(() => props.open && activeTab() === "voice");
 
   // The Dynamic Island exists only on macOS, so other platforms get no tab for it.
   const isMac = () => props.appInfo?.platform === "darwin";
+  // Linux builds carry no speech recognition runtime.
+  const hasVoice = () => voiceSupported(props.appInfo?.platform);
   // An account that lost access to hosting still sees its servers, so it can delete or start them.
   const hostedServersShown = () => hostedServers.state.available || hostedServers.state.servers.length > 0;
   // A deep link, or the last server's delete, can leave the Hosted servers tab open without its panel.
@@ -119,7 +126,9 @@ export function SettingsModal(props: SettingsModalProps) {
   const visibleNavItems = () =>
     navItems.filter(
       (item) =>
-        (item.value !== "dynamic-island" || isMac()) && (item.value !== "hosted-servers" || hostedServersShown()),
+        (item.value !== "dynamic-island" || isMac()) &&
+        (item.value !== "voice" || hasVoice()) &&
+        (item.value !== "hosted-servers" || hostedServersShown()),
     );
 
   const title = () => i18n.t(navItem(activeTab()).titleKey);
@@ -132,6 +141,7 @@ export function SettingsModal(props: SettingsModalProps) {
     onChange(value: string) {
       if (
         value === "general" ||
+        (value === "voice" && hasVoice()) ||
         (value === "dynamic-island" && isMac()) ||
         value === "computer-use" ||
         value === "profile" ||
@@ -203,6 +213,12 @@ export function SettingsModal(props: SettingsModalProps) {
           />
         </Tabs.Content>
 
+        <Show when={hasVoice()}>
+          <Tabs.Content value="voice" class="settings-modal-tab-panel" data-tab="voice">
+            <SettingsVoiceTab store={voice} />
+          </Tabs.Content>
+        </Show>
+
         <Show when={isMac()}>
           <Tabs.Content value="dynamic-island" class="settings-modal-tab-panel" data-tab="dynamic-island">
             <SettingsDynamicIslandTab
@@ -243,6 +259,7 @@ export function SettingsModal(props: SettingsModalProps) {
         <Tabs.Content value="updates" class="settings-modal-tab-panel" data-tab="updates">
           <SettingsUpdatesTab
             store={updates}
+            onOpenWhatsNew={props.onOpenWhatsNew}
             value={props.value}
             onUpdateSetting={updateSetting}
             selectMount={modalElement}

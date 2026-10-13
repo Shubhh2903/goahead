@@ -25,4 +25,6 @@ export const messages = {
     "A conta de serviço não consegue ler nenhum cofre. Dê acesso a um cofre e tente novamente.",
   "error.connector.onePasswordFileUnreadable": "O arquivo de conexão com o 1Password não pode ser lido.",
   "error.connector.onePasswordFileTooLarge": "O arquivo de conexão com o 1Password é muito grande.",
+  "error.connector.bitwardenFailed":
+    "Não foi possível ler o Bitwarden. Instale a CLI bw, entre, desbloqueie e crie uma pasta chamada Shared with OpenBot. Conecte com uma nova chave de sessão.",
 } as const satisfies PartialTranslation<typeof source>;

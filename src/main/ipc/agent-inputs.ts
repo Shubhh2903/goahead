@@ -22,6 +22,7 @@ import {
   isAgentProvider,
   isAvatarHue,
   isAvatarSeed,
+  isBusyMessageMode,
   isMessageReaction,
   isReasoningEffort,
   isRoutineSchedule,
@@ -458,11 +459,19 @@ export function parseSendMessage(value: unknown): SendMessageInput {
   if (replyToMessageId !== null && (!isString(replyToMessageId) || replyToMessageId.length > INPUT_LIMITS.identifier)) {
     throw new Error("Invalid reply target.");
   }
+  const clientMessageId = value.clientMessageId;
+  if (
+    clientMessageId !== undefined &&
+    (!isString(clientMessageId) || !clientMessageId || clientMessageId.length > INPUT_LIMITS.identifier)
+  ) {
+    throw new Error("Invalid client message id.");
+  }
   return {
     agentId: requireString(value.agentId, "agentId"),
     text: value.text,
     attachmentDraftIds,
     replyToMessageId: replyToMessageId?.trim() || null,
+    ...(clientMessageId === undefined ? {} : { clientMessageId }),
   };
 }
 
@@ -539,6 +548,12 @@ export function parseUpdateAgent(value: unknown): UpdateAgentInput {
   if (value.allowAutomation !== undefined) {
     if (!isBoolean(value.allowAutomation)) throw new Error("Invalid automation value.");
     result.allowAutomation = value.allowAutomation;
+  }
+  if (value.busyMessageMode !== undefined) {
+    if (value.busyMessageMode !== null && !isBusyMessageMode(value.busyMessageMode)) {
+      throw new Error("Invalid busy message mode.");
+    }
+    result.busyMessageMode = value.busyMessageMode;
   }
   if (value.avatarSeed !== undefined) {
     if (!isAvatarSeed(value.avatarSeed)) throw new Error("Invalid avatar seed.");

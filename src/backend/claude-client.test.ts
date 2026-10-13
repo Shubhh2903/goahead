@@ -8,6 +8,7 @@ import type { McpServerConfig } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { normalizeAccountUsage } from "./agent/account-usage";
 import { AgentStore } from "./agent-store";
 import { CLAUDE_IDLE_THREAD_LIMIT, CLAUDE_THREAD_IDLE_RELEASE_MS, ClaudeAgentClient } from "./claude-client";
 import { mergeProviderHistory, newAssistantMessage, snapshotFromThread } from "./conversation-snapshots";
@@ -117,6 +118,58 @@ describe("ClaudeAgentClient", () => {
       client.request("account/rateLimits/read", { model: "claude-haiku-4-5" }, decodeAccountRateLimitsReadResult),
     ).resolves.toMatchObject({
       rateLimits: { secondary: { usedPercent: 34, windowDurationMins: 10_080 } },
+      rateLimitsByLimitId: null,
+    });
+    await client.stop();
+  });
+
+  it("reads the all-model weekly limit and each model family weekly limit when no model is given", async () => {
+    const usage = {
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 12, resets_at: "2026-09-03T16:00:00Z" },
+        seven_day: { utilization: 34, resets_at: "2026-09-08T00:00:00Z" },
+        seven_day_opus: { utilization: 61, resets_at: "2026-09-08T00:00:00Z" },
+        seven_day_sonnet: { utilization: 82, resets_at: "2026-09-09T00:00:00Z" },
+      },
+    };
+    const client = new ClaudeAgentClient(
+      { executable: "/bin/true", version: "2.1.246" },
+      () => new TestQuery(new TestQueue<TestStreamMessage>(), [], usage),
+    );
+    client.start();
+
+    const rateLimits = await client.request("account/rateLimits/read", {}, decodeAccountRateLimitsReadResult);
+    expect(normalizeAccountUsage(rateLimits)).toEqual({
+      limits: [
+        {
+          id: "claude",
+          primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: Date.parse("2026-09-03T16:00:00Z") / 1_000 },
+          secondary: {
+            usedPercent: 34,
+            windowDurationMins: 10_080,
+            resetsAt: Date.parse("2026-09-08T00:00:00Z") / 1_000,
+          },
+        },
+        {
+          id: "claude-opus-weekly",
+          primary: null,
+          secondary: {
+            usedPercent: 61,
+            windowDurationMins: 10_080,
+            resetsAt: Date.parse("2026-09-08T00:00:00Z") / 1_000,
+          },
+        },
+        {
+          id: "claude-sonnet-weekly",
+          primary: null,
+          secondary: {
+            usedPercent: 82,
+            windowDurationMins: 10_080,
+            resetsAt: Date.parse("2026-09-09T00:00:00Z") / 1_000,
+          },
+        },
+      ],
     });
     await client.stop();
   });

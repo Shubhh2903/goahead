@@ -1,8 +1,10 @@
-import type { AnalyticsTotals, HostAnalytics } from "@openbot/contracts/ipc";
+import type { AgentModelOption, AnalyticsAgent, AnalyticsTotals, HostAnalytics } from "@openbot/contracts/ipc";
 import type { AppTextKey } from "@openbot/i18n";
 import { Button, SlidingTabs } from "@openbot/ui";
 import { createMemo, createStore, For, onSettled, Show } from "solid-js";
+import { pickerModels } from "../../components/provider-model-options";
 import { useText } from "../../text";
+import { AgentAvatar } from "../agents/AgentAvatar";
 import { UsageChart } from "./UsageChart";
 import { UsageProviderMark } from "./UsageProviderMark";
 import {
@@ -83,10 +85,61 @@ function BreakdownCells(props: { row: AnalyticsTotals; cost: boolean; share: (am
     </>
   );
 }
+/**
+ * One agent in "Tokens by agent", drawn with the anatomy of a sidebar agent row: the avatar, the
+ * name, the total where the sidebar shows the time, and the models where it shows the preview.
+ */
+function AgentTokensRow(props: {
+  agent: AnalyticsAgent;
+  label: UsageAgentLabel;
+  /** The provider of the first model, or the provider the agent uses now. */
+  provider: string;
+  modelNames: string;
+}) {
+  const text = useText();
+  const { t } = text;
+  return (
+    <li class="agent-row">
+      <span class="agent-row-avatar">
+        <AgentAvatar
+          agent={props.label.avatar}
+          seed={props.label.avatar ? undefined : props.agent.agentId}
+          motion="idle"
+        />
+      </span>
+      <span class="agent-row-copy">
+        <span class="agent-row-heading">
+          <span class="agent-row-title">
+            <span class="agent-row-name">
+              <strong>{props.label.name}</strong>
+            </span>
+          </span>
+          <span class="agent-row-time">
+            <span aria-hidden="true">
+              {t("usage.tokensAmount", { tokens: usageCompact(props.agent.processedTokens, text) })}
+            </span>
+            <span class="sr-only">
+              {t("usage.tokensAmount", { tokens: usageNumber(props.agent.processedTokens, text) })}
+            </span>
+          </span>
+        </span>
+        <Show when={props.modelNames}>
+          <span class="agent-row-preview agent-usage-agent-models">
+            <UsageProviderMark provider={props.provider} />
+            <span>{props.modelNames}</span>
+          </span>
+        </Show>
+      </span>
+    </li>
+  );
+}
+
 export function AgentUsageReport(props: {
   result: HostAnalytics;
   metric: UsageMetric;
   agentLabel: (agentId: string) => UsageAgentLabel;
+  /** The models of the host, to name the model ids of an agent row. An unknown id shows as it is. */
+  modelOptions?: AgentModelOption[];
   onReady: () => void;
 }) {
   const text = useText();
@@ -112,6 +165,22 @@ export function AgentUsageReport(props: {
       cost() ? (b.estimatedCostUsd ?? -1) - (a.estimatedCostUsd ?? -1) : b.processedTokens - a.processedTokens,
     ),
   );
+  const tokenAgents = createMemo(() =>
+    props.result.agents
+      .filter((agent) => agent.processedTokens > 0)
+      .sort((a, b) => b.processedTokens - a.processedTokens),
+  );
+  // The same names the model picker shows. A host before the `models` field sends none, and
+  // the row then names no model.
+  const pickerById = createMemo(
+    () => new Map(pickerModels(props.modelOptions ?? []).map((model) => [model.id, model])),
+  );
+  const agentModels = (agent: AnalyticsAgent) =>
+    [...new Set((agent.models ?? []).map((model) => pickerById().get(model)?.name ?? model))].join(
+      t("format.list.separator"),
+    );
+  const agentProvider = (agent: AnalyticsAgent) =>
+    pickerById().get(agent.models?.[0] ?? "")?.provider ?? props.agentLabel(agent.agentId).provider;
   const partial = () =>
     totals().missingUsageTurns > 0 || totals().unpricedRecords > 0 || totals().incompleteRecords > 0;
   const share = (amount: number | null) => {
@@ -199,6 +268,28 @@ export function AgentUsageReport(props: {
           <UsageChart result={props.result} metric={props.metric} />
         </section>
       </div>
+      <section class="agent-usage-tokens" aria-label={t("usage.tokens.title")}>
+        <div class="agent-usage-section-header">
+          <h3>{t("usage.tokens.title")}</h3>
+        </div>
+        <Show
+          when={tokenAgents().length > 0}
+          fallback={<p class="agent-usage-tokens-note">{t("usage.tokens.empty")}</p>}
+        >
+          <ul class="agent-usage-agent-list" aria-label={t("usage.tokens.table")}>
+            <For each={tokenAgents()}>
+              {(agent) => (
+                <AgentTokensRow
+                  agent={agent}
+                  label={props.agentLabel(agent.agentId)}
+                  provider={agentProvider(agent)}
+                  modelNames={agentModels(agent)}
+                />
+              )}
+            </For>
+          </ul>
+        </Show>
+      </section>
       <section aria-label={t("usage.totals.title")}>
         <h3>{t("usage.totals.title")}</h3>
         <dl class="agent-usage-totals">

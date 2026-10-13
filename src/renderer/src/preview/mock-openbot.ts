@@ -18,6 +18,7 @@ import {
   type AppSetupState,
   type AttachmentImportEvent,
   agentAutoApprovalEnabled,
+  type BusyMessageModePreference,
   type CentralAuthState,
   CONTEXT_RESET_ITEM_TYPE,
   type ComputerUseState,
@@ -30,6 +31,7 @@ import {
   DEFAULT_AGENT_ACCESS,
   DEFAULT_APP_LOGO_COLOR,
   DEFAULT_APPROVAL_AUTOMATION_PREFERENCE,
+  DEFAULT_BUSY_MESSAGE_MODE,
   DEFAULT_DYNAMIC_ISLAND_PREFERENCE,
   DEFAULT_PROVIDER_DETECTION_SETTINGS,
   type DirectConversationSnapshot,
@@ -49,6 +51,7 @@ import {
   type OpenWorkspaceFileInput,
   type ProviderDetectionSettings,
   type QueueDelivery,
+  type QueuedMessageReceipt,
   type QueueSnapshot,
   type RemoteDesktopSession,
   type ReorderQueueInput,
@@ -100,6 +103,7 @@ import {
 import { mockAgentAnalytics, mockHostAnalytics } from "./mock-agent-analytics";
 import { createMockAuth, type MockAuthOptions } from "./mock-auth";
 import { createMockBilling } from "./mock-billing";
+import { createMockBitwardenConnector } from "./mock-bitwarden-connector";
 import { createMockBrowser, type MockBrowserOptions } from "./mock-browser";
 import { createMockChannels } from "./mock-channels";
 import { createMockGitHubConnector } from "./mock-github-connector";
@@ -116,9 +120,11 @@ import { createMockSlackClient } from "./mock-slack-client";
 import { createMockStorage } from "./mock-storage";
 import { clone, type Listener, type MockRuntime, matchesQuery } from "./mock-support";
 import { createMockTeam, type MockTeamOptions } from "./mock-team";
+import { createMockVoice, type MockVoiceOptions } from "./mock-voice";
 
 export interface MockOpenBotOptions
   extends MockProviderRuntimeOptions,
+    MockVoiceOptions,
     MockAuthOptions,
     MockBrowserOptions,
     MockTeamOptions,
@@ -221,6 +227,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
   };
   let analyticsPreference = clone<AnalyticsPreference>(options.analyticsPreference ?? { enabled: true });
   let approvalAutomation = clone<ApprovalAutomationPreference>(DEFAULT_APPROVAL_AUTOMATION_PREFERENCE);
+  let busyMessageMode: BusyMessageModePreference = { mode: DEFAULT_BUSY_MESSAGE_MODE };
   let languagePreference = clone<AppLanguagePreference>(options.languagePreference ?? { language: "system" });
   const languageListeners = new Set<(preference: AppLanguagePreference) => void>();
   let logoColorPreference: AppLogoColorPreference = { color: DEFAULT_APP_LOGO_COLOR };
@@ -273,6 +280,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
   let marketplaceAgentSubmissions = clone(STORY_AGENT_SUBMISSIONS);
   const agentTemplatePublications = new Map<string, AgentTemplatePublication>();
   let messageCounter = 10;
+  const sentReceipts = new Map<string, QueuedMessageReceipt>();
 
   /** Which providers have a key saved. The preview holds the flag only, like the real boundary. */
   const providerApiKeys = new Set<AgentProviderId>();
@@ -420,6 +428,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     (agentId) => agents.find((entry) => entry.id === agentId)?.name ?? agentId,
   );
   const mockProviderRuntimes = createMockProviderRuntimes(options, runtime);
+  const mockVoice = createMockVoice(options, runtime);
   const mockAuth = createMockAuth(options, runtime);
   const mockSkills = createMockSkills(options, (agentId) => emitAgentEvent({ type: "skills-changed", agentId }));
   const { installedSkills, readInstalledSkills } = mockSkills;
@@ -455,6 +464,11 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     onApprovalAutomation: (listener) => {
       approvalAutomationListeners.add(listener);
       return () => approvalAutomationListeners.delete(listener);
+    },
+    getBusyMessageModePreference: async () => clone(busyMessageMode),
+    setBusyMessageModePreference: async ({ mode }) => {
+      busyMessageMode = { mode };
+      return clone(busyMessageMode);
     },
     getAppLanguagePreference: async () => clone(languagePreference),
     setAppLanguagePreference: async ({ language }) => {
@@ -550,12 +564,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     }),
     providerRuntimes: mockProviderRuntimes.providerRuntimes,
     openUrl: async () => undefined,
-    voice: {
-      getModelStatus: async () => ({ phase: "ready", progress: 100, message: null }),
-      prepareModel: async () => ({ phase: "ready", progress: 100, message: null }),
-      transcribe: async () => ({ text: "Mock voice transcript" }),
-      onModelStatus: () => () => undefined,
-    },
+    voice: mockVoice.voice,
     auth: mockAuth.auth,
     skills: mockSkills.skills,
     hostedSites: {
@@ -603,6 +612,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     },
     githubConnector: createMockGitHubConnector(),
     onePasswordConnector: createMockOnePasswordConnector(),
+    bitwardenConnector: createMockBitwardenConnector(),
     billing: createMockBilling(),
     hostedServers: createMockHostedServers(),
     customProviders: {
@@ -1135,8 +1145,11 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
       updateAgent: async (input: UpdateAgentInput) => {
         const current = agents.find((agent) => agent.id === input.agentId);
         if (!current) throw new Error("Agent not found");
-        const { agentId: _agentId, ...updates } = input;
-        const updated = { ...current, ...updates };
+        const { agentId: _agentId, busyMessageMode, ...updates } = input;
+        const updated: AgentSummary = { ...current, ...updates };
+        // `null` returns the agent to the app default, which an agent records by having no value.
+        if (busyMessageMode === null) delete updated.busyMessageMode;
+        else if (busyMessageMode) updated.busyMessageMode = busyMessageMode;
         agents = agents.map((agent) => (agent.id === updated.id ? updated : agent));
         emitAgentEvent({ type: "agents-changed", agents });
         return clone(updated);
@@ -1389,12 +1402,16 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
       previewSharedFile: async (input: OpenSharedFileInput) => mockFilePreview(input.path, "shared-file"),
       previewWorkspaceFile: async (input: OpenWorkspaceFileInput) => mockFilePreview(input.path, "workspace-file"),
       sendMessage: async (input: SendMessageInput) => {
+        // As on a host, a repeated client id answers with the first receipt and stores nothing.
+        const repeated = input.clientMessageId ? sentReceipts.get(input.clientMessageId) : undefined;
+        if (repeated) return repeated;
         const messageId = `mock-message-${messageCounter++}`;
         const deliveryId = `mock-delivery-${messageCounter++}`;
         const turnId = `mock-turn-${messageCounter++}`;
         const createdAt = new Date().toISOString();
+        // The host names a user message by its delivery, which the receipt returns.
         const userMessage: ConversationMessage = {
-          id: messageId,
+          id: deliveryId,
           turnId,
           author: "user",
           source: "user",
@@ -1471,10 +1488,12 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
           });
         }, 80);
 
-        return {
+        const receipt: QueuedMessageReceipt = {
           messageId,
           deliveries: [{ id: deliveryId, recipientAgentId: input.agentId, status: "running", position: null }],
         };
+        if (input.clientMessageId) sentReceipts.set(input.clientMessageId, receipt);
+        return receipt;
       },
       setMessageReaction: async (input: SetMessageReactionInput) => {
         updateSnapshot(input.agentId, (snapshot) => {

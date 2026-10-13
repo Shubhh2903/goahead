@@ -433,6 +433,7 @@ describe("OpenBot connected desktop shell", () => {
         hapticsEnabled: true,
         idleVisible: true,
         additionalDisplaysEnabled: true,
+        emotionsEnabled: true,
         widthPercent: 100,
         heightPercent: 100,
       }),
@@ -451,13 +452,24 @@ describe("OpenBot connected desktop shell", () => {
     // The trigger reads its label and its value, so match the start of the name. It also opens on
     // pointer down rather than on click, so a plain click never reaches the list.
     await fireEvent.pointerDown(screen.getByRole("button", { name: /^Language/ }), { pointerType: "mouse", button: 0 });
-    await fireEvent.click(await screen.findByRole("option", { name: "Français" }));
-    await waitFor(() => expect(window.openbot.setAppLanguagePreference).toHaveBeenCalledWith({ language: "fr" }));
-    // The screen is written in the chosen language at once, with no restart: the tab the user is
-    // looking at is the same tab, now named in French.
-    await screen.findByRole("tab", { name: "Général" });
+    // The app is English only: the selector offers the system row and English, and nothing else.
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "System default",
+      "English",
+    ]);
+    await fireEvent.click(screen.getByRole("option", { name: "English" }));
+    await waitFor(() => expect(window.openbot.setAppLanguagePreference).toHaveBeenCalledWith({ language: "en" }));
     // The document says which language it is in, so a screen reader speaks it with the right voice.
-    expect(document.documentElement.lang).toBe("fr");
+    expect(document.documentElement.lang).toBe("en");
+  });
+
+  it("reads a saved French preference as English with no error", async () => {
+    vi.mocked(window.openbot.getAppLanguagePreference).mockResolvedValue({ language: "fr" });
+    render(() => <App />);
+    await fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    await screen.findByRole("tab", { name: "General" });
+    expect(screen.getByRole("button", { name: /^Language/ })).toHaveTextContent("English");
+    expect(document.documentElement.lang).toBe("en");
   });
 
   it("does not open desktop analytics when the saved preference is disabled", async () => {
@@ -694,7 +706,7 @@ describe("OpenBot connected desktop shell", () => {
             resolveModelUpdate = resolve;
           }),
       )
-      .mockImplementationOnce(async (input) => ({
+      .mockImplementationOnce(async ({ busyMessageMode: _busyMessageMode, ...input }) => ({
         ...chief,
         ...input,
         provider: "claude",

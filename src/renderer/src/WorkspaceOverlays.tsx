@@ -2,6 +2,7 @@ import type { CentralAuthUser, ServerSummary } from "@openbot/contracts/ipc";
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import type { CustomAgentSettingsApi } from "@openbot/ui/features/custom-providers/CustomAgentSettings";
 import { providerDiagnosticsText } from "@openbot/ui/features/provider-diagnostics/provider-diagnostics";
+import type { BitwardenConnectorPanelProps } from "@openbot/ui/features/settings/BitwardenConnectorPanel";
 import type { HostedSiteDeleteResult } from "@openbot/ui/features/settings/stores/hosted-sites-store";
 import { currentText } from "@openbot/ui/text";
 import { createEffect, Loading, Show } from "solid-js";
@@ -11,6 +12,7 @@ import { appPort } from "./app-port";
 import { useAuth } from "./features/account/account-context";
 import { resolveOrchestratorModel } from "./features/agents/agent-creation-model";
 import { useAgents } from "./features/agents/agents-context";
+import { createBitwardenConnector } from "./features/connectors/bitwarden-connector";
 import { createGitHubConnector, type GitHubConnectorController } from "./features/connectors/github-connector";
 import {
   createOnePasswordConnector,
@@ -36,6 +38,7 @@ import type { HostProviderSettings } from "./features/settings/ProviderSettingsS
 import { useSettings } from "./features/settings/settings-context";
 import { useSidebar } from "./features/sidebar/sidebar-context";
 import { useUpdates } from "./features/updates/updates-context";
+import { useWhatsNew } from "./features/updates/whats-new-context";
 import { useGlobalSearchSources } from "./global-search-sources";
 import { InitialSetup, RemoteDesktopWorkspace, SettingsModal } from "./lazy-views";
 import { useNavigation } from "./navigation";
@@ -82,6 +85,9 @@ export function WorkspaceOverlays(props: AccountProps) {
   /* The 1Password connection of this computer. The browser that fills its logins runs here too. */
   const onePassword = createOnePasswordConnector();
   const onePasswordFor = (server: ServerSummary | undefined) => (server?.kind === "local" ? onePassword : undefined);
+  /* The Bitwarden connection of this computer. Like 1Password, only the local server has it. */
+  const bitwarden = createBitwardenConnector();
+  const bitwardenFor = (server: ServerSummary | undefined) => (server?.kind === "local" ? bitwarden : undefined);
   /* The overlays mount with the app. A first read that failed then must not hide GitHub for good, and
      the sign-in can change outside this window, so each window reads the status again when it opens. */
   createEffect(
@@ -96,6 +102,7 @@ export function WorkspaceOverlays(props: AccountProps) {
       <SkillsMarketplace
         githubConnector={githubFor(activeServer())}
         onePasswordConnector={onePasswordFor(activeServer())}
+        bitwardenConnector={bitwardenFor(activeServer())}
       />
       <SharedAgentInstall />
       <JoinServer account={props.account} />
@@ -103,6 +110,7 @@ export function WorkspaceOverlays(props: AccountProps) {
       <ServerSettings
         githubConnector={githubFor(serverSettingsTarget())}
         onePasswordConnector={onePasswordFor(serverSettingsTarget())}
+        bitwardenConnector={bitwardenFor(serverSettingsTarget())}
       />
       <AppSettings account={props.account} />
       <GlobalMessageSearch />
@@ -151,6 +159,7 @@ function PermissionsReview(props: AccountProps) {
 function SkillsMarketplace(props: {
   githubConnector: GitHubConnectorController | undefined;
   onePasswordConnector: OnePasswordConnectorController | undefined;
+  bitwardenConnector: BitwardenConnectorPanelProps | undefined;
 }) {
   const {
     skillsMarketplaceOpen,
@@ -183,6 +192,7 @@ function SkillsMarketplace(props: {
       }}
       githubConnector={props.githubConnector}
       onePasswordConnector={props.onePasswordConnector}
+      bitwardenConnector={props.bitwardenConnector}
     />
   );
 }
@@ -260,6 +270,7 @@ function AddServer() {
 function ServerSettings(props: {
   githubConnector: GitHubConnectorController | undefined;
   onePasswordConnector: OnePasswordConnectorController | undefined;
+  bitwardenConnector: BitwardenConnectorPanelProps | undefined;
 }) {
   const platform = usePlatform();
   const { hostStatus, setServerMuted, setServerNotificationLevel, activeServer } = useServers();
@@ -547,6 +558,7 @@ function ServerSettings(props: {
           }
           githubConnector={props.githubConnector}
           onePasswordConnector={props.onePasswordConnector}
+          bitwardenConnector={props.bitwardenConnector}
           // Slack is connected on the computer that runs the agents: Slack opens this computer's browser
           // and returns to its `openbot://` link.
           slackConnector={server().kind === "local" ? slack : undefined}
@@ -578,6 +590,7 @@ function AppSettings(props: AccountProps) {
   const platform = usePlatform();
   const auth = useAuth();
   const updates = useUpdates();
+  const whatsNew = useWhatsNew();
   const { setAddServerOpen } = useServers();
   const {
     appSettingsOpen,
@@ -602,6 +615,14 @@ function AppSettings(props: AccountProps) {
         builtInDisplayGeometry={builtInDisplayGeometry()}
         updateStatus={updates.status()}
         onUpdateAction={updates.runAction}
+        onOpenWhatsNew={
+          whatsNew.state.version
+            ? () => {
+                setAppSettingsOpen(false);
+                whatsNew.reopen();
+              }
+            : undefined
+        }
         onCancelScheduledRestart={updates.cancelScheduledRestart}
         onRestartWhenIdle={updates.restartWhenIdle}
         onCancelIdleRestart={updates.cancelIdleRestart}

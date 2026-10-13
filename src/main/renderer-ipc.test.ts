@@ -4,7 +4,7 @@ import { IPC_ENDPOINTS, type VoiceModelStatus } from "@openbot/contracts/ipc";
 import { describe, expect, it, vi } from "vitest";
 import { type RendererIpcWindow, sendToRenderer } from "./renderer-ipc";
 
-const READY: VoiceModelStatus = { phase: "ready", progress: null, message: null };
+const READY: VoiceModelStatus = { modelId: "parakeet-tdt-0.6b-v3", phase: "ready", progress: null, message: null };
 
 function rendererWindow(
   overrides: {

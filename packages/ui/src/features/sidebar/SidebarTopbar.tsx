@@ -1,6 +1,6 @@
-/** The server name, the marketplace or expand toggle, and new agent - plus the window drag region. */
+/** The server name, usage, the marketplace or expand toggle, and new agent - plus the window drag region. */
 
-import { Bot, Button, DropdownMenu, FolderPlus, Hash, Puzzle } from "@openbot/ui";
+import { Bot, Button, ChartArea, DropdownMenu, FolderPlus, Hash, Puzzle } from "@openbot/ui";
 import { Show } from "solid-js";
 import { useText } from "../../text";
 import { ServerMenu } from "../servers/ServerMenu";
@@ -41,6 +41,21 @@ export function SidebarTopbar() {
         )}
       </Show>
       <div class="sidebar-topbar-actions">
+        {/* The compact sidebar keeps only the expand toggle and new, so usage stays in the server menu there. */}
+        <Show when={!props.compact && props.onOpenUsage}>
+          {(openUsage) => (
+            <Button
+              variant="ghost"
+              type="button"
+              class="sidebar-icon-button sidebar-usage-button no-drag"
+              onClick={(event) => openUsage()(event.currentTarget)}
+              aria-label={t("sidebar.topbar.openUsage")}
+              title={t("sidebar.topbar.usage")}
+            >
+              <ChartArea aria-hidden="true" />
+            </Button>
+          )}
+        </Show>
         {/* The menu view needs the room for the server name, so its menu holds the marketplace. */}
         <Show when={props.compact || (props.marketplaceSupported !== false && props.serverMenu?.view !== "menu")}>
           <Button

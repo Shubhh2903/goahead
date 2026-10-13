@@ -226,6 +226,7 @@ describe("DynamicIslandSurface", () => {
       "aria-expanded",
       "true",
     );
+    expect(await screen.findByRole("alert")).toHaveTextContent("That did not work. Try again.");
     mock.dispose();
   });
 
@@ -346,7 +347,7 @@ function truncatedApprovalPresentation(): Extract<DynamicIslandPresentation, { m
 function renderControlledIsland(
   initialPresentation: DynamicIslandPresentation,
   initialState: DynamicIslandViewState,
-  onAction: (action: DynamicIslandAction) => void = () => undefined,
+  onAction: (action: DynamicIslandAction) => Promise<boolean> | undefined = () => undefined,
   onHaptic: () => void = () => undefined,
 ) {
   render(() => {

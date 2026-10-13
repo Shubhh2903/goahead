@@ -132,8 +132,8 @@ the shared file panel's width, and for each account and host the pinned item ids
 ids and selected channel id, not chat content. The channel UI takes a `ChannelsPort` runtime; its
 desktop default is the preload API. A Web Lock permits one live tab per account
 and host because the existing control plane reuses that credential's logical host session.
-Host switches discard the prior host's chat state. Temporary connection loss keeps drafts;
-uncertain sends require an explicit user check before another send. BroadcastChannel, account
+Host switches discard the prior host's chat state. Temporary connection loss keeps drafts; a
+failed send stays in the chat and is never sent again on its own. BroadcastChannel, account
 checks on focus, and signed session invalidation clear access when a session ends.
 
 MP3 and MOV attachments use the existing file attachment contract with no inline preview. Import
@@ -935,6 +935,25 @@ Agents can organize teammates into flat sidebar sections through `list_sections`
 to ungroup an agent; deleting a section also ungroups its agents without deleting them. These tools
 use the same `SidebarLayoutStore` as manual sidebar edits, including persistence, validation,
 and change events delivered to desktop and connected clients.
+
+`html_render` publishes a visual reply: an HTML page that shows above the agent's reply. The router
+stores the page as a generated `text/html` attachment and adds an assistant message with the item
+type `visual-reply:<height>` and the page title as its text (`@openbot/contracts/chat-visual`). A
+client that does not know the item type shows the title and the file. A visual message is not
+readable: unread counts, latest-message previews and mobile read state skip it. A channel or an
+external (Slack) conversation refuses `html_render`, because its answer goes where the page cannot
+run. The desktop serves the page on `openbot-visual:` (`openbot-remote-visual:` for a remote host)
+with `Content-Security-Policy: sandbox allow-scripts allow-forms` and the frame script, and the
+frame has the same sandbox without `allow-same-origin`. The page runs its scripts and can load files
+from the network, but it has an opaque origin, gets no permission (the permission handler accepts
+only the main frame), and talks to the app only with the checked MCP Apps messages for its height,
+its theme and a link that the user clicked. The attachment schemes send CORS headers only to the
+trusted renderer origin, and an HTML or SVG attachment opened directly gets `sandbox` with no
+scripts. Mobile shows the page as its file and does not run it: in react-native-webview, a script in
+any frame can reach the bridge to the app. `html_preview` lets the agent look at a page before it
+publishes it: the main process draws it in a hidden window with its own in-memory session
+(`ChatVisualPreviewer`) and returns a PNG, the content height and the redacted console lines. The
+file preview shows an HTML file in the same frame.
 
 Codex fixes dynamic tools at provider-session creation; resume does not update them. A local
 `provider-toolsets` manifest records the tool fingerprint for each new Codex session. Sessions with
@@ -1852,6 +1871,34 @@ secure card, with no card. On an origin where an agent ran `evaluate` during thi
 could read the filled fields. A login matches by 1Password's autofill rule, on the registrable domain
 with private suffixes such as `github.io` counted. Agents and providers never receive the token, a
 password or a code.
+
+The Bitwarden connector (`src/main/bitwarden-connector-service.ts`) also implements `PasswordVault`.
+It uses an installed `bw` executable, resolved to an absolute path from absolute `PATH` entries or
+common installation directories. It runs fixed arguments without a shell and with an allowlisted
+environment; the session key goes to the child in `BW_SESSION`, never in an argument. The user
+supplies a CLI session key after signing in and unlocking Bitwarden outside GoAhead. GoAhead keeps
+no connection file and never asks for the master password. The CLI owns its encrypted cache and
+server configuration. Each call has a 30-second deadline and an output limit, and calls run one at a
+time. Errors discard all CLI output. Disconnect cancels active calls, and a late call cannot return a
+credential from an old session. Eight hours without a successful vault call ends the connection.
+
+Connect requires exactly one folder named `Shared with OpenBot`. Its id scopes later reads. Each fill
+syncs and checks the current item, its folder, its saved HTTPS origin, its deleted state, and its
+master-password prompt setting. Default, domain, and host URI rules use exact HTTPS origin matching.
+Other URI rules are not supported; those logins use the manual secret card. A secret request takes
+only a UUID item id. The session key, each password and each authenticator code are registered with
+the log redactor; codes use `registerSecretValue(value, { allowShort: true })` because they are
+shorter than the usual limit. The session key can decrypt the wider vault; the folder limit is
+enforced by GoAhead, not Bitwarden. All local agents share this grant. Prompt injection can still use
+an approved account on its own site; this feature does not authorize or constrain actions after
+sign-in.
+
+`src/backend/password-vault-router.ts` joins metadata from both managers and prefixes Bitwarden ids
+with `bitwarden:`. Existing 1Password ids stay unchanged. A failed list stops automatic account
+selection rather than hiding a source and selecting a different account. Main returns only
+connection state through the local `bitwardenConnector` IPC group. The shared panel
+(`@openbot/ui/features/settings/BitwardenConnectorPanel`) is used in desktop Marketplace and server
+settings; remote web and mobile clients do not manage this local connection.
 
 The GitHub connector is built in and has no SQLite row. `src/main/github-connector-service.ts` signs
 in to the `openbotgit` GitHub App with the device flow, which needs only the public Client ID, and keeps

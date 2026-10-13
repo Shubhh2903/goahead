@@ -1,4 +1,10 @@
-import { VOICE_AUDIO_LIMITS, type VoiceTranscriptionInput } from "@openbot/contracts/ipc";
+import {
+  isVoiceModelId,
+  VOICE_AUDIO_LIMITS,
+  type VoiceModelRequest,
+  type VoiceSettings,
+  type VoiceTranscriptionInput,
+} from "@openbot/contracts/ipc";
 import { isObject } from "./validation";
 
 export function parseVoiceTranscription(input: unknown): VoiceTranscriptionInput {
@@ -29,4 +35,16 @@ export function parseVoiceTranscription(input: unknown): VoiceTranscriptionInput
 
 function ascii(value: Uint8Array, start: number, end: number): string {
   return String.fromCharCode(...value.subarray(start, end));
+}
+
+export function parseVoiceModelRequest(input: unknown): VoiceModelRequest {
+  if (!isObject(input) || !isVoiceModelId(input.modelId)) throw new Error("A known voice model is required.");
+  return { modelId: input.modelId };
+}
+
+export function parseVoiceSettings(input: unknown): VoiceSettings {
+  if (!isObject(input) || !isVoiceModelId(input.modelId)) {
+    throw new Error("Voice settings need a known model.");
+  }
+  return { modelId: input.modelId };
 }

@@ -1,41 +1,28 @@
 import { serializeAttachmentReference } from "@openbot/contracts/attachment-references";
-import type {
-  AgentEvent,
-  AttachmentSummary,
-  AvatarImageInput,
-  DraftAttachment,
-  QueueSnapshot,
-  UpdateAgentInput,
-} from "@openbot/contracts/ipc";
+import type { AgentEvent, AttachmentSummary, DraftAttachment, QueueSnapshot } from "@openbot/contracts/ipc";
 import type { AgentMessage as RendererAgentMessage } from "@openbot/ui/data";
 import { BrowserTakeoverCard } from "@openbot/ui/features/conversation/ConversationPrompts";
+import { currentText } from "@openbot/ui/text";
 import { Portal } from "@solidjs/web";
-import { createEffect, createSignal, onCleanup, onSettled, type ParentProps, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
 import { clipboardFiles } from "../../preload/clipboard-files";
-import { AuthProvider } from "../src/features/account/account-context";
 import { Conversation, createConversationController } from "../src/features/conversation/Conversation";
 import { ConversationView } from "../src/features/conversation/ConversationView";
 import { ConversationControllerProvider } from "../src/features/conversation/conversation-controller-context";
 import { composerDraftKey } from "../src/features/conversation/conversation-keys";
-import { SetupProvider } from "../src/features/onboarding/onboarding-context";
-import { ServersProvider } from "../src/features/servers/servers-context";
-import { SettingsProvider } from "../src/features/settings/settings-context";
-import { UsageProvider } from "../src/features/usage/usage-context";
-import { PlatformProvider } from "../src/platform";
+import type { VoicePhase } from "../src/features/conversation/voice-status";
 import browserTakeoverPreviewUrl from "./assets/browser-takeover-preview.svg";
+import { CONVERSATION_STORY_ARGS, StoryAppProviders } from "./conversation-story-support";
 import {
   requireFixture,
   STORY_AGENT_STATUS,
   STORY_AGENTS,
   STORY_ATTACHMENTS,
   STORY_CONVERSATION_MESSAGES,
-  STORY_MODELS,
   STORY_PRESENCE,
   STORY_QUEUES,
-  STORY_REMOTE_DESKTOP_SESSION,
-  STORY_SERVERS,
 } from "./fixtures";
 import { createMockOpenBot } from "./mock-openbot";
 
@@ -486,6 +473,60 @@ const codeBlockMessages: RendererAgentMessage[] = [
   },
 ];
 
+const diagramMessages: RendererAgentMessage[] = [
+  {
+    id: "diagram-user",
+    author: "you",
+    body: "Draw how a message gets to the agent.",
+    time: "10:02",
+    kind: "text",
+  },
+  {
+    id: "diagram-agent",
+    author: "agent",
+    body: [
+      "```mermaid",
+      "flowchart LR",
+      "  Composer --> Queue --> Agent --> Reply",
+      "```",
+      "",
+      "The second diagram has an error, so it stays code with the reason above it:",
+      "",
+      "```mermaid",
+      "flowchart LR",
+      "  Composer --> --> Agent",
+      "```",
+    ].join("\n"),
+    time: "10:03",
+    kind: "text",
+  },
+];
+
+const markdownImageMessages: RendererAgentMessage[] = [
+  {
+    id: "markdown-images-user",
+    author: "you",
+    body: "Show me the logo options.",
+    time: "10:02",
+    kind: "text",
+  },
+  {
+    id: "markdown-images-agent",
+    author: "agent",
+    body: [
+      "These are the three options. Select an image to open it larger.",
+      "",
+      `![Production logo](${generatedImagePreview})`,
+      "",
+      `![Development logo](${generatedImagePreviewAlternate})`,
+      "",
+      `![](${new URL("../src/assets/openbot-logo-preview.png", import.meta.url).href})`,
+    ].join("\n"),
+    time: "10:03",
+    kind: "text",
+  },
+];
+
 const markdownMessages: RendererAgentMessage[] = [
   {
     id: "markdown-user",
@@ -824,24 +865,48 @@ const referenceQueue: QueueSnapshot = {
   ],
 };
 
+const LIVE_DICTATION =
+  "Can you check the release notes for 2.18 and tell me which fixes still need a changelog entry before Friday?";
+
 /**
- * The domains `ConversationView` and its panels read through `use*()`, nested in the order
- * `app-providers.tsx` uses. Each one talks to the mocked `window.openbot` the story installs.
+ * Live dictation as the app shows it: a partial pass about once a second, a few words longer each
+ * time, then the final pass (darker text) and the transcript in the draft. The animated story loops.
  */
-function StoryAppProviders(props: ParentProps) {
-  return (
-    <PlatformProvider>
-      <AuthProvider>
-        <SetupProvider>
-          <SettingsProvider>
-            <ServersProvider>
-              <UsageProvider>{props.children}</UsageProvider>
-            </ServersProvider>
-          </SettingsProvider>
-        </SetupProvider>
-      </AuthProvider>
-    </PlatformProvider>
-  );
+function playLiveDictation(
+  controller: ReturnType<typeof createConversationController>,
+  target: { agentId: string; serverId: string },
+  options: { draft: string; animate: boolean },
+): () => void {
+  const setDraft = (text: string) =>
+    controller.setDrafts({ [target.agentId]: { text, attachments: [], replyToMessageId: null } });
+  setDraft(options.draft);
+  controller.setVoicePhase("recording");
+  if (!options.animate) {
+    controller.setVoiceElapsedSeconds(7);
+    controller.setVoiceLiveTranscript({ ...target, text: LIVE_DICTATION });
+    return () => undefined;
+  }
+  const words = LIVE_DICTATION.split(" ");
+  const recordingTicks = Math.ceil(words.length / 3);
+  let tick = 0;
+  const timer = window.setInterval(() => {
+    tick = tick >= recordingTicks + 3 ? 0 : tick + 1;
+    if (tick === 0) {
+      setDraft(options.draft);
+      controller.setVoiceLiveTranscript(null);
+      controller.setVoicePhase("recording");
+    } else if (tick <= recordingTicks) {
+      controller.setVoiceLiveTranscript({ ...target, text: words.slice(0, tick * 3).join(" ") });
+    } else if (tick === recordingTicks + 1) {
+      controller.setVoicePhase("transcribing");
+    } else if (tick === recordingTicks + 2) {
+      controller.setVoiceLiveTranscript(null);
+      controller.setVoicePhase("idle");
+      setDraft(options.draft ? `${options.draft} ${LIVE_DICTATION}` : LIVE_DICTATION);
+    }
+    controller.setVoiceElapsedSeconds(Math.min(tick, recordingTicks));
+  }, 1_000);
+  return () => window.clearInterval(timer);
 }
 
 function MockedConversation(props: {
@@ -849,6 +914,8 @@ function MockedConversation(props: {
   messages?: RendererAgentMessage[];
   initialAttachments?: DraftAttachment[];
   voiceModelProgress?: number;
+  voiceLive?: { draft: string; animate: boolean };
+  voicePhase?: VoicePhase;
   takeoverStateGallery?: boolean;
   conversationError?: string;
 }) {
@@ -870,6 +937,18 @@ function MockedConversation(props: {
     onSettled(() => {
       controller.setVoicePhase("preparing");
       controller.setVoiceModelProgress(props.voiceModelProgress ?? null);
+    });
+  }
+  const voiceLive = props.voiceLive;
+  if (initialAgentId && voiceLive) {
+    onSettled(() =>
+      playLiveDictation(controller, { agentId: initialAgentId, serverId: props.args.server?.id ?? "local" }, voiceLive),
+    );
+  }
+  const voicePhase = props.voicePhase;
+  if (voicePhase) {
+    onSettled(() => {
+      controller.setVoicePhase(voicePhase);
     });
   }
   // The same keyed entry `agent-event-bridge` writes when a provider reports an error, so the
@@ -1014,56 +1093,7 @@ function RecordingConversation(props: { args: Parameters<typeof Conversation>[0]
   return <MockedConversation args={props.args} />;
 }
 
-const args: Parameters<typeof Conversation>[0] = {
-  agentStatus: STORY_AGENT_STATUS,
-  agent: STORY_AGENTS[0],
-  agents: STORY_AGENTS,
-  modelOptions: STORY_MODELS,
-  messages,
-  unreadCount: 0,
-  firstUnreadMessageId: null,
-  loaded: true,
-  activeTurnId: null,
-  globalOverlayOpen: false,
-  settingsRequest: null,
-  messageFocusRequest: null,
-  queue: undefined,
-  browserTabs: [],
-  activeBrowserTabId: null,
-  browserVisibilitySuspended: false,
-  browserControlState: { sessions: [] },
-  server: STORY_SERVERS[0],
-  presence: STORY_PRESENCE,
-  currentUserEmail: "person@example.com",
-  isOwnSender: (senderId) => senderId === "member-self",
-  remoteDesktopSessionActive: Boolean(STORY_REMOTE_DESKTOP_SESSION),
-  remoteDesktopVisible: false,
-  prompt: undefined,
-  approval: undefined,
-  browserTakeover: undefined,
-  onSelectAgent: fn(),
-  onUpdateAgent: async (_agentId: string, _updates: Omit<UpdateAgentInput, "agentId">) => undefined,
-  onSetAgentAvatar: async (_agentId: string, _image: AvatarImageInput | null) => undefined,
-  onSendMessage: async (_body: string, _attachmentDraftIds: string[], _replyToMessageId: string | null) => true,
-  onMarkRead: async () => undefined,
-  onTypingChange: fn(),
-  onAnswerPrompt: async (_answers: Record<string, string[]>) => true,
-  onRespondToApproval: async (_decision: "accept" | "decline") => true,
-  onRespondToBrowserTakeover: async (_decision: "complete" | "cancel") => true,
-  onCancelQueuedMessage: fn(),
-  onSteerQueuedMessage: fn(),
-  onUpdateQueuedMessage: async (
-    _deliveryId: string,
-    _text: string,
-    _keepAttachmentIds: string[],
-    _attachmentDraftIds: string[],
-  ) => true,
-  onReorderQueue: fn(),
-  onActivateBrowserTab: fn(),
-  onCloseBrowserTab: fn(),
-  onOpenRemoteDesktop: async (_serverId: string, _trigger: HTMLElement) => undefined,
-  onStop: fn(),
-};
+const args: Parameters<typeof Conversation>[0] = { ...CONVERSATION_STORY_ARGS, messages };
 
 const meta = {
   title: "Conversation/Conversation",
@@ -1136,6 +1166,43 @@ export const AllAgentMessageTypes: Story = {
 export const VoiceRecording: Story = {
   name: "Voice recording",
   render: (storyArgs) => <RecordingConversation args={storyArgs} />,
+};
+
+export const VoiceLiveTranscription: Story = {
+  name: "Voice live transcription",
+  render: (storyArgs) => <MockedConversation args={storyArgs} voiceLive={{ draft: "", animate: true }} />,
+};
+
+export const VoiceLiveTranscriptionAfterDraft: Story = {
+  name: "Voice live transcription after a draft",
+  render: (storyArgs) => (
+    <MockedConversation args={storyArgs} voiceLive={{ draft: "Quick question about the release.", animate: false }} />
+  ),
+};
+
+export const VoiceRequestingMicrophone: Story = {
+  name: "Voice requesting microphone",
+  render: (storyArgs) => <MockedConversation args={storyArgs} voicePhase="requesting" />,
+};
+
+/** After Stop: the last live text shows in full colour until the final pass replaces the draft. */
+export const VoiceTranscribing: Story = {
+  name: "Voice transcribing",
+  render: (storyArgs) => (
+    <MockedConversation args={storyArgs} voiceLive={{ draft: "", animate: false }} voicePhase="transcribing" />
+  ),
+};
+
+export const VoiceWhileAgentStarts: Story = {
+  name: "Voice while the agent starts",
+  args: { agentStatus: { ...STORY_AGENT_STATUS, phase: "starting" } },
+};
+
+export const VoiceMicrophoneBlocked: Story = {
+  name: "Voice microphone blocked",
+  render: (storyArgs) => (
+    <MockedConversation args={storyArgs} conversationError={currentText().t("composer.voice.blocked")} />
+  ),
 };
 
 export const VoiceModelDownload: Story = {
@@ -1276,6 +1343,20 @@ export const CodeBlockInChat: Story = {
   name: "Code block in chat",
   args: {
     messages: codeBlockMessages,
+  },
+};
+
+export const DiagramsInChat: Story = {
+  name: "Diagrams in chat",
+  args: {
+    messages: diagramMessages,
+  },
+};
+
+export const MarkdownImagesInChat: Story = {
+  name: "Markdown images in chat",
+  args: {
+    messages: markdownImageMessages,
   },
 };
 
@@ -1431,6 +1512,29 @@ export const ThreeQueuedMessages: Story = {
   args: { queue: queueWithItems(3), activeTurnId: "turn-active" },
 };
 
+/** Messages sent to steer that wait in the queue instead, each with the reason on its row. */
+export const QueuedAfterSteerFallback: Story = {
+  args: {
+    activeTurnId: "turn-active",
+    queue: {
+      ...queue,
+      deliveries: [
+        { ...queuedDelivery, text: "Use the staging database, not production.", steerFallback: "provider-unsupported" },
+        {
+          ...queuedDelivery,
+          id: "queued-2",
+          messageId: "queued-message-2",
+          text: "Skip the flaky browser tests.",
+          position: 2,
+          createdAt: "2026-08-19T10:01:00.000Z",
+          steerFallback: "steer-failed",
+        },
+        runningDelivery,
+      ],
+    },
+  },
+};
+
 export const SevenQueuedMessages: Story = {
   args: {
     queue: referenceQueue,
@@ -1491,7 +1595,7 @@ export const SevenQueuedMessages: Story = {
     };
     const sendMessage = async (body: string, attachmentDraftIds: string[], replyToMessageId: string | null) => {
       const sent = await storyArgs.onSendMessage(body, attachmentDraftIds, replyToMessageId);
-      if (!sent || !storyArgs.activeTurnId) return sent;
+      if ("error" in sent || !storyArgs.activeTurnId) return sent;
       const id = `storybook-queued-${nextStoryDeliveryId++}`;
       setQueueState((current) => ({
         ...current,
@@ -1513,7 +1617,7 @@ export const SevenQueuedMessages: Story = {
           },
         ],
       }));
-      return true;
+      return { messageId: id };
     };
 
     return (

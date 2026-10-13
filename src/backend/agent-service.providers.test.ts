@@ -2902,7 +2902,13 @@ describe.sequential("AgentService: providers", () => {
         primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1_787_040_000 },
         secondary: { usedPercent: 55, windowDurationMins: 10_080, resetsAt: 1_787_040_000 },
       },
-      rateLimitsByLimitId: null,
+      rateLimitsByLimitId: {
+        "claude-opus-weekly": {
+          limitId: "claude-opus-weekly",
+          primary: null,
+          secondary: { usedPercent: 61, windowDurationMins: 10_080, resetsAt: 1_787_040_000 },
+        },
+      },
     };
 
     await expect(service.getUsage()).resolves.toMatchObject({
@@ -2912,13 +2918,19 @@ describe.sequential("AgentService: providers", () => {
           primary: { usedPercent: 100, windowDurationMins: 300 },
           secondary: { usedPercent: 55, windowDurationMins: 10_080 },
         },
+        { id: "claude-opus-weekly", secondary: { usedPercent: 61, windowDurationMins: 10_080 } },
         {
           id: "codex",
           secondary: { usedPercent: 15, windowDurationMins: 10_080 },
         },
       ],
     });
-    expect((await service.getUsage()).limits.map((limit) => limit.id)).toEqual(["claude", "codex"]);
+    expect((await service.getUsage()).limits.map((limit) => limit.id)).toEqual([
+      "claude",
+      "claude-opus-weekly",
+      "codex",
+    ]);
+    expect(claude.requests).toContainEqual({ method: "account/rateLimits/read", params: { model: undefined } });
   });
 
   it("maps provider browser tool calls to the stable OpenBot thread", async () => {

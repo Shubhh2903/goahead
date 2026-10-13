@@ -359,7 +359,8 @@ export class ProviderRuntime implements ProviderPort {
   readonly #lastErrors = new Map<AgentProvider, { message: string; at: number; serial: number }>();
   #errorSerial = 0;
   /** The last usage each provider reported, shown for a released provider instead of starting it. */
-  readonly #lastUsage = new Map<AgentProvider, AccountUsage["limits"][number]>();
+  /** The last account-wide limits of each provider: its own limit first, then any extra limit. */
+  readonly #lastUsage = new Map<AgentProvider, AccountUsage["limits"]>();
   /**
    * Providers whose last usage read returned no limit, such as custom ACP agents. The dock polls
    * every five minutes, so starting a released one to ask again would keep its process running.
@@ -609,7 +610,8 @@ export class ProviderRuntime implements ProviderPort {
         .map((item) => item.id)
         .filter(isAgentProvider)
         .sort((left, right) => agentProviderDescriptor(left).pickerOrder - agentProviderDescriptor(right).pickerOrder);
-      const collected = new Map<AgentProvider, AccountUsage["limits"][number]>();
+      const collected = new Map<AgentProvider, AccountUsage["limits"]>();
+      const collectedLimits = () => [...collected.values()].flat();
       await Promise.all(
         providers.map(async (provider) => {
           try {
@@ -625,34 +627,39 @@ export class ProviderRuntime implements ProviderPort {
               );
             } else {
               const kept = this.#released.has(provider) ? this.#lastUsage.get(provider) : undefined;
-              if (kept && !usageWindowHasReset(kept)) {
+              if (kept && !kept.some(usageWindowHasReset)) {
                 collected.set(provider, kept);
-                this.#emit({ type: "usage-changed", usage: { limits: [...collected.values()] } });
+                this.#emit({ type: "usage-changed", usage: { limits: collectedLimits() } });
                 return;
               }
               if (this.#released.has(provider) && this.#usageUnreported.has(provider)) return;
               if (!this.#clients.has(provider)) await this.ensureProvider(provider);
               const client = this.#clients.get(provider);
               if (!client) return;
+              // Claude reads its plan account-wide with no model, so the weekly window is the
+              // all-model one and the model family windows come as their own limits.
               const model =
-                provider === "codex" ? undefined : agentProviderDescriptor(provider).defaultModel || undefined;
+                provider === "codex" || provider === "claude"
+                  ? undefined
+                  : agentProviderDescriptor(provider).defaultModel || undefined;
               usage = await withTimeout(
                 this.#refreshUsage(client, model, false),
                 ACCOUNT_USAGE_READ_TIMEOUT_MS,
                 "Usage read timed out.",
               );
             }
-            const limit = usage.limits[0];
+            const [limit, ...extra] = usage.limits;
             if (!limit || (!limit.primary && !limit.secondary)) {
               this.#usageUnreported.add(provider);
               return;
             }
             this.#usageUnreported.delete(provider);
-            collected.set(provider, { ...limit, id: provider });
-            this.#lastUsage.set(provider, { ...limit, id: provider });
+            const limits = [{ ...limit, id: provider }, ...extra];
+            collected.set(provider, limits);
+            this.#lastUsage.set(provider, limits);
             this.#emit({
               type: "usage-changed",
-              usage: { limits: [...collected.values()] },
+              usage: { limits: collectedLimits() },
             });
           } catch (error) {
             logger.warn("Could not read provider usage.", {
@@ -662,7 +669,7 @@ export class ProviderRuntime implements ProviderPort {
           }
         }),
       );
-      return { limits: structuredClone([...collected.values()]) };
+      return { limits: structuredClone(collectedLimits()) };
     }
     const client = this.#clients.get(scope.provider);
     if (!client || !accountUsageCoversModel(scope.provider, scope.model)) return { limits: [] };

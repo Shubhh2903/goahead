@@ -1,6 +1,17 @@
-import type { AccountUsage, AccountUsageLimit, AccountUsageWindow } from "@openbot/contracts/ipc";
+import {
+  type AccountUsage,
+  type AccountUsageLimit,
+  type AccountUsageWindow,
+  CLAUDE_WEEKLY_OPUS_LIMIT_ID,
+  CLAUDE_WEEKLY_SONNET_LIMIT_ID,
+} from "@openbot/contracts/ipc";
 import { isNumber } from "@openbot/contracts/runtime-values";
 import type { AccountRateLimitResult, AccountRateLimitsReadResult } from "../protocol";
+
+const ACCOUNT_WIDE_EXTRA_LIMIT_IDS: ReadonlySet<string> = new Set([
+  CLAUDE_WEEKLY_OPUS_LIMIT_ID,
+  CLAUDE_WEEKLY_SONNET_LIMIT_ID,
+]);
 
 export function normalizeAccountUsage(rateLimits: AccountRateLimitsReadResult | null, model?: string): AccountUsage {
   const entries = rateLimits?.rateLimitsByLimitId
@@ -12,8 +23,13 @@ export function normalizeAccountUsage(rateLimits: AccountRateLimitsReadResult | 
     ? [rateLimits.rateLimits.limitId ?? "codex", rateLimits.rateLimits]
     : null;
   // No model means the dock's account-wide reading: one bucket per provider, not every
-  // Codex model window mixed into the same unlabeled list.
-  const selectedEntries = model ? selectModelRateLimits(entries, model, fallback) : fallback ? [fallback] : entries;
+  // Codex model window mixed into the same unlabeled list. The Claude model family weekly
+  // windows are the exception: they have their own ids, which the dock does not read.
+  const selectedEntries = model
+    ? selectModelRateLimits(entries, model, fallback)
+    : fallback
+      ? [fallback, ...entries.filter(([id]) => ACCOUNT_WIDE_EXTRA_LIMIT_IDS.has(id))]
+      : entries;
   const limits = selectedEntries.map(([id, limit]) => normalizeAccountLimit(id, limit));
 
   return { limits };

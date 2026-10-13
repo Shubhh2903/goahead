@@ -7,6 +7,7 @@ import type { Meta, StoryObj } from "storybook-solidjs-vite";
 import { SettingsModal } from "../src/features/settings/SettingsModal";
 import type { SettingsTab } from "../src/features/settings/settings-tabs";
 import { createMockBilling } from "../src/preview/mock-billing";
+import type { MockVoiceOptions } from "../src/preview/mock-voice";
 import { createMockOpenBot } from "./mock-openbot";
 import { previewStorySoundSettings } from "./sound-feedback-fixture";
 
@@ -36,10 +37,12 @@ function SettingsModalStory(props: {
   scheduledRestart?: UpdateStatus["scheduledRestart"];
   /** The check failed because the release feed is private: Settings offers the release page. */
   feedPrivate?: boolean;
+  /** The downloaded dictation models and the saved voice setting. */
+  voice?: MockVoiceOptions;
 }) {
   const previousApi = window.openbot;
   const billingApi = createMockBilling();
-  const mock = createMockOpenBot();
+  const mock = createMockOpenBot(props.voice);
   window.openbot = mock.api;
   onCleanup(() => {
     mock.dispose();
@@ -193,6 +196,10 @@ export const Open: Story = {
 export const Narrow: Story = {
   render: () => <SettingsModalStory initialOpen />,
   parameters: { viewport: { defaultViewport: "settingsNarrow" } },
+};
+
+export const Voice: Story = {
+  render: () => <SettingsModalStory initialOpen initialTab="voice" />,
 };
 
 /** No plan yet. Choose a plan: the mock then shows it as active, as after a Stripe payment. */

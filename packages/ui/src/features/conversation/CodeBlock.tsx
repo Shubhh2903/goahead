@@ -6,12 +6,12 @@ import { createEffect, createSignal, For, onCleanup, Show, untrack } from "solid
 import { useText } from "../../text";
 import type { MessageCodeBlock } from "./DataTable";
 
-interface CodeToken {
+export interface CodeToken {
   text: string;
   type?: ShjToken;
 }
 
-type CodeLine = CodeToken[];
+export type CodeLine = CodeToken[];
 
 const LANGUAGE_ALIASES: Record<string, ShjLanguage> = {
   assembly: "asm",
@@ -23,11 +23,16 @@ const LANGUAGE_ALIASES: Record<string, ShjLanguage> = {
   dockerfile: "docker",
   golang: "go",
   htaccess: "http",
+  htm: "html",
   javascript: "js",
   jsx: "js",
   mjs: "js",
   cjs: "js",
+  makefile: "make",
   markdown: "md",
+  mts: "ts",
+  cts: "ts",
+  patch: "diff",
   perl: "pl",
   plaintext: "plain",
   text: "plain",
@@ -231,6 +236,13 @@ export function codeLanguage(language: string): ShjLanguage {
   return isSupportedLanguage(normalized) ? normalized : "plain";
 }
 
+/** The language of a file from its extension, or from its whole name when it has none, such as `Dockerfile`. */
+export function fileCodeLanguage(name: string): ShjLanguage {
+  const fileName = name.slice(name.lastIndexOf("/") + 1);
+  const extensionStart = fileName.lastIndexOf(".");
+  return codeLanguage(extensionStart > 0 ? fileName.slice(extensionStart + 1) : fileName);
+}
+
 function isSupportedLanguage(language: string): language is ShjLanguage {
   return SUPPORTED_LANGUAGES.has(language);
 }
@@ -255,7 +267,8 @@ function plainCodeLines(code: string): CodeLine[] {
   return code.split("\n").map((line) => [{ text: line }]);
 }
 
-async function highlightedCodeLines(code: string, language: ShjLanguage): Promise<CodeLine[]> {
+/** The highlighted lines of complete code. When the tokenizer fails, the lines are plain. */
+export async function highlightedCodeLines(code: string, language: ShjLanguage): Promise<CodeLine[]> {
   const lines: CodeLine[] = [[]];
   try {
     await tokenize(code, language, (text, type) => {

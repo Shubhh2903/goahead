@@ -4,6 +4,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type { AgentEvent } from "@openbot/contracts/ipc";
+import { sourceText } from "@openbot/i18n/source";
 import { registerSecretValue } from "@openbot/logging";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEVELOPMENT_DEFAULT_MODEL, DEVELOPMENT_DEFAULT_REASONING_EFFORT } from "./agent/development-defaults";
@@ -32,6 +33,7 @@ import {
 } from "./agent-service-test-harness";
 import { MailboxStore } from "./mailbox-store";
 import { getString } from "./protocol";
+import { NO_PROVIDER_CREDENTIALS } from "./provider-drivers";
 import { SidebarLayoutStore } from "./sidebar-layout-store";
 
 let root: string;
@@ -174,6 +176,30 @@ describe.sequential("AgentService: queue", () => {
     await restored.initialize();
     expect(restored.matchesFinishedQueueSave("chief", deliveryId, "device-a-edit", "Edited on A", [], [])).toBe(true);
     expect(restored.matchesFinishedQueueSave("chief", deliveryId, "device-b-edit", "Edited on B", [], [])).toBe(true);
+  });
+
+  it("stores a retried user message once, and keeps the same id from another sender apart", async () => {
+    const { store, mailbox } = stores(root);
+    // The active turn never completes, so every later message waits queued behind it.
+    const client = new FakeAgentClient("codex", "CODEX_DONE", false);
+    service = createTestService({ store, mailbox, clientFactory: () => client });
+    await service.initialize();
+    await store.getOrCreate("chief");
+    await service.sendMessage({ agentId: "chief", text: "Active task" });
+    const input = { agentId: "chief", text: "Send once", clientMessageId: "client-1" };
+    // A retry while the first call still waits joins it; a retry after the answer gets its receipt.
+    const [first, concurrent] = await Promise.all([service.sendMessage(input), service.sendMessage(input)]);
+    const later = await service.sendMessage(input);
+    expect(concurrent).toEqual(first);
+    expect(later.messageId).toBe(first.messageId);
+    const other = await service.sendMessage(input, { id: "member-1", name: "Ada" });
+    expect(other.messageId).not.toBe(first.messageId);
+    expect(service.listQueue("chief").deliveries.filter((item) => item.text === "Send once")).toHaveLength(2);
+    // The desktop app sends through the local-owner path, which must drop a retry the same way.
+    const ownerInput = { agentId: "chief", text: "Owner send", clientMessageId: "client-2" };
+    const owner = await service.sendLocalOwnerMessage(ownerInput);
+    expect((await service.sendLocalOwnerMessage(ownerInput)).messageId).toBe(owner.messageId);
+    expect(service.listQueue("chief").deliveries.filter((item) => item.text === "Owner send")).toHaveLength(1);
   });
 
   it("rejects a save that repeats a finished cancellation and keeps the original message", async () => {
@@ -1225,6 +1251,218 @@ describe.sequential("AgentService: queue", () => {
     }
     expect(client.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
     expect(service.listQueue("worker").deliveries.map((delivery) => delivery.status)).toEqual(["running"]);
+  });
+
+  describe("a message sent while the agent works, in steer mode", () => {
+    async function startBusyAgent(provider: AgentProvider, requestHook?: (method: string) => Promise<void>) {
+      if (provider === "opencode") process.env.OPENBOT_OPENCODE_PATH = await createFakeOpencode(root);
+      const started = await startService(root, {
+        provider,
+        preferredProvider: provider,
+        busyMessageMode: () => "steer",
+        credentials: {
+          ...NO_PROVIDER_CREDENTIALS,
+          customAgents: () => [{ id: "fixture", name: "Fixture", command: "fixture", args: [], env: [] }],
+        },
+        client: (requested) => {
+          const client = new FakeAgentClient(requested, "DONE", false, true, {}, requestHook);
+          if (requested === "acp") client.modelList = () => ({ data: [{ model: "fixture/default" }] });
+          return client;
+        },
+      });
+      service = started.service;
+      if (provider === "opencode" || provider === "acp") {
+        await started.store.getOrCreate("chief");
+        await started.service.ensureProvider(provider);
+        await started.service.updateAgent({
+          agentId: "chief",
+          provider,
+          model: provider === "acp" ? "fixture/default" : "opencode/example-model",
+        });
+      }
+      const events: AgentEvent[] = [];
+      started.service.on("event", (event) => events.push(event));
+      await started.service.sendMessage({ agentId: "chief", text: "Start" });
+      await waitFor(() => events.some((event) => event.type === "turn-started"));
+      const active = events.find((event) => event.type === "turn-started");
+      if (active?.type !== "turn-started") throw new Error("Turn did not start.");
+      const client = started.clientFor(provider);
+      const threadId = started.store.activeProviderSession("chief")?.externalSessionId;
+      if (!client || !threadId) throw new Error("Active provider session is missing.");
+      const completeTurn = () =>
+        client.emit(
+          "notification",
+          notification("turn/completed", { threadId, turn: { id: active.turnId, status: "completed" } }),
+        );
+      return { ...started, client, turnId: active.turnId, completeTurn };
+    }
+
+    const turnStarts = (client: FakeAgentClient) =>
+      client.requests.filter((request) => request.method === "turn/start").length;
+
+    it("joins the running turn on a provider that steers", async () => {
+      const { service: agentService, client, turnId } = await startBusyAgent("codex");
+      const receipt = await agentService.sendMessage({ agentId: "chief", text: "Use staging" });
+
+      await waitForQueue(agentService, "chief", (queue) => queue.deliveries[1]?.status === "running");
+      const steer = client.requests.find((request) => request.method === "turn/steer");
+      expect(steer?.params).toMatchObject({ expectedTurnId: turnId, clientUserMessageId: receipt.deliveries[0]?.id });
+    });
+
+    it.each(["opencode", "acp"] as const)(
+      "keeps automatic and manual %s steering queued until the turn ends",
+      async (provider) => {
+        const { service: agentService, client, completeTurn, turnId, store } = await startBusyAgent(provider);
+        const session = store.activeProviderSession("chief");
+        await agentService.sendMessage({ agentId: "chief", text: "Use staging" });
+
+        expect(client.requests.some((request) => request.method === "turn/steer")).toBe(false);
+        expect(agentService.listQueue("chief").deliveries[1]).toMatchObject({
+          status: "queued",
+          steerFallback: "provider-unsupported",
+        });
+
+        const queued = agentService.listQueue("chief").deliveries[1];
+        if (!queued) throw new Error("Queued message is missing.");
+        await expect(
+          agentService.steerQueuedMessage({ agentId: "chief", deliveryId: queued.id, expectedTurnId: turnId }),
+        ).rejects.toThrow(sourceText("error.backend.steerUnsupported"));
+        expect(
+          client.requests.some((request) => request.method === "turn/steer" || request.method === "turn/interrupt"),
+        ).toBe(false);
+        expect(agentService.listQueue("chief").deliveries).toEqual([
+          expect.objectContaining({ status: "running", turnId }),
+          expect.objectContaining({
+            id: queued.id,
+            text: "Use staging",
+            status: "queued",
+            steerFallback: "provider-unsupported",
+          }),
+        ]);
+        expect(store.activeProviderSession("chief")).toEqual(session);
+        completeTurn();
+        await waitFor(() => turnStarts(client) === 2);
+        expect(agentService.listQueue("chief").deliveries[1]).toMatchObject({ id: queued.id, status: "running" });
+        expect(agentService.listQueue("chief").deliveries[1]).not.toHaveProperty("steerFallback");
+      },
+    );
+
+    it("keeps a message whose steer request fails in the queue, then starts it", async () => {
+      const {
+        service: agentService,
+        client,
+        completeTurn,
+      } = await startBusyAgent("codex", async (method) => {
+        if (method === "turn/steer") throw new Error("The provider refused the steer.");
+      });
+      await agentService.sendMessage({ agentId: "chief", text: "Use staging" });
+
+      await waitForQueue(agentService, "chief", (queue) => queue.deliveries[1]?.steerFallback === "steer-failed");
+      expect(agentService.listQueue("chief").deliveries[1]).toMatchObject({ text: "Use staging", status: "queued" });
+
+      completeTurn();
+      await waitFor(() => turnStarts(client) === 2);
+      expect(agentService.listQueue("chief").deliveries[1]?.status).toBe("running");
+    });
+
+    it.each([false, true])(
+      "restores a refused manual native steer (turn ended: %s) without duplicate delivery",
+      async (endTurn) => {
+        let refuse = (_error: Error) => {};
+        const pending = new Promise<void>((_resolve, reject) => {
+          refuse = reject;
+        });
+        const requested = vi.fn();
+        const busy = await startBusyAgent("codex", async (method) => {
+          if (method !== "turn/steer") return;
+          requested();
+          await pending;
+        });
+        await busy.service.updateAgent({ agentId: "chief", busyMessageMode: "queue" });
+        await busy.service.sendMessage({ agentId: "chief", text: "Keep this input" });
+        const queued = busy.service.listQueue("chief").deliveries[1];
+        if (!queued) throw new Error("Queued message is missing.");
+        const steering = busy.service.steerQueuedMessage({
+          agentId: "chief",
+          deliveryId: queued.id,
+          expectedTurnId: busy.turnId,
+        });
+        const refused = expect(steering).rejects.toThrow("Steer refused.");
+        await vi.waitFor(() => expect(requested).toHaveBeenCalledOnce());
+        expect(busy.service.listQueue("chief").deliveries[1]?.status).toBe("starting");
+        if (endTurn) {
+          busy.completeTurn();
+          await waitForQueue(busy.service, "chief", (queue) => queue.deliveries[1]?.status === "completed");
+        }
+        refuse(new Error("Steer refused."));
+        await refused;
+        if (!endTurn) {
+          expect(busy.service.listQueue("chief").deliveries[1]).toMatchObject({ id: queued.id, status: "queued" });
+          busy.completeTurn();
+        }
+        await waitFor(() => turnStarts(busy.client) === 2);
+        expect(busy.service.listQueue("chief").deliveries).toEqual([
+          expect.objectContaining({ status: "completed", turnId: busy.turnId }),
+          expect.objectContaining({ id: queued.id, text: "Keep this input", status: "running" }),
+        ]);
+      },
+    );
+
+    it("does not steer the local owner's message into a turn of another origin", async () => {
+      const { service: agentService, client, completeTurn } = await startBusyAgent("codex");
+      await agentService.sendLocalOwnerMessage({ agentId: "chief", text: "From the desktop" });
+
+      expect(client.requests.some((request) => request.method === "turn/steer")).toBe(false);
+      expect(agentService.listQueue("chief").deliveries[1]).toMatchObject({
+        text: "From the desktop",
+        status: "queued",
+      });
+      completeTurn();
+      await waitFor(() => turnStarts(client) === 2);
+      expect(agentService.listQueue("chief").deliveries[1]).toMatchObject({ status: "running" });
+    });
+
+    it("follows the agent's own setting before the app default", async () => {
+      const { service: agentService, client } = await startBusyAgent("codex");
+      await agentService.updateAgent({ agentId: "chief", busyMessageMode: "queue" });
+      await agentService.sendMessage({ agentId: "chief", text: "Queue this one" });
+      expect(client.requests.some((request) => request.method === "turn/steer")).toBe(false);
+      expect(agentService.listQueue("chief").deliveries[1]).toMatchObject({ status: "queued" });
+      expect(agentService.listQueue("chief").deliveries[1]).not.toHaveProperty("steerFallback");
+
+      await agentService.updateAgent({ agentId: "chief", busyMessageMode: null });
+      expect(agentService.listAgents().find((agent) => agent.id === "chief")).not.toHaveProperty("busyMessageMode");
+      await agentService.sendMessage({ agentId: "chief", text: "Steer this one" });
+      await waitFor(() => client.requests.filter((request) => request.method === "turn/steer").length === 1);
+    });
+
+    it("runs a message whose turn ended while the steer request was in flight", async () => {
+      let endTurnDuringSteer = async () => undefined;
+      const busy = await startBusyAgent("codex", async (method) => {
+        if (method !== "turn/steer") return;
+        await endTurnDuringSteer();
+        throw new Error("The turn ended before the steer.");
+      });
+      endTurnDuringSteer = async () => {
+        busy.completeTurn();
+        // The end of the turn stamps every delivery of that turn, the one being steered too.
+        await waitForQueue(busy.service, "chief", (queue) => queue.deliveries[1]?.status === "completed");
+      };
+      await busy.service.sendMessage({ agentId: "chief", text: "Use staging" });
+
+      await waitFor(() => turnStarts(busy.client) === 2);
+      expect(busy.service.listQueue("chief").deliveries[1]).toMatchObject({ text: "Use staging", status: "running" });
+    });
+
+    it("does not steer into a turn the user stopped", async () => {
+      const { service: agentService, client, turnId } = await startBusyAgent("codex");
+      await agentService.interrupt("chief", turnId);
+      await agentService.sendMessage({ agentId: "chief", text: "Start over" });
+
+      expect(client.requests.some((request) => request.method === "turn/steer")).toBe(false);
+      expect(agentService.listQueue("chief").deliveries[1]).toMatchObject({ status: "queued" });
+      expect(agentService.listQueue("chief").deliveries[1]).not.toHaveProperty("steerFallback");
+    });
   });
 
   it("steers a queued delivery into the active turn and completes it with that turn", async () => {

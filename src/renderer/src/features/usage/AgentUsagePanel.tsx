@@ -1,4 +1,10 @@
-import { type AgentSummary, analyticsRange, type HostAnalytics, type HostAnalyticsInput } from "@openbot/contracts/ipc";
+import {
+  type AgentModelOption,
+  type AgentSummary,
+  analyticsRange,
+  type HostAnalytics,
+  type HostAnalyticsInput,
+} from "@openbot/contracts/ipc";
 import type { AppTextKey } from "@openbot/i18n";
 import {
   ArrowLeft,
@@ -23,6 +29,7 @@ import {
   usagePeriods,
 } from "@openbot/ui/features/usage/usage-format";
 import { useText } from "@openbot/ui/text";
+import type { JSX } from "@solidjs/web";
 import { createEffect, createStore, onSettled, Show } from "solid-js";
 import { type UsagePort, usagePort } from "./usage-port";
 
@@ -34,6 +41,8 @@ interface AgentUsagePanelProps {
   onBack: () => void;
   /** The web client reads the host through its own connection. The default is the desktop bridge. */
   port?: UsagePort;
+  /** The plan limits above the report. The desktop passes the Claude plan limits of its account. */
+  planLimits?: JSX.Element;
 }
 interface UsageState {
   range: HostAnalyticsInput;
@@ -43,6 +52,8 @@ interface UsageState {
   metric: UsageMetric;
   period: UsagePeriod;
   serverId: string;
+  /** The models of the host, which name the models of each agent row. */
+  models: AgentModelOption[];
 }
 
 export function AgentUsagePanel(props: AgentUsagePanelProps) {
@@ -56,6 +67,7 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
     metric: "cost",
     period: "30d",
     serverId: props.serverId,
+    models: [],
   });
   let generation = 0;
   /**
@@ -75,14 +87,19 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
         draft.result = null;
       });
     try {
-      const [result, agents] = await Promise.all([
+      const [result, agents, models] = await Promise.all([
         // Electron cannot clone the Solid store proxy across the context bridge.
         port().agent.getHostAnalytics({ ...range }, serverId),
         port().agent.listAgents(serverId),
+        // The model names are a label only: without them a row shows the model id.
+        port()
+          .agent.listModels(serverId)
+          .catch(() => []),
       ]);
       if (request === generation && props.serverId === serverId && state.range.agentId === agentId)
         setState((draft) => {
           draft.agents = agents;
+          draft.models = models;
           draft.serverId = serverId;
           draft.result = result;
           draft.phase = result ? "ready" : "unsupported";
@@ -142,6 +159,7 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
     return {
       name: agent?.name ?? (id === props.agentId ? props.agentName : undefined) ?? id,
       provider: agent?.provider ?? "",
+      avatar: agent,
     };
   };
   let reportBody: HTMLDivElement | undefined;
@@ -232,6 +250,7 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
         </div>
       </header>
       <div ref={reportBody} class="agent-usage-body">
+        {props.planLimits}
         <Show when={state.phase === "loading"}>
           <div class="agent-usage-loading" role="status">
             <span>{t("usage.panel.loading")}</span>
@@ -266,6 +285,7 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
               result={result()}
               metric={state.metric}
               agentLabel={agentLabel}
+              modelOptions={state.models}
               onReady={() => {
                 // Start each loaded report at its total, after the tabs settle their initial selection.
                 if (reportBody) reportBody.scrollTop = 0;

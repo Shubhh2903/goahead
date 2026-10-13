@@ -37,6 +37,8 @@ files:
 asarUnpack:
   # The database host is loaded by path as a separate process, not required into the main bundle.
   - out/main/agent-database-host.js
+  # The voice transcription host is started by path in the same way.
+  - out/main/voice-transcription-host.js
 extraResources:
   - from: resources/managed-skills
     to: managed-skills
@@ -58,10 +60,12 @@ extraResources:
     to: licenses/Electron-LICENSE
   - from: node_modules/electron/dist/LICENSES.chromium.html
     to: licenses/LICENSES.chromium.html
-  - from: build/licenses/OpenAI-Whisper-LICENSE
-    to: licenses/OpenAI-Whisper-LICENSE
-  - from: build/licenses/whisper.cpp-LICENSE
-    to: licenses/whisper.cpp-LICENSE
+  - from: build/licenses/sherpa-onnx-LICENSE
+    to: licenses/sherpa-onnx-LICENSE
+  - from: build/licenses/onnxruntime-LICENSE
+    to: licenses/onnxruntime-LICENSE
+  - from: build/licenses/NVIDIA-Parakeet-TDT-0.6B-v3-LICENSE
+    to: licenses/NVIDIA-Parakeet-TDT-0.6B-v3-LICENSE
 # Voice and remote desktop are prepared for macOS and Windows only, and each Computer Use driver
 # is built for one target, so their resources are listed under each platform instead of here.
 # electron-builder merges the root and platform lists, so every build still gets its own, while a
@@ -84,8 +88,9 @@ mac:
     # The Dock icons for the emotion faces. Only macOS has a Dock, so only the Mac build ships them.
     - from: build/emotions
       to: icons/emotions
-    - from: .openbot-build/whisper/bin
-      to: whisper/bin
+    # The sherpa-onnx addon and its libraries. The Parakeet model is downloaded on demand.
+    - from: .openbot-build/voice/runtime
+      to: voice/runtime
     - from: build/remote-desktop-runtime
       to: remote-desktop-runtime
     - from: build/cua-driver/darwin/${arch}
@@ -112,7 +117,7 @@ mac:
       - NSUserActivityTypeBrowsingWeb
   # No `arch` here: a target's own `arch` list replaces the one given on the command line, so
   # `--x64` would still build ARM64. With no flag, electron-builder builds for the machine it runs
-  # on. Build one architecture at a time: the Whisper and remote desktop builds on disk are for the
+  # on. Build one architecture at a time: the voice runtime and remote desktop builds on disk are for the
   # architecture of the machine that made them.
   target:
     - dmg
@@ -120,8 +125,8 @@ mac:
 win:
   icon: build/icon-production.ico
   extraResources:
-    - from: .openbot-build/whisper/bin
-      to: whisper/bin
+    - from: .openbot-build/voice/runtime
+      to: voice/runtime
     - from: build/remote-desktop-runtime
       to: remote-desktop-runtime
     - from: build/cua-driver/win32/x64

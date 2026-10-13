@@ -536,6 +536,8 @@ export function installOpenbotStub(): void {
         .fn()
         .mockResolvedValue({ turbo: false, defaultAutoApprove: false, autoApproveOverrides: {} }),
       setApprovalAutomation: vi.fn(async () => ({ turbo: false, defaultAutoApprove: false, autoApproveOverrides: {} })),
+      getBusyMessageModePreference: vi.fn().mockResolvedValue({ mode: "queue" }),
+      setBusyMessageModePreference: vi.fn(async ({ mode }) => ({ mode })),
       getAppLanguagePreference: vi.fn().mockResolvedValue({ language: "system" }),
       setAppLanguagePreference: vi.fn(async ({ language }) => ({ language })),
       openExternal: vi.fn().mockResolvedValue(undefined),
@@ -611,6 +613,9 @@ export function installOpenbotStub(): void {
       status: vi.fn().mockResolvedValue(DISCONNECTED_GITHUB_CONNECTOR),
       repositories: vi.fn().mockResolvedValue({ repositories: [], total: 0 }),
     }),
+    bitwardenConnector: stubGroup(IPC_ENDPOINTS.bitwardenConnector, "bitwardenConnector", {
+      status: vi.fn().mockResolvedValue({ connected: false }),
+    }),
     onePasswordConnector: stubGroup(IPC_ENDPOINTS.onePasswordConnector, "onePasswordConnector", {
       status: vi.fn().mockResolvedValue(DISCONNECTED_ONEPASSWORD_CONNECTOR),
     }),
@@ -623,8 +628,13 @@ export function installOpenbotStub(): void {
       takePendingLink: vi.fn().mockResolvedValue(null),
     }),
     voice: stubGroup(IPC_ENDPOINTS.voice, "voice", {
-      getModelStatus: vi.fn().mockResolvedValue({ phase: "ready", progress: 100, message: null }),
-      prepareModel: vi.fn().mockResolvedValue({ phase: "ready", progress: 100, message: null }),
+      getModelStatus: vi
+        .fn()
+        .mockResolvedValue({ modelId: "parakeet-tdt-0.6b-v3", phase: "ready", progress: 100, message: null }),
+      prepareModel: vi
+        .fn()
+        .mockResolvedValue({ modelId: "parakeet-tdt-0.6b-v3", phase: "ready", progress: 100, message: null }),
+      getSettings: vi.fn().mockResolvedValue({ modelId: "parakeet-tdt-0.6b-v3" }),
       transcribe: vi.fn().mockResolvedValue({ text: "Voice transcript" }),
     }),
     auth: stubGroup(IPC_ENDPOINTS.auth, "auth", {

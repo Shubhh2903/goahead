@@ -42,6 +42,9 @@ export const messages = defineMessages("settings", {
   "settings.sendShortcut.enter": "Enter to send",
   "settings.sendShortcut.modEnterMac": "⌘Enter to send",
   "settings.sendShortcut.modEnterWin": "Ctrl+Enter to send",
+  "settings.busyMessage.title": "Steer agents while they work",
+  "settings.busyMessage.description":
+    "A message you send while an agent works joins its current work at the next step, instead of waiting in the queue. ChatGPT and Claude can steer; other providers queue the message.",
   "settings.autonomy.title": "Agent autonomy",
   "settings.turbo.title": "Turbo mode",
   "settings.turbo.description":
@@ -103,6 +106,8 @@ export const messages = defineMessages("settings", {
   // The Settings window shell: its tab list, headers and save bar.
   "settings.tab.general.title": "General",
   "settings.tab.general.description": "Control how GoAhead behaves on this computer.",
+  "settings.tab.voice.title": "Voice",
+  "settings.tab.voice.description": "Dictation in the message box. It runs on this computer.",
   "settings.tab.computerUse.title": "Computer Use",
   "settings.tab.computerUse.description": "Allow GoAhead to see and interact with apps on this computer.",
   "settings.tab.profile.title": "Profile",
@@ -345,4 +350,21 @@ export const messages = defineMessages("settings", {
   "settings.hostedServers.plan.standard.summary": "For a small team with daily routines.",
   "settings.hostedServers.plan.pro.name": "Pro",
   "settings.hostedServers.plan.pro.summary": "For many agents and heavy browser work.",
+  // The Voice tab: dictation models and the dictation language.
+  "settings.voice.models.title": "Dictation model",
+  "settings.voice.model.parakeet.description": "Fast, and runs on this computer. Dictation is in English.",
+  "settings.voice.model.size": "Download size: {size}",
+  "settings.voice.model.downloading": "Downloading · {received} of {total}",
+  "settings.voice.model.failed": "The download stopped. Check the connection and try again.",
+  "settings.voice.model.progressLabel": "Downloading {name}",
+  "settings.voice.model.use": "Use",
+  "settings.voice.model.inUse": "In use",
+  "settings.voice.model.downloadLabel": "Download {name}",
+  "settings.voice.model.cancelLabel": "Stop the download of {name}",
+  "settings.voice.model.retryLabel": "Download {name} again",
+  "settings.voice.model.useLabel": "Use {name} for dictation",
+  "settings.voice.loadFailed": "Could not read the voice models.",
+  "settings.voice.saveFailed": "Could not save the voice setting. Try again.",
+  "settings.voice.downloadFailed": "Could not start the download. Try again.",
+  "settings.voice.cancelFailed": "Could not stop the download.",
 });

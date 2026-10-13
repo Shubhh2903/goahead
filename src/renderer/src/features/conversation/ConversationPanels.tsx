@@ -6,6 +6,7 @@ import { serverCanAdministerAgents } from "../agents/remote-agent-admin";
 import type { AgentFilesOptions } from "../files/AgentFilesSettings";
 import { canManageStorage, serverHasStorage } from "../files/storage-usage";
 import { serverCanAdminister, serverSupportsCapability } from "../servers/server-capabilities";
+import { htmlAttachmentPageUrl } from "./chat-visual-url";
 import { useConversationController } from "./conversation-controller-context";
 import { useConversationViewScope } from "./conversation-scope";
 
@@ -153,6 +154,7 @@ export function ConversationPanels(panelProps: { onOpenUsage?: (trigger: HTMLBut
                 onOpenSharedFile={openSharedFile}
                 onOpenWorkspaceFile={openWorkspaceFile}
                 sourceUrl={attached()?.previewUrl ?? null}
+                pageUrl={htmlAttachmentPageUrl(attached())}
                 onOpenExternally={openSidebarFileExternally}
                 /* In the browser, "open" saves a shared or workspace file, so it is the download. */
                 onDownload={attached() ? downloadSidebarFile : props.runtime ? openSidebarFileExternally : undefined}
@@ -276,13 +278,14 @@ export function ConversationPanels(panelProps: { onOpenUsage?: (trigger: HTMLBut
               computerUseEditable={props.server?.kind === "local"}
               automationEditable={props.server?.kind === "local"}
               projectFoldersServerId={props.server?.kind === "local" ? props.server.id : undefined}
+              busyMessageModeEditable={props.server?.kind === "local"}
+              defaultBusyMessageMode={props.defaultBusyMessageMode}
               agents={props.agents}
               onStartNewChat={props.onClearAgentContext}
               onCreateSkill={
                 serverCanAdminister(props.server, "skills-admin-v1") &&
                 agentReady() &&
                 !controller.submitting() &&
-                !controller.selectionSending() &&
                 controller.voicePhase() === "idle" &&
                 !controller.editingDeliveryId()
                   ? () => {
@@ -296,7 +299,6 @@ export function ConversationPanels(panelProps: { onOpenUsage?: (trigger: HTMLBut
                 serverCanAdminister(props.server, "skills-admin-v1") &&
                 agentReady() &&
                 !controller.submitting() &&
-                !controller.selectionSending() &&
                 controller.voicePhase() === "idle" &&
                 !controller.editingDeliveryId()
                   ? (skill) => {

@@ -1,4 +1,4 @@
-import type { AnalyticsModel } from "@openbot/contracts/ipc";
+import type { AgentSummary, AnalyticsModel } from "@openbot/contracts/ipc";
 import { agentProviderCliName, isAgentProvider } from "@openbot/contracts/ipc";
 import type { AppTextKey } from "@openbot/i18n";
 import { currentText, type TextValue } from "../../text";
@@ -12,9 +12,10 @@ export const usageMetricLabels = {
   cost: "usage.metric.cost",
   tokens: "usage.metric.tokens",
 } as const satisfies Record<UsageMetric, AppTextKey>;
-export const usagePeriods = ["7d", "30d", "90d", "1y"] as const;
+export const usagePeriods = ["1d", "7d", "30d", "90d", "1y"] as const;
 export type UsagePeriod = (typeof usagePeriods)[number];
 export const usagePeriodLabels = {
+  "1d": "usage.period.today",
   "7d": "usage.period.days7",
   "30d": "usage.period.days30",
   "90d": "usage.period.days90",
@@ -23,6 +24,7 @@ export const usagePeriodLabels = {
 // A label is not a number of days once "1 year" is an option, and the host rejects a
 // range wider than 367 days, so a year is the 365 the calendar names rather than 366.
 export const usagePeriodDays: Record<UsagePeriod, number> = {
+  "1d": 1,
   "7d": 7,
   "30d": 30,
   "90d": 90,
@@ -34,6 +36,8 @@ export const usagePeriodDays: Record<UsagePeriod, number> = {
 export interface UsageAgentLabel {
   name: string;
   provider: string;
+  /** The avatar of the agent. Absent when the agent is not in the list the panel read. */
+  avatar?: Pick<AgentSummary, "avatarSeed" | "avatarHue" | "avatarUrl">;
 }
 export function usageNumber(value: number | null, text: UsageText = currentText()): string {
   return value === null ? text.t("usage.unavailable") : text.format.number(value);

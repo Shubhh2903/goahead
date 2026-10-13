@@ -24,17 +24,25 @@ const appPathArgument = process.argv.slice(2).find((argument) => !argument.start
 const appPath = resolve(appPathArgument ?? "dist/win-unpacked");
 const executablePath = resolve(appPath, "OpenBot.exe");
 const resourcesPath = resolve(appPath, "resources");
-const whisperExecutablePath = resolve(resourcesPath, "whisper/bin/whisper-cli.exe");
-const whisperModelPath = resolve(resourcesPath, "whisper/model/ggml-medium-q5_0.bin");
+const voiceRuntimePath = resolve(resourcesPath, "voice/runtime");
+const voiceRuntimeFiles = [
+  "sherpa-onnx.node",
+  "sherpa-onnx-c-api.dll",
+  "onnxruntime.dll",
+  "onnxruntime_providers_shared.dll",
+];
+const voiceHostPath = resolve(resourcesPath, "app.asar.unpacked/out/main/voice-transcription-host.js");
 
 await Promise.all([
   access(executablePath),
   access(resolve(resourcesPath, "app.asar")),
   access(resolve(resourcesPath, "licenses/Electron-LICENSE")),
   access(resolve(resourcesPath, "licenses/LICENSES.chromium.html")),
-  access(resolve(resourcesPath, "licenses/OpenAI-Whisper-LICENSE")),
-  access(resolve(resourcesPath, "licenses/whisper.cpp-LICENSE")),
-  access(whisperExecutablePath),
+  access(resolve(resourcesPath, "licenses/sherpa-onnx-LICENSE")),
+  access(resolve(resourcesPath, "licenses/onnxruntime-LICENSE")),
+  access(resolve(resourcesPath, "licenses/NVIDIA-Parakeet-TDT-0.6B-v3-LICENSE")),
+  ...voiceRuntimeFiles.map((name) => access(resolve(voiceRuntimePath, name))),
+  access(voiceHostPath),
   access(resolve(resourcesPath, "remote-desktop-runtime/licenses/Sunshine-GPL-3.0.txt")),
   access(resolve(resourcesPath, "remote-desktop-runtime/licenses/moonlight-web-stream-GPL-3.0.txt")),
   access(resolve(resourcesPath, "remote-desktop-runtime/source-manifest.json")),
@@ -57,7 +65,13 @@ await Promise.all(["codex", "claude", "grok"].map((name) => assertAbsent(resolve
 await assertAbsent(resolve(resourcesPath, "cloudflared"));
 await assertAbsent(resolve(resourcesPath, "app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64"));
 
-if (existsSync(whisperModelPath)) throw new Error("The on-demand Whisper model must not be in the application.");
+// The Parakeet model is downloaded on demand. No voice model, also not an old Whisper one, may ship.
+if (
+  ["voice/model", "voice/whisper-turbo-int8"].some((path) => existsSync(resolve(resourcesPath, path))) ||
+  ["encoder.int8.onnx", "turbo-encoder.int8.onnx"].some((name) => existsSync(resolve(voiceRuntimePath, name)))
+) {
+  throw new Error("The on-demand voice models must not be in the application.");
+}
 
 const packageJson = JSON.parse(await readFile("package.json", "utf8"));
 if (!isDynamicRecord(packageJson)) throw new Error("package.json is not a JSON object.");
@@ -102,7 +116,6 @@ if (updateMetadata !== null && !updateMetadata.includes("provider: github")) {
 
 const ownExecutables = [
   executablePath,
-  whisperExecutablePath,
   ...["sunshine.exe", "web-server.exe", "streamer.exe"].map((name) =>
     resolve(resourcesPath, "remote-desktop-runtime/win32/x64", name),
   ),

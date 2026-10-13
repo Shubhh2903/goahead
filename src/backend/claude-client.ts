@@ -14,7 +14,11 @@ import {
   tool,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { defaultProviderModel } from "@openbot/contracts/ipc";
+import {
+  CLAUDE_WEEKLY_OPUS_LIMIT_ID,
+  CLAUDE_WEEKLY_SONNET_LIMIT_ID,
+  defaultProviderModel,
+} from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord, isNumber, isOneOf, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
 import {
@@ -58,6 +62,7 @@ import {
 import { OPENBOT_TOOL_DEFINITIONS } from "./openbot-tools";
 import { PendingServerRequests } from "./pending-server-requests";
 import {
+  type AccountRateLimitResult,
   type AccountRateLimitsReadResult,
   type AccountRateLimitWindowResult,
   type AccountReadResult,
@@ -1288,8 +1293,24 @@ function claudeRateLimits(value: unknown, model: string | null): AccountRateLimi
   if (!primary && !secondary) return { rateLimits: null, rateLimitsByLimitId: null };
   return {
     rateLimits: { limitId: "claude", primary, secondary },
-    rateLimitsByLimitId: null,
+    rateLimitsByLimitId: model ? null : claudeFamilyWeeklyLimits(rateLimits),
   };
+}
+
+/**
+ * The account-wide reading also carries the weekly window of each model family that Claude
+ * reports. A reading for one model does not: its `secondary` is already that family's window.
+ */
+function claudeFamilyWeeklyLimits(rateLimits: DynamicRecord): Record<string, AccountRateLimitResult> | null {
+  const limits: Record<string, AccountRateLimitResult> = {};
+  for (const [limitId, key] of [
+    [CLAUDE_WEEKLY_OPUS_LIMIT_ID, "seven_day_opus"],
+    [CLAUDE_WEEKLY_SONNET_LIMIT_ID, "seven_day_sonnet"],
+  ] as const) {
+    const window = claudeUsageWindow(rateLimits[key], 10_080);
+    if (window) limits[limitId] = { limitId, primary: null, secondary: window };
+  }
+  return Object.keys(limits).length > 0 ? limits : null;
 }
 
 function claudeModelWeeklyWindow(rateLimits: DynamicRecord, model: string | null): AccountRateLimitWindowResult | null {

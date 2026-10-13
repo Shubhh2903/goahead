@@ -19,6 +19,7 @@ import { WorkspaceSidebar } from "./features/sidebar/WorkspaceSidebar";
 import { SlackClientView } from "./features/slack-client/SlackClientView";
 import { AgentUsagePanel } from "./features/usage/AgentUsagePanel";
 import { useUsage } from "./features/usage/usage-context";
+import { WorkspacePlanLimits } from "./features/usage/WorkspacePlanLimits";
 import { useLayout } from "./layout";
 import { usePlatform } from "./platform";
 import { WorkspaceFrame } from "./WorkspaceFrame";
@@ -54,7 +55,7 @@ export function WorkspaceShell(props: { account: () => CentralAuthUser }) {
   const threadOpen = () => !channelOpen() && (messagingThreads.state.selectedId !== null || inboxOpen());
   const usage = useUsage();
   const layout = useLayout();
-  const { activeServer, activeServerSupportsCapability, retryServerConnection, servers } = useServers();
+  const { activeServer, activeServerId, activeServerSupportsCapability, retryServerConnection, servers } = useServers();
   const { remoteDesktopWorkspaceVisible } = useRemoteDesktop();
   const { agentSetupOpen, serverOnboardingOpen } = useAgents();
   const { activeDirectMember } = useDirectMessages();
@@ -94,6 +95,8 @@ export function WorkspaceShell(props: { account: () => CentralAuthUser }) {
                   hostName={servers().find((server) => server.id === serverId())?.name ?? "Host"}
                   agentId={usage.state.agentId}
                   onBack={usage.closeUsage}
+                  // The account reading answers for the active server only.
+                  planLimits={serverId() === activeServerId() ? <WorkspacePlanLimits /> : undefined}
                 />
               }
             >

@@ -1371,7 +1371,8 @@ textarea {
   stroke-linejoin: round;
 }
 
-.sidebar-marketplace-button > svg {
+.sidebar-marketplace-button > svg,
+.sidebar-usage-button > svg {
   width: 18px;
   height: 18px;
   stroke-width: var(--openbot-icon-stroke);

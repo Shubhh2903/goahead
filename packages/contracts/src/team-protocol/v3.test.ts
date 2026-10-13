@@ -166,6 +166,20 @@ describe("Team protocol v3", () => {
     expect(
       decodeTeamProtocolV3CurrentHttpResponse("GET", path, 200, { ...value, prompt: "private" }),
     ).not.toHaveProperty("prompt");
+    // The models of an agent row are optional: a host before them sends none and the row stays
+    // the same, and a host that sends them keeps them across the wire.
+    const withModels = {
+      ...value,
+      agents: [{ ...emptyAnalyticsTotals(), agentId: "agent-a", share: 1, models: ["claude-opus-5", "gpt-5.6"] }],
+    };
+    expect(decodeTeamProtocolV3WebRtcHttpResponse("GET", path, 200, withModels)).toEqual(withModels);
+    expect(decodeHostAnalytics(value).agents[0]).not.toHaveProperty("models");
+    expect(() =>
+      decodeTeamProtocolV3CurrentHttpResponse("GET", path, 200, {
+        ...value,
+        agents: [{ ...emptyAnalyticsTotals(), agentId: "agent-a", share: 1, models: [1] }],
+      }),
+    ).toThrow("Invalid analytics");
   });
   it("adds validated analytics without changing released adapters", () => {
     const path = "/v1/agents/agent-a/analytics?startDate=2026-09-01&endDate=2026-09-07&timeZone=UTC";

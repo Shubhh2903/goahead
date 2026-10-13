@@ -105,12 +105,6 @@ export default defineConfig({
         },
       },
     ],
-    exclude: [
-      ...configDefaults.exclude,
-      "apps/auth-api/**",
-      "tests/visual/**",
-      ".openbot-build/**",
-      "build/whisper/**",
-    ],
+    exclude: [...configDefaults.exclude, "apps/auth-api/**", "tests/visual/**", ".openbot-build/**"],
   },
 });

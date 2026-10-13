@@ -1,5 +1,5 @@
 import { Host, Picker, Switch } from "@expo/ui";
-import { APP_LANGUAGE_OPTIONS } from "@openbot/i18n/languages";
+import { APP_LANGUAGE_OPTIONS, appLanguageOption } from "@openbot/i18n/languages";
 import { router } from "expo-router";
 import { Typography } from "heroui-native";
 import { useEffect, useState } from "react";
@@ -33,7 +33,7 @@ function LanguageSection({ dark }: { dark: boolean }) {
         trailing={
           <Host matchContents colorScheme={dark ? "dark" : "light"}>
             <Picker
-              selectedValue={language.value}
+              selectedValue={appLanguageOption(language.value).id}
               enabled={language.ready && !language.saving}
               onValueChange={(next) => {
                 setError(null);

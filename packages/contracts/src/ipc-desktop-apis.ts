@@ -83,6 +83,7 @@ export type SkillsDesktopApi = GroupApi<IpcEndpoints["skills"]>;
 export type HostedSitesDesktopApi = GroupApi<IpcEndpoints["hostedSites"]>;
 export type GitHubConnectorDesktopApi = GroupApi<IpcEndpoints["githubConnector"]>;
 export type OnePasswordConnectorDesktopApi = GroupApi<IpcEndpoints["onePasswordConnector"]>;
+export type BitwardenConnectorDesktopApi = GroupApi<IpcEndpoints["bitwardenConnector"]>;
 export type BillingDesktopApi = GroupApi<IpcEndpoints["billing"]>;
 
 export type HostedServersDesktopApi = GroupApi<IpcEndpoints["hostedServers"]>;
@@ -152,6 +153,7 @@ export interface OpenBotDesktopApi extends GroupApi<IpcEndpoints["app"]>, GroupA
   hostedSites: HostedSitesDesktopApi;
   githubConnector: GitHubConnectorDesktopApi;
   onePasswordConnector: OnePasswordConnectorDesktopApi;
+  bitwardenConnector: BitwardenConnectorDesktopApi;
   billing: BillingDesktopApi;
   hostedServers: HostedServersDesktopApi;
   marketplaceAgents: MarketplaceAgentsDesktopApi;

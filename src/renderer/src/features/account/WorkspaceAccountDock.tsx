@@ -1,16 +1,16 @@
 import type { CentralAuthUser } from "@openbot/contracts/ipc";
 import { StaticAccountDock } from "@openbot/ui/features/account/StaticAccountDock";
-import { createEffect, createMemo, Loading, untrack } from "solid-js";
+import { createEffect, Loading, untrack } from "solid-js";
 import { appPort } from "../../app-port";
 import { useLayout } from "../../layout";
 import { AccountDock } from "../../lazy-views";
 import { usePlatform } from "../../platform";
 import { useAgents } from "../agents/agents-context";
 import { useSetup } from "../onboarding/onboarding-context";
-import { useServers } from "../servers/servers-context";
 import { useSettings } from "../settings/settings-context";
 import { useUpdates } from "../updates/updates-context";
 import { useAuth } from "./account-context";
+import { useAccountUsageTarget } from "./account-usage-target";
 
 /**
  * The signed-in account, its usage and the update state, at the bottom of the
@@ -25,25 +25,8 @@ export function WorkspaceAccountDock(props: { account: () => CentralAuthUser }) 
   const setup = useSetup();
   const updates = useUpdates();
   const { activeAgent, agentStatus } = useAgents();
-  const { activeServerId } = useServers();
   const { openAppSettings, setSkillsMarketplaceOpen } = useSettings();
-  const usageReady = createMemo(() => {
-    const status = agentStatus();
-    return (
-      status.phase === "ready" ||
-      Boolean(status.providers?.some((item) => item.state === "available" && item.connectionState !== "connecting"))
-    );
-  });
-  const usageTargetKey = createMemo(() => {
-    const serverId = activeServerId();
-    if (!serverId) return null;
-    const connected = (agentStatus().providers ?? [])
-      .filter((item) => item.state === "available" && item.connectionState !== "connecting")
-      .map((item) => item.id)
-      .sort()
-      .join(",");
-    return `${serverId}:${connected}`;
-  });
+  const { ready: usageReady, targetKey: usageTargetKey } = useAccountUsageTarget();
 
   createEffect(
     () => usageTargetKey(),

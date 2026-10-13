@@ -43,6 +43,7 @@ import { agentTemplateIpcHandlers } from "./ipc/agent-template-handlers";
 import { appIpcHandlers } from "./ipc/app-handlers";
 import { attachmentIpcHandlers } from "./ipc/attachment-handlers";
 import { billingIpcHandlers } from "./ipc/billing-handlers";
+import { bitwardenConnectorIpcHandlers } from "./ipc/bitwarden-connector-handlers";
 import { browserIpcHandlers } from "./ipc/browser-handlers";
 import { channelMemoryIpcHandlers } from "./ipc/channel-memory-handlers";
 import { channelRoutineIpcHandlers } from "./ipc/channel-routine-handlers";
@@ -191,6 +192,15 @@ protocol.registerSchemesAsPrivileged([
     scheme: "openbot-remote-attachment",
     privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
   },
+  // A visual reply page. It needs no fetch or CORS support: only a frame loads it.
+  {
+    scheme: "openbot-visual",
+    privileges: { standard: true, secure: true },
+  },
+  {
+    scheme: "openbot-remote-visual",
+    privileges: { standard: true, secure: true },
+  },
   {
     scheme: "openbot-avatar",
     privileges: { standard: true, secure: true, supportFetchAPI: true },
@@ -272,6 +282,7 @@ const {
   forwardProviderRuntimeStatus,
   forwardGitHubConnectorStatus,
   forwardOnePasswordConnectorStatus,
+  forwardBitwardenConnectorStatus,
   forwardMessagingThreadsChanged,
   forwardMessagingInboxChanged,
   forwardSlackClientChanged,
@@ -429,6 +440,7 @@ function registerIpcHandlers({
   language,
   logoColor,
   notificationPreference,
+  busyMessageMode,
   agentInitialization,
   sidebarLayout,
   host,
@@ -439,6 +451,7 @@ function registerIpcHandlers({
   hostedSites,
   githubConnector,
   onePasswordConnector,
+  bitwardenConnector,
   billing,
   hostedServers,
   customProviderChanges,
@@ -472,6 +485,7 @@ function registerIpcHandlers({
       setupFile,
       analyticsPreferenceFile,
       approvalAutomation,
+      busyMessageMode,
       language,
       logoColor,
       initializeAgent: () => agentInitialization.start(),
@@ -493,6 +507,7 @@ function registerIpcHandlers({
     ...hostedSiteIpcHandlers({ hostedSites, remoteServers, getMainWindow, translate: language.translate }),
     ...githubConnectorIpcHandlers({ githubConnector }),
     ...onePasswordConnectorIpcHandlers({ onePasswordConnector }),
+    ...bitwardenConnectorIpcHandlers({ bitwardenConnector }),
     ...billingIpcHandlers({ billing }),
     ...hostedServerIpcHandlers({ hostedServers }),
     ...customProviderIpcHandlers(customProviderChanges),
@@ -948,6 +963,7 @@ if (!hasSingleInstanceLock) {
       remoteDesktop.on("changed", forwardRemoteDesktopSessions);
       built.githubConnector.onChanged(forwardGitHubConnectorStatus);
       built.onePasswordConnector.onChanged(forwardOnePasswordConnectorStatus);
+      built.bitwardenConnector.onChanged(forwardBitwardenConnectorStatus);
       built.messaging.onThreadChanged((threadId) => forwardMessagingThreadsChanged({ threadId }));
       built.messaging.onInboxChanged((workspaceId) => forwardMessagingInboxChanged({ workspaceId }));
       built.messaging.onSlackClientChanged(forwardSlackClientChanged);

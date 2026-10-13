@@ -89,6 +89,8 @@ export const messages = {
     "Hesap kimliğiniz ve e-postanız ile birlikte kullanım ve güvenilirlik meta verilerini GoAhead'in kendi barındırdığı analizlerine gönderin.",
   "settings.tab.general.title": "Genel",
   "settings.tab.general.description": "GoAhead'in bu bilgisayarda nasıl davranacağını kontrol edin.",
+  "settings.tab.voice.title": "Ses",
+  "settings.tab.voice.description": "Mesaj kutusunda dikte. Bu bilgisayarda çalışır.",
   "settings.tab.computerUse.title": "Bilgisayar Kullanımı",
   "settings.tab.computerUse.description":
     "GoAhead'in bu bilgisayardaki uygulamaları görmesine ve bunlarla etkileşime girmesine izin verin.",
@@ -319,4 +321,23 @@ export const messages = {
   "settings.hostedServers.plan.standard.summary": "Günlük rutinleri olan küçük bir ekip için.",
   "settings.hostedServers.plan.pro.name": "Pro",
   "settings.hostedServers.plan.pro.summary": "Çok sayıda ajan ve yoğun tarayıcı çalışması için.",
+  "settings.busyMessage.title": "Ajanları çalışırken yönlendir",
+  "settings.busyMessage.description":
+    "Ajan çalışırken gönderdiğiniz mesaj, kuyrukta beklemek yerine bir sonraki adımda mevcut işe eklenir. ChatGPT ve Claude yönlendirebilir; diğer sağlayıcılar mesajı kuyruğa alır.",
+  // The Voice tab: dictation models and the dictation language.
+  "settings.voice.models.title": "Dikte modeli",
+  "settings.voice.model.size": "İndirme boyutu: {size}",
+  "settings.voice.model.downloading": "İndiriliyor · {received} / {total}",
+  "settings.voice.model.failed": "İndirme durdu. Bağlantıyı kontrol edip yeniden deneyin.",
+  "settings.voice.model.progressLabel": "{name} indiriliyor",
+  "settings.voice.model.use": "Kullan",
+  "settings.voice.model.inUse": "Kullanımda",
+  "settings.voice.model.downloadLabel": "{name} indir",
+  "settings.voice.model.cancelLabel": "{name} indirmesini durdur",
+  "settings.voice.model.retryLabel": "{name} yeniden indir",
+  "settings.voice.model.useLabel": "Dikte için {name} kullan",
+  "settings.voice.loadFailed": "Ses modelleri okunamadı.",
+  "settings.voice.saveFailed": "Ses ayarı kaydedilemedi. Yeniden deneyin.",
+  "settings.voice.downloadFailed": "İndirme başlatılamadı. Yeniden deneyin.",
+  "settings.voice.cancelFailed": "İndirme durdurulamadı.",
 } as const satisfies PartialTranslation<typeof source>;

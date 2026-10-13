@@ -1,3 +1,4 @@
+import { chatVisualReply } from "@openbot/contracts/chat-visual";
 import type { ConversationMessageSender } from "@openbot/contracts/ipc";
 import { Button } from "@openbot/ui";
 import type { AgentMessage, ChatActionMarkerModel } from "@openbot/ui/data";
@@ -7,9 +8,11 @@ import { ChatActionMarker } from "@openbot/ui/features/conversation/ChatActionMa
 import { type ChatMessageAuthor, ChatMessageRow } from "@openbot/ui/features/conversation/ChatMessageRow";
 import { ChatRowBoundary } from "@openbot/ui/features/conversation/ChatRowBoundary";
 import { ChatSearch } from "@openbot/ui/features/conversation/ChatSearch";
+import { ChatVisual } from "@openbot/ui/features/conversation/ChatVisual";
 import { BrowserTakeoverCard } from "@openbot/ui/features/conversation/ConversationPrompts";
 import { ScrollToLatestButton } from "@openbot/ui/features/conversation/MessageNavigation";
 import { MessageActions } from "@openbot/ui/features/conversation/MessageRendering";
+import { PendingSendStatus } from "@openbot/ui/features/conversation/PendingSendStatus";
 import { SlackAskCard } from "@openbot/ui/features/conversation/SlackAskCard";
 import { TaskList } from "@openbot/ui/features/conversation/TaskList";
 import { UnreadMessagesBanner, UnreadMessagesDivider } from "@openbot/ui/features/conversation/UnreadMessages";
@@ -21,12 +24,14 @@ import { deviceSendShortcut } from "../../send-shortcut-preference";
 import { groupedMessageIds } from "./agent-message-timeline";
 import { dayMarkerLabel } from "./chat-day-markers";
 import { continuesSenderRun } from "./chat-grouping";
+import { chatVisualPageUrl } from "./chat-visual-url";
 import { conversationRuntime } from "./conversation-runtime";
 import { useConversationViewScope } from "./conversation-scope";
 import type { ConversationProps } from "./conversation-types";
 import { HandoffChatCard } from "./HandoffChatCard";
 import { MarketplaceSuggestionChatCard, marketplaceSuggestionKnown } from "./MarketplaceSuggestionChatCard";
 import { RoutineChatCard } from "./RoutineChatCard";
+import { PENDING_SEND_ID_PREFIX, pendingSendRetrySafe } from "./stores/pending-send-store";
 
 /**
  * A message that renders only an action marker, with no bubble of its own. A routine instruction is
@@ -39,12 +44,17 @@ function markerOnlyMessage(message: AgentMessage): boolean {
 /**
  * Does this row draw a time of its own?
  *
- * A marker-only row carries the marker's own time, and a question prompt and a plan draw a card
- * instead of a message row. None shows the header a run continues under, so none can hold a run
- * open.
+ * A marker-only row carries the marker's own time, and a question prompt, a plan and a visual reply
+ * draw a card instead of a message row. None shows the header a run continues under, so none can
+ * hold a run open.
  */
 function rowDrawsTime(message: AgentMessage): boolean {
-  return !markerOnlyMessage(message) && !message.questionPrompt && message.kind !== "plan";
+  return (
+    !markerOnlyMessage(message) &&
+    !message.questionPrompt &&
+    message.kind !== "plan" &&
+    chatVisualReply(message) === null
+  );
 }
 
 /** Marker-only rows that render attachment cards below the marker do not end with one. */
@@ -87,7 +97,11 @@ export function ConversationTimeline() {
     chatSearchTotal,
     clearNewMessages,
     closeChatSearch,
+    composerHasContent,
     copiedMessageId,
+    dismissPendingSend,
+    editingDeliveryId,
+    editPendingSend,
     copyMessage,
     expandedEmojiMessageId,
     installedSkills,
@@ -111,12 +125,14 @@ export function ConversationTimeline() {
     openSkillSettings,
     openSharedFile,
     openWorkspaceFile,
+    pendingSendFor,
     previewAttachment,
     props,
     reactToMessage,
     renderedAgentActivity,
     respondToBrowserTakeover,
     replyToMessage,
+    retryPendingSend,
     scheduleUnreadDividerVisibilityUpdate,
     setChatSearchQuery,
     setExpandedEmojiMessageId,
@@ -332,6 +348,23 @@ export function ConversationTimeline() {
                   const sender = otherSender(referencedMessage());
                   return sender ? memberAuthor(sender).name : undefined;
                 };
+                // A row the host has not drawn yet has no reactions, replies or menu: its id is not the
+                // host's, even after the host answered.
+                const hostless = createMemo(() => message()?.id.startsWith(PENDING_SEND_ID_PREFIX) === true);
+                const pendingSend = createMemo(() => {
+                  const send = pendingSendFor(message()?.id);
+                  return send && send.state !== "sent" ? send : undefined;
+                });
+                // The status line stays one element while its state changes, so its live region speaks.
+                const pending = createMemo(() => pendingSend() !== undefined);
+                const pendingState = () => {
+                  const state = pendingSend()?.state;
+                  return state === "failed" || state === "waiting" ? state : "sending";
+                };
+                const pendingRetrySafe = () => {
+                  const send = pendingSend();
+                  return send ? pendingSendRetrySafe(send) : false;
+                };
                 const markerOnly = untrack(() => markerOnlyMessage(initialMessage));
                 // Consecutive markers keep the tighter marker gap so they read as one group.
                 const groupedWithMarker = createMemo(() => {
@@ -526,6 +559,56 @@ export function ConversationTimeline() {
                     </div>
                   );
                 }
+                const initialVisual = untrack(() => chatVisualReply(initialMessage));
+                // The web client cannot load the page, so there the message shows its title and file.
+                if (initialVisual && chatVisualPageUrl(initialVisual.attachment.previewUrl)) {
+                  // A visual reply is the agent's page. It shows above the final reply, with no bubble.
+                  const visual = () => chatVisualReply(message() ?? initialMessage) ?? initialVisual;
+                  const pageUrl = () => chatVisualPageUrl(visual().attachment.previewUrl);
+                  return (
+                    <div
+                      data-index={virtualRow.index}
+                      ref={messageVirtualizer.measureElement}
+                      class="virtual-chat-row"
+                      style={{
+                        transform: messageVirtualizer.isVirtualized()
+                          ? `translateY(${virtualRow.start - messageVirtualizer.scrollMargin()}px)`
+                          : "none",
+                      }}
+                    >
+                      <Show when={dayMarker()}>
+                        {(label) => (
+                          <div class="time-marker">
+                            <span>{label()}</span>
+                          </div>
+                        )}
+                      </Show>
+                      <Show when={message()?.id === unreadBoundaryMessageId()}>
+                        <UnreadMessagesDivider
+                          elementRef={(element) => {
+                            setUnreadMessagesDividerElement(element);
+                            scheduleUnreadDividerVisibilityUpdate();
+                          }}
+                        />
+                      </Show>
+                      <ChatRowBoundary>
+                        <article
+                          data-chat-search-message={message()?.id}
+                          aria-label={(message() ?? initialMessage).body}
+                          class={{ "message-entry-animated": animateEntrance }}
+                        >
+                          <ChatVisual
+                            src={pageUrl()}
+                            failed={pageUrl() === undefined}
+                            title={(message() ?? initialMessage).body}
+                            height={visual().height}
+                            onOpenLink={(url) => void openExternalMessageUrl(url)}
+                          />
+                        </article>
+                      </ChatRowBoundary>
+                    </div>
+                  );
+                }
                 const displayedReactions = createMemo(() => {
                   const currentMessage = message();
                   if (currentMessage?.reactions?.length) return currentMessage.reactions;
@@ -597,47 +680,74 @@ export function ConversationTimeline() {
                                 onOpenWorkspaceFile={openWorkspaceFile}
                                 onDownloadAttachments={props.runtime ? undefined : downloadAttachments}
                                 onDownload={(attachment) => attachmentAction(attachment, "download")}
+                                class={pending() ? "message-entry-pending" : undefined}
+                                footer={
+                                  pending() ? (
+                                    <PendingSendStatus
+                                      state={pendingState()}
+                                      error={pendingSend()?.error ?? null}
+                                      retrySafe={pendingRetrySafe()}
+                                      canEdit={!composerHasContent() && !editingDeliveryId()}
+                                      onRetry={() => {
+                                        const send = pendingSend();
+                                        if (send) retryPendingSend(send.clientMessageId);
+                                      }}
+                                      onEdit={() => {
+                                        const send = pendingSend();
+                                        if (send) editPendingSend(send.clientMessageId);
+                                      }}
+                                      onDismiss={() => {
+                                        const send = pendingSend();
+                                        if (send) dismissPendingSend(send.clientMessageId);
+                                      }}
+                                    />
+                                  ) : undefined
+                                }
                                 actions={
-                                  <MessageActions
-                                    message={message() ?? initialMessage}
-                                    pickerOpen={openReactionMessageId() === message()?.id}
-                                    moreOpen={openMoreMessageId() === message()?.id}
-                                    expandedEmoji={expandedEmojiMessageId() === message()?.id}
-                                    copied={copiedMessageId() === message()?.id}
-                                    onTogglePicker={() => {
-                                      const messageId = message()?.id;
-                                      if (!messageId) return;
-                                      setOpenReactionMessageId((current) => (current === messageId ? null : messageId));
-                                      setOpenMoreMessageId(null);
-                                      setExpandedEmojiMessageId(null);
-                                    }}
-                                    onToggleMore={() => {
-                                      const messageId = message()?.id;
-                                      if (!messageId) return;
-                                      setOpenMoreMessageId((current) => (current === messageId ? null : messageId));
-                                      setOpenReactionMessageId(null);
-                                      setExpandedEmojiMessageId(null);
-                                    }}
-                                    onExpandEmoji={() => {
-                                      const messageId = message()?.id;
-                                      if (!messageId) return;
-                                      setExpandedEmojiMessageId((current) =>
-                                        current === messageId ? null : messageId,
-                                      );
-                                    }}
-                                    onReact={(emoji) => {
-                                      const currentMessage = message();
-                                      if (currentMessage) void reactToMessage(currentMessage, emoji);
-                                    }}
-                                    onReply={() => {
-                                      const currentMessage = message();
-                                      if (currentMessage) replyToMessage(currentMessage);
-                                    }}
-                                    onCopy={() => {
-                                      const currentMessage = message();
-                                      if (currentMessage) void copyMessage(currentMessage);
-                                    }}
-                                  />
+                                  <Show when={!hostless()}>
+                                    <MessageActions
+                                      message={message() ?? initialMessage}
+                                      pickerOpen={openReactionMessageId() === message()?.id}
+                                      moreOpen={openMoreMessageId() === message()?.id}
+                                      expandedEmoji={expandedEmojiMessageId() === message()?.id}
+                                      copied={copiedMessageId() === message()?.id}
+                                      onTogglePicker={() => {
+                                        const messageId = message()?.id;
+                                        if (!messageId) return;
+                                        setOpenReactionMessageId((current) =>
+                                          current === messageId ? null : messageId,
+                                        );
+                                        setOpenMoreMessageId(null);
+                                        setExpandedEmojiMessageId(null);
+                                      }}
+                                      onToggleMore={() => {
+                                        const messageId = message()?.id;
+                                        if (!messageId) return;
+                                        setOpenMoreMessageId((current) => (current === messageId ? null : messageId));
+                                        setOpenReactionMessageId(null);
+                                        setExpandedEmojiMessageId(null);
+                                      }}
+                                      onExpandEmoji={() => {
+                                        const messageId = message()?.id;
+                                        if (!messageId) return;
+                                        setExpandedEmojiMessageId((current) =>
+                                          current === messageId ? null : messageId,
+                                        );
+                                      }}
+                                      onReact={(emoji) => {
+                                        const currentMessage = message();
+                                        if (currentMessage) void reactToMessage(currentMessage, emoji);
+                                      }}
+                                      onReply={() => {
+                                        const currentMessage = message();
+                                        if (currentMessage) replyToMessage(currentMessage);
+                                      }}
+                                      onCopy={() => {
+                                        const currentMessage = message();
+                                        if (currentMessage) void copyMessage(currentMessage);
+                                      }}
+                                    />
+                                  </Show>
                                 }
                               />
                             }
