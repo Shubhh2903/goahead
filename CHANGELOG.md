@@ -6,6 +6,129 @@ All notable changes to OpenBot will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-10-14
+
+### Added
+
+- Connect Bitwarden in Marketplace or Server settings to fill browser passwords and authenticator codes in GoAhead. Share logins through a folder named `Shared with OpenBot`. The CLI session lasts until disconnect, eight idle hours, or app exit.
+- The sidebar has a usage button next to Marketplace. It opens the usage report of the current server. The button is also in the web client.
+- The desktop usage report shows the Claude plan limits at the top: the 5-hour limit, the weekly limit, and the weekly Opus and weekly Sonnet limits when Claude reports them. Each limit shows the percent used and the time to the next reset. For an account without plan limits, such as an API key account, the report says that plan limits are not available.
+- The usage report has a "Tokens by agent" list. Each row shows the agent, its total tokens in the range, and the models that it used. The agent with the most tokens is first. A host that has not been updated shows no model names.
+- The usage period has a "Today" option.
+- Settings > Voice shows the dictation model. You can download it, stop the download, and see its
+  status there.
+- The file preview panel has a Copy button for text, code and Markdown files. It copies the full source of the file, also for Markdown that the panel shows rendered and for text that the panel truncates.
+- The file preview panel highlights code files, such as JSON, TypeScript, Python, YAML and diff files, with the same colors as code in chat. Files larger than 200,000 characters, or with a line longer than 5,000 characters, stay as plain text.
+- The file preview panel has a wrap button for text files. When it is on, long lines wrap to the panel width, so you do not have to scroll sideways. The app remembers your choice.
+- On macOS, you can reply to an agent and stop it from the Dynamic Island. A message card has a reply
+  field, a question card accepts a typed answer, and a working row has a Stop button. GoAhead sends
+  the reply or the stop to the local agent or to the remote host. The main window does not move.
+- The emotion face stays on the island while you type a reply, and it changes with the agent state
+  while the island holds a card for you.
+- A message that GoAhead could not send stays in the chat with Retry, Edit and Dismiss. Retry does not send the message two times, also when the first attempt got to the server and only the answer was lost. A server with an older version cannot find a repeated message, so for that server the chat shows only Edit and Dismiss.
+- A message that GoAhead did not send before a restart is back in the composer of its chat after the restart. GoAhead does not send it again on its own.
+- Settings > General has a new "Steer agents while they work" switch. When it is on, a message that you send to a busy ChatGPT or Claude agent joins the current work at the next step, and does not wait in the queue. The switch is off by default, so messages queue as before.
+- Each agent has a "While working" setting in its settings panel. It uses the app default, or it always queues or always steers for that agent.
+- A message that cannot steer waits in the queue with a "Not steered" label and the reason. Grok, OpenCode, Gemini, Cursor, Cline and custom agents cannot steer a running turn. The message starts when the current turn ends.
+- After a desktop update, GoAhead shows the notes of the new version in a dialog. The notes come from the GoAhead changelog that the app includes, so the dialog needs no network. When an update skips versions, the dialog shows the notes of each skipped version together. A new installation starts without the dialog. Open the notes again from Settings > Updates.
+- Visual replies. A GoAhead agent can show a chart, a table, a diagram or a mockup as an HTML page
+  above its reply. The page runs its scripts in a sandbox and can load files from the network. A
+  link in the page opens in your browser after you click it. Agents can look at a page before they
+  show it.
+- An HTML file opens as a page in the file preview. Use "Show HTML source" to see its code.
+- Copy a table from a reply as Markdown or CSV.
+- Click an image in a reply to open it in the image viewer, with the other images of the message.
+- GoAhead has a Routines view in the sidebar. It shows a canvas for the open agent with its routines, the agents
+  that each routine reaches, when each routine runs next and how its last runs went.
+- A routine can hand its agent's answer on to other agents. Draw a connection from one agent to the next on the
+  canvas, and give it an instruction. An agent with more than one input waits for all of them and gets them in
+  one message. A connection applies to the runs that start after you make it.
+- Agents can read and change routine flows with the `list_routine_flows`, `connect_routine_agents` and
+  `disconnect_routine_agents` tools, and the canvas has a chat panel that sends your request to the open agent.
+- GoAhead adds Pi and Muse as providers. Pi runs in its native RPC mode, and Muse runs `muse serve`
+  through the official Muse SDK. GoAhead can download and pin each CLI, and checks its files against
+  the hashes in `native-runtime.lock.json`.
+- Pi signs in with `/login` in a terminal on this computer. Muse signs in with `muse login` or with a
+  Meta API key that GoAhead keeps encrypted.
+- Settings has an ACP registry section. You can search the registry, and install, update, cancel, or
+  remove an agent on this computer. Remove runtime keeps the agent's settings, credentials, and
+  conversations.
+- Connect Gmail and Google Calendar in Server settings > Connectors, and pick the agent that handles
+  mail. GoAhead tells you about important mail and meeting requests in the Dynamic Island, a macOS
+  notification and that agent's chat. The agent, and the Slack Orchestrator in your own direct
+  message with GoAhead, can read and sort mail, write reply drafts and book Google Meet calls. Mail
+  is sent and meetings are booked only after you approve the card in GoAhead. GoAhead talks to
+  Google from your computer only.
+
+### Changed
+
+- The account service tells iPhones that the GoAhead phone app opens invitation and shared agent links of `goahead.multicodegenius.com`.
+- The desktop shows a `goahead://mobile-connect` QR code to pair a phone, and Live Activity links use `goahead://`. **Pair the GoAhead phone app again with the new code.**
+- The Slack Orchestrator can now send a Slack message as you when you ask from GoAhead (also through Chief). Quiet hours and pause still apply.
+- Agents name Slack recipients by name, such as Harsh Patel or #general, and `@Name` in the message becomes a mention. Slack IDs are not needed.
+- Agents' MCP servers now run on Bun 1.4.3.
+- Voice input now uses NVIDIA Parakeet TDT 0.6B v3 in place of Whisper medium. Dictation is in
+  English.
+- The words show in the message box while you speak, and the full text replaces them when you stop.
+- The first voice recording downloads a new model of approximately 670 MB. GoAhead deletes the old
+  Whisper model files (approximately 540 MB).
+- While you speak, the microphone button changes into a recording bar with a live waveform.
+  ✓ puts the text in the message box, × discards the recording, and the send arrow sends it.
+- Speech recognition runs in a separate process that stops 60 seconds after the last use.
+  Audio stays on this computer.
+- GoAhead is in English only for now. The language setting offers System default and English. If
+  you chose French, Japanese, Portuguese or Turkish before, GoAhead shows English.
+- A message that you send shows in the chat immediately, with the status "Sending". The composer stays available for the next message. Messages that you send quickly go to the agent in the order that you sent them.
+- In the web client, a failed send does not block the composer. The message stays in the chat with the reason for the failure.
+- A Mermaid diagram that cannot be drawn shows the parser message. When the diagram module did not
+  load, a retry button shows.
+- An HTML or SVG attachment that a frame opens directly runs with no scripts. Only the GoAhead window
+  can read an attachment across origins.
+- GoAhead now reads provider history in pages and saves each page when it arrives. Long chats no longer need a
+  full copy of the provider transcript in memory, and GoAhead keeps only the recent part of each chat in memory.
+- GoAhead requires Codex CLI 0.156.0 or newer to read Codex history in pages. The included Codex runtime is now
+  0.160.1.
+- The provider message size limit is now 256 MB, up from 128 MB, so larger single records can load.
+- The database upgrade lets a later GoAhead version add an agent provider with no table rebuild.
+  All provider sessions and their links to turns stay the same.
+- GoAhead adds database migration 34 for the routine flow tables. The migration only adds empty tables, so all
+  routines, runs, chats and Slack data stay as they are.
+- Routine flows are only for agents on this computer. A remote server answers that it does not support them.
+- Pi and Muse agents stay on this computer. Team members do not see them, and the Team API protocols
+  do not change.
+
+### Fixed
+
+- Remote desktop now asks you to allow GoAhead in Screen Recording and Accessibility, which is what
+  macOS checks.
+- The "Test on this Mac" check now accepts clicks and typing through the remote view.
+- Keep the message you did not send when you go to a different chat. Each agent chat and each
+  channel keeps its own draft. The draft text also stays after you restart GoAhead, for example to
+  install an update. Attached files stay only until you close GoAhead.
+- When an action in the Dynamic Island fails, the island stays open and shows "That did not work.
+  Try again." next to the buttons. Before, the click did nothing that you could see.
+- A queued message that you steered just as the agent finished its turn no longer shows as done when the agent never read it. It stays in the queue and starts next.
+- Messages stay in the queue when you try to steer a provider that does not support it. Custom ACP agents no longer get a second prompt that can stop the running task or lose the queued message.
+- A steered message shows in the chat at the time it joined the turn, not at the time it was queued.
+- GoAhead keeps saved messages and their attachments when a history import fails or continues after a restart.
+  Before, a failed read could leave a chat without the turns that the provider did not send again.
+- After a provider stops because a message was too large, you can change the model and the provider again.
+  Before, a turn that no longer ran could block the change.
+- A message that the provider accepted is not sent a second time when GoAhead cannot save its start.
+- An OpenCode, Grok, Cursor, Cline, Gemini or custom ACP agent that keeps a session only in its process now keeps
+  that process running while the session is open, so its context is not lost.
+- GoAhead now stops at startup with a clear message when its data folder holds a database that
+  OpenBot made, and does not change that database. Before, GoAhead tried to upgrade it and stopped
+  with a migration error.
+
+### Security
+
+- Updated the npm packages of the remote desktop web UI (`vue` 3.5.43, `compression` 1.8.2 and other
+  non-breaking fixes) to remove known high-severity advisories.
+- The account service compares the skills and site operations admin tokens in constant time.
+- Bitwarden fills require an exact HTTPS origin and a current item in the shared folder. GoAhead does not save session keys or login values, and redacts short authenticator codes from logs.
+- In GoAhead, a teammate's answer in your Slack direct message can no longer read your Slack inbox. It can also no longer send a Slack message as you without your approval.
+
 ## [0.35.0] - 2026-10-11
 
 ### Added
