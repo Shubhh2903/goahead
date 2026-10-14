@@ -1227,7 +1227,9 @@ export class MessagingService {
       const live = this.#live.get(link.connectionId);
       const user = live?.identity?.user;
       if (!live || !user) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
-      if (this.#threads.runningOrigin(link.linkId)?.origin.authorId !== user.id)
+      // Only the person's own words: a teammate's answer here carries their origin, not their words.
+      const running = this.#threads.runningOrigin(link.linkId);
+      if (!running?.fromPerson || running.origin.authorId !== user.id)
         throw new Error(sourceText("error.messaging.inboxOwnerOnly"));
       return live;
     }
@@ -2437,8 +2439,9 @@ export class MessagingService {
     if (refused) throw new Error(refused);
     const { adapter } = live;
     const running = this.#threads.runningOrigin(link.linkId);
-    // Only the person's own request goes out as them. Anyone else's goes out as the GoAhead app.
-    const ownRequest = running?.origin.authorId === approverId;
+    // Only the person's own request goes out as them. Anyone else's, and a teammate's answer that
+    // carries the person's origin, goes out as the GoAhead app.
+    const ownRequest = running?.fromPerson === true && running.origin.authorId === approverId;
     // Even the person's own request waits for them when it goes to someone GoAhead never wrote to, or
     // in quiet hours: an agent that a message tricked must not reach a stranger as them.
     const quiet = inQuietHours(this.#guards.get(live.record.workspaceId).quietHours, new Date());

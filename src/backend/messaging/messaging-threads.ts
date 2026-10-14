@@ -438,13 +438,21 @@ export class MessagingThreads {
     });
   }
 
-  /** The requester of the turn that runs now in this link, if one runs. */
-  runningOrigin(linkId: string): { turnId: string; origin: MessagingOrigin } | null {
+  /**
+   * The requester of the turn that runs now in this link, if one runs. `fromPerson` is true only when
+   * every delivery of that turn is a person's message: a teammate's answer carries the requester's
+   * origin, but its words are the teammate's.
+   */
+  runningOrigin(linkId: string): { turnId: string; origin: MessagingOrigin; fromPerson: boolean } | null {
     const running = this.#mailbox
       .unresolvedMessagingDeliveries(linkId)
       .find((context) => context.delivery.status === "running" && context.delivery.turnId);
     const origin = running ? this.#mailbox.messagingOrigin(running.delivery.id) : null;
-    return running?.delivery.turnId && origin ? { turnId: running.delivery.turnId, origin } : null;
+    if (!running?.delivery.turnId || !origin) return null;
+    const turnId = running.delivery.turnId;
+    const deliveries = this.#mailbox.findDeliveriesByTurn(running.delivery.recipientAgentId, turnId);
+    const fromPerson = deliveries.length > 0 && deliveries.every(({ delivery }) => delivery.sender.kind === "user");
+    return { turnId, origin, fromPerson };
   }
 
   /** Stops what one author asked for in this link: the running turn and queued messages. */
