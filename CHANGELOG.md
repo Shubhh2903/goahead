@@ -6,6 +6,23 @@ All notable changes to OpenBot will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-10-14
+
+### Changed
+
+- Claude agents no longer load your personal Claude Code plugins, skills, subagents, hooks and personal CLAUDE.md. Each agent starts with less context and runs no personal hook on each turn. The project settings and skills of the agent's workspace still load, and the environment and sign-in helper commands of your Claude Code settings still apply.
+- Slack auto-reply uses fewer tokens. Each Slack conversation gets a short-lived reply context, not
+  the Slack Orchestrator's main chat. A reply sends only the new messages. On Claude, a reply uses
+  Claude Sonnet 5.5 at low effort with only the Slack send tool. The orchestrator's own chats
+  keep its model.
+- Auto-reply waits 20 seconds after the last message (at most 90 seconds) and pauses after 6 fast
+  replies in a row. Before, it waited 10 seconds (at most 60) and paused after 10 replies.
+- The "Auto-reply paused" card shows in the orchestrator's chat without a model turn.
+
+### Fixed
+
+- The usage view no longer counts a resumed Claude session twice. Before, the first turn after an agent was idle for 10 minutes, or after GoAhead restarted, added the whole session's tokens and cost again.
+
 ## [0.36.0] - 2026-10-14
 
 ### Added
