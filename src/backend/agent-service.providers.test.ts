@@ -2663,6 +2663,8 @@ describe.sequential("AgentService: providers", () => {
         { id: "antigravity", state: "not-installed", version: null },
         { id: "cursor", state: "not-installed", version: null },
         { id: "cline", state: "not-installed", version: null },
+        { id: "pi", state: "not-installed", version: null },
+        { id: "muse", state: "not-installed", version: null },
         { id: "acp", state: "not-installed", version: null },
       ],
       // Unavailable because no Computer Use driver was given to this service. It no longer follows

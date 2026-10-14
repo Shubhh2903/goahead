@@ -137,6 +137,40 @@ const CONNECTING_STATUS: Record<AgentProviderId, AgentStatus> = {
     message: null,
     fullAccess: true,
   },
+  pi: {
+    phase: "blocked",
+    cliVersion: "1.1.0",
+    auth: { kind: "unknown" },
+    providers: [
+      {
+        id: "pi",
+        state: "sign-in-required",
+        connectionState: "connecting",
+        version: "1.1.0",
+        message: null,
+      },
+    ],
+    capabilities: { chat: "unavailable", browser: "ready", computerUse: "unavailable" },
+    message: null,
+    fullAccess: true,
+  },
+  muse: {
+    phase: "blocked",
+    cliVersion: "1.4.4-R5419.1",
+    auth: { kind: "unknown" },
+    providers: [
+      {
+        id: "muse",
+        state: "sign-in-required",
+        connectionState: "connecting",
+        version: "1.4.4-R5419.1",
+        message: null,
+      },
+    ],
+    capabilities: { chat: "unavailable", browser: "ready", computerUse: "unavailable" },
+    message: null,
+    fullAccess: true,
+  },
   acp: {
     phase: "blocked",
     cliVersion: null,
@@ -1181,6 +1215,10 @@ export function installOpenbotStub(): void {
     }),
     customAgents: stubGroup(IPC_ENDPOINTS.customAgents, "customAgents", {
       list: vi.fn().mockResolvedValue([]),
+    }),
+    acpRegistry: stubGroup(IPC_ENDPOINTS.acpRegistry, "acpRegistry", {
+      search: vi.fn().mockResolvedValue([]),
+      status: vi.fn().mockResolvedValue([]),
     }),
     // Onboarding and the Providers section of Server settings scan on their own, so a scan finds nothing by default.
     providerDetection: stubGroup(IPC_ENDPOINTS.providerDetection, "providerDetection", {

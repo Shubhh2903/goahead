@@ -103,6 +103,8 @@ export type CustomProvidersDesktopApi = GroupApi<IpcEndpoints["customProviders"]
  */
 export type ProviderDetectionDesktopApi = GroupApi<IpcEndpoints["providerDetection"]>;
 export type CustomAgentsDesktopApi = GroupApi<IpcEndpoints["customAgents"]>;
+/** The ACP registry of this computer: search, install, update, cancel and runtime removal. */
+export type AcpRegistryDesktopApi = GroupApi<IpcEndpoints["acpRegistry"]>;
 
 /**
  * The providers of one server's host: code sign-in, API keys, managed CLI runtimes and custom
@@ -145,6 +147,7 @@ export interface OpenBotDesktopApi extends GroupApi<IpcEndpoints["app"]>, GroupA
   customProviders: CustomProvidersDesktopApi;
   providerDetection: ProviderDetectionDesktopApi;
   customAgents: CustomAgentsDesktopApi;
+  acpRegistry: AcpRegistryDesktopApi;
   providerAdmin: ProviderAdminDesktopApi;
   hostAdmin: HostAdminDesktopApi;
   messaging: MessagingDesktopApi;

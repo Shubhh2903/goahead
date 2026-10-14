@@ -131,7 +131,11 @@ function isZipTreeName(name: string, root: string): boolean {
   if (name.includes("\0") || name.includes("\\")) return false;
   const parts = name.replace(/\/$/u, "").split("/");
   // A `:` names an NTFS stream on Windows, which would write beside the file rather than into it.
-  return parts[0] === root && parts.every((part) => part && part !== "." && part !== ".." && !part.includes(":"));
+  // An empty `root` is an archive whose files sit at its top level, as Pi's Windows archive does.
+  return (
+    (root === "" || parts[0] === root) &&
+    parts.every((part) => part && part !== "." && part !== ".." && !part.includes(":"))
+  );
 }
 
 async function readZipDirectory(

@@ -63,7 +63,86 @@ const ACP_REGISTRY_TARGETS: Record<RuntimeTarget, string> = {
   "win32-x64": "windows-x86_64",
 };
 
+/** Muse's manifest name for each target. */
+const MUSE_TARGETS: Record<RuntimeTarget, string> = {
+  "darwin-arm64": "aarch64_macos",
+  "darwin-x64": "x86_macos",
+  "linux-arm64": "aarch64_linux",
+  "linux-x64": "x86_linux",
+  "win32-x64": "x86_windows",
+};
+
 const LATEST_RELEASES: Record<ManagedProviderId, (context: LatestReleaseContext) => Promise<RuntimeSpec>> = {
+  // Pi publishes each archive on its GitHub release, with GitHub's SHA-256 `digest`.
+  pi: async ({ target, lock, fetch }) => {
+    const pinned = providerRuntimeDescriptor("pi").spec(target, lock);
+    const release = await fetchJson(fetch, "https://api.github.com/repos/earendil-works/pi/releases/latest", {
+      Accept: "application/vnd.github+json",
+    });
+    // Pi tags a release `v<version>`, not with Codex's `rust-v` prefix.
+    const version = isString(release.tag_name) ? (/^v(\d+\.\d+\.\d+)$/u.exec(release.tag_name)?.[1] ?? null) : null;
+    const assetName = `pi-${target.replace("win32", "windows")}.${target === "win32-x64" ? "zip" : "tar.gz"}`;
+    const asset = Array.isArray(release.assets)
+      ? release.assets.find((entry: unknown) => isDynamicRecord(entry) && entry.name === assetName)
+      : null;
+    const sha256 =
+      isDynamicRecord(asset) && isString(asset.digest) ? /^sha256:([0-9a-f]{64})$/u.exec(asset.digest)?.[1] : null;
+    if (!(version && sha256 && isDynamicRecord(asset) && isNumber(asset.size) && asset.size > 0)) {
+      throw new Error(sourceText("error.provider.nativeArchiveInvalid"));
+    }
+    return {
+      ...pinned,
+      source: "latest",
+      version,
+      packageVersion: version,
+      url: `https://github.com/earendil-works/pi/releases/download/v${version}/${assetName}`,
+      archiveDigest: { algorithm: "sha256", hex: sha256 },
+      downloadBytes: asset.size,
+    };
+  },
+  // Muse names its stable version in a channel, and each binary with its SHA-256 in a manifest.
+  muse: async ({ target, lock, fetch }) => {
+    const pinned = providerRuntimeDescriptor("muse").spec(target, lock);
+    const channel = await fetchJson(fetch, "https://api.meta.ai/muse-code/channels/muse-stable");
+    if (!isString(channel.version) || !/^\d+\.\d+\.\d+-R\d+(?:\.\d+)?$/u.test(channel.version)) {
+      throw new Error(sourceText("error.provider.nativeArchiveInvalid"));
+    }
+    const base = `https://lookaside.facebook.com/lookaside/muse/download/?channel=muse&version=${encodeURIComponent(channel.version)}&file=`;
+    const manifest = await fetchJson(fetch, `${base}manifest.json`);
+    const asset = isDynamicRecord(manifest.artifacts) ? manifest.artifacts[MUSE_TARGETS[target]] : null;
+    if (
+      manifest.version !== channel.version ||
+      manifest.checksum_algorithm !== "sha256" ||
+      !isDynamicRecord(asset) ||
+      !isString(asset.checksum) ||
+      !/^[a-f0-9]{64}$/u.test(asset.checksum) ||
+      !isNumber(asset.size) ||
+      asset.size <= 0 ||
+      !isString(asset.url)
+    ) {
+      throw new Error(sourceText("error.provider.nativeArchiveInvalid"));
+    }
+    // The manifest names the download. Only Meta's own download path for this version is accepted.
+    const url = new URL(asset.url);
+    if (
+      url.origin !== "https://lookaside.facebook.com" ||
+      url.pathname !== "/lookaside/muse/download/" ||
+      url.searchParams.get("version") !== channel.version ||
+      url.searchParams.get("channel") !== "muse"
+    ) {
+      throw new Error(sourceText("error.provider.nativeArchiveInvalid"));
+    }
+    return {
+      ...pinned,
+      source: "latest",
+      version: channel.version,
+      packageVersion: channel.version,
+      url: url.toString(),
+      archiveDigest: { algorithm: "sha256", hex: asset.checksum },
+      downloadBytes: asset.size,
+      installedBytes: asset.size,
+    };
+  },
   codex: async ({ target, lock, fetch }) => {
     const pinned = providerRuntimeDescriptor("codex").spec(target, lock);
     const api = lock.codex.repository.replace("https://github.com/", "https://api.github.com/repos/");

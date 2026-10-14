@@ -294,6 +294,8 @@ describe("OnboardingFlow", () => {
       antigravity: { phase: "not-downloaded", progress: null, message: null, version: null },
       cursor: { phase: "not-downloaded", progress: null, message: null, version: null },
       cline: { phase: "not-downloaded", progress: null, message: null, version: null },
+      pi: { phase: "not-downloaded", progress: null, message: null, version: null },
+      muse: { phase: "not-downloaded", progress: null, message: null, version: null },
       opencode: { phase: "not-downloaded", progress: null, message: null, version: null },
     };
     const [agentStatus, setAgentStatus] = createSignal(initialAgentStatus);
@@ -378,6 +380,8 @@ describe("OnboardingFlow", () => {
       antigravity: { phase: "not-downloaded", progress: null, message: null, version: null },
       cursor: { phase: "not-downloaded", progress: null, message: null, version: null },
       cline: { phase: "not-downloaded", progress: null, message: null, version: null },
+      pi: { phase: "not-downloaded", progress: null, message: null, version: null },
+      muse: { phase: "not-downloaded", progress: null, message: null, version: null },
       opencode: { phase: "not-downloaded", progress: null, message: null, version: null },
     };
     const onDownloadProvider = vi.fn();
@@ -465,6 +469,8 @@ describe("OnboardingFlow", () => {
       antigravity: { phase: "not-downloaded", progress: null, message: null, version: null },
       cursor: { phase: "not-downloaded", progress: null, message: null, version: null },
       cline: { phase: "not-downloaded", progress: null, message: null, version: null },
+      pi: { phase: "not-downloaded", progress: null, message: null, version: null },
+      muse: { phase: "not-downloaded", progress: null, message: null, version: null },
       opencode: { phase: "ready", progress: 100, message: null, version: "1.18.27" },
     };
     const onConnectProvider = vi.fn();
@@ -527,6 +533,8 @@ describe("OnboardingFlow", () => {
       antigravity: { phase: "not-downloaded", progress: null, message: null, version: null },
       cursor: { phase: "not-downloaded", progress: null, message: null, version: null },
       cline: { phase: "not-downloaded", progress: null, message: null, version: null },
+      pi: { phase: "not-downloaded", progress: null, message: null, version: null },
+      muse: { phase: "not-downloaded", progress: null, message: null, version: null },
       opencode: { phase: "not-downloaded", progress: null, message: null, version: null },
     });
     const view = render(() => (
@@ -592,6 +600,8 @@ describe("OnboardingFlow", () => {
       antigravity: { phase: "not-downloaded", progress: null, message: null, version: null },
       cursor: { phase: "not-downloaded", progress: null, message: null, version: null },
       cline: { phase: "not-downloaded", progress: null, message: null, version: null },
+      pi: { phase: "not-downloaded", progress: null, message: null, version: null },
+      muse: { phase: "not-downloaded", progress: null, message: null, version: null },
       opencode: { phase: "not-downloaded", progress: null, message: null, version: null },
     };
     const view = render(() => (

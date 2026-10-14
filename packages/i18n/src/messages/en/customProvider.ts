@@ -211,4 +211,14 @@ export const messages = defineMessages("customProvider", {
   "customProvider.list.confirmTitle": "Remove {name}?",
   "customProvider.list.confirmDescription":
     "Its API key is discarded, its models disappear from the picker, and any agent using one falls back to a default model.",
+  "customProvider.registry.title": "ACP registry",
+  "customProvider.registry.description":
+    "Install agents on this host. Remove runtime keeps agent settings, credentials, and conversations.",
+  "customProvider.registry.search": "Search registry",
+  "customProvider.registry.empty": "No agents match this search.",
+  "customProvider.registry.agentId": "Custom agent ID",
+  "customProvider.registry.install": "Install",
+  "customProvider.registry.update": "Update",
+  "customProvider.registry.remove": "Remove runtime",
+  "customProvider.registry.failed": "The registry operation failed.",
 });

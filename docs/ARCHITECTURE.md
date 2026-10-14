@@ -1485,6 +1485,49 @@ adds `cline` to `projection_provider_sessions`.
 Team API v1–v5 do not know `cline`. The host hides Cline agents, models, status, and sign-in state
 from peers on those versions, as for Cursor. Team API v6 and `providers-v4` carry it, as for Cursor.
 
+### Pi and Muse
+
+These two providers do not use ACP. `pi-client.ts` starts `pi --mode rpc` (`pi-rpc.ts` owns the
+request IDs and the line framing). A successful `prompt` response only accepts the prompt;
+`agent_settled` completes the turn. Cancellation clears the queued work before `abort`. A thread
+keeps its Pi session file and active branch across restarts and provider switches. Models come from
+the running CLI. `pi-mcp.ts` writes a temporary extension that calls Pi's `registerMcpServer` for
+the enabled MCP servers and the GoAhead tool bridge; secrets go through the process environment and
+never into the extension file. Sign in is the `terminal` sign-in kind: `provider-terminal-login.ts`
+opens Pi in a terminal on the host (Terminal on macOS, PowerShell on Windows, `xterm` on Linux), and
+the provider is checked again when it closes. `resolvePiCli` refuses a CLI older than 1.1.0.
+
+`muse-client.ts` runs `muse serve` over MSP through `@muse-code/sdk`, pinned to 1.4.2 (MIT). It
+supplies the session MCP servers, keeps the native session identity, and reads durable history to
+recover missed events before a turn completes. A cached model list does not prove a sign-in, so
+the client reports the account as `muse-unverified` and the status asks for a sign-in, as upstream
+OpenBot does. Sign in runs `muse login`; a Meta API key is stored in the provider credential store,
+as the OpenCode Go key is. Muse cannot generate an agent profile without tools, so its profile client
+fails before the CLI starts.
+
+`native-provider-runtime.ts` stages both downloads: Pi's release archive (its `pi` folder becomes
+`bin`) and Muse's single binary. A pinned install is checked file by file against `files` in
+`native-runtime.lock.json`. Update checks read GitHub releases for Pi and Meta's stable channel and
+manifest for Muse, both with SHA-256. `piStatePaths` and `museStatePaths` let a confined process
+write only session data; settings, credentials, extensions, hooks, and plugins stay read-only, and
+`.pi` and `.muse` are protected project settings. Migration 32 removed the provider CHECK, so these
+providers need no table rebuild.
+
+No released Team API protocol knows `pi` or `muse`. `isPeerHiddenProvider` hides their agents,
+models, status, and sign-in state from every peer, and GoAhead adds no protocol version for them.
+Upstream OpenBot's Team API v7, `providers-v5`, and `agent-session-settings-v1` are not ported.
+
+### ACP registry
+
+`src/main/acp-registry.ts` reads `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`
+and installs an entry as a custom agent on this computer only, through local IPC. Install records
+are kept apart from `custom-agents.json`. Native and npm distributions are staged and checked
+against the published integrity data; a `uvx` entry needs `uvx` on the host. An ACP `initialize`
+check runs before the new command replaces the old one, so a failed or cancelled install keeps the
+previous command. Remove runtime runs inside `withCustomAgentRuntimeRemoval`: it waits for custom
+agent starts, refuses while an ACP turn runs, stops the custom agent processes, deletes the managed
+files, and keeps the saved agent, its environment values, workspaces, and conversations.
+
 Team API v4 has its own frozen provider-aware schema and adapters. Versions 1–3 remain registered
 with their released provider vocabulary. The host filters OpenCode agents, models, status,
 sidebar references, and runtime events before encoding an older client's response. Requests for

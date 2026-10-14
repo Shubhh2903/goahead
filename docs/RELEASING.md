@@ -310,6 +310,18 @@ SHA-256 and size, the SHA-256 of `bin/cline` (`bin/cline.exe` on Windows) and of
 packages have no license file, so set `licenseSha256` to the SHA-256 of `LICENSE` at the
 `cli-v<version>` tag of `github.com/cline/cline`.
 
+## Pin the Pi and Muse CLIs
+
+`native-runtime.lock.json` pins both by hand, with the values of upstream OpenBot's lock.
+For Pi, set `version` to a GitHub release of `github.com/earendil-works/pi`. For each target,
+download `pi-<os>-<arch>.tar.gz` (`pi-windows-x64.zip` on Windows), and set `url`, the archive
+SHA-256 (GitHub's asset `digest`) and size, `installedBytes` above the extracted size, and the
+SHA-256 of each file in `files`, under `bin/`. For Muse, read the version from
+`api.meta.ai/muse-code/channels/muse-stable` and the manifest from
+`lookaside.facebook.com/lookaside/muse/download/?channel=muse&version=<version>&file=manifest.json`.
+Set `url`, the binary SHA-256 and size for each target, and `files` to `bin/muse` (`bin/muse.exe` on
+Windows) with the same SHA-256. Muse is proprietary: do not commit the binaries.
+
 ## Pin the OpenCode CLI
 
 `native-runtime.lock.json` also pins the OpenCode CLI that GoAhead downloads for the OpenCode

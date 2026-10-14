@@ -136,4 +136,7 @@ export const messages = defineMessages("provider", {
   "provider.openCodeKey.saveFailed": "Could not save the key.",
   "provider.openCodeKey.removeFailed": "Could not remove the key.",
   "provider.openCodeKey.reconnectFailed": "Could not reconnect.",
+  "provider.museKey.title": "Meta API key for Muse",
+  "provider.museKey.description": "Save a Meta API key on the host, or use the Muse CLI to sign in.",
+  "provider.museKey.label": "Meta API key",
 });

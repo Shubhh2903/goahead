@@ -43,6 +43,8 @@ const providerRuntimeStatuses: ProviderRuntimeSnapshot["providers"] = {
   antigravity: { phase: "downloading", progress: 12, message: null, version: null },
   cursor: { phase: "not-downloaded", progress: null, message: null, version: null },
   cline: { phase: "not-downloaded", progress: null, message: null, version: null },
+  pi: { phase: "not-downloaded", progress: null, message: null, version: null },
+  muse: { phase: "not-downloaded", progress: null, message: null, version: null },
 };
 
 /** Four connected runtimes, one of which has a newer version waiting. */
@@ -98,6 +100,8 @@ const providerUpdateRuntimeStatuses: ProviderRuntimeSnapshot["providers"] = {
   antigravity: { phase: "ready", progress: 100, message: null, version: "1.2.1" },
   cursor: { phase: "ready", progress: 100, message: null, version: "2026.09.28-64d2043" },
   cline: { phase: "ready", progress: 100, message: null, version: "3.0.68" },
+  pi: { phase: "not-downloaded", progress: null, message: null, version: null },
+  muse: { phase: "not-downloaded", progress: null, message: null, version: null },
 };
 
 /** The Providers section of Server settings, with the providers of this computer. */

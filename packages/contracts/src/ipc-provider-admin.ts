@@ -94,6 +94,15 @@ export function decodeProviderRuntimeSnapshot(value: unknown): ProviderRuntimeSn
         providers.cline === undefined
           ? { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null }
           : decodeProviderRuntimeStatus(providers.cline),
+      // No released `providers-*` route carries Pi or Muse; only this computer's snapshot names them.
+      pi:
+        providers.pi === undefined
+          ? { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null }
+          : decodeProviderRuntimeStatus(providers.pi),
+      muse:
+        providers.muse === undefined
+          ? { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null }
+          : decodeProviderRuntimeStatus(providers.muse),
     },
     toolRuntimes: { bun: decodeProviderRuntimeStatus(toolRuntimes.bun) },
   };

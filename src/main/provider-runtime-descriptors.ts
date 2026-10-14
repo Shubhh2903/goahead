@@ -31,6 +31,7 @@ import {
   parseOpencodeVersion,
 } from "../backend/cli";
 import { sha256File } from "../backend/file-hash";
+import { nativeProviderRuntime } from "./native-provider-runtime";
 import {
   assertSafeArchive,
   extractArchive,
@@ -84,7 +85,7 @@ export const INSTALL_RECORD = "openbot-install.json";
 
 /** Everything a staging step may use. `downloadSmallFile` is passed in so fetching stays private
  *  to the manager: a descriptor can ask for a checksummed LICENSE, and nothing else. */
-interface ProviderStageContext {
+export interface ProviderStageContext {
   readonly spec: RuntimeSpec;
   /** The verified archive or bare binary the manager downloaded. */
   readonly downloadedPath: string;
@@ -210,6 +211,8 @@ function layoutManifest(fields: Record<string, string>): string {
 }
 
 const PROVIDER_RUNTIME_DESCRIPTORS: Record<ManagedRuntimeId, ProviderRuntimeDescriptor> = {
+  pi: nativeProviderRuntime("pi"),
+  muse: nativeProviderRuntime("muse"),
   codex: {
     runtime: "codex",
     spec: (target, lock) => {

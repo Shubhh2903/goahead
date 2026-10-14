@@ -203,6 +203,8 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
       antigravity: emptyStatus(unsupportedMessage),
       cursor: emptyStatus(unsupportedMessage),
       cline: emptyStatus(unsupportedMessage),
+      pi: emptyStatus(unsupportedMessage),
+      muse: emptyStatus(unsupportedMessage),
       bun: emptyStatus(unsupportedMessage),
     };
   }

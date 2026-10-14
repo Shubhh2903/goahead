@@ -4,6 +4,7 @@ import { AgentDatabaseSupervisor } from "../backend/agent-data/agent-database-su
 import { AgentTables } from "../backend/agent-data/agent-tables";
 import { createHostRoutineFlows } from "../backend/routine-flows/routine-flow-host";
 import type { RoutineFlows } from "../backend/routine-flows/routine-flows";
+import { type AcpRegistry, createAcpRegistry } from "./acp-registry";
 import { type AgentAdminSettingsService, createAgentAdminSettings } from "./agent-admin-settings";
 import { spawnAgentDatabaseHost } from "./agent-database-host-process";
 import { LocalSkillLibrary } from "./local-skill-library";
@@ -265,6 +266,8 @@ const TEARDOWN_ORDER = {
   browser: 30,
   browserPictureInPicture: 40,
   browserView: 45,
+  // Before the provider runtimes: a cancelled installation stops its installer process first.
+  acpRegistry: 49,
   providerRuntimes: 50,
   cuaDriver: 55,
   remoteServers: 60,
@@ -377,6 +380,7 @@ export interface ApplicationServices {
   customProviders: CustomProviderStore;
   customProviderChanges: CustomProviderChanges;
   customAgentChanges: CustomAgentChanges;
+  acpRegistry: AcpRegistry;
   providerDetection: ProviderDetection;
   providerDetectionSettings: ProviderDetectionSettingsStore;
   marketplaceAgents: AgentMarketplaceService;
@@ -1310,6 +1314,12 @@ export async function createApplicationServices({
   const agentAdminSettings = createAgentAdminSettings({ agents: service, approvalAutomation });
   const customProviderChanges = createCustomProviderChanges({ service, customProviders });
   const customAgentChanges = createCustomAgentChanges({ service, customAgents });
+  const acpRegistry = createAcpRegistry({
+    directory: app.getPath("userData"),
+    customAgentChanges,
+    withRuntimeRemoval: (_ids, operation) => service.withCustomAgentRuntimeRemoval(operation),
+  });
+  teardown.push(TEARDOWN_ORDER.acpRegistry, "ACP registry installations", () => acpRegistry.close());
   // The host comes before the updater, and the restart readiness reads the host. The routes reach
   // the schedule through this, and a request that arrives before it exists is refused.
   let requestedUpdate: RequestedUpdate | undefined;
@@ -1882,6 +1892,7 @@ export async function createApplicationServices({
     customProviders,
     customProviderChanges,
     customAgentChanges,
+    acpRegistry,
     providerDetection,
     providerDetectionSettings,
     marketplaceAgents,

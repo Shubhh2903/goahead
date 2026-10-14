@@ -391,6 +391,73 @@ export async function resolveClineCli(
   );
 }
 
+/** The first Pi CLI with the native RPC mode and the MCP extension interface that GoAhead uses. */
+const MINIMUM_PI_VERSION = [1, 1, 0] as const;
+
+/**
+ * Pi and Muse run their native RPC protocol, not ACP. They resolve with the same precedence as the
+ * other providers: an explicit `OPENBOT_<PROVIDER>_PATH`, then the managed CLI, then `PATH`.
+ */
+async function resolveNativeCli(
+  provider: "pi" | "muse",
+  input: { systemCandidates?: string[]; bundledExecutable?: string | null } = {},
+): Promise<AgentCliInfo> {
+  const candidates = await cliCandidates(provider, input.systemCandidates, input.bundledExecutable ?? null);
+  const name = agentProviderName(provider);
+  const failures: CodexCliError[] = [];
+  for (const candidate of candidates) {
+    if (!(await isExecutable(candidate.executable))) continue;
+    try {
+      const output = await readCliVersion(candidate.executable, provider);
+      const version = provider === "pi" ? parsePiVersion(output) : parseMuseVersion(output);
+      if (provider === "pi" && !isMinimumVersion(version, MINIMUM_PI_VERSION)) {
+        throw new CodexCliError(sourceText("error.provider.piOutdated", { version }), "outdated");
+      }
+      return { executable: candidate.executable, version, source: candidate.source };
+    } catch (error) {
+      if (isCliTimeout(error)) throw error;
+      failures.push(
+        error instanceof CodexCliError
+          ? error
+          : new CodexCliError(sourceText("error.provider.nativeNotStarted", { provider: name }), "invalid"),
+      );
+    }
+  }
+  throw (
+    failures.find((failure) => failure.code === "outdated") ??
+    failures[0] ??
+    new CodexCliError(sourceText("error.provider.nativeMissing", { provider: name }), "missing")
+  );
+}
+
+export function resolvePiCli(
+  input: { systemCandidates?: string[]; bundledExecutable?: string | null } = {},
+): Promise<AgentCliInfo> {
+  return resolveNativeCli("pi", input);
+}
+
+export function resolveMuseCli(
+  input: { systemCandidates?: string[]; bundledExecutable?: string | null } = {},
+): Promise<AgentCliInfo> {
+  return resolveNativeCli("muse", input);
+}
+
+/** Pi prints `1.1.0` or `pi 1.1.0`, with an optional pre-release suffix. */
+export function parsePiVersion(output: string): string {
+  const match = output.trim().match(/(?:^|\s)v?(\d+\.\d+\.\d+)(?:[-+][\w.-]+)?(?:\s|$)/u);
+  if (!match?.[1])
+    throw new CodexCliError(sourceText("error.provider.nativeVersionUnreadable", { provider: "Pi" }), "invalid");
+  return match[1];
+}
+
+/** Muse prints a release such as `1.4.0-R12`. The release suffix is part of the pinned version. */
+export function parseMuseVersion(output: string): string {
+  const match = output.match(/\b\d+\.\d+\.\d+-R\d+(?:\.\d+)?\b/u) ?? output.match(/\b\d+\.\d+\.\d+\b/u);
+  if (!match)
+    throw new CodexCliError(sourceText("error.provider.nativeVersionUnreadable", { provider: "Muse" }), "invalid");
+  return match[0];
+}
+
 export function bundledOpencodeExecutable(
   platform = process.platform,
   architecture = process.arch,

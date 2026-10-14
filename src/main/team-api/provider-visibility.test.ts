@@ -72,4 +72,25 @@ describe("provider visibility", () => {
     expect(hiddenAgentView(payload, new Set(), 5)).toEqual(hidden);
     expect(hiddenAgentView(payload, new Set(), 6)).toEqual(payload);
   });
+
+  it.each(["pi", "muse"])("hides %s from every released protocol, and keeps an endpoint with its id", (provider) => {
+    const payload = {
+      agents: [{ id: `agent-${provider}`, provider, model: "auto" }],
+      providers: [{ id: provider, state: "ready" }],
+      customProviders: [{ id: provider, name: "An endpoint saved before the provider existed" }],
+      cliVersion: "1.1.0",
+      auth: { kind: provider, email: null },
+      message: "Sign in.",
+    };
+    const hidden = {
+      agents: [],
+      providers: [],
+      customProviders: [{ id: provider, name: "An endpoint saved before the provider existed" }],
+      cliVersion: null,
+      auth: { kind: "unknown" },
+      message: null,
+    };
+    expect(legacyProviderView(payload, new Set())).toEqual(hidden);
+    for (const protocol of [4, 5, 6] as const) expect(hiddenAgentView(payload, new Set(), protocol)).toEqual(hidden);
+  });
 });

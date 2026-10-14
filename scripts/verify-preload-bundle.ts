@@ -29,6 +29,7 @@ const GROUP_PATHS: Readonly<Record<IpcGroupName, string | null>> = {
   customProviders: "customProviders",
   providerDetection: "providerDetection",
   customAgents: "customAgents",
+  acpRegistry: "acpRegistry",
   providerAdmin: "providerAdmin",
   messaging: "messaging",
   slackClient: "slackClient",

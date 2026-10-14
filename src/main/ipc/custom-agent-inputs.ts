@@ -9,7 +9,6 @@ import {
   type DeleteCustomAgentInput,
   isCustomAgentEnvName,
   isCustomAgentId,
-  isNewCustomAgentId,
   type SaveCustomAgentInput,
 } from "@openbot/contracts/ipc";
 import { isString } from "@openbot/contracts/runtime-values";
@@ -17,10 +16,12 @@ import { sourceText } from "@openbot/i18n/source";
 import { agentCommandForm } from "../../backend/acp-agent-command";
 import { isObject, requireString } from "./validation";
 
-/** `isNew` refuses a provider added after the agent was saved: only a delete or a check may name it. */
-function parseAgentId(value: unknown, isNew = false): string {
-  if (!isString(value) || !(isNew ? isNewCustomAgentId : isCustomAgentId)(value))
-    throw new Error(sourceText("error.provider.customAgentIdInvalid"));
+/**
+ * A saved custom agent id. The change service refuses a provider name (`isNewCustomAgentId`) only for
+ * a new agent, so an agent saved under a name that a later provider took can still be edited.
+ */
+function parseAgentId(value: unknown): string {
+  if (!isString(value) || !isCustomAgentId(value)) throw new Error(sourceText("error.provider.customAgentIdInvalid"));
   return value;
 }
 
@@ -66,7 +67,7 @@ function parseEnv(value: unknown): CustomAgentEnvInput[] {
 export function parseSaveCustomAgent(input: unknown): SaveCustomAgentInput {
   if (!isObject(input)) throw new Error(sourceText("error.provider.customAgentCommandInvalid"));
   return {
-    id: parseAgentId(input.id, true),
+    id: parseAgentId(input.id),
     name: requireString(input.name, "Display name", INPUT_LIMITS.agentName).trim(),
     command: parseCommand(input.command),
     args: parseArgs(input.args),

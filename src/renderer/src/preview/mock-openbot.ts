@@ -1,5 +1,6 @@
 import {
   type AccountUsage,
+  type AcpRegistryEntry,
   type AgentEvent,
   type AgentHandoff,
   type AgentMemory,
@@ -256,6 +257,17 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
   let hostedSites = clone(STORY_HOSTED_SITES);
   let detectionSettings: ProviderDetectionSettings = clone(DEFAULT_PROVIDER_DETECTION_SETTINGS);
   let customAgents: CustomAgentSummary[] = [];
+  const registryEntry: AcpRegistryEntry = {
+    id: "example-acp",
+    name: "Example ACP",
+    version: "1.0.0",
+    description: "Preview agent",
+    website: null,
+    license: "MIT",
+    distributions: ["binary"],
+    installedVersion: null,
+    customAgentId: null,
+  };
   // The same two endpoints the model-picker stories invent, so preview shows one list everywhere.
   let customProviders = clone(
     options.customProviders ?? [
@@ -669,6 +681,44 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
         );
         emitAgentEvent({ type: "status", status: clone(agentStatus) });
         return { providers: clone(customProviders), restart: "restarted" };
+      },
+    },
+    // Preview downloads nothing: an install saves a custom agent with a preview command.
+    acpRegistry: {
+      search: async (query) =>
+        clone(!query || registryEntry.name.toLowerCase().includes(query.toLowerCase()) ? [registryEntry] : []),
+      installed: async () =>
+        registryEntry.installedVersion && registryEntry.customAgentId
+          ? [
+              {
+                registryId: registryEntry.id,
+                customAgentId: registryEntry.customAgentId,
+                version: registryEntry.installedVersion,
+                distribution: "binary",
+              },
+            ]
+          : [],
+      status: async () => [],
+      install: async (input) => {
+        registryEntry.installedVersion = registryEntry.version;
+        registryEntry.customAgentId = input.customAgentId;
+        if (!customAgents.some((agent) => agent.id === input.customAgentId))
+          customAgents = [
+            ...customAgents,
+            {
+              id: input.customAgentId,
+              name: input.name ?? registryEntry.name,
+              command: "/preview/example-acp",
+              args: [],
+              envNames: [],
+              resolvedCommand: "/preview/example-acp",
+            },
+          ];
+        return { agents: clone(customAgents), restart: "not-running" };
+      },
+      cancel: async () => undefined,
+      remove: async () => {
+        registryEntry.installedVersion = null;
       },
     },
     // Preview starts no process: the names are kept, the values are dropped, and a check answers

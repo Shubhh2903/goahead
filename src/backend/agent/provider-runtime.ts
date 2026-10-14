@@ -46,6 +46,7 @@ import {
   requireProviderDriver,
   savedCustomAgents,
 } from "./../provider-drivers";
+import { startProviderTerminalLogin } from "../provider-terminal-login";
 import { recordRestartActivity } from "../restart-activity";
 import { shortenDiagnostic } from "./../stderr-diagnostics";
 import { stopProcessTree } from "../windows-process-tree";
@@ -123,6 +124,8 @@ const SPAWN_ENVIRONMENT_PROVIDERS: readonly AgentProvider[] = [
   "antigravity",
   "cursor",
   "cline",
+  "pi",
+  "muse",
   "acp",
 ];
 
@@ -263,6 +266,8 @@ const INITIAL_STATUS: AgentStatus = {
     { id: "antigravity", state: "not-started", version: null, message: null },
     { id: "cursor", state: "not-started", version: null, message: null },
     { id: "cline", state: "not-started", version: null, message: null },
+    { id: "pi", state: "not-started", version: null, message: null },
+    { id: "muse", state: "not-started", version: null, message: null },
     { id: "acp", state: "not-started", version: null, message: null },
   ],
   capabilities: {
@@ -335,6 +340,8 @@ export class ProviderRuntime implements ProviderPort {
   readonly #providerStarts = new Map<AgentProvider, Promise<void>>();
   readonly #providerConnectionCommands = new Map<AgentProvider, Promise<void>>();
   readonly #replacingCli = new Set<AgentProvider>();
+  /** True while an ACP registry removal deletes managed agent files: no custom agent process may start. */
+  #removingCustomRuntime = false;
   /**
    * Providers whose idle process was stopped to give its memory back. Each one keeps its status,
    * account and models, so every view reads it as connected; `ensureProvider` starts it again.
@@ -456,8 +463,14 @@ export class ProviderRuntime implements ProviderPort {
       providers: status.providers.map((row) => {
         const source = this.#cli.get(row.id)?.source ?? this.#cliSources.get(row.id);
         const lastError = this.#lastErrors.get(row.id);
+        // A cached Muse model list does not prove a sign-in: Muse reports the account as unverified.
+        const unverified =
+          row.id === "muse" && row.state === "available" && this.#accounts.get(row.id)?.type === "muse-unverified";
         const withSource = {
           ...row,
+          ...(unverified
+            ? { state: "sign-in-required" as const, message: sourceText("error.provider.museAuthUnverified") }
+            : {}),
           ...(source ? { cliSource: source } : {}),
           ...(lastError ? { lastError: lastError.message, lastErrorAt: lastError.at } : {}),
         };
@@ -590,6 +603,7 @@ export class ProviderRuntime implements ProviderPort {
   }
 
   createProfileClient(provider: AgentProvider): AgentClient {
+    this.#refuseDuringCustomRuntimeRemoval(provider);
     const cli = this.#cli.get(provider);
     if (!cli || !this.#clients.has(provider)) throw new Error(sourceText("error.provider.connectBeforeProfile"));
     if (this.#clientFactory) return this.#clientFactory(provider, cli);
@@ -711,6 +725,7 @@ export class ProviderRuntime implements ProviderPort {
   }
 
   async ensureProvider(provider: AgentProvider): Promise<void> {
+    this.#refuseDuringCustomRuntimeRemoval(provider);
     this.#lastUsed.set(provider, Date.now());
     if (this.#clients.has(provider)) return;
     let start = this.#providerStarts.get(provider);
@@ -745,6 +760,8 @@ export class ProviderRuntime implements ProviderPort {
 
   async refreshProvider(provider: AgentProvider): Promise<AgentStatus> {
     if (this.#clients.has(provider)) return this.status();
+    // The removal starts the custom agents again when it ends.
+    if (provider === "acp" && this.#removingCustomRuntime) return this.status();
     this.#resetRestarts(provider);
     let start = this.#providerStarts.get(provider);
     if (!start) {
@@ -808,6 +825,11 @@ export class ProviderRuntime implements ProviderPort {
           // Nothing to spawn: the user signs in with the provider's own CLI in a terminal, and
           // Connect only asks the provider again whether that has happened.
           return this.#reprobeProvider(provider);
+        case "terminal":
+          // The CLI signs in only in its own interactive interface, so the host opens it in a
+          // terminal and asks the provider again when that terminal closes.
+          await this.#cancelCliLogin(provider, null);
+          return this.#startCliLogin(provider, (cli) => startProviderTerminalLogin(cli, signIn.timeoutMs));
       }
     });
   }
@@ -960,6 +982,10 @@ export class ProviderRuntime implements ProviderPort {
    * that a turn delays is applied by the idle check after the turn stops, as the saved message says.
    */
   async reloadCustomAgents(): Promise<CustomProviderRestart> {
+    if (this.#removingCustomRuntime) {
+      this.#customAgentsReloadPending = true;
+      return "skipped-busy";
+    }
     this.#customAgentsReloadPending = false;
     const result = await this.#reloadCustomAgents();
     if (result === "skipped-busy") this.#customAgentsReloadPending = true;
@@ -980,6 +1006,38 @@ export class ProviderRuntime implements ProviderPort {
       if (savedCustomAgents(this.#credentials).length === 0) await this.#stopProviderClient("acp");
     }
     return "restarted";
+  }
+
+  /**
+   * Runs `operation` while no custom ACP agent process runs, so an ACP registry removal can delete
+   * the managed files of an agent. A turn in progress wins: the removal is refused and nothing
+   * changes. The custom agents start again when the removal ends, whatever its result.
+   */
+  async withCustomAgentRuntimeRemoval<T>(operation: () => Promise<T>): Promise<T> {
+    return this.#runProviderConnectionCommand("acp", async () => {
+      await this.#providerStarts.get("acp")?.catch(() => undefined);
+      await Promise.all([...this.#confinedStarts.values()].map((start) => start.catch(() => undefined)));
+      if (this.#hooks.isProviderBusy("acp")) throw new Error(sourceText("error.provider.registryRemoveBusy"));
+      this.#removingCustomRuntime = true;
+      this.#replacingCli.add("acp");
+      recordRestartActivity();
+      try {
+        await this.#stopProviderClient("acp");
+        return await operation();
+      } finally {
+        this.#removingCustomRuntime = false;
+        this.#replacingCli.delete("acp");
+        this.#hooks.onProviderResumed("acp");
+        // Queued behind this command: a custom agent change during the removal reaches the router now.
+        if (this.#customAgentsReloadPending) void this.reloadCustomAgents();
+      }
+    });
+  }
+
+  #refuseDuringCustomRuntimeRemoval(provider: AgentProvider): void {
+    if (provider === "acp" && this.#removingCustomRuntime) {
+      throw new Error(sourceText("error.provider.registryRemoveBusy"));
+    }
   }
 
   /** Stops a provider's shared process and every Workspace only process of it, with no restart. */
@@ -1100,6 +1158,7 @@ export class ProviderRuntime implements ProviderPort {
    */
   requireReadyClientForAgent(agent: AgentSummary): AgentClient {
     const provider = providerForAgent(agent);
+    this.#refuseDuringCustomRuntimeRemoval(provider);
     if (!this.#confined.has(agent.id) && !this.#confinementFor(agent)) return this.requireReadyClient(provider);
     const client = this.clientForAgent(agent);
     if (!client) throw new Error(sourceText("error.provider.noAgentProcess", { provider: providerLabel(provider) }));
@@ -1112,6 +1171,7 @@ export class ProviderRuntime implements ProviderPort {
    */
   async ensureAgentClient(agent: AgentSummary): Promise<AgentClient> {
     const provider = providerForAgent(agent);
+    this.#refuseDuringCustomRuntimeRemoval(provider);
     await this.ensureProvider(provider);
     for (let pending = this.#confinedStarts.get(agent.id); pending; pending = this.#confinedStarts.get(agent.id)) {
       await pending.catch(() => undefined);
@@ -1281,6 +1341,7 @@ export class ProviderRuntime implements ProviderPort {
   }
 
   requireReadyClient(provider: AgentProvider): AgentClient {
+    this.#refuseDuringCustomRuntimeRemoval(provider);
     const client = this.clientFor(provider);
     if (!client || this.#status.phase !== "ready") {
       throw new Error(
@@ -1404,6 +1465,7 @@ export class ProviderRuntime implements ProviderPort {
               return this.status();
             case "cli-command":
             case "acp-authenticate":
+            case "terminal":
             case "external":
               // `external` has nothing to cancel, and the call is a no-op without a pending login.
               await this.#cancelCliLogin(driver.id, null);
@@ -1903,7 +1965,12 @@ export class ProviderRuntime implements ProviderPort {
           const account = await client.request("account/read", { refreshToken: false }, decodeAccountReadResult, 5_000);
           if (!account.account) {
             const message =
-              this.#customProviderSignInMessage(provider) ?? agentProviderDescriptor(provider).signInMessage;
+              this.#customProviderSignInMessage(provider) ??
+              (provider === "pi"
+                ? sourceText("error.provider.piSignIn")
+                : provider === "muse"
+                  ? sourceText("error.provider.museSignIn")
+                  : agentProviderDescriptor(provider).signInMessage);
             await client.stop().catch(() => undefined);
             this.#setStatus({
               providers: updateProviderStatus(this.#status.providers, provider, {

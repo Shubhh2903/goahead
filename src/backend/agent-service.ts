@@ -1794,6 +1794,11 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   }
 
   /** Replaces the custom agents' router so a saved or removed agent reaches it. Reports why, if it did not. */
+  /** Runs an ACP registry removal while no custom agent process runs. A turn in progress refuses it. */
+  withCustomAgentRuntimeRemoval<T>(operation: () => Promise<T>): Promise<T> {
+    return this.#providers.withCustomAgentRuntimeRemoval(operation);
+  }
+
   reloadCustomAgents(): Promise<CustomProviderRestart> {
     return this.#providers.reloadCustomAgents();
   }

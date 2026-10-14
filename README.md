@@ -6,7 +6,8 @@
 GoAhead is a local-first desktop workspace for persistent AI teammates. It supports the local
 [Codex App Server](https://learn.chatgpt.com/docs/app-server) and
 [Claude Code](https://code.claude.com/docs/en/overview), plus [Grok CLI](https://docs.x.ai/build/overview),
-OpenCode, Gemini, [Cursor CLI](https://cursor.com/cli), and [Cline CLI](https://cline.bot/cli) through ACP. It gives every agent its own workspace and
+OpenCode, Gemini, [Cursor CLI](https://cursor.com/cli), and [Cline CLI](https://cline.bot/cli) through ACP, and Pi and
+Muse through their native protocols. It gives every agent its own workspace and
 conversation, and provides local queues, file transfers, an embedded browser, and agent-to-agent
 messaging in one desktop app.
 
@@ -19,8 +20,8 @@ messaging in one desktop app.
 ## What works
 
 - Prompt-driven agent creation and editing on desktop and mobile, with editable instructions, avatar, and section review before saving.
-- Persistent agents backed by independent Codex, Claude, Grok, OpenCode, Gemini, Cursor, or Cline sessions and local workspaces.
-- Custom OpenAI-compatible endpoints and custom ACP agents, with detection of local model servers (Ollama, LM Studio) and installed agents.
+- Persistent agents backed by independent Codex, Claude, Grok, OpenCode, Gemini, Cursor, Cline, Pi, or Muse sessions and local workspaces.
+- Custom OpenAI-compatible endpoints and custom ACP agents, with detection of local model servers (Ollama, LM Studio) and installed agents, and install from the ACP registry.
 - Per-agent context monitoring with automatic compaction before long threads exhaust the model window.
 - FIFO message queues with pause, resume, cancellation, and crash-safe persistence.
 - Agent-to-agent messages, replies, reactions, images, and managed file transfers.
@@ -168,6 +169,14 @@ Cline's sign-in page in your browser. You can also set `CLINE_API_KEY` in the en
 launch GoAhead. If you installed `cline` 3.0.68 or newer yourself, GoAhead uses it until a download
 exists. Set `OPENBOT_CLINE_PATH` to select an executable yourself. Cline agents stay on this
 computer: team members do not see them.
+
+Pi runs in its native RPC mode (`pi --mode rpc`), and Muse runs `muse serve` through the official
+Muse SDK. GoAhead downloads and pins each CLI when you select Download on its row in More providers.
+To sign in to Pi, select Connect: Pi opens in a terminal, where you run `/login` and then close Pi.
+Muse signs in with `muse login`, or with a Meta API key that you save in GoAhead. If you installed
+Pi 1.1.0 or newer, or Muse, yourself, GoAhead uses it until a download exists. Set `OPENBOT_PI_PATH`
+or `OPENBOT_MUSE_PATH` to select an executable yourself. Pi and Muse agents stay on this computer:
+team members do not see them.
 
 On Windows, install the native CLI and make sure `codex`, `claude`, or `grok` is available in PowerShell.
 Claude Code also requires Git for Windows. Then authenticate the installed CLI and restart GoAhead.
@@ -499,6 +508,8 @@ video formats, export as MP3 or MOV, or attach a text transcript. Remote hosts m
 - `~/.cursor` — login and session history managed exclusively by the Cursor CLI. A confined Cursor
   process keeps its settings in `~/.cursor/openbot-confined`, so it never changes yours.
 - `~/.cline` (or `$CLINE_DIR`) — login and session history managed exclusively by the Cline CLI.
+- `~/.pi/agent` (or `$PI_CODING_AGENT_DIR`) — login and sessions managed exclusively by the Pi CLI.
+- `~/.local/share/muse` (or `$XDG_DATA_HOME/muse`) — sessions managed exclusively by the Muse CLI.
 
 Deleting an agent removes its workspace, owned generated attachments, and deliveries addressed only
 to that agent. A transfer remains when another agent still uses the same message.

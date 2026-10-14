@@ -27,6 +27,8 @@ export const AGENT_PROVIDERS = [
   "antigravity",
   "cursor",
   "cline",
+  "pi",
+  "muse",
   "acp",
 ] as const;
 export type AgentProviderId = (typeof AGENT_PROVIDERS)[number];
@@ -212,6 +214,41 @@ const AGENT_PROVIDER_DESCRIPTOR_TABLE = {
     workspaceEnforcement: "confined-process",
     steer: "deferred",
   },
+  // Pi in its native `--mode rpc` interface, with no ACP wrapper. Sign-in is `/login` in Pi itself,
+  // in a terminal on the host.
+  pi: {
+    id: "pi",
+    displayName: "Pi",
+    cliName: "Pi CLI",
+    onboardingDescription: "Included with GoAhead",
+    signInMessage: "Use /login in Pi on the host computer. Close Pi when sign-in is complete.",
+    installGuideLink: null,
+    defaultModel: "",
+    legacyModelPrefix: null,
+    authKind: "pi",
+    pickerOrder: 7,
+    codeSignIn: false,
+    skillFolders: [".agents/skills"],
+    workspaceEnforcement: "confined-process",
+    steer: "native",
+  },
+  // Muse runs `muse serve` over MSP through the official `@muse-code/sdk`.
+  muse: {
+    id: "muse",
+    displayName: "Muse",
+    cliName: "Muse CLI",
+    onboardingDescription: "Included with GoAhead",
+    signInMessage: "Sign in to Muse on the host computer to continue.",
+    installGuideLink: null,
+    defaultModel: "",
+    legacyModelPrefix: null,
+    authKind: "muse",
+    pickerOrder: 8,
+    codeSignIn: false,
+    skillFolders: [".agents/skills"],
+    workspaceEnforcement: "confined-process",
+    steer: "native",
+  },
   // One provider for every Agent Client Protocol agent the user adds by command. The model id names
   // the agent (`<customAgentId>/<agentModel>`), so one provider row serves them all and the shipped
   // provider CHECK lists grow by one word only once.
@@ -275,6 +312,8 @@ export const MANAGED_RUNTIME_PROVIDERS = [
   "antigravity",
   "cursor",
   "cline",
+  "pi",
+  "muse",
 ] as const satisfies readonly AgentProviderId[];
 export type ManagedProviderId = (typeof MANAGED_RUNTIME_PROVIDERS)[number];
 
@@ -284,13 +323,15 @@ export function isManagedRuntimeProvider(provider: AgentProviderId): provider is
 
 /**
  * The providers that only newer Team API protocols carry: Gemini and custom ACP agents from protocol
- * 5, Cursor and Cline from protocol 6. A joined server's settings list one only when the host's status
- * names it.
+ * 5, Cursor and Cline from protocol 6. Pi and Muse are in no released protocol yet: a peer never sees
+ * them. A joined server's settings list one only when the host's status names it.
  */
 export const LOCAL_ONLY_PROVIDERS = [
   "antigravity",
   "cursor",
   "cline",
+  "pi",
+  "muse",
   "acp",
 ] as const satisfies readonly AgentProviderId[];
 

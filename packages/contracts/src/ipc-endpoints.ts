@@ -25,6 +25,12 @@ import type {
   HostedServerList,
   HostedServerSummary,
 } from "./hosted-servers";
+import type {
+  AcpRegistryEntry,
+  AcpRegistryInstallation,
+  AcpRegistryInstallInput,
+  AcpRegistryOperation,
+} from "./ipc-acp-registry";
 import type { AddedAgent, AgentAdminSettings, UpdateAgentAdminSettingsInput } from "./ipc-agent-admin";
 import type { AgentAnalytics, AgentAnalyticsInput } from "./ipc-agent-analytics";
 import type { AgentIpcRequest, ScopedAgentEvent } from "./ipc-agent-events";
@@ -620,6 +626,17 @@ export const IPC_ENDPOINTS = {
     setSettings: request<ProviderDetectionSettings, ProviderDetectionSettings>()("provider-detection:set-settings"),
     // Looks for known agent command names only. It starts no file.
     scanAgents: request<undefined, DetectedAcpAgent[]>()("provider-detection:scan-agents"),
+  },
+  // The ACP registry: search, install, update, cancel and runtime removal of managed ACP agents, on
+  // this computer only. No Team API route reaches it. Main fetches the catalog; no command comes
+  // from the renderer.
+  acpRegistry: {
+    search: request<string, AcpRegistryEntry[]>()("acp-registry:search"),
+    installed: request<undefined, AcpRegistryInstallation[]>()("acp-registry:installed"),
+    status: request<undefined, AcpRegistryOperation[]>()("acp-registry:status"),
+    install: request<AcpRegistryInstallInput, CustomAgentResult>()("acp-registry:install"),
+    cancel: request<string, void>()("acp-registry:cancel"),
+    remove: request<string, void>()("acp-registry:remove"),
   },
   // The user's own ACP agents, on this computer only: no Team API route and no `providerAdmin` entry.
   // Environment values travel only towards main.

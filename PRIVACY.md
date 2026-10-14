@@ -740,6 +740,38 @@ process, and are not in a screen, log, data export, or diagnostics report; the d
 them under `scope.excludes`. Custom agents stay on this computer: GoAhead does not show them to
 team members.
 
+### Pi and Muse
+
+GoAhead downloads the Pi CLI from `github.com` and the Muse CLI from `lookaside.facebook.com` when
+you select Download on the Pi or Muse row. Each provider update check asks `api.github.com` for the
+newest Pi release and `api.meta.ai` and `lookaside.facebook.com` for the newest Muse release, also
+when you do not use them. These requests reveal the IP address of this computer and the requested
+file. GoAhead starts each CLI as a local process. Prompts, attached images, tool definitions, and
+the MCP servers you turned on go to that process, and the CLI sends them to the model provider that
+it uses. Pi's license is MIT. Muse is proprietary software, and Meta's terms apply:
+<https://dev.meta.ai/legal/terms-of-service>.
+
+Pi signs in with `/login` in Pi itself: Connect opens Pi in a terminal on this computer. Muse signs
+in with `muse login`, or with a Meta API key that you save in GoAhead. GoAhead encrypts that key with
+the operating system's secret storage, like the OpenCode Go key, and gives it only to the local Muse
+process. No screen, log, data export, or diagnostics report contains the key. Each CLI keeps its
+login and session files in its own folders (`~/.pi/agent` for Pi, `~/.local/share/muse` and Muse's
+configuration folder for Muse). GoAhead does not read, copy, or upload these files. To give Pi the
+MCP servers, GoAhead writes a temporary extension file with no credentials; the MCP secrets go to the
+Pi process in its environment. Pi and Muse agents stay on this computer: GoAhead does not show them
+to team members.
+
+### ACP registry
+
+ACP registry search fetches the catalog from `cdn.agentclientprotocol.com`. The search text is
+matched on this computer and is not sent. Install and Update download the selected agent from the
+source that the registry names, and check the published integrity data when the registry has it.
+These requests reveal the IP address of this computer and the requested file. The installed agent
+is a custom agent: the Custom agents section above applies to it. The install records are in the
+app profile, apart from the custom agent settings, credentials, and conversations. Remove runtime
+deletes only the downloaded files; it keeps the agent's settings, environment values, workspaces,
+and conversations. The registry is on this computer only: team members cannot install agents on it.
+
 ## Shared desktop channels
 
 Channel names, purposes, participating agents, linked conversation references, messages, tasks,

@@ -1,5 +1,6 @@
 import type { CentralAuthUser, ServerSummary } from "@openbot/contracts/ipc";
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
+import type { AcpRegistrySettingsApi } from "@openbot/ui/features/custom-providers/AcpRegistrySettings";
 import type { CustomAgentSettingsApi } from "@openbot/ui/features/custom-providers/CustomAgentSettings";
 import { providerDiagnosticsText } from "@openbot/ui/features/provider-diagnostics/provider-diagnostics";
 import type { BitwardenConnectorPanelProps } from "@openbot/ui/features/settings/BitwardenConnectorPanel";
@@ -20,6 +21,7 @@ import {
 } from "./features/connectors/onepassword-connector";
 import { createSlackConnector } from "./features/connectors/slack-connector";
 import { useCustomAgents } from "./features/custom-agents/custom-agents-context";
+import { customAgentsPort } from "./features/custom-agents/custom-agents-port";
 import { useCustomProviders } from "./features/custom-providers/custom-providers-context";
 import { useProviderDetection } from "./features/custom-providers/provider-detection-context";
 import type { ServerStorageOptions } from "./features/files/ServerStoragePanel";
@@ -299,6 +301,21 @@ function ServerSettings(props: {
   const localEndpoints = useCustomProviders();
   const localAgents = useCustomAgents();
   const detection = useProviderDetection();
+  /**
+   * The ACP registry installs a custom agent on this computer, so only the local server shows it. An
+   * install saves a custom agent, so the list is read again after it.
+   */
+  const acpRegistry: AcpRegistrySettingsApi = {
+    search: (query) => customAgentsPort().acpRegistry.search(query),
+    status: () => customAgentsPort().acpRegistry.status(),
+    install: async (input) => {
+      const result = await customAgentsPort().acpRegistry.install(input);
+      await localAgents.refreshCustomAgents();
+      return result;
+    },
+    cancel: (registryId) => customAgentsPort().acpRegistry.cancel(registryId),
+    remove: (registryId) => customAgentsPort().acpRegistry.remove(registryId),
+  };
   /** A custom agent is a command on this computer, so only the local server lists or runs one. */
   const customAgents: CustomAgentSettingsApi = {
     get agents() {
@@ -447,6 +464,7 @@ function ServerSettings(props: {
         return detection.takenAgentIds();
       },
       customAgents: local ? customAgents : undefined,
+      acpRegistry: local ? acpRegistry : undefined,
       get detectionSettings() {
         return local ? (detection.settingsValue() ?? undefined) : undefined;
       },

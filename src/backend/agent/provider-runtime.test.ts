@@ -154,6 +154,8 @@ describe.sequential("ProviderRuntime: account checks and login", () => {
       antigravity: 0,
       cursor: 0,
       cline: 0,
+      pi: 0,
+      muse: 0,
       acp: 0,
     };
     const availableOrder: AgentProvider[] = [];

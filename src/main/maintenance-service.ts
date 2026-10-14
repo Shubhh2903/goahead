@@ -58,6 +58,7 @@ export async function exportOpenBotData(
         excludes: [
           "Codex credentials",
           "OpenCode Go key",
+          "Muse Meta API key",
           "custom provider API keys",
           "custom agent environment values",
           "browser cookies",

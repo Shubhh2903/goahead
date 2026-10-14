@@ -500,6 +500,8 @@ describe("Team API providers-v1", () => {
         antigravity: idle,
         cursor: idle,
         cline: idle,
+        pi: idle,
+        muse: idle,
       },
       toolRuntimes: { bun: idle },
     };
