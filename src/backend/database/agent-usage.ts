@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   type AgentAnalytics,
   type AgentAnalyticsInput,
+  ANALYTICS_AGENT_MODEL_ID_LIMIT,
   ANALYTICS_AGENT_MODELS_LIMIT,
   type AnalyticsProviderDay,
   type AnalyticsTotals,
@@ -302,7 +303,8 @@ export class AgentUsage {
           ...finish(item),
           share: summary.processedTokens ? item.values.processedTokens / summary.processedTokens : 0,
           models: [...(agentModels.get(agentId) ?? [])]
-            .filter(([model]) => model.length > 0)
+            // A longer id would make every decoder refuse the whole response.
+            .filter(([model]) => model.length > 0 && model.length <= ANALYTICS_AGENT_MODEL_ID_LIMIT)
             .sort(([leftModel, left], [rightModel, right]) => right - left || leftModel.localeCompare(rightModel))
             .slice(0, ANALYTICS_AGENT_MODELS_LIMIT)
             .map(([model]) => model),

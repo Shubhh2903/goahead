@@ -45,6 +45,8 @@ export interface AnalyticsAgent extends AnalyticsTotals {
 }
 /** The most model ids one agent row carries. */
 export const ANALYTICS_AGENT_MODELS_LIMIT = 32;
+/** The longest model id the decoders accept, the same as the frozen `host-analytics-v1` text limit. */
+export const ANALYTICS_AGENT_MODEL_ID_LIMIT = 256;
 // One cell of the daily-by-provider grid. The chart reads exactly these two measures, so
 // the cell carries them rather than the eleven other fields of AnalyticsTotals: at the
 // 367-day cap a full-totals cell per provider is four times the payload for nothing.
@@ -246,7 +248,7 @@ function analyticsAgentModels(value: unknown): string[] {
   if (
     !Array.isArray(value) ||
     value.length > ANALYTICS_AGENT_MODELS_LIMIT ||
-    !value.every((model) => isString(model) && model.length > 0 && model.length <= 256)
+    !value.every((model) => isString(model) && model.length > 0 && model.length <= ANALYTICS_AGENT_MODEL_ID_LIMIT)
   )
     throw new Error("Invalid agent analytics models.");
   return [...value];
