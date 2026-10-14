@@ -35,6 +35,7 @@ import { USAGE_LIMIT_METHOD } from "./agent/usage-limit-gate";
 import { type AgentProvider, RequestTimeoutError } from "./agent-client";
 import { BROWSER_TOOL_DEFINITIONS, OPENBOT_BROWSER_NAMESPACE } from "./browser-tools";
 import { type ClaudeHistoryOptions, claudeHistoryFromMessages, claudeHistoryReader } from "./claude-history";
+import { claudeSettingSources, readClaudeUserCarryOver } from "./claude-user-settings";
 import {
   CLAUDE_WORKSPACE_MANAGED_SETTINGS,
   claudeWorkspaceHooks,
@@ -81,6 +82,31 @@ import {
 import type { ReadProviderHistory } from "./provider-history";
 
 const execFileAsync = promisify(execFile);
+/** Claude Code's own tools, named again after `tools: []` so that a tool a later CLI adds is still removed. */
+export const CLAUDE_BUILT_IN_TOOLS: readonly string[] = [
+  "Agent",
+  "Bash",
+  "BashOutput",
+  "Edit",
+  "Glob",
+  "Grep",
+  "KillShell",
+  "MultiEdit",
+  "NotebookEdit",
+  "Read",
+  "Skill",
+  "Task",
+  "TodoWrite",
+  "WebFetch",
+  "WebSearch",
+  "Write",
+];
+/**
+ * The only tool of a Slack reply context session: send the reply. Other people's Slack text drives
+ * the session, so it cannot change memories either. No browser, sites, routines, teammates, visual
+ * replies, Gmail or the user's MCP servers.
+ */
+const SLACK_REPLY_TOOLS: ReadonlySet<string> = new Set(["slack_send_message"]);
 const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
 
@@ -106,6 +132,11 @@ interface ThreadConfig {
    * the project settings do not load. See `claude-workspace-sandbox.ts`.
    */
   workspaceOnly: boolean;
+  /**
+   * `slack-reply`: a Slack reply context. The developer instructions are the whole system prompt,
+   * and the session has only the `SLACK_REPLY_TOOLS`. `full` is every other session.
+   */
+  toolProfile: "full" | "slack-reply";
 }
 
 interface ActiveTurn {
@@ -136,7 +167,15 @@ interface ActiveTurn {
 
 interface ThreadRuntime {
   id: string;
+  /**
+   * The identity of Claude's cumulative usage totals. A resumed session restores its totals from
+   * the transcript, so the id is the session id and the stored checkpoint survives an idle release
+   * and a restart. Without it, the first totals after a resume counted the whole session again.
+   * Only a reset of the totals inside one process gives a new id.
+   */
   usageCounterId: string;
+  /** True until the first totals of a process that resumed the session go out. */
+  usageResumed: boolean;
   usageCost: number;
   config: ThreadConfig;
   appliedEffort?: string;
@@ -384,17 +423,20 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
   /**
    * A model list or a usage read runs no tools, so it starts none of the user's MCP servers. Each
    * server is a process of its own (`npx chrome-devtools-mcp` is about 480 MB), and these reads run
-   * at every start and on every usage refresh.
+   * at every start and on every usage refresh. It loads no setting source either, so the user's
+   * plugins and their `SessionStart` hooks do not run for a read.
    */
-  #probeOptions(): Options {
+  async #probeOptions(): Promise<Options> {
+    const carryOver = await readClaudeUserCarryOver();
     return {
       cwd: process.cwd(),
       pathToClaudeCodeExecutable: this.#cli.executable,
-      settingSources: ["user", "project", "local"],
+      settingSources: [],
+      ...(carryOver.settings ? { settings: carryOver.settings } : {}),
       mcpServers: {},
       strictMcpConfig: true,
       persistSession: false,
-      env: { ...claudeEnvironment(this.#cli), CLAUDE_AGENT_SDK_CLIENT_APP: "openbot/0.1.0" },
+      env: { ...claudeEnvironment(this.#cli), ...carryOver.env, CLAUDE_AGENT_SDK_CLIENT_APP: "openbot/0.1.0" },
     };
   }
 
@@ -402,7 +444,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     const input = new AsyncMessageQueue();
     const claudeQuery = this.#createQuery({
       prompt: input,
-      options: this.#probeOptions(),
+      options: await this.#probeOptions(),
     });
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -467,7 +509,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     const input = new AsyncMessageQueue();
     const claudeQuery = this.#createQuery({
       prompt: input,
-      options: this.#probeOptions(),
+      options: await this.#probeOptions(),
     });
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -564,23 +606,30 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     // OpenBot's own servers spread last: Claude keys this record by name, so a user configuration
     // that reached one of those names would take the agent's own tools away. Profile generation
     // asks one question and must not act, so it gets neither set.
-    const handoff = config.profileGeneration
-      ? null
-      : claudeMcpServers(
-          await usableMcpServers(
-            agentMcpServers(this.#mcpServers(), config.computerUse),
-            this.#mcpToolRuntimes?.(),
-            this.#mcpAuthorization,
-          ),
-        );
+    const slackReply = config.toolProfile === "slack-reply";
+    const handoff =
+      config.profileGeneration || slackReply
+        ? null
+        : claudeMcpServers(
+            await usableMcpServers(
+              agentMcpServers(this.#mcpServers(), config.computerUse),
+              this.#mcpToolRuntimes?.(),
+              this.#mcpAuthorization,
+            ),
+          );
     const skillPlugin =
-      config.workspaceOnly && this.#stateDirectory
+      config.workspaceOnly && !slackReply && this.#stateDirectory
         ? await claudeWorkspaceSkillPlugin(this.#stateDirectory, config.cwd)
         : null;
+    const carryOver = config.profileGeneration ? null : await readClaudeUserCarryOver();
     // `stop()` may have run during the await: a query created now would outlive the client.
     if (!this.#running) throw new Error("Claude Agent SDK is not running.");
     if (handoff) this.#reportMcpDrops?.(this.provider, handoff.dropped);
-    const mcpServers = handoff ? { ...handoff.servers, ...this.#createOpenBotServers(threadId) } : {};
+    const mcpServers = slackReply
+      ? this.#createSlackReplyServers(threadId)
+      : handoff
+        ? { ...handoff.servers, ...this.#createOpenBotServers(threadId) }
+        : {};
     const claudeQuery = this.#createQuery({
       prompt: input,
       options: {
@@ -589,11 +638,14 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
         ...(config.model ? { model: this.#sdkModel(config.model) } : {}),
         ...(appliedEffort ? { effort: appliedEffort } : {}),
         ...(resume ? { resume: threadId } : { sessionId: threadId }),
-        systemPrompt: {
-          type: "preset",
-          preset: "claude_code",
-          append: config.developerInstructions,
-        },
+        // A Slack reply context has no Claude Code tools, so the long Claude Code prompt is left out.
+        systemPrompt: slackReply
+          ? config.developerInstructions
+          : {
+              type: "preset",
+              preset: "claude_code",
+              append: config.developerInstructions,
+            },
         // The developer instructions carry the profile and the memories, and `thread/resume` above
         // restarts the query when they change. A recorded prompt would be sent instead of them on
         // every later request and resume, so the agent kept an edited profile's old text. The CLI
@@ -601,13 +653,26 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
         // that option.
         ...(claudeTakesPromptSnapshotFlag(this.#cli.version) ? { extraArgs: { "system-prompt-snapshot": "off" } } : {}),
         ...(config.profileGeneration ? { tools: [] } : {}),
-        settingSources: config.profileGeneration ? [] : config.workspaceOnly ? ["user"] : ["user", "project", "local"],
-        // The MCP panel is the only door. Without this, Claude merges project `.mcp.json`, user
-        // settings, plugin and agent-frontmatter servers into the record above, so two computers
-        // with the same OpenBot settings give their agents different tools and "which servers does
-        // my agent have" has no answer. The flag takes away MCP and nothing else, so permissions and
-        // hooks still load from those files. Workspace only loads the user settings alone: see
-        // `claude-workspace-sandbox.ts`.
+        ...(slackReply
+          ? {
+              tools: [],
+              disallowedTools: [...CLAUDE_BUILT_IN_TOOLS],
+              allowedTools: [...SLACK_REPLY_TOOLS].map((name) => `mcp__openbot__${name}`),
+              skills: [],
+            }
+          : {}),
+        // No user source: the personal plugins, skills, subagents and hooks of the user's Claude Code
+        // stay out of the agent. A Slack reply context loads no source at all. `claude-user-settings.ts`
+        // says what still comes from the user file: the `env` and the credential helpers. A Slack
+        // reply also gets them, because a user who signs in through Bedrock, a proxy or a helper
+        // cannot start a session without them. They hold no plugin, skill or hook.
+        settingSources: config.profileGeneration || slackReply ? [] : claudeSettingSources(config.workspaceOnly),
+        ...(carryOver?.settings ? { settings: carryOver.settings } : {}),
+        // The MCP panel is the only door. Without this, Claude merges project `.mcp.json`, plugin and
+        // agent-frontmatter servers into the record above, so two computers with the same OpenBot
+        // settings give their agents different tools and "which servers does my agent have" has no
+        // answer. The flag takes away MCP and nothing else, so permissions and hooks still load from
+        // the workspace settings files.
         strictMcpConfig: true,
         permissionMode: "default",
         includePartialMessages: true,
@@ -625,6 +690,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
         mcpServers,
         env: {
           ...claudeEnvironment(this.#cli),
+          ...carryOver?.env,
           ...this.#agentEnvironment?.(),
           CLAUDE_AGENT_SDK_CLIENT_APP: "openbot/0.1.0",
           // Without a terminal, the CLI gives the newer models no TodoWrite or task tools, so the
@@ -635,7 +701,8 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     });
     const runtime: ThreadRuntime = {
       id: threadId,
-      usageCounterId: randomUUID(),
+      usageCounterId: threadId,
+      usageResumed: resume,
       usageCost: 0,
       config,
       appliedEffort,
@@ -850,20 +917,28 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
       message.subtype === "success" &&
       message.total_cost_usd !== undefined &&
       message.total_cost_usd < runtime.usageCost
-    )
+    ) {
+      // The totals start again from zero, so they need a counter with no checkpoint.
       runtime.usageCounterId = randomUUID();
+      runtime.usageResumed = false;
+    }
     if (message.subtype === "success" || (message.total_cost_usd ?? 0) > runtime.usageCost)
       runtime.usageCost = message.total_cost_usd ?? runtime.usageCost;
-    if (runtime.activeTurn && message.modelUsage)
+    if (runtime.activeTurn && message.modelUsage) {
       this.emit("notification", {
         method: "openbot/usage",
         params: {
           threadId: runtime.id,
           turnId: runtime.activeTurn.id,
           counterId: runtime.usageCounterId,
+          // The collector reads this to keep totals of a session that has no checkpoint yet, such
+          // as one from an earlier version, as a baseline and not as new usage.
+          resumed: runtime.usageResumed,
           modelUsage: message.modelUsage,
         },
       });
+      runtime.usageResumed = false;
+    }
     const fallback = message.subtype === "success" ? message.result : "";
     const errors = message.errors ?? [];
     const interrupted =
@@ -1206,6 +1281,22 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     return { thread: { id: threadId, turns } };
   }
 
+  /** The one server of a Slack reply context session: the OpenBot tools that it may use. */
+  #createSlackReplyServers(threadId: string) {
+    return {
+      openbot: createSdkMcpServer({
+        name: "openbot",
+        version: "0.1.0",
+        tools: OPENBOT_TOOL_DEFINITIONS.filter((definition) => SLACK_REPLY_TOOLS.has(definition.name)).map(
+          (definition) =>
+            tool(definition.name, definition.description, definition.shape, (args) =>
+              this.#callDynamicTool(threadId, "openbot", definition.name, args),
+            ),
+        ),
+      }),
+    };
+  }
+
   #createOpenBotServers(threadId: string) {
     const call = (namespace: string, name: string, args: unknown) =>
       this.#callDynamicTool(threadId, namespace, name, args);
@@ -1440,6 +1531,7 @@ function readThreadConfig(params: unknown): ThreadConfig {
     profileGeneration: isRecord(params) && params.profileGeneration === true,
     computerUse: computerUseParam(params),
     workspaceOnly: isRecord(params) && params.workspaceOnly === true,
+    toolProfile: isRecord(params) && params.toolProfile === "slack-reply" ? "slack-reply" : "full",
   };
 }
 

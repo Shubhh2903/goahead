@@ -1177,6 +1177,7 @@ export async function createApplicationServices({
         slackAsk
           ? service.sendSlackAskMessage(input, slackAsk, host.conversationSender())
           : service.sendMessage(input, host.conversationSender()),
+      postNotice: ({ slackAsk, ...input }) => service.postSlackNotice(input, slackAsk),
       projectMap: () => service.projectMap(),
       handoffRecords: (agentId) => service.handoffRecords(agentId),
       onHandoffs: (listener) => {

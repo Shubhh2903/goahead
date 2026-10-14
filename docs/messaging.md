@@ -68,9 +68,9 @@ approves (in Slack or on the desktop), and again right before the post:
   in memory at once and is saved to `openbot-messaging-send-guards-v1.json` in the app's user data.
 - **Quiet hours** turn every send into a draft, and an approval waits until they end.
 - **No count limit.** Settings show how many agent sends went out in the last hour. In a conversation
-  with auto-reply on, 10 auto-replies in a row that each answer within about 2 minutes look like a
-  reply loop: auto-reply pauses in that conversation only, and the Slack Orchestrator asks you in
-  GoAhead to check it. Your next message to the orchestrator, or your own message in that Slack
+  with auto-reply on, 6 auto-replies in a row that each answer within about 2 minutes look like a
+  reply loop: auto-reply pauses in that conversation only, and a card in the Slack Orchestrator's
+  chat asks you to check it. Your next message to the orchestrator, or your own message in that Slack
   conversation, ends the pause.
 
 Prompt-injection cases are covered in `src/main/slack-workspace.test.ts` ("guards every Slack send"),

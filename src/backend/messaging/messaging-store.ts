@@ -72,6 +72,14 @@ export interface MessagingSendRecord {
   fromGoAhead?: true;
 }
 
+/**
+ * The thread key of a reply context: the execution thread where auto-reply turns of one Slack
+ * conversation run, away from the agent's main thread. A Slack thread key is a `ts` or `direct`, so
+ * no external conversation can have this key. The link reads below never return such a row: for
+ * every send and inbox gate, a reply context is a thread with no external conversation.
+ */
+export const REPLY_CONTEXT_KEY = "goahead:auto-reply";
+
 const LINK_LIST_LIMIT = 200;
 /** As long as a title: the row shows one line of it. */
 const PREVIEW_LIMIT = 256;
@@ -184,7 +192,9 @@ export class MessagingStore {
 
   linkForThread(threadId: string): MessagingLink | null {
     const row = databaseRow(
-      this.#database.connection.prepare("SELECT * FROM projection_messaging_threads WHERE thread_id = ?").get(threadId),
+      this.#database.connection
+        .prepare("SELECT * FROM projection_messaging_threads WHERE thread_id = ? AND thread_key != ?")
+        .get(threadId, REPLY_CONTEXT_KEY),
     );
     return row ? decodeLink(row) : null;
   }
@@ -193,10 +203,44 @@ export class MessagingStore {
     return databaseRows(
       this.#database.connection
         .prepare(
-          "SELECT * FROM projection_messaging_threads WHERE agent_id = ? ORDER BY updated_at DESC, link_id LIMIT ?",
+          `SELECT * FROM projection_messaging_threads WHERE agent_id = ? AND thread_key != ?
+           ORDER BY updated_at DESC, link_id LIMIT ?`,
         )
-        .all(agentId, LINK_LIST_LIMIT),
+        .all(agentId, REPLY_CONTEXT_KEY, LINK_LIST_LIMIT),
     ).map(decodeLink);
+  }
+
+  /** The link or reply context that owns this execution thread, or null: one lookup for both. */
+  executionLink(threadId: string): MessagingLink | null {
+    const row = databaseRow(
+      this.#database.connection.prepare("SELECT * FROM projection_messaging_threads WHERE thread_id = ?").get(threadId),
+    );
+    return row ? decodeLink(row) : null;
+  }
+
+  /** The reply context of one conversation, or null. */
+  replyContext(connectionId: string, platformChannelId: string): MessagingLink | null {
+    return this.linkByKey(connectionId, platformChannelId, REPLY_CONTEXT_KEY);
+  }
+
+  /** The reply context that owns this execution thread, or null. */
+  replyContextForThread(threadId: string): MessagingLink | null {
+    const row = databaseRow(
+      this.#database.connection
+        .prepare("SELECT * FROM projection_messaging_threads WHERE thread_id = ? AND thread_key = ?")
+        .get(threadId, REPLY_CONTEXT_KEY),
+    );
+    return row ? decodeLink(row) : null;
+  }
+
+  /** How many messages GoAhead wrote to the thread, which is how many turns it had. */
+  userMessageCount(threadId: string): number {
+    const row = databaseRow(
+      this.#database.connection
+        .prepare("SELECT COUNT(*) AS count FROM projection_thread_messages WHERE thread_id = ? AND author = 'user'")
+        .get(threadId),
+    );
+    return row ? requiredNumberColumn(row, "count") : 0;
   }
 
   /**
@@ -214,9 +258,10 @@ export class MessagingStore {
               ORDER BY m.created_at DESC, m.ordinal DESC LIMIT 1) AS preview
            FROM projection_messaging_threads t
            JOIN projection_messaging_connections c ON c.connection_id = t.connection_id
+           WHERE t.thread_key != ?
            ORDER BY t.updated_at DESC, t.link_id LIMIT ?`,
         )
-        .all(PREVIEW_LIMIT, LINK_LIST_LIMIT),
+        .all(PREVIEW_LIMIT, REPLY_CONTEXT_KEY, LINK_LIST_LIMIT),
     ).flatMap((row) => {
       const platform = requiredStringColumn(row, "platform");
       if (!isOneOf(MESSAGING_PLATFORMS, platform)) return [];
@@ -345,6 +390,37 @@ export class MessagingStore {
         db.prepare(
           "UPDATE projection_messaging_connections SET orchestrator_agent_id = NULL WHERE orchestrator_agent_id = ?",
         ).run(agentId);
+        return null;
+      },
+    );
+  }
+
+  /**
+   * Removes one link with its execution thread. Only for a reply context, which holds no drafts and
+   * no external message. The caller removes the live provider state of the thread first.
+   */
+  deleteLink(linkId: string): void {
+    const link = this.link(linkId);
+    if (!link) return;
+    this.#database.dispatch(
+      `messaging-link-deleted:${linkId}:${randomUUID()}`,
+      [
+        {
+          // On the agent, as `deleteForAgent` does: the history of the link is deleted below.
+          aggregateType: "messaging-agent",
+          aggregateId: link.agentId,
+          eventType: "messaging.reply-context-deleted",
+          payload: { threadIds: [link.threadId] },
+        },
+      ],
+      (db) => {
+        deleteAggregateHistory(db, "messaging-thread", [linkId]);
+        deleteAggregateHistory(db, "thread", [link.threadId]);
+        db.prepare("DELETE FROM projection_attachments WHERE owner_kind = 'thread-message' AND owner_id LIKE ?").run(
+          `${link.threadId}:%`,
+        );
+        db.prepare("DELETE FROM projection_messaging_threads WHERE link_id = ?").run(linkId);
+        db.prepare("DELETE FROM projection_threads WHERE thread_id = ?").run(link.threadId);
         return null;
       },
     );

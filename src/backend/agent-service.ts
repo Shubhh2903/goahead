@@ -680,6 +680,8 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
           "The earlier provider session could not be read in time.",
         ),
       passwordVaultConnected: () => options.passwordVault?.connected() ?? false,
+      // Read lazily: the messaging threads are made after this controller.
+      slackReplyThread: (threadId) => this.messaging.isReplyContextThread(threadId),
       hooks: {
         logRecovery: (agentId, provider, outcome) =>
           logger.warn("Recovered an unavailable provider session.", { agentId, provider, outcome }),
@@ -819,6 +821,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       interrupt: (agentId, turnId, threadId) => this.interrupt(agentId, turnId, threadId),
       forgetThread: (threadId) => this.#forgetExecutionThread(threadId),
       projectMap: () => this.projectMap(),
+      mainThreadId: (agentId) => this.#store.ensureThreadId(agentId),
     });
     this.#memoryHold = new MemoryHold({
       memory: hostMemory,
@@ -2180,6 +2183,24 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     sender?: ConversationMessageSender,
   ): Promise<QueuedMessageReceipt> {
     return this.#sendMessage(input, sender, undefined, false, slackAsk);
+  }
+
+  /**
+   * A Slack notice in the agent's chat, such as a paused auto-reply. It is stored with a completed
+   * delivery, so no turn starts and the model never reads it. Only the backend calls this.
+   */
+  async postSlackNotice(input: { agentId: string; text: string }, slackAsk: ConversationSlackAsk): Promise<void> {
+    const agent = await this.#store.getOrCreate(input.agentId);
+    await this.#mailbox.enqueue({
+      sender: { kind: "user" },
+      slackAsk,
+      recipientAgentIds: [agent.id],
+      text: input.text,
+      notice: true,
+    });
+    const snapshot = this.#conversation.ensureSnapshot(agent.id, agent.threadId);
+    this.#mailboxSync.syncMailboxMessages(snapshot);
+    this.#conversation.emitConversation(snapshot);
   }
 
   /**

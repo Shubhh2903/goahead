@@ -1,5 +1,8 @@
-/** Fast auto-replies in a row that pause auto-reply in one conversation. */
-export const AUTO_REPLY_LOOP_REPLIES = 10;
+/**
+ * Fast auto-replies in a row that pause auto-reply in one conversation. Each reply is a model turn,
+ * so a loop between two auto-replying sides stops after 6 turns.
+ */
+export const AUTO_REPLY_LOOP_REPLIES = 6;
 /** The other side answered our last auto-reply within this time: the exchange is fast. */
 export const AUTO_REPLY_LOOP_GAP_MS = 2 * 60_000;
 

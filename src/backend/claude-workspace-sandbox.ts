@@ -21,9 +21,10 @@ import { isPathInside } from "./path-containment";
  * The files in `.claude` of the workspace are not trusted: a Codex agent can write them before a
  * switch to Claude, because Codex cannot deny one path in a writable root while it takes a sandbox
  * mode. The Grok and OpenCode sandboxes deny them. Their `sandbox.filesystem.allowWrite`, `Edit(...)`
- * rules and hooks would widen this sandbox or run outside it. So the query loads the user settings
- * only, the workspace skills come back through `claudeWorkspaceSkillPlugin`, and
- * `CLAUDE_WORKSPACE_MANAGED_SETTINGS` stops the hooks of settings and skills.
+ * rules and hooks would widen this sandbox or run outside it. So the query loads no setting source
+ * (the user source stays out of every agent session, see `claude-user-settings.ts`), the workspace
+ * skills come back through `claudeWorkspaceSkillPlugin`, and `CLAUDE_WORKSPACE_MANAGED_SETTINGS`
+ * stops the hooks of settings and skills.
  */
 export function claudeWorkspaceSandbox(roots: readonly string[]): NonNullable<Options["sandbox"]> {
   return {

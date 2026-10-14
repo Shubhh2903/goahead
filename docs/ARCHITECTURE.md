@@ -1128,7 +1128,11 @@ activity, and related command receipts in its existing transaction.
 
 The turn lifecycle accepts usage only for a provider session belonging to the agent. Codex totals
 use durable session checkpoints; restored totals establish a baseline for pre-feature sessions.
-Claude uses per-model query totals and a separate counter identity for each query process. ACP usage
+Claude uses per-model session totals with one counter identity for each Claude session. A resumed
+session restores its totals, so the checkpoint of that counter survives an idle release and a
+restart, and only the difference counts. A reset of the totals inside one process starts a new
+counter. A resumed session with no checkpoint (one from before this rule) takes its first totals as
+a baseline. ACP usage
 is optional. Missing fields remain unknown. Completed assistant messages exclude commentary and tool
 output. Only post-install messages enter activity counts.
 
@@ -1792,6 +1796,14 @@ transport for its events. `messaging-types.ts` is the seam; the core never reads
   it, but all direct messages from one person are one conversation (`DIRECT_CONVERSATION_KEY`). `MessagingThreads.event` takes that thread's conversation
   and turn events, so the public chat, the renderer and Team peers never see them. Approvals still
   reach the host.
+- **Reply contexts.** Auto-reply turns of one Slack conversation run in a reply context: a row of
+  `projection_messaging_threads` with the reserved thread key `goahead:auto-reply` (no migration).
+  `linkForThread`, `links` and `recentLinks` never return it, so the sidebar, the storage view and
+  every send and inbox gate treat it as a thread with no external conversation. Its events stay out of
+  the public chat. `history_cursor` holds what it read; a completed turn or an auto-sent reply writes
+  it. `MessagingThreads.ensureReplyContext` replaces a context after 10 turns or 1 hour idle. On Claude,
+  `ThreadLifecycle` gives its sessions the lean `slack-reply` profile (Sonnet, low effort, only
+  `slack_send_message`).
 - **Deliveries.** An external message is a mailbox message from `user` with a `messaging` origin
   (link, author, platform message). No new sender kind, so the frozen Team protocol codecs are
   unchanged. The queue and the public chat hide it like channel work. A request the agent sends from
@@ -1843,8 +1855,8 @@ transport for its events. `messaging-types.ts` is the seam; the core never reads
   holds in memory before it is saved. `#sendBlock` checks the pause and quiet hours when a send is
   asked for, when it is approved, and right before the post. A blocked approval keeps the draft.
   Sends have no count limit; settings show the agent sends of the last hour (counted from the audit
-  log). `MessagingAutoReplyLoop` (in memory) pauses auto-reply in one conversation after 10 fast
-  auto-replies in a row; the orchestrator tells the person, and their next desktop message to it, or
+  log). `MessagingAutoReplyLoop` (in memory) pauses auto-reply in one conversation after 6 fast
+  auto-replies in a row; a card in the orchestrator's chat tells the person with no turn, and their next desktop message to it, or
   their own Slack message there, ends the pause. The auto-reply setting stays on. Behavior: [messaging.md](messaging.md).
 - **Screen.** **Server settings → Connectors → Slack** on the computer that runs the agents shows each
   workspace and its orchestrator, and a two-step dialog connects the workspace and adds the
@@ -1980,6 +1992,13 @@ problem is not offered as a chat tag.
 
 GoAhead does not list the home-directory folders. They hold the host user's skills, which are the
 same for every agent, and each provider CLI changes its home-folder rules without notice.
+
+A Claude agent does not load the user setting source (`src/backend/claude-user-settings.ts`). So
+`~/.claude/skills/`, `~/.claude/agents/`, `~/.claude/CLAUDE.md` and the plugins and hooks of
+`~/.claude/settings.json` do not reach the agent. The project and local settings of the workspace
+still load; Workspace only loads no source. Only the `env` and the credential helper commands of the
+user settings go to the session. The Claude sign-in is in the keychain or in
+`~/.claude/.credentials.json`, not in a settings file.
 
 MCP servers do not use folders. `projection_mcp_servers` in SQLite is the source of truth for the
 whole computer. No shared MCP file format exists: Claude Code reads `.mcp.json` and

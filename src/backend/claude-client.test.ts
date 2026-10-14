@@ -186,7 +186,8 @@ describe("ClaudeAgentClient", () => {
     await client.request("account/rateLimits/read", { model: "claude-sonnet-4-6" }, decodeAccountRateLimitsReadResult);
 
     expect(probes).toHaveLength(2);
-    for (const options of probes) expect(options).toMatchObject({ mcpServers: {}, strictMcpConfig: true });
+    for (const options of probes)
+      expect(options).toMatchObject({ mcpServers: {}, strictMcpConfig: true, settingSources: [] });
     await client.stop();
   });
 
@@ -843,7 +844,7 @@ fi
     for (const [index, threadId] of threadIds.entries()) {
       const turnId = `00000000-0000-4000-8000-00000000000${index}`;
       await startTurn(client, threadId, turnId);
-      spawned[index]?.output.push(resultMessage(threadId, turnId, ""));
+      spawned[index]?.output.push(resultMessage(threadId, turnId, "", { output: 50, cost: 0.01 }));
       await waitFor(() => notifications.filter((event) => event.method === "turn/completed").length === index + 1);
     }
     expect(spawned.map((one) => one.query.closed)).toEqual([true, ...Array(CLAUDE_IDLE_THREAD_LIMIT).fill(false)]);
@@ -852,6 +853,27 @@ fi
     expect(spawned.at(-1)?.options).toMatchObject({ resume: threadIds[0] });
     // The thread in a turn is not idle, so the others keep their processes.
     expect(spawned.slice(1, -1).map((one) => one.query.closed)).toEqual(Array(CLAUDE_IDLE_THREAD_LIMIT).fill(false));
+
+    // The resumed process reports the session's whole totals. They go out under the same counter as
+    // before the release, so the collector counts only the difference.
+    spawned
+      .at(-1)
+      ?.output.push(
+        resultMessage(threadIds[0] ?? "", "77777777-7777-4777-8777-777777777777", "", { output: 80, cost: 0.015 }),
+      );
+    await waitFor(
+      () => notifications.filter((event) => event.method === "turn/completed").length === threadIds.length + 1,
+    );
+    const firstThreadUsage = notifications
+      .filter((event) => event.method === "openbot/usage" && getString(event.params, "threadId") === threadIds[0])
+      .map((event) => ({
+        counterId: getString(event.params, "counterId"),
+        resumed: isDynamicRecord(event.params) ? event.params.resumed : undefined,
+      }));
+    expect(firstThreadUsage).toEqual([
+      { counterId: threadIds[0], resumed: false },
+      { counterId: threadIds[0], resumed: true },
+    ]);
     await client.stop();
   });
 
@@ -1612,11 +1634,30 @@ function toolResultMessage(threadId: string, messageId: string, toolUseId: strin
   };
 }
 
-function resultMessage(threadId: string, turnId: string, result: string): TestStreamMessage {
+function resultMessage(
+  threadId: string,
+  turnId: string,
+  result: string,
+  usage?: { output: number; cost: number },
+): TestStreamMessage {
   return {
     type: "result",
     subtype: "success",
     result,
+    ...(usage
+      ? {
+          modelUsage: {
+            "claude-sonnet-5": {
+              inputTokens: 100,
+              outputTokens: usage.output,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              costUSD: usage.cost,
+            },
+          },
+          total_cost_usd: usage.cost,
+        }
+      : {}),
     terminal_reason: "completed",
     errors: [],
     session_id: threadId,
@@ -1757,11 +1798,11 @@ it("hands the enabled MCP servers to the spawn and keeps the bridge names", asyn
     /*
      * The record above is the whole set. Without the flag, Claude adds the servers of project
      * `.mcp.json`, user settings, plugins and agent frontmatter to it - including one that takes
-     * the bridge name `openbot` - and the panel stops describing what the agent has. The setting
-     * sources stay, because the flag takes away MCP and leaves permissions and hooks.
+     * the bridge name `openbot` - and the panel stops describing what the agent has. The workspace
+     * setting sources stay, because the flag takes away MCP and leaves permissions and hooks.
      */
     expect(started?.strictMcpConfig).toBe(true);
-    expect(started?.settingSources).toEqual(["user", "project", "local"]);
+    expect(started?.settingSources).toEqual(["project", "local"]);
   } finally {
     await client.stop();
   }
@@ -1792,8 +1833,10 @@ it("keeps the workspace settings out of a Workspace only thread and still loads 
   try {
     await client.request("thread/start", { cwd, workspaceOnly: true }, decodeThreadResponse);
     const started = spawned.at(-1);
-    expect(started?.settingSources).toEqual(["user"]);
+    // No source at all: the workspace files are not trusted, and the user's plugins stay out too.
+    expect(started?.settingSources).toEqual([]);
     expect(started?.managedSettings).toEqual({ allowManagedHooksOnly: true });
+    expect(started?.plugins).toHaveLength(1);
     const plugin = Array.isArray(started?.plugins) ? started.plugins[0] : null;
     const pluginPath = isDynamicRecord(plugin) && isString(plugin.path) ? plugin.path : "";
     expect(isPathInside(join(root, "provider-state"), pluginPath)).toBe(true);
@@ -1801,6 +1844,77 @@ it("keeps the workspace settings out of a Workspace only thread and still loads 
   } finally {
     await client.stop();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+// The user's own Claude Code plugins, skills and hooks loaded into every agent: about 9K tokens of
+// skill listing and a hook process on each turn. Sign-in that the user settings configure still works.
+it("keeps the user's Claude Code plugins out of an agent session and keeps its sign-in settings", async () => {
+  const query = new TestQuery(new TestQueue<TestStreamMessage>());
+  const spawned: DynamicRecord[] = [];
+  const configDirectory = await mkdtemp(join(tmpdir(), "openbot-claude-user-settings-"));
+  await writeFile(
+    join(configDirectory, "settings.json"),
+    JSON.stringify({
+      enabledPlugins: { "claude-mem@thedotmack": true },
+      hooks: { SessionStart: [{ hooks: [{ type: "command", command: "echo personal" }] }] },
+      env: { CLAUDE_CODE_USE_BEDROCK: "1", IGNORED_NUMBER: 1 },
+      apiKeyHelper: "/usr/local/bin/claude-key",
+      permissions: { allow: ["Bash(*)"] },
+    }),
+  );
+  vi.stubEnv("CLAUDE_CONFIG_DIR", configDirectory);
+  const client = new ClaudeAgentClient({ executable: "/bin/true", version: "2.1.251" }, (params) => {
+    if (isDynamicRecord(params.options)) spawned.push(params.options);
+    return query;
+  });
+  client.start();
+  try {
+    await client.request("thread/start", { cwd: process.cwd() }, decodeThreadResponse);
+    const started = spawned.at(-1);
+    expect(started?.settingSources).toEqual(["project", "local"]);
+    expect(started?.settings).toEqual({ apiKeyHelper: "/usr/local/bin/claude-key" });
+    expect(started?.plugins).toBeUndefined();
+    const env = isDynamicRecord(started?.env) ? started.env : {};
+    expect(env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
+    expect(env.IGNORED_NUMBER).toBeUndefined();
+  } finally {
+    await client.stop();
+    vi.unstubAllEnvs();
+    await rm(configDirectory, { recursive: true, force: true });
+  }
+});
+
+// An auto-reply session: the instructions are the whole prompt, and only the Slack send tool.
+it("gives a Slack reply session no Claude Code tools, no MCP servers and only the Slack send tool", async () => {
+  const query = new TestQuery(new TestQueue<TestStreamMessage>());
+  const spawned: DynamicRecord[] = [];
+  const client = new ClaudeAgentClient(
+    { executable: "/bin/true", version: "2.1.251" },
+    (params) => {
+      if (isDynamicRecord(params.options)) spawned.push(params.options);
+      return query;
+    },
+    undefined,
+    undefined,
+    () => [mcpConfig({ id: "mcp-1", name: "Notion", command: "/bin/echo" })],
+  );
+  client.start();
+  try {
+    await client.request(
+      "thread/start",
+      { cwd: process.cwd(), developerInstructions: "Reply in Slack.", toolProfile: "slack-reply" },
+      decodeThreadResponse,
+    );
+    const started = spawned.at(-1);
+    expect(started?.systemPrompt).toBe("Reply in Slack.");
+    expect(started?.tools).toEqual([]);
+    expect(started?.disallowedTools).toEqual(expect.arrayContaining(["Bash", "Read", "Write", "WebFetch"]));
+    expect(started?.allowedTools).toEqual(["mcp__openbot__slack_send_message"]);
+    expect(Object.keys(isDynamicRecord(started?.mcpServers) ? started.mcpServers : {})).toEqual(["openbot"]);
+    expect(started?.settingSources).toEqual([]);
+  } finally {
+    await client.stop();
   }
 });
 

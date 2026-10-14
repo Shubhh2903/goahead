@@ -62,6 +62,7 @@ import type { HandoffRecord } from "../agent/handoff-activity";
 import type { MessagingOrigin } from "../mailbox-store";
 import type { SidebarLayoutStore } from "../sidebar-layout-store";
 import { MessagingAutoReplyLoop } from "./messaging-auto-reply-loop";
+import { type AutoReplyRoute, autoReplyRouteAccepts } from "./messaging-auto-reply-route";
 import type { SendDraft } from "./messaging-draft-store";
 import { MessagingHiddenThreadStore } from "./messaging-hidden-threads";
 import { type InboxImage, isInboxImage, MessagingInboxFiles } from "./messaging-inbox-files";
@@ -78,6 +79,8 @@ import type {
   MessagingSendReceipt,
   MessagingSendRequest,
   MessagingThreads,
+  ReplyContextCursor,
+  ReplyContextTurn,
 } from "./messaging-threads";
 import {
   type ConnectionIdentity,
@@ -148,6 +151,11 @@ export interface MessagingAgents {
    * agent gets `text`; the chat shows `slackAsk`, when there is one, as a card.
    */
   sendMessage(input: { agentId: string; text: string; slackAsk?: ConversationSlackAsk }): Promise<unknown>;
+  /**
+   * A card in the agent's own conversation that starts no turn, such as a paused auto-reply. Without
+   * it, such a notice is only logged.
+   */
+  postNotice?(input: { agentId: string; text: string; slackAsk: ConversationSlackAsk }): Promise<unknown>;
   /** Every local agent's project folders as one prompt line, or null when no agent has one. */
   projectMap?(): string | null;
   /** The newest hand-offs an agent sent, each with the conversation its answer goes back to. */
@@ -237,7 +245,18 @@ interface AutoReplyWait {
   /** When the first message of this wait arrived: the wait never lasts longer than the cap. */
   firstAt: number | null;
   cancelWait: (() => void) | null;
-  running: { agentId: string; turnId: string | null; cancelLimit: () => void } | null;
+  /**
+   * `route` is where the turn runs: a send or a turn event is the turn's only from that thread, and
+   * none is while it is pending. `readMark` is what the turn read; only a completed turn or an
+   * auto-sent reply writes it to the reply context.
+   */
+  running: {
+    agentId: string;
+    route: AutoReplyRoute;
+    readMark: ReplyContextCursor | null;
+    turnId: string | null;
+    cancelLimit: () => void;
+  } | null;
   /** A message arrived while the turn ran: one more turn follows it. */
   again: boolean;
 }
@@ -348,10 +367,13 @@ const MENTION_MARKERS = /[\uE000-\uE001]/g;
 const MENTION_CANDIDATES = 20;
 /** An `@` that starts a name in message text: at the start, or after a space or an opening bracket. */
 const TEXT_MENTION = /(?:^|[\s(])@(?=[^\s@<>])/u;
-/** How long an auto-reply conversation waits after a new message, so several quick messages get one turn. */
-const AUTO_REPLY_WAIT_MS = 10_000;
-/** The longest wait from the first message, however many follow. */
-const AUTO_REPLY_WAIT_CAP_MS = 60_000;
+/**
+ * How long an auto-reply conversation waits after a new message, so several quick messages get one
+ * turn. People send a burst of 2-4 chat lines within 10-20 s, so 20 s puts most bursts in one turn.
+ */
+const AUTO_REPLY_WAIT_MS = 20_000;
+/** The longest wait from the first message, however many follow: a reply is at most 1.5 min late. */
+const AUTO_REPLY_WAIT_CAP_MS = 90_000;
 /** After this, an auto-reply turn whose end GoAhead did not see no longer holds the conversation. */
 const AUTO_REPLY_TURN_LIMIT_MS = 15 * 60_000;
 
@@ -447,6 +469,7 @@ export class MessagingService {
       this.#threads.onActivity((activity) => this.#serial(activity.link.linkId, () => this.#activity(activity))),
       this.#agents.onEvent((event) => this.#agentEvent(event)),
       this.#threads.onLocalOwnerMessage((agentId) => this.#localOwnerMessage(agentId)),
+      this.#threads.onReplyContextTurn((turn) => this.#autoReplyTurn(turn)),
       this.#agents.onHandoffs?.((agentId) => this.#handoffsChanged(agentId)) ?? (() => undefined),
     );
     this.#threads.setContextSource((link, origin) => this.#promptContext(link, origin));
@@ -1266,7 +1289,7 @@ export class MessagingService {
     const live = this.#personConnection(input.workspaceId);
     const instruction = input.text.trim().replace(CHIEF_PREFIX, "").trim();
     if (!instruction) throw new Error(sourceText("error.messaging.sendTextEmpty"));
-    const agentId = await this.#askOrchestrator(live, {
+    const { agentId } = await this.#askOrchestrator(live, {
       conversation: input.conversation,
       threadKey: input.threadKey ?? null,
       lead: "The GoAhead user asks about a Slack conversation",
@@ -1278,8 +1301,11 @@ export class MessagingService {
   }
 
   /**
-   * Gives the workspace's orchestrator one instruction about one conversation, in its own
-   * conversation, with the conversation's newest messages as context. Answers the orchestrator's id.
+   * Gives the workspace's orchestrator one instruction about one conversation, with the
+   * conversation's newest messages as context. An inbox ask goes to the orchestrator's own
+   * conversation. An auto-reply goes to the reply context of the conversation: a new context gets the
+   * newest messages, and a context that already read some gets only the messages after them.
+   * Answers the orchestrator's id and the reply context thread, if any.
    */
   async #askOrchestrator(
     live: LiveConnection,
@@ -1288,36 +1314,65 @@ export class MessagingService {
       threadKey: string | null;
       lead: string;
       instructionTitle: string;
-      /** The text, or a function that writes it with the conversation's name. */
-      instruction: string | ((place: string) => string);
+      instruction: string;
       /** The card that the orchestrator's chat shows in place of the text. */
-      card: SlackAskKind;
+      card: Exclude<SlackAskKind, "auto-reply-paused">;
       /** For an auto-reply: the new messages, which the card shows. */
       newMessageIds?: ReadonlySet<string>;
+      /**
+       * For an auto-reply: called before the turn is queued, with the reply context thread (null when
+       * the turn runs in the main thread) and the read mark that the turn commits once it completes.
+       */
+      onReplyContext?: (threadId: string | null, cursor: ReplyContextCursor | null) => Promise<void>;
     },
-  ): Promise<string> {
+  ): Promise<{ agentId: string; threadId: string | null }> {
     const user = live.identity?.user;
     if (!user) throw new Error(sourceText("error.messaging.inboxNeedsUser"));
     const connectionId = live.record.connectionId;
     const inbox = this.#threads.inbox;
-    const messages = inbox.readForAgent(connectionId, ask.conversation, ask.threadKey, CHIEF_CONTEXT_MESSAGES);
+    // An auto-reply reads the whole conversation, threads included, so one read mark covers every
+    // thread of it. An inbox ask reads the thread it is about.
+    const readKey = ask.card === "auto-reply" ? null : ask.threadKey;
+    const messages = inbox.readForAgent(connectionId, ask.conversation, readKey, CHIEF_CONTEXT_MESSAGES);
     if (messages.length === 0) throw new Error(sourceText("error.messaging.inboxUnknownConversation"));
     const agentId = this.#orchestrator(live.record);
     if (!agentId) throw new Error(sourceText("error.messaging.inboxNeedsOrchestrator"));
-    const kind = messages[0]?.kind ?? "channel";
-    const other = messages.find((message) => message.authorId !== user.id)?.authorName ?? "";
-    const place = await this.#inboxPlace(live, inbox.watched(connectionId))(ask.conversation, kind, other);
+    const { kind, place } = await this.#conversationPlace(live, user.id, ask.conversation, messages);
     const where =
       kind === "direct"
         ? `direct message with ${place}`
         : kind === "group"
           ? `group direct message with ${place}`
           : `channel ${place}`;
+    const replyContext =
+      ask.card === "auto-reply"
+        ? await this.#threads.ensureReplyContext({
+            connectionId,
+            agentId,
+            platformChannelId: ask.conversation,
+            isDirect: kind === "direct",
+            title: place,
+          })
+        : null;
+    // A context that already read the conversation gets only what came after, without GoAhead's own
+    // auto-replies: the context holds them already.
+    const cursor = replyContext && !replyContext.fresh ? replyContext.link.historyCursor : null;
+    const autoSent = cursor ? this.#threads.store.autoSentMessageIds(connectionId, ask.conversation) : null;
+    const after =
+      cursor === null
+        ? messages
+        : messages.filter((message) => message.platformMessageId > cursor && !autoSent?.has(message.platformMessageId));
+    // Never an empty list: a message that Slack edited in place keeps its old `ts`.
+    const prompted = after.length > 0 ? after : messages.slice(-1);
     const people = new Map<string, string>();
-    for (const message of messages)
+    for (const message of prompted)
       if (message.authorId !== user.id && !people.has(message.authorId))
         people.set(message.authorId, message.authorName);
-    const projectMap = this.#agents.projectMap?.() ?? null;
+    // The map is for delegation. A continued context has it already, and a Claude reply context has
+    // no tool to delegate with.
+    const lean =
+      replyContext !== null && this.#agents.listAgents().find((a) => a.id === agentId)?.provider === "claude";
+    const projectMap = cursor === null && !lean ? (this.#agents.projectMap?.() ?? null) : null;
     const text = [
       `${ask.lead} in ${live.record.workspaceName}: ${where} (conversation ${ask.conversation}${ask.threadKey ? `, thread ${ask.threadKey}` : ""}).`,
       kind === "channel" ? `Channel ID: ${ask.conversation}.` : "",
@@ -1325,13 +1380,15 @@ export class MessagingService {
       "To answer in this conversation, call openbot.slack_send_message with to: <@USER_ID> (direct message) or <#CHANNEL_ID> (channel).",
       SLACK_INBOX_UNTRUSTED_NOTE,
       projectMap ? projectMapInstruction(projectMap) : "",
-      "--- newest messages, oldest first ---",
-      ...messages.map(
+      cursor === null
+        ? "--- newest messages, oldest first ---"
+        : "--- new messages since your last turn, oldest first ---",
+      ...prompted.map(
         (message) =>
-          `${message.authorId === user.id ? `${message.authorName} (the GoAhead user)` : message.authorName}: ${this.#readable(live, message.text)}`,
+          `${message.authorId === user.id ? `${message.authorName} (the GoAhead user)` : message.authorName}${readKey === null && message.threadKey ? ` (in thread ${message.threadKey})` : ""}: ${this.#readable(live, message.text)}`,
       ),
       `--- ${ask.instructionTitle} ---`,
-      typeof ask.instruction === "function" ? ask.instruction(place) : ask.instruction,
+      ask.instruction,
     ]
       .filter(Boolean)
       .join("\n");
@@ -1351,14 +1408,36 @@ export class MessagingService {
       channelId: ask.conversation,
       place: clip(place, SLACK_ASK_PLACE_LIMIT),
       trigger:
-        ask.card === "inbox-ask" && typeof ask.instruction === "string"
+        ask.card === "inbox-ask"
           ? [line(user.name, ask.instruction)]
           : newMessages
               .slice(-SLACK_ASK_TRIGGER_LIMIT)
               .map((message) => line(message.authorName, this.#readable(live, message.text))),
     };
+    const threadId = replyContext?.link.threadId ?? null;
+    // Not written here: the turn commits it when it completes, so a failed turn reads them again.
+    const newest = messages.at(-1)?.platformMessageId;
+    const readMark =
+      replyContext && newest && (cursor === null || newest > cursor)
+        ? { linkId: replyContext.link.linkId, value: newest }
+        : null;
+    await ask.onReplyContext?.(threadId, readMark);
     await this.#agents.sendMessage({ agentId, text, slackAsk });
-    return agentId;
+    return { agentId, threadId };
+  }
+
+  /** The kind of a conversation and the name that GoAhead shows for it. */
+  async #conversationPlace(
+    live: LiveConnection,
+    userId: string,
+    conversation: string,
+    messages: ReadonlyArray<{ kind: InboxKind; authorId: string; authorName: string }>,
+  ): Promise<{ kind: InboxKind; place: string }> {
+    const kind = messages[0]?.kind ?? "channel";
+    const other = messages.find((message) => message.authorId !== userId)?.authorName ?? "";
+    const inbox = this.#threads.inbox;
+    const place = await this.#inboxPlace(live, inbox.watched(live.record.connectionId))(conversation, kind, other);
+    return { kind, place };
   }
 
   /**
@@ -1429,18 +1508,34 @@ export class MessagingService {
     if (wait && !wait.running && !wait.cancelWait && wait.authorIds.size > 0) this.#restartAutoReplyWait(key, wait);
   }
 
-  /** An auto-reply went out. The reply that completes a loop pauses the conversation and tells the person. */
+  /**
+   * An auto-reply went out. The reply that completes a loop pauses the conversation and tells the
+   * person with a card in the orchestrator's chat. The card starts no turn.
+   */
   #autoReplySent(live: LiveConnection, channelId: string): void {
     if (!this.#autoReplyLoop.replied(`${live.record.connectionId}\n${channelId}`, Date.now())) return;
-    void this.#askOrchestrator(live, {
-      conversation: channelId,
-      threadKey: null,
-      lead: "GoAhead paused auto-reply in a Slack conversation",
-      instructionTitle: "GoAhead's instruction",
-      card: "auto-reply-paused",
-      instruction: (place) =>
-        `Do not reply in Slack. Tell the GoAhead user this in one line, as it is: ${sourceText("status.messaging.autoReplyLoopPaused", { conversation: place })}`,
-    }).catch((error) => this.#warn(error));
+    void this.#autoReplyPausedNotice(live, channelId).catch((error) => this.#warn(error));
+  }
+
+  async #autoReplyPausedNotice(live: LiveConnection, channelId: string): Promise<void> {
+    const user = live.identity?.user;
+    const agentId = this.#orchestrator(live.record);
+    if (!user || !agentId) return;
+    const messages = this.#threads.inbox.readForAgent(live.record.connectionId, channelId, null, 1);
+    const { place } = await this.#conversationPlace(live, user.id, channelId, messages);
+    const text = sourceText("status.messaging.autoReplyLoopPaused", { conversation: place });
+    const slackAsk: ConversationSlackAsk = {
+      kind: "auto-reply-paused",
+      workspaceId: live.record.workspaceId,
+      channelId,
+      place: place.length > SLACK_ASK_PLACE_LIMIT ? `${place.slice(0, SLACK_ASK_PLACE_LIMIT - 1)}…` : place,
+      trigger: [],
+    };
+    if (!this.#agents.postNotice) {
+      logger.info("Auto-reply paused after a reply loop.", { channelId });
+      return;
+    }
+    await this.#agents.postNotice({ agentId, text, slackAsk });
   }
 
   /** Whether an auto-reply turn may start in the conversation now. */
@@ -1484,8 +1579,13 @@ export class MessagingService {
     wait.threadKeys.clear();
     wait.running = {
       agentId,
+      route: { kind: "pending" },
+      readMark: null,
       turnId: null,
-      cancelLimit: this.#autoReplyTimers.start(() => this.#autoReplyTurnEnded(key, wait), AUTO_REPLY_TURN_LIMIT_MS),
+      cancelLimit: this.#autoReplyTimers.start(
+        () => this.#autoReplyTurnEnded(key, wait, false),
+        AUTO_REPLY_TURN_LIMIT_MS,
+      ),
     };
     try {
       const names = (await Promise.all(authorIds.map((id) => live.adapter.authorName(id)))).join(", ");
@@ -1500,27 +1600,42 @@ export class MessagingService {
         instructionTitle: "GoAhead's instruction",
         card: "auto-reply",
         newMessageIds,
+        onReplyContext: async (threadId, readMark) => {
+          const route: AutoReplyRoute = threadId
+            ? { kind: "context", threadId }
+            : { kind: "main", threadId: await this.#threads.mainThreadId(agentId) };
+          if (!wait.running) return;
+          wait.running.route = route;
+          wait.running.readMark = readMark;
+        },
         instruction: `Auto-reply is on for this conversation. Read the new messages from ${names} and reply in this conversation as the GoAhead user, the way they would answer in chat: a short, natural reply to every message written to them.${thread} Send nothing anywhere else. Send nothing only when the new messages are just an acknowledgement, such as an emoji, "ok", "thanks" or a thumbs up.`,
       });
     } catch (error) {
-      this.#autoReplyTurnEnded(key, wait);
+      this.#autoReplyTurnEnded(key, wait, false);
       throw error;
     }
   }
 
-  /** The orchestrator's turns: the first one that starts after an auto-reply request is that request's. */
-  #autoReplyTurn(event: Extract<AgentEvent, { type: "turn-started" | "turn-completed" }>): void {
+  /**
+   * The orchestrator's turns: the first one that starts in the reply context after an auto-reply
+   * request is that request's. A request with no reply context runs in the main thread, and takes
+   * the first turn that starts there.
+   */
+  #autoReplyTurn(turn: ReplyContextTurn): void {
     for (const [key, wait] of this.#autoReplyWaits) {
       const running = wait.running;
-      if (running?.agentId !== event.agentId) continue;
-      if (event.type === "turn-started" && running.turnId === null) running.turnId = event.turnId;
-      else if (event.type === "turn-completed" && running.turnId === event.turnId) this.#autoReplyTurnEnded(key, wait);
+      if (running?.agentId !== turn.agentId || !autoReplyRouteAccepts(running.route, turn.threadId)) continue;
+      if (turn.type === "started" && running.turnId === null) running.turnId = turn.turnId;
+      else if (turn.type === "completed" && running.turnId === turn.turnId)
+        this.#autoReplyTurnEnded(key, wait, turn.status === "completed");
     }
   }
 
-  #autoReplyTurnEnded(key: string, wait: AutoReplyWait): void {
+  /** The turn ended. Only a completed one writes its read mark; after any other, the messages are read again. */
+  #autoReplyTurnEnded(key: string, wait: AutoReplyWait, completed: boolean): void {
     if (this.#autoReplyWaits.get(key) !== wait || !wait.running) return;
     wait.running.cancelLimit();
+    if (completed) this.#commitReadMark(wait);
     wait.running = null;
     if (wait.again) {
       wait.again = false;
@@ -1538,12 +1653,25 @@ export class MessagingService {
     }
   }
 
-  /** The auto-reply turn that runs now for this agent in this conversation, if any. */
-  #runningAutoReply(agentId: string, connectionId: string, channelId: string): AutoReplyWait | null {
-    for (const wait of this.#autoReplyWaits.values())
-      if (wait.running?.agentId === agentId && wait.connectionId === connectionId && wait.channelId === channelId)
-        return wait;
+  /**
+   * The auto-reply turn that runs now for this agent in this conversation, if any. When the turn
+   * runs in a reply context, only a request from that thread is the turn's.
+   */
+  #runningAutoReply(agentId: string, connectionId: string, channelId: string, threadId: string): AutoReplyWait | null {
+    for (const wait of this.#autoReplyWaits.values()) {
+      const running = wait.running;
+      if (running?.agentId !== agentId || wait.connectionId !== connectionId || wait.channelId !== channelId) continue;
+      if (autoReplyRouteAccepts(running.route, threadId)) return wait;
+    }
     return null;
+  }
+
+  /** Writes what the running turn read to its reply context. */
+  #commitReadMark(wait: AutoReplyWait): void {
+    const mark = wait.running?.readMark;
+    if (!mark || !wait.running) return;
+    wait.running.readMark = null;
+    this.#threads.markReplyContextRead(mark.linkId, mark.value);
   }
 
   /** The live connection of a workspace that is connected as the person. */
@@ -2343,7 +2471,15 @@ export class MessagingService {
   }
 
   #agentEvent(event: AgentEvent): void {
-    if (event.type === "turn-started" || event.type === "turn-completed") this.#autoReplyTurn(event);
+    // Only main-thread turns come here: the turns of a reply context come from `onReplyContextTurn`.
+    if (event.type === "turn-started" || event.type === "turn-completed")
+      this.#autoReplyTurn({
+        type: event.type === "turn-started" ? "started" : "completed",
+        agentId: event.agentId,
+        threadId: event.threadId,
+        turnId: event.turnId,
+        status: event.type === "turn-completed" ? event.status : null,
+      });
     // A local-only approval (a mail to send, a meeting to book) holds private text, and only the
     // person at this computer answers it: it never goes to Slack.
     if (event.type === "approval" && isLocalOnlyApprovalRequestId(event.approval.requestId)) return;
@@ -2562,11 +2698,10 @@ export class MessagingService {
     const { to, text } = await this.#sendTarget(live, credentials, approverId, request);
     const channelId =
       to.kind === "channel" ? to.id : await live.adapter.openDirectMessage?.(to.id, "user").catch(() => undefined);
-    if (
-      !channelId ||
-      !this.#runningAutoReply(request.agentId, connectionId, channelId) ||
-      !this.#threads.autoReply.isOn(connectionId, channelId)
-    )
+    const running = channelId
+      ? this.#runningAutoReply(request.agentId, connectionId, channelId, request.threadId)
+      : null;
+    if (!channelId || !running || !this.#threads.autoReply.isOn(connectionId, channelId))
       throw new Error(sourceText("error.messaging.sendNeedsSlack"));
     // A pause or quiet hours refuse at once: with no Slack conversation, no draft can wait.
     const blocked = this.#sendBlock(live.record);
@@ -2590,6 +2725,8 @@ export class MessagingService {
       createdAt: new Date().toISOString(),
     };
     const sentLink = await this.#deliver(live, draft, approverId, "autoSent");
+    // The reply went out, so the messages it answered stay read even if the turn fails later.
+    this.#commitReadMark(running);
     this.#autoReplySent(live, channelId);
     return { status: "sent", draftId, sender: "user", approverId, link: sentLink, autoSent: true };
   }

@@ -67,6 +67,17 @@ export class AgentUsage {
     return row ? requiredStringColumn(row, "model") : null;
   }
 
+  /** Whether the agent has a checkpoint for a counter id that starts with `prefix`. */
+  hasCounter(agentId: string, prefix: string): boolean {
+    return (
+      databaseRow(
+        this.#core.connection
+          .prepare("SELECT 1 FROM agent_usage_checkpoints WHERE agent_id = ? AND substr(counter_id, 1, ?) = ? LIMIT 1")
+          .get(agentId, prefix.length, prefix),
+      ) !== null
+    );
+  }
+
   record(sample: UsageSample): void {
     const tokens = decodeUsageTokens(sample.tokens);
     const digest = createHash("sha256")

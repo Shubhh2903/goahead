@@ -161,6 +161,11 @@ interface EnqueueInput {
   draftIds?: string[];
   sourcePaths?: string[];
   idempotencyKey?: string;
+  /**
+   * A notice for the chat only: the delivery is stored as completed, so no turn starts for it. Only
+   * a user message with a `slackAsk` card can be one.
+   */
+  notice?: true;
 }
 
 /** A file a chat message carries or an agent made, as the Storage view lists it. */
@@ -337,6 +342,13 @@ export class MailboxStore {
     return message?.messaging ? structuredClone(message.messaging) : null;
   }
 
+  /** The Slack card of the message that this delivery carries, or null. Only the backend writes one. */
+  slackAskFor(deliveryId: string): ConversationSlackAsk | null {
+    const delivery = this.#state.deliveries.find((item) => item.id === deliveryId);
+    const message = delivery ? this.#state.messages.find((item) => item.id === delivery.messageId) : undefined;
+    return message?.slackAsk ? structuredClone(message.slackAsk) : null;
+  }
+
   /**
    * The external conversation an agent's answer goes back to: the one the request was sent from,
    * when the answer goes to the agent that sent it and to no one else. Every delivery of a message
@@ -458,7 +470,7 @@ export class MailboxStore {
       messageId,
       recipientAgentId,
       queueOrder: this.#nextQueueOrder(recipientAgentId),
-      status: "queued",
+      status: input.notice && message.slackAsk ? "completed" : "queued",
       turnId: null,
       error: null,
       createdAt,

@@ -57,6 +57,12 @@ export function collectProviderUsage(
     const models = getRecord(params, "modelUsage");
     const counterId = getString(params, "counterId");
     if (!models || !counterId) return;
+    // The first totals of a resumed session hold the whole session. The counter id is the session's,
+    // so a checkpoint usually exists and only the difference counts. A session with no checkpoint
+    // under that id (one from before stable counter ids) takes these totals as its baseline: that
+    // loses this one turn and does not count the whole session again.
+    const counterPrefix = `${session.id}:${counterId}:`;
+    const baseline = isDynamicRecord(params) && params.resumed === true && !usage.hasCounter(agent.id, counterPrefix);
     for (const [model, value] of Object.entries(models)) {
       if (!isDynamicRecord(value) || !isAgentModel(model)) continue;
       usage.record({
@@ -65,8 +71,8 @@ export function collectProviderUsage(
         turnId,
         provider: session.provider,
         model,
-        counterId: `${session.id}:${counterId}:${model}`,
-        baseline: false,
+        counterId: `${counterPrefix}${model}`,
+        baseline,
         tokens: {
           uncachedInput: count(value.inputTokens),
           cachedInput: count(value.cacheReadInputTokens),

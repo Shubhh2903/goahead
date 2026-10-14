@@ -21,7 +21,7 @@ import {
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { redactText } from "@openbot/logging";
 import { z } from "zod";
-import { claudeEnvironment } from "../claude-client";
+import { CLAUDE_BUILT_IN_TOOLS, claudeEnvironment } from "../claude-client";
 import { type ClaudeCliInfo, resolveClaudeCli } from "../cli";
 import {
   GMAIL_NOTIFY_TOOL,
@@ -40,25 +40,6 @@ export const GOOGLE_TRIAGE_ALLOWED_TOOLS: readonly string[] = TRIAGE_TOOL_NAMES.
 export const GOOGLE_TRIAGE_MODEL = "sonnet";
 const TRIAGE_MAX_TURNS = 30;
 const TRIAGE_TIMEOUT_MS = 5 * 60_000;
-/** Named again after `tools: []`, so a default tool that a later CLI adds is still removed. */
-const BUILT_IN_TOOLS = [
-  "Agent",
-  "Bash",
-  "BashOutput",
-  "Edit",
-  "Glob",
-  "Grep",
-  "KillShell",
-  "MultiEdit",
-  "NotebookEdit",
-  "Read",
-  "Skill",
-  "Task",
-  "TodoWrite",
-  "WebFetch",
-  "WebSearch",
-  "Write",
-];
 
 export interface GoogleTriageMail {
   id: string;
@@ -191,7 +172,7 @@ export function googleTriageOptions(input: {
     model: GOOGLE_TRIAGE_MODEL,
     systemPrompt: GOOGLE_TRIAGE_SYSTEM_PROMPT,
     tools: [],
-    disallowedTools: [...BUILT_IN_TOOLS],
+    disallowedTools: [...CLAUDE_BUILT_IN_TOOLS],
     allowedTools: [...GOOGLE_TRIAGE_ALLOWED_TOOLS],
     permissionMode: "dontAsk",
     canUseTool: googleTriagePermission,

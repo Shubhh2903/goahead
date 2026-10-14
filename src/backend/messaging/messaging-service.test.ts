@@ -16,9 +16,11 @@ import { type DynamicRecord, isString } from "@openbot/contracts/runtime-values"
 import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-app";
 import { sourceText } from "@openbot/i18n/source";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AgentProvider } from "../agent-client";
 import type { AgentService } from "../agent-service";
 import {
   callOpenBotTool,
+  createFakeClaude,
   type FakeAgentClient,
   inputRecords,
   notification,
@@ -29,6 +31,7 @@ import {
   stopAgentTestFixture,
   waitFor,
 } from "../agent-service-test-harness";
+import { storageThreads } from "../database/storage-usage-queries";
 import { SidebarLayoutStore } from "../sidebar-layout-store";
 import { GOOGLE_MAIL_AGENT_INSTRUCTIONS, type GoogleWorkspace } from "./google-tools";
 import { MessagingHiddenThreadStore } from "./messaging-hidden-threads";
@@ -353,10 +356,13 @@ async function connected(
     description?: string;
     autoReplyTimers?: AutoReplyTimers;
     googleWorkspace?: GoogleWorkspace;
+    provider?: AgentProvider;
   } = {},
 ) {
+  // The Claude runtime must be on disk for an agent to move to Claude; the provider is still faked.
+  if (options.provider === "claude") process.env.OPENBOT_CLAUDE_PATH = await createFakeClaude(root);
   const started = await startService(root, {
-    provider: "codex",
+    provider: options.provider ?? "codex",
     autoComplete: options.autoComplete ?? true,
     ...(options.googleWorkspace ? { googleWorkspace: options.googleWorkspace } : {}),
   });
@@ -384,6 +390,7 @@ async function connected(
       updateAgentDescription: (agentId, description) => started.service.updateAgent({ agentId, description }),
       sendMessage: ({ slackAsk, ...input }) =>
         slackAsk ? started.service.sendSlackAskMessage(input, slackAsk) : started.service.sendMessage(input),
+      postNotice: ({ slackAsk, ...input }) => started.service.postSlackNotice(input, slackAsk),
       projectMap: () => started.service.projectMap(),
       handoffRecords: (agentId) => started.service.handoffRecords(agentId),
       onHandoffs: (listener) => {
@@ -1648,10 +1655,23 @@ describe.sequential("Slack messaging end to end", () => {
     // Two quick messages from Preet: one wait, then one turn.
     await direct("D-UPREET", "UPREET", "how are you?", "1700000004.000100");
     await direct("D-UPREET", "UPREET", "free later?", "1700000005.000100");
-    expect(timers.waits()).toEqual([10_000]);
+    expect(timers.waits()).toEqual([20_000]);
     timers.elapse();
     await waitFor(() => turns.length === 1);
     const prompt = promptOf(turnStarts(started.client)[0] ?? { params: null });
+    // The turn runs in the conversation's reply context, not in the orchestrator's main thread.
+    const context = started.service.messaging.store.replyContext(started.connectionId, "D-UPREET");
+    if (!context) throw new Error("The auto-reply has no reply context.");
+    expect(started.store.database.activeProviderSession(context.threadId, "codex")?.externalSessionId).toBe(
+      turns[0]?.threadId,
+    );
+    expect((await started.store.getOrCreate(started.agent.id)).threadId).not.toBe(context.threadId);
+    // The reply context is no Slack conversation of the sidebar.
+    expect(messaging?.threadSummaries().map((summary) => summary.threadId)).not.toContain(context.threadId);
+    // Nor a chat of the storage view.
+    expect(storageThreads(started.store.database.connection).map((thread) => thread.threadId)).not.toContain(
+      context.threadId,
+    );
     expect(prompt).toContain("Auto-reply is on for this conversation.");
     expect(prompt).toContain("how are you?");
     expect(prompt).toContain("free later?");
@@ -1703,13 +1723,199 @@ describe.sequential("Slack messaging end to end", () => {
     );
     await waitFor(() => timers.waits().length === 1);
 
-    // Auto-reply off during the wait: no turn.
+    // The message that came during the turn gets the next turn, in the same context, with only the
+    // messages after the ones the context read.
+    timers.elapse();
+    await waitFor(() => turns.length === 2);
+    expect(turns[1]?.threadId).toBe(turn.threadId);
+    const next = promptOf(turnStarts(started.client)[1] ?? { params: null });
+    expect(next).toContain("--- new messages since your last turn, oldest first ---");
+    expect(next).toContain("also, the report?");
+    expect(next).not.toContain("how are you?");
+    expect(next).not.toContain("Hi Preet");
+    started.client.emit(
+      "notification",
+      notification("turn/completed", {
+        threadId: turn.threadId,
+        turn: { id: turns[1]?.turnId ?? "", status: "completed" },
+      }),
+    );
+
+    // Auto-reply off: no turn.
     await messaging?.slackClientSetAutoReply({ ...preet, on: false });
     expect(timers.waits()).toEqual([]);
     await direct("D-UPREET", "UPREET", "hello?", "1700000007.000100");
     expect(timers.waits()).toEqual([]);
-    expect(turnStarts(started.client)).toHaveLength(1);
-    report.autoReply = { turns: 1, autoSent: true };
+    expect(turnStarts(started.client)).toHaveLength(2);
+    report.autoReply = { turns: 2, autoSent: true, replyContext: true, secondTurnOnlyNewMessages: true };
+  });
+
+  it("an auto-reply on Claude runs on the lean reply model and tools, and the orchestrator keeps its own", async () => {
+    const timers = new ManualTimers();
+    const started = await connected({ user: true, autoComplete: false, autoReplyTimers: timers, provider: "claude" });
+    await started.service.updateAgent({
+      agentId: started.agent.id,
+      provider: "claude",
+      model: "claude-opus-5-5",
+      reasoningEffort: "high",
+    });
+    started.service.messaging.inbox.cache.upsertConversations(started.connectionId, [
+      { channelId: "D-UPREET", kind: "im", name: "", memberIds: ["UPREET", "UOWNER"], isMember: true },
+    ]);
+    await messaging?.slackClientSetAutoReply({ workspaceId: "T1", channelId: "D-UPREET", on: true });
+    await slack.send("events_api", {
+      team_id: "T1",
+      event: {
+        type: "message",
+        user: "UPREET",
+        text: "are you around?",
+        ts: "1700000301.000100",
+        channel: "D-UPREET",
+        channel_type: "im",
+      },
+    });
+    timers.elapse();
+    await waitFor(() => turnStarts(started.client).length === 1);
+
+    const sessionStart = started.client.requests.find((request) => request.method === "thread/start");
+    const session = paramsRecord(sessionStart?.params);
+    expect(session).toMatchObject({ model: "claude-sonnet-5-5", effort: "low", toolProfile: "slack-reply" });
+    expect(session?.developerInstructions).toContain("This session only answers Slack conversations");
+    expect(session?.developerInstructions).not.toContain("openbot.publish_site");
+    const turn = paramsRecord(turnStarts(started.client)[0]?.params);
+    expect(turn).toMatchObject({ model: "claude-sonnet-5-5", effort: "low" });
+    expect(promptOf(turnStarts(started.client)[0] ?? { params: null })).toContain("are you around?");
+    // The orchestrator's own model and effort do not change.
+    expect(await started.store.getOrCreate(started.agent.id)).toMatchObject({
+      model: "claude-opus-5-5",
+      reasoningEffort: "high",
+    });
+    report.autoReplyLean = { replyModel: true, lowEffort: true, slackReplyTools: true, ownModelKept: true };
+  });
+
+  describe("a reply context", () => {
+    async function autoReplyIn(googleWorkspace?: GoogleWorkspace) {
+      const timers = new ManualTimers();
+      const started = await connected({
+        user: true,
+        autoComplete: false,
+        autoReplyTimers: timers,
+        ...(googleWorkspace ? { googleWorkspace } : {}),
+      });
+      const turns = trackTurns(started.client);
+      started.service.messaging.inbox.cache.upsertConversations(started.connectionId, [
+        { channelId: "D-UPREET", kind: "im", name: "", memberIds: ["UPREET", "UOWNER"], isMember: true },
+      ]);
+      await messaging?.slackClientSetAutoReply({ workspaceId: "T1", channelId: "D-UPREET", on: true });
+      let ts = 1700000500;
+      const preet = (text: string) =>
+        slack.send("events_api", {
+          team_id: "T1",
+          event: {
+            type: "message",
+            user: "UPREET",
+            text,
+            ts: `${ts++}.000100`,
+            channel: "D-UPREET",
+            channel_type: "im",
+          },
+        });
+      const end = async (turn: { threadId: string; turnId: string } | undefined, status: string) => {
+        if (!turn) throw new Error("The turn did not start.");
+        started.client.emit(
+          "notification",
+          notification("turn/completed", { threadId: turn.threadId, turn: { id: turn.turnId, status } }),
+        );
+        await waitFor(() => started.mailbox.findDeliveryByTurn(turn.turnId)?.delivery.status !== "running");
+      };
+      return { started, timers, turns, preet, end };
+    }
+
+    it("reads again the messages of a turn that failed", async () => {
+      const { started, timers, turns, preet, end } = await autoReplyIn();
+      await preet("alpha-msg");
+      timers.elapse();
+      await waitFor(() => turns.length === 1);
+      await end(turns[0], "completed");
+
+      await preet("beta-msg");
+      timers.elapse();
+      await waitFor(() => turns.length === 2);
+      expect(promptOf(turnStarts(started.client)[1] ?? { params: null })).toContain("beta-msg");
+      await end(turns[1], "failed");
+
+      // The failed turn wrote no read mark: the next turn gets "beta-msg" again, and not "alpha-msg".
+      await preet("gamma-msg");
+      timers.elapse();
+      await waitFor(() => turns.length === 3);
+      const prompt = promptOf(turnStarts(started.client)[2] ?? { params: null });
+      expect(prompt).toContain("--- new messages since your last turn, oldest first ---");
+      expect(prompt).toContain("beta-msg");
+      expect(prompt).toContain("gamma-msg");
+      expect(prompt).not.toContain("alpha-msg");
+      report.replyContextFailedTurn = { readAgain: true };
+    });
+
+    it("refuses a send from the orchestrator's main thread while its auto-reply runs", async () => {
+      const { started, timers, turns, preet, end } = await autoReplyIn();
+      // A Team API member's message: a main-thread turn that is not the person's own.
+      await started.service.sendMessage({ agentId: started.agent.id, text: "Please tell Preet hi" });
+      await waitFor(() => turns.length === 1);
+      const main = turns[0];
+      if (!main) throw new Error("The main turn did not start.");
+      // The auto-reply waits behind the main turn, and its route is the reply context already.
+      await preet("are you there?");
+      timers.elapse();
+      await waitFor(() => started.service.messaging.store.replyContext(started.connectionId, "D-UPREET") !== null);
+      await waitFor(() => started.mailbox.queuedDeliveryIds(started.agent.id).length > 0);
+
+      const fromMain = await callOpenBotTool(
+        started.client,
+        main.threadId,
+        "slack_send_message",
+        { to: "<@UPREET>", text: "hi from the main thread" },
+        main.turnId,
+      );
+      expect(paramsRecord(fromMain.result)?.success).toBe(false);
+      expect(slack.of("chat.postMessage").some((call) => call.params.text === "hi from the main thread")).toBe(false);
+
+      // The auto-reply itself still sends from its reply context.
+      await end(main, "completed");
+      await waitFor(() => turns.length === 2);
+      const reply = turns[1];
+      if (!reply) throw new Error("The auto-reply did not start.");
+      expect(reply.threadId).not.toBe(main.threadId);
+      const sent = await callOpenBotTool(
+        started.client,
+        reply.threadId,
+        "slack_send_message",
+        { to: "<@UPREET>", text: "yes, here" },
+        reply.turnId,
+      );
+      expect(openBotToolPayload(sent.result)).toMatchObject({ status: "sent", autoSent: true });
+      report.replyContextMainThreadSend = { refused: true };
+    });
+
+    it("refuses the inbox read tools and the Google tools", async () => {
+      const google = googleStub();
+      const { started, timers, turns, preet } = await autoReplyIn(google);
+      await preet("what is in my inbox?");
+      timers.elapse();
+      await waitFor(() => turns.length === 1);
+      const turn = turns[0];
+      if (!turn) throw new Error("The auto-reply did not start.");
+      const calls: Array<[string, DynamicRecord]> = [
+        ["slack_list_unread", {}],
+        ["slack_read_conversation", { conversation: "D-UPREET" }],
+        ["gmail_search", { query: "is:unread" }],
+      ];
+      for (const [tool, args] of calls) {
+        const answer = await callOpenBotTool(started.client, turn.threadId, tool, args, turn.turnId);
+        expect(paramsRecord(answer.result)?.success, tool).toBe(false);
+      }
+      expect(google.queries).toEqual([]);
+      report.replyContextReadTools = { slackReadRefused: true, googleRefused: true };
+    });
   });
 
   it("a fast reply loop pauses auto-reply in its conversation until the person says to continue", async () => {
@@ -1739,16 +1945,15 @@ describe.sequential("Slack messaging end to end", () => {
         "notification",
         notification("turn/completed", { threadId: turn.threadId, turn: { id: turn.turnId, status: "completed" } }),
       );
-      await waitFor(() =>
-        started.events.some((event) => event.type === "turn-completed" && event.turnId === turn.turnId),
-      );
+      // A reply context turn never reaches the public events: its delivery shows the end.
+      await waitFor(() => started.mailbox.findDeliveryByTurn(turn.turnId)?.delivery.status === "completed");
     };
     // Preet writes, the wait ends, the orchestrator's turn replies at once, and the turn ends.
     let pings = 0;
     const exchange = async () => {
       pings += 1;
       await direct("UPREET", `ping ${pings}`);
-      expect(timers.waits()).toEqual([10_000]);
+      expect(timers.waits()).toEqual([20_000]);
       timers.elapse();
       // Each exchange is one turn: a notice turn in between would break the count.
       await waitFor(() => turns.length === pings && turnStarts(started.client).length === pings);
@@ -1766,38 +1971,53 @@ describe.sequential("Slack messaging end to end", () => {
       await complete(turn);
     };
 
-    // Nine fast replies, then the person writes in the conversation: the count starts again.
-    for (let index = 0; index < 9; index += 1) await exchange();
+    // Five fast replies, then the person writes in the conversation: the count starts again.
+    for (let index = 0; index < 5; index += 1) await exchange();
     await direct("UOWNER", "sorry, I am here");
-    for (let index = 0; index < 9; index += 1) await exchange();
+    for (let index = 0; index < 5; index += 1) await exchange();
     const beforeLoop = turnStarts(started.client).length;
-    expect(beforeLoop).toBe(18);
+    expect(beforeLoop).toBe(10);
 
-    // The tenth fast reply in a row pauses auto-reply there. The toggle stays on, and the
-    // orchestrator tells the person in GoAhead.
+    // The sixth fast reply in a row pauses auto-reply there. The toggle stays on, and a card in
+    // the orchestrator's chat tells the person, with no model turn.
     await exchange();
-    await waitFor(() => turnStarts(started.client).length === beforeLoop + 2);
-    const notice = promptOf(turnStarts(started.client).at(-1) ?? { params: null });
-    expect(notice).toContain("Auto-reply paused in");
-    expect(notice).toContain("it looks like a reply loop");
+    // The reply context had 10 turns, so the 11th starts a new one, with the full context again.
+    expect(turns[10]?.threadId).not.toBe(turns[9]?.threadId);
+    expect(turns[9]?.threadId).toBe(turns[0]?.threadId);
+    expect(promptOf(turnStarts(started.client)[10] ?? { params: null })).toContain(
+      "--- newest messages, oldest first ---",
+    );
+    const pausedCard = () =>
+      started.mailbox
+        .conversationMessages(started.agent.id)
+        .find((item) => item.slackAsk?.kind === "auto-reply-paused");
+    await waitFor(() => pausedCard() !== undefined);
+    expect(pausedCard()?.text).toContain("Auto-reply paused in");
+    expect(pausedCard()?.text).toContain("it looks like a reply loop");
+    expect(pausedCard()?.delivery?.status).toBe("completed");
+    expect(turnStarts(started.client)).toHaveLength(beforeLoop + 1);
     expect((await messaging?.slackClientOpen(preet))?.autoReply).toBe(true);
-    await waitFor(() => turns.length === beforeLoop + 2);
-    await complete(turns.at(-1));
 
     // A new message during the pause starts no turn.
     await direct("UPREET", "ping again");
     expect(timers.waits()).toEqual([]);
-    expect(turnStarts(started.client)).toHaveLength(beforeLoop + 2);
+    expect(turnStarts(started.client)).toHaveLength(beforeLoop + 1);
 
     // The person tells the orchestrator to continue: the waiting message gets one turn.
     await started.service.sendLocalOwnerMessage({ agentId: started.agent.id, text: "ok continue" });
-    expect(timers.waits()).toEqual([10_000]);
-    await waitFor(() => turns.length === beforeLoop + 3);
+    expect(timers.waits()).toEqual([20_000]);
+    await waitFor(() => turns.length === beforeLoop + 2);
     await complete(turns.at(-1));
     timers.elapse();
-    await waitFor(() => turnStarts(started.client).length === beforeLoop + 4);
+    await waitFor(() => turnStarts(started.client).length === beforeLoop + 3);
     expect(promptOf(turnStarts(started.client).at(-1) ?? { params: null })).toContain("ping again");
-    report.autoReplyLoop = { pausedAfter: 10, toggleStaysOn: true, resetByOwnMessage: true, resumed: true };
+    report.autoReplyLoop = {
+      pausedAfter: 6,
+      toggleStaysOn: true,
+      resetByOwnMessage: true,
+      resumed: true,
+      noticeStartsNoTurn: true,
+    };
   });
 
   it("the orchestrator sends as the person when they ask in GoAhead, and the send is marked", async () => {

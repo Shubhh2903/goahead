@@ -186,6 +186,67 @@ describe("local agent usage", () => {
     expect(db.usage.read(range).totals.processedTokens).toBe(340);
   });
 
+  // A resumed Claude session reports the session's whole totals in its first result. The first
+  // result after each idle release counted them again: about half of the measured tokens.
+  it("counts a resumed Claude session once and starts a new session from zero", async () => {
+    const db = await database();
+    const now = new Date().toISOString();
+    const today = { ...range, startDate: now.slice(0, 10), endDate: now.slice(0, 10) };
+    const agent = { id: "agent-a", model: "claude-sonnet-5" };
+    const claudeTotals = (
+      session: string,
+      turnId: string,
+      counterId: string,
+      resumed: boolean,
+      output: number,
+      cost: number,
+    ) => {
+      const provider = { id: session, provider: "claude" as const, createdAt: now };
+      collectProviderUsage(db.usage, agent, provider, "turn/started", { turn: { id: turnId } });
+      collectProviderUsage(db.usage, agent, provider, "openbot/usage", {
+        turnId,
+        counterId,
+        resumed,
+        modelUsage: {
+          "claude-sonnet-5": {
+            inputTokens: 100,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            outputTokens: output,
+            costUSD: cost,
+          },
+        },
+      });
+    };
+    const totals = () => db.usage.read(today).totals;
+
+    claudeTotals("session-a", "turn-1", "thread-a", false, 50, 0.01);
+    claudeTotals("session-a", "turn-2", "thread-a", false, 80, 0.015);
+    expect(totals()).toMatchObject({ processedTokens: 180 });
+    // Idle release, then a resume that restores the totals: only the 20 new output tokens count.
+    claudeTotals("session-a", "turn-3", "thread-a", true, 100, 0.02);
+    expect(totals()).toMatchObject({ processedTokens: 200 });
+    expect(totals().estimatedCostUsd).toBeCloseTo(0.02);
+    // The checkpoint is in SQLite, so a restart of GoAhead keeps it too.
+    db.close();
+    await db.initialize();
+    claudeTotals("session-a", "turn-4", "thread-a", true, 110, 0.022);
+    expect(totals()).toMatchObject({ processedTokens: 210 });
+    expect(totals().estimatedCostUsd).toBeCloseTo(0.022);
+
+    // A session from before stable counter ids has no checkpoint: its first totals are a baseline.
+    claudeTotals("session-b", "turn-5", "thread-b", true, 500, 0.1);
+    expect(totals()).toMatchObject({ processedTokens: 210 });
+    claudeTotals("session-b", "turn-6", "thread-b", false, 530, 0.11);
+    expect(totals()).toMatchObject({ processedTokens: 240 });
+    expect(totals().estimatedCostUsd).toBeCloseTo(0.032);
+
+    // A new session counts its first totals in full.
+    claudeTotals("session-c", "turn-7", "thread-c", false, 40, 0.005);
+    expect(totals()).toMatchObject({ processedTokens: 380 });
+    expect(totals().estimatedCostUsd).toBeCloseTo(0.037);
+  });
+
   it("isolates agents, dates, sessions, and models while preserving unknown costs", async () => {
     const db = await database();
     db.usage.record(sample);

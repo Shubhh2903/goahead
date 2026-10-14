@@ -38,7 +38,7 @@ import type { AgentMemories } from "./agent-memories";
 import type { ContextCompaction } from "./context-compaction";
 import type { ConversationRuntime } from "./conversation-runtime";
 import { agentNamesById, estimateTokens, renderHandoffMessage } from "./delivery-content";
-import { developerInstructions } from "./developer-instructions";
+import { developerInstructions, slackReplyInstructions } from "./developer-instructions";
 import { readHandoffHistory } from "./handoff-history";
 import { decodeCapturedSteps, readCapturedSteps } from "./handoff-tool-steps";
 import { existingProjectFolders } from "./project-folders";
@@ -67,6 +67,15 @@ const CODEX_TOOLS_CONFIG = { update_plan: { enabled: true } } as const;
 // remit, and without this line the model copies them instead of following the new one.
 const HANDOFF_PRECEDENCE =
   "Your current profile and developer instructions take precedence over any different instructions or behavior in this transcript.";
+
+/**
+ * The model and effort of a Slack reply context session on Claude, whatever the agent's own model
+ * is. An auto-reply is a short chat answer, so a cheaper model at low effort is enough.
+ */
+export const SLACK_REPLY_MODEL = "claude-sonnet-5-5";
+export const SLACK_REPLY_EFFORT = "low";
+/** What a Slack reply context session is told to the Claude client: only the Slack send tool. */
+const SLACK_REPLY_TOOL_PROFILE = "slack-reply";
 
 /** How many of the newest earlier sessions a handoff reads, when they have no capture. */
 const HANDOFF_SESSIONS_READ = 3;
@@ -110,6 +119,11 @@ export interface ThreadLifecycleOptions {
   readProviderSteps?: (provider: AgentProvider, externalSessionId: string) => Promise<Map<string, string>>;
   /** Whether a password vault is connected, read at each start and resume of a session. */
   passwordVaultConnected?: () => boolean;
+  /**
+   * True for an execution thread whose Claude sessions use the lean Slack reply profile: the
+   * `SLACK_REPLY_MODEL` at `SLACK_REPLY_EFFORT`, short instructions, and only the Slack tools.
+   */
+  slackReplyThread?: (publicThreadId: string) => boolean;
 }
 
 /**
@@ -135,6 +149,7 @@ export class ThreadLifecycle {
   readonly #agentEnvironment: () => Readonly<Record<string, string>>;
   readonly #readProviderSteps: ThreadLifecycleOptions["readProviderSteps"];
   readonly #passwordVaultConnected: () => boolean;
+  readonly #slackReplyThread: (publicThreadId: string) => boolean;
   readonly #pendingHandoffs = new Map<string, string>();
   readonly #pendingRuntimeRefreshes = new Set<string>();
   /**
@@ -160,6 +175,31 @@ export class ThreadLifecycle {
     this.#agentEnvironment = options.agentEnvironment ?? (() => ({}));
     this.#readProviderSteps = options.readProviderSteps;
     this.#passwordVaultConnected = options.passwordVaultConnected ?? (() => false);
+    this.#slackReplyThread = options.slackReplyThread ?? (() => false);
+  }
+
+  /** True when a session of this thread uses the Slack reply profile. Only Claude has the profile. */
+  #isSlackReply(agent: AgentSummary, publicThreadId: string | undefined): boolean {
+    return publicThreadId !== undefined && agent.provider === "claude" && this.#slackReplyThread(publicThreadId);
+  }
+
+  /** The agent as a session of this thread sees it: a Slack reply context gets the lean model. */
+  #profiled(agent: AgentSummary, publicThreadId: string | undefined): AgentSummary {
+    return this.#isSlackReply(agent, publicThreadId)
+      ? { ...agent, model: SLACK_REPLY_MODEL, reasoningEffort: SLACK_REPLY_EFFORT }
+      : agent;
+  }
+
+  /**
+   * The model and effort of a turn on this thread. The agent's own, except in a Slack reply context
+   * on Claude. The turn names them, so a session started before the profile still runs lean.
+   */
+  turnSettings(
+    agent: AgentSummary,
+    publicThreadId: string | undefined,
+  ): Pick<AgentSummary, "model" | "reasoningEffort"> {
+    const { model, reasoningEffort } = this.#profiled(agent, publicThreadId);
+    return { model, reasoningEffort };
   }
 
   /**
@@ -260,7 +300,10 @@ export class ThreadLifecycle {
   async ensureThread(agent: AgentSummary, client: AgentClient, executionThreadId?: string): Promise<string> {
     const publicThreadId = executionThreadId ?? (await this.#store.ensureThreadId(agent.id));
     if (executionThreadId) this.#conversation.registerExecutionThread(agent.id, executionThreadId);
-    const currentAgent = this.#store.list().find((candidate) => candidate.id === agent.id) ?? agent;
+    const currentAgent = this.#profiled(
+      this.#store.list().find((candidate) => candidate.id === agent.id) ?? agent,
+      executionThreadId,
+    );
     const session = this.#store.database.activeProviderSession(publicThreadId, agent.provider);
     if (session) {
       this.#conversation.bindThread(session.externalSessionId, agent.id, publicThreadId);
@@ -289,7 +332,7 @@ export class ThreadLifecycle {
       }
       if (this.#conversation.loadedClientFor(session.externalSessionId) !== client) {
         try {
-          await this.resumeThread(currentAgent, client, session.externalSessionId);
+          await this.resumeThread(currentAgent, client, session.externalSessionId, executionThreadId);
         } catch (error) {
           if (!isMissingProviderSessionError(error, client.provider)) throw error;
           this.retireProviderSession(currentAgent, session.externalSessionId);
@@ -359,7 +402,7 @@ export class ThreadLifecycle {
         sandbox: codexSandboxMode(agent),
         ...this.#workspaceOnlyParam(agent, client),
         ...this.#computerUseParam(agent, client),
-        developerInstructions: this.#instructions(agent),
+        ...this.#sessionProfile(agent, publicThreadId),
         ephemeral: false,
         serviceName: "openbot",
         dynamicTools: [...BROWSER_DYNAMIC_TOOLS, OPENBOT_DYNAMIC_TOOLS],
@@ -591,6 +634,21 @@ export class ThreadLifecycle {
     }
   }
 
+  /**
+   * The instructions of a session start or resume, and for a Slack reply context the tool profile
+   * that tells the Claude client to give only the Slack send tool.
+   */
+  #sessionProfile(
+    agent: AgentSummary,
+    publicThreadId: string | undefined,
+  ): { developerInstructions: string; toolProfile?: typeof SLACK_REPLY_TOOL_PROFILE } {
+    if (!this.#isSlackReply(agent, publicThreadId)) return { developerInstructions: this.#instructions(agent) };
+    return {
+      developerInstructions: slackReplyInstructions(agent, this.#memories.listFor(agent.id)),
+      toolProfile: SLACK_REPLY_TOOL_PROFILE,
+    };
+  }
+
   /** The developer instructions of a session start or resume, with what is connected now. */
   #instructions(agent: AgentSummary): string {
     return developerInstructions(
@@ -607,7 +665,12 @@ export class ThreadLifecycle {
    * recovery, which reads a session before any turn resumes it: a client that has to load the
    * session to answer needs the same workspace and settings as the resume would have given it.
    */
-  async threadParams(agent: AgentSummary, client: AgentClient, externalThreadId: string): Promise<DynamicRecord> {
+  async threadParams(
+    agent: AgentSummary,
+    client: AgentClient,
+    externalThreadId: string,
+    executionThreadId?: string,
+  ): Promise<DynamicRecord> {
     return {
       threadId: externalThreadId,
       model: agent.model,
@@ -618,7 +681,7 @@ export class ThreadLifecycle {
       sandbox: codexSandboxMode(agent),
       ...this.#workspaceOnlyParam(agent, client),
       ...this.#computerUseParam(agent, client),
-      developerInstructions: this.#instructions(agent),
+      ...this.#sessionProfile(agent, executionThreadId),
       ...(client.provider === "codex" ? {} : { dynamicTools: [...BROWSER_DYNAMIC_TOOLS, OPENBOT_DYNAMIC_TOOLS] }),
       ...(await this.codexConfig(
         agent,
@@ -631,9 +694,14 @@ export class ThreadLifecycle {
     };
   }
 
-  async resumeThread(agent: AgentSummary, client: AgentClient, externalThreadId: string): Promise<void> {
+  async resumeThread(
+    agent: AgentSummary,
+    client: AgentClient,
+    externalThreadId: string,
+    executionThreadId?: string,
+  ): Promise<void> {
     this.#conversation.bindThread(externalThreadId, agent.id);
-    const params = await this.threadParams(agent, client, externalThreadId);
+    const params = await this.threadParams(agent, client, externalThreadId, executionThreadId);
 
     try {
       await client.request("thread/resume", params, decodeRecordResponse);

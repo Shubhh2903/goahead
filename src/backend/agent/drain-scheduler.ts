@@ -371,6 +371,8 @@ export class DrainScheduler {
         return;
       }
       let threadId = await this.#threads.ensureThread(agent, client, execution?.threadId);
+      // A Slack reply context runs on its own lean model, whatever model the agent chose.
+      const turnSettings = this.#threads.turnSettings(agent, execution?.threadId);
       const snapshot = this.#conversation.ensureSnapshot(agent.id, threadId);
       // A turn started on this thread while the provider and the thread were prepared. The user
       // cannot see that race, so the delivery goes back to the head of the queue rather than
@@ -452,8 +454,8 @@ export class DrainScheduler {
           "turn/start",
           {
             threadId: providerThreadId,
-            model: agent.model,
-            effort: agent.reasoningEffort,
+            model: turnSettings.model,
+            effort: turnSettings.reasoningEffort,
             clientUserMessageId: delivery.id,
             // A teammate message that wants no answer tells the model to write nothing, so an empty
             // turn is the expected result and not a provider that swallowed its error.
@@ -488,7 +490,7 @@ export class DrainScheduler {
       // snapshot with a running delivery is a stale state for clients.
       snapshot.activeTurnId = response.turn.id;
       confirmedTurnId = response.turn.id;
-      this.#turnModels.set(agent.id, { turnId: response.turn.id, model: agent.model });
+      this.#turnModels.set(agent.id, { turnId: response.turn.id, model: turnSettings.model });
       for (const item of batch) await this.#mailbox.markRunning(item.delivery.id, response.turn.id);
       this.#channels?.accepted(delivery.id, threadId, response.turn.id);
       const currentDelivery = this.#mailbox.getDelivery(delivery.id)?.delivery;

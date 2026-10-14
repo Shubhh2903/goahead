@@ -29,15 +29,27 @@ export interface StoragePlacement {
 
 const STORAGE_PLACEMENT_PAGE = 500;
 
-/** Agent chats only. A channel context thread is internal: the user never sees it as a chat. */
+/**
+ * The thread key of a Slack reply context, `REPLY_CONTEXT_KEY` in `messaging/messaging-store.ts`.
+ * Written again here: the database modules do not import the messaging ones.
+ */
+const REPLY_CONTEXT_THREAD_KEY = "goahead:auto-reply";
+
+/**
+ * Agent chats only. A channel context thread and a Slack reply context are internal: the user never
+ * sees them as a chat.
+ */
 export function storageThreads(db: DatabaseSync, agentId?: string): StorageThread[] {
   const agentFilter = agentId === undefined ? "" : "AND agent_id = ?";
   const statement = db.prepare(
     `SELECT thread_id, agent_id, title FROM projection_threads
-     WHERE thread_id NOT IN (SELECT thread_id FROM projection_channel_contexts) ${agentFilter}
+     WHERE thread_id NOT IN (SELECT thread_id FROM projection_channel_contexts)
+       AND thread_id NOT IN (SELECT thread_id FROM projection_messaging_threads WHERE thread_key = ?) ${agentFilter}
      ORDER BY thread_id`,
   );
-  return databaseRows(agentId === undefined ? statement.all() : statement.all(agentId)).map((row) => ({
+  return databaseRows(
+    agentId === undefined ? statement.all(REPLY_CONTEXT_THREAD_KEY) : statement.all(REPLY_CONTEXT_THREAD_KEY, agentId),
+  ).map((row) => ({
     threadId: requiredStringColumn(row, "thread_id"),
     agentId: requiredStringColumn(row, "agent_id"),
     title: requiredStringColumn(row, "title"),

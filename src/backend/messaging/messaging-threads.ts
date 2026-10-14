@@ -8,7 +8,7 @@ import { MessagingAutoReplyStore } from "./messaging-auto-reply-store";
 import { MessagingDraftStore } from "./messaging-draft-store";
 import { MessagingInboxStore } from "./messaging-inbox-store";
 import { type MessagingContextMessage, messagingPromptText, projectMapInstruction } from "./messaging-prompt";
-import { type MessagingLink, MessagingStore } from "./messaging-store";
+import { type MessagingLink, MessagingStore, REPLY_CONTEXT_KEY } from "./messaging-store";
 
 /** A file the agent attached to its answer, ready to upload. */
 export interface MessagingAnswerFile {
@@ -56,6 +56,37 @@ export type MessagingReceiveResult =
   | { status: "queued"; link: MessagingLink; deliveryId: string; waiting: boolean }
   | { status: "duplicate" }
   | { status: "busy"; link: MessagingLink };
+
+/** The reply context of one conversation, as the platform side uses it. */
+export interface ReplyContext {
+  link: MessagingLink;
+  /** No turn was sent to it yet: the first prompt carries the full context. */
+  fresh: boolean;
+}
+
+export interface ReplyContextInput {
+  connectionId: string;
+  agentId: string;
+  platformChannelId: string;
+  isDirect: boolean;
+  title: string;
+}
+
+/** A turn that started or ended in a reply context. */
+export interface ReplyContextTurn {
+  type: "started" | "completed";
+  agentId: string;
+  threadId: string;
+  turnId: string;
+  /** How a completed turn ended, such as `completed` or `failed`. Null for a start. */
+  status: string | null;
+}
+
+/** The newest platform message that a reply context read, written once the turn that read it succeeds. */
+export interface ReplyContextCursor {
+  linkId: string;
+  value: string;
+}
 
 /** What the platform side adds to the prompt when a delivery starts. */
 export interface MessagingPromptContext {
@@ -153,6 +184,8 @@ export interface MessagingThreadsHooks {
   forgetThread(threadId: string): Promise<void>;
   /** Every local agent's project folders as one prompt line, or null when no agent has one. */
   projectMap(): string | null;
+  /** The agent's own main thread: the one its chat shows. */
+  mainThreadId(agentId: string): Promise<string>;
 }
 
 /**
@@ -160,6 +193,13 @@ export interface MessagingThreadsHooks {
  * orchestrator receives every new conversation, and it mostly asks teammates, so its turns are short.
  */
 const AGENT_QUEUE_LIMIT = 20;
+/**
+ * A reply context starts again after this many turns. Each turn adds the new messages, the reply
+ * and its tool call, so the context stays small and a long day of auto-replies does not grow it.
+ */
+export const REPLY_CONTEXT_TURNS = 10;
+/** A reply context idle for this long starts again: the provider's prompt cache is cold by then. */
+export const REPLY_CONTEXT_IDLE_MS = 60 * 60_000;
 const AUTHOR_QUEUE_LIMIT = 2;
 const CONTEXT_TIMEOUT_MS = 5_000;
 
@@ -183,6 +223,7 @@ export class MessagingThreads {
   readonly #listeners = new Set<(activity: MessagingActivity) => void>();
   readonly #changeListeners = new Set<(threadId: string) => void>();
   readonly #ownerMessageListeners = new Set<(agentId: string) => void>();
+  readonly #replyTurnListeners = new Set<(turn: ReplyContextTurn) => void>();
   readonly #admissions = new Map<string, Promise<unknown>>();
   /** The external message each running turn answers, by turn id. */
   readonly #turnOrigins = new Map<string, { origin: MessagingOrigin | null; followUp: boolean }>();
@@ -204,6 +245,70 @@ export class MessagingThreads {
   onActivity(listener: (activity: MessagingActivity) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  /** A turn started or ended in a reply context. Its events never reach the agent's public chat. */
+  onReplyContextTurn(listener: (turn: ReplyContextTurn) => void): () => void {
+    this.#replyTurnListeners.add(listener);
+    return () => this.#replyTurnListeners.delete(listener);
+  }
+
+  /**
+   * The reply context where the auto-reply turns of one conversation run, made when there is none.
+   * A context with `REPLY_CONTEXT_TURNS` turns, one idle for `REPLY_CONTEXT_IDLE_MS`, or one of another
+   * agent is replaced with an empty one, unless a turn of its agent runs now. Null when the context
+   * belongs to another agent that is busy: the turn then runs in the agent's main thread.
+   */
+  async ensureReplyContext(input: ReplyContextInput): Promise<ReplyContext | null> {
+    const existing = this.store.replyContext(input.connectionId, input.platformChannelId);
+    if (existing) {
+      const sameAgent = existing.agentId === input.agentId;
+      const spent =
+        this.store.userMessageCount(existing.threadId) >= REPLY_CONTEXT_TURNS ||
+        Date.now() - Date.parse(existing.updatedAt) >= REPLY_CONTEXT_IDLE_MS;
+      if (sameAgent && (!spent || this.#hooks.busy(existing.agentId)))
+        return { link: existing, fresh: existing.historyCursor === null };
+      if (this.#hooks.busy(existing.agentId)) return null;
+      await this.#hooks.forgetThread(existing.threadId);
+      this.store.deleteLink(existing.linkId);
+    }
+    const link = this.store.ensureLink({
+      connectionId: input.connectionId,
+      agentId: input.agentId,
+      platformChannelId: input.platformChannelId,
+      threadKey: REPLY_CONTEXT_KEY,
+      isDirect: input.isDirect,
+      title: input.title.slice(0, MESSAGING_LIMITS.name),
+    });
+    return { link, fresh: link.historyCursor === null };
+  }
+
+  /** The agent's own main thread, where an auto-reply runs when its reply context is not free. */
+  mainThreadId(agentId: string): Promise<string> {
+    return this.#hooks.mainThreadId(agentId);
+  }
+
+  /** Records the newest platform message that a reply context has read. */
+  markReplyContextRead(linkId: string, cursor: string): void {
+    this.store.touch(linkId, cursor);
+  }
+
+  /** True when the thread is a reply context, whose sessions use the lean Slack reply profile. */
+  isReplyContextThread(threadId: string): boolean {
+    return this.store.replyContextForThread(threadId) !== null;
+  }
+
+  /**
+   * The reply context of an auto-reply delivery: GoAhead wrote it with an `auto-reply` card, and the
+   * context of that conversation belongs to the recipient. Null for any other delivery.
+   */
+  #replyContextFor(deliveryId: string): MessagingLink | null {
+    const slackAsk = this.#mailbox.slackAskFor(deliveryId);
+    if (slackAsk?.kind !== "auto-reply") return null;
+    const connection = this.store.connectionForWorkspace("slack", slackAsk.workspaceId);
+    const link = connection ? this.store.replyContext(connection.connectionId, slackAsk.channelId) : null;
+    const recipient = this.#mailbox.getDelivery(deliveryId)?.delivery.recipientAgentId;
+    return link && link.agentId === recipient ? link : null;
   }
 
   /** The person at this computer sent a message to the agent from the desktop app. */
@@ -311,14 +416,15 @@ export class MessagingThreads {
     return { status: "queued", link, deliveryId, waiting };
   }
 
-  /** The execution thread of a messaging delivery, or null for any other delivery. */
+  /** The execution thread of a messaging or auto-reply delivery, or null for any other delivery. */
   threadForDelivery(deliveryId: string): string | null {
     const origin = this.#mailbox.messagingOrigin(deliveryId);
-    return origin ? (this.store.link(origin.linkId)?.threadId ?? null) : null;
+    if (origin) return this.store.link(origin.linkId)?.threadId ?? null;
+    return this.#replyContextFor(deliveryId)?.threadId ?? null;
   }
 
   ownsDelivery(deliveryId: string): boolean {
-    return this.#mailbox.messagingOrigin(deliveryId) !== null;
+    return this.#mailbox.messagingOrigin(deliveryId) !== null || this.#replyContextFor(deliveryId) !== null;
   }
 
   /** The orchestrator of each enabled workspace. Each one is a mail agent of the Google tools. */
@@ -368,7 +474,11 @@ export class MessagingThreads {
 
   async prepare(context: DeliveryContext): Promise<{ threadId: string; text: string } | null> {
     const origin = this.#mailbox.messagingOrigin(context.delivery.id);
-    if (!origin) return null;
+    if (!origin) {
+      // An auto-reply: GoAhead already wrote the whole prompt, with only the new messages.
+      const replyContext = this.#replyContextFor(context.delivery.id);
+      return replyContext ? { threadId: replyContext.threadId, text: context.delivery.text } : null;
+    }
     const link = this.store.link(origin.linkId);
     if (!link) return null;
     // A teammate's answer to a request the agent sent from this conversation. The delivery framing
@@ -432,16 +542,22 @@ export class MessagingThreads {
     switch (event.type) {
       case "conversation": {
         const threadId = event.snapshot.threadId;
-        if (threadId === null || this.store.linkForThread(threadId) === null) return false;
-        this.#changed(threadId);
+        const owner = threadId === null ? null : this.store.executionLink(threadId);
+        if (!owner || threadId === null) return false;
+        if (owner.threadKey !== REPLY_CONTEXT_KEY) this.#changed(threadId);
         return true;
       }
       case "conversation-delta":
       case "turn-progress":
-        return this.store.linkForThread(event.threadId) !== null;
+        // One lookup: these come for every streamed piece of every turn.
+        return this.store.executionLink(event.threadId) !== null;
       case "turn-started": {
-        const link = this.store.linkForThread(event.threadId);
+        const link = this.store.executionLink(event.threadId);
         if (!link) return false;
+        if (link.threadKey === REPLY_CONTEXT_KEY) {
+          this.#replyContextTurn(link, event);
+          return true;
+        }
         const running = this.#mailbox
           .unresolvedMessagingDeliveries(link.linkId)
           .find((context) => context.delivery.status !== "queued");
@@ -452,8 +568,12 @@ export class MessagingThreads {
         return true;
       }
       case "turn-completed": {
-        const link = this.store.linkForThread(event.threadId);
+        const link = this.store.executionLink(event.threadId);
         if (!link) return false;
+        if (link.threadKey === REPLY_CONTEXT_KEY) {
+          this.#replyContextTurn(link, event);
+          return true;
+        }
         const started = this.#turnOrigins.get(event.turnId) ?? { origin: null, followUp: false };
         this.#turnOrigins.delete(event.turnId);
         this.store.touch(link.linkId);
@@ -463,6 +583,22 @@ export class MessagingThreads {
       default:
         return false;
     }
+  }
+
+  /** Tells the listeners about a turn of a reply context. */
+  #replyContextTurn(
+    context: MessagingLink,
+    event: Extract<AgentEvent, { type: "turn-started" | "turn-completed" }>,
+  ): void {
+    if (event.type === "turn-completed") this.store.touch(context.linkId);
+    const turn: ReplyContextTurn = {
+      type: event.type === "turn-started" ? "started" : "completed",
+      agentId: context.agentId,
+      threadId: context.threadId,
+      turnId: event.turnId,
+      status: event.type === "turn-completed" ? event.status : null,
+    };
+    for (const listener of this.#replyTurnListeners) listener(turn);
   }
 
   /** A messaging delivery that failed before its turn started ends like a failed turn. */
