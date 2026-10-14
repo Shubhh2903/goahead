@@ -35,6 +35,7 @@ const GROUP_PATHS: Readonly<Record<IpcGroupName, string | null>> = {
   handoffs: "handoffs",
   hostAdmin: "hostAdmin",
   hostedSites: "hostedSites",
+  routineFlows: "routineFlows",
   githubConnector: "githubConnector",
   onePasswordConnector: "onePasswordConnector",
   bitwardenConnector: "bitwardenConnector",

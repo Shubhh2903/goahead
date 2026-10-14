@@ -5,12 +5,12 @@ import { promisify } from "node:util";
 import {
   type CanUseTool,
   createSdkMcpServer,
-  getSessionMessages,
   type ModelInfo,
   type Options,
   type PermissionResult,
   query,
   type SDKUserMessage,
+  type SessionMessage,
   tool,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -34,6 +34,7 @@ import { isBalanceDiagnostic, isPlanLimitDiagnostic } from "./agent/provider-dia
 import { USAGE_LIMIT_METHOD } from "./agent/usage-limit-gate";
 import { type AgentProvider, RequestTimeoutError } from "./agent-client";
 import { BROWSER_TOOL_DEFINITIONS, OPENBOT_BROWSER_NAMESPACE } from "./browser-tools";
+import { type ClaudeHistoryOptions, claudeHistoryFromMessages, claudeHistoryReader } from "./claude-history";
 import {
   CLAUDE_WORKSPACE_MANAGED_SETTINGS,
   claudeWorkspaceHooks,
@@ -77,6 +78,7 @@ import {
   type ThreadResponse,
   type TurnResponse,
 } from "./protocol";
+import type { ReadProviderHistory } from "./provider-history";
 
 const execFileAsync = promisify(execFile);
 const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -192,14 +194,14 @@ interface ClaudeQuery extends AsyncIterable<ClaudeStreamMessage> {
 }
 
 type QueryFactory = (params: Parameters<typeof query>[0]) => ClaudeQuery;
-type SessionHistoryReader = typeof getSessionMessages;
+type SessionHistoryReader = (sessionId: string, options?: { dir?: string }) => Promise<SessionMessage[]>;
 type ClaudeEffortCapability = { supported: ClaudeEffort[]; defaultEffort: ClaudeEffort } | null;
 
 export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
   readonly provider: AgentProvider = "claude";
   readonly #cli: ClaudeCliInfo;
   readonly #createQuery: QueryFactory;
-  readonly #readSessionMessages: SessionHistoryReader;
+  readonly #readSessionMessages: SessionHistoryReader | undefined;
   readonly #requestTimeoutMs: number;
   readonly #mcpServers: McpServerSource;
   readonly #reportMcpDrops: McpDropReporter | undefined;
@@ -209,6 +211,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
   readonly #stateDirectory: string | undefined;
   /** Read at each session start, so a GitHub connection made while OpenBot runs reaches the next session. */
   readonly #agentEnvironment: ((inherited?: NodeJS.ProcessEnv) => Readonly<Record<string, string>>) | undefined;
+  readonly readHistory: ReadProviderHistory;
   /** Threads whose process was closed for being idle keep the config that resumes them. */
   readonly #threads = new IdleThreadPool<ThreadRuntime, ThreadConfig>({
     releaseAfterMs: CLAUDE_THREAD_IDLE_RELEASE_MS,
@@ -229,7 +232,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
   constructor(
     cli: ClaudeCliInfo,
     createQuery: QueryFactory = query,
-    readSessionMessages: SessionHistoryReader = getSessionMessages,
+    readSessionMessages?: SessionHistoryReader,
     requestTimeoutMs = 30_000,
     mcpServers: McpServerSource = () => [],
     reportMcpDrops?: McpDropReporter,
@@ -237,6 +240,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     mcpAuthorization?: McpAuthorizationSource,
     stateDirectory?: string,
     agentEnvironment?: (inherited?: NodeJS.ProcessEnv) => Readonly<Record<string, string>>,
+    historyIndexDirectory?: string,
   ) {
     super();
     this.#cli = cli;
@@ -249,6 +253,22 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     this.#mcpAuthorization = mcpAuthorization;
     this.#stateDirectory = stateDirectory;
     this.#agentEnvironment = agentEnvironment;
+    const historyEnvironment = agentEnvironment?.();
+    const resolvedHistoryIndexDirectory = historyIndexDirectory ?? stateDirectory;
+    const historyOptions: ClaudeHistoryOptions = {
+      ...(historyEnvironment?.CLAUDE_CONFIG_DIR === undefined
+        ? {}
+        : { configDirectory: historyEnvironment.CLAUDE_CONFIG_DIR }),
+      ...(historyEnvironment?.CLAUDE_CODE_PROJECT_DIR_NAME === undefined
+        ? {}
+        : { projectDirectoryName: historyEnvironment.CLAUDE_CODE_PROJECT_DIR_NAME }),
+      ...(resolvedHistoryIndexDirectory === undefined ? {} : { indexDirectory: resolvedHistoryIndexDirectory }),
+    };
+    // Production reads the transcript through a disk index, a page at a time. An injected SDK reader is
+    // the test seam.
+    this.readHistory = readSessionMessages
+      ? claudeHistoryFromMessages(readSessionMessages)
+      : claudeHistoryReader(historyOptions);
   }
 
   get running(): boolean {
@@ -1063,7 +1083,28 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
 
   async #readThread(threadId: string): Promise<ThreadResponse> {
     const cwd = this.#threads.get(threadId)?.config.cwd ?? this.#threads.released(threadId)?.cwd;
-    const messages = await this.#readSessionMessages(threadId, cwd ? { dir: cwd } : undefined);
+    const readSessionMessages = this.#readSessionMessages;
+    if (!readSessionMessages) {
+      // thread/read is a released full-history response. Build it for this response only, from bounded pages.
+      const turns: NonNullable<ThreadResponse["thread"]["turns"]> = [];
+      let currentTurn: (typeof turns)[number] | null = null;
+      await this.readHistory({ threadId, ...(cwd === undefined ? {} : { cwd }), items: "full" }, async (fragment) => {
+        if (currentTurn?.id === fragment.turnId) {
+          currentTurn.items = [...(currentTurn.items ?? []), ...fragment.items];
+          return true;
+        }
+        currentTurn = {
+          id: fragment.turnId,
+          status: fragment.status ?? "completed",
+          ...(fragment.startedAt === undefined ? {} : { startedAt: fragment.startedAt }),
+          items: fragment.items,
+        };
+        turns.unshift(currentTurn);
+        return true;
+      });
+      return { thread: { id: threadId, turns } };
+    }
+    const messages = await readSessionMessages(threadId, cwd ? { dir: cwd } : undefined);
     const turns: NonNullable<ThreadResponse["thread"]["turns"]> = [];
     let current: (typeof turns)[number] | null = null;
     let currentThinking: ThreadItem | null = null;

@@ -81,6 +81,8 @@ export type VoiceDesktopApi = GroupApi<IpcEndpoints["voice"]>;
 export type SkillsDesktopApi = GroupApi<IpcEndpoints["skills"]>;
 
 export type HostedSitesDesktopApi = GroupApi<IpcEndpoints["hostedSites"]>;
+/** Routine flows on this computer's host: one agent's canvas, its links and positions. */
+export type RoutineFlowsDesktopApi = GroupApi<IpcEndpoints["routineFlows"]>;
 export type GitHubConnectorDesktopApi = GroupApi<IpcEndpoints["githubConnector"]>;
 export type OnePasswordConnectorDesktopApi = GroupApi<IpcEndpoints["onePasswordConnector"]>;
 export type BitwardenConnectorDesktopApi = GroupApi<IpcEndpoints["bitwardenConnector"]>;
@@ -151,6 +153,7 @@ export interface OpenBotDesktopApi extends GroupApi<IpcEndpoints["app"]>, GroupA
   storage: StorageDesktopApi;
   agentImport: AgentImportDesktopApi;
   hostedSites: HostedSitesDesktopApi;
+  routineFlows: RoutineFlowsDesktopApi;
   githubConnector: GitHubConnectorDesktopApi;
   onePasswordConnector: OnePasswordConnectorDesktopApi;
   bitwardenConnector: BitwardenConnectorDesktopApi;

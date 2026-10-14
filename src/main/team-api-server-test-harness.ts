@@ -111,6 +111,7 @@ export function createAgents(overrides: Partial<TeamApiAgents> = {}, events = ne
     deleteAgent: unimplemented,
     setAvatar: unimplemented,
     resolveAvatar: unimplemented,
+    readConversation: unimplemented,
     readConversationFor: unimplemented,
     readConversationPageFor: unimplemented,
     searchConversationMessages: unimplemented,

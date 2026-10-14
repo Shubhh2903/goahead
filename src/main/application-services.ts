@@ -2,6 +2,8 @@ import { isManagedRuntimeProvider } from "@openbot/contracts/agent-providers";
 import { PRODUCT_IDENTITY, PRODUCT_LINK_PREFIX } from "@openbot/contracts/product-identity";
 import { AgentDatabaseSupervisor } from "../backend/agent-data/agent-database-supervisor";
 import { AgentTables } from "../backend/agent-data/agent-tables";
+import { createHostRoutineFlows } from "../backend/routine-flows/routine-flow-host";
+import type { RoutineFlows } from "../backend/routine-flows/routine-flows";
 import { type AgentAdminSettingsService, createAgentAdminSettings } from "./agent-admin-settings";
 import { spawnAgentDatabaseHost } from "./agent-database-host-process";
 import { LocalSkillLibrary } from "./local-skill-library";
@@ -42,6 +44,7 @@ import type {
   CentralAuthState,
   ComputerUseState,
   ProviderRuntimeSnapshot,
+  RoutineFlowsChanged,
   VoiceModelStatus,
 } from "@openbot/contracts/ipc";
 import { IPC_ENDPOINTS, isManagedToolRuntime, isUpdateBusyPhase } from "@openbot/contracts/ipc";
@@ -273,6 +276,8 @@ const TEARDOWN_ORDER = {
   slackIngress: 86,
   host: 90,
   teamWebRtcBridge: 100,
+  // Before the agent service, so no handoff is sent to an agent while the service stops.
+  routineFlows: 103,
   mcpOAuthRedirect: 105,
   // Before the agent service, so no agent is handed a token file that is being removed.
   githubConnector: 107,
@@ -316,9 +321,16 @@ export interface ApplicationServiceContext {
   prepareForUpdateInstall: () => Promise<void>;
 }
 
+/** The routine flow runtime, and a way to hear which agents' canvases changed. */
+export interface RoutineFlowsService {
+  runtime: RoutineFlows;
+  onChanged(listener: (change: RoutineFlowsChanged) => void): void;
+}
+
 /** Everything the entry point wires up, registers IPC handlers against, and shuts down. */
 export interface ApplicationServices {
   service: AgentService;
+  routineFlows: RoutineFlowsService;
   providerRuntimes: ProviderRuntimeManager;
   providerCredentials: ProviderCredentialStore;
   /** The Slack connections of the agents on this host. */
@@ -970,6 +982,7 @@ export async function createApplicationServices({
     githubConnector,
     passwordVault: passwordVaultRouter(onePasswordConnector, bitwardenConnector),
     localSkillTools: () => localSkillTools(skills),
+    routineFlowTools: () => routineFlowRuntime,
     approvalAutomation,
     busyMessageMode: () => busyMessageMode.get().mode,
     deleteWithRevokedApproval: (agentId, remove) => approvalAutomation.deleteAgent(agentId, remove),
@@ -987,6 +1000,24 @@ export async function createApplicationServices({
     if (event.type === "agents-changed") void automation.sync();
   });
   teardown.push(TEARDOWN_ORDER.automation, "the automation server", () => automation.stop());
+  // An agent routine's answer handed on from agent to agent; see `routine-flows.ts`.
+  const routineFlowListeners = new Set<(change: RoutineFlowsChanged) => void>();
+  const routineFlowRuntime = createHostRoutineFlows({
+    store,
+    mailbox,
+    service,
+    changed: (agentIds) => {
+      for (const listener of routineFlowListeners) listener({ agentIds });
+    },
+  });
+  const routineFlows: RoutineFlowsService = {
+    runtime: routineFlowRuntime,
+    onChanged: (listener) => {
+      routineFlowListeners.add(listener);
+    },
+  };
+  service.on("event", (event) => routineFlowRuntime.notice(event));
+  teardown.push(TEARDOWN_ORDER.routineFlows, "the routine flows", () => routineFlowRuntime.close());
   /*
    * The Slack workspaces where the agents answer. The tokens use the same cipher as every other
    * secret; an unreadable file is reported, not fatal, and each workspace then connects again.
@@ -1667,6 +1698,8 @@ export async function createApplicationServices({
     await computerUseWarmUp.catch(() => undefined);
     await service.initialize({ heldRoutines: takeRoutineHold(routineHoldFile, (message) => logger.warn(message)) });
     await automation.sync();
+    // Picks up the flows a restart stopped between one agent's answer and the next agent's message.
+    await routineFlowRuntime.sweep();
   });
   const describeRestartReadiness = (): RestartReadiness =>
     checkRestartReadiness({
@@ -1808,6 +1841,7 @@ export async function createApplicationServices({
 
   return {
     service,
+    routineFlows,
     providerRuntimes,
     providerCredentials,
     messaging,

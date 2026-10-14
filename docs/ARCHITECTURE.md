@@ -152,6 +152,16 @@ the `media-attachments` capability; released protocol adapters keep their existi
   Generated response attachments become visible only after the conversation and mailbox commit
   succeeds. Agent deletion and queue edits record file removals in the mailbox transaction; the
   deletion outbox retries failed removals.
+- `src/backend/provider-history.ts` defines the provider history reader: newest turn first, one bounded
+  fragment at a time. Each provider adapter owns its pagination and decoding. `provider-history-import.ts`
+  stages each fragment in the `provider_history_*` tables (migration 33, upstream OpenBot migration 29) and
+  commits one normalized page of messages per transaction. It never deletes a message that a page does not
+  hold. ACP replay records that have no stable GoAhead turn ID stay provider records for handoff and recovery;
+  they do not make a second copy of messages that the live turn saved.
+- `ConversationRuntime` keeps the active turn and a bounded recent view of each chat (100 completed messages,
+  8 MB per chat, 64 MB in total). Writes from that view upsert the rows it holds and delete only explicitly
+  removed IDs. The released full-history reads, `thread/read` with turns and the event stream of a released
+  Team API event client, build their full answer from SQLite for each request and do not fill the cache.
 - `~/.codex`, `~/.claude`, `~/.grok`, and `~/.gemini` are provider-owned login and resume state. They are not GoAhead
   conversation storage.
 - D1 is the source of truth for central accounts, remote membership, invitations, and logical sessions.
@@ -354,6 +364,38 @@ crash. The flag is in `agent_json` and needs no migration; a profile without it 
 changes it, on the computer that runs the agent: the Team API parser and the agent profile tools do
 not accept it, the remote IPC branch refuses it, and duplication does not copy it. When the flag is
 on, the developer instructions name the two file paths, never the token.
+
+## Routine flows
+
+A routine flow hands the answer of an agent routine on to other agents. The Routines view of the
+sidebar shows one canvas for each agent: every routine whose run reaches it, the agents its links
+reach, and the last run of each routine. Only this computer's host keeps flows. The remote IPC branch
+refuses them, and no Team API protocol changes. GoAhead routines start on a schedule only; upstream
+OpenBot webhook triggers are not part of GoAhead.
+
+- `src/backend/routine-flows/` owns the three tables of migration 34 (upstream OpenBot migration 31):
+  links, node positions and steps. The rows are written directly, not through `dispatch`, because a
+  step holds the text that one agent gave another, and the event log is never deleted from.
+  `hardDeleteAgent` removes the rows of a deleted agent. A deleted routine or run takes its rows by
+  foreign key.
+- `RoutineFlows` (`routine-flows.ts`) never listens to a provider. On a turn, queue or routine event
+  it sweeps: it records the answer of a run that ended, settles each step whose delivery ended, and
+  sends the next messages. Sweeps run one at a time. A request during a sweep runs one more sweep
+  after it. Startup sweeps once, so a flow that a restart stopped continues. `createHostRoutineFlows`
+  (`routine-flow-host.ts`) wires it to the stores and the agent service.
+- A step is written before its handoff is sent, and the handoff uses the step id as its mailbox
+  idempotency key. A restart between the two writes sends the handoff again, and the mailbox answers
+  with the delivery it made the first time. After `close`, nothing is sent.
+- A link belongs to one routine and applies only to runs that started after it. An agent with several
+  inputs waits for all of them and gets them in one message. An agent whose inputs all failed is
+  skipped, so a failure never leaves a flow waiting.
+- A handoff is a mailbox delivery from the routine (`RoutineScheduler.enqueueHandoff`). It names the
+  same routine and run, but `reconcileDelivery` finds a run only by its own delivery, so the run status
+  does not change.
+- Agents read and change flows with the `openbot` tools `list_routine_flows`, `connect_routine_agents`
+  and `disconnect_routine_agents` (`routine-flow-tools.ts`). `RoutineFlows` is built after the agent
+  service, so the tool router reads it through a getter. The canvas chat panel sends the user's request
+  to the open agent's own conversation and shows the answer of the turn that read it.
 
 ## Provider CLI updates
 
@@ -662,10 +704,23 @@ SQLite migration history starts at the frozen version 8 compatibility baseline. 
 schema unchanged, append every later migration in numeric order, and update the separate latest
 schema used for new databases. Never remove or rewrite a migration that may have shipped.
 
+GoAhead and upstream OpenBot share migrations 8 to 27. From 28 on, the same version number means a
+different change: GoAhead 28 to 31 add the Slack inbox, client cache, drafts and auto-reply tables, and
+GoAhead 32 onward port upstream 28 onward with a new number. Both applications name the file
+`openbot.db`. Before any migration runs, `assertGoAheadLineage` in
+`src/backend/openbot-database-schema.ts` checks each applied marker from 28 to 31 for the table that the
+GoAhead migration of that version creates. If one table is missing, upstream OpenBot wrote the
+database: startup stops with `error.storage.upstreamDatabase` and changes nothing. A later migration
+that drops or renames one of these tables must update that list.
+
 At startup, chat recovery reads all saved provider sessions for each thread, including inactive
 sessions from an upgrade or a provider change. It uses each session's provider and merges the
 messages into SQLite without activating the old session. A failed read reports an error, keeps
 the saved messages, and can be tried again when the provider connects or the app restarts.
+The read is paged (`readHistory`), and each page commits on its own, so a failure keeps the pages
+before it. Codex reads use `thread/turns/list` and `thread/items/list`, so GoAhead requires Codex
+CLI 0.156.0 or newer. A history line over the provider line limit marks that session, and recovery
+does not read it again until the app restarts.
 
 ## Team API compatibility boundary
 
@@ -1352,6 +1407,10 @@ authenticates, so the name is the only signal. `isFreeOpencodeModelName` in
 about what costs money.
 Provider session IDs remain in `projection_provider_sessions`; migration 17 adds OpenCode while
 preserving turn links. Provider switches keep the same agent, workspace, and local thread.
+Migrations 17, 22, 23, 24 and 26 widen the table's provider `CHECK`. Migration 32 (upstream
+migration 28) removes it, so a new provider needs no table rebuild. `ProviderSessions.bindProviderSession`
+and the thread replay accept only `AGENT_PROVIDERS` and reject other values before they write an event
+or a row.
 
 ### Gemini
 

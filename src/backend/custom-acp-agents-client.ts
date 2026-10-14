@@ -22,6 +22,7 @@ import { isAgentModel } from "@openbot/contracts/ipc";
 import type { DynamicRecord } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
 import { assertAgentArgs, assertWindowsScriptArgs, resolveAgentCommand } from "./acp-agent-command";
+import type { AcpHistoryPersistence } from "./acp-client";
 import type { AgentClient, DiagnosticOrigin } from "./agent-client";
 import {
   type AppServerNotification,
@@ -36,6 +37,13 @@ import {
   type ResponseDecoder,
   type RpcError,
 } from "./protocol";
+import {
+  type CollectedHistoryTurn,
+  collectHistoryTurn,
+  type ProviderHistoryConsumer,
+  type ProviderHistoryFragment,
+  type ProviderHistoryRequest,
+} from "./provider-history";
 import { withTimeout } from "./with-timeout";
 
 export interface CustomAgentConfig {
@@ -57,6 +65,7 @@ export type CustomAgentChildFactory = (
   config: CustomAgentConfig,
   executable: string,
   folder: string | null,
+  history?: AcpHistoryPersistence,
 ) => AgentClient;
 
 const MODEL_LIST_TIMEOUT_MS = 5_000;
@@ -122,6 +131,7 @@ export class CustomAcpAgentsClient extends EventEmitter<ClientEvents> implements
   readonly #source: CustomAgentSource;
   readonly #createChild: CustomAgentChildFactory;
   readonly #resolve: typeof resolveAgentCommand;
+  readonly #history: AcpHistoryPersistence | undefined;
   readonly #children = new Map<string, Promise<AgentClient>>();
   /** The process that opened or loaded each session, by the routed id that the caller knows. */
   readonly #sessions = new Map<string, HeldSession>();
@@ -134,16 +144,66 @@ export class CustomAcpAgentsClient extends EventEmitter<ClientEvents> implements
   readonly #lastModels = new Map<string, ModelEntry[]>();
   #running = false;
 
-  constructor(source: CustomAgentSource, createChild: CustomAgentChildFactory, resolve = resolveAgentCommand) {
+  constructor(
+    source: CustomAgentSource,
+    createChild: CustomAgentChildFactory,
+    resolve = resolveAgentCommand,
+    history?: AcpHistoryPersistence,
+  ) {
     super();
     this.#source = source;
     this.#createChild = createChild;
     this.#resolve = resolve;
+    this.#history = history;
   }
 
   get running(): boolean {
     return this.#running;
   }
+
+  /** Keep a custom ACP process alive when one of its held sessions cannot resume or load. */
+  canReleaseProcess(): boolean {
+    const children = new Set([...this.#sessions.values()].map(({ child }) => child));
+    return [...children].every((child) => child.canReleaseProcess?.() !== false);
+  }
+
+  /** Routes durable history reads to the process that owns the custom session. */
+  readonly readHistory = async (request: ProviderHistoryRequest, consume: ProviderHistoryConsumer): Promise<void> => {
+    const history = this.#history;
+    const durableReplay = Boolean(history?.append && history.read);
+    const complete = history?.complete;
+    if (request.providerOnly && complete && (await complete(request))) return;
+    let stopped = false;
+    const reader = history?.read;
+    const readStored = async (storedRequest: ProviderHistoryRequest): Promise<void> => {
+      if (!reader) return;
+      await reader(storedRequest, async (fragment) => {
+        const continueReading = await consume(fragment);
+        stopped = !continueReading;
+        return continueReading;
+      });
+    };
+    if (!request.providerOnly && history?.read) {
+      if (!durableReplay) {
+        await readStored(request);
+        if (stopped) return;
+        if (complete && (await complete(request))) return;
+      } else if (complete && (await complete(request))) {
+        await readStored(request);
+        return;
+      }
+    }
+    const agentId = sessionAgent(request.threadId);
+    if (!agentId || !request.cwd) {
+      if (history && durableReplay && !request.providerOnly) await readStored(request);
+      return;
+    }
+    const child = await this.#child(agentId, request.cwd);
+    const read = child.readHistory;
+    if (!read) return;
+    const sessionId = ownSessionId(request.threadId, agentId, request.cwd);
+    await read({ ...request, threadId: sessionId, ...(durableReplay ? { providerOnly: true } : {}) }, consume);
+  };
 
   start(): void {
     this.#running = true;
@@ -225,6 +285,17 @@ export class CustomAcpAgentsClient extends EventEmitter<ClientEvents> implements
       }
       case "thread/read": {
         const threadId = getString(params, "threadId") ?? "";
+        if (isRecord(params) && params.includeTurns === true) {
+          const turns = new Map<string, CollectedHistoryTurn>();
+          const seenItems = new Map<string, Set<string>>();
+          const cwd = getString(params, "cwd");
+          await this.readHistory({ threadId, items: "full", ...(cwd === null ? {} : { cwd }) }, async (fragment) => {
+            collectHistoryTurn(turns, seenItems, fragment);
+            return true;
+          });
+          // readHistory is newest-first; the released response is chronological.
+          return decoder({ thread: { id: threadId, turns: [...turns.values()].reverse() } });
+        }
         const agentId = sessionAgent(threadId);
         // A read has nothing to recover: a session of an agent that is gone has no turns to show.
         if (!agentId || !this.#source().some((config) => config.id === agentId)) {
@@ -336,8 +407,26 @@ export class CustomAcpAgentsClient extends EventEmitter<ClientEvents> implements
     const executable = await this.#resolve(config.command);
     if (!executable) throw new Error(sourceText("error.provider.customAgentNotFound", { command: config.command }));
     assertWindowsScriptArgs(executable, config.args);
-    const child = this.#createChild(config, executable, folder);
     const prefix = folder === null ? agentId : `${agentId}:${folderTag(folder)}`;
+    let created: AgentClient | null = null;
+    const routedId = (sessionId: string) =>
+      created ? this.#routedSessionId(created, prefix, sessionId) : `${prefix}:${sessionId}`;
+    const stored = this.#history;
+    // The child writes completed turns under the id the caller knows, so the stored import of a routed
+    // session is found again by that id. The process that only lists models has no sessions.
+    const history: AcpHistoryPersistence | undefined =
+      folder === null || !stored
+        ? undefined
+        : {
+            read: async (request: ProviderHistoryRequest, consume: ProviderHistoryConsumer) => {
+              await stored.read?.({ ...request, threadId: routedId(request.threadId) }, consume);
+            },
+            append: async (sessionId: string, fragment: ProviderHistoryFragment) => {
+              await stored.append?.(routedId(sessionId), fragment);
+            },
+          };
+    const child = this.#createChild(config, executable, folder, history);
+    created = child;
     const route = (sessionId: string) => this.#routedSessionId(child, prefix, sessionId);
     child.on("notification", (notification) => {
       this.emit("notification", withRoutedThreadId(notification, route));

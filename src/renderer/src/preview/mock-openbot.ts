@@ -114,6 +114,7 @@ import { createMockMessaging } from "./mock-messaging";
 import { createMockOnePasswordConnector } from "./mock-onepassword-connector";
 import { createMockProviderRuntimes, type MockProviderRuntimeOptions } from "./mock-provider-runtimes";
 import { mockRoutineCalendar } from "./mock-routine-calendar";
+import { mockRoutineFlows } from "./mock-routine-flows";
 import { applySidebarLayoutAction } from "./mock-sidebar-layout";
 import { createMockSkills, type MockSkillsOptions } from "./mock-skills";
 import { createMockSlackClient } from "./mock-slack-client";
@@ -565,6 +566,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     providerRuntimes: mockProviderRuntimes.providerRuntimes,
     openUrl: async () => undefined,
     voice: mockVoice.voice,
+    routineFlows: mockRoutineFlows({ routines, routineRuns }),
     auth: mockAuth.auth,
     skills: mockSkills.skills,
     hostedSites: {

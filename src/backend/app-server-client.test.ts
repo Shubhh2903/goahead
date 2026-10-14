@@ -7,6 +7,7 @@ import { isString } from "@openbot/contracts/runtime-values";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./app-server-client";
 import { decodeRecordResponse, isRecord } from "./protocol";
+import type { ProviderHistoryFragment } from "./provider-history";
 
 const temporaryRoots: string[] = [];
 const clients: CodexAppServerClient[] = [];
@@ -77,6 +78,92 @@ describe("CodexAppServerClient", () => {
       echoed: "after restart",
     });
   });
+
+  it("reads newest turns with bounded item pages without resuming the thread", async () => {
+    const client = createClient(await createFakeCodex(), 5_000);
+    const observed: Array<{ method: string; params: unknown }> = [];
+    const fragments: ProviderHistoryFragment[] = [];
+    client.on("notification", (notification) => {
+      if (notification.method === "test/observed" && isRecord(notification.params)) {
+        observed.push({ method: String(notification.params.method), params: notification.params.params });
+      }
+    });
+    client.start();
+
+    await client.readHistory({ threadId: "history-thread", cwd: "/tmp/workspace", items: "full" }, async (fragment) => {
+      fragments.push(fragment);
+      return true;
+    });
+    await vi.waitFor(() => expect(observed).toHaveLength(5));
+
+    expect(fragments).toEqual([
+      {
+        turnId: "turn-2",
+        status: "completed",
+        startedAt: 2,
+        itemOffset: 0,
+        items: [{ type: "userMessage", id: "item-2a", text: "first" }],
+        complete: false,
+      },
+      {
+        turnId: "turn-2",
+        status: "completed",
+        startedAt: 2,
+        itemOffset: 1,
+        items: [{ type: "agentMessage", id: "item-2b", text: "second" }],
+        complete: true,
+      },
+      { turnId: "turn-1", status: "failed", startedAt: 1, itemOffset: 0, items: [], complete: true },
+    ]);
+    const turnsList = { threadId: "history-thread", limit: 50, sortDirection: "desc", itemsView: "notLoaded" };
+    const itemsList = (turnId: string) => ({ threadId: "history-thread", turnId, limit: 50, sortDirection: "asc" });
+    expect(observed).toEqual([
+      { method: "thread/turns/list", params: turnsList },
+      { method: "thread/items/list", params: itemsList("turn-2") },
+      { method: "thread/items/list", params: { ...itemsList("turn-2"), cursor: "item-next" } },
+      { method: "thread/turns/list", params: { ...turnsList, cursor: "turn-next" } },
+      { method: "thread/items/list", params: itemsList("turn-1") },
+    ]);
+  });
+
+  it("fails when Codex repeats a history cursor", async () => {
+    const client = createClient(await createFakeCodex(), 5_000);
+    client.start();
+
+    await expect(client.readHistory({ threadId: "repeated-thread", items: "none" }, async () => true)).rejects.toThrow(
+      "repeated turn history cursor",
+    );
+  });
+
+  it("stops paging when the consumer declines a fragment", async () => {
+    const client = createClient(await createFakeCodex(), 5_000);
+    const observed: string[] = [];
+    client.on("notification", (notification) => {
+      if (notification.method === "test/observed" && isRecord(notification.params)) {
+        observed.push(String(notification.params.method));
+      }
+    });
+    client.start();
+    let count = 0;
+
+    await client.readHistory({ threadId: "history-thread", items: "full" }, async () => {
+      count += 1;
+      return false;
+    });
+
+    await vi.waitFor(() => expect(observed).toHaveLength(2));
+    expect(count).toBe(1);
+    expect(observed).toEqual(["thread/turns/list", "thread/items/list"]);
+  });
+
+  it("propagates a failed page without falling back to a full history read", async () => {
+    const client = createClient(await createFakeCodex(), 5_000);
+    client.start();
+
+    await expect(
+      client.readHistory({ threadId: "failed-page-thread", items: "full" }, async () => true),
+    ).rejects.toThrow("Codex history page failed");
+  });
 });
 
 function decodeEchoResponse(value: unknown): { echoed: string } {
@@ -120,6 +207,30 @@ process.stdin.on("data", (chunk) => {
       } else if (message.method === "thread/unsubscribe") {
         process.stdout.write(JSON.stringify({ id: message.id, result: { status: "Unsubscribed" } }) + "\\n");
         process.stdout.write(JSON.stringify({ method: "test/unsubscribed", params: message.params }) + "\\n");
+      } else if (message.method === "thread/turns/list") {
+        const page =
+          message.params.threadId === "repeated-thread"
+            ? { data: [], nextCursor: "same-turn-cursor" }
+            : message.params.cursor === "turn-next"
+              ? { data: [{ id: "turn-1", status: "failed", startedAt: 1 }], nextCursor: null }
+              : { data: [{ id: "turn-2", status: "completed", startedAt: 2 }], nextCursor: "turn-next" };
+        process.stdout.write(JSON.stringify({ id: message.id, result: page }) + "\\n");
+        process.stdout.write(JSON.stringify({ method: "test/observed", params: { method: message.method, params: message.params } }) + "\\n");
+      } else if (message.method === "thread/items/list") {
+        if (message.params.threadId === "failed-page-thread") {
+          process.stdout.write(JSON.stringify({ id: message.id, error: { code: 499, message: "Codex history page failed" } }) + "\\n");
+        } else {
+          let page;
+          if (message.params.turnId === "turn-1") {
+            page = { data: [], nextCursor: null };
+          } else if (message.params.cursor === "item-next") {
+            page = { data: [{ turnId: "turn-2", item: { type: "agentMessage", id: "item-2b", text: "second" } }], nextCursor: null };
+          } else {
+            page = { data: [{ turnId: "turn-2", item: { type: "userMessage", id: "item-2a", text: "first" } }], nextCursor: "item-next" };
+          }
+          process.stdout.write(JSON.stringify({ id: message.id, result: page }) + "\\n");
+          process.stdout.write(JSON.stringify({ method: "test/observed", params: { method: message.method, params: message.params } }) + "\\n");
+        }
       } else if (message.method === "test/partial-exit") {
         process.stdout.write('{"id":');
         process.exit(9);

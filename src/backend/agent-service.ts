@@ -116,7 +116,7 @@ import { DeltaBuffer } from "./agent/delta-buffer";
 import { DrainScheduler } from "./agent/drain-scheduler";
 import { DuplicationGate } from "./agent/duplication-gate";
 import { HandoffActivity, type HandoffRecord } from "./agent/handoff-activity";
-import { decodeProviderTurns } from "./agent/handoff-tool-steps";
+import { readCapturedSteps } from "./agent/handoff-tool-steps";
 import { type AgentHostedSites, HostedSiteCoordinator } from "./agent/hosted-site-coordinator";
 import { ImageGenRuntime } from "./agent/image-gen-runtime";
 import { MailboxSync } from "./agent/mailbox-sync";
@@ -162,7 +162,9 @@ import { MessagingThreads } from "./messaging/messaging-threads";
 import type { PasswordVault } from "./password-vault";
 import { decodeRecordResponse } from "./protocol";
 import { NO_PROVIDER_CREDENTIALS, type ProviderClientContext } from "./provider-drivers";
+import { providerHistoryPersistence } from "./provider-history-persistence";
 import { recordAgentRestartActivity } from "./restart-activity";
+import type { RoutineFlowTools } from "./routine-flows/routine-flow-tools";
 import type { RoutineHoldWindow } from "./routine-store";
 import { RoutineTimer } from "./routine-timer";
 import type { SidebarLayoutStore } from "./sidebar-layout-store";
@@ -219,6 +221,8 @@ export interface AgentServiceOptions {
    */
   credentials?: ProviderClientContext;
   localSkillTools?: () => LocalSkillTools;
+  /** Built after the service, so read when a tool call needs it. */
+  routineFlowTools?: () => RoutineFlowTools;
   /**
    * Whose approvals are answered without asking. The main process owns the preference, because it
    * is a property of this computer and never crosses the Team API. Omitted, every approval asks.
@@ -307,6 +311,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   readonly #tools: OpenBotToolRouter;
   readonly #sidebarLayout: AgentSidebar | null;
   readonly #localSkillTools?: () => LocalSkillTools;
+  readonly #routineFlowTools: (() => RoutineFlowTools) | undefined;
   readonly #developmentDefaults: boolean;
   /**
    * The deliveries that the person at this computer sent from the desktop app, newest last. Only in
@@ -337,6 +342,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       sidebarLayout = null,
       credentials = NO_PROVIDER_CREDENTIALS,
       localSkillTools,
+      routineFlowTools,
       developmentDefaults = false,
       computerUseMcpServer = () => null,
       githubConnector = null,
@@ -346,6 +352,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     this.#developmentDefaults = developmentDefaults;
     this.#busyMessageMode = busyMessageMode;
     this.#localSkillTools = localSkillTools;
+    this.#routineFlowTools = routineFlowTools;
     this.#store = store;
     // First of the sub-objects, because `#emitError` reads it to redact and every one of them is
     // given that callback.
@@ -508,6 +515,8 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       // endpoint can refuse the prompt itself, after the waits every caller above it makes.
       credentials: {
         ...credentials,
+        // ACP clients write completed turns to SQLite and read them back from there.
+        history: credentials.history ?? ((provider) => providerHistoryPersistence(this.#store.database, provider)),
         servesModel: (modelId) => this.#endpoints.serves(modelId),
         // Every MCP set that leaves for a provider is remembered, so its secrets stay redactable
         // after the user edits them. This is the second of the two ways one leaves; the other is
@@ -639,12 +648,12 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       // The previous provider's CLI stops a minute after no agent uses it, so it is started again. The
       // first turn on the new provider waits for the start and the read, so both share one short
       // limit. No `cwd` is sent, as in the boot backfill: a replaced ACP session is not opened again.
-      readProviderTurns: (provider, threadId) =>
+      readProviderSteps: (provider, threadId) =>
         withTimeout(
           (async () => {
             await this.#providers.ensureProvider(provider);
             const client = this.#providers.clientFor(provider);
-            return client ? client.request("thread/read", { threadId, includeTurns: true }, decodeProviderTurns) : [];
+            return client ? await readCapturedSteps(client, threadId) : new Map<string, string>();
           })(),
           10_000,
           "The earlier provider session could not be read in time.",
@@ -933,6 +942,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       tables: this.#tables,
       sidebarLayout: this.#sidebarLayout,
       localSkillTools: this.#localSkillTools,
+      routineFlowTools: this.#routineFlowTools,
       approvalAutomation: options.approvalAutomation,
       messaging: this.messaging,
       visualPreview: options.visualPreview,
@@ -1113,6 +1123,16 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
 
   testRoutine(input: TestRoutineInput): Promise<RoutineRun> {
     return this.#routines.test(input);
+  }
+
+  /** Hands a routine run's work on to the next agent of its flow; answers the delivery id. */
+  enqueueRoutineHandoff(input: {
+    run: Pick<RoutineRun, "id" | "routineId" | "routineName" | "scheduledFor">;
+    agentId: string;
+    text: string;
+    idempotencyKey: string;
+  }): Promise<string> {
+    return this.#routines.enqueueHandoff(input);
   }
 
   /** A run that a local script starts through the automation server. Only for agents that allow it. */
@@ -1502,7 +1522,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         const activeTurn =
           this.#conversation.workingSnapshot(input.agentId)?.activeTurnId ??
           (previous.threadId
-            ? this.#store.database.readConversation(input.agentId, previous.threadId).activeTurnId
+            ? this.#store.database.readConversationRuntime(input.agentId, previous.threadId).activeTurnId
             : null);
         if (hasPendingWork || activeTurn) {
           throw new Error(sourceText("error.agent.waitBeforeProviderChange"));
@@ -1629,7 +1649,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     const agent = this.#conversation.requireKnownAgent(agentId);
     const activeTurn =
       this.#conversation.workingSnapshot(agentId)?.activeTurnId ??
-      (agent.threadId ? this.#store.database.readConversation(agentId, agent.threadId).activeTurnId : null);
+      (agent.threadId ? this.#store.database.readConversationRuntime(agentId, agent.threadId).activeTurnId : null);
     if (activeTurn || this.#mailbox.hasUnfinishedDelivery(agentId) || this.#threads.providerContextBusy(agent)) {
       throw new ContextResetBusyError(sourceText("error.agent.waitBeforeClearContext"));
     }
@@ -2246,15 +2266,16 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     const agent = await this.#store.getOrCreate(input.agentId);
     const snapshot = this.#conversation.ensureSnapshot(agent.id, agent.threadId);
     if (!snapshot.messages.some((message) => message.id === input.messageId)) {
-      await this.readConversation(agent.id);
+      // A message older than the working cache: read that one row, not the whole chat.
+      const [message] = this.#store.database.readConversationMessages(agent.id, agent.threadId, [input.messageId]);
+      if (message) snapshot.messages.push(message);
     }
-    const current = this.#conversation.ensureSnapshot(agent.id, agent.threadId);
-    if (!current.messages.some((message) => message.id === input.messageId)) {
+    if (!snapshot.messages.some((message) => message.id === input.messageId)) {
       throw new Error(sourceText("error.agent.messageUnavailable"));
     }
     await this.#mailbox.setReaction(agent.id, input.messageId, { kind: "user" }, input.emoji);
-    this.#mailboxSync.syncMailboxMessages(current);
-    this.#conversation.emitConversation(current);
+    this.#mailboxSync.syncMailboxMessages(snapshot);
+    this.#conversation.emitConversation(snapshot);
   }
 
   async interrupt(agentId: string, turnId: string, executionThreadId?: string): Promise<void> {

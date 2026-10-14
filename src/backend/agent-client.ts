@@ -1,5 +1,6 @@
 import type { AgentProviderId } from "@openbot/contracts/ipc";
 import type { AppServerNotification, AppServerRequest, RequestId, ResponseDecoder, RpcError } from "./protocol";
+import type { ReadProviderHistory } from "./provider-history";
 
 export type AgentProvider = AgentProviderId;
 
@@ -11,6 +12,10 @@ export interface DiagnosticOrigin {
 export interface AgentClient {
   readonly provider: AgentProvider;
   readonly running: boolean;
+  /** Reads the provider's history in bounded fragments, newest turn first. */
+  readonly readHistory?: ReadProviderHistory;
+  /** False when stopping this client would lose a live provider session with no recovery path. */
+  readonly canReleaseProcess?: () => boolean;
   start(): void;
   stop(): Promise<void>;
   /**

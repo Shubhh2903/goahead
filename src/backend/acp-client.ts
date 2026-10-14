@@ -17,6 +17,7 @@ import {
   RequestError,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type ResumeSessionRequest,
   type SessionConfigOption,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
@@ -58,6 +59,14 @@ import {
   type RpcError,
   type ThreadItem,
 } from "./protocol";
+import {
+  type CollectedHistoryTurn,
+  collectHistoryTurn,
+  type ProviderHistoryConsumer,
+  type ProviderHistoryFragment,
+  type ProviderHistoryRequest,
+  type ReadProviderHistory,
+} from "./provider-history";
 import { createDiagnosticStream } from "./stderr-diagnostics";
 import { stopWindowsProcessTree } from "./windows-process-tree";
 import { withTimeout } from "./with-timeout";
@@ -102,6 +111,9 @@ const OPENCODE_LOAD_RETRY_MS = 500;
 /** How many `session/list` pages OpenBot reads to find a session before it stops looking. */
 const OPENCODE_SESSION_LIST_PAGES = 50;
 
+/** Maximum replay work waiting for the storage consumer before the import fails safely. */
+const ACP_HISTORY_REPLAY_QUEUE_LIMIT = 256;
+
 interface ClientEvents {
   notification: [notification: AppServerNotification];
   request: [request: AppServerRequest];
@@ -117,6 +129,7 @@ interface ProcessEnd {
 
 interface AcpTurn {
   id: string;
+  startedAt: number;
   itemId: string;
   thoughtItemId: string;
   text: string;
@@ -129,6 +142,8 @@ interface AcpTurn {
   toolNames: Map<string, string>;
   /** The ACP `kind` of each tool call; a later update can omit it. */
   toolKinds: Map<string, string>;
+  /** The latest durable shape of each tool call until ACP reports its terminal status. */
+  toolItems: Map<string, ThreadItem>;
   /** The user stopped the turn. */
   stopped: boolean;
   task: Promise<void>;
@@ -142,7 +157,6 @@ interface AcpThread {
   currentModelId: string | null;
   mcp: LocalMcpSession;
   activeTurn: AcpTurn | null;
-  turns: Array<{ id: string; status: string; items: ThreadItem[] }>;
   dynamicTools: DynamicToolNamespace[];
   workspaceRoots: string[];
   /** Whether the session got the Computer Use server. Its MCP servers are fixed when it opens. */
@@ -152,11 +166,19 @@ interface AcpThread {
   idleSince: number;
 }
 
-/** What a closed idle session needs to be loaded again, and the turns a read answers meanwhile. */
+/** What a closed idle session needs to be loaded again. Completed history lives in storage. */
 type ReleasedAcpThread = Pick<
   AcpThread,
-  "cwd" | "developerInstructions" | "dynamicTools" | "workspaceRoots" | "computerUse" | "turns"
+  "cwd" | "developerInstructions" | "dynamicTools" | "workspaceRoots" | "computerUse"
 >;
+
+/** Persistence hooks for provider history. The database owns the data; ACP only streams it. */
+export interface AcpHistoryPersistence {
+  readonly read?: ReadProviderHistory;
+  /** Reports whether the stored import covers the requested session. */
+  readonly complete?: (request: ProviderHistoryRequest) => Promise<boolean>;
+  readonly append?: (threadId: string, fragment: ProviderHistoryFragment) => Promise<void>;
+}
 
 /**
  * How long a session with no turn stays open in the agent process. The agent starts the user's MCP
@@ -187,6 +209,29 @@ interface AcpProviderAccount {
   planType: string | null;
 }
 
+/** A load replay is consumed as it arrives and never enters the live turn path. */
+interface HistoryReplay {
+  readonly consume: ProviderHistoryConsumer;
+  readonly items: "none" | "full";
+  readonly itemsById: Map<string, ThreadItem>;
+  readonly queue: ProviderHistoryFragment[];
+  currentTurnId: string | null;
+  currentUserMessageId: string | null;
+  currentUserItemId: string | null;
+  currentAgentItemId: string | null;
+  turnHasOutput: boolean;
+  turnSequence: number;
+  currentTurnStartedAt: number | undefined;
+  hasUpdates: boolean;
+  stopped: boolean;
+  sourceDone: boolean;
+  draining: boolean;
+  done: Promise<void>;
+  resolveDone: () => void;
+  pending: number;
+  error: unknown;
+}
+
 /**
  * What OpenBot offers every ACP agent in `initialize`. One value, so the trial start that "Check
  * agent" makes (`acp-agent-check.ts`) and the real client cannot differ.
@@ -202,6 +247,8 @@ export const OPENBOT_ACP_CLIENT_INFO = { name: "openbot", title: "OpenBot", vers
 
 export interface AcpProviderOptions {
   provider: AgentProvider;
+  /** Durable history supplied by the database. ACP never owns a full conversation snapshot. */
+  history?: AcpHistoryPersistence | undefined;
   /** The name in error text. The provider name when absent; a custom agent gives its own. */
   label?: string;
   /**
@@ -272,13 +319,12 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
     // An agent that cannot close a session and load it again would keep its MCP servers or lose it.
     canRelease: () =>
       this.#loadsSessions && Boolean(this.#initialization?.agentCapabilities?.sessionCapabilities?.close),
-    snapshot: ({ cwd, developerInstructions, dynamicTools, workspaceRoots, computerUse, turns }) => ({
+    snapshot: ({ cwd, developerInstructions, dynamicTools, workspaceRoots, computerUse }) => ({
       cwd,
       developerInstructions,
       dynamicTools,
       workspaceRoots,
       computerUse,
-      turns,
     }),
     dispose: (thread) => this.#closeSession(thread),
     reopen: (threadId, released) =>
@@ -295,6 +341,8 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
       ),
   });
   readonly #startingThreads = new Map<string, Promise<{ thread: { id: string } }>>();
+  /** Session loads currently being consumed as history. These updates must never become live turns. */
+  readonly #historyReplays = new Map<string, HistoryReplay>();
   readonly #serverRequests = new PendingServerRequests((request) => this.emit("request", request));
   #process: ChildProcessWithoutNullStreams | null = null;
   #connection: ClientSideConnection | null = null;
@@ -303,6 +351,7 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
   #initialized: Promise<void> | null = null;
   #initialization: InitializeResponse | null = null;
   #models: AcpModel[] = [];
+  #lastTurnStartedAt = 0;
   #signedIn = false;
   #stopping = false;
   /**
@@ -321,6 +370,120 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
     this.#cli = cli;
     this.#requestTimeoutMs = requestTimeoutMs;
   }
+
+  /** Reads durable history first; load-only ACP agents are streamed into the same consumer. */
+  readonly readHistory = async (request: ProviderHistoryRequest, consume: ProviderHistoryConsumer): Promise<void> => {
+    const history = this.options.history;
+    const reader = history?.read;
+    const append = history?.append;
+    const stored = request.providerOnly ? undefined : reader;
+    const complete = history?.complete;
+    if (request.providerOnly && complete && (await complete(request))) return;
+    const durableReplay = Boolean(append && reader);
+    let storedStopped = false;
+    const readStored = async (storedRequest: ProviderHistoryRequest): Promise<void> => {
+      if (!reader) return;
+      await reader(storedRequest, async (fragment) => {
+        const continueReading = await consume(fragment);
+        storedStopped = !continueReading;
+        return continueReading;
+      });
+    };
+    if (stored && !durableReplay) {
+      await readStored(request);
+      if (storedStopped) return;
+      if (complete && (await complete(request))) return;
+    } else if (stored && durableReplay) {
+      // If the import is incomplete, do not publish its partial pages and then publish the whole
+      // transcript after ACP load. Staging first keeps SQLite's newest-first order and avoids
+      // duplicate live items.
+      if (complete && (await complete(request))) {
+        await readStored(request);
+        return;
+      }
+    }
+    // `session/resume` intentionally returns no history. A complete stored import is handled
+    // above; without one, a session/load capable agent is the only replay source.
+    if (!request.cwd) {
+      if (stored && durableReplay) await readStored(request);
+      return;
+    }
+    await this.#ensureInitialized();
+    if (this.#supportsSessionResume || !this.#loadsSessions) {
+      if (stored && durableReplay) await readStored(request);
+      return;
+    }
+    let resolveDone!: () => void;
+    const done = new Promise<void>((resolve) => {
+      resolveDone = resolve;
+    });
+    const replay: HistoryReplay = {
+      consume:
+        durableReplay && append
+          ? async (fragment) => {
+              await append(request.threadId, fragment);
+              return true;
+            }
+          : consume,
+      items: request.items,
+      itemsById: new Map(),
+      currentTurnId: null,
+      currentUserMessageId: null,
+      currentUserItemId: null,
+      currentAgentItemId: null,
+      turnHasOutput: false,
+      turnSequence: 0,
+      currentTurnStartedAt: undefined,
+      hasUpdates: false,
+      queue: [],
+      stopped: false,
+      sourceDone: false,
+      draining: false,
+      done,
+      resolveDone,
+      pending: 0,
+      error: null,
+    };
+    this.#historyReplays.set(request.threadId, replay);
+    try {
+      try {
+        // Share the per-session load gate with a concurrent resume. A boot history read and the
+        // first turn can arrive in the same tick; both must use one ACP session.
+        await this.#startThread(
+          { threadId: request.threadId, cwd: request.cwd, includeTurns: request.items === "full" },
+          true,
+        );
+      } catch (error) {
+        // A provider can delete an old session. Stored OpenBot history remains valid, so a read
+        // reports the available fragments and leaves the caller to create a replacement session.
+        if (error instanceof MissingAcpSessionError) {
+          if (stored && durableReplay) await readStored(request);
+          return;
+        }
+        throw error;
+      }
+      // An empty load is not evidence that the provider covered the saved session. In particular,
+      // a legacy ACP agent can answer `session/load` before it has replayed an older transcript.
+      // Leave the import active in that case; a later recovery can retry without declaring missing
+      // turns complete. A real replay turn always has a boundary to finish here.
+      this.#finishHistoryTurn(replay);
+      this.#finishHistoryReplay(replay);
+      await replay.done;
+      if (replay.error) throw replay.error;
+      if (durableReplay && (!request.providerOnly || replay.hasUpdates)) {
+        await readStored({
+          threadId: request.threadId,
+          items: request.items,
+          ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+        });
+      }
+    } finally {
+      if (!replay.sourceDone) this.#abortHistoryReplay(replay);
+      this.#historyReplays.delete(request.threadId);
+      const thread = this.#threads.get(request.threadId);
+      if (thread && !thread.activeTurn) this.#threads.markIdle(thread);
+    }
+  };
 
   get #label(): string {
     return this.options.label ?? agentProviderName(this.provider);
@@ -412,6 +575,8 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
     this.#process = null;
     this.#connection = null;
     this.#initialized = null;
+    for (const replay of this.#historyReplays.values()) this.#abortHistoryReplay(replay);
+    this.#historyReplays.clear();
     for (const thread of this.#threads.clear()) thread.mcp.close();
     this.#startingThreads.clear();
     this.#serverRequests.rejectAll("ACP session stopped.");
@@ -422,6 +587,12 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
 
   releaseIdleThreads(): void {
     this.#threads.releaseIdle();
+  }
+
+  /** A non-resumable ACP session must keep its process and in-memory context. */
+  canReleaseProcess(): boolean {
+    if (this.#threads.ids().next().done) return true;
+    return this.#supportsSessionResume || this.#loadsSessions;
   }
 
   /**
@@ -531,11 +702,21 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
         return decoder(await this.#startThread(params, true));
       case "thread/read": {
         const threadId = requiredString(params, "threadId");
-        // A closed idle session answers from the turns it kept, so a read does not start its MCP
-        // servers again.
-        const released = this.#threads.has(threadId) ? undefined : this.#threads.released(threadId);
-        const thread = released ?? (await this.#readableThread(threadId, params));
-        return decoder({ thread: { id: threadId, turns: thread?.turns ?? [] } });
+        if (isRecord(params) && params.includeTurns === true) {
+          const turns = new Map<string, CollectedHistoryTurn>();
+          const seenItems = new Map<string, Set<string>>();
+          const cwd = getString(params, "cwd");
+          await this.readHistory({ threadId, items: "full", ...(cwd === null ? {} : { cwd }) }, async (fragment) => {
+            collectHistoryTurn(turns, seenItems, fragment);
+            return true;
+          });
+          // readHistory is newest-first; the released response is chronological.
+          return decoder({ thread: { id: threadId, turns: [...turns.values()].reverse() } });
+        }
+        // Keep the legacy endpoint's session warm for callers that use it as a metadata read. Full
+        // history goes through `readHistory` and is retained only for this explicit response.
+        await this.#readableThread(threadId, params);
+        return decoder({ thread: { id: threadId, turns: [] } });
       }
       case "turn/start":
         return decoder(await this.#startTurn(params));
@@ -718,14 +899,10 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
   }
 
   /**
-   * The thread a `thread/read` can answer from, loading the session when it is not held here.
+   * Loads a session for legacy metadata reads without retaining provider turns in memory.
    *
-   * An ACP session lives in this process alone, so a restart leaves every persisted session id
-   * unknown until something loads it. Boot recovery reads those ids before any turn does, and a
-   * refusal there is reported to the user as a failed history backfill. The session is loaded
-   * instead, which also leaves it warm for the first turn. `null` is answered when it cannot be
-   * loaded - the agent does not support `session/load`, the caller sent no `cwd`, or the load
-   * failed - because a read is advisory: its callers treat an absent turn as an unsettled one.
+   * `null` is answered when it cannot be loaded - the agent does not support `session/load`, the
+   * caller sent no `cwd`, or the load failed - because a read is advisory.
    */
   async #readableThread(id: string, params: unknown): Promise<AcpThread | null> {
     const held = this.#threads.get(id);
@@ -745,9 +922,7 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
       return null;
     }
     const thread = this.#threads.get(id) ?? null;
-    // Boot recovery reads every stored session, and each loaded session holds its own set of the
-    // user's MCP servers. A session loaded only for a read is idle from the start, so the idle limit
-    // counts it and keeps only the most recent ones warm for a first turn.
+    // A session loaded only for a read is idle from the start, so the idle limit counts it.
     if (thread && !resuming && thread.idleSince === 0 && !thread.activeTurn) this.#threads.markIdle(thread);
     return thread;
   }
@@ -757,17 +932,20 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
     return this.#initialization?.agentCapabilities?.loadSession === true;
   }
 
+  /** Whether the agent can resume without replaying its transcript. */
+  get #supportsSessionResume(): boolean {
+    return this.#initialization?.agentCapabilities?.sessionCapabilities?.resume != null;
+  }
+
   async #startThread(params: unknown, resume: boolean): Promise<{ thread: { id: string } }> {
     await this.#ensureInitialized();
     if (!this.#signedIn) throw new Error(this.options.signInMessage);
     const requestedThreadId = getString(params, "threadId");
     if (!resume || !requestedThreadId) return this.#openThread(params, false);
     const held = this.#threads.get(requestedThreadId);
-    let turns: AcpThread["turns"] | undefined;
     // The MCP servers are fixed when a session opens, so a changed Computer Use switch loads the
     // session again. A session with a turn keeps its servers until a later resume.
     if (held && !held.activeTurn && held.computerUse !== computerUseParam(params)) {
-      turns = held.turns;
       await this.#threads.close(held);
     }
     // A thread this client already holds takes the caller's settings even though no session is
@@ -783,20 +961,16 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
     // bridge sessions under one id, of which only the last is reachable.
     const starting = this.#startingThreads.get(requestedThreadId);
     if (starting) return starting;
-    const start = this.#openThread(params, true, turns).finally(() => {
+    const start = this.#openThread(params, true).finally(() => {
       this.#startingThreads.delete(requestedThreadId);
     });
     this.#startingThreads.set(requestedThreadId, start);
     return start;
   }
 
-  async #openThread(
-    params: unknown,
-    resume: boolean,
-    heldTurns?: AcpThread["turns"],
-  ): Promise<{ thread: { id: string } }> {
+  async #openThread(params: unknown, resume: boolean): Promise<{ thread: { id: string } }> {
     const requestedThreadId = getString(params, "threadId");
-    if (resume && requestedThreadId && !this.#loadsSessions) {
+    if (resume && requestedThreadId && !this.#supportsSessionResume && !this.#loadsSessions) {
       // Reported as a missing session, which is what it is for the caller: the agent cannot give
       // this session back, so the recovery that replaces it runs now rather than after a protocol
       // error the user would have to read.
@@ -830,12 +1004,19 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
       this.options.reportMcpDrops?.(this.provider, handoff.dropped);
       const mcpServers = [...handoff.servers, ...mcp.servers];
       if (resume && requestedThreadId) {
-        const response = await this.#loadSession(connection, {
-          sessionId: requestedThreadId,
-          cwd,
-          additionalDirectories,
-          mcpServers,
-        });
+        const response = this.#supportsSessionResume
+          ? await connection.resumeSession({
+              sessionId: requestedThreadId,
+              cwd,
+              additionalDirectories,
+              mcpServers,
+            } satisfies ResumeSessionRequest)
+          : await this.#loadSession(connection, {
+              sessionId: requestedThreadId,
+              cwd,
+              additionalDirectories,
+              mcpServers,
+            });
         id = requestedThreadId;
         configOptions = response.configOptions ?? [];
         currentModelId = currentModelFromSessionSetup(response);
@@ -854,7 +1035,6 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
         currentModelId,
         mcp,
         activeTurn: null,
-        turns: heldTurns ?? this.#threads.released(id)?.turns ?? [],
         dynamicTools,
         workspaceRoots: additionalDirectories,
         computerUse,
@@ -906,6 +1086,221 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
     } catch (error) {
       if (!isOpenCodeServiceFailure(error)) throw error;
       throw new Error(sourceText("error.provider.opencodeServiceFailure"), { cause: error });
+    }
+  }
+
+  /** Queue one replay fragment without retaining the provider transcript in this client. */
+  #enqueueHistoryFragment(replay: HistoryReplay, fragment: ProviderHistoryFragment): void {
+    if (replay.stopped || replay.error) return;
+    if (replay.pending >= ACP_HISTORY_REPLAY_QUEUE_LIMIT) {
+      this.#abortHistoryReplay(replay, new Error("ACP history consumer is too slow."));
+      return;
+    }
+    replay.pending += 1;
+    replay.queue.push(fragment);
+    void this.#drainHistoryReplay(replay);
+  }
+
+  /** Drain one fragment at a time. The queue, rather than a Promise chain, is the memory bound. */
+  async #drainHistoryReplay(replay: HistoryReplay): Promise<void> {
+    if (replay.draining) return;
+    replay.draining = true;
+    try {
+      while (replay.queue.length > 0 && !replay.stopped && !replay.error) {
+        const fragment = replay.queue.shift();
+        if (!fragment) break;
+        try {
+          replay.stopped = !(await replay.consume(fragment));
+          replay.pending -= 1;
+          if (replay.stopped) {
+            replay.queue.length = 0;
+            replay.pending = 0;
+          }
+        } catch (error) {
+          this.#abortHistoryReplay(replay, error);
+        }
+      }
+    } finally {
+      replay.draining = false;
+      this.#resolveHistoryReplay(replay);
+    }
+  }
+
+  #finishHistoryReplay(replay: HistoryReplay): void {
+    replay.sourceDone = true;
+    this.#resolveHistoryReplay(replay);
+  }
+
+  #abortHistoryReplay(replay: HistoryReplay, error?: unknown): void {
+    replay.error ??= error ?? new Error("ACP history replay was cancelled.");
+    replay.stopped = true;
+    replay.queue.length = 0;
+    replay.pending = 0;
+    this.#resolveHistoryReplay(replay);
+  }
+
+  #resolveHistoryReplay(replay: HistoryReplay): void {
+    if ((replay.sourceDone || replay.stopped || replay.error) && !replay.draining && replay.queue.length === 0)
+      replay.resolveDone();
+  }
+
+  /** Converts ACP replay notifications into storage fragments, with no live turn side effects. */
+  #historyUpdate(replay: HistoryReplay, notification: SessionNotification): void {
+    replay.hasUpdates = true;
+    const update = notification.update;
+    const messageId = contentMessageId(update);
+    const startsTurn =
+      update.sessionUpdate === "user_message_chunk" &&
+      (replay.currentTurnId === null ||
+        (messageId !== null && replay.currentUserMessageId !== null && messageId !== replay.currentUserMessageId) ||
+        replay.turnHasOutput);
+    if (startsTurn) {
+      this.#finishHistoryTurn(replay);
+      replay.turnSequence += 1;
+      replay.currentTurnId = `${notification.sessionId}:history:${String(replay.turnSequence).padStart(12, "0")}`;
+      replay.currentTurnStartedAt = undefined;
+      replay.currentUserMessageId = messageId;
+      replay.currentUserItemId = null;
+      replay.currentAgentItemId = null;
+    } else if (replay.currentTurnId === null) {
+      replay.turnSequence += 1;
+      replay.currentTurnId = `${notification.sessionId}:history:${String(replay.turnSequence).padStart(12, "0")}`;
+      replay.currentTurnStartedAt = undefined;
+      replay.currentUserMessageId = update.sessionUpdate === "user_message_chunk" ? messageId : null;
+      replay.currentUserItemId = null;
+      replay.currentAgentItemId = null;
+    } else if (update.sessionUpdate === "user_message_chunk" && replay.currentUserMessageId === null) {
+      replay.currentUserMessageId = messageId;
+    }
+    if (
+      update.sessionUpdate === "agent_message_chunk" ||
+      update.sessionUpdate === "agent_thought_chunk" ||
+      update.sessionUpdate === "tool_call" ||
+      update.sessionUpdate === "tool_call_update"
+    ) {
+      replay.turnHasOutput = true;
+    }
+    if (replay.items === "none") return;
+    if (
+      (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "user_message_chunk") &&
+      update.content.type === "text" &&
+      update.content.text
+    ) {
+      const turnId = replay.currentTurnId;
+      if (!turnId) return;
+      const isUser = update.sessionUpdate === "user_message_chunk";
+      const previousId = isUser ? replay.currentUserItemId : replay.currentAgentItemId;
+      const id = messageId ?? previousId ?? `${turnId}:${update.sessionUpdate}`;
+      const previous = replay.itemsById.get(id);
+      if (!previous) this.#flushHistoryItems(replay);
+      if (replay.stopped || replay.error) return;
+      if (!previous && replay.itemsById.size >= ACP_HISTORY_REPLAY_QUEUE_LIMIT) {
+        this.#abortHistoryReplay(replay, new Error("ACP history replay has too many active items."));
+        return;
+      }
+      replay.itemsById.set(id, {
+        ...(previous ?? {}),
+        id,
+        type: isUser ? "userMessage" : "agentMessage",
+        ...(isUser ? {} : { phase: "final_answer" }),
+        ...(isUser
+          ? {
+              content: [
+                {
+                  type: "text",
+                  text: `${previous?.content?.find((part) => part.type === "text")?.text ?? ""}${update.content.text}`,
+                },
+              ],
+            }
+          : {}),
+        text: `${previous?.text ?? ""}${update.content.text}`,
+      });
+      if (isUser) replay.currentUserItemId = id;
+      else replay.currentAgentItemId = id;
+      return;
+    }
+    if (update.sessionUpdate === "agent_thought_chunk" && update.content.type === "text" && update.content.text) {
+      const turnId = replay.currentTurnId;
+      if (!turnId) return;
+      replay.currentAgentItemId = null;
+      const id = `${turnId}:thought`;
+      const previous = replay.itemsById.get(id);
+      replay.itemsById.set(id, {
+        ...(previous ?? {}),
+        id,
+        type: "agentMessage",
+        phase: "commentary",
+        text: `${previous?.text ?? ""}${update.content.text}`,
+      });
+      return;
+    }
+    if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
+      const turnId = replay.currentTurnId;
+      if (!turnId) return;
+      replay.currentAgentItemId = null;
+      const previous = replay.itemsById.get(update.toolCallId);
+      if (!previous) this.#flushHistoryItems(replay);
+      if (replay.stopped || replay.error) return;
+      if (!previous && replay.itemsById.size >= ACP_HISTORY_REPLAY_QUEUE_LIMIT) {
+        this.#abortHistoryReplay(replay, new Error("ACP history replay has too many active items."));
+        return;
+      }
+      const status = update.status ?? previous?.status;
+      const item: ThreadItem = {
+        ...(previous ?? {}),
+        id: update.toolCallId,
+        type: "toolCall",
+        name: update.name ?? update.title ?? previous?.name,
+        toolKind: update.kind ?? previous?.toolKind,
+        ...(status === undefined || status === null ? {} : { status }),
+        arguments: update.rawInput ?? previous?.arguments,
+        result: update.rawOutput ?? previous?.result,
+      };
+      replay.itemsById.set(update.toolCallId, item);
+      if (update.status === "completed" || update.status === "failed") {
+        this.#flushHistoryItem(replay, update.toolCallId);
+      }
+    }
+  }
+
+  #finishHistoryTurn(replay: HistoryReplay): boolean {
+    const turnId = replay.currentTurnId;
+    if (!turnId) return false;
+    this.#flushHistoryItems(replay);
+    this.#enqueueHistoryFragment(replay, {
+      turnId,
+      ...(replay.currentTurnStartedAt === undefined ? {} : { startedAt: replay.currentTurnStartedAt }),
+      recordsOnly: true,
+      items: [],
+      complete: true,
+    });
+    replay.itemsById.clear();
+    replay.currentTurnId = null;
+    replay.currentUserMessageId = null;
+    replay.currentUserItemId = null;
+    replay.currentAgentItemId = null;
+    replay.turnHasOutput = false;
+    replay.currentTurnStartedAt = undefined;
+    return true;
+  }
+
+  #flushHistoryItem(replay: HistoryReplay, id: string): void {
+    const item = replay.itemsById.get(id);
+    if (!item || !replay.currentTurnId) return;
+    replay.itemsById.delete(id);
+    this.#enqueueHistoryFragment(replay, {
+      turnId: replay.currentTurnId,
+      ...(replay.currentTurnStartedAt === undefined ? {} : { startedAt: replay.currentTurnStartedAt }),
+      recordsOnly: true,
+      items: [item],
+      complete: false,
+    });
+  }
+
+  #flushHistoryItems(replay: HistoryReplay): void {
+    for (const id of replay.itemsById.keys()) {
+      if (replay.stopped || replay.error) return;
+      this.#flushHistoryItem(replay, id);
     }
   }
 
@@ -1001,8 +1396,13 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
       });
     }
     this.#requireServedModel(thread);
+    const currentSecond = Date.now() / 1_000;
+    const startedAt = Math.max(currentSecond, this.#lastTurnStartedAt + 0.001);
+    this.#lastTurnStartedAt = startedAt;
     const turn: AcpTurn = {
       id: turnId,
+      // History timestamps use provider seconds, not JavaScript milliseconds.
+      startedAt,
       itemId: `${turnId}:assistant`,
       thoughtItemId: `${turnId}:thought`,
       text: "",
@@ -1013,6 +1413,7 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
       messages: [],
       toolNames: new Map(),
       toolKinds: new Map(),
+      toolItems: new Map(),
       stopped: false,
       task: Promise.resolve(),
     };
@@ -1036,6 +1437,15 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
   }
 
   async #consumePrompt(thread: AcpThread, turn: AcpTurn, prompt: ContentBlock[]): Promise<void> {
+    const outcome = await this.#promptOutcome(thread, turn, prompt);
+    await this.#completeTurn(thread, turn, outcome.status, outcome.error);
+  }
+
+  async #promptOutcome(
+    thread: AcpThread,
+    turn: AcpTurn,
+    prompt: ContentBlock[],
+  ): Promise<{ status: string; error: unknown }> {
     try {
       const response = await this.#requireConnection().prompt({ sessionId: thread.id, prompt });
       if (response.usage)
@@ -1052,13 +1462,11 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
         !turn.receivedOutput &&
         !turn.answerOptional
       ) {
-        this.#completeTurn(
-          thread,
-          turn,
-          "failed",
-          "OpenCode returned no response. Check the selected model's sign-in and billing in OpenCode, then retry or choose another model.",
-        );
-        return;
+        return {
+          status: "failed",
+          error:
+            "OpenCode returned no response. Check the selected model's sign-in and billing in OpenCode, then retry or choose another model.",
+        };
       }
       const status =
         response.stopReason === "cancelled"
@@ -1066,13 +1474,18 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
           : response.stopReason === "end_turn"
             ? "completed"
             : "failed";
-      this.#completeTurn(thread, turn, status, status === "failed" ? response.stopReason : null);
+      return { status, error: status === "failed" ? response.stopReason : null };
     } catch (error) {
-      this.#completeTurn(thread, turn, "failed", error);
+      return { status: "failed", error };
     }
   }
 
   #sessionUpdate(notification: SessionNotification): void {
+    const replay = this.#historyReplays.get(notification.sessionId);
+    if (replay) {
+      this.#historyUpdate(replay, notification);
+      return;
+    }
     const thread = this.#threads.get(notification.sessionId);
     if (!thread) return;
     const turn = thread.activeTurn;
@@ -1114,22 +1527,27 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
       turn.toolNames.set(update.toolCallId, name);
       const toolKind = update.kind ?? turn.toolKinds.get(update.toolCallId) ?? "other";
       turn.toolKinds.set(update.toolCallId, toolKind);
+      const previous = turn.toolItems.get(update.toolCallId);
+      const status = update.status ?? previous?.status;
+      const item: ThreadItem = {
+        ...(previous ?? {}),
+        id: update.toolCallId,
+        type: "toolCall",
+        name,
+        toolKind,
+        ...(status === undefined || status === null ? {} : { status }),
+        arguments: update.rawInput ?? previous?.arguments,
+        result: update.rawOutput ?? previous?.result,
+      };
+      turn.toolItems.set(update.toolCallId, item);
       this.emit("notification", {
         method: update.status === "completed" || update.status === "failed" ? "item/completed" : "item/started",
-        params: {
-          threadId: thread.id,
-          turnId: turn.id,
-          item: {
-            id: update.toolCallId,
-            type: "toolCall",
-            name,
-            toolKind,
-            status: update.status,
-            arguments: update.rawInput,
-            result: update.rawOutput,
-          },
-        },
+        params: { threadId: thread.id, turnId: turn.id, item },
       });
+      if (update.status === "completed" || update.status === "failed") {
+        turn.messages.push(item);
+        turn.toolItems.delete(update.toolCallId);
+      }
       return;
     }
     if (update.sessionUpdate === "plan") {
@@ -1166,9 +1584,11 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
     turn.thoughtItemId = `${turn.id}:thought:${turn.messages.length}`;
   }
 
-  #completeTurn(thread: AcpThread, turn: AcpTurn, status: string, error: unknown): void {
+  async #completeTurn(thread: AcpThread, turn: AcpTurn, status: string, error: unknown): Promise<void> {
     if (thread.activeTurn !== turn) return;
     this.#completeThought(thread, turn);
+    for (const item of turn.toolItems.values()) turn.messages.push(item);
+    turn.toolItems.clear();
     this.#completeMessage(thread, turn, "final_answer");
     if (status === "failed" && error) {
       const detail = this.#redact(failureText(error));
@@ -1187,11 +1607,33 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
         params: { threadId: thread.id, turnId: turn.id, message },
       });
     }
+    const append = this.options.history?.append;
+    if (append) {
+      // Persist before clearing the active turn. A failed durable write cannot be reported as a
+      // completed turn because the provider session may be released immediately afterwards.
+      try {
+        await append(thread.id, {
+          turnId: turn.id,
+          status,
+          startedAt: turn.startedAt,
+          items: turn.messages,
+          complete: true,
+        });
+      } catch (cause) {
+        this.emit("diagnostic", this.#redact(`ACP history persistence failed: ${String(cause)}`));
+        this.emit("notification", {
+          method: "turn/completed",
+          params: { threadId: thread.id, turn: { id: turn.id, status: "failed" } },
+        });
+        thread.activeTurn = null;
+        this.#threads.markIdle(thread);
+        return;
+      }
+    }
     this.emit("notification", {
       method: "turn/completed",
       params: { threadId: thread.id, turn: { id: turn.id, status } },
     });
-    thread.turns.push({ id: turn.id, status, items: turn.messages });
     thread.activeTurn = null;
     this.#threads.markIdle(thread);
   }
@@ -1214,6 +1656,7 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
 
   async #requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
     if (this.options.profileGeneration) return { outcome: { outcome: "cancelled" } };
+    if (this.#historyReplays.has(params.sessionId)) return { outcome: { outcome: "cancelled" } };
     const thread = this.#threads.get(params.sessionId);
     const turnId = thread?.activeTurn?.id ?? randomUUID();
     const kind =
@@ -1247,6 +1690,7 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
 
   async #requestUserInput(method: string, params: DynamicRecord): Promise<DynamicRecord> {
     const sessionId = getString(params, "sessionId") ?? [...this.#threads.ids()][0];
+    if (sessionId && this.#historyReplays.has(sessionId)) return {};
     const thread = sessionId ? this.#threads.get(sessionId) : undefined;
     const result = await this.#serverRequests.call("item/tool/requestUserInput", {
       ...params,
@@ -1305,6 +1749,9 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
     },
     signal: AbortSignal,
   ): Promise<DynamicToolResult> {
+    if (this.#historyReplays.has(params.threadId)) {
+      return { success: false, contentItems: [{ type: "inputText", text: "History replay cannot execute tools." }] };
+    }
     const result = await this.#serverRequests.call("item/tool/call", params, signal);
     if (!isDynamicToolResult(result)) throw new Error("OpenBot returned an invalid dynamic tool result.");
     return result;
@@ -1582,6 +2029,11 @@ class MissingAcpSessionError extends Error {
     super(message, { cause });
     this.name = "MissingAcpSessionError";
   }
+}
+
+function contentMessageId(update: SessionNotification["update"]): string | null {
+  if (!("messageId" in update) || typeof update.messageId !== "string" || update.messageId.length === 0) return null;
+  return update.messageId;
 }
 
 /** The protocol's resource-not-found error, for this session. */

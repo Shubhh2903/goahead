@@ -50,6 +50,9 @@ export class ConversationReader {
 
   async read(agentId: string): Promise<ConversationSnapshot> {
     const agent = await this.#store.getOrCreate(agentId);
+    // The released read endpoint still returns the complete durable conversation. `setSnapshot`
+    // keeps only a bounded recent view after this transient response is built, so this read does
+    // not turn a large chat into a long-lived process cache.
     const persisted = this.#store.database.readConversation(agentId, agent.threadId);
     const live = this.#conversation.snapshot(agentId);
     const snapshot = live?.activeTurnId ? mergeConversationSnapshots(persisted, live) : persisted;
@@ -133,21 +136,31 @@ export class ConversationReader {
     throughMessageId: string | null,
     options: ConversationMarkerExclusions = {},
   ): Promise<ConversationReadState> {
-    const snapshot = await this.read(agentId);
-    const previous = this.#reads.readState(memberId, snapshot).throughMessageId;
-    const state = this.#reads.markRead(memberId, snapshot, throughMessageId, options);
-    if (this.#reads.readState(memberId, snapshot).throughMessageId !== previous) {
+    // A marker can name a message older than the working cache, so the boundary is read from SQLite
+    // and the chat is not loaded.
+    const agent = await this.#store.getOrCreate(agentId);
+    const previous = this.#reads.readStateForThread(memberId, agent.threadId, options).throughMessageId;
+    const state = this.#reads.markReadForThread(memberId, agent.threadId, throughMessageId, options);
+    if (state.throughMessageId !== previous) {
       // Read cursors are shared by a member's devices, not by every team member.
       // Invalidate without broadcasting a reader's cursor; each client reloads its own state.
-      this.#hooks.emit({ type: "conversation-invalidated", agentId, revision: snapshot.revision });
+      this.#hooks.emit({
+        type: "conversation-invalidated",
+        agentId,
+        revision: this.#store.database.readConversationRevision(agentId, agent.threadId),
+      });
     }
     return state;
   }
 
   async markUnread(agentId: string, memberId: string): Promise<ConversationReadState> {
-    const snapshot = await this.read(agentId);
-    const state = this.#reads.markUnread(memberId, snapshot);
-    this.#hooks.emit({ type: "conversation-invalidated", agentId, revision: snapshot.revision });
+    const agent = await this.#store.getOrCreate(agentId);
+    const state = this.#reads.markUnreadForThread(memberId, agent.threadId);
+    this.#hooks.emit({
+      type: "conversation-invalidated",
+      agentId,
+      revision: this.#store.database.readConversationRevision(agentId, agent.threadId),
+    });
     return state;
   }
 }

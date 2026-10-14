@@ -29,6 +29,46 @@ afterEach(async () => {
 });
 
 describe("MailboxStore", () => {
+  // The chat keeps a bounded recent view: every active delivery stays in it, however old.
+  it("filters mailbox history per agent and keeps old active deliveries with attachments", async () => {
+    const source = join(root, "old-mailbox.txt");
+    await writeFile(source, "Keep this attachment");
+    const [draft] = await store.prepareAttachments([source]);
+    assert(draft);
+    const completed = await store.enqueue({
+      sender: { kind: "user" },
+      recipientAgentIds: ["chief"],
+      text: "Old completed message",
+      draftIds: [draft.id],
+    });
+    const completedDelivery = required(completed.deliveries[0]);
+    await store.markTerminal(completedDelivery.id, "completed");
+    const savedAttachment = required(store.getDelivery(completedDelivery.id)?.managedAttachments[0]);
+    const active = await store.enqueue({
+      sender: { kind: "user" },
+      recipientAgentIds: ["chief"],
+      text: "Old active message",
+    });
+    const activeDelivery = required(active.deliveries[0]);
+    await store.markStarting(activeDelivery.id);
+    await store.markRunning(activeDelivery.id, "turn-old");
+    for (let index = 0; index < 100; index += 1) {
+      await store.enqueue({ sender: { kind: "user" }, recipientAgentIds: ["sales"], text: `Unrelated ${index}` });
+    }
+
+    const messages = store.conversationMessages("chief", { limit: 1 });
+
+    expect(messages.map((message) => message.text)).toEqual(["Old completed message", "Old active message"]);
+    expect(messages[0]).toMatchObject({
+      id: completedDelivery.id,
+      attachments: [expect.objectContaining({ id: savedAttachment.id })],
+    });
+    expect(messages[1]).toMatchObject({
+      id: activeDelivery.id,
+      delivery: { id: activeDelivery.id, status: "running" },
+    });
+  });
+
   it("preserves edit attachment bytes across restart and clears unrelated drafts", async () => {
     const file = join(root, "pasted.txt");
     await writeFile(file, "Pasted bytes");

@@ -9,6 +9,7 @@ import { type DynamicRecord, isDynamicRecord } from "@openbot/contracts/runtime-
 import { sourceText } from "@openbot/i18n/source";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GrokAgentClient } from "./grok-client";
+import { OpenBotDatabase } from "./openbot-database";
 import {
   type AppServerNotification,
   type AppServerRequest,
@@ -19,14 +20,18 @@ import {
   decodeThreadResponse,
   decodeTurnResponse,
 } from "./protocol";
+import { providerHistoryPersistence } from "./provider-history-persistence";
 
 let root: string;
 let executable: string;
 let logPath: string;
 let client: AcpAgentClient | null = null;
+let historyDatabase: OpenBotDatabase | null = null;
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "openbot-grok-acp-"));
+  historyDatabase = new OpenBotDatabase(join(root, "history"));
+  await historyDatabase.initialize();
   executable = join(root, "grok");
   logPath = join(root, "fake-grok.jsonl");
   await writeFile(executable, FAKE_GROK_ACP);
@@ -38,11 +43,37 @@ beforeEach(async () => {
 afterEach(async () => {
   await client?.stop();
   client = null;
+  historyDatabase?.close();
+  historyDatabase = null;
   delete process.env.OPENBOT_FAKE_GROK_LOG;
   delete process.env.OPENBOT_FAKE_GROK_MODE;
   delete process.env.OPENBOT_FAKE_OPENCODE_ERROR;
   await rm(root, { recursive: true, force: true });
 });
+
+/** Completed ACP turns are written to SQLite and read back from there, as the app does. */
+function historyFor(provider: "grok" | "opencode") {
+  if (!historyDatabase) throw new Error("The test history database is not initialized.");
+  return providerHistoryPersistence(historyDatabase, provider);
+}
+
+function bindHistorySession(threadId: string, provider: "grok" | "opencode"): void {
+  if (!historyDatabase) throw new Error("The test history database is not initialized.");
+  historyDatabase.connection
+    .prepare(
+      `INSERT OR IGNORE INTO projection_threads
+         (thread_id, agent_id, title, active_turn_id, created_at, updated_at, last_event_sequence)
+       VALUES (?, ?, ?, NULL, ?, ?, 0)`,
+    )
+    .run(threadId, "history-test-agent", "History test", new Date().toISOString(), new Date().toISOString());
+  historyDatabase.bindProviderSession({
+    threadId,
+    provider,
+    externalSessionId: threadId,
+    model: "test-model",
+    effort: "medium",
+  });
+}
 
 describe.sequential("GrokAgentClient", () => {
   it("runs OpenCode ACP without Grok authentication or billing and preserves its resumed session", async () => {
@@ -90,11 +121,13 @@ describe.sequential("GrokAgentClient", () => {
       argv: ["acp"],
       env: {},
       signInMessage: "Connect OpenCode.",
+      history: historyFor("opencode"),
     });
     const notifications: AppServerNotification[] = [];
     client.on("notification", (event) => notifications.push(event));
     client.start();
     const { thread } = await client.request("thread/start", { cwd: root }, decodeThreadResponse);
+    bindHistorySession(thread.id, "opencode");
     await client.request(
       "turn/start",
       { threadId: thread.id, input: [{ type: "text", text: "Answer" }] },
@@ -123,7 +156,11 @@ describe.sequential("GrokAgentClient", () => {
       decodeTurnResponse,
     );
     await waitFor(() => notifications.some((event) => event.method === "turn/completed"));
-    const history = await client.request("thread/read", { threadId: thread.id }, decodeThreadResponse);
+    const history = await client.request(
+      "thread/read",
+      { threadId: thread.id, includeTurns: true },
+      decodeThreadResponse,
+    );
     expect(history.thread.turns?.map((turn) => turn.status)).toEqual([status, "completed"]);
     expect(history.thread.turns?.[1]?.items).toContainEqual(expect.objectContaining({ text: "Reply after retry." }));
   });
@@ -154,11 +191,13 @@ describe.sequential("GrokAgentClient", () => {
         argv: ["acp"],
         env: {},
         signInMessage: "Connect OpenCode.",
+        history: historyFor("opencode"),
       });
       const notifications: AppServerNotification[] = [];
       client.on("notification", (event) => notifications.push(event));
       client.start();
       const { thread } = await client.request("thread/start", { cwd: root }, decodeThreadResponse);
+      bindHistorySession(thread.id, "opencode");
       for (const text of ["Try", "Retry"]) {
         await client.request(
           "turn/start",
@@ -174,7 +213,11 @@ describe.sequential("GrokAgentClient", () => {
           message: sourceText("error.provider.opencodeCredentialsRejected", { detail: reason }),
         }),
       ]);
-      const history = await client.request("thread/read", { threadId: thread.id }, decodeThreadResponse);
+      const history = await client.request(
+        "thread/read",
+        { threadId: thread.id, includeTurns: true },
+        decodeThreadResponse,
+      );
       expect(history.thread.turns?.map((turn) => turn.status)).toEqual(["failed", "completed"]);
     },
   );
@@ -282,11 +325,23 @@ describe.sequential("GrokAgentClient", () => {
     "shows only the final segment in chat when Grok ends with %s",
     async (stopReason) => {
       process.env.OPENBOT_FAKE_GROK_MODE = stopReason;
-      client = new GrokAgentClient({ executable, version: "1.0.5" }, 5_000);
+      client = new GrokAgentClient(
+        { executable, version: "1.0.5" },
+        5_000,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        historyFor("grok"),
+      );
       const notifications: AppServerNotification[] = [];
       client.on("notification", (notification) => notifications.push(notification));
       client.start();
       const { thread } = await client.request("thread/start", { cwd: root }, decodeThreadResponse);
+      bindHistorySession(thread.id, "grok");
       await client.request(
         "turn/start",
         { threadId: thread.id, input: [{ type: "text", text: "Inspect and answer" }] },
@@ -296,8 +351,13 @@ describe.sequential("GrokAgentClient", () => {
       expect(notifications.find((event) => event.method === "openbot/usage")?.params).toMatchObject({
         usage: { inputTokens: 300, outputTokens: 50, cachedReadTokens: 200 },
       });
-      const history = await client.request("thread/read", { threadId: thread.id }, decodeThreadResponse);
-      const messages = history.thread.turns?.[0]?.items;
+      const history = await client.request(
+        "thread/read",
+        { threadId: thread.id, includeTurns: true },
+        decodeThreadResponse,
+      );
+      // The stored turn holds its tool calls too; the chat shows the messages.
+      const messages = history.thread.turns?.[0]?.items?.filter((item) => item.type === "agentMessage");
       expect(messages).toEqual([
         expect.objectContaining({ phase: "commentary", text: "Planning inspection." }),
         expect.objectContaining({ phase: "commentary", text: "Inspecting files." }),
@@ -351,13 +411,25 @@ describe.sequential("GrokAgentClient", () => {
 
   it("refuses steering without sending a second prompt or completing the running turn", async () => {
     process.env.OPENBOT_FAKE_GROK_MODE = "busy-steer";
-    client = new GrokAgentClient({ executable, version: "1.0.5" }, 5_000);
+    client = new GrokAgentClient(
+      { executable, version: "1.0.5" },
+      5_000,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      historyFor("grok"),
+    );
     const notifications: AppServerNotification[] = [];
     const diagnostics: string[] = [];
     client.on("notification", (notification) => notifications.push(notification));
     client.on("diagnostic", (message: string) => diagnostics.push(message));
     client.start();
     const { thread } = await client.request("thread/start", { cwd: root }, decodeThreadResponse);
+    bindHistorySession(thread.id, "grok");
     await client.request(
       "turn/start",
       { threadId: thread.id, clientUserMessageId: "turn-1", input: [{ type: "text", text: "Build it" }] },
@@ -385,7 +457,11 @@ describe.sequential("GrokAgentClient", () => {
       .filter((entry) => entry.method === "session/prompt")
       .map((entry) => entry.text);
     expect(prompts).toEqual(["Build it"]);
-    const history = await client.request("thread/read", { threadId: thread.id }, decodeThreadResponse);
+    const history = await client.request(
+      "thread/read",
+      { threadId: thread.id, includeTurns: true },
+      decodeThreadResponse,
+    );
     expect(history.thread.turns?.[0]?.items).toEqual([
       expect.objectContaining({ phase: "final_answer", text: "First answer." }),
     ]);

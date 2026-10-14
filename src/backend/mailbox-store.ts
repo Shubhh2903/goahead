@@ -123,6 +123,10 @@ interface StoredDelivery {
   steerFallback?: QueueSteerFallback;
 }
 
+function isActiveDelivery(delivery: StoredDelivery): boolean {
+  return delivery.status === "queued" || delivery.status === "starting" || delivery.status === "running";
+}
+
 interface StoredState {
   version: 3;
   messages: StoredMessage[];
@@ -633,20 +637,49 @@ export class MailboxStore {
     });
   }
 
-  conversationMessages(agentId: string): ConversationMessage[] {
-    const messages: ConversationMessage[] = [];
+  /**
+   * The agent's mailbox messages as conversation rows: every active one, and at most `limit` (100)
+   * of the newest others, none older than `fromCreatedAt`. The working snapshot is a bounded recent
+   * view, so this never builds rows for the whole mailbox history.
+   */
+  conversationMessages(
+    agentId: string,
+    options: { fromCreatedAt?: string; limit?: number } = {},
+  ): ConversationMessage[] {
+    const limit = Math.max(1, Math.min(options.limit ?? 100, 100));
     const deliveriesByMessage = new Map<string, StoredDelivery[]>();
-    const positions = this.#queuedPositions();
     for (const delivery of this.#state.deliveries) {
       const deliveries = deliveriesByMessage.get(delivery.messageId) ?? [];
       deliveries.push(delivery);
       deliveriesByMessage.set(delivery.messageId, deliveries);
     }
-    for (const message of this.#state.messages) {
-      if (message.channelId || message.messaging) continue;
+    const selectedStoredMessages: StoredMessage[] = [];
+    let completedCount = 0;
+    for (let index = this.#state.messages.length - 1; index >= 0; index -= 1) {
+      const message = this.#state.messages[index];
+      if (!message || message.channelId || message.messaging) continue;
       // A request the agent sent from a Slack thread belongs to that thread, not to its own chat.
       // The teammate it went to still sees it.
       if (message.messagingReturn && message.sender.kind === "agent" && message.sender.agentId === agentId) continue;
+      const deliveries = deliveriesByMessage.get(message.id) ?? [];
+      const ownMessage = message.sender.kind === "agent" && message.sender.agentId === agentId;
+      let relevant = ownMessage;
+      let active = false;
+      for (const delivery of deliveries) {
+        if (!ownMessage && delivery.recipientAgentId !== agentId) continue;
+        relevant = true;
+        if (isActiveDelivery(delivery)) active = true;
+      }
+      if (!relevant) continue;
+      if (!active && options.fromCreatedAt && message.createdAt < options.fromCreatedAt) continue;
+      if (!active && completedCount >= limit) continue;
+      selectedStoredMessages.push(message);
+      if (!active) completedCount += 1;
+    }
+    selectedStoredMessages.reverse();
+    const messages: ConversationMessage[] = [];
+    const positions = this.#queuedPositions();
+    for (const message of selectedStoredMessages) {
       const deliveries = deliveriesByMessage.get(message.id) ?? [];
       if (message.sender.kind === "agent" && message.sender.agentId === agentId) {
         messages.push({
@@ -1702,8 +1735,14 @@ export class MailboxStore {
       ...this.#state,
       generatedAttachments: [...this.#state.generatedAttachments, ...staged],
     };
-    const persisted = this.#database.persistConversationAndMailbox(
+    // Only the rows that carry the new attachments: the snapshot is a bounded recent view, and a
+    // whole-snapshot write would delete the older rows it does not hold.
+    const changedMessages = snapshot.messages.filter((message) =>
+      message.attachments?.some((attachment) => attachmentIds.includes(attachment.id)),
+    );
+    const persisted = this.#database.persistConversationChangesAndMailbox(
       snapshot,
+      changedMessages,
       eventType,
       detail,
       nextState,

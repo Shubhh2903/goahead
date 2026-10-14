@@ -5,6 +5,13 @@ import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import type { DeliveryContext } from "./mailbox-store";
 import type { ThreadItem, ThreadResponse } from "./protocol";
 
+export interface ThreadTurnMessageContext {
+  id: string;
+  status?: string;
+  startedAt?: number;
+  baseTime?: number;
+}
+
 export function snapshotFromThread(
   agentId: string,
   thread: ThreadResponse["thread"],
@@ -12,89 +19,157 @@ export function snapshotFromThread(
 ): ConversationSnapshot {
   const messages: ConversationMessage[] = [];
   for (const turn of thread.turns ?? []) {
-    const items = turn.items ?? [];
-    const firstUserItem = items.find((item) => item.type === "userMessage" && isString(item.clientId));
-    const firstDelivery = firstUserItem?.clientId ? findDelivery(firstUserItem.clientId) : null;
-    const deliveryTime = firstDelivery ? Date.parse(firstDelivery.delivery.createdAt) : Number.NaN;
-    const turnStartedAt = turn.startedAt ? turn.startedAt * 1_000 : Number.NaN;
-    const baseTime = Number.isFinite(deliveryTime)
-      ? deliveryTime
-      : Number.isFinite(turnStartedAt)
-        ? turnStartedAt
-        : Date.now();
-    for (const [itemIndex, item] of items.entries()) {
-      const createdAt = new Date(baseTime + itemIndex).toISOString();
-      if (item.type === "userMessage" && isString(item.id)) {
-        const delivery = item.clientId ? findDelivery(item.clientId) : null;
-        const text = (item.content ?? [])
-          .filter((part) => part.type === "text" && isString(part.text))
-          .map((part) => part.text)
-          .join("\n");
-        if (text) {
-          messages.push({
-            id: delivery?.delivery.id ?? item.id,
-            turnId: turn.id,
-            author: delivery?.delivery.sender.kind === "agent" ? "agent" : "user",
-            source: delivery?.delivery.sender.kind === "agent" ? "agent" : "user",
-            senderAgentId: delivery?.delivery.sender.kind === "agent" ? delivery.delivery.sender.agentId : undefined,
-            replyToMessageId: delivery?.delivery.replyToMessageId,
-            attachments: delivery?.delivery.attachments,
-            delivery: delivery
-              ? {
-                  id: delivery.delivery.id,
-                  status: delivery.delivery.status,
-                  position: delivery.delivery.position,
-                }
-              : undefined,
-            text: delivery?.delivery.text ?? text,
-            createdAt: delivery?.delivery.createdAt ?? createdAt,
-            status: "completed",
-          });
-        }
-      }
-      if (item.type === "agentMessage" && isString(item.id) && item.text) {
-        messages.push({
-          id: item.id,
-          turnId: turn.id,
-          author: "assistant",
-          text: item.text,
-          createdAt,
-          status: normalizeCompletionStatus(turn.status ?? "completed"),
-          itemType: isString(item.phase) ? item.phase : "agentMessage",
-        });
-      }
-      if (isImageGenerationItem(item) && isString(item.id)) {
-        const providerStatus = isString(item.status) ? item.status : turn.status;
-        const failed = providerStatus === "failed";
-        const failure = imageGenerationFailure(item);
-        messages.push({
-          id: item.id,
-          turnId: turn.id,
-          author: "assistant",
-          text: "",
-          createdAt,
-          status: failed ? "failed" : providerStatus === "interrupted" ? "interrupted" : "completed",
-          itemType: "image_generation",
-          imageGeneration: {
-            ...(isString(item.revised_prompt) ? { prompt: item.revised_prompt } : {}),
-            resolution: isString(item.resolution) ? item.resolution : "1024 × 1024",
-            aspectRatio: isImageGenerationAspectRatio(item.aspectRatio) ? item.aspectRatio : "square",
-            ...(failure ? { error: failure } : {}),
-          },
-        });
-      }
-    }
+    messages.push(
+      ...messagesFromThreadItems(
+        {
+          id: turn.id,
+          ...(turn.status === undefined ? {} : { status: turn.status }),
+          ...(turn.startedAt === undefined ? {} : { startedAt: turn.startedAt }),
+        },
+        turn.items ?? [],
+        0,
+        findDelivery,
+      ),
+    );
   }
   sortConversationMessages(messages);
   return { agentId, threadId: thread.id, activeTurnId: null, revision: 0, messages };
+}
+
+/**
+ * Converts one bounded provider item page into OpenBot messages.
+ *
+ * `itemOffset` keeps timestamps stable when a provider splits one turn over several pages. The
+ * caller must release the item page after this function returns; this function keeps no provider
+ * item state between calls.
+ */
+export function messagesFromThreadItems(
+  turn: ThreadTurnMessageContext,
+  items: readonly ThreadItem[],
+  itemOffset: number,
+  findDelivery: (deliveryId: string) => DeliveryContext | null,
+): ConversationMessage[] {
+  const baseTime = turn.baseTime ?? threadTurnBaseTime(turn, items, findDelivery);
+  const messages: ConversationMessage[] = [];
+  for (const [pageIndex, item] of items.entries()) {
+    const itemIndex = itemOffset + pageIndex;
+    const createdAt = new Date(baseTime + itemIndex).toISOString();
+    if (item.type === "userMessage" && isString(item.id)) {
+      const delivery = item.clientId ? findDelivery(item.clientId) : null;
+      const text = (item.content ?? [])
+        .filter((part) => part.type === "text" && isString(part.text))
+        .map((part) => part.text)
+        .join("\n");
+      if (text) {
+        messages.push({
+          id: delivery?.delivery.id ?? item.id,
+          turnId: turn.id,
+          author: delivery?.delivery.sender.kind === "agent" ? "agent" : "user",
+          source: delivery?.delivery.sender.kind === "agent" ? "agent" : "user",
+          senderAgentId: delivery?.delivery.sender.kind === "agent" ? delivery.delivery.sender.agentId : undefined,
+          replyToMessageId: delivery?.delivery.replyToMessageId,
+          attachments: delivery?.delivery.attachments,
+          delivery: delivery
+            ? {
+                id: delivery.delivery.id,
+                status: delivery.delivery.status,
+                position: delivery.delivery.position,
+              }
+            : undefined,
+          text: delivery?.delivery.text ?? text,
+          createdAt: delivery?.delivery.createdAt ?? createdAt,
+          status: "completed",
+        });
+      }
+    }
+    if (item.type === "agentMessage" && isString(item.id) && item.text) {
+      messages.push({
+        id: item.id,
+        turnId: turn.id,
+        author: "assistant",
+        text: item.text,
+        createdAt,
+        status: normalizeCompletionStatus(turn.status ?? "completed"),
+        itemType: isString(item.phase) ? item.phase : "agentMessage",
+      });
+    }
+    if (isImageGenerationItem(item) && isString(item.id)) {
+      const providerStatus = isString(item.status) ? item.status : turn.status;
+      const failed = providerStatus === "failed";
+      const failure = imageGenerationFailure(item);
+      messages.push({
+        id: item.id,
+        turnId: turn.id,
+        author: "assistant",
+        text: "",
+        createdAt,
+        status: failed ? "failed" : providerStatus === "interrupted" ? "interrupted" : "completed",
+        itemType: "image_generation",
+        imageGeneration: {
+          ...(isString(item.revised_prompt) ? { prompt: item.revised_prompt } : {}),
+          resolution: isString(item.resolution) ? item.resolution : "1024 × 1024",
+          aspectRatio: isImageGenerationAspectRatio(item.aspectRatio) ? item.aspectRatio : "square",
+          ...(failure ? { error: failure } : {}),
+        },
+      });
+    }
+  }
+  return messages;
+}
+
+/** The time of a turn's first item: its delivery, then the provider's start time, then now. */
+export function threadTurnBaseTime(
+  turn: ThreadTurnMessageContext,
+  items: readonly ThreadItem[],
+  findDelivery: (deliveryId: string) => DeliveryContext | null,
+): number {
+  const firstUserItem = items.find((item) => item.type === "userMessage" && isString(item.clientId));
+  const firstDelivery = firstUserItem?.clientId ? findDelivery(firstUserItem.clientId) : null;
+  const deliveryTime = firstDelivery ? Date.parse(firstDelivery.delivery.createdAt) : Number.NaN;
+  const turnStartedAt = typeof turn.startedAt === "number" ? turn.startedAt * 1_000 : Number.NaN;
+  return Number.isFinite(deliveryTime) ? deliveryTime : Number.isFinite(turnStartedAt) ? turnStartedAt : Date.now();
+}
+
+/** Merges a partial page while keeping rows omitted by that page. */
+export function mergeProviderHistoryMessages(
+  stored: readonly ConversationMessage[],
+  imported: readonly ConversationMessage[],
+  provider?: AgentProviderId,
+): ConversationMessage[] {
+  if (provider === "claude") {
+    const kept = stored.filter((message) => !isStoredClaudeNotice(message));
+    return mergeConversationMessages(kept, reconcileClaudeHistoryMessages(kept, imported));
+  }
+  const importedIds = new Set(imported.map((message) => message.id));
+  const importedAssistantMessages = new Set(imported.filter(isProviderAssistantMessage).map(providerMessageIdentity));
+  const reconciledStored = stored.filter(
+    (message) =>
+      importedIds.has(message.id) ||
+      !isProviderAssistantMessage(message) ||
+      !importedAssistantMessages.has(providerMessageIdentity(message)),
+  );
+  return mergeConversationMessages(reconciledStored, imported);
 }
 
 export function mergeConversationSnapshots(
   stored: ConversationSnapshot,
   live: ConversationSnapshot,
 ): ConversationSnapshot {
-  const messages = new Map(stored.messages.map((message) => [message.id, message]));
-  for (const message of live.messages) {
+  return {
+    agentId: live.agentId,
+    threadId: live.threadId ?? stored.threadId,
+    activeTurnId: live.activeTurnId,
+    revision: live.revision,
+    messages: mergeConversationMessages(stored.messages, live.messages),
+  };
+}
+
+function mergeConversationMessages(
+  stored: readonly ConversationMessage[],
+  live: readonly ConversationMessage[],
+): ConversationMessage[] {
+  const messages = new Map(stored.map((message) => [message.id, message]));
+  for (const message of live) {
     const previous = messages.get(message.id);
     messages.set(
       message.id,
@@ -108,14 +183,8 @@ export function mergeConversationSnapshots(
         : message,
     );
   }
-  const merged: ConversationSnapshot = {
-    agentId: live.agentId,
-    threadId: live.threadId ?? stored.threadId,
-    activeTurnId: live.activeTurnId,
-    revision: live.revision,
-    messages: [...messages.values()],
-  };
-  sortConversationMessages(merged.messages);
+  const merged = [...messages.values()];
+  sortConversationMessages(merged);
   return merged;
 }
 
@@ -145,24 +214,46 @@ export function mergeProviderHistory(
 }
 
 function reconcileClaudeHistory(stored: ConversationSnapshot, imported: ConversationSnapshot): ConversationSnapshot {
-  const storedMessages = new Map(stored.messages.map((message) => [message.id, message]));
+  return {
+    ...imported,
+    messages: reconcileClaudeHistoryMessages(stored.messages, imported.messages),
+  };
+}
+
+function reconcileClaudeHistoryMessages(
+  stored: readonly ConversationMessage[],
+  imported: readonly ConversationMessage[],
+): ConversationMessage[] {
+  const storedMessages = new Map(stored.map((message) => [message.id, message]));
   const turns = new Map<string, ConversationMessage[]>();
   /* A turn's narration is imported under the session's own message IDs, which never match the IDs a
      live turn published it under. A turn this app already holds therefore keeps the narration it
      recorded, and the imported copy is dropped rather than stored a second time on every restart. */
   const storedNarrationTurns = new Set<string>();
-  for (const message of stored.messages) {
+  for (const message of stored) {
     if (!isClaudeNarration(message) || !message.turnId) continue;
     storedNarrationTurns.add(message.turnId);
   }
+  const storedReasoning = new Map<string, ConversationMessage>();
+  for (const message of stored) {
+    if (!isClaudeReasoning(message) || !message.turnId) continue;
+    if (message.id === `${message.turnId}:reasoning`) storedReasoning.set(message.turnId, message);
+  }
   const importedNarration = new Map<string, ConversationMessage[]>();
-  for (const message of imported.messages) {
+  const importedReasoning = new Map<string, ConversationMessage[]>();
+  for (const message of imported) {
+    if (isClaudeReasoning(message) && message.turnId) {
+      const parts = importedReasoning.get(message.turnId) ?? [];
+      parts.push(message);
+      importedReasoning.set(message.turnId, parts);
+      continue;
+    }
     if (!isClaudeNarration(message) || !message.turnId) continue;
     const parts = importedNarration.get(message.turnId) ?? [];
     parts.push(message);
     importedNarration.set(message.turnId, parts);
   }
-  for (const message of imported.messages) {
+  for (const message of imported) {
     if (message.author !== "assistant" || message.itemType !== "agentMessage" || !message.turnId) continue;
     const parts = turns.get(message.turnId) ?? [];
     parts.push(message);
@@ -172,6 +263,21 @@ function reconcileClaudeHistory(stored: ConversationSnapshot, imported: Conversa
   const omitted = new Set<string>();
   /** Stored rows this has to rewrite that the import carries no entry of its own for. */
   const appended: ConversationMessage[] = [];
+  for (const [turnId, parts] of importedReasoning) {
+    const existing = storedReasoning.get(turnId);
+    // Fresh imports keep provider IDs. A partial live row must not hide missing provider text.
+    if (existing) {
+      let canonicalPlaced = false;
+      for (const part of parts) {
+        if (!existing.text.includes(part.text)) continue;
+        if (!canonicalPlaced) {
+          replacements.set(part.id, existing);
+          canonicalPlaced = true;
+        } else omitted.add(part.id);
+      }
+      if (!canonicalPlaced) appended.push(existing);
+    }
+  }
   for (const [turnId, parts] of turns) {
     // Live Claude output combines SDK replies under one ID. Keep that ID and its metadata.
     const answer = storedMessages.get(`${turnId}:assistant`);
@@ -231,15 +337,10 @@ function reconcileClaudeHistory(stored: ConversationSnapshot, imported: Conversa
     replacements.set(first.id, { ...answer, itemType: "commentary", text, status: last.status });
     for (const part of narration.slice(1)) omitted.add(part.id);
   }
-  return {
-    ...imported,
-    messages: [
-      ...imported.messages
-        .filter((message) => !omitted.has(message.id))
-        .map((message) => replacements.get(message.id) ?? message),
-      ...appended,
-    ],
-  };
+  return [
+    ...imported.filter((message) => !omitted.has(message.id)).map((message) => replacements.get(message.id) ?? message),
+    ...appended,
+  ];
 }
 
 /**
@@ -256,8 +357,12 @@ function isClaudeNarration(message: ConversationMessage): boolean {
     message.author === "assistant" &&
     message.itemType === "commentary" &&
     Boolean(message.turnId) &&
-    message.id !== `${message.turnId}:reasoning`
+    !isClaudeReasoning(message)
   );
+}
+
+function isClaudeReasoning(message: ConversationMessage): boolean {
+  return message.author === "assistant" && message.itemType === "commentary" && message.id.endsWith(":reasoning");
 }
 
 /**

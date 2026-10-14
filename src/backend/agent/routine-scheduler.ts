@@ -258,14 +258,16 @@ export class RoutineScheduler implements RoutineDueSource {
           options.turnId,
           {
             beforeMutate: (snapshot) => {
+              const transitionMessages: ConversationMessage[] = [];
               for (const run of activeRuns) {
                 if (run.status === "queued" && run.deliveryId) {
                   if (this.#mailbox.getDelivery(run.deliveryId)?.delivery.status === "queued") {
                     this.#mailbox.cancelNow(input.agentId, run.deliveryId);
                   }
                 }
-                this.#appendRunTransition(snapshot, run, "cancelled");
+                transitionMessages.push(this.#appendRunTransition(snapshot, run, "cancelled").message);
               }
+              return transitionMessages;
             },
             onRollback: () => this.#mailbox.restorePersistedState(),
           },
@@ -576,6 +578,48 @@ export class RoutineScheduler implements RoutineDueSource {
     });
   }
 
+  /**
+   * Hands a routine run's work on to another agent: the next step of the routine's flow. The
+   * delivery names the same routine and run, so the agent reads it as that routine, but the run
+   * keeps its own delivery and status: `reconcileDelivery` finds a run by its delivery only. An agent
+   * that no longer exists fails the handoff rather than coming back. The idempotency key makes a
+   * second call for the same step answer the delivery the first one made.
+   */
+  async enqueueHandoff(input: {
+    run: Pick<RoutineRun, "id" | "routineId" | "routineName" | "scheduledFor">;
+    agentId: string;
+    text: string;
+    idempotencyKey: string;
+  }): Promise<string> {
+    const agent = this.#hooks.listAgents().find((candidate) => candidate.id === input.agentId);
+    if (!agent) throw new Error(sourceText("error.agent.unknown", { id: input.agentId }));
+    const validateRecipient = this.#mailbox.prepareDelivery([agent.id]);
+    validateRecipient();
+    const receipt = await this.#mailbox.enqueue({
+      sender: {
+        kind: "routine",
+        routineId: input.run.routineId,
+        runId: input.run.id,
+        routineName: input.run.routineName,
+        scheduledFor: input.run.scheduledFor,
+      },
+      recipientAgentIds: [agent.id],
+      text: input.text,
+      draftIds: [],
+      replyToMessageId: null,
+      idempotencyKey: input.idempotencyKey,
+    });
+    const deliveryId = receipt.deliveries[0]?.id;
+    if (!deliveryId) throw new Error("Unable to create the routine handoff delivery.");
+    const snapshot = this.#conversation.ensureSnapshot(agent.id, agent.threadId);
+    this.#hooks.syncMailboxMessages(snapshot);
+    this.#hooks.emit({ type: "agents-changed", agents: this.#hooks.listAgents() });
+    this.#conversation.emitConversation(snapshot);
+    this.#hooks.emitQueue(agent.id);
+    this.#hooks.scheduleDrain(agent.id);
+    return deliveryId;
+  }
+
   async #enqueueRun(run: RoutineRun): Promise<RoutineRun> {
     // A test or a script run that arrives while a spent plan holds the agent would wait for the
     // reset, and a routine set to skip has no use for a late result.
@@ -730,13 +774,17 @@ export class RoutineScheduler implements RoutineDueSource {
     mutate: () => T,
     eventRoutine: (result: T) => Pick<Routine, "id" | "name">,
     turnId?: string,
-    transactionHooks?: { beforeMutate?: (snapshot: ConversationSnapshot) => void; onRollback?: () => void },
+    transactionHooks?: {
+      /** Returns the rows it added to the snapshot, so they are written with the routine marker. */
+      beforeMutate?: (snapshot: ConversationSnapshot) => readonly ConversationMessage[];
+      onRollback?: () => void;
+    },
   ): T {
     const database = this.#store.database;
     return this.#conversation.withConversationTransaction(
       agentId,
-      ({ snapshot: nextSnapshot }) => {
-        transactionHooks?.beforeMutate?.(nextSnapshot);
+      ({ threadId, snapshot: nextSnapshot }) => {
+        const changedMessages = transactionHooks?.beforeMutate?.(nextSnapshot) ?? [];
         const result = mutate();
         const routine = eventRoutine(result);
         const createdAt = new Date().toISOString();
@@ -752,14 +800,22 @@ export class RoutineScheduler implements RoutineDueSource {
         };
         nextSnapshot.messages.push(message);
         sortConversationMessages(nextSnapshot.messages);
-        // persistConversation returns a fresh snapshot, so the published one is not `nextSnapshot`.
-        const persisted = database.persistConversation(nextSnapshot, `routine.${action}`, {
-          action,
-          routineId: routine.id,
-          routineName: routine.name,
-          messageId: message.id,
+        // Only the new rows: the snapshot is a bounded recent view, and a whole-snapshot write would
+        // delete the older rows it does not hold.
+        nextSnapshot.revision = database.persistConversationChanges({
+          agentId,
+          threadId,
+          activeTurnId: nextSnapshot.activeTurnId,
+          changedMessages: [...changedMessages, message],
+          eventType: `routine.${action}`,
+          detail: {
+            action,
+            routineId: routine.id,
+            routineName: routine.name,
+            messageId: message.id,
+          },
         });
-        return { result, snapshot: persisted };
+        return { result, snapshot: nextSnapshot };
       },
       transactionHooks?.onRollback,
     );

@@ -6,6 +6,8 @@ import type {
   AgentModelOption,
   AgentSummary,
   AvatarImageInput,
+  ConversationMessage,
+  ConversationSnapshot,
   CreateAgentInput,
   McpServerConfig,
   SidebarLayoutSnapshot,
@@ -39,6 +41,7 @@ import { SLACK_SEND_MESSAGE_TOOL, slackSendMessageSchema } from "../messaging/me
 import type { MessagingThreads } from "../messaging/messaging-threads";
 import { CHAT_VISUAL_PREVIEW_DEFAULT_WIDTH, htmlPreviewToolSchema, htmlRenderToolSchema } from "../openbot-tools";
 import { type AppServerRequest, type DynamicToolCallParams, type DynamicToolResult, isRecord } from "../protocol";
+import { handleRoutineFlowTool, type RoutineFlowTools } from "../routine-flows/routine-flow-tools";
 import { AgentInterruptTool } from "./agent-interrupt-tool";
 import type { AgentMemories } from "./agent-memories";
 import { type ApprovalAutomationPolicy, NO_APPROVAL_AUTOMATION } from "./approval-automation";
@@ -125,6 +128,7 @@ export interface OpenBotToolRouterOptions {
   tables: AgentTables | null;
   sidebarLayout: AgentSidebar | null;
   localSkillTools?: () => LocalSkillTools;
+  routineFlowTools?: () => RoutineFlowTools;
   approvalAutomation?: ApprovalAutomationPolicy;
   /** The external conversations, which take an agent's request to send a message. */
   messaging: MessagingThreads;
@@ -157,6 +161,7 @@ export class OpenBotToolRouter {
   readonly #tables: AgentTables | null;
   readonly #sidebarLayout: AgentSidebar | null;
   readonly #localSkillTools?: () => LocalSkillTools;
+  readonly #routineFlowTools: (() => RoutineFlowTools) | undefined;
   readonly #approvalAutomation: ApprovalAutomationPolicy;
   readonly #messaging: MessagingThreads;
   readonly #visualPreview: ChatVisualPreviewHost | null;
@@ -180,6 +185,7 @@ export class OpenBotToolRouter {
     this.#tables = options.tables;
     this.#sidebarLayout = options.sidebarLayout;
     this.#localSkillTools = options.localSkillTools;
+    this.#routineFlowTools = options.routineFlowTools;
     this.#approvalAutomation = options.approvalAutomation ?? NO_APPROVAL_AUTOMATION;
     this.#messaging = options.messaging;
     this.#visualPreview = options.visualPreview ?? null;
@@ -297,6 +303,28 @@ export class OpenBotToolRouter {
       }
       this.#hooks.emitError("server_request_failed", error);
     }
+  }
+
+  /**
+   * Writes one new row and sets the snapshot's revision. Only that row: the snapshot is a bounded
+   * recent view, and a whole-snapshot write would delete the older rows it does not hold.
+   */
+  #persistAddedMessage(
+    agentId: string,
+    snapshot: ConversationSnapshot,
+    message: ConversationMessage,
+    eventType: string,
+    detail: unknown,
+  ): void {
+    if (!snapshot.threadId) return;
+    snapshot.revision = this.#store.database.persistConversationChanges({
+      agentId,
+      threadId: snapshot.threadId,
+      activeTurnId: snapshot.activeTurnId,
+      changedMessages: [message],
+      eventType,
+      detail,
+    });
   }
 
   #requireAgent(agentId: string): AgentSummary {
@@ -500,7 +528,7 @@ export class OpenBotToolRouter {
             (event) => {
               const executionThreadId = this.#conversation.publicThreadId(senderAgentId, params.threadId);
               const snapshot = structuredClone(this.#conversation.ensureSnapshot(senderAgentId, executionThreadId));
-              snapshot.messages.push({
+              const message: ConversationMessage = {
                 id: randomUUID(),
                 turnId: params.turnId,
                 author: "system",
@@ -509,10 +537,11 @@ export class OpenBotToolRouter {
                 createdAt: new Date().toISOString(),
                 itemType: skillConversationEventItemType(event),
                 text: redactText(event.skillName),
-              });
-              const persisted = this.#store.database.persistConversation(snapshot, `skill.${event.action}`, event);
-              this.#conversation.setSnapshot(senderAgentId, persisted);
-              this.#conversation.publishConversation(persisted);
+              };
+              snapshot.messages.push(message);
+              this.#persistAddedMessage(senderAgentId, snapshot, message, `skill.${event.action}`, event);
+              this.#conversation.setSnapshot(senderAgentId, snapshot);
+              this.#conversation.publishConversation(snapshot);
             },
           ),
         );
@@ -869,6 +898,15 @@ export class OpenBotToolRouter {
     const routineResult = await this.#routines.handleTool(params, senderAgentId);
     if (routineResult) return routineResult;
 
+    const flowResult = await handleRoutineFlowTool(
+      params.tool,
+      params.arguments,
+      senderAgentId,
+      this.#routineFlowTools?.() ?? null,
+      new Set(this.#hooks.listAgents().map((agent) => agent.id)),
+    );
+    if (flowResult) return flowResult;
+
     const memoryResult = this.#memories.handleTool(params, senderAgentId);
     if (memoryResult) return memoryResult;
 
@@ -881,7 +919,7 @@ export class OpenBotToolRouter {
         throw new Error("app must be a Marketplace plugin slug, or github.");
       }
       const snapshot = structuredClone(this.#conversation.ensureSnapshot(senderAgentId, executionThreadId));
-      snapshot.messages.push({
+      const message: ConversationMessage = {
         id: randomUUID(),
         turnId: params.turnId,
         author: "system",
@@ -891,12 +929,11 @@ export class OpenBotToolRouter {
         itemType: marketplaceSuggestionItemType({ appId: args.app }),
         // The card reads the app from the item type. A client without the card shows this line.
         text: sourceText("status.agent.marketplaceSuggested", { app: args.app }),
-      });
-      const persisted = this.#store.database.persistConversation(snapshot, "marketplace.suggested", {
-        appId: args.app,
-      });
-      this.#conversation.setSnapshot(senderAgentId, persisted);
-      this.#conversation.publishConversation(persisted);
+      };
+      snapshot.messages.push(message);
+      this.#persistAddedMessage(senderAgentId, snapshot, message, "marketplace.suggested", { appId: args.app });
+      this.#conversation.setSnapshot(senderAgentId, snapshot);
+      this.#conversation.publishConversation(snapshot);
       return openBotToolResult({ status: "suggested", app: args.app });
     }
 

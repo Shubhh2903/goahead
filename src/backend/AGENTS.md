@@ -83,10 +83,12 @@ and `dispatch`. The shape in both: one class per file, kebab-case, `<Name>Option
 Two rules those controllers depend on and a reader cannot infer. They hold the core object and read
 `.connection` at each use — a cached handle survives `initialize()` and then silently addresses a
 closed database after `close()`. And a projection controller does not open a transaction of its own.
-Four places do, and each is load-bearing: `dispatch` and `deleteEventsAndReceipt` open one only if
+Five places do, and each is load-bearing: `dispatch` and `deleteEventsAndReceipt` open one only if
 they find none open, which is what lets a projector nest another dispatch inside the caller's, and
-`ThreadReplay.rebuildThreadProjection` and the facade's `persistConversationAndMailbox` open one
-unconditionally, which is what makes the dispatch inside each of them skip its own. Open an
+`ThreadReplay.rebuildThreadProjection` and the facade's `persistConversationAndMailbox` and
+`persistConversationChangesAndMailbox` open one unconditionally, which is what makes the dispatch
+inside each of them skip its own. (`ProviderHistoryStore` and the facade's
+`importProviderHistoryMessages` also open one only if they find none open.) Open an
 unconditional one anywhere else and a caller already in a transaction gets a nested `BEGIN` that
 SQLite rejects; remove one of these four and the replay or the mailbox write silently stops being
 atomic.

@@ -155,6 +155,13 @@ interface EventClientState {
   nextSnapshotRequestAt: number;
 }
 
+type ConversationEventAudience = "all" | "modern" | "legacy";
+
+interface PendingLegacyConversationRead {
+  event: Extract<AgentEvent, { type: "conversation" }>;
+  retries: number;
+}
+
 interface RateEntry {
   attempts: number;
   resetAt: number;
@@ -174,6 +181,9 @@ export class TeamApiServer {
   readonly #options: Omit<TeamApiOptions, "sidebarLayout"> & { sidebarLayout: TeamApiSidebarLayout };
   readonly #rateLimits = new Map<string, RateEntry>();
   readonly #eventClients = new Map<Ws.WebSocket, EventClientState>();
+  readonly #pendingLegacyConversationReads = new Map<string, PendingLegacyConversationRead>();
+  /** Bumped by stop, so a full read that a stopped server started publishes nothing. */
+  #legacyConversationGeneration = 0;
   #hostRestart: HostRestartEvent = { type: HOST_RESTART_EVENT, state: "none", version: null };
   readonly #responseRoutes = new WeakMap<
     ServerResponse,
@@ -313,12 +323,14 @@ export class TeamApiServer {
     this.#agentListener = null;
     if (this.#sidebarLayoutListener) this.#options.sidebarLayout.off("changed", this.#sidebarLayoutListener);
     this.#sidebarLayoutListener = null;
+    this.#legacyConversationGeneration += 1;
     for (const [client, connection] of this.#eventClients) {
       if (connection.typingTimer) clearTimeout(connection.typingTimer);
       if (connection.directTypingTimer) clearTimeout(connection.directTypingTimer);
       client.close(1001, "Server stopped");
     }
     this.#eventClients.clear();
+    this.#pendingLegacyConversationReads.clear();
     this.#localTypingAgentId = null;
     try {
       await this.#options.remoteScreen?.stop();
@@ -776,9 +788,90 @@ export class TeamApiServer {
   }
 
   #broadcastAgentEvent(event: AgentEvent): void {
+    if (event.type !== "conversation") {
+      this.#broadcastAgentEventToClients(event);
+      return;
+    }
+
+    // A bounded runtime snapshot is enough for modern clients: they fetch the page they need after
+    // this invalidation. The released event clients have no invalidation path, so they keep the old
+    // full snapshot contract. Read that snapshot only when such a client is connected, and keep the
+    // read out of the synchronous event path used by modern clients.
+    const primaryAgent = this.#options.agents.listAgents().find((agent) => agent.id === event.snapshot.agentId);
+    if (!primaryAgent || primaryAgent.threadId !== event.snapshot.threadId) {
+      // Execution and channel threads are consumed by their owners before this listener. A stale
+      // event for a deleted agent must also never enter readConversation, whose released endpoint
+      // can recreate an agent from its id.
+      this.#broadcastAgentEventToClients(event, "modern");
+      return;
+    }
+    const hasLegacyClient = [...this.#eventClients.values()].some(isLegacyConversationClient);
+    this.#broadcastAgentEventToClients(event, hasLegacyClient ? "modern" : "all");
+    if (hasLegacyClient) this.#queueLegacyConversationEvent(event);
+  }
+
+  #queueLegacyConversationEvent(event: Extract<AgentEvent, { type: "conversation" }>, retries = 0): void {
+    const agentId = event.snapshot.agentId;
+    const pending = this.#pendingLegacyConversationReads.get(agentId);
+    if (pending) {
+      // One full SQLite materialization is enough for a burst. The newest event is the state that
+      // the legacy client needs, so an older read never gets replayed after a newer event arrives.
+      pending.event = event;
+      return;
+    }
+    const next: PendingLegacyConversationRead = { event, retries };
+    this.#pendingLegacyConversationReads.set(agentId, next);
+    const generation = this.#legacyConversationGeneration;
+    const stillWanted = () =>
+      generation === this.#legacyConversationGeneration &&
+      // `readConversation` uses getOrCreate for the released HTTP endpoint. Do not let a delayed
+      // event read recreate an agent that was deleted after the event was emitted.
+      this.#options.agents.listAgents().some((agent) => agent.id === agentId) &&
+      [...this.#eventClients.values()].some(isLegacyConversationClient);
+    const forget = () => {
+      if (this.#pendingLegacyConversationReads.get(agentId) === next)
+        this.#pendingLegacyConversationReads.delete(agentId);
+    };
+    queueMicrotask(() => {
+      void (async () => {
+        if (!stillWanted()) {
+          forget();
+          return;
+        }
+        const snapshot = await this.#options.agents.readConversation(agentId);
+        if (this.#pendingLegacyConversationReads.get(agentId) !== next) return;
+        if (!stillWanted()) {
+          forget();
+          return;
+        }
+        const latest = next.event;
+        forget();
+        if (snapshot.revision < latest.snapshot.revision) {
+          // The event can be emitted while the read is still catching up with its transaction.
+          // Retry once the newest revision is the durable one instead of sending a stale snapshot.
+          if (next.retries === 0) this.#queueLegacyConversationEvent(latest, 1);
+          else (this.#options.logger ?? logger).warn("Legacy conversation event read is behind its revision.");
+          return;
+        }
+        this.#broadcastAgentEventToClients({ type: "conversation", snapshot }, "legacy");
+      })().catch((error: unknown) => {
+        forget();
+        (this.#options.logger ?? logger).warn(
+          "Legacy conversation event could not be materialized:",
+          toLogValue(error),
+        );
+      });
+    });
+  }
+
+  #broadcastAgentEventToClients(event: AgentEvent, audience: ConversationEventAudience = "all"): void {
     const filteredConversationPayloads = new Map<string, string>();
 
     for (const [client, connection] of this.#eventClients) {
+      if (event.type === "conversation") {
+        const legacy = isLegacyConversationClient(connection);
+        if ((audience === "legacy" && !legacy) || (audience === "modern" && legacy)) continue;
+      }
       // An event this client's protocol cannot describe is skipped for this client only. Thrown
       // out of the loop, it would stop the event for every client after this one.
       const encodeEvent = (event: AgentEvent, options = {}) => {
@@ -1384,6 +1477,11 @@ function unavailableSidebarLayout(): TeamApiSidebarLayout {
 }
 
 /** The protocol that an event connection's capabilities describe, as `#encodeProviderEvent` encodes it. */
+/** A released event client that takes full conversation snapshots and has no invalidation path. */
+function isLegacyConversationClient(connection: EventClientState): boolean {
+  return connection.includeConversationEvents && !connection.capabilities.has("agent-runtime-snapshots");
+}
+
 function eventProtocol(capabilities: ReadonlySet<string>): 1 | 4 | 5 | 6 {
   if (capabilities.has(TEAM_CURSOR_CLINE_CAPABILITY)) return 6;
   return capabilities.has(TEAM_LOCAL_PROVIDERS_CAPABILITY) ? 5 : capabilities.has("opencode") ? 4 : 1;

@@ -1,8 +1,9 @@
 import type { AgentProvider } from "../agent-client";
 import type { AgentStore } from "../agent-store";
-import { mergeProviderHistory, snapshotFromThread } from "../conversation-snapshots";
+import { mergeConversationSnapshots } from "../conversation-snapshots";
+import { LineTooLongError } from "../jsonl";
 import type { MailboxStore } from "../mailbox-store";
-import { decodeThreadResponse } from "../protocol";
+import { importProviderHistory } from "../provider-history-import";
 import type { ConversationRuntime } from "./conversation-runtime";
 import { conversationContentSignature } from "./delivery-content";
 import { markIncompleteImageGeneration } from "./image-generation";
@@ -39,8 +40,8 @@ export interface BootRecoveryOptions {
  *   repeats uncertain side effects. A delivery is orphaned when the process
  *   that ran it is gone: the previous OpenBot run, or a provider CLI that
  *   exited. Any other unsettled delivery is a live turn of this run.
- * - `backfillProviderHistory` merges provider-side turns that happened while
- *   OpenBot was down into the persisted conversation.
+ * - `backfillProviderHistory` imports provider-side turns that happened while
+ *   OpenBot was down into the persisted conversation, one bounded page at a time.
  *
  * Reads the store/mailbox/provider and writes the database plus in-memory
  * snapshots; delivery to the renderer goes through `mailboxSync` and
@@ -61,6 +62,8 @@ export class BootRecovery {
    * no active turn, and `markTerminal` cannot correct a terminal status.
    */
   readonly #orphanedDeliveryIds = new Set<string>();
+  /** Do not read the same oversized history again after the provider restarts. */
+  readonly #oversizedHistory = new Set<string>();
 
   constructor(options: BootRecoveryOptions) {
     this.#store = options.store;
@@ -131,23 +134,42 @@ export class BootRecovery {
         const client = agent ? this.#providers.clientForAgent(agent) : null;
         const threadId = this.#hooks.deliveryThreadId?.(delivery.id) ?? agent?.threadId;
         const session = agent && threadId ? this.#store.database.activeProviderSession(threadId, agent.provider) : null;
-        if (agent && session && client) {
-          const response = await client.request(
-            "thread/read",
-            { ...(await this.#threads.threadParams(agent, client, session.externalSessionId)), includeTurns: true },
-            decodeThreadResponse,
-          );
+        const historyKey = session ? `${session.provider}:${session.externalSessionId}` : null;
+        const readHistory = client?.readHistory;
+        if (agent && session && historyKey && readHistory && !this.#oversizedHistory.has(historyKey)) {
           const batchIds = delivery.turnId ? null : unconfirmedStarts.get(delivery.recipientAgentId);
-          const turn = response.thread.turns?.find(
-            (candidate) =>
-              candidate.id === delivery.turnId ||
-              candidate.items?.some(
-                (item) =>
-                  item.type === "userMessage" &&
-                  !!item.clientId &&
-                  (item.clientId === delivery.id || batchIds?.has(item.clientId) === true),
-              ),
-          );
+          let recovered: { id: string; status?: string } | undefined;
+          try {
+            // A known turn needs only the turn list; an unconfirmed start is found by its client id.
+            await readHistory(
+              {
+                threadId: session.externalSessionId,
+                cwd: agent.workspacePath,
+                items: delivery.turnId ? "none" : "full",
+              },
+              async (fragment) => {
+                const matches =
+                  fragment.turnId === delivery.turnId ||
+                  fragment.items.some(
+                    (item) =>
+                      item.type === "userMessage" &&
+                      !!item.clientId &&
+                      (item.clientId === delivery.id || batchIds?.has(item.clientId) === true),
+                  );
+                if (matches) {
+                  recovered =
+                    fragment.status === undefined
+                      ? { id: fragment.turnId }
+                      : { id: fragment.turnId, status: fragment.status };
+                }
+                return !matches;
+              },
+            );
+          } catch (error) {
+            if (containsLineTooLong(error)) this.#oversizedHistory.add(historyKey);
+            throw error;
+          }
+          const turn = recovered;
           if (turn && !delivery.turnId) {
             await this.#mailbox.markRunning(delivery.id, turn.id);
           }
@@ -166,18 +188,35 @@ export class BootRecovery {
       const agent = this.#store.list().find((candidate) => candidate.id === delivery.recipientAgentId);
       const threadId = this.#hooks.deliveryThreadId?.(delivery.id) ?? agent?.threadId;
       if (agent && threadId) {
-        const snapshot = this.#store.database.readConversation(agent.id, threadId);
-        snapshot.activeTurnId = null;
-        for (const message of snapshot.messages) {
-          if (message.turnId === delivery.turnId && message.status === "streaming") {
-            message.status = terminal;
-            markIncompleteImageGeneration(message, terminal);
-          }
-        }
-        this.#store.database.persistConversation(snapshot, "turn.reconciled-after-restart", {
-          turnId: delivery.turnId,
-          status: terminal,
+        // Only the rows this recovery changes: a whole-chat read and write would hold the chat in
+        // memory, and the working snapshot is a bounded view.
+        const recoveryTurnId =
+          delivery.turnId ?? this.#store.database.readConversationRuntime(agent.id, threadId).activeTurnId;
+        const changedMessages = this.#store.database
+          .readConversationRecoveryMessages(agent.id, threadId, recoveryTurnId)
+          .filter((message) => message.turnId === recoveryTurnId && message.status === "streaming")
+          .map((message) => {
+            const changed = structuredClone(message);
+            changed.status = terminal;
+            markIncompleteImageGeneration(changed, terminal);
+            return changed;
+          });
+        const revision = this.#store.database.persistConversationChanges({
+          agentId: agent.id,
+          threadId,
+          activeTurnId: null,
+          changedMessages,
+          eventType: "turn.reconciled-after-restart",
+          detail: { turnId: delivery.turnId, status: terminal },
         });
+        const snapshot = structuredClone(this.#conversation.ensureSnapshot(agent.id, threadId));
+        const changedById = new Map(changedMessages.map((message) => [message.id, message]));
+        snapshot.messages = snapshot.messages.map((message) => changedById.get(message.id) ?? message);
+        snapshot.activeTurnId = null;
+        snapshot.revision = revision;
+        // Clear the cached turn before queue listeners can read or change the agent.
+        this.#conversation.setSnapshot(agent.id, snapshot);
+        this.#conversation.publishConversation(snapshot);
       }
       this.#mailboxSync.emitQueue(delivery.recipientAgentId);
     }
@@ -187,27 +226,38 @@ export class BootRecovery {
     for (const { delivery } of this.#mailbox.unresolvedDeliveries()) this.#orphanedDeliveryIds.add(delivery.id);
     for (const agent of this.threads()) {
       if (!agent.threadId) continue;
-      const snapshot = this.#store.database.readConversation(agent.id, agent.threadId);
-      const turnId = snapshot.activeTurnId;
-      let changed = false;
-      if (turnId) {
-        snapshot.activeTurnId = null;
-        changed = true;
-      }
-      for (const message of snapshot.messages) {
-        if (message.questionPrompt?.resolution === null) {
-          message.questionPrompt.resolution = { status: "expired" };
-          changed = true;
-        }
-        if (turnId && message.turnId === turnId && message.status === "streaming") {
-          message.status = "interrupted";
-          markIncompleteImageGeneration(message, "interrupted");
-          changed = true;
-        }
-      }
+      // Only the rows that recovery can change: the streaming messages of the stale turn and the
+      // unanswered prompts. A whole-chat read would hold every chat in memory at startup.
+      const turnId = this.#store.database.readConversationRuntime(agent.id, agent.threadId).activeTurnId;
+      const changedMessages = this.#store.database
+        .readConversationRecoveryMessages(agent.id, agent.threadId, turnId)
+        .flatMap((message) => {
+          const changed = structuredClone(message);
+          if (changed.questionPrompt?.resolution === null) changed.questionPrompt.resolution = { status: "expired" };
+          if (turnId && changed.turnId === turnId && changed.status === "streaming") {
+            changed.status = "interrupted";
+            markIncompleteImageGeneration(changed, "interrupted");
+          }
+          return changed.questionPrompt?.resolution?.status === "expired" || changed.status === "interrupted"
+            ? [changed]
+            : [];
+        });
+      const changed = turnId !== null || changedMessages.length > 0;
       if (!changed) continue;
-      const persisted = this.#store.database.persistConversation(snapshot, "turn.interrupted-by-restart", { turnId });
-      this.#conversation.setSnapshot(agent.id, persisted);
+      const revision = this.#store.database.persistConversationChanges({
+        agentId: agent.id,
+        threadId: agent.threadId,
+        activeTurnId: null,
+        changedMessages,
+        eventType: "turn.interrupted-by-restart",
+        detail: { turnId },
+      });
+      const snapshot = structuredClone(this.#conversation.ensureSnapshot(agent.id, agent.threadId));
+      const changedById = new Map(changedMessages.map((message) => [message.id, message]));
+      snapshot.messages = snapshot.messages.map((message) => changedById.get(message.id) ?? message);
+      snapshot.activeTurnId = null;
+      snapshot.revision = revision;
+      this.#conversation.setSnapshot(agent.id, snapshot);
     }
   }
 
@@ -218,41 +268,72 @@ export class BootRecovery {
       const active = this.#store.database.activeProviderSession(agent.threadId, agent.provider);
       for (const session of this.#store.database.listProviderSessions(agent.threadId)) {
         const client = this.#providers.clientFor(session.provider);
-        if (!client) continue;
+        if (!client?.readHistory) continue;
+        const historyKey = `${session.provider}:${session.externalSessionId}`;
+        if (this.#oversizedHistory.has(historyKey)) continue;
         try {
-          // The full parameters for the session the agent still runs on, and the id alone for the
-          // retired ones: a client that loads a session to read it must not reopen a session that
-          // was deliberately replaced.
+          // The workspace of the session the agent still runs on, and none for the retired ones: a
+          // client that loads a session to read it must not reopen a session that was deliberately
+          // replaced.
           const params =
             session.externalSessionId === active?.externalSessionId
               ? await this.#threads.threadParams(agent, client, session.externalSessionId)
               : { threadId: session.externalSessionId };
-          const response = await client.request("thread/read", { ...params, includeTurns: true }, decodeThreadResponse);
-          const imported = snapshotFromThread(agent.id, response.thread, (deliveryId) =>
-            this.#mailbox.getDelivery(deliveryId),
-          );
-          imported.threadId = agent.threadId;
-          const current = this.#store.database.readConversation(agent.id, agent.threadId);
-          const merged = mergeProviderHistory(current, imported, session.provider);
-          this.#mailboxSync.syncMailboxMessages(merged);
-          if (conversationContentSignature(merged) === conversationContentSignature(current)) {
-            const live = this.#conversation.ensureSnapshot(agent.id, agent.threadId);
-            if (!live?.activeTurnId) this.#conversation.setSnapshot(agent.id, current);
-            continue;
-          }
-          const persisted = this.#store.database.persistConversation(merged, "provider-history.backfilled", {
+          const cwd = typeof params.cwd === "string" ? params.cwd : undefined;
+          await importProviderHistory({
+            database: this.#store.database,
+            readHistory: client.readHistory,
+            sessionId: session.id,
             provider: session.provider,
             externalSessionId: session.externalSessionId,
+            agentId: agent.id,
+            publicThreadId: agent.threadId,
+            ...(cwd === undefined ? {} : { cwd }),
+            findDelivery: (deliveryId) => this.#mailbox.getDelivery(deliveryId),
           });
-          const live = this.#conversation.ensureSnapshot(agent.id, agent.threadId);
-          if (!live?.activeTurnId) {
-            this.#conversation.setSnapshot(agent.id, persisted);
-            if (this.#conversation.isExecutionThread(agent.threadId)) this.#conversation.publishConversation(persisted);
-          }
+          this.#refreshBackfilledConversation(agent.id, agent.threadId);
         } catch (error) {
+          if (containsLineTooLong(error)) this.#oversizedHistory.add(historyKey);
+          // The pages committed before the failure stay saved: show them.
+          try {
+            this.#refreshBackfilledConversation(agent.id, agent.threadId);
+          } catch (refreshFailure) {
+            this.#hooks.emitError("provider_history_backfill_pending", refreshFailure, agent.id);
+          }
           this.#hooks.emitError("provider_history_backfill_pending", error, agent.id);
         }
       }
     }
   }
+
+  /** Puts the newest page in the cache, keeps a running turn's live rows, and publishes a change. */
+  #refreshBackfilledConversation(agentId: string, threadId: string): void {
+    const page = this.#store.database.readConversationPage(agentId, threadId, { type: "latest" }, 100);
+    const persisted = {
+      agentId: page.agentId,
+      threadId: page.threadId,
+      activeTurnId: page.activeTurnId,
+      revision: page.revision,
+      messages: page.messages,
+    };
+    const live = this.#conversation.loadedSnapshot(agentId);
+    const next = live?.activeTurnId ? mergeConversationSnapshots(persisted, live) : persisted;
+    const previousSignature = live ? conversationContentSignature(live) : null;
+    this.#conversation.setSnapshot(agentId, next);
+    const published = this.#conversation.loadedSnapshot(agentId) ?? next;
+    const signature = conversationContentSignature(published);
+    if (!live || signature !== previousSignature) this.#conversation.publishConversation(published, signature);
+  }
+}
+
+/** Whether a failure, or one of its causes, is a provider line over the size limit. */
+function containsLineTooLong(value: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current = value;
+  while (current && (typeof current === "object" || typeof current === "function") && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof LineTooLongError) return true;
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
 }

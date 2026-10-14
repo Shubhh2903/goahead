@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentAuthState, AgentProviderId } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
-import { AcpAgentClient } from "./acp-client";
+import { AcpAgentClient, type AcpHistoryPersistence } from "./acp-client";
 import type { AgentClient } from "./agent-client";
 import { CodexAppServerClient } from "./app-server-client";
 import { ClaudeAgentClient } from "./claude-client";
@@ -146,6 +146,8 @@ function confineClineTarget(target: SpawnTarget, confinement: ProcessConfinement
  */
 export interface ProviderClientContext {
   apiKey(provider: AgentProviderId): string | null;
+  /** Durable provider-history ports, selected by the external provider id. */
+  readonly history?: (provider: AgentProviderId) => AcpHistoryPersistence | undefined;
   readonly customProviders: CustomProviderSource;
   /**
    * The MCP servers the user enabled, read at spawn like the endpoints above. Each client resolves
@@ -315,6 +317,7 @@ export const BUILT_IN_PROVIDER_DRIVERS: readonly BuiltInProviderDriver[] = [
         context.mcpAuthorization,
         confinement,
         context.agentEnvironment,
+        context.history?.("grok"),
       ),
     createProfileClient: (cli, requestTimeoutMs) => new GrokAgentClient(cli, requestTimeoutMs, true),
     authState: (account) => ({ kind: "grok", email: account?.email ?? null }),
@@ -349,6 +352,7 @@ export const BUILT_IN_PROVIDER_DRIVERS: readonly BuiltInProviderDriver[] = [
         mcpToolRuntimes: context.mcpToolRuntimes,
         mcpAuthorization: context.mcpAuthorization,
         readRateLimits: () => readOpenCodeGoUsage(context.apiKey("opencode")),
+        history: context.history?.("opencode"),
       }),
     createProfileClient: (cli, timeout, context) =>
       new AcpAgentClient(cli, timeout, {
@@ -391,6 +395,7 @@ export const BUILT_IN_PROVIDER_DRIVERS: readonly BuiltInProviderDriver[] = [
         reportMcpDrops: context.reportMcpDrops,
         mcpToolRuntimes: context.mcpToolRuntimes,
         mcpAuthorization: context.mcpAuthorization,
+        history: context.history?.("antigravity"),
       }),
     // A profile-generation client asks one question and must not act: no MCP servers, and every
     // permission request is cancelled.
@@ -432,6 +437,7 @@ export const BUILT_IN_PROVIDER_DRIVERS: readonly BuiltInProviderDriver[] = [
         reportMcpDrops: context.reportMcpDrops,
         mcpToolRuntimes: context.mcpToolRuntimes,
         mcpAuthorization: context.mcpAuthorization,
+        history: context.history?.("cursor"),
       }),
     createProfileClient: (cli, timeout, context) =>
       new AcpAgentClient(cli, timeout, {
@@ -476,6 +482,7 @@ export const BUILT_IN_PROVIDER_DRIVERS: readonly BuiltInProviderDriver[] = [
         reportMcpDrops: context.reportMcpDrops,
         mcpToolRuntimes: context.mcpToolRuntimes,
         mcpAuthorization: context.mcpAuthorization,
+        history: context.history?.("cline"),
       }),
     createProfileClient: (cli, timeout, context) =>
       new AcpAgentClient(cli, timeout, {
@@ -497,13 +504,18 @@ export const BUILT_IN_PROVIDER_DRIVERS: readonly BuiltInProviderDriver[] = [
     createClient: (_cli, timeout, context, confinement) =>
       new CustomAcpAgentsClient(
         () => savedCustomAgents(context),
-        (config, executable, folder) =>
-          customAgentChild(config, executable, folder, timeout, context, confinement, false),
+        (config, executable, folder, history) =>
+          customAgentChild(config, executable, folder, timeout, context, confinement, false, history),
+        undefined,
+        context.history?.("acp"),
       ),
     createProfileClient: (_cli, timeout, context) =>
       new CustomAcpAgentsClient(
         () => savedCustomAgents(context),
-        (config, executable, folder) => customAgentChild(config, executable, folder, timeout, context, undefined, true),
+        (config, executable, folder, history) =>
+          customAgentChild(config, executable, folder, timeout, context, undefined, true, history),
+        undefined,
+        context.history?.("acp"),
       ),
     authState: () => ({ kind: "acp", email: null }),
     validateAccount: () => undefined,
@@ -527,6 +539,7 @@ function customAgentChild(
   context: ProviderClientContext,
   confinement: ProcessConfinement | undefined,
   profileGeneration: boolean,
+  history?: AcpHistoryPersistence,
 ): AgentClient {
   const env = Object.fromEntries(config.env.map((entry) => [entry.name, entry.value]));
   const values = config.env.map((entry) => entry.value);
@@ -539,6 +552,9 @@ function customAgentChild(
     argv: config.args,
     env,
     ...(profileGeneration ? { profileGeneration: true } : {}),
+    // The router owns durable reads so it can map routed IDs. The child only appends completed
+    // turns; its fallback read then talks to the provider when the stored import is incomplete.
+    history: profileGeneration ? undefined : history,
     ...(confinement ? { confine: (target) => confineSpawnTarget(target, confinement, customAgentStatePaths()) } : {}),
     signInMessage: sourceText("error.provider.customAgentSignIn"),
     servesModel: () => savedCustomAgents(context).some((saved) => saved.id === config.id),

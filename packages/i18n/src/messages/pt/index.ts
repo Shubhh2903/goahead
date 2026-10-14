@@ -15,6 +15,7 @@ import { messages as computerUse } from "./computerUse";
 import { messages as connector } from "./connector";
 import { messages as conversation } from "./conversation";
 import { messages as customProvider } from "./customProvider";
+import { messages as diagram } from "./diagram";
 import { messages as dialog } from "./dialog";
 import { messages as files } from "./files";
 import { messages as importAgent } from "./import";
@@ -95,4 +96,5 @@ export const pt = {
   ...island,
   ...computerUse,
   ...connector,
+  ...diagram,
 } as const satisfies PartialTranslation<AppMessages>;

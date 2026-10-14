@@ -260,6 +260,16 @@ import type {
   RemoteDesktopTestStatus,
 } from "./ipc-remote-desktop-setup";
 import type {
+  ConnectRoutineFlowInput,
+  DisconnectRoutineFlowInput,
+  RemoveRoutineFlowPositionInput,
+  RoutineFlowCanvas,
+  RoutineFlowLink,
+  RoutineFlowsChanged,
+  SaveRoutineFlowPositionInput,
+  UpdateRoutineFlowLinkInput,
+} from "./ipc-routine-flows";
+import type {
   CreateRoutineInput,
   DeleteRoutineInput,
   ListRoutineRunsInput,
@@ -960,6 +970,20 @@ export const IPC_ENDPOINTS = {
     listChannelRoutineRuns: scopedRequest<ListChannelRoutineRunsInput, ChannelRoutineRun[]>()(
       "agent:channel-routines:runs",
     ),
+  },
+  /**
+   * Routine flows: an agent routine's answer handed on from agent to agent, and the canvas that shows
+   * it. Only this computer's host keeps them; a remote server answers that it cannot.
+   */
+  routineFlows: {
+    canvas: scopedRequest<string, RoutineFlowCanvas>()("routine-flows:canvas"),
+    savePosition: scopedRequest<SaveRoutineFlowPositionInput, void>()("routine-flows:save-position"),
+    removePosition: scopedRequest<RemoveRoutineFlowPositionInput, void>()("routine-flows:remove-position"),
+    connect: scopedRequest<ConnectRoutineFlowInput, RoutineFlowLink>()("routine-flows:connect"),
+    disconnect: scopedRequest<DisconnectRoutineFlowInput, void>()("routine-flows:disconnect"),
+    updateLink: scopedRequest<UpdateRoutineFlowLinkInput, RoutineFlowLink>()("routine-flows:update-link"),
+    /** The local agents whose canvases changed. */
+    changed: event<RoutineFlowsChanged>()("routine-flows:changed"),
   },
   agentAttachments: {
     chooseAttachments: scopedRequest<ChooseAttachmentsInput, DraftAttachment[]>()("agent:choose-attachments"),

@@ -2,8 +2,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { COMPUTER_USE_MCP_SERVER_NAME } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import { isGeneratedAgentId } from "@openbot/contracts/validation";
+import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { CHANNEL_SCHEMA_SQL, CHANNEL_SETTINGS_SCHEMA_SQL } from "./channel-schema";
+import { PROVIDER_HISTORY_SCHEMA_SQL } from "./database/provider-history-schema";
 import { MCP_SERVERS_SCHEMA_SQL } from "./mcp-schema";
 import {
   MESSAGING_AUTO_REPLY_SCHEMA_SQL,
@@ -12,6 +14,7 @@ import {
   MESSAGING_SCHEMA_SQL,
   SLACK_CLIENT_SCHEMA_SQL,
 } from "./messaging/messaging-schema";
+import { ROUTINE_FLOW_SCHEMA_SQL } from "./routine-flows/routine-flow-schema";
 
 const BASELINE_SCHEMA_VERSION = 8;
 
@@ -311,7 +314,8 @@ const V12_REACTIONS_TABLE_SQL = `  CREATE TABLE IF NOT EXISTS projection_reactio
     PRIMARY KEY(agent_id, message_id, actor_kind, actor_agent_id)
   );`;
 
-// Migrations 17, 22, 23, 24 and 26 widen the provider CHECK, so the fresh schema is no longer the v8 baseline here either.
+// Migrations 17, 22, 23, 24 and 26 widen the provider CHECK and migration 32 removes it, so the fresh schema is no
+// longer the v8 baseline here either.
 // One line rather than the whole table: the substitution then survives any later baseline edit that does
 // not touch this constraint, and `substituteOnce` still shouts if the line ever stops being unique.
 const BASELINE_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok')),`;
@@ -319,7 +323,7 @@ const BASELINE_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provi
 const V17_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok', 'opencode')),`;
 
 // Migration 22 adds the Antigravity provider. This list is frozen with the migration: do not derive it
-// from `AGENT_PROVIDERS`, because a later provider must get its own migration.
+// from `AGENT_PROVIDERS`, because a shipped migration must always write the same table.
 const V22_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok', 'opencode', 'antigravity')),`;
 
 // Migration 23 adds `acp`, the one provider of every custom ACP agent. Frozen with the migration, like V22.
@@ -330,6 +334,11 @@ const V24_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provider I
 
 // Migration 26 adds the Cline provider. Frozen with the migration, like V22.
 const V26_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok', 'opencode', 'antigravity', 'acp', 'cursor', 'cline')),`;
+
+// Migration 32 (upstream OpenBot migration 28) removes the provider CHECK, so a new provider no longer needs a
+// table rebuild. The write path validates the provider instead: `ProviderSessions.bindProviderSession` and the
+// thread replay accept only `AGENT_PROVIDERS`. Frozen with the migration.
+const V32_PROVIDER_SESSIONS_COLUMN_SQL = `provider TEXT NOT NULL,`;
 
 // Migration 27 adds what a routine does while the provider plan of its agent is spent. Frozen with the
 // migration. ADD COLUMN appends the declaration at the end of the stored CREATE statement, so the latest
@@ -401,7 +410,7 @@ const LATEST_SCHEMA_SQL =
     substituteOnce(
       substituteOnce(BASELINE_V8_SCHEMA_SQL, BASELINE_REACTIONS_TABLE_SQL, V12_REACTIONS_TABLE_SQL),
       BASELINE_PROVIDER_SESSIONS_CHECK_SQL,
-      V26_PROVIDER_SESSIONS_CHECK_SQL,
+      V32_PROVIDER_SESSIONS_COLUMN_SQL,
     ),
     BASELINE_AGENT_ROUTINES_END_SQL,
     withRoutineLimitPolicy(BASELINE_AGENT_ROUTINES_END_SQL),
@@ -419,7 +428,11 @@ const LATEST_SCHEMA_SQL =
   MESSAGING_INBOX_SCHEMA_SQL +
   SLACK_CLIENT_SCHEMA_SQL +
   MESSAGING_DRAFTS_SCHEMA_SQL +
-  MESSAGING_AUTO_REPLY_SCHEMA_SQL;
+  MESSAGING_AUTO_REPLY_SCHEMA_SQL +
+  // Migration 33 (upstream OpenBot migration 29).
+  PROVIDER_HISTORY_SCHEMA_SQL +
+  // Migration 34 (upstream OpenBot migration 31).
+  ROUTINE_FLOW_SCHEMA_SQL;
 
 /** The end of a routine table with the migration 27 column after its last one. */
 function withRoutineLimitPolicy(tableEnd: string): string {
@@ -579,6 +592,28 @@ const MIGRATIONS: readonly OpenBotMigration[] = [
     // empty, so every conversation still needs approval after the upgrade.
     up: (db) => db.exec(MESSAGING_AUTO_REPLY_SCHEMA_SQL),
   },
+  {
+    version: 32,
+    // Upstream OpenBot migration 28. The same rebuild as migrations 17, 22, 23, 24 and 26, with foreign keys
+    // off for the same reason: with them on, the DROP sets `projection_turns.provider_session_id` to NULL.
+    disableForeignKeys: true,
+    up: removeProviderSessionsCheck,
+  },
+  {
+    version: 33,
+    // Upstream OpenBot migration 29. Provider history is additive durable import state: three new tables and
+    // their indexes. Existing conversation projections and provider sessions stay untouched, so foreign keys
+    // stay on and no vacuum is needed. The tables use IF NOT EXISTS, so only an index name can collide.
+    up: (db) => db.exec(PROVIDER_HISTORY_SCHEMA_SQL),
+  },
+  {
+    version: 34,
+    // Upstream OpenBot migration 31. GoAhead leaves out upstream migration 30 (webhook triggers), and no
+    // column here refers to its tables. Only creates tables and indexes, so no foreign-key pause and no
+    // vacuum. Existing routines have no links, so every routine keeps running only its own agent, which is
+    // what it did before. The tables use IF NOT EXISTS, so only an index name can collide.
+    up: (db) => db.exec(ROUTINE_FLOW_SCHEMA_SQL),
+  },
 ];
 
 const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? BASELINE_SCHEMA_VERSION;
@@ -593,6 +628,9 @@ export function migrateOpenBotDatabase(db: DatabaseSync, options: OpenBotMigrati
   }
 
   const appliedVersions = readAppliedVersions(db);
+  // Before the version checks: an upstream database at a version above ours must get the lineage error, not the
+  // downgrade error, because a newer GoAhead can not open it either.
+  assertGoAheadLineage(db, appliedVersions);
   validateAppliedVersions(appliedVersions);
   const currentVersion = latestAppliedVersion(appliedVersions);
   const pending = MIGRATIONS.filter((migration) => migration.version > currentVersion);
@@ -728,6 +766,32 @@ function validateAppliedVersions(versions: number[]): void {
   for (let version = BASELINE_SCHEMA_VERSION; version <= newestVersion; version += 1) {
     if (!applied.has(version)) {
       throw new Error(`OpenBot database migration history is missing version ${version}.`);
+    }
+  }
+}
+
+// GoAhead and upstream OpenBot share migrations 8 to 27. From 28 on, the same marker means a different schema
+// change in each application, and both name the file `openbot.db`. Each GoAhead migration below creates its table
+// in the same transaction as its marker, and no GoAhead code drops these tables. Upstream OpenBot never creates
+// them (upstream 28 rebuilds `projection_provider_sessions`, and 29 to 31 add provider history, webhook and
+// routine flow tables). So a marker without its table means that upstream OpenBot wrote the database. Running
+// GoAhead migrations on it would skip the GoAhead schema of those versions, so stop before any write.
+// GoAhead 33 and 34 create the same provider history and routine flow tables as upstream 29 and 31, so those tables
+// prove nothing either way: only a missing GoAhead table below is the signal.
+// A later GoAhead migration that drops or renames one of these tables must change this list in the same change.
+const GOAHEAD_LINEAGE_TABLES: readonly (readonly [version: number, table: string])[] = [
+  [28, "projection_messaging_inbox"],
+  [29, "slack_messages"],
+  [30, "projection_messaging_drafts"],
+  [31, "projection_messaging_auto_reply"],
+];
+
+function assertGoAheadLineage(db: DatabaseSync, versions: readonly number[]): void {
+  const applied = new Set(versions);
+  const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
+  for (const [version, table] of GOAHEAD_LINEAGE_TABLES) {
+    if (applied.has(version) && !hasTable.get(table)) {
+      throw new Error(sourceText("error.storage.upstreamDatabase"));
     }
   }
 }
@@ -911,12 +975,23 @@ function widenProviderSessionsCheck(
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'projection_provider_sessions'")
     .get();
   if (!isDynamicRecord(row) || !isString(row.sql) || row.sql.includes(providerLiteral)) return;
+  rebuildProviderSessions(db, providerCheckSql, stagingTable);
+}
 
+// Migration 32 (upstream OpenBot migration 28) removes the provider CHECK. It rebuilds the table with no
+// guard: every shipped table has the CHECK, and a rebuild of a table that has none keeps every row.
+function removeProviderSessionsCheck(db: DatabaseSync): void {
+  rebuildProviderSessions(db, V32_PROVIDER_SESSIONS_COLUMN_SQL, "projection_provider_sessions_v32");
+}
+
+// The rebuild that migrations 17, 22, 23, 24, 26 and 32 run. `providerColumnSql` is the whole provider column
+// line. The SQL text stays the same as the text that migrations 17 to 26 ran before this function was shared.
+function rebuildProviderSessions(db: DatabaseSync, providerColumnSql: string, stagingTable: string): void {
   db.exec(`
     CREATE TABLE ${stagingTable} (
       id TEXT PRIMARY KEY,
       thread_id TEXT NOT NULL REFERENCES projection_threads(thread_id) ON DELETE CASCADE,
-      ${providerCheckSql}
+      ${providerColumnSql}
       external_session_id TEXT NOT NULL,
       model TEXT NOT NULL,
       effort TEXT NOT NULL,

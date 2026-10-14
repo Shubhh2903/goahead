@@ -1,5 +1,12 @@
 import { sortConversationMessages } from "@openbot/contracts/conversation-order";
-import type { AgentEvent, AgentSummary, ConversationSnapshot, QueueHold, QueueSnapshot } from "@openbot/contracts/ipc";
+import type {
+  AgentEvent,
+  AgentSummary,
+  ConversationMessage,
+  ConversationSnapshot,
+  QueueHold,
+  QueueSnapshot,
+} from "@openbot/contracts/ipc";
 import type { MailboxStore } from "../mailbox-store";
 import type { OpenBotDatabase } from "../openbot-database";
 import type { ConversationRuntime } from "./conversation-runtime";
@@ -49,7 +56,8 @@ export class MailboxSync {
     const context = this.#mailbox.getDelivery(deliveryId);
     const message = snapshot.messages.find((candidate) => candidate.id === deliveryId);
     if (!context || !message) return;
-    message.turnId = context.delivery.turnId ?? undefined;
+    if (context.delivery.turnId === null) delete message.turnId;
+    else message.turnId = context.delivery.turnId;
     message.delivery = {
       id: context.delivery.id,
       status: context.delivery.status,
@@ -57,10 +65,18 @@ export class MailboxSync {
     };
   }
 
-  syncMailboxMessages(snapshot: ConversationSnapshot): void {
+  /**
+   * Merges the mailbox rows into a snapshot. The snapshot is a bounded recent view, so only the
+   * mailbox rows from its oldest message on are read, with every active one.
+   */
+  syncMailboxMessages(snapshot: ConversationSnapshot, mailboxMessages?: readonly ConversationMessage[]): void {
     if (this.#conversation.isExecutionThread(snapshot.threadId)) return;
+    const fromCreatedAt = snapshot.messages[0]?.createdAt;
+    const incomingMailboxMessages =
+      mailboxMessages ??
+      this.#mailbox.conversationMessages(snapshot.agentId, fromCreatedAt === undefined ? {} : { fromCreatedAt });
     const indexes = new Map(snapshot.messages.map((message, index) => [message.id, index]));
-    for (const mailboxMessage of this.#mailbox.conversationMessages(snapshot.agentId)) {
+    for (const mailboxMessage of incomingMailboxMessages) {
       const index = indexes.get(mailboxMessage.id);
       if (index !== undefined) snapshot.messages[index] = mailboxMessage;
       else {
@@ -78,12 +94,29 @@ export class MailboxSync {
 
   reconcilePersistedMailboxMessages(agent: AgentSummary): void {
     if (!agent.threadId) return;
-    const persisted = this.#database.readConversation(agent.id, agent.threadId);
+    // The newest page only: a full read would hold the whole chat in memory, and a whole-snapshot
+    // write of a page would delete the rows it does not hold.
+    const page = this.#database.readConversationPage(agent.id, agent.threadId, { type: "latest" }, 100);
+    const persisted: ConversationSnapshot = {
+      agentId: page.agentId,
+      threadId: page.threadId,
+      activeTurnId: page.activeTurnId,
+      revision: page.revision,
+      messages: page.messages,
+    };
+    const previousMessageIds = new Set(persisted.messages.map((message) => message.id));
     const previousSignature = conversationContentSignature(persisted);
     this.syncMailboxMessages(persisted);
     if (conversationContentSignature(persisted) === previousSignature) return;
-    this.#database.persistConversation(persisted, "conversation.mailbox-reconciled", {
-      messageCount: persisted.messages.length,
+    const currentIds = new Set(persisted.messages.map((message) => message.id));
+    this.#database.persistConversationChanges({
+      agentId: agent.id,
+      threadId: agent.threadId,
+      activeTurnId: persisted.activeTurnId,
+      changedMessages: persisted.messages,
+      removedMessageIds: [...previousMessageIds].filter((messageId) => !currentIds.has(messageId)),
+      eventType: "conversation.mailbox-reconciled",
+      detail: { messageCount: persisted.messages.length },
     });
     const live = this.#conversation.snapshot(agent.id);
     if (live) this.syncMailboxMessages(live);
@@ -121,15 +154,31 @@ export class MailboxSync {
     }
   }
 
-  retryDeliveryReconciliation(agentId: string): void {
+  /**
+   * Publishes the queue and the conversation again after a delivery write failed. `turnId` and
+   * `deliveryIds` name a turn that the provider accepted: its rows still in `starting` are moved to
+   * `running` with that turn first, so a later drain does not submit the same turn again.
+   */
+  retryDeliveryReconciliation(agentId: string, turnId?: string, deliveryIds: readonly string[] = []): void {
     queueMicrotask(() => {
-      try {
+      void (async () => {
+        // A provider response can arrive before the mailbox writes complete. The turn id came from the
+        // provider. Check the active marker again so a delayed retry cannot claim a new turn's rows.
+        const activeTurn = this.#conversation.workingSnapshot(agentId)?.activeTurnId;
+        if (turnId && activeTurn === turnId) {
+          for (const deliveryId of new Set(deliveryIds)) {
+            const current = this.#mailbox.getDelivery(deliveryId)?.delivery;
+            if (current?.recipientAgentId !== agentId || current.status !== "starting" || current.turnId !== null)
+              continue;
+            await this.#mailbox.markRunning(deliveryId, turnId);
+          }
+        }
         this.emitQueue(agentId);
         const snapshot = this.#conversation.snapshotToUpdate(agentId);
         if (snapshot) this.#conversation.emitConversation(snapshot);
-      } catch (error) {
+      })().catch((error: unknown) => {
         this.#hooks.emitError("delivery_reconciliation_pending", error, agentId);
-      }
+      });
     });
   }
 }
