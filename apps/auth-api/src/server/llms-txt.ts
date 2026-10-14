@@ -7,12 +7,7 @@ import { OPENBOT_PLANS } from "../content/compare/comparison";
 import { CHANGELOG_DESCRIPTION, changelogUrl } from "../lib/changelog";
 import { CONTENT_COLLECTIONS } from "../lib/content";
 import { articleUrl, collectionIndexUrl } from "../lib/content-collection";
-import {
-  OPENBOT_ALTERNATE_DOWNLOAD_LINKS,
-  OPENBOT_DOWNLOAD_LINKS,
-  OPENBOT_DOWNLOAD_PAGE_LINKS,
-  OPENBOT_LINKS,
-} from "../lib/landing-links";
+import { OPENBOT_DOWNLOAD_LINKS, OPENBOT_DOWNLOAD_PAGE_LINKS, OPENBOT_LINKS } from "../lib/landing-links";
 import { PLUGINS_DESCRIPTION, pluginIndexUrl } from "../lib/plugins";
 import { OPENBOT_SITE_DESCRIPTION, OPENBOT_SITE_URL } from "../lib/site-metadata";
 import { FEED_CACHE_CONTROL } from "./content-feed";
@@ -27,7 +22,7 @@ function llmsTxt(): string {
     "",
     `> ${OPENBOT_SITE_DESCRIPTION}`,
     "",
-    "GoAhead is a desktop app for macOS, Windows and Linux. Each agent has its own workspace, thread and history, and keeps them when you change its provider or restart the app. Agents can give work to other agents. Chats, files and workspaces stay on your computer; GoAhead has no server that holds them. The app is free for noncommercial use, and it works with no account. iPhone and Android apps connect to GoAhead on your own computer.",
+    "GoAhead is a desktop app for macOS on Apple silicon. Versions for Intel Macs, Windows and Linux are not available yet. Each agent has its own workspace, thread and history, and keeps them when you change its provider or restart the app. Agents can give work to other agents. Chats, files and workspaces stay on your computer; GoAhead has no server that holds them. The app is free for noncommercial use, and it works with no account. iPhone and Android apps connect to GoAhead on your own computer.",
     "",
     "## Models and plans",
     "",
@@ -37,13 +32,9 @@ function llmsTxt(): string {
     "",
     "## Download",
     "",
-    `System requirements and install steps: [macOS](${absolute(OPENBOT_DOWNLOAD_PAGE_LINKS.macos)}), [Windows](${absolute(OPENBOT_DOWNLOAD_PAGE_LINKS.windows)}), [Linux](${absolute(OPENBOT_DOWNLOAD_PAGE_LINKS.linux)}).`,
+    `System requirements and install steps: [macOS](${absolute(OPENBOT_DOWNLOAD_PAGE_LINKS.macos)}).`,
     "",
     `- [macOS](${absolute(OPENBOT_DOWNLOAD_LINKS.macos)}): macOS 13 or later, Apple silicon`,
-    `- [macOS for Intel](${absolute(OPENBOT_ALTERNATE_DOWNLOAD_LINKS.macos)}): macOS 13 or later, Intel`,
-    `- [Windows](${absolute(OPENBOT_DOWNLOAD_LINKS.windows)}): Windows 10 or later, x64`,
-    `- [Linux](${absolute(OPENBOT_DOWNLOAD_LINKS.linux)}): x64 AppImage`,
-    `- [Linux for arm64](${absolute(OPENBOT_ALTERNATE_DOWNLOAD_LINKS.linux)}): arm64 AppImage`,
     `- [Source code](${OPENBOT_LINKS.repository}): PolyForm Noncommercial 1.0.0`,
     "",
   ];

@@ -97,7 +97,7 @@ export const MANUS_COMPARISON: Comparison = {
     {
       icon: "devices",
       topic: "Apps",
-      openbot: "macOS, Windows and Linux, and mobile apps for iPhone and Android.",
+      openbot: "macOS on Apple silicon, and mobile apps for iPhone and Android.",
       rival: "macOS and Windows, apps for iPhone and Android, and the web. A Linux desktop app: not stated by Manus.",
     },
     {

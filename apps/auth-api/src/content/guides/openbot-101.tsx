@@ -76,18 +76,12 @@ export function OpenBot101() {
 
       <h2>Install it, then connect a provider</h2>
       <p>
-        GoAhead runs on macOS 13 or newer on Apple silicon or Intel, Windows 10 or newer on x64, and x64 Linux as an
-        AppImage. Grab the installer from{" "}
+        GoAhead runs on a Mac with Apple silicon (M1 or newer) and macOS 13 or newer. Versions for Intel Macs, Windows
+        and Linux are not available yet. Get the DMG from{" "}
         <a href={OPENBOT_LINKS.releases} target="_blank" rel={EXTERNAL_LINK_REL}>
           GitHub Releases
         </a>
-        . The Windows preview is not code-signed yet, so Windows may warn about an unknown publisher. Check the release
-        checksum before you run it. On Ubuntu 23.10 or newer and on Debian 13, the AppImage needs an AppArmor profile
-        first.{" "}
-        <a href={OPENBOT_LINKS.documentation} target="_blank" rel={EXTERNAL_LINK_REL}>
-          The README
-        </a>{" "}
-        has the two commands that install it.
+        . It is signed and notarized by Apple.
       </p>
       <p>
         Then pick a provider. In onboarding, in Settings or in the model picker, select one and press{" "}

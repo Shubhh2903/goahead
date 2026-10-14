@@ -11,7 +11,6 @@ import { LandingAppPreview } from "./LandingAppPreview";
 import { LandingFooter } from "./LandingFooter";
 import { LandingGlow } from "./LandingGlow";
 import { PricingSection } from "./PricingSection";
-import { ProductHuntPill } from "./ProductHuntLaunch";
 import { SiteHeader } from "./SiteHeader";
 
 export function LandingPage() {
@@ -26,27 +25,12 @@ export function LandingPage() {
           <div class="landing-hero-grid" data-slot="hero-grid" aria-hidden="true" />
           <div class="landing-hero-copy">
             <div class="landing-hero-pills landing-hero-line" style={{ "--landing-hero-line": 0 }}>
-              <ProductHuntPill />
               <p class="landing-availability">
                 <span class="landing-availability-new">NEW</span>
                 <span class="landing-availability-copy">Available on</span>
                 <span class="landing-availability-platform">
                   <PlatformLogo platform="macos" />
-                  macOS
-                </span>
-                <span class="landing-availability-separator" aria-hidden="true">
-                  ·
-                </span>
-                <span class="landing-availability-platform">
-                  <PlatformLogo platform="windows" />
-                  Windows
-                </span>
-                <span class="landing-availability-separator" aria-hidden="true">
-                  ·
-                </span>
-                <span class="landing-availability-platform">
-                  <PlatformLogo platform="linux" solid />
-                  Linux
+                  macOS (Apple silicon)
                 </span>
               </p>
             </div>

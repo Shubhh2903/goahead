@@ -1,16 +1,12 @@
 export const EXTERNAL_LINK_REL = "noopener noreferrer";
 
-/** The installer each platform's download button starts: Apple silicon on macOS, x64 elsewhere. */
+/**
+ * The installer that each download button starts. GoAhead ships only the macOS Apple silicon DMG.
+ * `/download/windows/latest`, `/download/linux/latest` and `?arch=x64` still answer, with the page
+ * of their system, so an old link does not break.
+ */
 export const OPENBOT_DOWNLOAD_LINKS = {
   macos: "/download/macos/latest",
-  windows: "/download/windows/latest",
-  linux: "/download/linux/latest",
-} as const;
-
-/** The other installer of a platform that ships two architectures. Windows ships x64 only. */
-export const OPENBOT_ALTERNATE_DOWNLOAD_LINKS = {
-  macos: "/download/macos/latest?arch=x64",
-  linux: "/download/linux/latest?arch=arm64",
 } as const;
 
 /** The pages that describe each installer: requirements, install steps and known limits. */
@@ -22,7 +18,7 @@ export const OPENBOT_DOWNLOAD_PAGE_LINKS = {
 } as const;
 
 export const OPENBOT_LINKS = {
-  contact: "https://x.com/OpenBot_",
+  contact: "https://x.com/SLilawala",
   download: "#download",
   /** The same anchor from a page that is not the landing page. */
   downloadFromOtherPage: "/#download",
@@ -30,23 +26,19 @@ export const OPENBOT_LINKS = {
   guides: "/guides",
   plugins: "/plugins",
   changelog: "/changelog",
-  releases: "https://github.com/nightly-labs/openbot/releases",
-  repository: "https://github.com/nightly-labs/openbot",
-  license: "https://github.com/nightly-labs/openbot/blob/main/LICENSE",
-  privacy: "https://github.com/nightly-labs/openbot/blob/main/PRIVACY.md",
-  documentation: "https://github.com/nightly-labs/openbot#readme",
-  troubleshooting: "https://github.com/nightly-labs/openbot/blob/main/docs/TROUBLESHOOTING.md",
-  selfHostedServer: "https://github.com/nightly-labs/openbot/blob/main/docs/self-hosted-server.md",
-  architecture: "https://github.com/nightly-labs/openbot#architecture",
-  contributing: "https://github.com/nightly-labs/openbot/blob/main/CONTRIBUTING.md",
+  releases: "https://github.com/Shubhh2903/goahead/releases",
+  repository: "https://github.com/Shubhh2903/goahead",
+  license: "https://github.com/Shubhh2903/goahead/blob/master/LICENSE",
+  privacy: "https://github.com/Shubhh2903/goahead/blob/master/PRIVACY.md",
+  documentation: "https://github.com/Shubhh2903/goahead#readme",
+  troubleshooting: "https://github.com/Shubhh2903/goahead/blob/master/docs/TROUBLESHOOTING.md",
+  selfHostedServer: "https://github.com/Shubhh2903/goahead/blob/master/docs/self-hosted-server.md",
+  architecture: "https://github.com/Shubhh2903/goahead#architecture",
+  contributing: "https://github.com/Shubhh2903/goahead/blob/master/CONTRIBUTING.md",
   codex: "https://learn.chatgpt.com/docs/app-server",
   claude: "https://code.claude.com/docs/en/overview",
   anthropicAgents: "https://www.anthropic.com/engineering/building-effective-agents",
-  productHunt: "https://www.producthunt.com/products/openbot-3?launch=openbot-4",
 } as const;
-
-/** The Product Hunt launch pill and dialog. Set to `false` when the launch ends. */
-export const PRODUCT_HUNT_LAUNCH_LIVE = true;
 
 /**
  * One entry in a footer column. An internal entry carries a route, not a string,

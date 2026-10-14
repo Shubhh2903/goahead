@@ -38,68 +38,61 @@ export function DownloadSection() {
   let sectionRef: HTMLElement | undefined;
   const revealed = createLandingReveal(() => sectionRef);
   const revealState = () => (revealed() ? "true" : "false");
-  const macos = DOWNLOAD_PLATFORMS.macos;
-  const windows = DOWNLOAD_PLATFORMS.windows;
-  const linux = DOWNLOAD_PLATFORMS.linux;
 
   return (
     <section ref={sectionRef} id="download" class="landing-download" aria-labelledby="download-title">
       <div class="landing-download-inner">
         <header class="landing-download-heading" data-revealed={revealState()}>
           <h2 id="download-title">Download GoAhead</h2>
-          <p>Choose your platform. Run Codex, Claude, Gemini, Grok, OpenCode or your own model from one desktop app.</p>
+          <p>
+            For a Mac with Apple silicon. Run Codex, Claude, Gemini, Grok, OpenCode or your own model from one desktop
+            app.
+          </p>
         </header>
 
         <div class="landing-download-grid">
-          <a
-            class="landing-download-card"
-            href={macos.href}
-            data-download-platform="macos"
-            data-state="available"
-            data-revealed={revealState()}
-          >
-            <DownloadCardContent
-              platform="macos"
-              status={macos.status}
-              title={macos.label}
-              description={macos.description}
-              action={macos.action}
-            />
-          </a>
-
-          <a
-            class="landing-download-card"
-            href={windows.href}
-            data-download-platform="windows"
-            data-state="available"
-            data-revealed={revealState()}
-          >
-            <DownloadCardContent
-              platform="windows"
-              status={windows.status}
-              title={windows.label}
-              description={windows.description}
-              action={windows.action}
-            />
-          </a>
-
-          {/* The hero selector already offers Linux and /download/linux/latest resolves an AppImage, so the
-              card is the same link the other two are. A non-clickable card here contradicted both. */}
-          <a
-            class="landing-download-card"
-            href={linux.href}
-            data-download-platform="linux"
-            data-state="available"
-            data-revealed={revealState()}
-          >
-            <DownloadCardContent
-              platform="linux"
-              status={linux.status}
-              title={linux.label}
-              description={linux.description}
-              action={linux.action}
-            />
-          </a>
+          <For each={DOWNLOAD_PLATFORM_ORDER}>
+            {(platform) => {
+              const details = DOWNLOAD_PLATFORMS[platform];
+              const content = () => (
+                <DownloadCardContent
+                  platform={platform}
+                  status={details.status}
+                  title={details.label}
+                  description={details.description}
+                  action={details.href ? details.action : undefined}
+                />
+              );
+              // A system with no installer yet is a card with no link, so it offers nothing to download.
+              return (
+                <Show
+                  when={details.available && details.href}
+                  fallback={
+                    <div
+                      class="landing-download-card"
+                      data-download-platform={platform}
+                      data-state="coming-soon"
+                      data-revealed={revealState()}
+                    >
+                      {content()}
+                    </div>
+                  }
+                >
+                  {(href) => (
+                    <a
+                      class="landing-download-card"
+                      href={href()}
+                      data-download-platform={platform}
+                      data-state="available"
+                      data-revealed={revealState()}
+                    >
+                      {content()}
+                    </a>
+                  )}
+                </Show>
+              );
+            }}
+          </For>
         </div>
 
         {/* The cards start the download, so the pages that explain each installer get their own

@@ -43,16 +43,18 @@ export function DownloadPlatformPage(props: DownloadPlatformPageProps) {
                 {props.page.heading}
               </h1>
               <p class="download-panel-intro">{props.page.intro}</p>
-              <ul class="download-panel-installers">
-                <For each={props.page.installers}>
-                  {(installer, index) => (
-                    <li>
-                      <InstallerButton installer={installer} primary={index() === 0} />
-                      <span class="download-panel-installer-detail">{installer.detail}</span>
-                    </li>
-                  )}
-                </For>
-              </ul>
+              <Show when={props.page.installers.length > 0}>
+                <ul class="download-panel-installers">
+                  <For each={props.page.installers}>
+                    {(installer, index) => (
+                      <li>
+                        <InstallerButton installer={installer} primary={index() === 0} />
+                        <span class="download-panel-installer-detail">{installer.detail}</span>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </Show>
             </div>
             <PlatformLogo platform={props.page.platform} class="download-panel-logo" />
           </div>
@@ -69,12 +71,15 @@ export function DownloadPlatformPage(props: DownloadPlatformPageProps) {
         </section>
 
         <div class="download-rows">
-          <section class="download-row" aria-labelledby="download-install-title">
-            <h2 class="download-row-title" id="download-install-title">
-              Install on {props.page.name}
-            </h2>
-            <DownloadSteps steps={props.page.installSteps} />
-          </section>
+          {/* A system with no installer yet has no install steps. */}
+          <Show when={props.page.installSteps.length > 0}>
+            <section class="download-row" aria-labelledby="download-install-title">
+              <h2 class="download-row-title" id="download-install-title">
+                Install on {props.page.name}
+              </h2>
+              <DownloadSteps steps={props.page.installSteps} />
+            </section>
+          </Show>
 
           <For each={props.page.extraSections}>
             {(section, index) => (

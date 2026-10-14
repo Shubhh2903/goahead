@@ -31,23 +31,23 @@ export const DOWNLOAD_PLATFORMS: Record<DownloadPlatform, DownloadPlatformDetail
     available: true,
     href: OPENBOT_DOWNLOAD_LINKS.macos,
   },
+  // GoAhead publishes no Windows or Linux installer yet. The cards and the menu show them as not
+  // available, with no link.
   windows: {
     id: "windows",
     label: "Windows",
-    status: "Available",
-    description: "Windows 10+ · x64",
-    action: "Download for Windows",
-    available: true,
-    href: OPENBOT_DOWNLOAD_LINKS.windows,
+    status: "Coming soon",
+    description: "Not available yet",
+    action: "Windows: not available yet",
+    available: false,
   },
   linux: {
     id: "linux",
     label: "Linux",
-    status: "Available",
-    description: "x64 · AppImage",
-    action: "Download for Linux",
-    available: true,
-    href: OPENBOT_DOWNLOAD_LINKS.linux,
+    status: "Coming soon",
+    description: "Not available yet",
+    action: "Linux: not available yet",
+    available: false,
   },
 };
 

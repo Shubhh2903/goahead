@@ -92,7 +92,7 @@ export const GROK_BOT_COMPARISON: Comparison = {
     {
       icon: "devices",
       topic: "Apps",
-      openbot: "macOS, Windows and Linux, and mobile apps for iPhone and Android.",
+      openbot: "macOS on Apple silicon, and mobile apps for iPhone and Android.",
       rival: "macOS, Windows and Linux, and mobile apps for iPhone, iPad and Android.",
     },
     {

@@ -95,7 +95,7 @@ export const DEVIN_COMPARISON: Comparison = {
     {
       icon: "devices",
       topic: "Apps",
-      openbot: "macOS, Windows and Linux, and mobile apps for iPhone and Android.",
+      openbot: "macOS on Apple silicon, and mobile apps for iPhone and Android.",
       rival:
         "Devin Desktop and the Devin CLI for macOS, Windows and Linux, a web app, and plugins for JetBrains IDEs. No native mobile app is listed.",
     },

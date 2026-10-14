@@ -9,7 +9,6 @@ import { Button } from "../ui/button";
 export function JoinPage() {
   const [openUrl, setOpenUrl] = createSignal("");
   const [browserUrl, setBrowserUrl] = createSignal("");
-  const [downloadUrl, setDownloadUrl] = createSignal<string>(OPENBOT_DOWNLOAD_LINKS.macos);
   const [mobile, setMobile] = createSignal(false);
   const [invalid, setInvalid] = createSignal(false);
 
@@ -29,7 +28,6 @@ export function JoinPage() {
       validInvite = false;
       setInvalid(true);
     }
-    if (platform === "windows") setDownloadUrl(OPENBOT_DOWNLOAD_LINKS.windows);
     const cleanup = landingAnalytics.startJoin(document, window.location.hostname, { validInvite, platform });
     return cleanup;
   });
@@ -85,7 +83,7 @@ export function JoinPage() {
               )}
             </Show>
             <Show when={!mobile()}>
-              <Button href={downloadUrl()} variant="secondary" size="lg" icon="download">
+              <Button href={OPENBOT_DOWNLOAD_LINKS.macos} variant="secondary" size="lg" icon="download">
                 Download GoAhead
               </Button>
             </Show>

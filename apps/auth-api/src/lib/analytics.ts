@@ -3,12 +3,7 @@ import { isBoolean, isOneOf } from "@openbot/contracts/runtime-values";
 import { OpenPanel, OpenPanelBase, type OpenPanelOptions, type TrackProperties } from "@openpanel/web";
 import { CONTENT_COLLECTIONS } from "./content";
 import { type CollectionId, type ContentCollection, findArticle } from "./content-collection";
-import {
-  OPENBOT_ALTERNATE_DOWNLOAD_LINKS,
-  OPENBOT_DOWNLOAD_LINKS,
-  OPENBOT_DOWNLOAD_PAGE_LINKS,
-  OPENBOT_LINKS,
-} from "./landing-links";
+import { OPENBOT_DOWNLOAD_LINKS, OPENBOT_DOWNLOAD_PAGE_LINKS, OPENBOT_LINKS } from "./landing-links";
 
 export const OPENPANEL_API_URL = "https://analytics.openbot.run/api";
 const OPENPANEL_CLIENT_ID = "6c989975-87ef-4f0c-857e-ab449a65b5c2";
@@ -48,7 +43,6 @@ type LandingPlacement =
   | "content_index"
   | "content_article"
   | "content_related"
-  | "launch_dialog"
   | "other";
 
 const LANDING_PLACEMENTS = [
@@ -60,7 +54,6 @@ const LANDING_PLACEMENTS = [
   "content_index",
   "content_article",
   "content_related",
-  "launch_dialog",
   "other",
 ] as const satisfies readonly LandingPlacement[];
 /** The platforms the landing page can send a visitor to a download for. */
@@ -80,8 +73,7 @@ type LandingDestination =
   | "architecture"
   | "contributing"
   | "codex"
-  | "claude"
-  | "product_hunt";
+  | "claude";
 
 type CollectionIndexRoute = ContentCollection["indexRoute"];
 type DownloadPagePath = (typeof OPENBOT_DOWNLOAD_PAGE_LINKS)[keyof typeof OPENBOT_DOWNLOAD_PAGE_LINKS];
@@ -158,13 +150,7 @@ function createOpenPanelClient(options: OpenPanelOptions): OpenPanelClient {
 }
 
 /** The download routes of each platform, reversed so a click can name the platform it asked for. */
-const DOWNLOAD_PLATFORMS_BY_HREF = new Map<string, LandingDownloadPlatform>([
-  [OPENBOT_DOWNLOAD_LINKS.macos, "macos"],
-  [OPENBOT_DOWNLOAD_LINKS.windows, "windows"],
-  [OPENBOT_DOWNLOAD_LINKS.linux, "linux"],
-  [OPENBOT_ALTERNATE_DOWNLOAD_LINKS.macos, "macos"],
-  [OPENBOT_ALTERNATE_DOWNLOAD_LINKS.linux, "linux"],
-]);
+const DOWNLOAD_PLATFORMS_BY_HREF = new Map<string, LandingDownloadPlatform>([[OPENBOT_DOWNLOAD_LINKS.macos, "macos"]]);
 
 const LINK_DESTINATIONS = new Map<string, LandingDestination>([
   [OPENBOT_LINKS.download, "download_section"],
@@ -185,7 +171,6 @@ const LINK_DESTINATIONS = new Map<string, LandingDestination>([
   [OPENBOT_LINKS.contributing, "contributing"],
   [OPENBOT_LINKS.codex, "codex"],
   [OPENBOT_LINKS.claude, "claude"],
-  [OPENBOT_LINKS.productHunt, "product_hunt"],
 ]);
 
 const EVENT_PROPERTY_ALLOWLIST = {
@@ -280,11 +265,8 @@ export class LandingAnalytics {
         return;
       }
       const href = link?.getAttribute("href");
-      if (href === OPENBOT_DOWNLOAD_LINKS.macos || href === OPENBOT_DOWNLOAD_LINKS.windows) {
-        this.#track("join_page_action", {
-          action: "download",
-          platform: href === OPENBOT_DOWNLOAD_LINKS.windows ? "windows" : "macos",
-        });
+      if (href === OPENBOT_DOWNLOAD_LINKS.macos) {
+        this.#track("join_page_action", { action: "download", platform: "macos" });
       }
     };
     return this.#replaceClickListener(document, handleClick, "/join");
@@ -528,8 +510,6 @@ export function landingAttribution(document: Document, hostname: string) {
 }
 
 function landingPlacement(link: HTMLAnchorElement): LandingPlacement {
-  // Portaled out of every page container, so it is checked by its own class.
-  if (link.closest(".ph-dialog")) return "launch_dialog";
   if (link.closest(".landing-header")) return "header";
   // Checked before `.post-article`, which wraps it: a card in the related row is a different
   // question from a link inside the article body.

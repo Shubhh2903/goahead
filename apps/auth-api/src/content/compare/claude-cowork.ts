@@ -96,7 +96,7 @@ export const CLAUDE_COWORK_COMPARISON: Comparison = {
     {
       icon: "devices",
       topic: "Apps",
-      openbot: "macOS, Windows and Linux, and mobile apps for iPhone and Android.",
+      openbot: "macOS on Apple silicon, and mobile apps for iPhone and Android.",
       rival:
         "The Claude desktop app for macOS and Windows, and Linux in beta. The Claude apps for iPhone and Android and the web, in beta.",
     },

@@ -1,11 +1,12 @@
 // The /download pages: one per operating system, and a hub that lists them. Each statement here
 // comes from the release configuration, README.md or docs/TROUBLESHOOTING.md. Keep it to what the
 // released app does, because these pages are what a search engine shows for "GoAhead for Linux".
+// GoAhead publishes only the macOS Apple silicon installer (`release:local`). The Windows and Linux
+// pages say that their system is not available yet and offer no installer.
 
-import { PRODUCT_LINK_PREFIX } from "@openbot/contracts/product-identity";
 import type { DownloadPlatform } from "./download-platforms";
 import { LANDING_FAQ, type LandingQuestion } from "./landing-faq";
-import { OPENBOT_ALTERNATE_DOWNLOAD_LINKS, OPENBOT_DOWNLOAD_LINKS, OPENBOT_DOWNLOAD_PAGE_LINKS } from "./landing-links";
+import { OPENBOT_DOWNLOAD_LINKS, OPENBOT_DOWNLOAD_PAGE_LINKS } from "./landing-links";
 import {
   OPENBOT_SITE_URL,
   OPENBOT_SOCIAL_IMAGE_ALT,
@@ -16,7 +17,7 @@ import {
 } from "./site-metadata";
 
 /** The sitemap date of the four pages. Change it when their text changes. */
-export const DOWNLOAD_PAGES_UPDATED_AT = "2026-10-03";
+export const DOWNLOAD_PAGES_UPDATED_AT = "2026-10-14";
 
 export interface DownloadInstaller {
   /** The button text where the system is not on screen, such as a list of every installer. */
@@ -60,7 +61,7 @@ export interface DownloadPageContent {
   extraSections: readonly DownloadPageSection[];
   notes: readonly string[];
   faq: readonly LandingQuestion[];
-  /** schema.org `operatingSystem` for this page's installer. */
+  /** schema.org `operatingSystem` for this page's installer. A page with no installer uses the site's. */
   operatingSystem: string;
 }
 
@@ -73,6 +74,10 @@ const CONNECT_STEP: DownloadStep = {
 const UPDATES_NOTE = "GoAhead checks for new versions and updates itself.";
 const NETWORK_NOTE = "The AI provider you choose needs an internet connection. A local model needs none.";
 const UPDATES_SPEC: DownloadSpec = { label: "Updates", value: "Automatic" };
+const NOT_AVAILABLE_SPEC: DownloadSpec = { label: "Status", value: "Not available yet" };
+const MAC_INSTEAD_SPEC: DownloadSpec = { label: "Available now", value: "macOS on Apple silicon" };
+const MAC_INSTEAD_NOTE =
+  "Today GoAhead runs only on a Mac with Apple silicon (M1 or newer) and macOS 13 or newer. The download page for macOS has the installer.";
 
 function providersQuestion(system: string): LandingQuestion {
   return {
@@ -89,7 +94,7 @@ export const DOWNLOAD_PAGES: Record<DownloadPlatform, DownloadPageContent> = {
     name: "macOS",
     title: "Download GoAhead for Mac: AI agent app for macOS",
     description:
-      "Download GoAhead for macOS 13 or later on Apple silicon or Intel. A free app that runs Codex, Claude Code, Gemini and Grok agents as a team on your Mac.",
+      "Download GoAhead for macOS 13 or later on Apple silicon. A free app that runs Codex, Claude Code, Gemini and Grok agents as a team on your Mac.",
     heading: "GoAhead for Mac",
     intro:
       "Run a team of AI agents on your Mac with the ChatGPT, Claude, Gemini or Grok plan you already pay for, or with your own model. Your chats and files stay on your Mac.",
@@ -100,22 +105,16 @@ export const DOWNLOAD_PAGES: Record<DownloadPlatform, DownloadPageContent> = {
         detail: "For a Mac with M1 or newer",
         href: OPENBOT_DOWNLOAD_LINKS.macos,
       },
-      {
-        label: "Download for Intel Mac",
-        shortLabel: "Intel",
-        detail: "For a Mac with an Intel processor",
-        href: OPENBOT_ALTERNATE_DOWNLOAD_LINKS.macos,
-      },
     ],
     specs: [
       { label: "System", value: "macOS 13 Ventura or later" },
-      { label: "Processor", value: "Apple silicon or Intel" },
+      { label: "Processor", value: "Apple silicon (M1 or newer)" },
       { label: "File", value: "DMG, notarized by Apple" },
       UPDATES_SPEC,
     ],
     installSteps: [
       {
-        text: "Download the DMG for your Mac. To find which one you need, open the Apple menu and choose About This Mac: a “Chip” line means Apple silicon, a “Processor” line means Intel.",
+        text: "Make sure that your Mac has Apple silicon: open the Apple menu and choose About This Mac. A “Chip” line means Apple silicon. A “Processor” line means Intel, which GoAhead does not support yet. Then download the DMG.",
       },
       { text: "Open the DMG and drag GoAhead to the Applications folder." },
       {
@@ -133,164 +132,76 @@ export const DOWNLOAD_PAGES: Record<DownloadPlatform, DownloadPageContent> = {
       { question: "Is GoAhead free on Mac?", answer: FREE_ANSWER },
       {
         question: "Does GoAhead run on an Intel Mac?",
-        answer: "Yes. Download the Intel installer. It needs macOS 13 or later, like the Apple silicon one.",
+        answer: "Not yet. GoAhead is available only for a Mac with Apple silicon (M1 or newer).",
       },
       providersQuestion("a Mac"),
     ],
-    operatingSystem: "macOS 13 or later (Apple silicon or Intel)",
+    operatingSystem: "macOS 13 or later (Apple silicon)",
   },
   windows: {
     platform: "windows",
     name: "Windows",
-    title: "Download GoAhead for Windows: AI agent app for Windows 10 and 11",
+    title: "GoAhead for Windows: not available yet",
     description:
-      "Download GoAhead for Windows 10 or 11 on x64. A free app that runs Codex, Claude Code, Gemini and Grok agents as a team on your PC.",
+      "GoAhead for Windows is not available yet. Today GoAhead runs on a Mac with Apple silicon, as a free app that runs Codex, Claude Code, Gemini and Grok agents as a team.",
     heading: "GoAhead for Windows",
-    intro:
-      "Run a team of AI agents on your PC with the ChatGPT, Claude, Gemini or Grok plan you already pay for, or with your own model. Your chats and files stay on your PC.",
-    installers: [
-      {
-        label: "Download for Windows",
-        shortLabel: "Windows x64",
-        detail: "For a PC with a 64-bit Intel or AMD processor",
-        href: OPENBOT_DOWNLOAD_LINKS.windows,
-      },
-    ],
-    specs: [
-      { label: "System", value: "Windows 10 or 11" },
-      { label: "Processor", value: "x64, Intel or AMD" },
-      { label: "File", value: "Installer (.exe)" },
-      UPDATES_SPEC,
-    ],
-    installSteps: [
-      { text: "Download the installer." },
-      {
-        text: "Run the installer. It is not code-signed yet, so Windows can show “Windows protected your PC” or “Unknown publisher”. Select More info, then Run anyway.",
-      },
-      { text: "The installer installs GoAhead for your user and opens it. Later, open it from the Start menu." },
-      CONNECT_STEP,
-    ],
+    intro: "GoAhead for Windows is not available yet. Today you can run GoAhead on a Mac with Apple silicon.",
+    installers: [],
+    specs: [NOT_AVAILABLE_SPEC, MAC_INSTEAD_SPEC],
+    installSteps: [],
     extraSections: [],
-    notes: [
-      UPDATES_NOTE,
-      NETWORK_NOTE,
-      "There is no build for Windows on Arm yet.",
-      "To check the installer before you run it, compare its checksum with the one on the GitHub release, or check the GitHub build attestation.",
-    ],
+    notes: [MAC_INSTEAD_NOTE],
     faq: [
-      { question: "Is GoAhead free on Windows?", answer: FREE_ANSWER },
       {
-        question: "Why does Windows warn about the installer?",
-        answer:
-          "The Windows installer is not code-signed yet, so SmartScreen does not know the publisher. The source code and every release build are public on GitHub, where you can check the checksum and the build attestation.",
+        question: "Does GoAhead run on Windows?",
+        answer: "Not yet. GoAhead is available only for a Mac with Apple silicon (M1 or newer).",
       },
-      providersQuestion("Windows"),
     ],
-    operatingSystem: "Windows 10 or later (x64)",
+    operatingSystem: OPENBOT_SOFTWARE_APPLICATION.operatingSystem,
   },
   linux: {
     platform: "linux",
     name: "Linux",
-    title: "Download GoAhead for Linux: AI agent app as an AppImage",
+    title: "GoAhead for Linux: not available yet",
     description:
-      "Download GoAhead for Linux as an AppImage for x64 or arm64. A free app that runs Codex, Claude Code, Gemini and Grok agents as a team on your computer.",
+      "The GoAhead desktop app for Linux is not available yet. Today GoAhead runs on a Mac with Apple silicon, as a free app that runs Codex, Claude Code, Gemini and Grok agents as a team.",
     heading: "GoAhead for Linux",
     intro:
-      "Run a team of AI agents on your Linux computer with the ChatGPT, Claude, Gemini or Grok plan you already pay for, or with your own model. Your chats and files stay on your computer.",
-    installers: [
-      {
-        label: "Download for Linux x64",
-        shortLabel: "x64",
-        detail: "When uname -m shows x86_64",
-        href: OPENBOT_DOWNLOAD_LINKS.linux,
-      },
-      {
-        label: "Download for Linux arm64",
-        shortLabel: "arm64",
-        detail: "When uname -m shows aarch64",
-        href: OPENBOT_ALTERNATE_DOWNLOAD_LINKS.linux,
-      },
-    ],
-    specs: [
-      { label: "System", value: "Any 64-bit distribution" },
-      { label: "Processor", value: "x64 or arm64" },
-      { label: "File", value: "AppImage" },
-      UPDATES_SPEC,
-    ],
-    installSteps: [
-      {
-        text: "Download the AppImage for your processor. To find which one you need, run this command: x86_64 means x64, and aarch64 means arm64.",
-        code: "uname -m",
-      },
-      { text: "Make the AppImage executable.", code: "chmod +x OpenBot-*.AppImage" },
-      {
-        text: `Run it. On the first start, GoAhead adds itself to your app launcher, so that ${PRODUCT_LINK_PREFIX} links open it.`,
-        code: "./OpenBot-*.AppImage",
-      },
-      CONNECT_STEP,
-    ],
+      "The GoAhead desktop app for Linux is not available yet. Today you can run GoAhead on a Mac with Apple silicon.",
+    installers: [],
+    specs: [NOT_AVAILABLE_SPEC, MAC_INSTEAD_SPEC],
+    installSteps: [],
     extraSections: [
-      {
-        title: "Ubuntu 23.10 or newer, and Debian 13",
-        steps: [
-          {
-            text: "These distributions restrict the user namespaces that the Electron sandbox needs, so GoAhead exits during launch until you install its AppArmor profile. Take the profile out of the AppImage:",
-            code: "./OpenBot-*.AppImage --appimage-extract resources/linux/openbot.apparmor",
-          },
-          {
-            text: "Install the profile, then reload AppArmor:",
-            code: "sudo install -m 0644 squashfs-root/resources/linux/openbot.apparmor /etc/apparmor.d/openbot\nsudo systemctl reload apparmor",
-          },
-          {
-            text: "The profile applies to an AppImage in ~/Applications, ~/Desktop, ~/Downloads, ~/.local/bin or /opt/OpenBot. Keep it in one of these, or edit the path in the profile before you install it. Do not start GoAhead with --no-sandbox: the sandbox is the boundary between a web page and the rest of your computer.",
-          },
-        ],
-      },
       {
         title: "A server with no screen",
         steps: [
           {
             text: "On Ubuntu 24.04 with systemd, install GoAhead as an always-on server of your account, then sign in with an email code:",
-            code: "curl -fsSL https://raw.githubusercontent.com/nightly-labs/openbot/main/scripts/install-server.sh | sudo bash\nsudo openbot login",
+            code: "curl -fsSL https://raw.githubusercontent.com/Shubhh2903/goahead/master/scripts/install-server.sh | sudo bash\nsudo openbot login",
           },
           { text: "Then use it from the desktop app, the iPhone app or openbot.run/app." },
         ],
       },
     ],
-    notes: [
-      "Each release is tested on Ubuntu 24.04 on x64.",
-      UPDATES_NOTE,
-      NETWORK_NOTE,
-      "Voice prompts are not available on Linux.",
-      "Remote desktop works with the x64 AppImage in an X11 session, such as Xorg or Xvfb. It does not work under Wayland, and the arm64 AppImage does not include it.",
-    ],
+    notes: [MAC_INSTEAD_NOTE],
     faq: [
       {
-        question: "Is there an AI agent app for Linux?",
+        question: "Does the GoAhead desktop app run on Linux?",
         answer:
-          "Yes. GoAhead runs on Linux as an AppImage for x64 and arm64. It runs Codex, Claude Code, Gemini, Grok and OpenCode agents as a team, with the plans you already pay for or a local model.",
-      },
-      {
-        question: "Why does GoAhead exit at once on Ubuntu?",
-        answer:
-          "Ubuntu 23.10 and newer, and Debian 13, restrict the user namespaces that the Electron sandbox needs. Install the AppArmor profile that ships in the AppImage, as the steps on this page show.",
-      },
-      {
-        question: "Does GoAhead run on arm64 Linux?",
-        answer: "Yes. Download the arm64 AppImage. It has the features of the x64 AppImage except remote desktop.",
+          "Not yet. The desktop app is available only for a Mac with Apple silicon (M1 or newer). You can install GoAhead as a server on Ubuntu 24.04, as this page shows.",
       },
     ],
-    operatingSystem: "Linux (x64 or arm64)",
+    operatingSystem: OPENBOT_SOFTWARE_APPLICATION.operatingSystem,
   },
 };
 
 export const DOWNLOAD_HUB = {
-  title: "Download GoAhead for Mac, Windows and Linux",
+  title: "Download GoAhead for Mac",
   description:
-    "Download GoAhead, the free app that runs AI agents as a team on your computer. For macOS 13 or later, Windows 10 or later, and Linux on x64 or arm64.",
+    "Download GoAhead, the free app that runs AI agents as a team on your computer. For macOS 13 or later on Apple silicon.",
   heading: "Download GoAhead",
   intro:
-    "Free for Mac, Windows and Linux. Get the installer for this computer, or choose a system below for its requirements and install steps.",
+    "Free for a Mac with Apple silicon. Versions for Intel Macs, Windows and Linux are not available yet. Choose a system below for its requirements and install steps.",
 } as const;
 
 export function downloadPagePath(platform: DownloadPlatform | "hub"): string {
@@ -336,13 +247,14 @@ export function downloadPageHead(platform: DownloadPlatform | "hub", siteUrl: st
   const title = page?.title ?? DOWNLOAD_HUB.title;
   const description = page?.description ?? DOWNLOAD_HUB.description;
   const url = downloadPageUrl(platform, siteUrl);
-  const application = page
-    ? {
-        ...OPENBOT_SOFTWARE_APPLICATION,
-        operatingSystem: page.operatingSystem,
-        downloadUrl: page.installers.map((installer) => new URL(installer.href, siteUrl).toString()),
-      }
-    : OPENBOT_SOFTWARE_APPLICATION;
+  const application =
+    page && page.installers.length > 0
+      ? {
+          ...OPENBOT_SOFTWARE_APPLICATION,
+          operatingSystem: page.operatingSystem,
+          downloadUrl: page.installers.map((installer) => new URL(installer.href, siteUrl).toString()),
+        }
+      : OPENBOT_SOFTWARE_APPLICATION;
 
   return {
     meta: [

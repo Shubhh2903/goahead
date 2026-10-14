@@ -90,7 +90,7 @@ export function LandingFooter() {
           <div class="landing-footer-meta">
             <Link to="/" hash="download">
               <span class="landing-footer-availability" aria-hidden="true" />
-              Available for macOS, Windows and Linux
+              Available for macOS (Apple silicon)
             </Link>
             <p class="landing-footer-made">
               Made with

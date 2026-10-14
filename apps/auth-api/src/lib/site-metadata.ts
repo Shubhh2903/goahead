@@ -5,7 +5,7 @@
 
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { LANDING_FAQ_STRUCTURED_DATA } from "./landing-faq";
-import { OPENBOT_ALTERNATE_DOWNLOAD_LINKS, OPENBOT_DOWNLOAD_LINKS } from "./landing-links";
+import { OPENBOT_DOWNLOAD_LINKS } from "./landing-links";
 
 export const OPENBOT_SITE_URL = `${PRODUCT_IDENTITY.siteOrigin}/`;
 export const OPENBOT_SITE_TITLE = "GoAhead: Run a team of AI agents on your computer";
@@ -13,9 +13,9 @@ export const OPENBOT_SITE_DESCRIPTION =
   "A free desktop app that runs AI agents as a team on your own computer, with the ChatGPT, Claude, Gemini or Grok plan you already pay for, or your own model.";
 export const OPENBOT_SOCIAL_IMAGE_URL = `${OPENBOT_SITE_URL}openbot-social.png`;
 /** The account `OPENBOT_LINKS.contact` opens, which a shared card names. */
-export const OPENBOT_X_HANDLE = "@OpenBot_";
-const OPENBOT_X_URL = "https://x.com/OpenBot_";
-const OPENBOT_REPOSITORY_URL = "https://github.com/nightly-labs/openbot";
+export const OPENBOT_X_HANDLE = "@SLilawala";
+const OPENBOT_X_URL = "https://x.com/SLilawala";
+const OPENBOT_REPOSITORY_URL = "https://github.com/Shubhh2903/goahead";
 /** Square, as schema.org wants for a publisher logo. */
 export const OPENBOT_LOGO_URL = `${OPENBOT_SITE_URL}icon-512x512.png`;
 export const OPENBOT_SOCIAL_IMAGE_ALT = "Meet GoAhead on a dark grid background";
@@ -55,15 +55,9 @@ export const OPENBOT_SOFTWARE_APPLICATION = {
   description: OPENBOT_SITE_DESCRIPTION,
   applicationCategory: "DeveloperApplication",
   applicationSubCategory: "AI agent app",
-  operatingSystem: ["macOS 13 or later (Apple silicon or Intel)", "Windows 10 or later (x64)", "Linux (x64 or arm64)"],
-  // The installers themselves: schema.org's `downloadUrl` is the file, not a page about it.
-  downloadUrl: [
-    OPENBOT_DOWNLOAD_LINKS.macos,
-    OPENBOT_ALTERNATE_DOWNLOAD_LINKS.macos,
-    OPENBOT_DOWNLOAD_LINKS.windows,
-    OPENBOT_DOWNLOAD_LINKS.linux,
-    OPENBOT_ALTERNATE_DOWNLOAD_LINKS.linux,
-  ].map((path) => new URL(path, OPENBOT_SITE_URL).toString()),
+  operatingSystem: "macOS 13 or later (Apple silicon)",
+  // The installer itself: schema.org's `downloadUrl` is the file, not a page about it.
+  downloadUrl: new URL(OPENBOT_DOWNLOAD_LINKS.macos, OPENBOT_SITE_URL).toString(),
   // What people ask an assistant for. Keep it to what the released app does.
   featureList: [
     "Runs Codex, Claude Code, Gemini (Antigravity), Grok and OpenCode agents",

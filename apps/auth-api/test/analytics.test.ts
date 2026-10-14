@@ -424,23 +424,6 @@ describe("landing analytics", () => {
     ]);
   });
 
-  it("keeps the platform on a Linux download click", () => {
-    document.body.innerHTML = `<section class="landing-download"><a id="linux" href="/download/linux/latest">Linux</a></section>`;
-    window.history.replaceState({}, "", "/");
-    const client = { setGlobalProperties: vi.fn(), track: vi.fn(), trackScreenView: vi.fn() };
-    const analytics = new LandingAnalytics(() => client, true);
-    const cleanup = analytics.start(document, "goahead.multicodegenius.com");
-
-    clickWithoutNavigation("#linux");
-    cleanup();
-
-    expect(client.track).toHaveBeenLastCalledWith(
-      "landing_download_clicked",
-      { platform: "linux", placement: "download_section" },
-      "/",
-    );
-  });
-
   it("reports the detected platform and each manual change, including before the page starts", () => {
     document.body.innerHTML = "";
     window.history.replaceState({}, "", "/");

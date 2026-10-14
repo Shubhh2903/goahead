@@ -93,7 +93,7 @@ export const OPENCLAW_COMPARISON: Comparison = {
     {
       icon: "devices",
       topic: "Apps",
-      openbot: "macOS, Windows and Linux, and mobile apps for iPhone and Android.",
+      openbot: "macOS on Apple silicon, and mobile apps for iPhone and Android.",
       rival: "macOS, Windows and Linux, apps for iPhone and Android, a web Control UI, and a command line.",
     },
     {

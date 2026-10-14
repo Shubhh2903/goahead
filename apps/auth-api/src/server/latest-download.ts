@@ -1,53 +1,20 @@
-import { OPENBOT_LINKS } from "../lib/landing-links";
-
-export type AvailableDownloadPlatform = "linux" | "macos" | "windows";
+import { OPENBOT_DOWNLOAD_PAGE_LINKS, OPENBOT_LINKS } from "../lib/landing-links";
 
 /**
- * `latest-mac.yml` lists the Apple silicon and the Intel installer, so a macOS download also names
- * its architecture. electron-builder puts `arm64` in the Apple silicon asset name and no
- * architecture suffix that contains it in the Intel one. Linux has one manifest per architecture,
- * and Windows ships x64 only.
+ * GoAhead publishes one desktop installer: the macOS Apple silicon (arm64) DMG. `release:local`
+ * uploads `GoAhead-<version>-arm64.dmg`, `GoAhead-<version>-arm64.zip` and `latest-mac.yml`.
+ * The DMG is stapled after the build, so `latest-mac.yml` lists only the ZIP (`dmg.writeUpdateInfo:
+ * false`). The DMG has the same name with the `.dmg` extension.
  */
-export type DownloadArchitecture = "arm64" | "x64";
+const RELEASES_BASE_URL = "https://github.com/Shubhh2903/goahead/releases";
+const MANIFEST = "latest-mac.yml";
 
-interface DownloadManifestConfig {
-  /**
-   * Compared against a lowercased asset name, so it must be lowercase itself. The Linux asset is
-   * published as `.AppImage`.
-   */
-  extension: ".appimage" | ".dmg" | ".exe";
-  manifest: "latest-linux-arm64.yml" | "latest-linux.yml" | "latest-mac.yml" | "latest.yml";
-}
+/** The systems that have a download page. Any request for them that is not the Apple silicon DMG gets the page. */
+const UNAVAILABLE_DOWNLOAD_PLATFORMS = ["linux", "macos", "windows"] as const;
+type UnavailableDownloadPlatform = (typeof UNAVAILABLE_DOWNLOAD_PLATFORMS)[number];
 
-const RELEASES_BASE_URL = "https://github.com/nightly-labs/openbot/releases";
-
-const DOWNLOAD_PLATFORMS = ["linux", "macos", "windows"] as const satisfies readonly AvailableDownloadPlatform[];
-
-function downloadManifest(
-  platform: AvailableDownloadPlatform,
-  architecture: DownloadArchitecture,
-): DownloadManifestConfig {
-  if (platform === "linux")
-    return {
-      extension: ".appimage",
-      manifest: architecture === "arm64" ? "latest-linux-arm64.yml" : "latest-linux.yml",
-    };
-  if (platform === "macos") return { extension: ".dmg", manifest: "latest-mac.yml" };
-  return { extension: ".exe", manifest: "latest.yml" };
-}
-
-export function isAvailableDownloadPlatform(value: string): value is AvailableDownloadPlatform {
-  return DOWNLOAD_PLATFORMS.some((platform) => platform === value);
-}
-
-/**
- * The architecture a `?arch=` value asks for. Most Macs are Apple silicon and most Linux computers
- * are x64, so anything else gets those. Windows has only the x64 installer.
- */
-export function downloadArchitecture(platform: AvailableDownloadPlatform, arch: string | null): DownloadArchitecture {
-  if (platform === "macos") return arch === "x64" ? "x64" : "arm64";
-  if (platform === "linux") return arch === "arm64" ? "arm64" : "x64";
-  return "x64";
+function isUnavailableDownloadPlatform(value: string): value is UnavailableDownloadPlatform {
+  return UNAVAILABLE_DOWNLOAD_PLATFORMS.some((platform) => platform === value);
 }
 
 function redirect(location: string): Response {
@@ -60,17 +27,16 @@ function redirect(location: string): Response {
   });
 }
 
-function findInstaller(
-  manifest: string,
-  extension: DownloadManifestConfig["extension"],
-  macArchitecture: DownloadArchitecture | undefined,
-): string | undefined {
+/** The arm64 DMG name, from the arm64 DMG or ZIP that the manifest lists. */
+function findInstaller(manifest: string): string | undefined {
   const assetLines = manifest.matchAll(/^\s*-\s+url:\s*["']?([^\s"']+)["']?\s*$/gim);
   for (const match of assetLines) {
     const asset = match[1];
-    if (!asset?.toLowerCase().endsWith(extension) || !/^[a-z0-9][a-z0-9._+-]+$/i.test(asset)) continue;
-    if (macArchitecture && asset.toLowerCase().includes("arm64") !== (macArchitecture === "arm64")) continue;
-    return asset;
+    if (!asset || !/^[a-z0-9][a-z0-9._+-]+$/i.test(asset)) continue;
+    const lower = asset.toLowerCase();
+    if (!lower.includes("arm64")) continue;
+    if (lower.endsWith(".dmg")) return asset;
+    if (lower.endsWith(".zip")) return `${asset.slice(0, -".zip".length)}.dmg`;
   }
   return undefined;
 }
@@ -78,39 +44,43 @@ function findInstaller(
 /**
  * The releases page is a working answer but not the one that was asked for, so each fallback says
  * why. Written to the Worker log rather than to analytics: a server event has no session, and the
- * landing reports are defined on sessions. Platform and reason only, never a URL or a response body.
+ * landing reports are defined on sessions. The reason only, never a URL or a response body.
  */
-function fallbackToReleases(platform: AvailableDownloadPlatform, reason: string): Response {
-  console.warn(`latest-download: serving the releases page for ${platform} (${reason})`);
+function fallbackToReleases(reason: string): Response {
+  console.warn(`latest-download: serving the releases page for macos (${reason})`);
   return redirect(OPENBOT_LINKS.releases);
 }
 
-export async function latestDownloadResponse(
-  platform: AvailableDownloadPlatform,
-  fetcher: typeof fetch = fetch,
-  architecture: DownloadArchitecture = downloadArchitecture(platform, null),
-): Promise<Response> {
-  const config = downloadManifest(platform, architecture);
-  const manifestUrl = `${RELEASES_BASE_URL}/latest/download/${config.manifest}`;
-
+/** The Apple silicon DMG of the latest release. */
+export async function latestDownloadResponse(fetcher: typeof fetch = fetch): Promise<Response> {
   try {
-    const response = await fetcher(manifestUrl, {
+    const response = await fetcher(`${RELEASES_BASE_URL}/latest/download/${MANIFEST}`, {
       headers: { accept: "text/yaml, text/plain" },
       // A slow release host must not hold the Worker request open; the releases page is the answer.
       signal: AbortSignal.timeout(5_000),
     });
-    if (!response.ok) return fallbackToReleases(platform, `manifest status ${response.status}`);
+    if (!response.ok) return fallbackToReleases(`manifest status ${response.status}`);
 
-    const installer = findInstaller(
-      await response.text(),
-      config.extension,
-      // Only the macOS manifest lists two architectures.
-      platform === "macos" ? architecture : undefined,
-    );
-    if (!installer) return fallbackToReleases(platform, `no ${config.extension} asset in the manifest`);
+    const installer = findInstaller(await response.text());
+    if (!installer) return fallbackToReleases("no arm64 asset in the manifest");
 
     return redirect(`${RELEASES_BASE_URL}/latest/download/${encodeURIComponent(installer)}`);
   } catch {
-    return fallbackToReleases(platform, "the manifest request failed");
+    return fallbackToReleases("the manifest request failed");
   }
+}
+
+/**
+ * The answer to `/download/<platform>/latest?arch=<arch>`. macOS without `?arch=x64` gets the
+ * Apple silicon DMG. An Intel Mac, Windows and Linux have no installer yet, so they get the download
+ * page of their system, which says so. They never get an installer for another system.
+ */
+export function downloadRouteResponse(
+  platform: string,
+  arch: string | null,
+  fetcher: typeof fetch = fetch,
+): Promise<Response> | Response {
+  if (platform === "macos" && arch !== "x64") return latestDownloadResponse(fetcher);
+  if (isUnavailableDownloadPlatform(platform)) return redirect(OPENBOT_DOWNLOAD_PAGE_LINKS[platform]);
+  return new Response("Not found", { status: 404 });
 }

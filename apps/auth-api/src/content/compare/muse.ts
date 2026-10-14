@@ -93,7 +93,7 @@ export const MUSE_COMPARISON: Comparison = {
     {
       icon: "devices",
       topic: "Apps",
-      openbot: "macOS, Windows and Linux, and mobile apps for iPhone and Android.",
+      openbot: "macOS on Apple silicon, and mobile apps for iPhone and Android.",
       rival:
         "iPhone, Android, Mac, the web and WhatsApp. Meta's AI glasses are next. A Windows or Linux app: not stated by Meta.",
     },

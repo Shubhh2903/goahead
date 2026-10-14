@@ -40,7 +40,7 @@ export const LANDING_FAQ: readonly LandingQuestion[] = [
   {
     question: "Which computers can run GoAhead?",
     answer:
-      "macOS 13 or newer on Apple silicon or Intel, Windows 10 or newer on x64, and Linux on x64 or arm64 as an AppImage.",
+      "A Mac with Apple silicon (M1 or newer) and macOS 13 or newer. Versions for Intel Macs, Windows and Linux are not available yet.",
   },
   {
     question: "Is it safe to let agents work on my computer?",

@@ -98,7 +98,7 @@ export const HERMES_AGENT_COMPARISON: Comparison = {
     {
       icon: "devices",
       topic: "Apps",
-      openbot: "macOS, Windows and Linux, and mobile apps for iPhone and Android.",
+      openbot: "macOS on Apple silicon, and mobile apps for iPhone and Android.",
       rival:
         "A command line, a terminal UI, a web dashboard, and Hermes Desktop for macOS, Windows and Linux. The command line also runs on Android in Termux. No iPhone or Android app is stated.",
     },

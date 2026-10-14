@@ -98,7 +98,7 @@ export const CHATGPT_DOTS_COMPARISON: Comparison = {
     {
       icon: "devices",
       topic: "Apps",
-      openbot: "macOS, Windows and Linux, and mobile apps for iPhone and Android.",
+      openbot: "macOS on Apple silicon, and mobile apps for iPhone and Android.",
       rival:
         "Create a dot in the ChatGPT app for macOS or Windows, or on the web on a computer. Then talk to it in the ChatGPT mobile app, Slack or Microsoft Teams.",
     },

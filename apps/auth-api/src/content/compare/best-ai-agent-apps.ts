@@ -6,7 +6,7 @@ import { BENCHMARK_SOURCES, type RoundupComparison } from "./comparison";
 // official home or pricing page of each app. The benchmark numbers are read by hand
 // from the Artificial Analysis Coding Agent Index.
 
-const OPENBOT = "https://github.com/nightly-labs/openbot";
+const OPENBOT = "https://github.com/Shubhh2903/goahead";
 
 export const BEST_AI_AGENT_APPS: RoundupComparison = {
   kind: "roundup",
@@ -20,7 +20,7 @@ export const BEST_AI_AGENT_APPS: RoundupComparison = {
       mark: "openbot",
       comparisons: [],
       bestFor: "A team of agents on your own computer, with the AI plans you already pay for.",
-      runsOn: "Your computer. Apps for macOS, Windows, Linux, iPhone and Android.",
+      runsOn: "Your computer. Apps for macOS on Apple silicon, iPhone and Android.",
       models: "Your ChatGPT, Claude, Gemini, Grok or Cursor plan, free models, or your own model.",
       price: "Free for noncommercial use. Hosted EU server from €20 or $25 a month.",
       summary:
