@@ -184,6 +184,7 @@
     "test:remote": "bun run --cwd remote/api test",
     "test:backend": "vitest run src/backend",
     "test:browser": "bun scripts/browser-smoke.ts",
+    "smoke:google-connector": "bun scripts/google-connector-smoke.ts",
     "test:browser:google-live": "bun scripts/browser-smoke.ts --google-live",
     "test:browser:whatsapp-live": "bun scripts/browser-smoke.ts --whatsapp-live",
     "test:browser:canva-live": "bun scripts/browser-smoke.ts --canva-live",

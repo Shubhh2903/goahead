@@ -185,6 +185,7 @@ import type {
   SetDynamicIslandPreferenceInput,
 } from "./ipc-dynamic-island";
 import type { GitHubConnectorRepositories, GitHubConnectorStatus } from "./ipc-github-connector";
+import type { GoogleConnectorStatus, GoogleMailNotice } from "./ipc-google-connector";
 import type { AgentHandoff, AgentHandoffsChanged } from "./ipc-handoffs";
 import type { HostAnalytics, HostAnalyticsInput } from "./ipc-host-analytics";
 import type {
@@ -775,6 +776,21 @@ export const IPC_ENDPOINTS = {
     openVerification: request<undefined, void>()("github-connector:open-verification"),
     openInstall: request<undefined, void>()("github-connector:open-install"),
     changed: event<GitHubConnectorStatus>()("github-connector:changed"),
+  },
+  // The Gmail and Google Calendar connection of this computer. Local only, like `githubConnector`.
+  // The one payload is an agent id, for `setMailAgent`: the renderer cannot name a URL, a client or a
+  // token, and main checks that the id names a local agent.
+  googleConnector: {
+    status: request<undefined, GoogleConnectorStatus>()("google-connector:status"),
+    connect: request<undefined, GoogleConnectorStatus>()("google-connector:connect"),
+    cancel: request<undefined, GoogleConnectorStatus>()("google-connector:cancel"),
+    disconnect: request<undefined, GoogleConnectorStatus>()("google-connector:disconnect"),
+    // The "Agent that handles mail".
+    setMailAgent: request<string, GoogleConnectorStatus>()("google-connector:set-mail-agent"),
+    changed: event<GoogleConnectorStatus>()("google-connector:changed"),
+    // The mail cards of `gmail_notify`, for the Dynamic Island. Local only.
+    notices: request<undefined, GoogleMailNotice[]>()("google-connector:notices"),
+    noticesChanged: event<GoogleMailNotice[]>()("google-connector:notices-changed"),
   },
   // The Bitwarden connection of this computer. Local only, like `githubConnector`. The CLI session
   // key goes from the renderer to main once, in `connect`; every answer is the status only.

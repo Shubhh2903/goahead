@@ -11,6 +11,7 @@ import type {
 import {
   HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX,
   isAttachmentSummary,
+  LOCAL_ONLY_CONVERSATION_ITEM_TYPES,
   MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX,
   ROUTINE_EVENT_ITEM_TYPE_PREFIX,
   ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX,
@@ -307,6 +308,8 @@ export class ConversationQueries {
       excludeRoutineEvents?: boolean;
       excludeRoutineRunEvents?: boolean;
       excludeHostedSiteEvents?: boolean;
+      /** A cursor for another device never rests on a note that stays on this computer. */
+      excludeLocalOnly?: boolean;
     } = {},
   ): string | null {
     if (!throughMessageId) return null;
@@ -333,6 +336,7 @@ export class ConversationQueries {
                options.excludeRoutineRunEvents === true,
                options.excludeHostedSiteEvents === true,
              )}
+             ${options.excludeLocalOnly === true ? localOnlyItemTypeSqlFilter("item_type") : ""}
            ORDER BY created_at DESC, ordinal DESC, message_id DESC
            LIMIT 1`,
         )
@@ -378,6 +382,7 @@ export class ConversationQueries {
              AND COALESCE(message.item_type, '') NOT LIKE '${ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX}%'
              AND COALESCE(message.item_type, '') NOT LIKE '${HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX}%'
              AND COALESCE(message.item_type, '') NOT LIKE '${MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX}%'
+             ${localOnlyItemTypeSqlFilter("message.item_type")}
              AND json_extract(message.message_json, '$.routine') IS NULL
              ${CHANNEL_THREAD_EXCLUSION}
              ${filter}`,
@@ -398,6 +403,7 @@ export class ConversationQueries {
              AND COALESCE(message.item_type, '') NOT LIKE '${ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX}%'
              AND COALESCE(message.item_type, '') NOT LIKE '${HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX}%'
              AND COALESCE(message.item_type, '') NOT LIKE '${MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX}%'
+             ${localOnlyItemTypeSqlFilter("message.item_type")}
              AND json_extract(message.message_json, '$.routine') IS NULL
              ${CHANNEL_THREAD_EXCLUSION}
              ${filter}
@@ -637,6 +643,12 @@ function conversationRowCursor(row: DynamicRecord): ConversationPageCursor {
     ordinal: requiredNumberColumn(row, "ordinal"),
     messageId: requiredStringColumn(row, "message_id"),
   };
+}
+
+/** `AND` clause that leaves out every item type of `LOCAL_ONLY_CONVERSATION_ITEM_TYPES`. */
+export function localOnlyItemTypeSqlFilter(column: "item_type" | "message.item_type"): string {
+  const types = LOCAL_ONLY_CONVERSATION_ITEM_TYPES.map((type) => `'${type.replaceAll("'", "''")}'`).join(", ");
+  return `AND COALESCE(${column}, '') NOT IN (${types})`;
 }
 
 function conversationMarkerSqlFilter(

@@ -40,6 +40,8 @@ import {
   type ExportResult,
   type GitHubConnectorRepositories,
   type GitHubConnectorStatus,
+  type GoogleConnectorStatus,
+  type GoogleMailNotice,
   type HostedSiteList,
   type HostedSiteSummary,
   IDLE_RESTART_TARGETS,
@@ -70,6 +72,8 @@ import {
   type ProviderDetectionSettings,
   parseGitHubConnectorRepositories,
   parseGitHubConnectorStatus,
+  parseGoogleConnectorStatus,
+  parseGoogleMailNotices,
   parseOnePasswordConnectorStatus,
   type RemoteDesktopSetupStatus,
   type RemoteDesktopTestStatus,
@@ -340,6 +344,18 @@ export function decodeGitHubConnectorStatus(value: unknown): GitHubConnectorStat
   const status = parseGitHubConnectorStatus(value);
   if (!status) throw new Error("Invalid GitHub connector response.");
   return status;
+}
+
+export function decodeGoogleConnectorStatus(value: unknown): GoogleConnectorStatus {
+  const status = parseGoogleConnectorStatus(value);
+  if (!status) throw new Error("Invalid Google connector response.");
+  return status;
+}
+
+export function decodeGoogleMailNotices(value: unknown): GoogleMailNotice[] {
+  const notices = parseGoogleMailNotices(value);
+  if (!notices) throw new Error("Invalid Google mail notice list.");
+  return notices;
 }
 
 export function decodeGitHubConnectorRepositories(value: unknown): GitHubConnectorRepositories {

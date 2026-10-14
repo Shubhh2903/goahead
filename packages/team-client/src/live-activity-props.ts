@@ -211,6 +211,9 @@ function liveActivityContent(
   switch (presentation.mode) {
     case "idle":
       return null;
+    // A mail card is local to the desktop; the phone never gets it.
+    case "mail":
+      return null;
     case "working": {
       const rows = presentation.working.slice(0, WORKING_ROWS).map((item) => ({
         name: limit(item.agent.name, ROW_NAME_LIMIT),

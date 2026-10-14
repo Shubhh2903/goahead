@@ -311,6 +311,9 @@ function presentationIdentity(presentation: DynamicIslandPresentation): string {
   if (presentation.mode === "failed") {
     return `${presentation.serverId}:${presentation.mode}:${presentation.item.turnId}`;
   }
+  if (presentation.mode === "mail") {
+    return `${presentation.serverId}:${presentation.mode}:${presentation.item.noticeId}`;
+  }
   if (presentation.mode === "message") {
     return `${presentation.serverId}:${presentation.mode}:${presentation.message.messageId}`;
   }

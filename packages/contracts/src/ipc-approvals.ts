@@ -42,6 +42,11 @@ export interface AgentApproval {
   reason: string | null;
   grantRoot: string | null;
   permissions: AgentApprovalPermissions | null;
+  /**
+   * True when this copy does not show the whole request, so no client may allow it from this copy.
+   * Only a local-only approval sets it on a full approval (an unreadable or too long mail).
+   */
+  truncated?: boolean;
 }
 
 export function isAgentApproval(value: unknown): value is AgentApproval {
@@ -56,6 +61,7 @@ export function isAgentApproval(value: unknown): value is AgentApproval {
     isNullableBoundedString(value.cwd, INPUT_LIMITS.path) &&
     isNullableBoundedString(value.reason, INPUT_LIMITS.messageText) &&
     isNullableBoundedString(value.grantRoot, INPUT_LIMITS.path) &&
+    (value.truncated === undefined || isBoolean(value.truncated)) &&
     (value.permissions === null || isAgentApprovalPermissions(value.permissions))
   );
 }
@@ -63,6 +69,20 @@ export function isAgentApproval(value: unknown): value is AgentApproval {
 export interface RespondToApprovalInput {
   requestId: string | number;
   decision: "accept" | "decline";
+}
+
+/**
+ * An approval that only the person at the computer that runs the agent may see and answer, such as
+ * sending a mail. The Team API, the phone and Slack drop it, and only a local answer is accepted.
+ */
+export const LOCAL_ONLY_APPROVAL_PREFIX = "local-only:";
+
+export function localOnlyApprovalRequestId(key: string): string {
+  return `${LOCAL_ONLY_APPROVAL_PREFIX}${key}`;
+}
+
+export function isLocalOnlyApprovalRequestId(requestId: string | number): boolean {
+  return typeof requestId === "string" && requestId.startsWith(LOCAL_ONLY_APPROVAL_PREFIX);
 }
 
 /**

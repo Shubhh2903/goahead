@@ -46,6 +46,7 @@ import type {
 } from "@openbot/contracts/ipc";
 import {
   type ConversationSlackAsk,
+  isLocalOnlyApprovalRequestId,
   MESSAGING_CONNECTION_STATES,
   MESSAGING_LIMITS,
   SLACK_ASK_PLACE_LIMIT,
@@ -451,6 +452,7 @@ export class MessagingService {
     this.#threads.setContextSource((link, origin) => this.#promptContext(link, origin));
     this.#threads.setMessageSender((request) => this.#requestSend(request));
     this.#threads.setInboxReader((request) => this.#readInbox(request));
+    this.#threads.setOwnerSource((connectionId) => this.#slackOwner(connectionId));
     this.#ingress?.handle((workspaceId, delivery) => this.deliverSlack(workspaceId, delivery));
     this.#purgeInbox();
     const purge = setInterval(() => this.#purgeInbox(), INBOX_PURGE_INTERVAL_MS);
@@ -471,6 +473,7 @@ export class MessagingService {
     this.#threads.setContextSource(null);
     this.#threads.setMessageSender(null);
     this.#threads.setInboxReader(null);
+    this.#threads.setOwnerSource(null);
     this.#ingress?.handle(null);
     for (const connectionId of this.#live.keys()) this.#slackSync.stop(connectionId);
     await Promise.all([...this.#live.values()].map((live) => live.transport?.stop()));
@@ -2341,6 +2344,9 @@ export class MessagingService {
 
   #agentEvent(event: AgentEvent): void {
     if (event.type === "turn-started" || event.type === "turn-completed") this.#autoReplyTurn(event);
+    // A local-only approval (a mail to send, a meeting to book) holds private text, and only the
+    // person at this computer answers it: it never goes to Slack.
+    if (event.type === "approval" && isLocalOnlyApprovalRequestId(event.approval.requestId)) return;
     if (event.type === "approval") void this.#approval(event.approval).catch((error) => this.#warn(error));
     else if (event.type === "agent-input-resolved" && event.kind === "approval")
       void this.#approvalResolved(event.requestId).catch((error) => this.#warn(error));

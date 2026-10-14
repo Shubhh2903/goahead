@@ -456,7 +456,8 @@ export function agentIpcHandlers({
           }),
       }),
       respondToApproval: scopedHandler(parseApprovalResponse, {
-        local: (parsed) => service.respondToApproval(parsed),
+        // The renderer of this computer: the person at this computer answers.
+        local: (parsed) => service.respondToApproval(parsed, "local-owner"),
         remote: (parsed, serverId) =>
           remoteServers.request(serverId, TEAM_API_ROUTES.respond.approval, decodeVoid, {
             method: "POST",

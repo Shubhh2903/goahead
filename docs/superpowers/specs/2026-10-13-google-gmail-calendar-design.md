@@ -151,7 +151,7 @@ user approves.
 ### Book a Meet call
 
 1. `calendar_find_times` reads `events.list` for the primary calendar in a range (max 14 days) and returns
-   free slots inside working hours 09:00–18:00 in the system time zone.
+   free slots inside working hours 09:00–18:00, Monday to Friday, in the system time zone.
 2. `calendar_propose_meeting` stores the proposal and registers an approval that shows title, time with
    time zone, guests and description.
 3. Approve: `events.insert` on `primary` with `conferenceData.createRequest`
@@ -174,7 +174,7 @@ user approves.
 - `PRIVACY.md`: GoAhead talks to Google directly from the computer; Cloudflare and Signal get no Gmail or
   Calendar data; the AI provider gets triaged mail and mail the Chief reads; tokens stay in the keychain.
 - `docs/ARCHITECTURE.md`: connector section (store, OAuth, watcher, tools, gate, approvals).
-- `changelog.d/google-connector.md`.
+- `changelog.d/gmail-calendar.md`.
 - A setup note in `docs/` for the Google Cloud project (APIs, consent screen in Testing, test users,
   Desktop client, env keys).
 
@@ -229,4 +229,8 @@ agent, Gmail push (Pub/Sub), checks while GoAhead is closed, other calendars tha
 - **Island card:** the Meet link reaches the picked agent's chat; there is no separate Meet card.
 - **Mail notes stay on this computer (decision 2026-10-14):** the `google-mail-notice` chat notes are
   filtered out of every Team API conversation read and event, and out of phone/live-activity pushes.
-  Only this desktop shows them.
+  Only this desktop shows them. Desktop search never shows them.
+- **Send and book results (final review 2026-10-14):** send/book results are notes for the person; the
+  agent is not told.
+- **Mail agent replies:** the replies of a mail agent are ordinary chat messages. The `gmail_notify`
+  result does not ask the agent to write the summary in its answer.

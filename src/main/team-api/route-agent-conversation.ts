@@ -15,6 +15,7 @@ import { HttpError } from "./http-error";
 import type { AgentRouteTarget, RouteOutcome, TeamApiRequestContext } from "./request-context";
 import {
   conversationForCapabilities,
+  conversationPageForTeam,
   markerExclusionsForCapabilities,
   memberSender,
   nullableString,
@@ -45,7 +46,7 @@ export async function routeAgentConversation(
   const { method, url, request, member, protocol, capabilities, json, empty } = context;
 
   if (method === "GET" && action === "conversation") {
-    const conversation = await agents.readConversationFor(agentId, member.id);
+    const conversation = await agents.readConversationFor(agentId, member.id, { excludeLocalOnly: true });
     return json(200, conversationForCapabilities(conversation, capabilities));
   }
   if (method === "GET" && action === "conversation-page") {
@@ -56,7 +57,7 @@ export async function routeAgentConversation(
       pageLimit(url),
       markerExclusionsForCapabilities(capabilities),
     );
-    return json(200, page);
+    return json(200, conversationPageForTeam(page));
   }
   if (method === "POST" && action === "conversation/unread") {
     // `context.protocol` is the same `requestProtocol(request)` this branch used to recompute for
@@ -66,7 +67,10 @@ export async function routeAgentConversation(
       throw new HttpError(400, sourceText("error.team.markUnreadUnsupported"));
     }
     await readJson(request);
-    return json(200, await agents.markConversationUnread(agentId, member.id));
+    return json(
+      200,
+      await agents.markConversationUnread(agentId, member.id, markerExclusionsForCapabilities(capabilities)),
+    );
   }
   if (method === "POST" && action === "conversation/read") {
     const body = await readJson(request);

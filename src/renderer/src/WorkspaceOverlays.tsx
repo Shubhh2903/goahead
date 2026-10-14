@@ -15,6 +15,7 @@ import { resolveOrchestratorModel } from "./features/agents/agent-creation-model
 import { useAgents } from "./features/agents/agents-context";
 import { createBitwardenConnector } from "./features/connectors/bitwarden-connector";
 import { createGitHubConnector, type GitHubConnectorController } from "./features/connectors/github-connector";
+import { createGoogleConnector, type GoogleConnectorController } from "./features/connectors/google-connector";
 import {
   createOnePasswordConnector,
   type OnePasswordConnectorController,
@@ -84,6 +85,10 @@ export function WorkspaceOverlays(props: AccountProps) {
   const github = createGitHubConnector();
   const githubFor = (server: ServerSummary | undefined) =>
     server?.kind === "local" && github.status().available ? github : undefined;
+  /* The Google connection of this computer. A build with no Google OAuth client has none. */
+  const google = createGoogleConnector();
+  const googleFor = (server: ServerSummary | undefined) =>
+    server?.kind === "local" && google.status().available ? google : undefined;
   /* The 1Password connection of this computer. The browser that fills its logins runs here too. */
   const onePassword = createOnePasswordConnector();
   const onePasswordFor = (server: ServerSummary | undefined) => (server?.kind === "local" ? onePassword : undefined);
@@ -95,7 +100,10 @@ export function WorkspaceOverlays(props: AccountProps) {
   createEffect(
     () => skillsMarketplaceOpen() || serverSettingsOpen(),
     (open) => {
-      if (open) github.reload();
+      if (open) {
+        github.reload();
+        google.reload();
+      }
     },
   );
   return (
@@ -111,6 +119,7 @@ export function WorkspaceOverlays(props: AccountProps) {
       <AddServer />
       <ServerSettings
         githubConnector={githubFor(serverSettingsTarget())}
+        googleConnector={googleFor(serverSettingsTarget())}
         onePasswordConnector={onePasswordFor(serverSettingsTarget())}
         bitwardenConnector={bitwardenFor(serverSettingsTarget())}
       />
@@ -271,6 +280,7 @@ function AddServer() {
  */
 function ServerSettings(props: {
   githubConnector: GitHubConnectorController | undefined;
+  googleConnector: GoogleConnectorController | undefined;
   onePasswordConnector: OnePasswordConnectorController | undefined;
   bitwardenConnector: BitwardenConnectorPanelProps | undefined;
 }) {
@@ -575,6 +585,7 @@ function ServerSettings(props: {
               : undefined
           }
           githubConnector={props.githubConnector}
+          googleConnector={props.googleConnector}
           onePasswordConnector={props.onePasswordConnector}
           bitwardenConnector={props.bitwardenConnector}
           // Slack is connected on the computer that runs the agents: Slack opens this computer's browser

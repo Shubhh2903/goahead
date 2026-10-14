@@ -22,6 +22,7 @@ import {
 } from "./agent/sidebar-tools";
 import { LOCAL_SKILL_TOOL_DEFINITIONS } from "./agent/skill-tools";
 import { CHANNEL_TOOL_DEFINITIONS } from "./channel-tools";
+import { GOOGLE_TOOL_DEFINITIONS } from "./messaging/google-tools";
 import { SLACK_LIST_UNREAD_TOOL, SLACK_READ_CONVERSATION_TOOL } from "./messaging/messaging-read-tools";
 import { SLACK_SEND_MESSAGE_TOOL } from "./messaging/messaging-send-tool";
 import { ROUTINE_FLOW_TOOL_DEFINITIONS } from "./routine-flows/routine-flow-tools";
@@ -84,6 +85,7 @@ export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
   SLACK_SEND_MESSAGE_TOOL,
   SLACK_LIST_UNREAD_TOOL,
   SLACK_READ_CONVERSATION_TOOL,
+  ...GOOGLE_TOOL_DEFINITIONS,
   {
     name: "list_sites",
     description:

@@ -1,6 +1,7 @@
 import { INPUT_LIMITS } from "./input-limits";
 import { type AvatarHue, isAvatarHue } from "./ipc-agent-identity";
 import type { AgentApprovalKind, AgentApprovalPermissions } from "./ipc-approvals";
+import type { GoogleMailNoticeKind } from "./ipc-google-connector";
 import { isBoolean, isDynamicRecord, isNumber, isString } from "./runtime-values";
 
 export interface DynamicIslandPreference {
@@ -171,6 +172,15 @@ export interface DynamicIslandFailureItem {
   detail: string | null;
 }
 
+export interface DynamicIslandMailItem {
+  noticeId: string;
+  agent: DynamicIslandAgentIdentity;
+  kind: GoogleMailNoticeKind;
+  from: string;
+  subject: string;
+  summary: string;
+}
+
 interface DynamicIslandPresentationBase {
   serverId: string;
   /** The face to show. Main sets it; it is absent when emotions are off. */
@@ -191,11 +201,22 @@ export type DynamicIslandPresentation =
       item: DynamicIslandApprovalItem;
       remainingCount: number;
     })
+  | (DynamicIslandPresentationBase & { mode: "mail"; item: DynamicIslandMailItem; remainingCount: number })
   | (DynamicIslandPresentationBase & { mode: "takeover"; item: DynamicIslandTakeoverItem })
   | (DynamicIslandPresentationBase & { mode: "failed"; item: DynamicIslandFailureItem });
 
+/** A button of the mail card. Main checks `noticeId` against the notices it made. */
+export type DynamicIslandMailAction = {
+  type: "mail-action";
+  serverId: string;
+  agentId: string;
+  noticeId: string;
+  action: "open" | "draft-reply" | "book-meeting" | "dismiss";
+};
+
 export type DynamicIslandAction =
   | { type: "open-app" }
+  | DynamicIslandMailAction
   | { type: "open-agent"; serverId: string; agentId: string }
   | { type: "open-message"; serverId: string; agentId: string; messageId: string }
   /**
@@ -303,6 +324,7 @@ export function isDynamicIslandPresentation(value: unknown): value is DynamicIsl
   if (value.mode === "message") return isSafeCount(value.unreadCount) && isMessageItem(value.message);
   if (value.mode === "question") return isPromptItem(value.item) && isSafeCount(value.remainingCount);
   if (value.mode === "approval") return isApprovalItem(value.item) && isSafeCount(value.remainingCount);
+  if (value.mode === "mail") return isMailItem(value.item) && isSafeCount(value.remainingCount);
   if (value.mode === "takeover") return isTakeoverItem(value.item);
   if (value.mode === "failed") return isFailureItem(value.item);
   return false;
@@ -323,6 +345,15 @@ export function isDynamicIslandAction(value: unknown): value is DynamicIslandAct
   }
   if (value.type === "stop-agent" || value.type === "open-failure" || value.type === "dismiss-failure") {
     return isShortString(value.turnId, 160);
+  }
+  if (value.type === "mail-action") {
+    return (
+      isShortString(value.noticeId, 160) &&
+      (value.action === "open" ||
+        value.action === "draft-reply" ||
+        value.action === "book-meeting" ||
+        value.action === "dismiss")
+    );
   }
   if (value.type === "review-attention") {
     return isDynamicIslandRequestId(value.requestId);
@@ -413,6 +444,21 @@ function isTakeoverItem(value: unknown): value is DynamicIslandTakeoverItem {
     isAgentIdentity(value.agent) &&
     isShortString(value.title, 180) &&
     isNullableShortString(value.detail, 600)
+  );
+}
+
+function isMailItem(value: unknown): value is DynamicIslandMailItem {
+  return (
+    isDynamicRecord(value) &&
+    isShortString(value.noticeId, 160) &&
+    isAgentIdentity(value.agent) &&
+    (value.kind === "important" || value.kind === "meeting") &&
+    isString(value.from) &&
+    value.from.length <= 400 &&
+    isString(value.subject) &&
+    value.subject.length <= 1000 &&
+    isString(value.summary) &&
+    value.summary.length <= 500
   );
 }
 

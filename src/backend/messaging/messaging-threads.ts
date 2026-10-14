@@ -3,6 +3,7 @@ import { CONVERSATION_PLAN_ITEM_TYPE, MESSAGING_LIMITS } from "@openbot/contract
 import { sourceText } from "@openbot/i18n/source";
 import type { DeliveryContext, MailboxStore, MessagingOrigin } from "../mailbox-store";
 import type { OpenBotDatabase } from "../openbot-database";
+import type { SlackTurnFacts } from "./google-tools";
 import { MessagingAutoReplyStore } from "./messaging-auto-reply-store";
 import { MessagingDraftStore } from "./messaging-draft-store";
 import { MessagingInboxStore } from "./messaging-inbox-store";
@@ -188,6 +189,7 @@ export class MessagingThreads {
   #contextSource: ((link: MessagingLink, origin: MessagingOrigin) => Promise<MessagingPromptContext>) | null = null;
   #sender: ((request: MessagingSendRequest) => Promise<MessagingSendReceipt>) | null = null;
   #inboxReader: ((request: MessagingInboxRequest) => Promise<MessagingInboxResult>) | null = null;
+  #ownerSource: ((connectionId: string) => string | null) | null = null;
 
   constructor(database: OpenBotDatabase, mailbox: MailboxStore, hooks: MessagingThreadsHooks) {
     this.store = new MessagingStore(database);
@@ -235,6 +237,14 @@ export class MessagingThreads {
   /** The platform side answers the inbox reads of agents. Without it, no agent can read the inbox. */
   setInboxReader(reader: ((request: MessagingInboxRequest) => Promise<MessagingInboxResult>) | null): void {
     this.#inboxReader = reader;
+  }
+
+  /**
+   * The Slack user who connected each workspace as themself, from the messaging service. The service
+   * sets it when it starts and clears it when it stops, as it does the inbox reader.
+   */
+  setOwnerSource(source: ((connectionId: string) => string | null) | null): void {
+    this.#ownerSource = source;
   }
 
   readInbox(request: MessagingInboxRequest): Promise<MessagingInboxResult> {
@@ -309,6 +319,41 @@ export class MessagingThreads {
 
   ownsDelivery(deliveryId: string): boolean {
     return this.#mailbox.messagingOrigin(deliveryId) !== null;
+  }
+
+  /** The orchestrator of each enabled workspace. Each one is a mail agent of the Google tools. */
+  orchestratorAgentIds(): string[] {
+    return [
+      ...new Set(
+        this.store
+          .connections()
+          .filter((connection) => connection.enabled)
+          .map((connection) => connection.orchestratorAgentId)
+          .filter((agentId): agentId is string => agentId !== null),
+      ),
+    ];
+  }
+
+  /**
+   * The facts of a turn that runs in an external conversation, or null when `threadId` is no
+   * conversation's thread. `isSlackOwnerDirectTurn` decides on them. A delivery that a teammate
+   * sent, such as an answer that goes back to the conversation, has no origin here: it carries the
+   * origin of the request, but the person did not write it.
+   */
+  slackTurnFacts(threadId: string, deliveryIds: readonly string[]): SlackTurnFacts | null {
+    const link = this.store.linkForThread(threadId);
+    if (!link) return null;
+    return {
+      isDirect: link.isDirect,
+      ownerId: this.#ownerSource?.(link.connectionId) ?? null,
+      origins: deliveryIds.map((deliveryId) => {
+        const origin = this.#mailbox.messagingOrigin(deliveryId);
+        const fromPerson = this.#mailbox.getDelivery(deliveryId)?.delivery.sender.kind === "user";
+        return origin && fromPerson
+          ? { authorId: origin.authorId, sameLink: origin.linkId === link.linkId, isReply: origin.isReply === true }
+          : null;
+      }),
+    };
   }
 
   /**

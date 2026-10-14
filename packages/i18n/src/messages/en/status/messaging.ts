@@ -57,4 +57,34 @@ export const messages = defineMessages("status.messaging", {
   // The page a development Slack install ends on.
   "status.messaging.signInReceived": "GoAhead received the Slack install. You can close this tab.",
   "status.messaging.signInUnknown": "GoAhead did not start this Slack install. Start it again in GoAhead.",
+  // A note from GoAhead in the chat of the agent that handles mail. It starts no turn.
+  "status.messaging.googleImportantMail": "Important mail from {from}: {subject}",
+  "status.messaging.googleMeetingRequest": "Meeting request from {from}: {subject}",
+  // The approval card of a Google action. The person approves the real draft or event.
+  "status.messaging.googleSendDetail":
+    "To: {to}\nCc: {cc}\nBcc: {bcc}\nAttachments: {attachments}\nSubject: {subject}\n\n{body}",
+  "status.messaging.googleDraftUnreadable": "GoAhead could not read the draft text. It is in Gmail Drafts.",
+  "status.messaging.googleMeetingDetail": "{title}\n{start} to {end} ({timeZone})\nGuests: {guests}\n\n{description}",
+  "status.messaging.googleNone": "none",
+  "status.messaging.googleUnknown": "unknown",
+  // A note from GoAhead in the chat after an approval. It starts no turn.
+  "status.messaging.googleSent": 'Gmail sent the mail "{subject}".',
+  "status.messaging.googleSendDeclined": 'You declined to send the mail "{subject}". The draft stays in Gmail Drafts.',
+  "status.messaging.googleSendError":
+    'Gmail did not send the mail "{subject}": {detail}. The draft stays in Gmail Drafts. To try again, approve the new card.',
+  "status.messaging.googleSendFailedNoRetry":
+    'Gmail did not send the mail "{subject}": {detail}. The draft stays in Gmail Drafts.',
+  "status.messaging.googleSendUncertain":
+    'Gmail may have sent the mail "{subject}" ({detail}). Check Sent in Gmail before you send it again.',
+  "status.messaging.googleSendChanged":
+    'The draft "{subject}" changed after GoAhead showed it. Nothing was sent. Check the new card.',
+  "status.messaging.googleSendChangedNoRetry":
+    'The draft "{subject}" changed after GoAhead showed it. Nothing was sent. It stays in Gmail Drafts.',
+  "status.messaging.googleSendUnreadable": 'GoAhead could not read the draft "{subject}" again. Nothing was sent.',
+  "status.messaging.googleBooked": 'The meeting "{title}" is booked and the invitations are sent. Google Meet: {link}',
+  "status.messaging.googleBookDeclined": 'You declined the meeting "{title}". Nothing was created.',
+  "status.messaging.googleBookFailedNoRetry":
+    'Google Calendar did not create the meeting "{title}": {detail}. Nothing was created.',
+  "status.messaging.googleBookError":
+    'Google Calendar did not create the meeting "{title}": {detail}. Nothing was created. To try again, approve the new card.',
 });

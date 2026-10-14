@@ -17,6 +17,7 @@
 import {
   type AgentEvent,
   type BrowserDisplayState,
+  type GoogleMailNotice,
   IPC_ENDPOINTS,
   LOCAL_SERVER_ID,
   type VoiceModelStatus,
@@ -126,6 +127,53 @@ export function createRendererForwarders({
     showRetainedNotification(notification);
   }
 
+  /**
+   * A macOS notification for the Google connection. Like the agent notifications, none while the
+   * window has focus, and none while this computer's notifications are muted or off.
+   */
+  function notifyGoogle(content: { title: string; body: string }, agentId: string | null): void {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed() || window.isFocused()) return;
+    if (!desktopNotificationsEnabled() || !Notification.isSupported()) return;
+    const local = getRemoteServerManager()
+      ?.list()
+      .find((candidate) => candidate.id === LOCAL_SERVER_ID);
+    if (local?.notificationsMuted || local?.notificationLevel === "nothing") return;
+    const notification = new Notification({ title: content.title, body: content.body });
+    notification.on("click", () => {
+      const current = getMainWindow();
+      if (!current || current.isDestroyed()) return;
+      showMainWindow(current);
+      if (agentId) {
+        sendToRenderer(current, IPC_ENDPOINTS.notifications.opened, {
+          serverId: LOCAL_SERVER_ID,
+          agentId,
+          threadId: null,
+        });
+      }
+    });
+    showRetainedNotification(notification);
+  }
+
+  /** One mail notice. A click opens the agent of the notice: the agent that handles mail. */
+  function notifyGoogleMail(notice: GoogleMailNotice): void {
+    const translate = getTranslate();
+    const title =
+      notice.kind === "meeting"
+        ? translate("notification.google.meetingTitle", { from: notice.from })
+        : translate("notification.google.importantTitle", { from: notice.from });
+    // A notice from Gmail's signals only has no summary: the subject stands in.
+    notifyGoogle({ title, body: notice.summary || notice.subject }, notice.agentId);
+  }
+
+  function notifyGoogleSignInExpired(): void {
+    const translate = getTranslate();
+    notifyGoogle(
+      { title: translate("notification.google.expiredTitle"), body: translate("notification.google.expiredBody") },
+      null,
+    );
+  }
+
   function forwardBrowserDisplayState(state: BrowserDisplayState): void {
     for (const window of BrowserWindow.getAllWindows()) {
       sendToRenderer(window, IPC_ENDPOINTS.browser.displayState, state);
@@ -166,6 +214,18 @@ export function createRendererForwarders({
     const window = getMainWindow();
     if (!window || window.isDestroyed()) return;
     sendToRenderer(window, IPC_ENDPOINTS.routineFlows.changed, change);
+  }
+
+  function forwardGoogleConnectorStatus(status: import("@openbot/contracts/ipc").GoogleConnectorStatus): void {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) return;
+    sendToRenderer(window, IPC_ENDPOINTS.googleConnector.changed, status);
+  }
+
+  function forwardGoogleMailNotices(notices: GoogleMailNotice[]): void {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) return;
+    sendToRenderer(window, IPC_ENDPOINTS.googleConnector.noticesChanged, notices);
   }
 
   function forwardOnePasswordConnectorStatus(
@@ -269,6 +329,8 @@ export function createRendererForwarders({
     forwardProviderRuntimeStatus,
     forwardGitHubConnectorStatus,
     forwardRoutineFlowsChanged,
+    forwardGoogleConnectorStatus,
+    forwardGoogleMailNotices,
     forwardOnePasswordConnectorStatus,
     forwardBitwardenConnectorStatus,
     forwardMessagingThreadsChanged,
@@ -281,5 +343,7 @@ export function createRendererForwarders({
     forwardTeamPresence,
     forwardDirectMessage,
     forwardDirectTyping,
+    notifyGoogleMail,
+    notifyGoogleSignInExpired,
   };
 }

@@ -726,6 +726,7 @@
   color: var(--openbot-text-muted);
   font-size: var(--openbot-text-lg);
   line-height: var(--openbot-leading-lg);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 

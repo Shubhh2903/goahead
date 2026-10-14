@@ -6,6 +6,7 @@ import type {
   BrowserTakeoverRequest,
   RespondToBrowserSecretInput,
 } from "@openbot/contracts/ipc";
+import { isLocalOnlyApprovalRequestId, localOnlyApprovalKind } from "@openbot/contracts/ipc";
 import { Badge, Button, Check, Input, LoaderCircle, Maximize2, Monitor, RadioGroup, toast, X } from "@openbot/ui";
 import { StandingApprovalConfirmation } from "@openbot/ui/components/StandingApprovalConfirmation";
 import { BrowserSecretCard } from "@openbot/ui/features/conversation/BrowserSecretCard";
@@ -112,6 +113,7 @@ export function ChoiceCard(props: {
 }
 
 export function ApprovalCard(props: {
+  /** `truncated` (a snapshot copy, or a local-only card that cannot show everything): Allow is off. */
   approval: AgentApproval;
   onApprove: () => Promise<boolean>;
   onReject: () => Promise<boolean>;
@@ -128,6 +130,12 @@ export function ApprovalCard(props: {
   const [submitting, setSubmitting] = createSignal(false);
   const [confirmingAlways, setConfirmingAlways] = createSignal(false);
   let alwaysAllowButton: HTMLButtonElement | undefined;
+  // Only a local-only card (a mail to send, a meeting to book) must show the whole request to be
+  // allowed. A provider approval keeps its Allow: a window that loads again has only its cut copy.
+  const incomplete = () => isLocalOnlyApprovalRequestId(props.approval.requestId) && props.approval.truncated === true;
+  // A local-only approval (a mail to send, a meeting to book) is never a standing grant.
+  const alwaysAllowGrant = () =>
+    isLocalOnlyApprovalRequestId(props.approval.requestId) ? undefined : props.onAlwaysAllow;
   const submit = async (decision: "accept" | "decline") => {
     if (submitting()) return;
     setSubmitting(true);
@@ -140,7 +148,7 @@ export function ApprovalCard(props: {
     }
   };
   const alwaysAllow = async () => {
-    const grant = props.onAlwaysAllow;
+    const grant = alwaysAllowGrant();
     if (!grant || submitting()) return;
     setConfirmingAlways(false);
     setSubmitting(true);
@@ -184,8 +192,11 @@ export function ApprovalCard(props: {
             <strong>{props.approval.grantRoot ?? t("prompt.approval.agentWorkspace")}</strong>
           </div>
         </Show>
-        <Show when={props.approval.kind === "permissions"}>
+        <Show when={props.approval.kind === "permissions" && props.approval.permissions}>
           <PermissionDetails permissions={props.approval.permissions} />
+        </Show>
+        <Show when={incomplete()}>
+          <p class="approval-reason">{t("prompt.approval.incomplete")}</p>
         </Show>
       </div>
       <footer class="approval-card-footer">
@@ -193,12 +204,12 @@ export function ApprovalCard(props: {
           variant="default"
           type="button"
           class="approval-button"
-          disabled={submitting()}
+          disabled={submitting() || incomplete()}
           onClick={() => void submit("accept")}
         >
           {submitting() ? t("common.sending") : t("prompt.approval.allow")}
         </Button>
-        <Show when={props.onAlwaysAllow}>
+        <Show when={alwaysAllowGrant() && !incomplete()}>
           <Button
             ref={alwaysAllowButton}
             variant="secondary"
@@ -421,6 +432,9 @@ function browserPageDetails(tab: BrowserTab | undefined, t: TextValue["t"]): { t
 }
 
 function approvalTitle(approval: AgentApproval | undefined) {
+  const localKind = approval ? localOnlyApprovalKind(approval.requestId) : null;
+  if (localKind === "send") return "prompt.approval.title.sendMail";
+  if (localKind === "meeting") return "prompt.approval.title.bookMeeting";
   if (approval?.kind === "command") return "prompt.approval.title.command";
   if (approval?.kind === "file-change") return "prompt.approval.title.fileChange";
   return "prompt.approval.title.permissions";

@@ -10,7 +10,11 @@ export type CriticalAction = Extract<
 
 export interface DynamicIslandActionAgent {
   respondToPrompt(input: { requestId: string | number; answers: Record<string, string[]> }): Promise<void>;
-  respondToApproval(input: { requestId: string | number; decision: "accept" | "decline" }): Promise<void>;
+  /** `local-owner`: the island runs on this computer, so the person at it answers. */
+  respondToApproval(
+    input: { requestId: string | number; decision: "accept" | "decline" },
+    from?: "local-owner" | "other",
+  ): Promise<void>;
   sendMessage(input: SendMessageInput, sender?: ConversationMessageSender): Promise<unknown>;
   interrupt(agentId: string, turnId: string): Promise<void>;
 }
@@ -72,7 +76,7 @@ export async function performDynamicIslandCriticalAction(
   }
   const input = { requestId: action.requestId, decision: action.decision };
   await routeToServer<unknown>(action.serverId, {
-    local: () => local.respondToApproval(input),
+    local: () => local.respondToApproval(input, "local-owner"),
     remote: (serverId) =>
       remote.request(serverId, TEAM_API_ROUTES.respond.approval, decodeVoid, { method: "POST", body: input }),
   });

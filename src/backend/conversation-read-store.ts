@@ -7,6 +7,7 @@ import {
   type ConversationReadState,
   type ConversationSnapshot,
   HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX,
+  isLocalOnlyConversationMessage,
   MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX,
   ROUTINE_EVENT_ITEM_TYPE_PREFIX,
   ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX,
@@ -14,12 +15,18 @@ import {
 } from "@openbot/contracts/ipc";
 import { isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
+import { localOnlyItemTypeSqlFilter } from "./database/conversation-queries";
 import type { OpenBotDatabase } from "./openbot-database";
 
 export interface ConversationMarkerExclusions {
   excludeRoutineEvents?: boolean;
   excludeRoutineRunEvents?: boolean;
   excludeHostedSiteEvents?: boolean;
+  /**
+   * A reader on another device or computer (Team API, phone, Live Activity): a note that stays on
+   * this computer (`isLocalOnlyConversationMessage`) is not unread and is not a read cursor.
+   */
+  excludeLocalOnly?: boolean;
 }
 
 export class ConversationReadStore {
@@ -48,13 +55,13 @@ export class ConversationReadStore {
       const initialCursor =
         baseline && !this.#messageExists(threadId, baseline) ? this.#latestMessageId(threadId) : baseline;
       this.#saveCursor(threadId, memberId, initialCursor, "initialized");
-      state = this.#stateFromDatabase(threadId, initialCursor);
+      state = this.#stateFromDatabase(threadId, initialCursor, options);
     } else if (stored !== null && !this.#messageExists(threadId, stored)) {
       const latestMessageId = this.#latestMessageId(threadId);
       this.#saveCursor(threadId, memberId, latestMessageId, "initialized");
-      state = this.#stateFromDatabase(threadId, latestMessageId);
+      state = this.#stateFromDatabase(threadId, latestMessageId, options);
     } else {
-      state = this.#stateFromDatabase(threadId, stored);
+      state = this.#stateFromDatabase(threadId, stored, options);
     }
     return this.#withSupportedCursor(threadId, state, options);
   }
@@ -82,7 +89,11 @@ export class ConversationReadStore {
     }
   }
 
-  readState(memberId: string, snapshot: ConversationSnapshot): ConversationReadState {
+  readState(
+    memberId: string,
+    snapshot: ConversationSnapshot,
+    options: ConversationMarkerExclusions = {},
+  ): ConversationReadState {
     if (!snapshot.threadId) return emptyReadState();
     const stored = this.#storedCursor(snapshot.threadId, memberId);
     if (stored === undefined) {
@@ -91,12 +102,12 @@ export class ConversationReadStore {
         baseline && !snapshot.messages.some((message) => message.id === baseline)
           ? (snapshot.messages.at(-1)?.id ?? null)
           : baseline;
-      return this.#initialize(memberId, snapshot, initialCursor);
+      return this.#initialize(memberId, snapshot, initialCursor, options);
     }
     if (stored !== null && !snapshot.messages.some((message) => message.id === stored)) {
-      return this.#initialize(memberId, snapshot, snapshot.messages.at(-1)?.id ?? null);
+      return this.#initialize(memberId, snapshot, snapshot.messages.at(-1)?.id ?? null, options);
     }
-    return stateFromSnapshot(snapshot, stored);
+    return stateFromSnapshot(snapshot, stored, options);
   }
 
   markRead(
@@ -116,7 +127,11 @@ export class ConversationReadStore {
     const storedIndex = stored ? snapshot.messages.findIndex((message) => message.id === stored) : -1;
     const nextThroughMessageId = storedIndex > requestedIndex ? (stored ?? null) : (throughMessageId ?? null);
     this.#saveCursor(snapshot.threadId, memberId, nextThroughMessageId, "marked");
-    return this.#withSupportedCursor(snapshot.threadId, stateFromSnapshot(snapshot, nextThroughMessageId), options);
+    return this.#withSupportedCursor(
+      snapshot.threadId,
+      stateFromSnapshot(snapshot, nextThroughMessageId, options),
+      options,
+    );
   }
 
   /**
@@ -141,21 +156,33 @@ export class ConversationReadStore {
       nextThroughMessageId = stored;
     }
     this.#saveCursor(threadId, memberId, nextThroughMessageId, "marked");
-    return this.#withSupportedCursor(threadId, this.#stateFromDatabase(threadId, nextThroughMessageId), options);
+    return this.#withSupportedCursor(
+      threadId,
+      this.#stateFromDatabase(threadId, nextThroughMessageId, options),
+      options,
+    );
   }
 
-  markUnread(memberId: string, snapshot: ConversationSnapshot): ConversationReadState {
+  markUnread(
+    memberId: string,
+    snapshot: ConversationSnapshot,
+    options: ConversationMarkerExclusions = {},
+  ): ConversationReadState {
     if (!snapshot.threadId) return emptyReadState();
     // Explicit user action only. Ordinary read acknowledgements remain monotonic.
     this.#saveCursor(snapshot.threadId, memberId, null, "marked");
-    return stateFromSnapshot(snapshot, null);
+    return stateFromSnapshot(snapshot, null, options);
   }
 
   /** Marks a thread unread without reading its message rows. */
-  markUnreadForThread(memberId: string, threadId: string | null): ConversationReadState {
+  markUnreadForThread(
+    memberId: string,
+    threadId: string | null,
+    options: ConversationMarkerExclusions = {},
+  ): ConversationReadState {
     if (!threadId) return emptyReadState();
     this.#saveCursor(threadId, memberId, null, "marked");
-    return this.#stateFromDatabase(threadId, null);
+    return this.#stateFromDatabase(threadId, null, options);
   }
 
   #withSupportedCursor(
@@ -247,7 +274,11 @@ export class ConversationReadStore {
     return row.message_id;
   }
 
-  #stateFromDatabase(threadId: string, throughMessageId: string | null): ConversationReadState {
+  #stateFromDatabase(
+    threadId: string,
+    throughMessageId: string | null,
+    options: ConversationMarkerExclusions,
+  ): ConversationReadState {
     const boundary = throughMessageId
       ? this.database.connection
           .prepare(
@@ -273,7 +304,8 @@ export class ConversationReadStore {
       AND COALESCE(item_type, '') NOT LIKE '${ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX}%'
       AND COALESCE(item_type, '') NOT LIKE '${HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX}%'
       AND COALESCE(item_type, '') NOT LIKE '${MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX}%'
-      AND COALESCE(item_type, '') != '${CONTEXT_RESET_ITEM_TYPE}'`;
+      AND COALESCE(item_type, '') != '${CONTEXT_RESET_ITEM_TYPE}'
+      ${options.excludeLocalOnly ? localOnlyItemTypeSqlFilter("item_type") : ""}`;
     const countRow = this.database.connection
       .prepare(
         `SELECT COUNT(*) AS unread_count FROM projection_thread_messages
@@ -322,10 +354,11 @@ export class ConversationReadStore {
     memberId: string,
     snapshot: ConversationSnapshot,
     throughMessageId: string | null,
+    options: ConversationMarkerExclusions,
   ): ConversationReadState {
     if (!snapshot.threadId) return emptyReadState();
     this.#saveCursor(snapshot.threadId, memberId, throughMessageId, "initialized");
-    return stateFromSnapshot(snapshot, throughMessageId);
+    return stateFromSnapshot(snapshot, throughMessageId, options);
   }
 
   #saveCursor(
@@ -364,7 +397,11 @@ export class ConversationReadStore {
   }
 }
 
-function stateFromSnapshot(snapshot: ConversationSnapshot, throughMessageId: string | null): ConversationReadState {
+function stateFromSnapshot(
+  snapshot: ConversationSnapshot,
+  throughMessageId: string | null,
+  options: ConversationMarkerExclusions = {},
+): ConversationReadState {
   const throughIndex = throughMessageId
     ? snapshot.messages.findIndex((message) => message.id === throughMessageId)
     : -1;
@@ -382,7 +419,8 @@ function stateFromSnapshot(snapshot: ConversationSnapshot, throughMessageId: str
         !message.itemType?.startsWith(ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX) &&
         !message.itemType?.startsWith(HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX) &&
         !message.itemType?.startsWith(MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX) &&
-        message.itemType !== CONTEXT_RESET_ITEM_TYPE,
+        message.itemType !== CONTEXT_RESET_ITEM_TYPE &&
+        !(options.excludeLocalOnly === true && isLocalOnlyConversationMessage(message)),
     );
   return {
     unreadCount: unread.length,

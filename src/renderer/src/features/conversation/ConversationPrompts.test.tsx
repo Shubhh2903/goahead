@@ -117,6 +117,66 @@ describe("ApprovalCard", () => {
     await vi.waitFor(() => expect(approve).toHaveBeenCalledTimes(2));
   });
 
+  it("offers no standing grant and no permission line for a mail to send", () => {
+    const send: AgentApproval = {
+      ...approval,
+      requestId: "local-only:google:g1",
+      kind: "permissions",
+      command: null,
+      reason: "Send this email?\n\nTo: alice@example.com",
+    };
+    render(() => (
+      <ApprovalCard
+        approval={send}
+        onApprove={async () => true}
+        onReject={async () => true}
+        onAlwaysAllow={async () => true}
+      />
+    ));
+
+    expect(screen.getByRole("button", { name: "Allow" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Always allow" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Network access")).not.toBeInTheDocument();
+  });
+
+  it("still allows a cut copy of a provider approval", () => {
+    render(() => (
+      <ApprovalCard
+        approval={{ ...approval, truncated: true }}
+        onApprove={async () => true}
+        onReject={async () => true}
+      />
+    ));
+
+    expect(screen.getByRole("button", { name: "Allow" })).toBeEnabled();
+  });
+
+  it("names a Google card by what it does", () => {
+    const meeting = { ...approval, requestId: "local-only:google:meeting:g2", kind: "permissions" as const };
+    render(() => <ApprovalCard approval={meeting} onApprove={async () => true} onReject={async () => true} />);
+
+    expect(screen.getByText("Book this meeting?")).toBeInTheDocument();
+    expect(screen.queryByText("Grant permissions")).not.toBeInTheDocument();
+  });
+
+  it("does not allow a local-only card that does not show the whole request", async () => {
+    const reject = vi.fn(async () => true);
+    render(() => (
+      <ApprovalCard
+        approval={{ ...approval, requestId: "local-only:google:send:g1", truncated: true }}
+        onApprove={async () => true}
+        onReject={reject}
+        onAlwaysAllow={async () => true}
+      />
+    ));
+
+    expect(screen.getByText("Send this mail?")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allow" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Always allow" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+    expect(reject).toHaveBeenCalledOnce();
+  });
+
   it("offers no standing grant where the caller gives none", () => {
     render(() => <ApprovalCard approval={approval} onApprove={async () => true} onReject={async () => true} />);
     expect(screen.queryByRole("button", { name: "Always allow" })).not.toBeInTheDocument();

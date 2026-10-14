@@ -56,7 +56,10 @@ describe("performDynamicIslandCriticalAction", () => {
       decision: "decline",
     });
 
-    expect(local.respondToApproval).toHaveBeenCalledWith({ requestId: "approval-local", decision: "accept" });
+    expect(local.respondToApproval).toHaveBeenCalledWith(
+      { requestId: "approval-local", decision: "accept" },
+      "local-owner",
+    );
     expect(remote.request).toHaveBeenCalledWith("server-eu", "/v1/approvals/respond", decoders.decodeVoid, {
       method: "POST",
       body: { requestId: "approval-remote", decision: "decline" },

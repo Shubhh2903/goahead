@@ -1,6 +1,32 @@
 import { defineMessages } from "../../message";
 
 export const messages = defineMessages("connector", {
+  // Server settings > Connectors: the Gmail and Google Calendar connection of this computer.
+  "connector.google.title": "Gmail and Google Calendar",
+  "connector.google.description":
+    "GoAhead tells you about important mail and meeting requests. The agent that handles mail, and the Slack Orchestrator in your own direct message with GoAhead, read and sort your Gmail, write replies and book Google Meet calls. Mail is sent and meetings are booked only after you approve.",
+  "connector.google.howItWorks":
+    "GoAhead talks to Google from this computer. Your mail and your calendar do not go to GoAhead servers.",
+  "connector.google.connect": "Connect Google",
+  "connector.google.cancel": "Cancel",
+  "connector.google.pendingTitle": "Sign in to Google",
+  "connector.google.pendingDescription": "Google opened in your browser. Allow GoAhead there to connect.",
+  "connector.google.accountTitle": "Account",
+  "connector.google.connectedDescription": "The mail agents can use Gmail and Google Calendar.",
+  "connector.google.reauthDescription": "The Google sign-in expired. Sign in again to continue.",
+  "connector.google.signInAgain": "Sign in again",
+  "connector.google.disconnect": "Disconnect",
+  "connector.google.disconnectTitle": "Disconnect Google",
+  "connector.google.disconnectSummary": "GoAhead revokes its Google sign-in. Your mail and calendar stay in Google.",
+  "connector.google.actionFailed": "The Google connection did not change.",
+  "connector.google.statusNotSetUp": "Not set up",
+  "connector.google.statusConnecting": "Connecting",
+  "connector.google.statusConnected": "Connected",
+  "connector.google.statusReauth": "Sign in again",
+  "connector.google.mailAgentTitle": "Agent that handles mail",
+  "connector.google.mailAgentDescription":
+    "This agent gets the notes about important mail and meeting requests, and can use Gmail and Google Calendar when you ask it in GoAhead. The Slack Orchestrator can use them too, in your own direct message with GoAhead.",
+  "connector.google.mailAgentNone": "Pick an agent to get notes about new mail.",
   // Server settings > Connectors: the built-in GitHub connection of this computer.
   "connector.github.title": "GitHub",
   "connector.github.description":

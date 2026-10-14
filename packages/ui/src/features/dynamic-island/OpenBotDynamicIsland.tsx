@@ -7,6 +7,7 @@ import type {
   DynamicIslandApprovalItem,
   DynamicIslandFailureItem,
   DynamicIslandGaze,
+  DynamicIslandMailItem,
   DynamicIslandPresentation,
   DynamicIslandPromptItem,
   DynamicIslandTakeoverItem,
@@ -23,6 +24,7 @@ import {
   ArrowUp,
   Badge,
   Button,
+  CalendarClock,
   Check,
   DYNAMIC_ISLAND_COMPACT_EAR_TRACK_WIDTH,
   DynamicIsland,
@@ -33,6 +35,7 @@ import {
   ExternalLink,
   IconButton,
   Input,
+  Mail,
   MessageCircle,
   MessageCircleQuestionMark,
   Monitor,
@@ -178,7 +181,7 @@ interface IslandModeSwapProps {
 
 type StatusMode = Extract<
   DynamicIslandPresentation["mode"],
-  "working" | "message" | "question" | "approval" | "takeover" | "failed"
+  "working" | "message" | "question" | "approval" | "takeover" | "failed" | "mail"
 >;
 
 interface OpenBotIslandModeConfig {
@@ -276,6 +279,16 @@ const OPENBOT_ISLAND_MODE_CONFIG: Record<DynamicIslandPresentation["mode"], Open
         <Monitor data-icon="inline-start" class="dynamic-island-surface-status-badge-icon" aria-hidden="true" />
       ),
       className: "dynamic-island-surface-takeover-badge",
+    },
+  },
+  mail: {
+    label: "island.label.mail",
+    ariaLive: "polite",
+    badge: {
+      label: "island.badge.mail",
+      variant: "info-light",
+      icon: () => <Mail data-icon="inline-start" class="dynamic-island-surface-status-badge-icon" aria-hidden="true" />,
+      className: "dynamic-island-surface-message-badge",
     },
   },
   failed: {
@@ -1153,6 +1166,16 @@ function ExpandedContent(props: {
           />
         )}
       </Match>
+      <Match when={props.presentation.mode === "mail" ? props.presentation.item : undefined}>
+        {(item) => (
+          <MailContent
+            item={item()}
+            serverId={props.presentation.serverId}
+            actionError={props.actionError}
+            onAction={props.onAction}
+          />
+        )}
+      </Match>
       <Match when={props.presentation.mode === "question" ? props.presentation : undefined}>
         {(presentation) => (
           <QuestionContent
@@ -1179,6 +1202,51 @@ function ExpandedContent(props: {
         )}
       </Match>
     </Switch>
+  );
+}
+
+function MailContent(props: {
+  item: DynamicIslandMailItem;
+  serverId: string;
+  actionError?: string | undefined;
+  onAction: (action: DynamicIslandAction) => Promise<boolean> | undefined;
+}): JSX.Element {
+  const { t } = useText();
+  const act = (action: "open" | "draft-reply" | "book-meeting" | "dismiss") =>
+    props.onAction({
+      type: "mail-action",
+      serverId: props.serverId,
+      agentId: props.item.agent.id,
+      noticeId: props.item.noticeId,
+      action,
+    });
+  return (
+    <NotificationContent
+      contentKey={props.item.noticeId}
+      name={props.item.agent.name}
+      status={props.item.kind === "meeting" ? t("island.status.meetingRequest") : t("island.status.importantMail")}
+      // A notice from Gmail's signals only has no summary: the subject stands in.
+      description={`${props.item.from}: ${props.item.summary || props.item.subject}`}
+      actionError={props.actionError}
+      action={
+        <>
+          <Button size="sm" variant="ghost" onClick={() => act("dismiss")}>
+            {t("island.action.dismiss")}
+          </Button>
+          <Show when={props.item.kind === "meeting"}>
+            <Button size="sm" variant="ghost" onClick={() => act("book-meeting")}>
+              <CalendarClock aria-hidden="true" /> {t("island.action.bookMeeting")}
+            </Button>
+          </Show>
+          <Button size="sm" variant="ghost" onClick={() => act("draft-reply")}>
+            <Mail aria-hidden="true" /> {t("island.action.draftReply")}
+          </Button>
+          <Button size="sm" onClick={() => act("open")}>
+            <ExternalLink aria-hidden="true" /> {t("island.action.open")}
+          </Button>
+        </>
+      }
+    />
   );
 }
 

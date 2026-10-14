@@ -146,6 +146,7 @@ describe("dynamic island window geometry", () => {
       presentMainWindow: () => undefined,
       performHaptic: () => undefined,
       performCriticalAction: async () => undefined,
+      performMailAction: async () => undefined,
     });
 
     await controller.initialize();
@@ -222,6 +223,7 @@ describe("dynamic island window geometry", () => {
       presentMainWindow: () => undefined,
       performHaptic: () => undefined,
       performCriticalAction: async () => undefined,
+      performMailAction: async () => undefined,
     });
 
     await controller.initialize();
@@ -264,6 +266,7 @@ describe("dynamic island window geometry", () => {
       presentMainWindow: () => undefined,
       performHaptic: () => undefined,
       performCriticalAction: async () => undefined,
+      performMailAction: async () => undefined,
     });
     await controller.initialize();
     const window = windows[0];
@@ -304,6 +307,7 @@ describe("dynamic island window geometry", () => {
       presentMainWindow: () => undefined,
       performHaptic: () => undefined,
       performCriticalAction: async () => undefined,
+      performMailAction: async () => undefined,
     });
 
     await expect(controller.initialize()).resolves.toBeUndefined();
@@ -344,6 +348,7 @@ describe("dynamic island window geometry", () => {
       presentMainWindow: () => undefined,
       performHaptic: () => undefined,
       performCriticalAction: async () => undefined,
+      performMailAction: async () => undefined,
     });
 
     const initialize = controller.initialize();
@@ -377,6 +382,7 @@ describe("dynamic island window geometry", () => {
       presentMainWindow: () => undefined,
       performHaptic: () => undefined,
       performCriticalAction: async () => undefined,
+      performMailAction: async () => undefined,
     });
     const firstPreference = preference({ hapticsEnabled: false });
     const latestPreference = preference({ idleVisible: false });
@@ -413,6 +419,7 @@ describe("dynamic island window geometry", () => {
       presentMainWindow: () => undefined,
       performHaptic,
       performCriticalAction: async () => undefined,
+      performMailAction: async () => undefined,
     });
 
     await controller.initialize();
@@ -453,6 +460,7 @@ describe("dynamic island window geometry", () => {
       presentMainWindow: () => undefined,
       performHaptic: () => undefined,
       performCriticalAction: async () => undefined,
+      performMailAction: async () => undefined,
     });
 
     await controller.initialize();
@@ -476,6 +484,7 @@ describe("dynamic island window geometry", () => {
       presentMainWindow: () => undefined,
       performHaptic: () => undefined,
       performCriticalAction: async () => undefined,
+      performMailAction: async () => undefined,
     });
     await controller.initialize();
     expect(createWindow).not.toHaveBeenCalled();
@@ -500,6 +509,7 @@ describe("dynamic island window geometry", () => {
       ensureMainWindow,
       performHaptic: () => undefined,
       performCriticalAction,
+      performMailAction: async () => undefined,
     });
     const action: DynamicIslandAction = {
       type: "answer-prompt",
@@ -542,6 +552,7 @@ describe("dynamic island window geometry", () => {
       presentMainWindow: () => undefined,
       performHaptic: () => undefined,
       performCriticalAction,
+      performMailAction: async () => undefined,
     });
     const action = {
       type: "answer-prompt",
@@ -580,6 +591,7 @@ describe("dynamic island window geometry", () => {
       presentMainWindow: () => undefined,
       performHaptic: () => undefined,
       performCriticalAction,
+      performMailAction: async () => undefined,
     });
     controller.publish(criticalPresentation("question", "prompt-current"));
 
@@ -610,6 +622,7 @@ describe("dynamic island window geometry", () => {
       getMainWindow: () => mainWindow as unknown as BrowserWindow,
       presentMainWindow: () => undefined,
       performHaptic: () => undefined,
+      performMailAction: async () => undefined,
       performCriticalAction: async () => {
         throw new Error("The request is no longer active.");
       },
@@ -644,6 +657,7 @@ describe("dynamic island window geometry", () => {
       presentMainWindow,
       performHaptic: () => undefined,
       performCriticalAction: async () => undefined,
+      performMailAction: async () => undefined,
     });
     const action = {
       type: "open-failure",

@@ -44,7 +44,8 @@ export interface DrainHooks {
   requeueChannelDelivery(deliveryId: string): boolean;
   /**
    * A context line for the start of a turn, read when the turn starts, or null. The provider gets it
-   * in front of the message; the conversation shows only the message.
+   * in front of the message; the conversation shows only the message. Never asked for a channel
+   * task. An external conversation's message is asked for too, in front of its framing.
    */
   turnContext(agentId: string, deliveryIds: readonly string[]): string | null;
 }
@@ -400,13 +401,12 @@ export class DrainScheduler {
         [...requestIds].flatMap((requestId) => this.#mailbox.unansweredRecipients(requestId)),
         agentNames,
       );
-      const turnContext =
-        channelDelivery || messagingDelivery
-          ? null
-          : this.#hooks.turnContext(
-              agent.id,
-              batch.map((item) => item.delivery.id),
-            );
+      const turnContext = channelDelivery
+        ? null
+        : this.#hooks.turnContext(
+            agent.id,
+            batch.map((item) => item.delivery.id),
+          );
       const framed = turnContext
         ? input.map((item, index) =>
             index === 0 && item.type === "text"

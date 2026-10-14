@@ -6,10 +6,13 @@ import {
   type DynamicIslandAgentIdentity,
   type DynamicIslandApprovalItem,
   type DynamicIslandFailureItem,
+  type DynamicIslandMailItem,
   type DynamicIslandPresentation,
   type DynamicIslandPromptItem,
   type DynamicIslandQuestionItem,
   type DynamicIslandTakeoverItem,
+  type GoogleMailNotice,
+  localOnlyApprovalKind,
   type QueueSnapshot,
 } from "@openbot/contracts/ipc";
 
@@ -37,6 +40,12 @@ export interface DynamicIslandText {
   approvalCommand: string;
   approvalFileChange: string;
   approvalPermissions: string;
+  /**
+   * The titles of a local-only send or booking card. Only the desktop shows these cards, so only it
+   * sets them; the card's reason does not repeat the question.
+   */
+  approvalSendMail?: string;
+  approvalBookMeeting?: string;
   /** `userErrorMessage` in the interface language. `fallback` is already translated. */
   errorMessage: (error: unknown, fallback: string) => string;
 }
@@ -52,6 +61,8 @@ export interface DynamicIslandPresentationInput {
   pendingPrompts: Record<string, PromptEvent | BrowserTakeoverEvent | undefined>;
   pendingApprovals: Record<string, AgentApproval | undefined>;
   failedTurns: Record<string, string | undefined>;
+  /** The local mail cards of `gmail_notify`. Only the desktop sets it, for the local server. */
+  mailNotices?: GoogleMailNotice[];
 }
 
 export interface DynamicIslandAgentSource {
@@ -126,6 +137,21 @@ export function createDynamicIslandPresentation(
     };
   }
   if (attention?.mode === "failed") return { serverId: input.serverId, mode: "failed", item: attention.item };
+
+  const notices = (input.mailNotices ?? []).filter((candidate) => agentsById.has(candidate.agentId));
+  const [notice] = notices;
+  const noticeAgent = notice ? agentsById.get(notice.agentId) : undefined;
+  if (notice && noticeAgent) {
+    const item: DynamicIslandMailItem = {
+      noticeId: notice.noticeId,
+      agent: agentIdentity(noticeAgent),
+      kind: notice.kind,
+      from: notice.from.slice(0, 400),
+      subject: notice.subject.slice(0, 1000),
+      summary: notice.summary.slice(0, 500),
+    };
+    return { serverId: input.serverId, mode: "mail", item, remainingCount: islandCount(notices.length - 1) };
+  }
 
   const working = visibleAgents
     .filter((agent) => isAgentWorking(agent.id, input))
@@ -325,19 +351,23 @@ function truncateNullable(value: string | null | undefined): string | null {
 }
 
 function approvalTitle(approval: AgentApproval, text: DynamicIslandText) {
+  const localKind = localOnlyApprovalKind(approval.requestId);
+  if (localKind === "send" && text.approvalSendMail) return text.approvalSendMail;
+  if (localKind === "meeting" && text.approvalBookMeeting) return text.approvalBookMeeting;
   if (approval.kind === "command") return text.approvalCommand;
   if (approval.kind === "file-change") return text.approvalFileChange;
   return text.approvalPermissions;
 }
 
-function presentationPriority(mode: DynamicIslandPresentation["mode"]): 0 | 1 | 2 | 3 | 4 | 5 | 6 {
+function presentationPriority(mode: DynamicIslandPresentation["mode"]): 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 {
   if (mode === "question") return 0;
   if (mode === "approval") return 1;
   if (mode === "takeover") return 2;
   if (mode === "failed") return 3;
-  if (mode === "working") return 4;
-  if (mode === "message") return 5;
-  return 6;
+  if (mode === "mail") return 4;
+  if (mode === "working") return 5;
+  if (mode === "message") return 6;
+  return 7;
 }
 
 function presentationAttentionCount(presentation: DynamicIslandPresentation): number {

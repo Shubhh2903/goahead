@@ -61,11 +61,15 @@ export class ConversationReader {
     return structuredClone(snapshot);
   }
 
-  async readFor(agentId: string, memberId: string): Promise<ConversationWithReadState> {
+  async readFor(
+    agentId: string,
+    memberId: string,
+    options: ConversationMarkerExclusions = {},
+  ): Promise<ConversationWithReadState> {
     const snapshot = await this.read(agentId);
     return {
       ...snapshot,
-      readState: this.#reads.readState(memberId, snapshot),
+      readState: this.#reads.readState(memberId, snapshot, options),
     };
   }
 
@@ -153,9 +157,13 @@ export class ConversationReader {
     return state;
   }
 
-  async markUnread(agentId: string, memberId: string): Promise<ConversationReadState> {
+  async markUnread(
+    agentId: string,
+    memberId: string,
+    options: ConversationMarkerExclusions = {},
+  ): Promise<ConversationReadState> {
     const agent = await this.#store.getOrCreate(agentId);
-    const state = this.#reads.markUnreadForThread(memberId, agent.threadId);
+    const state = this.#reads.markUnreadForThread(memberId, agent.threadId, options);
     this.#hooks.emit({
       type: "conversation-invalidated",
       agentId,

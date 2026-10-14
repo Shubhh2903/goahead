@@ -16,8 +16,10 @@ import {
   type DirectTypingRealtimeEvent,
   type DuplicateAgentResult,
   isAgentEvent,
+  isLocalOnlyApprovalRequestId,
   isTeamRealtimeEvent,
   type SidebarLayoutSnapshot,
+  sharedAgentEvent,
   type TeamMemberSummary,
   type TeamPresenceSnapshot,
   type TeamRealtimeEvent,
@@ -787,7 +789,17 @@ export class TeamApiServer {
     return encodeTeamProtocolV1CurrentEvent(visible, options);
   }
 
-  #broadcastAgentEvent(event: AgentEvent): void {
+  #broadcastAgentEvent(input: AgentEvent): void {
+    // A mail note and a local-only approval (a mail to send, a meeting to book) never leave this
+    // computer. The service emits the local snapshot: when local-only approvals took places in its
+    // budget, or it is not complete, the shared snapshot is built again, with no local-only place.
+    const event =
+      input.type === "runtime-snapshot" &&
+      (!input.snapshot.attentionComplete ||
+        input.snapshot.pendingApprovals.some((approval) => isLocalOnlyApprovalRequestId(approval.requestId)))
+        ? ({ type: "runtime-snapshot", snapshot: this.#options.agents.getRuntimeSnapshot() } satisfies AgentEvent)
+        : sharedAgentEvent(input);
+    if (!event) return;
     if (event.type !== "conversation") {
       this.#broadcastAgentEventToClients(event);
       return;
@@ -853,7 +865,9 @@ export class TeamApiServer {
           else (this.#options.logger ?? logger).warn("Legacy conversation event read is behind its revision.");
           return;
         }
-        this.#broadcastAgentEventToClients({ type: "conversation", snapshot }, "legacy");
+        // The full SQLite read holds the local-only notes too: they never leave this computer.
+        const shared = sharedAgentEvent({ type: "conversation", snapshot });
+        if (shared) this.#broadcastAgentEventToClients(shared, "legacy");
       })().catch((error: unknown) => {
         forget();
         (this.#options.logger ?? logger).warn(

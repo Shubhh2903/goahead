@@ -231,6 +231,8 @@ export class OpenBotDatabase {
       excludeRoutineEvents?: boolean;
       excludeRoutineRunEvents?: boolean;
       excludeHostedSiteEvents?: boolean;
+      /** A cursor for another device never rests on a note that stays on this computer. */
+      excludeLocalOnly?: boolean;
     } = {},
   ): string | null {
     return this.#conversations.supportedConversationCursor(threadId, throughMessageId, options);

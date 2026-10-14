@@ -39,6 +39,7 @@ export function compactRuntimeApproval(approval: AgentApproval): AgentRuntimeSna
   return {
     ...approval,
     truncated:
+      approval.truncated === true ||
       [approval.command, approval.cwd, approval.reason, approval.grantRoot].some(
         (value) => value !== null && value.length > AGENT_RUNTIME_TEXT_LIMIT,
       ) ||
@@ -136,6 +137,8 @@ export interface RuntimeSnapshotSources {
   turn: Pick<TurnLifecycle, "failedTurns">;
   attention: Pick<AttentionRegistry, "runtimeAttention">;
   usageLimits: Pick<UsageLimitGate, "limitedAgents">;
+  /** `shared` leaves out the local-only approvals, also from the attention budget. */
+  scope?: "local" | "shared";
 }
 
 /** The runtime view of every agent: active turns, queued work, latest messages and attention. */
@@ -147,6 +150,7 @@ export function buildRuntimeSnapshot({
   turn,
   attention,
   usageLimits,
+  scope = "local",
 }: RuntimeSnapshotSources): AgentRuntimeSnapshot {
   const runtimeAgents: AgentRuntimeSnapshot["agents"] = agents.map((agent) => ({
     id: agent.id,
@@ -199,7 +203,7 @@ export function buildRuntimeSnapshot({
       turn.failedTurns(),
     ),
     latestMessages,
-    ...attention.runtimeAttention(),
+    ...attention.runtimeAttention(scope),
     failedTurns: [...turn.failedTurns()].map(([agentId, turnId]) => ({ agentId, turnId })),
     usageLimits: usageLimits.limitedAgents(),
   });

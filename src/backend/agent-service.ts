@@ -7,6 +7,7 @@ import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
   AccountUsage,
   AgentAnalyticsInput,
+  AgentApproval,
   AgentEvent,
   AgentHandoff,
   AgentMemory,
@@ -91,8 +92,12 @@ import {
   type BusyMessageMode,
   CONTEXT_RESET_ITEM_TYPE,
   DEFAULT_BUSY_MESSAGE_MODE,
+  GOOGLE_APPROVAL_KEY_PREFIX,
+  GOOGLE_MAIL_NOTICE_ITEM_TYPE,
+  googleApprovalKey,
   isContextResetMarker,
   type QueueSteerFallback,
+  sharedRuntimeSnapshot,
   workspaceAccessEnforced,
 } from "@openbot/contracts/ipc";
 import { ContextResetBusyError } from "@openbot/contracts/team-protocol/context-reset-v1";
@@ -103,6 +108,7 @@ import { AgentMemories } from "./agent/agent-memories";
 import { AgentRemoval } from "./agent/agent-removal";
 import type { ApprovalAutomationPolicy } from "./agent/approval-automation";
 import { AttachmentGateway } from "./agent/attachment-gateway";
+import type { ApprovalAnswerOrigin } from "./agent/attention-registry";
 import { AttentionRegistry } from "./agent/attention-registry";
 import { BootRecovery } from "./agent/boot-recovery";
 import { BrowserUploads } from "./agent/browser-uploads";
@@ -158,6 +164,14 @@ import type { ProviderSession } from "./database/provider-sessions";
 import type { HostMemory } from "./host-memory";
 import type { MailboxStore } from "./mailbox-store";
 import { McpServerStore } from "./mcp-server-store";
+import {
+  GOOGLE_MAIL_AGENT_INSTRUCTIONS,
+  type GoogleApprovalCard,
+  GoogleApprovalFailedError,
+  type GoogleTurnOrigin,
+  type GoogleWorkspace,
+  isSlackOwnerDirectTurn,
+} from "./messaging/google-tools";
 import { MessagingThreads } from "./messaging/messaging-threads";
 import type { PasswordVault } from "./password-vault";
 import { decodeRecordResponse } from "./protocol";
@@ -260,6 +274,12 @@ export interface AgentServiceOptions {
   /** The 1Password vault the user shared with OpenBot, or `null`. The browser fills logins from it. */
   passwordVault?: PasswordVault | null;
   /**
+   * The Gmail and Google Calendar port of the main process, or `null`. Only a mail agent gets the
+   * tools: in a turn of the person at this computer, or, for a Slack orchestrator, in the Slack
+   * owner's own direct message with GoAhead.
+   */
+  googleWorkspace?: GoogleWorkspace | null;
+  /**
    * The memory of a hosted server, or `null` on each other computer. With it, no new turn starts
    * while memory is low, and only a fixed number of turns run at the same time.
    */
@@ -309,6 +329,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   readonly #duplication: DuplicationGate;
   readonly #removal: AgentRemoval;
   readonly #tools: OpenBotToolRouter;
+  readonly #googleWorkspace: GoogleWorkspace | null;
   readonly #sidebarLayout: AgentSidebar | null;
   readonly #localSkillTools?: () => LocalSkillTools;
   readonly #routineFlowTools: (() => RoutineFlowTools) | undefined;
@@ -824,6 +845,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         released: () => this.channels.wake(),
       },
     });
+    this.#googleWorkspace = options.googleWorkspace ?? null;
     this.#drain = new DrainScheduler({
       channels: this.channels,
       messaging: this.messaging,
@@ -845,12 +867,18 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         isStopping: () => this.#stopping,
         servesModel: (model) => this.#endpoints.serves(model),
         requeueChannelDelivery: (deliveryId) => this.#requeueChannelDelivery(deliveryId),
-        // Only the owner's own messages in the app: a Slack message frames the map itself, and
-        // asking Chief from the inbox adds it to its prompt.
-        turnContext: (agentId, deliveryIds) =>
-          deliveryIds.some((id) => this.#localOwnerDeliveries.has(id))
-            ? this.messaging.orchestratorProjectMap(agentId)
-            : null,
+        // The project map: only the owner's own messages in the app. A Slack message frames the map
+        // itself, and asking Chief from the inbox adds it to its prompt. The Gmail rules: a mail
+        // agent's turn that may use the Google tools, while Google is connected.
+        turnContext: (agentId, deliveryIds) => {
+          const parts = [
+            deliveryIds.some((id) => this.#localOwnerDeliveries.has(id))
+              ? this.messaging.orchestratorProjectMap(agentId)
+              : null,
+            this.#googleMailContext(agentId, deliveryIds),
+          ].filter((part): part is string => part !== null);
+          return parts.length > 0 ? parts.join("\n\n") : null;
+        },
       },
     });
     this.#browser.onControlChanged((state) => {
@@ -945,6 +973,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       routineFlowTools: this.#routineFlowTools,
       approvalAutomation: options.approvalAutomation,
       messaging: this.messaging,
+      googleWorkspace: this.#googleWorkspace,
       visualPreview: options.visualPreview,
       hooks: {
         listAgents: () => this.listAgents(),
@@ -959,6 +988,12 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         runsTurn: (agentId) => this.#runsTurn(agentId),
         isLocalOwnerTurn: (agentId, turnId) => this.#isLocalOwnerTurn(agentId, turnId),
         isOwnerOriginTurn: (agentId, turnId) => this.#isOwnerOriginTurn(agentId, turnId),
+        googleTurnOrigin: (agentId, threadId, turnId) => this.#googleTurnOrigin(agentId, threadId, turnId),
+        googleMailAgents: () => ({
+          pickedAgentId: this.#googleWorkspace?.mailAgentId() ?? null,
+          orchestratorIds: this.messaging.orchestratorAgentIds(),
+        }),
+        surfaceGoogleApproval: (card) => this.surfaceGoogleApproval(card),
         noteHandOff: (agentId, turnId, deliveryIds) => this.#noteHandOff(agentId, turnId, deliveryIds),
         interrupt: (agentId, turnId, mayStop) => this.#interruptTurn(agentId, turnId, undefined, mayStop),
         turnActivity: (agentId, turnId) => ({
@@ -1007,8 +1042,12 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     return ids;
   }
 
-  getRuntimeSnapshot(): AgentRuntimeSnapshot {
-    return buildRuntimeSnapshot({
+  /**
+   * `shared` (the default) leaves out the approvals that only the person at this computer may see:
+   * the Team API and the phone read this. The desktop windows of this computer read `local`.
+   */
+  getRuntimeSnapshot(scope: "local" | "shared" = "shared"): AgentRuntimeSnapshot {
+    const snapshot = buildRuntimeSnapshot({
       agents: this.listAgents(),
       conversation: this.#conversation,
       database: this.#store.database,
@@ -1016,7 +1055,9 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       turn: this.#turn,
       attention: this.#attention,
       usageLimits: this.#usageLimits,
+      scope,
     });
+    return scope === "local" ? snapshot : sharedRuntimeSnapshot(snapshot);
   }
 
   /**
@@ -1680,6 +1721,37 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     this.#threads.endThreadContext(threadId);
   }
 
+  /**
+   * A note from GoAhead in an agent's chat: a mail notice, a send result or a Meet link. It is a
+   * system message: it starts no turn and goes to no provider. Only this desktop shows it: the Team
+   * API, search and the phone drop it (`isLocalOnlyConversationMessage`). An unknown agent throws.
+   */
+  postGoogleInformation(agentId: string, text: string): void {
+    this.#conversation.requireKnownAgent(agentId);
+    const database = this.#store.database;
+    this.#conversation.withConversationTransaction(agentId, ({ threadId, snapshot }) => {
+      const message: ConversationMessage = {
+        id: `google-notice-${randomUUID()}`,
+        author: "system",
+        source: "system",
+        text,
+        createdAt: new Date().toISOString(),
+        status: "completed",
+        itemType: GOOGLE_MAIL_NOTICE_ITEM_TYPE,
+      };
+      snapshot.messages.push(message);
+      sortConversationMessages(snapshot.messages);
+      snapshot.revision = database.appendConversationMessage({
+        agentId,
+        threadId,
+        activeTurnId: snapshot.activeTurnId,
+        message,
+        eventType: "google.mail-notice",
+      });
+      return { result: threadId, snapshot };
+    });
+  }
+
   resolveAvatar(agentId: string): { path: string; mimeType: AvatarImageInput["mimeType"]; version: string } | null {
     return this.#store.resolveAvatar(agentId);
   }
@@ -1898,8 +1970,12 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     return this.#reader.read(agentId);
   }
 
-  readConversationFor(agentId: string, memberId: string): Promise<ConversationWithReadState> {
-    return this.#reader.readFor(agentId, memberId);
+  readConversationFor(
+    agentId: string,
+    memberId: string,
+    options?: ConversationMarkerExclusions,
+  ): Promise<ConversationWithReadState> {
+    return this.#reader.readFor(agentId, memberId, options);
   }
 
   readConversationPageFor(
@@ -1964,8 +2040,12 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     return this.#reader.markRead(agentId, memberId, throughMessageId, options);
   }
 
-  markConversationUnread(agentId: string, memberId: string): Promise<ConversationReadState> {
-    return this.#reader.markUnread(agentId, memberId);
+  markConversationUnread(
+    agentId: string,
+    memberId: string,
+    options?: ConversationMarkerExclusions,
+  ): Promise<ConversationReadState> {
+    return this.#reader.markUnread(agentId, memberId, options);
   }
 
   prepareAttachments(paths: string[]): Promise<DraftAttachment[]> {
@@ -2154,6 +2234,32 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         ({ delivery }) => this.#localOwnerDeliveries.has(delivery.id) || this.#ownerHandOffDeliveries.has(delivery.id),
       )
     );
+  }
+
+  #googleTurnOrigin(agentId: string, threadId: string, turnId: string): GoogleTurnOrigin {
+    if (this.#isLocalOwnerTurn(agentId, turnId)) return "local-owner";
+    const deliveryIds = this.#mailbox.findDeliveriesByTurn(agentId, turnId).map(({ delivery }) => delivery.id);
+    return isSlackOwnerDirectTurn(this.messaging.slackTurnFacts(threadId, deliveryIds)) ? "slack-owner-dm" : "other";
+  }
+
+  /**
+   * The Gmail rules for the start of a turn, or null. Only for a mail agent while Google is
+   * connected, and only for a turn that may use the Google tools: every delivery is the local
+   * owner's, or, for a Slack orchestrator, the Slack owner's own message in their direct message.
+   */
+  #googleMailContext(agentId: string, deliveryIds: readonly string[]): string | null {
+    if (!this.#googleWorkspace?.connected() || deliveryIds.length === 0) return null;
+    const picked = this.#googleWorkspace.mailAgentId() === agentId;
+    const orchestrator = this.messaging.orchestratorAgentIds().includes(agentId);
+    if (!picked && !orchestrator) return null;
+    if (deliveryIds.every((id) => this.#localOwnerDeliveries.has(id))) return GOOGLE_MAIL_AGENT_INSTRUCTIONS;
+    if (!orchestrator) return null;
+    const threadIds = new Set(deliveryIds.map((id) => this.messaging.threadForDelivery(id)));
+    const [threadId] = threadIds;
+    if (threadIds.size !== 1 || !threadId) return null;
+    return isSlackOwnerDirectTurn(this.messaging.slackTurnFacts(threadId, deliveryIds))
+      ? GOOGLE_MAIL_AGENT_INSTRUCTIONS
+      : null;
   }
 
   /**
@@ -2347,8 +2453,53 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     await this.#attention.respondToPrompt(input);
   }
 
-  async respondToApproval(input: RespondToApprovalInput): Promise<void> {
-    await this.#attention.respondToApproval(input);
+  /** `from` is `local-owner` only for the desktop app and the Dynamic Island of this computer. */
+  async respondToApproval(input: RespondToApprovalInput, from: ApprovalAnswerOrigin = "other"): Promise<void> {
+    await this.#attention.respondToApproval(input, from);
+  }
+
+  /** The full open local-only approvals, for a desktop window that loads again. */
+  localOnlyApprovals(): AgentApproval[] {
+    return this.#attention.localApprovals();
+  }
+
+  /**
+   * Google was disconnected, or another account signed in: the open send and booking approvals
+   * belong to the old account. They leave the state file and the cards close, with no answer.
+   */
+  async clearGoogleApprovals(): Promise<void> {
+    const workspace = this.#googleWorkspace;
+    if (!workspace) return;
+    await workspace.clearApprovals();
+    this.#attention.dropLocalApprovals(GOOGLE_APPROVAL_KEY_PREFIX);
+  }
+
+  /**
+   * A Google send or booking card, at the tool call or again at the start of the app. When Google
+   * refuses the approved action, the new card that the failure stored is shown, so the person can
+   * try again; the error still reaches the caller.
+   */
+  surfaceGoogleApproval(card: GoogleApprovalCard): void {
+    const workspace = this.#googleWorkspace;
+    if (!workspace) return;
+    this.#attention.surfaceLocalApproval(
+      {
+        key: googleApprovalKey(card.kind, card.approvalId),
+        agentId: card.agentId,
+        threadId: card.threadId,
+        turnId: card.turnId,
+        detail: card.detail,
+        complete: card.complete,
+      },
+      async (decision) => {
+        try {
+          await workspace.answerApproval(card.approvalId, decision);
+        } catch (error) {
+          if (error instanceof GoogleApprovalFailedError && error.retry) this.surfaceGoogleApproval(error.retry);
+          throw error;
+        }
+      },
+    );
   }
 
   async respondToBrowserSecret(input: RespondToBrowserSecretInput): Promise<void> {
@@ -2372,7 +2523,8 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   }
 
   #emitRuntimeSnapshot(): void {
-    this.#emit({ type: "runtime-snapshot", snapshot: this.getRuntimeSnapshot() });
+    // The full snapshot: the Team API filters the event with `sharedAgentEvent`.
+    this.#emit({ type: "runtime-snapshot", snapshot: this.getRuntimeSnapshot("local") });
   }
 
   #emit(event: AgentEvent): void {

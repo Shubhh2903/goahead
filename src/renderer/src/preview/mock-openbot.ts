@@ -108,6 +108,7 @@ import { createMockBitwardenConnector } from "./mock-bitwarden-connector";
 import { createMockBrowser, type MockBrowserOptions } from "./mock-browser";
 import { createMockChannels } from "./mock-channels";
 import { createMockGitHubConnector } from "./mock-github-connector";
+import { createMockGoogleConnector } from "./mock-google-connector";
 import { createMockHandoffs } from "./mock-handoffs";
 import { createMockHostUpdate, type MockHostUpdateOptions } from "./mock-host-update";
 import { createMockHostedServers } from "./mock-hosted-servers";
@@ -625,6 +626,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
       },
     },
     githubConnector: createMockGitHubConnector(),
+    googleConnector: createMockGoogleConnector(),
     onePasswordConnector: createMockOnePasswordConnector(),
     bitwardenConnector: createMockBitwardenConnector(),
     billing: createMockBilling(),

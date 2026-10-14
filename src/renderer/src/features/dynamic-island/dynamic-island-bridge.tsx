@@ -1,6 +1,7 @@
-import type { DynamicIslandAction } from "@openbot/contracts/ipc";
+import type { DynamicIslandAction, GoogleMailNotice } from "@openbot/contracts/ipc";
+import { LOCAL_SERVER_ID } from "@openbot/contracts/ipc";
 import { useText } from "@openbot/ui/text";
-import { createEffect, onSettled, untrack } from "solid-js";
+import { createEffect, createSignal, onSettled, untrack } from "solid-js";
 import { actionToast } from "../../action-toast";
 import { withoutAgent } from "../../app-message-projection";
 import { useNavigation } from "../../navigation";
@@ -51,6 +52,8 @@ export function DynamicIslandBridge() {
   const { selectAgent, openAgentMessage } = useNavigation();
   /** The handoff this bridge published, so it never consumes or clears its own. */
   let publishedAction: DynamicIslandAction | null = null;
+  /** The mail cards of this computer. Main sends the whole list on each change. */
+  const [mailNotices, setMailNotices] = createSignal<GoogleMailNotice[]>([]);
 
   createEffect(
     () => {
@@ -73,6 +76,7 @@ export function DynamicIslandBridge() {
         pendingPrompts: pendingPrompts(),
         pendingApprovals: pendingApprovals(),
         failedTurns: failedTurns(),
+        mailNotices: activeServerId() === LOCAL_SERVER_ID ? mailNotices() : [],
       };
     },
     (input) => {
@@ -109,13 +113,22 @@ export function DynamicIslandBridge() {
 
   onSettled(() => {
     if (platform.landingPreview) return;
-    return dynamicIslandPort().dynamicIsland.onAction((action) => {
+    void dynamicIslandPort()
+      .googleConnector.notices()
+      .then(setMailNotices)
+      .catch(() => undefined);
+    const stopNotices = dynamicIslandPort().googleConnector.onNoticesChanged(setMailNotices);
+    const stopActions = dynamicIslandPort().dynamicIsland.onAction((action) => {
       void handleDynamicIslandAction(action).catch((error) => {
         actionToast.error(t("island.error.openRemoteTitle"), {
           description: errorMessage(error, t("island.error.openRemote")),
         });
       });
     });
+    return () => {
+      stopNotices();
+      stopActions();
+    };
   });
 
   async function handleDynamicIslandAction(action: DynamicIslandAction): Promise<void> {
@@ -150,6 +163,12 @@ export function DynamicIslandBridge() {
       dynamicIslandCoordinator.resolveAction(action);
       publishDynamicIslandPresentation();
       return;
+    }
+    if (action.type === "mail-action") {
+      // Main already used the notice. The island drops the card; the other buttons open the agent that handles mail.
+      dynamicIslandCoordinator.resolveAction(action);
+      publishDynamicIslandPresentation();
+      if (action.action === "dismiss") return;
     }
     if (activeServerId() !== action.serverId) {
       // The switch replaces this bridge along with the rest of the scope, so the

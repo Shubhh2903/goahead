@@ -11,6 +11,7 @@ import type { IncomingMessage } from "node:http";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   type ConversationMessageSender,
+  type ConversationPage,
   type ConversationPageAnchor,
   type ConversationSnapshot,
   type ConversationWithReadState,
@@ -21,12 +22,14 @@ import {
   isAgentProvider,
   isAvatarHue,
   isAvatarSeed,
+  isLocalOnlyConversationMessage,
   isReasoningEffort,
   MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX,
   type RespondToApprovalInput,
   type RespondToBrowserTakeoverInput,
   ROUTINE_EVENT_ITEM_TYPE_PREFIX,
   ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX,
+  sharedAgentEvent,
   type TeamMemberSummary,
   type UpdateAgentInput,
 } from "@openbot/contracts/ipc";
@@ -87,6 +90,27 @@ export function conversationForCapabilities(
   };
 }
 
+/**
+ * A page as a Team API client may see it: no message that must stay on this computer. A read cursor
+ * on a dropped note walks back to the newest message of the page that stays.
+ */
+export function conversationPageForTeam(page: ConversationPage): ConversationPage {
+  const event = sharedAgentEvent({ type: "conversation-page", page });
+  if (event?.type !== "conversation-page" || event.page === page) return page;
+  const shared = event.page;
+  const cursor = shared.readState?.throughMessageId;
+  if (!shared.readState || !cursor) return shared;
+  const kept = new Set(shared.messages.map((message) => message.id));
+  const boundary = page.messages.findIndex((message) => message.id === cursor);
+  for (let index = boundary; index >= 0; index -= 1) {
+    const message = page.messages[index];
+    if (message && kept.has(message.id)) {
+      return { ...shared, readState: { ...shared.readState, throughMessageId: message.id } };
+    }
+  }
+  return shared;
+}
+
 function supportedConversationCursor(
   messages: ConversationSnapshot["messages"],
   throughMessageId: string | null,
@@ -105,8 +129,11 @@ export function markerExclusionsForCapabilities(capabilities: ReadonlySet<string
   excludeRoutineEvents: boolean;
   excludeRoutineRunEvents: boolean;
   excludeHostedSiteEvents: boolean;
+  excludeLocalOnly: boolean;
 } {
   return {
+    // A Team API reader is never this desktop: a mail note is not unread for it.
+    excludeLocalOnly: true,
     excludeRoutineEvents: !capabilities.has("routine-event-markers"),
     excludeRoutineRunEvents: !capabilities.has("routine-run-event-markers"),
     excludeHostedSiteEvents: !capabilities.has("hosted-site-event-markers"),
@@ -114,6 +141,8 @@ export function markerExclusionsForCapabilities(capabilities: ReadonlySet<string
 }
 
 function markerSupported(itemType: string | undefined, capabilities: ReadonlySet<string>): boolean {
+  // A mail note stays on this computer, whatever the client understands.
+  if (isLocalOnlyConversationMessage({ itemType })) return false;
   if (itemType?.startsWith(ROUTINE_EVENT_ITEM_TYPE_PREFIX)) return capabilities.has("routine-event-markers");
   // Paged history drops suggestions with routine events, so live events drop them the same way.
   if (itemType?.startsWith(MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX)) return capabilities.has("routine-event-markers");

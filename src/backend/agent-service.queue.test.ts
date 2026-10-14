@@ -380,6 +380,8 @@ describe.sequential("AgentService: queue", () => {
         { id: "antigravity", state: "not-installed", version: null },
         { id: "cursor", state: "not-installed", version: null },
         { id: "cline", state: "not-installed", version: null },
+        { id: "pi", state: "not-installed", version: null },
+        { id: "muse", state: "not-installed", version: null },
         { id: "acp", state: "not-installed", version: null },
       ],
     });
@@ -472,6 +474,8 @@ describe.sequential("AgentService: queue", () => {
           { id: "antigravity", state: "not-installed" },
           { id: "cursor", state: "not-installed" },
           { id: "cline", state: "not-installed" },
+          { id: "pi", state: "not-installed" },
+          { id: "muse", state: "not-installed" },
           { id: "acp", state: "not-installed" },
         ],
       });
@@ -487,6 +491,8 @@ describe.sequential("AgentService: queue", () => {
           { id: "antigravity", state: "not-installed" },
           { id: "cursor", state: "not-installed" },
           { id: "cline", state: "not-installed" },
+          { id: "pi", state: "not-installed" },
+          { id: "muse", state: "not-installed" },
           { id: "acp", state: "not-installed" },
         ],
       });

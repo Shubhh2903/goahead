@@ -22,7 +22,11 @@ import { useServers } from "../servers/servers-context";
 import { useSidebar } from "../sidebar/sidebar-context";
 import { claimErrorToast, readableAgentError } from "./agent-error-text";
 import { createAgentEventSounds } from "./agent-event-sounds";
-import { reconcileAttentionApprovals, reconcileAttentionPrompts } from "./agent-runtime-snapshot";
+import {
+  approvalsAfterTurnCompleted,
+  reconcileAttentionApprovals,
+  reconcileAttentionPrompts,
+} from "./agent-runtime-snapshot";
 import { useAgents } from "./agents-context";
 import { agentsPort } from "./agents-port";
 
@@ -205,7 +209,7 @@ export function AgentEventBridge() {
           }
           return { ...current, [event.agentId]: undefined };
         });
-        setPendingApprovals((current) => ({ ...current, [event.agentId]: undefined }));
+        setPendingApprovals((current) => approvalsAfterTurnCompleted(current, event.agentId));
         if (event.status === "completed") {
           markReplyCompleted(event.agentId);
           playCompletionSoundForAgentEvent(event, agentList());

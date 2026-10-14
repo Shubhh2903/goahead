@@ -335,6 +335,7 @@ describe("TeamApiServer conversations", () => {
       excludeRoutineEvents: true,
       excludeRoutineRunEvents: true,
       excludeHostedSiteEvents: true,
+      excludeLocalOnly: true,
     });
     await expect(
       jsonRequest(base, "/v1/agents/chief/conversation-page?limit=10", {
@@ -346,6 +347,7 @@ describe("TeamApiServer conversations", () => {
       excludeRoutineEvents: false,
       excludeRoutineRunEvents: false,
       excludeHostedSiteEvents: false,
+      excludeLocalOnly: true,
     });
     await expect(jsonRequest(base, "/v1/agents/conversation-reads", { token: token })).resolves.toEqual({
       chief: { unreadCount: 0, firstUnreadMessageId: null, throughMessageId: "message-1" },
@@ -354,6 +356,7 @@ describe("TeamApiServer conversations", () => {
       excludeRoutineEvents: true,
       excludeRoutineRunEvents: true,
       excludeHostedSiteEvents: true,
+      excludeLocalOnly: true,
     });
     await expect(
       jsonRequest(base, "/v1/agents/conversation-reads", {
@@ -367,6 +370,7 @@ describe("TeamApiServer conversations", () => {
       excludeRoutineEvents: false,
       excludeRoutineRunEvents: false,
       excludeHostedSiteEvents: false,
+      excludeLocalOnly: true,
     });
     await expect(
       jsonRequest(base, "/v1/agents/chief/conversation/read", {
@@ -427,7 +431,11 @@ describe("TeamApiServer conversations", () => {
         body: {},
       }),
     ).resolves.toEqual({ unreadCount: 1, firstUnreadMessageId: "message-1", throughMessageId: null });
-    expect(markConversationUnread).toHaveBeenCalledWith("chief", store.authenticate(token)?.id);
+    expect(markConversationUnread).toHaveBeenCalledWith(
+      "chief",
+      store.authenticate(token)?.id,
+      expect.objectContaining({ excludeLocalOnly: true }),
+    );
     const unsupported = await fetch(`${base}/v1/agents/chief/conversation/unread`, {
       method: "POST",
       headers: {

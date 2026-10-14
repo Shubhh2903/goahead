@@ -1,4 +1,4 @@
-import type { CentralAuthUser, UpdateAgentInput } from "@openbot/contracts/ipc";
+import { type CentralAuthUser, isLocalOnlyApprovalRequestId, type UpdateAgentInput } from "@openbot/contracts/ipc";
 import { hasVisibleToasts } from "@openbot/ui";
 import { createMemo } from "solid-js";
 import { useNavigation } from "../../navigation";
@@ -161,6 +161,8 @@ export function WorkspaceConversation(props: { account: () => CentralAuthUser })
     const agent = activeAgent();
     const approval = activeApproval();
     if (!agent || !approval || !autoApproveEditable()) return undefined;
+    // A mail to send or a meeting to book is approved each time: no standing grant covers it.
+    if (isLocalOnlyApprovalRequestId(approval.requestId)) return undefined;
     return async () => {
       await writeAgentAutoApprove(agent.id, true);
       if (!scopeIsCurrent()) return false;

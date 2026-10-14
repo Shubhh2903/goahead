@@ -1,12 +1,16 @@
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import solidPlugin from "@solidjs/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import { parseEnvFile } from "./scripts/release-local-lib";
 
 const rendererPort = readRendererPort(process.env.OPENBOT_DEV_RENDERER_PORT);
 
 export default defineConfig({
   main: {
+    // The Google OAuth client of this build. See `googleClientDefine` below.
+    define: googleClientDefine(),
     // Workspace sources ship as TypeScript and must be bundled for the packaged app.
     plugins: [
       externalizeDepsPlugin({
@@ -72,4 +76,20 @@ function readRendererPort(value: string | undefined): number | undefined {
     throw new Error("OPENBOT_DEV_RENDERER_PORT must be an integer from 1024 to 65535.");
   }
   return port;
+}
+
+/**
+ * Writes the Google OAuth "Desktop app" client into the main bundle (`google-connector-config.ts`).
+ * A value in the shell wins over `.env.google`, which git ignores. With no value, the build offers no
+ * Google connection. The names are in `.env.google.example`.
+ */
+function googleClientDefine(): Record<string, string> {
+  const file = existsSync(".env.google")
+    ? parseEnvFile(readFileSync(".env.google", "utf8"))
+    : new Map<string, string>();
+  const value = (name: string) => process.env[name]?.trim() || file.get(name)?.trim() || "";
+  return {
+    "process.env.OPENBOT_GOOGLE_CLIENT_ID": JSON.stringify(value("OPENBOT_GOOGLE_CLIENT_ID")),
+    "process.env.OPENBOT_GOOGLE_CLIENT_SECRET": JSON.stringify(value("OPENBOT_GOOGLE_CLIENT_SECRET")),
+  };
 }

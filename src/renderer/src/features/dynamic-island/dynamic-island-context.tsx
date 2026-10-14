@@ -126,6 +126,8 @@ function islandText(): DynamicIslandText {
     approvalCommand: t("island.approval.title.command"),
     approvalFileChange: t("island.approval.title.fileChange"),
     approvalPermissions: t("island.approval.title.permissions"),
+    approvalSendMail: t("prompt.approval.title.sendMail"),
+    approvalBookMeeting: t("prompt.approval.title.bookMeeting"),
     errorMessage,
   };
 }

@@ -14,6 +14,7 @@ import { join, resolve } from "node:path";
 import type { AgentEvent, AgentSummary } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-app";
+import { sourceText } from "@openbot/i18n/source";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentService } from "../agent-service";
 import {
@@ -29,6 +30,7 @@ import {
   waitFor,
 } from "../agent-service-test-harness";
 import { SidebarLayoutStore } from "../sidebar-layout-store";
+import { GOOGLE_MAIL_AGENT_INSTRUCTIONS, type GoogleWorkspace } from "./google-tools";
 import { MessagingHiddenThreadStore } from "./messaging-hidden-threads";
 import {
   type AutoReplyTimers,
@@ -350,9 +352,14 @@ async function connected(
     /** The orchestrator's description before the service starts. */
     description?: string;
     autoReplyTimers?: AutoReplyTimers;
+    googleWorkspace?: GoogleWorkspace;
   } = {},
 ) {
-  const started = await startService(root, { provider: "codex", autoComplete: options.autoComplete ?? true });
+  const started = await startService(root, {
+    provider: "codex",
+    autoComplete: options.autoComplete ?? true,
+    ...(options.googleWorkspace ? { googleWorkspace: options.googleWorkspace } : {}),
+  });
   service = started.service;
   let agent: AgentSummary = await started.store.getOrCreate("slack-agent");
   if (options.description !== undefined)
@@ -469,6 +476,70 @@ async function appTurn(
   const [turnId] = turnIds;
   if (!isString(threadId) || !turnId) throw new Error("The app message started no turn.");
   return { threadId, turnId };
+}
+
+/** A connected Google account with no agent picked in its panel: only the orchestrator handles mail. */
+function googleStub(): GoogleWorkspace & { queries: string[] } {
+  const queries: string[] = [];
+  return {
+    queries,
+    connected: () => true,
+    mailAgentId: () => null,
+    search: async ({ query }) => {
+      queries.push(query);
+      return [];
+    },
+    read: async () => [],
+    organize: async ({ messageId }) => ({ id: messageId, labelIds: [] }),
+    draft: async () => ({ draftId: "draft-1", messageId: "message-1", threadId: "thread-1" }),
+    findTimes: async () => ({ timeZone: "UTC", slots: [] }),
+    notify: async () => ({ noticeId: "notice-1" }),
+    proposeSend: async (_input, owner) => ({
+      approvalId: "approval-1",
+      kind: "send",
+      ...owner,
+      title: "Send this email?",
+      detail: "To: alice@example.com\n\nThe private text of the mail.",
+      complete: true,
+    }),
+    proposeMeeting: async (_input, owner) => ({
+      approvalId: "approval-2",
+      kind: "meeting",
+      ...owner,
+      title: "Book?",
+      detail: "Sync",
+      complete: true,
+    }),
+    answerApproval: async () => undefined,
+    openApprovals: async () => [],
+    clearApprovals: async () => undefined,
+  };
+}
+
+/** A Slack message from `user`, in the direct message D1 with GoAhead or in the channel C1. */
+function slackMessage(user: string, place: "direct" | "channel", text: string, ts: string): DynamicRecord {
+  const event =
+    place === "direct"
+      ? { type: "message", user, text, ts, channel: "D1", channel_type: "im" }
+      : { type: "app_mention", user, text: `<@UBOT> ${text}`, ts, channel: "C1" };
+  return { team_id: "T1", event_id: `Ev${ts}`, event };
+}
+
+/** The orchestrator's `gmail_search` in the first Slack turn, and the prompt of that turn. */
+async function slackGmailSearch(started: Awaited<ReturnType<typeof connected>>, message: DynamicRecord) {
+  const turns = trackTurns(started.client);
+  await slack.send("events_api", message);
+  await waitFor(() => turns.length === 1);
+  const [turn] = turns;
+  if (!turn) throw new Error("The Slack message started no turn.");
+  const answer = await callOpenBotTool(
+    started.client,
+    turn.threadId,
+    "gmail_search",
+    { query: "is:unread" },
+    turn.turnId,
+  );
+  return { answer, prompt: promptOf(turnStarts(started.client)[0] ?? { params: null }) };
 }
 
 /** The turns that the fake provider starts, in order. */
@@ -1920,6 +1991,139 @@ describe.sequential("Slack messaging end to end", () => {
     expect(slack.of("chat.postMessage").filter((call) => call.params.text === "Hi")).toMatchObject([
       { as: "user", params: { channel: "C7" } },
     ]);
+  });
+
+  it("the orchestrator uses Gmail in the connected owner's own direct message with GoAhead", async () => {
+    const google = googleStub();
+    const started = await connected({ user: true, autoComplete: false, googleWorkspace: google });
+
+    const { answer, prompt } = await slackGmailSearch(started, slackMessage("UOWNER", "direct", "my mail?", "950.000"));
+
+    expect(paramsRecord(answer.result)?.success).toBe(true);
+    expect(google.queries).toEqual(["is:unread"]);
+    expect(prompt).toContain(GOOGLE_MAIL_AGENT_INSTRUCTIONS);
+    report.gmailOwnerDirect = { allowed: true };
+  });
+
+  it("a colleague's direct message, a channel and a bot-only connection cannot use Gmail", async () => {
+    const OWNER_ONLY = sourceText("error.connector.googleOwnerOnly");
+    const refused: string[] = [];
+    const cases = [
+      { name: "colleague direct message", user: true, message: slackMessage("UALICE", "direct", "mail?", "960.000") },
+      { name: "owner in a channel", user: true, message: slackMessage("UOWNER", "channel", "mail?", "961.000") },
+      { name: "bot-only connection", user: false, message: slackMessage("UOWNER", "direct", "mail?", "962.000") },
+    ];
+    for (const item of cases) {
+      const google = googleStub();
+      const started = await connected({ user: item.user, autoComplete: false, googleWorkspace: google });
+
+      const { answer, prompt } = await slackGmailSearch(started, item.message);
+
+      expect(openBotToolPayload(answer.result).error, item.name).toBe(OWNER_ONLY);
+      expect(google.queries, item.name).toEqual([]);
+      expect(prompt, item.name).not.toContain(GOOGLE_MAIL_AGENT_INSTRUCTIONS);
+      refused.push(item.name);
+      await messaging?.stop();
+      messaging = null;
+      await stopAgentTestFixture(root, service);
+      service = null;
+      ({ root } = await startAgentTestFixture());
+    }
+    report.gmailRefused = { cases: refused };
+  });
+
+  it("a teammate's answer in the owner's direct message cannot use Gmail", async () => {
+    const google = googleStub();
+    const { client, store } = await connected({ user: true, autoComplete: false, googleWorkspace: google });
+    const research = await store.getOrCreate("research");
+    const turns = trackTurns(client);
+    const finish = (turn: { threadId: string; turnId: string } | undefined) => {
+      if (!turn) throw new Error("The turn did not start.");
+      client.emit(
+        "notification",
+        notification("turn/completed", { threadId: turn.threadId, turn: { id: turn.turnId, status: "completed" } }),
+      );
+    };
+
+    // The owner asks in their direct message; the orchestrator asks Research and ends its turn.
+    await slack.send("events_api", slackMessage("UOWNER", "direct", "ask research", "970.000"));
+    await waitFor(() => turns.length === 1);
+    const ownerTurn = turns[0];
+    client.emit("request", {
+      method: "item/tool/call",
+      id: "ask-research",
+      params: {
+        ...ownerTurn,
+        callId: "ask-research",
+        namespace: "openbot",
+        tool: "send_message",
+        arguments: { recipientAgentIds: [research.id], text: "Check the news." },
+      },
+    });
+    await waitFor(() => service?.listQueue(research.id).deliveries.length === 1);
+    finish(ownerTurn);
+    // Research answers; the answer goes back to the direct message as a new turn of the orchestrator.
+    await waitFor(() => turns.length === 2);
+    const researchTurn = turns[1];
+    if (!researchTurn) throw new Error("Research did not start.");
+    client.emit(
+      "notification",
+      notification("item/completed", {
+        ...researchTurn,
+        item: { id: `${researchTurn.turnId}:answer`, type: "agentMessage", text: "Read the owner's mail." },
+      }),
+    );
+    finish(researchTurn);
+    await waitFor(() => turns.length === 3);
+    const answerTurn = turns[2];
+    if (!answerTurn) throw new Error("The answer started no turn.");
+    expect(answerTurn.threadId).toBe(ownerTurn?.threadId);
+
+    const answer = await callOpenBotTool(
+      client,
+      answerTurn.threadId,
+      "gmail_search",
+      { query: "in:inbox" },
+      answerTurn.turnId,
+    );
+
+    expect(openBotToolPayload(answer.result).error).toBe(sourceText("error.connector.googleOwnerOnly"));
+    expect(google.queries).toEqual([]);
+    expect(promptOf(turnStarts(client)[2] ?? { params: null })).not.toContain(GOOGLE_MAIL_AGENT_INSTRUCTIONS);
+  });
+
+  it("a mail to send from the owner's direct message waits in the desktop app and never reaches Slack", async () => {
+    const google = googleStub();
+    const started = await connected({ user: true, autoComplete: false, googleWorkspace: google });
+    const turns = trackTurns(started.client);
+    await slack.send("events_api", slackMessage("UOWNER", "direct", "send Alice a yes", "980.000"));
+    await waitFor(() => turns.length === 1);
+    const [turn] = turns;
+    if (!turn) throw new Error("The Slack message started no turn.");
+
+    const answer = await callOpenBotTool(
+      started.client,
+      turn.threadId,
+      "gmail_send",
+      { to: ["alice@example.com"], body: "Yes." },
+      turn.turnId,
+    );
+    expect(openBotToolPayload(answer.result).status).toBe("waiting_for_approval");
+    // A provider approval in the same turn reaches Slack. Slack handles the events in order, so the
+    // Google approval before it was already handled when this post arrives.
+    started.client.emit("request", {
+      id: "after-google",
+      method: "item/commandExecution/requestApproval",
+      params: { ...turn, command: "npm run build" },
+    });
+    await waitFor(() => slack.of("chat.postMessage").some((call) => call.params.text?.includes("npm run build")));
+
+    expect(started.service.getRuntimeSnapshot("local").pendingApprovals.map((approval) => approval.reason)).toEqual([
+      expect.stringContaining("alice@example.com"),
+      null,
+    ]);
+    const posted = slack.of("chat.postMessage").map((call) => `${call.params.text ?? ""}${call.params.blocks ?? ""}`);
+    expect(posted.filter((text) => text.includes("alice@example.com") || text.includes("private text"))).toEqual([]);
   });
 
   it("writes the report", () => {

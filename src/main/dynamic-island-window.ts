@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type {
   DynamicIslandAction,
+  DynamicIslandMailAction,
   DynamicIslandNotchSize,
   DynamicIslandPreference,
   DynamicIslandPresentation,
@@ -58,6 +59,8 @@ export interface DynamicIslandWindowControllerOptions {
   presentMainWindow: (window: BrowserWindow) => void;
   performHaptic: () => void;
   performCriticalAction: (action: CriticalAction) => Promise<void>;
+  /** A mail card button. Runs before the main window opens, like a critical action. */
+  performMailAction: (action: DynamicIslandMailAction) => Promise<void>;
   logger?: Logger;
   /** Lets the face follow the pointer. Without it, the face does not look around. */
   gaze?: Omit<EmotionGazeOptions, "targets">;
@@ -278,6 +281,13 @@ export class DynamicIslandWindowController {
       } finally {
         if (this.#criticalActions.get(key) === pending) this.#criticalActions.delete(key);
       }
+      return;
+    }
+    if (action.type === "mail-action") {
+      await this.#options.performMailAction(action);
+      const window = await this.#ensureMainWindow();
+      if (action.action !== "dismiss") this.#options.presentMainWindow(window);
+      sendToRenderer(window, IPC_ENDPOINTS.dynamicIsland.action, action);
       return;
     }
     const window = await this.#ensureMainWindow();

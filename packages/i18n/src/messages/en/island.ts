@@ -92,4 +92,12 @@ export const messages = defineMessages("island", {
   "island.emotion.learned": "GoAhead: learned",
   "island.emotion.money": "GoAhead: money",
   "island.emotion.needs-you": "GoAhead: needs you",
+  // The card of one mail notice (the triage session, Gmail's signals, or a mail agent's gmail_notify).
+  "island.label.mail": "GoAhead mail from Gmail",
+  "island.badge.mail": "Mail",
+  "island.status.importantMail": "important mail",
+  "island.status.meetingRequest": "meeting request",
+  "island.action.draftReply": "Draft reply",
+  "island.action.bookMeeting": "Book meeting",
+  "island.action.open": "Open",
 });

@@ -44,6 +44,7 @@ import type {
   CapabilityState,
   CentralAuthState,
   ComputerUseState,
+  DynamicIslandMailAction,
   ProviderRuntimeSnapshot,
   RoutineFlowsChanged,
   VoiceModelStatus,
@@ -58,6 +59,7 @@ import { pasteCodeLoginSupported } from "../backend/agent/cli-code-login";
 import { AgentService } from "../backend/agent-service";
 import { AgentStore } from "../backend/agent-store";
 import { BrowserHost } from "../backend/browser-host";
+import { resolveClaudeCli } from "../backend/cli";
 import { MailboxStore } from "../backend/mailbox-store";
 import { McpOAuth } from "../backend/mcp-oauth-provider";
 import { MessagingHiddenThreadStore } from "../backend/messaging/messaging-hidden-threads";
@@ -117,6 +119,16 @@ import { DynamicIslandWindowController } from "./dynamic-island-window";
 import { githubAppConfig } from "./github-connector-config";
 import { GitHubConnectorService } from "./github-connector-service";
 import { GitHubConnectorStore } from "./github-connector-store";
+import { GmailWatcher } from "./gmail-watcher";
+import { googleEndpoints, googleOAuthClient } from "./google-connector-config";
+import { GoogleConnectorService } from "./google-connector-service";
+import { GoogleConnectorStore } from "./google-connector-store";
+import { performGoogleMailAction } from "./google-mail-actions";
+import { GoogleMailAgentStore } from "./google-mail-agent-store";
+import { createGoogleMailTriage } from "./google-mail-triage";
+import { GoogleNotices } from "./google-notices";
+import { GoogleWatcherStateStore } from "./google-watcher-state";
+import { DesktopGoogleWorkspace } from "./google-workspace";
 import { HostService } from "./host-service";
 import { HostUpdateCoordinator } from "./host-update-coordinator";
 import { CLIENT_USE_WINDOW_MS, HostedServerActivity } from "./hosted-server-activity";
@@ -232,6 +244,9 @@ const MESSAGING_CREDENTIAL_FILE = "openbot-messaging-credentials-v1.json";
 const MCP_OAUTH_FILE = "openbot-mcp-oauth-v1.json";
 /** The one GitHub sign-in of this computer, with the same cipher as the MCP sign-ins. */
 const GITHUB_CONNECTOR_FILE = "openbot-github-connector-v1.json";
+const GOOGLE_CONNECTOR_FILE = "openbot-google-connector-v1.json";
+const GOOGLE_MAIL_AGENT_FILE = "google-mail-agent.json";
+const GOOGLE_WATCHER_STATE_FILE = "google-watcher-state.json";
 /** The 1Password service account token of this computer, with the same cipher. */
 const ONEPASSWORD_CONNECTOR_FILE = "openbot-onepassword-connector-v1.json";
 
@@ -281,7 +296,11 @@ const TEARDOWN_ORDER = {
   teamWebRtcBridge: 100,
   // Before the agent service, so no handoff is sent to an agent while the service stops.
   routineFlows: 103,
+  // Before the Google connection and the agent service: no triage starts while they stop.
+  gmailWatcher: 104,
   mcpOAuthRedirect: 105,
+  // Before the agent service, so no Gmail watcher delivery starts while the service stops.
+  googleConnector: 106,
   // Before the agent service, so no agent is handed a token file that is being removed.
   githubConnector: 107,
   // Before the agent service, so no script starts a run while the service stops.
@@ -341,6 +360,12 @@ export interface ApplicationServices {
   /** Reached by the entry point for one thing only: handing a returning grant to its sign-in. */
   mcpOAuth: McpOAuth;
   githubConnector: GitHubConnectorService;
+  googleConnector: GoogleConnectorService;
+  /** The mail notices of the island card and the macOS notifications. In memory only. */
+  googleNotices: GoogleNotices;
+  googleWatcherState: GoogleWatcherStateStore;
+  /** Restarted by the entry point when the Google connection ends or its account changes. */
+  gmailWatcher: GmailWatcher;
   onePasswordConnector: OnePasswordConnectorService;
   bitwardenConnector: BitwardenConnectorService;
   mailbox: MailboxStore;
@@ -455,6 +480,8 @@ export async function createApplicationServices({
   // two lazy getters, so the gap is visible and bounded.
   let criticalActionTargets: { agents: AgentService; host: HostService; remoteServers: RemoteServerManager } | null =
     null;
+  // Built with the Gmail watcher, below the agent service. A click before then is refused.
+  let mailActionTarget: ((action: DynamicIslandMailAction) => Promise<void>) | null = null;
   const dynamicIsland = new DynamicIslandWindowController({
     platform: process.platform,
     preferencePath: join(app.getPath("userData"), DYNAMIC_ISLAND_PREFERENCE_FILE),
@@ -484,6 +511,10 @@ export async function createApplicationServices({
         { decodeVoid, decodeQueuedMessageReceipt },
         () => host.conversationSender(),
       );
+    },
+    performMailAction: async (action) => {
+      if (!mailActionTarget) throw new Error(sourceText("error.app.notReady"));
+      await mailActionTarget(action);
     },
   });
   teardown.push(TEARDOWN_ORDER.dynamicIsland, "the Dynamic Island", () => dynamicIsland.destroy());
@@ -756,10 +787,16 @@ export async function createApplicationServices({
   // in between - a browser tab left open on a previous run reaches this port on its own. It is
   // held rather than closed over, so that request is refused instead of raising in the listener.
   let mcpOAuthAuthority: McpOAuth | null = null;
+  // The Google sign-in returns to the same listener. Each attempt has its own random `state`, so a
+  // return reaches at most one of the two.
+  let googleConnectorAuthority: GoogleConnectorService | null = null;
   const mcpOAuthRedirect = await startMcpOAuthRedirectServer({
     language,
     deliver: (state, code) => {
-      if (!mcpOAuthAuthority?.receiveAuthorizationCode(state, code)) return false;
+      const accepted =
+        googleConnectorAuthority?.receiveAuthorizationCode(state, code) === true ||
+        mcpOAuthAuthority?.receiveAuthorizationCode(state, code) === true;
+      if (!accepted) return false;
       const current = windows.getMainWindow();
       if (current && !current.isDestroyed()) showMainWindow(current);
       return true;
@@ -794,6 +831,27 @@ export async function createApplicationServices({
   });
   await githubConnector.load();
   teardown.push(TEARDOWN_ORDER.githubConnector, "the GitHub connection", () => githubConnector.dispose());
+  /*
+   * The Gmail and Google Calendar connection. A development build can point it at a fake Google on
+   * this computer (`OPENBOT_DEV_GOOGLE_API_ORIGIN`); the fake answers the consent page itself, so no
+   * browser opens. A packaged build ignores that variable.
+   */
+  const googleDevelopmentOrigin = app.isPackaged ? null : process.env.OPENBOT_DEV_GOOGLE_API_ORIGIN?.trim() || null;
+  const googleEndpointSet = googleEndpoints(googleDevelopmentOrigin);
+  const googleConnector = new GoogleConnectorService({
+    client: googleOAuthClient(),
+    endpoints: googleEndpointSet,
+    store: new GoogleConnectorStore(join(app.getPath("userData"), GOOGLE_CONNECTOR_FILE), secretCipher),
+    mailAgent: new GoogleMailAgentStore(join(app.getPath("userData"), GOOGLE_MAIL_AGENT_FILE)),
+    redirectUrl: mcpOAuthRedirect?.redirectUrl ?? null,
+    openExternal: googleEndpointSet.authorize.startsWith("http://127.0.0.1")
+      ? async (url) => void (await fetch(url))
+      : (url) => shell.openExternal(url),
+    canPersist: () => secretCipher.canPersist(),
+  });
+  googleConnectorAuthority = googleConnector;
+  await googleConnector.load();
+  teardown.push(TEARDOWN_ORDER.googleConnector, "the Google connection", () => googleConnector.dispose());
   /*
    * The 1Password connection. The browser fills logins from it, so the agent service reads it. The
    * login list is read from 1Password in the background; startup does not wait for it.
@@ -938,6 +996,20 @@ export async function createApplicationServices({
   teardown.push(TEARDOWN_ORDER.computerUsePermissionHelp, "the Computer Use permission help", () => {
     computerUsePermissionHelp.close();
   });
+  const googleNotices = new GoogleNotices();
+  const googleWatcherState = new GoogleWatcherStateStore(join(app.getPath("userData"), GOOGLE_WATCHER_STATE_FILE));
+  const googleWatcherStateError = await googleWatcherState.load();
+  if (googleWatcherStateError) {
+    logger.warn("The Gmail watcher state could not be read. It starts again.", toLogValue(googleWatcherStateError));
+  }
+  const googleWorkspace = new DesktopGoogleWorkspace({
+    connector: googleConnector,
+    notices: googleNotices,
+    // Read at each call, after the service below exists.
+    agentExists: (agentId) => service.listAgents().some((agent) => agent.id === agentId),
+    postInformation: (agentId, text) => service.postGoogleInformation(agentId, text),
+    state: googleWatcherState,
+  });
   const service: AgentService = new AgentService({
     store,
     mailbox,
@@ -984,6 +1056,7 @@ export async function createApplicationServices({
     // handing every provider a command it cannot start.
     computerUseMcpServer: () => cuaDriver.mcpServerForProviders(),
     githubConnector,
+    googleWorkspace,
     passwordVault: passwordVaultRouter(onePasswordConnector, bitwardenConnector),
     localSkillTools: () => localSkillTools(skills),
     routineFlowTools: () => routineFlowRuntime,
@@ -993,6 +1066,38 @@ export async function createApplicationServices({
     tables,
   });
   teardown.push(TEARDOWN_ORDER.service, "the agent service", () => service.stop());
+  /*
+   * The Gmail watcher. New mail goes to the restricted triage session, never to an agent turn; the
+   * notes go to the chat of the agent that handles mail. With no such agent, nothing is triaged.
+   */
+  const gmailWatcher = new GmailWatcher({
+    gmail: googleWorkspace.gmail,
+    state: googleWatcherState,
+    active: () => googleConnector.connected(),
+    account: () => googleConnector.status().email,
+    triage: createGoogleMailTriage({
+      mailAgentId: () => googleConnector.mailAgentId(),
+      // A picked agent that was deleted handles no mail.
+      agentExists: (agentId) => service.listAgents().some((agent) => agent.id === agentId),
+      notices: googleNotices,
+      postInformation: (agentId, text) => service.postGoogleInformation(agentId, text),
+      gmail: {
+        read: (messageId) => googleWorkspace.gmail.message(messageId),
+        organize: ({ messageId, add, remove }) => googleWorkspace.gmail.modify(messageId, { add, remove }),
+      },
+      resolveCli: () => resolveClaudeCli({ bundledExecutable: providerRuntimes.bundledExecutables().claude }),
+    }),
+    // Development only: the smoke test polls faster than every 2 minutes.
+    ...(app.isPackaged ? {} : developmentWatchInterval(process.env.OPENBOT_DEV_GMAIL_WATCH_INTERVAL_MS)),
+  });
+  // Started after the agent service initializes (below): a note needs the agents' conversations.
+  teardown.push(TEARDOWN_ORDER.gmailWatcher, "the Gmail watcher", () => gmailWatcher.stop());
+  mailActionTarget = async (action) => {
+    await performGoogleMailAction(action, {
+      notices: googleNotices,
+      sendLocalOwnerMessage: (input) => service.sendLocalOwnerMessage(input),
+    });
+  };
   // Listens only while an agent allows local scripts; see `AutomationServer`.
   const automation = new AutomationServer({
     root: store.automationRoot,
@@ -1710,6 +1815,17 @@ export async function createApplicationServices({
     await automation.sync();
     // Picks up the flows a restart stopped between one agent's answer and the next agent's message.
     await routineFlowRuntime.sweep();
+    gmailWatcher.start();
+    // The send and booking approvals that were open when the app quit. In the background: the draft
+    // text comes from Google.
+    // With Google disconnected, they belong to no account: they are removed.
+    void (
+      googleConnector.status().state === "disconnected"
+        ? service.clearGoogleApprovals()
+        : googleWorkspace.openApprovals().then((cards) => {
+            for (const card of cards) service.surfaceGoogleApproval(card);
+          })
+    ).catch((error: unknown) => logger.warn("The open Google approvals could not be shown again.", toLogValue(error)));
   });
   const describeRestartReadiness = (): RestartReadiness =>
     checkRestartReadiness({
@@ -1857,6 +1973,10 @@ export async function createApplicationServices({
     messaging,
     mcpOAuth,
     githubConnector,
+    googleConnector,
+    googleNotices,
+    googleWatcherState,
+    gmailWatcher,
     onePasswordConnector,
     bitwardenConnector,
     mailbox,
@@ -1909,4 +2029,9 @@ export async function createApplicationServices({
     appliedAccount: signedInState,
     centralAuthInitialization,
   };
+}
+
+function developmentWatchInterval(value: string | undefined): { intervalMs?: number } {
+  const intervalMs = Number(value);
+  return Number.isInteger(intervalMs) && intervalMs >= 1_000 ? { intervalMs } : {};
 }

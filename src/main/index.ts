@@ -32,6 +32,7 @@ import {
 } from "./development-profile";
 import { createDockEmotion, type DockEmotion, resolveEmotionDockIconPath } from "./dock-emotion";
 import { createEmotionFaces } from "./emotion-faces";
+import { googleApprovalsEnd } from "./google-workspace";
 import { hostAllowsTenantLaunch } from "./host-update-coordinator";
 import { takeHostedServerEnvironment } from "./hosted-server-bootstrap";
 import { takeHostingDeveloperKey } from "./hosted-server-service";
@@ -54,6 +55,7 @@ import { customProviderIpcHandlers } from "./ipc/custom-provider-handlers";
 import { registerIpcGroups } from "./ipc/define-ipc-group";
 import { dynamicIslandIpcHandlers } from "./ipc/dynamic-island-handlers";
 import { githubConnectorIpcHandlers } from "./ipc/github-connector-handlers";
+import { googleConnectorIpcHandlers } from "./ipc/google-connector-handlers";
 import { handoffIpcHandlers } from "./ipc/handoff-handlers";
 import { hostAdminIpcHandlers } from "./ipc/host-admin-handlers";
 import { hostedServerIpcHandlers } from "./ipc/hosted-server-handlers";
@@ -284,6 +286,10 @@ const {
   forwardProviderRuntimeStatus,
   forwardGitHubConnectorStatus,
   forwardRoutineFlowsChanged,
+  forwardGoogleConnectorStatus,
+  forwardGoogleMailNotices,
+  notifyGoogleMail,
+  notifyGoogleSignInExpired,
   forwardOnePasswordConnectorStatus,
   forwardBitwardenConnectorStatus,
   forwardMessagingThreadsChanged,
@@ -453,6 +459,8 @@ function registerIpcHandlers({
   skills,
   hostedSites,
   githubConnector,
+  googleConnector,
+  googleNotices,
   onePasswordConnector,
   bitwardenConnector,
   billing,
@@ -511,6 +519,7 @@ function registerIpcHandlers({
     ...skillIpcHandlers({ skills, getMainWindow, translate: language.translate }),
     ...hostedSiteIpcHandlers({ hostedSites, remoteServers, getMainWindow, translate: language.translate }),
     ...githubConnectorIpcHandlers({ githubConnector }),
+    ...googleConnectorIpcHandlers({ googleConnector, googleNotices, listAgents: () => service.listAgents() }),
     ...onePasswordConnectorIpcHandlers({ onePasswordConnector }),
     ...bitwardenConnectorIpcHandlers({ bitwardenConnector }),
     ...billingIpcHandlers({ billing }),
@@ -970,6 +979,38 @@ if (!hasSingleInstanceLock) {
       remoteDesktop.on("changed", forwardRemoteDesktopSessions);
       built.githubConnector.onChanged(forwardGitHubConnectorStatus);
       built.routineFlows.onChanged(forwardRoutineFlowsChanged);
+      built.googleConnector.onChanged(forwardGoogleConnectorStatus);
+      built.googleNotices.onAdded(notifyGoogleMail);
+      built.googleNotices.onChanged(forwardGoogleMailNotices);
+      // One notification when the sign-in expires, not one for each status change after it.
+      let googleState = built.googleConnector.status().state;
+      let googleAccount = built.googleConnector.status().email;
+      built.googleConnector.onChanged((status) => {
+        if (status.state === "reauth-required" && googleState !== "reauth-required") notifyGoogleSignInExpired();
+        if (status.state === "disconnected") {
+          built.googleNotices.clear();
+          // A later connection starts at the current history: no mail from the disconnected time.
+          void built.gmailWatcher
+            .forget()
+            .catch((error: unknown) => logger.warn("The Gmail watcher state could not be reset.", toLogValue(error)));
+        } else if (
+          (googleState === "connected" && status.state !== "connected") ||
+          (googleAccount !== null && status.email !== null && status.email !== googleAccount)
+        ) {
+          // The running poll and its triage belong to the connection that ended: no late card or note.
+          built.gmailWatcher.restart();
+        }
+        // The open send and booking approvals belong to the account that was connected.
+        if (googleApprovalsEnd(googleAccount, status)) {
+          void built.service
+            .clearGoogleApprovals()
+            .catch((error: unknown) =>
+              logger.warn("The open Google approvals could not be removed.", toLogValue(error)),
+            );
+        }
+        googleState = status.state;
+        googleAccount = status.email;
+      });
       built.onePasswordConnector.onChanged(forwardOnePasswordConnectorStatus);
       built.bitwardenConnector.onChanged(forwardBitwardenConnectorStatus);
       built.messaging.onThreadChanged((threadId) => forwardMessagingThreadsChanged({ threadId }));

@@ -1907,6 +1907,42 @@ transport for its events. `messaging-types.ts` is the seam; the core never reads
   `openbot-attachment://slack/…`. The agent read tools and `@chief` read the cache, with the
   owner-only rules above, and fall back to the old inbox table when the cache has no rows.
 
+## Google connector
+
+The Gmail and Google Calendar connection of this computer. One Google account. The mail agents are
+the agent picked in the Google panel and the orchestrator of each connected Slack workspace.
+[google-connector-setup.md](google-connector-setup.md) has the Google Cloud setup.
+
+| Part | File | Owns |
+| --- | --- | --- |
+| Token store | `src/main/google-connector-store.ts` | `{version: 1, record}`, encrypted with the shared `secretCipher` (Electron `safeStorage`). A file that cannot be decrypted stays on disk; the panel asks for a new sign-in. |
+| Sign-in | `src/main/google-oauth.ts`, `google-connector-service.ts` | PKCE (S256), a one-time `state`, the shared loopback listener `mcp-oauth-redirect-server.ts`, one token refresh at a time, revoke on disconnect. |
+| API client | `src/main/google-api.ts`, `gmail-api.ts`, `google-calendar.ts` | Plain `fetch`. Backoff for 429 and 5xx (3 tries). `reauth-required` after a refused refresh. |
+| Watcher | `src/main/gmail-watcher.ts`, `google-watcher-state.ts` | `history.list` every 2 minutes. One triage batch for each poll (10 mails at most). The state file holds the history position, the last 500 ids and the open approvals. |
+| Triage | `src/backend/messaging/google-triage.ts`, `src/main/google-mail-triage.ts` | One restricted Claude session for each batch: no built-in tools, one in-process MCP server with `gmail_read`, `gmail_organize` and `gmail_notify`, no setting sources, a temporary `cwd`. Without Claude, the notices come from Gmail's signals. A notice goes to the island, a macOS notification, and a system note in the mail agent's chat that starts no turn. |
+| Port | `src/backend/messaging/google-tools.ts` (`GoogleWorkspace`), `src/main/google-workspace.ts` | The backend sees data objects only, never a token. |
+| Gate | `googleToolRefusal`, `isSlackOwnerDirectTurn` | Mail agents only. The turn must be a local-owner turn. For a Slack orchestrator, the turn can also be a message of the connected Slack owner in the owner's own direct message with GoAhead, with the same rule as the Slack inbox tools. A message from any other sender, a reply in a thread, a channel or a group message is refused. |
+| Approvals | `AttentionRegistry.surfaceLocalApproval`, `ipc-local-only.ts` | `local-only:` cards that Auto approve and Turbo never answer, that the Team API never shows or answers, and that the state file keeps across a restart. The record leaves the file before the send or the booking, so it runs once. A send re-reads the Gmail draft and compares its digest with the digest that the card showed; a changed draft is not sent. |
+| Local-only items | `LOCAL_ONLY_CONVERSATION_ITEM_TYPES` in `ipc-local-only.ts` | The `google-mail-notice` chat notes. The conversation queries leave them out of every Team API read, and the event filter leaves them out of every Team API event and push. Desktop search never shows them. |
+| Results | `google-workspace.ts` (`postInformation`) | The result of an approved send or booking is a system note for the person. The agent is not told. A mail agent's own replies are ordinary chat messages that every viewer of that agent sees. |
+| Disconnect | `src/main/index.ts` (`googleConnector.onChanged`) | Clears the notices and the open approvals, aborts the running poll and its triage, and resets the history position, seen ids and waiting mails. A call that runs during the disconnect fails with `GoogleNotConnectedError` and does not ask for a new sign-in. An account change also aborts the running poll. |
+
+Change rules:
+
+- Background triage never runs in an agent turn. Do not add a tool, a setting source, a plugin or an
+  MCP server to the triage session.
+- The local-owner proof is in memory only. After a restart, a waiting delivery gets no Google tool.
+- Do not send a `local-only:` approval or a `LOCAL_ONLY_CONVERSATION_ITEM_TYPES` item through a path
+  that leaves this computer. Any new Team API read, event or push that carries messages or attention
+  must go through the local-only filters (`sharedAgentEvent`, `markerSupported`,
+  `conversationPageForTeam`, and the conversation queries).
+- Known limits. A reconnect does not revoke the refresh token that it replaces. A disconnect during
+  the last write of a sign-in can leave a grant active at Google; the user can remove it in the
+  Google account. Gmail history pages are capped, so a very long offline gap can skip mail (the
+  Gmail API logs a warning). A `gmail_read` result holds at most 60,000 characters: the oldest
+  messages of a long thread are left out, and the result says how many. A 409 on an event id that
+  was cancelled earlier reports that event as booked.
+
 ## Skill folders and MCP configuration
 
 A skill follows the [Agent Skills specification](https://agentskills.io/specification): a folder

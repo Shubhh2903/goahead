@@ -21,4 +21,9 @@ export const messages = defineMessages("notification", {
   // The toast region in each window.
   "notification.toast.region": "Notifications",
   "notification.toast.close": "Close notification",
+  // A macOS notification for one mail notice. {from} is the sender.
+  "notification.google.importantTitle": "Important mail from {from}",
+  "notification.google.meetingTitle": "Meeting request from {from}",
+  "notification.google.expiredTitle": "Google sign-in expired",
+  "notification.google.expiredBody": "Open GoAhead to sign in to Google again.",
 });

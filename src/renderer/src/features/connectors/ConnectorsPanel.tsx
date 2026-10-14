@@ -1,11 +1,12 @@
 import type { GitHubConnectorStatus, OnePasswordConnectorStatus } from "@openbot/contracts/ipc";
-import { Button, ChevronLeft, Lock } from "@openbot/ui";
+import { Button, ChevronLeft, Lock, Mail } from "@openbot/ui";
 import type { AgentProfile } from "@openbot/ui/data";
 import {
   BitwardenConnectorPanel,
   type BitwardenConnectorPanelProps,
 } from "@openbot/ui/features/settings/BitwardenConnectorPanel";
 import { GitHubConnectorPanel } from "@openbot/ui/features/settings/GitHubConnectorPanel";
+import { GOOGLE_CONNECTOR_STATUS, GoogleConnectorPanel } from "@openbot/ui/features/settings/GoogleConnectorPanel";
 import {
   GitHubMark,
   type IntegrationStatus,
@@ -22,10 +23,11 @@ import {
 import { useText } from "@openbot/ui/text";
 import { createSignal, Match, onSettled, Show, Switch } from "solid-js";
 import { type GitHubConnectorController, githubPanelProps } from "./github-connector";
+import { type GoogleConnectorController, googlePanelProps } from "./google-connector";
 import { type OnePasswordConnectorController, onePasswordPanelProps } from "./onepassword-connector";
 import type { SlackConnectorController } from "./slack-connector";
 
-type View = "hub" | "github" | "onepassword" | "bitwarden" | "slack";
+type View = "hub" | "github" | "google" | "onepassword" | "bitwarden" | "slack";
 
 const GITHUB_STATUS = {
   disconnected: { status: "idle", label: "connector.github.statusNotSetUp" },
@@ -47,6 +49,7 @@ const ONEPASSWORD_STATUS = {
  */
 export function ConnectorsPanel(props: {
   github?: GitHubConnectorController | undefined;
+  google?: GoogleConnectorController | undefined;
   onePassword?: OnePasswordConnectorController | undefined;
   bitwarden?: BitwardenConnectorPanelProps | undefined;
   slack?: SlackConnectorController | undefined;
@@ -73,6 +76,24 @@ export function ConnectorsPanel(props: {
             ? t("connector.github.expiredTitle")
             : t("connector.github.description"),
       onOpen: () => setView("github"),
+    };
+  };
+  const googleRow = (google: GoogleConnectorController): IntegrationsHubRow => {
+    const status = google.status();
+    const header = GOOGLE_CONNECTOR_STATUS[status.state];
+    return {
+      id: "google",
+      name: t("connector.google.title"),
+      logo: <Mail aria-hidden="true" />,
+      status: header.status,
+      statusLabel: t(header.label),
+      summary:
+        status.state === "connected"
+          ? (status.email ?? "")
+          : status.state === "reauth-required"
+            ? t("connector.google.reauthDescription")
+            : t("connector.google.description"),
+      onOpen: () => setView("google"),
     };
   };
   const onePasswordRow = (onePassword: OnePasswordConnectorController): IntegrationsHubRow => {
@@ -119,6 +140,7 @@ export function ConnectorsPanel(props: {
     const list: IntegrationsHubRow[] = [];
     if (props.slack) list.push(slackRow(props.slack));
     if (props.github) list.push(githubRow(props.github));
+    if (props.google) list.push(googleRow(props.google));
     if (props.onePassword) list.push(onePasswordRow(props.onePassword));
     if (props.bitwarden)
       list.push({
@@ -149,6 +171,16 @@ export function ConnectorsPanel(props: {
           <div class="integrations-hub">
             <Back />
             <GitHubConnectorPanel {...githubPanelProps(github())} />
+          </div>
+        )}
+      </Match>
+      <Match when={view() === "google" && props.google}>
+        {(google) => (
+          <div class="integrations-hub">
+            <Back />
+            <GoogleConnectorPanel
+              {...googlePanelProps(google(), () => props.agents.map((agent) => ({ id: agent.id, name: agent.name })))}
+            />
           </div>
         )}
       </Match>

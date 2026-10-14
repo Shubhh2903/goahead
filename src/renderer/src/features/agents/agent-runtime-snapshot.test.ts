@@ -3,6 +3,7 @@ import type { AgentMessage } from "@openbot/ui/data";
 import { promptRequestKey } from "../conversation/conversation-keys";
 import {
   appendLatestRuntimeMessages,
+  approvalsAfterTurnCompleted,
   type PendingAttentionPrompts,
   reconcileAttentionApprovals,
   reconcileAttentionPrompts,
@@ -149,6 +150,34 @@ describe("reconcileAttentionApprovals", () => {
     });
 
     expect(next.chief).toMatchObject({ requestId: "a2" });
+  });
+});
+
+describe("local-only approvals in the renderer", () => {
+  const google = (reason: string, truncated: boolean): AgentRuntimeApproval => ({
+    ...approval("chief", "local-only:google:g1"),
+    kind: "permissions",
+    command: null,
+    reason,
+    truncated,
+  });
+
+  it("keeps the full approval when the snapshot sends a cut copy of the same request", () => {
+    const full = google("Send this email?\n\nTo: alice@example.com\n\nThe whole text.", false);
+    const cut = google("Send this email?", true);
+
+    const next = reconcileAttentionApprovals({ chief: full }, { attentionComplete: true, pendingApprovals: [cut] });
+
+    expect(next.chief?.reason).toBe(full.reason);
+    // Only a cut copy is known: that is what the card has.
+    expect(reconcileAttentionApprovals({}, { attentionComplete: true, pendingApprovals: [cut] }).chief).toBe(cut);
+  });
+
+  it("keeps a local-only approval after the turn ends, and still clears a provider approval", () => {
+    const current = { chief: google("Send this email?", false), scout: approval("scout", "a1") };
+
+    expect(approvalsAfterTurnCompleted(current, "chief").chief?.requestId).toBe("local-only:google:g1");
+    expect(approvalsAfterTurnCompleted(current, "scout").scout).toBeUndefined();
   });
 });
 

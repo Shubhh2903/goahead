@@ -1,4 +1,9 @@
-import type { AgentApproval, AgentEvent, AgentRuntimeSnapshot } from "@openbot/contracts/ipc";
+import {
+  type AgentApproval,
+  type AgentEvent,
+  type AgentRuntimeSnapshot,
+  isLocalOnlyApprovalRequestId,
+} from "@openbot/contracts/ipc";
 import { cleanAgentMessageText } from "@openbot/team-client/agent-message-text";
 import type { AgentMessage } from "@openbot/ui/data";
 import { promptRequestKey } from "../conversation/conversation-keys";
@@ -83,8 +88,28 @@ export function reconcileAttentionApprovals(
 ): Record<string, AgentApproval | undefined> {
   return {
     ...(snapshot.attentionComplete ? {} : current),
-    ...Object.fromEntries(snapshot.pendingApprovals.map((approval) => [approval.agentId, approval])),
+    ...Object.fromEntries(
+      snapshot.pendingApprovals.map((approval) => {
+        // The snapshot copy cuts long text. The full copy from the `approval` event stays.
+        const held = current[approval.agentId];
+        const fuller = held && String(held.requestId) === String(approval.requestId) && held.truncated !== true;
+        return [approval.agentId, fuller ? held : approval];
+      }),
+    ),
   };
+}
+
+/**
+ * The approvals after an agent's turn ended. A provider approval ends with its turn; a local-only
+ * approval (a mail to send, a meeting to book) waits for the person after the turn.
+ */
+export function approvalsAfterTurnCompleted(
+  current: Record<string, AgentApproval | undefined>,
+  agentId: string,
+): Record<string, AgentApproval | undefined> {
+  const approval = current[agentId];
+  if (!approval || isLocalOnlyApprovalRequestId(approval.requestId)) return current;
+  return { ...current, [agentId]: undefined };
 }
 
 /**

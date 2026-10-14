@@ -33,6 +33,15 @@ import type { ChannelService } from "../channel-service";
 import type { MailboxStore } from "../mailbox-store";
 import { agentMcpServers } from "../mcp-provider-shapes";
 import {
+  type GoogleApprovalCard,
+  type GoogleMailAgents,
+  type GoogleTurnOrigin,
+  type GoogleWorkspace,
+  googleToolRefusal,
+  isGoogleToolName,
+  runGoogleTool,
+} from "../messaging/google-tools";
+import {
   SLACK_LIST_UNREAD_TOOL,
   SLACK_READ_CONVERSATION_TOOL,
   slackReadConversationSchema,
@@ -103,6 +112,12 @@ export interface OpenBotToolRouterHooks {
   isLocalOwnerTurn(agentId: string, turnId: string): boolean;
   /** True when the person at this computer started this turn, directly or through an agent's hand-off. */
   isOwnerOriginTurn(agentId: string, turnId: string): boolean;
+  /** Who started this turn: the person at this computer in the app, the Slack owner in their own DM, or someone else. */
+  googleTurnOrigin(agentId: string, threadId: string, turnId: string): GoogleTurnOrigin;
+  /** The agents that may use the Google tools. */
+  googleMailAgents(): GoogleMailAgents;
+  /** Shows a Google send or booking card that only the person at this computer answers. */
+  surfaceGoogleApproval(card: GoogleApprovalCard): void;
   /** An agent's `send_message` in a turn of the person carries that origin to its recipients. */
   noteHandOff(agentId: string, turnId: string, deliveryIds: readonly string[]): void;
   /** `false` when the turn no longer runs or `mayStop` refuses, so no stop was sent. */
@@ -132,6 +147,8 @@ export interface OpenBotToolRouterOptions {
   approvalAutomation?: ApprovalAutomationPolicy;
   /** The external conversations, which take an agent's request to send a message. */
   messaging: MessagingThreads;
+  /** The Gmail and Google Calendar port of the main process, or null. */
+  googleWorkspace?: GoogleWorkspace | null;
   /** Draws pages for `html_preview`; null where no window can draw one. */
   visualPreview?: ChatVisualPreviewHost | null;
   hooks: OpenBotToolRouterHooks;
@@ -164,6 +181,7 @@ export class OpenBotToolRouter {
   readonly #routineFlowTools: (() => RoutineFlowTools) | undefined;
   readonly #approvalAutomation: ApprovalAutomationPolicy;
   readonly #messaging: MessagingThreads;
+  readonly #googleWorkspace: GoogleWorkspace | null;
   readonly #visualPreview: ChatVisualPreviewHost | null;
   readonly #hooks: OpenBotToolRouterHooks;
   readonly #interruptTool: AgentInterruptTool;
@@ -188,6 +206,7 @@ export class OpenBotToolRouter {
     this.#routineFlowTools = options.routineFlowTools;
     this.#approvalAutomation = options.approvalAutomation ?? NO_APPROVAL_AUTOMATION;
     this.#messaging = options.messaging;
+    this.#googleWorkspace = options.googleWorkspace ?? null;
     this.#visualPreview = options.visualPreview ?? null;
     this.#hooks = options.hooks;
     this.#interruptTool = new AgentInterruptTool({
@@ -604,6 +623,33 @@ export class OpenBotToolRouter {
     }
 
     if (isHostedSiteMutationTool(params.tool)) throw new Error("Hosted site changes require user approval.");
+
+    if (isGoogleToolName(params.tool)) {
+      const workspace = this.#googleWorkspace;
+      const refusal = googleToolRefusal({
+        agentId: senderAgentId,
+        mailAgents: this.#hooks.googleMailAgents(),
+        origin: this.#hooks.googleTurnOrigin(
+          senderAgentId,
+          this.#conversation.publicThreadId(senderAgentId, params.threadId),
+          params.turnId,
+        ),
+        connected: workspace?.connected() ?? false,
+      });
+      if (refusal !== null || !workspace) {
+        return openBotToolFailure(refusal ?? sourceText("error.connector.googleNotConnected"));
+      }
+      try {
+        return await runGoogleTool(params.tool, params.arguments, workspace, {
+          agentId: senderAgentId,
+          threadId: this.#conversation.publicThreadId(senderAgentId, params.threadId),
+          turnId: params.turnId,
+          surfaceApproval: (card) => this.#hooks.surfaceGoogleApproval(card),
+        });
+      } catch (error) {
+        return openBotToolFailure(redactText(error instanceof Error ? error.message : String(error)));
+      }
+    }
 
     if (params.tool === SLACK_SEND_MESSAGE_TOOL.name) {
       const args = slackSendMessageSchema.parse(params.arguments ?? {});

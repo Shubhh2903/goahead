@@ -13,11 +13,13 @@ export function AgentSelect(props: {
   agents: Array<{ id: string; name: string }>;
   value: string;
   onChange: (value: string) => void;
+  /** The accessible name, when the control does not pick an install target. */
+  label?: string;
 }) {
   const { t } = useText();
   const selected = () => props.agents.find((agent) => agent.id === props.value) ?? null;
-  /* The list belongs to the dialog, as in the settings modal: outside it the dialog hides it from
-     assistive technology. */
+  /* The list belongs to the dialog (the marketplace or a settings modal): outside it the dialog
+     hides it from assistive technology and blocks its clicks. */
   const [mount, setMount] = createSignal<HTMLElement | undefined>();
   let root: HTMLElement | undefined;
   return (
@@ -27,7 +29,7 @@ export function AgentSelect(props: {
       }}
       // The dialog is in the tree only once the control is, so the list finds it as it opens.
       onOpenChange={(open) => {
-        if (open) setMount(root?.closest<HTMLElement>(".skills-marketplace") ?? undefined);
+        if (open) setMount(root?.closest<HTMLElement>(".skills-marketplace, .settings-modal") ?? undefined);
       }}
       class="skills-agent-select"
       /* Kobalte prints the children of the value only once one is chosen, so the empty state is
@@ -44,7 +46,7 @@ export function AgentSelect(props: {
       itemComponent={(item) => <SelectItem item={item.item}>{item.item.rawValue.name}</SelectItem>}
     >
       {/* The control sits beside the install button, which says what the target is for. */}
-      <SelectTrigger size="sm" aria-label={t("settings.agentSelect.label")}>
+      <SelectTrigger size="sm" aria-label={props.label ?? t("settings.agentSelect.label")}>
         <SelectValue<{ id: string; name: string }>>{(state) => state.selectedOption()?.name}</SelectValue>
       </SelectTrigger>
       <SelectContent mount={mount()} />

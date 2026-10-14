@@ -157,6 +157,7 @@
     "./features/settings/AccountProfilePanel": "./src/features/settings/AccountProfilePanel.tsx",
     "./features/settings/AgentSelect": "./src/features/settings/AgentSelect.tsx",
     "./features/settings/GitHubConnectorPanel": "./src/features/settings/GitHubConnectorPanel.tsx",
+    "./features/settings/GoogleConnectorPanel": "./src/features/settings/GoogleConnectorPanel.tsx",
     "./features/settings/IntegrationLayout": "./src/features/settings/IntegrationLayout.tsx",
     "./features/settings/IntegrationsHub": "./src/features/settings/IntegrationsHub.tsx",
     "./features/settings/BitwardenConnectorPanel": "./src/features/settings/BitwardenConnectorPanel.tsx",

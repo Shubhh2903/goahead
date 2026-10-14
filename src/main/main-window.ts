@@ -262,7 +262,15 @@ export function createMainWindowController({
     window.webContents.on("did-finish-load", () => {
       const services = getServices();
       if (services) {
-        forwardAgentEvent("local", { type: "runtime-snapshot", snapshot: services.service.getRuntimeSnapshot() });
+        forwardAgentEvent("local", {
+          type: "runtime-snapshot",
+          snapshot: services.service.getRuntimeSnapshot("local"),
+        });
+        // The snapshot cuts long text. The full local-only approvals (a mail to send, a meeting to
+        // book) follow, so the card shows the whole request.
+        for (const approval of services.service.localOnlyApprovals()) {
+          forwardAgentEvent("local", { type: "approval", approval });
+        }
         services.remoteServers.refreshRuntimeSnapshots();
       }
     });

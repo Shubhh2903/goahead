@@ -46,6 +46,7 @@ import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { actionToast } from "../../action-toast";
 import { ConnectorsPanel } from "../connectors/ConnectorsPanel";
 import type { GitHubConnectorController } from "../connectors/github-connector";
+import type { GoogleConnectorController } from "../connectors/google-connector";
 import type { OnePasswordConnectorController } from "../connectors/onepassword-connector";
 import type { SlackConnectorController } from "../connectors/slack-connector";
 import { type ServerStorageOptions, ServerStoragePanel } from "../files/ServerStoragePanel";
@@ -146,6 +147,8 @@ export interface ServerSettingsModalProps {
    * without a GitHub App passes no GitHub.
    */
   githubConnector?: GitHubConnectorController | undefined;
+  /** This computer's Google connection. A remote server passes none. */
+  googleConnector?: GoogleConnectorController | undefined;
   /** This computer's 1Password connection. A remote server passes none. */
   onePasswordConnector?: OnePasswordConnectorController | undefined;
   /** This computer's Bitwarden connection. A remote server passes none. */
@@ -558,7 +561,11 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
             </Show>
             <Show
               when={
-                props.githubConnector || props.onePasswordConnector || props.bitwardenConnector || props.slackConnector
+                props.githubConnector ||
+                props.googleConnector ||
+                props.onePasswordConnector ||
+                props.bitwardenConnector ||
+                props.slackConnector
               }
             >
               <Tabs.Trigger class="settings-modal-nav-item" value="connectors">
@@ -677,11 +684,18 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
           )}
         </Show>
         <Show
-          when={props.githubConnector || props.onePasswordConnector || props.bitwardenConnector || props.slackConnector}
+          when={
+            props.githubConnector ||
+            props.googleConnector ||
+            props.onePasswordConnector ||
+            props.bitwardenConnector ||
+            props.slackConnector
+          }
         >
           <Tabs.Content value="connectors" class="settings-modal-tab-panel server-settings-panel" data-tab="connectors">
             <ConnectorsPanel
               github={props.githubConnector}
+              google={props.googleConnector}
               onePassword={props.onePasswordConnector}
               bitwarden={props.bitwardenConnector}
               slack={props.slackConnector}

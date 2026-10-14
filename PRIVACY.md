@@ -390,6 +390,17 @@ Billing is off, and Stripe receives nothing, when the account service has no Str
   or a one-time code is read from 1Password when the browser fills it, goes only to that page, and
   is never sent to an agent, a provider, a log or a team member. The token and each filled value
   are redacted from logs, exports and diagnostics.
+- The Google connection (Server settings > Connectors) is kept in
+  `~/Library/Application Support/OpenBot/openbot-google-connector-v1.json`, encrypted by the
+  operating system's secret storage (the macOS keychain, through Electron `safeStorage`). It holds
+  the Google access and refresh tokens, the account email and the granted scopes. If the file cannot
+  be decrypted, it stays on disk and the connector asks you to sign in again.
+  `google-mail-agent.json` in the same folder holds the id of the agent that handles mail.
+  `google-watcher-state.json` in the same folder, mode 0600, holds the Gmail history position, the
+  ids of the last 500 new messages, and the open send and booking approvals (Gmail draft ids,
+  recipients, subjects and a digest of the draft, or meeting title, time, guests and description).
+  It holds no token and no mail body. The tokens, the sign-in code, the PKCE verifier and the
+  client secret are redacted from logs, exports and diagnostics.
 - `~/Library/Application Support/OpenBot/logs/trace.ndjson` is a local trace of IPC calls,
   provider turns, and main-process failures. Each line holds a time, the IPC channel name, the turn
   origin or the failure origin (`uncaughtException` or `unhandledRejection`), the duration, and the
@@ -482,6 +493,24 @@ Network traffic can also occur when:
   files. `html_preview` draws the page in a hidden window that has its own
   session in memory. The mobile app does not run the page: it shows the page as its file;
 - a user opens an explicitly labeled external support or setup link;
+- the user connects Google in Server settings. GoAhead opens Google's sign-in page in the browser,
+  receives the code on a listener on `127.0.0.1`, and exchanges it at `oauth2.googleapis.com`.
+  While the connection is on, GoAhead talks to Google directly from the computer
+  (`gmail.googleapis.com` and `www.googleapis.com/calendar`): every 2 minutes for new inbox mail,
+  and when a mail agent uses a Gmail or Calendar tool. Disconnect revokes the token at
+  `oauth2.googleapis.com/revoke`. Cloudflare and Signal get no Gmail or Calendar data. The AI
+  provider gets the mail that triage selects (sender, subject, date, Gmail id, snippet, and the text
+  of a mail that the triage session or a mail agent reads with a tool). Triage runs in a separate,
+  restricted Claude session that has no shell, file or web tool; it can only read, label and report
+  those mails. It runs on your own Claude sign-in, so Anthropic is the provider that gets the mail.
+  Without a Claude sign-in, no AI provider gets new mail. When you ask the Slack Orchestrator about
+  your mail in your own Slack direct message with GoAhead, its reply goes to Slack, including any
+  mail text it quotes. Only you can ask (your own direct message only), and mail notes and send and
+  booking approvals never go to Slack. The notes about new mail and the send and booking approvals
+  stay on this computer: the Team API does not show them to team members, other computers, the
+  phone or Slack, they are not in Live Activity updates, and desktop search never shows the notes.
+  The replies of a mail agent are ordinary chat messages: whoever can see that agent (team members,
+  the phone, Live Activity) can see them, including any mail text the agent writes in them;
 - a Slack workspace is connected. See [Slack connections](#slack-connections).
 
 ## Slack connections

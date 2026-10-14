@@ -125,6 +125,55 @@ describe("DynamicIslandCoordinator", () => {
     });
   });
 
+  it("keeps a local-only approval after the turn ends, and clears a provider approval", () => {
+    const coordinator = new DynamicIslandCoordinator(() => text);
+    seedAgents(coordinator, "local", [agent("chief", "Chief"), agent("research", "Research")]);
+    coordinator.applyEvent(scoped("local", approval("chief", "local-only:google:g1")), "local");
+    coordinator.applyEvent(scoped("local", approval("research", "approval-1")), "local");
+    for (const agentId of ["chief", "research"]) {
+      coordinator.applyEvent(
+        scoped("local", {
+          type: "turn-completed",
+          agentId,
+          threadId: `thread-${agentId}`,
+          turnId: `turn-${agentId}`,
+          status: "completed",
+        }),
+        "local",
+      );
+    }
+
+    expect(coordinator.presentation(["local"])).toMatchObject({
+      mode: "approval",
+      remainingCount: 0,
+      item: { requestId: "local-only:google:g1" },
+    });
+  });
+
+  it("keeps the full local-only approval when a snapshot sends its cut copy", () => {
+    const coordinator = new DynamicIslandCoordinator(() => text);
+    seedAgents(coordinator, "local", [agent("chief", "Chief")]);
+    const full = approval("chief", "local-only:google:send:g1");
+    full.approval.reason = `Send this email?\n\n${"Text of the mail. ".repeat(20)}`;
+    coordinator.applyEvent(scoped("local", full), "local");
+
+    coordinator.applyEvent(
+      scoped(
+        "local",
+        runtimeSnapshot({
+          agents: [agent("chief", "Chief")],
+          pendingApprovals: [{ ...full.approval, reason: full.approval.reason.slice(0, 240), truncated: true }],
+        }),
+      ),
+      "local",
+    );
+
+    expect(coordinator.presentation(["local"])).toMatchObject({
+      mode: "approval",
+      item: { requestId: "local-only:google:send:g1", truncated: false },
+    });
+  });
+
   it("removes only the matching failure after it is opened", () => {
     const coordinator = new DynamicIslandCoordinator(() => text);
     seedAgents(coordinator, "local", [agent("chief", "Chief")]);

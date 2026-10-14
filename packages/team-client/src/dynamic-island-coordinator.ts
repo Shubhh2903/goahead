@@ -7,6 +7,7 @@ import type {
   QueueSnapshot,
   ScopedAgentEvent,
 } from "@openbot/contracts/ipc";
+import { isLocalOnlyApprovalRequestId } from "@openbot/contracts/ipc";
 import { cleanAgentMessageText } from "./agent-message-text";
 import {
   countDynamicIslandAttention,
@@ -228,7 +229,10 @@ export class DynamicIslandCoordinator {
         runtime.activeTurns[event.agentId] = null;
         if (runtime.turnProgress[event.agentId]?.turnId === event.turnId) delete runtime.turnProgress[event.agentId];
         runtime.pendingPrompts[event.agentId] = undefined;
-        runtime.pendingApprovals[event.agentId] = undefined;
+        // A local-only approval (a mail to send, a meeting to book) waits for the person after the turn.
+        if (!isLocalOnlyApprovalRequestId(runtime.pendingApprovals[event.agentId]?.requestId ?? "")) {
+          runtime.pendingApprovals[event.agentId] = undefined;
+        }
         if (event.status === "failed") runtime.failedTurns[event.agentId] = event.turnId;
         else delete runtime.failedTurns[event.agentId];
         return;
@@ -284,6 +288,9 @@ export class DynamicIslandCoordinator {
       if (approval && String(approval.requestId) === String(action.requestId)) {
         runtime.pendingApprovals[action.agentId] = undefined;
       }
+    }
+    if (action.type === "mail-action") {
+      runtime.mailNotices = (runtime.mailNotices ?? []).filter((notice) => notice.noticeId !== action.noticeId);
     }
     if (action.type === "open-failure" && runtime.failedTurns[action.agentId] === action.turnId) {
       delete runtime.failedTurns[action.agentId];
@@ -413,7 +420,14 @@ export class DynamicIslandCoordinator {
       pendingPrompts,
       pendingApprovals: {
         ...(snapshot.attentionComplete ? {} : runtime.pendingApprovals),
-        ...Object.fromEntries(snapshot.pendingApprovals.map((approval) => [approval.agentId, approval])),
+        ...Object.fromEntries(
+          snapshot.pendingApprovals.map((approval) => {
+            // The snapshot copy cuts long text. The full copy from the `approval` event stays.
+            const held = runtime.pendingApprovals[approval.agentId];
+            const fuller = held && String(held.requestId) === String(approval.requestId) && held.truncated !== true;
+            return [approval.agentId, fuller ? held : approval];
+          }),
+        ),
       },
       failedTurns: Object.fromEntries(snapshot.failedTurns.map((turn) => [turn.agentId, turn.turnId])),
     });

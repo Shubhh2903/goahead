@@ -1317,7 +1317,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
   }
 }
 
-function claudeEnvironment(cli: ClaudeCliInfo): NodeJS.ProcessEnv {
+export function claudeEnvironment(cli: ClaudeCliInfo): NodeJS.ProcessEnv {
   return {
     ...process.env,
     ...(cli.source === "managed" ? { DISABLE_AUTOUPDATER: "1" } : {}),

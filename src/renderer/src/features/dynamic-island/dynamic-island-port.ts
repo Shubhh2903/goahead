@@ -20,6 +20,7 @@ export interface DynamicIslandPort {
     | "publishPresentation"
     | "setInteractive"
   >;
+  googleConnector: Pick<OpenBotDesktopApi["googleConnector"], "notices" | "onNoticesChanged">;
 }
 
 /** Read on each call: tests and stories replace `window.openbot` per case. */

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
   AgentApproval,
   AgentApprovalKind,
@@ -13,7 +14,11 @@ import type {
   RespondToBrowserTakeoverInput,
   RespondToPromptInput,
 } from "@openbot/contracts/ipc";
-import { AGENT_RUNTIME_ATTENTION_LIMIT } from "@openbot/contracts/ipc";
+import {
+  AGENT_RUNTIME_ATTENTION_LIMIT,
+  isLocalOnlyApprovalRequestId,
+  localOnlyApprovalRequestId,
+} from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import type { AgentClient } from "../agent-client";
@@ -74,6 +79,32 @@ interface PendingApproval {
   params: unknown;
   approval: AgentApproval;
   hostedSiteMutation?: HostedSiteMutationContext;
+}
+
+/** An approval that no provider request waits for, and that only the person at this computer answers. */
+export interface LocalApprovalCard {
+  /** Stable across restarts. The request id is `local-only:` and this key. */
+  key: string;
+  agentId: string;
+  threadId: string;
+  turnId: string;
+  /** The request only. The client's card title asks the question (from the request id's kind). */
+  detail: string;
+  /** False when the card cannot show the whole request: it can then only be declined. */
+  complete: boolean;
+}
+
+/** The text of a local-only card, as its `reason`. */
+export function localApprovalText(card: Pick<LocalApprovalCard, "detail">): string {
+  return card.detail;
+}
+
+/** Who answers: the person at this computer (desktop IPC, Dynamic Island), or anyone else (Team API, Slack). */
+export type ApprovalAnswerOrigin = "local-owner" | "other";
+
+interface PendingLocalApproval {
+  approval: AgentApproval;
+  answer: (decision: "accept" | "decline") => Promise<void>;
 }
 
 interface PendingBrowserTakeover {
@@ -175,6 +206,7 @@ export class AttentionRegistry {
   readonly #passwordVault: PasswordVault | null;
   readonly #prompts = new Map<RequestId, PendingPrompt>();
   readonly #approvals = new Map<RequestId, PendingApproval>();
+  readonly #localApprovals = new Map<RequestId, PendingLocalApproval>();
   readonly #takeovers = new Map<RequestId, PendingBrowserTakeover>();
 
   constructor(options: AttentionRegistryOptions) {
@@ -194,14 +226,22 @@ export class AttentionRegistry {
     return (
       [...this.#prompts.values()].some((pending) => pending.agentId === agentId) ||
       [...this.#approvals.values()].some((pending) => pending.approval.agentId === agentId) ||
+      [...this.#localApprovals.values()].some((pending) => pending.approval.agentId === agentId) ||
       [...this.#takeovers.values()].some((pending) => pending.request.agentId === agentId)
     );
   }
 
   /** The attention section of the runtime snapshot, budgeted prompts first and takeovers last. */
-  runtimeAttention(): RuntimeAttention {
+  /**
+   * `shared` (the Team API, the phone) leaves the local-only approvals out completely: they take no
+   * place in the budget, and `attentionComplete` counts only what that scope may see.
+   */
+  runtimeAttention(scope: "local" | "shared" = "local"): RuntimeAttention {
+    const localApprovals =
+      scope === "local" ? [...this.#localApprovals.values()].map((pending) => pending.approval) : [];
     const attentionComplete =
-      this.#prompts.size + this.#approvals.size + this.#takeovers.size <= AGENT_RUNTIME_ATTENTION_LIMIT;
+      this.#prompts.size + localApprovals.length + this.#approvals.size + this.#takeovers.size <=
+      AGENT_RUNTIME_ATTENTION_LIMIT;
     let remainingAttention = AGENT_RUNTIME_ATTENTION_LIMIT;
     const pendingPrompts = [...this.#prompts.values()].slice(0, remainingAttention).map((pending) => ({
       requestId: pending.id,
@@ -211,9 +251,9 @@ export class AttentionRegistry {
       questions: pending.questions.map(compactRuntimeQuestion),
     }));
     remainingAttention -= pendingPrompts.length;
-    const pendingApprovals = [...this.#approvals.values()]
+    const pendingApprovals = [...localApprovals, ...[...this.#approvals.values()].map((pending) => pending.approval)]
       .slice(0, remainingAttention)
-      .map((pending) => compactRuntimeApproval(pending.approval));
+      .map(compactRuntimeApproval);
     remainingAttention -= pendingApprovals.length;
     const pendingBrowserTakeovers = [...this.#takeovers.values()]
       .slice(0, remainingAttention)
@@ -251,7 +291,21 @@ export class AttentionRegistry {
     this.#emitRuntimeSnapshot();
   }
 
-  async respondToApproval(input: RespondToApprovalInput): Promise<void> {
+  async respondToApproval(input: RespondToApprovalInput, from: ApprovalAnswerOrigin = "other"): Promise<void> {
+    const local = this.#localApprovals.get(input.requestId);
+    if (local) {
+      if (from !== "local-owner") throw new Error(sourceText("error.connector.googleApprovalLocalOnly"));
+      if (input.decision === "accept" && local.approval.truncated) {
+        throw new Error(sourceText("error.connector.googleApprovalIncomplete"));
+      }
+      // Removed before the answer runs: a second click finds nothing, so the action runs once.
+      this.#localApprovals.delete(input.requestId);
+      this.#emitInputResolved("approval", input.requestId, local.approval.agentId);
+      this.#emitRuntimeSnapshot();
+      await local.answer(input.decision);
+      return;
+    }
+    if (isLocalOnlyApprovalRequestId(input.requestId)) throw new Error(sourceText("error.backend.approvalInactive"));
     const pending = this.#approvals.get(input.requestId);
     if (!pending) throw new Error(sourceText("error.backend.approvalInactive"));
     this.#routines.markRunningForTurn(getString(pending.params, "turnId"));
@@ -422,6 +476,52 @@ export class AttentionRegistry {
     });
     this.#routines.markNeedsAttention(prepared.approval.turnId);
     this.#emit({ type: "approval", approval: prepared.approval });
+  }
+
+  /**
+   * Shows a card for a tool that already answered `waiting_for_approval`: a mail to send, a meeting
+   * to book. Auto approve and Turbo never answer it, the end of a turn does not remove it, and only
+   * the person at this computer answers it (`respondToApproval` with `local-owner`).
+   */
+  surfaceLocalApproval(card: LocalApprovalCard, answer: (decision: "accept" | "decline") => Promise<void>): void {
+    const requestId = localOnlyApprovalRequestId(card.key);
+    if (this.#localApprovals.has(requestId)) return;
+    const approval: AgentApproval = {
+      requestId,
+      agentId: card.agentId,
+      threadId: card.threadId,
+      turnId: card.turnId,
+      kind: "permissions",
+      command: null,
+      cwd: null,
+      reason: boundedText(localApprovalText(card), INPUT_LIMITS.messageText),
+      grantRoot: null,
+      // No provider permission is asked: the card is the whole request.
+      permissions: null,
+      // A card that does not show everything cannot be allowed (the client disables Allow).
+      truncated: !card.complete || localApprovalText(card).length > INPUT_LIMITS.messageText,
+    };
+    this.#localApprovals.set(requestId, { approval, answer });
+    this.#emit({ type: "approval", approval });
+    this.#emitRuntimeSnapshot();
+  }
+
+  /** The full open local-only approvals, for a window that loads again: a snapshot copy is cut. */
+  localApprovals(): AgentApproval[] {
+    return [...this.#localApprovals.values()].map((pending) => structuredClone(pending.approval));
+  }
+
+  /** Removes the local-only approvals whose key starts with `keyPrefix`, with no answer. */
+  dropLocalApprovals(keyPrefix: string): void {
+    const prefix = localOnlyApprovalRequestId(keyPrefix);
+    let changed = false;
+    for (const [requestId, pending] of this.#localApprovals) {
+      if (typeof requestId !== "string" || !requestId.startsWith(prefix)) continue;
+      this.#localApprovals.delete(requestId);
+      this.#emitInputResolved("approval", requestId, pending.approval.agentId);
+      changed = true;
+    }
+    if (changed) this.#emitRuntimeSnapshot();
   }
 
   surfaceLegacyApproval(client: AgentClient, request: AppServerRequest): void {
@@ -928,4 +1028,9 @@ export class AttentionRegistry {
       status: resolution.status,
     });
   }
+}
+
+/** `text`, or its start and an ellipsis, at most `limit` characters. */
+function boundedText(text: string, limit: number): string {
+  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
 }
