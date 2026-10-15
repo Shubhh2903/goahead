@@ -3,6 +3,7 @@
 // goes to the protocol adapter.
 import type { OptionalRouteCodec } from "./admin-wire";
 import { AGENT_ADMIN_CODECS } from "./agent-admin-v1";
+import { AGENT_HOST_SETTINGS_CODECS } from "./agent-host-settings-v1";
 import { AGENT_IMPORT_CODECS } from "./agent-import-v1";
 import { AGENT_INSTALL_CODECS } from "./agent-install-v1";
 import { AGENT_MEMORIES_CODECS } from "./agent-memories-v1";
@@ -24,6 +25,7 @@ export type { OptionalRouteCodec } from "./admin-wire";
 
 const CODECS: ReadonlyMap<string, OptionalRouteCodec> = new Map([
   ...AGENT_ADMIN_CODECS,
+  ...AGENT_HOST_SETTINGS_CODECS,
   ...AGENT_MEMORIES_CODECS,
   ...SKILLS_ADMIN_CODECS,
   ...SHARED_TABLES_CODECS,

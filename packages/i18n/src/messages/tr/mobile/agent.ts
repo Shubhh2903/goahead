@@ -208,7 +208,6 @@ export const messages = {
   "mobile.agent.record.deleteRoutineBody": "Bu rutin kaldırılacaktır.",
   "mobile.agent.record.deleteRoutine": "Rutini sil",
   "mobile.agent.record.testStarted": "Test çalıştırması başladı. Sonuç sohbette gösterilir.",
-  "mobile.agent.runtime.title": "Çalışma zamanı",
   "mobile.agent.runtime.unavailable": "Kullanılamıyor",
   "mobile.agent.runtime.provider": "Sağlayıcı",
   "mobile.agent.runtime.model": "Model",

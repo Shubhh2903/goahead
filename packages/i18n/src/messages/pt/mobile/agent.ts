@@ -199,7 +199,6 @@ export const messages = {
   "mobile.agent.record.deleteRoutineBody": "Esta rotina será removida.",
   "mobile.agent.record.deleteRoutine": "Excluir rotina",
   "mobile.agent.record.testStarted": "A execução de teste começou. O resultado aparece no chat.",
-  "mobile.agent.runtime.title": "Execução",
   "mobile.agent.runtime.unavailable": "Indisponível",
   "mobile.agent.runtime.provider": "Provedor",
   "mobile.agent.runtime.model": "Modelo",

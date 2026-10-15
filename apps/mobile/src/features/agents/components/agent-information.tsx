@@ -92,7 +92,7 @@ export function AgentInformation({
   useEffect(() => {
     if (section === "usage") mobileAnalytics.track("usage_viewed", {});
   }, [section]);
-  const { t } = useText();
+  const { t, format } = useText();
   const { recordId } = useLocalSearchParams<{ recordId?: string }>();
   const workspace = useMobileWorkspace();
   const { session, sessionScope } = useMobileSession();
@@ -105,6 +105,13 @@ export function AgentInformation({
     queryKey: [...key, "memories"],
     queryFn: () => workspace.loadAgentMemories(agent.id, agent.serverId),
   });
+  const memorySelection = useQuery({
+    ...options,
+    enabled: available && (section === "memories" || section === "memory"),
+    queryKey: [...key, "memory-selection"],
+    queryFn: () => workspace.loadAgentMemorySelection(agent.id, agent.serverId),
+  });
+  const selectionById = new Map(memorySelection.data?.selections.map((entry) => [entry.memoryId, entry]));
   const routines = useQuery({
     ...options,
     enabled: available && (section === "routines" || section === "routine"),
@@ -174,18 +181,39 @@ export function AgentInformation({
           </InformationSection>
         </View>
       ) : null}
+      {section === "memories" && memorySelection.data ? (
+        <SettingsNote>
+          {t("mobile.agent.info.memory.inclusion.explanation")}{" "}
+          {t("mobile.agent.info.memory.inclusion.capacity", {
+            used: format.fileSize(memorySelection.data.usedBytes),
+            total: format.fileSize(memorySelection.data.budgetBytes),
+          })}
+        </SettingsNote>
+      ) : null}
       {section === "memories" ? (
         <InformationSection
           kind="memories"
           list
           available={available}
-          pending={memories.isPending}
-          failed={memories.isError}
-          retry={() => void memories.refetch()}
+          pending={memories.isPending || memorySelection.isPending}
+          failed={memories.isError || memorySelection.isError}
+          retry={() => {
+            void memories.refetch();
+            void memorySelection.refetch();
+          }}
         >
           {memories.data?.map((memory) => (
             <SettingsRow
               key={memory.id}
+              supportingText={
+                selectionById.has(memory.id)
+                  ? t(
+                      selectionById.get(memory.id)?.inclusion === "essential"
+                        ? "mobile.agent.info.memory.inclusion.essential"
+                        : "mobile.agent.info.memory.inclusion.searchable",
+                    )
+                  : undefined
+              }
               onPress={() =>
                 router.push({
                   pathname: "/agent-info/[agentId]/memory",
@@ -310,14 +338,17 @@ export function AgentInformation({
       ) : null}
       {section === "memory" ? (
         !recordId ? (
-          <MemoryEditor agent={agent} available={available} />
+          <MemoryEditor agent={agent} available={available} selection={memorySelection.data} />
         ) : (
           <RecordSection
             kind="memory"
             available={available}
-            pending={memories.isPending}
-            failed={memories.isError}
-            retry={() => void memories.refetch()}
+            pending={memories.isPending || memorySelection.isPending}
+            failed={memories.isError || memorySelection.isError}
+            retry={() => {
+              void memories.refetch();
+              void memorySelection.refetch();
+            }}
           >
             {memories.data?.some((item) => item.id === recordId) ? (
               <MemoryEditor
@@ -325,6 +356,8 @@ export function AgentInformation({
                 agent={agent}
                 available={available && !memories.isError}
                 memory={memories.data.find((item) => item.id === recordId)}
+                selection={memorySelection.data}
+                selectionAvailable={!memorySelection.isError}
               />
             ) : (
               <SettingsRow>

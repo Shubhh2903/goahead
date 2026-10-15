@@ -7,6 +7,7 @@ import type { RoutineFlows } from "../backend/routine-flows/routine-flows";
 import { type AcpRegistry, createAcpRegistry } from "./acp-registry";
 import { type AgentAdminSettingsService, createAgentAdminSettings } from "./agent-admin-settings";
 import { spawnAgentDatabaseHost } from "./agent-database-host-process";
+import { createAgentHostSettings } from "./agent-host-settings";
 import { LocalSkillLibrary } from "./local-skill-library";
 import { localSkillTools } from "./local-skill-tools";
 import { MAC_PERMISSION_URLS } from "./mac-permission-urls";
@@ -1474,6 +1475,7 @@ export async function createApplicationServices({
     // Each member present advertises its admin capability. Every admin route requires an owner or admin.
     admin: {
       agents: agentAdminSettings,
+      agentHost: createAgentHostSettings({ agents: service, busyMessageMode }),
       skills,
       sharedTables: service,
       marketplaceAgents,

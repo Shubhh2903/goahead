@@ -2,6 +2,7 @@ import {
   type AgentAdminSettings,
   type AgentAnalytics,
   type AgentMemory,
+  type AgentMemorySelectionState,
   analyticsRange,
   CHANNEL_CHATS_CAPABILITY,
   CHANNEL_DELETE_CAPABILITY,
@@ -12,6 +13,7 @@ import {
   type InstalledSkill,
   parseChannelCommand,
   type Routine,
+  type SetAgentMemoryInclusionInput,
   type SetEnabledSkillInput,
   type SidebarLayoutAction,
   type SidebarLayoutSnapshot,
@@ -228,6 +230,9 @@ const workspace = {
       supportedReasoningEfforts: ["medium", "high"],
     },
   ]),
+  loadAgentMemorySelection: vi.fn<() => Promise<AgentMemorySelectionState | null>>(async () => null),
+  setAgentMemoryInclusion:
+    vi.fn<(input: SetAgentMemoryInclusionInput, serverId: string) => Promise<AgentMemorySelectionState>>(),
   loadAgentMemories: vi.fn<() => Promise<AgentMemory[]>>(async () => []),
   loadAgentRoutines: vi.fn<() => Promise<Routine[]>>(async () => []),
   loadAgentAnalytics: vi.fn<() => Promise<AgentAnalytics | null>>(async () => null),
@@ -251,6 +256,12 @@ const workspace = {
   >(async () => {
     throw new Error("unexpected");
   }),
+  loadAgentHostSettings: vi.fn(async (_agentId: string, _serverId: string) => null),
+  canStartNewChat: vi.fn((_serverId: string) => false),
+  canManageSharedTables: vi.fn((_serverId: string) => false),
+  canPublishAgent: vi.fn((_serverId: string) => false),
+  canManageAgentAccess: vi.fn((_serverId: string) => false),
+  canManageAgentHostSettings: vi.fn((_serverId: string) => false),
 };
 vi.mock("@/features/workspace/context/mobile-workspace-context", () => ({ useMobileWorkspace: () => workspace }));
 vi.mock("@/features/auth/context/mobile-session-context", () => ({
@@ -423,15 +434,23 @@ vi.mock("@/features/settings/components/settings-content", () => ({
     trailing,
     disabled,
     accessibilityLabel,
+    checked,
   }: PropsWithChildren<{
     onPress?: () => void;
     trailing?: import("react").ReactNode;
     disabled?: boolean;
     accessibilityLabel?: string;
+    checked?: boolean;
   }>) =>
     onPress ? (
       <div>
-        <button type="button" aria-label={accessibilityLabel} disabled={disabled} onClick={onPress}>
+        <button
+          type="button"
+          aria-label={accessibilityLabel}
+          aria-pressed={checked}
+          disabled={disabled}
+          onClick={onPress}
+        >
           {children}
         </button>
         {trailing}
@@ -538,7 +557,7 @@ vi.mock("@expo/ui/community/datetime-picker", () => ({
       />
     ),
 }));
-vi.mock("uniwind", () => ({ useUniwind: () => ({ theme: "light" }) }));
+vi.mock("uniwind", () => ({ useUniwind: () => ({ theme: "light" }), useCSSVariable: () => "gray" }));
 vi.mock("@expo/ui", () => {
   const Picker = ({
     label,
@@ -596,6 +615,7 @@ vi.mock("@/shared/lib/haptics", () => ({
   haptics: { impact: async () => {}, notification: async () => {}, selection: async () => {} },
 }));
 vi.mock("lucide-react-native", () => ({
+  Check: () => null,
   ChevronRight: () => null,
   Ellipsis: () => null,
   ArrowLeft: () => null,
@@ -625,6 +645,8 @@ async function renderSheet(
     | "files"
     | "routines"
     | "runtime"
+    | "permissions"
+    | "advanced"
     | "memory"
     | "routine" = "info",
 ) {
@@ -665,6 +687,8 @@ beforeEach(() => {
   workspace.createAgentRoutine.mockClear();
   workspace.updateAgentRoutine.mockClear();
   workspace.deleteAgentRoutine.mockClear();
+  workspace.setAgentMemoryInclusion.mockReset();
+  workspace.loadAgentMemorySelection.mockReset().mockResolvedValue(null);
   workspace.loadAgentMemories.mockReset().mockResolvedValue([]);
   workspace.loadAgentRoutines.mockReset().mockResolvedValue([]);
   workspace.loadAgentAnalytics.mockReset().mockResolvedValue(null);
@@ -1211,7 +1235,7 @@ it("edits appearance separately from the main form", async () => {
 it("opens each detail page on the same host without sending or losing main form edits", async () => {
   await renderSheet();
   await edit("Name", "Draft name");
-  for (const label of ["Edit appearance", "Usage", "Memories", "Routines", "Runtime"]) await click(label);
+  for (const label of ["Edit appearance", "Usage", "Memories", "Routines", "Model"]) await click(label);
   expect(mocks.push.mock.calls.map((call) => call[0])).toEqual(
     ["appearance", "usage", "memories", "routines", "runtime"].map((page) => ({
       pathname: `/agent-info/[agentId]/${page}`,
@@ -1254,9 +1278,7 @@ it.each([
 ] as const)("hides access controls for %s", async (_case, role, settings) => {
   workspace.servers = [{ ...host, role }];
   workspace.loadAgentAdminSettings.mockResolvedValue(settings);
-  workspace.loadAgentModels.mockClear();
-  await renderSheet("runtime");
-  await waitFor(() => expect(workspace.loadAgentModels).toHaveBeenCalled());
+  await renderSheet("permissions");
   if (role === "member") expect(workspace.loadAgentAdminSettings).not.toHaveBeenCalled();
   else await waitFor(() => expect(workspace.loadAgentAdminSettings).toHaveBeenCalledWith(original.id, host.id));
   await act(async () => {});
@@ -1272,7 +1294,7 @@ it("saves access and auto-approve on the host for an admin", async () => {
     saved = { ...saved, ...input };
     return saved;
   });
-  await renderSheet("runtime");
+  await renderSheet("permissions");
   await waitFor(() => expect(screen.getByRole("switch", { name: "Auto approve" })).toHaveProperty("disabled", false));
   await click("Auto approve", "switch");
   await waitFor(() => expect(screen.getByRole("switch", { name: "Auto approve" })).toHaveProperty("checked", true));
@@ -1294,7 +1316,7 @@ it("saves access and auto-approve on the host for an admin", async () => {
   await act(() => root.unmount());
   root = createRoot(container);
   client.clear();
-  await renderSheet("runtime");
+  await renderSheet("permissions");
   await waitFor(() => expect(screen.getByDisplayValue("Full access")).toBeTruthy());
   expect(screen.getByRole("switch", { name: "Auto approve" })).toHaveProperty("checked", true);
 });
@@ -1303,7 +1325,7 @@ it("keeps the host value and shows the reason when an access update fails", asyn
   workspace.servers = [{ ...host, role: "owner" }];
   workspace.loadAgentAdminSettings.mockResolvedValue({ access: "full", autoApprove: true, autoApproveLocked: false });
   workspace.updateAgentAdminSettings.mockRejectedValue(new Error("Host refused the change."));
-  await renderSheet("runtime");
+  await renderSheet("permissions");
   await waitFor(() => expect(screen.getByDisplayValue("Full access")).toHaveProperty("disabled", false));
   await act(() => fireEvent.change(screen.getByDisplayValue("Full access"), { target: { value: "workspace" } }));
   expect(await screen.findByText("Host refused the change.")).toBeTruthy();
@@ -1318,7 +1340,7 @@ it("shows auto-approve as read-only when Turbo mode is on", async () => {
     autoApprove: false,
     autoApproveLocked: true,
   });
-  await renderSheet("runtime");
+  await renderSheet("permissions");
   await waitFor(() => expect(screen.getByRole("switch", { name: "Auto approve" })).toHaveProperty("checked", true));
   expect(screen.getByRole("switch", { name: "Auto approve" })).toHaveProperty("disabled", true);
 });
@@ -1368,6 +1390,79 @@ it("changes provider together with a compatible model and reasoning", async () =
     { agentId: original.id, provider: "claude", model: "claude-model", reasoningEffort: "medium" },
     host.id,
   );
+});
+
+it("sets essential memory and releases a user choice with the current host revision", async () => {
+  const memory: AgentMemory = {
+    id: "memory",
+    agentId: original.id,
+    text: "Uses metric units",
+    origin: "manual",
+    sourceTurnId: null,
+    createdAt: "",
+    updatedAt: "",
+  };
+  let selection: AgentMemorySelectionState = {
+    selections: [{ memoryId: memory.id, inclusion: "searchable", userControlled: false, revision: 1 }],
+    usedBytes: 0,
+    budgetBytes: 8192,
+  };
+  workspace.loadAgentMemories.mockResolvedValue([memory]);
+  workspace.loadAgentMemorySelection.mockImplementation(async () => selection);
+  workspace.setAgentMemoryInclusion.mockImplementation(async ({ changes }) => {
+    const previous = selection.selections[0];
+    const change = changes[0];
+    assert(change && previous);
+    expect(change.expectedRevision).toBe(previous.revision);
+    selection = {
+      ...selection,
+      selections: [
+        {
+          ...previous,
+          inclusion: change.inclusion === "automatic" ? previous.inclusion : change.inclusion,
+          userControlled: change.inclusion !== "automatic",
+          revision: previous.revision + 1,
+        },
+      ],
+    };
+    return selection;
+  });
+  mocks.recordId = memory.id;
+  await renderSheet("memory");
+  await screen.findByRole("button", { name: "Always included" });
+  await click("Always included");
+  await waitFor(() =>
+    expect(selection.selections[0]).toEqual({
+      memoryId: memory.id,
+      inclusion: "essential",
+      userControlled: true,
+      revision: 2,
+    }),
+  );
+  // A desktop changes the same memory before this client releases its override.
+  const beforeRemoteUpdate = selection.selections[0];
+  assert(beforeRemoteUpdate);
+  selection = { ...selection, selections: [{ ...beforeRemoteUpdate, inclusion: "searchable", revision: 5 }] };
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ["agent-info"] });
+  });
+  await act(async () => {
+    await screen.findByRole("button", { name: "Search when needed", pressed: true });
+  });
+  await click("Let the agent decide");
+  await waitFor(() =>
+    expect(workspace.setAgentMemoryInclusion).toHaveBeenLastCalledWith(
+      { agentId: original.id, changes: [{ memoryId: memory.id, inclusion: "automatic", expectedRevision: 5 }] },
+      host.id,
+    ),
+  );
+  expect(selection.selections[0]).toEqual({
+    memoryId: memory.id,
+    inclusion: "searchable",
+    userControlled: false,
+    revision: 6,
+  });
+  expect(workspace.saveAgentMemory).not.toHaveBeenCalled();
 });
 
 it("creates, edits, and deletes a memory on its host", async () => {

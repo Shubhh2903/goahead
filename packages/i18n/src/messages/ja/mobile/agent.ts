@@ -199,7 +199,6 @@ export const messages = {
   "mobile.agent.record.deleteRoutine": "ルーティンを削除",
   "mobile.agent.record.testStarted": "テスト実行を開始しました。結果はチャットに表示されます。",
   "mobile.agent.record.time": "時刻",
-  "mobile.agent.runtime.title": "ランタイム",
   "mobile.agent.runtime.unavailable": "利用できません",
   "mobile.agent.runtime.provider": "プロバイダー",
   "mobile.agent.runtime.model": "モデル",

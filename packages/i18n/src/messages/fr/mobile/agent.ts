@@ -204,7 +204,6 @@ export const messages = {
   "mobile.agent.record.deleteRoutine": "Supprimer la routine",
   "mobile.agent.record.testStarted": "L’exécution de test a commencé. Le résultat s’affiche dans la discussion.",
   "mobile.agent.record.time": "Heure",
-  "mobile.agent.runtime.title": "Exécution",
   "mobile.agent.runtime.unavailable": "Indisponible",
   "mobile.agent.runtime.provider": "Fournisseur",
   "mobile.agent.runtime.model": "Modèle",

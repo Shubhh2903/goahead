@@ -16,6 +16,7 @@ import type {
 import {
   CONVERSATION_PLAN_ITEM_TYPE,
   channelRoutingConversationEvent,
+  isContextResetMarker,
   parseConversationPlanText,
   routineConversationEvent,
   routineRunConversationEvent,
@@ -40,6 +41,8 @@ export type ChatMessage =
     }
   | { id: string; kind: "exchange"; exchange: AgentExchangeSummary }
   /** A routine created, changed, deleted, or run by the agent. The label matches the desktop marker. */
+  /** Where a new chat started: the agent does not see the messages above it. */
+  | { id: string; kind: "context-reset" }
   | { id: string; kind: "routine"; event: RoutineMarkerEvent; label: MobileTextKey; routineName: string }
   | { id: string; kind: "question"; turnId: string | undefined; prompt: ConversationQuestionPrompt }
   | {
@@ -122,6 +125,7 @@ const projectedBubbles = new WeakMap<ConversationMessage, { readerKey: string; b
 const projectedExchanges = new WeakMap<ConversationMessage, ChatMessage>();
 const projectedQuestions = new WeakMap<ConversationMessage, ChatMessage>();
 const projectedRoutines = new WeakMap<ConversationMessage, ChatMessage>();
+const projectedResets = new WeakMap<ConversationMessage, ChatMessage>();
 
 const ROUTINE_RUN_LABELS = {
   queued: "mobile.chat.routine.invoked",
@@ -284,6 +288,13 @@ export function projectChatMessages(
     const routine = projectRoutineMarker(message, latestRuns);
     if (routine) result.push(routine);
     if (message.routine) continue;
+    // A new chat is a system message too. Like desktop, it shows as a divider, not as its text.
+    if (isContextResetMarker(message)) {
+      result.push(
+        projectedMarker(projectedResets, message, () => ({ id: `context-reset:${message.id}`, kind: "context-reset" })),
+      );
+      continue;
+    }
     if (message.delivery?.status === "queued" || message.delivery?.status === "cancelled") continue;
     if (message.exchange) {
       const { exchange } = message;

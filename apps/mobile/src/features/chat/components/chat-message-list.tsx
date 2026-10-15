@@ -319,6 +319,20 @@ function RoutineMarkerRow({
   );
 }
 
+/** Where a new chat started, as the desktop divider shows it. The agent does not see the messages above. */
+function ContextResetMarkerRow({ muted }: { muted: ViewStyle["backgroundColor"] }) {
+  const { t } = useText();
+  return (
+    <View accessible className="flex-row items-center gap-3 py-2">
+      <View className="h-px flex-1" style={{ backgroundColor: muted, opacity: 0.35 }} />
+      <Typography.Paragraph type="body-sm" style={{ color: muted }}>
+        {t("mobile.chat.contextReset")}
+      </Typography.Paragraph>
+      <View className="h-px flex-1" style={{ backgroundColor: muted, opacity: 0.35 }} />
+    </View>
+  );
+}
+
 function playbackEligible(message: VisibleMessage) {
   return (
     message.kind === "message" &&
@@ -414,6 +428,8 @@ const MessageRow = memo(function MessageRow({
   const rendered =
     message.kind === "routine" ? (
       <RoutineMarkerRow key={message.id} message={message} muted={muted} />
+    ) : message.kind === "context-reset" ? (
+      <ContextResetMarkerRow key={message.id} muted={muted} />
     ) : message.kind === "exchange" || message.kind === "channel-routing" ? (
       <View key={message.id} className="flex-row flex-wrap items-center justify-center gap-2 py-2">
         <Typography.Paragraph type="body-sm" style={{ color: muted }}>
