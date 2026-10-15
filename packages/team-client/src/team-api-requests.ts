@@ -6,6 +6,8 @@
 
 import {
   type AgentImportPreview,
+  type AgentMemory,
+  type AgentMemorySelectionState,
   type ApplyAgentImportInput,
   type AttachmentSummary,
   BROWSER_SECRET_RESPONSE_PATH,
@@ -23,17 +25,27 @@ import {
   decodeRemoteAgentImportPreview,
   decodeRemoteAgentImportResult,
   type InstalledSkill,
+  isAgentMemory,
+  isAgentMemorySelectionState,
   isAttachmentSummary,
   type OpenBotDesktopApi,
   type RemoteAgentImportResult,
   type ReorderQueueInput,
   type RespondToBrowserSecretInput,
   type RespondToBrowserTakeoverInput,
+  type SetAgentMemoryInclusionInput,
   type SteerQueuedMessageInput,
   type UpdateQueuedMessageInput,
 } from "@openbot/contracts/ipc";
+import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { TEAM_API_ROUTES } from "@openbot/contracts/team-api-routes";
 import { AGENT_IMPORT_ROUTES, AGENT_IMPORT_UPLOAD_BYTES } from "@openbot/contracts/team-protocol/agent-import-v1";
+import {
+  AGENT_MEMORIES_PAGE_ROUTE,
+  AGENT_MEMORIES_PAGE_SIZE,
+  AGENT_MEMORY_INCLUSION_ROUTE,
+  AGENT_MEMORY_SELECTION_PAGE_ROUTE,
+} from "@openbot/contracts/team-protocol/agent-memories-v1";
 import { CHANNEL_ROUTES } from "@openbot/contracts/team-protocol/channels-v1";
 import { CONTEXT_RESET_ROUTES } from "@openbot/contracts/team-protocol/context-reset-v1";
 import { decodeTeamProtocolV2Json, type TeamProtocolV2Json } from "@openbot/contracts/team-protocol/v2";
@@ -175,4 +187,123 @@ export function teamChannelsApi(request: TeamApiRequest): TeamChannelsApi {
     testChannelRoutine: (input) => post(CHANNEL_ROUTES.routineTest, decodeChannelRoutineRun, input),
     listChannelRoutineRuns: (input) => post(CHANNEL_ROUTES.routineRuns, decodeChannelRoutineRuns, input),
   };
+}
+
+/** Old hosts keep their full-list route; new hosts send bounded pages in stable id order. */
+export async function readAgentMemories(
+  request: TeamApiRequest,
+  agentId: string,
+  paged: boolean,
+): Promise<AgentMemory[]> {
+  function decodeMemories(value: unknown): AgentMemory[] {
+    if (!Array.isArray(value) || !value.every(isAgentMemory) || value.some((memory) => memory.agentId !== agentId))
+      throw new Error("The host returned invalid memories.");
+    return value;
+  }
+  if (!paged) return request("GET", TEAM_API_ROUTES.agent.memories(agentId), decodeMemories);
+  const memories: AgentMemory[] = [];
+  let after: string | null = null;
+  do {
+    const cursor: string | null = after;
+    const page: { memories: AgentMemory[]; nextCursor: string | null } = await request(
+      "POST",
+      AGENT_MEMORIES_PAGE_ROUTE,
+      (value) => {
+        if (!isDynamicRecord(value) || !(value.nextCursor === null || isString(value.nextCursor)))
+          throw new Error("The host returned an invalid memory page.");
+        const entries = decodeMemories(value.memories);
+        if (
+          entries.length > AGENT_MEMORIES_PAGE_SIZE ||
+          entries.some((entry, index) => {
+            const previous = index === 0 ? cursor : entries[index - 1]?.id;
+            return previous !== null && previous !== undefined && entry.id <= previous;
+          }) ||
+          (value.nextCursor !== null && (entries.length === 0 || value.nextCursor !== entries.at(-1)?.id))
+        )
+          throw new Error("The host returned an invalid memory cursor.");
+        return { memories: entries, nextCursor: value.nextCursor };
+      },
+      { agentId, after: cursor },
+    );
+    memories.push(...page.memories);
+    after = page.nextCursor;
+  } while (after !== null);
+  // Match the local store's updated_at DESC, memory_id order after collecting stable pages.
+  return memories.sort((left, right) =>
+    left.updatedAt !== right.updatedAt
+      ? left.updatedAt > right.updatedAt
+        ? -1
+        : 1
+      : left.id < right.id
+        ? -1
+        : left.id > right.id
+          ? 1
+          : 0,
+  );
+}
+
+/** Selection pages name their owner and use strictly increasing memory IDs. */
+export async function readAgentMemorySelection(
+  request: TeamApiRequest,
+  agentId: string,
+  supported: boolean,
+): Promise<AgentMemorySelectionState | null> {
+  if (!supported) return null;
+  const state: AgentMemorySelectionState = { selections: [], usedBytes: 0, budgetBytes: 8192 };
+  let after: string | null = null;
+  do {
+    const cursor: string | null = after;
+    const page: AgentMemorySelectionState & { nextCursor: string | null } = await request(
+      "POST",
+      AGENT_MEMORY_SELECTION_PAGE_ROUTE,
+      (value) => {
+        if (
+          !isDynamicRecord(value) ||
+          value.agentId !== agentId ||
+          !isAgentMemorySelectionState(value) ||
+          !(value.nextCursor === null || isString(value.nextCursor))
+        )
+          throw new Error("The host returned invalid memory selection.");
+        const entries = value.selections;
+        if (
+          entries.length > AGENT_MEMORIES_PAGE_SIZE ||
+          entries.some((entry, index) => {
+            const previous = index === 0 ? cursor : entries[index - 1]?.memoryId;
+            return previous !== null && previous !== undefined && entry.memoryId <= previous;
+          }) ||
+          (value.nextCursor !== null && (entries.length === 0 || value.nextCursor !== entries.at(-1)?.memoryId))
+        )
+          throw new Error("The host returned an invalid selection cursor.");
+        return {
+          selections: entries,
+          usedBytes: value.usedBytes,
+          budgetBytes: value.budgetBytes,
+          nextCursor: value.nextCursor,
+        };
+      },
+      { agentId, after: cursor },
+    );
+    state.selections.push(...page.selections);
+    state.usedBytes = page.usedBytes;
+    state.budgetBytes = page.budgetBytes;
+    after = page.nextCursor;
+  } while (after !== null);
+  return state;
+}
+
+export async function setAgentMemoryInclusion(
+  request: TeamApiRequest,
+  input: SetAgentMemoryInclusionInput,
+): Promise<AgentMemorySelectionState> {
+  await request("POST", AGENT_MEMORY_INCLUSION_ROUTE, ignoreResponse, {
+    agentId: input.agentId,
+    changes: input.changes.map(({ memoryId, inclusion, expectedRevision }) => ({
+      memoryId,
+      inclusion,
+      expectedRevision,
+    })),
+  });
+  const state = await readAgentMemorySelection(request, input.agentId, true);
+  if (state === null) throw new Error("The host returned no memory selection.");
+  return state;
 }

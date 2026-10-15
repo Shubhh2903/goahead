@@ -81,6 +81,7 @@ import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import type * as Ws from "ws";
 import { duplicateAgentIntoLayout } from "../backend/agent/duplication-gate";
+import { AgentMemorySelectionError } from "../backend/agent-memory-store";
 import { McpServerError } from "../backend/mcp-server-store";
 import type { TeamChatStore } from "../backend/team-chat-store";
 import { LifecycleGate } from "./lifecycle-gate";
@@ -109,6 +110,7 @@ import {
 import { routeAgentAdmin } from "./team-api/route-agent-admin";
 import { routeAgentImport } from "./team-api/route-agent-import";
 import { routeAgentInstall } from "./team-api/route-agent-install";
+import { routeAgentMemoryPage } from "./team-api/route-agent-memories";
 import { routeAgentPublish } from "./team-api/route-agent-publish";
 import { routeAgents } from "./team-api/route-agents";
 import { routeBrowser } from "./team-api/route-browser";
@@ -656,6 +658,7 @@ export class TeamApiServer {
       if ((await routeHostAdmin(context, this.#options.admin)) === "handled") return;
       if ((await routeHostUpdate(context, this.#options.admin)) === "handled") return;
       if ((await routeContextReset(context, this.#options.agents, hidden)) === "handled") return;
+      if ((await routeAgentMemoryPage(context, this.#options.agents, hidden)) === "handled") return;
       if ((await routeAgentImport(context, this.#options.agentImport, newAgentHidden)) === "handled") return;
       if (
         (await routeLiveActivityPush(context, this.#options.liveActivityPush, () =>
@@ -675,7 +678,8 @@ export class TeamApiServer {
         error instanceof RemoteScreenError ||
         error instanceof TeamStoreError ||
         error instanceof McpServerError ||
-        error instanceof AnalyticsInputError;
+        error instanceof AnalyticsInputError ||
+        error instanceof AgentMemorySelectionError;
       const status =
         error instanceof HttpError || error instanceof RemoteScreenError ? error.status : expected ? 400 : 500;
       const message = expected ? error.message : sourceText("error.team.requestFailed");

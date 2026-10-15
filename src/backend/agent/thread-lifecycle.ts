@@ -644,7 +644,7 @@ export class ThreadLifecycle {
   ): { developerInstructions: string; toolProfile?: typeof SLACK_REPLY_TOOL_PROFILE } {
     if (!this.#isSlackReply(agent, publicThreadId)) return { developerInstructions: this.#instructions(agent) };
     return {
-      developerInstructions: slackReplyInstructions(agent, this.#memories.listFor(agent.id)),
+      developerInstructions: slackReplyInstructions(agent, this.#memories.essentialFor(agent.id)),
       toolProfile: SLACK_REPLY_TOOL_PROFILE,
     };
   }
@@ -654,9 +654,13 @@ export class ThreadLifecycle {
     return developerInstructions(
       agent,
       this.#store.sharedRoot,
-      this.#memories.listFor(agent.id),
+      this.#memories.essentialFor(agent.id),
       this.#store.automationRoot,
-      { passwordVault: this.#passwordVaultConnected() },
+      {
+        passwordVault: this.#passwordVaultConnected(),
+        memoryLimit: this.#memories.limit(),
+        storedMemoryCount: this.#memories.listFor(agent.id).length,
+      },
     );
   }
 

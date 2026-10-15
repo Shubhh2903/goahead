@@ -18,7 +18,7 @@ import { importProviderHistory } from "./provider-history-import";
 // - a deleted thread leaves import, turn or staging rows behind;
 // - the first import after the upgrade deletes a saved row or drops its attachments.
 
-const LATEST = 34;
+const LATEST = 35;
 const STAMP = "2026-10-01T07:00:00.000Z";
 const HISTORY_OBJECTS = [
   "provider_history_imports",
@@ -392,12 +392,14 @@ describe("migration 33: provider history tables", () => {
       effort: agent.reasoningEffort,
     });
     created.close();
-    // Migrations 33 and 34 only add objects, so taking them and the markers away gives the v32 shape of this install.
+    // Migrations 33 to 35 only add objects, so taking them and the markers away gives the v32 shape of this install.
     const legacy = new DatabaseSync(join(root, "openbot.db"));
     databases.push(legacy);
     legacy.exec(`DROP TABLE provider_history_staging; DROP TABLE provider_history_turns;
       DROP TABLE provider_history_imports; DROP TABLE routine_flow_steps; DROP TABLE routine_flow_links;
-      DROP TABLE routine_flow_positions; DELETE FROM schema_migrations WHERE version IN (33, 34);`);
+      DROP TABLE routine_flow_positions; DROP TRIGGER agent_memory_insert; DROP TRIGGER agent_memory_update;
+      DROP TRIGGER agent_memory_delete; DROP TABLE agent_memory_search; DROP TABLE agent_memory_selections;
+      DELETE FROM schema_migrations WHERE version IN (33, 34, 35);`);
     legacy.close();
 
     const database = new OpenBotDatabase(root);

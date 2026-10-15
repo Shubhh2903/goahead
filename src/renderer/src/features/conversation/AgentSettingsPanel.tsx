@@ -33,6 +33,8 @@ interface AgentSettingsPanelProps
   /** The server on this computer that runs the agent. Project folders are local-only, so a remote server has none. */
   projectFoldersServerId?: string;
   remoteClient?: boolean;
+  /** The memory cap of an agent on this computer. Absent for a remote agent: its host enforces its own. */
+  memoryLimit?: number;
   /** The web client's host calls. A remote client shows only Skills and Tables, and only with these. */
   adminCalls?: ConversationRuntime["admin"];
   onOpenUsage?: (trigger: HTMLButtonElement) => void;
@@ -108,7 +110,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
       });
     }
   }
-  const memoriesPort = createMemo(() => agentMemoriesPort(props.agent.id, props.agent.name));
+  const memoriesPort = createMemo(() => agentMemoriesPort(props.agent.id, props.agent.name, props.memoryLimit ?? null));
   const routinesPort = createMemo(() =>
     agentRoutinesPort(
       props.agent.id,

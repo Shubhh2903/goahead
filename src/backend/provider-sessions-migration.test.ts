@@ -22,7 +22,7 @@ import { migrateOpenBotDatabase } from "./openbot-database-schema";
 // - a database that upstream OpenBot wrote is migrated as a GoAhead database;
 // - the lineage guard stops a real GoAhead database.
 
-const LATEST = 34;
+const LATEST = 35;
 const STAMP = "2026-10-01T07:00:00.000Z";
 
 const roots: string[] = [];

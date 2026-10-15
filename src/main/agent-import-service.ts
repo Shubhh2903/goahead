@@ -58,6 +58,8 @@ export interface AgentImportAgents {
   }): Promise<AgentSummary>;
   createRoutine(input: CreateRoutineInput, options?: { recordConversationEvent?: boolean }): unknown;
   createMemory(input: { agentId: string; text: string }): unknown;
+  memoryLimit(): number;
+  initializeMemorySelection(agentId: string): void;
   setAvatar(agentId: string, image: AvatarImageInput | null): Promise<AgentSummary>;
   deleteAgent(agentId: string): Promise<void>;
   channels: { command(command: ChannelCommand, actor: ChannelActor): Promise<Channel> };
@@ -190,6 +192,7 @@ export class AgentImportService {
       throw new Error(sourceText("error.import.manifestMissing", { manifest: AGENT_IMPORT_MANIFEST }));
     const { manifest, warnings } = decodeImportManifest(
       extract(bytes, (name) => name === manifestName)[manifestName] ?? new Uint8Array(),
+      this.agents.memoryLimit(),
     );
 
     const avatarPaths = new Set(manifest.agents.flatMap((agent) => (agent.avatar ? [wrapper + agent.avatar] : [])));
@@ -461,7 +464,12 @@ export class AgentImportService {
           );
         }
       }
-      for (const text of source.memories) this.agents.createMemory({ agentId: agent.id, text });
+      // The limit can be lower now than when the archive was read.
+      const memoryLimit = this.agents.memoryLimit();
+      if (source.memories.length > memoryLimit)
+        warnings.push(sourceText("error.import.memoryLimit", { name: source.name, limit: memoryLimit }));
+      for (const text of source.memories.slice(0, memoryLimit)) this.agents.createMemory({ agentId: agent.id, text });
+      this.agents.initializeMemorySelection(agent.id);
       const avatar = staged.avatars.get(source.key);
       if (avatar) agent = await this.agents.setAvatar(agent.id, avatar);
       return agent;

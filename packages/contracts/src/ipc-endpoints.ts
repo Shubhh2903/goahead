@@ -38,8 +38,11 @@ import type { AgentModelOption } from "./ipc-agent-identity";
 import type { AgentImportPreview, AgentImportResult, ApplyAgentImportInput } from "./ipc-agent-import";
 import type {
   AgentMemory,
+  AgentMemoryLimitPreference,
+  AgentMemorySelectionState,
   CreateAgentMemoryInput,
   DeleteAgentMemoryInput,
+  SetAgentMemoryInclusionInput,
   UpdateAgentMemoryInput,
 } from "./ipc-agent-memories";
 import type {
@@ -477,6 +480,10 @@ export const IPC_ENDPOINTS = {
     getBusyMessageModePreference: request<undefined, BusyMessageModePreference>()("app:get-busy-message-mode"),
     setBusyMessageModePreference: request<BusyMessageModePreference, BusyMessageModePreference>()(
       "app:set-busy-message-mode",
+    ),
+    getAgentMemoryLimitPreference: request<undefined, AgentMemoryLimitPreference>()("app:get-agent-memory-limit"),
+    setAgentMemoryLimitPreference: request<AgentMemoryLimitPreference, AgentMemoryLimitPreference>()(
+      "app:set-agent-memory-limit",
     ),
     getAppLanguagePreference: request<undefined, AppLanguagePreference>()("app:get-language-preference"),
     setAppLanguagePreference: request<SetAppLanguagePreferenceInput, AppLanguagePreference>()(
@@ -963,6 +970,10 @@ export const IPC_ENDPOINTS = {
     scopedEvent: event<ScopedAgentEvent>()("agent:event"),
   },
   agentMemories: {
+    getMemorySelection: scopedRequest<string, AgentMemorySelectionState | null>()("agent:get-memory-selection"),
+    setMemoryInclusion: scopedRequest<SetAgentMemoryInclusionInput, AgentMemorySelectionState>()(
+      "agent:set-memory-inclusion",
+    ),
     listMemories: scopedRequest<string, AgentMemory[]>()("agent:list-memories"),
     createMemory: scopedRequest<CreateAgentMemoryInput, AgentMemory>()("agent:create-memory"),
     updateMemory: scopedRequest<UpdateAgentMemoryInput, AgentMemory>()("agent:update-memory"),

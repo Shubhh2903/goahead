@@ -7,6 +7,7 @@
 import {
   type AccountUsage,
   type AgentMemory,
+  type AgentMemorySelectionState,
   type AgentModelOption,
   type AgentProjectFolderState,
   type AgentStatus,
@@ -16,6 +17,7 @@ import {
   decodeOptionalHostAnalytics,
   isAccountUsage,
   isAgentMemory,
+  isAgentMemorySelectionState,
   isAgentModelOption,
   isAgentProjectFolderState,
   isAgentProvider,
@@ -160,4 +162,13 @@ export function decodeAgentAnalyticsFromMain(value: unknown) {
 
 export function decodeHostAnalyticsFromMain(value: unknown) {
   return decodeOptionalHostAnalytics(value);
+}
+
+export function decodeMemorySelection(value: unknown): AgentMemorySelectionState {
+  if (!isAgentMemorySelectionState(value)) throw new Error("Invalid agent memory selection response.");
+  return value;
+}
+
+export function decodeOptionalMemorySelection(value: unknown): AgentMemorySelectionState | null {
+  return value === null ? null : decodeMemorySelection(value);
 }

@@ -4,7 +4,12 @@
 // words of copy are not. They live here, so `AgentMemoriesModal` names no owner at all.
 
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import type { MemoryEntry, OpenBotDesktopApi } from "@openbot/contracts/ipc";
+import type {
+  AgentMemorySelectionState,
+  MemoryEntry,
+  OpenBotDesktopApi,
+  SetAgentMemoryInclusionInput,
+} from "@openbot/contracts/ipc";
 
 export interface MemoriesPort {
   ownerId: string;
@@ -12,8 +17,13 @@ export interface MemoriesPort {
   ownerLabel: string;
   /** The word the modal reads in its sentences: "This agent has no saved memories yet." */
   ownerNoun: "agent" | "channel";
-  limit: number;
+  /** Null when another computer holds the cap: its host refuses a memory past it. */
+  limit: number | null;
   list: () => Promise<MemoryEntry[]>;
+  selection?: {
+    read: () => Promise<AgentMemorySelectionState | null>;
+    set: (changes: SetAgentMemoryInclusionInput["changes"]) => Promise<AgentMemorySelectionState>;
+  };
   create: (text: string) => Promise<void>;
   update: (memoryId: string, text: string) => Promise<void>;
   remove: (memoryId: string) => Promise<void>;
@@ -22,13 +32,17 @@ export interface MemoriesPort {
   subscribe: (reload: () => void) => () => void;
 }
 
-export function agentMemoriesPort(agentId: string, agentName: string): MemoriesPort {
+export function agentMemoriesPort(agentId: string, agentName: string, limit: number | null): MemoriesPort {
   return {
     ownerId: agentId,
     ownerLabel: agentName,
     ownerNoun: "agent",
-    limit: INPUT_LIMITS.agentMemories,
+    limit,
     list: () => window.openbot.agent.listMemories(agentId),
+    selection: {
+      read: () => window.openbot.agent.getMemorySelection(agentId),
+      set: (changes) => window.openbot.agent.setMemoryInclusion({ agentId, changes }),
+    },
     create: async (text) => {
       await window.openbot.agent.createMemory({ agentId, text });
     },

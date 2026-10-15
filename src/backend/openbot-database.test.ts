@@ -148,6 +148,7 @@ describe("OpenBotDatabase", () => {
       { version: 32 },
       { version: 33 },
       { version: 34 },
+      { version: 35 },
     ]);
     database.close();
   });
@@ -1148,6 +1149,7 @@ describe("OpenBotDatabase", () => {
       { version: 32 },
       { version: 33 },
       { version: 34 },
+      { version: 35 },
     ]);
     expect(migrated.connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     migrated.close();
@@ -1222,7 +1224,7 @@ describe("OpenBotDatabase", () => {
       DROP TABLE projection_messaging_inbox_reads;
       DROP TABLE projection_messaging_watched_channels;
       DROP TABLE projection_messaging_inbox;
-      DELETE FROM schema_migrations WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34);
+      DELETE FROM schema_migrations WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35);
       PRAGMA foreign_keys = ON;
     `);
     legacy.close();
@@ -1250,7 +1252,7 @@ describe("OpenBotDatabase", () => {
         .get(),
     ).toMatchObject({ sql: expect.not.stringContaining("CHECK(provider") });
     expect(migrated.connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-      version: 34,
+      version: 35,
     });
     migrated.close();
   });
@@ -1275,7 +1277,7 @@ describe("OpenBotDatabase", () => {
       DROP TABLE projection_messaging_inbox_reads;
       DROP TABLE projection_messaging_watched_channels;
       DROP TABLE projection_messaging_inbox;
-      DELETE FROM schema_migrations WHERE version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34);
+      DELETE FROM schema_migrations WHERE version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35);
     `);
     legacy.close();
 
@@ -1300,7 +1302,7 @@ describe("OpenBotDatabase", () => {
       { name: "Filesystem" },
     ]);
     expect(reopened.connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-      version: 34,
+      version: 35,
     });
     reopened.close();
   });
@@ -1345,7 +1347,7 @@ describe("OpenBotDatabase", () => {
         DROP TABLE projection_messaging_inbox;
         DROP TABLE projection_messaging_threads;
         DROP TABLE projection_messaging_connections;
-        DELETE FROM schema_migrations WHERE version IN (25, 26, 27, 28, 29, 30, 31, 32, 33, 34);
+        DELETE FROM schema_migrations WHERE version IN (25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35);
       `);
       // The squatted name is the index's: the tables use IF NOT EXISTS, so only the index can collide.
       if (failFirst) legacy.exec("CREATE TABLE messaging_threads_agent (conflict TEXT)");
@@ -1368,7 +1370,7 @@ describe("OpenBotDatabase", () => {
       expect(migrated.listAgents()).toEqual([agent]);
       expect(migrated.readConversation(agent.id, agent.threadId).messages).toEqual(conversation.messages);
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 34,
+        version: 35,
       });
       expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -1458,7 +1460,7 @@ describe("OpenBotDatabase", () => {
         DROP TABLE projection_messaging_inbox_reads;
         DROP TABLE projection_messaging_watched_channels;
         DROP TABLE projection_messaging_inbox;
-        DELETE FROM schema_migrations WHERE version IN (28, 29, 30, 31, 32, 33, 34);
+        DELETE FROM schema_migrations WHERE version IN (28, 29, 30, 31, 32, 33, 34, 35);
       `);
       // The squatted name is the index's: the tables use IF NOT EXISTS, so only the index can collide.
       if (failFirst) legacy.exec("CREATE TABLE messaging_inbox_sent (conflict TEXT)");
@@ -1496,7 +1498,7 @@ describe("OpenBotDatabase", () => {
         connection.prepare("SELECT link_id, thread_key, history_cursor FROM projection_messaging_threads").all(),
       ).toEqual([{ link_id: "link-1", thread_key: "direct", history_cursor: "100.000" }]);
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 34,
+        version: 35,
       });
       expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -1551,7 +1553,7 @@ describe("OpenBotDatabase", () => {
         DROP TABLE projection_messaging_drafts;
         DROP TABLE slack_messages;
         DROP TABLE slack_conversations;
-        DELETE FROM schema_migrations WHERE version IN (29, 30, 31, 32, 33, 34);
+        DELETE FROM schema_migrations WHERE version IN (29, 30, 31, 32, 33, 34, 35);
       `);
       const addInbox = legacy.prepare(
         `INSERT INTO projection_messaging_inbox
@@ -1606,7 +1608,7 @@ describe("OpenBotDatabase", () => {
       const connection = migrated.connection;
       expect(migrated.listAgents()).toEqual([agent]);
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 34,
+        version: 35,
       });
       expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -1763,7 +1765,7 @@ describe("OpenBotDatabase", () => {
       legacy.exec(`
         DROP TABLE projection_messaging_auto_reply;
         DROP TABLE projection_messaging_drafts;
-        DELETE FROM schema_migrations WHERE version IN (30, 31, 32, 33, 34);
+        DELETE FROM schema_migrations WHERE version IN (30, 31, 32, 33, 34, 35);
       `);
       legacy
         .prepare(
@@ -1796,7 +1798,7 @@ describe("OpenBotDatabase", () => {
       const connection = migrated.connection;
       expect(migrated.listAgents()).toEqual([agent]);
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 34,
+        version: 35,
       });
       expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -1923,7 +1925,7 @@ describe("OpenBotDatabase", () => {
       const legacy = new DatabaseSync(database.path);
       legacy.exec(`
         DROP TABLE projection_messaging_auto_reply;
-        DELETE FROM schema_migrations WHERE version IN (31, 32, 33, 34);
+        DELETE FROM schema_migrations WHERE version IN (31, 32, 33, 34, 35);
       `);
       legacy
         .prepare(
@@ -1959,7 +1961,7 @@ describe("OpenBotDatabase", () => {
       const connection = migrated.connection;
       expect(migrated.listAgents()).toEqual([agent]);
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 34,
+        version: 35,
       });
       expect(connection.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -2066,7 +2068,7 @@ describe("OpenBotDatabase", () => {
       DROP TABLE projection_messaging_inbox_reads;
       DROP TABLE projection_messaging_watched_channels;
       DROP TABLE projection_messaging_inbox;
-      DELETE FROM schema_migrations WHERE version IN (21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34);
+      DELETE FROM schema_migrations WHERE version IN (21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35);
     `);
     legacy.close();
 
@@ -2158,6 +2160,7 @@ describe("OpenBotDatabase", () => {
       { version: 32 },
       { version: 33 },
       { version: 34 },
+      { version: 35 },
     ]);
     migrated.close();
   });
@@ -2250,6 +2253,7 @@ describe("OpenBotDatabase", () => {
       { version: 32 },
       { version: 33 },
       { version: 34 },
+      { version: 35 },
     ]);
     retried.close();
   });
@@ -2988,7 +2992,7 @@ describe("OpenBotDatabase", () => {
       expect(migrated.connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(migrated.connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(migrated.connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 34,
+        version: 35,
       });
       expect(
         migrated.connection.prepare("SELECT provider_session_id FROM projection_turns WHERE turn_id = ?").get("turn-1"),
@@ -3129,7 +3133,7 @@ describe("OpenBotDatabase", () => {
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 34,
+        version: 35,
       });
       expect(
         connection.prepare("SELECT provider_session_id FROM projection_turns WHERE turn_id = ?").get("turn-1"),
@@ -3289,7 +3293,7 @@ describe("OpenBotDatabase", () => {
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 34,
+        version: 35,
       });
       expect(
         connection.prepare("SELECT provider_session_id FROM projection_turns WHERE turn_id = ?").get("turn-1"),
@@ -3462,7 +3466,7 @@ describe("OpenBotDatabase", () => {
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 34,
+        version: 35,
       });
       expect(
         connection.prepare("SELECT provider_session_id FROM projection_turns WHERE turn_id = ?").get("turn-1"),
@@ -3625,7 +3629,7 @@ describe("OpenBotDatabase", () => {
       expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(connection.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-        version: 34,
+        version: 35,
       });
       const agentRoutines = new AgentRoutineStore(migrated);
       expect(agentRoutines.get(agent.id, agentRoutine.id)?.limitPolicy).toBe("wait");

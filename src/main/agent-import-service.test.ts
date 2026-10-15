@@ -118,6 +118,8 @@ beforeEach(async () => {
         return { id: `routine-${routines.length}` };
       },
       createMemory: (input) => memories.push(input),
+      memoryLimit: () => 64,
+      initializeMemorySelection: vi.fn(),
       setAvatar: async (agentId, image) => {
         avatars.set(agentId, image);
         const agent = agents.find((candidate) => candidate.id === agentId);

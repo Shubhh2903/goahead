@@ -45,6 +45,8 @@ export const messages = defineMessages("settings", {
   "settings.busyMessage.title": "Steer agents while they work",
   "settings.busyMessage.description":
     "A message you send while an agent works joins its current work at the next step, instead of waiting in the queue. ChatGPT and Claude can steer; other providers queue the message.",
+  "settings.agentMemoryLimit.title": "Memories per agent",
+  "settings.agentMemoryLimit.description": "How many memories each agent on this computer can keep.",
   "settings.autonomy.title": "Agent autonomy",
   "settings.turbo.title": "Turbo mode",
   "settings.turbo.description":

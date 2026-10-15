@@ -1269,6 +1269,32 @@ The next provider session gets a handoff of only the messages after the last mar
 the request while a turn runs or a message waits in the queue. A client without the capability shows
 the marker as its text. Channel execution threads are not reset.
 
+### Agent memories
+
+Only essential memories enter an agent's startup instructions, in a block limited to 8,192 UTF-8
+bytes after secret redaction. A Slack reply context gets the same block without ids. All saved
+memories stay on the host in SQLite. Agents recall the other entries with bounded local search
+(`openbot.search_memories`: FTS5, `unicode61`, BM25, at most 10 entries) and ID-paged listing
+(`openbot.list_memories`, at most 25 entries). Each response is limited to 8,192 UTF-8 bytes. The
+search index stays local. Migration 35 (upstream OpenBot 32) adds the selection table, the index and
+its triggers, keeps memory text, ids and dates, and selects recent manual entries before recent
+automatic ones. After that, a new memory that the user adds is essential when the essential block
+still fits (a GoAhead choice; upstream starts it searchable), and a memory that an agent saves starts
+searchable. The index uses the rowid of `projection_agent_memories`, so a later migration that
+vacuums must rebuild `agent_memory_search`. Automatic text and selection changes stay pending until
+the turn completes. Agent tools cannot change a user-controlled selection. The storage limit is 64,
+128, 256 or 512 per agent; a lower limit deletes no memories.
+
+The optional `agent-memories-v1` capability (`team-protocol/agent-memories-v1.ts`, the upstream name
+and payloads) adds three POST routes for the iPhone app and joined members. `/v1/agent-memories/page`
+returns up to 256 memories. `/v1/agent-memories/selection` returns up to 256 selection records, the
+agent id and essential-memory byte usage. Both use ascending memory ids and an `after` cursor (`null`
+for the first page); clients check the owner and the cursor order. `/v1/agent-memories/inclusion`
+changes up to 25 selections with expected revisions and returns an empty acknowledgement. Each route
+needs authentication and a visible agent. Selection writes use the same member access as memory text
+writes. The released full-list GET route and the 2 MiB frame limit do not change: a new client on an
+older host keeps text editing and hides the selection controls.
+
 ### Agent import from a joined server
 
 `agent-import-v1` lets any member, not only an owner or admin, import a Grok Bot export into the host.

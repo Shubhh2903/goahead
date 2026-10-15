@@ -12,7 +12,7 @@ import { migrateOpenBotDatabase } from "./openbot-database-schema";
 // - a newer or incomplete history is changed or accepted;
 // - a deleted routine or run leaves links or steps behind, or a step can point at a missing run.
 
-const LATEST = 34;
+const LATEST = 35;
 const STAMP = "2026-10-01T07:00:00.000Z";
 const FLOW_OBJECTS = [
   "routine_flow_links",

@@ -280,6 +280,7 @@ export function ConversationPanels(panelProps: { onOpenUsage?: (trigger: HTMLBut
               projectFoldersServerId={props.server?.kind === "local" ? props.server.id : undefined}
               busyMessageModeEditable={props.server?.kind === "local"}
               defaultBusyMessageMode={props.defaultBusyMessageMode}
+              memoryLimit={props.server?.kind === "local" ? props.agentMemoryLimit : undefined}
               agents={props.agents}
               onStartNewChat={props.onClearAgentContext}
               onCreateSkill={

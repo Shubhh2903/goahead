@@ -4,6 +4,7 @@ import { type DynamicRecord, isDynamicRecord, isNumber, isString } from "@openbo
 import { isGeneratedAgentId } from "@openbot/contracts/validation";
 import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
+import { AGENT_MEMORY_SELECTION_SCHEMA_SQL, migrateAgentMemorySelection } from "./agent-memory-selection";
 import { CHANNEL_SCHEMA_SQL, CHANNEL_SETTINGS_SCHEMA_SQL } from "./channel-schema";
 import { PROVIDER_HISTORY_SCHEMA_SQL } from "./database/provider-history-schema";
 import { MCP_SERVERS_SCHEMA_SQL } from "./mcp-schema";
@@ -432,7 +433,9 @@ const LATEST_SCHEMA_SQL =
   // Migration 33 (upstream OpenBot migration 29).
   PROVIDER_HISTORY_SCHEMA_SQL +
   // Migration 34 (upstream OpenBot migration 31).
-  ROUTINE_FLOW_SCHEMA_SQL;
+  ROUTINE_FLOW_SCHEMA_SQL +
+  // Migration 35 (upstream OpenBot migration 32).
+  AGENT_MEMORY_SELECTION_SCHEMA_SQL;
 
 /** The end of a routine table with the migration 27 column after its last one. */
 function withRoutineLimitPolicy(tableEnd: string): string {
@@ -614,6 +617,15 @@ const MIGRATIONS: readonly OpenBotMigration[] = [
     // what it did before. The tables use IF NOT EXISTS, so only an index name can collide.
     up: (db) => db.exec(ROUTINE_FLOW_SCHEMA_SQL),
   },
+  {
+    version: 35,
+    // Upstream OpenBot migration 32. Adds the memory selection table, the FTS5 search index over
+    // `projection_agent_memories` and the triggers that keep both current, then fills them: an index rebuild and
+    // one selection row per memory. Memory rows stay unchanged, so foreign keys stay on. The index uses the rowid
+    // of a table with a TEXT primary key, which a VACUUM can change: a later migration that vacuums must also
+    // rebuild `agent_memory_search`.
+    up: migrateAgentMemorySelection,
+  },
 ];
 
 const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? BASELINE_SCHEMA_VERSION;
@@ -776,8 +788,8 @@ function validateAppliedVersions(versions: number[]): void {
 // them (upstream 28 rebuilds `projection_provider_sessions`, and 29 to 31 add provider history, webhook and
 // routine flow tables). So a marker without its table means that upstream OpenBot wrote the database. Running
 // GoAhead migrations on it would skip the GoAhead schema of those versions, so stop before any write.
-// GoAhead 33 and 34 create the same provider history and routine flow tables as upstream 29 and 31, so those tables
-// prove nothing either way: only a missing GoAhead table below is the signal.
+// GoAhead 33, 34 and 35 create the same provider history, routine flow and memory selection tables as upstream 29,
+// 31 and 32, so those tables prove nothing either way: only a missing GoAhead table below is the signal.
 // A later GoAhead migration that drops or renames one of these tables must change this list in the same change.
 const GOAHEAD_LINEAGE_TABLES: readonly (readonly [version: number, table: string])[] = [
   [28, "projection_messaging_inbox"],

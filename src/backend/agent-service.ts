@@ -11,6 +11,7 @@ import type {
   AgentEvent,
   AgentHandoff,
   AgentMemory,
+  AgentMemorySelectionState,
   AgentModelId,
   AgentModelOption,
   AgentProfileDraft,
@@ -71,6 +72,7 @@ import type {
   SaveAgentProfileResult,
   SaveMcpServerInput,
   SendMessageInput,
+  SetAgentMemoryInclusionInput,
   SetMcpServerEnabledInput,
   SetMessageReactionInput,
   SharedTable,
@@ -247,6 +249,11 @@ export interface AgentServiceOptions {
    * Omitted, such a message waits in the queue, as every one did before the setting existed.
    */
   busyMessageMode?: () => BusyMessageMode;
+  /**
+   * How many memories one agent can hold. The main process owns the preference. Omitted, the
+   * default cap, which was the only cap before the setting existed.
+   */
+  agentMemoryLimit?: () => number;
   deleteWithRevokedApproval?: (agentId: string, remove: () => Promise<void>) => Promise<void>;
   /**
    * The shared database agents keep their tables in. Injected because the host child's packaged
@@ -422,6 +429,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       conversation: this.#conversation,
       emit: (event) => this.#emit(event),
       emitError: (code, error, agentId) => this.#emitError(code, error, agentId),
+      ...(options.agentMemoryLimit ? { limit: options.agentMemoryLimit } : {}),
     });
     // One timer for both routine owners. The sources are read lazily because `channels` and its
     // scheduler are built further down, and because an owner's earliest routine changes constantly.
@@ -1104,6 +1112,28 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
 
   listMemories(agentId: string): AgentMemory[] {
     return this.#memories.list(agentId);
+  }
+
+  getMemorySelection(agentId: string): AgentMemorySelectionState {
+    return this.#memories.selectionState(agentId);
+  }
+
+  setMemoryInclusion(input: SetAgentMemoryInclusionInput): AgentMemorySelectionState {
+    return this.#memories.setInclusions(input);
+  }
+
+  initializeMemorySelection(agentId: string): void {
+    this.#memories.initializeSelection(agentId);
+  }
+
+  /** How many memories one agent can hold now. */
+  memoryLimit(): number {
+    return this.#memories.limit();
+  }
+
+  /** The developer instructions state the limit, so a new limit reloads every agent's threads. */
+  memoryLimitChanged(): void {
+    for (const agent of this.listAgents()) this.#conversation.unloadAgentThreads(agent.id);
   }
 
   createMemory(input: CreateAgentMemoryInput): AgentMemory {

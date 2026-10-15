@@ -98,6 +98,7 @@ const Settings = createSimpleContext({
     let autoInstallUpdatesChanged = false;
     let desktopNotificationsChanged = false;
     let busyMessageModeChanged = false;
+    let agentMemoryLimitChanged = false;
     let turboModeChanged = false;
     const [turboModePending, setTurboModePending] = createSignal(false);
 
@@ -235,6 +236,13 @@ const Settings = createSimpleContext({
           .setBusyMessageModePreference({ mode: value.busyMessageMode })
           .then((preference) => setGeneralSettings((current) => ({ ...current, busyMessageMode: preference.mode })))
           .catch(() => setGeneralSettings((current) => ({ ...current, busyMessageMode: previous.busyMessageMode })));
+      }
+      if (previous.agentMemoryLimit !== value.agentMemoryLimit) {
+        agentMemoryLimitChanged = true;
+        void settingsPort()
+          .setAgentMemoryLimitPreference({ limit: value.agentMemoryLimit })
+          .then((preference) => setGeneralSettings((current) => ({ ...current, agentMemoryLimit: preference.limit })))
+          .catch(() => setGeneralSettings((current) => ({ ...current, agentMemoryLimit: previous.agentMemoryLimit })));
       }
       if (
         previous.macBookNotch !== value.macBookNotch ||
@@ -383,6 +391,13 @@ const Settings = createSimpleContext({
         .then((preference) => {
           if (busyMessageModeChanged) return;
           setGeneralSettings((current) => ({ ...current, busyMessageMode: preference.mode }));
+        })
+        .catch(() => undefined);
+      void settingsPort()
+        .getAgentMemoryLimitPreference()
+        .then((preference) => {
+          if (agentMemoryLimitChanged) return;
+          setGeneralSettings((current) => ({ ...current, agentMemoryLimit: preference.limit }));
         })
         .catch(() => undefined);
       void settingsPort()

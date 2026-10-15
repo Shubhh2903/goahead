@@ -16,6 +16,7 @@ import { version as developmentVersion } from "../../../package.json";
 import type { AgentService } from "../../backend/agent-service";
 import type { BrowserHost } from "../../backend/browser-host";
 import type { MailboxStore } from "../../backend/mailbox-store";
+import type { AgentMemoryLimitPreferenceStore } from "../agent-memory-limit-preference-store";
 import { readAnalyticsPreference, writeAnalyticsPreference } from "../analytics-preference-store";
 import type { ApprovalAutomation } from "../approval-automation-store";
 import type { BusyMessageModePreferenceStore } from "../busy-message-mode-preference-store";
@@ -26,6 +27,7 @@ import { exportDiagnostics, exportOpenBotData } from "../maintenance-service";
 import { readSetupState, writeSetupState } from "../setup-store";
 import type { UpdateService } from "../update-service";
 import {
+  parseAgentMemoryLimitPreference,
   parseAnalyticsPreference,
   parseAppLanguagePreference,
   parseAppLogoColorPreference,
@@ -71,6 +73,7 @@ export interface AppIpcDependencies {
   analyticsPreferenceFile: string;
   approvalAutomation: ApprovalAutomation;
   busyMessageMode: BusyMessageModePreferenceStore;
+  agentMemoryLimit: AgentMemoryLimitPreferenceStore;
   language: LanguageService;
   logoColor: LogoColorService;
   initializeAgent: () => Promise<void>;
@@ -89,6 +92,7 @@ export function appIpcHandlers({
   analyticsPreferenceFile,
   approvalAutomation,
   busyMessageMode,
+  agentMemoryLimit,
   language,
   logoColor,
   initializeAgent,
@@ -127,6 +131,12 @@ export function appIpcHandlers({
       setBusyMessageModePreference: payloadHandler(parseBusyMessageModePreference, (parsed) =>
         busyMessageMode.set(parsed),
       ),
+      getAgentMemoryLimitPreference: handler(() => agentMemoryLimit.get()),
+      setAgentMemoryLimitPreference: payloadHandler(parseAgentMemoryLimitPreference, async (parsed) => {
+        const preference = await agentMemoryLimit.set(parsed);
+        service.memoryLimitChanged();
+        return preference;
+      }),
       getAppLanguagePreference: handler(() => language.preference),
       setAppLanguagePreference: payloadHandler(parseAppLanguagePreference, (parsed) => language.set(parsed)),
       getAppLogoColorPreference: handler(() => logoColor.preference),

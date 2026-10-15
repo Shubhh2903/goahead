@@ -51,6 +51,8 @@ import {
   decodeHostAnalyticsFromMain,
   decodeMemories,
   decodeMemory,
+  decodeMemorySelection,
+  decodeOptionalMemorySelection,
   decodeProjectFolders,
   decodeProviderApiKeyState,
   decodeProviderCodeLoginStart,
@@ -66,6 +68,7 @@ import { decodeScopedAgentEvent } from "./agent-event-decoding";
 import {
   decodeAccountSessions,
   decodeAgentImportSkill,
+  decodeAgentMemoryLimitPreference,
   decodeAnalyticsPreference,
   decodeAppInfo,
   decodeAppLanguagePreference,
@@ -494,6 +497,8 @@ const openbotApi: OpenBotDesktopApi = {
     approvalAutomation: decodeApprovalAutomationPreference,
     getBusyMessageModePreference: decodeBusyMessageModePreference,
     setBusyMessageModePreference: decodeBusyMessageModePreference,
+    getAgentMemoryLimitPreference: decodeAgentMemoryLimitPreference,
+    setAgentMemoryLimitPreference: decodeAgentMemoryLimitPreference,
     getAppLanguagePreference: decodeAppLanguagePreference,
     setAppLanguagePreference: decodeAppLanguagePreference,
     appLanguagePreference: decodeAppLanguagePreference,
@@ -775,6 +780,8 @@ const openbotApi: OpenBotDesktopApi = {
   agent: {
     ...agentGroup,
     ...bridgeGroup(IPC_ENDPOINTS.agentMemories, {
+      getMemorySelection: decodeOptionalMemorySelection,
+      setMemoryInclusion: decodeMemorySelection,
       listMemories: decodeMemories,
       createMemory: decodeMemory,
       updateMemory: decodeMemory,
