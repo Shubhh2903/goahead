@@ -12,8 +12,13 @@
 
 - Agents and Slack auto-replies send fewer tokens: the full memory list is no longer in each prompt.
   Secrets in memories are redacted before they go to a provider.
-- The database upgrades to version 35. Your memories stay unchanged. Recent manual memories, then
-  recent automatic memories, become essential until the 8 KB limit.
+- **The database upgrades to version 36. After the upgrade, GoAhead 0.37.0 and earlier cannot open
+  it, so do not go back to an older version.** Your memories, routines, triggers and runs stay
+  unchanged.
+- **Check each agent's memories after the upgrade.** Recent manual memories, then recent automatic
+  memories, become essential until the 8 KB limit. The others become searchable: they are not lost,
+  and the agent finds them with a search, but they are no longer in every prompt. Mark a memory as
+  essential in the memories window if the agent must always see it.
 
 ### Fixed
 
