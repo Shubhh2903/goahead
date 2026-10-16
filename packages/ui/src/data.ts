@@ -185,6 +185,12 @@ export interface AgentProfile {
   allowAutomation?: boolean;
   /** Absent means the app default. Absent for an agent on a remote host too, which does not share it. */
   busyMessageMode?: AgentSummary["busyMessageMode"];
+  /** Absent means the full window. Absent for an agent on a remote host too, which does not share it. */
+  compactWindow?: AgentSummary["compactWindow"];
+  /** Absent means every MCP server. Absent for an agent on a remote host too, which does not share it. */
+  disabledMcpServerIds?: AgentSummary["disabledMcpServerIds"];
+  /** Absent means no budget. Absent for an agent on a remote host too, which does not share it. */
+  weeklyTokenBudget?: AgentSummary["weeklyTokenBudget"];
   threadId: string | null;
   /** The agent's working directory. Absent for profiles built before it was tracked. */
   workspacePath?: string;

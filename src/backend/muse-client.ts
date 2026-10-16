@@ -18,6 +18,7 @@ import {
   acpMcpServers,
   agentMcpServers,
   computerUseParam,
+  disabledMcpServersParam,
   type McpAuthorizationSource,
   type McpDropReporter,
   type McpServerSource,
@@ -417,7 +418,7 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
     );
     try {
       const resolved = await usableMcpServers(
-        agentMcpServers(this.#options.mcpServers?.() ?? [], computerUseParam(params)),
+        agentMcpServers(this.#options.mcpServers?.() ?? [], computerUseParam(params), disabledMcpServersParam(params)),
         this.#options.mcpToolRuntimes?.(),
         this.#options.mcpAuthorization,
       );

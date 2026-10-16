@@ -61,6 +61,31 @@ function isMarketplaceSource(value: unknown): value is NonNullable<AgentSummary[
   );
 }
 
+/**
+ * The context windows, in tokens, at which an agent can compact its conversation early. A smaller
+ * window makes each model call read less context, and the agent keeps a summary of the rest. Absent
+ * means the provider's full window. Only Claude reads it; another provider keeps its own compaction.
+ */
+export const AGENT_COMPACT_WINDOWS = [80_000, 120_000] as const;
+export type AgentCompactWindow = (typeof AGENT_COMPACT_WINDOWS)[number];
+
+/** The weekly token budgets an agent can have. A budget only alerts; it never stops work. */
+export const AGENT_WEEKLY_TOKEN_BUDGETS = [5_000_000, 10_000_000, 25_000_000, 50_000_000, 100_000_000] as const;
+export type AgentWeeklyTokenBudget = (typeof AGENT_WEEKLY_TOKEN_BUDGETS)[number];
+
+export function isAgentCompactWindow(value: unknown): value is AgentCompactWindow {
+  return isOneOf(AGENT_COMPACT_WINDOWS, value);
+}
+
+export function isAgentWeeklyTokenBudget(value: unknown): value is AgentWeeklyTokenBudget {
+  return isOneOf(AGENT_WEEKLY_TOKEN_BUDGETS, value);
+}
+
+/** The MCP server ids an agent does not get, at most one per server the panel can hold. */
+export function isDisabledMcpServerIds(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length <= INPUT_LIMITS.mcpServers && value.every(isIdentifier);
+}
+
 export interface AgentSummary {
   id: string;
   name: string;
@@ -95,6 +120,15 @@ export interface AgentSummary {
    * app default.
    */
   busyMessageMode?: BusyMessageMode;
+  /** Where Claude compacts the agent's conversation. Local-only, like `access`. Absent means the full window. */
+  compactWindow?: AgentCompactWindow;
+  /**
+   * The MCP servers of the MCP panel that this agent does not get. Local-only, like `access`. Absent
+   * means every enabled server, so a server added later reaches every agent, as before the setting.
+   */
+  disabledMcpServerIds?: string[];
+  /** The weekly token budget that alerts the user. Local-only, like `access`. Absent means no budget. */
+  weeklyTokenBudget?: AgentWeeklyTokenBudget;
   threadId: string | null;
   workspacePath: string;
   preview: string;
@@ -127,6 +161,9 @@ export function isAgentSummary(value: unknown): value is AgentSummary {
     (value.allowAutomation === undefined || isBoolean(value.allowAutomation)) &&
     (value.projectFolders === undefined || isAgentProjectFolderList(value.projectFolders)) &&
     (value.busyMessageMode === undefined || isBusyMessageMode(value.busyMessageMode)) &&
+    (value.compactWindow === undefined || isAgentCompactWindow(value.compactWindow)) &&
+    (value.disabledMcpServerIds === undefined || isDisabledMcpServerIds(value.disabledMcpServerIds)) &&
+    (value.weeklyTokenBudget === undefined || isAgentWeeklyTokenBudget(value.weeklyTokenBudget)) &&
     (value.threadId === null || isIdentifier(value.threadId)) &&
     isBoundedString(value.workspacePath, INPUT_LIMITS.path) &&
     isBoundedString(value.preview, INPUT_LIMITS.messageText) &&
@@ -217,6 +254,12 @@ export interface UpdateAgentInput {
   allowAutomation?: boolean;
   /** `null` returns the agent to the app default. */
   busyMessageMode?: BusyMessageMode | null;
+  /** `null` returns the agent to the full window. */
+  compactWindow?: AgentCompactWindow | null;
+  /** The whole list; an empty list gives the agent every server again. */
+  disabledMcpServerIds?: string[];
+  /** `null` removes the budget. */
+  weeklyTokenBudget?: AgentWeeklyTokenBudget | null;
   avatarSeed?: string;
   avatarHue?: AvatarHue | null;
 }

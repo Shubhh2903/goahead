@@ -18,6 +18,7 @@ import {
   screen,
   shell,
 } from "electron";
+import { AgentTokenBudget } from "./agent-token-budget";
 import { readAppVariant, resolveAppIconPath, resolveLogoColorIconPath } from "./app-icon";
 import { type ApplicationServices, createApplicationServices } from "./application-services";
 import { type DeepLink, findDeepLink, parseDeepLink } from "./deep-link-router";
@@ -291,6 +292,7 @@ const {
   forwardGoogleMailNotices,
   notifyGoogleMail,
   notifyGoogleSignInExpired,
+  notifyTokenBudget,
   forwardOnePasswordConnectorStatus,
   forwardBitwardenConnectorStatus,
   forwardMessagingThreadsChanged,
@@ -966,6 +968,19 @@ if (!hasSingleInstanceLock) {
       setIpcCallObserver((call) => trace.record({ kind: "ipc", ...call }));
       service.on("event", (event) => trace.observeAgentEvent(event));
       service.on("event", (event) => forwardAgentEvent("local", event));
+      // Local only: a budget alerts the user of this computer, and the Team API does not carry it.
+      const tokenBudget = new AgentTokenBudget({
+        listAgents: () => service.listAgents(),
+        getAnalytics: (input) => service.getAnalytics(input),
+        notify: notifyTokenBudget,
+      });
+      service.on("event", (event) => {
+        try {
+          tokenBudget.handle(event);
+        } catch (error) {
+          logger.warn("The weekly token budget could not be checked.", error);
+        }
+      });
       // Internal usage signals for analytics only. They are not agent events, so the renderer and
       // Team API clients never receive them.
       service.on("toolUsage", (usage) => built.analytics.handleToolUsage(usage));

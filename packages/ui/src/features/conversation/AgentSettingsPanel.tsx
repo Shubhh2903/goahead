@@ -2,12 +2,16 @@ import { agentProviderDescriptor, agentProviderName } from "@openbot/contracts/a
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   AGENT_ACCESS_MODES,
+  AGENT_COMPACT_WINDOWS,
+  AGENT_WEEKLY_TOKEN_BUDGETS,
   type AgentAccess,
+  type AgentCompactWindow,
   type AgentModelId,
   type AgentModelOption,
   type AgentProviderId,
   type AgentReasoningEffort,
   type AgentStatus,
+  type AgentWeeklyTokenBudget,
   type AvatarHue,
   type AvatarImageInput,
   agentAutomationAllowed,
@@ -89,6 +93,10 @@ export interface AgentSettingsPanelProps {
   busyMessageModeEditable?: boolean;
   /** The app default an agent without its own busy-message setting follows. */
   defaultBusyMessageMode?: BusyMessageMode;
+  /** Early compaction, the MCP servers and the weekly token budget are local-only too. */
+  tokenSettingsEditable?: boolean;
+  /** The MCP panel servers of the computer that runs the agent, for the per-agent switches. */
+  mcpServers?: readonly { id: string; name: string }[];
   providerRuntimeStatuses?: Partial<Record<AgentProviderId, ProviderRuntimeStatus>>;
   /** The caller supplies providers available on the selected host. */
   customProviders?: readonly CustomProviderSummary[];
@@ -155,6 +163,9 @@ interface AgentSettingsDraft {
   allowAutomation: boolean;
   /** `default` follows the app setting. */
   busyMessage: BusyMessageChoice;
+  compactWindow: CompactWindowChoice;
+  weeklyTokenBudget: WeeklyBudgetChoice;
+  disabledMcpServerIds: string[];
   /** Widening to full access waits here for the confirmation. */
   confirmingFullAccess: boolean;
   runtime: AgentRuntimeSettings;
@@ -169,7 +180,7 @@ interface TextSaveRequest {
 }
 
 export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
-  const { t, errorMessage } = useText();
+  const { t, errorMessage, format } = useText();
   const [newChatOpen, setNewChatOpen] = createSignal(false);
   const [newChatError, setNewChatError] = createSignal<string | null>(null);
   async function startNewChat(start: () => Promise<void>): Promise<void> {
@@ -197,6 +208,9 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     computerUse: true,
     allowAutomation: false,
     busyMessage: "default",
+    compactWindow: "off",
+    weeklyTokenBudget: "none",
+    disabledMcpServerIds: [],
     confirmingFullAccess: false,
     runtime: untrack(() => ({ ...props.runtimeSettings })),
     saveError: null,
@@ -258,6 +272,9 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
           String(agentComputerUseEnabled(agent)),
           String(agentAutomationAllowed(agent)),
           agent.busyMessageMode ?? "default",
+          String(agent.compactWindow ?? "off"),
+          String(agent.weeklyTokenBudget ?? "none"),
+          (agent.disabledMcpServerIds ?? []).join(","),
           runtimeSettings.provider,
           runtimeSettings.model,
           runtimeSettings.reasoningEffort,
@@ -294,6 +311,9 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
           state.computerUse = agentComputerUseEnabled(agent);
           state.allowAutomation = agentAutomationAllowed(agent);
           state.busyMessage = agent.busyMessageMode ?? "default";
+          state.compactWindow = agent.compactWindow ?? "off";
+          state.weeklyTokenBudget = agent.weeklyTokenBudget ?? "none";
+          state.disabledMcpServerIds = [...(agent.disabledMcpServerIds ?? [])];
           if (agentChanged) state.confirmingFullAccess = false;
           state.runtime.provider = runtimeSettings.provider;
           state.runtime.model = runtimeSettings.model;
@@ -593,6 +613,59 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
       });
     }
   }
+
+  async function saveCompactWindow(next: CompactWindowChoice): Promise<void> {
+    const agentId = props.agent.id;
+    const previous = draft.compactWindow;
+    setDraft((state) => {
+      state.compactWindow = next;
+    });
+    if (await saveAgentPatch({ compactWindow: next === "off" ? null : next }, agentId)) return;
+    if (!disposed && props.agent.id === agentId && draft.compactWindow === next) {
+      setDraft((state) => {
+        state.compactWindow = previous;
+      });
+    }
+  }
+
+  async function saveWeeklyTokenBudget(next: WeeklyBudgetChoice): Promise<void> {
+    const agentId = props.agent.id;
+    const previous = draft.weeklyTokenBudget;
+    setDraft((state) => {
+      state.weeklyTokenBudget = next;
+    });
+    if (await saveAgentPatch({ weeklyTokenBudget: next === "none" ? null : next }, agentId)) return;
+    if (!disposed && props.agent.id === agentId && draft.weeklyTokenBudget === next) {
+      setDraft((state) => {
+        state.weeklyTokenBudget = previous;
+      });
+    }
+  }
+
+  async function saveMcpServer(serverId: string, enabled: boolean): Promise<void> {
+    const agentId = props.agent.id;
+    const previous = [...draft.disabledMcpServerIds];
+    const next = enabled ? previous.filter((id) => id !== serverId) : [...new Set([...previous, serverId])];
+    setDraft((state) => {
+      state.disabledMcpServerIds = next;
+    });
+    if (await saveAgentPatch({ disabledMcpServerIds: next }, agentId)) return;
+    if (!disposed && props.agent.id === agentId && draft.disabledMcpServerIds.join(",") === next.join(",")) {
+      setDraft((state) => {
+        state.disabledMcpServerIds = previous;
+      });
+    }
+  }
+
+  const tokenCount = (value: number) => format.number(value, { notation: "compact", maximumFractionDigits: 1 });
+  const compactWindowLabel = (choice: CompactWindowChoice) =>
+    choice === "off"
+      ? t("agentSettings.compactWindow.off")
+      : t("agentSettings.compactWindow.at", { tokens: tokenCount(choice) });
+  const weeklyBudgetLabel = (choice: WeeklyBudgetChoice) =>
+    choice === "none"
+      ? t("agentSettings.weeklyBudget.none")
+      : t("agentSettings.weeklyBudget.amount", { tokens: tokenCount(choice) });
 
   const appBusyMessageMode = () => props.defaultBusyMessageMode ?? DEFAULT_BUSY_MESSAGE_MODE;
   const busyMessageLabel = (choice: BusyMessageChoice) =>
@@ -967,6 +1040,50 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
                   <SelectContent />
                 </Select>
               </Show>
+              <Show when={props.tokenSettingsEditable && draft.runtime.provider === "claude"}>
+                <Select<CompactWindowChoice>
+                  class="agent-settings-runtime-select"
+                  options={[...COMPACT_WINDOW_CHOICES]}
+                  value={draft.compactWindow}
+                  onChange={(next) => {
+                    if (!next || next === draft.compactWindow) return;
+                    void saveCompactWindow(next);
+                  }}
+                  itemComponent={(item) => (
+                    <SelectItem item={item.item}>{compactWindowLabel(item.item.rawValue)}</SelectItem>
+                  )}
+                >
+                  <SelectTrigger class="agent-settings-runtime-row" aria-label={t("agentSettings.compactWindow.label")}>
+                    <span class="agent-settings-runtime-label">{t("agentSettings.compactWindow.title")}</span>
+                    <SelectValue<CompactWindowChoice>>
+                      {(state) => compactWindowLabel(state.selectedOption() ?? "off")}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent />
+                </Select>
+              </Show>
+              <Show when={props.tokenSettingsEditable}>
+                <Select<WeeklyBudgetChoice>
+                  class="agent-settings-runtime-select"
+                  options={[...WEEKLY_BUDGET_CHOICES]}
+                  value={draft.weeklyTokenBudget}
+                  onChange={(next) => {
+                    if (!next || next === draft.weeklyTokenBudget) return;
+                    void saveWeeklyTokenBudget(next);
+                  }}
+                  itemComponent={(item) => (
+                    <SelectItem item={item.item}>{weeklyBudgetLabel(item.item.rawValue)}</SelectItem>
+                  )}
+                >
+                  <SelectTrigger class="agent-settings-runtime-row" aria-label={t("agentSettings.weeklyBudget.label")}>
+                    <span class="agent-settings-runtime-label">{t("agentSettings.weeklyBudget.title")}</span>
+                    <SelectValue<WeeklyBudgetChoice>>
+                      {(state) => weeklyBudgetLabel(state.selectedOption() ?? "none")}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent />
+                </Select>
+              </Show>
               <div class="agent-settings-runtime-path">
                 <span class="agent-settings-runtime-label">{t("agentSettings.runtime.workingDirectory")}</span>
                 <span>
@@ -1021,6 +1138,24 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
                 onChange={(next) => void saveComputerUse(next)}
               />
             </div>
+          </Show>
+          <Show when={props.tokenSettingsEditable}>
+            <For each={props.mcpServers ?? []}>
+              {(server) => (
+                <div class="agent-settings-notifications">
+                  <div>
+                    <strong>{t("agentSettings.mcpServer.title", { name: server.name })}</strong>
+                    <span>{t("agentSettings.mcpServer.description")}</span>
+                  </div>
+                  <Switch
+                    size="sm"
+                    aria-label={t("agentSettings.mcpServer.title", { name: server.name })}
+                    checked={!draft.disabledMcpServerIds.includes(server.id)}
+                    onChange={(next) => void saveMcpServer(server.id, next)}
+                  />
+                </div>
+              )}
+            </For>
           </Show>
           <Show when={props.automationEditable}>
             <div class="agent-settings-notifications">
@@ -1139,6 +1274,12 @@ function sameRuntimeSettings(current: AgentRuntimeSettings, settings: AgentRunti
     current.reasoningEffort === settings.reasoningEffort
   );
 }
+
+const COMPACT_WINDOW_CHOICES = ["off", ...AGENT_COMPACT_WINDOWS] as const;
+type CompactWindowChoice = "off" | AgentCompactWindow;
+
+const WEEKLY_BUDGET_CHOICES = ["none", ...AGENT_WEEKLY_TOKEN_BUDGETS] as const;
+type WeeklyBudgetChoice = "none" | AgentWeeklyTokenBudget;
 
 const BUSY_MESSAGE_CHOICES = ["default", "queue", "steer"] as const;
 type BusyMessageChoice = (typeof BUSY_MESSAGE_CHOICES)[number];

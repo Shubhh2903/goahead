@@ -18,6 +18,7 @@ import {
   CLAUDE_WEEKLY_OPUS_LIMIT_ID,
   CLAUDE_WEEKLY_SONNET_LIMIT_ID,
   defaultProviderModel,
+  isAgentCompactWindow,
 } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord, isNumber, isOneOf, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
@@ -55,6 +56,7 @@ import {
   agentMcpServers,
   claudeMcpServers,
   computerUseParam,
+  disabledMcpServersParam,
   type McpAuthorizationSource,
   type McpDropReporter,
   type McpServerSource,
@@ -127,6 +129,10 @@ interface ThreadConfig {
   profileGeneration: boolean;
   /** Part of the config so that a change restarts the query with the new servers. */
   computerUse: boolean;
+  /** The MCP panel servers that the agent's settings turn off. Part of the config for the same reason. */
+  disabledMcpServerIds: string[];
+  /** Where Claude Code compacts the conversation, in tokens. Null keeps the model's full window. */
+  compactWindow: number | null;
   /**
    * Workspace only: Bash runs in the Claude sandbox, a file write outside the roots asks the user, and
    * the project settings do not load. See `claude-workspace-sandbox.ts`.
@@ -612,7 +618,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
         ? null
         : claudeMcpServers(
             await usableMcpServers(
-              agentMcpServers(this.#mcpServers(), config.computerUse),
+              agentMcpServers(this.#mcpServers(), config.computerUse, config.disabledMcpServerIds),
               this.#mcpToolRuntimes?.(),
               this.#mcpAuthorization,
             ),
@@ -696,6 +702,9 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
           // Without a terminal, the CLI gives the newer models no TodoWrite or task tools, so the
           // agent has no plan for OpenBot to show as a task list.
           CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
+          // A smaller auto-compact window makes Claude Code summarize the conversation sooner, so each
+          // model call reads less context. Claude Code clamps it to the model window.
+          ...(config.compactWindow === null ? {} : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(config.compactWindow) }),
         },
       },
     });
@@ -1530,9 +1539,15 @@ function readThreadConfig(params: unknown): ThreadConfig {
     persistSession: !isRecord(params) || params.persistSession !== false,
     profileGeneration: isRecord(params) && params.profileGeneration === true,
     computerUse: computerUseParam(params),
+    disabledMcpServerIds: disabledMcpServersParam(params),
+    compactWindow: compactWindowParam(params),
     workspaceOnly: isRecord(params) && params.workspaceOnly === true,
     toolProfile: isRecord(params) && params.toolProfile === "slack-reply" ? "slack-reply" : "full",
   };
+}
+
+function compactWindowParam(params: unknown): number | null {
+  return isRecord(params) && isAgentCompactWindow(params.compactWindow) ? params.compactWindow : null;
 }
 
 function requiredString(value: unknown, key: string): string {

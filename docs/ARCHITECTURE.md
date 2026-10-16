@@ -438,6 +438,22 @@ schedule code that fires the run, so it needs no RRULE or time zone rules. Nothi
 computer: a calendar service that fetches feeds from its own servers, such as Google Calendar or
 iCloud, cannot read it. A remote server has no feed: the section shows only for this computer.
 
+## Token settings of an agent
+
+Three local-only agent settings lower token use. The Team API agent allowlist does not carry them, and
+the remote IPC branch refuses them (`error.agent.tokenSettingsLocalOnly`).
+
+- `compactWindow` (80K or 120K tokens; absent means the full window). `ThreadLifecycle` sends it to
+  Claude as a thread param, and `claude-client.ts` sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, so Claude
+  Code summarizes the conversation sooner and each model call reads less context. A change restarts
+  the Claude query with the next turn. Other providers keep their own compaction.
+- `disabledMcpServerIds` (absent means every enabled MCP panel server). `agentMcpServers` leaves these
+  servers out for Codex, Claude and the ACP clients, so a server added later still reaches every agent.
+- `weeklyTokenBudget` (5M to 100M tokens). `AgentTokenBudget` (`src/main/agent-token-budget.ts`)
+  reads the agent's processed tokens since Monday after each completed turn and shows one desktop
+  notification at 80% and one at 100% per week. It never stops work. The alerts already shown are
+  kept in memory, so a restart can show a level once more.
+
 ## Provider CLI updates
 
 The runtime manager offers the latest upstream release of each provider CLI. It checks at startup,

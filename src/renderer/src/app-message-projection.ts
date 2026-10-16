@@ -36,6 +36,9 @@ export function toAgentProfile(stored: AgentSummary): AgentProfile {
     computerUse: stored.computerUse,
     allowAutomation: stored.allowAutomation,
     busyMessageMode: stored.busyMessageMode,
+    compactWindow: stored.compactWindow,
+    disabledMcpServerIds: stored.disabledMcpServerIds,
+    weeklyTokenBudget: stored.weeklyTokenBudget,
     threadId: stored.threadId,
     workspacePath: stored.workspacePath,
     avatarSeed: stored.avatarSeed,
@@ -181,6 +184,9 @@ export function agentProfilesEqual(left: AgentProfile, right: AgentProfile): boo
     left.reasoningEffort === right.reasoningEffort &&
     left.access === right.access &&
     left.computerUse === right.computerUse &&
+    left.compactWindow === right.compactWindow &&
+    (left.disabledMcpServerIds ?? []).join("\u0000") === (right.disabledMcpServerIds ?? []).join("\u0000") &&
+    left.weeklyTokenBudget === right.weeklyTokenBudget &&
     left.threadId === right.threadId &&
     left.avatarSeed === right.avatarSeed &&
     left.avatarHue === right.avatarHue &&

@@ -72,6 +72,7 @@ export function ConversationPanels(panelProps: { onOpenUsage?: (trigger: HTMLBut
     settingsProvider,
     settingsReasoning,
     updateRuntimeSettings,
+    mcpServers,
   } = useConversationViewScope();
   const { t, errorMessage } = useText();
   let browserPreviewTrigger: HTMLButtonElement | undefined;
@@ -279,6 +280,8 @@ export function ConversationPanels(panelProps: { onOpenUsage?: (trigger: HTMLBut
               automationEditable={props.server?.kind === "local"}
               projectFoldersServerId={props.server?.kind === "local" ? props.server.id : undefined}
               busyMessageModeEditable={props.server?.kind === "local"}
+              tokenSettingsEditable={props.server?.kind === "local"}
+              mcpServers={props.server?.kind === "local" ? mcpServers() : []}
               defaultBusyMessageMode={props.defaultBusyMessageMode}
               memoryLimit={props.server?.kind === "local" ? props.agentMemoryLimit : undefined}
               agents={props.agents}

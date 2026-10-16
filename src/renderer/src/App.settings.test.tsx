@@ -706,7 +706,7 @@ describe("OpenBot connected desktop shell", () => {
             resolveModelUpdate = resolve;
           }),
       )
-      .mockImplementationOnce(async ({ busyMessageMode: _busyMessageMode, ...input }) => ({
+      .mockImplementationOnce(async ({ busyMessageMode: _b, compactWindow: _c, weeklyTokenBudget: _w, ...input }) => ({
         ...chief,
         ...input,
         provider: "claude",

@@ -398,10 +398,12 @@ export class OpenBotToolRouter {
         schedule: routine.trigger.schedule,
         nextRunAt: routine.trigger.nextRunAt,
       })),
-      mcpServers: agentMcpServers(this.#hooks.enabledMcpServers(), computerUse).map((server) => ({
-        name: server.name,
-        transport: server.transport,
-      })),
+      mcpServers: agentMcpServers(this.#hooks.enabledMcpServers(), computerUse, agent.disabledMcpServerIds).map(
+        (server) => ({
+          name: server.name,
+          transport: server.transport,
+        }),
+      ),
     };
   }
 

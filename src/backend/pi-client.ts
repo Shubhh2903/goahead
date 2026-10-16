@@ -13,6 +13,7 @@ import {
   agentMcpServers,
   claudeMcpServers,
   computerUseParam,
+  disabledMcpServersParam,
   type McpAuthorizationSource,
   type McpDropReporter,
   type McpServerSource,
@@ -317,7 +318,7 @@ export class PiAgentClient extends EventEmitter<ClientEvents> implements AgentCl
     try {
       const handoff = claudeMcpServers(
         await usableMcpServers(
-          agentMcpServers(this.options.mcpServers?.() ?? [], computerUseParam(params)),
+          agentMcpServers(this.options.mcpServers?.() ?? [], computerUseParam(params), disabledMcpServersParam(params)),
           this.options.mcpToolRuntimes?.(),
           this.options.mcpAuthorization,
         ),

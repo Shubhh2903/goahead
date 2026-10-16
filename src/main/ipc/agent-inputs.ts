@@ -19,11 +19,14 @@ import {
   type ImportAttachmentsInput,
   type InterruptTurnInput,
   isAgentAccess,
+  isAgentCompactWindow,
   isAgentModel,
   isAgentProvider,
+  isAgentWeeklyTokenBudget,
   isAvatarHue,
   isAvatarSeed,
   isBusyMessageMode,
+  isDisabledMcpServerIds,
   isMessageReaction,
   isReasoningEffort,
   isRoutineSchedule,
@@ -566,6 +569,22 @@ export function parseUpdateAgent(value: unknown): UpdateAgentInput {
       throw new Error("Invalid busy message mode.");
     }
     result.busyMessageMode = value.busyMessageMode;
+  }
+  if (value.compactWindow !== undefined) {
+    if (value.compactWindow !== null && !isAgentCompactWindow(value.compactWindow)) {
+      throw new Error("Invalid compact window.");
+    }
+    result.compactWindow = value.compactWindow;
+  }
+  if (value.disabledMcpServerIds !== undefined) {
+    if (!isDisabledMcpServerIds(value.disabledMcpServerIds)) throw new Error("Invalid MCP server list.");
+    result.disabledMcpServerIds = [...value.disabledMcpServerIds];
+  }
+  if (value.weeklyTokenBudget !== undefined) {
+    if (value.weeklyTokenBudget !== null && !isAgentWeeklyTokenBudget(value.weeklyTokenBudget)) {
+      throw new Error("Invalid weekly token budget.");
+    }
+    result.weeklyTokenBudget = value.weeklyTokenBudget;
   }
   if (value.avatarSeed !== undefined) {
     if (!isAvatarSeed(value.avatarSeed)) throw new Error("Invalid avatar seed.");

@@ -27,6 +27,7 @@ import type { AppFormat, AppTranslate } from "@openbot/i18n";
 import { notificationForAgentEvent, notificationForUsageLimit } from "@openbot/team-client/agent-notifications";
 import { BrowserWindow, Notification } from "electron";
 import type { AgentService } from "../backend/agent-service";
+import type { TokenBudgetAlert } from "./agent-token-budget";
 import type { HostAnalytics } from "./analytics";
 import { showRetainedNotification } from "./desktop-notifications";
 import type { HostService } from "./host-service";
@@ -128,10 +129,11 @@ export function createRendererForwarders({
   }
 
   /**
-   * A macOS notification for the Google connection. Like the agent notifications, none while the
-   * window has focus, and none while this computer's notifications are muted or off.
+   * A macOS notification about this computer: the Google connection or a token budget. Like the agent
+   * notifications, none while the window has focus, and none while this computer's notifications are
+   * muted or off.
    */
-  function notifyGoogle(content: { title: string; body: string }, agentId: string | null): void {
+  function notifyLocal(content: { title: string; body: string }, agentId: string | null): void {
     const window = getMainWindow();
     if (!window || window.isDestroyed() || window.isFocused()) return;
     if (!desktopNotificationsEnabled() || !Notification.isSupported()) return;
@@ -155,6 +157,23 @@ export function createRendererForwarders({
     showRetainedNotification(notification);
   }
 
+  /** An agent passed 80% or 100% of its weekly token budget. A click opens the agent. */
+  function notifyTokenBudget(alert: TokenBudgetAlert): void {
+    const translate = getTranslate();
+    const format = getFormat();
+    const tokens = (value: number) => format.number(value, { notation: "compact", maximumFractionDigits: 1 });
+    notifyLocal(
+      {
+        title: translate("notification.tokenBudget.title", { name: alert.agent.name, percent: alert.level }),
+        body: translate("notification.tokenBudget.body", {
+          used: tokens(alert.usedTokens),
+          budget: tokens(alert.budgetTokens),
+        }),
+      },
+      alert.agent.id,
+    );
+  }
+
   /** One mail notice. A click opens the agent of the notice: the agent that handles mail. */
   function notifyGoogleMail(notice: GoogleMailNotice): void {
     const translate = getTranslate();
@@ -163,12 +182,12 @@ export function createRendererForwarders({
         ? translate("notification.google.meetingTitle", { from: notice.from })
         : translate("notification.google.importantTitle", { from: notice.from });
     // A notice from Gmail's signals only has no summary: the subject stands in.
-    notifyGoogle({ title, body: notice.summary || notice.subject }, notice.agentId);
+    notifyLocal({ title, body: notice.summary || notice.subject }, notice.agentId);
   }
 
   function notifyGoogleSignInExpired(): void {
     const translate = getTranslate();
-    notifyGoogle(
+    notifyLocal(
       { title: translate("notification.google.expiredTitle"), body: translate("notification.google.expiredBody") },
       null,
     );
@@ -331,6 +350,7 @@ export function createRendererForwarders({
     forwardRoutineFlowsChanged,
     forwardGoogleConnectorStatus,
     forwardGoogleMailNotices,
+    notifyTokenBudget,
     forwardOnePasswordConnectorStatus,
     forwardBitwardenConnectorStatus,
     forwardMessagingThreadsChanged,

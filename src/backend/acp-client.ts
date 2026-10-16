@@ -37,6 +37,7 @@ import {
   acpMcpServers,
   agentMcpServers,
   computerUseParam,
+  disabledMcpServersParam,
   type McpAuthorizationSource,
   type McpDropReporter,
   type McpServerSource,
@@ -996,7 +997,7 @@ export class AcpAgentClient extends EventEmitter<ClientEvents> {
       // configuration that reached one of those names would take the agent's own tools away.
       const handoff = acpMcpServers(
         await usableMcpServers(
-          agentMcpServers(this.options.mcpServers?.() ?? [], computerUse),
+          agentMcpServers(this.options.mcpServers?.() ?? [], computerUse, disabledMcpServersParam(params)),
           this.options.mcpToolRuntimes?.(),
           this.options.mcpAuthorization,
         ),

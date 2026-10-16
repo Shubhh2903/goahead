@@ -26,4 +26,7 @@ export const messages = defineMessages("notification", {
   "notification.google.meetingTitle": "Meeting request from {from}",
   "notification.google.expiredTitle": "Google sign-in expired",
   "notification.google.expiredBody": "Open GoAhead to sign in to Google again.",
+  "notification.tokenBudget.title": "{name} used {percent}% of its weekly token budget",
+  "notification.tokenBudget.body":
+    "{used} of {budget} tokens this week. Work continues. Change the budget in the agent settings.",
 });

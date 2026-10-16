@@ -140,7 +140,13 @@ describe("Team API agent-host-settings-v1", () => {
     const settings = createAgentHostSettings({
       agents: {
         listAgents: () => [agent],
-        updateAgent: async ({ agentId: _agentId, busyMessageMode, ...changes }) => {
+        updateAgent: async ({
+          agentId: _agentId,
+          busyMessageMode,
+          compactWindow: _c,
+          weeklyTokenBudget: _w,
+          ...changes
+        }) => {
           agent = { ...agent, ...changes };
           if (busyMessageMode === null) delete agent.busyMessageMode;
           else if (busyMessageMode) agent.busyMessageMode = busyMessageMode;

@@ -137,8 +137,25 @@ function unusableDrop(server: UnusableMcpServer): McpServerDrop {
  * The configurations one agent is given: all of them, or all but Computer Use when the user turned
  * it off for that agent.
  */
-export function agentMcpServers(configs: readonly McpServerConfig[], computerUse: boolean): readonly McpServerConfig[] {
-  return computerUse ? configs : configs.filter((config) => config.id !== COMPUTER_USE_MCP_SERVER_ID);
+/** The servers one agent gets: without Computer Use when it is off, and without the servers its settings turn off. */
+export function agentMcpServers(
+  configs: readonly McpServerConfig[],
+  computerUse: boolean,
+  disabledIds: readonly string[] = [],
+): readonly McpServerConfig[] {
+  const disabled = new Set(disabledIds);
+  return configs.filter(
+    (config) => (computerUse || config.id !== COMPUTER_USE_MCP_SERVER_ID) && !disabled.has(config.id),
+  );
+}
+
+/**
+ * The MCP server ids that the `thread/start` or `thread/resume` params turn off for the agent.
+ * `ThreadLifecycle` sends them to Claude and the ACP clients, which read the servers themselves.
+ */
+export function disabledMcpServersParam(params: unknown): string[] {
+  if (!isDynamicRecord(params) || !Array.isArray(params.disabledMcpServerIds)) return [];
+  return params.disabledMcpServerIds.filter((id): id is string => typeof id === "string");
 }
 
 /**

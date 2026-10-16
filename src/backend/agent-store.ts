@@ -36,11 +36,14 @@ import {
   decodeSaveAgentProfileResult,
   defaultProviderModel,
   isAgentAccess,
+  isAgentCompactWindow,
   isAgentModel,
   isAgentProjectFolder,
+  isAgentWeeklyTokenBudget,
   isAvatarHue,
   isAvatarSeed,
   isBusyMessageMode,
+  isDisabledMcpServerIds,
   isProjectFolderName,
   isReasoningEffort,
   isSidebarLayoutSnapshot,
@@ -73,6 +76,14 @@ type PersistedStoredAgent = Omit<StoredAgent, "avatarUrl" | "provider" | "access
   // Absent means the app default, as for every agent stored before the setting existed.
   busyMessageMode?: BusyMessageMode;
 };
+
+/** The settings that an update can remove, so that absent means the default again. */
+const OPTIONAL_SETTING_FIELDS = [
+  "busyMessageMode",
+  "compactWindow",
+  "disabledMcpServerIds",
+  "weeklyTokenBudget",
+] as const;
 type StoredAgentBase = Omit<PersistedStoredAgent, "avatarSeed" | "avatarHue"> & DynamicRecord;
 
 interface AgentDuplicationMarker {
@@ -339,6 +350,9 @@ export class AgentStore {
     record.access = source.access;
     record.computerUse = source.computerUse;
     if (source.busyMessageMode) record.busyMessageMode = source.busyMessageMode;
+    if (source.compactWindow) record.compactWindow = source.compactWindow;
+    if (source.disabledMcpServerIds?.length) record.disabledMcpServerIds = [...source.disabledMcpServerIds];
+    if (source.weeklyTokenBudget) record.weeklyTokenBudget = source.weeklyTokenBudget;
     record.avatarSeed = source.avatarSeed;
     record.avatarHue = source.avatarHue;
     // The folders stay where they are: the copy works in the same projects, not in copies of them.
@@ -573,6 +587,21 @@ export class AgentStore {
       if (!isBusyMessageMode(input.busyMessageMode)) throw new Error("Invalid busy message mode.");
       next.busyMessageMode = input.busyMessageMode;
     }
+    if (input.compactWindow === null) delete next.compactWindow;
+    else if (input.compactWindow !== undefined) {
+      if (!isAgentCompactWindow(input.compactWindow)) throw new Error("Invalid compact window.");
+      next.compactWindow = input.compactWindow;
+    }
+    if (input.disabledMcpServerIds !== undefined) {
+      if (!isDisabledMcpServerIds(input.disabledMcpServerIds)) throw new Error("Invalid MCP server list.");
+      if (input.disabledMcpServerIds.length === 0) delete next.disabledMcpServerIds;
+      else next.disabledMcpServerIds = [...new Set(input.disabledMcpServerIds)];
+    }
+    if (input.weeklyTokenBudget === null) delete next.weeklyTokenBudget;
+    else if (input.weeklyTokenBudget !== undefined) {
+      if (!isAgentWeeklyTokenBudget(input.weeklyTokenBudget)) throw new Error("Invalid weekly token budget.");
+      next.weeklyTokenBudget = input.weeklyTokenBudget;
+    }
     if (input.avatarSeed !== undefined) {
       if (!isAvatarSeed(input.avatarSeed)) throw new Error("Invalid avatar seed.");
       next.avatarSeed = input.avatarSeed;
@@ -596,12 +625,12 @@ export class AgentStore {
         : undefined;
     Object.assign(agent, next);
     // A copy cannot remove a field, and `null` above returned the agent to the app default.
-    if (next.busyMessageMode === undefined) delete agent.busyMessageMode;
+    for (const field of OPTIONAL_SETTING_FIELDS) if (next[field] === undefined) delete agent[field];
     try {
       this.#persist(modelChange ? "agent.model-changed" : "agent.updated", modelChange);
     } catch (error) {
       Object.assign(agent, previous);
-      if (previous.busyMessageMode === undefined) delete agent.busyMessageMode;
+      for (const field of OPTIONAL_SETTING_FIELDS) if (previous[field] === undefined) delete agent[field];
       throw error;
     }
     return { ...agent };
@@ -1468,6 +1497,9 @@ function isStoredAgent(value: unknown): value is PersistedStoredAgent {
     (record.projectFolders === undefined ||
       (Array.isArray(record.projectFolders) && record.projectFolders.every(isAgentProjectFolder))) &&
     (record.busyMessageMode === undefined || isBusyMessageMode(record.busyMessageMode)) &&
+    (record.compactWindow === undefined || isAgentCompactWindow(record.compactWindow)) &&
+    (record.disabledMcpServerIds === undefined || isDisabledMcpServerIds(record.disabledMcpServerIds)) &&
+    (record.weeklyTokenBudget === undefined || isAgentWeeklyTokenBudget(record.weeklyTokenBudget)) &&
     isAvatarSeed(record.avatarSeed) &&
     (record.avatarHue === null || isAvatarHue(record.avatarHue)) &&
     isMarketplaceSource(record.marketplaceSource)
@@ -1538,6 +1570,18 @@ function readStoredAgent(value: unknown): ReadStoredAgent | UnreadableStoredAgen
     value.busyMessageMode === undefined || isBusyMessageMode(value.busyMessageMode)
       ? value.busyMessageMode
       : reset("busyMessageMode", undefined);
+  const compactWindow =
+    value.compactWindow === undefined || isAgentCompactWindow(value.compactWindow)
+      ? value.compactWindow
+      : reset("compactWindow", undefined);
+  const disabledMcpServerIds =
+    value.disabledMcpServerIds === undefined || isDisabledMcpServerIds(value.disabledMcpServerIds)
+      ? value.disabledMcpServerIds
+      : reset("disabledMcpServerIds", undefined);
+  const weeklyTokenBudget =
+    value.weeklyTokenBudget === undefined || isAgentWeeklyTokenBudget(value.weeklyTokenBudget)
+      ? value.weeklyTokenBudget
+      : reset("weeklyTokenBudget", undefined);
   let marketplaceSource: StoredAgent["marketplaceSource"];
   if (value.marketplaceSource !== undefined) {
     if (isMarketplaceSource(value.marketplaceSource)) {
@@ -1572,6 +1616,9 @@ function readStoredAgent(value: unknown): ReadStoredAgent | UnreadableStoredAgen
     ...(allowAutomation === undefined ? {} : { allowAutomation }),
     ...(projectFolders === undefined ? {} : { projectFolders }),
     ...(busyMessageMode === undefined ? {} : { busyMessageMode }),
+    ...(compactWindow === undefined ? {} : { compactWindow }),
+    ...(disabledMcpServerIds === undefined ? {} : { disabledMcpServerIds }),
+    ...(weeklyTokenBudget === undefined ? {} : { weeklyTokenBudget }),
     ...(marketplaceSource === undefined ? {} : { marketplaceSource }),
   };
   return { agent, repaired };

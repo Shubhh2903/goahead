@@ -280,6 +280,13 @@ export function agentIpcHandlers({
           if (input.busyMessageMode !== undefined) {
             throw new Error(sourceText("error.agent.busyMessageModeLocalOnly"));
           }
+          if (
+            input.compactWindow !== undefined ||
+            input.disabledMcpServerIds !== undefined ||
+            input.weeklyTokenBudget !== undefined
+          ) {
+            throw new Error(sourceText("error.agent.tokenSettingsLocalOnly"));
+          }
           return remoteServers.request(serverId, TEAM_API_ROUTES.agent.one(input.agentId), decodeAgentSummary, {
             method: "PATCH",
             body: input,

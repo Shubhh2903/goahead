@@ -596,7 +596,7 @@ export class ThreadLifecycle {
 
   /** The enabled servers this agent is given. Without Computer Use the fingerprint changes, so Codex replaces the session. */
   #agentMcpServers(agent: AgentSummary): readonly McpServerConfig[] {
-    return agentMcpServers(this.#mcpServers(), agentComputerUseEnabled(agent));
+    return agentMcpServers(this.#mcpServers(), agentComputerUseEnabled(agent), agent.disabledMcpServerIds);
   }
 
   /**
@@ -610,9 +610,21 @@ export class ThreadLifecycle {
       : {};
   }
 
-  /** Claude and the ACP clients read the servers themselves, so they are told to leave Computer Use out. */
-  #computerUseParam(agent: AgentSummary, client: AgentClient): { computerUse?: false } {
-    return client.provider === "codex" || agentComputerUseEnabled(agent) ? {} : { computerUse: false };
+  /**
+   * Claude and the ACP clients read the servers themselves, so they are told to leave Computer Use and
+   * the servers that the agent's settings turn off out. Claude also gets the window where it compacts
+   * early; Codex keeps its own compaction.
+   */
+  #computerUseParam(
+    agent: AgentSummary,
+    client: AgentClient,
+  ): { computerUse?: false; disabledMcpServerIds?: string[]; compactWindow?: number } {
+    if (client.provider === "codex") return {};
+    return {
+      ...(agentComputerUseEnabled(agent) ? {} : { computerUse: false as const }),
+      ...(agent.disabledMcpServerIds?.length ? { disabledMcpServerIds: [...agent.disabledMcpServerIds] } : {}),
+      ...(client.provider === "claude" && agent.compactWindow ? { compactWindow: agent.compactWindow } : {}),
+    };
   }
 
   private async hasCurrentTools(agent: AgentSummary, client: AgentClient, sessionId: string): Promise<boolean> {
