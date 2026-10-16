@@ -6,6 +6,58 @@ All notable changes to OpenBot will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-10-16
+
+### Added
+
+- Choose how many memories each agent can keep, from 64 to 512, in Settings > General.
+- Essential memories: only the memories marked essential go into an agent's instructions, up to
+  8 KB. The agent finds its other memories with a local search. In the memories window, mark a
+  memory as essential or searchable, or let the app select. A memory that you add is essential when
+  it fits in the 8 KB; a memory that an agent saves starts as searchable.
+- The iPhone app and members of a joined server can read memory pages and change the selection
+  through the new optional Team API capability `agent-memories-v1`.
+- An owner or admin can turn Computer Use and Local scripts on or off for an agent, and select what
+  a message does while the agent works, from the GoAhead iPhone app. The host serves the new optional
+  Team API capability `agent-host-settings-v1`.
+- A scheduled routine has the setting "If GoAhead was closed at the scheduled time". "Skip this run"
+  is the default. "Run once when GoAhead opens" starts one run for the most recent missed time.
+- The run history shows the runs that GoAhead skipped while it was closed, as one row for each
+  group, and marks a run that started more than one minute late.
+- A scheduled run of an agent routine can stay silent when it has nothing to report. Ask the agent in
+  the routine task to answer `[[no-update]]` in that case. When every answer of the run is only
+  `[[no-update]]`, the run posts no message, adds no unread message, does not change the chat
+  preview and shows no notification. The run marker stays in the chat, and the run stays in the
+  routine **History**. Test runs and script runs always show their result. An older client shows
+  the run as finished, as before.
+- Server Settings > Routines has a calendar feed. Apple Calendar (On My Mac), or another calendar app
+  that reads the feed on this computer, can subscribe to the next 30 days of runs of active routines,
+  for all agents or for one agent. The private URL works only on this computer, and **New URL** stops
+  the old one.
+- Agent settings have three ways to use fewer tokens, on this computer only:
+  - **Compact early** (Claude agents): the agent summarizes its conversation at 80K or 120K tokens,
+    so each step reads less context.
+  - **MCP** switches: turn off an MCP server for an agent that does not need its tools.
+  - **Weekly tokens**: a weekly token budget. GoAhead shows a notification at 80% and at 100% of the
+    budget. Work continues.
+
+### Changed
+
+- Agents and Slack auto-replies send fewer tokens: the full memory list is no longer in each prompt.
+  Secrets in memories are redacted before they go to a provider.
+- **The database upgrades to version 36. After the upgrade, GoAhead 0.37.0 and earlier cannot open
+  it, so do not go back to an older version.** Your memories, routines, triggers and runs stay
+  unchanged.
+- **Check each agent's memories after the upgrade.** Recent manual memories, then recent automatic
+  memories, become essential until the 8 KB limit. The others become searchable: they are not lost,
+  and the agent finds them with a search, but they are no longer in every prompt. Mark a memory as
+  essential in the memories window if the agent must always see it.
+
+### Fixed
+
+- An agent with a full memory now gets an error when it tries to save one more memory, and it can
+  merge or forget a memory in the same turn. Before, the new memory was lost when the turn ended.
+
 ## [0.37.0] - 2026-10-14
 
 ### Changed
