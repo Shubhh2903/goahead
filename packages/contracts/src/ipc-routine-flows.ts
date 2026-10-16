@@ -4,6 +4,7 @@ import {
   isRoutineRun,
   isRoutineSchedule,
   ROUTINE_LIMIT_POLICIES,
+  ROUTINE_MISSED_POLICIES,
   type Routine,
   type RoutineRun,
   type RoutineSchedule,
@@ -187,6 +188,7 @@ function isRoutineFlowRoutineInfo(value: unknown): value is RoutineFlowRoutineIn
     value.trigger.kind === "schedule" &&
     isRoutineSchedule(value.trigger.schedule) &&
     (value.limitPolicy === undefined || isOneOf(ROUTINE_LIMIT_POLICIES, value.limitPolicy)) &&
+    (value.missedPolicy === undefined || isOneOf(ROUTINE_MISSED_POLICIES, value.missedPolicy)) &&
     isString(value.createdAt) &&
     isString(value.updatedAt)
   );

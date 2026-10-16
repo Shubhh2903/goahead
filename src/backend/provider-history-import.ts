@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { AgentProviderId, ConversationMessage } from "@openbot/contracts/ipc";
+import { isImageGenerationItem } from "./agent/image-generation";
+import { isNoUpdateAnswer } from "./agent/routine-quiet-runs";
 import { mergeProviderHistoryMessages, messagesFromThreadItems, threadTurnBaseTime } from "./conversation-snapshots";
 import { databaseRow, decodeConversationMessageJson, requiredStringColumn } from "./database/database-rows";
 import type { DeliveryContext } from "./mailbox-store";
@@ -51,6 +53,11 @@ export interface ProviderHistoryImportInput {
   publicThreadId: string;
   cwd?: string;
   findDelivery(deliveryId: string): DeliveryContext | null;
+  /**
+   * Whether this routine delivery can have ended quiet: a scheduled run, or a run of a deleted
+   * routine, whose record is gone. A Test or script run cannot.
+   */
+  quietRoutineDelivery(deliveryId: string): boolean;
 }
 
 export interface ProviderHistoryImportResult {
@@ -132,6 +139,11 @@ async function importCompletedTurn(
   input: ProviderHistoryImportInput,
   fragment: ProviderHistoryFragment,
 ): Promise<number> {
+  // Only a completed turn can end quiet; a failed or interrupted turn keeps its answers.
+  const routine =
+    fragment.status === undefined || fragment.status === "completed"
+      ? routineTurnAnswers(input, fragment.turnId)
+      : "none";
   let importedCount = 0;
   let afterIndex = -1;
   let complete = false;
@@ -155,12 +167,15 @@ async function importCompletedTurn(
     };
     const items = page.map(({ item }) => item);
     baseTime ??= threadTurnBaseTime(turn, items, input.findDelivery);
-    const pageMessages = messagesFromThreadItems(
+    const allMessages = messagesFromThreadItems(
       { ...turn, baseTime },
       items,
       page[0]?.itemIndex ?? afterIndex + 1,
       input.findDelivery,
     );
+    // The turn completion dropped these answers from the chat, so the import does not bring them
+    // back.
+    const pageMessages = routine === "none" ? allMessages : allMessages.filter(keptRoutineMessage(routine));
     const reconciled =
       input.provider === "claude"
         ? mergeProviderHistoryMessages(
@@ -193,6 +208,57 @@ async function importCompletedTurn(
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
   return importedCount;
+}
+
+/**
+ * How a turn that a scheduled routine run started answered: `quiet` when each answer is only the
+ * no-update marker, so the turn completion dropped all of them with the turn's thinking, `answered`
+ * for any other such turn, and `none` for a turn that no scheduled routine run started. A Test or
+ * script run keeps its answers, as the turn completion does. Decided from the staged items alone,
+ * one bounded page at a time, so it needs no stored state.
+ */
+type RoutineTurnAnswers = "none" | "answered" | "quiet";
+
+function routineTurnAnswers(input: ProviderHistoryImportInput, turnId: string): RoutineTurnAnswers {
+  let routine: boolean | undefined;
+  let markers = 0;
+  let reported = false;
+  let afterIndex = -1;
+  while (true) {
+    const page = input.database.stagedProviderHistoryItems({
+      sessionId: input.sessionId,
+      turnId,
+      afterIndex,
+      limit: IMPORT_PAGE_ITEMS,
+    });
+    for (const { item } of page) {
+      // Every delivery of the turn must be a scheduled run, as at the turn completion: a message
+      // steered into the turn waits for the answer.
+      if (routine !== false && item.type === "userMessage" && typeof item.clientId === "string")
+        routine =
+          input.findDelivery(item.clientId)?.delivery.sender.kind === "routine" &&
+          input.quietRoutineDelivery(item.clientId);
+      if (item.type === "agentMessage" && typeof item.text === "string" && item.text && item.phase !== "commentary") {
+        if (isNoUpdateAnswer(item.text)) markers += 1;
+        else reported = true;
+      }
+      if (isImageGenerationItem(item)) reported = true;
+    }
+    const last = page.at(-1);
+    if (routine === false) return "none";
+    if (page.length < IMPORT_PAGE_ITEMS || !last || last.itemIndex <= afterIndex) break;
+    afterIndex = last.itemIndex;
+  }
+  if (!routine) return "none";
+  return markers > 0 && !reported ? "quiet" : "answered";
+}
+
+function keptRoutineMessage(routine: Exclude<RoutineTurnAnswers, "none">) {
+  return (message: ConversationMessage): boolean => {
+    if (message.author !== "assistant") return true;
+    if (routine === "quiet") return false;
+    return message.itemType === "commentary" || !isNoUpdateAnswer(message.text);
+  };
 }
 
 function readStoredTurnMessages(

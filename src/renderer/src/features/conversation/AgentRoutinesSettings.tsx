@@ -1,8 +1,10 @@
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   ROUTINE_LIMIT_POLICIES,
+  ROUTINE_MISSED_POLICIES,
   type RoutineFields,
   type RoutineLimitPolicy,
+  type RoutineMissedPolicy,
   type RoutineRunFields,
   type RoutineSchedule,
 } from "@openbot/contracts/ipc";
@@ -20,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
   Switch,
+  Text,
   Textarea,
   toast,
 } from "@openbot/ui";
@@ -66,12 +69,18 @@ interface RoutineDraft {
   schedule: RoutineSchedule;
   scheduleDraft: RoutineScheduleDraft;
   limitPolicy: RoutineLimitPolicy;
+  missedPolicy: RoutineMissedPolicy;
 }
 
 const LIMIT_POLICY_LABELS = {
   wait: "routine.settings.limitPolicy.wait",
   skip: "routine.settings.limitPolicy.skip",
 } as const satisfies Record<RoutineLimitPolicy, AppTextKey>;
+
+const MISSED_POLICY_LABELS = {
+  skip: "routine.settings.missedPolicy.skip",
+  "run-once": "routine.settings.missedPolicy.runOnce",
+} as const satisfies Record<RoutineMissedPolicy, AppTextKey>;
 
 const NEW_ROUTINE_SCHEDULE: RoutineScheduleDraft = { kind: "daily", days: ROUTINE_EVERY_DAY, time: "09:00" };
 
@@ -201,6 +210,10 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
         active: current.active === base.active ? routine.active : current.active,
         limitPolicy:
           current.limitPolicy === (base.limitPolicy ?? "wait") ? (routine.limitPolicy ?? "wait") : current.limitPolicy,
+        missedPolicy:
+          current.missedPolicy === (base.missedPolicy ?? "skip")
+            ? (routine.missedPolicy ?? "skip")
+            : current.missedPolicy,
         ...(scheduleEdited
           ? {}
           : {
@@ -225,6 +238,7 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
       schedule: structuredClone(routine.trigger.schedule),
       scheduleDraft: routineScheduleToDraft(routine.trigger.schedule),
       limitPolicy: routine.limitPolicy ?? "wait",
+      missedPolicy: routine.missedPolicy ?? "skip",
     });
     void loadRuns(routine.id);
   }
@@ -244,6 +258,7 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
       schedule: routineScheduleFromDraft(NEW_ROUTINE_SCHEDULE),
       scheduleDraft: NEW_ROUTINE_SCHEDULE,
       limitPolicy: "wait",
+      missedPolicy: "skip",
     });
   }
 
@@ -341,6 +356,7 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
         schedule: current.schedule,
         limitPolicy: current.limitPolicy,
+        missedPolicy: current.missedPolicy,
       });
       setRoutines((items) => {
         const next = [saved, ...items.filter((routine) => routine.id !== saved.id)];
@@ -594,9 +610,10 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                   }
                 />
               </section>
-              <label class="settings-field agent-routine-instruction-field">
-                <span>{t("routine.settings.instruction")}</span>
+              <div class="settings-field agent-routine-instruction-field">
+                <span id="agent-routine-instruction-label">{t("routine.settings.instruction")}</span>
                 <Textarea
+                  aria-labelledby="agent-routine-instruction-label"
                   value={current().instruction}
                   placeholder={
                     props.port.ownerNoun === "channel"
@@ -604,9 +621,16 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                       : t("routine.settings.instructionPlaceholderAgent")
                   }
                   maxlength={INPUT_LIMITS.routineInstruction}
+                  aria-describedby={props.port.ownerNoun === "channel" ? undefined : "agent-routine-no-update-hint"}
                   onValueChange={(instruction) => changeDraft((value) => ({ ...value, instruction }))}
                 />
-              </label>
+                {/* A scheduled run of an agent routine that answers only the marker posts nothing. */}
+                <Show when={props.port.ownerNoun !== "channel"}>
+                  <Text id="agent-routine-no-update-hint" variant="caption" tone="muted">
+                    {t("routine.settings.instructionNoUpdateHint")}
+                  </Text>
+                </Show>
+              </div>
               <Show when={props.port.limitPolicy}>
                 <div class="settings-field">
                   <span id="agent-routine-limit-policy-label">{t("routine.settings.limitPolicy")}</span>
@@ -623,6 +647,28 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                     <SelectTrigger aria-labelledby="agent-routine-limit-policy-label">
                       <SelectValue<RoutineLimitPolicy>>
                         {(state) => t(LIMIT_POLICY_LABELS[state.selectedOption()])}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent />
+                  </Select>
+                </div>
+              </Show>
+              <Show when={props.port.missedPolicy}>
+                <div class="settings-field">
+                  <span id="agent-routine-missed-policy-label">{t("routine.settings.missedPolicy")}</span>
+                  <Select<RoutineMissedPolicy>
+                    options={[...ROUTINE_MISSED_POLICIES]}
+                    value={current().missedPolicy}
+                    onChange={(missedPolicy) => {
+                      if (missedPolicy) changeDraft((value) => ({ ...value, missedPolicy }));
+                    }}
+                    itemComponent={(item) => (
+                      <SelectItem item={item.item}>{t(MISSED_POLICY_LABELS[item.item.rawValue])}</SelectItem>
+                    )}
+                  >
+                    <SelectTrigger aria-labelledby="agent-routine-missed-policy-label">
+                      <SelectValue<RoutineMissedPolicy>>
+                        {(state) => t(MISSED_POLICY_LABELS[state.selectedOption()])}
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent />

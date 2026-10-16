@@ -346,6 +346,16 @@ const V32_PROVIDER_SESSIONS_COLUMN_SQL = `provider TEXT NOT NULL,`;
 // schema puts it last as well. Both routine tables end with a column, not a table constraint.
 const V27_ROUTINE_LIMIT_POLICY_COLUMN_SQL = `limit_policy TEXT NOT NULL DEFAULT 'wait' CHECK(limit_policy IN ('wait', 'skip'))`;
 
+// Migration 36 (upstream OpenBot migration 33) adds what a routine does with the occurrences that came due while
+// GoAhead was closed, and the run columns that record those occurrences on one cancelled run. Frozen with the
+// migration. The policy goes after the migration 27 column. ADD COLUMN puts a run column before the UNIQUE
+// constraint that ends the run tables, so the latest schema puts the two run columns there as well.
+const V36_ROUTINE_MISSED_POLICY_COLUMN_SQL = `missed_policy TEXT NOT NULL DEFAULT 'skip' CHECK(missed_policy IN ('skip', 'run-once'))`;
+const V36_ROUTINE_RUN_MISSED_COLUMNS_SQL = [
+  "missed_count INTEGER CHECK(missed_count IS NULL OR missed_count >= 1)",
+  "missed_until TEXT",
+] as const;
+
 const BASELINE_AGENT_ROUTINES_END_SQL = `    last_event_sequence INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS agent_routines_agent`;
@@ -353,6 +363,16 @@ const BASELINE_AGENT_ROUTINES_END_SQL = `    last_event_sequence INTEGER NOT NUL
 const V19_CHANNEL_ROUTINES_END_SQL = `    last_event_sequence INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS channel_routines_channel`;
+
+const BASELINE_ROUTINE_RUNS_END_SQL = `    last_event_sequence INTEGER NOT NULL,
+    UNIQUE(trigger_id, scheduled_for)
+  );
+  CREATE INDEX IF NOT EXISTS routine_runs_routine`;
+
+const V19_CHANNEL_ROUTINE_RUNS_END_SQL = `    last_event_sequence INTEGER NOT NULL,
+    UNIQUE(trigger_id, scheduled_for)
+  );
+  CREATE INDEX IF NOT EXISTS channel_routine_runs_routine`;
 
 // IF NOT EXISTS throughout, because this text is both migration 15 and the tail of the latest
 // schema. A database built from the latest schema and then replayed forward - which is how a
@@ -409,20 +429,28 @@ const ANALYTICS_DATE_INDEX_SQL = `
 const LATEST_SCHEMA_SQL =
   substituteOnce(
     substituteOnce(
-      substituteOnce(BASELINE_V8_SCHEMA_SQL, BASELINE_REACTIONS_TABLE_SQL, V12_REACTIONS_TABLE_SQL),
-      BASELINE_PROVIDER_SESSIONS_CHECK_SQL,
-      V32_PROVIDER_SESSIONS_COLUMN_SQL,
+      substituteOnce(
+        substituteOnce(BASELINE_V8_SCHEMA_SQL, BASELINE_REACTIONS_TABLE_SQL, V12_REACTIONS_TABLE_SQL),
+        BASELINE_PROVIDER_SESSIONS_CHECK_SQL,
+        V32_PROVIDER_SESSIONS_COLUMN_SQL,
+      ),
+      BASELINE_AGENT_ROUTINES_END_SQL,
+      withRoutinePolicies(BASELINE_AGENT_ROUTINES_END_SQL),
     ),
-    BASELINE_AGENT_ROUTINES_END_SQL,
-    withRoutineLimitPolicy(BASELINE_AGENT_ROUTINES_END_SQL),
+    BASELINE_ROUTINE_RUNS_END_SQL,
+    withRunMissedColumns(BASELINE_ROUTINE_RUNS_END_SQL),
   ) +
   ANALYTICS_SCHEMA_SQL +
   ANALYTICS_DATE_INDEX_SQL +
   CHANNEL_SCHEMA_SQL +
   substituteOnce(
-    CHANNEL_SETTINGS_SCHEMA_SQL,
-    V19_CHANNEL_ROUTINES_END_SQL,
-    withRoutineLimitPolicy(V19_CHANNEL_ROUTINES_END_SQL),
+    substituteOnce(
+      CHANNEL_SETTINGS_SCHEMA_SQL,
+      V19_CHANNEL_ROUTINES_END_SQL,
+      withRoutinePolicies(V19_CHANNEL_ROUTINES_END_SQL),
+    ),
+    V19_CHANNEL_ROUTINE_RUNS_END_SQL,
+    withRunMissedColumns(V19_CHANNEL_ROUTINE_RUNS_END_SQL),
   ) +
   MCP_SERVERS_SCHEMA_SQL +
   MESSAGING_SCHEMA_SQL +
@@ -437,11 +465,19 @@ const LATEST_SCHEMA_SQL =
   // Migration 35 (upstream OpenBot migration 32).
   AGENT_MEMORY_SELECTION_SCHEMA_SQL;
 
-/** The end of a routine table with the migration 27 column after its last one. */
-function withRoutineLimitPolicy(tableEnd: string): string {
+/** The end of a routine table with the migration 27 and 36 columns after its last one. */
+function withRoutinePolicies(tableEnd: string): string {
   return tableEnd.replace(
     "last_event_sequence INTEGER NOT NULL\n",
-    `last_event_sequence INTEGER NOT NULL,\n    ${V27_ROUTINE_LIMIT_POLICY_COLUMN_SQL}\n`,
+    `last_event_sequence INTEGER NOT NULL,\n    ${V27_ROUTINE_LIMIT_POLICY_COLUMN_SQL},\n    ${V36_ROUTINE_MISSED_POLICY_COLUMN_SQL}\n`,
+  );
+}
+
+/** The end of a routine run table with the migration 36 columns before its UNIQUE constraint. */
+function withRunMissedColumns(tableEnd: string): string {
+  return tableEnd.replace(
+    "last_event_sequence INTEGER NOT NULL,\n",
+    `last_event_sequence INTEGER NOT NULL,\n${V36_ROUTINE_RUN_MISSED_COLUMNS_SQL.map((column) => `    ${column},\n`).join("")}`,
   );
 }
 
@@ -626,6 +662,13 @@ const MIGRATIONS: readonly OpenBotMigration[] = [
     // rebuild `agent_memory_search`.
     up: migrateAgentMemorySelection,
   },
+  {
+    version: 36,
+    // Upstream OpenBot migration 33. Adds columns with a constant default or none to four tables: no rebuild, so
+    // no foreign-key pause and no vacuum. Every existing routine keeps skipping the occurrences it missed, which is what it did
+    // before, and every existing run records no missed occurrence.
+    up: addRoutineMissedRuns,
+  },
 ];
 
 const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? BASELINE_SCHEMA_VERSION;
@@ -789,7 +832,8 @@ function validateAppliedVersions(versions: number[]): void {
 // routine flow tables). So a marker without its table means that upstream OpenBot wrote the database. Running
 // GoAhead migrations on it would skip the GoAhead schema of those versions, so stop before any write.
 // GoAhead 33, 34 and 35 create the same provider history, routine flow and memory selection tables as upstream 29,
-// 31 and 32, so those tables prove nothing either way: only a missing GoAhead table below is the signal.
+// 31 and 32, and GoAhead 36 adds the same routine columns as upstream 33, so those prove nothing either way: only a
+// missing GoAhead table below is the signal.
 // A later GoAhead migration that drops or renames one of these tables must change this list in the same change.
 const GOAHEAD_LINEAGE_TABLES: readonly (readonly [version: number, table: string])[] = [
   [28, "projection_messaging_inbox"],
@@ -973,6 +1017,26 @@ function addSlackClientCache(db: DatabaseSync, appliedAt: string): void {
      FROM projection_messaging_inbox m
      GROUP BY m.connection_id, m.platform_channel_id`,
   ).run(appliedAt);
+}
+
+// Migration 36 (upstream OpenBot migration 33) adds the missed-run policy to the routine tables and the missed-run
+// record to the run tables.
+function addRoutineMissedRuns(db: DatabaseSync): void {
+  const additions: readonly (readonly [string, string, string])[] = [
+    ["projection_agent_routines", "missed_policy", V36_ROUTINE_MISSED_POLICY_COLUMN_SQL],
+    ["projection_channel_routines", "missed_policy", V36_ROUTINE_MISSED_POLICY_COLUMN_SQL],
+    ...["projection_routine_runs", "projection_channel_routine_runs"].flatMap((table) =>
+      V36_ROUTINE_RUN_MISSED_COLUMNS_SQL.map(
+        (column) => [table, column.slice(0, column.indexOf(" ")), column] as const,
+      ),
+    ),
+  ];
+  for (const [table, name, column] of additions) {
+    // A development profile that ran this version before it shipped has the column already.
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+    if (columns.some((existing) => isDynamicRecord(existing) && existing.name === name)) continue;
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`);
+  }
 }
 
 // Migrations 17, 22, 23, 24 and 26 share this SQL. Each migration gives its own CHECK line and staging table name, so the

@@ -12,7 +12,7 @@ import { migrateOpenBotDatabase } from "./openbot-database-schema";
 // - a newer or incomplete history is changed or accepted;
 // - a deleted routine or run leaves links or steps behind, or a step can point at a missing run.
 
-const LATEST = 35;
+const LATEST = 36;
 const STAMP = "2026-10-01T07:00:00.000Z";
 const FLOW_OBJECTS = [
   "routine_flow_links",
@@ -149,6 +149,16 @@ function seedInstall(db: DatabaseSync, version: number): void {
 
 type TableRows = Record<string, readonly Record<string, SQLOutputValue>[]>;
 
+/**
+ * Migration 36 adds these columns to the routine and run rows, and `routine-missed-runs-migration.test.ts` checks
+ * them, so the row comparisons here leave them out.
+ */
+const MISSED_RUN_COLUMNS = new Set(["missed_policy", "missed_count", "missed_until"]);
+
+function withoutMissedRunColumns(row: Record<string, SQLOutputValue>): Record<string, SQLOutputValue> {
+  return Object.fromEntries(Object.entries(row).filter(([key]) => !MISSED_RUN_COLUMNS.has(key)));
+}
+
 /** Every row of every table, in a stable order. */
 function allRows(db: DatabaseSync): TableRows {
   const tables = db
@@ -161,6 +171,7 @@ function allRows(db: DatabaseSync): TableRows {
       db
         .prepare(`SELECT * FROM "${table}"`)
         .all()
+        .map(withoutMissedRunColumns)
         .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
     ]),
   );

@@ -709,6 +709,9 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       threads: this.#threads,
       hooks: {
         emitError: (code, error, agentId) => this.#emitError(code, error, agentId),
+        // A deleted routine takes its runs with it, so a run without a record counts as scheduled:
+        // otherwise the import would bring back the answers that its quiet turns dropped.
+        quietRoutineDelivery: (deliveryId) => this.#routines.runForDelivery(deliveryId)?.kind !== "manual",
         executionThreads: () => [...this.channels.store.executionThreads(), ...this.messaging.store.executionThreads()],
         deliveryThreadId: (deliveryId) => {
           const assignment = this.channels.store.assignmentForDelivery(deliveryId);
@@ -941,6 +944,8 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         toolStep: (agentId, turnId, item) => this.#handoffs.recordStep(agentId, turnId, item),
         turnModel: (agentId, turnId) => this.#drain.modelForTurn(agentId, turnId),
         requeueChannelDelivery: (deliveryId) => this.#requeueChannelDelivery(deliveryId),
+        quietRoutineDelivery: (deliveryId) => this.#routines.quietRunForDelivery(deliveryId),
+        takeRoutinePreview: (deliveryId) => this.#routines.takePreviewBeforeRun(deliveryId),
       },
     });
     this.#removal = new AgentRemoval({
@@ -1238,8 +1243,9 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     if (!agent || !agentAutomationAllowed(agent)) throw new Error(sourceText("error.agent.automationOff"));
   }
 
-  listRoutineRuns(input: ListRoutineRunsInput): RoutineRun[] {
-    return this.#routines.listRuns(input);
+  /** `withSkipped` adds the skipped-run records, which only the local history shows. */
+  listRoutineRuns(input: ListRoutineRunsInput, withSkipped = false): RoutineRun[] {
+    return this.#routines.listRuns(input, withSkipped);
   }
 
   listChannelMemories(channelId: string): ChannelMemory[] {
@@ -1282,8 +1288,8 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     return this.#channelRoutines.test(input);
   }
 
-  listChannelRoutineRuns(input: ListChannelRoutineRunsInput): ChannelRoutineRun[] {
-    return this.#channelRoutines.listRuns(input);
+  listChannelRoutineRuns(input: ListChannelRoutineRunsInput, withSkipped = false): ChannelRoutineRun[] {
+    return this.#channelRoutines.listRuns(input, withSkipped);
   }
 
   /**

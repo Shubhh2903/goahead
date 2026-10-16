@@ -397,6 +397,47 @@ OpenBot webhook triggers are not part of GoAhead.
   service, so the tool router reads it through a getter. The canvas chat panel sends the user's request
   to the open agent's own conversation and shows the answer of the turn that read it.
 
+## Missed routine runs
+
+Migration 36 (upstream OpenBot migration 33) adds `missed_policy` (`skip` or `run-once`, default
+`skip`) to both routine tables, and `missed_count` and `missed_until` to both run tables. It only adds
+columns, so every routine, trigger and run stays. At startup, `RoutineStore.skipMissed` records the
+times that came due while GoAhead was closed as one `cancelled` run with a count and a time range, in
+the same transaction that moves the trigger. With `run-once`, the newest missed time stays due, so the
+scheduler runs it once. The count is exact up to 999. Only the local run history (the IPC run lists)
+reads these records. The Team API run routes, the calendar and the flows canvas do not get them,
+because a released client reads such a record as a run that a person cancelled. Only this computer's
+host shows the setting.
+
+## Quiet routine runs
+
+A scheduled run of an agent routine can end without a message: the user asks for it in the routine
+task, and GoAhead adds nothing to the run prompt. When every answer of a completed turn that ran only
+scheduled runs is exactly `[[no-update]]` (`agent/routine-quiet-runs.ts`), the turn drops its answers,
+thinking and plan, keeps the run marker and the run history, and puts back the agent preview from
+before the run (memory only, by delivery). Its `turn-completed` event has `quiet: true`, so no
+notification or completion sound follows. A marker inside a longer answer is a report. Test runs and
+script runs are never quiet. The provider history import skips the dropped answers. On the Team API,
+`quiet` goes beside the frozen v6 `turn-completed` projection (`team-protocol/turn-quiet-v6.ts`):
+older peers drop the key, so no protocol bump and no capability are needed.
+
+## Routine calendar feed
+
+`src/main/routine-feed-server.ts` is a loopback HTTP listener that serves the routines of this
+computer as an iCalendar feed (`src/main/routine-feed-ics.ts`) for Server Settings > Routines. It
+runs only after the user makes a feed URL, and binds `127.0.0.1`. The URL is
+`/routines/<token>.ics`, with an optional `?agent=<id>`: a calendar app cannot send a header, so the
+token is in the path. `<userData>/openbot-routine-feed-v1.json` keeps the token, encrypted with the
+secret storage cipher, and the port, so the URL stays the same after a restart. When the port is not
+free, the listener takes a new one and saves it. **New URL** replaces the token, and **Turn off**
+deletes the file. A wrong token gets 404. A request with an `Origin` header or a foreign `Host` gets
+403 before the token is checked. The token is a registered secret, so logs redact it.
+
+The feed lists each run of the next 30 days of active routines as one UTC event, placed by the same
+schedule code that fires the run, so it needs no RRULE or time zone rules. Nothing leaves the
+computer: a calendar service that fetches feeds from its own servers, such as Google Calendar or
+iCloud, cannot read it. A remote server has no feed: the section shows only for this computer.
+
 ## Provider CLI updates
 
 The runtime manager offers the latest upstream release of each provider CLI. It checks at startup,

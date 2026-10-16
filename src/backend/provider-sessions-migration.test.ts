@@ -22,7 +22,7 @@ import { migrateOpenBotDatabase } from "./openbot-database-schema";
 // - a database that upstream OpenBot wrote is migrated as a GoAhead database;
 // - the lineage guard stops a real GoAhead database.
 
-const LATEST = 35;
+const LATEST = 36;
 const STAMP = "2026-10-01T07:00:00.000Z";
 
 const roots: string[] = [];
@@ -209,6 +209,16 @@ function seedInstall(db: DatabaseSync, version: number): void {
 type TableRows = Record<string, readonly Record<string, SQLOutputValue>[]>;
 
 /** Every row of every table, in a stable order. A rebuild can change the rowid order, not the rows. */
+/**
+ * Migration 36 adds these columns to the routine and run rows, and `routine-missed-runs-migration.test.ts` checks
+ * them, so the row comparisons here leave them out.
+ */
+const MISSED_RUN_COLUMNS = new Set(["missed_policy", "missed_count", "missed_until"]);
+
+function withoutMissedRunColumns(row: Record<string, SQLOutputValue>): Record<string, SQLOutputValue> {
+  return Object.fromEntries(Object.entries(row).filter(([key]) => !MISSED_RUN_COLUMNS.has(key)));
+}
+
 function allRows(db: DatabaseSync): TableRows {
   const tables = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
@@ -220,6 +230,7 @@ function allRows(db: DatabaseSync): TableRows {
       db
         .prepare(`SELECT * FROM "${table}"`)
         .all()
+        .map(withoutMissedRunColumns)
         .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
     ]),
   );

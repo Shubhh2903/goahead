@@ -71,6 +71,7 @@ export class AgentRoutineStore extends RoutineStore {
             timezone: routine.timezone,
             schedule: routine.trigger.schedule,
             ...(routine.limitPolicy ? { limitPolicy: routine.limitPolicy } : {}),
+            ...(routine.missedPolicy ? { missedPolicy: routine.missedPolicy } : {}),
           },
           now,
         ),
@@ -89,8 +90,8 @@ export class AgentRoutineStore extends RoutineStore {
     return toRoutine(this.updateRoutine(agentId, fields, now));
   }
 
-  listRuns(agentId: string, routineId: string, limit = 50): RoutineRun[] {
-    return this.listRunRows(agentId, routineId, limit).map(toRun);
+  listRuns(agentId: string, routineId: string, limit = 50, withSkipped = false): RoutineRun[] {
+    return this.listRunRows(agentId, routineId, limit, withSkipped).map(toRun);
   }
 
   pendingRuns(): RoutineRun[] {

@@ -13,6 +13,7 @@ import { CHANNEL_ROUTES } from "@openbot/contracts/team-protocol/channels-v1";
 import { sourceText } from "@openbot/i18n/source";
 import { buildRoutineCalendar, type RoutineCalendarSource } from "@openbot/team-client/routine-calendar";
 import type { AgentService } from "../../backend/agent-service";
+import { localRoutineCalendarSource } from "../local-routine-calendar";
 import {
   decodeAgentSummaries,
   decodeRoutine,
@@ -89,7 +90,7 @@ export function routineIpcHandlers({
           ),
       }),
       listRoutineRuns: scopedHandler(parseListRoutineRuns, {
-        local: (parsed) => service.listRoutineRuns(parsed),
+        local: (parsed) => service.listRoutineRuns(parsed, true),
         remote: (parsed, serverId) =>
           remoteServers.request(
             serverId,
@@ -104,7 +105,7 @@ export function routineIpcHandlers({
         },
       }),
       routineCalendar: scopedHandler(parseRoutineCalendar, {
-        local: (input) => calendar(input, localCalendarSource(service)),
+        local: (input) => calendar(input, localRoutineCalendarSource(service)),
         remote: (input, serverId) => calendar(input, remoteCalendarSource(remoteServers, serverId)),
       }),
     },
@@ -113,27 +114,6 @@ export function routineIpcHandlers({
 
 function calendar(input: { from: string; to: string }, source: RoutineCalendarSource) {
   return buildRoutineCalendar({ from: new Date(input.from), to: new Date(input.to) }, new Date(), source);
-}
-
-function localCalendarSource(service: AgentService): RoutineCalendarSource {
-  return {
-    owners: async () => {
-      const archived = service.channels.store.archivedIds();
-      return [
-        ...service.listAgents().map((agent): RoutineCalendarOwner => ({ kind: "agent", agentId: agent.id })),
-        ...service.channels.store
-          .ids()
-          .filter((channelId) => !archived.has(channelId))
-          .map((channelId): RoutineCalendarOwner => ({ kind: "channel", channelId })),
-      ];
-    },
-    routines: async (owner) =>
-      owner.kind === "agent" ? service.listRoutines(owner.agentId) : service.listChannelRoutines(owner.channelId),
-    runs: async (owner, routineId, limit) =>
-      owner.kind === "agent"
-        ? service.listRoutineRuns({ agentId: owner.agentId, routineId, limit })
-        : service.listChannelRoutineRuns({ channelId: owner.channelId, routineId, limit }),
-  };
 }
 
 /** A remote host answers through the routes its routine settings already use, so no new route is needed. */

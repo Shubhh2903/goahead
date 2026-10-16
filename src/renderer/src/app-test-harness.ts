@@ -670,6 +670,7 @@ export function installOpenbotStub(): void {
     }),
     // No renderer test reaches routine flows yet; a request rejects as not stubbed.
     routineFlows: stubGroup(IPC_ENDPOINTS.routineFlows, "routineFlows", {}),
+    routineFeed: stubGroup(IPC_ENDPOINTS.routineFeed, "routineFeed", {}),
     voice: stubGroup(IPC_ENDPOINTS.voice, "voice", {
       getModelStatus: vi
         .fn()

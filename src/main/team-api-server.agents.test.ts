@@ -8,7 +8,7 @@ import opencodeFixture from "../../packages/contracts/src/team-protocol/fixtures
 
 import { join } from "node:path";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import type { AgentMemory, AgentSummary, Routine, RoutineRun } from "@openbot/contracts/ipc";
+import type { AgentMemory, AgentSummary, ListRoutineRunsInput, Routine, RoutineRun } from "@openbot/contracts/ipc";
 import {
   TEAM_APP_VERSION_HEADER,
   TEAM_CAPABILITIES_HEADER,
@@ -877,7 +877,12 @@ describe("TeamApiServer agents", () => {
         updateRoutine,
         deleteRoutine,
         testRoutine: vi.fn(async () => run),
-        listRoutineRuns: vi.fn(() => [run]),
+        // A released client would read a skipped-run record as a run that a person cancelled.
+        listRoutineRuns: vi.fn((_input: ListRoutineRunsInput, withSkipped?: boolean) =>
+          withSkipped
+            ? [run, { ...run, id: "run-missed", status: "cancelled" as const, missed: { count: 3, until: null } }]
+            : [run],
+        ),
       }),
     });
 

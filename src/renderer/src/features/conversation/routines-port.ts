@@ -4,6 +4,7 @@ import type {
   OpenBotDesktopApi,
   RoutineFields,
   RoutineLimitPolicy,
+  RoutineMissedPolicy,
   RoutineRunFields,
   RoutineSchedule,
 } from "@openbot/contracts/ipc";
@@ -17,6 +18,8 @@ interface RoutineSaveInput {
   schedule: RoutineSchedule;
   /** Left out, an update keeps the saved policy. */
   limitPolicy?: RoutineLimitPolicy;
+  /** Left out, an update keeps the saved policy. */
+  missedPolicy?: RoutineMissedPolicy;
 }
 
 export interface RoutinesPort {
@@ -28,6 +31,11 @@ export interface RoutinesPort {
    * released Team API drops the field, so a remote host would ignore the choice.
    */
   limitPolicy: boolean;
+  /**
+   * Whether the host keeps what a routine does with a run that came due while GoAhead was closed.
+   * Only this computer's host does, for the same reason as `limitPolicy`.
+   */
+  missedPolicy: boolean;
   list: () => Promise<RoutineFields[]>;
   listRuns: (routineId: string, limit: number) => Promise<RoutineRunFields[]>;
   save: (input: RoutineSaveInput) => Promise<RoutineFields>;
@@ -43,10 +51,13 @@ export function agentRoutinesPort(agentId: string, automation = false, localHost
     ownerId: agentId,
     ownerNoun: "agent",
     limitPolicy: localHost,
+    missedPolicy: localHost,
     list: () => window.openbot.agent.listRoutines(agentId),
     listRuns: (routineId, limit) => window.openbot.agent.listRoutineRuns({ agentId, routineId, limit }),
-    save: ({ routineId, name, instruction, active, timezone, schedule, limitPolicy }) => {
-      const policy = localHost && limitPolicy ? { limitPolicy } : {};
+    save: ({ routineId, name, instruction, active, timezone, schedule, limitPolicy, missedPolicy }) => {
+      const policy = localHost
+        ? { ...(limitPolicy ? { limitPolicy } : {}), ...(missedPolicy ? { missedPolicy } : {}) }
+        : {};
       return routineId
         ? window.openbot.agent.updateRoutine({ agentId, routineId, name, instruction, active, schedule, ...policy })
         : window.openbot.agent.createRoutine({ agentId, name, instruction, active, timezone, schedule, ...policy });
@@ -86,10 +97,13 @@ export function channelRoutinesPort(
     ownerId: channelId,
     ownerNoun: "channel",
     limitPolicy: localHost,
+    missedPolicy: localHost,
     list: () => api.listChannelRoutines(channelId),
     listRuns: (routineId, limit) => api.listChannelRoutineRuns({ channelId, routineId, limit }),
-    save: ({ routineId, name, instruction, active, timezone, schedule, limitPolicy }) => {
-      const policy = localHost && limitPolicy ? { limitPolicy } : {};
+    save: ({ routineId, name, instruction, active, timezone, schedule, limitPolicy, missedPolicy }) => {
+      const policy = localHost
+        ? { ...(limitPolicy ? { limitPolicy } : {}), ...(missedPolicy ? { missedPolicy } : {}) }
+        : {};
       return routineId
         ? api.updateChannelRoutine({ channelId, routineId, name, instruction, active, schedule, ...policy })
         : api.createChannelRoutine({ channelId, name, instruction, active, timezone, schedule, ...policy });

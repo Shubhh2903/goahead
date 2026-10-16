@@ -376,6 +376,7 @@
 
 .agent-routine-run-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   margin-top: 0;
 }
@@ -397,6 +398,24 @@
 
 .ui-button.agent-routine-run-link {
   cursor: pointer;
+}
+
+/* The time, then a muted note: skipped runs or a late start. */
+.agent-routine-run-text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 0 var(--openbot-space-2);
+  white-space: nowrap;
+}
+
+.agent-routine-run-note {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--openbot-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -435,7 +454,8 @@
 .agent-routine-run-icon-running,
 .agent-routine-run-icon-queued,
 .agent-routine-run-icon-interrupted,
-.agent-routine-run-icon-cancelled {
+.agent-routine-run-icon-cancelled,
+.agent-routine-run-icon-skipped {
   color: var(--openbot-text-muted);
 }
 

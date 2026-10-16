@@ -121,6 +121,7 @@ import { createMockMessaging } from "./mock-messaging";
 import { createMockOnePasswordConnector } from "./mock-onepassword-connector";
 import { createMockProviderRuntimes, type MockProviderRuntimeOptions } from "./mock-provider-runtimes";
 import { mockRoutineCalendar } from "./mock-routine-calendar";
+import { createMockRoutineFeed } from "./mock-routine-feed";
 import { mockRoutineFlows } from "./mock-routine-flows";
 import { applySidebarLayoutAction } from "./mock-sidebar-layout";
 import { createMockSkills, type MockSkillsOptions } from "./mock-skills";
@@ -459,6 +460,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     timezone: string;
     schedule: RoutineSchedule;
     limitPolicy?: Routine["limitPolicy"];
+    missedPolicy?: Routine["missedPolicy"];
   }): Routine {
     const now = new Date().toISOString();
     const routineId = crypto.randomUUID();
@@ -470,6 +472,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
       active: input.active,
       timezone: input.timezone,
       limitPolicy: input.limitPolicy ?? "wait",
+      missedPolicy: input.missedPolicy ?? "skip",
       trigger: {
         id: crypto.randomUUID(),
         routineId,
@@ -681,6 +684,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     onePasswordConnector: createMockOnePasswordConnector(),
     bitwardenConnector: createMockBitwardenConnector(),
     billing: createMockBilling(),
+    routineFeed: createMockRoutineFeed(),
     hostedServers: createMockHostedServers(),
     customProviders: {
       list: async () => clone(customProviders),
@@ -1428,6 +1432,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
           ...(input.instruction === undefined ? {} : { instruction: input.instruction.trim() }),
           ...(input.active === undefined ? {} : { active: input.active }),
           ...(input.limitPolicy === undefined ? {} : { limitPolicy: input.limitPolicy }),
+          ...(input.missedPolicy === undefined ? {} : { missedPolicy: input.missedPolicy }),
           ...(input.schedule === undefined
             ? {}
             : {
