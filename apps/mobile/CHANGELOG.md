@@ -7,6 +7,76 @@ the [root changelog](../../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-17
+
+### Added
+
+- Brazilian Portuguese for the iPhone app. Select Português (Brasil) in Settings, or use your phone language.
+- More of the iPhone app is in Turkish, including agents, chats, channels, servers and usage.
+- Turkish (`tr`) language support in mobile app settings and interfaces.
+- Routines for a server. Touch and hold a server in the server list, then select Routines. The week view shows the runs of each day with the agents that do them. Swipe the days to change the week. Select Day in the header to see one day; today also shows the next runs. Select a run to open its routine.
+- Usage for a server. Touch and hold a server in the server list, then select Usage. The report shows the processed tokens and the estimated cost of all agents on the server, with the share of each agent. Select an agent in the list, or in the Agent row at the top, to see the usage of one agent.
+- Buy a cloud server from the iPhone app. Tap + in the server list, choose a plan, and pay on a secure Stripe page. The app shows the setup until the server is ready, and the server shows on your computer too.
+- Buy a cloud server from the Android app, version 1.1.0. Tap + in the server list and choose a plan.
+- HTML pages and Mermaid diagrams in a reply. A code block marked `html` or `mermaid` shows as a
+  card with a header and a small picture of the page or the diagram. Tap the card to open it on its
+  own screen. Go back with the back button or a swipe from the left edge. Use the menu in the
+  top-right corner to switch between Preview and Code, to wrap long lines of code, or to copy the
+  code. Move a diagram with one finger, pinch to zoom, and double-tap to zoom in or to see the
+  whole diagram. A page runs no scripts and loads nothing from the network.
+- Settings → Support. It shows how to get help: report a problem on GitHub or message us on X. It also shows a support log of recent app events, connection steps, requests and errors. Select Save log file to save the log or attach it to a message. The log stays on your phone and OpenBot never sends it. It does not record messages or files, and it masks passwords and tokens. Select Clear log to remove it.
+- In an agent chat on a team, each message from another person stands on the right, with your messages, and shows their name. Their bubble has their own color, so it does not look like yours. Messages sent before this update show as yours.
+- Cursor and Cline agents on a server now show in the app. Before, the server kept them hidden.
+- Visual replies. A chart, a table, a diagram or a mockup that a GoAhead agent shows as an HTML page
+  on the computer appears in the phone chat as its HTML file, with the page title. The phone does
+  not run the page. The page does not count as an unread message.
+- Agent info groups the agent settings as the desktop app does: **Brain**, **Knows**, **Does**, and
+  **Rules**. **Rules** has **Permissions**, **Notifications**, and **Advanced**.
+- **Advanced** shows the workspace folder of the agent and can start a **New chat**. A new chat shows
+  a "New chat started" divider in the chat.
+- Owners and admins can turn **Computer Use** and **Local scripts** on or off for an agent, and
+  select what a message does while the agent works (**Queue** or **Steer**). The computer that runs
+  the agent must have the newest GoAhead desktop version.
+- Owners and admins can see and delete the **Tables** that the agents share, and **Publish** an
+  agent as a link template. The link preview of a template that you publish from the phone shows the
+  general GoAhead image, not an agent card.
+- Memories: choose which memories go into every prompt (**Always included**) and which the agent
+  finds with search (**Search when needed**), or let the agent decide. The computer that runs the
+  agent must have the newest GoAhead desktop version.
+
+### Changed
+
+- The routine schedule is easier to set. Select how often it repeats (hourly, daily, weekly, monthly or yearly), then the days and the time, as on desktop. A cron expression is now the last choice, for advanced schedules only.
+- The agent Usage page has a clearer period control. Select 7 days, 30 days, 90 days, 1 year or Custom. For Custom, set the start and end dates with the date pickers. The report changes at once. The daily chart is now the chart of the desktop app: one area for each provider, in its color, with the values on a grid. Touch or drag across the chart to see a day, with the value of each provider under it. When you change the period or the agent, the report stays on screen and its numbers and chart move to the new values.
+- The OpenBot logo no longer turns when you turn your phone, and the app no longer uses motion access.
+- Settings → About shows the build number after the version, such as "1.1.0 (17)".
+- A routine run in a chat shows as one short line with the routine name and its state. The chat no
+  longer shows the routine instruction as your message.
+- The app is now named GoAhead. The home screen, permission prompts, the About screen and saved support logs show the new name.
+- The iPhone app is now the GoAhead app (`com.multicodegenius.goahead.mobile`). It pairs with the GoAhead desktop and opens `goahead://` links and links of `goahead.multicodegenius.com`. **It installs as a new app: scan the QR code of the desktop once.** It still reads the QR code of a released OpenBot desktop.
+- About shows the GoAhead website. Support opens issues in the GoAhead repository. The rows for the OpenBot privacy policy and the OpenBot X account are removed.
+- The app sends no product analytics.
+- The app is in English only for now. The language setting offers System default and English. If
+  you chose French, Japanese, Portuguese or Turkish before, the app shows English.
+- A scheduled routine run that answers only `[[no-update]]` on the computer shows no notification
+  and no Live Activity update on the iPhone.
+
+### Fixed
+
+- The iPhone app now shows the year on a date that is not from the current year. Before, a message from last year and one from this month could show the same day and month, and the list could not be read by recency.
+- When you ask an agent to create a routine from the iPhone app, the routine now runs in the
+  phone's timezone. Before, it ran in the server's timezone. The server must be updated too.
+- The app no longer stops at start with "Cannot find native module 'ExpoWidgets'" in a build without Live Activities. It opens without them.
+- Opening a chat with unread messages marks them read. Before, the unread dot stayed until you
+  scrolled to the bottom when the chat opened in the middle of its history.
+- A long press on a server in the server list keeps the list open while the menu shows.
+- Keep the connection to your desktop when the phone changes between Wi-Fi and mobile data, or
+  loses mobile data for a short time. Before, the app made a new connection after 5 seconds,
+  waited 10 seconds between attempts, and waited 2 minutes after 5 failed attempts.
+- Reconnect as soon as the phone gets a network again, not at the next planned attempt.
+- Keep a new connection over a slow mobile network. Before, the first check of the desktop stopped
+  after 3 seconds and started the connection again.
+
 ## [1.1.0] - 2026-09-29
 
 ### Added
