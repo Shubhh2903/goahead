@@ -1,7 +1,7 @@
 {
   "name": "@openbot/mobile",
   "main": "expo-router/entry",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "expo": {
     "install": {
       "exclude": [
@@ -91,9 +91,9 @@
   },
   "scripts": {
     "setup:skia": "install-skia",
-    "start": "expo start",
-    "start:go": "bunx expo start --go --clear",
-    "start:go:tunnel": "bunx expo start --go --clear --tunnel",
+    "start": "node init && expo start",
+    "start:go": "node init && bunx expo start --go --clear",
+    "start:go:tunnel": "node init && bunx expo start --go --clear --tunnel",
     "android": "expo run:android",
     "ios": "bun ../../scripts/mobile-ios.ts",
     "ios:rocketsim": "bun ../../scripts/mobile-ios.ts --rocketsim",
