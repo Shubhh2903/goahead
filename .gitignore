@@ -59,4 +59,5 @@ mise.local.toml
 keys
 # Agent task checklist. Local to one worktree.
 /TASKS.md
-config.bat
+.env
+.env*
