@@ -31,7 +31,8 @@ services:
         value: https://goahead-api.multicodegenius.com
       - key: REMOTE_TICKET_JWKS_URL
         value: https://goahead-api.multicodegenius.com/.well-known/jwks.json
-      # Required by the configuration; there is no TURN server on Render (no UDP).
+      # Required by the configuration; there is no TURN server on Render (no UDP). The peers also get
+      # Cloudflare's public STUN server (PUBLIC_STUN_URLS default), so two ordinary networks connect directly.
       - key: TURN_HOST
         value: goahead-turn.multicodegenius.com
       # Secrets: set in the Render dashboard, never in this file.

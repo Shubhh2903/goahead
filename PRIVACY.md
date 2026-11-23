@@ -424,7 +424,11 @@ client and host use a separate GoAhead Signal service to establish WebRTC. Signa
 short-lived authentication, SDP, and ICE messages. Team API data uses WebRTC DataChannels. Remote
 Desktop media and input use a separate WebRTC connection. The live browser view sends compressed
 images of the host's browser tab, and the watching member's pointer and key input, over that same
-media connection. ICE uses a direct peer-to-peer path when possible. If a direct path is not possible, encrypted WebRTC traffic uses a GoAhead coturn relay.
+media connection. ICE uses a direct peer-to-peer path when possible. To find that path on two
+different networks, each device asks a public STUN server (by default Cloudflare's
+`stun.cloudflare.com`) for its own public IP address and port. The STUN server sees that address
+only, never the WebRTC traffic. A Signal deploy can name other STUN servers, or none, with
+`PUBLIC_STUN_URLS`. If a direct path is not possible, encrypted WebRTC traffic uses a GoAhead coturn relay.
 
 Agents, conversations, queues, direct messages, attachments, browser data, prompts, approvals, and
 Remote Desktop data remain on the host. The central account service does not copy them into D1 or

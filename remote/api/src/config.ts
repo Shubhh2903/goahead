@@ -13,6 +13,12 @@ export interface RemoteApiConfig {
   turnHost: string;
   turnPort: number;
   turnTlsPort: number;
+  /**
+   * Public STUN servers that the peers also get. With them, a phone and a host on two ordinary
+   * networks find a direct route without TURN. A STUN server sees only the address of the device
+   * that asks it, never the traffic.
+   */
+  publicStunUrls: string[];
   metricsToken: string | null;
   maximumConnectionsPerUser: number;
   maximumConnectionsPerIp: number;
@@ -97,6 +103,7 @@ export function readRemoteApiConfig(environment: Record<string, string | undefin
     turnHost: required(environment.TURN_HOST, "TURN_HOST"),
     turnPort: positiveInteger(environment.TURN_PORT, 3478),
     turnTlsPort: positiveInteger(environment.TURN_TLS_PORT, 5349),
+    publicStunUrls: readStunUrls(environment.PUBLIC_STUN_URLS),
     metricsToken: optional(environment.REMOTE_METRICS_TOKEN),
     maximumConnectionsPerUser: positiveInteger(environment.REMOTE_MAX_CONNECTIONS_PER_USER, 32),
     maximumConnectionsPerIp: positiveInteger(environment.REMOTE_MAX_CONNECTIONS_PER_IP, 32),
@@ -105,6 +112,22 @@ export function readRemoteApiConfig(environment: Record<string, string | undefin
     slackSigningSecrets: readSlackSigningSecrets(environment.SLACK_SIGNING_SECRET),
     slackAppTokens: readSlackAppTokens(environment.SLACK_APP_TOKEN),
   };
+}
+
+/** Cloudflare's free STUN server. `PUBLIC_STUN_URLS=""` turns public STUN off. */
+const DEFAULT_PUBLIC_STUN_URLS = ["stun:stun.cloudflare.com:3478"];
+const STUN_URL_PATTERN = /^stun:[A-Za-z0-9.-]+(?::\d{1,5})?$/u;
+
+function readStunUrls(value: string | undefined): string[] {
+  if (value === undefined) return [...DEFAULT_PUBLIC_STUN_URLS];
+  const urls = value
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+  for (const url of urls) {
+    if (!STUN_URL_PATTERN.test(url)) throw new Error("PUBLIC_STUN_URLS must list stun:host or stun:host:port URLs.");
+  }
+  return urls;
 }
 
 function required(value: string | undefined, name: string): string {

@@ -30,6 +30,27 @@ describe("Remote API development configuration", () => {
       }).ticketJwks,
     ).toBe('{"keys":[]}');
   });
+
+  it("gives the peers Cloudflare's public STUN server unless the deploy names others or none", () => {
+    const base = {
+      REMOTE_TICKET_PUBLIC_JWKS: '{"keys":[]}',
+      REMOTE_TLS_DISABLED: "true",
+      REMOTE_CONTROL_PLANE_URL: "http://127.0.0.1:3100",
+      REMOTE_SESSION_SECRET: "s".repeat(32),
+      REMOTE_AUTH_WEBHOOK_SECRET: "w".repeat(32),
+      TURN_SHARED_SECRET: "t".repeat(32),
+      TURN_HOST: "turn.example.com",
+    };
+    expect(readRemoteApiConfig(base).publicStunUrls).toEqual(["stun:stun.cloudflare.com:3478"]);
+    expect(readRemoteApiConfig({ ...base, PUBLIC_STUN_URLS: "" }).publicStunUrls).toEqual([]);
+    expect(
+      readRemoteApiConfig({ ...base, PUBLIC_STUN_URLS: "stun:stun.example.com, stun:stun2.example.com:19302" })
+        .publicStunUrls,
+    ).toEqual(["stun:stun.example.com", "stun:stun2.example.com:19302"]);
+    expect(() => readRemoteApiConfig({ ...base, PUBLIC_STUN_URLS: "turn:relay.example.com" })).toThrow(
+      "PUBLIC_STUN_URLS",
+    );
+  });
 });
 
 describe("signed account notifications", () => {

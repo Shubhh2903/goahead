@@ -119,8 +119,9 @@ The cheapest option. `render.yaml` at the repository root describes the service.
   only free service in that Render workspace.
 - Render can restart a free instance. Signal then forgets its routes until the desktops reconnect,
   which they do by themselves. A Slack event in that gap gets no answer, and Slack sends it again.
-- No UDP, so no TURN (as on Cloud Run): Slack features work; remote desktop between strict networks
-  can fail.
+- No UDP, so no TURN (as on Cloud Run): Slack features work. Signal gives the peers Cloudflare's
+  public STUN server (`PUBLIC_STUN_URLS`), so a phone and a desktop on two ordinary networks connect
+  directly. Mobile data and strict networks (symmetric NAT, blocked UDP) still need TURN.
 
 **Steps:**
 

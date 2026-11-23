@@ -75,6 +75,20 @@ describe("remote tokens", () => {
     const servers = service.iceServers(claims, now);
     expect(claims.sessionId).toBe("session-1");
     expect(servers[1]).toMatchObject({ username: `${now + 3_600}:session-1` });
+    expect(servers).toHaveLength(2);
+    const withPublicStun = new RemoteTokenService({
+      ticketJwks: JSON.stringify({ keys: [jwk] }),
+      ticketJwksUrl: null,
+      sessionSecret: secret,
+      turnSecret: "t".repeat(32),
+      turnHost: "turn.example.com",
+      turnPort: 3478,
+      turnTlsPort: 5349,
+      publicStunUrls: ["stun:stun.cloudflare.com:3478"],
+    }).iceServers(claims, now);
+    // The public STUN server comes last and carries no credential.
+    expect(withPublicStun[1]).toMatchObject({ username: `${now + 3_600}:session-1` });
+    expect(withPublicStun[2]).toEqual({ urls: ["stun:stun.cloudflare.com:3478"] });
     expect(() => service.iceServers({ ...claims, sessionExpiresAt: now }, now)).toThrow("expired");
     const resume = await service.issueResumeToken(claims, now);
     expect((await service.verifyResumeToken(resume)).hostId).toBe("host-1");

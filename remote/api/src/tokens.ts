@@ -88,6 +88,7 @@ export class RemoteTokenService {
   readonly #sessionSecret: Uint8Array;
   readonly #turnSecret: string;
   readonly #turnHost: string;
+  readonly #publicStunUrls: readonly string[];
   readonly #turnPort: number;
   readonly #turnTlsPort: number;
   readonly #validateResumeClaims: (claims: RemoteTicketClaims) => Promise<boolean>;
@@ -101,7 +102,8 @@ export class RemoteTokenService {
     config: Pick<
       RemoteApiConfig,
       "ticketJwks" | "ticketJwksUrl" | "sessionSecret" | "turnSecret" | "turnHost" | "turnPort" | "turnTlsPort"
-    >,
+    > &
+      Partial<Pick<RemoteApiConfig, "publicStunUrls">>,
     validateResumeClaims: (claims: RemoteTicketClaims) => Promise<boolean> = async () => false,
     options: {
       fetch?: FetchImplementation;
@@ -125,6 +127,7 @@ export class RemoteTokenService {
     this.#turnHost = config.turnHost;
     this.#turnPort = config.turnPort;
     this.#turnTlsPort = config.turnTlsPort;
+    this.#publicStunUrls = config.publicStunUrls ?? [];
     this.#validateResumeClaims = validateResumeClaims;
     this.#validateSlackRoute = options.validateSlackRoute ?? (async () => ({ teams: [] }));
   }
@@ -283,6 +286,8 @@ export class RemoteTokenService {
         username,
         credential,
       },
+      // Last, so the TURN entry keeps its place. A direct route found through it needs no relay.
+      ...(this.#publicStunUrls.length > 0 ? [{ urls: [...this.#publicStunUrls] }] : []),
     ];
   }
 }
