@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { stat } from "node:fs/promises";
-import { agentProviderDescriptor } from "@openbot/contracts/agent-providers";
+import { type AgentProviderId, agentProviderDescriptor } from "@openbot/contracts/agent-providers";
 import { sortConversationMessages } from "@openbot/contracts/conversation-order";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
@@ -17,6 +17,7 @@ import type {
   AgentProfileDraft,
   AgentProjectFolder,
   AgentProjectFolderState,
+  AgentReasoningEffort,
   AgentRuntimeSnapshot,
   AgentStatus,
   AgentSummary,
@@ -1459,7 +1460,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
           reasoningEffort:
             input.reasoningEffort && requested.model.supportedReasoningEfforts.includes(input.reasoningEffort)
               ? input.reasoningEffort
-              : requested.model.defaultReasoningEffort,
+              : newAgentEffort(requested.provider, requested.model),
         });
       } else {
         const starting = this.#startingChoice();
@@ -1511,7 +1512,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       agentId: agent.id,
       provider: starting.provider,
       model: starting.model.id,
-      reasoningEffort: starting.model.defaultReasoningEffort,
+      reasoningEffort: newAgentEffort(starting.provider, starting.model),
     });
   }
 
@@ -1534,7 +1535,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
           reasoningEffort:
             input.reasoningEffort && requested.model.supportedReasoningEfforts.includes(input.reasoningEffort)
               ? input.reasoningEffort
-              : requested.model.defaultReasoningEffort,
+              : newAgentEffort(requested.provider, requested.model),
         });
       else if (starting) agent = await this.#landOnStartingChoice(agent, starting);
       if (input.title) agent = await this.#store.updateAgent({ agentId: agent.id, title: input.title });
@@ -2602,4 +2603,13 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     }
     this.#conversation.forgetExecutionThread(threadId);
   }
+}
+
+/**
+ * The effort a new agent starts on when the request names none. Codex starts low, as its built-in
+ * default does: the catalog default (medium) spent more of a ChatGPT plan on everyday chat work and
+ * answered more slowly. Claude's catalog default is already medium. The user can raise it later.
+ */
+function newAgentEffort(provider: AgentProviderId, model: AgentModelOption): AgentReasoningEffort {
+  return provider === "codex" && model.supportedReasoningEfforts.includes("low") ? "low" : model.defaultReasoningEffort;
 }

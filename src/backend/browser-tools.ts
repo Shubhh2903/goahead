@@ -326,6 +326,8 @@ export const BROWSER_DYNAMIC_TOOLS = [
       name: definition.name,
       description: definition.description,
       inputSchema: z.toJSONSchema(definition.schema, { target: "draft-7", unrepresentable: "any" }),
+      // Most turns do not browse. Codex loads these through `tool_search` when a turn does.
+      deferLoading: true,
     })),
   },
 ];

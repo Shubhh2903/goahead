@@ -762,6 +762,18 @@ function redactedMetadataUrl(value: string | undefined): string {
   }
 }
 
+/**
+ * The page text that a click, typing or another input action returns. The model reads it after each
+ * step of a task, so the full text cost was paid again for each step. The elements stay complete,
+ * because the next action needs them. `snapshot` and `navigate` still return the full text.
+ */
+const MAX_ACTION_SNAPSHOT_TEXT = 6_000;
+
+export function compactActionSnapshot<Result extends BrowserSnapshot | { closed: true }>(result: Result): Result {
+  if (!("text" in result) || result.text.length <= MAX_ACTION_SNAPSHOT_TEXT) return result;
+  return { ...result, text: result.text.slice(0, MAX_ACTION_SNAPSHOT_TEXT), truncated: true };
+}
+
 export function boundSerializedSnapshot(snapshot: BrowserSnapshot): void {
   let bytes = Buffer.byteLength(JSON.stringify(snapshot));
   while (bytes > MAX_SERIALIZED_SNAPSHOT_BYTES) {

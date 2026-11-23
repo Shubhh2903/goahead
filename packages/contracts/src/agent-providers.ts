@@ -117,7 +117,9 @@ const AGENT_PROVIDER_DESCRIPTOR_TABLE = {
     onboardingDescription: "Included with GoAhead",
     signInMessage: "Connect Claude to continue.",
     installGuideLink: "claude-install",
-    defaultModel: "claude-opus-5-5",
+    // Sonnet, not Opus: a new agent's every turn runs on it, and Opus used a plan's limits many
+    // times faster for everyday work. The user can still pick Opus for an agent.
+    defaultModel: "claude-sonnet-5-5",
     legacyModelPrefix: "claude-",
     authKind: "claude",
     pickerOrder: 0,

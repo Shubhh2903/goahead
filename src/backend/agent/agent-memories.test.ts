@@ -638,7 +638,7 @@ describe.sequential("AgentMemories: staging, epochs and turn commitment", () => 
     if (!client || !threadId || !turnId) throw new Error("The memory cap turn did not start.");
     const startRequest = client.requests.find((request) => request.method === "thread/start");
     expect(JSON.stringify(startRequest?.params)).toContain(
-      "You have 2 saved memories; 0 additional entries are available through search. The storage limit is 3.",
+      "Saved memories beyond the essential ones above are available through search. The storage limit is 3.",
     );
     const owner = await callOpenBotTool(client, threadId, "remember", { text: "Builder owns the rollback." }, turnId);
     expect(openBotToolPayload(owner.result).status).toBe("staged");

@@ -532,7 +532,7 @@ fi
         {
           model: "claude-opus-5",
           displayName: "Claude Opus 5",
-          defaultReasoningEffort: "high",
+          defaultReasoningEffort: "medium",
           supportedReasoningEfforts: [
             { reasoningEffort: "low" },
             { reasoningEffort: "medium" },
@@ -544,7 +544,7 @@ fi
         {
           model: "claude-sonnet-5",
           displayName: "Claude Sonnet 5",
-          defaultReasoningEffort: "low",
+          defaultReasoningEffort: "medium",
           supportedReasoningEfforts: [
             { reasoningEffort: "low" },
             { reasoningEffort: "medium" },
@@ -712,14 +712,14 @@ fi
       decodeTurnResponse,
     );
     expect(switchingQuery.models).toEqual(["sonnet"]);
-    expect(switchingQuery.flagSettings).toEqual([{ effortLevel: "low" }]);
+    expect(switchingQuery.flagSettings).toEqual([{ effortLevel: "medium" }]);
 
     const effortChangingThread = await client.request(
       "thread/start",
       { cwd: root, model: "claude-sonnet-5", effort: "high" },
       decodeThreadResponse,
     );
-    expect(runtimeOptions[2]).toMatchObject({ effort: "low" });
+    expect(runtimeOptions[2]).toMatchObject({ effort: "medium" });
     await client.request(
       "turn/start",
       { threadId: effortChangingThread.thread.id, model: "claude-sonnet-5", effort: "max", input: [] },

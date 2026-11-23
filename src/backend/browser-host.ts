@@ -41,6 +41,7 @@ import {
   type BrowserViewportInput,
   type SnapshotReadResult,
 } from "./browser-cdp";
+import { compactActionSnapshot } from "./browser-cdp-snapshot";
 import { BrowserControlSessions } from "./browser-control-sessions";
 import { BrowserDiagnostics } from "./browser-diagnostics";
 import {
@@ -1308,13 +1309,15 @@ export class BrowserHost {
     this.#requireToolTab(params, call.args.tabId);
     const action = browserInputAction(call, hooks);
     return textResult(
-      await this.#runAction(
-        call.args.tabId,
-        action.name,
-        action.target,
-        (tab, deadline, markDispatched) => action.run(tab.engine, deadline, markDispatched),
-        browserToolTimeout(call.args.timeoutMs),
-        call.tool === "upload_files" ? hooks.onUploadOperationStarted : undefined,
+      compactActionSnapshot(
+        await this.#runAction(
+          call.args.tabId,
+          action.name,
+          action.target,
+          (tab, deadline, markDispatched) => action.run(tab.engine, deadline, markDispatched),
+          browserToolTimeout(call.args.timeoutMs),
+          call.tool === "upload_files" ? hooks.onUploadOperationStarted : undefined,
+        ),
       ),
     );
   }

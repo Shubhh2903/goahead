@@ -336,6 +336,19 @@ export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
   },
 ];
 
+/**
+ * The OpenBot tools that every turn carries in full. The others, and all browser tools, are deferred:
+ * the model sees their names and loads a definition through the provider's tool search when it needs
+ * one. The full set is about 85,000 characters of schema, sent with each request of a session.
+ */
+export const ALWAYS_LOADED_OPENBOT_TOOLS: ReadonlySet<string> = new Set([
+  "send_message",
+  "ask_user",
+  "remember",
+  "react_to_user_message",
+  "attach_files_to_response",
+]);
+
 export const OPENBOT_DYNAMIC_TOOLS = {
   type: "namespace",
   name: "openbot",
@@ -346,5 +359,7 @@ export const OPENBOT_DYNAMIC_TOOLS = {
     name: definition.name,
     description: definition.description,
     inputSchema: z.toJSONSchema(z.strictObject(definition.shape), { target: "draft-7" }),
+    // Codex leaves a deferred tool out of the request and finds it with its `tool_search` tool.
+    deferLoading: !ALWAYS_LOADED_OPENBOT_TOOLS.has(definition.name),
   })),
 } as const;

@@ -99,7 +99,10 @@ const CODEX_SLACK_REPLY_CONFIG = {
 /** The only OpenBot tool of a Slack reply context: send the reply, as on Claude. */
 const SLACK_REPLY_DYNAMIC_TOOLS = {
   ...OPENBOT_DYNAMIC_TOOLS,
-  tools: OPENBOT_DYNAMIC_TOOLS.tools.filter((tool) => tool.name === SLACK_SEND_MESSAGE_TOOL.name),
+  // Loaded in full: the reply context has its built-in tools off, so it could not search for it.
+  tools: OPENBOT_DYNAMIC_TOOLS.tools
+    .filter((tool) => tool.name === SLACK_SEND_MESSAGE_TOOL.name)
+    .map((tool) => ({ ...tool, deferLoading: false })),
 };
 
 // A handoff can follow an edit of the profile. The earlier replies then show the old standing
@@ -735,7 +738,6 @@ export class ThreadLifecycle {
       {
         passwordVault: this.#passwordVaultConnected(),
         memoryLimit: this.#memories.limit(),
-        storedMemoryCount: this.#memories.listFor(agent.id).length,
       },
     );
   }

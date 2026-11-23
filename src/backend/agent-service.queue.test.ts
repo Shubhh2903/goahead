@@ -294,7 +294,7 @@ describe.sequential("AgentService: queue", () => {
       service.createAgent({ ...CREATE_AGENT_INPUT, name: "Chosen Agent", avatarSeed: "setup:chosen" }),
     ).resolves.toMatchObject({
       provider: "claude",
-      model: "claude-opus-5-5",
+      model: "claude-sonnet-5-5",
     });
     // A template, a marketplace agent or an import names no model, and starts on the same choice.
     await expect(
@@ -304,7 +304,7 @@ describe.sequential("AgentService: queue", () => {
         avatarSeed: "setup:template",
         avatarHue: null,
       }),
-    ).resolves.toMatchObject({ provider: "claude", model: "claude-opus-5-5" });
+    ).resolves.toMatchObject({ provider: "claude", model: "claude-sonnet-5-5" });
 
     // A Codex model saved in setup is a choice too, not the built-in Luna 6 the record starts on.
     await service.setPreferredProvider("codex", "gpt-5.6-terra");
@@ -392,8 +392,7 @@ describe.sequential("AgentService: queue", () => {
         avatarSeed: "setup:claude-planning",
       }),
     ).resolves.toMatchObject({
-      model: "claude-opus-5-5",
-      reasoningEffort: "high",
+      model: "claude-sonnet-5-5",
     });
     await service.setPreferredProvider("codex");
     expect(service.getStatus()).toMatchObject({
@@ -422,7 +421,7 @@ describe.sequential("AgentService: queue", () => {
       service.createAgent({ ...CREATE_AGENT_INPUT, name: "Fallback Agent", avatarSeed: "setup:fallback" }),
     ).resolves.toMatchObject({
       provider: "claude",
-      model: "claude-opus-5-5",
+      model: "claude-sonnet-5-5",
     });
   });
 
@@ -2305,7 +2304,8 @@ describe.sequential("AgentService: queue", () => {
       expect.arrayContaining([
         { name: "Scout", provider: "codex", model: "gpt-5.6-terra", reasoningEffort: "high" },
         { name: "Analyst", provider: "codex", model: "gpt-5.6-terra", reasoningEffort: "high" },
-        { name: "Writer", provider: "codex", model: "gpt-5.6-luna", reasoningEffort: "medium" },
+        // A named model without an effort starts a new Codex agent low, as every new Codex agent does.
+        { name: "Writer", provider: "codex", model: "gpt-5.6-luna", reasoningEffort: "low" },
         { name: "Editor", provider: "codex", model: "gpt-5.6-terra", reasoningEffort: "low" },
       ]),
     );

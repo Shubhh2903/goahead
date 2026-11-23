@@ -63,7 +63,7 @@ import {
   type McpToolRuntimeSource,
   usableMcpServers,
 } from "./mcp-provider-shapes";
-import { OPENBOT_TOOL_DEFINITIONS } from "./openbot-tools";
+import { ALWAYS_LOADED_OPENBOT_TOOLS, OPENBOT_TOOL_DEFINITIONS } from "./openbot-tools";
 import { PendingServerRequests } from "./pending-server-requests";
 import {
   type AccountRateLimitResult,
@@ -482,8 +482,10 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
         ];
         const supportedReasoningEfforts =
           discoveredReasoningEfforts.length > 0 ? discoveredReasoningEfforts : ["medium" as const];
-        const defaultReasoningEffort = supportedReasoningEfforts.includes("high")
-          ? "high"
+        // Medium, not high: a new agent starts on it, and high effort spends more of the plan and
+        // answers more slowly on every turn. The user can still raise it for an agent.
+        const defaultReasoningEffort = supportedReasoningEfforts.includes("medium")
+          ? "medium"
           : (supportedReasoningEfforts[0] ?? "medium");
         effortCapabilities.set(
           id,
@@ -1296,6 +1298,8 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
       openbot: createSdkMcpServer({
         name: "openbot",
         version: "0.1.0",
+        // Always loaded: the session has no built-in tools, so it has no ToolSearch to find it with.
+        alwaysLoad: true,
         tools: OPENBOT_TOOL_DEFINITIONS.filter((definition) => SLACK_REPLY_TOOLS.has(definition.name)).map(
           (definition) =>
             tool(definition.name, definition.description, definition.shape, (args) =>
@@ -1323,9 +1327,14 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
         name: "openbot",
         version: "0.1.0",
         // Claude uses the SDK's AskUserQuestion permission flow.
+        // The rest wait behind ToolSearch, as `ENABLE_TOOL_SEARCH` in `claudeEnvironment` asks.
         tools: OPENBOT_TOOL_DEFINITIONS.filter((definition) => definition.name !== "ask_user").map((definition) =>
-          tool(definition.name, definition.description, definition.shape, (args) =>
-            call("openbot", definition.name, args),
+          tool(
+            definition.name,
+            definition.description,
+            definition.shape,
+            (args) => call("openbot", definition.name, args),
+            { alwaysLoad: ALWAYS_LOADED_OPENBOT_TOOLS.has(definition.name) },
           ),
         ),
       }),
@@ -1421,6 +1430,9 @@ export function claudeEnvironment(cli: ClaudeCliInfo): NodeJS.ProcessEnv {
   return {
     ...process.env,
     ...(cli.source === "managed" ? { DISABLE_AUTOUPDATER: "1" } : {}),
+    // Tool definitions wait behind ToolSearch, except the ones marked `alwaysLoad`: the OpenBot,
+    // browser and MCP schemas otherwise go with every request. A value the user set is kept.
+    ENABLE_TOOL_SEARCH: process.env.ENABLE_TOOL_SEARCH ?? "true",
   };
 }
 
