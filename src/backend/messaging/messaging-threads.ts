@@ -549,6 +549,7 @@ export class MessagingThreads {
       }
       case "conversation-delta":
       case "turn-progress":
+      case "turn-text-preview":
         // One lookup: these come for every streamed piece of every turn.
         return this.store.executionLink(event.threadId) !== null;
       case "turn-started": {

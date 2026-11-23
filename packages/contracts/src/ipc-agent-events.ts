@@ -26,6 +26,9 @@ import { isQueueSnapshot, type QueueSnapshot } from "./ipc-queue";
 import { isSidebarLayoutSnapshot, type SidebarLayoutSnapshot } from "./ipc-sidebar-layout";
 import { isBoolean, isDynamicRecord, isNumber, isString } from "./runtime-values";
 
+/** The last characters of held-back text that a preview carries. The whole text is sent on each update. */
+export const TURN_TEXT_PREVIEW_LIMIT = 4_000;
+
 export type AgentTurnOrigin = "user" | "routine" | "agent" | "unknown";
 
 function isAgentTurnOrigin(value: unknown): value is AgentTurnOrigin {
@@ -59,6 +62,12 @@ export type AgentEvent =
   | { type: "queue-invalidated"; agentId: string }
   | { type: "queue-changed"; snapshot: QueueSnapshot }
   | { type: "turn-progress"; agentId: string; threadId: string; turnId: string; detail: string }
+  /**
+   * The text a turn holds back while it cannot yet tell its narration from its answer (Claude). The
+   * chat shows it as a transient preview, never as a message; empty text clears it. It never leaves
+   * this computer: `sharedAgentEvent` drops it, so no Team API peer receives it.
+   */
+  | { type: "turn-text-preview"; agentId: string; threadId: string; turnId: string; text: string }
   | { type: "turn-started"; agentId: string; threadId: string; turnId: string; origin?: AgentTurnOrigin }
   | {
       type: "turn-completed";
@@ -184,6 +193,14 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
         isString(value.detail) &&
         value.detail.length > 0 &&
         value.detail.length <= INPUT_LIMITS.promptQuestion
+      );
+    case "turn-text-preview":
+      return (
+        isIdentifier(value.agentId) &&
+        isIdentifier(value.threadId) &&
+        isIdentifier(value.turnId) &&
+        isString(value.text) &&
+        value.text.length <= TURN_TEXT_PREVIEW_LIMIT
       );
     case "turn-started":
     case "turn-completed":

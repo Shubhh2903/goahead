@@ -1727,6 +1727,31 @@ the router, opens the message with the keys of the active host from secure stora
 notification. It ignores an update older than the shown content. Without `google-services.json` in
 the build, the phone has no FCM token and registers nothing.
 
+## Claude text preview
+
+Claude cannot tell its narration from its answer while text arrives, so `claude-client.ts` holds the
+text until a tool or thinking boundary or the end of the turn. While it holds text, it sends
+`openbot/textPreview` (`src/backend/text-preview.ts`) at most every 150 ms with the last 4,000
+characters, and an empty preview right before the held text is published. `TurnLifecycle` turns it
+into the local AgentEvent `turn-text-preview`. `sharedAgentEvent` drops that event, so no Team API peer
+receives it, and channel and messaging threads swallow it like `turn-progress`. The renderer keeps it
+per agent in `turnTextPreview` (not seeded or saved), clears it on turn start, turn completion and a
+runtime snapshot, and `AgentActivityIndicator` shows its end under the activity line. It is never a
+message.
+
+## Routine run conditions
+
+A routine can store a run condition (migration 37: `run_condition` JSON and
+`run_condition_fingerprint` on both routine tables). Before a scheduled run starts a turn,
+`RoutineScheduler.#skipByRunCondition` and `ChannelRoutineScheduler.#runConditionSkip` call
+`decideRunCondition` (`src/backend/agent/routine-run-condition.ts`). It runs the command in the login
+shell, in the agent's working directory or, for a channel, the shared directory, with a 30-second
+limit. `exit-zero` runs the agent when the command succeeds; `output-changes` also needs its output
+hash to differ from the stored fingerprint. A skipped run is a cancelled run row with the reason as
+its error, and no delivery. A check that cannot start, times out or prints too much starts the agent
+(fail open). Test runs always start the agent. Only the local host offers the field: the released
+Team API key lists drop it in both directions.
+
 ## Shared channel chats
 
 Channels are separate from sidebar sections. A channel has one host, a purpose, participating agents,

@@ -16,3 +16,14 @@
 
 - Saving a memory no longer restarts a Claude agent's session, which made its next turn read the
   whole conversation again without the prompt cache.
+
+### Added
+
+- A routine can have a run condition: a shell command that runs on this computer before each
+  scheduled run. The agent starts only when the command succeeds, or only when its output changed
+  since the last check, so a routine that watches for something new uses no AI while nothing
+  changed. A skipped run shows in the run history with its reason. A check that cannot start or
+  takes longer than 30 seconds starts the agent anyway. Set it in the routine settings, or ask an
+  agent. Routines on a remote server do not have it.
+- While a Claude agent writes its answer, the chat shows the text as it arrives, under the agent's
+  activity line. It becomes a normal message when Claude finishes the step.

@@ -18,7 +18,7 @@ import { importProviderHistory } from "./provider-history-import";
 // - a deleted thread leaves import, turn or staging rows behind;
 // - the first import after the upgrade deletes a saved row or drops its attachments.
 
-const LATEST = 36;
+const LATEST = 37;
 const STAMP = "2026-10-01T07:00:00.000Z";
 const HISTORY_OBJECTS = [
   "provider_history_imports",
@@ -176,7 +176,13 @@ function schema(db: DatabaseSync): readonly Record<string, SQLOutputValue>[] {
 }
 
 /** Migration 36 adds these columns to the routine and run rows; `routine-missed-runs-migration.test.ts` checks them. */
-const MISSED_RUN_COLUMNS = new Set(["missed_policy", "missed_count", "missed_until"]);
+const MISSED_RUN_COLUMNS = new Set([
+  "missed_policy",
+  "missed_count",
+  "missed_until",
+  "run_condition",
+  "run_condition_fingerprint",
+]);
 
 function withoutMissedRunColumns(rows: TableRows): TableRows {
   return Object.fromEntries(
@@ -407,14 +413,14 @@ describe("migration 33: provider history tables", () => {
     });
     created.close();
     // Migrations 33 to 35 only add objects, so taking them and the markers away gives the v32 shape of this install.
-    // Migration 36 only adds columns and skips a column that exists, so its columns stay.
+    // Migrations 36 and 37 only add columns and skip a column that exists, so their columns stay.
     const legacy = new DatabaseSync(join(root, "openbot.db"));
     databases.push(legacy);
     legacy.exec(`DROP TABLE provider_history_staging; DROP TABLE provider_history_turns;
       DROP TABLE provider_history_imports; DROP TABLE routine_flow_steps; DROP TABLE routine_flow_links;
       DROP TABLE routine_flow_positions; DROP TRIGGER agent_memory_insert; DROP TRIGGER agent_memory_update;
       DROP TRIGGER agent_memory_delete; DROP TABLE agent_memory_search; DROP TABLE agent_memory_selections;
-      DELETE FROM schema_migrations WHERE version IN (33, 34, 35, 36);`);
+      DELETE FROM schema_migrations WHERE version IN (33, 34, 35, 36, 37);`);
     legacy.close();
 
     const database = new OpenBotDatabase(root);

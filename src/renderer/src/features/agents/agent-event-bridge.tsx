@@ -71,6 +71,7 @@ export function AgentEventBridge() {
   const {
     setActiveTurns,
     setTurnProgress,
+    setTurnTextPreview,
     setFailedTurns,
     setUsageLimits,
     setQueues,
@@ -147,6 +148,13 @@ export function AgentEventBridge() {
       case "conversation-delta":
         applyConversationDelta(event);
         return;
+      case "turn-text-preview":
+        setTurnTextPreview((current) =>
+          event.text
+            ? { ...current, [event.agentId]: { turnId: event.turnId, text: event.text } }
+            : withoutAgent(current, event.agentId),
+        );
+        return;
       case "turn-progress":
         setTurnProgress((current) => ({
           ...current,
@@ -174,6 +182,7 @@ export function AgentEventBridge() {
       case "turn-started":
         completedTurnByAgent.delete(event.agentId);
         setTurnProgress((current) => withoutAgent(current, event.agentId));
+        setTurnTextPreview((current) => withoutAgent(current, event.agentId));
         clearRecentReply(event.agentId);
         setFailedTurns((current) => withoutAgent(current, event.agentId));
         setActiveTurns((current) => ({
@@ -186,6 +195,7 @@ export function AgentEventBridge() {
         setTurnProgress((current) =>
           current[event.agentId]?.turnId === event.turnId ? withoutAgent(current, event.agentId) : current,
         );
+        setTurnTextPreview((current) => withoutAgent(current, event.agentId));
         setFailedTurns((current) =>
           event.status === "failed"
             ? { ...current, [event.agentId]: event.turnId }
@@ -309,6 +319,12 @@ export function AgentEventBridge() {
   function applyAgentRuntimeSnapshot(snapshot: AgentRuntimeSnapshot): void {
     const runtimeTurns = new Map(snapshot.activeTurns.map((turn) => [turn.agentId, turn.turnId]));
     setActiveTurns(Object.fromEntries(runtimeTurns));
+    // A reconnect or a restart can miss the event that cleared it.
+    setTurnTextPreview((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([agentId, preview]) => preview?.turnId === runtimeTurns.get(agentId)),
+      ),
+    );
     setTurnProgress((current) =>
       Object.fromEntries(
         Object.entries(current).filter(([agentId, progress]) => progress?.turnId === runtimeTurns.get(agentId)),

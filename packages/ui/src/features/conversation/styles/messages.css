@@ -452,6 +452,19 @@
   transform: translateY(0) scale(0.98);
 }
 
+.agent-activity-preview {
+  display: -webkit-box;
+  margin: 0 0 8px 48px;
+  overflow: hidden;
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
 .agent-activity-label {
   display: -webkit-box;
   min-width: 0;

@@ -71,6 +71,10 @@ const Turns = createSimpleContext({
     const [turnProgress, setTurnProgress] = createSignal<
       Record<string, { turnId: string; detail: string } | undefined>
     >(seed?.turnProgress ?? {});
+    // The text a turn holds back before it publishes it (Claude). Transient: not seeded, not saved.
+    const [turnTextPreview, setTurnTextPreview] = createSignal<
+      Record<string, { turnId: string; text: string } | undefined>
+    >({});
     const [failedTurns, setFailedTurns] = createSignal<Record<string, string | undefined>>(seed?.failedTurns ?? {});
     // The agents whose queue waits for a provider plan to reset, in epoch seconds. Only a runtime snapshot of the local host carries it.
     const [usageLimits, setUsageLimits] = createSignal<Record<string, number | null>>({});
@@ -377,6 +381,8 @@ const Turns = createSimpleContext({
       setActiveTurns,
       turnProgress,
       setTurnProgress,
+      turnTextPreview,
+      setTurnTextPreview,
       failedTurns,
       setFailedTurns,
       usageLimits,

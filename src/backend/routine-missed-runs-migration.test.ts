@@ -104,8 +104,8 @@ function rows(db: DatabaseSync, tables?: readonly string[]): Record<string, Tabl
 }
 
 /**
- * What the upgrade adds to each old row: the "skip" policy, and no missed-run record. A source before
- * migration 27 also gets that migration's "wait" limit policy.
+ * What the upgrade adds to each old row: the "skip" policy, no missed-run record, and (migration 37) no run
+ * condition. A source before migration 27 also gets that migration's "wait" limit policy.
  */
 function withMissedColumns(before: Record<string, TableRow[]>): Record<string, TableRow[]> {
   return Object.fromEntries(
@@ -113,7 +113,13 @@ function withMissedColumns(before: Record<string, TableRow[]>): Record<string, T
       table,
       tableRows.map((row) =>
         table.endsWith("_routines")
-          ? { limit_policy: "wait", ...row, missed_policy: "skip" }
+          ? {
+              limit_policy: "wait",
+              ...row,
+              missed_policy: "skip",
+              run_condition: null,
+              run_condition_fingerprint: null,
+            }
           : table.endsWith("_runs")
             ? { ...row, missed_count: null, missed_until: null }
             : row,
@@ -131,7 +137,7 @@ describe("routine missed-run migration", () => {
       const before = rows(db);
       migrateOpenBotDatabase(db);
       expect(rows(db, Object.keys(before))).toEqual(withMissedColumns(before));
-      expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 36 });
+      expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 37 });
       expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
@@ -186,9 +192,9 @@ describe("routine missed-run migration", () => {
     const db = databaseAt(35);
     seedRoutines(db, 35);
     const before = rows(db);
-    db.exec("INSERT INTO schema_migrations VALUES(37, 'now')");
+    db.exec("INSERT INTO schema_migrations VALUES(38, 'now')");
     expect(() => migrateOpenBotDatabase(db)).toThrow("newer than this application supports");
-    db.exec("DELETE FROM schema_migrations WHERE version = 37; DELETE FROM schema_migrations WHERE version = 27");
+    db.exec("DELETE FROM schema_migrations WHERE version = 38; DELETE FROM schema_migrations WHERE version = 27");
     expect(() => migrateOpenBotDatabase(db)).toThrow("missing version 27");
     expect(rows(db)).toEqual(before);
   });

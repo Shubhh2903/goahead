@@ -25,6 +25,7 @@ import {
   getRecord,
   getString,
 } from "./protocol";
+import { TEXT_PREVIEW_METHOD } from "./text-preview";
 
 type TestStreamMessage =
   | {
@@ -918,6 +919,39 @@ fi
       uuid: "55555555-5555-4555-8555-555555555555",
       message: { content: "Also check the queue." },
     });
+    await client.stop();
+  });
+
+  it("previews held text live and clears the preview before the answer is published", async () => {
+    const { client, notifications, output, threadId } = await createHarness();
+    const turnId = "22222222-2222-4222-8222-222222222299";
+    await startTurn(client, threadId, turnId);
+    const previews = () =>
+      notifications.flatMap((event, index) =>
+        event.method === TEXT_PREVIEW_METHOD && isDynamicRecord(event.params) && isString(event.params.text)
+          ? [{ index, text: event.params.text }]
+          : [],
+      );
+
+    output.push(streamDelta(threadId, turnId, "Hel"));
+    output.push(streamDelta(threadId, turnId, "lo"));
+    await waitFor(() => previews().some((preview) => preview.text === "Hello"));
+    // The preview is never a message: no answer or narration item exists yet.
+    expect(answerText(notifications)).toBe("");
+
+    output.push(assistantMessage(threadId, "main-message", "Hello"));
+    output.push(resultMessage(threadId, turnId, "Hello"));
+    await waitFor(() => notifications.some((event) => event.method === "turn/completed"));
+
+    const clear = previews().at(-1);
+    const answer = notifications.findIndex(
+      (event) =>
+        event.method === "item/completed" && getString(getRecord(event.params, "item"), "id") === `${turnId}:assistant`,
+    );
+    // Cleared before the answer item, so the text never shows twice.
+    expect(clear?.text).toBe("");
+    expect(clear?.index).toBeLessThan(answer);
+    expect(answerText(notifications)).toBe("Hello");
     await client.stop();
   });
 

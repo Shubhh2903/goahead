@@ -5,6 +5,7 @@ import {
   type RoutineFields,
   type RoutineLimitPolicy,
   type RoutineMissedPolicy,
+  type RoutineRunCondition,
   type RoutineRunFields,
   type RoutineRunStatus,
   type RoutineSchedule,
@@ -87,6 +88,8 @@ export interface CreateChannelRoutineInput {
   limitPolicy?: RoutineLimitPolicy;
   /** `skip` when absent. */
   missedPolicy?: RoutineMissedPolicy;
+  /** No condition when absent. */
+  runCondition?: RoutineRunCondition;
 }
 
 export interface UpdateChannelRoutineInput {
@@ -98,6 +101,8 @@ export interface UpdateChannelRoutineInput {
   schedule?: RoutineSchedule;
   limitPolicy?: RoutineLimitPolicy;
   missedPolicy?: RoutineMissedPolicy;
+  /** Kept when absent; `null` removes the condition. */
+  runCondition?: RoutineRunCondition | null;
 }
 
 export interface DeleteChannelRoutineInput {

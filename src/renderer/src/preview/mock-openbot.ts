@@ -461,6 +461,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     schedule: RoutineSchedule;
     limitPolicy?: Routine["limitPolicy"];
     missedPolicy?: Routine["missedPolicy"];
+    runCondition?: Routine["runCondition"];
   }): Routine {
     const now = new Date().toISOString();
     const routineId = crypto.randomUUID();
@@ -473,6 +474,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
       timezone: input.timezone,
       limitPolicy: input.limitPolicy ?? "wait",
       missedPolicy: input.missedPolicy ?? "skip",
+      ...(input.runCondition ? { runCondition: input.runCondition } : {}),
       trigger: {
         id: crypto.randomUUID(),
         routineId,
@@ -1431,8 +1433,10 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
       updateRoutine: async (input) => {
         const current = routines.get(input.agentId)?.find((routine) => routine.id === input.routineId);
         if (!current) throw new Error("Routine not found");
+        const { runCondition: savedCondition, ...withoutCondition } = current;
         const updated: Routine = {
-          ...current,
+          ...withoutCondition,
+          ...(input.runCondition === null ? {} : { runCondition: input.runCondition ?? savedCondition }),
           ...(input.name === undefined ? {} : { name: input.name.trim() }),
           ...(input.instruction === undefined ? {} : { instruction: input.instruction.trim() }),
           ...(input.active === undefined ? {} : { active: input.active }),
@@ -1614,6 +1618,13 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
           threadId: getSnapshot(input.agentId).threadId ?? `thread-${input.agentId}`,
           turnId,
           detail: "Reviewing your request…",
+        });
+        emitAgentEvent({
+          type: "turn-text-preview",
+          agentId: input.agentId,
+          threadId: getSnapshot(input.agentId).threadId ?? `thread-${input.agentId}`,
+          turnId,
+          text: "I received your message and am adding it to the working context",
         });
 
         schedule(() => {

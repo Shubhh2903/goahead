@@ -810,6 +810,7 @@ export function ConversationTimeline() {
                   label={activity().label}
                   phase={activity().phase}
                   since={activity().since}
+                  preview={props.textPreview}
                 />
               )}
             </Show>

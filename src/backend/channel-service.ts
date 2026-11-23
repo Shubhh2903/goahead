@@ -1166,7 +1166,8 @@ export class ChannelService {
         this.accepted(assignment.deliveryId, session.externalSessionId, event.turnId);
       return true;
     }
-    if (event.type === "turn-progress") return this.store.channelForThread(event.threadId) !== null;
+    if (event.type === "turn-progress" || event.type === "turn-text-preview")
+      return this.store.channelForThread(event.threadId) !== null;
     return false;
   }
 

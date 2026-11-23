@@ -22,7 +22,7 @@ import { migrateOpenBotDatabase } from "./openbot-database-schema";
 // - a database that upstream OpenBot wrote is migrated as a GoAhead database;
 // - the lineage guard stops a real GoAhead database.
 
-const LATEST = 36;
+const LATEST = 37;
 const STAMP = "2026-10-01T07:00:00.000Z";
 
 const roots: string[] = [];
@@ -210,10 +210,16 @@ type TableRows = Record<string, readonly Record<string, SQLOutputValue>[]>;
 
 /** Every row of every table, in a stable order. A rebuild can change the rowid order, not the rows. */
 /**
- * Migration 36 adds these columns to the routine and run rows, and `routine-missed-runs-migration.test.ts` checks
+ * Migrations 36 and 37 add these columns to the routine and run rows, and their own migration tests check
  * them, so the row comparisons here leave them out.
  */
-const MISSED_RUN_COLUMNS = new Set(["missed_policy", "missed_count", "missed_until"]);
+const MISSED_RUN_COLUMNS = new Set([
+  "missed_policy",
+  "missed_count",
+  "missed_until",
+  "run_condition",
+  "run_condition_fingerprint",
+]);
 
 function withoutMissedRunColumns(row: Record<string, SQLOutputValue>): Record<string, SQLOutputValue> {
   return Object.fromEntries(Object.entries(row).filter(([key]) => !MISSED_RUN_COLUMNS.has(key)));

@@ -109,6 +109,8 @@ export interface ConversationProps {
   olderError?: string | null;
   activeTurnId: string | null | undefined;
   activityDetail?: string;
+  /** The end of the text the active turn is writing and has not published yet. */
+  textPreview?: string;
   skillsMarketplaceOpen?: boolean;
   /**
    * True while a surface that can add or remove one of the host's MCP servers is open: the server

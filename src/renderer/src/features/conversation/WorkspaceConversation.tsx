@@ -75,6 +75,7 @@ export function WorkspaceConversation(props: { account: () => CentralAuthUser })
     pendingApprovals,
     activeTurns,
     turnProgress,
+    turnTextPreview,
     answerPrompt,
     respondToApproval,
     respondToApprovalRequest,
@@ -286,6 +287,7 @@ export function WorkspaceConversation(props: { account: () => CentralAuthUser })
       browserTakeover={activeBrowserTakeover()}
       activeTurnId={activeAgent() ? activeTurns()[activeAgent()?.id ?? ""] : null}
       activityDetail={activeAgent() ? turnProgress()[activeAgent()?.id ?? ""]?.detail : undefined}
+      textPreview={activeAgent() ? previewTail(turnTextPreview()[activeAgent()?.id ?? ""]?.text) : undefined}
       skillsMarketplaceOpen={skillsMarketplaceOpen()}
       mcpSettingsOpen={serverSettingsOpen() || skillsMarketplaceOpen()}
       globalOverlayOpen={
@@ -343,4 +345,12 @@ export function WorkspaceConversation(props: { account: () => CentralAuthUser })
       onStop={stopActiveTurn}
     />
   );
+}
+
+/** The newest part of the text, which the indicator clamps to a few lines. */
+const PREVIEW_TAIL = 280;
+
+function previewTail(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  return text.length > PREVIEW_TAIL ? `…${text.slice(-PREVIEW_TAIL).trimStart()}` : text;
 }

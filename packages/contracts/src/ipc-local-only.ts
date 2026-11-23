@@ -57,6 +57,8 @@ export function sharedRuntimeSnapshot(snapshot: AgentRuntimeSnapshot): AgentRunt
 /** The event as another client may see it, or null when it must not leave this computer. */
 export function sharedAgentEvent(event: AgentEvent): AgentEvent | null {
   if (event.type === "approval" && isLocalOnlyApprovalRequestId(event.approval.requestId)) return null;
+  // A preview of text the turn has not published yet: the answer reaches peers when it is published.
+  if (event.type === "turn-text-preview") return null;
   if (event.type === "agent-input-resolved" && isLocalOnlyApprovalRequestId(event.requestId)) return null;
   if (event.type === "runtime-snapshot") {
     const snapshot = sharedRuntimeSnapshot(event.snapshot);

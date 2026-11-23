@@ -204,6 +204,13 @@ export const messages = defineMessages("routine", {
   "routine.settings.missedPolicy": "If GoAhead was closed at the scheduled time",
   "routine.settings.missedPolicy.skip": "Skip this run",
   "routine.settings.missedPolicy.runOnce": "Run once when GoAhead opens",
+  "routine.settings.runCondition": "Run only if this command says so",
+  "routine.settings.runConditionPlaceholder": "Optional shell command, such as git log -1 --format=%H",
+  "routine.settings.runConditionWhen": "Start the agent when the command",
+  "routine.settings.runConditionWhen.outputChanges": "Prints something new",
+  "routine.settings.runConditionWhen.exitZero": "Succeeds",
+  "routine.settings.runConditionHint":
+    "The command runs on this computer before each scheduled run. When it says no, the run is skipped and uses no AI. A check that fails to start or takes longer than 30 seconds runs the agent anyway.",
   "routine.settings.discardTitle": "Discard changes?",
   "routine.settings.discardDescription": "Your unsaved changes to this routine will be lost.",
   "routine.settings.discardConfirm": "Discard changes",

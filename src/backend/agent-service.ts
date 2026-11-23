@@ -813,6 +813,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     });
     this.#channelRoutines = new ChannelRoutineScheduler({
       channels: this.channels,
+      runConditionCwd: () => store.sharedRoot,
       hooks: {
         changed: (channelId) => {
           this.#emit({ type: "channel-routines-changed", channelId });

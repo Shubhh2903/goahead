@@ -124,6 +124,30 @@ export const ROUTINE_MISSED_POLICIES = ["skip", "run-once"] as const;
 export type RoutineMissedPolicy = (typeof ROUTINE_MISSED_POLICIES)[number];
 
 /**
+ * When a scheduled run starts the agent, as decided by a shell command the host runs first:
+ * `output-changes` when the command succeeds and prints something other than at its last check,
+ * `exit-zero` when the command succeeds. A run that the condition skips makes no model turn.
+ */
+export const ROUTINE_RUN_CONDITION_MODES = ["output-changes", "exit-zero"] as const;
+export type RoutineRunConditionMode = (typeof ROUTINE_RUN_CONDITION_MODES)[number];
+export const ROUTINE_RUN_CONDITION_COMMAND_LIMIT = 2_000;
+
+export interface RoutineRunCondition {
+  command: string;
+  when: RoutineRunConditionMode;
+}
+
+export function isRoutineRunCondition(value: unknown): value is RoutineRunCondition {
+  return (
+    isDynamicRecord(value) &&
+    isString(value.command) &&
+    value.command.trim().length > 0 &&
+    value.command.length <= ROUTINE_RUN_CONDITION_COMMAND_LIMIT &&
+    isOneOf(ROUTINE_RUN_CONDITION_MODES, value.when)
+  );
+}
+
+/**
  * The part of a routine that does not name its owner. One store and one settings panel serve both
  * an agent and a channel; `Routine` and `ChannelRoutine` only add the owner id and keep their own
  * shapes exactly.
@@ -139,6 +163,8 @@ export interface RoutineFields {
   limitPolicy?: RoutineLimitPolicy;
   /** Absent from a host that does not store it, for the same reason as `limitPolicy`. */
   missedPolicy?: RoutineMissedPolicy;
+  /** Absent when every scheduled run starts the agent. Only the local host stores and shows it. */
+  runCondition?: RoutineRunCondition;
   createdAt: string;
   updatedAt: string;
 }
@@ -158,6 +184,7 @@ export function isRoutineFields(value: unknown): value is RoutineFields {
     isRoutineTrigger(value.trigger) &&
     (value.limitPolicy === undefined || isOneOf(ROUTINE_LIMIT_POLICIES, value.limitPolicy)) &&
     (value.missedPolicy === undefined || isOneOf(ROUTINE_MISSED_POLICIES, value.missedPolicy)) &&
+    (value.runCondition === undefined || isRoutineRunCondition(value.runCondition)) &&
     isString(value.createdAt) &&
     isString(value.updatedAt)
   );
@@ -260,6 +287,8 @@ export interface CreateRoutineInput {
   limitPolicy?: RoutineLimitPolicy;
   /** `skip` when absent. */
   missedPolicy?: RoutineMissedPolicy;
+  /** No condition when absent. */
+  runCondition?: RoutineRunCondition;
 }
 
 export interface UpdateRoutineInput {
@@ -271,6 +300,8 @@ export interface UpdateRoutineInput {
   schedule?: RoutineSchedule;
   limitPolicy?: RoutineLimitPolicy;
   missedPolicy?: RoutineMissedPolicy;
+  /** Kept when absent; `null` removes the condition. */
+  runCondition?: RoutineRunCondition | null;
 }
 
 export interface DeleteRoutineInput {

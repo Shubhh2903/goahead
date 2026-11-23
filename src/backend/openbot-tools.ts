@@ -5,6 +5,7 @@ import {
   CHAT_VISUAL_TITLE_LIMIT,
 } from "@openbot/contracts/chat-visual";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
+import { ROUTINE_RUN_CONDITION_COMMAND_LIMIT, ROUTINE_RUN_CONDITION_MODES } from "@openbot/contracts/ipc";
 import { z } from "zod";
 import { interruptAgentToolSchema } from "./agent/agent-interrupt-tool";
 import { DATA_TOOL_DEFINITIONS } from "./agent/data-tools";
@@ -78,6 +79,20 @@ export const htmlPreviewToolSchema = z.object({
 });
 
 /** Shared declarations for Codex, Grok, and Claude. Service handlers enforce execution rules. */
+/**
+ * A shell command the host runs before each scheduled run. A routine that watches for a change spends
+ * no model turn while nothing changed: `output-changes` starts the agent only when the command succeeds
+ * and prints something new, `exit-zero` only when it succeeds.
+ */
+const routineRunConditionZodSchema = z
+  .object({
+    command: z.string().min(1).max(ROUTINE_RUN_CONDITION_COMMAND_LIMIT),
+    when: z.enum(ROUTINE_RUN_CONDITION_MODES),
+  })
+  .describe(
+    "Optional check before each scheduled run, which saves a model turn when there is nothing to do. The command runs in this agent's working directory. Example: {command: 'git log -1 --format=%H', when: 'output-changes'} runs only after a new commit.",
+  );
+
 export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
   ...CHANNEL_TOOL_DEFINITIONS,
   ...DATA_TOOL_DEFINITIONS,
@@ -219,6 +234,7 @@ export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
       ),
       active: z.boolean().optional(),
       timezone: z.string().min(1).max(128).describe("IANA timezone such as Europe/Warsaw.").optional(),
+      runCondition: routineRunConditionZodSchema.optional(),
     },
   },
   {
@@ -234,6 +250,7 @@ export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
         .describe("Routine schedule. Must not run more often than every 3 minutes.")
         .optional(),
       active: z.boolean().optional(),
+      runCondition: routineRunConditionZodSchema.nullable().optional().describe("null removes the run condition."),
     },
   },
   {

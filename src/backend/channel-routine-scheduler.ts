@@ -12,6 +12,7 @@ import type {
 } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import { collapseMissedOccurrences } from "@openbot/team-client/routine-schedule";
+import { decideRunCondition, type RunConditionCommand, runConditionCommand } from "./agent/routine-run-condition";
 import { ChannelRoutineStore } from "./channel-routine-store";
 import type { ChannelService } from "./channel-service";
 import { recordRestartActivity } from "./restart-activity";
@@ -29,6 +30,10 @@ export interface ChannelRoutineHooks {
 export interface ChannelRoutineSchedulerOptions {
   channels: ChannelService;
   hooks: ChannelRoutineHooks;
+  /** Where a channel routine's run condition runs: the shared directory, as a channel has no workspace. */
+  runConditionCwd: () => string;
+  /** Runs a run condition. Tests pass a fake; the app runs it in the login shell. */
+  runConditionCommand?: RunConditionCommand;
 }
 
 /**
@@ -98,11 +103,15 @@ export class ChannelRoutineScheduler implements RoutineDueSource {
   readonly #channels: ChannelService;
   readonly #hooks: ChannelRoutineHooks;
   readonly #routines: ChannelRoutineStore;
+  readonly #runConditionCwd: () => string;
+  readonly #runConditionCommand: RunConditionCommand;
 
   constructor(options: ChannelRoutineSchedulerOptions) {
     this.#channels = options.channels;
     this.#hooks = options.hooks;
     this.#routines = new ChannelRoutineStore(options.channels.store.database);
+    this.#runConditionCwd = options.runConditionCwd;
+    this.#runConditionCommand = options.runConditionCommand ?? runConditionCommand;
   }
 
   list(channelId: string): ChannelRoutine[] {
@@ -280,9 +289,33 @@ export class ChannelRoutineScheduler implements RoutineDueSource {
    * command, which is what makes `resumePendingRuns` exactly-once with no separate dedupe.
    */
   async #fire(routine: ChannelRoutine, triggerId: string | null, scheduledFor: string): Promise<ChannelRoutineRun> {
+    // A scheduled run checks the run condition first; a test run always asks the lead.
+    const skipped = triggerId ? await this.#runConditionSkip(routine) : null;
     const created = this.#routines.createRun(routine, triggerId, triggerId ? "scheduled" : "manual", scheduledFor);
+    // Recorded as cancelled with its reason, so the history shows the check and no turn ran.
+    if (skipped) return this.#routines.updateRunStatus(created.id, "cancelled", skipped);
     const run = created.requestMessageId ? created : this.#routines.attachRequest(created.id, randomUUID());
     return this.#issue(run);
+  }
+
+  /** The reason a scheduled run skips the channel, or `null` when the run asks the lead. */
+  async #runConditionSkip(routine: ChannelRoutine): Promise<string | null> {
+    if (!routine.runCondition) return null;
+    const decision = await decideRunCondition(
+      routine.runCondition,
+      this.#runConditionCwd(),
+      this.#routines.runConditionFingerprint(routine.id),
+      this.#runConditionCommand,
+    );
+    if (decision.run) {
+      if (decision.fingerprint) this.#routines.setRunConditionFingerprint(routine.id, decision.fingerprint);
+      return null;
+    }
+    return sourceText(
+      decision.reason === "unchanged"
+        ? "error.backend.routineRunConditionUnchanged"
+        : "error.backend.routineRunConditionNotMet",
+    );
   }
 
   async #issue(run: ChannelRoutineRun): Promise<ChannelRoutineRun> {

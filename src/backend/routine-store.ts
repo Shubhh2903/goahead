@@ -4,11 +4,13 @@ import type {
   RoutineFields,
   RoutineLimitPolicy,
   RoutineMissedPolicy,
+  RoutineRunCondition,
   RoutineRunFields,
   RoutineRunStatus,
   RoutineSchedule,
 } from "@openbot/contracts/ipc";
 import {
+  isRoutineRunCondition,
   isRoutineSchedule,
   ROUTINE_LIMIT_POLICIES,
   ROUTINE_MISSED_COUNT_LIMIT,
@@ -81,6 +83,7 @@ export interface RoutineInputFields {
   schedule: RoutineSchedule;
   limitPolicy?: RoutineLimitPolicy;
   missedPolicy?: RoutineMissedPolicy;
+  runCondition?: RoutineRunCondition;
 }
 
 export interface RoutineUpdateFields {
@@ -91,6 +94,8 @@ export interface RoutineUpdateFields {
   schedule?: RoutineSchedule;
   limitPolicy?: RoutineLimitPolicy;
   missedPolicy?: RoutineMissedPolicy;
+  /** Kept when absent; `null` removes the condition. */
+  runCondition?: RoutineRunCondition | null;
 }
 
 /**
@@ -112,7 +117,7 @@ export class RoutineStore {
 
   protected get routineColumns(): string {
     return `routine_id, ${this.tables.ownerColumn}, name, instruction, active, timezone, limit_policy, missed_policy,
-            created_at, updated_at`;
+            run_condition, created_at, updated_at`;
   }
 
   protected get runColumns(): string {
@@ -163,9 +168,9 @@ export class RoutineStore {
         const sequence = sequences[0] ?? 0;
         db.prepare(
           `INSERT INTO ${routineTable} (
-             routine_id, ${ownerColumn}, name, instruction, active, timezone, limit_policy, missed_policy, created_at,
-             updated_at, last_event_sequence
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             routine_id, ${ownerColumn}, name, instruction, active, timezone, limit_policy, missed_policy,
+             run_condition, created_at, updated_at, last_event_sequence
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           routineId,
           ownerId,
@@ -175,6 +180,7 @@ export class RoutineStore {
           input.timezone,
           input.limitPolicy ?? "wait",
           input.missedPolicy ?? "skip",
+          runConditionColumn(input.runCondition ?? null),
           createdAt,
           createdAt,
           sequence,
@@ -195,6 +201,11 @@ export class RoutineStore {
     const active = input.active ?? current.active;
     const limitPolicy = input.limitPolicy ?? current.limitPolicy ?? "wait";
     const missedPolicy = input.missedPolicy ?? current.missedPolicy ?? "skip";
+    const runCondition = runConditionColumn(
+      input.runCondition === undefined ? (current.runCondition ?? null) : input.runCondition,
+    );
+    // A changed command or mode starts its comparison again, so its first check runs the agent.
+    const conditionChanged = runCondition !== runConditionColumn(current.runCondition ?? null);
     const reactivating = !current.active && active;
     const updatedAt = now.toISOString();
     const { commandPrefix, eventPrefix, routineAggregate, routineTable, triggerTable, ownerColumn } = this.tables;
@@ -212,8 +223,9 @@ export class RoutineStore {
         const sequence = sequences[0] ?? 0;
         db.prepare(
           `UPDATE ${routineTable}
-           SET name = ?, instruction = ?, active = ?, limit_policy = ?, missed_policy = ?, updated_at = ?,
-               last_event_sequence = ?
+           SET name = ?, instruction = ?, active = ?, limit_policy = ?, missed_policy = ?, run_condition = ?,
+               run_condition_fingerprint = CASE WHEN ? THEN NULL ELSE run_condition_fingerprint END,
+               updated_at = ?, last_event_sequence = ?
            WHERE routine_id = ? AND ${ownerColumn} = ?`,
         ).run(
           name.trim(),
@@ -221,6 +233,8 @@ export class RoutineStore {
           active ? 1 : 0,
           limitPolicy,
           missedPolicy,
+          runCondition,
+          conditionChanged ? 1 : 0,
           updatedAt,
           sequence,
           input.routineId,
@@ -369,6 +383,21 @@ export class RoutineStore {
     ).map((row) => requiredStringColumn(row, this.tables.ownerColumn));
   }
 
+  /** The fingerprint of the run condition's last output, or `null` before its first check. */
+  runConditionFingerprint(routineId: string): string | null {
+    const row = this.database.connection
+      .prepare(`SELECT run_condition_fingerprint FROM ${this.tables.routineTable} WHERE routine_id = ?`)
+      .get(routineId);
+    return isDynamicRecord(row) && isString(row.run_condition_fingerprint) ? row.run_condition_fingerprint : null;
+  }
+
+  /** Projection-only state, like `next_run_at`: it records what the host saw, not a user change. */
+  setRunConditionFingerprint(routineId: string, fingerprint: string): void {
+    this.database.connection
+      .prepare(`UPDATE ${this.tables.routineTable} SET run_condition_fingerprint = ? WHERE routine_id = ?`)
+      .run(fingerprint, routineId);
+  }
+
   protected dueRoutines(now = new Date(), excludedOwnerIds: ReadonlySet<string> = new Set()): DueRoutine[] {
     const { triggerTable, routineTable, ownerColumn } = this.tables;
     return databaseRows(
@@ -376,7 +405,8 @@ export class RoutineStore {
         .prepare(
           `SELECT trigger.trigger_id, trigger.next_run_at, trigger.schedule_json, routine.routine_id,
                   routine.${ownerColumn}, routine.name, routine.instruction, routine.active, routine.timezone,
-                  routine.limit_policy, routine.missed_policy, routine.created_at, routine.updated_at
+                  routine.limit_policy, routine.missed_policy, routine.run_condition, routine.created_at,
+                  routine.updated_at
            FROM ${triggerTable} trigger
            JOIN ${routineTable} routine ON routine.routine_id = trigger.routine_id
            WHERE routine.active = 1 AND trigger.next_run_at <= ?
@@ -653,6 +683,7 @@ export class RoutineStore {
       })(),
       limitPolicy,
       missedPolicy,
+      ...runConditionField(row),
       createdAt: requiredStringColumn(row, "created_at"),
       updatedAt: requiredStringColumn(row, "updated_at"),
     };
@@ -822,4 +853,21 @@ function isRoutineRunStatus(value: string): value is RoutineRunStatus {
     value === "interrupted" ||
     value === "cancelled"
   );
+}
+
+/** The stored form of a run condition: its JSON, or `null` for none. */
+function runConditionColumn(condition: RoutineRunCondition | null): string | null {
+  return condition ? JSON.stringify({ command: condition.command.trim(), when: condition.when }) : null;
+}
+
+/** The run condition of a routine row. A value no release can read means no condition, not a broken routine. */
+function runConditionField(row: DynamicRecord): { runCondition?: RoutineRunCondition } {
+  const stored = row.run_condition;
+  if (!isString(stored)) return {};
+  try {
+    const value = JSON.parse(stored);
+    return isRoutineRunCondition(value) ? { runCondition: value } : {};
+  } catch {
+    return {};
+  }
 }

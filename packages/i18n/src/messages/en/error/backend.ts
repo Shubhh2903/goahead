@@ -68,6 +68,8 @@ export const messages = defineMessages("error.backend", {
   "error.backend.memoryOperationFailed": "The memory operation failed. Try again.",
   "error.backend.memoryGone": "This memory no longer exists.",
   "error.backend.routineGone": "This routine no longer exists.",
+  "error.backend.routineRunConditionUnchanged": "Skipped: the run condition printed the same output as last time.",
+  "error.backend.routineRunConditionNotMet": "Skipped: the run condition command did not succeed.",
   "error.backend.channelMemoryLimit": "A channel can have up to {limit} memories.",
   "error.backend.channelRoutineLimit": "A channel can have at most {limit} routines.",
   "error.backend.agentRoutineLimit": "An agent can have at most {limit} routines.",

@@ -87,6 +87,7 @@ afterEach(async () => {
 function newScheduler(): ChannelRoutineScheduler {
   return new ChannelRoutineScheduler({
     channels: service,
+    runConditionCwd: () => tmpdir(),
     hooks: {
       changed: () => undefined,
       emitError: (code) => errors.push(code),
@@ -427,6 +428,7 @@ describe("ChannelRoutineScheduler", () => {
     });
     const cold = new ChannelRoutineScheduler({
       channels: restarted,
+      runConditionCwd: () => tmpdir(),
       hooks: {
         changed: () => undefined,
         emitError: (code) => errors.push(code),

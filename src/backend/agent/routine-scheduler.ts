@@ -13,11 +13,16 @@ import type {
   Routine,
   RoutineConversationEventAction,
   RoutineRun,
+  RoutineRunCondition,
   RoutineRunConversationEventStatus,
   TestRoutineInput,
   UpdateRoutineInput,
 } from "@openbot/contracts/ipc";
-import { routineConversationEventItemType, routineRunConversationEventItemType } from "@openbot/contracts/ipc";
+import {
+  isRoutineRunCondition,
+  routineConversationEventItemType,
+  routineRunConversationEventItemType,
+} from "@openbot/contracts/ipc";
 import { type DynamicRecord, isBoolean } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
 import { collapseMissedOccurrences, RoutineInputError } from "@openbot/team-client/routine-schedule";
@@ -30,6 +35,7 @@ import type { RoutineHoldWindow } from "../routine-store";
 import type { RoutineDueSource, RoutineTimer } from "../routine-timer";
 import { type ConversationRuntime, withDatabaseTransaction } from "./conversation-runtime";
 import { routineStatusForDelivery } from "./delivery-content";
+import { decideRunCondition, type RunConditionCommand, runConditionCommand } from "./routine-run-condition";
 import {
   localTimezone,
   type OpenBotToolResponse,
@@ -92,6 +98,8 @@ export interface RoutineSchedulerOptions {
   hooks: RoutineHooks;
   /** Shared with every other routine owner, so one wake time is derived across all of them. */
   timer: RoutineTimer;
+  /** Runs a routine's run condition. Tests pass a fake; the app runs it in the login shell. */
+  runConditionCommand?: RunConditionCommand;
 }
 
 /**
@@ -113,6 +121,7 @@ export class RoutineScheduler implements RoutineDueSource {
   readonly #conversation: ConversationRuntime;
   readonly #hooks: RoutineHooks;
   readonly #routines: AgentRoutineStore;
+  readonly #runConditionCommand: RunConditionCommand;
   /**
    * A deletion has to interrupt live runs before it can remove their routine, so it holds the agent
    * out of the drain loop while it does — otherwise the queue starts the next delivery for a
@@ -141,6 +150,7 @@ export class RoutineScheduler implements RoutineDueSource {
     this.#hooks = options.hooks;
     this.#timer = options.timer;
     this.#routines = new AgentRoutineStore(options.store.database);
+    this.#runConditionCommand = options.runConditionCommand ?? runConditionCommand;
   }
 
   noteDeliveryTimezone(deliveryId: string, timezone: string): void {
@@ -412,6 +422,7 @@ export class RoutineScheduler implements RoutineDueSource {
         "schedule",
         "active",
         "timezone",
+        "runCondition",
       ]);
       const agentId = this.#toolAgentId(args, senderAgentId);
       const active = args.active === undefined ? true : args.active;
@@ -441,6 +452,7 @@ export class RoutineScheduler implements RoutineDueSource {
           active,
           timezone,
           schedule: routineToolSchedule(args.schedule),
+          ...(args.runCondition === undefined ? {} : { runCondition: routineToolRunCondition(args.runCondition) }),
         },
         { turnId: agentId === senderAgentId ? params.turnId : undefined },
       );
@@ -455,6 +467,7 @@ export class RoutineScheduler implements RoutineDueSource {
         "instruction",
         "schedule",
         "active",
+        "runCondition",
       ]);
       const input: UpdateRoutineInput = {
         agentId: this.#toolAgentId(args, senderAgentId),
@@ -481,6 +494,10 @@ export class RoutineScheduler implements RoutineDueSource {
       }
       if (args.schedule !== undefined) {
         input.schedule = routineToolSchedule(args.schedule);
+        hasUpdate = true;
+      }
+      if (args.runCondition !== undefined) {
+        input.runCondition = args.runCondition === null ? null : routineToolRunCondition(args.runCondition);
         hasUpdate = true;
       }
       if (!hasUpdate) throw new RoutineInputError("At least one routine update is required.");
@@ -680,6 +697,8 @@ export class RoutineScheduler implements RoutineDueSource {
       this.stateChanged(run.agentId);
       return cancelled;
     }
+    const skipped = await this.#skipByRunCondition(run);
+    if (skipped) return skipped;
     recordRestartActivity();
     const validateRecipient = this.#mailbox.prepareDelivery([run.agentId]);
     const agent = await this.#store.getOrCreate(run.agentId);
@@ -724,6 +743,39 @@ export class RoutineScheduler implements RoutineDueSource {
       this.stateChanged(run.agentId);
       throw error;
     }
+  }
+
+  /**
+   * A scheduled run of a routine with a run condition checks it first, and a check that says no
+   * records the run as cancelled with its reason and starts no turn. Test and script runs always
+   * start the agent: the user asked for them.
+   */
+  async #skipByRunCondition(run: RoutineRun): Promise<RoutineRun | null> {
+    if (run.kind !== "scheduled") return null;
+    const condition = this.#routines.get(run.agentId, run.routineId)?.runCondition;
+    if (!condition) return null;
+    const agent = await this.#store.getOrCreate(run.agentId);
+    const decision = await decideRunCondition(
+      condition,
+      agent.workspacePath,
+      this.#routines.runConditionFingerprint(run.routineId),
+      this.#runConditionCommand,
+    );
+    if (decision.run) {
+      if (decision.fingerprint) this.#routines.setRunConditionFingerprint(run.routineId, decision.fingerprint);
+      return null;
+    }
+    const cancelled = this.#transitionRunWithConversation(
+      run,
+      "cancelled",
+      sourceText(
+        decision.reason === "unchanged"
+          ? "error.backend.routineRunConditionUnchanged"
+          : "error.backend.routineRunConditionNotMet",
+      ),
+    );
+    this.stateChanged(run.agentId);
+    return cancelled;
   }
 
   async #interruptRunsBeforeDeletion(agentId: string, runs: RoutineRun[]): Promise<RoutineRun[]> {
@@ -878,4 +930,13 @@ export class RoutineScheduler implements RoutineDueSource {
       transactionHooks?.onRollback,
     );
   }
+}
+
+function routineToolRunCondition(value: unknown): RoutineRunCondition {
+  if (!isRoutineRunCondition(value)) {
+    throw new RoutineInputError(
+      "runCondition needs a command and when: output-changes or exit-zero. The command can be at most 2000 characters.",
+    );
+  }
+  return { command: value.command.trim(), when: value.when };
 }

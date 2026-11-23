@@ -29,6 +29,7 @@ import {
   isDisabledMcpServerIds,
   isMessageReaction,
   isReasoningEffort,
+  isRoutineRunCondition,
   isRoutineSchedule,
   type ListChannelRoutineRunsInput,
   type ListRoutineRunsInput,
@@ -48,6 +49,7 @@ import {
   type RoutineCalendarInput,
   type RoutineLimitPolicy,
   type RoutineMissedPolicy,
+  type RoutineRunCondition,
   type SearchConversationFilesInput,
   type SearchConversationMessagesInput,
   type SendMessageInput,
@@ -240,6 +242,7 @@ export function parseCreateRoutine(value: unknown): CreateRoutineInput {
     schedule: parseRoutineSchedule(value.schedule),
     ...optionalLimitPolicy(value.limitPolicy),
     ...optionalMissedPolicy(value.missedPolicy),
+    ...optionalRunCondition(value.runCondition),
   };
 }
 
@@ -258,7 +261,12 @@ export function parseUpdateRoutine(value: unknown): UpdateRoutineInput {
     parsed.active = value.active;
   }
   if (value.schedule !== undefined) parsed.schedule = parseRoutineSchedule(value.schedule);
-  Object.assign(parsed, optionalLimitPolicy(value.limitPolicy), optionalMissedPolicy(value.missedPolicy));
+  Object.assign(
+    parsed,
+    optionalLimitPolicy(value.limitPolicy),
+    optionalMissedPolicy(value.missedPolicy),
+    optionalRunConditionChange(value.runCondition),
+  );
   if (Object.keys(parsed).length === 2) throw new Error("A routine update is required.");
   return parsed;
 }
@@ -273,6 +281,17 @@ function optionalMissedPolicy(value: unknown): { missedPolicy?: RoutineMissedPol
   if (value === undefined) return {};
   if (!isOneOf(ROUTINE_MISSED_POLICIES, value)) throw new Error("Invalid routine missed-run policy.");
   return { missedPolicy: value };
+}
+
+function optionalRunCondition(value: unknown): { runCondition?: RoutineRunCondition } {
+  if (value === undefined) return {};
+  if (!isRoutineRunCondition(value)) throw new Error("Invalid routine run condition.");
+  return { runCondition: { command: value.command.trim(), when: value.when } };
+}
+
+/** In an update, `null` removes the run condition. */
+function optionalRunConditionChange(value: unknown): { runCondition?: RoutineRunCondition | null } {
+  return value === null ? { runCondition: null } : optionalRunCondition(value);
 }
 
 export function parseDeleteRoutine(value: unknown): DeleteRoutineInput {
@@ -356,6 +375,7 @@ export function parseCreateChannelRoutine(value: unknown): CreateChannelRoutineI
     schedule: parseRoutineSchedule(value.schedule),
     ...optionalLimitPolicy(value.limitPolicy),
     ...optionalMissedPolicy(value.missedPolicy),
+    ...optionalRunCondition(value.runCondition),
   };
 }
 
@@ -374,7 +394,12 @@ export function parseUpdateChannelRoutine(value: unknown): UpdateChannelRoutineI
     parsed.active = value.active;
   }
   if (value.schedule !== undefined) parsed.schedule = parseRoutineSchedule(value.schedule);
-  Object.assign(parsed, optionalLimitPolicy(value.limitPolicy), optionalMissedPolicy(value.missedPolicy));
+  Object.assign(
+    parsed,
+    optionalLimitPolicy(value.limitPolicy),
+    optionalMissedPolicy(value.missedPolicy),
+    optionalRunConditionChange(value.runCondition),
+  );
   if (Object.keys(parsed).length === 2) throw new Error("A routine update is required.");
   return parsed;
 }

@@ -23,6 +23,7 @@ import {
   isRecord,
   type ThreadItem,
 } from "../protocol";
+import { TEXT_PREVIEW_METHOD } from "../text-preview";
 import type { AgentMemories } from "./agent-memories";
 import type { AttentionBrowserHost, AttentionRegistry } from "./attention-registry";
 import type { BrowserUploadTarget } from "./browser-uploads";
@@ -272,6 +273,19 @@ export class TurnLifecycle {
     }
 
     switch (notification.method) {
+      case TEXT_PREVIEW_METHOD: {
+        const turnId = getString(params, "turnId");
+        const text = getString(params, "text");
+        if (!threadId || !agentId || !turnId || text === null) return;
+        this.#hooks.emit({
+          type: "turn-text-preview",
+          agentId,
+          threadId: this.#conversation.publicThreadId(agentId, threadId),
+          turnId,
+          text,
+        });
+        return;
+      }
       case "account/login/completed": {
         this.#providers.completeCodexLogin(params, source, decodeAccountLoginCompletedResult);
         return;

@@ -2,9 +2,12 @@ import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   ROUTINE_LIMIT_POLICIES,
   ROUTINE_MISSED_POLICIES,
+  ROUTINE_RUN_CONDITION_COMMAND_LIMIT,
+  ROUTINE_RUN_CONDITION_MODES,
   type RoutineFields,
   type RoutineLimitPolicy,
   type RoutineMissedPolicy,
+  type RoutineRunConditionMode,
   type RoutineRunFields,
   type RoutineSchedule,
 } from "@openbot/contracts/ipc";
@@ -70,7 +73,15 @@ interface RoutineDraft {
   scheduleDraft: RoutineScheduleDraft;
   limitPolicy: RoutineLimitPolicy;
   missedPolicy: RoutineMissedPolicy;
+  /** Empty for no run condition. */
+  conditionCommand: string;
+  conditionWhen: RoutineRunConditionMode;
 }
+
+const RUN_CONDITION_LABELS = {
+  "output-changes": "routine.settings.runConditionWhen.outputChanges",
+  "exit-zero": "routine.settings.runConditionWhen.exitZero",
+} as const satisfies Record<RoutineRunConditionMode, AppTextKey>;
 
 const LIMIT_POLICY_LABELS = {
   wait: "routine.settings.limitPolicy.wait",
@@ -214,6 +225,14 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
           current.missedPolicy === (base.missedPolicy ?? "skip")
             ? (routine.missedPolicy ?? "skip")
             : current.missedPolicy,
+        conditionCommand:
+          current.conditionCommand === (base.runCondition?.command ?? "")
+            ? (routine.runCondition?.command ?? "")
+            : current.conditionCommand,
+        conditionWhen:
+          current.conditionWhen === (base.runCondition?.when ?? "output-changes")
+            ? (routine.runCondition?.when ?? "output-changes")
+            : current.conditionWhen,
         ...(scheduleEdited
           ? {}
           : {
@@ -239,6 +258,8 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
       scheduleDraft: routineScheduleToDraft(routine.trigger.schedule),
       limitPolicy: routine.limitPolicy ?? "wait",
       missedPolicy: routine.missedPolicy ?? "skip",
+      conditionCommand: routine.runCondition?.command ?? "",
+      conditionWhen: routine.runCondition?.when ?? "output-changes",
     });
     void loadRuns(routine.id);
   }
@@ -259,6 +280,8 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
       scheduleDraft: NEW_ROUTINE_SCHEDULE,
       limitPolicy: "wait",
       missedPolicy: "skip",
+      conditionCommand: "",
+      conditionWhen: "output-changes",
     });
   }
 
@@ -357,6 +380,9 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
         schedule: current.schedule,
         limitPolicy: current.limitPolicy,
         missedPolicy: current.missedPolicy,
+        runCondition: current.conditionCommand.trim()
+          ? { command: current.conditionCommand.trim(), when: current.conditionWhen }
+          : null,
       });
       setRoutines((items) => {
         const next = [saved, ...items.filter((routine) => routine.id !== saved.id)];
@@ -674,6 +700,45 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                     <SelectContent />
                   </Select>
                 </div>
+              </Show>
+
+              <Show when={props.port.runCondition}>
+                <label class="settings-field">
+                  <span>{t("routine.settings.runCondition")}</span>
+                  <Input
+                    value={current().conditionCommand}
+                    placeholder={t("routine.settings.runConditionPlaceholder")}
+                    maxlength={ROUTINE_RUN_CONDITION_COMMAND_LIMIT}
+                    spellcheck={false}
+                    aria-describedby="agent-routine-run-condition-hint"
+                    onValueChange={(conditionCommand) => changeDraft((value) => ({ ...value, conditionCommand }))}
+                  />
+                </label>
+                <Show when={current().conditionCommand.trim()}>
+                  <div class="settings-field">
+                    <span id="agent-routine-run-condition-when-label">{t("routine.settings.runConditionWhen")}</span>
+                    <Select<RoutineRunConditionMode>
+                      options={[...ROUTINE_RUN_CONDITION_MODES]}
+                      value={current().conditionWhen}
+                      onChange={(conditionWhen) => {
+                        if (conditionWhen) changeDraft((value) => ({ ...value, conditionWhen }));
+                      }}
+                      itemComponent={(item) => (
+                        <SelectItem item={item.item}>{t(RUN_CONDITION_LABELS[item.item.rawValue])}</SelectItem>
+                      )}
+                    >
+                      <SelectTrigger aria-labelledby="agent-routine-run-condition-when-label">
+                        <SelectValue<RoutineRunConditionMode>>
+                          {(state) => t(RUN_CONDITION_LABELS[state.selectedOption()])}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent />
+                    </Select>
+                  </div>
+                </Show>
+                <Text id="agent-routine-run-condition-hint" variant="caption" tone="muted">
+                  {t("routine.settings.runConditionHint")}
+                </Text>
               </Show>
 
               <RoutineRunHistory runs={runs()} onOpenRun={props.onOpenRun ? requestOpenRun : undefined} />

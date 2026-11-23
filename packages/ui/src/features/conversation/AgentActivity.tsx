@@ -75,6 +75,11 @@ export function AgentActivityIndicator(props: {
    * so a working agent reads differently from a stalled one.
    */
   since?: number;
+  /**
+   * Text the agent is writing that it has not published yet. It shows under the line until it
+   * becomes a message, so the reader sees progress; it is never a message itself.
+   */
+  preview?: string | null;
 }) {
   const { t, format } = useText();
   const label = () => props.detail ?? t(agentActivityLabelKey(props.label));
@@ -105,6 +110,9 @@ export function AgentActivityIndicator(props: {
         <span class="agent-activity-label">{label()}</span>
         <Show when={elapsed()}>{(time) => <span class="agent-activity-elapsed">{time()}</span>}</Show>
       </section>
+      <Show when={props.phase !== "exiting" && props.preview}>
+        {(preview) => <p class="agent-activity-preview">{preview()}</p>}
+      </Show>
     </div>
   );
 }

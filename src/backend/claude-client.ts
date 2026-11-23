@@ -19,6 +19,7 @@ import {
   CLAUDE_WEEKLY_SONNET_LIMIT_ID,
   defaultProviderModel,
   isAgentCompactWindow,
+  TURN_TEXT_PREVIEW_LIMIT,
 } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord, isNumber, isOneOf, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
@@ -82,6 +83,7 @@ import {
   type TurnResponse,
 } from "./protocol";
 import type { ReadProviderHistory } from "./provider-history";
+import { TEXT_PREVIEW_METHOD } from "./text-preview";
 
 const execFileAsync = promisify(execFile);
 /** Claude Code's own tools, named again after `tools: []` so that a tool a later CLI adds is still removed. */
@@ -110,6 +112,7 @@ export const CLAUDE_BUILT_IN_TOOLS: readonly string[] = [
  */
 const SLACK_REPLY_TOOLS: ReadonlySet<string> = new Set(["slack_send_message"]);
 const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+const TEXT_PREVIEW_INTERVAL_MS = 150;
 type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
 
 interface ClientEvents {
@@ -169,6 +172,8 @@ interface ActiveTurn {
    * message that only states the limit, so its text is held here and not published as the answer.
    */
   usageLimit: { resetsAt: number | null; text: string | null } | null;
+  /** The preview of the held text: a pending update, when the last one went, and whether one shows. */
+  preview: { timer: ReturnType<typeof setTimeout> | null; sentAt: number; shown: boolean };
 }
 
 interface ThreadRuntime {
@@ -776,6 +781,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
       thinkingMessages: new Map<string, string>(),
       toolCalls: new Map<string, string>(),
       usageLimit: null,
+      preview: { timer: null, sentAt: 0, shown: false },
     };
     runtime.activeTurn = activeTurn;
     startClaudePlanTurn(runtime.plan);
@@ -1054,6 +1060,39 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     if (!turn || !delta) return;
     turn.text += delta;
     turn.seenText += delta;
+    this.#schedulePreview(runtime);
+  }
+
+  /**
+   * Shows the held text while the turn cannot yet say whether it is narration or the answer, so the
+   * reader sees Claude write instead of a wait. It is a preview only: `openbot/textPreview` becomes a
+   * local event that the chat shows outside the messages, and it never reaches a message or a peer.
+   * At most one update goes every `TEXT_PREVIEW_INTERVAL_MS`, with the end of the text.
+   */
+  #schedulePreview(runtime: ThreadRuntime): void {
+    const turn = runtime.activeTurn;
+    if (!turn || turn.preview.timer) return;
+    const delay = Math.max(0, turn.preview.sentAt + TEXT_PREVIEW_INTERVAL_MS - Date.now());
+    turn.preview.timer = setTimeout(() => {
+      turn.preview.timer = null;
+      if (runtime.activeTurn !== turn || !turn.text) return;
+      turn.preview.sentAt = Date.now();
+      turn.preview.shown = true;
+      this.#emitPreview(runtime.id, turn.id, turn.text.slice(-TURN_TEXT_PREVIEW_LIMIT));
+    }, delay);
+  }
+
+  /** Removes the preview: the held text was just published as narration or as the answer. */
+  #clearPreview(turn: ActiveTurn, threadId: string): void {
+    if (turn.preview.timer) clearTimeout(turn.preview.timer);
+    turn.preview.timer = null;
+    if (!turn.preview.shown) return;
+    turn.preview.shown = false;
+    this.#emitPreview(threadId, turn.id, "");
+  }
+
+  #emitPreview(threadId: string, turnId: string, text: string): void {
+    this.emit("notification", { method: TEXT_PREVIEW_METHOD, params: { threadId, turnId, text } });
   }
 
   /**
@@ -1130,11 +1169,14 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     turn.narrationCount += 1;
     turn.publishedText += text;
     turn.text = turn.text.slice(text.length);
+    this.#clearPreview(turn, runtime.id);
   }
 
   #completeTurn(runtime: ThreadRuntime, status: string, error: unknown): void {
     const turn = runtime.activeTurn;
     if (!turn) return;
+    // Cleared first, so the answer never shows twice: once as the preview, once as the message.
+    this.#clearPreview(turn, runtime.id);
     if (turn.thinkingStarted) {
       this.emit("notification", {
         method: "item/completed",

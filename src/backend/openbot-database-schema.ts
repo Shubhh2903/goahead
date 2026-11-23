@@ -351,6 +351,12 @@ const V27_ROUTINE_LIMIT_POLICY_COLUMN_SQL = `limit_policy TEXT NOT NULL DEFAULT 
 // migration. The policy goes after the migration 27 column. ADD COLUMN puts a run column before the UNIQUE
 // constraint that ends the run tables, so the latest schema puts the two run columns there as well.
 const V36_ROUTINE_MISSED_POLICY_COLUMN_SQL = `missed_policy TEXT NOT NULL DEFAULT 'skip' CHECK(missed_policy IN ('skip', 'run-once'))`;
+// Migration 37 adds a routine's optional run condition (JSON: a command and a mode) and the fingerprint of the
+// command's last output, after the migration 36 column. Frozen with the migration.
+const V37_ROUTINE_RUN_CONDITION_COLUMNS_SQL = [
+  "run_condition TEXT CHECK(run_condition IS NULL OR (json_valid(run_condition) AND length(run_condition) <= 4096))",
+  "run_condition_fingerprint TEXT",
+];
 const V36_ROUTINE_RUN_MISSED_COLUMNS_SQL = [
   "missed_count INTEGER CHECK(missed_count IS NULL OR missed_count >= 1)",
   "missed_until TEXT",
@@ -465,11 +471,11 @@ const LATEST_SCHEMA_SQL =
   // Migration 35 (upstream OpenBot migration 32).
   AGENT_MEMORY_SELECTION_SCHEMA_SQL;
 
-/** The end of a routine table with the migration 27 and 36 columns after its last one. */
+/** The end of a routine table with the migration 27, 36 and 37 columns after its last one. */
 function withRoutinePolicies(tableEnd: string): string {
   return tableEnd.replace(
     "last_event_sequence INTEGER NOT NULL\n",
-    `last_event_sequence INTEGER NOT NULL,\n    ${V27_ROUTINE_LIMIT_POLICY_COLUMN_SQL},\n    ${V36_ROUTINE_MISSED_POLICY_COLUMN_SQL}\n`,
+    `last_event_sequence INTEGER NOT NULL,\n    ${V27_ROUTINE_LIMIT_POLICY_COLUMN_SQL},\n    ${V36_ROUTINE_MISSED_POLICY_COLUMN_SQL},\n    ${V37_ROUTINE_RUN_CONDITION_COLUMNS_SQL.join(",\n    ")}\n`,
   );
 }
 
@@ -668,6 +674,13 @@ const MIGRATIONS: readonly OpenBotMigration[] = [
     // no foreign-key pause and no vacuum. Every existing routine keeps skipping the occurrences it missed, which is what it did
     // before, and every existing run records no missed occurrence.
     up: addRoutineMissedRuns,
+  },
+  {
+    version: 37,
+    // Adds two nullable columns with no default to the two routine tables: no rebuild, so no
+    // foreign-key pause and no vacuum. Every existing routine has no run condition, so each scheduled
+    // run starts the agent, which is what it did before.
+    up: addRoutineRunConditions,
   },
 ];
 
@@ -1036,6 +1049,20 @@ function addRoutineMissedRuns(db: DatabaseSync): void {
     const columns = db.prepare(`PRAGMA table_info(${table})`).all();
     if (columns.some((existing) => isDynamicRecord(existing) && existing.name === name)) continue;
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`);
+  }
+}
+
+// Migration 37 adds the optional run condition of a routine: a shell command the host runs before a scheduled
+// run, and the fingerprint of its last output.
+function addRoutineRunConditions(db: DatabaseSync): void {
+  for (const table of ["projection_agent_routines", "projection_channel_routines"]) {
+    for (const column of V37_ROUTINE_RUN_CONDITION_COLUMNS_SQL) {
+      const name = column.slice(0, column.indexOf(" "));
+      // A development profile that ran this version before it shipped has the column already.
+      const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+      if (columns.some((existing) => isDynamicRecord(existing) && existing.name === name)) continue;
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`);
+    }
   }
 }
 

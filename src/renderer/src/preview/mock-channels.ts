@@ -229,6 +229,7 @@ export function createMockChannels(emit: (event: AgentEvent) => void, agentName:
         timezone: input.timezone,
         limitPolicy: input.limitPolicy ?? "wait",
         missedPolicy: input.missedPolicy ?? "skip",
+        ...(input.runCondition ? { runCondition: input.runCondition } : {}),
         trigger: nextTrigger(id, input.schedule, now),
         createdAt: now,
         updatedAt: now,
@@ -241,8 +242,10 @@ export function createMockChannels(emit: (event: AgentEvent) => void, agentName:
       const current = routines.get(input.channelId)?.find((routine) => routine.id === input.routineId);
       if (!current) throw new Error("Routine not found.");
       const now = new Date().toISOString();
+      const { runCondition: savedCondition, ...withoutCondition } = current;
       const updated: ChannelRoutine = {
-        ...current,
+        ...withoutCondition,
+        ...(input.runCondition === null ? {} : { runCondition: input.runCondition ?? savedCondition }),
         ...(input.name === undefined ? {} : { name: input.name.trim() }),
         ...(input.instruction === undefined ? {} : { instruction: input.instruction.trim() }),
         ...(input.active === undefined ? {} : { active: input.active }),
