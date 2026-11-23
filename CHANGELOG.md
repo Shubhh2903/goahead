@@ -6,6 +6,24 @@ All notable changes to OpenBot will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-11-23
+
+### Added
+
+- A desktop host can update the ongoing notification of the GoAhead Android app while Android stops
+  the app, as it updates the iPhone Live Activity. The update is sealed for the phone, so the
+  account service and Google cannot read it. It needs a Firebase project; see
+  `docs/goahead-internal-release.md`.
+
+### Fixed
+
+- The phone app and a remote desktop connect when they are on different networks, such as home and
+  office Wi-Fi. Before, they connected only on the same network. Mobile data and strict company
+  networks still need a TURN relay.
+- A Slack auto-reply of a Codex agent now has only the Slack send tool, as on Claude. Before, a
+  Slack message from another person could make it run commands, browse, delegate, or change the
+  agent's memories. Its session reads only and cannot write files.
+
 ## [0.38.0] - 2026-10-16
 
 ### Added
