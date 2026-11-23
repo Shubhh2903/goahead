@@ -10,6 +10,8 @@ coverage/
 .DS_Store
 *.log
 *.local
+.env
+.env.*
 .dev.vars
 .dev.vars.*
 !.env.example
@@ -23,6 +25,7 @@ coverage/
 *.pem
 .idea/
 # Keep shared VS Code settings while ignoring other editor state.
+**/.vscode/*
 !/.vscode/settings.json
 !/.vscode/extensions.json
 !/apps/mobile/.vscode/settings.json
@@ -59,5 +62,3 @@ mise.local.toml
 keys
 # Agent task checklist. Local to one worktree.
 /TASKS.md
-.env
-.env*
