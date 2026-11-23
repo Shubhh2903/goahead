@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync } from "node:fs";
+import { accessSync, existsSync, mkdirSync, symlinkSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -283,6 +283,33 @@ function requiredSunshineSubmodules(targetPlatform: "darwin" | "win32" | "linux"
   return [...common, "third-party/ViGEmClient", "third-party/glad", "third-party/nvapi"];
 }
 
+/**
+ * The pinned Sunshine needs OpenSSL 3, and Homebrew can link OpenSSL 4 as its default, whose
+ * `ASN1_STRING` is opaque and whose `X509_NAME` is const. `OPENSSL_ROOT_DIR` links OpenSSL 3. The
+ * headers need more: another library adds `-isystem /opt/homebrew/include`, which holds the linked
+ * OpenSSL 4 headers. A `-I` folder comes before every `-isystem` folder, but clang drops a `-I` that
+ * names the same folder as an `-isystem`, and CMake adds OpenSSL 3's own include folder that way. So
+ * a separate folder holds only an `openssl` link to the OpenSSL 3 headers.
+ */
+function macOpenSslOptions(build: string): string[] {
+  const prefix = ["/opt/homebrew/opt/openssl@3", "/usr/local/opt/openssl@3"].find((candidate) =>
+    existsSync(join(candidate, "include", "openssl", "opensslv.h")),
+  );
+  if (!prefix) throw new Error("Sunshine needs OpenSSL 3. Install it with `brew install openssl@3`.");
+  const includes = join(build, "openssl3-include");
+  mkdirSync(includes, { recursive: true });
+  if (!existsSync(join(includes, "openssl")))
+    symlinkSync(join(prefix, "include", "openssl"), join(includes, "openssl"));
+  const flag = `-I${includes}`;
+  return [
+    `-DOPENSSL_ROOT_DIR=${prefix}`,
+    `-DCMAKE_C_FLAGS=${flag}`,
+    `-DCMAKE_CXX_FLAGS=${flag}`,
+    `-DCMAKE_OBJC_FLAGS=${flag}`,
+    `-DCMAKE_OBJCXX_FLAGS=${flag}`,
+  ];
+}
+
 function buildSunshine(source: string, version: string, commit: string): void {
   const build = join(source, "build-openbot");
   const generator = process.env.CMAKE_GENERATOR ?? (hasExecutable("ninja") ? "Ninja" : "Unix Makefiles");
@@ -308,6 +335,7 @@ function buildSunshine(source: string, version: string, commit: string): void {
       "-DOPENBOT_SECURITY_TESTS=ON",
       "-DBUILD_WERROR=OFF",
       ...(platform === "linux" ? LINUX_SUNSHINE_OPTIONS : []),
+      ...(platform === "darwin" ? macOpenSslOptions(build) : []),
     ],
     { env: buildEnvironment, stdio: "inherit" },
   );

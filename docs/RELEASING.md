@@ -292,6 +292,11 @@ Linux arm64 builds only for local development and has no release artifact.
 plugin only uploads bundle statistics in Sunshine's own CI. Moonlight Web had no findings. Biome does
 not check the override files, so they stay as upstream wrote them and match their pinned digests.
 
+On macOS the runtime build also compiles Sunshine against Homebrew's `openssl@3`, because the pinned
+Sunshine does not build with OpenSSL 4, which Homebrew now links by default. `macOpenSslOptions` in
+`scripts/build-remote-desktop-runtime.ts` sets `OPENSSL_ROOT_DIR` and puts the OpenSSL 3 headers
+ahead of `/opt/homebrew/include`. The build stops with a clear error when `openssl@3` is missing.
+
 ## Pin the Gemini server
 
 `native-runtime.lock.json` pins Google's Antigravity ACP server for the Gemini provider by hand:
