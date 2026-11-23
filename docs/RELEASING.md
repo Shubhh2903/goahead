@@ -282,6 +282,16 @@ adds a `vaMapBuffer2` shim, because the prebuilt FFmpeg needs libva 2.21 and Ubu
 The runtime uses the system libraries of Ubuntu 24.04; the hosted server template installs them.
 Linux arm64 builds only for local development and has no release artifact.
 
+### Sunshine web UI dependencies (recipe 15)
+
+`npm audit --audit-level=high` in the runtime build found an XSS fix in `vue-i18n` (11.4.2 to
+11.4.23, shipped in the Sunshine web UI) and dev-only advisories in `vite`, `undici`, and `zod` through
+`@codecov/vite-plugin`, which has no fixed release. The Sunshine source now gets three overrides from
+`vendor/remote-desktop/overrides/sunshine/`: `package.json` and `package-lock.json` with `vue-i18n`
+11.4.23 and `vite` 6.4.6 and without the Codecov plugin, and `vite.config.js` without that plugin. The
+plugin only uploads bundle statistics in Sunshine's own CI. Moonlight Web had no findings. Biome does
+not check the override files, so they stay as upstream wrote them and match their pinned digests.
+
 ## Pin the Gemini server
 
 `native-runtime.lock.json` pins Google's Antigravity ACP server for the Gemini provider by hand:

@@ -23,6 +23,8 @@ All notable changes to OpenBot will be documented here. The project follows
 - A Slack auto-reply of a Codex agent now has only the Slack send tool, as on Claude. Before, a
   Slack message from another person could make it run commands, browse, delegate, or change the
   agent's memories. Its session reads only and cannot write files.
+- Update the web interface of the remote desktop runtime to `vue-i18n` 11.4.23, which fixes a
+  cross-site scripting issue, and remove a build plugin that pulled in packages with known issues.
 
 ## [0.38.0] - 2026-10-16
 

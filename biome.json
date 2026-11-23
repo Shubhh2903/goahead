@@ -38,7 +38,8 @@
       "!!Shared",
       "!!.worktrees",
       "!!.agents",
-      "!src/renderer/src/vendor"
+      "!src/renderer/src/vendor",
+      "!vendor/remote-desktop/overrides"
     ]
   },
   "formatter": {

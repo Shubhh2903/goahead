@@ -293,7 +293,7 @@
     }
   },
   "remoteDesktop": {
-    "recipeVersion": 14,
+    "recipeVersion": 15,
     "sunshine": {
       "sourceMode": "upstream-with-patch",
       "repository": "https://github.com/LizardByte/Sunshine.git",
@@ -311,7 +311,23 @@
         "path": "vendor/remote-desktop/patches/sunshine-v2026.516.143833-openbot.patch",
         "sha256": "3fac721b1d894005ea2206dc93c248bbbf87b8f689cc333de5becdafd1cbcda0"
       },
-      "overrides": [],
+      "overrides": [
+        {
+          "source": "vendor/remote-desktop/overrides/sunshine/package.json",
+          "destination": "package.json",
+          "sha256": "0ce025afbfa391381a3a6948205564fd96ff5906e20c1d5e271d6176b7d8926c"
+        },
+        {
+          "source": "vendor/remote-desktop/overrides/sunshine/package-lock.json",
+          "destination": "package-lock.json",
+          "sha256": "cab98bc8056b894db278db602a5d1cc860f84c20f69f3b09de306586c4427caa"
+        },
+        {
+          "source": "vendor/remote-desktop/overrides/sunshine/vite.config.js",
+          "destination": "vite.config.js",
+          "sha256": "d35f9a1e9c8eb68474091868dece460c5313b2cc53a25225b73e6aac9aea2c87"
+        }
+      ],
       "submodules": {
         "packaging/linux/flatpak/deps/flatpak-builder-tools": "dda10aa5949811589747e6e485da6ae2e86b5d2b",
         "packaging/linux/flatpak/deps/shared-modules": "8c3f3cfa5a4af9a696ff0bfb3ed0eba404faaf5d",
