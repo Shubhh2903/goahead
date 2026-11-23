@@ -1,6 +1,10 @@
 import type { AgentEvent, DynamicIslandAgentIdentity, TeamRealtimeEvent } from "@openbot/contracts/ipc";
 import { TEAM_API_ROUTES } from "@openbot/contracts/team-api-routes";
 import {
+  ANDROID_LIVE_UPDATE_PUSH_ROUTES,
+  type AndroidLiveUpdatePushRegistration,
+} from "@openbot/contracts/team-protocol/android-live-update-push-v1";
+import {
   LIVE_ACTIVITY_PUSH_ROUTES,
   type LiveActivityPushRegistration,
 } from "@openbot/contracts/team-protocol/live-activity-push-v1";
@@ -26,6 +30,7 @@ import { getBloubAvatarColor } from "@/features/agents/model/bloub-activity";
 import { useLiveActivitiesPreference } from "@/features/settings/model/live-activities";
 import type { LiveWorkspaceStore } from "@/features/workspace/model/live-workspace-store";
 import type { MobileAgent, MobileServer } from "@/features/workspace/model/workspace-types";
+import { isAndroid } from "@/shared/lib/platform";
 import { currentLocale, currentText } from "@/shared/lib/text";
 import { agentLiveActivity } from "./agent-live-activity";
 import type { AgentLiveActivityNative } from "./agent-live-activity.types";
@@ -442,7 +447,7 @@ export function useLiveActivity({
     if (previous && previous.serverId !== pushServerId) {
       registered.current = null;
       // The host also forgets it when the session ends, so a failed request leaves nothing behind.
-      void enqueueRegistration(() => post(previous.serverId, LIVE_ACTIVITY_PUSH_ROUTES.remove, {}));
+      void enqueueRegistration(() => post(previous.serverId, PUSH_ROUTES.remove, {}));
     }
     // A host that restarts keeps registrations in memory only, so a new connection registers again.
     if (!pushServerOnline && registered.current) registered.current = { ...registered.current, key: "" };
@@ -466,25 +471,31 @@ export function useLiveActivity({
         }
       }
       keepAvatars();
-      const registration: LiveActivityPushRegistration = {
+      const common: AndroidLiveUpdatePushRegistration = {
         serverId: pushServerId,
         token: pushToken,
-        environment: pushEnvironment(),
         secret: encodeLiveActivityBytes(liveActivityHostKeys(secret, pushServerId).secret),
         locale: currentLocale(),
         away: !foreground,
-        photos: serverAgents.flatMap((agent) => {
-          const file = agent.avatarUrl ? photos[photoName(pushServerId, agent.id, agent.avatarUrl)] : undefined;
-          return file ? [{ agentId: agent.id, file }] : [];
-        }),
       };
+      // An Android notification shows no agent picture and has one FCM environment.
+      const registration: AndroidLiveUpdatePushRegistration | LiveActivityPushRegistration = isAndroid
+        ? common
+        : {
+            ...common,
+            environment: pushEnvironment(),
+            photos: serverAgents.flatMap((agent) => {
+              const file = agent.avatarUrl ? photos[photoName(pushServerId, agent.id, agent.avatarUrl)] : undefined;
+              return file ? [{ agentId: agent.id, file }] : [];
+            }),
+          };
       const key = JSON.stringify(registration);
       await enqueueRegistration(async () => {
         if (cancelled || disposed.current || registered.current?.key === key) return;
         // Recorded before the request, so a change of host or a sign-out during it queues its removal.
         registered.current = { serverId: pushServerId, key: "" };
         try {
-          await post(pushServerId, LIVE_ACTIVITY_PUSH_ROUTES.register, { ...registration });
+          await post(pushServerId, PUSH_ROUTES.register, { ...registration });
         } catch {
           // The activity then shows its last state until the app returns, and marks it out of date.
           return;
@@ -524,10 +535,12 @@ export function useLiveActivity({
       const previous = registered.current;
       registered.current = null;
       if (previous) {
-        void enqueueRegistration(() => postRef.current(previous.serverId, LIVE_ACTIVITY_PUSH_ROUTES.remove, {}));
+        void enqueueRegistration(() => postRef.current(previous.serverId, PUSH_ROUTES.remove, {}));
       }
       void resetLiveActivitySecret().catch(() => undefined);
       if (!live) return;
+      // A host update that comes later must not open with the keys of the removed workspace.
+      live.native.setSealKeys(null, unreadableProps(currentText().t));
       live.native.removeAvatars(new Set());
       void syncFor(live.native).show(null);
     };
@@ -535,6 +548,9 @@ export function useLiveActivity({
 
   return applyTeamEvent;
 }
+
+/** The iPhone registers its Live Activity, and an Android phone its ongoing notification. */
+const PUSH_ROUTES = isAndroid ? ANDROID_LIVE_UPDATE_PUSH_ROUTES : LIVE_ACTIVITY_PUSH_ROUTES;
 
 /** The view the widget shows when it cannot open a host update, such as after sign-out. */
 function unreadableProps(t: MobileTranslate): AgentLiveActivityProps {

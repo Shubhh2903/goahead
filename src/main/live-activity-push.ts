@@ -1,6 +1,11 @@
 import { avatarHeadColor } from "@openbot/brand/bloub-avatar";
+import {
+  ANDROID_LIVE_UPDATE_SEALED_LIMIT,
+  type AndroidLiveUpdateRelayPush,
+} from "@openbot/contracts/android-live-update-relay";
 import type { AgentRuntimeSnapshot } from "@openbot/contracts/ipc";
 import { LIVE_ACTIVITY_SEALED_LIMIT, type LiveActivityRelayPush } from "@openbot/contracts/live-activity-relay";
+import type { AndroidLiveUpdatePushRegistration } from "@openbot/contracts/team-protocol/android-live-update-push-v1";
 import type { LiveActivityPushRegistration } from "@openbot/contracts/team-protocol/live-activity-push-v1";
 import { mobileTranslateFor, resolveLocale } from "@openbot/i18n/mobile";
 import { toLogValue } from "@openbot/logging";
@@ -43,6 +48,8 @@ export interface LiveActivityPushOptions {
   agents: LiveActivityPushAgents;
   /** Sends one update through the account service. `gone` means Apple refused the token. */
   send(push: LiveActivityRelayPush): Promise<"sent" | "gone">;
+  /** Sends one Android update through the account service. `gone` means FCM refused the token. */
+  sendAndroid?(push: AndroidLiveUpdateRelayPush): Promise<"sent" | "gone">;
   now?: () => number;
   randomBytes(size: number): Uint8Array;
   /** Whether the member is still a member and not disabled. A removed member gets no more updates. */
@@ -57,10 +64,15 @@ export interface LiveActivityPushViewer {
   readOptions: ReturnType<typeof markerExclusionsForCapabilities>;
 }
 
+/** What a phone gave: an iPhone Live Activity, or an Android phone's ongoing notification. */
+type PushTarget =
+  | ({ platform: "ios" } & LiveActivityPushRegistration)
+  | ({ platform: "android" } & AndroidLiveUpdatePushRegistration);
+
 interface Registration {
   sessionId: string;
   viewer: LiveActivityPushViewer;
-  value: LiveActivityPushRegistration;
+  value: PushTarget;
   keys: LiveActivityKeys;
   photos: Map<string, string>;
   coordinator: DynamicIslandCoordinator;
@@ -77,14 +89,16 @@ interface Registration {
 }
 
 /**
- * Keeps the iOS Live Activity of a member's phone current while iOS suspends the app. The phone
+ * Keeps the iOS Live Activity of a member's phone current while iOS suspends the app, and the
+ * ongoing notification of an Android phone while Android stops the app. The phone
  * gives its push token and a secret over the Team API, and says when it goes away. iOS can suspend
  * it before that request goes out, so a closed connection of the session also counts as away.
  * While it is away, this reads the same state the phone would read, builds the same view with the
- * shared builder, seals it, and sends it through the account service to Apple.
+ * shared builder, seals it, and sends it through the account service to Apple or to Firebase Cloud
+ * Messaging.
  *
  * Registrations live in memory only: a restart forgets them, and the phone gives them again when
- * it connects. The account service and Apple see the token, the time, and sealed bytes only.
+ * it connects. The account service, Apple and Google see the token, the time, and sealed bytes only.
  */
 export class LiveActivityPushService {
   readonly #options: LiveActivityPushOptions;
@@ -100,7 +114,21 @@ export class LiveActivityPushService {
     this.#now = options.now ?? Date.now;
   }
 
+  /** Whether the account service can reach Android phones, so the host offers the Android capability. */
+  get android(): boolean {
+    return this.#options.sendAndroid !== undefined;
+  }
+
   register(sessionId: string, viewer: LiveActivityPushViewer, value: LiveActivityPushRegistration): void {
+    this.#register(sessionId, viewer, { platform: "ios", ...value });
+  }
+
+  registerAndroid(sessionId: string, viewer: LiveActivityPushViewer, value: AndroidLiveUpdatePushRegistration): void {
+    if (!this.#options.sendAndroid) throw new Error("Android live updates are not available.");
+    this.#register(sessionId, viewer, { platform: "android", ...value });
+  }
+
+  #register(sessionId: string, viewer: LiveActivityPushViewer, value: PushTarget): void {
     const secret = decodeLiveActivityBytes(value.secret);
     if (!secret) throw new Error("The Live Activity secret is not valid.");
     const previous = this.#registrations.get(sessionId);
@@ -112,7 +140,8 @@ export class LiveActivityPushService {
       viewer,
       value,
       keys: same && previous ? previous.keys : liveActivityKeys(secret),
-      photos: new Map(value.photos.map((photo) => [photo.agentId, photo.file])),
+      // An Android notification shows no agent picture.
+      photos: new Map(value.platform === "ios" ? value.photos.map((photo) => [photo.agentId, photo.file]) : []),
       coordinator:
         same && previous
           ? previous.coordinator
@@ -194,22 +223,25 @@ export class LiveActivityPushService {
       this.#schedule(registration, sent.at + SAME_MODE_INTERVAL_MS - now);
       return;
     }
-    const push: LiveActivityRelayPush = {
-      token: registration.value.token,
-      environment: registration.value.environment,
-      event: props ? "update" : "end",
-      sealed: props ? this.#sealToFit(props, registration.keys) : null,
+    const value = registration.value;
+    const update = {
+      token: value.token,
+      event: props ? ("update" as const) : ("end" as const),
+      sealed: props ? this.#sealToFit(props, registration.keys, sealedLimit(value)) : null,
       timestamp: Math.floor(now / 1000),
       staleAt: props ? Math.floor((now + STALE_AFTER_MS) / 1000) : null,
-      priority: sent?.mode === mode ? 5 : 10,
     };
+    const sameMode = sent?.mode === mode;
     registration.sending = true;
     registration.sent = { key, mode, at: now };
     try {
-      const result = await this.#options.send(push);
+      const result =
+        value.platform === "ios"
+          ? await this.#options.send({ ...update, environment: value.environment, priority: sameMode ? 5 : 10 })
+          : await this.#sendAndroid({ ...update, priority: sameMode ? "normal" : "high" });
       registration.failures = 0;
       registration.retryAt = 0;
-      // Apple refused the token: the activity ended, or the app was removed.
+      // Apple or FCM refused the token: the activity ended, or the app was removed.
       if (result === "gone" || !props) this.#stop(registration);
       else this.#schedule(registration, KEEPALIVE_MS);
     } catch (error) {
@@ -225,12 +257,17 @@ export class LiveActivityPushService {
     }
   }
 
-  /** Apple takes 4 KB for each update, so the lists and then the buttons go when the seal is too long. */
-  #sealToFit(props: AgentLiveActivityProps, keys: LiveActivityKeys): string {
+  #sendAndroid(push: AndroidLiveUpdateRelayPush): Promise<"sent" | "gone"> {
+    if (!this.#options.sendAndroid) return Promise.reject(new Error("Android live updates are not available."));
+    return this.#options.sendAndroid(push);
+  }
+
+  /** Apple and FCM take 4 KB for each update, so the lists and then the buttons go when the seal is too long. */
+  #sealToFit(props: AgentLiveActivityProps, keys: LiveActivityKeys, limit: number): string {
     let sealed = "";
     for (const candidate of liveActivityShorterProps(props)) {
       sealed = sealLiveActivity(JSON.stringify(candidate), keys, this.#options.randomBytes(LIVE_ACTIVITY_NONCE_BYTES));
-      if (sealed.length <= LIVE_ACTIVITY_SEALED_LIMIT) break;
+      if (sealed.length <= limit) break;
     }
     return sealed;
   }
@@ -283,6 +320,10 @@ export class LiveActivityPushService {
     this.#options.agents.on("event", this.#listener);
     this.#listening = true;
   }
+}
+
+function sealedLimit(value: PushTarget): number {
+  return value.platform === "ios" ? LIVE_ACTIVITY_SEALED_LIMIT : ANDROID_LIVE_UPDATE_SEALED_LIMIT;
 }
 
 /** While the phone runs, it updates the activity itself. */

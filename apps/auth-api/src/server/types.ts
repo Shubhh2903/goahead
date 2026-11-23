@@ -70,6 +70,12 @@ export interface WorkerBindings {
   APNS_TOPIC?: string;
   /** Local development only: the development server that forwards to Apple over HTTP/2. */
   APNS_ORIGIN?: string;
+  /** The Firebase project ID. The Android live update relay is off without it and the service account. */
+  FCM_PROJECT_ID?: string;
+  /** The `client_email` of the Firebase service account. */
+  FCM_CLIENT_EMAIL?: string;
+  /** The `private_key` of the Firebase service account (PKCS #8 PEM text). */
+  FCM_PRIVATE_KEY?: string;
   /** `<team ID>.<bundle ID>` of the signed desktop app that opens `/join` links. Unset: no desktop entry. */
   APPLE_DESKTOP_APP_ID?: string;
   /** `<team ID>.<bundle ID>` of the phone app that opens `/join` and `/agents/*` links. Unset: no phone entry. */

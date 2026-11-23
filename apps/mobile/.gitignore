@@ -41,3 +41,6 @@ example
 # generated native folders
 /ios
 /android
+
+# The Firebase file of the Android app. EAS gets it as the file variable GOOGLE_SERVICES_JSON.
+/google-services.json

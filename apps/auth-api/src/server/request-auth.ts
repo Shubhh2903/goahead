@@ -3,6 +3,7 @@ import { HOSTING_DEVELOPER_KEY_HEADER } from "@openbot/contracts/hosted-servers"
 import { adminTokenMatches } from "./admin-token";
 import { AgentMarketplace, AgentMarketplaceError } from "./agent-marketplace";
 import { AgentTemplates } from "./agent-templates";
+import { type FcmLiveUpdateSender, sharedFcmSender } from "./android-live-update-relay";
 import { AuthService, AuthServiceError } from "./auth-service";
 import { BillingError, type BillingService } from "./billing-service";
 import { D1AuthRepository } from "./d1-auth-repository";
@@ -171,6 +172,24 @@ export function requestLiveActivityRelay(): {
       teamId: APNS_TEAM_ID,
       topic: APNS_TOPIC,
       ...(origin ? { origin } : {}),
+    }),
+    allow: async (hostId) => (await LIVE_ACTIVITY_RATE_LIMITER.limit({ key: `host:${hostId}` })).success,
+  };
+}
+
+export function requestAndroidLiveUpdateRelay(): {
+  sender: FcmLiveUpdateSender;
+  /** The same limit as the iPhone relay: a host sends a few updates a minute for each phone. */
+  allow(hostId: string): Promise<boolean>;
+} | null {
+  const { FCM_PROJECT_ID, FCM_CLIENT_EMAIL, FCM_PRIVATE_KEY, LIVE_ACTIVITY_RATE_LIMITER } = requireWorkerBindings(env);
+  if (!FCM_PROJECT_ID || !FCM_CLIENT_EMAIL || !FCM_PRIVATE_KEY || !LIVE_ACTIVITY_RATE_LIMITER) return null;
+  return {
+    sender: sharedFcmSender({
+      projectId: FCM_PROJECT_ID,
+      clientEmail: FCM_CLIENT_EMAIL,
+      // A deploy passes the key as one line, with `\n` for each line break.
+      privateKey: FCM_PRIVATE_KEY.replaceAll("\\n", "\n"),
     }),
     allow: async (hostId) => (await LIVE_ACTIVITY_RATE_LIMITER.limit({ key: `host:${hostId}` })).success,
   };

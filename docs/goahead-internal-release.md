@@ -362,6 +362,21 @@ the OpenBot phone app do not move to it.
    (the PEM text) and `APNS_KEY_ID` in `apps/auth-api/.env.goahead`. `APNS_TEAM_ID` (`S29HD2MDR4`)
    and `APNS_TOPIC` (`com.multicodegenius.goahead.mobile`) are set in the `goahead` env of
    `wrangler.jsonc`. Deploy again. Without the key, the relay stays off.
+8. Optional, for Android live updates (FCM):
+   1. In the [Firebase console](https://console.firebase.google.com), add a project (for example
+      `goahead-mobile`). Google Analytics is not needed.
+   2. Add an **Android app** with the package name `com.multicodegenius.goahead.mobile`. Download
+      `google-services.json` and put it in `apps/mobile/` (git ignores it). For EAS builds, add it as
+      the file variable `GOOGLE_SERVICES_JSON` instead: `bunx eas-cli@latest env:create --name
+      GOOGLE_SERVICES_JSON --type file --value ./google-services.json --visibility secret`.
+   3. Project settings > Service accounts > **Generate new private key**. From that JSON file, put
+      `FCM_PROJECT_ID` (`project_id`), `FCM_CLIENT_EMAIL` (`client_email`) and `FCM_PRIVATE_KEY`
+      (`private_key`, one line with `\n`) in `apps/auth-api/.env.goahead`, encrypted with dotenvx.
+      Delete the downloaded JSON file after that. Deploy the account service again (section 3).
+   4. Build the Android app again (`bunx expo prebuild --platform android`, then
+      `./gradlew assembleRelease` in `apps/mobile/android`). Without the file, the app builds without
+      FCM, and only the running app updates the notification. Without the service account, the relay
+      answers 503 and the host keeps trying.
 
 ### Local TestFlight release (GoAhead)
 

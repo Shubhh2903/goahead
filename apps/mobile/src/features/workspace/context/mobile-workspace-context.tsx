@@ -10,6 +10,7 @@ import { TEAM_API_ROUTES } from "@openbot/contracts/team-api-routes";
 import { AGENT_ADMIN_CAPABILITY } from "@openbot/contracts/team-protocol/agent-admin-v1";
 import { AGENT_HOST_SETTINGS_CAPABILITY } from "@openbot/contracts/team-protocol/agent-host-settings-v1";
 import { AGENT_PUBLISH_CAPABILITY } from "@openbot/contracts/team-protocol/agent-publish-v1";
+import { ANDROID_LIVE_UPDATE_PUSH_CAPABILITY } from "@openbot/contracts/team-protocol/android-live-update-push-v1";
 import { TEAM_CONVERSATION_UNREAD_CAPABILITY } from "@openbot/contracts/team-protocol/current";
 import { HOST_ADMIN_CAPABILITY } from "@openbot/contracts/team-protocol/host-admin-v1";
 import { LIVE_ACTIVITY_PUSH_CAPABILITY } from "@openbot/contracts/team-protocol/live-activity-push-v1";
@@ -100,6 +101,7 @@ import type {
   MobileServerDirectoryState,
   MobileWorkspaceContextValue,
 } from "@/features/workspace/model/workspace-types";
+import { isAndroid } from "@/shared/lib/platform";
 import { currentText } from "@/shared/lib/text";
 import { useAppForeground } from "@/shared/lib/use-app-foreground";
 
@@ -350,7 +352,10 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
     [request],
   );
   const supportsLiveActivityPush = useCallback(
-    (serverId: string) => serverCapabilities.current.get(serverId)?.includes(LIVE_ACTIVITY_PUSH_CAPABILITY) === true,
+    (serverId: string) =>
+      serverCapabilities.current
+        .get(serverId)
+        ?.includes(isAndroid ? ANDROID_LIVE_UPDATE_PUSH_CAPABILITY : LIVE_ACTIVITY_PUSH_CAPABILITY) === true,
     [],
   );
   const applyLiveActivityEvent = useLiveActivity({

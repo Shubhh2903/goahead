@@ -45,4 +45,6 @@ export const messages = defineMessages("mobile.liveActivity", {
   "mobile.liveActivity.island.approvalCommand": "Command needs review",
   "mobile.liveActivity.island.approvalFileChange": "File changes need review",
   "mobile.liveActivity.island.approvalPermissions": "Permissions need review",
+  "mobile.liveActivity.android.channel": "Agent activity",
+  "mobile.liveActivity.android.channelDescription": "Shows what your agents do while GoAhead is in the background.",
 });

@@ -324,7 +324,8 @@ recipient.
 
 Cloudflare processes account and configuration API requests. It does not carry Team API, file,
 message, command, Remote Desktop media, or Remote Desktop input traffic. It forwards sealed iPhone
-Live Activity updates that it cannot read; see [iPhone Live Activity](#iphone-live-activity). For an
+Live Activity and Android live updates that it cannot read; see [iPhone Live Activity](#iphone-live-activity)
+and [Android live update](#android-live-update). For an
 agent's Slack app, it exchanges the Slack sign-in and serves the install page; see
 [Slack connections](#slack-connections). Cloudflare and the email provider can keep their own
 security, delivery, and network logs under their own policies. These provider logs are outside the
@@ -878,6 +879,29 @@ approves it.
 
 Settings > General > Live Activities turns this off. The phone then removes its token from the
 host.
+
+## Android live update
+
+The Android app shows the same state in one ongoing notification. While the app runs, the phone
+makes it from the data that it receives over the encrypted host connection.
+
+When Android stops the app in the background, the active host updates the notification through
+Firebase Cloud Messaging (FCM). For this, the phone gives that host, over the encrypted host
+connection, its FCM registration token, a 32-byte secret for that host made as on the iPhone, and
+its interface language. It gives no agent pictures. The host keeps these values in memory only,
+with the same limits as for the iPhone, and forgets them when FCM refuses the token.
+
+Each update holds the same text as an iPhone update, sealed with the same keys. The GoAhead account
+service sends it to Google as an FCM data message: the token, the sealed bytes, the time, the
+priority, and the time when the content becomes out of date. The account service and Google cannot
+read the content. The account service stores nothing from these requests, does not log them, and
+makes the FCM message itself with no notification text, so a host cannot use it to send an ordinary
+notification. The phone opens the update with the keys of the active host, which it keeps in its
+secure storage, and shows nothing with a wrong tag, for another host, or after sign-out. Google can
+keep its own delivery logs under its own policy.
+
+Settings > General > Live updates turns this off. The phone then removes its token from the host.
+Android notification settings can also turn the notification off.
 
 ## Optional macOS Host Manager
 

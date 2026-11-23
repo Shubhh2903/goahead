@@ -5,6 +5,7 @@ import { AGENT_IMPORT_ROUTES } from "./agent-import-v1";
 import { AGENT_INSTALL_ROUTES } from "./agent-install-v1";
 import { AGENT_PUBLISH_ROUTES } from "./agent-publish-v1";
 import { AGENT_UPDATE_ROUTES } from "./agent-update-v1";
+import { ANDROID_LIVE_UPDATE_PUSH_ROUTES } from "./android-live-update-push-v1";
 import { CONTEXT_RESET_ROUTES } from "./context-reset-v1";
 import { TEAM_CURRENT_CAPABILITIES } from "./current";
 import { HOST_ADMIN_ROUTES } from "./host-admin-v1";
@@ -466,6 +467,31 @@ describe("live-activity-push-v1", () => {
     expect(() => request({ ...registration, secret: "short" })).toThrow();
     expect(() => request({ ...registration, photos: [{ agentId: "chief", file: "../secret.png" }] })).toThrow();
     expect(() => request({ ...registration, environment: "staging" })).toThrow();
+  });
+});
+
+describe("android-live-update-push-v1", () => {
+  const registration = {
+    serverId: "server-1",
+    token: `${"a".repeat(22)}:APA91b${"B_-".repeat(40)}`,
+    secret: "A".repeat(43),
+    locale: "en",
+    away: true,
+  };
+
+  it("carries the push registration and nothing else", () => {
+    expect(codec(ANDROID_LIVE_UPDATE_PUSH_ROUTES.register).request({ ...registration, photos: [] })).toEqual(
+      registration,
+    );
+    expect(codec(ANDROID_LIVE_UPDATE_PUSH_ROUTES.register).response(200, {})).toEqual({});
+    expect(codec(ANDROID_LIVE_UPDATE_PUSH_ROUTES.remove).request({})).toEqual({});
+  });
+
+  it("refuses a token or secret that could carry other content", () => {
+    const request = codec(ANDROID_LIVE_UPDATE_PUSH_ROUTES.register).request;
+    expect(() => request({ ...registration, token: "../../messages:send" })).toThrow();
+    expect(() => request({ ...registration, token: "short" })).toThrow();
+    expect(() => request({ ...registration, secret: "short" })).toThrow();
   });
 });
 

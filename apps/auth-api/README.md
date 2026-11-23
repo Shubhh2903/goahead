@@ -246,3 +246,15 @@ sets `APNS_ORIGIN` and forwards the Worker's request to Apple from Node
 (`dev-apns-proxy.ts`). The Worker still checks the host and the limit, makes the payload and signs
 the token. Only a loopback caller can use the forwarder, and the Worker accepts only a loopback
 `APNS_ORIGIN`.
+
+### Android live update relay
+
+`POST /v2/remote/hosts/:hostId/android-live-update` forwards a sealed Android live update from a
+host to Firebase Cloud Messaging. The host seals the content with the same keys as an iPhone
+update, so the Worker cannot read it. The Worker checks the host credential and
+`LIVE_ACTIVITY_RATE_LIMITER`, makes a data-only FCM message itself with no notification text, and
+stores and logs nothing. `410 live_update_gone` tells the host that FCM refused the token.
+
+The relay is off until `FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL` and `FCM_PRIVATE_KEY` (the Firebase
+service account) are set. The deploy script puts all three, or none. See
+[the GoAhead release notes](../../docs/goahead-internal-release.md#6b-phone-app-goahead-human), step 8.

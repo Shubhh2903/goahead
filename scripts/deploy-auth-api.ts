@@ -42,6 +42,8 @@ async function main(): Promise<void> {
   if (!cloudflareEnvironment) await putOptionalSecretSet("OPENPANEL_CLIENT_ID", "OPENPANEL_CLIENT_SECRET");
   // The Live Activity relay stays off until the Apple key is in the environment.
   await putOptionalSecretSet("APNS_PRIVATE_KEY", "APNS_KEY_ID");
+  // The Android live update relay stays off until the Firebase service account is in the environment.
+  await putOptionalSecretSet("FCM_PROJECT_ID", "FCM_CLIENT_EMAIL", "FCM_PRIVATE_KEY");
   await run(wranglerExecutable, ["d1", "migrations", "apply", "DB", "--remote", ...environmentArgs], {
     label: "Remote D1 migrations",
   });

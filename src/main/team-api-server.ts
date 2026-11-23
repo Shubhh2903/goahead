@@ -33,6 +33,7 @@ import {
   AGENT_INSTALL_CAPABILITY,
   AGENT_PUBLISH_CAPABILITY,
   AGENT_UPDATE_CAPABILITY,
+  ANDROID_LIVE_UPDATE_PUSH_CAPABILITY,
   CHANNEL_DELETE_CAPABILITY,
   HOST_ADMIN_CAPABILITY,
   HOST_UPDATE_CAPABILITY,
@@ -122,7 +123,7 @@ import { routeFiles } from "./team-api/route-files";
 import { routeHostAdmin } from "./team-api/route-host-admin";
 import { routeHostUpdate } from "./team-api/route-host-update";
 import { routeHostedSites } from "./team-api/route-hosted-sites";
-import { routeLiveActivityPush } from "./team-api/route-live-activity-push";
+import { routeAndroidLiveUpdatePush, routeLiveActivityPush } from "./team-api/route-live-activity-push";
 import { routeMcpServers } from "./team-api/route-mcp";
 import { routeProviders } from "./team-api/route-providers";
 import { routeRemoteScreen } from "./team-api/route-remote-screen";
@@ -664,6 +665,12 @@ export class TeamApiServer {
       if ((await routeAgentImport(context, this.#options.agentImport, newAgentHidden)) === "handled") return;
       if (
         (await routeLiveActivityPush(context, this.#options.liveActivityPush, () =>
+          this.#hiddenAgentIds(context.protocol, context.capabilities),
+        )) === "handled"
+      )
+        return;
+      if (
+        (await routeAndroidLiveUpdatePush(context, this.#options.liveActivityPush, () =>
           this.#hiddenAgentIds(context.protocol, context.capabilities),
         )) === "handled"
       )
@@ -1387,6 +1394,7 @@ export class TeamApiServer {
         if (capability === HOST_UPDATE_CAPABILITY) return this.#options.admin?.update !== undefined;
         if (capability === AGENT_IMPORT_CAPABILITY) return this.#options.agentImport !== undefined;
         if (capability === LIVE_ACTIVITY_PUSH_CAPABILITY) return this.#options.liveActivityPush !== undefined;
+        if (capability === ANDROID_LIVE_UPDATE_PUSH_CAPABILITY) return this.#options.liveActivityPush?.android === true;
         return true;
       }),
     };

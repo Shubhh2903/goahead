@@ -6,6 +6,7 @@ import {
   AGENT_MEMORY_SELECTION_PAGE_ROUTE,
 } from "@openbot/contracts/team-protocol/agent-memories-v1";
 import { AGENT_PUBLISH_ROUTES } from "@openbot/contracts/team-protocol/agent-publish-v1";
+import { ANDROID_LIVE_UPDATE_PUSH_ROUTES } from "@openbot/contracts/team-protocol/android-live-update-push-v1";
 import { CHANNEL_ROUTES } from "@openbot/contracts/team-protocol/channels-v1";
 import { HOST_UPDATE_ROUTES } from "@openbot/contracts/team-protocol/host-update-v1";
 import { HOSTED_SITES_ROUTES } from "@openbot/contracts/team-protocol/hosted-sites-v1";
@@ -30,6 +31,8 @@ const PASSIVE_ROUTES: ReadonlySet<string> = new Set([
   HOST_UPDATE_ROUTES.status,
   LIVE_ACTIVITY_PUSH_ROUTES.register,
   LIVE_ACTIVITY_PUSH_ROUTES.remove,
+  ANDROID_LIVE_UPDATE_PUSH_ROUTES.register,
+  ANDROID_LIVE_UPDATE_PUSH_ROUTES.remove,
   STORAGE_ROUTES.usage,
   AGENT_ADMIN_ROUTES.settings,
   AGENT_HOST_SETTINGS_ROUTES.settings,

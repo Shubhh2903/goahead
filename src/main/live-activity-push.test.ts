@@ -1,3 +1,4 @@
+import type { AndroidLiveUpdateRelayPush } from "@openbot/contracts/android-live-update-relay";
 import type { AgentEvent, AgentRuntimeSnapshot } from "@openbot/contracts/ipc";
 import type { LiveActivityRelayPush } from "@openbot/contracts/live-activity-relay";
 import type { LiveActivityPushRegistration } from "@openbot/contracts/team-protocol/live-activity-push-v1";
@@ -169,5 +170,38 @@ describe("LiveActivityPushService", () => {
     await vi.runOnlyPendingTimersAsync();
     expect(send).toHaveBeenCalledTimes(2);
     expect(listener).toBeNull();
+  });
+
+  it("sends an Android phone the same sealed state through FCM, never through Apple", async () => {
+    const send = vi.fn(async (_push: LiveActivityRelayPush) => "sent" as const);
+    const sendAndroid = vi.fn(async (_push: AndroidLiveUpdateRelayPush) => "sent" as const);
+    const push = new LiveActivityPushService({
+      agents,
+      send,
+      sendAndroid,
+      randomBytes: (size) => new Uint8Array(size).fill(4),
+      memberActive: () => memberActive,
+    });
+    expect(push.android).toBe(true);
+    expect(service(send).android).toBe(false);
+
+    snapshot.pendingApprovals.push(approval("ada", "npm test"));
+    const token = `${"d".repeat(22)}:APA91b${"x".repeat(60)}`;
+    push.registerAndroid("session-1", viewer, {
+      serverId: "server-1",
+      token,
+      secret: "A".repeat(43),
+      locale: "en",
+      away: true,
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(send).not.toHaveBeenCalled();
+    const [sent] = sendAndroid.mock.calls[0] ?? [];
+    expect(sent).toMatchObject({ token, event: "update", priority: "high" });
+    expect(sent).not.toHaveProperty("environment");
+    // The relay and Google see sealed bytes only.
+    expect(JSON.stringify(sent)).not.toMatch(/npm test|Ada|hidden-secret|approval/iu);
+    push.dispose();
   });
 });

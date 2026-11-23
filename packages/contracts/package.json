@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./live-activity-relay": "./src/live-activity-relay.ts",
+    "./android-live-update-relay": "./src/android-live-update-relay.ts",
     "./agent-providers": "./src/agent-providers.ts",
     "./app-language": "./src/app-language.ts",
     "./app-logo-color": "./src/app-logo-color.ts",
@@ -81,6 +82,7 @@
     "./team-protocol/agent-update-v1": "./src/team-protocol/agent-update-v1.ts",
     "./team-protocol/context-reset-v1": "./src/team-protocol/context-reset-v1.ts",
     "./team-protocol/live-activity-push-v1": "./src/team-protocol/live-activity-push-v1.ts",
+    "./team-protocol/android-live-update-push-v1": "./src/team-protocol/android-live-update-push-v1.ts",
     "./team-protocol/providers-v1": "./src/team-protocol/providers-v1.ts",
     "./team-protocol/providers-v2": "./src/team-protocol/providers-v2.ts",
     "./team-protocol/providers-v3": "./src/team-protocol/providers-v3.ts",

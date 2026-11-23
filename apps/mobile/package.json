@@ -1,6 +1,6 @@
 {
   "name": "@openbot/mobile",
-  "main": "expo-router/entry",
+  "main": "index.ts",
   "version": "1.2.0",
   "expo": {
     "install": {
@@ -57,12 +57,13 @@
     "expo-status-bar": "~57.0.1",
     "expo-symbols": "~57.0.3",
     "expo-system-ui": "~57.0.4",
+    "expo-task-manager": "~57.0.23",
     "expo-updates": "~57.0.23",
     "expo-web-browser": "~57.0.3",
     "expo-widgets": "~57.0.20",
     "heroui-native": "^1.0.8",
-    "lucide-react-native": "^1.38.0",
     "katex": "catalog:",
+    "lucide-react-native": "^1.38.0",
     "marked": "catalog:",
     "mermaid": "catalog:",
     "react": "19.2.3",

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
+import type { AndroidLiveUpdateRelayPush } from "@openbot/contracts/android-live-update-relay";
 import { createInviteUrl, selfHostedApiOrigin } from "@openbot/contracts/invite-links";
 import type {
   AvatarImageInput,
@@ -131,6 +132,8 @@ interface HostServiceOptions {
   issueRemoteHostTicket?: (hostId: string) => Promise<{ ticket: string; signalUrl: string; expiresAt: number }>;
   /** Sends one sealed Live Activity update through the account service. `gone` means Apple refused the token. */
   sendLiveActivityPush?: (hostId: string, push: LiveActivityRelayPush) => Promise<"sent" | "gone">;
+  /** Sends one sealed Android live update through the account service. `gone` means FCM refused the token. */
+  sendAndroidLiveUpdatePush?: (hostId: string, push: AndroidLiveUpdateRelayPush) => Promise<"sent" | "gone">;
   verifyRemoteSessionTicket?: (ticket: string) => Promise<VerifiedRemoteSessionTicket>;
   endRemoteSession?: (sessionId: string) => Promise<void>;
   remoteControlPlaneUrl?: string;
@@ -241,6 +244,7 @@ export class HostService extends EventEmitter<HostEvents> {
       },
     });
     const sendLiveActivityPush = options.sendLiveActivityPush;
+    const sendAndroidLiveUpdatePush = options.sendAndroidLiveUpdatePush;
     this.#liveActivityPush = sendLiveActivityPush
       ? new LiveActivityPushService({
           agents: options.agents,
@@ -249,6 +253,15 @@ export class HostService extends EventEmitter<HostEvents> {
             if (!hostId) throw new Error(sourceText("error.auth.hostCredentialUnavailable"));
             return sendLiveActivityPush(hostId, push);
           },
+          ...(sendAndroidLiveUpdatePush
+            ? {
+                sendAndroid: (push: AndroidLiveUpdateRelayPush) => {
+                  const hostId = options.store.getIdentity()?.serverId;
+                  if (!hostId) throw new Error(sourceText("error.auth.hostCredentialUnavailable"));
+                  return sendAndroidLiveUpdatePush(hostId, push);
+                },
+              }
+            : {}),
           randomBytes: (size) => new Uint8Array(randomBytes(size)),
           memberActive: (memberId) => {
             const member = options.store.getMember(memberId);

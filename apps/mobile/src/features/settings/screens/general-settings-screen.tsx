@@ -19,7 +19,7 @@ import { saveLiveActivitiesPreference, useLiveActivitiesPreference } from "@/fea
 import { saveAgentColorMessages, useAgentColorMessages } from "@/features/settings/model/message-color";
 import { useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
 import { haptics } from "@/shared/lib/haptics";
-import { isIOS } from "@/shared/lib/platform";
+import { isAndroid, isIOS } from "@/shared/lib/platform";
 import { speechRecognition } from "@/shared/lib/speech-recognition";
 import { useText } from "@/shared/lib/text";
 
@@ -116,7 +116,10 @@ function DictationSection({ dark }: { dark: boolean }) {
   );
 }
 
-/** Live Activities exist only on iOS. iOS Settings can also turn them off for the app. */
+/**
+ * Live Activities on iOS, and one ongoing notification on Android. iOS Settings can also turn Live
+ * Activities off for the app, and Android settings the notifications.
+ */
 function LiveActivitiesSection({ dark }: { dark: boolean }) {
   const { t } = useText();
   const preference = useLiveActivitiesPreference();
@@ -125,11 +128,13 @@ function LiveActivitiesSection({ dark }: { dark: boolean }) {
     setError(null);
     void saveLiveActivitiesPreference(enabled).catch(() => setError(t("mobile.settings.saveFailed")));
   }
-  if (!isIOS) return null;
+  if (!isIOS && !isAndroid) return null;
   return (
     <SettingsSection
-      title={t("mobile.settings.liveActivities.title")}
-      footer={error ?? t("mobile.settings.liveActivities.footer")}
+      title={t(isAndroid ? "mobile.settings.liveActivities.androidTitle" : "mobile.settings.liveActivities.title")}
+      footer={
+        error ?? t(isAndroid ? "mobile.settings.liveActivities.androidFooter" : "mobile.settings.liveActivities.footer")
+      }
     >
       <SettingsRow>
         <Host matchContents={{ vertical: true }} style={{ width: "100%" }} colorScheme={dark ? "dark" : "light"}>

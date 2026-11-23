@@ -73,6 +73,9 @@ export const messages = defineMessages("mobile.settings", {
     "Shows agent work, messages, questions, and approvals on the Lock Screen and in the Dynamic Island while GoAhead runs.",
   "mobile.settings.liveActivities.toggle": "Show agent activity",
   "mobile.settings.liveActivities.retry": "Retry saving Live Activities setting",
+  "mobile.settings.liveActivities.androidTitle": "Live updates",
+  "mobile.settings.liveActivities.androidFooter":
+    "Shows agent work, messages, questions, and approvals in one notification while GoAhead is in the background.",
   "mobile.settings.privacy.title": "Privacy",
   "mobile.settings.privacy.footer":
     "Share feature use and connection results from this phone. Message contents and files are not sent.",

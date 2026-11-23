@@ -1,5 +1,10 @@
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import {
+  ANDROID_LIVE_UPDATE_PUSH_CAPABILITY,
+  ANDROID_LIVE_UPDATE_PUSH_ROUTES,
+  type AndroidLiveUpdatePushRegistration,
+} from "@openbot/contracts/team-protocol/android-live-update-push-v1";
+import {
   LIVE_ACTIVITY_PUSH_CAPABILITY,
   LIVE_ACTIVITY_PUSH_ROUTES,
   type LiveActivityPushRegistration,
@@ -42,6 +47,56 @@ export async function routeLiveActivityPush(
     registration(body),
   );
   return json(200, {});
+}
+
+/**
+ * The Android phone of the calling member gives or removes its FCM token. The same rules as the
+ * iPhone route: this session only, and only what this member can see. Frozen by
+ * `android-live-update-push-v1`.
+ */
+export async function routeAndroidLiveUpdatePush(
+  context: TeamApiRequestContext,
+  push: LiveActivityPushService | undefined,
+  hiddenAgentIds: () => ReadonlySet<string>,
+): Promise<RouteOutcome> {
+  const { method, url, capabilities, request, json, member, sessionId } = context;
+  if (
+    method !== "POST" ||
+    (url.pathname !== ANDROID_LIVE_UPDATE_PUSH_ROUTES.register &&
+      url.pathname !== ANDROID_LIVE_UPDATE_PUSH_ROUTES.remove)
+  ) {
+    return "unmatched";
+  }
+  if (!push?.android || !capabilities.has(ANDROID_LIVE_UPDATE_PUSH_CAPABILITY)) {
+    throw new HttpError(400, sourceText("error.team.liveActivityUnsupported"));
+  }
+  // `readJson` has already run the body through the android-live-update-push wire codec.
+  const body = await readJson(request);
+  if (url.pathname === ANDROID_LIVE_UPDATE_PUSH_ROUTES.remove) {
+    push.remove(sessionId);
+    return json(200, {});
+  }
+  push.registerAndroid(
+    sessionId,
+    { memberId: member.id, hiddenAgentIds, readOptions: markerExclusionsForCapabilities(capabilities) },
+    androidRegistration(body),
+  );
+  return json(200, {});
+}
+
+function androidRegistration(body: DynamicRecord): AndroidLiveUpdatePushRegistration {
+  const text = (field: string) => {
+    const value = body[field];
+    if (typeof value !== "string") throw new HttpError(400, `${field} is required.`);
+    return value;
+  };
+  return {
+    serverId: text("serverId"),
+    token: text("token"),
+    secret: text("secret"),
+    locale: text("locale"),
+    away: body.away === true,
+  };
 }
 
 function registration(body: DynamicRecord): LiveActivityPushRegistration {

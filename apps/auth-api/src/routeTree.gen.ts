@@ -110,6 +110,7 @@ import { Route as V2HostingServersServerIdActivityRouteImport } from './routes/v
 import { Route as V2HostingServersServerIdCheckoutRouteImport } from './routes/v2/hosting/servers/$serverId/checkout'
 import { Route as V2HostingServersServerIdStatusRouteImport } from './routes/v2/hosting/servers/$serverId/status'
 import { Route as V2HostingServersServerIdWakeRouteImport } from './routes/v2/hosting/servers/$serverId/wake'
+import { Route as V2RemoteHostsHostIdAndroidLiveUpdateRouteImport } from './routes/v2/remote/hosts/$hostId/android-live-update'
 import { Route as V2RemoteHostsHostIdInvitesRouteImport } from './routes/v2/remote/hosts/$hostId/invites'
 import { Route as V2RemoteHostsHostIdLiveActivityRouteImport } from './routes/v2/remote/hosts/$hostId/live-activity'
 import { Route as V2RemoteHostsHostIdLogoRouteImport } from './routes/v2/remote/hosts/$hostId/logo'
@@ -654,6 +655,12 @@ const V2HostingServersServerIdWakeRoute =
     path: '/v2/hosting/servers/$serverId/wake',
     getParentRoute: () => rootRouteImport,
   } as any)
+const V2RemoteHostsHostIdAndroidLiveUpdateRoute =
+  V2RemoteHostsHostIdAndroidLiveUpdateRouteImport.update({
+    id: '/v2/remote/hosts/$hostId/android-live-update',
+    path: '/v2/remote/hosts/$hostId/android-live-update',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const V2RemoteHostsHostIdInvitesRoute =
   V2RemoteHostsHostIdInvitesRouteImport.update({
     id: '/v2/remote/hosts/$hostId/invites',
@@ -839,6 +846,7 @@ export interface FileRoutesByFullPath {
   '/v2/hosting/servers/$serverId/checkout': typeof V2HostingServersServerIdCheckoutRoute
   '/v2/hosting/servers/$serverId/status': typeof V2HostingServersServerIdStatusRoute
   '/v2/hosting/servers/$serverId/wake': typeof V2HostingServersServerIdWakeRoute
+  '/v2/remote/hosts/$hostId/android-live-update': typeof V2RemoteHostsHostIdAndroidLiveUpdateRoute
   '/v2/remote/hosts/$hostId/invites': typeof V2RemoteHostsHostIdInvitesRoute
   '/v2/remote/hosts/$hostId/live-activity': typeof V2RemoteHostsHostIdLiveActivityRoute
   '/v2/remote/hosts/$hostId/logo': typeof V2RemoteHostsHostIdLogoRoute
@@ -956,6 +964,7 @@ export interface FileRoutesByTo {
   '/v2/hosting/servers/$serverId/checkout': typeof V2HostingServersServerIdCheckoutRoute
   '/v2/hosting/servers/$serverId/status': typeof V2HostingServersServerIdStatusRoute
   '/v2/hosting/servers/$serverId/wake': typeof V2HostingServersServerIdWakeRoute
+  '/v2/remote/hosts/$hostId/android-live-update': typeof V2RemoteHostsHostIdAndroidLiveUpdateRoute
   '/v2/remote/hosts/$hostId/invites': typeof V2RemoteHostsHostIdInvitesRoute
   '/v2/remote/hosts/$hostId/live-activity': typeof V2RemoteHostsHostIdLiveActivityRoute
   '/v2/remote/hosts/$hostId/logo': typeof V2RemoteHostsHostIdLogoRoute
@@ -1074,6 +1083,7 @@ export interface FileRoutesById {
   '/v2/hosting/servers/$serverId/checkout': typeof V2HostingServersServerIdCheckoutRoute
   '/v2/hosting/servers/$serverId/status': typeof V2HostingServersServerIdStatusRoute
   '/v2/hosting/servers/$serverId/wake': typeof V2HostingServersServerIdWakeRoute
+  '/v2/remote/hosts/$hostId/android-live-update': typeof V2RemoteHostsHostIdAndroidLiveUpdateRoute
   '/v2/remote/hosts/$hostId/invites': typeof V2RemoteHostsHostIdInvitesRoute
   '/v2/remote/hosts/$hostId/live-activity': typeof V2RemoteHostsHostIdLiveActivityRoute
   '/v2/remote/hosts/$hostId/logo': typeof V2RemoteHostsHostIdLogoRoute
@@ -1193,6 +1203,7 @@ export interface FileRouteTypes {
     | '/v2/hosting/servers/$serverId/checkout'
     | '/v2/hosting/servers/$serverId/status'
     | '/v2/hosting/servers/$serverId/wake'
+    | '/v2/remote/hosts/$hostId/android-live-update'
     | '/v2/remote/hosts/$hostId/invites'
     | '/v2/remote/hosts/$hostId/live-activity'
     | '/v2/remote/hosts/$hostId/logo'
@@ -1310,6 +1321,7 @@ export interface FileRouteTypes {
     | '/v2/hosting/servers/$serverId/checkout'
     | '/v2/hosting/servers/$serverId/status'
     | '/v2/hosting/servers/$serverId/wake'
+    | '/v2/remote/hosts/$hostId/android-live-update'
     | '/v2/remote/hosts/$hostId/invites'
     | '/v2/remote/hosts/$hostId/live-activity'
     | '/v2/remote/hosts/$hostId/logo'
@@ -1427,6 +1439,7 @@ export interface FileRouteTypes {
     | '/v2/hosting/servers/$serverId/checkout'
     | '/v2/hosting/servers/$serverId/status'
     | '/v2/hosting/servers/$serverId/wake'
+    | '/v2/remote/hosts/$hostId/android-live-update'
     | '/v2/remote/hosts/$hostId/invites'
     | '/v2/remote/hosts/$hostId/live-activity'
     | '/v2/remote/hosts/$hostId/logo'
@@ -1531,6 +1544,7 @@ export interface RootRouteChildren {
   V2HostingServersServerIdCheckoutRoute: typeof V2HostingServersServerIdCheckoutRoute
   V2HostingServersServerIdStatusRoute: typeof V2HostingServersServerIdStatusRoute
   V2HostingServersServerIdWakeRoute: typeof V2HostingServersServerIdWakeRoute
+  V2RemoteHostsHostIdAndroidLiveUpdateRoute: typeof V2RemoteHostsHostIdAndroidLiveUpdateRoute
   V2RemoteHostsHostIdInvitesRoute: typeof V2RemoteHostsHostIdInvitesRoute
   V2RemoteHostsHostIdLiveActivityRoute: typeof V2RemoteHostsHostIdLiveActivityRoute
   V2RemoteHostsHostIdLogoRoute: typeof V2RemoteHostsHostIdLogoRoute
@@ -2255,6 +2269,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof V2HostingServersServerIdWakeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/v2/remote/hosts/$hostId/android-live-update': {
+      id: '/v2/remote/hosts/$hostId/android-live-update'
+      path: '/v2/remote/hosts/$hostId/android-live-update'
+      fullPath: '/v2/remote/hosts/$hostId/android-live-update'
+      preLoaderRoute: typeof V2RemoteHostsHostIdAndroidLiveUpdateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/v2/remote/hosts/$hostId/invites': {
       id: '/v2/remote/hosts/$hostId/invites'
       path: '/v2/remote/hosts/$hostId/invites'
@@ -2571,6 +2592,8 @@ const rootRouteChildren: RootRouteChildren = {
   V2HostingServersServerIdCheckoutRoute: V2HostingServersServerIdCheckoutRoute,
   V2HostingServersServerIdStatusRoute: V2HostingServersServerIdStatusRoute,
   V2HostingServersServerIdWakeRoute: V2HostingServersServerIdWakeRoute,
+  V2RemoteHostsHostIdAndroidLiveUpdateRoute:
+    V2RemoteHostsHostIdAndroidLiveUpdateRoute,
   V2RemoteHostsHostIdInvitesRoute: V2RemoteHostsHostIdInvitesRoute,
   V2RemoteHostsHostIdLiveActivityRoute: V2RemoteHostsHostIdLiveActivityRoute,
   V2RemoteHostsHostIdLogoRoute: V2RemoteHostsHostIdLogoRoute,

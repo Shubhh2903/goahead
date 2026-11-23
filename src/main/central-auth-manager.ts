@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import type { AndroidLiveUpdateRelayPush } from "@openbot/contracts/android-live-update-relay";
 import { parseHostedServerClaim } from "@openbot/contracts/hosted-servers";
 import type {
   AvatarImageInput,
@@ -418,6 +419,31 @@ export class CentralAuthManager extends EventEmitter<CentralAuthEvents> {
     try {
       await this.#request(
         `/v2/remote/hosts/${encodeURIComponent(hostId)}/live-activity`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ machineToken, ...push }),
+        },
+        () => undefined,
+      );
+      return "sent";
+    } catch (error) {
+      if (error instanceof AuthApiError && error.status === 410) return "gone";
+      throw error;
+    }
+  }
+
+  /**
+   * Sends one Android live update through the account service to Firebase Cloud Messaging. The host
+   * sealed the content with keys that only the phone has, so the service forwards bytes it cannot
+   * read. Returns `gone` when FCM refused the token.
+   */
+  async sendAndroidLiveUpdatePush(hostId: string, push: AndroidLiveUpdateRelayPush): Promise<"sent" | "gone"> {
+    const machineToken = this.#teamHostTokens.get(hostId.toLowerCase());
+    if (!machineToken) throw new Error(sourceText("error.auth.hostCredentialUnavailable"));
+    try {
+      await this.#request(
+        `/v2/remote/hosts/${encodeURIComponent(hostId)}/android-live-update`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

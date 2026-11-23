@@ -1713,6 +1713,20 @@ library, so the phone composes its layout with the two widget keys and the App G
 state carry an HMAC signature, which the app checks with the key of the host that the action goes
 to, so one host cannot sign an action for another.
 
+### Android live update
+
+Android has no Live Activity, so `agent-live-activity.android.tsx` gives the same interface with one
+ongoing notification (`model/android-live-update.ts`), and its push token is the phone's FCM token.
+The phone registers with `android-live-update-push-v1` (`POST /v1/android-live-update/registration`):
+the same fields without the APNs environment and the pictures. `LiveActivityPushService` keeps both
+kinds of registration and builds the same sealed props. For Android it sends them to
+`POST /v2/remote/hosts/:hostId/android-live-update`, where the Worker signs in with the Firebase
+service account and sends a data-only FCM message, with `high` priority for a change of state and
+`normal` inside one state. On the phone, `android-live-update-task.ts`, which `index.ts` loads before
+the router, opens the message with the keys of the active host from secure storage and updates the
+notification. It ignores an update older than the shown content. Without `google-services.json` in
+the build, the phone has no FCM token and registers nothing.
+
 ## Shared channel chats
 
 Channels are separate from sidebar sections. A channel has one host, a purpose, participating agents,
