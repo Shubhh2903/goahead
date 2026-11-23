@@ -1368,11 +1368,9 @@ export class MessagingService {
     for (const message of prompted)
       if (message.authorId !== user.id && !people.has(message.authorId))
         people.set(message.authorId, message.authorName);
-    // The map is for delegation. A continued context has it already, and a Claude reply context has
-    // no tool to delegate with.
-    const lean =
-      replyContext !== null && this.#agents.listAgents().find((a) => a.id === agentId)?.provider === "claude";
-    const projectMap = cursor === null && !lean ? (this.#agents.projectMap?.() ?? null) : null;
+    // The map is for delegation. A continued context has it already, and a reply context has no tool
+    // to delegate with: the tool router refuses every tool but the Slack send tool there.
+    const projectMap = cursor === null && replyContext === null ? (this.#agents.projectMap?.() ?? null) : null;
     const text = [
       `${ask.lead} in ${live.record.workspaceName}: ${where} (conversation ${ask.conversation}${ask.threadKey ? `, thread ${ask.threadKey}` : ""}).`,
       kind === "channel" ? `Channel ID: ${ask.conversation}.` : "",

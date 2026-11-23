@@ -88,6 +88,9 @@ import { LOCAL_SKILL_TOOL_DEFINITIONS, type LocalSkillTools, runLocalSkillTool }
 import { isDynamicToolCall } from "./thread-items";
 import type { AgentBrowserHost } from "./turn-lifecycle";
 
+const SLACK_REPLY_REFUSAL =
+  "A Slack auto-reply can only send its reply with openbot.slack_send_message. Say in the reply that the user will follow up.";
+
 const logger = createOpenBotLogger("openbot-tool-router");
 
 export interface OpenBotToolRouterHooks {
@@ -244,6 +247,10 @@ export class OpenBotToolRouter {
           return;
         case "item/tool/call": {
           if (!isDynamicToolCall(request.params)) throw new Error("Invalid dynamic tool request.");
+          if (this.#slackReplyRefuses(request.params)) {
+            client.respond(request.id, openBotToolFailure(SLACK_REPLY_REFUSAL));
+            return;
+          }
           if (request.params.namespace === OPENBOT_BROWSER_NAMESPACE) {
             const agentId = this.#conversation.agentForThread(request.params.threadId);
             if (!agentId) throw new Error("The browsing GoAhead agent is unknown.");
@@ -530,6 +537,19 @@ export class OpenBotToolRouter {
       if (error instanceof ChatVisualPreviewFailed) return openBotToolFailure(error.reason);
       throw error;
     }
+  }
+
+  /**
+   * True when a Slack reply context calls a tool other than the Slack send tool. Other people's Slack
+   * text drives that session, so it cannot browse, delegate, change memories or reach any other
+   * OpenBot tool. Claude and Codex start such a session with only the send tool; this check also
+   * holds for an older session and for the other providers.
+   */
+  #slackReplyRefuses(params: DynamicToolCallParams): boolean {
+    if (params.namespace === "openbot" && params.tool === SLACK_SEND_MESSAGE_TOOL.name) return false;
+    const agentId = this.#conversation.agentForThread(params.threadId);
+    if (!agentId) return false;
+    return this.#messaging.isReplyContextThread(this.#conversation.publicThreadId(agentId, params.threadId));
   }
 
   async #handleOpenBotTool(params: DynamicToolCallParams): Promise<OpenBotToolResponse | DynamicToolResult> {

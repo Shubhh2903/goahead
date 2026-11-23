@@ -33,6 +33,7 @@ export function workspaceWritableRoots(
 
 export type CodexSandboxPolicy =
   | { type: "dangerFullAccess" }
+  | { type: "readOnly"; networkAccess: false }
   | {
       type: "workspaceWrite";
       writableRoots: string[];

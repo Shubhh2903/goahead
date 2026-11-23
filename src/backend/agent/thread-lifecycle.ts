@@ -31,6 +31,7 @@ import {
   NO_MCP_TOOL_RUNTIMES,
   usableMcpServers,
 } from "../mcp-provider-shapes";
+import { SLACK_SEND_MESSAGE_TOOL } from "../messaging/messaging-send-tool";
 import { OPENBOT_DYNAMIC_TOOLS } from "../openbot-tools";
 import { decodeRecordResponse, decodeThreadResponse, getString, type ResponseDecoder } from "../protocol";
 import { withTimeout } from "../with-timeout";
@@ -43,7 +44,13 @@ import { readHandoffHistory } from "./handoff-history";
 import { decodeCapturedSteps, readCapturedSteps } from "./handoff-tool-steps";
 import { existingProjectFolders } from "./project-folders";
 import { isArchivedThreadError, isMissingProviderSessionError } from "./thread-items";
-import { codexSandboxConfig, codexSandboxMode, workspaceWritableRoots } from "./workspace-sandbox";
+import {
+  type CodexSandboxPolicy,
+  codexSandboxConfig,
+  codexSandboxMode,
+  codexSandboxPolicy,
+  workspaceWritableRoots,
+} from "./workspace-sandbox";
 
 /**
  * What the Codex adapter sends, versioned. Codex ignores MCP configuration on resume, so a
@@ -62,6 +69,38 @@ const CODEX_MCP_ADAPTER_VERSION = 6;
  * `turn/plan/updated`, so the conversation shows no task list.
  */
 const CODEX_TOOLS_CONFIG = { update_plan: { enabled: true } } as const;
+
+/**
+ * The Codex built-in tools that a Slack reply context turns off. Other people's Slack text drives
+ * the session, so it gets no shell, web search, images, goals, subagents, apps, plugins, browser
+ * or Computer Use. Codex 0.160.1 keeps `apply_patch` and `request_user_input` whatever the config
+ * says: the read-only sandbox with no approvals refuses every write, and the question goes to the
+ * GoAhead user.
+ */
+const CODEX_SLACK_REPLY_CONFIG = {
+  features: {
+    shell_tool: false,
+    unified_exec: false,
+    view_image: false,
+    image_generation: false,
+    goals: false,
+    multi_agent: false,
+    apps: false,
+    plugins: false,
+    browser_use: false,
+    computer_use: false,
+    skill_search: false,
+    tool_suggest: false,
+    sleep_tool: false,
+  },
+  web_search: "disabled",
+} as const;
+
+/** The only OpenBot tool of a Slack reply context: send the reply, as on Claude. */
+const SLACK_REPLY_DYNAMIC_TOOLS = {
+  ...OPENBOT_DYNAMIC_TOOLS,
+  tools: OPENBOT_DYNAMIC_TOOLS.tools.filter((tool) => tool.name === SLACK_SEND_MESSAGE_TOOL.name),
+};
 
 // A handoff can follow an edit of the profile. The earlier replies then show the old standing
 // remit, and without this line the model copies them instead of following the new one.
@@ -178,14 +217,26 @@ export class ThreadLifecycle {
     this.#slackReplyThread = options.slackReplyThread ?? (() => false);
   }
 
-  /** True when a session of this thread uses the Slack reply profile. Only Claude has the profile. */
+  /**
+   * True when a session of this thread uses the Slack reply profile: its instructions and only the
+   * Slack send tool. Claude and Codex have the profile.
+   */
   #isSlackReply(agent: AgentSummary, publicThreadId: string | undefined): boolean {
-    return publicThreadId !== undefined && agent.provider === "claude" && this.#slackReplyThread(publicThreadId);
+    return (
+      publicThreadId !== undefined &&
+      (agent.provider === "claude" || agent.provider === "codex") &&
+      this.#slackReplyThread(publicThreadId)
+    );
   }
 
-  /** The agent as a session of this thread sees it: a Slack reply context gets the lean model. */
+  /** A Codex session with the Slack reply profile: its tools and sandbox are set at start. */
+  #isCodexSlackReply(agent: AgentSummary, publicThreadId: string | undefined): boolean {
+    return agent.provider === "codex" && this.#isSlackReply(agent, publicThreadId);
+  }
+
+  /** The agent as a session of this thread sees it: a Slack reply context on Claude gets the lean model. */
   #profiled(agent: AgentSummary, publicThreadId: string | undefined): AgentSummary {
-    return this.#isSlackReply(agent, publicThreadId)
+    return agent.provider === "claude" && this.#isSlackReply(agent, publicThreadId)
       ? { ...agent, model: SLACK_REPLY_MODEL, reasoningEffort: SLACK_REPLY_EFFORT }
       : agent;
   }
@@ -320,7 +371,7 @@ export class ThreadLifecycle {
       // instructions take the same path, for the reason given at `toolFingerprint`.
       if (
         client.provider === "codex" &&
-        !(await this.hasCurrentTools(currentAgent, client, session.externalSessionId))
+        !(await this.hasCurrentTools(currentAgent, client, session.externalSessionId, publicThreadId))
       ) {
         const replacement = await this.startProviderThread(currentAgent, client, publicThreadId);
         // The client is named here: a profile edit has already dropped the loaded entry, and the
@@ -381,7 +432,8 @@ export class ThreadLifecycle {
     // One reading of the MCP set for the request and for the manifest below. Read twice, a change
     // that lands while the provider answers would be recorded as what this session was given, and
     // `hasCurrentTools` would then accept a session that never got it.
-    const mcpServers = this.#agentMcpServers(agent);
+    const slackReply = this.#isCodexSlackReply(agent, publicThreadId);
+    const mcpServers = slackReply ? [] : this.#agentMcpServers(agent);
     // The runtimes join that single reading for the same reason: a download that finishes while
     // the provider answers must not be recorded as what resolved this session's servers.
     const toolRuntimes = this.#toolRuntimes();
@@ -393,19 +445,18 @@ export class ThreadLifecycle {
     const response = await client.request(
       "thread/start",
       {
-        ...(await this.codexConfig(agent, client, mcpServers, disabled, toolRuntimes, environment)),
+        ...(await this.codexConfig(agent, client, mcpServers, disabled, toolRuntimes, environment, slackReply)),
         model: agent.model,
         effort: agent.reasoningEffort,
         cwd: agent.workspacePath,
         runtimeWorkspaceRoots: workspaceWritableRoots(agent, this.#store.sharedRoot),
-        approvalPolicy: "on-request",
-        sandbox: codexSandboxMode(agent),
+        ...this.#codexAccess(agent, slackReply),
         ...this.#workspaceOnlyParam(agent, client),
         ...this.#computerUseParam(agent, client),
         ...this.#sessionProfile(agent, publicThreadId),
         ephemeral: false,
         serviceName: "openbot",
-        dynamicTools: [...BROWSER_DYNAMIC_TOOLS, OPENBOT_DYNAMIC_TOOLS],
+        dynamicTools: slackReply ? [SLACK_REPLY_DYNAMIC_TOOLS] : [...BROWSER_DYNAMIC_TOOLS, OPENBOT_DYNAMIC_TOOLS],
       },
       decodeThreadResponse,
     );
@@ -415,7 +466,7 @@ export class ThreadLifecycle {
         await mkdir(this.toolManifestDirectory(), { recursive: true, mode: 0o700 });
         await writeFile(
           this.toolManifestPath(externalThreadId),
-          this.toolFingerprint(agent, mcpServers, disabled, toolRuntimes, environment),
+          this.toolFingerprint(agent, mcpServers, disabled, toolRuntimes, environment, slackReply),
           {
             mode: 0o600,
           },
@@ -494,12 +545,14 @@ export class ThreadLifecycle {
     disabled: Record<string, CodexDisabledMcpServer>,
     toolRuntimes: McpToolRuntimes,
     environment: Readonly<Record<string, string>>,
+    slackReply = false,
   ): Promise<{
     config?: {
       mcp_servers?: Record<string, CodexMcpServer | CodexDisabledMcpServer>;
       tools: typeof CODEX_TOOLS_CONFIG;
       [variable: `shell_environment_policy.set.${string}`]: string;
-    } & ReturnType<typeof codexSandboxConfig>;
+    } & ReturnType<typeof codexSandboxConfig> &
+      Partial<typeof CODEX_SLACK_REPLY_CONFIG>;
   }> {
     if (client.provider !== "codex") return {};
     const { servers, dropped } = codexMcpServers(await usableMcpServers(configs, toolRuntimes, this.#mcpAuthorization));
@@ -509,7 +562,7 @@ export class ThreadLifecycle {
       config: {
         ...(Object.keys(mcpServers).length > 0 ? { mcp_servers: mcpServers } : {}),
         tools: CODEX_TOOLS_CONFIG,
-        ...codexSandboxConfig(agent, this.#store.sharedRoot),
+        ...(slackReply ? CODEX_SLACK_REPLY_CONFIG : codexSandboxConfig(agent, this.#store.sharedRoot)),
         ...Object.fromEntries(
           Object.entries(environment).map(([name, value]) => [`shell_environment_policy.set.${name}`, value]),
         ),
@@ -566,11 +619,14 @@ export class ThreadLifecycle {
     disabled: Record<string, CodexDisabledMcpServer>,
     toolRuntimes: McpToolRuntimes,
     environment: Readonly<Record<string, string>>,
+    slackReply = false,
   ): string {
     return createHash("sha256")
       .update(
         JSON.stringify([
-          [...BROWSER_DYNAMIC_TOOLS, OPENBOT_DYNAMIC_TOOLS],
+          slackReply
+            ? [SLACK_REPLY_DYNAMIC_TOOLS, CODEX_SLACK_REPLY_CONFIG]
+            : [...BROWSER_DYNAMIC_TOOLS, OPENBOT_DYNAMIC_TOOLS],
           mcpFingerprintValues(configs),
           Object.keys(disabled).sort(),
           [toolRuntimes.binDirectories, toolRuntimes.commandAliases],
@@ -627,17 +683,24 @@ export class ThreadLifecycle {
     };
   }
 
-  private async hasCurrentTools(agent: AgentSummary, client: AgentClient, sessionId: string): Promise<boolean> {
+  private async hasCurrentTools(
+    agent: AgentSummary,
+    client: AgentClient,
+    sessionId: string,
+    publicThreadId: string,
+  ): Promise<boolean> {
+    const slackReply = this.#isCodexSlackReply(agent, publicThreadId);
     try {
       const stored = await readFile(this.toolManifestPath(sessionId), "utf8");
       return (
         stored ===
         this.toolFingerprint(
           agent,
-          this.#agentMcpServers(agent),
+          slackReply ? [] : this.#agentMcpServers(agent),
           await this.codexOwnServers(client),
           this.#toolRuntimes(),
           this.#agentEnvironment(),
+          slackReply,
         )
       );
     } catch (error) {
@@ -657,7 +720,8 @@ export class ThreadLifecycle {
     if (!this.#isSlackReply(agent, publicThreadId)) return { developerInstructions: this.#instructions(agent) };
     return {
       developerInstructions: slackReplyInstructions(agent, this.#memories.essentialFor(agent.id)),
-      toolProfile: SLACK_REPLY_TOOL_PROFILE,
+      // Codex gets its lean tools at start, from `#startProviderThread`.
+      ...(agent.provider === "claude" ? { toolProfile: SLACK_REPLY_TOOL_PROFILE } : {}),
     };
   }
 
@@ -687,14 +751,14 @@ export class ThreadLifecycle {
     externalThreadId: string,
     executionThreadId?: string,
   ): Promise<DynamicRecord> {
+    const slackReply = this.#isCodexSlackReply(agent, executionThreadId);
     return {
       threadId: externalThreadId,
       model: agent.model,
       effort: agent.reasoningEffort,
       cwd: agent.workspacePath,
       runtimeWorkspaceRoots: workspaceWritableRoots(agent, this.#store.sharedRoot),
-      approvalPolicy: "on-request",
-      sandbox: codexSandboxMode(agent),
+      ...this.#codexAccess(agent, slackReply),
       ...this.#workspaceOnlyParam(agent, client),
       ...this.#computerUseParam(agent, client),
       ...this.#sessionProfile(agent, executionThreadId),
@@ -702,12 +766,39 @@ export class ThreadLifecycle {
       ...(await this.codexConfig(
         agent,
         client,
-        this.#agentMcpServers(agent),
+        slackReply ? [] : this.#agentMcpServers(agent),
         await this.codexOwnServers(client),
         this.#toolRuntimes(),
         this.#agentEnvironment(),
+        slackReply,
       )),
     };
+  }
+
+  /**
+   * The approval and sandbox policy of a Codex turn. Codex keeps what a turn sends for the turns
+   * after, so a Slack reply context sends its read-only policy with each turn as well.
+   */
+  turnAccess(
+    agent: AgentSummary,
+    publicThreadId: string | undefined,
+  ): { approvalPolicy: "never" | "on-request"; sandboxPolicy: CodexSandboxPolicy } {
+    return this.#isCodexSlackReply(agent, publicThreadId)
+      ? { approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: false } }
+      : { approvalPolicy: "on-request", sandboxPolicy: codexSandboxPolicy(agent, this.#store.sharedRoot) };
+  }
+
+  /**
+   * The sandbox and approval policy of a session. A Codex Slack reply context reads only, and with no
+   * approvals Codex refuses a write at once instead of asking the GoAhead user.
+   */
+  #codexAccess(
+    agent: AgentSummary,
+    slackReply: boolean,
+  ): { approvalPolicy: "never" | "on-request"; sandbox: "read-only" | ReturnType<typeof codexSandboxMode> } {
+    return slackReply
+      ? { approvalPolicy: "never", sandbox: "read-only" }
+      : { approvalPolicy: "on-request", sandbox: codexSandboxMode(agent) };
   }
 
   async resumeThread(
