@@ -295,7 +295,9 @@ not check the override files, so they stay as upstream wrote them and match thei
 On macOS the runtime build also compiles Sunshine against Homebrew's `openssl@3`, because the pinned
 Sunshine does not build with OpenSSL 4, which Homebrew now links by default. `macOpenSslOptions` in
 `scripts/build-remote-desktop-runtime.ts` sets `OPENSSL_ROOT_DIR` and puts the OpenSSL 3 headers
-ahead of `/opt/homebrew/include`. The build stops with a clear error when `openssl@3` is missing.
+ahead of `/opt/homebrew/include` through `CMAKE_PROJECT_INCLUDE`, so the security test build, whose
+`tests/CMakeLists.txt` sets its own compiler flags, uses them too. The build stops with a clear error
+when `openssl@3` is missing.
 
 ## Pin the Gemini server
 

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync, existsSync, mkdirSync, symlinkSync } from "node:fs";
+import { accessSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -289,7 +289,9 @@ function requiredSunshineSubmodules(targetPlatform: "darwin" | "win32" | "linux"
  * headers need more: another library adds `-isystem /opt/homebrew/include`, which holds the linked
  * OpenSSL 4 headers. A `-I` folder comes before every `-isystem` folder, but clang drops a `-I` that
  * names the same folder as an `-isystem`, and CMake adds OpenSSL 3's own include folder that way. So
- * a separate folder holds only an `openssl` link to the OpenSSL 3 headers.
+ * a separate folder holds only an `openssl` link to the OpenSSL 3 headers. It is added through
+ * `CMAKE_PROJECT_INCLUDE` as a directory include, not through `CMAKE_CXX_FLAGS`: Sunshine's
+ * `tests/CMakeLists.txt` sets those flags itself, which dropped the folder from the test build.
  */
 function macOpenSslOptions(build: string): string[] {
   const prefix = ["/opt/homebrew/opt/openssl@3", "/usr/local/opt/openssl@3"].find((candidate) =>
@@ -300,14 +302,9 @@ function macOpenSslOptions(build: string): string[] {
   mkdirSync(includes, { recursive: true });
   if (!existsSync(join(includes, "openssl")))
     symlinkSync(join(prefix, "include", "openssl"), join(includes, "openssl"));
-  const flag = `-I${includes}`;
-  return [
-    `-DOPENSSL_ROOT_DIR=${prefix}`,
-    `-DCMAKE_C_FLAGS=${flag}`,
-    `-DCMAKE_CXX_FLAGS=${flag}`,
-    `-DCMAKE_OBJC_FLAGS=${flag}`,
-    `-DCMAKE_OBJCXX_FLAGS=${flag}`,
-  ];
+  const projectInclude = join(build, "openssl3-include.cmake");
+  writeFileSync(projectInclude, `include_directories(BEFORE "${includes}")\n`);
+  return [`-DOPENSSL_ROOT_DIR=${prefix}`, `-DCMAKE_PROJECT_INCLUDE=${projectInclude}`];
 }
 
 function buildSunshine(source: string, version: string, commit: string): void {
