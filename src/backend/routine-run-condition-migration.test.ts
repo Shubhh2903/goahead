@@ -111,6 +111,32 @@ describe("routine run condition migration", () => {
     }
   });
 
+  it("leaves no column and no changed row behind when the migration fails, and succeeds on retry", () => {
+    const db = databaseAt(36);
+    const tables = seedRoutines(db, 36);
+    const before = rows(db, tables);
+    db.exec(`CREATE TEMP TRIGGER fail_v37 BEFORE INSERT ON schema_migrations WHEN new.version = 37
+      BEGIN SELECT RAISE(ABORT, 'injected failure'); END;`);
+    expect(() => migrateOpenBotDatabase(db)).toThrow("migration to version 37 failed");
+    // Rolled back: the columns and the version marker are gone, and every row is as it was.
+    for (const table of ["projection_agent_routines", "projection_channel_routines"]) {
+      const names = db
+        .prepare(`PRAGMA table_info(${table})`)
+        .all()
+        .map((column) => column.name);
+      expect(names).not.toContain("run_condition");
+      expect(names).not.toContain("run_condition_fingerprint");
+    }
+    expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 36 });
+    expect(rows(db, tables)).toEqual(before);
+    expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+
+    db.exec("DROP TRIGGER fail_v37");
+    migrateOpenBotDatabase(db);
+    expect(rows(db, tables)).toEqual(upgraded(before));
+    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  });
+
   it("stores only a run condition that is JSON", () => {
     const db = databaseAt(36);
     const tables = seedRoutines(db, 36);
