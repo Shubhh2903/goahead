@@ -10,6 +10,7 @@ import { AGENT_MEMORIES_CODECS } from "./agent-memories-v1";
 import { AGENT_PUBLISH_CODECS } from "./agent-publish-v1";
 import { AGENT_UPDATE_CODECS } from "./agent-update-v1";
 import { ANDROID_LIVE_UPDATE_PUSH_CODECS } from "./android-live-update-push-v1";
+import { CHAT_FOLDERS_CODECS } from "./chat-folders-v1";
 import { CONTEXT_RESET_CODECS } from "./context-reset-v1";
 import { HOST_ADMIN_CODECS } from "./host-admin-v1";
 import { HOST_UPDATE_CODECS } from "./host-update-v1";
@@ -44,6 +45,7 @@ const CODECS: ReadonlyMap<string, OptionalRouteCodec> = new Map([
   ...LIVE_ACTIVITY_PUSH_CODECS,
   ...ANDROID_LIVE_UPDATE_PUSH_CODECS,
   ...HOSTED_SITES_CODECS,
+  ...CHAT_FOLDERS_CODECS,
 ]);
 
 export function optionalRouteCodec(path: string): OptionalRouteCodec | undefined {

@@ -10,8 +10,11 @@ import {
 } from "../apps/mobile/src/features/chat/model/chat-messages";
 import {
   answeredPromptResolution,
+  answerWithText,
   nextUnansweredQuestion,
+  orderedPicks,
   promptAnswerLabel,
+  toggledPicks,
 } from "../apps/mobile/src/features/chat/model/question-prompt";
 import { conversationMessageId, decodeConversation } from "../apps/mobile/src/features/workspace/model/conversation";
 
@@ -237,5 +240,37 @@ describe("mobile question forms", () => {
     expect(promptAnswerLabel(questions[2], resolution, mobileTranslateFor("en"))).toBe("Skipped");
     expect(answeredPromptResolution(questions, {})).toEqual({ status: "cancelled" });
     expect(answers.token).toEqual(["private-value"]);
+  });
+
+  it("sends the toggled options of a multi-select question in option order, with a typed reply last", () => {
+    const question: AgentPromptQuestion = {
+      id: "colors",
+      header: "Colors",
+      question: "Which colors?",
+      isSecret: false,
+      multiSelect: true,
+      options: [
+        { label: "Red", description: "" },
+        { label: "Green", description: "" },
+        { label: "Blue", description: "" },
+      ],
+    };
+    let picks = toggledPicks(undefined, "Blue");
+    picks = toggledPicks(picks, "Red");
+    picks = toggledPicks(picks, "Green");
+    picks = toggledPicks(picks, "Green");
+    const picked = orderedPicks(question, picks);
+    expect(picked).toEqual(["Red", "Blue"]);
+    const answers = { [question.id]: answerWithText(picked, "Teal") };
+    expect(answers).toEqual({ colors: ["Red", "Blue", "Teal"] });
+    expect(answeredPromptResolution([question], answers)).toEqual({
+      status: "answered",
+      responses: { colors: { status: "answered", answers: ["Red", "Blue", "Teal"] } },
+    });
+  });
+
+  it("treats a question from an older host, which has no multiSelect flag, as a single choice", () => {
+    const [place] = questions;
+    expect(orderedPicks(place, ["Garden"])).toEqual([]);
   });
 });

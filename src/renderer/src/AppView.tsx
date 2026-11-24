@@ -92,7 +92,8 @@ export function AppAccessGate() {
                           setup.setupState() ?? { completed: false, preferredProvider: null, preferredModel: null }
                         }
                         platform={platform.appInfo()?.platform ?? "darwin"}
-                        onSave={setup.saveSetup}
+                        onSave={setup.saveFirstRunSetup}
+                        onSkipSetup={setup.skipFirstRunSetup}
                         onProviderStepShown={detection.scanOnce}
                         soundFeedback={soundFeedback}
                       />

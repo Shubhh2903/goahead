@@ -1,7 +1,7 @@
 /**
- * One section - the unassigned one included. A custom section stays visible while empty so it can
- * be dropped into, but only when nothing is being searched for: during a search an empty section is
- * noise, not a target.
+ * One section - the unassigned one included. A custom section is a folder. It stays visible while
+ * empty so it can be dropped into, but not during a search or a filter: then an empty folder is noise,
+ * not a target. A folder hides while a folder that holds it is collapsed.
  *
  * The unassigned section keeps its heading only once a custom section exists. Before that it is the
  * whole list, and "Unassigned" names it against nothing.
@@ -20,21 +20,27 @@ export function SidebarAgentSection(sectionProps: { sectionId: string }) {
     customSectionById,
     dragOffset,
     filteredChatsBySection,
-    normalizedQuery,
     props,
     sectionDragClasses,
     sectionIsCollapsed,
+    sectionIsVisible,
+    sectionLabel,
   } = useSidebarScope();
   const { t } = useText();
   const sectionId = () => sectionProps.sectionId;
   const chats = () => filteredChatsBySection().get(sectionId()) ?? [];
   const custom = () => customSectionById().get(sectionId());
+  // A folder in a folder shows its path, "Parent / Name", so the list stays flat for dragging.
   const name = () =>
-    sectionId() === SIDEBAR_UNASSIGNED_SECTION_ID ? t("sidebar.section.unassigned") : (custom()?.name ?? "");
+    sectionId() === SIDEBAR_UNASSIGNED_SECTION_ID
+      ? t("sidebar.section.unassigned")
+      : custom()
+        ? sectionLabel(sectionId())
+        : "";
   const headed = () => Boolean(custom()) || props.layout.sections.length > 0;
   const collapsed = () => headed() && sectionIsCollapsed(sectionId());
   return (
-    <Show when={name() && (chats().length > 0 || (custom() && !normalizedQuery()))}>
+    <Show when={name() && sectionIsVisible(sectionId())}>
       <section
         class={["sidebar-chat-group sidebar-section", sectionDragClasses(sectionId())]}
         style={`--sidebar-drag-y: ${dragOffset(sectionId()).y}px;`}

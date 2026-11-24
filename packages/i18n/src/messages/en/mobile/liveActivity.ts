@@ -19,6 +19,7 @@ export const messages = defineMessages("mobile.liveActivity", {
   "mobile.liveActivity.button.decline": "Decline",
   "mobile.liveActivity.button.approve": "Approve",
   "mobile.liveActivity.button.openDetails": "Open details",
+  "mobile.liveActivity.button.open": "Open",
   "mobile.liveActivity.stale.label": "Not current",
   "mobile.liveActivity.stale.detail": "Open GoAhead to see the current state.",
   "mobile.liveActivity.confirm.title": "Approve this command?",

@@ -155,6 +155,10 @@ export class FakeAgentClient extends EventEmitter implements AgentClient {
    * treats as "no entry of its own".
    */
   configRead: unknown;
+  /** What `turn/interrupt` answers. Claude answers `{ turnActive: false }` for a turn it does not run. */
+  interruptResult: unknown = {};
+  /** False drops `turn/started`, as for a turn whose provider events were lost. */
+  announcesTurns = true;
 
   constructor(
     readonly provider: AgentProvider,
@@ -252,7 +256,8 @@ export class FakeAgentClient extends EventEmitter implements AgentClient {
     if (method === "thread/read") {
       result = this.threadRead?.(params) ?? { thread: { id: stringParam(params, "threadId"), turns: [] } };
     }
-    if (method === "thread/compact/start" || method === "turn/interrupt") result = {};
+    if (method === "thread/compact/start") result = {};
+    if (method === "turn/interrupt") result = this.interruptResult;
     if (method === "turn/steer") {
       result = { turnId: stringParam(params, "expectedTurnId") };
     }
@@ -262,7 +267,7 @@ export class FakeAgentClient extends EventEmitter implements AgentClient {
       const itemId = `${turnId}:assistant`;
       const text = this.output;
       setTimeout(() => {
-        if (!this.running) return;
+        if (!this.running || !this.announcesTurns) return;
         this.emit("notification", notification("turn/started", { threadId, turn: { id: turnId } }));
         if (!this.autoComplete) return;
         this.emit(

@@ -104,10 +104,15 @@ const Updates = createSimpleContext({
       setStatus(await updatesPort().update.cancelIdleRestart());
     }
 
+    /** Restarts at once, without the wait for idle agents. Only the user's explicit choice calls it. */
+    async function restartNow(): Promise<void> {
+      setStatus(await updatesPort().update.restartNow());
+    }
+
     createIdleRestartToast({ status, cancel: cancelIdleRestart });
     createAppUpdateToast({ status, act: runAction });
 
-    return { status, runAction, cancelScheduledRestart, restartWhenIdle, cancelIdleRestart };
+    return { status, runAction, cancelScheduledRestart, restartWhenIdle, cancelIdleRestart, restartNow };
   },
 });
 

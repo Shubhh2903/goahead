@@ -402,6 +402,11 @@ export class ProviderRuntime implements ProviderPort {
   /** Counts `dispose()` calls, so a start from before one cannot add its client after it. */
   #disposals = 0;
   #models = structuredClone(FALLBACK_MODELS);
+  /**
+   * The providers whose models in `#models` their CLI listed, and whose last list read did not fail.
+   * The others hold `FALLBACK_MODELS` or a list kept after a failed read, which the CLI may not serve.
+   */
+  readonly #listedCatalogs = new Set<AgentProvider>();
 
   constructor(options: {
     conversation: ConversationRuntime;
@@ -600,6 +605,11 @@ export class ProviderRuntime implements ProviderPort {
 
   listModels(): AgentModelOption[] {
     return structuredClone(this.#models);
+  }
+
+  /** Whether the provider's own CLI listed its models now in the catalogue, at its last read. */
+  hasListedCatalog(provider: AgentProvider): boolean {
+    return this.#listedCatalogs.has(provider);
   }
 
   createProfileClient(provider: AgentProvider): AgentClient {
@@ -2339,7 +2349,9 @@ export class ProviderRuntime implements ProviderPort {
     const errorSerialAtStart = this.#errorSerial;
     const discovered = await Promise.all(
       BUILT_IN_PROVIDER_DRIVERS.map(
-        async ({ id: provider }): Promise<{ provider: AgentProvider; models: AgentModelOption[]; fresh: boolean }> => {
+        async ({
+          id: provider,
+        }): Promise<{ provider: AgentProvider; models: AgentModelOption[]; fresh: boolean; unread?: true }> => {
           const previous = this.#models.filter((model) => model.provider === provider);
           const client = this.#clients.get(provider);
           const signedOut = this.#status.providers?.some(
@@ -2349,7 +2361,8 @@ export class ProviderRuntime implements ProviderPort {
           // in the map has an account: activation refreshes the catalog before it marks the
           // provider available, so the old status alone does not mean signed out.
           if (provider === "opencode" && signedOut && !client) return { provider, models: [], fresh: false };
-          if (!client) return { provider, models: previous, fresh: false };
+          // Not read at all: the list stays what it was, and so does where it came from.
+          if (!client) return { provider, models: previous, fresh: false, unread: true };
           // Read once per pass, not per model: a stored key cannot change inside one refresh, and
           // a model is unusable only because OpenBot is what put that key in the environment.
           const hasStoredKey = Boolean(this.#credentials.apiKey(provider));
@@ -2474,6 +2487,10 @@ export class ProviderRuntime implements ProviderPort {
       ),
     );
     this.#models = discovered.flatMap((entry) => entry.models);
+    for (const entry of discovered) {
+      if (entry.fresh) this.#listedCatalogs.add(entry.provider);
+      else if (!entry.unread) this.#listedCatalogs.delete(entry.provider);
+    }
     const fresh = new Set(discovered.filter((entry) => entry.fresh).map((entry) => entry.provider));
     let cleared = false;
     for (const provider of fresh) {

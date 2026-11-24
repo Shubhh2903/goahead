@@ -283,7 +283,8 @@ export function agentIpcHandlers({
           if (
             input.compactWindow !== undefined ||
             input.disabledMcpServerIds !== undefined ||
-            input.weeklyTokenBudget !== undefined
+            input.weeklyTokenBudget !== undefined ||
+            input.autoModel !== undefined
           ) {
             throw new Error(sourceText("error.agent.tokenSettingsLocalOnly"));
           }

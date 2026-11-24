@@ -93,6 +93,7 @@ import { BrowserPictureInPicture } from "./browser-picture-in-picture";
 import { BrowserViewClient } from "./browser-view-client";
 import { BusyMessageModePreferenceStore } from "./busy-message-mode-preference-store";
 import { CentralAuthManager, readCentralAuthApiUrl, readMobileConnectApiUrl } from "./central-auth-manager";
+import { ChatBackdropStore } from "./chat-backdrop-store";
 import { ChatVisualPreviewer } from "./chat-visual-preview";
 import { ComputerUseHighlightController } from "./computer-use-highlight-window";
 import { applicationBundlePath, applicationIconName } from "./computer-use-permission-app";
@@ -186,6 +187,7 @@ import { ServerMode, type ServerModeEnvironment } from "./server-mode";
 import {
   configureApplicationProtocol,
   configureAttachmentProtocol,
+  configureBackdropProtocol,
   configureServerLogoProtocols,
 } from "./session-configuration";
 import { readSetupState } from "./setup-store";
@@ -399,6 +401,8 @@ export interface ApplicationServices {
   logoColor: LogoColorService;
   notificationPreference: NotificationPreferenceStore;
   busyMessageMode: BusyMessageModePreferenceStore;
+  /** The backdrop behind the window: the choice and the uploaded images and videos. */
+  chatBackdrops: ChatBackdropStore;
   agentMemoryLimit: AgentMemoryLimitPreferenceStore;
   agentInitialization: AgentInitializationGate;
   sidebarLayout: SidebarLayoutStore;
@@ -690,6 +694,8 @@ export async function createApplicationServices({
     join(app.getPath("userData"), BUSY_MESSAGE_MODE_PREFERENCE_FILE),
   );
   await busyMessageMode.load();
+  const chatBackdrops = new ChatBackdropStore(app.getPath("userData"));
+  await chatBackdrops.load();
   const agentMemoryLimit = new AgentMemoryLimitPreferenceStore(
     join(app.getPath("userData"), AGENT_MEMORY_LIMIT_PREFERENCE_FILE),
   );
@@ -730,6 +736,8 @@ export async function createApplicationServices({
       }
       await service.updateProviderCli(runtime, install);
     },
+    // Read when an automatic update would start, after `service` exists.
+    isProviderIdle: (provider) => !service.isProviderBusy(provider),
   });
   teardown.push(TEARDOWN_ORDER.providerRuntimes, "the provider runtimes", () => providerRuntimes.stop());
   // Before `new AgentService`, which reads every `executablePath` eagerly.
@@ -1714,6 +1722,7 @@ export async function createApplicationServices({
   }
   configureAttachmentProtocol({ mailbox, agents: service, remoteServers, slackInboxFiles: messaging });
   configureServerLogoProtocols({ teamStore, remoteServers });
+  configureBackdropProtocol(chatBackdrops);
   // After the servers: the view it opens belongs to one of them, and it has to stop before they do.
   const browserView = new BrowserViewClient({
     servers: remoteServers,
@@ -2021,6 +2030,7 @@ export async function createApplicationServices({
     logoColor,
     notificationPreference,
     busyMessageMode,
+    chatBackdrops,
     agentMemoryLimit,
     agentInitialization,
     hostUpdateCoordinator,

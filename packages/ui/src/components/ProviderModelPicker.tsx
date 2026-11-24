@@ -549,7 +549,8 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
                                 const target = status().id;
                                 if (action() === "Cancel") void props.onCancelProviderDownload?.(target);
                                 else if (action() === "Connect") void props.onConnectProvider?.(target);
-                                else void props.onDownloadProvider?.(target);
+                                // The runtime status and the update notification show a failure.
+                                else void Promise.resolve(props.onDownloadProvider?.(target)).catch(() => undefined);
                               }}
                             >
                               {t(RUNTIME_ACTION_LABEL[action()])}

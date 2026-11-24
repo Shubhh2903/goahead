@@ -1,5 +1,6 @@
 import { normalizeSidebarPinnedItems, reownSidebarPinnedItems } from "@openbot/ui/features/sidebar/sidebar-pins";
 import { describe, expect, it, vi } from "vitest";
+import { readSidebarChatOrder, writeSidebarChatOrder } from "./sidebar-chat-order-storage";
 import {
   normalizeSidebarPeopleOrder,
   readSidebarPeopleOrder,
@@ -183,5 +184,30 @@ describe("sidebar pins", () => {
         },
       }),
     ).not.toThrow();
+  });
+});
+
+describe("sidebar chat order", () => {
+  it("keeps the saved order and falls back to manual for missing, unknown or unreadable storage", () => {
+    let stored: string | null = null;
+    const storage = {
+      getItem: () => stored,
+      setItem: (_key: string, value: string) => {
+        stored = value;
+      },
+    };
+    expect(readSidebarChatOrder(storage)).toBe("manual");
+    writeSidebarChatOrder("recent", storage);
+    expect(readSidebarChatOrder(storage)).toBe("recent");
+    stored = "unread-first";
+    expect(readSidebarChatOrder(storage)).toBe("manual");
+    expect(
+      readSidebarChatOrder({
+        getItem: () => {
+          throw new Error("blocked");
+        },
+        setItem: vi.fn(),
+      }),
+    ).toBe("manual");
   });
 });

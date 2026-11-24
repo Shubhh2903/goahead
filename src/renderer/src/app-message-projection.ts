@@ -39,6 +39,7 @@ export function toAgentProfile(stored: AgentSummary): AgentProfile {
     compactWindow: stored.compactWindow,
     disabledMcpServerIds: stored.disabledMcpServerIds,
     weeklyTokenBudget: stored.weeklyTokenBudget,
+    autoModel: stored.autoModel,
     threadId: stored.threadId,
     workspacePath: stored.workspacePath,
     avatarSeed: stored.avatarSeed,
@@ -82,6 +83,7 @@ export function toAgentMessage(message: ConversationMessage, ownerAgentId?: stri
     actionMarker: actionMarker ?? undefined,
     plan: plan ?? undefined,
     slackAsk: message.author === "user" ? message.slackAsk : undefined,
+    autoModelName: message.author === "assistant" ? message.autoModelName : undefined,
     status:
       message.exchange || message.routine
         ? undefined
@@ -187,6 +189,7 @@ export function agentProfilesEqual(left: AgentProfile, right: AgentProfile): boo
     left.compactWindow === right.compactWindow &&
     (left.disabledMcpServerIds ?? []).join("\u0000") === (right.disabledMcpServerIds ?? []).join("\u0000") &&
     left.weeklyTokenBudget === right.weeklyTokenBudget &&
+    left.autoModel === right.autoModel &&
     left.threadId === right.threadId &&
     left.avatarSeed === right.avatarSeed &&
     left.avatarHue === right.avatarHue &&
@@ -242,7 +245,8 @@ export function agentMessagesEqual(left: AgentMessage, right: AgentMessage): boo
     JSON.stringify(left.items) === JSON.stringify(right.items) &&
     JSON.stringify(left.itemIds) === JSON.stringify(right.itemIds) &&
     JSON.stringify(left.plan) === JSON.stringify(right.plan) &&
-    JSON.stringify(left.slackAsk) === JSON.stringify(right.slackAsk)
+    JSON.stringify(left.slackAsk) === JSON.stringify(right.slackAsk) &&
+    left.autoModelName === right.autoModelName
   );
 }
 

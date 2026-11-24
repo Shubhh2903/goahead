@@ -65,8 +65,20 @@ export function ChatQuestionPrompt({
   }
 
   if (!controller?.question) return null;
-  const { question, index, disabled, pending, failedAnswers, setIndex, answer, submit, replyInChat, setReplyInChat } =
-    controller;
+  const {
+    question,
+    index,
+    disabled,
+    pending,
+    failedAnswers,
+    setIndex,
+    answer,
+    submit,
+    replyInChat,
+    setReplyInChat,
+    picked,
+    togglePick,
+  } = controller;
 
   return (
     <View
@@ -117,38 +129,48 @@ export function ChatQuestionPrompt({
         </View>
       ) : null}
       <View>
-        {question.options?.map((option, optionIndex) => (
-          <Button
-            key={option.label}
-            variant="ghost"
-            isDisabled={disabled}
-            accessibilityLabel={option.label}
-            className="h-auto min-h-12 justify-start rounded-[18px] px-2 py-2"
-            onPress={() => {
-              void haptics.selection();
-              answer([option.label]);
-            }}
-          >
-            <View
-              className="w-10 self-stretch items-center justify-center rounded-xl bg-control"
-              style={{ borderCurve: "continuous" }}
+        {question.options?.map((option, optionIndex) => {
+          const checked = picked.includes(option.label);
+          return (
+            <Button
+              key={option.label}
+              variant="ghost"
+              isDisabled={disabled}
+              accessibilityRole={question.multiSelect ? "checkbox" : "button"}
+              accessibilityLabel={option.label}
+              accessibilityState={question.multiSelect ? { checked, disabled } : { disabled }}
+              className={`h-auto min-h-12 justify-start rounded-[18px] px-2 py-2 ${checked ? "bg-control/60" : ""}`}
+              onPress={() => {
+                if (question.multiSelect) return togglePick(option.label);
+                void haptics.selection();
+                answer([option.label]);
+              }}
             >
-              <Typography type="body-sm" weight="medium" className="text-text-secondary">
-                {String.fromCharCode(65 + optionIndex)}
-              </Typography>
-            </View>
-            <View className="min-w-0 flex-1 gap-0.5">
-              <Typography type="body-sm" weight="medium">
-                {option.label}
-              </Typography>
-              {option.description ? (
-                <Typography type="body-xs" className="text-text-secondary">
-                  {option.description}
+              <View
+                className={`w-10 self-stretch items-center justify-center rounded-xl ${checked ? "bg-accent" : "bg-control"}`}
+                style={{ borderCurve: "continuous" }}
+              >
+                {checked ? (
+                  <Check color={String(accentForeground)} size={18} />
+                ) : (
+                  <Typography type="body-sm" weight="medium" className="text-text-secondary">
+                    {String.fromCharCode(65 + optionIndex)}
+                  </Typography>
+                )}
+              </View>
+              <View className="min-w-0 flex-1 gap-0.5">
+                <Typography type="body-sm" weight="medium">
+                  {option.label}
                 </Typography>
-              ) : null}
-            </View>
-          </Button>
-        ))}
+                {option.description ? (
+                  <Typography type="body-xs" className="text-text-secondary">
+                    {option.description}
+                  </Typography>
+                ) : null}
+              </View>
+            </Button>
+          );
+        })}
         {question.isSecret ? null : (
           // One more answer row, so it reads as a choice like the options above. The composer
           // answers only after this choice, so a message typed meanwhile still goes to the chat,
@@ -199,6 +221,19 @@ export function ChatQuestionPrompt({
             {t("mobile.chat.question.skip")}
           </Typography>
         </Button>
+        {question.multiSelect ? (
+          <Button
+            variant="primary"
+            size="sm"
+            isDisabled={disabled || picked.length === 0}
+            onPress={() => {
+              void haptics.selection();
+              answer(picked);
+            }}
+          >
+            <Button.Label>{t("common.done")}</Button.Label>
+          </Button>
+        ) : null}
       </View>
       {/* The composer answers in the chat. Only a private answer keeps its own masked field. */}
       {question.isSecret ? (

@@ -45,3 +45,19 @@ export function promptAnswerLabel(
   if (question.isSecret || !response.answers) return t("mobile.chat.question.privateAnswer");
   return response.answers.join(", ") || t("mobile.chat.question.answerSkipped");
 }
+
+/** The options toggled on, in the order of the options so that the answer does not depend on the taps. */
+export function orderedPicks(question: AgentPromptQuestion, picks: readonly string[] | undefined): string[] {
+  if (!question.multiSelect) return [];
+  return (question.options ?? []).map((option) => option.label).filter((label) => picks?.includes(label));
+}
+
+export function toggledPicks(current: readonly string[] | undefined, label: string): string[] {
+  const picks = current ?? [];
+  return picks.includes(label) ? picks.filter((item) => item !== label) : [...picks, label];
+}
+
+/** A typed reply also sends the options that are toggled on. */
+export function answerWithText(picked: readonly string[], text: string): string[] {
+  return [...picked, text];
+}

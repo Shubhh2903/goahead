@@ -45,6 +45,7 @@ import { agentImportIpcHandlers } from "./ipc/agent-import-handlers";
 import { agentTemplateIpcHandlers } from "./ipc/agent-template-handlers";
 import { appIpcHandlers } from "./ipc/app-handlers";
 import { attachmentIpcHandlers } from "./ipc/attachment-handlers";
+import { backdropIpcHandlers } from "./ipc/backdrop-handlers";
 import { billingIpcHandlers } from "./ipc/billing-handlers";
 import { bitwardenConnectorIpcHandlers } from "./ipc/bitwarden-connector-handlers";
 import { browserIpcHandlers } from "./ipc/browser-handlers";
@@ -80,6 +81,7 @@ import { slackClientIpcHandlers } from "./ipc/slack-client-handlers";
 import { storageIpcHandlers } from "./ipc/storage-handlers";
 import { teamIpcHandlers } from "./ipc/team-handlers";
 import { updateIpcHandlers } from "./ipc/update-handlers";
+import { usageIpcHandlers } from "./ipc/usage-handlers";
 import { voiceIpcHandlers } from "./ipc/voice-handlers";
 import { installLinuxDesktopEntry } from "./linux-desktop-entry";
 import { MacHapticFeedback } from "./mac-haptic-feedback";
@@ -214,6 +216,11 @@ protocol.registerSchemesAsPrivileged([
   {
     scheme: "openbot-remote-avatar",
     privileges: { standard: true, secure: true, supportFetchAPI: true },
+  },
+  // An uploaded backdrop image or video. `stream`, as for attachments, lets a <video> play it.
+  {
+    scheme: "openbot-backdrop",
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
   },
   {
     scheme: "openbot-server-logo",
@@ -453,6 +460,7 @@ function registerIpcHandlers({
   logoColor,
   notificationPreference,
   busyMessageMode,
+  chatBackdrops,
   agentMemoryLimit,
   agentInitialization,
   sidebarLayout,
@@ -530,6 +538,8 @@ function registerIpcHandlers({
     ...bitwardenConnectorIpcHandlers({ bitwardenConnector }),
     ...billingIpcHandlers({ billing }),
     ...routineFeedIpcHandlers({ routineFeed }),
+    ...backdropIpcHandlers({ backdrops: chatBackdrops, getMainWindow, translate: language.translate }),
+    ...usageIpcHandlers({ service }),
     ...hostedServerIpcHandlers({ hostedServers }),
     ...customProviderIpcHandlers(customProviderChanges),
     ...customAgentIpcHandlers(customAgentChanges),

@@ -1144,6 +1144,34 @@ describe.sequential("AgentService: queue", () => {
     expect(service.listQueue("chief").deliveries[0]?.status).toBe("completed");
   });
 
+  it("ends a turn that its provider no longer runs when the person presses Stop", async () => {
+    const { store, mailbox } = stores(root);
+    // The turn's provider events are lost, and the provider answers that it does not run the turn,
+    // as the Claude adapter does.
+    const client = new FakeAgentClient("codex", "", false);
+    client.announcesTurns = false;
+    client.interruptResult = { turnActive: false };
+    service = createTestService({ store, mailbox, clientFactory: () => client });
+    const events: AgentEvent[] = [];
+    service.on("event", (event) => events.push(event));
+    await service.initialize();
+    await service.sendMessage({ agentId: "chief", text: "Start" });
+    await waitForQueue(service, "chief", (queue) => queue.deliveries[0]?.status === "running");
+    await service.sendMessage({ agentId: "chief", text: "Run after the stop" });
+    const turnId = service.listQueue("chief").deliveries[0]?.turnId;
+    assert(turnId);
+
+    await service.interrupt("chief", turnId);
+
+    await waitForQueue(service, "chief", (queue) => queue.deliveries[0]?.status === "interrupted");
+    await waitFor(() => client.requests.filter((request) => request.method === "turn/start").length === 2);
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "turn-completed", agentId: "chief", turnId, status: "interrupted" }),
+    );
+    // No held text of the stopped turn stays on screen.
+    expect(events).toContainEqual(expect.objectContaining({ type: "turn-text-preview", turnId, text: "" }));
+  });
+
   it("queues FIFO instead of steering and continues draining after an interrupt", async () => {
     const { store, mailbox } = stores(root);
     service = createTestService({ store, mailbox });

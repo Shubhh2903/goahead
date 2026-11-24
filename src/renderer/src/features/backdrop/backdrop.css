@@ -1,0 +1,79 @@
+/* While a backdrop shows (`WindowBackdrop` sets `data-openbot-window-glass` on the root), the frame,
+ * its panes and its surfaces are clear tints, so the scene or the upload shows through them. The
+ * root keeps the solid values; a surface that hangs over other content inside the frame, such as a
+ * menu or a popper, uses them again. Dialogs, menus and toasts that portal outside `.app-frame` stay
+ * solid. Ported from upstream OpenBot `styles/window-glass.css` (PR 10503), for the GoAhead frame. */
+:root[data-openbot-window-glass] {
+  --window-glass-canvas: color-mix(in srgb, var(--openbot-bg-canvas) 25%, transparent);
+  --window-glass-sidebar: color-mix(in srgb, var(--openbot-bg-sidebar) 25%, transparent);
+  --window-glass-sheet: color-mix(in srgb, var(--openbot-bg-sheet) 35%, transparent);
+  --window-glass-grouped: color-mix(in srgb, var(--openbot-bg-grouped) 35%, transparent);
+  --window-glass-surface: color-mix(in srgb, var(--openbot-bg-surface) 35%, transparent);
+  --window-glass-surface-raised: color-mix(in srgb, var(--openbot-bg-surface-raised) 40%, transparent);
+  --window-glass-control: color-mix(in srgb, var(--openbot-bg-control) 35%, transparent);
+  --window-glass-control-hover: color-mix(in srgb, var(--openbot-bg-control-hover) 45%, transparent);
+  --window-glass-control-active: color-mix(in srgb, var(--openbot-bg-control-active) 55%, transparent);
+  --window-glass-tabs-bar: color-mix(in srgb, var(--openbot-tabs-bar-bg) 35%, transparent);
+  --window-glass-tabs-pill: color-mix(in srgb, var(--openbot-tabs-pill-bg) 45%, transparent);
+
+  --window-solid-canvas: var(--openbot-bg-canvas);
+  --window-solid-sidebar: var(--openbot-bg-sidebar);
+  --window-solid-sheet: var(--openbot-bg-sheet);
+  --window-solid-grouped: var(--openbot-bg-grouped);
+  --window-solid-surface: var(--openbot-bg-surface);
+  --window-solid-surface-raised: var(--openbot-bg-surface-raised);
+  --window-solid-control: var(--openbot-bg-control);
+  --window-solid-control-hover: var(--openbot-bg-control-hover);
+  --window-solid-control-active: var(--openbot-bg-control-active);
+  --window-solid-tabs-bar: var(--openbot-tabs-bar-bg);
+  --window-solid-tabs-pill: var(--openbot-tabs-pill-bg);
+}
+
+/* The root resolves `--background` and `--surface` from the solid tokens, so the frame sets them again. */
+:root[data-openbot-window-glass] .app-frame {
+  --openbot-bg-canvas: var(--window-glass-canvas);
+  --openbot-bg-sidebar: var(--window-glass-sidebar);
+  --openbot-bg-sheet: var(--window-glass-sheet);
+  --openbot-bg-grouped: var(--window-glass-grouped);
+  --openbot-bg-surface: var(--window-glass-surface);
+  --openbot-bg-surface-raised: var(--window-glass-surface-raised);
+  --openbot-bg-control: var(--window-glass-control);
+  --openbot-bg-control-hover: var(--window-glass-control-hover);
+  --openbot-bg-control-active: var(--window-glass-control-active);
+  --openbot-tabs-bar-bg: var(--window-glass-tabs-bar);
+  --openbot-tabs-pill-bg: var(--window-glass-tabs-pill);
+  --background: var(--openbot-bg-canvas);
+  --surface: var(--openbot-bg-surface);
+}
+
+:root[data-openbot-window-glass]
+  .app-frame
+  :is(
+    [data-popper-positioner],
+    [role="dialog"],
+    [role="alertdialog"],
+    [role="menu"],
+    [role="listbox"],
+    [role="tooltip"]
+  ) {
+  --openbot-bg-canvas: var(--window-solid-canvas);
+  --openbot-bg-sidebar: var(--window-solid-sidebar);
+  --openbot-bg-sheet: var(--window-solid-sheet);
+  --openbot-bg-grouped: var(--window-solid-grouped);
+  --openbot-bg-surface: var(--window-solid-surface);
+  --openbot-bg-surface-raised: var(--window-solid-surface-raised);
+  --openbot-bg-control: var(--window-solid-control);
+  --openbot-bg-control-hover: var(--window-solid-control-hover);
+  --openbot-bg-control-active: var(--window-solid-control-active);
+  --openbot-tabs-bar-bg: var(--window-solid-tabs-bar);
+  --openbot-tabs-pill-bg: var(--window-solid-tabs-pill);
+  --background: var(--openbot-bg-canvas);
+  --surface: var(--openbot-bg-surface);
+}
+
+/* The Settings row: Remove, Upload and the select, on one line. */
+.settings-backdrop-control {
+  display: flex;
+  align-items: center;
+  gap: var(--openbot-space-2);
+}

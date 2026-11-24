@@ -138,7 +138,7 @@ describe("SidebarLayoutStore", () => {
     await store.mutate({ type: "create", name: "Demo" }, agents);
 
     await expect(store.mutate({ type: "create", name: " demo " }, agents)).rejects.toThrow(
-      "Section names must be unique",
+      "Folder names must be unique",
     );
     await expect(store.mutate({ type: "create", name: "Other", agentId: "missing" }, agents)).rejects.toThrow(
       "Unknown agent",
@@ -259,5 +259,99 @@ describe("SidebarLayoutStore", () => {
       agentOrder: [],
     });
     expect((await readdir(root)).some((name) => name.startsWith("sidebar-layout.json.corrupt-"))).toBe(true);
+  });
+
+  it("loads a saved version 2 layout with no folder in folder as today's list", async () => {
+    const { path } = await createStore();
+    const first = "11111111-1111-4111-8111-111111111111";
+    const second = "22222222-2222-4222-8222-222222222222";
+    const saved = {
+      revision: 7,
+      sections: [
+        { id: first, name: "Work" },
+        { id: second, name: "Home" },
+      ],
+      order: [second, SIDEBAR_PEOPLE_SECTION_ID, first, SIDEBAR_UNASSIGNED_SECTION_ID],
+      agentAssignments: { chief: first, sales: second },
+      agentOrder: ["sales", "chief"],
+    };
+    await writeFile(path, `${JSON.stringify({ version: 2, ...saved })}\n`);
+
+    const restored = new SidebarLayoutStore(path);
+    await restored.initialize();
+    expect(restored.getSnapshot()).toEqual(saved);
+  });
+
+  it("moves a bad saved parent to the top and keeps every folder and chat", async () => {
+    const { path } = await createStore();
+    const first = "11111111-1111-4111-8111-111111111111";
+    const second = "22222222-2222-4222-8222-222222222222";
+    await writeFile(
+      path,
+      `${JSON.stringify({
+        version: 2,
+        revision: 3,
+        sections: [
+          { id: first, name: "Work", parentId: second },
+          { id: second, name: "Home", parentId: first },
+        ],
+        order: [SIDEBAR_PEOPLE_SECTION_ID, SIDEBAR_UNASSIGNED_SECTION_ID, first, second],
+        agentAssignments: { chief: first, sales: second },
+        agentOrder: [],
+      })}\n`,
+    );
+
+    const restored = new SidebarLayoutStore(path);
+    await restored.initialize();
+    const layout = restored.getSnapshot();
+    expect(layout.sections.map((section) => section.id).sort()).toEqual([first, second]);
+    expect(layout.sections.filter((section) => section.parentId === undefined)).toHaveLength(1);
+    expect(layout.agentAssignments).toEqual({ chief: first, sales: second });
+  });
+
+  it("deletes a folder and keeps its chats and folders one level up", async () => {
+    const { path, store } = await createStore();
+    const agents = new Set(["chief", "research", "sales"]);
+    const top = (await store.mutate({ type: "create", name: "Work", agentId: "sales" }, agents)).sections[0]?.id ?? "";
+    const middle =
+      (await store.mutate({ type: "create", name: "Product", agentId: "chief", parentId: top }, agents)).sections[1]
+        ?.id ?? "";
+    const inner =
+      (await store.mutate({ type: "create", name: "Research", agentId: "research", parentId: middle }, agents))
+        .sections[2]?.id ?? "";
+
+    const deleted = await store.mutate({ type: "delete", sectionId: middle }, agents);
+    expect(deleted.sections).toEqual([
+      { id: top, name: "Work" },
+      { id: inner, name: "Research", parentId: top },
+    ]);
+    expect(deleted.agentAssignments).toEqual({ sales: top, chief: top, research: inner });
+    expect(deleted.order).toEqual([SIDEBAR_PEOPLE_SECTION_ID, SIDEBAR_UNASSIGNED_SECTION_ID, top, inner]);
+
+    // At the top, the chats of a deleted folder are unassigned: no chat is deleted.
+    const topDeleted = await store.mutate({ type: "delete", sectionId: top }, agents);
+    expect(topDeleted.sections).toEqual([{ id: inner, name: "Research" }]);
+    expect(topDeleted.agentAssignments).toEqual({ research: inner });
+    const restored = new SidebarLayoutStore(path);
+    await restored.initialize();
+    expect(restored.getSnapshot()).toEqual(topDeleted);
+  });
+
+  it("nests folders three levels deep at most and not into themselves", async () => {
+    const { store } = await createStore();
+    const agents = new Set<string>();
+    const one = (await store.mutate({ type: "create", name: "One" }, agents)).sections[0]?.id ?? "";
+    const two = (await store.mutate({ type: "create", name: "Two", parentId: one }, agents)).sections[1]?.id ?? "";
+    const three = (await store.mutate({ type: "create", name: "Three", parentId: two }, agents)).sections[2]?.id ?? "";
+    await expect(store.mutate({ type: "create", name: "Four", parentId: three }, agents)).rejects.toThrow(
+      "Folders can go only three levels deep.",
+    );
+    await expect(
+      store.mutate({ type: "nest", sectionId: one, parentId: three, beforeSectionId: null }, agents),
+    ).rejects.toThrow("This folder cannot move there.");
+
+    const moved = await store.mutate({ type: "nest", sectionId: three, parentId: null, beforeSectionId: one }, agents);
+    expect(moved.sections.find((section) => section.id === three)?.parentId).toBeUndefined();
+    expect(moved.order).toEqual([SIDEBAR_PEOPLE_SECTION_ID, SIDEBAR_UNASSIGNED_SECTION_ID, three, one, two]);
   });
 });

@@ -12,6 +12,7 @@ import { toLogValue } from "@openbot/logging";
 import { DynamicIslandCoordinator } from "@openbot/team-client/dynamic-island-coordinator";
 import {
   type AgentLiveActivityProps,
+  LIVE_ACTIVITY_STALE_AFTER_MS,
   type LiveActivityUnreadAgent,
   liveActivityBloubFile,
   liveActivityIslandText,
@@ -32,8 +33,6 @@ import type { markerExclusionsForCapabilities } from "./team-api/request-helpers
 const EVENT_DELAY_MS = 1_000;
 /** iOS limits how often a Live Activity gets updates. A change inside one state waits this long. */
 const SAME_MODE_INTERVAL_MS = 5_000;
-/** Content older than this looks out of date, as when this computer sleeps and sends nothing. */
-const STALE_AFTER_MS = 15 * 60 * 1000;
 /** An unchanged state is sent again before it becomes out of date. */
 const KEEPALIVE_MS = 10 * 60 * 1000;
 /** A failed send is tried again, first after this time, and then after double the time. */
@@ -229,7 +228,7 @@ export class LiveActivityPushService {
       event: props ? ("update" as const) : ("end" as const),
       sealed: props ? this.#sealToFit(props, registration.keys, sealedLimit(value)) : null,
       timestamp: Math.floor(now / 1000),
-      staleAt: props ? Math.floor((now + STALE_AFTER_MS) / 1000) : null,
+      staleAt: props ? Math.floor((now + LIVE_ACTIVITY_STALE_AFTER_MS) / 1000) : null,
     };
     const sameMode = sent?.mode === mode;
     registration.sending = true;

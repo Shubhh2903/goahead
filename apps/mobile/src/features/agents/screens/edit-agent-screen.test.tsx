@@ -123,6 +123,7 @@ const original: MobileAgent = {
   title: "",
   preview: "",
   updatedLabel: "",
+  updatedAt: null,
   avatarSeed: "original",
   avatarHue: null,
 };
@@ -2194,7 +2195,7 @@ it("collapses and expands from the section name while options keep the section v
     );
   }
   await act(() => root.render(<Section />));
-  await click("Work section options");
+  await click("Work folder options");
   expect(screen.getByRole("button", { name: "Collapse Work" }).getAttribute("aria-expanded")).toBe("true");
   expect(screen.getByRole("button", { name: "Open agent" })).toBeTruthy();
   expect(workspace.mutateSidebarLayout).not.toHaveBeenCalled();
@@ -2212,7 +2213,7 @@ it("moves a chat from the native submenu without opening a sheet", async () => {
   }
   await act(() => root.render(<Menu />));
   expect(screen.queryByRole("button", { name: "Agents" })).toBeNull();
-  await click("Move to section");
+  await click("Move to folder");
   expect(screen.getByRole("button", { name: "Work" }).hasAttribute("disabled")).toBe(true);
   await click("Agents");
   expect(workspace.mutateSidebarLayout).toHaveBeenLastCalledWith(host.id, {
@@ -2230,7 +2231,7 @@ it("keeps a failed submenu move available for retry", async () => {
     return useChatSectionMenu(host.id, original.id).menu;
   }
   await act(() => root.render(<Menu />));
-  await click("Move to section");
+  await click("Move to folder");
   await click("Agents");
   expect(mocks.alert).toHaveBeenCalledWith("Could not move chat", "Move failed");
   await click("Agents");

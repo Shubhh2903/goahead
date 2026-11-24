@@ -2,10 +2,12 @@ import type { ProviderRuntimeStatus } from "@openbot/contracts/ipc";
 import {
   type ProviderUpdate,
   presentProviderUpdate,
+  providersToUpdate,
   providerUpdatesToAnnounce,
   providerVersionLabel,
+  updateAllProviders,
 } from "@openbot/ui/features/provider-updates/provider-update";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 function runtime(patch: Partial<ProviderRuntimeStatus> = {}): ProviderRuntimeStatus {
   return { phase: "ready", progress: null, message: null, version: "2.1.246", ...patch };
@@ -104,5 +106,31 @@ describe("providerUpdatesToAnnounce", () => {
     const current = update({ availableVersion: "2.1.246" });
     const downloading = update({ runtime: runtime({ phase: "downloading", progress: 10 }) });
     expect(providerUpdatesToAnnounce([], [current, downloading])).toEqual([]);
+  });
+});
+
+describe("Update all", () => {
+  const options = [
+    { id: "claude" as const, name: "Claude", runtimeStatus: runtime(), availableVersion: "2.1.250" },
+    { id: "codex" as const, name: "ChatGPT", runtimeStatus: runtime(), availableVersion: "0.161.0" },
+    { id: "grok" as const, name: "Grok", runtimeStatus: runtime(), availableVersion: "1.0.30" },
+    { id: "opencode" as const, name: "OpenCode", runtimeStatus: runtime(), availableVersion: null },
+    { id: "pi" as const, name: "Pi", runtimeStatus: runtime(), availableVersion: "1.2.0", off: true },
+  ];
+
+  it("starts each outdated provider once, and one failure does not stop the others", async () => {
+    // As `startProviderUpdate` does: it resolves once an update started, and rejects when it did not.
+    const update = vi.fn(async (provider: string) => {
+      if (provider === "codex") throw new Error("The download could not start.");
+    });
+
+    const results = await updateAllProviders(providersToUpdate(options), update);
+
+    expect(update.mock.calls.map(([provider]) => provider)).toEqual(["claude", "codex", "grok"]);
+    expect(results).toEqual([
+      { provider: "claude", name: "Claude", error: null },
+      { provider: "codex", name: "ChatGPT", error: new Error("The download could not start.") },
+      { provider: "grok", name: "Grok", error: null },
+    ]);
   });
 });

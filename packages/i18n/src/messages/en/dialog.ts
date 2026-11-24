@@ -14,4 +14,6 @@ export const messages = defineMessages("dialog", {
   "dialog.filter.agentExports": "Agent exports",
   "dialog.saveExportSkill": "Save the export skill",
   "dialog.chooseProjectFolder": "Choose a project folder",
+  "dialog.chooseBackdrop": "Choose an image or video for the backdrop",
+  "dialog.filter.backdrops": "Images and videos",
 });

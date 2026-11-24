@@ -325,7 +325,7 @@ it("keeps the section editor open past menu focus restoration", async () => {
   // Hold the trigger: the open menu hides the background from role queries.
   const trigger = await screen.findByRole("button", { name: "New agent or channel" });
   await fireEvent.pointerDown(trigger, { button: 0 });
-  const item = await screen.findByRole("menuitem", { name: "New section" });
+  const item = await screen.findByRole("menuitem", { name: "New folder" });
   // Frames are a fake modeling animation-frame timing, not a sleep: each step runs exactly
   // the callbacks the production code scheduled.
   const pendingFrames: FrameRequestCallback[] = [];
@@ -352,8 +352,8 @@ it("keeps the section editor open past menu focus restoration", async () => {
     trigger.focus();
     await runFrame();
     await runFrame();
-    expect(screen.getByLabelText("New section")).toBeInTheDocument();
-    expect(screen.getByLabelText("New section name")).toHaveFocus();
+    expect(screen.getByLabelText("New folder")).toBeInTheDocument();
+    expect(screen.getByLabelText("New folder name")).toHaveFocus();
   } finally {
     restore.mockRestore();
   }

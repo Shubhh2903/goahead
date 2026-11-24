@@ -22,6 +22,11 @@ export interface OnboardingFlowProps extends SetupProviderProps {
   onProviderStepShown?: () => void;
   /** Adds a step that turns sound feedback on or off. */
   soundFeedback?: SoundFeedbackChoice;
+  /**
+   * Skips the rest of first-run setup: saves `provider`, connected or not, and opens GoAhead. With
+   * it, the provider step can also be skipped, and the flow ends without a connected provider.
+   */
+  onSkipSetup?: (provider: AgentProviderId) => Promise<void>;
 }
 
 type OnboardingStep = "meet" | "computer" | "sounds" | "jobs";
@@ -54,7 +59,12 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
    */
   const [screenElement, setScreenElement] = createSignal<HTMLElement | undefined>();
   const [saving, setSaving] = createSignal(false);
+  /** The user went on without a connected provider. Settings > Providers can connect one later. */
+  const [providerSkipped, setProviderSkipped] = createSignal(false);
   const providers = createSetupProviders(props);
+  const providerReady = () => providers.selectedProviderConnected() || providerSkipped();
+  /** The provider a skip saves: the selected row, else the first one the picker lists. */
+  const skipProvider = (): AgentProviderId | undefined => providers.selectedProvider() ?? providers.options()[0]?.id;
   createEffect(
     () => step() === "meet",
     (shown) => {
@@ -87,7 +97,7 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
   }
 
   function nextStep(): void {
-    if (!providers.selectedProviderConnected()) {
+    if (!providerReady()) {
       next.connectSelected();
       return;
     }
@@ -111,14 +121,33 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
     }
   }
 
+  function skipProviderStep(): void {
+    setProviderSkipped(true);
+    const following = steps()[stepNumber()];
+    if (following) moveTo(following, "forward");
+  }
+
+  async function skipSetup(): Promise<void> {
+    const provider = skipProvider();
+    if (!provider || !props.onSkipSetup || saving()) return;
+    setSaving(true);
+    providers.setError("");
+    try {
+      await props.onSkipSetup(provider);
+    } catch (cause) {
+      providers.setError(errorMessage(cause, t("onboarding.error.finish")));
+      setSaving(false);
+    }
+  }
+
   function previousStep(): void {
     const previous = steps()[stepNumber() - 2];
     if (previous) moveTo(previous, "back");
   }
 
   async function finish(): Promise<void> {
-    const provider = providers.selectedProvider();
-    if (!provider || !providers.selectedProviderConnected() || saving()) return;
+    const provider = providers.selectedProviderConnected() ? providers.selectedProvider() : skipProvider();
+    if (!provider || !providerReady() || saving()) return;
     setSaving(true);
     providers.setError("");
     try {
@@ -372,24 +401,34 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
             variant="default"
             class="onboarding-next"
             disabled={saving()}
-            aria-describedby={nextBlockedReason() ? nextReasonId : undefined}
+            aria-describedby={!providerSkipped() && nextBlockedReason() ? nextReasonId : undefined}
             loading={saving()}
             loadingLabel={t("onboarding.opening")}
             onClick={nextStep}
           >
-            {!providers.selectedProviderConnected()
+            {!providerReady()
               ? t("onboarding.action.connect")
               : step() === "jobs"
                 ? t("onboarding.action.open")
                 : t("onboarding.action.next")}
           </Button>
           {/* Named by the button above, so the reason is read out with it rather than hunted for. */}
-          <Show when={nextBlockedReason()}>
+          <Show when={!providerSkipped() && nextBlockedReason()}>
             {(reason) => (
               <p class="onboarding-next-reason" id={nextReasonId}>
                 {reason()}
               </p>
             )}
+          </Show>
+          <Show when={props.onSkipSetup}>
+            <Show when={step() === "meet" && !providerReady()}>
+              <Button type="button" variant="ghost" disabled={saving()} onClick={skipProviderStep}>
+                {t("onboarding.wizard.skipStep")}
+              </Button>
+            </Show>
+            <Button type="button" variant="ghost" disabled={saving()} onClick={() => void skipSetup()}>
+              {t("onboarding.wizard.skipAll")}
+            </Button>
           </Show>
         </div>
       </div>

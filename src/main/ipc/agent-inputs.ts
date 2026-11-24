@@ -122,6 +122,9 @@ export function parseSidebarLayoutAction(value: unknown): SidebarLayoutAction {
         ...(value.agentId === undefined
           ? {}
           : { agentId: requireString(value.agentId, "agentId", INPUT_LIMITS.identifier) }),
+        ...(value.parentId === undefined
+          ? {}
+          : { parentId: requireString(value.parentId, "parentId", INPUT_LIMITS.identifier) }),
       };
     case "rename":
       return {
@@ -171,6 +174,19 @@ export function parseSidebarLayoutAction(value: unknown): SidebarLayoutAction {
         sectionId,
         beforeAgentId:
           beforeAgentId === null ? null : requireString(beforeAgentId, "beforeAgentId", INPUT_LIMITS.identifier),
+      };
+    }
+    case "nest": {
+      const parentId = value.parentId;
+      const beforeSectionId = value.beforeSectionId;
+      if (parentId !== null && !isString(parentId)) throw new Error("Invalid folder parent.");
+      if (beforeSectionId !== null && !isString(beforeSectionId)) throw new Error("Invalid folder order target.");
+      return {
+        type: "nest",
+        sectionId: requireString(value.sectionId, "sectionId", INPUT_LIMITS.identifier),
+        parentId: parentId === null ? null : requireString(parentId, "parentId", INPUT_LIMITS.identifier),
+        beforeSectionId:
+          beforeSectionId === null ? null : requireString(beforeSectionId, "beforeSectionId", INPUT_LIMITS.identifier),
       };
     }
     default:
@@ -610,6 +626,10 @@ export function parseUpdateAgent(value: unknown): UpdateAgentInput {
       throw new Error("Invalid weekly token budget.");
     }
     result.weeklyTokenBudget = value.weeklyTokenBudget;
+  }
+  if (value.autoModel !== undefined) {
+    if (!isBoolean(value.autoModel)) throw new Error("Invalid automatic model value.");
+    result.autoModel = value.autoModel;
   }
   if (value.avatarSeed !== undefined) {
     if (!isAvatarSeed(value.avatarSeed)) throw new Error("Invalid avatar seed.");

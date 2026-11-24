@@ -34,6 +34,7 @@ import {
 import { type ProviderSession, ProviderSessions } from "./database/provider-sessions";
 import { ThreadReplay } from "./database/thread-replay";
 import { type StoredThreadSummary, ThreadSummaries } from "./database/thread-summaries";
+import { UsageByAgent } from "./database/usage-by-agent";
 
 // Declared in this module before the split and part of the frozen public surface, so it stays
 // reachable from here rather than only from the controller that owns it now. Structural `Pick<...>`
@@ -63,6 +64,7 @@ export type { StoredThreadSummary } from "./database/thread-summaries";
 export class OpenBotDatabase {
   readonly #core: DatabaseCore;
   readonly usage: AgentUsage;
+  readonly usageDashboard: UsageByAgent;
   readonly #conversations: ConversationQueries;
   readonly #roster: AgentRoster;
   readonly #conversationWrites: ConversationWriter;
@@ -76,6 +78,7 @@ export class OpenBotDatabase {
   constructor(readonly userDataPath: string) {
     this.#core = new DatabaseCore({ userDataPath });
     this.usage = new AgentUsage(this.#core);
+    this.usageDashboard = new UsageByAgent(this.#core);
     this.#conversations = new ConversationQueries({ core: this.#core });
     this.#roster = new AgentRoster({ core: this.#core });
     this.#conversationWrites = new ConversationWriter({ core: this.#core, roster: this.#roster });

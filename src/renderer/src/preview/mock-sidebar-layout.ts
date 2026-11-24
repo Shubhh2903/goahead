@@ -1,6 +1,31 @@
-import type { SidebarLayoutAction, SidebarLayoutSnapshot } from "@openbot/contracts/ipc";
+import {
+  type SidebarLayoutAction,
+  type SidebarLayoutSnapshot,
+  sidebarFolderParents,
+  sidebarFolderTreeOrder,
+} from "@openbot/contracts/ipc";
+
+/** The preview keeps the folders in tree order, as the layout store does. */
+function withFolderTree(layout: SidebarLayoutSnapshot): SidebarLayoutSnapshot {
+  const parents = sidebarFolderParents(layout);
+  return {
+    ...layout,
+    sections: layout.sections.map(({ id, name }) => {
+      const parentId = parents.get(id);
+      return parentId === undefined ? { id, name } : { id, name, parentId };
+    }),
+    order: sidebarFolderTreeOrder(layout.order, parents),
+  };
+}
 
 export function applySidebarLayoutAction(
+  layout: SidebarLayoutSnapshot,
+  action: SidebarLayoutAction,
+): SidebarLayoutSnapshot {
+  return withFolderTree(applyFlatSidebarLayoutAction(layout, action));
+}
+
+function applyFlatSidebarLayoutAction(
   layout: SidebarLayoutSnapshot,
   action: SidebarLayoutAction,
 ): SidebarLayoutSnapshot {
@@ -10,7 +35,12 @@ export function applySidebarLayoutAction(
     return {
       ...layout,
       revision,
-      sections: [...layout.sections, { id, name: action.name.trim() }],
+      sections: [
+        ...layout.sections,
+        action.parentId
+          ? { id, name: action.name.trim(), parentId: action.parentId }
+          : { id, name: action.name.trim() },
+      ],
       order: [...layout.order, id],
       agentAssignments: action.agentId
         ? { ...layout.agentAssignments, [action.agentId]: id }
@@ -28,15 +58,45 @@ export function applySidebarLayoutAction(
     };
   }
   if (action.type === "delete") {
+    // The chats and folders of the folder move up one level.
+    const parentId = sidebarFolderParents(layout).get(action.sectionId);
     return {
       ...layout,
       revision,
-      sections: layout.sections.filter((section) => section.id !== action.sectionId),
+      sections: layout.sections
+        .filter((section) => section.id !== action.sectionId)
+        .map((section) =>
+          section.parentId !== action.sectionId
+            ? section
+            : parentId === undefined
+              ? { id: section.id, name: section.name }
+              : { ...section, parentId },
+        ),
       order: layout.order.filter((sectionId) => sectionId !== action.sectionId),
       agentAssignments: Object.fromEntries(
-        Object.entries(layout.agentAssignments).filter(([, sectionId]) => sectionId !== action.sectionId),
+        Object.entries(layout.agentAssignments).flatMap(([chatId, sectionId]) => {
+          if (sectionId !== action.sectionId) return [[chatId, sectionId]];
+          return parentId === undefined ? [] : [[chatId, parentId]];
+        }),
       ),
       agentOrder: [...layout.agentOrder],
+    };
+  }
+  if (action.type === "nest") {
+    const order = layout.order.filter((sectionId) => sectionId !== action.sectionId);
+    const index = action.beforeSectionId === null ? order.length : order.indexOf(action.beforeSectionId);
+    order.splice(index < 0 ? order.length : index, 0, action.sectionId);
+    return {
+      ...layout,
+      revision,
+      order,
+      sections: layout.sections.map((section) =>
+        section.id !== action.sectionId
+          ? section
+          : action.parentId === null
+            ? { id: section.id, name: section.name }
+            : { ...section, parentId: action.parentId },
+      ),
     };
   }
   if (action.type === "move") {

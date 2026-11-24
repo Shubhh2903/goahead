@@ -4,6 +4,7 @@ import { Bot, Button, ChartArea, DropdownMenu, FolderPlus, Hash, Puzzle } from "
 import { Show } from "solid-js";
 import { useText } from "../../text";
 import { ServerMenu } from "../servers/ServerMenu";
+import { SidebarFilterMenu } from "./SidebarFilterMenu";
 import { PlusIcon, SidebarToggleIcon } from "./SidebarIcons";
 import { useSidebarScope } from "./sidebar-scope";
 
@@ -76,6 +77,10 @@ export function SidebarTopbar() {
               <SidebarToggleIcon />
             </Show>
           </Button>
+        </Show>
+        {/* The compact sidebar has no list to filter. */}
+        <Show when={!props.compact}>
+          <SidebarFilterMenu />
         </Show>
         <Show when={props.createSupported !== false || props.onCreateChannel || layoutMutable()}>
           <DropdownMenu.Root placement="bottom-end" gutter={4}>

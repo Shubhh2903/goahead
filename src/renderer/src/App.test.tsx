@@ -34,6 +34,8 @@ import { useLayout } from "./layout";
 import { useNavigation } from "./navigation";
 import { useProviders } from "./providers";
 
+const primary = navigator.platform.toLowerCase().includes("mac") ? { metaKey: true } : { ctrlKey: true };
+
 const morningBrief: Routine = {
   id: "routine-1",
   agentId: "chief",
@@ -569,8 +571,8 @@ describe("OpenBot connected desktop shell", () => {
 
     await fireEvent.contextMenu(screen.getByLabelText("Sidebar free area"));
     const sidebarMenu = await screen.findByRole("menu", { name: "Sidebar actions" });
-    await fireEvent.pointerUp(within(sidebarMenu).getByRole("menuitem", { name: "New section" }), { button: 0 });
-    const sectionName = await screen.findByRole("textbox", { name: "New section name" });
+    await fireEvent.pointerUp(within(sidebarMenu).getByRole("menuitem", { name: "New folder" }), { button: 0 });
+    const sectionName = await screen.findByRole("textbox", { name: "New folder name" });
     await fireEvent.input(sectionName, { target: { value: "Product" } });
     await fireEvent.keyDown(sectionName, { key: "Enter" });
 
@@ -791,7 +793,7 @@ describe("OpenBot connected desktop shell", () => {
     render(() => <App />);
     await screen.findByRole("heading", { name: "Chief" });
 
-    await fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await fireEvent.keyDown(window, { key: "k", ...primary });
 
     const dialog = await screen.findByRole("dialog", { name: "Search GoAhead" });
     const input = screen.getByRole("combobox", { name: "Search GoAhead" });
@@ -817,7 +819,7 @@ describe("OpenBot connected desktop shell", () => {
       limit: 50,
     });
 
-    await fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await fireEvent.keyDown(window, { key: "k", ...primary });
     await fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
     const agentSearch = screen.getByRole("combobox", { name: "Search GoAhead" });
     await fireEvent.input(agentSearch, { target: { value: "chief" } });
@@ -829,12 +831,12 @@ describe("OpenBot connected desktop shell", () => {
     render(() => <App />);
     await screen.findByRole("heading", { name: "Chief" });
 
-    await fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await fireEvent.keyDown(window, { key: "k", ...primary });
     await screen.findByRole("dialog", { name: "Search GoAhead" });
     await fireEvent.keyDown(screen.getByRole("combobox", { name: "Search GoAhead" }), { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search GoAhead" })).not.toBeInTheDocument());
 
-    await fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await fireEvent.keyDown(window, { key: "k", ...primary });
     await screen.findByRole("dialog", { name: "Search GoAhead" });
     // Kobalte attaches its outside-press listener on a later task, so press until it reacts.
     await waitFor(() => {

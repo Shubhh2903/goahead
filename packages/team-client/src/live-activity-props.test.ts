@@ -36,6 +36,7 @@ describe("Live Activity buttons", () => {
       header: "Deploy",
       question: "Deploy now?",
       isSecret: false,
+      multiSelect: false,
       options: [
         { label: "Yes", description: "" },
         { label: "No", description: "" },
@@ -66,6 +67,7 @@ describe("Live Activity buttons", () => {
     ]);
     expect(liveActivityButtons(prompt([question, { ...question, id: "region" }]), t)).toEqual([]);
     expect(liveActivityButtons(prompt([{ ...question, isSecret: true }]), t)).toEqual([]);
+    expect(liveActivityButtons(prompt([{ ...question, multiSelect: true }]), t)).toEqual([]);
   });
 
   it("lists the chats with unread replies only when there is more than one", () => {

@@ -1,7 +1,9 @@
 import type { AgentEvent, AgentRuntimeSnapshot, AgentSummary, QueueDelivery } from "@openbot/contracts/ipc";
+import { mobileTranslateFor } from "@openbot/i18n/mobile";
 import { describe, expect, it } from "vitest";
 import { DynamicIslandCoordinator, reconcileQueuesWithRuntimeWork } from "./dynamic-island-coordinator";
 import type { DynamicIslandPresentationInput, DynamicIslandText } from "./dynamic-island-presentation";
+import { liveActivityButtons } from "./live-activity-props";
 
 /** The caller redacts in production; these fixtures hold no secrets. */
 const text: DynamicIslandText = {
@@ -700,6 +702,58 @@ describe("DynamicIslandCoordinator", () => {
 
     coordinator.replaceUnreadReplies("phone", {});
     expect(coordinator.presentation(["phone"]).mode).toBe("idle");
+  });
+});
+
+describe("Live Activity answers", () => {
+  const t = mobileTranslateFor("en");
+  const answers = (coordinator: DynamicIslandCoordinator) =>
+    liveActivityButtons(coordinator.presentation(["local"]), t).map((button) => button.action);
+
+  it("answers a single-choice question in one tap, and never a multi-select one", () => {
+    const coordinator = new DynamicIslandCoordinator(() => text);
+    seedAgents(coordinator, "local", [agent("chief", "Chief")]);
+
+    coordinator.applyEvent(scoped("local", prompt("chief", "single")), "local");
+    expect(answers(coordinator)).toEqual([
+      {
+        type: "answer-prompt",
+        serverId: "local",
+        agentId: "chief",
+        requestId: "single",
+        answers: { source: ["Official data"] },
+      },
+    ]);
+
+    const multi = prompt("chief", "multi");
+    multi.questions = multi.questions.map((question) => ({ ...question, multiSelect: true }));
+    coordinator.applyEvent(scoped("local", multi), "local");
+    expect(coordinator.presentation(["local"])).toMatchObject({ mode: "question", item: { requestId: "multi" } });
+    expect(answers(coordinator)).toEqual([]);
+  });
+
+  it("offers no answers for a question from a snapshot without multiSelect, as the wire sends it", () => {
+    const coordinator = new DynamicIslandCoordinator(() => text);
+    seedAgents(coordinator, "local", [agent("chief", "Chief")]);
+    const { type: _type, ...held } = prompt("chief", "from-snapshot");
+
+    coordinator.applyEvent(
+      scoped("local", runtimeSnapshot({ agents: [agent("chief", "Chief")], pendingPrompts: [held] })),
+      "local",
+    );
+    expect(coordinator.presentation(["local"])).toMatchObject({
+      mode: "question",
+      item: { requestId: "from-snapshot" },
+    });
+    expect(answers(coordinator)).toEqual([]);
+
+    // The `prompt` event says one answer, and a later snapshot of the same request keeps that.
+    coordinator.applyEvent(scoped("local", prompt("chief", "from-snapshot")), "local");
+    coordinator.applyEvent(
+      scoped("local", runtimeSnapshot({ agents: [agent("chief", "Chief")], pendingPrompts: [held] })),
+      "local",
+    );
+    expect(answers(coordinator)).toHaveLength(1);
   });
 });
 

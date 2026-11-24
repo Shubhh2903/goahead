@@ -4,7 +4,7 @@
  * the scroll fades in that order.
  */
 
-import { Bot, CheckCheck, ContextMenu, FolderPlus, Hash } from "@openbot/ui";
+import { ArrowUpDown, Bot, Button, Check, CheckCheck, ChevronRight, ContextMenu, FolderPlus, Hash } from "@openbot/ui";
 import { For, Show } from "solid-js";
 import { useText } from "../../text";
 import { SidebarChannelRow } from "./SidebarChannelRow";
@@ -12,7 +12,9 @@ import { SidebarEmptyState } from "./SidebarEmptyState";
 import { SidebarPinnedGroup } from "./SidebarPinnedGroup";
 import { SidebarSectionList } from "./SidebarSectionList";
 import { SidebarWaitingGroup } from "./SidebarWaitingGroup";
+import { SIDEBAR_NO_LIST_FILTER } from "./sidebar-list-filter";
 import { useSidebarScope } from "./sidebar-scope";
+import { SIDEBAR_CHAT_ORDER_LABEL, SIDEBAR_CHAT_ORDERS } from "./sidebar-types";
 
 export function SidebarNav() {
   const {
@@ -22,12 +24,14 @@ export function SidebarNav() {
     filteredPeople,
     handleListDragLeave,
     layoutMutable,
+    listFiltered,
     pending,
     props,
     reorderAnnouncement,
     resolvedPinnedItems,
     scrollFades,
     setAgentListElement,
+    setListFilter,
     startCreateSection,
     updateSidebarNativeDrag,
     waitingAgents,
@@ -45,8 +49,17 @@ export function SidebarNav() {
       onScroll={scrollFades.measure}
     >
       <div class="agent-list-content">
+        <Show when={listFiltered() && filteredChats().length === 0}>
+          <div class="sidebar-filter-empty">
+            <p class="empty-search">{t("sidebar.filter.noMatch")}</p>
+            <Button variant="secondary" size="sm" onClick={() => setListFilter(SIDEBAR_NO_LIST_FILTER)}>
+              {t("sidebar.filter.clear")}
+            </Button>
+          </div>
+        </Show>
         <Show
           when={
+            !listFiltered() &&
             resolvedPinnedItems().length === 0 &&
             waitingAgents().length === 0 &&
             filteredChats().length === 0 &&
@@ -77,6 +90,7 @@ export function SidebarNav() {
           props.onCreateChannel ||
           layoutMutable() ||
           props.onMarkAllRead ||
+          props.onChatOrderChange ||
           props.onToggleArchivedChannels
         }
       >
@@ -107,6 +121,35 @@ export function SidebarNav() {
                   <CheckCheck class="agent-context-icon size-4" aria-hidden="true" />
                   <span>{t("sidebar.markAllRead")}</span>
                 </ContextMenu.Item>
+              </Show>
+              <Show when={props.onChatOrderChange}>
+                <ContextMenu.Sub>
+                  <ContextMenu.SubTrigger>
+                    <ArrowUpDown class="agent-context-icon size-4" aria-hidden="true" />
+                    <span>{t("sidebar.order.title")}</span>
+                    <ChevronRight class="agent-context-submenu-chevron size-4" aria-hidden="true" />
+                  </ContextMenu.SubTrigger>
+                  <ContextMenu.Portal>
+                    <ContextMenu.SubContent
+                      class="ui-action-menu agent-context-menu agent-context-submenu"
+                      aria-label={t("sidebar.order.title")}
+                    >
+                      <For each={SIDEBAR_CHAT_ORDERS}>
+                        {(order) => (
+                          <ContextMenu.Item onSelect={() => props.onChatOrderChange?.(order)}>
+                            <Show
+                              when={(props.chatOrder ?? "manual") === order}
+                              fallback={<span class="agent-context-icon size-4" aria-hidden="true" />}
+                            >
+                              <Check class="agent-context-icon size-4" aria-hidden="true" />
+                            </Show>
+                            <span>{t(SIDEBAR_CHAT_ORDER_LABEL[order])}</span>
+                          </ContextMenu.Item>
+                        )}
+                      </For>
+                    </ContextMenu.SubContent>
+                  </ContextMenu.Portal>
+                </ContextMenu.Sub>
               </Show>
               <Show when={props.onToggleArchivedChannels}>
                 <ContextMenu.Item onSelect={() => props.onToggleArchivedChannels?.()}>

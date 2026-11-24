@@ -18,7 +18,7 @@ export function SidebarChannelRow(rowProps: { channel: ChannelSummary }) {
     dragOffset,
     draggedChatId,
     endChatDragging,
-    layoutMutable,
+    chatsDraggable,
     props,
     sidebarClickIsSuppressed,
     startChatDragging,
@@ -44,7 +44,7 @@ export function SidebarChannelRow(rowProps: { channel: ChannelSummary }) {
       ]}
       style={`--sidebar-drag-y: ${dragOffset(rowProps.channel.id).y}px;`}
       data-chat-id={rowProps.channel.id}
-      draggable={rowProps.channel.archived || !layoutMutable() || props.compact ? "false" : "true"}
+      draggable={rowProps.channel.archived || !chatsDraggable() || props.compact ? "false" : "true"}
       onDragStart={(event: DragEvent & { currentTarget: HTMLElement }) => startChatDragging(event, rowProps.channel.id)}
       onDragEnd={endChatDragging}
     >

@@ -37,7 +37,7 @@ export function SidebarAgentRow(rowProps: { agent: AgentProfile; waiting?: boole
     dragOffset,
     draggedChatId,
     endChatDragging,
-    layoutMutable,
+    chatsDraggable,
     props,
     sidebarClickIsSuppressed,
     startChatDragging,
@@ -166,7 +166,7 @@ export function SidebarAgentRow(rowProps: { agent: AgentProfile; waiting?: boole
       ]}
       style={`--sidebar-drag-y: ${dragOffset(rowProps.agent.id).y}px;`}
       data-chat-id={rowProps.waiting ? undefined : rowProps.agent.id}
-      draggable={!layoutMutable() || props.compact || rowProps.waiting ? "false" : "true"}
+      draggable={!chatsDraggable() || props.compact || rowProps.waiting ? "false" : "true"}
       onDragStart={(event: DragEvent & { currentTarget: HTMLElement }) => startChatDragging(event, rowProps.agent.id)}
       onDragEnd={endChatDragging}
     >

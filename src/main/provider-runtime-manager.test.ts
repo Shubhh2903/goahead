@@ -197,6 +197,98 @@ describe("ProviderRuntimeManager", () => {
     expect(manager.executablePath("grok")).toBe(join(root, "grok", "darwin-arm64", "1.0.30", "bin", "grok"));
   });
 
+  it("updates an older managed CLI automatically to the pinned version only", async () => {
+    const root = await temporaryRoot();
+    const fixture = automaticGrokFixture();
+    await olderManagedGrok(root);
+    let fetchedBeforeSwap: string[] = [];
+    const manager = automaticGrokManager(root, fixture, {
+      updateRuntime: async (_runtime, install) => {
+        fetchedBeforeSwap = [...fixture.fetched];
+        await install();
+      },
+    });
+    await manager.initialize();
+    expect(manager.getStatus().providers.grok).toMatchObject({ phase: "not-downloaded", version: "1.0.20" });
+
+    const ready = waitFor(manager, (snapshot) => snapshot.providers.grok.phase === "ready");
+    manager.startUpdateChecks();
+    const snapshot = await ready;
+
+    // A newer release (1.0.30) is known, but the automatic update installs the pin and only offers it.
+    expect(snapshot.providers.grok).toMatchObject({ phase: "ready", version: "1.0.22", availableVersion: "1.0.30" });
+    // The download ran before the swap, so the provider's turns waited only for the swap.
+    expect(fetchedBeforeSwap).toContain("https://x.ai/cli/grok-1.0.22-macos-aarch64");
+    expect(fixture.fetched.filter((url) => url.includes("grok-1.0.30"))).toEqual([]);
+    await manager.stop();
+  });
+
+  it("defers the automatic swap when a turn starts during the download, and swaps later without a new download", async () => {
+    for (const refusal of ["idle check", "swap refused"] as const) {
+      const root = await temporaryRoot();
+      const fixture = automaticGrokFixture();
+      await olderManagedGrok(root);
+      const pinnedUrl = "https://x.ai/cli/grok-1.0.22-macos-aarch64";
+      let busy = false;
+      const swaps: string[] = [];
+      const manager = automaticGrokManager(root, fixture, {
+        isProviderIdle: () => refusal === "swap refused" || !busy,
+        updateRuntime: async (runtime, install) => {
+          // As `updateProviderCli` does: a busy provider is refused before the swap starts.
+          if (busy) throw new Error("Grok is busy. Try the update again when it is idle.");
+          swaps.push(runtime);
+          await install();
+        },
+      });
+      await manager.initialize();
+      // A turn starts while the pinned CLI downloads.
+      const fetchImpl = fixture.onFetch;
+      fixture.onFetch = (url) => {
+        fetchImpl?.(url);
+        if (url === pinnedUrl) busy = true;
+      };
+
+      let downloading = false;
+      const deferred = waitFor(manager, (snapshot) => {
+        if (snapshot.providers.grok.phase === "downloading") downloading = true;
+        return downloading && snapshot.providers.grok.phase === "not-downloaded";
+      });
+      manager.startUpdateChecks();
+      expect((await deferred).providers.grok).toMatchObject({ version: "1.0.20" });
+      expect(swaps).toEqual([]);
+      // The agent service still runs 1.0.20, and the install waits in the store.
+      expect(manager.executablePath("grok")).toBe(join(root, "grok", "darwin-arm64", "1.0.20", "bin", "grok"));
+      await expect(access(join(root, "grok", "darwin-arm64", "1.0.22", "bin", "grok"))).resolves.toBeUndefined();
+
+      busy = false;
+      const ready = waitFor(manager, (snapshot) => snapshot.providers.grok.phase === "ready");
+      await manager.checkForUpdates();
+      expect((await ready).providers.grok.version).toBe("1.0.22");
+      expect(swaps).toEqual(["grok"]);
+      expect(fixture.fetched.filter((url) => url === pinnedUrl)).toHaveLength(1);
+      await manager.stop();
+    }
+  });
+
+  it("does not update a CLI the user installed, or a provider whose agents are busy", async () => {
+    for (const setup of ["system", "busy"] as const) {
+      const root = await temporaryRoot();
+      const fixture = automaticGrokFixture();
+      await olderManagedGrok(root);
+      const manager = automaticGrokManager(root, fixture, { isProviderIdle: () => setup !== "busy" });
+      await manager.initialize();
+      if (setup === "system") manager.setSystemVersion("grok", "1.0.19");
+
+      manager.startUpdateChecks();
+      // Joins the check that `startUpdateChecks` began.
+      await manager.checkForUpdates();
+
+      expect(manager.getStatus().providers.grok.phase).toBe("not-downloaded");
+      expect(fixture.fetched.filter((url) => url.startsWith("https://x.ai/cli/grok-"))).toEqual([]);
+      await manager.stop();
+    }
+  });
+
   it("reports a check that no release source answered", async () => {
     const root = await temporaryRoot();
     const manager = new ProviderRuntimeManager({
@@ -1460,6 +1552,61 @@ function latestGrokManager(root: string, fixture: ReturnType<typeof latestGrokFi
             headers: { "content-range": `bytes 0-0/${fixture.executable.byteLength}` },
           });
         }
+        return chunkedResponse(fixture.executable, 1_024);
+      }
+      return new Response(null, { status: 404 });
+    },
+  });
+}
+
+/**
+ * Grok pinned at 1.0.22, with an older managed copy (1.0.20) in the store and x.ai announcing 1.0.30.
+ * Each fetched URL but the size probe is recorded, so a test can tell which version a download asked for.
+ */
+function automaticGrokFixture(): ReturnType<typeof latestGrokFixture> & {
+  pinned: Uint8Array<ArrayBuffer>;
+  fetched: string[];
+  /** Runs for each recorded fetch, so a test can act while a download runs. */
+  onFetch?: (url: string) => void;
+} {
+  return { ...latestGrokFixture("1.0.30"), pinned: grokFixture().executable, fetched: [] };
+}
+
+/** A managed Grok that an earlier build installed, older than the pin. */
+async function olderManagedGrok(root: string): Promise<void> {
+  const bin = join(root, "grok", "darwin-arm64", "1.0.20", "bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, "grok"), "#!/bin/sh\necho 1.0.20\n");
+}
+
+function automaticGrokManager(
+  root: string,
+  fixture: ReturnType<typeof automaticGrokFixture>,
+  options: Partial<ProviderRuntimeManagerOptions> = {},
+): ProviderRuntimeManager {
+  return new ProviderRuntimeManager({
+    root,
+    platform: "darwin",
+    architecture: "arm64",
+    lock: fixture.lock,
+    ...options,
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      // The release check reads one byte of the newest release to learn its size; that is no download.
+      if (new Headers(init?.headers).get("Range") === "bytes=0-0") {
+        return new Response(fixture.executable.slice(0, 1), {
+          status: 206,
+          headers: { "content-range": `bytes 0-0/${fixture.executable.byteLength}` },
+        });
+      }
+      fixture.fetched.push(url);
+      fixture.onFetch?.(url);
+      if (url === "https://x.ai/cli/stable") return new Response(`${fixture.version}\n`);
+      if (url.endsWith("/provider-runtime-blocklist.json")) return Response.json({ schemaVersion: 1, blocked: {} });
+      if (url.endsWith("/LICENSE")) return new Response(fixture.license);
+      if (url.endsWith("/THIRD-PARTY-NOTICES")) return new Response(fixture.notices);
+      if (url === "https://x.ai/cli/grok-1.0.22-macos-aarch64") return chunkedResponse(fixture.pinned, 1_024);
+      if (url === `https://x.ai/cli/grok-${fixture.version}-macos-aarch64`) {
         return chunkedResponse(fixture.executable, 1_024);
       }
       return new Response(null, { status: 404 });

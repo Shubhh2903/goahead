@@ -53,6 +53,11 @@ import { recordRestartActivity } from "./restart-activity";
 
 const MAX_ATTACHMENTS = INPUT_LIMITS.attachments;
 /**
+ * How long an answer waits for the slower requests of the same turn. Counted from the answer's
+ * stored queue time, so a restart does not start the wait again.
+ */
+export const REQUEST_GROUP_HOLD_MS = 5 * 60_000;
+/**
  * The external conversation a message came from. Such a message runs in the execution thread of
  * that conversation, so the queue and the public chat do not show it, like channel work.
  */
@@ -223,6 +228,7 @@ export class MailboxStore {
   readonly #database: OpenBotDatabase;
   readonly #queueUpdates = new Set<string>();
   readonly #deliveryGate = new MailboxDeliveryGate();
+  #recipientMayWork: (agentId: string) => boolean = () => true;
   readonly #stagedGeneratedAttachments = new Map<string, StoredGeneratedAttachment>();
   #state: StoredState = structuredClone(EMPTY_STATE);
 
@@ -851,9 +857,7 @@ export class MailboxStore {
 
   #sourceTurnId(messageId: string): string | undefined {
     const key = Object.entries(this.#state.idempotency).find(([, value]) => value === messageId)?.[0];
-    if (!key) return undefined;
-    const parts = key.split(":");
-    return parts.length >= 3 ? parts.at(-2) : undefined;
+    return key ? turnIdOfKey(key) : undefined;
   }
 
   senderAgentIdsForRecipient(agentId: string): string[] {
@@ -890,14 +894,61 @@ export class MailboxStore {
     const message = this.#requireMessage(next.messageId);
     const requestId = isAnswer(message) ? message.replyToMessageId : null;
     if (message.sender.kind !== "user" && !requestId) return [];
+    const group = requestId ? new Set(this.requestGroupIds(requestId)) : null;
     return this.#queuedFor(next.recipientAgentId)
       .filter((candidate) => {
         if (candidate.id === next.id || !this.#mayStart(candidate)) return false;
-        if (!requestId) return this.#isHeldReply(candidate);
+        if (!group) return this.#isHeldReply(candidate);
         const reply = this.#requireMessage(candidate.messageId);
-        return isAnswer(reply) && reply.replyToMessageId === requestId;
+        return isAnswer(reply) && group.has(reply.replyToMessageId);
       })
       .map((delivery) => this.#context(delivery));
+  }
+
+  /**
+   * Whether a recipient can work now. A request of a group at a recipient that cannot, such as one
+   * whose plan limit is spent, does not hold the answers of the other requests.
+   */
+  setRecipientMayWork(predicate: (agentId: string) => boolean): void {
+    this.#recipientMayWork = predicate;
+  }
+
+  /** The earliest time the hold cap releases a held answer queued for this agent, or null. */
+  groupHoldReleaseAt(agentId: string): number | null {
+    const times = this.#queuedFor(agentId)
+      .filter((delivery) => this.#isHeldReply(delivery))
+      .map((delivery) => Date.parse(delivery.createdAt) + REQUEST_GROUP_HOLD_MS)
+      .filter((time) => Number.isFinite(time) && time > Date.now());
+    return times.length > 0 ? Math.min(...times) : null;
+  }
+
+  /**
+   * The requests that an agent sent in the same turn as this one, this one included, oldest first.
+   * Their answers start one turn together, so a fan-out in several `send_message` calls costs the
+   * requester one turn, as one call to several teammates does. A request without a known turn is
+   * its own group.
+   */
+  requestGroupIds(requestId: string): string[] {
+    const request = this.#state.messages.find((message) => message.id === requestId);
+    const requestKey = Object.entries(this.#state.idempotency).find(([, value]) => value === requestId)?.[0];
+    const turnKey = requestKey ? turnKeyOf(requestKey) : undefined;
+    if (request?.sender.kind !== "agent" || turnKey === undefined) return [requestId];
+    const senderAgentId = request.sender.agentId;
+    const sameTurn = new Set(
+      Object.entries(this.#state.idempotency).flatMap(([key, messageId]) =>
+        turnKeyOf(key) === turnKey ? [messageId] : [],
+      ),
+    );
+    return this.#state.messages
+      .filter(
+        (message) =>
+          message.id === requestId ||
+          (sameTurn.has(message.id) &&
+            message.sender.kind === "agent" &&
+            message.sender.agentId === senderAgentId &&
+            message.expectsReply !== false),
+      )
+      .map((message) => message.id);
   }
 
   /** The agents that were sent a request and whose delivery ended with no answer. */
@@ -929,9 +980,10 @@ export class MailboxStore {
   }
 
   /**
-   * An answer to a request that its recipient sent to several teammates waits while another of them
-   * has the request still queued or running. So the requester reads all the answers in one turn,
-   * not one turn for each answer.
+   * An answer to a request that its recipient sent to several teammates, in one message or in one
+   * turn, waits while another of them has a request of that group still queued or running. So the
+   * requester reads all the answers in one turn, not one turn for each answer. Another request of
+   * the turn holds only for `REQUEST_GROUP_HOLD_MS`, and not while its recipient cannot work.
    */
   #isHeldReply(delivery: StoredDelivery): boolean {
     const reply = this.#requireMessage(delivery.messageId);
@@ -944,9 +996,12 @@ export class MailboxStore {
     )
       return false;
     const answeredBy = reply.sender.agentId;
+    const capPassed = Date.now() - Date.parse(delivery.createdAt) >= REQUEST_GROUP_HOLD_MS;
+    const group = new Set(capPassed ? [] : this.requestGroupIds(request.id));
     return this.#state.deliveries.some(
       (candidate) =>
-        candidate.messageId === request.id &&
+        (candidate.messageId === request.id ||
+          (group.has(candidate.messageId) && this.#recipientMayWork(candidate.recipientAgentId))) &&
         candidate.recipientAgentId !== answeredBy &&
         (candidate.status === "queued" || candidate.status === "starting" || candidate.status === "running"),
     );
@@ -2245,6 +2300,17 @@ function queueSaveHash(text: string, keepAttachmentIds: string[], attachmentDraf
  */
 function recordFinishedQueueEdit(delivery: StoredDelivery, editId: string, outcome: StoredFinishedEdit): void {
   delivery.finishedEditOutcomes = { ...(delivery.finishedEditOutcomes ?? {}), [editId]: outcome };
+}
+
+/** The turn of an idempotency key `<threadId>:<turnId>:<callId>`, or undefined for a shorter key. */
+function turnIdOfKey(key: string): string | undefined {
+  const parts = key.split(":");
+  return parts.length >= 3 ? parts.at(-2) : undefined;
+}
+
+/** `<threadId>:<turnId>` of an idempotency key, so equal turn ids of two threads stay apart. */
+function turnKeyOf(key: string): string | undefined {
+  return turnIdOfKey(key) === undefined ? undefined : key.slice(0, key.lastIndexOf(":"));
 }
 
 /** An agent's answer to a request. A linked message that asks for a reply is a new request. */

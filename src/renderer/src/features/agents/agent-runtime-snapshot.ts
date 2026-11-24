@@ -3,6 +3,7 @@ import {
   type AgentEvent,
   type AgentRuntimeSnapshot,
   isLocalOnlyApprovalRequestId,
+  runtimePromptEvent,
 } from "@openbot/contracts/ipc";
 import { cleanAgentMessageText } from "@openbot/team-client/agent-message-text";
 import type { AgentMessage } from "@openbot/ui/data";
@@ -38,7 +39,7 @@ export function reconcileAttentionPrompts(
     // A prompt whose answer is already on its way to main would otherwise come
     // back the moment a snapshot crosses the answer in flight.
     if (promptRequestKey(prompt.turnId, prompt.requestId) !== submittedRequests[prompt.agentId]) {
-      next[prompt.agentId] = { type: "prompt", ...prompt };
+      next[prompt.agentId] = runtimePromptEvent(prompt);
     }
   }
   for (const request of snapshot.pendingBrowserTakeovers) {

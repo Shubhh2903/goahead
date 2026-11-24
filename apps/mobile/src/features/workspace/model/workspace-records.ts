@@ -30,6 +30,7 @@ export function projectAgent(serverId: string, agent: RemoteAgent): MobileAgent 
     description: agent.description,
     preview: agent.preview,
     updatedLabel: formatUpdatedAt(agent.updatedAt),
+    updatedAt: agent.updatedAt,
     provider: agent.provider,
     model: agent.model,
     reasoningEffort: agent.reasoningEffort,

@@ -130,7 +130,7 @@ it("offers retry when the update request fails before progress starts", async ()
   const { store, api } = runtimeHarness();
   await waitFor(() => expect(store.providerAvailableVersions().claude).toBe("2.1.250"));
   vi.mocked(api.download).mockRejectedValueOnce(new Error("IPC request failed"));
-  await store.downloadProviderRuntime("claude");
+  await expect(store.downloadProviderRuntime("claude")).rejects.toThrow("The update could not start. Try again.");
   expect(await screen.findByRole("button", { name: "Retry" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   expect(await screen.findByText("Updating Claude")).toBeInTheDocument();
@@ -159,4 +159,18 @@ it("checks rather than downloads for a CLI the user installed that is already on
   await store.startProviderUpdate("claude");
   expect(api.checkForUpdates).toHaveBeenCalled();
   expect(api.download).not.toHaveBeenCalled();
+});
+
+it("reports each provider of Update all, a download that did not start included", async () => {
+  const { store, api } = runtimeHarness();
+  await waitFor(() => expect(store.providerAvailableVersions().claude).toBe("2.1.250"));
+  vi.mocked(api.download).mockRejectedValueOnce(new Error("IPC request failed"));
+  fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+  expect(await screen.findByText("Claude: The update could not start. Try again.")).toBeInTheDocument();
+  expect(api.download).toHaveBeenCalledOnce();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+  expect(await screen.findByText("Claude: the update started.")).toBeInTheDocument();
+  expect(screen.queryByText("Claude: The update could not start. Try again.")).not.toBeInTheDocument();
+  expect(api.download).toHaveBeenCalledTimes(2);
 });

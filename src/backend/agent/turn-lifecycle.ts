@@ -1,6 +1,8 @@
+import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   type AgentEvent,
   type AgentSummary,
+  agentAutoModelEnabled,
   type BrowserControlState,
   type BrowserTab,
   CONVERSATION_PLAN_ITEM_TYPE,
@@ -153,6 +155,8 @@ export class TurnLifecycle {
     string,
     { client: AgentClient; agentId: string; threadId: string; startedAt: number; produced: boolean; acted: boolean }
   >();
+  /** Turns whose completion has started and not yet ended. */
+  readonly #completingTurns = new Set<string>();
   /** Running turns a provider plan refused, with the reset in epoch seconds when the provider gave it. */
   readonly #limitedTurns = new Map<string, number | null>();
   /** The deliveries run again after a refused session history. Each one gets a single retry. */
@@ -186,6 +190,30 @@ export class TurnLifecycle {
   forgetAgent(agentId: string): void {
     this.#failedTurns.delete(agentId);
     this.#lastEventAt.delete(agentId);
+  }
+
+  /** True while the completion of this turn runs. */
+  isCompleting(turnId: string): boolean {
+    return this.#completingTurns.has(turnId);
+  }
+
+  /**
+   * Ends a turn that its provider no longer runs, as interrupted: the person pressed Stop, and the
+   * provider answered that the turn is not active. No `turn/completed` comes for such a turn. The
+   * empty preview removes held text that the chat may still show for it.
+   */
+  async settleLostTurn(agentId: string, threadId: string, turnId: string): Promise<void> {
+    this.#hooks.emit({
+      type: "turn-text-preview",
+      agentId,
+      threadId: this.#conversation.publicThreadId(agentId, threadId),
+      turnId,
+      text: "",
+    });
+    // As for `turn/completed`: the automatic model rule measures the prompt cache from the real end.
+    this.#conversation.recordTurnEnded(threadId);
+    this.#attention.clearForTurn(threadId, turnId);
+    await this.#completeTurn(agentId, threadId, turnId, "interrupted");
   }
 
   /** When this running turn sent `turn/started`, in epoch milliseconds. Null for a turn that is not running. */
@@ -265,7 +293,15 @@ export class TurnLifecycle {
         : undefined;
       if (agent && session) {
         try {
-          collectProviderUsage(this.#store.database.usage, agent, session, notification.method, params);
+          // A turn that "Choose model automatically" moved to another model counts on that model.
+          const turnModel = agentAutoModelEnabled(agent) ? this.#conversation.turnModel(threadId) : null;
+          collectProviderUsage(
+            this.#store.database.usage,
+            turnModel ? { id: agent.id, model: turnModel } : agent,
+            session,
+            notification.method,
+            params,
+          );
         } catch {
           this.#hooks.emitError("usage_collection_failed", new Error("Usage data could not be saved."), agentId);
         }
@@ -402,6 +438,8 @@ export class TurnLifecycle {
         const turnId = getString(turn, "id");
         if (!turnId) return;
         const status = getString(turn, "status") ?? "completed";
+        // Measured from here: the provider's prompt cache stays warm for a while after its last request.
+        this.#conversation.recordTurnEnded(threadId);
         this.#attention.clearForTurn(threadId, turnId);
         if (this.#compaction.isCompactionTurn(threadId, turnId)) {
           this.#compaction.finish(agentId, threadId, status);
@@ -474,6 +512,15 @@ export class TurnLifecycle {
   }
 
   async #completeTurn(agentId: string, threadId: string, turnId: string, status: string): Promise<void> {
+    this.#completingTurns.add(turnId);
+    try {
+      await this.#finishTurn(agentId, threadId, turnId, status);
+    } finally {
+      this.#completingTurns.delete(turnId);
+    }
+  }
+
+  async #finishTurn(agentId: string, threadId: string, turnId: string, status: string): Promise<void> {
     const running = this.#runningTurns.get(turnId);
     this.#runningTurns.delete(turnId);
     const reportedError = this.#turnErrors.get(turnId);
@@ -712,7 +759,7 @@ export class TurnLifecycle {
     await this.#mailbox.enqueue({
       sender: { kind: "agent", agentId },
       recipientAgentIds: [recipientAgentId],
-      text,
+      text: boundedRelayText(text, agentId),
       replyToMessageId: messageId,
       // The requested result, not a new request. The chain-origin guard above already stops a
       // second relay; this is what tells the recipient it owes no acknowledgement for one.
@@ -831,4 +878,19 @@ function isRepeatedWork(item: { type?: unknown; phase?: unknown; text?: unknown 
   if (item.type === "userMessage" || item.type === "reasoning" || item.type === "contextCompaction") return false;
   if (item.type !== "agentMessage") return true;
   return item.phase !== "commentary" && isString(item.text) && item.text.trim() !== "";
+}
+
+/**
+ * A relayed answer that fits one message. A longer one would make the enqueue throw, and the
+ * requester would get no answer at all. The teammate's own conversation keeps the whole text.
+ */
+function boundedRelayText(text: string, agentId: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= INPUT_LIMITS.messageText) return trimmed;
+  const note = `\n\n[Shortened to fit one message. The full answer is in the conversation of teammate ${agentId}.]`;
+  let end = INPUT_LIMITS.messageText - note.length;
+  // Not between the two halves of a surrogate pair.
+  const last = trimmed.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${trimmed.slice(0, end).trimEnd()}${note}`;
 }

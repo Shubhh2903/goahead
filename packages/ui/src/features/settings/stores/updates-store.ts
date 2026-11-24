@@ -14,6 +14,7 @@ interface UpdatesStoreProps {
   /** Restarts OpenBot, or installs the downloaded update, when no work runs. Absent: no such action. */
   onRestartWhenIdle?: () => Promise<void>;
   onCancelIdleRestart?: () => Promise<void>;
+  onRestartNow?: () => Promise<void>;
   /** Opens the release page in the browser, for when the updater cannot read the feed. */
   onOpenReleases?: () => void;
 }
@@ -168,6 +169,8 @@ export function createSettingsUpdatesStore(props: UpdatesStoreProps) {
     openReleases: () => props.onOpenReleases?.(),
     restartWhenIdle: () => changeIdleRestart(props.onRestartWhenIdle, "update.idleRestart.requestFailed"),
     cancelIdleRestart: () => changeIdleRestart(props.onCancelIdleRestart, "update.idleRestart.cancelFailed"),
+    restartNowOffered: () => Boolean(props.onRestartNow),
+    restartNow: () => changeIdleRestart(props.onRestartNow, "update.idleRestart.failedTitle"),
   };
 }
 

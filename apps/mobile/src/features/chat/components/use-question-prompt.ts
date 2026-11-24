@@ -1,7 +1,13 @@
 import type { AgentPromptResolution, RespondToPromptInput } from "@openbot/contracts/ipc";
 import { useRef, useState } from "react";
 import type { ChatMessage } from "@/features/chat/model/chat-messages";
-import { answeredPromptResolution, nextUnansweredQuestion } from "@/features/chat/model/question-prompt";
+import {
+  answeredPromptResolution,
+  answerWithText,
+  nextUnansweredQuestion,
+  orderedPicks,
+  toggledPicks,
+} from "@/features/chat/model/question-prompt";
 import { haptics } from "@/shared/lib/haptics";
 
 interface PromptState {
@@ -9,6 +15,8 @@ interface PromptState {
   index: number;
   answers: Record<string, string[]>;
   drafts: Record<string, string>;
+  /** Options toggled on a multi-select question, before Done sends them. */
+  picks: Record<string, string[]>;
   pending: boolean;
   failedAnswers: Record<string, string[]> | null;
   resolution: AgentPromptResolution | null;
@@ -22,6 +30,7 @@ function initialState(scope: string): PromptState {
     index: 0,
     answers: {},
     drafts: {},
+    picks: {},
     pending: false,
     failedAnswers: null,
     resolution: null,
@@ -46,6 +55,8 @@ export function useQuestionPrompt(
   const question = resolution ? undefined : prompt?.questions[state.index];
   const disabled = !canSend || state.pending || Boolean(resolution) || !prompt;
 
+  const picked = question ? orderedPicks(question, state.picks[question.id]) : [];
+
   function update(change: Partial<PromptState>): void {
     setState((current) => (current.scope === scope ? { ...current, ...change } : current));
   }
@@ -56,7 +67,7 @@ export function useQuestionPrompt(
     update({ pending: true, failedAnswers: null });
     try {
       await respond(agentId, { requestId: prompt.requestId, answers });
-      update({ resolution: answeredPromptResolution(prompt.questions, answers), answers: {}, drafts: {} });
+      update({ resolution: answeredPromptResolution(prompt.questions, answers), answers: {}, drafts: {}, picks: {} });
       void haptics.notification("success");
     } catch {
       void haptics.notification("error");
@@ -83,6 +94,20 @@ export function useQuestionPrompt(
     if (next === null) void submit(answers);
   }
 
+  function togglePick(label: string): void {
+    if (disabled || !question?.multiSelect) return;
+    void haptics.selection();
+    update({
+      picks: { ...state.picks, [question.id]: toggledPicks(state.picks[question.id], label) },
+      failedAnswers: null,
+    });
+  }
+
+  /** A typed reply also sends the options that are toggled on. */
+  function answerText(text: string): void {
+    answer(answerWithText(picked, text));
+  }
+
   return {
     messageId: message?.id,
     index: state.index,
@@ -106,7 +131,10 @@ export function useQuestionPrompt(
       void haptics.selection();
       update({ index, replyInChat: false });
     },
+    picked,
+    togglePick,
     answer,
+    answerText,
     submit,
   };
 }

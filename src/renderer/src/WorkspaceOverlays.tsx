@@ -20,12 +20,13 @@ import {
   createOnePasswordConnector,
   type OnePasswordConnectorController,
 } from "./features/connectors/onepassword-connector";
-import { createSlackConnector } from "./features/connectors/slack-connector";
+import { createSlackConnector, type SlackConnectorController } from "./features/connectors/slack-connector";
 import { useCustomAgents } from "./features/custom-agents/custom-agents-context";
 import { customAgentsPort } from "./features/custom-agents/custom-agents-port";
 import { useCustomProviders } from "./features/custom-providers/custom-providers-context";
 import { useProviderDetection } from "./features/custom-providers/provider-detection-context";
 import type { ServerStorageOptions } from "./features/files/ServerStoragePanel";
+import { FirstRunWizard } from "./features/onboarding/FirstRunWizard";
 import { useSetup } from "./features/onboarding/onboarding-context";
 import { useSetupProviderProps } from "./features/onboarding/setup-provider-props";
 import { useRemoteDesktop } from "./features/remote-desktop/remote-desktop-context";
@@ -92,6 +93,8 @@ export function WorkspaceOverlays(props: AccountProps) {
   /* The 1Password connection of this computer. The browser that fills its logins runs here too. */
   const onePassword = createOnePasswordConnector();
   const onePasswordFor = (server: ServerSummary | undefined) => (server?.kind === "local" ? onePassword : undefined);
+  /* The Slack workspaces of this computer, which Server settings and first-run setup both show. */
+  const slack = createLocalSlackConnector();
   /* The Bitwarden connection of this computer. Like 1Password, only the local server has it. */
   const bitwarden = createBitwardenConnector();
   const bitwardenFor = (server: ServerSummary | undefined) => (server?.kind === "local" ? bitwarden : undefined);
@@ -122,12 +125,47 @@ export function WorkspaceOverlays(props: AccountProps) {
         googleConnector={googleFor(serverSettingsTarget())}
         onePasswordConnector={onePasswordFor(serverSettingsTarget())}
         bitwardenConnector={bitwardenFor(serverSettingsTarget())}
+        slackConnector={slack}
       />
       <AppSettings account={props.account} />
+      <FirstRunWizard google={google} slack={slack} />
       <GlobalMessageSearch />
       <RemoteDesktop />
       <ChannelCreateOverlay />
     </>
+  );
+}
+
+/**
+ * The Slack connection of this computer. The Slack Orchestrator runs here, so its picker lists this
+ * computer's models: none while a joined server is on screen, and then it starts on a new agent's
+ * default.
+ */
+function createLocalSlackConnector(): SlackConnectorController {
+  const { activeServer } = useServers();
+  const { agentStatus, modelOptions, serverSetupChoice } = useAgents();
+  const { setupState } = useSetup();
+  const localEndpoints = useCustomProviders();
+  const localAgents = useCustomAgents();
+  const { collapseSidebarSection } = useSidebar();
+  return createSlackConnector(
+    undefined,
+    () => {
+      const options = modelOptions();
+      if (activeServer()?.kind !== "local" || options.length === 0) return undefined;
+      return {
+        modelOptions: options,
+        agentStatus: agentStatus(),
+        initial: resolveOrchestratorModel(serverSetupChoice() ?? setupState(), options),
+        customProviders: localEndpoints.customProviders(),
+        customAgents: localAgents.customAgents(),
+      };
+    },
+    // The Integrations section starts collapsed: the orchestrator is not an agent people chat with
+    // every day. The collapse belongs to the local server, the one on screen when Slack connects.
+    (sectionId) => {
+      if (activeServer()?.kind === "local") collapseSidebarSection(sectionId);
+    },
   );
 }
 
@@ -283,14 +321,14 @@ function ServerSettings(props: {
   googleConnector: GoogleConnectorController | undefined;
   onePasswordConnector: OnePasswordConnectorController | undefined;
   bitwardenConnector: BitwardenConnectorPanelProps | undefined;
+  slackConnector: SlackConnectorController;
 }) {
   const platform = usePlatform();
-  const { hostStatus, setServerMuted, setServerNotificationLevel, activeServer } = useServers();
+  const { hostStatus, setServerMuted, setServerNotificationLevel } = useServers();
   const { selectAgent, selectGlobalSearchMessage } = useNavigation();
   const { selectServer } = useServerSelection();
   const { setPendingAgentSelection } = useServerSwitch();
-  const { agentList, agentStatus, modelOptions, serverSetupChoice } = useAgents();
-  const { setupState } = useSetup();
+  const { agentList, agentStatus } = useAgents();
   const {
     toolRuntimeStatuses,
     providerAdminServerId,
@@ -382,28 +420,6 @@ function ServerSettings(props: {
     setMcpServerEnabled,
     testMcpServer,
   } = useServerSettings();
-  // The Slack Orchestrator runs on this computer, so its picker lists this computer's models: none
-  // while a joined server is on screen, and then it starts on a new agent's default.
-  const { collapseSidebarSection } = useSidebar();
-  const slack = createSlackConnector(
-    undefined,
-    () => {
-      const options = modelOptions();
-      if (activeServer()?.kind !== "local" || options.length === 0) return undefined;
-      return {
-        modelOptions: options,
-        agentStatus: agentStatus(),
-        initial: resolveOrchestratorModel(serverSetupChoice() ?? setupState(), options),
-        customProviders: localEndpoints.customProviders(),
-        customAgents: localAgents.customAgents(),
-      };
-    },
-    // The Integrations section starts collapsed: the orchestrator is not an agent people chat with
-    // every day. The collapse belongs to the local server, the one on screen when Slack connects.
-    (sectionId) => {
-      if (activeServer()?.kind === "local") collapseSidebarSection(sectionId);
-    },
-  );
   // The workspace belongs to the selected server. For another server, the switch comes first and
   // the agent is published for the scope it lands in; a message there opens as its agent's chat.
   const openOnServer = (server: ServerSummary, agentId: string, open: () => void) => {
@@ -590,7 +606,7 @@ function ServerSettings(props: {
           bitwardenConnector={props.bitwardenConnector}
           // Slack is connected on the computer that runs the agents: Slack opens this computer's browser
           // and returns to its `openbot://` link.
-          slackConnector={server().kind === "local" ? slack : undefined}
+          slackConnector={server().kind === "local" ? props.slackConnector : undefined}
           connectorAgents={agentList()}
           // The feed listens on this computer, so a calendar app on another one cannot read it.
           routineFeed={
@@ -661,6 +677,7 @@ function AppSettings(props: AccountProps) {
         onCancelScheduledRestart={updates.cancelScheduledRestart}
         onRestartWhenIdle={updates.restartWhenIdle}
         onCancelIdleRestart={updates.cancelIdleRestart}
+        onRestartNow={updates.restartNow}
         onOpenReleases={() => void appPort().openUrl(PRODUCT_IDENTITY.releasesUrl)}
         account={props.account()}
         onUpdateAccountName={auth.updateAccountName}

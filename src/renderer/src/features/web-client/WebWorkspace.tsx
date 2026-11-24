@@ -52,7 +52,7 @@ import { startActionSounds } from "../../action-sounds";
 import { actionToast } from "../../action-toast";
 import { toAgentMessage, toAgentMessages } from "../../app-message-projection";
 import { playCompletionSoundForAgentEvent, unlockCompletionSound } from "../../completion-sound";
-import { isGlobalSearchShortcut } from "../../global-search-shortcut";
+import { matchesShortcut } from "../../keyboard-shortcut-preference";
 import { LayoutProvider, useLayout } from "../../layout";
 import { PlatformProvider } from "../../platform";
 import { WorkspaceFrame } from "../../WorkspaceFrame";
@@ -540,7 +540,7 @@ function WebWorkspaceFrame(props: WebWorkspaceProps) {
   } | null>(null);
   onSettled(() => {
     const toggleSearch = (event: KeyboardEvent) => {
-      if (!isGlobalSearchShortcut(event)) return;
+      if (!matchesShortcut(event, "globalSearch")) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       setSearchOpen((open) => !open);

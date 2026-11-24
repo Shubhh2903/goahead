@@ -1,4 +1,4 @@
-import type { ChannelSummary, SidebarLayoutAction, SidebarLayoutSnapshot } from "@openbot/contracts/ipc";
+import type { ChannelSummary, SidebarLayoutSnapshot } from "@openbot/contracts/ipc";
 import type { AvatarMood } from "@openbot/ui/bloub-avatar";
 import { Sidebar } from "@openbot/ui/features/sidebar/Sidebar";
 import { normalizeSidebarPinnedItems, type SidebarPinnedItem } from "@openbot/ui/features/sidebar/sidebar-pins";
@@ -7,6 +7,7 @@ import { createSignal, untrack } from "solid-js";
 import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
 import { defaultSidebarLayout } from "../src/features/sidebar/sidebar-sections";
+import { applySidebarLayoutAction } from "../src/preview/mock-sidebar-layout";
 import { requireFixture, STORY_AGENTS, STORY_DIRECT_THREADS, STORY_PRESENCE, STORY_SERVERS } from "./fixtures";
 
 const agentStates: Record<string, SidebarAgentState> = {
@@ -185,7 +186,7 @@ function InteractiveSidebar(props: Parameters<typeof Sidebar>[0]) {
         props.onReorderPeople(memberIds);
       }}
       onMutateLayout={async (action) => {
-        setLayout((current) => applyStoryLayoutAction(current, action));
+        setLayout((current) => applySidebarLayoutAction(current, action));
         await props.onMutateLayout(action);
       }}
       onToggleSection={(sectionId) => {
@@ -198,67 +199,6 @@ function InteractiveSidebar(props: Parameters<typeof Sidebar>[0]) {
       }}
     />
   );
-}
-
-function applyStoryLayoutAction(layout: SidebarLayoutSnapshot, action: SidebarLayoutAction): SidebarLayoutSnapshot {
-  const revision = layout.revision + 1;
-  if (action.type === "create") {
-    const id = crypto.randomUUID();
-    return {
-      ...layout,
-      revision,
-      sections: [...layout.sections, { id, name: action.name.trim() }],
-      order: [...layout.order, id],
-      agentAssignments: action.agentId
-        ? { ...layout.agentAssignments, [action.agentId]: id }
-        : { ...layout.agentAssignments },
-      agentOrder: [...layout.agentOrder],
-    };
-  }
-  if (action.type === "rename") {
-    return {
-      ...layout,
-      revision,
-      sections: layout.sections.map((section) =>
-        section.id === action.sectionId ? { ...section, name: action.name.trim() } : section,
-      ),
-    };
-  }
-  if (action.type === "delete") {
-    return {
-      ...layout,
-      revision,
-      sections: layout.sections.filter((section) => section.id !== action.sectionId),
-      order: layout.order.filter((sectionId) => sectionId !== action.sectionId),
-      agentAssignments: Object.fromEntries(
-        Object.entries(layout.agentAssignments).filter(([, sectionId]) => sectionId !== action.sectionId),
-      ),
-      agentOrder: [...layout.agentOrder],
-    };
-  }
-  if (action.type === "move") {
-    const order = [...layout.order];
-    const index = order.indexOf(action.sectionId);
-    const target = index + (action.direction === "up" ? -1 : 1) * (action.steps ?? 1);
-    if (index >= 0 && target >= 0 && target < order.length) {
-      const [movedSectionId] = order.splice(index, 1);
-      if (movedSectionId) order.splice(target, 0, movedSectionId);
-    }
-    return { ...layout, revision, order };
-  }
-  if (action.type === "move-agent") {
-    const agentOrder = layout.agentOrder.filter((agentId) => agentId !== action.agentId);
-    const insertionIndex = action.beforeAgentId === null ? agentOrder.length : agentOrder.indexOf(action.beforeAgentId);
-    agentOrder.splice(insertionIndex < 0 ? agentOrder.length : insertionIndex, 0, action.agentId);
-    const agentAssignments = { ...layout.agentAssignments };
-    if (action.sectionId === null) delete agentAssignments[action.agentId];
-    else agentAssignments[action.agentId] = action.sectionId;
-    return { ...layout, revision, agentAssignments, agentOrder };
-  }
-  const agentAssignments = { ...layout.agentAssignments };
-  if (action.sectionId === null) delete agentAssignments[action.agentId];
-  else agentAssignments[action.agentId] = action.sectionId;
-  return { ...layout, revision, agentAssignments };
 }
 
 const meta = {

@@ -19,6 +19,7 @@ import type {
   TeamPresenceSnapshot,
   TeamRealtimeEvent,
 } from "@openbot/contracts/ipc";
+import { runtimePromptEvent } from "@openbot/contracts/ipc";
 import { cleanAgentMessageText } from "@openbot/team-client/agent-message-text";
 import { WAKE_RECONNECT_DELAY_MS } from "@openbot/team-client/hosted-server-wake";
 import type { RemoteTeamHost } from "@openbot/team-client/remote-directory";
@@ -299,7 +300,7 @@ export function createWebWorkspace(
             );
             draft.prompts = reconcilePendingRequests(
               draft.prompts,
-              event.snapshot.pendingPrompts.map((prompt) => ({ ...prompt, type: "prompt" as const })),
+              event.snapshot.pendingPrompts.map(runtimePromptEvent),
               attentionComplete,
             );
             draft.takeovers = reconcilePendingRequests(

@@ -89,6 +89,8 @@ export type OnePasswordConnectorDesktopApi = GroupApi<IpcEndpoints["onePasswordC
 export type BitwardenConnectorDesktopApi = GroupApi<IpcEndpoints["bitwardenConnector"]>;
 export type BillingDesktopApi = GroupApi<IpcEndpoints["billing"]>;
 export type RoutineFeedDesktopApi = GroupApi<IpcEndpoints["routineFeed"]>;
+export type BackdropsDesktopApi = GroupApi<IpcEndpoints["backdrops"]>;
+export type UsageDesktopApi = GroupApi<IpcEndpoints["usage"]>;
 
 export type HostedServersDesktopApi = GroupApi<IpcEndpoints["hostedServers"]>;
 
@@ -159,6 +161,8 @@ export interface OpenBotDesktopApi extends GroupApi<IpcEndpoints["app"]>, GroupA
   agentImport: AgentImportDesktopApi;
   hostedSites: HostedSitesDesktopApi;
   routineFeed: RoutineFeedDesktopApi;
+  backdrops: BackdropsDesktopApi;
+  usage: UsageDesktopApi;
   routineFlows: RoutineFlowsDesktopApi;
   githubConnector: GitHubConnectorDesktopApi;
   googleConnector: GoogleConnectorDesktopApi;

@@ -39,6 +39,11 @@ export interface AgentPromptQuestion {
   question: string;
   isSecret: boolean;
   options: Array<{ label: string; description: string }> | null;
+  /**
+   * The person may pick more than one option. Absent means one. Only `true` is a value, as on the
+   * `question-multi-select-v6` wire, so no `false` can reach the host encoder.
+   */
+  multiSelect?: true;
 }
 
 export function isAgentPromptQuestion(value: unknown): value is AgentPromptQuestion {
@@ -48,6 +53,7 @@ export function isAgentPromptQuestion(value: unknown): value is AgentPromptQuest
     isBoundedString(value.header, INPUT_LIMITS.promptHeader) &&
     isBoundedString(value.question, INPUT_LIMITS.promptQuestion) &&
     isBoolean(value.isSecret) &&
+    (value.multiSelect === undefined || value.multiSelect === true) &&
     (value.options === null ||
       (Array.isArray(value.options) &&
         value.options.length <= INPUT_LIMITS.promptOptions &&
@@ -253,6 +259,11 @@ export interface ConversationMessage {
   plan?: ConversationPlan;
   /** Set on a user message that GoAhead wrote to a Slack orchestrator. The chat draws a card. */
   slackAsk?: ConversationSlackAsk;
+  /**
+   * The name of the model that GoAhead chose for this answer's turn, when the agent chooses its model
+   * automatically and the turn did not run on the agent's own model. Local-only.
+   */
+  autoModelName?: string;
 }
 
 export function isConversationMessage(value: unknown): value is ConversationMessage {
@@ -296,7 +307,8 @@ export function isConversationMessage(value: unknown): value is ConversationMess
     (value.imageGeneration === undefined || isImageGenerationInfo(value.imageGeneration)) &&
     (value.questionPrompt === undefined || isConversationQuestionPrompt(value.questionPrompt)) &&
     (value.plan === undefined || isConversationPlan(value.plan)) &&
-    (value.slackAsk === undefined || isConversationSlackAsk(value.slackAsk))
+    (value.slackAsk === undefined || isConversationSlackAsk(value.slackAsk)) &&
+    (value.autoModelName === undefined || isBoundedString(value.autoModelName, INPUT_LIMITS.modelName))
   );
 }
 

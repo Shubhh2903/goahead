@@ -2,6 +2,7 @@ import type { AgentModelId, AgentProviderId, AppSetupState } from "@openbot/cont
 import { createSignal, flush, onSettled } from "solid-js";
 import { desktopAnalytics } from "../../analytics";
 import { createSimpleContext } from "../../simple-context";
+import { type FirstRunWizard, firstRunWizardForSetup, nextFirstRunStep, skipFirstRunWizard } from "./first-run-wizard";
 import { onboardingPort } from "./onboarding-port";
 
 /**
@@ -33,14 +34,27 @@ const Setup = createSimpleContext({
     const [setupLoaded, setSetupLoaded] = createSignal(false);
     const [pendingInviteUrl, setPendingInviteUrl] = createSignal("");
     const [permissionsOpen, setPermissionsOpen] = createSignal(false);
+    /**
+     * The first-run wizard of this session, or null when it never shows. It is decided once, from
+     * the setup read at launch: see `first-run-wizard.ts` for why nothing else is stored.
+     */
+    const [firstRunWizard, setFirstRunWizard] = createSignal<FirstRunWizard | null>(null);
 
     onSettled(() => {
       // `finally`, not `then`: a failed read still ends the loading screen, and
       // a null `setupState` is the same "not configured yet" the view handles.
+      // The wizard reads the answer itself: a signal read returns the new value only after a flush.
+      let loaded: AppSetupState | null = null;
       void onboardingPort()
         .getSetupState()
-        .then(setSetupState)
-        .finally(() => setSetupLoaded(true));
+        .then((state) => {
+          loaded = state;
+          setSetupState(state);
+        })
+        .finally(() => {
+          setFirstRunWizard(firstRunWizardForSetup(loaded));
+          setSetupLoaded(true);
+        });
     });
 
     /**
@@ -78,6 +92,22 @@ const Setup = createSimpleContext({
       }
     }
 
+    /** Step one of the wizard ends: the onboarding flow saved its choice, and the agent step follows. */
+    async function saveFirstRunSetup(preferredProvider: AgentProviderId, preferredModel?: AgentModelId | null) {
+      await saveSetup(preferredProvider, preferredModel);
+      updateFirstRunWizard(nextFirstRunStep);
+    }
+
+    /** Skips the whole wizard. The provider is saved, so the next launch does not start it again. */
+    async function skipFirstRunSetup(preferredProvider: AgentProviderId) {
+      await saveSetup(preferredProvider, null);
+      updateFirstRunWizard(skipFirstRunWizard);
+    }
+
+    function updateFirstRunWizard(transform: (wizard: FirstRunWizard) => FirstRunWizard): void {
+      setFirstRunWizard((current) => (current ? transform(current) : current));
+    }
+
     async function previewInvite(input: { inviteUrl: string }) {
       return onboardingPort().servers.previewInvite(input);
     }
@@ -90,6 +120,10 @@ const Setup = createSimpleContext({
       permissionsOpen,
       setPermissionsOpen,
       saveSetup,
+      firstRunWizard,
+      saveFirstRunSetup,
+      skipFirstRunSetup,
+      updateFirstRunWizard,
       previewInvite,
     };
   },

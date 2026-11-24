@@ -26,6 +26,8 @@ export function compactRuntimeQuestion(
     header: question.header.slice(0, AGENT_RUNTIME_QUESTION_HEADER_LIMIT),
     question: question.question.slice(0, AGENT_RUNTIME_TEXT_LIMIT),
     isSecret: question.isSecret,
+    // The host's own consumers, such as the Live Activity push, read it. The wire adapters drop it.
+    multiSelect: question.multiSelect === true,
     options:
       question.options?.map((option) => ({
         label: option.label,

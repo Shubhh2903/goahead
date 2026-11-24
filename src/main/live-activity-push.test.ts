@@ -1,8 +1,17 @@
+import { hmac } from "@noble/hashes/hmac.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import type { AndroidLiveUpdateRelayPush } from "@openbot/contracts/android-live-update-relay";
 import type { AgentEvent, AgentRuntimeSnapshot } from "@openbot/contracts/ipc";
 import type { LiveActivityRelayPush } from "@openbot/contracts/live-activity-relay";
+import { isDynamicRecord } from "@openbot/contracts/runtime-values";
 import type { LiveActivityPushRegistration } from "@openbot/contracts/team-protocol/live-activity-push-v1";
+import {
+  decodeLiveActivityBytes,
+  LIVE_ACTIVITY_NONCE_BYTES,
+  liveActivityKeys,
+} from "@openbot/team-client/live-activity-seal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { compactRuntimeQuestion } from "../backend/agent/runtime-snapshot";
 import { type LiveActivityPushAgents, LiveActivityPushService } from "./live-activity-push";
 
 const agent = (id: string, name: string) => ({
@@ -204,4 +213,71 @@ describe("LiveActivityPushService", () => {
     expect(JSON.stringify(sent)).not.toMatch(/npm test|Ada|hidden-secret|approval/iu);
     push.dispose();
   });
+
+  // The host feeds its own runtime snapshot to the coordinator. That copy says `multiSelect`, so a
+  // single choice keeps its one-tap answers and a multi-select question gets none.
+  it("offers one-tap answers for a single-choice question only", async () => {
+    const send = vi.fn(async (_push: LiveActivityRelayPush) => "sent" as const);
+    const push = service(send);
+    const question = (multiSelect?: true) =>
+      compactRuntimeQuestion({
+        id: "color",
+        header: "Color",
+        question: "Which color?",
+        isSecret: false,
+        options: [
+          { label: "Red", description: "" },
+          { label: "Blue", description: "" },
+        ],
+        ...(multiSelect ? { multiSelect } : {}),
+      });
+    const prompt = (requestId: string, multiSelect?: true) => ({
+      requestId,
+      agentId: "ada",
+      threadId: "thread-ada",
+      turnId: "turn-ada",
+      questions: [question(multiSelect)],
+    });
+    const sentButtons = (index: number) => {
+      const sealed = send.mock.calls[index]?.[0].sealed;
+      if (!sealed) throw new Error("No sealed content.");
+      const props = JSON.parse(unseal(sealed));
+      if (!isDynamicRecord(props) || !Array.isArray(props.buttons)) throw new Error("No buttons.");
+      return props.buttons.map((button) => (isDynamicRecord(button) ? button.label : null));
+    };
+
+    snapshot.pendingPrompts.push(prompt("single"));
+    push.register("session-1", viewer, registration);
+    await vi.runOnlyPendingTimersAsync();
+    expect(sentButtons(0)).toEqual(["Red", "Blue"]);
+
+    snapshot.pendingPrompts = [prompt("multi", true)];
+    listener?.({ type: "agents-changed", agents: [] });
+    // A second question update waits for the same-mode interval.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(sentButtons(1)).toEqual([]);
+    push.dispose();
+  });
 });
+
+/** Opens a seal as the widget extension does, with the keys of `registration`. */
+function unseal(sealed: string): string {
+  const secret = decodeLiveActivityBytes(registration.secret);
+  const bytes = decodeLiveActivityBytes(sealed);
+  if (!secret || !bytes) throw new Error("Invalid seal.");
+  const { seal } = liveActivityKeys(secret);
+  const nonce = bytes.subarray(0, LIVE_ACTIVITY_NONCE_BYTES);
+  const cipher = bytes.subarray(LIVE_ACTIVITY_NONCE_BYTES, bytes.length - 16);
+  const plain = new Uint8Array(cipher.length);
+  for (let offset = 0; offset < cipher.length; offset += 32) {
+    const block = offset / 32;
+    const counter = new Uint8Array([(block >>> 24) & 0xff, (block >>> 16) & 0xff, (block >>> 8) & 0xff, block & 0xff]);
+    const nonceAndCounter = new Uint8Array([...nonce, ...counter]);
+    const stream = hmac(sha256, seal, nonceAndCounter);
+    for (let index = 0; index < 32 && offset + index < cipher.length; index += 1) {
+      plain[offset + index] = (cipher[offset + index] ?? 0) ^ (stream[index] ?? 0);
+    }
+  }
+  return new TextDecoder().decode(plain);
+}

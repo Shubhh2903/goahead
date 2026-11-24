@@ -1,5 +1,6 @@
 import { type MenuAction, MenuView } from "@expo/ui/community/menu";
 import type { SidebarLayoutSnapshot } from "@openbot/contracts/ipc";
+import type { MobileTextKey } from "@openbot/i18n/mobile";
 import { type Href, router, Stack } from "expo-router";
 import { Button, Typography } from "heroui-native";
 import { useThemeColor } from "heroui-native/hooks";
@@ -29,8 +30,10 @@ import { SidebarSectionHeader } from "@/features/agents/components/sidebar-secti
 import { ChannelListRow } from "@/features/channels/components/channel-list";
 import { useChannels } from "@/features/channels/components/use-channels";
 import { useAppDrawer } from "@/features/servers/components/app-drawer-shell";
+import { saveChatOrderPreference, useChatOrderPreference } from "@/features/settings/model/chat-order";
 import { ConnectionHeaderStatus } from "@/features/workspace/components/connection-header-status";
 import { useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
+import { MOBILE_CHAT_ORDERS, type MobileChatOrder, parseMobileChatOrder } from "@/features/workspace/model/chat-order";
 import { mobileSidebarItems } from "@/features/workspace/model/sidebar-layout";
 import { useAppLoadingOverlay, useScreenLoadingLabel } from "@/shared/components/app-loading-overlay";
 import { haptics } from "@/shared/lib/haptics";
@@ -155,6 +158,12 @@ function HeaderIconButton({
   );
 }
 
+/** The name of each chat order in the chat options menu. */
+const CHAT_ORDER_LABEL = {
+  manual: "mobile.agent.home.sort.manual",
+  recent: "mobile.agent.home.sort.recent",
+} as const satisfies Record<MobileChatOrder, MobileTextKey>;
+
 function openFromMenu(href: Href): void {
   void haptics.impact("soft");
   router.push(href);
@@ -215,6 +224,8 @@ export function ConnectedScreen() {
     [activeAgents, pinnedAgentIds],
   );
   const sidebar = sidebarByServer[activeServer.id];
+  // This phone's own choice. "Recent activity" sorts each section by last activity; the layout does not change.
+  const chatOrder = useChatOrderPreference((state) => state.order);
   const items = useMemo(
     () =>
       mobileSidebarItems(
@@ -226,8 +237,9 @@ export function ConnectedScreen() {
         ),
         undefined,
         t,
+        chatOrder,
       ),
-    [sidebar?.layout, unpinnedAgents, channels.channels, hiddenChannelIds, pinnedChannelIds, t],
+    [sidebar?.layout, unpinnedAgents, channels.channels, hiddenChannelIds, pinnedChannelIds, t, chatOrder],
   );
   const visibleSectionIds = items.filter((item) => item.kind === "section").map((item) => item.id);
   const listReveal = useAgentListReveal(listReady, activeServer.id);
@@ -248,9 +260,18 @@ export function ConnectedScreen() {
       { id: "add-agent", title: t("mobile.agent.home.addAgent") },
       ...(sidebar?.layout ? [{ id: "add-section", title: t("mobile.agent.sectionForm.newTitle") }] : []),
       ...(channels.supported ? [{ id: "add-channel", title: t("mobile.agent.home.newChannel") }] : []),
+      {
+        id: "sort-chats",
+        title: t("mobile.agent.home.sort.title"),
+        subactions: MOBILE_CHAT_ORDERS.map((order) => ({
+          id: `sort-chats:${order}`,
+          title: t(CHAT_ORDER_LABEL[order]),
+          state: order === chatOrder ? ("on" as const) : ("off" as const),
+        })),
+      },
       ...(hasHiddenChats ? [{ id: "hidden-chats", title: t("mobile.agent.hidden.title") }] : []),
     ],
-    [hasHiddenChats, channels.supported, sidebar?.layout, t],
+    [hasHiddenChats, channels.supported, sidebar?.layout, chatOrder, t],
   );
 
   return (
@@ -439,6 +460,8 @@ export function ConnectedScreen() {
                       if (event.nativeEvent.event === "add-channel")
                         router.push({ pathname: "/add-channel", params: { serverId: activeServer.id } });
                       if (event.nativeEvent.event === "hidden-chats") router.push("/hidden-chats");
+                      if (event.nativeEvent.event.startsWith("sort-chats:"))
+                        void saveChatOrderPreference(parseMobileChatOrder(event.nativeEvent.event.slice(11)));
                     }}
                     style={{ height: 44, width: 44 }}
                   >
@@ -497,6 +520,17 @@ export function ConnectedScreen() {
                   {t("mobile.agent.home.newChannel")}
                 </Stack.Toolbar.MenuAction>
               ) : null}
+              <Stack.Toolbar.Menu icon="arrow.up.arrow.down" title={t("mobile.agent.home.sort.title")}>
+                {MOBILE_CHAT_ORDERS.map((order) => (
+                  <Stack.Toolbar.MenuAction
+                    key={order}
+                    isOn={order === chatOrder}
+                    onPress={() => void saveChatOrderPreference(order)}
+                  >
+                    {t(CHAT_ORDER_LABEL[order])}
+                  </Stack.Toolbar.MenuAction>
+                ))}
+              </Stack.Toolbar.Menu>
               {hasHiddenChats ? (
                 <Stack.Toolbar.MenuAction icon="eye.slash" onPress={() => openFromMenu("/hidden-chats")}>
                   {t("mobile.agent.hidden.title")}

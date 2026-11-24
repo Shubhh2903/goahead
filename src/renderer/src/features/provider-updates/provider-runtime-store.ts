@@ -66,6 +66,11 @@ export function createProviderRuntimeStore(
    * shows the runtime current: a sibling instance installed it, or a Retry elsewhere did.
    */
   const failed = new Set<AgentProviderId>();
+  /**
+   * Update failures that the notification already shows. They still reject, so a caller such as
+   * "Update all" learns the outcome, but they are not reported a second time.
+   */
+  const reportedFailures = new WeakSet<Error>();
   /** What the user was last told about, so one offer is not announced twice. */
   let announced: ProviderUpdate[] = [];
   let disposed = false;
@@ -94,9 +99,9 @@ export function createProviderRuntimeStore(
   function startProviderUpdate(provider: AgentProviderId): Promise<void> {
     return runProviderUpdate(provider).catch((error: unknown) => {
       // A user pressed a button, so the outcome belongs on screen. `downloadProviderRuntime`
-      // reports its own failures and settles; what reaches here failed before it owned the
-      // notification, and was discarded by the caller that started it.
-      failProviderUpdate(provider, error);
+      // reports its own failures on the notification; what else reaches here failed before it owned
+      // the notification, and was discarded by the caller that started it.
+      if (!(error instanceof Error && reportedFailures.has(error))) failProviderUpdate(provider, error);
       throw error;
     });
   }
@@ -129,7 +134,7 @@ export function createProviderRuntimeStore(
     if (disposed || source !== api()) return;
     const update = providerUpdate(provider);
     if (providerUpdateAvailable(update.runtime, update.availableVersion)) {
-      showProviderUpdateToast(update, () => void startProviderUpdate(provider));
+      showProviderUpdateToast(update, () => void startProviderUpdate(provider).catch(() => undefined));
     } else {
       reportProviderUpdateToast(update, () => {});
     }
@@ -148,7 +153,7 @@ export function createProviderRuntimeStore(
           message: currentText().errorMessage(error, currentText().t("update.provider.startFailed")),
         },
       },
-      () => void startProviderUpdate(provider),
+      () => void startProviderUpdate(provider).catch(() => undefined),
     );
     failed.add(provider);
   }
@@ -182,7 +187,7 @@ export function createProviderRuntimeStore(
       const update = providerUpdate(provider, snapshot);
       if (update.runtime.phase === "not-downloaded" || (update.runtime.phase === "ready" && update.availableVersion))
         continue;
-      reportProviderUpdateToast(update, () => void downloadProviderRuntime(provider));
+      reportProviderUpdateToast(update, () => void downloadProviderRuntime(provider).catch(() => undefined));
       // The report replaced whatever the notification said before, a failure included.
       if (update.runtime.phase === "download-error") failed.add(provider);
       else failed.delete(provider);
@@ -218,7 +223,7 @@ export function createProviderRuntimeStore(
       failed.delete(provider);
       showProviderUpdateToast(
         { ...update, runtime: { ...update.runtime, phase: "downloading", progress: 0 } },
-        () => void downloadProviderRuntime(provider),
+        () => void downloadProviderRuntime(provider).catch(() => undefined),
       );
     }
     const analytics = desktopAnalytics.scope();
@@ -244,10 +249,13 @@ export function createProviderRuntimeStore(
                 message: currentText().t("update.provider.startFailed"),
               },
             },
-            () => void downloadProviderRuntime(provider),
+            () => void downloadProviderRuntime(provider).catch(() => undefined),
           );
         failed.add(provider);
-        return;
+        // The notification shows it; the caller still learns that the update did not start.
+        const reported = new Error(currentText().t("update.provider.startFailed"), { cause: error });
+        reportedFailures.add(reported);
+        throw reported;
       }
       throw error;
     }
@@ -290,7 +298,7 @@ export function createProviderRuntimeStore(
         // A closed notification stays closed, including across the server switch that rebuilds this
         // store: the record of it is kept by the notification module, which outlives the switch.
         if (providerUpdateOfferClosed(update.provider, update.availableVersion)) continue;
-        showProviderUpdateToast(update, () => void startProviderUpdate(update.provider));
+        showProviderUpdateToast(update, () => void startProviderUpdate(update.provider).catch(() => undefined));
       }
       announced = next;
     },

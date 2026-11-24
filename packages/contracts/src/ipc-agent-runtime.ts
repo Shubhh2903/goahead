@@ -7,6 +7,7 @@ import {
   isBrowserTakeoverRequest,
 } from "./ipc-approvals";
 import { isBoundedString, isIdentifier, isNullableBoundedString, isRequestId } from "./ipc-bounded-values";
+import type { AgentPromptQuestion } from "./ipc-conversation-messages";
 import { isBoolean, isDynamicRecord, isNumber, isOneOf } from "./runtime-values";
 
 export const AGENT_RUNTIME_TEXT_LIMIT = 240;
@@ -69,6 +70,12 @@ export interface AgentRuntimePromptQuestion {
   question: string;
   isSecret: boolean;
   options: Array<{ label: string; description: string }> | null;
+  /**
+   * Whether the person may pick more than one option. Only the host's own copy has it: the Team API
+   * adapters project a fixed key list and drop it, so a snapshot from a joined server leaves it out,
+   * and absent means not known.
+   */
+  multiSelect?: boolean;
 }
 
 function isRuntimePromptQuestion(value: unknown): value is AgentRuntimePromptQuestion {
@@ -78,6 +85,7 @@ function isRuntimePromptQuestion(value: unknown): value is AgentRuntimePromptQue
     isBoundedString(value.header, AGENT_RUNTIME_QUESTION_HEADER_LIMIT) &&
     isBoundedString(value.question, AGENT_RUNTIME_TEXT_LIMIT) &&
     isBoolean(value.isSecret) &&
+    (value.multiSelect === undefined || isBoolean(value.multiSelect)) &&
     (value.options === null ||
       (Array.isArray(value.options) &&
         value.options.length <= INPUT_LIMITS.promptOptions &&
@@ -153,6 +161,26 @@ export interface AgentRuntimeSnapshot {
    * a released Team API snapshot: its adapters project a fixed key list.
    */
   usageLimits?: Array<{ agentId: string; resetsAt: number | null }>;
+}
+
+/**
+ * A snapshot prompt as a `prompt` event: `multiSelect` is `true` or left out, as on the event and the
+ * wire. A `false` never reaches a `prompt` event, whose host encoder refuses it.
+ */
+export function runtimePromptEvent(prompt: AgentRuntimeSnapshot["pendingPrompts"][number]): Omit<
+  AgentRuntimeSnapshot["pendingPrompts"][number],
+  "questions"
+> & {
+  type: "prompt";
+  questions: AgentPromptQuestion[];
+} {
+  return {
+    ...prompt,
+    type: "prompt",
+    questions: prompt.questions.map(({ multiSelect, ...question }) =>
+      multiSelect === true ? { ...question, multiSelect } : question,
+    ),
+  };
 }
 
 export function isAgentRuntimeSnapshot(value: unknown): value is AgentRuntimeSnapshot {

@@ -1,5 +1,7 @@
 import type { MobileTextKey, MobileTranslate } from "@openbot/i18n/mobile";
+import type { RemoteTeamHost } from "@openbot/team-client";
 import { type RemoteRecoveryStatus, remoteRecoveryMessage } from "@openbot/team-client";
+import { serverAccent } from "./server-order";
 import type { MobileServer, MobileServerState } from "./workspace-types";
 
 const LABELS = {
@@ -48,4 +50,32 @@ export function applyServerRecovery(
 
 export function serverKind(hostId: string, pairedHostId: string | undefined): MobileServer["kind"] {
   return hostId === pairedHostId ? "local" : "remote";
+}
+
+/**
+ * The row for a host in the account directory. A refresh of the directory keeps what the
+ * connection already knows about the server: its state, recovery status and connection path.
+ */
+export function serverFromHost(
+  host: RemoteTeamHost,
+  previous: MobileServer | undefined,
+  kind: MobileServer["kind"],
+): MobileServer {
+  return {
+    id: host.hostId,
+    name: host.name,
+    logoKey: host.logoKey,
+    kind,
+    state: previous?.state ?? "unknown",
+    initialConnectionPending: previous?.initialConnectionPending ?? true,
+    connectionMessage: previous?.connectionMessage ?? null,
+    recoveryStatus: previous?.recoveryStatus,
+    connectionPath: previous?.connectionPath,
+    address: null,
+    accent: serverAccent(host.hostId),
+    publicKey: previous?.publicKey ?? host.devicePublicKey,
+    membershipId: host.membershipId,
+    role: host.role,
+    ...(host.memberLimit === undefined ? {} : { memberLimit: host.memberLimit }),
+  };
 }

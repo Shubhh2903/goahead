@@ -166,6 +166,8 @@ export interface AgentMessage {
   plan?: AgentMessagePlan;
   /** A message that GoAhead wrote to a Slack Orchestrator: the chat draws a card, not the text. */
   slackAsk?: ConversationSlackAsk;
+  /** The model that GoAhead chose for this answer, when it is not the agent's own model. */
+  autoModelName?: string;
 }
 
 export interface AgentProfile {
@@ -191,6 +193,8 @@ export interface AgentProfile {
   disabledMcpServerIds?: AgentSummary["disabledMcpServerIds"];
   /** Absent means no budget. Absent for an agent on a remote host too, which does not share it. */
   weeklyTokenBudget?: AgentSummary["weeklyTokenBudget"];
+  /** Absent means off. Absent for an agent on a remote host too, which does not share it. */
+  autoModel?: boolean;
   threadId: string | null;
   /** The agent's working directory. Absent for profiles built before it was tracked. */
   workspacePath?: string;

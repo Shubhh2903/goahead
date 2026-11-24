@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import { sortConversationMessages } from "@openbot/contracts/conversation-order";
-import type { AgentEvent, AgentSummary, ConversationMessage, ConversationSnapshot } from "@openbot/contracts/ipc";
+import {
+  type AgentEvent,
+  type AgentSummary,
+  type ConversationMessage,
+  type ConversationSnapshot,
+  latestTurnAnswer,
+} from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import type { AgentClient } from "../agent-client";
 import type { AgentStore } from "../agent-store";
@@ -114,6 +120,9 @@ export function withDatabaseTransaction<T>(
  */
 export const CONVERSATION_SNAPSHOT_IDLE_MS = 10 * 60_000;
 
+/** How many of the newest automatically chosen turns keep their label until their answer is drawn. */
+const AUTO_MODEL_LABELLED_TURNS = 64;
+
 interface EvictedSnapshot {
   threadId: string;
   snapshot: WeakRef<ConversationSnapshot>;
@@ -175,11 +184,36 @@ export class ConversationRuntime {
   readonly #cachedExecutionSnapshots = new Map<string, CachedSnapshot>();
   readonly #publicThreads = new Map<string, string>();
   readonly #forgottenExecutionThreads = new Set<string>();
+  /**
+   * The last turn the provider accepted on each provider thread in this run, by external thread id:
+   * its model, and when it started and ended. In memory only: a restart starts a new provider
+   * process, whose prompt cache is cold.
+   */
+  readonly #lastTurns = new Map<string, { model: string; startedAt: number; endedAt: number | null }>();
+  /** The model of a turn whose `turn/start` is on its way, so its `turn/started` counts on that model. */
+  readonly #startingTurnModels = new Map<string, string>();
+  readonly #now: () => number;
+  /**
+   * The name of the model an automatic choice ran a turn on, by turn id, until the turn ends and its
+   * answer takes the label. The label is then saved with the message. Only the newest turns.
+   */
+  readonly #autoModelTurns = new Map<string, string>();
 
-  constructor(store: AgentStore, emit: (event: AgentEvent) => void, listAgents: () => AgentSummary[]) {
+  constructor(
+    store: AgentStore,
+    emit: (event: AgentEvent) => void,
+    listAgents: () => AgentSummary[],
+    now: () => number = Date.now,
+  ) {
     this.#store = store;
     this.#emit = emit;
     this.#listAgents = listAgents;
+    this.#now = now;
+  }
+
+  /** The clock of the turn records below. Tests replace it. */
+  now(): number {
+    return this.#now();
   }
 
   /**
@@ -509,6 +543,7 @@ export class ConversationRuntime {
     },
   ): void {
     if (snapshot.threadId && this.#forgottenExecutionThreads.has(snapshot.threadId)) return;
+    this.#labelAutoModelTurns(snapshot);
     sortConversationMessages(snapshot.messages);
     const signature = conversationContentSignature(snapshot);
     if (this.#conversationSignatures.get(snapshot.threadId ?? snapshot.agentId) === signature) {
@@ -573,9 +608,13 @@ export class ConversationRuntime {
     );
   }
 
-  publishConversation(snapshot: ConversationSnapshot, signature = conversationContentSignature(snapshot)): void {
+  publishConversation(snapshot: ConversationSnapshot, signature?: string): void {
     if (snapshot.threadId && this.#forgottenExecutionThreads.has(snapshot.threadId)) return;
-    this.#conversationSignatures.set(snapshot.threadId ?? snapshot.agentId, signature);
+    const labelled = this.#labelAutoModelTurns(snapshot);
+    this.#conversationSignatures.set(
+      snapshot.threadId ?? snapshot.agentId,
+      signature === undefined || labelled ? conversationContentSignature(snapshot) : signature,
+    );
     this.#emit({ type: "conversation", snapshot: structuredClone(snapshot) });
   }
 
@@ -608,6 +647,65 @@ export class ConversationRuntime {
 
   unloadThread(externalThreadId: string): void {
     this.#loadedThreads.delete(externalThreadId);
+  }
+
+  /** A `turn/start` with this model is on its way on this provider thread; null when it has ended. */
+  setStartingTurnModel(externalThreadId: string, model: string | null): void {
+    if (model === null) this.#startingTurnModels.delete(externalThreadId);
+    else this.#startingTurnModels.set(externalThreadId, model);
+  }
+
+  /** Records a turn the provider accepted. A start that failed is never recorded. */
+  recordAcceptedTurn(externalThreadId: string, model: string): void {
+    this.#lastTurns.set(externalThreadId, { model, startedAt: this.#now(), endedAt: null });
+  }
+
+  /** Records that the last turn on this provider thread ended now. */
+  recordTurnEnded(externalThreadId: string): void {
+    const turn = this.#lastTurns.get(externalThreadId);
+    if (turn) turn.endedAt = this.#now();
+  }
+
+  /**
+   * The model of the last accepted turn on this provider thread and when it ended (its start when no
+   * end was seen), or null when this run started no turn there.
+   */
+  lastTurn(externalThreadId: string): { model: string; at: number } | null {
+    const turn = this.#lastTurns.get(externalThreadId);
+    return turn ? { model: turn.model, at: turn.endedAt ?? turn.startedAt } : null;
+  }
+
+  /** The model a turn on this provider thread runs on: the one starting, else the last accepted one. */
+  turnModel(externalThreadId: string): string | null {
+    return this.#startingTurnModels.get(externalThreadId) ?? this.#lastTurns.get(externalThreadId)?.model ?? null;
+  }
+
+  /** Labels the answer of a turn that an automatic choice ran on a model other than the agent's. */
+  labelAutoModelTurn(turnId: string, modelName: string): void {
+    this.#autoModelTurns.set(turnId, modelName);
+    while (this.#autoModelTurns.size > AUTO_MODEL_LABELLED_TURNS) {
+      const oldest = this.#autoModelTurns.keys().next().value;
+      if (oldest === undefined) break;
+      this.#autoModelTurns.delete(oldest);
+    }
+  }
+
+  /**
+   * Puts the label on the answer of each labelled turn that has ended: one label per turn, on the
+   * message that answers. True when a message got its label.
+   */
+  #labelAutoModelTurns(snapshot: ConversationSnapshot): boolean {
+    if (this.#autoModelTurns.size === 0) return false;
+    let labelled = false;
+    for (const [turnId, name] of this.#autoModelTurns) {
+      if (snapshot.activeTurnId === turnId) continue;
+      const answer = latestTurnAnswer(snapshot.messages, turnId);
+      if (!answer) continue;
+      answer.autoModelName = name;
+      this.#autoModelTurns.delete(turnId);
+      labelled = true;
+    }
+    return labelled;
   }
 
   /** Forgets the sessions one stopped process held, and leaves those of every other provider loaded. */

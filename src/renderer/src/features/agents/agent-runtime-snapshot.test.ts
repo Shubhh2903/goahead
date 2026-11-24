@@ -1,4 +1,9 @@
-import type { AgentApproval, AgentRuntimeApproval, AgentRuntimeSnapshot } from "@openbot/contracts/ipc";
+import {
+  type AgentApproval,
+  type AgentRuntimeApproval,
+  type AgentRuntimeSnapshot,
+  runtimePromptEvent,
+} from "@openbot/contracts/ipc";
 import type { AgentMessage } from "@openbot/ui/data";
 import { promptRequestKey } from "../conversation/conversation-keys";
 import {
@@ -65,13 +70,13 @@ describe("reconcileAttentionPrompts", () => {
   });
 
   it("drops a prompt a complete snapshot no longer lists", () => {
-    const current: PendingAttentionPrompts = { chief: { type: "prompt", ...prompt("chief", "r1") } };
+    const current: PendingAttentionPrompts = { chief: runtimePromptEvent(prompt("chief", "r1")) };
 
     expect(reconcileAttentionPrompts(current, attention({}), {}).chief).toBeUndefined();
   });
 
   it("keeps a prompt an incomplete snapshot omits", () => {
-    const current: PendingAttentionPrompts = { chief: { type: "prompt", ...prompt("chief", "r1") } };
+    const current: PendingAttentionPrompts = { chief: runtimePromptEvent(prompt("chief", "r1")) };
 
     const next = reconcileAttentionPrompts(current, attention({ attentionComplete: false }), {});
 
@@ -106,7 +111,7 @@ describe("reconcileAttentionPrompts", () => {
 
   it("leaves the agents an incomplete snapshot says nothing about", () => {
     const next = reconcileAttentionPrompts(
-      { scout: { type: "prompt", ...prompt("scout", "r1") } },
+      { scout: runtimePromptEvent(prompt("scout", "r1")) },
       attention({ attentionComplete: false, pendingPrompts: [prompt("chief", "r2")] }),
       {},
     );

@@ -34,6 +34,7 @@ import {
   ProviderDetectionSettings,
   type ProviderDetectionSettingsValue,
 } from "@openbot/ui/features/custom-providers/ProviderDetectionSettings";
+import { ProviderUpdateAll } from "@openbot/ui/features/provider-updates/ProviderUpdateAll";
 import { OpenCodeKeyDialog, type ProviderKeyApi } from "@openbot/ui/features/settings/OpenCodeKeyDialog";
 import { createEffect, createSignal, Show, untrack } from "solid-js";
 import type { ProviderCodeLoginApi } from "../../components/provider-code-login-api";
@@ -107,6 +108,7 @@ function ProviderSettingsSection(props: ProviderSettingsSectionProps) {
   return (
     // The tab title already names this list, so it has no heading of its own.
     <div class="settings-provider-section">
+      <ProviderUpdateAll options={props.store.providerOptions()} onUpdateProvider={props.onUpdateProvider} />
       <ProviderPicker
         value={props.store.selectedProvider()}
         options={props.store.providerOptions()}

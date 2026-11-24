@@ -12,7 +12,7 @@ import {
 } from "@openbot/contracts/ipc";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { AttachmentFiles } from "./attachment-files";
-import { MailboxStore } from "./mailbox-store";
+import { MailboxStore, REQUEST_GROUP_HOLD_MS } from "./mailbox-store";
 import { OpenBotDatabase } from "./openbot-database";
 
 let root: string;
@@ -29,6 +29,13 @@ afterEach(async () => {
 });
 
 describe("MailboxStore", () => {
+  /** Runs one delivery and ends it, as a turn does. */
+  const finish = async (deliveryId: string, status: "completed" | "failed") => {
+    await store.markStarting(deliveryId);
+    await store.markRunning(deliveryId, `turn-${deliveryId}`);
+    await store.markTerminal(deliveryId, status);
+  };
+
   // The chat keeps a bounded recent view: every active delivery stays in it, however old.
   it("filters mailbox history per agent and keeps old active deliveries with attachments", async () => {
     const source = join(root, "old-mailbox.txt");
@@ -911,6 +918,130 @@ describe("MailboxStore", () => {
     const next = required(store.nextQueued("chief"));
     const replyIds = [next, ...store.repliesToStartWith(next.delivery.id)].map((context) => context.delivery.messageId);
     expect(replyIds).toEqual([first.messageId, second.messageId]);
+  });
+
+  it("holds the answers to every request of one turn, so they start one turn together", async () => {
+    const ask = (agentId: string, key: string) =>
+      store.enqueue({
+        sender: { kind: "agent", agentId: "chief" },
+        recipientAgentIds: [agentId],
+        text: `Task for ${agentId}.`,
+        idempotencyKey: key,
+      });
+    const research = await ask("research", "thread-chief:turn-1:call-1");
+    const builder = await ask("builder", "thread-chief:turn-1:call-2");
+    // Another turn's request is not part of the group.
+    const later = await ask("launch", "thread-chief:turn-2:call-1");
+    const answer = (agentId: string, requestId: string) =>
+      store.enqueue({
+        sender: { kind: "agent", agentId },
+        recipientAgentIds: ["chief"],
+        text: `${agentId} done.`,
+        replyToMessageId: requestId,
+        expectsReply: false,
+      });
+
+    expect(store.requestGroupIds(research.messageId)).toEqual([research.messageId, builder.messageId]);
+    expect(store.requestGroupIds(later.messageId)).toEqual([later.messageId]);
+
+    await finish(required(research.deliveries[0]).id, "completed");
+    const first = await answer("research", research.messageId);
+    // The builder request of the same turn is still queued, so the research answer waits.
+    expect(store.nextQueued("chief")).toBeNull();
+
+    await finish(required(builder.deliveries[0]).id, "completed");
+    const second = await answer("builder", builder.messageId);
+
+    // The launch request of turn 2 is still queued and holds nothing from turn 1.
+    const head = required(store.nextQueued("chief"));
+    expect([head, ...store.repliesToStartWith(head.delivery.id)].map((context) => context.delivery.messageId)).toEqual([
+      first.messageId,
+      second.messageId,
+    ]);
+  });
+
+  it("releases a group's answers when another request of the turn ends with no answer", async () => {
+    const ask = (agentId: string, key: string) =>
+      store.enqueue({
+        sender: { kind: "agent", agentId: "chief" },
+        recipientAgentIds: [agentId],
+        text: `Task for ${agentId}.`,
+        idempotencyKey: key,
+      });
+    const research = await ask("research", "thread-chief:turn-1:call-1");
+    const builder = await ask("builder", "thread-chief:turn-1:call-2");
+    await finish(required(research.deliveries[0]).id, "completed");
+    const first = await store.enqueue({
+      sender: { kind: "agent", agentId: "research" },
+      recipientAgentIds: ["chief"],
+      text: "research done.",
+      replyToMessageId: research.messageId,
+      expectsReply: false,
+    });
+    expect(store.nextQueued("chief")).toBeNull();
+
+    await finish(required(builder.deliveries[0]).id, "failed");
+    expect(store.nextQueued("chief")?.delivery.messageId).toBe(first.messageId);
+    expect(store.unansweredRecipients(builder.messageId)).toEqual(["builder"]);
+  });
+
+  describe("request groups", () => {
+    const ask = (agentId: string, key: string) =>
+      store.enqueue({
+        sender: { kind: "agent", agentId: "chief" },
+        recipientAgentIds: [agentId],
+        text: `Task for ${agentId}.`,
+        idempotencyKey: key,
+      });
+    /** research answers; builder's request of the same turn is still queued. */
+    const heldAnswer = async () => {
+      const research = await ask("research", "thread-chief:turn-1:call-1");
+      const builder = await ask("builder", "thread-chief:turn-1:call-2");
+      await finish(required(research.deliveries[0]).id, "completed");
+      const answer = await store.enqueue({
+        sender: { kind: "agent", agentId: "research" },
+        recipientAgentIds: ["chief"],
+        text: "research done.",
+        replyToMessageId: research.messageId,
+        expectsReply: false,
+      });
+      return { research, builder, answer };
+    };
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("keeps two turns with the same turn id in different threads apart", async () => {
+      const first = await ask("research", "thread-chief:turn-1:call-1");
+      const other = await ask("builder", "thread-other:turn-1:call-1");
+      expect(store.requestGroupIds(first.messageId)).toEqual([first.messageId]);
+      expect(store.requestGroupIds(other.messageId)).toEqual([other.messageId]);
+    });
+
+    it("does not hold answers for a request whose recipient cannot work", async () => {
+      const { answer } = await heldAnswer();
+      expect(store.nextQueued("chief")).toBeNull();
+      store.setRecipientMayWork((agentId) => agentId !== "builder");
+      expect(store.nextQueued("chief")?.delivery.messageId).toBe(answer.messageId);
+    });
+
+    it("releases a held answer after the hold cap, also after a restart", async () => {
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-11-24T10:00:00.000Z") });
+      const { answer } = await heldAnswer();
+      expect(store.nextQueued("chief")).toBeNull();
+      expect(store.groupHoldReleaseAt("chief")).toBe(Date.now() + REQUEST_GROUP_HOLD_MS);
+
+      // A restart keeps the stored queue time, so the wait does not start again.
+      const restored = new MailboxStore(join(root, "user-data"), join(root, "Shared"));
+      await restored.initialize();
+      expect(restored.nextQueued("chief")).toBeNull();
+
+      vi.setSystemTime(Date.now() + REQUEST_GROUP_HOLD_MS);
+      expect(store.nextQueued("chief")?.delivery.messageId).toBe(answer.messageId);
+      expect(store.groupHoldReleaseAt("chief")).toBeNull();
+      expect(restored.nextQueued("chief")?.delivery.messageId).toBe(answer.messageId);
+    });
   });
 
   it("keeps a message that asks for no answer marked as one after a restart", async () => {

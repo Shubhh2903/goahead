@@ -35,6 +35,21 @@ export function agentAutomationAllowed(agent: Pick<AgentSummary, "allowAutomatio
   return agent.allowAutomation === true;
 }
 
+/** Whether GoAhead may run a simple turn of this agent on a smaller model. Absent means off. */
+export function agentAutoModelEnabled(agent: Pick<AgentSummary, "autoModel">): boolean {
+  return agent.autoModel === true;
+}
+
+/**
+ * The providers that take a model for one turn on the same session: Claude through `setModel`, and
+ * Codex through `turn/start`. For the others the automatic model choice has no effect.
+ */
+export const AUTO_MODEL_PROVIDERS = ["claude", "codex"] as const satisfies readonly AgentProviderId[];
+
+export function providerSupportsAutoModel(provider: AgentProviderId): boolean {
+  return isOneOf(AUTO_MODEL_PROVIDERS, provider);
+}
+
 /**
  * Whether this agent runs inside the workspace sandbox now. Every provider enforces it. Codex runs the
  * agent in its `workspace-write` sandbox. Claude runs Bash in its sandbox and asks before a file edit
@@ -129,6 +144,11 @@ export interface AgentSummary {
   disabledMcpServerIds?: string[];
   /** The weekly token budget that alerts the user. Local-only, like `access`. Absent means no budget. */
   weeklyTokenBudget?: AgentWeeklyTokenBudget;
+  /**
+   * Whether a simple turn may run on the provider's small model. Local-only, like `access`. Absent
+   * means off; see `agentAutoModelEnabled`.
+   */
+  autoModel?: boolean;
   threadId: string | null;
   workspacePath: string;
   preview: string;
@@ -164,6 +184,7 @@ export function isAgentSummary(value: unknown): value is AgentSummary {
     (value.compactWindow === undefined || isAgentCompactWindow(value.compactWindow)) &&
     (value.disabledMcpServerIds === undefined || isDisabledMcpServerIds(value.disabledMcpServerIds)) &&
     (value.weeklyTokenBudget === undefined || isAgentWeeklyTokenBudget(value.weeklyTokenBudget)) &&
+    (value.autoModel === undefined || isBoolean(value.autoModel)) &&
     (value.threadId === null || isIdentifier(value.threadId)) &&
     isBoundedString(value.workspacePath, INPUT_LIMITS.path) &&
     isBoundedString(value.preview, INPUT_LIMITS.messageText) &&
@@ -260,6 +281,8 @@ export interface UpdateAgentInput {
   disabledMcpServerIds?: string[];
   /** `null` removes the budget. */
   weeklyTokenBudget?: AgentWeeklyTokenBudget | null;
+  /** `false` returns the agent to its own model for every turn. */
+  autoModel?: boolean;
   avatarSeed?: string;
   avatarHue?: AvatarHue | null;
 }

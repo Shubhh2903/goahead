@@ -80,7 +80,7 @@ export const messages = defineMessages("error.agent", {
   "error.agent.busyMessageModeLocalOnly":
     "What messages do while the agent works can only be set on the computer that runs the agent.",
   "error.agent.tokenSettingsLocalOnly":
-    "Early compaction, MCP servers and the weekly token budget can only be set on the computer that runs the agent.",
+    "Early compaction, MCP servers, the weekly token budget and the automatic model choice can only be set on the computer that runs the agent.",
   "error.agent.automationOff": "This agent does not allow local scripts to run its routines.",
   "error.agent.automationPayloadTooLong": "The payload is longer than {limit} characters.",
   "error.agent.automationRateLimited":

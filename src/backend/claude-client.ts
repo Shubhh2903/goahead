@@ -174,6 +174,18 @@ interface ActiveTurn {
   usageLimit: { resetsAt: number | null; text: string | null } | null;
   /** The preview of the held text: a pending update, when the last one went, and whether one shows. */
   preview: { timer: ReturnType<typeof setTimeout> | null; sentAt: number; shown: boolean };
+  /**
+   * Steers sent with `priority: "now"` that no result has listed yet. Claude stops its running tools
+   * for such a steer and ends that part with an aborted result, then runs the steer in a new turn.
+   * The OpenBot turn stays open until the result of that turn.
+   */
+  untakenSteerIds: Set<string>;
+  /** The open OpenBot host tool calls. They abort when Claude drops its tools for a steer. */
+  hostToolCalls: Set<AbortController>;
+  /** Questions and write approvals that wait for the person. A steer does not stop them. */
+  personRequests: number;
+  /** The person pressed Stop on this turn. */
+  stopRequested: boolean;
 }
 
 interface ThreadRuntime {
@@ -232,6 +244,10 @@ interface ClaudeStreamMessage {
   /** Why an assistant message is a refusal, such as `rate_limit`. */
   error?: string;
   rate_limit_info?: unknown;
+  /** The client uuid of the user message whose prompt a result's turn took. */
+  user_message_uuid?: string;
+  /** Every user message uuid that a result's turn took. Older CLIs send only `user_message_uuid`. */
+  user_message_uuids?: unknown;
 }
 
 interface ClaudeQuery extends AsyncIterable<ClaudeStreamMessage> {
@@ -405,11 +421,27 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
         return decoder(await this.#steerTurn(params));
       case "turn/interrupt": {
         const threadId = requiredString(params, "threadId");
+        const turnId = getString(params, "turnId");
+        // Claude makes the turn ids, so a named turn that it does not run has ended here. The Stop
+        // of the person ends such a turn in OpenBot on this answer.
+        const notRunning = turnId === null ? {} : { turnActive: false };
         // A released thread has no turn to stop.
-        if (this.#threads.isReleased(threadId)) return decoder({});
+        if (this.#threads.isReleased(threadId)) return decoder(notRunning);
         const runtime = this.#requireThread(threadId);
-        await runtime.query.interrupt();
-        return decoder({});
+        const turn = runtime.activeTurn;
+        const stopped = turn && turn.id === turnId ? turn : null;
+        if (stopped) {
+          stopped.stopRequested = true;
+          // The held text goes out as the interrupted answer, so the preview of it goes now.
+          this.#clearPreview(stopped, runtime.id);
+        }
+        try {
+          await runtime.query.interrupt();
+        } catch (error) {
+          const ended = stopped && (this.#threads.get(runtime.id) !== runtime || runtime.activeTurn !== stopped);
+          if (!ended && (stopped || turnId === null)) throw error;
+        }
+        return decoder(stopped ? {} : notRunning);
       }
       case "thread/compact/start":
         // Claude Code manages its own context compaction.
@@ -765,7 +797,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     const clientId = getString(params, "clientUserMessageId");
     const turnId = clientId && isUuid(clientId) ? clientId : randomUUID();
     const text = readInputText(params);
-    const activeTurn = {
+    const activeTurn: ActiveTurn = {
       id: turnId,
       itemId: `${turnId}:assistant`,
       reasoningItemId: `${turnId}:reasoning`,
@@ -782,6 +814,10 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
       toolCalls: new Map<string, string>(),
       usageLimit: null,
       preview: { timer: null, sentAt: 0, shown: false },
+      untakenSteerIds: new Set<string>(),
+      hostToolCalls: new Set<AbortController>(),
+      personRequests: 0,
+      stopRequested: false,
     };
     runtime.activeTurn = activeTurn;
     startClaudePlanTurn(runtime.plan);
@@ -811,14 +847,22 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     }
     const clientId = getString(params, "clientUserMessageId");
     const messageId = clientId && isUuid(clientId) ? clientId : randomUUID();
+    /* Claude Code holds a plain steer until the running tool call ends, and a subagent is one tool
+       call. With `priority: "now"` it stops the tools and runs the steer at once. A question or a
+       write approval that waits for the person keeps the steer plain: its card stays the one that
+       Claude waits for. */
+    const turn = runtime.activeTurn;
+    const stopsRunningTools = turn.toolCalls.size > 0 && turn.personRequests === 0;
+    if (stopsRunningTools) turn.untakenSteerIds.add(messageId);
     runtime.input.push({
       type: "user",
       message: { role: "user", content: readInputText(params) },
       parent_tool_use_id: null,
       uuid: messageId,
       session_id: threadId,
+      ...(stopsRunningTools ? { priority: "now" as const } : {}),
     });
-    return { turnId: runtime.activeTurn.id };
+    return { turnId: turn.id };
   }
 
   async #consume(runtime: ThreadRuntime): Promise<void> {
@@ -963,6 +1007,17 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
       message.terminal_reason === "aborted_tools" ||
       errors.some((error) => /interrupt|abort/i.test(error));
     const turn = runtime.activeTurn;
+    if (turn) for (const uuid of takenMessageIds(message)) turn.untakenSteerIds.delete(uuid);
+    if (turn && interrupted && !turn.stopRequested && turn.untakenSteerIds.size > 0) {
+      // Claude stopped its tools for a steer and runs it in a new turn, whose result ends this one.
+      for (const [toolCallId, name] of turn.toolCalls) {
+        this.#emitToolCall(runtime, toolCallId, name, true);
+      }
+      turn.toolCalls.clear();
+      for (const hostToolCall of turn.hostToolCalls) hostToolCall.abort();
+      turn.hostToolCalls.clear();
+      return;
+    }
     if (turn) {
       for (const [toolCallId, name] of turn.toolCalls) {
         this.#emitToolCall(runtime, toolCallId, name, true);
@@ -1071,7 +1126,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
    */
   #schedulePreview(runtime: ThreadRuntime): void {
     const turn = runtime.activeTurn;
-    if (!turn || turn.preview.timer) return;
+    if (!turn || turn.preview.timer || turn.stopRequested) return;
     const delay = Math.max(0, turn.preview.sentAt + TEXT_PREVIEW_INTERVAL_MS - Date.now());
     turn.preview.timer = setTimeout(() => {
       turn.preview.timer = null;
@@ -1385,14 +1440,28 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
 
   async #callDynamicTool(threadId: string, namespace: string, name: string, args: unknown): Promise<CallToolResult> {
     const runtime = this.#requireThread(threadId);
-    const result = await this.#serverRequests.call("item/tool/call", {
-      threadId,
-      turnId: runtime.activeTurn?.id ?? randomUUID(),
-      callId: randomUUID(),
-      namespace,
-      tool: name,
-      arguments: args,
-    });
+    const turn = runtime.activeTurn;
+    // Aborted when Claude drops its tools for a steer, so the host removes an approval card that
+    // would otherwise run the action for an agent that has moved on.
+    const hostToolCall = new AbortController();
+    turn?.hostToolCalls.add(hostToolCall);
+    let result: unknown;
+    try {
+      result = await this.#serverRequests.call(
+        "item/tool/call",
+        {
+          threadId,
+          turnId: turn?.id ?? randomUUID(),
+          callId: randomUUID(),
+          namespace,
+          tool: name,
+          arguments: args,
+        },
+        hostToolCall.signal,
+      );
+    } finally {
+      turn?.hostToolCalls.delete(hostToolCall);
+    }
     if (!isRecord(result)) return { content: [{ type: "text" as const, text: String(result) }] };
     const content: CallToolResult["content"] = [];
     if (Array.isArray(result.contentItems)) {
@@ -1409,13 +1478,16 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
       header: isString(question.header) ? question.header : "Question",
       question: isString(question.question) ? question.question : "Claude needs more information.",
       options: Array.isArray(question.options) ? question.options : undefined,
+      ...(question.multiSelect === true ? { multiSelect: true } : {}),
     }));
-    const result = await this.#serverRequests.call("item/tool/requestUserInput", {
-      threadId,
-      turnId: runtime.activeTurn?.id ?? randomUUID(),
-      itemId: toolUseId,
-      questions,
-    });
+    const result = await this.#awaitPerson(threadId, () =>
+      this.#serverRequests.call("item/tool/requestUserInput", {
+        threadId,
+        turnId: runtime.activeTurn?.id ?? randomUUID(),
+        itemId: toolUseId,
+        questions,
+      }),
+    );
     const responseAnswers = isRecord(result) && isRecord(result.answers) ? result.answers : {};
     const answers = Object.fromEntries(
       questions.map((question) => {
@@ -1437,14 +1509,27 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     toolInput: DynamicRecord,
     toolUseId: string,
   ): Promise<PermissionResult> {
-    const result = await this.#serverRequests.call("item/fileChange/requestApproval", {
-      threadId,
-      turnId: this.#threads.get(threadId)?.activeTurn?.id ?? randomUUID(),
-      itemId: toolUseId,
-      reason: sourceText("status.agent.claudeWriteOutside", { path }),
-    });
+    const result = await this.#awaitPerson(threadId, () =>
+      this.#serverRequests.call("item/fileChange/requestApproval", {
+        threadId,
+        turnId: this.#threads.get(threadId)?.activeTurn?.id ?? randomUUID(),
+        itemId: toolUseId,
+        reason: sourceText("status.agent.claudeWriteOutside", { path }),
+      }),
+    );
     if (isRecord(result) && result.decision === "accept") return { behavior: "allow", updatedInput: toolInput };
     return { behavior: "deny", message: "The user did not allow this write outside the workspace." };
+  }
+
+  /** Runs a request that waits for the person, while a steer must not stop the turn's tools. */
+  async #awaitPerson<T>(threadId: string, request: () => Promise<T>): Promise<T> {
+    const turn = this.#threads.get(threadId)?.activeTurn ?? null;
+    if (turn) turn.personRequests += 1;
+    try {
+      return await request();
+    } finally {
+      if (turn) turn.personRequests -= 1;
+    }
   }
 
   #requireThread(threadId: string): ThreadRuntime {
@@ -1547,6 +1632,12 @@ function stringValue(value: unknown): string | null {
 
 function numberValue(value: unknown): number | null {
   return isNumber(value) && Number.isFinite(value) ? value : null;
+}
+
+/** The user message uuids a result's turn took, newest last. */
+function takenMessageIds(message: ClaudeStreamMessage): string[] {
+  const listed = Array.isArray(message.user_message_uuids) ? message.user_message_uuids.filter(isString) : [];
+  return listed.length > 0 ? listed : message.user_message_uuid ? [message.user_message_uuid] : [];
 }
 
 class AsyncMessageQueue implements AsyncIterable<SDKUserMessage> {

@@ -20,7 +20,7 @@ import type {
   SidebarDropTarget,
 } from "../sidebar-drag-model";
 import { type SidebarPinnedItem, sidebarPinnedItemKey } from "../sidebar-pins";
-import type { SidebarChatItem, SidebarProps } from "../sidebar-types";
+import { type SidebarChatItem, type SidebarProps, sidebarChatOrderSortsSections } from "../sidebar-types";
 
 export function createSidebarLayoutActions(deps: {
   chatPinnedItems: () => SidebarPinnedItem[];
@@ -32,11 +32,15 @@ export function createSidebarLayoutActions(deps: {
   draggedSidebarItem: () => SidebarPinnedItem | null;
   filteredChatsBySection: () => Map<string, SidebarChatItem[]>;
   filteredPeople: () => TeamPresenceMember[];
+  /** True when the host keeps folders in folders, so a folder moves with `nest`. */
+  foldersSupported: () => boolean;
   layoutMutable: () => boolean;
   orderedPeople: () => TeamPresenceMember[];
   personById: () => Map<string, TeamPresenceMember>;
   props: SidebarProps;
   sectionLabel: (sectionId: string) => string;
+  sectionParent: (sectionId: string) => string | null;
+  sectionSiblings: (sectionId: string) => string[];
   visiblePinnedKeys: () => string[];
   visibleSectionIds: () => string[];
 }) {
@@ -50,17 +54,57 @@ export function createSidebarLayoutActions(deps: {
     draggedSidebarItem,
     filteredChatsBySection,
     filteredPeople,
+    foldersSupported,
     layoutMutable,
     orderedPeople,
     personById,
     props,
     sectionLabel,
+    sectionParent,
+    sectionSiblings,
     visiblePinnedKeys,
     visibleSectionIds,
   } = deps;
   const { t } = currentText();
 
+  /**
+   * The sibling that a folder goes before so that it shows just before `targetId` ("before") or just
+   * after it ("after"), among the folders of `parentId`. Null: last in that folder.
+   */
+  function nestBefore(sectionId: string, parentId: string | null, targetId: string, placement: "before" | "after") {
+    if (placement === "before") return targetId;
+    const siblings = props.layout.order.filter(
+      (candidate) => candidate !== sectionId && sectionParent(candidate) === parentId,
+    );
+    return siblings[siblings.indexOf(targetId) + 1] ?? null;
+  }
+
+  /** Puts a folder, with the folders in it, into `parentId` (null: the top), last there. */
+  function nestSection(sectionId: string, parentId: string | null): void {
+    void props.onMutateLayout({ type: "nest", sectionId, parentId, beforeSectionId: null }).then(
+      () =>
+        announce(
+          t("sidebar.announce.movedTo", {
+            name: sectionLabel(sectionId),
+            section: parentId === null ? t("sidebar.folder.topLevel") : sectionLabel(parentId),
+          }),
+        ),
+      announceError,
+    );
+  }
+
   function moveSection(sectionId: string, direction: "up" | "down"): void {
+    if (foldersSupported()) {
+      // A folder moves among the folders of its own parent, with the folders in it.
+      const siblings = sectionSiblings(sectionId);
+      const index = siblings.indexOf(sectionId);
+      const targetId = siblings[index + (direction === "up" ? -1 : 1)];
+      if (index < 0 || !targetId) return;
+      const parentId = sectionParent(sectionId);
+      const beforeSectionId = nestBefore(sectionId, parentId, targetId, direction === "up" ? "before" : "after");
+      void props.onMutateLayout({ type: "nest", sectionId, parentId, beforeSectionId }).catch(announceError);
+      return;
+    }
     const visibleOrder = visibleSectionIds();
     const index = visibleOrder.indexOf(sectionId);
     const targetSectionId = visibleOrder[index + (direction === "up" ? -1 : 1)];
@@ -130,6 +174,23 @@ export function createSidebarLayoutActions(deps: {
 
   function reorderDraggedSection(sourceSectionId: string, target: SectionDropTarget): void {
     if (sourceSectionId === target.sectionId) return;
+    if (foldersSupported()) {
+      // The dropped folder goes to the level of the folder it lands next to. The host refuses a drop
+      // into the folder itself or too deep, and the announcement says why.
+      const parentId = sectionParent(target.sectionId);
+      const beforeSectionId = nestBefore(sourceSectionId, parentId, target.sectionId, target.placement);
+      void props.onMutateLayout({ type: "nest", sectionId: sourceSectionId, parentId, beforeSectionId }).then(
+        () =>
+          announce(
+            t("sidebar.announce.movedTo", {
+              name: sectionLabel(sourceSectionId),
+              section: parentId === null ? t("sidebar.folder.topLevel") : sectionLabel(parentId),
+            }),
+          ),
+        announceError,
+      );
+      return;
+    }
     const sourceIndex = props.layout.order.indexOf(sourceSectionId);
     if (sourceIndex < 0) return;
     const orderWithoutSource = props.layout.order.filter((sectionId) => sectionId !== sourceSectionId);
@@ -165,6 +226,9 @@ export function createSidebarLayoutActions(deps: {
   }
 
   function moveChatAction(chatId: string, target: ChatDropTarget): SidebarLayoutAction | null {
+    // The "recent activity" order shows the rows by activity, not in the saved order. A drop next to
+    // a row there must not write a position that the user cannot see: the chat goes to the end.
+    if (sidebarChatOrderSortsSections(props.chatOrder)) return appendChatAction(chatId, target.sectionId);
     const idsWithoutSource = sectionChatIdsWithout(target.sectionId, chatId);
     const targetIndex = idsWithoutSource.indexOf(target.chatId);
     if (targetIndex < 0) return null;
@@ -287,6 +351,7 @@ export function createSidebarLayoutActions(deps: {
     movePersonByKeyboard,
     movePinnedItem,
     moveSection,
+    nestSection,
     pinDraggedSidebarItem,
     reorderDraggedPerson,
     reorderDraggedSection,

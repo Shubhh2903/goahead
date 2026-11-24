@@ -7,7 +7,7 @@ import type {
   QueueSnapshot,
   ScopedAgentEvent,
 } from "@openbot/contracts/ipc";
-import { isLocalOnlyApprovalRequestId } from "@openbot/contracts/ipc";
+import { isLocalOnlyApprovalRequestId, runtimePromptEvent } from "@openbot/contracts/ipc";
 import { cleanAgentMessageText } from "./agent-message-text";
 import {
   countDynamicIslandAttention,
@@ -433,7 +433,20 @@ export class DynamicIslandCoordinator {
     const pendingPrompts: DynamicIslandPresentationInput["pendingPrompts"] = snapshot.attentionComplete
       ? {}
       : { ...runtime.pendingPrompts };
-    for (const prompt of snapshot.pendingPrompts) pendingPrompts[prompt.agentId] = { type: "prompt", ...prompt };
+    for (const prompt of snapshot.pendingPrompts) {
+      // Only the host's own snapshot says `multiSelect`; the wire drops it. Without it, the copy from
+      // the `prompt` event says it, so that copy stays.
+      const known = prompt.questions.every((question) => typeof question.multiSelect === "boolean");
+      const held = runtime.pendingPrompts[prompt.agentId];
+      const fuller =
+        !known &&
+        held?.type === "prompt" &&
+        held.fromRuntimeSnapshot !== true &&
+        String(held.requestId) === String(prompt.requestId);
+      pendingPrompts[prompt.agentId] = fuller
+        ? held
+        : { ...runtimePromptEvent(prompt), ...(known ? {} : { fromRuntimeSnapshot: true as const }) };
+    }
     for (const request of snapshot.pendingBrowserTakeovers) {
       pendingPrompts[request.agentId] = { type: "browser-takeover-requested", request };
     }

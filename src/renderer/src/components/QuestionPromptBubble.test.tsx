@@ -38,6 +38,33 @@ const questions: AgentPromptQuestion[] = [
 const singleQuestion = questions.slice(0, 1);
 
 describe("QuestionPromptBubble", () => {
+  it("sends the ticked options in option order and the typed text for a multi-select question", async () => {
+    const onSubmit = vi.fn(async () => true);
+    const multiSelect: AgentPromptQuestion[] = [
+      {
+        id: "approach",
+        header: "Approach",
+        question: "Which approaches should we use?",
+        isSecret: false,
+        multiSelect: true,
+        options: [
+          { label: "Session cookies", description: "" },
+          { label: "Bearer token", description: "" },
+        ],
+      },
+    ];
+    render(() => <QuestionPromptBubble questions={multiSelect} onSubmit={onSubmit} />);
+
+    await fireEvent.click(screen.getByRole("checkbox", { name: /Bearer token/ }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: /Session cookies/ }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "Both" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Submit answer" }));
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith({ approach: ["Session cookies", "Bearer token", "Both"] }),
+    );
+  });
+
   it("advances after a choice and submits after the final answer", async () => {
     const onSubmit = vi.fn(async () => true);
     render(() => <QuestionPromptBubble questions={questions} onSubmit={onSubmit} />);

@@ -2,6 +2,7 @@
 @import "katex/dist/katex.min.css";
 @import "./styles/layout.css";
 @import "./styles/header-layout.css";
+@import "./styles/chat-backdrop.css";
 @import "./styles/file-preview.css";
 @import "./styles/remote-desktop.css";
 @import "./styles/browser-panel.css";

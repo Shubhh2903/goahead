@@ -6,6 +6,7 @@ import type { ChannelService } from "../channel-service";
 import type { DeliveryContext, MailboxStore } from "../mailbox-store";
 import type { MessagingThreads } from "../messaging/messaging-threads";
 import { decodeTurnResponse } from "../protocol";
+import { chooseTurnModel } from "./auto-model";
 import type { ContextCompaction } from "./context-compaction";
 import type { ConversationRuntime } from "./conversation-runtime";
 import { agentNamesById, combinedPromptInput, deliveryPromptInput } from "./delivery-content";
@@ -115,6 +116,8 @@ export class DrainScheduler {
   readonly #startingDeliveries = new Map<AgentProvider, number>();
   readonly #scheduledDrains = new Set<string>();
   readonly #drainTasks = new Map<string, Promise<void>>();
+  /** One timer per agent for the time the hold cap releases its held teammate answers. */
+  readonly #groupHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(options: DrainSchedulerOptions) {
     this.#store = options.store;
@@ -217,6 +220,7 @@ export class DrainScheduler {
   }
 
   forgetAgent(agentId: string): void {
+    this.#clearGroupHoldTimer(agentId);
     this.#drainingAgents.delete(agentId);
     this.#scheduledDrains.delete(agentId);
     this.#slotWaiters.delete(agentId);
@@ -224,6 +228,8 @@ export class DrainScheduler {
   }
 
   dispose(): void {
+    for (const timer of this.#groupHoldTimers.values()) clearTimeout(timer);
+    this.#groupHoldTimers.clear();
     this.#drainingAgents.clear();
     this.#scheduledDrains.clear();
     this.#slotWaiters.clear();
@@ -289,8 +295,36 @@ export class DrainScheduler {
     } finally {
       this.#drainingAgents.delete(agentId);
       if (this.#mailbox.nextQueued(agentId)) this.#scheduleDrain(agentId);
+      this.#armGroupHoldTimer(agentId);
       this.retrySlotWaiters();
     }
+  }
+
+  /**
+   * A teammate answer that waits for the other requests of its turn waits at most
+   * `REQUEST_GROUP_HOLD_MS`. Nothing else may drain the agent at that time, so a timer does.
+   */
+  #armGroupHoldTimer(agentId: string): void {
+    this.#clearGroupHoldTimer(agentId);
+    if (this.#hooks.isStopping()) return;
+    const releaseAt = this.#mailbox.groupHoldReleaseAt(agentId);
+    if (releaseAt === null) return;
+    const timer = setTimeout(
+      () => {
+        this.#groupHoldTimers.delete(agentId);
+        this.scheduleDrain(agentId);
+      },
+      Math.max(0, releaseAt - Date.now()),
+    );
+    timer.unref?.();
+    this.#groupHoldTimers.set(agentId, timer);
+  }
+
+  #clearGroupHoldTimer(agentId: string): void {
+    const timer = this.#groupHoldTimers.get(agentId);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.#groupHoldTimers.delete(agentId);
   }
 
   async startDelivery(context: DeliveryContext): Promise<void> {
@@ -383,11 +417,33 @@ export class DrainScheduler {
         this.#mailboxSync.emitQueue(agent.id);
         return;
       }
+      // With "Choose model automatically" on, a short chat message runs on the provider's small
+      // model, for this turn only, on the same session. Off, this is `turnSettings` unchanged.
+      const turnModel = chooseTurnModel({
+        agent,
+        settings: turnSettings,
+        relay: channelDelivery || messagingDelivery,
+        messages: batch.map(({ delivery: item }) => ({
+          sender: item.sender.kind === "user" ? "person" : item.sender.kind === "agent" ? "teammate" : "routine",
+          text: item.text,
+          attachmentCount: item.attachments.length,
+        })),
+        models: () => this.#providers.listModels(),
+        catalogListed: this.#providers.hasListedCatalog(agent.provider),
+        servesModel: (model) => this.#hooks.servesModel(model),
+        lastTurn: this.#conversation.lastTurn(threadId),
+        now: this.#conversation.now(),
+      });
+      if (turnModel.smallModelName) requestedModel = turnModel.model;
 
       const agentNames = agentNamesById(this.#store.list());
+      // Every request of the group the answers belong to, so a teammate of the same fan-out that
+      // ended with no answer is named too.
       const requestIds = new Set(
         batch.flatMap(({ delivery: item }) =>
-          item.sender.kind === "agent" && item.replyToMessageId ? [item.replyToMessageId] : [],
+          item.sender.kind === "agent" && item.replyToMessageId
+            ? this.#mailbox.requestGroupIds(item.replyToMessageId)
+            : [],
         ),
       );
       const input = combinedPromptInput(
@@ -443,31 +499,36 @@ export class DrainScheduler {
       }
       this.#conversation.emitConversation(snapshot);
 
-      const startTurn = (providerThreadId: string) => {
+      const startTurn = async (providerThreadId: string) => {
         // Read again here, not only above: the provider, the thread and the channel are prepared in
         // between, and an endpoint removed during that wait finds the process still running. The
         // retry below calls this as well, so the recovered thread is checked too.
         requireServedModel();
-        return this.#threads.requestWithArchivedThreadRecovery(
-          agent,
-          client,
-          "turn/start",
-          {
-            threadId: providerThreadId,
-            model: turnSettings.model,
-            effort: turnSettings.reasoningEffort,
-            clientUserMessageId: delivery.id,
-            // A teammate message that wants no answer tells the model to write nothing, so an empty
-            // turn is the expected result and not a provider that swallowed its error.
-            answerOptional:
-              delivery.sender.kind === "agent" && delivery.expectsReply === false && !delivery.replyToMessageId,
-            input: inputForThread(providerThreadId),
-            cwd: agent.workspacePath,
-            runtimeWorkspaceRoots: workspaceWritableRoots(agent, this.#store.sharedRoot),
-            ...this.#threads.turnAccess(agent, execution?.threadId),
-          },
-          decodeTurnResponse,
-        );
+        this.#conversation.setStartingTurnModel(providerThreadId, turnModel.model);
+        try {
+          return await this.#threads.requestWithArchivedThreadRecovery(
+            agent,
+            client,
+            "turn/start",
+            {
+              threadId: providerThreadId,
+              model: turnModel.model,
+              effort: turnModel.reasoningEffort,
+              clientUserMessageId: delivery.id,
+              // A teammate message that wants no answer tells the model to write nothing, so an empty
+              // turn is the expected result and not a provider that swallowed its error.
+              answerOptional:
+                delivery.sender.kind === "agent" && delivery.expectsReply === false && !delivery.replyToMessageId,
+              input: inputForThread(providerThreadId),
+              cwd: agent.workspacePath,
+              runtimeWorkspaceRoots: workspaceWritableRoots(agent, this.#store.sharedRoot),
+              ...this.#threads.turnAccess(agent, execution?.threadId),
+            },
+            decodeTurnResponse,
+          );
+        } finally {
+          this.#conversation.setStartingTurnModel(providerThreadId, null);
+        }
       };
       let response: Awaited<ReturnType<typeof startTurn>>;
       try {
@@ -489,7 +550,10 @@ export class DrainScheduler {
       // snapshot with a running delivery is a stale state for clients.
       snapshot.activeTurnId = response.turn.id;
       confirmedTurnId = response.turn.id;
-      this.#turnModels.set(agent.id, { turnId: response.turn.id, model: turnSettings.model });
+      // Only an accepted start counts as the thread's last turn: a failed one warmed no cache.
+      this.#conversation.recordAcceptedTurn(threadId, turnModel.model);
+      if (turnModel.smallModelName) this.#conversation.labelAutoModelTurn(response.turn.id, turnModel.smallModelName);
+      this.#turnModels.set(agent.id, { turnId: response.turn.id, model: turnModel.model });
       for (const item of batch) await this.#mailbox.markRunning(item.delivery.id, response.turn.id);
       this.#channels?.accepted(delivery.id, threadId, response.turn.id);
       const currentDelivery = this.#mailbox.getDelivery(delivery.id)?.delivery;

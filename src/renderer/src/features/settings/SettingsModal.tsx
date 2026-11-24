@@ -24,14 +24,17 @@ import { createSettingsHostedServersStore } from "@openbot/ui/features/settings/
 import { createSettingsMobileConnectStore } from "@openbot/ui/features/settings/stores/mobile-connect-store";
 import { createSettingsProfileStore } from "@openbot/ui/features/settings/stores/profile-store";
 import { createSettingsUpdatesStore } from "@openbot/ui/features/settings/stores/updates-store";
+import { UsageDashboardPanel } from "@openbot/ui/features/usage/UsageDashboardPanel";
 import { createEffect, createSignal, Show, untrack } from "solid-js";
 import { useI18n } from "../../i18n-context";
 import { ComputerUseSetup } from "../computer-use/ComputerUseSetup";
 import { voiceSupported } from "../conversation/voice-status";
 import { SettingsDynamicIslandTab } from "./SettingsDynamicIslandTab";
 import { SettingsGeneralTab } from "./SettingsGeneralTab";
+import { SettingsKeyboardTab } from "./SettingsKeyboardTab";
 import { SettingsVoiceTab } from "./SettingsVoiceTab";
 import { navItem, navItems, type SettingsTab } from "./settings-tabs";
+import { createSettingsUsageStore } from "./settings-usage-store";
 import { createSettingsVoiceStore } from "./settings-voice-store";
 
 export interface SettingsModalProps {
@@ -48,6 +51,7 @@ export interface SettingsModalProps {
   onCancelScheduledRestart?: () => Promise<void>;
   onRestartWhenIdle?: () => Promise<void>;
   onCancelIdleRestart?: () => Promise<void>;
+  onRestartNow?: () => Promise<void>;
   onOpenReleases?: () => void;
   account: CentralAuthUser;
   onUpdateAccountName: (name: string) => Promise<void>;
@@ -96,6 +100,7 @@ export function SettingsModal(props: SettingsModalProps) {
   );
   const hostedServers = createSettingsHostedServersStore(props, () => activeTab() === "hosted-servers");
   const voice = createSettingsVoiceStore(() => props.open && activeTab() === "voice");
+  const usage = createSettingsUsageStore(() => props.open && activeTab() === "usage");
 
   // The Dynamic Island exists only on macOS, so other platforms get no tab for it.
   const isMac = () => props.appInfo?.platform === "darwin";
@@ -142,12 +147,14 @@ export function SettingsModal(props: SettingsModalProps) {
       if (
         value === "general" ||
         (value === "voice" && hasVoice()) ||
+        value === "keyboard" ||
         (value === "dynamic-island" && isMac()) ||
         value === "computer-use" ||
         value === "profile" ||
         value === "billing" ||
         value === "mobile-connect" ||
         value === "updates" ||
+        value === "usage" ||
         (value === "hosted-servers" && hostedServersShown())
       ) {
         setActiveTab(value);
@@ -219,6 +226,10 @@ export function SettingsModal(props: SettingsModalProps) {
           </Tabs.Content>
         </Show>
 
+        <Tabs.Content value="keyboard" class="settings-modal-tab-panel" data-tab="keyboard">
+          <SettingsKeyboardTab />
+        </Tabs.Content>
+
         <Show when={isMac()}>
           <Tabs.Content value="dynamic-island" class="settings-modal-tab-panel" data-tab="dynamic-island">
             <SettingsDynamicIslandTab
@@ -263,6 +274,16 @@ export function SettingsModal(props: SettingsModalProps) {
             value={props.value}
             onUpdateSetting={updateSetting}
             selectMount={modalElement}
+          />
+        </Tabs.Content>
+        <Tabs.Content value="usage" class="settings-modal-tab-panel" data-tab="usage">
+          <UsageDashboardPanel
+            dashboard={usage.state.dashboard}
+            phase={usage.state.phase}
+            days={usage.state.days}
+            onDaysChange={usage.setDays}
+            onRetry={usage.reload}
+            agentLabel={usage.agentLabel}
           />
         </Tabs.Content>
         <Show when={hostedServersShown()}>

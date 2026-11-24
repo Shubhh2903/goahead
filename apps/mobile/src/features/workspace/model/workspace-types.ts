@@ -43,7 +43,7 @@ import type {
   UpdateRoutineInput,
 } from "@openbot/contracts/ipc";
 import type { QueueEditRequest } from "@openbot/contracts/team-protocol/queue-edit-v1";
-import type { RemoteRecoveryStatus, RemoteTeamDirectoryClient } from "@openbot/team-client";
+import type { ConnectionPath, RemoteRecoveryStatus, RemoteTeamDirectoryClient } from "@openbot/team-client";
 import type { RemoteFileUpload } from "@openbot/team-client/remote-peer";
 import type { MobileChannelStore } from "@/features/channels/model/channel-store";
 import type { MobileConversationStore } from "./conversation-store";
@@ -63,6 +63,8 @@ export interface MobileServer {
   initialConnectionPending: boolean;
   connectionMessage: string | null;
   recoveryStatus?: RemoteRecoveryStatus;
+  /** How this phone reaches the server, or why it cannot. Set by the connection; absent until known. */
+  connectionPath?: ConnectionPath;
   address: string | null;
   accent: string;
   publicKey: string;
@@ -87,6 +89,8 @@ export interface MobileAgent {
   description: string;
   preview: string;
   updatedLabel: string;
+  /** When the agent last had activity, for the "Recent activity" order. Null when unknown. */
+  updatedAt: string | null;
   avatarUrl?: string | null;
   avatarSeed: string;
   avatarHue: AvatarHue | null;

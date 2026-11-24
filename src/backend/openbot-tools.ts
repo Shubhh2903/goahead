@@ -90,7 +90,7 @@ const routineRunConditionZodSchema = z
     when: z.enum(ROUTINE_RUN_CONDITION_MODES),
   })
   .describe(
-    "Optional check before each scheduled run, which saves a model turn when there is nothing to do. The command runs in this agent's working directory. Example: {command: 'git log -1 --format=%H', when: 'output-changes'} runs only after a new commit.",
+    "Optional check before each scheduled run, which saves a model turn when there is nothing to do. The command runs in this agent's working directory. Example: {command: 'git log -1 --format=%H', when: 'output-changes'} runs only after a new commit. Other templates (quote every value for a POSIX shell; the shell does not expand ~ inside quotes, so write a leading ~/ as \"$HOME\"/'rest' or use an absolute path): new file in a folder {command: \"ls -t '<folder>' | head -1\", when: 'output-changes'}; web page changed {command: \"curl -fsSL '<url>' | shasum\", when: 'output-changes'}; file exists {command: \"test -f '<path>'\", when: 'exit-zero'}.",
   );
 
 export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
@@ -308,6 +308,7 @@ export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
               )
               .max(INPUT_LIMITS.promptOptions)
               .optional(),
+            multiSelect: z.boolean().optional(),
           }),
         )
         .min(1)

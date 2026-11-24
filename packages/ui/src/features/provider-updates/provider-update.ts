@@ -1,3 +1,4 @@
+import { isManagedRuntimeProvider } from "@openbot/contracts/agent-providers";
 import type { AgentProviderId, ProviderRuntimeStatus } from "@openbot/contracts/ipc";
 import { currentText, type TextValue } from "../../text";
 
@@ -150,5 +151,57 @@ export function providerUpdatesToAnnounce(previous: ProviderUpdate[], next: Prov
     (update) =>
       providerUpdateAvailable(update.runtime, update.availableVersion) &&
       announced.get(update.provider) !== update.availableVersion,
+  );
+}
+
+/** A provider row, as "Update all" reads it. `ProviderPickerOption` has this shape. */
+export interface ProviderUpdateCandidate {
+  id: AgentProviderId;
+  name: string;
+  runtimeStatus?: ProviderRuntimeStatus | undefined;
+  availableVersion?: string | null | undefined;
+  off?: boolean | undefined;
+}
+
+/** What "Update all" reports for one provider: `error` is `null` when its update started. */
+export interface ProviderUpdateAllResult {
+  provider: AgentProviderId;
+  name: string;
+  error: unknown;
+}
+
+/**
+ * The providers "Update all" starts: a managed CLI that is on and has an update offer. Main decides
+ * the offer; this only reads it, as the row's own Update button does.
+ */
+export function providersToUpdate<T extends ProviderUpdateCandidate>(options: readonly T[]): T[] {
+  return options.filter((option) => {
+    const runtime = option.runtimeStatus;
+    return (
+      !option.off &&
+      isManagedRuntimeProvider(option.id) &&
+      runtime !== undefined &&
+      providerUpdateAvailable(runtime, option.availableVersion ?? null)
+    );
+  });
+}
+
+/**
+ * Starts the update of each provider once, through the same action as its row's Update button. A
+ * failure of one provider does not stop the others. Answers one result for each provider, in order.
+ */
+export async function updateAllProviders(
+  providers: readonly ProviderUpdateCandidate[],
+  update: (provider: AgentProviderId) => void | Promise<void>,
+): Promise<ProviderUpdateAllResult[]> {
+  return await Promise.all(
+    providers.map(async (provider): Promise<ProviderUpdateAllResult> => {
+      try {
+        await update(provider.id);
+        return { provider: provider.id, name: provider.name, error: null };
+      } catch (error) {
+        return { provider: provider.id, name: provider.name, error };
+      }
+    }),
   );
 }

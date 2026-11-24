@@ -4,7 +4,9 @@ import {
   type SidebarPinnedItem,
   sidebarPinnedItemKey,
 } from "@openbot/ui/features/sidebar/sidebar-pins";
+import type { SidebarChatOrder } from "@openbot/ui/features/sidebar/sidebar-types";
 import { createMemo, createSignal } from "solid-js";
+import { readSidebarChatOrder, writeSidebarChatOrder } from "./sidebar-chat-order-storage";
 import { readSidebarPins, type SidebarPinsByServer, writeSidebarPins } from "./sidebar-pins-storage";
 import { readSidebarCollapsed, type SidebarCollapsedByServer, writeSidebarCollapsed } from "./sidebar-sections-storage";
 
@@ -25,6 +27,13 @@ export function createSidebarPreferences(options: { scope: () => string }) {
   const [sidebarCollapsedByServer, setSidebarCollapsedByServer] = createSignal<SidebarCollapsedByServer>(
     readSidebarCollapsed(),
   );
+
+  const [sidebarChatOrder, setSidebarChatOrderSignal] = createSignal<SidebarChatOrder>(readSidebarChatOrder());
+
+  function setSidebarChatOrder(order: SidebarChatOrder): void {
+    setSidebarChatOrderSignal(order);
+    writeSidebarChatOrder(order);
+  }
 
   const pinnedSidebarItems = createMemo(() => sidebarPinsByServer()[options.scope()] ?? []);
   const collapsedSidebarSectionIds = createMemo(() => sidebarCollapsedByServer()[options.scope()] ?? []);
@@ -114,6 +123,8 @@ export function createSidebarPreferences(options: { scope: () => string }) {
   }
 
   return {
+    sidebarChatOrder,
+    setSidebarChatOrder,
     collapsedSidebarSectionIds,
     toggleSidebarSection,
     collapseSidebarSection,

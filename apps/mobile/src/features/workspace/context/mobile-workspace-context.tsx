@@ -11,6 +11,7 @@ import { AGENT_ADMIN_CAPABILITY } from "@openbot/contracts/team-protocol/agent-a
 import { AGENT_HOST_SETTINGS_CAPABILITY } from "@openbot/contracts/team-protocol/agent-host-settings-v1";
 import { AGENT_PUBLISH_CAPABILITY } from "@openbot/contracts/team-protocol/agent-publish-v1";
 import { ANDROID_LIVE_UPDATE_PUSH_CAPABILITY } from "@openbot/contracts/team-protocol/android-live-update-push-v1";
+import { CHAT_FOLDERS_ROUTES, decodeChatFoldersLayout } from "@openbot/contracts/team-protocol/chat-folders-v1";
 import { TEAM_CONVERSATION_UNREAD_CAPABILITY } from "@openbot/contracts/team-protocol/current";
 import { HOST_ADMIN_CAPABILITY } from "@openbot/contracts/team-protocol/host-admin-v1";
 import { LIVE_ACTIVITY_PUSH_CAPABILITY } from "@openbot/contracts/team-protocol/live-activity-push-v1";
@@ -21,6 +22,7 @@ import type { TeamProtocolV2Json } from "@openbot/contracts/team-protocol/v2";
 import { TEAM_PROTOCOL_V3 } from "@openbot/contracts/team-protocol/v3";
 import { sourceText } from "@openbot/i18n/source";
 import {
+  type ConnectionPath,
   createRemoteAccountRefresh,
   createRemoteReadRefresh,
   createWorkspacePreferences,
@@ -83,7 +85,8 @@ import { MobileConversationStore } from "@/features/workspace/model/conversation
 import { LiveWorkspaceStore } from "@/features/workspace/model/live-workspace-store";
 import { applyMobileQueueEvent } from "@/features/workspace/model/queue-cache";
 import { decodeServerOrder, serverAccent, serverOrderKey, sortServers } from "@/features/workspace/model/server-order";
-import { applyServerRecovery, serverKind } from "@/features/workspace/model/server-status";
+import { applyServerRecovery, serverFromHost, serverKind } from "@/features/workspace/model/server-status";
+import { mobileChatFoldersSupported } from "@/features/workspace/model/sidebar-layout";
 import { trustedHostKeys } from "@/features/workspace/model/trusted-host-keys";
 import {
   decodeAgent,
@@ -259,22 +262,7 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
         const previousServers = new Map(current.map((server) => [server.id, server]));
         return hosts.map((host) => {
           const previous = previousServers.get(host.hostId);
-          return {
-            id: host.hostId,
-            name: host.name,
-            logoKey: host.logoKey,
-            kind: serverKind(host.hostId, session.host?.hostId),
-            state: previous?.state ?? "unknown",
-            initialConnectionPending: previous?.initialConnectionPending ?? true,
-            connectionMessage: previous?.connectionMessage ?? null,
-            recoveryStatus: previous?.recoveryStatus,
-            address: null,
-            accent: serverAccent(host.hostId),
-            publicKey: previous?.publicKey ?? host.devicePublicKey,
-            membershipId: host.membershipId,
-            role: host.role,
-            ...(host.memberLimit === undefined ? {} : { memberLimit: host.memberLimit }),
-          };
+          return serverFromHost(host, previous, serverKind(host.hostId, session.host?.hostId));
         });
       });
       setActiveServerId((current) => (hosts.some((host) => host.hostId === current) ? current : null));
@@ -342,6 +330,26 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
       return client.request(method, path, decode, body, upload, onUploadProgress);
     },
     [],
+  );
+  /**
+   * Reads the layout with the folder parents from a host with `chat-folders-v1`. The released layout in
+   * `sidebar-layout-changed` and in an action answer has no parents, so the phone reads this route then.
+   */
+  const refreshChatFolders = useCallback(
+    async (serverId: string) => {
+      try {
+        const layout = await request("POST", CHAT_FOLDERS_ROUTES.read, decodeChatFoldersLayout, {}, serverId);
+        applySidebarLayout(serverId, layout);
+      } catch (error) {
+        const text = currentText();
+        const message = text.errorMessage(error, text.t("mobile.workspace.error.sectionsLoadFailed"));
+        setSidebarByServer((current) => ({
+          ...current,
+          [serverId]: { layout: current[serverId]?.layout ?? null, error: message },
+        }));
+      }
+    },
+    [request, applySidebarLayout],
   );
   const loadAgentAvatar = useCallback(
     (agentId: string, avatarUrl: string, serverId: string) => requestAgentAvatar(request, agentId, avatarUrl, serverId),
@@ -478,7 +486,10 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
       void channelStore.refresh(serverId);
       if (compatibility.capabilities.includes("sidebar-layout")) {
         try {
-          const layout = await client.request("GET", TEAM_API_ROUTES.sidebarLayout.state, decodeSidebarLayout);
+          // A host with chat folders sends the parents on its own route. An older host gives the flat list.
+          const layout = mobileChatFoldersSupported(compatibility.capabilities)
+            ? await client.request("POST", CHAT_FOLDERS_ROUTES.read, decodeChatFoldersLayout, {})
+            : await client.request("GET", TEAM_API_ROUTES.sidebarLayout.state, decodeSidebarLayout);
           if (!context.isCurrent()) return;
           applySidebarLayout(serverId, layout);
         } catch (error) {
@@ -573,6 +584,9 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
   );
   /** The last failed attempt of each server that asked for a wake. */
   const wakeAttempts = useRef(new Map<string, number>());
+  const handleConnectionPath = useCallback((hostId: string, connectionPath: ConnectionPath) => {
+    setServers((current) => current.map((server) => (server.id === hostId ? { ...server, connectionPath } : server)));
+  }, []);
   const handleConnectionStatus = useCallback(
     (hostId: string, status: RemoteRecoveryStatus, failure: string | null) => {
       setServers((current) =>
@@ -687,7 +701,8 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
         }));
       }
       if (event.type === "sidebar-layout-changed") {
-        applySidebarLayout(serverId, event.layout);
+        if (mobileChatFoldersSupported(serverCapabilities.current.get(serverId))) void refreshChatFolders(serverId);
+        else applySidebarLayout(serverId, event.layout);
         return;
       }
       if (event.type === "queue-changed" || event.type === "queue-invalidated") {
@@ -811,6 +826,7 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
       applyLiveActivityEvent,
       channelStore,
       applySidebarLayout,
+      refreshChatFolders,
       loadConversation,
       replaceServerAgents,
       conversationStore,
@@ -934,7 +950,8 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
           action,
           serverId,
         );
-        applySidebarLayout(serverId, layout);
+        if (mobileChatFoldersSupported(serverCapabilities.current.get(serverId))) await refreshChatFolders(serverId);
+        else applySidebarLayout(serverId, layout);
       },
       channelStore,
       servers: orderedServers,
@@ -1251,6 +1268,7 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
   }, [
     sidebarByServer,
     applySidebarLayout,
+    refreshChatFolders,
     channelStore,
     activeServerId,
     agents,
@@ -1298,6 +1316,7 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
             register={registerConnection}
             load={loadServer}
             onStatus={handleConnectionStatus}
+            onConnectionPath={handleConnectionPath}
             onMembershipChanged={refreshMemberships}
             onTeamEvent={handleTeamEvent}
           />

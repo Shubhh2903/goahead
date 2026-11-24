@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   type AgentEvent,
   type ConversationMessage,
@@ -28,6 +29,7 @@ import {
 } from "./agent-service-test-harness";
 import { ChannelRoutineStore } from "./channel-routine-store";
 import { ChannelStore } from "./channel-store";
+import { REQUEST_GROUP_HOLD_MS } from "./mailbox-store";
 import { getString } from "./protocol";
 
 let root: string;
@@ -991,6 +993,142 @@ describe.sequential("AgentService: routines", () => {
     });
     expect(service.listQueue("sales-outbound").deliveries).toHaveLength(2);
     expect(service.listQueue("chief").deliveries).toHaveLength(2);
+  });
+
+  it("gives the requester one turn for the answers to every request of its turn, files included", async () => {
+    process.env.OPENBOT_FAKE_AUTO_COMPLETE = "AUTO_BUILDER_RESULT";
+    const { store, mailbox } = stores(root);
+    service = createTestService({ store, mailbox });
+    await store.initialize();
+    await mailbox.initialize();
+    await store.getOrCreate("chief");
+    await store.getOrCreate("research");
+    await store.getOrCreate("builder");
+    const report = join(root, "research-report.txt");
+    await writeFile(report, "Root cause: stale cache.");
+
+    // Two send_message calls in one turn of chief: the router's keys share the turn id.
+    const ask = (agentId: string, callId: string) =>
+      mailbox.enqueue({
+        sender: { kind: "agent", agentId: "chief" },
+        recipientAgentIds: [agentId],
+        text: `Task for ${agentId}.`,
+        idempotencyKey: `thread-chief:turn-fan-out:${callId}`,
+      });
+    const research = await ask("research", "call-1");
+    const builder = await ask("builder", "call-2");
+    const researchDelivery = research.deliveries[0]?.id ?? "";
+    await mailbox.markStarting(researchDelivery);
+    await mailbox.markRunning(researchDelivery, "turn-research");
+    await mailbox.enqueue({
+      sender: { kind: "agent", agentId: "research" },
+      recipientAgentIds: ["chief"],
+      text: "RESEARCH_RESULT",
+      sourcePaths: [report],
+      replyToMessageId: research.messageId,
+      expectsReply: false,
+    });
+    await mailbox.markTerminal(researchDelivery, "completed");
+
+    await service.initialize();
+    await waitForQueue(
+      service,
+      "chief",
+      (queue) => queue.deliveries.length === 2 && queue.deliveries.every((item) => item.status === "completed"),
+    );
+
+    const chiefStarts = (await protocolMessages(logPath)).filter(
+      (message) =>
+        message.method === "turn/start" &&
+        inputRecords(message.params).some((item) => getString(item, "text")?.includes("RESEARCH_RESULT")),
+    );
+    expect(chiefStarts).toHaveLength(1);
+    const input = inputRecords(chiefStarts[0]?.params);
+    expect(getString(input[0], "text")).toContain("AUTO_BUILDER_RESULT");
+    expect(input.some((item) => getString(item, "name") === "research-report.txt")).toBe(true);
+    // Each answer reaches chief once.
+    expect(
+      service
+        .listQueue("chief")
+        .deliveries.map((item) => (item.sender.kind === "agent" ? item.sender.agentId : null))
+        .sort(),
+    ).toEqual(["builder", "research"]);
+    expect(builder.deliveries).toHaveLength(1);
+  });
+
+  it("starts a held answer when the hold cap ends, without another event", async () => {
+    process.env.OPENBOT_FAKE_AUTO_COMPLETE = "CHIEF_DONE";
+    const { store, mailbox } = stores(root);
+    service = createTestService({ store, mailbox });
+    await store.initialize();
+    await mailbox.initialize();
+    await store.getOrCreate("chief");
+    await store.getOrCreate("research");
+    await store.getOrCreate("builder");
+    const ask = (agentId: string, callId: string) =>
+      mailbox.enqueue({
+        sender: { kind: "agent", agentId: "chief" },
+        recipientAgentIds: [agentId],
+        text: `Task for ${agentId}.`,
+        idempotencyKey: `thread-chief:turn-fan-out:${callId}`,
+      });
+    const research = await ask("research", "call-1");
+    const builder = await ask("builder", "call-2");
+    // A person edits the builder request, so it stays queued and holds the group.
+    mailbox.beginQueueEdit("builder", builder.deliveries[0]?.id ?? "", "edit-builder");
+    const researchDelivery = research.deliveries[0]?.id ?? "";
+    await mailbox.markStarting(researchDelivery);
+    await mailbox.markRunning(researchDelivery, "turn-research");
+    await mailbox.enqueue({
+      sender: { kind: "agent", agentId: "research" },
+      recipientAgentIds: ["chief"],
+      text: "RESEARCH_RESULT",
+      replyToMessageId: research.messageId,
+      expectsReply: false,
+    });
+    await mailbox.markTerminal(researchDelivery, "completed");
+    // The cap is input here: the clock starts one second before it ends.
+    vi.useFakeTimers({
+      toFake: ["Date"],
+      shouldAdvanceTime: true,
+      now: Date.now() + REQUEST_GROUP_HOLD_MS - 1_000,
+    });
+    try {
+      await service.initialize();
+      expect(service.listQueue("chief").deliveries[0]?.status).toBe("queued");
+      await waitForQueue(service, "chief", (queue) => queue.deliveries[0]?.status === "completed");
+      expect(service.listQueue("builder").deliveries[0]?.status).toBe("queued");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("relays an answer longer than a message can be, shortened, instead of losing it", async () => {
+    const long = `${"x".repeat(INPUT_LIMITS.messageText)}TAIL`;
+    process.env.OPENBOT_FAKE_AUTO_COMPLETE = long;
+    const { store, mailbox } = stores(root);
+    service = createTestService({ store, mailbox });
+    await store.initialize();
+    await mailbox.initialize();
+    await store.getOrCreate("chief");
+    await store.getOrCreate("sales-outbound");
+    const request = await mailbox.enqueue({
+      sender: { kind: "agent", agentId: "chief" },
+      recipientAgentIds: ["sales-outbound"],
+      text: "Write the full report.",
+    });
+
+    await service.initialize();
+    await waitForQueue(service, "chief", (queue) => queue.deliveries.length === 1);
+
+    const [answer] = service.listQueue("chief").deliveries;
+    expect(answer).toMatchObject({ replyToMessageId: request.messageId, expectsReply: false });
+    expect(answer?.text.length).toBeLessThanOrEqual(INPUT_LIMITS.messageText);
+    expect(answer?.text).not.toContain("TAIL");
+    expect(answer?.text).toContain("sales-outbound");
+    // The teammate's own conversation keeps the whole answer.
+    const own = await service.readConversation("sales-outbound");
+    expect(own.messages.some((message) => message.author === "assistant" && message.text === long)).toBe(true);
   });
 
   it("sends nothing back for a teammate message that asks for no answer", async () => {

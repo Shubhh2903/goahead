@@ -139,4 +139,7 @@ export const messages = defineMessages("provider", {
   "provider.museKey.title": "Meta API key for Muse",
   "provider.museKey.description": "Save a Meta API key on the host, or use the Muse CLI to sign in.",
   "provider.museKey.label": "Meta API key",
+  "provider.settings.updateAll": "Update all",
+  "provider.settings.updateAllStarted": "{name}: the update started.",
+  "provider.settings.updateAllFailed": "{name}: {reason}",
 });

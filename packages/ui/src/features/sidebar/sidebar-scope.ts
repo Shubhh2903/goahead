@@ -10,7 +10,8 @@
 import { createContext, createEffect, onCleanup, useContext } from "solid-js";
 import { createScrollFades } from "../../components/createScrollFades";
 import { createSidebarDragEngine } from "./createSidebarDragEngine";
-import type { SidebarProps } from "./sidebar-types";
+import { SIDEBAR_NO_LIST_FILTER } from "./sidebar-list-filter";
+import { type SidebarProps, sidebarChatOrderSortsSections } from "./sidebar-types";
 import { createSidebarAnnouncementStore } from "./stores/announcement-store";
 import { createSidebarDataStore } from "./stores/data-store";
 import { createSidebarDragStateStore } from "./stores/drag-state-store";
@@ -20,6 +21,8 @@ import { createSidebarSearchStore } from "./stores/search-store";
 
 export function createSidebarScope(props: SidebarProps) {
   const layoutMutable = () => props.layoutMutable !== false;
+  /** Folders in folders: only a host that keeps them, and only while the layout can change. */
+  const foldersSupported = () => props.foldersSupported === true && layoutMutable();
   const scrollFades = createScrollFades();
 
   const { announce, announceError, reorderAnnouncement } = createSidebarAnnouncementStore();
@@ -36,21 +39,38 @@ export function createSidebarScope(props: SidebarProps) {
     chatPinnedItems,
     customSectionById,
     directThreadByMember,
+    filterFolders,
     filteredAgents,
     filteredChats,
     filteredChatsBySection,
     filteredPeople,
+    listFilter,
+    listFilterCount,
+    listFiltered,
     orderedPeople,
     personById,
     resolvedPinnedItems,
     sectionAcceptsChat,
+    sectionCanHoldFolder,
+    sectionCanNest,
     sectionIsCollapsed,
+    sectionIsVisible,
     sectionLabel,
+    sectionParent,
     sectionPosition,
+    sectionSiblings,
+    setListFilter,
     visiblePinnedKeys,
     visibleSectionIds,
     waitingAgents,
   } = createSidebarDataStore({ normalizedQuery, props, dragActive: () => dragActive() });
+  /**
+   * Nothing drags while a filter is set: a drop places a row among the rows that show, and the rows that
+   * the filter hides would lose their place. A chat drags only in the manual order, because "Recent
+   * activity" sorts each section itself.
+   */
+  const layoutDraggable = () => layoutMutable() && !listFiltered();
+  const chatsDraggable = () => layoutDraggable() && !sidebarChatOrderSortsSections(props.chatOrder);
   const {
     cancelSectionEditor,
     closeDelete,
@@ -68,15 +88,20 @@ export function createSidebarScope(props: SidebarProps) {
     saveSectionEditor,
     sectionDeleteTarget,
     setSectionNameInput,
-    startCreateSection,
+    startCreateSection: startCreateSectionEditor,
     startRenameSection,
     updateSectionEditorName,
   } = createSidebarPendingStore({ customSectionById, props });
+  /** A new folder has no chats, so a filter would hide it and its name editor. It clears the filter first. */
+  const startCreateSection = (agentId?: string, parentId?: string) => {
+    setListFilter(SIDEBAR_NO_LIST_FILTER);
+    startCreateSectionEditor(agentId, parentId);
+  };
   let agentList: HTMLElement | undefined;
 
   const dragState = createSidebarDragStateStore({ chatKind, sectionAcceptsChat });
   dragActive = () => dragState.draggingKind() !== undefined;
-  const { assignChatSection, commitSidebarDrop, movePersonByKeyboard, movePinnedItem, moveSection } =
+  const { assignChatSection, commitSidebarDrop, movePersonByKeyboard, movePinnedItem, moveSection, nestSection } =
     createSidebarLayoutActions({
       announce,
       announceError,
@@ -87,11 +112,14 @@ export function createSidebarScope(props: SidebarProps) {
       draggedSidebarItem: dragState.draggedSidebarItem,
       filteredChatsBySection,
       filteredPeople,
+      foldersSupported,
       layoutMutable,
       orderedPeople,
       personById,
       props,
       sectionLabel,
+      sectionParent,
+      sectionSiblings,
       visiblePinnedKeys,
       visibleSectionIds,
     });
@@ -168,16 +196,24 @@ export function createSidebarScope(props: SidebarProps) {
     emptyPinnedDropVisible: dragState.emptyPinnedDropVisible,
     endChatDragging,
     expandToSearch,
+    filterFolders,
     filteredAgents,
     filteredChats,
     filteredChatsBySection,
     filteredPeople,
     handleListDragLeave,
     historyClearTarget,
+    foldersSupported,
+    layoutDraggable,
     layoutMutable,
+    listFilter,
+    listFilterCount,
+    listFiltered,
+    chatsDraggable,
     movePersonByKeyboard,
     movePinnedItem,
     moveSection,
+    nestSection,
     normalizedQuery,
     openDelete,
     pending,
@@ -190,10 +226,17 @@ export function createSidebarScope(props: SidebarProps) {
     saveSectionEditor,
     scrollFades,
     sectionDeleteTarget,
+    sectionCanHoldFolder,
+    sectionCanNest,
     sectionDragClasses: dragState.sectionDragClasses,
     sectionIsCollapsed,
+    sectionIsVisible,
+    sectionLabel,
+    sectionParent,
     sectionPosition,
+    sectionSiblings,
     setAgentListElement,
+    setListFilter,
     setQuery,
     setSearchInputElement,
     setSectionNameInput,

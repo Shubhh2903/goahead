@@ -117,6 +117,7 @@ import { routeAgentPublish } from "./team-api/route-agent-publish";
 import { routeAgents } from "./team-api/route-agents";
 import { routeBrowser } from "./team-api/route-browser";
 import { routeChannels } from "./team-api/route-channels";
+import { routeChatFolders } from "./team-api/route-chat-folders";
 import { routeContextReset } from "./team-api/route-context-reset";
 import { routeDirect } from "./team-api/route-direct";
 import { routeFiles } from "./team-api/route-files";
@@ -661,6 +662,7 @@ export class TeamApiServer {
       if ((await routeHostAdmin(context, this.#options.admin)) === "handled") return;
       if ((await routeHostUpdate(context, this.#options.admin)) === "handled") return;
       if ((await routeContextReset(context, this.#options.agents, hidden)) === "handled") return;
+      if ((await routeChatFolders(context, this.#options.sidebarLayout)) === "handled") return;
       if ((await routeAgentMemoryPage(context, this.#options.agents, hidden)) === "handled") return;
       if ((await routeAgentImport(context, this.#options.agentImport, newAgentHidden)) === "handled") return;
       if (

@@ -546,6 +546,24 @@ that it is not supported instead of offering a download. An older managed instal
 metadata until the offered runtime passes the existing download and install checks. Runtime snapshots carry the previous version and an optional `availableVersion` through the
 preload decoder. Cancellation and failure preserve the previous installation and its update offer.
 
+Main also updates a managed CLI with no offer, but only to the version that `native-runtime.lock.json`
+pins: never to the latest upstream release, which stays an offer. After `startUpdateChecks`, each
+check (at start, then each hour) starts the download of each managed CLI that is older than its pin.
+It skips a CLI the user installed, a configured CLI path, a CLI with no managed copy, a provider whose
+agents are busy (a later check takes it), and a pinned version the user cancelled in this session
+(kept in memory only). An automatic update downloads, verifies and installs the pinned artifact
+first, and only then calls `updateRuntime` for the swap, so new turns of that provider wait only for
+the swap, not for the download. When a turn or a sign-in starts during the download, the swap is
+deferred: the verified install stays in the store, the status goes back to the CLI still in use, and a
+later check swaps it in with no new download. A user's update still downloads inside `updateRuntime`. A failed
+automatic update stays in `download-error` and is not started again by itself.
+
+Provider settings show "Update all" while one or more providers that are on have an offer. It calls
+`onUpdateProvider` once for each of them, so it uses the same local or Team API path as the Update
+action of one row. One failure does not stop the others, and the section reports for each provider
+whether its update started. `startProviderUpdate` rejects when the download did not start, after it
+has put the failure on the notification, so "Update all" reports it too.
+
 `ProvidersProvider` starts the shared renderer runtime store for the active server. The store
 announces each provider that gains an offer as one notification, from an effect over both the
 runtime snapshot and the agent status, because the two arrive separately and either one can complete an offer. An explicit update opens
@@ -555,8 +573,9 @@ stays dismissed until the offer changes. Closing the notification does not cance
 and later reports do not reopen it. A refusal that reaches neither the download nor the report it
 makes - an update started while a workspace on another computer is open - is put on that same
 notification with a Retry, because the user pressed a button and the outcome belongs on screen.
-Fresh provider downloads retain their existing flow. These actions apply only to the local desktop
-host.
+Fresh provider downloads retain their existing flow. The notifications are for the local desktop
+host only. The Update action of a row and "Update all" also reach a joined server's host, but only for
+an owner or admin of that server, over `providers-v1` (see [Admin capabilities](#admin-capabilities)).
 
 A CLI the user installed themselves is not managed, but it still gets the update offer.
 Each provider status row reports `cliSource`, and main passes the version of a `system` row to
@@ -1200,6 +1219,17 @@ an inclusive start and exclusive next-day boundary; custom ranges are limited to
 names the host explicitly, and mobile binds reads to its authenticated active host. Every member of
 that host team can read totals. The public web and Signal service store no usage records.
 
+`UsageByAgent` (`database/usage-by-agent.ts`) owns the read-only queries of the desktop Settings >
+Usage tab, `usage:get-dashboard`. It is local only: no Team API route and no capability, and a joined
+server's usage stays in the host report. `usageByAgent(range)` sums the stored usage rows, which are
+already deltas of their counter, for the last 7 or 30 local days, by agent, provider and day. It reads
+one UTC day before and two after the range and puts each row on its local day with `analyticsDate`.
+It also counts the scheduled routine runs that a run condition skipped: cancelled runs whose error is
+one of the two run-condition `sourceText` reasons. A channel run has no agent and counts apart.
+The tab also lists every agent with a weekly token budget. `weeklyBudgetUsage` builds the same
+request as the budget alert (`tokenBudgetWeekInput`: Monday 00:00 to today in the computer's time zone)
+and reads the same `getAnalytics` total, so the tab and the alert cannot disagree.
+
 The Usage views show 7, 30, 90, or custom days, with 30 days as the default. Both expose exact daily
 values beside the SVG charts. Cost is a USD API-equivalent estimate, not a subscription charge.
 The bundled rates cite official sources and carry a verification date. Claude list-price estimates
@@ -1306,6 +1336,16 @@ optional `hosted-sites-v1` capability exposes `POST /v1/hosted-sites/list` for e
 `POST /v1/hosted-sites/delete` for an owner or admin, with the frozen codec in
 `team-protocol/hosted-sites-v1.ts`. The host answers with its own account and credential, and only with the server's own sites: the owner's unlinked sites never reach a member, and the Team API has no fallback to delete one. Sites are
 managed in Server settings > Sites, on the desktop and in the browser.
+
+### Chat folders
+
+The optional `chat-folders-v1` capability adds `POST /v1/chat-folders` with an empty body, for every
+member. It answers the sidebar layout of `/v1/sidebar-layout` plus the `parentId` of each folder (three
+levels at most), with the frozen codec in `team-protocol/chat-folders-v1.ts`. The route is read only:
+a client changes the layout through `/v1/sidebar-layout/actions` and reads the route again on
+`sidebar-layout-changed`. The host route is `src/main/team-api/route-chat-folders.ts`. The response
+goes through the same hidden-agent projection as every JSON response, so an agent that the member
+cannot see is not in `agentAssignments` or `agentOrder`. A request without the capability gets 400.
 
 ### Leaving a server
 

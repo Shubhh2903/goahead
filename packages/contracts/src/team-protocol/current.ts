@@ -12,6 +12,7 @@ import { AGENT_UPDATE_CAPABILITY } from "./agent-update-v1";
 import { ANDROID_LIVE_UPDATE_PUSH_CAPABILITY } from "./android-live-update-push-v1";
 import { TEAM_BROWSER_NAVIGATION_CAPABILITY } from "./browser-navigation-v1";
 import { TEAM_BROWSER_VIEW_CAPABILITY, TEAM_BROWSER_VIEW_FRAME_POINT_CAPABILITY } from "./browser-view-v1";
+import { CHAT_FOLDERS_CAPABILITY } from "./chat-folders-v1";
 import { CONTEXT_RESET_CAPABILITY } from "./context-reset-v1";
 import { HOST_ADMIN_CAPABILITY } from "./host-admin-v1";
 import { HOST_UPDATE_CAPABILITY } from "./host-update-v1";
@@ -58,6 +59,7 @@ export {
   AGENT_UPDATE_CAPABILITY,
   ANDROID_LIVE_UPDATE_PUSH_CAPABILITY,
   CHANNEL_DELETE_CAPABILITY,
+  CHAT_FOLDERS_CAPABILITY,
   CONTEXT_RESET_CAPABILITY,
   HOST_ADMIN_CAPABILITY,
   HOST_UPDATE_CAPABILITY,
@@ -122,6 +124,7 @@ export const TEAM_CURRENT_CAPABILITIES = [
   HOSTED_SITES_CAPABILITY,
   TEAM_MESSAGE_CLIENT_ID_CAPABILITY,
   ANDROID_LIVE_UPDATE_PUSH_CAPABILITY,
+  CHAT_FOLDERS_CAPABILITY,
 ] as const;
 
 export type TeamCurrentCapability = (typeof TEAM_CURRENT_CAPABILITIES)[number];

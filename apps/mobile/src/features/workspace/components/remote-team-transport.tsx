@@ -2,7 +2,7 @@ import type { AgentEvent, TeamRealtimeEvent } from "@openbot/contracts/ipc";
 import { isQueueEditRoute, QueueEditRejectedError } from "@openbot/contracts/team-protocol/queue-edit-v1";
 import type { TeamProtocolV2Json } from "@openbot/contracts/team-protocol/v2";
 import { sourceText } from "@openbot/i18n/source";
-import type { RemoteTeamDirectoryClient } from "@openbot/team-client";
+import type { ConnectionPath, RemoteTeamDirectoryClient } from "@openbot/team-client";
 import {
   createRemoteCommandMailbox,
   type RemoteFileUpload,
@@ -38,6 +38,8 @@ interface RemoteTeamTransportProps {
   active: boolean;
   directory: RemoteTeamDirectoryClient;
   onConnectionUpdate: (update: RemoteTeamConnectionUpdate) => void;
+  /** How the phone reaches the host, or why it cannot. */
+  onConnectionPath?: (update: { hostId: string; path: ConnectionPath }) => void;
   /** Signal says this account's server list changed on another device. */
   onMembershipChanged?: () => Promise<void>;
   /** The phone got a network again. */
@@ -52,7 +54,15 @@ type RemoteTeamCommandInput =
 
 export const RemoteTeamTransport = forwardRef<RemoteTeamTransportRef, RemoteTeamTransportProps>(
   function RemoteTeamTransport(
-    { active: foreground, directory, onConnectionUpdate, onMembershipChanged, onNetworkRestored, onTeamEvent },
+    {
+      active: foreground,
+      directory,
+      onConnectionUpdate,
+      onConnectionPath,
+      onMembershipChanged,
+      onNetworkRestored,
+      onTeamEvent,
+    },
     ref,
   ) {
     const { refreshProfile } = useMobileSession();
@@ -165,6 +175,7 @@ export const RemoteTeamTransport = forwardRef<RemoteTeamTransportRef, RemoteTeam
         onAccountProfileChanged={refreshProfile}
         onAccountServersChanged={onMembershipChanged}
         onConnectionUpdate={async (update) => onConnectionUpdate(update)}
+        onConnectionPath={async (update) => onConnectionPath?.(update)}
         onDiagnostic={async ({ hostId, step, detail }: RemoteTeamDiagnostic) =>
           supportLog.add(
             step === "failed" ? "warn" : "info",

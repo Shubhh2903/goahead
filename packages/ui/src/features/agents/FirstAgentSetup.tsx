@@ -58,6 +58,8 @@ export interface FirstAgentSetupProps {
   onChange: (value: FirstAgentDraft) => void;
   onSubmit: (value: FirstAgentDraft) => void | Promise<void>;
   onCancel?: () => void;
+  /** First-run setup only: closes the first-agent form without an agent. */
+  onSkip?: () => void;
 }
 
 export const FIRST_AGENT_AVATAR_SEEDS = avatarCandidateSeeds("first-bot", "first-bot", 0);
@@ -328,6 +330,18 @@ export function FirstAgentSetup(props: FirstAgentSetupProps) {
             onClick={() => props.onCancel?.()}
           >
             {t("common.cancel")}
+          </Button>
+        </Show>
+        <Show when={props.mode !== "additional" && props.onSkip}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            class="first-agent-cancel no-drag"
+            disabled={props.submitting}
+            onClick={() => props.onSkip?.()}
+          >
+            {t("onboarding.wizard.skipStep")}
           </Button>
         </Show>
       </header>

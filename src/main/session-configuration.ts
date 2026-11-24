@@ -1,7 +1,7 @@
 /**
  * Everything that configures the default Electron session: the renderer's Content-Security-Policy,
  * its permission handlers, and the custom protocols that serve the packaged renderer bundle,
- * attachments, visual reply pages, avatars and server logos.
+ * attachments, visual reply pages, avatars, server logos and backdrop uploads.
  *
  * **This module body must stay side-effect free.** The main entry point imports it, and an import
  * evaluates before the entry point's own statements - which is where `app.setPath("userData", ...)`
@@ -18,6 +18,7 @@ import { app, session } from "electron";
 import type { AgentService } from "../backend/agent-service";
 import type { MailboxStore } from "../backend/mailbox-store";
 import type { MessagingService } from "../backend/messaging/messaging-service";
+import type { ChatBackdropStore } from "./chat-backdrop-store";
 import {
   attachmentCorsHeaders,
   attachmentDocumentHeaders,
@@ -26,6 +27,7 @@ import {
 } from "./chat-visual-protocol";
 import { buildContentSecurityPolicy, readSelfHostedSignalOrigin } from "./content-security-policy";
 import { fileResponse } from "./file-response";
+import { rangedFileResponse } from "./ranged-file-response";
 import type { RemoteServerManager } from "./remote-server-manager";
 import { canCheckRendererPermission, canRequestRendererPermission } from "./renderer-permissions";
 import type { TeamStore } from "./team-store";
@@ -207,6 +209,29 @@ async function slackInboxFileResponse(
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
     "Content-Disposition": "inline",
+  });
+}
+
+/**
+ * `openbot-backdrop://file/<id>`: an image or video that the user uploaded as the window backdrop.
+ * Only an id in the store's index answers, so the renderer cannot name any other file.
+ */
+export function configureBackdropProtocol(backdrops: Pick<ChatBackdropStore, "resolveUpload">): void {
+  session.defaultSession.protocol.handle("openbot-backdrop", async (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== "file") return new Response("Not found", { status: 404 });
+      const upload = backdrops.resolveUpload(decodeURIComponent(url.pathname.split("/").filter(Boolean)[0] ?? ""));
+      if (!upload) return new Response("Not found", { status: 404 });
+      // Ranged, so a backdrop video can seek and loop without reading the whole file again.
+      return await rangedFileResponse(
+        upload.path,
+        { "Content-Type": upload.mimeType, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
+        request.headers.get("Range"),
+      );
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
   });
 }
 

@@ -11,6 +11,7 @@ import {
   toWireAgentKeys,
   toWireAgentKeysObjectForPath,
 } from "./current-agent-keys";
+import { withQuestionMultiSelect } from "./question-multi-select-v6";
 import { withQuietTurn } from "./turn-quiet-v6";
 import {
   decodeTeamProtocolV6BaseEvent,
@@ -38,8 +39,11 @@ export function decodeTeamProtocolV6BaseCurrentEvent(value: unknown): TeamProtoc
   const decodedValue: TeamProtocolV6BaseJsonValue = JSON.parse(JSON.stringify(decoded.event));
   let current: unknown;
   try {
-    current = withQuietTurn(
-      withEventConversationPlans(restoreBrowserSecretMetadata(toCurrentAgentKeys(decodedValue), value), value),
+    current = withEventQuestionMultiSelect(
+      withQuietTurn(
+        withEventConversationPlans(restoreBrowserSecretMetadata(toCurrentAgentKeys(decodedValue), value), value),
+        value,
+      ),
       value,
     );
   } catch {
@@ -64,11 +68,30 @@ export function encodeTeamProtocolV6BaseCurrentEvent(
   const encoded = encodeTeamProtocolV6BaseEvent(decoded.event);
   if (
     !encoded ||
-    (!options.preserveBrowserSecrets && !eventConversationKey(event.type) && event.type !== "turn-completed")
+    (!options.preserveBrowserSecrets &&
+      !eventConversationKey(event.type) &&
+      event.type !== "turn-completed" &&
+      event.type !== "prompt")
   )
     return encoded;
-  const output = withQuietTurn(withEventConversationPlans(JSON.parse(encoded), wireValue), wireValue);
+  const output = withEventQuestionMultiSelect(
+    withQuietTurn(withEventConversationPlans(JSON.parse(encoded), wireValue), wireValue),
+    wireValue,
+  );
   return JSON.stringify(options.preserveBrowserSecrets ? restoreBrowserSecretMetadata(output, wireValue) : output);
+}
+
+/** Puts `multiSelect` beside the frozen questions of a conversation event or a `prompt` event. */
+function withEventQuestionMultiSelect(
+  projected: TeamProtocolV6BaseJsonValue,
+  source: unknown,
+): TeamProtocolV6BaseJsonValue {
+  if (!isDynamicRecord(projected) || !isDynamicRecord(source)) return projected;
+  if (projected.type === "prompt") return withQuestionMultiSelect(projected, source);
+  const key = eventConversationKey(projected.type);
+  const conversation = key ? projected[key] : undefined;
+  if (!key || conversation === undefined) return projected;
+  return { ...projected, [key]: withQuestionMultiSelect(conversation, source[key]) };
 }
 
 /**

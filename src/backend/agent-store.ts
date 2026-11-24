@@ -83,6 +83,7 @@ const OPTIONAL_SETTING_FIELDS = [
   "compactWindow",
   "disabledMcpServerIds",
   "weeklyTokenBudget",
+  "autoModel",
 ] as const;
 type StoredAgentBase = Omit<PersistedStoredAgent, "avatarSeed" | "avatarHue"> & DynamicRecord;
 
@@ -353,6 +354,7 @@ export class AgentStore {
     if (source.compactWindow) record.compactWindow = source.compactWindow;
     if (source.disabledMcpServerIds?.length) record.disabledMcpServerIds = [...source.disabledMcpServerIds];
     if (source.weeklyTokenBudget) record.weeklyTokenBudget = source.weeklyTokenBudget;
+    if (source.autoModel) record.autoModel = true;
     record.avatarSeed = source.avatarSeed;
     record.avatarHue = source.avatarHue;
     // The folders stay where they are: the copy works in the same projects, not in copies of them.
@@ -601,6 +603,12 @@ export class AgentStore {
     else if (input.weeklyTokenBudget !== undefined) {
       if (!isAgentWeeklyTokenBudget(input.weeklyTokenBudget)) throw new Error("Invalid weekly token budget.");
       next.weeklyTokenBudget = input.weeklyTokenBudget;
+    }
+    if (input.autoModel !== undefined) {
+      if (!isBoolean(input.autoModel)) throw new Error("Invalid automatic model value.");
+      // Stored only when on, so an agent that turns it off again reads like one from before it existed.
+      if (input.autoModel) next.autoModel = true;
+      else delete next.autoModel;
     }
     if (input.avatarSeed !== undefined) {
       if (!isAvatarSeed(input.avatarSeed)) throw new Error("Invalid avatar seed.");
@@ -1500,6 +1508,7 @@ function isStoredAgent(value: unknown): value is PersistedStoredAgent {
     (record.compactWindow === undefined || isAgentCompactWindow(record.compactWindow)) &&
     (record.disabledMcpServerIds === undefined || isDisabledMcpServerIds(record.disabledMcpServerIds)) &&
     (record.weeklyTokenBudget === undefined || isAgentWeeklyTokenBudget(record.weeklyTokenBudget)) &&
+    (record.autoModel === undefined || isBoolean(record.autoModel)) &&
     isAvatarSeed(record.avatarSeed) &&
     (record.avatarHue === null || isAvatarHue(record.avatarHue)) &&
     isMarketplaceSource(record.marketplaceSource)
@@ -1582,6 +1591,8 @@ function readStoredAgent(value: unknown): ReadStoredAgent | UnreadableStoredAgen
     value.weeklyTokenBudget === undefined || isAgentWeeklyTokenBudget(value.weeklyTokenBudget)
       ? value.weeklyTokenBudget
       : reset("weeklyTokenBudget", undefined);
+  const autoModel =
+    value.autoModel === undefined || isBoolean(value.autoModel) ? value.autoModel : reset("autoModel", undefined);
   let marketplaceSource: StoredAgent["marketplaceSource"];
   if (value.marketplaceSource !== undefined) {
     if (isMarketplaceSource(value.marketplaceSource)) {
@@ -1619,6 +1630,7 @@ function readStoredAgent(value: unknown): ReadStoredAgent | UnreadableStoredAgen
     ...(compactWindow === undefined ? {} : { compactWindow }),
     ...(disabledMcpServerIds === undefined ? {} : { disabledMcpServerIds }),
     ...(weeklyTokenBudget === undefined ? {} : { weeklyTokenBudget }),
+    ...(autoModel === undefined ? {} : { autoModel }),
     ...(marketplaceSource === undefined ? {} : { marketplaceSource }),
   };
   return { agent, repaired };

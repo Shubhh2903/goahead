@@ -69,6 +69,8 @@ export function WorkspaceSidebar(props: { peopleEnabled: boolean }) {
   const { selectAgent, selectDirectMember } = useNavigation();
   const {
     sidebarLayout,
+    sidebarChatOrder,
+    setSidebarChatOrder,
     collapsedSidebarSectionIds,
     mutateSidebarLayout,
     toggleSidebarSection,
@@ -191,6 +193,10 @@ export function WorkspaceSidebar(props: { peopleEnabled: boolean }) {
       agentMoods={agentMoods()}
       layout={sidebarLayout()}
       layoutMutable={activeServerSupportsCapability("sidebar-layout")}
+      // Folders in folders: the local host only. A joined host keeps a flat list in this version.
+      foldersSupported={(activeServer()?.kind ?? "local") === "local"}
+      chatOrder={sidebarChatOrder()}
+      onChatOrderChange={setSidebarChatOrder}
       collapsedSectionIds={collapsedSidebarSectionIds()}
       onMutateLayout={mutateSidebarLayout}
       onToggleSection={toggleSidebarSection}

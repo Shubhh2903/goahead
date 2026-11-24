@@ -12,6 +12,7 @@ import {
 import { CHANNEL_ROUTES } from "@openbot/contracts/team-protocol/channels-v1";
 import { STORAGE_ROUTES } from "@openbot/contracts/team-protocol/storage-v1";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ConnectionFailureReason, ConnectionPath } from "./connection-path";
 import { createEd25519Identity, signEd25519 } from "./ed25519";
 import {
   createRemoteCommandMailbox,
@@ -412,6 +413,100 @@ describe("browser remote peer recovery", () => {
         body: {},
       });
       expect(result).toMatchObject({ ok: true, status: 200, body: [] });
+    } finally {
+      await network.runtime.dispose();
+    }
+  });
+
+  it("reports the path of the selected candidate pair once connected", async () => {
+    const onConnectionPath = vi.fn(async () => {});
+    const network = await setupNetwork({ onConnectionPath, selectedPair: { local: "srflx", remote: "host" } });
+    await network.connect();
+    try {
+      await vi.waitFor(() =>
+        expect(onConnectionPath).toHaveBeenCalledWith({ hostId: "host", path: { kind: "direct" } }),
+      );
+    } finally {
+      await network.runtime.dispose();
+    }
+  });
+
+  it("reports a relay path when either side of the pair is a relay", async () => {
+    const onConnectionPath = vi.fn(async () => {});
+    const network = await setupNetwork({ onConnectionPath, selectedPair: { local: "host", remote: "relay" } });
+    await network.connect();
+    try {
+      await vi.waitFor(() =>
+        expect(onConnectionPath).toHaveBeenCalledWith({ hostId: "host", path: { kind: "relay" } }),
+      );
+    } finally {
+      await network.runtime.dispose();
+    }
+  });
+
+  it.each<
+    [
+      string,
+      { urls: string | string[] }[],
+      { gatheredServerReflexive: boolean; stunError?: boolean },
+      ConnectionFailureReason,
+    ]
+  >([
+    ["no STUN server", [{ urls: "turn:relay" }], { gatheredServerReflexive: false }, "no-stun"],
+    [
+      "STUN error seen and no reflexive candidate",
+      [{ urls: "stun:s" }, { urls: "turn:t" }],
+      { gatheredServerReflexive: false, stunError: true },
+      "stun-unreachable",
+    ],
+    ["no reflexive candidate but no STUN error", [{ urls: "stun:s" }], { gatheredServerReflexive: false }, "no-relay"],
+    ["host answered, ICE failed, no TURN", [{ urls: ["stun:s"] }], { gatheredServerReflexive: true }, "no-relay"],
+    [
+      "host answered, ICE failed, TURN configured",
+      [{ urls: "stun:s" }, { urls: "turns:t" }],
+      { gatheredServerReflexive: true },
+      "no-path",
+    ],
+  ])("explains a failed ICE connection: %s", async (_name, iceServers, iceFails, reason) => {
+    const onConnectionPath = vi.fn(async () => {});
+    const network = await setupNetwork({ onConnectionPath, iceServers, iceFails });
+    await network.connect();
+    try {
+      await vi.waitFor(() =>
+        expect(onConnectionPath).toHaveBeenCalledWith({ hostId: "host", path: { kind: "cannot-connect", reason } }),
+      );
+    } finally {
+      await network.runtime.dispose();
+    }
+  });
+
+  it("says the desktop did not answer, not a network reason, when no answer arrives before the timeout", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const never = deferred();
+    const onConnectionPath = vi.fn(async () => {});
+    const network = await setupNetwork({
+      onConnectionPath,
+      iceServers: [{ urls: "stun:s" }],
+      beforeAnswer: () => never.promise,
+    });
+    try {
+      void network.connect();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(onConnectionPath).toHaveBeenCalledTimes(1);
+      expect(onConnectionPath).toHaveBeenCalledWith({
+        hostId: "host",
+        path: { kind: "cannot-connect", reason: "no-answer" },
+      });
+    } finally {
+      never.resolve();
+      await network.runtime.dispose();
+    }
+  });
+
+  it("works with a caller that does not listen for the path", async () => {
+    const network = await setupNetwork({ selectedPair: { local: "host", remote: "host" } });
+    try {
+      await expect(network.connect()).resolves.toMatchObject({ ok: true });
     } finally {
       await network.runtime.dispose();
     }
@@ -964,6 +1059,16 @@ describe("native command mailbox", () => {
   );
 });
 
+interface TestStatsReport {
+  type?: string;
+  state?: string;
+  nominated?: boolean;
+  candidateType?: string;
+  protocol?: string;
+  localCandidateId?: string;
+  remoteCandidateId?: string;
+}
+
 function sdp(fingerprint: string) {
   return `v=0\r\na=fingerprint:sha-256 ${fingerprint}\r\n`;
 }
@@ -989,6 +1094,12 @@ async function setupNetwork(
     beforeResponse?: () => Promise<void>;
     responseBody?: TeamProtocolV2Json;
     responseFile?: TeamProtocolV2Json;
+    onConnectionPath?: (update: { hostId: string; path: ConnectionPath }) => Promise<void>;
+    iceServers?: { urls: string | string[] }[];
+    /** The nominated pair the connection reports, as candidate types. */
+    selectedPair?: { local: string; remote: string };
+    /** ICE fails when the answer arrives, before authentication. */
+    iceFails?: { gatheredServerReflexive: boolean; stunError?: boolean };
   } = {},
 ) {
   const host = await createEd25519Identity(() => new Uint8Array(32).fill(7));
@@ -1037,7 +1148,7 @@ async function setupNetwork(
             version: 1,
             connectionId: `connection-${bootstrapCount}`,
             resumeToken: "resume",
-            iceServers: [{ urls: "stun:localhost" }],
+            iceServers: options.iceServers ?? [{ urls: "stun:localhost" }],
           }),
         );
       if (message.type === "offer")
@@ -1132,8 +1243,27 @@ async function setupNetwork(
     remoteDescription: RTCSessionDescriptionInit | null = null;
     onconnectionstatechange: (() => void) | null = null;
     readonly channels = new Map<string, TestChannel>();
+    onicecandidateerror: ((event: { url: string }) => void) | null = null;
+    onicecandidate:
+      | ((event: { candidate: { candidate: string; sdpMid: string; sdpMLineIndex: number } }) => void)
+      | null = null;
     constructor() {
       connections.push(this);
+    }
+    async getStats() {
+      const pair = options.selectedPair;
+      const reports = new Map<string, TestStatsReport>();
+      if (!pair) return reports;
+      reports.set("local", { candidateType: pair.local, protocol: "udp" });
+      reports.set("remote", { candidateType: pair.remote, protocol: "udp" });
+      reports.set("pair", {
+        type: "candidate-pair",
+        state: "succeeded",
+        nominated: true,
+        localCandidateId: "local",
+        remoteCandidateId: "remote",
+      });
+      return reports;
     }
     channel(label: string) {
       const value = this.channels.get(label);
@@ -1153,6 +1283,15 @@ async function setupNetwork(
     }
     async setRemoteDescription(value: RTCSessionDescriptionInit) {
       this.remoteDescription = value;
+      if (options.iceFails) {
+        if (options.iceFails.stunError) this.onicecandidateerror?.({ url: "stun:s" });
+        if (options.iceFails.gatheredServerReflexive)
+          this.onicecandidate?.({
+            candidate: { candidate: "candidate:1 1 udp 1 1.2.3.4 9 typ srflx", sdpMid: "0", sdpMLineIndex: 0 },
+          });
+        this.drop("failed");
+        return;
+      }
       // An ICE restart answer does not bring the path back by itself; a test calls `drop("connected")`.
       if (this.connectionState !== "new") return;
       this.connectionState = "connected";
@@ -1201,6 +1340,7 @@ async function setupNetwork(
       onNetworkRestored: options.onNetworkRestored,
       onHostStreamData: options.onHostStreamData,
       onTeamEvent: options.onTeamEvent ?? (async () => {}),
+      onConnectionPath: options.onConnectionPath,
       onConnectionUpdate: async (update) => {
         updates.push(update);
         if (update.state === "offline") callbacks.onOffline();

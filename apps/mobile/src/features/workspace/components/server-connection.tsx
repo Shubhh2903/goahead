@@ -1,6 +1,7 @@
 import type { AgentEvent, TeamRealtimeEvent } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import {
+  type ConnectionPath,
   createRemoteConnectionRecovery,
   type RemoteConnectionStage,
   type RemoteRecoveryStatus,
@@ -31,6 +32,7 @@ interface Props {
   register(hostId: string, handle: ServerConnectionHandle | null): void;
   load(hostId: string, publicKey: string, client: RemoteTeamTransportRef, context: ServerLoadContext): Promise<void>;
   onStatus(hostId: string, status: RemoteRecoveryStatus, failure: string | null): void;
+  onConnectionPath?(hostId: string, path: ConnectionPath): void;
   onMembershipChanged?(): Promise<void>;
   onTeamEvent(hostId: string, event: AgentEvent | TeamRealtimeEvent): void;
 }
@@ -44,6 +46,7 @@ export function ServerConnection({
   register,
   load,
   onStatus,
+  onConnectionPath,
   onTeamEvent,
   onMembershipChanged,
 }: Props) {
@@ -138,6 +141,9 @@ export function ServerConnection({
       active={active}
       directory={directory}
       onMembershipChanged={onMembershipChanged}
+      onConnectionPath={(update) => {
+        if (update.hostId === hostId) onConnectionPath?.(hostId, update.path);
+      }}
       onNetworkRestored={() => {
         supportLog.add("info", "connection", `${hostId} network restored`);
         controller.current?.networkRestored();

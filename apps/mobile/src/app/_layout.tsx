@@ -18,6 +18,7 @@ import { DevelopmentConnectLinkHandler } from "@/features/auth/components/develo
 import { MobileSessionProvider, useMobileSession } from "@/features/auth/context/mobile-session-context";
 import { loadAppLanguage } from "@/features/settings/model/app-language";
 import { loadAppearance, useAppearance } from "@/features/settings/model/appearance";
+import { loadChatOrderPreference } from "@/features/settings/model/chat-order";
 import { loadDictationLanguage } from "@/features/settings/model/dictation-language";
 import { loadHapticsPreference } from "@/features/settings/model/haptics";
 import { loadLiveActivitiesPreference } from "@/features/settings/model/live-activities";
@@ -151,6 +152,7 @@ export default function RootLayout() {
   useEffect(() => {
     void loadAppearance().catch(() => undefined);
     void loadHapticsPreference().catch(() => undefined);
+    void loadChatOrderPreference().catch(() => undefined);
     void loadAgentColorMessages().catch(() => undefined);
     void loadLiveActivitiesPreference().catch(() => undefined);
     void loadDictationLanguage().catch(() => undefined);

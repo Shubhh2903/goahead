@@ -14,6 +14,7 @@ import {
   type AgentWeeklyTokenBudget,
   type AvatarHue,
   type AvatarImageInput,
+  agentAutoModelEnabled,
   agentAutomationAllowed,
   agentComputerUseEnabled,
   type BusyMessageMode,
@@ -21,7 +22,9 @@ import {
   type CustomProviderSummary,
   DEFAULT_AGENT_ACCESS,
   DEFAULT_BUSY_MESSAGE_MODE,
+  defaultProviderModel,
   type ProviderRuntimeStatus,
+  providerSupportsAutoModel,
   type UpdateAgentInput,
 } from "@openbot/contracts/ipc";
 import type { AppTextKey } from "@openbot/i18n";
@@ -165,6 +168,7 @@ interface AgentSettingsDraft {
   busyMessage: BusyMessageChoice;
   compactWindow: CompactWindowChoice;
   weeklyTokenBudget: WeeklyBudgetChoice;
+  autoModel: boolean;
   disabledMcpServerIds: string[];
   /** Widening to full access waits here for the confirmation. */
   confirmingFullAccess: boolean;
@@ -210,6 +214,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     busyMessage: "default",
     compactWindow: "off",
     weeklyTokenBudget: "none",
+    autoModel: false,
     disabledMcpServerIds: [],
     confirmingFullAccess: false,
     runtime: untrack(() => ({ ...props.runtimeSettings })),
@@ -274,6 +279,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
           agent.busyMessageMode ?? "default",
           String(agent.compactWindow ?? "off"),
           String(agent.weeklyTokenBudget ?? "none"),
+          String(agentAutoModelEnabled(agent)),
           (agent.disabledMcpServerIds ?? []).join(","),
           runtimeSettings.provider,
           runtimeSettings.model,
@@ -313,6 +319,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
           state.busyMessage = agent.busyMessageMode ?? "default";
           state.compactWindow = agent.compactWindow ?? "off";
           state.weeklyTokenBudget = agent.weeklyTokenBudget ?? "none";
+          state.autoModel = agentAutoModelEnabled(agent);
           state.disabledMcpServerIds = [...(agent.disabledMcpServerIds ?? [])];
           if (agentChanged) state.confirmingFullAccess = false;
           state.runtime.provider = runtimeSettings.provider;
@@ -641,6 +648,28 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
       });
     }
   }
+
+  async function saveAutoModel(next: boolean): Promise<void> {
+    const agentId = props.agent.id;
+    setDraft((state) => {
+      state.autoModel = next;
+    });
+    if (await saveAgentPatch({ autoModel: next }, agentId)) return;
+    if (!disposed && props.agent.id === agentId && draft.autoModel === next) {
+      setDraft((state) => {
+        state.autoModel = !next;
+      });
+    }
+  }
+
+  const autoModelSupported = () => providerSupportsAutoModel(draft.runtime.provider);
+  /** The small model a short message runs on, by the name the provider lists. */
+  const autoModelName = () => {
+    const id = defaultProviderModel(draft.runtime.provider);
+    return (
+      props.modelOptions.find((option) => option.provider === draft.runtime.provider && option.id === id)?.name ?? id
+    );
+  };
 
   async function saveMcpServer(serverId: string, enabled: boolean): Promise<void> {
     const agentId = props.agent.id;
@@ -1156,6 +1185,25 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
                 </div>
               )}
             </For>
+          </Show>
+          <Show when={props.tokenSettingsEditable}>
+            <div class="agent-settings-notifications">
+              <div>
+                <strong>{t("agentSettings.autoModel.title")}</strong>
+                <span>
+                  {autoModelSupported()
+                    ? t("agentSettings.autoModel.description", { model: autoModelName() })
+                    : t("agentSettings.autoModel.unsupported")}
+                </span>
+              </div>
+              <Switch
+                size="sm"
+                aria-label={t("agentSettings.autoModel.title")}
+                checked={autoModelSupported() && draft.autoModel}
+                disabled={!autoModelSupported()}
+                onChange={(next) => void saveAutoModel(next)}
+              />
+            </div>
           </Show>
           <Show when={props.automationEditable}>
             <div class="agent-settings-notifications">

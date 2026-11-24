@@ -160,6 +160,11 @@ export function ChatMessageRow(props: ChatMessageRowProps): JSX.Element {
             <time datetime={props.message.createdAt}>{props.message.time}</time>
           </MessageHeader>
         </Show>
+        <Show when={!person() && props.message.autoModelName}>
+          {(model) => (
+            <MessageHeader class="message-auto-model">{t("chat.row.autoModel", { model: model() })}</MessageHeader>
+          )}
+        </Show>
         <div class="message-shell">
           <Bubble
             class={member() ? "message-bubble-member" : undefined}

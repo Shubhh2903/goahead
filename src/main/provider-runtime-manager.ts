@@ -129,6 +129,11 @@ export interface ProviderRuntimeManagerOptions {
   /** How long a commit waits for a stage that another program holds open. Tests shorten it. */
   heldStageWaitMs?: number;
   updateRuntime?: (runtime: ManagedRuntimeId, install: () => Promise<string>) => Promise<void>;
+  /**
+   * Whether the agents of a provider are idle. An automatic update starts only then; a busy provider
+   * gets it at a later check. Idle by default.
+   */
+  isProviderIdle?: (provider: ManagedProviderId) => boolean;
 }
 
 /**
@@ -169,6 +174,12 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
   /** What each running download installs, so a cancel removes the right partial file. */
   readonly #transfers = new Map<ManagedRuntimeId, RuntimeSpec>();
   readonly #updateRuntime: (runtime: ManagedRuntimeId, install: () => Promise<string>) => Promise<void>;
+  /**
+   * The pinned version of each runtime whose download the user cancelled. An automatic update does
+   * not start that version again until the app restarts; the offer stays. In memory only.
+   */
+  readonly #declined = new Map<ManagedRuntimeId, string>();
+  readonly #isProviderIdle: (provider: ManagedProviderId) => boolean;
   #blocked: BlockedVersions = new Map();
   #check: Promise<void> | null = null;
   #checkTimer: NodeJS.Timeout | null = null;
@@ -184,6 +195,7 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
       (async (_runtime, install) => {
         await install();
       });
+    this.#isProviderIdle = options.isProviderIdle ?? (() => true);
     this.#target = runtimeTarget(options.platform ?? process.platform, options.architecture ?? process.arch);
     this.#fetch = options.fetchImpl ?? fetch;
     this.#lock = options.lock ?? parseAgentRuntimeLock(lockValue);
@@ -234,7 +246,11 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
         // Agent status names a system fallback until the managed candidate is activated.
         const installed = this.#systemVersions.get(provider) ?? providers[provider].version;
         const offer = installed !== null && installed !== undefined && olderVersion(installed, version);
-        providers[provider].availableVersion = offer && !configuredCliPath(provider) ? version : null;
+        // An automatic update installs the pinned version without an offer. A newer release stays offered.
+        const automatic =
+          this.#updatesAutomatically(provider, this.#target) &&
+          runtimeSpec(provider, this.#target, this.#lock).version === version;
+        providers[provider].availableVersion = offer && !configuredCliPath(provider) && !automatic ? version : null;
       }
     }
     return { revision: this.#revision, providers, toolRuntimes: { bun } };
@@ -257,7 +273,10 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
     return this.getStatus();
   }
 
-  /** Checks now and then every hour, until `stop`. The caller starts it once the app is up. */
+  /**
+   * Checks now and then every hour, until `stop`. The caller starts it once the app is up. Each check
+   * also starts the automatic updates to the pinned versions: see `#startAutomaticUpdates`.
+   */
   startUpdateChecks(intervalMs = UPDATE_CHECK_INTERVAL_MS): void {
     if (this.#checkTimer || !this.#target || this.#stopping) return;
     const check = () => void this.checkForUpdates().catch(() => undefined);
@@ -275,11 +294,51 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
       }),
     );
     this.#blocked = (await blocked) ?? this.#blocked;
+    // Before the status goes out, so the renderer announces no offer for what updates by itself. The
+    // pinned version needs no release source, so this runs even when none answered.
+    this.#startAutomaticUpdates(target);
     this.#revision += 1;
     this.emit("status", this.getStatus());
     if (releases.every((result) => result.status === "rejected")) {
       throw new Error(sourceText("error.provider.releaseSourcesUnreachable"));
     }
+  }
+
+  /**
+   * Updates each managed CLI that is older than the version this build pins, with no offer.
+   *
+   * Only ever the pinned version from `native-runtime.lock.json`: never the latest upstream release,
+   * which stays a choice the user makes. A provider whose agents are busy is left to a later check,
+   * because `updateRuntime` refuses to replace a CLI that runs a turn. A failure stays in
+   * `download-error` and is not started again by itself.
+   */
+  #startAutomaticUpdates(target: RuntimeTarget): void {
+    if (this.#stopping) return;
+    for (const provider of PROVIDERS) {
+      if (!this.#updatesAutomatically(provider, target) || this.#tasks.has(provider)) continue;
+      if (!this.#isProviderIdle(provider)) continue;
+      // Downloaded and verified first, so the provider's turns wait only for the swap.
+      this.#startDownload(provider, runtimeSpec(provider, target, this.#lock), { installFirst: true });
+    }
+  }
+
+  /**
+   * Whether the managed copy of `provider` updates by itself to the pinned version. Not before the
+   * update checks start, not a CLI the user installed, not a configured path, not a CLI with no
+   * managed copy yet, never a downgrade, and not a version the user cancelled.
+   */
+  #updatesAutomatically(provider: ManagedProviderId, target: RuntimeTarget): boolean {
+    const { phase, version } = this.#statuses[provider];
+    const pinned = runtimeSpec(provider, target, this.#lock).version;
+    return (
+      this.#checkTimer !== null &&
+      this.#declined.get(provider) !== pinned &&
+      (phase === "ready" || phase === "not-downloaded") &&
+      version !== null &&
+      olderVersion(version, pinned) &&
+      !this.#systemVersions.has(provider) &&
+      !configuredCliPath(provider)
+    );
   }
 
   /**
@@ -394,7 +453,18 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
       if (current.phase !== "ready") this.#setStatus(runtime, await this.#inspect(runtime));
       return this.getStatus();
     }
+    this.#startDownload(runtime, spec);
+    return this.getStatus();
+  }
 
+  /**
+   * Starts one download in the background. The caller has checked that none runs for `runtime`.
+   * With `installFirst`, the transfer and the install run before `updateRuntime`, which then holds the
+   * provider only for the swap. Without it, the transfer runs inside `updateRuntime`, as it always did.
+   */
+  #startDownload(runtime: ManagedRuntimeId, spec: RuntimeSpec, options: { installFirst?: boolean } = {}): void {
+    // What a deferred automatic swap returns to: the CLI the agent service still runs.
+    const previous = structuredClone(this.#statuses[runtime]);
     const controller = new AbortController();
     this.#controllers.set(runtime, controller);
     this.#transfers.set(runtime, spec);
@@ -407,7 +477,7 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
     });
     // The task is registered without an await between it and the guard above, so a second request
     // for the same runtime finds it and joins it instead of starting a download of its own.
-    const task = this.#updateProviderRuntime(spec, controller.signal)
+    const task = this.#updateProviderRuntime(spec, controller.signal, options.installFirst ? previous : null)
       .catch((error: unknown) => {
         this.#controllers.delete(runtime);
         this.#tasks.delete(runtime);
@@ -420,7 +490,6 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
         this.#cancelled.delete(runtime);
       });
     this.#tasks.set(runtime, task);
-    return this.getStatus();
   }
 
   /**
@@ -456,9 +525,14 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
     const task = this.#tasks.get(runtime);
     const spec = this.#transfers.get(runtime);
     this.#cancelled.add(runtime);
+    if (spec) this.#declined.set(runtime, spec.version);
     this.#controllers.get(runtime)?.abort();
     await task;
     if (spec) await this.#removePartial(spec);
+    // A task that settled its own status (activated, or a deferred automatic swap) keeps it: reading
+    // the store again would name a deferred install as the CLI in use.
+    const settled = this.#statuses[runtime].phase;
+    if (settled !== "downloading" && settled !== "finishing") return this.getStatus();
     await this.#inspect(runtime);
     this.#setStatus(runtime, this.#statuses[runtime]);
     return this.getStatus();
@@ -529,16 +603,44 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
    * reason to skip the transfer, not the activation: the agent service still runs the old CLI, and
    * a status of `ready` without the swap leaves the offer on screen with no way to answer it.
    */
-  async #updateProviderRuntime(spec: RuntimeSpec, signal: AbortSignal): Promise<void> {
+  async #updateProviderRuntime(
+    spec: RuntimeSpec,
+    signal: AbortSignal,
+    automaticFrom: ProviderRuntimeStatus | null,
+  ): Promise<void> {
     const installed = await this.#readStore(spec);
     if (installed.phase === "ready") {
-      await this.#activate(spec, null);
+      // An automatic update that a busy provider deferred finds its install here, and only swaps.
+      if (automaticFrom) await this.#swapWhenIdle(spec, false, automaticFrom);
+      else await this.#activate(spec, null);
       return;
     }
     if (this.#stopping) throw new Error(sourceText("error.provider.closing"));
     signal.throwIfAborted();
     this.#setStatus(spec.runtime, { phase: "downloading", progress: 0, message: null, version: installed.version });
+    if (automaticFrom) {
+      const committed = await this.#runDownload(spec, signal);
+      await this.#removePartial(spec);
+      await this.#swapWhenIdle(spec, committed, automaticFrom);
+      return;
+    }
     await this.#activate(spec, signal);
+  }
+
+  /**
+   * The swap of an automatic update, whose install is in the store already. A turn or a sign-in can
+   * start while the download runs. Then the swap waits for a later check: the verified install stays,
+   * and the status goes back to the CLI the agent service still runs, so the next check swaps without
+   * a new download. `#newestInstalled` would take the install as current only at the next start, when
+   * the agent service reads `executablePath` again; nothing else reads the store while this instance
+   * runs (`cancel` keeps a status that its task settled).
+   */
+  async #swapWhenIdle(spec: RuntimeSpec, installedHere: boolean, previous: ProviderRuntimeStatus): Promise<void> {
+    const provider = spec.runtime;
+    const idle = isManagedToolRuntime(provider) || this.#isProviderIdle(provider);
+    if (idle && (await this.#activate(spec, null, { installedHere, deferRefusal: true })) === "activated") return;
+    logger.info(`The automatic ${provider} update waits for the provider to be idle.`);
+    this.#setStatus(provider, previous);
   }
 
   // Keep the last installed version available while its replacement is downloaded.
@@ -572,16 +674,23 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
    * Hands the installed executable to the agent service, which swaps it into its running clients.
    *
    * A `null` signal means the bytes are in the store already, because a sibling instance put them
-   * there: there is nothing to transfer, only the swap. An install this instance made and could not
+   * there, or because this instance installed them first (`installedHere`): there is nothing to
+   * transfer, only the swap. An install this instance made and could not
    * activate is removed, so the rejected artifact is not selected on the next start; one a sibling
    * made is left where it is, because the sibling is using it. A transfer is not what decides that:
    * a sibling can commit the same version while this instance is still downloading it, and what is
    * then in the store is the sibling's install, adopted rather than written.
    */
-  async #activate(spec: RuntimeSpec, signal: AbortSignal | null): Promise<void> {
-    let installed = false;
+  async #activate(
+    spec: RuntimeSpec,
+    signal: AbortSignal | null,
+    options: { installedHere?: boolean; deferRefusal?: boolean } = {},
+  ): Promise<"activated" | "refused"> {
+    let installed = options.installedHere ?? false;
+    let swapStarted = false;
     try {
       await this.#updateRuntime(spec.runtime, async () => {
+        swapStarted = true;
         if (signal) {
           installed = await this.#runDownload(spec, signal);
           await this.#removePartial(spec);
@@ -590,7 +699,11 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
       });
       this.#setStatus(spec.runtime, readyStatus(spec.version));
       this.emit("ready", spec.runtime);
+      return "activated";
     } catch (error) {
+      // `updateRuntime` refused before it began the swap: the provider runs a turn or signs in. The
+      // install is verified and stays for a later swap.
+      if (options.deferRefusal && !swapStarted) return "refused";
       if (installed) await rm(this.#installRoot(spec), { recursive: true, force: true });
       throw error;
     }

@@ -14,7 +14,8 @@ import { useText } from "../../text";
 import { useSidebarScope } from "./sidebar-scope";
 
 export function SidebarMoveToSubmenu(menuProps: { chatId: string }) {
-  const { assignChatSection, customSectionById, layoutMutable, props, startCreateSection } = useSidebarScope();
+  const { assignChatSection, customSectionById, layoutMutable, props, sectionLabel, startCreateSection } =
+    useSidebarScope();
   const { t } = useText();
   const currentSectionId = () =>
     customSectionById().has(props.layout.agentAssignments[menuProps.chatId] ?? "")
@@ -33,16 +34,17 @@ export function SidebarMoveToSubmenu(menuProps: { chatId: string }) {
             class="ui-action-menu agent-context-menu agent-context-submenu"
             aria-label={t("sidebar.moveTo")}
           >
-            <For each={props.layout.sections}>
-              {(section) => (
-                <ContextMenu.Item onSelect={() => assignChatSection(menuProps.chatId, section.id)}>
+            {/* In tree order, each folder with its path, so a folder in a folder can be told apart. */}
+            <For each={props.layout.order.filter((sectionId) => customSectionById().has(sectionId))}>
+              {(sectionId) => (
+                <ContextMenu.Item onSelect={() => assignChatSection(menuProps.chatId, sectionId)}>
                   <Show
-                    when={currentSectionId() === section.id}
+                    when={currentSectionId() === sectionId}
                     fallback={<Folder class="agent-context-icon size-4" aria-hidden="true" />}
                   >
                     <Check class="agent-context-icon size-4" aria-hidden="true" />
                   </Show>
-                  <span>{section.name}</span>
+                  <span>{sectionLabel(sectionId)}</span>
                 </ContextMenu.Item>
               )}
             </For>

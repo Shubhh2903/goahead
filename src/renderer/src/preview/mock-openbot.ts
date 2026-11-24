@@ -108,6 +108,7 @@ import {
 } from "./fixtures";
 import { mockAgentAnalytics, mockHostAnalytics } from "./mock-agent-analytics";
 import { createMockAuth, type MockAuthOptions } from "./mock-auth";
+import { createMockBackdrops } from "./mock-backdrops";
 import { createMockBilling } from "./mock-billing";
 import { createMockBitwardenConnector } from "./mock-bitwarden-connector";
 import { createMockBrowser, type MockBrowserOptions } from "./mock-browser";
@@ -129,6 +130,7 @@ import { createMockSlackClient } from "./mock-slack-client";
 import { createMockStorage } from "./mock-storage";
 import { clone, type Listener, type MockRuntime, matchesQuery } from "./mock-support";
 import { createMockTeam, type MockTeamOptions } from "./mock-team";
+import { createMockUsage } from "./mock-usage";
 import { createMockVoice, type MockVoiceOptions } from "./mock-voice";
 
 export interface MockOpenBotOptions
@@ -687,6 +689,8 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     bitwardenConnector: createMockBitwardenConnector(),
     billing: createMockBilling(),
     routineFeed: createMockRoutineFeed(),
+    backdrops: createMockBackdrops(),
+    usage: createMockUsage(() => agents),
     hostedServers: createMockHostedServers(),
     customProviders: {
       list: async () => clone(customProviders),
@@ -1256,7 +1260,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
       updateAgent: async (input: UpdateAgentInput) => {
         const current = agents.find((agent) => agent.id === input.agentId);
         if (!current) throw new Error("Agent not found");
-        const { agentId: _agentId, busyMessageMode, compactWindow, weeklyTokenBudget, ...updates } = input;
+        const { agentId: _agentId, busyMessageMode, compactWindow, weeklyTokenBudget, autoModel, ...updates } = input;
         const updated: AgentSummary = { ...current, ...updates };
         // `null` returns the agent to the app default, which an agent records by having no value.
         if (busyMessageMode === null) delete updated.busyMessageMode;
@@ -1265,6 +1269,8 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
         else if (compactWindow) updated.compactWindow = compactWindow;
         if (weeklyTokenBudget === null) delete updated.weeklyTokenBudget;
         else if (weeklyTokenBudget) updated.weeklyTokenBudget = weeklyTokenBudget;
+        if (autoModel === false) delete updated.autoModel;
+        else if (autoModel) updated.autoModel = true;
         if (updated.disabledMcpServerIds?.length === 0) delete updated.disabledMcpServerIds;
         agents = agents.map((agent) => (agent.id === updated.id ? updated : agent));
         emitAgentEvent({ type: "agents-changed", agents });
@@ -1840,6 +1846,13 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
       },
       cancelIdleRestart: async () => {
         const { idleRestart: _cancelled, ...rest } = updateStatus;
+        updateStatus = rest;
+        emit(updateListeners, updateStatus);
+        return clone(updateStatus);
+      },
+      // The preview does not restart: "Restart now" only ends the wait.
+      restartNow: async () => {
+        const { idleRestart: _restarted, ...rest } = updateStatus;
         updateStatus = rest;
         emit(updateListeners, updateStatus);
         return clone(updateStatus);

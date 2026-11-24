@@ -367,7 +367,7 @@ export function ChatView({
       Keyboard.dismiss();
       void haptics.impact();
       setDraft("");
-      questionForm.answer([mentionDraft(body).text]);
+      questionForm.answerText(mentionDraft(body).text);
       return;
     }
 

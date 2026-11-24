@@ -1,14 +1,41 @@
-import {
-  COLOR_BY_ID,
-  type ColorId,
-  EXPRESSIONS,
-  type ExpressionId,
-  SHAPES,
-  type ShapeId,
-} from "@norbert_bodziony/bloub";
+import { COLOR_BY_ID, type ColorId, EXPRESSIONS, type ExpressionId, type ShapeId } from "@norbert_bodziony/bloub";
 import type { AvatarHue } from "@openbot/contracts/ipc";
 
-export type SupportedAvatarSilhouetteId = Exclude<ShapeId, "goutte">;
+/**
+ * The shapes that the hash of a seed picks from: the eight shapes of bloub 0.4.1, in its order. Keep
+ * this list as it is. A longer list would give most existing agents a different shape, and a client
+ * on an older release would draw a different shape for the same agent.
+ */
+const SEEDED_AVATAR_SILHOUETTES = [
+  "cercle",
+  "galet",
+  "squircle",
+  "capsule",
+  "triangle",
+  "hexagone",
+  "nuage",
+  "goutte",
+] as const satisfies readonly ShapeId[];
+type SeededSilhouette = (typeof SEEDED_AVATAR_SILHOUETTES)[number];
+type SeededSupportedSilhouette = Exclude<SeededSilhouette, "goutte">;
+
+/**
+ * The shapes that a seed names, as `<prefix>:<shape>:face:<n>` (upstream OpenBot #14274): ghost,
+ * jellyfish and octopus. Each has a lookalike among the seeded shapes. The picker chooses an `n`
+ * whose hash gives that lookalike, so a client on an older release draws a similar shape with the
+ * same eyes. bloub 0.7.0 also has `carre`, `losange` and `pentagone`; GoAhead does not offer them.
+ */
+const NAMED_SILHOUETTE_LOOKALIKES = {
+  fantome: "squircle",
+  meduse: "galet",
+  poulpe: "nuage",
+} as const satisfies Partial<Record<ShapeId, SeededSupportedSilhouette>>;
+type NamedSilhouette = keyof typeof NAMED_SILHOUETTE_LOOKALIKES;
+const NAMED_SILHOUETTES = Object.keys(NAMED_SILHOUETTE_LOOKALIKES).filter(isNamedSilhouette);
+const NAMED_SILHOUETTE_SEED_PATTERN = /:([a-z]+):face:\d+$/;
+const NAMED_SEED_TRIES = 512;
+
+export type SupportedAvatarSilhouetteId = SeededSupportedSilhouette | NamedSilhouette;
 
 export interface BloubAvatarProfile {
   shape: SupportedAvatarSilhouetteId;
@@ -18,9 +45,40 @@ export interface BloubAvatarProfile {
 
 const AUTOMATIC_COLORS = ["rouge", "orange", "ambre", "vert", "turquoise", "bleu", "violet", "rose"] as const;
 const UNSUPPORTED_AVATAR_SILHOUETTE = "goutte" as const satisfies ShapeId;
-const SUPPORTED_AVATAR_SILHOUETTES = SHAPES.map((option) => option.id).filter(
-  (silhouette): silhouette is SupportedAvatarSilhouetteId => silhouette !== UNSUPPORTED_AVATAR_SILHOUETTE,
+const SEEDED_SUPPORTED_SILHOUETTES = SEEDED_AVATAR_SILHOUETTES.filter(
+  (silhouette): silhouette is SeededSupportedSilhouette => silhouette !== UNSUPPORTED_AVATAR_SILHOUETTE,
 );
+
+function isNamedSilhouette(silhouette: string): silhouette is NamedSilhouette {
+  return Object.hasOwn(NAMED_SILHOUETTE_LOOKALIKES, silhouette);
+}
+
+function namedSilhouette(seed: string): NamedSilhouette | null {
+  const silhouette = NAMED_SILHOUETTE_SEED_PATTERN.exec(seed)?.[1];
+  return silhouette !== undefined && isNamedSilhouette(silhouette) ? silhouette : null;
+}
+
+function seededSilhouette(seed: string): SeededSupportedSilhouette {
+  const silhouette = requiredItem(
+    SEEDED_AVATAR_SILHOUETTES,
+    stableIndex(`${seed}:shape`, SEEDED_AVATAR_SILHOUETTES.length),
+  );
+  return silhouette === UNSUPPORTED_AVATAR_SILHOUETTE
+    ? requiredItem(
+        SEEDED_SUPPORTED_SILHOUETTES,
+        stableIndex(`${seed}:shape:replacement`, SEEDED_SUPPORTED_SILHOUETTES.length),
+      )
+    : silhouette;
+}
+
+/** A seed that draws the named shape here, and its lookalike on an older client. */
+function namedSilhouetteSeed(prefix: string, silhouette: NamedSilhouette): string | null {
+  for (let index = 0; index < NAMED_SEED_TRIES; index += 1) {
+    const candidate = `${prefix}:${silhouette}:face:${index}`;
+    if (seededSilhouette(candidate) === NAMED_SILHOUETTE_LOOKALIKES[silhouette]) return candidate;
+  }
+  return null;
+}
 
 const HUE_COLORS: Readonly<Record<AvatarHue, ColorId>> = {
   0: "rouge",
@@ -55,14 +113,7 @@ export const AVATAR_HUE_OPTIONS: ReadonlyArray<{
 export const AVATAR_HUE_CHOICES = AVATAR_HUE_OPTIONS.filter((option) => option.hue !== 100 && option.hue !== 280);
 
 export function bloubAvatarProfile(seed: string, hue: AvatarHue | null): BloubAvatarProfile {
-  const storedSilhouette = requiredItem(SHAPES, stableIndex(`${seed}:shape`, SHAPES.length)).id;
-  const silhouette =
-    storedSilhouette === UNSUPPORTED_AVATAR_SILHOUETTE
-      ? requiredItem(
-          SUPPORTED_AVATAR_SILHOUETTES,
-          stableIndex(`${seed}:shape:replacement`, SUPPORTED_AVATAR_SILHOUETTES.length),
-        )
-      : storedSilhouette;
+  const silhouette = namedSilhouette(seed) ?? seededSilhouette(seed);
   const expression = requiredItem(EXPRESSIONS, stableIndex(`${seed}:expression`, EXPRESSIONS.length)).id;
 
   return {
@@ -86,7 +137,7 @@ export function avatarHeadColor(seed: string, hue: AvatarHue | null): string {
 export function avatarCandidateSeeds(agentId: string, currentSeed: string, batch: number): string[] {
   const candidates = [currentSeed];
   const firstProfile = bloubAvatarProfile(currentSeed, null);
-  const unseenSilhouetteIds = new Set<SupportedAvatarSilhouetteId>(SUPPORTED_AVATAR_SILHOUETTES);
+  const unseenSilhouetteIds = new Set<SupportedAvatarSilhouetteId>(SEEDED_SUPPORTED_SILHOUETTES);
   const usedExpressions = new Set<ExpressionId>([firstProfile.expression]);
   unseenSilhouetteIds.delete(firstProfile.shape);
   let index = 1;
@@ -99,6 +150,14 @@ export function avatarCandidateSeeds(agentId: string, currentSeed: string, batch
     if (!unseenSilhouetteIds.delete(profile.shape)) continue;
     candidates.push(candidate);
     usedExpressions.add(profile.expression);
+  }
+
+  for (const silhouette of NAMED_SILHOUETTES) {
+    if (silhouette === firstProfile.shape) continue;
+    const candidate = namedSilhouetteSeed(`${agentId}:avatar:${batch}`, silhouette);
+    if (candidate === null || candidates.includes(candidate)) continue;
+    candidates.push(candidate);
+    usedExpressions.add(bloubAvatarProfile(candidate, null).expression);
   }
 
   while (candidates.length < 12) {

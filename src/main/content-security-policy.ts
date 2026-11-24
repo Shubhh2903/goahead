@@ -19,11 +19,12 @@ export function buildContentSecurityPolicy(
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    `img-src 'self' data: openbot-attachment: openbot-remote-attachment: openbot-avatar: openbot-remote-avatar: openbot-server-logo: openbot-remote-server-logo: https:${developmentImageSources}`,
+    `img-src 'self' data: openbot-attachment: openbot-remote-attachment: openbot-avatar: openbot-remote-avatar: openbot-server-logo: openbot-remote-server-logo: openbot-backdrop: https:${developmentImageSources}`,
     "font-src 'self' data:",
     // The lightbox plays a recording from the attachment scheme, and the preview panel plays one
-    // from an object URL of the bytes that the main process sent. Neither matches `default-src`.
-    "media-src 'self' blob: openbot-attachment: openbot-remote-attachment:",
+    // from an object URL of the bytes that the main process sent. A backdrop video plays from the
+    // backdrop scheme, which serves only the uploads in main's index. None matches `default-src`.
+    "media-src 'self' blob: openbot-attachment: openbot-remote-attachment: openbot-backdrop:",
     // Product analytics are off (`PRODUCT_IDENTITY.analytics`), so no analytics origin is allowed.
     `connect-src 'self' openbot-attachment: openbot-remote-attachment: ws://127.0.0.1:* ${SIGNAL_SOURCE}${selfHostedSignalSource}${developmentSources}`,
     "object-src 'none'",

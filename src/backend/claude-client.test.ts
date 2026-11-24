@@ -1,9 +1,12 @@
 // @vitest-environment node
 
+import { randomUUID } from "node:crypto";
 import { chmod, mkdtemp, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CanUseTool, ModelInfo, SDKUserMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, ModelInfo, Options, SDKUserMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServerConfig } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -77,10 +80,11 @@ type TestStreamMessage =
       total_cost_usd?: number;
       subtype: "success";
       result: string;
-      terminal_reason: "completed";
+      terminal_reason: "completed" | "aborted_tools";
       errors: string[];
       session_id: string;
       uuid: string;
+      user_message_uuids?: string[];
     };
 
 let root: string | null = null;
@@ -955,6 +959,161 @@ fi
     await client.stop();
   });
 
+  it("steers with priority now while a tool runs, and keeps the turn open until the steer's result", async () => {
+    const { client, notifications, output, prompt, threadId } = await createHarness();
+    const turnId = "66666666-6666-4666-8666-666666666601";
+    const steerId = "66666666-6666-4666-8666-666666666602";
+    await startTurn(client, threadId, turnId);
+    const iterator = prompt[Symbol.asyncIterator]();
+    await iterator.next();
+
+    output.push(toolUseMessage(threadId, "tool-message", "tool-1", "Agent"));
+    await waitFor(() => notifications.some((event) => event.method === "item/started"));
+    await expect(steerTurn(client, threadId, turnId, steerId)).resolves.toEqual({ turnId });
+    expect((await iterator.next()).value).toMatchObject({ uuid: steerId, priority: "now" });
+
+    output.push(abortedToolsResult(threadId, [turnId]));
+    await waitFor(() => toolCallCompleted(notifications, "tool-1"));
+    output.push(assistantMessage(threadId, "steer-answer", "Using staging."));
+    output.push(resultMessage(threadId, steerId, "Using staging.", undefined, [steerId]));
+    await waitFor(() => turnCompletions(notifications).length > 0);
+
+    expect(turnCompletions(notifications)).toEqual(["completed"]);
+    expect(answerText(notifications)).toBe("Using staging.");
+    await client.stop();
+  });
+
+  it("sends a plain steer when no tool runs", async () => {
+    const { client, prompt, threadId } = await createHarness();
+    const turnId = "66666666-6666-4666-8666-666666666611";
+    await startTurn(client, threadId, turnId);
+    const iterator = prompt[Symbol.asyncIterator]();
+    await iterator.next();
+
+    await steerTurn(client, threadId, turnId, "66666666-6666-4666-8666-666666666612");
+    expect((await iterator.next()).value).not.toHaveProperty("priority");
+    await client.stop();
+  });
+
+  it("keeps a steer plain while a question waits for the person", async () => {
+    const { client, notifications, options, output, prompt, threadId } = await createHarness();
+    const turnId = "66666666-6666-4666-8666-666666666621";
+    const requests: Array<{ id: string | number; method: string }> = [];
+    client.on("request", (request) => requests.push(request));
+    await startTurn(client, threadId, turnId);
+    const iterator = prompt[Symbol.asyncIterator]();
+    await iterator.next();
+
+    output.push(toolUseMessage(threadId, "question-message", "question-1", "AskUserQuestion"));
+    await waitFor(() => notifications.some((event) => event.method === "item/started"));
+    const answer = options[0]?.canUseTool?.(
+      "AskUserQuestion",
+      { questions: [{ question: "Which server?", header: "Server", options: [] }] },
+      { signal: new AbortController().signal, toolUseID: "question-1", requestId: "request-1" },
+    );
+    await waitFor(() => requests.some((request) => request.method === "item/tool/requestUserInput"));
+
+    await steerTurn(client, threadId, turnId, "66666666-6666-4666-8666-666666666622");
+    expect((await iterator.next()).value).not.toHaveProperty("priority");
+
+    const question = requests.find((request) => request.method === "item/tool/requestUserInput");
+    if (question) client.respond(question.id, { answers: {} });
+    await expect(answer).resolves.toMatchObject({ behavior: "allow" });
+    await client.stop();
+  });
+
+  it("aborts an open host tool call when Claude stops its tools for a steer", async () => {
+    const { client, notifications, options, output, prompt, threadId } = await createHarness();
+    const turnId = "66666666-6666-4666-8666-666666666631";
+    const requests: Array<{ method: string; signal?: AbortSignal }> = [];
+    client.on("request", (request) => requests.push(request));
+    await startTurn(client, threadId, turnId);
+    const iterator = prompt[Symbol.asyncIterator]();
+    await iterator.next();
+    const server = options[0]?.mcpServers?.openbot;
+    if (server?.type !== "sdk" || !("instance" in server)) throw new Error("The OpenBot server is missing.");
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.instance.connect(serverTransport);
+    const mcp = new Client({ name: "test", version: "1.0.0" });
+    await mcp.connect(clientTransport);
+
+    output.push(toolUseMessage(threadId, "tool-message", "tool-1", "mcp__openbot__list_agents"));
+    await waitFor(() => notifications.some((event) => event.method === "item/started"));
+    const call = mcp.callTool({ name: "list_agents", arguments: {} });
+    await waitFor(() => requests.some((request) => request.method === "item/tool/call"));
+    const hostCall = requests.find((request) => request.method === "item/tool/call");
+    expect(hostCall?.signal?.aborted).toBe(false);
+
+    await steerTurn(client, threadId, turnId, "66666666-6666-4666-8666-666666666632");
+    output.push(abortedToolsResult(threadId, [turnId]));
+
+    await waitFor(() => hostCall?.signal?.aborted === true);
+    await expect(call).resolves.toMatchObject({ isError: true });
+    expect(turnCompletions(notifications)).toEqual([]);
+    await mcp.close();
+    await client.stop();
+  });
+
+  it("ends the turn as interrupted when the person stops it while a steer waits", async () => {
+    const { client, notifications, output, prompt, threadId } = await createHarness();
+    const turnId = "66666666-6666-4666-8666-666666666641";
+    await startTurn(client, threadId, turnId);
+    const iterator = prompt[Symbol.asyncIterator]();
+    await iterator.next();
+
+    output.push(toolUseMessage(threadId, "tool-message", "tool-1", "Agent"));
+    await waitFor(() => notifications.some((event) => event.method === "item/started"));
+    await steerTurn(client, threadId, turnId, "66666666-6666-4666-8666-666666666642");
+    await expect(client.request("turn/interrupt", { threadId, turnId }, decodeRecordResponse)).resolves.toEqual({});
+    output.push(abortedToolsResult(threadId, [turnId]));
+
+    await waitFor(() => turnCompletions(notifications).length > 0);
+    expect(turnCompletions(notifications)).toEqual(["interrupted"]);
+    await client.stop();
+  });
+
+  it("answers that a turn is not active when Stop names a turn that Claude does not run", async () => {
+    const { client, query, threadId } = await createHarness();
+    await startTurn(client, threadId, "66666666-6666-4666-8666-666666666651");
+    const lostTurn = "66666666-6666-4666-8666-666666666652";
+
+    await expect(
+      client.request("turn/interrupt", { threadId, turnId: lostTurn }, decodeRecordResponse),
+    ).resolves.toEqual({ turnActive: false });
+    // A closed query cannot interrupt, and the named turn has still ended in Claude.
+    vi.spyOn(query, "interrupt").mockRejectedValue(new Error("The query is closed."));
+    await expect(
+      client.request("turn/interrupt", { threadId, turnId: lostTurn }, decodeRecordResponse),
+    ).resolves.toEqual({ turnActive: false });
+    await client.stop();
+  });
+
+  it("clears the held-text preview when the person stops the turn", async () => {
+    const { client, notifications, output, threadId } = await createHarness();
+    const turnId = "66666666-6666-4666-8666-666666666661";
+    await startTurn(client, threadId, turnId);
+    const previews = () =>
+      notifications.flatMap((event) =>
+        event.method === TEXT_PREVIEW_METHOD && isDynamicRecord(event.params) && isString(event.params.text)
+          ? [event.params.text]
+          : [],
+      );
+
+    output.push(streamDelta(threadId, turnId, "Working on it"));
+    await waitFor(() => previews().includes("Working on it"));
+    await client.request("turn/interrupt", { threadId, turnId }, decodeRecordResponse);
+
+    // Cleared at Stop, before Claude ends the turn.
+    expect(previews().at(-1)).toBe("");
+    expect(turnCompletions(notifications)).toEqual([]);
+    output.push(streamDelta(threadId, turnId, " and more"));
+    output.push(abortedToolsResult(threadId, [turnId]));
+    await waitFor(() => turnCompletions(notifications).length > 0);
+    expect(turnCompletions(notifications)).toEqual(["interrupted"]);
+    expect(previews()).toEqual(["Working on it", ""]);
+    await client.stop();
+  });
+
   it("adds only the missing suffix from a complete assistant message", async () => {
     const { client, notifications, output, threadId } = await createHarness();
     const turnId = "22222222-2222-4222-8222-222222222222";
@@ -1539,16 +1698,20 @@ async function createHarness(history?: SessionMessage[]): Promise<{
   notifications: Array<{ method: string; params: unknown }>;
   output: TestQueue<TestStreamMessage>;
   prompt: AsyncIterable<SDKUserMessage>;
+  query: TestQuery;
+  options: Options[];
   threadId: string;
 }> {
   root = await mkdtemp(join(tmpdir(), "openbot-claude-client-"));
   const output = new TestQueue<TestStreamMessage>();
   let prompt: AsyncIterable<SDKUserMessage> | null = null;
+  const options: Options[] = [];
   const generator = new TestQuery(output);
   const client = new ClaudeAgentClient(
     { executable: "/bin/true", version: "2.1.231" },
     (params) => {
       if (!isString(params.prompt)) prompt = params.prompt;
+      if (params.options) options.push(params.options);
       return generator;
     },
     history ? async () => history : undefined,
@@ -1567,7 +1730,46 @@ async function createHarness(history?: SessionMessage[]): Promise<{
     decodeThreadResponse,
   );
   if (!prompt) throw new Error("Claude prompt was not initialized.");
-  return { client, notifications, output, prompt, threadId: thread.thread.id };
+  return { client, notifications, output, prompt, query: generator, options, threadId: thread.thread.id };
+}
+
+function steerTurn(client: ClaudeAgentClient, threadId: string, turnId: string, messageId: string) {
+  return client.request(
+    "turn/steer",
+    {
+      threadId,
+      expectedTurnId: turnId,
+      clientUserMessageId: messageId,
+      input: [{ type: "text", text: "Stop and use staging." }],
+    },
+    decodeRecordResponse,
+  );
+}
+
+/** Claude stopped its tools for a steer: the result lists only the messages that its turn took. */
+function abortedToolsResult(threadId: string, takenIds: string[]): TestStreamMessage {
+  return {
+    type: "result",
+    subtype: "success",
+    result: "",
+    terminal_reason: "aborted_tools",
+    errors: [],
+    session_id: threadId,
+    uuid: randomUUID(),
+    user_message_uuids: takenIds,
+  };
+}
+
+function turnCompletions(notifications: Array<{ method: string; params: unknown }>): string[] {
+  return notifications
+    .filter((event) => event.method === "turn/completed")
+    .map((event) => getString(getRecord(event.params, "turn"), "status") ?? "");
+}
+
+function toolCallCompleted(notifications: Array<{ method: string; params: unknown }>, toolUseId: string): boolean {
+  return notifications.some(
+    (event) => event.method === "item/completed" && getString(getRecord(event.params, "item"), "id") === toolUseId,
+  );
 }
 
 function startTurn(client: ClaudeAgentClient, threadId: string, turnId: string) {
@@ -1673,9 +1875,11 @@ function resultMessage(
   turnId: string,
   result: string,
   usage?: { output: number; cost: number },
+  takenIds?: string[],
 ): TestStreamMessage {
   return {
     type: "result",
+    ...(takenIds ? { user_message_uuids: takenIds } : {}),
     subtype: "success",
     result,
     ...(usage

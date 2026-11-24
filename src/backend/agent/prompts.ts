@@ -79,6 +79,7 @@ export function promptQuestions(params: unknown): AgentPromptQuestion[] {
       header: getString(question, "header") ?? "Question",
       question: getString(question, "question") ?? "The agent needs more information.",
       isSecret: question.isSecret === true,
+      ...(question.multiSelect === true ? { multiSelect: true } : {}),
       options: Array.isArray(question.options)
         ? question.options.filter(isRecord).map((option) => ({
             label: getString(option, "label") ?? "Option",

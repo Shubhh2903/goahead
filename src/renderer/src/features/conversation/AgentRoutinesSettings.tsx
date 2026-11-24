@@ -50,6 +50,11 @@ import { createEffect, createSignal, For, onCleanup, Show, untrack } from "solid
 import { type DesktopAnalyticsScope, desktopAnalytics } from "../../analytics";
 import { writeClipboardText } from "../../clipboard";
 import type { RoutinesPort } from "./routines-port";
+import {
+  fillRunConditionTemplate,
+  RUN_CONDITION_TEMPLATES,
+  type RunConditionTemplate,
+} from "./run-condition-templates";
 
 export interface RoutineSelectionRequest {
   routineId: string;
@@ -119,8 +124,24 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
   const [testing, setTesting] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [confirmDelete, setConfirmDelete] = createSignal(false);
+  const [pendingTemplate, setPendingTemplate] = createSignal<RunConditionTemplate | null>(null);
+  const [templateValue, setTemplateValue] = createSignal("");
   const [pendingExit, setPendingExit] = createSignal<PendingRoutineExit | null>(null);
   const scrollFades = createScrollFades();
+  const applyTemplate = (template: RunConditionTemplate, value?: string) => {
+    const filled = fillRunConditionTemplate(template, value);
+    if (!filled) return;
+    setPendingTemplate(null);
+    setTemplateValue("");
+    changeDraft((current) => ({ ...current, conditionCommand: filled.command, conditionWhen: filled.when }));
+  };
+  const chooseTemplate = (template: RunConditionTemplate | null) => {
+    if (!template) return;
+    if (template.askKey) {
+      setTemplateValue("");
+      setPendingTemplate(template);
+    } else applyTemplate(template);
+  };
   let draftRevision = 0;
   // The saved routine the open draft started from. A field that still matches it is unedited.
   let draftBase: RoutineFields | null = null;
@@ -703,6 +724,53 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
               </Show>
 
               <Show when={props.port.runCondition}>
+                <div class="settings-field">
+                  <span id="agent-routine-run-condition-template-label">
+                    {t("routine.settings.runConditionTemplate")}
+                  </span>
+                  <Select<RunConditionTemplate>
+                    options={[...RUN_CONDITION_TEMPLATES]}
+                    optionValue="id"
+                    optionTextValue={(template) => t(template.labelKey)}
+                    value={null}
+                    onChange={chooseTemplate}
+                    itemComponent={(item) => <SelectItem item={item.item}>{t(item.item.rawValue.labelKey)}</SelectItem>}
+                  >
+                    <SelectTrigger aria-labelledby="agent-routine-run-condition-template-label">
+                      <SelectValue<RunConditionTemplate>>
+                        {() => t("routine.settings.runConditionTemplate")}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent />
+                  </Select>
+                </div>
+                <Show when={pendingTemplate()}>
+                  {(template) => (
+                    <div class="settings-field">
+                      <label>
+                        <span>{t(template().askKey ?? "routine.settings.runConditionTemplate")}</span>
+                        <Input
+                          value={templateValue()}
+                          spellcheck={false}
+                          onValueChange={setTemplateValue}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              applyTemplate(template(), templateValue());
+                            }
+                          }}
+                        />
+                      </label>
+                      <Button
+                        type="button"
+                        disabled={!templateValue().trim()}
+                        onClick={() => applyTemplate(template(), templateValue())}
+                      >
+                        {t("routine.settings.runConditionTemplate.apply")}
+                      </Button>
+                    </div>
+                  )}
+                </Show>
                 <label class="settings-field">
                   <span>{t("routine.settings.runCondition")}</span>
                   <Input

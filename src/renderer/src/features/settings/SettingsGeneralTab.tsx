@@ -27,6 +27,7 @@ import { createSignal, Show } from "solid-js";
 import { replayActionSoundChoice } from "../../action-sounds";
 import { useI18n } from "../../i18n-context";
 import { useLogoColorChoice } from "../../logo-color";
+import { ChatBackdropSetting } from "../backdrop/ChatBackdropSetting";
 
 const linkTargetOptions: GeneralSettingsValue["externalLinkTarget"][] = ["Default browser", "OpenBot"];
 
@@ -85,6 +86,15 @@ export function SettingsGeneralTab(props: SettingsGeneralTabProps) {
               </Show>
             </ItemContent>
             <LogoColorPicker value={logoColor.color()} onChange={logoColor.changeColor} />
+          </Item>
+          <Item class="settings-modal-row">
+            <ItemContent>
+              <ItemTitle>{i18n.t("settings.chatBackdrop.title")}</ItemTitle>
+              <ItemDescription>{i18n.t("settings.chatBackdrop.description")}</ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <ChatBackdropSetting mount={props.selectMount} />
+            </ItemActions>
           </Item>
         </ItemGroup>
       </SettingsSection>

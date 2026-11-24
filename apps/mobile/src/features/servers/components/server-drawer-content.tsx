@@ -13,6 +13,7 @@ import {
   useHostedServerAvailability,
 } from "@/features/servers/model/hosted-server-checkout";
 import type { MobileServer } from "@/features/workspace/context/mobile-workspace-context";
+import { connectionPathLabel } from "@/features/workspace/model/connection-path-label";
 import { moveServerId } from "@/features/workspace/model/server-order";
 import { serverStatusLabel } from "@/features/workspace/model/server-status";
 import { ProfileAvatar } from "@/shared/components/profile-avatar";
@@ -43,7 +44,11 @@ interface ServerDrawerContentProps {
 function serverDetail(server: MobileServer, t: MobileTranslate): string {
   const label = serverKindLabel(server, t);
   const pending = server.state === "connecting" && server.initialConnectionPending;
-  return pending || server.state === "error" ? `${label} · ${serverStatusLabel(server, t)}` : label;
+  const path = connectionPathLabel(server, t);
+  // A failure reason is long and the row is one line, so it replaces the kind.
+  if (path && server.state === "offline") return path;
+  if (pending || server.state === "error") return `${label} · ${serverStatusLabel(server, t)}`;
+  return path ? `${label} · ${path}` : label;
 }
 
 function ignoreLongPress(): void {}
@@ -140,7 +145,14 @@ export function ServerDrawerContent({
         key={serverItem.id}
         accessibilityRole="button"
         accessibilityState={{ selected }}
-        accessibilityLabel={`${serverItem.name}, ${serverLabel}, ${serverStatusLabel(serverItem, t)}`}
+        accessibilityLabel={[
+          serverItem.name,
+          serverLabel,
+          serverStatusLabel(serverItem, t),
+          connectionPathLabel(serverItem, t),
+        ]
+          .filter(Boolean)
+          .join(", ")}
         accessibilityActions={accessibilityActions}
         onAccessibilityAction={(event) => {
           const action = event.nativeEvent.actionName;

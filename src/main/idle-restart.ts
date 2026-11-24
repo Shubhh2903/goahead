@@ -88,6 +88,22 @@ export class IdleRestart {
     return this.#updater.getStatus();
   }
 
+  /**
+   * Restarts at once, without the wait for idle agents. Only the user's explicit choice calls this:
+   * agent turns and routine runs that did not finish stop. Without a waiting restart it does nothing.
+   */
+  restartNow(): UpdateStatus {
+    if (this.#restarting || this.#updater.getStatus().phase === "installing") {
+      throw new Error(sourceText("error.update.alreadyRestarting"));
+    }
+    const status = this.#status;
+    if (!status || status.error) return this.#updater.getStatus();
+    this.#clearTimer();
+    this.#log(`The user asked to restart now while waiting for: ${status.waitingFor.join(", ") || "nothing"}.`);
+    void this.#restart(status);
+    return this.#updater.getStatus();
+  }
+
   /** Removes the restart, or the error of the last one, and lets the routines run. */
   cancel(): UpdateStatus {
     if (this.#restarting) throw new Error(sourceText("error.update.alreadyRestarting"));
@@ -121,15 +137,21 @@ export class IdleRestart {
       this.#schedule(this.#pollMs);
       return;
     }
+    this.#log("No work runs.");
+    await this.#restart(status);
+  }
+
+  /** The restart steps, shared by the idle check and by `restartNow`. */
+  async #restart(status: IdleRestartStatus): Promise<void> {
     this.#restarting = true;
     this.#publish({ ...status, waitingFor: [] });
     this.#keepHold();
     if (status.target === "relaunch") {
-      this.#log("Restarting OpenBot: no work runs.");
+      this.#log("Restarting OpenBot.");
       this.#relaunch();
       return;
     }
-    this.#log("Installing the update: no work runs.");
+    this.#log("Installing the update.");
     try {
       await this.#updater.installUpdate();
       // The updater owns the install from here, and reports its own failure, which can come after

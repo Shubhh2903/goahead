@@ -4,6 +4,7 @@ import { createEffect, createMemo, createSignal } from "solid-js";
 import { useProviders } from "../../providers";
 import { useCustomAgents } from "../custom-agents/custom-agents-context";
 import { useCustomProviders } from "../custom-providers/custom-providers-context";
+import { isFirstRunActive, skipFirstRunStep } from "../onboarding/first-run-wizard";
 import { useSetup } from "../onboarding/onboarding-context";
 import { useServers } from "../servers/servers-context";
 import { useAgentActions } from "./agent-actions";
@@ -26,9 +27,10 @@ export function WorkspaceAgentSetup() {
     modelOptions,
     agentStatus,
     serverSetupChoice,
+    skipFirstAgentSetup,
   } = useAgents();
   const { createAgent } = useAgentActions();
-  const { setupState } = useSetup();
+  const { setupState, firstRunWizard, updateFirstRunWizard } = useSetup();
   // Not gated on the server: the picker needs these IDs to label a model it is already showing,
   // and a remote server's OpenCode has its own catalogue. Only the write paths are local-only.
   const { customProviders } = useCustomProviders();
@@ -59,6 +61,16 @@ export function WorkspaceAgentSetup() {
    * provider step chose for that server, so its choice comes first.
    */
   const [modelTouched, setModelTouched] = createSignal(false);
+  /** The agent step of first-run setup, on this computer, which the user may skip. */
+  const firstRunAgentStep = createMemo(() => {
+    const wizard = firstRunWizard();
+    return (
+      isFirstRunActive(wizard) &&
+      wizard.step === "agent" &&
+      agentList().length === 0 &&
+      activeServer()?.kind === "local"
+    );
+  });
   createEffect(
     () => ({
       touched: modelTouched(),
@@ -98,6 +110,14 @@ export function WorkspaceAgentSetup() {
       }}
       onSubmit={createAgent}
       onCancel={agentList().length > 0 ? cancelAgentSetup : undefined}
+      onSkip={
+        firstRunAgentStep()
+          ? () => {
+              skipFirstAgentSetup();
+              updateFirstRunWizard(skipFirstRunStep);
+            }
+          : undefined
+      }
     />
   );
 }

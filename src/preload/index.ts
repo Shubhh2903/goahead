@@ -117,6 +117,7 @@ import {
   decodeVoiceTranscriptionResult,
   decodeVoid,
 } from "./app-decoding";
+import { decodeChatBackdropState, decodeChatBackdropUploadResult } from "./backdrop-decoding";
 import {
   decodeBrowserBounds,
   decodeBrowserControlState,
@@ -220,6 +221,7 @@ import {
   decodeTeamPresenceSnapshot,
   decodeTeamSessions,
 } from "./team-decoding";
+import { decodeLocalUsageDashboard } from "./usage-decoding";
 
 const attachmentImportListeners = new Set<(event: AttachmentImportEvent) => void>();
 let selectedServerId: string = LOCAL_SERVER_ID;
@@ -653,6 +655,15 @@ const openbotApi: OpenBotDesktopApi = {
     create: decodeRoutineFeed,
     remove: decodeRoutineFeed,
   }),
+  backdrops: bridgeGroup(IPC_ENDPOINTS.backdrops, {
+    getState: decodeChatBackdropState,
+    setChoice: decodeChatBackdropState,
+    upload: decodeChatBackdropUploadResult,
+    remove: decodeChatBackdropState,
+  }),
+  usage: bridgeGroup(IPC_ENDPOINTS.usage, {
+    getDashboard: decodeLocalUsageDashboard,
+  }),
   billing: bridgeGroup(IPC_ENDPOINTS.billing, {
     getState: decodeBillingState,
     openPortal: decodeVoid,
@@ -895,6 +906,7 @@ const openbotApi: OpenBotDesktopApi = {
     cancelScheduledRestart: decodeUpdateStatus,
     restartWhenIdle: decodeUpdateStatus,
     cancelIdleRestart: decodeUpdateStatus,
+    restartNow: decodeUpdateStatus,
     event: decodeUpdateStatus,
     preference: decodeUpdatePreference,
   }),

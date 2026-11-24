@@ -12,6 +12,7 @@ const agent: MobileAgent = {
   description: "",
   preview: "Ready",
   updatedLabel: "",
+  updatedAt: null,
   avatarSeed: "chief",
   avatarHue: null,
 };

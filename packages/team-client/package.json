@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./connection-path": "./src/connection-path.ts",
     "./ed25519": "./src/ed25519.ts",
     "./remote-directory": "./src/remote-directory.ts",
     "./remote-peer": "./src/remote-peer.ts",

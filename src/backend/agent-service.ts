@@ -89,6 +89,8 @@ import type {
   UpdateChannelRoutineInput,
   UpdateQueuedMessageInput,
   UpdateRoutineInput,
+  UsageDashboard,
+  UsageRange,
 } from "@openbot/contracts/ipc";
 import {
   agentAutomationAllowed,
@@ -101,6 +103,7 @@ import {
   isContextResetMarker,
   type QueueSteerFallback,
   sharedRuntimeSnapshot,
+  usageRangeStart,
   workspaceAccessEnforced,
 } from "@openbot/contracts/ipc";
 import { ContextResetBusyError } from "@openbot/contracts/team-protocol/context-reset-v1";
@@ -155,6 +158,7 @@ import { isRequestTimeout, providerForAgent, providerLabel, type ToolUsageSignal
 import { ThreadLifecycle } from "./agent/thread-lifecycle";
 import { type AgentBrowserHost, TurnLifecycle } from "./agent/turn-lifecycle";
 import { UsageLimitGate } from "./agent/usage-limit-gate";
+import { weeklyBudgetUsage } from "./agent/weekly-token-budget";
 import type { AgentProvider } from "./agent-client";
 import type { AgentTables } from "./agent-data/agent-tables";
 import type { AgentStore } from "./agent-store";
@@ -217,6 +221,8 @@ interface AgentServiceEvents {
 }
 
 export interface AgentServiceOptions {
+  /** The clock of the automatic model choice (how long a provider thread has been quiet). Tests set it. */
+  now?: () => number;
   store: AgentStore;
   mailbox: MailboxStore;
   browser: AgentBrowserHost;
@@ -423,6 +429,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       store,
       (event) => this.#emit(event),
       () => this.listAgents(),
+      options.now,
     );
     this.#tables = options.tables ?? null;
     this.#memories = new AgentMemories({
@@ -518,9 +525,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         },
         sharedRoot: () => this.#store.sharedRoot,
         isStopping: () => this.#stopping,
-        isProviderBusy: (provider) =>
-          this.#drain.hasStartingDeliveries(provider) ||
-          this.#store.list().some((agent) => providerForAgent(agent) === provider && this.#runsTurn(agent.id)),
+        isProviderBusy: (provider) => this.isProviderBusy(provider),
         isAgentBusy: (agentId) => this.#runsTurn(agentId),
         isProviderAssigned: (provider) => this.#store.list().some((agent) => providerForAgent(agent) === provider),
         captureConfigRevision: () => this.#endpoints.committedRevision(),
@@ -861,6 +866,8 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         released: () => this.channels.wake(),
       },
     });
+    // A teammate whose plan limit is spent does not hold the answers of the other requests of a turn.
+    mailbox.setRecipientMayWork((agentId) => this.#usageLimits.mayDrain(agentId));
     this.#googleWorkspace = options.googleWorkspace ?? null;
     this.#drain = new DrainScheduler({
       channels: this.channels,
@@ -1036,6 +1043,23 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     if (input.agentId && !this.listAgents().some((agent) => agent.id === input.agentId))
       throw new Error(sourceText("error.team.agentNotFound"));
     return this.#store.database.usage.readHost(input);
+  }
+
+  /** The Usage tab of this computer. It reads only the local database. */
+  getUsageDashboard(range: UsageRange): UsageDashboard {
+    return {
+      ...range,
+      startDate: usageRangeStart(range),
+      agents: this.#store.database.usageDashboard.usageByAgent(range),
+      skippedChannelRuns: this.#store.database.usageDashboard.skippedChannelRuns(range),
+      // The budget alert's week and time zone, not the range: see `weeklyBudgetUsage`.
+      weeklyBudgets: weeklyBudgetUsage(
+        this.listAgents(),
+        (input) => this.getAnalytics(input),
+        new Date(),
+        Intl.DateTimeFormat().resolvedOptions().timeZone,
+      ),
+    };
   }
 
   async getUsage(agentId?: string): Promise<AccountUsage> {
@@ -1901,6 +1925,14 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     return this.#providers.updateProviderCli(provider, install);
   }
 
+  /** Whether an agent of `provider` runs a turn, or a delivery to one starts. A CLI update then waits. */
+  isProviderBusy(provider: AgentProvider): boolean {
+    return (
+      this.#drain.hasStartingDeliveries(provider) ||
+      this.#store.list().some((agent) => providerForAgent(agent) === provider && this.#runsTurn(agent.id))
+    );
+  }
+
   /** Restarts OpenCode so a saved or removed endpoint reaches it. Reports why, if it did not. */
   reloadOpenCodeConfig(): Promise<CustomProviderRestart> {
     return this.#providers.reloadOpenCodeConfig();
@@ -2139,6 +2171,13 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
    */
   async #settleHeldQueues(agentIds: readonly string[]): Promise<void> {
     this.channels.wake();
+    // The requesters may hold answers for these agents' requests, which the hold now releases.
+    for (const agentId of agentIds) {
+      for (const delivery of this.listQueue(agentId).deliveries) {
+        if (delivery.status === "queued" && delivery.sender.kind === "agent")
+          this.#drain.scheduleDrain(delivery.sender.agentId);
+      }
+    }
     for (const agentId of agentIds) {
       for (const deliveryId of this.#mailbox.queuedDeliveryIds(agentId)) {
         if (!this.channels.store.assignmentForDelivery(deliveryId) || !this.#requeueChannelDelivery(deliveryId))
@@ -2478,8 +2517,32 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       : this.#store.activeProviderSession(agentId);
     if (!session) return false;
     this.#images.interrupt(agentId, session.externalSessionId, turnId);
-    await client.request("turn/interrupt", { threadId: session.externalSessionId, turnId }, decodeRecordResponse);
+    const response = await client.request(
+      "turn/interrupt",
+      { threadId: session.externalSessionId, turnId },
+      decodeRecordResponse,
+    );
+    // The provider does not run this turn, so no turn end will come. Only the Stop of the person
+    // ends it here; `interrupt_agent` leaves it.
+    if (!mayStop && response.turnActive === false && this.#turnRunsOnlyInSnapshot(agentId, turnId)) {
+      logger.warn("Stop found a chat turn that its provider does not run. It ends as interrupted.", {
+        agentId,
+        turnId,
+      });
+      await this.#turn.settleLostTurn(agentId, session.externalSessionId, turnId);
+    }
     return true;
+  }
+
+  /** A turn that the chat shows as active, with no running or completing record in the lifecycle. */
+  #turnRunsOnlyInSnapshot(agentId: string, turnId: string): boolean {
+    return (
+      this.#turn.turnStartedAt(turnId) === null &&
+      !this.#turn.isCompleting(turnId) &&
+      [...this.#conversation.activeSnapshots()].some(
+        ([id, snapshot]) => id === agentId && snapshot.activeTurnId === turnId,
+      )
+    );
   }
 
   async interruptAll(): Promise<void> {

@@ -18,6 +18,7 @@ import type { ManagedProviderId } from "./agent-providers";
 import type { AppLanguagePreference, SetAppLanguagePreferenceInput } from "./app-language";
 import type { AppLogoColorPreference, SetAppLogoColorPreferenceInput } from "./app-logo-color";
 import type { BillingPortalRequest, BillingState } from "./billing";
+import type { ChatBackdropChoice, ChatBackdropState, ChatBackdropUploadResult } from "./chat-backdrop";
 import type {
   CreateHostedServerInput,
   DeleteHostedServerInput,
@@ -373,6 +374,7 @@ import type {
   UpdateHostIdentityInput,
   UpdateTeamMemberInput,
 } from "./ipc-team-host";
+import type { UsageDashboard, UsageRange } from "./ipc-usage-dashboard";
 import type {
   VoiceModelRequest,
   VoiceModelStatus,
@@ -838,6 +840,19 @@ export const IPC_ENDPOINTS = {
     create: request<undefined, RoutineFeed>()("routine-feed:create"),
     remove: request<undefined, RoutineFeed>()("routine-feed:remove"),
   },
+  // The backdrop behind this computer's window. Main keeps the choice and the uploads under userData.
+  // The renderer never sends a path or bytes: `upload` opens the file dialog in main, and main checks
+  // the type, the signature and the size before it copies the file.
+  backdrops: {
+    getState: request<undefined, ChatBackdropState>()("backdrops:get-state"),
+    setChoice: request<ChatBackdropChoice | null, ChatBackdropState>()("backdrops:set-choice"),
+    upload: request<undefined, ChatBackdropUploadResult>()("backdrops:upload"),
+    remove: request<string, ChatBackdropState>()("backdrops:remove"),
+  },
+  // The usage of this computer's agents by local day. Local only: a joined server's usage is the host report.
+  usage: {
+    getDashboard: request<UsageRange, UsageDashboard>()("usage:get-dashboard"),
+  },
   // The account's Stripe subscription. The main process gets the Checkout or Portal URL from the
   // account server and opens it in the browser, so the renderer never sends a URL.
   billing: {
@@ -900,6 +915,7 @@ export const IPC_ENDPOINTS = {
     // The user of this computer restarts OpenBot, or installs the update, when no work runs.
     restartWhenIdle: request<IdleRestartTarget, UpdateStatus>()("update:restart-when-idle"),
     cancelIdleRestart: request<undefined, UpdateStatus>()("update:cancel-idle-restart"),
+    restartNow: request<undefined, UpdateStatus>()("update:restart-now"),
     event: event<UpdateStatus>()("update:event"),
     // A preference that an admin of a joined server changed on this computer.
     preference: event<UpdatePreference>()("update:preference-event"),

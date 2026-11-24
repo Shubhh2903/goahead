@@ -1,7 +1,9 @@
 import type { AppTextKey } from "@openbot/i18n";
 import {
+  ChartArea,
   CircleArrowDown,
   CreditCard,
+  Keyboard,
   Mic,
   MousePointer2,
   PanelTop,
@@ -14,12 +16,14 @@ import {
 export type SettingsTab =
   | "general"
   | "voice"
+  | "keyboard"
   | "dynamic-island"
   | "computer-use"
   | "profile"
   | "billing"
   | "mobile-connect"
   | "updates"
+  | "usage"
   | "hosted-servers";
 
 /**
@@ -46,6 +50,12 @@ export const navItems: ReadonlyArray<SettingsNavItem> = [
     titleKey: "settings.tab.voice.title",
     descriptionKey: "settings.tab.voice.description",
     icon: Mic,
+  },
+  {
+    value: "keyboard",
+    titleKey: "settings.tab.keyboard.title",
+    descriptionKey: "settings.tab.keyboard.description",
+    icon: Keyboard,
   },
   {
     value: "dynamic-island",
@@ -82,6 +92,12 @@ export const navItems: ReadonlyArray<SettingsNavItem> = [
     titleKey: "settings.tab.updates.title",
     descriptionKey: "settings.tab.updates.description",
     icon: CircleArrowDown,
+  },
+  {
+    value: "usage",
+    titleKey: "settings.tab.usage.title",
+    descriptionKey: "settings.tab.usage.description",
+    icon: ChartArea,
   },
   {
     value: "hosted-servers",

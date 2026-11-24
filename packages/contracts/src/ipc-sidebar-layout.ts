@@ -6,7 +6,12 @@ export const SIDEBAR_UNASSIGNED_SECTION_ID = "unassigned";
 export interface SidebarSection {
   id: string;
   name: string;
+  /** The folder that holds this folder. Absent: the folder is at the top of the list. */
+  parentId?: string;
 }
+
+/** A folder can hold folders, three levels in all. */
+export const SIDEBAR_FOLDER_LEVELS = 3;
 
 export interface SidebarLayoutSnapshot {
   revision: number;
@@ -55,6 +60,7 @@ export function isSidebarLayoutSnapshot(value: unknown): value is SidebarLayoutS
   const sectionIds = new Set<string>();
   for (const section of value.sections) {
     if (!isDynamicRecord(section) || !isString(section.id) || !isString(section.name)) return false;
+    if (section.parentId !== undefined && !isString(section.parentId)) return false;
     if (sectionIds.has(section.id)) return false;
     sectionIds.add(section.id);
   }
@@ -67,9 +73,93 @@ export function isSidebarLayoutSnapshot(value: unknown): value is SidebarLayoutS
 }
 
 export type SidebarLayoutAction =
-  | { type: "create"; name: string; agentId?: string }
+  | { type: "create"; name: string; agentId?: string; parentId?: string }
   | { type: "rename"; sectionId: string; name: string }
   | { type: "delete"; sectionId: string }
   | { type: "move"; sectionId: string; direction: "up" | "down"; steps?: number }
   | { type: "assign"; agentId: string; sectionId: string | null }
-  | { type: "move-agent"; agentId: string; sectionId: string | null; beforeAgentId: string | null };
+  | { type: "move-agent"; agentId: string; sectionId: string | null; beforeAgentId: string | null }
+  /** Puts a folder, with the folders in it, into `parentId` (null: the top) before a sibling (null: last). */
+  | { type: "nest"; sectionId: string; parentId: string | null; beforeSectionId: string | null };
+
+/**
+ * The parent of each folder that has a valid one. A parent that names no folder, a cycle, and a fourth
+ * level are dropped here, so a bad parent moves the folder up and never hides it.
+ */
+export function sidebarFolderParents(layout: Pick<SidebarLayoutSnapshot, "sections" | "order">): Map<string, string> {
+  const known = new Map(layout.sections.map((section) => [section.id, section]));
+  const rank = new Map(layout.order.map((sectionId, index) => [sectionId, index]));
+  const ordered = [...layout.sections].sort(
+    (left, right) => (rank.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(right.id) ?? Number.MAX_SAFE_INTEGER),
+  );
+  const parents = new Map<string, string>();
+  for (const section of ordered) {
+    const parentId = section.parentId;
+    if (parentId === undefined || parentId === section.id || !known.has(parentId)) continue;
+    let ancestor: string | undefined = parentId;
+    while (ancestor !== undefined && ancestor !== section.id) ancestor = parents.get(ancestor);
+    if (ancestor === undefined) parents.set(section.id, parentId);
+  }
+  for (const sectionId of sidebarFolderTreeOrder(layout.order, parents)) {
+    const chain = sidebarFolderAncestors(parents, sectionId);
+    if (chain.length >= SIDEBAR_FOLDER_LEVELS) {
+      const parentId = chain[SIDEBAR_FOLDER_LEVELS - 2];
+      if (parentId !== undefined) parents.set(sectionId, parentId);
+    }
+  }
+  return parents;
+}
+
+/** The folders that hold `sectionId`, the top one first. */
+export function sidebarFolderAncestors(parents: ReadonlyMap<string, string>, sectionId: string): string[] {
+  const chain: string[] = [];
+  for (let parentId = parents.get(sectionId); parentId !== undefined; parentId = parents.get(parentId)) {
+    if (chain.includes(parentId)) break;
+    chain.unshift(parentId);
+  }
+  return chain;
+}
+
+/** How many levels of folders are under `sectionId`. 0 when it holds no folder. */
+export function sidebarFolderHeight(parents: ReadonlyMap<string, string>, sectionId: string): number {
+  let height = 0;
+  for (const [childId, parentId] of parents) {
+    if (parentId === sectionId) height = Math.max(height, 1 + sidebarFolderHeight(parents, childId));
+  }
+  return height;
+}
+
+/** `order` with each folder directly after its parent and the folders before it in that parent. */
+export function sidebarFolderTreeOrder(order: readonly string[], parents: ReadonlyMap<string, string>): string[] {
+  const present = new Set(order);
+  const children = new Map<string | null, string[]>();
+  for (const sectionId of order) {
+    const parentId = parents.get(sectionId);
+    const key = parentId !== undefined && present.has(parentId) ? parentId : null;
+    children.set(key, [...(children.get(key) ?? []), sectionId]);
+  }
+  const result: string[] = [];
+  const seen = new Set<string>();
+  const visit = (sectionId: string) => {
+    if (seen.has(sectionId)) return;
+    seen.add(sectionId);
+    result.push(sectionId);
+    for (const childId of children.get(sectionId) ?? []) visit(childId);
+  };
+  for (const sectionId of children.get(null) ?? []) visit(sectionId);
+  for (const sectionId of order) visit(sectionId);
+  return result;
+}
+
+/** The names from the top folder down to `sectionId`. */
+export function sidebarFolderPath(
+  layout: Pick<SidebarLayoutSnapshot, "sections">,
+  parents: ReadonlyMap<string, string>,
+  sectionId: string,
+): string[] {
+  const names = new Map(layout.sections.map((section) => [section.id, section.name]));
+  return [...sidebarFolderAncestors(parents, sectionId), sectionId].flatMap((id) => {
+    const name = names.get(id);
+    return name === undefined ? [] : [name];
+  });
+}

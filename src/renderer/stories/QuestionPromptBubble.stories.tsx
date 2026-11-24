@@ -78,6 +78,21 @@ const customQuestion: AgentPromptQuestion[] = [
   },
 ];
 
+const multiSelectQuestion: AgentPromptQuestion[] = [
+  {
+    id: "checks",
+    header: "Checks",
+    question: "Which checks should run before the release?",
+    isSecret: false,
+    multiSelect: true,
+    options: [
+      { label: "Unit tests", description: "Run the test files of the changed code." },
+      { label: "Type check", description: "Check the types of the changed projects." },
+      { label: "Smoke test", description: "Start the app and try the new feature." },
+    ],
+  },
+];
+
 const secretQuestion: AgentPromptQuestion[] = [
   {
     id: "token",
@@ -227,6 +242,11 @@ export const MultipleQuestions: Story = {
 
 export const CustomAnswer: Story = {
   args: { questions: customQuestion },
+  render: renderInChat,
+};
+
+export const MultiSelect: Story = {
+  args: { questions: multiSelectQuestion },
   render: renderInChat,
 };
 

@@ -298,7 +298,8 @@ export function ProviderPicker(props: ProviderPickerProps) {
                 if (action() === "cancel") {
                   void props.onCancelProviderDownload?.("opencode");
                 } else {
-                  void props.onDownloadProvider?.("opencode");
+                  // The runtime status and the update notification show a failure.
+                  void Promise.resolve(props.onDownloadProvider?.("opencode")).catch(() => undefined);
                 }
               }}
             >
@@ -576,7 +577,8 @@ export function ProviderPicker(props: ProviderPickerProps) {
                                   void props.onConnectProvider?.(option().id);
                                 }
                               } else {
-                                void props.onDownloadProvider?.(option().id);
+                                // The runtime status and the update notification show a failure.
+                                void Promise.resolve(props.onDownloadProvider?.(option().id)).catch(() => undefined);
                               }
                             }}
                           >
@@ -676,7 +678,10 @@ export function ProviderPicker(props: ProviderPickerProps) {
                               <Show when={updateOffered()}>
                                 <DropdownMenu.Item
                                   disabled={connecting()}
-                                  onSelect={() => void props.onUpdateProvider?.(option().id)}
+                                  // The caller's notification shows a failure; the rejection is for "Update all".
+                                  onSelect={() =>
+                                    void Promise.resolve(props.onUpdateProvider?.(option().id)).catch(() => undefined)
+                                  }
                                 >
                                   <RefreshCw aria-hidden="true" />
                                   {updatable()

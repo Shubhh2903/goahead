@@ -4,8 +4,21 @@
  * caller - both regions that show a section header reach it through here.
  */
 
-import { ArrowDown, ArrowUp, buttonVariants, ChevronDown, ContextMenu, Pencil, Trash2 } from "@openbot/ui";
-import { Show } from "solid-js";
+import {
+  ArrowDown,
+  ArrowUp,
+  buttonVariants,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ContextMenu,
+  Folder,
+  FolderInput,
+  FolderPlus,
+  Pencil,
+  Trash2,
+} from "@openbot/ui";
+import { For, Show } from "solid-js";
 import { useText } from "../../text";
 import { SidebarSectionEditor } from "./SidebarSectionEditor";
 import { useSidebarScope } from "./sidebar-scope";
@@ -13,18 +26,25 @@ import { useSidebarScope } from "./sidebar-scope";
 export function SidebarSectionHeader(headerProps: { sectionId: string; name: string }) {
   const {
     customSectionById,
+    foldersSupported,
+    layoutDraggable,
     layoutMutable,
     moveSection,
+    nestSection,
     openDelete,
     pending,
     props,
+    sectionCanHoldFolder,
+    sectionCanNest,
     sectionIsCollapsed,
-    sectionPosition,
+    sectionLabel,
+    sectionParent,
+    sectionSiblings,
     sidebarClickIsSuppressed,
+    startCreateSection,
     startRenameSection,
     startSectionDragging,
     stopSidebarDragging,
-    visibleSectionIds,
   } = useSidebarScope();
   const { t } = useText();
   const editing = () => {
@@ -33,7 +53,18 @@ export function SidebarSectionHeader(headerProps: { sectionId: string; name: str
   };
   const collapsed = () => sectionIsCollapsed(headerProps.sectionId);
   const custom = () => customSectionById().has(headerProps.sectionId);
-  const position = () => sectionPosition(headerProps.sectionId);
+  // "Move up" and "Move down" stay among the folders of the same parent.
+  const siblings = () => sectionSiblings(headerProps.sectionId);
+  const position = () => siblings().indexOf(headerProps.sectionId);
+  const parentId = () => sectionParent(headerProps.sectionId);
+  /** The folders this one can move into, and the top level when it is not there already. */
+  const nestTargets = () =>
+    props.layout.order.filter(
+      (sectionId) =>
+        customSectionById().has(sectionId) &&
+        sectionId !== parentId() &&
+        sectionCanNest(headerProps.sectionId, sectionId),
+    );
   return (
     <Show when={!editing()} fallback={<SidebarSectionEditor />}>
       <header>
@@ -45,7 +76,7 @@ export function SidebarSectionHeader(headerProps: { sectionId: string; name: str
               variant: "ghost",
               class: "sidebar-section-toggle sidebar-section-drag-handle",
             })}
-            draggable={!layoutMutable() || props.compact ? "false" : "true"}
+            draggable={!layoutDraggable() || props.compact ? "false" : "true"}
             title={!layoutMutable() ? t("sidebar.section.layoutUnsupported") : undefined}
             aria-expanded={collapsed() ? "false" : "true"}
             aria-controls={`sidebar-section-body-${headerProps.sectionId}`}
@@ -77,12 +108,54 @@ export function SidebarSectionHeader(headerProps: { sectionId: string; name: str
                     <span>{t("common.rename")}</span>
                   </ContextMenu.Item>
                 </Show>
+                <Show when={foldersSupported() && sectionCanHoldFolder(headerProps.sectionId)}>
+                  <ContextMenu.Item onSelect={() => startCreateSection(undefined, headerProps.sectionId)}>
+                    <FolderPlus class="agent-context-icon size-4" aria-hidden="true" />
+                    <span>{t("sidebar.folder.newInside")}</span>
+                  </ContextMenu.Item>
+                </Show>
+                <Show when={custom() && foldersSupported()}>
+                  <ContextMenu.Sub>
+                    <ContextMenu.SubTrigger>
+                      <FolderInput class="agent-context-icon size-4" aria-hidden="true" />
+                      <span>{t("sidebar.moveTo")}</span>
+                      <ChevronRight class="agent-context-submenu-chevron size-4" aria-hidden="true" />
+                    </ContextMenu.SubTrigger>
+                    <ContextMenu.Portal>
+                      <ContextMenu.SubContent
+                        class="ui-action-menu agent-context-menu agent-context-submenu"
+                        aria-label={t("sidebar.moveTo")}
+                      >
+                        <ContextMenu.Item
+                          disabled={parentId() === null}
+                          onSelect={() => nestSection(headerProps.sectionId, null)}
+                        >
+                          <Show
+                            when={parentId() === null}
+                            fallback={<Folder class="agent-context-icon size-4" aria-hidden="true" />}
+                          >
+                            <Check class="agent-context-icon size-4" aria-hidden="true" />
+                          </Show>
+                          <span>{t("sidebar.folder.topLevel")}</span>
+                        </ContextMenu.Item>
+                        <For each={nestTargets()}>
+                          {(sectionId) => (
+                            <ContextMenu.Item onSelect={() => nestSection(headerProps.sectionId, sectionId)}>
+                              <Folder class="agent-context-icon size-4" aria-hidden="true" />
+                              <span>{sectionLabel(sectionId)}</span>
+                            </ContextMenu.Item>
+                          )}
+                        </For>
+                      </ContextMenu.SubContent>
+                    </ContextMenu.Portal>
+                  </ContextMenu.Sub>
+                </Show>
                 <ContextMenu.Item disabled={position() <= 0} onSelect={() => moveSection(headerProps.sectionId, "up")}>
                   <ArrowUp class="agent-context-icon size-4" aria-hidden="true" />
                   <span>{t("sidebar.section.moveUp")}</span>
                 </ContextMenu.Item>
                 <ContextMenu.Item
-                  disabled={position() < 0 || position() >= visibleSectionIds().length - 1}
+                  disabled={position() < 0 || position() >= siblings().length - 1}
                   onSelect={() => moveSection(headerProps.sectionId, "down")}
                 >
                   <ArrowDown class="agent-context-icon size-4" aria-hidden="true" />

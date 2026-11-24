@@ -1,7 +1,13 @@
 import { createRemoteConnectionRecovery, REMOTE_RETRY_INTERVAL_MS } from "@openbot/team-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { textFor } from "../../../shared/lib/text-value";
-import { applyServerFailure, applyServerRecovery, serverKind, serverStatusLabel } from "./server-status";
+import {
+  applyServerFailure,
+  applyServerRecovery,
+  serverFromHost,
+  serverKind,
+  serverStatusLabel,
+} from "./server-status";
 import type { MobileServer } from "./workspace-types";
 
 const { t } = textFor("en");
@@ -109,4 +115,19 @@ it("labels only the paired desktop as local", () => {
     serverKind("another-owned-host", "paired"),
     serverKind("host", undefined),
   ]).toEqual(["local", "remote", "remote"]);
+});
+
+describe("server row from the account directory", () => {
+  it("keeps the connection path across a membership refresh", () => {
+    const host = {
+      hostId: "desktop",
+      name: "Renamed",
+      logoKey: null,
+      devicePublicKey: "key",
+      membershipId: "member",
+      role: "owner",
+    } as const;
+    const refreshed = serverFromHost(host, { ...server, connectionPath: { kind: "relay" } }, "local");
+    expect(refreshed).toMatchObject({ name: "Renamed", state: "online", connectionPath: { kind: "relay" } });
+  });
 });

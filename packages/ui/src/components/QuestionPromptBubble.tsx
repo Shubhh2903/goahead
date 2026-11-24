@@ -5,6 +5,7 @@ import {
   Bubble,
   BubbleContent,
   Button,
+  Check,
   ChevronLeft,
   ChevronRight,
   CircleCheck,
@@ -42,6 +43,7 @@ export interface QuestionPromptBubbleProps {
 }
 
 type QuestionAnswers = Record<string, string>;
+type QuestionPicks = Record<string, string[]>;
 type QuestionFlags = Record<string, boolean>;
 type PageContent = { kind: "question"; index: number } | { kind: "resolution"; resolution: AgentPromptResolution };
 
@@ -126,7 +128,9 @@ export function QuestionPromptBubble(props: QuestionPromptBubbleProps) {
   };
   const initialPage = untrack(initialContent);
   const [step, setStep] = createSignal(0);
-  const [answers, setAnswers] = createSignal<QuestionAnswers>({});
+  const [answers, setAnswers] = createSignal<QuestionPicks>({});
+  // The options ticked on a multi-select question. They become its answer on confirm.
+  const [picks, setPicks] = createSignal<QuestionPicks>({});
   const [customAnswers, setCustomAnswers] = createSignal<QuestionFlags>({});
   const [customDrafts, setCustomDrafts] = createSignal<QuestionAnswers>({});
   const [skipped, setSkipped] = createSignal<QuestionFlags>({});
@@ -249,19 +253,19 @@ export function QuestionPromptBubble(props: QuestionPromptBubbleProps) {
   }
 
   function isResolved(question: AgentPromptQuestion, nextAnswers = answers(), nextSkipped = skipped()): boolean {
-    return Boolean(nextSkipped[question.id] || nextAnswers[question.id]?.trim());
+    return Boolean(nextSkipped[question.id] || nextAnswers[question.id]?.length);
   }
 
-  function resultFor(nextAnswers: QuestionAnswers, nextSkipped: QuestionFlags): Record<string, string[]> {
+  function resultFor(nextAnswers: QuestionPicks, nextSkipped: QuestionFlags): Record<string, string[]> {
     return Object.fromEntries(
       props.questions.map((question) => [
         question.id,
-        nextSkipped[question.id] ? [] : [nextAnswers[question.id]?.trim() ?? ""],
+        nextSkipped[question.id] ? [] : (nextAnswers[question.id] ?? []).map((value) => value.trim()),
       ]),
     );
   }
 
-  function nextUnresolvedIndex(currentIndex: number, nextAnswers: QuestionAnswers, nextSkipped: QuestionFlags): number {
+  function nextUnresolvedIndex(currentIndex: number, nextAnswers: QuestionPicks, nextSkipped: QuestionFlags): number {
     for (let offset = 1; offset <= questionCount(); offset += 1) {
       const candidate = (currentIndex + offset) % questionCount();
       const question = props.questions[candidate];
@@ -293,7 +297,7 @@ export function QuestionPromptBubble(props: QuestionPromptBubbleProps) {
     props.onResolutionPresented?.();
   }
 
-  function finishQuestion(questionIndex: number, nextAnswers: QuestionAnswers, nextSkipped: QuestionFlags): void {
+  function finishQuestion(questionIndex: number, nextAnswers: QuestionPicks, nextSkipped: QuestionFlags): void {
     setAnswers(nextAnswers);
     setSkipped(nextSkipped);
     const unresolvedIndex = nextUnresolvedIndex(questionIndex, nextAnswers, nextSkipped);
@@ -305,19 +309,60 @@ export function QuestionPromptBubble(props: QuestionPromptBubbleProps) {
   }
 
   function chooseOption(question: AgentPromptQuestion, questionIndex: number, value: string): void {
+    if (question.multiSelect) {
+      togglePick(question, value);
+      return;
+    }
     performWhenReady(() => {
-      const nextAnswers = { ...answers(), [question.id]: value };
+      const nextAnswers = { ...answers(), [question.id]: [value] };
       const nextSkipped = { ...skipped(), [question.id]: false };
       setCustomAnswers((current) => ({ ...current, [question.id]: false }));
       finishQuestion(questionIndex, nextAnswers, nextSkipped);
     });
   }
 
+  function togglePick(question: AgentPromptQuestion, value: string): void {
+    performWhenReady(() => {
+      const current = picks()[question.id] ?? [];
+      const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+      setPicks((all) => ({ ...all, [question.id]: next }));
+      // A confirmed answer that no longer matches the ticks must be confirmed again.
+      setAnswers(({ [question.id]: _changed, ...rest }) => rest);
+    });
+  }
+
+  function isPicked(question: AgentPromptQuestion, label: string): boolean {
+    return picks()[question.id]?.includes(label) ?? false;
+  }
+
+  /** The ticked options, in the order the question lists them, then the typed answer. */
+  function multiSelectAnswer(question: AgentPromptQuestion): string[] {
+    const picked = picks()[question.id] ?? [];
+    const labels = (question.options ?? []).map((option) => option.label).filter((label) => picked.includes(label));
+    const custom = customDrafts()[question.id]?.trim();
+    return custom ? [...labels, custom] : labels;
+  }
+
+  function confirmMultiSelect(question: AgentPromptQuestion, questionIndex: number): void {
+    performWhenReady(() => {
+      const values = multiSelectAnswer(question);
+      if (values.length === 0) return;
+      const nextAnswers = { ...answers(), [question.id]: values };
+      const nextSkipped = { ...skipped(), [question.id]: false };
+      setCustomAnswers((current) => ({ ...current, [question.id]: Boolean(customDrafts()[question.id]?.trim()) }));
+      finishQuestion(questionIndex, nextAnswers, nextSkipped);
+    });
+  }
+
   function commitCustomAnswer(question: AgentPromptQuestion, questionIndex: number): void {
+    if (question.multiSelect) {
+      confirmMultiSelect(question, questionIndex);
+      return;
+    }
     performWhenReady(() => {
       const value = customDrafts()[question.id]?.trim() ?? "";
       if (!value) return;
-      const nextAnswers = { ...answers(), [question.id]: value };
+      const nextAnswers = { ...answers(), [question.id]: [value] };
       const nextSkipped = { ...skipped(), [question.id]: false };
       setCustomAnswers((current) => ({ ...current, [question.id]: true }));
       finishQuestion(questionIndex, nextAnswers, nextSkipped);
@@ -410,14 +455,22 @@ export function QuestionPromptBubble(props: QuestionPromptBubbleProps) {
                 {t("prompt.inputRequired")}
               </Badge>
             </header>
-            <Questionnaire.Choices role="radiogroup" aria-label={current().question}>
+            <Questionnaire.Choices
+              role={current().multiSelect ? "group" : "radiogroup"}
+              aria-label={current().question}
+            >
               <ItemGroup class="question-prompt-options">
                 <For each={current().options ?? []}>
                   {(option, optionIndex) => (
                     <Questionnaire.Choice
                       name={current().id}
                       value={option.label}
-                      checked={answers()[current().id] === option.label && !customAnswers()[current().id]}
+                      multiple={current().multiSelect === true}
+                      checked={
+                        current().multiSelect
+                          ? isPicked(current(), option.label)
+                          : answers()[current().id]?.[0] === option.label && !customAnswers()[current().id]
+                      }
                       disabled={busy()}
                       onChange={(value) => chooseOption(current(), pageProps.index, value)}
                     >
@@ -432,7 +485,11 @@ export function QuestionPromptBubble(props: QuestionPromptBubbleProps) {
                           </Show>
                         </ItemContent>
                         <span class="question-prompt-choice-arrow" aria-hidden="true">
-                          <ChevronRight />
+                          <Show when={current().multiSelect} fallback={<ChevronRight />}>
+                            <Show when={isPicked(current(), option.label)}>
+                              <Check />
+                            </Show>
+                          </Show>
                         </span>
                       </Item>
                     </Questionnaire.Choice>
@@ -475,8 +532,18 @@ export function QuestionPromptBubble(props: QuestionPromptBubbleProps) {
                         {t("common.sending")}
                       </span>
                     </Show>
+                    <Show when={current().multiSelect}>
+                      <Button
+                        type="button"
+                        size="xs"
+                        disabled={busy() || multiSelectAnswer(current()).length === 0}
+                        onClick={() => confirmMultiSelect(current(), pageProps.index)}
+                      >
+                        {t("prompt.question.submitAnswer")}
+                      </Button>
+                    </Show>
                     {/* A software keyboard has no modifier chord, so the modifier mode needs a button. */}
-                    <Show when={(props.sendShortcut ?? "enter") !== "enter"}>
+                    <Show when={!current().multiSelect && (props.sendShortcut ?? "enter") !== "enter"}>
                       <Button
                         type="button"
                         size="xs"
