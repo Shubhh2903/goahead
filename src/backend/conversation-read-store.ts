@@ -1,33 +1,34 @@
 import { randomUUID } from "node:crypto";
-import { CHAT_VISUAL_ITEM_TYPE_PREFIX } from "@openbot/contracts/chat-visual";
+import {
+  itemTypeCountsAsUnread,
+  READ_EXCLUDED_ITEM_TYPE_PREFIXES,
+  READ_EXCLUDED_ITEM_TYPES,
+} from "@openbot/contracts/conversation-read";
 import {
   type AgentSummary,
-  CONTEXT_RESET_ITEM_TYPE,
-  CONVERSATION_PLAN_ITEM_TYPE,
   type ConversationReadState,
   type ConversationSnapshot,
-  HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX,
   isLocalOnlyConversationMessage,
-  MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX,
-  ROUTINE_EVENT_ITEM_TYPE_PREFIX,
-  ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX,
-  SKILL_EVENT_ITEM_TYPE_PREFIX,
 } from "@openbot/contracts/ipc";
 import { isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
-import { localOnlyItemTypeSqlFilter } from "./database/conversation-queries";
+import {
+  type ConversationMarkerExclusions,
+  localOnlyItemTypeSqlFilter,
+  ORDER_KEY_COLUMNS,
+  ORDER_KEY_DESC,
+  ORDERED_THREAD_MESSAGES,
+} from "./database/conversation-queries";
+import { cachedStatement } from "./database/statement-cache";
 import type { OpenBotDatabase } from "./openbot-database";
 
-export interface ConversationMarkerExclusions {
-  excludeRoutineEvents?: boolean;
-  excludeRoutineRunEvents?: boolean;
-  excludeHostedSiteEvents?: boolean;
-  /**
-   * A reader on another device or computer (Team API, phone, Live Activity): a note that stays on
-   * this computer (`isLocalOnlyConversationMessage`) is not unread and is not a read cursor.
-   */
-  excludeLocalOnly?: boolean;
-}
+export type { ConversationMarkerExclusions } from "./database/conversation-queries";
+
+const UNREAD_FILTER = [
+  "author != 'user'",
+  ...READ_EXCLUDED_ITEM_TYPES.map((itemType) => `COALESCE(item_type, '') != '${itemType}'`),
+  ...READ_EXCLUDED_ITEM_TYPE_PREFIXES.map((prefix) => `COALESCE(item_type, '') NOT LIKE '${prefix}%'`),
+].join(" AND ");
 
 export class ConversationReadStore {
   constructor(readonly database: OpenBotDatabase) {}
@@ -134,11 +135,6 @@ export class ConversationReadStore {
     );
   }
 
-  /**
-   * Marks a database boundary without loading the thread messages. The public conversation reader
-   * uses this for marker actions because a marker can target a message older than the working
-   * cache. The ordering key keeps the monotonic cursor rule from the snapshot implementation.
-   */
   markReadForThread(
     memberId: string,
     threadId: string | null,
@@ -147,9 +143,7 @@ export class ConversationReadStore {
   ): ConversationReadState {
     if (!threadId) return emptyReadState();
     const requestedKey = throughMessageId ? this.#messageOrderKey(threadId, throughMessageId) : undefined;
-    if (throughMessageId && !requestedKey) {
-      throw new Error(sourceText("error.backend.readBoundaryUnavailable"));
-    }
+    if (throughMessageId && !requestedKey) return this.readStateForThread(memberId, threadId, options);
     const stored = this.#storedCursor(threadId, memberId);
     let nextThroughMessageId = throughMessageId;
     if (stored && (!throughMessageId || this.#isAfter(threadId, stored, requestedKey))) {
@@ -169,20 +163,22 @@ export class ConversationReadStore {
     options: ConversationMarkerExclusions = {},
   ): ConversationReadState {
     if (!snapshot.threadId) return emptyReadState();
-    // Explicit user action only. Ordinary read acknowledgements remain monotonic.
     this.#saveCursor(snapshot.threadId, memberId, null, "marked");
     return stateFromSnapshot(snapshot, null, options);
   }
 
-  /** Marks a thread unread without reading its message rows. */
   markUnreadForThread(
     memberId: string,
     threadId: string | null,
+    fromMessageId: string | null = null,
     options: ConversationMarkerExclusions = {},
   ): ConversationReadState {
     if (!threadId) return emptyReadState();
-    this.#saveCursor(threadId, memberId, null, "marked");
-    return this.#stateFromDatabase(threadId, null, options);
+    const fromKey = fromMessageId ? this.#messageOrderKey(threadId, fromMessageId) : undefined;
+    if (fromMessageId && !fromKey) throw new Error(sourceText("error.backend.readBoundaryUnavailable"));
+    const throughMessageId = fromKey ? this.#messageBefore(threadId, fromKey) : null;
+    this.#saveCursor(threadId, memberId, throughMessageId, "marked");
+    return this.#withSupportedCursor(threadId, this.#stateFromDatabase(threadId, throughMessageId, options), options);
   }
 
   #withSupportedCursor(
@@ -197,12 +193,11 @@ export class ConversationReadStore {
   }
 
   #storedCursor(threadId: string, memberId: string): string | null | undefined {
-    const row = this.database.connection
-      .prepare(
-        `SELECT through_message_id FROM projection_thread_reads
-         WHERE thread_id = ? AND member_id = ?`,
-      )
-      .get(threadId, memberId);
+    const row = cachedStatement(
+      this.database.connection,
+      `SELECT through_message_id FROM projection_thread_reads
+       WHERE thread_id = ? AND member_id = ?`,
+    ).get(threadId, memberId);
     if (row === undefined) return undefined;
     if (!isDynamicRecord(row)) {
       throw new Error("The stored conversation read state is malformed.");
@@ -223,48 +218,63 @@ export class ConversationReadStore {
     );
   }
 
-  #messageOrderKey(
-    threadId: string,
-    messageId: string,
-  ): [createdAt: string, ordinal: number, messageId: string] | undefined {
+  #messageOrderKey(threadId: string, messageId: string): MessageOrderKey | undefined {
     const row = this.database.connection
       .prepare(
-        `SELECT created_at, ordinal, message_id FROM projection_thread_messages
-         WHERE thread_id = ? AND message_id = ? LIMIT 1`,
+        `${ORDERED_THREAD_MESSAGES}
+         SELECT ${ORDER_KEY_COLUMNS} FROM ordered WHERE message_id = ?`,
       )
       .get(threadId, messageId);
     if (row === undefined) return undefined;
-    if (!isDynamicRecord(row) || !isString(row.created_at) || !isNumber(row.ordinal) || !isString(row.message_id)) {
+    if (
+      !isDynamicRecord(row) ||
+      !isString(row.group_start) ||
+      !isNumber(row.group_first) ||
+      !isString(row.group_id) ||
+      !isNumber(row.turn_rank) ||
+      !isString(row.created_at) ||
+      !isNumber(row.ordinal) ||
+      !isString(row.message_id)
+    ) {
       throw new Error("The conversation message order is malformed.");
     }
-    return [row.created_at, row.ordinal, row.message_id];
+    return [row.group_start, row.group_first, row.group_id, row.turn_rank, row.created_at, row.ordinal, row.message_id];
   }
 
-  #isAfter(
-    threadId: string,
-    candidateMessageId: string,
-    boundary: [createdAt: string, ordinal: number, messageId: string] | undefined,
-  ): boolean {
+  #isAfter(threadId: string, candidateMessageId: string, boundary: MessageOrderKey | undefined): boolean {
     if (!boundary) return false;
     return Boolean(
       this.database.connection
         .prepare(
-          `SELECT 1 FROM projection_thread_messages
-           WHERE thread_id = ? AND message_id = ?
-             AND (created_at, ordinal, message_id) > (?, ?, ?)
-           LIMIT 1`,
+          `${ORDERED_THREAD_MESSAGES}
+           SELECT 1 FROM ordered
+           WHERE message_id = ? AND (${ORDER_KEY_COLUMNS}) > (?, ?, ?, ?, ?, ?, ?)`,
         )
         .get(threadId, candidateMessageId, ...boundary),
     );
   }
 
+  #messageBefore(threadId: string, boundary: MessageOrderKey): string | null {
+    const row = this.database.connection
+      .prepare(
+        `${ORDERED_THREAD_MESSAGES}
+         SELECT message_id FROM ordered
+         WHERE (${ORDER_KEY_COLUMNS}) < (?, ?, ?, ?, ?, ?, ?)
+         ORDER BY ${ORDER_KEY_DESC} LIMIT 1`,
+      )
+      .get(threadId, ...boundary);
+    if (row === undefined) return null;
+    if (!isDynamicRecord(row) || !isString(row.message_id)) {
+      throw new Error("The previous conversation message is malformed.");
+    }
+    return row.message_id;
+  }
+
   #latestMessageId(threadId: string): string | null {
     const row = this.database.connection
       .prepare(
-        `SELECT message_id FROM projection_thread_messages
-         WHERE thread_id = ?
-         ORDER BY created_at DESC, ordinal DESC, message_id DESC
-         LIMIT 1`,
+        `${ORDERED_THREAD_MESSAGES}
+         SELECT message_id FROM ordered ORDER BY ${ORDER_KEY_DESC} LIMIT 1`,
       )
       .get(threadId);
     if (row === undefined) return null;
@@ -279,57 +289,25 @@ export class ConversationReadStore {
     throughMessageId: string | null,
     options: ConversationMarkerExclusions,
   ): ConversationReadState {
-    const boundary = throughMessageId
-      ? this.database.connection
-          .prepare(
-            `SELECT created_at, ordinal, message_id FROM projection_thread_messages
-             WHERE thread_id = ? AND message_id = ?`,
-          )
-          .get(threadId, throughMessageId)
-      : undefined;
-    let boundaryKey: [createdAt: string, ordinal: number] | null = null;
-    if (boundary !== undefined) {
-      if (!isDynamicRecord(boundary) || !isString(boundary.created_at) || !isNumber(boundary.ordinal))
-        throw new Error("The conversation read boundary is malformed.");
-      boundaryKey = [boundary.created_at, boundary.ordinal];
-    }
-    const afterBoundary = boundaryKey ? `AND (created_at, ordinal, message_id) > (?, ?, ?)` : "";
-    const parameters = boundaryKey ? [threadId, ...boundaryKey, throughMessageId] : [threadId];
-    const unreadFilter = `author != 'user'
-      AND COALESCE(item_type, '') != 'commentary'
-      AND COALESCE(item_type, '') != 'plan'
-      AND COALESCE(item_type, '') != 'agent_attachment'
-      AND COALESCE(item_type, '') NOT LIKE '${CHAT_VISUAL_ITEM_TYPE_PREFIX}%'
-      AND COALESCE(item_type, '') NOT LIKE '${SKILL_EVENT_ITEM_TYPE_PREFIX}%' AND COALESCE(item_type, '') NOT LIKE '${ROUTINE_EVENT_ITEM_TYPE_PREFIX}%'
-      AND COALESCE(item_type, '') NOT LIKE '${ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX}%'
-      AND COALESCE(item_type, '') NOT LIKE '${HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX}%'
-      AND COALESCE(item_type, '') NOT LIKE '${MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX}%'
-      AND COALESCE(item_type, '') != '${CONTEXT_RESET_ITEM_TYPE}'
-      ${options.excludeLocalOnly ? localOnlyItemTypeSqlFilter("item_type") : ""}`;
-    const countRow = this.database.connection
-      .prepare(
-        `SELECT COUNT(*) AS unread_count FROM projection_thread_messages
-         WHERE thread_id = ? ${afterBoundary} AND ${unreadFilter}`,
-      )
-      .get(...parameters);
+    const boundaryKey = throughMessageId ? this.#messageOrderKey(threadId, throughMessageId) : undefined;
+    const afterBoundary = boundaryKey ? `AND (${ORDER_KEY_COLUMNS}) > (?, ?, ?, ?, ?, ?, ?)` : "";
+    const parameters = boundaryKey ? [threadId, ...boundaryKey] : [threadId];
     const firstRow = this.database.connection
       .prepare(
-        `SELECT message_id FROM projection_thread_messages
-         WHERE thread_id = ? ${afterBoundary} AND ${unreadFilter}
-         ORDER BY created_at, ordinal, message_id LIMIT 1`,
+        `${ORDERED_THREAD_MESSAGES}
+         SELECT message_id, COUNT(*) OVER () AS unread_count FROM ordered
+         WHERE 1 = 1 ${afterBoundary} AND ${UNREAD_FILTER}
+           ${options.excludeLocalOnly ? localOnlyItemTypeSqlFilter("item_type") : ""}
+         ORDER BY ${ORDER_KEY_COLUMNS} LIMIT 1`,
       )
       .get(...parameters);
-    if (!isDynamicRecord(countRow) || !isNumber(countRow.unread_count)) {
+    if (firstRow === undefined) return { unreadCount: 0, firstUnreadMessageId: null, throughMessageId };
+    if (!isDynamicRecord(firstRow) || !isString(firstRow.message_id) || !isNumber(firstRow.unread_count)) {
       throw new Error("The conversation unread count is malformed.");
     }
-    if (firstRow !== undefined && (!isDynamicRecord(firstRow) || !isString(firstRow.message_id))) {
-      throw new Error("The first unread conversation message is malformed.");
-    }
-    const firstUnreadMessageId =
-      firstRow !== undefined && isDynamicRecord(firstRow) && isString(firstRow.message_id) ? firstRow.message_id : null;
     return {
-      unreadCount: countRow.unread_count,
-      firstUnreadMessageId,
+      unreadCount: firstRow.unread_count,
+      firstUnreadMessageId: firstRow.message_id,
       throughMessageId,
     };
   }
@@ -370,8 +348,6 @@ export class ConversationReadStore {
     if (this.#storedCursor(threadId, memberId) === throughMessageId) return;
     const updatedAt = new Date().toISOString();
     this.database.dispatch(
-      // A cursor can be visited again after an explicit mark-unread. Do not reuse
-      // an old command receipt and silently skip the next read/unread transition.
       `thread-read:${event}:${threadId}:${memberId}:${randomUUID()}`,
       [
         {
@@ -410,16 +386,7 @@ function stateFromSnapshot(
     .filter(
       (message) =>
         message.author !== "user" &&
-        message.itemType !== "commentary" &&
-        message.itemType !== CONVERSATION_PLAN_ITEM_TYPE &&
-        message.itemType !== "agent_attachment" &&
-        !message.itemType?.startsWith(CHAT_VISUAL_ITEM_TYPE_PREFIX) &&
-        !message.itemType?.startsWith(SKILL_EVENT_ITEM_TYPE_PREFIX) &&
-        !message.itemType?.startsWith(ROUTINE_EVENT_ITEM_TYPE_PREFIX) &&
-        !message.itemType?.startsWith(ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX) &&
-        !message.itemType?.startsWith(HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX) &&
-        !message.itemType?.startsWith(MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX) &&
-        message.itemType !== CONTEXT_RESET_ITEM_TYPE &&
+        itemTypeCountsAsUnread(message.itemType) &&
         !(options.excludeLocalOnly === true && isLocalOnlyConversationMessage(message)),
     );
   return {
@@ -428,6 +395,16 @@ function stateFromSnapshot(
     throughMessageId,
   };
 }
+
+type MessageOrderKey = [
+  groupStart: string,
+  groupFirst: number,
+  groupId: string,
+  turnRank: number,
+  createdAt: string,
+  ordinal: number,
+  messageId: string,
+];
 
 function emptyReadState(): ConversationReadState {
   return { unreadCount: 0, firstUnreadMessageId: null, throughMessageId: null };

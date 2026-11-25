@@ -1,34 +1,94 @@
+import { stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { isAbsolute } from "node:path";
 import { type AgentSummary, workspaceAccessEnforced } from "@openbot/contracts/ipc";
+import { Effect } from "effect";
+import { isPathInside } from "../path-containment";
 import { existingProjectFolders } from "./project-folders";
 
-type SandboxedAgent = Pick<AgentSummary, "access" | "provider" | "workspacePath" | "projectFolders">;
+type SandboxedAgent = Pick<
+  AgentSummary,
+  "id" | "access" | "additionalFolders" | "provider" | "workspacePath" | "projectFolders"
+>;
 
-/**
- * The sandbox mode sent with each thread. A `workspace` agent can write only in its workspace, the
- * shared folder and the temporary folders. Reads and the network stay open, as the Access setting
- * says. A write outside asks for approval, and `AttentionRegistry` always shows that approval.
- *
- * Codex takes the mode itself. Claude gets an explicit `workspaceOnly` flag instead and applies its
- * own sandbox (`claude-workspace-sandbox.ts`). A provider whose `workspaceEnforcement` is
- * `confined-process` ignores it: `ProviderRuntime` runs such an agent in a sandboxed process of its
- * own (`process-confinement.ts`).
- */
 export function codexSandboxMode(agent: SandboxedAgent): "workspace-write" | "danger-full-access" {
   return workspaceAccessEnforced(agent) ? "workspace-write" : "danger-full-access";
 }
 
+export type CodexApprovalPolicy = "untrusted" | "on-request";
+
+export function codexApprovalPolicy(agent: Pick<AgentSummary, "access">, asksFirst: boolean): CodexApprovalPolicy {
+  return asksFirst && !workspaceAccessEnforced(agent) ? "untrusted" : "on-request";
+}
+
+const foundFolders = new Map<string, boolean>();
+
+type FolderAgent = Pick<AgentSummary, "id" | "additionalFolders">;
+
+let channelFoldersOf: (agentId: string) => readonly string[] = () => [];
+
+export function setChannelFolderSource(source: (agentId: string) => readonly string[]): void {
+  channelFoldersOf = source;
+}
+
+export function effectiveAgentFolders(agent: FolderAgent): string[] {
+  const own = agent.additionalFolders ?? [];
+  return [...own, ...channelFoldersOf(agent.id).filter((folder) => !own.includes(folder))];
+}
+
+export const checkAgentFolders = Effect.fn("checkAgentFolders")(function* (agent: FolderAgent) {
+  const folders = effectiveAgentFolders(agent);
+  const found = yield* Effect.promise(() =>
+    Promise.all(
+      folders.map((folder) =>
+        stat(folder).then(
+          (stats) => stats.isDirectory(),
+          () => false,
+        ),
+      ),
+    ),
+  );
+  for (const [index, folder] of folders.entries()) foundFolders.set(folder, found[index] === true);
+});
+
+export function existingAgentFolders(agent: FolderAgent): string[] {
+  return effectiveAgentFolders(agent).filter((folder) => foundFolders.get(folder) === true);
+}
+
 /**
- * The folders a Workspace only agent may write, besides the temporary folders. The same list is each
- * provider's working folders: Claude and the ACP clients get it as additional directories, and
- * `ProviderRuntime` confines a `confined-process` provider to it. Project folders that no longer exist
- * are left out.
+ * The folders a Workspace only agent may write, besides the temporary folders: the workspace, the
+ * shared folder, the agent's additional folders, and its GoAhead project folders that still exist.
  */
 export function workspaceWritableRoots(
-  agent: Pick<AgentSummary, "workspacePath" | "projectFolders">,
+  agent: Pick<AgentSummary, "id" | "additionalFolders" | "workspacePath" | "projectFolders">,
   sharedRoot: string,
 ) {
-  return [agent.workspacePath, sharedRoot, ...existingProjectFolders(agent).map((folder) => folder.path)];
+  const roots = [agent.workspacePath, sharedRoot, ...existingAgentFolders(agent)];
+  for (const folder of existingProjectFolders(agent)) if (!roots.includes(folder.path)) roots.push(folder.path);
+  return roots;
+}
+
+export function workspaceExcludedFolders(agent: Pick<AgentSummary, "access" | "excludedFolders">): string[] {
+  return workspaceAccessEnforced(agent) ? (agent.excludedFolders ?? []) : [];
+}
+
+export function confinedWritesAllowed(
+  agent: Pick<
+    AgentSummary,
+    "id" | "access" | "additionalFolders" | "excludedFolders" | "workspacePath" | "projectFolders"
+  >,
+  sharedRoot: string,
+  paths: readonly string[],
+): boolean {
+  if (!workspaceAccessEnforced(agent) || paths.length === 0) return false;
+  const roots = workspaceWritableRoots(agent, sharedRoot);
+  const excluded = workspaceExcludedFolders(agent);
+  return paths.every(
+    (path) =>
+      isAbsolute(path) &&
+      roots.some((root) => isPathInside(root, path)) &&
+      !excluded.some((folder) => isPathInside(folder, path)),
+  );
 }
 
 export type CodexSandboxPolicy =
@@ -42,32 +102,21 @@ export type CodexSandboxPolicy =
       excludeSlashTmp: boolean;
     };
 
-/**
- * The temporary folders that a Workspace only agent may write on every provider, as Codex allows them
- * (`$TMPDIR` and `/tmp`). Compilers, package managers, test runners and the providers need them.
- */
 export function workspaceTemporaryPaths(platform: NodeJS.Platform = process.platform): string[] {
   return [...new Set(platform === "win32" ? [tmpdir()] : ["/tmp", tmpdir()])];
 }
 
-/** Sent with each turn. Codex keeps it for the turns after, so a changed setting applies at the next turn. */
 export function codexSandboxPolicy(agent: SandboxedAgent, sharedRoot: string): CodexSandboxPolicy {
   if (!workspaceAccessEnforced(agent)) return { type: "dangerFullAccess" };
   return {
     type: "workspaceWrite",
     writableRoots: workspaceWritableRoots(agent, sharedRoot),
     networkAccess: true,
-    // Compilers, package managers and test runners write temporary files, so the temporary folders stay
-    // writable. The settings note and the agent instructions name them. The `config.toml` defaults agree.
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };
 }
 
-/**
- * The same roots for the session default, in the `config.toml` shape. `thread/start` takes only the
- * sandbox mode, and without this the session would allow the workspace alone until its first turn.
- */
 export function codexSandboxConfig(
   agent: SandboxedAgent,
   sharedRoot: string,

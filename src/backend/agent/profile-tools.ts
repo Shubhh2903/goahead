@@ -1,13 +1,34 @@
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   AGENT_ACCESS_MODES,
+  AGENT_BACKUP_MODEL_LIMIT,
   AGENT_PROVIDERS,
   AGENT_REASONING_EFFORTS,
+  type AgentAccess,
+  type AgentSummary,
   AVATAR_HUES,
   AVATAR_SEED_PATTERN,
+  type AvatarHue,
+  agentComputerUseEnabled,
   isAvatarHue,
+  isProviderAccountId,
+  type UpdateAgentInput,
+  workspaceAccessEnforced,
 } from "@openbot/contracts/ipc";
 import { z } from "zod";
+
+const AVATAR_HUE_NAMES = {
+  0: "red",
+  30: "orange",
+  55: "yellow",
+  100: "lime",
+  150: "green",
+  185: "cyan",
+  215: "blue",
+  245: "indigo",
+  280: "violet",
+  320: "magenta",
+} as const satisfies Record<AvatarHue, string>;
 
 const profileFields = {
   name: z.string().trim().min(1).max(INPUT_LIMITS.agentName),
@@ -15,17 +36,16 @@ const profileFields = {
   description: z
     .string()
     .max(INPUT_LIMITS.agentDescription)
-    .describe(
-      `Standing instructions, at most ${INPUT_LIMITS.agentDescription} characters. Shorten longer instructions before calling this tool.`,
-    ),
+    .describe(`A short summary of the agent's work, at most ${INPUT_LIMITS.agentDescription} characters.`),
   avatarSeed: z.string().regex(AVATAR_SEED_PATTERN, "Invalid avatar seed."),
-  // A number schema, not z.literal: Gemini rejects a request whose tool schema has a non-string enum.
   avatarHue: z
     .number()
     .int()
     .refine(isAvatarHue, "Invalid avatar hue.")
     .nullable()
-    .describe(`One of ${AVATAR_HUES.join(", ")}, or null for an automatic hue.`),
+    .describe(
+      `Color, only ${AVATAR_HUES.map((hue) => `${hue} ${AVATAR_HUE_NAMES[hue]}`).join(", ")}, or null for automatic. Else use the nearest.`,
+    ),
 };
 
 export const createAgentToolSchema = z
@@ -38,7 +58,7 @@ export const createAgentToolSchema = z
     provider: z
       .enum(AGENT_PROVIDERS)
       .describe(
-        "Provider for the new agent. Omit provider and model to give it your own provider and model. See list_models.",
+        "Provider for the new agent. Omit provider and model for your provider, model and account. See list_models.",
       )
       .optional(),
     model: z
@@ -51,7 +71,7 @@ export const createAgentToolSchema = z
     reasoningEffort: z
       .enum(AGENT_REASONING_EFFORTS)
       .describe(
-        "Reasoning effort that the model supports, from list_models. Omit to use your own effort when the new agent gets your model, else the model's default.",
+        "An effort of the model from list_models. Omit for your own effort when the new agent gets your model, else the model's default.",
       )
       .optional(),
   })
@@ -60,6 +80,39 @@ export const createAgentToolSchema = z
 export const listModelsToolSchema = z
   .object({
     provider: z.enum(AGENT_PROVIDERS).describe("Show only the models of this provider.").optional(),
+    query: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .describe("Words that a model id or name contains. Searches all models.")
+      .optional(),
+  })
+  .strict();
+
+const providerAccountId = z.string().refine(isProviderAccountId, "Use an account id from list_models.");
+
+const backupModelToolSchema = z
+  .object({
+    provider: z.enum(AGENT_PROVIDERS),
+    model: z.string().trim().min(1).max(INPUT_LIMITS.modelName).describe("Model id from list_models."),
+    providerAccountId: providerAccountId
+      .describe("Account id from list_models. Omit it for the provider's own sign-in.")
+      .optional(),
+  })
+  .strict();
+
+const backupModelsToolSchema = z
+  .object({
+    automatic: z
+      .boolean()
+      .describe(
+        "true: when a usage limit holds a message, or a provider error fails a turn before it did work, the agent moves at once to the first ready model in order. false: it asks in the chat first.",
+      ),
+    order: z
+      .array(backupModelToolSchema)
+      .max(AGENT_BACKUP_MODEL_LIMIT)
+      .describe("The backup models to try, first to last. They use the agent's reasoning effort where they can."),
   })
   .strict();
 
@@ -77,7 +130,7 @@ export const updateProfileToolSchema = z
       .min(1)
       .max(INPUT_LIMITS.path)
       .describe(
-        "Local PNG, JPEG, or WebP file, up to 512 KB. Resize or compress a copy with your available tools first if needed. Use an absolute path or a path relative to your workspace. Do not combine with avatarSeed or avatarHue.",
+        "Local PNG, JPEG, or WebP image up to 512 KB, absolute or relative to your workspace. It replaces the generated face; never use it for a color. Not with avatarSeed.",
       )
       .optional(),
     provider: z
@@ -88,7 +141,19 @@ export const updateProfileToolSchema = z
     reasoningEffort: z
       .enum(AGENT_REASONING_EFFORTS)
       .describe(
-        "New reasoning effort that the model supports, from list_models. Omit to keep the current effort when the model supports it, else to use the model's default.",
+        "New effort of the model from list_models. Omit to keep the current effort when the model supports it, else the model's default.",
+      )
+      .optional(),
+    providerAccountId: providerAccountId
+      .nullable()
+      .describe(
+        "Account id from list_models ('default' is the provider's own sign-in), or null for it (also after a provider change). A runtime change during work waits as pendingRuntime for the next turn. With pooled accounts, a named account stays until a limit; null gives it to the pool.",
+      )
+      .optional(),
+    backupModels: backupModelsToolSchema
+      .nullable()
+      .describe(
+        "Replaces the agent's backup models. null removes them: the agent asks in the chat, with no saved order.",
       )
       .optional(),
     access: z
@@ -100,6 +165,27 @@ export const updateProfileToolSchema = z
       .describe("false turns Computer Use off for the agent. Only the user can turn it on.")
       .optional(),
     notifications: z.boolean().describe("Whether the user gets notifications for the agent.").optional(),
+  })
+  .strict();
+
+const UPDATE_AGENTS_LIMIT = 100;
+
+const updateProfileFields = updateProfileToolSchema.shape;
+
+export const updateAgentsToolSchema = z
+  .object({
+    agentIds: z
+      .array(updateProfileFields.agentId)
+      .min(1)
+      .max(UPDATE_AGENTS_LIMIT)
+      .refine((ids) => new Set(ids).size === ids.length, "Pass each agent id once.")
+      .describe("Stable ids from list_agents of the agents to change."),
+    provider: updateProfileFields.provider,
+    model: updateProfileFields.model,
+    reasoningEffort: updateProfileFields.reasoningEffort,
+    access: updateProfileFields.access,
+    computerUse: updateProfileFields.computerUse,
+    notifications: updateProfileFields.notifications,
   })
   .strict();
 
@@ -120,17 +206,38 @@ export const PROFILE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read_agent",
   "create_agent",
   "update_profile",
+  "update_agents",
+  "set_browser_profile",
+  "set_commit_co_author",
+  "delete_agent",
 ]);
 
-/**
- * Describe a failed profile tool call. Schema failures omit submitted instructions and unknown field
- * names. A schema parsed with `reportInput` gives the checked value, so a trimmed field reports its
- * trimmed length.
- */
-export function profileToolErrorMessage(error: unknown): string {
+export function widensAgentSettings(
+  target: AgentSummary,
+  access: AgentAccess | undefined,
+  computerUse: boolean | undefined,
+): boolean {
+  return (
+    (access === "full" && workspaceAccessEnforced(target)) || (computerUse === true && !agentComputerUseEnabled(target))
+  );
+}
+
+export function restrictionInput(
+  access: AgentAccess | undefined,
+  computerUse: boolean | undefined,
+): Pick<UpdateAgentInput, "access" | "computerUse"> {
+  return { ...(access === "workspace" ? { access } : {}), ...(computerUse === false ? { computerUse } : {}) };
+}
+
+const UNSUPPORTED_PROFILE_FIELDS = "Remove unsupported profile fields.";
+
+export function profileToolErrorMessage(
+  error: unknown,
+  unsupportedFields: (path: readonly PropertyKey[]) => string = () => UNSUPPORTED_PROFILE_FIELDS,
+): string {
   if (!(error instanceof z.ZodError)) return error instanceof Error ? error.message : String(error);
   const details = error.issues.map((issue) => {
-    if (issue.code === "unrecognized_keys") return "Remove unsupported profile fields.";
+    if (issue.code === "unrecognized_keys") return unsupportedFields(issue.path);
     const field = issue.path.join(".") || "arguments";
     if (issue.code === "too_big" && issue.origin === "string" && typeof issue.input === "string") {
       return `${field} must have at most ${issue.maximum} characters; received ${issue.input.length}. Shorten it and retry.`;
@@ -138,4 +245,26 @@ export function profileToolErrorMessage(error: unknown): string {
     return `${field}: ${issue.message}`;
   });
   return `${details.join(" ")} Correct the arguments and retry.`;
+}
+
+const PROFILE_TOOL_FIELDS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["create_agent", Object.keys(createAgentToolSchema.shape)],
+  ["update_profile", Object.keys(updateProfileToolSchema.shape)],
+  ["update_agents", Object.keys(updateAgentsToolSchema.shape)],
+]);
+const BACKUP_MODELS_FIELDS = Object.keys(backupModelsToolSchema.shape).join(", ");
+const BACKUP_MODEL_FIELDS = Object.keys(backupModelToolSchema.shape).join(", ");
+
+export function profileAgentToolErrorMessage(tool: string, error: unknown): string {
+  return profileToolErrorMessage(error, (path) => {
+    const toolFields = path.length === 0 ? PROFILE_TOOL_FIELDS.get(tool) : undefined;
+    if (toolFields) return `${UNSUPPORTED_PROFILE_FIELDS} ${tool} takes only: ${toolFields.join(", ")}.`;
+    if (tool !== "update_profile" || path[0] !== "backupModels") return UNSUPPORTED_PROFILE_FIELDS;
+    const entryFields = `Each backupModels.order entry takes only: ${BACKUP_MODEL_FIELDS}.`;
+    if (path.length === 1)
+      return `${UNSUPPORTED_PROFILE_FIELDS} backupModels takes only: ${BACKUP_MODELS_FIELDS}. ${entryFields}`;
+    if (path.length === 3 && path[1] === "order" && typeof path[2] === "number")
+      return `${UNSUPPORTED_PROFILE_FIELDS} ${entryFields}`;
+    return UNSUPPORTED_PROFILE_FIELDS;
+  });
 }

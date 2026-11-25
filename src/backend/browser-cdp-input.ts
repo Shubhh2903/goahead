@@ -1,61 +1,137 @@
+import { Effect, Option } from "effect";
 import type { SendCommand } from "./browser-cdp-values";
+import { type BrowserOperationError, browserFailure, browserSync } from "./browser-effects";
 
-export async function dispatchMouseClick(
+export interface PointerPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+const MAX_POINTER_PATH = 160;
+const POINTER_PATH_STEPS = 3;
+const POINTER_PATH_MOVE_WAIT = "100 millis";
+
+export const dispatchPointerMove = Effect.fn("Browser.dispatchPointerMove")(function* (
+  send: SendCommand,
+  from: PointerPoint | undefined,
+  to: PointerPoint,
+  modifiers: number,
+  sessionId?: string,
+) {
+  const path = pointerPath(from, to);
+  const target = path.pop() ?? to;
+  for (const point of path) {
+    const acknowledged = yield* send(
+      "Input.dispatchMouseEvent",
+      { type: "mouseMoved", ...point, modifiers },
+      sessionId,
+    ).pipe(Effect.timeoutOption(POINTER_PATH_MOVE_WAIT));
+    if (Option.isNone(acknowledged)) break;
+  }
+  yield* send("Input.dispatchMouseEvent", { type: "mouseMoved", ...target, modifiers }, sessionId);
+});
+
+function pointerPath(from: PointerPoint | undefined, to: PointerPoint): PointerPoint[] {
+  let dx = from ? from.x - to.x : 0;
+  let dy = from ? from.y - to.y : 0;
+  const distance = Math.hypot(dx, dy);
+  if (distance < 2) {
+    const angle = Math.random() * 2 * Math.PI;
+    const length = 24 + Math.random() * 24;
+    dx = Math.cos(angle) * length;
+    dy = Math.sin(angle) * length;
+  } else if (distance > MAX_POINTER_PATH) {
+    dx *= MAX_POINTER_PATH / distance;
+    dy *= MAX_POINTER_PATH / distance;
+  }
+  const bend = (Math.random() - 0.5) * 0.2;
+  const points: PointerPoint[] = [];
+  for (let step = 0; step < POINTER_PATH_STEPS; step += 1) {
+    const rest = 1 - step / POINTER_PATH_STEPS;
+    const along = rest * rest;
+    const curve = Math.sin(Math.PI * rest) * bend;
+    points.push({
+      x: Math.max(0, Math.round((to.x + dx * along - dy * curve) * 100) / 100),
+      y: Math.max(0, Math.round((to.y + dy * along + dx * curve) * 100) / 100),
+    });
+  }
+  points.push(to);
+  return points;
+}
+
+function pressHold() {
+  return Effect.sleep(30 + Math.floor(Math.random() * 30));
+}
+
+export const dispatchMouseClick = Effect.fn("Browser.dispatchMouseClick")(function* (
   send: SendCommand,
   coordinates: { x: number; y: number },
   button: "left" | "middle" | "right",
   totalClicks: number,
   modifiers: number,
   sessionId?: string,
-): Promise<void> {
-  await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...coordinates, modifiers }, sessionId);
+  from?: PointerPoint,
+) {
+  yield* dispatchPointerMove(send, from, coordinates, modifiers, sessionId);
   for (let clickCount = 1; clickCount <= totalClicks; clickCount += 1) {
-    await send(
-      "Input.dispatchMouseEvent",
-      { type: "mousePressed", ...coordinates, button, clickCount, modifiers },
-      sessionId,
-    );
-    await send(
-      "Input.dispatchMouseEvent",
-      { type: "mouseReleased", ...coordinates, button, clickCount, modifiers },
-      sessionId,
+    let released = false;
+    yield* Effect.gen(function* () {
+      yield* send(
+        "Input.dispatchMouseEvent",
+        { type: "mousePressed", ...coordinates, button, clickCount, modifiers },
+        sessionId,
+      );
+      yield* pressHold();
+      yield* send(
+        "Input.dispatchMouseEvent",
+        { type: "mouseReleased", ...coordinates, button, clickCount, modifiers },
+        sessionId,
+      );
+      released = true;
+    }).pipe(
+      Effect.ensuring(
+        Effect.suspend(() =>
+          released
+            ? Effect.void
+            : send(
+                "Input.dispatchMouseEvent",
+                { type: "mouseReleased", ...coordinates, button, clickCount, modifiers },
+                sessionId,
+              ).pipe(Effect.ignore),
+        ),
+      ),
     );
   }
-}
+});
 
-export async function dispatchShortcut(send: SendCommand, shortcut: string, sessionId?: string): Promise<void> {
+export const dispatchShortcut = Effect.fn("Browser.dispatchShortcut")(function* (
+  send: SendCommand,
+  shortcut: string,
+  sessionId?: string,
+) {
   const parts = shortcut
     .split("+")
     .map((part) => part.trim())
     .filter(Boolean);
-  if (parts.length === 0 || parts.length > 5) throw new Error("Invalid browser shortcut.");
+  if (parts.length === 0 || parts.length > 5) return yield* browserFailure(new Error("Invalid browser shortcut."));
   const key = parts.pop();
-  if (!key) throw new Error("Invalid browser shortcut.");
+  if (!key) return yield* browserFailure(new Error("Invalid browser shortcut."));
   const modifierNames: string[] = [];
   for (const part of parts) {
     const modifier = normalizeModifier(part);
-    if (!modifier) throw new Error(`Invalid browser shortcut: ${shortcut}`);
+    if (!modifier) return yield* browserFailure(new Error(`Invalid browser shortcut: ${shortcut}`));
     modifierNames.push(modifier);
   }
-  const { text: keyText, ...normalized } = normalizeKey(key);
+  const { text: keyText, ...normalized } = yield* browserSync(() => normalizeKey(key));
   const modifiers = modifierMask(modifierNames);
   const shiftOnly = modifiers === SHIFT_MODIFIER;
-  // A named key gets its character from the alias table; a single-character shortcut is its own.
-  // A command modifier gets none, because `Ctrl+S` is a command rather than an `s` in the document.
-  // Shift is not one of those: `Shift+Enter` is how a composer spells "line break, do not submit",
-  // and suppressing its character made the shortcut fire a key event, insert nothing, and report
-  // success. Which glyph Shift produces is only knowable for the alias keys, whose text does not
-  // depend on it, and for a letter -- `Shift+1` is `!` on a US layout and something else on half a
-  // dozen others, so it stays a key event rather than a guessed character.
   const character = keyText ?? (key.length === 1 ? (shiftOnly ? shiftedLetter(key) : key) : undefined);
-  // A real `Shift+a` reports `A` in `event.key`, not an `a` with a shift flag beside it, and the
-  // character event has to agree with the key events around it.
   const keyInfo = shiftOnly && keyText === undefined && character ? { ...normalized, key: character } : normalized;
   const pressedModifiers: string[] = [];
   let keyPressed = false;
-  try {
+  yield* Effect.gen(function* () {
     for (const modifier of modifierNames) {
-      await send(
+      yield* send(
         "Input.dispatchKeyEvent",
         {
           type: "rawKeyDown",
@@ -67,28 +143,31 @@ export async function dispatchShortcut(send: SendCommand, shortcut: string, sess
       );
       pressedModifiers.push(modifier);
     }
-    await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...keyInfo, modifiers }, sessionId);
+    yield* send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...keyInfo, modifiers }, sessionId);
     keyPressed = true;
     if (character !== undefined && (modifiers === 0 || shiftOnly))
-      // The keypress has to agree with the keydown around it. Without the mask CDP defaults it to
-      // zero, so `Shift+Enter` arrives at the page as an unshifted Enter -- and a composer that
-      // decides between "send" and "line break" in its keypress handler sends the message.
-      await send("Input.dispatchKeyEvent", { type: "char", ...keyInfo, modifiers, text: character }, sessionId);
-    await send("Input.dispatchKeyEvent", { type: "keyUp", ...keyInfo, modifiers }, sessionId);
+      yield* send("Input.dispatchKeyEvent", { type: "char", ...keyInfo, modifiers, text: character }, sessionId);
+    yield* send("Input.dispatchKeyEvent", { type: "keyUp", ...keyInfo, modifiers }, sessionId);
     keyPressed = false;
-  } finally {
-    if (keyPressed) {
-      await send("Input.dispatchKeyEvent", { type: "keyUp", ...keyInfo, modifiers }, sessionId).catch(() => undefined);
-    }
-    for (const modifier of [...pressedModifiers].reverse()) {
-      await send(
-        "Input.dispatchKeyEvent",
-        { type: "keyUp", key: modifier, code: `${modifier}Left`, modifiers: 0 },
-        sessionId,
-      ).catch(() => undefined);
-    }
-  }
-}
+  }).pipe(
+    Effect.ensuring(
+      Effect.gen(function* () {
+        if (keyPressed) {
+          yield* send("Input.dispatchKeyEvent", { type: "keyUp", ...keyInfo, modifiers }, sessionId).pipe(
+            Effect.ignore,
+          );
+        }
+        for (const modifier of [...pressedModifiers].reverse()) {
+          yield* send(
+            "Input.dispatchKeyEvent",
+            { type: "keyUp", key: modifier, code: `${modifier}Left`, modifiers: 0 },
+            sessionId,
+          ).pipe(Effect.ignore);
+        }
+      }).pipe(Effect.orDie),
+    ),
+  );
+});
 
 function normalizeModifier(value: string) {
   const lower = value.toLowerCase();
@@ -99,28 +178,165 @@ function normalizeModifier(value: string) {
   return null;
 }
 
-export async function dispatchTextKey(send: SendCommand, character: string, sessionId?: string): Promise<void> {
-  const upper = character.toUpperCase();
-  const code = /^[a-z]$/i.test(character) ? `Key${upper}` : "Unidentified";
-  await send(
-    "Input.dispatchKeyEvent",
-    { type: "rawKeyDown", key: character, code, text: character, unmodifiedText: character },
-    sessionId,
-  );
-  await send(
-    "Input.dispatchKeyEvent",
-    { type: "char", key: character, code, text: character, unmodifiedText: character },
-    sessionId,
-  );
-  await send("Input.dispatchKeyEvent", { type: "keyUp", key: character, code }, sessionId);
+const US_SYMBOL_KEYS: readonly (readonly [string, string, string, number])[] = [
+  ["`", "~", "Backquote", 192],
+  ["-", "_", "Minus", 189],
+  ["=", "+", "Equal", 187],
+  ["[", "{", "BracketLeft", 219],
+  ["]", "}", "BracketRight", 221],
+  ["\\", "|", "Backslash", 220],
+  [";", ":", "Semicolon", 186],
+  ["'", '"', "Quote", 222],
+  [",", "<", "Comma", 188],
+  [".", ">", "Period", 190],
+  ["/", "?", "Slash", 191],
+  ["1", "!", "Digit1", 49],
+  ["2", "@", "Digit2", 50],
+  ["3", "#", "Digit3", 51],
+  ["4", "$", "Digit4", 52],
+  ["5", "%", "Digit5", 53],
+  ["6", "^", "Digit6", 54],
+  ["7", "&", "Digit7", 55],
+  ["8", "*", "Digit8", 56],
+  ["9", "(", "Digit9", 57],
+  ["0", ")", "Digit0", 48],
+];
+
+interface UsKey {
+  readonly code: string;
+  readonly keyCode: number;
+  readonly shift: boolean;
 }
 
-// `text` is the character the key produces, and only the keys that produce one carry it. Chromium
-// decides implicit form submission and text insertion from the character event, not the key event:
-// without `\r` here, `press("Enter")` fires `keydown` and nothing else, so a plain `<form>` with no
-// script never submits and a textarea never gains a line. `Tab` stays characterless on purpose --
-// the browser moves focus on the key event, and a character dispatched afterwards would land in
-// whatever gained focus.
+const US_KEYS: ReadonlyMap<string, UsKey> = new Map<string, UsKey>([
+  [" ", { code: "Space", keyCode: 32, shift: false }],
+  ...[..."abcdefghijklmnopqrstuvwxyz"].flatMap((letter): Array<[string, UsKey]> => {
+    const upper = letter.toUpperCase();
+    const key = { code: `Key${upper}`, keyCode: upper.charCodeAt(0) };
+    return [
+      [letter, { ...key, shift: false }],
+      [upper, { ...key, shift: true }],
+    ];
+  }),
+  ...US_SYMBOL_KEYS.flatMap(
+    ([plain, shifted, code, keyCode]): Array<[string, UsKey]> => [
+      [plain, { code, keyCode, shift: false }],
+      [shifted, { code, keyCode, shift: true }],
+    ],
+  ),
+]);
+
+const PHYSICAL_KEY_CODES: ReadonlyMap<string, number> = new Map<string, number>([
+  ...[...US_KEYS.values()].map((usKey): [string, number] => [usKey.code, usKey.keyCode]),
+  ...[..."0123456789"].map((digit): [string, number] => [`Numpad${digit}`, 96 + Number(digit)]),
+  ["NumpadMultiply", 106],
+  ["NumpadAdd", 107],
+  ["NumpadSubtract", 109],
+  ["NumpadDecimal", 110],
+  ["NumpadDivide", 111],
+]);
+
+const ASCII_LETTER = /^[a-z]$/iu;
+
+export function printableKeyCode(key: string, code: string): number | undefined {
+  if ([...key].length !== 1) return undefined;
+  const usKey = US_KEYS.get(key);
+  if (ASCII_LETTER.test(key)) return usKey?.keyCode;
+  return PHYSICAL_KEY_CODES.get(code) ?? (usKey?.shift === false ? usKey.keyCode : undefined);
+}
+
+const MAX_KEYED_TEXT = 128;
+
+const EDITOR_COMPLETED_TEXT = /[\n\r([{'"`<]/;
+
+interface TextChecks {
+  readonly keyArrived?: Effect.Effect<boolean, BrowserOperationError>;
+  readonly saveText?: Effect.Effect<void, BrowserOperationError>;
+  readonly beforeNext?: (typed: number, total: number) => Effect.Effect<void, BrowserOperationError>;
+}
+
+export const dispatchText = Effect.fn("Browser.dispatchText")(function* (
+  send: SendCommand,
+  text: string,
+  sessionId?: string,
+  checks: TextChecks = {},
+) {
+  if (text.length === 0 || text.length > MAX_KEYED_TEXT || EDITOR_COMPLETED_TEXT.test(text)) {
+    yield* send("Input.insertText", { text }, sessionId);
+    return;
+  }
+  const characters = [...text];
+  let typed = 0;
+  const beforePiece = Effect.suspend(() =>
+    typed > 0 && checks.beforeNext ? checks.beforeNext(typed, characters.length) : Effect.void,
+  );
+  const insert = (piece: string) =>
+    beforePiece.pipe(
+      Effect.andThen(send("Input.insertText", { text: piece }, sessionId)),
+      Effect.andThen(
+        Effect.sync(() => {
+          typed += [...piece].length;
+        }),
+      ),
+    );
+  let pending = "";
+  let keyed = false;
+  for (const [index, character] of characters.entries()) {
+    if (!US_KEYS.has(character)) {
+      pending += character;
+      continue;
+    }
+    if (pending) yield* insert(pending);
+    pending = "";
+    yield* beforePiece;
+    if (!keyed && index > 0 && checks.saveText) yield* checks.saveText;
+    yield* dispatchTextKey(send, character, sessionId);
+    typed += 1;
+    if (!keyed && checks.keyArrived && !(yield* checks.keyArrived)) {
+      yield* insert(characters.slice(index).join(""));
+      return;
+    }
+    keyed = true;
+  }
+  if (pending) yield* insert(pending);
+});
+
+export const dispatchTextKey = Effect.fn("Browser.dispatchTextKey")(function* (
+  send: SendCommand,
+  character: string,
+  sessionId?: string,
+) {
+  const usKey = US_KEYS.get(character);
+  const key = {
+    key: character,
+    code: usKey?.code ?? "Unidentified",
+    ...(usKey ? { windowsVirtualKeyCode: usKey.keyCode, modifiers: usKey.shift ? SHIFT_MODIFIER : 0 } : {}),
+  };
+  let released = false;
+  yield* Effect.gen(function* () {
+    yield* send(
+      "Input.dispatchKeyEvent",
+      { type: "rawKeyDown", ...key, text: character, unmodifiedText: character },
+      sessionId,
+    );
+    yield* send(
+      "Input.dispatchKeyEvent",
+      { type: "char", ...key, text: character, unmodifiedText: character },
+      sessionId,
+    );
+    yield* send("Input.dispatchKeyEvent", { type: "keyUp", ...key }, sessionId);
+    released = true;
+  }).pipe(
+    Effect.ensuring(
+      Effect.suspend(() =>
+        released
+          ? Effect.void
+          : send("Input.dispatchKeyEvent", { type: "keyUp", ...key }, sessionId).pipe(Effect.ignore),
+      ),
+    ),
+  );
+});
+
 const KEY_ALIASES: Record<string, [string, string, number?, string?]> = {
   enter: ["Enter", "Enter", 13, "\r"],
   tab: ["Tab", "Tab", 9],
@@ -142,29 +358,31 @@ const KEY_ALIASES: Record<string, [string, string, number?, string?]> = {
 function normalizeKey(key: string): {
   key: string;
   code: string;
-  windowsVirtualKeyCode?: number;
-  nativeVirtualKeyCode?: number;
+  windowsVirtualKeyCode?: number | undefined;
+  nativeVirtualKeyCode?: number | undefined;
   text?: string;
 } {
   const alias = KEY_ALIASES[key.toLowerCase()];
-  if (alias)
+  if (alias) {
+    const nativeVirtualKeyCode = macNativeVirtualKeyCode(alias[0]);
     return {
       ...(alias[3] === undefined ? {} : { text: alias[3] }),
       key: alias[0],
       code: alias[1],
-      windowsVirtualKeyCode: alias[2],
-      nativeVirtualKeyCode: macNativeVirtualKeyCode(alias[0]),
+      ...(alias[2] === undefined ? {} : { windowsVirtualKeyCode: alias[2] }),
+      ...(nativeVirtualKeyCode === undefined ? {} : { nativeVirtualKeyCode }),
     };
+  }
   if (!/^[\w\-.,/;='[\]`]{1,20}$/u.test(key)) throw new Error(`Unsupported browser key: ${key}`);
   const upper = key.length === 1 ? key.toUpperCase() : key;
-  return { key, code: key.length === 1 && /[a-z]/i.test(key) ? `Key${upper}` : upper };
+  const usKey = key.length === 1 ? US_KEYS.get(key) : undefined;
+  return {
+    key,
+    code: key.length === 1 && /[a-z]/i.test(key) ? `Key${upper}` : upper,
+    ...(usKey ? { windowsVirtualKeyCode: usKey.keyCode } : {}),
+  };
 }
 
-/**
- * The key code and character of a named key, as `KeyboardEvent.key` spells it. Chromium runs an
- * editing command such as Backspace or an arrow from the key code, and submits a form from Enter's
- * character, so a named key that has neither does nothing in the page.
- */
 export function namedKey(key: string): {
   windowsVirtualKeyCode?: number | undefined;
   nativeVirtualKeyCode?: number | undefined;
@@ -183,7 +401,6 @@ function macNativeVirtualKeyCode(key: string): number | undefined {
   return process.platform === "darwin" ? { ArrowUp: 126, ArrowDown: 125, Home: 115 }[key] : undefined;
 }
 
-/** Chromium's `Input.dispatchKeyEvent` bit for Shift, the one modifier that still yields a character. */
 export const SHIFT_MODIFIER = 8;
 
 function shiftedLetter(key: string): string | undefined {

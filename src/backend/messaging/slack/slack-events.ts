@@ -10,7 +10,6 @@ import {
   type InboxFile,
 } from "../messaging-types";
 
-/** The Block Kit action ids of the buttons the agent posts. */
 export const SLACK_ACTION_IDS = {
   accept: "openbot_accept",
   decline: "openbot_decline",
@@ -47,6 +46,7 @@ export function slackInboundMessage(payload: unknown, workspaceId: string, botUs
     platformMessageId: ts,
     authorId: user,
     text: plainText(isString(event.text) ? event.text : "", botUserId),
+    mentionedUserIds: slackMentionIds(isString(event.text) ? event.text : "", botUserId),
     files: inboundFiles(event.files),
   };
   if (event.type === "app_mention") {
@@ -81,6 +81,9 @@ export function slackInboundMessage(payload: unknown, workspaceId: string, botUs
     };
   }
   if (!threadTs || threadTs === ts) return null;
+  if (isString(event.text) && event.text.includes(`<@${botUserId}>`)) return null;
+  const leading = isString(event.text) ? /^\s*<@([A-Z0-9]+)(?:\|[^>]*)?>/.exec(event.text) : null;
+  if (leading && leading[1] !== botUserId) return null;
   return {
     ...base,
     threadKey: threadTs,
@@ -258,7 +261,6 @@ function inboxFiles(value: unknown): InboxFile[] {
   });
 }
 
-/** One `block_actions` payload as a button press on an OpenBot message, or null. */
 export function slackInboundAction(payload: unknown, workspaceId: string): InboundAction | null {
   if (!isDynamicRecord(payload) || payload.type !== "block_actions") return null;
   const team = payload.team;
@@ -305,17 +307,25 @@ function inboundFiles(value: unknown): InboundFile[] {
   );
 }
 
-/**
- * Slack's markup as plain text: OpenBot's own mention goes, other mentions stay as ids, a
- * channel link keeps its name, a link keeps its label and address, and the three escaped
- * characters come back.
- */
+export function slackMentionIds(text: string, botUserId: string): string[] {
+  const ids = [...text.matchAll(/<@([A-Z0-9]+)(?:\|[^>]*)?>/g)].map((match) => match[1] ?? "");
+  return [...new Set(ids)].filter((id) => id && id !== botUserId);
+}
+
 export function plainText(text: string, botUserId: string): string {
   return text
     .replaceAll(`<@${botUserId}>`, "")
     .replace(/<@([A-Z0-9]+)(?:\|[^>]*)?>/g, "@$1")
+    .replace(
+      /<!subteam\^([A-Z0-9]+)(?:\|([^>]+))?>/g,
+      (_match, id: string, label: string | undefined) => label ?? `@group:${id}`,
+    )
     .replace(/<#([A-Z0-9]+)(?:\|([^>]*))?>/g, (_match, id: string, name: string | undefined) => `#${name || id}`)
     .replace(/<!(here|channel|everyone)>/g, "@$1")
+    .replace(/<mailto:([^|>]+)\|([^>]+)>/g, (_match, address: string, label: string) =>
+      label === address ? address : `${label} (${address})`,
+    )
+    .replace(/<mailto:([^>]+)>/g, "$1")
     .replace(/<(https?:[^|>]+)\|([^>]+)>/g, "$2 ($1)")
     .replace(/<(https?:[^>]+)>/g, "$1")
     .replaceAll("&lt;", "<")

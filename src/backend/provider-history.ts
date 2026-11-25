@@ -1,36 +1,34 @@
+import type { Effect } from "effect";
 import type { ThreadItem } from "./protocol";
+import type { ProviderClientOperationError } from "./provider-client-effects";
 
-/** A fragment is never a complete conversation or a replacement snapshot. */
 export interface ProviderHistoryFragment {
   turnId: string;
   status?: string;
   startedAt?: number;
-  /** Stable offset within the turn. This is not a provider cursor. */
   itemOffset?: number;
   items: ThreadItem[];
-  /** The provider has no stable OpenBot turn identity; retain this record for reads and recovery only. */
+  liveTurnId?: string;
   recordsOnly?: boolean;
-  /** The last fragment of this turn in this scan. */
   complete: boolean;
 }
 
 export interface ProviderHistoryRequest {
   threadId: string;
   cwd?: string;
-  /** Metadata reads omit items, for recovery of a known turn. */
   items: "none" | "full";
-  /** Import recovery from the provider; do not satisfy this read from the durable staging seam. */
   providerOnly?: boolean;
+  resumeKey?: string;
 }
 
-/** Resolve false to stop the scan after this fragment. Cursors stay inside the adapter. */
-export type ProviderHistoryConsumer = (fragment: ProviderHistoryFragment) => Promise<boolean>;
+export type ProviderHistoryConsumer = (
+  fragment: ProviderHistoryFragment,
+) => Effect.Effect<boolean, ProviderClientOperationError>;
 
-/**
- * Reads provider history newest turn first, one bounded fragment at a time. It rejects with the
- * provider's error. A reader never retains the full transcript.
- */
-export type ReadProviderHistory = (request: ProviderHistoryRequest, consume: ProviderHistoryConsumer) => Promise<void>;
+export type ReadProviderHistory = (
+  request: ProviderHistoryRequest,
+  consume: ProviderHistoryConsumer,
+) => Effect.Effect<void, ProviderClientOperationError>;
 
 export const PROVIDER_HISTORY_PAGE_SIZE = 50;
 

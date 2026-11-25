@@ -1,21 +1,28 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdir, readFile, rename } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   isCompleteSectionOrder,
+  SIDEBAR_FOLDER_LEVELS,
   SIDEBAR_PEOPLE_SECTION_ID,
   SIDEBAR_UNASSIGNED_SECTION_ID,
   type SidebarLayoutAction,
   type SidebarLayoutSnapshot,
   type SidebarSection,
+  sidebarFolderAncestors,
+  sidebarFolderHeight,
+  sidebarFolderParents,
+  sidebarFolderTreeOrder,
 } from "@openbot/contracts/ipc";
 import { isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import { isUuidV4, legacyAgentId } from "@openbot/contracts/validation";
 import { sourceText } from "@openbot/i18n/source";
-import { writeJsonFileAtomically } from "./atomic-json-file";
-import { isMissingFileError } from "./file-errors";
+import { Effect, Exit, Semaphore } from "effect";
+import { writeFileAtomically } from "./atomic-json-file";
+import { StoredStateFailure, storedIO, storedSync } from "./stored-state-effects";
+import { readVersionedJsonFile, type VersionedJsonFormat } from "./versioned-json-store";
 
 interface StoredSidebarLayout extends SidebarLayoutSnapshot {
   version: 2;
@@ -37,182 +44,214 @@ const DEFAULT_LAYOUT: SidebarLayoutSnapshot = {
   agentOrder: [],
 };
 
+const SIDEBAR_LAYOUT_FORMAT: VersionedJsonFormat<SidebarLayoutSnapshot> = {
+  current: 2,
+  releases: {
+    1: (file) => {
+      if (!isLegacyStoredSidebarLayout(file)) throw new Error("Invalid sidebar layout state.");
+      return withFolderTree({ ...snapshotFromLegacyStored(file), agentOrder: [] });
+    },
+    2: (file) => {
+      if (!isStoredSidebarLayout(file)) throw new Error("Invalid sidebar layout state.");
+      return snapshotFromStored(file);
+    },
+  },
+};
+
 export class SidebarLayoutStore extends EventEmitter<SidebarLayoutStoreEvents> {
   readonly #path: string;
+  #writePath: string;
   #layout = structuredClone(DEFAULT_LAYOUT);
-  #operationQueue: Promise<void> = Promise.resolve();
+  readonly #operationQueue = Semaphore.makeUnsafe(1);
 
   constructor(path: string) {
     super();
     this.#path = path;
+    this.#writePath = path;
   }
 
-  async initialize(): Promise<void> {
-    await mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
-    try {
-      const parsed = JSON.parse(await readFile(this.#path, "utf8"));
-      if (isStoredSidebarLayout(parsed)) this.#layout = snapshotFromStored(parsed);
-      else if (isLegacyStoredSidebarLayout(parsed))
-        this.#layout = { ...snapshotFromLegacyStored(parsed), agentOrder: [] };
-      else throw new Error("Invalid sidebar layout state.");
-    } catch (error) {
-      if (isMissingFileError(error)) return;
-      const backupPath = `${this.#path}.corrupt-${Date.now()}`;
-      await rename(this.#path, backupPath).catch(() => undefined);
-      this.#layout = structuredClone(DEFAULT_LAYOUT);
-    }
+  initialize() {
+    return Effect.gen({ self: this }, function* () {
+      yield* storedIO(() => mkdir(dirname(this.#path), { recursive: true, mode: 0o700 }));
+      const loaded = yield* readVersionedJsonFile(this.#path, SIDEBAR_LAYOUT_FORMAT);
+      this.#writePath = loaded.writePath;
+      this.#layout = loaded.value ?? structuredClone(DEFAULT_LAYOUT);
+    });
   }
 
   getSnapshot(): SidebarLayoutSnapshot {
     return structuredClone(this.#layout);
   }
 
-  mutate(action: SidebarLayoutAction, agentIds: ReadonlySet<string>): Promise<SidebarLayoutSnapshot> {
-    return this.#enqueue(async () => {
-      const next = applySidebarLayoutAction(this.#layout, action, agentIds);
-      if (next === this.#layout) return this.getSnapshot();
-      await this.#commit(next);
-      return this.getSnapshot();
-    });
-  }
-
-  withProfileAssignment<T>(
-    sectionId: string | null,
-    operation: (assign: (agentId: string) => Promise<SidebarLayoutSnapshot>) => Promise<T>,
-  ): Promise<T> {
-    return this.#enqueue(async () => {
-      if (sectionId !== null) requireCustomSection(this.#layout, sectionId);
-      const previous = this.getSnapshot();
-      try {
-        return await operation(async (agentId) => {
-          const next = applySidebarLayoutAction(
-            this.#layout,
-            { type: "assign", agentId, sectionId },
-            new Set([agentId]),
-          );
-          if (next !== this.#layout) await this.#commit(next);
-          return this.getSnapshot();
-        });
-      } catch (error) {
-        if (this.#layout.revision !== previous.revision) {
-          await this.#commit({ ...previous, revision: this.#layout.revision + 1 });
-        }
-        throw error;
-      }
-    });
-  }
-
-  removeAgent(agentId: string): Promise<SidebarLayoutSnapshot> {
-    return this.#enqueue(async () => {
-      if (!(agentId in this.#layout.agentAssignments) && !this.#layout.agentOrder.includes(agentId)) {
+  mutate(
+    action: SidebarLayoutAction,
+    agentIds: ReadonlySet<string>,
+  ): Effect.Effect<SidebarLayoutSnapshot, StoredStateFailure> {
+    return this.#enqueue(
+      Effect.gen({ self: this }, function* () {
+        const next = yield* storedSync(() => applySidebarLayoutAction(this.#layout, action, agentIds));
+        if (next === this.#layout) return this.getSnapshot();
+        yield* this.#commit(next);
         return this.getSnapshot();
-      }
-      const agentAssignments = { ...this.#layout.agentAssignments };
-      delete agentAssignments[agentId];
-      await this.#commit({
-        ...this.#layout,
-        revision: this.#layout.revision + 1,
-        agentAssignments,
-        agentOrder: this.#layout.agentOrder.filter((candidate) => candidate !== agentId),
-      });
-      return this.getSnapshot();
-    });
+      }),
+    );
+  }
+
+  withProfileAssignment<T, E>(
+    sectionId: string | null,
+    operation: (
+      assign: (agentId: string) => Effect.Effect<SidebarLayoutSnapshot, StoredStateFailure>,
+    ) => Effect.Effect<T, E>,
+  ): Effect.Effect<T, E | StoredStateFailure> {
+    return this.#enqueue(
+      Effect.gen({ self: this }, function* () {
+        if (sectionId !== null) yield* storedSync(() => requireCustomSection(this.#layout, sectionId));
+        const previous = this.getSnapshot();
+        const result = yield* Effect.exit(
+          operation((agentId) =>
+            Effect.gen({ self: this }, function* () {
+              const next = yield* storedSync(() =>
+                applySidebarLayoutAction(this.#layout, { type: "assign", agentId, sectionId }, new Set([agentId])),
+              );
+              if (next !== this.#layout) yield* this.#commit(next);
+              return this.getSnapshot();
+            }),
+          ),
+        );
+        if (Exit.isSuccess(result)) return result.value;
+        if (this.#layout.revision !== previous.revision)
+          yield* this.#commit({ ...previous, revision: this.#layout.revision + 1 });
+        return yield* Effect.failCause(result.cause);
+      }),
+    );
+  }
+
+  removeAgent(agentId: string): Effect.Effect<SidebarLayoutSnapshot, StoredStateFailure> {
+    return this.#enqueue(
+      Effect.gen({ self: this }, function* () {
+        if (!(agentId in this.#layout.agentAssignments) && !this.#layout.agentOrder.includes(agentId)) {
+          return this.getSnapshot();
+        }
+        const agentAssignments = { ...this.#layout.agentAssignments };
+        delete agentAssignments[agentId];
+        yield* this.#commit({
+          ...this.#layout,
+          revision: this.#layout.revision + 1,
+          agentAssignments,
+          agentOrder: this.#layout.agentOrder.filter((candidate) => candidate !== agentId),
+        });
+        return this.getSnapshot();
+      }),
+    );
   }
 
   placeDuplicateAfter(
     sourceAgentId: string,
     duplicateAgentId: string,
     orderedAgentIds: readonly string[],
-  ): Promise<SidebarLayoutSnapshot> {
-    return this.#enqueue(async () => {
-      const agentIds = new Set(orderedAgentIds);
-      if (!agentIds.has(sourceAgentId) || !agentIds.has(duplicateAgentId)) throw new Error("Unknown agent.");
-      const sectionId = this.#layout.agentAssignments[sourceAgentId] ?? null;
-      const order = normalizedAgentOrder(this.#layout.agentOrder, agentIds).filter(
-        (agentId) => agentId !== duplicateAgentId,
-      );
-      const sourceIndex = order.indexOf(sourceAgentId);
-      if (sourceIndex < 0) throw new Error("Unknown source agent order.");
-      const beforeAgentId =
-        order
-          .slice(sourceIndex + 1)
-          .find((agentId) => (this.#layout.agentAssignments[agentId] ?? null) === sectionId) ?? null;
-      const next = applySidebarLayoutAction(
-        this.#layout,
-        { type: "move-agent", agentId: duplicateAgentId, sectionId, beforeAgentId },
-        agentIds,
-      );
-      if (next === this.#layout) return this.getSnapshot();
-      await this.#commit(next);
-      return this.getSnapshot();
-    });
-  }
-
-  /**
-   * Drops the agents that are gone -- but renames the ones that only look gone first. This layout is a
-   * JSON file outside the database, so migration v13 renamed every agent in SQLite and left the sidebar
-   * still filing them under `bot-<uuid>`. Filtering straight against the new roster would read that as
-   * "these agents no longer exist" and commit the deletion, so a user with a dozen agents in named groups
-   * comes back to all of them unassigned, in an order they never chose, with nothing to undo it.
-   */
-  reconcileAgents(agentIds: ReadonlySet<string>): Promise<SidebarLayoutSnapshot> {
-    return this.#enqueue(async () => {
-      const renamedFrom = new Map<string, string>();
-      for (const agentId of agentIds) {
-        const legacyId = legacyAgentId(agentId);
-        if (legacyId !== agentId) renamedFrom.set(legacyId, agentId);
-      }
-      // An id still in the roster answers for itself, which is why that test comes first: v13 declines to
-      // rename onto an id that is taken, so an agent spelled `bot-<uuid>` can be sitting beside the
-      // `agent-<uuid>` it would otherwise have become, and this entry belongs to the one the user filed.
-      const currentId = (agentId: string) => (agentIds.has(agentId) ? agentId : (renamedFrom.get(agentId) ?? agentId));
-      // Two entries can land on one id -- the layout can hold a `bot-<uuid>` the user filed before the
-      // upgrade beside the `agent-<uuid>` it became -- and the layout is validated on the way back in.
-      // An unmerged pair leaves the same agent twice in `agentOrder`, the file is rejected on the next
-      // launch, and the user's sections and ordering are reset. The entry already spelled the way the
-      // roster spells it is the one the user filed most recently, so it wins.
-      const agentAssignments: Record<string, string> = {};
-      for (const [agentId, sectionId] of Object.entries(this.#layout.agentAssignments)) {
-        const id = currentId(agentId);
-        if (!agentIds.has(id) || (id !== agentId && this.#layout.agentAssignments[id] !== undefined)) continue;
-        agentAssignments[id] = sectionId;
-      }
-      const agentOrder: string[] = [];
-      for (const entry of this.#layout.agentOrder) {
-        const agentId = currentId(entry);
-        if (agentIds.has(agentId) && !agentOrder.includes(agentId)) agentOrder.push(agentId);
-      }
-      if (
-        Object.keys(agentAssignments).length === Object.keys(this.#layout.agentAssignments).length &&
-        Object.keys(agentAssignments).every((agentId) => agentId in this.#layout.agentAssignments) &&
-        agentOrder.length === this.#layout.agentOrder.length &&
-        agentOrder.every((agentId, index) => agentId === this.#layout.agentOrder[index])
-      ) {
+  ): Effect.Effect<SidebarLayoutSnapshot, StoredStateFailure> {
+    return this.#enqueue(
+      Effect.gen({ self: this }, function* () {
+        const agentIds = new Set(orderedAgentIds);
+        if (!agentIds.has(sourceAgentId) || !agentIds.has(duplicateAgentId))
+          return yield* new StoredStateFailure({ cause: new Error("Unknown agent.") });
+        const sectionId = this.#layout.agentAssignments[sourceAgentId] ?? null;
+        const order = normalizedAgentOrder(this.#layout.agentOrder, agentIds).filter(
+          (agentId) => agentId !== duplicateAgentId,
+        );
+        const sourceIndex = order.indexOf(sourceAgentId);
+        if (sourceIndex < 0) return yield* new StoredStateFailure({ cause: new Error("Unknown source agent order.") });
+        const beforeAgentId =
+          order
+            .slice(sourceIndex + 1)
+            .find((agentId) => (this.#layout.agentAssignments[agentId] ?? null) === sectionId) ?? null;
+        const next = yield* storedSync(() =>
+          applySidebarLayoutAction(
+            this.#layout,
+            { type: "move-agent", agentId: duplicateAgentId, sectionId, beforeAgentId },
+            agentIds,
+          ),
+        );
+        if (next === this.#layout) return this.getSnapshot();
+        yield* this.#commit(next);
         return this.getSnapshot();
-      }
-      await this.#commit({ ...this.#layout, revision: this.#layout.revision + 1, agentAssignments, agentOrder });
-      return this.getSnapshot();
-    });
-  }
-
-  #enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#operationQueue.then(operation, operation);
-    this.#operationQueue = result.then(
-      () => undefined,
-      () => undefined,
+      }),
     );
-    return result;
   }
 
-  async #commit(next: SidebarLayoutSnapshot): Promise<void> {
+  reconcileAgents(agentIds: ReadonlySet<string>): Effect.Effect<SidebarLayoutSnapshot, StoredStateFailure> {
+    return this.#enqueue(
+      Effect.gen({ self: this }, function* () {
+        const renamedFrom = new Map<string, string>();
+        for (const agentId of agentIds) {
+          const legacyId = legacyAgentId(agentId);
+          if (legacyId !== agentId) renamedFrom.set(legacyId, agentId);
+        }
+        const currentId = (agentId: string) =>
+          agentIds.has(agentId) ? agentId : (renamedFrom.get(agentId) ?? agentId);
+        const agentAssignments: Record<string, string> = {};
+        for (const [agentId, sectionId] of Object.entries(this.#layout.agentAssignments)) {
+          const id = currentId(agentId);
+          if (!agentIds.has(id) || (id !== agentId && this.#layout.agentAssignments[id] !== undefined)) continue;
+          agentAssignments[id] = sectionId;
+        }
+        const agentOrder: string[] = [];
+        for (const entry of this.#layout.agentOrder) {
+          const agentId = currentId(entry);
+          if (agentIds.has(agentId) && !agentOrder.includes(agentId)) agentOrder.push(agentId);
+        }
+        if (
+          Object.keys(agentAssignments).length === Object.keys(this.#layout.agentAssignments).length &&
+          Object.keys(agentAssignments).every((agentId) => agentId in this.#layout.agentAssignments) &&
+          agentOrder.length === this.#layout.agentOrder.length &&
+          agentOrder.every((agentId, index) => agentId === this.#layout.agentOrder[index])
+        ) {
+          return this.getSnapshot();
+        }
+        yield* this.#commit({ ...this.#layout, revision: this.#layout.revision + 1, agentAssignments, agentOrder });
+        return this.getSnapshot();
+      }),
+    );
+  }
+
+  #enqueue<T, E>(operation: Effect.Effect<T, E>): Effect.Effect<T, E> {
+    return this.#operationQueue.withPermit(operation.pipe(Effect.uninterruptible));
+  }
+
+  #commit = Effect.fn("SidebarLayout.commit")(function* (this: SidebarLayoutStore, next: SidebarLayoutSnapshot) {
     const stored: StoredSidebarLayout = { version: 2, ...next };
-    await writeJsonFileAtomically(this.#path, stored);
+    yield* writeFileAtomically(this.#writePath, `${JSON.stringify(stored)}\n`).pipe(
+      Effect.mapError(({ cause }) => new StoredStateFailure({ cause })),
+    );
     this.#layout = next;
     this.emit("changed", this.getSnapshot());
-  }
+  });
 }
 
 function applySidebarLayoutAction(
+  current: SidebarLayoutSnapshot,
+  action: SidebarLayoutAction,
+  agentIds: ReadonlySet<string>,
+): SidebarLayoutSnapshot {
+  const next = applyFlatSidebarLayoutAction(current, action, agentIds);
+  if (next === current) return current;
+  const normalized = withFolderTree(next);
+  return action.type === "move" && arraysEqual(normalized.order, current.order) ? current : normalized;
+}
+
+function withFolderTree(layout: SidebarLayoutSnapshot): SidebarLayoutSnapshot {
+  const parents = sidebarFolderParents(layout);
+  return {
+    ...layout,
+    sections: layout.sections.map(({ id, name }) => {
+      const parentId = parents.get(id);
+      return parentId === undefined ? { id, name } : { id, name, parentId };
+    }),
+    order: sidebarFolderTreeOrder(layout.order, parents),
+  };
+}
+
+function applyFlatSidebarLayoutAction(
   current: SidebarLayoutSnapshot,
   action: SidebarLayoutAction,
   agentIds: ReadonlySet<string>,
@@ -224,7 +263,15 @@ function applySidebarLayoutAction(
       }
       const name = validSectionName(action.name, current.sections);
       if (action.agentId !== undefined && !agentIds.has(action.agentId)) throw new Error("Unknown agent.");
-      const section: SidebarSection = { id: randomUUID(), name };
+      if (action.parentId !== undefined) {
+        requireCustomSection(current, action.parentId);
+        if (folderDepth(current, action.parentId) + 1 >= SIDEBAR_FOLDER_LEVELS)
+          throw new Error(sourceText("error.backend.sidebarFolderTooDeep"));
+      }
+      const section: SidebarSection =
+        action.parentId === undefined
+          ? { id: randomUUID(), name }
+          : { id: randomUUID(), name, parentId: action.parentId };
       return {
         revision: current.revision + 1,
         sections: [...current.sections, section],
@@ -253,15 +300,54 @@ function applySidebarLayoutAction(
     }
     case "delete": {
       requireCustomSection(current, action.sectionId);
+      const parentId = sidebarFolderParents(current).get(action.sectionId);
       return {
         revision: current.revision + 1,
-        sections: current.sections.filter((section) => section.id !== action.sectionId),
+        sections: current.sections
+          .filter((section) => section.id !== action.sectionId)
+          .map((section) => (section.parentId === action.sectionId ? withParent(section, parentId) : section)),
         order: current.order.filter((sectionId) => sectionId !== action.sectionId),
         agentAssignments: Object.fromEntries(
-          Object.entries(current.agentAssignments).filter(([, sectionId]) => sectionId !== action.sectionId),
+          Object.entries(current.agentAssignments).flatMap(([agentId, sectionId]) => {
+            if (sectionId !== action.sectionId) return [[agentId, sectionId]];
+            return parentId === undefined ? [] : [[agentId, parentId]];
+          }),
         ),
         agentOrder: [...current.agentOrder],
       };
+    }
+    case "nest": {
+      if (action.sectionId === SIDEBAR_PEOPLE_SECTION_ID || action.sectionId === SIDEBAR_UNASSIGNED_SECTION_ID) {
+        if (action.parentId !== null) throw new Error(sourceText("error.backend.sidebarFolderMoveInvalid"));
+      } else requireCustomSection(current, action.sectionId);
+      const parents = sidebarFolderParents(current);
+      if (action.parentId !== null) {
+        requireCustomSection(current, action.parentId);
+        if (
+          action.parentId === action.sectionId ||
+          sidebarFolderAncestors(parents, action.parentId).includes(action.sectionId)
+        )
+          throw new Error(sourceText("error.backend.sidebarFolderMoveInvalid"));
+      }
+      const depth = action.parentId === null ? 0 : folderDepth(current, action.parentId) + 1;
+      if (depth + sidebarFolderHeight(parents, action.sectionId) >= SIDEBAR_FOLDER_LEVELS)
+        throw new Error(sourceText("error.backend.sidebarFolderTooDeep"));
+      if (action.beforeSectionId !== null) {
+        if (action.beforeSectionId === action.sectionId || !current.order.includes(action.beforeSectionId))
+          throw new Error("Unknown sidebar section order target.");
+        if ((parents.get(action.beforeSectionId) ?? null) !== action.parentId)
+          throw new Error(sourceText("error.backend.sidebarFolderMoveInvalid"));
+      }
+      const order = current.order.filter((sectionId) => sectionId !== action.sectionId);
+      const insertionIndex = action.beforeSectionId === null ? order.length : order.indexOf(action.beforeSectionId);
+      order.splice(insertionIndex, 0, action.sectionId);
+      const sections = current.sections.map((section) =>
+        section.id === action.sectionId ? withParent(section, action.parentId ?? undefined) : section,
+      );
+      const next = withFolderTree({ ...current, sections, order });
+      if (arraysEqual(next.order, current.order) && (parents.get(action.sectionId) ?? null) === action.parentId)
+        return current;
+      return { ...next, revision: current.revision + 1 };
     }
     case "move": {
       const index = current.order.indexOf(action.sectionId);
@@ -347,6 +433,16 @@ function validSectionName(name: string, existing: readonly SidebarSection[]): st
   return trimmed;
 }
 
+function withParent(section: SidebarSection, parentId: string | undefined): SidebarSection {
+  return parentId === undefined
+    ? { id: section.id, name: section.name }
+    : { id: section.id, name: section.name, parentId };
+}
+
+function folderDepth(layout: SidebarLayoutSnapshot, sectionId: string): number {
+  return sidebarFolderAncestors(sidebarFolderParents(layout), sectionId).length;
+}
+
 function requireCustomSection(layout: SidebarLayoutSnapshot, sectionId: string): SidebarSection {
   const section = layout.sections.find((candidate) => candidate.id === sectionId);
   if (!section) throw new Error("Unknown sidebar section.");
@@ -396,20 +492,24 @@ function isStoredSidebarLayoutBody(value: unknown): boolean {
 }
 
 function snapshotFromStored(stored: StoredSidebarLayout): SidebarLayoutSnapshot {
-  return {
+  return withFolderTree({
     revision: stored.revision,
-    sections: stored.sections.map((section) => ({ ...section })),
+    sections: stored.sections.map(storedSection),
     order: [...stored.order],
     agentAssignments: { ...stored.agentAssignments },
     agentOrder: [...stored.agentOrder],
-  };
+  });
 }
 
 function snapshotFromLegacyStored(stored: LegacyStoredSidebarLayout): Omit<SidebarLayoutSnapshot, "agentOrder"> {
   return {
     revision: stored.revision,
-    sections: stored.sections.map((section) => ({ ...section })),
+    sections: stored.sections.map(storedSection),
     order: [...stored.order],
     agentAssignments: { ...stored.agentAssignments },
   };
+}
+
+function storedSection({ id, name, parentId }: SidebarSection): SidebarSection {
+  return isString(parentId) ? { id, name, parentId } : { id, name };
 }

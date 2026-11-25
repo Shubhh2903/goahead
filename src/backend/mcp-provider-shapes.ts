@@ -1,142 +1,121 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import {
   type AgentProviderId,
   COMPUTER_USE_MCP_SERVER_ID,
+  COMPUTER_USE_MCP_SERVER_NAME,
   isReservedMcpServerName,
   type McpServerConfig,
+  type McpTransport,
 } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
-import { runInLoginShell } from "./cli";
+import { Deferred, Effect, Schema } from "effect";
+import { agentLaunchPath, isExecutable, isWindowsRunnable } from "./cli";
+import { causeHelpers } from "./effect-boundary";
+import { isMissingFileError } from "./file-errors";
+import type { McpOperationError } from "./mcp-effects";
 import { getRecord } from "./protocol";
 
 const execFileAsync = promisify(execFile);
 
-/** Where a provider client reads the enabled configurations at spawn. */
-export type McpServerSource = () => readonly McpServerConfig[];
+export type McpServerSource = (agentId?: string | null) => readonly McpServerConfig[];
 
-/**
- * What OpenBot can lend a machine that does not have it: the `bin` directories of the tool runtimes
- * it downloaded, and the command words it can answer itself.
- *
- * Both are a floor, never a choice. The directories are appended *after* the user's own `PATH`, so
- * a machine with nvm, Homebrew or mise keeps the Node it installed, and an alias is read only once
- * a lookup in that whole `PATH` has found nothing. That ordering is what makes the managed runtime
- * a pure addition: no machine that starts a server today starts a different one afterwards.
- */
 export interface McpToolRuntimes {
   readonly binDirectories: readonly string[];
-  /** Command word to the absolute program that answers it, such as `npx` to the managed `bunx`. */
   readonly commandAliases: Readonly<Record<string, string>>;
+  readonly catalogCommand?: (config: McpServerConfig) => McpCatalogCommand | "pending" | null;
 }
 
-/** The machine exactly as it is. Used by every caller that has no runtime manager, including tests. */
+interface McpCatalogCommand {
+  command: string;
+  args: readonly string[];
+}
+
 export const NO_MCP_TOOL_RUNTIMES: McpToolRuntimes = { binDirectories: [], commandAliases: {} };
 
-/**
- * Read at each spawn, like the configurations themselves: a runtime that finished downloading after
- * the app started has to count, and one the user removed has to stop counting.
- */
 export type McpToolRuntimeSource = () => McpToolRuntimes;
 
-/**
- * The bearer token for an http server this machine has signed in to, or `null` for every other one.
- *
- * Read at each spawn and never stored on the row: the token is OpenBot's to refresh, and a value in
- * the configuration would be a credential the panel shows, the Team API carries and a user edits.
- * Asked per configuration rather than per URL, so a listing that grows a second way in can answer
- * differently without this signature moving.
- */
-export type McpAuthorizationSource = (config: McpServerConfig) => Promise<string | null>;
+export interface McpEndpoint {
+  url: string;
+  authorization: string | null;
+  proxied: boolean;
+}
 
-/**
- * Why an enabled configuration was not given to a provider.
- *
- * `working_directory_unsupported` is the only one that describes a perfectly valid server: it names
- * a provider's limit, not the user's mistake, so it is the same server every time and the panel can
- * say so without probing anything.
- */
-type McpDropReason = "command_not_found" | "working_directory_unsupported" | "name_conflict" | "unusable";
+export interface McpEndpointRefusal {
+  error: string;
+}
 
-/** One server a provider did not get, named so the user can be told which one and why. */
+export type McpEndpointSource = (
+  config: McpServerConfig,
+  agentId: string | null,
+) => Effect.Effect<McpEndpoint | McpEndpointRefusal, McpOperationError>;
+
+type McpDropReason =
+  | "command_not_found"
+  | "working_directory_unsupported"
+  | "name_conflict"
+  | "provider_limit"
+  | "unusable"
+  | "failed_to_start"
+  | "failed_in_provider";
+
 export interface McpServerDrop {
   name: string;
   reason: McpDropReason;
   detail: string;
+  signIn?: boolean;
 }
 
-/**
- * How a client says what it could not carry. `AgentService` is the only implementation, so that one
- * class stays the single writer of the log and the single source of the event the renderer shows.
- */
 export type McpDropReporter = (provider: AgentProviderId, drops: readonly McpServerDrop[]) => void;
 
-/**
- * What one provider is given, and what it had to be refused.
- *
- * The adapters used to answer only the first half and drop the rest with a bare `continue`, so a
- * server that never reached a provider produced nothing at all: no log line, no event, and no
- * stderr from the provider either, because nothing was ever handed over to fail. The caller reports
- * `dropped`; see `AgentService.#reportMcpDrops`.
- */
 export interface McpHandoff<T> {
   servers: T;
   dropped: McpServerDrop[];
 }
 
-/** Said by both providers that cannot carry one, so the user reads the same sentence either way. */
 const WORKING_DIRECTORY_UNSUPPORTED = "This provider cannot start a server in a working directory.";
 
-/** Said when two names differ only in characters the provider replaces. */
 const NAME_CONFLICT = "Another MCP server has the same name for this provider.";
 
-/**
- * A configuration with its stdio command, directory and `PATH` resolved, or why it cannot start.
- *
- * `path` is both the `PATH` the command was looked up in and the one the server is launched with.
- * The two have to be the same: a lookup in another `PATH` answers for another build of the command.
- */
 export type UsableMcpServer =
   | {
       config: McpServerConfig;
       command: string;
+      args: string[];
       workingDirectory: string;
       path: string | null;
-      /** The bearer token OpenBot holds for this server, added at hand-off. `null` for all others. */
+      url: string;
       authorization: string | null;
+      proxied: boolean;
       error?: undefined;
       reason?: undefined;
     }
   | {
       config: McpServerConfig;
       command?: undefined;
+      args?: undefined;
       workingDirectory?: undefined;
       path?: undefined;
+      url?: undefined;
       authorization?: undefined;
+      proxied?: undefined;
       error: string;
-      /** Machine-readable beside the sentence, so a reporter never has to match on the wording. */
-      reason: Exclude<McpDropReason, "working_directory_unsupported" | "name_conflict">;
+      reason: Exclude<McpDropReason, "working_directory_unsupported" | "name_conflict" | "provider_limit">;
     };
 
-/** The failed arm, for the readers that have already narrowed to it. */
 type UnusableMcpServer = Extract<UsableMcpServer, { error: string }>;
 
-/** The arm a provider is actually given, for the readers that have already narrowed to it. */
 export type ResolvedMcpServer = Extract<UsableMcpServer, { error?: undefined }>;
 
-/** A server that could not be resolved at all. Every provider refuses these for the same reason. */
 function unusableDrop(server: UnusableMcpServer): McpServerDrop {
   return { name: server.config.name, reason: server.reason, detail: server.error };
 }
 
-/**
- * The configurations one agent is given: all of them, or all but Computer Use when the user turned
- * it off for that agent.
- */
 /** The servers one agent gets: without Computer Use when it is off, and without the servers its settings turn off. */
 export function agentMcpServers(
   configs: readonly McpServerConfig[],
@@ -158,64 +137,54 @@ export function disabledMcpServersParam(params: unknown): string[] {
   return params.disabledMcpServerIds.filter((id): id is string => typeof id === "string");
 }
 
-/**
- * Whether the `thread/start` or `thread/resume` params allow Computer Use. `ThreadLifecycle` sends
- * `computerUse: false` to Claude and the ACP clients only when it is off, because those clients read
- * the MCP servers themselves. Absent means on.
- */
 export function computerUseParam(params: unknown): boolean {
   return !isDynamicRecord(params) || params.computerUse !== false;
 }
 
-/**
- * The enabled configurations a provider can actually be given.
- *
- * Two jobs, both of which have to happen exactly once and before anything else reads the list:
- *
- * - A configuration that takes one of OpenBot's own bridge names is dropped. All four providers key
- *   MCP servers by name, so `openbot` here would displace the bridge the agent depends on.
- * - A stdio command is resolved to an absolute path. Claude and Codex spawn with no shell, so a bare
- *   `npx` fails in the provider even though a probe using the SDK's default environment succeeded.
- *   Resolving here, and probing the resolved value, keeps the panel's answer and the agent's answer
- *   the same. An unresolvable command is reported as failed rather than sent.
- */
-export async function usableMcpServers(
-  configs: readonly McpServerConfig[],
-  tools: McpToolRuntimes = NO_MCP_TOOL_RUNTIMES,
-  authorization?: McpAuthorizationSource,
-): Promise<UsableMcpServer[]> {
-  const candidates = configs.filter((config) => config.enabled && !isReservedMcpServerName(config.name));
-  return Promise.all(candidates.map((config) => usableMcpServer(config, tools, authorization)));
+export function mcpAgentParam(params: unknown): string | null {
+  return isDynamicRecord(params) && typeof params.openbotAgentId === "string" ? params.openbotAgentId : null;
 }
 
-/**
- * One configuration made usable, whether or not it is enabled.
- *
- * A test answers for the configuration in front of the user, and a user may well test a server
- * before turning it on - so this one, unlike `usableMcpServers`, does not filter.
- */
-export async function usableMcpServer(
+export const usableMcpServers = Effect.fnUntraced(function* (
+  configs: readonly McpServerConfig[],
+  tools: McpToolRuntimes = NO_MCP_TOOL_RUNTIMES,
+  endpoint?: McpEndpointSource,
+  agentId: string | null = null,
+) {
+  const candidates = configs.filter((config) => config.enabled && !isReservedMcpServerName(config.name));
+  return yield* Effect.forEach(candidates, (config) => usableMcpServer(config, tools, endpoint, agentId), {
+    concurrency: "unbounded",
+  });
+});
+
+export const usableMcpServer = Effect.fnUntraced(function* (
   config: McpServerConfig,
   tools: McpToolRuntimes = NO_MCP_TOOL_RUNTIMES,
-  authorization?: McpAuthorizationSource,
-): Promise<UsableMcpServer> {
-  // An http server starts no process, so it needs neither a command nor a `PATH`. It is the only
-  // kind that can carry a sign-in, because a token travels in a header.
+  endpoint?: McpEndpointSource,
+  agentId: string | null = null,
+): Effect.fn.Return<UsableMcpServer, McpShapeFailed> {
   if (config.transport !== "stdio") {
+    const resolved = endpoint
+      ? yield* endpoint(config, agentId).pipe(Effect.mapError(({ cause }) => new McpShapeFailed({ cause })))
+      : { url: config.url, authorization: null, proxied: false };
+    if ("error" in resolved) return { config, error: resolved.error, reason: "unusable" };
+    return { config, command: "", args: [], workingDirectory: "", path: null, ...resolved };
+  }
+  const configured = mcpEnvironment(config).PATH;
+  const path = appendToolRuntimes(configured ?? (yield* agentLaunchPath()), tools.binDirectories);
+  const catalog = tools.catalogCommand?.(config) ?? null;
+  if (catalog !== null && catalog !== "pending")
     return {
       config,
-      command: "",
-      workingDirectory: "",
-      path: null,
-      authorization: (await authorization?.(config)) ?? null,
+      command: catalog.command,
+      args: [...catalog.args, ...config.args],
+      workingDirectory: expandHomePath(config.workingDirectory),
+      path,
+      url: "",
+      authorization: null,
+      proxied: false,
     };
-  }
-  // A `PATH` the configuration carries is the one the server runs with, so it is the one the command
-  // is looked up in: `python` with a virtual environment's `PATH` names that interpreter, and the
-  // absolute path a login shell answered with would silently be a different one.
-  const configured = mcpEnvironment(config).PATH;
-  const path = appendToolRuntimes(configured ?? (await loginShellPath()), tools.binDirectories);
-  const command = (await resolveMcpCommand(config.command, path)) ?? tools.commandAliases[config.command.trim()];
+  const command = (yield* resolveMcpCommand(config.command, path)) ?? tools.commandAliases[config.command.trim()];
   if (!command)
     return {
       config,
@@ -225,239 +194,123 @@ export async function usableMcpServer(
   return {
     config,
     command,
+    args: [...config.args],
     workingDirectory: expandHomePath(config.workingDirectory),
     path,
+    url: "",
     authorization: null,
+    proxied: false,
   };
-}
+});
 
-/**
- * The managed directories after everything the machine already had, and `null` when there is
- * nothing at all to search.
- *
- * Last, not first: see `McpToolRuntimes`. A directory already on the list is not added again, so a
- * user who put the managed `bin` on their own `PATH` keeps the position they chose for it.
- *
- * Exported for its own test, like `pickWindowsExecutable`: the case that matters is the one this
- * machine cannot reach, a `null` path, which is every Windows machine.
- */
-export function appendToolRuntimes(path: string | null, binDirectories: readonly string[]): string | null {
+function appendToolRuntimes(path: string | null, binDirectories: readonly string[]): string | null {
   if (binDirectories.length === 0) return path;
-  // `null` means "wherever this process would look", which is what naming a directory here takes
-  // away: from this point the value is the whole search path, and anything left out of it is gone.
-  // Windows is where that bites, because it has no login shell to ask and so is always `null`: the
-  // user's own `npx`, `python` and `uvx` would all disappear behind the one managed directory.
   const entries = (path ?? process.env.PATH ?? "").split(delimiter).filter((entry) => entry.length > 0);
   for (const directory of binDirectories) if (!entries.includes(directory)) entries.push(directory);
   return entries.join(delimiter);
 }
 
-/**
- * A path with a leading `~` replaced by this user's home: the directory a stdio server starts in,
- * and a command such as `~/.paper/bin/paper`.
- *
- * The form offers `~/code` as its example, and a shell is what usually expands that: process
- * creation takes the value as written, so a literal `~` would be a file that does not exist and the
- * spawn would fail. Expanding it here, once, keeps the probe and every provider on the same path.
- * It is also the only way a catalog listing can name a program under the home directory: the
- * listing is the same for every user. Anything else is passed through untouched, including a
- * relative directory, which a user writes against the agent's own workspace.
- */
 function expandHomePath(value: string): string {
   const trimmed = value.trim();
-  // A backslash separates only on Windows. On the other systems it is an ordinary character of a
-  // file name, so `~\project` there names a directory called `~\project`.
   const homeRelative = process.platform === "win32" ? /^~[/\\]/u : /^~\//u;
   if (trimmed !== "~" && !homeRelative.test(trimmed)) return trimmed;
   const rest = trimmed.slice(2);
   return rest ? join(homedir(), rest) : homedir();
 }
 
-/**
- * One word for a POSIX shell, whatever it holds.
- *
- * The lookup below needs a shell, and the word it looks up is written by the user - and by a remote
- * administrator of this machine's host. Quoted, a name such as `node$(...)` is a name the machine
- * does not have; unquoted, the shell would run what is inside it while answering the question.
- */
-function shellWord(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
+const resolvedCommands = new Map<string, Deferred.Deferred<string | null, McpShapeFailed>>();
 
-/**
- * An absolute path for a command name, or `null` when the given `PATH` holds none. A command the
- * user already wrote as a path is taken as written, after `~` is expanded: it is their statement of
- * which build to run.
- *
- * `path` is the list to search, which is the list the server will be launched with. Without one the
- * login shell's own is used, because a packaged app starts with a restricted `PATH` - the same
- * reason `collectCandidates` in `cli.ts` uses a login shell.
- */
-export function resolveMcpCommand(command: string, path: string | null = null): Promise<string | null> {
+const resolveMcpCommand = Effect.fn("McpShape.resolveCommand")(function* (command: string, path: string | null = null) {
   const trimmed = expandHomePath(command);
-  if (!trimmed) return Promise.resolve(null);
-  if (isAbsolute(trimmed) || trimmed.startsWith(".")) return Promise.resolve(trimmed);
-  // The `PATH` belongs in the key: the same word looked up in two lists names two builds, which is
-  // the invariant the type comment above states.
+  if (!trimmed) return null;
+  if (isAbsolute(trimmed)) return (yield* isMissingCommandFile(trimmed)) ? null : trimmed;
+  if (trimmed.startsWith(".")) return trimmed;
   const key = `${path ?? ""}\u0000${trimmed}`;
   const cached = resolvedCommands.get(key);
-  if (cached) return cached;
-  const pending = rememberMcpCommand(key, trimmed, path);
+  if (cached) return yield* Deferred.await(cached);
+  const pending = Deferred.makeUnsafe<string | null, McpShapeFailed>();
   resolvedCommands.set(key, pending);
-  return pending;
-}
+  return yield* lookUpMcpCommand(trimmed, path).pipe(
+    Effect.tap((value) =>
+      Effect.sync(() => {
+        if (value === null && resolvedCommands.get(key) === pending) resolvedCommands.delete(key);
+      }),
+    ),
+    Effect.onExit((exit) => Deferred.done(pending, exit)),
+    Effect.uninterruptible,
+  );
+});
 
-/**
- * Every command resolved in this run, so a thread start does not pay for a login shell per server.
- *
- * The promise is stored rather than the value, so two servers naming the same command in one
- * hand-off share one shell instead of racing two. A miss is forgotten again, because a user who
- * installs the tool that was missing must not have to restart the app to be believed.
- */
-const resolvedCommands = new Map<string, Promise<string | null>>();
+const COMMAND_FILE_CHECK_MS = 2_000;
 
-/** Drops a cached miss, and keeps every hit. */
-async function rememberMcpCommand(key: string, command: string, path: string | null): Promise<string | null> {
-  const resolved = await lookUpMcpCommand(command, path);
-  if (resolved === null) resolvedCommands.delete(key);
-  return resolved;
-}
+const isMissingCommandFile = Effect.fn("McpShape.isMissingCommandFile")(function* (command: string) {
+  if (process.platform === "win32" && !isWindowsRunnable(command, process.env.PATHEXT)) return false;
+  return yield* mcpShapeIo(() => access(command)).pipe(
+    Effect.as(false),
+    Effect.catch(({ cause }) =>
+      Effect.succeed(
+        isMissingFileError(cause) || (cause instanceof Error && "code" in cause && cause.code === "ENOTDIR"),
+      ),
+    ),
+    Effect.timeoutOrElse({ duration: COMMAND_FILE_CHECK_MS, orElse: () => Effect.succeed(false) }),
+  );
+});
 
-/**
- * Forgets what every command resolved to.
- *
- * The Test button is the user asking about *now* - usually straight after installing the thing that
- * was missing - so it starts from nothing. Nothing else clears this: a hand-off wants the answer the
- * probe gave, or the panel and the agent would disagree.
- */
 export function clearMcpCommandCache(): void {
   resolvedCommands.clear();
 }
 
-/** The extensions Windows runs when `PATHEXT` is unset, in the order the system itself uses. */
-const DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD";
-
-/**
- * The first `where.exe` line this machine can actually spawn.
- *
- * `where.exe npx` on a machine with Node answers `npx` before `npx.cmd`: the first is a shell script
- * for Git Bash and has no extension Windows can run. Providers spawn an MCP server with no shell, so
- * handing that line over is a server that never starts. The order is otherwise kept as `where.exe`
- * gave it, because that order is the user's own `PATH` and so their statement of which build to run.
- *
- * A line that matches nothing in `PATHEXT` is still answered with, unchanged from before this
- * function existed: an extensionless program is normal everywhere except Windows, and refusing one
- * here would turn a working configuration into a missing command.
- */
 export function pickWindowsExecutable(stdout: string, pathext: string | undefined): string | null {
   const lines = stdout
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
-  const runnable = new Set(
-    (pathext?.trim() || DEFAULT_PATHEXT)
-      .split(";")
-      .map((entry) => entry.trim().toLowerCase())
-      .filter((entry) => entry.startsWith(".")),
-  );
-  return lines.find((line) => runnable.has(windowsExtension(line))) ?? lines[0] ?? null;
+  return lines.find((line) => isWindowsRunnable(line, pathext)) ?? lines[0] ?? null;
 }
 
-/** The last extension of a path, or `""`. A dot inside a directory name is not one. */
-function windowsExtension(line: string): string {
-  const dot = line.lastIndexOf(".");
-  const separator = Math.max(line.lastIndexOf("\\"), line.lastIndexOf("/"));
-  return dot > separator ? line.slice(dot).toLowerCase() : "";
-}
-
-async function lookUpMcpCommand(trimmed: string, path: string | null): Promise<string | null> {
-  try {
+const lookUpMcpCommand = Effect.fn("McpShape.lookUpCommand")(
+  function* (trimmed: string, path: string | null) {
     if (process.platform === "win32") {
-      const { stdout } = await execFileAsync("where.exe", [trimmed], {
-        timeout: 5_000,
-        maxBuffer: 64 * 1024,
-        ...(path === null ? {} : { env: { ...process.env, PATH: path } }),
-      });
+      const { stdout } = yield* mcpShapeIo(() =>
+        execFileAsync("where.exe", [trimmed], {
+          timeout: 5_000,
+          maxBuffer: 64 * 1024,
+          ...(path === null ? {} : { env: { ...process.env, PATH: path } }),
+        }),
+      );
       return pickWindowsExecutable(stdout, process.env.PATHEXT);
     }
-    // The assignment goes inside the command, not into the shell's environment: a login shell reads
-    // the user's profile first, and a profile that appends to `PATH` would undo an inherited one.
-    const search = path === null ? "" : `PATH=${shellWord(path)} `;
-    const stdout = await runInLoginShell(`${search}command -v -- ${shellWord(trimmed)}`);
-    // Only the last line: an interactive profile can print a greeting before the command runs. The
-    // line is kept as `command -v` gave it - a relative `PATH` entry gives a relative path, and a
-    // shell function, such as the `npx` of a lazy-loaded nvm, gives its bare name for spawn to find.
-    return stdout.trim().split(/\r?\n/u).at(-1)?.trim() || null;
-  } catch {
+    if (trimmed.includes("/")) return null;
+    for (const folder of (path ?? process.env.PATH ?? "").split(delimiter)) {
+      if (!isAbsolute(folder)) continue;
+      const candidate = join(folder, trimmed);
+      const found = yield* isExecutable(candidate).pipe(
+        Effect.timeoutOrElse({ duration: COMMAND_FILE_CHECK_MS, orElse: () => Effect.succeed(false) }),
+      );
+      if (found) return candidate;
+    }
     return null;
-  }
-}
+  },
+  Effect.catch(() => Effect.succeed(null)),
+);
 
-/**
- * This user's own `PATH`, as their login shell builds it, or `null` when it cannot be read.
- *
- * Read once per run and reused, because every hand-off and every test would otherwise start a login
- * shell of its own. Windows has no equivalent: `where.exe` runs against the process `PATH` already.
- */
-let loginShellPathOnce: Promise<string | null> | null = null;
-
-export function loginShellPath(): Promise<string | null> {
-  loginShellPathOnce ??= readLoginShellPath();
-  return loginShellPathOnce;
-}
-
-async function readLoginShellPath(): Promise<string | null> {
-  if (process.platform === "win32") return null;
-  try {
-    const stdout = await runInLoginShell('printf %s "$PATH"');
-    // `printf` writes no newline, so the value is the last line whatever the user's profile printed
-    // before it.
-    return stdout.split(/\r?\n/u).pop()?.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Whether testing this configuration is worth waiting for the managed tool runtimes.
- *
- * An http test waits for nothing, and neither does a stdio command this machine already resolves -
- * an installed interpreter, an absolute path, the user's own `npx`. Only a command nothing on the
- * search list names may arrive with the download, so only that one waits for it.
- */
-export async function needsManagedRuntime(config: McpServerConfig, tools: McpToolRuntimes): Promise<boolean> {
+export const needsManagedRuntime = Effect.fn("McpShape.needsManagedRuntime")(function* (
+  config: McpServerConfig,
+  tools: McpToolRuntimes,
+) {
   if (config.transport !== "stdio") return false;
-  const resolved = await usableMcpServer(config, tools);
+  if (tools.catalogCommand?.(config) === "pending") return true;
+  if (isAbsolute(expandHomePath(config.command))) return false;
+  const resolved = yield* usableMcpServer(config, tools);
   return resolved.error !== undefined && resolved.reason === "command_not_found";
-}
+});
 
-/**
- * The environment a stdio MCP server is launched with, `PATH` included.
- *
- * The login shell that found the command holds the `PATH` that makes it run: an `npx` or `uvx`
- * installed by nvm, Homebrew or mise starts with `#!/usr/bin/env node`, so it needs that same `PATH`
- * to find its own runtime. An app the user started from Finder or a launcher inherits none of it,
- * which is a server that tests green from a terminal and fails everywhere else.
- *
- * The resolved `server.path` wins over the configured pairs: it is what the command was looked up
- * in - the configured `PATH` with the managed directories appended - so launching with anything
- * else would disagree with the lookup. The user's own directories still come first, because they
- * were first in the resolved list.
- */
 export function mcpLaunchEnvironment(server: UsableMcpServer): Record<string, string> {
   const environment = mcpEnvironment(server.config);
-  // Truthiness, not a null check: an empty list is no list, and the configured value stands.
   if (server.path) environment.PATH = server.path;
   return environment;
 }
 
-/**
- * The environment a stdio MCP server starts with, beyond the provider's own.
- *
- * `envPassthrough` is spent here and nowhere else: it names the variables this machine already
- * holds that the server needs, such as `HOME`. The configuration's own pairs are applied last, so
- * a user's explicit value always wins over an inherited one.
- */
 export function mcpEnvironment(config: McpServerConfig): Record<string, string> {
   const environment: Record<string, string> = {};
   for (const name of config.envPassthrough) {
@@ -468,12 +321,14 @@ export function mcpEnvironment(config: McpServerConfig): Record<string, string> 
   return environment;
 }
 
-/** Claude reads a record keyed by name. Its stdio entry takes `cwd`; its http entry takes headers. */
 export type ClaudeMcpServer =
   | { type: "stdio"; command: string; args: string[]; env: Record<string, string>; cwd?: string }
   | { type: "http"; url: string; headers: Record<string, string> };
 
-export function claudeMcpServers(servers: readonly UsableMcpServer[]): McpHandoff<Record<string, ClaudeMcpServer>> {
+export function claudeMcpServers(
+  servers: readonly UsableMcpServer[],
+  userAgent?: string,
+): McpHandoff<Record<string, ClaudeMcpServer>> {
   const record: Record<string, ClaudeMcpServer> = {};
   const dropped: McpServerDrop[] = [];
   for (const server of servers) {
@@ -487,39 +342,75 @@ export function claudeMcpServers(servers: readonly UsableMcpServer[]): McpHandof
         ? {
             type: "stdio",
             command: server.command,
-            args: [...config.args],
+            args: server.args,
             env: mcpLaunchEnvironment(server),
             ...(server.workingDirectory ? { cwd: server.workingDirectory } : {}),
           }
-        : { type: "http", url: config.url, headers: mcpHandoffHeaders(server) };
+        : { type: "http", url: server.url, headers: withUserAgent(mcpHandoffHeaders(server), userAgent) };
   }
   return { servers: record, dropped };
 }
 
-/**
- * ACP reads an array, and its environment and headers are `{ name, value }` pairs, not records.
- *
- * **No working directory.** `McpServerStdio` in the ACP schema carries only a name, a command,
- * arguments and an environment, so a server that names a directory is left out rather than started
- * in the provider's own. A server told to open `./data.db` would otherwise pass its test and then
- * create a second, empty database beside the agent's workspace. The form says so before the save,
- * the row says so afterwards, and the hand-off reports it as a drop.
- */
+function withUserAgent(headers: Record<string, string>, userAgent: string | undefined): Record<string, string> {
+  if (!userAgent || Object.keys(headers).some((key) => key.toLowerCase() === "user-agent")) return headers;
+  return { ...headers, "User-Agent": userAgent };
+}
+
 export type AcpMcpServer =
-  | { name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }
+  | { name: string; command: string; args: string[]; env: Array<{ name: string; value: string }>; cwd?: string }
   | { type: "http"; name: string; url: string; headers: Array<{ name: string; value: string }> };
 
-export function acpMcpServers(servers: readonly UsableMcpServer[]): McpHandoff<AcpMcpServer[]> {
+export function acpMcpServerName(
+  config: McpServerConfig,
+  own: readonly string[] = [],
+  form: (name: string) => string = (name) => name,
+): string {
+  const name = form(providerMcpServerName(config.name));
+  if (config.id === COMPUTER_USE_MCP_SERVER_ID || !own.includes(name)) return name;
+  const renamed = form(`openbot_${name}`);
+  return own.includes(renamed) || isReservedMcpServerName(renamed) ? name : renamed;
+}
+
+export function grokMcpServerName(name: string): string {
+  const joined = name.replace(/_{2,}/gu, "_").replace(/_+$/u, "");
+  if (joined === "") return "server";
+  return /^[A-Za-z_]/u.test(joined) ? joined : `_${joined}`;
+}
+
+export function acpMcpServers(
+  servers: readonly UsableMcpServer[],
+  own: readonly string[] = [],
+  form?: (name: string) => string,
+  relaysStdio = false,
+  limit = Number.POSITIVE_INFINITY,
+): McpHandoff<AcpMcpServer[]> {
   const entries: AcpMcpServer[] = [];
   const dropped: McpServerDrop[] = [];
+  const configured = new Set(servers.map((server) => server.config.name));
   for (const server of servers) {
     if (server.error !== undefined) {
       dropped.push(unusableDrop(server));
       continue;
     }
     const { config } = server;
+    if (entries.length >= limit) {
+      dropped.push({
+        name: config.name,
+        reason: "provider_limit",
+        detail: sourceText("error.backend.mcpProviderLimit"),
+      });
+      continue;
+    }
+    const name = acpMcpServerName(config, own, form);
+    if (
+      entries.some((entry) => entry.name === name) ||
+      (name !== config.name && (configured.has(name) || isReservedMcpServerName(name)))
+    ) {
+      dropped.push({ name: config.name, reason: "name_conflict", detail: NAME_CONFLICT });
+      continue;
+    }
     if (config.transport === "stdio") {
-      if (config.workingDirectory) {
+      if (config.workingDirectory && !relaysStdio) {
         dropped.push({
           name: config.name,
           reason: "working_directory_unsupported",
@@ -528,16 +419,17 @@ export function acpMcpServers(servers: readonly UsableMcpServer[]): McpHandoff<A
         continue;
       }
       entries.push({
-        name: config.name,
+        name,
         command: server.command,
-        args: [...config.args],
+        args: server.args,
         env: Object.entries(mcpLaunchEnvironment(server)).map(([name, value]) => ({ name, value })),
+        ...(config.workingDirectory ? { cwd: server.workingDirectory } : {}),
       });
     } else {
       entries.push({
         type: "http",
-        name: config.name,
-        url: config.url,
+        name,
+        url: server.url,
         headers: Object.entries(mcpHandoffHeaders(server)).map(([name, value]) => ({ name, value })),
       });
     }
@@ -545,60 +437,111 @@ export function acpMcpServers(servers: readonly UsableMcpServer[]): McpHandoff<A
   return { servers: entries, dropped };
 }
 
-/**
- * Codex reads `config.mcp_servers`, a record keyed by name, which `profile-generation.ts` already
- * writes to disable the user's own servers.
- *
- * **stdio needs no working directory.** Neither a key for a working directory nor any other guess
- * could be confirmed against the pinned Codex app-server, and a guessed key name would fail
- * silently at the next turn. A server that names a directory is left out of the Codex payload
- * instead: a directory that does not arrive would start the server in the wrong place, which a
- * server told to open `./data.db` answers by creating a second database. Every other capable
- * provider still gets it.
- *
- * **http travels as `url` with `http_headers`.** Both were confirmed against the pinned Codex
- * app-server: an entry with an invalid credential is listed as failed with the server's own 401,
- * which is the handshake reaching the server rather than the shape being dropped.
- *
- * **Names travel as `codexMcpServerName`.** Codex does not start a server whose name does not match
- * `^[a-zA-Z0-9_-]+$`, and it tells no one. A server the user named "Home Assistant" passed its test
- * and gave a Codex agent no tools. Two names that become the same key keep the first; the second is
- * reported as a drop.
- */
 export type CodexMcpServer =
-  | { command: string; args: string[]; env: Record<string, string> }
+  | {
+      command: string;
+      args: string[];
+      env: Record<string, string>;
+      cwd?: string;
+      enabled?: boolean;
+      tools?: DynamicRecord;
+    }
   | { url: string; http_headers: Record<string, string> };
 
-/**
- * The names Codex holds in `~/.codex/config.toml`, each turned off.
- *
- * Codex merges its own file into the thread configuration, so without this an agent's tools depend
- * on a file OpenBot's panel does not show, and two computers with the same OpenBot settings give
- * different tools. `profile-generation.ts` has swept these since the profile step existed; a normal
- * thread gets the same treatment, with OpenBot's own entries spread on top so a colliding name
- * resolves to the one the panel shows.
- *
- * The reader is passed in, because this module knows the payload shape and not the transport. An
- * empty record is the answer when the provider holds no configuration of its own.
- */
-export async function codexDisabledServers(
-  readConfig: () => Promise<DynamicRecord>,
-): Promise<Record<string, CodexDisabledMcpServer>> {
-  const configured = getRecord(getRecord(await readConfig(), "config"), "mcp_servers");
-  return Object.fromEntries(Object.keys(configured ?? {}).map((name) => [name, { enabled: false } as const]));
+export const CODEX_PLACEHOLDER_COMMAND = "openbot-mcp";
+export const CODEX_PLACEHOLDER_URL = "http://127.0.0.1:1";
+
+export type CodexOwnTransports = Readonly<Record<string, McpTransport>>;
+
+export interface CodexOwnServers {
+  disabled: Record<string, CodexDisabledMcpServer>;
+  transports: CodexOwnTransports;
+  read: DynamicRecord | null;
 }
 
-/** A name Codex found in its own file and must not start. It carries no command; that is the point. */
+export function codexOwnTransports(configured: DynamicRecord | null): CodexOwnTransports {
+  return Object.fromEntries(
+    Object.entries(configured ?? {}).flatMap(([name, entry]): Array<[string, McpTransport]> => {
+      if (!isDynamicRecord(entry)) return [];
+      if (typeof entry.command === "string" && entry.command !== CODEX_PLACEHOLDER_COMMAND) return [[name, "stdio"]];
+      if (typeof entry.url === "string" && entry.url !== CODEX_PLACEHOLDER_URL) return [[name, "http"]];
+      return [];
+    }),
+  );
+}
+
+export const codexDisabledServers = Effect.fn("McpShape.codexDisabledServers")(function* (
+  readConfig: () => Effect.Effect<DynamicRecord, McpShapeFailed>,
+): Effect.fn.Return<CodexOwnServers, McpShapeFailed> {
+  const config = yield* readConfig();
+  const configured = getRecord(getRecord(config, "config"), "mcp_servers");
+  return {
+    disabled: Object.fromEntries(
+      Object.keys(configured ?? {}).map((name) => {
+        const tools = getRecord(getRecord(configured, name), "tools");
+        return [name, { enabled: false, ...(tools ? { tools } : {}) } satisfies CodexDisabledMcpServer];
+      }),
+    ),
+    transports: codexOwnTransports(configured),
+    read: config,
+  };
+});
+
 export interface CodexDisabledMcpServer {
   enabled: false;
+  tools?: DynamicRecord;
 }
 
-/** A server name in the form Codex accepts. Claude makes the same change by itself. */
-function codexMcpServerName(name: string): string {
+export function providerMcpServerName(name: string): string {
   return name.replace(/[^A-Za-z0-9_-]/gu, "_");
 }
 
-export function codexMcpServers(servers: readonly UsableMcpServer[]): McpHandoff<Record<string, CodexMcpServer>> {
+export function codexMcpServerKey(config: McpServerConfig, own: CodexOwnTransports = {}): string {
+  const name = providerMcpServerName(config.name);
+  if (config.id === COMPUTER_USE_MCP_SERVER_ID) return name;
+  const renamed = `openbot_${name}`;
+  const renamedTaken = Object.hasOwn(own, renamed) || isReservedMcpServerName(renamed);
+  return renamedTaken && (!Object.hasOwn(own, name) || own[name] === config.transport) ? name : renamed;
+}
+
+function codexMcpServerKeyTaken(
+  key: string,
+  config: McpServerConfig,
+  own: CodexOwnTransports,
+  record: Readonly<Record<string, CodexMcpServer>>,
+): boolean {
+  if (Object.hasOwn(record, key)) return true;
+  if (key === providerMcpServerName(config.name)) return false;
+  return Object.hasOwn(own, key) || isReservedMcpServerName(key);
+}
+
+export function codexThreadMcpServers(
+  disabled: Readonly<Record<string, CodexDisabledMcpServer>>,
+  servers: Readonly<Record<string, CodexMcpServer>>,
+): Record<string, CodexMcpServer | CodexDisabledMcpServer> {
+  const record: Record<string, CodexMcpServer | CodexDisabledMcpServer> = { ...disabled, ...servers };
+  for (const [name, server] of Object.entries(servers)) {
+    record[name] = { ...disabled[name], ...server, enabled: true };
+  }
+  return record;
+}
+
+export function codexDirectMcpNamespaces(servers: Readonly<Record<string, CodexMcpServer>>): string[] {
+  return Object.hasOwn(servers, COMPUTER_USE_MCP_SERVER_NAME) ? [`mcp__${COMPUTER_USE_MCP_SERVER_NAME}`] : [];
+}
+
+export function codexDeferredMcpServers(configs: readonly McpServerConfig[]): McpServerConfig[] {
+  return configs.filter((config) => config.enabled && config.id !== COMPUTER_USE_MCP_SERVER_ID);
+}
+
+export function openCodeMcpServers(configs: readonly McpServerConfig[]): McpServerConfig[] {
+  return configs.filter((config) => config.enabled && !isReservedMcpServerName(config.name));
+}
+
+export function codexMcpServers(
+  servers: readonly UsableMcpServer[],
+  own: CodexOwnTransports = {},
+): McpHandoff<Record<string, CodexMcpServer>> {
   const record: Record<string, CodexMcpServer> = {};
   const dropped: McpServerDrop[] = [];
   for (const server of servers) {
@@ -606,28 +549,21 @@ export function codexMcpServers(servers: readonly UsableMcpServer[]): McpHandoff
       dropped.push(unusableDrop(server));
       continue;
     }
-    const name = codexMcpServerName(server.config.name);
-    if (Object.hasOwn(record, name)) {
+    const name = codexMcpServerKey(server.config, own);
+    if (codexMcpServerKeyTaken(name, server.config, own, record)) {
       dropped.push({ name: server.config.name, reason: "name_conflict", detail: NAME_CONFLICT });
       continue;
     }
     if (server.config.transport === "stdio") {
-      if (server.config.workingDirectory) {
-        dropped.push({
-          name: server.config.name,
-          reason: "working_directory_unsupported",
-          detail: WORKING_DIRECTORY_UNSUPPORTED,
-        });
-        continue;
-      }
       record[name] = {
         command: server.command,
-        args: [...server.config.args],
+        args: server.args,
         env: mcpLaunchEnvironment(server),
+        ...(server.workingDirectory ? { cwd: server.workingDirectory } : {}),
       };
     } else {
       record[name] = {
-        url: server.config.url,
+        url: server.url,
         http_headers: mcpHandoffHeaders(server),
       };
     }
@@ -635,14 +571,6 @@ export function codexMcpServers(servers: readonly UsableMcpServer[]): McpHandoff
   return { servers: record, dropped };
 }
 
-/**
- * What the Codex tool manifest records about the MCP set.
- *
- * Every field that changes what the server is, because Codex ignores the configuration on resume:
- * an edited command, argument, working directory or credential leaves a loaded session running the
- * old server, so it has to force a replacement session in the same way an added server does. The
- * manifest is a file on disk, so the secret values go in as a digest and never as themselves.
- */
 export function mcpFingerprintValues(configs: readonly McpServerConfig[]): string[] {
   return configs
     .filter((config) => config.enabled && !isReservedMcpServerName(config.name))
@@ -663,29 +591,23 @@ export function mcpFingerprintValues(configs: readonly McpServerConfig[]): strin
     .sort();
 }
 
-/** The values reduced to one digest, so a changed credential is visible without being readable. */
 function secretDigest(config: McpServerConfig): string {
   const values = [...config.env, ...config.headers].map((pair) => `${pair.key}=${pair.value}`).join("\u0000");
   return createHash("sha256").update(values).digest("hex");
 }
 
-/**
- * The headers one http server is handed, with the OAuth token added here and only here.
- *
- * The token is never written to the row. That is the whole reason this stage exists: a credential
- * `mcp-remote` kept in a file of its own was one OpenBot could not redact, and a credential written
- * into `McpServerConfig.headers` would be one the panel shows, the Team API carries to a remote
- * administrator, and a user can edit into something OpenBot then refreshes over. Injected at the
- * hand-off, it is a value `McpHandoffLog` has already seen, so every log, export and send path
- * removes it.
- *
- * A header the user typed wins. Someone who pasted their own `Authorization` has said which
- * credential this server takes, and silently replacing it would be OpenBot overruling them with an
- * account they did not choose.
- */
 export function mcpHandoffHeaders(server: ResolvedMcpServer): Record<string, string> {
+  if (server.proxied) return server.authorization ? { Authorization: `Bearer ${server.authorization}` } : {};
   const headers = Object.fromEntries(server.config.headers.map((pair) => [pair.key, pair.value]));
   const named = Object.keys(headers).some((key) => key.toLowerCase() === "authorization");
   if (server.authorization && !named) headers.Authorization = `Bearer ${server.authorization}`;
   return headers;
 }
+
+export class McpShapeFailed extends Schema.TaggedError<McpShapeFailed>()("McpShapeFailed", {
+  cause: Schema.Defect(),
+}) {}
+
+const { io: mcpShapeIo, rewrap: toMcpShapeFailed } = causeHelpers(McpShapeFailed);
+
+export { toMcpShapeFailed };

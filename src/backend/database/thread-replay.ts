@@ -3,10 +3,15 @@ import type { ConversationMessage, ConversationSnapshot } from "@openbot/contrac
 import { isAgentProvider } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import type { ConversationQueries } from "./conversation-queries";
-import type { DatabaseCore } from "./database-core";
+import { activityTurnId } from "./conversation-writer";
+import { type DatabaseCore, deleteThreadAttachments } from "./database-core";
 import { databaseRows, decodeThreadAgentRow, objectValue, requiredEventRow } from "./database-rows";
+import { withoutDeletedMessages } from "./deleted-thread-messages";
 import { currentConversationMessage } from "./legacy-conversation-message";
 import type { ProviderSession } from "./provider-sessions";
+import { withTransaction } from "./sqlite-transaction";
+import { conversationSnapshotValue, ThreadMessageFold, threadEventMessages } from "./thread-message-fold";
+import { refreshThreadOrder } from "./thread-message-order";
 import type { StoredThreadSummary } from "./thread-summaries";
 
 export interface ThreadReplayOptions {
@@ -14,16 +19,6 @@ export interface ThreadReplayOptions {
   conversations: ConversationQueries;
 }
 
-/**
- * Rebuilds a thread's projections by replaying its orchestration events from the start.
- *
- * Owns the recovery path taken when a projection is missing or stale: messages, turns, provider
- * session links, summaries and attachment projections are all reconstructed from the event log,
- * then read back through the conversation queries. This is the one place that opens an
- * unconditional transaction of its own, because the replay must be all-or-nothing and the
- * dispatches nested inside it must join it rather than commit piecemeal. The class never imports
- * the facade.
- */
 export class ThreadReplay {
   readonly #core: DatabaseCore;
   readonly #conversations: ConversationQueries;
@@ -47,10 +42,9 @@ export class ThreadReplay {
     const thread = decodeThreadAgentRow(
       db.prepare("SELECT agent_id FROM projection_threads WHERE thread_id = ?").get(threadId),
     );
-    if (!thread) throw new Error(`Unknown OpenBot thread: ${threadId}`);
+    if (!thread) throw new Error(`Unknown GoAhead thread: ${threadId}`);
 
-    let latest: ConversationSnapshot | null = null;
-    let latestSequence = 0;
+    const fold = new ThreadMessageFold(thread.agent_id, threadId);
     const sessions = new Map<string, ProviderSession & { sequence: number }>();
     const summaries: Array<StoredThreadSummary & { sequence: number }> = [];
     const turnSessions = new Map<string, string | null>();
@@ -82,97 +76,30 @@ export class ThreadReplay {
         const summary = summaryValue(record);
         if (summary) summaries.push({ ...summary, sequence: event.sequence });
       }
-      const snapshot = conversationSnapshotValue(objectValue(record?.snapshot));
-      const appendedMessage = currentConversationMessage(record?.appendedMessage);
-      const streamedMessage = currentConversationMessage(record?.streamedMessage);
-      const importedMessage = currentConversationMessage(record?.importedMessage);
-      const changedMessages = Array.isArray(record?.changedMessages)
-        ? record.changedMessages
-            .map(currentConversationMessage)
-            .filter((message): message is ConversationMessage => message !== null)
-        : [];
-      const removedMessageIds = Array.isArray(record?.removedMessageIds)
-        ? record.removedMessageIds.filter(isString)
-        : [];
-      const appendedActiveTurnId = record?.activeTurnId;
-      const hasActiveTurnChange = record !== null && "activeTurnId" in record;
-      if (snapshot) {
-        latest = snapshot;
-        latestSequence = event.sequence;
+      const messages = threadEventMessages(record);
+      if (fold.apply(event.sequence, messages) === "snapshot" && messages.snapshot) {
         for (const [turnId, sessionId] of turnProviderSessionIdsValue(record?.recovery)) {
           turnSessions.set(turnId, sessionId);
         }
-        if (snapshot.activeTurnId && !turnSessions.has(snapshot.activeTurnId)) {
+        const activeTurnId = messages.snapshot.activeTurnId;
+        if (activeTurnId && !turnSessions.has(activeTurnId)) {
           const activeSession = [...sessions.values()].find((session) => session.state === "active");
-          turnSessions.set(snapshot.activeTurnId, activeSession?.id ?? null);
+          turnSessions.set(activeTurnId, activeSession?.id ?? null);
         }
-      } else if (latest && streamedMessage) {
-        // A flush of streamed text carries the message whole, not the delta, so it replaces the
-        // one it names. Replacing rather than appending is what makes it safe to lose the earlier
-        // flushes of the same run, which both the supersede on write and the prune on the next
-        // whole snapshot do.
-        const index = latest.messages.findIndex((message) => message.id === streamedMessage.id);
-        if (index >= 0) latest.messages[index] = structuredClone(streamedMessage);
-        else latest.messages.push(structuredClone(streamedMessage));
-        if (isString(appendedActiveTurnId) || appendedActiveTurnId === null) {
-          latest.activeTurnId = appendedActiveTurnId;
-        }
-        latestSequence = event.sequence;
-      } else if (appendedMessage || importedMessage) {
-        latest ??= {
-          agentId: thread.agent_id,
-          threadId,
-          activeTurnId: null,
-          revision: 0,
-          messages: [],
-        };
-        const message = appendedMessage ?? importedMessage;
-        if (!message) continue;
-        const index = latest.messages.findIndex((current) => current.id === message.id);
-        const previousMessage = latest.messages[index];
-        if (previousMessage && importedMessage) latest.messages[index] = mergeReplayedMessage(previousMessage, message);
-        else if (index < 0) latest.messages.push(structuredClone(message));
-        if (isString(appendedActiveTurnId) || appendedActiveTurnId === null) {
-          latest.activeTurnId = appendedActiveTurnId;
-        }
-        latestSequence = event.sequence;
-      } else if (changedMessages.length > 0 || removedMessageIds.length > 0 || hasActiveTurnChange) {
-        latest ??= {
-          agentId: thread.agent_id,
-          threadId,
-          activeTurnId: null,
-          revision: 0,
-          messages: [],
-        };
-        const changedById = new Map(changedMessages.map((message) => [message.id, message]));
-        latest.messages = latest.messages
-          .filter((message) => !removedMessageIds.includes(message.id))
-          .map((message) => {
-            const changed = changedById.get(message.id);
-            return changed ? mergeReplayedLiveMessage(message, changed) : message;
-          });
-        for (const message of changedMessages) {
-          if (!latest.messages.some((current) => current.id === message.id))
-            latest.messages.push(structuredClone(message));
-        }
-        if (isString(appendedActiveTurnId) || appendedActiveTurnId === null) {
-          latest.activeTurnId = appendedActiveTurnId;
-        }
-        latestSequence = event.sequence;
       }
     }
+    const latest = fold.latest;
+    const latestSequence = fold.latestSequence;
     if (!latest) throw new Error(`Thread ${threadId} has no conversation events to replay.`);
+    latest.messages = withoutDeletedMessages(db, threadId, latest.messages);
 
-    db.exec("BEGIN IMMEDIATE");
-    try {
+    withTransaction(db, () => {
       db.prepare("DELETE FROM projection_thread_activities WHERE thread_id = ?").run(threadId);
       db.prepare("DELETE FROM projection_turns WHERE thread_id = ?").run(threadId);
       db.prepare("DELETE FROM projection_thread_messages WHERE thread_id = ?").run(threadId);
       db.prepare("DELETE FROM projection_thread_summaries WHERE thread_id = ?").run(threadId);
       db.prepare("DELETE FROM projection_provider_sessions WHERE thread_id = ?").run(threadId);
-      db.prepare("DELETE FROM projection_attachments WHERE owner_kind = 'thread-message' AND owner_id LIKE ?").run(
-        `${threadId}:%`,
-      );
+      deleteThreadAttachments(db, threadId);
       const sessionInsert = db.prepare(`
         INSERT INTO projection_provider_sessions (
           id, thread_id, provider, external_session_id, model, effort, state,
@@ -228,6 +155,7 @@ export class ThreadReplay {
           );
         }
       });
+      refreshThreadOrder(db, threadId);
       const messagesByTurn = new Map<string, ConversationMessage[]>();
       for (const message of latest.messages) {
         if (!message.turnId) continue;
@@ -239,6 +167,7 @@ export class ThreadReplay {
         INSERT INTO projection_turns (
           turn_id, thread_id, provider_session_id, status, started_at, completed_at, last_event_sequence
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(turn_id) DO NOTHING
       `);
       for (const [turnId, messages] of messagesByTurn) {
         const running = latest.activeTurnId === turnId;
@@ -280,22 +209,32 @@ export class ThreadReplay {
         INSERT INTO projection_thread_activities (
           activity_id, thread_id, turn_id, activity_type,
           payload_json, created_at, last_event_sequence
-        ) VALUES (?, ?, NULL, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
       for (const event of events) {
         const eventPayload = JSON.parse(event.payload_json);
         const eventRecord = objectValue(eventPayload);
+        const eventSnapshot = conversationSnapshotValue(objectValue(eventRecord?.snapshot));
+        const eventMessage =
+          currentConversationMessage(eventRecord?.appendedMessage) ??
+          currentConversationMessage(eventRecord?.importedMessage);
         const activityPayload =
-          conversationSnapshotValue(objectValue(eventRecord?.snapshot)) ||
-          currentConversationMessage(eventRecord?.appendedMessage) ||
-          currentConversationMessage(eventRecord?.importedMessage) ||
+          eventSnapshot ||
+          eventMessage ||
           Array.isArray(eventRecord?.changedMessages) ||
           Array.isArray(eventRecord?.removedMessageIds)
             ? (eventRecord?.detail ?? {})
             : eventPayload;
+        const eventActiveTurnId = eventSnapshot?.activeTurnId ?? eventRecord?.activeTurnId;
         activityInsert.run(
           randomUUID(),
           threadId,
+          (eventMessage ?? currentConversationMessage(eventRecord?.streamedMessage))?.turnId ??
+            activityTurnId(
+              event.event_type,
+              eventRecord?.detail,
+              isString(eventActiveTurnId) ? eventActiveTurnId : null,
+            ),
           event.event_type,
           JSON.stringify(activityPayload),
           event.occurred_at,
@@ -306,14 +245,7 @@ export class ThreadReplay {
         `UPDATE projection_threads
          SET active_turn_id = ?, updated_at = ?, last_event_sequence = ? WHERE thread_id = ?`,
       ).run(latest.activeTurnId, new Date().toISOString(), latestSequence, threadId);
-      db.exec("COMMIT");
-    } catch (error) {
-      // SQLite auto-rolls back on some failures (a full disk, a statement-level abort). An
-      // unguarded ROLLBACK then throws "cannot rollback - no transaction is active" and replaces
-      // the original error, so the user is told about the rollback instead of the full disk.
-      if (db.isTransaction) db.exec("ROLLBACK");
-      throw error;
-    }
+    });
     return this.#conversations.readConversation(thread.agent_id, threadId);
   }
 }
@@ -370,32 +302,6 @@ function summaryValue(value: DynamicRecord | null): StoredThreadSummary | null {
   };
 }
 
-function conversationSnapshotValue(value: DynamicRecord | null): ConversationSnapshot | null {
-  // Snapshots written before the bot-to-agent rename spell the id `botId`, and a database restored from
-  // the user's own file copy still carries them however far the migrations have run. Rejecting one here
-  // makes `rebuildThreadProjection` throw and the conversation unrecoverable, so both spellings are read.
-  const agentId = value?.agentId ?? value?.botId;
-  if (
-    !value ||
-    !isString(agentId) ||
-    (!isString(value.threadId) && value.threadId !== null) ||
-    (!isString(value.activeTurnId) && value.activeTurnId !== null) ||
-    !isNumber(value.revision) ||
-    !Array.isArray(value.messages)
-  ) {
-    return null;
-  }
-  const messages = value.messages.map(currentConversationMessage).filter((message) => message !== null);
-  if (messages.length !== value.messages.length) return null;
-  return {
-    agentId,
-    threadId: value.threadId,
-    activeTurnId: value.activeTurnId,
-    revision: value.revision,
-    messages,
-  };
-}
-
 function turnProviderSessionIdsValue(value: unknown): Array<[string, string | null]> {
   const recovery = objectValue(value);
   const turnProviderSessionIds = objectValue(recovery?.turnProviderSessionIds);
@@ -405,46 +311,4 @@ function turnProviderSessionIdsValue(value: unknown): Array<[string, string | nu
     if (sessionId === null || isString(sessionId)) result.push([turnId, sessionId]);
   }
   return result;
-}
-
-function mergeReplayedMessage(existing: ConversationMessage, imported: ConversationMessage): ConversationMessage {
-  const attachments = mergeReplayValues(existing.attachments, imported.attachments, (value) => value.id);
-  const reactions = mergeReplayValues(existing.reactions, imported.reactions, (value) => JSON.stringify(value));
-  const turnId = existing.turnId ?? imported.turnId;
-  return {
-    ...existing,
-    ...imported,
-    id: existing.id,
-    author: existing.author,
-    createdAt: existing.createdAt,
-    ...(turnId === undefined ? {} : { turnId }),
-    ...(attachments === undefined ? {} : { attachments }),
-    ...(reactions === undefined ? {} : { reactions }),
-    ...(imported.delivery === undefined && existing.delivery ? { delivery: existing.delivery } : {}),
-    ...(imported.exchange === undefined && existing.exchange ? { exchange: existing.exchange } : {}),
-    ...(imported.senderMember === undefined && existing.senderMember ? { senderMember: existing.senderMember } : {}),
-  };
-}
-
-function mergeReplayedLiveMessage(existing: ConversationMessage, updated: ConversationMessage): ConversationMessage {
-  const turnId = updated.turnId ?? existing.turnId;
-  return {
-    ...existing,
-    ...updated,
-    id: existing.id,
-    author: existing.author,
-    createdAt: existing.createdAt,
-    ...(turnId === undefined ? {} : { turnId }),
-  };
-}
-
-function mergeReplayValues<T>(
-  existing: T[] | undefined,
-  imported: T[] | undefined,
-  key: (value: T) => string,
-): T[] | undefined {
-  if (existing === undefined && imported === undefined) return undefined;
-  const values = new Map((existing ?? []).map((value) => [key(value), value]));
-  for (const value of imported ?? []) values.set(key(value), value);
-  return [...values.values()];
 }

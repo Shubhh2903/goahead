@@ -4,9 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 import type { AgentSummary, ConversationMessage } from "@openbot/contracts/ipc";
+import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
+import { runCauseEffect } from "./effect-boundary";
 import { OpenBotDatabase } from "./openbot-database";
 import { migrateOpenBotDatabase } from "./openbot-database-schema";
+import type { ReadProviderHistory } from "./provider-history";
 import { importProviderHistory } from "./provider-history-import";
 
 // Migration 33 (upstream OpenBot migration 29): the provider history tables. Failure modes, one test each:
@@ -18,7 +21,7 @@ import { importProviderHistory } from "./provider-history-import";
 // - a deleted thread leaves import, turn or staging rows behind;
 // - the first import after the upgrade deletes a saved row or drops its attachments.
 
-const LATEST = 37;
+const LATEST = 74;
 const STAMP = "2026-10-01T07:00:00.000Z";
 const HISTORY_OBJECTS = [
   "provider_history_imports",
@@ -182,6 +185,13 @@ const MISSED_RUN_COLUMNS = new Set([
   "missed_until",
   "run_condition",
   "run_condition_fingerprint",
+  "run_source",
+  "run_in",
+  "site",
+  "group_first",
+  "group_id",
+  "group_start",
+  "turn_rank",
 ]);
 
 function withoutMissedRunColumns(rows: TableRows): TableRows {
@@ -253,7 +263,7 @@ describe("migration 33: provider history tables", () => {
     migrateOpenBotDatabase(db);
 
     expectHealthyLatest(db);
-    expect(pick(allRows(db), [...tables, "projection_turns"])).toEqual(before);
+    expect(pick(withoutMissedRunColumns(allRows(db)), [...tables, "projection_turns"])).toEqual(before);
   });
 
   it("rolls back the tables and the marker after a late failure, then retries", () => {
@@ -398,7 +408,7 @@ describe("migration 33: provider history tables", () => {
       },
     ];
     const created = new OpenBotDatabase(root);
-    await created.initialize();
+    await runCauseEffect(created.initialize());
     created.replaceAgents("provider-history-agent", [agent], "agents.imported");
     created.persistConversation(
       { agentId: agent.id, threadId, activeTurnId: null, revision: 0, messages },
@@ -420,33 +430,40 @@ describe("migration 33: provider history tables", () => {
       DROP TABLE provider_history_imports; DROP TABLE routine_flow_steps; DROP TABLE routine_flow_links;
       DROP TABLE routine_flow_positions; DROP TRIGGER agent_memory_insert; DROP TRIGGER agent_memory_update;
       DROP TRIGGER agent_memory_delete; DROP TABLE agent_memory_search; DROP TABLE agent_memory_selections;
-      DELETE FROM schema_migrations WHERE version IN (33, 34, 35, 36, 37);`);
+      DROP TABLE projection_routine_webhooks; DROP TABLE projection_channel_routine_webhooks;
+      DROP TABLE projection_webhook_route_revocations; DROP TABLE projection_webhook_receipts;
+      DELETE FROM schema_migrations WHERE version >= 33;`);
     legacy.close();
 
     const database = new OpenBotDatabase(root);
-    await database.initialize();
+    await runCauseEffect(database.initialize());
     try {
       expect(maxVersion(database.connection)).toBe(LATEST);
-      const result = await importProviderHistory({
-        database,
-        readHistory: async (_request, consume) => {
+      const readHistory: ReadProviderHistory = (_request, consume) =>
+        Effect.gen(function* () {
           // One page of the provider turn, then the rest of it. The page carries none of the saved rows.
-          await consume({
+          yield* consume({
             turnId: "provider-turn",
             status: "completed",
             items: [{ id: "provider-answer", type: "agentMessage", text: "After" }],
             complete: false,
           });
-          await consume({ turnId: "provider-turn", status: "completed", items: [], complete: true });
-        },
-        sessionId: session.id,
-        provider: "codex",
-        externalSessionId: session.externalSessionId,
-        agentId: agent.id,
-        publicThreadId: threadId,
-        findDelivery: () => null,
-        quietRoutineDelivery: () => false,
-      });
+          yield* consume({ turnId: "provider-turn", status: "completed", items: [], complete: true });
+        });
+      const result = await Effect.runPromise(
+        importProviderHistory({
+          database,
+          readHistory,
+          sessionId: session.id,
+          provider: "codex",
+          externalSessionId: session.externalSessionId,
+          agentId: agent.id,
+          publicThreadId: threadId,
+          findDelivery: () => null,
+          findMessageDelivery: () => null,
+          quietRoutineDelivery: () => false,
+        }),
+      );
 
       expect(result).toEqual({ turns: 1, messages: 1 });
       expect(database.providerHistoryImport(session.id)?.state).toBe("complete");

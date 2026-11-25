@@ -1,29 +1,39 @@
 import { randomUUID } from "node:crypto";
-import type {
-  ChannelRoutine,
-  ChannelRoutineRun,
-  ChannelRoutineRunStatus,
-  ChannelTask,
-  CreateChannelRoutineInput,
-  DeleteChannelRoutineInput,
-  ListChannelRoutineRunsInput,
-  TestChannelRoutineInput,
-  UpdateChannelRoutineInput,
+import {
+  type ChannelRoutine,
+  type ChannelRoutineRun,
+  type ChannelRoutineRunStatus,
+  type CreateChannelRoutineInput,
+  channelRunStatusForTasks,
+  type DeleteChannelRoutineInput,
+  type ListChannelRoutineRunsInput,
+  type TestChannelRoutineInput,
+  type UpdateChannelRoutineInput,
 } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import { collapseMissedOccurrences } from "@openbot/team-client/routine-schedule";
+import { Effect, Result, Schema } from "effect";
+import { failedRunReason } from "./agent/delivery-content";
+import { quietRoutineRun } from "./agent/routine-quiet-runs";
 import { decideRunCondition, type RunConditionCommand, runConditionCommand } from "./agent/routine-run-condition";
+import type { RoutineTriggerAccess } from "./agent/routine-scheduler";
 import { ChannelRoutineStore } from "./channel-routine-store";
 import type { ChannelService } from "./channel-service";
+import { causeHelpers } from "./effect-boundary";
 import { recordRestartActivity } from "./restart-activity";
-import type { RoutineHoldWindow } from "./routine-store";
+import type {
+  ImportedRoutineRun,
+  OwnedRoutineRecord,
+  ReceivedWebhookEvent,
+  RoutineHoldWindow,
+  RoutineRecordInput,
+} from "./routine-store";
 import type { RoutineDueSource } from "./routine-timer";
 
 export interface ChannelRoutineHooks {
   changed(channelId: string): void;
   emitError(code: string, error: unknown): void;
   excludedChannels(): ReadonlySet<string>;
-  /** Whether a spent provider plan holds the queue of the channel's lead, who takes each routine request. */
   usageLimited(channelId: string): boolean;
 }
 
@@ -36,69 +46,6 @@ export interface ChannelRoutineSchedulerOptions {
   runConditionCommand?: RunConditionCommand;
 }
 
-/**
- * The task that holds this one, if there is one: the first dependency of the branch below it that
- * failed or that a human has to unblock. A dependency of a dependency counts, because the branch
- * moves again only from its own root.
- */
-function stoppedBlocker(tasks: ChannelTask[], task: ChannelTask, seen = new Set<string>()): ChannelTask | null {
-  for (const id of task.dependencies) {
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const dependency = tasks.find((item) => item.id === id);
-    if (!dependency) continue;
-    if (dependency.state === "failed" || dependency.state === "paused") return dependency;
-    const deeper = stoppedBlocker(tasks, dependency, seen);
-    if (deeper) return deeper;
-  }
-  return null;
-}
-
-/**
- * Reads the run's status out of the tasks its request produced. Pure, because that is what makes a
- * restart free: the status is a function of durable rows, so a fresh scheduler over the same
- * database reaches the same answer with no in-memory state.
- *
- * `hasAssignment` separates "nobody has picked this up yet" from "a member is on it": an assignment
- * is a durable row, so the difference survives a restart too.
- */
-export function channelRunStatusForTasks(
-  tasks: ChannelTask[],
-  hasAssignment: boolean,
-): { status: ChannelRoutineRunStatus; error: string | null } {
-  // A later human message can absorb the routine's open task and take its request id with it, and a
-  // deleted channel takes every task. Neither is a failure of the routine.
-  if (!tasks.length) return { status: "cancelled", error: null };
-  if (tasks.some((task) => task.state === "running")) return { status: "running", error: null };
-  const open = tasks.filter((task) => task.state === "queued" || task.state === "waiting");
-  if (open.length) {
-    // A task starts only when every task it delegated is completed, so an open task behind one
-    // that stopped is not work in progress: nothing but a human moves it again. Reporting it as
-    // queued would hide the reason in the run history while the run cannot advance.
-    const blocked = open.map((task) => stoppedBlocker(tasks, task));
-    const free = blocked.some((blocker) => !blocker);
-    if (free) return { status: hasAssignment ? "running" : "queued", error: null };
-    const blocker = blocked.find((task) => task?.state === "failed") ?? blocked[0];
-    if (blocker)
-      return blocker.state === "failed"
-        ? { status: "failed", error: blocker.error }
-        : { status: "needs-attention", error: blocker.error };
-  }
-  const failed = tasks.find((task) => task.state === "failed");
-  if (failed) return { status: "failed", error: failed.error };
-  // In a channel, `paused` always means a human has to act: a routing question, an unavailable
-  // owner, the assignment limit, an unconfirmed turn, or an explicit Stop.
-  const paused = tasks.find((task) => task.state === "paused");
-  if (paused) return { status: "needs-attention", error: paused.error };
-  // Every task is completed or cancelled. This includes the lead judging that no work was needed.
-  return { status: "succeeded", error: null };
-}
-
-/**
- * Owns standing instructions attached to a channel. A fire is not a private path into the channel:
- * it is a `request` command, so it inherits the per-channel serialisation, the retry receipt and
- * the archived guard that every other channel command already has.
- */
 export class ChannelRoutineScheduler implements RoutineDueSource {
   readonly #channels: ChannelService;
   readonly #hooks: ChannelRoutineHooks;
@@ -118,18 +65,17 @@ export class ChannelRoutineScheduler implements RoutineDueSource {
     return this.#routines.list(this.#requireChannel(channelId));
   }
 
-  /**
-   * Whether any channel routine run is executing right now. Scheduled future runs do not count:
-   * they resume from durable rows after a restart. See RoutineScheduler.hasActiveRuns for why the
-   * executing case is still worth naming.
-   */
   hasActiveRuns(): boolean {
     for (const channelId of this.#channels.store.ids()) {
-      for (const routine of this.#routines.list(channelId)) {
+      for (const routine of this.#routines.listRecords(channelId)) {
         if (this.#routines.activeRuns(channelId, routine.id).length > 0) return true;
       }
     }
     return false;
+  }
+
+  importRuns(channelId: string, routineId: string, runs: readonly ImportedRoutineRun[]): string[] {
+    return this.#routines.importRuns(this.#requireChannel(channelId), routineId, runs);
   }
 
   listRuns(input: ListChannelRoutineRunsInput, withSkipped = false): ChannelRoutineRun[] {
@@ -153,99 +99,174 @@ export class ChannelRoutineScheduler implements RoutineDueSource {
     return routine;
   }
 
-  delete(input: DeleteChannelRoutineInput): void {
-    this.#routines.delete(this.#requireChannel(input.channelId), input.routineId);
+  listRecords(channelId: string): OwnedRoutineRecord[] {
+    return this.#routines.listRecords(this.#requireChannel(channelId));
+  }
+
+  getRecord(channelId: string, routineId: string): OwnedRoutineRecord | null {
+    return this.#routines.getRecord(this.#requireChannel(channelId), routineId);
+  }
+
+  saveRecord(channelId: string, routineId: string | undefined, input: RoutineRecordInput): OwnedRoutineRecord {
+    const routine = this.#routines.saveRecord(this.#requireChannel(channelId), routineId, input);
+    this.#changed(channelId);
+    return routine;
+  }
+
+  readonly receiveWebhook = Effect.fn("ChannelRoutineScheduler.receiveWebhook")(function* (
+    this: ChannelRoutineScheduler,
+    channelId: string,
+    routineId: string,
+    event: ReceivedWebhookEvent,
+  ) {
+    if (!this.#channels.store.exists(channelId) || this.#excluded().has(channelId)) {
+      return { kind: "unavailable" } as const;
+    }
+    const result = yield* channelRoutineStep(() => this.#routines.receiveWebhook(channelId, routineId, event));
+    if (result.kind === "ignored") this.#changed(channelId);
+    if (result.kind !== "started") return result;
+    const run = result.run;
+    const record = yield* channelRoutineStep(() => this.#routines.getRecord(channelId, routineId));
+    if (record?.limitPolicy === "skip" && this.#hooks.usageLimited(channelId)) {
+      yield* channelRoutineStep(() => this.#settle(run, { status: "cancelled", error: null }));
+    } else {
+      const request = yield* channelRoutineStep(() => this.#routines.attachRequest(run.id, randomUUID()));
+      yield* this.#issueEffect(request);
+    }
+    this.#changed(channelId);
+    return result;
+  }, Effect.uninterruptible);
+
+  delete(input: DeleteChannelRoutineInput, access: RoutineTriggerAccess = {}): void {
+    const channelId = this.#requireChannel(input.channelId);
+    if (!access.webhook && this.#routines.getRecord(channelId, input.routineId)?.trigger.kind === "webhook") {
+      throw new Error(sourceText("error.backend.routineGone"));
+    }
+    this.#channels.withdrawRequests(
+      channelId,
+      new Set(this.#routines.activeRuns(channelId, input.routineId).flatMap((run) => run.requestMessageId ?? [])),
+    );
+    this.#routines.delete(channelId, input.routineId);
     this.#changed(input.channelId);
   }
 
-  /** A manual fire: no trigger, so it never collides with the scheduled occurrence. */
-  async test(input: TestChannelRoutineInput): Promise<ChannelRoutineRun> {
-    const channelId = this.#requireChannel(input.channelId);
-    const routine = this.#routines.get(channelId, input.routineId);
-    if (!routine) throw new Error(sourceText("error.backend.routineGone"));
+  readonly test = Effect.fn("ChannelRoutineScheduler.test")(function* (
+    this: ChannelRoutineScheduler,
+    input: TestChannelRoutineInput,
+    access: RoutineTriggerAccess = {},
+  ) {
+    const routine = yield* channelRoutineStep(() => {
+      const channelId = this.#requireChannel(input.channelId);
+      const stored = this.#routines.getRecord(channelId, input.routineId);
+      if (!stored || (stored.trigger.kind === "webhook" && !access.webhook)) {
+        throw new Error(sourceText("error.backend.routineGone"));
+      }
+      return { ...stored, channelId: stored.ownerId };
+    });
     const now = new Date().toISOString();
-    // The run would wait for the reset, and a routine set to skip has no use for a late result.
     const run =
-      routine.limitPolicy === "skip" && this.#hooks.usageLimited(channelId)
-        ? this.#routines.updateRunStatus(this.#routines.createRun(routine, null, "manual", now).id, "cancelled", null)
-        : await this.#fire(routine, null, now);
-    this.#changed(channelId);
+      routine.limitPolicy === "skip" && this.#hooks.usageLimited(routine.channelId)
+        ? yield* channelRoutineStep(() =>
+            this.#routines.updateRunStatus(this.#routines.createRun(routine, null, "test", now).id, "cancelled", null),
+          )
+        : yield* this.#fireEffect(routine, null, now);
+    this.#changed(routine.channelId);
     return run;
-  }
+  }, Effect.uninterruptible);
 
-  /**
-   * Whether a spent plan drops this channel task: it belongs to an open run of a routine set to
-   * skip. The run is settled as cancelled here, before the task is.
-   */
   skipAtLimit(channelId: string, requestMessageId: string): boolean {
     const run = this.#routines.openRuns(channelId).find((item) => item.requestMessageId === requestMessageId);
-    if (!run || this.#routines.get(channelId, run.routineId)?.limitPolicy !== "skip") return false;
+    if (!run || this.#routines.getRecord(channelId, run.routineId)?.limitPolicy !== "skip") return false;
     this.#settle(run, { status: "cancelled", error: null });
     return true;
+  }
+
+  quietRun(requestMessageId: string): boolean {
+    const run = this.#routines.runForRequest(requestMessageId);
+    return run !== null && quietRoutineRun(run);
   }
 
   skipMissed(now: Date, held?: RoutineHoldWindow): void {
     this.#routines.skipMissed(now, held);
   }
 
-  /** The earliest channel routine, for the shared timer to compare against the other owners. */
   nextDueAt(): string | null {
     return this.#routines.nextDueAt(this.#excluded());
   }
 
-  async processDue(now = new Date(), active: () => boolean = () => true): Promise<void> {
+  readonly processDue = Effect.fn("ChannelRoutineScheduler.processDue")(function* (
+    this: ChannelRoutineScheduler,
+    now = new Date(),
+    active: () => boolean = () => true,
+  ) {
     const changed = new Set<string>();
-    try {
-      for (const due of this.#routines.due(now, this.#excluded())) {
+    yield* Effect.gen({ self: this }, function* () {
+      const pending = yield* channelRoutineStep(() => this.#routines.due(now, this.#excluded()));
+      for (const due of pending) {
         if (!active()) break;
-        // A previous fire can yield while the channel is archived.
         if (this.#excluded().has(due.routine.channelId)) continue;
-        const { scheduledFor, nextRunAt } = collapseMissedOccurrences(
-          due.schedule,
-          due.routine.timezone,
-          new Date(due.nextRunAt),
-          now,
-        );
-        // The trigger advances whether or not the fire succeeds, so a channel builds no backlog.
-        this.#routines.advanceTrigger(due.routine.id, due.triggerId, nextRunAt.toISOString());
-        changed.add(due.routine.channelId);
-        // A routine set to skip drops the occurrence while a spent plan would only make it wait.
-        if (due.routine.limitPolicy === "skip" && this.#hooks.usageLimited(due.routine.channelId)) continue;
-        await this.#fire(due.routine, due.triggerId, scheduledFor.toISOString());
+        const fire = yield* channelRoutineStep(() => {
+          const current = this.#routines.get(due.routine.channelId, due.routine.id);
+          if (!current?.active || current.trigger.id !== due.triggerId || current.trigger.nextRunAt !== due.nextRunAt)
+            return null;
+          changed.add(due.routine.channelId);
+          if (due.schedule.kind === "once") {
+            this.#routines.completeTrigger(due.routine.id, due.triggerId, now);
+            return this.#skipReason(current) ? null : { routine: current, scheduledFor: due.nextRunAt };
+          }
+          const occurrence = collapseMissedOccurrences(
+            current.trigger.schedule,
+            current.timezone,
+            new Date(due.nextRunAt),
+            now,
+          );
+          const skipReason = this.#skipReason(current);
+          if (skipReason) {
+            this.#routines.skipOccurrences(
+              current,
+              new Date(due.nextRunAt),
+              occurrence.scheduledFor,
+              occurrence.nextRunAt,
+              skipReason,
+            );
+            return null;
+          }
+          this.#routines.advanceTrigger(due.routine.id, due.triggerId, occurrence.nextRunAt.toISOString());
+          return { routine: current, scheduledFor: occurrence.scheduledFor.toISOString() };
+        });
+        if (!fire) continue;
+        yield* this.#fireEffect(fire.routine, due.triggerId, fire.scheduledFor);
       }
-    } finally {
-      for (const channelId of changed) this.#changed(channelId);
-    }
-  }
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          for (const channelId of changed) this.#changed(channelId);
+        }),
+      ),
+    );
+  });
 
-  /**
-   * Repairs the crash window between minting a run and issuing its command. A run without a request
-   * id never reached the channel, so it is fired now; a run that has one re-issues the identical
-   * command, which the receipt turns into a no-op that only re-wakes the channel.
-   */
-  async resumePendingRuns(): Promise<void> {
-    for (const run of this.#routines.pendingRuns()) {
+  readonly resumePendingRuns = Effect.fn("ChannelRoutineScheduler.resumePendingRuns")(function* (
+    this: ChannelRoutineScheduler,
+  ) {
+    const pending = yield* channelRoutineStep(() => this.#routines.pendingRuns());
+    for (const run of pending) {
       if (this.#excluded().has(run.channelId) || !this.#channels.store.exists(run.channelId)) {
-        this.#settle(run, { status: "cancelled", error: null });
+        yield* channelRoutineStep(() => this.#settle(run, { status: "cancelled", error: null }));
         continue;
       }
-      await this.#issue(run.requestMessageId ? run : this.#routines.attachRequest(run.id, randomUUID()));
+      const request = yield* channelRoutineStep(() =>
+        run.requestMessageId ? run : this.#routines.attachRequest(run.id, randomUUID()),
+      );
+      yield* this.#issueEffect(request);
     }
-  }
+  });
 
-  /**
-   * Runs inside `ChannelHooks.changed`, one frame after a channel commit. It only reads the channel
-   * store and writes its own table, and it must never throw: an exception here would surface as a
-   * failed `publish` rather than as a wrong run status.
-   */
   reconcile(channelId: string): void {
     try {
       const exists = this.#channels.store.exists(channelId);
       const tasks = exists ? this.#channels.store.tasks(channelId) : [];
       const assignments = exists ? this.#channels.store.assignments(channelId) : [];
-      // Continue and Reassign restart a failed task under the request it already has, so the run
-      // a failure settled has to follow it out of the failed state. Only the runs whose request
-      // still has live work are read: a finished failure stays where the history put it.
       const live = [
         ...new Set(
           tasks
@@ -258,11 +279,7 @@ export class ChannelRoutineScheduler implements RoutineDueSource {
         ...this.#routines.openRuns(channelId),
         ...this.#routines.failedRunsForRequests(channelId, live),
       ]) {
-        // A run with no request id has not reached the channel yet; `resumePendingRuns` owns it.
         if (!run.requestMessageId) continue;
-        // Nor has a run whose command is still in flight: the run row is written first, so a
-        // publish from other channel work can land between the two. Read as a state, that window
-        // looks like a request that every task has dropped, and would cancel work about to start.
         if (exists && !this.#channels.committed(this.#actor(run).id, this.#operationId(run))) continue;
         const requestId = run.requestMessageId;
         const owned = tasks.filter((task) => task.requestMessageId === requestId);
@@ -283,23 +300,25 @@ export class ChannelRoutineScheduler implements RoutineDueSource {
     for (const channelId of this.#routines.channelsWithOpenRuns()) this.reconcile(channelId);
   }
 
-  /**
-   * The run row is written before the command, and both halves of the command's receipt key are
-   * functions of the run id. A crash between the two is therefore repaired by replaying the
-   * command, which is what makes `resumePendingRuns` exactly-once with no separate dedupe.
-   */
-  async #fire(routine: ChannelRoutine, triggerId: string | null, scheduledFor: string): Promise<ChannelRoutineRun> {
-    // A scheduled run checks the run condition first; a test run always asks the lead.
-    const skipped = triggerId ? await this.#runConditionSkip(routine) : null;
-    const created = this.#routines.createRun(routine, triggerId, triggerId ? "scheduled" : "manual", scheduledFor);
-    // Recorded as cancelled with its reason, so the history shows the check and no turn ran.
-    if (skipped) return this.#routines.updateRunStatus(created.id, "cancelled", skipped);
-    const run = created.requestMessageId ? created : this.#routines.attachRequest(created.id, randomUUID());
-    return this.#issue(run);
+  #skipReason(routine: Pick<ChannelRoutine, "id" | "channelId" | "limitPolicy">): string | null {
+    if (this.#hasLiveRun(routine.channelId, routine.id)) return sourceText("status.agent.routineSkippedRunOpen");
+    if (routine.limitPolicy === "skip" && this.#hooks.usageLimited(routine.channelId))
+      return sourceText("status.agent.routineSkippedUsageLimit");
+    return null;
+  }
+
+  #hasLiveRun(channelId: string, routineId: string): boolean {
+    const requests = new Set(
+      this.#routines.activeRuns(channelId, routineId).flatMap((run) => run.requestMessageId ?? []),
+    );
+    if (!requests.size) return false;
+    return this.#channels.store
+      .tasks(channelId)
+      .some((task) => requests.has(task.requestMessageId) && task.state !== "completed" && task.state !== "cancelled");
   }
 
   /** The reason a scheduled run skips the channel, or `null` when the run asks the lead. */
-  async #runConditionSkip(routine: ChannelRoutine): Promise<string | null> {
+  async #runConditionSkip(routine: Pick<ChannelRoutine, "id" | "runCondition">): Promise<string | null> {
     if (!routine.runCondition) return null;
     const decision = await decideRunCondition(
       routine.runCondition,
@@ -318,37 +337,71 @@ export class ChannelRoutineScheduler implements RoutineDueSource {
     );
   }
 
-  async #issue(run: ChannelRoutineRun): Promise<ChannelRoutineRun> {
+  readonly #fireEffect = Effect.fn("ChannelRoutineScheduler.fire")(function* (
+    this: ChannelRoutineScheduler,
+    routine: Pick<ChannelRoutine, "id" | "channelId" | "name" | "instruction" | "runCondition">,
+    triggerId: string | null,
+    scheduledFor: string,
+  ) {
+    // A scheduled run checks the run condition first; a test run always asks the lead.
+    const skipped = triggerId
+      ? yield* Effect.tryPromise({
+          try: () => this.#runConditionSkip(routine),
+          catch: (cause) => new ChannelRoutineFailed({ cause }),
+        })
+      : null;
+    const run = yield* channelRoutineStep(() => {
+      const created = this.#routines.createRun(routine, triggerId, triggerId ? "scheduled" : "test", scheduledFor);
+      // Recorded as cancelled with its reason, so the history shows the check and no turn ran.
+      if (skipped) return this.#routines.updateRunStatus(created.id, "cancelled", skipped);
+      return created.requestMessageId ? created : this.#routines.attachRequest(created.id, randomUUID());
+    });
+    if (skipped) return run;
+    return yield* this.#issueEffect(run);
+  }, Effect.uninterruptible);
+
+  readonly #issueEffect = Effect.fn("ChannelRoutineScheduler.issue")(function* (
+    this: ChannelRoutineScheduler,
+    run: ChannelRoutineRun,
+  ) {
     recordRestartActivity();
-    if (!run.requestMessageId) throw new Error("The routine run has no request message.");
-    try {
-      await this.#channels.command(
-        {
-          type: "request",
-          operationId: this.#operationId(run),
-          channelId: run.channelId,
-          text: run.instruction,
-          // Always the lead's decision. A routine pinned to one member would fail the moment that
-          // member left the channel.
-          recipientAgentId: null,
-          requestMessageId: run.requestMessageId,
-          origin: {
-            kind: "routine",
-            routineId: run.routineId,
-            routineName: run.routineName,
-            runId: run.id,
+    const requestMessageId = run.requestMessageId;
+    if (!requestMessageId)
+      return yield* new ChannelRoutineFailed({ cause: new Error("The routine run has no request message.") });
+    const issued = yield* Effect.result(
+      this.#channels
+        .command(
+          {
+            type: "request",
+            operationId: this.#operationId(run),
+            channelId: run.channelId,
+            text: run.instruction,
+            recipientAgentId: null,
+            requestMessageId,
+            origin: { kind: "routine", routineId: run.routineId, routineName: run.routineName, runId: run.id },
           },
-        },
-        this.#actor(run),
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.#settle(run, { status: "failed", error: message });
-      this.#hooks.emitError("channel_routine_fire_failed", error);
-      return this.#routines.runForRequest(run.requestMessageId) ?? run;
+          this.#actor(run),
+          (queued) => (this.#routines.getRecord(run.channelId, run.routineId) ? queued : null),
+        )
+        .pipe(toChannelRoutineFailed),
+    );
+    if (!this.#routines.getRecord(run.channelId, run.routineId)) {
+      yield* channelRoutineStep(() => {
+        this.#channels.withdrawRequests(run.channelId, new Set([requestMessageId]));
+        this.#changed(run.channelId);
+      });
+      return run;
+    }
+    if (Result.isFailure(issued)) {
+      const error = issued.failure.cause;
+      return yield* channelRoutineStep(() => {
+        this.#settle(run, { status: "failed", error: error instanceof Error ? error.message : String(error) });
+        this.#hooks.emitError("channel_routine_fire_failed", error);
+        return this.#routines.runForRequest(requestMessageId) ?? run;
+      });
     }
     return run;
-  }
+  }, Effect.uninterruptible);
 
   #actor(run: ChannelRoutineRun): { id: string; name: string } {
     return { id: `routine:${run.routineId}`, name: run.routineName };
@@ -358,10 +411,10 @@ export class ChannelRoutineScheduler implements RoutineDueSource {
     return `channel-routine-run:${run.id}`;
   }
 
-  /** Writes only on a change, so a channel that publishes often does not rewrite every run row. */
   #settle(run: ChannelRoutineRun, next: { status: ChannelRoutineRunStatus; error: string | null }): boolean {
-    if (run.status === next.status && run.error === next.error) return false;
-    this.#routines.updateRunStatus(run.id, next.status, next.error);
+    const error = next.status === "failed" ? failedRunReason(next.error, run) : next.error;
+    if (run.status === next.status && run.error === error) return false;
+    this.#routines.updateRunStatus(run.id, next.status, error);
     return true;
   }
 
@@ -378,3 +431,9 @@ export class ChannelRoutineScheduler implements RoutineDueSource {
     this.#hooks.changed(channelId);
   }
 }
+
+class ChannelRoutineFailed extends Schema.TaggedError<ChannelRoutineFailed>()("ChannelRoutineFailed", {
+  cause: Schema.Defect(),
+}) {}
+
+const { sync: channelRoutineStep, rewrap: toChannelRoutineFailed } = causeHelpers(ChannelRoutineFailed);

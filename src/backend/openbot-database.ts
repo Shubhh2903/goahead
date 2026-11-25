@@ -10,56 +10,84 @@ import type {
   ConversationSearchPage,
   ConversationSnapshot,
   HostedSiteConversationEventStatus,
+  MessagePinner,
+  SentMessageStats,
 } from "@openbot/contracts/ipc";
+import { AgentHistoryQueries, type AgentHistorySelection } from "./database/agent-history-queries";
 import { type AgentModelChange, AgentRoster } from "./database/agent-roster";
 import { AgentUsage } from "./database/agent-usage";
-import { ConversationQueries } from "./database/conversation-queries";
+import { type ConversationMarkerExclusions, ConversationQueries } from "./database/conversation-queries";
 import { ConversationWriter } from "./database/conversation-writer";
-import { DatabaseCore, type OrchestrationEventInput } from "./database/database-core";
+import { DatabaseCore, type DatabaseCoreOptions, type OrchestrationEventInput } from "./database/database-core";
+import { deletedThreadMessageIds, threadMessageIds } from "./database/deleted-thread-messages";
 import {
   type ActiveHostedSiteConversationEvent,
   HostedSiteEventLog,
   type PendingHostedSiteTerminalEvent,
 } from "./database/hosted-site-event-log";
-import { MailboxProjection, type MailboxProjectionState } from "./database/mailbox-projection";
 import {
+  MailboxProjection,
+  type MailboxProjectionChanges,
+  type MailboxProjectionState,
+} from "./database/mailbox-projection";
+import {
+  type PinnedThreadMessage,
+  pinnedThreadMessageCount,
+  pinnedThreadMessages,
+  pinThreadMessage,
+  threadMessagePinner,
+  threadMessagesContaining,
+  unpinThreadMessage,
+} from "./database/pinned-thread-messages";
+import {
+  type ProviderHistoryCompactionBatch,
   type ProviderHistoryImportState,
   type ProviderHistorySessionInput,
   type ProviderHistoryStagedItem,
   type ProviderHistoryStagedTurn,
   type ProviderHistoryStagedTurnPage,
+  type ProviderHistoryStageResult,
   ProviderHistoryStore,
   type ProviderHistoryTurnCursor,
 } from "./database/provider-history-store";
 import { type ProviderSession, ProviderSessions } from "./database/provider-sessions";
+import { withTransaction } from "./database/sqlite-transaction";
+import { ThreadEventCompaction, type ThreadEventCompactionBatch } from "./database/thread-event-compaction";
 import { ThreadReplay } from "./database/thread-replay";
 import { type StoredThreadSummary, ThreadSummaries } from "./database/thread-summaries";
 
-// Declared in this module before the split and part of the frozen public surface, so it stays
-// reachable from here rather than only from the controller that owns it now. Structural `Pick<...>`
-// types over this class do not cover exported types.
 export type { OrchestrationEventInput } from "./database/database-core";
 export type {
   ActiveHostedSiteConversationEvent,
   PendingHostedSiteTerminalEvent,
 } from "./database/hosted-site-event-log";
 export type {
+  ProviderHistoryCompactionBatch,
   ProviderHistoryImportState,
   ProviderHistorySessionInput,
   ProviderHistoryStagedItem,
   ProviderHistoryStagedTurn,
   ProviderHistoryStagedTurnPage,
+  ProviderHistoryStageResult,
   ProviderHistoryTurnCursor,
 } from "./database/provider-history-store";
+
+import { perfTimed } from "./perf-probe-hooks";
+
 export type { ProviderSession } from "./database/provider-sessions";
+export type { ThreadEventCompactionBatch } from "./database/thread-event-compaction";
 export type { StoredThreadSummary } from "./database/thread-summaries";
 
-/**
- * The local OpenBot event log and its read projections.
- *
- * A command appends events, changes projections, and stores its receipt in one
- * SQLite transaction. Providers never receive direct access to this database.
- */
+export interface StreamingMessageWrite {
+  snapshot: ConversationSnapshot;
+  messageId: string;
+  eventType: string;
+  detail?: unknown;
+  commandId?: string;
+}
+
+export type StreamingMessageResult = { revision: number } | { error: unknown };
+
 export class OpenBotDatabase {
   readonly #core: DatabaseCore;
   readonly usage: AgentUsage;
@@ -70,11 +98,16 @@ export class OpenBotDatabase {
   readonly #hostedSiteEvents: HostedSiteEventLog;
   readonly #mailbox: MailboxProjection;
   readonly #sessions: ProviderSessions;
+  readonly #agentHistory: AgentHistoryQueries;
   readonly #providerHistory: ProviderHistoryStore;
   readonly #summaries: ThreadSummaries;
+  readonly #threadEvents: ThreadEventCompaction;
 
-  constructor(readonly userDataPath: string) {
-    this.#core = new DatabaseCore({ userDataPath });
+  constructor(
+    readonly userDataPath: string,
+    checkIntegrity?: DatabaseCoreOptions["checkIntegrity"],
+  ) {
+    this.#core = new DatabaseCore({ userDataPath, checkIntegrity });
     this.usage = new AgentUsage(this.#core);
     this.#conversations = new ConversationQueries({ core: this.#core });
     this.#roster = new AgentRoster({ core: this.#core });
@@ -82,17 +115,19 @@ export class OpenBotDatabase {
     this.#replay = new ThreadReplay({ core: this.#core, conversations: this.#conversations });
     this.#hostedSiteEvents = new HostedSiteEventLog({ core: this.#core });
     this.#mailbox = new MailboxProjection({ core: this.#core });
+    this.#agentHistory = new AgentHistoryQueries(this.#core);
     this.#sessions = new ProviderSessions({ core: this.#core });
     this.#providerHistory = new ProviderHistoryStore({ core: this.#core });
     this.#summaries = new ThreadSummaries({ core: this.#core });
+    this.#threadEvents = new ThreadEventCompaction({ core: this.#core });
   }
 
   get path(): string {
     return this.#core.path;
   }
 
-  async initialize(): Promise<void> {
-    await this.#core.initialize();
+  initialize() {
+    return this.#core.initialize();
   }
 
   close(): void {
@@ -119,8 +154,8 @@ export class OpenBotDatabase {
     return this.#core.hasAggregateEvents(aggregateType, aggregateId);
   }
 
-  async backupLegacyFile(path: string): Promise<void> {
-    await this.#core.backupLegacyFile(path);
+  backupLegacyFile(path: string) {
+    return this.#core.backupLegacyFile(path);
   }
 
   recordPendingHostedSiteTerminalEvent(event: PendingHostedSiteTerminalEvent): void {
@@ -175,12 +210,24 @@ export class OpenBotDatabase {
     return this.#conversations.readConversation(agentId, threadId);
   }
 
-  readTurnAssistantMessages(agentId: string, threadId: string, turnId: string): ConversationMessage[] {
-    return this.#conversations.readTurnAssistantMessages(agentId, threadId, turnId);
+  readTurnConversation(agentId: string, threadId: string, turnId: string): ConversationSnapshot {
+    return this.#conversations.readTurnConversation(agentId, threadId, turnId);
+  }
+
+  readLatestTurnId(turnIds: string[]): string | null {
+    return this.#conversations.readLatestTurnId(turnIds);
+  }
+
+  readTurnAssistantMessages(agentId: string, turnId: string): ConversationMessage[] {
+    return this.#conversations.readTurnAssistantMessages(agentId, turnId);
   }
 
   readActiveTurnId(agentId: string, threadId: string | null): string | null {
     return this.#conversations.readActiveTurnId(agentId, threadId);
+  }
+
+  readRunningTurnIds(): Map<string, string[]> {
+    return this.#conversations.readRunningTurnIds();
   }
 
   readConversationRevision(agentId: string, threadId: string | null): number {
@@ -194,12 +241,24 @@ export class OpenBotDatabase {
     return this.#conversations.readConversationRuntime(agentId, threadId);
   }
 
+  readAgentHistory(agentId: string, threadId: string, selection: AgentHistorySelection) {
+    return this.#agentHistory.read(agentId, threadId, selection);
+  }
+
+  readTurnTrace(threadId: string, turnId: string) {
+    return this.#agentHistory.turnTrace(threadId, turnId);
+  }
+
   readConversationMessages(
     agentId: string,
     threadId: string | null,
     messageIds: readonly string[],
   ): ConversationMessage[] {
     return this.#conversations.readConversationMessages(agentId, threadId, messageIds);
+  }
+
+  readConversationMessagesOfItemType(agentId: string, threadId: string, itemType: string): ConversationMessage[] {
+    return this.#conversations.readConversationMessagesOfItemType(agentId, threadId, itemType);
   }
 
   readConversationRecoveryMessages(
@@ -210,16 +269,24 @@ export class OpenBotDatabase {
     return this.#conversations.readConversationRecoveryMessages(agentId, threadId, activeTurnId);
   }
 
+  conversationCursorAt(threadId: string, messageId: string): string | null {
+    return this.#conversations.conversationCursorAt(threadId, messageId);
+  }
+
+  conversationCountBefore(threadId: string, messageId: string, options: ConversationMarkerExclusions = {}): number {
+    return this.#conversations.conversationCountBefore(threadId, messageId, options);
+  }
+
+  conversationHasAfter(threadId: string, messageId: string, options: ConversationMarkerExclusions = {}): boolean {
+    return this.#conversations.conversationHasAfter(threadId, messageId, options);
+  }
+
   readConversationPage(
     agentId: string,
     threadId: string | null,
     anchor: ConversationPageAnchor = { type: "latest" },
     requestedLimit = 50,
-    options: {
-      excludeRoutineEvents?: boolean;
-      excludeRoutineRunEvents?: boolean;
-      excludeHostedSiteEvents?: boolean;
-    } = {},
+    options: ConversationMarkerExclusions = {},
   ): ConversationPage {
     return this.#conversations.readConversationPage(agentId, threadId, anchor, requestedLimit, options);
   }
@@ -227,13 +294,7 @@ export class OpenBotDatabase {
   supportedConversationCursor(
     threadId: string,
     throughMessageId: string | null,
-    options: {
-      excludeRoutineEvents?: boolean;
-      excludeRoutineRunEvents?: boolean;
-      excludeHostedSiteEvents?: boolean;
-      /** A cursor for another device never rests on a note that stays on this computer. */
-      excludeLocalOnly?: boolean;
-    } = {},
+    options: ConversationMarkerExclusions = {},
   ): string | null {
     return this.#conversations.supportedConversationCursor(threadId, throughMessageId, options);
   }
@@ -243,12 +304,17 @@ export class OpenBotDatabase {
     agentId?: string,
     cursor?: string,
     requestedLimit = 100,
+    includeSideThreads = false,
   ): ConversationSearchPage {
-    return this.#conversations.searchConversationMessages(query, agentId, cursor, requestedLimit);
+    return this.#conversations.searchConversationMessages(query, agentId, cursor, requestedLimit, includeSideThreads);
   }
 
   searchConversationFiles(query: string, cursor?: string, requestedLimit = 50): ConversationFileSearchPage {
     return this.#conversations.searchConversationFiles(query, cursor, requestedLimit);
+  }
+
+  readSentMessageStats(): SentMessageStats {
+    return this.#conversations.readSentMessageStats();
   }
 
   persistConversation(
@@ -257,18 +323,27 @@ export class OpenBotDatabase {
     payload: unknown = {},
     commandId = `conversation:${eventType}:${randomUUID()}`,
   ): ConversationSnapshot {
-    return this.#conversationWrites.persistConversation(snapshot, eventType, payload, commandId);
+    return perfTimed("db.persistConversation", () =>
+      this.#conversationWrites.persistConversation(snapshot, eventType, payload, commandId),
+    );
   }
 
-  /** Writes one message of a thread, for a caller that knows only that message changed. */
-  persistStreamingMessage(input: {
-    snapshot: ConversationSnapshot;
-    messageId: string;
-    eventType: string;
-    detail?: unknown;
-    commandId?: string;
-  }): number {
-    return this.#conversationWrites.persistStreamingMessage(input);
+  persistStreamingMessage(input: StreamingMessageWrite): number {
+    return perfTimed("db.persistStreamingMessage", () => this.#conversationWrites.persistStreamingMessage(input));
+  }
+
+  persistStreamingMessages(inputs: readonly StreamingMessageWrite[]): StreamingMessageResult[] {
+    const db = this.connection;
+    return withTransaction(db, () =>
+      inputs.map((input): StreamingMessageResult => {
+        try {
+          return { revision: this.#conversationWrites.persistStreamingMessage(input) };
+        } catch (error) {
+          if (!db.isTransaction) throw error;
+          return { error };
+        }
+      }),
+    );
   }
 
   appendConversationMessage(input: {
@@ -283,6 +358,10 @@ export class OpenBotDatabase {
     return this.#conversationWrites.appendConversationMessage(input);
   }
 
+  changedConversationMessages(threadId: string, messages: readonly ConversationMessage[]): ConversationMessage[] {
+    return this.#conversationWrites.changedConversationMessages(threadId, messages);
+  }
+
   persistConversationChanges(input: {
     agentId: string;
     threadId: string;
@@ -292,8 +371,45 @@ export class OpenBotDatabase {
     eventType: string;
     detail?: unknown;
     commandId?: string;
+    deletedMessageIds?: readonly string[];
   }): number {
     return this.#conversationWrites.persistConversationChanges(input);
+  }
+
+  deleteThreadHistory(input: { agentId: string; threadId: string }): number {
+    return this.#conversationWrites.deleteThreadHistory(input);
+  }
+
+  threadMessageIds(threadId: string): string[] {
+    return threadMessageIds(this.connection, threadId);
+  }
+
+  deletedConversationMessageIds(threadId: string): Set<string> {
+    return deletedThreadMessageIds(this.connection, threadId);
+  }
+
+  pinnedThreadMessages(threadIds: readonly string[], limit: number): PinnedThreadMessage[] {
+    return pinnedThreadMessages(this.connection, threadIds, limit);
+  }
+
+  pinnedThreadMessageCount(threadId: string): number {
+    return pinnedThreadMessageCount(this.connection, threadId);
+  }
+
+  threadMessagePinner(threadId: string, messageId: string): MessagePinner | null {
+    return threadMessagePinner(this.connection, threadId, messageId);
+  }
+
+  pinThreadMessage(threadId: string, messageId: string, pinnedAt: string, pinnedBy: MessagePinner): void {
+    pinThreadMessage(this.connection, threadId, messageId, pinnedAt, pinnedBy);
+  }
+
+  unpinThreadMessage(threadId: string, messageId: string): void {
+    unpinThreadMessage(this.connection, threadId, messageId);
+  }
+
+  threadMessagesContaining(threadId: string, quote: string, limit: number): ConversationMessage[] {
+    return threadMessagesContaining(this.connection, threadId, quote, limit);
   }
 
   upsertProviderHistoryMessage(input: {
@@ -308,7 +424,6 @@ export class OpenBotDatabase {
     return this.#conversationWrites.upsertProviderHistoryMessage(input);
   }
 
-  /** Commits one normalized provider-history page and its staging marker as one transaction. */
   importProviderHistoryMessages(input: {
     sessionId: string;
     turnId: string;
@@ -317,12 +432,10 @@ export class OpenBotDatabase {
     messages: readonly ConversationMessage[];
     throughItemIndex?: number;
     complete: boolean;
+    compact?: boolean;
     detail?: unknown;
   }): void {
-    const db = this.connection;
-    const ownsTransaction = !db.isTransaction;
-    if (ownsTransaction) db.exec("BEGIN IMMEDIATE");
-    try {
+    withTransaction(this.connection, () => {
       for (const message of input.messages) {
         this.upsertProviderHistoryMessage({
           agentId: input.agentId,
@@ -335,12 +448,11 @@ export class OpenBotDatabase {
       if (input.throughItemIndex !== undefined) {
         this.#providerHistory.markItemsImportedThrough(input.sessionId, input.turnId, input.throughItemIndex);
       }
-      if (input.complete) this.#providerHistory.markTurnImported(input.sessionId, input.turnId);
-      if (ownsTransaction) db.exec("COMMIT");
-    } catch (error) {
-      if (ownsTransaction && db.isTransaction) db.exec("ROLLBACK");
-      throw error;
-    }
+      if (input.complete) {
+        this.#providerHistory.markTurnImported(input.sessionId, input.turnId);
+        if (input.compact) this.#providerHistory.compactImportedTurn(input.sessionId, input.turnId);
+      }
+    });
   }
 
   persistConversationAndMailbox(
@@ -350,22 +462,15 @@ export class OpenBotDatabase {
     mailboxState: MailboxProjectionState,
     mailboxEventType: string,
   ): ConversationSnapshot {
-    const db = this.connection;
-    db.exec("BEGIN IMMEDIATE");
-    try {
+    return withTransaction(this.connection, () => {
       this.replaceMailboxState(`mailbox:${mailboxEventType}:${randomUUID()}`, mailboxState, mailboxEventType);
-      const persisted = this.#conversationWrites.persistConversation(
+      return this.#conversationWrites.persistConversation(
         snapshot,
         eventType,
         payload,
         `conversation:${eventType}:${randomUUID()}`,
       );
-      db.exec("COMMIT");
-      return persisted;
-    } catch (error) {
-      if (db.isTransaction) db.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   persistConversationChangesAndMailbox(
@@ -374,16 +479,17 @@ export class OpenBotDatabase {
     eventType: string,
     payload: unknown,
     mailboxState: MailboxProjectionState,
+    mailboxChanges: MailboxProjectionChanges,
     mailboxEventType: string,
   ): ConversationSnapshot {
-    const db = this.connection;
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      this.replaceMailboxState(`mailbox:${mailboxEventType}:${randomUUID()}`, mailboxState, mailboxEventType);
-      if (!snapshot.threadId) {
-        db.exec("COMMIT");
-        return structuredClone(snapshot);
-      }
+    return withTransaction(this.connection, () => {
+      this.applyMailboxChanges(
+        `mailbox:${mailboxEventType}:${randomUUID()}`,
+        mailboxState,
+        mailboxChanges,
+        mailboxEventType,
+      );
+      if (!snapshot.threadId) return structuredClone(snapshot);
       const revision = this.#conversationWrites.persistConversationChanges({
         agentId: snapshot.agentId,
         threadId: snapshot.threadId,
@@ -393,20 +499,48 @@ export class OpenBotDatabase {
         detail: payload,
         commandId: `conversation:${eventType}:${randomUUID()}`,
       });
-      db.exec("COMMIT");
       return { ...structuredClone(snapshot), revision };
-    } catch (error) {
-      if (db.isTransaction) db.exec("ROLLBACK");
-      throw error;
-    }
+    });
+  }
+
+  persistMailboxChangesWith<T>(
+    mailboxState: MailboxProjectionState,
+    mailboxChanges: MailboxProjectionChanges,
+    mailboxEventType: string,
+    write: () => T,
+  ): T {
+    return withTransaction(this.connection, () => {
+      this.applyMailboxChanges(
+        `mailbox:${mailboxEventType}:${randomUUID()}`,
+        mailboxState,
+        mailboxChanges,
+        mailboxEventType,
+      );
+      return write();
+    });
   }
 
   activeProviderSession(threadId: string, provider: AgentProviderId): ProviderSession | null {
     return this.#sessions.activeProviderSession(threadId, provider);
   }
 
+  threadHasEvent(threadId: string, eventType: string): boolean {
+    return (
+      this.connection
+        .prepare(
+          `SELECT 1 FROM orchestration_events
+           WHERE aggregate_type = 'thread' AND aggregate_id = ? AND event_type = ? LIMIT 1`,
+        )
+        .get(threadId, eventType) !== undefined
+    );
+  }
+
   listProviderSessions(threadId: string): ProviderSession[] {
     return this.#sessions.listProviderSessions(threadId);
+  }
+
+  listProviderSessionIds(externalSessionId?: string): string[] {
+    return this.#sessions.listProviderSessionIds(externalSessionId);
   }
 
   listExternalSessionIds(): string[] {
@@ -444,7 +578,7 @@ export class OpenBotDatabase {
     sessionId: string;
     fragment: import("./provider-history").ProviderHistoryFragment;
     cursor?: unknown;
-  }): ProviderHistoryImportState {
+  }): ProviderHistoryStageResult {
     return this.#providerHistory.stageProviderHistoryFragment(input);
   }
 
@@ -471,6 +605,18 @@ export class OpenBotDatabase {
     pendingOnly?: boolean;
   }): ProviderHistoryStagedItem[] {
     return this.#providerHistory.readStagedItems(input);
+  }
+
+  compactImportedProviderHistory(afterRowId: number): ProviderHistoryCompactionBatch {
+    return this.#providerHistory.compactImportedItems(afterRowId);
+  }
+
+  compactThreadEvents(): ThreadEventCompactionBatch {
+    return this.#threadEvents.compactNext();
+  }
+
+  dropCompactedProviderHistoryItems(sessionId: string, turnId: string): void {
+    this.#providerHistory.dropCompactedItems(sessionId, turnId);
   }
 
   markProviderHistoryTurnImported(sessionId: string, turnId: string): void {
@@ -508,8 +654,18 @@ export class OpenBotDatabase {
     eventType: string,
     fileDeletions: string[] = [],
     rebaseHistory = false,
-  ): void {
-    this.#mailbox.replaceMailboxState(commandId, state, eventType, fileDeletions, rebaseHistory);
+  ): boolean {
+    return this.#mailbox.replaceMailboxState(commandId, state, eventType, fileDeletions, rebaseHistory);
+  }
+
+  applyMailboxChanges(
+    commandId: string,
+    state: MailboxProjectionState,
+    changes: MailboxProjectionChanges,
+    eventType: string,
+    fileDeletions: string[] = [],
+  ): boolean {
+    return this.#mailbox.applyMailboxChanges(commandId, state, changes, eventType, fileDeletions);
   }
 
   pendingFileDeletions(): Array<{ id: string; path: string }> {

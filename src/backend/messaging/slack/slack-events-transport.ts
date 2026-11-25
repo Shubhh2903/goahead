@@ -1,4 +1,5 @@
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import { Effect } from "effect";
 import type {
   ConnectionIdentity,
   IngressAnswer,
@@ -10,7 +11,6 @@ import type {
 } from "../messaging-types";
 import { slackHistoryEvent, slackInboundAction, slackInboundMessage, slackInboxCandidate } from "./slack-events";
 
-/** Slack sends a request again when the answer is late, with the same `event_id`. */
 const RECENT_EVENTS = 2_000;
 const OK: IngressAnswer = { status: 200 };
 
@@ -19,12 +19,6 @@ export interface SlackEventsTransportOptions {
   ingress: MessagingIngress;
 }
 
-/**
- * The inbound half of one workspace's OpenBot app: the Events API, which Slack posts to Signal.
- * Signal checks Slack's signature, which only it can, and passes the workspace's requests to this
- * host. This holds the ingress socket open while it runs and answers at once. The agent's work
- * starts after the answer, because Slack gives up after three seconds.
- */
 export class SlackEventsTransport implements MessagingTransport {
   readonly #identity: ConnectionIdentity;
   readonly #ingress: MessagingIngress;
@@ -32,6 +26,8 @@ export class SlackEventsTransport implements MessagingTransport {
   #sink: TransportSink | null = null;
   #release: (() => void) | null = null;
   #unsubscribe: (() => void) | null = null;
+  #unsubscribeRoutes: (() => void) | null = null;
+  #linked = true;
 
   constructor(options: SlackEventsTransportOptions) {
     this.#identity = options.identity;
@@ -40,65 +36,83 @@ export class SlackEventsTransport implements MessagingTransport {
 
   start(sink: TransportSink): void {
     this.#sink = sink;
-    this.#release ??= this.#ingress.acquire();
+    this.#unsubscribeRoutes ??= this.#ingress.onLinkedRoutes("slack", (ids) => {
+      this.#linked = ids === null || ids.has(this.#identity.workspaceId);
+      this.#report(this.#ingress.state());
+    });
+    this.#release ??= this.#ingress.acquire("slack");
     this.#unsubscribe ??= this.#ingress.onState((state) => this.#report(state));
     this.#report(this.#ingress.state());
   }
 
-  /** The main process reconnects the ingress socket itself when the computer wakes. */
   reconnect(): void {}
 
-  async stop(): Promise<void> {
-    this.#sink = null;
-    this.#unsubscribe?.();
-    this.#unsubscribe = null;
-    this.#release?.();
-    this.#release = null;
-  }
+  readonly stop = Effect.fn("SlackEvents.stop")(() =>
+    Effect.sync(() => {
+      this.#sink = null;
+      this.#unsubscribe?.();
+      this.#unsubscribe = null;
+      this.#unsubscribeRoutes?.();
+      this.#unsubscribeRoutes = null;
+      this.#linked = true;
+      this.#release?.();
+      this.#release = null;
+    }),
+  );
 
-  async deliver(delivery: IngressDelivery): Promise<IngressAnswer> {
-    const sink = this.#sink;
-    if (!sink) return { status: 503 };
-    const text = new TextDecoder().decode(delivery.body);
-    if (delivery.kind === "interactivity") {
-      const payload = parseRecord(new URLSearchParams(text).get("payload") ?? "");
-      if (!payload) return { status: 400 };
-      if (payload.api_app_id !== undefined && payload.api_app_id !== this.#identity.appId) return { status: 404 };
-      const action = slackInboundAction(payload, this.#identity.workspaceId);
-      if (action) sink.action(action);
+  readonly deliver = Effect.fn("SlackEvents.deliver")((delivery: IngressDelivery) =>
+    Effect.sync((): IngressAnswer => {
+      const sink = this.#sink;
+      if (!sink) return { status: 503 };
+      if (delivery.platform !== "slack") return { status: 400 };
+      const text = new TextDecoder().decode(delivery.body);
+      if (delivery.kind === "interactivity") {
+        const payload = parseRecord(new URLSearchParams(text).get("payload") ?? "");
+        if (!payload) return { status: 400 };
+        if (payload.api_app_id !== undefined && payload.api_app_id !== this.#identity.appId) return { status: 404 };
+        const action = slackInboundAction(payload, this.#identity.workspaceId);
+        if (action) sink.action(action);
+        return OK;
+      }
+      const body = parseRecord(text);
+      if (!body) return { status: 400 };
+      if (body.type !== "event_callback") return OK;
+      if (body.api_app_id !== this.#identity.appId) return { status: 404 };
+      if (isString(body.event_id) && this.#remember(body.event_id)) return OK;
+      const event = body.event;
+      if (isDynamicRecord(event) && (event.type === "app_uninstalled" || event.type === "tokens_revoked")) {
+        if (sink.revoked) sink.revoked();
+        else sink.state("invalid_token");
+        return OK;
+      }
+      if (isDynamicRecord(event) && event.type === "channel_created") {
+        if (isDynamicRecord(event.channel) && isString(event.channel.id)) sink.placeCreated?.(event.channel.id);
+        return OK;
+      }
+      // The Slack client's cache, the inbox and the request path are separate: a message can go to
+      // each of them. Edits, deletions, reactions and membership changes go only to the cache.
+      const change = slackHistoryEvent(body, this.#identity.workspaceId, this.#identity.user?.id ?? null);
+      if (change) sink.history?.(change);
+      const candidate = slackInboxCandidate(body, this.#identity.workspaceId, this.#identity.botUserId);
+      if (candidate) sink.inbox?.(candidate);
+      const message = slackInboundMessage(body, this.#identity.workspaceId, this.#identity.botUserId);
+      if (message) sink.message(message);
       return OK;
-    }
-    const body = parseRecord(text);
-    if (!body) return { status: 400 };
-    if (body.type !== "event_callback") return OK;
-    if (body.api_app_id !== this.#identity.appId) return { status: 404 };
-    if (isString(body.event_id) && this.#remember(body.event_id)) return OK;
-    const event = body.event;
-    if (isDynamicRecord(event) && (event.type === "app_uninstalled" || event.type === "tokens_revoked")) {
-      if (sink.revoked) sink.revoked();
-      else sink.state("invalid_token");
-      return OK;
-    }
-    if (isDynamicRecord(event) && event.type === "channel_created") {
-      if (isDynamicRecord(event.channel) && isString(event.channel.id)) sink.placeCreated?.(event.channel.id);
-      return OK;
-    }
-    // The Slack client's cache, the inbox and the request path are separate: a message can go to
-    // each of them. Edits, deletions, reactions and membership changes go only to the cache.
-    const change = slackHistoryEvent(body, this.#identity.workspaceId, this.#identity.user?.id ?? null);
-    if (change) sink.history?.(change);
-    const candidate = slackInboxCandidate(body, this.#identity.workspaceId, this.#identity.botUserId);
-    if (candidate) sink.inbox?.(candidate);
-    const message = slackInboundMessage(body, this.#identity.workspaceId, this.#identity.botUserId);
-    if (message) sink.message(message);
-    return OK;
-  }
+    }),
+  );
 
   #report(state: IngressState): void {
-    this.#sink?.state(state === "online" ? "connected" : state === "connecting" ? "connecting" : "relay_unavailable");
+    this.#sink?.state(
+      state === "online"
+        ? this.#linked
+          ? "connected"
+          : "not_linked"
+        : state === "connecting"
+          ? "connecting"
+          : "relay_unavailable",
+    );
   }
 
-  /** True when the event was already handled. */
   #remember(eventId: string): boolean {
     if (this.#seen.has(eventId)) return true;
     this.#seen.add(eventId);
@@ -110,7 +124,6 @@ export class SlackEventsTransport implements MessagingTransport {
   }
 }
 
-/** A Slack payload is always a JSON object. Anything else is a request Slack did not send. */
 function parseRecord(text: string): DynamicRecord | null {
   try {
     const value = JSON.parse(text);

@@ -12,7 +12,7 @@ import { migrateOpenBotDatabase } from "./openbot-database-schema";
 // - a newer or incomplete history is changed or accepted;
 // - a deleted routine or run leaves links or steps behind, or a step can point at a missing run.
 
-const LATEST = 37;
+const LATEST = 74;
 const STAMP = "2026-10-01T07:00:00.000Z";
 const FLOW_OBJECTS = [
   "routine_flow_links",
@@ -21,6 +21,8 @@ const FLOW_OBJECTS = [
   "routine_flow_steps",
   "routine_flow_steps_agent",
   "routine_flow_steps_delivery",
+  "routine_flow_steps_running",
+  "routine_flow_steps_updated",
 ];
 
 const databases: DatabaseSync[] = [];
@@ -159,6 +161,13 @@ const MISSED_RUN_COLUMNS = new Set([
   "missed_until",
   "run_condition",
   "run_condition_fingerprint",
+  "run_source",
+  "run_in",
+  "site",
+  "group_first",
+  "group_id",
+  "group_start",
+  "turn_rank",
 ]);
 
 function withoutMissedRunColumns(row: Record<string, SQLOutputValue>): Record<string, SQLOutputValue> {

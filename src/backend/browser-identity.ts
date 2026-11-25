@@ -1,69 +1,87 @@
-/**
- * Per-site request identity for the embedded browser.
- *
- * One shared session means one page identity: native everywhere, which Google reads as a
- * known client. A few allowlists read the other way, so those hosts get the build and
- * product tokens scrubbed back out, request by request. Page JavaScript always sees the
- * native string; only listed hosts are ever rewritten, so one host's gate cannot change
- * another's verdict.
- *
- * To add a site: append a row with the measured reason and cover it with an opt-in live
- * probe in `scripts/browser-smoke-electron.ts` (`--*-live`), the way WhatsApp is covered.
- * The first match in table order wins, and anything unmatched stays native.
- */
-export type BrowserSiteIdentity = "native" | "scrubbed";
-
-interface BrowserSitePolicy {
-  readonly hosts: readonly string[];
-  readonly identity: BrowserSiteIdentity;
-  readonly reason: string;
+export function sessionBrowserUserAgent(userAgent: string): string {
+  return userAgent.replace(/\s(?:Electron|GoAhead)\/[^\s]+/gu, "").replace(/(\sChrome\/\d+)\.[\d.]+/u, "$1.0.0.0");
 }
 
-const SITE_POLICIES: readonly BrowserSitePolicy[] = [
-  {
-    hosts: ["whatsapp.com", "whatsapp.net"],
-    identity: "scrubbed",
-    reason: "Allowlist refuses the build token; measured with --whatsapp-live.",
-  },
-  {
-    hosts: ["canva.com"],
-    identity: "scrubbed",
-    reason: "Server answers the product token with an update-your-browser page; measured with --canva-live.",
-  },
-];
+export function browserRequestUserAgent(url: string, userAgent: string, electronVersion: string): string {
+  const cleanAgent = sessionBrowserUserAgent(userAgent);
+  const hostname = URL.parse(url)?.hostname.replace(/\.+$/u, "");
+  if (hostname !== "accounts.google.com") return cleanAgent;
+  return cleanAgent.replace(/(Chrome\/[^\s]+)/u, `$1 Electron/${electronVersion}`);
+}
 
-export function siteIdentityForUrl(url: string): BrowserSiteIdentity {
-  let hostname: string;
-  try {
-    hostname = new URL(url).hostname.replace(/\.+$/u, "");
-  } catch {
-    return "native";
+const GREASE_CHARACTERS = [" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_"] as const;
+const GREASE_VERSIONS = ["8", "99", "24"] as const;
+
+function browserBrandHeader(chromeVersion: string, full: boolean): string {
+  const majorVersion = Number.parseInt(chromeVersion, 10);
+  const greaseVersion = GREASE_VERSIONS[majorVersion % GREASE_VERSIONS.length];
+  const grease = `"Not${GREASE_CHARACTERS[majorVersion % GREASE_CHARACTERS.length]}A${
+    GREASE_CHARACTERS[(majorVersion + 1) % GREASE_CHARACTERS.length]
+  }Brand";v="${full ? `${greaseVersion}.0.0.0` : greaseVersion}"`;
+  const chromium = `"Chromium";v="${full ? chromeVersion : majorVersion}"`;
+  return majorVersion % 2 === 0 ? `${grease}, ${chromium}` : `${chromium}, ${grease}`;
+}
+
+export function browserClientHints(chromeVersion: string, platform: NodeJS.Platform): Record<string, string> {
+  const platformName = platform === "darwin" ? "macOS" : platform === "win32" ? "Windows" : "Linux";
+  return {
+    "Sec-CH-UA": browserBrandHeader(chromeVersion, false),
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": `"${platformName}"`,
+  };
+}
+
+export interface BrowserHintSystem {
+  chromeVersion: string;
+  platform: NodeJS.Platform;
+  arch: string;
+  systemVersion: string;
+}
+
+export function browserHighEntropyClientHints(system: BrowserHintSystem): Record<string, string> {
+  const hints: Record<string, string> = {
+    "Sec-CH-UA-Full-Version-List": browserBrandHeader(system.chromeVersion, true),
+    "Sec-CH-UA-Full-Version": `"${system.chromeVersion}"`,
+    "Sec-CH-UA-Model": '""',
+    "Sec-CH-UA-WoW64": "?0",
+    "Sec-CH-UA-Form-Factors": '"Desktop"',
+  };
+  const arch = system.arch === "arm64" ? "arm" : system.arch === "x64" ? "x86" : undefined;
+  if (arch) {
+    hints["Sec-CH-UA-Arch"] = `"${arch}"`;
+    hints["Sec-CH-UA-Bitness"] = '"64"';
   }
-  for (const policy of SITE_POLICIES) {
-    if (policy.hosts.some((base) => hostname === base || hostname.endsWith(`.${base}`))) {
-      return policy.identity;
-    }
+  const numbers = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?/u.exec(system.systemVersion);
+  if (system.platform === "linux") hints["Sec-CH-UA-Platform-Version"] = '""';
+  else if (numbers && system.platform === "darwin") {
+    hints["Sec-CH-UA-Platform-Version"] = `"${numbers[1]}.${numbers[2] ?? 0}.${numbers[3] ?? 0}"`;
   }
-  return "native";
+  return hints;
 }
 
-export function scrubbedBrowserUserAgent(userAgent: string): string {
-  return userAgent.replace(/\s(?:Electron|OpenBot)\/[^\s]+/gu, "");
-}
+const HINT_ORIGIN_LIMIT = 500;
 
-/**
- * The request headers with the site policy applied. Returns a copy; the input is never
- * mutated. Hosts outside the table pass through untouched, as does a request without a
- * user agent -- no header is ever invented.
- */
-export function applySiteIdentity(url: string, requestHeaders: Record<string, string>): Record<string, string> {
-  const headers = { ...requestHeaders };
-  if (siteIdentityForUrl(url) !== "scrubbed") return headers;
-  const userAgent = Object.entries(headers).find(([candidate]) => candidate.toLowerCase() === "user-agent");
-  if (userAgent === undefined) return headers;
-  const [userAgentName, userAgentValue] = userAgent;
-  const scrubbed = scrubbedBrowserUserAgent(userAgentValue);
-  if (userAgentName !== "User-Agent") delete headers[userAgentName];
-  headers["User-Agent"] = scrubbed;
-  return headers;
+export class BrowserHintRequests {
+  readonly #origins = new Map<string, ReadonlySet<string>>();
+
+  note(url: string, responseHeaders: Record<string, string[]> | undefined): void {
+    const origin = URL.parse(url)?.origin;
+    const header = Object.entries(responseHeaders ?? {}).find(([name]) => name.toLowerCase() === "accept-ch");
+    if (!origin || !header) return;
+    const names = header[1]
+      .flatMap((value) => value.split(","))
+      .map((name) => name.trim().toLowerCase())
+      .filter(Boolean);
+    this.#origins.delete(origin);
+    if (names.length === 0) return;
+    this.#origins.set(origin, new Set(names));
+    const oldest = this.#origins.keys().next().value;
+    if (this.#origins.size > HINT_ORIGIN_LIMIT && oldest !== undefined) this.#origins.delete(oldest);
+  }
+
+  requested(url: string, pageUrl: string): ReadonlySet<string> | undefined {
+    const origin = URL.parse(url)?.origin;
+    if (!origin || URL.parse(pageUrl)?.origin !== origin) return undefined;
+    return this.#origins.get(origin);
+  }
 }

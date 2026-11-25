@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { KEY_ONLY_PROVIDERS } from "@openbot/contracts/agent-providers";
 import {
   type AgentAnalytics,
   type AgentAnalyticsInput,
   ANALYTICS_AGENT_MODEL_ID_LIMIT,
   ANALYTICS_AGENT_MODELS_LIMIT,
   type AnalyticsProviderDay,
+  type AnalyticsSkill,
   type AnalyticsTotals,
   analyticsDate,
   type ConversationMessage,
@@ -20,7 +22,7 @@ import {
 import type { DynamicRecord } from "@openbot/contracts/runtime-values";
 import { estimateUsageCost } from "../agent/usage-pricing";
 import type { DatabaseCore } from "./database-core";
-import { databaseRow, databaseRows, requiredStringColumn } from "./database-rows";
+import { databaseRow, databaseRows, optionalNumberColumn, requiredStringColumn } from "./database-rows";
 
 export interface UsageSample {
   agentId: string;
@@ -33,11 +35,32 @@ export interface UsageSample {
   baseline: boolean;
   reportedCost?: number | null;
   occurredAt?: string;
-  pricingInputTokens?: number | null;
+  lastRequestInputTokens?: number | null;
+  smallestRequestInputTokens?: number | null;
+  previousTokens?: UsageTokens | null;
+  costCounterId?: string;
+  zeroCostUnpriced?: boolean;
 }
 const TOKEN_KEYS = ["uncachedInput", "cachedInput", "cacheCreation", "output"] as const;
 
-/** Owns numeric analytics and cumulative checkpoints. Conversation deletion does not erase usage. */
+export interface SkillLoadSample {
+  agentId: string;
+  sessionId: string;
+  turnId: string;
+  itemId: string;
+  provider: string;
+  model: string;
+  skill: string;
+  tokens: number | null;
+  occurredAt: string;
+}
+
+export interface TurnModelUsage {
+  provider: string;
+  model: string;
+  tokens: UsageTokens;
+}
+
 export class AgentUsage {
   readonly #core: DatabaseCore;
   constructor(core: DatabaseCore) {
@@ -92,14 +115,32 @@ export class AgentUsage {
             .prepare("SELECT tokens_json FROM agent_usage_checkpoints WHERE agent_id = ? AND counter_id = ?")
             .get(sample.agentId, sample.counterId),
         );
-        const previousValue = previous ? databaseRow(JSON.parse(requiredStringColumn(previous, "tokens_json"))) : null;
+        const costCheckpoint = sample.costCounterId
+          ? databaseRow(
+              db
+                .prepare("SELECT tokens_json FROM agent_usage_checkpoints WHERE agent_id = ? AND counter_id = ?")
+                .get(sample.agentId, sample.costCounterId),
+            )
+          : previous;
+        const previousValue = costCheckpoint
+          ? databaseRow(JSON.parse(requiredStringColumn(costCheckpoint, "tokens_json")))
+          : null;
         const previousCost = previousValue?.reportedCost;
-        const before = previous ? decodeUsageTokens(JSON.parse(requiredStringColumn(previous, "tokens_json"))) : null;
+        const reportedCost =
+          sample.reportedCost == null
+            ? typeof previousCost === "number"
+              ? previousCost
+              : null
+            : Math.max(sample.reportedCost, typeof previousCost === "number" ? previousCost : 0);
+        const before = previous
+          ? decodeUsageTokens(JSON.parse(requiredStringColumn(previous, "tokens_json")))
+          : sample.baseline
+            ? null
+            : (sample.previousTokens ?? null);
         const delta: UsageTokens = { ...tokens };
         for (const key of TOKEN_KEYS) {
           const current = tokens[key];
           const prior = before?.[key];
-          // Counter resets need an explicit new counter id, never a negative delta treated as fresh usage.
           delta[key] =
             current === null || (before && prior === null)
               ? null
@@ -113,35 +154,32 @@ export class AgentUsage {
         ).run(
           sample.agentId,
           sample.counterId,
-          JSON.stringify({
-            ...tokens,
-            reportedCost:
-              sample.reportedCost == null
-                ? typeof previousCost === "number"
-                  ? previousCost
-                  : null
-                : Math.max(sample.reportedCost, typeof previousCost === "number" ? previousCost : 0),
-          }),
+          JSON.stringify(sample.costCounterId ? tokens : { ...tokens, reportedCost }),
         );
+        const costStartUnknown =
+          sample.costCounterId && sample.reportedCost != null && typeof previousCost !== "number"
+            ? databaseRow(
+                db
+                  .prepare("SELECT 1 FROM agent_usage_records WHERE agent_id = ? AND session_id = ? LIMIT 1")
+                  .get(sample.agentId, sample.sessionId),
+              ) !== null
+            : false;
+        if (sample.costCounterId && sample.reportedCost != null)
+          db.prepare(
+            "INSERT INTO agent_usage_checkpoints VALUES (?, ?, ?) ON CONFLICT(agent_id, counter_id) DO UPDATE SET tokens_json = excluded.tokens_json",
+          ).run(sample.agentId, sample.costCounterId, JSON.stringify({ reportedCost }));
         if ((!before && sample.baseline) || sample.turnId === "baseline") return null;
-        const estimate =
-          sample.reportedCost !== undefined && sample.reportedCost !== null
-            ? {
-                cost:
-                  before && typeof previousCost !== "number"
-                    ? null
-                    : Math.max(0, sample.reportedCost - (typeof previousCost === "number" ? previousCost : 0)),
-                basis:
-                  "Claude SDK list-price estimate; https://platform.claude.com/docs/en/about-claude/pricing; verified 2026-09-07",
-              }
-            : sample.provider === "claude"
-              ? { cost: null, basis: null }
-              : estimateUsageCost(
-                  sample.provider,
-                  sample.model,
-                  delta,
-                  sample.pricingInputTokens ?? (tokens.uncachedInput ?? 0) + (tokens.cachedInput ?? 0),
-                );
+        const reportedDelta =
+          sample.reportedCost === undefined ||
+          sample.reportedCost === null ||
+          costStartUnknown ||
+          (!sample.costCounterId && before && typeof previousCost !== "number")
+            ? null
+            : Math.max(0, sample.reportedCost - (typeof previousCost === "number" ? previousCost : 0));
+        const reported =
+          reportedDelta === null || (sample.zeroCostUnpriced && reportedDelta === 0)
+            ? null
+            : { cost: reportedDelta, basis: reportedCostBasis(sample.provider) };
         const turn = databaseRow(
           db
             .prepare("SELECT occurred_at FROM agent_usage_activity WHERE agent_id = ? AND activity_id = ?")
@@ -149,6 +187,16 @@ export class AgentUsage {
         );
         const occurredAt =
           sample.occurredAt ?? (turn ? requiredStringColumn(turn, "occurred_at") : new Date().toISOString());
+        const estimate =
+          reported ??
+          estimateUsageCost(
+            sample.provider,
+            sample.model,
+            delta,
+            sample.lastRequestInputTokens ?? null,
+            sample.smallestRequestInputTokens ?? null,
+            occurredAt,
+          );
         db.prepare("INSERT INTO agent_usage_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
           sample.agentId,
           digest,
@@ -167,26 +215,106 @@ export class AgentUsage {
     );
   }
 
+  recordSkillLoad(sample: SkillLoadSample): void {
+    const cost =
+      sample.tokens === null
+        ? null
+        : estimateUsageCost(
+            sample.provider,
+            sample.model,
+            { uncachedInput: sample.tokens, cachedInput: 0, cacheCreation: 0, output: 0 },
+            null,
+            null,
+            sample.occurredAt,
+          ).cost;
+    this.#core.connection
+      .prepare("INSERT OR IGNORE INTO agent_usage_skill_loads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(
+        sample.agentId,
+        JSON.stringify([sample.sessionId, sample.itemId, sample.skill]),
+        sample.sessionId,
+        sample.turnId,
+        sample.provider,
+        sample.model,
+        sample.skill,
+        sample.tokens,
+        cost,
+        sample.occurredAt,
+      );
+  }
+
   startTurn(agentId: string, sessionId: string, turnId: string, provider: string, model: string): void {
     this.#core.connection
       .prepare("INSERT OR IGNORE INTO agent_usage_activity VALUES (?, ?, ?, ?, ?, ?, 'turn', ?)")
       .run(agentId, `turn:${sessionId}:${turnId}`, sessionId, turnId, provider, model, new Date().toISOString());
   }
 
+  readTurn(agentId: string, turnId: string, since: string): TurnModelUsage[] {
+    const rows = databaseRows(
+      this.#core.connection
+        .prepare(
+          "SELECT provider, model, tokens_json FROM agent_usage_records WHERE agent_id = ? AND occurred_at >= ? AND turn_id = ?",
+        )
+        .all(agentId, since, turnId),
+    );
+    const models = new Map<string, TurnModelUsage>();
+    for (const row of rows) {
+      const provider = requiredStringColumn(row, "provider");
+      const model = requiredStringColumn(row, "model");
+      const key = JSON.stringify([provider, model]);
+      let entry = models.get(key);
+      if (!entry) {
+        entry = { provider, model, tokens: { uncachedInput: 0, cachedInput: 0, cacheCreation: 0, output: 0 } };
+        models.set(key, entry);
+      }
+      const tokens = decodeUsageTokens(JSON.parse(requiredStringColumn(row, "tokens_json")));
+      for (const key of TOKEN_KEYS) {
+        const value = tokens[key];
+        const total = entry.tokens[key];
+        entry.tokens[key] = value === null || total === null ? null : total + value;
+      }
+    }
+    return [...models.values()];
+  }
+
+  readTurnTotals(
+    agentId: string,
+    turnId: string,
+    since: string,
+  ): { tokens: number; cachedInput: number; costUsd: number | null } | null {
+    const rows = databaseRows(
+      this.#core.connection
+        .prepare(
+          "SELECT provider, model, occurred_at, tokens_json, estimated_cost_usd FROM agent_usage_records WHERE agent_id = ? AND occurred_at >= ? AND turn_id = ?",
+        )
+        .all(agentId, since, turnId),
+    );
+    if (rows.length === 0) return null;
+    let tokens = 0;
+    let cachedInput = 0;
+    let costUsd: number | null = 0;
+    for (const row of rows) {
+      const counts = decodeUsageTokens(JSON.parse(requiredStringColumn(row, "tokens_json")));
+      for (const key of TOKEN_KEYS) tokens += counts[key] ?? 0;
+      cachedInput += counts.cachedInput ?? 0;
+      const cost = recordCost(row, counts);
+      costUsd = costUsd === null || cost === null ? null : costUsd + cost;
+    }
+    return { tokens, cachedInput, costUsd };
+  }
+
   read(raw: AgentAnalyticsInput): AgentAnalytics {
-    // A spread does not trigger excess-property checking, so the host-only arrays of a
-    // single-agent report are dropped by name rather than left for a decoder to strip.
-    const { agents: _agents, providerDaily: _providerDaily, ...report } = this.readHost(parseAgentAnalyticsInput(raw));
+    const {
+      agents: _agents,
+      providerDaily: _providerDaily,
+      skills: _skills,
+      ...report
+    } = this.readHost(parseAgentAnalyticsInput(raw));
     return { ...report, agentId: raw.agentId };
   }
 
   readHost(raw: HostAnalyticsInput): HostAnalytics {
     const input = parseHostAnalyticsInput(raw);
-    // One statement per shape rather than one with `(? IS NULL OR agent_id = ?)`. That
-    // predicate cannot be answered from an index in either case, so both reads scanned all
-    // retained history: a seven-day report cost as much as the whole table, and a report
-    // left open repeated it after every turn. Each shape now seeks - the host-wide read on
-    // the date-leading index, the agent read on the leading `agent_id` of its own.
     const rangeStart = new Date(Date.parse(input.startDate) - 86400000).toISOString();
     const rangeEnd = new Date(Date.parse(input.endDate) + 2 * 86400000).toISOString();
     const readRange = (table: string): DynamicRecord[] =>
@@ -211,10 +339,7 @@ export class AgentUsage {
       days.set(date.toISOString().slice(0, 10), bucket());
     const models = new Map<string, { provider: string; model: string; bucket: Bucket }>();
     const agents = new Map<string, Bucket>();
-    // The tokens of each model per agent, so an agent row can name the models it used.
     const agentModels = new Map<string, Map<string, number>>();
-    // The chart reads two measures per [date, provider], and a Bucket would allocate three
-    // Sets per cell - about 3,300 at the 367-day cap - for fields this row never carries.
     const providerDays = new Map<string, AnalyticsProviderDay>();
     let updatedAt: string | null = null;
     const targets = (row: DynamicRecord): { targets: Bucket[]; cell: AnalyticsProviderDay | null } => {
@@ -232,8 +357,6 @@ export class AgentUsage {
         entry = { provider, model, bucket: bucket() };
         models.set(key, entry);
       }
-      // The bucket is created past the day guard, so an agent whose rows all fall outside
-      // the range stays out of the table instead of arriving as a row of zeroes.
       const agentId = requiredStringColumn(row, "agent_id");
       let agentEntry = agents.get(agentId);
       if (!agentEntry) {
@@ -243,7 +366,7 @@ export class AgentUsage {
       const cellKey = JSON.stringify([date, provider]);
       let cell = providerDays.get(cellKey);
       if (!cell) {
-        cell = { date, provider, processedTokens: 0, estimatedCostUsd: null };
+        cell = { date, provider, processedTokens: 0, cachedInput: null, estimatedCostUsd: null };
         providerDays.set(cellKey, cell);
       }
       return { targets: [totals, day, entry.bucket, agentEntry], cell };
@@ -251,6 +374,7 @@ export class AgentUsage {
     for (const row of records) {
       const tokens = decodeUsageTokens(JSON.parse(requiredStringColumn(row, "tokens_json")));
       const turn = JSON.stringify([row.agent_id, row.provider, row.session_id, row.turn_id]);
+      const cost = recordCost(row, tokens);
       const scope = targets(row);
       if (scope.targets.length > 0) {
         const agentId = requiredStringColumn(row, "agent_id");
@@ -271,17 +395,14 @@ export class AgentUsage {
           }
         }
         if (TOKEN_KEYS.some((key) => tokens[key] === null)) target.values.incompleteRecords++;
-        if (typeof row.estimated_cost_usd === "number")
-          target.values.estimatedCostUsd = (target.values.estimatedCostUsd ?? 0) + row.estimated_cost_usd;
+        if (cost !== null) target.values.estimatedCostUsd = (target.values.estimatedCostUsd ?? 0) + cost;
         else target.values.unpricedRecords++;
       }
-      // Only this loop feeds the cell: tokens and cost live on agent_usage_records, and the
-      // activity rows below carry turn and message counts the cell does not hold.
       const cell = scope.cell;
       if (cell) {
         for (const key of TOKEN_KEYS) if (tokens[key] !== null) cell.processedTokens += tokens[key];
-        if (typeof row.estimated_cost_usd === "number")
-          cell.estimatedCostUsd = (cell.estimatedCostUsd ?? 0) + row.estimated_cost_usd;
+        if (tokens.cachedInput !== null) cell.cachedInput = (cell.cachedInput ?? 0) + tokens.cachedInput;
+        if (cost !== null) cell.estimatedCostUsd = (cell.estimatedCostUsd ?? 0) + cost;
       }
     }
     for (const row of activity) {
@@ -294,6 +415,32 @@ export class AgentUsage {
       }
     }
     const summary = finish(totals);
+    const skills = new Map<string, { row: AnalyticsSkill; agents: Set<string> }>();
+    let skillTokens = 0;
+    for (const row of readRange("agent_usage_skill_loads")) {
+      const occurred = requiredStringColumn(row, "occurred_at");
+      if (!days.has(analyticsDate(new Date(occurred), input.timeZone))) continue;
+      const name = requiredStringColumn(row, "skill");
+      let entry = skills.get(name);
+      if (!entry) {
+        entry = {
+          row: { skill: name, loads: 0, tokens: 0, estimatedCostUsd: null, agents: 0, share: 0 },
+          agents: new Set(),
+        };
+        skills.set(name, entry);
+      }
+      entry.row.loads++;
+      const loadTokens = optionalNumberColumn(row, "tokens");
+      const tokens = loadTokens ?? 0;
+      entry.row.tokens += tokens;
+      skillTokens += tokens;
+      const cost =
+        loadTokens === null
+          ? null
+          : recordCost(row, { uncachedInput: loadTokens, cachedInput: 0, cacheCreation: 0, output: 0 });
+      if (cost !== null) entry.row.estimatedCostUsd = (entry.row.estimatedCostUsd ?? 0) + cost;
+      entry.agents.add(requiredStringColumn(row, "agent_id"));
+    }
     return {
       ...input,
       collectionStartedAt: this.collectionStartedAt(),
@@ -320,14 +467,17 @@ export class AgentUsage {
             .slice(0, ANALYTICS_AGENT_MODELS_LIMIT)
             .map(([model]) => model),
         }))
-        // Agent ids are unique, so the tiebreak makes the order of two equal rows a
-        // decision rather than a consequence of the unordered SELECT above.
         .sort((a, b) => b.processedTokens - a.processedTokens || a.agentId.localeCompare(b.agentId)),
-      // daily leans on the insertion order of a map seeded date by date; this map is built
-      // lazily from an ORDER BY-less SELECT, so the order is sorted rather than inherited.
       providerDaily: [...providerDays.values()].sort(
         (a, b) => a.date.localeCompare(b.date) || a.provider.localeCompare(b.provider),
       ),
+      skills: [...skills.values()]
+        .map(({ row, agents: loadedBy }) => ({
+          ...row,
+          agents: loadedBy.size,
+          share: skillTokens ? row.tokens / skillTokens : 0,
+        }))
+        .sort((a, b) => b.tokens - a.tokens || b.loads - a.loads || a.skill.localeCompare(b.skill)),
     };
   }
 }
@@ -340,6 +490,19 @@ interface Bucket {
 function bucket(): Bucket {
   return { values: emptyAnalyticsTotals(), sessions: new Set(), turns: new Set(), usageTurns: new Set() };
 }
+function recordCost(row: DynamicRecord, tokens: UsageTokens): number | null {
+  return (
+    optionalNumberColumn(row, "estimated_cost_usd") ??
+    estimateUsageCost(
+      requiredStringColumn(row, "provider"),
+      requiredStringColumn(row, "model"),
+      tokens,
+      null,
+      null,
+      requiredStringColumn(row, "occurred_at"),
+    ).cost
+  );
+}
 function finish(item: Bucket): AnalyticsTotals {
   return {
     ...item.values,
@@ -349,7 +512,6 @@ function finish(item: Bucket): AnalyticsTotals {
   };
 }
 
-/** Called inside the conversation writer's transaction; only message identity and counts survive. */
 export function recordUsageMessage(
   db: DatabaseSync,
   agentId: string,
@@ -375,4 +537,13 @@ export function recordUsageMessage(
     message.createdAt,
     message.createdAt,
   );
+}
+
+function reportedCostBasis(provider: string) {
+  if (provider === "opencode") return "OpenCode session cost report; API-equivalent rates, not subscription charges";
+  if (provider === "grok") return "Grok CLI prompt cost report";
+  if (provider === "pi" || KEY_ONLY_PROVIDERS.some((id) => id === provider))
+    return "Pi session cost report; rates of Pi's model list, not subscription charges";
+  if (provider === "acp") return "Custom agent session cost report";
+  return "Claude SDK list-price estimate; https://platform.claude.com/docs/en/about-claude/pricing; verified 2026-09-07";
 }

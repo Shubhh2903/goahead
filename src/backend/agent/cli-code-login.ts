@@ -1,18 +1,13 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { pasteCodeSignInSupported } from "@openbot/contracts/agent-providers";
 import { sourceText } from "@openbot/i18n/source";
 import { registerSecretValue } from "@openbot/logging";
+import { Deferred, Effect, Fiber, Option, Schema } from "effect";
+import { shellQuote } from "../automation-command";
 import { cliSpawnTarget } from "../cli";
 import { stopProcessTree } from "../windows-process-tree";
-import { waitForSuccessfulProcess } from "./provider-status";
+import { orNewSavedSignIn, waitForSuccessfulProcess, watchSavedSignIn } from "./provider-status";
 
-/**
- * What a provider CLI prints for a sign-in the user finishes on another device.
- *
- * `device` is a device code: the user opens the page, confirms the code, and the CLI sees the
- * approval by itself (Grok, Cline). `paste` is an authorization code the provider's page shows after
- * the sign-in, which the user copies back and OpenBot types into the CLI's prompt (Claude). `link` is
- * a page that signs the CLI in by itself, with no code to confirm or copy (Cursor).
- */
 export type CliCodePrompt =
   | { flow: "device"; userCode: string; verificationUrl: string; verificationUrlComplete: string | null }
   | { flow: "paste"; verificationUrl: string }
@@ -20,127 +15,162 @@ export type CliCodePrompt =
 
 export interface CliCodeLogin {
   child: ChildProcess;
-  /** Settles when the CLI exits: resolves on success, rejects on failure or after `timeoutMs`. */
-  done: Promise<void>;
-  /** Resolves when the CLI has printed what the user needs. Rejects when it exits or goes quiet first. */
-  prompt: Promise<CliCodePrompt>;
-  /** Types the code into the CLI's prompt. Only a `paste` sign-in reads it. */
+  done: Effect.Effect<void, CliCodeLoginFailed>;
+  prompt: Effect.Effect<CliCodePrompt | null, CliCodeLoginFailed>;
   submit(code: string): void;
 }
 
-/** How long the CLI has to print its link. A pinned CLI prints it in well under a second. */
-const PROMPT_TIMEOUT_MS = 30_000;
-/** The link and the prompt are in the first lines. Output past this is not read or kept. */
+export const PROMPT_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_CHARS = 64 * 1024;
 const MAX_CODE_LENGTH = 2048;
 
-/**
- * Starts a provider CLI sign-in and reads its link from the output.
- *
- * The output is a secret: the link carries the PKCE challenge and state, and the pasted code is a
- * credential. None of it is logged, and no error here quotes it.
- *
- * A `paste` sign-in runs under `script`, because the CLI shows its prompt only on a terminal. The
- * util-linux `script` is in every Debian and Ubuntu base image (package `bsdutils`). The paste
- * flow runs only there: the BSD `script` of macOS stops when its stdin is a socket, which is what
- * Node gives a child, and a FIFO on macOS is a socket too. Windows has no `script`.
- */
-export function startCliCodeLogin(options: {
+export const startCliCodeLogin = Effect.fnUntraced(function* (options: {
   flow: CliCodePrompt["flow"];
   executable: string;
   argv: readonly string[];
   env: Record<string, string>;
   timeoutMs: number;
+  closeInput?: boolean;
+  pipedInput?: boolean;
+  savedSignIn?: Effect.Effect<string | null>;
   platform?: NodeJS.Platform;
-}): CliCodeLogin {
+}) {
   const platform = options.platform ?? process.platform;
-  const command = options.flow === "paste" ? terminalCommand(platform, options.argv) : null;
-  // Cursor's Windows launcher is a `.cmd` file, which starts only through `cmd.exe`.
-  const target = command
-    ? { command: command.file, args: command.args, windowsVerbatimArguments: false }
-    : cliSpawnTarget(options.executable, options.argv, platform);
-  const child = spawn(target.command, target.args, {
-    cwd: process.cwd(),
-    env: { ...process.env, ...options.env, ...(command ? { OPENBOT_LOGIN_EXECUTABLE: options.executable } : {}) },
-    windowsVerbatimArguments: target.windowsVerbatimArguments,
-    stdio: ["pipe", "pipe", "pipe"],
-    shell: false,
-    windowsHide: platform === "win32",
+  const command = yield* Effect.try({
+    try: () => (options.flow === "paste" && !options.pipedInput ? terminalCommand(platform, options.argv) : null),
+    catch: (cause) => new CliCodeLoginFailed({ cause }),
   });
+  const watch = yield* watchSavedSignIn(options.savedSignIn);
+  const child = yield* Effect.acquireRelease(
+    Effect.try({
+      try: () => {
+        const target = command
+          ? { command: command.file, args: command.args, windowsVerbatimArguments: false }
+          : cliSpawnTarget(options.executable, options.argv, platform);
+        return spawn(target.command, target.args, {
+          cwd: process.cwd(),
+          env: { ...process.env, ...options.env, ...(command ? { OPENBOT_LOGIN_EXECUTABLE: options.executable } : {}) },
+          windowsVerbatimArguments: target.windowsVerbatimArguments,
+          stdio: ["pipe", "pipe", "pipe"],
+          shell: false,
+          windowsHide: platform === "win32",
+        });
+      },
+      catch: (cause) => new CliCodeLoginFailed({ cause }),
+    }),
+    (child) => stopProcessTree(child).pipe(Effect.orDie),
+  );
   child.stdin?.on("error", () => undefined);
+  if (options.closeInput && options.flow !== "paste") child.stdin?.end();
   let submitted = false;
-  // After a pasted code, an exit with a failure code is the provider refusing it. A timeout is a
-  // signal, so it keeps its own message.
-  const done = waitForSuccessfulProcess(child, options.timeoutMs).catch((error: unknown) => {
-    if (submitted && child.exitCode !== null) throw new Error(sourceText("error.provider.codeLoginRefused"));
-    throw error;
+  const prompt = Deferred.makeUnsafe<CliCodePrompt | null, CliCodeLoginFailed>();
+  const done = yield* Effect.forkScoped(
+    orNewSavedSignIn(waitForSuccessfulProcess(child, options.timeoutMs), watch, undefined).pipe(
+      Effect.mapError(
+        (failure) =>
+          new CliCodeLoginFailed({
+            cause:
+              submitted && child.exitCode !== null
+                ? new Error(sourceText("error.provider.codeLoginRefused"))
+                : failure.cause,
+          }),
+      ),
+      Effect.tapError((failure) => Deferred.fail(prompt, failure)),
+      Effect.tap(() => Deferred.succeed(prompt, null)),
+    ),
+    { startImmediately: true },
+  );
+  const afterFailedExit = watch
+    ? Fiber.join(done).pipe(
+        Effect.as(null),
+        Effect.mapError(
+          () => new CliCodeLoginFailed({ cause: new Error(sourceText("error.provider.codeLoginNoLink")) }),
+        ),
+      )
+    : undefined;
+  yield* Effect.forkScoped(Deferred.complete(prompt, readCodePrompt(child, options.flow, afterFailedExit)), {
+    startImmediately: true,
   });
-  const prompt = new Promise<CliCodePrompt>((resolve, reject) => {
+  return {
+    child,
+    done: Fiber.join(done),
+    prompt: Deferred.await(prompt),
+    submit(code) {
+      if (options.flow !== "paste") throw new Error(sourceText("error.provider.codeLoginNotWaiting"));
+      const value = normalizePastedCode(code);
+      registerSecretValue(value);
+      if (!child.stdin || child.exitCode !== null) throw new Error(sourceText("error.provider.codeLoginNotWaiting"));
+      submitted = true;
+      child.stdin.write(`${value}${options.pipedInput ? "\n" : "\r"}`);
+    },
+  } satisfies CliCodeLogin;
+});
+
+export class CliCodeLoginFailed extends Schema.TaggedError<CliCodeLoginFailed>()("CliCodeLoginFailed", {
+  cause: Schema.Defect(),
+}) {}
+
+const readCodePrompt = Effect.fnUntraced(function* (
+  child: ChildProcess,
+  flow: CliCodePrompt["flow"],
+  afterFailedExit?: Effect.Effect<null, CliCodeLoginFailed>,
+) {
+  return yield* Effect.callback<CliCodePrompt | null, CliCodeLoginFailed>((resume) => {
     let output = "";
     let settled = false;
-    const settle = (result: CliCodePrompt | Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
+    const cleanup = () => {
       child.stdout?.off("data", read);
       child.stderr?.off("data", read);
-      if (result instanceof Error) {
-        // Cursor's Windows launcher runs under `cmd.exe`, so the whole tree has to stop.
-        if (child.exitCode === null) stopProcessTree(child);
-        reject(result);
-      } else resolve(result);
+      child.off("error", unavailable);
+      child.off("exit", exited);
+    };
+    const settle = (result: CliCodePrompt | Error | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resume(result instanceof Error ? Effect.fail(new CliCodeLoginFailed({ cause: result })) : Effect.succeed(result));
+    };
+    const unavailable = () => settle(new Error(sourceText("error.provider.codeLoginNoLink")));
+    const exited = (code: number | null) => {
+      if (code === 0) return settle(null);
+      if (!afterFailedExit || settled) return unavailable();
+      settled = true;
+      cleanup();
+      resume(afterFailedExit);
     };
     const read = (chunk: Buffer) => {
       if (output.length >= MAX_OUTPUT_CHARS) return;
       output += chunk.toString("utf8").slice(0, MAX_OUTPUT_CHARS - output.length);
-      const parsed = parseCliCodePrompt(options.flow, output);
+      const parsed = parseCliCodePrompt(flow, output);
       if (parsed) settle(parsed);
     };
-    const timer = setTimeout(() => settle(new Error(sourceText("error.provider.codeLoginNoLink"))), PROMPT_TIMEOUT_MS);
-    timer.unref?.();
     child.stdout?.on("data", read);
     child.stderr?.on("data", read);
-    child.once("error", () => settle(new Error(sourceText("error.provider.codeLoginNoLink"))));
-    child.once("exit", () => settle(new Error(sourceText("error.provider.codeLoginNoLink"))));
-  });
-  // Both are awaited by the caller; this only keeps an early exit from being unhandled.
-  done.catch(() => undefined);
-  prompt.catch(() => undefined);
-  return {
-    child,
-    done,
-    prompt,
-    submit(code) {
-      if (options.flow !== "paste") throw new Error(sourceText("error.provider.codeLoginNotWaiting"));
-      const value = normalizePastedCode(code);
-      // The CLI can quote the code when it fails; every log line and error then masks it.
-      registerSecretValue(value);
-      if (!child.stdin || child.exitCode !== null) throw new Error(sourceText("error.provider.codeLoginNotWaiting"));
-      submitted = true;
-      child.stdin.write(`${value}\r`);
-    },
-  };
-}
+    child.once("error", unavailable);
+    child.once("exit", exited);
+    return Effect.sync(cleanup);
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: PROMPT_TIMEOUT_MS,
+      orElse: () =>
+        Effect.fail(new CliCodeLoginFailed({ cause: new Error(sourceText("error.provider.codeLoginNoLink")) })),
+    }),
+    Effect.tapError(() => stopProcessTree(child).pipe(Effect.ignore)),
+  );
+});
 
-/** The pasted code, or an error that does not quote it. */
 export function normalizePastedCode(code: string): string {
   const value = code.trim();
-  // A control character would type a key into the CLI, such as Enter before the code ends.
   if (!value || value.length > MAX_CODE_LENGTH || [...value].some(isControlCharacter)) {
     throw new Error(sourceText("error.provider.codeLoginBadCode"));
   }
   return value;
 }
 
-/** Whether a pasted-code sign-in can run on this platform: see `startCliCodeLogin`. */
 export function pasteCodeLoginSupported(platform: NodeJS.Platform = process.platform): boolean {
-  return platform === "linux";
+  return pasteCodeSignInSupported(platform);
 }
 
-/**
- * The CLI under a pseudo-terminal, on Linux. The executable travels in the environment, so no path
- * is ever pasted into a shell command. The arguments are the driver's own constants.
- */
 function terminalCommand(platform: NodeJS.Platform, argv: readonly string[]): { file: string; args: string[] } {
   if (pasteCodeLoginSupported(platform)) {
     const line = ['exec "$OPENBOT_LOGIN_EXECUTABLE"', ...argv.map(shellQuote)].join(" ");
@@ -149,19 +179,15 @@ function terminalCommand(platform: NodeJS.Platform, argv: readonly string[]): { 
   throw new Error(sourceText("error.provider.codeLoginUnsupported"));
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-/**
- * Reads the link, and the code for a device sign-in, from what the CLI has printed so far. Returns
- * null until all of it is there. The shapes are the pinned CLIs' (Grok 1.0.22, Claude 2.1.263,
- * Cursor 2026.10.01, Cline 3.0.68); the tests hold samples of each.
- */
-export function parseCliCodePrompt(flow: CliCodePrompt["flow"], output: string): CliCodePrompt | null {
+function parseCliCodePrompt(flow: CliCodePrompt["flow"], output: string): CliCodePrompt | null {
   const text = stripTerminalCodes(output);
-  // Only a link that something has ended: a chunk can stop in the middle of one.
-  const url = text.match(/https:\/\/[^\s"'<>]+(?=[\s"'<>])/)?.[0];
+  if (flow === "device") {
+    const event = deviceCodeEvent(text);
+    if (event) return event;
+  }
+  const url =
+    (flow === "device" ? text.match(/\bopen:[ \t]*(https:\/\/[^\s"'<>]+)(?=[\s"'<>])/i)?.[1] : undefined) ??
+    text.match(/https:\/\/[^\s"'<>]+(?=[\s"'<>])/)?.[0];
   if (!url) return null;
   let parsed: URL;
   try {
@@ -170,8 +196,7 @@ export function parseCliCodePrompt(flow: CliCodePrompt["flow"], output: string):
     return null;
   }
   if (flow === "paste") {
-    // The CLI reads stdin only once it shows the prompt, so a code typed before then is lost.
-    return /paste code/i.test(text) ? { flow, verificationUrl: parsed.href } : null;
+    return /paste (?:the authorization )?code/i.test(text) ? { flow, verificationUrl: parsed.href } : null;
   }
   if (flow === "link") return { flow, verificationUrl: parsed.href };
   const userCode = codeAfterConfirmLine(text) ?? codeOnEnterLine(text);
@@ -186,21 +211,44 @@ export function parseCliCodePrompt(flow: CliCodePrompt["flow"], output: string):
   };
 }
 
-/**
- * The first non-empty line after "Confirm this code", when it is a code. The last line has no
- * newline yet, so a chunk can end in it with part of the code.
- */
 function codeAfterConfirmLine(text: string): string | null {
   const lines = text.split("\n").map((line) => line.trim());
-  const confirm = lines.findIndex((line) => /confirm this code/i.test(line));
+  const confirm = lines.findIndex((line) => /confirm this code|enter this one-time code/i.test(line));
   if (confirm < 0) return null;
   const code = lines.slice(confirm + 1, -1).find(Boolean);
   return code && /^[A-Z0-9]{3,12}(?:-[A-Z0-9]{3,12})*$/.test(code) ? code : null;
 }
 
-/** The code at the end of an "Enter this code in your browser: CODE" line that has ended (Cline). */
+const DeviceCodeEvent = Schema.Struct({
+  type: Schema.Literal("verification_url"),
+  data: Schema.Struct({ verification_url: Schema.String, user_code: Schema.String }),
+});
+const decodeDeviceCodeEvent = Schema.decodeUnknownOption(Schema.fromJsonString(DeviceCodeEvent));
+
+function deviceCodeEvent(text: string): CliCodePrompt | null {
+  for (const line of text.split("\n").slice(0, -1)) {
+    const event = decodeDeviceCodeEvent(line.trim());
+    if (Option.isNone(event)) continue;
+    const { verification_url: url, user_code: userCode } = event.value.data;
+    if (!/^[A-Za-z0-9]{3,12}(?:-[A-Za-z0-9]{3,12})*$/.test(userCode) || !URL.canParse(url)) continue;
+    const page = new URL(url);
+    if (page.protocol !== "https:") continue;
+    const base = new URL(page.href);
+    base.search = "";
+    return {
+      flow: "device",
+      userCode,
+      verificationUrl: base.href,
+      verificationUrlComplete: page.search ? page.href : null,
+    };
+  }
+  return null;
+}
+
 function codeOnEnterLine(text: string): string | null {
-  return text.match(/enter this code[^:\n]*:[ \t]*([A-Z0-9]{3,12}(?:-[A-Z0-9]{3,12})*)[ \t]*\n/i)?.[1] ?? null;
+  return (
+    text.match(/enter (?:this )?code(?:[^:\n]*:)?[ \t]*([A-Z0-9]{3,12}(?:-[A-Z0-9]{3,12})*)[ \t]*\n/i)?.[1] ?? null
+  );
 }
 
 const ESC = 0x1b;
@@ -211,17 +259,12 @@ function isControlCharacter(character: string): boolean {
   return code < 0x20 || code === 0x7f;
 }
 
-/**
- * Removes colours, cursor moves and OSC 8 hyperlinks, which wrap the URL a terminal prints. The
- * hyperlink's visible text repeats its URL, so dropping the escape keeps one copy.
- */
 function stripTerminalCodes(value: string): string {
   let result = "";
   let index = 0;
   while (index < value.length) {
     const code = value.charCodeAt(index);
     if (code === ESC && value[index + 1] === "]") {
-      // OSC: runs to BEL or to ESC \.
       index += 2;
       while (index < value.length && value.charCodeAt(index) !== BEL && value.charCodeAt(index) !== ESC) index += 1;
       index += value.charCodeAt(index) === ESC ? 2 : 1;
@@ -229,7 +272,6 @@ function stripTerminalCodes(value: string): string {
       continue;
     }
     if (code === ESC && value[index + 1] === "[") {
-      // CSI: parameters, then one final letter.
       index += 2;
       while (index < value.length && !/[A-Za-z]/.test(value[index] ?? "")) index += 1;
       index += 1;

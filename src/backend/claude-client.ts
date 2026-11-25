@@ -1,20 +1,34 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID, type UUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
 import {
   type CanUseTool,
   createSdkMcpServer,
+  type ElicitationResult,
   type ModelInfo,
+  type OnElicitation,
   type Options,
   type PermissionResult,
   query,
   type SDKUserMessage,
   type SessionMessage,
+  type Settings,
+  type SpawnedProcess,
+  type SpawnOptions,
   tool,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { attachmentMimeTypeForName } from "@openbot/contracts/attachment-files";
+import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
+  type AgentContextCategoryUsage,
+  agentProviderName,
   CLAUDE_WEEKLY_OPUS_LIMIT_ID,
   CLAUDE_WEEKLY_SONNET_LIMIT_ID,
   defaultProviderModel,
@@ -23,6 +37,12 @@ import {
 } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord, isNumber, isOneOf, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
+import { createOpenBotLogger, redactText } from "@openbot/logging";
+import { classifyFailure } from "@openbot/telemetry";
+import { Deferred, Effect, Exit, Fiber, Option, Scope } from "effect";
+import { z } from "zod";
+import { advertisedZodShape } from "./agent/advertised-json-schema";
+import { isTurnContextBlock } from "./agent/developer-instructions";
 import {
   type ClaudePlanState,
   foldClaudePlanCall,
@@ -32,39 +52,83 @@ import {
   type PlanUpdateStep,
   startClaudePlanTurn,
 } from "./agent/plan-updates";
-import { isBalanceDiagnostic, isPlanLimitDiagnostic } from "./agent/provider-diagnostics";
+import { isBalanceDiagnostic, isPlanLimitDiagnostic, isSpentBalanceDiagnostic } from "./agent/provider-diagnostics";
+import { ROUTINE_NO_UPDATE_TOOL } from "./agent/routine-quiet-runs";
+import {
+  endSubagentTurn,
+  foldClaudeSubagentCall,
+  foldClaudeSubagentMessage,
+  foldClaudeSubagentResult,
+  foldClaudeTaskMessage,
+  newSubagentState,
+  SUBAGENTS_UPDATED_METHOD,
+  type SubagentChange,
+  type SubagentState,
+  stopSubagents,
+} from "./agent/subagent-updates";
+import { claudeBridgedToolName, DIRECT_BROWSER_TOOL_DEFINITIONS, visibleToolDefinitions } from "./agent/tool-catalog";
+import { TurnContext } from "./agent/turn-context";
 import { USAGE_LIMIT_METHOD } from "./agent/usage-limit-gate";
-import { type AgentProvider, RequestTimeoutError } from "./agent-client";
-import { BROWSER_TOOL_DEFINITIONS, OPENBOT_BROWSER_NAMESPACE } from "./browser-tools";
-import { type ClaudeHistoryOptions, claudeHistoryFromMessages, claudeHistoryReader } from "./claude-history";
-import { claudeSettingSources, readClaudeUserCarryOver } from "./claude-user-settings";
+import {
+  type AgentProvider,
+  MissingClaudeSessionError,
+  ProviderModelLimitedError,
+  ProviderTurnActiveError,
+  RequestTimeoutError,
+} from "./agent-client";
+import { OPENBOT_BROWSER_NAMESPACE } from "./browser-tools";
+import { CHANNEL_TOOL_DEFINITIONS } from "./channel-tools";
+import { claudeContextCategories } from "./claude-context-categories";
+import {
+  CLAUDE_NO_RESPONSE_TEXT,
+  type ClaudeHistoryOptions,
+  claudeHistoryFromMessages,
+  claudeHistoryReader,
+  claudeTaskTurnId,
+  isClaudeNoResponsePlaceholder,
+} from "./claude-history";
+import { readClaudeStoredSignIn } from "./claude-stored-sign-in";
 import {
   CLAUDE_WORKSPACE_MANAGED_SETTINGS,
+  claudeExcludedWriteMessage,
+  claudeHomeSkillPlugin,
   claudeWorkspaceHooks,
   claudeWorkspaceSandbox,
   claudeWorkspaceSkillPlugin,
+  claudeWriteInExcluded,
   claudeWriteOutsideRoots,
 } from "./claude-workspace-sandbox";
-import { type ClaudeCliInfo, claudeTakesPromptSnapshotFlag, cliSpawnTarget } from "./cli";
+import {
+  type ClaudeCliInfo,
+  claudeTakesPromptSnapshotFlag,
+  cliLaunchPath,
+  cliPathEnvironment,
+  cliSpawnTarget,
+} from "./cli";
 import {
   isClaudeCompactionSummary,
   isClaudeInterruptMarker,
   isClaudeLocalCommand,
   isClaudeTaskNotification,
 } from "./conversation-snapshots";
+import { runCauseEffect } from "./effect-boundary";
+import { skillFolderNames } from "./home-skills";
 import { IdleThreadPool } from "./idle-thread-pool";
+import { MCP_STDIO_PROBE_TIMEOUT_MS } from "./mcp-probe";
 import {
   agentMcpServers,
+  type ClaudeMcpServer,
   claudeMcpServers,
   computerUseParam,
   disabledMcpServersParam,
-  type McpAuthorizationSource,
   type McpDropReporter,
+  type McpEndpointSource,
   type McpServerSource,
   type McpToolRuntimeSource,
+  mcpAgentParam,
   usableMcpServers,
 } from "./mcp-provider-shapes";
-import { ALWAYS_LOADED_OPENBOT_TOOLS, OPENBOT_TOOL_DEFINITIONS } from "./openbot-tools";
+import { MAX_RUNS, untakenRunId } from "./message-run-ids";
 import { PendingServerRequests } from "./pending-server-requests";
 import {
   type AccountRateLimitResult,
@@ -73,6 +137,10 @@ import {
   type AccountReadResult,
   type AppServerNotification,
   type AppServerRequest,
+  CLAUDE_API_KEY_ACCOUNT_TYPE,
+  CLAUDE_CLI_API_KEY_ACCOUNT_TYPE,
+  getArray,
+  getRecord,
   getString,
   isRecord,
   type RequestId,
@@ -82,7 +150,17 @@ import {
   type ThreadResponse,
   type TurnResponse,
 } from "./protocol";
+import {
+  type ProviderClientOperationError,
+  providerCall,
+  providerFailure,
+  providerResult,
+  providerSync,
+  requiredString,
+  toProviderClientOperationError,
+} from "./provider-client-effects";
 import type { ReadProviderHistory } from "./provider-history";
+import { endProcessGroupOnExit, PROVIDER_PROCESS_GROUP } from "./provider-process-group";
 import { TEXT_PREVIEW_METHOD } from "./text-preview";
 
 const execFileAsync = promisify(execFile);
@@ -113,7 +191,175 @@ export const CLAUDE_BUILT_IN_TOOLS: readonly string[] = [
 const SLACK_REPLY_TOOLS: ReadonlySet<string> = new Set(["slack_send_message"]);
 const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 const TEXT_PREVIEW_INTERVAL_MS = 150;
+const CLAUDE_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
 type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
+const CLAUDE_NATIVE_SCHEDULING = [
+  "CronCreate",
+  "CronDelete",
+  "CronList",
+  "ScheduleWakeup",
+  "RemoteTrigger",
+  "Skill(schedule)",
+  "Skill(loop)",
+];
+const CLAUDE_DUPLICATE_TOOLS = ["ListAgents", "Workflow", "Skill(workflow-authoring)"];
+export const CLAUDE_HOST_TOOLS = [
+  "ReportFindings",
+  "DesignSync",
+  "PushNotification",
+  "Agent(statusline-setup)",
+  "Agent(claude-code-guide)",
+  "Agent(claude)",
+];
+
+export const CLAUDE_UNFIT_SKILLS = [
+  "deep-research",
+  "design",
+  "design-sync",
+  "doctor",
+  "fewer-permission-prompts",
+  "keybindings-help",
+  "loop",
+  "plugin-authoring",
+  "schedule",
+  "send-to-project",
+  "update-config",
+  "workflow-authoring",
+];
+const CLAUDE_NAME_ONLY_SKILLS = [
+  "batch",
+  "claude-api",
+  "code-review",
+  "dataviz",
+  "debug",
+  "init",
+  "run",
+  "run-skill-generator",
+  "security-review",
+  "simplify",
+  "verify",
+];
+const claudeFlagSettings = Effect.fn("claudeFlagSettings")(function* (
+  userSettings: DynamicRecord,
+  configDirectory: string,
+  cwd: string,
+  sources: NonNullable<Options["settingSources"]>,
+  processEnvironment: NodeJS.ProcessEnv,
+  excludedInstructionFiles: readonly string[],
+) {
+  const projectFiles = [
+    ...(sources.includes("project") ? [join(cwd, ".claude", "settings.json")] : []),
+    ...(sources.includes("local") ? [join(cwd, ".claude", "settings.local.json")] : []),
+  ];
+  const projectSettings = yield* Effect.forEach(projectFiles, readClaudeSettingsFile);
+  const ownSettings = [...(sources.includes("user") ? [userSettings] : []), ...projectSettings];
+  const envFiles = sources.includes("user") ? [userSettings, ...projectSettings] : [...projectSettings, userSettings];
+  const environmentValue = (name: string) =>
+    envFiles
+      .map((file) => (isDynamicRecord(file.env) ? file.env[name] : undefined))
+      .filter(isString)
+      .at(-1) ?? processEnvironment[name];
+  const firstPartyApi = CLAUDE_OTHER_API_VARIABLES.every((name) => !environmentValue(name));
+  const ownSkills = new Set([
+    ...(sources.includes("user") ? yield* skillFolderNames(join(configDirectory, "skills")) : []),
+    ...(sources.includes("project") ? yield* skillFolderNames(join(cwd, ".claude", "skills")) : []),
+  ]);
+  const ownOverride = (skill: string) =>
+    ownSettings.some((file) => isDynamicRecord(file.skillOverrides) && Object.hasOwn(file.skillOverrides, skill));
+  const overrides: Array<[string, "off" | "name-only"]> = [
+    ...CLAUDE_UNFIT_SKILLS.map((skill): [string, "off"] => [skill, "off"]),
+    ...CLAUDE_NAME_ONLY_SKILLS.map((skill): [string, "name-only"] => [skill, "name-only"]),
+  ];
+  const ownAttribution = ownSettings.some((file) => "attribution" in file || "includeCoAuthoredBy" in file);
+  const memoryExcludes = sources.includes("project")
+    ? [
+        ...(sources.includes("user") ? [] : claudeHomeMemoryFiles()),
+        ...claudeWorkspaceInstructionExcludes(cwd, excludedInstructionFiles),
+      ]
+    : [];
+  const settings: Settings = {
+    ...(ownAttribution ? {} : { attribution: { commit: "", pr: "" } }),
+    disableRemoteControl: true,
+    skillOverrides: Object.fromEntries(overrides.filter(([skill]) => !ownSkills.has(skill) && !ownOverride(skill))),
+    ...(firstPartyApi && isClaudeAutoToolSearch(environmentValue("ENABLE_TOOL_SEARCH"))
+      ? { env: { ENABLE_TOOL_SEARCH: "true" } }
+      : {}),
+    ...(memoryExcludes.length > 0 ? { claudeMdExcludes: memoryExcludes } : {}),
+  };
+  return { settings, firstPartyApi };
+});
+
+function claudeHomeMemoryFiles(): string[] {
+  const userFolder = join(homedir(), ".claude");
+  return [join(userFolder, "CLAUDE.md"), join(userFolder, "rules", "**")];
+}
+
+const CLAUDE_EXCLUDE_PATTERN_CHARACTERS = /[*?[\]{}()!]/g;
+
+function claudeWorkspaceInstructionExcludes(cwd: string, fileNames: readonly string[]): string[] {
+  return fileNames.map((fileName) => join(cwd, fileName).replace(CLAUDE_EXCLUDE_PATTERN_CHARACTERS, "?"));
+}
+
+const CLAUDE_OTHER_API_VARIABLES = [
+  "ANTHROPIC_BASE_URL",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_USE_GATEWAY",
+  "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+  "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+  "CLAUDE_CODE_USE_MANTLE",
+];
+
+function isClaudeAutoToolSearch(value: string | undefined): boolean {
+  if (value === "auto") return true;
+  if (!value?.startsWith("auto:")) return false;
+  const percent = Number.parseInt(value.slice("auto:".length), 10);
+  return Number.isNaN(percent) || (percent > 0 && percent < 100);
+}
+
+const TOOL_DESCRIPTION_LIMIT = 120;
+const LABELLED_TOOLS: ReadonlySet<string> = new Set(["Bash", "Task", "Agent"]);
+
+const OPENBOT_CLAUDE_CLIENT = {
+  CLAUDE_AGENT_SDK_CLIENT_APP: "openbot/0.1.0",
+  CLAUDE_CODE_ARTIFACT: "0",
+  CLAUDE_CODE_ENTRYPOINT: "openbot",
+  CLAUDE_CODE_SILENT_TURN_REMINDER: "0",
+};
+const CLAUDE_TERMINAL_CHANNEL_TOOLS: readonly string[] = [
+  "mcp__openbot__channel_result",
+  "mcp__openbot__channel_reply",
+];
+const CLAUDE_TERMINAL_NO_UPDATE_TOOL = `mcp__openbot__${ROUTINE_NO_UPDATE_TOOL}`;
+
+function claudeTerminalTools(channelTools: boolean): readonly string[] {
+  return channelTools
+    ? [CLAUDE_TERMINAL_NO_UPDATE_TOOL, ...CLAUDE_TERMINAL_CHANNEL_TOOLS]
+    : [CLAUDE_TERMINAL_NO_UPDATE_TOOL];
+}
+
+function terminalToolRefusal(namespace: string, name: string, content: CallToolResult["content"]): boolean {
+  if (namespace !== "openbot" || !claudeTerminalTools(true).includes(`mcp__openbot__${name}`)) return false;
+  const [first] = content;
+  if (first?.type !== "text") return false;
+  try {
+    const value = JSON.parse(first.text);
+    if (!isRecord(value)) return false;
+    return name === ROUTINE_NO_UPDATE_TOOL ? value.status !== "quiet" : value.accepted === false;
+  } catch {
+    return false;
+  }
+}
+function withClaudeClientLabels(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...environment,
+    ...OPENBOT_CLAUDE_CLIENT,
+    ...(environment.ANTHROPIC_API_KEY ? { CLAUDE_CODE_ENTRYPOINT: "sdk-ts" } : {}),
+  };
+}
+const CLAUDE_MCP_USER_AGENT = "claude-code-mcp-client";
+const CLAUDE_SESSION_TITLE = "GoAhead";
 
 interface ClientEvents {
   notification: [notification: AppServerNotification];
@@ -124,23 +370,23 @@ interface ClientEvents {
 
 interface ThreadConfig {
   cwd: string;
-  model?: string;
-  effort?: string;
+  model?: string | undefined;
+  effort?: string | undefined;
   developerInstructions: string;
   additionalDirectories: string[];
   persistSession: boolean;
   profileGeneration: boolean;
-  /** Part of the config so that a change restarts the query with the new servers. */
+  outputSchema: DynamicRecord | null;
   computerUse: boolean;
-  /** The MCP panel servers that the agent's settings turn off. Part of the config for the same reason. */
+  /** The MCP panel servers that the agent's settings turn off. Part of the config so a change restarts the query. */
   disabledMcpServerIds: string[];
-  /** Where Claude Code compacts the conversation, in tokens. Null keeps the model's full window. */
+  /** Where Claude Code compacts the conversation, in tokens. Null keeps the provider setting or the model window. */
   compactWindow: number | null;
-  /**
-   * Workspace only: Bash runs in the Claude sandbox, a file write outside the roots asks the user, and
-   * the project settings do not load. See `claude-workspace-sandbox.ts`.
-   */
+  channelTools: boolean;
   workspaceOnly: boolean;
+  excludedFolders: string[];
+  excludedInstructionFiles: string[];
+  agentId: string | null;
   /**
    * `slack-reply`: a Slack reply context. The developer instructions are the whole system prompt,
    * and the session has only the `SLACK_REPLY_TOOLS`. `full` is every other session.
@@ -152,66 +398,118 @@ interface ActiveTurn {
   id: string;
   itemId: string;
   reasoningItemId: string;
-  /** Text held back from the reader until a step boundary or the end of the turn classifies it. */
   text: string;
-  /** Every assistant character this turn has produced, which is what a repeat is measured against. */
   seenText: string;
-  /** What the narration already took, which the answer can no longer be rewritten over. */
   publishedText: string;
-  /** The segment published last, which a message contradicting it can still put right. */
   lastNarration: { id: string; text: string } | null;
   narrationCount: number;
+  stopHookBlocked: boolean;
   thinking: string;
   thinkingStarted: boolean;
-  thinkingStreamId: string | null;
+  thinkingBlocks: Map<string, string>;
+  thinkingTail: string | null;
+  thinkingSnapshotCounts: Map<string, number>;
+  thinkingSnapshots: Set<string>;
   assistantMessages: Map<string, string>;
-  thinkingMessages: Map<string, string>;
-  toolCalls: Map<string, string>;
-  /**
-   * Set when Claude refuses the turn for a spent plan window. The refusal arrives as an assistant
-   * message that only states the limit, so its text is held here and not published as the answer.
-   */
+  toolCalls: Map<string, { name: string; input: Record<string, string> }>;
   usageLimit: { resetsAt: number | null; text: string | null } | null;
   /** The preview of the held text: a pending update, when the last one went, and whether one shows. */
   preview: { timer: ReturnType<typeof setTimeout> | null; sentAt: number; shown: boolean };
+  ranTools: boolean;
+  authenticationFailed: boolean;
+  balanceSpent: boolean;
+  billingFailed: boolean;
+  modelNotFound: boolean;
+  retrying: boolean;
+  sandboxBlockedWarned: boolean;
+  unprompted: boolean;
+  prompt: { requestedId: string | null; message: SDKUserMessage; retries: number } | null;
+  messageIds: Set<string>;
+  untakenSteerIds: Set<string>;
+  hostToolCalls: Set<AbortController>;
+  promptStarted: boolean;
+  lastActivityAt: number;
+  stalled: boolean;
+  hostRequests: number;
+  personRequests: number;
+  stopRequested: boolean;
 }
 
 interface ThreadRuntime {
   id: string;
-  /**
-   * The identity of Claude's cumulative usage totals. A resumed session restores its totals from
-   * the transcript, so the id is the session id and the stored checkpoint survives an idle release
-   * and a restart. Without it, the first totals after a resume counted the whole session again.
-   * Only a reset of the totals inside one process gives a new id.
-   */
+  firstPartyApi: boolean;
   usageCounterId: string;
-  /** True until the first totals of a process that resumed the session go out. */
-  usageResumed: boolean;
   usageCost: number;
+  resumedUsage: boolean;
+  requestUsage: Map<string, { model: string; usage: unknown }>;
+  contextRequest: number;
+  compacting: boolean;
   config: ThreadConfig;
-  appliedEffort?: string;
+  appliedEffort: string | undefined;
+  appliedFastMode: boolean | undefined;
+  fastModeDisabledReason: string | null;
   input: AsyncMessageQueue;
   query: ClaudeQuery;
   activeTurn: ActiveTurn | null;
-  consume: Promise<void>;
+  consume: Fiber.Fiber<void, ProviderClientOperationError> | null;
   idleRelease: ReturnType<typeof setTimeout> | null;
   idleSince: number;
-  /** The plan Claude keeps with its todo and task tools, which OpenBot shows as a task list. */
   plan: ClaudePlanState;
+  subagents: SubagentState;
+  backgroundTasks: number;
+  awaitsResultTurn: boolean;
+  taskTurns: Map<string, string | typeof SUBAGENT_OWNED_TASK>;
+  endedTaskTurns: (string | null)[];
+  subagentLimit: { resetsAt: number | null; text: string } | null;
+  lastOutputAt: number;
+  answered: boolean;
+  promptIds: Set<string>;
+  nextTurnId: string | null;
+  streamMessage: { id: string | null; thinkingBlocks: Map<number, string> };
+  mcpConfigFile: string | null;
+  settingsFile: string | null;
+  stderr: ClaudeStderrTail;
 }
 
-/**
- * How long a thread with no turn keeps its `claude` process. Each process holds hundreds of MB with
- * its MCP servers, and the SDK resumes the same session from disk, so an idle thread costs only a
- * slower first message when the user comes back.
- */
-export const CLAUDE_THREAD_IDLE_RELEASE_MS = 10 * 60_000;
+const CLAUDE_FAST_SERVICE_TIER = "fast";
 
-/**
- * How many idle threads keep their `claude` process before the timeout. A user who runs one turn on
- * each of five agents otherwise holds five processes of about 140 MB each for ten minutes.
- */
-export const CLAUDE_IDLE_THREAD_LIMIT = 2;
+const AUTH_STATUS_TIMEOUT_MS = 20_000;
+
+const CLAUDE_THREAD_IDLE_RELEASE_MS = 5 * 60_000;
+
+const CLAUDE_IDLE_THREAD_LIMIT = 1;
+
+const CLAUDE_BACKGROUND_QUIET_RELEASE_MS = 30 * 60_000;
+
+const CLAUDE_STOP_CONFIRM_MS = 10_000;
+
+const CLAUDE_COMPACT_COMMAND = "/compact";
+
+const CLAUDE_CACHE_TTL_MS = { short: 5 * 60_000, long: 60 * 60_000 } as const;
+
+const CLAUDE_TURN_STALL_MS = 15 * 60_000;
+
+const CLAUDE_TOOL_STALL_MS = 60 * 60_000;
+
+const CLAUDE_STALL_CHECK_MS = 60_000;
+
+const TAKEN_PROMPT_LIMIT = 1_000;
+
+const SKIPPED_PROMPT_RETRIES = MAX_RUNS + 1;
+
+const CLAUDE_STOP_HOOK_FEEDBACK = "Stop hook feedback:\n";
+
+const SUBAGENT_OWNED_TASK = Symbol("subagent-owned task");
+
+function startedTaskOrigin(
+  taskTurns: ReadonlyMap<string, string | typeof SUBAGENT_OWNED_TASK>,
+  message: ClaudeStreamMessage,
+  turn: ActiveTurn | null,
+): string | typeof SUBAGENT_OWNED_TASK | undefined {
+  if (message.owned_by_subagent === true) return SUBAGENT_OWNED_TASK;
+  const parentOrigin = isString(message.parent_task_id) ? taskTurns.get(message.parent_task_id) : undefined;
+  return parentOrigin ?? turn?.id;
+}
 
 interface ClaudeStreamMessage {
   type: string;
@@ -225,21 +523,48 @@ interface ClaudeStreamMessage {
   errors?: string[];
   terminal_reason?: string;
   modelUsage?: unknown;
+  status?: unknown;
+  compact_result?: unknown;
+  compact_metadata?: unknown;
+  context_usage?: unknown;
   total_cost_usd?: number;
-  /** The structured result of the tool a `user` message answers, such as the task a `TaskCreate` made. */
   tool_use_result?: unknown;
+  structured_output?: unknown;
   is_error?: boolean;
-  /** Why an assistant message is a refusal, such as `rate_limit`. */
+  api_error_status?: number | null;
   error?: string;
+  api_error?: string;
+  api_error_params?: unknown;
   rate_limit_info?: unknown;
+  tasks?: unknown;
+  task_id?: unknown;
+  parent_task_id?: unknown;
+  owned_by_subagent?: unknown;
+  run_id?: unknown;
+  command_uuid?: unknown;
+  state?: unknown;
+  user_message_uuid?: string;
+  user_message_uuids?: unknown;
+  origin?: unknown;
+  num_turns?: unknown;
+  resume_reason?: string;
+  attempt?: unknown;
+  max_retries?: unknown;
+  error_status?: unknown;
+  no_response?: unknown;
+  fast_mode_disabled_reason?: unknown;
+  mcp_servers?: unknown;
 }
 
 interface ClaudeQuery extends AsyncIterable<ClaudeStreamMessage> {
   interrupt(): Promise<unknown>;
   supportedModels(): Promise<ModelInfo[]>;
+  getContextUsage?(options: { detail: "summary" }): Promise<unknown>;
+  initializationResult?(): Promise<unknown>;
+  mcpServerStatus?(): Promise<unknown>;
   setModel(model?: string): Promise<void>;
-  applyFlagSettings(settings: { effortLevel?: ClaudeEffort | null }): Promise<void>;
-  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?(): Promise<unknown>;
+  applyFlagSettings(settings: { effortLevel?: ClaudeEffort | null; fastMode?: boolean }): Promise<void>;
+  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?(options?: { skipBehaviors?: boolean }): Promise<unknown>;
   close(): void;
 }
 
@@ -247,37 +572,121 @@ type QueryFactory = (params: Parameters<typeof query>[0]) => ClaudeQuery;
 type SessionHistoryReader = (sessionId: string, options?: { dir?: string }) => Promise<SessionMessage[]>;
 type ClaudeEffortCapability = { supported: ClaudeEffort[]; defaultEffort: ClaudeEffort } | null;
 
+const queryLogger = createOpenBotLogger("claude-query");
+const lastAuthStatuses = new Map<string, DynamicRecord>();
+
+function claudeSettingSources(
+  config: Pick<ThreadConfig, "profileGeneration" | "workspaceOnly" | "toolProfile">,
+  userSetup: boolean,
+): NonNullable<Options["settingSources"]> {
+  // A Slack reply context loads no setting source: other people's Slack text drives it.
+  if (config.profileGeneration || config.toolProfile === "slack-reply") return [];
+  const user: NonNullable<Options["settingSources"]> = userSetup ? ["user"] : [];
+  return config.workspaceOnly ? user : [...user, "project", "local"];
+}
+
+const readClaudeSettingsFile = Effect.fn("readClaudeSettingsFile")(function* (path: string) {
+  const text = yield* Effect.tryPromise(() => readFile(path, "utf8")).pipe(Effect.option);
+  if (Option.isNone(text)) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.value);
+  } catch {
+    queryLogger.warn("GoAhead reads no values from a Claude settings file: the file is not valid JSON.", { path });
+    return {};
+  }
+  const record: DynamicRecord = isDynamicRecord(parsed) ? parsed : {};
+  return record;
+});
+
+function withoutReplacedGateway(
+  settings: Settings,
+  environment: Readonly<Record<string, string>> | undefined,
+): Settings {
+  if (!environment?.ANTHROPIC_BASE_URL || !settings.env) return settings;
+  const replaced = new Set<string>([...CLAUDE_OTHER_API_VARIABLES, "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]);
+  const env = Object.fromEntries(Object.entries(settings.env).filter(([name]) => !replaced.has(name)));
+  const { env: _copied, ...rest } = settings;
+  return Object.keys(env).length > 0 ? { ...rest, env } : rest;
+}
+
+function claudeSignInSettings(parsed: DynamicRecord): Settings {
+  const stringSetting = (key: string): string | null => {
+    const value = parsed[key];
+    return isString(value) ? value : null;
+  };
+  const apiKeyHelper = stringSetting("apiKeyHelper");
+  const proxyAuthHelper = stringSetting("proxyAuthHelper");
+  const awsCredentialExport = stringSetting("awsCredentialExport");
+  const awsAuthRefresh = stringSetting("awsAuthRefresh");
+  const gcpAuthRefresh = stringSetting("gcpAuthRefresh");
+  const forceLoginMethod = parsed.forceLoginMethod;
+  const forceLoginOrgUUID = parsed.forceLoginOrgUUID;
+  const env = isDynamicRecord(parsed.env)
+    ? Object.fromEntries(Object.entries(parsed.env).filter((entry): entry is [string, string] => isString(entry[1])))
+    : {};
+  const settings: Settings = {
+    ...(apiKeyHelper ? { apiKeyHelper } : {}),
+    ...(proxyAuthHelper ? { proxyAuthHelper } : {}),
+    ...(awsCredentialExport ? { awsCredentialExport } : {}),
+    ...(awsAuthRefresh ? { awsAuthRefresh } : {}),
+    ...(gcpAuthRefresh ? { gcpAuthRefresh } : {}),
+    ...(isOneOf(["claudeai", "console", "gateway"] as const, forceLoginMethod) ? { forceLoginMethod } : {}),
+    ...(isString(forceLoginOrgUUID) || (Array.isArray(forceLoginOrgUUID) && forceLoginOrgUUID.every(isString))
+      ? { forceLoginOrgUUID }
+      : {}),
+    ...(Object.keys(env).length > 0 ? { env } : {}),
+  };
+  return settings;
+}
+
+const CLAUDE_LISTED_MODELS = new Set<string>();
+
 export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
+  readonly contextCompaction = "native";
+  readonly compactsOnDemand = true;
+  readonly #cacheTtls = new Map<string, number>();
+  readonly turnContext = true;
+  readonly userInputNote = true;
+  readonly imageInput = (): boolean => true;
+  readonly structuredOutput = true;
+  #queryRestarts = 0;
   readonly provider: AgentProvider = "claude";
   readonly #cli: ClaudeCliInfo;
+  readonly #sdkLaunch: ClaudeSdkLaunch;
   readonly #createQuery: QueryFactory;
   readonly #readSessionMessages: SessionHistoryReader | undefined;
   readonly #requestTimeoutMs: number;
   readonly #mcpServers: McpServerSource;
   readonly #reportMcpDrops: McpDropReporter | undefined;
   readonly #mcpToolRuntimes: McpToolRuntimeSource | undefined;
-  readonly #mcpAuthorization: McpAuthorizationSource | undefined;
-  /** Where a Workspace only query keeps its skill plugin. Without it, such a query has no workspace skills. */
+  readonly #mcpEndpoint: McpEndpointSource | undefined;
   readonly #stateDirectory: string | undefined;
-  /** Read at each session start, so a GitHub connection made while OpenBot runs reaches the next session. */
   readonly #agentEnvironment: ((inherited?: NodeJS.ProcessEnv) => Readonly<Record<string, string>>) | undefined;
+  readonly #fallbackApiKey: (() => string | null) | undefined;
+  readonly #userSetup: () => boolean;
+  #onApiKey = false;
+  #cliApiKey = false;
+  #accountRead = false;
   readonly readHistory: ReadProviderHistory;
-  /** Threads whose process was closed for being idle keep the config that resumes them. */
   readonly #threads = new IdleThreadPool<ThreadRuntime, ThreadConfig>({
+    scope: () => this.#scope,
     releaseAfterMs: CLAUDE_THREAD_IDLE_RELEASE_MS,
     idleLimit: CLAUDE_IDLE_THREAD_LIMIT,
-    // A session that is not persisted has nothing on disk to resume from.
-    canRelease: (runtime) => runtime.config.persistSession,
+    canRelease: (runtime) => runtime.config.persistSession && runtime.backgroundTasks === 0,
     snapshot: (runtime) => runtime.config,
     dispose: (runtime) => this.#closeRuntime(runtime),
     reopen: (threadId, config) => this.#startThread(threadId, config, true),
   });
+  readonly #takenPrompts = new Map<string, Set<string>>();
   readonly #serverRequests = new PendingServerRequests((request) => this.emit("request", request));
   readonly #modelEffortCapabilities = new Map<string, ClaudeEffortCapability>();
   readonly #modelSdkValues = new Map<string, string>();
-  /** Resumes of one thread run one after another: two at once would leave a query nobody closes. */
-  readonly #threadResumes = new Map<string, Promise<void>>();
+  readonly #turnContext = new TurnContext();
+  readonly #threadResumes = new Map<string, Deferred.Deferred<void, ProviderClientOperationError>>();
   #running = false;
+  #scope = Scope.makeUnsafe();
+  #weeklyLimitKey = "seven_day";
 
   constructor(
     cli: ClaudeCliInfo,
@@ -287,22 +696,27 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     mcpServers: McpServerSource = () => [],
     reportMcpDrops?: McpDropReporter,
     mcpToolRuntimes?: McpToolRuntimeSource,
-    mcpAuthorization?: McpAuthorizationSource,
+    mcpEndpoint?: McpEndpointSource,
     stateDirectory?: string,
     agentEnvironment?: (inherited?: NodeJS.ProcessEnv) => Readonly<Record<string, string>>,
     historyIndexDirectory?: string,
+    fallbackApiKey?: () => string | null,
+    userSetup: () => boolean = () => false,
   ) {
     super();
     this.#cli = cli;
+    this.#sdkLaunch = claudeSdkLaunch(cli.executable);
     this.#createQuery = createQuery;
     this.#readSessionMessages = readSessionMessages;
     this.#requestTimeoutMs = requestTimeoutMs;
     this.#mcpServers = mcpServers;
     this.#reportMcpDrops = reportMcpDrops;
     this.#mcpToolRuntimes = mcpToolRuntimes;
-    this.#mcpAuthorization = mcpAuthorization;
+    this.#mcpEndpoint = mcpEndpoint;
     this.#stateDirectory = stateDirectory;
     this.#agentEnvironment = agentEnvironment;
+    this.#fallbackApiKey = fallbackApiKey;
+    this.#userSetup = userSetup;
     const historyEnvironment = agentEnvironment?.();
     const resolvedHistoryIndexDirectory = historyIndexDirectory ?? stateDirectory;
     const historyOptions: ClaudeHistoryOptions = {
@@ -314,8 +728,6 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
         : { projectDirectoryName: historyEnvironment.CLAUDE_CODE_PROJECT_DIR_NAME }),
       ...(resolvedHistoryIndexDirectory === undefined ? {} : { indexDirectory: resolvedHistoryIndexDirectory }),
     };
-    // Production reads the transcript through a disk index, a page at a time. An injected SDK reader is
-    // the test seam.
     this.readHistory = readSessionMessages
       ? claudeHistoryFromMessages(readSessionMessages)
       : claudeHistoryReader(historyOptions);
@@ -326,102 +738,338 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
   }
 
   start(): void {
+    if (this.#running) return;
+    if (this.#scope.state._tag === "Closed") this.#scope = Scope.makeUnsafe();
     this.#running = true;
   }
 
-  async stop(): Promise<void> {
+  readonly stop = Effect.fn("ClaudeAgentClient.stop")(function* (
+    this: ClaudeAgentClient,
+  ): Effect.fn.Return<void, ProviderClientOperationError> {
     this.#running = false;
     const runtimes = this.#threads.clear();
     for (const runtime of runtimes) {
       runtime.input.close();
       runtime.query.close();
     }
-    await Promise.allSettled(runtimes.map((runtime) => runtime.consume));
+    yield* Effect.forEach(
+      runtimes,
+      (runtime) =>
+        Effect.all([removeClaudeQueryFile(runtime.mcpConfigFile), removeClaudeQueryFile(runtime.settingsFile)]),
+      { discard: true },
+    );
+    yield* Effect.forEach(
+      runtimes,
+      (runtime) => (runtime.consume ? Fiber.join(runtime.consume).pipe(Effect.ignore) : Effect.void),
+      { concurrency: "unbounded", discard: true },
+    );
+    yield* Scope.close(this.#scope, Exit.void);
     this.#serverRequests.rejectAll("Claude session stopped.");
+  });
+
+  releaseIdleThreads(): Effect.Effect<void, ProviderClientOperationError> {
+    return this.#threads.releaseIdle();
   }
 
-  releaseIdleThreads(): void {
-    this.#threads.releaseIdle();
+  readonly releaseQuietBackgroundThreads = Effect.fn("ClaudeAgentClient.releaseQuietBackgroundThreads")(function* (
+    this: ClaudeAgentClient,
+    quietForMs = CLAUDE_BACKGROUND_QUIET_RELEASE_MS,
+  ): Effect.fn.Return<void, ProviderClientOperationError> {
+    const now = Date.now();
+    const closed = yield* this.#threads.releaseWhere(
+      (runtime) =>
+        runtime.config.persistSession && runtime.backgroundTasks > 0 && now - runtime.lastOutputAt >= quietForMs,
+    );
+    for (const runtime of closed)
+      queryLogger.warn("Closed a Claude thread with quiet background work, because memory is low.", {
+        threadId: runtime.id,
+        backgroundTasks: runtime.backgroundTasks,
+        quietForMinutes: Math.floor((now - runtime.lastOutputAt) / 60_000),
+      });
+  });
+
+  canReleaseProcess(): boolean {
+    return !this.runsBackgroundWork();
   }
 
-  /**
-   * Closes one thread runtime and keeps the rest of the client. The SDK query owns the MCP servers
-   * of that thread, so the close is what ends those child processes. The caller releases an idle
-   * thread: a turn that still runs would end with the query that carries it.
-   */
-  async releaseThread(threadId: string): Promise<void> {
+  runsBackgroundWork(): boolean {
+    return [...this.#threads.ids()].some((id) => Boolean(this.#threads.get(id)?.backgroundTasks));
+  }
+
+  holdsBackgroundWork(threadId: string): Effect.Effect<boolean, ProviderClientOperationError> {
+    return Effect.sync(() => {
+      const thread = this.#threads.get(threadId);
+      return thread !== undefined && (thread.backgroundTasks > 0 || thread.awaitsResultTurn);
+    });
+  }
+
+  readonly #reportFailedMcpServers = Effect.fnUntraced(function* (
+    this: ClaudeAgentClient,
+    runtime: ThreadRuntime,
+    message: ClaudeStreamMessage,
+  ) {
+    const failed = failedClaudeMcpServers(message.mcp_servers);
+    if (failed.length === 0) return;
+    const query = runtime.query;
+    yield* Effect.forkIn(
+      providerCall(() => query.mcpServerStatus?.() ?? null).pipe(
+        Effect.timeout("2 seconds"),
+        Effect.orElseSucceed(() => null),
+        Effect.flatMap((rows) =>
+          Effect.sync(() => {
+            for (const name of failed) {
+              const row = Array.isArray(rows) ? rows.find((item) => getString(item, "name") === name) : undefined;
+              this.emit("notification", {
+                method: "mcpServer/startupStatus/updated",
+                params: { name, status: "failed", error: getString(row, "error") ?? "" },
+              });
+            }
+          }),
+        ),
+      ),
+      this.#scope,
+    );
+  });
+
+  #emitBackgroundWork(runtime: ThreadRuntime, closed = false): void {
+    this.emit("notification", {
+      method: "openbot/background-work",
+      params: { threadId: runtime.id, running: runtime.backgroundTasks > 0, ...(closed ? { closed } : {}) },
+    });
+  }
+
+  wakesAfterBackgroundWork(threadId: string): Effect.Effect<boolean, ProviderClientOperationError> {
+    return this.holdsBackgroundWork(threadId);
+  }
+
+  readonly releaseThread = Effect.fn("ClaudeAgentClient.releaseThread")(function* (
+    this: ClaudeAgentClient,
+    threadId: string,
+    resumes = false,
+  ): Effect.fn.Return<void, ProviderClientOperationError> {
     this.#threads.forget(threadId);
+    if (!resumes) {
+      this.#turnContext.forget(threadId);
+      this.#takenPrompts.delete(threadId);
+    }
     const runtime = this.#threads.get(threadId);
     if (!runtime) return;
-    await this.#threads.close(runtime);
-  }
+    yield* this.#threads.close(runtime).pipe(toProviderClientOperationError);
+  });
 
-  async #closeRuntime(runtime: ThreadRuntime): Promise<void> {
+  readonly #closeRuntime = Effect.fn("ClaudeAgentClient.closeRuntime")(function* (
+    this: ClaudeAgentClient,
+    runtime: ThreadRuntime,
+  ): Effect.fn.Return<void, ProviderClientOperationError> {
+    const turn = runtime.activeTurn;
     runtime.input.close();
     runtime.query.close();
-    // The consumer rejects when the query ends in the middle of a turn. The runtime is already gone
-    // from the map, so there is nothing left to report it against.
-    await runtime.consume.catch(() => undefined);
+    yield* removeClaudeQueryFile(runtime.mcpConfigFile);
+    yield* removeClaudeQueryFile(runtime.settingsFile);
+    for (const change of stopSubagents(runtime.subagents, new Date().toISOString()))
+      this.#emitSubagents(runtime, change);
+    if (runtime.backgroundTasks > 0 || runtime.awaitsResultTurn) {
+      runtime.backgroundTasks = 0;
+      runtime.awaitsResultTurn = false;
+      this.#emitBackgroundWork(runtime, true);
+    }
+    if (runtime.consume) yield* Fiber.await(runtime.consume);
+    if (turn && runtime.activeTurn === turn) {
+      for (const [toolCallId, { name }] of turn.toolCalls) this.#emitToolCall(runtime, toolCallId, name, true);
+      turn.toolCalls.clear();
+      if (turn.stalled)
+        yield* this.#completeTurn(
+          runtime,
+          "failed",
+          sourceText("error.agent.turnStalled", { provider: agentProviderName("claude") }),
+        );
+      else yield* this.#completeTurn(runtime, "interrupted", null);
+    }
+  });
+
+  readonly #watchStall = Effect.fn("ClaudeAgentClient.watchStall")(function* (
+    this: ClaudeAgentClient,
+    runtime: ThreadRuntime,
+  ) {
+    while (this.#threads.get(runtime.id) === runtime) {
+      const before = Date.now();
+      yield* Effect.sleep(CLAUDE_STALL_CHECK_MS);
+      const turn = runtime.activeTurn;
+      if (!turn) continue;
+      const asleep = Date.now() - before - CLAUDE_STALL_CHECK_MS;
+      if (asleep > CLAUDE_STALL_CHECK_MS) turn.lastActivityAt = Math.min(Date.now(), turn.lastActivityAt + asleep);
+      const silentFor = Date.now() - turn.lastActivityAt;
+      const limit = turn.toolCalls.size > 0 || runtime.compacting ? CLAUDE_TOOL_STALL_MS : CLAUDE_TURN_STALL_MS;
+      if (turn.hostRequests > 0 || turn.stopRequested || silentFor < limit || this.#threads.get(runtime.id) !== runtime)
+        continue;
+      queryLogger.warn("Closed a Claude query that sent nothing past the stall limit.", {
+        threadId: runtime.id,
+        silentForMinutes: Math.floor(silentFor / 60_000),
+        openToolCalls: turn.toolCalls.size,
+      });
+      turn.stalled = true;
+      yield* (runtime.config.persistSession ? this.#threads.releaseNow(runtime) : this.#threads.close(runtime)).pipe(
+        Effect.ignore,
+      );
+      return;
+    }
+  });
+
+  #awaitHost<A, E, R>(threadId: string, request: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
+    return Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const turn = this.#threads.get(threadId)?.activeTurn ?? null;
+        if (turn) turn.hostRequests += 1;
+        return turn;
+      }),
+      () => request,
+      (turn) =>
+        Effect.sync(() => {
+          if (!turn) return;
+          turn.hostRequests -= 1;
+          turn.lastActivityAt = Date.now();
+        }),
+    );
   }
 
-  request<T>(method: string, params: unknown, decoder: ResponseDecoder<T>, timeoutMs?: number): Promise<T>;
-  async request<T>(method: string, params: unknown, decoder: ResponseDecoder<T>, timeoutMs?: number): Promise<T> {
-    if (!this.#running) throw new Error("Claude Agent SDK is not running.");
+  #awaitPerson<A, E, R>(threadId: string, request: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
+    return Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const turn = this.#threads.get(threadId)?.activeTurn ?? null;
+        if (turn) turn.personRequests += 1;
+        return turn;
+      }),
+      () => this.#awaitHost(threadId, request),
+      (turn) =>
+        Effect.sync(() => {
+          if (turn) turn.personRequests -= 1;
+        }),
+    );
+  }
+
+  readonly #closeIfStopIgnored = Effect.fn("ClaudeAgentClient.closeIfStopIgnored")(function* (
+    this: ClaudeAgentClient,
+    runtime: ThreadRuntime,
+    turn: ActiveTurn,
+  ) {
+    yield* Effect.forkIn(
+      Effect.sleep(CLAUDE_STOP_CONFIRM_MS).pipe(
+        Effect.andThen(
+          Effect.suspend(() => {
+            if (runtime.activeTurn !== turn || this.#threads.get(runtime.id) !== runtime) return Effect.void;
+            queryLogger.warn("Closed a Claude query that did not end its turn after a stop.", {
+              threadId: runtime.id,
+              waitedMs: CLAUDE_STOP_CONFIRM_MS,
+            });
+            return runtime.config.persistSession ? this.#threads.releaseNow(runtime) : this.#threads.close(runtime);
+          }),
+        ),
+        Effect.ignore,
+      ),
+      this.#scope,
+    );
+  });
+
+  readonly request = Effect.fn("ClaudeAgentClient.request")(function* <T>(
+    this: ClaudeAgentClient,
+    method: string,
+    params: unknown,
+    decoder: ResponseDecoder<T>,
+    timeoutMs?: number,
+  ): Effect.fn.Return<T, ProviderClientOperationError> {
+    if (!this.#running) return yield* providerFailure(new Error("Claude Agent SDK is not running."));
 
     switch (method) {
       case "initialize":
-        return decoder({});
-      case "account/read":
-        return decoder(await this.#readAccount());
-      case "account/rateLimits/read":
-        return decoder(await this.#readUsage(getString(params, "model"), timeoutMs ?? this.#requestTimeoutMs));
-      case "model/list":
-        return decoder({ data: await this.#listModels(timeoutMs) });
+        return yield* providerSync(() => decoder({}));
+      case "account/read": {
+        const response = yield* this.#readAccountEffect(timeoutMs);
+        return yield* providerSync(() => decoder(response));
+      }
+      case "account/rateLimits/read": {
+        const response = yield* this.#readUsageEffect(getString(params, "model"), timeoutMs ?? this.#requestTimeoutMs);
+        return yield* providerSync(() => decoder(response));
+      }
+      case "model/list": {
+        const response = { data: yield* this.#listModelsEffect(timeoutMs) };
+        return yield* providerSync(() => decoder(response));
+      }
       case "plugin/list":
-        return decoder({ marketplaces: [] });
+        return yield* providerSync(() => decoder({ marketplaces: [] }));
       case "thread/start": {
         const threadId = randomUUID();
-        await this.#startThread(threadId, readThreadConfig(params), false);
-        return decoder({ thread: { id: threadId } });
+        yield* this.#startThread(threadId, readThreadConfig(params), false);
+        this.#turnContext.set(threadId, params, false);
+        return yield* providerSync(() => decoder({ thread: { id: threadId } }));
       }
       case "thread/resume": {
-        const threadId = requiredString(params, "threadId");
+        const threadId = yield* providerSync(() => requiredString(params, "threadId"));
+        if (!isUuid(threadId)) return yield* providerFailure(new MissingClaudeSessionError(threadId));
         const config = readThreadConfig(params);
-        const previous = this.#threadResumes.get(threadId) ?? Promise.resolve();
-        const resume = previous.catch(() => undefined).then(() => this.#resumeThread(threadId, config));
-        this.#threadResumes.set(threadId, resume);
-        try {
-          await resume;
-        } finally {
-          if (this.#threadResumes.get(threadId) === resume) this.#threadResumes.delete(threadId);
-        }
-        return decoder({ thread: { id: threadId } });
+        this.#turnContext.set(threadId, params, true);
+        const previous = this.#threadResumes.get(threadId);
+        const completion = Deferred.makeUnsafe<void, ProviderClientOperationError>();
+        this.#threadResumes.set(threadId, completion);
+        yield* Effect.gen({ self: this }, function* () {
+          if (previous) yield* Deferred.await(previous).pipe(Effect.ignore);
+          const exit = yield* Effect.exit(this.#resumeThread(threadId, config));
+          yield* Deferred.done(completion, exit);
+          if (this.#threadResumes.get(threadId) === completion) this.#threadResumes.delete(threadId);
+          yield* exit;
+        }).pipe(Effect.uninterruptible);
+        return yield* providerSync(() => decoder({ thread: { id: threadId } }));
       }
-      case "thread/read":
-        return decoder(await this.#readThread(requiredString(params, "threadId")));
-      case "turn/start":
-        return decoder(await this.#startTurn(params));
-      case "turn/steer":
-        return decoder(await this.#steerTurn(params));
+      case "thread/read": {
+        const response = yield* this.#readThreadEffect(requiredString(params, "threadId"));
+        return yield* providerSync(() => decoder(response));
+      }
+      case "turn/start": {
+        const response = yield* this.#startTurnEffect(params);
+        return yield* providerSync(() => decoder(response));
+      }
+      case "turn/steer": {
+        const response = yield* this.#steerTurnEffect(params);
+        return yield* providerSync(() => decoder(response));
+      }
       case "turn/interrupt": {
-        const threadId = requiredString(params, "threadId");
-        // A released thread has no turn to stop.
-        if (this.#threads.isReleased(threadId)) return decoder({});
-        const runtime = this.#requireThread(threadId);
-        await runtime.query.interrupt();
-        return decoder({});
+        const threadId = yield* providerSync(() => requiredString(params, "threadId"));
+        const turnId = getString(params, "turnId");
+        const notRunning = turnId === null ? {} : { turnActive: false };
+        if (this.#threads.isReleased(threadId)) return yield* providerSync(() => decoder(notRunning));
+        const runtime = yield* providerSync(() => this.#requireThread(threadId));
+        const turn = runtime.activeTurn;
+        const stopped = turn && turn.id === turnId ? turn : null;
+        if (stopped) {
+          stopped.stopRequested = true;
+          yield* this.#closeIfStopIgnored(runtime, stopped);
+        }
+        yield* providerCall(() => runtime.query.interrupt()).pipe(
+          Effect.catch((failure) =>
+            (stopped && (this.#threads.get(runtime.id) !== runtime || runtime.activeTurn !== stopped)) ||
+            (!stopped && turnId !== null)
+              ? Effect.void
+              : Effect.fail(failure),
+          ),
+        );
+        return yield* providerSync(() => decoder(stopped ? {} : notRunning));
       }
-      case "thread/compact/start":
-        // Claude Code manages its own context compaction.
-        return decoder({});
+      case "thread/compact/start": {
+        const threadId = yield* providerSync(() => requiredString(params, "threadId"));
+        yield* this.#threads
+          .startTurn(threadId, () => this.#openCompaction(threadId))
+          .pipe(toProviderClientOperationError);
+        return yield* providerSync(() => decoder({}));
+      }
       default:
-        throw new Error(`Claude adapter does not implement ${method}.`);
+        return yield* providerFailure(new Error(`Claude adapter does not implement ${method}.`));
     }
+  });
+
+  promptCacheTtlMs(externalThreadId: string): number | null {
+    return this.#cacheTtls.get(externalThreadId) ?? null;
   }
 
-  notify(): void {
-    // Claude Agent SDK has no initialize notification.
-  }
+  notify(): void {}
 
   respond(id: RequestId, result: unknown): void {
     this.#serverRequests.resolve(id, result);
@@ -431,48 +1079,70 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     this.#serverRequests.reject(id, error);
   }
 
-  /**
-   * A model list or a usage read runs no tools, so it starts none of the user's MCP servers. Each
-   * server is a process of its own (`npx chrome-devtools-mcp` is about 480 MB), and these reads run
-   * at every start and on every usage refresh. It loads no setting source either, so the user's
-   * plugins and their `SessionStart` hooks do not run for a read.
-   */
-  async #probeOptions(): Promise<Options> {
-    const carryOver = await readClaudeUserCarryOver();
-    return {
+  #configDirectory(): string {
+    return this.#agentEnvironment?.().CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
+  }
+
+  readonly #probeOptionsEffect = Effect.fn("ClaudeAgentClient.probeOptions")(function* (this: ClaudeAgentClient) {
+    const userSetup = this.#userSetup();
+    const signInSettings: Settings = userSetup
+      ? {}
+      : withoutReplacedGateway(
+          claudeSignInSettings(yield* readClaudeSettingsFile(join(this.#configDirectory(), "settings.json"))),
+          this.#agentEnvironment?.(),
+        );
+    const stateDirectory = this.#stateDirectory;
+    const settingsFile =
+      Object.keys(signInSettings).length > 0 && stateDirectory
+        ? yield* Effect.acquireRelease(
+            writeClaudeFlagSettings(stateDirectory, "probe", signInSettings).pipe(
+              Effect.catch((error) =>
+                Effect.sync(() => {
+                  queryLogger.warn("Claude checks its models and usage without the sign-in settings.", {
+                    error: error.cause,
+                  });
+                  return null;
+                }),
+              ),
+            ),
+            removeClaudeQueryFile,
+          )
+        : null;
+    const options: Options = {
       cwd: process.cwd(),
-      pathToClaudeCodeExecutable: this.#cli.executable,
-      settingSources: [],
-      ...(carryOver.settings ? { settings: carryOver.settings } : {}),
+      ...this.#sdkLaunch,
+      settingSources: userSetup ? ["user", "project", "local"] : [],
+      ...(settingsFile ? { settings: settingsFile } : {}),
       mcpServers: {},
       strictMcpConfig: true,
       persistSession: false,
-      env: { ...claudeEnvironment(this.#cli), ...carryOver.env, CLAUDE_AGENT_SDK_CLIENT_APP: "openbot/0.1.0" },
+      env: withClaudeClientLabels({ ...claudeEnvironment(this.#cli), ...this.#environment(this.#onApiKey) }),
     };
-  }
+    return options;
+  });
 
-  async #listModels(timeoutMs?: number): Promise<unknown[]> {
+  readonly #listModelsEffect = Effect.fn("ClaudeAgentClient.listModels")(function* (
+    this: ClaudeAgentClient,
+    timeoutMs: number | undefined,
+  ): Effect.fn.Return<unknown[], ProviderClientOperationError, Scope.Scope> {
+    const options = yield* this.#probeOptionsEffect();
     const input = new AsyncMessageQueue();
-    const claudeQuery = this.#createQuery({
-      prompt: input,
-      options: await this.#probeOptions(),
-    });
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const discovery = claudeQuery.supportedModels();
-      const discovered =
-        timeoutMs === undefined
-          ? await discovery
-          : await Promise.race([
-              discovery,
-              new Promise<ModelInfo[]>((_, reject) => {
-                timeout = setTimeout(() => {
-                  input.close();
-                  claudeQuery.close();
-                  reject(new RequestTimeoutError("Claude", "model/list"));
-                }, timeoutMs);
-              }),
-            ]);
+    const claudeQuery = yield* providerSync(() =>
+      this.#createQuery({
+        prompt: input,
+        options,
+      }),
+    );
+    return yield* Effect.gen({ self: this }, function* () {
+      const discovery = providerCall(() => claudeQuery.supportedModels());
+      const discovered = yield* timeoutMs === undefined
+        ? discovery
+        : discovery.pipe(
+            Effect.timeoutOrElse({
+              duration: timeoutMs,
+              orElse: () => Effect.fail(providerFailure(new RequestTimeoutError("Claude", "model/list"))),
+            }),
+          );
       const models = new Map<string, (typeof discovered)[number]>();
       for (const model of discovered) {
         const id = model.resolvedModel?.trim() || model.value.trim();
@@ -498,274 +1168,611 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
             ? null
             : { supported: supportedReasoningEfforts, defaultEffort: defaultReasoningEffort },
         );
-        sdkValues.set(id, model.value.trim() || id);
+        sdkValues.set(id, model.value.trim() === "default" ? id : model.value.trim() || id);
         return {
           model: id,
           displayName: model.displayName,
           defaultReasoningEffort,
           supportedReasoningEfforts: supportedReasoningEfforts.map((reasoningEffort) => ({ reasoningEffort })),
+          ...(model.supportsFastMode ? { serviceTiers: [{ id: CLAUDE_FAST_SERVICE_TIER, name: "Fast" }] } : {}),
         };
       });
       this.#modelEffortCapabilities.clear();
       this.#modelSdkValues.clear();
       for (const [id, capability] of effortCapabilities) this.#modelEffortCapabilities.set(id, capability);
       for (const [id, value] of sdkValues) this.#modelSdkValues.set(id, value);
-      return result;
-    } finally {
-      if (timeout) clearTimeout(timeout);
-      input.close();
-      claudeQuery.close();
-    }
-  }
+      for (const id of sdkValues.keys()) CLAUDE_LISTED_MODELS.add(id);
+      return yield* providerSync(() => result);
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          input.close();
+          claudeQuery.close();
+        }),
+      ),
+    );
+  }, Effect.scoped);
 
-  async #readUsage(model: string | null, timeoutMs: number): Promise<AccountRateLimitsReadResult> {
+  readonly #readUsageEffect = Effect.fn("ClaudeAgentClient.readUsage")(function* (
+    this: ClaudeAgentClient,
+    model: string | null,
+    timeoutMs: number,
+  ): Effect.fn.Return<AccountRateLimitsReadResult, ProviderClientOperationError, Scope.Scope> {
+    const options = yield* this.#probeOptionsEffect();
     const input = new AsyncMessageQueue();
-    const claudeQuery = this.#createQuery({
-      prompt: input,
-      options: await this.#probeOptions(),
-    });
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
+    const claudeQuery = yield* providerSync(() =>
+      this.#createQuery({
+        prompt: input,
+        options,
+      }),
+    );
+    return yield* Effect.gen({ self: this }, function* () {
       const readUsage = claudeQuery.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
       if (!readUsage) return { rateLimits: null, rateLimitsByLimitId: null };
-      const usage = await Promise.race([
-        readUsage.call(claudeQuery),
-        new Promise<unknown>((_, reject) => {
-          timeout = setTimeout(() => {
-            input.close();
-            claudeQuery.close();
-            reject(new RequestTimeoutError("Claude", "account/rateLimits/read"));
-          }, timeoutMs);
+      const usage = yield* providerCall(() => readUsage.call(claudeQuery, { skipBehaviors: true })).pipe(
+        Effect.timeoutOrElse({
+          duration: timeoutMs,
+          orElse: () => Effect.fail(providerFailure(new RequestTimeoutError("Claude", "account/rateLimits/read"))),
         }),
-      ]);
-      return claudeRateLimits(usage, model);
-    } finally {
-      if (timeout) clearTimeout(timeout);
-      input.close();
-      claudeQuery.close();
-    }
-  }
+      );
+      if (isDynamicRecord(usage) && usage.rate_limits_available === true && !isDynamicRecord(usage.rate_limits))
+        return yield* providerFailure(new Error("Claude could not read the plan usage."));
+      if (model === defaultProviderModel("claude") && isDynamicRecord(usage) && isDynamicRecord(usage.rate_limits))
+        this.#weeklyLimitKey = claudeWeeklyKey(usage.rate_limits, model);
+      return yield* providerSync(() => claudeRateLimits(usage, model));
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          input.close();
+          claudeQuery.close();
+        }),
+      ),
+    );
+  }, Effect.scoped);
 
-  async #readAccount(): Promise<AccountReadResult> {
-    const status = await this.#readAuthStatus();
+  readonly #readAccountEffect = Effect.fn("ClaudeAgentClient.readAccount")(function* (
+    this: ClaudeAgentClient,
+    requestTimeoutMs = 0,
+  ): Effect.fn.Return<AccountReadResult, ProviderClientOperationError> {
+    const timeoutMs = Math.max(requestTimeoutMs, AUTH_STATUS_TIMEOUT_MS);
+    let status = yield* this.#readAuthStatusEffect(false, timeoutMs);
+    const onApiKey = status.loggedIn !== true && Boolean(this.#fallbackApiKey?.());
+    if (onApiKey) status = yield* this.#readAuthStatusEffect(true, timeoutMs);
+    this.#onApiKey = onApiKey && status.loggedIn === true;
+    this.#accountRead = true;
+    this.#cliApiKey = status.loggedIn === true && !this.#onApiKey && (yield* this.#billsOwnApiKey(status));
     if (status.loggedIn !== true) return { account: null, requiresOpenaiAuth: false };
     return {
       account: {
-        type: "claude",
+        type: this.#onApiKey
+          ? CLAUDE_API_KEY_ACCOUNT_TYPE
+          : this.#cliApiKey
+            ? CLAUDE_CLI_API_KEY_ACCOUNT_TYPE
+            : "claude",
         email: isString(status.email) ? status.email : null,
         planType: isString(status.subscriptionType) ? status.subscriptionType : null,
+        organization: isString(status.orgId) ? status.orgId : null,
       },
       requiresOpenaiAuth: false,
     };
+  });
+
+  readonly #billsOwnApiKey = Effect.fn("ClaudeAgentClient.billsOwnApiKey")(function* (
+    this: ClaudeAgentClient,
+    status: DynamicRecord,
+  ) {
+    if (status.apiKeySource !== "ANTHROPIC_API_KEY" && status.apiKeySource !== "apiKeyHelper") return false;
+    if (status.apiProvider !== undefined && status.apiProvider !== "firstParty") return false;
+    if (status.authMethod !== "api_key" && status.authMethod !== "api_key_helper") return false;
+    const environment = { ...claudeEnvironment(this.#cli), ...this.#environment(false) };
+    if (this.#environment(false).ANTHROPIC_API_KEY || environment.ANTHROPIC_BASE_URL) return false;
+    const settings = yield* readClaudeSettingsFile(
+      join(environment.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "settings.json"),
+    );
+    return !(isDynamicRecord(settings.env) && settings.env.ANTHROPIC_BASE_URL);
+  });
+
+  #decideApiKey(): void {
+    if (this.#accountRead || !this.#fallbackApiKey?.()) return;
+    const last = lastAuthStatuses.get(this.#environment(false).CLAUDE_CONFIG_DIR ?? "");
+    if (last) this.#onApiKey = last.loggedIn !== true;
   }
 
-  /**
-   * `claude auth status` exits 1 when signed out and still prints its status. Only a status says
-   * signed out: a timeout, a failed spawn or unreadable output throws, so an account refresh keeps
-   * the working client instead of stopping it as signed out.
-   */
-  async #readAuthStatus(): Promise<DynamicRecord> {
+  readonly #readAuthStatusEffect = Effect.fn("ClaudeAgentClient.readAuthStatus")(function* (
+    this: ClaudeAgentClient,
+    withApiKey: boolean,
+    timeoutMs: number,
+  ): Effect.fn.Return<DynamicRecord, ProviderClientOperationError> {
+    if (!withApiKey) {
+      const stored = yield* readClaudeStoredSignIn({ ...claudeEnvironment(this.#cli), ...this.#environment(false) });
+      if (Option.isSome(stored)) {
+        lastAuthStatuses.set(this.#environment(false).CLAUDE_CONFIG_DIR ?? "", stored.value);
+        return stored.value;
+      }
+    }
     let stdout: unknown;
     let failure: unknown = null;
     const target = cliSpawnTarget(this.#cli.executable, ["auth", "status", "--json"]);
     try {
-      ({ stdout } = await execFileAsync(target.command, target.args, {
-        timeout: 5_000,
-        maxBuffer: 64 * 1024,
-        windowsVerbatimArguments: target.windowsVerbatimArguments,
-        env: claudeEnvironment(this.#cli),
-      }));
+      ({ stdout } = providerResult(
+        yield* Effect.result(
+          providerCall(() =>
+            execFileAsync(target.command, target.args, {
+              timeout: timeoutMs,
+              maxBuffer: 64 * 1024,
+              windowsVerbatimArguments: target.windowsVerbatimArguments,
+              env: { ...claudeEnvironment(this.#cli), ...this.#environment(withApiKey) },
+            }),
+          ),
+        ),
+      ));
     } catch (error) {
       failure = error;
       stdout = isRecord(error) ? error.stdout : undefined;
     }
     const status = parseAuthStatus(stdout);
-    if (status && (failure === null || status.loggedIn === false)) return status;
-    // `execFile` marks a child it stopped at its timeout: a busy computer, not a failed check.
-    if (isDynamicRecord(failure) && failure.killed === true) throw new RequestTimeoutError("Claude", "account/read");
-    throw failure ?? new Error("Claude returned an unreadable sign-in status.");
+    if (status && (failure === null || status.loggedIn === false)) {
+      if (!withApiKey) lastAuthStatuses.set(this.#environment(false).CLAUDE_CONFIG_DIR ?? "", status);
+      return yield* providerSync(() => status);
+    }
+    if (isDynamicRecord(failure) && failure.killed === true)
+      return yield* providerFailure(new RequestTimeoutError("Claude", "account/read"));
+    if (failure !== null) return yield* providerFailure(failure);
+    queryLogger.warn("Claude exited signed in with an unreadable sign-in status.", {
+      outputLength: isString(stdout) ? stdout.length : null,
+    });
+    const last = withApiKey ? null : lastAuthStatuses.get(this.#environment(false).CLAUDE_CONFIG_DIR ?? "");
+    return yield* providerSync(() => (last?.loggedIn === true ? last : { loggedIn: true }));
+  });
+
+  #usesApiKey(): boolean {
+    return (
+      this.#cliApiKey ||
+      Boolean({ ...claudeEnvironment(this.#cli), ...this.#environment(this.#onApiKey) }.ANTHROPIC_API_KEY)
+    );
   }
 
-  async #resumeThread(threadId: string, config: ThreadConfig): Promise<void> {
-    // A turn can open a released thread again at each await here: that query is the one to
-    // compare, not a second one, so the check runs again until this resume opens the thread.
+  #onClaudeAccount(): boolean {
+    const last = lastAuthStatuses.get(this.#environment(false).CLAUDE_CONFIG_DIR ?? "");
+    return last?.loggedIn === true && last.authMethod === "claude.ai";
+  }
+
+  #environment(withApiKey: boolean): Readonly<Record<string, string>> {
+    const key = withApiKey ? this.#fallbackApiKey?.() : null;
+    return { ...this.#agentEnvironment?.(), ...(key ? { ANTHROPIC_API_KEY: key } : {}) };
+  }
+
+  readonly #resumeThread = Effect.fn("ClaudeAgentClient.resumeThread")(function* (
+    this: ClaudeAgentClient,
+    threadId: string,
+    config: ThreadConfig,
+  ): Effect.fn.Return<void, ProviderClientOperationError> {
     for (;;) {
-      await this.#threads.opened(threadId);
+      yield* this.#threads.opened(threadId);
       const current = this.#threads.get(threadId);
-      if (current && JSON.stringify(current.config) === JSON.stringify(config)) return;
+      if (current && threadConfigKey(current.config, true) === threadConfigKey(config, true)) return;
       if (current) {
-        if (current.activeTurn) throw new Error(sourceText("error.provider.claudeTurnActive"));
-        await this.#threads.close(current);
+        if (current.activeTurn) return yield* providerFailure(new Error(sourceText("error.provider.claudeTurnActive")));
+        if (threadConfigKey(current.config, false) === threadConfigKey(config, false)) return;
+        queryLogger.info("Restarting a Claude query.", {
+          reason: "configuration-change",
+          count: ++this.#queryRestarts,
+        });
+        yield* this.#threads.close(current).pipe(toProviderClientOperationError);
         continue;
       }
-      if (await this.#threads.opening(threadId, () => this.#startThread(threadId, config, true))) return;
+      if (
+        yield* this.#threads
+          .opening(threadId, () => this.#startThread(threadId, config, true))
+          .pipe(toProviderClientOperationError)
+      )
+        return;
     }
-  }
+  });
 
-  async #startThread(threadId: string, config: ThreadConfig, resume: boolean): Promise<void> {
+  readonly #startThread = Effect.fn("ClaudeAgentClient.startThread")(function* (
+    this: ClaudeAgentClient,
+    threadId: string,
+    config: ThreadConfig,
+    resume: boolean,
+  ): Effect.fn.Return<void, ProviderClientOperationError> {
+    this.#decideApiKey();
     const input = new AsyncMessageQueue();
     const appliedEffort = this.#resolveEffort(config.model, config.effort);
-    const canUseTool: CanUseTool = async (toolName, toolInput, options) => {
-      if (config.profileGeneration) return { behavior: "deny", message: "Profile generation has no tools." };
-      if (config.workspaceOnly) {
-        const outside = await claudeWriteOutsideRoots(toolName, toolInput, config.cwd, config.additionalDirectories);
-        if (outside) return this.#requestWriteApproval(threadId, outside, toolInput, options.toolUseID ?? randomUUID());
-      }
-      if (toolName !== "AskUserQuestion") {
-        return { behavior: "allow", updatedInput: toolInput } satisfies PermissionResult;
-      }
-      return this.#requestUserInput(threadId, toolInput, options.toolUseID ?? randomUUID());
-    };
-    // OpenBot's own servers spread last: Claude keys this record by name, so a user configuration
-    // that reached one of those names would take the agent's own tools away. Profile generation
-    // asks one question and must not act, so it gets neither set.
+    const canUseTool: CanUseTool = (toolName, toolInput, options) =>
+      runCauseEffect(
+        Effect.gen({ self: this }, function* () {
+          if (config.profileGeneration) return { behavior: "deny", message: "Profile generation has no tools." };
+          if (config.workspaceOnly) {
+            const excluded = yield* claudeWriteInExcluded(toolName, toolInput, config.cwd, config.excludedFolders);
+            if (excluded) return { behavior: "deny", message: claudeExcludedWriteMessage(excluded) };
+            const outside = yield* claudeWriteOutsideRoots(
+              toolName,
+              toolInput,
+              config.cwd,
+              config.additionalDirectories,
+            );
+            if (outside)
+              return yield* this.#requestWriteApprovalEffect(
+                threadId,
+                outside,
+                toolInput,
+                options.toolUseID ?? randomUUID(),
+              );
+          }
+          if (toolName !== "AskUserQuestion") {
+            return yield* providerCall(
+              () => ({ behavior: "allow", updatedInput: toolInput }) satisfies PermissionResult,
+            );
+          }
+          return yield* this.#requestUserInputEffect(threadId, toolInput, options.toolUseID ?? randomUUID());
+        }),
+      );
+    const onElicitation: OnElicitation = (request, { signal }) =>
+      runCauseEffect(this.#requestElicitationEffect(threadId, request, signal));
     const slackReply = config.toolProfile === "slack-reply";
-    const handoff =
+    const usable =
       config.profileGeneration || slackReply
         ? null
-        : claudeMcpServers(
-            await usableMcpServers(
-              agentMcpServers(this.#mcpServers(), config.computerUse, config.disabledMcpServerIds),
-              this.#mcpToolRuntimes?.(),
-              this.#mcpAuthorization,
-            ),
-          );
+        : yield* usableMcpServers(
+            agentMcpServers(this.#mcpServers(config.agentId), config.computerUse, config.disabledMcpServerIds),
+            this.#mcpToolRuntimes?.(),
+            this.#mcpEndpoint,
+            config.agentId,
+          ).pipe(toProviderClientOperationError);
+    const handoff = usable ? claudeMcpServers(usable, CLAUDE_MCP_USER_AGENT) : null;
+    const stateDirectory = this.#stateDirectory;
+    const userSetup = !config.profileGeneration && !slackReply && this.#userSetup();
     const skillPlugin =
-      config.workspaceOnly && !slackReply && this.#stateDirectory
-        ? await claudeWorkspaceSkillPlugin(this.#stateDirectory, config.cwd)
+      config.workspaceOnly && !slackReply && stateDirectory
+        ? yield* claudeWorkspaceSkillPlugin(stateDirectory, config.cwd).pipe(
+            Effect.catch((error) =>
+              Effect.sync(() => {
+                queryLogger.warn("Claude starts without the skills in the workspace .claude/skills.", {
+                  error: error.cause,
+                });
+                return null;
+              }),
+            ),
+          )
         : null;
-    const carryOver = config.profileGeneration ? null : await readClaudeUserCarryOver();
-    // `stop()` may have run during the await: a query created now would outlive the client.
-    if (!this.#running) throw new Error("Claude Agent SDK is not running.");
+    const configDirectory = this.#configDirectory();
+    yield* clearClaudeNeedsAuthMarks(
+      configDirectory,
+      usable?.flatMap((server) => (server.url ? [server.config.name] : [])) ?? [],
+    );
+    const userSettingsFile = yield* readClaudeSettingsFile(join(configDirectory, "settings.json"));
+    const signInSettings: Settings = userSetup
+      ? {}
+      : withoutReplacedGateway(claudeSignInSettings(userSettingsFile), this.#agentEnvironment?.());
+    const homeSkillPlugin =
+      stateDirectory && userSetup
+        ? yield* claudeHomeSkillPlugin(stateDirectory, configDirectory, config.cwd).pipe(
+            Effect.catch((error) =>
+              Effect.sync(() => {
+                queryLogger.warn("Claude starts without the skills in ~/.agents/skills.", { error: error.cause });
+                return null;
+              }),
+            ),
+          )
+        : null;
+    const plugins = [skillPlugin, homeSkillPlugin].filter((plugin) => plugin !== null);
+    const launchPath = yield* cliLaunchPath(this.#cli.executable, this.#cli.source);
+    const openBotServers = handoff ? this.#createOpenBotServers(threadId, config.channelTools) : {};
+    const nodeOptions = this.#agentEnvironment?.().NODE_OPTIONS;
+    const mcpConfigFile =
+      handoff && stateDirectory && Object.keys(handoff.servers).length > 0
+        ? yield* writeClaudeMcpConfig(stateDirectory, threadId, handoff.servers).pipe(
+            Effect.catch((error) =>
+              Effect.sync(() => {
+                queryLogger.warn("Claude gets its MCP servers on the command line.", { error: error.cause });
+                return null;
+              }),
+            ),
+          )
+        : null;
+    const nodeOptionsSettings: Settings = nodeOptions ? { env: { NODE_OPTIONS: nodeOptions } } : {};
+    const settingSources = claudeSettingSources(config, userSetup);
+    const cliEnvironment: NodeJS.ProcessEnv = {
+      ...claudeEnvironment(this.#cli),
+      ...(launchPath ? { PATH: launchPath } : {}),
+      ...this.#environment(this.#onApiKey),
+    };
+    const { settings: openBotSettings, firstPartyApi } =
+      config.profileGeneration || slackReply
+        ? {
+            settings: {},
+            firstPartyApi: CLAUDE_OTHER_API_VARIABLES.every(
+              (name) => !(signInSettings.env?.[name] ?? cliEnvironment[name]),
+            ),
+          }
+        : yield* claudeFlagSettings(
+            userSettingsFile,
+            configDirectory,
+            config.cwd,
+            settingSources,
+            cliEnvironment,
+            config.excludedInstructionFiles,
+          );
+    const flagSettings: Settings = {
+      ...openBotSettings,
+      ...nodeOptionsSettings,
+      ...(openBotSettings.env || nodeOptionsSettings.env
+        ? { env: { ...openBotSettings.env, ...nodeOptionsSettings.env } }
+        : {}),
+    };
+    const sandbox = config.workspaceOnly
+      ? claudeWorkspaceSandbox(config.additionalDirectories, config.excludedFolders)
+      : null;
+    const settingsFile =
+      Object.keys(signInSettings).length > 0
+        ? stateDirectory
+          ? yield* writeClaudeFlagSettings(stateDirectory, threadId, {
+              ...signInSettings,
+              ...openBotSettings,
+              env: { ...signInSettings.env, ...openBotSettings.env, ...nodeOptionsSettings.env },
+              ...(sandbox ? { sandbox } : {}),
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.sync(() => {
+                  queryLogger.warn("Claude starts without the sign-in settings of its settings file.", {
+                    error: error.cause,
+                  });
+                  return null;
+                }),
+              ),
+            )
+          : null
+        : null;
+    const removeQueryFiles = Effect.all([removeClaudeQueryFile(mcpConfigFile), removeClaudeQueryFile(settingsFile)]);
+    if (!this.#running) {
+      yield* removeQueryFiles;
+      return yield* providerFailure(new Error("Claude Agent SDK is not running."));
+    }
     if (handoff) this.#reportMcpDrops?.(this.provider, handoff.dropped);
     const mcpServers = slackReply
       ? this.#createSlackReplyServers(threadId)
       : handoff
-        ? { ...handoff.servers, ...this.#createOpenBotServers(threadId) }
+        ? { ...(mcpConfigFile ? {} : handoff.servers), ...openBotServers }
         : {};
-    const claudeQuery = this.#createQuery({
-      prompt: input,
-      options: {
-        cwd: config.cwd,
-        pathToClaudeCodeExecutable: this.#cli.executable,
-        ...(config.model ? { model: this.#sdkModel(config.model) } : {}),
-        ...(appliedEffort ? { effort: appliedEffort } : {}),
-        ...(resume ? { resume: threadId } : { sessionId: threadId }),
-        // A Slack reply context has no Claude Code tools, so the long Claude Code prompt is left out.
-        systemPrompt: slackReply
-          ? config.developerInstructions
-          : {
-              type: "preset",
-              preset: "claude_code",
-              append: config.developerInstructions,
-            },
-        // The developer instructions carry the profile and the memories, and `thread/resume` above
-        // restarts the query when they change. A recorded prompt would be sent instead of them on
-        // every later request and resume, so the agent kept an edited profile's old text. The CLI
-        // flag, not the SDK's `systemPromptSnapshot` option: the CLI records by default and ignores
-        // that option.
-        ...(claudeTakesPromptSnapshotFlag(this.#cli.version) ? { extraArgs: { "system-prompt-snapshot": "off" } } : {}),
-        ...(config.profileGeneration ? { tools: [] } : {}),
-        ...(slackReply
-          ? {
-              tools: [],
-              disallowedTools: [...CLAUDE_BUILT_IN_TOOLS],
-              allowedTools: [...SLACK_REPLY_TOOLS].map((name) => `mcp__openbot__${name}`),
-              skills: [],
-            }
-          : {}),
-        // No user source: the personal plugins, skills, subagents and hooks of the user's Claude Code
-        // stay out of the agent. A Slack reply context loads no source at all. `claude-user-settings.ts`
-        // says what still comes from the user file: the `env` and the credential helpers. A Slack
-        // reply also gets them, because a user who signs in through Bedrock, a proxy or a helper
-        // cannot start a session without them. They hold no plugin, skill or hook.
-        settingSources: config.profileGeneration || slackReply ? [] : claudeSettingSources(config.workspaceOnly),
-        ...(carryOver?.settings ? { settings: carryOver.settings } : {}),
-        // The MCP panel is the only door. Without this, Claude merges project `.mcp.json`, plugin and
-        // agent-frontmatter servers into the record above, so two computers with the same OpenBot
-        // settings give their agents different tools and "which servers does my agent have" has no
-        // answer. The flag takes away MCP and nothing else, so permissions and hooks still load from
-        // the workspace settings files.
-        strictMcpConfig: true,
-        permissionMode: "default",
-        includePartialMessages: true,
-        persistSession: config.persistSession,
-        additionalDirectories: config.additionalDirectories,
-        canUseTool,
-        ...(config.workspaceOnly
-          ? {
-              sandbox: claudeWorkspaceSandbox(config.additionalDirectories),
-              hooks: claudeWorkspaceHooks(config.cwd, config.additionalDirectories),
-              managedSettings: CLAUDE_WORKSPACE_MANAGED_SETTINGS,
-              plugins: skillPlugin ? [skillPlugin] : [],
-            }
-          : {}),
-        mcpServers,
-        env: {
-          ...claudeEnvironment(this.#cli),
-          ...carryOver?.env,
-          ...this.#agentEnvironment?.(),
-          CLAUDE_AGENT_SDK_CLIENT_APP: "openbot/0.1.0",
-          // Without a terminal, the CLI gives the newer models no TodoWrite or task tools, so the
-          // agent has no plan for OpenBot to show as a task list.
-          CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
-          // A smaller auto-compact window makes Claude Code summarize the conversation sooner, so each
-          // model call reads less context. Claude Code clamps it to the model window.
-          ...(config.compactWindow === null ? {} : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(config.compactWindow) }),
+    const extraArgs: Record<string, string | null> = {
+      ...(claudeTakesPromptSnapshotFlag(this.#cli.version) ? { "system-prompt-snapshot": "off" } : {}),
+      ...(mcpConfigFile ? { "mcp-config": mcpConfigFile } : {}),
+    };
+    const stderr = new ClaudeStderrTail();
+    const claudeQuery = yield* providerSync(() =>
+      this.#createQuery({
+        prompt: input,
+        options: {
+          cwd: config.cwd,
+          ...this.#sdkLaunch,
+          ...(this.#sdkLaunch.spawnClaudeCodeProcess || !PROVIDER_PROCESS_GROUP
+            ? {}
+            : { spawnClaudeCodeProcess: (options: SpawnOptions) => spawnClaudeProcessGroup(options, stderr) }),
+          ...(config.model ? { model: this.#sdkModel(config.model) } : {}),
+          ...(appliedEffort ? { effort: appliedEffort } : {}),
+          ...(resume ? { resume: threadId } : { sessionId: threadId, title: CLAUDE_SESSION_TITLE }),
+          // A Slack reply context has no Claude Code tools, so the long Claude Code prompt is left out.
+          systemPrompt:
+            config.profileGeneration || slackReply
+              ? config.developerInstructions
+              : { type: "preset", preset: "claude_code", append: config.developerInstructions },
+          ...(Object.keys(extraArgs).length ? { extraArgs } : {}),
+          ...(config.outputSchema ? { outputFormat: { type: "json_schema", schema: config.outputSchema } } : {}),
+          ...(config.profileGeneration
+            ? { tools: [] }
+            : slackReply
+              ? {
+                  tools: [],
+                  disallowedTools: [
+                    ...CLAUDE_BUILT_IN_TOOLS,
+                    ...CLAUDE_NATIVE_SCHEDULING,
+                    ...CLAUDE_DUPLICATE_TOOLS,
+                    ...CLAUDE_HOST_TOOLS,
+                  ],
+                  allowedTools: [...SLACK_REPLY_TOOLS].map((name) => `mcp__openbot__${name}`),
+                  skills: [],
+                }
+              : { disallowedTools: [...CLAUDE_NATIVE_SCHEDULING, ...CLAUDE_DUPLICATE_TOOLS, ...CLAUDE_HOST_TOOLS] }),
+          settingSources,
+          strictMcpConfig: true,
+          permissionMode: "default",
+          includePartialMessages: true,
+          persistSession: config.persistSession,
+          additionalDirectories: config.additionalDirectories,
+          canUseTool,
+          onElicitation,
+          ...(settingsFile
+            ? { settings: settingsFile }
+            : Object.keys(flagSettings).length > 0
+              ? { settings: flagSettings }
+              : {}),
+          ...(sandbox && !settingsFile ? { sandbox } : {}),
+          ...(config.workspaceOnly
+            ? {
+                hooks: claudeWorkspaceHooks(config.cwd, config.additionalDirectories, config.excludedFolders),
+                managedSettings: CLAUDE_WORKSPACE_MANAGED_SETTINGS,
+              }
+            : {}),
+          ...(plugins.length ? { plugins } : {}),
+          mcpServers,
+          env: {
+            ...withClaudeClientLabels(cliEnvironment),
+            ...(handoff ? claudeMcpStartupEnvironment(cliEnvironment) : {}),
+            ...(resume && cliEnvironment.MCP_CONNECTION_NONBLOCKING === undefined
+              ? { MCP_CONNECTION_NONBLOCKING: "0" }
+              : {}),
+            CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
+            CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+            // A per-agent compact window: Claude Code summarizes the conversation sooner, so each model
+            // call reads less context. Claude Code clamps it to the model window.
+            ...(config.compactWindow === null ? {} : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(config.compactWindow) }),
+            ...(handoff ? { CLAUDE_CODE_TERMINAL_MCP_TOOLS: claudeTerminalTools(config.channelTools).join(",") } : {}),
+          },
         },
-      },
-    });
+      }),
+    ).pipe(Effect.onError(() => removeQueryFiles));
     const runtime: ThreadRuntime = {
       id: threadId,
-      usageCounterId: threadId,
-      usageResumed: resume,
+      firstPartyApi,
+      usageCounterId: randomUUID(),
       usageCost: 0,
+      resumedUsage: resume,
+      requestUsage: new Map(),
+      contextRequest: 0,
+      compacting: false,
       config,
       appliedEffort,
+      appliedFastMode: undefined,
+      fastModeDisabledReason: null,
       input,
       query: claudeQuery,
       activeTurn: null,
-      consume: Promise.resolve(),
+      consume: null,
       idleRelease: null,
       idleSince: 0,
       plan: newClaudePlanState(),
+      subagents: newSubagentState(),
+      backgroundTasks: 0,
+      awaitsResultTurn: false,
+      taskTurns: new Map(),
+      endedTaskTurns: [],
+      subagentLimit: null,
+      lastOutputAt: Date.now(),
+      answered: false,
+      promptIds: (resume && this.#takenPrompts.get(threadId)) || new Set<string>(),
+      nextTurnId: null,
+      streamMessage: { id: null, thinkingBlocks: new Map<number, string>() },
+      mcpConfigFile,
+      settingsFile,
+      stderr,
     };
-    runtime.consume = this.#consume(runtime);
+    runtime.consume = yield* Effect.forkIn(this.#consume(runtime), this.#scope, { startImmediately: true });
+    const initialization = mcpConfigFile ? claudeQuery.initializationResult?.() : undefined;
+    if (initialization)
+      yield* Effect.forkIn(
+        providerCall(() => initialization).pipe(Effect.ignore, Effect.andThen(removeClaudeQueryFile(mcpConfigFile))),
+        this.#scope,
+      );
     this.#threads.add(runtime);
-  }
+    if (config.persistSession) this.#takenPrompts.set(threadId, runtime.promptIds);
+    yield* Effect.forkIn(this.#watchStall(runtime), this.#scope);
+  });
 
-  async #startTurn(params: unknown): Promise<TurnResponse> {
-    const threadId = requiredString(params, "threadId");
-    return this.#threads.startTurn(threadId, () => this.#openTurn(threadId, params));
-  }
+  readonly #startTurnEffect = Effect.fn("ClaudeAgentClient.startTurn")(function* (
+    this: ClaudeAgentClient,
+    params: unknown,
+  ): Effect.fn.Return<TurnResponse, ProviderClientOperationError> {
+    const threadId = yield* providerSync(() => requiredString(params, "threadId"));
+    return yield* this.#threads
+      .startTurn(threadId, () => this.#openTurn(threadId, params))
+      .pipe(toProviderClientOperationError);
+  });
 
-  async #openTurn(threadId: string, params: unknown): Promise<TurnResponse> {
-    await this.#threads.wake(threadId);
-    const runtime = this.#requireThread(threadId);
-    if (runtime.activeTurn) throw new Error("The Claude thread already has an active turn.");
+  readonly #applyFastMode = Effect.fn("ClaudeAgentClient.applyFastMode")(function* (
+    runtime: ThreadRuntime,
+    params: unknown,
+  ): Effect.fn.Return<void, ProviderClientOperationError> {
+    if (!isRecord(params) || !("serviceTier" in params)) return;
+    const fastMode = params.serviceTier === CLAUDE_FAST_SERVICE_TIER;
+    if (fastMode === runtime.appliedFastMode) return;
+    yield* providerCall(() => runtime.query.applyFlagSettings({ fastMode }));
+    runtime.appliedFastMode = fastMode;
+  });
+
+  readonly #openTurn = Effect.fn("ClaudeAgentClient.openTurn")(function* (
+    this: ClaudeAgentClient,
+    threadId: string,
+    params: unknown,
+  ): Effect.fn.Return<TurnResponse, ProviderClientOperationError> {
+    yield* this.#threads.wake(threadId).pipe(toProviderClientOperationError);
+    const runtime = yield* providerSync(() => this.#requireThread(threadId));
+    if (runtime.activeTurn) return yield* providerFailure(this.#turnActiveError(runtime.activeTurn));
+    runtime.contextRequest += 1;
 
     const requestedModel = getString(params, "model");
     const modelChanged = Boolean(requestedModel && requestedModel !== runtime.config.model);
     if (requestedModel && modelChanged) {
-      await runtime.query.setModel(this.#sdkModel(requestedModel));
+      yield* providerCall(() => runtime.query.setModel(this.#sdkModel(requestedModel))).pipe(
+        Effect.mapError((failure) => {
+          const refusal = limitRefusal(failure.cause);
+          return refusal === null ? failure : providerFailure(new ProviderModelLimitedError(refusal));
+        }),
+      );
       runtime.config.model = requestedModel;
     }
     const requestedEffort = getString(params, "effort");
     const selectedEffort = requestedEffort ?? runtime.config.effort;
     const appliedEffort = this.#resolveEffort(runtime.config.model, selectedEffort);
     if (!appliedEffort) {
-      if (runtime.appliedEffort !== undefined) await runtime.query.applyFlagSettings({ effortLevel: null });
+      if (runtime.appliedEffort !== undefined)
+        yield* providerCall(() => runtime.query.applyFlagSettings({ effortLevel: null }));
       runtime.appliedEffort = undefined;
     } else if (modelChanged || appliedEffort !== runtime.appliedEffort) {
-      await runtime.query.applyFlagSettings({ effortLevel: appliedEffort });
+      yield* providerCall(() => runtime.query.applyFlagSettings({ effortLevel: appliedEffort }));
       runtime.appliedEffort = appliedEffort;
     }
     if (requestedEffort) runtime.config.effort = requestedEffort;
+    yield* this.#applyFastMode(runtime, params);
 
     const clientId = getString(params, "clientUserMessageId");
-    const turnId = clientId && isUuid(clientId) ? clientId : randomUUID();
+    const requestedTurnId = getString(params, "clientTurnId") ?? clientId;
+    const turnId = promptUuid(runtime, requestedTurnId);
     const text = readInputText(params);
-    const activeTurn = {
+    const images = runtime.config.profileGeneration ? yield* readInputImages(params) : [];
+    if (runtime.activeTurn) return yield* providerFailure(this.#turnActiveError(runtime.activeTurn));
+    const turn = this.#beginTurn(runtime, turnId, false);
+    const context = this.#turnContext.take(threadId, text.startsWith("/"));
+    takePrompt(runtime, turnId);
+    const message: SDKUserMessage = {
+      type: "user",
+      message: {
+        role: "user",
+        content:
+          context.length > 0 || images.length > 0
+            ? [...context.map((block) => ({ type: "text" as const, text: block })), { type: "text", text }, ...images]
+            : text,
+      },
+      parent_tool_use_id: null,
+      uuid: turnId,
+      session_id: threadId,
+    };
+    turn.prompt = { requestedId: requestedTurnId ?? null, message, retries: 0 };
+    turn.messageIds.add(turnId);
+    runtime.input.push(message);
+    return { turn: { id: turnId, status: "inProgress" } };
+  });
+
+  readonly #openCompaction = Effect.fn("ClaudeAgentClient.openCompaction")(function* (
+    this: ClaudeAgentClient,
+    threadId: string,
+  ): Effect.fn.Return<TurnResponse, ProviderClientOperationError> {
+    yield* this.#threads.wake(threadId).pipe(toProviderClientOperationError);
+    const runtime = yield* providerSync(() => this.#requireThread(threadId));
+    if (runtime.activeTurn) return yield* providerFailure(this.#turnActiveError(runtime.activeTurn));
+    runtime.contextRequest += 1;
+    const turnId = randomUUID();
+    const turn = this.#beginTurn(runtime, turnId, false);
+    takePrompt(runtime, turnId);
+    turn.messageIds.add(turnId);
+    runtime.input.push({
+      type: "user",
+      message: { role: "user", content: CLAUDE_COMPACT_COMMAND },
+      parent_tool_use_id: null,
+      uuid: turnId,
+      session_id: threadId,
+    });
+    return { turn: { id: turnId, status: "inProgress" } };
+  });
+
+  #turnActiveError(turn: ActiveTurn): Error {
+    return turn.unprompted
+      ? new ProviderTurnActiveError("Claude")
+      : new Error("The Claude thread already has an active turn.");
+  }
+
+  #beginTurn(runtime: ThreadRuntime, turnId: string, unprompted: boolean): ActiveTurn {
+    const turn: ActiveTurn = {
       id: turnId,
       itemId: `${turnId}:assistant`,
       reasoningItemId: `${turnId}:reasoning`,
@@ -774,65 +1781,210 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
       publishedText: "",
       lastNarration: null,
       narrationCount: 0,
+      stopHookBlocked: false,
       thinking: "",
       thinkingStarted: false,
-      thinkingStreamId: null,
+      thinkingBlocks: new Map<string, string>(),
+      thinkingTail: null,
+      thinkingSnapshotCounts: new Map<string, number>(),
+      thinkingSnapshots: new Set<string>(),
       assistantMessages: new Map<string, string>(),
-      thinkingMessages: new Map<string, string>(),
-      toolCalls: new Map<string, string>(),
+      toolCalls: new Map<string, { name: string; input: Record<string, string> }>(),
       usageLimit: null,
+      ranTools: false,
+      authenticationFailed: false,
+      balanceSpent: false,
+      billingFailed: false,
+      modelNotFound: false,
+      retrying: false,
+      sandboxBlockedWarned: false,
+      unprompted,
+      prompt: null,
+      messageIds: new Set<string>(),
+      untakenSteerIds: new Set<string>(),
+      hostToolCalls: new Set<AbortController>(),
+      promptStarted: false,
+      lastActivityAt: Date.now(),
+      stalled: false,
+      hostRequests: 0,
+      personRequests: 0,
+      stopRequested: false,
       preview: { timer: null, sentAt: 0, shown: false },
     };
-    runtime.activeTurn = activeTurn;
+    const continues =
+      unprompted && !runtime.endedTaskTurns.includes(null) ? runtime.endedTaskTurns.filter(isString) : [];
+    runtime.endedTaskTurns = [];
+    if (!unprompted) runtime.subagentLimit = null;
+    runtime.activeTurn = turn;
+    runtime.nextTurnId = null;
+    runtime.awaitsResultTurn = false;
     startClaudePlanTurn(runtime.plan);
-    // Only now: a model or effort change that fails above leaves the idle timer armed, so the
-    // pool can still release the thread.
     this.#threads.holdForTurn(runtime);
     this.emit("notification", {
       method: "turn/started",
-      params: { threadId, turn: { id: turnId, status: "inProgress" } },
+      params: {
+        threadId: runtime.id,
+        turn: { id: turnId, status: "inProgress" },
+        ...(unprompted ? { unprompted } : {}),
+        ...(continues.length > 0 ? { continues } : {}),
+      },
     });
-    runtime.input.push({
-      type: "user",
-      message: { role: "user", content: text },
-      parent_tool_use_id: null,
-      uuid: turnId,
-      session_id: threadId,
-    });
-    return { turn: { id: turnId, status: "inProgress" } };
+    return turn;
   }
 
-  async #steerTurn(params: unknown): Promise<{ turnId: string }> {
-    const threadId = requiredString(params, "threadId");
-    const runtime = this.#requireThread(threadId);
-    const expectedTurnId = requiredString(params, "expectedTurnId");
-    if (!runtime.activeTurn || runtime.activeTurn.id !== expectedTurnId) {
-      throw new Error("The active Claude turn changed before steering was accepted.");
+  #noteEndedTask(runtime: ThreadRuntime, message: ClaudeStreamMessage, taskId: string, origin: string | null): void {
+    const turn = runtime.activeTurn;
+    if (!turn) {
+      runtime.endedTaskTurns.push(origin);
+      if (isString(message.run_id))
+        runtime.nextTurnId = claudeTaskTurnId(
+          isString(message.session_id) ? message.session_id : runtime.id,
+          taskId,
+          message.run_id,
+        );
+    } else if (turn.unprompted && origin !== turn.id)
+      this.emit("notification", {
+        method: "openbot/turn-continues",
+        params: { threadId: runtime.id, turnId: turn.id, continues: origin },
+      });
+  }
+
+  #holdSubagentLimit(runtime: ThreadRuntime, message: ClaudeStreamMessage): void {
+    const text = messageText(message.message);
+    const refusal = claudeUsageLimitRefusal(message);
+    if (isSpentBalanceDiagnostic(text) || (!refusal && !isPlanLimitDiagnostic(text))) return;
+    if (runtime.activeTurn && !runtime.activeTurn.unprompted) return;
+    runtime.subagentLimit = {
+      resetsAt: refusal?.resetsAt ?? null,
+      text: text || sourceText("error.provider.usageLimitReached"),
+    };
+  }
+
+  #outputTurn(runtime: ThreadRuntime): ActiveTurn {
+    return runtime.activeTurn ?? this.#beginTurn(runtime, runtime.nextTurnId ?? randomUUID(), true);
+  }
+
+  readonly #steerTurnEffect = Effect.fn("ClaudeAgentClient.steerTurn")(function* (
+    this: ClaudeAgentClient,
+    params: unknown,
+  ): Effect.fn.Return<{ turnId: string }, ProviderClientOperationError> {
+    const threadId = yield* providerSync(() => requiredString(params, "threadId"));
+    const expectedTurnId = yield* providerSync(() => requiredString(params, "expectedTurnId"));
+    const runtime = this.#threads.get(threadId);
+    if (!runtime?.activeTurn || runtime.activeTurn.id !== expectedTurnId) {
+      return yield* providerFailure(new Error(sourceText("error.backend.steerTurnChanged")));
     }
     const clientId = getString(params, "clientUserMessageId");
-    const messageId = clientId && isUuid(clientId) ? clientId : randomUUID();
+    const messageId = promptUuid(runtime, clientId);
+    takePrompt(runtime, messageId);
+    runtime.activeTurn.messageIds.add(messageId);
+    const stopsRunningTools = runtime.activeTurn.toolCalls.size > 0 && runtime.activeTurn.personRequests === 0;
+    if (stopsRunningTools) runtime.activeTurn.untakenSteerIds.add(messageId);
     runtime.input.push({
       type: "user",
       message: { role: "user", content: readInputText(params) },
       parent_tool_use_id: null,
       uuid: messageId,
       session_id: threadId,
+      ...(stopsRunningTools ? { priority: "now" as const } : {}),
     });
     return { turnId: runtime.activeTurn.id };
-  }
+  });
 
-  async #consume(runtime: ThreadRuntime): Promise<void> {
+  readonly #promptLifecycle = Effect.fn("ClaudeAgentClient.promptLifecycle")(function* (
+    this: ClaudeAgentClient,
+    runtime: ThreadRuntime,
+    uuid: unknown,
+    state: unknown,
+  ) {
+    const turn = runtime.activeTurn;
+    const prompt = turn?.prompt;
+    if (!turn || !prompt || uuid !== prompt.message.uuid) return;
+    if (state === "started") turn.promptStarted = true;
+    if (state !== "completed" || turn.promptStarted) return;
+    if (prompt.retries >= SKIPPED_PROMPT_RETRIES) {
+      queryLogger.warn("Claude skipped a message with each new id.", { threadId: runtime.id, retries: prompt.retries });
+      yield* this.#completeTurn(runtime, "failed", sourceText("error.provider.acpNoAnswer", { provider: "Claude" }));
+      return;
+    }
+    const retryId = promptUuid(runtime, prompt.requestedId ?? turn.id);
+    takePrompt(runtime, retryId);
+    prompt.message = { ...prompt.message, uuid: retryId };
+    turn.messageIds.add(retryId);
+    prompt.retries += 1;
+    queryLogger.warn("Claude skipped a message that its session holds, so it goes again with a new id.", {
+      threadId: runtime.id,
+      retries: prompt.retries,
+    });
     try {
-      for await (const message of runtime.query) this.#handleMessage(runtime, message);
+      runtime.input.push(prompt.message);
+    } catch {}
+  });
+
+  readonly #consume = Effect.fn("ClaudeAgentClient.consume")(function* (
+    this: ClaudeAgentClient,
+    runtime: ThreadRuntime,
+  ): Effect.fn.Return<void, ProviderClientOperationError> {
+    try {
+      let complete = false;
+      providerResult(
+        yield* Effect.result(
+          Effect.acquireUseRelease(
+            providerSync(() => runtime.query[Symbol.asyncIterator]()),
+            (iterator) =>
+              Effect.gen({ self: this }, function* () {
+                for (;;) {
+                  const next = yield* providerCall(() => iterator.next());
+                  if (next.done) {
+                    complete = true;
+                    break;
+                  }
+                  yield* this.#handleMessage(runtime, next.value);
+                }
+              }),
+            (iterator) => (complete ? Effect.void : providerCall(() => iterator.return?.()).pipe(Effect.asVoid)),
+          ),
+        ),
+      );
       if (this.#running && this.#threads.get(runtime.id) === runtime) {
         this.#fail(new Error("Claude session stream ended unexpectedly."));
       }
-    } catch (error) {
+    } catch (caught) {
       if (!this.#running || this.#threads.get(runtime.id) !== runtime) return;
-      const activeTurn = runtime.activeTurn;
-      if (activeTurn) this.#completeTurn(runtime, "failed", error);
-      this.#fail(error instanceof Error ? error : new Error(String(error)));
+      yield* this.#endFailedQuery(runtime, runtime.stderr.addTo(caught));
     }
+  });
+
+  readonly #endFailedQuery = Effect.fn("ClaudeAgentClient.endFailedQuery")(function* (
+    this: ClaudeAgentClient,
+    runtime: ThreadRuntime,
+    error: unknown,
+  ) {
+    const noSandbox = CLAUDE_SANDBOX_UNAVAILABLE.test(String(error));
+    if (!noSandbox && !runtime.answered) {
+      if (runtime.activeTurn) yield* this.#completeTurn(runtime, "failed", error);
+      this.#fail(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    queryLogger.warn(
+      noSandbox ? "Claude cannot start its sandbox for a Workspace only thread." : "A Claude query failed.",
+      { threadId: runtime.id, error: redactText(String(error)) },
+    );
+    yield* runtime.config.persistSession
+      ? this.#threads.releaseNow(runtime)
+      : Effect.forkIn(this.#threads.close(runtime), this.#scope, { startImmediately: true });
+    const turn = runtime.activeTurn;
+    if (!turn) return;
+    for (const [toolCallId, { name }] of turn.toolCalls) this.#emitToolCall(runtime, toolCallId, name, true);
+    turn.toolCalls.clear();
+    yield* this.#completeTurn(runtime, "failed", error);
+  });
+
+  #emitTurnProgress(runtime: ThreadRuntime, turn: ActiveTurn, detail: string): void {
+    this.emit("notification", {
+      method: "openbot/turn-progress",
+      params: { threadId: runtime.id, turnId: turn.id, detail },
+    });
   }
 
   #fail(error: Error): void {
@@ -841,45 +1993,213 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     this.emit("exit", error);
   }
 
-  #handleMessage(runtime: ThreadRuntime, message: ClaudeStreamMessage): void {
-    if (message.type === "rate_limit_event") {
-      const info = message.rate_limit_info;
+  readonly #handleMessage = Effect.fn("ClaudeAgentClient.handleMessage")(function* (
+    this: ClaudeAgentClient,
+    runtime: ThreadRuntime,
+    message: ClaudeStreamMessage,
+  ) {
+    runtime.lastOutputAt = Date.now();
+    if (runtime.activeTurn) runtime.activeTurn.lastActivityAt = runtime.lastOutputAt;
+    runtime.answered = true;
+    if (message.type === "command_lifecycle") {
+      yield* this.#promptLifecycle(runtime, message.command_uuid, message.state);
+      return;
+    }
+    if (
+      runtime.activeTurn &&
+      message.parent_tool_use_id === null &&
+      (message.type === "stream_event" || message.type === "assistant")
+    )
+      runtime.activeTurn.promptStarted = true;
+    if (message.type === "assistant") {
+      const id = getString(message.message, "id");
+      const model = getString(message.message, "model");
+      if (runtime.resumedUsage && id && model && isRecord(message.message))
+        runtime.requestUsage.set(id, { model, usage: message.message.usage });
+      const cacheTtl = message.parent_tool_use_id ? null : claudeCacheWriteTtlMs(message.message);
+      if (cacheTtl !== null) this.#cacheTtls.set(runtime.id, cacheTtl);
+    }
+    if (message.type === "system" && message.subtype === "init") yield* this.#reportFailedMcpServers(runtime, message);
+    if (message.type === "system" && message.subtype === "status") {
+      const status =
+        message.status === "compacting"
+          ? "running"
+          : message.compact_result === "success"
+            ? "completed"
+            : message.compact_result === "failed"
+              ? "failed"
+              : null;
+      if (status) runtime.compacting = status === "running";
+      if (status)
+        this.emit("notification", { method: "openbot/context-compaction", params: { threadId: runtime.id, status } });
+      return;
+    }
+    if (message.type === "system" && message.subtype === "api_retry") {
       const turn = runtime.activeTurn;
-      if (turn && isDynamicRecord(info) && info.status === "rejected") {
-        turn.usageLimit = { resetsAt: claudeResetSeconds(info.resetsAt), text: turn.usageLimit?.text ?? null };
+      if (!turn || typeof message.attempt !== "number" || typeof message.max_retries !== "number") return;
+      turn.retrying = true;
+      this.#emitTurnProgress(
+        runtime,
+        turn,
+        sourceText(
+          message.error_status === null && !message.no_response
+            ? "status.provider.retryUnreachable"
+            : "status.provider.retryServerError",
+          {
+            provider: "Claude",
+            attempt: message.attempt,
+            maxAttempts: message.max_retries,
+          },
+        ),
+      );
+      return;
+    }
+    if (
+      (message.type === "stream_event" || message.type === "assistant") &&
+      !message.error &&
+      runtime.activeTurn?.retrying
+    ) {
+      runtime.activeTurn.retrying = false;
+      this.#emitTurnProgress(
+        runtime,
+        runtime.activeTurn,
+        sourceText("status.provider.retryRecovered", { provider: "Claude" }),
+      );
+    }
+    if (message.type === "system" && message.subtype === "background_tasks_changed") {
+      const before = runtime.backgroundTasks;
+      runtime.backgroundTasks = Array.isArray(message.tasks)
+        ? message.tasks.filter((task) => !(isRecord(task) && task.ambient === true)).length
+        : 0;
+      if (before > 0 !== runtime.backgroundTasks > 0 || runtime.backgroundTasks > before)
+        this.#emitBackgroundWork(runtime);
+      if (!runtime.activeTurn) {
+        if (before === 0 && runtime.backgroundTasks > 0) this.#threads.holdForTurn(runtime);
+        else if (before > 0 && runtime.backgroundTasks === 0) {
+          runtime.awaitsResultTurn = true;
+          this.#threads.awaitOwnTurn(runtime);
+        }
       }
       return;
     }
+    if (message.type === "system" && message.subtype?.startsWith("task_") && isString(message.task_id)) {
+      const turn = runtime.activeTurn;
+      if (message.subtype === "task_started") {
+        const origin = startedTaskOrigin(runtime.taskTurns, message, turn);
+        if (origin !== undefined) runtime.taskTurns.set(message.task_id, origin);
+      } else if (message.subtype === "task_notification") {
+        const owner = runtime.taskTurns.get(message.task_id);
+        runtime.taskTurns.delete(message.task_id);
+        if (owner !== SUBAGENT_OWNED_TASK) this.#noteEndedTask(runtime, message, message.task_id, owner ?? null);
+      }
+    }
+    if (message.type === "system" && message.subtype?.startsWith("task_")) {
+      this.#emitSubagents(runtime, foldClaudeTaskMessage(runtime.subagents, message, new Date().toISOString()));
+      return;
+    }
+    if (message.type === "system" && message.subtype === "compact_boundary") {
+      runtime.compacting = false;
+      this.#turnContext.resend(runtime.id);
+      this.emit("notification", {
+        method: "openbot/context-compaction",
+        params: {
+          threadId: runtime.id,
+          status: "completed",
+        },
+      });
+      return;
+    }
+    if (message.context_usage && !message.parent_tool_use_id && isRecord(message.context_usage)) {
+      this.#emitContextUsage(runtime, message.context_usage.total_tokens, message.context_usage.raw_max_tokens);
+    }
+    if (message.type === "rate_limit_event") {
+      const info = message.rate_limit_info;
+      if (!isDynamicRecord(info)) return;
+      const turn = runtime.activeTurn;
+      if (turn && info.status === "rejected") {
+        turn.usageLimit = { resetsAt: claudeResetSeconds(info.resetsAt), text: turn.usageLimit?.text ?? null };
+      }
+      const windows = claudePushedWindows(info, this.#weeklyLimitKey);
+      if (windows)
+        this.emit("notification", {
+          method: "account/rateLimits/updated",
+          params: { rateLimits: { limitId: "claude", ...windows } },
+        });
+      return;
+    }
 
+    if (
+      (message.type === "stream_event" || message.type === "assistant") &&
+      !runtime.activeTurn &&
+      message.parent_tool_use_id === null &&
+      message.user_message_uuid &&
+      isUuid(message.user_message_uuid) &&
+      !message.resume_reason
+    )
+      runtime.nextTurnId = message.user_message_uuid;
     if (message.type === "stream_event" && message.parent_tool_use_id === null) {
       const event = message.event;
       const delta = isRecord(event) ? event.delta : null;
-      if (event && isRecord(event) && event.type === "content_block_delta" && isRecord(delta)) {
-        if (delta.type === "text_delta" && isString(delta.text)) this.#bufferText(runtime, delta.text);
-        else if (delta.type === "thinking_delta" && isString(delta.thinking)) {
-          this.#appendThinkingDelta(runtime, delta.thinking, message.uuid);
+      const block = isRecord(event) ? event.content_block : null;
+      if (isRecord(event) && event.type === "message_start") {
+        this.#closeBlockedReply(runtime);
+        runtime.streamMessage = { id: getString(event.message, "id"), thinkingBlocks: new Map<number, string>() };
+      } else if (
+        isRecord(event) &&
+        event.type === "content_block_start" &&
+        isRecord(block) &&
+        block.type === "thinking"
+      ) {
+        this.#streamThinkingBlock(runtime, event.index, true);
+      } else if (
+        isRecord(event) &&
+        event.type === "content_block_start" &&
+        isRecord(block) &&
+        (block.type === "tool_use" || block.type === "server_tool_use" || block.type === "mcp_tool_use")
+      ) {
+        this.#flushNarration(runtime);
+      } else if (event && isRecord(event) && event.type === "content_block_delta" && isRecord(delta)) {
+        if (delta.type === "text_delta" && isString(delta.text)) {
+          this.#outputTurn(runtime);
+          this.#bufferText(runtime, delta.text);
+        } else if (delta.type === "thinking_delta" && isString(delta.thinking)) {
+          this.#outputTurn(runtime);
+          this.#appendThinking(runtime, this.#streamThinkingBlock(runtime, event.index, false), delta.thinking);
         }
       }
       return;
     }
 
+    if (message.type === "assistant" && message.parent_tool_use_id && message.uuid) {
+      if (message.error === "rate_limit") this.#holdSubagentLimit(runtime, message);
+      this.#emitSubagents(
+        runtime,
+        foldClaudeSubagentMessage(runtime.subagents, message.parent_tool_use_id, message.uuid, message.message),
+      );
+      return;
+    }
     if (message.type === "assistant") {
-      if (message.parent_tool_use_id !== null) return;
-      const turn = runtime.activeTurn;
+      if (message.parent_tool_use_id !== null || !message.uuid || isClaudeNoResponsePlaceholder(message.message))
+        return;
+      const turn = this.#outputTurn(runtime);
       const text = messageText(message.message);
-      if (!turn || !message.uuid) return;
       if (message.error === "rate_limit") {
-        // A spent balance does not reset, so it is not held: the turn fails with its own text.
-        if (isBalanceDiagnostic(text)) turn.usageLimit = null;
-        else if (turn.usageLimit || isPlanLimitDiagnostic(text)) {
-          turn.usageLimit = { resetsAt: turn.usageLimit?.resetsAt ?? null, text: text || null };
+        const refusal = claudeUsageLimitRefusal(message);
+        if (isSpentBalanceDiagnostic(text)) {
+          turn.usageLimit = null;
+          turn.balanceSpent = true;
+        } else if (turn.usageLimit || refusal || isPlanLimitDiagnostic(text)) {
+          turn.usageLimit = { resetsAt: refusal?.resetsAt ?? turn.usageLimit?.resetsAt ?? null, text: text || null };
           return;
         }
       }
+      if (message.error === "authentication_failed") turn.authenticationFailed = true;
+      if (message.error === "billing_error") turn.billingFailed = true;
+      if (message.error === "model_not_found") turn.modelNotFound = true;
+      if (message.error && message.error !== "max_output_tokens") return;
+      this.#closeBlockedReply(runtime);
       const thinking = messageThinking(message.message);
-      /* The deltas never announced this block, so its own order is all there is to say what came
-         before it. Text the message placed there is narration, and only that much may go. */
-      if (thinking && message.uuid !== turn.thinkingStreamId) {
+      if (thinking) {
         const before = textBeforeThinking(message.message);
         if (before) {
           turn.assistantMessages.set(message.uuid, before);
@@ -888,29 +2208,35 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
           this.#flushNarration(runtime);
         }
       }
-      if (thinking) {
-        turn.thinkingMessages.set(message.uuid, thinking);
-        const completeThinking = [...turn.thinkingMessages.values()].join("\n");
-        if (completeThinking.startsWith(turn.thinking)) {
-          this.#appendThinkingDelta(runtime, completeThinking.slice(turn.thinking.length));
+      if (!turn.thinkingSnapshots.has(message.uuid)) {
+        turn.thinkingSnapshots.add(message.uuid);
+        const messageId = getString(message.message, "id") ?? message.uuid;
+        for (const blockText of messageThinkingBlocks(message.message)) {
+          const ordinal = turn.thinkingSnapshotCounts.get(messageId) ?? 0;
+          turn.thinkingSnapshotCounts.set(messageId, ordinal + 1);
+          if (blockText) this.#setThinkingBlock(runtime, `${messageId}:thinking:${ordinal}`, blockText, false);
         }
       }
-      /* Hold this message's own text first. Claude can omit the stream deltas and send one message
-         carrying the narration together with the call it introduces, and a flush that ran before
-         the text was held would see an empty buffer and leave that narration for the answer. */
       if (text) {
         turn.assistantMessages.set(message.uuid, text);
         this.#reconcileText(runtime, [...turn.assistantMessages.values()].join(""));
       }
       const toolCalls = messageToolCalls(message.message);
-      // A tool call closes the step, which makes the text before it narration rather than an answer.
-      if (toolCalls.length > 0) this.#flushNarration(runtime);
+      if (toolCalls.length > 0) {
+        turn.ranTools = true;
+        this.#flushNarration(runtime);
+      }
       for (const toolCall of toolCalls) {
         if (turn.toolCalls.has(toolCall.id)) continue;
-        turn.toolCalls.set(toolCall.id, toolCall.name);
-        this.#emitToolCall(runtime, toolCall.id, toolCall.name, false);
+        const name = claudeBridgedToolName(toolCall.name, toolCall.input);
+        turn.toolCalls.set(toolCall.id, { name, input: completedToolInput(toolCall.input) });
+        this.#emitToolCall(runtime, toolCall.id, name, false, toolCall.input);
         const plan = foldClaudePlanCall(runtime.plan, toolCall);
         if (plan) this.#emitPlan(runtime, plan);
+        this.#emitSubagents(
+          runtime,
+          foldClaudeSubagentCall(runtime.subagents, turn.id, toolCall, new Date().toISOString()),
+        );
       }
       return;
     }
@@ -918,27 +2244,74 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     if (message.type === "user") {
       const turn = runtime.activeTurn;
       if (!turn) return;
-      for (const { id: toolCallId, text } of messageToolResults(message.message)) {
-        // A subagent's task ids are its own, so only the main agent's results name a plan task.
-        if (!message.parent_tool_use_id) foldClaudePlanResult(runtime.plan, toolCallId, message.tool_use_result, text);
-        const name = turn.toolCalls.get(toolCallId);
-        if (!name) continue;
+      if (!message.parent_tool_use_id && messageText(message.message).startsWith(CLAUDE_STOP_HOOK_FEEDBACK))
+        turn.stopHookBlocked = true;
+      for (const { id: toolCallId, text, isError } of messageToolResults(message.message)) {
+        if (!message.parent_tool_use_id) {
+          foldClaudePlanResult(runtime.plan, toolCallId, message.tool_use_result, text);
+          this.#emitSubagents(
+            runtime,
+            foldClaudeSubagentResult(
+              runtime.subagents,
+              toolCallId,
+              message.tool_use_result,
+              isError,
+              text,
+              new Date().toISOString(),
+            ),
+          );
+        }
+        const call = turn.toolCalls.get(toolCallId);
+        if (!call) continue;
         turn.toolCalls.delete(toolCallId);
-        this.#emitToolCall(runtime, toolCallId, name, true);
+        this.#emitToolCall(
+          runtime,
+          toolCallId,
+          call.name,
+          true,
+          call.input,
+          isError ? text : null,
+          isError ? null : text,
+        );
+        if (
+          isError &&
+          call.name === "Bash" &&
+          runtime.config.workspaceOnly &&
+          !turn.sandboxBlockedWarned &&
+          CLAUDE_SANDBOX_BLOCKED.test(text)
+        ) {
+          turn.sandboxBlockedWarned = true;
+          queryLogger.warn("The Claude sandbox cannot start the agent's commands.");
+          this.emit("notification", {
+            method: "warning",
+            params: { threadId: runtime.id, turnId: turn.id, message: sourceText("error.agent.claudeSandboxBlocked") },
+          });
+        }
       }
       return;
     }
 
     if (message.type !== "result") return;
+    runtime.nextTurnId = null;
+    const fastModeDisabledReason =
+      runtime.appliedFastMode && isString(message.fast_mode_disabled_reason) ? message.fast_mode_disabled_reason : null;
+    if (fastModeDisabledReason && fastModeDisabledReason !== runtime.fastModeDisabledReason) {
+      queryLogger.warn("Claude ran a fast mode turn at the standard speed.", { reason: fastModeDisabledReason });
+      const warning = claudeFastModeWarning(fastModeDisabledReason);
+      if (warning && runtime.activeTurn) {
+        this.emit("notification", {
+          method: "warning",
+          params: { threadId: runtime.id, turnId: runtime.activeTurn.id, message: warning },
+        });
+        runtime.fastModeDisabledReason = fastModeDisabledReason;
+      }
+    } else runtime.fastModeDisabledReason = fastModeDisabledReason;
     if (
       message.subtype === "success" &&
       message.total_cost_usd !== undefined &&
       message.total_cost_usd < runtime.usageCost
-    ) {
-      // The totals start again from zero, so they need a counter with no checkpoint.
+    )
       runtime.usageCounterId = randomUUID();
-      runtime.usageResumed = false;
-    }
     if (message.subtype === "success" || (message.total_cost_usd ?? 0) > runtime.usageCost)
       runtime.usageCost = message.total_cost_usd ?? runtime.usageCost;
     if (runtime.activeTurn && message.modelUsage) {
@@ -948,13 +2321,12 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
           threadId: runtime.id,
           turnId: runtime.activeTurn.id,
           counterId: runtime.usageCounterId,
-          // The collector reads this to keep totals of a session that has no checkpoint yet, such
-          // as one from an earlier version, as a baseline and not as new usage.
-          resumed: runtime.usageResumed,
           modelUsage: message.modelUsage,
+          ...(runtime.resumedUsage ? { turnModelUsage: claudeTurnModelUsage(runtime.requestUsage.values()) } : {}),
         },
       });
-      runtime.usageResumed = false;
+      runtime.resumedUsage = false;
+      runtime.requestUsage.clear();
     }
     const fallback = message.subtype === "success" ? message.result : "";
     const errors = message.errors ?? [];
@@ -963,26 +2335,59 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
       message.terminal_reason === "aborted_tools" ||
       errors.some((error) => /interrupt|abort/i.test(error));
     const turn = runtime.activeTurn;
-    if (turn) {
-      for (const [toolCallId, name] of turn.toolCalls) {
+    if (turn?.prompt && !interrupted && isOtherTurnResult(message, turn.messageIds)) {
+      queryLogger.info("Claude ended a turn of its own before the message's turn.", { threadId: runtime.id });
+      return;
+    }
+    if (turn) for (const uuid of takenMessageIds(message)) turn.untakenSteerIds.delete(uuid);
+    if (turn && interrupted && !turn.stopRequested && turn.untakenSteerIds.size > 0) {
+      for (const [toolCallId, { name }] of turn.toolCalls) {
         this.#emitToolCall(runtime, toolCallId, name, true);
       }
       turn.toolCalls.clear();
-      // A rejected window alone is not a failure: the request can still run on overage. Only the
-      // refusal message, or a request that then failed with an API error, ends the turn on the limit.
-      const limit = turn.usageLimit;
+      for (const hostToolCall of turn.hostToolCalls) hostToolCall.abort();
+      turn.hostToolCalls.clear();
+      queryLogger.info("Claude stopped its running tools to take a steered message.", { threadId: runtime.id });
+      return;
+    }
+    const apiError = message.subtype === "success" && message.is_error === true;
+    if (turn) {
+      for (const [toolCallId, { name }] of turn.toolCalls) {
+        this.#emitToolCall(runtime, toolCallId, name, true);
+      }
+      turn.toolCalls.clear();
+      const limitError = apiError && (message.api_error_status == null || message.api_error_status === 429);
+      const held = turn.unprompted ? runtime.subagentLimit : null;
+      if (turn.unprompted) runtime.subagentLimit = null;
+      const subagentLimit =
+        held &&
+        (held.resetsAt ?? Number.POSITIVE_INFINITY) * 1_000 > Date.now() &&
+        turn.usageLimit?.text == null &&
+        !turn.seenText &&
+        !fallback &&
+        !turn.ranTools &&
+        !turn.balanceSpent &&
+        !turn.billingFailed &&
+        !turn.authenticationFailed &&
+        message.subtype === "success" &&
+        (!apiError || limitError)
+          ? held
+          : null;
+      const limit = subagentLimit
+        ? { resetsAt: subagentLimit.resetsAt ?? turn.usageLimit?.resetsAt ?? null, text: subagentLimit.text }
+        : turn.usageLimit;
       if (
         limit &&
         !interrupted &&
-        (limit.text !== null || (message.subtype === "success" && message.is_error === true)) &&
-        !isBalanceDiagnostic(limit.text ?? `${errors.join("\n")}\n${fallback}`)
+        (limit.text !== null || limitError) &&
+        !isSpentBalanceDiagnostic(limit.text ?? `${errors.join("\n")}\n${fallback}`)
       ) {
         this.emit("notification", {
           method: USAGE_LIMIT_METHOD,
           params: { threadId: runtime.id, turnId: turn.id, resetsAt: limit.resetsAt },
         });
         this.#reconcileText(runtime, [...turn.assistantMessages.values()].join(""));
-        this.#completeTurn(
+        yield* this.#completeTurn(
           runtime,
           "failed",
           limit.text ?? (errors.join("\n") || fallback || sourceText("error.provider.usageLimitReached")),
@@ -990,22 +2395,130 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
         return;
       }
       this.#reconcileText(runtime, [...turn.assistantMessages.values()].join(""));
-      if (!turn.seenText && fallback) this.#bufferText(runtime, fallback);
+      const structured =
+        runtime.config.outputSchema && message.subtype === "success" && message.structured_output !== undefined
+          ? JSON.stringify(message.structured_output)
+          : null;
+      if (structured !== null && !apiError) this.#bufferText(runtime, structured);
+      else if (!turn.seenText && fallback && fallback !== CLAUDE_NO_RESPONSE_TEXT && !apiError)
+        this.#bufferText(runtime, fallback);
     }
-    const status = interrupted ? "interrupted" : message.subtype === "success" ? "completed" : "failed";
-    this.#completeTurn(runtime, status, errors.length > 0 ? errors.join("\n") : null);
+    const status = interrupted ? "interrupted" : message.subtype === "success" && !apiError ? "completed" : "failed";
+    yield* this.#completeTurn(runtime, status, errors.length > 0 ? errors.join("\n") : apiError ? fallback : null);
+    const contextRequest = ++runtime.contextRequest;
+    if (runtime.query.getContextUsage)
+      yield* Effect.forkIn(
+        providerCall(() => runtime.query.getContextUsage?.({ detail: "summary" })).pipe(
+          Effect.timeout("2 seconds"),
+          Effect.tap((usage) =>
+            Effect.sync(() => {
+              if (
+                this.#threads.get(runtime.id) !== runtime ||
+                runtime.contextRequest !== contextRequest ||
+                runtime.activeTurn ||
+                !isRecord(usage)
+              )
+                return;
+              this.#emitContextUsage(runtime, usage.totalTokens, usage.rawMaxTokens, claudeContextCategories(usage));
+            }),
+          ),
+          Effect.ignore,
+        ),
+        this.#scope,
+      );
+  });
+
+  #emitContextUsage(
+    runtime: ThreadRuntime,
+    used: unknown,
+    window: unknown,
+    categories?: AgentContextCategoryUsage[],
+  ): void {
+    if (
+      typeof used !== "number" ||
+      !Number.isFinite(used) ||
+      used < 0 ||
+      typeof window !== "number" ||
+      !Number.isFinite(window) ||
+      window <= 0
+    )
+      return;
+    this.emit("notification", {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: runtime.id,
+        tokenUsage: {
+          last: { totalTokens: used },
+          modelContextWindow: window,
+          estimated: true,
+          ...(categories ? { categories } : {}),
+        },
+      },
+    });
   }
 
-  #emitToolCall(runtime: ThreadRuntime, id: string, name: string, completed: boolean): void {
+  #emitToolCall(
+    runtime: ThreadRuntime,
+    id: string,
+    name: string,
+    completed: boolean,
+    input?: unknown,
+    failure: string | null = null,
+    output: string | null = null,
+  ): void {
     const turn = runtime.activeTurn;
     if (!turn) return;
+    const bridged = name === "mcp__openbot__tool_call" && isRecord(input) && input.name === "openbot.send_message";
+    const message = name === "mcp__openbot__send_message" ? input : bridged ? input.arguments : undefined;
+    const recipients =
+      isRecord(message) && Array.isArray(message.recipientAgentIds)
+        ? { recipientAgentIds: message.recipientAgentIds }
+        : null;
     this.emit("notification", {
       method: completed ? "item/completed" : "item/started",
       params: {
         threadId: runtime.id,
         turnId: turn.id,
-        item: { id, type: "toolCall", name, status: completed ? "completed" : "in_progress" },
+        filePaths:
+          ["Read", "Write", "Edit", "MultiEdit"].includes(name) &&
+          isRecord(input) &&
+          typeof input.file_path === "string"
+            ? [input.file_path]
+            : undefined,
+        folderPaths:
+          completed && failure === null && ["Glob", "Grep", "LS"].includes(name) && isRecord(input)
+            ? [input.path].filter((path) => typeof path === "string")
+            : undefined,
+        item: {
+          id,
+          type: "toolCall",
+          name,
+          status: completed ? (failure === null ? "completed" : "failed") : "in_progress",
+          ...(completed && failure ? { error: textEnds(failure) } : {}),
+          ...(completed && !failure && output ? { output: textEnds(output) } : {}),
+          ...(name === "Skill" && isRecord(input) && typeof input.skill === "string"
+            ? { skill: input.skill.slice(0, INPUT_LIMITS.identifier) }
+            : {}),
+          ...(!completed && LABELLED_TOOLS.has(name) && isRecord(input) && typeof input.description === "string"
+            ? { description: input.description.slice(0, TOOL_DESCRIPTION_LIMIT) }
+            : {}),
+          ...(completed ? {} : claudeStepTarget(name, input)),
+          ...(name === "Bash" && isRecord(input) && typeof input.command === "string"
+            ? { command: input.command.slice(0, INPUT_LIMITS.messageText) }
+            : {}),
+          ...(recipients === null
+            ? {}
+            : { arguments: bridged ? { name: "openbot.send_message", arguments: recipients } : recipients }),
+        },
       },
+    });
+  }
+
+  #emitSubagents(runtime: ThreadRuntime, change: SubagentChange | null): void {
+    if (!change) return;
+    this.emit("notification", {
+      method: SUBAGENTS_UPDATED_METHOD,
+      params: { threadId: runtime.id, turnId: change.turnId, subagents: change.subagents },
     });
   }
 
@@ -1018,15 +2531,47 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     });
   }
 
-  /* Claude streams reasoning as its own content block; the app-server vocabulary carries it as a
-     separate agentMessage item whose `commentary` phase becomes the thinking disclosure. */
-  #appendThinkingDelta(runtime: ThreadRuntime, delta: string, streamId?: string): void {
+  #streamThinkingBlock(runtime: ThreadRuntime, index: unknown, starts: boolean): string {
+    const stream = runtime.streamMessage;
+    const position = typeof index === "number" ? index : -1;
+    const known = stream.thinkingBlocks.get(position);
+    if (known && !starts) return known;
+    stream.id ??= randomUUID();
+    const key = `${stream.id}:thinking:${stream.thinkingBlocks.size}`;
+    stream.thinkingBlocks.set(position, key);
+    return key;
+  }
+
+  #appendThinking(runtime: ThreadRuntime, key: string, delta: string): void {
     const turn = runtime.activeTurn;
     if (!turn || !delta) return;
-    /* A thinking block beginning closes the step. Filling in the rest of one that already began
-       does not, and a message carries that backfill with no stream of its own: flushing there
-       would publish text the turn holds for its answer as narration and end with no answer. */
-    if (streamId !== undefined && streamId !== turn.thinkingStreamId) this.#flushNarration(runtime);
+    const previous = turn.thinkingBlocks.get(key);
+    if (previous && key === turn.thinkingTail) {
+      turn.thinkingBlocks.set(key, `${previous}${delta}`);
+      this.#emitThinking(runtime, delta);
+      return;
+    }
+    this.#setThinkingBlock(runtime, key, `${previous ?? ""}${delta}`, true);
+  }
+
+  #setThinkingBlock(runtime: ThreadRuntime, key: string, text: string, streamed: boolean): void {
+    const turn = runtime.activeTurn;
+    if (!turn || !text || turn.thinkingBlocks.get(key) === text) return;
+    const begins = !turn.thinkingBlocks.has(key);
+    if (streamed && begins) this.#flushNarration(runtime);
+    turn.thinkingBlocks.set(key, text);
+    if (begins) turn.thinkingTail = key;
+    const thinking = [...turn.thinkingBlocks.values()].join("\n");
+    if (thinking.startsWith(turn.thinking)) {
+      this.#emitThinking(runtime, thinking.slice(turn.thinking.length));
+      return;
+    }
+    turn.thinking = thinking;
+  }
+
+  #emitThinking(runtime: ThreadRuntime, delta: string): void {
+    const turn = runtime.activeTurn;
+    if (!turn || !delta) return;
     if (!turn.thinkingStarted) {
       turn.thinkingStarted = true;
       this.emit("notification", {
@@ -1038,23 +2583,18 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
         },
       });
     }
-    const nextDelta = streamId && turn.thinkingStreamId && streamId !== turn.thinkingStreamId ? `\n${delta}` : delta;
-    if (streamId) turn.thinkingStreamId = streamId;
-    turn.thinking += nextDelta;
+    turn.thinking += delta;
     this.emit("notification", {
       method: "item/agentMessage/delta",
       params: {
         threadId: runtime.id,
         turnId: turn.id,
         itemId: turn.reasoningItemId,
-        delta: nextDelta,
+        delta,
       },
     });
   }
 
-  /* Claude cannot say which text is its answer while the text arrives: the narration before a tool
-     call reads the same as the reply that ends the turn. Hold it here instead of streaming it into
-     the answer item, where every word of it drew a chat bubble that the end of the turn rewrote. */
   #bufferText(runtime: ThreadRuntime, delta: string): void {
     const turn = runtime.activeTurn;
     if (!turn || !delta) return;
@@ -1095,14 +2635,6 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     this.emit("notification", { method: TEXT_PREVIEW_METHOD, params: { threadId, turnId, text } });
   }
 
-  /**
-   * Let the complete assistant messages correct what the stream delivered.
-   *
-   * A delta can go missing, and the complete messages are the ones Claude stands behind. They can
-   * only rewrite what no step boundary has published yet, so this has to run before every flush
-   * while the current step can still be corrected: publishing a stale step would strand every
-   * later comparison behind text Claude never sent, and the answer would be dropped with it.
-   */
   #reconcileText(runtime: ThreadRuntime, completeText: string): void {
     const turn = runtime.activeTurn;
     if (!turn) return;
@@ -1119,14 +2651,6 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     this.#correctNarration(runtime, completeText);
   }
 
-  /**
-   * Put right the narration a boundary published before any message stood behind it.
-   *
-   * Thinking closes a step while the message carrying the text is still arriving, so the only text
-   * there is to publish is what the deltas gave. When the message then disagrees, the published
-   * segment is republished under its own ID rather than left to strand every later comparison
-   * behind words Claude never sent. Text already held for the answer is not taken into it.
-   */
   #correctNarration(runtime: ThreadRuntime, completeText: string): void {
     const turn = runtime.activeTurn;
     const last = turn?.lastNarration;
@@ -1138,7 +2662,6 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     if (!corrected || corrected === last.text) return;
     last.text = corrected;
     turn.publishedText = `${prefix}${corrected}`;
-    // Whatever the correction did not take is the answer's again, so the two stay in step.
     turn.text = completeText.slice(prefix.length + corrected.length);
     turn.seenText = completeText;
     this.emit("notification", {
@@ -1151,7 +2674,14 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     });
   }
 
-  /** Publish held text as the thinking disclosure, which is what a step boundary proves it was. */
+  #closeBlockedReply(runtime: ThreadRuntime): void {
+    const turn = runtime.activeTurn;
+    if (!turn?.stopHookBlocked) return;
+    turn.stopHookBlocked = false;
+    this.#reconcileText(runtime, [...turn.assistantMessages.values()].join(""));
+    this.#flushNarration(runtime);
+  }
+
   #flushNarration(runtime: ThreadRuntime): void {
     const turn = runtime.activeTurn;
     if (!turn?.text) return;
@@ -1172,11 +2702,23 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     this.#clearPreview(turn, runtime.id);
   }
 
-  #completeTurn(runtime: ThreadRuntime, status: string, error: unknown): void {
+  readonly #completeTurn = Effect.fn("ClaudeAgentClient.completeTurn")(function* (
+    this: ClaudeAgentClient,
+    runtime: ThreadRuntime,
+    status: string,
+    error: unknown,
+  ) {
     const turn = runtime.activeTurn;
     if (!turn) return;
     // Cleared first, so the answer never shows twice: once as the preview, once as the message.
     this.#clearPreview(turn, runtime.id);
+    if (runtime.compacting && status !== "completed") {
+      runtime.compacting = false;
+      this.emit("notification", {
+        method: "openbot/context-compaction",
+        params: { threadId: runtime.id, status: "failed" },
+      });
+    }
     if (turn.thinkingStarted) {
       this.emit("notification", {
         method: "item/completed",
@@ -1196,52 +2738,77 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
       },
     });
     if (status === "failed" && error) {
+      const blocked = CLAUDE_CLOUDFLARE_BLOCK.test(String(error));
+      if (blocked) queryLogger.warn("Cloudflare blocked a Claude request.", { error: redactText(String(error)) });
+      const signInFailed = !blocked && (turn.authenticationFailed || CLAUDE_NOT_LOGGED_IN.test(String(error)));
+      const billing = turn.billingFailed || (turn.balanceSpent && isBalanceDiagnostic(String(error)));
+      const apiKey = this.#usesApiKey();
+      const message = claudeTurnError(error, apiKey, !apiKey && runtime.firstPartyApi && this.#onClaudeAccount());
+      const crashed = message === String(error) && claudeProcessExited(error) && classifyFailure(message) === "unknown";
       this.emit("notification", {
         method: "error",
-        params: { threadId: runtime.id, turnId: turn.id, message: String(error) },
+        params: {
+          threadId: runtime.id,
+          turnId: turn.id,
+          message,
+          ...(blocked
+            ? { causeCode: "provider_unavailable" }
+            : signInFailed
+              ? { causeCode: "authentication" }
+              : billing
+                ? { causeCode: "billing" }
+                : turn.modelNotFound
+                  ? { causeCode: "model_not_found" }
+                  : turn.stalled
+                    ? { causeCode: "stalled" }
+                    : crashed
+                      ? { causeCode: "provider_exited" }
+                      : {}),
+        },
       });
     }
+    this.#emitSubagents(runtime, endSubagentTurn(runtime.subagents, turn.id, new Date().toISOString()));
     this.emit("notification", {
       method: "turn/completed",
       params: { threadId: runtime.id, turn: { id: turn.id, status } },
     });
     runtime.activeTurn = null;
-    this.#threads.markIdle(runtime);
-  }
+    yield* this.#threads.markIdle(runtime);
+  });
 
-  async #readThread(threadId: string): Promise<ThreadResponse> {
+  readonly #readThreadEffect = Effect.fn("ClaudeAgentClient.readThread")(function* (
+    this: ClaudeAgentClient,
+    threadId: string,
+  ): Effect.fn.Return<ThreadResponse, ProviderClientOperationError> {
     const cwd = this.#threads.get(threadId)?.config.cwd ?? this.#threads.released(threadId)?.cwd;
-    const readSessionMessages = this.#readSessionMessages;
-    if (!readSessionMessages) {
-      // thread/read is a released full-history response. Build it for this response only, from bounded pages.
+    if (!this.#readSessionMessages) {
       const turns: NonNullable<ThreadResponse["thread"]["turns"]> = [];
       let currentTurn: (typeof turns)[number] | null = null;
-      await this.readHistory({ threadId, ...(cwd === undefined ? {} : { cwd }), items: "full" }, async (fragment) => {
-        if (currentTurn?.id === fragment.turnId) {
-          currentTurn.items = [...(currentTurn.items ?? []), ...fragment.items];
+      yield* this.readHistory({ threadId, ...(cwd === undefined ? {} : { cwd }), items: "full" }, (fragment) =>
+        Effect.sync(() => {
+          if (currentTurn?.id === fragment.turnId) {
+            currentTurn.items = [...(currentTurn.items ?? []), ...fragment.items];
+            return true;
+          }
+          currentTurn = {
+            id: fragment.turnId,
+            status: fragment.status ?? "completed",
+            ...(fragment.startedAt === undefined ? {} : { startedAt: fragment.startedAt }),
+            items: fragment.items,
+          };
+          turns.unshift(currentTurn);
           return true;
-        }
-        currentTurn = {
-          id: fragment.turnId,
-          status: fragment.status ?? "completed",
-          ...(fragment.startedAt === undefined ? {} : { startedAt: fragment.startedAt }),
-          items: fragment.items,
-        };
-        turns.unshift(currentTurn);
-        return true;
-      });
+        }),
+      );
       return { thread: { id: threadId, turns } };
     }
-    const messages = await readSessionMessages(threadId, cwd ? { dir: cwd } : undefined);
+    const readSessionMessages = this.#readSessionMessages;
+    if (!readSessionMessages) return { thread: { id: threadId, turns: [] } };
+    const messages = yield* providerCall(() => readSessionMessages(threadId, cwd ? { dir: cwd } : undefined));
     const turns: NonNullable<ThreadResponse["thread"]["turns"]> = [];
     let current: (typeof turns)[number] | null = null;
     let currentThinking: ThreadItem | null = null;
-    /* Only a turn's last answer is an answer. Every earlier one was narration between tool calls,
-       so it is demoted as soon as the next one proves it was not the end of the turn. A restored
-       thread otherwise reopens with the chat bubbles a live turn no longer draws. */
     let currentAnswer: ThreadItem | null = null;
-    /* Claude writes its compaction summary as a user entry, and the reply after it finishes a turn
-       the app already published live under that turn's own ID. Neither is restored. */
     let skippingCompaction = false;
     for (const message of messages) {
       if (message.parent_tool_use_id) continue;
@@ -1254,8 +2821,6 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
           continue;
         }
         skippingCompaction = false;
-        /* A task notification or a slash command still opens the turn that answers it. The user did not
-           write that text: the mailbox already holds the command as the user sent it. */
         current = {
           id: message.uuid,
           status: "completed",
@@ -1275,7 +2840,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
         currentThinking = null;
         currentAnswer = null;
       } else if (message.type === "assistant") {
-        if (skippingCompaction) continue;
+        if (skippingCompaction || isClaudeNoResponsePlaceholder(message.message)) continue;
         const thinking = messageThinking(message.message);
         const endsStep = messageToolCalls(message.message).length > 0;
         if (!thinking && !text && !endsStep) continue;
@@ -1286,12 +2851,8 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
           currentAnswer = null;
         }
         if (!current) continue;
-        /* One message can hold text on both sides of its thinking, and only what follows can be
-           the answer. The live turn splits it there, so restoring has to split it the same way. */
         const beforeThinking = thinking ? textBeforeThinking(message.message) : "";
         if (thinking) {
-          /* Thinking closes the step for a live turn, so it has to close it here as well. A turn
-             that stopped while thinking otherwise keeps the text that led to it as the answer. */
           if (currentAnswer) {
             currentAnswer.phase = "commentary";
             currentAnswer = null;
@@ -1322,9 +2883,6 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
           currentAnswer = { id: message.uuid, type: "agentMessage", text: answerText };
           current.items?.push(currentAnswer);
         }
-        /* A tool call closes the step here too, including one the same message introduced. Without
-           this, a turn that stopped on its tool call keeps the narration that led to it as the
-           answer, and restores the bubble the live path removed. */
         if (endsStep && currentAnswer) {
           currentAnswer.phase = "commentary";
           currentAnswer = null;
@@ -1332,120 +2890,167 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
       }
     }
     return { thread: { id: threadId, turns } };
-  }
+  });
 
-  /** The one server of a Slack reply context session: the OpenBot tools that it may use. */
+  /** The one server of a Slack reply context session: the GoAhead tools that it may use. */
   #createSlackReplyServers(threadId: string) {
+    const call = (name: string, args: unknown) =>
+      runCauseEffect(this.#callDynamicTool(threadId, "openbot", name, args));
     return {
       openbot: createSdkMcpServer({
         name: "openbot",
         version: "0.1.0",
         // Always loaded: the session has no built-in tools, so it has no ToolSearch to find it with.
         alwaysLoad: true,
-        tools: OPENBOT_TOOL_DEFINITIONS.filter((definition) => SLACK_REPLY_TOOLS.has(definition.name)).map(
-          (definition) =>
-            tool(definition.name, definition.description, definition.shape, (args) =>
-              this.#callDynamicTool(threadId, "openbot", definition.name, args),
-            ),
-        ),
+        tools: claudeOpenBotTools(call).filter((definition) => SLACK_REPLY_TOOLS.has(definition.name)),
       }),
     };
   }
 
-  #createOpenBotServers(threadId: string) {
+  #createOpenBotServers(threadId: string, channelTools: boolean) {
     const call = (namespace: string, name: string, args: unknown) =>
-      this.#callDynamicTool(threadId, namespace, name, args);
+      runCauseEffect(this.#callDynamicTool(threadId, namespace, name, args));
     return {
-      openbot_browser: createSdkMcpServer({
-        name: OPENBOT_BROWSER_NAMESPACE,
-        version: "0.2.0",
-        tools: BROWSER_TOOL_DEFINITIONS.map((definition) =>
-          tool(definition.name, definition.description, definition.shape, (args) =>
-            call(OPENBOT_BROWSER_NAMESPACE, definition.name, args),
-          ),
-        ),
-      }),
       openbot: createSdkMcpServer({
         name: "openbot",
         version: "0.1.0",
-        // Claude uses the SDK's AskUserQuestion permission flow.
-        // The rest wait behind ToolSearch, as `ENABLE_TOOL_SEARCH` in `claudeEnvironment` asks.
-        tools: OPENBOT_TOOL_DEFINITIONS.filter((definition) => definition.name !== "ask_user").map((definition) =>
-          tool(
-            definition.name,
-            definition.description,
-            definition.shape,
-            (args) => call("openbot", definition.name, args),
-            { alwaysLoad: ALWAYS_LOADED_OPENBOT_TOOLS.has(definition.name) },
-          ),
-        ),
+        tools: claudeOpenBotTools((name, args) => call("openbot", name, args), channelTools),
+      }),
+      [OPENBOT_BROWSER_NAMESPACE]: createSdkMcpServer({
+        name: OPENBOT_BROWSER_NAMESPACE,
+        version: "0.1.0",
+        alwaysLoad: true,
+        tools: claudeBrowserTools((name, args) => call(OPENBOT_BROWSER_NAMESPACE, name, args)),
       }),
     };
   }
 
-  async #callDynamicTool(threadId: string, namespace: string, name: string, args: unknown): Promise<CallToolResult> {
-    const runtime = this.#requireThread(threadId);
-    const result = await this.#serverRequests.call("item/tool/call", {
+  readonly #callDynamicTool = Effect.fn("ClaudeAgentClient.callDynamicTool")(function* (
+    this: ClaudeAgentClient,
+    threadId: string,
+    namespace: string,
+    name: string,
+    args: unknown,
+  ): Effect.fn.Return<CallToolResult, ProviderClientOperationError> {
+    const runtime = yield* providerSync(() => this.#requireThread(threadId));
+    const turn = runtime.activeTurn;
+    const hostToolCall = new AbortController();
+    turn?.hostToolCalls.add(hostToolCall);
+    const result = yield* this.#awaitHost(
       threadId,
-      turnId: runtime.activeTurn?.id ?? randomUUID(),
-      callId: randomUUID(),
-      namespace,
-      tool: name,
-      arguments: args,
-    });
+      this.#serverRequests.call(
+        "item/tool/call",
+        {
+          threadId,
+          turnId: turn?.id ?? randomUUID(),
+          callId: randomUUID(),
+          namespace,
+          tool: name,
+          arguments: args,
+        },
+        hostToolCall.signal,
+      ),
+    ).pipe(
+      Effect.ensuring(Effect.sync(() => turn?.hostToolCalls.delete(hostToolCall))),
+      toProviderClientOperationError,
+    );
     if (!isRecord(result)) return { content: [{ type: "text" as const, text: String(result) }] };
     const content: CallToolResult["content"] = [];
     if (Array.isArray(result.contentItems)) {
       for (const item of result.contentItems) content.push(...dynamicContent(item));
     }
-    return { content, isError: result.success === false };
-  }
+    return { content, isError: result.success === false || terminalToolRefusal(namespace, name, content) };
+  });
 
-  async #requestUserInput(threadId: string, input: DynamicRecord, toolUseId: string): Promise<PermissionResult> {
-    const runtime = this.#requireThread(threadId);
+  readonly #requestUserInputEffect = Effect.fn("ClaudeAgentClient.requestUserInput")(function* (
+    this: ClaudeAgentClient,
+    threadId: string,
+    input: DynamicRecord,
+    toolUseId: string,
+  ): Effect.fn.Return<PermissionResult, ProviderClientOperationError> {
+    const runtime = yield* providerSync(() => this.#requireThread(threadId));
     const rawQuestions = Array.isArray(input.questions) ? input.questions.filter(isRecord) : [];
     const questions = rawQuestions.map((question, index) => ({
       id: `question-${index}`,
       header: isString(question.header) ? question.header : "Question",
       question: isString(question.question) ? question.question : "Claude needs more information.",
       options: Array.isArray(question.options) ? question.options : undefined,
+      ...(question.multiSelect === true ? { multiSelect: true } : {}),
     }));
-    const result = await this.#serverRequests.call("item/tool/requestUserInput", {
+    const result = yield* this.#awaitPerson(
       threadId,
-      turnId: runtime.activeTurn?.id ?? randomUUID(),
-      itemId: toolUseId,
-      questions,
-    });
+      this.#serverRequests.call("item/tool/requestUserInput", {
+        threadId,
+        turnId: runtime.activeTurn?.id ?? randomUUID(),
+        itemId: toolUseId,
+        questions,
+      }),
+    ).pipe(toProviderClientOperationError);
     const responseAnswers = isRecord(result) && isRecord(result.answers) ? result.answers : {};
+    const note = isRecord(result) && isString(result.note) ? result.note : "";
     const answers = Object.fromEntries(
       questions.map((question) => {
         const entry = responseAnswers[question.id];
         const values = isRecord(entry) && Array.isArray(entry.answers) ? entry.answers : [];
-        return [question.question, values.filter((value): value is string => isString(value)).join(", ")];
+        return [question.question, values.filter((value): value is string => isString(value)).join(", ") || note];
       }),
     );
     return { behavior: "allow", updatedInput: { questions: input.questions, answers } };
-  }
+  });
 
-  /**
-   * A Workspace only agent's file write outside its roots, shown as a file-change approval. The
-   * approval registry never answers it without the user, as for a Codex write outside the sandbox.
-   */
-  async #requestWriteApproval(
+  readonly #requestElicitationEffect = Effect.fn("ClaudeAgentClient.requestElicitation")(function* (
+    this: ClaudeAgentClient,
+    threadId: string,
+    request: Parameters<OnElicitation>[0],
+    signal: AbortSignal,
+  ): Effect.fn.Return<ElicitationResult> {
+    const result = yield* this.#awaitPerson(
+      threadId,
+      this.#serverRequests.call(
+        "mcpServer/elicitation/request",
+        {
+          threadId,
+          turnId: this.#threads.get(threadId)?.activeTurn?.id ?? randomUUID(),
+          serverName: request.serverName,
+          mode: request.mode ?? "form",
+          message: request.message,
+          requestedSchema: request.requestedSchema ?? null,
+          url: request.url ?? null,
+          elicitationId: request.elicitationId ?? null,
+        },
+        signal,
+      ),
+    ).pipe(Effect.orElseSucceed(() => ({ action: "cancel" })));
+    const action = getString(result, "action");
+    if (action !== "accept") return { action: action === "decline" ? "decline" : "cancel" };
+    const content: NonNullable<ElicitationResult["content"]> = {};
+    const answers = isRecord(result) && isRecord(result.content) ? result.content : {};
+    for (const [id, value] of Object.entries(answers)) {
+      if (isString(value) || isNumber(value) || typeof value === "boolean") content[id] = value;
+      else if (Array.isArray(value) && value.every(isString)) content[id] = value;
+    }
+    return { action, content };
+  });
+
+  readonly #requestWriteApprovalEffect = Effect.fn("ClaudeAgentClient.requestWriteApproval")(function* (
+    this: ClaudeAgentClient,
     threadId: string,
     path: string,
     toolInput: DynamicRecord,
     toolUseId: string,
-  ): Promise<PermissionResult> {
-    const result = await this.#serverRequests.call("item/fileChange/requestApproval", {
+  ): Effect.fn.Return<PermissionResult, ProviderClientOperationError> {
+    const result = yield* this.#awaitPerson(
       threadId,
-      turnId: this.#threads.get(threadId)?.activeTurn?.id ?? randomUUID(),
-      itemId: toolUseId,
-      reason: sourceText("status.agent.claudeWriteOutside", { path }),
-    });
+      this.#serverRequests.call("item/fileChange/requestApproval", {
+        threadId,
+        turnId: this.#threads.get(threadId)?.activeTurn?.id ?? randomUUID(),
+        itemId: toolUseId,
+        reason: sourceText("status.agent.claudeWriteOutside", { path }),
+      }),
+    ).pipe(toProviderClientOperationError);
     if (isRecord(result) && result.decision === "accept") return { behavior: "allow", updatedInput: toolInput };
     return { behavior: "deny", message: "The user did not allow this write outside the workspace." };
-  }
+  });
 
   #requireThread(threadId: string): ThreadRuntime {
     const runtime = this.#threads.get(threadId);
@@ -1464,17 +3069,247 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
   }
 
   #sdkModel(model: string): string {
-    return this.#modelSdkValues.get(model) ?? normalizeClaudeModel(model);
+    return this.#modelSdkValues.get(model) ?? (CLAUDE_LISTED_MODELS.has(model) ? model : normalizeClaudeModel(model));
   }
+}
+
+type ClaudeSdkLaunch = Pick<Options, "pathToClaudeCodeExecutable" | "spawnClaudeCodeProcess">;
+
+const writeClaudeMcpConfig = Effect.fn("ClaudeAgentClient.writeMcpConfig")(function* (
+  stateDirectory: string,
+  threadId: string,
+  servers: Record<string, ClaudeMcpServer>,
+) {
+  const directory = join(stateDirectory, "claude-mcp");
+  const file = join(directory, `${threadId}-${randomUUID()}.json`);
+  yield* providerCall(() => mkdir(directory, { recursive: true, mode: 0o700 }));
+  yield* providerCall(() => writeFile(file, JSON.stringify({ mcpServers: servers }), { mode: 0o600 }));
+  return file;
+});
+
+const writeClaudeFlagSettings = Effect.fn("ClaudeAgentClient.writeFlagSettings")(function* (
+  stateDirectory: string,
+  threadId: string,
+  settings: Settings,
+) {
+  const directory = join(stateDirectory, "claude-settings");
+  const file = join(directory, `${threadId}-${randomUUID()}.json`);
+  yield* providerCall(() => mkdir(directory, { recursive: true, mode: 0o700 }));
+  yield* providerCall(() => writeFile(file, JSON.stringify(settings), { mode: 0o600 }));
+  return file;
+});
+
+export function claudeOpenBotTools(
+  call: (name: string, args: unknown) => Promise<CallToolResult>,
+  channelTools = false,
+) {
+  const channel = channelTools
+    ? CHANNEL_TOOL_DEFINITIONS.filter((definition) =>
+        CLAUDE_TERMINAL_CHANNEL_TOOLS.includes(`mcp__openbot__${definition.name}`),
+      )
+    : [];
+  const claudeTool = (definition: (typeof channel)[number], extras?: { alwaysLoad: true }) =>
+    tool(
+      definition.name,
+      definition.description,
+      advertisedZodShape(z.strictObject(definition.shape)),
+      (args) => call(definition.name, args),
+      extras,
+    );
+  return [
+    ...visibleToolDefinitions("claude")
+      .filter((definition) => definition.name !== "ask_user")
+      .map((definition) =>
+        claudeTool(definition, definition.name === ROUTINE_NO_UPDATE_TOOL ? { alwaysLoad: true } : undefined),
+      ),
+    ...channel.map((definition) => claudeTool(definition, { alwaysLoad: true })),
+  ];
+}
+
+export function claudeBrowserTools(call: (name: string, args: unknown) => Promise<CallToolResult>) {
+  return DIRECT_BROWSER_TOOL_DEFINITIONS.map((definition) =>
+    tool(definition.name, definition.description, advertisedZodShape(definition.schema), (args) =>
+      call(definition.name, args),
+    ),
+  );
+}
+
+const clearClaudeNeedsAuthMarks = Effect.fn("ClaudeAgentClient.clearNeedsAuthMarks")(
+  function* (configDirectory: string, names: readonly string[]) {
+    if (names.length === 0) return;
+    const file = join(configDirectory, "mcp-needs-auth-cache.json");
+    const marks = yield* providerCall(async (): Promise<unknown> => JSON.parse(await readFile(file, "utf8")));
+    if (!isRecord(marks)) return;
+    const isMark = (name: string) => {
+      const mark = marks[name];
+      return isRecord(mark) && typeof mark.timestamp === "number";
+    };
+    if (!names.some(isMark)) return;
+    const kept = Object.fromEntries(Object.entries(marks).filter(([name]) => !(names.includes(name) && isMark(name))));
+    yield* providerCall(() => writeFile(file, JSON.stringify(kept)));
+  },
+  (effect) => Effect.ignore(effect),
+);
+
+function removeClaudeQueryFile(file: string | null): Effect.Effect<void> {
+  return file ? providerCall(() => rm(file, { force: true })).pipe(Effect.ignore) : Effect.void;
+}
+
+const CLAUDE_SANDBOX_UNAVAILABLE = /Sandbox required but unavailable: (.+?)\.? Set sandbox\.failIfUnavailable=false/s;
+
+const CLAUDE_SANDBOX_BLOCKED =
+  /^(?:apply-seccomp: (?:unshare\(|write \/proc\/self\/(?:setgroups|uid_map|gid_map)\b)|bwrap: (?:Failed to make \/ slave|setting up uid map|No permissions to creat(?:e a new|ing new) namespace|Creating new namespace failed|pivot_root\b|loopback: Failed RTM_NEW(?:ADDR|LINK)|Can't mount proc on (?:\/newroot)?\/proc: (?:Operation not permitted|Permission denied|Invalid argument)))/mu;
+
+const CLAUDE_API_CREDIT_EMPTY = /\bcredit balance (?:is )?too low\b/iu;
+
+const CLAUDE_NOT_LOGGED_IN = /\bnot logged in\b\s*·\s*please run \/login\b/iu;
+
+const CLAUDE_CLOUDFLARE_BLOCK =
+  /\b403\b[\s\S]*(?:attention required!? \| cloudflare|sorry, you have been blocked|cf-browser-verification|__cf_chl|cdn-cgi\/challenge-platform)/iu;
+
+function claudeFastModeWarning(reason: string): string | null {
+  switch (reason) {
+    case "extra_usage_disabled":
+      return sourceText("status.provider.claudeFastModeNeedsUsageCredits");
+    case "free":
+      return sourceText("status.provider.claudeFastModeNotOnPlan");
+    case "not_first_party":
+      return sourceText("status.provider.claudeFastModeNotFirstParty");
+    case "model_not_allowed":
+      return sourceText("status.provider.claudeFastModeModelNotAllowed");
+    case "disabled_by_env":
+    case "preference":
+      return sourceText("status.provider.claudeFastModeTurnedOff");
+    case "pending":
+    case "sdk_opt_in_required":
+      return null;
+    default:
+      return sourceText("status.provider.claudeFastModeUnavailable");
+  }
+}
+
+function claudeTurnError(error: unknown, apiKey: boolean, claudeAccount: boolean): string {
+  const text = String(error);
+  if (apiKey && CLAUDE_API_CREDIT_EMPTY.test(text)) return sourceText("error.provider.claudeApiKeyNoCredit");
+  if (claudeAccount && CLAUDE_API_CREDIT_EMPTY.test(text)) return sourceText("error.provider.claudeAccountNoCredit");
+  if (CLAUDE_CLOUDFLARE_BLOCK.test(text)) return sourceText("error.provider.claudeServiceBlocked");
+  if (!apiKey && CLAUDE_NOT_LOGGED_IN.test(text))
+    return sourceText("error.provider.signInExpired", { provider: agentProviderName("claude") });
+  return CLAUDE_SANDBOX_UNAVAILABLE.test(text) ? sourceText("error.agent.claudeNoSandbox") : text;
+}
+
+function limitRefusal(cause: unknown): string | null {
+  const text = cause instanceof Error ? cause.message : String(cause);
+  const reason = classifyFailure(text);
+  return (reason === "rate_limit" || reason === "usage_limit") && !isPlanLimitDiagnostic(text) ? text : null;
+}
+
+function claudeProcessExited(error: unknown): boolean {
+  for (let cause = error, depth = 0; cause instanceof Error && depth < 3; cause = cause.cause, depth += 1) {
+    if (
+      "errorClass" in cause &&
+      (cause.errorClass === "process_exited_nonzero" || cause.errorClass === "process_killed_by_signal")
+    )
+      return true;
+  }
+  return false;
+}
+
+const NPM_WRAPPER_TARGET = /"%dp0%\\([^"%]+\.(?:exe|js))"\s+%\*/i;
+
+function claudeSdkLaunch(executable: string): ClaudeSdkLaunch {
+  if (!cliSpawnTarget(executable, []).windowsVerbatimArguments) return { pathToClaudeCodeExecutable: executable };
+  const target = NPM_WRAPPER_TARGET.exec(readWrapper(executable))?.[1];
+  const program = target ? join(dirname(executable), target) : null;
+  if (program && existsSync(program)) return { pathToClaudeCodeExecutable: program };
+  return { pathToClaudeCodeExecutable: executable, spawnClaudeCodeProcess: spawnClaudeWrapper };
+}
+
+function readWrapper(executable: string): string {
+  try {
+    return readFileSync(executable, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function spawnClaudeWrapper({ command, args, cwd, env, signal }: SpawnOptions): SpawnedProcess {
+  const target = cliSpawnTarget(command, args);
+  const child = spawn(target.command, target.args, {
+    cwd,
+    env,
+    stdio: ["pipe", "pipe", "ignore"],
+    windowsHide: true,
+    windowsVerbatimArguments: target.windowsVerbatimArguments,
+  });
+  const killWrapper = child.kill.bind(child);
+  const running = () => child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+  let stopping = false;
+  child.kill = (killSignal) => {
+    if (!running()) return false;
+    if (stopping) return true;
+    stopping = true;
+    execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {
+      if (running()) killWrapper(killSignal);
+    });
+    return true;
+  };
+  const abort = () => child.kill();
+  const release = () => signal.removeEventListener("abort", abort);
+  signal.addEventListener("abort", abort, { once: true });
+  child.once("exit", release);
+  child.once("error", release);
+  if (signal.aborted) abort();
+  return child;
+}
+
+const CLAUDE_STDERR_TAIL_CHARS = 2_048;
+
+const CLAUDE_PROCESS_EXIT = /^Claude Code process (?:exited with code|terminated by signal) [^.]*$/;
+
+class ClaudeStderrTail {
+  #text = "";
+  readonly #decoder = new StringDecoder("utf8");
+
+  push(chunk: Buffer): void {
+    this.#text += this.#decoder.write(chunk);
+    if (this.#text.length > 2 * CLAUDE_STDERR_TAIL_CHARS) this.#text = this.#text.slice(-CLAUDE_STDERR_TAIL_CHARS);
+  }
+
+  addTo(error: unknown): unknown {
+    if (!(error instanceof Error) || !CLAUDE_PROCESS_EXIT.test(error.message)) return error;
+    const text = redactText(this.#text).slice(-CLAUDE_STDERR_TAIL_CHARS).trim();
+    return text ? new Error(`${error.message}. stderr: ${text}`, { cause: error }) : error;
+  }
+}
+
+function spawnClaudeProcessGroup(
+  { command, args, cwd, env, signal }: SpawnOptions,
+  stderr: ClaudeStderrTail,
+): SpawnedProcess {
+  const child = spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+  endProcessGroupOnExit(child);
+  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+  child.stderr.on("error", () => {});
+  const abort = () => child.kill();
+  const release = () => signal.removeEventListener("abort", abort);
+  signal.addEventListener("abort", abort, { once: true });
+  child.once("exit", release);
+  child.once("error", release);
+  if (signal.aborted) abort();
+  return child;
+}
+
+function claudeMcpStartupEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
+  if (env.MCP_TIMEOUT?.trim()) return {};
+  return { MCP_TIMEOUT: String(MCP_STDIO_PROBE_TIMEOUT_MS) };
 }
 
 export function claudeEnvironment(cli: ClaudeCliInfo): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    ...cliPathEnvironment(cli),
     ...(cli.source === "managed" ? { DISABLE_AUTOUPDATER: "1" } : {}),
-    // Tool definitions wait behind ToolSearch, except the ones marked `alwaysLoad`: the OpenBot,
-    // browser and MCP schemas otherwise go with every request. A value the user set is kept.
-    ENABLE_TOOL_SEARCH: process.env.ENABLE_TOOL_SEARCH ?? "true",
   };
 }
 
@@ -1484,7 +3319,7 @@ function claudeRateLimits(value: unknown, model: string | null): AccountRateLimi
   }
   const rateLimits = value.rate_limits;
   const primary = claudeUsageWindow(rateLimits.five_hour, 300);
-  const secondary = claudeModelWeeklyWindow(rateLimits, model) ?? claudeUsageWindow(rateLimits.seven_day, 10_080);
+  const secondary = claudeUsageWindow(rateLimits[claudeWeeklyKey(rateLimits, model)], 10_080);
   if (!primary && !secondary) return { rateLimits: null, rateLimitsByLimitId: null };
   return {
     rateLimits: { limitId: "claude", primary, secondary },
@@ -1508,18 +3343,32 @@ function claudeFamilyWeeklyLimits(rateLimits: DynamicRecord): Record<string, Acc
   return Object.keys(limits).length > 0 ? limits : null;
 }
 
-function claudeModelWeeklyWindow(rateLimits: DynamicRecord, model: string | null): AccountRateLimitWindowResult | null {
-  if (!model) return null;
-  const familyKey = model.toLowerCase().includes("opus")
-    ? "seven_day_opus"
-    : model.toLowerCase().includes("sonnet")
-      ? "seven_day_sonnet"
-      : null;
-  if (familyKey) {
-    const family = claudeUsageWindow(rateLimits[familyKey], 10_080);
-    if (family) return family;
-  }
-  return null;
+function claudeWeeklyKey(rateLimits: DynamicRecord, model: string | null): string {
+  const name = model?.toLowerCase() ?? "";
+  const familyKey = name.includes("opus") ? "seven_day_opus" : name.includes("sonnet") ? "seven_day_sonnet" : null;
+  return familyKey && claudeUsageWindow(rateLimits[familyKey], 10_080) ? familyKey : "seven_day";
+}
+
+function claudePushedWindows(
+  info: DynamicRecord,
+  weeklyKey: string,
+): { primary?: AccountRateLimitWindowResult; secondary?: AccountRateLimitWindowResult } | null {
+  const windows = isDynamicRecord(info.unifiedWindows)
+    ? info.unifiedWindows
+    : isString(info.rateLimitType)
+      ? { [info.rateLimitType]: info }
+      : {};
+  const primary = claudePushedWindow(windows.five_hour, 300);
+  const secondary = claudePushedWindow(windows[weeklyKey], 10_080);
+  if (!primary && !secondary) return null;
+  return { ...(primary && { primary }), ...(secondary && { secondary }) };
+}
+
+function claudePushedWindow(value: unknown, windowDurationMins: number): AccountRateLimitWindowResult | null {
+  if (!isDynamicRecord(value)) return null;
+  const utilization = numberValue(value.utilization);
+  if (utilization === null || utilization < 0) return null;
+  return { usedPercent: utilization * 100, windowDurationMins, resetsAt: claudeResetSeconds(value.resetsAt) };
 }
 
 function claudeUsageWindow(value: unknown, windowDurationMins: number): AccountRateLimitWindowResult | null {
@@ -1535,7 +3384,13 @@ function claudeUsageWindow(value: unknown, windowDurationMins: number): AccountR
   };
 }
 
-/** Claude reports a reset in epoch seconds. A value in milliseconds is converted, so both read the same. */
+function claudeUsageLimitRefusal(message: ClaudeStreamMessage): { resetsAt: number | null } | null {
+  const params = isDynamicRecord(message.api_error_params) ? message.api_error_params : null;
+  const info = params && isDynamicRecord(params.rate_limit_info) ? params.rate_limit_info : null;
+  if (message.api_error !== "usage_limit_reached" && info?.status !== "rejected") return null;
+  return { resetsAt: claudeResetSeconds(info?.resetsAt) };
+}
+
 function claudeResetSeconds(value: unknown): number | null {
   if (!isNumber(value) || !Number.isFinite(value) || value <= 0) return null;
   return value > 100_000_000_000 ? value / 1_000 : value;
@@ -1584,18 +3439,34 @@ function readThreadConfig(params: unknown): ThreadConfig {
       ? params.runtimeWorkspaceRoots.filter((value): value is string => isString(value))
       : [];
   const cwd = requiredString(params, "cwd");
+  const model = getString(params, "model");
+  const effort = getString(params, "effort");
   return {
     cwd,
-    model: getString(params, "model") ?? undefined,
-    effort: getString(params, "effort") ?? undefined,
+    ...(model === null ? {} : { model }),
+    ...(effort === null ? {} : { effort }),
     developerInstructions: getString(params, "developerInstructions") ?? "",
     additionalDirectories: [...new Set([cwd, ...roots])],
     persistSession: !isRecord(params) || params.persistSession !== false,
     profileGeneration: isRecord(params) && params.profileGeneration === true,
+    outputSchema:
+      isRecord(params) && params.profileGeneration === true && isDynamicRecord(params.outputSchema)
+        ? params.outputSchema
+        : null,
     computerUse: computerUseParam(params),
     disabledMcpServerIds: disabledMcpServersParam(params),
     compactWindow: compactWindowParam(params),
+    channelTools: isRecord(params) && params.channelTools === true,
     workspaceOnly: isRecord(params) && params.workspaceOnly === true,
+    excludedFolders:
+      isRecord(params) && Array.isArray(params.excludedFolders)
+        ? params.excludedFolders.filter((value): value is string => isString(value))
+        : [],
+    excludedInstructionFiles:
+      isRecord(params) && Array.isArray(params.excludedInstructionFiles)
+        ? params.excludedInstructionFiles.filter((value): value is string => isString(value))
+        : [],
+    agentId: mcpAgentParam(params),
     toolProfile: isRecord(params) && params.toolProfile === "slack-reply" ? "slack-reply" : "full",
   };
 }
@@ -1604,10 +3475,18 @@ function compactWindowParam(params: unknown): number | null {
   return isRecord(params) && isAgentCompactWindow(params.compactWindow) ? params.compactWindow : null;
 }
 
-function requiredString(value: unknown, key: string): string {
-  const result = getString(value, key);
-  if (!result) throw new Error(`${key} is required.`);
-  return result;
+function threadConfigKey(config: ThreadConfig, withModel: boolean): string {
+  const fields = {
+    ...config,
+    model: withModel ? (config.model ?? null) : null,
+    effort: withModel ? (config.effort ?? null) : null,
+  };
+  return JSON.stringify(Object.entries(fields).sort(([a], [b]) => (a < b ? -1 : 1)));
+}
+
+function textEnds(text: string): string {
+  const half = Math.floor(INPUT_LIMITS.messageText / 2);
+  return text.length <= INPUT_LIMITS.messageText ? text : `${text.slice(0, half)}\n…\n${text.slice(-half)}`;
 }
 
 function parseAuthStatus(stdout: unknown): DynamicRecord | null {
@@ -1629,18 +3508,38 @@ function readInputText(params: unknown): string {
     .join("\n");
 }
 
+const readInputImages = Effect.fnUntraced(function* (params: unknown) {
+  const paths = getArray(params, "input").flatMap((item) =>
+    isRecord(item) && item.type === "localImage" && isString(item.path) ? [item.path] : [],
+  );
+  return yield* Effect.forEach(paths, (path) =>
+    Effect.gen(function* () {
+      const mediaType = attachmentMimeTypeForName(path);
+      if (!isOneOf(CLAUDE_IMAGE_TYPES, mediaType))
+        return yield* providerFailure(new Error(sourceText("error.workflow.modelImageType")));
+      const data = yield* providerCall(() => readFile(path));
+      return {
+        type: "image",
+        source: { type: "base64", media_type: mediaType, data: data.toString("base64") },
+      } as const;
+    }),
+  );
+});
+
 function messageText(message: unknown): string {
   if (!isRecord(message)) return "";
   if (isString(message.content)) return message.content;
   if (!Array.isArray(message.content)) return "";
   return message.content
     .filter(isRecord)
-    .filter((block) => block.type === "text" && isString(block.text))
+    .filter(
+      (block) =>
+        block.type === "text" && isString(block.text) && !(message.role === "user" && isTurnContextBlock(block.text)),
+    )
     .map((block) => block.text)
     .join("\n");
 }
 
-/** The text a message placed before its first thinking block, with the break that follows it. */
 function textBeforeThinking(message: unknown): string {
   if (!isRecord(message) || !Array.isArray(message.content)) return "";
   const blocks = message.content.filter(isRecord);
@@ -1655,14 +3554,16 @@ function textBeforeThinking(message: unknown): string {
   return `${before.join("\n")}${follows ? "\n" : ""}`;
 }
 
-function messageThinking(message: unknown): string {
-  if (!isRecord(message) || !Array.isArray(message.content)) return "";
+function messageThinkingBlocks(message: unknown): string[] {
+  if (!isRecord(message) || !Array.isArray(message.content)) return [];
   return message.content
     .filter(isRecord)
     .filter((block) => block.type === "thinking")
-    .map((block) => getString(block, "thinking"))
-    .filter(isString)
-    .join("\n");
+    .map((block) => getString(block, "thinking") ?? "");
+}
+
+function messageThinking(message: unknown): string {
+  return messageThinkingBlocks(message).filter(Boolean).join("\n");
 }
 
 function messageToolCalls(message: unknown): Array<{ id: string; name: string; input: unknown }> {
@@ -1674,7 +3575,7 @@ function messageToolCalls(message: unknown): Array<{ id: string; name: string; i
   });
 }
 
-function messageToolResults(message: unknown): Array<{ id: string; text: string }> {
+function messageToolResults(message: unknown): Array<{ id: string; text: string; isError: boolean }> {
   if (!isRecord(message) || !Array.isArray(message.content)) return [];
   return message.content.filter(isRecord).flatMap((block) => {
     const id = getString(block, "tool_use_id");
@@ -1688,7 +3589,7 @@ function messageToolResults(message: unknown): Array<{ id: string; text: string 
             .map((part) => getString(part, "text") ?? "")
             .join("\n")
         : "";
-    return [{ id, text }];
+    return [{ id, text, isError: block.is_error === true }];
   });
 }
 
@@ -1712,6 +3613,111 @@ function normalizeClaudeEffort(effort: string): ClaudeEffort {
   return isOneOf(CLAUDE_EFFORTS, effort) ? effort : "high";
 }
 
+function promptUuid(runtime: ThreadRuntime, requested: string | null | undefined): UUID {
+  const run = requested && isUuid(requested) ? untakenRunId(requested, runtime.promptIds) : null;
+  return run && isUuid(run) ? run : randomUUID();
+}
+
+function claudeCacheWriteTtlMs(message: unknown): number | null {
+  const written = getRecord(getRecord(message, "usage"), "cache_creation");
+  const tokens = (key: string) => {
+    const value = written?.[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  };
+  if (tokens("ephemeral_5m_input_tokens") > 0) return CLAUDE_CACHE_TTL_MS.short;
+  if (tokens("ephemeral_1h_input_tokens") > 0) return CLAUDE_CACHE_TTL_MS.long;
+  return null;
+}
+
+function takePrompt(runtime: ThreadRuntime, uuid: string): void {
+  runtime.promptIds.add(uuid);
+  for (const old of runtime.promptIds) {
+    if (runtime.promptIds.size <= TAKEN_PROMPT_LIMIT) break;
+    runtime.promptIds.delete(old);
+  }
+}
+
+function takenMessageIds(message: ClaudeStreamMessage): string[] {
+  const listed = Array.isArray(message.user_message_uuids) ? message.user_message_uuids.filter(isString) : [];
+  return listed.length > 0 ? listed : message.user_message_uuid ? [message.user_message_uuid] : [];
+}
+
+function isOtherTurnResult(message: ClaudeStreamMessage, messageIds: ReadonlySet<string>): boolean {
+  const taken = takenMessageIds(message);
+  if (taken.length > 0) return !taken.some((uuid) => messageIds.has(uuid));
+  return (
+    isRecord(message.origin) &&
+    message.origin.kind === "task-notification" &&
+    message.num_turns === 0 &&
+    message.subtype === "success" &&
+    message.is_error !== true &&
+    !message.result
+  );
+}
+
+function failedClaudeMcpServers(servers: unknown): string[] {
+  if (!Array.isArray(servers)) return [];
+  return servers.flatMap((server) => {
+    const name = getString(server, "name");
+    return name && getString(server, "status") === "failed" ? [name] : [];
+  });
+}
+
 function isUuid(value: string): value is UUID {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function claudeTurnModelUsage(
+  requests: Iterable<{ model: string; usage: unknown }>,
+): Record<string, Record<string, number | null>> {
+  const models: Record<string, Record<string, number | null>> = {};
+  for (const { model, usage } of requests) {
+    if (!isDynamicRecord(usage)) continue;
+    const total = models[model] ?? {
+      inputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      outputTokens: 0,
+      smallestRequestInputTokens: Number.POSITIVE_INFINITY,
+    };
+    models[model] = total;
+    let prompt: number | null = 0;
+    for (const [key, field] of [
+      ["inputTokens", "input_tokens"],
+      ["cacheReadInputTokens", "cache_read_input_tokens"],
+      ["cacheCreationInputTokens", "cache_creation_input_tokens"],
+      ["outputTokens", "output_tokens"],
+    ] as const) {
+      const value = usage[field] ?? 0;
+      const sum = total[key];
+      total[key] = isNumber(value) && isNumber(sum) ? sum + value : null;
+      if (key !== "outputTokens") prompt = isNumber(value) && prompt !== null ? prompt + value : null;
+    }
+    const smallest = total.smallestRequestInputTokens;
+    total.smallestRequestInputTokens = isNumber(smallest) && prompt !== null ? Math.min(smallest, prompt) : null;
+  }
+  return models;
+}
+
+function claudeStepTarget(name: string, input: unknown): Record<string, string> {
+  if (!isRecord(input)) return {};
+  const text = (key: string) => (typeof input[key] === "string" ? input[key].slice(0, INPUT_LIMITS.identifier) : null);
+  const path = name === "Read" ? text("file_path") : null;
+  const pattern = name === "Grep" || name === "Glob" ? text("pattern") : null;
+  const query = name === "WebSearch" ? text("query") : null;
+  const url = name === "WebFetch" ? text("url") : null;
+  return {
+    ...(path ? { path } : {}),
+    ...(pattern ? { pattern } : {}),
+    ...(query ? { query } : {}),
+    ...(url ? { url } : {}),
+  };
+}
+
+function completedToolInput(input: unknown): Record<string, string> {
+  const kept: Record<string, string> = {};
+  if (!isRecord(input)) return kept;
+  for (const key of ["skill", "command", "file_path", "path"])
+    if (typeof input[key] === "string") kept[key] = input[key];
+  return kept;
 }

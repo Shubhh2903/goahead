@@ -1,112 +1,99 @@
-import { z } from "zod";
+import { Schema } from "effect";
+import { withoutTurnContext } from "./agent/developer-instructions";
 import type { ThreadItem } from "./protocol";
 
-/*
- * The MSP payloads that the Muse client reads. Each schema keeps only the fields the client uses and
- * drops the others, so a newer Muse that adds a field still decodes. A missing or wrongly typed field
- * that the client reads fails the decode.
- */
-const text = z.string();
-const int = z.number().int();
-
-export const MuseItem = z.object({
-  itemId: z.string().min(1),
-  kind: z.string().min(1),
-  revision: int,
+const text = Schema.String;
+export const MuseItem = Schema.Struct({
+  itemId: Schema.NonEmptyString,
+  kind: Schema.NonEmptyString,
+  revision: Schema.Int,
   status: text,
-  turnId: text.nullable().optional(),
-  text: text.optional(),
-  summary: z.array(text).optional(),
-  tool: text.optional(),
-  args: text.optional(),
-  visibleOutput: text.optional(),
-  commandText: text.optional(),
-  exitCode: int.optional(),
-  failureReason: text.optional(),
-  outcome: text.optional(),
+  turnId: Schema.optional(Schema.NullOr(text)),
+  text: Schema.optional(text),
+  summary: Schema.optional(Schema.Array(text)),
+  tool: Schema.optional(text),
+  args: Schema.optional(text),
+  visibleOutput: Schema.optional(text),
+  commandText: Schema.optional(text),
+  exitCode: Schema.optional(Schema.Int),
+  failureReason: Schema.optional(text),
+  outcome: Schema.optional(text),
 });
-export type MuseItem = z.infer<typeof MuseItem>;
-
-export const MuseItemEvent = z.object({ item: MuseItem });
-
-export const MuseSession = z.object({
-  session: z.object({ sessionId: z.string().min(1) }),
-  history: z
-    .object({
+export type MuseItem = typeof MuseItem.Type;
+export const MuseSession = Schema.Struct({
+  session: Schema.Struct({ sessionId: Schema.NonEmptyString }),
+  history: Schema.optional(
+    Schema.Struct({
       mode: text,
-      items: z.array(MuseItem).nullable(),
-      snapshot: z.object({ schemaVersion: int, state: z.object({ items: z.array(MuseItem) }) }).nullable(),
-    })
-    .optional(),
+      items: Schema.NullOr(Schema.Array(MuseItem)),
+      snapshot: Schema.NullOr(
+        Schema.Struct({ schemaVersion: Schema.Int, state: Schema.Struct({ items: Schema.Array(MuseItem) }) }),
+      ),
+    }),
+  ),
 });
-
-export const MusePage = z.object({
-  events: z.array(z.object({ method: text, params: z.record(text, z.unknown()) })),
-  nextCursor: text.nullable(),
+export const MusePage = Schema.Struct({
+  events: Schema.Array(Schema.Struct({ method: text, params: Schema.Record(text, Schema.Unknown) })),
+  nextCursor: Schema.NullOr(text),
 });
-export type MusePage = z.infer<typeof MusePage>;
-
-export const MuseModels = z.object({
+export const MuseModels = Schema.Struct({
   providerId: text,
-  models: z.array(
-    z.object({
+  models: Schema.Array(
+    Schema.Struct({
       modelId: text,
       displayLabel: text,
       providerId: text,
-      variants: z.union([z.array(text), z.literal("unknown")]).optional(),
-      defaultReasoningEffort: text.optional(),
+      variants: Schema.optional(Schema.Union([Schema.Array(text), Schema.Literal("unknown")])),
+      defaultReasoningEffort: Schema.optional(text),
     }),
   ),
 });
-
-export const MuseApproval = z.object({
+export const MuseApproval = Schema.Struct({
   approvalId: text,
-  currentRequirementId: z.object({ approvalId: text, sourceIndex: int }),
-  availableChoices: z.array(z.object({ choiceId: text, decision: text, scope: text })),
-  subject: z.object({ kind: text, command: text.optional(), path: text.optional() }),
+  currentRequirementId: Schema.Struct({ approvalId: text, sourceIndex: Schema.Int }),
+  availableChoices: Schema.Array(Schema.Struct({ choiceId: text, decision: text, scope: text })),
+  subject: Schema.Struct({ kind: text, command: Schema.optional(text), path: Schema.optional(text) }),
 });
-export type MuseApproval = z.infer<typeof MuseApproval>;
-
-export const MuseUsage = z.object({
+export const MuseUsage = Schema.Struct({
   turnId: text,
-  cumulative: z.object({
-    promptTokens: z.number(),
-    totalTokens: z.number(),
-    outputTokens: z.number(),
-    cacheReadTokens: z.number().optional(),
-    cacheWriteTokens: z.number().optional(),
+  cumulative: Schema.Struct({
+    promptTokens: Schema.Number,
+    totalTokens: Schema.Number,
+    outputTokens: Schema.Number,
+    cacheReadTokens: Schema.optional(Schema.Number),
+    cacheWriteTokens: Schema.optional(Schema.Number),
   }),
 });
-
-export const MuseTerminal = z.object({
+export const MuseTerminal = Schema.Struct({
   turnId: text,
   terminal: text,
-  reason: text.optional(),
-  error: z.object({ message: text }).optional(),
+  reason: Schema.optional(text),
+  error: Schema.optional(Schema.Struct({ message: text })),
 });
-
-export const MuseUserInput = z.object({
+export const MuseUserInput = Schema.Struct({
   userInputId: text,
-  questions: z.array(
-    z.object({
+  questions: Schema.Array(
+    Schema.Struct({
       id: text,
       header: text,
       question: text,
-      options: z.array(z.object({ label: text, description: text.optional() })),
-      selection: z.object({ mode: z.enum(["single", "multiple"]) }),
+      options: Schema.Array(Schema.Struct({ label: text, description: Schema.optional(text) })),
+      selection: Schema.Struct({ mode: Schema.Literals(["single", "multiple"]) }),
     }),
   ),
 });
-export type MuseUserInput = z.infer<typeof MuseUserInput>;
 
-/** Converts a native item without exposing raw provider arguments as diagnostic text. */
 export function museThreadItem(item: MuseItem): ThreadItem {
   const common = { id: item.itemId, status: item.status };
   switch (item.kind) {
     case "agentMessage":
       return { ...common, type: "agentMessage", text: item.text ?? "" };
     case "userMessage":
-      return { ...common, type: "userMessage", content: [{ type: "inputText", text: item.text ?? "" }] };
+      return {
+        ...common,
+        type: "userMessage",
+        content: [{ type: "inputText", text: withoutTurnContext(item.text ?? "") }],
+      };
     case "reasoning":
       return {
         ...common,

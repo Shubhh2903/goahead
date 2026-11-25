@@ -1,11 +1,21 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { AgentProviderId, ConversationMessage } from "@openbot/contracts/ipc";
-import { isImageGenerationItem } from "./agent/image-generation";
-import { isNoUpdateAnswer } from "./agent/routine-quiet-runs";
+import { type AgentProviderId, type ConversationMessage, ROUTINE_QUIET_ANSWER_ITEM_TYPE } from "@openbot/contracts/ipc";
+import { Duration, Effect } from "effect";
+import { generatedMediaKind } from "./agent/image-generation";
+import {
+  isNoUpdateAnswer,
+  isNoUpdateToolCall,
+  isTextAnswer,
+  keptQuietAnswer,
+  quietNarration,
+  quietTeammateTurnDelivery,
+  teammateRequest,
+} from "./agent/routine-quiet-runs";
 import { mergeProviderHistoryMessages, messagesFromThreadItems, threadTurnBaseTime } from "./conversation-snapshots";
 import { databaseRow, decodeConversationMessageJson, requiredStringColumn } from "./database/database-rows";
 import type { DeliveryContext } from "./mailbox-store";
 import type { ThreadItem } from "./protocol";
+import { type ProviderClientOperationError, providerFailure, providerSync } from "./provider-client-effects";
 import type {
   ProviderHistoryConsumer,
   ProviderHistoryFragment,
@@ -13,16 +23,20 @@ import type {
   ReadProviderHistory,
 } from "./provider-history";
 
-/** The synchronous database boundary needed by the bounded provider-history importer. */
-export interface ProviderHistoryImportDatabase {
+interface ProviderHistoryImportDatabase {
   readonly connection: DatabaseSync;
   ensureProviderHistoryImport(input: {
     sessionId: string;
     threadId: string;
     provider: AgentProviderId;
     externalSessionId: string;
-  }): unknown;
-  stageProviderHistoryFragment(input: { sessionId: string; fragment: ProviderHistoryFragment }): unknown;
+  }): { state: string; createdAt: string };
+  stageProviderHistoryFragment(input: { sessionId: string; fragment: ProviderHistoryFragment }): {
+    turnImported: boolean;
+    rewroteItems: boolean;
+    compactedItems: boolean;
+  };
+  dropCompactedProviderHistoryItems(sessionId: string, turnId: string): void;
   stagedProviderHistoryItems(input: {
     sessionId: string;
     turnId: string;
@@ -36,9 +50,9 @@ export interface ProviderHistoryImportDatabase {
     agentId: string;
     threadId: string;
     messages: readonly ConversationMessage[];
-    /** Highest staged item included in this normalized page. */
     throughItemIndex?: number;
     complete: boolean;
+    compact?: boolean;
     detail?: unknown;
   }): void;
 }
@@ -52,12 +66,13 @@ export interface ProviderHistoryImportInput {
   agentId: string;
   publicThreadId: string;
   cwd?: string;
+  retired?: boolean;
   findDelivery(deliveryId: string): DeliveryContext | null;
-  /**
-   * Whether this routine delivery can have ended quiet: a scheduled run, or a run of a deleted
-   * routine, whose record is gone. A Test or script run cannot.
-   */
+  findMessageDelivery(messageId: string): DeliveryContext | null;
   quietRoutineDelivery(deliveryId: string): boolean;
+  quietTeammateThread?: boolean;
+  continuesQuietRun?(delivery: DeliveryContext["delivery"]): boolean;
+  requestAnswered?(deliveryId: string): boolean;
 }
 
 export interface ProviderHistoryImportResult {
@@ -65,199 +80,334 @@ export interface ProviderHistoryImportResult {
   messages: number;
 }
 
-/** The number of staged items one normalized page reads. */
-const IMPORT_PAGE_ITEMS = 50;
-
-/**
- * Imports provider history as a stream of completed turns.
- *
- * The provider adapter owns its cursors. This layer keeps only incomplete turns in the durable
- * staging tables, then reads one bounded item page at a time and writes that page in one
- * transaction. It never writes a full conversation snapshot and never deletes a message missing
- * from a page. A failed read marks the import `failed` and rejects with the provider's error.
- */
-export async function importProviderHistory(input: ProviderHistoryImportInput): Promise<ProviderHistoryImportResult> {
-  input.database.ensureProviderHistoryImport({
-    sessionId: input.sessionId,
-    threadId: input.publicThreadId,
-    provider: input.provider,
-    externalSessionId: input.externalSessionId,
-  });
-  let turns = 0;
-  let messages = 0;
-  let providerCovered = false;
-  const consume: ProviderHistoryConsumer = async (fragment) => {
-    input.database.stageProviderHistoryFragment({ sessionId: input.sessionId, fragment });
-    if (!fragment.complete) return true;
-    providerCovered = true;
-    // ACP replay has stable item IDs only inside the provider transcript. It has no stable
-    // OpenBot turn ID, so normalizing it into the conversation projection would duplicate a
-    // live turn after release and reload. Keep the bounded raw records for handoff and reads;
-    // live OpenBot turns already committed their normalized messages under durable IDs.
-    if (fragment.recordsOnly) {
-      input.database.importProviderHistoryMessages({
-        sessionId: input.sessionId,
-        turnId: fragment.turnId,
-        agentId: input.agentId,
-        threadId: input.publicThreadId,
-        messages: [],
-        complete: true,
-        detail: {
-          provider: input.provider,
-          externalSessionId: input.externalSessionId,
-          turnId: fragment.turnId,
-          recordsOnly: true,
-        },
-      });
-      turns += 1;
-      return true;
-    }
-    messages += await importCompletedTurn(input, fragment);
-    turns += 1;
-    return true;
-  };
-
-  try {
-    await input.readHistory(
-      {
-        threadId: input.externalSessionId,
-        ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-        items: "full",
-        providerOnly: true,
-      } satisfies ProviderHistoryRequest,
-      consume,
-    );
-  } catch (error) {
-    input.database.markProviderHistoryImportState(input.sessionId, "failed");
-    throw error;
-  }
-  if (providerCovered) input.database.markProviderHistoryImportState(input.sessionId, "complete");
-  return { turns, messages };
+interface ProviderHistoryPartial {
+  turnId: string;
+  status?: string;
+  startedAt?: number;
+  itemOffset: number;
+  baseTime?: number;
+  complete: boolean;
+  messages: readonly ConversationMessage[];
 }
 
-async function importCompletedTurn(
+export function importProviderHistory(
   input: ProviderHistoryImportInput,
-  fragment: ProviderHistoryFragment,
-): Promise<number> {
-  // Only a completed turn can end quiet; a failed or interrupted turn keeps its answers.
-  const routine =
-    fragment.status === undefined || fragment.status === "completed"
-      ? routineTurnAnswers(input, fragment.turnId)
-      : "none";
-  let importedCount = 0;
-  let afterIndex = -1;
-  let complete = false;
-  let baseTime: number | undefined;
-  while (!complete) {
-    const page = input.database.stagedProviderHistoryItems({
-      sessionId: input.sessionId,
-      turnId: fragment.turnId,
-      afterIndex,
-      limit: IMPORT_PAGE_ITEMS,
-    });
-    const last = page.at(-1);
-    complete = page.length < IMPORT_PAGE_ITEMS;
-    if (page.length > 0 && (!last || last.itemIndex <= afterIndex)) {
-      throw new Error("Provider history staging returned a repeated item index.");
-    }
-    const turn = {
-      id: fragment.turnId,
-      ...(fragment.status === undefined ? {} : { status: fragment.status }),
-      ...(fragment.startedAt === undefined ? {} : { startedAt: fragment.startedAt }),
-    };
-    const items = page.map(({ item }) => item);
-    baseTime ??= threadTurnBaseTime(turn, items, input.findDelivery);
-    const allMessages = messagesFromThreadItems(
-      { ...turn, baseTime },
-      items,
-      page[0]?.itemIndex ?? afterIndex + 1,
-      input.findDelivery,
-    );
-    // The turn completion dropped these answers from the chat, so the import does not bring them
-    // back.
-    const pageMessages = routine === "none" ? allMessages : allMessages.filter(keptRoutineMessage(routine));
-    const reconciled =
-      input.provider === "claude"
-        ? mergeProviderHistoryMessages(
-            // Claude can use a new provider ID for a reply that OpenBot already published under the
-            // live turn ID. Read only matching IDs from SQLite, so reconciliation never materializes
-            // the full chat or the full turn.
-            readStoredTurnMessages(input.database, input.publicThreadId, fragment.turnId, pageMessages),
-            pageMessages,
-            input.provider,
-          )
-        : [...pageMessages];
-    input.database.importProviderHistoryMessages({
-      sessionId: input.sessionId,
-      turnId: fragment.turnId,
-      agentId: input.agentId,
-      threadId: input.publicThreadId,
-      messages: reconciled,
-      ...(last === undefined ? {} : { throughItemIndex: last.itemIndex }),
-      complete,
-      detail: {
+): Effect.Effect<ProviderHistoryImportResult, ProviderClientOperationError> {
+  return Effect.gen(function* () {
+    const current = yield* providerSync(() =>
+      input.database.ensureProviderHistoryImport({
+        sessionId: input.sessionId,
+        threadId: input.publicThreadId,
         provider: input.provider,
         externalSessionId: input.externalSessionId,
-        turnId: fragment.turnId,
-      },
-    });
-    importedCount += reconciled.length;
-    if (last) afterIndex = last.itemIndex;
-    if (page.length === 0) complete = true;
-    // One page at a time: let other work run between the synchronous page writes.
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  return importedCount;
+      }),
+    );
+    const resumeKey = yield* providerSync(() => importResumeKey(input, current));
+    let turns = 0;
+    let messages = 0;
+    let providerCovered = false;
+    let turnWaits = false;
+    const seenTurns = new Set<string>();
+    const rewrittenTurns = new Set<string>();
+    const consume: ProviderHistoryConsumer = (fragment) =>
+      Effect.gen(function* () {
+        const staged = yield* providerSync(() =>
+          input.database.stageProviderHistoryFragment({ sessionId: input.sessionId, fragment }),
+        );
+        if (!seenTurns.has(fragment.turnId)) {
+          seenTurns.add(fragment.turnId);
+          if (staged.rewroteItems) rewrittenTurns.add(fragment.turnId);
+        }
+        if (!fragment.complete) return true;
+        providerCovered = true;
+        if (staged.turnImported) return true;
+        if (staged.compactedItems) {
+          if (!rewrittenTurns.has(fragment.turnId)) {
+            turnWaits = true;
+            return true;
+          }
+          yield* providerSync(() => input.database.dropCompactedProviderHistoryItems(input.sessionId, fragment.turnId));
+        }
+        if (fragment.recordsOnly) {
+          yield* providerSync(() =>
+            input.database.importProviderHistoryMessages({
+              sessionId: input.sessionId,
+              turnId: fragment.turnId,
+              agentId: input.agentId,
+              threadId: input.publicThreadId,
+              messages: [],
+              complete: true,
+              detail: {
+                provider: input.provider,
+                externalSessionId: input.externalSessionId,
+                turnId: fragment.turnId,
+                recordsOnly: true,
+              },
+            }),
+          );
+          turns += 1;
+          return true;
+        }
+        const imported = yield* importCompletedTurn(input, fragment);
+        turns += 1;
+        messages += imported;
+        return true;
+      });
+
+    yield* input
+      .readHistory(
+        {
+          threadId: input.externalSessionId,
+          ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+          items: "full",
+          providerOnly: true,
+          ...(resumeKey === undefined ? {} : { resumeKey }),
+        } satisfies ProviderHistoryRequest,
+        consume,
+      )
+      .pipe(
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            input.database.markProviderHistoryImportState(input.sessionId, "failed");
+          }),
+        ),
+      );
+    if (providerCovered || input.retired === true || current.state === "complete")
+      yield* providerSync(() =>
+        input.database.markProviderHistoryImportState(input.sessionId, turnWaits ? "active" : "complete"),
+      );
+    return { turns, messages };
+  });
 }
 
-/**
- * How a turn that a scheduled routine run started answered: `quiet` when each answer is only the
- * no-update marker, so the turn completion dropped all of them with the turn's thinking, `answered`
- * for any other such turn, and `none` for a turn that no scheduled routine run started. A Test or
- * script run keeps its answers, as the turn completion does. Decided from the staged items alone,
- * one bounded page at a time, so it needs no stored state.
- */
-type RoutineTurnAnswers = "none" | "answered" | "quiet";
+export function retiredSessionNeedsHistoryRead(
+  imported: { state: string; updatedAt: string } | null,
+  retiredAt: string,
+): boolean {
+  return imported?.state !== "complete" || imported.updatedAt < retiredAt;
+}
 
-function routineTurnAnswers(input: ProviderHistoryImportInput, turnId: string): RoutineTurnAnswers {
-  let routine: boolean | undefined;
-  let markers = 0;
-  let reported = false;
-  let afterIndex = -1;
-  while (true) {
-    const page = input.database.stagedProviderHistoryItems({
-      sessionId: input.sessionId,
-      turnId,
-      afterIndex,
-      limit: IMPORT_PAGE_ITEMS,
-    });
-    for (const { item } of page) {
-      // Every delivery of the turn must be a scheduled run, as at the turn completion: a message
-      // steered into the turn waits for the answer.
-      if (routine !== false && item.type === "userMessage" && typeof item.clientId === "string")
-        routine =
-          input.findDelivery(item.clientId)?.delivery.sender.kind === "routine" &&
-          input.quietRoutineDelivery(item.clientId);
-      if (item.type === "agentMessage" && typeof item.text === "string" && item.text && item.phase !== "commentary") {
-        if (isNoUpdateAnswer(item.text)) markers += 1;
-        else reported = true;
-      }
-      if (isImageGenerationItem(item)) reported = true;
+const COMPACTION_PAUSE = Duration.millis(5);
+
+export interface ProviderHistoryCompactionResult {
+  rows: number;
+  bytes: number;
+  batches: number;
+}
+
+export function compactImportedProviderHistory(
+  database: {
+    compactImportedProviderHistory(afterRowId: number): { lastRowId: number | null; rows: number; bytes: number };
+  },
+  pause: Duration.Duration = COMPACTION_PAUSE,
+): Effect.Effect<ProviderHistoryCompactionResult, ProviderClientOperationError> {
+  return Effect.gen(function* () {
+    const result = { rows: 0, bytes: 0, batches: 0 };
+    let afterRowId = 0;
+    for (;;) {
+      const batch = yield* providerSync(() => database.compactImportedProviderHistory(afterRowId));
+      if (batch.lastRowId === null) return result;
+      result.rows += batch.rows;
+      result.bytes += batch.bytes;
+      result.batches += 1;
+      afterRowId = batch.lastRowId;
+      yield* Effect.sleep(pause);
     }
-    const last = page.at(-1);
-    if (routine === false) return "none";
-    if (page.length < IMPORT_PAGE_ITEMS || !last || last.itemIndex <= afterIndex) break;
-    afterIndex = last.itemIndex;
-  }
-  if (!routine) return "none";
-  return markers > 0 && !reported ? "quiet" : "answered";
+  });
 }
 
-function keptRoutineMessage(routine: Exclude<RoutineTurnAnswers, "none">) {
-  return (message: ConversationMessage): boolean => {
-    if (message.author !== "assistant") return true;
-    if (routine === "quiet") return false;
-    return message.itemType === "commentary" || !isNoUpdateAnswer(message.text);
+function importResumeKey(
+  input: ProviderHistoryImportInput,
+  current: { state: string; createdAt: string },
+): string | undefined {
+  if (current.state !== "complete") return undefined;
+  const waiting = databaseRow(
+    input.database.connection
+      .prepare(
+        `SELECT 1 AS waiting FROM provider_history_turns
+         WHERE session_id = ? AND imported = 0 AND complete = 1 LIMIT 1`,
+      )
+      .get(input.sessionId),
+  );
+  return waiting ? undefined : `${input.sessionId}:${current.createdAt}`;
+}
+
+function importCompletedTurn(
+  input: ProviderHistoryImportInput,
+  fragment: ProviderHistoryFragment,
+): Effect.Effect<number, ProviderClientOperationError> {
+  return Effect.gen(function* () {
+    const routine =
+      fragment.status === undefined || fragment.status === "completed"
+        ? yield* routineTurnAnswers(input, fragment.turnId)
+        : "none";
+    const keep = routine === "none" ? null : keptRoutineMessage(routine, input.provider);
+    const liveTurnId = fragment.liveTurnId ?? fragment.turnId;
+    const toLiveTurn = (message: ConversationMessage): ConversationMessage =>
+      liveTurnId !== fragment.turnId && message.turnId === fragment.turnId
+        ? { ...message, turnId: liveTurnId }
+        : message;
+    let importedCount = 0;
+    let afterIndex = -1;
+    let complete = false;
+    let baseTime: number | undefined;
+    while (!complete) {
+      const page = yield* providerSync(() =>
+        input.database.stagedProviderHistoryItems({
+          sessionId: input.sessionId,
+          turnId: fragment.turnId,
+          afterIndex,
+          limit: 50,
+        }),
+      );
+      const last = page.at(-1);
+      complete = page.length < 50;
+      if (page.length > 0 && (!last || last.itemIndex <= afterIndex)) {
+        return yield* Effect.fail(
+          providerFailure(new Error("Provider history staging returned a repeated item index.")),
+        );
+      }
+      const turn = {
+        id: fragment.turnId,
+        ...(fragment.status === undefined ? {} : { status: fragment.status }),
+        ...(fragment.startedAt === undefined ? {} : { startedAt: fragment.startedAt }),
+      };
+      baseTime ??= threadTurnBaseTime(
+        turn,
+        page.map(({ item }) => item),
+        input.findDelivery,
+      );
+      const partial: ProviderHistoryPartial = {
+        turnId: fragment.turnId,
+        ...(fragment.status === undefined ? {} : { status: fragment.status }),
+        ...(fragment.startedAt === undefined ? {} : { startedAt: fragment.startedAt }),
+        itemOffset: page[0]?.itemIndex ?? afterIndex + 1,
+        baseTime,
+        complete,
+        messages: messagesFromThreadItems(
+          input.agentId,
+          { ...turn, baseTime },
+          page.map(({ item }) => item),
+          page[0]?.itemIndex ?? afterIndex + 1,
+          input.findDelivery,
+          input.findMessageDelivery,
+        ),
+      };
+      const pageMessages = (keep === null ? partial.messages : partial.messages.flatMap(keep)).map(toLiveTurn);
+      const reconciled =
+        input.provider === "claude"
+          ? mergeProviderHistoryMessages(
+              readStoredTurnMessages(input.database, input.publicThreadId, liveTurnId, pageMessages),
+              pageMessages,
+              input.provider,
+            )
+          : [...pageMessages];
+      yield* providerSync(() =>
+        input.database.importProviderHistoryMessages({
+          sessionId: input.sessionId,
+          turnId: fragment.turnId,
+          agentId: input.agentId,
+          threadId: input.publicThreadId,
+          messages: reconciled,
+          ...(last === undefined ? {} : { throughItemIndex: last.itemIndex }),
+          complete,
+          compact: input.provider === "codex" || input.provider === "claude",
+          detail: {
+            provider: input.provider,
+            externalSessionId: input.externalSessionId,
+            turnId: fragment.turnId,
+          },
+        }),
+      );
+      importedCount += reconciled.length;
+      if (last) afterIndex = last.itemIndex;
+      if (page.length === 0) complete = true;
+      yield* Effect.yieldNow;
+    }
+    return importedCount;
+  });
+}
+
+type RoutineTurnAnswers = "none" | "answered" | "image" | "quiet";
+
+function routineTurnAnswers(
+  input: ProviderHistoryImportInput,
+  turnId: string,
+): Effect.Effect<RoutineTurnAnswers, ProviderClientOperationError> {
+  return Effect.gen(function* () {
+    let routine: boolean | undefined;
+    let requestsOnly = true;
+    let markers = 0;
+    let reported = false;
+    let noUpdateCalled = false;
+    let failureReported = false;
+    let imageGenerated = false;
+    let needsNoUpdate = false;
+    let afterIndex = -1;
+    while (true) {
+      const page = yield* providerSync(() =>
+        input.database.stagedProviderHistoryItems({ sessionId: input.sessionId, turnId, afterIndex, limit: 50 }),
+      );
+      for (const { item } of page) {
+        if (routine !== false && item.type === "userMessage" && typeof item.clientId === "string") {
+          const delivery = input.findDelivery(item.clientId)?.delivery;
+          const continuesQuietRun =
+            delivery !== undefined &&
+            input.quietTeammateThread === true &&
+            input.continuesQuietRun?.(delivery) === true;
+          if (continuesQuietRun) needsNoUpdate = true;
+          routine =
+            delivery !== undefined &&
+            ((input.quietTeammateThread === true &&
+              quietTeammateTurnDelivery(delivery, (request) => input.requestAnswered?.(request.id) === true)) ||
+              (delivery.sender.kind === "routine" && input.quietRoutineDelivery(delivery.id)) ||
+              continuesQuietRun);
+          requestsOnly &&= delivery !== undefined && teammateRequest(delivery);
+          if (delivery?.status === "completed" && delivery.error !== null) failureReported = true;
+        }
+        if (item.type === "agentMessage" && typeof item.text === "string" && item.text && item.phase !== "commentary") {
+          if (isNoUpdateAnswer(item.text)) markers += 1;
+          else reported = true;
+        }
+        if (generatedMediaKind(item)) imageGenerated = true;
+        if (isNoUpdateToolCall(item)) noUpdateCalled = true;
+      }
+      const last = page.at(-1);
+      if (routine === false) return "none";
+      if (page.length < 50 || !last || last.itemIndex <= afterIndex) break;
+      afterIndex = last.itemIndex;
+    }
+    if (!routine || (needsNoUpdate && !noUpdateCalled)) return "none";
+    if (failureReported) return "answered";
+    if (noUpdateCalled) return imageGenerated ? "image" : "quiet";
+    if (requestsOnly) return imageGenerated || reported || storedTurnReport(input, turnId) ? "answered" : "quiet";
+    return markers > 0 && !reported && !imageGenerated ? "quiet" : "answered";
+  });
+}
+
+function storedTurnReport(input: ProviderHistoryImportInput, turnId: string): boolean {
+  const row = input.database.connection
+    .prepare(
+      `SELECT 1 AS found FROM projection_thread_messages
+       WHERE thread_id = ? AND turn_id = ? AND author = 'assistant'
+         AND (item_type = 'question_prompt' OR json_array_length(message_json, '$.attachments') > 0)
+       LIMIT 1`,
+    )
+    .get(input.publicThreadId, turnId);
+  return row !== undefined;
+}
+
+function keptRoutineMessage(routine: Exclude<RoutineTurnAnswers, "none">, provider: AgentProviderId) {
+  const narration = quietNarration(provider);
+  return (message: ConversationMessage): ConversationMessage[] => {
+    if (message.author !== "assistant") return [message];
+    if (routine === "quiet") {
+      return keptQuietAnswer(message) || narration(message)
+        ? [{ ...message, itemType: ROUTINE_QUIET_ANSWER_ITEM_TYPE }]
+        : [];
+    }
+    if (routine === "image") return isTextAnswer(message) ? [] : [message];
+    return message.itemType === "commentary" || !isNoUpdateAnswer(message.text) ? [message] : [];
   };
 }
 
@@ -267,13 +417,6 @@ function readStoredTurnMessages(
   turnId: string,
   imported: readonly ConversationMessage[],
 ): ConversationMessage[] {
-  /*
-   * Claude's live stream publishes narration with IDs that differ from the IDs in its transcript.
-   * Read one identity separately so reconciliation can see that the turn already has narration.
-   * The query returns one ID only; message JSON is fetched only for this turn's candidate IDs
-   * below. Do not query all rows for a turn: a long tool-heavy turn is still a bounded import page,
-   * while the projection may contain many old records.
-   */
   const identityRows = database.connection
     .prepare(
       `SELECT message_id FROM projection_thread_messages
@@ -290,8 +433,6 @@ function readStoredTurnMessages(
   const ids = [
     ...new Set([
       `${turnId}:assistant`,
-      // Live Claude collapses all thinking for a turn under this canonical identity. Provider
-      // transcript reasoning keeps its own IDs, so this row is the duplicate check only.
       `${turnId}:reasoning`,
       ...identityIds,
       ...imported.flatMap((message) => (message.id ? [message.id] : [])),
@@ -313,10 +454,9 @@ function readStoredTurnMessages(
 }
 
 function decodeStoredMessageRow(row: unknown): ConversationMessage | null {
-  const value = databaseRow(row);
-  if (!value) return null;
+  if (!row || typeof row !== "object" || !("message_json" in row) || typeof row.message_json !== "string") return null;
   try {
-    return decodeConversationMessageJson(requiredStringColumn(value, "message_json"));
+    return decodeConversationMessageJson(row.message_json);
   } catch {
     return null;
   }

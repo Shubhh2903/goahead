@@ -1,16 +1,44 @@
-import { type OAuthClientProvider, UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import { basename } from "node:path";
+import type { Readable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
+import { stripVTControlCharacters } from "node:util";
+import {
+  Client as ModernClient,
+  StreamableHTTPClientTransport as ModernHttpTransport,
+} from "@modelcontextprotocol/client";
+import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { AccessDeniedError, UnauthorizedClientError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { StdioClientTransport, type StdioServerParameters } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  AccessDeniedError,
+  InvalidClientError,
+  InvalidClientMetadataError,
+  InvalidGrantError,
+  UnauthorizedClientError,
+} from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { type CallToolRequest, ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type { McpServerConfig } from "@openbot/contracts/ipc";
 import { isDynamicRecord } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
-import { type McpOAuthAuthority, type McpSignIn, secureOAuthFetch } from "./mcp-oauth-provider";
+import { Effect, Result, Schema } from "effect";
+import { z } from "zod";
+import { causeHelpers } from "./effect-boundary";
+import {
+  isLoopback,
+  MCP_TOKEN_TIMEOUT_MS,
+  type McpOAuthAuthority,
+  type McpSignIn,
+  namesAuthorizationServer,
+  normalizeResource,
+  secureOAuthFetch,
+} from "./mcp-oauth-provider";
 import {
   clearMcpCommandCache,
+  type McpShapeFailed,
   type McpToolRuntimes,
   mcpHandoffHeaders,
   mcpLaunchEnvironment,
@@ -21,254 +49,551 @@ import {
 } from "./mcp-provider-shapes";
 import { redactMcpSecrets, redactMcpValues } from "./mcp-redaction";
 
-export const MCP_PROBE_TIMEOUT_MS = 10_000;
+const MCP_PROBE_TIMEOUT_MS = 30_000;
 
-export interface McpProbeResult {
+export const MCP_STDIO_PROBE_TIMEOUT_MS = 60_000;
+
+function probeTimeoutMs(config: McpServerConfig) {
+  return config.transport === "stdio" ? MCP_STDIO_PROBE_TIMEOUT_MS : MCP_PROBE_TIMEOUT_MS;
+}
+
+interface McpProbeResult {
   toolCount: number;
   error: string | null;
 }
 
-/**
- * Tests one configuration, saved or not: connects, counts the tools, and disconnects.
- *
- * Only a user asking for it starts this. OpenBot does not test by itself, because a connection is
- * not free - an http server can want an OAuth sign-in, a cold `npx` can take longer than the
- * deadline below, and a server can do real work at startup. The answer is reported once and not
- * stored.
- */
-export async function testMcpServer(
+type McpProbeNeed = "sign_in" | "key";
+
+const MCP_PROBE_TOOL_NAMES = 50;
+
+export interface McpProbeOutcome extends McpProbeResult {
+  tools: string[];
+  needs: McpProbeNeed | null;
+}
+
+class McpProbeFailure extends Schema.TaggedError<McpProbeFailure>()("McpProbeFailure", {
+  cause: Schema.Defect(),
+}) {}
+
+const { io: probeIo, rewrap: toMcpProbeFailure } = causeHelpers(McpProbeFailure);
+
+export type McpSignInPlace = "here" | "host";
+
+export const testMcpServer = Effect.fnUntraced(function* (
   config: McpServerConfig,
-  timeoutMs = MCP_PROBE_TIMEOUT_MS,
+  timeoutMs = probeTimeoutMs(config),
   tools: McpToolRuntimes = NO_MCP_TOOL_RUNTIMES,
-  oauth?: McpOAuthAuthority,
-): Promise<McpProbeResult> {
-  // The user is asking about now, usually straight after installing the thing that was missing, so
-  // no command keeps an answer from earlier in this run. Only a test does this: a hand-off wants
-  // the answer the probe gave, or the panel and the agent would describe two different servers.
+  oauth?: Pick<McpOAuthAuthority, "accessToken" | "signIn">,
+  signInPlace: McpSignInPlace | null = null,
+) {
+  const { toolCount, error } = yield* inspectMcpServer(config, timeoutMs, tools, oauth, signInPlace);
+  return { toolCount, error } satisfies McpProbeResult;
+});
+
+export const inspectMcpServer = Effect.fnUntraced(function* (
+  config: McpServerConfig,
+  timeoutMs = probeTimeoutMs(config),
+  tools: McpToolRuntimes = NO_MCP_TOOL_RUNTIMES,
+  oauth?: Pick<McpOAuthAuthority, "accessToken" | "signIn">,
+  signInPlace: McpSignInPlace | null = null,
+) {
   clearMcpCommandCache();
-  // Nothing cancels a test from outside: it ends on its own within the deadline, and a child that
-  // outlives its transport is killed below either way.
-  const controller = new AbortController();
-  /*
-   * A sign-in is offered only here, and only for an http server. This is the one path a person is
-   * waiting on: at a thread start the same 401 has to stay silent, because a browser window nobody
-   * asked for arriving in the middle of an answer is worse than a tool that says it is not signed in.
-   */
-  const signIn = config.transport === "http" ? (oauth?.signIn(config.url) ?? null) : null;
-  try {
-    return await probeMcpServer(
-      await usableMcpServer(config, tools, oauth ? (subject) => oauth.accessToken(subject.url) : undefined),
-      controller.signal,
-      timeoutMs,
-      signIn,
-    );
-  } finally {
-    signIn?.abandon();
-  }
+  return yield* Effect.acquireUseRelease(
+    Effect.sync(() => (config.transport === "http" ? (oauth?.signIn(config.url) ?? null) : null)),
+    (signIn) =>
+      Effect.gen(function* () {
+        const server = yield* usableMcpServer(
+          config,
+          tools,
+          oauth
+            ? (subject) =>
+                oauth
+                  .accessToken(subject.url)
+                  .pipe(Effect.map((authorization) => ({ url: subject.url, authorization, proxied: false })))
+            : undefined,
+        );
+        return yield* probeMcpServerEffect(server, timeoutMs, signIn, signInPlace);
+      }),
+    (signIn) => Effect.sync(() => signIn?.abandon()),
+  );
+});
+
+export const MCP_TOOL_CALL_TIMEOUT_MS = 5 * 60_000;
+
+export type McpToolCallResult = Awaited<ReturnType<Client["callTool"]>>;
+export type McpToolArguments = NonNullable<CallToolRequest["params"]["arguments"]>;
+
+export const callMcpServerTool = Effect.fnUntraced(function* (
+  config: McpServerConfig,
+  name: string,
+  args: McpToolArguments,
+  tools: McpToolRuntimes,
+  oauth?: Pick<McpOAuthAuthority, "accessToken">,
+): Effect.fn.Return<{ result: McpToolCallResult } | { error: string }, McpShapeFailed> {
+  const server = yield* usableMcpServer(
+    config,
+    tools,
+    oauth
+      ? (subject) =>
+          oauth
+            .accessToken(subject.url)
+            .pipe(Effect.map((authorization) => ({ url: subject.url, authorization, proxied: false })))
+      : undefined,
+  );
+  if (server.error !== undefined) return { error: boundedError(server.error) };
+  const timeoutMs = probeTimeoutMs(config);
+  const called = yield* Effect.result(
+    Effect.acquireUseRelease(
+      Effect.try({
+        try: () => ({
+          client: new Client({ name: "openbot", version: "1" }, { capabilities: {} }),
+          transport: createTransport(server, null, () => undefined),
+        }),
+        catch: (cause) => new McpProbeFailure({ cause }),
+      }),
+      ({ client, transport }) =>
+        probeIo((signal) => client.connect(transport, { signal })).pipe(
+          Effect.timeoutOrElse({
+            duration: timeoutMs,
+            orElse: () => Effect.fail(new McpProbeFailure({ cause: new McpTimeout(timeoutMs) })),
+          }),
+          Effect.andThen(
+            probeIo((signal) =>
+              client.callTool({ name, arguments: args }, undefined, { signal, timeout: MCP_TOOL_CALL_TIMEOUT_MS }),
+            ),
+          ),
+        ),
+      ({ client, transport }) => closeQuietlyEffect(client, transport),
+    ),
+  );
+  if (Result.isSuccess(called)) return { result: called.success };
+  const described = describeMcpError(called.failure.cause, config);
+  return { error: boundedError(redactMcpValues(described, probeSecrets(server, null))) };
+});
+
+interface McpChallenge {
+  status: number;
+  bearer: boolean;
+  resourceMetadata: boolean;
+  keyOnly?: boolean;
+  insufficientScope?: boolean;
+  url: string;
 }
 
-/**
- * Connects to one already-resolved MCP server once, counts its tools, and disconnects.
- *
- * The providers make their own connections when an agent starts; a probe never becomes the
- * connection an agent talks to.
- */
-async function probeMcpServer(
+const probeMcpServerEffect = Effect.fnUntraced(function* (
   server: UsableMcpServer,
-  signal: AbortSignal,
-  timeoutMs = MCP_PROBE_TIMEOUT_MS,
-  signIn: McpSignIn | null = null,
-): Promise<McpProbeResult> {
+  timeoutMs: number,
+  signIn: McpSignIn | null,
+  signInPlace: McpSignInPlace | null,
+): Effect.fn.Return<McpProbeOutcome> {
   const { config } = server;
-  // `!== undefined`, not truthiness: the resolved arm declares `error?: undefined`, and only the
-  // explicit comparison narrows this union to the arm `connectAndCount` below is given.
-  if (server.error !== undefined) return { toolCount: 0, error: boundedError(server.error) };
-
-  /*
-   * The token is minted for this connection and never written to the row, so `describeMcpError`,
-   * which reads the configuration, cannot know it. A transport reports a failure by quoting what it
-   * sent, and this is the one reader that would otherwise put a bearer token on the user's screen.
-   */
-  const failure = (error: unknown): McpProbeResult => {
-    const refused = signIn?.registrationFailed() && isRegistrationRefusal(error);
-    const described = refused ? REGISTRATION_REFUSED : describeMcpError(error, config, timeoutMs);
-    return { toolCount: 0, error: boundedError(redactMcpValues(described, probeSecrets(server, signIn))) };
+  if (server.error !== undefined) return { toolCount: 0, error: boundedError(server.error), tools: [], needs: null };
+  const seen: { challenge: McpChallenge | null } = { challenge: null };
+  const record = (next: McpChallenge) => {
+    seen.challenge = next;
   };
-
-  try {
-    return { toolCount: await connectAndCount(server, signal, timeoutMs, signIn?.provider), error: null };
-  } catch (error) {
-    if (!signIn || !(error instanceof UnauthorizedError)) return failure(error);
-    /*
-     * The browser is open on the server's own page. The deadline above measures the connection and
-     * not the person, so the wait for the grant is the sign-in's own and much longer; the second
-     * attempt is a fresh transport, because the first one has already been closed by its failure.
-     */
-    try {
-      await signIn.complete();
-      return { toolCount: await connectAndCount(server, signal, timeoutMs, signIn.provider), error: null };
-    } catch (retry) {
-      return failure(retry);
-    }
+  const failure = (error: unknown, signedIn = false): McpProbeOutcome => {
+    const accountRefused = refusesSignedInAccount(error, server, signIn, seen.challenge, signedIn);
+    const described = describeProbeFailure(error, config, signIn, seen.challenge, signInPlace, accountRefused);
+    return {
+      toolCount: 0,
+      error: boundedError(redactMcpValues(described, probeSecrets(server, signIn))),
+      tools: [],
+      needs: signIn || accountRefused ? null : probeNeed(config, seen.challenge),
+    };
+  };
+  const found = (listed: ListedTools): McpProbeOutcome => ({
+    toolCount: listed.count,
+    error: null,
+    tools: listed.names,
+    needs: null,
+  });
+  const afterSignIn = Effect.fnUntraced(function* (active: McpSignIn) {
+    const retry = yield* Effect.result(
+      active
+        .complete()
+        .pipe(toMcpProbeFailure, Effect.andThen(connectAndCountEffect(server, timeoutMs, active, record))),
+    );
+    return Result.isFailure(retry) ? failure(retry.failure.cause, true) : found(retry.success);
+  });
+  const startedAt = Date.now();
+  const firstTimeoutMs = signIn ? timeoutMs + MCP_TOKEN_TIMEOUT_MS : timeoutMs;
+  const first = yield* Effect.result(connectAndCountEffect(server, firstTimeoutMs, signIn, record));
+  if (Result.isSuccess(first)) {
+    if (!signIn) return found(first.success);
+    const begun = yield* Effect.result(signIn.begin());
+    if (Result.isFailure(begun)) return failure(begun.failure.cause);
+    return begun.success ? yield* afterSignIn(signIn) : found(first.success);
   }
+  const unexplained = seen.challenge;
+  if (!signIn && signInPlace !== null && unexplained && !hasCredentialHeader(config)) {
+    const lookupMs = timeoutMs - (Date.now() - startedAt);
+    if (unexplained.status === 401 && !unexplained.bearer)
+      seen.challenge = {
+        ...unexplained,
+        bearer: (yield* advertisesOAuth(config.url, lookupMs, ORIGIN_METADATA)) === true,
+      };
+    else if (unexplained.status === 401 && !unexplained.resourceMetadata)
+      seen.challenge = {
+        ...unexplained,
+        keyOnly: (yield* advertisesOAuth(config.url, lookupMs, signInMetadata(config.url))) === false,
+      };
+    else if (unexplained.status === 403 && !server.authorization)
+      seen.challenge = { ...unexplained, bearer: yield* offersSignIn(config.url, lookupMs) };
+  }
+  const remainingMs = timeoutMs - (Date.now() - startedAt);
+  if (!signIn && config.transport === "http" && httpStatus(first.failure.cause) === 400 && remainingMs > 0) {
+    const modern = yield* Effect.result(connectAndCountModernEffect(server, remainingMs));
+    if (Result.isSuccess(modern)) return found(modern.success);
+  }
+  if (!signIn) return failure(first.failure.cause);
+  if (first.failure.cause instanceof UnauthorizedError) return yield* afterSignIn(signIn);
+  if (httpStatus(first.failure.cause) !== 403 || hasCredentialHeader(config)) return failure(first.failure.cause);
+  const begun = yield* Effect.result(signIn.begin());
+  if (Result.isFailure(begun)) return failure(begun.failure.cause);
+  return begun.success ? yield* afterSignIn(signIn) : failure(first.failure.cause);
+});
+
+function describeProbeFailure(
+  error: unknown,
+  config: McpServerConfig,
+  signIn: McpSignIn | null,
+  challenge: McpChallenge | null,
+  signInPlace: McpSignInPlace | null,
+  accountRefused: boolean,
+): string {
+  if (signIn?.cancelled()) return sourceText("error.backend.mcpSignInCancelled");
+  const otherAddress = signIn?.otherAddress();
+  if (otherAddress) return sourceText("error.backend.mcpSignInOtherAddress", { url: otherAddress });
+  if (signIn?.signInServerMissing()) return BEARER_KEY;
+  if (signIn && isRegistrationRefusal(error, signIn))
+    return signIn.registrationUnsupported() ? REGISTRATION_UNAVAILABLE : REGISTRATION_REFUSED;
+  if (accountRefused) return sourceText("error.backend.mcpSignInAccountRefused");
+  const status = httpStatus(error);
+  if (signIn && status === 401) return sourceText("error.backend.mcpSignInNotAccepted");
+  if (signIn?.exchangeFailed() && error instanceof InvalidGrantError)
+    return sourceText("error.backend.mcpSignInGrantRefused");
+  if (signIn?.exchangeFailed() && status !== null && status >= 400 && status < 500)
+    return sourceText("error.backend.mcpSignInNotAccepted");
+  if (challenge?.status === 401 && challenge.bearer && (challenge.keyOnly || authorizationWithoutScheme(config)))
+    return BEARER_KEY;
+  if (challenge?.bearer && !hasCredentialHeader(config)) {
+    const described = describeSignInChallenge(config.url, challenge.url, signInPlace);
+    if (described) return described;
+  }
+  return describeMcpError(error, config);
 }
 
-/**
- * Every secret this probe could have sent.
- *
- * `server.authorization` is the one read before the connection, and on a first sign-in it is
- * `null`: the credentials the retry spends are minted in between, by the sign-in itself. The
- * sign-in keeps its own ledger of them - the access and refresh tokens, the client secret, the
- * authorization code and the PKCE verifier - because a token endpoint states a refusal in
- * `error_description`, the SDK makes that text the error it throws, and a server that quotes back
- * what it rejected would otherwise put that value on the panel. The ledger is used rather than the
- * stored record because a recoverable refusal clears the record first.
- */
+function refusesSignedInAccount(
+  error: unknown,
+  server: UsableMcpServer,
+  signIn: McpSignIn | null,
+  challenge: McpChallenge | null,
+  signedIn: boolean,
+): boolean {
+  if (httpStatus(error) !== 403 || signIn?.exchangeFailed() || challenge?.insufficientScope) return false;
+  return signedIn || (Boolean(server.authorization) && !hasCredentialHeader(server.config));
+}
+
+function describeSignInChallenge(url: string, finalUrl: string, place: McpSignInPlace | null): string | null {
+  if (place === null) return null;
+  if (!normalizeResource(url))
+    return sourceText("error.backend.mcpSignInNeedsHttps", { url: httpsAddress(finalUrl, url) });
+  return place === "host" ? sourceText("error.backend.mcpSignInOnHost") : sourceText("error.backend.mcpSignInRequired");
+}
+
+function httpsAddress(finalUrl: string, url: string): string {
+  const target = URL.canParse(finalUrl) && finalUrl.startsWith("https:") ? new URL(finalUrl) : new URL(url);
+  target.protocol = "https:";
+  target.search = "";
+  target.hash = "";
+  return target.toString();
+}
+
+function probeNeed(config: McpServerConfig, challenge: McpChallenge | null): McpProbeNeed | null {
+  if (!challenge || !isAccessRefusal(challenge.status)) return null;
+  if (!challenge.bearer || challenge.keyOnly || hasCredentialHeader(config)) return "key";
+  return normalizeResource(config.url) ? "sign_in" : null;
+}
+
+export function hasCredentialHeader(config: McpServerConfig): boolean {
+  return config.headers.some(({ key, value }) => CREDENTIAL_HEADER.test(key) && value.trim().length > 0);
+}
+
+function authorizationWithoutScheme(config: McpServerConfig): boolean {
+  return config.headers.some(
+    ({ key, value }) => key.trim().toLowerCase() === "authorization" && /^\S+$/u.test(value.trim()),
+  );
+}
+
+const BEARER_KEY = sourceText("error.backend.mcpServerBearerKey");
+
+const CREDENTIAL_HEADER = /auth|key|token|secret/i;
+
 function probeSecrets(server: UsableMcpServer, signIn: McpSignIn | null): string[] {
   const values = server.authorization ? [server.authorization] : [];
   return [...values, ...(signIn?.secrets() ?? [])];
 }
 
-/** One connection, from the handshake to the tool count, closed again whatever it answered. */
-async function connectAndCount(
+const PROBE_CLIENT_INFO = { name: "openbot-probe", version: "1" };
+
+const connectAndCountEffect = Effect.fnUntraced(function* (
   server: ResolvedMcpServer,
-  signal: AbortSignal,
   timeoutMs: number,
-  authProvider: OAuthClientProvider | undefined,
-): Promise<number> {
-  const client = new Client({ name: "openbot-probe", version: "1" }, { capabilities: {} });
-  const transport = createTransport(server, authProvider);
-  try {
-    return await withDeadline(
-      (async () => {
-        await client.connect(transport);
-        return await countTools(client);
-      })(),
-      signal,
-      timeoutMs,
+  signIn: McpSignIn | null,
+  onChallenge: (challenge: McpChallenge) => void,
+) {
+  return yield* countOverEffect(timeoutMs, () => {
+    const client = new Client(PROBE_CLIENT_INFO, { capabilities: {} });
+    const transport = createTransport(server, signIn, onChallenge);
+    const lister: ProbeClient = {
+      listTools: (params, options) => client.request({ method: "tools/list", params }, LISTED_TOOLS_PAGE, options),
+      close: () => client.close(),
+    };
+    return { client: lister, transport, connect: (signal) => client.connect(transport, { signal }) };
+  });
+});
+
+const LISTED_TOOLS_PAGE = z.object({
+  tools: z.array(z.object({ name: z.string() })),
+  nextCursor: z.string().optional(),
+});
+
+const connectAndCountModernEffect = Effect.fnUntraced(function* (server: ResolvedMcpServer, timeoutMs: number) {
+  return yield* countOverEffect(timeoutMs, () => {
+    const client = new ModernClient(PROBE_CLIENT_INFO, {
+      capabilities: {},
+      versionNegotiation: { mode: { pin: MODERN_PROTOCOL_VERSION } },
+    });
+    const transport = new ModernHttpTransport(new URL(server.config.url), {
+      requestInit: { headers: mcpHandoffHeaders(server) },
+    });
+    return { client, transport, connect: (signal) => client.connect(transport, { signal }) };
+  });
+});
+
+const MODERN_PROTOCOL_VERSION = "2026-07-28";
+
+interface ProbeClient {
+  listTools(
+    params: { cursor: string } | undefined,
+    options: { signal: AbortSignal },
+  ): Promise<{ tools: ReadonlyArray<{ name: string }>; nextCursor?: string | undefined }>;
+  close(): Promise<void>;
+}
+
+interface ProbeConnection {
+  client: ProbeClient;
+  transport: Pick<Transport, "close">;
+  connect: (signal: AbortSignal) => Promise<void>;
+}
+
+const countOverEffect = Effect.fnUntraced(function* (timeoutMs: number, open: () => ProbeConnection) {
+  return yield* Effect.acquireUseRelease(
+    Effect.try({ try: open, catch: (cause) => new McpProbeFailure({ cause }) }),
+    ({ client, transport, connect }) =>
+      Effect.gen(function* () {
+        yield* probeIo(connect);
+        return yield* countToolsEffect(client);
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: timeoutMs,
+          orElse: () => Effect.fail(new McpProbeFailure({ cause: new McpTimeout(timeoutMs) })),
+        }),
+        Effect.catch((failure) => explainClosedEffect(failure, transport)),
+      ),
+    ({ client, transport }) => closeQuietlyEffect(client, transport),
+  );
+});
+
+const explainClosedEffect = Effect.fnUntraced(function* (
+  failure: McpProbeFailure,
+  transport: Pick<Transport, "close">,
+): Effect.fn.Return<never, McpProbeFailure> {
+  if (!(transport instanceof TailedStdioTransport) || !isConnectionClosed(failure.cause))
+    return yield* Effect.fail(failure);
+  const output = yield* transport.output();
+  if (!output.text) return yield* Effect.fail(failure);
+  return yield* Effect.fail(new McpProbeFailure({ cause: new McpServerExit(output.text, output.cut) }));
+});
+
+const MCP_STDERR_SHOWN = 1_000;
+
+const MCP_STDERR_KEPT = 8_000;
+
+const MCP_STDERR_SETTLE_MS = 250;
+
+class TailedStdioTransport extends StdioClientTransport {
+  #output = "";
+  #cut = false;
+  #source: Readable | null = null;
+  readonly #ended: Promise<void>;
+
+  constructor(server: StdioServerParameters) {
+    super({ ...server, stderr: "pipe" });
+    const stream = this.stderr;
+    const decoder = new StringDecoder("utf8");
+    const keep = (text: string) => {
+      const output = this.#output + text;
+      this.#cut ||= output.length > MCP_STDERR_KEPT;
+      this.#output = output.slice(-MCP_STDERR_KEPT);
+    };
+    this.#ended = new Promise((resolve) => {
+      if (!stream) return resolve();
+      stream.on("pipe", (source: Readable) => {
+        this.#source = source;
+      });
+      stream.on("data", (chunk: Buffer) => keep(decoder.write(chunk)));
+      stream.once("end", () => {
+        keep(decoder.end());
+        resolve();
+      });
+      stream.once("close", () => resolve());
+      stream.on("error", () => resolve());
+    });
+  }
+
+  output() {
+    return Effect.promise(() => this.#ended).pipe(
+      Effect.timeoutOption(MCP_STDERR_SETTLE_MS),
+      Effect.map(() => ({ text: stripVTControlCharacters(this.#output).trim(), cut: this.#cut })),
     );
-  } finally {
-    await closeQuietly(client, transport);
+  }
+
+  override async close() {
+    await super.close();
+    this.#source?.destroy();
   }
 }
 
-/**
- * Every tool the server offers, not the first page of them.
- *
- * A server with many tools answers `tools/list` one page at a time, and the number on the row is an
- * answer to "what would an agent get". The deadline around this call bounds the walk; a cursor that
- * repeats, and the count the panel can carry, end it as well.
- */
-async function countTools(client: Client): Promise<number> {
+interface ListedTools {
+  count: number;
+  names: string[];
+}
+
+const countToolsEffect = Effect.fnUntraced(function* (client: ProbeClient) {
   const seen = new Set<string>();
+  const names: string[] = [];
   let count = 0;
   let cursor: string | undefined;
   for (;;) {
-    const page = await client.listTools(cursor === undefined ? undefined : { cursor });
+    const page = yield* probeIo((signal) =>
+      client.listTools(cursor === undefined ? undefined : { cursor }, { signal }),
+    );
+    for (const tool of page.tools) if (names.length < MCP_PROBE_TOOL_NAMES) names.push(tool.name.slice(0, 128));
     count += page.tools.length;
-    if (count >= INPUT_LIMITS.mcpToolCount) return INPUT_LIMITS.mcpToolCount;
+    if (count >= INPUT_LIMITS.mcpToolCount) return { count: INPUT_LIMITS.mcpToolCount, names } satisfies ListedTools;
     cursor = page.nextCursor;
-    if (cursor === undefined || seen.has(cursor)) return count;
+    if (cursor === undefined || seen.has(cursor)) return { count, names } satisfies ListedTools;
     seen.add(cursor);
   }
-}
+});
 
-/**
- * The failure text, held to the length the IPC decoder and the remote codec accept.
- *
- * A server can answer with a whole diagnostic, and a command name is allowed to be longer than this
- * on its own. An over-long text is rejected on the way to the panel, which would replace the
- * connection failure the user asked about with a decoding failure.
- */
-function boundedError(text: string): string {
+export function boundedError(text: string): string {
   if (text.length <= INPUT_LIMITS.mcpErrorText) return text;
   return `${text.slice(0, INPUT_LIMITS.mcpErrorText - 1)}…`;
 }
 
-function createTransport(server: ResolvedMcpServer, authProvider?: OAuthClientProvider): Transport {
+function createTransport(
+  server: ResolvedMcpServer,
+  signIn: McpSignIn | null,
+  onChallenge: (challenge: McpChallenge) => void,
+): Transport {
   const { config } = server;
+  const authProvider = signIn?.provider;
   if (config.transport === "http") {
-    /*
-     * The `authProvider` is what turns a 401 into a sign-in instead of a sentence. Without one the
-     * transport reports the refusal, which is what a server with a pasted key should do.
-     *
-     * With one, the stored token is left out of `requestInit`: a header written there wins over the
-     * one the provider adds, so a token the provider has just refreshed would lose to the value this
-     * probe read a moment before the refusal.
-     */
     const headers = authProvider
       ? Object.fromEntries(config.headers.map(({ key, value }) => [key, value]))
       : mcpHandoffHeaders(server);
-    /*
-     * The transport does OAuth of its own: a 401 on a token this probe believed was still valid
-     * makes it call `auth()` through its own fetch, which spends the refresh token and the client
-     * secret at the discovered endpoint. That is the same exchange the explicit paths guard, so it
-     * gets the same fetch - without it a discovery document could name a plain-text token endpoint
-     * and this one request would still honour it. A provider is only attached to a URL that already
-     * passed `normalizeResource`, so the guard refuses nothing this probe could otherwise reach.
-     */
     return new StreamableHTTPClientTransport(new URL(config.url), {
-      ...(authProvider ? { authProvider, fetch: secureOAuthFetch() } : {}),
+      fetch: signIn
+        ? signIn.watchRegistration(secureOAuthFetch({ resource: config.url, mcpTraffic: true }))
+        : challengeRecordingFetch(onChallenge),
+      ...(authProvider ? { authProvider } : {}),
       requestInit: { headers },
     });
   }
-  return new StdioClientTransport({
+  return new TailedStdioTransport({
     command: server.command ?? config.command,
-    args: config.args,
-    // The resolved directory, not the stored one: process creation does not expand a leading `~`,
-    // which the form's own example uses.
+    args: server.args,
     ...(server.workingDirectory ? { cwd: server.workingDirectory } : {}),
-    // The SDK default first, then this user's own `PATH`, the names the user asked to pass through,
-    // and the user's own pairs. `envPassthrough` has no other meaning anywhere in OpenBot; this is
-    // where it is spent. The launch environment is the providers' as well, so what the panel tests
-    // is what an agent starts.
     env: {
       ...getDefaultEnvironment(),
       ...mcpLaunchEnvironment(server),
     },
-    // Discarded, not piped. Nothing here reads that pipe, so a server that writes its startup log to
-    // stderr - which a Rust or Python server does with a blocking write - fills the 64 KB buffer and
-    // stops before it answers the handshake. The probe would report a timeout for a working server.
-    stderr: "ignore",
   });
 }
 
-function withDeadline<T>(work: Promise<T>, signal: AbortSignal, timeoutMs: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new McpTimeout(timeoutMs)), timeoutMs);
-    const onAbort = () => reject(new Error(sourceText("error.backend.mcpConnectionCancelled")));
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) onAbort();
-    work.then(resolve, reject).finally(() => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-    });
-  });
+function challengeRecordingFetch(onChallenge: (challenge: McpChallenge) => void): FetchLike {
+  return async (input, init) => {
+    const response = await fetch(input, init);
+    if (response.status === 401 || response.status === 403) {
+      const challenge = response.headers.get("www-authenticate") ?? "";
+      const bearer = /(?:^|,)\s*bearer\b/iu.test(challenge);
+      const insufficientScope =
+        response.status === 403 && bearer && /\berror\s*=\s*"?insufficient_scope\b/iu.test(challenge);
+      onChallenge({
+        status: response.status,
+        bearer: (response.status === 401 && bearer) || insufficientScope,
+        insufficientScope,
+        resourceMetadata: /\bresource_metadata\s*=/iu.test(challenge),
+        url: response.url || input.toString(),
+      });
+    }
+    return response;
+  };
 }
 
-/**
- * A child that ignores a closed stdin would otherwise outlive the panel that started it, so the
- * transport's own close is followed by a signal to its process.
- */
-async function closeQuietly(client: Client, transport: Transport): Promise<void> {
-  try {
-    await client.close();
-  } catch {
-    // The transport is closed next either way.
-  }
-  try {
-    await transport.close();
-  } catch {
-    // Nothing left to do: the process kill below is the last resort.
-  }
+const ORIGIN_METADATA = ["/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server"];
+
+function signInMetadata(url: string): string[] {
+  const path = new URL(url).pathname.replace(/\/+$/u, "");
+  const resource = path ? [`/.well-known/oauth-protected-resource${path}`] : [];
+  return [...resource, ...ORIGIN_METADATA, "/.well-known/openid-configuration"];
+}
+
+const advertisesOAuth = Effect.fnUntraced(function* (url: string, remainingMs: number, paths: readonly string[]) {
+  if (remainingMs <= 0) return null;
+  const { origin } = new URL(url);
+  const lookups = paths.map((path) =>
+    Effect.tryPromise({
+      try: async (signal): Promise<boolean | null> => {
+        const response = await fetch(`${origin}${path}`, { signal, headers: { accept: "application/json" } });
+        await response.body?.cancel();
+        if (response.ok) return (response.headers.get("content-type") ?? "").includes("json");
+        return response.status === 404 || response.status === 410 || response.status === 401 ? false : null;
+      },
+      catch: (cause) => new McpProbeFailure({ cause }),
+    }).pipe(Effect.catch(() => Effect.succeed(null))),
+  );
+  const found: readonly (boolean | null)[] = yield* Effect.all(lookups, { concurrency: "unbounded" }).pipe(
+    Effect.timeoutOrElse({ duration: remainingMs, orElse: () => Effect.succeed([null]) }),
+  );
+  if (found.includes(true)) return true;
+  return found.includes(null) ? null : false;
+});
+
+const offersSignIn = Effect.fnUntraced(function* (url: string, remainingMs: number) {
+  if (remainingMs <= 0) return false;
+  const controller = new AbortController();
+  const fetchFn: FetchLike = (input, init) => fetch(input, { ...init, signal: controller.signal });
+  return yield* namesAuthorizationServer(normalizeResource(url) ?? url, fetchFn).pipe(
+    Effect.map((issuer) => issuer !== null),
+    Effect.timeoutOrElse({ duration: remainingMs, orElse: () => Effect.succeed(false) }),
+    Effect.catch(() => Effect.succeed(false)),
+    Effect.ensuring(Effect.sync(() => controller.abort())),
+  );
+});
+
+const closeQuietlyEffect = Effect.fnUntraced(function* (client: ProbeClient, transport: Pick<Transport, "close">) {
+  yield* probeIo(() => client.close()).pipe(Effect.catch(() => Effect.void));
+  yield* probeIo(() => transport.close()).pipe(Effect.catch(() => Effect.void));
   const pid = transport instanceof StdioClientTransport ? transport.pid : null;
   if (pid === null) return;
-  try {
-    process.kill(pid, "SIGKILL");
-  } catch {
-    // Already gone, which is the outcome this wanted.
-  }
-}
+  yield* Effect.try({ try: () => process.kill(pid, "SIGKILL"), catch: (cause) => new McpProbeFailure({ cause }) }).pipe(
+    Effect.catch(() => Effect.void),
+  );
+});
 
 class McpTimeout extends Error {
   constructor(readonly timeoutMs: number) {
@@ -276,39 +601,139 @@ class McpTimeout extends Error {
   }
 }
 
-/** The failure, in the words the panel shows. Secrets are removed before the text leaves here. */
-export function describeMcpError(error: unknown, config: McpServerConfig, timeoutMs: number): string {
+class McpServerExit extends Error {
+  constructor(
+    readonly output: string,
+    readonly cut: boolean,
+  ) {
+    super("The MCP server stopped before it answered.");
+  }
+}
+
+function serverOutput(error: McpServerExit, config: McpServerConfig): string {
+  const output = redactMcpSecrets(error.output, config).trim();
+  if (!error.cut && output.length <= MCP_STDERR_SHOWN) return output;
+  return `…${output.slice(-MCP_STDERR_SHOWN).replace(/^[\uDC00-\uDFFF]/u, "")}`;
+}
+
+function describeMcpError(error: unknown, config: McpServerConfig): string {
+  const described = describeMcpErrorText(error, config);
+  const bridgeUrl = mcpRemoteBridgeUrl(config);
+  if (
+    bridgeUrl === null ||
+    !(error instanceof McpTimeout || error instanceof McpServerExit || isConnectionClosed(error))
+  )
+    return described;
+  return sourceText("error.backend.mcpRemoteBridge", { reason: described, url: bridgeUrl });
+}
+
+function describeMcpErrorText(error: unknown, config: McpServerConfig): string {
   if (error instanceof McpTimeout)
-    return sourceText("error.backend.mcpServerNoAnswer", { seconds: Math.round(timeoutMs / 1000) });
-  // Only a sign-in reaches this: without an `authProvider` the transport reports the raw 401 below.
+    return sourceText("error.backend.mcpServerNoAnswer", { seconds: Math.round(error.timeoutMs / 1000) });
   if (error instanceof UnauthorizedError) return sourceText("error.backend.mcpSignInNotAccepted");
+  if (error instanceof McpServerExit)
+    return sourceText("error.backend.mcpServerExitedWithOutput", { detail: serverOutput(error, config) });
+  if (config.transport === "stdio" && isConnectionClosed(error)) return sourceText("error.backend.mcpServerExited");
+  if (config.transport === "http") {
+    const described = describeConnectionFailure(error, config.url);
+    if (described) return described;
+  }
   const status = httpStatus(error);
   if (status !== null) return httpStatusMessage(status);
+  if (config.transport === "http" && isNetworkFailure(error)) return sourceText("error.backend.mcpServerUnreachable");
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes("ENOENT")) return sourceText("error.backend.mcpCommandNotFound", { command: config.command });
   return redactMcpSecrets(message, config);
 }
 
-/**
- * A refused registration is the service's choice, not the user's credentials: Figma, for one,
- * registers only the MCP clients it approved. "Try again" and the API key cannot change it.
- */
+function mcpRemoteBridgeUrl(config: McpServerConfig): string | null {
+  if (config.transport !== "stdio") return null;
+  const words = [basename(config.command), ...config.args];
+  const bridge = words.findIndex((word) => /^mcp-remote(@\S*)?$/u.test(word.trim()));
+  if (bridge === -1) return null;
+  for (const word of words.slice(bridge + 1)) {
+    if (!URL.canParse(word.trim())) continue;
+    const url = new URL(word.trim());
+    if (url.protocol === "http:" || url.protocol === "https:") return `${url.origin}${url.pathname}`;
+  }
+  return null;
+}
+
+function isConnectionClosed(error: unknown): boolean {
+  return error instanceof McpError && error.code === ErrorCode.ConnectionClosed;
+}
+
+const NETWORK_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+]);
+
+function causeChain(error: unknown): Error[] {
+  const chain: Error[] = [];
+  for (let current = error; current instanceof Error && chain.length < 4; current = current.cause) chain.push(current);
+  return chain;
+}
+
+function systemCode(error: Error): string | null {
+  const code = isDynamicRecord(error) ? error.code : undefined;
+  return typeof code === "string" ? code : null;
+}
+
+function isNetworkFailure(error: unknown): boolean {
+  return causeChain(error).some((current) => {
+    const code = systemCode(current);
+    if (code !== null && NETWORK_ERROR_CODES.has(code)) return true;
+    return current instanceof TypeError && current.message === "fetch failed";
+  });
+}
+
+function describeConnectionFailure(error: unknown, url: string): string | null {
+  for (const current of causeChain(error)) {
+    const code = systemCode(current);
+    if (code === "ECONNREFUSED" && URL.canParse(url)) {
+      const address = new URL(url);
+      if (isLoopback(address.hostname))
+        return sourceText("error.backend.mcpLocalServerOff", { address: address.origin });
+    }
+    if (code === "EACCES" || code === "EPERM") return sourceText("error.backend.mcpServerBlocked");
+    if (isProtocolMismatch(current, code)) return sourceText("error.backend.mcpServerIncompatible");
+  }
+  return null;
+}
+
+function isProtocolMismatch(error: Error, code: string | null): boolean {
+  if (error instanceof StreamableHTTPError) return error.code === -1 || error.code === 405;
+  return error.name === "HTTPParserError" || (code?.startsWith("HPE_") ?? false);
+}
+
 const REGISTRATION_REFUSED = sourceText("error.backend.mcpRegistrationRefused");
+
+const REGISTRATION_UNAVAILABLE = sourceText("error.backend.mcpRegistrationUnavailable");
 
 function isAccessRefusal(status: number | null): boolean {
   return status === 401 || status === 403;
 }
 
-/**
- * The SDK keeps the status only when the refusal body is not an OAuth error. A body such as
- * `{"error":"access_denied"}` arrives as its error class, with the status gone.
- */
-function isRegistrationRefusal(error: unknown): boolean {
-  if (error instanceof AccessDeniedError || error instanceof UnauthorizedClientError) return true;
+function isRegistrationRefusal(error: unknown, signIn: McpSignIn): boolean {
+  if (signIn.registrationUnsupported()) return true;
+  const status = signIn.registrationStatus();
+  if (isAccessRefusal(status)) return true;
+  if (signIn.registrationRedirectRefused()) return true;
+  if (!signIn.registrationFailed() && status === null) return false;
+  if (
+    error instanceof AccessDeniedError ||
+    error instanceof UnauthorizedClientError ||
+    error instanceof InvalidClientError ||
+    error instanceof InvalidClientMetadataError
+  )
+    return true;
   return isAccessRefusal(httpStatus(error));
 }
 
-/** What the user can change. A link from a service such as Composio stops working when it is deleted. */
 function httpStatusMessage(status: number): string {
   if (isAccessRefusal(status)) return sourceText("error.backend.mcpServerHttpCredentials", { status });
   if (status === 404 || status === 410) return sourceText("error.backend.mcpServerHttpUrl", { status });
@@ -317,8 +742,6 @@ function httpStatusMessage(status: number): string {
 
 function httpStatus(error: unknown): number | null {
   if (!(error instanceof Error)) return null;
-  // `code` on an SDK transport error is the HTTP status; on a Node system error it is a string
-  // such as `ECONNREFUSED`, which the number check below rejects.
   const code = isDynamicRecord(error) ? error.code : undefined;
   if (typeof code === "number" && code >= 100 && code < 600) return code;
   const match = /\b(4\d\d|5\d\d)\b/u.exec(error.message);

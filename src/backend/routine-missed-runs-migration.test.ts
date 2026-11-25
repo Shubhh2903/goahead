@@ -119,9 +119,10 @@ function withMissedColumns(before: Record<string, TableRow[]>): Record<string, T
               missed_policy: "skip",
               run_condition: null,
               run_condition_fingerprint: null,
+              ...(table === "projection_agent_routines" ? { run_in: "chat" } : {}),
             }
           : table.endsWith("_runs")
-            ? { ...row, missed_count: null, missed_until: null }
+            ? { ...row, missed_count: null, missed_until: null, run_source: null }
             : row,
       ),
     ]),
@@ -137,7 +138,7 @@ describe("routine missed-run migration", () => {
       const before = rows(db);
       migrateOpenBotDatabase(db);
       expect(rows(db, Object.keys(before))).toEqual(withMissedColumns(before));
-      expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 37 });
+      expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 74 });
       expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
@@ -192,9 +193,9 @@ describe("routine missed-run migration", () => {
     const db = databaseAt(35);
     seedRoutines(db, 35);
     const before = rows(db);
-    db.exec("INSERT INTO schema_migrations VALUES(38, 'now')");
+    db.exec("INSERT INTO schema_migrations VALUES(75, 'now')");
     expect(() => migrateOpenBotDatabase(db)).toThrow("newer than this application supports");
-    db.exec("DELETE FROM schema_migrations WHERE version = 38; DELETE FROM schema_migrations WHERE version = 27");
+    db.exec("DELETE FROM schema_migrations WHERE version = 75; DELETE FROM schema_migrations WHERE version = 27");
     expect(() => migrateOpenBotDatabase(db)).toThrow("missing version 27");
     expect(rows(db)).toEqual(before);
   });

@@ -1,14 +1,12 @@
 import type { BrowserEnvironment, BrowserPreview, BrowserTab } from "@openbot/contracts/ipc";
-import { BrowserWindow, type WebContents, type WebContentsView, webContents } from "electron";
+import type { BrowserViewContextMenu } from "@openbot/contracts/team-protocol/browser-view-v1";
+import type { Deferred, Effect, Scope } from "effect";
+import { BrowserWindow, type Session, type WebContents, type WebContentsView, webContents } from "electron";
 import type { BrowserCdpEngine } from "./browser-cdp";
 import type { BrowserDiagnostics } from "./browser-diagnostics";
-import { isPersistableBrowserUrl } from "./browser-state";
+import type { BrowserOperationError } from "./browser-effects";
+import { type BrowserTabSession, isPersistableBrowserUrl } from "./browser-state";
 
-/**
- * One tab as `BrowserHost` holds it. The host owns every tab and its lifecycle; the tab operations in
- * `browser-tab-operations.ts` only read and advance its queue, revision and secret state.
- */
-/** The page a preview frame shows: its URL, its main-frame document, and the tab's capture generation. */
 export interface BrowserPreviewPage {
   url: string;
   document: number;
@@ -18,63 +16,63 @@ export interface BrowserPreviewPage {
 export interface BrowserHostTab {
   id: string;
   view: WebContentsView;
-  /** WebContentsView clears its property after native destruction. Keep the handle for cleanup. */
   contents: WebContents;
   requestedUrl: string;
   openerTabId?: string;
-  /** Retained document references can outlive popup closure and navigation. */
   hasSharedBrowsingContext?: boolean;
-  /**
-   * The current document received a secret and was kept, with its filled fields empty and no
-   * readable copy of the value, so a
-   * single-page sign-in can show its next step. Page code can still hold the value, so evaluation
-   * and recording stay blocked in its opener group until a main-frame navigation replaces it.
-   */
   secretDocument?: boolean;
+  secretShown?: boolean;
+  filledCard?: boolean;
+  scriptedOrigins?: Set<string>;
+  workerExposedOrigins?: Set<string>;
+  privateSession?: Session;
+  tabSession?: BrowserTabSession;
   popup: boolean;
   popupFailure?: BrowserTab["popupFailure"];
   closing?: boolean;
   ownerThreadId: string | null;
   ownerAgentId: string | null;
+  sharedThreadIds?: Set<string>;
   revision: number;
-  queue: Promise<unknown>;
-  /** Operations queued or running on `queue`, so a preview can tell the agent is working on the tab. */
+  operations?: number;
+  image?: { operation: number; url: string; taken: number };
+  queue: Deferred.Deferred<void>;
+  scope: Scope.Closeable;
   pendingOperations: number;
-  /** Main-frame documents the tab has loaded. A reload keeps the URL, so a saved preview checks this too. */
+  opening?: boolean;
+  crashes?: number;
+  endingSilentPage?: boolean;
   documents: number;
-  /**
-   * The last preview frame, with the page, document and capture generation it shows. A preview waits
-   * behind the agent's actions, so the preview card shows this frame instead while the tab is busy.
-   */
+  challengeWait?: { document: number; waitedMs: number };
+  challengeClick?: { document: number; waited: boolean };
+  checkOrigin?: string;
+  checkAfterTakeover?: string;
+  siteRecall?: { turnId: string; host: string };
   preview?: (BrowserPreviewPage & { frame: BrowserPreview }) | undefined;
-  /** The preview capture on `queue`, so preview requests for the same page share one capture. */
-  previewCapture?: (BrowserPreviewPage & { frame: Promise<BrowserPreview> }) | undefined;
-  /**
-   * The first load of a tab restored from disk, held back until the tab is shown or used. Each loaded
-   * tab is a renderer process, and a restart would otherwise start one for every saved tab at once.
-   */
-  pendingRestore?: (() => Promise<void>) | undefined;
-  /**
-   * An idle agent tab whose page was unloaded to free its renderer's memory. The title and the last
-   * preview frame stand in for the page until `pendingRestore` loads it again.
-   */
+  previewCapture?:
+    | (BrowserPreviewPage & { frame: Deferred.Deferred<BrowserPreview, BrowserOperationError> })
+    | undefined;
+  pendingRestore?: (() => Effect.Effect<void, BrowserOperationError>) | undefined;
   sleeping?: { title: string; preview: BrowserPreview | null } | undefined;
-  /** When a person or an agent last used the tab. A preview request does not count as use. */
+  idleUnloadNoted?: Set<string>;
   lastUsedAt: number;
+  lastToolChat?: { threadId: string; at: number } | undefined;
   focusOnVisible: boolean;
+  focusOnCommit?: boolean | undefined;
+  focusedAtPageClose?: boolean | undefined;
   environment: BrowserEnvironment;
   engine: BrowserCdpEngine;
   diagnostics: BrowserDiagnostics;
   recording: boolean;
   captureGeneration: number;
+  loadGeneration: number;
   viewInvalidations: Set<() => void>;
-  /** The host of the last page reported as a site visit, so a navigation inside one site is not reported again. */
+  viewContextMenu: { deliver: (menu: BrowserViewContextMenu) => void; until: number } | null;
   visitedHost?: string | undefined;
-  // Pending consent permits human takeover; submission blocks captures until document replacement.
   secret?: { origin: string; submitted: boolean; replaced: boolean; running: boolean } | undefined;
 }
 
-export type KeepQueueBlocked = (promise: Promise<unknown>) => void;
+export type KeepQueueBlocked = (work: Effect.Effect<unknown, BrowserOperationError>) => void;
 
 export function restoreWebContentsFocus(previous: WebContents | null, controlled: WebContents): void {
   const current = webContents.getFocusedWebContents();
@@ -84,6 +82,11 @@ export function restoreWebContentsFocus(previous: WebContents | null, controlled
     if (window && !window.isDestroyed()) window.focus();
     previous.focus();
   }
+}
+
+export function hasHistoryEntry(contents: WebContents, offset: -1 | 1): boolean {
+  const history = contents.navigationHistory;
+  return history.canGoToOffset(offset) && Boolean(history.getEntryAtIndex(history.getActiveIndex() + offset)?.url);
 }
 
 export function toPublicTab(tab: BrowserHostTab): BrowserTab {
@@ -100,7 +103,9 @@ export function toPublicTab(tab: BrowserHostTab): BrowserTab {
       : tab.environment;
   return {
     id: tab.id,
-    title: tab.secret ? "Secure authentication" : restoredTabTitle(tab) || tab.contents.getTitle() || "New tab",
+    title: tab.secret
+      ? "Secure authentication"
+      : restoredTabTitle(tab) || tab.engine.scrubText(tab.contents.getTitle()) || "New tab",
     url: tab.secret?.origin ?? currentTabUrl(tab),
     loading: tab.contents.isLoading(),
     ownerThreadId: tab.ownerThreadId,
@@ -108,15 +113,13 @@ export function toPublicTab(tab: BrowserHostTab): BrowserTab {
     environment,
     recording: tab.recording,
     diagnosticErrorCount: tab.diagnostics.errorCount,
+    canGoBack: hasHistoryEntry(tab.contents, -1),
+    canGoForward: hasHistoryEntry(tab.contents, 1),
     ...(tab.openerTabId ? { openerTabId: tab.openerTabId } : {}),
     ...(tab.popupFailure ? { popupFailure: tab.popupFailure } : {}),
   };
 }
 
-/**
- * A restored or sleeping tab that has not loaded yet shows a blank page; its last title, or else its
- * host name, stands in for its title.
- */
 function restoredTabTitle(tab: BrowserHostTab): string | null {
   if (!tab.pendingRestore) return null;
   if (tab.sleeping?.title) return tab.sleeping.title;

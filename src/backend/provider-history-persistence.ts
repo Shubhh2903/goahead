@@ -1,14 +1,12 @@
+import { Effect } from "effect";
 import type { AcpHistoryPersistence } from "./acp-client";
 import type { AgentProvider } from "./agent-client";
 import { databaseRow, optionalStringColumn, requiredStringColumn } from "./database/database-rows";
 import type { ProviderHistoryTurnCursor } from "./database/provider-history-store";
 import type { OpenBotDatabase } from "./openbot-database";
+import { providerSync } from "./provider-client-effects";
 import type { ProviderHistoryConsumer, ProviderHistoryRequest } from "./provider-history";
 
-/** The number of staged turns or items one read takes from SQLite. */
-const STORED_PAGE_SIZE = 50;
-
-/** Builds the ACP history port from SQLite without exposing the database to a provider process. */
 export function providerHistoryPersistence(database: OpenBotDatabase, provider: AgentProvider): AcpHistoryPersistence {
   const recordsOnly = provider !== "codex" && provider !== "claude";
   const findSession = (externalSessionId: string) => {
@@ -46,77 +44,103 @@ export function providerHistoryPersistence(database: OpenBotDatabase, provider: 
     };
   };
 
-  const read = async (request: ProviderHistoryRequest, consume: ProviderHistoryConsumer): Promise<void> => {
-    if (request.providerOnly) return;
-    const session = findSession(request.threadId);
-    if (!session) return;
-    let after: ProviderHistoryTurnCursor | undefined;
-    for (;;) {
-      const page = database.stagedProviderHistoryTurnPage(session.sessionId, {
-        ...(after === undefined ? {} : { after }),
-        limit: STORED_PAGE_SIZE,
-      });
-      for (const turn of page.turns) {
-        const base = {
-          turnId: turn.turnId,
-          ...(turn.status === null ? {} : { status: turn.status }),
-          ...(turn.startedAt === null ? {} : { startedAt: turn.startedAt }),
-          ...(recordsOnly ? { recordsOnly: true } : {}),
-        };
-        if (request.items === "none") {
-          if (!(await consume({ ...base, complete: turn.complete, items: [] }))) return;
-          continue;
-        }
-        let afterIndex = -1;
-        for (;;) {
-          const items = database.stagedProviderHistoryItems({
-            sessionId: session.sessionId,
-            turnId: turn.turnId,
-            afterIndex,
-            limit: STORED_PAGE_SIZE,
-          });
-          if (items.length === 0) {
-            if (!(await consume({ ...base, items: [], itemOffset: afterIndex + 1, complete: turn.complete }))) return;
-            break;
+  const read = (request: ProviderHistoryRequest, consume: ProviderHistoryConsumer) =>
+    Effect.gen(function* () {
+      if (request.providerOnly) return;
+      const session = yield* providerSync(() => findSession(request.threadId));
+      if (!session) return;
+      let after: ProviderHistoryTurnCursor | undefined;
+      for (;;) {
+        const page = yield* providerSync(() =>
+          database.stagedProviderHistoryTurnPage(session.sessionId, {
+            ...(after === undefined ? {} : { after }),
+            limit: 50,
+          }),
+        );
+        for (const turn of page.turns) {
+          if (request.items === "none") {
+            if (
+              !(yield* consume({
+                turnId: turn.turnId,
+                ...(turn.status === null ? {} : { status: turn.status }),
+                ...(turn.startedAt === null ? {} : { startedAt: turn.startedAt }),
+                ...(recordsOnly ? { recordsOnly: true } : {}),
+                complete: turn.complete,
+                items: [],
+              }))
+            )
+              return;
+            continue;
           }
-          const last = items.at(-1);
-          const complete = items.length < STORED_PAGE_SIZE && turn.complete;
-          const fragment = {
-            ...base,
-            items: items.map(({ item }) => item),
-            itemOffset: items[0]?.itemIndex ?? afterIndex + 1,
-            complete,
-          };
-          if (!(await consume(fragment))) return;
-          if (complete || !last || last.itemIndex <= afterIndex) break;
-          afterIndex = last.itemIndex;
+          let afterIndex = -1;
+          for (;;) {
+            const items = yield* providerSync(() =>
+              database.stagedProviderHistoryItems({
+                sessionId: session.sessionId,
+                turnId: turn.turnId,
+                afterIndex,
+                limit: 50,
+              }),
+            );
+            if (items.length === 0) {
+              if (
+                !(yield* consume({
+                  turnId: turn.turnId,
+                  ...(turn.status === null ? {} : { status: turn.status }),
+                  ...(turn.startedAt === null ? {} : { startedAt: turn.startedAt }),
+                  ...(recordsOnly ? { recordsOnly: true } : {}),
+                  items: [],
+                  itemOffset: afterIndex + 1,
+                  complete: turn.complete,
+                }))
+              )
+                return;
+              break;
+            }
+            const last = items.at(-1);
+            const complete = items.length < 50 && turn.complete;
+            if (
+              !(yield* consume({
+                turnId: turn.turnId,
+                ...(turn.status === null ? {} : { status: turn.status }),
+                ...(turn.startedAt === null ? {} : { startedAt: turn.startedAt }),
+                ...(recordsOnly ? { recordsOnly: true } : {}),
+                items: items.map(({ item }) => item),
+                itemOffset: items[0]?.itemIndex ?? afterIndex + 1,
+                complete,
+              }))
+            )
+              return;
+            if (complete || !last || last.itemIndex <= afterIndex) break;
+            afterIndex = last.itemIndex;
+          }
         }
+        if (!page.nextCursor) return;
+        after = page.nextCursor;
       }
-      if (!page.nextCursor) return;
-      after = page.nextCursor;
-    }
-  };
+    });
 
   return {
     read,
-    complete: async (request) => findSession(request.threadId)?.state === "complete",
-    append: async (externalSessionId, fragment) => {
-      const existing = findSession(externalSessionId);
-      if (existing) {
-        database.stageProviderHistoryFragment({ sessionId: existing.sessionId, fragment });
-        return;
-      }
-      const providerSession = findProviderSession(externalSessionId);
-      if (!providerSession) {
-        throw new Error(`Unknown provider session for ACP history append: ${externalSessionId}`);
-      }
-      database.ensureProviderHistoryImport({
-        sessionId: providerSession.sessionId,
-        threadId: providerSession.threadId,
-        provider,
-        externalSessionId,
-      });
-      database.stageProviderHistoryFragment({ sessionId: providerSession.sessionId, fragment });
-    },
+    complete: (request) => providerSync(() => findSession(request.threadId)?.state === "complete"),
+    append: (externalSessionId, fragment) =>
+      providerSync(() => {
+        const existing = findSession(externalSessionId);
+        if (existing) {
+          database.stageProviderHistoryFragment({ sessionId: existing.sessionId, fragment });
+          return;
+        }
+        const providerSession = findProviderSession(externalSessionId);
+        if (!providerSession) {
+          throw new Error(`Unknown provider session for ACP history append: ${externalSessionId}`);
+        }
+        database.ensureProviderHistoryImport({
+          sessionId: providerSession.sessionId,
+          threadId: providerSession.threadId,
+          provider,
+          externalSessionId,
+        });
+        database.stageProviderHistoryFragment({ sessionId: providerSession.sessionId, fragment });
+      }),
   };
 }

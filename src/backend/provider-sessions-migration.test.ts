@@ -6,6 +6,7 @@ import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 import type { AgentProviderId } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import { afterEach, describe, expect, it } from "vitest";
+import { runCauseEffect } from "./effect-boundary";
 import { OpenBotDatabase } from "./openbot-database";
 import { migrateOpenBotDatabase } from "./openbot-database-schema";
 
@@ -22,7 +23,7 @@ import { migrateOpenBotDatabase } from "./openbot-database-schema";
 // - a database that upstream OpenBot wrote is migrated as a GoAhead database;
 // - the lineage guard stops a real GoAhead database.
 
-const LATEST = 37;
+const LATEST = 74;
 const STAMP = "2026-10-01T07:00:00.000Z";
 
 const roots: string[] = [];
@@ -219,6 +220,13 @@ const MISSED_RUN_COLUMNS = new Set([
   "missed_until",
   "run_condition",
   "run_condition_fingerprint",
+  "run_source",
+  "run_in",
+  "site",
+  "group_first",
+  "group_id",
+  "group_start",
+  "turn_rank",
 ]);
 
 function withoutMissedRunColumns(row: Record<string, SQLOutputValue>): Record<string, SQLOutputValue> {
@@ -360,7 +368,7 @@ describe("migration 32: provider sessions without a provider CHECK", () => {
     const db = databaseAt(28);
     seedInstall(db, 28);
     // Migrations 29 to 31 run first and commit; only 32 fails.
-    db.exec("CREATE TABLE projection_provider_sessions_v32 (squatter TEXT)");
+    db.exec("CREATE TABLE projection_provider_sessions_v28 (squatter TEXT)");
 
     expect(() => migrateOpenBotDatabase(db)).toThrow("migration to version 32 failed");
     expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 31 });
@@ -374,12 +382,12 @@ describe("migration 32: provider sessions without a provider CHECK", () => {
     expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     const before = withoutMarkers(allRows(db));
 
-    db.exec("DROP TABLE projection_provider_sessions_v32");
+    db.exec("DROP TABLE projection_provider_sessions_v28");
     migrateOpenBotDatabase(db);
     expectHealthyLatest(db);
-    const { projection_provider_sessions_v32: _squatter, ...kept } = before;
+    const { projection_provider_sessions_v28: _squatter, ...kept } = before;
     expect(pick(allRows(db), Object.keys(kept))).toEqual(kept);
-    expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'projection_provider_sessions_v32'").get()).toBe(
+    expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'projection_provider_sessions_v28'").get()).toBe(
       undefined,
     );
   });
@@ -415,7 +423,7 @@ describe("migration 32: provider sessions without a provider CHECK", () => {
     source.close();
 
     const database = new OpenBotDatabase(root);
-    await database.initialize();
+    await runCauseEffect(database.initialize());
     try {
       expect(providerSessionsSql(database.connection)).not.toContain("CHECK(provider");
       const events = database.connection.prepare("SELECT COUNT(*) AS count FROM orchestration_events").get();
@@ -511,7 +519,7 @@ describe("lineage guard", () => {
     source.close();
 
     const database = new OpenBotDatabase(root);
-    await expect(database.initialize()).rejects.toThrow(
+    await expect(runCauseEffect(database.initialize())).rejects.toThrow(
       "OpenBot made this database, not GoAhead. GoAhead cannot open it and did not change it.",
     );
     const reopened = new DatabaseSync(join(root, "openbot.db"));

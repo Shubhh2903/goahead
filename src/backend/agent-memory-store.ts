@@ -1,31 +1,37 @@
 import { randomUUID } from "node:crypto";
 import { AGENT_MEMORY_CONTEXT_BUDGET_BYTES, essentialMemoryBytes } from "@openbot/contracts/agent-memory-context";
-import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import type {
-  AgentMemory,
-  AgentMemorySelection,
-  AgentMemorySelectionChange,
-  AgentMemorySelectionState,
-  MemoryEntry,
+import {
+  type AgentMemory,
+  type AgentMemorySelection,
+  type AgentMemorySelectionChange,
+  type AgentMemorySelectionState,
+  DEFAULT_AGENT_MEMORY_LIMIT,
+  type MemoryEntry,
 } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
+import { Schema } from "effect";
 import { initializeAgentMemorySelection } from "./agent-memory-selection";
 import { databaseRows, requiredNumberColumn, requiredStringColumn } from "./database/database-rows";
-import { MemoryStore, type MemoryTables, type SaveMemoryInput } from "./memory-store";
+import { MemoryStore, type MemoryTables, memorySitesForHost, type SaveMemoryInput } from "./memory-store";
 import type { OpenBotDatabase } from "./openbot-database";
 
-export type AgentMemorySelectionErrorCode = "budget" | "conflict" | "user-controlled" | "query" | "missing";
+const UNSPACED_SCRIPT =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
 
-/** A refused selection change or search. The message is for the agent or the member, not a host fault. */
-export class AgentMemorySelectionError extends Error {
-  readonly code: AgentMemorySelectionErrorCode;
-
-  constructor({ code, message }: { code: AgentMemorySelectionErrorCode; message: string }) {
-    super(message);
-    this.name = "AgentMemorySelectionError";
-    this.code = code;
-  }
+function unindexedTermMatcher(term: string): { term: string; pattern: RegExp } {
+  const unspaced = UNSPACED_SCRIPT.source;
+  const edge = `${unspaced}|[^\\p{L}\\p{N}\\p{M}]`;
+  const touchingUnspacedText = `(?<=${unspaced})${term}(?=${edge}|$)|(?<=${edge}|^)${term}(?=${unspaced})`;
+  return { term, pattern: new RegExp(UNSPACED_SCRIPT.test(term) ? term : touchingUnspacedText, "iu") };
 }
+
+export class AgentMemorySelectionError extends Schema.TaggedError<AgentMemorySelectionError>()(
+  "AgentMemorySelectionError",
+  {
+    code: Schema.Literals(["budget", "conflict", "user-controlled", "query", "missing"]),
+    message: Schema.String,
+  },
+) {}
 
 export interface SaveAutomaticMemoryInput {
   agentId: string;
@@ -34,6 +40,7 @@ export interface SaveAutomaticMemoryInput {
   sourceTurnId: string;
   expectedUpdatedAt?: string | null;
   expectedSelectionRevision?: number;
+  site?: string;
 }
 
 export interface RetrievedAgentMemory extends AgentMemory {
@@ -51,19 +58,22 @@ export interface AgentMemoryListPage extends AgentMemorySearchResult {
   nextCursor: string | null;
 }
 
+const SITE_MEMORY_LIMIT = 5;
+
 function agentMemoryTables(limit: () => number): MemoryTables {
   return {
     table: "projection_agent_memories",
     ownerColumn: "agent_id",
+    ownerKey: "agentId",
     aggregateType: "agent-memory",
     limit,
     limitMessage: (current) => sourceText("error.backend.agentMemoryLimit", { limit: current }),
+    siteColumn: true,
   };
 }
 
-/** Owns saved agent memories, their selection, and local recall. Channel memories remain separate. */
 export class AgentMemoryStore extends MemoryStore {
-  constructor(database: OpenBotDatabase, limit: () => number = () => INPUT_LIMITS.agentMemories) {
+  constructor(database: OpenBotDatabase, limit: () => number = () => DEFAULT_AGENT_MEMORY_LIMIT) {
     super(database, agentMemoryTables(limit));
   }
 
@@ -135,9 +145,27 @@ export class AgentMemoryStore extends MemoryStore {
     return memory && { ...memory, agentId: input.agentId };
   }
 
-  /** Dispatch reuses an existing transaction and otherwise owns commit and rollback. */
+  listForSites(agentId: string, sites: readonly string[], limit: number): AgentMemory[] {
+    if (sites.length === 0) return [];
+    const ids = databaseRows(
+      this.database.connection
+        .prepare(
+          `SELECT m.memory_id FROM projection_agent_memories m
+       LEFT JOIN agent_memory_selections s ON s.memory_id = m.memory_id
+       WHERE m.agent_id = ? AND m.site IN (${sites.map(() => "?").join(", ")})
+         AND COALESCE(s.inclusion, 'searchable') <> 'essential'
+       ORDER BY m.updated_at DESC, m.memory_id LIMIT ?`,
+        )
+        .all(agentId, ...sites, limit),
+    ).map((row) => requiredStringColumn(row, "memory_id"));
+    return ids.flatMap((id) => this.get(agentId, id) ?? []);
+  }
+
+  forHost(agentId: string, hostname: string, limit = SITE_MEMORY_LIMIT): AgentMemory[] {
+    return this.listForSites(agentId, memorySitesForHost(hostname), limit);
+  }
+
   withMemoryTransaction<T>(operation: () => T): T {
-    // The wrapper receipt must not retain text after forget/clear removes the memory's own receipts.
     const output: { value?: { result: T } } = {};
     this.database.dispatch(`agent-memory:batch:${randomUUID()}`, [], () => {
       output.value = { result: operation() };
@@ -257,8 +285,17 @@ export class AgentMemoryStore extends MemoryStore {
     if (query.length > 256 || terms.length === 0 || !Number.isInteger(limit) || limit < 1 || limit > 10) {
       throw new AgentMemorySelectionError({ code: "query", message: sourceText("error.backend.memorySearchQuery") });
     }
-    const expression = [...new Set(terms)].map((term) => `"${term}"`).join(" OR ");
-    const ids = databaseRows(
+    const expression = [
+      ...new Set(
+        terms.flatMap((term) => {
+          const letters = [...term];
+          return letters.length < 6
+            ? [`"${term}"`]
+            : [`"${term}"`, `"${letters.slice(0, Math.max(4, letters.length - 3)).join("")}"*`];
+        }),
+      ),
+    ].join(" OR ");
+    const indexed = databaseRows(
       this.database.connection
         .prepare(
           `SELECT m.memory_id FROM agent_memory_search JOIN projection_agent_memories m ON m.rowid = agent_memory_search.rowid
@@ -267,6 +304,26 @@ export class AgentMemoryStore extends MemoryStore {
         )
         .all(expression, agentId, limit + 1),
     ).map((row) => requiredStringColumn(row, "memory_id"));
+    const unindexed = [...new Set(terms)].map(unindexedTermMatcher);
+    const ids =
+      indexed.length > limit
+        ? indexed
+        : [
+            ...new Set([
+              ...indexed,
+              ...databaseRows(
+                this.database.connection
+                  .prepare(
+                    `SELECT memory_id, text FROM projection_agent_memories
+       WHERE agent_id = ? AND (${unindexed.map(() => "text LIKE ?").join(" OR ")})
+       ORDER BY updated_at DESC, memory_id`,
+                  )
+                  .all(agentId, ...unindexed.map(({ term }) => `%${term}%`)),
+              )
+                .filter((row) => unindexed.some(({ pattern }) => pattern.test(requiredStringColumn(row, "text"))))
+                .map((row) => requiredStringColumn(row, "memory_id")),
+            ]),
+          ].slice(0, limit + 1);
     const result: AgentMemorySearchResult = { memories: [], hasMore: ids.length > limit };
     for (const id of ids.slice(0, limit)) {
       const memory = this.#retrieved(agentId, id);

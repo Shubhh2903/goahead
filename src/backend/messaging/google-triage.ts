@@ -23,6 +23,7 @@ import { redactText } from "@openbot/logging";
 import { z } from "zod";
 import { CLAUDE_BUILT_IN_TOOLS, claudeEnvironment } from "../claude-client";
 import { type ClaudeCliInfo, resolveClaudeCli } from "../cli";
+import { runCauseEffect } from "../effect-boundary";
 import {
   GMAIL_NOTIFY_TOOL,
   GMAIL_ORGANIZE_TOOL,
@@ -225,7 +226,7 @@ export async function runGoogleTriage(input: GoogleTriageRun): Promise<GoogleTri
   let cli: ClaudeCliInfo;
   let cwd: string;
   try {
-    cli = await (input.resolveCli ?? (() => resolveClaudeCli()))();
+    cli = input.resolveCli ? await input.resolveCli() : await runCauseEffect(resolveClaudeCli());
     cwd = await mkdtemp(join(tmpdir(), "goahead-mail-triage-"));
   } catch (error) {
     return { status: "unavailable", reason: errorText(error), notified };

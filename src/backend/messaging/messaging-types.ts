@@ -1,17 +1,31 @@
-// The seam between the platform-agnostic messaging core and one chat platform. A platform is one
-// `MessagingDriver`: an adapter for its API and a transport for its inbound events. The OpenBot
-// Slack app uses the Events API: Slack posts to Signal, Signal checks Slack's signature, and passes
-// each request of a workspace linked to this host over the `MessagingIngress` socket, which the host
-// opens. A Discord driver would use the Gateway and a Telegram driver long polling (`getUpdates`).
-// No transport needs a public endpoint on the host.
-
+import { AGENT_PROVIDERS, agentProviderName } from "@openbot/contracts/agent-providers";
 import type { MessagingConnectionState, MessagingPlatform, SlackConversationKind } from "@openbot/contracts/ipc";
+import type { DiscordApiRequest, DiscordDelivery, DiscordEmbed } from "@openbot/contracts/signal-protocol/discord-api";
+import type {
+  TelegramCallMethod,
+  TelegramCallParams,
+  TelegramCallResult,
+} from "@openbot/contracts/signal-protocol/telegram-route";
+import { isFixedSourceText, matchingSourceKeys, sourceText } from "@openbot/i18n/source";
+import { type Effect, Schema } from "effect";
+import type { MessagingOperationFailed } from "./messaging-service";
 import type { MessagingAnswerFile } from "./messaging-threads";
 
-/** Where a post goes: a platform channel, and the thread in it or the top level. */
 export interface MessageTarget {
   platformChannelId: string;
   replyThreadId: string | null;
+}
+
+export interface MessagingPlace {
+  id: string;
+  name: string;
+  kind: "channel" | "private" | "thread" | "chat";
+  readOnly?: true;
+}
+
+export interface MessagingPlaces {
+  places: MessagingPlace[];
+  note?: string;
 }
 
 export interface InboundFile {
@@ -20,6 +34,18 @@ export interface InboundFile {
   mimeType: string;
   size: number;
   url: string;
+  path?: string;
+}
+
+export const CANCEL_TEXT = /^(cancel|stop)$/i;
+
+export function chatFailureReason(error: string | null | undefined): string | null {
+  if (!error) return null;
+  if (isFixedSourceText(error)) return matchingSourceKeys(error).some((key) => key.startsWith("error.")) ? error : null;
+  const signInExpired = AGENT_PROVIDERS.some(
+    (provider) => error === sourceText("error.provider.signInExpired", { provider: agentProviderName(provider) }),
+  );
+  return signInExpired ? error : null;
 }
 
 /**
@@ -28,21 +54,20 @@ export interface InboundFile {
  */
 export const DIRECT_CONVERSATION_KEY = "direct";
 
-/** One message that addresses OpenBot, in the same shape for every platform. */
 export interface InboundMessage {
-  /** Stable for one message across redeliveries. */
   dedupKey: string;
   platformChannelId: string;
-  /** Names the conversation: one link, and so one execution thread, per key and channel. */
   threadKey: string;
   target: MessageTarget;
   platformMessageId: string;
   isDirect: boolean;
-  /** True for a reply that does not name OpenBot: it counts only in a conversation that already has an agent. */
   requiresLink: boolean;
   authorId: string;
   text: string;
+  mentionedUserIds: string[];
   files: InboundFile[];
+  authorRoleIds?: readonly string[] | null;
+  replyTo?: InboundQuote | null;
   /** Set for a reply to a message OpenBot sent as the user, already turned into a message of its conversation. */
   observed?: boolean;
   /**
@@ -189,21 +214,30 @@ export interface HistoryUpload {
   initialComment?: string;
 }
 
+interface InboundQuote {
+  authorName: string;
+  text: string;
+  mentionedUserIds: string[];
+  sentAt: string;
+  messageId?: string;
+  files?: InboundFile[];
+}
+
+interface InboundActionBase {
+  token: string;
+  actorId: string;
+  target: MessageTarget;
+  platformMessageId: string;
+  replyHandle?: string;
+}
+
 export type InboundAction =
-  | {
-      type: "approval";
-      token: string;
-      decision: "accept" | "decline";
-      actorId: string;
-      target: MessageTarget;
-      platformMessageId: string;
-    }
-  | { type: "stop"; token: string; actorId: string; target: MessageTarget; platformMessageId: string };
+  | (InboundActionBase & { type: "approval"; decision: "accept" | "decline" })
+  | (InboundActionBase & { type: "stop" });
 
 interface MessageButton {
   action: "accept" | "decline" | "stop";
   label: string;
-  /** Opaque and single use. It maps to the request only in the host's memory. */
   token: string;
   style?: "primary" | "danger";
 }
@@ -211,6 +245,7 @@ interface MessageButton {
 export interface MessageBody {
   text: string;
   buttons?: MessageButton[];
+  embeds?: DiscordEmbed[];
 }
 
 export type StatusReaction = "received" | "done" | "failed" | "stopped";
@@ -233,20 +268,69 @@ export interface ContextEntry {
   authorName: string;
   text: string;
   sentAt: string;
+  files?: InboundFile[];
 }
 
-/** A failure the connection cannot recover from alone. The user must act. */
+export interface HistoryFilter {
+  query?: string;
+  before?: string;
+}
+
+export interface RecentMessages {
+  messages: ContextEntry[];
+  note?: string;
+}
+
 export class MessagingConnectionError extends Error {
   constructor(readonly state: Extract<MessagingConnectionState, "invalid_token">) {
     super(state);
   }
 }
 
+export class MessagingAdapterError extends Schema.TaggedError<MessagingAdapterError>()("MessagingAdapterError", {
+  cause: Schema.Defect(),
+}) {}
+
 export interface MessagingAdapter {
   readonly platform: MessagingPlatform;
-  identify(): Promise<ConnectionIdentity>;
-  post(target: MessageTarget, body: MessageBody): Promise<string>;
-  edit(target: MessageTarget, messageId: string, body: MessageBody): Promise<void>;
+  readonly searchesHistory?: boolean;
+  identify(): Effect.Effect<ConnectionIdentity, MessagingAdapterError>;
+  post(target: MessageTarget, body: MessageBody): Effect.Effect<string, MessagingAdapterError>;
+  edit(target: MessageTarget, messageId: string, body: MessageBody): Effect.Effect<void, MessagingAdapterError>;
+  remove?(target: MessageTarget, messageId: string): Effect.Effect<void, MessagingAdapterError>;
+  postPrivate(
+    target: MessageTarget,
+    userId: string,
+    text: string,
+    replyHandle?: string,
+  ): Effect.Effect<void, MessagingAdapterError>;
+  react(
+    target: MessageTarget,
+    messageId: string,
+    reaction: StatusReaction,
+    on: boolean,
+  ): Effect.Effect<void, MessagingAdapterError>;
+  addEmoji?(target: MessageTarget, messageId: string, emoji: string): Effect.Effect<void, MessagingAdapterError>;
+  postAnswer(
+    target: MessageTarget,
+    markdown: string,
+    replaceMessageId: string | null,
+  ): Effect.Effect<string, MessagingAdapterError>;
+  postEmbeds?(
+    target: MessageTarget,
+    markdown: string,
+    embeds: DiscordEmbed[],
+  ): Effect.Effect<string, MessagingAdapterError>;
+  rememberPost?(target: MessageTarget, postId: string, text: string): void;
+  upload(
+    target: MessageTarget,
+    files: MessagingAnswerFile[],
+  ): Effect.Effect<{ skipped: string[]; firstId: string | null }, MessagingAdapterError>;
+  postFileWithText?(
+    target: MessageTarget,
+    markdown: string,
+    file: MessagingAnswerFile,
+  ): Effect.Effect<string | null, MessagingAdapterError>;
   /**
    * Posts a reply that the person typed, as them, with the user token. Only Slack has it. The text is
    * escaped as a whole; with `keepMentions` it is client text, and `<@U…>` user mentions stay. With
@@ -261,15 +345,6 @@ export interface MessagingAdapter {
   }): Promise<{ ts: string }>;
   /** Moves the person's read mark of a conversation to `ts`, with the user token. Only Slack has it. */
   markReadAsUser?(channel: string, ts: string): Promise<void>;
-  postPrivate(target: MessageTarget, userId: string, text: string): Promise<void>;
-  react(target: MessageTarget, messageId: string, reaction: StatusReaction, on: boolean): Promise<void>;
-  /**
-   * Posts the agent's answer, in as many posts as the platform needs. The first part replaces
-   * `replaceMessageId` when it is given.
-   */
-  postAnswer(target: MessageTarget, markdown: string, replaceMessageId: string | null): Promise<void>;
-  /** Uploads files to the conversation, and returns the names it did not send. */
-  upload(target: MessageTarget, files: MessagingAnswerFile[]): Promise<string[]>;
   /**
    * The direct message with one person, or the group direct message with several (ids joined with
    * commas), opened when needed, as the sender. Returns its channel id.
@@ -312,9 +387,23 @@ export interface MessagingAdapter {
     threadKey: string,
     afterId: string | null,
     beforeId: string,
-  ): Promise<ContextEntry[]>;
-  /** Downloads one file to `destination`. Refuses a file larger than `maxBytes`. */
-  download(file: InboundFile, destination: string, maxBytes: number): Promise<void>;
+  ): Effect.Effect<ContextEntry[], MessagingAdapterError>;
+  recent(
+    platformChannelId: string,
+    threadKey: string | null,
+    limit: number,
+    filter?: HistoryFilter,
+  ): Effect.Effect<RecentMessages, MessagingAdapterError>;
+  download(file: InboundFile, destination: string, maxBytes: number): Effect.Effect<void, MessagingAdapterError>;
+  authorName(userId: string): Effect.Effect<string, MessagingAdapterError>;
+  placeName(platformChannelId: string): Effect.Effect<string, MessagingAdapterError>;
+  places(): Effect.Effect<MessagingPlaces, MessagingAdapterError>;
+  placeId?(placeId: string): string;
+  directChat?(target: MessageTarget): { userId: string; threadKey: string } | null;
+  roles?(): Effect.Effect<Array<{ id: string; name: string }>, MessagingAdapterError>;
+  mention(userId: string): string;
+  joinPublicPlaces?(): Effect.Effect<void, MessagingAdapterError>;
+  joinPlace?(platformChannelId: string): Effect.Effect<void, MessagingAdapterError>;
   /**
    * Downloads a file of the person's inbox to `destination`, with the person's token first and then
    * the bot's. Refuses an address that is not the platform's, a page instead of a file, and a file
@@ -325,9 +414,6 @@ export interface MessagingAdapter {
   customEmoji?(): Promise<Record<string, string>>;
   /** Inbox text, kept in the platform's markup, as plain text for an agent or a preview. */
   plainText?(text: string): string;
-  authorName(userId: string): Promise<string>;
-  placeName(platformChannelId: string): Promise<string>;
-  mention(userId: string): string;
   // The Slack client. Every method below acts as the connected person, with the user token, and fails
   // without it. Reads throw `SlackRateLimitError` on a 429 at once, so the client's queue waits; each
   // read is one Slack call, so the queue schedules and repeats one page at a time. Text that these
@@ -357,18 +443,14 @@ export interface MessagingAdapter {
    * Deleted people and bots are left out. Read from the platform, not only from a local cache.
    */
   findPeople?(name: string): Promise<Array<{ id: string; name: string; title: string }>>;
-  /** Joins every public place the platform lets OpenBot join without an invitation. */
-  joinPublicPlaces?(): Promise<void>;
-  /** Joins one public place, such as a channel that was just created. */
-  joinPlace?(platformChannelId: string): Promise<void>;
 }
 
 export interface TransportSink {
   state(state: MessagingConnectionState, detail?: { retryAt?: string }): void;
   message(message: InboundMessage): void;
   action(action: InboundAction): void;
-  /** A public place was created that OpenBot can join. */
   placeCreated?(platformChannelId: string): void;
+  renamed?(workspaceName: string): void;
   /** A message the connected person can see. The inbox decides whether to keep it. */
   inbox?(candidate: InboxCandidate): void;
   /** A live change to a conversation's history, for the Slack client's cache. Only Slack has it. */
@@ -383,61 +465,113 @@ export interface TransportSink {
 
 export interface MessagingTransport {
   start(sink: TransportSink): void;
-  /** Reconnects now, such as after the computer wakes. */
   reconnect(): void;
-  stop(): Promise<void>;
-  /** Handles one request that the ingress relay brought, for a transport that gets its events that way. */
-  deliver?(delivery: IngressDelivery): Promise<IngressAnswer>;
+  stop(): Effect.Effect<void>;
+  deliver?(delivery: IngressDelivery): Effect.Effect<IngressAnswer>;
 }
 
-/**
- * One HTTP request that a platform sent to its request URL, as Signal passed it on. Signal has
- * already checked the platform's signature.
- */
-export interface IngressDelivery {
-  kind: "events" | "interactivity";
-  retryNum: number | null;
-  body: Uint8Array;
-}
+export type IngressDelivery = (
+  | { platform: "slack"; kind: "events" | "interactivity"; retryNum: number | null; body: Uint8Array }
+  | { platform: "discord"; delivery: DiscordDelivery }
+  | { platform: "telegram"; botId: string; body: Uint8Array; linked: boolean }
+) & {
+  queued?: boolean;
+};
 
-/** The HTTP answer the platform gets. A body only for a URL check or a button reply. */
 export interface IngressAnswer {
   status: 200 | 400 | 401 | 404 | 503;
   contentType?: "application/json" | "text/plain";
   body?: string;
 }
 
-/** `unavailable` has a reason the user can act on: sign in, name this computer, or wait for Signal. */
 export type IngressState = "online" | "connecting" | "signed_out" | "no_host" | "unavailable";
 
-/** Handles one request for a workspace, by the platform's workspace id. */
-export type IngressHandler = (workspaceId: string, delivery: IngressDelivery) => Promise<IngressAnswer>;
+export type IngressHandler = (
+  workspaceId: string,
+  delivery: IngressDelivery,
+) => Effect.Effect<IngressAnswer, MessagingOperationFailed>;
 
-/**
- * The relay that brings a platform's HTTP requests to this host: Signal's `ingress` socket, which
- * the main process owns. It is open while anything holds it.
- */
+export interface TelegramGateway {
+  available(): boolean;
+  call<M extends TelegramCallMethod>(
+    botId: string,
+    method: M,
+    params: TelegramCallParams[M],
+  ): Effect.Effect<TelegramCallResult, MessagingAdapterError>;
+  download(fileToken: string, destination: string, maxBytes: number): Effect.Effect<void, MessagingAdapterError>;
+  upload(uploadToken: string, path: string): Effect.Effect<number, MessagingAdapterError>;
+}
+
+export class TelegramCallError extends Error {
+  readonly code: string;
+  constructor(
+    readonly errorCode: number,
+    description: string,
+    readonly retryAfter: number | null,
+  ) {
+    super(description);
+    this.name = "TelegramCallError";
+    this.code = `telegram_${errorCode}`;
+  }
+}
+
+export class WhatsAppRefusedError extends Error {
+  readonly code: string;
+  constructor(errorCode: string) {
+    super(`WhatsApp refused the message: ${errorCode}`);
+    this.name = "WhatsAppRefusedError";
+    this.code = `whatsapp_${errorCode}`;
+  }
+}
+
+export class WhatsAppAnswerPartlySent extends Error {
+  constructor(cause: unknown) {
+    super("A part of the WhatsApp answer was sent.", { cause });
+    this.name = "WhatsAppAnswerPartlySent";
+  }
+}
+
 export interface MessagingIngress {
-  /** Keeps the relay open until the returned function runs. */
-  acquire(): () => void;
+  acquire(platform: MessagingPlatform): () => void;
   state(): IngressState;
   onState(listener: (state: IngressState) => void): () => void;
-  /** Sets the one handler of the requests the relay receives, or removes it. */
   handle(handler: IngressHandler | null): void;
-  /**
-   * Opens the socket again, such as after the computer wakes, or after a workspace was connected or
-   * disconnected: Signal learns the workspaces of this host when the socket connects.
-   */
+  readonly telegram: TelegramGateway;
   reconnect(): void;
+  discord<A>(
+    request: DiscordApiRequest,
+    decode: (value: unknown) => A,
+    file?: DiscordUploadFile,
+  ): Effect.Effect<A, MessagingAdapterError>;
+  onDiscordRoutes(listener: (guildIds: ReadonlySet<string>) => void): () => void;
+  onLinkedRoutes(platform: LinkedRoutePlatform, listener: (ids: ReadonlySet<string> | null) => void): () => void;
+}
+
+export type LinkedRoutePlatform = "slack" | "telegram";
+
+export interface DiscordUploadFile {
+  bytes: Uint8Array;
+  mimeType: string;
+}
+
+export class DiscordApiError extends Error {
+  constructor(
+    readonly op: string,
+    readonly code: string,
+    readonly retryAfterMs?: number,
+  ) {
+    super(`Discord ${op} failed: ${code}`);
+  }
 }
 
 export interface MessagingDriverOptions {
-  /** Called when the platform asks the host to wait, with the time it can try again. */
+  connectionId: string;
   rateLimited(retryAt: string): void;
 }
 
 export interface MessagingDriver {
   readonly platform: MessagingPlatform;
+  readonly requiredCredential: string;
   createAdapter(credentials: Record<string, string>, options: MessagingDriverOptions): MessagingAdapter;
   createTransport(credentials: Record<string, string>, identity: ConnectionIdentity): MessagingTransport;
 }

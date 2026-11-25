@@ -3,24 +3,19 @@ import { redactText } from "@openbot/logging";
 
 const DIAGNOSTIC_LIMIT = 100;
 const ACTION_LIMIT = 100;
-/**
- * Every snapshot, and so every action, hands these to the model again. A single-page application
- * that logs on each render fills the ring with long messages, so a snapshot takes the recent ones
- * and each message is cut to a length that still names the failure.
- */
 const SNAPSHOT_DIAGNOSTICS = 20;
 const SNAPSHOT_ACTIONS = 10;
+const STATUS_ERRORS = 5;
 const MAX_ENTRY_TEXT = 500;
 
-/**
- * The bounded console/network/load and action rings for one browser tab. Every string here is
- * page-controlled text that `snapshot()` hands to a provider, so redaction happens on the way in
- * rather than at each reader: a page that logs `Authorization: Bearer …` never gets a secret into
- * the ring, and no later caller can forget to strip one.
- */
 export class BrowserDiagnostics {
   readonly #diagnostics: BrowserDiagnosticEntry[] = [];
   readonly #actions: BrowserActionHistoryEntry[] = [];
+  #addedDiagnostics = 0;
+  #addedActions = 0;
+  #deliveredDiagnostics = 0;
+  #deliveredActions = 0;
+  #statusDiagnostics = 0;
 
   add(entry: Omit<BrowserDiagnosticEntry, "timestamp">): void {
     pushRing(
@@ -28,6 +23,7 @@ export class BrowserDiagnostics {
       { ...entry, message: boundedText(entry.message), timestamp: new Date().toISOString() },
       DIAGNOSTIC_LIMIT,
     );
+    this.#addedDiagnostics += 1;
   }
 
   action(entry: Omit<BrowserActionHistoryEntry, "timestamp">): void {
@@ -41,13 +37,36 @@ export class BrowserDiagnostics {
       },
       ACTION_LIMIT,
     );
+    this.#addedActions += 1;
   }
 
-  snapshot(): { diagnostics: BrowserDiagnosticEntry[]; actions: BrowserActionHistoryEntry[] } {
+  snapshot(): {
+    diagnostics: BrowserDiagnosticEntry[];
+    actions: BrowserActionHistoryEntry[];
+    cursor: BrowserHistoryCursor;
+  } {
     return {
-      diagnostics: this.#diagnostics.slice(-SNAPSHOT_DIAGNOSTICS),
-      actions: this.#actions.slice(-SNAPSHOT_ACTIONS),
+      diagnostics: newest(this.#diagnostics, this.#addedDiagnostics - this.#deliveredDiagnostics, DIAGNOSTIC_LIMIT)
+        .filter((entry) => entry.kind !== "network" || entry.level !== "info")
+        .slice(-SNAPSHOT_DIAGNOSTICS),
+      actions: newest(this.#actions, this.#addedActions - this.#deliveredActions, ACTION_LIMIT)
+        .filter((entry) => entry.outcome !== "success" || entry.detail)
+        .slice(-SNAPSHOT_ACTIONS),
+      cursor: { diagnostics: this.#addedDiagnostics, actions: this.#addedActions },
     };
+  }
+
+  takeStatusErrors(): BrowserDiagnosticEntry[] {
+    const undelivered = this.#addedDiagnostics - Math.max(this.#deliveredDiagnostics, this.#statusDiagnostics);
+    this.#statusDiagnostics = this.#addedDiagnostics;
+    return newest(this.#diagnostics, undelivered, DIAGNOSTIC_LIMIT)
+      .filter((entry) => entry.level === "error")
+      .slice(-STATUS_ERRORS);
+  }
+
+  delivered(cursor: BrowserHistoryCursor): void {
+    this.#deliveredDiagnostics = Math.max(this.#deliveredDiagnostics, cursor.diagnostics);
+    this.#deliveredActions = Math.max(this.#deliveredActions, cursor.actions);
   }
 
   clearDiagnostics(): void {
@@ -59,7 +78,15 @@ export class BrowserDiagnostics {
   }
 }
 
-// Redact before cutting, so a cut cannot split a secret into a prefix the redactor no longer knows.
+export interface BrowserHistoryCursor {
+  readonly diagnostics: number;
+  readonly actions: number;
+}
+
+function newest<T>(entries: T[], undelivered: number, limit: number): T[] {
+  return undelivered > 0 ? entries.slice(-Math.min(undelivered, limit)) : [];
+}
+
 function boundedText(value: string): string {
   const redacted = redactText(value);
   return redacted.length > MAX_ENTRY_TEXT ? `${redacted.slice(0, MAX_ENTRY_TEXT)}…` : redacted;

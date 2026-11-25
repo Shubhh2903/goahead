@@ -1,11 +1,23 @@
 import type { BrowserTarget } from "@openbot/contracts/ipc";
+import { Effect, type Fiber } from "effect";
 import type { BrowserCdpEngine } from "./browser-cdp";
+import { type BrowserOperationError, browserSync } from "./browser-effects";
 import type { BrowserToolCall } from "./browser-tools";
+import type { DynamicToolResult } from "./protocol";
+import type { VaultCardSecret } from "./vault-items";
 
 export interface BrowserDynamicToolHooks {
   onUploadTargetResolved?: (inputId: string, documentId: string) => void;
   onUploadAssigned?: (inputId: string, documentId: string) => void;
-  onUploadOperationStarted?: (completion: Promise<void>) => void;
+  onUploadOperationStarted?: (completion: Fiber.Fiber<void, BrowserOperationError>) => void;
+  onUserControl?: (tabId: string) => Effect.Effect<DynamicToolResult>;
+  cardVault?: BrowserCardVault | undefined;
+}
+
+export interface BrowserCardVault {
+  secret(cardId: string): VaultCardSecret | null;
+  approved(cardId: string, page: string, frames: readonly string[]): boolean;
+  approve(cardId: string, page: string, frames: readonly string[]): Effect.Effect<boolean, BrowserOperationError>;
 }
 
 export type BrowserInputCall = Extract<
@@ -18,10 +30,13 @@ export type BrowserInputCall = Extract<
 interface BrowserInputAction {
   name: string;
   target: BrowserTarget | undefined;
-  run(engine: BrowserCdpEngine, deadline: number, markDispatched: () => void): Promise<void>;
+  run(
+    engine: BrowserCdpEngine,
+    deadline: number,
+    markDispatched: () => void,
+  ): Effect.Effect<void, BrowserOperationError>;
 }
 
-/** Owns typed input dispatch. The host owns tab authorization, queues, focus, and deadlines. */
 export function browserInputAction(call: BrowserInputCall, hooks: BrowserDynamicToolHooks): BrowserInputAction {
   switch (call.tool) {
     case "click": {
@@ -33,9 +48,9 @@ export function browserInputAction(call: BrowserInputCall, hooks: BrowserDynamic
           engine.click(
             args.target,
             {
-              button: args.button,
-              clickCount: args.clickCount,
-              modifiers: args.modifiers,
+              ...(args.button === undefined ? {} : { button: args.button }),
+              ...(args.clickCount === undefined ? {} : { clickCount: args.clickCount }),
+              ...(args.modifiers === undefined ? {} : { modifiers: args.modifiers }),
             },
             deadline,
             markDispatched,
@@ -44,9 +59,6 @@ export function browserInputAction(call: BrowserInputCall, hooks: BrowserDynamic
     }
     case "type": {
       const { args } = call;
-      // Without a target the text goes to whatever the page has focused, where there is no value to
-      // replace and no selection to append to. Accepting `mode` there would report a replacement
-      // that never happened.
       if (!args.target && args.mode) throw new Error("type mode requires a target.");
       return {
         name: "type",
@@ -56,7 +68,7 @@ export function browserInputAction(call: BrowserInputCall, hooks: BrowserDynamic
             args.target,
             args.text,
             {
-              mode: args.target ? (args.mode ?? "replace") : undefined,
+              ...(args.target ? { mode: args.mode ?? "replace" } : {}),
               submit: args.submit === true,
             },
             deadline,
@@ -122,16 +134,17 @@ export function browserInputAction(call: BrowserInputCall, hooks: BrowserDynamic
       return {
         name: "upload-files",
         target: args.target,
-        run: async (engine, deadline, markDispatched) => {
-          const assignment = await engine.uploadFiles(
-            args.target,
-            args.paths,
-            (resolved) => hooks.onUploadTargetResolved?.(resolved.inputId, resolved.documentId),
-            deadline,
-            markDispatched,
-          );
-          hooks.onUploadAssigned?.(assignment.inputId, assignment.documentId);
-        },
+        run: (engine, deadline, markDispatched) =>
+          Effect.gen(function* () {
+            const assignment = yield* engine.uploadFiles(
+              args.target,
+              args.paths,
+              (resolved) => hooks.onUploadTargetResolved?.(resolved.inputId, resolved.documentId),
+              deadline,
+              markDispatched,
+            );
+            yield* browserSync(() => hooks.onUploadAssigned?.(assignment.inputId, assignment.documentId));
+          }),
       };
     }
   }

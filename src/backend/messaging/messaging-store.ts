@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { MESSAGING_PLATFORMS, type MessagingPlatform } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord, isOneOf, isString } from "@openbot/contracts/runtime-values";
+import { deleteAggregateHistory, deleteThreadAttachments } from "../database/database-core";
 import {
   databaseRow,
   databaseRows,
@@ -9,9 +9,10 @@ import {
   requiredNumberColumn,
   requiredStringColumn,
 } from "../database/database-rows";
+import { withTransaction } from "../database/sqlite-transaction";
+import { cachedStatement } from "../database/statement-cache";
 import type { OpenBotDatabase } from "../openbot-database";
 
-/** One workspace of a platform, where every agent of this computer can answer. */
 export interface MessagingConnectionRecord {
   connectionId: string;
   platform: MessagingPlatform;
@@ -20,13 +21,10 @@ export interface MessagingConnectionRecord {
   enabled: boolean;
   botUserId: string | null;
   appId: string | null;
-  /** The agent that receives every new conversation. Null until the user adds it. */
   orchestratorAgentId: string | null;
-  /** The last failure that stops the connection until the user acts, such as a revoked token. */
   lastErrorCode: string | null;
 }
 
-/** One external conversation, answered in its own execution thread of the agent. */
 export interface MessagingLink {
   linkId: string;
   connectionId: string;
@@ -36,9 +34,36 @@ export interface MessagingLink {
   isDirect: boolean;
   threadId: string;
   title: string;
-  /** The newest platform message that the agent already read as context. */
   historyCursor: string | null;
   updatedAt: string;
+}
+
+export interface MessagingAllowedRole {
+  id: string;
+  name: string;
+}
+
+export interface MessagingAllowedSender {
+  id: string;
+  kind: "contact" | "group";
+  name: string;
+  readOnly: boolean;
+}
+
+export interface MessagingPingInput {
+  connectionId: string;
+  platformChannelId: string;
+  threadKey: string;
+  userIds: readonly string[];
+  agentId: string;
+  text: string;
+}
+
+export interface MessagingPing {
+  userId: string;
+  agentId: string;
+  text: string;
+  createdAt: string;
 }
 
 export interface MessagingLinkInput {
@@ -86,14 +111,6 @@ const PREVIEW_LIMIT = 256;
 const SEND_AGGREGATE = "messaging_send";
 const SEND_EVENT = "messaging_send_sent";
 
-/**
- * Owns `projection_messaging_connections` and `projection_messaging_threads`. It never stores a
- * token, and it never imports the database facade's callers.
- *
- * A connection row is configuration, so it is written directly, as MCP servers are. A link creates
- * a row in `projection_threads`, so it goes through `dispatch`, as a channel context does. Its event
- * payload holds ids only: the event log is append-only and must not keep external text.
- */
 export class MessagingStore {
   readonly #database: OpenBotDatabase;
 
@@ -125,10 +142,6 @@ export class MessagingStore {
     return row ? (decodeConnection(row)[0] ?? null) : null;
   }
 
-  /**
-   * Creates the connection of this workspace, or returns the one it had. A workspace connected
-   * again keeps its row, so its conversations keep their agents.
-   */
   ensureConnection(platform: MessagingPlatform, workspaceId: string, workspaceName: string): MessagingConnectionRecord {
     const existing = this.connectionForWorkspace(platform, workspaceId);
     if (existing) return existing;
@@ -171,6 +184,122 @@ export class MessagingStore {
       );
   }
 
+  allowedRoles(connectionId: string): MessagingAllowedRole[] {
+    return databaseRows(
+      this.#database.connection
+        .prepare(
+          `SELECT role_id, role_name FROM projection_messaging_allowed_roles
+           WHERE connection_id = ? ORDER BY created_at, role_name, role_id`,
+        )
+        .all(connectionId),
+    ).map((row) => ({ id: requiredStringColumn(row, "role_id"), name: requiredStringColumn(row, "role_name") }));
+  }
+
+  replaceAllowedRoles(connectionId: string, roles: readonly MessagingAllowedRole[]): void {
+    const db = this.#database.connection;
+    withTransaction(db, () => {
+      const kept = new Set(roles.map((role) => role.id));
+      for (const current of this.allowedRoles(connectionId))
+        if (!kept.has(current.id))
+          db.prepare("DELETE FROM projection_messaging_allowed_roles WHERE connection_id = ? AND role_id = ?").run(
+            connectionId,
+            current.id,
+          );
+      const now = new Date().toISOString();
+      const upsert = db.prepare(
+        `INSERT INTO projection_messaging_allowed_roles (connection_id, role_id, role_name, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(connection_id, role_id) DO UPDATE SET role_name = excluded.role_name`,
+      );
+      for (const role of roles) upsert.run(connectionId, role.id, role.name, now);
+    });
+  }
+
+  allowedSenders(connectionId: string): MessagingAllowedSender[] {
+    return databaseRows(
+      this.#database.connection
+        .prepare(
+          `SELECT sender_id, kind, name, mode FROM projection_messaging_allowed_senders
+           WHERE connection_id = ? ORDER BY created_at, name, sender_id`,
+        )
+        .all(connectionId),
+    ).flatMap((row) => {
+      const kind = requiredStringColumn(row, "kind");
+      if (kind !== "contact" && kind !== "group") return [];
+      return [
+        {
+          id: requiredStringColumn(row, "sender_id"),
+          kind,
+          name: requiredStringColumn(row, "name"),
+          readOnly: requiredStringColumn(row, "mode") === "read",
+        },
+      ];
+    });
+  }
+
+  setAllowedSenderReadOnly(connectionId: string, senderId: string, readOnly: boolean): boolean {
+    const result = this.#database.connection
+      .prepare("UPDATE projection_messaging_allowed_senders SET mode = ? WHERE connection_id = ? AND sender_id = ?")
+      .run(readOnly ? "read" : "reply", connectionId, senderId);
+    return Number(result.changes) > 0;
+  }
+
+  addAllowedSender(connectionId: string, sender: Omit<MessagingAllowedSender, "readOnly">): void {
+    this.#database.connection
+      .prepare(
+        `INSERT INTO projection_messaging_allowed_senders (connection_id, sender_id, kind, name, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(connection_id, sender_id) DO UPDATE SET name = excluded.name`,
+      )
+      .run(connectionId, sender.id, sender.kind, sender.name, new Date().toISOString());
+  }
+
+  removeAllowedSender(connectionId: string, senderId: string): void {
+    this.#database.connection
+      .prepare("DELETE FROM projection_messaging_allowed_senders WHERE connection_id = ? AND sender_id = ?")
+      .run(connectionId, senderId);
+  }
+
+  savePings(input: MessagingPingInput): void {
+    const db = this.#database.connection;
+    withTransaction(db, () => {
+      const upsert = db.prepare(
+        `INSERT INTO projection_messaging_pings
+           (connection_id, platform_channel_id, thread_key, user_id, agent_id, text, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(connection_id, platform_channel_id, thread_key, user_id)
+         DO UPDATE SET agent_id = excluded.agent_id, text = excluded.text, created_at = excluded.created_at`,
+      );
+      const now = new Date().toISOString();
+      for (const userId of input.userIds)
+        upsert.run(
+          input.connectionId,
+          input.platformChannelId,
+          input.threadKey,
+          userId,
+          input.agentId,
+          input.text,
+          now,
+        );
+    });
+  }
+
+  pings(connectionId: string, platformChannelId: string, threadKey: string): MessagingPing[] {
+    return databaseRows(
+      this.#database.connection
+        .prepare(
+          `SELECT user_id, agent_id, text, created_at FROM projection_messaging_pings
+           WHERE connection_id = ? AND platform_channel_id = ? AND thread_key = ?`,
+        )
+        .all(connectionId, platformChannelId, threadKey),
+    ).map((row) => ({
+      userId: requiredStringColumn(row, "user_id"),
+      agentId: requiredStringColumn(row, "agent_id"),
+      text: requiredStringColumn(row, "text"),
+      createdAt: requiredStringColumn(row, "created_at"),
+    }));
+  }
+
   link(linkId: string): MessagingLink | null {
     const row = databaseRow(
       this.#database.connection.prepare("SELECT * FROM projection_messaging_threads WHERE link_id = ?").get(linkId),
@@ -192,9 +321,10 @@ export class MessagingStore {
 
   linkForThread(threadId: string): MessagingLink | null {
     const row = databaseRow(
-      this.#database.connection
-        .prepare("SELECT * FROM projection_messaging_threads WHERE thread_id = ? AND thread_key != ?")
-        .get(threadId, REPLY_CONTEXT_KEY),
+      cachedStatement(
+        this.#database.connection,
+        "SELECT * FROM projection_messaging_threads WHERE thread_id = ? AND thread_key != ?",
+      ).get(threadId, REPLY_CONTEXT_KEY),
     );
     return row ? decodeLink(row) : null;
   }
@@ -277,14 +407,12 @@ export class MessagingStore {
     });
   }
 
-  /** The agent id and thread id of every link, for boot recovery. */
   executionThreads(): Array<{ id: string; threadId: string }> {
     return databaseRows(
       this.#database.connection.prepare("SELECT agent_id, thread_id FROM projection_messaging_threads").all(),
     ).map((row) => ({ id: requiredStringColumn(row, "agent_id"), threadId: requiredStringColumn(row, "thread_id") }));
   }
 
-  /** Finds the link of one external conversation, or creates it with a new execution thread. */
   ensureLink(input: MessagingLinkInput): MessagingLink {
     const existing = this.linkByKey(input.connectionId, input.platformChannelId, input.threadKey);
     if (existing) return existing;
@@ -335,7 +463,6 @@ export class MessagingStore {
     return created;
   }
 
-  /** Marks new activity, so the link lists first, and records what the agent has read. */
   touch(linkId: string, historyCursor?: string): void {
     const now = new Date().toISOString();
     if (historyCursor === undefined)
@@ -348,12 +475,12 @@ export class MessagingStore {
         .run(now, historyCursor, linkId);
   }
 
-  /**
-   * Removes every link of an agent, with the execution threads and their history. A workspace whose
-   * orchestrator it was has none until the user adds one again. The caller releases the provider
-   * sessions of `threadIdsForAgent` first.
-   */
-  deleteForAgent(agentId: string): void {
+  deleteForAgent(agentId: string): string[] {
+    const orchestratorOf = databaseRows(
+      this.#database.connection
+        .prepare("SELECT connection_id FROM projection_messaging_connections WHERE orchestrator_agent_id = ?")
+        .all(agentId),
+    ).map((row) => requiredStringColumn(row, "connection_id"));
     const links = databaseRows(
       this.#database.connection
         .prepare("SELECT link_id, thread_id FROM projection_messaging_threads WHERE agent_id = ?")
@@ -380,10 +507,22 @@ export class MessagingStore {
         );
         for (const { threadId } of links) {
           deleteAggregateHistory(db, "thread", [threadId]);
-          db.prepare("DELETE FROM projection_attachments WHERE owner_kind = 'thread-message' AND owner_id LIKE ?").run(
-            `${threadId}:%`,
-          );
+          deleteThreadAttachments(db, threadId);
         }
+        db.prepare(
+          `DELETE FROM projection_messaging_pings WHERE EXISTS (
+             SELECT 1 FROM projection_messaging_threads AS link WHERE link.agent_id = ?
+               AND link.connection_id = projection_messaging_pings.connection_id
+               AND link.platform_channel_id = projection_messaging_pings.platform_channel_id
+               AND link.thread_key = projection_messaging_pings.thread_key)`,
+        ).run(agentId);
+        db.prepare(
+          `DELETE FROM projection_messaging_pings WHERE agent_id = ? AND NOT EXISTS (
+             SELECT 1 FROM projection_messaging_threads AS link
+             WHERE link.connection_id = projection_messaging_pings.connection_id
+               AND link.platform_channel_id = projection_messaging_pings.platform_channel_id
+               AND link.thread_key = projection_messaging_pings.thread_key)`,
+        ).run(agentId);
         db.prepare("DELETE FROM projection_messaging_threads WHERE agent_id = ?").run(agentId);
         for (const { threadId } of links)
           db.prepare("DELETE FROM projection_threads WHERE thread_id = ?").run(threadId);
@@ -393,6 +532,13 @@ export class MessagingStore {
         return null;
       },
     );
+    return orchestratorOf;
+  }
+
+  restoreOrchestrator(agentId: string, connectionIds: readonly string[]): void {
+    for (const connectionId of connectionIds)
+      if (this.connection(connectionId)?.orchestratorAgentId === null)
+        this.updateConnection(connectionId, { orchestratorAgentId: agentId });
   }
 
   /**
@@ -519,22 +665,6 @@ export class MessagingStore {
   }
 }
 
-function deleteAggregateHistory(db: DatabaseSync, aggregateType: string, aggregateIds: readonly string[]): void {
-  if (!aggregateIds.length) return;
-  const placeholders = aggregateIds.map(() => "?").join(", ");
-  db.prepare(
-    `DELETE FROM orchestration_command_receipts WHERE command_id IN (
-       SELECT DISTINCT command_id FROM orchestration_events
-       WHERE aggregate_type = ? AND aggregate_id IN (${placeholders})
-     )`,
-  ).run(aggregateType, ...aggregateIds);
-  db.prepare(`DELETE FROM orchestration_events WHERE aggregate_type = ? AND aggregate_id IN (${placeholders})`).run(
-    aggregateType,
-    ...aggregateIds,
-  );
-}
-
-/** A row of a platform this build has no driver for is skipped, not an error: a newer build wrote it. */
 function decodeConnection(row: DynamicRecord): MessagingConnectionRecord[] {
   const platform = requiredStringColumn(row, "platform");
   if (!isOneOf(MESSAGING_PLATFORMS, platform)) return [];

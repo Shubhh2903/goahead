@@ -1,30 +1,48 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { access, writeFile } from "node:fs/promises";
-import { isAbsolute } from "node:path";
-import { type DynamicRecord, isBoolean, isNumber, isString } from "@openbot/contracts/runtime-values";
+import { access, open, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { agentProviderName, type KeyOnlyProviderId } from "@openbot/contracts/agent-providers";
+import { type DynamicRecord, isBoolean, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
-import { redactText } from "@openbot/logging";
+import { createOpenBotLogger, type LogValue, redactSecrets, redactText } from "@openbot/logging";
+import { type CauseCode, classifyFailure, httpStatusCause, structuredCause } from "@openbot/telemetry";
+import { Cause, Effect, Exit, Option, Schema, Scope, Semaphore } from "effect";
+import { CONTEXT_COMPACTION_THRESHOLD } from "./agent/context-compaction";
+import { withoutTurnContext } from "./agent/developer-instructions";
 import { secretElicitationField } from "./agent/prompts";
-import type { AgentClient, DiagnosticOrigin } from "./agent-client";
-import { type AgentCliInfo, cliSpawnTarget } from "./cli";
+import { isContextTooSmallFailure, isPiCompactionNoOp } from "./agent/provider-diagnostics";
+import { waitForSuccessfulProcess } from "./agent/provider-status";
+import { TurnContext } from "./agent/turn-context";
+import { type AgentClient, type DiagnosticOrigin, MissingPiSessionError, RequestTimeoutError } from "./agent-client";
+import { type AgentCliInfo, cliPathEnvironment, cliSpawnTarget } from "./cli";
+import { runCauseEffect } from "./effect-boundary";
+import { encodedModelId, providerModelValue } from "./encoded-model-id";
+import { isMissingFileError } from "./file-errors";
 import { type DynamicToolNamespace, LocalMcpBridge, type LocalMcpSession } from "./local-mcp-bridge";
 import {
   agentMcpServers,
   claudeMcpServers,
   computerUseParam,
   disabledMcpServersParam,
-  type McpAuthorizationSource,
   type McpDropReporter,
+  type McpEndpointSource,
   type McpServerSource,
   type McpToolRuntimeSource,
+  mcpAgentParam,
   usableMcpServers,
 } from "./mcp-provider-shapes";
-import { mcpSecretValues, redactMcpValues } from "./mcp-redaction";
+import { mcpSecretValues, redactMcpRecord, redactMcpValues } from "./mcp-redaction";
+import type { CustomProviderSource } from "./opencode-config";
 import { PendingServerRequests } from "./pending-server-requests";
+import { createPiCustomEndpointExtension, piCustomEndpointSecrets } from "./pi-custom-endpoints";
+import { createPiKeyExtension } from "./pi-key-providers";
 import { createPiMcpExtension, type PiMcpExtension } from "./pi-mcp";
-import { piMessageItems, piPrompt, piText } from "./pi-messages";
-import { PiRpc } from "./pi-rpc";
+import { piMessageItems, piPrompt, piShellCommand, piText } from "./pi-messages";
+import { PI_REQUEST_TIMEOUT_MS, PiProcessClosedError, PiRpc } from "./pi-rpc";
+import { piWindowsShellArguments } from "./pi-windows-shell";
 import type { SpawnTarget } from "./process-confinement";
 import {
   type AppServerNotification,
@@ -39,18 +57,101 @@ import {
   type RpcError,
   type ThreadItem,
 } from "./protocol";
+import {
+  type ProviderClientOperationError,
+  providerCall,
+  providerFailure,
+  providerSync,
+  requiredString,
+  toProviderClientOperationError,
+} from "./provider-client-effects";
+import type {
+  ProviderHistoryConsumer,
+  ProviderHistoryFragment,
+  ProviderHistoryRequest,
+  ReadProviderHistory,
+} from "./provider-history";
+import { stopProcessTree } from "./windows-process-tree";
+
+const logger = createOpenBotLogger("provider-runtime");
+
+const extensionModels = new Set<string>();
+
+function piModelSelection(provider: string, model: string) {
+  if (provider !== "pi") return { provider, modelId: providerModelValue(model) };
+  const separator = model.indexOf("/");
+  if (separator < 1) return undefined;
+  return { provider: model.slice(0, separator), modelId: providerModelValue(model.slice(separator + 1)) };
+}
+
+const PI_TURN_STALL_MS = 10 * 60_000;
+
+const PI_THREAD_IDLE_RELEASE_MS = 5 * 60_000;
+
+const PI_LONG_CACHE_TTL_MS = 60 * 60_000;
+
+const PI_START_TIMEOUT_MS = 120_000;
+
+const PI_IDLE_THREAD_LIMIT = 1;
+
+const PI_CATALOG_REFRESH_TIMEOUT_MS = 4_000;
+
+const PI_CATALOG_KEY_VARIABLES: Record<KeyOnlyProviderId, string | null> = {
+  inception: null,
+  deepseek: "DEEPSEEK_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+};
+
+const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+function piThinkingLevels(model: unknown): string[] {
+  if (!isRecord(model) || model.reasoning !== true) return [];
+  const map = getRecord(model, "thinkingLevelMap");
+  return PI_THINKING_LEVELS.filter((level) => {
+    const mapped = map?.[level];
+    if (mapped === null) return false;
+    return level === "xhigh" || level === "max" ? mapped !== undefined : true;
+  });
+}
+
+const PiSessionUsage = Schema.Struct({
+  tokens: Schema.Struct({
+    input: Schema.Number,
+    output: Schema.Number,
+    cacheRead: Schema.Number,
+    cacheWrite: Schema.Number,
+  }),
+});
+
+const PiSessionHeader = Schema.Struct({ type: Schema.Literal("session"), cwd: Schema.optional(Schema.String) });
+
+const PI_SESSION_HEADER_BYTES = 65_536;
+
+const PiSessionCost = Schema.Struct({ cost: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)) });
+
+const PiContextUsage = Schema.Struct({
+  tokens: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
+  contextWindow: Schema.Finite.check(Schema.isGreaterThan(0)),
+});
 
 export interface PiProviderOptions {
   requestTimeoutMs?: number;
   discoveryCwd?: () => string;
   confine?: (target: SpawnTarget) => SpawnTarget;
   extraEnv?: () => Record<string, string>;
+  keyProvider?: { id: KeyOnlyProviderId; apiKey: () => string | null };
+  customEndpoints?: CustomProviderSource;
   providerStateDirectory?: string;
   profileGeneration?: boolean;
   mcpServers?: McpServerSource;
   reportMcpDrops?: McpDropReporter;
   mcpToolRuntimes?: McpToolRuntimeSource;
-  mcpAuthorization?: McpAuthorizationSource;
+  mcpEndpoint?: McpEndpointSource;
+  history?: {
+    read?: ReadProviderHistory;
+    complete?: (request: ProviderHistoryRequest) => Effect.Effect<boolean, ProviderClientOperationError>;
+    append?: (threadId: string, fragment: ProviderHistoryFragment) => Effect.Effect<void, ProviderClientOperationError>;
+  };
 }
 
 interface PiTurn {
@@ -60,7 +161,13 @@ interface PiTurn {
   items: Map<string, ThreadItem>;
   stopped: boolean;
   failure: string | null;
+  failureCause: CauseCode | null;
   finishing: boolean;
+  lastActivityAt: number;
+  openTools: Set<string>;
+  waitingOnUser: number;
+  compacting: boolean;
+  stalled: string | null;
 }
 interface PiThread {
   id: string;
@@ -69,9 +176,14 @@ interface PiThread {
   rpc: PiRpc;
   mcp: LocalMcpSession;
   extension: PiMcpExtension;
+  keyExtension: PiMcpExtension | null;
+  deferredMcp: boolean;
   turn: PiTurn | null;
   closed: boolean;
-  gate: Gate;
+  gate: Semaphore.Semaphore;
+  configured: boolean;
+  idleRelease: ReturnType<typeof setTimeout> | null;
+  idleSince: number;
 }
 interface ClientEvents {
   notification: [AppServerNotification];
@@ -80,53 +192,42 @@ interface ClientEvents {
   diagnostic: [string, DiagnosticOrigin?];
 }
 
-const UI_METHODS = ["confirm", "select", "input", "editor"];
-
-/** Runs one task at a time, in call order. A failed task does not block the next one. */
-class Gate {
-  #tail: Promise<unknown> = Promise.resolve();
-  run<T>(task: () => Promise<T>): Promise<T> {
-    const result = this.#tail.then(task, task);
-    this.#tail = result.catch(() => undefined);
-    return result;
-  }
-}
-
-function requiredString(value: unknown, key: string): string {
-  const text = getString(value, key);
-  if (!text) throw new Error(`Missing ${key}.`);
-  return text;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/** Owns Pi's native sessions. The database owns OpenBot history and agent identity. */
 export class PiAgentClient extends EventEmitter<ClientEvents> implements AgentClient {
-  readonly provider = "pi";
+  readonly contextCompaction = "request";
+  readonly #cacheTtls = new Map<string, number>();
+  readonly provisionalAnswers = true;
+  readonly turnContext = true;
+  readonly imageInput = (): boolean => true;
+  readonly #turnContext = new TurnContext();
+  readonly provider: "pi" | KeyOnlyProviderId;
   readonly #bridge = new LocalMcpBridge();
   readonly #requests = new PendingServerRequests((request) => this.emit("request", request));
   readonly #threads = new Map<string, PiThread>();
   readonly #released = new Map<string, unknown>();
   readonly #secrets = new Set<string>();
-  readonly #opening = new Gate();
+  readonly #opening = Semaphore.makeUnsafe(1);
+  readonly #starting = new Set<PiRpc>();
+  #scope = Scope.makeUnsafe();
   #running = false;
   constructor(
     private readonly cli: AgentCliInfo,
     private readonly options: PiProviderOptions,
   ) {
     super();
+    this.provider = options.keyProvider?.id ?? "pi";
   }
   get running(): boolean {
     return this.#running;
   }
   start(): void {
-    this.#running = true;
+    if (!this.#running) {
+      this.#scope = Scope.makeUnsafe();
+      this.#running = true;
+    }
   }
-  notify(): void {
-    /* Pi has no post-initialize notification. */
-  }
+  deferredMcpTools = (id: string): boolean => this.#threads.get(id)?.deferredMcp ?? false;
+  canReleaseProcess = (): boolean => [...this.#threads.values()].every((thread) => thread.turn === null);
+  notify(): void {}
   respond(id: RequestId, value: unknown): void {
     this.#requests.resolve(id, value);
   }
@@ -134,54 +235,171 @@ export class PiAgentClient extends EventEmitter<ClientEvents> implements AgentCl
     this.#requests.reject(id, error);
   }
 
-  #redact = (text: string): string => {
-    const values = [...this.#secrets, ...mcpSecretValues(this.options.mcpServers?.() ?? [])];
-    return redactMcpValues(
-      redactText(text),
-      values.flatMap((value) => [value, JSON.stringify(value).slice(1, -1)]),
-    );
-  };
+  #redact = (text: string): string => redactMcpValues(redactText(text), this.#secretValues());
 
-  async stop(): Promise<void> {
+  #failureText(message: string | null): string {
+    if (message && this.provider !== "pi") {
+      const provider = agentProviderName(this.provider);
+      if (/^401\b/u.test(message)) return sourceText("error.provider.keyProviderRefused", { provider });
+      if (/^402\b/u.test(message) && /\bcan only afford\b/iu.test(message)) {
+        return sourceText("error.provider.keyProviderLowCredit", { provider });
+      }
+      if (/^402\b/u.test(message)) return sourceText("error.provider.keyProviderNoBalance", { provider });
+    }
+    const refused = message === null ? null : /^403\b:?\s*([\s\S]*)$/u.exec(message);
+    if (refused) {
+      const reason = piRefusalReason(this.#redact(refused[1] ?? ""));
+      return reason
+        ? sourceText("error.provider.modelServiceRefusedReason", { reason })
+        : sourceText("error.provider.modelServiceRefused");
+    }
+    if (message && isContextTooSmallFailure(message)) return this.#contextTooSmall(message);
+    return this.#redact(message ?? "Pi model request failed.");
+  }
+
+  readonly #compactionFailure = Effect.fn("PiAgentClient.compactionFailure")(function* (
+    this: PiAgentClient,
+    thread: PiThread,
+    failure: ProviderClientOperationError,
+  ) {
+    const message = failure.cause instanceof Error ? failure.cause.message : "";
+    const noOp = isPiCompactionNoOp(message);
+    const tooSmall = isContextTooSmallFailure(message);
+    if (!noOp && !tooSmall) return yield* failure;
+    const usedShare = yield* thread.rpc.request({ type: "get_session_stats" }, 2_000).pipe(
+      Effect.map((stats) =>
+        Option.map(
+          Schema.decodeUnknownOption(PiContextUsage)(getRecord(stats, "contextUsage")),
+          (usage) => usage.tokens / usage.contextWindow,
+        ),
+      ),
+      Effect.orElseSucceed(() => Option.none<number>()),
+    );
+    const full = Option.exists(usedShare, (share) => share >= CONTEXT_COMPACTION_THRESHOLD);
+    if (full && tooSmall) return yield* providerFailure(new Error(this.#contextTooSmall(message)));
+    if (!noOp || full || Option.isNone(usedShare)) return yield* failure;
+    logger.info("Pi has nothing to compact, so the session is already compact.", { provider: this.provider });
+  });
+
+  #contextTooSmall(reason: string): string {
+    logger.warn("A Pi request does not fit the model's context window.", {
+      provider: this.provider,
+      reason: this.#redact(reason),
+    });
+    return sourceText("error.provider.opencodeContextTooSmall");
+  }
+
+  #secretValues(): string[] {
+    const values = [...this.#secrets, ...mcpSecretValues(this.options.mcpServers?.() ?? [])];
+    return values.flatMap((value) => [value, JSON.stringify(value).slice(1, -1)]);
+  }
+
+  readonly stop = Effect.fn("PiAgentClient.stop")(function* (this: PiAgentClient) {
     this.#running = false;
     this.#requests.rejectAll(sourceText("error.provider.piStopped"));
-    const threads = [...this.#threads.values()];
+    for (const rpc of this.#starting) yield* rpc.stop();
+    yield* this.#opening.withPermit(Effect.void);
+    for (const thread of this.#threads.values()) yield* this.#close(thread);
     this.#threads.clear();
     this.#released.clear();
-    await Promise.allSettled(threads.map((thread) => this.#close(thread)));
-    await this.#bridge.close();
-  }
+    yield* Scope.close(this.#scope, Exit.void);
+    yield* this.#bridge.close().pipe(toProviderClientOperationError);
+  }, Effect.uninterruptible);
 
-  async #close(thread: PiThread): Promise<void> {
+  readonly #close = Effect.fn("PiAgentClient.closeThread")(function* (this: PiAgentClient, thread: PiThread) {
     thread.closed = true;
-    await thread.rpc.stop();
-    thread.mcp.close();
-    await thread.extension.close();
-  }
+    this.#disarmIdle(thread);
+    yield* Effect.gen(function* () {
+      yield* thread.rpc.stop();
+      yield* keepEmptySession(thread.id);
+      thread.mcp.close();
+      yield* thread.extension.close();
+    }).pipe(Effect.ensuring(thread.keyExtension ? thread.keyExtension.close().pipe(Effect.orDie) : Effect.void));
+  });
 
-  async releaseThread(id: string): Promise<void> {
+  readonly releaseThread = Effect.fn("PiAgentClient.releaseThread")(function* (this: PiAgentClient, id: string) {
     const thread = this.#threads.get(id);
     if (!thread) {
       this.#released.delete(id);
+      this.#turnContext.forget(id);
       return;
     }
-    if (thread.turn) throw new Error(sourceText("error.provider.piSessionBusy"));
+    if (thread.turn) return yield* providerFailure(new Error(sourceText("error.provider.piSessionBusy")));
+    yield* this.#close(thread);
     this.#threads.delete(id);
     this.#released.delete(id);
-    await this.#close(thread);
+    this.#turnContext.forget(id);
+  });
+
+  readonly releaseIdleThreads = Effect.fn("PiAgentClient.releaseIdleThreads")(function* (this: PiAgentClient) {
+    for (const thread of [...this.#threads.values()]) yield* this.#releaseIdle(thread);
+  });
+
+  readonly #releaseIdle = Effect.fn("PiAgentClient.releaseIdle")(function* (this: PiAgentClient, thread: PiThread) {
+    const done = yield* Effect.gen({ self: this }, function* () {
+      if (thread.turn || this.#threads.get(thread.id) !== thread) return;
+      if (thread.configured) this.#released.set(thread.id, thread.params);
+      this.#threads.delete(thread.id);
+      yield* this.#close(thread);
+    }).pipe(thread.gate.withPermitsIfAvailable(1));
+    if (Option.isNone(done) && !thread.turn && this.#threads.get(thread.id) === thread) this.#armIdle(thread);
+  });
+
+  readonly #threadExited = Effect.fn("PiAgentClient.threadExited")(function* (
+    this: PiAgentClient,
+    thread: PiThread,
+    error: Error,
+  ) {
+    logger.warn("A Pi process exited. Only its thread ends.", { provider: this.provider, error: error.message });
+    if (this.#threads.get(thread.id) !== thread) return;
+    if (thread.configured) this.#released.set(thread.id, thread.params);
+    this.#threads.delete(thread.id);
+    if (thread.turn)
+      yield* error instanceof PiProcessClosedError
+        ? this.#endAfterExit(thread)
+        : this.#finish(thread, "failed", error.message, "provider_exited");
+    yield* this.#close(thread);
+  });
+
+  #endAfterExit(thread: PiThread) {
+    return thread.turn?.stopped
+      ? this.#finish(thread, "interrupted")
+      : this.#finish(thread, "failed", sourceText("error.provider.piThreadStopped"), "provider_exited");
   }
 
-  releaseIdleThreads(): void {
-    for (const [id, thread] of this.#threads) {
-      if (thread.turn) continue;
-      this.#released.set(id, thread.params);
-      this.#threads.delete(id);
-      this.#background(this.#close(thread));
-    }
+  readonly #markIdle = Effect.fn("PiAgentClient.markIdle")(function* (this: PiAgentClient, thread: PiThread) {
+    if (thread.turn || this.#threads.get(thread.id) !== thread) return;
+    thread.idleSince = Date.now();
+    this.#armIdle(thread);
+    const idle = [...this.#threads.values()]
+      .filter((candidate) => candidate.turn === null && candidate.idleSince > 0)
+      .sort((left, right) => left.idleSince - right.idleSince);
+    for (const candidate of idle.slice(0, Math.max(0, idle.length - PI_IDLE_THREAD_LIMIT)))
+      yield* this.#releaseIdle(candidate);
+  });
+
+  #armIdle(thread: PiThread): void {
+    this.#disarmIdle(thread);
+    thread.idleRelease = setTimeout(() => {
+      thread.idleRelease = null;
+      this.#background(this.#releaseIdle(thread));
+    }, PI_THREAD_IDLE_RELEASE_MS);
+    thread.idleRelease.unref?.();
   }
 
-  async request<T>(method: string, params: unknown, decoder: ResponseDecoder<T>, timeoutMs?: number): Promise<T> {
-    if (!this.running) throw new Error(sourceText("error.provider.piStopped"));
+  #disarmIdle(thread: PiThread): void {
+    if (thread.idleRelease) clearTimeout(thread.idleRelease);
+    thread.idleRelease = null;
+  }
+
+  readonly request = Effect.fn("PiAgentClient.request")(function* <T>(
+    this: PiAgentClient,
+    method: string,
+    params: unknown,
+    decoder: ResponseDecoder<T>,
+    timeoutMs?: number,
+  ): Effect.fn.Return<T, ProviderClientOperationError> {
+    if (!this.running) return yield* providerFailure(new Error(sourceText("error.provider.piStopped")));
     let response: unknown;
     switch (method) {
       case "initialize":
@@ -194,281 +412,596 @@ export class PiAgentClient extends EventEmitter<ClientEvents> implements AgentCl
         response = { marketplaces: [] };
         break;
       case "account/read": {
-        const models = await this.#models(timeoutMs);
-        response = { account: models.length ? { type: "pi", email: null } : null, requiresOpenaiAuth: false };
+        const startMs = Math.max(timeoutMs ?? 0, this.options.requestTimeoutMs ?? PI_REQUEST_TIMEOUT_MS);
+        const models = yield* this.#models(timeoutMs, startMs);
+        response = { account: models.length ? { type: this.provider, email: null } : null, requiresOpenaiAuth: false };
         break;
       }
       case "model/list":
-        response = { data: await this.#models(timeoutMs) };
+        yield* this.#refreshCatalog();
+        response = { data: yield* this.#models(timeoutMs) };
         break;
       case "thread/start":
       case "thread/resume": {
-        const thread = await this.#opening.run(() => this.#open(params, method === "thread/resume"));
+        const thread = yield* this.#opening.withPermit(this.#open(params, method === "thread/resume", true));
+        const resumed = method === "thread/resume" && getString(params, "threadId") === thread.id;
+        this.#turnContext.set(thread.id, params, resumed);
         response = { thread: { id: thread.id } };
         break;
       }
       case "thread/read": {
-        const id = requiredString(params, "threadId");
-        const thread = await this.#thread(id, params);
-        const turns = isRecord(params) && params.includeTurns === true ? await this.#history(thread) : [];
+        const id = yield* providerSync(() => requiredString(params, "threadId"));
+        const turns: Array<{ id: string; status?: string; startedAt?: number; items: ThreadItem[] }> = [];
+        const cwd = getString(params, "cwd");
+        if (isRecord(params) && params.includeTurns === true)
+          yield* this.readHistory(
+            {
+              threadId: id,
+              items: "full",
+              ...(cwd ? { cwd } : {}),
+            },
+            (fragment) =>
+              Effect.sync(() => {
+                turns.unshift({
+                  id: fragment.turnId,
+                  ...(fragment.status ? { status: fragment.status } : {}),
+                  ...(fragment.startedAt ? { startedAt: fragment.startedAt } : {}),
+                  items: fragment.items,
+                });
+                return true;
+              }),
+          );
+        else yield* this.#thread(id, params);
         response = { thread: { id, turns } };
         break;
       }
       case "turn/start":
       case "turn/steer": {
-        const id = requiredString(params, "threadId");
-        const thread = await this.#thread(id, params);
-        response = await thread.gate.run(() => this.#prompt(thread, params, method === "turn/steer"));
+        const id = yield* providerSync(() => requiredString(params, "threadId"));
+        const thread = yield* this.#thread(id, params);
+        response = yield* thread.gate.withPermit(
+          method === "turn/steer" ? this.#steer(thread, params) : this.#prompt(thread, params),
+        );
         break;
       }
       case "turn/interrupt": {
-        const id = requiredString(params, "threadId");
+        const id = yield* providerSync(() => requiredString(params, "threadId"));
         const thread = this.#threads.get(id);
         if (thread?.turn) {
           thread.turn.stopped = true;
-          await thread.rpc.request({ type: "clear_queue" });
-          await thread.rpc.request({ type: "abort" });
+          yield* thread.rpc.request({ type: "clear_queue" });
+          yield* thread.rpc.request({ type: "abort" });
         }
         response = {};
         break;
       }
       case "thread/compact/start": {
-        const id = requiredString(params, "threadId");
-        const thread = await this.#thread(id, params);
-        await thread.gate.run(() => thread.rpc.request({ type: "compact" }, timeoutMs ?? 120_000));
+        const id = yield* providerSync(() => requiredString(params, "threadId"));
+        const thread = yield* this.#thread(id, params);
+        yield* thread.gate
+          .withPermit(thread.rpc.request({ type: "compact" }, timeoutMs ?? 120_000))
+          .pipe(Effect.catch((failure) => this.#compactionFailure(thread, failure)));
+        yield* thread.rpc.request({ type: "get_session_stats" }, 2_000).pipe(
+          Effect.tap((stats) => Effect.sync(() => this.#notifyContextUsage(thread, stats))),
+          Effect.ignore,
+        );
         response = {};
         break;
       }
       default:
-        throw new Error(`Pi adapter does not implement ${method}.`);
+        return yield* providerFailure(new Error(`Pi adapter does not implement ${method}.`));
     }
-    return decoder(response);
-  }
+    return yield* providerSync(() => decoder(response));
+  });
 
-  async #models(timeoutMs?: number): Promise<DynamicRecord[]> {
-    const rpc = new PiRpc(this.#redact);
+  readonly #models = Effect.fn("PiAgentClient.models")(function* (
+    this: PiAgentClient,
+    timeoutMs?: number,
+    startMs = timeoutMs,
+  ) {
+    const keyProvider = this.options.keyProvider;
+    if (keyProvider && !keyProvider.apiKey()) return [];
+    const rpc = new PiRpc(this.#redact, this.provider);
     rpc.on("diagnostic", (text) => this.emit("diagnostic", text));
     rpc.on("record", (record) => {
-      if (record.type === "extension_ui_request" && isString(record.id) && UI_METHODS.includes(String(record.method)))
+      if (
+        record.type === "extension_ui_request" &&
+        isString(record.id) &&
+        ["confirm", "select", "input", "editor"].includes(String(record.method))
+      )
         rpc.send({ type: "extension_ui_response", id: record.id, cancelled: true });
     });
-    this.#spawn(rpc, this.options.discoveryCwd?.() ?? process.cwd(), ["--no-session", "--no-tools"], {});
-    try {
-      const state = await rpc.request({ type: "get_state" }, timeoutMs);
-      const listed = await rpc.request({ type: "get_available_models" }, timeoutMs);
-      const models: DynamicRecord[] = [];
-      for (const model of getArray(listed, "models")) {
-        const provider = getString(model, "provider");
-        const id = getString(model, "id");
-        if (!provider || !id) continue;
-        const reasoning = isRecord(model) && model.reasoning === true;
-        let levels: string[] = [];
-        if (reasoning) {
-          await rpc.request({ type: "set_model", provider, modelId: id }, timeoutMs);
-          const advertised = await rpc.request({ type: "get_available_thinking_levels" }, timeoutMs);
-          levels = getArray(advertised, "levels")
-            .filter(isString)
-            .map((level) => (level === "off" ? "none" : level));
-        }
-        const preferred = getString(state, "thinkingLevel");
-        models.push({
-          model: `${provider}/${id}`,
-          displayName: getString(model, "name") ?? id,
-          defaultReasoningEffort: preferred && levels.includes(preferred) ? preferred : (levels[0] ?? "none"),
-          supportedReasoningEfforts: levels.map((reasoningEffort) => ({ reasoningEffort })),
-          reasoningEffortConfigurable: levels.length > 0,
-        });
-      }
-      return models;
-    } finally {
-      await rpc.stop().catch(() => undefined);
+    return yield* Effect.acquireUseRelease(
+      Effect.gen({ self: this }, function* () {
+        const keyExtension = yield* this.#keyExtension();
+        yield* providerSync(() =>
+          this.#spawn(
+            rpc,
+            this.options.discoveryCwd?.() ?? process.cwd(),
+            ["--no-session", "--no-tools", ...(keyExtension ? ["--extension", keyExtension.path] : [])],
+            keyExtension?.environment ?? {},
+          ),
+        ).pipe(Effect.onError(() => (keyExtension ? keyExtension.close().pipe(Effect.orDie) : Effect.void)));
+        return { connection: rpc, keyExtension };
+      }),
+      ({ connection }) =>
+        Effect.gen({ self: this }, function* () {
+          const state = yield* connection.request({ type: "get_state" }, startMs);
+          const listed = yield* connection.request({ type: "get_available_models" }, timeoutMs);
+          const models = [];
+          for (const model of getArray(listed, "models")) {
+            const provider = getString(model, "provider");
+            const id = getString(model, "id");
+            if (!provider || !id || (keyProvider && provider !== keyProvider.id)) continue;
+            if (provider === "openrouter" && id.endsWith(":batch")) continue;
+            const levels = piThinkingLevels(model).map((level) => (level === "off" ? "none" : level));
+            const thinkingLevel = getString(state, "thinkingLevel");
+            const preferred = thinkingLevel === "off" ? "none" : thinkingLevel;
+            const defaultLevel = preferred && levels.includes(preferred) ? preferred : levels[0];
+            models.push({
+              model: encodedModelId(keyProvider ? "" : `${provider}/`, id),
+              displayName: getString(model, "name") ?? id,
+              ...(defaultLevel === undefined ? {} : { defaultReasoningEffort: defaultLevel }),
+              supportedReasoningEfforts: levels.map((reasoningEffort) => ({ reasoningEffort })),
+              reasoningEffortConfigurable: levels.length > 0,
+            });
+          }
+          return models;
+        }),
+      ({ connection, keyExtension }) =>
+        connection
+          .stop()
+          .pipe(Effect.ensuring(keyExtension ? keyExtension.close().pipe(Effect.orDie) : Effect.void), Effect.orDie),
+    );
+  });
+
+  readonly #refreshCatalog = Effect.fn("PiAgentClient.refreshCatalog")(function* (this: PiAgentClient) {
+    const keyProvider = this.options.keyProvider;
+    const environment: Record<string, string> = {};
+    if (keyProvider) {
+      const variable = PI_CATALOG_KEY_VARIABLES[keyProvider.id];
+      const key = keyProvider.apiKey();
+      if (!variable || !key) return;
+      environment[variable] = key;
     }
+    const target = cliSpawnTarget(this.cli.executable, ["update", "--models"]);
+    const env = { ...process.env, ...cliPathEnvironment(this.cli), ...this.options.extraEnv?.(), ...environment };
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const child = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            spawn(target.command, target.args, {
+              cwd: homedir(),
+              env,
+              stdio: "ignore",
+              shell: false,
+              windowsHide: process.platform === "win32",
+              windowsVerbatimArguments: target.windowsVerbatimArguments,
+            }),
+          ),
+          (child) => stopProcessTree(child).pipe(Effect.ignore),
+        );
+        yield* waitForSuccessfulProcess(child, PI_CATALOG_REFRESH_TIMEOUT_MS, "Pi model catalog refresh");
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.sync(() =>
+          logger.warn("Pi could not refresh its model catalog.", {
+            provider: this.provider,
+            error: this.#redact(String(Cause.squash(cause))),
+          }),
+        ),
+      ),
+    );
+  });
+
+  readonly #keyExtension = Effect.fn("PiAgentClient.keyExtension")(function* (this: PiAgentClient) {
+    const keyProvider = this.options.keyProvider;
+    const directory = this.options.providerStateDirectory;
+    if (!keyProvider) {
+      const endpoints = this.options.customEndpoints?.() ?? [];
+      const extension = yield* createPiCustomEndpointExtension(endpoints, directory);
+      for (const secret of extension?.secrets ?? []) this.#secrets.add(secret);
+      return extension;
+    }
+    const key = keyProvider.apiKey();
+    if (!key) return null;
+    const extension = yield* createPiKeyExtension(keyProvider.id, key, directory);
+    for (const secret of extension.secrets) this.#secrets.add(secret);
+    return extension;
+  });
+
+  #environment(): Record<string, string> {
+    const extra = this.options.extraEnv?.() ?? {};
+    for (const value of Object.values(extra)) this.#secrets.add(value);
+    const environment: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) if (value !== undefined) environment[key] = value;
+    return { ...environment, ...cliPathEnvironment(this.cli), ...extra };
   }
 
   #spawn(rpc: PiRpc, cwd: string, args: string[], environment: Record<string, string>): void {
-    const extra = this.options.extraEnv?.() ?? {};
-    for (const value of Object.values(extra)) if (value) this.#secrets.add(value);
     const target = cliSpawnTarget(this.cli.executable, ["--mode", "rpc", ...args]);
-    rpc.start(this.options.confine?.(target) ?? target, cwd, { ...process.env, ...extra, ...environment });
+    rpc.start(this.options.confine?.(target) ?? target, cwd, { ...this.#environment(), ...environment });
   }
 
-  async #open(params: unknown, resume: boolean): Promise<PiThread> {
+  readonly #open = Effect.fn("PiAgentClient.openThread")(function* (
+    this: PiAgentClient,
+    params: unknown,
+    resume: boolean,
+    configured: boolean,
+  ): Effect.fn.Return<PiThread, ProviderClientOperationError> {
     const requestedId = getString(params, "threadId");
     if (resume && requestedId) {
       const live = this.#threads.get(requestedId);
-      if (live) return live;
-      if (!isAbsolute(requestedId)) throw new Error(sourceText("error.provider.piSessionMissing"));
-      try {
-        await access(requestedId);
-      } catch {
-        throw new Error(sourceText("error.provider.piSessionMissing"));
+      if (live && (live.configured || !configured)) return live;
+      if (live) {
+        const replaced = yield* live.gate.withPermit(
+          Effect.gen({ self: this }, function* () {
+            if (live.turn) return false;
+            this.#threads.delete(requestedId);
+            yield* this.#close(live);
+            return true;
+          }),
+        );
+        if (!replaced) return live;
       }
+      yield* requireSessionFile(requestedId);
     }
-    const cwd = requiredString(params, "cwd");
+    const cwd = yield* providerSync(() => requiredString(params, "cwd"));
     let thread: PiThread | null = null;
     let extension: PiMcpExtension | null = null;
-    const rpc = new PiRpc(this.#redact);
+    let keyExtension: PiMcpExtension | null = null;
+    const rpc = new PiRpc(this.#redact, this.provider);
     let retained = false;
-    const mcp = await this.#bridge.createSession(
-      requestedId ?? randomUUID(),
-      getArray(params, "dynamicTools").filter(isNamespace),
-      () => thread?.turn?.id ?? null,
-      (call, signal) => this.#callTool(call, signal),
-    );
-    try {
+    const mcp = yield* this.#bridge
+      .createSession(
+        requestedId ?? randomUUID(),
+        getArray(params, "dynamicTools").filter(isNamespace),
+        () => thread?.turn?.id ?? null,
+        (call, signal, detachAfterMs) => this.#callTool(call, signal, detachAfterMs),
+      )
+      .pipe(toProviderClientOperationError);
+    this.#starting.add(rpc);
+    const model = getString(params, "model");
+    const selection = model ? piModelSelection(this.provider, model) : undefined;
+    const modelKey = selection ? `${selection.provider}/${selection.modelId}` : undefined;
+    const opened = yield* Effect.gen({ self: this }, function* () {
       const handoff = claudeMcpServers(
-        await usableMcpServers(
-          agentMcpServers(this.options.mcpServers?.() ?? [], computerUseParam(params), disabledMcpServersParam(params)),
+        yield* usableMcpServers(
+          agentMcpServers(
+            this.options.mcpServers?.(mcpAgentParam(params)) ?? [],
+            computerUseParam(params),
+            disabledMcpServersParam(params),
+          ),
           this.options.mcpToolRuntimes?.(),
-          this.options.mcpAuthorization,
-        ),
+          this.options.mcpEndpoint,
+          mcpAgentParam(params),
+        ).pipe(toProviderClientOperationError),
       );
-      this.options.reportMcpDrops?.("pi", handoff.dropped);
-      extension = await createPiMcpExtension(handoff.servers, mcp, this.options.providerStateDirectory);
+      this.options.reportMcpDrops?.(this.provider, handoff.dropped);
+      const relay =
+        this.options.confine && !this.options.profileGeneration ? { environment: this.#environment(), cwd } : undefined;
+      extension = yield* createPiMcpExtension(handoff.servers, mcp, this.options.providerStateDirectory, relay);
       for (const secret of extension.secrets) this.#secrets.add(secret);
+      keyExtension = yield* this.#keyExtension();
       rpc.on("diagnostic", (text) => this.emit("diagnostic", text, { duringStop: thread?.closed ?? false }));
       rpc.on("record", (record) => {
         if (thread && !thread.closed) this.#record(thread, record);
         else if (
           record.type === "extension_ui_request" &&
           isString(record.id) &&
-          UI_METHODS.includes(String(record.method))
+          ["confirm", "select", "input", "editor"].includes(String(record.method))
         )
           rpc.send({ type: "extension_ui_response", id: record.id, cancelled: true });
       });
       rpc.on("exit", (error) => {
         if (thread?.closed) return;
-        if (thread?.turn) this.#background(this.#finish(thread, "failed", error.message));
+        if (thread && this.#threads.get(thread.id) === thread) {
+          this.#background(this.#threadExited(thread, error));
+          return;
+        }
+        if (thread?.turn) this.#background(this.#finish(thread, "failed", error.message, "provider_exited"));
         this.emit("exit", error);
       });
-      const args = this.options.profileGeneration
-        ? ["--no-tools", "--no-extensions", "--no-mcp"]
-        : ["--extension", extension.path];
+      const startsOnSession = resume && requestedId && (yield* piSessionOpensAtStart(requestedId));
+      const switchesSession = resume && requestedId && !startsOnSession;
+      const args = [
+        ...(startsOnSession && requestedId ? ["--session", requestedId] : []),
+        ...(keyExtension ? ["--extension", keyExtension.path] : []),
+      ];
+      const withExtensions = modelKey !== undefined && extensionModels.has(modelKey);
+      args.push(
+        ...(this.options.profileGeneration
+          ? ["--no-tools", ...(withExtensions ? [] : ["--no-extensions"]), "--no-mcp"]
+          : ["--extension", extension.path]),
+      );
+      if (!this.options.profileGeneration && process.platform === "win32")
+        args.push(...(yield* piWindowsShellArguments(cwd, this.#environment())));
       const instructions = getString(params, "developerInstructions");
-      if (instructions) args.push("--append-system-prompt", instructions);
-      this.#spawn(rpc, cwd, args, extension.environment);
-      if (resume && requestedId) {
-        const loaded = await rpc.request({ type: "switch_session", sessionPath: requestedId });
-        if (loaded.cancelled === true) throw new Error(sourceText("error.provider.piResumeCancelled"));
+      if (instructions) {
+        const path = join(dirname(extension.path), "instructions.md");
+        yield* providerCall(() => writeFile(path, instructions, { mode: 0o600 }));
+        args.push("--append-system-prompt", path);
       }
-      const state = await rpc.request({ type: "get_state" });
+      if (!this.#running) return yield* providerFailure(new Error(sourceText("error.provider.piStopped")));
+      const environment = { ...extension?.environment, ...keyExtension?.environment };
+      yield* providerSync(() => this.#spawn(rpc, cwd, args, environment));
+      if (switchesSession) {
+        const loaded = yield* rpc.request({ type: "switch_session", sessionPath: requestedId }, PI_START_TIMEOUT_MS);
+        if (loaded.cancelled === true)
+          return yield* providerFailure(new Error(sourceText("error.provider.piResumeCancelled")));
+      }
+      const state = yield* rpc.request({ type: "get_state" }, switchesSession ? undefined : PI_START_TIMEOUT_MS);
       const id = getString(state, "sessionFile");
-      if (!id || (resume && id !== requestedId)) throw new Error(sourceText("error.provider.piSessionIdentity"));
-      if (!resume) {
-        // Pi normally delays its first file write until a user message. Create an exclusive empty
-        // file now, so idle release and restart can resume an empty thread.
-        let created = false;
-        try {
-          await writeFile(id, "", { flag: "wx", mode: 0o600 });
-          created = true;
-        } catch (cause) {
-          if (!(cause instanceof Error && "code" in cause && cause.code === "EEXIST")) throw cause;
-        }
-        if (created) {
-          const loaded = await rpc.request({ type: "switch_session", sessionPath: id });
-          const persisted = await rpc.request({ type: "get_state" });
-          if (loaded.cancelled === true || getString(persisted, "sessionFile") !== id)
-            throw new Error(sourceText("error.provider.piResumeCancelled"));
+      if (!id || (resume && id !== requestedId))
+        return yield* providerFailure(new Error(sourceText("error.provider.piSessionIdentity")));
+      if (this.options.profileGeneration && selection && modelKey && !withExtensions) {
+        const listed = yield* rpc.request({ type: "get_available_models" });
+        const known = getArray(listed, "models").some(
+          (item) => getString(item, "provider") === selection.provider && getString(item, "id") === selection.modelId,
+        );
+        if (!known) {
+          extensionModels.add(modelKey);
+          return null;
         }
       }
       mcp.setThreadId(id);
-      const opened: PiThread = {
+      thread = {
         id,
         cwd,
         params,
         rpc,
         mcp,
         extension,
+        keyExtension,
+        deferredMcp: !this.options.profileGeneration && Object.keys(handoff.servers).length > 0,
         turn: null,
         closed: false,
-        gate: new Gate(),
+        gate: Semaphore.makeUnsafe(1),
+        configured,
+        idleRelease: null,
+        idleSince: 0,
       };
-      thread = opened;
-      await this.#configure(opened, params);
-      this.#threads.set(id, opened);
+      yield* this.#configure(thread, params);
+      this.#threads.set(id, thread);
       this.#released.delete(id);
+      this.#armIdle(thread);
       retained = true;
-      return opened;
-    } finally {
-      if (!retained) {
-        await rpc.stop().catch(() => undefined);
-        mcp.close();
-        await extension?.close().catch(() => undefined);
-      }
-    }
-  }
+      return thread;
+    }).pipe(
+      Effect.ensuring(
+        Effect.gen({ self: this }, function* () {
+          this.#starting.delete(rpc);
+          if (retained) return;
+          yield* rpc.stop().pipe(Effect.orDie);
+          mcp.close();
+          if (extension) yield* extension.close().pipe(Effect.orDie);
+          if (keyExtension) yield* keyExtension.close().pipe(Effect.orDie);
+        }),
+      ),
+    );
+    if (opened) return opened;
+    return yield* this.#open(params, resume, configured).pipe(
+      Effect.tapError(() => Effect.sync(() => modelKey && extensionModels.delete(modelKey))),
+    );
+  });
 
-  async #thread(id: string, params: unknown): Promise<PiThread> {
+  readonly #thread = Effect.fn("PiAgentClient.thread")(function* (
+    this: PiAgentClient,
+    id: string,
+    params: unknown,
+  ): Effect.fn.Return<PiThread, ProviderClientOperationError> {
     const existing = this.#threads.get(id);
     if (existing) return existing;
     const saved = this.#released.get(id);
-    return this.#opening.run(() =>
-      this.#open({ ...(isRecord(saved) ? saved : {}), ...(isRecord(params) ? params : {}), threadId: id }, true),
+    return yield* this.#opening.withPermit(
+      this.#open(
+        { ...(isRecord(saved) ? saved : {}), ...(isRecord(params) ? params : {}), threadId: id },
+        true,
+        isRecord(saved),
+      ),
     );
-  }
+  });
 
-  async #configure(thread: PiThread, params: unknown): Promise<void> {
+  readonly #configure = Effect.fn("PiAgentClient.configure")(function* (
+    this: PiAgentClient,
+    thread: PiThread,
+    params: unknown,
+  ) {
     const model = getString(params, "model");
     if (model) {
-      const separator = model.indexOf("/");
-      if (separator < 1) throw new Error(sourceText("error.provider.piModelInvalid"));
-      await thread.rpc.request({
-        type: "set_model",
-        provider: model.slice(0, separator),
-        modelId: model.slice(separator + 1),
-      });
+      const selection = piModelSelection(this.provider, model);
+      if (!selection) return yield* providerFailure(new Error(sourceText("error.provider.piModelInvalid")));
+      yield* thread.rpc.request({ type: "set_model", ...selection });
     }
     const effort = getString(params, "effort") ?? getString(params, "reasoningEffort");
-    if (effort) await thread.rpc.request({ type: "set_thinking_level", level: effort === "none" ? "off" : effort });
-  }
+    if (effort) yield* thread.rpc.request({ type: "set_thinking_level", level: effort === "none" ? "off" : effort });
+  });
 
-  async #prompt(thread: PiThread, params: unknown, steer: boolean): Promise<DynamicRecord> {
-    if (thread.turn && !steer) throw new Error(sourceText("error.provider.piSessionBusy"));
-    if (!thread.turn) await this.#configure(thread, params);
-    const prompt = await piPrompt(params);
-    const active = thread.turn;
-    const turn: PiTurn = active ?? {
-      id: getString(params, "clientUserMessageId") ?? randomUUID(),
+  readonly #modelReadsImages = Effect.fn("PiAgentClient.modelReadsImages")(function* (thread: PiThread) {
+    const state = yield* thread.rpc.request({ type: "get_state" });
+    const input = getArray(getRecord(state, "model"), "input");
+    return input.length === 0 || input.includes("image");
+  });
+
+  readonly #prompt = Effect.fn("PiAgentClient.prompt")(function* (
+    this: PiAgentClient,
+    thread: PiThread,
+    params: unknown,
+  ) {
+    if (thread.turn) return yield* providerFailure(new Error(sourceText("error.provider.piSessionBusy")));
+    yield* this.#configure(thread, params);
+    const prompt = yield* piPrompt(params);
+    if (this.options.profileGeneration && prompt.images && !(yield* this.#modelReadsImages(thread)))
+      return yield* providerFailure(new Error(sourceText("error.workflow.modelImageUnsupported")));
+    const context = this.#turnContext.take(thread.id, prompt.message.startsWith("/"));
+    const message = context.length > 0 ? [...context, prompt.message].join("\n\n") : prompt.message;
+    const turn: PiTurn = {
+      id: getString(params, "clientTurnId") ?? getString(params, "clientUserMessageId") ?? randomUUID(),
       startedAt: Date.now() / 1_000,
       messageIndex: 0,
       items: new Map(),
       stopped: false,
       failure: null,
+      failureCause: null,
       finishing: false,
+      lastActivityAt: Date.now(),
+      openTools: new Set(),
+      waitingOnUser: 0,
+      compacting: false,
+      stalled: null,
     };
-    const userId = `${turn.id}:user:${randomUUID()}`;
-    turn.items.set(userId, {
-      id: userId,
-      type: "userMessage",
-      content: [{ type: "text", text: this.#redact(prompt.message) }],
-    });
-    if (!active) {
-      thread.turn = turn;
-      this.#notify("turn/started", thread, { turn: { id: turn.id, status: "inProgress" } });
-    }
-    // Not awaited: a successful `prompt` response only accepts the prompt, and `agent_settled`
-    // completes the turn. A completed event can arrive before the acknowledgement.
-    this.#background(
-      thread.rpc
-        .request(
-          { type: "prompt", ...prompt, ...(steer ? { streamingBehavior: "steer" } : {}) },
-          this.options.requestTimeoutMs,
-        )
-        .then(
-          async (response) => {
-            if (response.disposition === "handled" && thread.turn === turn) await this.#finish(thread, "completed");
-          },
-          async (failure: unknown) => {
-            if (thread.turn === turn) await this.#finish(thread, "failed", this.#redact(errorMessage(failure)));
-          },
+    this.#addUserMessage(turn, prompt.message);
+    thread.turn = turn;
+    this.#disarmIdle(thread);
+    this.#notify("turn/started", thread, { turn: { id: turn.id, status: "inProgress" } });
+    const fail = (failure: ProviderClientOperationError) =>
+      thread.turn !== turn
+        ? Effect.void
+        : failure.cause instanceof PiProcessClosedError
+          ? this.#endAfterExit(thread)
+          : this.#finish(thread, "failed", this.#redact(String(failure.cause)), classifyFailure(failure.cause));
+    let answered = false;
+    yield* Effect.forkIn(
+      thread.rpc.request({ type: "prompt", ...prompt, message }, null).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            answered = true;
+          }),
         ),
+        Effect.flatMap((response) =>
+          response.disposition === "handled" && thread.turn === turn
+            ? this.#finish(thread, "completed", undefined, undefined, true)
+            : Effect.void,
+        ),
+        Effect.catch(fail),
+      ),
+      this.#scope,
+      { startImmediately: true },
     );
+    yield* Effect.forkIn(
+      Effect.sleep(this.options.requestTimeoutMs ?? PI_REQUEST_TIMEOUT_MS).pipe(
+        Effect.andThen(
+          Effect.suspend(() =>
+            answered || thread.turn !== turn
+              ? Effect.void
+              : thread.rpc.request({ type: "get_state" }, this.options.requestTimeoutMs).pipe(
+                  Effect.flatMap((state) =>
+                    answered || turn.waitingOnUser > 0 || state.isStreaming === true || state.isCompacting === true
+                      ? Effect.void
+                      : fail(providerFailure(new RequestTimeoutError("Pi", "prompt"))),
+                  ),
+                  Effect.catch((failure) => (answered ? Effect.void : fail(failure))),
+                ),
+          ),
+        ),
+      ),
+      this.#scope,
+    );
+    yield* Effect.forkIn(this.#watchStall(thread, turn), this.#scope);
     return { turn: { id: turn.id, status: "inProgress" }, turnId: turn.id };
+  });
+
+  readonly #watchStall = Effect.fn("PiAgentClient.watchStall")(function* (
+    this: PiAgentClient,
+    thread: PiThread,
+    turn: PiTurn,
+  ) {
+    while (thread.turn === turn && !turn.finishing && !turn.stopped) {
+      const silentFor = Date.now() - turn.lastActivityAt;
+      if (silentFor < PI_TURN_STALL_MS || turn.openTools.size > 0 || turn.waitingOnUser > 0 || turn.compacting) {
+        yield* Effect.sleep(silentFor < PI_TURN_STALL_MS ? PI_TURN_STALL_MS - silentFor : PI_TURN_STALL_MS);
+        continue;
+      }
+      this.emit("diagnostic", `Pi sent nothing for ${silentFor} ms; ending turn ${turn.id}.`);
+      const failure = sourceText("error.agent.turnStalled", { provider: agentProviderName(this.provider) });
+      turn.stalled = failure;
+      yield* thread.rpc.request({ type: "clear_queue" }).pipe(Effect.ignore);
+      yield* thread.rpc.request({ type: "abort" }).pipe(Effect.ignore);
+      yield* this.#finish(thread, "failed", failure, "stalled");
+    }
+  });
+
+  readonly #steer = Effect.fn("PiAgentClient.steer")(function* (
+    this: PiAgentClient,
+    thread: PiThread,
+    params: unknown,
+  ) {
+    const turn = thread.turn;
+    if (!turn || turn.id !== getString(params, "expectedTurnId") || turn.stopped || turn.finishing)
+      return yield* providerFailure(new Error(sourceText("error.backend.steerTurnChanged")));
+    const prompt = yield* piPrompt(params);
+    yield* thread.rpc
+      .request({ type: "steer", ...prompt }, this.options.requestTimeoutMs)
+      .pipe(
+        Effect.tapError((failure) =>
+          failure.cause instanceof RequestTimeoutError ? this.#dropSteer(thread, turn, prompt.message) : Effect.void,
+        ),
+      );
+    if (thread.turn !== turn || turn.finishing || turn.stopped) {
+      yield* thread.rpc.request({ type: "clear_queue" }).pipe(Effect.ignore);
+      return yield* providerFailure(new Error(sourceText("error.backend.steerTurnChanged")));
+    }
+    this.#addUserMessage(turn, withoutTurnContext(prompt.message));
+    return { turn: { id: turn.id, status: "inProgress" }, turnId: turn.id };
+  });
+
+  readonly #dropSteer = Effect.fn("PiAgentClient.dropSteer")(
+    function* (this: PiAgentClient, thread: PiThread, turn: PiTurn, message: string) {
+      const cleared = yield* thread.rpc.request({ type: "clear_queue" });
+      const steering = getArray(cleared, "steering").filter(isString);
+      const index = steering.indexOf(message);
+      if (index >= 0) steering.splice(index, 1);
+      for (const text of steering) {
+        if (thread.turn !== turn || turn.stopped || turn.finishing) return;
+        yield* thread.rpc
+          .request({ type: "steer", message: text })
+          .pipe(
+            Effect.catch((failure) => Effect.sync(() => this.emit("diagnostic", this.#redact(String(failure.cause))))),
+          );
+      }
+    },
+    (effect) => Effect.ignore(effect),
+  );
+
+  #addUserMessage(turn: PiTurn, message: string): void {
+    const id = `${turn.id}:user:${randomUUID()}`;
+    const text = redactMcpValues(redactSecrets(message), this.#secretValues(), redactSecrets);
+    turn.items.set(id, { id, type: "userMessage", content: [{ type: "text", text }] });
+  }
+
+  promptCacheTtlMs(externalThreadId: string): number | null {
+    return this.#cacheTtls.get(externalThreadId) ?? null;
+  }
+
+  #observeCacheWrite(threadId: string, usage: DynamicRecord | null): void {
+    const written = typeof usage?.cacheWrite === "number" ? usage.cacheWrite : 0;
+    const writtenForHour = typeof usage?.cacheWrite1h === "number" ? usage.cacheWrite1h : 0;
+    if (written <= 0) return;
+    if (writtenForHour >= written) this.#cacheTtls.set(threadId, PI_LONG_CACHE_TTL_MS);
+    else this.#cacheTtls.delete(threadId);
+  }
+
+  #notifyContextUsage(thread: PiThread, stats: unknown): void {
+    const context = Schema.decodeUnknownOption(PiContextUsage)(getRecord(stats, "contextUsage"));
+    if (Option.isNone(context)) return;
+    this.#notify("thread/tokenUsage/updated", thread, {
+      tokenUsage: {
+        last: { totalTokens: context.value.tokens },
+        modelContextWindow: context.value.contextWindow,
+        estimated: true,
+      },
+    });
   }
 
   #notify(method: string, thread: PiThread, params: DynamicRecord): void {
-    // Usage contains only validated numeric counters. Generic secret-name matching masks `*Tokens`.
-    const safe = method === "openbot/usage" ? params : JSON.parse(this.#redact(JSON.stringify(params)));
+    const safe =
+      method === "openbot/usage" ||
+      method === "thread/tokenUsage/updated" ||
+      method === "turn/started" ||
+      method === "turn/completed"
+        ? params
+        : withOwnIds(redactMcpRecord(params, this.#secretValues()), params);
     this.emit("notification", {
       method,
       params: {
@@ -478,9 +1011,15 @@ export class PiAgentClient extends EventEmitter<ClientEvents> implements AgentCl
       },
     });
   }
-
-  #background(task: Promise<void>): void {
-    task.catch((failure: unknown) => this.emit("diagnostic", this.#redact(errorMessage(failure))));
+  #background(effect: Effect.Effect<void, ProviderClientOperationError>): void {
+    void runCauseEffect(
+      Effect.forkIn(
+        effect.pipe(
+          Effect.catch((failure) => Effect.sync(() => this.emit("diagnostic", this.#redact(String(failure.cause))))),
+        ),
+        this.#scope,
+      ),
+    ).catch(() => undefined);
   }
 
   #record(thread: PiThread, record: DynamicRecord): void {
@@ -488,16 +1027,22 @@ export class PiAgentClient extends EventEmitter<ClientEvents> implements AgentCl
       this.#background(this.#ui(thread, record));
       return;
     }
+    if (record.type === "compaction_end") this.#turnContext.resend(thread.id);
     const turn = thread.turn;
     if (!turn || turn.finishing) return;
+    turn.lastActivityAt = Date.now();
     if (record.type === "agent_settled") {
+      const failure = turn.stalled ?? turn.failure;
       this.#background(
         this.#finish(
           thread,
-          turn.stopped ? "interrupted" : turn.failure ? "failed" : "completed",
-          turn.failure ?? undefined,
+          turn.stalled || (!turn.stopped && failure) ? "failed" : turn.stopped ? "interrupted" : "completed",
+          failure ?? undefined,
+          turn.stalled ? "stalled" : (turn.failureCause ?? undefined),
         ),
       );
+    } else if (record.type === "compaction_start" || record.type === "compaction_end") {
+      turn.compacting = record.type === "compaction_start";
     } else if (record.type === "message_update") {
       const update = getRecord(record, "assistantMessageEvent");
       const kind = getString(update, "type");
@@ -517,6 +1062,7 @@ export class PiAgentClient extends EventEmitter<ClientEvents> implements AgentCl
     } else if (record.type === "message_end") {
       const message = getRecord(record, "message");
       if (getString(message, "role") !== "assistant") return;
+      this.#observeCacheWrite(thread.id, getRecord(message, "usage"));
       const id = `${turn.id}:message:${turn.messageIndex++}`;
       for (const key of turn.items.keys()) if (key.startsWith(`${id}:`)) turn.items.delete(key);
       for (const item of piMessageItems(message, id)) {
@@ -524,47 +1070,104 @@ export class PiAgentClient extends EventEmitter<ClientEvents> implements AgentCl
         this.#notify("item/completed", thread, { item });
       }
       const stop = getString(message, "stopReason");
-      turn.failure =
-        stop === "error" ? this.#redact(getString(message, "errorMessage") ?? "Pi model request failed.") : null;
+      turn.failure = stop === "error" ? this.#failureText(getString(message, "errorMessage")) : null;
+      turn.failureCause = stop === "error" ? piFailureCause(getString(message, "errorMessage")) : null;
       if (stop === "aborted") turn.stopped = true;
     } else if (record.type === "tool_execution_start" || record.type === "tool_execution_end") {
       const id = getString(record, "toolCallId");
       if (!id) return;
       const done = record.type === "tool_execution_end";
+      if (done) turn.openTools.delete(id);
+      else turn.openTools.add(id);
+      const tool = getString(record, "toolName");
+      const args = record.args ?? turn.items.get(id)?.arguments;
       const item: ThreadItem = {
         ...turn.items.get(id),
         id,
         type: "dynamicToolCall",
-        tool: getString(record, "toolName"),
-        arguments: record.args ?? turn.items.get(id)?.arguments,
+        tool,
+        arguments: args,
+        ...piShellCommand(tool, args),
         status: done ? (record.isError === true ? "failed" : "completed") : "inProgress",
         ...(done ? { contentItems: [{ type: "inputText", text: piText(getRecord(record, "result")?.content) }] } : {}),
       };
       turn.items.set(id, item);
-      this.#notify(done ? "item/completed" : "item/started", thread, { item });
+      this.#notify(done ? "item/completed" : "item/started", thread, {
+        item,
+        filePaths: piToolFilePaths(item.tool, item.arguments, thread.cwd),
+      });
     }
   }
 
-  async #finish(thread: PiThread, status: string, failure?: string): Promise<void> {
+  readonly #finish = Effect.fn("PiAgentClient.finishTurn")(function* (
+    this: PiAgentClient,
+    thread: PiThread,
+    status: string,
+    failure?: string,
+    causeCode?: CauseCode,
+    handledCommand = false,
+  ) {
     const turn = thread.turn;
     if (!turn || turn.finishing) return;
     turn.finishing = true;
-    if (failure) this.#notify("error", thread, { error: { message: this.#redact(failure) }, willRetry: false });
-    // Native totals survive process release/resume. Per-message usage is not a cumulative counter.
-    // A crashed host cannot answer telemetry; it must not block completion.
-    const usage = await thread.rpc
-      .request({ type: "get_session_stats" }, 2_000)
-      .then(sessionUsage)
-      .catch(() => null);
-    if (usage) this.#notify("openbot/usage", thread, { usage });
-    this.#notify("turn/completed", thread, { turn: { id: turn.id, status } });
+    if (status === "failed") this.#turnContext.resend(thread.id);
+    if (failure)
+      this.#notify("error", thread, {
+        error: { message: this.#redact(failure) },
+        willRetry: false,
+        ...(causeCode ? { causeCode } : {}),
+      });
+    yield* thread.rpc.request({ type: "get_session_stats" }, 2_000).pipe(
+      Effect.flatMap((stats) => {
+        this.#notifyContextUsage(thread, stats);
+        const cost = Schema.decodeUnknownOption(PiSessionCost)(stats);
+        return providerSync(() => ({
+          ...Schema.decodeUnknownSync(PiSessionUsage)(stats),
+          cost: Option.isSome(cost) ? cost.value.cost : null,
+        }));
+      }),
+      Effect.map(({ tokens, cost }) =>
+        this.#notify("openbot/usage", thread, {
+          usage: {
+            inputTokens: tokens.input + tokens.cacheRead + tokens.cacheWrite,
+            outputTokens: tokens.output,
+            cachedReadTokens: tokens.cacheRead,
+            cachedWriteTokens: tokens.cacheWrite,
+          },
+          ...(cost === null ? {} : { cost }),
+        }),
+      ),
+      Effect.catch(() => Effect.void),
+    );
+    const keepsHistory = !isRecord(thread.params) || thread.params.persistSession !== false;
+    const append = keepsHistory ? this.options.history?.append : undefined;
+    if (append) {
+      const saved = yield* Effect.exit(
+        append(thread.id, {
+          turnId: turn.id,
+          startedAt: turn.startedAt,
+          status,
+          items: this.#safeItems([...turn.items.values()]),
+          complete: true,
+        }),
+      );
+      if (Exit.isFailure(saved)) status = "failed";
+    }
     if (thread.turn === turn) thread.turn = null;
-  }
+    this.#notify("turn/completed", thread, {
+      turn: { id: turn.id, status, ...(handledCommand ? { handledCommand } : {}) },
+    });
+    this.#background(this.#markIdle(thread));
+  });
 
-  async #ui(thread: PiThread, record: DynamicRecord): Promise<void> {
+  readonly #ui = Effect.fn("PiAgentClient.userInput")(function* (
+    this: PiAgentClient,
+    thread: PiThread,
+    record: DynamicRecord,
+  ) {
     const id = getString(record, "id");
     const method = getString(record, "method");
-    if (!id || !method || !UI_METHODS.includes(method)) return;
+    if (!id || !method || !["confirm", "select", "input", "editor"].includes(method)) return;
     if (this.options.profileGeneration) {
       thread.rpc.send({ type: "extension_ui_response", id, cancelled: true });
       return;
@@ -575,7 +1178,9 @@ export class PiAgentClient extends EventEmitter<ClientEvents> implements AgentCl
         ? [confirm, sourceText("status.provider.confirmCancel")]
         : getArray(record, "options").filter(isString);
     const question = getString(record, "message") ?? getString(record, "title") ?? "Pi";
-    const result = await this.#requests
+    const turn = thread.turn;
+    if (turn) turn.waitingOnUser += 1;
+    const result = yield* this.#requests
       .call("item/tool/requestUserInput", {
         threadId: thread.id,
         turnId: thread.turn?.id ?? randomUUID(),
@@ -589,60 +1194,186 @@ export class PiAgentClient extends EventEmitter<ClientEvents> implements AgentCl
           },
         ],
       })
-      .catch(() => null);
+      .pipe(
+        Effect.catch(() => Effect.succeed(null)),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (!turn) return;
+            turn.waitingOnUser -= 1;
+            turn.lastActivityAt = Date.now();
+          }),
+        ),
+      );
     const answer = getArray(getRecord(getRecord(result, "answers"), id), "answers").find(isString);
-    thread.rpc.send({
-      type: "extension_ui_response",
-      id,
-      ...(answer === undefined
-        ? { cancelled: true }
-        : method === "confirm"
-          ? { confirmed: answer === confirm }
-          : { value: answer }),
-    });
-  }
+    yield* providerSync(() =>
+      thread.rpc.send({
+        type: "extension_ui_response",
+        id,
+        ...(answer === undefined
+          ? { cancelled: true }
+          : method === "confirm"
+            ? { confirmed: answer === confirm }
+            : { value: answer }),
+      }),
+    );
+  });
 
-  async #callTool(
+  readonly #callTool = Effect.fn("PiAgentClient.callTool")(function* (
+    this: PiAgentClient,
     params: { threadId: string; turnId: string; callId: string; namespace: string; tool: string; arguments: unknown },
     signal: AbortSignal,
-  ): Promise<DynamicToolResult> {
-    const result = await this.#requests.call("item/tool/call", params, signal);
-    if (!isToolResult(result)) throw new Error(sourceText("error.provider.piToolInvalid"));
+    detachAfterMs: number | undefined,
+  ): Effect.fn.Return<DynamicToolResult, ProviderClientOperationError> {
+    const result = yield* this.#requests.call("item/tool/call", params, signal, detachAfterMs);
+    if (!isToolResult(result)) return yield* providerFailure(new Error(sourceText("error.provider.piToolInvalid")));
     return result;
-  }
+  });
 
-  /** The active branch of the Pi session, newest turn last. `get_entries` also has abandoned branches. */
-  async #history(
-    thread: PiThread,
-  ): Promise<Array<{ id: string; status: string; startedAt?: number; items: ThreadItem[] }>> {
-    const response = await thread.rpc.request({ type: "get_messages" });
-    return getArray(response, "messages").map((message, index) => ({
-      id: `${thread.id}:history:${index}`,
-      status: "completed",
-      ...(isRecord(message) && typeof message.timestamp === "number" ? { startedAt: message.timestamp / 1_000 } : {}),
-      items: this.#safeItems(piMessageItems(message, `pi-history:${index}`)),
-    }));
-  }
+  readonly readHistory = Effect.fn("PiAgentClient.readHistory")(function* (
+    this: PiAgentClient,
+    request: ProviderHistoryRequest,
+    consume: ProviderHistoryConsumer,
+  ) {
+    const stored = this.options.history;
+    if (!request.providerOnly && stored?.read && stored.complete && (yield* stored.complete(request))) {
+      yield* stored.read(request, consume);
+      return;
+    }
+    const messages = yield* this.#readMessages(
+      request.threadId,
+      request.cwd ?? this.options.discoveryCwd?.() ?? process.cwd(),
+    );
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index];
+      const fragment: ProviderHistoryFragment = {
+        turnId: `${request.threadId}:history:${index}`,
+        recordsOnly: true,
+        status: "completed",
+        ...(isRecord(message) && typeof message.timestamp === "number" ? { startedAt: message.timestamp / 1_000 } : {}),
+        items: request.items === "none" ? [] : this.#safeItems(piMessageItems(message, `pi-history:${index}`)),
+        complete: true,
+      };
+      if (!(yield* consume(fragment))) break;
+    }
+  });
+
+  readonly #readMessages = Effect.fn("PiAgentClient.readMessages")(function* (
+    this: PiAgentClient,
+    sessionFile: string,
+    cwd: string,
+  ) {
+    const fromThread = (thread: PiThread) =>
+      thread.rpc.request({ type: "get_messages" }).pipe(Effect.map((response) => getArray(response, "messages")));
+    const live = this.#threads.get(sessionFile);
+    if (live) return yield* fromThread(live);
+    return yield* this.#opening.withPermit(
+      Effect.suspend(() => {
+        const opened = this.#threads.get(sessionFile);
+        return opened ? fromThread(opened) : this.#readOnShortProcess(sessionFile, cwd);
+      }),
+    );
+  });
+
+  readonly #readOnShortProcess = Effect.fn("PiAgentClient.readOnShortProcess")(function* (
+    this: PiAgentClient,
+    sessionFile: string,
+    cwd: string,
+  ) {
+    yield* requireSessionFile(sessionFile);
+    if (!this.#running) return yield* providerFailure(new Error(sourceText("error.provider.piStopped")));
+    const keyProvider = this.options.keyProvider;
+    const key = keyProvider?.apiKey();
+    if (key) this.#secrets.add(key);
+    if (!keyProvider)
+      for (const secret of piCustomEndpointSecrets(this.options.customEndpoints?.() ?? [])) this.#secrets.add(secret);
+    const rpc = new PiRpc(this.#redact, this.provider);
+    let stopping = false;
+    rpc.on("diagnostic", (text) => this.emit("diagnostic", text, { duringStop: stopping }));
+    return yield* Effect.acquireUseRelease(
+      providerSync(() => {
+        this.#spawn(rpc, cwd, ["--no-tools", "--no-extensions", "--no-mcp"], {});
+        this.#starting.add(rpc);
+      }),
+      () =>
+        Effect.gen(function* () {
+          const loaded = yield* rpc.request({ type: "switch_session", sessionPath: sessionFile });
+          if (loaded.cancelled === true)
+            return yield* providerFailure(new Error(sourceText("error.provider.piResumeCancelled")));
+          return getArray(yield* rpc.request({ type: "get_messages" }), "messages");
+        }),
+      () =>
+        Effect.sync(() => {
+          stopping = true;
+        }).pipe(
+          Effect.andThen(rpc.stop()),
+          Effect.ensuring(Effect.sync(() => this.#starting.delete(rpc))),
+          Effect.orDie,
+        ),
+    );
+  });
 
   #safeItems(items: ThreadItem[]): ThreadItem[] {
+    const values = this.#secretValues();
     return items.flatMap((item) => {
-      const value = JSON.parse(this.#redact(JSON.stringify(item)));
+      const value = withOwnIds(redactMcpRecord(item, values), item);
       return isRecord(value) && isString(value.type) ? [{ ...value, type: value.type }] : [];
     });
   }
 }
 
-function sessionUsage(stats: DynamicRecord): DynamicRecord | null {
-  const tokens = getRecord(stats, "tokens");
-  if (!tokens) return null;
-  const { input, output, cacheRead, cacheWrite } = tokens;
-  if (!isNumber(input) || !isNumber(output) || !isNumber(cacheRead) || !isNumber(cacheWrite)) return null;
-  return {
-    inputTokens: input + cacheRead + cacheWrite,
-    outputTokens: output,
-    cachedReadTokens: cacheRead,
-    cachedWriteTokens: cacheWrite,
-  };
+function withOwnIds(safe: LogValue, original: DynamicRecord | ThreadItem): LogValue {
+  if (!isRecord(safe)) return safe;
+  const restored = { ...safe };
+  if (isString(original.id)) restored.id = original.id;
+  if (isString(original.itemId)) restored.itemId = original.itemId;
+  const itemId = getString(getRecord(original, "item"), "id");
+  if (itemId !== undefined && isRecord(restored.item)) restored.item = { ...restored.item, id: itemId };
+  return restored;
+}
+
+function requireSessionFile(sessionFile: string): Effect.Effect<void, ProviderClientOperationError> {
+  if (!isAbsolute(sessionFile)) return Effect.fail(providerFailure(new MissingPiSessionError()));
+  return providerCall(() => access(sessionFile)).pipe(
+    Effect.mapError(({ cause }) =>
+      providerFailure(
+        isMissingFileError(cause)
+          ? new MissingPiSessionError()
+          : new Error(sourceText("error.provider.piSessionMissing")),
+      ),
+    ),
+  );
+}
+
+function piSessionOpensAtStart(sessionFile: string): Effect.Effect<boolean> {
+  return providerCall(async () => {
+    const handle = await open(sessionFile, "r");
+    try {
+      const { buffer, bytesRead } = await handle.read(
+        Buffer.alloc(PI_SESSION_HEADER_BYTES),
+        0,
+        PI_SESSION_HEADER_BYTES,
+        0,
+      );
+      if (bytesRead === 0) return true;
+      const text = buffer.toString("utf8", 0, bytesRead);
+      const end = text.indexOf("\n");
+      if (end < 0) return false;
+      const header = Schema.decodeUnknownOption(Schema.fromJsonString(PiSessionHeader))(text.slice(0, end));
+      if (Option.isNone(header)) return false;
+      const cwd = header.value.cwd;
+      if (!cwd) return true;
+      return access(cwd).then(
+        () => true,
+        () => false,
+      );
+    } finally {
+      await handle.close();
+    }
+  }).pipe(Effect.orElseSucceed(() => false));
+}
+
+function keepEmptySession(sessionFile: string): Effect.Effect<void> {
+  return providerCall(() => writeFile(sessionFile, "", { flag: "wx", mode: 0o600 })).pipe(Effect.ignore);
 }
 
 function isNamespace(value: unknown): value is DynamicToolNamespace {
@@ -667,4 +1398,59 @@ function isToolResult(value: unknown): value is DynamicToolResult {
         ((item.type === "inputText" && isString(item.text)) || (item.type === "inputImage" && isString(item.imageUrl))),
     )
   );
+}
+
+const PI_PROVIDER_STOP =
+  /^(?:Provider finish_reason: error\b|Stream ended without finish_reason\b|Provider returned (?:an? )?error\b)/u;
+
+const PiErrorBody = Schema.fromJsonString(
+  Schema.Union([
+    Schema.Struct({ error: Schema.Union([Schema.String, Schema.Struct({ message: Schema.String })]) }),
+    Schema.Struct({ message: Schema.String }),
+    Schema.Struct({ detail: Schema.String }),
+  ]),
+);
+
+const PI_REFUSAL_REASON_LIMIT = 120;
+
+function piRefusalReason(body: string): string | null {
+  const decoded = Schema.decodeUnknownOption(PiErrorBody)(body.trim());
+  const text = Option.isSome(decoded)
+    ? "error" in decoded.value
+      ? typeof decoded.value.error === "string"
+        ? decoded.value.error
+        : decoded.value.error.message
+      : "message" in decoded.value
+        ? decoded.value.message
+        : decoded.value.detail
+    : /^\s*[{[]/u.test(body)
+      ? ""
+      : body;
+  const reason = text
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/[.\s]+$/u, "");
+  if (!reason || /^status code \(no body\)$/iu.test(reason)) return null;
+  return reason.length <= PI_REFUSAL_REASON_LIMIT
+    ? reason
+    : `${reason.slice(0, PI_REFUSAL_REASON_LIMIT - 1).trimEnd()}…`;
+}
+
+function piFailureCause(message: string | null): CauseCode {
+  if (!message) return "unknown";
+  const status = /^([1-5]\d\d):? /u.exec(message)?.[1];
+  const cause = structuredCause(
+    status === undefined ? null : httpStatusCause(Number(status)),
+    classifyFailure(message),
+  );
+  return cause === "unknown" && PI_PROVIDER_STOP.test(message) ? "provider_unavailable" : cause;
+}
+
+function piToolFilePaths(tool: unknown, args: unknown, cwd: string): string[] | undefined {
+  if (tool !== "read" && tool !== "write" && tool !== "edit") return undefined;
+  const path = isRecord(args) && typeof args.path === "string" ? args.path.replace(/^@/u, "") : "";
+  if (!path) return undefined;
+  const home = path.startsWith("~/") || (process.platform === "win32" && path.startsWith("~\\"));
+  if (path === "~" || home) return [resolve(homedir(), path.slice(2))];
+  return [resolve(cwd, path)];
 }

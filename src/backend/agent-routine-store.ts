@@ -1,4 +1,3 @@
-import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
   CreateRoutineInput,
   Routine,
@@ -6,15 +5,21 @@ import type {
   RoutineRunStatus,
   UpdateRoutineInput,
 } from "@openbot/contracts/ipc";
-import { sourceText } from "@openbot/i18n/source";
 import type { OpenBotDatabase } from "./openbot-database";
 import {
   type DueRoutine,
+  type ImportedRoutineRun,
   type OwnedRoutine,
   type OwnedRoutineRun,
+  type ReceivedWebhookEvent,
+  type RoutineRunStart,
   RoutineStore,
-  type RoutineTables,
+  type SkippedRunRows,
+  type WebhookReceiveResult,
 } from "./routine-store";
+import { ROUTINE_TABLES } from "./routine-tables";
+
+const HIDDEN_AGENT_ROUTINE_PAUSE_COMMAND_ID = "routine:hidden-agent-pause:v1";
 
 export interface DueRoutineTrigger {
   routine: Routine;
@@ -23,29 +28,9 @@ export interface DueRoutineTrigger {
   schedule: DueRoutine["schedule"];
 }
 
-const AGENT_ROUTINE_TABLES: RoutineTables = {
-  routineTable: "projection_agent_routines",
-  triggerTable: "projection_routine_triggers",
-  runTable: "projection_routine_runs",
-  ownerColumn: "agent_id",
-  handleColumn: "delivery_id",
-  routineAggregate: "agent-routine",
-  runAggregate: "routine-run",
-  commandPrefix: "routine",
-  eventPrefix: "routine",
-  limit: INPUT_LIMITS.agentRoutines,
-  limitMessage: sourceText("error.backend.agentRoutineLimit", { limit: INPUT_LIMITS.agentRoutines }),
-};
-
-/**
- * The agent-shaped names over the shared store: `ownerId` reads as `agentId` and the run handle
- * reads as `deliveryId`. The SQL, the constraints and the command ids all live in `RoutineStore`,
- * so this file only translates - which is why the callers and `agent-routine-store.test.ts` did not
- * change with the extraction.
- */
 export class AgentRoutineStore extends RoutineStore {
   constructor(database: OpenBotDatabase) {
-    super(database, AGENT_ROUTINE_TABLES);
+    super(database, ROUTINE_TABLES.agent);
   }
 
   list(agentId: string): Routine[] {
@@ -72,6 +57,7 @@ export class AgentRoutineStore extends RoutineStore {
             schedule: routine.trigger.schedule,
             ...(routine.limitPolicy ? { limitPolicy: routine.limitPolicy } : {}),
             ...(routine.missedPolicy ? { missedPolicy: routine.missedPolicy } : {}),
+            ...(routine.runIn ? { runIn: routine.runIn } : {}),
           },
           now,
         ),
@@ -88,6 +74,37 @@ export class AgentRoutineStore extends RoutineStore {
   update(input: UpdateRoutineInput, now = new Date()): Routine {
     const { agentId, ...fields } = input;
     return toRoutine(this.updateRoutine(agentId, fields, now));
+  }
+
+  pauseForAgentsHiddenBeforeWork(agentIds: readonly string[], now = new Date()): string[] {
+    if (this.database.commandResult(HIDDEN_AGENT_ROUTINE_PAUSE_COMMAND_ID) !== undefined) return [];
+    const routineIds = agentIds.flatMap((agentId) =>
+      this.listRecords(agentId).flatMap((routine) => (routine.active ? [routine.id] : [])),
+    );
+    this.database.dispatch(
+      HIDDEN_AGENT_ROUTINE_PAUSE_COMMAND_ID,
+      [
+        {
+          aggregateType: "agent-hidden-routine-pause",
+          aggregateId: HIDDEN_AGENT_ROUTINE_PAUSE_COMMAND_ID,
+          eventType: "routine.hidden-agents-paused",
+          payload: { agentIds, routineIds },
+        },
+      ],
+      (db, sequences) => {
+        const pause = db.prepare(
+          `UPDATE ${this.tables.routineTable} SET active = 0, updated_at = ?, last_event_sequence = ?
+           WHERE routine_id = ? AND active = 1`,
+        );
+        for (const routineId of routineIds) pause.run(now.toISOString(), sequences[0] ?? 0, routineId);
+        return null;
+      },
+    );
+    return routineIds;
+  }
+
+  importRuns(agentId: string, routineId: string, runs: readonly ImportedRoutineRun[]): string[] {
+    return this.importRunRows(routineId, agentId, runs);
   }
 
   listRuns(agentId: string, routineId: string, limit = 50, withSkipped = false): RoutineRun[] {
@@ -111,8 +128,28 @@ export class AgentRoutineStore extends RoutineStore {
     }));
   }
 
-  createRun(routine: Routine, triggerId: string | null, kind: RoutineRun["kind"], scheduledFor: string): RoutineRun {
-    return toRun(this.createRunRow(toOwnedRoutine(routine), triggerId, kind, scheduledFor));
+  createRun(
+    routine: Pick<Routine, "id" | "agentId" | "name" | "instruction">,
+    triggerId: string | null,
+    start: RoutineRunStart,
+    scheduledFor: string,
+  ): RoutineRun {
+    return toRun(this.createRunRow(runSource(routine), triggerId, start, scheduledFor));
+  }
+
+  skipOccurrences(
+    { agentId, ...fields }: Routine,
+    due: Date,
+    scheduledFor: Date,
+    nextRunAt: Date,
+    reason: string,
+  ): void {
+    this.skipOccurrenceRow({ ...fields, ownerId: agentId }, due, scheduledFor, nextRunAt, reason);
+  }
+
+  receiveWebhook(agentId: string, routineId: string, event: ReceivedWebhookEvent): WebhookReceiveResult<RoutineRun> {
+    const result = this.receiveWebhookRow(agentId, routineId, event);
+    return result.kind === "started" ? { kind: "started", run: toRun(result.run) } : result;
   }
 
   attachDelivery(runId: string, deliveryId: string): RoutineRun {
@@ -123,8 +160,17 @@ export class AgentRoutineStore extends RoutineStore {
     return toRun(this.updateRunRow(runId, status, error));
   }
 
+  skippedBefore(run: RoutineRun): SkippedRunRows {
+    return this.skippedRowsBefore(run.agentId, run.routineId, run.id, run.createdAt);
+  }
+
   runForDelivery(deliveryId: string): RoutineRun | null {
     const run = this.runForHandleRow(deliveryId);
+    return run ? toRun(run) : null;
+  }
+
+  run(runId: string): RoutineRun | null {
+    const run = this.runRow(runId);
     return run ? toRun(run) : null;
   }
 }
@@ -133,8 +179,8 @@ function toRoutine({ ownerId, ...fields }: OwnedRoutine): Routine {
   return { ...fields, agentId: ownerId };
 }
 
-function toOwnedRoutine({ agentId, ...fields }: Routine): OwnedRoutine {
-  return { ...fields, ownerId: agentId };
+function runSource({ id, agentId, name, instruction }: Pick<Routine, "id" | "agentId" | "name" | "instruction">) {
+  return { id, ownerId: agentId, name, instruction };
 }
 
 function toRun({ ownerId, handleId, ...fields }: OwnedRoutineRun): RoutineRun {

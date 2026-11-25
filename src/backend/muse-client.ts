@@ -1,35 +1,40 @@
 import { EventEmitter } from "node:events";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
+import { toNamespacedPath } from "node:path";
 import {
   type Connection,
   type SendUserTurnOptions,
   type SpawnedMspConnection,
   spawnMspConnection,
 } from "@muse-code/sdk";
+import { attachmentMimeTypeForName } from "@openbot/contracts/attachment-files";
 import { isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
 import { redactText } from "@openbot/logging";
-import type { z } from "zod";
+import { Effect, Exit, Fiber, Option, Schema, Scope } from "effect";
+import { shownFailureDetail } from "./acp-flavor";
 import { secretElicitationField } from "./agent/prompts";
+import { TurnContext } from "./agent/turn-context";
 import { type AgentClient, type AgentProvider, type DiagnosticOrigin, RequestTimeoutError } from "./agent-client";
-import { type AgentCliInfo, cliSpawnTarget } from "./cli";
+import { type AgentCliInfo, cliPathEnvironment, cliSpawnTarget } from "./cli";
+import { runCauseEffect } from "./effect-boundary";
 import { type DynamicToolNamespace, LocalMcpBridge, type LocalMcpSession } from "./local-mcp-bridge";
 import {
   acpMcpServers,
   agentMcpServers,
   computerUseParam,
   disabledMcpServersParam,
-  type McpAuthorizationSource,
   type McpDropReporter,
+  type McpEndpointSource,
   type McpServerSource,
   type McpToolRuntimeSource,
+  mcpAgentParam,
   usableMcpServers,
 } from "./mcp-provider-shapes";
-import { mcpSecretValues, redactMcpValues } from "./mcp-redaction";
+import { isInheritedProfileValue, mcpSecretValues, redactMcpValues } from "./mcp-redaction";
 import {
   MuseApproval,
-  type MuseItem,
-  MuseItemEvent,
+  MuseItem,
   MuseModels,
   MusePage,
   MuseSession,
@@ -52,15 +57,16 @@ import {
   type RpcError,
   type ThreadItem,
 } from "./protocol";
+import {
+  type ProviderClientOperationError,
+  providerCall,
+  providerFailure,
+  providerSync,
+  requiredString,
+  toProviderClientOperationError,
+} from "./provider-client-effects";
+import type { ReadProviderHistory } from "./provider-history";
 import { createDiagnosticStream } from "./stderr-diagnostics";
-
-const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
-
-export interface MuseAccountStatus {
-  authenticated: boolean;
-  email?: string | null;
-  planType?: string | null;
-}
 
 export interface MuseProviderOptions {
   requestTimeoutMs?: number;
@@ -71,10 +77,12 @@ export interface MuseProviderOptions {
   mcpServers?: McpServerSource;
   reportMcpDrops?: McpDropReporter;
   mcpToolRuntimes?: McpToolRuntimeSource;
-  mcpAuthorization?: McpAuthorizationSource;
-  readAccount?: () => Promise<MuseAccountStatus>;
+  mcpEndpoint?: McpEndpointSource;
+  readAccount?: () => Effect.Effect<
+    { authenticated: boolean; email?: string | null; planType?: string | null },
+    ProviderClientOperationError
+  >;
   profileGeneration?: boolean;
-  /** Test seam at the owned SDK process boundary. */
   spawn?: typeof spawnMspConnection;
 }
 
@@ -88,43 +96,46 @@ interface MuseTurn {
   id: string;
   compact: boolean;
   items: Map<string, MuseItem>;
-  /** Holds a trailing credential prefix until the next delta or authoritative item. */
   deltaPending: Map<string, string>;
 }
 interface MuseThread {
   id: string;
   cwd: string;
   instructions: string;
+  instructionsSent: string | null;
   roots: string[];
   mcp: LocalMcpSession;
   turn: MuseTurn | null;
   approvals: Map<string, AbortController>;
-  /** Only cursors replayed by a gap fill; remove the live twin when it arrives. */
   replayed: Set<string>;
 }
-type MuseParams = Parameters<Connection["command"]>[1];
 
-/**
- * Owns one native MSP process (`muse serve`), the session MCP bridges, and the adapter from the
- * Muse view events to the OpenBot notifications. Each session owns its own child process, because MSP
- * has no session-close command and an MCP refresh must be able to stop the old one.
- */
+const MUSE_MODEL_UNAVAILABLE = /\bmodel\b.{0,80}\bdoes not exist or you lack access\b/iu;
+const MUSE_CREDENTIAL_FAILURE =
+  /\b(?:40[123]|unauthori[sz]ed|forbidden|payment required|billing|invalid[ _-]?(?:api[ _-]?)?key|api[ _-]?key)\b/iu;
+
 export class MuseAgentClient extends EventEmitter<ClientEvents> implements AgentClient {
+  readonly contextCompaction = "events";
   readonly provider: AgentProvider = "muse";
+  readonly turnContext = true;
+  readonly imageInput = (): boolean => true;
+  readonly #turnContext = new TurnContext();
   readonly #cli: AgentCliInfo;
   readonly #options: MuseProviderOptions;
   readonly #bridge = new LocalMcpBridge();
   readonly #requests = new PendingServerRequests((request) => this.emit("request", request));
   readonly #threads = new Map<string, MuseThread>();
   readonly #children = new Map<string, MuseAgentClient>();
+  readonly #opening = new Set<MuseAgentClient>();
   readonly #secrets = new Set<string>();
   readonly #diagnostics = createDiagnosticStream({
     redact: (value) => this.#redact(value),
     emit: (message) => this.emit("diagnostic", message, { duringStop: this.#stopping }),
   });
+  readonly #scope = Scope.makeUnsafe();
   #running = false;
   #host: SpawnedMspConnection | null = null;
-  #starting: Promise<SpawnedMspConnection> | null = null;
+  #starting: Fiber.Fiber<SpawnedMspConnection, ProviderClientOperationError> | null = null;
   #handshake: ReturnType<typeof spawnMspConnection> | null = null;
   #events: Promise<void> = Promise.resolve();
   #stopping = false;
@@ -141,15 +152,10 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
   start(): void {
     this.#running = true;
   }
-  canReleaseProcess(): boolean {
-    return (
-      [...this.#threads.values()].every((thread) => !thread.turn) &&
-      [...this.#children.values()].every((child) => child.canReleaseProcess())
-    );
-  }
-  notify(): void {
-    /* The SDK completes the initialized handshake. */
-  }
+  canReleaseProcess = (): boolean =>
+    [...this.#threads.values()].every((thread) => !thread.turn) &&
+    [...this.#children.values()].every((child) => child.canReleaseProcess());
+  notify(): void {}
   respond(id: RequestId, result: unknown): void {
     this.#requests.resolve(id, result);
     for (const child of this.#children.values()) child.respond(id, result);
@@ -159,72 +165,88 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
     for (const child of this.#children.values()) child.respondError(id, error);
   }
 
-  async stop(): Promise<void> {
+  readonly stop = Effect.fn("MuseAgentClient.stop")(function* (
+    this: MuseAgentClient,
+  ): Effect.fn.Return<void, ProviderClientOperationError> {
     this.#stopping = true;
     this.#running = false;
     this.#requests.rejectAll("Muse stopped.");
-    for (const child of this.#children.values()) await child.stop();
+    for (const child of [...this.#children.values(), ...this.#opening]) yield* child.stop();
     this.#children.clear();
     for (const thread of this.#threads.values()) {
       for (const controller of thread.approvals.values()) controller.abort();
       thread.mcp.close();
     }
-    await this.#handshake?.close();
+    yield* providerCall(() => this.#handshake?.close());
     this.#diagnostics.flush();
-    await this.#events;
-    await this.#bridge.close();
+    yield* providerCall(() => this.#events);
+    yield* Scope.close(this.#scope, Exit.void);
+    yield* this.#bridge.close().pipe(toProviderClientOperationError);
     this.#threads.clear();
     this.#host = null;
-  }
+  });
 
-  async releaseThread(id: string): Promise<void> {
+  readonly releaseThread = Effect.fn("MuseAgentClient.releaseThread")(function* (this: MuseAgentClient, id: string) {
     const child = this.#children.get(id);
     if (child) {
-      if (!child.canReleaseProcess()) throw new Error(sourceText("error.provider.museBusy"));
-      await child.stop();
+      if (!child.canReleaseProcess()) return yield* providerFailure(new Error(sourceText("error.provider.museBusy")));
+      yield* child.stop();
       this.#children.delete(id);
       return;
     }
     const thread = this.#threads.get(id);
     if (!thread) return;
-    if (thread.turn) throw new Error(sourceText("error.provider.museBusy"));
-    await this.#read("view/unsubscribe", { sessionId: id });
+    if (thread.turn) return yield* providerFailure(new Error(sourceText("error.provider.museBusy")));
+    yield* this.#read("view/unsubscribe", { sessionId: id });
     thread.mcp.close();
     this.#threads.delete(id);
-  }
+    this.#turnContext.forget(id);
+  });
 
-  async request<T>(method: string, params: unknown, decoder: ResponseDecoder<T>, timeoutMs?: number): Promise<T> {
-    if (!this.#running) throw new Error(sourceText("error.provider.museStopped"));
-    const response = await withTimeout(
-      this.#dispatch(method, params),
-      timeoutMs ?? this.#options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      () => new RequestTimeoutError("Muse", method),
+  readonly request = Effect.fn("MuseAgentClient.request")(function* <T>(
+    this: MuseAgentClient,
+    method: string,
+    params: unknown,
+    decoder: ResponseDecoder<T>,
+    timeoutMs?: number,
+  ): Effect.fn.Return<T, ProviderClientOperationError> {
+    if (!this.#running) return yield* providerFailure(new Error(sourceText("error.provider.museStopped")));
+    const response = yield* this.#dispatch(method, params).pipe(
+      Effect.timeoutOrElse({
+        duration: timeoutMs ?? this.#options.requestTimeoutMs ?? 30_000,
+        orElse: () => Effect.fail(providerFailure(new RequestTimeoutError("Muse", method))),
+      }),
     );
-    return decoder(response);
-  }
+    return yield* providerSync(() => decoder(response));
+  });
 
-  async #dispatch(method: string, params: unknown): Promise<unknown> {
+  readonly #dispatch = Effect.fn("MuseAgentClient.dispatch")(function* (
+    this: MuseAgentClient,
+    method: string,
+    params: unknown,
+  ): Effect.fn.Return<unknown, ProviderClientOperationError> {
     const child = this.#children.get(getString(params, "threadId") ?? "");
-    if (child && method !== "thread/resume") return child.#dispatch(method, params);
+    if (child && method !== "thread/resume") return yield* child.#dispatch(method, params);
     switch (method) {
       case "initialize":
-        await this.#ensureHost();
+        yield* this.#ensureHost();
         return {};
       case "account/read": {
-        if (!this.#options.readAccount && !this.#reportedUnknownAuth) {
+        const verified = this.#options.readAccount
+          ? yield* this.#options.readAccount().pipe(Effect.option)
+          : Option.none();
+        if (Option.isNone(verified) && !this.#reportedUnknownAuth) {
           this.#reportedUnknownAuth = true;
           this.emit(
             "diagnostic",
             "Muse authentication is not verified. The first model request will check the configured credentials.",
           );
         }
-        const status: MuseAccountStatus = this.#options.readAccount
-          ? await this.#options.readAccount()
-          : { authenticated: true };
+        const status = Option.getOrElse(verified, () => ({ authenticated: true, email: null, planType: null }));
         return {
           account: status.authenticated
             ? {
-                type: this.#options.readAccount ? "muse" : "muse-unverified",
+                type: Option.isSome(verified) ? "muse" : "muse-unverified",
                 email: status.email ?? null,
                 planType: status.planType ?? null,
               }
@@ -237,8 +259,11 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
       case "plugin/list":
         return { marketplaces: [] };
       case "model/list": {
-        const catalog = decode(MuseModels, await this.#read("model/list", {}));
-        if (catalog.providerId !== "meta") throw new Error(sourceText("error.provider.museUnexpectedProvider"));
+        const catalog = yield* this.#read("model/list", {}).pipe(
+          Effect.flatMap((value) => this.#decode(MuseModels, value)),
+        );
+        if (catalog.providerId !== "meta")
+          return yield* providerFailure(new Error(sourceText("error.provider.museUnexpectedProvider")));
         return {
           data: catalog.models
             .filter((row) => row.providerId === "meta")
@@ -254,90 +279,132 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
         };
       }
       case "thread/start":
-        return this.#openOwnedThread(params, false);
+        return yield* this.#openOwnedThread(params, false);
       case "thread/resume":
-        return child ? { thread: { id: getString(params, "threadId") } } : this.#openOwnedThread(params, true);
+        return child ? yield* child.#openThread(params, true) : yield* this.#openOwnedThread(params, true);
       case "thread/read": {
-        const id = requiredString(params, "threadId");
-        const turns = isRecord(params) && params.includeTurns === true ? await this.#readTurns(id) : [];
+        const id = yield* providerSync(() => requiredString(params, "threadId"));
+        const turns: Array<{ id: string; status?: string; items: ThreadItem[] }> = [];
+        if (isRecord(params) && params.includeTurns === true)
+          yield* this.readHistory({ threadId: id, items: "full" }, (fragment) =>
+            Effect.sync(() => {
+              turns.unshift({
+                id: fragment.turnId,
+                ...(fragment.status ? { status: fragment.status } : {}),
+                items: fragment.items,
+              });
+              return true;
+            }),
+          );
         return { thread: { id, turns } };
       }
       case "turn/start":
-        return this.#startTurn(params, false);
+        return yield* this.#startTurn(params, false);
       case "thread/compact/start":
-        return this.#startTurn(params, true);
+        return yield* this.#startTurn(params, true);
       case "turn/interrupt": {
-        const thread = this.#thread(params);
-        if (thread.turn) await this.#command("turn/interrupt", { sessionId: thread.id, turnId: thread.turn.id });
+        const thread = yield* this.#thread(params);
+        if (thread.turn) yield* this.#command("turn/interrupt", { sessionId: thread.id, turnId: thread.turn.id });
         return {};
       }
       case "turn/steer": {
-        const thread = this.#thread(params);
-        if (!thread.turn) throw new Error(sourceText("error.provider.museNoActiveTurn"));
-        await this.#command("turn/steer", {
+        const thread = yield* this.#thread(params);
+        if (!thread.turn) return yield* providerFailure(new Error(sourceText("error.provider.museNoActiveTurn")));
+        yield* this.#command("turn/steer", {
           sessionId: thread.id,
           expectedTurnId: thread.turn.id,
-          input: await musePrompt(params),
+          input: yield* musePrompt(params),
         });
         return { turn: { id: thread.turn.id, status: "inProgress" }, turnId: thread.turn.id };
       }
       default:
-        throw new Error(sourceText("error.provider.museMethodUnsupported", { method }));
+        return yield* providerFailure(new Error(sourceText("error.provider.museMethodUnsupported", { method })));
     }
-  }
+  });
 
-  async #ensureHost(): Promise<SpawnedMspConnection> {
-    // A profile client must not start: the pinned host inherits MCP servers it cannot turn off.
-    if (this.#options.profileGeneration) throw new Error(sourceText("error.provider.museProfileUnsupported"));
+  readonly #decode = <A, I>(schema: Schema.Codec<A, I>, value: unknown) =>
+    Schema.decodeUnknownEffect(schema)(value).pipe(
+      Effect.mapError(() => providerFailure(new Error(sourceText("error.provider.museInvalidProtocol")))),
+    );
+
+  readonly #ensureHost = Effect.fn("MuseAgentClient.ensureHost")(function* (this: MuseAgentClient) {
+    if (this.#options.profileGeneration)
+      return yield* providerFailure(new Error(sourceText("error.provider.museProfileUnsupported")));
     if (this.#host) return this.#host;
-    if (!this.#starting) this.#starting = this.#launch();
-    const host = await this.#starting;
-    if (!host) throw new Error(sourceText("error.provider.museNotStarted"));
+    if (!this.#starting) this.#starting = yield* Effect.forkDetach(this.#launch());
+    const host = yield* Fiber.join(this.#starting);
+    if (!host) return yield* providerFailure(new Error(sourceText("error.provider.museNotStarted")));
     return host;
-  }
+  });
 
-  async #launch(): Promise<SpawnedMspConnection> {
-    const base = cliSpawnTarget(this.#cli.executable, ["serve", "--trust-workspace", "--disable-sandbox"]);
-    const target = this.#options.confine?.(base) ?? base;
-    if (target.windowsVerbatimArguments) throw new Error(sourceText("error.provider.museNativeWindows"));
-    const environment: NodeJS.ProcessEnv = {
-      ...(this.#options.env ?? process.env),
-      ...this.#options.extraEnv?.(),
-      MUSE_NO_AUTO_UPDATE: "1",
-    };
-    // Only the key saved in OpenBot signs Muse in. An inherited key could belong to another account.
-    for (const key of Object.keys(environment)) if (key.toUpperCase() === "META_API_KEY") delete environment[key];
-    const apiKey = this.#options.apiKey();
-    if (apiKey) {
-      environment.META_API_KEY = apiKey;
-      this.#secrets.add(apiKey);
-    }
-    const handshake = (this.#options.spawn ?? spawnMspConnection)({
-      command: target.command,
-      args: target.args,
-      env: environment,
-      shutdownTimeoutMs: 10_000,
-      onStderr: (chunk) => this.#diagnostics.push(chunk),
+  readonly #launch = Effect.fn("MuseAgentClient.launch")(function* (
+    this: MuseAgentClient,
+  ): Effect.fn.Return<SpawnedMspConnection, ProviderClientOperationError> {
+    const handshake = yield* providerSync(() => {
+      const base = cliSpawnTarget(
+        this.#cli.executable,
+        this.#options.profileGeneration
+          ? ["serve", "--disable-shell", "--disable-write", "-c", "hooks={}", "-c", "managed_hooks_path=null"]
+          : ["serve", "--trust-workspace", "--disable-sandbox"],
+      );
+      const target = this.#options.confine?.(base) ?? base;
+      if (target.windowsVerbatimArguments) throw new Error(sourceText("error.provider.museNativeWindows"));
+      const environment: NodeJS.ProcessEnv = {
+        ...(this.#options.env ?? process.env),
+        ...cliPathEnvironment(this.#cli),
+        ...this.#options.extraEnv?.(),
+        MUSE_NO_AUTO_UPDATE: "1",
+      };
+      for (const key of Object.keys(environment)) if (key.toUpperCase() === "META_API_KEY") delete environment[key];
+      const apiKey = this.#options.apiKey();
+      if (apiKey) {
+        environment.META_API_KEY = apiKey;
+        this.#secrets.add(apiKey);
+      }
+      return (this.#options.spawn ?? spawnMspConnection)({
+        command: target.command,
+        args: target.args,
+        env: environment,
+        shutdownTimeoutMs: 10_000,
+        onStderr: (chunk) => this.#diagnostics.push(chunk),
+      });
     });
     this.#handshake = handshake;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const host = await Promise.race([
-        handshake.initialize({
-          clientInfo: { name: "openbot", version: "1" },
-          capabilities: { requestedCapabilities: ["sessionMcp"] },
-        }),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error(sourceText("error.provider.museStartTimeout"))),
-            this.#options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-          );
-        }),
-      ]);
-      if (this.#stopping) throw new Error(sourceText("error.provider.museStartStopped"));
-      if (host.initializeResult.schema.version !== 1) throw new Error(sourceText("error.provider.museProtocolVersion"));
-      if (host.initializeResult.sessionDurability === "ephemeral")
-        throw new Error(sourceText("error.provider.museHistoryRequired"));
+    return yield* this.#connect(handshake).pipe(
+      Effect.catch((error) =>
+        providerCall(() => handshake.close()).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              this.#starting = null;
+            }),
+          ),
+          Effect.andThen(Effect.fail(error)),
+        ),
+      ),
+    );
+  });
+
+  readonly #connect = Effect.fn("MuseAgentClient.connect")(function* (
+    this: MuseAgentClient,
+    handshake: ReturnType<typeof spawnMspConnection>,
+  ): Effect.fn.Return<SpawnedMspConnection, ProviderClientOperationError> {
+    const host = yield* providerCall(() =>
+      handshake.initialize({
+        clientInfo: { name: "openbot", version: "1" },
+        capabilities: { requestedCapabilities: ["sessionMcp"] },
+      }),
+    ).pipe(
+      Effect.timeoutOrElse({
+        duration: this.#options.requestTimeoutMs ?? 30_000,
+        orElse: () => Effect.fail(providerFailure(new Error(sourceText("error.provider.museStartTimeout")))),
+      }),
+    );
+    if (this.#stopping) return yield* providerFailure(new Error(sourceText("error.provider.museStartStopped")));
+    if (host.initializeResult.schema.version !== 1)
+      return yield* providerFailure(new Error(sourceText("error.provider.museProtocolVersion")));
+    if (host.initializeResult.sessionDurability === "ephemeral")
+      return yield* providerFailure(new Error(sourceText("error.provider.museHistoryRequired")));
+    return yield* providerSync(() => {
       this.#host = host;
       host.connection.onServerRequest(async (request) => {
         if (request.method === "approval/request" || request.method === "userInput/request") return {};
@@ -346,23 +413,19 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
       host.connection.onNotification((notification) => {
         this.#events = this.#events
           .then(() =>
-            this.#stopping || !this.#running ? undefined : this.#notification(notification.method, notification.params),
+            this.#stopping || !this.#running
+              ? undefined
+              : runCauseEffect(this.#notification(notification.method, notification.params)),
           )
-          .catch((error: unknown) => this.#fail(error));
+          .catch((error) => this.#fail(error));
       });
       host.connection.onProtocolError(() => this.#fail(new Error("Muse protocol failed.")));
       void host.connection.closed.then(() => {
         if (!this.#stopping) this.#fail(new Error("Muse connection closed."));
       });
       return host;
-    } catch (error) {
-      await handshake.close();
-      this.#starting = null;
-      throw error;
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
+    });
+  });
 
   #redactionValues(): string[] {
     const key = this.#options.apiKey();
@@ -376,69 +439,117 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
   #redact(value: string): string {
     return redactMcpValues(redactText(value), this.#redactionValues());
   }
+  #turnFailureText(message: string, unexplained: boolean): string {
+    if (MUSE_MODEL_UNAVAILABLE.test(message))
+      return sourceText("error.provider.museModelUnavailable", { detail: shownFailureDetail(message) });
+    if (this.#options.apiKey() && (unexplained || MUSE_CREDENTIAL_FAILURE.test(message)))
+      return sourceText("error.provider.museSavedKeyFailed", { detail: message });
+    return message;
+  }
   #fail(_error: unknown): void {
     if (!this.#running) return;
     this.#running = false;
     this.#requests.rejectAll("Muse connection failed.");
     this.emit("exit", new Error(sourceText("error.provider.museConnectionFailed")));
   }
-  async #read(method: string, params: MuseParams): Promise<unknown> {
-    const host = await this.#ensureHost();
-    return withTimeout(
-      host.connection.request(method, params),
-      this.#options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      () => new RequestTimeoutError("Muse", method),
+  readonly #read = Effect.fn("MuseAgentClient.read")(function* (
+    this: MuseAgentClient,
+    method: string,
+    params: Parameters<Connection["command"]>[1],
+  ) {
+    const host = yield* this.#ensureHost();
+    return yield* providerCall(() => host.connection.request(method, params)).pipe(
+      Effect.timeoutOrElse({
+        duration: this.#options.requestTimeoutMs ?? 30_000,
+        orElse: () => Effect.fail(providerFailure(new RequestTimeoutError("Muse", method))),
+      }),
     );
-  }
-  async #command(method: string, params: MuseParams, commandId?: string): Promise<unknown> {
-    const host = await this.#ensureHost();
-    return host.connection.command(method, params, { maxAttempts: 1, ...(commandId ? { commandId } : {}) });
-  }
-  #thread(params: unknown): MuseThread {
-    const thread = this.#threads.get(requiredString(params, "threadId"));
-    if (!thread) throw new Error(sourceText("error.provider.museUnknownSession"));
+  });
+  readonly #command = Effect.fn("MuseAgentClient.command")(function* (
+    this: MuseAgentClient,
+    method: string,
+    params: Parameters<Connection["command"]>[1],
+    commandId?: string,
+  ) {
+    const host = yield* this.#ensureHost();
+    return yield* providerCall(() =>
+      host.connection.command(method, params, { maxAttempts: 1, ...(commandId ? { commandId } : {}) }),
+    );
+  });
+  readonly #thread = Effect.fn("MuseAgentClient.thread")(function* (this: MuseAgentClient, params: unknown) {
+    const id = yield* providerSync(() => requiredString(params, "threadId"));
+    const thread = this.#threads.get(id);
+    if (!thread) return yield* providerFailure(new Error(sourceText("error.provider.museUnknownSession")));
     return thread;
-  }
+  });
 
-  async #openThread(params: unknown, resume: boolean): Promise<{ thread: { id: string } }> {
-    const host = await this.#ensureHost();
-    const id = resume ? requiredString(params, "threadId") : host.connection.mintCommandId();
-    if (this.#threads.has(id)) return { thread: { id } };
-    const cwd = requiredString(params, "cwd");
-    const tools = getArray(params, "dynamicTools").filter(isNamespace);
-    const bridge = await this.#bridge.createSession(
-      id,
-      tools,
-      () => this.#threads.get(id)?.turn?.id ?? null,
-      async (call, signal) => {
-        const value = await this.#requests.call("item/tool/call", call, signal);
-        if (!isToolResult(value)) throw new Error(sourceText("error.provider.museInvalidToolResult"));
-        return value;
-      },
-    );
-    try {
-      const resolved = await usableMcpServers(
-        agentMcpServers(this.#options.mcpServers?.() ?? [], computerUseParam(params), disabledMcpServersParam(params)),
+  readonly #openThread = Effect.fn("MuseAgentClient.openThread")(function* (
+    this: MuseAgentClient,
+    params: unknown,
+    resume: boolean,
+  ): Effect.fn.Return<{ thread: { id: string } }, ProviderClientOperationError> {
+    const host = yield* this.#ensureHost();
+    const id = resume ? yield* providerSync(() => requiredString(params, "threadId")) : host.connection.mintCommandId();
+    const held = this.#threads.get(id);
+    if (held) {
+      held.instructions = getString(params, "developerInstructions") ?? held.instructions;
+      this.#turnContext.set(id, params, true);
+      return { thread: { id } };
+    }
+    const cwd = yield* providerSync(() => requiredString(params, "cwd"));
+    const tools = this.#options.profileGeneration ? [] : getArray(params, "dynamicTools").filter(isNamespace);
+    const bridge = yield* this.#bridge
+      .createSession(
+        id,
+        tools,
+        () => this.#threads.get(id)?.turn?.id ?? null,
+        (call, signal, detachAfterMs) =>
+          this.#requests
+            .call("item/tool/call", call, signal, detachAfterMs)
+            .pipe(
+              Effect.flatMap((value) =>
+                isToolResult(value)
+                  ? Effect.succeed(value)
+                  : Effect.fail(providerFailure(new Error(sourceText("error.provider.museInvalidToolResult")))),
+              ),
+            ),
+      )
+      .pipe(toProviderClientOperationError);
+    const setup = Effect.gen({ self: this }, function* () {
+      const resolved = yield* usableMcpServers(
+        agentMcpServers(
+          this.#options.profileGeneration ? [] : (this.#options.mcpServers?.(mcpAgentParam(params)) ?? []),
+          computerUseParam(params),
+          disabledMcpServersParam(params),
+        ),
         this.#options.mcpToolRuntimes?.(),
-        this.#options.mcpAuthorization,
-      );
+        this.#options.mcpEndpoint,
+        mcpAgentParam(params),
+      ).pipe(toProviderClientOperationError);
       for (const secret of mcpSecretValues(resolved.map((server) => server.config))) this.#secrets.add(secret);
       const handoff = acpMcpServers(resolved);
       for (const server of [...handoff.servers, ...bridge.servers]) {
-        for (const entry of "headers" in server ? server.headers : server.env) this.#secrets.add(entry.value);
+        for (const entry of "headers" in server ? server.headers : server.env) {
+          if (!isInheritedProfileValue(entry.name, entry.value)) this.#secrets.add(entry.value);
+        }
       }
       this.#options.reportMcpDrops?.(this.provider, handoff.dropped);
       const mcpServers = Object.fromEntries(
-        [...handoff.servers, ...bridge.servers].map((server) => [
+        [
+          ...handoff.servers.map((server) => ({ server, mode: "optional" })),
+          ...bridge.servers.map((server) => ({ server, mode: "required" })),
+        ].map(({ server, mode }) => [
           server.name,
           "url" in server
             ? {
                 transport: "streamableHttp",
+                mode,
                 url: server.url,
                 headers: Object.fromEntries(server.headers.map((header) => [header.name, header.value])),
               }
             : {
                 transport: "stdio",
+                mode,
                 command: server.command,
                 args: server.args,
                 env: Object.fromEntries(server.env.map((entry) => [entry.name, entry.value])),
@@ -446,11 +557,12 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
         ]),
       );
       if (Object.keys(mcpServers).length && !host.initializeResult.grantedCapabilities.includes("sessionMcp"))
-        throw new Error(sourceText("error.provider.museMcpRequired"));
+        return yield* providerFailure(new Error(sourceText("error.provider.museMcpRequired")));
       const thread: MuseThread = {
         id,
         cwd,
         instructions: getString(params, "developerInstructions") ?? "",
+        instructionsSent: null,
         roots: getArray(params, "runtimeWorkspaceRoots").filter(isString),
         mcp: bridge,
         turn: null,
@@ -459,96 +571,118 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
       };
       this.#threads.set(id, thread);
       const model = getString(params, "model");
-      const response = decode(
-        MuseSession,
-        await this.#command(resume ? "session/resume" : "session/start", {
-          sessionId: id,
-          config: { mcpServers },
-          ...(resume
-            ? { excludeItems: true }
-            : {
-                workspaceRoot: cwd,
-                providerId: "meta",
-                approvalMode: "promptUnmatched",
-                ...(model && model !== "default" ? { modelId: model } : {}),
-              }),
-        }),
-      );
-      if (response.session.sessionId !== id) throw new Error(sourceText("error.provider.museSessionMismatch"));
+      const response = yield* this.#command(resume ? "session/resume" : "session/start", {
+        sessionId: id,
+        config: { mcpServers },
+        ...(resume
+          ? { excludeItems: true }
+          : {
+              workspaceRoot: cwd,
+              providerId: "meta",
+              approvalMode: "promptUnmatched",
+              ...(model && model !== "default" ? { modelId: model } : {}),
+            }),
+      }).pipe(Effect.flatMap((value) => this.#decode(MuseSession, value)));
+      if (response.session.sessionId !== id)
+        return yield* providerFailure(new Error(sourceText("error.provider.museSessionMismatch")));
+      this.#turnContext.set(id, params, resume);
       return { thread: { id } };
-    } catch (error) {
-      bridge.close();
-      this.#threads.delete(id);
-      throw error;
-    }
-  }
+    });
+    return yield* setup.pipe(
+      Effect.onError(() =>
+        Effect.sync(() => {
+          bridge.close();
+          this.#threads.delete(id);
+        }),
+      ),
+    );
+  });
 
-  /** MSP has no session-close command. A session owns its process so MCP refresh can stop it. */
-  async #openOwnedThread(params: unknown, resume: boolean): Promise<{ thread: { id: string } }> {
+  readonly #openOwnedThread = Effect.fn("MuseAgentClient.openOwnedThread")(function* (
+    this: MuseAgentClient,
+    params: unknown,
+    resume: boolean,
+  ) {
     const child = new MuseAgentClient(this.#cli, this.#options);
     child.on("notification", (event) => this.emit("notification", event));
     child.on("request", (event) => this.emit("request", event));
     child.on("diagnostic", (message, origin) => this.emit("diagnostic", message, origin));
     child.once("exit", (error) => this.#fail(error));
     child.start();
-    let response: { thread: { id: string } };
-    try {
-      response = await child.#openThread(params, resume);
-    } catch (error) {
-      await child.stop().catch(() => undefined);
-      throw error;
-    }
+    this.#opening.add(child);
+    const response = yield* child.#openThread(params, resume).pipe(
+      Effect.flatMap((opened) =>
+        this.#stopping
+          ? Effect.fail(providerFailure(new Error(sourceText("error.provider.museStopped"))))
+          : Effect.succeed(opened),
+      ),
+      Effect.onError(() => child.stop().pipe(Effect.ignore)),
+      Effect.ensuring(Effect.sync(() => this.#opening.delete(child))),
+    );
     this.#children.set(response.thread.id, child);
     return response;
-  }
+  });
 
-  async #startTurn(params: unknown, compact: boolean): Promise<{ turn: { id: string; status: string } }> {
-    const thread = this.#thread(params);
-    if (thread.turn) throw new Error(sourceText("error.provider.museBusy"));
-    const host = await this.#ensureHost();
+  readonly #startTurn = Effect.fn("MuseAgentClient.startTurn")(function* (
+    this: MuseAgentClient,
+    params: unknown,
+    compact: boolean,
+  ) {
+    const thread = yield* this.#thread(params);
+    if (thread.turn) return yield* providerFailure(new Error(sourceText("error.provider.museBusy")));
+    const host = yield* this.#ensureHost();
     const model = getString(params, "model");
     if (model && model !== "default")
-      await this.#command("session/setModel", { sessionId: thread.id, model: { modelId: model, providerId: "meta" } });
-    const input = compact ? [] : await musePrompt(params);
-    if (thread.instructions) input.unshift({ type: "text", text: thread.instructions });
+      yield* this.#command("session/setModel", { sessionId: thread.id, model: { modelId: model, providerId: "meta" } });
+    const input = compact ? [] : yield* musePrompt(params);
+    const sendInstructions = !compact && thread.instructions && thread.instructionsSent !== thread.instructions;
+    if (sendInstructions) this.#turnContext.resend(thread.id);
+    const first = input[0];
+    const command = first?.type === "text" && first.text?.startsWith("/") === true;
+    if (!compact)
+      input.unshift(...this.#turnContext.take(thread.id, command).map((text) => ({ type: "text" as const, text })));
+    if (sendInstructions) {
+      input.unshift({ type: "text", text: thread.instructions });
+      thread.instructionsSent = thread.instructions;
+    }
+    const workspaceRoots = compact ? [] : yield* museWorkspaceRoots([thread.cwd, ...thread.roots]);
     const id = host.connection.mintCommandId();
     thread.turn = { id, compact, items: new Map(), deltaPending: new Map() };
     this.#emit("turn/started", { threadId: thread.id, turn: { id, status: "inProgress" } });
     const effort = getString(params, "effort");
-    let result: unknown;
-    try {
-      result = await this.#command(
-        compact ? "session/compact" : "turn/start",
-        {
-          sessionId: thread.id,
-          ...(compact
-            ? {}
-            : {
-                input,
-                workspaceRoots: [thread.cwd, ...thread.roots],
-                ifBusy: "queue",
-                ...(effort ? { reasoningEffort: effort } : {}),
-              }),
-        },
-        id,
-      );
-    } catch (error) {
-      thread.turn = null;
-      throw error;
-    }
+    const result = yield* this.#command(
+      compact ? "session/compact" : "turn/start",
+      {
+        sessionId: thread.id,
+        ...(compact
+          ? {}
+          : {
+              input,
+              workspaceRoots,
+              ifBusy: "queue",
+              ...(effort ? { reasoningEffort: effort } : {}),
+            }),
+      },
+      id,
+    ).pipe(
+      Effect.onError(() =>
+        Effect.sync(() => {
+          if (thread.turn?.id === id) this.#finish(thread, "failed");
+        }),
+      ),
+    );
     if (compact) {
       if (getString(result, "status") !== "accepted") {
         this.#finish(thread, "failed");
-        throw new Error(sourceText("error.provider.museCompactRejected"));
+        return yield* providerFailure(new Error(sourceText("error.provider.museCompactRejected")));
       }
     } else if (getString(result, "turnId") !== id) {
       this.#fail(new Error(sourceText("error.provider.museTurnMismatch")));
-      throw new Error(sourceText("error.provider.museTurnMismatch"));
+      return yield* providerFailure(new Error(sourceText("error.provider.museTurnMismatch")));
     }
     return { turn: { id, status: "inProgress" } };
-  }
+  });
 
-  /** Only provider text is redacted. IDs, status, revisions, and numeric usage stay intact. */
   #publicItem(item: MuseItem, turn?: MuseTurn): ThreadItem {
     const redact = (text: string, field: string): string => {
       if (!turn || item.status !== "inProgress") return this.#redact(text);
@@ -569,10 +703,6 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
     });
   }
 
-  /**
-   * Redacts one streamed delta. A delta can end with the first part of a secret whose rest comes in
-   * the next delta, so that suffix is held back until the next delta or the final item.
-   */
   #streamDelta(turn: MuseTurn, itemId: string, field: string, delta: string): string {
     const key = `${itemId}:${field}`;
     const text = this.#redact((turn.deltaPending.get(key) ?? "") + delta);
@@ -600,7 +730,6 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
     if (old && old.revision >= item.revision) return;
     turn.items.set(item.itemId, item);
     if (item.status !== "inProgress") {
-      // The final item replaces streamed text, including any held ordinary suffix.
       for (const key of turn.deltaPending.keys()) if (key.startsWith(`${item.itemId}:`)) turn.deltaPending.delete(key);
     }
     this.#emit(item.status === "inProgress" ? "item/started" : "item/completed", {
@@ -613,23 +742,53 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
     const turn = thread.turn;
     if (!turn) return;
     thread.turn = null;
+    if (status === "failed" && !turn.compact) {
+      thread.instructionsSent = null;
+      this.#turnContext.resend(thread.id);
+    }
     for (const controller of thread.approvals.values()) controller.abort();
     thread.approvals.clear();
     this.#emit("turn/completed", { threadId: thread.id, turn: { id: turn.id, status } });
   }
 
-  async #notification(method: string, params: unknown, replay = false): Promise<void> {
+  readonly #notification = Effect.fn("MuseAgentClient.notification")(function* (
+    this: MuseAgentClient,
+    method: string,
+    params: unknown,
+    replay = false,
+  ): Effect.fn.Return<void, ProviderClientOperationError> {
     const id = getString(params, "sessionId");
     const thread = id ? this.#threads.get(id) : undefined;
     if (!thread) return;
     const cursor = getString(params, "viewCursor");
     if (!replay && cursor && thread.replayed.delete(cursor)) return;
     if (method === "view/gap") {
-      await this.#fillGap(thread, requiredString(params, "after"), requiredString(params, "next"));
-      return;
+      let after = yield* providerSync(() => requiredString(params, "after"));
+      const next = yield* providerSync(() => requiredString(params, "next"));
+      const visited = new Set<string>();
+      while (!visited.has(after)) {
+        visited.add(after);
+        const page = yield* this.#read("view/page", {
+          sessionId: thread.id,
+          cursor: after,
+          direction: "forward",
+          limit: 100,
+        }).pipe(Effect.flatMap((value) => this.#decode(MusePage, value)));
+        for (const event of page.events) {
+          const eventCursor = getString(event.params, "viewCursor");
+          if (eventCursor === next) return;
+          if (getString(event.params, "sessionId") !== thread.id)
+            return yield* providerFailure(new Error(sourceText("error.provider.museHistoryMismatch")));
+          yield* this.#notification(event.method, event.params, true);
+          if (eventCursor) thread.replayed.add(eventCursor);
+        }
+        if (!page.nextCursor) return yield* providerFailure(new Error(sourceText("error.provider.museRecoveryFailed")));
+        after = page.nextCursor;
+      }
+      return yield* providerFailure(new Error(sourceText("error.provider.museHistoryStalled")));
     }
     if (method === "approval/requested" || method === "approval/updated") {
-      const approval = decode(MuseApproval, params);
+      const approval = yield* this.#decode(MuseApproval, params);
       const key = `${approval.approvalId}:${approval.currentRequirementId.sourceIndex}`;
       if (thread.approvals.has(key)) return;
       for (const [previous, controller] of thread.approvals) {
@@ -640,9 +799,17 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
       }
       const controller = new AbortController();
       thread.approvals.set(key, controller);
-      void this.#approve(thread, approval, controller.signal).catch(() => {
-        if (!controller.signal.aborted) this.#fail(new Error("Muse approval failed."));
-      });
+      yield* Effect.forkIn(
+        this.#approve(thread, approval, controller.signal).pipe(
+          Effect.catch(() =>
+            Effect.sync(() => {
+              if (!controller.signal.aborted) this.#fail(new Error("Muse approval failed."));
+            }),
+          ),
+        ),
+        this.#scope,
+        { startImmediately: true },
+      );
       return;
     }
     if (method === "approval/resolved") {
@@ -655,14 +822,22 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
       return;
     }
     if (method === "userInput/requested") {
-      const input = decode(MuseUserInput, params);
+      const input = yield* this.#decode(MuseUserInput, params);
       const key = `input:${input.userInputId}`;
       if (thread.approvals.has(key)) return;
       const controller = new AbortController();
       thread.approvals.set(key, controller);
-      void this.#answer(thread, input, controller.signal).catch(() => {
-        if (!controller.signal.aborted) this.#fail(new Error("Muse user input failed."));
-      });
+      yield* Effect.forkIn(
+        this.#answer(thread, input, controller.signal).pipe(
+          Effect.catch(() =>
+            Effect.sync(() => {
+              if (!controller.signal.aborted) this.#fail(new Error("Muse user input failed."));
+            }),
+          ),
+        ),
+        this.#scope,
+        { startImmediately: true },
+      );
       return;
     }
     if (method === "userInput/settled") {
@@ -672,8 +847,12 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
       return;
     }
     if (method === "item/started" || method === "item/updated" || method === "item/completed") {
-      const event = decode(MuseItemEvent, params);
+      const event = yield* this.#decode(Schema.Struct({ item: MuseItem }), params);
       this.#publish(thread, event.item);
+      if (event.item.kind === "compaction" && event.item.status === "completed") {
+        thread.instructionsSent = null;
+        this.#turnContext.resend(thread.id);
+      }
       if (thread.turn?.compact && event.item.kind === "compaction" && event.item.status !== "inProgress")
         this.#finish(
           thread,
@@ -704,7 +883,7 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
       return;
     }
     if (method === "session/tokenUsage") {
-      const usage = decode(MuseUsage, params);
+      const usage = yield* this.#decode(MuseUsage, params);
       this.#emit("openbot/usage", {
         threadId: thread.id,
         turnId: usage.turnId,
@@ -718,55 +897,37 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
       return;
     }
     if (method === "turn/completed" && thread.turn && !thread.turn.compact) {
-      const terminal = decode(MuseTerminal, params);
+      const terminal = yield* this.#decode(MuseTerminal, params);
       if (terminal.turnId !== thread.turn.id) return;
-      // A terminal can follow dropped ephemeral deltas. Read final durable items before publishing it.
-      const history = await this.#history(thread.id);
+      const history = yield* this.#history(thread.id);
       for (const item of history) this.#publish(thread, item);
       if (terminal.terminal === "failed") {
+        const message = this.#redact(
+          terminal.error?.message ?? terminal.reason ?? sourceText("error.provider.museTurnFailed"),
+        );
         this.#emit("error", {
           threadId: thread.id,
           turnId: terminal.turnId,
-          error: {
-            message: this.#redact(
-              terminal.error?.message ?? terminal.reason ?? sourceText("error.provider.museTurnFailed"),
-            ),
-          },
+          error: { message: this.#turnFailureText(message, !terminal.error && !terminal.reason) },
           willRetry: false,
         });
       }
-      this.#finish(thread, terminalStatus(terminal.terminal));
-    }
-  }
-
-  /** Replays the view events between two cursors that the live stream did not deliver. */
-  async #fillGap(thread: MuseThread, start: string, next: string): Promise<void> {
-    let after = start;
-    const visited = new Set<string>();
-    while (!visited.has(after)) {
-      visited.add(after);
-      const page = decode(
-        MusePage,
-        await this.#read("view/page", { sessionId: thread.id, cursor: after, direction: "forward", limit: 100 }),
+      this.#finish(
+        thread,
+        terminal.terminal === "completed" ? "completed" : terminal.terminal === "cancelled" ? "interrupted" : "failed",
       );
-      for (const event of page.events) {
-        const eventCursor = getString(event.params, "viewCursor");
-        if (eventCursor === next) return;
-        if (getString(event.params, "sessionId") !== thread.id)
-          throw new Error(sourceText("error.provider.museHistoryMismatch"));
-        await this.#notification(event.method, event.params, true);
-        if (eventCursor) thread.replayed.add(eventCursor);
-      }
-      if (!page.nextCursor) throw new Error(sourceText("error.provider.museRecoveryFailed"));
-      after = page.nextCursor;
     }
-    throw new Error(sourceText("error.provider.museHistoryStalled"));
-  }
+  });
 
-  async #approve(thread: MuseThread, approval: MuseApproval, signal: AbortSignal): Promise<void> {
+  readonly #approve = Effect.fn("MuseAgentClient.approve")(function* (
+    this: MuseAgentClient,
+    thread: MuseThread,
+    approval: typeof MuseApproval.Type,
+    signal: AbortSignal,
+  ) {
     const response = this.#options.profileGeneration
       ? { decision: "decline" }
-      : await this.#requests.call(
+      : yield* this.#requests.call(
           "item/commandExecution/requestApproval",
           {
             threadId: thread.id,
@@ -782,17 +943,22 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
       ? choices.find((candidate) => candidate.decision === "approved" && candidate.scope === "once")
       : (choices.find((candidate) => candidate.decision === "denied") ??
         choices.find((candidate) => candidate.decision === "abort"));
-    if (!choice) throw new Error(sourceText("error.provider.museApprovalUnavailable"));
-    await this.#command("approval/decide", {
+    if (!choice) return yield* providerFailure(new Error(sourceText("error.provider.museApprovalUnavailable")));
+    yield* this.#command("approval/decide", {
       sessionId: thread.id,
       approvalId: approval.approvalId,
       requirementId: approval.currentRequirementId,
       choiceId: choice.choiceId,
     });
-  }
+  });
 
-  async #answer(thread: MuseThread, input: MuseUserInput, signal: AbortSignal): Promise<void> {
-    const result = await this.#requests.call(
+  readonly #answer = Effect.fn("MuseAgentClient.answer")(function* (
+    this: MuseAgentClient,
+    thread: MuseThread,
+    input: typeof MuseUserInput.Type,
+    signal: AbortSignal,
+  ) {
+    const result = yield* this.#requests.call(
       "item/tool/requestUserInput",
       {
         threadId: thread.id,
@@ -820,59 +986,71 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
         ...(freeText ? (selected.length ? { note: freeText } : { freeText }) : {}),
       };
     });
-    await this.#command("userInput/answer", { sessionId: thread.id, userInputId: input.userInputId, answers });
-  }
+    yield* this.#command("userInput/answer", { sessionId: thread.id, userInputId: input.userInputId, answers });
+  });
 
-  /**
-   * The durable items of one session. Without `terminals` an inline item list or snapshot is enough.
-   * With it, every page is read so the terminal status of each turn is known.
-   */
-  async #history(id: string, terminals?: Map<string, string>): Promise<readonly MuseItem[]> {
-    const result = decode(MuseSession, await this.#read("session/read", { sessionId: id, excludeItems: false }));
-    if (result.session.sessionId !== id) throw new Error(sourceText("error.provider.museHistoryOwner"));
+  readonly #history = Effect.fn("MuseAgentClient.history")(function* (
+    this: MuseAgentClient,
+    id: string,
+    terminals?: Map<string, string>,
+  ): Effect.fn.Return<readonly MuseItem[], ProviderClientOperationError> {
+    const result = yield* this.#read("session/read", { sessionId: id, excludeItems: false }).pipe(
+      Effect.flatMap((value) => this.#decode(MuseSession, value)),
+    );
+    if (result.session.sessionId !== id)
+      return yield* providerFailure(new Error(sourceText("error.provider.museHistoryOwner")));
     const history = result.history;
-    if (!history) throw new Error(sourceText("error.provider.museHistoryMissing"));
+    if (!history) return yield* providerFailure(new Error(sourceText("error.provider.museHistoryMissing")));
     if (!terminals && history.items) return history.items;
     if (!terminals && history.snapshot?.schemaVersion === 1 && history.mode === "snapshot")
       return history.snapshot.state.items;
-    // Paged mode and a partial compaction snapshot need the full durable view.
     const items = new Map<string, MuseItem>();
     const cursors = new Set<string>();
     let cursor: string | null = null;
     do {
-      const page: MusePage = decode(
-        MusePage,
-        await this.#read("view/page", {
-          sessionId: id,
-          limit: 100,
-          direction: "forward",
-          ...(cursor ? { cursor } : {}),
-        }),
-      );
+      const page: typeof MusePage.Type = yield* this.#read("view/page", {
+        sessionId: id,
+        limit: 100,
+        direction: "forward",
+        ...(cursor ? { cursor } : {}),
+      }).pipe(Effect.flatMap((value) => this.#decode(MusePage, value)));
       for (const event of page.events) {
         if (getString(event.params, "sessionId") !== id)
-          throw new Error(sourceText("error.provider.museHistoryMismatch"));
+          return yield* providerFailure(new Error(sourceText("error.provider.museHistoryMismatch")));
         if (terminals && event.method === "turn/completed") {
-          const terminal = decode(MuseTerminal, event.params);
-          terminals.set(terminal.turnId, terminalStatus(terminal.terminal));
+          const terminal = yield* this.#decode(MuseTerminal, event.params);
+          terminals.set(
+            terminal.turnId,
+            terminal.terminal === "completed"
+              ? "completed"
+              : terminal.terminal === "cancelled"
+                ? "interrupted"
+                : "failed",
+          );
         }
         if (event.method === "item/started" || event.method === "item/updated" || event.method === "item/completed") {
-          const value = decode(MuseItemEvent, event.params);
+          const value = yield* this.#decode(Schema.Struct({ item: MuseItem }), event.params);
           const previous = items.get(value.item.itemId);
           if (!previous || value.item.revision > previous.revision) items.set(value.item.itemId, value.item);
         }
       }
       cursor = page.nextCursor;
-      if (cursor && cursors.has(cursor)) throw new Error(sourceText("error.provider.museHistoryStalled"));
+      if (cursor && cursors.has(cursor))
+        return yield* providerFailure(new Error(sourceText("error.provider.museHistoryStalled")));
       if (cursor) cursors.add(cursor);
     } while (cursor);
     return [...items.values()];
-  }
+  });
 
-  /** The turns of a session for `thread/read`, oldest first, with provider text redacted. */
-  async #readTurns(id: string): Promise<Array<{ id: string; status?: string; items: ThreadItem[] }>> {
+  readonly readHistory: ReadProviderHistory = Effect.fn("MuseAgentClient.readHistory")(function* (
+    this: MuseAgentClient,
+    request,
+    consume,
+  ) {
+    const child = this.#children.get(request.threadId);
+    if (child) return yield* child.readHistory(request, consume);
     const terminals = new Map<string, string>();
-    const items = await this.#history(id, terminals);
+    const items = yield* this.#history(request.threadId, terminals);
     const turns = new Map<string, MuseItem[]>();
     for (const item of items) {
       if (!item.turnId) continue;
@@ -880,45 +1058,23 @@ export class MuseAgentClient extends EventEmitter<ClientEvents> implements Agent
       turn.push(item);
       turns.set(item.turnId, turn);
     }
-    for (const turnId of terminals.keys()) if (!turns.has(turnId)) turns.set(turnId, []);
-    return [...turns].map(([turnId, turn]) => {
-      const status = terminals.get(turnId);
-      return {
-        id: turnId,
-        ...(status ? { status } : {}),
-        items: turn.map((item) => this.#publicItem(item)),
-      };
-    });
-  }
+    for (const id of terminals.keys()) if (!turns.has(id)) turns.set(id, []);
+    for (const [id, turn] of [...turns].reverse()) {
+      const status = terminals.get(id);
+      if (
+        !(yield* consume({
+          turnId: id,
+          ...(status ? { status } : {}),
+          items: request.items === "full" ? turn.map((item) => this.#publicItem(item)) : [],
+          complete: true,
+        }))
+      )
+        break;
+    }
+  });
 }
 
-function terminalStatus(terminal: string): "completed" | "interrupted" | "failed" {
-  return terminal === "completed" ? "completed" : terminal === "cancelled" ? "interrupted" : "failed";
-}
-
-function decode<T extends z.ZodType>(schema: T, value: unknown): z.infer<T> {
-  const result = schema.safeParse(value);
-  if (!result.success) throw new Error(sourceText("error.provider.museInvalidProtocol"));
-  return result.data;
-}
-
-function requiredString(value: unknown, key: string): string {
-  const result = getString(value, key);
-  if (!result) throw new Error(`${key} is required.`);
-  return result;
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, error: () => Error): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(error()), timeoutMs);
-    }),
-  ]).finally(() => clearTimeout(timer));
-}
-
-async function musePrompt(params: unknown): Promise<SendUserTurnOptions<never>["input"]> {
+const musePrompt = Effect.fn("MuseAgentClient.prompt")(function* (params: unknown) {
   const input: SendUserTurnOptions<never>["input"] = [];
   for (const item of getArray(params, "input")) {
     if (!isRecord(item)) continue;
@@ -927,17 +1083,21 @@ async function musePrompt(params: unknown): Promise<SendUserTurnOptions<never>["
       input.push({ type: "text", text: `Attached local file: ${item.path}` });
     if (item.type === "localImage" && isString(item.path)) {
       const path = item.path;
-      const bytes = await readFile(path);
+      const bytes = yield* providerCall(() => readFile(path));
       input.push({
         type: "image",
         base64Data: bytes.toString("base64"),
-        mediaType: /\.jpe?g$/iu.test(path) ? "image/jpeg" : /\.webp$/iu.test(path) ? "image/webp" : "image/png",
+        mediaType: attachmentMimeTypeForName(path),
       });
     }
   }
-  if (!input.length) throw new Error(sourceText("error.provider.museEmptyInput"));
+  if (!input.length) return yield* providerFailure(new Error(sourceText("error.provider.museEmptyInput")));
   return input;
-}
+});
+const museWorkspaceRoots = Effect.fn("MuseAgentClient.workspaceRoots")(function* (paths: string[]) {
+  const roots = yield* Effect.forEach(paths, (path) => Effect.promise(() => realpath(path).catch(() => path)));
+  return [...new Set(roots.map((root) => toNamespacedPath(root)))];
+});
 function isNamespace(value: unknown): value is DynamicToolNamespace {
   return (
     isRecord(value) &&

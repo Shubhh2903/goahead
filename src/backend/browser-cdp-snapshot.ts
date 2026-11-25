@@ -1,33 +1,72 @@
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import type { BrowserElement, BrowserFocus, BrowserSnapshot, BrowserTarget } from "@openbot/contracts/ipc";
+import type { BrowserElement, BrowserSnapshot, BrowserTarget } from "@openbot/contracts/ipc";
 import { isString } from "@openbot/contracts/runtime-values";
+import { Effect } from "effect";
 import {
   assertBeforeDeadline,
   automationContextId,
   axValue,
   type CdpResult,
   exceptionDescription,
+  frameAutomationContextId,
   frameIds,
+  isFrameGone,
   isRecord,
   numberValue,
   recordValue,
   type SendCommand,
+  skipGoneFrame,
   stringValue,
   textMatches,
 } from "./browser-cdp-values";
+import { browserFailure, browserSync } from "./browser-effects";
 
 const MAX_SNAPSHOT_ELEMENTS = 200;
 const MAX_SNAPSHOT_CANDIDATES = MAX_SNAPSHOT_ELEMENTS * 2;
-/** How much page text a text wait scans for its needle. */
 const MAX_SCANNED_TEXT = 100_000;
-/**
- * The page text a snapshot returns. Each action returns a fresh snapshot to the model, so this is
- * paid again on every step; the text in the viewport comes first, and a truncated snapshot says so.
- */
 const MAX_SNAPSHOT_TEXT = 20_000;
 export const MAX_SNAPSHOT_SCANNED_NODES = 10_000;
+export const MAX_TARGET_CANDIDATES = 5;
+const MAX_CANDIDATE_TEXT = 120;
+const MAX_CANDIDATE_ITEM_TEXT = 200;
+const MAX_CANDIDATE_PEERS = 500;
 const MAX_SNAPSHOT_ELEMENT_VALUE = 2_000;
+const MAX_FRAME_DOCUMENTS = 12;
 const MAX_SERIALIZED_SNAPSHOT_BYTES = 128 * 1024;
+type HiddenSubtreeRule = "strict" | "drawn" | "drawn-usable";
+
+const SVG_RESOURCE_TAGS = [
+  "clipPath",
+  "defs",
+  "filter",
+  "linearGradient",
+  "marker",
+  "mask",
+  "pattern",
+  "radialGradient",
+  "symbol",
+];
+
+function skipHiddenSubtrees(rule: HiddenSubtreeRule): string {
+  const strict = rule === "strict";
+  return `{ acceptNode: node => {
+  if (node.nodeType !== 1) return NodeFilter.FILTER_ACCEPT;
+  if (scanned >= ${MAX_SNAPSHOT_SCANNED_NODES}) return NodeFilter.FILTER_ACCEPT;
+  let hidden = node.namespaceURI === 'http://www.w3.org/2000/svg' && ${JSON.stringify(SVG_RESOURCE_TAGS)}.includes(node.localName);
+  hidden ||= Element.prototype.hasAttribute.call(node, 'hidden') || (${rule !== "drawn"} && Element.prototype.hasAttribute.call(node, 'inert')) || (${strict} && String(node.getAttribute('aria-hidden')).toLowerCase() === 'true');
+  if (!hidden) {
+    const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+    hidden = !style || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.contentVisibility === 'hidden' || (${strict} && style.opacity === '0');
+  }
+  if (hidden) {
+    scanned++;
+    return NodeFilter.FILTER_REJECT;
+  }
+  return NodeFilter.FILTER_ACCEPT;
+} }`;
+}
+
+const SKIP_HIDDEN_SUBTREES = skipHiddenSubtrees("strict");
 
 const ACTIONABLE_ROLES = new Set([
   "button",
@@ -51,9 +90,11 @@ const ACTIONABLE_ROLES = new Set([
 
 export interface TargetRecord {
   backendNodeId: number;
-  targetId?: string;
+  targetId?: string | undefined;
   element: BrowserElement;
   visibleText: string;
+  drawnOnly?: true;
+  ownFrame?: true;
 }
 
 export interface SnapshotTarget {
@@ -64,17 +105,30 @@ export interface SnapshotTarget {
 
 export interface SemanticMatch {
   backendNodeId: number;
-  sessionId?: string;
-  targetId?: string;
+  sessionId?: string | undefined;
+  targetId?: string | undefined;
   role: string;
   name: string;
 }
 
-export async function collectBoundedSnapshot(
+export const collectBoundedSnapshot = Effect.fn("Browser.collectBoundedSnapshot")(function* (
   send: SendCommand,
   captures: SnapshotTarget[],
   revision: number,
   includeText: boolean,
+  deadline?: number,
+) {
+  const strict = yield* collectSnapshotPass(send, captures, revision, includeText, false, deadline);
+  if (!includeText || strict.elements.length > 0 || strict.text) return { ...strict, fallback: false };
+  return { ...(yield* collectSnapshotPass(send, captures, revision, includeText, true, deadline)), fallback: true };
+});
+
+const collectSnapshotPass = Effect.fn("Browser.collectSnapshotPass")(function* (
+  send: SendCommand,
+  captures: SnapshotTarget[],
+  revision: number,
+  includeText: boolean,
+  drawnOnly: boolean,
   deadline?: number,
 ) {
   const targets = new Map<string, TargetRecord>();
@@ -83,12 +137,29 @@ export async function collectBoundedSnapshot(
   let textLength = 0;
   let hasVisualSurface = false;
   let hasFrame = captures.length > 1;
+  let hasRoot = true;
   let truncated = false;
+  const documents: Array<{ capture: SnapshotTarget; contextId?: number }> = [];
+  let frameBudget = MAX_FRAME_DOCUMENTS;
   for (const capture of captures) {
-    assertBeforeDeadline(deadline);
+    documents.push({ capture });
+    const frames = yield* frameDocumentContexts(send, capture.sessionId, frameBudget).pipe(
+      Effect.catch(() => Effect.succeed([])),
+    );
+    frameBudget -= frames.length;
+    documents.push(...frames.map((contextId) => ({ capture, contextId })));
+  }
+  for (const { capture, contextId } of documents) {
+    yield* browserSync(() => assertBeforeDeadline(deadline));
     if (includeText) {
       const remainingText = Math.max(0, MAX_SNAPSHOT_TEXT - textLength);
-      const summary = await collectPageSummary(send, capture.sessionId, remainingText).catch(() => null);
+      const summary = yield* collectPageSummaryEffect(
+        send,
+        capture.sessionId,
+        remainingText,
+        drawnOnly,
+        contextId,
+      ).pipe(Effect.catch(() => Effect.succeed(null)));
       if (summary) {
         if (summary.text) {
           textParts.push(summary.text);
@@ -97,14 +168,17 @@ export async function collectBoundedSnapshot(
         truncated ||= summary.truncated;
         hasVisualSurface ||= summary.hasVisualSurface;
         hasFrame ||= summary.hasFrame;
+        if (!capture.sessionId && contextId === undefined) hasRoot = summary.hasRoot;
       }
     }
     const remainingElements = MAX_SNAPSHOT_ELEMENTS - elements.length;
-    if (remainingElements <= 0) break;
+    if (remainingElements <= 0) continue;
     const candidates =
-      capture.sessionId && deadline === undefined
-        ? await collectActionableNodes(send, capture, remainingElements).catch(() => [])
-        : await collectActionableNodes(send, capture, remainingElements, deadline);
+      (capture.sessionId || contextId !== undefined) && deadline === undefined
+        ? yield* collectActionableNodesEffect(send, capture, remainingElements, drawnOnly, undefined, contextId).pipe(
+            Effect.catch(() => Effect.succeed([])),
+          )
+        : yield* collectActionableNodesEffect(send, capture, remainingElements, drawnOnly, deadline, contextId);
     for (const candidate of candidates) {
       const properties = Array.isArray(candidate.ax.properties) ? candidate.ax.properties.filter(isRecord) : [];
       const states = properties
@@ -119,7 +193,7 @@ export async function collectBoundedSnapshot(
       const element: BrowserElement = {
         ref,
         role: candidate.role,
-        name: axValue(candidate.ax.name).slice(0, 500),
+        name: candidate.name,
         description: axValue(candidate.ax.description).slice(0, 500),
         tag: (stringValue(candidate.node.localName) || stringValue(candidate.node.nodeName)).toLowerCase(),
         value: axValue(candidate.ax.value).slice(0, MAX_SNAPSHOT_ELEMENT_VALUE) || null,
@@ -131,9 +205,11 @@ export async function collectBoundedSnapshot(
       elements.push(element);
       targets.set(ref, {
         backendNodeId: candidate.backendNodeId,
-        targetId: capture.targetId,
+        ...(capture.targetId === undefined ? {} : { targetId: capture.targetId }),
         element,
         visibleText: candidate.visibleText,
+        ...(drawnOnly ? { drawnOnly: true as const } : {}),
+        ...(contextId === undefined ? {} : { ownFrame: true as const }),
       });
       if (elements.length >= MAX_SNAPSHOT_ELEMENTS) break;
     }
@@ -146,16 +222,51 @@ export async function collectBoundedSnapshot(
     truncated: truncated || text.length > MAX_SNAPSHOT_TEXT || elements.length >= MAX_SNAPSHOT_ELEMENTS,
     hasVisualSurface,
     hasFrame,
+    hasRoot,
   };
-}
+});
 
-async function collectPageSummary(
+const frameDocumentContexts = Effect.fn("Browser.frameDocumentContexts")(function* (
+  send: SendCommand,
+  sessionId: string | undefined,
+  limit: number,
+) {
+  if (limit <= 0) return [];
+  const tree = recordValue((yield* send("Page.getFrameTree", {}, sessionId)).frameTree);
+  const frames: string[] = [];
+  const pending = (Array.isArray(tree?.childFrames) ? tree.childFrames : []).map((child) => ({
+    child: recordValue(child),
+    parentOrigin: stringValue(recordValue(tree?.frame)?.securityOrigin),
+  }));
+  while (pending.length > 0 && frames.length < limit) {
+    const next = pending.shift();
+    const frame = recordValue(next?.child?.frame);
+    const id = stringValue(frame?.id);
+    const origin = stringValue(frame?.securityOrigin);
+    if (id && origin !== next?.parentOrigin) frames.push(id);
+    const children = next?.child?.childFrames;
+    if (Array.isArray(children))
+      pending.push(...children.map((child) => ({ child: recordValue(child), parentOrigin: origin })));
+  }
+  const contexts: number[] = [];
+  for (const frameId of frames) {
+    const contextId = yield* frameAutomationContextId(send, frameId, sessionId).pipe(
+      Effect.catch(() => Effect.succeed(undefined)),
+    );
+    if (contextId !== undefined) contexts.push(contextId);
+  }
+  return contexts;
+});
+
+const collectPageSummaryEffect = Effect.fn("Browser.collectPageSummary")(function* (
   send: SendCommand,
   sessionId: string | undefined,
   maxText: number,
-): Promise<{ text: string; truncated: boolean; hasVisualSurface: boolean; hasFrame: boolean }> {
-  const contextId = await automationContextId(send, sessionId);
-  const result = await send(
+  drawnOnly: boolean,
+  frameContextId?: number,
+) {
+  const contextId = frameContextId ?? (yield* automationContextId(send, sessionId));
+  const result = yield* send(
     "Runtime.evaluate",
     {
       expression: `(() => {
@@ -163,8 +274,6 @@ async function collectPageSummary(
         const maxText = ${maxText};
         const roots = [document];
         const seen = new Set();
-        // Text in the viewport comes first: a dialog is often the last child of the body, and the
-        // page behind it would otherwise fill the budget.
         const inView = { parts: [], chars: 0 };
         const outside = { parts: [], chars: 0 };
         let truncated = false;
@@ -172,18 +281,6 @@ async function collectPageSummary(
         let hasVisualSurface = false;
         let hasFrame = false;
         const visibleRects = node => {
-          let element = node.parentElement;
-          while (element) {
-            if (element.hidden || element.inert || String(element.getAttribute('aria-hidden')).toLowerCase() === 'true') return null;
-            const style = getComputedStyle(element);
-            if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.contentVisibility === 'hidden' || style.opacity === '0') return null;
-            const parent = element.parentElement;
-            if (parent) element = parent;
-            else {
-              const root = element.getRootNode();
-              element = root?.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? root.host : null;
-            }
-          }
           const range = node.ownerDocument.createRange();
           range.selectNodeContents(node);
           const rects = [...range.getClientRects()];
@@ -193,7 +290,7 @@ async function collectPageSummary(
           const root = roots.shift();
           if (!root || seen.has(root)) continue;
           seen.add(root);
-          const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, ${skipHiddenSubtrees(drawnOnly ? "drawn" : "strict")});
           let node;
           while ((node = walker.nextNode()) && scanned < maxNodes) {
             scanned++;
@@ -235,7 +332,7 @@ async function collectPageSummary(
         if (scanned >= maxNodes) truncated = true;
         const text = [...inView.parts, ...outside.parts].join(' ');
         if (text.length > maxText) truncated = true;
-        return { text: text.slice(0, maxText), truncated, hasVisualSurface, hasFrame };
+        return { text: text.slice(0, maxText), truncated, hasVisualSurface, hasFrame, hasRoot: document.documentElement !== null };
       })()`,
       contextId,
       returnByValue: true,
@@ -248,16 +345,13 @@ async function collectPageSummary(
     truncated: value?.truncated === true,
     hasVisualSurface: value?.hasVisualSurface === true,
     hasFrame: value?.hasFrame === true,
+    hasRoot: value?.hasRoot !== false,
   };
-}
+});
 
-// Focus is what `type` writes to when it has no target, and an application that draws its own
-// surface keeps it on a node no semantic target names -- Google Sheets parks it on a hidden editor
-// beside the grid, and on its Name box the moment that box was used. Without this a caller cannot
-// tell the two apart until the data lands in the wrong place.
-export async function collectFocus(send: SendCommand, sessionId?: string): Promise<BrowserFocus | null> {
-  const contextId = await automationContextId(send, sessionId);
-  const result = await send(
+export const collectFocus = Effect.fn("Browser.collectFocus")(function* (send: SendCommand, sessionId?: string) {
+  const contextId = yield* automationContextId(send, sessionId);
+  const result = yield* send(
     "Runtime.evaluate",
     {
       expression: `(() => {
@@ -297,19 +391,22 @@ export async function collectFocus(send: SendCommand, sessionId?: string): Promi
     editable: value.editable === true,
     inFrame: value.inFrame === true,
   };
-}
+});
 
-export async function pageContainsText(
+export const pageContainsText = Effect.fn("Browser.pageContainsText")(function* (
   send: SendCommand,
   captures: SnapshotTarget[],
   text: string,
   deadline: number,
-): Promise<boolean> {
+) {
   for (const capture of captures) {
-    assertBeforeDeadline(deadline);
+    yield* browserSync(() => assertBeforeDeadline(deadline));
     const scanBudgetMs = Math.max(1, deadline - Date.now());
-    const contextId = await automationContextId(send, capture.sessionId);
-    const result = await send(
+    const contextId = yield* automationContextId(send, capture.sessionId).pipe(
+      skipGoneFrame(capture.sessionId, undefined),
+    );
+    if (contextId === undefined) continue;
+    const result = yield* send(
       "Runtime.evaluate",
       {
         expression: `(() => {
@@ -321,18 +418,6 @@ export async function pageContainsText(
           let chars = 0;
           let scanned = 0;
           const isVisibleText = node => {
-            let element = node.parentElement;
-            while (element) {
-              if (element.hidden || element.inert || String(element.getAttribute('aria-hidden')).toLowerCase() === 'true') return false;
-              const style = getComputedStyle(element);
-              if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.contentVisibility === 'hidden' || style.opacity === '0') return false;
-              const parent = element.parentElement;
-              if (parent) element = parent;
-              else {
-                const root = element.getRootNode();
-                element = root?.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? root.host : null;
-              }
-            }
             const range = node.ownerDocument.createRange();
             range.selectNodeContents(node);
             return range.getClientRects().length > 0;
@@ -342,7 +427,7 @@ export async function pageContainsText(
             const root = roots.shift();
             if (!root || seen.has(root)) continue;
             seen.add(root);
-            const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, ${SKIP_HIDDEN_SUBTREES});
             let node;
             while ((node = walker.nextNode()) && scanned < ${MAX_SNAPSHOT_SCANNED_NODES}) {
               if (performance.now() >= scanDeadline) return { matched: false, expired: true };
@@ -373,22 +458,23 @@ export async function pageContainsText(
         returnByValue: true,
       },
       capture.sessionId,
-    ).catch(() => null);
-    assertBeforeDeadline(deadline);
+    ).pipe(Effect.catch(() => Effect.succeed(null)));
+    yield* browserSync(() => assertBeforeDeadline(deadline));
     const value = recordValue(recordValue(result?.result)?.value);
-    if (value?.expired === true) throw new Error("Browser wait condition timed out.");
+    if (value?.expired === true) return yield* browserFailure(new Error("Browser wait condition timed out."));
     if (value?.matched === true) return true;
   }
   return false;
-}
+});
 
-export async function cssObjectMatch(
+export const cssObjectMatch = Effect.fn("Browser.cssObjectMatch")(function* (
   send: SendCommand,
   selector: string,
   sessionId?: string,
-): Promise<{ objectId?: string; ambiguous: boolean }> {
-  const contextId = await automationContextId(send, sessionId);
-  const collection = await send(
+  limit = MAX_TARGET_CANDIDATES,
+) {
+  const contextId = yield* automationContextId(send, sessionId);
+  const collection = yield* send(
     "Runtime.evaluate",
     {
       expression: `(() => {
@@ -398,32 +484,30 @@ export async function cssObjectMatch(
         const matches = [];
         let scanned = 0;
         let truncated = false;
-        while (roots.length && matches.length < 2) {
-          if (scanned >= ${MAX_SNAPSHOT_SCANNED_NODES}) {
-            truncated = true;
-            break;
-          }
+        while (roots.length && matches.length < ${limit}) {
           const root = roots.shift();
           if (!root || seen.has(root)) continue;
           seen.add(root);
+          for (const node of root.querySelectorAll(selector)) {
+            matches.push(node);
+            if (matches.length >= ${limit}) break;
+          }
+          if (truncated || matches.length >= ${limit}) continue;
           const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-          while (matches.length < 2) {
-            const node = walker.nextNode();
-            if (!node) break;
+          let node;
+          while ((node = walker.nextNode())) {
             if (scanned >= ${MAX_SNAPSHOT_SCANNED_NODES}) {
               truncated = true;
               break;
             }
             scanned++;
-            if (node.matches(selector)) matches.push(node);
             if (node.localName === 'iframe' || node.localName === 'frame') {
               try { if (node.contentDocument) roots.push(node.contentDocument); } catch {}
             }
             if (node.shadowRoot) roots.push(node.shadowRoot);
           }
-          if (truncated) break;
         }
-        if (truncated && matches.length < 2) throw new Error('CSS selector uniqueness scan exceeded the safe node limit.');
+        if (truncated && matches.length === 0) throw new Error('CSS selector uniqueness scan exceeded the safe node limit.');
         return matches;
       })()`,
       contextId,
@@ -432,54 +516,56 @@ export async function cssObjectMatch(
     sessionId,
   );
   const exception = recordValue(collection.exceptionDetails);
-  if (exception) throw new Error(exceptionDescription(exception));
-  const collectionId = stringValue(recordValue(collection.result)?.objectId);
-  if (!collectionId) return { ambiguous: false };
-  try {
-    const lengthResult = await send(
-      "Runtime.callFunctionOn",
-      {
-        objectId: collectionId,
-        functionDeclaration: "function() { return this.length; }",
-        returnByValue: true,
-      },
-      sessionId,
-    );
-    const length = numberValue(recordValue(lengthResult.result)?.value);
-    if (length === 0) return { ambiguous: false };
-    if (length > 1) return { ambiguous: true };
-    const element = await send(
-      "Runtime.callFunctionOn",
-      {
-        objectId: collectionId,
-        functionDeclaration: "function() { return this[0]; }",
-        returnByValue: false,
-      },
-      sessionId,
-    );
-    const objectId = stringValue(recordValue(element.result)?.objectId);
-    if (!objectId) throw new Error(`Unable to resolve CSS selector: ${selector}`);
-    return { objectId, ambiguous: false };
-  } finally {
-    await send("Runtime.releaseObject", { objectId: collectionId }, sessionId).catch(() => undefined);
-  }
-}
+  if (exception) return yield* browserFailure(new Error(exceptionDescription(exception)));
+  return yield* collectionElements(send, stringValue(recordValue(collection.result)?.objectId), sessionId, limit);
+});
 
-export async function semanticAxMatches(
+const collectionElements = Effect.fn("Browser.collectionElements")(function* (
+  send: SendCommand,
+  collectionId: string,
+  sessionId: string | undefined,
+  limit = MAX_TARGET_CANDIDATES,
+) {
+  if (!collectionId) return [];
+  return yield* Effect.gen(function* () {
+    const properties = yield* send("Runtime.getProperties", { objectId: collectionId, ownProperties: true }, sessionId);
+    return (Array.isArray(properties.result) ? properties.result.filter(isRecord) : [])
+      .filter((descriptor) => /^\d+$/.test(stringValue(descriptor.name)))
+      .sort((left, right) => Number(left.name) - Number(right.name))
+      .map((descriptor) => stringValue(recordValue(descriptor.value)?.objectId))
+      .filter(Boolean)
+      .slice(0, limit);
+  }).pipe(
+    Effect.ensuring(
+      Effect.gen(function* () {
+        yield* send("Runtime.releaseObject", { objectId: collectionId }, sessionId).pipe(Effect.ignore);
+      }).pipe(Effect.orDie),
+    ),
+  );
+});
+
+export const semanticAxMatches = Effect.fn("Browser.semanticAxMatches")(function* (
   send: SendCommand,
   capture: SnapshotTarget,
   target: Extract<BrowserTarget, { kind: "role" | "text" }>,
   allowNonActionableRole: boolean,
   deadline?: number,
-): Promise<SemanticMatch[]> {
-  assertBeforeDeadline(deadline);
-  await send("Accessibility.enable", {}, capture.sessionId);
+  limit = MAX_TARGET_CANDIDATES,
+) {
+  yield* browserSync(() => assertBeforeDeadline(deadline));
+  yield* send("Accessibility.enable", {}, capture.sessionId);
   const matches: SemanticMatch[] = [];
   const seen = new Set<number>();
-  const frameTree = await send("Page.getFrameTree", {}, capture.sessionId);
-  for (const frameId of frameIds(frameTree)) {
-    const tree = await send("Accessibility.getFullAXTree", { frameId }, capture.sessionId);
-    assertBeforeDeadline(deadline);
+  const frameTree = yield* send("Page.getFrameTree", {}, capture.sessionId);
+  const ids = frameIds(frameTree);
+  for (const frameId of ids) {
+    const tree = yield* send("Accessibility.getFullAXTree", { frameId }, capture.sessionId).pipe(
+      Effect.catchIf(
+        (failure) => frameId !== ids[0] && isFrameGone(failure),
+        () => Effect.succeed({ nodes: [] }),
+      ),
+    );
+    yield* browserSync(() => assertBeforeDeadline(deadline));
     for (const node of Array.isArray(tree.nodes) ? tree.nodes.filter(isRecord) : []) {
       if (node.ignored === true) continue;
       const backendNodeId = numberValue(node.backendDOMNodeId);
@@ -498,26 +584,27 @@ export async function semanticAxMatches(
       if (!matched) continue;
       matches.push({
         backendNodeId,
-        sessionId: capture.sessionId,
-        targetId: capture.targetId,
+        ...(capture.sessionId === undefined ? {} : { sessionId: capture.sessionId }),
+        ...(capture.targetId === undefined ? {} : { targetId: capture.targetId }),
         role,
         name,
       });
-      if (matches.length >= 2) return matches;
+      if (matches.length >= limit) return matches;
     }
   }
   return matches;
-}
+});
 
-export async function visibleTextObjectMatches(
+export const visibleTextObjectMatches = Effect.fn("Browser.visibleTextObjectMatches")(function* (
   send: SendCommand,
   capture: SnapshotTarget,
   target: Extract<BrowserTarget, { kind: "text" }>,
   deadline?: number,
-): Promise<string[]> {
-  assertBeforeDeadline(deadline);
-  const contextId = await automationContextId(send, capture.sessionId);
-  const collection = await send(
+  limit = MAX_TARGET_CANDIDATES,
+) {
+  yield* browserSync(() => assertBeforeDeadline(deadline));
+  const contextId = yield* automationContextId(send, capture.sessionId);
+  const collection = yield* send(
     "Runtime.evaluate",
     {
       expression: `(() => {
@@ -531,18 +618,6 @@ export async function visibleTextObjectMatches(
         let truncated = false;
         const isCandidate = node => {
           if (node.nodeType !== 1) return false;
-          let element = node;
-          while (element) {
-            if (element.hidden || element.inert || String(element.getAttribute('aria-hidden')).toLowerCase() === 'true') return false;
-            const style = element.ownerDocument.defaultView?.getComputedStyle(element);
-            if (!style || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.contentVisibility === 'hidden' || style.opacity === '0') return false;
-            const parent = element.parentElement;
-            if (parent) element = parent;
-            else {
-              const root = element.getRootNode();
-              element = root?.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? root.host : null;
-            }
-          }
           const explicitRole = (node.getAttribute('role') || '').trim().split(/\\s+/)[0].toLowerCase();
           const tag = node.localName;
           const semantic = tag === 'button' || tag === 'summary' || (tag === 'a' && node.hasAttribute('href')) ||
@@ -550,7 +625,7 @@ export async function visibleTextObjectMatches(
           if (!semantic && !roles.has(explicitRole)) return false;
           return node.getClientRects().length > 0;
         };
-        while (roots.length && matches.length < 2) {
+        while (roots.length && matches.length < ${limit}) {
           if (scanned >= ${MAX_SNAPSHOT_SCANNED_NODES}) {
             truncated = true;
             break;
@@ -558,8 +633,8 @@ export async function visibleTextObjectMatches(
           const root = roots.shift();
           if (!root || seenRoots.has(root)) continue;
           seenRoots.add(root);
-          const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-          while (matches.length < 2) {
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, ${SKIP_HIDDEN_SUBTREES});
+          while (matches.length < ${limit}) {
             const node = walker.nextNode();
             if (!node) break;
             if (scanned >= ${MAX_SNAPSHOT_SCANNED_NODES}) {
@@ -586,60 +661,147 @@ export async function visibleTextObjectMatches(
     capture.sessionId,
   );
   const exception = recordValue(collection.exceptionDetails);
-  if (exception) throw new Error(exceptionDescription(exception));
-  const collectionId = stringValue(recordValue(collection.result)?.objectId);
-  if (!collectionId) return [];
-  try {
-    const properties = await send(
-      "Runtime.getProperties",
-      { objectId: collectionId, ownProperties: true },
-      capture.sessionId,
-    );
-    return (Array.isArray(properties.result) ? properties.result.filter(isRecord) : [])
-      .filter((descriptor) => /^\d+$/.test(stringValue(descriptor.name)))
-      .sort((left, right) => Number(left.name) - Number(right.name))
-      .map((descriptor) => stringValue(recordValue(descriptor.value)?.objectId))
-      .filter(Boolean)
-      .slice(0, 2);
-  } finally {
-    await send("Runtime.releaseObject", { objectId: collectionId }, capture.sessionId).catch(() => undefined);
-  }
+  if (exception) return yield* browserFailure(new Error(exceptionDescription(exception)));
+  return yield* collectionElements(
+    send,
+    stringValue(recordValue(collection.result)?.objectId),
+    capture.sessionId,
+    limit,
+  );
+});
+
+export interface TargetCandidateText {
+  tag: string;
+  text: string;
+  item: string;
 }
 
-async function collectActionableNodes(
+export const describeTargetCandidates = Effect.fn("Browser.describeTargetCandidates")(function* (
+  send: SendCommand,
+  sessionId: string | undefined,
+  backendNodeIds: number[],
+) {
+  const executionContextId = yield* automationContextId(send, sessionId);
+  const objectIds: string[] = [];
+  return yield* Effect.gen(function* () {
+    for (const backendNodeId of backendNodeIds) {
+      const resolved = yield* send("DOM.resolveNode", { backendNodeId, executionContextId }, sessionId).pipe(
+        Effect.catch(() => Effect.succeed<CdpResult>({})),
+      );
+      objectIds.push(stringValue(recordValue(resolved.object)?.objectId));
+    }
+    const resolvedIds = objectIds.filter(Boolean);
+    const [first] = resolvedIds;
+    if (!first) return [];
+    const result = yield* send(
+      "Runtime.callFunctionOn",
+      {
+        objectId: first,
+        functionDeclaration: String.raw`function(...nodes) {
+          const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+          const rendered = (element) =>
+            element.checkVisibility ? element.checkVisibility() : element.getClientRects().length > 0;
+          return nodes.map((node) => {
+            if (!rendered(node)) return { tag: node.localName, text: '', item: '' };
+            const text = clean(node.innerText);
+            const own = clean(node.textContent);
+            const twins = new Map();
+            const isTwin = (peer) => {
+              let known = twins.get(peer);
+              if (known === undefined) {
+                known = peer !== node && peer.childElementCount === node.childElementCount && clean(peer.textContent) === own;
+                twins.set(peer, known);
+              }
+              return known;
+            };
+            const holdsTwin = (parent) => {
+              const peers = parent.getElementsByTagName(node.localName);
+              for (let index = 0; index < peers.length && index < ${MAX_CANDIDATE_PEERS}; index++) {
+                if (isTwin(peers[index])) return true;
+              }
+              return false;
+            };
+            let item = '';
+            for (let parent = node.parentElement, depth = 0; parent && depth < 8; parent = parent.parentElement, depth++) {
+              if (nodes.some((other) => other !== node && parent.contains(other)) || holdsTwin(parent)) break;
+              const parentText = clean(parent.innerText);
+              if (parentText.length > ${MAX_CANDIDATE_ITEM_TEXT}) {
+                if (!item) item = parentText;
+                break;
+              }
+              if (parentText.length > text.length) item = parentText;
+            }
+            return { tag: node.localName, text: text.slice(0, ${MAX_CANDIDATE_TEXT}), item: item.slice(0, ${MAX_CANDIDATE_ITEM_TEXT}) };
+          });
+        }`,
+        arguments: resolvedIds.map((objectId) => ({ objectId })),
+        returnByValue: true,
+      },
+      sessionId,
+    );
+    const values = recordValue(result.result)?.value;
+    const described = (Array.isArray(values) ? values.filter(isRecord) : []).map(
+      (value): TargetCandidateText => ({
+        tag: stringValue(value.tag),
+        text: stringValue(value.text),
+        item: stringValue(value.item),
+      }),
+    );
+    let next = 0;
+    return objectIds.map((objectId) => (objectId ? described[next++] : undefined));
+  }).pipe(
+    Effect.ensuring(
+      Effect.gen(function* () {
+        yield* Effect.all(
+          objectIds
+            .filter(Boolean)
+            .map((objectId) => Effect.exit(send("Runtime.releaseObject", { objectId }, sessionId))),
+          { concurrency: "unbounded" },
+        );
+      }).pipe(Effect.orDie),
+    ),
+  );
+});
+
+const collectActionableNodesEffect = Effect.fn("Browser.collectActionableNodes")(function* (
   send: SendCommand,
   capture: SnapshotTarget,
   limit: number,
+  drawnOnly: boolean,
   deadline?: number,
-): Promise<Array<{ backendNodeId: number; node: CdpResult; ax: CdpResult; role: string; visibleText: string }>> {
-  assertBeforeDeadline(deadline);
-  await Promise.all([send("DOM.enable", {}, capture.sessionId), send("Accessibility.enable", {}, capture.sessionId)]);
-  assertBeforeDeadline(deadline);
-  const contextId = await automationContextId(send, capture.sessionId);
+  frameContextId?: number,
+) {
+  yield* browserSync(() => assertBeforeDeadline(deadline));
+  yield* Effect.all([send("DOM.enable", {}, capture.sessionId), send("Accessibility.enable", {}, capture.sessionId)], {
+    concurrency: "unbounded",
+  });
+  yield* browserSync(() => assertBeforeDeadline(deadline));
+  const contextId = frameContextId ?? (yield* automationContextId(send, capture.sessionId));
   const results: Array<{
     backendNodeId: number;
     node: CdpResult;
     ax: CdpResult;
     role: string;
+    name: string;
     visibleText: string;
   }> = [];
   const batchSize = MAX_SNAPSHOT_ELEMENTS;
-  const collection = await send(
+  const collection = yield* send(
     "Runtime.evaluate",
     {
-      expression: actionableNodesExpression(MAX_SNAPSHOT_CANDIDATES),
+      expression: actionableNodesExpression(MAX_SNAPSHOT_CANDIDATES, drawnOnly ? "drawn-usable" : "strict"),
       contextId,
       returnByValue: false,
     },
     capture.sessionId,
   );
   const exception = recordValue(collection.exceptionDetails);
-  if (exception) throw new Error(exceptionDescription(exception));
+  if (exception) return yield* browserFailure(new Error(exceptionDescription(exception)));
   const collectionId = stringValue(recordValue(collection.result)?.objectId);
   if (!collectionId) return results;
   const objectIds: string[] = [];
-  try {
-    const properties = await send(
+  yield* Effect.gen(function* () {
+    const properties = yield* send(
       "Runtime.getProperties",
       { objectId: collectionId, ownProperties: true },
       capture.sessionId,
@@ -655,73 +817,76 @@ async function collectActionableNodes(
     );
     for (let offset = 0; offset < objectIds.length && results.length < limit; offset += batchSize) {
       const batch = objectIds.slice(offset, offset + batchSize);
-      const resolved = await Promise.all(
-        batch.map(async (objectId) => {
-          const [description, partialAxTree, visibleTextResult] = await Promise.all([
-            send("DOM.describeNode", { objectId, depth: 0 }, capture.sessionId),
-            send("Accessibility.getPartialAXTree", { objectId, fetchRelatives: false }, capture.sessionId),
-            send(
-              "Runtime.callFunctionOn",
-              {
-                objectId,
-                functionDeclaration:
-                  "function() { return String(this.innerText ?? this.textContent ?? '').replace(/\\s+/g, ' ').trim().slice(0, 500); }",
-                returnByValue: true,
-              },
-              capture.sessionId,
-            ),
-          ]);
-          const node = recordValue(description.node);
-          const backendNodeId = numberValue(node?.backendNodeId);
-          if (!node || !backendNodeId) return null;
-          const axNodes = Array.isArray(partialAxTree.nodes) ? partialAxTree.nodes.filter(isRecord) : [];
-          const ax =
-            axNodes.find((candidate) => numberValue(candidate.backendDOMNodeId) === backendNodeId) ?? axNodes[0];
-          if (!ax || ax.ignored === true) return null;
-          const role = axValue(ax.role).toLowerCase() || fallbackRole(node);
-          if (!ACTIONABLE_ROLES.has(role)) return null;
-          return {
-            backendNodeId,
-            node,
-            ax,
-            role,
-            visibleText: stringValue(recordValue(visibleTextResult.result)?.value),
-          };
-        }),
+      const resolved = yield* Effect.all(
+        batch.map((objectId) =>
+          Effect.gen(function* () {
+            const [description, partialAxTree, visibleTextResult] = yield* Effect.all(
+              [
+                send("DOM.describeNode", { objectId, depth: 0 }, capture.sessionId),
+                send("Accessibility.getPartialAXTree", { objectId, fetchRelatives: false }, capture.sessionId),
+                send(
+                  "Runtime.callFunctionOn",
+                  {
+                    objectId,
+                    functionDeclaration:
+                      "function() { return String(this.innerText ?? this.textContent ?? '').replace(/\\s+/g, ' ').trim().slice(0, 500); }",
+                    returnByValue: true,
+                  },
+                  capture.sessionId,
+                ),
+              ],
+              { concurrency: "unbounded" },
+            );
+            const node = recordValue(description.node);
+            const backendNodeId = numberValue(node?.backendNodeId);
+            if (!node || !backendNodeId) return null;
+            const axNodes = Array.isArray(partialAxTree.nodes) ? partialAxTree.nodes.filter(isRecord) : [];
+            const ax =
+              axNodes.find((candidate) => numberValue(candidate.backendDOMNodeId) === backendNodeId) ?? axNodes[0];
+            if (!drawnOnly && (!ax || ax.ignored === true)) return null;
+            const visibleText = stringValue(recordValue(visibleTextResult.result)?.value);
+            const { role, name } = controlIdentity(node, ax, visibleText);
+            if (!ACTIONABLE_ROLES.has(role)) return null;
+            return { backendNodeId, node, ax: ax ?? {}, role, name, visibleText };
+          }),
+        ),
+        { concurrency: "unbounded" },
       );
       results.push(...resolved.filter((candidate) => candidate !== null).slice(0, limit - results.length));
-      assertBeforeDeadline(deadline);
+      yield* browserSync(() => assertBeforeDeadline(deadline));
     }
-  } finally {
-    await Promise.allSettled([
-      ...objectIds.map((objectId) => send("Runtime.releaseObject", { objectId }, capture.sessionId)),
-      send("Runtime.releaseObject", { objectId: collectionId }, capture.sessionId),
-    ]);
-  }
+  }).pipe(
+    Effect.ensuring(
+      Effect.gen(function* () {
+        yield* Effect.all(
+          [
+            ...objectIds.map((objectId) => send("Runtime.releaseObject", { objectId }, capture.sessionId)),
+            send("Runtime.releaseObject", { objectId: collectionId }, capture.sessionId),
+          ].map((operation) => Effect.exit(operation)),
+          { concurrency: "unbounded" },
+        );
+      }).pipe(Effect.orDie),
+    ),
+  );
   return results;
-}
+});
 
-function actionableNodesExpression(limit: number): string {
+function actionableNodesExpression(limit: number, rule: HiddenSubtreeRule): string {
   return `(() => {
     const roles = new Set(${JSON.stringify([...ACTIONABLE_ROLES])});
     const roots = [document];
     const seenRoots = new Set();
-    const matches = [];
+    const inView = [];
+    const outside = [];
     let scanned = 0;
+    const isInView = node => {
+      const view = node.ownerDocument.defaultView;
+      const width = view?.innerWidth ?? 0;
+      const height = view?.innerHeight ?? 0;
+      return [...node.getClientRects()].some(rect => rect.bottom > 0 && rect.right > 0 && rect.top < height && rect.left < width);
+    };
     const isCandidate = node => {
       if (node.nodeType !== 1) return false;
-      let element = node;
-      while (element) {
-        if (element.hidden || element.inert || String(element.getAttribute('aria-hidden')).toLowerCase() === 'true') return false;
-        const style = element.ownerDocument.defaultView?.getComputedStyle(element);
-        if (!style || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.contentVisibility === 'hidden' || style.opacity === '0') return false;
-        const parent = element.parentElement;
-        if (parent) element = parent;
-        else {
-          const root = element.getRootNode();
-          element = root?.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? root.host : null;
-        }
-      }
       const explicitRole = (node.getAttribute('role') || '').trim().split(/\\s+/)[0].toLowerCase();
       const tag = node.localName;
       const semantic = tag === 'button' || tag === 'summary' || (tag === 'a' && node.hasAttribute('href')) ||
@@ -729,22 +894,25 @@ function actionableNodesExpression(limit: number): string {
       if (!semantic && !roles.has(explicitRole)) return false;
       return node.getClientRects().length > 0;
     };
-    while (roots.length && scanned < ${MAX_SNAPSHOT_SCANNED_NODES} && matches.length < ${Math.max(0, limit)}) {
+    const limit = ${Math.max(0, limit)};
+    while (roots.length && scanned < ${MAX_SNAPSHOT_SCANNED_NODES} && inView.length < limit) {
       const root = roots.shift();
       if (!root || seenRoots.has(root)) continue;
       seenRoots.add(root);
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, ${skipHiddenSubtrees(rule)});
       let node;
-      while ((node = walker.nextNode()) && scanned < ${MAX_SNAPSHOT_SCANNED_NODES} && matches.length < ${Math.max(0, limit)}) {
+      while ((node = walker.nextNode()) && scanned < ${MAX_SNAPSHOT_SCANNED_NODES} && inView.length < limit) {
         scanned++;
         if (node.shadowRoot) roots.push(node.shadowRoot);
         if (node.localName === 'iframe' || node.localName === 'frame') {
           try { if (node.contentDocument) roots.push(node.contentDocument); } catch {}
         }
-        if (isCandidate(node)) matches.push(node);
+        if (!isCandidate(node)) continue;
+        if (isInView(node)) inView.push(node);
+        else if (outside.length < limit) outside.push(node);
       }
     }
-    return matches;
+    return [...inView, ...outside].slice(0, limit);
   })()`;
 }
 
@@ -777,7 +945,6 @@ export function compactActionSnapshot<Result extends BrowserSnapshot | { closed:
 export function boundSerializedSnapshot(snapshot: BrowserSnapshot): void {
   let bytes = Buffer.byteLength(JSON.stringify(snapshot));
   while (bytes > MAX_SERIALIZED_SNAPSHOT_BYTES) {
-    // The text ends with what is outside the viewport; the elements are what the next action uses.
     if (snapshot.text.length > 0) {
       snapshot.truncated = true;
       const excess = bytes - MAX_SERIALIZED_SNAPSHOT_BYTES;
@@ -795,7 +962,8 @@ export function boundSerializedSnapshot(snapshot: BrowserSnapshot): void {
 export function fallbackRole(node: CdpResult): string {
   const tag = (stringValue(node.localName) || stringValue(node.nodeName)).toLowerCase();
   const attributes = nodeAttributes(node.attributes);
-  if (attributes.role) return attributes.role.toLowerCase();
+  const role = (attributes.role ?? "").trim().split(/\s+/u)[0]?.toLowerCase() ?? "";
+  if (role && role !== "none" && role !== "presentation") return role;
   if (tag === "button" || tag === "summary") return "button";
   if (tag === "a") return "link";
   if (tag === "select") return attributes.multiple === undefined ? "combobox" : "listbox";
@@ -805,7 +973,23 @@ export function fallbackRole(node: CdpResult): string {
   if (attributes.type === "radio") return "radio";
   if (attributes.type === "range") return "slider";
   if (attributes.type === "number") return "spinbutton";
+  if (["button", "submit", "reset", "image"].includes(attributes.type ?? "")) return "button";
   return "textbox";
+}
+
+export function controlIdentity(
+  node: CdpResult,
+  ax: CdpResult | undefined,
+  visibleText: string,
+): { role: string; name: string } {
+  if (ax && ax.ignored !== true) {
+    return { role: axValue(ax.role).toLowerCase() || fallbackRole(node), name: axValue(ax.name).slice(0, 500) };
+  }
+  const attributes = nodeAttributes(node.attributes);
+  const role = fallbackRole(node);
+  const value = stringValue(node.localName) === "input" && role === "button" ? attributes.value || attributes.alt : "";
+  const name = attributes["aria-label"] || visibleText || value || attributes.placeholder || attributes.title || "";
+  return { role, name: name.slice(0, 500) };
 }
 
 function nodeAttributes(value: unknown): Record<string, string> {
@@ -817,4 +1001,72 @@ function nodeAttributes(value: unknown): Record<string, string> {
     if (name !== undefined && attribute !== undefined) result[name.toLowerCase()] = attribute;
   }
   return result;
+}
+
+const HIDDEN_SECURITY_CODE = "•••";
+
+export class CardValueScrub {
+  readonly #numbers = new Map<string, { pattern: RegExp; replacement: string }>();
+  #documentValues = new Map<string, RegExp>();
+  #documentSecretShown = false;
+
+  add(number: string, securityCode: string): void {
+    const digits = number.replace(/[^0-9]/gu, "");
+    if (digits.length >= 12 && !this.#numbers.has(digits)) {
+      this.#numbers.set(digits, {
+        pattern: new RegExp(`(?<![0-9])${[...digits].join("[\\s.\\-]*")}(?![0-9])`, "gu"),
+        replacement: `•••• ${digits.slice(-4)}`,
+      });
+    }
+    if (/^[0-9]{3,4}$/u.test(securityCode) && !this.#documentValues.has(securityCode))
+      this.#documentValues.set(securityCode, new RegExp(`(?<![0-9])${securityCode}(?![0-9])`, "gu"));
+  }
+
+  addDocumentSecret(secret: string, shown: boolean): void {
+    this.#documentSecretShown ||= shown;
+    const forms = [secret, encodeURIComponent(secret), new URLSearchParams({ v: secret }).toString().slice(2)];
+    for (const value of new Set(forms)) {
+      if (!value || this.#documentValues.has(value)) continue;
+      const escaped = value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+      const pattern = /^[0-9]+$/u.test(value)
+        ? `(?<![0-9])${escaped}(?![0-9])`
+        : value.length < 4
+          ? `(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`
+          : escaped;
+      this.#documentValues.set(value, new RegExp(pattern, "gu"));
+    }
+  }
+
+  endDocument(): void {
+    this.#documentValues = new Map();
+    this.#documentSecretShown = false;
+  }
+
+  get documentSecretShown(): boolean {
+    return this.#documentSecretShown;
+  }
+
+  get active(): boolean {
+    return this.#numbers.size > 0 || this.#documentValues.size > 0;
+  }
+
+  text(value: string): string {
+    let result = value;
+    for (const { pattern, replacement } of this.#numbers.values()) result = result.replace(pattern, replacement);
+    for (const pattern of this.#documentValues.values()) result = result.replace(pattern, HIDDEN_SECURITY_CODE);
+    return result;
+  }
+
+  reveals(value: string): boolean {
+    return this.active && this.text(value) !== value;
+  }
+
+  snapshot(snapshot: BrowserSnapshot): BrowserSnapshot {
+    if (!this.active) return snapshot;
+    const scrubbed: BrowserSnapshot = JSON.parse(JSON.stringify(snapshot), (_key, value: unknown) =>
+      typeof value === "string" ? this.text(value) : value,
+    );
+    boundSerializedSnapshot(scrubbed);
+    return scrubbed;
+  }
 }

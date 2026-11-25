@@ -1,775 +1,70 @@
 import type { DatabaseSync } from "node:sqlite";
-import { COMPUTER_USE_MCP_SERVER_NAME } from "@openbot/contracts/ipc";
-import { type DynamicRecord, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
-import { isGeneratedAgentId } from "@openbot/contracts/validation";
+import { isDynamicRecord, isNumber } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
-import { AGENT_MEMORY_SELECTION_SCHEMA_SQL, migrateAgentMemorySelection } from "./agent-memory-selection";
-import { CHANNEL_SCHEMA_SQL, CHANNEL_SETTINGS_SCHEMA_SQL } from "./channel-schema";
-import { PROVIDER_HISTORY_SCHEMA_SQL } from "./database/provider-history-schema";
-import { MCP_SERVERS_SCHEMA_SQL } from "./mcp-schema";
-import {
-  MESSAGING_AUTO_REPLY_SCHEMA_SQL,
-  MESSAGING_DRAFTS_SCHEMA_SQL,
-  MESSAGING_INBOX_SCHEMA_SQL,
-  MESSAGING_SCHEMA_SQL,
-  SLACK_CLIENT_SCHEMA_SQL,
-} from "./messaging/messaging-schema";
-import { ROUTINE_FLOW_SCHEMA_SQL } from "./routine-flows/routine-flow-schema";
+import { withTransaction } from "./database/sqlite-transaction";
+import type { OpenBotMigration } from "./migrations/migration";
+import { MIGRATIONS } from "./migrations/registry";
 
 const BASELINE_SCHEMA_VERSION = 8;
-
-// This is the frozen compatibility schema for every database that predates v8.
-// Future schema changes must update LATEST_SCHEMA_SQL and append a migration without editing this SQL.
-const BASELINE_V8_SCHEMA_SQL = `
-  CREATE TABLE IF NOT EXISTS schema_migrations (
-    version INTEGER PRIMARY KEY,
-    applied_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS orchestration_events (
-    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id TEXT NOT NULL UNIQUE,
-    command_id TEXT NOT NULL,
-    aggregate_type TEXT NOT NULL,
-    aggregate_id TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    occurred_at TEXT NOT NULL,
-    payload_json TEXT NOT NULL CHECK(json_valid(payload_json))
-  );
-  CREATE INDEX IF NOT EXISTS orchestration_events_aggregate
-    ON orchestration_events(aggregate_type, aggregate_id, sequence);
-  CREATE INDEX IF NOT EXISTS orchestration_events_command
-    ON orchestration_events(command_id);
-  CREATE TABLE IF NOT EXISTS orchestration_command_receipts (
-    command_id TEXT PRIMARY KEY,
-    accepted_at TEXT NOT NULL,
-    first_sequence INTEGER NOT NULL,
-    last_sequence INTEGER NOT NULL,
-    result_json TEXT NOT NULL CHECK(json_valid(result_json))
-  );
-  CREATE TABLE IF NOT EXISTS projection_threads (
-    thread_id TEXT PRIMARY KEY,
-    agent_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    active_turn_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS projection_agents (
-    agent_id TEXT PRIMARY KEY,
-    thread_id TEXT,
-    model TEXT NOT NULL,
-    updated_at TEXT,
-    sort_order INTEGER NOT NULL,
-    agent_json TEXT NOT NULL CHECK(json_valid(agent_json)),
-    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS projection_agent_memories (
-    memory_id TEXT PRIMARY KEY,
-    agent_id TEXT NOT NULL,
-    text TEXT NOT NULL,
-    normalized_text TEXT NOT NULL,
-    origin TEXT NOT NULL CHECK(origin IN ('automatic', 'manual')),
-    source_turn_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    last_event_sequence INTEGER NOT NULL,
-    UNIQUE(agent_id, normalized_text)
-  );
-  CREATE INDEX IF NOT EXISTS agent_memories_agent
-    ON projection_agent_memories(agent_id, updated_at DESC, memory_id);
-  CREATE TABLE IF NOT EXISTS projection_agent_routines (
-    routine_id TEXT PRIMARY KEY,
-    agent_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    instruction TEXT NOT NULL,
-    active INTEGER NOT NULL CHECK(active IN (0, 1)),
-    timezone TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS agent_routines_agent
-    ON projection_agent_routines(agent_id, updated_at DESC, routine_id);
-  CREATE TABLE IF NOT EXISTS projection_routine_triggers (
-    trigger_id TEXT PRIMARY KEY,
-    routine_id TEXT NOT NULL REFERENCES projection_agent_routines(routine_id) ON DELETE CASCADE,
-    schedule_json TEXT NOT NULL CHECK(json_valid(schedule_json)),
-    next_run_at TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    last_event_sequence INTEGER NOT NULL,
-    UNIQUE(routine_id)
-  );
-  CREATE INDEX IF NOT EXISTS routine_triggers_due
-    ON projection_routine_triggers(next_run_at, routine_id);
-  CREATE TABLE IF NOT EXISTS projection_routine_runs (
-    run_id TEXT PRIMARY KEY,
-    routine_id TEXT NOT NULL REFERENCES projection_agent_routines(routine_id) ON DELETE CASCADE,
-    agent_id TEXT NOT NULL,
-    trigger_id TEXT,
-    run_kind TEXT NOT NULL CHECK(run_kind IN ('scheduled', 'manual')),
-    scheduled_for TEXT NOT NULL,
-    routine_name TEXT NOT NULL,
-    instruction TEXT NOT NULL,
-    delivery_id TEXT,
-    status TEXT NOT NULL CHECK(status IN (
-      'queued', 'running', 'needs-attention', 'succeeded', 'failed', 'interrupted', 'cancelled'
-    )),
-    error TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    last_event_sequence INTEGER NOT NULL,
-    UNIQUE(trigger_id, scheduled_for)
-  );
-  CREATE INDEX IF NOT EXISTS routine_runs_routine
-    ON projection_routine_runs(routine_id, created_at DESC, run_id);
-  CREATE UNIQUE INDEX IF NOT EXISTS routine_runs_delivery
-    ON projection_routine_runs(delivery_id) WHERE delivery_id IS NOT NULL;
-  CREATE TABLE IF NOT EXISTS projection_provider_sessions (
-    id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL REFERENCES projection_threads(thread_id) ON DELETE CASCADE,
-    provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok')),
-    external_session_id TEXT NOT NULL,
-    model TEXT NOT NULL,
-    effort TEXT NOT NULL,
-    state TEXT NOT NULL CHECK(state IN ('active', 'inactive', 'failed')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    resume_cursor TEXT,
-    last_event_sequence INTEGER NOT NULL,
-    UNIQUE(provider, external_session_id)
-  );
-  CREATE INDEX IF NOT EXISTS provider_sessions_thread
-    ON projection_provider_sessions(thread_id, provider, state);
-  CREATE TABLE IF NOT EXISTS projection_turns (
-    turn_id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL REFERENCES projection_threads(thread_id) ON DELETE CASCADE,
-    provider_session_id TEXT REFERENCES projection_provider_sessions(id) ON DELETE SET NULL,
-    status TEXT NOT NULL,
-    started_at TEXT NOT NULL,
-    completed_at TEXT,
-    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS projection_thread_messages (
-    thread_id TEXT NOT NULL REFERENCES projection_threads(thread_id) ON DELETE CASCADE,
-    message_id TEXT NOT NULL,
-    turn_id TEXT,
-    author TEXT NOT NULL,
-    status TEXT NOT NULL,
-    item_type TEXT,
-    created_at TEXT NOT NULL,
-    ordinal INTEGER NOT NULL,
-    message_json TEXT NOT NULL CHECK(json_valid(message_json)),
-    last_event_sequence INTEGER NOT NULL,
-    PRIMARY KEY(thread_id, message_id)
-  );
-  CREATE INDEX IF NOT EXISTS thread_messages_order
-    ON projection_thread_messages(thread_id, created_at, ordinal);
-  CREATE INDEX IF NOT EXISTS thread_messages_page_order
-    ON projection_thread_messages(thread_id, created_at, ordinal, message_id);
-  CREATE TABLE IF NOT EXISTS projection_thread_reads (
-    thread_id TEXT NOT NULL REFERENCES projection_threads(thread_id) ON DELETE CASCADE,
-    member_id TEXT NOT NULL,
-    through_message_id TEXT,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY(thread_id, member_id)
-  );
-  CREATE TABLE IF NOT EXISTS projection_thread_read_baselines (
-    thread_id TEXT PRIMARY KEY REFERENCES projection_threads(thread_id) ON DELETE CASCADE,
-    through_message_id TEXT,
-    initialized_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS projection_thread_activities (
-    activity_id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL REFERENCES projection_threads(thread_id) ON DELETE CASCADE,
-    turn_id TEXT,
-    activity_type TEXT NOT NULL,
-    payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
-    created_at TEXT NOT NULL,
-    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS projection_mailbox_messages (
-    message_id TEXT PRIMARY KEY,
-    sender_kind TEXT NOT NULL,
-    sender_agent_id TEXT,
-    text TEXT NOT NULL,
-    reply_to_message_id TEXT,
-    created_at TEXT NOT NULL,
-    message_json TEXT NOT NULL CHECK(json_valid(message_json)),
-    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS projection_deliveries (
-    delivery_id TEXT PRIMARY KEY,
-    message_id TEXT NOT NULL REFERENCES projection_mailbox_messages(message_id) ON DELETE CASCADE,
-    recipient_agent_id TEXT NOT NULL,
-    status TEXT NOT NULL,
-    turn_id TEXT,
-    error TEXT,
-    created_at TEXT NOT NULL,
-    delivery_json TEXT NOT NULL CHECK(json_valid(delivery_json)),
-    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS projection_queue_state (
-    agent_id TEXT PRIMARY KEY,
-    paused INTEGER NOT NULL CHECK(paused IN (0, 1)),
-    metadata_json TEXT NOT NULL CHECK(json_valid(metadata_json)),
-    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS projection_reactions (
-    agent_id TEXT NOT NULL,
-    message_id TEXT NOT NULL,
-    emoji TEXT NOT NULL,
-    actor_kind TEXT NOT NULL CHECK(actor_kind IN ('user', 'bot')),
-    actor_bot_id TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    last_event_sequence INTEGER NOT NULL,
-    PRIMARY KEY(agent_id, message_id, actor_kind, actor_bot_id)
-  );
-  CREATE TABLE IF NOT EXISTS projection_attachments (
-    attachment_id TEXT PRIMARY KEY,
-    owner_kind TEXT NOT NULL,
-    owner_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    path TEXT NOT NULL,
-    metadata_json TEXT NOT NULL CHECK(json_valid(metadata_json)),
-    created_at TEXT NOT NULL,
-    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS projection_thread_summaries (
-    summary_id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL REFERENCES projection_threads(thread_id) ON DELETE CASCADE,
-    through_message_id TEXT,
-    summary_text TEXT NOT NULL,
-    estimated_tokens INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS projection_direct_threads (
-    thread_id TEXT PRIMARY KEY,
-    member_a_id TEXT NOT NULL,
-    member_b_id TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    last_message_id TEXT,
-    last_event_sequence INTEGER NOT NULL,
-    UNIQUE(member_a_id, member_b_id)
-  );
-  CREATE INDEX IF NOT EXISTS direct_threads_member_a
-    ON projection_direct_threads(member_a_id, updated_at DESC);
-  CREATE INDEX IF NOT EXISTS direct_threads_member_b
-    ON projection_direct_threads(member_b_id, updated_at DESC);
-  CREATE TABLE IF NOT EXISTS projection_direct_messages (
-    message_id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL REFERENCES projection_direct_threads(thread_id) ON DELETE CASCADE,
-    sender_member_id TEXT NOT NULL,
-    recipient_member_id TEXT NOT NULL,
-    text TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    message_json TEXT NOT NULL CHECK(json_valid(message_json)),
-    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS direct_messages_thread
-    ON projection_direct_messages(thread_id, last_event_sequence);
-  CREATE TABLE IF NOT EXISTS projection_direct_reads (
-    thread_id TEXT NOT NULL REFERENCES projection_direct_threads(thread_id) ON DELETE CASCADE,
-    member_id TEXT NOT NULL,
-    last_read_sequence INTEGER NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY(thread_id, member_id)
-  );
-  CREATE TABLE IF NOT EXISTS file_deletion_outbox (
-    id TEXT PRIMARY KEY,
-    path TEXT NOT NULL UNIQUE,
-    reason TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    last_error TEXT
-  );
-`;
-
-// v12 rewrites `projection_reactions`, so the fresh schema is no longer the v8 baseline. It is derived
-// from that baseline by substituting the one table that changed rather than by copying all of it, so a
-// table added to the baseline still reaches new installs from a single declaration.
-// `openbot-database-schema-parity.test.ts` proves the result matches what the migrations produce.
-const BASELINE_REACTIONS_TABLE_SQL = `  CREATE TABLE IF NOT EXISTS projection_reactions (
-    agent_id TEXT NOT NULL,
-    message_id TEXT NOT NULL,
-    emoji TEXT NOT NULL,
-    actor_kind TEXT NOT NULL CHECK(actor_kind IN ('user', 'bot')),
-    actor_bot_id TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    last_event_sequence INTEGER NOT NULL,
-    PRIMARY KEY(agent_id, message_id, actor_kind, actor_bot_id)
-  );`;
-
-const V12_REACTIONS_TABLE_SQL = `  CREATE TABLE IF NOT EXISTS projection_reactions (
-    agent_id TEXT NOT NULL,
-    message_id TEXT NOT NULL,
-    emoji TEXT NOT NULL,
-    actor_kind TEXT NOT NULL CHECK(actor_kind IN ('user', 'agent')),
-    actor_agent_id TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    last_event_sequence INTEGER NOT NULL,
-    PRIMARY KEY(agent_id, message_id, actor_kind, actor_agent_id)
-  );`;
-
-// Migrations 17, 22, 23, 24 and 26 widen the provider CHECK and migration 32 removes it, so the fresh schema is no
-// longer the v8 baseline here either.
-// One line rather than the whole table: the substitution then survives any later baseline edit that does
-// not touch this constraint, and `substituteOnce` still shouts if the line ever stops being unique.
-const BASELINE_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok')),`;
-
-const V17_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok', 'opencode')),`;
-
-// Migration 22 adds the Antigravity provider. This list is frozen with the migration: do not derive it
-// from `AGENT_PROVIDERS`, because a shipped migration must always write the same table.
-const V22_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok', 'opencode', 'antigravity')),`;
-
-// Migration 23 adds `acp`, the one provider of every custom ACP agent. Frozen with the migration, like V22.
-const V23_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok', 'opencode', 'antigravity', 'acp')),`;
-
-// Migration 24 adds the Cursor provider. Frozen with the migration, like V22.
-const V24_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok', 'opencode', 'antigravity', 'acp', 'cursor')),`;
-
-// Migration 26 adds the Cline provider. Frozen with the migration, like V22.
-const V26_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok', 'opencode', 'antigravity', 'acp', 'cursor', 'cline')),`;
-
-// Migration 32 (upstream OpenBot migration 28) removes the provider CHECK, so a new provider no longer needs a
-// table rebuild. The write path validates the provider instead: `ProviderSessions.bindProviderSession` and the
-// thread replay accept only `AGENT_PROVIDERS`. Frozen with the migration.
-const V32_PROVIDER_SESSIONS_COLUMN_SQL = `provider TEXT NOT NULL,`;
-
-// Migration 27 adds what a routine does while the provider plan of its agent is spent. Frozen with the
-// migration. ADD COLUMN appends the declaration at the end of the stored CREATE statement, so the latest
-// schema puts it last as well. Both routine tables end with a column, not a table constraint.
-const V27_ROUTINE_LIMIT_POLICY_COLUMN_SQL = `limit_policy TEXT NOT NULL DEFAULT 'wait' CHECK(limit_policy IN ('wait', 'skip'))`;
-
-// Migration 36 (upstream OpenBot migration 33) adds what a routine does with the occurrences that came due while
-// GoAhead was closed, and the run columns that record those occurrences on one cancelled run. Frozen with the
-// migration. The policy goes after the migration 27 column. ADD COLUMN puts a run column before the UNIQUE
-// constraint that ends the run tables, so the latest schema puts the two run columns there as well.
-const V36_ROUTINE_MISSED_POLICY_COLUMN_SQL = `missed_policy TEXT NOT NULL DEFAULT 'skip' CHECK(missed_policy IN ('skip', 'run-once'))`;
-// Migration 37 adds a routine's optional run condition (JSON: a command and a mode) and the fingerprint of the
-// command's last output, after the migration 36 column. Frozen with the migration.
-const V37_ROUTINE_RUN_CONDITION_COLUMNS_SQL = [
-  "run_condition TEXT CHECK(run_condition IS NULL OR (json_valid(run_condition) AND length(run_condition) <= 4096))",
-  "run_condition_fingerprint TEXT",
-];
-const V36_ROUTINE_RUN_MISSED_COLUMNS_SQL = [
-  "missed_count INTEGER CHECK(missed_count IS NULL OR missed_count >= 1)",
-  "missed_until TEXT",
-] as const;
-
-const BASELINE_AGENT_ROUTINES_END_SQL = `    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS agent_routines_agent`;
-
-const V19_CHANNEL_ROUTINES_END_SQL = `    last_event_sequence INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS channel_routines_channel`;
-
-const BASELINE_ROUTINE_RUNS_END_SQL = `    last_event_sequence INTEGER NOT NULL,
-    UNIQUE(trigger_id, scheduled_for)
-  );
-  CREATE INDEX IF NOT EXISTS routine_runs_routine`;
-
-const V19_CHANNEL_ROUTINE_RUNS_END_SQL = `    last_event_sequence INTEGER NOT NULL,
-    UNIQUE(trigger_id, scheduled_for)
-  );
-  CREATE INDEX IF NOT EXISTS channel_routine_runs_routine`;
-
-// IF NOT EXISTS throughout, because this text is both migration 15 and the tail of the latest
-// schema. A database built from the latest schema and then replayed forward - which is how a
-// test fakes an older version - meets its own tables.
-const ANALYTICS_SCHEMA_SQL = `
-  CREATE TABLE IF NOT EXISTS agent_usage_records (
-    agent_id TEXT NOT NULL,
-    record_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    turn_id TEXT NOT NULL,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    occurred_at TEXT NOT NULL,
-    tokens_json TEXT NOT NULL CHECK(json_valid(tokens_json)),
-    estimated_cost_usd REAL,
-    rate_basis TEXT,
-    recorded_at TEXT NOT NULL,
-    PRIMARY KEY(agent_id, record_id)
-  );
-  CREATE INDEX IF NOT EXISTS agent_usage_date ON agent_usage_records(agent_id, occurred_at);
-  CREATE TABLE IF NOT EXISTS agent_usage_checkpoints (
-    agent_id TEXT NOT NULL,
-    counter_id TEXT NOT NULL,
-    tokens_json TEXT NOT NULL CHECK(json_valid(tokens_json)),
-    PRIMARY KEY(agent_id, counter_id)
-  );
-  CREATE TABLE IF NOT EXISTS agent_usage_activity (
-    agent_id TEXT NOT NULL,
-    activity_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    turn_id TEXT NOT NULL,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK(kind IN ('turn', 'user', 'assistant')),
-    occurred_at TEXT NOT NULL,
-    PRIMARY KEY(agent_id, activity_id)
-  );
-  CREATE INDEX IF NOT EXISTS agent_usage_activity_date ON agent_usage_activity(agent_id, occurred_at);
-`;
-
-// A host-wide report constrains the date and nothing else, and an index that leads with
-// `agent_id` cannot serve a range over `occurred_at` alone - so every such report used to
-// scan all retained history, and a report open across turn completions repeated that scan.
-// The date-leading pair is what a host read seeks on; `agent_usage_date` and
-// `agent_usage_activity_date` still serve a report filtered to one agent.
-//
-// A separate constant, and migration 16 rather than an edit to 15: a database that already
-// ran 15 - every development profile on this machine - would otherwise never meet the index.
-const ANALYTICS_DATE_INDEX_SQL = `
-  CREATE INDEX IF NOT EXISTS agent_usage_occurred ON agent_usage_records(occurred_at);
-  CREATE INDEX IF NOT EXISTS agent_usage_activity_occurred ON agent_usage_activity(occurred_at);
-`;
-
-const LATEST_SCHEMA_SQL =
-  substituteOnce(
-    substituteOnce(
-      substituteOnce(
-        substituteOnce(BASELINE_V8_SCHEMA_SQL, BASELINE_REACTIONS_TABLE_SQL, V12_REACTIONS_TABLE_SQL),
-        BASELINE_PROVIDER_SESSIONS_CHECK_SQL,
-        V32_PROVIDER_SESSIONS_COLUMN_SQL,
-      ),
-      BASELINE_AGENT_ROUTINES_END_SQL,
-      withRoutinePolicies(BASELINE_AGENT_ROUTINES_END_SQL),
-    ),
-    BASELINE_ROUTINE_RUNS_END_SQL,
-    withRunMissedColumns(BASELINE_ROUTINE_RUNS_END_SQL),
-  ) +
-  ANALYTICS_SCHEMA_SQL +
-  ANALYTICS_DATE_INDEX_SQL +
-  CHANNEL_SCHEMA_SQL +
-  substituteOnce(
-    substituteOnce(
-      CHANNEL_SETTINGS_SCHEMA_SQL,
-      V19_CHANNEL_ROUTINES_END_SQL,
-      withRoutinePolicies(V19_CHANNEL_ROUTINES_END_SQL),
-    ),
-    V19_CHANNEL_ROUTINE_RUNS_END_SQL,
-    withRunMissedColumns(V19_CHANNEL_ROUTINE_RUNS_END_SQL),
-  ) +
-  MCP_SERVERS_SCHEMA_SQL +
-  MESSAGING_SCHEMA_SQL +
-  MESSAGING_INBOX_SCHEMA_SQL +
-  SLACK_CLIENT_SCHEMA_SQL +
-  MESSAGING_DRAFTS_SCHEMA_SQL +
-  MESSAGING_AUTO_REPLY_SCHEMA_SQL +
-  // Migration 33 (upstream OpenBot migration 29).
-  PROVIDER_HISTORY_SCHEMA_SQL +
-  // Migration 34 (upstream OpenBot migration 31).
-  ROUTINE_FLOW_SCHEMA_SQL +
-  // Migration 35 (upstream OpenBot migration 32).
-  AGENT_MEMORY_SELECTION_SCHEMA_SQL;
-
-/** The end of a routine table with the migration 27, 36 and 37 columns after its last one. */
-function withRoutinePolicies(tableEnd: string): string {
-  return tableEnd.replace(
-    "last_event_sequence INTEGER NOT NULL\n",
-    `last_event_sequence INTEGER NOT NULL,\n    ${V27_ROUTINE_LIMIT_POLICY_COLUMN_SQL},\n    ${V36_ROUTINE_MISSED_POLICY_COLUMN_SQL},\n    ${V37_ROUTINE_RUN_CONDITION_COLUMNS_SQL.join(",\n    ")}\n`,
-  );
-}
-
-/** The end of a routine run table with the migration 36 columns before its UNIQUE constraint. */
-function withRunMissedColumns(tableEnd: string): string {
-  return tableEnd.replace(
-    "last_event_sequence INTEGER NOT NULL,\n",
-    `last_event_sequence INTEGER NOT NULL,\n${V36_ROUTINE_RUN_MISSED_COLUMNS_SQL.map((column) => `    ${column},\n`).join("")}`,
-  );
-}
-
-// Silence here would ship new installs a table the migrations never produce, so an edit to the baseline
-// that moves this declaration out from under the substitution has to be loud.
-function substituteOnce(source: string, search: string, replacement: string): string {
-  const index = source.indexOf(search);
-  if (index === -1 || source.indexOf(search, index + search.length) !== -1) {
-    throw new Error("The latest OpenBot schema could not be derived from the v8 baseline.");
-  }
-  return `${source.slice(0, index)}${replacement}${source.slice(index + search.length)}`;
-}
 
 export interface OpenBotMigrationOptions {
   appliedAt?: string;
   warn?: (message: string, error: unknown) => void;
+  closedCleanly?: boolean;
+  throughVersion?: number;
 }
 
 const logger = createOpenBotLogger("openbot-database-schema");
 
-interface OpenBotMigration {
-  version: number;
-  disableForeignKeys?: boolean;
-  vacuumAfterCommit?: boolean;
-  up: (db: DatabaseSync, appliedAt: string) => void;
+export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? BASELINE_SCHEMA_VERSION;
+
+export function openBotDatabaseNeedsMigration(db: DatabaseSync): boolean {
+  if (!hasExistingSchema(db)) return true;
+  const currentVersion = latestAppliedVersion(readAppliedVersions(db));
+  return MIGRATIONS.some((migration) => migration.version > currentVersion);
 }
-
-const MIGRATIONS: readonly OpenBotMigration[] = [
-  {
-    version: BASELINE_SCHEMA_VERSION,
-    disableForeignKeys: true,
-    vacuumAfterCommit: true,
-    up: migrateToBaselineV8,
-  },
-  {
-    version: 9,
-    up: refreshProviderSessionsForDynamicTools,
-  },
-  {
-    version: 10,
-    up: refreshProviderSessionsForDynamicTools,
-  },
-  {
-    version: 11,
-    up: refreshProviderSessionsForDynamicTools,
-  },
-  {
-    version: 12,
-    up: migrateReactionsForAgentActors,
-  },
-  {
-    version: 13,
-    disableForeignKeys: true,
-    vacuumAfterCommit: true,
-    up: rewriteGeneratedAgentIds,
-  },
-  {
-    version: 14,
-    up: refreshProviderSessionsForDynamicTools,
-  },
-  { version: 15, up: (db) => db.exec(ANALYTICS_SCHEMA_SQL) },
-  { version: 16, up: (db) => db.exec(ANALYTICS_DATE_INDEX_SQL) },
-  {
-    version: 17,
-    // `projection_turns.provider_session_id` is a child reference with ON DELETE SET NULL. Dropping the
-    // parent with foreign keys on would fire that action and blank the column on every turn ever taken,
-    // so the rebuild runs with them off - the same reason migration 13 does.
-    disableForeignKeys: true,
-    up: migrateProviderSessionsForOpencode,
-  },
-  {
-    version: 18,
-    up: (db) => db.exec(CHANNEL_SCHEMA_SQL),
-  },
-  {
-    version: 19,
-    // The pre-merge channel branch used versions 17 and 18 for channel storage and settings. Those
-    // versions were never shipped, but a development profile can still have both markers while
-    // retaining the old provider-session constraint. Repair that table before adding the settings
-    // projections so the profile also receives the main branch's migration 17 behavior.
-    disableForeignKeys: true,
-    up: migrateChannelSettings,
-  },
-  {
-    version: 20,
-    // Only creates a table, so no foreign-key pause and no vacuum.
-    up: (db) => db.exec(MCP_SERVERS_SCHEMA_SQL),
-  },
-  {
-    version: 21,
-    // Renames rows only, so no foreign-key pause, no vacuum, and nothing to mirror in the latest
-    // schema: a new database has no rows to rename.
-    up: freeComputerUseServerName,
-  },
-  {
-    version: 22,
-    // The same table rebuild as migration 17, so foreign keys stay off for the same reason: with them
-    // on, the DROP would set `projection_turns.provider_session_id` to NULL on every turn.
-    disableForeignKeys: true,
-    up: migrateProviderSessionsForAntigravity,
-  },
-  {
-    version: 23,
-    // The same rebuild as migrations 17 and 22, with foreign keys off for the same reason.
-    disableForeignKeys: true,
-    up: migrateProviderSessionsForCustomAgents,
-  },
-  {
-    version: 24,
-    // The same rebuild as migrations 17, 22 and 23, with foreign keys off for the same reason.
-    disableForeignKeys: true,
-    up: migrateProviderSessionsForCursor,
-  },
-  {
-    version: 25,
-    // Only creates tables, so no foreign-key pause and no vacuum.
-    up: (db) => db.exec(MESSAGING_SCHEMA_SQL),
-  },
-  {
-    version: 26,
-    // The same rebuild as migrations 17, 22, 23 and 24, with foreign keys off for the same reason.
-    disableForeignKeys: true,
-    up: migrateProviderSessionsForCline,
-  },
-  {
-    version: 27,
-    // Adds a column with a constant default to two tables: no rebuild, so no foreign-key pause and no
-    // vacuum. Every existing routine keeps waiting, which is what it did before.
-    up: addRoutineLimitPolicy,
-  },
-  {
-    version: 28,
-    // Only creates tables and an index, as migration 25 does: no foreign-key pause and no vacuum.
-    up: (db) => db.exec(MESSAGING_INBOX_SCHEMA_SQL),
-  },
-  {
-    version: 29,
-    // Creates tables and an index and copies rows into them: no rebuild, so no foreign-key pause and
-    // no vacuum. The inbox rows stay where they are.
-    up: addSlackClientCache,
-  },
-  {
-    version: 30,
-    // Only creates a table and an index, as migration 25 does: no foreign-key pause and no vacuum.
-    // Drafts were kept in memory before, so there are no rows to copy.
-    up: (db) => db.exec(MESSAGING_DRAFTS_SCHEMA_SQL),
-  },
-  {
-    version: 31,
-    // Only creates a table, as migration 30 does: no foreign-key pause and no vacuum. The list starts
-    // empty, so every conversation still needs approval after the upgrade.
-    up: (db) => db.exec(MESSAGING_AUTO_REPLY_SCHEMA_SQL),
-  },
-  {
-    version: 32,
-    // Upstream OpenBot migration 28. The same rebuild as migrations 17, 22, 23, 24 and 26, with foreign keys
-    // off for the same reason: with them on, the DROP sets `projection_turns.provider_session_id` to NULL.
-    disableForeignKeys: true,
-    up: removeProviderSessionsCheck,
-  },
-  {
-    version: 33,
-    // Upstream OpenBot migration 29. Provider history is additive durable import state: three new tables and
-    // their indexes. Existing conversation projections and provider sessions stay untouched, so foreign keys
-    // stay on and no vacuum is needed. The tables use IF NOT EXISTS, so only an index name can collide.
-    up: (db) => db.exec(PROVIDER_HISTORY_SCHEMA_SQL),
-  },
-  {
-    version: 34,
-    // Upstream OpenBot migration 31. GoAhead leaves out upstream migration 30 (webhook triggers), and no
-    // column here refers to its tables. Only creates tables and indexes, so no foreign-key pause and no
-    // vacuum. Existing routines have no links, so every routine keeps running only its own agent, which is
-    // what it did before. The tables use IF NOT EXISTS, so only an index name can collide.
-    up: (db) => db.exec(ROUTINE_FLOW_SCHEMA_SQL),
-  },
-  {
-    version: 35,
-    // Upstream OpenBot migration 32. Adds the memory selection table, the FTS5 search index over
-    // `projection_agent_memories` and the triggers that keep both current, then fills them: an index rebuild and
-    // one selection row per memory. Memory rows stay unchanged, so foreign keys stay on. The index uses the rowid
-    // of a table with a TEXT primary key, which a VACUUM can change: a later migration that vacuums must also
-    // rebuild `agent_memory_search`.
-    up: migrateAgentMemorySelection,
-  },
-  {
-    version: 36,
-    // Upstream OpenBot migration 33. Adds columns with a constant default or none to four tables: no rebuild, so
-    // no foreign-key pause and no vacuum. Every existing routine keeps skipping the occurrences it missed, which is what it did
-    // before, and every existing run records no missed occurrence.
-    up: addRoutineMissedRuns,
-  },
-  {
-    version: 37,
-    // Adds two nullable columns with no default to the two routine tables: no rebuild, so no
-    // foreign-key pause and no vacuum. Every existing routine has no run condition, so each scheduled
-    // run starts the agent, which is what it did before.
-    up: addRoutineRunConditions,
-  },
-];
-
-const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? BASELINE_SCHEMA_VERSION;
 
 export function migrateOpenBotDatabase(db: DatabaseSync, options: OpenBotMigrationOptions = {}): void {
   validateMigrationRegistry();
   const appliedAt = options.appliedAt ?? new Date().toISOString();
-  if (!hasExistingSchema(db)) {
-    createLatestDatabase(db, appliedAt);
-    assertQuickCheck(db);
-    return;
-  }
-
+  const isNewDatabase = !hasExistingSchema(db);
   const appliedVersions = readAppliedVersions(db);
-  // Before the version checks: an upstream database at a version above ours must get the lineage error, not the
-  // downgrade error, because a newer GoAhead can not open it either.
+  // Before the version checks: an upstream OpenBot database must get the lineage error, not a version error,
+  // because GoAhead versions 28-31 are different migrations from upstream versions 28-31.
   assertGoAheadLineage(db, appliedVersions);
   validateAppliedVersions(appliedVersions);
   const currentVersion = latestAppliedVersion(appliedVersions);
-  const pending = MIGRATIONS.filter((migration) => migration.version > currentVersion);
+  const throughVersion = options.throughVersion ?? LATEST_SCHEMA_VERSION;
+  const pending = MIGRATIONS.filter(
+    (migration) => migration.version > currentVersion && migration.version <= throughVersion,
+  );
+  let violations: Map<string, number> | undefined;
 
   for (const migration of pending) {
     try {
-      runMigration(db, migration, appliedAt);
+      violations ??= readOldForeignKeyViolations(db);
+      violations = runMigration(db, migration, appliedAt, violations);
     } catch (error) {
-      throw new Error(`OpenBot database migration to version ${migration.version} failed.`, {
+      logger.error(`GoAhead database migration to version ${migration.version} failed.`, toLogValue(error));
+      throw new Error(`GoAhead database migration to version ${migration.version} failed.`, {
         cause: error,
       });
     }
 
-    if (migration.vacuumAfterCommit) {
+    if (migration.vacuumAfterCommit && !isNewDatabase) {
       try {
         db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
         db.exec("VACUUM");
         db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       } catch (error) {
         const warn = options.warn ?? ((message: string, cause: unknown) => logger.warn(message, toLogValue(cause)));
-        warn(`OpenBot database migration to version ${migration.version} succeeded, but VACUUM failed.`, error);
+        warn(`GoAhead database migration to version ${migration.version} succeeded, but VACUUM failed.`, error);
       }
     }
   }
 
-  assertQuickCheck(db);
-}
-
-function migrateToBaselineV8(db: DatabaseSync, appliedAt: string): void {
-  db.exec(BASELINE_V8_SCHEMA_SQL);
-  db.prepare(
-    `INSERT OR IGNORE INTO projection_thread_read_baselines (
-       thread_id, through_message_id, initialized_at
-     )
-     SELECT thread.thread_id,
-       (
-         SELECT message.message_id
-         FROM projection_thread_messages message
-         WHERE message.thread_id = thread.thread_id
-         ORDER BY message.created_at DESC, message.ordinal DESC, message.message_id DESC
-         LIMIT 1
-       ),
-       ?
-     FROM projection_threads thread`,
-  ).run(appliedAt);
-  db.prepare(
-    `INSERT OR IGNORE INTO projection_direct_reads (
-       thread_id, member_id, last_read_sequence, updated_at
-     )
-     SELECT thread_id, member_a_id, last_event_sequence, ?
-     FROM projection_direct_threads`,
-  ).run(appliedAt);
-  db.prepare(
-    `INSERT OR IGNORE INTO projection_direct_reads (
-       thread_id, member_id, last_read_sequence, updated_at
-     )
-     SELECT thread_id, member_b_id, last_event_sequence, ?
-     FROM projection_direct_threads`,
-  ).run(appliedAt);
-  compactConversationHistory(db);
-  compactMailboxHistory(db);
-  migrateProviderSessionsForGrok(db);
-  migrateReactionsForActors(db);
-}
-
-function refreshProviderSessionsForDynamicTools(db: DatabaseSync, appliedAt: string): void {
-  db.prepare(
-    `UPDATE projection_provider_sessions
-     SET state = 'inactive', updated_at = ?
-     WHERE state = 'active'`,
-  ).run(appliedAt);
+  if (pending.length > 0 || !options.closedCleanly) assertQuickCheck(db);
 }
 
 function validateMigrationRegistry(): void {
@@ -777,7 +72,7 @@ function validateMigrationRegistry(): void {
   for (const migration of MIGRATIONS) {
     if (!Number.isInteger(migration.version) || migration.version !== expectedVersion) {
       throw new Error(
-        `OpenBot database migrations must be contiguous from version ${BASELINE_SCHEMA_VERSION}; expected ${expectedVersion}.`,
+        `GoAhead database migrations must be contiguous from version ${BASELINE_SCHEMA_VERSION}; expected ${expectedVersion}.`,
       );
     }
     expectedVersion += 1;
@@ -790,20 +85,6 @@ function hasExistingSchema(db: DatabaseSync): boolean {
   );
 }
 
-function createLatestDatabase(db: DatabaseSync, appliedAt: string): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.exec(LATEST_SCHEMA_SQL);
-    const insertMigration = db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)");
-    for (const migration of MIGRATIONS) insertMigration.run(migration.version, appliedAt);
-    assertForeignKeys(db);
-    db.exec("COMMIT");
-  } catch (error) {
-    if (db.isTransaction) db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
 function readAppliedVersions(db: DatabaseSync): number[] {
   const hasMigrationTable = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'")
@@ -814,18 +95,22 @@ function readAppliedVersions(db: DatabaseSync): number[] {
     .all()
     .map((row) => {
       if (!isDynamicRecord(row) || !isNumber(row.version) || !Number.isInteger(row.version)) {
-        throw new Error("OpenBot database contains an invalid schema migration version.");
+        throw new Error("GoAhead database contains an invalid schema migration version.");
       }
       return row.version;
     });
 }
 
+export class NewerDatabaseError extends Error {
+  constructor(databaseVersion: number, supportedVersion: number) {
+    super(`GoAhead database version ${databaseVersion} is newer than this application supports (${supportedVersion}).`);
+  }
+}
+
 function validateAppliedVersions(versions: number[]): void {
   const newestVersion = versions.at(-1) ?? 0;
   if (newestVersion > LATEST_SCHEMA_VERSION) {
-    throw new Error(
-      `OpenBot database version ${newestVersion} is newer than this application supports (${LATEST_SCHEMA_VERSION}).`,
-    );
+    throw new NewerDatabaseError(newestVersion, LATEST_SCHEMA_VERSION);
   }
 
   const baselineAndLater = versions.filter((version) => version >= BASELINE_SCHEMA_VERSION);
@@ -833,21 +118,82 @@ function validateAppliedVersions(versions: number[]): void {
   const applied = new Set(baselineAndLater);
   for (let version = BASELINE_SCHEMA_VERSION; version <= newestVersion; version += 1) {
     if (!applied.has(version)) {
-      throw new Error(`OpenBot database migration history is missing version ${version}.`);
+      throw new Error(`GoAhead database migration history is missing version ${version}.`);
     }
   }
 }
 
-// GoAhead and upstream OpenBot share migrations 8 to 27. From 28 on, the same marker means a different schema
-// change in each application, and both name the file `openbot.db`. Each GoAhead migration below creates its table
-// in the same transaction as its marker, and no GoAhead code drops these tables. Upstream OpenBot never creates
-// them (upstream 28 rebuilds `projection_provider_sessions`, and 29 to 31 add provider history, webhook and
-// routine flow tables). So a marker without its table means that upstream OpenBot wrote the database. Running
-// GoAhead migrations on it would skip the GoAhead schema of those versions, so stop before any write.
-// GoAhead 33, 34 and 35 create the same provider history, routine flow and memory selection tables as upstream 29,
-// 31 and 32, and GoAhead 36 adds the same routine columns as upstream 33, so those prove nothing either way: only a
-// missing GoAhead table below is the signal.
-// A later GoAhead migration that drops or renames one of these tables must change this list in the same change.
+function latestAppliedVersion(versions: number[]): number {
+  const baselineAndLater = versions.filter((version) => version >= BASELINE_SCHEMA_VERSION);
+  return baselineAndLater.at(-1) ?? BASELINE_SCHEMA_VERSION - 1;
+}
+
+function runMigration(
+  db: DatabaseSync,
+  migration: OpenBotMigration,
+  appliedAt: string,
+  violationsBefore: ReadonlyMap<string, number>,
+): Map<string, number> {
+  if (migration.disableForeignKeys) db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    return withTransaction(db, () => {
+      migration.up(db, appliedAt);
+      db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)").run(migration.version, appliedAt);
+      return assertForeignKeys(db, violationsBefore);
+    });
+  } finally {
+    if (migration.disableForeignKeys) db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function assertForeignKeys(db: DatabaseSync, before: ReadonlyMap<string, number>): Map<string, number> {
+  const violations = readForeignKeyViolations(db);
+  const added = [...violations]
+    .map(([reference, count]) => [reference, count - (before.get(reference) ?? 0)] as const)
+    .filter(([, count]) => count > 0);
+  if (added.length > 0) {
+    const total = added.reduce((sum, [, count]) => sum + count, 0);
+    const references = added.map(([reference]) => reference).join(", ");
+    throw new Error(`GoAhead database migration produced ${total} foreign-key violation(s) in ${references}.`);
+  }
+  return violations;
+}
+
+function readForeignKeyViolations(db: DatabaseSync): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const row of db.prepare("PRAGMA foreign_key_check").all()) {
+    const reference = isDynamicRecord(row) ? `${String(row.table)} -> ${String(row.parent)}` : "unknown";
+    counts.set(reference, (counts.get(reference) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function readOldForeignKeyViolations(db: DatabaseSync): Map<string, number> {
+  const violations = readForeignKeyViolations(db);
+  if (violations.size > 0) {
+    logger.warn("The GoAhead database has foreign-key violations from before this upgrade. They stay as they are.", {
+      violations: Object.fromEntries(violations),
+    });
+  }
+  return violations;
+}
+
+function assertQuickCheck(db: DatabaseSync): void {
+  assertQuickCheckResult(
+    db
+      .prepare("PRAGMA quick_check(20)")
+      .all()
+      .map((row) => (isDynamicRecord(row) ? row.quick_check : row)),
+  );
+}
+
+export function assertQuickCheckResult(problems: readonly unknown[]): void {
+  if (problems.length === 1 && problems[0] === "ok") return;
+  logger.error("The GoAhead database failed its integrity check.", { problems });
+  throw new Error(sourceText("error.backend.databaseIntegrity"));
+}
+
+// GoAhead versions 28-31 create these tables. An OpenBot database has versions 28-31 too, but without them.
 const GOAHEAD_LINEAGE_TABLES: readonly (readonly [version: number, table: string])[] = [
   [28, "projection_messaging_inbox"],
   [29, "slack_messages"],
@@ -863,723 +209,4 @@ function assertGoAheadLineage(db: DatabaseSync, versions: readonly number[]): vo
       throw new Error(sourceText("error.storage.upstreamDatabase"));
     }
   }
-}
-
-function latestAppliedVersion(versions: number[]): number {
-  const baselineAndLater = versions.filter((version) => version >= BASELINE_SCHEMA_VERSION);
-  return baselineAndLater.at(-1) ?? BASELINE_SCHEMA_VERSION - 1;
-}
-
-function runMigration(db: DatabaseSync, migration: OpenBotMigration, appliedAt: string): void {
-  if (migration.disableForeignKeys) db.exec("PRAGMA foreign_keys = OFF");
-  try {
-    db.exec("BEGIN IMMEDIATE");
-    migration.up(db, appliedAt);
-    db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)").run(migration.version, appliedAt);
-    assertForeignKeys(db);
-    db.exec("COMMIT");
-  } catch (error) {
-    if (db.isTransaction) db.exec("ROLLBACK");
-    throw error;
-  } finally {
-    if (migration.disableForeignKeys) db.exec("PRAGMA foreign_keys = ON");
-  }
-}
-
-function assertForeignKeys(db: DatabaseSync): void {
-  const violations = db.prepare("PRAGMA foreign_key_check").all();
-  if (violations.length > 0) {
-    throw new Error(`OpenBot database migration produced ${violations.length} foreign-key violation(s).`);
-  }
-}
-
-function assertQuickCheck(db: DatabaseSync): void {
-  const result = db.prepare("PRAGMA quick_check").get();
-  if (isDynamicRecord(result) && result.quick_check === "ok") return;
-  throw new Error("OpenBot database failed its integrity check.");
-}
-
-function migrateReactionsForActors(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA table_info(projection_reactions)").all();
-  if (columns.some((column) => isDynamicRecord(column) && isString(column.name) && column.name === "actor_kind")) {
-    return;
-  }
-  db.exec(`
-    CREATE TABLE projection_reactions_v8 (
-      agent_id TEXT NOT NULL,
-      message_id TEXT NOT NULL,
-      emoji TEXT NOT NULL,
-      actor_kind TEXT NOT NULL CHECK(actor_kind IN ('user', 'bot')),
-      actor_bot_id TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      last_event_sequence INTEGER NOT NULL,
-      PRIMARY KEY(agent_id, message_id, actor_kind, actor_bot_id)
-    );
-    INSERT INTO projection_reactions_v8 (
-      agent_id, message_id, emoji, actor_kind, actor_bot_id, updated_at, last_event_sequence
-    )
-    SELECT agent_id, message_id, emoji, 'user', '', updated_at, last_event_sequence
-    FROM projection_reactions;
-    DROP TABLE projection_reactions;
-    ALTER TABLE projection_reactions_v8 RENAME TO projection_reactions;
-  `);
-}
-
-function migrateProviderSessionsForGrok(db: DatabaseSync): void {
-  const row = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'projection_provider_sessions'")
-    .get();
-  if (!isDynamicRecord(row) || !isString(row.sql) || row.sql.includes("'grok'")) return;
-
-  db.exec(`
-    CREATE TABLE projection_provider_sessions_v7 (
-      id TEXT PRIMARY KEY,
-      thread_id TEXT NOT NULL REFERENCES projection_threads(thread_id) ON DELETE CASCADE,
-      provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok')),
-      external_session_id TEXT NOT NULL,
-      model TEXT NOT NULL,
-      effort TEXT NOT NULL,
-      state TEXT NOT NULL CHECK(state IN ('active', 'inactive', 'failed')),
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      resume_cursor TEXT,
-      last_event_sequence INTEGER NOT NULL,
-      UNIQUE(provider, external_session_id)
-    );
-    INSERT INTO projection_provider_sessions_v7 (
-      id, thread_id, provider, external_session_id, model, effort, state,
-      created_at, updated_at, resume_cursor, last_event_sequence
-    ) SELECT
-      id, thread_id, provider, external_session_id, model, effort, state,
-      created_at, updated_at, resume_cursor, last_event_sequence
-    FROM projection_provider_sessions;
-    DROP TABLE projection_provider_sessions;
-    ALTER TABLE projection_provider_sessions_v7 RENAME TO projection_provider_sessions;
-    CREATE INDEX provider_sessions_thread
-      ON projection_provider_sessions(thread_id, provider, state);
-  `);
-}
-
-// The provider list is a CHECK constraint, which SQLite can only widen by rebuilding the table. Guarding
-// on the stored SQL rather than on the schema version keeps this a no-op for a database `createLatestDatabase`
-// already built with the wider list, which is how a test replays an older version forward over a fresh file.
-// The index goes with the table it indexes, so it has to be recreated by name after the rename.
-function migrateProviderSessionsForOpencode(db: DatabaseSync): void {
-  widenProviderSessionsCheck(db, "'opencode'", V17_PROVIDER_SESSIONS_CHECK_SQL, "projection_provider_sessions_v17");
-}
-
-// Migration 22 uses the same rebuild as migration 17. It also skips a table that already allows the
-// provider, so a replay over a database that `createLatestDatabase` built does not rebuild the table.
-function migrateProviderSessionsForAntigravity(db: DatabaseSync): void {
-  widenProviderSessionsCheck(db, "'antigravity'", V22_PROVIDER_SESSIONS_CHECK_SQL, "projection_provider_sessions_v22");
-}
-
-// Migration 23 adds the custom ACP agent provider with the same rebuild and the same skip.
-function migrateProviderSessionsForCustomAgents(db: DatabaseSync): void {
-  widenProviderSessionsCheck(db, "'acp'", V23_PROVIDER_SESSIONS_CHECK_SQL, "projection_provider_sessions_v23");
-}
-
-// Migration 24 adds the Cursor provider with the same rebuild and the same skip.
-function migrateProviderSessionsForCursor(db: DatabaseSync): void {
-  widenProviderSessionsCheck(db, "'cursor'", V24_PROVIDER_SESSIONS_CHECK_SQL, "projection_provider_sessions_v24");
-}
-
-// Migration 26 adds the Cline provider with the same rebuild and the same skip.
-function migrateProviderSessionsForCline(db: DatabaseSync): void {
-  widenProviderSessionsCheck(db, "'cline'", V26_PROVIDER_SESSIONS_CHECK_SQL, "projection_provider_sessions_v26");
-}
-
-// Migration 27 adds the routine limit policy to the agent and the channel routine tables.
-function addRoutineLimitPolicy(db: DatabaseSync): void {
-  for (const table of ["projection_agent_routines", "projection_channel_routines"]) {
-    // A development profile that ran this version before it shipped has the column already.
-    const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-    if (columns.some((column) => isDynamicRecord(column) && column.name === "limit_policy")) continue;
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${V27_ROUTINE_LIMIT_POLICY_COLUMN_SQL}`);
-  }
-}
-
-// Migration 29 adds the Slack client cache. Every inbox message becomes a cached message, and every
-// inbox conversation a cached conversation. Slack sync fills the names, members, files and reactions
-// later; until then a conversation has an empty name. The person received each of these messages, so
-// they are a member. OR IGNORE keeps a row that a development profile which ran this version before it
-// shipped already has. last_read_ts stays NULL: the inbox read mark is GoAhead's, not the person's Slack
-// read mark. Sync fills it from conversations.info. The loaded range stays NULL: the inbox kept only
-// some messages, so the copied rows are not a range with no gap. The first open reads the newest page.
-function addSlackClientCache(db: DatabaseSync, appliedAt: string): void {
-  db.exec(SLACK_CLIENT_SCHEMA_SQL);
-  db.exec(`
-    INSERT OR IGNORE INTO slack_messages
-      (connection_id, channel_id, ts, thread_ts, author_id, text, files_json, reactions_json, deleted, subtype,
-       reply_count, cached_at)
-    SELECT connection_id, platform_channel_id, platform_message_id, thread_key, author_id, text, '[]', '[]', 0, NULL,
-      0, sent_at
-    FROM projection_messaging_inbox
-  `);
-  db.prepare(
-    `INSERT OR IGNORE INTO slack_conversations
-       (connection_id, channel_id, kind, name, member_ids_json, is_member, last_read_ts, unread_count,
-        last_activity_ts, last_opened_at, oldest_loaded_ts, newest_loaded_ts, has_more_history, updated_at)
-     SELECT m.connection_id, m.platform_channel_id,
-       CASE
-         WHEN SUM(m.kind = 'direct') > 0 THEN 'im'
-         WHEN SUM(m.kind = 'group') > 0 THEN 'mpim'
-         ELSE 'channel'
-       END,
-       '', '[]', 1, NULL, 0, MAX(m.platform_message_id), NULL, NULL, NULL, 1, ?
-     FROM projection_messaging_inbox m
-     GROUP BY m.connection_id, m.platform_channel_id`,
-  ).run(appliedAt);
-}
-
-// Migration 36 (upstream OpenBot migration 33) adds the missed-run policy to the routine tables and the missed-run
-// record to the run tables.
-function addRoutineMissedRuns(db: DatabaseSync): void {
-  const additions: readonly (readonly [string, string, string])[] = [
-    ["projection_agent_routines", "missed_policy", V36_ROUTINE_MISSED_POLICY_COLUMN_SQL],
-    ["projection_channel_routines", "missed_policy", V36_ROUTINE_MISSED_POLICY_COLUMN_SQL],
-    ...["projection_routine_runs", "projection_channel_routine_runs"].flatMap((table) =>
-      V36_ROUTINE_RUN_MISSED_COLUMNS_SQL.map(
-        (column) => [table, column.slice(0, column.indexOf(" ")), column] as const,
-      ),
-    ),
-  ];
-  for (const [table, name, column] of additions) {
-    // A development profile that ran this version before it shipped has the column already.
-    const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-    if (columns.some((existing) => isDynamicRecord(existing) && existing.name === name)) continue;
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`);
-  }
-}
-
-// Migration 37 adds the optional run condition of a routine: a shell command the host runs before a scheduled
-// run, and the fingerprint of its last output.
-function addRoutineRunConditions(db: DatabaseSync): void {
-  for (const table of ["projection_agent_routines", "projection_channel_routines"]) {
-    for (const column of V37_ROUTINE_RUN_CONDITION_COLUMNS_SQL) {
-      const name = column.slice(0, column.indexOf(" "));
-      // A development profile that ran this version before it shipped has the column already.
-      const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-      if (columns.some((existing) => isDynamicRecord(existing) && existing.name === name)) continue;
-      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`);
-    }
-  }
-}
-
-// Migrations 17, 22, 23, 24 and 26 share this SQL. Each migration gives its own CHECK line and staging table name, so the
-// SQL that migration 17 runs is the same text as before this function was shared.
-function widenProviderSessionsCheck(
-  db: DatabaseSync,
-  providerLiteral: string,
-  providerCheckSql: string,
-  stagingTable: string,
-): void {
-  const row = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'projection_provider_sessions'")
-    .get();
-  if (!isDynamicRecord(row) || !isString(row.sql) || row.sql.includes(providerLiteral)) return;
-  rebuildProviderSessions(db, providerCheckSql, stagingTable);
-}
-
-// Migration 32 (upstream OpenBot migration 28) removes the provider CHECK. It rebuilds the table with no
-// guard: every shipped table has the CHECK, and a rebuild of a table that has none keeps every row.
-function removeProviderSessionsCheck(db: DatabaseSync): void {
-  rebuildProviderSessions(db, V32_PROVIDER_SESSIONS_COLUMN_SQL, "projection_provider_sessions_v32");
-}
-
-// The rebuild that migrations 17, 22, 23, 24, 26 and 32 run. `providerColumnSql` is the whole provider column
-// line. The SQL text stays the same as the text that migrations 17 to 26 ran before this function was shared.
-function rebuildProviderSessions(db: DatabaseSync, providerColumnSql: string, stagingTable: string): void {
-  db.exec(`
-    CREATE TABLE ${stagingTable} (
-      id TEXT PRIMARY KEY,
-      thread_id TEXT NOT NULL REFERENCES projection_threads(thread_id) ON DELETE CASCADE,
-      ${providerColumnSql}
-      external_session_id TEXT NOT NULL,
-      model TEXT NOT NULL,
-      effort TEXT NOT NULL,
-      state TEXT NOT NULL CHECK(state IN ('active', 'inactive', 'failed')),
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      resume_cursor TEXT,
-      last_event_sequence INTEGER NOT NULL,
-      UNIQUE(provider, external_session_id)
-    );
-    INSERT INTO ${stagingTable} (
-      id, thread_id, provider, external_session_id, model, effort, state,
-      created_at, updated_at, resume_cursor, last_event_sequence
-    ) SELECT
-      id, thread_id, provider, external_session_id, model, effort, state,
-      created_at, updated_at, resume_cursor, last_event_sequence
-    FROM projection_provider_sessions;
-    DROP TABLE projection_provider_sessions;
-    ALTER TABLE ${stagingTable} RENAME TO projection_provider_sessions;
-    CREATE INDEX provider_sessions_thread
-      ON projection_provider_sessions(thread_id, provider, state);
-  `);
-}
-
-/**
- * Moves a saved MCP server off the name the Computer Use driver now takes.
- *
- * The name was free until the driver arrived, so a database written by a shipped release can hold a
- * server the user named `computer_use`. OpenBot appends its own entry under that name at spawn, and
- * all four providers key servers by name: Codex and Claude would hand the agent OpenBot's server in
- * place of the user's, and an ACP provider would receive two servers with one name. The row is
- * renamed rather than removed, so the user keeps the server, its command and its secrets, and sees
- * the new name where they configured it. A later save cannot take the name back: `mcpConfigErrors`
- * refuses it.
- */
-function freeComputerUseServerName(db: DatabaseSync): void {
-  const colliding = db
-    .prepare("SELECT mcp_server_id, name FROM projection_mcp_servers WHERE lower(name) = ?")
-    .all(COMPUTER_USE_MCP_SERVER_NAME);
-  if (colliding.length === 0) return;
-
-  const taken = new Set<string>();
-  for (const row of db.prepare("SELECT name FROM projection_mcp_servers").all()) {
-    if (isDynamicRecord(row) && isString(row.name)) taken.add(row.name.toLowerCase());
-  }
-  const rename = db.prepare("UPDATE projection_mcp_servers SET name = ? WHERE mcp_server_id = ?");
-  for (const row of colliding) {
-    if (!isDynamicRecord(row) || !isString(row.mcp_server_id) || !isString(row.name)) continue;
-    const name = freeServerName(taken);
-    taken.add(name.toLowerCase());
-    rename.run(name, row.mcp_server_id);
-    logger.warn("Renamed a saved MCP server, because Computer Use now uses its name.", {
-      from: row.name,
-      to: name,
-    });
-  }
-}
-
-/** The first `computer_use_saved` name the unique index will accept. */
-function freeServerName(taken: ReadonlySet<string>): string {
-  const base = `${COMPUTER_USE_MCP_SERVER_NAME}_saved`;
-  if (!taken.has(base)) return base;
-  for (let suffix = 2; ; suffix += 1) {
-    const candidate = `${base}_${suffix}`;
-    if (!taken.has(candidate)) return candidate;
-  }
-}
-
-function migrateChannelSettings(db: DatabaseSync): void {
-  migrateProviderSessionsForOpencode(db);
-  db.exec(CHANNEL_SETTINGS_SCHEMA_SQL);
-}
-
-// The actor column is part of the primary key, so the table is rebuilt rather than altered. There are no
-// indexes and no foreign keys in either direction, so foreign keys stay on: switching them off here could
-// only hide a real violation raised by the same transaction.
-function migrateReactionsForAgentActors(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA table_info(projection_reactions)").all();
-  if (columns.some((column) => isDynamicRecord(column) && column.name === "actor_agent_id")) return;
-
-  db.exec(`
-    CREATE TABLE projection_reactions_v12 (
-      agent_id TEXT NOT NULL,
-      message_id TEXT NOT NULL,
-      emoji TEXT NOT NULL,
-      actor_kind TEXT NOT NULL CHECK(actor_kind IN ('user', 'agent')),
-      actor_agent_id TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      last_event_sequence INTEGER NOT NULL,
-      PRIMARY KEY(agent_id, message_id, actor_kind, actor_agent_id)
-    );
-    INSERT INTO projection_reactions_v12 (
-      agent_id, message_id, emoji, actor_kind, actor_agent_id, updated_at, last_event_sequence
-    )
-    SELECT
-      agent_id, message_id, emoji,
-      CASE actor_kind WHEN 'bot' THEN 'agent' ELSE actor_kind END,
-      actor_bot_id, updated_at, last_event_sequence
-    FROM projection_reactions;
-    DROP TABLE projection_reactions;
-    ALTER TABLE projection_reactions_v12 RENAME TO projection_reactions;
-  `);
-}
-
-interface AgentIdRename {
-  readonly oldId: string;
-  readonly newId: string;
-  readonly workspacePath: string | null;
-}
-
-interface TextColumnTable {
-  readonly name: string;
-  readonly columns: readonly string[];
-}
-
-interface Substitution {
-  readonly from: string;
-  readonly to: string;
-}
-
-/**
- * How many replacements share one pass over the data.
- *
- * A pass is a full scan of every text column of every table: the search is `%needle%`, which no index
- * answers. One pass per renamed agent is therefore one scan of the user's entire history per agent, and a
- * host may hold a hundred of them. Nesting a batch of replacements into a single expression makes that one
- * scan for the whole batch instead. The bound is what keeps the expression inside SQLite's nesting depth
- * limit -- measured at between 500 and 999 nested `replace` calls on this build, so sixteen leaves the
- * margin an unfamiliar SQLite has to have.
- */
-const SUBSTITUTION_BATCH = 16;
-
-// Every persisted `bot-<uuid>` becomes `agent-<uuid>`, in id columns, in derived thread ids, in
-// orchestration command and aggregate ids, and inside stored JSON and message text - a historical message
-// quoting an id or a workspace path is meant to point at where that agent lives now.
-//
-// Only id *values* are rewritten. Key spellings stay exactly as the release that wrote them spelled them,
-// because `orchestration_events` is replayed to rebuild every projection: a key renamed in a projection
-// blob would be undone by the next replay, and a key renamed in the event log would rewrite history that a
-// database restored from the user's own file copy still carries either way. Readers accept both spellings
-// instead, which is the only thing that also covers that restored database.
-function rewriteGeneratedAgentIds(db: DatabaseSync): void {
-  const renames = readAgentIdRenames(db);
-  if (renames.length === 0) return;
-
-  const tables = textColumnTables(db);
-  const masks = renames.map((rename, index) => ({ from: seedLiteral(rename.oldId), to: seedSentinel(index) }));
-  // Ordered, and the order is the whole design: seeds out of reach, then the workspace roots, then the ids
-  // whose substitution rewrites the leaf those roots left behind, then the seeds back. Within one phase the
-  // pairs do not interact -- `readAgentIdRenames` leaves no id a substring of another and a sentinel is
-  // unique to its rename -- which is what makes batching them into one pass identical to running them one
-  // at a time.
-  substituteAll(db, tables, masks);
-  substituteAll(db, tables, legacyWorkspaceRoots(renames));
-  substituteAll(
-    db,
-    tables,
-    renames.map((rename) => ({ from: rename.oldId, to: rename.newId })),
-  );
-  substituteAll(
-    db,
-    tables,
-    masks.map((mask) => ({ from: mask.to, to: mask.from })),
-  );
-}
-
-/**
- * An agent the app created for itself starts with its own id as `avatarSeed`, and the seed is the input to
- * the function that draws the face -- not an identifier. Rewriting it would give every one of those agents
- * a different face on upgrade, and would diverge from the seed already published in
- * `marketplace_agent_versions`. So the seed is put beyond the substitution's reach first and put back
- * afterwards, everywhere it is stored: the roster projection, and the event payloads a replay would
- * rebuild that projection from.
- *
- * Masking rather than substituting back is what keeps this exact. Only a seed that *was* the old id is
- * restored; a seed that already read `agent-<uuid>` before the migration -- an agent installed from a
- * listing another user published from a renamed build -- is not this migration's doing and is left alone.
- *
- * The sentinel is the six-character escape `\u0000`, not the byte it denotes. Every payload column carries
- * a `json_valid` CHECK that a raw control character would fail mid-migration, and the escape is both valid
- * JSON and something no serializer emits for an identifier, so nothing stored can collide with it.
- */
-function seedLiteral(seed: string): string {
-  return `"avatarSeed":"${seed}"`;
-}
-
-function seedSentinel(index: number): string {
-  return String.raw`"avatarSeed":"\u0000openbot-avatar-seed-` + index + String.raw`\u0000"`;
-}
-
-function readAgentIdRenames(db: DatabaseSync): readonly AgentIdRename[] {
-  const rows = db
-    .prepare(
-      `SELECT agent_id, json_extract(agent_json, '$.workspacePath') AS workspace_path
-       FROM projection_agents
-       WHERE agent_id LIKE 'bot-%'`,
-    )
-    .all();
-  const taken = new Set<string>();
-  // Only `projection_agents`, which is where migration v13 shipped. `projection_threads.agent_id`
-  // carries no foreign key and `ensureThreadProjection` never deletes, so a thread can outlive the
-  // agent row that named it, and such a thread already keyed at `agent-<uuid>` is invisible here: the
-  // rename collides with it, the row-level `OR REPLACE` below deletes the orphan, both threads'
-  // messages are rewritten onto the one surviving thread id in the same pass, and nothing dangles --
-  // so no check objects and the two conversations silently merge. Widening this set would prevent that,
-  // but v13 has shipped, and a migration that transforms one database differently from another under
-  // the same version number is the larger hazard. `AgentStore` closes the hole from the other side
-  // instead: it restores an agent the roster projection lost and gives an unclaimed thread back to the
-  // agent that names it at every startup, so the orphan this cannot see stops existing.
-  for (const row of db.prepare("SELECT agent_id FROM projection_agents").all()) {
-    if (isDynamicRecord(row) && isString(row.agent_id)) taken.add(row.agent_id);
-  }
-  const renames: AgentIdRename[] = [];
-  for (const row of rows) {
-    if (!isDynamicRecord(row) || !isString(row.agent_id)) continue;
-    // `bot-` alone is not proof the application minted this id. An id a user chose, or one an imported
-    // `bots.json` carried, is an ordinary word: renaming `bot-research` to `agent-research` invents a new
-    // identity for it, and if `agent-research` already exists the primary-key update collides, the
-    // migration throws, `runMigration` rolls back -- and the next launch tries the same thing again, so the
-    // user never gets back in. The UUID suffix is what distinguishes the two, so only it is rewritten.
-    if (!isGeneratedAgentId(row.agent_id)) continue;
-    const newId = `agent-${row.agent_id.slice("bot-".length)}`;
-    // A UUID suffix says the id has the shape the application mints; it does not say *this* row came from
-    // one. `getOrCreate` takes a caller-supplied id and `bots.json` carried whatever the file held, so a
-    // `bot-<uuid>` can be sitting in this table beside an `agent-<uuid>` sharing that UUID. Renaming the
-    // first onto the second collides on the primary key, and the substitution below resolves a collision by
-    // replacing the row -- so an agent nobody touched would quietly disappear on upgrade. An id whose target
-    // is taken is left alone instead: a stale spelling is legible, a deleted agent is not recoverable.
-    if (taken.has(newId)) continue;
-    // The rename is carried out as a text substitution, so it reaches this id wherever it appears -- and an
-    // id the caller chose can *contain* a generated one. `getOrCreate` takes any string, so `bot-<uuid>-copy`
-    // is a legal id sitting beside `bot-<uuid>`, and rewriting the token inside it renames a second agent
-    // nobody asked about. Should `agent-<uuid>-copy` already exist, the row-level `OR REPLACE` below
-    // resolves that collision by deleting it, and two agents become one. A stale spelling is legible; an
-    // agent that vanished on upgrade is not recoverable, so an id that is a piece of another id is skipped.
-    if (containedInAnotherId(row.agent_id, taken)) continue;
-    renames.push({
-      oldId: row.agent_id,
-      newId,
-      workspacePath: isString(row.workspace_path) ? row.workspace_path : null,
-    });
-  }
-  return renames;
-}
-
-function containedInAnotherId(agentId: string, taken: ReadonlySet<string>): boolean {
-  for (const candidate of taken) {
-    if (candidate !== agentId && candidate.includes(agentId)) return true;
-  }
-  return false;
-}
-
-// The workspace root moves from `OpenBot/Bots` to `OpenBot/Agents`; the id in the leaf is rewritten by the
-// id substitution that follows. The root is only ever substituted with its full absolute prefix attached,
-// derived from a path this database actually stored, so a user whose own checkout sits at
-// `~/Projects/OpenBot/Bots` does not get their files silently repointed.
-function legacyWorkspaceRoots(renames: readonly AgentIdRename[]): readonly { from: string; to: string }[] {
-  const roots = new Map<string, { from: string; to: string }>();
-  for (const rename of renames) {
-    if (rename.workspacePath === null) continue;
-    // A Windows profile stores this path with backslashes. Matching only the POSIX form would leave the
-    // root behind and rewrite the leaf alone, giving `OpenBot\Bots\agent-<uuid>` -- a name no reader
-    // recognizes, since rebasing a path out of a resumed provider transcript looks for an `Agents` parent.
-    for (const separator of ["/", "\\"]) {
-      const root = ["OpenBot", "Bots", ""].join(separator);
-      const suffix = `${separator}${root}${rename.oldId}`;
-      if (!rename.workspacePath.endsWith(suffix)) continue;
-      const from = `${rename.workspacePath.slice(0, -suffix.length)}${separator}${root}`;
-      const to = `${from.slice(0, -`Bots${separator}`.length)}Agents${separator}`;
-      // The path is read back through `json_extract`, so it arrives unescaped, while the column it has to
-      // be substituted in holds the serialized JSON -- where a Windows separator is doubled. Both forms are
-      // rewritten; on POSIX they are the same string and the map collapses them.
-      for (const [rawFrom, rawTo] of [
-        [from, to],
-        [jsonEscape(from), jsonEscape(to)],
-      ] as const) {
-        roots.set(rawFrom, { from: rawFrom, to: rawTo });
-      }
-    }
-  }
-  return [...roots.values()];
-}
-
-function jsonEscape(value: string): string {
-  return JSON.stringify(value).slice(1, -1);
-}
-
-/**
- * A memory is a sentence the user or the model wrote, and it is the only free text this database indexes:
- * `UNIQUE(agent_id, normalized_text)`. Two memories quoting the id in its two spellings become one sentence
- * once the id is rewritten, and there is no good answer at that point -- aborting locks the user out of a
- * migration that has no backup, and collapsing the pair throws away a record whose origin, source turn and
- * timestamps were its own. So the sentence is left exactly as it was written. The row's identifiers are
- * still rewritten around it, so the memory stays attached to its agent; only the quotation inside it keeps
- * the pre-rename spelling, which is what the user typed anyway.
- */
-function isPreservedText(table: string, column: string): boolean {
-  return table === "projection_agent_memories" && (column === "text" || column === "normalized_text");
-}
-
-/** Every table this migration rewrites, with the TEXT columns of each. */
-function textColumnTables(db: DatabaseSync): readonly TextColumnTable[] {
-  const tables: TextColumnTable[] = [];
-  for (const table of db
-    .prepare(
-      `SELECT name FROM sqlite_master
-       WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations'`,
-    )
-    .all()) {
-    if (!isDynamicRecord(table) || !isString(table.name)) continue;
-    const columns: string[] = [];
-    for (const column of db.prepare(`PRAGMA table_info(${quoteSqlIdentifier(table.name)})`).all()) {
-      if (!isDynamicRecord(column) || !isString(column.name) || !isString(column.type)) continue;
-      if (column.type.toUpperCase() !== "TEXT") continue;
-      if (isPreservedText(table.name, column.name)) continue;
-      columns.push(column.name);
-    }
-    if (columns.length > 0) tables.push({ name: table.name, columns });
-  }
-  return tables;
-}
-
-/**
- * One phase of the rewrite, in as few passes over the data as the depth limit allows.
- *
- * One statement per table, rewriting every TEXT column of a row together. Together is the point: a
- * per-column statement lets the conflict resolution below act on one column of a row and not another,
- * leaving a memory whose `text` and `normalized_text` say different things -- and dedupe reads the
- * normalized column, so the divergence outlives the migration.
- */
-function substituteAll(
-  db: DatabaseSync,
-  tables: readonly TextColumnTable[],
-  substitutions: readonly Substitution[],
-): void {
-  for (let offset = 0; offset < substitutions.length; offset += SUBSTITUTION_BATCH) {
-    const batch = substitutions.slice(offset, offset + SUBSTITUTION_BATCH);
-    for (const table of tables) {
-      const parameters: string[] = [];
-      const assignments: string[] = [];
-      for (const column of table.columns) {
-        let expression = quoteSqlIdentifier(column);
-        for (const { from, to } of batch) {
-          expression = `replace(${expression}, ?, ?)`;
-          parameters.push(from, to);
-        }
-        assignments.push(`${quoteSqlIdentifier(column)} = ${expression}`);
-      }
-      const matches: string[] = [];
-      for (const column of table.columns) {
-        for (const { from } of batch) {
-          matches.push(`${quoteSqlIdentifier(column)} LIKE ? ESCAPE '\\'`);
-          parameters.push(likePattern(from));
-        }
-      }
-      // `OR REPLACE`, because a whole-database substitution can make two rows equal. Two memories of one
-      // agent quoting `bot-<uuid>` and `agent-<uuid>` collapse to the same `normalized_text` under
-      // `UNIQUE(agent_id, normalized_text)`, and two deletions queued under the two workspace roots collapse
-      // to the same `file_deletion_outbox.path`. Aborting would roll the migration back on every launch and
-      // lock the user out over a duplicated sentence; `OR IGNORE` would be worse still, leaving the skipped
-      // row's `agent_id` spelling an agent that no longer exists, so the memory survives attached to
-      // nobody. Collapsing the pair is what the constraint means and what would have happened had the
-      // duplicate been written today.
-      //
-      // What keeps this from reaching an identifier is `readAgentIdRenames`, which drops a rename whose
-      // target id is already taken. That leaves every identifier this rewrites one-to-one, so the only rows
-      // it can collapse are the free-text ones. Foreign keys are off for this migration, so a replace here
-      // would not cascade -- `runMigration` runs `PRAGMA foreign_key_check` over the result.
-      db.prepare(
-        `UPDATE OR REPLACE ${quoteSqlIdentifier(table.name)} SET ${assignments.join(", ")} WHERE ${matches.join(" OR ")}`,
-      ).run(...parameters);
-    }
-  }
-}
-
-function likePattern(search: string): string {
-  return `%${search.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
-}
-
-function quoteSqlIdentifier(identifier: string): string {
-  return `"${identifier.replaceAll('"', '""')}"`;
-}
-
-interface SnapshotEventRow {
-  sequence: number;
-  commandId: string;
-  threadId: string;
-  payload: DynamicRecord;
-}
-
-function compactConversationHistory(db: DatabaseSync): void {
-  const latestByThread = new Map<string, SnapshotEventRow>();
-  const events = db
-    .prepare(
-      `SELECT sequence, command_id, aggregate_id, payload_json
-       FROM orchestration_events
-       WHERE aggregate_type = 'thread'
-       ORDER BY aggregate_id, sequence`,
-    )
-    .all();
-  for (const value of events) {
-    if (!isDynamicRecord(value)) continue;
-    const sequence = value.sequence;
-    const commandId = value.command_id;
-    const threadId = value.aggregate_id;
-    const payloadJson = value.payload_json;
-    if (!isNumber(sequence) || !isString(commandId) || !isString(threadId) || !isString(payloadJson)) continue;
-    const payload = JSON.parse(payloadJson);
-    if (!isDynamicRecord(payload) || !isDynamicRecord(payload.snapshot)) continue;
-    latestByThread.set(threadId, { sequence, commandId, threadId, payload });
-  }
-
-  const updateEvent = db.prepare("UPDATE orchestration_events SET payload_json = ? WHERE sequence = ?");
-  const updateReceipt = db.prepare("UPDATE orchestration_command_receipts SET result_json = ? WHERE command_id = ?");
-  const updateActivity = db.prepare(
-    `UPDATE projection_thread_activities SET payload_json = ?
-     WHERE thread_id = ? AND last_event_sequence = ?`,
-  );
-  const deleteActivities = db.prepare(
-    `DELETE FROM projection_thread_activities
-     WHERE thread_id = ? AND last_event_sequence IN (
-       SELECT sequence FROM orchestration_events
-       WHERE aggregate_type = 'thread' AND aggregate_id = ? AND sequence < ?
-         AND json_type(payload_json, '$.snapshot') = 'object'
-     )`,
-  );
-  const deleteEvents = db.prepare(
-    `DELETE FROM orchestration_events
-     WHERE aggregate_type = 'thread' AND aggregate_id = ? AND sequence < ?
-       AND json_type(payload_json, '$.snapshot') = 'object'`,
-  );
-  for (const event of latestByThread.values()) {
-    const activityDetail = event.payload.detail ?? {};
-    const payload = {
-      ...event.payload,
-      recovery: {
-        ...recordValue(event.payload.recovery),
-        turnProviderSessionIds: turnProviderSessionIds(db, event.threadId),
-      },
-    };
-    updateEvent.run(JSON.stringify(payload), event.sequence);
-    updateReceipt.run(JSON.stringify({ revision: event.sequence }), event.commandId);
-    updateActivity.run(JSON.stringify(activityDetail), event.threadId, event.sequence);
-    deleteActivities.run(event.threadId, event.threadId, event.sequence);
-    deleteEvents.run(event.threadId, event.sequence);
-  }
-  deleteOrphanReceipts(db);
-}
-
-function compactMailboxHistory(db: DatabaseSync): void {
-  const value = db
-    .prepare(
-      `SELECT MAX(sequence) AS sequence FROM orchestration_events
-       WHERE aggregate_type = 'mailbox' AND aggregate_id = 'mailbox'`,
-    )
-    .get();
-  if (!isDynamicRecord(value) || !isNumber(value.sequence)) return;
-  db.prepare(
-    `DELETE FROM orchestration_events
-     WHERE aggregate_type = 'mailbox' AND aggregate_id = 'mailbox' AND sequence < ?`,
-  ).run(value.sequence);
-  deleteOrphanReceipts(db);
-}
-
-function turnProviderSessionIds(db: DatabaseSync, threadId: string): Record<string, string | null> {
-  const result: Record<string, string | null> = {};
-  const rows = db
-    .prepare("SELECT turn_id, provider_session_id FROM projection_turns WHERE thread_id = ?")
-    .all(threadId);
-  for (const value of rows) {
-    if (!isDynamicRecord(value) || !isString(value.turn_id)) continue;
-    if (value.provider_session_id !== null && !isString(value.provider_session_id)) continue;
-    result[value.turn_id] = value.provider_session_id;
-  }
-  return result;
-}
-
-function deleteOrphanReceipts(db: DatabaseSync): void {
-  db.exec(`DELETE FROM orchestration_command_receipts
-    WHERE NOT EXISTS (
-      SELECT 1 FROM orchestration_events
-      WHERE orchestration_events.command_id = orchestration_command_receipts.command_id
-    )`);
-}
-
-function recordValue(value: unknown): DynamicRecord {
-  return isDynamicRecord(value) ? value : {};
 }

@@ -9,6 +9,7 @@ import {
 } from "@openbot/contracts/ipc";
 import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
+import { Effect } from "effect";
 import { isInboxImage } from "../messaging-inbox-files";
 import type { HistoryMessage, InboxFile, MessagingAdapter } from "../messaging-types";
 import type { SlackCacheStore } from "./cache-store";
@@ -170,7 +171,13 @@ export class SlackClientSync {
         const fallback = conversation.kind === "mpim" ? groupDmHandles(conversation.name) : conversation.name;
         const name =
           direct && adapter && memberIds.length > 0
-            ? (await Promise.all(memberIds.slice(0, 8).map((id) => adapter.authorName(id).catch(() => id)))).join(", ")
+            ? (
+                await Promise.all(
+                  memberIds
+                    .slice(0, 8)
+                    .map((id) => Effect.runPromise(adapter.authorName(id).pipe(Effect.orElseSucceed(() => id)))),
+                )
+              ).join(", ")
             : fallback;
         return {
           workspaceId,
@@ -555,11 +562,14 @@ export class SlackClientSync {
     const references = slackReferences(messages);
     await Promise.all([
       ...[...references.users].slice(0, LOOKUPS).map(async (id) => {
-        const name = await adapter.authorName(id).catch(() => id);
+        const name = await Effect.runPromise(adapter.authorName(id).pipe(Effect.orElseSucceed(() => id)));
         if (name && name !== id) people[id] = name.slice(0, MAX_NAME);
       }),
       ...[...references.channels].slice(0, LOOKUPS).map(async (id) => {
-        const name = (await adapter.placeName(id).catch(() => id)).replace(/^#/u, "");
+        const name = (await Effect.runPromise(adapter.placeName(id).pipe(Effect.orElseSucceed(() => id)))).replace(
+          /^#/u,
+          "",
+        );
         if (name && name !== id) channels[id] = name.slice(0, MAX_NAME);
       }),
     ]);

@@ -4,6 +4,9 @@ import { mkdir, open, readdir, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Effect } from "effect";
+import { isTurnContextBlock } from "./agent/developer-instructions";
+import { claudeBridgedToolName } from "./agent/tool-catalog";
 import {
   isClaudeCompactionSummary,
   isClaudeInterruptMarker,
@@ -17,8 +20,10 @@ import {
   requiredNumberColumn,
   requiredStringColumn,
 } from "./database/database-rows";
+import { withTransaction, withTransactionAsync } from "./database/sqlite-transaction";
 import { LineTooLongError } from "./jsonl";
 import { getString, isRecord, type ThreadItem } from "./protocol";
+import { providerFailure } from "./provider-client-effects";
 import type {
   ProviderHistoryConsumer,
   ProviderHistoryFragment,
@@ -40,6 +45,7 @@ export interface ClaudeSessionMessage {
   parent_tool_use_id: string | null;
   parent_agent_id: string | null;
   timestamp?: string;
+  task_run_id?: string;
 }
 
 interface ParsedRecord {
@@ -58,6 +64,7 @@ interface ParsedRecord {
   teamName?: unknown;
   subtype?: unknown;
   compactMetadata?: unknown;
+  origin?: unknown;
   message?: unknown;
 }
 
@@ -120,30 +127,52 @@ const SCHEMA = `
 const MAX_TRANSCRIPT_RECORD_BYTES = 256 * 1024 * 1024;
 const MAX_TURN_FRAGMENT_ITEMS = 50;
 
-/** Reads Claude JSONL through a disk index. Message payloads are read one at a time per turn. */
 export function claudeHistoryReader(options: ClaudeHistoryOptions = {}): ReadProviderHistory {
-  return (request, consume) => scanClaudeHistory(request, consume, options);
+  return (request, consume) =>
+    Effect.tryPromise({
+      try: (signal) => scanClaudeHistory(request, consume, options, signal),
+      catch: providerFailure,
+    });
 }
 
-/** Explicit test boundary for an injected SDK history reader. Production uses claudeHistoryReader. */
+export const CLAUDE_NO_RESPONSE_TEXT = "No response requested.";
+
+export function isClaudeNoResponsePlaceholder(message: unknown): boolean {
+  if (!isRecord(message) || message.model !== "<synthetic>" || !Array.isArray(message.content)) return false;
+  const [block, ...rest] = message.content;
+  return rest.length === 0 && isRecord(block) && block.type === "text" && block.text === CLAUDE_NO_RESPONSE_TEXT;
+}
+
+export function claudeTaskTurnId(sessionId: string, taskId: string, runId: string): string {
+  const hex = createHash("sha256").update(`claude-task-turn\n${sessionId}\n${taskId}\n${runId}`).digest("hex");
+  const variant = ((Number.parseInt(hex.slice(16, 17), 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
 export function claudeHistoryFromMessages(
   readMessages: (threadId: string, options?: { dir?: string }) => Promise<readonly ClaudeSessionMessage[]>,
 ): ReadProviderHistory {
-  return async (request, consume) => {
-    const fragments = historyFragments(
-      await readMessages(request.threadId, request.cwd ? { dir: request.cwd } : undefined),
-      request.items === "full",
-    );
-    for (const fragment of fragments) {
-      if (!(await consume(fragment))) break;
-    }
-  };
+  return (request, consume) =>
+    Effect.tryPromise({
+      try: async (signal) => {
+        const fragments = historyFragments(
+          await readMessages(request.threadId, request.cwd ? { dir: request.cwd } : undefined),
+          request.items === "full",
+        );
+        for (const fragment of fragments) {
+          if (signal.aborted) throw signal.reason;
+          if (!(await Effect.runPromise(consume(fragment), { signal }))) break;
+        }
+      },
+      catch: providerFailure,
+    });
 }
 
 async function scanClaudeHistory(
   request: ProviderHistoryRequest,
   consume: ProviderHistoryConsumer,
   options: ClaudeHistoryOptions,
+  signal: AbortSignal,
 ): Promise<void> {
   const transcript = await findTranscript(
     request.threadId,
@@ -156,50 +185,72 @@ async function scanClaudeHistory(
   const indexDirectory = join(indexRoot, "openbot-claude-history");
   await mkdir(indexDirectory, { recursive: true });
   const indexPath = join(indexDirectory, `${sanitizeProjectPath(request.threadId)}.sqlite`);
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const before = await fileIdentity(transcript);
-    if (!before) return;
-    const database = new DatabaseSync(indexPath);
-    try {
-      database.exec(SCHEMA);
-      const stored = readHistoryState(database);
-      const committedPrefixHash = stored
-        ? await prefixHash(transcript, Math.min(stored.size, PREFIX_FINGERPRINT_BYTES))
-        : null;
-      const committedScanHash =
-        stored && before.size >= stored.scanOffset ? await scanBoundaryHash(transcript, stored.scanOffset) : null;
-      const reset =
-        stored === null
-          ? true
-          : stored.dev !== before.dev ||
-            stored.ino !== before.ino ||
-            before.size < stored.size ||
-            before.size < stored.scanOffset ||
-            committedPrefixHash !== stored.prefixHash ||
-            committedScanHash !== stored.scanHash ||
-            (before.size === stored.scanOffset && before.mtimeMs !== stored.mtimeMs);
-      if (reset) resetIndex(database);
-      const startOffset = reset ? 0 : (stored?.scanOffset ?? 0);
-      const nextOffset = await buildIndex(transcript, database, startOffset, before.size, before);
-      const after = await fileIdentity(transcript);
-      const afterCommittedPrefixHash = after
-        ? await prefixHash(transcript, Math.min(before.size, PREFIX_FINGERPRINT_BYTES))
-        : null;
-      if (!after || changed(before, after) || afterCommittedPrefixHash !== before.prefixHash) {
-        resetIndex(database);
-        continue;
+  await oneScanAtATime(indexPath, async () => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (signal.aborted) throw signal.reason;
+      const before = await fileIdentity(transcript);
+      if (!before) return;
+      const database = new DatabaseSync(indexPath);
+      try {
+        database.exec(SCHEMA);
+        const stored = readHistoryState(database);
+        const committedPrefixHash = stored
+          ? await prefixHash(transcript, Math.min(stored.size, PREFIX_FINGERPRINT_BYTES))
+          : null;
+        const committedScanHash =
+          stored && before.size >= stored.scanOffset ? await scanBoundaryHash(transcript, stored.scanOffset) : null;
+        const reset =
+          stored === null
+            ? true
+            : stored.dev !== before.dev ||
+              stored.ino !== before.ino ||
+              before.size < stored.size ||
+              before.size < stored.scanOffset ||
+              committedPrefixHash !== stored.prefixHash ||
+              committedScanHash !== stored.scanHash ||
+              (before.size === stored.scanOffset && before.mtimeMs !== stored.mtimeMs);
+        if (reset) resetIndex(database);
+        const startOffset = reset ? 0 : (stored?.scanOffset ?? 0);
+        const nextOffset = await buildIndex(transcript, database, startOffset, before.size, before, signal);
+        const after = await fileIdentity(transcript);
+        const afterCommittedPrefixHash = after
+          ? await prefixHash(transcript, Math.min(before.size, PREFIX_FINGERPRINT_BYTES))
+          : null;
+        if (!after || changed(before, after) || afterCommittedPrefixHash !== before.prefixHash) {
+          resetIndex(database);
+          continue;
+        }
+        writeHistoryState(database, after, nextOffset, await scanBoundaryHash(transcript, nextOffset));
+        await selectConversation(database, signal);
+        await populateTurnMetadata(database, transcript, request.items === "full", signal);
+        if (request.items === "none") await emitMetadata(database, consume, signal);
+        else {
+          const { resumeKey } = request;
+          const fromSeq = resumeKey === undefined ? 0 : resumeStartSeq(database, resumeKey);
+          if ((await emitTurns(database, transcript, consume, signal, fromSeq)) && resumeKey !== undefined) {
+            writeResumePoint(database, resumeKey);
+          }
+        }
+        return;
+      } finally {
+        database.close();
       }
-      writeHistoryState(database, after, nextOffset, await scanBoundaryHash(transcript, nextOffset));
-      await selectConversation(database);
-      await populateTurnMetadata(database, transcript, request.items === "full");
-      if (request.items === "none") await emitMetadata(database, consume);
-      else await emitTurns(database, transcript, consume);
-      return;
-    } finally {
-      database.close();
     }
+    throw new Error("Claude transcript changed while it was being read.");
+  });
+}
+
+const indexScans = new Map<string, Promise<unknown>>();
+
+async function oneScanAtATime(indexPath: string, scan: () => Promise<void>): Promise<void> {
+  const current = (indexScans.get(indexPath) ?? Promise.resolve()).then(scan);
+  const settled = current.catch(() => undefined);
+  indexScans.set(indexPath, settled);
+  try {
+    await current;
+  } finally {
+    if (indexScans.get(indexPath) === settled) indexScans.delete(indexPath);
   }
-  throw new Error("Claude transcript changed while it was being read.");
 }
 
 async function buildIndex(
@@ -208,18 +259,20 @@ async function buildIndex(
   startOffset: number,
   fileSize: number,
   identity: FileIdentity,
+  signal: AbortSignal,
 ): Promise<number> {
   const insert = database.prepare(
     `INSERT INTO entries
       (uuid, type, offset, length, parent_uuid, timestamp, session_id, parent_tool_use_id,
        parent_agent_id, is_sidechain, is_meta, team_name, subtype, compact_metadata, visible_user)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(uuid) DO NOTHING`,
   );
   let nextOffset = startOffset;
   let lineNumber = 0;
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    for await (const record of readTranscriptLines(filePath, startOffset, fileSize)) {
+  return withTransactionAsync(database, async () => {
+    for await (const record of readTranscriptLines(filePath, signal, startOffset, fileSize)) {
+      if (signal.aborted) throw signal.reason;
       const parsed = record.complete ? parseRecord(record.line.trim()) : null;
       if (parsed) {
         const text = messageText(parsed.message);
@@ -254,16 +307,13 @@ async function buildIndex(
       if (lineNumber % 256 === 0) await new Promise<void>((resume) => setImmediate(resume));
     }
     writeHistoryState(database, identity, nextOffset, await scanBoundaryHash(filePath, nextOffset));
-    database.exec("COMMIT");
     return nextOffset;
-  } catch (cause) {
-    database.exec("ROLLBACK");
-    throw cause;
-  }
+  });
 }
 
 async function* readTranscriptLines(
   filePath: string,
+  signal: AbortSignal,
   startOffset: number,
   endOffset: number,
 ): AsyncGenerator<{ line: string; byteLength: number; complete: boolean; offset: number }> {
@@ -273,6 +323,7 @@ async function* readTranscriptLines(
   let offset = startOffset;
   try {
     for await (const chunk of input) {
+      if (signal.aborted) throw signal.reason;
       carry += chunk;
       if (Buffer.byteLength(carry) > MAX_TRANSCRIPT_RECORD_BYTES) {
         throw new LineTooLongError("Claude");
@@ -359,17 +410,16 @@ function writeHistoryState(database: DatabaseSync, identity: FileIdentity, scanO
 }
 
 function resetIndex(database: DatabaseSync): void {
-  database.exec("BEGIN IMMEDIATE");
-  try {
+  withTransaction(database, () => {
     database.exec("DELETE FROM entries; DELETE FROM selected; DELETE FROM turn_metadata; DELETE FROM history_meta;");
-    database.exec("COMMIT");
-  } catch (cause) {
-    database.exec("ROLLBACK");
-    throw cause;
-  }
+  });
 }
 
-async function selectConversation(database: DatabaseSync): Promise<void> {
+async function selectConversation(database: DatabaseSync, signal: AbortSignal): Promise<void> {
+  await withTransactionAsync(database, () => writeSelectedConversation(database, signal));
+}
+
+async function writeSelectedConversation(database: DatabaseSync, signal: AbortSignal): Promise<void> {
   const updateParent = database.prepare("UPDATE entries SET parent_uuid = ? WHERE uuid = ?");
   const existsById = database.prepare("SELECT 1 FROM entries WHERE uuid = ?");
   for (const raw of database
@@ -444,6 +494,7 @@ async function selectConversation(database: DatabaseSync): Promise<void> {
   let uuid: string | null = fallback;
   let steps = 0;
   while (uuid) {
+    if (signal.aborted) throw signal.reason;
     const insertion = insertSelected.run(uuid);
     if (Number(insertion.changes) !== 1) {
       if (databaseRow(parentOf.get(uuid))) throw new Error("Claude transcript contains a parent cycle.");
@@ -467,6 +518,7 @@ async function populateTurnMetadata(
   database: DatabaseSync,
   filePath: string,
   includeAnswerMetadata: boolean,
+  signal: AbortSignal,
 ): Promise<void> {
   const turnRows = database.prepare(
     `SELECT e.seq, e.uuid, e.timestamp FROM entries e JOIN selected s ON s.seq = e.seq
@@ -479,27 +531,23 @@ async function populateTurnMetadata(
   const insert = database.prepare(
     "INSERT OR REPLACE INTO turn_metadata (turn_id, start_seq, end_seq, timestamp, final_answer_uuid) VALUES (?, ?, ?, ?, ?)",
   );
-  database.exec("BEGIN IMMEDIATE");
-  try {
+  await withTransactionAsync(database, async () => {
     database.exec("DELETE FROM turn_metadata");
     const file = includeAnswerMetadata ? await open(filePath, "r") : null;
     try {
       for (const raw of turnRows.iterate()) {
+        if (signal.aborted) throw signal.reason;
         const row = decodeTurnRow(raw);
         const nextRaw = nextTurn.get(row.seq);
         const next = nextRaw === undefined ? null : databaseRow(nextRaw);
         const endSeq = next ? (optionalNumberColumn(next, "seq") ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
-        const finalAnswerUuid = file ? await findFinalAnswer(database, file, row.seq, endSeq) : null;
+        const finalAnswerUuid = file ? await findFinalAnswer(database, file, row.seq, endSeq, signal) : null;
         insert.run(row.uuid, row.seq, endSeq, row.timestamp, finalAnswerUuid);
       }
     } finally {
       if (file) await file.close();
     }
-    database.exec("COMMIT");
-  } catch (cause) {
-    database.exec("ROLLBACK");
-    throw cause;
-  }
+  });
 }
 
 async function findFinalAnswer(
@@ -507,6 +555,7 @@ async function findFinalAnswer(
   file: Awaited<ReturnType<typeof open>>,
   startSeq: number,
   endSeq: number,
+  signal: AbortSignal,
 ): Promise<string | null> {
   let finalAnswerUuid: string | null = null;
   const statement = database.prepare(
@@ -515,9 +564,10 @@ async function findFinalAnswer(
      WHERE e.seq >= ? AND e.seq < ? AND e.is_sidechain = 0 AND e.is_meta = 0 AND e.team_name IS NULL ORDER BY e.seq`,
   );
   for (const raw of statement.iterate(startSeq, endSeq)) {
+    if (signal.aborted) throw signal.reason;
     const row = decodeTranscriptRow(raw);
     const message = await readMessage(file, row);
-    if (message?.type !== "assistant") continue;
+    if (message?.type !== "assistant" || isClaudeNoResponsePlaceholder(message.message)) continue;
     const text = messageText(message.message);
     const thinking = messageThinking(message.message);
     const endsStep = messageToolCalls(message.message).length > 0;
@@ -530,41 +580,117 @@ async function findFinalAnswer(
   return finalAnswerUuid;
 }
 
-async function emitMetadata(database: DatabaseSync, consume: ProviderHistoryConsumer): Promise<void> {
+async function emitMetadata(
+  database: DatabaseSync,
+  consume: ProviderHistoryConsumer,
+  signal: AbortSignal,
+): Promise<void> {
   let cursor = Number.MAX_SAFE_INTEGER;
   const statement = database.prepare(
     "SELECT turn_id, start_seq, end_seq, timestamp, final_answer_uuid FROM turn_metadata WHERE start_seq < ? ORDER BY start_seq DESC LIMIT 1",
   );
   for (;;) {
+    if (signal.aborted) throw signal.reason;
     const raw = statement.get(cursor);
     if (raw === undefined) return;
     const row = decodeTurnMetadata(raw);
     cursor = row.startSeq;
     if (
-      !(await consume({
-        turnId: row.turnId,
-        status: "completed",
-        startedAt: turnStartedAt(row.timestamp, row.startSeq),
-        items: [],
-        complete: true,
-      }))
+      !(await Effect.runPromise(
+        consume({
+          turnId: row.turnId,
+          status: "completed",
+          startedAt: turnStartedAt(row.timestamp, row.startSeq),
+          items: [],
+          complete: true,
+        }),
+        { signal },
+      ))
     )
       return;
   }
 }
 
-async function emitTurns(database: DatabaseSync, filePath: string, consume: ProviderHistoryConsumer): Promise<void> {
+async function emitTurns(
+  database: DatabaseSync,
+  filePath: string,
+  consume: ProviderHistoryConsumer,
+  signal: AbortSignal,
+  fromSeq: number,
+): Promise<boolean> {
   let cursor = Number.MAX_SAFE_INTEGER;
   const statement = database.prepare(
-    "SELECT turn_id, start_seq, end_seq, timestamp, final_answer_uuid FROM turn_metadata WHERE start_seq < ? ORDER BY start_seq DESC LIMIT 1",
+    "SELECT turn_id, start_seq, end_seq, timestamp, final_answer_uuid FROM turn_metadata WHERE start_seq < ? AND start_seq >= ? ORDER BY start_seq DESC LIMIT 1",
   );
   for (;;) {
-    const raw = statement.get(cursor);
-    if (raw === undefined) return;
+    if (signal.aborted) throw signal.reason;
+    const raw = statement.get(cursor, fromSeq);
+    if (raw === undefined) return true;
     const row = decodeTurnMetadata(raw);
     cursor = row.startSeq;
-    if (!(await emitTurnFragments(database, filePath, row, consume))) return;
+    if (!(await emitTurnFragments(database, filePath, row, consume, signal))) return false;
   }
+}
+
+const RESUME_POINT_KEY = "resume_point";
+
+interface TurnListDigest {
+  turns: number;
+  digest: string;
+  lastStart: number;
+}
+
+function turnListDigest(database: DatabaseSync, limit: number): TurnListDigest | null {
+  const rows = [
+    ...database
+      .prepare("SELECT turn_id, start_seq, end_seq, final_answer_uuid FROM turn_metadata ORDER BY start_seq LIMIT ?")
+      .iterate(limit),
+  ].map((raw) => {
+    const row = databaseRow(raw);
+    if (!row) throw new Error("Invalid Claude history turn row.");
+    return [
+      requiredStringColumn(row, "turn_id"),
+      requiredNumberColumn(row, "start_seq"),
+      requiredNumberColumn(row, "end_seq"),
+      optionalStringColumn(row, "final_answer_uuid") ?? null,
+    ] as const;
+  });
+  const last = rows.at(-1);
+  if (!last) return null;
+  const selectedBefore = databaseRow(
+    database.prepare("SELECT COUNT(*) AS count FROM selected WHERE seq < ?").get(last[1]),
+  );
+  const hash = createHash("sha256");
+  for (const row of rows.slice(0, -1)) hash.update(`${JSON.stringify(row)}\n`);
+  hash.update(JSON.stringify([last[0], last[1], selectedBefore ? requiredNumberColumn(selectedBefore, "count") : 0]));
+  return { turns: rows.length, digest: hash.digest("hex"), lastStart: last[1] };
+}
+
+function resumeStartSeq(database: DatabaseSync, resumeKey: string): number {
+  const raw = database.prepare("SELECT value FROM history_meta WHERE key = ?").get(RESUME_POINT_KEY);
+  const row = raw === undefined ? null : databaseRow(raw);
+  if (!row) return 0;
+  let stored: unknown;
+  try {
+    stored = JSON.parse(requiredStringColumn(row, "value"));
+  } catch {
+    return 0;
+  }
+  if (!isRecord(stored) || stored.key !== resumeKey || typeof stored.turns !== "number") return 0;
+  const current = turnListDigest(database, stored.turns);
+  return current && current.turns === stored.turns && current.digest === stored.digest ? current.lastStart : 0;
+}
+
+function writeResumePoint(database: DatabaseSync, resumeKey: string): void {
+  const current = turnListDigest(database, -1);
+  const value = current ? JSON.stringify({ key: resumeKey, turns: current.turns, digest: current.digest }) : null;
+  if (value === null) database.prepare("DELETE FROM history_meta WHERE key = ?").run(RESUME_POINT_KEY);
+  else
+    database
+      .prepare(
+        "INSERT INTO history_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      )
+      .run(RESUME_POINT_KEY, value);
 }
 
 async function emitTurnFragments(
@@ -572,21 +698,28 @@ async function emitTurnFragments(
   filePath: string,
   turn: TurnMetadata,
   consume: ProviderHistoryConsumer,
+  signal: AbortSignal,
 ): Promise<boolean> {
   const file = await open(filePath, "r");
   let items: ThreadItem[] = [];
   let itemOffset = 0;
   let stopped = false;
+  let liveTurnId: string | null = null;
   const flush = async (complete: boolean): Promise<boolean> => {
+    if (signal.aborted) throw signal.reason;
     const count = items.length;
-    const result = await consume({
-      turnId: turn.turnId,
-      status: "completed",
-      startedAt: turnStartedAt(turn.timestamp, turn.startSeq),
-      itemOffset,
-      items,
-      complete,
-    });
+    const result = await Effect.runPromise(
+      consume({
+        turnId: turn.turnId,
+        ...(liveTurnId ? { liveTurnId } : {}),
+        status: "completed",
+        startedAt: turnStartedAt(turn.timestamp, turn.startSeq),
+        itemOffset,
+        items,
+        complete,
+      }),
+      { signal },
+    );
     items = [];
     itemOffset += count;
     return result;
@@ -605,6 +738,7 @@ async function emitTurnFragments(
        WHERE e.seq >= ? AND e.seq < ? AND e.is_sidechain = 0 AND e.is_meta = 0 AND e.team_name IS NULL ORDER BY e.seq`,
     );
     for (const raw of statement.iterate(turn.startSeq, turn.endSeq)) {
+      if (signal.aborted) throw signal.reason;
       const row = decodeTranscriptRow(raw);
       const message = await readMessage(file, row);
       if (!message) continue;
@@ -626,6 +760,7 @@ async function emitTurnFragments(
           if (stopped) break;
           continue;
         }
+        if (row.seq === turn.startSeq && isClaudeTaskNotification(text)) liveTurnId = taskNotificationTurnId(message);
         if (
           row.seq !== turn.startSeq ||
           !text ||
@@ -645,7 +780,7 @@ async function emitTurnFragments(
           break;
         continue;
       }
-      if (message.type !== "assistant") continue;
+      if (message.type !== "assistant" || isClaudeNoResponsePlaceholder(message.message)) continue;
       const thinking = messageThinking(message.message);
       const endsStep = messageToolCalls(message.message).length > 0;
       if (!thinking && !text && !endsStep) continue;
@@ -687,6 +822,13 @@ async function emitTurnFragments(
   } finally {
     await file.close();
   }
+}
+
+function taskNotificationTurnId(message: ClaudeSessionMessage): string | null {
+  const taskId = [...messageText(message.message).matchAll(/<task-id>([^<]+)<\/task-id>/g)].at(-1)?.[1];
+  return taskId && message.task_run_id && message.session_id
+    ? claudeTaskTurnId(message.session_id, taskId, message.task_run_id)
+    : null;
 }
 
 function decodeTurnRow(raw: unknown): { seq: number; uuid: string; timestamp: string | null } {
@@ -738,6 +880,8 @@ async function readMessage(
   if (result.bytesRead !== row.length) throw new Error("Claude transcript changed while it was being read.");
   const parsed = parseRecord(buffer.toString("utf8"));
   if (!parsed || (parsed.type !== "user" && parsed.type !== "assistant" && parsed.type !== "system")) return null;
+  const taskRunId =
+    isRecord(parsed.origin) && parsed.origin.kind === "task-notification" ? stringOrNull(parsed.origin.runId) : null;
   return {
     type: parsed.type,
     uuid: parsed.uuid,
@@ -746,6 +890,7 @@ async function readMessage(
     parent_tool_use_id: stringOrNull(parsed.parentToolUseId ?? parsed.parent_tool_use_id),
     parent_agent_id: stringOrNull(parsed.parentAgentId ?? parsed.parent_agent_id),
     ...(parsed.timestamp ? { timestamp: String(parsed.timestamp) } : {}),
+    ...(taskRunId ? { task_run_id: taskRunId } : {}),
   };
 }
 
@@ -786,7 +931,7 @@ function historyFragments(messages: readonly ClaudeSessionMessage[], includeItem
         });
       continue;
     }
-    if (message.type !== "assistant" || skippingCompaction) continue;
+    if (message.type !== "assistant" || skippingCompaction || isClaudeNoResponsePlaceholder(message.message)) continue;
     const thinking = messageThinking(message.message);
     const endsStep = messageToolCalls(message.message).length > 0;
     if (!thinking && !text && !endsStep) continue;
@@ -891,6 +1036,7 @@ function parseRecord(line: string): ParsedRecord | null {
       teamName: value.teamName,
       subtype: value.subtype,
       compactMetadata: value.compactMetadata,
+      origin: value.origin,
       message: value.message,
     };
   } catch {
@@ -908,7 +1054,12 @@ function messageText(message: unknown): string {
   if (!Array.isArray(message.content)) return "";
   return message.content
     .filter(isRecord)
-    .filter((block) => block.type === "text" && typeof block.text === "string")
+    .filter(
+      (block) =>
+        block.type === "text" &&
+        typeof block.text === "string" &&
+        !(message.role === "user" && isTurnContextBlock(block.text)),
+    )
     .map((block) => String(block.text))
     .join("\n");
 }
@@ -942,7 +1093,7 @@ function messageToolCalls(message: unknown): Array<{ id: string; name: string }>
   return message.content.filter(isRecord).flatMap((block) => {
     const id = getString(block, "id");
     const name = getString(block, "name");
-    return block.type === "tool_use" && id && name ? [{ id, name }] : [];
+    return block.type === "tool_use" && id && name ? [{ id, name: claudeBridgedToolName(name, block.input) }] : [];
   });
 }
 
