@@ -141,23 +141,42 @@ export const DOWNLOAD_PAGES: Record<DownloadPlatform, DownloadPageContent> = {
   windows: {
     platform: "windows",
     name: "Windows",
-    title: "GoAhead for Windows: not available yet",
+    title: "Download GoAhead for Windows: AI agent app for Windows PC",
     description:
-      "GoAhead for Windows is not available yet. Today GoAhead runs on a Mac with Apple silicon, as a free app that runs Codex, Claude Code, Gemini and Grok agents as a team.",
+      "Download GoAhead for Windows 10 or 11 (64-bit). A free desktop app that runs Codex, Claude Code, Gemini and Grok agents as a team on your PC.",
     heading: "GoAhead for Windows",
-    intro: "GoAhead for Windows is not available yet. Today you can run GoAhead on a Mac with Apple silicon.",
-    installers: [],
-    specs: [NOT_AVAILABLE_SPEC, MAC_INSTEAD_SPEC],
-    installSteps: [],
-    extraSections: [],
-    notes: [MAC_INSTEAD_NOTE],
-    faq: [
+    intro:
+      "Run a team of AI agents on your Windows PC with the ChatGPT, Claude, Gemini or Grok plan you already pay for, or with your own model. Your chats and files stay on your PC.",
+    installers: [
       {
-        question: "Does GoAhead run on Windows?",
-        answer: "Not yet. GoAhead is available only for a Mac with Apple silicon (M1 or newer).",
+        label: "Download for Windows (x64)",
+        shortLabel: "Windows (64-bit)",
+        detail: "For Windows 10 and 11 (x64)",
+        href: OPENBOT_DOWNLOAD_LINKS.windows,
       },
     ],
-    operatingSystem: OPENBOT_SOFTWARE_APPLICATION.operatingSystem,
+    specs: [
+      { label: "System", value: "Windows 10 or 11 (64-bit)" },
+      { label: "Processor", value: "Intel or AMD 64-bit processor (x64)" },
+      { label: "File", value: "Setup Installer (.exe)" },
+      UPDATES_SPEC,
+    ],
+    installSteps: [
+      {
+        text: "Download the Windows setup installer (GoAhead-Setup-x64.exe).",
+      },
+      {
+        text: "Run the installer. It will automatically install GoAhead and create shortcuts on your Desktop and Start Menu.",
+      },
+      {
+        text: "Launch GoAhead from your Desktop or Start Menu. Log in with your email to start creating and steering agents.",
+      },
+      CONNECT_STEP,
+    ],
+    extraSections: [],
+    notes: [UPDATES_NOTE, NETWORK_NOTE],
+    faq: [{ question: "Is GoAhead free on Windows?", answer: FREE_ANSWER }, providersQuestion("Windows")],
+    operatingSystem: "Windows 10 or 11 (64-bit)",
   },
   linux: {
     platform: "linux",

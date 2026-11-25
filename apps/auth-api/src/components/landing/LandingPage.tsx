@@ -29,8 +29,13 @@ export function LandingPage() {
                 <span class="landing-availability-new">NEW</span>
                 <span class="landing-availability-copy">Available on</span>
                 <span class="landing-availability-platform">
+                  <PlatformLogo platform="windows" />
+                  Windows
+                </span>
+                <span class="landing-availability-copy">&amp;</span>
+                <span class="landing-availability-platform">
                   <PlatformLogo platform="macos" />
-                  macOS (Apple silicon)
+                  macOS
                 </span>
               </p>
             </div>

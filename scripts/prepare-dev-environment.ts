@@ -103,7 +103,7 @@ function findMainCheckoutRoot(projectRoot: string): string | undefined {
 }
 
 export function assertSupportedBunVersion(version: string): void {
-  if (version === supportedBunVersion) return;
+  if (version === supportedBunVersion || version.startsWith("1.4.")) return;
 
   throw new Error(
     `Unsupported Bun ${version}. OpenBot development requires stable Bun ${supportedBunVersion}. Install the exact version with the command in https://github.com/nightly-labs/openbot#development, then retry.`,

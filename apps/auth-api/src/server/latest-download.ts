@@ -9,8 +9,8 @@ import { OPENBOT_DOWNLOAD_PAGE_LINKS, OPENBOT_LINKS } from "../lib/landing-links
 const RELEASES_BASE_URL = "https://github.com/Shubhh2903/goahead/releases";
 const MANIFEST = "latest-mac.yml";
 
-/** The systems that have a download page. Any request for them that is not the Apple silicon DMG gets the page. */
-const UNAVAILABLE_DOWNLOAD_PLATFORMS = ["linux", "macos", "windows"] as const;
+/** The systems that have a download page. Any request for them that is not an installer gets the page. */
+const UNAVAILABLE_DOWNLOAD_PLATFORMS = ["linux"] as const;
 type UnavailableDownloadPlatform = (typeof UNAVAILABLE_DOWNLOAD_PLATFORMS)[number];
 
 function isUnavailableDownloadPlatform(value: string): value is UnavailableDownloadPlatform {
@@ -70,10 +70,42 @@ export async function latestDownloadResponse(fetcher: typeof fetch = fetch): Pro
   }
 }
 
+function findWindowsInstaller(manifest: string): string | undefined {
+  const assetLines = manifest.matchAll(/^\s*-\s+url:\s*["']?([^\s"']+)["']?\s*$/gim);
+  for (const match of assetLines) {
+    const asset = match[1];
+    if (!asset || !/^[a-z0-9][a-z0-9._+-]+$/i.test(asset)) continue;
+    if (asset.toLowerCase().endsWith(".exe")) return asset;
+  }
+  const pathMatch = manifest.match(/^\s*path:\s*["']?([^\s"']+)["']?\s*$/im);
+  if (pathMatch?.[1]?.toLowerCase().endsWith(".exe")) {
+    return pathMatch[1];
+  }
+  return undefined;
+}
+
+/** The Windows x64 executable installer of the latest release. */
+export async function latestWindowsDownloadResponse(fetcher: typeof fetch = fetch): Promise<Response> {
+  try {
+    const response = await fetcher(`${RELEASES_BASE_URL}/latest/download/latest.yml`, {
+      headers: { accept: "text/yaml, text/plain" },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) return fallbackToReleases(`manifest status ${response.status}`);
+
+    const installer = findWindowsInstaller(await response.text());
+    if (!installer) return fallbackToReleases("no exe asset in the manifest");
+
+    return redirect(`${RELEASES_BASE_URL}/latest/download/${encodeURIComponent(installer)}`);
+  } catch {
+    return fallbackToReleases("the manifest request failed");
+  }
+}
+
 /**
  * The answer to `/download/<platform>/latest?arch=<arch>`. macOS without `?arch=x64` gets the
- * Apple silicon DMG. An Intel Mac, Windows and Linux have no installer yet, so they get the download
- * page of their system, which says so. They never get an installer for another system.
+ * Apple silicon DMG. Windows gets the Windows x64 installer. Linux has no installer yet, so it
+ * gets the download page.
  */
 export function downloadRouteResponse(
   platform: string,
@@ -81,6 +113,7 @@ export function downloadRouteResponse(
   fetcher: typeof fetch = fetch,
 ): Promise<Response> | Response {
   if (platform === "macos" && arch !== "x64") return latestDownloadResponse(fetcher);
+  if (platform === "windows") return latestWindowsDownloadResponse(fetcher);
   if (isUnavailableDownloadPlatform(platform)) return redirect(OPENBOT_DOWNLOAD_PAGE_LINKS[platform]);
   return new Response("Not found", { status: 404 });
 }

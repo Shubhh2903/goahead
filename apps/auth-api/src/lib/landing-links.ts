@@ -7,6 +7,7 @@ export const EXTERNAL_LINK_REL = "noopener noreferrer";
  */
 export const OPENBOT_DOWNLOAD_LINKS = {
   macos: "/download/macos/latest",
+  windows: "/download/windows/latest",
 } as const;
 
 /** The pages that describe each installer: requirements, install steps and known limits. */

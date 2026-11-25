@@ -39,8 +39,7 @@ export const LANDING_FAQ: readonly LandingQuestion[] = [
   },
   {
     question: "Which computers can run GoAhead?",
-    answer:
-      "A Mac with Apple silicon (M1 or newer) and macOS 13 or newer. Versions for Intel Macs, Windows and Linux are not available yet.",
+    answer: "Windows 10/11 (64-bit) and macOS 13 or newer (Apple silicon M1 or newer). Linux is coming soon.",
   },
   {
     question: "Is it safe to let agents work on my computer?",

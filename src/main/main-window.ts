@@ -158,6 +158,7 @@ export function createMainWindowController({
 
     window.once("ready-to-show", () => {
       if (
+        process.platform === "win32" ||
         shouldShowDevelopmentWindow({
           remoteRole: developmentRemoteRole,
           testClientEnabled: developmentTestClientEnabled,
@@ -168,7 +169,7 @@ export function createMainWindowController({
     });
     window.on("close", (event) => {
       rememberMainWindowBounds(window.getNormalBounds());
-      if (process.platform === "darwin" && !isQuitting()) {
+      if (!isQuitting()) {
         // The hidden renderer owns the cross-host Dynamic Island coordinator and must outlive its visible window.
         event.preventDefault();
         window.hide();
@@ -335,7 +336,7 @@ export function createDynamicIslandWindow(bounds: Rectangle, _display: Display):
     enableLargerThanScreen: true,
     hasShadow: false,
     skipTaskbar: true,
-    type: "panel",
+    type: process.platform === "darwin" ? "panel" : "toolbar",
     backgroundColor: "#00000000",
     webPreferences: {
       preload: join(__dirname, "../preload/index.cjs"),

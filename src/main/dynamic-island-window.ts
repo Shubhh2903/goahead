@@ -325,14 +325,23 @@ export class DynamicIslandWindowController {
   }
 
   async #reconcileWindows(): Promise<void> {
-    if (this.#destroyed || this.#options.platform !== "darwin" || !this.#preference.enabled) {
+    if (
+      this.#destroyed ||
+      (this.#options.platform !== "darwin" && this.#options.platform !== "win32") ||
+      !this.#preference.enabled
+    ) {
       this.destroyWindows();
       return;
     }
 
-    const displays = this.#options
-      .getDisplays()
-      .filter((display) => this.#preference.additionalDisplaysEnabled || display.internal);
+    const allDisplays = this.#options.getDisplays();
+    const primaryDisplay = allDisplays.find((d) => d.bounds.x === 0 && d.bounds.y === 0) ?? allDisplays[0];
+    const displays = allDisplays.filter(
+      (display) =>
+        this.#preference.additionalDisplaysEnabled ||
+        display.internal ||
+        (this.#options.platform === "win32" && (display.id === primaryDisplay?.id || allDisplays.length === 1)),
+    );
     const displayIds = new Set(displays.map((display) => display.id));
     for (const [displayId, window] of this.#windows) {
       if (displayIds.has(displayId) && !window.isDestroyed()) continue;
@@ -378,16 +387,20 @@ export class DynamicIslandWindowController {
 
   private async createDisplayWindow(display: Display, bounds: Rectangle): Promise<void> {
     const window = this.#options.createWindow(this.#windowBounds(display, bounds, false), display);
-    window.excludedFromShownWindowsMenu = true;
     this.#windows.set(display.id, window);
     window.setHasShadow(false);
-    window.setWindowButtonVisibility(false);
-    window.setAlwaysOnTop(true, "status");
-    window.setVisibleOnAllWorkspaces(true, {
-      visibleOnFullScreen: true,
-      skipTransformProcessType: true,
-    });
-    window.setHiddenInMissionControl(true);
+    if (this.#options.platform === "darwin") {
+      window.excludedFromShownWindowsMenu = true;
+      window.setWindowButtonVisibility(false);
+      window.setAlwaysOnTop(true, "status");
+      window.setVisibleOnAllWorkspaces(true, {
+        visibleOnFullScreen: true,
+        skipTransformProcessType: true,
+      });
+      window.setHiddenInMissionControl(true);
+    } else {
+      window.setAlwaysOnTop(true, "screen-saver");
+    }
     window.setFocusable(false);
     window.setIgnoreMouseEvents(true, { forward: true });
     window.webContents.on("did-finish-load", () => {

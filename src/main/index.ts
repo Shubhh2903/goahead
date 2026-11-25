@@ -1078,6 +1078,9 @@ if (!hasSingleInstanceLock) {
         .initialize()
         .catch((error) => logger.error("Unable to initialize Dynamic Island:", toLogValue(error)));
       await windows.loadRenderer(mainWindow);
+      if (!mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+        mainWindow.show();
+      }
       // After the load: `sendToRenderer` drops events aimed at a window that is still loading.
       remoteServers.startEventConnections();
       const reconcileDynamicIsland = () =>
@@ -1168,10 +1171,6 @@ if (!hasSingleInstanceLock) {
       app.quit();
     });
 }
-
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
 
 app.on("before-quit", (event) => {
   isQuitting = true;
