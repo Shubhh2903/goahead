@@ -39,6 +39,7 @@ export function toAgentProfile(stored: AgentSummary): AgentProfile {
     compactWindow: stored.compactWindow,
     disabledMcpServerIds: stored.disabledMcpServerIds,
     weeklyTokenBudget: stored.weeklyTokenBudget,
+    turnLimit: stored.turnLimit,
     autoModel: stored.autoModel,
     threadId: stored.threadId,
     workspacePath: stored.workspacePath,
@@ -189,6 +190,7 @@ export function agentProfilesEqual(left: AgentProfile, right: AgentProfile): boo
     left.compactWindow === right.compactWindow &&
     (left.disabledMcpServerIds ?? []).join("\u0000") === (right.disabledMcpServerIds ?? []).join("\u0000") &&
     left.weeklyTokenBudget === right.weeklyTokenBudget &&
+    left.turnLimit === right.turnLimit &&
     left.autoModel === right.autoModel &&
     left.threadId === right.threadId &&
     left.avatarSeed === right.avatarSeed &&

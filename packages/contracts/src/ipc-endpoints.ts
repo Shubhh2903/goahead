@@ -337,6 +337,8 @@ import type {
   OpenStorageLocationInput,
   OpenStoredFileInput,
   StorageUsage,
+  TrashUnassignedFolderInput,
+  UnassignedFolder,
 } from "./ipc-storage";
 import type {
   ConfigureHostInput,
@@ -1175,6 +1177,10 @@ export const IPC_ENDPOINTS = {
     clear: scopedRequest<ClearStorageInput, void, "required">()("storage:clear"),
     openFile: scopedRequest<OpenStoredFileInput, void, "required">()("storage:open-file"),
     openLocation: request<OpenStorageLocationInput, void>()("storage:open-location"),
+    // Local only, like `openLocation`: the rows carry paths on this computer, and only the person at
+    // this computer moves one to the Trash. No Team API route serves either.
+    listUnassignedFolders: request<undefined, UnassignedFolder[]>()("storage:list-unassigned-folders"),
+    trashUnassignedFolder: request<TrashUnassignedFolderInput, void>()("storage:trash-unassigned-folder"),
   },
   // Bound against the agent import service, which holds the staged archives. A remote server is
   // reached with `agent-import-v1`; main still opens the file dialog and sends the file.

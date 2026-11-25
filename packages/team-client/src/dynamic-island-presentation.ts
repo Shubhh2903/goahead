@@ -50,11 +50,13 @@ export interface DynamicIslandText {
   approvalFileChange: string;
   approvalPermissions: string;
   /**
-   * The titles of a local-only send or booking card. Only the desktop shows these cards, so only it
-   * sets them; the card's reason does not repeat the question.
+   * The titles of a local-only send, booking, turn-limit or install card. Only the desktop shows these cards,
+   * so only it sets them; the card's reason does not repeat the question.
    */
   approvalSendMail?: string;
   approvalBookMeeting?: string;
+  approvalTurnLimit?: string;
+  approvalInstallGuard?: string;
   /** `userErrorMessage` in the interface language. `fallback` is already translated. */
   errorMessage: (error: unknown, fallback: string) => string;
 }
@@ -376,6 +378,8 @@ function approvalTitle(approval: AgentApproval, text: DynamicIslandText) {
   const localKind = localOnlyApprovalKind(approval.requestId);
   if (localKind === "send" && text.approvalSendMail) return text.approvalSendMail;
   if (localKind === "meeting" && text.approvalBookMeeting) return text.approvalBookMeeting;
+  if (localKind === "turn-limit" && text.approvalTurnLimit) return text.approvalTurnLimit;
+  if (localKind === "install-guard" && text.approvalInstallGuard) return text.approvalInstallGuard;
   if (approval.kind === "command") return text.approvalCommand;
   if (approval.kind === "file-change") return text.approvalFileChange;
   return text.approvalPermissions;

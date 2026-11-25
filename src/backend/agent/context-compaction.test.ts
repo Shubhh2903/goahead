@@ -62,6 +62,31 @@ describe.sequential("ContextCompaction: pressure, threshold and failure", () => 
     expect((await protocolMessages(logPath)).some((message) => message.method === "thread/compact/start")).toBe(false);
   });
 
+  // The incident: Codex let a thread grow to 270-350k tokens of a 272k+ window, and every call
+  // re-read it. The host compacts at 120,000 tokens, or earlier when 80% of a small window is less.
+  it.each([
+    { contextWindow: 272_000, used: 125_000, compacts: true },
+    { contextWindow: 272_000, used: 110_000, compacts: false },
+    { contextWindow: 100_000, used: 81_000, compacts: true },
+  ])("compacts a $contextWindow-token window at $used tokens: $compacts", async ({ contextWindow, used, compacts }) => {
+    process.env.OPENBOT_FAKE_AUTO_COMPLETE = "DONE";
+    process.env.OPENBOT_FAKE_CONTEXT_USAGE = String(used);
+    process.env.OPENBOT_FAKE_CONTEXT_WINDOW = String(contextWindow);
+    const { store, mailbox } = stores(root);
+    service = createTestService({ store, mailbox });
+    await service.initialize();
+
+    await service.sendMessage({ agentId: "chief", text: "First task" });
+    await service.sendMessage({ agentId: "chief", text: "Second task" });
+    await waitFor(async () => {
+      const messages = await protocolMessages(logPath);
+      return messages.filter((message) => message.method === "turn/start").length === 2;
+    });
+
+    const messages = await protocolMessages(logPath);
+    expect(messages.some((message) => message.method === "thread/compact/start")).toBe(compacts);
+  });
+
   it("continues queued work when an MCP server changes while the context is compacting", async () => {
     process.env.OPENBOT_FAKE_AUTO_COMPLETE = "DONE";
     process.env.OPENBOT_FAKE_CONTEXT_USAGE = "82000";

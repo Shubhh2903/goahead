@@ -50,6 +50,7 @@ const FAKE_RUNTIME_ENV_VARS = [
   "OPENBOT_FAKE_THREAD_READ_DELAY",
   "OPENBOT_FAKE_AUTO_COMPLETE",
   "OPENBOT_FAKE_CONTEXT_USAGE",
+  "OPENBOT_FAKE_CONTEXT_WINDOW",
   "OPENBOT_FAKE_COMPACTION_ERROR",
   "OPENBOT_FAKE_COMPACTION_DELAY",
   "OPENBOT_FAKE_ARCHIVED_THREAD",
@@ -699,7 +700,7 @@ process.stdin.on("data", (chunk) => {
         }
         if (process.env.OPENBOT_FAKE_CONTEXT_USAGE) {
           const totalTokens = Number(process.env.OPENBOT_FAKE_CONTEXT_USAGE);
-          write({ method: "thread/tokenUsage/updated", params: { threadId: message.params.threadId, turnId, tokenUsage: { total: { totalTokens }, last: { totalTokens }, modelContextWindow: 100000 } } });
+          write({ method: "thread/tokenUsage/updated", params: { threadId: message.params.threadId, turnId, tokenUsage: { total: { totalTokens }, last: { totalTokens }, modelContextWindow: Number(process.env.OPENBOT_FAKE_CONTEXT_WINDOW || 100000) } } });
         }
         write({ method: "item/agentMessage/delta", params: { threadId: message.params.threadId, turnId, itemId: "message-" + turnId, delta: "Streaming" } });
         if (process.env.OPENBOT_FAKE_AGENT_TOOL === "1" && turnCounter === 1) {

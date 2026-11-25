@@ -1,4 +1,8 @@
-import { CLEARABLE_STORAGE_CATEGORIES, type ClearableStorageCategory } from "@openbot/contracts/ipc";
+import {
+  CLEARABLE_STORAGE_CATEGORIES,
+  type ClearableStorageCategory,
+  type UnassignedFolder,
+} from "@openbot/contracts/ipc";
 import { isOneOf } from "@openbot/contracts/runtime-values";
 import type { AppFormat, AppTextKey, AppTranslate } from "@openbot/i18n";
 import {
@@ -60,9 +64,17 @@ export interface StorageOverviewProps {
   onClear: (category: ClearableStorageCategory) => void | Promise<void>;
   onPreviewFile: (file: StoredFileRow) => void;
   onFileAction: (file: StoredFileRow, action: StoredFileAction) => void | Promise<void>;
+  /** Folders under the managed workspace roots that no agent owns. This computer only. */
+  unassignedFolders?: readonly UnassignedFolder[];
+  /** Moves one of `unassignedFolders` to the Trash. Rejects with the reason to show. */
+  onTrashFolder?: (path: string) => Promise<void>;
 }
 
 const LARGEST_CHATS = 5;
+const GIB = 1024 ** 3;
+/** Smaller folders are counted in the workspaces total but not listed. */
+const UNASSIGNED_FOLDER_MIN_BYTES = GIB;
+const UNASSIGNED_FOLDER_WARNING_BYTES = 5 * GIB;
 
 /**
  * The Storage page: how much space OpenBot takes on one computer, which agents and chats take it,
@@ -315,6 +327,16 @@ export function StorageOverview(props: StorageOverviewProps) {
           </section>
         </Show>
 
+        <Show when={props.canManage ? props.onTrashFolder : undefined}>
+          {(onTrash) => (
+            <UnassignedFolders
+              folders={props.unassignedFolders ?? []}
+              disabled={props.state === "scanning"}
+              onTrash={onTrash()}
+            />
+          )}
+        </Show>
+
         <Show when={props.canManage && removable().length > 0}>
           <StorageCleanup
             entries={removable()}
@@ -445,5 +467,101 @@ function StorageCleanup(props: {
         error={error() ?? undefined}
       />
     </section>
+  );
+}
+
+function folderName(path: string): string {
+  return path.split(/[\\/]/u).filter(Boolean).pop() ?? path;
+}
+
+/**
+ * Folders beside the agent workspaces that no agent uses, such as what a QA run left. Large ones are
+ * listed, and each can go to the Trash, from which the user can put it back.
+ */
+function UnassignedFolders(props: {
+  folders: readonly UnassignedFolder[];
+  disabled: boolean;
+  onTrash: (path: string) => Promise<void>;
+}) {
+  const { t, format, errorMessage } = useText();
+  const headingId = `storage-unassigned-${createUniqueId()}`;
+  const [pending, setPending] = createSignal<UnassignedFolder | null>(null);
+  const [error, setError] = createSignal<string | null>(null);
+  const large = createMemo(() => props.folders.filter((folder) => folder.bytes >= UNASSIGNED_FOLDER_MIN_BYTES));
+  const totalBytes = () => props.folders.reduce((sum, folder) => sum + folder.bytes, 0);
+  // The warning counts every folder, so many small ones that add up still show it.
+  const warn = () => totalBytes() >= UNASSIGNED_FOLDER_WARNING_BYTES;
+
+  async function confirm(): Promise<void> {
+    const folder = pending();
+    if (!folder) return;
+    setError(null);
+    try {
+      await props.onTrash(folder.path);
+      setPending(null);
+    } catch (caught) {
+      setError(errorMessage(caught, t("files.unassigned.failed")));
+    }
+  }
+
+  return (
+    <Show when={large().length > 0 || warn()}>
+      <section class="storage-section" aria-labelledby={headingId}>
+        <h3 id={headingId} class="storage-section-heading">
+          {t("files.unassigned.title")}
+        </h3>
+        <Show when={warn()}>
+          <div class="storage-message" role="status">
+            <TriangleAlert class="storage-message-icon" aria-hidden="true" />
+            <p class="storage-message-description">
+              {t("files.unassigned.warning", { size: format.fileSize(totalBytes()) })}
+            </p>
+          </div>
+        </Show>
+        <Show when={large().length > 0}>
+          <ul class="storage-rows storage-cleanup-rows">
+            <For each={large()}>
+              {(folder) => (
+                <li class="storage-cleanup-row">
+                  <span class="storage-row-copy">
+                    <span class="storage-row-title" title={folder.path}>
+                      {folderName(folder.path)}
+                    </span>
+                    <span class="storage-row-meta">{t("files.unassigned.description")}</span>
+                  </span>
+                  <span class="storage-row-size">{format.fileSize(folder.bytes)}</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={props.disabled}
+                    aria-label={t("files.unassigned.moveFolder", { name: folderName(folder.path) })}
+                    onClick={() => {
+                      setError(null);
+                      setPending(folder);
+                    }}
+                  >
+                    {t("files.unassigned.moveToTrash")}
+                  </Button>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+        <ConfirmDialog
+          open={pending() !== null}
+          onCancel={() => setPending(null)}
+          onConfirm={confirm}
+          title={t("files.unassigned.confirmTitle", { name: folderName(pending()?.path ?? "") })}
+          description={t("files.unassigned.confirmDescription", {
+            path: pending()?.path ?? "",
+            size: format.fileSize(pending()?.bytes ?? 0),
+          })}
+          confirmLabel={t("files.unassigned.moveToTrash")}
+          pendingLabel={t("files.unassigned.moving")}
+          error={error() ?? undefined}
+        />
+      </section>
+    </Show>
   );
 }

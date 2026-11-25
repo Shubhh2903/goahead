@@ -128,6 +128,8 @@ function islandText(): DynamicIslandText {
     approvalPermissions: t("island.approval.title.permissions"),
     approvalSendMail: t("prompt.approval.title.sendMail"),
     approvalBookMeeting: t("prompt.approval.title.bookMeeting"),
+    approvalTurnLimit: t("prompt.approval.title.turnLimit"),
+    approvalInstallGuard: t("prompt.approval.title.installGuard"),
     errorMessage,
   };
 }

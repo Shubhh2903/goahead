@@ -58,7 +58,7 @@ export function AddAgentScreen() {
       await createAgent({
         name: name.trim(),
         description: description.trim(),
-        initialMessage: description.trim() ? `Your ongoing role is: ${description.trim()}` : "Greet me briefly.",
+        initialMessage: t("mobile.agent.add.firstGreeting"),
         avatarSeed,
         avatarHue,
       });

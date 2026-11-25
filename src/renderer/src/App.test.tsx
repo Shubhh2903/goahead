@@ -665,8 +665,7 @@ describe("OpenBot connected desktop shell", () => {
       avatarHue: 215,
       provider: "codex",
       model: "gpt-5.6-luna",
-      initialMessage:
-        "Your ongoing role is: Compare travel options and turn my rough ideas into practical, day-by-day itineraries.",
+      initialMessage: "Greet me briefly.",
     });
     expect(window.openbot.agent.sendMessage).not.toHaveBeenCalled();
     expect(await screen.findByRole("heading", { name: "Trip Planner" })).toBeInTheDocument();

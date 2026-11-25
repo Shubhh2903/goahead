@@ -12,6 +12,7 @@ import {
   parseGetStorageUsageInput,
   parseOpenStorageLocationInput,
   parseOpenStoredFileInput,
+  parseTrashUnassignedFolderInput,
   STORAGE_CAPABILITY,
 } from "@openbot/contracts/ipc";
 import { isDynamicRecord } from "@openbot/contracts/runtime-values";
@@ -23,7 +24,7 @@ import type { ResponseDecoder } from "../remote-host-decoding";
 import type { RemoteRequestInit } from "../remote-server-client";
 import { agentRequest } from "./agent-inputs";
 import { type OpenAttachmentDependencies, openAttachmentForServer } from "./attachment-handlers";
-import { type IpcGroupHandlers, payloadHandler } from "./define-ipc-group";
+import { handler, type IpcGroupHandlers, payloadHandler } from "./define-ipc-group";
 import { scopedHandler } from "./scoped-handler";
 
 /** The RemoteServerManager members this registrar reaches, and nothing else. */
@@ -34,10 +35,12 @@ interface StorageRemoteServers extends Pick<OpenAttachmentDependencies["remoteSe
 }
 
 export interface StorageIpcDependencies extends Omit<OpenAttachmentDependencies, "remoteServers"> {
-  storage: Pick<StorageUsageService, "usage" | "deleteFile" | "clear">;
+  storage: Pick<StorageUsageService, "usage" | "deleteFile" | "clear" | "unassignedFolders" | "trashUnassignedFolder">;
   remoteServers: StorageRemoteServers;
   agents: () => StorageAgent[];
   openPath: (path: string) => Promise<string>;
+  /** Electron `shell.trashItem`: the user can put the folder back from the Trash. */
+  trashItem: (path: string) => Promise<void>;
 }
 
 /** Delete and clear answer an empty object. The transport codec has already checked its shape. */
@@ -55,6 +58,7 @@ export function storageIpcHandlers({
   translate,
   agents,
   openPath,
+  trashItem,
 }: StorageIpcDependencies): Pick<IpcGroupHandlers, "storage"> {
   async function remoteChange(serverId: string, path: string, body: unknown): Promise<void> {
     if (!remoteServers.supportsCapability(serverId, STORAGE_CAPABILITY))
@@ -103,6 +107,12 @@ export function storageIpcHandlers({
         const error = await openPath(agent.workspacePath);
         if (error) throw new Error(error);
       }),
+      // Local only: the rows are paths on this computer. No Team API route reaches these two.
+      listUnassignedFolders: handler(() => storage.unassignedFolders()),
+      // The service checks the path again from the disk; the renderer's copy is never trusted.
+      trashUnassignedFolder: payloadHandler(parseTrashUnassignedFolderInput, ({ path }) =>
+        storage.trashUnassignedFolder(path, trashItem),
+      ),
     },
   };
 }

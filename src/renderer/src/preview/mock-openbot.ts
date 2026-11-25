@@ -1260,7 +1260,15 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
       updateAgent: async (input: UpdateAgentInput) => {
         const current = agents.find((agent) => agent.id === input.agentId);
         if (!current) throw new Error("Agent not found");
-        const { agentId: _agentId, busyMessageMode, compactWindow, weeklyTokenBudget, autoModel, ...updates } = input;
+        const {
+          agentId: _agentId,
+          busyMessageMode,
+          compactWindow,
+          weeklyTokenBudget,
+          turnLimit,
+          autoModel,
+          ...updates
+        } = input;
         const updated: AgentSummary = { ...current, ...updates };
         // `null` returns the agent to the app default, which an agent records by having no value.
         if (busyMessageMode === null) delete updated.busyMessageMode;
@@ -1269,6 +1277,9 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
         else if (compactWindow) updated.compactWindow = compactWindow;
         if (weeklyTokenBudget === null) delete updated.weeklyTokenBudget;
         else if (weeklyTokenBudget) updated.weeklyTokenBudget = weeklyTokenBudget;
+        // `0` is Off, a value of its own.
+        if (turnLimit === null) delete updated.turnLimit;
+        else if (turnLimit !== undefined) updated.turnLimit = turnLimit;
         if (autoModel === false) delete updated.autoModel;
         else if (autoModel) updated.autoModel = true;
         if (updated.disabledMcpServerIds?.length === 0) delete updated.disabledMcpServerIds;

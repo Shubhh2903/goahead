@@ -1,6 +1,7 @@
 import { defineMessages } from "../../../message";
 
 export const messages = defineMessages("mobile.agent", {
+  "mobile.agent.add.firstGreeting": "Greet me briefly.",
   "mobile.agent.pin.pin": "Pin",
   "mobile.agent.pin.unpin": "Unpin",
   "mobile.agent.pin.pinNamed": "Pin {name}",

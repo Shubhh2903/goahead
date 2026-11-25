@@ -440,19 +440,28 @@ iCloud, cannot read it. A remote server has no feed: the section shows only for 
 
 ## Token settings of an agent
 
-Three local-only agent settings lower token use. The Team API agent allowlist does not carry them, and
+Four local-only agent settings lower token use. The Team API agent allowlist does not carry them, and
 the remote IPC branch refuses them (`error.agent.tokenSettingsLocalOnly`).
 
-- `compactWindow` (80K or 120K tokens; absent means the full window). `ThreadLifecycle` sends it to
-  Claude as a thread param, and `claude-client.ts` sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, so Claude
-  Code summarizes the conversation sooner and each model call reads less context. A change restarts
-  the Claude query with the next turn. Other providers keep their own compaction.
+- `compactWindow` (80K, 120K or 200K tokens; absent means 120K, `DEFAULT_COMPACT_WINDOW`). `ThreadLifecycle`
+  sends it to Claude as a thread param, and `claude-client.ts` always sets
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, so Claude Code summarizes the conversation sooner and each model
+  call reads less context. A change restarts the Claude query with the next turn. For Codex,
+  `thread/start` and `thread/resume` send `model_auto_compact_token_limit` (120K), and host compaction
+  between turns starts at the smaller of the usual share of the window and 120K. Other providers keep
+  their own compaction.
 - `disabledMcpServerIds` (absent means every enabled MCP panel server). `agentMcpServers` leaves these
   servers out for Codex, Claude and the ACP clients, so a server added later still reaches every agent.
 - `weeklyTokenBudget` (5M to 100M tokens). `AgentTokenBudget` (`src/main/agent-token-budget.ts`)
   reads the agent's processed tokens since Monday after each completed turn and shows one desktop
   notification at 80% and one at 100% per week. It never stops work. The alerts already shown are
   kept in memory, so a restart can show a level once more.
+- `turnLimit` (40, 100, 200 or 0 for Off; absent means 40). A turn stops at that many tool calls or at
+  75,000 times that many processed tokens, and a local-only card (`turn-limit:`) offers Continue, which
+  sends a new message. The same stop-and-card path serves the install guard (`install-guard.ts`): a
+  Claude `Bash` hook asks before a guarded command runs, while Codex and Grok stop the turn after the
+  command starts, so the command can already be running. Allow lasts 60 minutes per agent and rule, in
+  memory. Only the local owner answers these cards, so Turbo and auto approve do not.
 
 ## Provider CLI updates
 
@@ -1301,6 +1310,11 @@ and a yield between pages, because `DatabaseSync` and the walk run on the main t
 cached for 60 seconds per scope, a scan in progress is shared, and a delete, clear or agent delete
 drops the cache. Lists stop at `STORAGE_LIMITS` and set `truncated`; the breakdown still counts
 every byte.
+
+The scan also counts folders in the Agents and legacy Bots roots that no agent owns. Folders of 1 GiB
+or more come back from a local IPC call (`storage:list-unassigned-folders`), not in `StorageUsage`,
+because the Team API answer carries no path. `storage:trash-unassigned-folder` moves one unowned direct
+child to the system Trash and refuses a folder with a registered workspace inside it.
 
 A delete does not change the schema. `MailboxStore.deleteStoredFile` sets `deletedAt` on the stored
 attachment, persists, and queues the file path, not the transfer folder, in the file-deletion outbox.

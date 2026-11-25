@@ -91,6 +91,17 @@ export const messages = defineMessages("files", {
   "files.cleanup.confirmDescription": "This frees {size}. {description}",
   "files.cleanup.clearing": "Clearing…",
   "files.cleanup.failed": "Could not clear the data.",
+  "files.unassigned.title": "Folders with no agent",
+  "files.unassigned.description":
+    "No agent in this GoAhead profile uses it. Another GoAhead or OpenBot install on this Mac can still use it.",
+  "files.unassigned.warning": "Folders with no agent use {size}. Move the folders that you do not need to the Trash.",
+  "files.unassigned.moveToTrash": "Move to Trash",
+  "files.unassigned.moveFolder": "Move {name} to Trash",
+  "files.unassigned.confirmTitle": "Move “{name}” to the Trash?",
+  "files.unassigned.confirmDescription":
+    "This moves {path} ({size}) to the Trash. No agent in this GoAhead profile uses this folder, and no file in it changed in the last 7 days. Another GoAhead or OpenBot install on this Mac can still use it. You can put it back from the Trash.",
+  "files.unassigned.moving": "Moving…",
+  "files.unassigned.failed": "Could not move the folder to the Trash.",
   "files.agent.title": "Files",
   "files.agent.back": "Back to settings",
   "files.agent.close": "Close details",

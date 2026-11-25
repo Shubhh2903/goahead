@@ -706,12 +706,14 @@ describe("OpenBot connected desktop shell", () => {
             resolveModelUpdate = resolve;
           }),
       )
-      .mockImplementationOnce(async ({ busyMessageMode: _b, compactWindow: _c, weeklyTokenBudget: _w, ...input }) => ({
-        ...chief,
-        ...input,
-        provider: "claude",
-        model: "claude-opus-5",
-      }));
+      .mockImplementationOnce(
+        async ({ busyMessageMode: _b, compactWindow: _c, weeklyTokenBudget: _w, turnLimit: _t, ...input }) => ({
+          ...chief,
+          ...input,
+          provider: "claude",
+          model: "claude-opus-5",
+        }),
+      );
     render(() => <App />);
     await screen.findByRole("heading", { name: "Chief" });
 

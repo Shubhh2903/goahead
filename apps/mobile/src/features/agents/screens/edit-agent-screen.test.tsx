@@ -1697,7 +1697,7 @@ it("creates an agent from changed valid input and blocks duplicate submission an
   expect(workspace.createAgent).toHaveBeenCalledExactlyOnceWith({
     name: "Explorer",
     description: "Plan trips",
-    initialMessage: "Your ongoing role is: Plan trips",
+    initialMessage: "Greet me briefly.",
     avatarSeed: "mobile:newagentseed",
     avatarHue: null,
   });

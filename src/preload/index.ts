@@ -24,6 +24,7 @@ import {
   decodeRegistryInstallResult,
   decodeRegistryOperations,
   decodeSaveAgentProfileResult,
+  decodeUnassignedFolders,
   type EventEndpoint,
   type GroupApi,
   groupApiMethodName,
@@ -974,6 +975,8 @@ const openbotApi: OpenBotDesktopApi = {
     clear: decodeVoid,
     openFile: decodeVoid,
     openLocation: decodeVoid,
+    listUnassignedFolders: decodeUnassignedFolders,
+    trashUnassignedFolder: decodeVoid,
   }),
   remoteDesktop: bridgeGroup(IPC_ENDPOINTS.remoteDesktop, {
     checkSetup: decodeRemoteDesktopSetupFromMain,

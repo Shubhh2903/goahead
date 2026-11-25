@@ -1,11 +1,12 @@
 // Storage and files: what the host keeps on disk, measured for the Storage tab, the agent Files
 // detail and the chat Files panel. Files come from the mailbox state and their chats from the
 // database; folders are walked with a bound. Nothing here follows a symbolic link, and nothing here
-// deletes outside the cache and log folders the caller names.
+// deletes outside the cache and log folders the caller names. A folder with no agent under a managed
+// workspace root goes to the Trash only through the caller's function, after the checks here.
 
 import type { Dirent } from "node:fs";
 import { lstat, readdir, realpath, rm, statfs } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
@@ -19,8 +20,11 @@ import {
   type StorageCategory,
   type StorageUsage,
   type StoredFileRow,
+  UNASSIGNED_FOLDER_LIMIT,
+  type UnassignedFolder,
 } from "@openbot/contracts/ipc";
 import { isOneOf } from "@openbot/contracts/runtime-values";
+import { legacyAgentId } from "@openbot/contracts/validation";
 import { sourceText } from "@openbot/i18n/source";
 import {
   type StoragePlacement,
@@ -30,10 +34,13 @@ import {
   storageThreads,
 } from "./database/storage-usage-queries";
 import type { MailboxStore, MailboxStoredFile } from "./mailbox-store";
+import { isWithin } from "./workspace-paths";
 
 export interface StorageRoots {
   /** The SQLite file. Its `-wal` and `-shm` companions are counted with it. */
   database: string;
+  /** The current and the legacy parent folders of managed agent workspaces. */
+  workspaceRoots: readonly string[];
   downloads: string;
   /** Folders of copies the app can download again. Clear removes what is in them. */
   caches: readonly string[];
@@ -47,6 +54,8 @@ export interface StorageRoots {
 export interface StorageAgent {
   id: string;
   workspacePath: string;
+  /** Folders the user picked for the agent to work in. Never offered for the Trash, nor a folder that holds one. */
+  projectFolders?: readonly { path: string }[];
 }
 
 export interface StorageUsageSources {
@@ -54,6 +63,13 @@ export interface StorageUsageSources {
   database: () => DatabaseSync;
   mailbox: Pick<MailboxStore, "listStoredFiles" | "deleteStoredFile">;
   agents: () => readonly StorageAgent[];
+}
+
+/** One host scan: the answer every surface reads, and the local-only folders with no agent. */
+export interface StorageScan {
+  usage: StorageUsage;
+  /** Largest first. Empty for an agent or a chat scope. */
+  unassignedFolders: UnassignedFolder[];
 }
 
 /** The request names an agent or a file the host does not have. The Team API answers 404. */
@@ -64,28 +80,40 @@ const STORAGE_WALK_ENTRY_LIMIT = 100_000;
 const STAT_BATCH = 64;
 const LOG_FILE = /\.log(\.\d+)?$/;
 const CACHE_TTL_MS = 60_000;
+/**
+ * A folder with no agent in this profile in which a file changed this recently is not offered for
+ * the Trash: another GoAhead profile or OpenBot install on this computer shares the Agents folder,
+ * and its agents can still work there.
+ */
+export const UNASSIGNED_FOLDER_QUIET_MS = 7 * 24 * 60 * 60_000;
+/** An unfinished copy of a workspace. The agent store finishes or removes it. */
+const STAGE_SUFFIX = ".openbot-stage";
 
 const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 interface TreeSize {
   bytes: number;
   complete: boolean;
+  /** The newest modification time of a regular file under the root, in epoch milliseconds; 0 with no file. */
+  newestModifiedMs: number;
 }
 
 /**
- * Bytes of the regular files under `root`. A symbolic link is never followed, so a workspace that
- * links to a large folder does not count it, and a loop cannot run forever.
+ * Bytes of the regular files under `root`, and the newest of their modification times. A symbolic
+ * link is never followed, so a workspace that links to a large folder does not count it, and a loop
+ * cannot run forever. A folder in `skip` (real paths) is not entered: it is counted with its agent.
  */
-async function measureTree(root: string, entryLimit = STORAGE_WALK_ENTRY_LIMIT): Promise<TreeSize> {
+async function measureTree(root: string, skip?: ReadonlySet<string>): Promise<TreeSize> {
   let start: string;
   try {
     start = await realpath(root);
-    if (!(await lstat(start)).isDirectory()) return { bytes: 0, complete: true };
+    if (!(await lstat(start)).isDirectory()) return { bytes: 0, complete: true, newestModifiedMs: 0 };
   } catch {
-    return { bytes: 0, complete: true };
+    return { bytes: 0, complete: true, newestModifiedMs: 0 };
   }
   const pending = [start];
   let bytes = 0;
+  let newestModifiedMs = 0;
   let entries = 0;
   while (pending.length) {
     const directory = pending.pop() ?? start;
@@ -97,15 +125,28 @@ async function measureTree(root: string, entryLimit = STORAGE_WALK_ENTRY_LIMIT):
     }
     const files: string[] = [];
     for (const child of children) {
-      if (++entries > entryLimit) return { bytes, complete: false };
+      if (++entries > STORAGE_WALK_ENTRY_LIMIT) return { bytes, complete: false, newestModifiedMs };
       const path = join(directory, child.name);
-      if (child.isDirectory()) pending.push(path);
-      else if (child.isFile()) files.push(path);
+      if (child.isDirectory()) {
+        if (!skip?.has(path)) pending.push(path);
+      } else if (child.isFile()) files.push(path);
     }
     for (let index = 0; index < files.length; index += STAT_BATCH)
-      for (const size of await Promise.all(files.slice(index, index + STAT_BATCH).map(fileSize))) bytes += size;
+      for (const info of await Promise.all(files.slice(index, index + STAT_BATCH).map(fileInfo))) {
+        bytes += info.size;
+        newestModifiedMs = Math.max(newestModifiedMs, info.modifiedMs);
+      }
   }
-  return { bytes, complete: true };
+  return { bytes, complete: true, newestModifiedMs };
+}
+
+async function fileInfo(path: string): Promise<{ size: number; modifiedMs: number }> {
+  try {
+    const info = await lstat(path);
+    return info.isFile() ? { size: info.size, modifiedMs: info.mtimeMs } : { size: 0, modifiedMs: 0 };
+  } catch {
+    return { size: 0, modifiedMs: 0 };
+  }
 }
 
 async function fileSize(path: string): Promise<number> {
@@ -165,12 +206,18 @@ function largestFirst<T extends { bytes: number }>(rows: T[], limit: number): { 
 
 export class StorageUsageScanner {
   readonly #sources: StorageUsageSources;
+  readonly #now: () => number;
 
-  constructor(sources: StorageUsageSources) {
+  constructor(sources: StorageUsageSources, now: () => number = Date.now) {
     this.#sources = sources;
+    this.#now = now;
   }
 
   async scan(input: GetStorageUsageInput): Promise<StorageUsage> {
+    return (await this.measure(input)).usage;
+  }
+
+  async measure(input: GetStorageUsageInput): Promise<StorageScan> {
     const scannedAt = new Date().toISOString();
     const agents = this.#sources.agents();
     const scopeAgent = input.agentId === undefined ? null : agents.find((agent) => agent.id === input.agentId);
@@ -214,6 +261,7 @@ export class StorageUsageScanner {
     const chatBytes = [...threadSizes.values()].reduce((total, size) => total + size.bytes, 0);
     let breakdown: StorageBreakdown[];
     let agentRows: AgentStorageRow[] = [];
+    let unassignedFolders: UnassignedFolder[] = [];
     if (input.scope === "host") {
       const measured = await this.#hostFolders(agents);
       truncated ||= !measured.complete;
@@ -237,6 +285,7 @@ export class StorageUsageScanner {
       );
       agentRows = agentList.rows;
       truncated ||= agentList.cut;
+      unassignedFolders = largestFirst(measured.unassignedFolders, UNASSIGNED_FOLDER_LIMIT).rows;
     } else if (input.scope === "agent" && scopeAgent) {
       const workspace = await measureTree(scopeAgent.workspacePath);
       truncated ||= !workspace.complete;
@@ -255,7 +304,7 @@ export class StorageUsageScanner {
       ];
     }
 
-    return {
+    const usage: StorageUsage = {
       scope: input.scope,
       agentId: input.agentId ?? null,
       conversationId: input.conversationId ?? null,
@@ -267,6 +316,7 @@ export class StorageUsageScanner {
       files: fileRows.rows.map((entry) => entry.row),
       truncated,
     };
+    return { usage, unassignedFolders };
   }
 
   /** Placements in the scope's chats, by attachment id. Paged, with a yield between pages. */
@@ -402,14 +452,28 @@ export class StorageUsageScanner {
   async #hostFolders(agents: readonly StorageAgent[]) {
     const roots = this.#sources.roots;
     let complete = true;
-    const measure = async (path: string) => {
-      const size = await measureTree(path);
+    const measureSize = async (path: string, skip?: ReadonlySet<string>) => {
+      const size = await measureTree(path, skip);
       complete &&= size.complete;
-      return size.bytes;
+      return size;
     };
-    // Two agents can share a workspace folder; the disk holds it once.
+    const measure = async (path: string, skip?: ReadonlySet<string>) => (await measureSize(path, skip)).bytes;
+    // Two agents can share a workspace folder, by one path or by two; the disk holds it once.
     const byWorkspace = new Map<string, number>();
-    for (const path of new Set(agents.map((agent) => agent.workspacePath))) byWorkspace.set(path, await measure(path));
+    const byRealPath = new Map<string, number>();
+    for (const path of new Set(agents.map((agent) => agent.workspacePath))) {
+      const real = await realpath(path).catch(() => null);
+      if (!real) {
+        byWorkspace.set(path, 0);
+        continue;
+      }
+      const bytes = byRealPath.get(real) ?? (await measure(real));
+      byRealPath.set(real, bytes);
+      byWorkspace.set(path, bytes);
+    }
+    const registered = new Set(byRealPath.keys());
+    const inUse = [...registered, ...(await realProjectFolders(agents))];
+    const unassigned = await this.#unassignedFolders(agents, registered, inUse, measureSize);
     let caches = 0;
     for (const path of roots.caches) caches += await measure(path);
     let logs = 0;
@@ -417,7 +481,8 @@ export class StorageUsageScanner {
       for (const size of await Promise.all((await logFiles(directory)).map(fileSize))) logs += size;
     return {
       byWorkspace,
-      workspaces: [...byWorkspace.values()].reduce((total, bytes) => total + bytes, 0),
+      workspaces: [...byRealPath.values()].reduce((total, bytes) => total + bytes, 0) + unassigned.bytes,
+      unassignedFolders: unassigned.folders,
       downloads: await measure(roots.downloads),
       caches,
       runtimes: roots.runtimes ? await measure(roots.runtimes) : 0,
@@ -425,6 +490,142 @@ export class StorageUsageScanner {
       complete,
     };
   }
+
+  /**
+   * What sits under a managed workspace root and is not a registered workspace: a folder an agent
+   * made beside its own, a copy left by an import, a QA run. Its bytes count as workspaces. A folder
+   * is offered for the Trash only when no agent of this profile owns it, no agent workspace is inside
+   * it, and no file in it changed for `UNASSIGNED_FOLDER_QUIET_MS`: another profile or install can
+   * share the root. A folder too large to walk to the end is not offered.
+   */
+  async #unassignedFolders(
+    agents: readonly StorageAgent[],
+    registered: ReadonlySet<string>,
+    inUse: readonly string[],
+    measure: (path: string, skip?: ReadonlySet<string>) => Promise<TreeSize>,
+  ): Promise<{ bytes: number; folders: UnassignedFolder[] }> {
+    let bytes = 0;
+    const folders: UnassignedFolder[] = [];
+    for (const root of new Set(this.#sources.roots.workspaceRoots)) {
+      const real = await realDirectory(root);
+      // A root inside a registered workspace is already counted with that agent.
+      if (!real || [...registered].some((workspace) => workspace === real || isWithin(workspace, real))) continue;
+      let children: Dirent[];
+      try {
+        children = await readdir(real, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      const owned = new Set(ownedWorkspacePaths([real], agents));
+      for (const child of children) {
+        const path = join(real, child.name);
+        if (child.isFile()) bytes += await fileSize(path);
+        if (!child.isDirectory() || registered.has(path)) continue;
+        const inside = new Set([...registered].filter((workspace) => isWithin(path, workspace)));
+        const size = await measure(path, inside);
+        bytes += size.bytes;
+        if (
+          inside.size === 0 &&
+          !owned.has(path) &&
+          canTrashUnassignedFolder(path, [real], inUse) &&
+          quietFolder(size, this.#now())
+        )
+          folders.push({ path: join(root, child.name), bytes: size.bytes });
+      }
+    }
+    return { bytes, folders };
+  }
+}
+
+/** A folder walked to the end in which no file changed for `UNASSIGNED_FOLDER_QUIET_MS`. */
+function quietFolder(size: TreeSize, now: number): boolean {
+  return size.complete && now - size.newestModifiedMs >= UNASSIGNED_FOLDER_QUIET_MS;
+}
+
+/** The real path of a folder that is not itself a symbolic link, or null. */
+async function realDirectory(path: string): Promise<string | null> {
+  try {
+    if (!(await lstat(path)).isDirectory()) return null;
+    return await realpath(path);
+  } catch {
+    return null;
+  }
+}
+
+/** The agents' project folders, by real path when the folder exists. */
+function realProjectFolders(agents: readonly StorageAgent[]): Promise<string[]> {
+  return Promise.all(
+    agents.flatMap((agent) =>
+      (agent.projectFolders ?? []).map((folder) => realpath(folder.path).catch(() => resolve(folder.path))),
+    ),
+  );
+}
+
+/**
+ * Paths the agent store derives from an agent id under each root. The store deletes them with the
+ * agent, so they are the agent's even when its workspace path names another folder.
+ */
+function ownedWorkspacePaths(roots: readonly string[], agents: readonly StorageAgent[]): string[] {
+  return roots.flatMap((root) =>
+    agents.flatMap((agent) => [join(root, agent.id), join(root, legacyAgentId(agent.id))]),
+  );
+}
+
+/**
+ * Whether `path` is a folder the user may move to the Trash from Storage: an absolute path directly
+ * in one of `roots`, not an unfinished copy, not an agent workspace, not inside one, and with no
+ * agent workspace inside it. Pure, so the caller resolves links first.
+ */
+export function canTrashUnassignedFolder(
+  path: string,
+  roots: readonly string[],
+  agentWorkspaces: readonly string[],
+): boolean {
+  if (!isAbsolute(path)) return false;
+  const candidate = resolve(path);
+  if (candidate !== path.replace(/[\\/]+$/u, "")) return false;
+  if (!roots.some((root) => resolve(root) === dirname(candidate))) return false;
+  if (basename(candidate).toLowerCase().endsWith(STAGE_SUFFIX)) return false;
+  return !agentWorkspaces.some((workspace) => {
+    const owned = resolve(workspace);
+    return owned === candidate || isWithin(candidate, owned) || isWithin(owned, candidate);
+  });
+}
+
+/**
+ * The real path of a folder the user asked to move to the Trash, checked again here from the disk,
+ * never from what the renderer saw: it must be a real folder (not a link) directly in a workspace
+ * root, with no agent owning it or any folder inside it, and no file in it changed for
+ * `UNASSIGNED_FOLDER_QUIET_MS` (walked with the scan's bound). Throws when any check fails.
+ */
+async function trashableUnassignedFolder(
+  path: string,
+  roots: readonly string[],
+  agents: readonly StorageAgent[],
+  now: number,
+): Promise<string> {
+  const refuse = () => new Error(sourceText("error.storage.folderNotTrashable"));
+  // Only the exact path the scan listed: no `..`, `.` or doubled separators.
+  if (!isAbsolute(path) || resolve(path) !== path.replace(/[\\/]+$/u, "")) throw refuse();
+  const target = await realDirectory(path);
+  if (!target) throw refuse();
+  const realRoots = (await Promise.all(roots.map(realDirectory))).filter((root): root is string => root !== null);
+  const workspaces = await Promise.all(
+    agents.map((agent) => realpath(agent.workspacePath).catch(() => resolve(agent.workspacePath))),
+  );
+  workspaces.push(...ownedWorkspacePaths(realRoots, agents), ...(await realProjectFolders(agents)));
+  if (!canTrashUnassignedFolder(target, realRoots, workspaces)) throw refuse();
+  // The same folder by another spelling, such as other letter case on macOS: compare identities.
+  const identity = await lstat(target);
+  for (const workspace of workspaces) {
+    for (let current = workspace; ; current = dirname(current)) {
+      const info = await lstat(current).catch(() => null);
+      if (info && info.dev === identity.dev && info.ino === identity.ino) throw refuse();
+      if (dirname(current) === current) break;
+    }
+  }
+  if (!quietFolder(await measureTree(target), now)) throw new Error(sourceText("error.storage.folderRecentlyChanged"));
+  return target;
 }
 
 /** Two records can point at one file on disk; count it once. */
@@ -465,16 +666,16 @@ function scopeKey(input: GetStorageUsageInput): string {
  * drops every answer, and a scan that was running at that moment is not kept.
  */
 export class StorageUsageService {
-  readonly #scanner: Pick<StorageUsageScanner, "scan">;
-  readonly #sources: Pick<StorageUsageSources, "roots" | "mailbox">;
+  readonly #scanner: Pick<StorageUsageScanner, "measure">;
+  readonly #sources: Pick<StorageUsageSources, "roots" | "mailbox" | "agents">;
   readonly #now: () => number;
-  readonly #cache = new Map<string, { at: number; usage: StorageUsage }>();
-  readonly #running = new Map<string, Promise<StorageUsage>>();
+  readonly #cache = new Map<string, { at: number; scan: StorageScan }>();
+  readonly #running = new Map<string, Promise<StorageScan>>();
   #generation = 0;
 
   constructor(
-    scanner: Pick<StorageUsageScanner, "scan">,
-    sources: Pick<StorageUsageSources, "roots" | "mailbox">,
+    scanner: Pick<StorageUsageScanner, "measure">,
+    sources: Pick<StorageUsageSources, "roots" | "mailbox" | "agents">,
     now: () => number = Date.now,
   ) {
     this.#scanner = scanner;
@@ -482,18 +683,45 @@ export class StorageUsageService {
     this.#now = now;
   }
 
-  usage(input: GetStorageUsageInput): Promise<StorageUsage> {
+  async usage(input: GetStorageUsageInput): Promise<StorageUsage> {
+    return (await this.#scan(input)).usage;
+  }
+
+  /** Local only: the folders with no agent, from the same host scan as the Storage tab. */
+  async unassignedFolders(): Promise<UnassignedFolder[]> {
+    return (await this.#scan({ scope: "host" })).unassignedFolders;
+  }
+
+  /**
+   * Moves one folder with no agent to the Trash with `moveToTrash`, so the user can put it back.
+   * The path is checked again here against the disk and the current agents.
+   */
+  async trashUnassignedFolder(path: string, moveToTrash: (path: string) => Promise<void>): Promise<void> {
+    const target = await trashableUnassignedFolder(
+      path,
+      this.#sources.roots.workspaceRoots,
+      this.#sources.agents(),
+      this.#now(),
+    );
+    try {
+      await moveToTrash(target);
+    } finally {
+      this.invalidate();
+    }
+  }
+
+  #scan(input: GetStorageUsageInput): Promise<StorageScan> {
     const key = scopeKey(input);
     const cached = this.#cache.get(key);
-    if (!input.force && cached && this.#now() - cached.at < CACHE_TTL_MS) return Promise.resolve(cached.usage);
+    if (!input.force && cached && this.#now() - cached.at < CACHE_TTL_MS) return Promise.resolve(cached.scan);
     const running = this.#running.get(key);
     if (running) return running;
     const generation = this.#generation;
     const settled = this.#scanner
-      .scan(input)
-      .then((usage) => {
-        if (generation === this.#generation) this.#cache.set(key, { at: this.#now(), usage });
-        return usage;
+      .measure(input)
+      .then((scan) => {
+        if (generation === this.#generation) this.#cache.set(key, { at: this.#now(), scan });
+        return scan;
       })
       .finally(() => {
         if (this.#running.get(key) === settled) this.#running.delete(key);

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import type { AgentEvent } from "@openbot/contracts/ipc";
+import type { AgentEvent, AgentTurnLimit } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import { registerSecretValue } from "@openbot/logging";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,7 +32,7 @@ import {
   waitForQueue,
 } from "./agent-service-test-harness";
 import { MailboxStore } from "./mailbox-store";
-import { getString } from "./protocol";
+import { type AppServerNotification, getRecord, getString } from "./protocol";
 import { NO_PROVIDER_CREDENTIALS } from "./provider-drivers";
 import { SidebarLayoutStore } from "./sidebar-layout-store";
 
@@ -2789,5 +2789,653 @@ describe.sequential("AgentService: queue", () => {
     const listResponse = (await protocolMessages(logPath)).find((message) => message.id === "agent-tool-configured-0");
     expect(JSON.stringify(listResponse?.result)).toContain('\\"title\\":\\"Design\\"');
     expect(JSON.stringify(listResponse?.result)).toContain('\\"description\\":\\"\\"');
+  });
+});
+
+describe.sequential("AgentService: turn limit", () => {
+  async function startLimitedTurn(turnLimit?: AgentTurnLimit, provider: AgentProvider = "codex") {
+    if (provider === "grok") process.env.OPENBOT_GROK_PATH = await createFakeGrok(root);
+    const started = await startService(root, { provider, preferredProvider: provider, autoComplete: false });
+    const agentService = started.service;
+    service = agentService;
+    await started.store.getOrCreate("chief");
+    if (provider !== "codex") {
+      await agentService.ensureProvider(provider);
+      await agentService.updateAgent({ agentId: "chief", provider, model: "grok-4.5" });
+    }
+    expect(started.store.list().find((agent) => agent.id === "chief")?.provider).toBe(provider);
+    if (turnLimit !== undefined) await started.store.updateAgent({ agentId: "chief", turnLimit });
+    const events: AgentEvent[] = [];
+    agentService.on("event", (event) => events.push(event));
+    await agentService.sendMessage({ agentId: "chief", text: "Build the report." });
+    await waitForQueue(agentService, "chief", (queue) => queue.deliveries[0]?.status === "running");
+    const turnId = agentService.listQueue("chief").deliveries[0]?.turnId;
+    const threadId = started.store.activeProviderSession("chief")?.externalSessionId;
+    assert(turnId && threadId);
+    // The fake announces the turn after its start answer; a tool step before that has no turn.
+    await waitFor(() => events.some((event) => event.type === "turn-started" && event.turnId === turnId));
+    let sentToolCalls = 0;
+    const toolCalls = (count: number) => {
+      for (let index = 0; index < count; index += 1) {
+        sentToolCalls += 1;
+        const id = `${turnId}-tool-${sentToolCalls}`;
+        // The item each provider client sends: Codex names the item type; an ACP client (Grok) sends a
+        // `toolCall` with the ACP tool kind, and sends `item/started` again for each progress update.
+        const item =
+          provider === "codex"
+            ? { id, type: "commandExecution", status: "inProgress" }
+            : { id, type: "toolCall", name: "Read files", toolKind: "read", status: "in_progress" };
+        started.client.emit("notification", notification("item/started", { threadId, turnId, item }));
+        if (provider !== "codex") {
+          started.client.emit("notification", notification("item/started", { threadId, turnId, item }));
+        }
+      }
+    };
+    const interrupts = () => started.client.requests.filter((request) => request.method === "turn/interrupt");
+    const limitCards = () =>
+      events.flatMap((event) =>
+        event.type === "approval" && String(event.approval.requestId).startsWith("local-only:turn-limit:")
+          ? [event.approval]
+          : [],
+      );
+    const endInterruptedTurn = () =>
+      started.client.emit(
+        "notification",
+        notification("turn/completed", { threadId, turn: { id: turnId, status: "interrupted" } }),
+      );
+    return {
+      ...started,
+      service: agentService,
+      events,
+      turnId,
+      threadId,
+      toolCalls,
+      interrupts,
+      limitCards,
+      endInterruptedTurn,
+    };
+  }
+
+  it("stops a turn at 40 tool calls, asks once, and continues with one message on Allow", async () => {
+    const turn = await startLimitedTurn();
+    turn.toolCalls(39);
+    await waitFor(() => turn.events.some((event) => event.type === "turn-progress"));
+    expect(turn.interrupts()).toHaveLength(0);
+
+    turn.toolCalls(1);
+    await waitFor(() => turn.limitCards().length === 1);
+    expect(turn.interrupts()).toEqual([
+      { method: "turn/interrupt", params: { threadId: turn.threadId, turnId: turn.turnId } },
+    ]);
+    const [card] = turn.limitCards();
+    assert(card);
+    expect(card.reason).toBe(sourceText("status.agent.turnLimitReached", { calls: 40, tokens: "0" }));
+    // More tool steps before the provider ends the turn do not ask again.
+    turn.toolCalls(5);
+    turn.endInterruptedTurn();
+    await waitForQueue(turn.service, "chief", (queue) => queue.deliveries[0]?.status === "interrupted");
+    expect(turn.interrupts()).toHaveLength(1);
+    expect(turn.limitCards()).toHaveLength(1);
+
+    await turn.service.respondToApproval({ requestId: card.requestId, decision: "accept" }, "local-owner");
+    await waitForQueue(turn.service, "chief", (queue) => queue.deliveries.length === 2);
+    expect(turn.service.listQueue("chief").deliveries[1]?.text).toBe(sourceText("status.agent.turnLimitContinue"));
+    await waitFor(() => turn.client.requests.filter((request) => request.method === "turn/start").length === 2);
+  });
+
+  it("keeps an Allow given before the stopped turn ends, and continues once when it ends", async () => {
+    const turn = await startLimitedTurn();
+    turn.toolCalls(40);
+    await waitFor(() => turn.limitCards().length === 1);
+    const [card] = turn.limitCards();
+    assert(card);
+    await turn.service.respondToApproval({ requestId: card.requestId, decision: "accept" }, "local-owner");
+    expect(turn.service.listQueue("chief").deliveries).toHaveLength(1);
+
+    turn.endInterruptedTurn();
+    await waitForQueue(turn.service, "chief", (queue) => queue.deliveries[1]?.status === "running");
+    expect(turn.service.listQueue("chief").deliveries.map((delivery) => [delivery.text, delivery.status])).toEqual([
+      ["Build the report.", "interrupted"],
+      [sourceText("status.agent.turnLimitContinue"), "running"],
+    ]);
+  });
+
+  it("sends no continue message when the person queues a message before the stopped turn ends", async () => {
+    const turn = await startLimitedTurn();
+    turn.toolCalls(40);
+    await waitFor(() => turn.limitCards().length === 1);
+    const [card] = turn.limitCards();
+    assert(card);
+    await turn.service.respondToApproval({ requestId: card.requestId, decision: "accept" }, "local-owner");
+    await turn.service.sendMessage({ agentId: "chief", text: "Then send it to the team." });
+
+    turn.endInterruptedTurn();
+    await waitForQueue(turn.service, "chief", (queue) => queue.deliveries[1]?.status === "running");
+    expect(turn.service.listQueue("chief").deliveries.map((delivery) => [delivery.text, delivery.status])).toEqual([
+      ["Build the report.", "interrupted"],
+      ["Then send it to the team.", "running"],
+    ]);
+  });
+
+  it("stops a Codex turn at 3,000,000 tokens counted from the turn's first total, through a compaction", async () => {
+    const turn = await startLimitedTurn();
+    const usage = (totalTokens: number) =>
+      turn.client.emit(
+        "notification",
+        notification("thread/tokenUsage/updated", {
+          threadId: turn.threadId,
+          turnId: turn.turnId,
+          tokenUsage: { total: { totalTokens }, last: { totalTokens: 1 }, modelContextWindow: 200_000 },
+        }),
+      );
+    usage(10_000_000);
+    usage(12_999_999);
+    // A compaction lowers the thread total: the count stays, and only the next rise adds to it.
+    usage(1_000_000);
+    turn.toolCalls(1);
+    await waitFor(() => turn.events.some((event) => event.type === "turn-progress"));
+    expect(turn.interrupts()).toHaveLength(0);
+    expect(turn.limitCards()).toHaveLength(0);
+
+    usage(1_000_001);
+    await waitFor(() => turn.limitCards().length === 1);
+    expect(turn.interrupts()).toHaveLength(1);
+    expect(turn.limitCards()[0]?.reason).toBe(
+      sourceText("status.agent.turnLimitReached", { calls: 1, tokens: "3,000,000" }),
+    );
+  });
+
+  it("never stops a turn when the agent's limit is Off", async () => {
+    const turn = await startLimitedTurn(0);
+    turn.toolCalls(500);
+    turn.client.emit(
+      "notification",
+      notification("item/completed", {
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+        item: { id: "answer", type: "agentMessage", text: "Done" },
+      }),
+    );
+    turn.client.emit(
+      "notification",
+      notification("turn/completed", { threadId: turn.threadId, turn: { id: turn.turnId, status: "completed" } }),
+    );
+    await waitForQueue(turn.service, "chief", (queue) => queue.deliveries[0]?.status === "completed");
+    expect(turn.interrupts()).toHaveLength(0);
+    expect(turn.limitCards()).toHaveLength(0);
+  });
+
+  it("keeps a queued message queued, and Allow sends nothing while that message runs", async () => {
+    const turn = await startLimitedTurn();
+    await turn.service.sendMessage({ agentId: "chief", text: "Then send it to the team." });
+    turn.toolCalls(40);
+    await waitFor(() => turn.limitCards().length === 1);
+    turn.endInterruptedTurn();
+
+    // The stop ends only the turn: the waiting message is the next turn, not cancelled.
+    await waitForQueue(
+      turn.service,
+      "chief",
+      (queue) => queue.deliveries[0]?.status === "interrupted" && queue.deliveries[1]?.status === "running",
+    );
+    expect(turn.service.listQueue("chief").deliveries[1]?.text).toBe("Then send it to the team.");
+    const [card] = turn.limitCards();
+    assert(card);
+    await turn.service.respondToApproval({ requestId: card.requestId, decision: "accept" }, "local-owner");
+    expect(turn.service.listQueue("chief").deliveries).toHaveLength(2);
+    expect(turn.client.requests.filter((request) => request.method === "turn/start")).toHaveLength(2);
+  });
+
+  it("sends no stop and shows no card when the turn ends before the stop goes", async () => {
+    const turn = await startLimitedTurn();
+    await turn.service.sendMessage({ agentId: "chief", text: "Then send it to the team." });
+    // The limit and the end of the turn arrive together: the stop waits for an await, and by then
+    // the turn is over and the queued message is about to start the next one.
+    turn.toolCalls(40);
+    turn.client.emit(
+      "notification",
+      notification("turn/completed", { threadId: turn.threadId, turn: { id: turn.turnId, status: "completed" } }),
+    );
+
+    await waitForQueue(turn.service, "chief", (queue) => queue.deliveries[1]?.status === "running");
+    const nextTurnId = turn.service.listQueue("chief").deliveries[1]?.turnId;
+    await waitFor(() => turn.events.some((event) => event.type === "turn-started" && event.turnId === nextTurnId));
+    expect(turn.service.listQueue("chief").deliveries[0]?.status).toBe("completed");
+    expect(turn.interrupts()).toEqual([]);
+    expect(turn.limitCards()).toEqual([]);
+    expect(turn.service.localOnlyApprovals()).toEqual([]);
+  });
+
+  it("keeps a hand-off and its answer when the limit stops the turn that asked", async () => {
+    const turn = await startLimitedTurn();
+    await turn.store.getOrCreate("worker");
+    await callOpenBotTool(turn.client, turn.threadId, "send_message", {
+      recipientAgentIds: ["worker"],
+      text: "Draft the report.",
+    });
+    await waitForQueue(turn.service, "worker", (queue) => queue.deliveries[0]?.status === "running");
+    const workerTurnId = turn.service.listQueue("worker").deliveries[0]?.turnId;
+    const workerThreadId = turn.store.activeProviderSession("worker")?.externalSessionId;
+    assert(workerTurnId && workerThreadId);
+
+    turn.toolCalls(40);
+    await waitFor(() => turn.limitCards().length === 1);
+    turn.endInterruptedTurn();
+    await waitForQueue(turn.service, "chief", (queue) => queue.deliveries[0]?.status === "interrupted");
+
+    // The teammate's work is not cancelled, unlike `interrupt_agent` with its follow-ups.
+    expect(turn.service.listQueue("worker").deliveries).toMatchObject([
+      { text: "Draft the report.", status: "running" },
+    ]);
+    // The stopped agent does not stay working.
+    expect(turn.service.getRuntimeSnapshot("local").activeTurns).not.toContainEqual(
+      expect.objectContaining({ agentId: "chief" }),
+    );
+
+    // The teammate's answer still reaches the agent that asked, as its next turn.
+    const answer = { id: "worker-answer", type: "agentMessage", text: "The draft is ready.", phase: "final_answer" };
+    turn.client.emit(
+      "notification",
+      notification("item/completed", { threadId: workerThreadId, turnId: workerTurnId, item: answer }),
+    );
+    turn.client.emit(
+      "notification",
+      notification("turn/completed", { threadId: workerThreadId, turn: { id: workerTurnId, status: "completed" } }),
+    );
+    await waitForQueue(turn.service, "chief", (queue) =>
+      queue.deliveries.some(
+        (delivery) =>
+          delivery.sender.kind === "agent" &&
+          delivery.sender.agentId === "worker" &&
+          delivery.text.includes("The draft is ready."),
+      ),
+    );
+    expect(turn.interrupts()).toHaveLength(1);
+  });
+
+  it("stops a channel turn on its own provider thread, and Allow continues the channel task, not the chat", async () => {
+    const actor = { id: "human", name: "Alex" };
+    const started = await startService(root, { provider: "codex", autoComplete: false, channelActor: () => actor });
+    service = started.service;
+    await started.store.getOrCreate("chief");
+    // A channel turn's events go to the channel, so the fake's own `turn/started` is the barrier:
+    // the service listened first and already runs the turn when this listener sees it.
+    const announced: string[] = [];
+    started.client.on("notification", (message: AppServerNotification) => {
+      const id = message.method === "turn/started" ? getString(getRecord(message.params, "turn"), "id") : null;
+      if (id) announced.push(id);
+    });
+    // The agent's own chat has a provider thread of its own, which the stop must not reach.
+    await started.service.sendMessage({ agentId: "chief", text: "Hello" });
+    await waitForQueue(started.service, "chief", (queue) => queue.deliveries[0]?.status === "running");
+    const chatTurnId = started.service.listQueue("chief").deliveries[0]?.turnId;
+    const chatThreadId = started.store.activeProviderSession("chief")?.externalSessionId;
+    assert(chatTurnId && chatThreadId);
+    // The chat turn ends after its start, so it does not stay active in the chat.
+    await waitFor(() => announced.includes(chatTurnId));
+    started.client.emit(
+      "notification",
+      notification("turn/completed", { threadId: chatThreadId, turn: { id: chatTurnId, status: "completed" } }),
+    );
+    await waitForQueue(started.service, "chief", (queue) => queue.deliveries[0]?.status === "completed");
+    await started.service.channels.command(
+      {
+        type: "save",
+        channelId: "channel-1",
+        operationId: "create",
+        draft: {
+          name: "project",
+          title: "Project launch",
+          instructions: "Shared work",
+          members: [{ agentId: "chief" }],
+          leadAgentId: "chief",
+        },
+      },
+      actor,
+    );
+    await started.service.channels.command(
+      {
+        type: "send",
+        channelId: "channel-1",
+        operationId: "send",
+        text: "Work in the channel.",
+        recipientAgentId: "chief",
+        replyToMessageId: null,
+        attachmentDraftIds: [],
+      },
+      actor,
+    );
+    await waitFor(() => started.service.channels.store.assignments("channel-1").some((item) => item.turnId));
+    const turnId = started.service.channels.store.assignments("channel-1")[0]?.turnId;
+    const channelThreadId = started.service.channels.store.context("channel-1", "chief").threadId;
+    const externalThreadId = started.store.database.activeProviderSession(channelThreadId, "codex")?.externalSessionId;
+    assert(turnId && externalThreadId);
+    expect(externalThreadId).not.toBe(chatThreadId);
+    await waitFor(() => announced.includes(turnId));
+    for (let index = 0; index < 40; index += 1) {
+      const item = { id: `channel-tool-${index}`, type: "commandExecution", status: "inProgress" };
+      started.client.emit("notification", notification("item/started", { threadId: externalThreadId, turnId, item }));
+    }
+
+    await waitFor(() => started.service.localOnlyApprovals().length === 1);
+    expect(started.client.requests.filter((request) => request.method === "turn/interrupt")).toEqual([
+      { method: "turn/interrupt", params: { threadId: externalThreadId, turnId } },
+    ]);
+    expect(started.service.localOnlyApprovals()).toMatchObject([{ threadId: channelThreadId, turnId }]);
+
+    const [card] = started.service.localOnlyApprovals();
+    assert(card);
+    started.client.emit(
+      "notification",
+      notification("turn/completed", { threadId: externalThreadId, turn: { id: turnId, status: "interrupted" } }),
+    );
+    const task = () => started.service.channels.store.tasks("channel-1")[0];
+    await waitFor(() => task()?.state === "paused");
+    const turnStarts = () => started.client.requests.filter((request) => request.method === "turn/start");
+    const startsBefore = turnStarts().length;
+
+    await started.service.respondToApproval({ requestId: card.requestId, decision: "accept" }, "local-owner");
+
+    // The continue message is the person's reply to the channel task, and runs in the channel thread.
+    await waitFor(() => turnStarts().length === startsBefore + 1);
+    expect(turnStarts().at(-1)?.params).toMatchObject({ threadId: externalThreadId });
+    expect(task()).toMatchObject({ instruction: sourceText("status.agent.turnLimitContinue"), ownerAgentId: "chief" });
+    expect(
+      started.service.channels.store
+        .messages("channel-1")
+        .filter((message) => message.message.text === sourceText("status.agent.turnLimitContinue")),
+    ).toMatchObject([{ author: { kind: "member", id: "human" } }]);
+    // The agent's own chat gets nothing.
+    expect(started.service.listQueue("chief").deliveries).toMatchObject([{ text: "Hello", status: "completed" }]);
+  });
+
+  it("gives one stop and one card when the 40th tool call is also a guarded install", async () => {
+    const turn = await startLimitedTurn();
+    turn.toolCalls(39);
+    turn.client.emit(
+      "notification",
+      notification("item/started", {
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+        item: { id: "pod", type: "commandExecution", status: "inProgress", command: "pod install" },
+      }),
+    );
+    const cards = () =>
+      turn.events.filter(
+        (event) => event.type === "approval" && String(event.approval.requestId).startsWith("local-only:"),
+      );
+    await waitFor(() => cards().length === 1);
+    // More steps and a token total over the limit before the provider ends the turn ask nothing.
+    turn.toolCalls(3);
+    turn.client.emit(
+      "notification",
+      notification("thread/tokenUsage/updated", {
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+        tokenUsage: { total: { totalTokens: 9_000_000 }, last: { totalTokens: 1 }, modelContextWindow: 200_000 },
+      }),
+    );
+    turn.endInterruptedTurn();
+    await waitForQueue(turn.service, "chief", (queue) => queue.deliveries[0]?.status === "interrupted");
+    expect(turn.interrupts()).toHaveLength(1);
+    expect(cards()).toHaveLength(1);
+    expect(turn.service.localOnlyApprovals()).toHaveLength(1);
+  });
+
+  it("shows no limit card for a turn that the person stopped", async () => {
+    const turn = await startLimitedTurn();
+    turn.toolCalls(10);
+    await turn.service.interrupt("chief", turn.turnId);
+    // The provider still reports work of the stopped turn before it ends it.
+    turn.toolCalls(40);
+    turn.endInterruptedTurn();
+    await waitForQueue(turn.service, "chief", (queue) => queue.deliveries[0]?.status === "interrupted");
+    expect(turn.interrupts()).toHaveLength(1);
+    expect(turn.limitCards()).toEqual([]);
+    expect(turn.service.localOnlyApprovals()).toEqual([]);
+  });
+
+  it("sends nothing on Allow while a message waits in the queue of the same chat", async () => {
+    const turn = await startLimitedTurn();
+    turn.toolCalls(40);
+    await waitFor(() => turn.limitCards().length === 1);
+    turn.endInterruptedTurn();
+    await waitForQueue(turn.service, "chief", (queue) => queue.deliveries[0]?.status === "interrupted");
+    // A channel turn of another agent holds the chat queues of the host, so the next chat message
+    // stays queued.
+    await turn.store.getOrCreate("worker");
+    const actor = { id: "human", name: "Alex" };
+    await turn.service.channels.command(
+      {
+        type: "save",
+        channelId: "channel-1",
+        operationId: "create",
+        draft: {
+          name: "project",
+          title: "Project launch",
+          instructions: "Shared work",
+          members: [{ agentId: "worker" }],
+          leadAgentId: "worker",
+        },
+      },
+      actor,
+    );
+    await turn.service.channels.command(
+      {
+        type: "send",
+        channelId: "channel-1",
+        operationId: "send",
+        text: "Work in the channel.",
+        recipientAgentId: "worker",
+        replyToMessageId: null,
+        attachmentDraftIds: [],
+      },
+      actor,
+    );
+    await waitFor(() => turn.service.channels.store.assignments("channel-1").some((item) => item.turnId));
+    await turn.service.sendMessage({ agentId: "chief", text: "Then send it to the team." });
+    expect(turn.service.listQueue("chief").deliveries[1]?.status).toBe("queued");
+    const [card] = turn.limitCards();
+    assert(card);
+
+    await turn.service.respondToApproval({ requestId: card.requestId, decision: "accept" }, "local-owner");
+
+    expect(turn.service.listQueue("chief").deliveries.map((delivery) => [delivery.text, delivery.status])).toEqual([
+      ["Build the report.", "interrupted"],
+      ["Then send it to the team.", "queued"],
+    ]);
+  });
+
+  it("counts the tool calls of an ACP client once per tool, and stops a Grok turn at 40", async () => {
+    const turn = await startLimitedTurn(undefined, "grok");
+    // Each tool sends `item/started` twice, as ACP does for a tool call and its progress update.
+    turn.toolCalls(39);
+    // A stop starts with the same agent read that a sent message starts with, and sends before the
+    // message is queued. So once the message is queued, a stop at a double-counted 40th call is sent.
+    await turn.service.sendMessage({ agentId: "chief", text: "Also check the totals." });
+    expect(turn.interrupts()).toHaveLength(0);
+
+    turn.toolCalls(1);
+    await waitFor(() => turn.limitCards().length === 1);
+    expect(turn.interrupts()).toEqual([
+      { method: "turn/interrupt", params: { threadId: turn.threadId, turnId: turn.turnId } },
+    ]);
+  });
+
+  it("closes the card of a deleted agent, so Allow sends it nothing", async () => {
+    const turn = await startLimitedTurn();
+    turn.toolCalls(40);
+    await waitFor(() => turn.limitCards().length === 1);
+    turn.endInterruptedTurn();
+    await waitForQueue(turn.service, "chief", (queue) => queue.deliveries[0]?.status === "interrupted");
+    const [card] = turn.limitCards();
+    assert(card);
+
+    await turn.service.deleteAgent("chief");
+
+    expect(turn.service.localOnlyApprovals()).toEqual([]);
+    await expect(
+      turn.service.respondToApproval({ requestId: card.requestId, decision: "accept" }, "local-owner"),
+    ).rejects.toThrow();
+    expect(turn.store.list().some((agent) => agent.id === "chief")).toBe(false);
+    expect(turn.client.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
+  });
+});
+
+describe.sequential("AgentService: install guard", () => {
+  async function startGuardedTurn() {
+    const started = await startService(root, { autoComplete: false });
+    service = started.service;
+    await started.store.getOrCreate("chief");
+    const events: AgentEvent[] = [];
+    started.service.on("event", (event) => events.push(event));
+    const runTurn = async (index: number) => {
+      await waitForQueue(started.service, "chief", (queue) => queue.deliveries[index]?.status === "running");
+      const turnId = started.service.listQueue("chief").deliveries[index]?.turnId;
+      const threadId = started.store.activeProviderSession("chief")?.externalSessionId;
+      assert(turnId && threadId);
+      await waitFor(() => events.some((event) => event.type === "turn-started" && event.turnId === turnId));
+      return { turnId, threadId };
+    };
+    const startCommand = (threadId: string, turnId: string, id: string, command: string) =>
+      started.client.emit(
+        "notification",
+        notification("item/started", {
+          threadId,
+          turnId,
+          item: { id, type: "commandExecution", status: "inProgress", command },
+        }),
+      );
+    const interrupts = () => started.client.requests.filter((request) => request.method === "turn/interrupt");
+    const guardCards = () =>
+      events.flatMap((event) =>
+        event.type === "approval" && String(event.approval.requestId).startsWith("local-only:install-guard:")
+          ? [event.approval]
+          : [],
+      );
+    await started.service.sendMessage({ agentId: "chief", text: "Check the font size on iPhone." });
+    return { ...started, events, runTurn, startCommand, interrupts, guardCards };
+  }
+
+  it("stops a Codex turn at pod install, and Allow continues and lets the next turn run it", async () => {
+    const guarded = await startGuardedTurn();
+    const first = await guarded.runTurn(0);
+    guarded.startCommand(first.threadId, first.turnId, "cmd-0", 'echo "run pod install later"');
+    guarded.startCommand(first.threadId, first.turnId, "cmd-1", "/bin/zsh -lc 'cd ios && pod install'");
+
+    await waitFor(() => guarded.guardCards().length === 1);
+    expect(guarded.interrupts()).toEqual([
+      { method: "turn/interrupt", params: { threadId: first.threadId, turnId: first.turnId } },
+    ]);
+    const [card] = guarded.guardCards();
+    assert(card);
+    expect(card.requestId).toBe(`local-only:install-guard:chief:${first.turnId}:cocoapods`);
+    expect(card.reason).toBe(
+      sourceText("status.agent.installGuardRequest", { command: "/bin/zsh -lc 'cd ios && pod install'" }),
+    );
+    guarded.client.emit(
+      "notification",
+      notification("turn/completed", { threadId: first.threadId, turn: { id: first.turnId, status: "interrupted" } }),
+    );
+    await waitForQueue(guarded.service, "chief", (queue) => queue.deliveries[0]?.status === "interrupted");
+
+    await guarded.service.respondToApproval({ requestId: card.requestId, decision: "accept" }, "local-owner");
+    await waitForQueue(guarded.service, "chief", (queue) => queue.deliveries.length === 2);
+    expect(guarded.service.listQueue("chief").deliveries[1]?.text).toBe(
+      sourceText("status.agent.installGuardContinue", { command: "/bin/zsh -lc 'cd ios && pod install'" }),
+    );
+    const second = await guarded.runTurn(1);
+    guarded.startCommand(second.threadId, second.turnId, "cmd-2", "/bin/zsh -lc 'cd ios && pod install'");
+    guarded.client.emit(
+      "notification",
+      notification("turn/completed", { threadId: second.threadId, turn: { id: second.turnId, status: "completed" } }),
+    );
+    await waitForQueue(guarded.service, "chief", (queue) => queue.deliveries[1]?.status === "completed");
+    expect(guarded.interrupts()).toHaveLength(1);
+    expect(guarded.guardCards()).toHaveLength(1);
+  });
+
+  it("stops a turn at an ACP command that is complete in its first update", async () => {
+    const guarded = await startGuardedTurn();
+    const first = await guarded.runTurn(0);
+    const item = (id: string, command: string) => ({
+      id,
+      type: "toolCall",
+      name: "Run",
+      toolKind: "execute",
+      status: "completed",
+      arguments: { command },
+    });
+    // A completion after its start was already read at the start.
+    guarded.client.emit(
+      "notification",
+      notification("item/started", { threadId: first.threadId, turnId: first.turnId, item: item("acp-0", "ls") }),
+    );
+    guarded.client.emit(
+      "notification",
+      notification("item/completed", { threadId: first.threadId, turnId: first.turnId, item: item("acp-0", "ls") }),
+    );
+    guarded.client.emit(
+      "notification",
+      notification("item/completed", {
+        threadId: first.threadId,
+        turnId: first.turnId,
+        item: item("acp-1", "xcodebuild -downloadPlatform iOS"),
+      }),
+    );
+    await waitFor(() => guarded.guardCards().length === 1);
+    expect(guarded.guardCards()[0]?.requestId).toBe(`local-only:install-guard:chief:${first.turnId}:xcode-platform`);
+    expect(guarded.interrupts()).toHaveLength(1);
+  });
+
+  it("queues nothing on Deny", async () => {
+    const guarded = await startGuardedTurn();
+    const first = await guarded.runTurn(0);
+    guarded.startCommand(first.threadId, first.turnId, "cmd-1", "xcrun simctl create Test iPhone-17");
+    await waitFor(() => guarded.guardCards().length === 1);
+    const [card] = guarded.guardCards();
+    assert(card);
+    await guarded.service.respondToApproval({ requestId: card.requestId, decision: "decline" }, "local-owner");
+    expect(guarded.service.localOnlyApprovals()).toEqual([]);
+    expect(guarded.service.listQueue("chief").deliveries).toHaveLength(1);
+  });
+
+  it("answers the Claude request with the card, and at once while the rule is allowed", async () => {
+    const guarded = await startGuardedTurn();
+    const first = await guarded.runTurn(0);
+    const ask = (id: string) =>
+      guarded.client.emit("request", {
+        id,
+        method: "openbot/installGuard",
+        params: { threadId: first.threadId, turnId: first.turnId, command: "pod install", rule: "cocoapods" },
+      });
+    ask("guard-1");
+    await waitFor(() => guarded.guardCards().length === 1);
+    expect(guarded.client.responses).toEqual([]);
+    const [card] = guarded.guardCards();
+    assert(card);
+    await guarded.service.respondToApproval({ requestId: card.requestId, decision: "accept" }, "local-owner");
+    expect(guarded.client.responses).toEqual([{ id: "guard-1", result: { decision: "accept" } }]);
+    // A Claude request is answered, not continued: the turn did not stop.
+    expect(guarded.interrupts()).toEqual([]);
+    expect(guarded.service.listQueue("chief").deliveries).toHaveLength(1);
+
+    ask("guard-2");
+    await waitFor(() => guarded.client.responses.length === 2);
+    expect(guarded.client.responses[1]).toEqual({ id: "guard-2", result: { decision: "accept" } });
+    expect(guarded.guardCards()).toHaveLength(1);
+  });
+
+  it("refuses a Claude request whose rule this computer does not guard", async () => {
+    const guarded = await startGuardedTurn();
+    const first = await guarded.runTurn(0);
+    guarded.client.emit("request", {
+      id: "guard-x",
+      method: "openbot/installGuard",
+      params: { threadId: first.threadId, turnId: first.turnId, command: "ls", rule: "anything" },
+    });
+    await waitFor(() => guarded.client.responses.length === 1);
+    expect(guarded.client.responses).toEqual([{ id: "guard-x", result: { decision: "decline" } }]);
+    expect(guarded.guardCards()).toEqual([]);
   });
 });

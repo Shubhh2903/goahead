@@ -115,6 +115,23 @@ export interface StorageUsage {
   truncated: boolean;
 }
 
+/**
+ * A folder directly under a managed workspace root (`~/OpenBot/Agents`, `~/OpenBot/Bots`) that no
+ * agent owns. Local only: it carries a path, so it is never part of `StorageUsage` or the Team API.
+ */
+export interface UnassignedFolder {
+  path: string;
+  bytes: number;
+}
+
+/** The largest folders with no agent that the host sends. */
+export const UNASSIGNED_FOLDER_LIMIT = 500;
+const FOLDER_PATH_LIMIT = 4_096;
+
+export interface TrashUnassignedFolderInput {
+  path: string;
+}
+
 export interface GetStorageUsageInput {
   scope: StorageScope;
   agentId?: string;
@@ -198,6 +215,13 @@ export function parseOpenStoredFileInput(value: unknown): OpenStoredFileInput {
   const input = record(value, "file request");
   if (!isOneOf(["open", "reveal", "download"] as const, input.action)) invalid("file action");
   return { fileId: identifier(input.fileId, "file"), action: input.action };
+}
+
+/** Main checks the path again before it moves anything; this only bounds the shape. */
+export function parseTrashUnassignedFolderInput(value: unknown): TrashUnassignedFolderInput {
+  const path = record(value, "folder request").path;
+  if (!isBoundedString(path, FOLDER_PATH_LIMIT) || path.length === 0) invalid("folder");
+  return { path };
 }
 
 export function parseOpenStorageLocationInput(value: unknown): OpenStorageLocationInput {
@@ -287,6 +311,16 @@ export function decodeStorageUsage(value: unknown): StorageUsage {
     files: list(usage.files, STORAGE_LIMITS.files, decodeFileRow, "stored files"),
     truncated: usage.truncated,
   };
+}
+
+function decodeUnassignedFolder(value: unknown): UnassignedFolder {
+  const row = record(value, "folder storage");
+  if (!isBoundedString(row.path, FOLDER_PATH_LIMIT)) invalid("folder storage");
+  return { path: row.path, bytes: byteCount(row.bytes, "folder storage") };
+}
+
+export function decodeUnassignedFolders(value: unknown): UnassignedFolder[] {
+  return list(value, UNASSIGNED_FOLDER_LIMIT, decodeUnassignedFolder, "folder storage");
 }
 
 /** A remote host without `storage-v1` answers null, and the surface says the host needs an update. */

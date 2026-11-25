@@ -39,6 +39,8 @@ export const messages = defineMessages("prompt", {
   "prompt.approval.title.permissions": "Grant permissions",
   "prompt.approval.title.sendMail": "Send this mail?",
   "prompt.approval.title.bookMeeting": "Book this meeting?",
+  "prompt.approval.title.turnLimit": "Continue this turn?",
+  "prompt.approval.title.installGuard": "Allow this install?",
   "prompt.approval.permissions": "Requested permissions",
   "prompt.approval.network": "Network access",
   "prompt.approval.read": "Read {path}",

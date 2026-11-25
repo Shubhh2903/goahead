@@ -22,6 +22,7 @@ import {
   isAgentCompactWindow,
   isAgentModel,
   isAgentProvider,
+  isAgentTurnLimit,
   isAgentWeeklyTokenBudget,
   isAvatarHue,
   isAvatarSeed,
@@ -626,6 +627,10 @@ export function parseUpdateAgent(value: unknown): UpdateAgentInput {
       throw new Error("Invalid weekly token budget.");
     }
     result.weeklyTokenBudget = value.weeklyTokenBudget;
+  }
+  if (value.turnLimit !== undefined) {
+    if (value.turnLimit !== null && !isAgentTurnLimit(value.turnLimit)) throw new Error("Invalid turn limit.");
+    result.turnLimit = value.turnLimit;
   }
   if (value.autoModel !== undefined) {
     if (!isBoolean(value.autoModel)) throw new Error("Invalid automatic model value.");

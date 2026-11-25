@@ -1231,6 +1231,8 @@ export function installOpenbotStub(): void {
       clear: vi.fn().mockResolvedValue(undefined),
       openFile: vi.fn().mockResolvedValue(undefined),
       openLocation: vi.fn().mockResolvedValue(undefined),
+      listUnassignedFolders: vi.fn().mockResolvedValue([]),
+      trashUnassignedFolder: vi.fn().mockResolvedValue(undefined),
     },
     agentImport: stubGroup(IPC_ENDPOINTS.agentImport, "agentImport", {}),
     // The custom providers context lists on mount, so every harnessed mount reaches this group.

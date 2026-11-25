@@ -3,6 +3,7 @@ import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   AGENT_ACCESS_MODES,
   AGENT_COMPACT_WINDOWS,
+  AGENT_TURN_LIMITS,
   AGENT_WEEKLY_TOKEN_BUDGETS,
   type AgentAccess,
   type AgentCompactWindow,
@@ -11,6 +12,7 @@ import {
   type AgentProviderId,
   type AgentReasoningEffort,
   type AgentStatus,
+  type AgentTurnLimit,
   type AgentWeeklyTokenBudget,
   type AvatarHue,
   type AvatarImageInput,
@@ -22,6 +24,8 @@ import {
   type CustomProviderSummary,
   DEFAULT_AGENT_ACCESS,
   DEFAULT_BUSY_MESSAGE_MODE,
+  DEFAULT_COMPACT_WINDOW,
+  DEFAULT_TURN_LIMIT,
   defaultProviderModel,
   type ProviderRuntimeStatus,
   providerSupportsAutoModel,
@@ -168,6 +172,7 @@ interface AgentSettingsDraft {
   busyMessage: BusyMessageChoice;
   compactWindow: CompactWindowChoice;
   weeklyTokenBudget: WeeklyBudgetChoice;
+  turnLimit: TurnLimitChoice;
   autoModel: boolean;
   disabledMcpServerIds: string[];
   /** Widening to full access waits here for the confirmation. */
@@ -212,8 +217,9 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     computerUse: true,
     allowAutomation: false,
     busyMessage: "default",
-    compactWindow: "off",
+    compactWindow: DEFAULT_COMPACT_WINDOW,
     weeklyTokenBudget: "none",
+    turnLimit: DEFAULT_TURN_LIMIT,
     autoModel: false,
     disabledMcpServerIds: [],
     confirmingFullAccess: false,
@@ -277,8 +283,9 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
           String(agentComputerUseEnabled(agent)),
           String(agentAutomationAllowed(agent)),
           agent.busyMessageMode ?? "default",
-          String(agent.compactWindow ?? "off"),
+          String(agent.compactWindow ?? DEFAULT_COMPACT_WINDOW),
           String(agent.weeklyTokenBudget ?? "none"),
+          String(agent.turnLimit ?? DEFAULT_TURN_LIMIT),
           String(agentAutoModelEnabled(agent)),
           (agent.disabledMcpServerIds ?? []).join(","),
           runtimeSettings.provider,
@@ -317,8 +324,9 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
           state.computerUse = agentComputerUseEnabled(agent);
           state.allowAutomation = agentAutomationAllowed(agent);
           state.busyMessage = agent.busyMessageMode ?? "default";
-          state.compactWindow = agent.compactWindow ?? "off";
+          state.compactWindow = agent.compactWindow ?? DEFAULT_COMPACT_WINDOW;
           state.weeklyTokenBudget = agent.weeklyTokenBudget ?? "none";
+          state.turnLimit = agent.turnLimit ?? DEFAULT_TURN_LIMIT;
           state.autoModel = agentAutoModelEnabled(agent);
           state.disabledMcpServerIds = [...(agent.disabledMcpServerIds ?? [])];
           if (agentChanged) state.confirmingFullAccess = false;
@@ -627,7 +635,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     setDraft((state) => {
       state.compactWindow = next;
     });
-    if (await saveAgentPatch({ compactWindow: next === "off" ? null : next }, agentId)) return;
+    if (await saveAgentPatch({ compactWindow: next === DEFAULT_COMPACT_WINDOW ? null : next }, agentId)) return;
     if (!disposed && props.agent.id === agentId && draft.compactWindow === next) {
       setDraft((state) => {
         state.compactWindow = previous;
@@ -645,6 +653,20 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     if (!disposed && props.agent.id === agentId && draft.weeklyTokenBudget === next) {
       setDraft((state) => {
         state.weeklyTokenBudget = previous;
+      });
+    }
+  }
+
+  async function saveTurnLimit(next: TurnLimitChoice): Promise<void> {
+    const agentId = props.agent.id;
+    const previous = draft.turnLimit;
+    setDraft((state) => {
+      state.turnLimit = next;
+    });
+    if (await saveAgentPatch({ turnLimit: next === DEFAULT_TURN_LIMIT ? null : next }, agentId)) return;
+    if (!disposed && props.agent.id === agentId && draft.turnLimit === next) {
+      setDraft((state) => {
+        state.turnLimit = previous;
       });
     }
   }
@@ -688,13 +710,20 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
 
   const tokenCount = (value: number) => format.number(value, { notation: "compact", maximumFractionDigits: 1 });
   const compactWindowLabel = (choice: CompactWindowChoice) =>
-    choice === "off"
-      ? t("agentSettings.compactWindow.off")
-      : t("agentSettings.compactWindow.at", { tokens: tokenCount(choice) });
+    choice === DEFAULT_COMPACT_WINDOW
+      ? t("agentSettings.compactWindow.default", { tokens: format.number(choice) })
+      : t("agentSettings.compactWindow.tokens", { tokens: format.number(choice) });
   const weeklyBudgetLabel = (choice: WeeklyBudgetChoice) =>
     choice === "none"
       ? t("agentSettings.weeklyBudget.none")
       : t("agentSettings.weeklyBudget.amount", { tokens: tokenCount(choice) });
+
+  const turnLimitLabel = (choice: TurnLimitChoice) =>
+    choice === 0
+      ? t("agentSettings.turnLimit.off")
+      : choice === DEFAULT_TURN_LIMIT
+        ? t("agentSettings.turnLimit.default", { calls: choice })
+        : t("agentSettings.turnLimit.calls", { calls: choice });
 
   const appBusyMessageMode = () => props.defaultBusyMessageMode ?? DEFAULT_BUSY_MESSAGE_MODE;
   const busyMessageLabel = (choice: BusyMessageChoice) =>
@@ -1085,7 +1114,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
                   <SelectTrigger class="agent-settings-runtime-row" aria-label={t("agentSettings.compactWindow.label")}>
                     <span class="agent-settings-runtime-label">{t("agentSettings.compactWindow.title")}</span>
                     <SelectValue<CompactWindowChoice>>
-                      {(state) => compactWindowLabel(state.selectedOption() ?? "off")}
+                      {(state) => compactWindowLabel(state.selectedOption() ?? DEFAULT_COMPACT_WINDOW)}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent />
@@ -1108,6 +1137,28 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
                     <span class="agent-settings-runtime-label">{t("agentSettings.weeklyBudget.title")}</span>
                     <SelectValue<WeeklyBudgetChoice>>
                       {(state) => weeklyBudgetLabel(state.selectedOption() ?? "none")}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent />
+                </Select>
+              </Show>
+              <Show when={props.tokenSettingsEditable}>
+                <Select<TurnLimitChoice>
+                  class="agent-settings-runtime-select"
+                  options={[...AGENT_TURN_LIMITS]}
+                  value={draft.turnLimit}
+                  onChange={(next) => {
+                    if (next === undefined || next === null || next === draft.turnLimit) return;
+                    void saveTurnLimit(next);
+                  }}
+                  itemComponent={(item) => (
+                    <SelectItem item={item.item}>{turnLimitLabel(item.item.rawValue)}</SelectItem>
+                  )}
+                >
+                  <SelectTrigger class="agent-settings-runtime-row" aria-label={t("agentSettings.turnLimit.label")}>
+                    <span class="agent-settings-runtime-label">{t("agentSettings.turnLimit.title")}</span>
+                    <SelectValue<TurnLimitChoice>>
+                      {(state) => turnLimitLabel(state.selectedOption() ?? DEFAULT_TURN_LIMIT)}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent />
@@ -1138,6 +1189,11 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
                 {t("agentSettings.runtime.workspaceUnlimited")}
               </Show>
             </Text>
+            <Show when={props.tokenSettingsEditable}>
+              <Text as="p" class="agent-settings-runtime-note" variant="caption" tone="muted">
+                {t("agentSettings.turnLimit.hint")}
+              </Text>
+            </Show>
             <Show when={props.busyMessageModeEditable && steerUnsupported()}>
               <Text as="p" class="agent-settings-runtime-note" variant="caption" tone="muted">
                 {t("agentSettings.busyMessage.steerUnsupported", {
@@ -1323,11 +1379,14 @@ function sameRuntimeSettings(current: AgentRuntimeSettings, settings: AgentRunti
   );
 }
 
-const COMPACT_WINDOW_CHOICES = ["off", ...AGENT_COMPACT_WINDOWS] as const;
-type CompactWindowChoice = "off" | AgentCompactWindow;
+/** Absent is `DEFAULT_COMPACT_WINDOW`, so the default saves `null`. */
+const COMPACT_WINDOW_CHOICES = AGENT_COMPACT_WINDOWS;
+type CompactWindowChoice = AgentCompactWindow;
 
 const WEEKLY_BUDGET_CHOICES = ["none", ...AGENT_WEEKLY_TOKEN_BUDGETS] as const;
 type WeeklyBudgetChoice = "none" | AgentWeeklyTokenBudget;
+
+type TurnLimitChoice = AgentTurnLimit;
 
 const BUSY_MESSAGE_CHOICES = ["default", "queue", "steer"] as const;
 type BusyMessageChoice = (typeof BUSY_MESSAGE_CHOICES)[number];

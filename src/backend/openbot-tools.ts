@@ -10,6 +10,7 @@ import { z } from "zod";
 import { interruptAgentToolSchema } from "./agent/agent-interrupt-tool";
 import { DATA_TOOL_DEFINITIONS } from "./agent/data-tools";
 import { MEMORY_RECALL_TOOL_DEFINITIONS } from "./agent/memory-tool-inputs";
+import { mobileQaReservationInput } from "./agent/mobile-qa-reservation";
 import {
   createAgentToolSchema,
   listModelsToolSchema,
@@ -190,6 +191,12 @@ export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
     description:
       "List the models each provider offers for a new agent: id, name, reasoning efforts, and the default model that create_agent uses when you give only a provider. Read-only.",
     shape: listModelsToolSchema.shape,
+  },
+  {
+    name: "reserve_mobile_qa",
+    description:
+      "Acquire the shared mobile test environment before using its device, app data, API or bundler. If busy, defer the device check until handoff. After acquisition, verify the previous runner has exited before changing anything. Stop your runner and restore shared state before release. A reservation expires 30 minutes after the last acquire; acquire again to extend it.",
+    shape: mobileQaReservationInput.shape,
   },
   {
     name: "interrupt_agent",

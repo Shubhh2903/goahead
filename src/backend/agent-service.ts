@@ -100,9 +100,13 @@ import {
   GOOGLE_APPROVAL_KEY_PREFIX,
   GOOGLE_MAIL_NOTICE_ITEM_TYPE,
   googleApprovalKey,
+  installGuardApprovalAgentPrefix,
+  installGuardApprovalKey,
   isContextResetMarker,
   type QueueSteerFallback,
   sharedRuntimeSnapshot,
+  turnLimitApprovalAgentPrefix,
+  turnLimitApprovalKey,
   usageRangeStart,
   workspaceAccessEnforced,
 } from "@openbot/contracts/ipc";
@@ -131,6 +135,7 @@ import { HandoffActivity, type HandoffRecord } from "./agent/handoff-activity";
 import { readCapturedSteps } from "./agent/handoff-tool-steps";
 import { type AgentHostedSites, HostedSiteCoordinator } from "./agent/hosted-site-coordinator";
 import { ImageGenRuntime } from "./agent/image-gen-runtime";
+import { InstallAllowances, type InstallGuardRule, isInstallGuardRule } from "./agent/install-guard";
 import { MailboxSync } from "./agent/mailbox-sync";
 import { type GitHubConnectorSource, McpGateway, type TestMcpServerOptions } from "./agent/mcp-gateway";
 import { MemoryHold } from "./agent/memory-hold";
@@ -159,7 +164,7 @@ import { ThreadLifecycle } from "./agent/thread-lifecycle";
 import { type AgentBrowserHost, TurnLifecycle } from "./agent/turn-lifecycle";
 import { UsageLimitGate } from "./agent/usage-limit-gate";
 import { weeklyBudgetUsage } from "./agent/weekly-token-budget";
-import type { AgentProvider } from "./agent-client";
+import type { AgentClient, AgentProvider } from "./agent-client";
 import type { AgentTables } from "./agent-data/agent-tables";
 import type { AgentStore } from "./agent-store";
 import { automationRunCommand } from "./automation-command";
@@ -169,7 +174,7 @@ import type { BundledProviderExecutables } from "./cli";
 import type { ConversationMarkerExclusions } from "./conversation-read-store";
 import type { ProviderSession } from "./database/provider-sessions";
 import type { HostMemory } from "./host-memory";
-import type { MailboxStore } from "./mailbox-store";
+import type { MailboxStore, MessagingOrigin } from "./mailbox-store";
 import { McpServerStore } from "./mcp-server-store";
 import {
   GOOGLE_MAIL_AGENT_INSTRUCTIONS,
@@ -181,7 +186,7 @@ import {
 } from "./messaging/google-tools";
 import { MessagingThreads } from "./messaging/messaging-threads";
 import type { PasswordVault } from "./password-vault";
-import { decodeRecordResponse } from "./protocol";
+import { type AppServerRequest, decodeRecordResponse, getString } from "./protocol";
 import { NO_PROVIDER_CREDENTIALS, type ProviderClientContext } from "./provider-drivers";
 import { providerHistoryPersistence } from "./provider-history-persistence";
 import { recordAgentRestartActivity } from "./restart-activity";
@@ -211,6 +216,22 @@ const LOCAL_OWNER_DELIVERY_LIMIT = 10_000;
 export type { TestMcpServerOptions } from "./agent/mcp-gateway";
 export type { RoutineMutationOptions } from "./agent/routine-scheduler";
 export type { ResolvedSharedFile, ResolvedWorkspaceFile } from "./workspace-paths";
+
+/**
+ * Where Continue on a turn-limit or install card goes: the chat, channel or messaging conversation of
+ * the stopped turn, as the person's next message there. Read while the turn still runs.
+ */
+type StoppedTurnRoute =
+  | { kind: "chat"; threadId: string }
+  | {
+      kind: "channel";
+      threadId: string;
+      channelId: string;
+      taskId: string;
+      taskRevision: number;
+      requestMessageId: string;
+    }
+  | { kind: "messaging"; threadId: string; linkId: string; origin: MessagingOrigin };
 
 interface AgentServiceEvents {
   event: [event: AgentEvent];
@@ -256,6 +277,11 @@ export interface AgentServiceOptions {
    * Omitted, such a message waits in the queue, as every one did before the setting existed.
    */
   busyMessageMode?: () => BusyMessageMode;
+  /**
+   * The person at this computer as a channel member. Continue on a stopped channel turn posts as
+   * them. Omitted, Continue sends nothing to a channel.
+   */
+  channelActor?: () => { id: string; name: string };
   /**
    * How many memories one agent can hold. The main process owns the preference. Omitted, the
    * default cap, which was the only cap before the setting existed.
@@ -356,8 +382,27 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   /** Deliveries that an agent sent in a turn of the local owner, to pass on the owner's request. */
   readonly #ownerHandOffDeliveries = new Set<string>();
   readonly #busyMessageMode: () => BusyMessageMode;
+  readonly #channelActor: (() => { id: string; name: string }) | null;
   /** The last turn of each agent's chat that the user stopped. One per agent, so it needs no clean-up. */
   readonly #stoppedTurns = new Map<string, string>();
+  /**
+   * Turns that are stopping or stopped: by the person's Stop, or for a turn-limit or install card.
+   * One stop and one card per turn. A turn leaves the map when it ends, or when its stop fails.
+   */
+  readonly #stoppingTurns = new Map<string, "person" | "card">();
+  /**
+   * Continue on a card that the person allowed while its stopped turn still ended, by turn: it goes
+   * when `turn-completed` comes for that turn. `client` runs the turn, and its loss drops the entry;
+   * null while the completion already runs. A deleted agent drops its entries.
+   */
+  readonly #pendingContinues = new Map<
+    string,
+    { agentId: string; route: StoppedTurnRoute; text: string; client: AgentClient | null }
+  >();
+  /** The install rules that the person allowed for an agent, for 60 minutes. */
+  readonly #installAllowances = new InstallAllowances();
+  /** The Claude install requests that wait for an install card, by card key. */
+  readonly #installRequests = new Map<string, Array<{ client: AgentClient; id: AppServerRequest["id"] }>>();
   #initialized = false;
   #stopping = false;
 
@@ -383,9 +428,11 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       githubConnector = null,
       hostMemory = null,
       busyMessageMode = () => DEFAULT_BUSY_MESSAGE_MODE,
+      channelActor = null,
     } = options;
     this.#developmentDefaults = developmentDefaults;
     this.#busyMessageMode = busyMessageMode;
+    this.#channelActor = channelActor;
     this.#localSkillTools = localSkillTools;
     this.#routineFlowTools = routineFlowTools;
     this.#store = store;
@@ -489,6 +536,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
           for (const agent of this.#store.list()) this.#drain.scheduleDrain(agent.id);
         },
         onProviderLost: (client) => {
+          this.#dropPendingContinues((entry) => entry.client === client);
           this.#boot.orphanDeliveriesOf(client.provider, (agentId) => this.#providers.runsOnOwnProcess(agentId));
           this.#compaction.dispose();
           this.#attention.clearPrompts(client);
@@ -497,12 +545,15 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
           this.#browser.clearControls();
         },
         onClientStopped: (client) => {
+          // Before its turns end below: a turn whose client stopped is not continued.
+          this.#dropPendingContinues((entry) => entry.client === client);
           this.#attention.clearPrompts(client);
           this.#attention.clearBrowserTakeovers(client);
           this.#attention.clearApprovals(client);
           this.#turn.interruptTurnsOf(client);
         },
         onAgentClientLost: (agentId, client) => {
+          this.#dropPendingContinues((entry) => entry.client === client);
           this.#attention.clearPrompts(client);
           this.#attention.clearBrowserTakeovers(client);
           this.#attention.clearApprovals(client);
@@ -955,6 +1006,25 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         requeueChannelDelivery: (deliveryId) => this.#requeueChannelDelivery(deliveryId),
         quietRoutineDelivery: (deliveryId) => this.#routines.quietRunForDelivery(deliveryId),
         takeRoutinePreview: (deliveryId) => this.#routines.takePreviewBeforeRun(deliveryId),
+        turnLimitReached: (agentId, threadId, turnId, usage) => {
+          void this.#stopTurnAtLimit(agentId, threadId, turnId, usage).catch((error) =>
+            this.#emitError("turn_limit_failed", error, agentId),
+          );
+        },
+        guardedCommandStarted: (agentId, threadId, turnId, command, rule) => {
+          if (this.#installAllowances.isAllowed(agentId, rule, Date.now())) return false;
+          // The guard waits while the stop is in flight. When no stop went, it reads the next
+          // commands of the turn again.
+          void this.#stopTurnAtInstall(agentId, threadId, turnId, command, rule)
+            .then((stopped) => {
+              if (!stopped) this.#turn.rearmInstallGuard(turnId);
+            })
+            .catch((error) => {
+              this.#turn.rearmInstallGuard(turnId);
+              this.#emitError("install_guard_failed", error, agentId);
+            });
+          return true;
+        },
       },
     });
     this.#removal = new AgentRemoval({
@@ -1019,6 +1089,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
           orchestratorIds: this.messaging.orchestratorAgentIds(),
         }),
         surfaceGoogleApproval: (card) => this.surfaceGoogleApproval(card),
+        answerInstallGuard: (client, request) => this.#answerInstallGuard(client, request),
         noteHandOff: (agentId, turnId, deliveryIds) => this.#noteHandOff(agentId, turnId, deliveryIds),
         interrupt: (agentId, turnId, mayStop) => this.#interruptTurn(agentId, turnId, undefined, mayStop),
         turnActivity: (agentId, turnId) => ({
@@ -1845,8 +1916,15 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     return agent;
   }
 
-  deleteAgent(agentId: string): Promise<void> {
-    return this.#removal.delete(agentId);
+  async deleteAgent(agentId: string): Promise<void> {
+    await this.#removal.delete(agentId);
+    // A turn-limit or install card of a deleted agent has nothing left to continue.
+    this.#attention.dropLocalApprovals(turnLimitApprovalAgentPrefix(agentId));
+    this.#attention.dropLocalApprovals(installGuardApprovalAgentPrefix(agentId));
+    this.#dropPendingContinues((entry) => entry.agentId === agentId);
+    for (const key of this.#installRequests.keys()) {
+      if (key.startsWith(installGuardApprovalAgentPrefix(agentId))) this.#installRequests.delete(key);
+    }
   }
 
   deleteChannel(channelId: string): Promise<void> {
@@ -2014,6 +2092,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     this.#attention.clearPrompts();
     this.#attention.clearBrowserTakeovers();
     this.#attention.clearApprovals();
+    this.#pendingContinues.clear();
     const clients = [...this.#providers.dispose(), ...this.#profileClients.release()];
     for (const [agentId, snapshot] of this.#conversation.activeSnapshots()) {
       if (!snapshot.activeTurnId) continue;
@@ -2489,7 +2568,18 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
 
   async interrupt(agentId: string, turnId: string, executionThreadId?: string): Promise<void> {
     if (!executionThreadId) this.#stoppedTurns.set(agentId, turnId);
-    await this.#interruptTurn(agentId, turnId, executionThreadId);
+    // The person's Stop after Allow: the stopped turn is not continued.
+    this.#pendingContinues.delete(turnId);
+    // A turn the person stopped gets no turn-limit or install card after it.
+    const previous = this.#stoppingTurns.get(turnId);
+    this.#stoppingTurns.set(turnId, "person");
+    try {
+      await this.#interruptTurn(agentId, turnId, executionThreadId);
+    } catch (error) {
+      if (previous === undefined) this.#stoppingTurns.delete(turnId);
+      else this.#stoppingTurns.set(turnId, previous);
+      throw error;
+    }
   }
 
   /**
@@ -2497,13 +2587,15 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
    * turn can end, and the next one, which another sender can own, starts: ACP and Claude stop
    * whatever turn runs, not `turnId`. Or the user can steer a message into the turn. So the turn
    * must still run, and `mayStop` is asked again, just before the stop is sent. `false` means no
-   * stop was sent.
+   * stop was sent. With `activeOnly`, `false` also means the provider answered that it did not run
+   * the turn.
    */
   async #interruptTurn(
     agentId: string,
     turnId: string,
     executionThreadId?: string,
     mayStop?: () => boolean,
+    activeOnly = false,
   ): Promise<boolean> {
     const agent = await this.#store.getOrCreate(agentId);
     const client = this.#providers.requireReadyClientForAgent(agent);
@@ -2531,7 +2623,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       });
       await this.#turn.settleLostTurn(agentId, session.externalSessionId, turnId);
     }
-    return true;
+    return !activeOnly || response.turnActive !== false;
   }
 
   /** A turn that the chat shows as active, with no running or completing record in the lifecycle. */
@@ -2624,6 +2716,307 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     );
   }
 
+  /**
+   * Stops a turn that reached its tool-call or token limit, and asks the person at this computer
+   * whether to continue. Queued deliveries stay queued: only the turn stops, as with Stop.
+   *
+   * The limit is found while the turn runs, and the stop is sent after an await. In that time the
+   * turn can end and the next one start, and ACP and Claude stop whatever turn runs. So the stop goes
+   * only while the lifecycle still runs this exact turn, to the provider thread of this turn
+   * (`threadId` is its public thread, which can be an execution thread). When no stop goes, or the
+   * provider does not run the turn, or the stop fails, no card asks to continue it.
+   */
+  async #stopTurnAtLimit(
+    agentId: string,
+    threadId: string,
+    turnId: string,
+    usage: { calls: number; tokens: number },
+  ): Promise<void> {
+    const route = await this.#stopTurnForCard(agentId, threadId, turnId);
+    if (route === false) return;
+    this.#attention.surfaceLocalApproval(
+      {
+        key: turnLimitApprovalKey(agentId, turnId),
+        agentId,
+        threadId,
+        turnId,
+        detail: sourceText("status.agent.turnLimitReached", {
+          calls: usage.calls,
+          tokens: new Intl.NumberFormat("en-US").format(usage.tokens),
+        }),
+        complete: true,
+      },
+      async (decision) => {
+        if (decision === "accept")
+          await this.#continueStoppedTurn(agentId, turnId, route, sourceText("status.agent.turnLimitContinue"));
+      },
+    );
+  }
+
+  /**
+   * Stops the turn for a card that asks the person: see `#stopTurnAtLimit`. When the stop went and
+   * the provider ran the turn, returns where Continue goes (null: nowhere); else false. One stop
+   * per turn: a turn that another card or the person's Stop already stops gets no second stop and
+   * no card. A stop that fails or does not go leaves the turn open to a later card.
+   */
+  async #stopTurnForCard(agentId: string, threadId: string, turnId: string): Promise<StoppedTurnRoute | null | false> {
+    const stillRunning = () => this.#turn.turnStartedAt(turnId) !== null && !this.#turn.isCompleting(turnId);
+    if (!stillRunning() || this.#stoppingTurns.has(turnId)) return false;
+    this.#stoppingTurns.set(turnId, "card");
+    const route = this.#stoppedTurnRoute(agentId, threadId, turnId);
+    // As for Stop of the chat: a message sent now waits in the queue and does not steer into the
+    // stopping turn. Stop of an execution thread does not record it either (`interrupt`).
+    const previousStop = this.#stoppedTurns.get(agentId);
+    const chat = this.#store.list().find((agent) => agent.id === agentId)?.threadId === threadId;
+    if (chat) this.#stoppedTurns.set(agentId, turnId);
+    const undo = () => {
+      // The person's own Stop, sent in the meantime, stays recorded.
+      if (this.#stoppingTurns.get(turnId) === "card") this.#stoppingTurns.delete(turnId);
+      if (!chat || this.#stoppedTurns.get(agentId) !== turnId) return;
+      if (previousStop === undefined) this.#stoppedTurns.delete(agentId);
+      else this.#stoppedTurns.set(agentId, previousStop);
+    };
+    let stopped: boolean;
+    try {
+      stopped = await this.#interruptTurn(agentId, turnId, threadId, stillRunning, true);
+    } catch (error) {
+      undo();
+      throw error;
+    }
+    if (!stopped) {
+      undo();
+      return false;
+    }
+    return route;
+  }
+
+  /**
+   * Where Continue on a card for this running turn goes: the agent's chat, the channel task that the
+   * turn works on, or the messaging conversation and requester of the turn. Null for a thread that
+   * takes no message from the person, such as a Slack auto-reply.
+   */
+  #stoppedTurnRoute(agentId: string, threadId: string, turnId: string): StoppedTurnRoute | null {
+    if (this.#store.list().find((agent) => agent.id === agentId)?.threadId === threadId) {
+      return { kind: "chat", threadId };
+    }
+    const channelId = this.channels.store.channelForThread(threadId);
+    if (channelId) {
+      const assignment = this.channels.store
+        .assignments(channelId)
+        .find((item) => item.turnId === turnId && item.agentId === agentId);
+      const task = assignment && this.channels.store.tasks(channelId).find((item) => item.id === assignment.taskId);
+      if (!assignment || !task) return null;
+      return {
+        kind: "channel",
+        threadId,
+        channelId,
+        taskId: task.id,
+        taskRevision: assignment.taskRevision,
+        requestMessageId: task.requestMessageId,
+      };
+    }
+    const link = this.messaging.store.executionLink(threadId);
+    if (!link) return null;
+    const running = this.messaging.runningOrigin(link.linkId);
+    if (!running || running.turnId !== turnId) return null;
+    return { kind: "messaging", threadId, linkId: link.linkId, origin: running.origin };
+  }
+
+  /**
+   * Stops a Codex or ACP turn at a command that can install gigabytes, and asks the person at this
+   * computer. Allow allows the rule for this agent for 60 minutes and continues the turn with one
+   * message that names the command. Deny queues nothing. The stop is guarded as for the turn limit.
+   */
+  async #stopTurnAtInstall(
+    agentId: string,
+    threadId: string,
+    turnId: string,
+    command: string,
+    rule: InstallGuardRule,
+  ): Promise<boolean> {
+    const route = await this.#stopTurnForCard(agentId, threadId, turnId);
+    if (route === false) return false;
+    const shown = this.#shownCommand(command);
+    this.#attention.surfaceLocalApproval(
+      {
+        key: installGuardApprovalKey(agentId, turnId, rule),
+        agentId,
+        threadId,
+        turnId,
+        detail: sourceText("status.agent.installGuardRequest", { command: shown }),
+        complete: true,
+      },
+      async (decision) => {
+        if (decision !== "accept") return;
+        this.#installAllowances.allow(agentId, rule, Date.now());
+        await this.#continueStoppedTurn(
+          agentId,
+          turnId,
+          route,
+          sourceText("status.agent.installGuardContinue", { command: shown }),
+        );
+      },
+    );
+    return true;
+  }
+
+  /**
+   * A Claude agent's Bash command that can install gigabytes waits for this answer. An allowed rule
+   * is accepted at once; otherwise the install card asks the person at this computer, and its answer
+   * goes to every request that waits for the same card. A request that the provider abandons (Stop)
+   * leaves the card, and the last one removes it.
+   */
+  #answerInstallGuard(client: AgentClient, request: AppServerRequest): void {
+    const threadId = getString(request.params, "threadId");
+    const turnId = getString(request.params, "turnId");
+    const command = getString(request.params, "command");
+    const rule = getString(request.params, "rule");
+    const agentId = threadId ? this.#conversation.agentForThread(threadId) : undefined;
+    if (!threadId || !turnId || command === null || !isInstallGuardRule(rule) || !agentId) {
+      client.respond(request.id, { decision: "decline" });
+      return;
+    }
+    if (this.#installAllowances.isAllowed(agentId, rule, Date.now())) {
+      client.respond(request.id, { decision: "accept" });
+      return;
+    }
+    // The provider already abandoned the request (Stop): no card, which no answer could reach.
+    if (request.signal?.aborted) return;
+    const key = installGuardApprovalKey(agentId, turnId, rule);
+    const waiter = { client, id: request.id };
+    this.#installRequests.set(key, [...(this.#installRequests.get(key) ?? []), waiter]);
+    request.signal?.addEventListener(
+      "abort",
+      () => {
+        const waiting = (this.#installRequests.get(key) ?? []).filter((entry) => entry !== waiter);
+        if (waiting.length > 0) {
+          this.#installRequests.set(key, waiting);
+          return;
+        }
+        this.#installRequests.delete(key);
+        this.#attention.dropLocalApprovals(key);
+      },
+      { once: true },
+    );
+    this.#attention.surfaceLocalApproval(
+      {
+        key,
+        agentId,
+        threadId: this.#conversation.publicThreadId(agentId, threadId),
+        turnId,
+        detail: sourceText("status.agent.installGuardRequest", { command: this.#shownCommand(command) }),
+        complete: true,
+      },
+      async (decision) => {
+        if (decision === "accept") this.#installAllowances.allow(agentId, rule, Date.now());
+        const waiting = this.#installRequests.get(key) ?? [];
+        this.#installRequests.delete(key);
+        for (const entry of waiting) {
+          if (entry.client.running) entry.client.respond(entry.id, { decision });
+        }
+      },
+    );
+  }
+
+  /** A command on an install card or in its continue message: secrets redacted, as for hand-off steps. */
+  #shownCommand(command: string): string {
+    return this.#mcp.redact(redactText(command));
+  }
+
+  /**
+   * Continue on a turn-limit or install card queues one message in the conversation of the stopped
+   * turn, as the person's next message there: the chat, a reply to the channel task, or the same
+   * requester's message in a messaging conversation. Nothing is sent to an agent that was deleted,
+   * to a conversation that can no longer take a message, or while that conversation runs a turn or
+   * has a message waiting (the person or a queued message started one): a second turn would repeat
+   * the work. An Allow that comes while the stopped turn still ends waits for `turn-completed` of
+   * that turn, and these checks run then.
+   */
+  async #continueStoppedTurn(
+    agentId: string,
+    turnId: string,
+    route: StoppedTurnRoute | null,
+    text: string,
+  ): Promise<void> {
+    if (!route) return;
+    const agent = this.#store.list().find((candidate) => candidate.id === agentId);
+    if (!agent || this.#removal.deleting().has(agentId)) return;
+    // `#stoppingTurns` keeps the turn until its `turn-completed`.
+    const ending =
+      this.#stoppingTurns.has(turnId) && (this.#turn.turnStartedAt(turnId) !== null || this.#turn.isCompleting(turnId));
+    if (ending) {
+      this.#pendingContinues.set(turnId, { agentId, route, text, client: this.#turn.turnClient(turnId) });
+      return;
+    }
+    const runsTurn =
+      [...this.#conversation.activeSnapshots()].some(
+        ([id, snapshot]) => id === agentId && snapshot.threadId === route.threadId && snapshot.activeTurnId,
+      ) ||
+      this.listQueue(agentId).deliveries.some(
+        (delivery) =>
+          (delivery.status === "queued" || delivery.status === "starting" || delivery.status === "running") &&
+          this.#deliveryThreadId(delivery.id, agent) === route.threadId,
+      );
+    if (runsTurn) return;
+    if (route.kind === "chat") {
+      await this.sendMessage({ agentId, text });
+      return;
+    }
+    if (route.kind === "messaging") {
+      await this.messaging.continueStoppedTurn(route.linkId, route.origin, text);
+      return;
+    }
+    const actor = this.#channelActor?.();
+    if (!actor || !this.channels.store.exists(route.channelId)) return;
+    const channel = this.channels.store.get(route.channelId);
+    const task = this.channels.store.tasks(route.channelId).find((item) => item.id === route.taskId);
+    // Only the task as the stop left it: a reply, Resume or Stop of the person changed it.
+    if (
+      channel.archived ||
+      !channel.members.some((member) => member.agentId === agentId) ||
+      task?.state !== "paused" ||
+      task.revision !== route.taskRevision ||
+      !this.channels.store.message(route.channelId, route.requestMessageId)
+    )
+      return;
+    await this.channels.command(
+      {
+        type: "send",
+        operationId: randomUUID(),
+        channelId: route.channelId,
+        text,
+        recipientAgentId: agentId,
+        replyToMessageId: route.requestMessageId,
+        attachmentDraftIds: [],
+      },
+      actor,
+    );
+  }
+
+  /**
+   * Runs at `turn-completed`, before the drain that follows it: a message queued in the meantime is
+   * still queued, so the checks of `#continueStoppedTurn` see it.
+   */
+  #sendPendingContinue(turnId: string): void {
+    const pending = this.#pendingContinues.get(turnId);
+    if (!pending) return;
+    this.#pendingContinues.delete(turnId);
+    void this.#continueStoppedTurn(pending.agentId, turnId, pending.route, pending.text).catch((error) =>
+      this.#emitError("turn_limit_failed", error, pending.agentId),
+    );
+  }
+
+  #dropPendingContinues(matches: (entry: { agentId: string; client: AgentClient | null }) => boolean): void {
+    for (const [turnId, entry] of this.#pendingContinues) if (matches(entry)) this.#pendingContinues.delete(turnId);
+  }
+
+  /** The thread a delivery runs in: its channel or messaging thread, else the agent's chat. */
+  #deliveryThreadId(deliveryId: string, agent: AgentSummary): string | null {
+    const assignment = this.channels.store.assignmentForDelivery(deliveryId);
+    if (assignment) return this.channels.store.context(assignment.channelId, assignment.agentId).threadId;
+    return this.messaging.threadForDelivery(deliveryId) ?? agent.threadId;
+  }
+
   async respondToBrowserSecret(input: RespondToBrowserSecretInput): Promise<void> {
     await this.#attention.respondToBrowserSecret(input);
   }
@@ -2651,9 +3044,12 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
 
   #emit(event: AgentEvent): void {
     recordAgentRestartActivity(event);
+    if (event.type === "turn-completed") this.#stoppingTurns.delete(event.turnId);
     this.#handoffs?.event(event);
-    if (this.channels?.event(event) || this.messaging?.event(event)) return;
-    this.emit("event", event);
+    const routed = this.channels?.event(event) || this.messaging?.event(event);
+    // After the channel paused the task of the stopped turn, which a channel Continue needs.
+    if (event.type === "turn-completed") this.#sendPendingContinue(event.turnId);
+    if (!routed) this.emit("event", event);
   }
 
   /** Removes live provider state for an execution thread before its durable rows are deleted. */

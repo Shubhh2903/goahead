@@ -44,6 +44,8 @@ import { SidebarLayoutStore } from "./sidebar-layout-store";
 
 // Every Codex session is given the plan tool.
 const CODEX_TOOLS = { update_plan: { enabled: true } };
+// Every Codex thread compacts mid-turn at 120,000 tokens, so no call re-reads more than that.
+const CODEX_CONFIG = { tools: CODEX_TOOLS, model_auto_compact_token_limit: 120_000 };
 
 let root: string;
 let logPath: string;
@@ -374,7 +376,7 @@ describe.sequential("AgentService: providers", () => {
     );
     const firstSession = store.activeProviderSession("chief")?.externalSessionId;
     expect(paramsRecord(client.requests.find((request) => request.method === "thread/start")?.params)?.config).toEqual({
-      tools: CODEX_TOOLS,
+      ...CODEX_CONFIG,
     });
 
     // Codex ignores the configuration on resume, so a new MCP server has to force a new session.
@@ -403,7 +405,7 @@ describe.sequential("AgentService: providers", () => {
     const starts = client.requests.filter((request) => request.method === "thread/start");
     expect(starts).toHaveLength(2);
     expect(paramsRecord(starts[1]?.params)?.config).toEqual({
-      tools: CODEX_TOOLS,
+      ...CODEX_CONFIG,
       mcp_servers: {
         Filesystem: { command: "/bin/echo", args: ["ready"], env: await launchEnvironment({ TOKEN: "secret" }) },
       },
@@ -449,7 +451,7 @@ describe.sequential("AgentService: providers", () => {
 
     // Reported, and still not sent: the point of the report is that the server is missing.
     const starts = client.requests.filter((request) => request.method === "thread/start");
-    expect(paramsRecord(starts.at(-1)?.params)?.config).toEqual({ tools: CODEX_TOOLS });
+    expect(paramsRecord(starts.at(-1)?.params)?.config).toEqual(CODEX_CONFIG);
 
     await service.sendMessage({ agentId: "chief", text: "Again." });
     await waitForQueue(service, "chief", (queue) =>
@@ -508,7 +510,7 @@ describe.sequential("AgentService: providers", () => {
 
     const starts = client.requests.filter((request) => request.method === "thread/start");
     expect(paramsRecord(starts.at(-1)?.params)?.config).toEqual({
-      tools: CODEX_TOOLS,
+      ...CODEX_CONFIG,
       mcp_servers: {
         Signed_in: { url: "https://mcp.example.com/mcp", http_headers: { Authorization: `Bearer ${token}` } },
       },
@@ -813,7 +815,7 @@ describe.sequential("AgentService: providers", () => {
     // `Database` is left out: the Codex configuration shape for a working directory is unconfirmed,
     // and a server told to open `./data.db` from the wrong place creates a second database.
     expect(paramsRecord(starts[1]?.params)?.config).toEqual({
-      tools: CODEX_TOOLS,
+      ...CODEX_CONFIG,
       mcp_servers: { Filesystem: { command: "/bin/echo", args: ["ready"], env: await launchEnvironment() } },
     });
   });
@@ -856,7 +858,7 @@ describe.sequential("AgentService: providers", () => {
     );
     const [start] = client.requests.filter((request) => request.method === "thread/start");
     expect(paramsRecord(start?.params)?.config).toEqual({
-      tools: CODEX_TOOLS,
+      ...CODEX_CONFIG,
       mcp_servers: {
         [COMPUTER_USE_MCP_SERVER_NAME]: {
           command: "/opt/cua/bin/cua-driver",
@@ -874,7 +876,7 @@ describe.sequential("AgentService: providers", () => {
       queue.deliveries.every((delivery) => delivery.status === "completed"),
     );
     const restart = paramsRecord(client.requests.filter((request) => request.method === "thread/start")[1]?.params);
-    expect(restart?.config).toEqual({ tools: CODEX_TOOLS });
+    expect(restart?.config).toEqual(CODEX_CONFIG);
     expect(restart?.developerInstructions).toContain("The user turned Computer Use off for you.");
 
     driverRunning = false;
@@ -932,7 +934,7 @@ describe.sequential("AgentService: providers", () => {
     // The file's own name carries no command, which is what turning it off means, and OpenBot's
     // entry is whole.
     expect(paramsRecord(starts().at(-1)?.params)?.config).toEqual({
-      tools: CODEX_TOOLS,
+      ...CODEX_CONFIG,
       mcp_servers: {
         "Local notes": { enabled: false },
         Filesystem: { command: "/bin/echo", args: ["ready"], env: await launchEnvironment() },
@@ -1042,7 +1044,7 @@ describe.sequential("AgentService: providers", () => {
     const starts = client.requests.filter((request) => request.method === "thread/start");
     expect(starts).toHaveLength(2);
     expect(paramsRecord(starts[1]?.params)?.config).toEqual({
-      tools: CODEX_TOOLS,
+      ...CODEX_CONFIG,
       mcp_servers: { Filesystem: { command: "/bin/echo", args: ["ready"], env: await launchEnvironment() } },
     });
   });
@@ -1209,7 +1211,7 @@ describe.sequential("AgentService: providers", () => {
     const starts = client.requests.filter((request) => request.method === "thread/start");
     expect(starts).toHaveLength(2);
     expect(paramsRecord(starts[1]?.params)?.config).toEqual({
-      tools: CODEX_TOOLS,
+      ...CODEX_CONFIG,
       mcp_servers: { Filesystem: { command: "/bin/echo", args: ["ready"], env: await launchEnvironment() } },
     });
   });

@@ -1,3 +1,4 @@
+import type { UnassignedFolder } from "@openbot/contracts/ipc";
 import type { AgentProfile } from "@openbot/ui/data";
 import { StorageOverview } from "@openbot/ui/features/files/StorageOverview";
 import { createEffect, createSignal, untrack } from "solid-js";
@@ -21,7 +22,7 @@ export interface ServerStorageOptions {
  * stored file. The agents are read for this server, because the dialog can be open for a server
  * that is not the selected one and the selected server's agents would name the wrong rows.
  */
-export function ServerStoragePanel(props: ServerStorageOptions & { serverId: string }) {
+export function ServerStoragePanel(props: ServerStorageOptions & { serverId: string; local?: boolean }) {
   const calls = () => props.calls ?? filesPort();
   const storage = createStorageUsage(() => ({ serverId: props.serverId, input: { scope: "host" } }), calls);
   const [agents, setAgents] = createSignal<AgentProfile[]>([]);
@@ -44,6 +45,38 @@ export function ServerStoragePanel(props: ServerStorageOptions & { serverId: str
 
   const usage = () => storage.state.usage;
 
+  // Folders with no agent are paths on this computer: only the local host lists them, and only
+  // where the port can move one to the Trash.
+  const folderCalls = () => {
+    const { listUnassignedFolders, trashUnassignedFolder } = calls().storage;
+    return props.local && listUnassignedFolders && trashUnassignedFolder
+      ? { list: listUnassignedFolders, trash: trashUnassignedFolder }
+      : null;
+  };
+  const [folders, setFolders] = createSignal<UnassignedFolder[]>([]);
+  // Read again after each scan; the host answers from the same scan, so this is quick.
+  createEffect(
+    () => usage()?.scannedAt ?? null,
+    (scannedAt) => {
+      let current = true;
+      const port = untrack(folderCalls);
+      if (!scannedAt || !port) setFolders([]);
+      else
+        port
+          .list()
+          .then((list) => {
+            if (current) setFolders(list);
+          })
+          // The section only hides; the storage read reports its own failure.
+          .catch(() => {
+            if (current) setFolders([]);
+          });
+      return () => {
+        current = false;
+      };
+    },
+  );
+
   return (
     <StorageOverview
       hostName={props.hostName}
@@ -64,6 +97,18 @@ export function ServerStoragePanel(props: ServerStorageOptions & { serverId: str
         if (agentId) props.onOpenAgent(agentId);
       }}
       onClear={storage.clear}
+      unassignedFolders={folders()}
+      onTrashFolder={
+        folderCalls()
+          ? async (path) => {
+              try {
+                await folderCalls()?.trash({ path });
+              } finally {
+                await storage.refresh(true);
+              }
+            }
+          : undefined
+      }
       // Settings has no preview pane, so a preview opens the file in its app.
       onPreviewFile={(file) => void storage.fileAction(file, "open", { onShowInChat: () => undefined })}
       onFileAction={(file, action) =>

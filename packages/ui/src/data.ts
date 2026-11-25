@@ -193,6 +193,8 @@ export interface AgentProfile {
   disabledMcpServerIds?: AgentSummary["disabledMcpServerIds"];
   /** Absent means no budget. Absent for an agent on a remote host too, which does not share it. */
   weeklyTokenBudget?: AgentSummary["weeklyTokenBudget"];
+  /** Absent means 40 tool calls; 0 is Off. Absent for an agent on a remote host too, which does not share it. */
+  turnLimit?: AgentSummary["turnLimit"];
   /** Absent means off. Absent for an agent on a remote host too, which does not share it. */
   autoModel?: boolean;
   threadId: string | null;

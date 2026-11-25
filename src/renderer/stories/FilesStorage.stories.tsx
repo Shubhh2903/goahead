@@ -79,6 +79,41 @@ export const StorageMember: Story = {
   render: () => <OverviewStage args={{ ...overviewArgs(), hostName: "Studio server", canManage: false }} />,
 };
 
+// This computer, with a QA run left beside the agent workspaces: the list, the warning, and Trash.
+export const StorageUnassignedFolders: Story = {
+  name: "Storage: Folders with no agent",
+  render: () => (
+    <OverviewStage
+      args={{
+        ...overviewArgs(),
+        unassignedFolders: [
+          { path: "/Users/you/OpenBot/Agents/mobile-qa", bytes: 5.2 * 1024 ** 3 },
+          { path: "/Users/you/OpenBot/Bots/old-import", bytes: 1.4 * 1024 ** 3 },
+          { path: "/Users/you/OpenBot/Agents/notes", bytes: 12 * 1024 ** 2 },
+        ],
+        onTrashFolder: fn(async () => undefined),
+      }}
+    />
+  ),
+};
+
+// Many small folders with no agent: none is listed, but their total still shows the warning.
+export const StorageUnassignedSmallFolders: Story = {
+  name: "Storage: Small folders with no agent",
+  render: () => (
+    <OverviewStage
+      args={{
+        ...overviewArgs(),
+        unassignedFolders: Array.from({ length: 8 }, (_, index) => ({
+          path: `/Users/you/OpenBot/Agents/qa-run-${index + 1}`,
+          bytes: 0.8 * 1024 ** 3,
+        })),
+        onTrashFolder: fn(async () => undefined),
+      }}
+    />
+  ),
+};
+
 export const StorageScanning: Story = {
   name: "Storage: Scanning",
   render: () => (

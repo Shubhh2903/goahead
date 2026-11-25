@@ -133,6 +133,7 @@ export const messages = defineMessages("error.backend", {
   "error.backend.routineRunNoSession":
     "GoAhead cannot interrupt the active routine run because its provider session is unavailable.",
   "error.backend.interruptSelf": "An agent cannot interrupt itself.",
+  "error.backend.mobileQaReservationIdRequired": "Supply the reservation id to release the test environment.",
   "error.backend.interruptOtherWork":
     "This agent works on a task that your message did not start. Only the user or the sender of that task can stop it.",
   "error.backend.interruptStarting": "This agent is still starting a turn. Try again after the turn starts.",

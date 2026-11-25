@@ -9,7 +9,6 @@ import {
 import { useText } from "@openbot/ui/text";
 import { createEffect, createStore, onSettled } from "solid-js";
 import { type CreationPreference, resolveCreationModel } from "../agents/agent-creation-model";
-import { createAgentInitialMessage } from "../agents/agent-initial-message";
 import type { WebWorkspaceRuntime } from "./web-runtime";
 
 export function WebAgentSettings(props: {
@@ -119,7 +118,7 @@ export function WebAgentSettings(props: {
       await props.runtime.createAgent({
         name: value.name,
         description: value.purpose,
-        initialMessage: createAgentInitialMessage(value),
+        initialMessage: t("agent.setup.firstGreeting"),
         avatarSeed: value.avatarSeed,
         avatarHue: value.avatarHue,
         ...(supportsModelSelection() && selectedModel

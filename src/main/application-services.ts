@@ -1084,6 +1084,8 @@ export async function createApplicationServices({
     routineFlowTools: () => routineFlowRuntime,
     approvalAutomation,
     busyMessageMode: () => busyMessageMode.get().mode,
+    // Read when the person answers a card, long after `host` exists.
+    channelActor: () => host.channelActor(),
     agentMemoryLimit: () => agentMemoryLimit.get().limit,
     deleteWithRevokedApproval: (agentId, remove) => approvalAutomation.deleteAgent(agentId, remove),
     tables,
@@ -1363,6 +1365,7 @@ export async function createApplicationServices({
   const storageSources = {
     roots: {
       database: store.database.path,
+      workspaceRoots: store.workspaceRoots,
       downloads: store.downloadsRoot,
       caches: ["remote-attachments", "remote-shared-files", "remote-workspace-files"].map((name) =>
         join(userData, name),

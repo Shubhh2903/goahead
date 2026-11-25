@@ -15,7 +15,7 @@ import type { AgentEvent, AgentSummary } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from "@openbot/contracts/slack-app";
 import { sourceText } from "@openbot/i18n/source";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it } from "vitest";
 import type { AgentProvider } from "../agent-client";
 import type { AgentService } from "../agent-service";
 import {
@@ -758,6 +758,66 @@ describe.sequential("Slack messaging end to end", () => {
     await slack.send("events_api", slack.message("stop", "501.000", { thread_ts: "500.000" }));
     await waitFor(() => client.requests.some((request) => request.method === "turn/interrupt"));
     report.approval = { refusedOther: true, accepted: true, interrupted: true };
+  });
+
+  describe("Continue on the card of a Slack turn stopped at its tool-call limit", () => {
+    async function stoppedSlackTurn() {
+      const started = await connected({ autoComplete: false });
+      const turns = trackTurns(started.client);
+      await slack.send("events_api", slack.mention("run the build", "600.000"));
+      // A tool step counts only after the provider announced the turn.
+      await waitFor(() => turns.length === 1);
+      const threadId = turns[0]?.threadId;
+      const [link] = started.service.messaging.store.links(started.agent.id);
+      assert(isString(threadId) && link);
+      await waitFor(() => started.service.messaging.runningOrigin(link.linkId)?.turnId === turns[0]?.turnId);
+      const running = started.service.messaging.runningOrigin(link.linkId);
+      assert(running);
+      for (let index = 0; index < 40; index += 1) {
+        const item = { id: `${running.turnId}-tool-${index}`, type: "commandExecution", status: "inProgress" };
+        started.client.emit("notification", notification("item/started", { threadId, turnId: running.turnId, item }));
+      }
+      await waitFor(() => started.service.localOnlyApprovals().length === 1);
+      started.client.emit(
+        "notification",
+        notification("turn/completed", { threadId, turn: { id: running.turnId, status: "interrupted" } }),
+      );
+      await waitFor(() => started.service.messaging.runningOrigin(link.linkId) === null);
+      // The Slack status of the stopped turn is done, so no Slack call of it runs after the test.
+      await waitFor(() => slack.of("chat.update").some((call) => call.params.text === "Stopped."));
+      const [card] = started.service.localOnlyApprovals();
+      assert(card);
+      const allow = () =>
+        started.service.respondToApproval({ requestId: card.requestId, decision: "accept" }, "local-owner");
+      return { ...started, threadId, link, running, allow };
+    }
+
+    it("sends the continue message to the same Slack thread and requester", async () => {
+      const turn = await stoppedSlackTurn();
+      await turn.allow();
+
+      await waitFor(() => turnStarts(turn.client).length === 2);
+      const next = turnStarts(turn.client)[1];
+      assert(next);
+      expect(paramsRecord(next.params)?.threadId).toBe(turn.threadId);
+      expect(promptOf(next)).toContain(sourceText("status.agent.turnLimitContinue"));
+      await waitFor(() => turn.service.messaging.runningOrigin(turn.link.linkId) !== null);
+      expect(turn.service.messaging.runningOrigin(turn.link.linkId)?.origin).toEqual(turn.running.origin);
+      expect(turn.service.messaging.store.links(turn.agent.id)).toHaveLength(1);
+    });
+
+    it("sends nothing when the connection was turned off", async () => {
+      const turn = await stoppedSlackTurn();
+      turn.service.messaging.store.updateConnection(turn.connectionId, { enabled: false });
+      // A queued message changes its conversation at once; Allow waits for that step.
+      const changed: string[] = [];
+      turn.service.messaging.onThreadChanged((threadId) => changed.push(threadId));
+      await turn.allow();
+
+      expect(changed).toEqual([]);
+      expect(turn.service.messaging.runningOrigin(turn.link.linkId)).toBeNull();
+      expect(turnStarts(turn.client)).toHaveLength(1);
+    });
   });
 
   it("stops on a token Slack no longer accepts, and keeps the workspace when an agent is deleted", async () => {

@@ -39,6 +39,7 @@ import {
   isAgentCompactWindow,
   isAgentModel,
   isAgentProjectFolder,
+  isAgentTurnLimit,
   isAgentWeeklyTokenBudget,
   isAvatarHue,
   isAvatarSeed,
@@ -83,6 +84,7 @@ const OPTIONAL_SETTING_FIELDS = [
   "compactWindow",
   "disabledMcpServerIds",
   "weeklyTokenBudget",
+  "turnLimit",
   "autoModel",
 ] as const;
 type StoredAgentBase = Omit<PersistedStoredAgent, "avatarSeed" | "avatarHue"> & DynamicRecord;
@@ -184,6 +186,11 @@ export class AgentStore {
 
   get sharedRoot(): string {
     return this.#sharedRoot;
+  }
+
+  /** The current and the legacy parent folders of managed workspaces. Storage counts what is in them. */
+  get workspaceRoots(): readonly string[] {
+    return [this.#agentsRoot, this.#legacyAgentsRoot];
   }
 
   get downloadsRoot(): string {
@@ -354,6 +361,7 @@ export class AgentStore {
     if (source.compactWindow) record.compactWindow = source.compactWindow;
     if (source.disabledMcpServerIds?.length) record.disabledMcpServerIds = [...source.disabledMcpServerIds];
     if (source.weeklyTokenBudget) record.weeklyTokenBudget = source.weeklyTokenBudget;
+    if (source.turnLimit !== undefined) record.turnLimit = source.turnLimit;
     if (source.autoModel) record.autoModel = true;
     record.avatarSeed = source.avatarSeed;
     record.avatarHue = source.avatarHue;
@@ -603,6 +611,11 @@ export class AgentStore {
     else if (input.weeklyTokenBudget !== undefined) {
       if (!isAgentWeeklyTokenBudget(input.weeklyTokenBudget)) throw new Error("Invalid weekly token budget.");
       next.weeklyTokenBudget = input.weeklyTokenBudget;
+    }
+    if (input.turnLimit === null) delete next.turnLimit;
+    else if (input.turnLimit !== undefined) {
+      if (!isAgentTurnLimit(input.turnLimit)) throw new Error("Invalid turn limit.");
+      next.turnLimit = input.turnLimit;
     }
     if (input.autoModel !== undefined) {
       if (!isBoolean(input.autoModel)) throw new Error("Invalid automatic model value.");
@@ -1508,6 +1521,7 @@ function isStoredAgent(value: unknown): value is PersistedStoredAgent {
     (record.compactWindow === undefined || isAgentCompactWindow(record.compactWindow)) &&
     (record.disabledMcpServerIds === undefined || isDisabledMcpServerIds(record.disabledMcpServerIds)) &&
     (record.weeklyTokenBudget === undefined || isAgentWeeklyTokenBudget(record.weeklyTokenBudget)) &&
+    (record.turnLimit === undefined || isAgentTurnLimit(record.turnLimit)) &&
     (record.autoModel === undefined || isBoolean(record.autoModel)) &&
     isAvatarSeed(record.avatarSeed) &&
     (record.avatarHue === null || isAvatarHue(record.avatarHue)) &&
@@ -1591,6 +1605,10 @@ function readStoredAgent(value: unknown): ReadStoredAgent | UnreadableStoredAgen
     value.weeklyTokenBudget === undefined || isAgentWeeklyTokenBudget(value.weeklyTokenBudget)
       ? value.weeklyTokenBudget
       : reset("weeklyTokenBudget", undefined);
+  const turnLimit =
+    value.turnLimit === undefined || isAgentTurnLimit(value.turnLimit)
+      ? value.turnLimit
+      : reset("turnLimit", undefined);
   const autoModel =
     value.autoModel === undefined || isBoolean(value.autoModel) ? value.autoModel : reset("autoModel", undefined);
   let marketplaceSource: StoredAgent["marketplaceSource"];
@@ -1630,6 +1648,7 @@ function readStoredAgent(value: unknown): ReadStoredAgent | UnreadableStoredAgen
     ...(compactWindow === undefined ? {} : { compactWindow }),
     ...(disabledMcpServerIds === undefined ? {} : { disabledMcpServerIds }),
     ...(weeklyTokenBudget === undefined ? {} : { weeklyTokenBudget }),
+    ...(turnLimit === undefined ? {} : { turnLimit }),
     ...(autoModel === undefined ? {} : { autoModel }),
     ...(marketplaceSource === undefined ? {} : { marketplaceSource }),
   };

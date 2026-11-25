@@ -16,7 +16,6 @@ import { agentConversationKey } from "../conversation/conversation-keys";
 import { useDirectMessages } from "../conversation/direct-messages-context";
 import { useServers } from "../servers/servers-context";
 import { useSidebar } from "../sidebar/sidebar-context";
-import { createAgentInitialMessage } from "./agent-initial-message";
 import { useAgents } from "./agents-context";
 import { agentsPort } from "./agents-port";
 
@@ -82,7 +81,7 @@ const AgentActions = createSimpleContext({
         ...(createModelSupported && draft.provider && draft.model
           ? { provider: draft.provider, model: draft.model }
           : {}),
-        initialMessage: createAgentInitialMessage(draft),
+        initialMessage: currentText().t("agent.setup.firstGreeting"),
       });
     }
 

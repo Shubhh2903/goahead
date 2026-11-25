@@ -18,13 +18,14 @@ import { join } from "node:path";
 import type { McpServerConfig } from "@openbot/contracts/ipc";
 import { isDynamicRecord } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { ACP_IDLE_SESSION_LIMIT, type AcpHistoryPersistence } from "./acp-client";
-import { isMissingProviderSessionError } from "./agent/thread-items";
+import { isMissingProviderSessionError, toolUsage } from "./agent/thread-items";
 import { type AgentClient, AgentProcessExitError } from "./agent-client";
 import type { OpencodeCliInfo } from "./cli";
 import type { CustomProviderConfig } from "./opencode-config";
 import {
+  type AppServerNotification,
   decodeAccountReadResult,
   decodeModelListResponse,
   decodeRecordResponse,
@@ -917,6 +918,34 @@ describe("OpenCode ACP session loading", () => {
     );
     await vi.waitFor(() => expect(completed).toHaveLength(1));
     expect(completed[0]).toMatchObject({ params: { turn: { status: "failed" } } });
+  });
+
+  it("starts each ACP tool call as an item that counts as a tool step", async () => {
+    const fake = await createFakeOpencodeAgent();
+    vi.stubEnv("OPENBOT_FAKE_ACP_PROMPT_TOOL", "1");
+    const client = startOpencode(fake.cli, () => null, fake.envLog);
+    const notifications: AppServerNotification[] = [];
+    client.on("notification", (notification: AppServerNotification) => notifications.push(notification));
+    await client.request("initialize", {}, decodeRecordResponse);
+    const thread = await client.request("thread/start", { cwd: fake.directory }, decodeRecordResponse);
+    const threadId = isDynamicRecord(thread.thread) ? thread.thread.id : null;
+    if (typeof threadId !== "string") throw new Error("The fake agent opened no thread.");
+    await client.request(
+      "turn/start",
+      { threadId, clientUserMessageId: "turn-tool-count", input: [{ type: "inputText", text: "Read it" }] },
+      decodeRecordResponse,
+    );
+    await vi.waitFor(() => expect(notifications.some((entry) => entry.method === "turn/completed")).toBe(true));
+
+    // The turn limit counts a tool step at `item/started` when `toolUsage` names it.
+    const started = notifications.flatMap((entry) => {
+      const item = entry.method === "item/started" && isDynamicRecord(entry.params) ? entry.params.item : null;
+      return isDynamicRecord(item) && item.id === "tool-1" ? [item] : [];
+    });
+    expect(started).toHaveLength(1);
+    const [item] = started;
+    assert(item && typeof item.type === "string");
+    expect(toolUsage({ ...item, type: item.type })).toEqual({ kind: "file_read", failed: false });
   });
 
   it("persists completed ACP tool items before releasing a turn", async () => {

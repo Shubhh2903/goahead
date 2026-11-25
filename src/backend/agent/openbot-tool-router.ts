@@ -65,7 +65,9 @@ import { responseAttachmentMessageId, visualReplyFileName, visualReplyMessageId 
 import type { DrainScheduler } from "./drain-scheduler";
 import type { HostedSiteCoordinator } from "./hosted-site-coordinator";
 import { isHostedSiteMutationTool } from "./hosted-site-events";
+import { INSTALL_GUARD_METHOD } from "./install-guard";
 import type { MailboxSync } from "./mailbox-sync";
+import { MobileQaReservation, mobileQaReservationInput } from "./mobile-qa-reservation";
 import {
   listModelsPayload,
   type ModelRequest,
@@ -119,6 +121,8 @@ export interface OpenBotToolRouterHooks {
   googleTurnOrigin(agentId: string, threadId: string, turnId: string): GoogleTurnOrigin;
   /** The agents that may use the Google tools. */
   googleMailAgents(): GoogleMailAgents;
+  /** Answers a Claude client's request to run a command that can install gigabytes (`INSTALL_GUARD_METHOD`). */
+  answerInstallGuard(client: AgentClient, request: AppServerRequest): void;
   /** Shows a Google send or booking card that only the person at this computer answers. */
   surfaceGoogleApproval(card: GoogleApprovalCard): void;
   /** An agent's `send_message` in a turn of the person carries that origin to its recipients. */
@@ -187,10 +191,12 @@ export class OpenBotToolRouter {
   readonly #googleWorkspace: GoogleWorkspace | null;
   readonly #visualPreview: ChatVisualPreviewHost | null;
   readonly #hooks: OpenBotToolRouterHooks;
+  readonly #mobileQa: MobileQaReservation;
   readonly #interruptTool: AgentInterruptTool;
 
   constructor(options: OpenBotToolRouterOptions) {
     this.#store = options.store;
+    this.#mobileQa = new MobileQaReservation(options.store.database.userDataPath);
     this.#mailbox = options.mailbox;
     this.#mailboxSync = options.mailboxSync;
     this.#conversation = options.conversation;
@@ -306,6 +312,9 @@ export class OpenBotToolRouter {
         }
         case "item/tool/requestUserInput":
           this.#attention.surfacePrompt(client, request);
+          return;
+        case INSTALL_GUARD_METHOD:
+          this.#hooks.answerInstallGuard(client, request);
           return;
         case "mcpServer/elicitation/request":
           this.#attention.surfaceMcpElicitation(client, request);
@@ -795,6 +804,15 @@ export class OpenBotToolRouter {
       const args = listModelsToolSchema.parse(params.arguments ?? {});
       const payload = listModelsPayload(this.#hooks.listModels(), this.#hooks.preferredProvider(), args.provider);
       return { success: true, contentItems: [{ type: "inputText", text: JSON.stringify(payload) }] };
+    }
+
+    if (params.tool === "reserve_mobile_qa") {
+      const input = mobileQaReservationInput.parse(params.arguments);
+      return openBotToolResult(
+        await this.#mobileQa.update(input, senderAgentId, (id) =>
+          this.#hooks.listAgents().some((agent) => agent.id === id),
+        ),
+      );
     }
 
     if (params.tool === "interrupt_agent") return this.#interruptTool.handle(params, senderAgentId);

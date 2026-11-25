@@ -9,9 +9,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServerConfig } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import { sourceText } from "@openbot/i18n/source";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { normalizeAccountUsage } from "./agent/account-usage";
+import { TURN_TOKENS_METHOD } from "./agent/turn-limit";
 import { AgentStore } from "./agent-store";
 import { CLAUDE_IDLE_THREAD_LIMIT, CLAUDE_THREAD_IDLE_RELEASE_MS, ClaudeAgentClient } from "./claude-client";
 import { mergeProviderHistory, newAssistantMessage, snapshotFromThread } from "./conversation-snapshots";
@@ -48,6 +50,8 @@ type TestStreamMessage =
       session_id: string;
       uuid: string;
       message: {
+        id?: string;
+        usage?: Record<string, number | null>;
         content: Array<{
           type: string;
           text?: string;
@@ -1022,6 +1026,68 @@ fi
     await client.stop();
   });
 
+  it.each([
+    ["full access", {}],
+    ["workspace only", { workspaceOnly: true }],
+  ])("asks the host before a guarded install command in a %s session", async (_mode, startParams) => {
+    const { client, options, threadId } = await createHarness(undefined, startParams);
+    const turnId = "66666666-6666-4666-8666-666666666641";
+    const requests: Array<{ id: string | number; method: string; params?: unknown }> = [];
+    client.on("request", (request) => requests.push(request));
+    await startTurn(client, threadId, turnId);
+    // A hook, not `canUseTool`: Claude skips `canUseTool` for a sandboxed or allow-listed command.
+    const hooks = (options[0]?.hooks?.PreToolUse ?? []).filter((matcher) => matcher.matcher === "Bash");
+    expect(hooks).toHaveLength(1);
+    const hook = hooks[0]?.hooks[0];
+    const ask = (command: string, toolUseId: string) =>
+      hook?.(
+        {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          tool_use_id: toolUseId,
+          session_id: threadId,
+          transcript_path: "",
+          cwd: "",
+        },
+        toolUseId,
+        { signal: new AbortController().signal },
+      );
+
+    await expect(ask('echo "run pod install later"', "bash-0")).resolves.toEqual({});
+    const allowed = ask("cd ios && pod install", "bash-1");
+    await waitFor(() => requests.length === 1);
+    expect(requests[0]).toMatchObject({
+      method: "openbot/installGuard",
+      params: { threadId, turnId, command: "cd ios && pod install", rule: "cocoapods" },
+    });
+    client.respond(requests[0]?.id ?? "", { decision: "accept" });
+    await expect(allowed).resolves.toEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
+    });
+
+    const denied = ask("xcrun simctl create Test iPhone-17", "bash-2");
+    await waitFor(() => requests.length === 2);
+    client.respond(requests[1]?.id ?? "", { decision: "decline" });
+    await expect(denied).resolves.toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: sourceText("status.agent.installGuardDenied"),
+      },
+    });
+    // `canUseTool` keeps no second check: Bash runs there at once.
+    await expect(
+      options[0]?.canUseTool?.(
+        "Bash",
+        { command: "pod install" },
+        { signal: new AbortController().signal, toolUseID: "bash-3", requestId: "bash-3" },
+      ),
+    ).resolves.toMatchObject({ behavior: "allow" });
+    expect(requests).toHaveLength(2);
+    await client.stop();
+  });
+
   it("aborts an open host tool call when Claude stops its tools for a steer", async () => {
     const { client, notifications, options, output, prompt, threadId } = await createHarness();
     const turnId = "66666666-6666-4666-8666-666666666631";
@@ -1111,6 +1177,40 @@ fi
     await waitFor(() => turnCompletions(notifications).length > 0);
     expect(turnCompletions(notifications)).toEqual(["interrupted"]);
     expect(previews()).toEqual(["Working on it", ""]);
+    await client.stop();
+  });
+
+  it("reports the turn's processed tokens once per API message, subagents included", async () => {
+    const { client, notifications, output, threadId } = await createHarness();
+    const turnId = "11111111-1111-4111-8111-111111111122";
+    await startTurn(client, threadId, turnId);
+    const usage = (input: number, output: number) => ({
+      input_tokens: input,
+      cache_read_input_tokens: 1_000,
+      cache_creation_input_tokens: null,
+      output_tokens: output,
+    });
+    const message = (uuid: string, id: string, tokens: ReturnType<typeof usage>, parent: string | null = null) => ({
+      type: "assistant" as const,
+      parent_tool_use_id: parent,
+      session_id: threadId,
+      uuid,
+      message: { id, usage: tokens, content: [{ type: "tool_use", id: `${uuid}-tool`, name: "Read" }] },
+    });
+
+    // Two blocks of one API message carry its id; the second has the larger usage.
+    output.push(message("block-1", "msg-1", usage(100, 10)));
+    output.push(message("block-2", "msg-1", usage(100, 50)));
+    output.push(message("child", "msg-child", usage(200, 20), "block-1-tool"));
+    output.push(assistantMessage(threadId, "no-usage", "Done"));
+    output.push(resultMessage(threadId, turnId, "Done"));
+    await waitFor(() => notifications.some((event) => event.method === "turn/completed"));
+
+    expect(notifications.filter((event) => event.method === TURN_TOKENS_METHOD).map((event) => event.params)).toEqual([
+      { threadId, turnId, processedTokens: 1_110 },
+      { threadId, turnId, processedTokens: 1_150 },
+      { threadId, turnId, processedTokens: 2_370 },
+    ]);
     await client.stop();
   });
 
@@ -1693,7 +1793,10 @@ fi
   });
 });
 
-async function createHarness(history?: SessionMessage[]): Promise<{
+async function createHarness(
+  history?: SessionMessage[],
+  startParams: DynamicRecord = {},
+): Promise<{
   client: ClaudeAgentClient;
   notifications: Array<{ method: string; params: unknown }>;
   output: TestQueue<TestStreamMessage>;
@@ -1726,6 +1829,7 @@ async function createHarness(history?: SessionMessage[]): Promise<{
       model: "claude-sonnet-5",
       developerInstructions: "Be concise.",
       runtimeWorkspaceRoots: [root],
+      ...startParams,
     },
     decodeThreadResponse,
   );
@@ -2116,6 +2220,11 @@ it("keeps the user's Claude Code plugins out of an agent session and keeps its s
     const env = isDynamicRecord(started?.env) ? started.env : {};
     expect(env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
     expect(env.IGNORED_NUMBER).toBeUndefined();
+    // An agent with no compact window compacts at 120,000 tokens; a chosen window replaces it.
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("120000");
+    await client.request("thread/start", { cwd: process.cwd(), compactWindow: 200_000 }, decodeThreadResponse);
+    const wide = spawned.at(-1);
+    expect(isDynamicRecord(wide?.env) ? wide.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW : null).toBe("200000");
   } finally {
     await client.stop();
     vi.unstubAllEnvs();

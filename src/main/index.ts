@@ -615,6 +615,7 @@ function registerIpcHandlers({
       translate: language.translate,
       agents: () => service.listAgents(),
       openPath: (path) => shell.openPath(path),
+      trashItem: (path) => shell.trashItem(path),
     }),
     ...agentIpcHandlers({
       service,

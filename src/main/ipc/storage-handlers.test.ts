@@ -48,6 +48,8 @@ function setup(options: { capable: boolean; answer?: unknown }) {
     usage: vi.fn(async () => usageFor("chief")),
     deleteFile: vi.fn(async () => undefined),
     clear: vi.fn(async () => undefined),
+    unassignedFolders: vi.fn(async () => [{ path: "/OpenBot/Agents/qa", bytes: 5 }]),
+    trashUnassignedFolder: vi.fn(async (_path: string, _moveToTrash: (path: string) => Promise<void>) => undefined),
   };
   const requests: { serverId: string; path: string; init?: RemoteRequestInit }[] = [];
   const remoteServers = {
@@ -63,6 +65,7 @@ function setup(options: { capable: boolean; answer?: unknown }) {
     resolveAttachment: vi.fn(async () => ({ path: "/transfers/report.pdf", mimeType: "application/pdf", name: "a" })),
   };
   const openPath = vi.fn(async () => "");
+  const trashItem = vi.fn(async (_path: string) => undefined);
   registerIpcGroup(
     "storage",
     storageIpcHandlers({
@@ -73,6 +76,7 @@ function setup(options: { capable: boolean; answer?: unknown }) {
       getMainWindow: () => null,
       agents: () => [{ id: "chief", workspacePath: "/workspaces/chief" }],
       openPath,
+      trashItem,
     }).storage,
   );
   // Async like `ipcMain.handle`: a parser that throws reaches the renderer as a rejection.
@@ -82,10 +86,27 @@ function setup(options: { capable: boolean; answer?: unknown }) {
     return handler(TRUSTED_EVENT, request);
   };
   const call = (channel: string, serverId: string, payload: unknown) => invoke(channel, { serverId, payload });
-  return { storage, requests, mailbox, openPath, call, invoke };
+  return { storage, requests, mailbox, openPath, trashItem, call, invoke };
 }
 
 describe("storageIpcHandlers", () => {
+  it("moves a folder to the Trash only for this computer's window, through the service's checks", async () => {
+    const { storage, trashItem, invoke } = setup({ capable: false });
+    const channel = IPC_ENDPOINTS.storage.trashUnassignedFolder.channel;
+    const handler = bound.get(channel);
+
+    await expect(
+      (async () => handler?.({ senderFrame: { url: "https://example.com/" } }, { path: "/OpenBot/Agents/qa" }))(),
+    ).rejects.toThrow("Rejected IPC request from an untrusted renderer.");
+    await expect(invoke(channel, { path: 7 })).rejects.toThrow("Invalid folder.");
+    expect(storage.trashUnassignedFolder).not.toHaveBeenCalled();
+
+    await invoke(channel, { path: "/OpenBot/Agents/qa" });
+    expect(storage.trashUnassignedFolder).toHaveBeenCalledExactlyOnceWith("/OpenBot/Agents/qa", trashItem);
+    // The service calls the Trash after its own checks; the handler never calls it directly.
+    expect(trashItem).not.toHaveBeenCalled();
+  });
+
   it("reads the local host from the service and a remote host over storage-v1", async () => {
     const local = setup({ capable: false });
     await expect(

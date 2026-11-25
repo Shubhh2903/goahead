@@ -416,6 +416,29 @@ export class MessagingThreads {
     return { status: "queued", link, deliveryId, waiting };
   }
 
+  /**
+   * Continues a turn that GoAhead stopped in this conversation (a turn limit or install card), as
+   * the same requester's next message: the answer goes back to the same conversation. False, and
+   * nothing is queued, when the conversation or its connection is gone or turned off.
+   */
+  async continueStoppedTurn(linkId: string, origin: MessagingOrigin, text: string): Promise<boolean> {
+    const link = this.store.link(linkId);
+    if (!link || link.threadKey === REPLY_CONTEXT_KEY || !this.store.connection(link.connectionId)?.enabled) {
+      return false;
+    }
+    const receipt = await this.#mailbox.enqueue({
+      sender: { kind: "user" },
+      messaging: { ...origin, linkId: link.linkId },
+      recipientAgentIds: [link.agentId],
+      text,
+    });
+    if (!receipt.deliveries[0]) return false;
+    this.store.touch(link.linkId);
+    this.#changed(link.threadId);
+    this.#hooks.schedule(link.agentId);
+    return true;
+  }
+
   /** The execution thread of a messaging or auto-reply delivery, or null for any other delivery. */
   threadForDelivery(deliveryId: string): string | null {
     const origin = this.#mailbox.messagingOrigin(deliveryId);

@@ -6,6 +6,7 @@ import {
   agentAutomationAllowed,
   agentComputerUseEnabled,
   agentProviderDescriptor,
+  DEFAULT_COMPACT_WINDOW,
   type McpServerConfig,
   workspaceAccessEnforced,
 } from "@openbot/contracts/ipc";
@@ -39,7 +40,7 @@ import type { AgentMemories } from "./agent-memories";
 import type { ContextCompaction } from "./context-compaction";
 import type { ConversationRuntime } from "./conversation-runtime";
 import { agentNamesById, estimateTokens, renderHandoffMessage } from "./delivery-content";
-import { developerInstructions, slackReplyInstructions } from "./developer-instructions";
+import { developerInstructions, slackReplyInstructions, TASK_SCOPE_INSTRUCTIONS } from "./developer-instructions";
 import { readHandoffHistory } from "./handoff-history";
 import { decodeCapturedSteps, readCapturedSteps } from "./handoff-tool-steps";
 import { existingProjectFolders } from "./project-folders";
@@ -69,6 +70,14 @@ const CODEX_MCP_ADAPTER_VERSION = 6;
  * `turn/plan/updated`, so the conversation shows no task list.
  */
 const CODEX_TOOLS_CONFIG = { update_plan: { enabled: true } } as const;
+
+/**
+ * Codex compacts the thread inside a turn when its context reaches this many tokens. The host
+ * compaction in `context-compaction.ts` runs only between turns, and a long turn alone filled
+ * 270-350k-token contexts that every model call re-read. Codex 0.160.1 reads the key from
+ * `ConfigToml`, so the app-server `config` override applies it.
+ */
+const CODEX_AUTO_COMPACT_TOKEN_LIMIT = DEFAULT_COMPACT_WINDOW;
 
 /**
  * The Codex built-in tools that a Slack reply context turns off. Other people's Slack text drives
@@ -553,6 +562,7 @@ export class ThreadLifecycle {
     config?: {
       mcp_servers?: Record<string, CodexMcpServer | CodexDisabledMcpServer>;
       tools: typeof CODEX_TOOLS_CONFIG;
+      model_auto_compact_token_limit: number;
       [variable: `shell_environment_policy.set.${string}`]: string;
     } & ReturnType<typeof codexSandboxConfig> &
       Partial<typeof CODEX_SLACK_REPLY_CONFIG>;
@@ -565,6 +575,7 @@ export class ThreadLifecycle {
       config: {
         ...(Object.keys(mcpServers).length > 0 ? { mcp_servers: mcpServers } : {}),
         tools: CODEX_TOOLS_CONFIG,
+        model_auto_compact_token_limit: CODEX_AUTO_COMPACT_TOKEN_LIMIT,
         ...(slackReply ? CODEX_SLACK_REPLY_CONFIG : codexSandboxConfig(agent, this.#store.sharedRoot)),
         ...Object.fromEntries(
           Object.entries(environment).map(([name, value]) => [`shell_environment_policy.set.${name}`, value]),
@@ -634,6 +645,8 @@ export class ThreadLifecycle {
           Object.keys(disabled).sort(),
           [toolRuntimes.binDirectories, toolRuntimes.commandAliases],
           CODEX_MCP_ADAPTER_VERSION,
+          // A resumed Codex session keeps its original instructions. Slack replies have their own prompt.
+          ...(slackReply ? [] : [TASK_SCOPE_INSTRUCTIONS]),
           // Only a sandboxed agent, or one that allows local scripts, adds a value: Codex keeps the
           // developer instructions of a loaded session, and other sessions keep the fingerprint they had.
           [
@@ -672,7 +685,8 @@ export class ThreadLifecycle {
   /**
    * Claude and the ACP clients read the servers themselves, so they are told to leave Computer Use and
    * the servers that the agent's settings turn off out. Claude also gets the window where it compacts
-   * early; Codex keeps its own compaction.
+   * early, and the client uses `DEFAULT_COMPACT_WINDOW` when there is none; Codex gets
+   * `CODEX_AUTO_COMPACT_TOKEN_LIMIT` in its config.
    */
   #computerUseParam(
     agent: AgentSummary,

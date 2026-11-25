@@ -1,13 +1,19 @@
 // @vitest-environment node
 
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StorageUsage } from "@openbot/contracts/ipc";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MailboxStoredFile } from "./mailbox-store";
 import { OpenBotDatabase } from "./openbot-database";
-import { type StorageRoots, StorageUsageScanner, StorageUsageService, type StorageUsageSources } from "./storage-usage";
+import {
+  canTrashUnassignedFolder,
+  type StorageRoots,
+  StorageUsageScanner,
+  StorageUsageService,
+  type StorageUsageSources,
+} from "./storage-usage";
 
 const roots: string[] = [];
 const databases: OpenBotDatabase[] = [];
@@ -20,6 +26,14 @@ afterEach(async () => {
 async function file(path: string, bytes: number): Promise<string> {
   await mkdir(join(path, ".."), { recursive: true });
   await writeFile(path, "x".repeat(bytes));
+  return path;
+}
+
+/** A file that last changed 30 days ago: its folder is quiet enough to offer for the Trash. */
+async function oldFile(path: string, bytes: number): Promise<string> {
+  await file(path, bytes);
+  const old = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+  await utimes(path, old, old);
   return path;
 }
 
@@ -93,6 +107,7 @@ async function host() {
 
   const storageRoots: StorageRoots = {
     database: database.path,
+    workspaceRoots: [join(root, "workspaces"), join(root, "legacy-workspaces")],
     downloads: join(root, "downloads"),
     caches: [join(root, "remote-attachments")],
     logs: [join(root, "logs", "remote")],
@@ -206,15 +221,173 @@ describe("StorageUsageScanner", () => {
   });
 });
 
+describe("folders with no agent", () => {
+  it("counts and lists a folder no agent owns under the current and the legacy root", async () => {
+    const { root, sources } = await host();
+    await oldFile(join(root, "workspaces", "qa", "runtime.img"), 17);
+    await oldFile(join(root, "legacy-workspaces", "old", "notes.md"), 19);
+    // An unfinished copy is counted but never offered for the Trash.
+    await file(join(root, "workspaces", "agent-copy.openbot-stage", "notes.md"), 3);
+    await symlink(join(root, "outside"), join(root, "workspaces", "linked"));
+
+    const scan = await new StorageUsageScanner(sources).measure({ scope: "host" });
+
+    expect(bytesOf(scan.usage).workspaces).toBe(11 + 13 + 17 + 19 + 3);
+    expect(scan.unassignedFolders).toEqual([
+      { path: join(root, "legacy-workspaces", "old"), bytes: 19 },
+      { path: join(root, "workspaces", "qa"), bytes: 17 },
+    ]);
+    // The answer a joined server reads carries no path.
+    expect(JSON.stringify(scan.usage)).not.toContain(root);
+  });
+
+  it("does not list or move to the Trash an agent's project folder, or a folder that holds one", async () => {
+    const { root, sources } = await host();
+    await file(join(root, "workspaces", "project", "src.ts"), 4);
+    await file(join(root, "workspaces", "client", "repo", "main.ts"), 6);
+    await oldFile(join(root, "workspaces", "qa", "runtime.img"), 17);
+    const agents = sources.agents();
+    const withProjects = {
+      ...sources,
+      agents: () => [
+        ...agents.map((agent) =>
+          agent.id === "chief"
+            ? {
+                ...agent,
+                projectFolders: [
+                  { path: join(root, "workspaces", "project") },
+                  { path: join(root, "workspaces", "client", "repo") },
+                ],
+              }
+            : agent,
+        ),
+      ],
+    };
+    const service = new StorageUsageService(new StorageUsageScanner(withProjects), withProjects);
+    const moveToTrash = vi.fn(async (_path: string) => undefined);
+
+    expect(await service.unassignedFolders()).toEqual([{ path: join(root, "workspaces", "qa"), bytes: 17 }]);
+    for (const refused of [join(root, "workspaces", "project"), join(root, "workspaces", "client")])
+      await expect(service.trashUnassignedFolder(refused, moveToTrash)).rejects.toThrow(
+        "This folder cannot be moved to the Trash.",
+      );
+    expect(moveToTrash).not.toHaveBeenCalled();
+  });
+
+  it("does not offer a folder that holds an agent workspace, and counts its bytes once", async () => {
+    const { root, sources } = await host();
+    await file(join(root, "workspaces", "team", "other.bin"), 5);
+    await file(join(root, "workspaces", "team", "nested", "notes.md"), 2);
+    const agents = sources.agents();
+    const nested = {
+      ...sources,
+      agents: () => [...agents, { id: "nested", workspacePath: join(root, "workspaces", "team", "nested") }],
+    };
+
+    const scan = await new StorageUsageScanner(nested).measure({ scope: "host" });
+
+    expect(bytesOf(scan.usage).workspaces).toBe(11 + 13 + 5 + 2);
+    expect(scan.unassignedFolders).toEqual([]);
+  });
+
+  it("does not list or move to the Trash a folder in which a file changed in the last 7 days", async () => {
+    const { root, sources } = await host();
+    await oldFile(join(root, "workspaces", "qa", "runtime.img"), 17);
+    // Another GoAhead profile or OpenBot install can still work in these: one file changed today.
+    await file(join(root, "workspaces", "agent-other-profile", "notes.md"), 7);
+    await oldFile(join(root, "workspaces", "mixed", "old.bin"), 5);
+    await file(join(root, "workspaces", "mixed", "deep", "today.md"), 3);
+    const service = new StorageUsageService(new StorageUsageScanner(sources), sources);
+    const moveToTrash = vi.fn(async (_path: string) => undefined);
+
+    expect(await service.unassignedFolders()).toEqual([{ path: join(root, "workspaces", "qa"), bytes: 17 }]);
+    // The recent folders still count in the total.
+    expect(bytesOf(await service.usage({ scope: "host" })).workspaces).toBe(11 + 13 + 17 + 7 + 5 + 3);
+    for (const refused of [join(root, "workspaces", "agent-other-profile"), join(root, "workspaces", "mixed")])
+      await expect(service.trashUnassignedFolder(refused, moveToTrash)).rejects.toThrow(
+        "A file in it changed in the last 7 days",
+      );
+    expect(moveToTrash).not.toHaveBeenCalled();
+
+    // Eight days later the same folders are quiet, and the Trash takes one.
+    const later = () => Date.now() + 8 * 24 * 60 * 60_000;
+    const quiet = new StorageUsageService(new StorageUsageScanner(sources, later), sources, later);
+    expect((await quiet.unassignedFolders()).map((folder) => folder.path).sort()).toEqual(
+      [
+        join(root, "workspaces", "agent-other-profile"),
+        join(root, "workspaces", "mixed"),
+        join(root, "workspaces", "qa"),
+      ].sort(),
+    );
+    await quiet.trashUnassignedFolder(join(root, "workspaces", "mixed"), moveToTrash);
+    expect(moveToTrash).toHaveBeenCalledExactlyOnceWith(await realpath(join(root, "workspaces", "mixed")));
+  });
+
+  it("allows only an unowned direct child of a workspace root", () => {
+    const roots = ["/home/u/OpenBot/Agents", "/home/u/OpenBot/Bots"];
+    const workspaces = ["/home/u/OpenBot/Agents/chief", "/home/u/OpenBot/Agents/team/nested"];
+    const allowed = (path: string) => canTrashUnassignedFolder(path, roots, workspaces);
+
+    expect(allowed("/home/u/OpenBot/Agents/qa")).toBe(true);
+    expect(allowed("/home/u/OpenBot/Bots/old")).toBe(true);
+    expect(allowed("/home/u/Documents/qa")).toBe(false);
+    expect(allowed("/home/u/OpenBot/Agents")).toBe(false);
+    expect(allowed("/home/u/OpenBot/Agents/qa/inner")).toBe(false);
+    expect(allowed("/home/u/OpenBot/Agents/../Shared")).toBe(false);
+    expect(allowed("OpenBot/Agents/qa")).toBe(false);
+    expect(allowed("/home/u/OpenBot/Agents/chief")).toBe(false);
+    expect(allowed("/home/u/OpenBot/Agents/team")).toBe(false);
+    expect(allowed("/home/u/OpenBot/Agents/agent-copy.openbot-stage")).toBe(false);
+    expect(canTrashUnassignedFolder("/home/u/OpenBot/Agents/qa", roots, ["/home/u/OpenBot"])).toBe(false);
+  });
+
+  it("moves only a folder with no agent to the Trash, and refuses one with an agent workspace inside", async () => {
+    const { root, sources } = await host();
+    await oldFile(join(root, "workspaces", "qa", "runtime.img"), 17);
+    await file(join(root, "workspaces", "team", "nested", "notes.md"), 2);
+    await symlink(join(root, "outside"), join(root, "workspaces", "linked"));
+    const agents = sources.agents();
+    const withNested = {
+      ...sources,
+      agents: () => [...agents, { id: "nested", workspacePath: join(root, "workspaces", "team", "nested") }],
+    };
+    const service = new StorageUsageService(new StorageUsageScanner(withNested), withNested);
+    const moveToTrash = vi.fn(async (_path: string) => undefined);
+
+    for (const refused of [
+      join(root, "workspaces", "team"),
+      join(root, "workspaces", "chief"),
+      join(root, "workspaces", "linked"),
+      // Raw strings: `join` would normalize the `..` away before the check sees it.
+      `${join(root, "workspaces", "team")}/../qa`,
+      `${join(root, "workspaces")}/./qa`,
+      join(root, "outside"),
+      join(root, "workspaces", "missing"),
+    ])
+      await expect(service.trashUnassignedFolder(refused, moveToTrash)).rejects.toThrow(
+        "This folder cannot be moved to the Trash.",
+      );
+    expect(moveToTrash).not.toHaveBeenCalled();
+
+    await service.trashUnassignedFolder(join(root, "workspaces", "qa"), moveToTrash);
+    expect(moveToTrash).toHaveBeenCalledExactlyOnceWith(await realpath(join(root, "workspaces", "qa")));
+  });
+});
+
 describe("StorageUsageService", () => {
   it("shares one scan between two callers and drops the answer after a delete", async () => {
     const { sources } = await host();
     const scanner = new StorageUsageScanner(sources);
-    const scan = vi.spyOn(scanner, "scan");
+    const scan = vi.spyOn(scanner, "measure");
     const service = new StorageUsageService(scanner, sources);
 
-    const [first, second] = await Promise.all([service.usage({ scope: "host" }), service.usage({ scope: "host" })]);
+    const [first, second, folders] = await Promise.all([
+      service.usage({ scope: "host" }),
+      service.usage({ scope: "host" }),
+      service.unassignedFolders(),
+    ]);
     expect(second).toBe(first);
+    expect(folders).toEqual([]);
     expect(await service.usage({ scope: "host" })).toBe(first);
     expect(scan).toHaveBeenCalledTimes(1);
 

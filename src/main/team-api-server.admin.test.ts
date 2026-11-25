@@ -145,6 +145,7 @@ describe("Team API agent-host-settings-v1", () => {
           busyMessageMode,
           compactWindow: _c,
           weeklyTokenBudget: _w,
+          turnLimit: _t,
           ...changes
         }) => {
           agent = { ...agent, ...changes };
