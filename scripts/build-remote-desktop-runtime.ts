@@ -1,10 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { accessSync, copyFileSync, existsSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { type BundledLibrary, bundledLibraryLicenses, bundleMacDynamicLibraries } from "./mac-runtime-dylibs";
+import {
+  type BundledLibrary,
+  bundledLibraryLicense,
+  bundledLibraryLicenses,
+  bundleMacDynamicLibraries,
+} from "./mac-runtime-dylibs";
 import { createRemoteDesktopSourceManifest, loadNativeRuntimeLock } from "./native-runtime-lock";
 import {
   archiveCachePath,
@@ -28,13 +33,10 @@ if (!architecture || (platform === "win32" && architecture !== "x64")) {
 const tarExecutable =
   process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
 
-/**
- * The Linux build captures an X11 display, such as the Xvfb display of a hosted server, and encodes
- * in software. The other capture and encoder paths need a GPU, a Wayland compositor or elevated
- * capabilities, and each would add libraries that such a computer does not have. With no tray, the
- * binary also loads no GTK modules.
- */
 const LINUX_SUNSHINE_OPTIONS = [
+  "-DBOOST_LOCALE_ENABLE_ICU=OFF",
+  "-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON",
+  "-DCMAKE_INSTALL_RPATH=$ORIGIN/lib",
   "-DSUNSHINE_ENABLE_CUDA=OFF",
   "-DSUNSHINE_ENABLE_DRM=OFF",
   "-DSUNSHINE_ENABLE_KWIN=OFF",
@@ -46,8 +48,11 @@ const LINUX_SUNSHINE_OPTIONS = [
   "-DSUNSHINE_ENABLE_X11=ON",
 ];
 
-/** `--no-cache` restores the uncached build: fresh downloads and clones from GitHub. */
 const cacheRoot = process.argv.includes("--no-cache") ? null : remoteDesktopCacheRoot();
+
+const LINUX_BUNDLED_LIBRARIES: Readonly<Record<string, string>> = {
+  "libminiupnpc.so.17": "libminiupnpc17",
+};
 
 const lock = await loadNativeRuntimeLock();
 const outputRoot = resolve("build/remote-desktop-runtime", platform, architecture);
@@ -86,6 +91,11 @@ try {
   } else {
     await cp(sunshineBinary, join(outputRoot, `sunshine${executableSuffix}`));
   }
+  if (platform === "win32") {
+    await cp(join(sunshineSource, "src_assets/windows/assets/shaders"), join(outputRoot, "assets/shaders"), {
+      recursive: true,
+    });
+  }
   await cp(
     join(moonlightSource, "target/release", `web-server${executableSuffix}`),
     join(outputRoot, `web-server${executableSuffix}`),
@@ -99,19 +109,18 @@ try {
   if (platform === "darwin") {
     const bundled = bundleMacRuntimeDependencies(outputRoot);
     bundledLibraries = bundled.libraries;
-    // Before signing, not after: rewriting a load command invalidates the signature over it.
     signMacRuntime(outputRoot, bundled.signTargets);
   }
+  if (platform === "linux") bundledLibraries = bundleLinuxRuntimeDependencies(outputRoot);
 
   const licenses = resolve("build/remote-desktop-runtime/licenses");
   await mkdir(licenses, { recursive: true });
   await Promise.all([
     cp(join(sunshineSource, "LICENSE"), join(licenses, "Sunshine-GPL-3.0.txt")),
     cp(join(moonlightSource, "LICENSE"), join(licenses, "moonlight-web-stream-GPL-3.0.txt")),
-    // The copies the runtime now carries are OpenBot's to redistribute, so their notices ship with
-    // them. Taken from the tree that was linked against, so the notice is the one for the binary in
-    // the archive rather than whatever the formula says today.
-    ...bundledLibraryLicenses(bundledLibraries).map(({ file, source }) => cp(source, join(licenses, file))),
+    ...(platform === "linux" ? linuxLibraryLicenses(bundledLibraries) : bundledLibraryLicenses(bundledLibraries)).map(
+      ({ file, source }) => cp(source, join(licenses, file)),
+    ),
     writeFile(
       resolve("build/remote-desktop-runtime/source-manifest.json"),
       `${JSON.stringify(createRemoteDesktopSourceManifest(lock), null, 2)}\n`,
@@ -119,9 +128,6 @@ try {
   ]);
   await writeChecksums(outputRoot);
   await writeChecksums(resolve("build/remote-desktop-runtime"), "DISTRIBUTION-SHA256SUMS.txt");
-  // The checksums above describe the pinned Sunshine.app. A development build then gets the same
-  // bundle id and signature as an installed development copy. A release build and a CI build (the
-  // archive that gets published) stay as pinned.
   if (platform === "darwin" && !process.env.CI && sunshineVariantFromEnvironment() === "development") {
     const { developmentSunshineIdentity } = await import("./install-remote-desktop-runtime");
     await developmentSunshineIdentity().apply(outputRoot);
@@ -283,16 +289,6 @@ function requiredSunshineSubmodules(targetPlatform: "darwin" | "win32" | "linux"
   return [...common, "third-party/ViGEmClient", "third-party/glad", "third-party/nvapi"];
 }
 
-/**
- * The pinned Sunshine needs OpenSSL 3, and Homebrew can link OpenSSL 4 as its default, whose
- * `ASN1_STRING` is opaque and whose `X509_NAME` is const. `OPENSSL_ROOT_DIR` links OpenSSL 3. The
- * headers need more: another library adds `-isystem /opt/homebrew/include`, which holds the linked
- * OpenSSL 4 headers. A `-I` folder comes before every `-isystem` folder, but clang drops a `-I` that
- * names the same folder as an `-isystem`, and CMake adds OpenSSL 3's own include folder that way. So
- * a separate folder holds only an `openssl` link to the OpenSSL 3 headers. It is added through
- * `CMAKE_PROJECT_INCLUDE` as a directory include, not through `CMAKE_CXX_FLAGS`: Sunshine's
- * `tests/CMakeLists.txt` sets those flags itself, which dropped the folder from the test build.
- */
 function macOpenSslOptions(build: string): string[] {
   const prefix = ["/opt/homebrew/opt/openssl@3", "/usr/local/opt/openssl@3"].find((candidate) =>
     existsSync(join(candidate, "include", "openssl", "opensslv.h")),
@@ -374,12 +370,6 @@ function buildMoonlight(source: string): void {
   });
 }
 
-/**
- * On an Intel Mac, moonlight-common-c's Reed-Solomon code picks its SIMD path with
- * `__builtin_cpu_supports`, which reads `__cpu_model` from the compiler runtime. rustc links with
- * `-nodefaultlibs`, so `libclang_rt.osx.a` is not on the link line and `streamer` fails with an
- * undefined `___cpu_model`. The ARM64 build never calls the x86 check.
- */
 function moonlightCargoEnvironment(): NodeJS.ProcessEnv {
   if (platform !== "darwin" || architecture !== "x64") return process.env;
   const resourceDirectory = execFileSync("xcrun", ["clang", "-print-resource-dir"], { encoding: "utf8" }).trim();
@@ -433,15 +423,8 @@ function auditNpmDependencies(source: string): void {
   execFileSync("npm", ["audit", "--audit-level=high"], { cwd: source, stdio: "inherit" });
 }
 
-// CMake links Sunshine against Homebrew's miniupnpc and OpenSSL by absolute path, so the binary that
-// runs on the build runner cannot start on a Mac without those formulae -- and nothing downstream
-// would say so: the app reports remote control as available, the session opens, and no frame ever
-// arrives. `verify-remote-desktop-runtime.ts` fails the build if any of this is left behind.
 function bundleMacRuntimeDependencies(root: string): { libraries: BundledLibrary[]; signTargets: string[] } {
   const app = join(root, "Sunshine.app", "Contents");
-  // The app bundle signs `--deep`, so its own copies need no separate pass. The two loose
-  // executables do, which is why only their libraries come back as signing targets. Both sets need
-  // their licences, so both are returned.
   const inBundle = bundleMacDynamicLibraries(join(app, "MacOS", "Sunshine"), join(app, "Frameworks"));
   const besideExecutables = ["web-server", "streamer"].flatMap((executable) =>
     bundleMacDynamicLibraries(join(root, executable), join(root, "lib")),
@@ -450,6 +433,33 @@ function bundleMacRuntimeDependencies(root: string): { libraries: BundledLibrary
     libraries: [...inBundle, ...besideExecutables],
     signTargets: besideExecutables.map((library) => library.path),
   };
+}
+
+function bundleLinuxRuntimeDependencies(root: string): BundledLibrary[] {
+  const libraries: BundledLibrary[] = [];
+  for (const line of execFileSync("ldd", [join(root, "sunshine")], { encoding: "utf8" }).split("\n")) {
+    const [, name, load] = /^\s*(\S+) => (\/\S+)/.exec(line) ?? [];
+    if (!name || !load || !LINUX_BUNDLED_LIBRARIES[name]) continue;
+    const path = join(root, "lib", name);
+    const origin = realpathSync(load);
+    mkdirSync(dirname(path), { recursive: true });
+    copyFileSync(origin, path);
+    libraries.push({ name, path, origin });
+  }
+  const missing = Object.keys(LINUX_BUNDLED_LIBRARIES).filter(
+    (name) => !libraries.some((library) => library.name === name),
+  );
+  if (missing.length > 0) throw new Error(`Sunshine does not load ${missing.join(", ")}, so it cannot be bundled.`);
+  return libraries;
+}
+
+// Debian keeps the licence of a package in /usr/share/doc/<package>/copyright.
+function linuxLibraryLicenses(libraries: readonly BundledLibrary[]): { file: string; source: string }[] {
+  return libraries.map((library) => {
+    const entry = bundledLibraryLicense(library.name);
+    if (!entry) throw new Error(`${library.name} would ship in the runtime with no licence recorded for it.`);
+    return { file: entry.license, source: `/usr/share/doc/${LINUX_BUNDLED_LIBRARIES[library.name]}/copyright` };
+  });
 }
 
 function signMacRuntime(root: string, bundledLibraries: string[] = []): void {
@@ -473,9 +483,7 @@ function findSunshineBinary(source: string): string {
     try {
       accessSync(candidate);
       return candidate;
-    } catch {
-      // Continue to the next platform-specific CMake output.
-    }
+    } catch {}
   }
   throw new Error("The Sunshine build did not produce its executable.");
 }

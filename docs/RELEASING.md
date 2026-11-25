@@ -1,8 +1,10 @@
 # Releasing GoAhead
 
 For iOS builds uploaded to TestFlight through GitHub Actions, see
-[the mobile release guide](../apps/mobile/README.md#github-actions-testflight-release).
-The mobile workflow is separate from the desktop tag release described below.
+[the mobile release guide](../apps/mobile/README.md#github-actions-testflight-release). For Android
+builds uploaded to Google Play, see
+[the Google Play release guide](../apps/mobile/README.md#github-actions-google-play-release).
+The mobile workflows are separate from the desktop tag release described below.
 
 GoAhead updates are published through GitHub Releases and installed with `electron-updater`.
 macOS requires every auto-updatable build to be signed with a Developer ID Application certificate.
@@ -23,10 +25,11 @@ GoAhead. Linux has no code-signature contract to check, so its provider artifact
 SHA-256 and version only.
 
 Installed apps do not wait for a release to get a new provider CLI: they offer the latest upstream
-release (see [Provider CLI updates](ARCHITECTURE.md#provider-cli-updates)). The pinned version is the
+release (see [Provider CLI updates](architecture/providers.md#provider-cli-updates)). The pinned version is the
 first-install fallback. To stop a broken upstream release, add its version to the provider's list in
 `provider-runtime-blocklist.json` and merge it to `main`. Apps read the list at their next check. A
-blocked version is no longer offered, but it stays on the computers that already installed it.
+blocked version is no longer offered. A GoAhead copy that already runs a blocked version moves to the
+newest version that is not blocked, also when that version is older. A CLI that the user installed stays.
 
 ## Internal GoAhead build
 
@@ -125,11 +128,84 @@ Create the `release` environment in `nightly-labs/openbot`, then add these envir
 Do not use an Apple Development certificate. Direct distribution and native macOS updates require a
 Developer ID Application certificate. Never commit signing credentials to the repository.
 
-The Docker image needs no secret: the `docker-publish` job pushes with `GITHUB_TOKEN`. After the
-first push, GHCR keeps the package `openbot` private. Open the package settings of
-`nightly-labs/openbot` once, make it public, and give the repository write access under **Manage
-Actions access**. (Not confirmed: a repository that pushes a new package usually gets this access
-already.)
+### Docker package access
+
+The Docker image needs no secret: the `docker-publish` job pushes with `GITHUB_TOKEN`.
+[GHCR makes new packages private](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry),
+even when the source repository is public. A successful push does not confirm public access.
+
+After the first push, a package administrator must open the
+[GoAhead package](https://github.com/orgs/nightly-labs/packages/container/package/openbot):
+
+1. Open **Package settings** and set **Change visibility** to **Public**.
+2. Check that the package is linked to `nightly-labs/openbot`. The Dockerfile sets the
+   `org.opencontainers.image.source` label for this link.
+3. Under **Manage Actions access**, check that `nightly-labs/openbot` has write access.
+
+If **Public** is disabled by organization administrators, an organization owner must enable
+**Public** under **Package creation** in the
+[organization package settings](https://github.com/organizations/nightly-labs/settings/packages).
+Make GoAhead public, then restore the previous organization policy. Existing public packages stay
+public when this creation permission is disabled again.
+
+If a release pushed its image but users cannot pull it, check these settings first. Changing
+visibility makes the existing tags public; no rebuild is needed. Tags `0.30.0` and `0.31.0` have
+no `v` prefix. Later releases also publish `v<version>` as an alias.
+
+Check access with an empty Docker configuration, so a saved login cannot hide the fault:
+
+```sh
+anonymous_config=$(mktemp -d)
+docker --config "$anonymous_config" manifest inspect ghcr.io/nightly-labs/openbot:latest
+docker --config "$anonymous_config" manifest inspect ghcr.io/nightly-labs/openbot:0.30.0
+rm -rf "$anonymous_config"
+```
+
+The release workflow checks anonymous access to the version, `v<version>` and `latest` tags,
+including both Linux architectures. A failure leaves the GitHub Release and pushed images in
+place. Correct the package settings, then run the failed job again.
+
+## Hosted-server snapshots
+
+After GitHub publication, `Publish boat server snapshot` builds the Linux x64 release into a boat
+named snapshot (`openbot-server-production-<version>` with dots replaced by hyphens), then selects
+it for new production servers. It uses the tagged hosting scripts,
+the published `SHA256SUMS-linux.txt`, and `https://goahead-api.multicodegenius.com`. The builder checks the AppImage
+checksum and installed version and requires an empty host profile before saving the snapshot.
+Existing servers and the test Worker do not change.
+
+Before the first release with this job, configure the `cloudflare-production` GitHub Environment:
+
+- Add `BOAT_TEMPLATE_API_KEY`, a separate boat key with sandbox, file, command and named snapshot
+  access. Keep the limited `BOAT_API_KEY` on the Worker.
+- Keep `CLOUDFLARE_PRODUCTION_DEPLOY_TOKEN` and the `CLOUDFLARE_ACCOUNT_ID` variable used by deployment.
+- Permit the tag pattern `v*.*.*` in addition to the `main` branch. The release job runs on a tag.
+
+`release:preflight` checks these settings. The hosted job and production Worker deployment share
+one concurrency group. The job checks GitHub's latest stable release before building and again
+before selection. It writes only the Worker's `HOSTED_SERVER_TEMPLATE` secret. Normal CI and local
+production deployments preserve it; the old GitHub variable is ignored. `hosting:setup` now sets
+up billing and webhooks only and no longer accepts `--template`.
+
+A failed hosted job leaves the GitHub Release published and the previous template selected.
+Run the failed job again after correcting the cause. A ready snapshot is reused; a save in progress
+is polled; a failed snapshot requires operator inspection. The builder never replaces an existing
+snapshot. It stops at 10 snapshots even if boat permits paid storage above that count.
+
+Before the build, the job removes production snapshots of older releases. It keeps the 2 newest
+ready ones, so 3 releases remain with the new one; the newest of them stays selected until the new
+release replaces it. A failed snapshot of an older release is removed too. It keeps a snapshot that
+is saving or has an unknown status, any snapshot newer than the release, and each
+`provider_template` of a production server that is not deleted and has no sandbox yet, because a
+create retry sends its first request again. The job reads these from the production D1
+database and stops if it cannot. Servers already made from a removed snapshot keep running. Names
+without the `openbot-server-production-` prefix are never removed; confirm that neither Worker nor
+any pending create needs one before removing it by hand.
+
+A successful job reports the selected version in its Actions summary. Verify the first rollout by
+creating a temporary production server and checking its initial installed version. Record the
+result under `.openbot-build/`; remove only that temporary server after the check. This remote check
+is separate from local checks and requires production access.
 
 ## Windows signing
 
@@ -146,7 +222,7 @@ A tag build signs the Windows release with Azure Artifact Signing. It needs no s
 - The `windows` job logs in with `azure/login`, caches a token for the signing service, and runs
   `bun run dist:win --config electron-builder.windows-signing.yml`, then runs `az account clear`, so
   the steps after the build have no Azure session. That overlay adds
-  `win.azureSignOptions` and `forceCodeSigning`. electron-builder signs `OpenBot.exe`, every `.exe` from
+  `win.azureSignOptions` and `forceCodeSigning`. electron-builder signs `GoAhead.exe`, every `.exe` from
   `extraResources` (the remote desktop runtime and the Computer Use driver), the NSIS
   installer, and its uninstaller. It does not sign the `.node` and `.dll` files of the voice runtime,
   because the overlay sets no `win.signExts`. The provider CLIs are not packaged on Windows, so their
@@ -202,15 +278,15 @@ Accessibility to the responsible app (GoAhead, or the app that started a develop
 Sunshine.
 
 Use this source build only to make or reproduce a runtime version. The
-`.github/workflows/remote-desktop-runtime.yml` workflow builds macOS ARM64, macOS x64 and Windows x64 when the
-recipe or a pinned input changes. It publishes an immutable GitHub prerelease named
-`remote-desktop-runtime-<input-digest>`. The prerelease contains the three deterministic archives, SPDX
+`.github/workflows/remote-desktop-runtime.yml` workflow builds macOS ARM64, macOS x64, Windows x64 and Linux x64
+when the recipe or a pinned input changes. It publishes an immutable GitHub prerelease named
+`remote-desktop-runtime-<input-digest>`. The prerelease contains the four deterministic archives, SPDX
 SBOMs, build provenance, and `remote-desktop-runtime-manifest.json`. It is not a GoAhead application
 update and it must never contain `latest.yml`.
 
 PR pushes do not cancel an active runtime build. The next run reuses a successful native build
 from the same PR and platform when its native inputs and build tools are unchanged. It still runs
-verification and the macOS smoke test against the current checkout. A cache miss rebuilds the
+verification and the macOS or Linux smoke test against the current checkout. A cache miss rebuilds the
 runtime. Pushes to `main` and manual dispatches do not use the PR build cache.
 
 After publication, the workflow opens a draft PR that adds the release tag and SHA-256 values to
@@ -220,7 +296,7 @@ is refused.
 
 So a branch that changes the recipe pins by hand, and must, or merging it leaves `main` with an
 unpinned lock -- which is not a degraded state but a broken one, because
-`prepare-remote-desktop-runtime.ts` throws and takes every `package`, `dist:mac` and `dist:win` run
+`prepare-remote-desktop-runtime.ts` throws and takes every `package`, `dist:mac`, `dist:win` and `dist:linux` run
 with it. From the branch:
 
 ```bash
@@ -233,7 +309,7 @@ bun scripts/pin-remote-desktop-runtime.ts remote-desktop-runtime-manifest.json
 To repeat verification after a download or CI setup failure, without replacing the published
 artifacts, run `gh workflow run remote-desktop-runtime.yml --ref <branch> -f verify_only=true`.
 This mode requires an existing release for the current input digest and runs installation, runtime
-verification, the macOS smoke test, and application packaging. It does not build or publish.
+verification, the macOS and Linux smoke tests, and application packaging. It does not build or publish.
 
 Commit the rewritten `native-runtime.lock.json` to the branch and merge it with the recipe, so `main`
 never sees the two apart. The pin does not change the input digest -- it covers `recipeVersion`, both
@@ -273,13 +349,18 @@ The published runtime uses a new recipe/input digest; no existing release assets
 The Linux GUI capability advisory GHSA-fp6g-27w5-489j does not apply: the Linux runtime is built
 with the tray off, and GoAhead gives Sunshine no file capabilities.
 
-### Linux runtime (recipe 14)
+### Linux runtime (recipe 16)
 
 The `linux-x64` target builds on Ubuntu 24.04 with GCC 14, X11 capture and software encoding only
 (CUDA, DRM, KWin, VAAPI, Vulkan, Wayland, portal and tray are off). The GoAhead patch adds an XTest
 input backend, because Xvfb does not read uinput devices. It also links libcap when DRM is off and
 adds a `vaMapBuffer2` shim, because the prebuilt FFmpeg needs libva 2.21 and Ubuntu 24.04 has 2.20.
-The runtime uses the system libraries of Ubuntu 24.04; the hosted server template installs them.
+The runtime uses the system libraries of Ubuntu 24.04 that Ubuntu 26.04 also has; the hosted server
+template installs them (the remote desktop part of `scripts/hosting/packages.txt`). Since recipe 16,
+Boost.Locale has no ICU backend, and the runtime carries `lib/libminiupnpc.so.17` with its Debian
+licence, because Ubuntu 26.04 has only `libminiupnpc21`. Sunshine finds it through its RUNPATH
+`$ORIGIN/lib`. The build job checks with `ldd` that each executable finds all its libraries on
+Ubuntu 26.04.
 Linux arm64 builds only for local development and has no release artifact.
 
 ### Sunshine web UI dependencies (recipe 15)
@@ -299,13 +380,15 @@ ahead of `/opt/homebrew/include` through `CMAKE_PROJECT_INCLUDE`, so the securit
 `tests/CMakeLists.txt` sets its own compiler flags, uses them too. The build stops with a clear error
 when `openssl@3` is missing.
 
-## Pin the Gemini server
+## Pin the Gemini CLI
 
-`native-runtime.lock.json` pins Google's Antigravity ACP server for the Gemini provider by hand:
-the version from the ACP registry entry `antigravity-acp`, and for each target the zip name, its
-SHA-256 and size, and the SHA-256 of `agy_acp_server` and `localharness_external` in it. Download
-each zip from the registry `archive` URL, hash the zip and the two files, and set `installedBytes`
-above the extracted size. Do not commit the zip: Google's license does not allow redistribution.
+`native-runtime.lock.json` pins Google's Antigravity CLI for the Gemini provider by hand. Read the
+tag of `https://api.github.com/repos/google-antigravity/antigravity-cli/releases/latest` and set
+`version` to it (the tags have no `v`). For each target, download `agy_cli_<target>.tar.gz`
+(`agy_cli_windows_x64.zip` on Windows) from that release, and check its SHA-256 against the asset
+`digest`. Set `url`, `assetSha256`, `downloadBytes`, `installedBytes` (the size of the extracted
+`antigravity` or `antigravity.exe`) and the SHA-256 of `bin/antigravity` (`bin/antigravity.exe` on
+Windows). Do not commit an archive: Google's license does not allow redistribution.
 
 ## Pin the Cursor CLI
 
@@ -327,6 +410,47 @@ SHA-256 and size, the SHA-256 of `bin/cline` (`bin/cline.exe` on Windows) and of
 packages have no license file, so set `licenseSha256` to the SHA-256 of `LICENSE` at the
 `cli-v<version>` tag of `github.com/cline/cline`.
 
+## Pin the Kimi CLI
+
+`native-runtime.lock.json` pins the Kimi Code CLI by hand. Read the `releases/latest` tag of
+`github.com/MoonshotAI/kimi-cli` and set `version` and `tag` (the tag has no `v`). For each target,
+download `kimi-<version>-<triple>-onedir.tar.gz` (`.zip` on Windows) from that release, and set the
+asset SHA-256 and size, `installedBytes` above the extracted size, and the SHA-256 of each file in
+`files`: `kimi` (`kimi.exe` on Windows), `_internal/base_library.zip` and the Python library. The
+paths in `files` are relative to the archive's `kimi/` folder. Do not follow or copy the symbolic
+links in the archive. Set `licenseSha256` to the SHA-256 of `LICENSE` at the version tag.
+
+## Pin the Devin CLI
+
+`native-runtime.lock.json` pins the Devin CLI by hand. Read `version` from
+`https://static.devin.ai/cli/current/manifest.json` and set `version`. For each target, download
+`devin-<version>-<triple>.tar.gz` (`.zip` on Windows) from `https://static.devin.ai/cli/<version>/`,
+and check its SHA-256 against the manifest `sha256`. Set `url`, `assetSha256`, `downloadBytes`,
+`installedBytes` (the size of the extracted `bin/` and `share/` folders), and the SHA-256 of
+`bin/devin` (`bin/devin.exe` on Windows). `share/` holds only documentation, so it is not in
+`files`.
+
+## Pin the GitHub Copilot CLI
+
+`native-runtime.lock.json` pins the GitHub Copilot CLI by hand. Read the tag of
+`https://api.github.com/repos/github/copilot-cli/releases/latest` and set `version` without its
+`v`. For each target, download `copilot-<target>.tar.gz` (`copilot-win32-x64.zip` on Windows) from
+that release, and check its SHA-256 against the asset `digest`. Set `url`, `assetSha256`,
+`downloadBytes`, `installedBytes` (the size of the extracted `copilot` or `copilot.exe`) and the
+SHA-256 of `bin/copilot` (`bin/copilot.exe` on Windows).
+
+## Pin Mistral Vibe
+
+`native-runtime.lock.json` pins Mistral Vibe's ACP server by hand. Read the tag of
+`https://api.github.com/repos/mistralai/mistral-vibe/releases/latest` and set `version` without its
+`v`, and `licenseUrl` to `LICENSE` at that tag. For each target, download
+`vibe-acp-<triple>-<version>.tar.gz` (`.zip` on Windows) from that release, and check its SHA-256
+against the asset `digest`. Set `url`, `assetSha256`, `downloadBytes`, `installedBytes` above the
+extracted size, and the SHA-256 of each file in `files`: `bin/vibe-acp` (`bin/vibe-acp.exe` on
+Windows), `bin/_internal/base_library.zip`, the Python library, and
+`bin/_internal/mistral_vibe-<version>.dist-info/licenses/LICENSE`. Do not follow or copy the symbolic
+links in the archive.
+
 ## Pin the Pi and Muse CLIs
 
 `native-runtime.lock.json` pins both by hand, with the values of upstream OpenBot's lock.
@@ -342,26 +466,28 @@ Windows) with the same SHA-256. Muse is proprietary: do not commit the binaries.
 ## Pin the OpenCode CLI
 
 `native-runtime.lock.json` also pins the OpenCode CLI that GoAhead downloads for the OpenCode
-provider before its first update check answers, by npm platform package, asset SHA-256, extracted binary SHA-256, byte counts, and the
-MIT license file it fetches from `github.com/anomalyco/opencode`. Codex, Claude, and Grok are pinned
-in the same file by hand; OpenCode has a script, because the version, both platform packages, and
-the license have to agree:
+provider before its first update check answers, by `@opencode/cli-*` npm platform package (OpenCode 2), asset SHA-256,
+extracted binary SHA-256, byte counts, and the MIT license file. The OpenCode 2 tarballs carry no license, so the lock
+names an `opencode-ai` (OpenCode 1) release in `licensePackage` and the app installs the same MIT file from it. Codex,
+Claude, and Grok are pinned in the same file by hand; OpenCode has a script, because the version, all five platform
+packages, and the license have to agree:
 
 ```bash
-bun run pin:opencode-runtime          # the newest published release
-bun run pin:opencode-runtime 1.18.30  # one exact version
+bun run pin:opencode-runtime                # the newest published release
+bun run pin:opencode-runtime 2.1.1          # one exact version
+bun run pin:opencode-runtime 2.1.1 1.19.3   # and one exact `opencode-ai` release for the license
 ```
 
-The script downloads both platform tarballs, checks that `package/package.json` names the package
-and version the lock claims, hashes the extracted binary and the license, and on macOS runs the
-extracted binary with `--version` and refuses a value that is not the pinned one. That last check is
+The script downloads all five platform tarballs, checks that `package/package.json` names the package
+and version the lock claims, hashes the extracted binary and the license, and runs the extracted
+binary of the target that matches the host with `--version` and refuses a value that is not the pinned one. That last check is
 what protects `verifyInstalledRuntime`, which compares the installed version for exact equality. The
 script prints the block for review instead of rewriting the lock, so paste it over the `opencode`
 entry and re-run it with that exact version: the command reports `already pins OpenCode <version>`
 when the committed block matches byte for byte.
 
 Run it on a version bump only. A bump also needs the Windows checks in
-[the OpenCode notes](ARCHITECTURE.md#opencode-and-acp): the `win32-x64` values come from the
+[the OpenCode notes](architecture/providers.md#opencode-and-acp): the `win32-x64` values come from the
 published tarball read on macOS, so a staged `opencode.exe --version` must be confirmed on Windows
 before release.
 
@@ -376,7 +502,7 @@ the user installs nothing.
 bun run pin:cua-driver 0.34.0
 ```
 
-The script downloads all three `-binary` release assets, hashes each shipped file, and refuses a
+The script downloads all four `-binary` release assets, hashes each shipped file, and refuses a
 release that renamed an asset or dropped a file. It prints the block for review instead of rewriting
 the lock, so paste it over the `cuaDriver` entry. Use the versioned `cua-driver-rs-v*` tags; the
 `nightly-cua-driver-rs-v*` tags are rebuilt daily and are not a pin.
@@ -401,7 +527,7 @@ Notarization accepts a nested binary signed by another Developer ID team, and
 `native-runtime.lock.json` also pins Bun, which is not a provider CLI: it is the runtime a STDIO MCP
 server is started with on a computer that has no Node, and the staged layout puts a second name
 `bunx` beside it so that `npx -y <package>` has something to answer it. The pin has its own script
-for the same reason OpenCode does - the version, three platform packages, and the MIT license have
+for the same reason OpenCode does - the version, five platform packages, and the MIT license have
 to agree:
 
 ```bash
@@ -409,7 +535,7 @@ bun run pin:bun-runtime         # the newest published release
 bun run pin:bun-runtime 1.4.2   # one exact version
 ```
 
-It works like the OpenCode script: it downloads all three platform tarballs, checks
+It works like the OpenCode script: it downloads all five platform tarballs, checks
 `package/package.json` against the registry metadata, hashes the extracted binary and
 `LICENSE.md`, runs `--version` on the target that matches the host, and prints the block for review
 instead of rewriting the lock. Paste it over the `bun` entry and re-run it with that exact version
@@ -445,7 +571,32 @@ A change to the desktop app or the web client and the iPhone app gets one file i
 `bun run mobile:release:patch`, `mobile:release:minor` and `mobile:release:major` move these files
 into `apps/mobile/CHANGELOG.md` and set the version in `apps/mobile/app.json`,
 `apps/mobile/package.json` and the copy of it in `bun.lock`. The pre-commit hook checks the new section when a commit changes the
-`app.json` version.
+`app.json` version. The new section is `## [x.y.z] - In review`, and `/changelog` does not show it
+until a store makes the build available. Each store reviews the build on its own. When one store has
+it, `bun run mobile:release:published ios` (or `android`) writes the date of that store, such as
+`## [x.y.z] - 2026-10-14 (Android)`. Run it again for the other store:
+`## [x.y.z] - 2026-10-14 (Android), 2026-10-16 (iOS)`. A date with no store is the date of both
+stores. `/changelog` shows each store, and a store that does not have the version as "In review".
+A store that a newer version replaced is `Skipped (Android)`, and `/changelog` shows it as skipped.
+`bun run mobile:release` does each step from a menu and opens the pull request
+(`apps/mobile/README.md#release-menu`).
+
+A fix with no native change can go to the phones of a store version with no store review, as an
+over-the-air update: `bun run mobile:ota:publish`. Its notes get a section with a fourth number, such
+as `1.5.0.1`, from `bun run mobile:release:ota`; the store version and `app.json` do not change. The
+steps, the limits and the rollback are in
+[the mobile README](../apps/mobile/README.md#over-the-air-updates).
+
+The same step sets that version for the store in `MOBILE_LATEST_VERSIONS` and in the `upTo` of each
+feature in `apps/auth-api/src/server/mobile-features-config.ts`. The merge deploys the account
+service. An app with an older version then shows the update header on home. Set it only after the
+store has the build: before, Update opens a store page that cannot install the version.
+
+The Android version in `MOBILE_LATEST_VERSIONS` is also the version of the APK that goahead.multicodegenius.com
+offers for a phone with no Google Play. The APK of a store build is a draft GitHub release, which is
+not public. The merge of this step makes it public (the `Publish the Android APK` workflow), before
+the account service deploys. That workflow fails when the version has no draft
+`android-v<version>`: see [Android APK](../apps/mobile/README.md#android-apk).
 
 `scripts/check-release-notes.ts` stops a release when the section is missing, empty or appears two
 times, or when it has an unknown group, a group with no items, an item with no text or outside a
@@ -462,28 +613,84 @@ group, a placeholder such as `TODO`, or a heading with no real date. These steps
 
 ### Post-update notes
 
-After a desktop update, GoAhead shows the notes of the new version in a dialog. The dialog reads
-`CHANGELOG.md`, which the build bundles (`src/renderer/src/features/updates/whats-new-releases.ts`).
-It does not read OpenBot's notes, GitHub releases or a remote service, so it sends no data and needs
-no network. A release writes its notes one time, in `changelog.d/`, and the version bump moves them
-into `CHANGELOG.md` as usual. Write each item for a user: the dialog shows it as it is.
+The desktop dialog uses edited excerpts of the published `CHANGELOG.md` in
+`src/renderer/src/features/updates/whats-new-releases.json`. Before publishing a desktop release,
+add its version, date, and selected notes there. Keep earlier entries for users who skip releases.
+Use short, plain sentences that explain what the user can do. Put required upgrade steps in
+`notices`. Use `added`, `changed`, and `fixed` for the other entries. Do not copy commit messages,
+developer setup, internal paths, credentials, or unpublished plans. Review this text with the
+release notes before tagging. A release can have no dialog entry when it has nothing to show.
 
-The dialog shows the `### Added`, `### Changed` and `### Fixed` items. It shows `### Removed` and
-`### Deprecated` items as changes and `### Security` items as fixes. A bold step after the upgrade
-shows under "Do this after the update". Unreleased notes and prerelease versions are not shown.
-When an update skips versions, the dialog shows the notes of each skipped version together.
-"Full changelog" opens `/changelog` on the GoAhead site.
+The dialog shows the notes in the app language. Each translated language has
+`src/renderer/src/features/updates/whats-new/<locale>.json` in the shape of the English file. When
+you add a release to the English file, add its translation to each of these files: the same version
+and date, the same notices, groups and item order, and one item for each English item. Write the
+first sentence of each item as its headline, as in English; Chinese and Japanese end it with `。`.
+Use the tone, the terms, and the screen names of the app catalogs in [i18n.md](i18n.md#terms).
+An agent gives these translations to small-model subagents, as the
+[release-upgrade-safety skill](../.agents/skills/release-upgrade-safety/SKILL.md#subagents-and-models) says.
+`bun scripts/whats-new-translations.ts <version>` checks the files; `release:preflight` and the
+tag workflow run it and stop a release that has no translation. A release that a file does not
+have shows in English, so an older release that was never translated keeps its English text.
+
+The app bundles this text and loads it when needed, so reading it does not send data or require
+network access. The full changelog button opens the existing public page. Changing the bundled
+text requires a new app release. Missing entries do not cause a network fallback.
 
 The installed desktop version comes from `AppInfo`, not an available update or a remote server.
 In development, `AppInfo` uses `package.json`; Electron otherwise reports its own version.
-The local app profile keeps the highest shown version in `openbot:whats-new-version`. On the first
-launch of this feature, an existing `openbot:analytics-app-version` gives the previous version. A
-profile with no previous version gets a silent baseline, so a new installation starts without the
-dialog. Downgrades do not lower the marker. The marker is saved before the dialog opens. An update
-with no notes is consumed without a dialog. Settings > Updates can open the notes again.
+The local app profile keeps the highest consumed version in `openbot:whats-new-version`. On the
+first launch of this feature, an existing `openbot:analytics-app-version` can supply the previous
+version; the dialog does not enable analytics. A profile with no previous version gets a silent
+baseline, so onboarding is not covered by release notes. Stable `x.y.z` releases participate;
+unknown versions and prerelease builds do not advance the marker. Downgrades do not lower it.
+The marker is saved before automatic display, including a load error; Settings > Updates can
+open the notes again. Empty updates are consumed without opening. If the marker cannot be saved,
+automatic display is disabled; manual opening still works.
 
-To see the dialog in development, set `openbot:whats-new-version` in the renderer's local storage
-to an earlier version than `package.json`, then reload the window.
+Mobile has its own store version and `apps/mobile/CHANGELOG.md`. It must use a native screen and
+its own local marker when post-update notes are added there. Desktop notes must not use a mobile
+version or the version of a connected server. This desktop feature does not change mobile,
+public web, Signal, database schemas, or Team API contracts.
+
+### Discord announcement
+
+Each desktop release posts a message in the GoAhead Discord. Before publishing a desktop release,
+select the 3 to 5 changes in its `CHANGELOG.md` section that have the largest effect on users, and
+write them with the version in `.github/release-announcement.json`:
+
+```json
+{ "version": "x.y.z", "highlights": ["...", "...", "..."] }
+```
+
+Write each highlight as one short, plain sentence that tells the user what they can do now. Put a
+required upgrade step first. Use the rules of the post-update notes: do not copy commit messages,
+developer setup, internal paths, credentials, or unpublished plans. Replace the highlights of the
+previous release; the file holds only one version.
+
+`scripts/discord-release-announcement.ts` builds the message: a mention of the `Release Pings`
+role, the title `GoAhead vx.y.z is out`, the highlights, and a link to the version on `/changelog`.
+It notifies only that role, not `@everyone` or `@here`. Run
+`bun scripts/discord-release-announcement.ts check x.y.z` to see it. The tag workflow and
+`bun run release:preflight` stop when the file is not for the release version, has fewer than 3 or
+more than 5 highlights, has a highlight that is empty or has a placeholder, a line break or a
+mention, or makes a message longer than 2000 characters. They also stop when the
+`DISCORD_RELEASE_ROLE_ID` repository variable is not set or is not a Discord role ID. After the GitHub Release, the Docker image and the
+boat snapshot are published, the `discord-announce` job posts the message as GoAhead through the
+channel webhook in the `DISCORD_RELEASE_WEBHOOK_URL` secret of the `release` environment. The job
+fails, and posts nothing, when `DISCORD_RELEASE_ROLE_ID` is not set. A failed post does not undo the
+release: re-run the job. A re-run after a successful post posts the message again.
+
+One-time setup:
+
+1. In Discord, open the settings of the announcement channel, then Integrations > Webhooks. Make a
+   webhook named `GoAhead` with the GoAhead icon. Add its URL as the secret
+   `DISCORD_RELEASE_WEBHOOK_URL` of the `release` environment.
+2. In Discord, turn on Developer Mode, open Server Settings > Roles, right-click `Release Pings` and
+   select Copy Role ID. Add the ID as the repository variable `DISCORD_RELEASE_ROLE_ID`.
+
+The mobile app has its own post, file, webhook and workflow. It waits until both stores have the
+version. See [the mobile Discord announcement](../apps/mobile/README.md#discord-announcement).
 
 ## Publish a version
 
@@ -509,33 +716,43 @@ under the new dated version heading, and deletes the `changelog.d` files. Review
 preparation before creating the tag:
 
 ```bash
-git add package.json CHANGELOG.md changelog.d
+git add package.json CHANGELOG.md changelog.d .github/release-announcement.json
 git commit -m "release: prepare vX.Y.Z"
 git push origin main
 bun run release:preflight
 git tag -a vX.Y.Z -m "GoAhead vX.Y.Z"
+# When Signal changed since the previous tag, deploy and check Signal from
+# vX.Y.Z now (preflight item 16). Push the tag only after that.
 git push origin vX.Y.Z
 ```
 
 GoAhead: after the tag, run `bun run release:local` (see [Local release](#local-release)). The text
 below describes the upstream tag workflow, which GoAhead no longer has.
 
+Before the merge of the preparation, the release-upgrade-safety skill starts the `Provider live E2E`
+workflow on that branch (Step 2c). It sends one real message to each provider
+([Live provider test](provider-live-e2e.md)). Do not push the tag when it has a stop.
+
 Pushing the version tag runs `.github/workflows/release.yml`.
-The tag workflow starts only after `https://openbot.run/join` and the Apple association file return
-direct `200` responses with the required security headers, MIME type, app IDs, and paths: `/join`
-for the desktop app, and `/join` and `/agents/*` for the mobile app.
+The tag workflow builds nothing until `https://goahead.multicodegenius.com/join` and the Apple association file return
+direct `200` responses: `/join` with `Cache-Control: no-store`, and the association file as
+`application/json` with the exact app IDs and paths: `/join` for the desktop app, and `/join` and
+`/agents/*` for the mobile app.
 
 The workflow:
 
 1. verifies the tag matches `package.json`;
 2. installs and verifies the pinned remote desktop runtime without CMake or Cargo;
-3. runs the complete offline repository check;
+3. runs the complete offline repository check on its own macOS runner, in parallel with the builds;
 4. builds signed and notarized ARM64 DMG and ZIP artifacts plus a separately signed/notarized Host PKG on a GitHub Apple silicon runner,
    and signed and notarized x64 DMG and ZIP artifacts on a GitHub Intel runner (`macos-15-intel`). Each
    architecture builds on its own runner, because the voice runtime and the remote desktop runtime
-   are prepared for the architecture of the build machine. The Host PKG is ARM64 only;
-   when `hdiutil create` fails with "Device not configured" or "Resource busy", it builds again,
-   up to 3 attempts, because that runner error is not caused by the app.
+   are prepared for the architecture of the build machine. The Host PKG is ARM64 only. The x64 job
+   does not run on an Apple silicon runner under Rosetta: there, the packaged app checks take about
+   ten times longer, and the upgrade check does not finish.
+   When `hdiutil create` fails with "Device not configured" or "Resource busy", or a network
+   connection drops, the app build of each architecture starts again, up to 3 attempts, because
+   these runner errors are not caused by the app.
    electron-builder signs the DMG with the Developer ID Application identity (`dmg.sign: true`) but
    notarizes only the app. The next step submits the DMG to `notarytool`, staples it, and requires
    `stapler validate` and `spctl --assess --type open --context context:primary-signature` to pass.
@@ -544,20 +761,23 @@ The workflow:
    `dist:mac` passes `--config.mac.identity=null`, so electron-builder does not sign the local DMG;
 5. builds a signed Windows x64 NSIS installer on a GitHub Windows runner (unsigned in a dry run);
 6. builds unsigned Linux x64 and arm64 AppImages on GitHub Ubuntu 24.04 runners of each architecture,
-   with the launch check under `xvfb-run`;
+   with the launch check under `xvfb-run`. A further check mounts each AppImage with only `fusermount3`,
+   because its static runtime must start on systems with no libfuse2, such as Arch Linux and Omarchy;
 7. verifies all three unpacked applications, update metadata, included runtimes, provider control
    artifacts, licenses, checksums, platform signing contracts, launch behavior, and update artifact
    size limits;
 8. generates SPDX SBOMs and GitHub build-provenance attestations for all three platforms;
 9. publishes one non-draft GitHub Release only after all platform jobs pass. It joins the ARM64 and
    x64 `latest-mac.yml` files with `scripts/merge-mac-update-manifests.ts`: electron-updater selects
-   the ZIP whose name contains `arm64` on Apple silicon and the other ZIP on Intel.
+   the ZIP whose name contains `arm64` on Apple silicon and the other ZIP on Intel. Then it writes the
+   first rollout percentage into the four update manifests (see [Staged rollout](#staged-rollout)).
 10. builds a Docker image (`docker/Dockerfile`) from each Linux AppImage on a runner of that
     architecture, after it checks the AppImage against its `SHA256SUMS` file. It starts each image
     with `docker/seccomp.json`, waits for `openbot status`, and stops it, which must exit with 0;
 11. after the GitHub Release is published, pushes both images to `ghcr.io/nightly-labs/openbot`
-    with the tags `<version>-amd64` and `<version>-arm64`, joins them under `<version>`, `latest` and
-    `sha-<commit>`, and attests the build provenance of that image. See [Docker](docker.md).
+    with the tags `<version>-amd64` and `<version>-arm64`, joins them under `<version>`, `v<version>`,
+    `latest` and `sha-<commit>`, and attests the build provenance of that image. It then checks
+    anonymous access to both architectures. See [Docker](docker.md).
 
 Users can verify a downloaded artifact with
 `gh attestation verify <file> --repo nightly-labs/openbot`.
@@ -591,31 +811,226 @@ It logs in to Azure, then signs a throwaway executable once immediately and once
 the delay between login and signing in a release build. It uploads and publishes nothing. Run it once
 after a change to the Azure setup or to `electron-builder.windows-signing.yml`, before the next tag.
 
-Installed GoAhead builds check for updates shortly after launch and every four minutes. New versions
+Installed GoAhead builds check for updates shortly after launch and every four minutes. A new version
+goes to a part of the installs first (see [Staged rollout](#staged-rollout)). New versions
 download automatically while **Automatically download updates** is on, which is the default and is
 persisted per user in `openbot-update-preference-v1.json`; with the setting off, a download starts
-only on a user action. The account popover shows the current state and lets the user download an
-available version, then restart into it. The restart action appears as
+only on a user action. The update notice in the sidebar and Settings > Updates show the current
+state and let the user download an available version, then restart into it. The restart action appears as
 soon as the download completes, and no platform installs without that
 explicit action, because `autoInstallOnAppQuit` stays off so shutdown preparation always runs. Every
 stage the user waits on is bounded by a timeout and recorded in `logs/update/update.log`, so a failed
 check, download, or restart reports an actionable error and can be retried in place.
 
 The voice runtime (the sherpa-onnx N-API addon and ONNX Runtime, from the pinned `sherpa-onnx-*`
-npm packages) is part of the macOS and Windows applications, in `voice/runtime`. Linux ships no voice
-runtime and no remote desktop runtime, so voice prompts and remote desktop report themselves as
-unavailable there. The NVIDIA Parakeet TDT 0.6B v3 int8 model is not part of an application or update
+npm packages) is part of the macOS, Windows and Linux applications, in `voice/runtime`. Each Linux
+AppImage carries the runtime of its architecture. The Linux arm64 AppImage ships no remote desktop
+runtime. The NVIDIA Parakeet TDT 0.6B v3 int8 model is not part of an application or update
 artifact. GoAhead downloads its four pinned files on first voice use, checks the size and SHA-256 of
 each, and keeps the verified files in `runtimes/parakeet-tdt-0.6b-v3-int8` in the user data directory
-for later offline use. Parakeet is the only dictation model, and dictation is in English. At startup,
-a packaged application removes the old Whisper model directory `runtimes/whisper` if it exists.
+for later offline use. The Whisper large-v3 turbo model (an int8 encoder and a full-precision
+decoder), which takes a fixed dictation language, is downloaded the same way when the user selects
+Download in Settings > Voice or dictates with it. Its three pinned files go in
+`runtimes/whisper-turbo-int8`. The int8 decoder of earlier versions in that directory is deleted
+after the three files are verified. The Underdog Bark 3.0 Plus int8 model,
+which recognizes English only, is no longer offered: Settings > Voice shows it only while it is in
+use or downloaded, and a saved choice of it still works. Its four pinned files go in
+`runtimes/bark-3.0-plus-int8`. They come from an
+unofficial sherpa-onnx conversion; the license is in `build/licenses/Underdog-Bark-3.0-Plus-LICENSE`.
+The optional NVIDIA Parakeet Unified EN 0.6B int8 model, which recognizes English only, is downloaded
+the same way when the user selects Download in Settings > Voice. Its four pinned files go in
+`runtimes/parakeet-unified-en-0.6b-int8`. It is under the NVIDIA Open Model License; the license and
+its notice are in `build/licenses/NVIDIA-Parakeet-Unified-EN-0.6B-LICENSE`. The optional Cohere
+Transcribe int8 model, which takes one of its 14 languages, is downloaded the same way when the user
+selects Download in Settings > Voice. Its four pinned files (about 2.9 GB) go in
+`runtimes/cohere-transcribe-14-lang-int8`. Its license is in `build/licenses/Cohere-Transcribe-LICENSE`.
+At startup, a packaged application removes the old `runtimes/whisper` directory if it exists. The
+Supertonic 3 int8 voice model, which reads replies aloud, is downloaded the same way only when the
+user turns on Read replies aloud or selects Download in the Spoken replies section. Its eight pinned
+files go in `runtimes/supertonic-3-int8`. The speech host, `voice-speech-host.js`, is a separate
+utility process that loads the same addon. Its weights are under OpenRAIL-M; the license is in
+`build/licenses/Supertone-Supertonic-3-LICENSE`.
 
 The release workflow stops if the macOS update ZIP, the Windows NSIS installer, or the Linux AppImage
 is larger than 700 MiB, or if the DMG is larger than 750 MiB. It also stops if update metadata has a wrong size or SHA-512, if
 a voice model is present, or if the application contains a second native Claude runtime.
 
-If a release is bad, publish a newer patch version. Do not replace an already published version with
-different binaries.
+If a release is bad, pause its rollout and publish a newer patch version (see
+[Staged rollout](#staged-rollout)). Do not replace an already published version with different
+binaries.
+
+## Staged rollout
+
+A new desktop release goes first to a part of the installed apps. electron-updater reads
+`stagingPercentage` in the update manifest (`latest.yml`, `latest-mac.yml`, `latest-linux.yml` and
+`latest-linux-arm64.yml`). Each install has a random ID in `.updaterId` in its user data folder.
+An install gets the release only when its ID is in the first `stagingPercentage` percent. The IDs
+do not change, so the same installs are first in each release, and an install that is in a 10% stage
+is also in the 50% stage. A manifest with no `stagingPercentage` goes to all installs.
+
+At an automatic check, an install outside the stage does not get the release. The sidebar shows
+nothing, and Settings > Updates says that the new version is rolling out to some computers and that
+**Check for updates** gets it now (`UpdateStatus.stagedVersion`). It shows no error. At 0%, the tab
+shows that GoAhead is up to date. A check that a person asks for skips the stage and gets the
+release. These checks are **Check for updates** in Settings > Updates or in the app menu, an update
+that a member of a joined server asks for, and the recovery when an older app opens newer data.
+After such a check, the other checks and download retries of that session also get that release. A
+later release keeps its stage. No check gets a paused release (0%). A member of a joined server does
+not see the rolling-out text, because `host-update-v1` has no field for it. `UpdateService` does this through the `isUserWithinRollout` test of electron-updater.
+
+The publish job writes the percentage into the four manifests before it uploads them, with
+`scripts/update-rollout.ts`. The default is 10. To use a different first percentage, set the
+`RELEASE_STAGING_PERCENTAGE` repository variable to a whole number from 0 to 100 before you push the
+tag. 100 releases to all installs at once. The `Validate release tag` job stops the run when the
+value is not valid. The manifests are not in a `SHA256SUMS` file or in an attestation, so the
+percentage changes no checksum. The script stops when any value other than the percentage changes,
+such as the SHA-512 or the size of a file.
+
+### Release to all installs
+
+1. Push the tag. The release goes to 10% of the installs.
+2. Wait about one day. Then examine the release:
+   - Run the [release regression report](../.agents/skills/openpanel/SKILL.md#release-regression-report):
+     `gh workflow run release-regression.yml`. It posts to the private Discord channel. It compares
+     the two newest releases that each have 30 computers in the last 14 days. For some hours, a
+     10% stage can have fewer. When the report says that there is nothing to compare, or it does not
+     name the new release, wait and run it again.
+   - With the `openpanel` skill, compare `system_unclean_exit` (by `previous_app_version`) and
+     `system_startup` of the new and the previous version. The report does not show unclean exits.
+   - Read the new crash reports and feedback for the new version.
+3. When the numbers are good, release to all installs:
+
+   ```sh
+   gh workflow run release-rollout.yml --ref main -f tag=vX.Y.Z -f percentage=100
+   ```
+
+   You can go to 50 first. Add `-f dry-run=true` to see the change in the run summary and upload
+   nothing.
+
+`release-rollout.yml` downloads the four manifests, changes only `stagingPercentage`, and checks
+that each other value is the same. It uploads only these four `.yml` files, downloads them again and
+compares them. It never uploads, replaces or deletes a binary. It refuses a draft, and only a run
+from `main` uploads. At 100 it removes the field, so the manifests are the same as before the stage.
+Installs read the new percentage at their next check, which is at most four minutes later.
+
+### Pause a release
+
+```sh
+gh workflow run release-rollout.yml --ref main -f tag=vX.Y.Z -f percentage=0
+```
+
+Installs that do not have the release yet stop getting it at their next check, also when a person
+asks for the check. A pause does not stop these:
+
+- An install that already downloaded the release keeps it ready. It installs the release at its
+  next restart: by the user, by an idle restart that the user asked for, or by an update that the
+  admin of a joined server asked for.
+- New downloads from the website, Nix, the Docker image, and hosted and self-installed servers.
+  These do not read `stagingPercentage` (see [Servers and Docker](#servers-and-docker)).
+- The Discord announcement. It says that the release is out when the release is published.
+
+### Ship a patch over a paused release
+
+Merge the fix to `main` and publish vX.Y.(Z+1) as usual. The patch becomes the latest release and
+starts at `RELEASE_STAGING_PERCENTAGE`. The same installs are first, so the installs that got the
+paused release get the patch first, while its percentage is not less than the highest percentage
+of the paused release. electron-updater reads only the latest release, so the paused release goes
+to no other install. Do not raise the paused release again.
+
+To stop a bad release on each path at once, before the patch is ready, make the previous release
+the latest one:
+
+```sh
+gh release edit vX.Y.(Z-1) --latest --repo nightly-labs/openbot
+```
+
+electron-updater then sees an older version and offers no update. The update script of hosted and
+self-installed servers removes a staged copy of the bad release at its next check, but a server that
+boots before that check installs it. The Docker `latest` tag and the template of new hosted servers
+do not change back.
+
+### Servers and Docker
+
+Servers do not use the stage. Hosted and self-installed Linux servers update with
+`scripts/hosting/openbot-hosted-update` and `HostedUpdateAdapter`. They read `latest-linux.yml` or
+`latest-linux-arm64.yml`, check for an update 5 minutes after start and then every 6 hours, and
+install a downloaded release at the next boot or when an owner, an admin or a permitted member installs
+it in Server Settings > Updates. A hosted server also installs it when it is idle and no client uses
+it, because its automatic update switch is always on. A self-installed server or a container
+installs it when idle only when an owner turns on the switch (it is off by default). The version check is
+`isNewerRelease` in `packages/contracts/src/release-version.ts`, and the `newer()` of the update
+script gives the same result for each X.Y.Z release (`scripts/release-version-comparator-e2e.ts`). The `docker-publish` job moves the Docker `latest` tag when the
+release is published, and the `hosted-release` job selects the release for new hosted servers. So
+all servers get a new release in about 6 hours, and a pause does not stop them.
+
+### Notes
+
+- A re-run of the publish job writes `RELEASE_STAGING_PERCENTAGE` again. After a re-run, set the
+  percentage again with `release-rollout.yml`.
+- `gh release upload --clobber` deletes each manifest and then uploads it again. A check in that
+  short time gets no manifest. Settings > Updates can then show a check error until the next check.
+
+## Minimum app version
+
+Each surface has a minimum app version: the desktop app, the server, iOS and Android. A version below
+it shows **Update required**. The web client has no minimum: the Worker serves it, so it is always
+current. The values are in `APP_MINIMUM_VERSIONS` (`apps/auth-api/src/server/app-minimum-version.ts`).
+They are `null` (nothing blocked) until we raise one.
+
+To raise a minimum:
+
+1. Raise it only in a PR that deletes old code or needs the newer client. The support window is 2
+   months (see [Team API support window](../AGENTS.md#non-negotiable)).
+2. Set the value to a released version that is 60 days old or older: the date in `CHANGELOG.md` for
+   `desktop` and `host`, the store date in `apps/mobile/CHANGELOG.md` for `ios` and `android`.
+   Over-the-air versions do not count.
+3. `bun run check:app-minimum-version` (in the CI `Check` job) fails for a newer or unknown version.
+4. The value is live when the account service Worker deploys.
+
+How the apps use it:
+
+- `GET /v1/app/minimum-version?surface=desktop|host|ios|android` answers `{ minimumVersion }`
+  (`null` for none or an unknown surface). `GET /v1/mobile/features` has the same field for the phone
+  platform.
+- A packaged desktop app or server asks 15 seconds after start and every 6 hours
+  (`src/main/required-update.ts`). Below the minimum, the desktop app shows **Update required** in
+  place of the workspace. The update downloads and installs when the agents are idle
+  (`RequestedUpdate`: agent turns, routines, browser control and transfers), or at once with the
+  button. A server does the same without the screen. A tenant whose Host Manager manages updates, a
+  development build and a local server child do not ask.
+- A signed-in phone below the minimum shows **Update required** with the store link.
+- A failed check never blocks. A failed request (offline, timeout, error status) keeps the last
+  confirmed state. An answer with no readable minimum removes the block.
+- An install that cannot update itself (a Linux package, Nix) shows only the download page.
+
+## Release health after publishing
+
+Before a staged rollout goes to 100%, run the release health check. It compares how the new release
+starts and keeps running with the release before it, over the same hours after each GitHub Release was
+published, from production analytics. Run it with the read-only ClickHouse access of the `openpanel`
+skill (`.agents/skills/openpanel/SKILL.md`):
+
+```sh
+MAIN="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+./node_modules/.bin/dotenvx run -q -f apps/auth-api/.env.dev -fk "$MAIN/.env.keys" -- \
+  bun scripts/release-health.ts <version>
+```
+
+It prints a table per platform and for servers, and writes `.openbot-build/release-health/report.json`.
+The metrics are finished starts, crashes, startup crashes, quit hangs, and update arrivals: the share
+of the computers that started an update install and then started a version other than the one that
+installed it, before the end of the window. An install of an older release that a computer downloaded
+earlier counts for the window in which it started. The thresholds are in the script header.
+
+- Exit code 0: no metric is clearly worse. Raise the rollout.
+- Exit code 1: a metric is clearly worse. Keep the rollout where it is, find the cause, and publish a
+  patch version if the release is bad.
+- Exit code 3: not enough data yet. Run it again later. The previous release gets the same number of
+  hours, so a check soon after the release is fair, but it needs 200 starts in each group.
+
+`.github/workflows/release-health.yml` runs the check for the newest release every two hours in its
+first 72 hours. When a metric is worse, or the check fails, it posts to the private release regression
+Discord channel, not to the public release channel.
 
 Before working this checklist, audit the changes since the last released tag with the
 `.agents/skills/release-upgrade-safety/` skill: it covers the upgrade and data-loss hazards an
@@ -628,7 +1043,9 @@ Before creating the first tag or any later release:
 
 0. run the Team API compatibility matrix for every protocol that remains in the adapter registry. The matrix must cover an older client with the new host, the new client with an older host, matching versions, no shared protocol, capability omission, unknown optional events, and malformed known events. Do not reduce this matrix because a protocol is old or because many application versions separate the peers. Confirm that each supported protocol still has unchanged client and host fixtures;
 
-1. run `bun run release:preflight` and resolve every reported release-secret or repository gate;
+1. run `bun run release:preflight` and resolve every reported release-secret or repository gate.
+   It also stops when the live Marketplace does not have the catalog of `main`: publish it as
+   [the catalog README](../marketplace/production-catalog/README.md#prepare-and-publish) says;
 2. confirm the `release` environment contains all eight macOS secrets above; Windows signs through
    the Azure federated credential and needs no secret; Linux remains unsigned;
 3. confirm the production `/join` page and Apple association file pass the deployment checks in CI;
@@ -650,17 +1067,55 @@ Before creating the first tag or any later release:
 11. confirm the canary update does not crash in `CFURLConnectionSynchronous`, preserves data, starts
     the new version, and can run three provider downloads with restricted memory;
 12. on Windows 10 and 11 x64, confirm that normal exit, restart, and sign-out do not start NSIS, while
-    `Restart and install` does start it;
+    `Restart and install` does start it, shows no installer page, and opens GoAhead again. With
+    GoAhead closed and with it open, confirm that Open GoAhead on a `/join` page opens GoAhead and
+    shows the invitation once, and that uninstall
+    removes `HKCU\Software\Classes\openbot`. Update from the previous release, then install to a
+    folder on a second disk. Confirm that the installer has no "All users" page, that an update
+    installs to the same folder, that `icacls` on that folder lists only the user, `SYSTEM` and
+    `Administrators`, and that the uninstaller removes only that folder. Choose
+    `%USERPROFILE%\GoAhead` with an agent workspace in it, and confirm that GoAhead installs to
+    `%USERPROFILE%\GoAhead\GoAhead` and that uninstall keeps the workspace. As a second account,
+    make an empty `D:\GoAhead`. As the first account, choose it, and confirm that GoAhead installs to
+    `D:\GoAhead\GoAhead` and that the second account cannot write there;
 13. on Ubuntu 24.04 x64 with the AppArmor profile from `build/linux/openbot.apparmor` installed,
     confirm the AppImage starts with the sandbox on, that `xdg-open 'openbot://join?...'` focuses the
-    running application, that a provider downloads in-app, that the server rail is drawn, and that the
+    running application, that a provider downloads in-app, that the page rail is drawn, and that the
     microphone control is absent;
-14. confirm `CHANGELOG.md` describes the version and the working tree is clean;
-15. create and push the version commit and tag only after CI passes on `main`.
+14. confirm `CHANGELOG.md` and `.github/release-announcement.json` describe the version and the
+    working tree is clean;
+15. create and push the version commit, and create the tag locally, only after CI passes on `main`;
+16. read the running Signal commit of both machines from `curl -fsS https://signal1.openbot.run/health/live`
+    and `curl -fsS https://signal2.openbot.run/health/live`, not from `goahead-signal.multicodegenius.com`, which reaches only
+    the entry machine. If a commit is missing or `unknown`, or if `git diff --quiet <running commit> <new tag> -- remote packages/contracts/src/signal-protocol`
+    finds changes for either commit, deploy Signal from the local tag before you push the tag. Compare with the running
+    commit, not with the previous tag: an earlier release can have left Signal behind. Pushing the tag starts the
+    release workflow, and nothing in it waits for Signal. Use the Signal-only procedure in
+    [remote-session-deployment.md](remote-session-deployment.md#deployment-procedure--requires-separate-approval);
+    the `.agents/skills/signal-deploy/` skill adds the checks before and after it.
+    Confirm that `/health/live` of `signal1.openbot.run` and of `signal2.openbot.run` shows the tag commit. A client
+    that needs a newer Signal fails until then: v0.33.0 shipped webhook routines while Signal was older
+    than #1520, so every webhook route answered 404 (#1661);
+17. push the tag.
 
 The macOS ZIP must be smaller than 800,000,000 bytes and smaller than the official `0.1.21` ZIP.
 Do not publish when either size gate fails, the `0.1.21` canary update crashes, or Windows starts NSIS
 during shutdown or sign-out.
+
+Each build job also runs `scripts/release-upgrade-e2e.ts` before `publish`. It installs the previous
+public release, starts it on a new profile, makes two agents with an answered chat, two memories, a
+channel and a custom agent, and quits it. It then installs the new build over it as an update does,
+starts it on the same profile, and checks the version, the schema version, every migration, table and
+column, `PRAGMA integrity_check`, the foreign keys, and that the seeded data is still there. A failure
+stops the release before `publish`. The report is `.openbot-build/release-upgrade-e2e/report.json`,
+with counts only. The script does not use the real `electron-updater` download: its header says why.
+
+`Release upgrade history` (`.github/workflows/release-upgrade-history.yml`) runs the same script each
+week and on demand, outside the release time. It installs the newest public release over the oldest
+public release with a database (`v0.1.14`) and over the newest release that is at least 60 days old,
+on macOS ARM64. `--history` seeds only what the old release has, compares the row count of each table,
+and records a forced end of the old release as a warning. A red run means that an install that skipped
+releases cannot upgrade; fix it in the next release.
 
 The unsigned local macOS package is a development artifact. It does not prove Gatekeeper,
 notarization, or auto-update readiness. Those are proven only by the signed release workflow's

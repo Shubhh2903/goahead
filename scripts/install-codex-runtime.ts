@@ -1,11 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { createOpenBotLogger } from "@openbot/logging";
 import { z } from "zod";
 import { type AgentRuntimeLock, loadAgentRuntimeLock } from "./agent-runtime-lock";
 import { rejectNonRegularFiles, sha256 } from "./remote-desktop-runtime-release";
+import {
+  download,
+  escapeRegExp,
+  installValidatedTree,
+  isCurrentInstallation,
+  safeArchivePathParts,
+} from "./runtime-install";
 
 const logger = createOpenBotLogger("install-codex-runtime");
 
@@ -44,18 +51,17 @@ export async function installCodexRuntime(
   const artifact = lock.codex.artifacts[target];
   const targetRoot = codexRuntimePath(outputRoot, target);
 
-  if (await isCurrentInstallation(targetRoot, target, lock)) {
+  if (await isCurrentInstallation(() => verifyCodexRuntime(targetRoot, target, lock))) {
     await writeMetadata(outputRoot, lock, fetchImpl);
     logger.info(`Using verified bundled Codex ${lock.codex.version} for ${target}.`);
     return "current";
   }
 
-  const response = await fetchImpl(
+  const archiveBytes = await download(
+    fetchImpl,
     `${lock.codex.repository}/releases/download/${encodeURIComponent(lock.codex.tag)}/${artifact.asset}`,
-    { headers: { "User-Agent": "OpenBot-runtime-installer" }, redirect: "follow" },
+    "Codex runtime",
   );
-  if (!response.ok) throw new Error(`Codex runtime download failed with HTTP ${response.status}.`);
-  const archiveBytes = Buffer.from(await response.arrayBuffer());
   if (sha256(archiveBytes) !== artifact.assetSha256) {
     throw new Error(`The ${target} Codex runtime archive checksum is invalid.`);
   }
@@ -81,7 +87,6 @@ export async function installCodexRuntime(
   return "installed";
 }
 
-/** The `target` the Codex package manifest carries for each runtime target OpenBot ships. */
 const CODEX_MANIFEST_TARGETS = {
   "darwin-arm64": "aarch64-apple-darwin",
   "darwin-x64": "x86_64-apple-darwin",
@@ -152,40 +157,10 @@ export function validateCodexArchive(archive: string): string[] {
 }
 
 function validateArchivePath(name: string): void {
-  if (name.includes("\0") || name.includes("\\")) throw new Error(`Unsafe Codex archive path: ${name}`);
-  const normalized = name.replace(/\/+$/u, "");
-  if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:/u.test(normalized)) {
-    throw new Error(`Unsafe Codex archive path: ${name}`);
-  }
-  const parts = normalized.split("/");
-  if (parts.some((part) => !part || part === "." || part === "..")) {
-    throw new Error(`Unsafe Codex archive path: ${name}`);
-  }
+  const parts = safeArchivePathParts(name, "Codex");
   if (!["bin", "codex-package.json", "codex-path", "codex-resources"].includes(parts[0] ?? "")) {
     throw new Error(`Unexpected Codex archive path: ${name}`);
   }
-}
-
-async function isCurrentInstallation(
-  root: string,
-  target: CodexRuntimeTarget,
-  lock: AgentRuntimeLock,
-): Promise<boolean> {
-  try {
-    await verifyCodexRuntime(root, target, lock);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function installValidatedTree(source: string, destination: string): Promise<void> {
-  const temporaryTarget = join(dirname(destination), `.${destination.split(/[\\/]/u).at(-1)}.installing`);
-  await mkdir(dirname(destination), { recursive: true });
-  await rm(temporaryTarget, { recursive: true, force: true });
-  await cp(source, temporaryTarget, { recursive: true });
-  await rm(destination, { recursive: true, force: true });
-  await rename(temporaryTarget, destination);
 }
 
 async function writeMetadata(root: string, lock: AgentRuntimeLock, fetchImpl: typeof fetch): Promise<void> {
@@ -195,24 +170,17 @@ async function writeMetadata(root: string, lock: AgentRuntimeLock, fetchImpl: ty
   let currentLicense: string | null = null;
   try {
     currentLicense = sha256(await readFile(licensePath));
-  } catch {
-    // Download the pinned license below.
-  }
+  } catch {}
   if (currentLicense !== lock.codex.licenseSha256) {
-    const response = await fetchImpl(`${lock.codex.repository}/raw/${encodeURIComponent(lock.codex.tag)}/LICENSE`, {
-      headers: { "User-Agent": "OpenBot-runtime-installer" },
-      redirect: "follow",
-    });
-    if (!response.ok) throw new Error(`Codex license download failed with HTTP ${response.status}.`);
-    const bytes = Buffer.from(await response.arrayBuffer());
+    const bytes = await download(
+      fetchImpl,
+      `${lock.codex.repository}/raw/${encodeURIComponent(lock.codex.tag)}/LICENSE`,
+      "Codex license",
+    );
     if (sha256(bytes) !== lock.codex.licenseSha256) throw new Error("The Codex license checksum is invalid.");
     await writeFile(licensePath, bytes);
   }
   await writeFile(join(root, "source-manifest.json"), `${JSON.stringify({ name: "codex", ...lock.codex }, null, 2)}\n`);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 if (import.meta.main) {

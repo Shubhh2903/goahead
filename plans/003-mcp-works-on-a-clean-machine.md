@@ -2,7 +2,7 @@
 
 ## Goal
 
-A user installs OpenBot on macOS, Linux or Windows, enables a catalog MCP
+A user installs GoAhead on macOS, Linux or Windows, enables a catalog MCP
 server, and it starts. No Node, no `npx` and no terminal are needed first. When
 a server does not start, the user reads why.
 
@@ -44,7 +44,7 @@ Do not change these. They are the reason this plan is small.
 
 - One store, one normalization step (`usableMcpServers`), one adapter per
   provider shape (`src/backend/mcp-provider-shapes.ts`).
-- The reserved-name guard, and OpenBot's own bridge servers spread last.
+- The reserved-name guard, and GoAhead's own bridge servers spread last.
 - The grow-only hand-off log for redaction (`src/backend/mcp-handoff-log.ts`).
 - The Codex tool fingerprint that forces a replacement session
   (`src/backend/agent/thread-lifecycle.ts`).
@@ -112,7 +112,7 @@ Claude is started with `strictMcpConfig: true`, which takes away project
 else. `settingSources` is unchanged, so permissions and hooks still load.
 
 Codex is started with every name from its own `config.toml` set to
-`{ enabled: false }`, with OpenBot's entries spread on top. The swept names are
+`{ enabled: false }`, with GoAhead's entries spread on top. The swept names are
 folded into the tool manifest fingerprint and `CODEX_MCP_ADAPTER_VERSION` is `3`,
 because Codex ignores MCP configuration on resume: without both, a user who edits
 that file keeps the old tools while the panel says otherwise.
@@ -121,16 +121,16 @@ OpenCode and Grok document no equivalent flag. Guessing a key name would fail
 silently at the next turn, which is the failure this plan exists to remove, so
 the limit is stated in the panel instead.
 
-The upgrade is user-visible and has no opt-out: a server declared outside OpenBot
+The upgrade is user-visible and has no opt-out: a server declared outside GoAhead
 stops reaching agents. `CHANGELOG.md` says so.
 
 ## Stage 4 - Native MCP OAuth, and delete `mcp-remote` (DONE)
 
 The motive was the redaction rule, not convenience: `mcp-remote` held six OAuth
 refresh tokens outside `safeStorage`, outside `src/backend/mcp-redaction.ts` and
-outside `McpHandoffLog`. A token OpenBot cannot see is a token it cannot redact.
+outside `McpHandoffLog`. A token GoAhead cannot see is a token it cannot redact.
 
-OpenBot writes no crypto and no discovery. `@modelcontextprotocol/sdk@1.30.0`
+GoAhead writes no crypto and no discovery. `@modelcontextprotocol/sdk@1.30.0`
 supplies metadata discovery, RFC 7591 registration, PKCE authorization, the code
 exchange, refresh and the `auth()` driver. What this stage added:
 
@@ -156,7 +156,7 @@ asked for: `https://mcp.linear.app/sse` is `404`, and the live address is
 
 **Known limit, accepted.** All three adapters copy headers once, at spawn. When
 an access token expires mid-thread the tools go away. A bounded session with a
-token OpenBot can redact beats an unbounded one it cannot, and this is the
+token GoAhead can redact beats an unbounded one it cannot, and this is the
 measurement that decides the bridge below.
 
 ## Deliberately not now
@@ -173,7 +173,7 @@ measurement that decides the bridge below.
 - **Routing user servers through `src/backend/local-mcp-bridge.ts`.** The right
   end state: one adapter, `workingDirectory` everywhere, one shared process, OAuth
   with a single home that can refresh, and per-agent filtering as a routing rule.
-  The understated cost is that OpenBot inherits process supervision, restart and
+  The understated cost is that GoAhead inherits process supervision, restart and
   crash reporting for arbitrary third-party binaries. Triggers, any one of which
   reverses this: Stage 4 ships and a token expires inside a live thread; a fifth
   provider shape appears; per-agent filtering is wanted for a real user reason.

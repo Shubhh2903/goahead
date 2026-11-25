@@ -58,6 +58,7 @@ export interface Publication {
   catalogVersion: string;
   skills: PublishedSkill[];
   agents: PublishedAgent[];
+  retiredAgents: string[];
 }
 
 export function createPublicationSql(publication: Publication, publishedAt: number): string {
@@ -71,8 +72,6 @@ export function createPublicationSql(publication: Publication, publishedAt: numb
     statements.push(
       `INSERT INTO marketplace_skills(id, slug, owner_user_id, approved_version_id, installs, featured, show_creator_avatar, created_at, updated_at) VALUES (${sql(skill.id)}, ${sql(skill.slug)}, ${sql(owner.id)}, NULL, 0, ${skill.featured ? 1 : 0}, 1, ${publishedAt}, ${publishedAt}) ON CONFLICT(id) DO UPDATE SET slug = excluded.slug, owner_user_id = excluded.owner_user_id, show_creator_avatar = excluded.show_creator_avatar, updated_at = excluded.updated_at;`,
       `INSERT INTO marketplace_skill_versions(id, skill_id, version, name, description, category, status, rejection_note, bundle_key, bundle_sha256, files_json, icon_key, created_at, reviewed_at) VALUES (${sql(skill.versionId)}, ${sql(skill.id)}, ${skill.version}, ${sql(skill.name)}, ${sql(skill.description)}, ${sql(skill.category)}, 'approved', NULL, ${sql(bundleKey)}, ${sql(skill.bundleSha256)}, ${sql(JSON.stringify(skill.files))}, ${sql(remoteIconKey(skill))}, ${publishedAt}, ${publishedAt}) ON CONFLICT(id) DO NOTHING;`,
-      /* The version row is immutable except for its artwork, which a release before the catalog
-         carried icons left empty. Only that column is repaired here. */
       `UPDATE marketplace_skill_versions SET icon_key = ${sql(remoteIconKey(skill))} WHERE id = ${sql(skill.versionId)};`,
       `UPDATE marketplace_skills SET approved_version_id = ${sql(skill.versionId)}, updated_at = ${publishedAt} WHERE id = ${sql(skill.id)} AND NOT EXISTS (SELECT 1 FROM marketplace_skill_versions current WHERE current.id = marketplace_skills.approved_version_id AND current.version > ${skill.version});`,
     );
@@ -83,6 +82,12 @@ export function createPublicationSql(publication: Publication, publishedAt: numb
       `INSERT INTO marketplace_agents(id, owner_user_id, approved_version_id, installs, featured, show_creator_avatar, created_at, updated_at) VALUES (${sql(agent.id)}, ${sql(owner.id)}, NULL, 0, ${agent.featured ? 1 : 0}, 1, ${publishedAt}, ${publishedAt}) ON CONFLICT(id) DO UPDATE SET owner_user_id = excluded.owner_user_id, show_creator_avatar = excluded.show_creator_avatar, updated_at = excluded.updated_at;`,
       `INSERT INTO marketplace_agent_versions(id, agent_id, version, name, title, description, avatar_seed, avatar_hue, avatar_key, skills_json, routines_json, category, status, rejection_note, created_at, reviewed_at) VALUES (${sql(agent.versionId)}, ${sql(agent.id)}, ${agent.version}, ${sql(agent.name)}, ${sql(agent.title)}, ${sql(agent.description)}, ${sql(agent.avatarSeed)}, ${agent.avatarHue}, NULL, ${sql(JSON.stringify(agent.skills))}, ${sql(JSON.stringify(agent.routines))}, ${sql(agent.category)}, 'approved', NULL, ${publishedAt}, ${publishedAt}) ON CONFLICT(id) DO NOTHING;`,
       `UPDATE marketplace_agents SET approved_version_id = ${sql(agent.versionId)}, updated_at = ${publishedAt} WHERE id = ${sql(agent.id)} AND NOT EXISTS (SELECT 1 FROM marketplace_agent_versions current WHERE current.id = marketplace_agents.approved_version_id AND current.version > ${agent.version});`,
+    );
+  }
+
+  for (const slug of publication.retiredAgents) {
+    statements.push(
+      `UPDATE marketplace_agents SET approved_version_id = NULL, featured = 0, updated_at = ${publishedAt} WHERE id = ${sql(`openbot-curated-agent-${slug}`)} AND owner_user_id = ${sql(owner.id)};`,
     );
   }
 
@@ -104,6 +109,9 @@ export async function publishProductionCatalog(
       process.stdout.write(
         `Dry run: ${publication.skills.length} skills and ${publication.agents.length} agents from ${publication.catalogVersion} are ready for ${target} under owner ${owner.name}.\n`,
       );
+      if (publication.retiredAgents.length > 0) {
+        process.stdout.write(`Retired agents to unlist: ${publication.retiredAgents.join(", ")}.\n`);
+      }
       process.stdout.write(
         `No resources were changed. Add ${target === "local" ? "--local --apply" : "--apply --confirm-production"} to publish.\n`,
       );
@@ -147,11 +155,69 @@ export async function publishProductionCatalog(
     await writeFile(sqlPath, createPublicationSql(publication, Date.now()));
     await run(wrangler, ["d1", "execute", productionDatabase, mode, "--file", sqlPath, "--yes"]);
     process.stdout.write(
-      `Published ${publication.skills.length} skills and ${publication.agents.length} agents to ${target} under owner ${owner.name}.\n`,
+      `Published ${publication.skills.length} skills and ${publication.agents.length} agents to ${target} under owner ${owner.name}, and unlisted ${publication.retiredAgents.length} retired agents.\n`,
     );
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
+}
+
+interface CatalogListing {
+  label: string;
+  path: string;
+  version: number;
+}
+
+export async function unpublishedCatalogEntries(): Promise<string[]> {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "openbot-production-catalog-check-"));
+  try {
+    const artifactRoot = join(temporaryRoot, "artifacts");
+    await buildProductionCatalog(artifactRoot);
+    const publication = await readPublication(artifactRoot);
+    const listings: CatalogListing[] = [
+      ...publication.skills.map((skill) => ({
+        label: `skill ${skill.slug}`,
+        path: `/v1/skills/${encodeURIComponent(skill.id)}`,
+        version: skill.version,
+      })),
+      ...publication.agents.map((agent) => ({
+        label: `agent ${agent.id.replace("openbot-curated-agent-", "")}`,
+        path: `/v1/marketplace/agents/${encodeURIComponent(agent.id)}`,
+        version: agent.version,
+      })),
+    ];
+    const [live, retired] = await Promise.all([
+      Promise.all(listings.map(async (listing) => ({ ...listing, liveVersion: await fetchLiveVersion(listing.path) }))),
+      Promise.all(
+        publication.retiredAgents.map(async (slug) => ({
+          slug,
+          liveVersion: await fetchLiveVersion(`/v1/marketplace/agents/openbot-curated-agent-${slug}`),
+        })),
+      ),
+    ]);
+    return [
+      ...live.filter(({ liveVersion }) => liveVersion === null).map(({ label }) => `${label} (missing)`),
+      ...retired
+        .filter(({ liveVersion }) => liveVersion !== null)
+        .map(({ slug }) => `retired agent ${slug} (still listed)`),
+      ...live
+        .filter(({ liveVersion, version }) => liveVersion !== null && liveVersion < version)
+        .map(({ label }) => label),
+    ];
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
+async function fetchLiveVersion(path: string): Promise<number | null> {
+  const response = await fetch(new URL(path, productionApiUrl));
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`The live Marketplace answered ${path} with HTTP ${response.status}.`);
+  const value = await response.json();
+  if (!isDynamicRecord(value) || !isNumber(value.version)) {
+    throw new Error(`The live Marketplace sent an invalid listing for ${path}.`);
+  }
+  return value.version;
 }
 
 async function verifyProductionAdmin(token: string): Promise<void> {
@@ -184,7 +250,16 @@ async function readPublication(root: string): Promise<Publication> {
     catalogVersion: catalogValue.catalogVersion,
     skills: catalogValue.skills.map(parseSkill),
     agents: agentValue.agents.map(parseAgent),
+    retiredAgents: parseRetiredAgents(agentValue.retired),
   };
+}
+
+function parseRetiredAgents(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!isDynamicRecord(value) || !Array.isArray(value.agents) || !value.agents.every(isString)) {
+    throw new Error("Generated production agent catalog has an invalid retired list.");
+  }
+  return value.agents;
 }
 
 function parseSkill(value: unknown): PublishedSkill {
@@ -260,8 +335,6 @@ function remoteBundleKey(skill: PublishedSkill): string {
   return `skills/${skill.id}/versions/${skill.versionId}.zip`;
 }
 
-/* The key a submission through the app would use, so the icon endpoint serves a catalog Skill the
-   same way it serves a community one. */
 function remoteIconKey(skill: PublishedSkill): string {
   return `skills/${skill.id}/versions/${skill.versionId}.icon`;
 }

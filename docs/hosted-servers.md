@@ -3,13 +3,18 @@
 A hosted server is a GoAhead server that runs in a [boat](https://boat.dev) sandbox, so it works
 when the user's computer is off. Each server is one boat sandbox for one account. The sandbox runs
 the Linux build of GoAhead on the boat desktop. The server runs while it is in use. After 15 minutes with no
-use, the Worker stops it and keeps its data. The next client starts it again, and the Worker cron
-starts it before its next routine run. A connected client counts as use for 5 minutes after its
+use, the Worker stops it and keeps its data. The next client starts it again, the Worker cron
+starts it before its next routine run, and Signal starts it for a Slack, Discord or Telegram message
+that addresses GoAhead (see [Connector events](#connector-events)). A connected client counts as use for 5 minutes after its
 last user action (`CLIENT_USE_WINDOW_MS`): a request that changes data, or a typing event. Reads and
 the requests that a client sends with no user action (polls, previews, mark-read) do not count
-(`src/main/team-api/client-use.ts`). So an app that is open but not used does not keep the server on:
-it stops 15 to 30 minutes after the last action (see the cron interval below). The desktop and the web client then show the server
-as asleep, and the next key press or click wakes it.
+(`src/main/team-api/client-use.ts`). An app that has focus (a focused desktop window, a visible and
+focused browser tab, the phone app in the foreground) also counts, for at most 30 minutes after the
+last user action of its session or after the app gets focus again (`focus-use-v1`). So an app that has focus but is not used keeps the
+server on for 30 minutes, and then the server stops 15 to 30 minutes later. An app that is open
+without focus does not keep the server on: it stops 15 to 30 minutes after the last action (see the
+cron interval below). The desktop and the web client then show the server as asleep, and the next key
+press or click wakes it.
 
 To run the same build on your own computer, see [self-hosted servers](self-hosted-server.md). It
 uses the scripts and units of this page with `mode` set to `self`.
@@ -17,7 +22,7 @@ uses the scripts and units of this page with `mode` set to `self`.
 The Worker enables hosted servers only when it has the boat and Stripe secrets and
 `HOSTED_SERVER_TEMPLATE`, and only for the account IDs or emails in `HOSTED_SERVERS_ALLOWED_USER_IDS` (`*`
 allows each account; with no value, no account can create a server). Production sets `*` in
-`wrangler.jsonc`, so each account can buy a server. See [Production](#production). An account can have 3 servers that are not
+`wrangler.jsonc`, so each account can buy a server. See [Production](#production). An account can have 50 servers that are not
 deleted (`MAX_SERVERS_PER_ACCOUNT`). An account has at most one server that waits for its first
 payment: a create with a new Idempotency-Key gives its plan to that server and opens a new page. So a
 cancelled or abandoned Checkout page adds no server, also when the client lost its key (the web client
@@ -25,19 +30,25 @@ leaves the page for Stripe). The old page closes first; when the user paid on it
 that server with no page. The server list sends the limit as
 `maxServers`. When the paid servers reach it, the add server dialog disables the plans and opens the
 server list (Settings on desktop, Billing on the web) to delete a server. Each server
-has its own Stripe plan. Its machine comes from the plan
-(`HOSTED_PLAN_SIZE`): Starter is boat `small`, Standard is `default`, and Pro is `large`.
+has its own Stripe plan. Its machine comes from the plan: a pool machine of the plan (Starter VPS 1,
+Standard VPS 2, Pro VPS 3), or when none is free, a boat sandbox (`HOSTED_BOAT_PLAN_SIZE`): Starter and
+Standard are `default`, and Pro is `large`. Starter sandboxes from before 2026-11-14 are `small` until a
+change of plan or billing interval moves them to the new Starter price and to `default`. Each server
+shows the storage of its plan and storage tier (`storageTierGb`), on a VPS and on boat. The disk of a
+boat type can be smaller than the plan storage. A server on boat moves to a VPS, so the plan storage
+does not depend on the machine. Developer decision, 2026-11-20. `leaseweb-pool.ts move` puts a Starter sandbox on a VPS 1 and sets the row to
+`HOSTED_PLAN_SIZE`.
 
 ## Parts
 
 | Part | Where | Job |
 | --- | --- | --- |
-| Account Worker | `apps/auth-api/src/server/hosted-server-service.ts`, `boat-client.ts` | Creates, restarts and deletes sandboxes. Stores state in D1 (`0023_hosted_servers.sql`). |
+| Account Worker | `apps/auth-api/src/server/hosted-server-service.ts`, `boat-client.ts` | Creates, restarts and deletes sandboxes. Stores state in D1 (`0023_hosted_servers.sql`, `0028_hosted_server_lifecycle.sql`). |
 | Server template | `scripts/hosting/` | Builds the boat named snapshot that each server starts from. |
 | Server bootstrap | `src/main/hosted-server-bootstrap.ts` | On the first start, redeems the claim, signs in, and publishes the host. |
 | Start retry | `src/main/hosted-server-start-retry.ts` | Publishes the host again after a failed start. |
 | Activity report | `src/main/hosted-server-activity.ts` | Tells the Worker that the server is in use, and when its next routine runs. |
-| Memory guard | `src/main/hosted-server-memory.ts`, `src/backend/agent/memory-hold.ts`, `turn-slots.ts` | Reads the memory of the server, holds new turns when it is low, and limits the turns that run at the same time. See [Memory](#memory). |
+| Memory guard | `src/main/server-memory.ts`, `src/backend/agent/memory-hold.ts`, `turn-slots.ts` | Reads the memory of the server, holds new turns when it is low, and limits the turns that run at the same time. See [Memory](#memory). |
 | Billing link | `apps/auth-api/src/server/hosted-billing.ts`, `billing-service.ts` | Opens Stripe Checkout for a new server. Tells the hosting service when a subscription changes. |
 | Desktop and web clients | `AddServerOverlay`, `SettingsHostedServersTab`, `hosted-server-service.ts`, `web-hosted-servers.ts`, `web-hosted-server-wake.ts` | Pick a plan, pay, list, start, renew and delete. The web app shows the list in Billing. Start a stopped server when a connection fails. |
 | Mobile client | `mobile-workspace-context.tsx` | Starts the selected stopped server when a connection fails. |
@@ -54,6 +65,15 @@ when a server is idle or boat stops a sandbox; and `error` and `deleted`. The Wo
    `{name, plan, interval, currency}` and an `Idempotency-Key`. The Worker stores a row in
    `awaiting_payment` with no claim and no sandbox, makes the Stripe customer, and returns a Stripe
    Checkout URL (35 minutes). A repeated request expires the old Checkout and returns a new one.
+   An optional `license: {tier, users}` adds the commercial license at the bundle price to the same
+   page, so one payment buys both. The first sync moves the license to its own subscription that
+   renews on the same day as the server ([Commercial license](architecture/servers.md#commercial-license)).
+   While the license promotion (`LICENSE_TRIAL_END`) runs, the page has the server line only, and the
+   license starts with a free trial until the promotion ends.
+   Refunds are by email only (Terms: Consumer Right of Withdrawal): email hello@goahead.multicodegenius.com within
+   2 hours of the purchase for a 90% refund, or use the statutory withdrawal. An operator makes the
+   refund in the Stripe Dashboard and cancels the subscription now. A refunded and cancelled server plan
+   deletes the server and its data at once (step 7).
    The desktop main process opens the URL only when it is an `https://checkout.stripe.com` URL; the
    renderer never gets it. The web client goes to the page in the same tab, and Stripe returns to
    `/app?hosting=checkout&hosted_server=<id>` (`&cancelled=1` when the user went back).
@@ -69,21 +89,39 @@ when a server is idle or boat stops a sandbox; and `error` and `deleted`. The Wo
    minutes (the Worker stopped during the create call) goes to `error`, and the setup retry below
    applies. When that create call returns later, the Worker deletes the sandbox that no row owns.
 
+   When the pool of the operator has a ready machine for the plan, the Worker makes no sandbox: the
+   server starts on that machine ([A new server on a pool machine](#a-new-server-on-a-pool-machine)),
+   and steps 3 and 5 to 8 of boat (the setup script, the stop and the resume) do not apply to it.
+
    The Worker then names the sandbox `openbot-<plan>-<owner email>-<first 8 characters of the host
-   ID>` (`PATCH /sandboxes/:id`), so an operator can find it in the boat dashboard. Each character of
-   the email that is not a letter or a digit becomes `-`. The name is only a label; a plan change
+   ID>` (`PATCH /sandboxes/:id`), so an operator can find it in the boat dashboard. The email is in
+   lowercase, and each group of characters that are not letters or digits becomes one `-`. The name is only a label; a plan change
    renames the sandbox.
 3. **Env handoff.** boat puts the sandbox env in the setup script, not in systemd. The Worker sends
    `setupScript: exec /opt/OpenBot/hosted/openbot-hosted-env`. That helper writes the two values to
    `~/.config/openbot-hosted/env` (mode 0600). `openbot.service` waits for this file.
 4. **First boot.** GoAhead starts with `OPENBOT_HOSTED_SERVER=1`. It redeems the claim at
    `POST /v2/hosting/claims/redeem`, signs in as the owner, keeps the host ID, and publishes the
-   host. `registerHost` refuses the host ID for any other account.
+   host. `registerHost` refuses the host ID for any other account. This claim is not the operator's
+   [server claim](self-hosted-server.md#sign-in-with-a-server-claim) of a self-hosted server.
 5. **In use.** GoAhead checks each minute whether the server is in use: an agent works, a remote
    desktop view is open, a file moves, or a remote client is connected (an open Team API event
-   stream) and sent a user action or a typing event in the last 5 minutes. A key press or pointer
+   stream) and sent a user action, a typing event or a focus ping in the last 5 minutes. A key press or pointer
    input in a browser view is a user action. An open browser view with no input does not count,
-   because a view that the user forgot would keep the server on. It sends
+   because a view that the user forgot would keep the server on.
+
+   **Focus.** Only a hosted server advertises `focus-use-v1`. While the app of a client has focus and
+   the server is online, the client sends `POST /v1/client/focus` with an empty body at once and then
+   each 4 minutes (`FOCUS_USE_INTERVAL_MS`): the desktop for its selected server while the window has
+   focus, the web client for its server while the tab is visible and has focus, and the mobile app for
+   its selected server while it is in the foreground. The host counts a ping as use only for 30 minutes
+   (`FOCUS_USE_LIMIT_MS`) after the later of the start of the focus period and the last user action of
+   the same session. A ping more than 8 minutes after the previous one starts a new focus period. The
+   ping is passive in `client-use.ts`, so it does not reset the limit and does not change which session
+   push notifications count as in use. Like other use, a focused app delays the automatic update
+   restart of a hosted server (`RequestedUpdate`, `clientInUse`).
+
+   It sends
    `POST /v2/hosting/servers/:id/activity` with `{inUse, nextRunAt}` and the session from its claim:
    at once when the use starts, then at most each 5 minutes while the use continues, and each time
    the next routine run changes. The Worker accepts only that session, not the owner's own sessions.
@@ -94,11 +132,16 @@ when a server is idle or boat stops a sandbox; and `error` and `deleted`. The Wo
    at once. The Worker cron (each minute on `test`) resumes a server that stays `stopped` for 2
    minutes.
 
+   A live Slack, Discord or Telegram connection is not use when the last Signal said
+   `ingress-queue` in `ready` and the host sent it a queue key: the server sleeps with its connectors.
+   Otherwise (an older Signal, or no key) the connection counts as use, so no message is lost.
+
    **Idle.** The cron stops a running server with no activity and no state change for 15 minutes:
    `desired_state = 'idle'`, and boat saves the disk. It does not stop a server whose next routine
    run is less than 10 minutes away. The webhook does not resume an idle server. The next wake
    (step 6) sets it to `running` and resumes it. A start and a resume count as activity, so the first
-   client has 15 minutes to connect.
+   client has 15 minutes to connect. A client that connects with focus keeps it on for 30 minutes
+   with no input.
 
    **Scheduled start.** The cron starts an idle server when its `next_run_at` is less than 10 minutes
    away (one cron interval and the start time), with the wake reason `schedule`. It clears
@@ -106,10 +149,69 @@ when a server is idle or boat stops a sandbox; and `error` and `deleted`. The Wo
    that run. After the start, GoAhead runs each routine that is due, and each run that it missed
    becomes one run.
 
+   **Keep-alive start.** boat deletes the disk of a stopped sandbox 14 days after the stop (it
+   sends an email on day 11), and a resume then fails with `snapshot_data_expired`. Each stop saves
+   a new disk. The cron starts an idle server whose last use (`last_active_at`) is 10 to 14 days
+   ago and keeps its `next_run_at`. The start counts as use, so with no client the idle stop comes
+   15 to 25 minutes later and saves the disk again. It sends one such start in each 10 minutes of
+   cron time (a tick whose UTC minute is a multiple of 10, so at most 144 each day for each Worker
+   with a cron each 5 minutes or each minute), the oldest change first: the test and production
+   Workers share the boat limits of 200 starts each day and 100 active sandboxes. After a
+   boat fault (5xx or no answer) the server sleeps again with its last use, and a later tick tries
+   again. `last_wake_reason` is `schedule` (its D1 check has no other value); the `woken` analytics
+   event has the reason `retention`. A server whose plan ended (`stopped`), whose deletion is due,
+   or whose disk is older than 14 days does not start: boat answers the resume of a deleted disk
+   with a 409, which the Worker reads as a start in progress.
+
    **Lease.** boat has no idle timer, and a boat trial refuses a sandbox with no auto-stop. Each
    create and resume sends `ttlSeconds: 7200`, so boat stops a sandbox that the Worker loses. An
    activity report extends the time (`PATCH /sandboxes/:id`) when less than 1 hour is left
    (`lease_until`). When boat stops a server in use at the end of its lease, the Worker resumes it.
+
+   **Disk save at a stop.** boat saves the disk of a running server file by file, with no pause,
+   and a file that changes during its copy is restored torn. A SQLite checkpoint during the save
+   gave a damaged database ("GoAhead database failed its integrity check"). Thus a hosted server
+   stops GoAhead before the save. boat runs `/home/user/.boat/pre-stop` as `user` when a stop
+   starts, waits for it to end (at most 60 seconds), and then saves the disk. boat supports this
+   hook, but its documentation does not show it yet. `openbot-hosted-update` installs `scripts/hosting/openbot-boat-pre-stop` there
+   (`install_hosting`, and `trigger` at each start, so a server that an older release updated gets
+   it). The hook makes `/run/openbot-pre-stop` and runs `systemctl stop openbot.service`: GoAhead
+   gets `SIGTERM`, stops its services and closes `openbot.db` last. After 40 seconds the hook kills
+   the unit, which leaves a database that SQLite recovers. The file makes the unit condition
+   `ConditionPathExists=!/run/openbot-pre-stop` fail, so `Restart=` and the end of an update request
+   do not start GoAhead during the save. `/run` is empty at each boot. boat can also keep a stopped
+   machine in memory and continue it at a resume with no boot: the resume answers `"status":
+   "running"`, and the file stays. Then the Worker runs a command on the machine that removes the
+   file and starts `openbot.service` (`HELD_RESUME_START_COMMAND`). With no file the command does
+   nothing. boat can also cancel the stop after the hook, for example when it cannot pause a Docker
+   container that restarts ("Final snapshot failed; stop aborted"). The machine then runs with the
+   file, and GoAhead stays stopped. Two paths start it again, both only for a file older than 5
+   minutes: boat runs the hook again before each new try of the stop, so a newer file can belong to a
+   save that still runs. The hook sets a transient systemd timer (`openbot-pre-stop-restart`) that
+   fires 15 minutes after the last hook. A client wake or a connector event for a server that boat
+   reports as running makes the Worker run `FAILED_STOP_START_COMMAND` after the reply. boat tries
+   the stop again every 4 to 10 minutes (seen on 2026-11-05), and each try stops GoAhead again. Thus
+   the timer fires only after boat stops its tries, and a wake keeps GoAhead running only until the
+   next try. boat reports these tries as `stop.status: "failing"` and keeps the sandbox state
+   `idle`. On 2026-11-05 a save failed this way for 18 hours, while the restore of the disk stalled,
+   and the start command failed with `sandbox_restoring`. Thus the Worker reads a failing stop as
+   `stopping`, not `running`, and logs `Hosted server stop is failing.` at each check. A `sandbox.ready`
+   webhook for a stopping server makes the Worker read the sandbox again, so the webhook does not hide
+   the failing stop. Each client wake and connector event still sends `FAILED_STOP_START_COMMAND`. The Worker does not end the stop. Only a resume ends it
+   (`superseded`), but boat does not say if that resume keeps the disk or restores the last saved
+   disk. A forced stop keeps only the last saved disk and loses what was written after it. An
+   operator decides: compare `snapshotCompletedAt` with the last writes of GoAhead before a force,
+   then wake the server. A machine that stopped
+   runs no timer. A hook that GoAhead did not write stays, and a self-hosted server gets
+   no hook.
+
+   **Check at a start.** `PRAGMA quick_check` reads every page of `openbot.db`: on a 15.7 GB file
+   it stopped the main thread for 77 seconds to about 4 minutes. A clean close removes
+   `openbot.db-wal`. Thus GoAhead runs the check at a start only when that file is there (a crash,
+   a kill, or a save while GoAhead ran) or when a migration ran. After a stop that did not close the
+   file, the check runs in a separate database host process, so the main thread stays free. When that
+   process cannot start or run the check, the main thread runs it as before. The check after a
+   migration still runs on the main thread.
 6. **Start after a failure.** A client that cannot reach the host first calls
    `GET /v2/hosting/servers/:id/status` (owner or member; 404 for a host that is not a hosted
    server). It returns `{serverId, state, error, sleeping}` and writes nothing, so it does not count
@@ -124,10 +226,27 @@ when a server is idle or boat stops a sandbox; and `error` and `deleted`. The Wo
 
    The desktop asks for each stored hosted server when Signal answers `host_unavailable`, at most
    once a minute for each host, and wakes only the selected server while the app has focus. After a
-   wake, it connects again every 5 seconds for at most 5 minutes. The web client does the same for
-   its one server, and checks a sleeping server again every 5 minutes. The mobile app has no status
-   check: it wakes the selected server while the app is in the foreground. A server whose plan ended
-   answers `402 plan_required`.
+   wake, it connects again every 5 seconds, and reads the status every 30 seconds to show the step:
+   the machine starts (`waking`, `starting`, `stopping`, or `stopped` with no error, which also gets a
+   wake), GoAhead starts (`running`), or the provider refused the start (`waking` with
+   `provider_limit`). The client waits with no limit while the
+   machine starts. When the machine is `running` and its host does not connect in 15 minutes, the
+   client shows that the server did not start in time, as it does after 10 status reads in a row
+   that fail. Restart is not available while the machine starts. It is available when the machine
+   runs and GoAhead does not answer. The web client does the same for its one server, and checks a
+   sleeping server again every 5 minutes. The mobile app has no status check: it wakes the selected server while the app is in
+   the foreground, with the same limit for a `running` server. A server whose plan ended answers
+   `402 plan_required`.
+
+   **Rate limit.** When boat refuses a resume with `429`, the row stays `waking` and gets
+   `observed_error = 'provider_limit'`, so clients keep waiting. The next client wake, Signal route
+   wake or cron pass sends the resume again after a delay: the time from the wake
+   (`provider_event_at`) to the last refusal, from 30 seconds to 5 minutes. A retry keeps the wake time
+   and the error, and only one caller can claim it. A resume that boat accepts clears the error. The
+   cron does not ask boat about such a row, because boat reports the sandbox `archived` and the row
+   would become `stopped`. A `409` on a retry (boat already resumes the sandbox) clears the error, so
+   the cron reads boat again when the webhook does not come. Any other resume failure sets `error` as
+   before.
 
    A paid server whose setup failed has no sandbox. A wake (Retry in the add server dialog) sets
    it up again at once, and the cron does this 10 minutes after each failure. Each attempt sends
@@ -150,16 +269,50 @@ when a server is idle or boat stops a sandbox; and `error` and `deleted`. The Wo
    "leave the subscription past-due", Stripe moves the period end at each renewal and the server
    runs with no payment. A cancel at the period end (`cancel_at_period_end` or `cancel_at`)
    shows the end date and keeps the server running until then.
-8. **Plan change.** In the Customer Portal an upgrade is charged at once, and a downgrade or a
-   shorter interval starts at the next period. The Worker copies the new plan, interval and currency
-   to the server. boat changes the machine of a sandbox only on a resume (`type`), so the Worker
+
+   Refunds and disputes. A refund alone (`refund.created` or `refund.updated` with `succeeded`) changes
+   no plan, so an operator can give back part of a payment and keep the server. To end a plan with a
+   refund, the operator cancels the subscription now in the Stripe Dashboard and refunds the payment,
+   in either order. When the subscription is `canceled`, the server is deleted with its data at once,
+   with no 14-day retention (Terms: Hosted Server Subscription Termination):
+   - a refund of any amount of a cancelled plan deletes its server;
+   - at `customer.subscription.deleted`, a refund of the subscription's `latest_invoice` deletes the
+     server (`StripeClient.isInvoiceRefunded`).
+
+   The webhook deletes the server as the owner does (`HostedServerService.deleteForRefund`). An open
+   plan of the server, such as a renewal paid just now, keeps it. A cancel at the period end after a
+   refund of that period also deletes the server when the period ends. A refund that fails after it
+   succeeded does not bring the server back. A dispute (`charge.dispute.created`, an inquiry too)
+   cancels the plan of the disputed invoice now, so Stripe does not charge that card again. When the
+   subscription started less than 30 days before the dispute (Stripe `start_date`,
+   `DISPUTE_DELETES_SERVER_MS`), the webhook also deletes the server at once, as for a refund. An
+   inquiry (a dispute `status` that starts with `warning_`, `isDisputeInquiry`) takes no money back,
+   so it never deletes the server. After an inquiry or a later dispute the server stops with
+   `plan_ended` and keeps its disk for 14 days. The Worker finds the plan through
+   the invoice of the PaymentIntent (`GET /v1/invoice_payments`). A refund or dispute of a payment
+   that is not a GoAhead plan invoice changes nothing.
+8. **Plan change.** The Customer Portal has no plan change (`subscription_update` is off), so only an
+   operator changes a plan, in the Stripe Dashboard. A portal request with `flow: "update"` from an
+   older app opens the Portal home. The owner of a server on a VPS can buy more storage: see
+   [Storage tiers](#storage-tiers). When an operator changes a plan, an upgrade is charged at once, and
+   a downgrade or a shorter interval starts at the next period. The Worker copies the new plan,
+   interval and currency to the server. boat changes the machine of a sandbox only on a resume (`type`), so the Worker
    stops a running server (boat saves the disk) and resumes it on the machine of the new plan. The
    server is offline for this time, so the Worker waits until the server has no use: no activity
    report for 7 minutes (a server in use reports each 5 minutes). A server that stops for no use,
    or that was not running at the plan change, gets the new machine at its next resume. When the data does not fit a smaller machine, boat refuses it
    (`409 type_too_small`); the server then starts on its old machine, and the Worker does not try
    again until the next plan change.
-9. **Delete.** `DELETE /v2/hosting/servers/:id` with `{confirmName}`. The Worker first closes the
+9. **Restart.** The owner or an admin selects Restart server in the server menu, above Leave or
+   Delete. The account host list (`GET /v2/remote/hosts/`) marks each hosted server with
+   `hosted: true` while its plan is active, so the clients of an admin know where to show it.
+   `POST /v2/hosting/servers/:id/restart` (the owner, or an active admin membership) moves a
+   `running` row to `stopping` and stops the sandbox. The `archived` webhook (or the cron) then
+   resumes it with the wake reason `restart`. A row in any other state gets a wake. boat answers `409` when the sandbox is busy; the Worker
+   puts the row back to `running` and answers `409 hosted_server_restart_busy`. The Worker uses stop
+   and resume because the production boat key has no command access. The clients connect again as
+   after a wake: a wake reply of `stopping` now also starts the reconnects.
+10. **Delete.** `DELETE /v2/hosting/servers/:id` with `{confirmName}`. The Worker first closes the
    open Checkout page. When the user paid on it just now, the Worker keeps the server and answers
    `409 hosted_server_paid`, so the owner sees the server before a second delete cancels the plan.
    Then it cancels the open plan now, with no refund. A Stripe failure stops the delete (502), so
@@ -175,17 +328,54 @@ over `providers-v3` and `providers-v4`: Codex, Grok and Cline show a device code
 whose code the user pastes back into the app, and Cursor shows a page that signs the host's CLI in by
 itself. The Claude sign-in runs under `script` from util-linux (package
 `bsdutils`, in every Ubuntu and Debian image). See
-[Admin capabilities](ARCHITECTURE.md#admin-capabilities) for the routes.
+[Admin capabilities](architecture/servers.md#admin-capabilities) for the routes. Before you sign in
+a Claude subscription on a server, read [provider terms](provider-terms.md#claude).
 
 ## Members
 
-The plan sets the number of active members, owner included: Starter 3, Standard 10 and Pro 25
-(`BILLING_PLANS`). A host with no plan has 3 (`DEFAULT_TEAM_MEMBER_LIMIT`). The Worker reads the plan
+The plan sets the number of active members, owner included: Starter 1, Standard 5 and Pro 10
+(`BILLING_PLANS`). A host with no plan, such as a self-hosted server, takes the users of its owner's
+license (`ownerLicenseForHost`): Starter 1, Team 2 to 10. Only a license that is `active`, `trialing`, or
+`past_due` until the end of its period gives these seats. A host with no plan and no such license has 3
+(`DEFAULT_TEAM_MEMBER_LIMIT`). The Worker reads the limit in this order: a `server_member_limits` row,
+a hosted plan, the license, the default. A self-hosted host can keep a plan from before the license; it
+takes the larger of that plan and the license users. When an account has two open licenses, an
+entitled one comes first. When the limit comes from the license, a full server refuses a
+join with `409 license_users_full`. When a license ends, its servers go back to 3; members who are
+active stay. Any open license, also an `unpaid` one, refuses a join after its users, so the host list
+shows the lower of the limit and those users. When a license opens or closes, changes its users, or
+starts or stops giving them, the Worker sends `account-servers-changed` to each active member of the
+owner's servers, so their devices read the new limit. A renewal sends nothing. A `past_due` license that
+passes its period end sends it when the lapse sweep reads the license. A server made before
+these limits keeps the old limits of `LEGACY_MEMBER_LIMITS`: Starter 3, Standard 10 and Pro 25.
+Migration `0041` sets `hosted_servers.legacy_member_limits` to 1 for each existing row, and the
+Worker writes 0 for a new server. A self-hosted host with a plan has no hosted row, so it also keeps
+the old limits. `getServerEntitlement` returns the
+limit as `memberLimit`. The Worker reads the plan
 with `getServerEntitlement` when a member joins or is reactivated, and refuses a member over the limit
-(`409 member_limit_reached`). This also applies to a self-hosted host that has a plan.
+(`409 member_limit_reached`). A lower limit removes no member who is already active. This also applies to a
+self-hosted host that has a plan.
 
-- A lower limit after a plan change or a plan end removes no one. Active members keep their seats.
-  A new join or a reactivation waits for a free seat.
+- A row in the D1 table `server_member_limits` replaces the plan's limit for one server, such as an
+  enterprise customer's, from 1 to 100. The row names the account that owns the server and applies
+  only while that account owns it, as a plan does. The key is the server ID, so the row stays when
+  the owner deletes the host and registers it again; it stops when the account is deleted. No route
+  writes it; add, change or delete it by hand (`openbot-auth-test` for the test Worker):
+
+  ```sh
+  bunx wrangler d1 execute openbot-auth --cwd apps/auth-api --remote --command \
+    "INSERT INTO server_member_limits(server_id, owner_user_id, member_limit, created_at, updated_at)
+     SELECT host_id, owner_user_id, 50, unixepoch() * 1000, unixepoch() * 1000
+       FROM remote_hosts WHERE host_id = '<server id>'
+     ON CONFLICT(server_id) DO UPDATE SET owner_user_id = excluded.owner_user_id,
+       member_limit = excluded.member_limit, updated_at = excluded.updated_at"
+  ```
+
+  For a hosted server that has not published its host, read the owner from `hosted_servers`. Delete
+  the row to go back to the plan's limit. Clients see the new limit when they read the host list
+  again.
+- A lower limit after a plan change, a plan end or a custom limit removes no one. Active members
+  keep their seats. A new join or a reactivation waits for a free seat.
 - The host list (`GET /v2/remote/hosts/`) gives `memberLimit` for each host. The desktop, web and
   mobile member screens show it. They use 3 when an older Worker sends no limit.
 - After each subscription sync, the Worker sends `account-servers-changed` to each active member,
@@ -195,10 +385,10 @@ with `getServerEntitlement` when a member joins or is reactivated, and refuses a
 ## Configure the test Worker
 
 `HOSTED_SERVERS_ENABLED` is `true` in `env.test` of `apps/auth-api/wrangler.jsonc`.
-`bun run api:deploy:test` sets `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `BOAT_API_KEY` and
-`BOAT_WEBHOOK_SECRET` from the encrypted `apps/auth-api/.env.shared` on each deploy, so a value that
-you set by hand for these four is replaced. `bun run hosting:setup --target=test` makes the two
-webhooks and writes their secrets to that file. It also sets the allow list from
+`bun run api:deploy:test` loads `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `BOAT_API_KEY` and
+`BOAT_WEBHOOK_SECRET` from the encrypted `apps/auth-api/.env.dev` on each deploy, so a
+value that you set by hand for these four is replaced. Set `DOTENV_PRIVATE_KEY_DEV` in the shell.
+`bun run hosting:setup --target=test` makes the two webhooks and writes their secrets to that file. `api:deploy:test` also sets the allow list from
 `HOSTED_SERVERS_TEST_ALLOW_LIST` in that file. Set the template with
 `wrangler secret put HOSTED_SERVER_TEMPLATE --env test` from `apps/auth-api`:
 
@@ -207,7 +397,7 @@ webhooks and writes their secrets to that file. It also sets the allow list from
 | `HOSTED_SERVER_TEMPLATE` | The named snapshot from the template build, such as `openbot-server-0-9-0`. |
 | `HOSTED_SERVERS_ALLOWED_USER_IDS` | Comma-separated account IDs or emails that can create servers. `api:deploy:test` sets it from `HOSTED_SERVERS_TEST_ALLOW_LIST` and refuses `*`: the test Worker is public, and it shares its boat account with production. |
 
-The `BOAT_API_KEY` in `.env.shared` is the development key of the boat test account. It also has
+The `BOAT_API_KEY` in `.env.dev` is the development key of the boat test account. It also has
 command access, because the e2e script (`scripts/stripe-flows-e2e.ts`) reads the VM with it. Use it
 only with test data. The production key must be a boat key limited to sandbox create, get, list,
 update, stop, resume and delete. The Worker uses update (`PATCH`) for the lease and the name. Do not
@@ -225,15 +415,18 @@ signs in to the test Worker, and the test Worker makes the VM. The local Worker 
 start, but the app does not use them for its account. The app uses its own profile for the test
 Worker, and all worktrees share it, so you sign in one time.
 
-Each developer who has `DOTENV_PRIVATE_KEY_SHARED` can create a server with any account. The
-command decrypts `HOSTED_SERVERS_DEVELOPER_KEY` from `.env.shared`, and main sends it in the
+Each developer who has `DOTENV_PRIVATE_KEY_DEV` can create a server with any account.
+The command decrypts
+`HOSTED_SERVERS_DEVELOPER_KEY` from `.env.dev`, and main sends it in the
 `OpenBot-Hosting-Developer-Key` header of each hosted server request. The test Worker has the same
 key and lets the account create servers. A clone of the repository cannot decrypt the key. Main
 removes the key from its environment at the start, so agents do not get it, and a packaged build
-never sends it. To change the key, set a new one and deploy:
+never sends it. To change the key, update `HOSTED_SERVERS_DEVELOPER_KEY` in `.env.dev` with a
+temporary 0600 dotenvx key file containing the matching development key, remove that temporary file,
+and run:
 
 ```bash
-bunx dotenvx set HOSTED_SERVERS_DEVELOPER_KEY "$(openssl rand -hex 32)" -f apps/auth-api/.env.shared -fk .env.keys
+bun run hosting:setup --target=test
 bun run api:deploy:test
 ```
 
@@ -256,22 +449,23 @@ servers, their webhooks and the cron continue.
    `small` $0.018, `default` $0.036 and `large` $0.072 each hour (see
    [boat pricing](https://docs.boat.dev/pricing)). `GET /limits` shows the balance in `default`
    seconds.
-2. **Template.** Build it from the release AppImage with the production account service:
-   `bun run hosting:template --version=<v> --appimage-url=<release AppImage URL>
-   --appimage-sha256=<hex> --auth-api-url=https://api.openbot.run`. A server updates itself to
-   each new release ([Updates](#updates)), so a new template only makes the first start of a new
-   server faster.
+2. **Template.** Configure the [hosted release job](RELEASING.md#hosted-server-snapshots).
+   Each stable desktop release builds and selects a production snapshot. Existing servers keep
+   their data and use their own [update process](#updates).
 3. **Webhooks and secrets.** Put the live Stripe key and the Worker boat key in the shell, so they
    are not in the history, and run the setup with `gh` signed in:
 
    ```sh
    read -rs STRIPE_SECRET_KEY && read -rs BOAT_API_KEY && export STRIPE_SECRET_KEY BOAT_API_KEY
-   bun run hosting:setup --target=production --template=<snapshot from step 2>
+   bun run hosting:setup --target=production
    ```
 
    It makes the six Prices, the Customer Portal settings, the Stripe webhook endpoint and the boat
-   webhook. It writes the two keys, the two webhook signing secrets and the template to the `cloudflare-production` GitHub Environment. Run it again at any time: it keeps
+   webhook. It writes the two keys and the two webhook signing secrets to the `cloudflare-production` GitHub Environment. Run it again at any time: it keeps
    a secret that the Environment has. `--replace-webhooks` makes new signing secrets.
+   Run it again after a deploy that adds an event to `BILLING_WEBHOOK_EVENTS`
+   (`scripts/stripe-bootstrap.ts`), not before: an older Worker records an event that it does not
+   know as received, and Stripe does not send it again.
 4. **Stripe Dashboard.** In live mode, in the failed-payment settings for subscriptions (Revenue
    recovery → Retries), set "If all retries for a payment fail" to cancel the subscription or to
    mark it unpaid. Both stop the server.
@@ -279,15 +473,18 @@ servers, their webhooks and the cron continue.
    billing and server events in [ANALYTICS.md](../ANALYTICS.md). Only production gets them.
 6. **Secrets.** The `Deploy Cloudflare production` job in `.github/workflows/ci.yml` sends these
    from the `cloudflare-production` GitHub Environment. It refuses a set with only some values and a
-   Stripe key that is not live. A value that is not set keeps the value that the Worker has; to turn
+   Stripe key that is not live. OpenPanel credentials are required before any remote change.
+   An optional value that is not set keeps the value that the Worker has; to turn
    a feature off, run `wrangler secret delete <name>`.
 
    | Name | Kind | Value |
    | --- | --- | --- |
    | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | secrets, a pair | Step 3 writes them |
    | `BOAT_API_KEY`, `BOAT_WEBHOOK_SECRET` | secrets, a pair | Step 3 writes them |
-   | `OPENPANEL_CLIENT_ID`, `OPENPANEL_CLIENT_SECRET` | secrets, a pair | The client from step 5 |
-   | `HOSTED_SERVER_TEMPLATE` | variable | Step 3 (`--template`) writes the snapshot name from step 2 |
+   | `OPENPANEL_CLIENT_ID`, `OPENPANEL_CLIENT_SECRET` | required secrets, a pair | The client from step 5 |
+
+   The release job sets `HOSTED_SERVER_TEMPLATE` directly on the production Worker. Normal
+   deployments preserve it. A GitHub variable with that name is no longer used.
 
    The CI deploy is the production path: `.env.production` does not have all the values that it
    needs, such as `SITE_REPORT_HASH_SECRET`. `bun run api:deploy` sends the same names from
@@ -296,11 +493,30 @@ servers, their webhooks and the cron continue.
    connect from the desktop and the web client. Delete the server at the end.
 
 The cron runs each 5 minutes in production. An idle server stops 15 to 30 minutes after its last
-use, and the checks that repair a missed webhook run at most 5 minutes late.
+use (a focus ping is use only for 30 minutes after the last user action or a new focus period), and the checks that repair a missed webhook run at most 5 minutes late.
+
+### Sales reports
+
+The OpenPanel **Revenue and Customers** dashboard shows purchases and checkout outcomes.
+Revenue comes from verified `invoice.paid` events. It includes collected tax and discounts,
+before refunds and fees. Refunds and lost disputes are separate `billing_action` events with
+`amount_usd` (see [ANALYTICS.md](../ANALYTICS.md)); subtract them for net revenue. Amounts use USD cents. EUR and PLN amounts use the latest available
+ECB rate on or before the payment date in UTC; a refund or a dispute uses the rate of its own date, so a
+full refund can leave a small USD difference. The original currency and amount stay on the event.
+
+Daily `billing_snapshot` events show MRR and ARR. MRR includes active and overdue subscriptions,
+after discounts and before tax. Annual prices are divided by 12. Overdue MRR is separate.
+Do not sum snapshots across dates. Read each value with its `as_of` date.
+
+The account service stores source facts before it accepts a payment webhook. A separate D1
+ledger sends the events. A network failure or unknown delivery result becomes `uncertain`.
+Check OpenPanel before retrying such an event. A repeated invoice does not create new revenue.
+Checkout return, expiry, and payment failure are separate outcomes; none proves that payment occurred.
 
 ## Build the server template
 
-The template is a boat named snapshot. Build one from a release; each server then updates itself:
+The template is a boat named snapshot. The desktop release workflow builds and selects production
+snapshots automatically. For a separate test template, build one from a release:
 
 ```sh
 BOAT_TEMPLATE_API_KEY=... bun run hosting:template --version=0.9.0 \
@@ -317,32 +533,78 @@ named snapshot access. The script:
    libraries), checks the AppImage SHA-256, unpacks the AppImage to `/opt/OpenBot/app`, adds an
    AppArmor profile that lets Chromium make user namespaces, and enables `openbot.service` and the
    [update](#updates) units;
-3. checks that GoAhead did not start and that no profile or claim exists;
-4. saves the builder as `openbot-server-<version>` and deletes the builder.
+3. checks the installed version, that GoAhead did not start, and that no profile or claim exists;
+4. saves the builder as `openbot-server-<version>` (or `--name=<snapshot>`) and deletes the builder.
 
-The builder never starts GoAhead, so the template has no host identity and no session. boat keeps
-at most 10 named snapshots for each account.
+The builder never starts GoAhead, so the template has no host identity and no session. A retry
+reuses a ready snapshot with the same name or waits for a save in progress. It refuses a failed
+snapshot and never replaces an existing name. Automatic production releases reserve the prefix
+`openbot-server-production-` to avoid test snapshots in the same account. Keep each name tied to
+one release and account-service origin; do not use that production prefix for manual test builds.
+
+The builder stops before creating an eleventh snapshot. This is our automation limit:
+[boat permits additional paid snapshots](https://docs.boat.dev/api/reference/snapshots/list-named-snapshots).
+Before each production build, the release job removes `openbot-server-production-` snapshots of
+older releases and keeps the 3 newest releases, including the new one
+([details](RELEASING.md#hosted-server-snapshots)). It never removes other names. Before removing a
+test snapshot by hand, check both Workers and pending server creation records
+(`provider_template`); a pending retry still needs its original snapshot. Servers already made
+from a removed snapshot keep running.
 
 ### Updates
+
+Server Settings > Updates has the same controls as on a computer that updates itself: download,
+**Update when idle**, **Restart now**, automatic updates, and the switch that lets members update.
+GoAhead runs as the service user from a release that root owns, so it asks root to do the work
+(`src/main/hosted-update-adapter.ts`). It makes an empty file in its runtime directory:
+`/run/openbot/update-stage` to download, and `/run/openbot/update-install` to install.
+`openbot-update-request.path` then starts `openbot-update-request.service`, which runs
+`openbot-hosted-update request` as root. That removes the file without reading it and runs `stage`.
+For an install, it then stops GoAhead, runs `apply` and starts GoAhead again, also after a failure.
+A request that comes during a timer download waits for it while GoAhead runs. While a request runs,
+root writes the step to `/run/openbot-update.state` and changes its time every 5 seconds. GoAhead
+reads each change as download progress, so the download deadline finds a request that root never
+takes or that stops.
+
+The release that an older script moves into place has these units, but that script installs only
+the units it knows. So `openbot.service` runs `openbot-hosted-update trigger` as root before GoAhead
+starts; it installs and starts the request units when they are missing. GoAhead offers the controls
+only when `/etc/systemd/system/openbot-update-request.path` is there at its start. Otherwise, and on
+hosts older than this release, the panel checks the release (`host-release-v1`) and shows the
+host-managed update path. A container has no request units. A container of `docker/instances` uses
+the same `HostedUpdateAdapter` with folders that the host mounts in `/var/lib/openbot-update`; see
+[Updates from the app](docker.md#updates-from-the-app).
 
 The Linux build contains `scripts/hosting/` (without the TypeScript files) in `resources/hosting`.
 On a server, root runs `openbot-hosted-update`:
 
-1. `openbot-update.timer` runs `stage` 5 to 10 minutes after each start of the timer and then
-   about each 6 hours. It reads the `latest-linux.yml` (`latest-linux-arm64.yml` on arm64) of the
+1. `openbot-update.timer` runs `check` 5 to 10 minutes after each start of the timer and then
+   about each hour. `check` runs `stage` when no `stage` of `check` succeeded in the last 6 hours
+   (`/run/openbot-update.staged`, so the first `check` after a boot stages), and then the step that
+   [Start loop](#start-loop) describes. `stage` reads the `latest-linux.yml` (`latest-linux-arm64.yml` on arm64) of the
    latest GitHub release, the manifest that the Linux desktop updater reads. When that version is newer than the installed one, it downloads the
    AppImage, checks its SHA-512 against the manifest, unpacks it in `/var/tmp`, checks that it has
-   all hosting files, installs the packages in the `packages.txt` of that release, and copies it
-   to `/opt/OpenBot/staged`.
+   all hosting files, installs the packages in the `packages.txt` and `optional-packages.txt` of
+   that release, and copies it to `/opt/OpenBot/staged`. The packages install with `--no-remove`.
+   A package of `optional-packages.txt` is skipped when a command with its name already exists,
+   or when it needs a removal. `stage` runs the installed
+   script with the list of the new release, so a package that conflicts with a host package must
+   not be in `packages.txt`: an older script would remove the host package or stop.
    `staged.ready` comes after the last file. GoAhead keeps running. The download and unpack use
    idle CPU and disk priority.
-2. `openbot-update-apply.service` runs `apply` at boot, before `openbot.service`. boat stop and resume
-   work like a reboot, so the new release starts at the next wake of the server, not during use. It
-   copies `staged` to `app`, and then installs the scripts, AppArmor profile and units of the new
-   release. `.applying` and `staged` stay until all of this is complete, so after a stop or a
-   failure the next boot does it again, and `stage` does nothing until then. `openbot.service`
-   does not require `apply`, so it starts after a failure too: with the old release, or with a
-   partial copy after a failed copy, until the next boot.
+2. `apply` copies `staged` to `app`, and then installs the scripts, AppArmor profile and units of
+   the new release. `.applying` and `staged` stay until all of this is complete, so after a stop or
+   a failure the next start does it again, and `stage` does nothing until then.
+   `openbot-update-apply.service` runs `boot` before `openbot.service`. `boot` runs `apply` only on
+   a complete disk, or when `.applying` shows an interrupted copy. `openbot.service` does not
+   require it, so it starts after a failure too: with the old release, or with a partial copy after
+   a failed copy, until the next start. On a self-installed server, the new release starts at the
+   next boot, or when idle if the automatic update switch is on (it is off by default). A hosted
+   server installs it itself: when the release is staged, GoAhead asks root to
+   install it when idle, and when no connected client changed data or typed for 5 minutes and the
+   start was 5 minutes ago. Reading is not use. Server Settings shows this wait as "other work",
+   because `host-update-v1` has no reason for it. The automatic update switch of a hosted server
+   is always on.
 
 boat saves `/opt` by the paths that change, and it does not look into a directory that a rename
 moves. After the next stop, such a directory is empty or has its old files. So a release gets to
@@ -350,9 +612,17 @@ moves. After the next stop, such a directory is empty or has its old files. So a
 with a probe; not in boat documentation.]
 
 boat resumes a server on a machine that booted before, restores the disk lazily, and starts the
-units before the restore ends. `stage` waits until the restore ends (at most 4 minutes). `apply`
-waits only when it finds `staged.ready` or `.applying`, because GoAhead starts after it. When the
-restore does not show a staged release yet, the release applies at the next boot.
+units before the restore ends. The restore takes about 3.5 minutes. `stage` waits until it ends (at
+most 4 minutes), and GoAhead asks for `stage` before each install, so an install never stops
+GoAhead for the restore. `boot` waits only for an interrupted copy, because GoAhead starts after
+it. During a restore it skips a staged release and recovers an incomplete one.
+
+boat starts the desktop (`lightdm`) about 8 s after the resume, and then the enabled units of
+`multi-user.target` again, about 16 s after it. `openbot.service` is also wanted by
+`lightdm.service`, so it starts with the desktop. The second start of `openbot-update-apply.service`
+does nothing: the unit stays active (`RemainAfterExit`), and `boot` does nothing while GoAhead runs
+(after a failed `boot`). [Observed on a boat VM on 2026-10-11; not in boat
+documentation.]
 [Not confirmed in boat documentation: the `active` and `hydration-done` files in
 `/var/lib/ascii-lazy` that mark the restore. Observed on a boat VM.] `apply` never removes a staged
 release that is not complete.
@@ -363,6 +633,53 @@ installed version is newer. A staged release that is no longer the latest one, f
 withdrawn release, is removed at the next `stage` run. A server that starts before that run applies
 it. A release without all of its `resources/hosting` files cannot update a server.
 
+#### Start loop
+
+A server has no window for the recovery window of the desktop. A server whose start
+failed started again each 10 seconds, without an end, in earlier releases. Now main stops the loop
+(`src/main/server-start-halt.ts`):
+
+- at the first failure when the database is from a newer GoAhead (`newer_database`): a restart
+  cannot help;
+- for all other failures, at the third failed start in a row of the same version (`start_failed`).
+  A failed migration rolls back and counts as a failed start, because its cause can be temporary
+  (a full disk, a lock). A start that fails with an error stops the loop at once; after a crash,
+  the next start stops it. This is the count of the desktop recovery window (`start-attempts.ts`).
+
+Main then writes `openbot-start-halt-v1.json` in its user data folder. The file has the reason
+word, the app version and a time only. The journal shows the reason. Then main runs its safe mode
+(`src/main/server-safe-mode.ts`): it keeps a minimal Team API up, so each member's app shows why
+the server does not start and which version it runs. The safe mode opens no database and changes
+no user data. It writes the empty file `/run/openbot/server-safe-mode` while it runs. See
+[Team API](architecture/team-api.md#server-safe-mode).
+
+When the safe mode cannot start (no team, or no host credential), main exits with 78 as before.
+`openbot.service` has `RestartPreventExitStatus=78`, so systemd does not start it again.
+
+The next start reads and removes the file, logs the reason, and tries once more. A failure of that
+start stops the loop again. These start GoAhead again:
+
+- a restart or a resume of the server, or `sudo openbot restart` or `start`;
+- `sudo openbot update`;
+- `check` of `openbot-update.timer`, about each hour: when `openbot.service` is stopped with
+  status 78, or runs its safe mode, it runs `stage`, stops the safe mode, and starts the service
+  again, after `apply` when a newer release is staged. A hosted
+  owner has no shell, and a failure can be temporary (a full disk, no network), so each run tries
+  once more. It reads only the state of the unit (`ActiveState`, `ExecMainStatus`) and the
+  existence of the empty safe-mode file, never the content of a file of the service user.
+
+When GoAhead is not running or runs its safe mode, `openbot` commands that need the control socket
+say that the start loop stopped it, and name `openbot logs`, `sudo openbot update` and
+`sudo openbot restart`. The safe mode has no control socket.
+
+A Docker container has no systemd and no `openbot-update.timer`. There the safe mode ends after one
+hour with exit 78, and the restart policy starts the container again, with the backoff of Docker.
+Each second start after a halt tries again.
+
+There is no install or rollback action in the safe mode: a newer release is the fix, through the
+update paths above. `copy_release` of `openbot-hosted-update` still removes the old copy before it
+copies (`rm -rf`, then `cp -a`); see plan 011 item 3.
+
 A server that has no updater, such as one made from a template before 0.26.0, needs one upgrade by
 hand. With a boat key that has command and file access: upload `scripts/hosting/` to
 `/tmp/openbot-upgrade`, run `sudo systemctl stop openbot.service`, run `sudo bash /tmp/openbot-upgrade/provision.sh user <AppImage URL> <SHA-256>
@@ -371,11 +688,17 @@ folder and in `/srv` stays.
 
 On a server, `openbot-hosted-server` starts a D-Bus session, unlocks a gnome-keyring with a
 random password for each server (so `safeStorage` can keep the account session), and runs GoAhead
-with `--password-store=gnome-libsecret`. GoAhead uses the boat desktop: the lightdm session of the
+with `--password-store=gnome-libsecret`. The agents use the boat desktop: the lightdm session of the
 sandbox user on `:0`, with openbox. So boat's desktop viewer and GoAhead remote desktop show the same
 screen, and a click moves the keyboard focus to another window. After a resume, the script waits up
-to 2 minutes for that session. With no session, GoAhead runs under `xvfb-run`. The keyring files are
-in `/srv/openbot-hosted/keyrings`:
+to 2 minutes for that session. GoAhead shows its own windows on a 1280x800 Xvfb display that
+`xvfb-run` starts. `xvfb-run` adds the key of that display to `~/.Xauthority`, which has the key of
+`:0`, and lightdm keeps the other keys when it writes the file. The script names `:0` in
+`OPENBOT_AGENT_DISPLAY`, so an agent's screenshot and remote desktop do not show the GoAhead window
+(see [Computer Use and remote desktop](architecture/computer-use.md#agent-display-on-a-server)). With
+no desktop session, the server starts two Xvfb displays and Openbox on the agent display, as a
+[self-hosted server](self-hosted-server.md#how-it-works) does. The keyring files are in
+`/srv/openbot-hosted/keyrings`:
 
 - not in `~/.local/share/keyrings`: the boat image has a locked `default` keyring there, and a
   snapshot restore resets that folder after the service starts;
@@ -394,17 +717,55 @@ A VM that never signed in keeps its claim in its env file. Each start of that se
 work again for one hour, so a VM that missed the first hour, or whose plan ended before it signed in,
 signs in at its next start. After the 10 minutes that follow the first redeem, the Worker never
 accepts the claim again, until the owner revokes the session of the server: then its next start makes
-the claim work again, and the server signs in with a new session. A new `REMOTE_TICKET_PRIVATE_JWK` changes
+the claim work again, and the server signs in with a new session. The account device list shows the
+session with the server name and `hostedServer: true`, so the owner can see which session to revoke
+when its token leaks. A new `REMOTE_TICKET_PRIVATE_JWK` changes
 each claim, so a VM that has no working session cannot sign in after the change; delete that server.
 
 A start that cannot reach the account server does not use the claim. The start retry signs in
 again with backoff (30 s to 10 min) and then publishes the host.
 
+## Watchdog
+
+Before it starts GoAhead, `openbot-hosted-server` starts itself again with `--watchdog` in the
+background. Main rewrites `~/.config/OpenBot/openbot-run-marker-v1.json` every 60 s from its event
+loop (`src/main/run-marker.ts`). The watchdog reads the file every 30 s. When the content does not
+change in 20 reads (10 minutes) after it changed once in this run, the watchdog logs "GoAhead did not
+update its heartbeat for 600 seconds" and sends `SIGKILL` to the process in
+`/run/openbot/openbot.pid`. `Restart=always` starts the service again 10 s later. The watchdog does
+nothing:
+
+- before the first change of the file in this run;
+- until the start finishes: `openbot-start-attempts-v1.json` in the same folder has
+  `"attempt":null` only after the migrations, the services and the renderer load. Migrations and the
+  database `quick_check` run on the main thread and can take longer than 10 minutes on a large
+  database;
+- while the run marker does not have `"state":"running"`. Quitting and the server safe mode stop the
+  heartbeat, and the safe mode stays alive to keep the host reachable;
+- when the folder of the file has less than 1 MB free, because main ignores a failed write;
+- when the process in the pid file is not `openbot` in the cgroup of the service.
+
+The watchdog counts reads and does not compare clock times, so a boat resume, which moves the clock
+forward, does not stop GoAhead. It does not help when the whole machine stops responding; that needs a
+reboot of the VM.
+
+On 2026-11-21 a Standard server on Leaseweb (0.75.0) ran out of memory: agent dev servers, browser
+tabs and Docker used 11 GB and 6 GB of swap. The Team WebRTC bridge did not answer its checks, and
+main crashed it. The main thread then stopped in a blocking read of a Unix socket
+(`unix_seqpacket_recvmsg`, probably the reply of the zygote) and never returned. Main wrote no log
+line and used no CPU, and the host stayed off Signal for 24 hours until a restart. The Chromium call
+that blocked is not confirmed: the processes were gone after the restart.
+`scripts/hosted-watchdog-e2e.ts` (`bun run test:hosted-watchdog`) runs the watchdog with a 1 s
+interval against fake apps that write, stop writing or never write the file, that did not finish
+their start, that quit, or that are not `openbot`.
+
 ## Memory
 
 One systemd unit holds GoAhead, its browser tabs and every agent process: one `claude` process for
-each thread, and one set of MCP servers for each ACP session. A Starter server has 4 GB. The guards
-are only on a hosted server; the desktop app does not change.
+each thread, one set of MCP servers for each ACP session, and one set for each loaded Codex thread.
+A Starter server has 4 GB. The guards are on a hosted server, a
+[self-hosted server](self-hosted-server.md#memory) and a [container](docker.md#memory); the desktop
+app does not change.
 
 The unit (`openbot.service`):
 
@@ -425,34 +786,123 @@ The unit (`openbot.service`):
   less memory and does not protect main more: the memory test below shows the same victim in each
   case.
 
-The app (`HostedServerMemory`) reads the memory every 5 s. The free memory is the smaller of
+The app (`ServerMemory`) reads the memory every 5 s. The free memory is the smaller of
 `MemAvailable` and the free memory of the unit's cgroup (cgroup v2 `memory.max − memory.current`,
-plus `inactive_file` from `memory.stat`: the kernel takes that file cache back before the OOM killer
-acts). Each turn that started in the last 60 s counts 300 MB more, so routines that start together
+plus `inactive_file` and half of `active_file` from `memory.stat`: the kernel takes that file cache
+back before the OOM killer acts. The other half of the active cache counts as used, because it can
+be program code that runs). Each turn that started in the last 60 s counts 300 MB more, so routines that start together
 do not all pass the check before their processes grow. A start that fails counts nothing.
 
 | Level | When | What happens |
 | --- | --- | --- |
-| `ok` | Other times. After `low`, only at 256 MB above the `low` limit. | Turns start. |
-| `low` | Free memory is less than 512 MB or 12% of the total. | No new turn starts; the message stays queued. The agent shows one notice in each low period. The browser opens no new tab. |
-| `critical` | Free memory is less than 256 MB or 6% of the total. | As `low`. Also, the provider threads with no turn close one time. They open again from their session at the next turn. |
+| `ok` | Other times. After `low`, only at 256 MB above the `low` limit (10% of the total when that is less). | Turns start. |
+| `low` | Free memory is less than 512 MB or 12% of the total. Below 2.5 GB of total memory, 20% of the total replaces 512 MB, so a small server does not stay `low`. It is always at least 64 MB above the `critical` limit. | No new turn starts; the message stays queued. The agent shows one notice in each low period. The browser opens no new tab. At each sample, a Claude thread whose background tasks sent nothing for 30 minutes closes; with normal memory, background tasks keep their thread open. |
+| `critical` | Free memory is less than 256 MB or 6% of the total. | As `low`. Also, the provider threads with no turn close one time. They open again from their session at the next turn. Leftover agent processes stop (see below). |
+
+Agent processes (`AgentProcesses` in `src/main/server-memory.ts`):
+
+- Each provider process gets `OPENBOT_AGENT_PROCESS=1`, so every program that an agent starts has
+  it too. A job that an agent detaches (`nohup`, `&`, a routine wake-up job), and the workers of a
+  build whose parent the OOM killer stopped, leave main's tree: the kernel gives them to PID 1. The
+  variable still finds them. Xvfb, D-Bus and the keyring start before main and do not have it.
+- Every 5 s, each marked process gets an `oom_score_adj` of at least 500, also after it leaves main's
+  tree, and each of its threads gets the nice value 10. Main and the Electron processes keep their
+  values. The Computer Use driver and remote desktop get the OOM value as children of main, but keep
+  their nice value. So a full CPU slows the agents' builds and not main or the WebRTC host. Without
+  this, a build with many workers took all the CPU and memory, main stopped answering, and the
+  clients lost the connection.
+- At `critical`, main stops leftover processes: marked processes that are not in main's tree. It
+  sends SIGTERM to the largest ones that never had a child and run for at least 5 s, until the free
+  memory is 256 MB above `critical`, and one SIGKILL to each one that still runs 5 s later. A shell
+  or a build that runs other programs is never stopped, and the short command that a shell runs next,
+  such as a routine wake-up command, is too young to be stopped. So a detached job's shell still
+  wakes the agent, with the exit status of the job: 143 when the stopped process was the shell's own
+  child, else the status that the job gives. A job of one process, such as a preview server, is
+  stopped. A provider and its own children are never stopped: the kernel's OOM killer decides for
+  them. The log has one warning for each signal, with the pid, the short name and the memory, never
+  the command line.
+- `NODE_OPTIONS` of each provider process gets `--require=<resources>/agent-runtime/cpu-limit.cjs`.
+  In a container or a unit with a CPU limit, `os.cpus()` lists every CPU of the host, and build tools
+  such as Next.js start a worker for each (63 on a 64-CPU host). The module makes `os.cpus()` and
+  `os.availableParallelism()` count only the CPUs of the cgroup limit (`cpu.max`) and of the CPU
+  affinity. It changes nothing without a limit, or when `/proc` already shows the limit (LXCFS). Codex gets both variables in the
+  environment of its app-server, not in each thread configuration, so its sessions are not replaced.
+  The Claude Agent SDK removes `NODE_OPTIONS` from the environment of the CLI, so Claude gets it in
+  the `env` of its flag settings (`--settings`), which the CLI gives to the Bash tool and its hooks.
 
 When the level is `ok` again, each held message starts. If a file cannot be read, the level stays
 `ok` and main logs one warning.
 
-Only a fixed number of turns run at the same time, from the memory of the server: 4 up to 5 GiB,
+Only a fixed number of turns run at the same time, from the memory of the server: 2 up to 5 GiB,
 8 up to 10 GiB, and 16 above. A turn that starts, runs, or compacts the context uses a slot. When
 the slots are full, the messages wait in the queue: a message from a person starts first, then
 routine runs and teammate messages, and the oldest first in each group. No turn waits for a slot
 that another turn holds, because a message to a teammate ends the turn that sends it. A queued
 message counts as use, so the server does not stop while messages wait.
 
-An agent's browser tab that nobody uses for 30 minutes unloads its page and keeps a blank page, as a
-restored tab does. The tab stays in the list with its URL, title and last preview. The next use by the agent or
+An agent's browser tab that nobody uses for 30 minutes unloads its page and ends its renderer
+process. A tab restored at start has no renderer process until it is used. The tab stays in the list with its URL, title and last preview. The next use by the agent or
 a person loads the page again, without its history and page state. When memory is `low`, a tab
 unloads after 5 minutes. The active tab, a popup and its opener, and a tab with a
 takeover, a secret, a recording, a live view, staged uploads or sound do not unload. This also
 applies to the desktop app.
+
+## Connector events
+
+All messaging platforms use one path in Signal (`remote/api/src/ingress-queue.ts`). When an event
+comes for a route (a Slack workspace, a Discord guild or a Telegram chat) and no `ingress` socket
+holds it:
+
+1. Signal asks the Worker, signed, `POST /v2/remote/route-wake` with the route and `wake`. The Worker
+   finds the host in `slack_workspace_routes`, `discord_guild_routes`, `telegram_chat_routes` or
+   `webhook_routes` (a route that is not revoked), and
+   answers `not_hosted`, `ended`, `sleeping` or `starting` before it starts anything, because Slack
+   waits at most 3 seconds. With `wake`, the server then starts in the background (`waitUntil`) as for
+   a client (`last_wake_reason = 'message'`). A plan that ended starts nothing. Signal asks at most
+   once a minute for each hosted route, and once in 10 minutes for another route.
+2. `wake` is true only for an event that addresses GoAhead: a Slack button press, mention, direct
+   message or thread reply from a person; a Discord mention or button press; a Telegram message or
+   button press.
+3. For such an event and a server that starts, Signal keeps the delivery frame, sealed to the host's
+   queue key (`@openbot/contracts/signal-protocol/ingress-queue`), in memory for at most 10 minutes
+   (64 events and 192 KB for each host). Slack gets 200, so it does not send the event again. Because
+   the start runs after the answer and can fail, Signal asks for the start again once a minute while
+   the host has kept events. Signal
+   cannot read a kept event, and a restart of Signal loses it. Signal also keeps the queue keys only
+   in memory, and a host sends its key only in its hello. So after a restart of Signal, a server that
+   sleeps still starts for an event, but Signal does not keep that event: Slack sends it again, and a
+   Telegram or Discord event is lost. This is accepted: it happens only to the events that arrive
+   before the host connects again. Signal keeps the keys of at most 100,000 hosts.
+4. Another Slack event of a hosted server gets 200 and is dropped: the host keeps only messages that
+   address GoAhead, and joins the public channels again when its connection starts.
+5. When the host's socket connects again, Signal sends each kept event of the routes that the socket
+   holds, in order, as `queued-delivery` with an `id`. The host opens it with its private key, handles
+   it as a normal delivery, and sends `queued-delivery-ack`. Signal keeps the event until that ack, and
+   sends it again on the host's next hello: the first socket can close before the host handled it. The
+   transports drop an event that they already handled.
+
+The host makes its queue key once (`src/main/ingress-queue-key.ts`, `openbot-ingress-queue-key-v1.json`
+in the user data folder), encrypted by the operating system, and sends the public half in each
+`ingress` hello. An older host sends no key, so Signal keeps nothing for it; a hello with no key
+removes the key that Signal had. A kept delivery that arrives before its connection has started waits
+up to 60 seconds for it, only while the connection can still start. When the account service does
+not answer, Signal keeps nothing and does not remember the failure. Signal says `ingress-queue` only
+when the account service had `/v2/remote/route-wake` when Signal started, so deploy the account
+service first.
+
+A generic webhook for a route that no socket holds also starts a hosted server that sleeps, but
+Signal keeps nothing: only the host can check the webhook's signature, so Signal answers 503 at once
+and the sender sends again (`docs/webhooks.md`). Because Signal cannot check the sender, two limits
+apply. A webhook starts a host at most once in 30 minutes, so requests to a known route URL keep a
+server awake for at most about half of the time (the idle stop is after 15 minutes). And a route that
+Signal has no recent answer for asks the account service at most 60 times a minute from one address
+(1/10 of `REMOTE_MAX_MESSAGES_PER_MINUTE`), and 600 times a minute from all addresses together (the
+full limit), so unknown route IDs cannot flood D1. Each wake request also counts against these lookup limits. A start that fails does not count against the 30
+minutes. A server that stays `starting` (a resume failed and its row stays `running`) is asked to
+start again, also at most once in 30 minutes. A route of a host ID that another owner registered again does not start it. A server that
+went back to sleep less than 30 minutes after a webhook started it waits for the end of the 30
+minutes; senders that retry for hours, such as Shopify and Stripe, still deliver. An account service
+without the `webhook` route answers 400, and Signal then starts nothing, as before.
 
 ## Tested on boat
 
@@ -472,6 +922,12 @@ secret in `/srv` stays. From the resume call to the GoAhead start took 7 to 34 s
 took 40 ms. Most of the time is boat: it restores the disk and then starts the enabled units, 5 to
 20 s after the sandbox is `idle`.
 
+A wake test on 2026-10-11 (one hosted server with 0.37.0) measured, from the resume call: boat
+ready at 4 s, `openbot.service` at 17 s and the host register at 22 s. A wake with a staged release
+took 3 min 35 s, because `apply` waited for the restore. With the start at `lightdm`,
+`openbot.service` started at 8 s and the host registered at about 20 s: Electron starts slowly from
+the lazily restored disk, and the desktop session holds the display until about 12 s.
+
 A resize test on 2026-09-28 (one plain sandbox with `noEnv`, `small → default → small`, each a stop
 and a resume with `type`) confirmed that boat changes the machine in place with the same sandbox
 ID (2 vCPU/4 GB, then 4 vCPU/8 GB, then 2 vCPU/4 GB). Files in `/srv` and in the home folder stayed,
@@ -479,7 +935,7 @@ and an enabled systemd unit started again after each resume. The stop took 25 to
 sandbox was `idle` 3 to 6 s after the resume call.
 
 A memory test on 2026-09-30 (one `small` sandbox with `noEnv`, the scripts and the Linux AppImage of
-main, and a `HostedServerMemory` driver in a unit with the same limits as `openbot.service`)
+main, and a `ServerMemory` driver in a unit with the same limits as `openbot.service`)
 confirmed:
 
 - boat VMs use cgroup v2 with the memory controller, and the unit gets `memory.max` = 90% (3.4 GiB);
@@ -512,6 +968,1068 @@ A boat trial account refuses a sandbox with no auto-stop, or a TTL longer than 2
 `PATCH /sandboxes/:id {ttlSeconds}` sets `archiveAfter` to the current time plus the TTL. A trial
 allows only `small` and `default`, so a Pro server (`large`) needs a paid boat plan.
 
+A durability test on 2026-10-15 (`scripts/hosting/hosted-database-durability-e2e.ts`, one hosted
+sandbox) stopped the sandbox while a writer used SQLite in WAL mode in the home folder:
+
+- with automatic checkpoints, the database came back damaged after the second stop
+  (`btreeInitPage() returns error code 11`);
+- with an empty WAL and only small appends at the stop, 9 checks were healthy;
+- with no automatic checkpoint, the main file was not damaged, but in 3 of 6 restores the WAL
+  header was torn, and SQLite ignored the full WAL. The rows of that run were lost;
+- with `openbot-boat-pre-stop` for the writer unit (`--mode=pre-stop`), each of 4 stops during
+  writes gave a healthy database with every committed row, and no `/run` flag after the resume.
+
+A stop-order probe on the same day (a unit that records `SIGTERM` and writes each 200 ms) showed
+that boat saves the disk while the processes run, about 3 seconds after the stop call, and sends no
+`SIGTERM` before the save. A pre-stop hook that slept 20 seconds started at once after the stop
+call, and the last write that the restore kept was from after the hook ended. Thus boat waits for
+the hook before it saves the disk.
+
+An install test on the same sandbox put the new `openbot-hosted-update`, `openbot.service` and hook
+in place, as an older release does when it updates. At the next start, `trigger` installed the hook
+as `user` with mode 0755. It did not change a current hook, kept a hook that GoAhead did not write
+(a file, a link or a FIFO, with no wait), and replaced a changed GoAhead hook. At a stop of the real GoAhead, the hook
+stopped `openbot.service` in 0.3 seconds and ended with 0. After the resume (a new boot ID), the
+flag was gone, GoAhead ran, and `openbot.db` passed `quick_check`.
+
+## Leaseweb VPS
+
+The Worker orders no Leaseweb server: the operator buys each VPS and adds it to a pool. A Leaseweb VPS
+runs all the time, so it has no stop and no resume. A new hosted server starts on a ready machine of
+the pool, and in a boat sandbox when the pool has none
+([A new server on a pool machine](#a-new-server-on-a-pool-machine)). An operator can move one hosted
+server at a time from boat to a VPS; [Move a server from boat](#move-a-server-from-boat) has the
+record and the steps.
+For a server that never was on boat, the VPS is a [self-hosted server](self-hosted-server.md) that
+an operator sets up for the customer. The customer is the owner: the server signs in with a
+[server claim](self-hosted-server.md#sign-in-with-a-server-claim) for the customer's email, never
+with the account of an operator. One command does all the steps below.
+
+Before you start, you need:
+
+- The root `.env.keys` with `DOTENV_PRIVATE_KEY_PRODUCTION`. `apps/auth-api/.env.production` then
+  gives the five Leaseweb keys, `SERVER_CLAIMS_ADMIN_TOKEN`, the Cloudflare token for D1 and
+  `OPERATOR_KEYS_HOST`, the SSH address of the core server of the operators.
+- An SSH key of your computer in `/root/.ssh/authorized_keys` of the core server of the operators.
+- The VPS ID, the owner's email, one short word for the customer (`a-z`, `0-9`), and the server name
+  that the customer sees (6 to 32 characters).
+
+```sh
+env="bunx @dotenvx/dotenvx@2.38.2 run --quiet -f apps/auth-api/.env.production -fk <root>/.env.keys --"
+# 1. Find the VPS just bought: each VPS with no reference on the five accounts.
+$env bun scripts/hosting/leaseweb-pool.ts free
+# 2. See the plan, then do it.
+$env bun scripts/hosting/leaseweb-pool.ts custom <VPS ID> --owner=<email> --customer=<word> \
+  --name="<server name>" --plan="<plan name>" --price=499 --vcpu=16 --memory=64 --storage=500 --support
+$env bun scripts/hosting/leaseweb-pool.ts custom <VPS ID> --owner=<email> --customer=<word> \
+  --name="<server name>" --plan="<plan name>" --price=499 --vcpu=16 --memory=64 --storage=500 --support --apply
+```
+
+When it ends, the owner sees the server in the app, and can invite the other members. With
+`--plan`, the owner sees the paywall of that plan first. To set, change or remove the plan of a
+server that runs already, see [The plan of a custom server](#the-plan-of-a-custom-server).
+
+- With no `--apply`, it only shows what it would do. It refuses a VPS with a reference, and a VPS of
+  the hosted pool.
+- A custom VPS never has the reference `pool`, and each pool step that changes a machine
+  (`prepare`, `move`, and then `sync`) needs it, so the pool never uses a custom VPS. When `add` and
+  `custom` take the same VPS at the same time, each one reads the reference again, and the one that
+  lost stops.
+- It sets the reference `custom-<NN> <customer> <email>` first, with the next number after the
+  highest on all five accounts, and reads it again (see [Leaseweb references](#leaseweb-references)).
+- It signs in with the root password of the Leaseweb API one time. After the bootstrap, only the
+  operator keys sign in, so one operator key must be a key of this computer.
+- It makes the claim just before the install, because a claim works for 15 minutes.
+- At the end it runs `leaseweb-bootstrap-e2e.ts`, which restarts the server, and then checks that
+  GoAhead is online and that D1 shows the owner as the active owner of the server.
+- A run that stops can run again with the same arguments: it continues with the same reference,
+  does not install again when the owner is signed in, and stops when another account is signed in.
+- Its output has no email and no key. The report of the checks is in
+  `.openbot-build/leaseweb-bootstrap/`.
+
+The steps of the command:
+
+1. Order a VPS with Ubuntu 24.04 or 26.04. The order takes no SSH key and no user data. The root password
+   comes from `GET /publicCloud/v1/vps/{id}/credentials`.
+2. Install GoAhead with `install-server.sh` and a [server claim](self-hosted-server.md#sign-in-with-a-server-claim)
+   for the customer's email.
+3. Run `scripts/hosting/leaseweb-bootstrap.sh` as root, with the public keys of the operators. Each
+   release also has it in `/opt/OpenBot/app/resources/hosting`.
+
+   ```sh
+   ssh root@<address> bash -s "$(ssh <core server> cat /root/.ssh/authorized_keys | base64 | tr -d '\n')" \
+     <scripts/hosting/leaseweb-bootstrap.sh
+   ```
+
+4. Restart the server one time before a customer uses it. The bootstrap writes GRUB to the disk
+   again, and a boot fault must show now. `leaseweb-bootstrap-e2e.ts --restart=yes` does this and
+   checks the result.
+
+The bootstrap does not restart GoAhead, and a second run gives the same state:
+
+| Part | Result | Files |
+| --- | --- | --- |
+| SSH | Keys only, no forwarding. The operator keys sign in as root, and as no other user. | `/etc/ssh/sshd_config.d/00-openbot-hardening.conf`, `/etc/ssh/openbot-operator-keys/root` |
+| Egress rules | The service user cannot connect to the CloudStack router (the DHCP server, which gives metadata and a reset root password to each process that asks), nor to private, link-local and multicast addresses. No user can connect to TCP port 25. | `/usr/local/sbin/openbot-egress-firewall`, `/etc/openbot/egress-router`, `openbot-egress-firewall.service`, `openbot.service.d/10-egress-firewall.conf` |
+| Updates | Security updates each day. They restart neither the server nor GoAhead. Ubuntu (`needrestart`) restarts each other service that uses an updated library. | `/etc/apt/apt.conf.d/20auto-upgrades`, `52openbot-unattended`, `/etc/needrestart/conf.d/50-openbot.conf` |
+| Kernel | A new kernel gets a boot entry: the bootstrap installs `grub-pc` when the image has no `update-grub`. The boot arguments of the image stay. | `/etc/default/grub.d/50-openbot.cfg` |
+
+The rules load before the network starts, with the router of the last run, and again before each
+start of GoAhead, with the router of the current DHCP lease. `openbot.service` requires the rules
+unit, so GoAhead does not run without them. The rules also refuse the service user a container
+network in 172.16.0.0/12 and a VPN in 100.64.0.0/10; change `PRIVATE4` in the helper for a server
+that needs one. They do not filter incoming connections: a port that an agent opens on all
+addresses is open to the internet.
+
+GoAhead thus keeps its old libraries until the operator restarts the service, and the server runs
+its old kernel until the operator restarts the server. Plan those restarts.
+
+A server has three names, and each one can change later:
+
+| Name | Command | Notes |
+| --- | --- | --- |
+| Leaseweb reference | `PUT /publicCloud/v1/vps/{id}` with `{"reference": "<name>"}` | At most 255 characters; `@`, `+`, a space and letters outside ASCII are kept. `GET /publicCloud/v1/vps?reference=<text>` finds each server that has the text in its reference, with no difference between capital and small letters. |
+| GoAhead server name | `openbot name <name>` as the service user | 6 to 32 characters. No restart. The customer sees this name. |
+| Linux hostname | `hostnamectl set-hostname <name>` | Set it before GoAhead starts, or restart GoAhead after it. |
+
+The X authorization of the virtual display has the hostname in it. After a hostname change, a new
+program of a running GoAhead cannot open the display ("Authorization required") until GoAhead
+restarts.
+
+#### Leaseweb references
+
+The reference tells each operator and each agent which VPS has an owner. All VPS on all five
+Leaseweb accounts use one scheme:
+
+| Reference | Use | Example |
+| --- | --- | --- |
+| None (no reference, or an empty one) | Not used. **Only a VPS with no reference can be taken for a new use.** | |
+| `pool` | In the hosted pool. It does not tell whether a server has the VPS: a purchase gives a VPS to a server in D1 and does not change the reference. `leaseweb-pool.ts status` shows the free ones. Only `leaseweb-pool.ts` and [Move a server from boat](#move-a-server-from-boat) use a pool VPS. Before 2026-11-13 a free pool VPS had `pool-free`; the script reads it as `pool`. | `pool` |
+| `<owner email> <first 8 characters of the GoAhead server ID>` | In the hosted pool, with a hosted server. `move` sets it for a moved server, and `sync` for a server that started on the machine. A label for the Leaseweb panel only: `sync` sets `pool` again on a free pool VPS that still has one. Do not decide from it whether a VPS is free. | `jane@example.com 1a2b3c4d` |
+| `custom-<NN> <customer> <owner email>` | A server for one customer, not in the pool. `<NN>` is the next number after the highest on all accounts; `leaseweb-pool.ts custom` sets it. `<customer>` is one word in small letters. | `custom-01 acme jane@example.com` |
+| `openbot-signal-<home>` | A Signal machine (see `docs/remote-session-deployment.md`). | `openbot-signal-us` |
+| `pool-test-<NN>` | A test machine of the operator. | `pool-test-01` |
+
+`leaseweb-pool.ts traffic [--from=YYYY-MM-DD] [--to=YYYY-MM-DD]` is read only. It shows the public
+traffic in and out of each VPS on the five accounts, from the first day of this month (UTC) to today,
+and the part of the traffic pack of its contract that the outgoing traffic used. Leaseweb counts only
+the outgoing traffic of a VPS against the pack. The output has the reference with no email, and
+`server` for a hosted server.
+
+To take a VPS:
+
+1. List the VPS of each account (`LEASEWEB_API_KEY_NL`, `_DE`, `_US`, `_AU`, `_SG`) and select one
+   with no reference in the location you need.
+2. Set its reference at once, before any other work on it. Then read the VPS again: when the
+   reference is not yours, another operator took it, and you select another one.
+3. Never take a VPS that has a reference, also `pool`. A pool VPS leaves the pool only with
+   `leaseweb-pool.ts remove`, by a decision of the operator. `remove` keeps the reference
+   `pool`, so the operator then sets the new reference, or clears it with
+   `{"reference": ""}` when the VPS is not used.
+
+`leaseweb-pool.ts add` gives `pool` to a VPS with no reference, and refuses a VPS with another
+reference. For a pool VPS, only the record of the account service (`operator_host` in D1) tells
+which VPS is free; a unique index on it refuses a second server on one VPS. Do not select a pool VPS
+from the Leaseweb panel: `move <server ID> auto` selects a free one when the move starts. The email in the reference goes to Leaseweb, so `PRIVACY.md` must name that before a
+customer server gets one.
+
+A pool VPS and a custom VPS also use these names:
+
+| Name | Value | Example |
+| --- | --- | --- |
+| Linux hostname | `lsw-<Leaseweb VPS ID>`; it never changes | `lsw-12728110` |
+| GoAhead server name | The customer's choice | |
+
+The operator keys are a file with one public key for each operator, in the format of
+`authorized_keys`, with no options. The fixed place of the list is `/root/.ssh/authorized_keys` of
+the core server of the operators: read it at each run, as the command above does, so that the same
+persons have access to each server. `leaseweb-pool.ts` reads it at each run from `OPERATOR_KEYS_HOST`,
+so each bootstrap that it runs installs all the operator keys. `--keys=<file>` only adds keys to that
+list. The bootstrap replaces the list on the server: a file with one key once left 106 machines with
+the key of only one operator. The list is not in this repository, which is public, and not in the
+bootstrap, which each release has. Only public keys go on a server: each operator keeps the
+private key.
+
+- The list replaces the list of the last run. To remove an operator, run the bootstrap with the
+  shorter list on each server. A run with no list keeps the keys.
+- A list with a line that is not a public key stops the run before a change.
+- The keys are in a file of root, not in `/root/.ssh/authorized_keys`, so the service user and the
+  agents cannot read a path that they can change. A key that an operator adds to
+  `/root/.ssh/authorized_keys` by hand still works.
+- An operator has root access to the files, chats and provider sessions of the customer.
+- Without a list, the password session of the operator is the last SSH session.
+
+The second way in is the Leaseweb API, which works below the operating system: `reboot`, `console`,
+`resetPassword`, and `attachIso` with the `GRML` image. So the Leaseweb API key gives full access
+to each server and its disk. Keep it only where the operator runs. The key of the account that
+has the customer servers (Netherlands) is `LEASEWEB_API_KEY_NL` in the encrypted
+`apps/auth-api/.env.production`. The deploy script does not send it to the Worker. Send it in the
+`X-LSW-Auth` header:
+
+```sh
+bunx dotenvx run -f apps/auth-api/.env.production -fk <root>/.env.keys -- \
+  sh -c 'curl -sS -H "X-LSW-Auth: $LEASEWEB_API_KEY_NL" "https://api.leaseweb.com/publicCloud/v1/vps?limit=50"'
+```
+
+One Leaseweb account is for one sales organization, and an API key sees only the servers of its
+account: the key of the German account does not list a server in Amsterdam. The key of the German
+account, which has the test VPS in Frankfurt, is `LEASEWEB_API_KEY_DE` in the same file. The keys of
+the accounts that have the Signal machines are `LEASEWEB_API_KEY_US`, `LEASEWEB_API_KEY_AU` and
+`LEASEWEB_API_KEY_SG`.
+
+### The plan of a custom server
+
+A custom server can have one plan. When the owner opens the server, the app shows a paywall with that
+plan, and the owner pays it in Stripe Checkout. Until the payment, the other members see a screen
+that asks them to wait for the owner. A server with no plan has no paywall.
+
+When the billing country is in the EU, the UK or Turkey and the account has no VAT ID, the paywall
+asks the owner to accept that the service starts during the 14-day withdrawal period, as the hosted
+plans page does. Subscribe stays off until the owner selects the checkbox. The Worker writes the time
+of the request to `openbot_early_start_at` on the Checkout Session and the subscription.
+
+`custom --plan=...` sets the plan at the setup. `custom-plan` shows, sets, changes or removes the
+plan of a server that runs already. It takes the GoAhead server ID, which is the last line of the
+`custom` command and the `host_id` in D1, not the VPS ID:
+
+```sh
+# Show the plan and the subscription status.
+$env bun scripts/hosting/leaseweb-pool.ts custom-plan <server ID>
+# See the change, then do it.
+$env bun scripts/hosting/leaseweb-pool.ts custom-plan <server ID> --plan="<plan name>" --price=499 \
+  --vcpu=16 --memory=64 --storage=500 --support
+$env bun scripts/hosting/leaseweb-pool.ts custom-plan <server ID> --plan="<plan name>" --price=499 \
+  --vcpu=16 --memory=64 --storage=500 --support --apply
+# Remove the paywall.
+$env bun scripts/hosting/leaseweb-pool.ts custom-plan <server ID> --remove --apply
+```
+
+| Flag | Value |
+| --- | --- |
+| `--plan` | The plan name that the owner sees, 1 to 60 characters. Stripe shows it as `GoAhead <plan name>`. |
+| `--price` | The price of one period, before tax, for example `499` or `499.50`. |
+| `--currency` | `eur` (default), `usd`, `pln` or `brl`. |
+| `--interval` | `month` (default) or `year`. |
+| `--vcpu`, `--memory`, `--storage` | The spec that the paywall shows: vCPU, memory in GB, storage in GB. |
+| `--support` | The paywall shows personalized support. |
+| `--remove` | `custom-plan` only: remove the plan and the paywall. |
+| `--env=test` | Use the test D1 (`openbot-auth-test`). |
+| `--env=local` | `custom-plan` only: use the local D1 of `bun run dev:api` in this worktree. No Cloudflare token is necessary. |
+
+- The plan is a row of the D1 table `custom_server_offers`. `custom` writes it after the D1 owner
+  check.
+- `custom-plan` refuses a hosted server: its plan is a hosted plan.
+- A plan changes, or goes, only while the server has no paid subscription and no open checkout. A
+  checkout stays open for 35 minutes, and a change in that time could lose the payment. When the
+  server pays already, change that subscription in Stripe.
+- Checkout uses a Stripe price made for the session (`price_data`), with the metadata
+  `openbot_kind=custom_server` and the server ID. The webhook stores the subscription and its status.
+  The status `active`, `trialing` or `past_due` removes the paywall; any other status shows it again.
+- Each change, from Stripe or from `custom` and `custom-plan`, sends `account-servers-changed` to the
+  active members, and the apps read the server list again. The Worker sends the events of the
+  operator commands at its next cron run, within one minute.
+- The paywall is in the apps only. The server itself does not stop when the plan is not paid.
+
+### A new server on a pool machine
+
+A customer who pays gets a server at once: on a machine of the pool when one is ready, and in a boat
+sandbox when none is. A server that starts on boat moves to a VPS later
+([Move a server from boat](#move-a-server-from-boat)). Developer decision, 2026-11-13.
+
+The Worker cannot connect to a machine, and it has no Leaseweb key. So the machine asks:
+
+1. `leaseweb-pool.ts prepare <VPS ID>... --apply` installs the newest GoAhead, disabled,
+   on each free machine, as for a move. Then it offers the machine: it makes a random token, stores the
+   SHA-256 of the token in `operator_hosts.assign_token_hash` (migration 0055), and runs
+   `move-from-boat.sh offer leaseweb:<VPS ID>` on the machine with the token on standard input. `offer`
+   refuses a machine that has the data of a server. It writes the token to `/etc/openbot-pool/token`
+   (root only) and starts `openbot-pool-wait.service`.
+2. The unit sends `POST /v2/hosting/pool/assignment` with `{hostId, token}` each 10 seconds. The Worker
+   compares the hash, stores the time in `operator_hosts.seen_at` (at most one write each 60 seconds)
+   and answers `{"state":"waiting"}`. A wrong token gets `401 hosted_pool_token_invalid`; the unit then
+   removes the token and stops. `leaseweb-pool.ts remove` clears the token in D1, so a machine that left
+   the pool gets the same answer and stops asking.
+3. A machine is **ready** when it is in the pool, no server names it, it has a token, and it asked in
+   the last 150 seconds (`POOL_SEEN_WITHIN_MS`).
+4. At the payment, the Worker reads the ready machines with the product of the plan: `VPS01` for
+   Starter, `VPS02` for Standard, `VPS03` for Pro. It never uses a larger or a smaller machine. The
+   currency gives the locations (`poolLocations`): a purchase in `usd` or `brl` gets a machine in
+   `WDC-02`, and one in `AMS-01` when `WDC-02` has none. A purchase in `eur` or `pln` gets only a
+   machine in `AMS-01`, so that its data stays in the EU, as on boat. A machine in each other location
+   gets no new server; `PRIVACY.md` names the locations, so change the two together. In a location,
+   the machine that was added first comes first. One `UPDATE` writes `operator_host` and the hash of a host ID
+   claim, and it changes no row when another server has the machine. So two payments in the same second
+   never get one machine. After three machines that another payment took, the server starts on boat.
+5. The next request of the machine gets `{"state":"assigned","serverId":…,"claim":…}`. The unit runs
+   `openbot-hosted-env` as the service user with the two values (the same helper as in the boat setup
+   script), enables and starts `openbot.service`, then removes the token and disables itself. The
+   answer is the same until GoAhead signs in, so a machine that restarts in this step asks again.
+6. GoAhead redeems the claim (`POST /v2/hosting/claims/redeem`). The Worker then sets the row to
+   `running` and clears the token hash of the machine. From here the server is the same as a moved server: the tables of
+   [Move a server from boat](#move-a-server-from-boat) apply, but it has no `retired_sandbox_id`, so a
+   delete sends no call to boat.
+
+The row of such a server has `operator_host`, no `provider_sandbox_id`, no `provider_template` and no
+`retired_sandbox_id`. Until the sign-in it has `observed_state = 'starting'` and
+`last_wake_reason = 'create'`.
+
+When a step fails, the customer still gets a server:
+
+| Fault | Result |
+| --- | --- |
+| No ready machine of the product, or the pool query fails | The Worker makes the boat sandbox in the same request, as before, and sends a [pool alert](#pool-alerts). |
+| The machine does not start GoAhead, or GoAhead does not sign in, in 4 minutes (`POOL_START_LOST_AFTER_MS`) | The cron takes the server off the machine and makes a boat sandbox for it. The claim of the machine stops working. The machine loses its token, because its disk can have the start of a server; `status` shows it as not ready. Run `prepare --reinstall` for it. |
+| The plan ends before the sign-in | The row gets `error` and no machine. A renewal sets the server up again. |
+| The owner deletes the server before the sign-in | The delete is the usual one. `sync` reinstalls the machine. |
+
+`sync` does not stop or start a server that waits for its first sign-in. For a server that started on
+a machine and signed in, `sync` sets the Leaseweb reference to the owner email and the first 8
+characters of the server ID. The Worker cannot do that: it has no Leaseweb key.
+
+The operator keeps the buffer. `status` shows, for each location and product, the free machines and
+how many are ready, and names each free machine that is not ready. The `hosted_pool_snapshot` event
+has the same number (`ready`). After `sync` reinstalls a machine, run `prepare` for it, so that the
+next customer can get it. A machine that `move` uses loses its token first: `move` stops when a new
+server got the machine in that moment.
+
+A machine of the pool is not the boat image:
+
+- It has no agent CLI for all users (`claude`, `codex`, `pi`) and no `node`. At start, a hosted
+  server downloads the CLI of each provider that an agent uses and that is not off. The user
+  downloads the CLI of another provider in GoAhead.
+- It has no Docker and no boat desktop. GoAhead uses its own virtual displays.
+- It shows the storage of the plan (25, 75 and 150 GB), the same numbers as the pricing page
+  (`storageTierGb`).
+- The clients show no restart action, and the server does not stop when it is not in use.
+
+Measured on the test Worker with a real Leaseweb VPS 2 (smoke, 2026-11-13): `prepare` of a clean
+machine takes about 3 minutes. GoAhead on the machine signed in 9 seconds after the payment, and the
+server was online after 13 seconds. A start on boat took 25 seconds to the sign-in. A server whose
+machine did not start GoAhead went to boat 270 seconds after the payment and signed in 15 seconds
+later; the late start of GoAhead on that machine got "The server claim is invalid or used."
+`prepare --reinstall` made that machine ready again in 213 seconds, and after `remove` the unit on
+the machine stopped at its next question.
+
+`bun run test:hosted-pool-assignment` checks the assignment, the request of the machine, the sign-in,
+the two fallbacks to boat and a payment for two servers at the same time, on the real service with
+SQLite, a fake Stripe and a fake boat.
+
+### Move a server from boat
+
+A move is a manual operator action on one row. The setup of a VPS can take hours, so the Worker
+never waits for one. A Starter server moves to a VPS 1, a Standard server to a VPS 2 and a Pro server
+to a VPS 3 (developer decisions, 2026-11-11 and 2026-11-13). Two columns of `hosted_servers`
+(migration 0052) hold the record:
+
+| Column | Value |
+| --- | --- |
+| `operator_host` | The machine that an operator runs for the server, such as `leaseweb:12728110`. `NULL` on each server that boat runs. A row has a machine or a sandbox, never the two, and one machine has one server. |
+| `retired_sandbox_id` | The boat sandbox from before the move. The rollback and the delete use it. |
+
+The machines of the pool are in `operator_hosts` (migration 0053). A machine of the pool that no row
+of `hosted_servers` names is free. See [Reuse a pool machine](#reuse-a-pool-machine).
+
+For a row with `operator_host`, the Worker sends no call to boat, with one exception (the delete).
+It writes what it wants in `desired_state`; the operator starts and stops GoAhead on the machine and
+writes `observed_state`:
+
+| Event | The Worker | The operator |
+| --- | --- | --- |
+| No use for 15 minutes | Nothing. The server runs all the time. | Nothing. |
+| A client or a connector event asks for a start | Nothing. | Nothing. |
+| The server reports its use | Stores `last_active_at` and `next_run_at`. | Nothing. |
+| The plan changes | Sets `size` at once. | Nothing: each pool server has the same size. |
+| The plan ends | Sets `desired_state = 'stopped'`, `observed_error = 'plan_ended'` and `plan_ended_at`. A start request gets `402 plan_required`. | Stop `openbot.service`, then write `observed_state = 'stopped'`. Until then the server still runs. |
+| The owner renews | Sets `desired_state = 'running'` and clears the error. `plan_ended_at` stays. | Start `openbot.service`, then write `observed_state = 'running'`. |
+| 14 days after the plan ended, with no open subscription | Reads the subscription at Stripe, then deletes the server as the owner does. | As for a delete. |
+| The owner or an admin restarts the server | Refuses with `409 hosted_server_restart_unavailable`. | Restart `openbot.service` on a request to support. |
+| The owner deletes the server | Cancels the plan, deletes the sandbox in `retired_sandbox_id`, removes the Remote host, ends the session, and sets `observed_state = 'deleted'`. `operator_host` stays. | Reinstall the VPS, set its reference to `pool`, then set `operator_host = NULL`. |
+| boat sends an event for the old sandbox | Finds no row for it. | Nothing. |
+
+The Worker sends no message to the operator, and it connects to no machine. Run
+`leaseweb-pool.ts sync` each day: it does the operator column of the table. See [Reuse a pool machine](#reuse-a-pool-machine).
+
+Never write `desired_state = 'idle'` on such a row: the next client request changes it to `running`,
+and the cron query for a server with a routine does not look at the machine.
+
+The server on the VPS stays a hosted server (no `/opt/OpenBot/hosted/mode` file), so GoAhead signs
+in, reports its use and installs updates as it did on boat. `provision.sh` installs it and does not
+start it, so the data is in place before the first start. `scripts/hosting/move-from-boat.sh` does
+the parts of a move that run on the two machines, as root.
+
+`leaseweb-pool.ts move <server ID> <VPS ID | auto> --apply` does steps 2 to 8 for one server, and writes
+the time of each step and of the downtime. Before the row changes, it checks for a server that is
+`running` or `idle` and a free machine of the pool with the product of the plan, and it takes the
+token of the machine away, so that no new server gets it. Use `auto`: new customers get machines at
+each moment, so a VPS that you selected earlier can have a server when the move starts. `auto` selects
+a ready machine first, in the locations of the currency of the server, as the account service does
+for a new server. When a new customer gets it before the token is away, it takes the next one. After the
+row changes and before the export, it checks the same IDs of `user` on the two machines, a GoAhead
+on the machine that is not older than that of the sandbox, and an ssh from the sandbox to the machine.
+When a step before the export fails, it gives the row back to the sandbox, and the customer sees no
+downtime. After the export starts, it stops and names the step; then finish or roll back by
+hand. It needs `BOAT_API_KEY` in the environment, from `apps/auth-api/.env.dev`:
+
+```bash
+bunx dotenvx run -f apps/auth-api/.env.production -f apps/auth-api/.env.dev -fk <root>/.env.keys -- \
+  bun scripts/hosting/leaseweb-pool.ts move <server ID> auto --apply
+```
+
+Tested on 2026-11-12 with the test Worker: one Standard server from a boat sandbox to a VPS 2 in
+`AMS-01` (GoAhead 0.68.0). The sandbox had an npm package, an apt package, a command in `/opt`, a
+crontab line, an MCP server, an Inception key and sign-in files of Claude and Codex. `prepare` of a
+new VPS took 140 s. The move took 69 s, and the downtime was 49 s: the export and the copy 28 s, the
+import 20 s, the start 2 s. After the move, the web client showed the old chats, the Inception agent
+answered in 3 s, the MCP server listed its tools, and each command, package and crontab line was
+there. A first run waited for a sandbox state that boat does not use; it stopped before the export
+and gave the row back, and the server had no downtime.
+
+The order of the steps keeps the downtime short. The work that does not need the data (the install
+of GoAhead, the bootstrap, the restart and the apt packages of the customer) runs while the customer
+still uses the sandbox. The downtime is the export, the copy, the import and the start. The steps:
+
+1. Deploy the Worker with migration 0052 before the first move. An older Worker does not know the
+   two columns, and it can make a new sandbox for a row that has none.
+2. On the VPS, while the customer still uses the sandbox: copy `scripts/hosting` to the VPS and run
+   `move-from-boat.sh prepare lsw-<VPS ID> <uid> <gid> <appimage-url> <appimage-sha256> <auth-api-url>`.
+   The IDs are those of `id user` in the sandbox (1000 and 1000 in the boat image). The release is the
+   one that the sandbox has, or a newer one. The command sets the hostname, makes the user `user`
+   with the home `/home/user`, runs `provision.sh`, and disables `openbot.service`, so a restart does
+   not start GoAhead with no data. `leaseweb-pool.ts prepare <VPS ID>... --apply` does
+   steps 2 and 3 on free machines before a move, with the newest release.
+3. Run `leaseweb-bootstrap.sh` with the operator keys. Restart the VPS one time. A new or reinstalled
+   VPS has no key of an operator: `leaseweb-pool.ts` then signs in one time with the root password of
+   the Leaseweb API, through `SSH_ASKPASS`, and runs steps 2 and 3 in that session. After the
+   bootstrap, the password login is off.
+4. Write the row, in one statement, before the export:
+
+   ```sql
+   UPDATE hosted_servers SET operator_host = 'leaseweb:<VPS ID>', retired_sandbox_id = provider_sandbox_id,
+     provider_sandbox_id = NULL, desired_state = 'running', observed_state = 'running', observed_error = NULL,
+     updated_at = <now in ms>
+   WHERE server_id = '<server ID>' AND provider_sandbox_id IS NOT NULL AND operator_host IS NULL
+     AND plan = '<plan>' AND desired_state IN ('running', 'idle');
+   ```
+
+   `<plan>` is the plan that the machine was selected for, so a plan change in this time stops the
+   move. The statement changes no row of a server whose plan ended (`stopped`) or whose delete is in
+   progress (`deleted`): do not move such a server.
+
+   From this statement, the Worker sends no call to boat for the server, and the customer still uses
+   the sandbox. The order is necessary: while the row has the sandbox and `desired_state = 'running'`,
+   the Worker resumes a stopped sandbox in some seconds, and a resume starts GoAhead there again. The
+   Worker can also stop the sandbox for no use during the export, and the next client request then
+   starts it. In each case the sandbox gets data that the archive does not have. When the sandbox is
+   stopped at this step, start it at boat.
+
+   From this statement, the Worker also does not extend the boat lease of the sandbox, and boat stops
+   the sandbox at the end of the lease. Read `lease_until` of the row before the statement. A server
+   in use has 1 to 2 hours. When less time is left than steps 5 to 7 need, extend the lease at boat
+   first (`PATCH /sandboxes/<sandbox ID>` with `ttlSeconds`). When boat stops the sandbox during the
+   export or the copy, start it at boat, delete the archive, and do step 5 again. Not confirmed: the
+   lease that a start at boat by hand gives.
+5. On the sandbox: `move-from-boat.sh packages`, then on the VPS `move-from-boat.sh install-packages`
+   with that output on its standard input. This installs the apt packages of the customer before the
+   downtime. Then on the sandbox: `move-from-boat.sh export <archive>`, or `export -`, which writes the
+   archive to standard output and each message to standard error. `leaseweb-pool.ts move` sends it
+   with `ssh` to a key that the sandbox makes for this move: on the VPS, that key can only run
+   `cat >/root/openbot-move.tar`, and the move removes it after the export. So no archive is on the
+   disk of the sandbox, and the copy has no separate step. The downtime of the customer starts here.
+   The command sets `/run/openbot-pre-stop`, stops `openbot.service`, and archives, with numeric
+   owners, the home of `user` and `/srv/openbot-hosted`. The home has each provider sign-in, API key
+   and MCP server. The archive does not have the provider CLIs that GoAhead downloaded
+   (`~/.config/OpenBot/provider-runtimes`, but `bun` stays) or the caches: at start, a hosted server
+   downloads the CLI of each provider that an agent uses. The archive also has what the customer installed
+   outside the home, and not what the boat image has (the lists at the top of the script, from image
+   `c4ed68db` and `5f37c910`):
+   - each directory that the customer added in `/opt`, `/usr/local` and `/usr/local/lib`, and each
+     npm package for all users. A directory that programs of root read, such as
+     `/usr/local/lib/systemd` or `/usr/local/lib/python3.12`, stays out, and the report names it.
+   - the Hermes CLI of the image when its sign-in file in the home has a sign-in. GoAhead does not
+     download Hermes as it downloads the other provider CLIs. An empty file, a file with only `{}`, or
+     the `.env` that the image writes for Hermes is not a sign-in.
+   - each program in `/usr/local/bin` that the image does not have, each link there into a moved
+     directory or into the home, and the crontab of `user`.
+   - the names of the apt packages that the customer installed (`~/.base-apt-packages.txt` of the
+     image lists those of the image).
+
+   The move does not copy systemd units or their settings in `/etc`. When the sandbox has a unit of
+   the customer (a unit file in `/etc/systemd/system` of no package, or an enabled template instance
+   such as `syncthing@user`), `packages` names it and the move stops before the downtime. The server
+   stays on boat. On 2026-11-12 an export failed because such a service wrote to the home during the
+   archive.
+
+   The move also does not copy files of the customer in other folders outside the home, such as
+   Obsidian vaults in `/srv` (issue #8871). `packages` names each folder, one level below the top
+   (`/srv/vaults`) or two in `/var` (`/var/lib/syncthing`), that has a file of `user` outside the paths
+   above, `/usr`, `/tmp`, `/var/log`, `/var/cache` and `/var/crash`, also on another mount.
+   `leaseweb-pool.ts move` then stops before the downtime, and the server stays on boat. It also stops
+   when the search fails. With `--folders=<folder>,...`, the move copies these folders too: `export`
+   archives them, and `import` makes each one as a new folder of `user` and restores it as `user`, as it
+   does for the directories in `/opt`. Only `/srv/<name>`, `/mnt/<name>`, `/media/<name>` and a new
+   top-level folder (not a system folder such as `/var` or `/snap`) are possible, and the VPS must not
+   have the folder; the move checks this before the downtime. The operator gives this list, not the
+   archive, because an agent of the customer can get root in the sandbox. `discard` removes these
+   folders. A server with another such folder, such as `/var/lib/syncthing` or a file directly in `/srv`,
+   stays on boat: a copy by hand cannot work, because `move` starts GoAhead on the VPS right after the
+   sandbox stops.
+   A file that the customer made as root is not found.
+
+   The move also stops before the downtime when the sandbox has a Docker container (a directory in
+   `/var/lib/docker/containers`): the VPS has no Docker, and the archive has no containers or images.
+   With `--docker`, an operator moves them by hand and the move continues. Stop each container first
+   and set its restart policy to `no`, or boat cannot pause a container that restarts and the stop
+   fails. The move stops before the downtime when a container runs or has another restart policy.
+   Save the volumes in the home, so that the archive has them.
+
+   After the move, give the VPS rootless Docker for `user` (done on 2026-11-13 for one server, Ubuntu
+   26.04). As root: install `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-compose-plugin`,
+   `docker-ce-rootless-extras`, `uidmap`, `dbus-user-session` and `slirp4netns` from the Docker
+   repository, then `systemctl disable --now docker.service docker.socket containerd.service`. Do not
+   add `user` to the `docker` group: the rootful daemon gives root. Run `loginctl enable-linger user`.
+   As `user`, run `dockerd-rootless-setuptool.sh install` and `docker context use rootless`. Ubuntu
+   has an AppArmor profile for `/usr/bin/rootlesskit`, and `user` has a `/etc/subuid` range. Pull each
+   image by the digest of the sandbox and tag it again. Make each volume and extract its archive with
+   `tar --numeric-owner -xpf` in a container. Then start the projects of the customer, for example
+   with `docker compose up -d`. The containers connect through a process of `user`, so the egress rules
+   also apply to them: they cannot connect to the router or to the metadata address.
+   It refuses, before it changes anything, a sandbox whose stop at boat is failing
+   (`stop.status: "failing"`): each new try of boat stops GoAhead, and a try during the downtime looks
+   like a stop that ended. On 2026-11-13 a move of a sandbox with a Docker container that restarted
+   started GoAhead on the VPS while boat cancelled the stop, and the sandbox started GoAhead again. It
+   was rolled back.
+
+   The archive also has the SHA-256 of `openbot.db`, `agent-data.db`, `login.keyring` and
+   `keyring-password`, the names of the npm commands and groups of the sandbox, and the Ubuntu
+   version. It does not have:
+   - `/opt/OpenBot`, `~/.boat`, `~/.boatignore`, `~/.ascii`, `~/.config/ascii`, `~/.Xauthority*` and
+     `~/.npm/_cacache`.
+   - the cache folders in each profile of Chromium, Chrome and Brave in `~/.config` (`Cache`,
+     `Code Cache`, `GPUCache`, `GrShaderCache`, `ShaderCache`, the four Dawn caches,
+     `component_crx_cache` and `extensions_crx_cache`). The browser makes them again. Cookies, sign-ins
+     and extensions stay.
+   - when the customer has no Hermes sign-in: the Hermes of the image, `~/.hermes/tools`,
+     `~/.hermes/installs`, `~/.hermes/cache`, and the commands `hermes`, `hermes-acp` and
+     `hermes-agent` in `~/.local/bin` that start it. The settings, sessions and skills in `~/.hermes`
+     stay.
+   - Docker containers and images, and Python packages for all users: the export names them.
+
+   `~/.cache` stays in the archive. Not all of it is cache: Poetry keeps its virtual environments
+   there, and Playwright and Puppeteer keep their browsers there. The export of 2026-11-13 left out
+   each entry of `~/.cache` except `ms-playwright`, for the six servers of that day.
+
+   The export prints each moved directory with its size. When the sandbox has another image than
+   these two, it says so: then make sure that no directory of the list is from the image. The
+   archive holds the account session and each provider sign-in and key of the customer: copy it only
+   over SSH.
+6. On the VPS: `move-from-boat.sh import <archive>`. The command refuses a GoAhead that is older
+   than that of the sandbox, restores the archive, and compares the four SHA-256 values. An agent
+   of the customer can get root in the sandbox, and the service user has no root on the VPS. So the
+   service user restores the files, and only `/home/user`, `/srv/openbot-hosted` and the moved
+   directories. Root makes each moved directory new, owned by `user`; a directory that the VPS has
+   already stays as it is, and the report names it. The archive cannot write a file of root, a setuid
+   file of root or a device. A file that root or another user owned in the sandbox gets the service
+   user as its owner. When the archive has a member that the service user cannot restore, the import
+   fails. Then, as `user`, the import puts the moved commands in `~/.local/bin` (a command that is
+   there already stays) and installs the crontab. When it moved an npm package and the VPS has no
+   `node`, it adds `~/.local/bin/node`, which starts the Bun that GoAhead downloaded to the home: Bun
+   runs a Node script when it starts with the name `node`. GoAhead downloads Bun at its first start
+   and when an MCP server is on; when the sandbox had no Bun, the report says so. As root, the import
+   installs the apt packages of the customer. It does not install a package that changes
+   the firewall, SSH or root access, such as `docker.io` or `ufw`. At the end it names each command in
+   `~/.local/bin` that cannot start here (a missing interpreter, library or link target), each apt
+   package that it could not install, and each item that the export did not copy. Read the report:
+   a program for Ubuntu 24.04 can fail on 26.04, such as a Python virtual environment. Delete each
+   copy of the archive. When the import fails, run `move-from-boat.sh discard lsw-<VPS ID>` and then
+   the import again: `discard` removes the restored data, the moved directories and the crontab (the
+   apt packages stay), and it refuses a machine on which GoAhead started.
+
+   The import also removes the parts of the boat desktop from the home: `~/.ascii` and `~/.config/ascii`
+   (with the token of the desktop), their links in `~/.local/bin`, the `boat` skill of each agent, the
+   `computer` MCP server of the desktop in the Claude, Codex and Pi settings, the boat blocks in the
+   shell files, and the Pi MCP extension when no other MCP server uses it. On the VPS, a Pi that
+   called the desktop waited for it, and its start timed out.
+7. Stop the sandbox at boat, and wait for the state `archived`. `archiving` is not enough: boat can
+   cancel the stop after it, and the sandbox then runs again. `leaseweb-pool.ts move` waits for
+   `archived` and stops when the stop becomes `failing`. Do not start the sandbox again while the VPS
+   runs: two hosts would have one ID.
+8. On the VPS: `move-from-boat.sh start`. It refuses when the import is not complete or when
+   `openbot.db` changed after the import, then enables and starts `openbot.service`. A machine with
+   no display manager does not wait for the boat desktop: GoAhead uses two virtual displays at once.
+   Confirm in the web client that the server is online and that an agent answers. Set the Leaseweb
+   reference.
+9. Keep the stopped sandbox for the rollback. A delete of the server by its owner also deletes it.
+
+The VPS is not the same machine as the sandbox:
+
+- The boat image has commands that npm installed for all users (`claude`, `codex` and `pnpm` on
+  2026-11-11). The VPS has none. The move copies only the Hermes CLI of the image, and `import` names each other one that
+  is missing. At start, a hosted server downloads the CLI of each
+  provider that an agent uses and that is not off. The user downloads the CLI of another provider in
+  GoAhead.
+- `prepare` makes only the primary group of `user`, and the VPS has no Docker. `import` names each
+  group that `user` had in the sandbox (`docker` and `ascii-streaming-audio` on 2026-11-11). An
+  agent of the customer that used Docker does not have it after the move.
+- `provision.sh` also writes `~/.boat/pre-stop` and `~/.boatignore` on the VPS, as each update does
+  on a hosted server. Nothing on the VPS reads them.
+- The clients show no restart action for a moved server: the server list of the account service has
+  `restartAvailable: false` for it. A client from before this field shows the action and gets the
+  refusal of the Worker.
+- Each server has the storage of its plan: 25, 75 and 150 GB for Starter, Standard and Pro
+  (`BILLING_PLANS`, and `storageTierGb` with a storage tier). The account service sends the number in
+  the server list, the hosting list and the billing state, so the storage meter, the storage alerts,
+  Billing and the plan change offer show it. The host reads it at its start, for the instructions of
+  its agents. The pricing page and the order form show the same numbers. Before 2026-11-20 a server in
+  a boat sandbox showed 12, 50 or 100 GB, limited by the disk of its boat type; now it shows the plan
+  storage, also when the boat disk is smaller. A client or a host from before this number shows the
+  plan table.
+- The number is not a limit that the machine enforces. A host with `storage-user-files-v1` measures
+  the files of its user (the home folder, `/tmp` and `/var/tmp`) with `du`, and the clients show the
+  plan minus that number. A host from before that capability gets the boat count: the clients
+  subtract `HOSTED_SERVER_BASE_IMAGE_GB` (22 GB) for the system from the used disk, which on a VPS
+  shows about 5 to 10 GB less free space than is correct, because the system part and the reserved
+  blocks of a VPS are not 22 GB. The disk has much more than the user sees:
+
+  | Plan | Machine | Disk | User sees | Disk above that |
+  | --- | --- | --- | --- | --- |
+  | Starter | Leaseweb VPS 1 | 100 GB | 25 GB | about 53 GB |
+  | Starter (only after a change down from Standard or Pro) | Leaseweb VPS 2 | 200 GB | 25 GB | about 153 GB |
+  | Standard | Leaseweb VPS 2 | 200 GB | 75 GB | about 103 GB |
+  | Pro | Leaseweb VPS 3 | 300 GB | 150 GB | about 128 GB |
+
+  The 200 GB is from the Leaseweb API (`rootDiskSize`, 2026-11-11). The VPS 3 (8 vCPU, 24 GB,
+  300 GB) is from the Leaseweb product page; no VPS 3 was bought on 2026-11-11, so its disk is not
+  measured. The VPS 1 (4 vCPU, 6 GB, 100 GB, EUR 4.49 a month in AMS-01) is from the order API
+  (`GET /ordering/v1/products/vps?location=AMS-01`, 2026-11-13); its disk is not measured either. The
+  22 GB is from the boat servers; it is not used for a VPS host with `storage-user-files-v1`.
+- Move a Pro server to a VPS 3. A plan change does not change the machine of a moved server. After a
+  change to Pro, a server on a VPS 2 shows 150 GB at once and has about 28 GB of disk above that,
+  until the operator moves it to a VPS 3. Nothing tells the operator about the plan change: look for
+  `plan = 'pro'` rows whose machine is a VPS 2. A change up from Starter on a VPS 1 is worse: a
+  Standard server shows 75 GB on a 100 GB disk. Move it to a VPS 2 soon.
+- Settings shows the vCPU and the memory of the row `size`, and the upgrade dialog shows the memory of the
+  boat size of the plan (`HOSTED_BOAT_PLAN_SIZE`), also for a moved server. A VPS has more: the VPS 2 in FRA-01 showed 6 vCPU and 16 GiB.
+- After the owner deletes the server, GoAhead still runs on the VPS with a session that is ended. It
+  cannot connect, and it has the data until the operator reinstalls the machine.
+
+Rollback, while the sandbox exists: run `systemctl disable --now openbot.service` on the VPS, so that
+no restart of the VPS starts a second host. Make sure that the sandbox is stopped at boat. Then give
+the row back to boat. The next client request resumes the sandbox, and the resume starts GoAhead
+there. The work that the server did on the VPS is not in the sandbox.
+
+When the export failed before the import, the sandbox still runs with GoAhead stopped and
+`/run/openbot-pre-stop` set. Delete `/root/openbot-move` and the marker, and start `openbot.service`
+in the sandbox. Delete `/root/openbot-move.tar` on the VPS. Then give the row back with the statement
+below, but with `desired_state` and `observed_state` of before the move. On 2026-11-12 an export of
+24 GB took 9 minutes; a restart timer of boat started GoAhead during it, and tar stopped the export.
+The export now stops that timer. On 2026-11-19 the `.bash_logout` of a sandbox wrote `\e[3J` after
+each boat command, and `move` read it as the status of an export that had not ended. `move` now
+reads only the output between two markers that the command writes.
+
+`move` sets `size` to `HOSTED_PLAN_SIZE` (`small` for Starter), so the statement writes the boat type of
+the sandbox again: the `type` that boat shows for the sandbox (`default` for a Starter sandbox from
+2026-11-14 or later, `small` before).
+
+```sql
+UPDATE hosted_servers SET provider_sandbox_id = retired_sandbox_id, retired_sandbox_id = NULL,
+  operator_host = NULL, size = '<boat type of the sandbox>',
+  desired_state = CASE WHEN desired_state = 'running' THEN 'idle' ELSE desired_state END,
+  observed_state = 'stopped', updated_at = <now in ms>
+WHERE server_id = '<server ID>' AND operator_host IS NOT NULL AND retired_sandbox_id IS NOT NULL
+  AND desired_state != 'deleted';
+```
+
+A server whose plan ended on the VPS keeps `stopped`, so the rollback does not start it. When the
+plan changed while the server ran on the VPS, the sandbox still has the machine of the old plan. In
+that case also write `pending_size = '<HOSTED_BOAT_PLAN_SIZE of the new plan>'` in the statement when it
+is not the boat type of the sandbox, so that the resume changes the machine, as it does after a plan change on boat. Not
+tested: a rollback after a plan change.
+
+A moved server that lost its session cannot get a new claim from a client request. The operator
+makes a claim of 16 to 128 characters from `A-Z a-z 0-9 _ -`, writes its SHA-256 as base64url with no
+padding to `claim_token_hash` and a time at most one hour ahead to `claim_expires_at`, writes
+the claim to `OPENBOT_HOSTED_CLAIM` in `/home/user/.config/openbot-hosted/env`, and restarts
+`openbot.service`. The redeem ends the old session.
+
+`bun run test:hosted-operator-host` drives the real service with a fake boat and checks each line of
+the table, the claim recovery, the storage of a moved server in each list, and that the servers of
+boat still stop and start. The migration has
+its data fixture in `apps/auth-api/test/hosted-server-operator-host-migration.test.ts`.
+
+Tested on 2026-11-11 with one test server, two times (test Worker, boat sandbox with 4 vCPU and
+8 GB, VPS in AMS-01 with Ubuntu 26.04, GoAhead 0.68.0, web client):
+
+- `user` in the sandbox had the UID 1000 and the GID 1000. ID 1000 is free on the Leaseweb image.
+- `prepare` took 83 seconds. For a home of 1.1 GB, the export took 8 seconds and made an archive of
+  974 MB, the copy from the sandbox to the VPS took 10 seconds, and the import took 2 seconds.
+- With the row written first, the sandbox kept its state during the export, and the stopped sandbox
+  stayed stopped for 3.5 minutes with no change of the row. In the old order (stop, then the row),
+  the Worker resumed the sandbox in 6 seconds.
+- After `start`, the host registered from the VPS in 129 seconds, with the same host key and no new
+  sign-in. The data of the sandbox was there. A restart of the VPS gave the same result.
+- An import of a cut archive failed and named `discard`. A second import and `start` refused.
+  `discard` removed the data, and the full import then passed. `discard` and a second `start`
+  refused after the start.
+- A hosted server ran under the rules of `leaseweb-bootstrap.sh`.
+- The web client showed no restart action for the moved server, and showed it again after the
+  rollback. With a Worker from before `restartAvailable`, it showed the message of the Worker.
+- A plan end set `desired_state = 'stopped'`, and a renewal set `running` again.
+- Rollback: the client request resumed the sandbox in 15 seconds, and the host registered from the
+  sandbox. A restart of the VPS started no GoAhead.
+- A delete of the moved server through the Worker deleted the retired sandbox at boat.
+
+Not confirmed:
+
+- a move of a server that has a signed-in provider, agents and chats of a real customer. The test
+  server had one file and no provider;
+- an update request of a hosted server under the rules of `leaseweb-bootstrap.sh`;
+- the behavior of Signal while the sandbox and the VPS both have the host ID. The test never ran both;
+- the restart action in the desktop and mobile clients. They read the same field through the same
+  gate, and only the web client was checked;
+- the cause of five `turn.openbot.run` resolve errors on the first start on the VPS in the first
+  test. The second test did not look for them.
+
+Tested on 2026-11-11 on one VPS (FRA-01, 6 vCPU, 16 GiB, Ubuntu 24.04, GoAhead 0.67.1):
+
+- `bun scripts/hosting/leaseweb-bootstrap-e2e.ts --host=root@<address> --restart=yes` passed its 75
+  checks. It runs the bootstrap two times, connects as the service user and as root, stops the rules,
+  and restarts the server. The report is in `.openbot-build/leaseweb-bootstrap/`.
+- Rescue: `attachIso` with `GRML` and then `reboot` started the GRML system. Its console gave a root
+  shell with no password, and `mount -o ro,noload /dev/sda2` showed the files of the server. After
+  `detachIso` and `reboot`, Ubuntu started 173 seconds after the call, and GoAhead was online 55
+  seconds later.
+
+An order test through the Leaseweb API on 2026-11-11, with an API key of an account of the German
+sales organization (locations FRA-01, FRA-10 and FRA-14), did not order a server:
+
+- `GET /ordering/v1/products/vps?location=FRA-01` answers `404 Product configurator not found`, and
+  `GET` and `POST /ordering/v1/products/vps/VPS02_2` (the order with `dryRun: true`) answer
+  `404 Product not found`. Another location answers `403`. The same key reads
+  `/ordering/v2/products/dedicatedServers?location=FRA-01`, `/publicCloud/v1/vps`,
+  `/account/v1/orders` and `/services/v1/services`. Thus the key and the account are accepted, and
+  the VPS order is not available to this account. The cause is not confirmed: Leaseweb documents
+  that the order API needs a verified customer who pays by invoice with no prepayment, and the first
+  order of this account was paid in advance.
+- `/services/v1/services` shows the VPS as `cancellable`, with a 1-month term that starts on the
+  first day of the next month: a server from 2026-11-11 has `contractTermEndDate` 2026-12-31.
+  `POST /services/v1/services/{id}/cancel` exists and was not called.
+- `PUT /publicCloud/v1/vps/{id}/reinstall` with `{"imageId": "UBUNTU_26_04_64BIT"}` answers `202`
+  and deletes the disk. The test VPS had Ubuntu 26.04.1 (kernel 7.0) and an open SSH port 37 seconds
+  later, with a new root password in `/credentials`. `install-server.sh` then took 98 seconds, and
+  `leaseweb-bootstrap-e2e.ts --restart=yes` passed its 75 checks. Ubuntu 26.04 has the `install`
+  command of uutils, which refuses `/dev/stdin` as the source when the target exists; the bootstrap
+  thus writes its files with `cat`. The bootstrap with this change was not run again on Ubuntu 24.04.
+- On Ubuntu 26.04, the server signed in with `openbot login`, and the web client connected to it. An
+  agent with a free OpenCode model ran a shell command as the service user and read a web page. After
+  a restart, the server was online again with no new sign-in, and the agent had its chat. The log
+  has `Failed to resolve address for turn.openbot.run` lines when a client connects, although the
+  service user resolves that name; the cause is not known, and the connection was made.
+- The configurator of the Leaseweb shop, on the same day, marks Frankfurt (FRA-01) as out of stock
+  for each VPS package (`VPS02_1` to `VPS02_6`), and Montreal and Tokyo too. Amsterdam, London,
+  Washington, San Francisco, Los Angeles, Singapore and Sydney are in stock. This is the probable
+  cause of the `404` for FRA-01. A pool of ready servers must thus not depend on one location.
+- A second account, of the Netherlands sales organization, got 10 servers on 2026-11-11 (VPS 2,
+  AMS-01, Ubuntu 26.04) from one shop order: the order was at 17:22 UTC and the servers started
+  from 17:44 to 17:45 UTC. Each has a 1-year term to 2027-11-30 with a bill each month (EUR 8.09),
+  and `cancellable: true`. With the key of this account, `GET /ordering/v1/products/vps?location=AMS-01`
+  answers `200` with the packages `VPS02_1` to `VPS02_6`. No order was sent through the API.
+- The first daily update on Ubuntu 26.04 restarted `openbot.service`: `needrestart` restarts each
+  service that uses an updated library. The bootstrap now writes
+  `/etc/needrestart/conf.d/50-openbot.conf`. After that, a reinstall of `libpcre2-8-0` restarted
+  `cron.service`, `ssh.service` and six other services, and listed `openbot.service` as deferred; its
+  start time did not change. The E2E reads the value that `needrestart` uses for the unit.
+- Operator keys: the E2E adds a temporary key to the list. That key signed in as root and not as the
+  service user, a key outside the list did not sign in, a list with a bad line changed nothing, and a
+  run with the first list removed the key. With `--restart=yes` on Ubuntu 26.04 it passed its 91
+  checks. The test VPS then had the two keys of another server of the operators and no
+  `/root/.ssh/authorized_keys`, and an operator signed in.
+- The Ubuntu 26.04 image of Leaseweb has GRUB 2.14 on the disk (GPT with a BIOS boot partition) and
+  no GRUB package, so it has no `update-grub`. The daily update installed kernel 7.0.0-43, and
+  `/boot/grub/grub.cfg` got no entry for it: after two restarts the server still ran 7.0.0-38.
+  Without a fix, a kernel security update has no effect on this image. The bootstrap now installs
+  `grub-pc`, which writes GRUB to the disk and adds `update-grub` to the kernel hooks. With the
+  package removed again, the E2E ran the bootstrap and restarted the server: it ran 7.0.0-43 with
+  the arguments `ro net.ifnames=0 quiet splash`, SSH answered 23 seconds after the restart command,
+  and GoAhead was online 5 seconds later.
+- The three names of the test VPS changed: the reference through the API, the server name with
+  `openbot name`, and the hostname, which stayed after a restart of the server.
+
+Not confirmed for Leaseweb:
+
+- `needrestart` on Ubuntu 24.04, and the bootstrap of this version on Ubuntu 24.04;
+- if the Ubuntu 24.04 image of Leaseweb has `update-grub`, and the kernel fix on a server that
+  starts with UEFI (the bootstrap prints a warning there and changes nothing);
+- a kernel update that comes after the fix. The boot entry of the kernel that was there is confirmed,
+  and `zz-update-grub` is in the kernel hooks;
+- another distribution than Ubuntu 24.04 and 26.04, and a network that does not use `systemd-networkd` (the
+  helper reads the DHCP server from its lease files);
+- a router address that changes while the server runs. The rules change at the next start of
+  GoAhead;
+- `resetPassword`, which needs the guest agent, and a custom image for a VPS;
+- why the start after `detachIso` took 173 seconds;
+- WebRTC with a rule set that also filters incoming connections.
+
+### Storage tiers
+
+The owner of a server on a VPS of the operator (`hosted_servers.operator_host` is set) can buy one of
+two larger storage tiers. A boat sandbox has no tiers. A tier never goes down, and the owner can buy
+tier 2 from tier 0 or tier 1. Tier 2 is the whole disk of the plan's VPS.
+
+| Plan | Tier 0 (plan) | Tier 1 | Tier 2 | Add-on a month, tier 1 / tier 2 (EUR) |
+| --- | --- | --- | --- | --- |
+| Starter | 25 GB | 50 GB | 100 GB | 10 / 20 |
+| Standard | 75 GB | 125 GB | 200 GB | 20 / 40 |
+| Pro | 150 GB | 200 GB | 300 GB | 20 / 45 |
+
+The sizes and prices are in `packages/contracts/src/billing.ts` (`STORAGE_TIER_GB`,
+`storageTierListPrices`). A year is 12 months less 20%. USD is EUR times 1.2, PLN times 4 and BRL
+times 6.
+
+- **Stripe.** Each tier is a second item on the plan subscription: a Price of the Product
+  `openbot_storage_<plan>` with the lookup key `openbot_storage_<plan>_<tier>_<interval>` and the
+  metadata `openbot_kind: storage`. `bun run api:stripe:bootstrap` makes them. The Worker also knows
+  an old Price by its metadata after the bootstrap moved a lookup key.
+- **Purchase.** `POST /v1/me/billing/storage` (desktop) or `/api/browser/v1/me/billing/storage`
+  (browser) with `{subscriptionId, tier}`. The Worker checks in D1 and in Stripe that the plan is
+  active (not trialing: a trial invoices 0 for the change), does not end, belongs to the user and to a server with an operator host, and
+  has a lower tier. Then it adds or changes the storage item with `proration_behavior=always_invoice`
+  and `payment_behavior=error_if_incomplete`: Stripe charges the prorated add-on now, and refuses the
+  change when the payment fails. The answer is the full billing state (200). Errors:
+  `400 invalid_billing_request`, `409 storage_unavailable`, and `402 storage_payment_failed` (nothing
+  changed). The Stripe idempotency key has the subscription, the old Price, the payment method of
+  the subscription and a 1-minute window, but not the new Price. A double click is one change, and two
+  purchases at the same time (for example on two devices) cannot each add a storage item: Stripe
+  refuses the second with `idempotency_error`, and the Worker answers `409 storage_unavailable`. A
+  retry of a different tier with the same card waits for the next window.
+- **Server.** The sync after the purchase, and each subscription webhook, copies the tier of the
+  subscription to `hosted_servers.storage_tier` (migration `0057`). The server list, the hosting
+  list, the host list and the billing state send the storage of the tier. The host reads its storage
+  at its next start. Nothing changes the disk: each tier fits in the disk of the plan's VPS. A
+  server on a smaller VPS than its plan (a Pro server on a VPS 2) must move before it can use tier 2.
+- **Amounts.** The billing state `amount` is the plan item and the storage item. `storageUpgrades`
+  lists the tiers above the current tier, only for an active plan that does not end. Its
+  `amount` is the plan amount and the add-on list price of that tier. After a tier 1 purchase the
+  plan amount is the current amount less the list price of tier 1, so a tier 1 Price from before a
+  price change gives an approximate amount for tier 2.
+- **Revenue.** MRR, the sales facts and the snapshots count each item that is not a license as server
+  revenue, so the add-on is in them.
+
+The bootstrap of the storage Prices and the `storage-tier` scenario of `scripts/stripe-flows-e2e.ts`
+ran against a local Worker and Stripe test mode. That the Portal sets a new payment method on the subscription, which
+gives a retry a new idempotency key at once, is not confirmed.
+
+### Reuse a pool machine
+
+A pool machine has one server at a time. When the server ends, the machine gets a new operating
+system and goes back to the pool for the next new server or the next move. The Worker and the operator share the work:
+
+1. The plan ends. The Worker sets `desired_state = 'stopped'` and `plan_ended_at`. `sync` stops
+   GoAhead on the machine. The data stays, so the owner can renew.
+2. 14 days after `plan_ended_at`, the cron of the Worker deletes the server when its newest
+   subscription is not open and Stripe reports it `canceled`. The delete is the one of the owner: the
+   old sandbox, the Remote host and the session go, and `observed_state = 'deleted'`. A subscription
+   that Stripe still retries (`past_due`, `unpaid`, `paused`) keeps the server, with no limit: the
+   operator decides. A renewal before the 14 days keeps the server. The 14 days are
+   `OPERATOR_HOST_DATA_KEPT_MS` in `hosted-server-service.ts`. A refunded and cancelled plan deletes the
+   server at once (step 7 of the plan flow).
+3. `sync` reinstalls the machine with `UBUNTU_26_04_64BIT`, which erases the disk, sets its reference
+   to `pool`, and sets `operator_host = NULL` on the deleted row. The machine is free.
+   Leaseweb shows the state `RUNNING` for the whole reinstall, so `sync` waits until SSH shows new
+   host keys.
+4. `prepare` installs GoAhead on the free machine again and offers it for a new server
+   ([A new server on a pool machine](#a-new-server-on-a-pool-machine)).
+
+### Archive of an ended pool server
+
+A machine does not wait 14 days with the data of an ended plan. `sync` moves the data into an encrypted
+archive in Backblaze B2 and gives the machine back to the pool ([plan 012](../plans/012-pool-server-archive.md)).
+A renewal before the archive is deleted restores the server on a free pool machine (plan 012 item 4,
+live since 2026-11-19). Run `sync --apply` each day, so that each ended plan frees its machine and each
+restored or due archive is deleted.
+
+1. `sync` finds each server on a machine with `desired_state = 'stopped'`, `plan_ended`, no open
+   subscription and no live archive. It reads the newest subscription at Stripe. It archives only a
+   `canceled` or `incomplete_expired` subscription: at once, or 3 days after `plan_ended_at` when
+   `cancellation_details.reason` is `payment_failed` (`POOL_UNPAID_ARCHIVE_AFTER_MS`).
+2. `sync` makes a new `age` X25519 key, starts a multipart upload in `openbot-pool-archive-eu` with the
+   operator key, and sends the machine only the `age` recipient and a presigned URL for each 100 MiB
+   part. The machine runs `move-from-boat.sh export - | age -r <recipient>`, cuts the result into parts,
+   and uploads each part with `curl`. The data does not go through the operator's computer, and the
+   machine gets no B2 key.
+3. `sync` checks that the ETag of each part is its MD5, completes the upload, and checks the size of
+   the object. Then it writes the row in `hosted_server_archives` with the `age` identity encrypted with
+   `HOSTED_ARCHIVE_KEY_SECRET` (AES-256-GCM, `v1.<IV>.<sealed>`, the server ID and object key as
+   additional data). The write stops when the server changed, for example by a renewal; `sync` then
+   deletes the object and the machine keeps the data.
+4. `sync` sets `operator_host = NULL` only while `desired_state` is still `stopped`, clears the token of
+   the machine, sets its reference to `pool` and reinstalls it. When the reinstall fails, the archive is
+   complete but the machine still has the data: run `prepare --reinstall` for it.
+5. Each `sync` deletes an archive in B2 and then its key in D1 (`deleted_at`, `wrapped_key = NULL`) when
+   `delete_after` (`plan_ended_at` + 14 days) is past, the server is deleted (owner delete, refund
+   delete, account delete), or the restore set `restored_at`. The bucket lifecycle (hide after 15 days,
+   delete 1 day later) removes an archive that `sync` missed.
+
+The 14-day cron of the Worker also deletes a server with a live archive and no machine, as it does a
+server on a machine. Its delete then also deletes the old boat sandbox of a moved server
+(`retired_sandbox_id`). `sync` needs `STRIPE_SECRET_KEY`, `B2_KEY_ID_EU`, `B2_APPLICATION_KEY_EU` and
+`HOSTED_ARCHIVE_KEY_SECRET` from `apps/auth-api/.env.production`. `status` names the servers that
+`sync` would archive and the archives that it would delete.
+
+A server that ended before migration 0053 gets `plan_ended_at` at the first cron run after the deploy,
+so its 14 days start then.
+
+Before the Terms of 2026-11-19, the data was kept for 30 days. The maintainer decided on 2026-11-19
+that the 14 days also apply to a plan that ended before that date, with no 30-day grace. The first cron
+run after the deploy deletes each server whose plan ended 14 to 30 days before.
+
+Tested on 2026-11-12 with the test Worker, its D1 and one VPS in `AMS-01`: `add`, `status`, `sync`
+stop and start, the cron delete of a server whose plan ended 31 days before with a `canceled` Stripe
+test subscription, then `sync`. The reinstall took 51 seconds: the machine started 26 seconds after
+the request, and `sync` returned 25 seconds later. A file in `/root` and `/opt/OpenBot` were gone.
+Then `remove` and `add`.
+
+`operator_hosts` has one row for each machine that was in the pool:
+
+| Column | Value |
+| --- | --- |
+| `host_id` | `leaseweb:<VPS ID>`, as in `hosted_servers.operator_host`. |
+| `location` | The Leaseweb data center, such as `AMS-01`. |
+| `product` | `VPS01`, `VPS02` or `VPS03`, from the Leaseweb pack. |
+| `added_at` | When the operator added the machine. |
+| `removed_at` | When the machine left the pool. `NULL` while it is in the pool. |
+| `assign_token_hash` | The SHA-256 of the token with which the machine asks for a new server. `NULL` when the machine is not offered. Migration 0055. |
+| `seen_at` | When the machine asked last. |
+
+`scripts/hosting/leaseweb-pool.ts` does the operator work. It shows what it would do and changes
+nothing without `--apply`. It reads the Leaseweb keys and the Cloudflare token from the environment,
+so it runs on each computer that has the key file, and it can run on a server of the operator later:
+
+```bash
+bunx dotenvx run -f apps/auth-api/.env.production -fk <root>/.env.keys -- \
+  bun scripts/hosting/leaseweb-pool.ts <command> [--apply] [--env=test]
+```
+
+| Command | Work |
+| --- | --- |
+| `status` | Read only. Free and ready machines of each location and product, each free machine that is not ready, each new server that waits for its sign-in, and the work of `sync`. |
+| `boat` | Read only. Each server on boat with a paid plan that does not end: `move` it. Also the number of servers on boat whose plan ends, is past due, or ended. A customer who takes back a cancel, or pays a past-due plan, comes back on this list. |
+| `add <VPS ID>...` | Adds bought machines. It reads the location and the product from Leaseweb, and sets the reference `pool` when the machine has none. It refuses a machine with another reference. |
+| `remove <VPS ID>...` | Takes a free machine out of the pool, for example before its contract ends. It refuses a machine that a server has. |
+| `sync` | Stops GoAhead where a plan ended, starts it where the owner renewed, and reinstalls each machine of a deleted server. It reinstalls only a machine of the pool. It also sets the reference of each machine on which a new server started, and `pool` on each free machine with the old `pool-free` or an owner reference. It changes no other reference. |
+| `prepare <VPS ID>... [--keys=<file>] [--reinstall]` | Installs the newest release, disabled, on free machines, runs the bootstrap with the operator keys of the core server and of `<file>`, restarts each machine, and offers it for a new server. A prepared machine with no server data and an older GoAhead gets the newest release (`move-from-boat.sh upgrade`); `move` does the same. A disabled GoAhead does not update itself, so run `prepare` again after each release. A free machine that has the data of a server (a start that failed) is skipped; `--reinstall` erases it first. |
+| `move <server ID> <VPS ID \| auto> [--keys=<file>]` | Moves one server from boat to a free machine. See [Move a server from boat](#move-a-server-from-boat). It prepares the machine when necessary. The machine takes no new server from then on. `auto` selects the machine when the move starts, and takes the next one when a new customer gets it first. |
+
+`sync` connects as root over SSH with the key of the operator. Not confirmed: SSH from a server of the
+operator. One key of the computer that runs `prepare` or `move` must be in the operator keys: the
+bootstrap turns off the password, and the script refuses a list without such a key.
+
+The OpenPanel dashboard "Server pool" (project `openbot`) shows the pool. Each 5 minutes, the
+production Worker sends one `hosted_pool_snapshot` event for each location and product and one with
+`location = all` (see `ANALYTICS.md`). The test Worker has no OpenPanel keys and sends none. Each
+report is a bar with the largest value of the snapshots in the last 30 minutes. Two local patches of
+the OpenPanel dashboard make this work: a bar with the `max` metric reads the value of each minute,
+and a tile with its own 30-minute range keeps it when the dashboard date picker has a longer range.
+A longer interval adds up more than one snapshot. The snapshot counts each machine in one state:
+
+| State | Machine |
+| --- | --- |
+| `free` | No server. Ready for a move. `ready` counts the free machines that a new server can get now. |
+| `to_reinstall` | Its server is deleted. Free after the next `sync`. |
+| `plan_ended` | Its plan ended. Free 14 days after `plan_ended_at`, unless the owner renews. |
+| `cancel_scheduled` | The owner cancelled the plan at the period end, or scheduled a delete. |
+| `in_use` | Each other server. |
+
+`free_in_7d` and `free_in_30d` count the machines that are free in that time when no owner renews.
+A machine whose plan ends at the period end is free 14 days after that end. A plan that ended with a
+subscription that Stripe still retries, or with no subscription, has no date: the cron does not delete
+that server. A server that names a machine that is not in the
+pool is in the group `unknown`: add the machine. When `ready` is 0 for a product, the next customer of
+that plan starts on boat. `bun run test:hosted-operator-pool` checks the
+delete, the snapshot and its event on the real service with a fake Stripe and a fake boat.
+
+#### Pool alerts
+
+With the Worker secret `HOSTED_POOL_ALERT_WEBHOOK_URL` (a Discord webhook, HTTPS only), the Worker
+sends the operator one message for each event below.
+
+Each message is one line: an emoji and a bold word for the event, then the parts after a middle dot
+(` · `). An amount has the currency symbol and no cents when it is whole. The amount of one period adds
+`/mo` or `/yr`, such as `€30/mo` or `PLN 480/yr`. An amount that Stripe does not give shows as
+`amount not known (<currency>)`.
+
+| Event | Message | Action |
+| --- | --- | --- |
+| A purchase takes a machine and leaves 0 or 1 free machines of that product in that location | `🔴 **Pool** <location> <product> · 0 free left` (`🟠` for 1) | Buy and `prepare` machines. |
+| A server starts on boat: no ready machine, the pool query failed, or its pool machine did not start it | `⛵ **Boat start** · <plan> server · <currency> · <server ID prefix> · <reason>` | `move` it when a machine is ready. `leaseweb-pool.ts boat` lists it. |
+| A pool start is lost (no sign-in in 4 minutes) | `🛠️ **Pool start lost** · <plan> server · <server ID prefix> · machine <host ID> · prepare it again` | `prepare --reinstall` the machine. |
+| `sync` puts the data of an ended plan in B2 and frees its machine | ``📦 **Archived** · <plan> server · `<email>` · <server ID prefix> · <size> in B2 · VPS <VPS ID> free · <cancelled or payment failed> · <time>`` | `prepare` the machine. |
+| A machine reports a finished restore | `♻️ **Restored** · <plan> server · <server ID prefix> · machine <host ID> · <time>` | None. |
+| A server plan starts (a new subscription) | ``🆕 **New** server · `<email>` · <plan> · <amount>`` | None. |
+| A license starts (a new subscription) | ``🆕 **New** license · `<email>` · <tier> · <n> users · <amount>`` | None. |
+| A subscription starts with a free trial | ``🧪 **Trial** <server or license> · `<email>` · ...`` | None. |
+| The owner cancels the renewal of a server plan or a license | ``🚪 **Cancelled** <server or license> · `<email>` · ... · ends <date>`` | None. |
+| The owner resumes that renewal | ``🔄 **Resumed** <server or license> · `<email>` · ...`` | None. |
+| A server plan or a license ends | ``⛔ **Ended** <server or license> · `<email>` · ... · <cancelled or not paid>`` | None. |
+| A paid Checkout page has a billing address in another country than the saved billing country | `🧾 **VAT check** · Checkout page <session ID> took the VAT of <country> (<treatment>), but its billing address is in <country>. ...` | Check the VAT of its invoice. |
+| Paid sales to consumers in other EU countries reach EUR 9,000 (net) in a calendar year, once a year | `🧾 **VAT limit** · in <year>, sales to consumers in other EU countries reached <amount> (net). ...` | Register for the EU One Stop Shop and charge the VAT of the buyer's country before EUR 10,000. |
+
+A purchase message (the 6 rows with an email), the `Archived` message and a payment message (below)
+have the email of the account, on a developer decision, so keep the webhook in a private channel.
+`Archived` comes from `leaseweb-pool.ts sync`, not from the Worker, and shows `unknown account` when
+the account is gone. The other pool messages have no account, email or name. A VAT message is the text of its log line with the emoji; the log line stays
+plain.
+
+The same webhook also gets one payment message for each invoice line of a server plan or a license
+that is paid or that fails, and for each refund and dispute:
+
+| Event | Message |
+| --- | --- |
+| A paid renewal | ``💵 **Renewed** <server or license> · `<email>` · <product> · <amount>`` |
+| A paid adjustment | ``💵 **Paid** <server or license> · `<email>` · <product> · <amount> · adjustment`` |
+| A failed payment | ``⚠️ **Payment failed** <server or license> · `<email>` · <product> · <amount> · <Stripe reason>`` |
+| A refund | ``↩️ **Refunded** <server or license> · `<email>` · <product> · <amount>`` |
+| A refund that failed after it was counted | ``❗ **Refund failed** <server or license> · `<email>` · ...`` |
+| A dispute, and a lost dispute | ``🚨 **Disputed** ...``, ``🚨 **Dispute lost** ...`` |
+
+The product of a server plan is its plan, and of a license its number of users, such as `5 users`. The
+amount is the amount of the payment, the refund or the dispute. Only a renewal and a failed renewal have
+the period (`/mo` or `/yr`): the other amounts are not the amount of one period. An adjustment is a plan change or a
+manual invoice. The sales ledger sends the message (`BillingSales.processPending`, in the cron of each
+5 minutes), in the run that puts the fact in the OpenPanel ledger, so the message comes at most some
+minutes after the payment and one time. It needs `OPENPANEL_CLIENT_ID` and `OPENPANEL_CLIENT_SECRET`
+too. A first purchase sends no payment message: the start of its subscription already sent the `New`
+message. An imported payment, a $0 paid invoice (a trial start or a $0 proration) and a checkout step
+send no message either. An account that is gone shows as `unknown account`.
+`bun run test:billing-sale-alert` checks the messages.
+
+The amount of a purchase message is the list amount of one period, before a discount. A license at the
+bundle price adds `bundle`. A claim in `billing_webhook_events` stops a second message for one change:
+`openbot_purchase:<subscription ID>` for the start, `openbot_purchase_end:<subscription ID>` for the
+end, and `openbot_purchase_cancel:<subscription ID>:<canceled_at>` for a cancel. Two Stripe events can
+see one cancel at the same time; only the event that adds the claim sends. Stripe sets `canceled_at` to
+the time of each cancel request, so a later cancel of the same subscription has a new claim and sends
+again. A resume has no claim. A cancel or resume message goes out with the sync that stores the change, so a
+repeated event sends nothing. A cancel date that Stripe has for the subscription (`cancel_at`) is the
+date of the cancel message. One sync sends one message: a cancel that Stripe stores together with a
+change of plan or users sends no cancel message. A change of plan or users sends no purchase message.
+A server order with a license sends two messages, one for each subscription. A subscription that ends
+after its owner cancelled the renewal sends the cancel message and, later, the end message. A deleted
+server and a dispute end the plan at once; a dispute in the first 30 days of the subscription also
+deletes the server. The reason is `not paid` when the last
+payment of the plan had failed, and `cancelled` in each other case. The boat message goes out only
+after the Worker stores the boat start, so a lost race, a retry of a boat attempt, or a pool change
+whose answer was lost sends nothing. A failed send logs one line and is not sent again. Without the
+secret there are no messages.
+The encrypted `apps/auth-api/.env.production` holds the URL, and `bun run api:deploy` sets it. The CI
+deploy keeps the value that the Worker has. To set only the secret:
+
+```sh
+cd apps/auth-api && bunx wrangler secret put HOSTED_POOL_ALERT_WEBHOOK_URL
+```
+
+`bun run test:hosted-pool-assignment` checks the pool messages, and `bun run test:purchase-alert` checks
+the purchase messages.
+
 ## Not confirmed
 
 These were not tested on boat. Test them before a user gets access:
@@ -526,14 +2044,42 @@ These were not tested on boat. Test them before a user gets access:
   must check the key before a user deletes the server;
 - the vCPU, memory and disk of boat `large`;
 - a downgrade that boat refuses with `type_too_small`. The test uses a fake boat;
-- the disk of each size. The root file system showed 69 GB on `small` and on `default`, not the 12 GB
-  and 50 GB of the boat machine table. The limit that `type_too_small` uses is not known. The plans
-  show 12, 50 and 100 GB, which is not more than the machine table. The disk of `large` was not
-  measured, so the 100 GB of Pro is not confirmed;
+- the disk of each size. The root file system showed 69 GB on `small` and on `default`. The boat
+  page lists 51 GB for `small` and `default` and 111 GB for `large`. The limit that `type_too_small`
+  uses is not known. A server on boat shows the plan storage (75 GB for Standard, 150 GB for Pro),
+  which is more than the boat disk; it moves to a VPS;
 - that boat frees the key of a refused create, so a retry of a setup that failed works;
 - the menu path of the Stripe failed-payment setting in [Production](#production), and whether test
   mode and live mode keep separate values;
 - the [memory guards](#memory) with real agents: the held message, the turn slots and the release of
   idle provider threads on a server with a signed-in account;
 - whether boat stops a sandbox that runs for weeks. The Worker restarts it, but work in progress
-  at that time stops.
+  at that time stops;
+- whether boat runs the pre-stop hook for a stop that it starts by itself: maintenance (the
+  `updating` state) or the end of `ttlSeconds`. A crash of the machine restores the last periodic
+  save, which also copies files while they change;
+- that GoAhead closes `openbot.db` at a `systemctl stop` on a server. The install test used a release
+  without the `SIGTERM` handler. The `ExecStop` of the unit stops GoAhead before its Xvfb displays
+  (see [Computer Use](architecture/computer-use.md#agent-display-on-a-server)). This was tested in a
+  container with a stand-in for GoAhead, not with systemd. When GoAhead does not close the database,
+  it is as after a crash, which SQLite recovers, because the save starts after the stop;
+- the agent display on boat with a release build. On 2026-10-16 one boat server ran a 0.42.0 build
+  with this change, from `openbot.service`: GoAhead was on Xvfb `:99` at 1280x800, and `:0` had no
+  GoAhead window. In an agent turn, the agent shell and `cua-driver` had `DISPLAY=:0`, and Computer
+  Use saw a 1920x1080 screen with only the panel and the dock. A local remote desktop session
+  captured `:0`. The session reported the size of the GoAhead display, 1280x800. The first start
+  after a resume, with this script in `/opt`, was not tested.
+
+
+### Billing and server deletion
+
+Billing lists each paid server separately. Cancel renewal stops the next payment; the
+server stops when its plan ends and keeps its data. Keep server resumes renewal before
+the plan ends and removes any scheduled deletion.
+
+Delete server requires the server name. The owner can delete immediately with no refund
+for unused time, or schedule deletion for the paid-through date. The account Worker stores
+the date and subscription ID. The cron deletes on its next pass after that date only after
+Stripe confirms the subscription has ended and no newer or open plan exists. Failed
+provider deletion is retried through the existing deletion queue. Keep server and deletion
+use the same per-server operation lease.

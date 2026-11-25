@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { createOpenBotLogger } from "@openbot/logging";
 import { z } from "zod";
 import { createRemoteDesktopInputDigest, loadNativeRuntimeLock, type NativeRuntimeLock } from "./native-runtime-lock";
@@ -15,6 +15,7 @@ import {
   runtimeTargetParts,
   sha256,
 } from "./remote-desktop-runtime-release";
+import { download, installValidatedTree, isCurrentInstallation } from "./runtime-install";
 import {
   applySunshineIdentity,
   chooseSunshineSigner,
@@ -44,10 +45,6 @@ export async function installRemoteDesktopRuntime(
     target?: RemoteDesktopTarget;
     fetchImpl?: typeof fetch;
     githubToken?: string;
-    /**
-     * macOS development only: the bundle id and signature that Sunshine.app gets after its checksums
-     * pass. Without it, Sunshine.app stays exactly as pinned.
-     */
     sunshineIdentity?: { plan: SunshineIdentityPlan; apply: (architectureRoot: string) => Promise<void> };
   } = {},
 ): Promise<"installed" | "current"> {
@@ -61,7 +58,9 @@ export async function installRemoteDesktopRuntime(
   const githubToken = input.githubToken ?? process.env.GITHUB_TOKEN;
   if (!release || !artifact) throw new Error(`No published remote desktop runtime is pinned for ${target}.`);
 
-  if (await isCurrentInstallation(outputRoot, target, lock, input.sunshineIdentity?.plan)) {
+  if (
+    await isCurrentInstallation(() => verifyInstalledRuntime(outputRoot, target, lock, input.sunshineIdentity?.plan))
+  ) {
     logger.info(`The ${target} remote desktop runtime is current.`);
     return "current";
   }
@@ -81,14 +80,14 @@ export async function installRemoteDesktopRuntime(
   validateGitHubRelease(githubRelease, release.tag);
 
   const manifestAsset = findAsset(githubRelease, release.manifestAsset);
-  const manifestBytes = await download(fetchImpl, manifestAsset.browser_download_url);
+  const manifestBytes = await download(fetchImpl, manifestAsset.browser_download_url, "Runtime asset");
   if (sha256(manifestBytes) !== release.manifestSha256)
     throw new Error("The runtime release manifest checksum is invalid.");
   const manifest = parseReleaseManifest(JSON.parse(manifestBytes.toString("utf8")));
   validateManifest(lock, manifest, target);
 
   const archiveAsset = findAsset(githubRelease, artifact.asset);
-  const archiveBytes = await download(fetchImpl, archiveAsset.browser_download_url);
+  const archiveBytes = await download(fetchImpl, archiveAsset.browser_download_url, "Runtime asset");
   if (sha256(archiveBytes) !== artifact.sha256) throw new Error(`The ${target} runtime archive checksum is invalid.`);
 
   const temporaryRoot = await mkdtemp(join(tmpdir(), "openbot-runtime-install-"));
@@ -102,10 +101,9 @@ export async function installRemoteDesktopRuntime(
     const extractedRuntime = join(extracted, "remote-desktop-runtime");
     await rejectNonRegularFiles(extractedRuntime);
     await verifyRuntimeTree(extractedRuntime, target, lock);
-    // The pinned archive and tree are verified above. Only now does Sunshine.app change.
     const { platform, architecture } = runtimeTargetParts(target);
     await input.sunshineIdentity?.apply(join(extractedRuntime, platform, architecture));
-    await installValidatedTree(extractedRuntime, outputRoot, target);
+    await installRuntimeTree(extractedRuntime, outputRoot, target);
     await verifyRuntimeTree(outputRoot, target, lock);
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
@@ -177,28 +175,17 @@ export async function verifyRuntimeTree(
   for (const name of required) await readFile(join(root, platform, architecture, ...name.split("/")));
 }
 
-async function isCurrentInstallation(
+async function verifyInstalledRuntime(
   root: string,
   target: RemoteDesktopTarget,
   lock: NativeRuntimeLock,
   sunshineIdentity: SunshineIdentityPlan | undefined,
-): Promise<boolean> {
-  try {
-    await verifyRuntimeTree(root, target, lock);
-    const { platform, architecture } = runtimeTargetParts(target);
-    const record = await readSunshineIdentityRecord(join(root, platform, architecture));
-    // A release needs the pinned Sunshine.app, so a changed development copy is not current.
-    if (!sunshineIdentity) return record === null;
-    return isSunshineIdentityCurrent(record, sunshineIdentity);
-  } catch {
-    return false;
-  }
-}
-
-async function download(fetchImpl: typeof fetch, url: string): Promise<Buffer> {
-  const response = await fetchImpl(url, { headers: { "User-Agent": "OpenBot-runtime-installer" } });
-  if (!response.ok) throw new Error(`Runtime asset download failed with HTTP ${response.status}.`);
-  return Buffer.from(await response.arrayBuffer());
+): Promise<void> {
+  await verifyRuntimeTree(root, target, lock);
+  const { platform, architecture } = runtimeTargetParts(target);
+  const record = await readSunshineIdentityRecord(join(root, platform, architecture));
+  const current = sunshineIdentity ? isSunshineIdentityCurrent(record, sunshineIdentity) : record === null;
+  if (!current) throw new Error("The installed Sunshine.app does not have the expected identity.");
 }
 
 function findAsset(release: GitHubRelease, name: string): GitHubReleaseAsset {
@@ -232,15 +219,9 @@ async function verifyChecksumFile(
   }
 }
 
-async function installValidatedTree(source: string, destination: string, target: RemoteDesktopTarget): Promise<void> {
+async function installRuntimeTree(source: string, destination: string, target: RemoteDesktopTarget): Promise<void> {
   const { platform, architecture } = runtimeTargetParts(target);
-  const exactTarget = join(destination, platform, architecture);
-  const temporaryTarget = join(dirname(exactTarget), `.${architecture}.installing`);
-  await mkdir(dirname(exactTarget), { recursive: true });
-  await rm(temporaryTarget, { recursive: true, force: true });
-  await cp(join(source, platform, architecture), temporaryTarget, { recursive: true });
-  await rm(exactTarget, { recursive: true, force: true });
-  await rename(temporaryTarget, exactTarget);
+  await installValidatedTree(join(source, platform, architecture), join(destination, platform, architecture));
   for (const name of ["licenses", "sources"]) {
     const destinationPath = join(destination, name);
     await rm(destinationPath, { recursive: true, force: true });
@@ -269,7 +250,6 @@ if (import.meta.main) {
   });
 }
 
-/** The development bundle id and signature. `build-remote-desktop-runtime.ts` uses it for a local build too. */
 export function developmentSunshineIdentity(): {
   plan: SunshineIdentityPlan;
   apply: (architectureRoot: string) => Promise<void>;

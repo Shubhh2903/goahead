@@ -3,7 +3,7 @@ name: distinctive-frontend-design
 description: Give new or substantially redesigned interfaces a deliberate visual direction grounded in their subject, audience, content, and purpose. Do not use for minor styling fixes.
 ---
 
-<!-- Modified by OpenBot from Anthropic's frontend-design skill. See NOTICE.txt. -->
+<!-- Modified by GoAhead from Anthropic's frontend-design skill. See NOTICE.txt. -->
 
 # Distinctive Frontend Design
 

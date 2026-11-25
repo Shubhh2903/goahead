@@ -1,38 +1,18 @@
-/**
- * Sets up Stripe and boat for the hosted servers of one account server, and stores each secret that
- * it makes. Run it again at any time: it changes only what differs.
- *
- *   read -rs STRIPE_SECRET_KEY && read -rs BOAT_API_KEY && export STRIPE_SECRET_KEY BOAT_API_KEY
- *   bun run hosting:setup --target=production [--template=<snapshot>]
- *
- *   bun run hosting:setup --target=test
- *
- * - Stripe: the catalog, the Customer Portal and the webhook endpoint (`scripts/stripe-bootstrap.ts`).
- * - boat: the webhook to `<api>/v2/hosting/boat/webhook` with each event that the Worker reads.
- *
- * Stripe and boat show a webhook signing secret only when they make it. When the store does not have
- * that secret, or with `--replace-webhooks`, the script makes a new one: it replaces the Stripe
- * endpoint and rotates the boat secret. Until the Worker has the new secret, it refuses the
- * deliveries; Stripe retries them, and the Worker cron repairs a missed boat event.
- *
- * The production store is the `cloudflare-production` GitHub Environment (`gh` must be signed in),
- * and the keys come from the shell. The test store is the encrypted `apps/auth-api/.env.shared`,
- * and the keys come from that file. The script shows no secret value.
- */
-
 import { execFile } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { get as dotenvGet, set as dotenvSet } from "@dotenvx/dotenvx";
+import { set as dotenvSet } from "@dotenvx/dotenvx";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { z } from "zod";
+import { loadSharedDevelopmentEnvironment } from "../development-environment";
 import { bootstrapStripe } from "../stripe-bootstrap";
 
 const logger = createOpenBotLogger("hosting-setup");
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BOAT_API_URL = "https://boat.dev/api/v1";
-/** The events that `HostedServerService` reads from a boat webhook delivery. */
 const BOAT_EVENTS = ["sandbox.ready", "sandbox.error", "sandbox.archived", "sandbox.hydrated"];
 const GITHUB_ENVIRONMENT = "cloudflare-production";
 const TARGETS = {
@@ -42,7 +22,6 @@ const TARGETS = {
 
 interface SecretStore {
   readonly label: string;
-  /** The value, or null when the store cannot show it or does not have it. */
   read(name: string): Promise<string | null>;
   has(name: string): Promise<boolean>;
   put(name: string, value: string): Promise<void>;
@@ -51,7 +30,6 @@ interface SecretStore {
 function run(command: string, args: string[], input = ""): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = execFile(command, args, { cwd: repoRoot }, (error, stdout, stderr) => {
-      // A value goes on standard input, so the command line and the error hold no secret.
       if (error)
         reject(new Error(`${command} ${args.slice(0, 2).join(" ")} failed: ${stderr.trim() || error.message}`));
       else resolve(stdout);
@@ -86,13 +64,32 @@ function githubStore(): SecretStore {
 }
 
 function envFileStore(path: string): SecretStore {
-  const options = { path: join(repoRoot, path), envKeysFile: join(repoRoot, ".env.keys"), quiet: true };
-  const read = async (name: string): Promise<string | null> =>
-    (await dotenvGet(name, { ...options, ignore: ["MISSING_KEY"] }))?.trim() || null;
+  const envPath = join(repoRoot, path);
+  const read = async (name: string): Promise<string | null> => {
+    const values = await loadSharedDevelopmentEnvironment(repoRoot);
+    return values[name]?.trim() || null;
+  };
   const put = async (name: string, value: string): Promise<void> => {
-    const result = await dotenvSet(name, value, options);
-    if (result.changedFilepaths.length === 0 && result.unchangedFilepaths.length === 0) {
-      throw new Error(`${name} was not written to ${path}. Check that .env.keys has its private key.`);
+    const privateKey = process.env.DOTENV_PRIVATE_KEY_DEV?.trim();
+    if (!privateKey) {
+      throw new Error(`${name} was not written to ${path}. Set DOTENV_PRIVATE_KEY_DEV in the shell.`);
+    }
+    const keysDirectory = mkdtempSync(join(tmpdir(), "openbot-dotenv-"));
+    const keysPath = join(keysDirectory, ".env.keys");
+    writeFileSync(keysPath, `DOTENV_PRIVATE_KEY_DEV=${privateKey}\n`, { encoding: "utf8", mode: 0o600 });
+    try {
+      const options = { path: envPath, envKeysFile: keysPath, quiet: true };
+      let result: Awaited<ReturnType<typeof dotenvSet>>;
+      try {
+        result = await dotenvSet(name, value, options);
+      } catch {
+        throw new Error(`${name} was not written to ${path}. Check the development private key.`);
+      }
+      if (result.changedFilepaths.length === 0 && result.unchangedFilepaths.length === 0) {
+        throw new Error(`${name} was not written to ${path}. Check the development private key.`);
+      }
+    } finally {
+      rmSync(keysDirectory, { recursive: true, force: true });
     }
   };
   return { label: path, read, has: async (name) => (await read(name)) !== null, put };
@@ -136,7 +133,6 @@ function boatSecret(value: z.infer<typeof boatSecretSchema>): string {
   return secret;
 }
 
-/** Returns a new signing secret, or null when the webhook keeps the secret that the store has. */
 async function ensureBoatWebhook(apiKey: string, url: string, name: string, rotate: boolean): Promise<string | null> {
   const { webhooks } = await boat(apiKey, "GET", "/webhooks", undefined, boatWebhookListSchema);
   const current = webhooks.find((webhook) => webhook.url === url);
@@ -165,7 +161,6 @@ async function main(args: string[]): Promise<void> {
       target: { type: "string" },
       api: { type: "string" },
       "replace-webhooks": { type: "boolean", default: false },
-      template: { type: "string" },
     },
     strict: true,
   });
@@ -174,7 +169,14 @@ async function main(args: string[]): Promise<void> {
   const live = target === "production";
   const api = new URL(values.api ?? TARGETS[target].api).origin;
   const replace = values["replace-webhooks"];
-  const store = live ? githubStore() : envFileStore("apps/auth-api/.env.shared");
+  const store = live ? githubStore() : envFileStore("apps/auth-api/.env.dev");
+  if (!live) {
+    const privateKey = process.env.DOTENV_PRIVATE_KEY_DEV?.trim();
+    if (!privateKey) {
+      throw new Error("Set DOTENV_PRIVATE_KEY_DEV in the shell before updating the test store.");
+    }
+    await loadSharedDevelopmentEnvironment(repoRoot);
+  }
   const written: string[] = [];
   const put = async (name: string, value: string): Promise<void> => {
     await store.put(name, value);
@@ -184,13 +186,11 @@ async function main(args: string[]): Promise<void> {
   const stripeKey = await requiredKey(store, "STRIPE_SECRET_KEY");
   if (live && !/^(sk|rk)_live_/u.test(stripeKey)) throw new Error("STRIPE_SECRET_KEY is not a live-mode key.");
   const boatKey = await requiredKey(store, "BOAT_API_KEY");
-  // The production keys come from the shell. The CI deploy refuses a pair with one value.
   if (live) {
     await put("STRIPE_SECRET_KEY", stripeKey);
     await put("BOAT_API_KEY", boatKey);
   }
 
-  // Each secret is stored at once: Stripe and boat do not show it again.
   const stripeSecret = await bootstrapStripe({
     secretKey: stripeKey,
     live,
@@ -207,21 +207,6 @@ async function main(args: string[]): Promise<void> {
   );
   if (boatSecretValue) await put("BOAT_WEBHOOK_SECRET", boatSecretValue);
 
-  if (values.template) {
-    if (!live) throw new Error("--template is for production. Set the test template on the test Worker.");
-    // A variable, not a secret: the snapshot name is not private.
-    await run("gh", [
-      "variable",
-      "set",
-      "HOSTED_SERVER_TEMPLATE",
-      "--env",
-      GITHUB_ENVIRONMENT,
-      "--body",
-      values.template,
-    ]);
-    written.push("HOSTED_SERVER_TEMPLATE");
-  }
-
   logger.info(written.length ? `Wrote ${written.join(", ")} to ${store.label}.` : `${store.label} did not change.`);
   const next: string[] = [];
   if (written.length > 0) {
@@ -235,10 +220,11 @@ async function main(args: string[]): Promise<void> {
     "Stripe Dashboard: in Revenue recovery → Retries, set 'If all retries for a payment fail' to cancel the subscription or to mark it unpaid.",
   );
   if (live) {
-    if (!values.template)
-      next.push("Set HOSTED_SERVER_TEMPLATE with --template=<snapshot> (bun run hosting:template).");
-    if (!(await store.has("OPENPANEL_CLIENT_ID"))) {
-      next.push("Optional: set OPENPANEL_CLIENT_ID and OPENPANEL_CLIENT_SECRET with gh secret set --env.");
+    next.push("The desktop release workflow selects HOSTED_SERVER_TEMPLATE directly on the production Worker.");
+    if (!(await store.has("OPENPANEL_CLIENT_ID")) || !(await store.has("OPENPANEL_CLIENT_SECRET"))) {
+      next.push(
+        "Required before production deployment: set OPENPANEL_CLIENT_ID and OPENPANEL_CLIENT_SECRET with gh secret set --env cloudflare-production.",
+      );
     }
   }
   for (const line of next) logger.info(line);

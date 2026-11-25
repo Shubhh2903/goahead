@@ -1,9 +1,3 @@
-// Scaled data for `bun run dev:seed --scale=...` and `bun run dev:bench`. The
-// showcase seed holds four short conversations, which says nothing about a
-// profile after months of use. This adds agents with long histories, busy
-// channels and large images, written through the same public stores as the
-// showcase so the app reads them back exactly as it reads its own writes.
-
 import {
   type AgentSummary,
   type AttachmentSummary,
@@ -16,16 +10,14 @@ import { isOneOf } from "@openbot/contracts/runtime-values";
 import { strToU8, zlibSync } from "fflate";
 import type { AgentStore } from "../src/backend/agent-store";
 import { ChannelStore } from "../src/backend/channel-store";
+import { runCauseEffect } from "../src/backend/effect-boundary";
 import type { MailboxStore } from "../src/backend/mailbox-store";
 
 export interface SeedScale {
   agents: number;
-  // Per scaled agent.
   messages: number;
   channels: number;
-  // Per scaled channel. Defaults to `messages`.
   channelMessages: number;
-  // Large images, all in the first scaled agent's conversation.
   attachments: number;
 }
 
@@ -41,7 +33,6 @@ const SCALE_LIMITS: Record<keyof SeedScale, number> = {
   attachments: 200,
 };
 
-/** Reads `agents:10,messages:2000,channels:5,attachments:20`. Unknown keys and bad counts throw. */
 export function parseSeedScale(raw: string): SeedScale {
   const scale: SeedScale = { ...NO_SCALE };
   let channelMessagesSet = false;
@@ -83,9 +74,6 @@ const TOPICS = [
   "the pricing test",
 ];
 
-// Replies of the shapes the renderer spends its time on: paragraphs, lists,
-// inline code, links and fenced code in several languages. Deterministic, so
-// two bench runs render the same bytes.
 export function scaledReply(index: number): string {
   const topic = TOPICS[index % TOPICS.length] ?? "the plan";
   const paragraphs = [
@@ -140,7 +128,6 @@ function scaledMessages(prefix: string, count: number, now: number): Conversatio
       author,
       source: author,
       text: author === "user" ? scaledRequest(index) : scaledReply(index),
-      // One minute apart, ending an hour ago, in order.
       createdAt: new Date(now - 60 * 60_000 - (count - index) * 60_000).toISOString(),
       status: "completed",
     });
@@ -174,10 +161,6 @@ function pngChunk(type: string, data: Uint8Array): Uint8Array {
   return chunk;
 }
 
-/**
- * An RGB PNG of the given size with a gradient and noise, so it neither
- * compresses to nothing nor decodes to less than a real photo would.
- */
 export function largePng(width: number, height: number, seed: number): Uint8Array {
   const raw = new Uint8Array(height * (1 + width * 3));
   let state = seed || 1;
@@ -244,9 +227,7 @@ export interface ScaledSeedOptions {
   agentStore: AgentStore;
   mailbox: MailboxStore;
   scale: SeedScale;
-  // The provider, model and effort every seeded agent shares.
   agentModel: Pick<AgentSummary, "provider" | "model" | "reasoningEffort">;
-  // Members of the scaled channels: showcase agents, which always exist.
   channelMembers: readonly string[];
   now: number;
   transferDirectories: string[];
@@ -257,29 +238,33 @@ export async function seedScale(options: ScaledSeedOptions): Promise<void> {
   for (let index = 0; index < scale.agents; index += 1) {
     const agentId = scaleAgentId(index);
     const name = `Scale ${index + 1}`;
-    await agentStore.getOrCreate(agentId, name, "Benchmark agent");
-    await agentStore.updateAgent({
-      agentId,
-      name,
-      title: "Benchmark agent",
-      description: "Holds a long, generated conversation for resource benchmarks.",
-      provider: agentModel.provider,
-      model: agentModel.model,
-      reasoningEffort: agentModel.reasoningEffort,
-      avatarSeed: agentId,
-      avatarHue: AVATAR_HUES[index % AVATAR_HUES.length] ?? null,
-    });
-    const threadId = await agentStore.ensureThreadId(agentId);
+    await runCauseEffect(agentStore.getOrCreate(agentId, name, "Benchmark agent"));
+    await runCauseEffect(
+      agentStore.updateAgent({
+        agentId,
+        name,
+        title: "Benchmark agent",
+        description: "Holds a long, generated conversation for resource benchmarks.",
+        provider: agentModel.provider,
+        model: agentModel.model,
+        reasoningEffort: agentModel.reasoningEffort,
+        avatarSeed: agentId,
+        avatarHue: AVATAR_HUES[index % AVATAR_HUES.length] ?? null,
+      }),
+    );
+    const threadId = await runCauseEffect(agentStore.ensureThreadId(agentId));
     const messages = scaledMessages(agentId, scale.messages, now);
     if (index === 0) {
       for (let image = 0; image < scale.attachments; image += 1) {
-        const attachment: AttachmentSummary = await mailbox.storeGeneratedAttachment({
-          name: `scale-image-${image + 1}.png`,
-          mimeType: "image/png",
-          bytes: largePng(2_400, 1_600, image + 1),
-          ownerAgentId: agentId,
-          ownerThreadId: threadId,
-        });
+        const attachment: AttachmentSummary = await runCauseEffect(
+          mailbox.storeGeneratedAttachment({
+            name: `scale-image-${image + 1}.png`,
+            mimeType: "image/png",
+            bytes: largePng(2_400, 1_600, image + 1),
+            ownerAgentId: agentId,
+            ownerThreadId: threadId,
+          }),
+        );
         transferDirectories.push(`generated/${attachment.id}`);
         messages.push({
           id: `${agentId}-image-${image}`,
@@ -343,8 +328,6 @@ export async function seedScale(options: ScaledSeedOptions): Promise<void> {
         },
       });
     }
-    // In slices: one commit of thousands of messages is not what the app ever
-    // writes, and it would hold one SQLite transaction for the whole channel.
     for (let start = 0; start < messages.length; start += 200) {
       const slice = messages.slice(start, start + 200);
       const sliceTasks = tasks.filter((task) => slice.some((message) => message.id === task.requestMessageId));

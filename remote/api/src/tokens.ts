@@ -1,10 +1,35 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
+  DISCORD_ROUTE_AUDIENCE,
+  DISCORD_ROUTE_GUILDS_LIMIT,
+  type DiscordRouteGuild,
+} from "@openbot/contracts/signal-protocol/discord-route";
+import {
+  GITHUB_ROUTE_AUDIENCE,
+  GITHUB_ROUTE_REPOSITORIES_LIMIT,
+  type GitHubRouteRepository,
+} from "@openbot/contracts/signal-protocol/github-route";
+import {
   SLACK_ROUTE_AUDIENCE,
   SLACK_ROUTE_ROUTED_USERS_LIMIT,
   SLACK_ROUTE_TEAMS_LIMIT,
   type SlackRouteTeam,
 } from "@openbot/contracts/signal-protocol/slack-route";
+import {
+  TELEGRAM_BOT_ID_PATTERN,
+  TELEGRAM_CHAT_ID_PATTERN,
+  TELEGRAM_FILE_TOKEN_TTL_SECONDS,
+  TELEGRAM_ROUTE_AUDIENCE,
+  TELEGRAM_ROUTE_CHATS_LIMIT,
+  type TelegramReplyParameters,
+  type TelegramRouteChat,
+} from "@openbot/contracts/signal-protocol/telegram-route";
+import {
+  WEBHOOK_ROUTE_AUDIENCE,
+  WEBHOOK_ROUTES_LIMIT,
+  type WebhookRoute,
+} from "@openbot/contracts/signal-protocol/webhook-route";
+import { Effect, Result, Schema } from "effect";
 import {
   createLocalJWKSet,
   createRemoteJWKSet,
@@ -26,12 +51,10 @@ import {
   type RemoteTicketClaims,
   SIGNAL_TURN_CREDENTIAL_TTL_SECONDS,
 } from "./protocol";
-import type { SlackRoute, SlackRouteValidation } from "./signal-service";
+import type { SlackRouteValidation } from "./signal-service";
 
-// The resume token is this service's own, minted and verified here and never seen by the account
-// API, so its audience stays local while the ticket's comes from the shared contract.
 const RESUME_AUDIENCE = "openbot-remote-resume";
-export const RESUME_TTL_SECONDS = 10 * 60;
+const RESUME_TTL_SECONDS = 10 * 60;
 const MAXIMUM_STALE_RESUME_SECONDS = 24 * 60 * 60;
 const MAXIMUM_TRUSTED_RESUME_TOKENS = 100_000;
 const jwksSchema = z.object({ keys: z.array(z.object({ kty: z.string() }).loose()).min(1) });
@@ -48,6 +71,7 @@ const remoteTicketClaimsSchema = z.object({
   protocolMaximum: z.number().int().nonnegative(),
   sessionExpiresAt: z.number().int().nonnegative(),
   clientPublicKey: z.string().min(1).max(8_192).optional(),
+  signal: z.string().min(1).max(64).optional(),
   iat: z.number().int().nonnegative(),
   exp: z.number().int().nonnegative(),
 });
@@ -75,24 +99,93 @@ const slackRouteClaimsSchema = z.object({
   hid: identifierSchema,
   teams: z.array(slackRouteTeamSchema).max(SLACK_ROUTE_TEAMS_LIMIT),
 });
-/** The account service's answer to `/v2/remote/slack-route/validate`. */
 export const slackRouteValidationSchema = z.object({
   teams: z.array(z.string()),
   routes: z.array(slackRouteTeamSchema).max(SLACK_ROUTE_TEAMS_LIMIT).optional(),
 }) satisfies z.ZodType<SlackRouteValidation>;
+const discordRouteClaimsSchema = z.object({
+  hid: identifierSchema,
+  guilds: z
+    .array(z.object({ id: z.string().regex(/^[0-9]{1,20}$/u), linkedAt: z.number().int().nonnegative() }))
+    .max(DISCORD_ROUTE_GUILDS_LIMIT),
+});
+const webhookRouteClaimsSchema = z.object({
+  hid: identifierSchema,
+  routes: z
+    .array(z.object({ id: identifierSchema, linkedAt: z.number().int().nonnegative() }))
+    .max(WEBHOOK_ROUTES_LIMIT),
+});
+const githubRouteClaimsSchema = z.object({
+  hid: identifierSchema,
+  repositories: z
+    .array(z.object({ id: z.int().positive(), installationId: z.int().positive() }))
+    .max(GITHUB_ROUTE_REPOSITORIES_LIMIT),
+});
+const telegramRouteClaimsSchema = z.object({
+  hid: identifierSchema,
+  chats: z
+    .array(
+      z.object({
+        id: z.string().regex(TELEGRAM_CHAT_ID_PATTERN),
+        botId: z.string().regex(TELEGRAM_BOT_ID_PATTERN),
+        linkedAt: z.int().nonnegative(),
+      }),
+    )
+    .max(TELEGRAM_ROUTE_CHATS_LIMIT),
+});
 const SLACK_SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
+
+export class RemoteTokenError extends Schema.TaggedError<RemoteTokenError>()("RemoteTokenError", {
+  message: Schema.String,
+}) {}
+
+export class RemoteTokenUnavailableError extends Schema.TaggedError<RemoteTokenUnavailableError>()(
+  "RemoteTokenUnavailableError",
+  {
+    message: Schema.String,
+    hostId: Schema.String,
+    sessionId: Schema.String,
+    role: Schema.String,
+    authEpoch: Schema.Number,
+  },
+) {}
+
+const tokenError = (error: unknown) =>
+  new RemoteTokenError({
+    message: error instanceof Error ? error.message : "Remote token operation failed.",
+  });
+const tokenCall = <A>(operation: () => Promise<A>) => Effect.tryPromise({ try: operation, catch: tokenError });
+const tokenDecode = <A>(operation: () => A) => Effect.try({ try: operation, catch: tokenError });
 
 export class RemoteTokenService {
   readonly #ticketKey: JWTVerifyGetKey;
   readonly #remoteTicketKey: RemoteJWKSet | null;
   readonly #sessionSecret: Uint8Array;
+  readonly #signalId: string | null;
   readonly #turnSecret: string;
-  readonly #turnHost: string;
+  readonly #turnHost: (hostId: string) => string;
   readonly #publicStunUrls: readonly string[];
   readonly #turnPort: number;
   readonly #turnTlsPort: number;
-  readonly #validateResumeClaims: (claims: RemoteTicketClaims) => Promise<boolean>;
-  readonly #validateSlackRoute: (hostId: string, teams: SlackRouteTeam[]) => Promise<SlackRouteValidation>;
+  readonly #validateResumeClaims: (claims: RemoteTicketClaims) => Effect.Effect<boolean, RemoteTokenUnavailableError>;
+  readonly #validateSlackRoute: (
+    hostId: string,
+    teams: SlackRouteTeam[],
+  ) => Effect.Effect<SlackRouteValidation, RemoteTokenError>;
+  readonly #validateTelegramRoute: (
+    hostId: string,
+    chats: TelegramRouteChat[],
+  ) => Effect.Effect<TelegramRouteChat[], RemoteTokenError>;
+  readonly #linkTelegramChat: (
+    botId: string,
+    chatId: string,
+    code: string,
+  ) => Effect.Effect<TelegramChatLink | null, RemoteTokenError>;
+  readonly #validateDiscordRoute: (
+    hostId: string,
+    guilds: DiscordRouteGuild[],
+  ) => Effect.Effect<string[], RemoteTokenError>;
+  readonly #validateWebhookRoute: (hostId: string, routes: WebhookRoute[]) => Effect.Effect<string[], RemoteTokenError>;
   readonly #trustedResumeTokens = new Map<
     string,
     { expiresAt: number; hostId: string; sessionId: string; authEpoch: number }
@@ -101,14 +194,36 @@ export class RemoteTokenService {
   constructor(
     config: Pick<
       RemoteApiConfig,
-      "ticketJwks" | "ticketJwksUrl" | "sessionSecret" | "turnSecret" | "turnHost" | "turnPort" | "turnTlsPort"
+      | "ticketJwks"
+      | "ticketJwksUrl"
+      | "sessionSecret"
+      | "turnSecret"
+      | "turnHosts"
+      | "turnPort"
+      | "turnTlsPort"
+      | "signalId"
     > &
       Partial<Pick<RemoteApiConfig, "publicStunUrls">>,
-    validateResumeClaims: (claims: RemoteTicketClaims) => Promise<boolean> = async () => false,
+    validateResumeClaims: (claims: RemoteTicketClaims) => Effect.Effect<boolean, RemoteTokenUnavailableError> = () =>
+      Effect.succeed(false),
     options: {
       fetch?: FetchImplementation;
-      // Asks the account service which links of a route are current. Without it, none is.
-      validateSlackRoute?: (hostId: string, teams: SlackRouteTeam[]) => Promise<SlackRouteValidation>;
+      turnHost?: (hostId: string) => string;
+      validateSlackRoute?: (
+        hostId: string,
+        teams: SlackRouteTeam[],
+      ) => Effect.Effect<SlackRouteValidation, RemoteTokenError>;
+      validateTelegramRoute?: (
+        hostId: string,
+        chats: TelegramRouteChat[],
+      ) => Effect.Effect<TelegramRouteChat[], RemoteTokenError>;
+      linkTelegramChat?: (
+        botId: string,
+        chatId: string,
+        code: string,
+      ) => Effect.Effect<TelegramChatLink | null, RemoteTokenError>;
+      validateDiscordRoute?: (hostId: string, guilds: DiscordRouteGuild[]) => Effect.Effect<string[], RemoteTokenError>;
+      validateWebhookRoute?: (hostId: string, routes: WebhookRoute[]) => Effect.Effect<string[], RemoteTokenError>;
     } = {},
   ) {
     if (config.ticketJwks) {
@@ -123,101 +238,216 @@ export class RemoteTokenService {
       this.#ticketKey = remoteTicketKey;
     }
     this.#sessionSecret = new TextEncoder().encode(config.sessionSecret);
+    this.#signalId = config.signalId;
     this.#turnSecret = config.turnSecret;
-    this.#turnHost = config.turnHost;
+    const localTurnHost = config.turnHosts[0] ?? "";
+    this.#turnHost = options.turnHost ?? (() => localTurnHost);
     this.#turnPort = config.turnPort;
     this.#turnTlsPort = config.turnTlsPort;
     this.#publicStunUrls = config.publicStunUrls ?? [];
     this.#validateResumeClaims = validateResumeClaims;
-    this.#validateSlackRoute = options.validateSlackRoute ?? (async () => ({ teams: [] }));
+    this.#validateSlackRoute = options.validateSlackRoute ?? (() => Effect.succeed({ teams: [] }));
+    this.#validateTelegramRoute = options.validateTelegramRoute ?? (() => Effect.succeed([]));
+    this.#linkTelegramChat = options.linkTelegramChat ?? (() => Effect.succeed(null));
+    this.#validateDiscordRoute = options.validateDiscordRoute ?? (() => Effect.succeed([]));
+    this.#validateWebhookRoute = options.validateWebhookRoute ?? (() => Effect.succeed([]));
   }
 
-  async initialize(): Promise<void> {
-    if (!this.#remoteTicketKey) return;
-    await this.#remoteTicketKey.reload();
-    const jwks = this.#remoteTicketKey.jwks();
-    if (!jwks) throw new Error("Ticket JWKS did not load.");
-    parseJwks(JSON.stringify(jwks));
-  }
+  readonly initialize = Effect.fn("RemoteTokens.initialize")(() =>
+    Effect.gen({ self: this }, function* () {
+      const key = this.#remoteTicketKey;
+      if (!key) return;
+      yield* tokenCall(() => key.reload());
+      const jwks = key.jwks();
+      if (!jwks) return yield* new RemoteTokenError({ message: "Ticket JWKS did not load." });
+      yield* tokenDecode(() => parseJwks(JSON.stringify(jwks)));
+    }),
+  );
 
-  async verifyTicket(token: string, now = new Date()): Promise<RemoteTicketClaims> {
-    const { payload } = await jwtVerify(token, this.#ticketKey, {
-      audience: REMOTE_TICKET_AUDIENCE,
-      algorithms: ["ES256"],
-      currentDate: now,
-    });
-    return decodeTicketClaims(payload, now);
-  }
+  readonly verifyTicket = Effect.fn("RemoteTokens.verifyTicket")((token: string, now = new Date()) =>
+    Effect.gen({ self: this }, function* () {
+      const { payload } = yield* tokenCall(() =>
+        jwtVerify(token, this.#ticketKey, {
+          audience: REMOTE_TICKET_AUDIENCE,
+          algorithms: ["ES256"],
+          currentDate: now,
+        }),
+      );
+      return yield* tokenDecode(() => decodeTicketClaims(payload, now, this.#signalId));
+    }),
+  );
 
-  /**
-   * The Slack workspaces that a route ticket links to `hostId`. Throws for a ticket that is expired,
-   * signed with another key, or minted for another host.
-   */
-  async verifySlackRoute(token: string, hostId: string, now = new Date()): Promise<SlackRoute> {
-    const { payload } = await jwtVerify(token, this.#ticketKey, {
-      audience: SLACK_ROUTE_AUDIENCE,
-      algorithms: ["ES256"],
-      requiredClaims: ["exp"],
-      currentDate: now,
-    });
-    const claims = slackRouteClaimsSchema.parse(payload);
-    if (claims.hid !== hostId) throw new Error("The Slack route belongs to another host.");
-    return { teams: claims.teams };
-  }
+  readonly verifySlackRoute = Effect.fn("RemoteTokens.verifySlackRoute")(
+    (token: string, hostId: string, now = new Date()) =>
+      Effect.gen({ self: this }, function* () {
+        const { payload } = yield* tokenCall(() =>
+          jwtVerify(token, this.#ticketKey, {
+            audience: SLACK_ROUTE_AUDIENCE,
+            algorithms: ["ES256"],
+            requiredClaims: ["exp"],
+            currentDate: now,
+          }),
+        );
+        const claims = yield* tokenDecode(() => slackRouteClaimsSchema.parse(payload));
+        if (claims.hid !== hostId)
+          return yield* new RemoteTokenError({ message: "The Slack route belongs to another host." });
+        return { teams: claims.teams };
+      }),
+  );
 
-  validateSlackRoute(hostId: string, teams: SlackRouteTeam[]): Promise<SlackRouteValidation> {
-    return this.#validateSlackRoute(hostId, teams);
-  }
+  readonly validateSlackRoute = Effect.fn("RemoteTokens.validateSlackRoute")(
+    (hostId: string, teams: SlackRouteTeam[]) => this.#validateSlackRoute(hostId, teams),
+  );
 
-  validateClaims(claims: RemoteTicketClaims): Promise<boolean> {
-    return this.#validateResumeClaims(claims);
-  }
+  readonly verifyDiscordRoute = Effect.fn("RemoteTokens.verifyDiscordRoute")(
+    (token: string, hostId: string, now = new Date()) =>
+      Effect.gen({ self: this }, function* () {
+        const { payload } = yield* tokenCall(() =>
+          jwtVerify(token, this.#ticketKey, {
+            audience: DISCORD_ROUTE_AUDIENCE,
+            algorithms: ["ES256"],
+            requiredClaims: ["exp"],
+            currentDate: now,
+          }),
+        );
+        const claims = yield* tokenDecode(() => discordRouteClaimsSchema.parse(payload));
+        if (claims.hid !== hostId)
+          return yield* new RemoteTokenError({ message: "The Discord route belongs to another host." });
+        return { guilds: claims.guilds };
+      }),
+  );
 
-  async verifyResumeToken(token: string, now = new Date()): Promise<RemoteTicketClaims> {
-    const nowSeconds = Math.floor(now.getTime() / 1_000);
-    this.#pruneTrustedResumeTokens(nowSeconds);
-    try {
-      const { payload } = await jwtVerify(token, this.#sessionSecret, {
-        audience: RESUME_AUDIENCE,
-        algorithms: ["HS256"],
-        currentDate: now,
-      });
-      const claims = decodeTicketClaims({ ...payload, aud: REMOTE_TICKET_AUDIENCE }, now);
-      if (this.#trustedResumeTokens.has(claims.jti)) return claims;
-      if (!(await this.#validateResumeClaims(claims))) throw new Error("The remote session is not active.");
-      this.#trustResumeToken(claims);
-      return claims;
-    } catch (error) {
-      const claims = await this.#verifyStaleResumeToken(token, now).catch(() => null);
-      if (!claims || !(await this.#validateResumeClaims(claims))) throw error;
-      return claims;
-    }
-  }
+  readonly validateDiscordRoute = Effect.fn("RemoteTokens.validateDiscordRoute")(
+    (hostId: string, guilds: DiscordRouteGuild[]) => this.#validateDiscordRoute(hostId, guilds),
+  );
 
-  async issueResumeToken(claims: RemoteTicketClaims, nowSeconds = Math.floor(Date.now() / 1_000)): Promise<string> {
-    const jti = crypto.randomUUID();
-    const expiresAt = Math.min(claims.sessionExpiresAt, nowSeconds + RESUME_TTL_SECONDS);
-    const token = await new SignJWT({
-      sessionId: claims.sessionId,
-      hostId: claims.hostId,
-      userId: claims.userId,
-      membershipId: claims.membershipId,
-      role: claims.role,
-      authEpoch: claims.authEpoch,
-      protocolMinimum: claims.protocolMinimum,
-      protocolMaximum: claims.protocolMaximum,
-      sessionExpiresAt: claims.sessionExpiresAt,
-      ...(claims.clientPublicKey ? { clientPublicKey: claims.clientPublicKey } : {}),
-    })
-      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
-      .setJti(jti)
-      .setIssuedAt(nowSeconds)
-      .setAudience(RESUME_AUDIENCE)
-      .setExpirationTime(expiresAt)
-      .sign(this.#sessionSecret);
-    this.#trustResumeToken({ ...claims, jti, iat: nowSeconds, exp: expiresAt });
-    return token;
-  }
+  readonly verifyWebhookRoute = Effect.fn("RemoteTokens.verifyWebhookRoute")(
+    (token: string, hostId: string, now = new Date()) =>
+      Effect.gen({ self: this }, function* () {
+        const { payload } = yield* tokenCall(() =>
+          jwtVerify(token, this.#ticketKey, {
+            audience: WEBHOOK_ROUTE_AUDIENCE,
+            algorithms: ["ES256"],
+            requiredClaims: ["exp"],
+            currentDate: now,
+          }),
+        );
+        const claims = yield* tokenDecode(() => webhookRouteClaimsSchema.parse(payload));
+        if (claims.hid !== hostId)
+          return yield* new RemoteTokenError({ message: "The webhook route belongs to another host." });
+        return { routes: claims.routes };
+      }),
+  );
+
+  readonly validateWebhookRoute = Effect.fn("RemoteTokens.validateWebhookRoute")(
+    (hostId: string, routes: WebhookRoute[]) => this.#validateWebhookRoute(hostId, routes),
+  );
+
+  readonly verifyGitHubRoute = Effect.fn("RemoteTokens.verifyGitHubRoute")(
+    (token: string, hostId: string, now = new Date()) =>
+      Effect.gen({ self: this }, function* () {
+        const { payload } = yield* tokenCall(() =>
+          jwtVerify(token, this.#ticketKey, {
+            audience: GITHUB_ROUTE_AUDIENCE,
+            algorithms: ["ES256"],
+            requiredClaims: ["exp"],
+            currentDate: now,
+          }),
+        );
+        const claims = yield* tokenDecode(() => githubRouteClaimsSchema.parse(payload));
+        if (claims.hid !== hostId)
+          return yield* new RemoteTokenError({ message: "The GitHub route belongs to another host." });
+        return { repositories: claims.repositories satisfies GitHubRouteRepository[] };
+      }),
+  );
+
+  readonly verifyTelegramRoute = Effect.fn("RemoteTokens.verifyTelegramRoute")(
+    (token: string, hostId: string, now = new Date()) =>
+      Effect.gen({ self: this }, function* () {
+        const { payload } = yield* tokenCall(() =>
+          jwtVerify(token, this.#ticketKey, {
+            audience: TELEGRAM_ROUTE_AUDIENCE,
+            algorithms: ["ES256"],
+            requiredClaims: ["exp"],
+            currentDate: now,
+          }),
+        );
+        const claims = yield* tokenDecode(() => telegramRouteClaimsSchema.parse(payload));
+        if (claims.hid !== hostId)
+          return yield* new RemoteTokenError({ message: "The Telegram route belongs to another host." });
+        return { chats: claims.chats };
+      }),
+  );
+
+  readonly validateTelegramRoute = Effect.fn("RemoteTokens.validateTelegramRoute")(
+    (hostId: string, chats: TelegramRouteChat[]) => this.#validateTelegramRoute(hostId, chats),
+  );
+
+  readonly linkTelegramChat = Effect.fn("RemoteTokens.linkTelegramChat")(
+    (botId: string, chatId: string, code: string) => this.#linkTelegramChat(botId, chatId, code),
+  );
+
+  readonly validateClaims = Effect.fn("RemoteTokens.validateClaims")((claims: RemoteTicketClaims) =>
+    this.#validateResumeClaims(claims),
+  );
+
+  readonly verifyResumeToken = Effect.fn("RemoteTokens.verifyResumeToken")((token: string, now = new Date()) =>
+    Effect.gen({ self: this }, function* () {
+      this.#pruneTrustedResumeTokens(Math.floor(now.getTime() / 1_000));
+      const current = yield* Effect.gen({ self: this }, function* () {
+        const { payload } = yield* tokenCall(() =>
+          jwtVerify(token, this.#sessionSecret, {
+            audience: RESUME_AUDIENCE,
+            algorithms: ["HS256"],
+            currentDate: now,
+          }),
+        );
+        const claims = yield* tokenDecode(() =>
+          decodeTicketClaims({ ...payload, aud: REMOTE_TICKET_AUDIENCE }, now, this.#signalId),
+        );
+        if (this.#trustedResumeTokens.has(claims.jti)) return claims;
+        if (!(yield* this.validateClaims(claims)))
+          return yield* new RemoteTokenError({ message: "The remote session is not active." });
+        this.#trustResumeToken(claims);
+        return claims;
+      }).pipe(Effect.result);
+      if (Result.isSuccess(current)) return current.success;
+      const stale = yield* this.#verifyStaleResumeToken(token, now).pipe(Effect.result);
+      if (Result.isFailure(stale) || !(yield* this.validateClaims(stale.success))) return yield* current.failure;
+      return stale.success;
+    }),
+  );
+
+  readonly issueResumeToken = Effect.fn("RemoteTokens.issueResumeToken")(
+    (claims: RemoteTicketClaims, nowSeconds = Math.floor(Date.now() / 1_000)) =>
+      Effect.gen({ self: this }, function* () {
+        const jti = crypto.randomUUID();
+        const expiresAt = Math.min(claims.sessionExpiresAt, nowSeconds + RESUME_TTL_SECONDS);
+        const token = yield* tokenCall(() =>
+          new SignJWT({
+            sessionId: claims.sessionId,
+            hostId: claims.hostId,
+            userId: claims.userId,
+            membershipId: claims.membershipId,
+            role: claims.role,
+            authEpoch: claims.authEpoch,
+            protocolMinimum: claims.protocolMinimum,
+            protocolMaximum: claims.protocolMaximum,
+            sessionExpiresAt: claims.sessionExpiresAt,
+            ...(claims.clientPublicKey ? { clientPublicKey: claims.clientPublicKey } : {}),
+            ...(claims.signal ? { signal: claims.signal } : {}),
+          })
+            .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+            .setJti(jti)
+            .setIssuedAt(nowSeconds)
+            .setAudience(RESUME_AUDIENCE)
+            .setExpirationTime(expiresAt)
+            .sign(this.#sessionSecret),
+        );
+        this.#trustResumeToken({ ...claims, jti, iat: nowSeconds, exp: expiresAt });
+        return token;
+      }),
+  );
 
   revokeHost(hostId: string, authEpoch: number): void {
     for (const [jti, token] of this.#trustedResumeTokens) {
@@ -252,36 +482,43 @@ export class RemoteTokenService {
     }
   }
 
-  async #verifyStaleResumeToken(token: string, now: Date): Promise<RemoteTicketClaims> {
-    const untrusted = decodeJwt(token);
-    const expiresAt = z.number().int().safe().parse(untrusted.exp);
-    const nowSeconds = Math.floor(now.getTime() / 1_000);
-    if (expiresAt >= nowSeconds || nowSeconds - expiresAt > MAXIMUM_STALE_RESUME_SECONDS) {
-      throw new Error("The resume token cannot be renewed.");
-    }
-    const { payload } = await jwtVerify(token, this.#sessionSecret, {
-      audience: RESUME_AUDIENCE,
-      algorithms: ["HS256"],
-      currentDate: new Date((expiresAt - 1) * 1_000),
-    });
-    const claims = decodeTicketClaims({ ...payload, aud: REMOTE_TICKET_AUDIENCE }, now);
-    if (claims.iat > nowSeconds || claims.exp <= claims.iat)
-      throw new Error("The resume token timestamps are invalid.");
-    return claims;
-  }
+  readonly #verifyStaleResumeToken = Effect.fn("RemoteTokens.verifyStaleResumeToken")((token: string, now: Date) =>
+    Effect.gen({ self: this }, function* () {
+      const expiresAt = yield* tokenDecode(() => z.number().int().safe().parse(decodeJwt(token).exp));
+      const nowSeconds = Math.floor(now.getTime() / 1_000);
+      if (expiresAt >= nowSeconds || nowSeconds - expiresAt > MAXIMUM_STALE_RESUME_SECONDS) {
+        return yield* new RemoteTokenError({ message: "The resume token cannot be renewed." });
+      }
+      const { payload } = yield* tokenCall(() =>
+        jwtVerify(token, this.#sessionSecret, {
+          audience: RESUME_AUDIENCE,
+          algorithms: ["HS256"],
+          currentDate: new Date((expiresAt - 1) * 1_000),
+        }),
+      );
+      const claims = yield* tokenDecode(() =>
+        decodeTicketClaims({ ...payload, aud: REMOTE_TICKET_AUDIENCE }, now, this.#signalId),
+      );
+      if (claims.iat > nowSeconds || claims.exp <= claims.iat) {
+        return yield* new RemoteTokenError({ message: "The resume token timestamps are invalid." });
+      }
+      return claims;
+    }),
+  );
 
   iceServers(claims: RemoteTicketClaims, nowSeconds = Math.floor(Date.now() / 1_000)): IceServer[] {
     const expiration = Math.min(claims.sessionExpiresAt, nowSeconds + SIGNAL_TURN_CREDENTIAL_TTL_SECONDS);
     if (expiration <= nowSeconds) throw new Error("The remote session has expired.");
     const username = `${expiration}:${claims.sessionId}`;
     const credential = createHmac("sha1", this.#turnSecret).update(username).digest("base64");
+    const host = this.#turnHost(claims.hostId);
     return [
-      { urls: `stun:${this.#turnHost}:${this.#turnPort}` },
+      { urls: `stun:${host}:${this.#turnPort}` },
       {
         urls: [
-          `turn:${this.#turnHost}:${this.#turnPort}?transport=udp`,
-          `turn:${this.#turnHost}:${this.#turnPort}?transport=tcp`,
-          `turns:${this.#turnHost}:${this.#turnTlsPort}?transport=tcp`,
+          `turn:${host}:${this.#turnPort}?transport=udp`,
+          `turn:${host}:${this.#turnPort}?transport=tcp`,
+          `turns:${host}:${this.#turnTlsPort}?transport=tcp`,
         ],
         username,
         credential,
@@ -292,10 +529,6 @@ export class RemoteTokenService {
   }
 }
 
-/**
- * Slack's request signature: `v0=` and the hex HMAC-SHA256 of `v0:<timestamp>:<body>` with the app's
- * signing secret, for a timestamp at most five minutes old.
- */
 export function verifySlackSignature(
   body: Uint8Array,
   timestamp: string,
@@ -309,6 +542,123 @@ export function verifySlackSignature(
   const actualBytes = Buffer.from(signature);
   const expectedBytes = Buffer.from(expected);
   return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
+export function verifyGitHubSignature(body: Uint8Array, signature: string, secret: string): boolean {
+  const expected = `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+  const actualBytes = Buffer.from(signature.toLowerCase());
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
+export interface TelegramChatLink {
+  hostId: string;
+  linkedAt: number;
+}
+
+export function telegramWebhookSecret(webhookSecret: string, botId: string): string {
+  return createHmac("sha256", webhookSecret).update(`telegram-webhook:${botId}`).digest("base64url");
+}
+
+export function verifyTelegramWebhookSecret(actual: string, expected: string): boolean {
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
+export interface TelegramFileGrant {
+  botId: string;
+  filePath: string;
+}
+
+export interface TelegramUploadGrant {
+  botId: string;
+  chatId: number;
+  fileName: string;
+  messageThreadId?: number;
+  replyParameters?: TelegramReplyParameters;
+}
+
+const telegramFileGrantSchema = z.object({
+  botId: z.string().regex(TELEGRAM_BOT_ID_PATTERN),
+  filePath: z.string().min(1).max(1_024),
+  exp: z.int(),
+});
+const telegramUploadGrantSchema = z.object({
+  botId: z.string().regex(TELEGRAM_BOT_ID_PATTERN),
+  chatId: z.int(),
+  fileName: z.string().min(1).max(255),
+  messageThreadId: z.int().positive().optional(),
+  replyParameters: z
+    .object({ message_id: z.int().positive(), allow_sending_without_reply: z.boolean().optional() })
+    .optional(),
+  exp: z.int(),
+  nonce: z.string().min(1).max(64),
+});
+
+export class TelegramFileTokens {
+  readonly #fileKey: Buffer;
+  readonly #uploadKey: Buffer;
+  readonly #usedUploads = new Map<string, number>();
+
+  constructor(sessionSecret: string) {
+    this.#fileKey = createHmac("sha256", sessionSecret).update("openbot-telegram-file-token").digest();
+    this.#uploadKey = createHmac("sha256", sessionSecret).update("openbot-telegram-upload-token").digest();
+  }
+
+  issueFile(grant: TelegramFileGrant, nowSeconds = Math.floor(Date.now() / 1_000)): string {
+    return signGrant(this.#fileKey, { ...grant, exp: nowSeconds + TELEGRAM_FILE_TOKEN_TTL_SECONDS });
+  }
+
+  verifyFile(token: string, nowSeconds = Math.floor(Date.now() / 1_000)): TelegramFileGrant | null {
+    const claims = verifyGrant(this.#fileKey, token, telegramFileGrantSchema);
+    if (!claims || claims.exp <= nowSeconds) return null;
+    return { botId: claims.botId, filePath: claims.filePath };
+  }
+
+  issueUpload(grant: TelegramUploadGrant, nowSeconds = Math.floor(Date.now() / 1_000)): string {
+    return signGrant(this.#uploadKey, {
+      ...grant,
+      exp: nowSeconds + TELEGRAM_FILE_TOKEN_TTL_SECONDS,
+      nonce: crypto.randomUUID(),
+    });
+  }
+
+  consumeUpload(token: string, nowSeconds = Math.floor(Date.now() / 1_000)): TelegramUploadGrant | null {
+    for (const [nonce, expiresAt] of this.#usedUploads) {
+      if (expiresAt > nowSeconds) break;
+      this.#usedUploads.delete(nonce);
+    }
+    const claims = verifyGrant(this.#uploadKey, token, telegramUploadGrantSchema);
+    if (!claims || claims.exp <= nowSeconds || this.#usedUploads.has(claims.nonce)) return null;
+    const { exp, nonce, ...grant } = claims;
+    this.#usedUploads.set(nonce, exp);
+    return grant;
+  }
+}
+
+function signGrant(
+  key: Buffer,
+  claims: (TelegramFileGrant | TelegramUploadGrant) & { exp: number; nonce?: string },
+): string {
+  const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+  return `${payload}.${createHmac("sha256", key).update(payload).digest("base64url")}`;
+}
+
+function verifyGrant<S extends z.ZodType>(key: Buffer, token: string, schema: S): z.output<S> | null {
+  const [payload, signature, extra] = token.split(".");
+  if (!payload || !signature || extra !== undefined) return null;
+  const actualBytes = Buffer.from(signature);
+  const expectedBytes = Buffer.from(createHmac("sha256", key).update(payload).digest("base64url"));
+  if (actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes)) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(Buffer.from(payload, "base64url").toString());
+  } catch {
+    return null;
+  }
+  const claims = schema.safeParse(value);
+  return claims.success ? claims.data : null;
 }
 
 export function verifyWebhookSignature(
@@ -334,8 +684,10 @@ function parseJwks(value: string): JSONWebKeySet {
   return jwksSchema.parse(JSON.parse(value));
 }
 
-function decodeTicketClaims(value: unknown, now: Date): RemoteTicketClaims {
+function decodeTicketClaims(value: unknown, now: Date, signalId: string | null): RemoteTicketClaims {
   const claims = remoteTicketClaimsSchema.parse(value);
+  if (signalId && claims.signal !== undefined && claims.signal !== signalId)
+    throw new Error("The ticket belongs to another Signal.");
   if (claims.protocolMinimum > claims.protocolMaximum) throw new Error("Invalid protocol range.");
   if (
     claims.protocolMinimum > REMOTE_TICKET_PROTOCOL_VERSION ||

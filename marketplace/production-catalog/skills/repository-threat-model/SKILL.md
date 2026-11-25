@@ -3,7 +3,7 @@ name: repository-threat-model
 description: Produce a repository-grounded application security threat model with assets, boundaries, abuse paths, priorities, and mitigations. Use only when threat modeling is explicitly requested.
 ---
 
-<!-- Modified by OpenBot from OpenAI's security-threat-model skill. See NOTICE.txt. -->
+<!-- Modified by GoAhead from OpenAI's security-threat-model skill. See NOTICE.txt. -->
 
 # Repository Threat Model
 

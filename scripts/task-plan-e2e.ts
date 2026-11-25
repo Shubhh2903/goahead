@@ -1,9 +1,3 @@
-// Checks the agent plan block and the waiting block in a running Storybook, which renders the real
-// conversation timeline and composer against the preview mock. Read-only. Pass the Storybook URL
-// that `bun run storybook` reports: `bun scripts/task-plan-e2e.ts --storybook=http://localhost:6006`.
-// It also checks the stack of panels above the input: each panel goes under the next one, the lower
-// panel paints over the shared edge, and the top of each panel stays visible.
-// Writes .openbot-build/task-plan-e2e/report.json and one screenshot per story.
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -24,7 +18,7 @@ interface Report {
   };
   planInProgress?: { expanded: boolean; done: number; total: number };
   awaitingStates?: string[];
-  stacks?: Record<string, StackSeam[]>;
+  stacks?: Record<string, ComposerStack>;
   passed: boolean;
 }
 
@@ -42,9 +36,18 @@ interface StackSeam {
   upperTopVisible: boolean;
 }
 
-/** The seams between the panels above the input, from the top to the composer. */
-async function composerStack(page: Page): Promise<StackSeam[]> {
-  // The panels slide in once; the shimmer and spinner animations run forever.
+interface CardSeam {
+  pair: string;
+  overlap: number;
+}
+
+interface ComposerStack {
+  seams: StackSeam[];
+  cards: CardSeam[];
+  cardsFillStack: boolean;
+}
+
+async function composerStack(page: Page): Promise<ComposerStack> {
   await page.waitForFunction(() =>
     document
       .getAnimations()
@@ -52,12 +55,38 @@ async function composerStack(page: Page): Promise<StackSeam[]> {
   );
   return page.evaluate(() => {
     const wrap = document.querySelector(".composer-wrap");
-    if (!wrap) return [];
-    const panels = [
-      ...wrap.querySelectorAll(":scope > *, :scope > .agent-queue-slot > .agent-queue-slot-inner > *"),
-    ].filter((node) => !node.classList.contains("agent-queue-slot") && node.getBoundingClientRect().height > 0);
+    if (!wrap) return { seams: [], cards: [], cardsFillStack: false };
+    const visible = (node: Element) => node.getBoundingClientRect().height > 0;
     const label = (node: Element) => [...node.classList].find((name) => !name.startsWith("task-list")) ?? node.tagName;
-    return panels.slice(1).flatMap((lower, index) => {
+    const panels = [...wrap.children].filter(visible);
+    const stack = wrap.querySelector(":scope > .composer-stack");
+    const cards = stack
+      ? [...stack.querySelectorAll(":scope > *, :scope > .agent-queue-slot > .agent-queue-slot-inner > *")].filter(
+          (node) => !node.classList.contains("agent-queue-slot") && visible(node),
+        )
+      : [];
+    const frame = stack?.getBoundingClientRect();
+    const border = stack ? Number.parseFloat(getComputedStyle(stack).borderLeftWidth) : 0;
+    const cardsFillStack =
+      frame !== undefined &&
+      cards.every((card) => {
+        const box = card.getBoundingClientRect();
+        return (
+          Math.round(box.left) === Math.round(frame.left + border) &&
+          Math.round(box.right) === Math.round(frame.right - border)
+        );
+      });
+    const cardSeams = cards.slice(1).flatMap((lower, index) => {
+      const upper = cards[index];
+      if (!upper) return [];
+      return [
+        {
+          pair: `${label(upper)} > ${label(lower)}`,
+          overlap: Math.round(upper.getBoundingClientRect().bottom - lower.getBoundingClientRect().top),
+        },
+      ];
+    });
+    const seams = panels.slice(1).flatMap((lower, index) => {
       const upper = panels[index];
       if (!upper) return [];
       const top = upper.getBoundingClientRect();
@@ -74,6 +103,7 @@ async function composerStack(page: Page): Promise<StackSeam[]> {
         },
       ];
     });
+    return { seams, cards: cardSeams, cardsFillStack };
   });
 }
 
@@ -86,7 +116,6 @@ const browser = await chromium.launch({ channel: "chrome" });
 try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 860 } });
 
-  // The agent asked Research and Sales Outbound. Research replied; its answer waits in the queue.
   await openStory(page, "conversation-conversation--waiting-for-replies");
   const plan = header(page, t("chat.taskList.title"));
   await plan.waitFor();
@@ -105,7 +134,6 @@ try {
   const research = waitingBlock.getByRole("listitem").filter({ hasText: "Research" });
   assert.match((await research.textContent()) ?? "", new RegExp(t("chat.awaiting.state.replied")));
   assert.match((await research.textContent()) ?? "", /All four sources check out/u);
-  // Chief reads the answers only when Sales Outbound is done too.
   assert.doesNotMatch(
     (await research.textContent()) ?? "",
     new RegExp(t("chat.awaiting.readsNext", { name: "Chief" })),
@@ -125,7 +153,6 @@ try {
   await page.screenshot({ path: resolve(OUT, "conversation-waiting.png") });
   report.waitingForReplies = { planSteps: 4, waitingRows: 2, agentReplyInQueue: false, waitingAboveQueue };
 
-  // A plan in the running turn is open and names the step that runs.
   await openStory(page, "conversation-conversation--plan-in-progress");
   const live = header(page, t("chat.taskList.title"));
   await live.waitFor();
@@ -139,7 +166,6 @@ try {
   await page.screenshot({ path: resolve(OUT, "conversation-plan-live.png") });
   report.planInProgress = { expanded: true, done: 1, total: 3 };
 
-  // All four states of a waiting row, and the closed header that names the agent that works.
   await openStory(page, "conversation-awaiting-replies--waiting");
   const rows = page.getByRole("listitem");
   assert.equal(await rows.count(), 3);
@@ -151,7 +177,6 @@ try {
     assert.match((await rows.filter({ hasText: name }).textContent()) ?? "", new RegExp(t(state)));
   }
   const opened = header(page, t("chat.awaiting.title"));
-  // A closed header shows the agent that works in place of the title, so its name changes.
   const block = page.locator(`[aria-controls="${await opened.getAttribute("aria-controls")}"]`);
   await block.click();
   assert.equal(await block.getAttribute("aria-expanded"), "false");
@@ -163,25 +188,30 @@ try {
   );
   report.awaitingStates = ["replied", "working", "asked", "failed"];
 
-  // Waiting + queue, waiting alone, waiting + notice, and a channel's waiting + stopped task.
   report.stacks = {};
   for (const id of [
     "conversation-conversation--waiting-for-replies",
+    "conversation-conversation--waiting-for-replies-with-usage-limit",
     "conversation-conversation--plan-in-progress",
     "conversation-conversation--provider-sign-in-required",
-    "conversation-channel-transcript--waiting-subtasks-above-stopped-task",
+    "conversation-channel--waiting-subtasks-above-stopped-task",
   ]) {
     await openStory(page, id);
     await page.locator(".composer-wrap .awaiting-replies").waitFor();
-    const seams = await composerStack(page);
+    const stack = await composerStack(page);
+    const { seams } = stack;
     assert.ok(seams.length > 0, `${id}: no panel above the input.`);
     for (const seam of seams) {
       assert.ok(seam.overlap > 0, `${id}: ${seam.pair} does not go under the next panel.`);
       assert.ok(seam.lowerPaintsOver, `${id}: ${seam.pair} covers the next panel.`);
       assert.ok(seam.upperTopVisible, `${id}: the top of ${seam.pair} is hidden.`);
     }
+    for (const card of stack.cards) {
+      assert.equal(card.overlap, 1, `${id}: ${card.pair} does not sit flush on the card above.`);
+    }
+    assert.ok(stack.cardsFillStack, `${id}: a card in the stack does not fill its width.`);
     await page.locator(".composer-wrap").screenshot({ path: resolve(OUT, `stack-${id.split("--")[1]}.png`) });
-    report.stacks[id] = seams;
+    report.stacks[id] = stack;
   }
 
   report.passed = true;

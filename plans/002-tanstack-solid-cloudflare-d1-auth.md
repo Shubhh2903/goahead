@@ -4,7 +4,7 @@
 
 The central account server runs as a separate TanStack Start application with
 Solid 2. Cloudflare Workers hosts the application. D1 stores users, short-lived
-sign-in data and OpenBot sessions.
+sign-in data and GoAhead sessions.
 
 ## Account contract
 
@@ -13,8 +13,8 @@ sign-in data and OpenBot sessions.
 - The code uses 32 safe characters and carries about 40 bits of entropy.
 - The code is valid for 10 minutes and can be used only once.
 - D1 stores only a hash of the code.
-- The API neither accepts nor stores an OpenBot password.
-- The API stores only a hash of the OpenBot session token.
+- The API neither accepts nor stores a GoAhead password.
+- The API stores only a hash of the GoAhead session token.
 - Electron stores the encrypted session token through `safeStorage`.
 
 ## Limits
@@ -32,7 +32,7 @@ sign-in data and OpenBot sessions.
 3. The delivery adapter hands the code to the email service.
 4. The user types the code into the app.
 5. Electron calls `POST /v1/auth/email/verify`.
-6. The API consumes the code and returns an OpenBot session.
+6. The API consumes the code and returns a GoAhead session.
 
 ## Connection to the host whitelist
 

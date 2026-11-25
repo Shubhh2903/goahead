@@ -15,17 +15,10 @@ import {
   loadCuaDriverLock,
 } from "./cua-driver-lock";
 import { sha256 } from "./remote-desktop-runtime-release";
+import { download, isCurrentInstallation } from "./runtime-install";
 
 const logger = createOpenBotLogger("install-cua-driver");
 
-/**
- * Puts the pinned `cua-driver` build under `build/cua-driver/<platform>/<architecture>` so
- * `electron-builder` can ship it as `resources/cua-driver/<platform>/<architecture>`.
- *
- * The release is fetched by its direct download URL rather than through the GitHub releases API:
- * the tag and every digest are already pinned, so the API adds a rate limit and a token
- * requirement without adding a check that the digests do not already make.
- */
 export async function installCuaDriver(
   input: { sourceRoot?: string; outputRoot?: string; target?: CuaDriverTarget; fetchImpl?: typeof fetch } = {},
 ): Promise<"installed" | "current"> {
@@ -36,12 +29,12 @@ export async function installCuaDriver(
   const lock = await loadCuaDriverLock(sourceRoot);
   const artifact = lock.artifacts[target];
 
-  if (await isCurrentInstallation(outputRoot, target, lock)) {
+  if (await isCurrentInstallation(() => verifyCuaDriverTree(outputRoot, target, lock))) {
     logger.info(`The ${target} cua-driver ${lock.version} build is current.`);
     return "current";
   }
 
-  const archiveBytes = await download(fetchImpl, cuaDriverDownloadUrl(lock, artifact.asset));
+  const archiveBytes = await download(fetchImpl, cuaDriverDownloadUrl(lock, artifact.asset), "cua-driver");
   if (archiveBytes.byteLength !== artifact.downloadBytes) {
     throw new Error(
       `The ${target} cua-driver asset is ${archiveBytes.byteLength} bytes and not ${artifact.downloadBytes}.`,
@@ -50,12 +43,10 @@ export async function installCuaDriver(
   if (sha256(archiveBytes) !== artifact.assetSha256) {
     throw new Error(`The ${target} cua-driver asset checksum is invalid.`);
   }
-  const licenseBytes = await download(fetchImpl, cuaDriverLicenseUrl(lock));
+  const licenseBytes = await download(fetchImpl, cuaDriverLicenseUrl(lock), "cua-driver license");
   if (sha256(licenseBytes) !== lock.licenseSha256) throw new Error("The cua-driver licence checksum is invalid.");
 
   const temporaryRoot = await mkdtemp(join(tmpdir(), "openbot-cua-driver-install-"));
-  // The staging tree is a sibling of the installed one so the final step is a rename inside one
-  // directory. A temporary directory could sit on another volume, where a rename fails.
   const staging = join(dirname(outputRoot), `.${basename(outputRoot)}.installing`);
   try {
     const archive = join(temporaryRoot, artifact.asset);
@@ -78,12 +69,6 @@ export async function installCuaDriver(
   return "installed";
 }
 
-/**
- * Checks an installed tree against the pin.
- *
- * Only the files the pin names are checked, because only those files were ever copied: the staging
- * step reads the archive by name instead of moving a directory, so nothing else reaches the tree.
- */
 export async function verifyCuaDriverTree(root: string, target: CuaDriverTarget, lock: CuaDriverLock): Promise<void> {
   const artifact = lock.artifacts[target];
   for (const file of CUA_DRIVER_TARGETS[target].files) {
@@ -102,7 +87,6 @@ export async function verifyCuaDriverTree(root: string, target: CuaDriverTarget,
     throw new Error("The installed cua-driver licence does not match the pin.");
 }
 
-/** Copies the pinned files out of an extracted archive, rejecting anything that is not a plain file. */
 async function stageValidatedFiles(
   extracted: string,
   staging: string,
@@ -123,21 +107,6 @@ async function stageValidatedFiles(
     await copyFile(source, destination);
     await chmod(destination, file.executable ? 0o755 : 0o644);
   }
-}
-
-async function isCurrentInstallation(root: string, target: CuaDriverTarget, lock: CuaDriverLock): Promise<boolean> {
-  try {
-    await verifyCuaDriverTree(root, target, lock);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function download(fetchImpl: typeof fetch, url: string): Promise<Buffer> {
-  const response = await fetchImpl(url, { headers: { "User-Agent": "OpenBot-runtime-installer" }, redirect: "follow" });
-  if (!response.ok) throw new Error(`The cua-driver download answered HTTP ${response.status} for ${url}.`);
-  return Buffer.from(await response.arrayBuffer());
 }
 
 if (import.meta.main) {

@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
+import { readFcmServiceAccount } from "../apps/auth-api/src/server/android-notification-relay";
 
 const logger = createOpenBotLogger("deploy-auth-api");
 
@@ -10,12 +12,17 @@ const projectRoot = join(scriptsRoot, "..");
 const apiRoot = join(projectRoot, "apps", "auth-api");
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const bunExecutable = process.execPath;
-// Bun installs the workspace binaries at the repository root.
 const wranglerExecutable = join(projectRoot, "node_modules", ".bin", `wrangler${executableSuffix}`);
 const cloudflareEnvironment = readCloudflareEnvironment(process.argv.slice(2));
 const environmentArgs = cloudflareEnvironment ? ["--env", cloudflareEnvironment] : [];
 
 async function main(): Promise<void> {
+  if (!cloudflareEnvironment) {
+    requiredSecret("OPENPANEL_CLIENT_ID");
+    requiredSecret("OPENPANEL_CLIENT_SECRET");
+    assertLandingBeam();
+  }
+  assertFcmServiceAccount();
   await putRequiredSecret("EMAIL_SMTP_PASSWORD");
   await putRequiredSecret("SKILLS_ADMIN_TOKEN");
   await putRequiredSecret("SITE_REPORT_HASH_SECRET");
@@ -25,25 +32,30 @@ async function main(): Promise<void> {
   assertStripeKeyMode();
   await putOptionalSecretSet("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET");
   await putOptionalSecretSet("BOAT_API_KEY", "BOAT_WEBHOOK_SECRET");
-  // An unset value keeps the value that the Worker has: a new template is set for each release.
   await putOptionalSecret("HOSTED_SERVER_TEMPLATE");
-  // Without the key, agents act on GitHub as the signed-in user and not as the OpenBot GitHub App.
   await putOptionalSecret("GITHUB_APP_PRIVATE_KEY");
-  // Slack is optional: without these, the Slack routes answer 503 slack_not_configured. The test
-  // Worker takes the development app's values from .env.shared, which dotenvx reads first.
+  await putOptionalSecret("COMPANY_SIGN_IN_SECRET");
+  await putOptionalSecretSet("HOSTED_ARCHIVE_KEY_SECRET", "B2_WORKER_KEY_ID_EU", "B2_WORKER_APPLICATION_KEY_EU");
+  await putOptionalSecret("SERVER_CLAIMS_ADMIN_TOKEN");
+  if (!cloudflareEnvironment) await putOptionalSecret("HOSTED_POOL_ALERT_WEBHOOK_URL");
   await putOptionalSecretSet("SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET", "SLACK_STATE_SECRET");
   await putOptionalSecretSet("SLACK_ROUTE_PRIVATE_JWK", "SLACK_ROUTE_KEY_ID");
+  await putOptionalSecretSet("DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET", "DISCORD_STATE_SECRET");
+  await putOptionalSecretSet("DISCORD_ROUTE_PRIVATE_JWK", "DISCORD_ROUTE_KEY_ID");
+  await putOptionalSecretSet("TELEGRAM_BOT_ID", "TELEGRAM_BOT_USERNAME");
   if (cloudflareEnvironment === "test") {
     await putTestAllowList();
-    // The key is in the encrypted .env.shared. Each developer who can decrypt it can create servers.
     await putOptionalSecret("HOSTED_SERVERS_DEVELOPER_KEY");
   }
-  // Only production sends account events, so a test Worker does not add events to the production project.
-  if (!cloudflareEnvironment) await putOptionalSecretSet("OPENPANEL_CLIENT_ID", "OPENPANEL_CLIENT_SECRET");
-  // The Live Activity relay stays off until the Apple key is in the environment.
+  if (!cloudflareEnvironment) {
+    await putRequiredSecret("OPENPANEL_CLIENT_ID");
+    await putRequiredSecret("OPENPANEL_CLIENT_SECRET");
+  }
   await putOptionalSecretSet("APNS_PRIVATE_KEY", "APNS_KEY_ID");
-  // The Android live update relay stays off until the Firebase service account is in the environment.
   await putOptionalSecretSet("FCM_PROJECT_ID", "FCM_CLIENT_EMAIL", "FCM_PRIVATE_KEY");
+  await putOptionalSecret("FCM_SERVICE_ACCOUNT");
+  await putOptionalSecretSet("MEDIA_API_URL", "MEDIA_API_KEY");
+  await putOptionalSecretSet("MEDIA_API_TASKS_URL", "MEDIA_API_TASKS_KEY");
   await run(wranglerExecutable, ["d1", "migrations", "apply", "DB", "--remote", ...environmentArgs], {
     label: "Remote D1 migrations",
   });
@@ -51,23 +63,53 @@ async function main(): Promise<void> {
     label: "Auth API build",
     env: cloudflareEnvironment ? { CLOUDFLARE_ENV: cloudflareEnvironment } : undefined,
   });
+  if (!cloudflareEnvironment) {
+    await run(bunExecutable, [join(apiRoot, "scripts", "keep-previous-assets.ts")], {
+      label: "Earlier code files",
+    });
+  }
+  if (!cloudflareEnvironment) {
+    await run(wranglerExecutable, ["deploy", "--config", "wrangler.email-relay.jsonc"], {
+      label: "Email relay deployment",
+    });
+  }
   await run(wranglerExecutable, ["deploy", "--keep-vars", ...environmentArgs], {
     label: "Auth API deployment",
   });
 }
 
-async function putRequiredSecret(name: string): Promise<void> {
+function assertLandingBeam(): void {
+  const port = join(apiRoot, "src", "vendor", "laser-flow", "LandingLaserFlow.tsx");
+  if (existsSync(port)) return;
+  throw new Error(
+    "The home page beam is missing. Clone nightly-labs/openbot-laser-flow into apps/auth-api/src/vendor/laser-flow.",
+  );
+}
+
+function requiredSecret(name: string): string {
   const value = process.env[name];
   if (!value?.trim()) throw new Error(`${name} is missing from the decrypted production environment.`);
-  // dotenvx keeps the ciphertext when .env.keys has no matching private key.
-  if (value.startsWith("encrypted:")) throw new Error(`${name} is not decrypted. Check the private key in .env.keys.`);
+  if (value.startsWith("encrypted:"))
+    throw new Error(`${name} is not decrypted. Check the environment decryption key.`);
+  return value;
+}
+
+async function putRequiredSecret(name: string): Promise<void> {
+  const value = requiredSecret(name);
   await run(wranglerExecutable, ["secret", "put", name, ...environmentArgs], {
     input: `${value}\n`,
     label: `${name} secret`,
   });
 }
 
-/** A test Worker must never take real payments, and production must never take test payments. */
+function assertFcmServiceAccount(): void {
+  const value = process.env.FCM_SERVICE_ACCOUNT?.trim();
+  if (!value) return;
+  if (value.startsWith("encrypted:"))
+    throw new Error("FCM_SERVICE_ACCOUNT is not decrypted. Check the environment decryption key.");
+  if (!readFcmServiceAccount(value)) throw new Error("FCM_SERVICE_ACCOUNT is not a Firebase service account key file.");
+}
+
 function assertStripeKeyMode(): void {
   const key = process.env.STRIPE_SECRET_KEY?.trim();
   if (!key) return;
@@ -79,12 +121,6 @@ function assertStripeKeyMode(): void {
     throw new Error("STRIPE_SECRET_KEY is not a live key. Production takes only live keys.");
 }
 
-/**
- * The test Worker is public and shares its boat account with production, so only the accounts in
- * the encrypted `HOSTED_SERVERS_TEST_ALLOW_LIST` (account IDs or emails), and a request with the
- * developer key, can create servers there. Production allows each account with a var in
- * wrangler.jsonc, and a var and a secret cannot have one name.
- */
 async function putTestAllowList(): Promise<void> {
   const value = process.env.HOSTED_SERVERS_TEST_ALLOW_LIST?.trim();
   if (!value) {
@@ -105,11 +141,6 @@ async function putOptionalSecret(name: string): Promise<void> {
   if (process.env[name]?.trim()) await putRequiredSecret(name);
 }
 
-/**
- * Billing, hosting and account events are optional: the Worker turns each off without its secrets.
- * Set all or none of a set. A Stripe or boat key without its webhook secret takes payments or makes
- * sandboxes that the Worker never sees.
- */
 async function putOptionalSecretSet(...names: string[]): Promise<void> {
   const present = names.filter((name) => process.env[name]?.trim());
   if (present.length === 0) {
@@ -125,7 +156,7 @@ async function putOptionalSecretSet(...names: string[]): Promise<void> {
 async function run(
   executable: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string; label: string },
+  options: { env?: NodeJS.ProcessEnv | undefined; input?: string; label: string },
 ): Promise<void> {
   await new Promise<void>((resolveProcess, rejectProcess) => {
     const environment = { ...process.env, ...options.env };

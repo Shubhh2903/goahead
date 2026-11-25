@@ -1009,7 +1009,7 @@
     {
       "names": ["clone", "unshare"],
       "action": "SCMP_ACT_ALLOW",
-      "comment": "OpenBot: the Electron sandbox makes user, PID and network namespaces."
+      "comment": "GoAhead: the Electron sandbox makes user, PID and network namespaces."
     }
   ]
 }

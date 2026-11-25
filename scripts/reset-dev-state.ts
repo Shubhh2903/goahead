@@ -6,7 +6,8 @@ import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { isMissingFileError } from "../src/backend/file-errors";
 import { type DevelopmentProfile, developmentUserDataName } from "../src/main/development-profile";
 import { resolveDevelopmentAppDataRoot } from "./development-state-paths";
-import { cleanupSeedOwnedTransfers } from "./seed-dev-state";
+import { readScriptArguments } from "./script-arguments";
+import { cleanupSeedOwnedTransfers, isDevelopmentProfileActive } from "./seed-dev-state";
 
 export { resolveDevelopmentAppDataRoot } from "./development-state-paths";
 
@@ -14,6 +15,13 @@ const logger = createOpenBotLogger("reset-dev-state");
 
 const developmentProfiles = ["app", "test-client"] as const satisfies readonly DevelopmentProfile[];
 const legacyDevelopmentStateNames = ["OpenBot Dev Host"] as const;
+
+const USAGE = [
+  "Usage: bun run dev:reset",
+  "",
+  "Deletes the app, test-client, and legacy host development profiles. It refuses while a",
+  "dev app has one of them open. It takes no options.",
+].join("\n");
 
 export function developmentStatePaths(appDataRoot: string): string[] {
   const safeRoot = resolve(appDataRoot);
@@ -27,15 +35,18 @@ export function developmentStatePaths(appDataRoot: string): string[] {
   ].map((name) => {
     const target = resolve(safeRoot, name);
     if (dirname(target) !== safeRoot) {
-      throw new Error(`Unsafe OpenBot dev state path: ${target}`);
+      throw new Error(`Unsafe GoAhead dev state path: ${target}`);
     }
     return target;
   });
 }
 
-export async function resetDevelopmentState(appDataRoot: string, homeDirectory = homedir()): Promise<string[]> {
-  const deletedPaths: string[] = [];
-
+export async function resetDevelopmentState(
+  appDataRoot: string,
+  homeDirectory = homedir(),
+  beforeDelete: (statePath: string) => void = () => {},
+): Promise<string[]> {
+  const existingPaths: string[] = [];
   for (const statePath of developmentStatePaths(appDataRoot)) {
     try {
       await lstat(statePath);
@@ -45,32 +56,39 @@ export async function resetDevelopmentState(appDataRoot: string, homeDirectory =
       }
       throw error;
     }
-
-    await cleanupSeedOwnedTransfers(statePath, homeDirectory);
-    await rm(statePath, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
-    deletedPaths.push(statePath);
+    existingPaths.push(statePath);
   }
 
-  return deletedPaths;
+  for (const statePath of existingPaths) {
+    if (await isDevelopmentProfileActive(statePath)) {
+      throw new Error(`Quit the GoAhead dev app before you reset its state. ${statePath} is open.`);
+    }
+  }
+
+  for (const statePath of existingPaths) {
+    beforeDelete(statePath);
+    await cleanupSeedOwnedTransfers(statePath, homeDirectory);
+    await rm(statePath, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
+  }
+
+  return existingPaths;
 }
 
 async function main(): Promise<void> {
+  if (readScriptArguments({ usage: USAGE, options: {} }) === null) return;
   const appDataRoot = resolveDevelopmentAppDataRoot();
-  const deletedPaths = await resetDevelopmentState(appDataRoot);
+  const deletedPaths = await resetDevelopmentState(appDataRoot, homedir(), (statePath) => {
+    logger.info(`Deleting ${statePath}`);
+  });
 
   if (deletedPaths.length === 0) {
-    logger.info("No OpenBot development state was found.");
+    logger.info("No GoAhead development state was found.");
   } else {
-    logger.info("OpenBot development state reset:");
-    for (const deletedPath of deletedPaths) {
-      logger.info(`- ${deletedPath}`);
-    }
+    logger.info("GoAhead development state reset.");
   }
 
   logger.info("Seed-owned transfer files were removed. Other shared files were not changed.");
   logger.info("Agent workspaces, ~/.codex, and ~/.claude were not changed.");
-  // The downloaded provider CLIs are the computer's now, not this profile's, so a reset no longer
-  // takes them. Say so: it used to cost a fresh download of every one of them.
   logger.info("Downloaded provider CLIs were not changed.");
 }
 

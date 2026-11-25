@@ -2,92 +2,31 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
-import { groupApiMethodName, IPC_ENDPOINTS, type IpcEndpoint } from "@openbot/contracts/ipc";
+import {
+  groupApiMethodName,
+  IPC_ENDPOINTS,
+  IPC_GROUP_PATHS,
+  type IpcEndpoint,
+  type IpcGroupName,
+} from "@openbot/contracts/ipc";
 import { createOpenBotLogger } from "@openbot/logging";
 
-// Runs the built preload bundles in a VM with a fake Electron, after `bun run build`. The types
-// describe the source; this reads what the renderer really gets. It fails when the bundle:
-// - loads a module that a sandboxed preload cannot load, or loads code with `import()`;
-// - exposes a world other than `openbot`, or a value other than a function or a method group;
-// - exposes a method that `IPC_ENDPOINTS` and the hand-written list below do not name, or omits one;
-// - sends a method to a channel other than the channel of its endpoint, or with the wrong operation:
-//   a request must `invoke`, and an event must subscribe with `on` or `once`.
-
-type IpcGroupName = keyof typeof IPC_ENDPOINTS;
-
-// Where `src/preload/index.ts` puts each endpoint group. The empty path is the top of `window.openbot`.
-// A new group does not compile until it has a place, so that the author decides what the page can call.
-const GROUP_PATHS: Readonly<Record<IpcGroupName, string | null>> = {
-  app: "",
-  providers: "",
-  maintenance: "maintenance",
-  providerRuntimes: "providerRuntimes",
-  voice: "voice",
-  dynamicIsland: "dynamicIsland",
-  computerUse: "computerUse",
-  skills: "skills",
-  customProviders: "customProviders",
-  providerDetection: "providerDetection",
-  customAgents: "customAgents",
-  acpRegistry: "acpRegistry",
-  providerAdmin: "providerAdmin",
-  messaging: "messaging",
-  slackClient: "slackClient",
-  handoffs: "handoffs",
-  hostAdmin: "hostAdmin",
-  hostedSites: "hostedSites",
-  routineFeed: "routineFeed",
-  routineFlows: "routineFlows",
-  githubConnector: "githubConnector",
-  googleConnector: "googleConnector",
-  onePasswordConnector: "onePasswordConnector",
-  bitwardenConnector: "bitwardenConnector",
-  billing: "billing",
-  hostedServers: "hostedServers",
-  marketplaceAgents: "marketplaceAgents",
-  agentTemplates: "agentTemplates",
-  auth: "auth",
-  update: "update",
-  notifications: "notifications",
-  agent: "agent",
-  agentMemories: "agent",
-  sharedTables: "agent",
-  agentRoutines: "agent",
-  channelMemories: "agent",
-  channelRoutines: "agent",
-  mcpServers: "agent",
-  agentAdmin: "agent",
-  agentAttachments: "agent",
-  // The preload calls it from its own drop, paste, and file input handlers.
-  attachmentImports: null,
-  browser: "browser",
-  browserInput: "browser",
-  servers: "servers",
-  storage: "storage",
-  agentImport: "agentImport",
-  plugins: "plugins",
-  host: "host",
-  remoteDesktop: "remoteDesktop",
-};
-
-// Methods that `src/preload/index.ts` writes by hand. Each one narrows a scoped event and must
-// subscribe to its channel. `onAttachmentImport` has no channel: the preload's own handlers call it.
 const HAND_WRITTEN_METHODS: ReadonlyMap<string, IpcEndpoint | null> = new Map<string, IpcEndpoint | null>([
   ["agent.onAttachmentImport", null],
+  ["agent.retryAttachmentImport", null],
+  ["agent.discardAttachmentImport", null],
+  ["agent.addDroppedAgentFolder", null],
   ["agent.onEvent", IPC_ENDPOINTS.agent.scopedEvent],
   ["servers.onPresence", IPC_ENDPOINTS.servers.scopedPresence],
   ["servers.onDirectMessage", IPC_ENDPOINTS.servers.scopedDirectMessage],
   ["servers.onDirectTyping", IPC_ENDPOINTS.servers.scopedDirectTyping],
 ]);
 
-// The modules that Electron gives a sandboxed preload. The VM gets the Node module for each one
-// except `electron`, which is the fake below.
 const SANDBOX_MODULES = new Set(["electron", "events", "timers", "url"]);
 const nodeRequire = createRequire(import.meta.url);
 
 const PRELOAD_DIRECTORY = resolve(import.meta.dirname, "../out/preload");
 
-// Every method of `window.openbot` takes a payload or a listener first.
 type BridgeMethod = (payloadOrListener: unknown) => unknown;
 
 interface IpcCall {
@@ -103,6 +42,7 @@ interface ExpectedMethod {
 interface PreloadRun {
   readonly worlds: ReadonlyMap<string, unknown>;
   readonly calls: IpcCall[];
+  readonly mainWorldScripts: unknown[];
 }
 
 const logger = createOpenBotLogger("verify-preload-bundle");
@@ -137,6 +77,24 @@ if (teamWebrtc.worlds.size > 0) {
   failures.push(`teamWebrtc.cjs must expose no world; it exposes: ${[...teamWebrtc.worlds.keys()].join(", ")}.`);
 }
 
+const browserPage = runPreload("browserPage.cjs");
+if (browserPage.worlds.size > 0) {
+  failures.push(`browserPage.cjs must expose no world; it exposes: ${[...browserPage.worlds.keys()].join(", ")}.`);
+}
+if (browserPage.calls.length > 0) {
+  const used = browserPage.calls.map((c) => `${c.method} ${c.channel}`).join(", ");
+  failures.push(`browserPage.cjs must use no IPC; it used: ${used}.`);
+}
+const [pageScript, ...otherPageScripts] = browserPage.mainWorldScripts;
+if (
+  otherPageScripts.length > 0 ||
+  !isPlainObject(pageScript) ||
+  !("func" in pageScript) ||
+  typeof pageScript.func !== "function"
+) {
+  failures.push("browserPage.cjs must run exactly one function in the page world.");
+}
+
 if (failures.length > 0) {
   logger.error(["The built preload does not match the IPC contract:", ...failures.map((f) => `  ${f}`)].join("\n"));
   process.exit(1);
@@ -155,11 +113,12 @@ function runPreload(fileName: string): PreloadRun {
 
   const worlds = new Map<string, unknown>();
   const calls: IpcCall[] = [];
-  // Never settles, so a method's decoder never runs on a value that main did not send.
+  const mainWorldScripts: unknown[] = [];
   const pending = () => new Promise<never>(() => undefined);
   const electron = {
     contextBridge: {
       exposeInMainWorld: (name: string, api: unknown) => worlds.set(name, api),
+      executeInMainWorld: (script: unknown) => mainWorldScripts.push(script),
     },
     ipcRenderer: {
       invoke: (channel: string) => {
@@ -172,7 +131,7 @@ function runPreload(fileName: string): PreloadRun {
     },
     webUtils: { getPathForFile: () => "" },
   };
-  const window = { addEventListener: () => undefined, postMessage: () => undefined };
+  const window = { addEventListener: () => undefined, postMessage: () => undefined, location: { search: "" } };
   const module = { exports: {} };
   const context = {
     require: (name: string) => {
@@ -185,6 +144,7 @@ function runPreload(fileName: string): PreloadRun {
     window,
     console,
     URL,
+    URLSearchParams,
     crypto,
     structuredClone,
   };
@@ -193,14 +153,13 @@ function runPreload(fileName: string): PreloadRun {
   } catch (error) {
     failures.push(`${fileName} failed to load: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return { worlds, calls };
+  return { worlds, calls, mainWorldScripts };
 }
 
-// Each method path, such as `agent.listAgents`, with the channel and kind of its endpoint.
 function expectedMethods(): Map<string, ExpectedMethod> {
   const methods = new Map<string, ExpectedMethod>();
   for (const [group, endpoints] of Object.entries(IPC_ENDPOINTS)) {
-    const parent = isGroupName(group) ? GROUP_PATHS[group] : null;
+    const parent = isGroupName(group) ? IPC_GROUP_PATHS[group] : null;
     if (parent === null) continue;
     for (const [key, endpoint] of Object.entries(endpoints)) {
       const name = groupApiMethodName(key, endpoint);
@@ -225,7 +184,6 @@ function collectMethods(value: unknown, path: string, into: Map<string, BridgeMe
 function checkCall(run: PreloadRun, path: string, method: BridgeMethod, expected: ExpectedMethod) {
   const start = run.calls.length;
   try {
-    // A request method takes the listener as its payload, and an event method subscribes it.
     method(() => undefined);
   } catch (error) {
     failures.push(`window.openbot.${path} threw: ${error instanceof Error ? error.message : String(error)}.`);
@@ -241,7 +199,6 @@ function checkCall(run: PreloadRun, path: string, method: BridgeMethod, expected
   }
 }
 
-// The bundle runs in another realm, so its objects have another `Object.prototype`.
 function isPlainObject(value: unknown): value is object {
   if (typeof value !== "object" || value === null) return false;
   const prototype = Object.getPrototypeOf(value);

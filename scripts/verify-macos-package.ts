@@ -1,12 +1,14 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { FuseV1Options, getCurrentFuseWire } from "@electron/fuses";
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { isDynamicRecord } from "@openbot/contracts/runtime-values";
 import { createOpenBotLogger } from "@openbot/logging";
+import { isMissingFileError } from "../src/backend/file-errors";
 import { PINNED_SUNSHINE_BUNDLE_ID } from "./sunshine-bundle-identity";
 
 const logger = createOpenBotLogger("verify-macos-package");
@@ -15,6 +17,9 @@ const APPLE_TEAM_ID = "S29HD2MDR4";
 
 const FUSE_DISABLED = 48;
 const FUSE_ENABLED = 49;
+
+const launchStepLimitMs = 5 * 60_000;
+
 const EXPECTED_MACOS_ICON_FILES = [
   "icon_16x16.png",
   "icon_16x16@2x.png",
@@ -28,8 +33,6 @@ const EXPECTED_MACOS_ICON_FILES = [
   "icon_512x512@2x.png",
 ] as const;
 
-// electron-builder writes the default x64 build to `dist/mac` and adds a suffix for any other one.
-// The package is built for the runner's own architecture, so that is the one to verify.
 const architecture = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x64" : null;
 if (!architecture) throw new Error(`${PRODUCT_IDENTITY.name} does not ship for macOS ${process.arch}.`);
 const machOArchitecture = architecture === "arm64" ? "arm64" : "x86_64";
@@ -44,18 +47,28 @@ const executablePath = resolve(contentsPath, `MacOS/${PRODUCT_IDENTITY.name}`);
 const resourcesPath = resolve(contentsPath, "Resources");
 const packagedIconPath = resolve(resourcesPath, "icon.icns");
 const sourceIconPath = resolve("build/icon-production.icns");
+const packagedIconCatalogPath = resolve(resourcesPath, "Assets.car");
+const sourceIconCatalogPath = resolve("build/macos/Assets.car");
 const plistPath = resolve(contentsPath, "Info.plist");
 const voiceRuntimePath = resolve(resourcesPath, "voice/runtime");
-const voiceRuntimeFiles = ["sherpa-onnx.node", "libsherpa-onnx-c-api.dylib", "libonnxruntime.dylib"];
+const voiceRuntimeLibraries = ["sherpa-onnx.node", "libsherpa-onnx-c-api.dylib", "libonnxruntime.dylib"];
+const voiceSessionSettingsPath = resolve(voiceRuntimePath, "no-arena.cfg");
 const remoteRuntimePath = resolve(resourcesPath, "remote-desktop-runtime/darwin", architecture);
 const cuaDriverPath = resolve(resourcesPath, "cua-driver/darwin", architecture);
-// The database host is spawned by path as its own process, so it has to survive the asar unchanged.
-// Packed into app.asar it would still be readable, but `utilityProcess` cannot start it from there.
 const databaseHostPath = resolve(resourcesPath, "app.asar.unpacked/out/main/agent-database-host.js");
 const voiceHostPath = resolve(resourcesPath, "app.asar.unpacked/out/main/voice-transcription-host.js");
+const speechHostPath = resolve(resourcesPath, "app.asar.unpacked/out/main/voice-speech-host.js");
 
 await Promise.all([
   access(executablePath),
+  access(resolve(resourcesPath, "app.asar.unpacked/node_modules/effect/package.json")),
+  access(resolve(resourcesPath, "app.asar.unpacked/node_modules/effect/dist/index.js")),
+  access(
+    resolve(
+      resourcesPath,
+      `app.asar.unpacked/node_modules/@koromix/koffi-darwin-${architecture}/darwin_${architecture}/koffi.node`,
+    ),
+  ),
   access(resolve(resourcesPath, "app.asar")),
   access(packagedIconPath),
   access(sourceIconPath),
@@ -64,9 +77,16 @@ await Promise.all([
   access(resolve(resourcesPath, "licenses/sherpa-onnx-LICENSE")),
   access(resolve(resourcesPath, "licenses/onnxruntime-LICENSE")),
   access(resolve(resourcesPath, "licenses/NVIDIA-Parakeet-TDT-0.6B-v3-LICENSE")),
-  ...voiceRuntimeFiles.map((name) => access(resolve(voiceRuntimePath, name))),
+  access(resolve(resourcesPath, "licenses/NVIDIA-Parakeet-Unified-EN-0.6B-LICENSE")),
+  access(resolve(resourcesPath, "licenses/Underdog-Bark-3.0-Plus-LICENSE")),
+  access(resolve(resourcesPath, "licenses/OpenAI-Whisper-LICENSE")),
+  access(resolve(resourcesPath, "licenses/Cohere-Transcribe-LICENSE")),
+  access(resolve(resourcesPath, "licenses/Supertone-Supertonic-3-LICENSE")),
+  ...voiceRuntimeLibraries.map((name) => access(resolve(voiceRuntimePath, name))),
+  access(voiceSessionSettingsPath),
   access(databaseHostPath),
   access(voiceHostPath),
+  access(speechHostPath),
   access(resolve(resourcesPath, "remote-desktop-runtime/licenses/Sunshine-GPL-3.0.txt")),
   access(resolve(resourcesPath, "remote-desktop-runtime/licenses/moonlight-web-stream-GPL-3.0.txt")),
   access(resolve(resourcesPath, "remote-desktop-runtime/source-manifest.json")),
@@ -83,20 +103,16 @@ await Promise.all([
   access(resolve(cuaDriverPath, "cua-driver")),
   access(resolve(cuaDriverPath, "LICENSE.md")),
 ]);
-// Only this Mac's driver ships. A `from: build/cua-driver` that forgot the target would put the
-// Windows and Linux builds in every installer.
 await Promise.all(["win32", "linux"].map((name) => assertAbsent(resolve(resourcesPath, "cua-driver", name))));
-// Each application carries one architecture's runtimes. The other one would only add size.
 const otherArchitecture = architecture === "arm64" ? "x64" : "arm64";
 await Promise.all(
   ["remote-desktop-runtime", "cua-driver"].map((name) =>
     assertAbsent(resolve(resourcesPath, name, "darwin", otherArchitecture)),
   ),
 );
-// `signIgnore` keeps the driver's own Developer ID signature, and with it the Automation
-// entitlement that re-signing under GoAhead's inherited entitlements would drop.
 assertCuaDriverSignature(resolve(cuaDriverPath, "cua-driver"));
 await verifyPackagedIcon(packagedIconPath, sourceIconPath);
+await verifyPackagedIconCatalog(packagedIconCatalogPath, sourceIconCatalogPath);
 await Promise.all(["codex", "claude", "grok"].map((name) => assertAbsent(resolve(resourcesPath, name))));
 await assertAbsent(resolve(resourcesPath, "cloudflared"));
 await assertAbsent(
@@ -109,6 +125,7 @@ expectEqual(plist.CFBundleDisplayName, PRODUCT_IDENTITY.name, "display name");
 expectEqual(plist.CFBundleExecutable, PRODUCT_IDENTITY.name, "executable name");
 expectEqual(plist.CFBundleIdentifier, PRODUCT_IDENTITY.appId, "bundle identifier");
 expectEqual(plist.CFBundleIconFile, "icon.icns", "application icon");
+expectEqual(plist.CFBundleIconName, "Icon", "macOS 26 application icon");
 expectEqual(plist.LSMinimumSystemVersion, "13.0", "minimum macOS version");
 // The company Apple team. The tag workflow can name another one with the APPLE_TEAM_ID secret.
 expectEqual(plist.ElectronTeamID, process.env.APPLE_TEAM_ID?.trim() || APPLE_TEAM_ID, "Apple Team ID");
@@ -126,10 +143,17 @@ const packageJson = JSON.parse(await readFile("package.json", "utf8"));
 if (!isDynamicRecord(packageJson)) throw new Error("package.json is not a JSON object.");
 expectEqual(plist.CFBundleShortVersionString, packageJson.version, "application version");
 
-// Electron is unavailable to this process, and its own imports are what keep it startable there.
 const databaseHost = await readFile(databaseHostPath, "utf8");
-if (/from "(?!node:)/.test(databaseHost)) {
-  throw new Error("The database host must import nothing but node: builtins.");
+if (/from "(?!node:|effect["/])/.test(databaseHost)) {
+  throw new Error("The database host must import nothing but node: builtins and effect.");
+}
+for (const [path, name] of [
+  [voiceHostPath, "voice transcription"],
+  [speechHostPath, "speech"],
+] as const) {
+  if (/from "(?!node:)/.test(await readFile(path, "utf8"))) {
+    throw new Error(`The ${name} host must import nothing but node: builtins.`);
+  }
 }
 const voiceHost = await readFile(voiceHostPath, "utf8");
 if (/from "(?!node:)/.test(voiceHost)) {
@@ -140,17 +164,25 @@ const executableArchitecture = run("file", [executablePath]);
 if (!executableArchitecture.includes(machOArchitecture)) {
   throw new Error(`Expected a ${machOArchitecture} executable: ${executableArchitecture}`);
 }
-for (const name of voiceRuntimeFiles) {
+for (const name of voiceRuntimeLibraries) {
   const path = resolve(voiceRuntimePath, name);
   const voiceArchitecture = run("file", [path]);
   if (!voiceArchitecture.includes(machOArchitecture)) {
     throw new Error(`Expected a ${machOArchitecture} voice runtime library: ${voiceArchitecture}`);
   }
 }
-// The Parakeet model is downloaded on demand. No voice model, also not an old Whisper one, may ship.
 if (
-  ["voice/model", "voice/whisper-turbo-int8"].some((path) => existsSync(resolve(resourcesPath, path))) ||
-  ["encoder.int8.onnx", "turbo-encoder.int8.onnx"].some((name) => existsSync(resolve(voiceRuntimePath, name)))
+  [
+    "voice/model",
+    "voice/parakeet-unified-en-0.6b-int8",
+    "voice/bark-3.0-plus-int8",
+    "voice/whisper-turbo-int8",
+    "voice/cohere-transcribe-14-lang-int8",
+    "voice/supertonic-3-int8",
+  ].some((path) => existsSync(resolve(resourcesPath, path))) ||
+  ["encoder.int8.onnx", "turbo-encoder.int8.onnx", "vocoder.int8.onnx"].some((name) =>
+    existsSync(resolve(voiceRuntimePath, name)),
+  )
 ) {
   throw new Error("The on-demand voice models must not be in the application.");
 }
@@ -225,7 +257,13 @@ async function verifyPackagedIcon(packagedPath: string, sourcePath: string): Pro
   }
 }
 
-/** The Computer Use driver keeps the signature it was published with, not GoAhead's. */
+async function verifyPackagedIconCatalog(packagedPath: string, sourcePath: string): Promise<void> {
+  const [packagedCatalog, sourceCatalog] = await Promise.all([readFile(packagedPath), readFile(sourcePath)]);
+  if (!packagedCatalog.equals(sourceCatalog)) {
+    throw new Error("The packaged macOS icon catalog does not match build/macos/Assets.car.");
+  }
+}
+
 function assertCuaDriverSignature(binary: string): void {
   const description = run("codesign", ["-dvvv", binary], true);
   if (!description.includes("Authority=Developer ID Application: Cua AI, Inc. (YCK386LBJ7)")) {
@@ -269,20 +307,33 @@ async function verifyLaunch(executable: string): Promise<void> {
     stderr = `${stderr}${chunk}`.slice(-4_000);
   });
 
+  const launchExit = new Promise<never>((_, reject) => {
+    child.once("exit", (code, signal) => {
+      reject(
+        new Error(`Packaged GoAhead exited during launch (${signal ?? `code ${String(code)}`}): ${stderr.trim()}`),
+      );
+    });
+  });
+
   try {
-    await Promise.race([
-      new Promise<never>((_, reject) => {
-        child.once("exit", (code, signal) => {
-          reject(
-            new Error(
-              `Packaged ${PRODUCT_IDENTITY.name} exited during launch (${signal ?? `code ${String(code)}`}): ${stderr.trim()}`,
-            ),
-          );
-        });
-      }),
-      new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 15_000)),
-    ]);
-    await verifySecondInstanceExits(executable, userDataPath);
+    await waitForFirstInstance(
+      launchExit,
+      () => pathExists(join(userDataPath, "SingletonLock")),
+      "take its lock",
+      () => stderr,
+    );
+    await waitForFirstInstance(
+      launchExit,
+      () => rendererCalledMain(userDataPath),
+      "load its window",
+      () => stderr,
+    );
+    await verifySecondInstanceExits(executable, userDataPath, launchExit);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `Packaged GoAhead exited when a second instance started (${child.signalCode ?? `code ${String(child.exitCode)}`}): ${stderr.trim()}`,
+      );
+    }
   } finally {
     child.kill("SIGTERM");
     await Promise.race([
@@ -298,7 +349,53 @@ async function verifyLaunch(executable: string): Promise<void> {
   }
 }
 
-async function verifySecondInstanceExits(executable: string, userDataPath: string): Promise<void> {
+async function waitForFirstInstance(
+  launchExit: Promise<never>,
+  reached: () => Promise<boolean>,
+  step: string,
+  stderr: () => string,
+): Promise<void> {
+  const stop = new AbortController();
+  const waitForState = async () => {
+    const limit = Date.now() + launchStepLimitMs;
+    while (!(await reached())) {
+      if (Date.now() > limit) {
+        throw new Error(`Packaged GoAhead did not ${step} in 5 minutes: ${stderr().trim()}`);
+      }
+      await delay(200, undefined, { signal: stop.signal });
+    }
+  };
+  try {
+    await Promise.race([launchExit, waitForState()]);
+  } finally {
+    stop.abort();
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (isMissingFileError(error)) return false;
+    throw error;
+  }
+}
+
+async function rendererCalledMain(userDataPath: string): Promise<boolean> {
+  try {
+    return (await readFile(join(userDataPath, "logs", "trace.ndjson"), "utf8")).includes('"kind":"ipc"');
+  } catch (error) {
+    if (isMissingFileError(error)) return false;
+    throw error;
+  }
+}
+
+async function verifySecondInstanceExits(
+  executable: string,
+  userDataPath: string,
+  launchExit: Promise<never>,
+): Promise<void> {
   const second = spawn(executable, [`--user-data-dir=${userDataPath}`, "--use-mock-keychain"], {
     env: {
       ...process.env,
@@ -315,19 +412,25 @@ async function verifySecondInstanceExits(executable: string, userDataPath: strin
   second.stderr.on("data", (chunk: string) => {
     stderr = `${stderr}${chunk}`.slice(-4_000);
   });
-  const result = await Promise.race([
-    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit) => {
-      second.once("exit", (code, signal) => resolveExit({ code, signal }));
-    }),
-    new Promise<null>((resolveDelay) => setTimeout(() => resolveDelay(null), 10_000)),
-  ]);
-  if (!result) {
-    second.kill("SIGKILL");
-    throw new Error(`A second ${PRODUCT_IDENTITY.name} instance did not exit: ${stderr.trim()}`);
-  }
-  if (result.code !== 0 || result.signal) {
-    throw new Error(
-      `A second ${PRODUCT_IDENTITY.name} instance exited unexpectedly (${result.signal ?? `code ${String(result.code)}`}).`,
-    );
+  const stop = new AbortController();
+  try {
+    const result = await Promise.race([
+      new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit) => {
+        second.once("exit", (code, signal) => resolveExit({ code, signal }));
+      }),
+      launchExit,
+      delay(launchStepLimitMs, null, { signal: stop.signal }),
+    ]);
+    if (!result) {
+      throw new Error(`A second GoAhead instance did not exit in 5 minutes: ${stderr.trim()}`);
+    }
+    if (result.code !== 0 || result.signal) {
+      throw new Error(
+        `A second GoAhead instance exited unexpectedly (${result.signal ?? `code ${String(result.code)}`}): ${stderr.trim()}`,
+      );
+    }
+  } finally {
+    stop.abort();
+    if (second.exitCode === null && second.signalCode === null) second.kill("SIGKILL");
   }
 }

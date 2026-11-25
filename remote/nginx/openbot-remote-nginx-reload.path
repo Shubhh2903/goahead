@@ -1,5 +1,5 @@
 [Unit]
-Description=Watch OpenBot Remote TLS certificate
+Description=Watch GoAhead Remote TLS certificate
 
 [Path]
 PathChanged=/var/lib/docker/volumes/openbot-remote_acme-data/_data/certificates/signal.openbot.run.crt

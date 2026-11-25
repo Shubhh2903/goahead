@@ -69,30 +69,94 @@ index 42a5dbe1..9ef25249 100644
 +target_compile_features(openbot-setup-test PRIVATE cxx_std_20)
 +target_link_libraries(openbot-setup-test PRIVATE nlohmann_json::nlohmann_json ${APP_KIT_LIBRARY} ${APP_SERVICES_LIBRARY})
 diff --git a/package-lock.json b/package-lock.json
-index f8381b16..855b5585 100644
+index f8381b16..049b6fbb 100644
 --- a/package-lock.json
 +++ b/package-lock.json
-@@ -12,7 +12,7 @@
+@@ -12,109 +12,42 @@
          "date-fns": "4.1.0",
          "lucide-vue-next": "1.0.0",
          "marked": "18.0.3",
 -        "vue": "3.5.34",
+-        "vue-i18n": "11.4.2",
 +        "vue": "3.5.43",
-         "vue-i18n": "11.4.2",
++        "vue-i18n": "11.4.16",
          "vue3-simple-icons": "16.10.0"
        },
-@@ -20,7 +20,7 @@
-         "@codecov/vite-plugin": "2.0.1",
+       "devDependencies": {
+-        "@codecov/vite-plugin": "2.0.1",
          "@vitejs/plugin-vue": "6.0.7",
          "serve": "14.2.6",
 -        "vite": "6.4.2",
-+        "vite": "^6.4.3",
++        "vite": "^6.4.4",
          "vite-plugin-ejs": "1.7.0"
        }
      },
-@@ -91,30 +91,30 @@
-       "license": "MIT"
-     },
+-    "node_modules/@actions/core": {
+-      "version": "3.0.1",
+-      "resolved": "https://registry.npmjs.org/@actions/core/-/core-3.0.1.tgz",
+-      "integrity": "sha512-a6d/Nwahm9fliVGRhdhofo40HjHQasUPusmc7vBfyky+7Z+P2A1J68zyFVaNcEclc/Se+eO595oAr5nwEIoIUA==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@actions/exec": "^3.0.0",
+-        "@actions/http-client": "^4.0.0"
+-      }
+-    },
+-    "node_modules/@actions/exec": {
+-      "version": "3.0.0",
+-      "resolved": "https://registry.npmjs.org/@actions/exec/-/exec-3.0.0.tgz",
+-      "integrity": "sha512-6xH/puSoNBXb72VPlZVm7vQ+svQpFyA96qdDBvhB8eNZOE8LtPf9L4oAsfzK/crCL8YZ+19fKYVnM63Sl+Xzlw==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@actions/io": "^3.0.2"
+-      }
+-    },
+-    "node_modules/@actions/github": {
+-      "version": "9.1.1",
+-      "resolved": "https://registry.npmjs.org/@actions/github/-/github-9.1.1.tgz",
+-      "integrity": "sha512-tL5JbYOBZHc0ngEnCsaDcryUizIUIlQyIMwy1Wkx93H5HzbBJ7TbiPx2PnFjBwZW0Vh05JmfFZhecE6gglYegA==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@actions/http-client": "^3.0.2",
+-        "@octokit/core": "^7.0.6",
+-        "@octokit/plugin-paginate-rest": "^14.0.0",
+-        "@octokit/plugin-rest-endpoint-methods": "^17.0.0",
+-        "@octokit/request": "^10.0.7",
+-        "@octokit/request-error": "^7.1.0",
+-        "undici": "^6.23.0"
+-      }
+-    },
+-    "node_modules/@actions/github/node_modules/@actions/http-client": {
+-      "version": "3.0.2",
+-      "resolved": "https://registry.npmjs.org/@actions/http-client/-/http-client-3.0.2.tgz",
+-      "integrity": "sha512-JP38FYYpyqvUsz+Igqlc/JG6YO9PaKuvqjM3iGvaLqFnJ7TFmcLyy2IDrY0bI0qCQug8E9K+elv5ZNfw62ZJzA==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "tunnel": "^0.0.6",
+-        "undici": "^6.23.0"
+-      }
+-    },
+-    "node_modules/@actions/http-client": {
+-      "version": "4.0.1",
+-      "resolved": "https://registry.npmjs.org/@actions/http-client/-/http-client-4.0.1.tgz",
+-      "integrity": "sha512-+Nvd1ImaOZBSoPbsUtEhv+1z99H12xzncCkz0a3RuehINE81FZSe2QTj3uvAPTcJX/SCzUQHQ0D1GrPMbrPitg==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "tunnel": "^0.0.6",
+-        "undici": "^6.23.0"
+-      }
+-    },
+-    "node_modules/@actions/io": {
+-      "version": "3.0.2",
+-      "resolved": "https://registry.npmjs.org/@actions/io/-/io-3.0.2.tgz",
+-      "integrity": "sha512-nRBchcMM+QK1pdjO7/idu86rbJI5YHUKCvKs0KxnSYbVe3F51UfGxuZX4Qy/fWlp6l7gWFwIkrOzN+oUK03kfw==",
+-      "dev": true,
+-      "license": "MIT"
+-    },
      "node_modules/@babel/helper-string-parser": {
 -      "version": "7.27.1",
 -      "resolved": "https://registry.npmjs.org/@babel/helper-string-parser/-/helper-string-parser-7.27.1.tgz",
@@ -131,7 +195,7 @@ index f8381b16..855b5585 100644
        },
        "bin": {
          "parser": "bin/babel-parser.js"
-@@ -124,13 +124,13 @@
+@@ -124,53 +57,18 @@
        }
      },
      "node_modules/@babel/types": {
@@ -150,7 +214,130 @@ index f8381b16..855b5585 100644
        },
        "engines": {
          "node": ">=6.9.0"
-@@ -675,9 +675,9 @@
+       }
+     },
+-    "node_modules/@codecov/bundler-plugin-core": {
+-      "version": "2.0.1",
+-      "resolved": "https://registry.npmjs.org/@codecov/bundler-plugin-core/-/bundler-plugin-core-2.0.1.tgz",
+-      "integrity": "sha512-TkdKn/rEwZQ723M7DDUmHe5r0IJa23rUT4TAx5jXmg12wGZGAHGWWU7LKeQsYCsKdLMxK7bLaGk9M++4wSRD5w==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@actions/core": "^3.0.0",
+-        "@actions/github": "^9.0.0",
+-        "chalk": "4.1.2",
+-        "semver": "^7.5.4",
+-        "unplugin": "^1.10.1",
+-        "zod": "^3.22.4"
+-      },
+-      "engines": {
+-        "node": ">=20.0.0"
+-      }
+-    },
+-    "node_modules/@codecov/vite-plugin": {
+-      "version": "2.0.1",
+-      "resolved": "https://registry.npmjs.org/@codecov/vite-plugin/-/vite-plugin-2.0.1.tgz",
+-      "integrity": "sha512-w7nGA9SSc0WECzn05yRrw3uN8293I620Kd9x97I0kyyxUjtWxCMmlgmAbS364gJZYvljd0A6iQyAigVV2dOX9A==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@codecov/bundler-plugin-core": "^2.0.1",
+-        "unplugin": "^1.10.1"
+-      },
+-      "engines": {
+-        "node": ">=20.0.0"
+-      },
+-      "peerDependencies": {
+-        "vite": "4.x || 5.x || 6.x"
+-      }
+-    },
+     "node_modules/@esbuild/aix-ppc64": {
+       "version": "0.25.12",
+       "resolved": "https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.25.12.tgz",
+@@ -614,210 +512,72 @@
+       }
+     },
+     "node_modules/@intlify/core-base": {
+-      "version": "11.4.2",
+-      "resolved": "https://registry.npmjs.org/@intlify/core-base/-/core-base-11.4.2.tgz",
+-      "integrity": "sha512-7fpuCcVmeLv2T9qHsARqGvh8xt+sV2fH+Q+gMHFwB/rPXzo85DpbJFKn7dBH1L5p0c2cSh2DW+2h/64EKrISmA==",
++      "version": "11.4.16",
++      "resolved": "https://registry.npmjs.org/@intlify/core-base/-/core-base-11.4.16.tgz",
++      "integrity": "sha512-xB8nMdMRLNx7b0zPvrHy0+N9uq9Vfi1aUxHqWgn2e2/TbjCKy8HfoFpnUXXxVP8I0p1ccd6LFSC3XsFjZ3vweA==",
+       "license": "MIT",
+       "dependencies": {
+-        "@intlify/devtools-types": "11.4.2",
+-        "@intlify/message-compiler": "11.4.2",
+-        "@intlify/shared": "11.4.2"
++        "@intlify/devtools-types": "11.4.16",
++        "@intlify/message-compiler": "11.4.16",
++        "@intlify/shared": "11.4.16"
+       },
+       "engines": {
+-        "node": ">= 16"
++        "node": ">= 22"
+       },
+       "funding": {
+         "url": "https://github.com/sponsors/kazupon"
+       }
+     },
+     "node_modules/@intlify/devtools-types": {
+-      "version": "11.4.2",
+-      "resolved": "https://registry.npmjs.org/@intlify/devtools-types/-/devtools-types-11.4.2.tgz",
+-      "integrity": "sha512-3u8EN1kB6EMSi96KXs5k7a8y2X2g4+h3X6iwVZU47cP4n+mTuq//WMjG588BzSp/2XQ/dTXo2BLUXX+XS+PNfA==",
++      "version": "11.4.16",
++      "resolved": "https://registry.npmjs.org/@intlify/devtools-types/-/devtools-types-11.4.16.tgz",
++      "integrity": "sha512-Bl7arICsKgwcSEQuZJun3swenN4jwSpg35lCpijFznYbW9GvkfH4wLxcI5+gz7d/EHqu66UT9CZDIdnQdgMAGg==",
+       "license": "MIT",
+       "dependencies": {
+-        "@intlify/core-base": "11.4.2",
+-        "@intlify/shared": "11.4.2"
++        "@intlify/core-base": "11.4.16",
++        "@intlify/shared": "11.4.16"
+       },
+       "engines": {
+-        "node": ">= 16"
++        "node": ">= 22"
+       },
+       "funding": {
+         "url": "https://github.com/sponsors/kazupon"
+       }
+     },
+     "node_modules/@intlify/message-compiler": {
+-      "version": "11.4.2",
+-      "resolved": "https://registry.npmjs.org/@intlify/message-compiler/-/message-compiler-11.4.2.tgz",
+-      "integrity": "sha512-a6CDSGSMTGrg0BjD97x8TBYPf7qQMDlZipJ6UDfv/pd4OIym8TMlHu3MsH0bTNnRdAG2D6EFEykIgiQPqvtTkA==",
++      "version": "11.4.16",
++      "resolved": "https://registry.npmjs.org/@intlify/message-compiler/-/message-compiler-11.4.16.tgz",
++      "integrity": "sha512-p4lDWmBAsi3ja+PuEfPRavYyvqkYn/Upxz7UpnyI9LgIIy8XawcGIDzN+k99Z+99etO3HmDXGeTxnJIJGgSZ+g==",
+       "license": "MIT",
+       "dependencies": {
+-        "@intlify/shared": "11.4.2",
++        "@intlify/shared": "11.4.16",
+         "source-map-js": "^1.0.2"
+       },
+       "engines": {
+-        "node": ">= 16"
++        "node": ">= 22"
+       },
+       "funding": {
+         "url": "https://github.com/sponsors/kazupon"
+       }
+     },
+     "node_modules/@intlify/shared": {
+-      "version": "11.4.2",
+-      "resolved": "https://registry.npmjs.org/@intlify/shared/-/shared-11.4.2.tgz",
+-      "integrity": "sha512-NzpHbguRCsOHDwxmlBa9qu/imc+/QWgsYUaK6FZeNC0wK8QfAbhqrktEp/haVzxU1aikH8IX4ytD+mfFEMi/9A==",
++      "version": "11.4.16",
++      "resolved": "https://registry.npmjs.org/@intlify/shared/-/shared-11.4.16.tgz",
++      "integrity": "sha512-xehmkbEgbbNh/V+d8r3hFup0ViaN29YTJSAfRr28C54rxjyZEO0RNQKqW7VVajj16gLdglotNjiq+sIVNtHGzw==",
+       "license": "MIT",
+       "engines": {
+-        "node": ">= 16"
++        "node": ">= 22"
+       },
+       "funding": {
+         "url": "https://github.com/sponsors/kazupon"
        }
      },
      "node_modules/@jridgewell/sourcemap-codec": {
@@ -162,8 +349,278 @@ index f8381b16..855b5585 100644
 +      "integrity": "sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw==",
        "license": "MIT"
      },
-     "node_modules/@octokit/auth-token": {
-@@ -1250,53 +1250,53 @@
+-    "node_modules/@octokit/auth-token": {
+-      "version": "6.0.0",
+-      "resolved": "https://registry.npmjs.org/@octokit/auth-token/-/auth-token-6.0.0.tgz",
+-      "integrity": "sha512-P4YJBPdPSpWTQ1NU4XYdvHvXJJDxM6YwpS0FZHRgP7YFkdVxsWcpWGy/NVqlAA7PcPCnMacXlRm1y2PFZRWL/w==",
+-      "dev": true,
+-      "license": "MIT",
+-      "engines": {
+-        "node": ">= 20"
+-      }
+-    },
+-    "node_modules/@octokit/core": {
+-      "version": "7.0.6",
+-      "resolved": "https://registry.npmjs.org/@octokit/core/-/core-7.0.6.tgz",
+-      "integrity": "sha512-DhGl4xMVFGVIyMwswXeyzdL4uXD5OGILGX5N8Y+f6W7LhC1Ze2poSNrkF/fedpVDHEEZ+PHFW0vL14I+mm8K3Q==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@octokit/auth-token": "^6.0.0",
+-        "@octokit/graphql": "^9.0.3",
+-        "@octokit/request": "^10.0.6",
+-        "@octokit/request-error": "^7.0.2",
+-        "@octokit/types": "^16.0.0",
+-        "before-after-hook": "^4.0.0",
+-        "universal-user-agent": "^7.0.0"
+-      },
+-      "engines": {
+-        "node": ">= 20"
+-      }
+-    },
+-    "node_modules/@octokit/endpoint": {
+-      "version": "11.0.3",
+-      "resolved": "https://registry.npmjs.org/@octokit/endpoint/-/endpoint-11.0.3.tgz",
+-      "integrity": "sha512-FWFlNxghg4HrXkD3ifYbS/IdL/mDHjh9QcsNyhQjN8dplUoZbejsdpmuqdA76nxj2xoWPs7p8uX2SNr9rYu0Ag==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@octokit/types": "^16.0.0",
+-        "universal-user-agent": "^7.0.2"
+-      },
+-      "engines": {
+-        "node": ">= 20"
+-      }
+-    },
+-    "node_modules/@octokit/graphql": {
+-      "version": "9.0.3",
+-      "resolved": "https://registry.npmjs.org/@octokit/graphql/-/graphql-9.0.3.tgz",
+-      "integrity": "sha512-grAEuupr/C1rALFnXTv6ZQhFuL1D8G5y8CN04RgrO4FIPMrtm+mcZzFG7dcBm+nq+1ppNixu+Jd78aeJOYxlGA==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@octokit/request": "^10.0.6",
+-        "@octokit/types": "^16.0.0",
+-        "universal-user-agent": "^7.0.0"
+-      },
+-      "engines": {
+-        "node": ">= 20"
+-      }
+-    },
+-    "node_modules/@octokit/openapi-types": {
+-      "version": "27.0.0",
+-      "resolved": "https://registry.npmjs.org/@octokit/openapi-types/-/openapi-types-27.0.0.tgz",
+-      "integrity": "sha512-whrdktVs1h6gtR+09+QsNk2+FO+49j6ga1c55YZudfEG+oKJVvJLQi3zkOm5JjiUXAagWK2tI2kTGKJ2Ys7MGA==",
+-      "dev": true,
+-      "license": "MIT"
+-    },
+-    "node_modules/@octokit/plugin-paginate-rest": {
+-      "version": "14.0.0",
+-      "resolved": "https://registry.npmjs.org/@octokit/plugin-paginate-rest/-/plugin-paginate-rest-14.0.0.tgz",
+-      "integrity": "sha512-fNVRE7ufJiAA3XUrha2omTA39M6IXIc6GIZLvlbsm8QOQCYvpq/LkMNGyFlB1d8hTDzsAXa3OKtybdMAYsV/fw==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@octokit/types": "^16.0.0"
+-      },
+-      "engines": {
+-        "node": ">= 20"
+-      },
+-      "peerDependencies": {
+-        "@octokit/core": ">=6"
+-      }
+-    },
+-    "node_modules/@octokit/plugin-rest-endpoint-methods": {
+-      "version": "17.0.0",
+-      "resolved": "https://registry.npmjs.org/@octokit/plugin-rest-endpoint-methods/-/plugin-rest-endpoint-methods-17.0.0.tgz",
+-      "integrity": "sha512-B5yCyIlOJFPqUUeiD0cnBJwWJO8lkJs5d8+ze9QDP6SvfiXSz1BF+91+0MeI1d2yxgOhU/O+CvtiZ9jSkHhFAw==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@octokit/types": "^16.0.0"
+-      },
+-      "engines": {
+-        "node": ">= 20"
+-      },
+-      "peerDependencies": {
+-        "@octokit/core": ">=6"
+-      }
+-    },
+-    "node_modules/@octokit/request": {
+-      "version": "10.0.8",
+-      "resolved": "https://registry.npmjs.org/@octokit/request/-/request-10.0.8.tgz",
+-      "integrity": "sha512-SJZNwY9pur9Agf7l87ywFi14W+Hd9Jg6Ifivsd33+/bGUQIjNujdFiXII2/qSlN2ybqUHfp5xpekMEjIBTjlSw==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@octokit/endpoint": "^11.0.3",
+-        "@octokit/request-error": "^7.0.2",
+-        "@octokit/types": "^16.0.0",
+-        "fast-content-type-parse": "^3.0.0",
+-        "json-with-bigint": "^3.5.3",
+-        "universal-user-agent": "^7.0.2"
+-      },
+-      "engines": {
+-        "node": ">= 20"
+-      }
+-    },
+-    "node_modules/@octokit/request-error": {
+-      "version": "7.1.0",
+-      "resolved": "https://registry.npmjs.org/@octokit/request-error/-/request-error-7.1.0.tgz",
+-      "integrity": "sha512-KMQIfq5sOPpkQYajXHwnhjCC0slzCNScLHs9JafXc4RAJI+9f+jNDlBNaIMTvazOPLgb4BnlhGJOTbnN0wIjPw==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@octokit/types": "^16.0.0"
+-      },
+-      "engines": {
+-        "node": ">= 20"
+-      }
+-    },
+-    "node_modules/@octokit/types": {
+-      "version": "16.0.0",
+-      "resolved": "https://registry.npmjs.org/@octokit/types/-/types-16.0.0.tgz",
+-      "integrity": "sha512-sKq+9r1Mm4efXW1FCk7hFSeJo4QKreL/tTbR0rz/qx/r1Oa2VV83LTA/H/MuCOX7uCIJmQVRKBcbmWoySjAnSg==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@octokit/openapi-types": "^27.0.0"
+-      }
+-    },
+     "node_modules/@popperjs/core": {
+       "version": "2.11.8",
+       "resolved": "https://registry.npmjs.org/@popperjs/core/-/core-2.11.8.tgz",
+@@ -928,9 +688,6 @@
+         "arm"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -945,9 +702,6 @@
+         "arm"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -962,9 +716,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -979,9 +730,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -996,9 +744,6 @@
+         "loong64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1013,9 +758,6 @@
+         "loong64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1030,9 +772,6 @@
+         "ppc64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1047,9 +786,6 @@
+         "ppc64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1064,9 +800,6 @@
+         "riscv64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1081,9 +814,6 @@
+         "riscv64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1098,9 +828,6 @@
+         "s390x"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1115,9 +842,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1132,9 +856,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1250,53 +971,53 @@
        }
      },
      "node_modules/@vue/compiler-core": {
@@ -241,7 +698,7 @@ index f8381b16..855b5585 100644
        }
      },
      "node_modules/@vue/devtools-api": {
-@@ -1306,53 +1306,51 @@
+@@ -1306,53 +1027,51 @@
        "license": "MIT"
      },
      "node_modules/@vue/reactivity": {
@@ -319,7 +776,41 @@ index f8381b16..855b5585 100644
        "license": "MIT"
      },
      "node_modules/@zeit/schemas": {
-@@ -1581,9 +1579,9 @@
+@@ -1362,19 +1081,6 @@
+       "dev": true,
+       "license": "MIT"
+     },
+-    "node_modules/acorn": {
+-      "version": "8.16.0",
+-      "resolved": "https://registry.npmjs.org/acorn/-/acorn-8.16.0.tgz",
+-      "integrity": "sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==",
+-      "dev": true,
+-      "license": "MIT",
+-      "bin": {
+-        "acorn": "bin/acorn"
+-      },
+-      "engines": {
+-        "node": ">=0.4.0"
+-      }
+-    },
+     "node_modules/ajv": {
+       "version": "8.18.0",
+       "resolved": "https://registry.npmjs.org/ajv/-/ajv-8.18.0.tgz",
+@@ -1518,13 +1224,6 @@
+       "dev": true,
+       "license": "MIT"
+     },
+-    "node_modules/before-after-hook": {
+-      "version": "4.0.0",
+-      "resolved": "https://registry.npmjs.org/before-after-hook/-/before-after-hook-4.0.0.tgz",
+-      "integrity": "sha512-q6tR3RPqIB1pMiTRMFcZwuG5T8vwp+vUvEG0vuI6B+Rikh5BfPp2fQ82c925FOs+b0lcFQ8CFrL+KbilfZFhOQ==",
+-      "dev": true,
+-      "license": "Apache-2.0"
+-    },
+     "node_modules/bootstrap": {
+       "version": "5.3.8",
+       "resolved": "https://registry.npmjs.org/bootstrap/-/bootstrap-5.3.8.tgz",
+@@ -1581,9 +1280,9 @@
        }
      },
      "node_modules/brace-expansion": {
@@ -332,7 +823,7 @@ index f8381b16..855b5585 100644
        "dev": true,
        "license": "MIT",
        "dependencies": {
-@@ -1712,15 +1710,16 @@
+@@ -1712,15 +1411,16 @@
        }
      },
      "node_modules/compression": {
@@ -352,7 +843,7 @@ index f8381b16..855b5585 100644
          "negotiator": "~0.6.4",
          "on-headers": "~1.1.0",
          "safe-buffer": "5.2.1",
-@@ -1728,6 +1727,10 @@
+@@ -1728,6 +1428,10 @@
        },
        "engines": {
          "node": ">= 0.8.0"
@@ -363,7 +854,7 @@ index f8381b16..855b5585 100644
        }
      },
      "node_modules/concat-map": {
-@@ -1798,6 +1801,17 @@
+@@ -1798,6 +1502,17 @@
          "node": ">=4.0.0"
        }
      },
@@ -381,20 +872,44 @@ index f8381b16..855b5585 100644
      "node_modules/eastasianwidth": {
        "version": "0.2.0",
        "resolved": "https://registry.npmjs.org/eastasianwidth/-/eastasianwidth-0.2.0.tgz",
-@@ -1937,9 +1951,9 @@
+@@ -1912,23 +1627,6 @@
+         "url": "https://github.com/sindresorhus/execa?sponsor=1"
+       }
+     },
+-    "node_modules/fast-content-type-parse": {
+-      "version": "3.0.0",
+-      "resolved": "https://registry.npmjs.org/fast-content-type-parse/-/fast-content-type-parse-3.0.0.tgz",
+-      "integrity": "sha512-ZvLdcY8P+N8mGQJahJV5G4U88CSvT1rP8ApL6uETe88MBXrBHAkZlSEySdUlyztF7ccb+Znos3TFqaepHxdhBg==",
+-      "dev": true,
+-      "funding": [
+-        {
+-          "type": "github",
+-          "url": "https://github.com/sponsors/fastify"
+-        },
+-        {
+-          "type": "opencollective",
+-          "url": "https://opencollective.com/fastify"
+-        }
+-      ],
+-      "license": "MIT"
+-    },
+     "node_modules/fast-deep-equal": {
+       "version": "3.1.3",
+       "resolved": "https://registry.npmjs.org/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz",
+@@ -1937,9 +1635,9 @@
        "license": "MIT"
      },
      "node_modules/fast-uri": {
 -      "version": "3.1.2",
 -      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.2.tgz",
 -      "integrity": "sha512-rVjf7ArG3LTk+FS6Yw81V1DLuZl1bRbNrev6Tmd/9RaroeeRRJhAt7jg/6YFxbvAQXUCavSoZhPPj6oOx+5KjQ==",
-+      "version": "3.1.8",
-+      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.8.tgz",
-+      "integrity": "sha512-GZMtZUTNRpOVIECoXwLNZS5xUGE+mVNbTB8h/7Rwh2TFWcBQiPzTgyZi05BF9UMZKkLJv8XBRJTlU7zg8+ZfMg==",
++      "version": "3.1.9",
++      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.9.tgz",
++      "integrity": "sha512-hS/0Wt3Ya043oKXs0sIxrMpKQITXhMLIrVAKKXi4gozGC9v7YRWVnXIZzjNPTO02M9BdxLCWqK1yRXgNziVyJQ==",
        "dev": true,
        "funding": [
          {
-@@ -1982,9 +1996,9 @@
+@@ -1982,9 +1680,9 @@
        }
      },
      "node_modules/filelist/node_modules/brace-expansion": {
@@ -407,7 +922,21 @@ index f8381b16..855b5585 100644
        "dev": true,
        "license": "MIT",
        "dependencies": {
-@@ -2274,9 +2288,9 @@
+@@ -2156,13 +1854,6 @@
+       "dev": true,
+       "license": "MIT"
+     },
+-    "node_modules/json-with-bigint": {
+-      "version": "3.5.8",
+-      "resolved": "https://registry.npmjs.org/json-with-bigint/-/json-with-bigint-3.5.8.tgz",
+-      "integrity": "sha512-eq/4KP6K34kwa7TcFdtvnftvHCD9KvHOGGICWwMFc4dOOKF5t4iYqnfLK8otCRCRv06FXOzGGyqE8h8ElMvvdw==",
+-      "dev": true,
+-      "license": "MIT"
+-    },
+     "node_modules/lucide-vue-next": {
+       "version": "1.0.0",
+       "resolved": "https://registry.npmjs.org/lucide-vue-next/-/lucide-vue-next-1.0.0.tgz",
+@@ -2274,9 +1965,9 @@
        "license": "MIT"
      },
      "node_modules/nanoid": {
@@ -420,7 +949,15 @@ index f8381b16..855b5585 100644
        "funding": [
          {
            "type": "github",
-@@ -2384,9 +2398,9 @@
+@@ -2376,6 +2067,7 @@
+       "integrity": "sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==",
+       "dev": true,
+       "license": "MIT",
++      "peer": true,
+       "engines": {
+         "node": ">=12"
+       },
+@@ -2384,9 +2076,9 @@
        }
      },
      "node_modules/postcss": {
@@ -433,7 +970,7 @@ index f8381b16..855b5585 100644
        "funding": [
          {
            "type": "opencollective",
-@@ -2403,9 +2417,9 @@
+@@ -2403,9 +2095,9 @@
        ],
        "license": "MIT",
        "dependencies": {
@@ -445,7 +982,27 @@ index f8381b16..855b5585 100644
        },
        "engines": {
          "node": "^10 || ^12 || >=14"
-@@ -2646,9 +2660,9 @@
+@@ -2537,19 +2229,6 @@
+       ],
+       "license": "MIT"
+     },
+-    "node_modules/semver": {
+-      "version": "7.7.4",
+-      "resolved": "https://registry.npmjs.org/semver/-/semver-7.7.4.tgz",
+-      "integrity": "sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA==",
+-      "dev": true,
+-      "license": "ISC",
+-      "bin": {
+-        "semver": "bin/semver.js"
+-      },
+-      "engines": {
+-        "node": ">=10"
+-      }
+-    },
+     "node_modules/serve": {
+       "version": "14.2.6",
+       "resolved": "https://registry.npmjs.org/serve/-/serve-14.2.6.tgz",
+@@ -2646,9 +2325,9 @@
        "license": "ISC"
      },
      "node_modules/source-map-js": {
@@ -458,33 +1015,78 @@ index f8381b16..855b5585 100644
        "license": "BSD-3-Clause",
        "engines": {
          "node": ">=0.10.0"
-@@ -2762,9 +2776,9 @@
+@@ -2738,16 +2417,6 @@
+         "url": "https://github.com/sponsors/SuperchupuDev"
        }
      },
-     "node_modules/undici": {
+-    "node_modules/tunnel": {
+-      "version": "0.0.6",
+-      "resolved": "https://registry.npmjs.org/tunnel/-/tunnel-0.0.6.tgz",
+-      "integrity": "sha512-1h/Lnq9yajKY2PEbBadPXj3VxsDDu844OnaAo52UVmIzIvwwtBPIuNvkjuzBlTWpfJyUbG3ez0KSBibQkj4ojg==",
+-      "dev": true,
+-      "license": "MIT",
+-      "engines": {
+-        "node": ">=0.6.11 <=0.7.0 || >=0.7.3"
+-      }
+-    },
+     "node_modules/type-fest": {
+       "version": "2.19.0",
+       "resolved": "https://registry.npmjs.org/type-fest/-/type-fest-2.19.0.tgz",
+@@ -2761,37 +2430,6 @@
+         "url": "https://github.com/sponsors/sindresorhus"
+       }
+     },
+-    "node_modules/undici": {
 -      "version": "6.25.0",
 -      "resolved": "https://registry.npmjs.org/undici/-/undici-6.25.0.tgz",
 -      "integrity": "sha512-ZgpWDC5gmNiuY9CnLVXEH8rl50xhRCuLNA97fAUnKi8RRuV4E6KG31pDTsLVUKnohJE0I3XDrTeEydAXRw47xg==",
-+      "version": "6.29.0",
-+      "resolved": "https://registry.npmjs.org/undici/-/undici-6.29.0.tgz",
-+      "integrity": "sha512-R+RODBqp6i2pPflGdq+xIOUkl+RNfGgHwoinecKu/JCuf2uO06cOKoDbI2P7Dn6KcswdKwrczbU6IYJ6K8X+wg==",
-       "dev": true,
-       "license": "MIT",
-       "engines": {
-@@ -2814,9 +2828,9 @@
+-      "dev": true,
+-      "license": "MIT",
+-      "engines": {
+-        "node": ">=18.17"
+-      }
+-    },
+-    "node_modules/universal-user-agent": {
+-      "version": "7.0.3",
+-      "resolved": "https://registry.npmjs.org/universal-user-agent/-/universal-user-agent-7.0.3.tgz",
+-      "integrity": "sha512-TmnEAEAsBJVZM/AADELsK76llnwcf9vMKuPz8JflO1frO8Lchitr0fNaN9d+Ap0BjKtqWqd/J17qeDnXh8CL2A==",
+-      "dev": true,
+-      "license": "ISC"
+-    },
+-    "node_modules/unplugin": {
+-      "version": "1.16.1",
+-      "resolved": "https://registry.npmjs.org/unplugin/-/unplugin-1.16.1.tgz",
+-      "integrity": "sha512-4/u/j4FrCKdi17jaxuJA0jClGxB1AvU2hw/IuayPc4ay1XGaJs/rbb4v5WKwAjNifjmXK9PIFyuPiaK8azyR9w==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "acorn": "^8.14.0",
+-        "webpack-virtual-modules": "^0.6.2"
+-      },
+-      "engines": {
+-        "node": ">=14.0.0"
+-      }
+-    },
+     "node_modules/update-check": {
+       "version": "1.5.4",
+       "resolved": "https://registry.npmjs.org/update-check/-/update-check-1.5.4.tgz",
+@@ -2814,11 +2452,12 @@
        }
      },
      "node_modules/vite": {
 -      "version": "6.4.2",
 -      "resolved": "https://registry.npmjs.org/vite/-/vite-6.4.2.tgz",
 -      "integrity": "sha512-2N/55r4JDJ4gdrCvGgINMy+HH3iRpNIz8K6SFwVsA+JbQScLiC+clmAxBgwiSPgcG9U15QmvqCGWzMbqda5zGQ==",
-+      "version": "6.4.3",
-+      "resolved": "https://registry.npmjs.org/vite/-/vite-6.4.3.tgz",
-+      "integrity": "sha512-NTKlcQjlAK7MlQoyb6LgaqHc8sso/pVyUJYWMws3jg21uTJw/LddqIFPcPqP6PzpgbIcZyKI85sFE4HBrQDA8A==",
++      "version": "6.4.4",
++      "resolved": "https://registry.npmjs.org/vite/-/vite-6.4.4.tgz",
++      "integrity": "sha512-xGjU/SyjeNyb0E4KxXBvYz/1C+3JXuujvf2hXNOtnlcE+58o5ajd9N2/n2VhkiJvpCP2qQasnUpx5PXNeI+p1Q==",
        "dev": true,
        "license": "MIT",
++      "peer": true,
        "dependencies": {
-@@ -2902,16 +2916,16 @@
+         "esbuild": "^0.25.0",
+         "fdir": "^6.4.4",
+@@ -2902,16 +2541,17 @@
        }
      },
      "node_modules/vue": {
@@ -495,6 +1097,7 @@ index f8381b16..855b5585 100644
 +      "resolved": "https://registry.npmjs.org/vue/-/vue-3.5.43.tgz",
 +      "integrity": "sha512-o5qZoksdnjIKvW1srZ3ab7pcDNYAerBjRe54D0LBLfRdCYFrSgBHVXokMas35czQc0//lmx4/tuY4ZNQ+Rf2Ng==",
        "license": "MIT",
++      "peer": true,
        "dependencies": {
 -        "@vue/compiler-dom": "3.5.34",
 -        "@vue/compiler-sfc": "3.5.34",
@@ -509,33 +1112,93 @@ index f8381b16..855b5585 100644
        },
        "peerDependencies": {
          "typescript": "*"
+@@ -2923,18 +2563,18 @@
+       }
+     },
+     "node_modules/vue-i18n": {
+-      "version": "11.4.2",
+-      "resolved": "https://registry.npmjs.org/vue-i18n/-/vue-i18n-11.4.2.tgz",
+-      "integrity": "sha512-sADDeKXqAGsPX6tK3t3y2ZiMpbVWN12tG+MhTiJ06rVoh58eGtM4wFyw3uWGbVkXByVp9Ne/AP+nSSzI+J9OAQ==",
++      "version": "11.4.16",
++      "resolved": "https://registry.npmjs.org/vue-i18n/-/vue-i18n-11.4.16.tgz",
++      "integrity": "sha512-Kv9tp6iTmaAeOwop7hkAo28N1IBsbSVpnxyE26b6gqc4Q2E9Ke3ZHHA3oqqwS6/cYLT1henZU4etTaLQxrK98Q==",
+       "license": "MIT",
+       "dependencies": {
+-        "@intlify/core-base": "11.4.2",
+-        "@intlify/devtools-types": "11.4.2",
+-        "@intlify/shared": "11.4.2",
++        "@intlify/core-base": "11.4.16",
++        "@intlify/devtools-types": "11.4.16",
++        "@intlify/shared": "11.4.16",
+         "@vue/devtools-api": "^6.5.0"
+       },
+       "engines": {
+-        "node": ">= 16"
++        "node": ">= 22"
+       },
+       "funding": {
+         "url": "https://github.com/sponsors/kazupon"
+@@ -2952,13 +2592,6 @@
+         "vue": "^3"
+       }
+     },
+-    "node_modules/webpack-virtual-modules": {
+-      "version": "0.6.2",
+-      "resolved": "https://registry.npmjs.org/webpack-virtual-modules/-/webpack-virtual-modules-0.6.2.tgz",
+-      "integrity": "sha512-66/V2i5hQanC51vBQKPH4aI8NMAcBW59FVBs+rC7eGHupMyfn34q7rZIE+ETlJ+XTevqfUhVVBgSUNSW2flEUQ==",
+-      "dev": true,
+-      "license": "MIT"
+-    },
+     "node_modules/which": {
+       "version": "2.0.2",
+       "resolved": "https://registry.npmjs.org/which/-/which-2.0.2.tgz",
+@@ -3021,16 +2654,6 @@
+       "funding": {
+         "url": "https://github.com/chalk/ansi-styles?sponsor=1"
+       }
+-    },
+-    "node_modules/zod": {
+-      "version": "3.25.76",
+-      "resolved": "https://registry.npmjs.org/zod/-/zod-3.25.76.tgz",
+-      "integrity": "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==",
+-      "dev": true,
+-      "license": "MIT",
+-      "funding": {
+-        "url": "https://github.com/sponsors/colinhacks"
+-      }
+     }
+   }
+ }
 diff --git a/package.json b/package.json
-index f95d49f9..9361a393 100644
+index f95d49f9..c85fcf15 100644
 --- a/package.json
 +++ b/package.json
-@@ -13,7 +13,7 @@
+@@ -13,15 +13,19 @@
      "date-fns": "4.1.0",
      "lucide-vue-next": "1.0.0",
      "marked": "18.0.3",
 -    "vue": "3.5.34",
+-    "vue-i18n": "11.4.2",
 +    "vue": "3.5.43",
-     "vue-i18n": "11.4.2",
++    "vue-i18n": "11.4.16",
      "vue3-simple-icons": "16.10.0"
    },
-@@ -21,7 +21,10 @@
-     "@codecov/vite-plugin": "2.0.1",
+   "devDependencies": {
+-    "@codecov/vite-plugin": "2.0.1",
      "@vitejs/plugin-vue": "6.0.7",
      "serve": "14.2.6",
 -    "vite": "6.4.2",
-+    "vite": "^6.4.3",
++    "vite": "^6.4.4",
      "vite-plugin-ejs": "1.7.0"
 +  },
 +  "overrides": {
-+    "compression": "1.8.2"
++    "serve": {
++      "compression": "1.8.2"
++    }
    }
  }
 diff --git a/src/confighttp.cpp b/src/confighttp.cpp
-index 2f703dbc..c9fb7f58 100644
+index 2f703dbc..504bcd79 100644
 --- a/src/confighttp.cpp
 +++ b/src/confighttp.cpp
 @@ -1,3 +1,7 @@
@@ -666,7 +1329,7 @@ index 2f703dbc..c9fb7f58 100644
        send_response(response, output_tree);
      } catch (std::exception &e) {
        BOOST_LOG(warning) << "SavePin: "sv << e.what();
-@@ -1356,6 +1435,64 @@ namespace confighttp {
+@@ -1356,6 +1435,79 @@ namespace confighttp {
      }
    }
  
@@ -719,11 +1382,26 @@ index 2f703dbc..c9fb7f58 100644
 +    nlohmann::json output_tree;
 +    output_tree["displays"] = nlohmann::json::array();
 +    const auto display_names = platf::display_names(platf::mem_type_e::system);
++#ifdef _WIN32
++    // On Windows, output_name takes the display device id, not the GDI name of the capture output.
++    const auto devices = display_device::enumerate_devices();
++#endif
 +    for (const auto &display_name : display_names) {
-+      output_tree["displays"].push_back({
++      nlohmann::json display = {
 +        {"id", display_name},
 +        {"name", display_name},
++      };
++#ifdef _WIN32
++      const auto device = std::find_if(devices.begin(), devices.end(), [&display_name](const auto &candidate) {
++        return candidate.m_display_name == display_name;
 +      });
++      if (device != devices.end() && !device->m_device_id.empty() && device->m_info) {
++        display["id"] = device->m_device_id;
++        display["x"] = device->m_info->m_origin_point.m_x;
++        display["y"] = device->m_info->m_origin_point.m_y;
++      }
++#endif
++      output_tree["displays"].push_back(display);
 +    }
 +    send_response(response, output_tree);
 +  }
@@ -731,7 +1409,7 @@ index 2f703dbc..c9fb7f58 100644
    /**
     * @brief Reset the display device persistence.
     * @param response The HTTP response object.
-@@ -1778,8 +1915,14 @@ namespace confighttp {
+@@ -1778,8 +1930,14 @@ namespace confighttp {
      server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
      server.resource["^/api/csrf-token$"]["GET"] = getCSRFToken;
      server.resource["^/api/password$"]["POST"] = savePassword;
@@ -2608,7 +3286,7 @@ index 00000000..24572465
 +}
 +#endif
 diff --git a/src/platform/macos/input.cpp b/src/platform/macos/input.cpp
-index de721819..db7bf802 100644
+index de721819..fbf8d310 100644
 --- a/src/platform/macos/input.cpp
 +++ b/src/platform/macos/input.cpp
 @@ -15,6 +15,7 @@
@@ -2636,20 +3314,30 @@ index de721819..db7bf802 100644
      CGEventPost(kCGHIDEventTap, event);
      // For why this is here, see:
      // https://stackoverflow.com/questions/15194409/simulated-mouseevent-not-working-properly-osx
-@@ -489,7 +491,7 @@ const KeyCodeMap kKeyCodesMap[] = {
-     int wheelY = high_res_distance / 120;
+@@ -485,19 +487,21 @@ const KeyCodeMap kKeyCodesMap[] = {
+     macos_input->last_mouse_event[mac_button][release] = now;
+   }
+ 
++  // Moonlight Web sends the browser's pixel deltas, which are mostly less than one 120 notch. A line
++  // count of distance / 120 is then 0, so the distance goes as pixels.
+   void scroll(input_t &input, const int high_res_distance) {
+-    int wheelY = high_res_distance / 120;
++    int wheelY = high_res_distance;
      int wheelX = 0;
-     CGEventRef upEvent = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 2, wheelY, wheelX);
+-    CGEventRef upEvent = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 2, wheelY, wheelX);
 -    CGEventPost(kCGHIDEventTap, upEvent);
++    CGEventRef upEvent = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, wheelY, wheelX);
 +    if (!openbot_test_input(upEvent)) CGEventPost(kCGHIDEventTap, upEvent);
      CFRelease(upEvent);
    }
  
-@@ -497,7 +499,7 @@ const KeyCodeMap kKeyCodesMap[] = {
+   void hscroll(input_t &input, int high_res_distance) {
      int wheelY = 0;
-     int wheelX = high_res_distance / 120;
-     CGEventRef upEvent = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 2, wheelY, wheelX);
+-    int wheelX = high_res_distance / 120;
+-    CGEventRef upEvent = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 2, wheelY, wheelX);
 -    CGEventPost(kCGHIDEventTap, upEvent);
++    int wheelX = high_res_distance;
++    CGEventRef upEvent = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, wheelY, wheelX);
 +    if (!openbot_test_input(upEvent)) CGEventPost(kCGHIDEventTap, upEvent);
      CFRelease(upEvent);
    }
@@ -2674,10 +3362,10 @@ index 00000000..3821983e
 +}
 diff --git a/src/platform/macos/openbot_setup.mm b/src/platform/macos/openbot_setup.mm
 new file mode 100644
-index 00000000..f5f6fe1e
+index 00000000..c31c8cf0
 --- /dev/null
 +++ b/src/platform/macos/openbot_setup.mm
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,201 @@
 +// OpenBot additions to Sunshine, distributed under GPL-3.0.
 +#import <AppKit/AppKit.h>
 +#import <CoreGraphics/CoreGraphics.h>
@@ -2689,9 +3377,11 @@ index 00000000..f5f6fe1e
 +namespace {
 +  std::mutex input_mutex;
 +  bool test_mode = false;
-+  int64_t event_tag = 0;
-+  CGRect test_bounds = CGRectZero;
-+  CGPoint test_cursor = CGPointZero;
++  int64_t test_id = 0;
++  // Sunshine takes a click's location from the real cursor, which stays still during a test. A
++  // click before the first remote move has no remote location, so it does not count.
++  bool has_pointer = false;
++  CGPoint pointer = CGPointZero;
 +  bool clicked = false;
 +  bool typed = false;
 +  NSString *code = @"";
@@ -2720,47 +3410,44 @@ index 00000000..f5f6fe1e
 +  [[NSString stringWithFormat:@"Then type: %@", code] drawAtPoint:NSMakePoint(24, 70) withAttributes:attributes];
 +  [(typed ? @"Keyboard received" : [NSString stringWithFormat:@"Input: %@", entered]) drawAtPoint:NSMakePoint(24, 30) withAttributes:attributes];
 +}
-+- (BOOL)remoteEvent:(NSEvent *)event {
-+  CGEventRef native = event.CGEvent;
-+  std::lock_guard<std::mutex> lock(input_mutex);
-+  return test_mode && native && CGEventGetIntegerValueField(native, kCGEventSourceUserData) == event_tag &&
-+    CGEventGetIntegerValueField(native, kCGEventSourceUnixProcessID) == getpid();
-+}
-+- (void)acceptMouse:(NSEvent *)event point:(NSPoint)point {
-+  if ([self remoteEvent:event] && NSPointInRect(point, NSMakeRect(24, 110, 390, 60))) {
-+    // Do not activate: the viewer application must keep focus to send the keys.
++// Only openbot_test_input calls these, so input from this Mac cannot pass the test.
++- (void)acceptClick:(NSPoint)point {
++  if (NSPointInRect(point, NSMakeRect(24, 110, 390, 60))) {
 +    clicked = true;
 +    self.needsDisplay = YES;
 +  }
 +}
-+- (void)mouseDown:(NSEvent *)event {
-+  [self acceptMouse:event point:[self convertPoint:event.locationInWindow fromView:nil]];
-+}
-+- (void)acceptKey:(NSEvent *)event characters:(NSString *)characters {
-+  if (![self remoteEvent:event] || !clicked) return;
-+  if (characters.length != 1 || [characters rangeOfCharacterFromSet:[[NSCharacterSet decimalDigitCharacterSet] invertedSet]].location != NSNotFound) return;
-+  entered = [entered stringByAppendingString:characters];
++- (void)acceptDigit:(int)digit {
++  if (!clicked) return;
++  entered = [entered stringByAppendingFormat:@"%d", digit];
 +  if (entered.length > 4) entered = [entered substringFromIndex:entered.length - 4];
 +  typed = [entered isEqualToString:code];
 +  self.needsDisplay = YES;
 +}
-+- (void)keyDown:(NSEvent *)event {
-+  [self acceptKey:event characters:event.charactersIgnoringModifiers];
-+}
 +@end
 +
-+// Sunshine posts marked input to its own process. The window server gives an event no window, or the key
-+// window, and Sunshine is not the active application. Give every marked event to the panel.
-+bool openbot_route_test_event(NSEvent *event) {
-+  if (!panel) return false;
-+  const auto type = event.type;
-+  if (type != NSEventTypeLeftMouseDown && type != NSEventTypeLeftMouseUp && type != NSEventTypeKeyDown && type != NSEventTypeKeyUp) return false;
-+  auto view = (OpenBotTestView *) panel.contentView;
-+  if (![view remoteEvent:event]) return false;
-+  const NSPoint screen = event.window ? [event.window convertPointToScreen:event.locationInWindow] : event.locationInWindow;
-+  if (type == NSEventTypeLeftMouseDown) [view acceptMouse:event point:[view convertPoint:[panel convertPointFromScreen:screen] fromView:nil]];
-+  else if (type == NSEventTypeKeyDown) [view acceptKey:event characters:event.charactersIgnoringModifiers];
-+  return true;
++namespace {
++  // The digit keys 0 to 9 of the main keyboard and of the keypad, by macOS key code.
++  constexpr int64_t digit_keys[] = {29, 18, 19, 20, 21, 23, 22, 26, 28, 25};
++  constexpr int64_t keypad_keys[] = {82, 83, 84, 85, 86, 87, 88, 89, 91, 92};
++
++  int digit_for_key(int64_t key) {
++    for (int digit = 0; digit < 10; ++digit) {
++      if (digit_keys[digit] == key || keypad_keys[digit] == key) return digit;
++    }
++    return -1;
++  }
++
++  // Runs on the main thread, and only while the test that received the input is open.
++  void on_test(int64_t test, void (^operation)(OpenBotTestView *view)) {
++    dispatch_async(dispatch_get_main_queue(), ^{
++      {
++        std::lock_guard<std::mutex> lock(input_mutex);
++        if (!test_mode || test_id != test) return;
++      }
++      if (panel) operation((OpenBotTestView *) panel.contentView);
++    });
++  }
 +}
 +
 +namespace platf {
@@ -2802,7 +3489,6 @@ index 00000000..f5f6fe1e
 +        expires = nil;
 +        std::lock_guard<std::mutex> lock(input_mutex);
 +        test_mode = false;
-+        event_tag = 0;
 +        return;
 +      }
 +      if (panel) return;
@@ -2825,32 +3511,39 @@ index 00000000..f5f6fe1e
 +      [NSApp activateIgnoringOtherApps:YES];
 +      expires = [NSDate dateWithTimeIntervalSinceNow:120];
 +      std::lock_guard<std::mutex> lock(input_mutex);
-+      event_tag = ((int64_t)arc4random() << 20) | arc4random_uniform(1 << 20);
-+      const auto frame = panel.frame;
-+      const auto main_height = NSScreen.screens.firstObject.frame.size.height;
-+      test_bounds = CGRectMake(frame.origin.x, main_height - NSMaxY(frame), frame.size.width, frame.size.height);
-+      test_cursor = CGPointZero;
++      ++test_id;
++      has_pointer = false;
 +      test_mode = true;
 +    });
 +  }
 +
++  // During a test, no remote input reaches the system. The test panel reads the click and the digit
++  // keys here. It does not post them back to this process: AppKit gives a posted click only to the
++  // window that the event names, and keys only to the key window of an active application.
 +  bool openbot_test_input(CGEventRef event) {
 +    std::lock_guard<std::mutex> lock(input_mutex);
 +    if (!test_mode) return false;
-+    auto type = CGEventGetType(event);
-+    if (type == kCGEventKeyDown || type == kCGEventKeyUp) {
-+      auto key = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
-+      // Only the ten digit keys; shortcuts cannot reach another application.
-+      if (key != 18 && key != 19 && key != 20 && key != 21 && key != 23 && key != 22 && key != 26 && key != 28 && key != 25 && key != 29) return true;
-+    } else if (type == kCGEventLeftMouseDown || type == kCGEventLeftMouseUp || type == kCGEventMouseMoved) {
-+      // Test mode does not move the real cursor, and a button takes its position. Use the last move.
-+      if (type == kCGEventMouseMoved) test_cursor = CGEventGetLocation(event);
-+      else CGEventSetLocation(event, test_cursor);
-+      if (!CGRectContainsPoint(test_bounds, test_cursor)) return true;
-+    } else return true;
-+    CGEventSetFlags(event, 0);
-+    CGEventSetIntegerValueField(event, kCGEventSourceUserData, event_tag);
-+    CGEventPostToPid(getpid(), event);
++    const auto test = test_id;
++    const auto type = CGEventGetType(event);
++    if (type == kCGEventMouseMoved || type == kCGEventLeftMouseDragged) {
++      has_pointer = true;
++      pointer = CGEventGetLocation(event);
++    } else if (type == kCGEventLeftMouseDown && has_pointer) {
++      const auto location = pointer;
++      on_test(test, ^(OpenBotTestView *view) {
++        // Quartz points start at the top left of the main display, AppKit points at the bottom left.
++        const auto main_height = NSScreen.screens.firstObject.frame.size.height;
++        const auto point = [panel convertPointFromScreen:NSMakePoint(location.x, main_height - location.y)];
++        [view acceptClick:[view convertPoint:point fromView:nil]];
++      });
++    } else if (type == kCGEventKeyDown) {
++      const auto digit = digit_for_key(CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode));
++      if (digit >= 0) {
++        on_test(test, ^(OpenBotTestView *view) {
++          [view acceptDigit:digit];
++        });
++      }
++    }
 +    return true;
 +  }
 +
@@ -2862,7 +3555,7 @@ index 00000000..f5f6fe1e
 +      while (!stopped()) {
 +        @autoreleasepool {
 +          NSEvent *event = [NSApp nextEventMatchingMask:NSEventMaskAny untilDate:[NSDate dateWithTimeIntervalSinceNow:0.1] inMode:NSDefaultRunLoopMode dequeue:YES];
-+          if (event && !openbot_route_test_event(event)) [NSApp sendEvent:event];
++          if (event) [NSApp sendEvent:event];
 +          [NSApp updateWindows];
 +          if (expires && expires.timeIntervalSinceNow <= 0) {
 +            [panel close];
@@ -4181,142 +4874,98 @@ index 00000000..9e539d1e
 +}
 diff --git a/tests/unit/test_openbot_setup.mm b/tests/unit/test_openbot_setup.mm
 new file mode 100644
-index 00000000..a54b139e
+index 00000000..ee8c32dd
 --- /dev/null
 +++ b/tests/unit/test_openbot_setup.mm
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,90 @@
 +// OpenBot additions to Sunshine, distributed under GPL-3.0.
 +#import <AppKit/AppKit.h>
 +#include <stdexcept>
-+#include <string>
 +#include "../../src/platform/macos/openbot_setup.mm"
 +namespace platf { bool is_screen_capture_allowed() { return false; } }
-+#define require(condition) do { if (!(condition)) throw std::runtime_error(std::string(#condition) + " (test_openbot_setup.mm:" + std::to_string(__LINE__) + ")"); } while (false)
-+// A key event from the default source gets the modifier keys that the user holds now. With Shift,
-+// charactersIgnoringModifiers gives "!" for the 1 key. Use a private source and no modifier flags.
-+static CGEventRef key_event(CGKeyCode key_code) {
-+  static CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStatePrivate);
-+  CGEventRef event = CGEventCreateKeyboardEvent(source, key_code, true);
-+  CGEventSetFlags(event, 0);
-+  return event;
++#define require(condition) do { if (!(condition)) throw std::runtime_error(#condition); } while (false)
++
++// Runs the panel work that openbot_test_input queued. The main queue keeps its order, so that work
++// is done when the marker runs.
++static void drain() {
++  __block bool done = false;
++  dispatch_async(dispatch_get_main_queue(), ^{ done = true; });
++  while (!done) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1, true);
 +}
++
++// The Quartz screen point, as Sunshine gives it, of a point in the test view.
++static CGPoint screen_point(NSPoint point) {
++  const auto screen = [panel convertPointToScreen:[panel.contentView convertPoint:point toView:nil]];
++  return CGPointMake(screen.x, NSScreen.screens.firstObject.frame.size.height - screen.y);
++}
++
++static CGEventRef move(CGPoint point) {
++  return CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, point, kCGMouseButtonLeft);
++}
++
++// Like Sunshine, gives the click the location of the real cursor, which a test does not move.
++static CGEventRef click(CGPoint point = CGPointZero) {
++  return CGEventCreateMouseEvent(nullptr, kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
++}
++
++static CGEventRef key(int digit, bool keypad) {
++  return CGEventCreateKeyboardEvent(nullptr, (CGKeyCode) (keypad ? keypad_keys : digit_keys)[digit], true);
++}
++
++// Gives the event to the test as Sunshine's input thread does. True when the test keeps it.
++static bool deliver(CGEventRef event, bool wait = true) {
++  const bool kept = platf::openbot_test_input(event);
++  CFRelease(event);
++  if (wait) drain();
++  return kept;
++}
++
++static void type_code(bool keypad = false) {
++  for (NSUInteger i = 0; i < code.length; i++) require(deliver(key([code characterAtIndex:i] - '0', keypad)));
++}
++
 +int main() {
 +  @autoreleasepool {
 +    [NSApplication sharedApplication];
 +    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
 +    [NSApp finishLaunching];
++    require(!deliver(click(CGPointZero)));
 +    platf::openbot_test_action("start");
 +    require(platf::openbot_test_status()["active"] == true);
 +    require(!panel.movable);
-+    auto view = (OpenBotTestView *)panel.contentView;
-+    CGEventRef native = key_event(18);
-+    NSEvent *event = [NSEvent eventWithCGEvent:native];
-+    require(![view remoteEvent:event]);
-+    [view keyDown:event];
++    type_code();
 +    require(platf::openbot_test_status()["keyboard"] == false);
-+    CGEventSetIntegerValueField(native, kCGEventSourceUserData, event_tag);
-+    event = [NSEvent eventWithCGEvent:native];
-+    require([view remoteEvent:event]);
-+    CGEventSetIntegerValueField(native, kCGEventSourceUnixProcessID, getpid() + 1);
-+    event = [NSEvent eventWithCGEvent:native];
-+    require(![view remoteEvent:event]);
-+    CFRelease(native);
-+    CGEventRef mouse = CGEventCreateMouseEvent(nullptr, kCGEventLeftMouseDown, CGPointZero, kCGMouseButtonLeft);
-+    NSEvent *click = [NSEvent eventWithCGEvent:mouse];
-+    [view acceptMouse:click point:NSMakePoint(50, 130)];
-+    require(!clicked);
-+    CGEventSetIntegerValueField(mouse, kCGEventSourceUserData, event_tag);
-+    click = [NSEvent eventWithCGEvent:mouse];
-+    [view acceptMouse:click point:NSMakePoint(0, 0)];
-+    require(!clicked);
-+    [view acceptMouse:click point:NSMakePoint(50, 130)];
-+    require(clicked);
-+    CGEventRef key = key_event(18);
-+    for (NSUInteger i = 0; i < code.length; i++) {
-+      [view acceptKey:[NSEvent eventWithCGEvent:key] characters:[code substringWithRange:NSMakeRange(i, 1)]];
-+    }
-+    require(!typed);
-+    CGEventSetIntegerValueField(key, kCGEventSourceUserData, event_tag);
-+    for (NSUInteger i = 0; i < code.length; i++) {
-+      [view acceptKey:[NSEvent eventWithCGEvent:key] characters:[code substringWithRange:NSMakeRange(i, 1)]];
-+    }
-+    require(typed);
-+    CFRelease(mouse);
-+    CFRelease(key);
-+
-+    // The viewer sends an absolute move, then a button without a position. Sunshine gives the button
-+    // the position of the real cursor, which test mode does not move. The window server delivers the
-+    // events only with Post Event access, so the test gives them to the view itself.
-+    clicked = typed = false;
-+    entered = @"";
-+    const NSRect target = [panel convertRectToScreen:[view convertRect:NSMakeRect(24, 110, 390, 60) toView:nil]];
-+    const auto main_height = NSScreen.screens.firstObject.frame.size.height;
-+    const CGPoint inside = CGPointMake(NSMidX(target), main_height - NSMidY(target));
-+    const CGPoint real_cursor = CGPointMake(CGRectGetMaxX(test_bounds) + 50, CGRectGetMaxY(test_bounds) + 50);
-+    CGEventRef move = CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, inside, kCGMouseButtonLeft);
-+    require(platf::openbot_test_input(move));
-+    CFRelease(move);
-+    for (auto type : {kCGEventLeftMouseDown, kCGEventLeftMouseUp}) {
-+      CGEventRef button = CGEventCreateMouseEvent(nullptr, type, real_cursor, kCGMouseButtonLeft);
-+      require(platf::openbot_test_input(button));
-+      const CGPoint location = CGEventGetLocation(button);
-+      const NSPoint window_point = [panel convertPointFromScreen:NSMakePoint(location.x, main_height - location.y)];
-+      if (type == kCGEventLeftMouseDown) [view acceptMouse:[NSEvent eventWithCGEvent:button] point:[view convertPoint:window_point fromView:nil]];
-+      CFRelease(button);
-+    }
-+    require(clicked);
-+    const CGKeyCode digits[] = {29, 18, 19, 20, 21, 23, 22, 26, 28, 25};
-+    for (NSUInteger i = 0; i < code.length; i++) {
-+      CGEventRef digit = key_event(digits[[code characterAtIndex:i] - '0']);
-+      require(platf::openbot_test_input(digit));
-+      [view acceptKey:[NSEvent eventWithCGEvent:digit] characters:[code substringWithRange:NSMakeRange(i, 1)]];
-+      CFRelease(digit);
-+    }
-+    require(typed);
-+    // Sunshine posts the marked events to itself. The window server gives a mouse event no window,
-+    // so the main loop must give it to the panel itself.
-+    clicked = typed = false;
-+    entered = @"";
-+    require(panel.canBecomeKeyWindow);
-+    const CGPoint outside = CGPointMake(CGRectGetMaxX(test_bounds) + 50, CGRectGetMaxY(test_bounds) + 50);
-+    for (const CGPoint point : {outside, inside}) {
-+      for (auto type : {kCGEventLeftMouseDown, kCGEventLeftMouseUp}) {
-+        CGEventRef button = CGEventCreateMouseEvent(nullptr, type, point, kCGMouseButtonLeft);
-+        require(!openbot_route_test_event([NSEvent eventWithCGEvent:button]));
-+        CGEventSetIntegerValueField(button, kCGEventSourceUserData, event_tag);
-+        NSEvent *routed = [NSEvent eventWithCGEvent:button];
-+        require(routed.window == nil);
-+        require(openbot_route_test_event(routed));
-+        CFRelease(button);
-+      }
-+      require(clicked == (point.x == inside.x && point.y == inside.y));
-+    }
-+    // Marked keys come with no window or with the panel window, also when the panel is not key. The main
-+    // loop gives every marked key to the view, so the viewer application can keep focus.
-+    for (const bool with_window : {false, true}) {
-+      typed = false;
-+      entered = @"";
-+      for (NSUInteger i = 0; i < code.length; i++) {
-+        const CGKeyCode key_code = digits[[code characterAtIndex:i] - '0'];
-+        CGEventRef digit = key_event(key_code);
-+        if (with_window) {
-+          CFRelease(digit);
-+          NSEvent *local = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:panel.windowNumber context:nil characters:[code substringWithRange:NSMakeRange(i, 1)] charactersIgnoringModifiers:[code substringWithRange:NSMakeRange(i, 1)] isARepeat:NO keyCode:key_code];
-+          digit = CGEventCreateCopy(local.CGEvent);
-+        }
-+        CGEventSetIntegerValueField(digit, kCGEventSourceUserData, event_tag);
-+        CGEventSetIntegerValueField(digit, kCGEventSourceUnixProcessID, getpid());
-+        NSEvent *routed = [NSEvent eventWithCGEvent:digit];
-+        require((routed.window == panel) == with_window);
-+        require(openbot_route_test_event(routed));
-+        CFRelease(digit);
-+      }
-+      require(typed);
-+    }
++    require(deliver(click(screen_point(NSMakePoint(50, 130)))));
++    require(platf::openbot_test_status()["mouse"] == false);
++    require(deliver(move(screen_point(NSMakePoint(50, 130)))));
++    require(deliver(move(screen_point(NSMakePoint(10, 10)))));
++    require(deliver(click(screen_point(NSMakePoint(50, 130)))));
++    require(platf::openbot_test_status()["mouse"] == false);
++    require(deliver(move(screen_point(NSMakePoint(50, 130)))));
++    require(deliver(click()));
++    require(platf::openbot_test_status()["mouse"] == true);
++    require(deliver(CGEventCreateKeyboardEvent(nullptr, 0, true)));
++    type_code();
++    require(platf::openbot_test_status()["keyboard"] == true);
++    platf::openbot_test_action("stop");
++    platf::openbot_test_action("start");
++    require(deliver(move(screen_point(NSMakePoint(50, 130)))));
++    require(deliver(click()));
++    type_code(true);
++    require(platf::openbot_test_status()["keyboard"] == true);
 +    platf::openbot_test_action("stop");
 +    require(platf::openbot_test_status()["active"] == false);
 +    require(!test_mode);
-+    puts("Native test: local input rejected; marked Sunshine input recognized; click at the test cursor; windowless input routed; panel cleanup passed.");
++    require(!deliver(click(CGPointZero)));
++    platf::openbot_test_action("start");
++    require(deliver(move(screen_point(NSMakePoint(50, 130)))));
++    require(deliver(click(), false));
++    platf::openbot_test_action("stop");
++    platf::openbot_test_action("start");
++    drain();
++    require(platf::openbot_test_status()["mouse"] == false);
++    platf::openbot_test_action("stop");
++    puts("Native test: remote pointer, click and code recognized without event routing; stale input ignored; panel cleanup passed.");
 +  }
 +}
 diff --git a/tests/unit/test_stream.cpp b/tests/unit/test_stream.cpp
@@ -4393,3 +5042,29 @@ index fdc444cf..7ace468f 100644
 +  EXPECT_EQ(message->first, 0x0206);
 +  EXPECT_EQ(message->second, "abc");
 +}
+diff --git a/vite.config.js b/vite.config.js
+index 568aae41..1e1cb4ea 100644
+--- a/vite.config.js
++++ b/vite.config.js
+@@ -3,7 +3,6 @@ import fs from 'fs';
+ import { resolve } from 'path'
+ import { defineConfig } from 'vite'
+ import { ViteEjsPlugin } from "vite-plugin-ejs";
+-import { codecovVitePlugin } from "@codecov/vite-plugin";
+ import vue from '@vitejs/plugin-vue'
+ import process from 'process'
+ 
+@@ -53,13 +52,6 @@ export default defineConfig({
+     plugins: [
+         vue(),
+         ViteEjsPlugin({ header }),
+-        // The Codecov vite plugin should be after all other plugins
+-        codecovVitePlugin({
+-            enableBundleAnalysis: true,
+-            bundleName: "sunshine",
+-            uploadToken: process.env.CODECOV_TOKEN,
+-            gitService: "github",
+-        }),
+     ],
+     root: resolve(assetsSrcPath),
+     build: {

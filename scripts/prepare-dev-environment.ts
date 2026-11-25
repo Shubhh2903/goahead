@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { constants, copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { constants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { developmentInstanceIdForWorktree } from "../src/main/development-profile";
-import { type DevelopmentEnvOutcome, ensureDevelopmentEnvFile } from "./development-secrets";
+import { type DevelopmentStateOutcome, ensureDevelopmentState } from "./development-secrets";
 
 const scriptsRoot = dirname(fileURLToPath(import.meta.url));
 export const developmentProjectRoot = dirname(scriptsRoot);
@@ -14,39 +15,130 @@ export type DevelopmentCommandRunner = (
   options: { cwd: string; stdio: "inherit"; env?: NodeJS.ProcessEnv },
 ) => void;
 
-export const supportedBunVersion = "1.4.0";
+export const supportedBunVersion = "1.4.2";
+
+const INSTALL_STAMP = join("node_modules", ".openbot-install-stamp");
+const LOCAL_D1_STATE = join("apps", "auth-api", ".wrangler", "state", "v3", "d1");
+const MIGRATION_STAMP = join(LOCAL_D1_STATE, ".openbot-migrate-local-stamp");
+const MIGRATIONS_DIRECTORY = join("apps", "auth-api", "migrations");
 
 export interface DevelopmentPreparationInput {
   projectRoot?: string;
-  /** The main checkout that owns this worktree; read from git when omitted. */
   mainCheckoutRoot?: string;
   executable?: string;
   bunVersion?: string;
   run?: DevelopmentCommandRunner;
 }
 
-export function prepareDevelopmentEnvironment(input: DevelopmentPreparationInput = {}): DevelopmentEnvOutcome {
+export function prepareDevelopmentEnvironment(input: DevelopmentPreparationInput = {}): DevelopmentStateOutcome {
   const projectRoot = input.projectRoot ?? developmentProjectRoot;
   assertSupportedBunVersion(input.bunVersion ?? process.versions.bun ?? "unknown");
-  // Before the env file, so a worktree reuses the main checkout's `.env.dev` identity.
   const copied = copyWorktreeIncludes(projectRoot, input.mainCheckoutRoot ?? findMainCheckoutRoot(projectRoot));
   for (const path of copied) process.stdout.write(`Copied ${path} from the main checkout.\n`);
-  // Before `bun install`, because a fresh clone has no `.env.dev` and both dev services load one.
-  // Only `.env.production` is still encrypted, so a fork needs no `.env.keys` to reach this point.
-  const envFile = ensureDevelopmentEnvFile(projectRoot);
+  const stateOutcome = ensureDevelopmentState(projectRoot);
 
   const executable = input.executable ?? process.execPath;
   const run = input.run ?? execDevelopmentCommand;
   const options = { cwd: projectRoot, stdio: "inherit" as const };
 
-  run(executable, ["install", "--frozen-lockfile"], options);
-  run(executable, ["run", "api:migrate:local"], options);
-  return envFile;
+  runUnlessStamped(
+    join(projectRoot, INSTALL_STAMP),
+    () => installFingerprint(projectRoot),
+    () => run(executable, ["install", "--frozen-lockfile"], options),
+  );
+  runUnlessStamped(
+    join(projectRoot, MIGRATION_STAMP),
+    () => (existsSync(join(projectRoot, LOCAL_D1_STATE)) ? migrationFingerprint(projectRoot) : null),
+    () => run(executable, ["run", "api:migrate:local"], options),
+  );
+  return stateOutcome;
 }
 
-export function prepareDevelopmentWorktree(input: DevelopmentPreparationInput = {}): DevelopmentEnvOutcome {
+function runUnlessStamped(stampPath: string, fingerprint: () => string | null, command: () => void): void {
+  const before = fingerprint();
+  if (before !== null && readStamp(stampPath) === before) return;
+  command();
+  const after = fingerprint();
+  if (after !== null) writeStamp(stampPath, after);
+}
+
+function writeStamp(path: string, fingerprint: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${fingerprint}\n`);
+}
+
+export function writeInstallStamp(projectRoot = developmentProjectRoot): void {
+  writeStamp(join(projectRoot, INSTALL_STAMP), installFingerprint(projectRoot));
+}
+
+function readStamp(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+export function installFingerprint(projectRoot: string): string {
+  const files = ["bun.lock", "bunfig.toml", "package.json", ...workspaceManifests(projectRoot)];
+  const patches = join(projectRoot, "patches");
+  if (existsSync(patches)) {
+    for (const entry of readdirSync(patches, { withFileTypes: true })) {
+      if (entry.isFile()) files.push(join("patches", entry.name));
+    }
+  }
+  return fingerprintFiles(projectRoot, files, [`bun ${process.versions.bun ?? "unknown"}`]);
+}
+
+export function migrationFingerprint(projectRoot: string): string {
+  const directory = join(projectRoot, MIGRATIONS_DIRECTORY);
+  const names = existsSync(directory) ? readdirSync(directory) : [];
+  return fingerprintFiles(
+    projectRoot,
+    names.map((name) => join(MIGRATIONS_DIRECTORY, name)),
+    [],
+  );
+}
+
+function workspaceManifests(projectRoot: string): string[] {
+  let patterns: unknown;
+  try {
+    patterns = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8")).workspaces?.packages;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(patterns)) return [];
+  const manifests: string[] = [];
+  for (const pattern of patterns) {
+    if (typeof pattern !== "string") continue;
+    if (!pattern.endsWith("/*")) {
+      manifests.push(join(pattern, "package.json"));
+      continue;
+    }
+    const parent = pattern.slice(0, -2);
+    if (!existsSync(join(projectRoot, parent))) continue;
+    for (const entry of readdirSync(join(projectRoot, parent), { withFileTypes: true })) {
+      if (entry.isDirectory()) manifests.push(join(parent, entry.name, "package.json"));
+    }
+  }
+  return manifests;
+}
+
+function fingerprintFiles(projectRoot: string, files: string[], extra: string[]): string {
+  const hash = createHash("sha256");
+  for (const line of extra) hash.update(`${line}\n`);
+  for (const file of [...files].sort()) {
+    const path = join(projectRoot, file);
+    hash.update(`${file}\n`);
+    hash.update(existsSync(path) ? readFileSync(path) : "missing");
+    hash.update("\n");
+  }
+  return hash.digest("hex");
+}
+
+export function prepareDevelopmentWorktree(input: DevelopmentPreparationInput = {}): DevelopmentStateOutcome {
   const projectRoot = input.projectRoot ?? developmentProjectRoot;
-  const envFile = prepareDevelopmentEnvironment({ ...input, projectRoot });
+  const stateOutcome = prepareDevelopmentEnvironment({ ...input, projectRoot });
   const executable = input.executable ?? process.execPath;
   const run = input.run ?? execDevelopmentCommand;
   const options = { cwd: projectRoot, stdio: "inherit" as const };
@@ -57,14 +149,9 @@ export function prepareDevelopmentWorktree(input: DevelopmentPreparationInput = 
     env: { ...process.env, OPENBOT_DEV_INSTANCE_ID: instanceId },
   });
   run(executable, ["run", "marketplace:seed:local"], options);
-  return envFile;
+  return stateOutcome;
 }
 
-/**
- * Copies each ignored file that `.worktreeinclude` lists from the main checkout, so a worktree made
- * by any harness gets the local secrets without a manual copy. An existing file is never replaced.
- * Lines are literal paths, not gitignore patterns. A path that leaves the checkout is skipped.
- */
 export function copyWorktreeIncludes(projectRoot: string, mainCheckoutRoot: string | undefined): string[] {
   if (!mainCheckoutRoot || resolve(mainCheckoutRoot) === resolve(projectRoot)) return [];
   const listPath = join(projectRoot, ".worktreeinclude");
@@ -97,7 +184,6 @@ function findMainCheckoutRoot(projectRoot: string): string | undefined {
     }).trim();
     return dirname(commonDir);
   } catch {
-    // A source archive has no git metadata, so there is nothing to copy from.
     return undefined;
   }
 }
@@ -106,7 +192,7 @@ export function assertSupportedBunVersion(version: string): void {
   if (version === supportedBunVersion) return;
 
   throw new Error(
-    `Unsupported Bun ${version}. OpenBot development requires stable Bun ${supportedBunVersion}. Install the exact version with the command in https://github.com/nightly-labs/openbot#development, then retry.`,
+    `Unsupported Bun ${version}. GoAhead development requires stable Bun ${supportedBunVersion}. Install the exact version with the command in https://github.com/Shubhh2903/goahead#development, then retry.`,
   );
 }
 
@@ -119,9 +205,7 @@ function execDevelopmentCommand(
 }
 
 if (import.meta.main) {
-  // Generating secrets without saying so leaves a contributor guessing where the file came from.
-  // stdout rather than a logger, because this runs before `bun install` on a fresh clone.
   if (prepareDevelopmentWorktree() === "created") {
-    process.stdout.write("Generated apps/auth-api/.env.dev for local development.\n");
+    process.stdout.write("Prepared local development state.\n");
   }
 }

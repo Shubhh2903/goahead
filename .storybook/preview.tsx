@@ -12,20 +12,26 @@ function isTranslatedLocale(value: unknown): value is TranslatedLocale {
 }
 
 const preview: Preview = {
-  // The toolbar switches every story's text, so a translation can be read in its real layout.
   globalTypes: {
     locale: {
       description: "Interface language",
       toolbar: { icon: "globe", items: [...TRANSLATED_LOCALES], dynamicTitle: true },
     },
+    colorScheme: {
+      description: "Color scheme",
+      toolbar: { icon: "contrast", items: ["dark", "light"], dynamicTitle: true },
+    },
   },
-  initialGlobals: { locale: "en" },
+  initialGlobals: { locale: "en", colorScheme: "dark" },
   decorators: [
-    (Story, context) => (
-      <StaticI18nProvider locale={isTranslatedLocale(context.globals.locale) ? context.globals.locale : "en"}>
-        <Story />
-      </StaticI18nProvider>
-    ),
+    (Story, context) => {
+      document.documentElement.dataset.openbotColorScheme = context.globals.colorScheme === "light" ? "light" : "dark";
+      return (
+        <StaticI18nProvider locale={isTranslatedLocale(context.globals.locale) ? context.globals.locale : "en"}>
+          <Story />
+        </StaticI18nProvider>
+      );
+    },
   ],
   parameters: {
     layout: "fullscreen",

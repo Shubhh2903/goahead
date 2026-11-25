@@ -1,11 +1,10 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { type NetworkInterfaceInfo, networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { get as getEncryptedValue } from "@dotenvx/dotenvx";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { cliSpawnTarget } from "../src/backend/cli";
 import {
@@ -13,6 +12,7 @@ import {
   developmentUserDataName,
   readDevelopmentInstanceId,
 } from "../src/main/development-profile";
+import { developmentRemoteConnectionPath } from "../src/main/development-runtime-directory";
 import {
   type DevInstanceRecord,
   removeDevInstanceRecord,
@@ -29,6 +29,13 @@ import {
   writeDevStackRecord,
 } from "./dev-automation/stack-registry";
 import { attachSlackTunnels } from "./dev-slack-tunnels";
+import {
+  developmentChildEnvironment,
+  developmentSettingsForService,
+  loadDevelopmentEnvironment,
+  loadSharedDevelopmentEnvironment,
+  requireDevelopmentValues,
+} from "./development-environment";
 import { resolveDevelopmentAppDataRoot } from "./development-state-paths";
 import { withoutElectronRuntimeFlags } from "./electron-spawn-env";
 import { resolvePackageBin } from "./package-bin";
@@ -48,18 +55,9 @@ export interface DevelopmentServiceSpec {
   env: NodeJS.ProcessEnv;
 }
 
-// A pid and whether it has been reaped is all the stop path needs, so
-// `dev:stop` can pass a recorded pid it never spawned through the same code.
 export type OwnedProcess = Pick<ChildProcess, "pid" | "exitCode">;
 type KillProcess = (pid: number, signal?: NodeJS.Signals | number) => boolean;
 
-// "group" is right for anything this runner spawned: those children are
-// detached, so each leads its own group and its grandchildren - Electron
-// helpers, the Vite worker, the Worker runtime - go with it. "process" is for a
-// pid this runner did not spawn, which `dev:stop` passes for a supervisor it
-// found in the registry: that process shares its group with whatever shell or
-// `bun run` started it, and signalling the group would either miss it, because
-// the group leader is somebody else, or reach the terminal job around it.
 type SignalScope = "group" | "process";
 
 interface StopOwnedProcessesOptions {
@@ -108,11 +106,7 @@ export function createDevelopmentServiceSpec(
   name: DevelopmentService,
   environment: NodeJS.ProcessEnv = process.env,
 ): DevelopmentServiceSpec {
-  // The parent shell may run inside an Electron harness with
-  // ELECTRON_RUN_AS_NODE=1. Every spec below becomes a spawned child, and the
-  // app/test-client children relaunch Electron, so the runtime flags are
-  // stripped once here rather than at each spawn.
-  const childEnvironment = withoutElectronRuntimeFlags(environment);
+  const childEnvironment = withoutElectronRuntimeFlags(developmentChildEnvironment(environment, name));
   if (name === "api") {
     return {
       name,
@@ -124,25 +118,10 @@ export function createDevelopmentServiceSpec(
   }
 
   if (name === "remote") {
-    const dotenvx = resolvePackageBin(projectRoot, "dotenvx");
     return {
       name,
-      executable: dotenvx,
-      args: [
-        "run",
-        "--redact",
-        "--strict",
-        "-f",
-        join(projectRoot, "apps", "auth-api", ".env.dev"),
-        "-fk",
-        join(projectRoot, ".env.keys"),
-        "--",
-        process.execPath,
-        "run",
-        "--cwd",
-        join(projectRoot, "remote", "api"),
-        "dev",
-      ],
+      executable: process.execPath,
+      args: [join(projectRoot, "scripts/run-development.ts"), "remote"],
       cwd: projectRoot,
       env: { ...childEnvironment },
     };
@@ -154,7 +133,7 @@ export function createDevelopmentServiceSpec(
   return {
     name,
     executable: electronVite,
-    args: ["dev", "--watch", "--outDir", outputDirectory, "--entry", join(outputDirectory, "main", "index.js")],
+    args: ["dev", "--watch", "--outDir", outputDirectory, "--entry", join(outputDirectory, "main", "start.js")],
     cwd: projectRoot,
     env: {
       ...childEnvironment,
@@ -171,10 +150,6 @@ export function createDevelopmentServiceSpec(
   };
 }
 
-// The ports in the spec are the ones this instance actually won, after
-// `findAvailablePort` walked past whatever a sibling worktree already held.
-// Publishing them is what lets `dev:automation` find this instance instead of
-// guessing 9333, so the record carries the worktree it belongs to as well.
 export function createDevInstanceRecord(
   spec: DevelopmentServiceSpec,
   pid: number,
@@ -198,22 +173,10 @@ export function createDevInstanceRecord(
   };
 }
 
-// A dev profile no start has ever created is an empty one: the app opens on
-// first-run setup with no agents and no chats. `bun run dev:prepare` seeds the
-// worktree profile, but a setup that only ran `bun install` never reaches it,
-// and the shared `OpenBot Dev` profile was never seeded by either, so the
-// profile this start is about to open is seeded here instead. Only a missing
-// profile is seeded, so a later start costs nothing and no data is replaced.
-//
-// The app spec, not the shared environment, decides which profile that is: a
-// start whose default renderer port was busy takes the port as its instance id,
-// and reading it any earlier would seed the shared profile while the app opens
-// `OpenBot Dev <port>`.
 export function developmentProfileToSeed(
   specs: readonly DevelopmentServiceSpec[],
   profileExists: (path: string) => boolean = existsSync,
 ): { profile: string; env: NodeJS.ProcessEnv } | null {
-  // The seed writes the app profile, which every target except `api` opens.
   const app = specs.find((spec) => spec.name === "app");
   if (!app) return null;
   const instanceId = readDevelopmentInstanceId(app.env.OPENBOT_DEV_INSTANCE_ID);
@@ -226,10 +189,6 @@ export function developmentProfileToSeed(
 
 function seedDevelopmentProfile(profile: string, environment: NodeJS.ProcessEnv): void {
   logger.info(`Seeding the new development profile ${profile}.`);
-  // `--if-missing` repeats the check above inside the seed, so a profile that
-  // appeared in between is kept rather than replaced. The seed runs with the app
-  // child's own environment, so it reads the same instance id and writes the
-  // profile that child opens.
   execFileSync(process.execPath, ["run", "dev:seed", "--if-missing"], {
     cwd: projectRoot,
     stdio: "inherit",
@@ -237,29 +196,15 @@ function seedDevelopmentProfile(profile: string, environment: NodeJS.ProcessEnv)
   });
 }
 
-const DEVELOPMENT_OPTIONS = ["--dry-run", "--force", "--isolated", "--hosting=test", "--slack"] as const;
-/** The deployed `test` account Worker. It creates real hosted server VMs for the accounts on its allow list. */
+const DEVELOPMENT_OPTIONS = ["--dry-run", "--force", "--shared", "--isolated", "--hosting=test", "--slack"] as const;
 const TEST_ACCOUNT_API_URL = "https://openbot-auth-api-test.internal9671.workers.dev";
 
 export interface DevelopmentInvocation {
   target: DevelopmentTarget;
   dryRun: boolean;
-  // Start beside this worktree's own running stack instead of refusing. Two
-  // stacks in one worktree is nearly always a forgotten terminal, so it takes
-  // saying so.
   force: boolean;
-  // Give this worktree a profile of its own, keyed to its path, instead of
-  // whichever suffix the renderer port happened to produce. The default keeps
-  // the shared `OpenBot Dev` profile; `--isolated` is for the times two
-  // worktrees must not see each other's conversations. Either way the profile
-  // is seeded on the start that creates it.
-  isolated: boolean;
-  // Sign the app in to the `test` account Worker instead of the local one, so that a hosted server
-  // is a real boat VM that can reach its Worker and Signal. The app gets one profile for this that
-  // all worktrees share: its account session belongs to the test Worker, not the local one.
+  shared: boolean;
   hostingTest: boolean;
-  // Open a public HTTPS tunnel to Signal and to the account API, so that Slack can reach a managed
-  // Slack app's host. See `dev-slack-tunnels.ts`.
   slack: boolean;
 }
 
@@ -272,58 +217,60 @@ export function parseDevelopmentTarget(args: string[]): DevelopmentInvocation {
     (argument) => argument.startsWith("--") && !DEVELOPMENT_OPTIONS.some((option) => option === argument),
   );
   if (unsupportedOption) throw new Error(`Unknown option: ${unsupportedOption}.`);
+  if (args.includes("--shared") && args.includes("--isolated")) {
+    throw new Error("Use --shared or --isolated, not both.");
+  }
   return {
     target,
     dryRun: args.includes("--dry-run"),
     force: args.includes("--force"),
-    isolated: args.includes("--isolated"),
+    shared: args.includes("--shared"),
     hostingTest: args.includes("--hosting=test"),
     slack: args.includes("--slack"),
   };
 }
 
-/**
- * The test Worker lets an account create servers when the app sends this key. It is in the encrypted
- * `.env.shared`, so only a developer with `DOTENV_PRIVATE_KEY_SHARED` can read it. Never log it.
- */
 async function readHostingDeveloperKey(): Promise<string> {
-  const missing =
-    "--hosting=test needs DOTENV_PRIVATE_KEY_SHARED in .env.keys or the environment, to read HOSTED_SERVERS_DEVELOPER_KEY.";
-  const value = await getEncryptedValue("HOSTED_SERVERS_DEVELOPER_KEY", {
-    path: join(projectRoot, "apps", "auth-api", ".env.shared"),
-    envKeysFile: join(projectRoot, ".env.keys"),
-    strict: true,
-  }).catch((error: unknown) => {
-    throw new Error(missing, { cause: error });
-  });
-  const key = value?.trim() ?? "";
-  if (!key || key.startsWith("encrypted:")) throw new Error(missing);
-  return key;
+  const shared = await loadSharedDevelopmentEnvironment(projectRoot);
+  const environment = { ...shared, ...process.env };
+  requireDevelopmentValues(environment, ["HOSTED_SERVERS_DEVELOPER_KEY"]);
+  return environment.HOSTED_SERVERS_DEVELOPER_KEY ?? "";
+}
+
+function prepareVoiceRuntime(): void {
+  try {
+    execFileSync(process.execPath, ["run", "voice:prepare-runtime"], {
+      cwd: projectRoot,
+      stdio: "inherit",
+      timeout: 300_000,
+    });
+  } catch (error) {
+    logger.warn(
+      "Could not prepare the local voice runtime. Local voice is off until `bun run voice:prepare-runtime` completes.",
+      toLogValue(error),
+    );
+  }
 }
 
 async function main(): Promise<void> {
-  const { target, dryRun, force, isolated, hostingTest, slack } = parseDevelopmentTarget(process.argv.slice(2));
+  const { target, dryRun, force, shared, hostingTest, slack } = parseDevelopmentTarget(process.argv.slice(2));
   if (!dryRun && prepareDevelopmentEnvironment() === "created") {
-    logger.info("Generated apps/auth-api/.env.dev for local development.");
+    logger.info("Prepared local development state.");
   }
   const services = servicesForTarget(target);
+  if (!dryRun && services.includes("app")) prepareVoiceRuntime();
+  const developmentEnvironment = dryRun ? {} : await loadDevelopmentEnvironment(projectRoot);
   const sharedEnvironment = developmentEnvironmentForTarget(target);
   if (hostingTest) {
     sharedEnvironment.OPENBOT_AUTH_API_URL = TEST_ACCOUNT_API_URL;
     sharedEnvironment.OPENBOT_MOBILE_AUTH_API_URL = TEST_ACCOUNT_API_URL;
     sharedEnvironment.OPENBOT_DEV_INSTANCE_ID ??= developmentInstanceIdForWorktree("openbot:hosting-test");
     sharedEnvironment.OPENBOT_HOSTING_DEVELOPER_KEY = await readHostingDeveloperKey();
-    // A dev role signs a throwaway account in with a code that only the local Worker returns.
     sharedEnvironment.OPENBOT_DEV_REMOTE_ROLE = "none";
     logger.info(`The app signs in to the test account Worker: ${TEST_ACCOUNT_API_URL}.`);
   }
-  if (isolated) {
-    sharedEnvironment.OPENBOT_DEV_INSTANCE_ID ??= developmentInstanceIdForWorktree(projectRoot);
-  }
+  sharedEnvironment.OPENBOT_DEV_STACK_ID = String(process.pid);
 
-  // Everything between reading the registry and publishing this stack's ports
-  // happens under one machine-wide lock, so a sibling worktree starting at the
-  // same moment cannot claim a port this one has already chosen.
   const { specs, stack } = await withDevPortAllocation(async (records) => {
     const conflicts = conflictingDevStacks(records, { projectRoot, services });
     if (conflicts.length > 0) {
@@ -336,7 +283,22 @@ async function main(): Promise<void> {
       }
       logger.warn(`This worktree already runs a dev stack:\n${detail}`);
     }
-    const allocated = await allocateDevelopmentPorts(services, sharedEnvironment, heldDevStackPorts(records));
+    const instanceId = developmentInstanceIdForStart({
+      configured: sharedEnvironment.OPENBOT_DEV_INSTANCE_ID,
+      shared,
+      besideOwnStack: conflicts.length > 0,
+      projectRoot,
+    });
+    if (instanceId !== sharedEnvironment.OPENBOT_DEV_INSTANCE_ID) {
+      sharedEnvironment.OPENBOT_DEV_INSTANCE_ID = instanceId;
+      logger.info("This worktree opens its own dev profile. Pass --shared to open the shared OpenBot Dev profile.");
+    }
+    const allocated = await allocateDevelopmentPorts(
+      services,
+      sharedEnvironment,
+      heldDevStackPorts(records),
+      developmentEnvironment,
+    );
     validateServiceSpecs(allocated);
     if (dryRun) return { specs: allocated, stack: null };
     const record = createDevStackRecord(allocated, process.pid, Date.now());
@@ -351,14 +313,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  // After the ports are known, and before any service reads the Signal address. The tunnels close
-  // when this process exits, which is when the stack stops: `runDevelopmentServices` returns as soon
-  // as the services have started.
   const closeSlackTunnels = slack ? await attachSlackTunnels(specs, projectRoot) : null;
 
   try {
-    // After the lock, because seeding a profile takes long enough that a sibling
-    // worktree should not wait behind it to choose its own ports.
     const seed = developmentProfileToSeed(specs);
     if (seed) seedDevelopmentProfile(seed.profile, seed.env);
 
@@ -369,9 +326,16 @@ async function main(): Promise<void> {
   }
 }
 
-// The ports the stack won, under the label a developer reads in
-// `bun run dev:status`. Every long-running listener the stack owns belongs
-// here: a port missing from the record is a port a sibling worktree will take.
+export function developmentInstanceIdForStart(input: {
+  configured: string | undefined;
+  shared: boolean;
+  besideOwnStack: boolean;
+  projectRoot: string;
+}): string | undefined {
+  if (input.configured || input.shared || input.besideOwnStack) return input.configured;
+  return developmentInstanceIdForWorktree(input.projectRoot);
+}
+
 export function createDevStackRecord(
   specs: DevelopmentServiceSpec[],
   supervisorPid: number,
@@ -407,6 +371,7 @@ async function allocateDevelopmentPorts(
   services: DevelopmentService[],
   sharedEnvironment: NodeJS.ProcessEnv,
   heldPorts: Set<number>,
+  developmentEnvironment: NodeJS.ProcessEnv,
 ): Promise<DevelopmentServiceSpec[]> {
   const reservedPorts = new Set<number>();
 
@@ -458,7 +423,7 @@ async function allocateDevelopmentPorts(
 
   const specs: DevelopmentServiceSpec[] = [];
   for (const service of services) {
-    const environment = { ...sharedEnvironment };
+    const environment = { ...developmentSettingsForService(developmentEnvironment, service), ...sharedEnvironment };
     if (service === "app" || service === "test-client") {
       const defaultPort = DEFAULT_RENDERER_PORTS[service];
       const rendererPort = await findAvailablePort(
@@ -510,60 +475,89 @@ async function runDevelopmentServices(specs: DevelopmentServiceSpec[], stack: De
     stopping = true;
     unpublishInstances();
     await stopOwnedProcesses([...processes.values()], signal);
-    // Last, not first: while this record exists, `dev:stop` can still find the
-    // pids. Dropping it before the escalation would make anything that
-    // survived SIGKILL an unrecorded orphan holding this worktree's ports.
     if (stack) removeDevStackRecord(stack);
+    const app = specs.find((spec) => spec.name === "app");
+    if (app) rmSync(developmentRemoteConnectionPath(app.env), { force: true });
   };
 
   process.once("SIGINT", () => void stopAll("SIGTERM").then(() => process.exit(130)));
   process.once("SIGTERM", () => void stopAll("SIGTERM").then(() => process.exit(143)));
   process.once("SIGHUP", () => void stopAll("SIGTERM").then(() => process.exit(129)));
 
-  try {
-    for (const spec of specs) {
-      const target = cliSpawnTarget(spec.executable, spec.args);
-      const child = spawn(target.command, target.args, {
-        cwd: spec.cwd,
-        env: spec.env,
-        stdio: "inherit",
-        shell: false,
-        detached: process.platform !== "win32",
-        windowsVerbatimArguments: target.windowsVerbatimArguments,
-      });
-      processes.set(spec.name, child);
-      if (stack && child.pid) {
-        // Republished after every spawn rather than once at the end: a stack
-        // that dies while starting still leaves behind the pids of whatever it
-        // did get running, which is what `dev:stop` needs to clear the ports.
-        stack.processes.push({ name: spec.name, pid: child.pid, startedAt: Date.now() });
-        writeDevStackRecord(stack);
-      }
-      const instance = child.pid ? createDevInstanceRecord(spec, child.pid, Date.now()) : null;
-      if (instance) {
-        writeDevInstanceRecord(instance);
-        publishedInstances.push(instance);
-        logger.info(
-          `[${spec.name}] dev:automation can reach this instance with --instance=${instance.instanceId} (:${instance.remoteDebuggingPort}).`,
-        );
-      }
-      child.once("error", (error) => {
-        logger.error(`[${spec.name}] Could not start:`, error.message);
-        void stopAll("SIGTERM").then(() => {
-          process.exitCode = 1;
-        });
-      });
-      child.once("exit", (code, signal) => {
-        if (stopping) return;
-        const result = signal ? `signal ${signal}` : `code ${code ?? 1}`;
-        logger.info(`[${spec.name}] stopped with ${result}. Stopping the other services.`);
-        void stopAll("SIGTERM").then(() => {
-          process.exitCode = code ?? 1;
-        });
-      });
-      if (spec.name === "api") await waitForDevelopmentApi(spec.env.OPENBOT_API_PORT, child);
-      if (spec.name === "remote") await waitForDevelopmentRemote(spec.env.REMOTE_HEALTH_PORT, child);
+  const restarting = new Set<DevelopmentService>();
+
+  const startService = async (spec: DevelopmentServiceSpec): Promise<void> => {
+    const target = cliSpawnTarget(spec.executable, spec.args);
+    const child = spawn(target.command, target.args, {
+      cwd: spec.cwd,
+      env: spec.env,
+      stdio: "inherit",
+      shell: false,
+      detached: process.platform !== "win32",
+      windowsVerbatimArguments: target.windowsVerbatimArguments,
+    });
+    processes.set(spec.name, child);
+    if (stack && child.pid) {
+      stack.processes.push({ name: spec.name, pid: child.pid, startedAt: Date.now() });
+      writeDevStackRecord(stack);
     }
+    const instance = child.pid ? createDevInstanceRecord(spec, child.pid, Date.now()) : null;
+    if (instance) {
+      writeDevInstanceRecord(instance);
+      publishedInstances.push(instance);
+      logger.info(
+        `[${spec.name}] dev:automation can reach this instance with --instance=${instance.instanceId} (:${instance.remoteDebuggingPort}).`,
+      );
+    }
+    child.once("error", (error) => {
+      logger.error(`[${spec.name}] Could not start:`, error.message);
+      void stopAll("SIGTERM").then(() => {
+        process.exitCode = 1;
+      });
+    });
+    child.once("exit", (code, signal) => {
+      if (stopping || processes.get(spec.name) !== child) return;
+      const result = signal ? `signal ${signal}` : `code ${code ?? 1}`;
+      logger.info(`[${spec.name}] stopped with ${result}. Stopping the other services.`);
+      void stopAll("SIGTERM").then(() => {
+        process.exitCode = code ?? 1;
+      });
+    });
+    if (spec.name === "api") await waitForDevelopmentApi(spec.env.OPENBOT_API_PORT, child);
+    if (spec.name === "remote") await waitForDevelopmentRemote(spec.env.REMOTE_HEALTH_PORT, child);
+  };
+
+  const testClient = specs.find((spec) => spec.name === "test-client");
+  if (testClient && process.platform !== "win32") {
+    process.on("SIGUSR2", () => {
+      const child = processes.get("test-client");
+      if (stopping || restarting.has("test-client") || !child) return;
+      restarting.add("test-client");
+      processes.delete("test-client");
+      logger.info("[test-client] Restarting the test client. The other services keep running.");
+      void (async () => {
+        await stopOwnedProcesses([child], "SIGTERM");
+        if (stack) {
+          stack.processes = stack.processes.filter((entry) => entry.pid !== child.pid);
+          writeDevStackRecord(stack);
+        }
+        const index = publishedInstances.findIndex((record) => record.pid === child.pid);
+        const [instance] = index >= 0 ? publishedInstances.splice(index, 1) : [];
+        if (instance) removeDevInstanceRecord(instance);
+        if (!stopping) await startService(testClient);
+      })()
+        .catch((error: unknown) => {
+          logger.error("[test-client] Could not restart:", error instanceof Error ? error.message : String(error));
+          void stopAll("SIGTERM").then(() => {
+            process.exitCode = 1;
+          });
+        })
+        .finally(() => restarting.delete("test-client"));
+    });
+  }
+
+  try {
+    for (const spec of specs) await startService(spec);
   } catch (error) {
     await stopAll("SIGTERM");
     throw error;
@@ -595,6 +589,8 @@ export function configureMobileConnectDevelopmentNetwork(
     environment.REMOTE_CONTROL_PLANE_URL ??= `http://127.0.0.1:${apiPort}`;
     environment.REMOTE_AUTH_WEBHOOK_URL ??= `http://127.0.0.1:${signalPort}/internal/auth-events`;
     environment.REMOTE_SIGNAL_URL ??= `ws://${address ?? "127.0.0.1"}:${signalPort}/v1/signal`;
+    environment.REMOTE_SIGNAL_HOMES ??= "";
+    environment.REMOTE_AUTH_WEBHOOK_URLS ??= "";
     environment.TURN_HOST ??= address ?? "127.0.0.1";
   }
 
@@ -650,9 +646,7 @@ async function waitForDevelopmentApi(portValue: string | undefined, child: Child
         signal: AbortSignal.timeout(1_000),
       });
       if (response.ok) return;
-    } catch {
-      // The API can reject connections while Vite and the Worker runtime start.
-    }
+    } catch {}
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
   }
   throw new Error(`The development Auth API did not become ready on port ${port}.`);
@@ -669,18 +663,12 @@ async function waitForDevelopmentRemote(portValue: string | undefined, child: Ch
         signal: AbortSignal.timeout(1_000),
       });
       if (response.ok) return;
-    } catch {
-      // The Signal service can reject connections while Bun starts its watcher.
-    }
+    } catch {}
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
   }
   throw new Error(`The development Signal service did not become ready on port ${port}.`);
 }
 
-// `heldPorts` are the ones a live dev stack has published, and they are skipped
-// without probing on purpose: a stack that has won 5173 has not bound it yet,
-// so probing would say it is free and hand it to this worktree as well.
-// `reservedPorts` is the same idea within this one allocation.
 export async function findAvailablePort(
   preferredPort: number,
   reservedPorts: Set<number>,
@@ -742,7 +730,7 @@ function validateServiceSpecs(specs: DevelopmentServiceSpec[]): void {
       throw new Error("The Remote API package is missing at remote/api/package.json.");
     }
     if (spec.name !== "api" && !existsSync(spec.executable)) {
-      const executableName = spec.name === "remote" ? "dotenvx" : "electron-vite";
+      const executableName = spec.name === "remote" ? "bun" : "electron-vite";
       throw new Error(`${executableName} is missing at ${spec.executable}. Run bun install.`);
     }
   }
@@ -758,10 +746,9 @@ export function signalOwnedProcess(
   if (!child.pid) return;
   try {
     if (platform === "win32") {
-      // Windows has no process groups to signal, so this reaches the process
-      // alone; anything it started outlives it. `exitCode` guards a child this
-      // runner already reaped, which a recorded pid never has.
-      if (child.exitCode === null) killProcess(child.pid, signal);
+      if (child.exitCode !== null) return;
+      if (scope === "group" && stopWindowsProcessTree(child.pid, killProcess)) return;
+      killProcess(child.pid, signal);
     } else {
       killProcess(scope === "group" ? -child.pid : child.pid, signal);
     }
@@ -807,18 +794,43 @@ function ownedProcessIsRunning(
   scope: SignalScope = "group",
 ): boolean {
   if (!child.pid) return false;
-  if (platform === "win32") return child.exitCode === null;
+  if (platform === "win32" && child.exitCode !== null) return false;
   try {
-    killProcess(scope === "group" ? -child.pid : child.pid, 0);
+    killProcess(scope === "group" && platform !== "win32" ? -child.pid : child.pid, 0);
     return true;
   } catch (error) {
     if (isUnavailableProcess(error, platform)) return false;
+    if (platform === "win32" && error instanceof Error && "code" in error && error.code === "EPERM") return true;
     throw error;
   }
 }
 
+function stopWindowsProcessTree(pid: number, killProcess: KillProcess): boolean {
+  const taskkill = (): boolean => {
+    try {
+      execFileSync("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        timeout: 10_000,
+        windowsHide: true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const rootRunning = (): boolean => {
+    try {
+      killProcess(pid, 0);
+      return true;
+    } catch (error) {
+      return error instanceof Error && "code" in error && error.code === "EPERM";
+    }
+  };
+  if (taskkill() || !rootRunning()) return true;
+  return taskkill() || !rootRunning();
+}
+
 function isUnavailableProcess(error: unknown, platform: NodeJS.Platform): error is NodeJS.ErrnoException {
-  // macOS can report EPERM while a detached Electron group is disappearing and only sandboxed helpers remain.
   return (
     error instanceof Error &&
     "code" in error &&

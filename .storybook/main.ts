@@ -5,15 +5,17 @@ import { mergeConfig, type PluginOption } from "vite";
 import { chatVisualPages } from "./chat-visual-pages";
 
 const config = {
-  // The desktop renderer, and the public site's article components. A site story
-  // brings its own stylesheet with it, because the two stylesheets set the same
-  // global rules to different values and cannot both be loaded for every story.
-  stories: ["../src/renderer/**/*.stories.@(ts|tsx)", "../apps/auth-api/src/**/*.stories.@(ts|tsx)"],
+  stories: [
+    "../src/renderer/**/*.stories.@(ts|tsx)",
+    "../apps/auth-api/src/**/*.stories.@(ts|tsx)",
+    "../apps/status/src/**/*.stories.@(ts|tsx)",
+    "../apps/browser-extension/src/**/*.stories.@(ts|tsx)",
+  ],
   addons: ["@storybook/addon-a11y"],
+  previewHead: (head) => `${head}\n<link rel="icon" type="image/svg+xml" href="./favicon.svg" />`,
   framework: {
     name: "storybook-solidjs-vite",
     options: {
-      // CI checks compilation. Local Storybook keeps automatic prop documentation.
       docgen: process.env.OPENBOT_STORYBOOK_CHECK === "true" ? false : undefined,
     },
   },
@@ -21,11 +23,11 @@ const config = {
     const mergedConfig = mergeConfig(viteConfig, {
       plugins: [tailwindcss({ optimize: false }), chatVisualPages()],
       build: {
-        // Storybook bundles axe and its preview runtime into intentionally large development-only chunks.
         chunkSizeWarningLimit: 1_200,
       },
       optimizeDeps: {
-        include: ["@norbert_bodziony/bloub", "solid-recharts"],
+        include: ["solid-recharts"],
+        exclude: ["@norbert_bodziony/bloub", "@norbert_bodziony/bloub/plush"],
       },
       resolve: {
         alias: [{ find: "solid-js/web", replacement: "@solidjs/web" }],
@@ -35,7 +37,7 @@ const config = {
     const plugins = (mergedConfig.plugins ?? []).filter((plugin: PluginOption) => !isLegacySolidPlugin(plugin));
     return {
       ...mergedConfig,
-      plugins: [...plugins, solidPlugin()],
+      plugins: [...plugins, solidPlugin({ performanceTracks: false })],
     };
   },
 } satisfies StorybookConfig;

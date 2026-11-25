@@ -31,8 +31,8 @@ export interface BackfillOptions {
   openPanelProfilesPath: string;
   apply: boolean;
   apiUrl?: string;
-  clientId?: string;
-  clientSecret?: string;
+  clientId?: string | undefined;
+  clientSecret?: string | undefined;
   requestTimeoutMs?: number;
   fetcher?: typeof fetch;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -222,9 +222,7 @@ async function readRecords(path: string, label: string): Promise<unknown[]> {
   try {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) return parsed;
-  } catch {
-    // Fall through to newline-delimited JSON.
-  }
+  } catch {}
   try {
     return raw
       .split(/\r?\n/u)

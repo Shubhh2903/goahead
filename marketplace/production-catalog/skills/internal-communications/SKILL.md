@@ -3,7 +3,7 @@ name: internal-communications
 description: Draft status reports, leadership updates, project announcements, FAQs, newsletters, and incident communications for an internal audience.
 ---
 
-<!-- Modified by OpenBot from Anthropic's internal-comms skill. See NOTICE.txt. -->
+<!-- Modified by GoAhead from Anthropic's internal-comms skill. See NOTICE.txt. -->
 
 # Internal Communications
 

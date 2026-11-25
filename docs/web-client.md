@@ -7,7 +7,7 @@ No deployment or pull request is made by these source changes.
 
 ## Shared application UI
 
-The browser uses the existing `AccountLogin`, `ServerRail`, `Sidebar`, `AccountDock`,
+The browser uses the existing `AccountLogin`, `PageRail`, `ServerRail`, `Sidebar`,
 `Conversation`, `AgentSettingsPanel`, and `FirstAgentSetup` components. After sign-in it
 connects to the first available host and selects a teammate. There is no web dashboard,
 welcome screen, separate conversation toolbar, or always-visible invitation form.
@@ -16,8 +16,13 @@ Invitations use the existing Add remote server dialog.
 The conversation accepts an explicit `ConversationRuntime`. Desktop calls still use preload;
 the web adapter uses the authenticated host connection. Browser drafts remain in memory.
 Native-only actions are hidden. Remote browser transport uses the shared desktop browser
-panel through an explicit runtime. Small screens switch between the existing conversation
-and workspace panes. Desktop layout remains unchanged. Browser ownership and stream recovery
+panel through an explicit runtime. On a phone (touch pointer, and a narrow screen or a landscape
+height), the client first shows `WebPhoneAppScreen`, which links to the phone app in the App Store
+and Google Play. A link or a return in the address (invitation, plugin, billing, sign-in) skips
+that screen, because the client removes the link from the address when it reads it. After
+"Continue in browser", which the browser keeps, small screens switch between the existing
+conversation and workspace panes. That phone layout is kept, not extended. Desktop layout remains
+unchanged. Browser ownership and stream recovery
 still require the release checks below.
 
 ## Review scopes
@@ -41,23 +46,26 @@ mock. The separate web preview implements the browser runtime with that same moc
 
 ## Behavior and limits
 
-- `/api/browser/*` exposes only email start/verify, session read/logout, host list, host logo read,
+- `/api/browser/*` exposes only email start/verify, session read/logout, checkout attribution
+  (`checkout-attribution`), host list, owned host removal, host logo read,
   session start/ticket/end, invitation preview/accept and email, host member and invite
   administration, and the account's display name, avatar, and session list/revoke
   (`v1/me/profile`, `v1/me/avatar`, `v1/me/sessions`), and billing (`v1/me/billing`,
-  `v1/me/billing/portal`), and hosted servers (`v2/hosting/servers` list and create with
+  `v1/me/billing/portal`, `v1/me/billing/storage`), and hosted servers (`v2/hosting/servers` list and create with
   `{name, plan, interval, currency}`, `v2/hosting/plans`, `v2/hosting/servers/:id` delete, and
-  `v2/hosting/servers/:id/wake` and `/checkout`), and the account's hosted site list/delete
+  `v2/hosting/servers/:id/wake`, `/restart`, `/status`, `/lifecycle` and `/checkout`), and the
+  account's hosted site list/delete
   (`v1/sites`), which the web client no longer calls: sites are in Server settings > Sites, through
   the host's `hosted-sites-v1`. It is not a general account or host proxy.
   Every write needs the same origin and `X-OpenBot-Browser: 1`; all send JSON except the avatar
   upload, which sends the image bytes. A site delete also needs an `Idempotency-Key`. A host logo is
   given to a member of that host, for its current `logoKey` only.
-- The account dock uses the single-row layout on every browser. Its menu has usage, Profile, Billing,
-  Account settings, Settings (the connected host's settings), Marketplace, Send feedback, Message,
-  and Sign out. Profile opens the desktop Settings > Profile content in the right panel of the agent
-  on screen; it is not available in a channel. Account settings opens a dialog with the desktop
-  Profile tab, and Preferences: the interface language and the completion sound.
+- The page rail is the same as on desktop: Agents, the pinned pages, More, Marketplace, Settings,
+  and Help. More lists Routines and Tasks (when the host supports them), Schedule, and Usage, and
+  each row has a pin that adds the page to the rail. Usage starts pinned. This browser keeps the
+  pins (`openbot:rail-pins`). Settings opens a page with the desktop Profile tab
+  (with Sign out), Preferences (the interface language and the completion sound), and a Billing
+  button below the tabs. The server menu opens the Server settings page of the connected host.
   This browser keeps both preferences, also before sign-in (`web-language-preference.ts`,
   `completion-sound.ts`). A browser session is listed as Desktop, and it can disconnect any other
   session of the account, as the desktop app can. Providers & permissions and app updates stay
@@ -103,8 +111,8 @@ mock. The separate web preview implements the browser runtime with that same moc
   serves `agent-publish-v1`; the host publishes with its own account. A plugin app
   that needs a browser sign-in is installed on the host computer, as for a desktop remote admin.
 - Join, marketplace, shared agent, server settings, global search and channel creation use the
-  shared views in `src/renderer/src/WorkspaceOverlayViews.tsx`, as desktop does. An open overlay or
-  toast suspends the browser view, as on desktop.
+  shared views in `src/renderer/src/WorkspaceOverlayViews.tsx`, as desktop does. An open overlay
+  suspends the browser view, as on desktop. A toast does not.
 - `/app` accepts three links: `?agent=<id>` from a shared agent page, the four invitation fields from
   the `/join` page, and `?plugin=<slug>` from a plugin page. The client removes the fields after it
   reads them, so the invitation secret does not stay in the address bar or history. A link opens the
@@ -113,9 +121,10 @@ mock. The separate web preview implements the browser runtime with that same moc
   server that the account pays for. Its actions open the Stripe Customer Portal in the same tab, only
   at a `billing.stripe.com` URL. Stripe returns to `/app?billing=portal`. The client removes the field
   and opens the dialog. The webhook can be later than the return, so the dialog loads again on focus.
-- The application Settings dialog, permissions review, and hosted site publishing are desktop only.
-  Publishing sends a folder of this computer through a folder picker and local file reads in the main
-  process. The browser can list, open, and delete the account's sites.
+- The application Settings page (permissions, app updates), permissions review, and hosted site
+  publishing are desktop only. Publishing sends a folder of this computer through a folder picker
+  and local file reads in the main process. The browser can list and open the sites of the
+  connected host in Server settings > Sites. An owner or admin can delete them there.
 - Uploads and downloads retain the shared client's 10 MB limit. Message attachment count uses the
   shared contract limit. Cancelling a transfer sends the existing file-cancel frame. If the host
   has already committed an attachment, cancellation removes that draft after the response.
@@ -123,8 +132,24 @@ mock. The separate web preview implements the browser runtime with that same moc
   and host preview URLs are not used as browser attachment links. Blob URLs are released when the
   preview closes, the host changes, or the workspace unmounts. A shared or workspace file link
   reads the file through the host's `/v1/shared-files` or `/v1/workspace-files` route and opens the
-  same panel. "Open" on a file card opens the panel; "Download" saves the file. Images show as
-  file cards, not inline: the browser reads no image bytes until a card is opened.
+  same panel. "Open" on a file card opens the panel; "Download" saves the file.
+- Inline media (`web-attachment-media.ts`): an image card of 2 MB or less downloads its file when
+  the chat shows the card, and shows it as a thumbnail. An MP3 or MOV card of 10 MB or less gets a
+  play button; the click downloads the whole file, then the player starts. Larger files keep only
+  Download. Only PNG, JPEG, GIF, WebP, AVIF, MP3 and MOV get an object URL, typed from that list and
+  not from the host's file type: an object URL has the app origin, so HTML, SVG and XHTML never get
+  one. At most 2 files download at the same time. The URLs share a 64 MB cache, and the least
+  recently used URL is revoked first. A host change or an unmount revokes all of them. An image
+  thumbnail opens the preview panel, not the image viewer.
+- Visual replies and HTML files: the browser has no page URL, so `web-attachments.ts` downloads
+  the HTML file (8 MB or less, HTML type on the attachment and the file) and the frame shows it as
+  `srcdoc`, with the same `allow-scripts allow-forms` sandbox as desktop and never
+  `allow-same-origin`. The page has an opaque origin and cannot read the web client's storage or
+  host keys. At most 4 pages download at the same time for each host connection, because the web
+  client accepts at most 10 open file transfers from the host. The last 8 pages stay in memory. The
+  frame inherits the `/app` CSP, so a `script-src` or `default-src` there would stop every page.
+  Differences from desktop: a relative URL in the page resolves to the `/app` origin, and the
+  browser blocks `http:` and private-network loads from the page.
 - Pinned agents and channels and collapsed sections are kept in local storage for each account and
   host, with the same storage modules as desktop. Only ids are stored. Pins do not delete
   conversations. Notification changes use the host's existing settings and include
@@ -145,9 +170,21 @@ mock. The separate web preview implements the browser runtime with that same moc
   Tabs, back, forward, reload, and the address bar use the same Team API routes as a desktop
   client of a remote host. Picture in Picture is desktop only. The expanded live view is a card
   with the shape of the host frame.
+- Copy and paste in the live view use the member's clipboard, not the host's, when the host
+  advertises `browser-view-clipboard`. The client sends pasted text as one `paste` input; the host
+  fires a `paste` event on the focused element and, when the page does not cancel it, inserts the
+  text with CDP `Input.insertText`. A copy starts in the key press with a `ClipboardItem` that waits
+  for the host's answer, the one text message on the view socket. The host answers every `copy`.
+  A cut is a copy, then a `cut` input once the text is on the clipboard; the host deletes only the
+  same selection. The host runs one input of a view at a time, in order. The host never reads or
+  writes its own clipboard. Password fields give no text. The host follows focus through open
+  shadow roots and frames: it walks into a frame of the page's own origin, and it finds a frame of
+  another origin through CDP (`DOM.describeNode` on the focused frame element gives its frame ID,
+  and a frame in another process is a target of its own). An `email` or `number` input has no
+  selection to read, so copy gets no text there; paste works.
 - No full remote desktop, push notifications, or offline operation is included. See
   [Remote desktop](#remote-desktop) for the reason.
-- These stay desktop only: the application Settings dialog (permissions, app updates),
+- These stay desktop only: the application Settings page (permissions, app updates),
   permissions review, hosted site publishing, marketplace publishing, Picture in Picture, the Memories, Routines and Files sections of agent settings, the
   conversation Files panel, and file reveal. The browser shows host files in Server settings >
   Storage.
@@ -174,7 +211,7 @@ to one remote-screen session. On 2026-09-23 the user decided not to add this ori
 ## Local checks
 
 Run `bun install --frozen-lockfile` in a fresh worktree. Start the API with
-`bun run dev:api --isolated`. The supervisor chooses and prints the port.
+`bun run dev:api`. The supervisor chooses and prints the port.
 For synthetic local email checks, `AUTH_EXPOSE_DEVELOPMENT_CODE=true` returns development codes;
 do not enable it in production or print codes and cookies in logs. Keep the cookie's security
 attributes in development. A browser that refuses secure loopback cookies needs a local HTTPS
@@ -185,25 +222,10 @@ for messages, models, settings and events. File previews use a small synthetic t
 file transport and browser streaming still need real-host checks. The existing `/app-preview`
 and desktop stories remain the comparison surfaces. Do not commit screenshot assets.
 
-Run one focused file at a time:
-
-```sh
-bun run --cwd apps/auth-api test:server -- test/browser-api.test.ts --maxWorkers=1
-bun run --cwd apps/auth-api test:server -- test/remote-control-plane.test.ts --maxWorkers=1
-bun run test:desktop -- src/renderer/src/features/web-client/WebApp.test.tsx --maxWorkers=1
-bun run test:desktop -- src/renderer/src/features/web-client/WebWorkspace.test.tsx --maxWorkers=1
-bun run test:desktop -- src/renderer/src/features/web-client/web-runtime.dom.test.ts --maxWorkers=1
-bun run test:desktop -- src/renderer/src/features/web-client/web-host-lock.dom.test.ts --maxWorkers=1
-bun run test:desktop -- packages/team-client/src/remote-directory.test.ts --maxWorkers=1
-bun run test:desktop -- packages/team-client/src/remote-peer.test.ts --maxWorkers=1
-bun run test:desktop -- packages/team-client/src/file-upload.test.ts --maxWorkers=1
-bun run test:desktop -- packages/team-client/src/browser-view.test.ts --maxWorkers=1
-```
-
 Lint changed files only. CI owns broad type checks, builds, UI checks and full suites. Shared
-team-client changes also affect mobile; its bearer authentication and existing peer tests must
-remain green. Main-process stream imports use a compatibility re-export. Signal and database
-schemas are unchanged.
+team-client changes also affect mobile; check its bearer authentication and peer connection.
+Main-process stream imports use a compatibility re-export. Signal and database schemas are
+unchanged.
 
 ## Release gate
 
@@ -338,8 +360,7 @@ older hosts keep a read-only default layout. Late responses from a previous host
 layout revisions after a newer event, cannot replace the current layout. Pins and collapsed
 sections use the desktop's `createSidebarPreferences`, scoped to the account and host.
 
-The existing shared AccountDock now shows its usage indicator and provider popover in the web
-client. Usage comes from the existing host Team API, with the same contract validation, refresh
+The page rail shows the usage rings and the Usage page in the web client. Usage comes from the existing host Team API, with the same contract validation, refresh
 controls, and visual components as desktop. Switching hosts clears usage and rejects stale UI
 updates. The web preview uses the desktop mock for usage and sidebar layout too.
 
@@ -351,8 +372,9 @@ unchanged. People and desktop-only settings remain outside the implemented web c
 
 ### Channels
 
-The browser uses the desktop channel UI: the sidebar rows and menus, `ChannelCreateDialog`,
-`ChannelConversation`, and channel settings with memories and routines. `createChannelsController`
+The browser uses the desktop channel UI: the sidebar rows and menus, `ChannelCreateDialog`, the
+shared `Conversation` view with the channel source of `createChannelConversation`, and channel
+settings with memories and routines. `createChannelsController`
 holds the channel logic for both clients. Each client gives it a `ChannelsEnvironment` and a
 `ChannelsPort` runtime: the desktop uses preload, and the browser uses `createWebChannelsPort`
 over the host connection. The Team API calls come from `teamChannelsApi` in
@@ -370,7 +392,9 @@ local storage for each account and host, as on desktop.
 The browser uses the shared Sidebar context menu and delete confirmation for duplicate/delete.
 Duplication requires the existing host capability. Its operation ID remains stable when a response
 is uncertain, so an explicit retry can use the host's existing idempotency contract. No automatic
-retry is made. Deletion refreshes host state and removes the deleted agent's local draft and pins.
+retry is made. The section menu also offers Duplicate for a custom section when the host has the
+`agent-duplication` and `sidebar-layout` capabilities. It calls the same agent duplicate once for each
+agent of the section, with no new Team API route. Deletion refreshes host state and removes the deleted agent's local draft and pins.
 The same desktop activity and avatar-state functions now consume loaded web conversation state
 and pending prompts/approvals; unloaded conversations do not invent activity or unread counts.
 

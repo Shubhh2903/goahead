@@ -1,23 +1,16 @@
-// Connects to the already-running dev app over CDP. Never launches Electron
-// itself: `bun run dev` owns the API, the seed and the SQLite profile, and a
-// second instance would fight it for ports and the single-instance lock.
-
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import type { Logger } from "@openbot/logging";
 import { type Browser, chromium, type Page } from "playwright-core";
-import { parseProcessTable } from "./cpu-sampling";
+import { PROCESS_TABLE_PS_ARGS, parseProcessTable } from "./cpu-sampling";
 import { describeTarget, findMainPages } from "./page-url";
 
 export const DEFAULT_DEV_AUTOMATION_PORT = 9_333;
 export const MIN_DEV_AUTOMATION_PORT = 1_024;
 export const MAX_DEV_AUTOMATION_PORT = 65_535;
 
-// Thrown when the port answers but the browser behind it is not OpenBot.
-// A class instead of a message prefix: the reconnect hint below must not
-// swallow this one, and matching on wording breaks the moment it is reworded.
 export class ForeignBrowserError extends Error {}
 
 export interface ResolvedAutomationPort {
@@ -25,10 +18,6 @@ export interface ResolvedAutomationPort {
   explicit: boolean;
 }
 
-// An explicit `--port=` or `OPENBOT_DEV_REMOTE_DEBUGGING_PORT` names one
-// instance outright. A bare default is a guess: on a machine where several
-// worktrees run dev, 9333 belongs to whichever started first. The caller uses
-// `explicit` to keep such a guess read-only.
 export function resolveAutomationPort(
   flag: string | undefined,
   environment: string | undefined,
@@ -49,20 +38,10 @@ export function resolveAutomationPort(
 export interface MutationGate {
   command: string;
   allowMutations: boolean;
-  // True when the target was named: an explicit port, an explicit
-  // `--instance=`, or the registry record of the worktree this command runs
-  // in. False for a default port and for the lone instance of some other
-  // worktree, both of which are inferences.
   instanceNamed: boolean;
-  // How the target was reached, for the refusal message. Empty when nothing
-  // resolved.
   target?: string;
 }
 
-// The whole safety story of `click` and `type`: they need an opt-in, and the
-// instance they will change has to be named rather than inferred, because
-// several worktrees run dev side by side and a typed message or a click lands
-// in a real profile.
 export function assertMutationAllowed(gate: MutationGate): void {
   if (!gate.allowMutations) {
     throw new Error(
@@ -86,18 +65,10 @@ export interface AutomationSession {
   close: () => Promise<void>;
 }
 
-// A port on the shared dev machine can belong to another Chromium. Refuse
-// anything that does not identify as OpenBot before a mutation can reach it.
-// The token is gone from new builds, so this now only gates ports no live
-// record owns; record-owned ports prove ownership through the process tree.
 export function isOpenBotBrowser(userAgent: string): boolean {
   return userAgent.includes(`${PRODUCT_IDENTITY.name}/`);
 }
 
-/**
- * The `SystemInfo.getProcessInfo` entry with this type is the browser process
- * itself. Anything else names a renderer, GPU, network, or utility process.
- */
 export function findBrowserProcessId(processInfo: unknown): number | null {
   if (!Array.isArray(processInfo)) return null;
   for (const entry of processInfo) {
@@ -107,12 +78,6 @@ export function findBrowserProcessId(processInfo: unknown): number | null {
   return null;
 }
 
-/**
- * Whether `pid` is `ownerPid` itself or runs underneath it. The parent map
- * comes from one `ps` listing, so a pid the listing never saw answers false
- * rather than throwing. Cycles answer false too: a loop can never contain a
- * pid outside itself.
- */
 export function processBelongsToInstance(
   pid: number,
   ownerPid: number,
@@ -149,7 +114,7 @@ async function readParentProcessTable(): Promise<ReadonlyMap<number, number>> {
     }
     return table;
   }
-  const { stdout } = await runCommand("ps", ["-o", "pid=,ppid=,cputime=,command=", "-ax"], {
+  const { stdout } = await runCommand("ps", [...PROCESS_TABLE_PS_ARGS], {
     timeout: 10_000,
     maxBuffer: 16 * 1_024 * 1_024,
   });
@@ -158,14 +123,14 @@ async function readParentProcessTable(): Promise<ReadonlyMap<number, number>> {
   return table;
 }
 
-/**
- * Whether the browser behind this connection descends from the recorded
- * instance process. Liveness alone cannot say that: the record names a pid,
- * not a socket, so a browser that grabbed the port during a restart passes a
- * lifetime check while answering for someone else. Anything unverifiable
- * answers false -- refusing a command is always safer than driving it blind.
- */
-export async function verifyBrowserOwnership(browser: Browser, ownerPid: number): Promise<boolean> {
+interface BrowserOwnershipProbe {
+  newBrowserCDPSession(): Promise<{
+    send(method: "SystemInfo.getProcessInfo"): Promise<{ processInfo: Array<{ type: string; id: number }> }>;
+    detach(): Promise<void>;
+  }>;
+}
+
+export async function verifyBrowserOwnership(browser: BrowserOwnershipProbe, ownerPid: number): Promise<boolean> {
   let browserPid: number | null = null;
   try {
     const session = await browser.newBrowserCDPSession();
@@ -186,19 +151,11 @@ export async function verifyBrowserOwnership(browser: Browser, ownerPid: number)
   }
 }
 
-// The URL shape alone cannot separate the app from an embedded browser tab:
-// `BrowserHost.open` accepts any http(s) address, so a visited local
-// development server can present the same loopback origin and bare path. Only
-// the app window carries the preload bridge, which `contextBridge` exposes as
-// `window.openbot` and no visited page can fake, so the bridge is the identity
-// check a click or a keystroke is gated on.
 export interface RendererCandidate {
   url: () => string;
   evaluate: (probe: string) => Promise<unknown>;
 }
 
-// Evaluated inside the page, so it is a string rather than a closure: this
-// file is typechecked against Node's globals and knows nothing about `window`.
 const BRIDGE_PROBE = "typeof window.openbot";
 
 export async function findRendererPages<T extends RendererCandidate>(
@@ -209,14 +166,12 @@ export async function findRendererPages<T extends RendererCandidate>(
   for (const candidate of findMainPages(pages, expectedRendererPort)) {
     try {
       if ((await candidate.evaluate(BRIDGE_PROBE)) === "object") confirmed.push(candidate);
-    } catch {
-      // A page navigating or closing while we probe is not the app we want.
-    }
+    } catch {}
   }
   return confirmed;
 }
 
-async function describeBrowser(port: number): Promise<{ targets: string; branded: boolean }> {
+async function describeBrowser(port: number): Promise<{ targets: string; electron: boolean }> {
   const version = await fetch(`http://127.0.0.1:${port}/json/version`, {
     signal: AbortSignal.timeout(5_000),
   });
@@ -234,23 +189,13 @@ async function describeBrowser(port: number): Promise<{ targets: string; branded
     .filter((target) => target.type === "page")
     .map((target) => `- ${describeTarget(isString(target.url) ? target.url : "")}`)
     .join("\n");
-  return { targets, branded: isOpenBotBrowser(userAgent) };
+  return { targets, electron: userAgent.includes("Electron/") };
 }
 
 export interface ConnectOptions {
-  // Set from the instance registry. Null means nothing published this port, so
-  // the port answers for itself through the build-token check.
   expectedRendererPort?: number | null;
-  // A `--page=` selector. This is dev: every window is fair game, including a
-  // Dynamic Island surface and an embedded browser view showing a real site,
-  // because those flows have to be testable too. The app window is only the
-  // default, so a command nobody aimed cannot land in an OAuth page by
-  // accident; naming a target overrides both the route filter and the preload
-  // bridge probe.
   pageSelector?: string | null;
-  // The pid of the live registry record that owns the port, if any. See
-  // OpenDevBrowserOptions: without it an unbranded browser is refused.
-  ownerPid?: number | null;
+  ownerPid?: number | null | undefined;
 }
 
 export interface PageChoice {
@@ -258,20 +203,11 @@ export interface PageChoice {
   target: string;
 }
 
-// CDP's own identifier for a page, and what `pages` prints for aiming at one.
-// An array position cannot do that job: every command opens its own CDP
-// connection, so a window that closed in between shifts each later page down
-// and `--page=1` would drive a target nobody printed - a Dynamic Island
-// surface, or an embedded view showing a real site. A target id names the same
-// page in the next command or nothing at all.
 export type TargetIdReader<T> = (page: T) => Promise<string>;
 
 export async function readTargetId(page: Page): Promise<string> {
   const session = await page.context().newCDPSession(page);
   try {
-    // Playwright types this reply against the CDP protocol, so the id needs no
-    // validation: it comes from the browser we already confirmed is OpenBot,
-    // not from a file another account could write.
     const { targetInfo } = await session.send("Target.getTargetInfo");
     return targetInfo.targetId;
   } finally {
@@ -290,9 +226,6 @@ export async function describeDevPages<T extends { url: () => string }>(
   return choices;
 }
 
-// A target id from `dev:automation pages`, or a case-insensitive substring of
-// the target URL. The substring is matched locally against what the developer
-// typed, so it never reaches a log.
 export async function matchPages<T extends { url: () => string }>(
   pages: T[],
   selector: string,
@@ -304,8 +237,6 @@ export async function matchPages<T extends { url: () => string }>(
     try {
       id = await readId(page);
     } catch {
-      // A page closing while we ask for its id cannot be the one we were aimed
-      // at, and the URL match below still gets its chance.
       continue;
     }
     if (id !== "" && id.toLowerCase() === needle) return [page];
@@ -314,11 +245,7 @@ export async function matchPages<T extends { url: () => string }>(
 }
 
 export interface OpenDevBrowserOptions {
-  // The pid of the live registry record that owns the port, if any. A branded
-  // build token proves the browser without further checks; an unbranded one
-  // must additionally prove the listening process descends from this pid,
-  // because liveness alone cannot tell a restarted instance from a squatter.
-  ownerPid?: number | null;
+  ownerPid?: number | null | undefined;
 }
 
 export async function openDevBrowser(
@@ -326,7 +253,7 @@ export async function openDevBrowser(
   logger: Logger,
   options: OpenDevBrowserOptions = {},
 ): Promise<Browser> {
-  let described: { targets: string; branded: boolean };
+  let described: { targets: string; electron: boolean };
   try {
     described = await describeBrowser(port);
   } catch (error) {
@@ -338,9 +265,7 @@ export async function openDevBrowser(
     );
   }
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-  if (!described.branded) {
-    // Closing a browser obtained through `connectOverCDP` closes the WebSocket
-    // transport only, never the app, so a refusal below leaves nothing behind.
+  if (!described.electron || (await findRendererPages(devBrowserPages(browser))).length === 0) {
     const ownerPid = options.ownerPid ?? null;
     if (ownerPid === null || !(await verifyBrowserOwnership(browser, ownerPid))) {
       await browser.close();
@@ -348,7 +273,7 @@ export async function openDevBrowser(
         `Port ${port} does not belong to ${PRODUCT_IDENTITY.name}. Pass --port=<OPENBOT_DEV_REMOTE_DEBUGGING_PORT> of the instance you mean to drive.`,
       );
     }
-    logger.info(`Port :${port} answers without the build token; the listener belongs to the recorded instance.`);
+    logger.info(`Port :${port} belongs to the recorded instance process.`);
   }
   const targets = described.targets;
   logger.info(`CDP targets on :${port}`, targets || "(no pages yet)");
@@ -400,10 +325,7 @@ export async function connectToDevApp(
     );
   }
   logger.info(`driving ${describeTarget(page.url())}`);
-  // The full text, not a slice of it: the logger redacts first and truncates
-  // after, so cutting here can hand it half of a token - a prefix short enough
-  // that no redaction rule recognizes the shape, and long enough to be the
-  // secret.
+  await Promise.all(pages.map((attached) => attached.emulateMedia({ colorScheme: null })));
   page.on("console", (message) => {
     logger.debug(`renderer console [${message.type()}]`, message.text());
   });
@@ -413,9 +335,6 @@ export async function connectToDevApp(
   return {
     browser,
     page,
-    // Closing a browser obtained through `connectOverCDP` closes the WebSocket
-    // transport only - Playwright never sends `Browser.close` on this path - so
-    // the dev app keeps running after every command.
     close: () => browser.close(),
   };
 }

@@ -19,37 +19,15 @@ The payload binding types make `(input: unknown) => Result` incompatible with th
 `() => Result` form. This requires an explicit decoder. Decoding follows sender validation so an
 untrusted frame cannot reach a parser.
 
-`ipc-channel-coverage.test.ts` restricts the name `ipcMain` to `ipc/define-ipc-group.ts`. An aliased
-import elsewhere could otherwise register a handler without a sender check. The test restricts the
-trusted wrapper names to that file too: the wrappers accept string channels, so direct use could
-create an endpoint outside the declared groups. Direct `IPC_ENDPOINTS.group.name` references keep
+`ipc-channel-coverage.test.ts` restricts the name `ipcMain` to `trusted-ipc.ts`, which holds the
+sender check. An aliased import elsewhere could otherwise register a handler without a sender check.
+The test restricts the trusted wrapper names to `ipc/define-ipc-group.ts`: the wrappers accept string
+channels, so direct use could create an endpoint outside the declared groups. Direct `IPC_ENDPOINTS.group.name` references keep
 renderer sends visible to the same coverage checks.
 
 `index.ts` calls `app.setPath`, `app.enableSandbox` and
 `protocol.registerSchemesAsPrivileged` at module scope. Tests that import it need an Electron mock.
-Source coverage tests read the file instead. A service without an Electron dependency can use
-ordinary unit tests; an unnecessary import would force it into the Electron mock setup.
-
-## Test harnesses
-
-The remote-server suite once had eight separate socket fakes. Five declared `readonly readyState`,
-so closing the fake left it OPEN. The event stream's two `readyState !== WebSocket.OPEN` guards
-could not run in the tests that appeared to cover them. `FakeEventSocket` in
-`remote-server-test-harness.ts` now models that transition in one place. The harness is a plain
-`.ts` module with no test cases, like `src/backend/agent-service-test-harness.ts`.
-
-Remote-server modules each have a matching test file. The backend's `agent-service.*.test.ts`
-pattern splits tests of one large class and is not the model for this module family.
-
-`TeamApiServer` is different: its cases call routes through real HTTP listeners. Route domains are
-the useful test boundary, so `team-api-server.*.test.ts` follows that split. Its shared harness
-requires explicit choices where defaults would change what a case tests. `host-service.test.ts`
-was separated because those cases test another class.
-
-Service events, returned promises, listener callbacks and harness barriers identify the state a
-test needs. `waitForServer` reports differences against the complete server summary.
-`deferredRoute` separates request arrival from its response. Fixed elapsed time cannot provide
-those guarantees under runner load. Use fake timers for behavior whose input is elapsed time.
+Source coverage tests read the file instead.
 
 ## Construction and shutdown
 
@@ -61,7 +39,9 @@ lifecycle and dispatch work.
 order explicit: a service assigned to a `const` can satisfy later non-null constructor parameters.
 Splitting it into stages would pass a roughly 15-field object between stages and restore ordering
 hazards. It only constructs. Adding event wiring would require more inputs than outputs and invert
-the dependency direction.
+the dependency direction. A self-contained block with a few inputs, such as `createMessagingServices`,
+can move to a helper in the same file that the function awaits at the same position; the helper keeps
+its teardown ordinals.
 
 Shutdown is largely in construction order, rather than reverse order. The browser host closes
 before its picture-in-picture window. Provider runtimes stop before the agent service that owns
@@ -98,13 +78,50 @@ There is no configuration for a developer or for a packaged build:
 - A stored registration that names a different address is replaced, but only for the attempt that
   needs the browser. `clientInformation()` in `src/backend/mcp-oauth-provider.ts` answers
   `undefined` when the stored `redirect_uris` do not hold this run's address, which makes the SDK
-  register again. A record that still has a refresh token keeps its client for one pass first: a
-  refresh uses no redirect address, and a refresh token spent against a new `client_id` is refused
-  and costs the user a sign-in. Two attempts never replace the registration: a silent refresh, and
-  the exchange of a grant already in hand, which must use the `client_id` that grant was issued
-  to.
+  register again. Two attempts never replace the registration: a silent refresh, and the exchange
+  of a grant already in hand, which must use the `client_id` that grant was issued to.
+- A sign-in that the user asked for does not refresh. `tokens()` gives the SDK the stored tokens
+  without the refresh token until the grant is in hand, so a token that the server refuses opens
+  the browser. Before, the SDK refreshed it, and a server that had ended the sign-in also refused
+  the new token, so Sign in opened no page (#6975). A stored token that the server accepts still
+  connects with no page. When tokens are on file, a registration that this sign-in makes stays in
+  memory and is written with the tokens of its grant: the stored tokens keep the client that they
+  were issued to, so a cancel or a timeout keeps the stored sign-in usable.
 - `describeUnusableRedirectUrl` refuses an address that cannot receive a grant: an `https` address,
   or a plain-text address that is not on this machine.
+- A registration endpoint that refuses the `127.0.0.1` address with `invalid_redirect_uri` or
+  `invalid_client_metadata` gets one more registration with the `localhost` form of the same
+  address (#5584). The MCP authorization specification names `localhost` redirects, and some
+  servers accept only that name. The listener answers both names. A stored registration that names
+  the `localhost` form keeps it: `redirectUrl` in `src/backend/mcp-oauth-provider.ts` sends that
+  form at `/authorize` and at `/token`.
+- A firewall can refuse an authorization page that names `127.0.0.1`, in the browser, where the
+  app cannot see it (#6149). So when a sign-in opened the browser and no grant came back (a timeout
+  or a cancel), or its page is still open when the user presses Sign in again, the next sign-in of
+  that server registers the other name of the same listener. The record is kept in memory, for one
+  attempt. A refusal of that name at registration gets the first name again. Sign-in apps and the
+  client metadata document keep `127.0.0.1`.
+- A second press of Sign in does not end the first sign-in (#10323). Both pages stay open, and the
+  user finishes whichever page they see. Each attempt keeps its own `state`, PKCE verifier and
+  client: the client that its page named, also when the other attempt registered another client
+  since then. Its exchange sends that client and the address of its page, and its tokens are saved
+  with that client. The first attempt that signs in ends the others as signed in. Cancel ends them
+  all. An attempt that is still before its page when another one signs in opens no page. On a
+  joined server, each relay flow follows its own attempt, and a cancel of the flow cancels only
+  that attempt, by its `state`. The client keeps the earlier page until its run ends, so its
+  callback and a pasted address still reach the host. Runs that return to the same port share one
+  listener, which closes when the last of them ends.
+- Some firewalls block both loopback names (TradingView, #7230). After `localhost` gets no grant
+  back, a sign-in in this computer's browser registers `goahead://mcp-auth`, and the next one after
+  that starts again at `127.0.0.1`. A refusal of the deep link at registration gets `127.0.0.1`,
+  and then `localhost`.
+  A sign-in that an in-app tab shows keeps the two loopback names: the deep link opens only in a
+  browser of a computer that runs GoAhead, and only while the operating system opens `goahead://`
+  in that app (`app.isDefaultProtocolClient`). A relayed sign-in does the same, except when the
+  client starts it with `sign-in-relay-deep-link-v1`: its computer opens the link, and passes the
+  callback to the relay by `state` (#9209). The web client and the phone do not. The deep link is sent only in the
+  attempt that registered it, because builds before the loopback listener registered it too and
+  Canva refuses it at `/authorize`.
 
 ## Remote services and released protocols
 
@@ -138,5 +155,6 @@ methods remain on `RemoteTeamDirectory` because they contact a different server 
 
 `ipc-channel-coverage.test.ts` checks a name bijection between `decode*FromHost` under `src/main`
 and `decode*FromMain` in the preload. This prevents deleting one side and redirecting its callers
-to the other, which could apply trusted-main validation to a remote server. The test only checks
-names: review must still detect two names that refer to one decoder.
+to the other, which could apply trusted-main validation to a remote server. A second test rejects a
+decoder that is a bare alias of its twin. Review must still detect a wrapper that calls the other
+decoder.

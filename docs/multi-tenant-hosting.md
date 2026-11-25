@@ -183,7 +183,6 @@ release commit as OpenBot.app. Native tests use a fake account service and tempo
 ```sh
 xcrun swiftc -parse-as-library -D TENANT_SETUP_TESTS scripts/macos-tenant-setup.swift scripts/macos-tenant-setup-tests.swift -o /tmp/openbot-tenant-setup-tests
 /tmp/openbot-tenant-setup-tests
-bun run test:desktop -- scripts/openbot-host.test.ts scripts/verify-host-installer.test.ts scripts/host-manager.test.ts
 ```
 
 macOS tests build and expand an unsigned fixture package without installing it. Production package

@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { serializeAttachmentReference } from "@openbot/contracts/attachment-references";
 import { serializeChatTagReference } from "@openbot/contracts/chat-tag-references";
 import { sortConversationMessages } from "@openbot/contracts/conversation-order";
+import { DEVELOPMENT_CLAUDE_DEFAULT, DEVELOPMENT_FREE_DEFAULT } from "@openbot/contracts/development-defaults";
 import type {
   AgentModelId,
   AgentProviderId,
@@ -23,31 +24,24 @@ import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { strToU8, zipSync } from "fflate";
 import { z } from "zod";
 import { agentNamesById, displayMessageReferences } from "../src/backend/agent/delivery-content";
-import {
-  DEVELOPMENT_DEFAULT_MODEL,
-  DEVELOPMENT_DEFAULT_PROVIDER,
-  DEVELOPMENT_DEFAULT_REASONING_EFFORT,
-} from "../src/backend/agent/development-defaults";
 import { AgentMemoryStore } from "../src/backend/agent-memory-store";
 import { AgentRoutineStore } from "../src/backend/agent-routine-store";
-import {
-  AgentStore,
-  DEFAULT_AGENT_MODEL,
-  DEFAULT_AGENT_PROVIDER,
-  DEFAULT_REASONING_EFFORT,
-} from "../src/backend/agent-store";
+import { AgentStore, DEFAULT_AGENT_PROVIDER } from "../src/backend/agent-store";
 import { ChannelMemoryStore } from "../src/backend/channel-memory-store";
 import { ChannelRoutineStore } from "../src/backend/channel-routine-store";
 import { ChannelStore } from "../src/backend/channel-store";
-import { resolveOpencodeCli } from "../src/backend/cli";
+import { resolveClaudeCli } from "../src/backend/cli";
+import { runCauseEffect } from "../src/backend/effect-boundary";
 import { isMissingFileError } from "../src/backend/file-errors";
 import { MailboxStore } from "../src/backend/mailbox-store";
+import { OpenBotDatabase } from "../src/backend/openbot-database";
 import { TeamChatStore } from "../src/backend/team-chat-store";
 import { developmentUserDataName, readDevelopmentInstanceId } from "../src/main/development-profile";
 import { ProviderRuntimeManager, providerRuntimeRoot } from "../src/main/provider-runtime-manager";
 import { writeSetupState } from "../src/main/setup-store";
 import { TeamStore } from "../src/main/team-store";
 import { resolveDevelopmentAppDataRoot } from "./development-state-paths";
+import { readScriptArguments } from "./script-arguments";
 import { NO_SCALE, parseSeedScale, type SeedScale, seedScale } from "./seed-dev-scale";
 
 export const DEVELOPMENT_SEED_MANIFEST_FILE = "openbot-dev-seed-v1.json";
@@ -55,7 +49,6 @@ export const DEVELOPMENT_SEED_MANIFEST_FILE = "openbot-dev-seed-v1.json";
 const logger = createOpenBotLogger("seed-dev-state");
 
 const TEAM_FILE = "openbot-team-server-v2.json";
-/** Read only, exactly as the app reads it: the file a build without accounts owns. */
 const LEGACY_TEAM_FILE = "openbot-team-server-v1.json";
 const SETUP_FILE = "openbot-setup-v2.json";
 const SEED_VERSION = 1;
@@ -64,74 +57,36 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const CHANNEL_LAUNCH_ROOM = "channel-launch-room";
 const CHANNEL_BETA_FEEDBACK = "channel-beta-feedback";
-/**
- * The reader id `HostService.channelActor` uses while no account is signed in. The signed-in reader
- * adopts these cursors through `ChannelStore.adoptReads`, so the seeded read state follows it.
- */
 const LOCAL_MEMBER_ID = "local";
-/** The provider, model and effort every seeded agent shares. Not per-agent data: one answer. */
 export interface SeededAgentModel {
   provider: AgentProviderId;
   model: AgentModelId;
   reasoningEffort: AgentReasoningEffort;
 }
 
-/**
- * What the seeded agents run on when the development default is out of reach. The same pair the app
- * falls back to, which is the built-in default of a new agent record.
- */
-export const SEED_FALLBACK_AGENT: SeededAgentModel = {
-  provider: DEFAULT_AGENT_PROVIDER,
-  model: DEFAULT_AGENT_MODEL,
-  reasoningEffort: DEFAULT_REASONING_EFFORT,
-};
-
-/**
- * What the seeded agents run on: the development default while this computer's OpenCode CLI lists
- * it, and the built-in default otherwise.
- *
- * The app asks the CLI it spawns, over ACP. A seed has no provider runtime, so it asks the same
- * binary with that CLI's own `models` command, and reads anything that fails -- nothing downloaded
- * yet, no OpenCode Go key and no sign-in, a command that moved -- as "not listed". Four seeded
- * agents whose first turn answers "Invalid API key." are a worse start than four on the default the
- * app itself falls back to.
- */
 async function seededAgentModel(appDataRoot: string): Promise<SeededAgentModel> {
+  return (await claudeSignedIn(appDataRoot)) ? DEVELOPMENT_CLAUDE_DEFAULT : DEVELOPMENT_FREE_DEFAULT;
+}
+
+async function claudeSignedIn(appDataRoot: string): Promise<boolean> {
   try {
-    const cli = await resolveOpencodeCli({ bundledExecutable: managedOpencodeExecutable(appDataRoot) });
-    const catalog = execFileSync(cli.executable, ["models"], {
+    const cli = await runCauseEffect(resolveClaudeCli({ bundledExecutable: managedClaudeExecutable(appDataRoot) }));
+    const status = execFileSync(cli.executable, ["auth", "status", "--json"], {
       encoding: "utf8",
-      timeout: 60_000,
-      // The flag the app spawns a managed CLI with. A managed binary that updates itself while a
-      // profile is seeded stops being the exact version the app verifies, and the app downloads it
-      // again on the next start.
-      env: { ...process.env, ...(cli.source === "managed" ? { OPENCODE_DISABLE_AUTOUPDATE: "1" } : {}) },
+      timeout: 15_000,
+      env: { ...process.env, ...(cli.source === "managed" ? { DISABLE_AUTOUPDATER: "1" } : {}) },
     });
-    if (!catalog.split("\n").some((line) => line.trim() === DEVELOPMENT_DEFAULT_MODEL)) return SEED_FALLBACK_AGENT;
-    return {
-      provider: DEVELOPMENT_DEFAULT_PROVIDER,
-      model: DEVELOPMENT_DEFAULT_MODEL,
-      reasoningEffort: DEVELOPMENT_DEFAULT_REASONING_EFFORT,
-    };
+    return z.object({ loggedIn: z.literal(true) }).safeParse(JSON.parse(status)).success;
   } catch {
-    return SEED_FALLBACK_AGENT;
+    return false;
   }
 }
 
-/**
- * Where the app's own OpenCode is: the runtime store this computer shares, which is where a CLI the
- * user downloaded in GoAhead is the only copy there is. A seed that looked at the repository's
- * `build/` tree and the user's own installs instead would find nothing on such a computer, and would
- * put four agents on a provider the app does not start a new agent on.
- *
- * The store, not the status: the manager is read for the path it computes, and nothing here creates
- * a directory, downloads, or collects an old version.
- */
-function managedOpencodeExecutable(appDataRoot: string): string | null {
+function managedClaudeExecutable(appDataRoot: string): string | null {
   const runtimes = new ProviderRuntimeManager({
     root: providerRuntimeRoot({ appData: appDataRoot, userDataOverride: "" }),
   });
-  return runtimes.executablePath("opencode");
+  return runtimes.executablePath("claude");
 }
 
 const GENERATED_DIRECTORY_PATTERN =
@@ -204,20 +159,14 @@ export interface DevelopmentSeedOptions {
   dryRun?: boolean;
   ifMissing?: boolean;
   instanceId?: string | null;
-  /**
-   * What the seeded agents run on. Left out, it is resolved from this computer's OpenCode CLI,
-   * which is what makes it an option: a test pins the answer instead of asking the machine.
-   */
   agentModel?: SeededAgentModel;
-  /** Generated agents, histories, channels and images on top of the showcase, for benchmarks. */
-  scale?: SeedScale;
+  scale?: SeedScale | undefined;
 }
 
 export interface DevelopmentSeedSummary {
   targetProfile: string;
   dryRun: boolean;
   profileActive: boolean;
-  /** The model every seeded agent runs on, which a dry run reports before anything is written. */
   agentModel: AgentModelId;
   agents: number;
   conversations: number;
@@ -241,14 +190,14 @@ export interface DevelopmentSeedSummary {
 const SEED_SUMMARY = {
   agents: 4,
   conversations: 4,
-  attachments: 10,
+  attachments: 12,
   teamMembers: 2,
   activeInvites: 1,
   sessions: 2,
   directThreads: 1,
   queuedDeliveries: 0,
   memories: 7,
-  routines: 5,
+  routines: 6,
   routineRuns: 3,
   channels: 2,
   channelMessages: 12,
@@ -340,7 +289,18 @@ export async function seedDevelopmentState(options: DevelopmentSeedOptions = {})
   return summary;
 }
 
-export async function isDevelopmentProfileActive(profilePath: string): Promise<boolean> {
+export async function isDevelopmentProfileActive(
+  profilePath: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<boolean> {
+  if (platform === "win32") {
+    try {
+      await lstat(join(profilePath, "lockfile"));
+      return true;
+    } catch (error) {
+      if (!isMissingFileError(error)) throw error;
+    }
+  }
   const lockPath = join(profilePath, "SingletonLock");
   try {
     const lock = await lstat(lockPath);
@@ -378,10 +338,10 @@ async function buildSeedProfile(
   agentModel: SeededAgentModel,
   scale: SeedScale,
 ): Promise<void> {
-  const agentStore = new AgentStore(profilePath, homeDirectory);
-  await agentStore.initialize();
+  const agentStore = new AgentStore(profilePath, homeDirectory, new OpenBotDatabase(profilePath));
+  await runCauseEffect(agentStore.initialize());
   const mailbox = new MailboxStore(profilePath, agentStore.sharedRoot, agentStore.database);
-  await mailbox.initialize();
+  await runCauseEffect(mailbox.initialize());
 
   const clock = createSeedClock();
   try {
@@ -402,13 +362,12 @@ async function buildSeedProfile(
       transferDirectories,
     });
     await seedTeam(profilePath, agentStore, clock);
-    // No model beside the provider, and the built-in provider: a seeded profile records no choice
-    // of the developer's, which is what lets the app apply its own development default to an agent
-    // created later. `AgentService` decides that one against the live catalog; this script cannot.
-    await writeSetupState(join(profilePath, SETUP_FILE), {
-      preferredProvider: DEFAULT_AGENT_PROVIDER,
-      preferredModel: null,
-    });
+    await runCauseEffect(
+      writeSetupState(join(profilePath, SETUP_FILE), {
+        preferredProvider: DEFAULT_AGENT_PROVIDER,
+        preferredModel: null,
+      }),
+    );
     await writeSeedManifest(profilePath, clock, transferDirectories);
   } finally {
     agentStore.database.close();
@@ -467,6 +426,8 @@ function seedMemories(agentStore: AgentStore): void {
     }
   }
 }
+
+const SEED_WEBHOOK_SECRET_PLACEHOLDER = Buffer.from("openbot-dev-seed: regenerate this secret").toString("base64");
 
 async function seedRoutines(agentStore: AgentStore, mailbox: MailboxStore, clock: SeedClock): Promise<void> {
   const routines = new AgentRoutineStore(agentStore.database);
@@ -528,9 +489,24 @@ async function seedRoutines(agentStore: AgentStore, mailbox: MailboxStore, clock
     now,
   );
 
-  // Each run holds its own `scheduledFor`, but the request it delivers carries the mailbox clock,
-  // which is the moment the seed runs. So two runs of one routine would render as one instruction
-  // repeated at one time. Two routines keep the scheduled and the manual run apart in the thread.
+  routines.saveRecord(
+    "launch",
+    undefined,
+    {
+      name: "Release published",
+      instruction: "Check the published release's notes and assets, then list the three things the team does next.",
+      active: true,
+      timezone,
+      trigger: {
+        kind: "webhook",
+        eventType: "release.published",
+        filters: [{ pointer: "/release/prerelease", value: false }],
+        secretCiphertext: SEED_WEBHOOK_SECRET_PLACEHOLDER,
+      },
+    },
+    now,
+  );
+
   await seedRoutineRun(routines, mailbox, morningBrief, "scheduled", clock.at(26 * HOUR), "succeeded");
   await seedRoutineRun(routines, mailbox, fridayReview, "manual", clock.at(2 * HOUR), "succeeded");
   await seedRoutineRun(
@@ -553,49 +529,167 @@ async function seedRoutineRun(
   status: "succeeded" | "failed",
   error: string | null = null,
 ): Promise<void> {
-  const run = routines.createRun(routine, kind === "scheduled" ? routine.trigger.id : null, kind, scheduledFor);
-  const receipt = await mailbox.enqueue({
-    sender: {
-      kind: "routine",
-      routineId: routine.id,
-      runId: run.id,
-      routineName: routine.name,
-      scheduledFor,
-    },
-    recipientAgentIds: [routine.agentId],
-    text: routine.instruction,
-    idempotencyKey: `dev-seed:routine-run:${run.id}`,
-  });
+  const run = routines.createRun(
+    routine,
+    kind === "scheduled" ? routine.trigger.id : null,
+    kind === "scheduled" ? "scheduled" : "test",
+    scheduledFor,
+  );
+  const receipt = await runCauseEffect(
+    mailbox.enqueue({
+      sender: {
+        kind: "routine",
+        routineId: routine.id,
+        runId: run.id,
+        routineName: routine.name,
+        scheduledFor,
+      },
+      recipientAgentIds: [routine.agentId],
+      text: routine.instruction,
+      idempotencyKey: `dev-seed:routine-run:${run.id}`,
+    }),
+  );
   const delivery = receipt.deliveries[0];
   if (!delivery) throw new Error("The seeded routine run did not create a delivery.");
   routines.attachDelivery(run.id, delivery.id);
-  await mailbox.markStarting(delivery.id);
-  await mailbox.markRunning(delivery.id, `dev-seed-routine-turn-${run.id}`);
-  await mailbox.markTerminal(delivery.id, status === "succeeded" ? "completed" : "failed", error);
+  await runCauseEffect(mailbox.markStarting(delivery.id));
+  await runCauseEffect(mailbox.markRunning(delivery.id, `dev-seed-routine-turn-${run.id}`));
+  await runCauseEffect(mailbox.markTerminal(delivery.id, status === "succeeded" ? "completed" : "failed", error));
   routines.updateRunStatus(run.id, status, error);
 }
 
 async function seedAgents(agentStore: AgentStore, agentModel: SeededAgentModel): Promise<Map<string, AgentSummary>> {
   const agents = new Map<string, AgentSummary>();
   for (const fixture of AGENTS) {
-    await agentStore.getOrCreate(fixture.id, fixture.name, fixture.title);
-    const agent = await agentStore.updateAgent({
-      agentId: fixture.id,
-      name: fixture.name,
-      title: fixture.title,
-      description: fixture.description,
-      // The provider travels with the model: a record left on the built-in provider while its
-      // model belongs to another one names a model that provider cannot run.
-      provider: agentModel.provider,
-      model: agentModel.model,
-      reasoningEffort: agentModel.reasoningEffort,
-      avatarSeed: fixture.id,
-      avatarHue: fixture.avatarHue,
-    });
-    await agentStore.ensureThreadId(fixture.id);
+    await runCauseEffect(agentStore.getOrCreate(fixture.id, fixture.name, fixture.title));
+    const agent = await runCauseEffect(
+      agentStore.updateAgent({
+        agentId: fixture.id,
+        name: fixture.name,
+        title: fixture.title,
+        description: fixture.description,
+        provider: agentModel.provider,
+        model: agentModel.model,
+        reasoningEffort: agentModel.reasoningEffort,
+        avatarSeed: fixture.id,
+        avatarHue: fixture.avatarHue,
+      }),
+    );
+    await runCauseEffect(agentStore.ensureThreadId(fixture.id));
     agents.set(fixture.id, agentStore.list().find((candidate) => candidate.id === fixture.id) ?? agent);
   }
   return agents;
+}
+
+const spreadsheetDateWorkbooks: {
+  system: "1900" | "1904";
+  cases: { id: string; serial: number; style: number }[];
+}[] = [
+  {
+    system: "1900",
+    cases: [
+      { id: "date-1", serial: 1, style: 1 },
+      { id: "date-59", serial: 59, style: 1 },
+      { id: "date-60", serial: 60, style: 1 },
+      { id: "date-61", serial: 61, style: 1 },
+      { id: "datetime-1.5", serial: 1.5, style: 2 },
+      { id: "datetime-60.5", serial: 60.5, style: 2 },
+      { id: "modern-45292", serial: 45292, style: 1 },
+      { id: "plain-number", serial: 60, style: 0 },
+      { id: "time-only", serial: 0.5, style: 3 },
+    ],
+  },
+  {
+    system: "1904",
+    cases: [
+      { id: "date-0", serial: 0, style: 1 },
+      { id: "date-59", serial: 59, style: 1 },
+      { id: "plain-number", serial: 60, style: 0 },
+      { id: "time-only", serial: 0.5, style: 3 },
+    ],
+  },
+];
+
+const NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relationships";
+
+const spreadsheetNumberFormatCases: { id: string; value: number; format: string }[] = [
+  { id: "dollar-prefix", value: 1234.5, format: '"$"#,##0.00' },
+  { id: "negative-dollar-prefix", value: -1234.5, format: '"$"#,##0.00' },
+  { id: "spaced-prefix", value: 1234.5, format: '"USD "0.00' },
+  { id: "prefix-and-percent", value: 0.125, format: '"Gain "0.0%' },
+  { id: "suffix", value: 2.5, format: '0.00" kg"' },
+  { id: "text-only", value: 1234.5, format: '"Total"' },
+];
+
+const escapeXmlAttribute = (value: string): string => value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+
+function caseWorkbookXlsx(input: {
+  sheetName: string;
+  date1904: boolean;
+  formats: string[];
+  styles: number[];
+  cases: { id: string; value: number; style: number }[];
+}): Uint8Array {
+  const entries = {
+    "[Content_Types].xml": `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+      <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+      <Default Extension="xml" ContentType="application/xml"/>
+      <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+      <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+      <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+    </Types>`,
+    "_rels/.rels": `<Relationships xmlns="${PACKAGE_REL}"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    "xl/workbook.xml": `<workbook xmlns="${NS}" xmlns:r="${REL}">${input.date1904 ? '<workbookPr date1904="1"/>' : ""}<sheets><sheet name="${input.sheetName}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    "xl/_rels/workbook.xml.rels": `<Relationships xmlns="${PACKAGE_REL}">
+      <Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/>
+      <Relationship Id="rId2" Type="${REL}/styles" Target="styles.xml"/>
+    </Relationships>`,
+    "xl/styles.xml": `<styleSheet xmlns="${NS}">
+      ${input.formats.length ? `<numFmts count="${input.formats.length}">${input.formats.map((code, index) => `<numFmt numFmtId="${164 + index}" formatCode="${escapeXmlAttribute(code)}"/>`).join("")}</numFmts>` : ""}
+      <fonts count="1"><font/></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+      <borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      <cellXfs count="${input.styles.length}">${input.styles.map((id) => `<xf numFmtId="${id}" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>`).join("")}</cellXfs>
+    </styleSheet>`,
+    "xl/worksheets/sheet1.xml": `<worksheet xmlns="${NS}"><sheetData>
+      <row r="1"><c r="A1" t="inlineStr"><is><t>Case</t></is></c><c r="B1" t="inlineStr"><is><t>Value</t></is></c></row>
+      ${input.cases
+        .map(
+          (entry, index) =>
+            `<row r="${index + 2}"><c r="A${index + 2}" t="inlineStr"><is><t>${entry.id}</t></is></c><c r="B${index + 2}" s="${entry.style}"><v>${entry.value}</v></c></row>`,
+        )
+        .join("")}
+    </sheetData></worksheet>`,
+  };
+  return zipSync(Object.fromEntries(Object.entries(entries).map(([name, xml]) => [name, strToU8(xml)])));
+}
+
+function spreadsheetDatesXlsx(system: "1900" | "1904"): Uint8Array {
+  const workbook = spreadsheetDateWorkbooks.find((entry) => entry.system === system);
+  if (!workbook) throw new Error("Missing spreadsheet date fixture.");
+  return caseWorkbookXlsx({
+    sheetName: `Dates ${workbook.system}`,
+    date1904: workbook.system === "1904",
+    formats: [],
+    styles: [0, 14, 22, 21],
+    cases: workbook.cases.map((entry) => ({ id: entry.id, value: entry.serial, style: entry.style })),
+  });
+}
+
+function spreadsheetNumberFormatsXlsx(): Uint8Array {
+  const formats = [...new Set(spreadsheetNumberFormatCases.map((entry) => entry.format))];
+  return caseWorkbookXlsx({
+    sheetName: "Number formats",
+    date1904: false,
+    formats,
+    styles: [0, ...formats.map((_format, index) => 164 + index)],
+    cases: spreadsheetNumberFormatCases.map((entry) => ({
+      id: entry.id,
+      value: entry.value,
+      style: formats.indexOf(entry.format) + 1,
+    })),
+  });
 }
 
 async function seedAttachments(
@@ -604,7 +698,18 @@ async function seedAttachments(
   transferDirectories: string[],
 ): Promise<
   Record<
-    "brief" | "metrics" | "evidence" | "image" | "log" | "svg" | "pdf" | "audio" | "spreadsheet",
+    | "brief"
+    | "metrics"
+    | "evidence"
+    | "image"
+    | "log"
+    | "svg"
+    | "pdf"
+    | "audio"
+    | "spreadsheet"
+    | "spreadsheetDates1900"
+    | "spreadsheetDates1904"
+    | "spreadsheetNumberFormats",
     AttachmentSummary
   >
 > {
@@ -617,11 +722,13 @@ async function seedAttachments(
       | { name: string; mimeType: string; bytes: Uint8Array }
       | { name: string; mimeType: string; sourcePath: string },
   ): Promise<AttachmentSummary> {
-    const attachment = await mailbox.storeGeneratedAttachment({
-      ...input,
-      ownerAgentId: owner.id,
-      ownerThreadId: owner.threadId,
-    });
+    const attachment = await runCauseEffect(
+      mailbox.storeGeneratedAttachment({
+        ...input,
+        ownerAgentId: owner.id,
+        ownerThreadId: owner.threadId,
+      }),
+    );
     transferDirectories.push(`generated/${attachment.id}`);
     return attachment;
   }
@@ -683,6 +790,21 @@ async function seedAttachments(
       mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       bytes: previewXlsx(),
     }),
+    spreadsheetDates1900: await store(chief, {
+      name: "spreadsheet-dates-1900.xlsx",
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      bytes: spreadsheetDatesXlsx("1900"),
+    }),
+    spreadsheetDates1904: await store(chief, {
+      name: "spreadsheet-dates-1904.xlsx",
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      bytes: spreadsheetDatesXlsx("1904"),
+    }),
+    spreadsheetNumberFormats: await store(chief, {
+      name: "spreadsheet-number-formats.xlsx",
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      bytes: spreadsheetNumberFormatsXlsx(),
+    }),
   };
 }
 
@@ -691,7 +813,18 @@ async function seedConversations(
   mailbox: MailboxStore,
   agents: Map<string, AgentSummary>,
   attachments: Record<
-    "brief" | "metrics" | "evidence" | "image" | "log" | "svg" | "pdf" | "audio" | "spreadsheet",
+    | "brief"
+    | "metrics"
+    | "evidence"
+    | "image"
+    | "log"
+    | "svg"
+    | "pdf"
+    | "audio"
+    | "spreadsheet"
+    | "spreadsheetDates1900"
+    | "spreadsheetDates1904"
+    | "spreadsheetNumberFormats",
     AttachmentSummary
   >,
   clock: SeedClock,
@@ -814,6 +947,25 @@ async function seedConversations(
           attachments.spreadsheet,
         ],
       },
+      {
+        ...message(
+          "chief-assistant-spreadsheet-dates",
+          "assistant",
+          [
+            "Open these workbooks to check spreadsheet dates and number formats:",
+            "",
+            `- ${file(attachments.spreadsheetDates1900)}`,
+            `- ${file(attachments.spreadsheetDates1904)}`,
+            `- ${file(attachments.spreadsheetNumberFormats)}`,
+          ].join("\n"),
+          42 * MINUTE,
+        ),
+        attachments: [
+          attachments.spreadsheetDates1900,
+          attachments.spreadsheetDates1904,
+          attachments.spreadsheetNumberFormats,
+        ],
+      },
       message(
         "chief-assistant-rich-previews",
         "assistant",
@@ -822,7 +974,7 @@ async function seedConversations(
           "",
           "```mermaid",
           "flowchart LR",
-          "  QA[Product QA] --> Evidence[Evidence review]",
+          '  QA[Product QA] --> Evidence["Evidence<br/>review"]',
           "  Evidence --> Release{Release ready?}",
           "  Release -- yes --> Publish[Publish]",
           "  Release -- no --> Rollback[Rollback]",
@@ -917,67 +1069,65 @@ async function seedConversations(
       { seedVersion: SEED_VERSION },
       `dev-seed:conversation:${agentId}`,
     );
-    // The app writes the preview from the user's last request with its references expanded
-    // (`agent-service.ts`), never from a reply. A hand-written line contradicts the transcript
-    // beside it as soon as the transcript changes.
     const request = [...messages].reverse().find((entry) => entry.author === "user" && entry.text.trim());
     if (request)
-      await agentStore.updatePreview(
-        agentId,
-        displayMessageReferences(request.text, request.attachments ?? [], agentNames),
+      await runCauseEffect(
+        agentStore.updatePreview(
+          agentId,
+          displayMessageReferences(request.text, request.attachments ?? [], agentNames),
+        ),
       );
   }
-  await mailbox.setReaction("chief", "chief-assistant-plan", { kind: "user" }, "🎉");
-  await mailbox.setReaction("research", "research-assistant", { kind: "user" }, "✅");
+  await runCauseEffect(mailbox.setReaction("chief", "chief-assistant-plan", { kind: "user" }, "🎉"));
+  await runCauseEffect(mailbox.setReaction("research", "research-assistant", { kind: "user" }, "✅"));
 }
 
 async function seedAgentExchanges(mailbox: MailboxStore): Promise<void> {
-  const completed = await mailbox.enqueue({
-    sender: { kind: "agent", agentId: "chief" },
-    recipientAgentIds: ["research", "builder"],
-    text: "Please verify the launch evidence and implementation checklist.",
-    replyToMessageId: "chief-assistant-plan",
-    idempotencyKey: "dev-seed:exchange:completed",
-  });
+  const completed = await runCauseEffect(
+    mailbox.enqueue({
+      sender: { kind: "agent", agentId: "chief" },
+      recipientAgentIds: ["research", "builder"],
+      text: "Please verify the launch evidence and implementation checklist.",
+      replyToMessageId: "chief-assistant-plan",
+      idempotencyKey: "dev-seed:exchange:completed",
+    }),
+  );
   for (const [index, delivery] of completed.deliveries.entries()) {
-    await mailbox.markStarting(delivery.id);
-    await mailbox.markRunning(delivery.id, `dev-seed-turn-completed-${index + 1}`);
-    await mailbox.markTerminal(delivery.id, "completed");
+    await runCauseEffect(mailbox.markStarting(delivery.id));
+    await runCauseEffect(mailbox.markRunning(delivery.id, `dev-seed-turn-completed-${index + 1}`));
+    await runCauseEffect(mailbox.markTerminal(delivery.id, "completed"));
   }
 
-  // A teammate passing information on without asking for an answer: the state the marker reads as
-  // "Informed" for the sender and "Update from" for the recipient.
-  const notice = await mailbox.enqueue({
-    sender: { kind: "agent", agentId: "builder" },
-    recipientAgentIds: ["chief"],
-    text: "The staging build is live. I am continuing with the checklist; no answer needed.",
-    expectsReply: false,
-    idempotencyKey: "dev-seed:exchange:notice",
-  });
+  const notice = await runCauseEffect(
+    mailbox.enqueue({
+      sender: { kind: "agent", agentId: "builder" },
+      recipientAgentIds: ["chief"],
+      text: "The staging build is live. I am continuing with the checklist; no answer needed.",
+      expectsReply: false,
+      idempotencyKey: "dev-seed:exchange:notice",
+    }),
+  );
   const noticeDelivery = notice.deliveries[0];
   if (!noticeDelivery) throw new Error("The seeded notice exchange did not create a delivery.");
-  await mailbox.markStarting(noticeDelivery.id);
-  await mailbox.markRunning(noticeDelivery.id, "dev-seed-turn-notice");
-  await mailbox.markTerminal(noticeDelivery.id, "completed");
+  await runCauseEffect(mailbox.markStarting(noticeDelivery.id));
+  await runCauseEffect(mailbox.markRunning(noticeDelivery.id, "dev-seed-turn-notice"));
+  await runCauseEffect(mailbox.markTerminal(noticeDelivery.id, "completed"));
 
-  const failed = await mailbox.enqueue({
-    sender: { kind: "agent", agentId: "research" },
-    recipientAgentIds: ["launch"],
-    text: "I could not verify the final launch claim. Please keep it out of the release note.",
-    idempotencyKey: "dev-seed:exchange:failed",
-  });
+  const failed = await runCauseEffect(
+    mailbox.enqueue({
+      sender: { kind: "agent", agentId: "research" },
+      recipientAgentIds: ["launch"],
+      text: "I could not verify the final launch claim. Please keep it out of the release note.",
+      idempotencyKey: "dev-seed:exchange:failed",
+    }),
+  );
   const failedDelivery = failed.deliveries[0];
   if (!failedDelivery) throw new Error("The failed seed exchange did not create a delivery.");
-  await mailbox.markStarting(failedDelivery.id);
-  await mailbox.markRunning(failedDelivery.id, "dev-seed-turn-failed");
-  await mailbox.markTerminal(failedDelivery.id, "failed", "The primary source was not available.");
+  await runCauseEffect(mailbox.markStarting(failedDelivery.id));
+  await runCauseEffect(mailbox.markRunning(failedDelivery.id, "dev-seed-turn-failed"));
+  await runCauseEffect(mailbox.markTerminal(failedDelivery.id, "failed", "The primary source was not available."));
 }
 
-/**
- * The two channels the app cannot show without them: a working room with a delegated run, and one
- * archived room behind the sidebar toggle. No seeded task is `queued` and no seeded routine run is
- * open, so the channel service recovers this state at startup without starting a provider turn.
- */
 async function seedChannels(
   agentStore: AgentStore,
   mailbox: MailboxStore,
@@ -1013,37 +1163,35 @@ async function seedLaunchRoom(
     {},
     "dev-seed:channel-launch-room",
   );
-  // The execution threads come first: a file an agent generates in a channel belongs to the shared
-  // transcript, so it has to be owned by the channel thread rather than by the agent's own chat.
   for (const agentId of ["chief", "research", "builder"]) store.context(channelId, agentId);
   const launchThread = store.context(channelId, "launch").threadId;
-  const draft = await mailbox.storeGeneratedAttachment({
-    name: "release-note-draft.md",
-    mimeType: "text/markdown",
-    bytes: bytes(
-      [
-        "# GoAhead 1.0 release note (draft)",
-        "",
-        "## What is new",
-        "- Channels: several agents share one chat and one task list.",
-        "- Routines: a schedule can start work in a channel.",
-        "",
-        "## Evidence",
-        "- Cold start: 1.9 s on the release benchmark. Owner: Builder.",
-        "- Search: 120 ms median on the release benchmark. Owner: Builder.",
-        "",
-        "## Open",
-        "- The retention claim has no primary source. It stays out of this note.",
-        "",
-      ].join("\n"),
-    ),
-    ownerAgentId: "launch",
-    ownerThreadId: launchThread,
-  });
+  const draft = await runCauseEffect(
+    mailbox.storeGeneratedAttachment({
+      name: "release-note-draft.md",
+      mimeType: "text/markdown",
+      bytes: bytes(
+        [
+          "# GoAhead 1.0 release note (draft)",
+          "",
+          "## What is new",
+          "- Channels: several agents share one chat and one task list.",
+          "- Routines: a schedule can start work in a channel.",
+          "",
+          "## Evidence",
+          "- Cold start: 1.9 s on the release benchmark. Owner: Builder.",
+          "- Search: 120 ms median on the release benchmark. Owner: Builder.",
+          "",
+          "## Open",
+          "- The retention claim has no primary source. It stays out of this note.",
+          "",
+        ].join("\n"),
+      ),
+      ownerAgentId: "launch",
+      ownerThreadId: launchThread,
+    }),
+  );
   transferDirectories.push(`generated/${draft.id}`);
 
-  // The routine exists before the message it fired: the author id of a routine request carries the
-  // routine id, the way `ChannelService` writes it for a `request` command.
   const routines = new ChannelRoutineStore(store.database);
   const timezone = seedTimezone();
   const standup = routines.create(
@@ -1196,15 +1344,12 @@ async function seedLaunchRoom(
     }),
   ];
   store.update(created, { messages, tasks }, "dev-seed:channel-launch-room:transcript");
-  // Two messages the user did not write stay unread, so the sidebar count and the unread divider
-  // both have something to show.
   store.markRead(channelId, LOCAL_MEMBER_ID, 6, "dev-seed:channel-launch-room:read");
 
   const standupRun = routines.createRun(standup, standup.trigger.id, "scheduled", clock.at(26 * HOUR));
   routines.attachRequest(standupRun.id, requestStandup);
   routines.updateRunStatus(standupRun.id, "succeeded");
-  // A fire that never reached the channel: the run holds the error and no request message.
-  const blockedRun = routines.createRun(standup, null, "manual", clock.at(4 * HOUR));
+  const blockedRun = routines.createRun(standup, null, "test", clock.at(4 * HOUR));
   routines.updateRunStatus(blockedRun.id, "failed", "Every member was busy when the routine fired.");
 
   const memories = new ChannelMemoryStore(store.database);
@@ -1218,7 +1363,6 @@ async function seedLaunchRoom(
   );
 }
 
-/** Finished work behind the sidebar's archived toggle, which is empty without it. */
 function seedBetaFeedbackChannel(store: ChannelStore, agents: Map<string, AgentSummary>, clock: SeedClock): void {
   const channelId = CHANNEL_BETA_FEEDBACK;
   const created = store.update(
@@ -1293,15 +1437,9 @@ interface SeedChannelMessage {
   turnId?: string;
   replyToMessageId?: string;
   attachments?: AttachmentSummary[];
-  /** The member a routing receipt names, which makes the row a channel activity marker. */
   assignedAgentId?: string;
 }
 
-/**
- * The same message shape `ChannelService` writes: a member request is a `user` message, a lead
- * dispatch or a handoff is a `system` message, and a reported result is an `assistant` message
- * with the turn that produced it.
- */
 function channelMessage(channelId: string, clock: SeedClock, input: SeedChannelMessage): ChannelMessage {
   return {
     id: input.id,
@@ -1367,33 +1505,34 @@ function mentionAgent(agents: Map<string, AgentSummary>, agentId: string): strin
 
 async function seedTeam(profilePath: string, agentStore: AgentStore, clock: SeedClock): Promise<void> {
   const team = new TeamStore(join(profilePath, TEAM_FILE), join(profilePath, LEGACY_TEAM_FILE));
-  await team.initialize();
+  await runCauseEffect(team.initialize());
   const owner = {
     id: "openbot-dev-owner",
     email: "goahead-dev-host@example.com",
     name: "Dev Owner",
     avatarUrl: null,
   };
-  const teamIdentity = await team.configureWithAccount("GoAhead Dev Team", owner);
+  const teamIdentity = await runCauseEffect(team.configureWithAccount("GoAhead Dev Team", owner));
   const joined = [];
   for (const member of [
     { id: "openbot-dev-alice", email: "alice@example.com", name: "Alice Chen", role: "admin" as const },
   ]) {
-    const invite = await team.createInvite(member.role, member.email);
+    const invite = await runCauseEffect(team.createInvite(member.role, member.email));
     joined.push(
-      await team.acceptInviteWithAccount(invite.token, {
-        id: member.id,
-        email: member.email,
-        name: member.name,
-        avatarUrl: null,
-      }),
+      await runCauseEffect(
+        team.acceptInviteWithAccount(invite.token, {
+          id: member.id,
+          email: member.email,
+          name: member.name,
+          avatarUrl: null,
+        }),
+      ),
     );
   }
-  await team.createInvite("member", "new-person@example.com");
-  const ownerSession = await team.loginWithAccount(owner);
-  await team.setEnabledOnLaunch(teamIdentity.serverId, true);
+  await runCauseEffect(team.createInvite("member", "new-person@example.com"));
+  const ownerSession = await runCauseEffect(team.loginWithAccount(owner));
+  await runCauseEffect(team.setEnabledOnLaunch(teamIdentity.serverId, true));
 
-  // The owner and Alice leave the third seat of the default limit to the dev test client.
   const [alice] = joined;
   if (!alice) throw new Error("The development team members could not be created.");
   const chat = new TeamChatStore(agentStore.database);
@@ -1486,11 +1625,6 @@ async function cleanupStagedSeed(
   ]);
 }
 
-/**
- * Every seeded record is dated backwards from the run. A fixed date would put the whole showcase
- * weeks before the routine runs, which the schedulers date from the real clock, and would make the
- * date separators and the sidebar order read wrong on the day a developer seeds.
- */
 interface SeedClock {
   now: Date;
   at(millisecondsAgo: number): string;
@@ -1556,14 +1690,26 @@ function isMainModule(): boolean {
   return entryPath !== undefined && import.meta.url === pathToFileURL(resolve(entryPath)).href;
 }
 
+const USAGE = [
+  "Usage: bun run dev:seed [--dry-run] [--if-missing] [--scale=<spec>]",
+  "",
+  "Replaces the app development profile with showcase data. It refuses while the dev app is open.",
+  "  --dry-run      Print the target and the fixture counts. Change no files.",
+  "  --if-missing   Keep an existing profile.",
+  "  --scale=<spec> Add generated data: agents:N,messages:M,channels:C,channelMessages:K,attachments:A",
+].join("\n");
+
 async function main(): Promise<void> {
-  const dryRun = process.argv.slice(2).includes("--dry-run");
-  const ifMissing = process.argv.slice(2).includes("--if-missing");
-  const scaleFlag = process.argv.slice(2).find((argument) => argument.startsWith("--scale="));
+  const parsed = readScriptArguments({
+    usage: USAGE,
+    options: { "dry-run": { type: "boolean" }, "if-missing": { type: "boolean" }, scale: { type: "string" } },
+  });
+  if (parsed === null) return;
+  const dryRun = parsed.values["dry-run"] ?? false;
   const summary = await seedDevelopmentState({
     dryRun,
-    ifMissing,
-    scale: scaleFlag === undefined ? undefined : parseSeedScale(scaleFlag.slice("--scale=".length)),
+    ifMissing: parsed.values["if-missing"] ?? false,
+    scale: parsed.values.scale === undefined ? undefined : parseSeedScale(parsed.values.scale),
     instanceId: readDevelopmentInstanceId(process.env.OPENBOT_DEV_INSTANCE_ID),
   });
   logger.info(dryRun ? "GoAhead development seed dry run:" : "GoAhead development state seeded:");

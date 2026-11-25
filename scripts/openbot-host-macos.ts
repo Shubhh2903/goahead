@@ -4,6 +4,7 @@ import { chmod, chown, lstat, mkdir, open, readdir, rm, unlink, writeFile } from
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
+import { runCauseEffect } from "../src/backend/effect-boundary";
 import { isMissingFileError } from "../src/backend/file-errors";
 import {
   hostStateSchema,
@@ -73,7 +74,7 @@ async function verifyInstallation(): Promise<void> {
       join(ROOT, name),
     ]);
   }
-  await readOwnedJson(join(ROOT, "host-release.json"), 0, hostReleaseSchema);
+  await runCauseEffect(readOwnedJson(join(ROOT, "host-release.json"), 0, hostReleaseSchema));
   for (const path of [HOST_AGENT_PLIST, HOST_DAEMON_PLIST]) await hostCommand("/usr/bin/plutil", ["-lint", path]);
   if (
     (await hostCommand("/usr/bin/plutil", ["-extract", "UserName", "raw", HOST_DAEMON_PLIST])) !== "root" ||
@@ -90,17 +91,16 @@ async function verifyInstallation(): Promise<void> {
 async function verifyApplication(): Promise<void> {
   await verifySharedAppParent();
   const installed = await macHostOperations().installedVersion();
-  const release = await readOwnedJson(join(ROOT, "host-release.json"), 0, hostReleaseSchema);
+  const release = await runCauseEffect(readOwnedJson(join(ROOT, "host-release.json"), 0, hostReleaseSchema));
   if (isNewerRelease(release.version, installed))
-    throw new Error("Install the matching or a newer OpenBot application first.");
+    throw new Error("Install the matching or a newer GoAhead application first.");
 }
 
 async function prepareApplication(): Promise<void> {
   await verifySharedAppParent();
   await verifyBundleTree(SHARED_APP, false);
   await verifySignature(SHARED_APP);
-  if (await macHostOperations().applicationInUse()) throw new Error("Quit all OpenBot sessions before initial setup.");
-  // A normal DMG copy may belong to its installing administrator. Never adopt a tenant-owned bundle.
+  if (await macHostOperations().applicationInUse()) throw new Error("Quit all GoAhead sessions before initial setup.");
   const admins = new Set<number>([0]);
   const checkOwner = async (path: string): Promise<void> => {
     const info = await lstat(path);
@@ -174,14 +174,13 @@ async function verifyIsolation(tenants: HostTenant[]): Promise<void> {
     for (const tenant of tenants) {
       const area = join(directory, String(tenant.uid));
       await mkdir(area, { mode: 0o700 });
-      await writeFile(join(area, "probe"), "OpenBot permission test\n", { flag: "wx", mode: 0o600 });
+      await writeFile(join(area, "probe"), "GoAhead permission test\n", { flag: "wx", mode: 0o600 });
       await chown(join(area, "probe"), tenant.uid, 20);
       await chown(area, tenant.uid, 20);
     }
     for (const owner of tenants)
       for (const reader of tenants) {
         const same = owner.uid === reader.uid;
-        // Only harmless files in the root-created verification area are accessed. No tenant content.
         await hostCommand("/usr/bin/sudo", [
           "-n",
           "-u",
@@ -204,7 +203,6 @@ async function verifyIsolation(tenants: HostTenant[]): Promise<void> {
 
 export function macHostAdminOperations(): HostAdminOperations {
   let credentialFile: string | null = null;
-  // Account names do not change while one command runs, and watch would otherwise rescan on each refresh.
   const names = new Map<number, string>();
   return {
     verifyInstallation,
@@ -213,13 +211,12 @@ export function macHostAdminOperations(): HostAdminOperations {
     inspectTenant,
     verifyIsolation,
     readConfig: async () => {
-      const config = await readHostConfig();
+      const config = await runCauseEffect(readHostConfig());
       if (config) await verifyNoWriteAcl(join(ROOT, "config.json"));
       return config;
     },
     checkNewUsers: async (names) => {
       if (!names.length) return;
-      // This lists only local account names. The native tool repeats directory-service preflight.
       const existing = (await hostCommand("/usr/bin/dscl", [".", "-list", "/Users"])).split("\n");
       for (const name of names) {
         if (existing.includes(name)) throw new Error("Requested account already exists.");
@@ -233,7 +230,6 @@ export function macHostAdminOperations(): HostAdminOperations {
       }
     },
     createUsers: async (names) => {
-      // Capture sensitive output in memory. Never print an exec error, stdout or stderr.
       let result: string;
       try {
         result = (
@@ -275,7 +271,6 @@ export function macHostAdminOperations(): HostAdminOperations {
     },
     presentCredentials: async (credentials) => {
       if (!credentials.length) return;
-      // /dev/tty avoids stdout redirection, pipes, service logs and diagnostic collectors.
       const terminal = await open("/dev/tty", "w");
       try {
         await terminal.writeFile(
@@ -301,19 +296,17 @@ export function macHostAdminOperations(): HostAdminOperations {
     bundleProcesses,
     readState: async () => {
       try {
-        await verifyHostDirectory(ROOT);
-        return await readOwnedJson(join(ROOT, "state.json"), 0, hostStateSchema);
+        await runCauseEffect(verifyHostDirectory(ROOT));
+        return await runCauseEffect(readOwnedJson(join(ROOT, "state.json"), 0, hostStateSchema));
       } catch (error) {
         if (isMissingFileError(error)) return null;
         throw error;
       }
     },
     readTenantStatus: async (uid) => {
-      // A logged-out, stopped or malformed tenant is a normal reading, not a command failure.
       try {
-        const directory = await verifyTenantDirectory(ROOT, uid);
-        const status = await readOwnedJson(join(directory, "status.json"), uid, tenantStatusSchema);
-        // The host ignores a report that claims another UID. Never show it as that tenant's state.
+        const directory = await runCauseEffect(verifyTenantDirectory(ROOT, uid));
+        const status = await runCauseEffect(readOwnedJson(join(directory, "status.json"), uid, tenantStatusSchema));
         return status.uid === uid ? status : null;
       } catch {
         return null;
@@ -321,7 +314,7 @@ export function macHostAdminOperations(): HostAdminOperations {
     },
     verifyState: async () => {
       await verifyHostPath(ROOT);
-      await readOwnedJson(join(ROOT, "state.json"), 0, hostStateSchema);
+      await runCauseEffect(readOwnedJson(join(ROOT, "state.json"), 0, hostStateSchema));
       await verifyNoWriteAcl(join(ROOT, "state.json"));
     },
     verifyDaemon: async () => {

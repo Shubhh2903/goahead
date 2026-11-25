@@ -1,5 +1,5 @@
 [Unit]
-Description=Reload Nginx after OpenBot Remote TLS renewal
+Description=Reload Nginx after GoAhead Remote TLS renewal
 After=nginx.service
 
 [Service]

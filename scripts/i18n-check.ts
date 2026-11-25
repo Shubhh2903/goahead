@@ -6,30 +6,48 @@ import { TRANSLATED_LOCALES } from "@openbot/i18n";
 import { matchingSourceKeys } from "@openbot/i18n/source";
 import { createOpenBotLogger } from "@openbot/logging";
 
-// Checks the catalogs in packages/i18n/src/messages. See docs/i18n.md.
-//
-// Fails on:
-// - a key that does not start with its module's prefix, or a key in two modules;
-// - a French or Japanese key that English does not have, a placeholder English does not have, or
-//   a string where English has plural forms (and the reverse);
-// - a source template that more than one source key can match, so the reverse lookup is ambiguous;
-// - an English key no code names. Write keys as literals, so this check and a search find them.
-//
-// Reports, and does not fail on, keys that are not translated yet. `--json` writes the report to
-// .openbot-build/i18n-report.json.
-
 const ROOT = resolve(import.meta.dirname, "..");
 const MESSAGES = resolve(ROOT, "packages/i18n/src/messages");
-/** Files that spread area modules together. They hold no keys of their own. */
+const GAPS = resolve(ROOT, "packages/i18n/untranslated.json");
 const AGGREGATORS = new Set(["index", "mobile", "source", "shared"]);
-/** Where code that names a key lives. The catalogs themselves are left out. */
-// `apps/auth-api/src`: the account site's pages read some shared keys, such as the Slack connect errors.
-const CODE_ROOTS = ["src", "packages", "apps/mobile/src", "apps/auth-api/src", "scripts"];
+const CODE_ROOTS = [
+  "src",
+  "packages",
+  "apps/mobile/src",
+  "apps/auth-api/src",
+  "apps/browser-extension/src",
+  "remote/api/src",
+  "scripts",
+];
 const CODE_EXTENSIONS = /\.(?:ts|tsx)$/;
 const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", "build", "out", ".expo"]);
+const RELEASED_SOURCE_KEYS = new Set([
+  "error.agent.noStartingModel",
+  "error.agent.queueEditRejected",
+  "error.agent.claudeSandboxUnavailable",
+  "error.provider.cliBusyUpdate",
+  "error.provider.startStopped",
+  "error.backend.taskNotFound",
+  "error.backend.taskStillRunning",
+  "error.backend.taskClosed",
+  "error.backend.taskTitleRequired",
+  "error.backend.taskOpenLimitReached",
+  "error.backend.taskRemoteUnsupported",
+  "error.backend.taskMoveRefused",
+  "error.backend.channelHistoryArriving",
+  "error.backend.channelHistoryLeadRequired",
+  "error.backend.channelRoutingUnreadable",
+  "error.backend.channelLeadTimedOut",
+  "error.backend.channelRequestMemberRequired",
+  "error.backend.recipientHidden",
+  "error.provider.customEndpointKeyRefused",
+  "error.connector.protonPassPlan",
+]);
 
 const logger = createOpenBotLogger("i18n-check");
 const failures: string[] = [];
+const OBJECT_START = "export const messages = {";
+const LEADING_KEY = /^(?:\s|\/\/[^\n]*)*"([^"\\]+)"\s*:/;
 
 function files(directory: string, match: RegExp): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -39,7 +57,6 @@ function files(directory: string, match: RegExp): string[] {
   });
 }
 
-/** `mobile/settings` for messages/en/mobile/settings.ts. */
 function moduleName(locale: string, path: string): string {
   return relative(resolve(MESSAGES, locale), path).replaceAll(sep, "/").replace(/\.ts$/, "");
 }
@@ -74,6 +91,78 @@ function placeholders(message: Message): Set<string> {
   return new Set(forms(message).flatMap((form) => [...form.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? "")));
 }
 
+function stringEnd(text: string, start: number): number {
+  const quote = text[start];
+  for (let index = start + 1; index < text.length; index += 1) {
+    if (text[index] === "\\") index += 1;
+    else if (quote === "`" && text.startsWith("${", index))
+      throw new Error("a template literal with a placeholder is not supported.");
+    else if (text[index] === quote) return index + 1;
+  }
+  throw new Error("a string literal does not end.");
+}
+
+function catalogEntries(text: string): { head: string; entries: string[]; tail: string } {
+  const open = text.indexOf(OBJECT_START);
+  if (open < 0 || text.indexOf(OBJECT_START, open + 1) >= 0) throw new Error(`expected one \`${OBJECT_START}\`.`);
+  const bodyStart = open + OBJECT_START.length;
+  const entries: string[] = [];
+  let depth = 0;
+  let entryStart = bodyStart;
+  for (let index = bodyStart; index < text.length; index += 1) {
+    const char = text[index];
+    if (text.startsWith("//", index)) {
+      const lineEnd = text.indexOf("\n", index);
+      index = (lineEnd < 0 ? text.length : lineEnd) - 1;
+    } else if (text.startsWith("/*", index)) {
+      throw new Error("a block comment is not supported; use a line comment above the key.");
+    } else if (char === '"' || char === "'" || char === "`") {
+      index = stringEnd(text, index) - 1;
+    } else if (char === "{" || char === "[" || char === "(") {
+      depth += 1;
+    } else if (char === "}" || char === "]" || char === ")") {
+      if (depth > 0) {
+        depth -= 1;
+        continue;
+      }
+      const last = text.slice(entryStart, index);
+      const lastEntry = last.trimEnd();
+      if (lastEntry.trim() === "") return { head: text.slice(0, bodyStart), entries, tail: text.slice(entryStart) };
+      entries.push(lastEntry);
+      return { head: text.slice(0, bodyStart), entries, tail: text.slice(entryStart + lastEntry.length) };
+    } else if (char === "," && depth === 0) {
+      entries.push(text.slice(entryStart, index));
+      entryStart = index + 1;
+    }
+  }
+  throw new Error("the `messages` object does not end.");
+}
+
+function entryKey(entry: string): string {
+  if (!entry.startsWith("\n")) throw new Error("text follows a comma on the same line; put each key on its own line.");
+  const key = LEADING_KEY.exec(entry)?.[1];
+  if (key === undefined) throw new Error(`an entry does not start with a quoted key: ${entry.trim().slice(0, 60)}`);
+  return key;
+}
+
+function sortCatalog(text: string, order: readonly string[]): string {
+  const { head, entries, tail } = catalogEntries(text);
+  const rank = new Map(order.map((key, index) => [key, index]));
+  const sorted = entries
+    .map((entry, index) => ({ entry, rank: rank.get(entryKey(entry)) ?? order.length + index }))
+    .sort((left, right) => left.rank - right.rank)
+    .map(({ entry }) => entry);
+  const [first, ...rest] = sorted;
+  if (first === undefined) return text;
+  return `${head}${[first.replace(/^\n(?:[ \t]*\n)+/, "\n"), ...rest].join(",")},${tail}`;
+}
+
+function isInOrder(keys: readonly string[], order: readonly string[]): boolean {
+  const known = new Set(keys);
+  const expected = order.filter((key) => known.has(key));
+  return expected.every((key, index) => keys[index] === key);
+}
+
 function modulePaths(locale: string): Map<string, string> {
   return new Map(
     files(resolve(MESSAGES, locale), /\.ts$/)
@@ -102,6 +191,8 @@ interface Coverage {
 }
 const coverage: Record<string, Record<string, Coverage>> = {};
 const untranslated: Record<string, string[]> = {};
+const outOfOrder: string[] = [];
+const fix = process.argv.includes("--fix");
 
 for (const locale of TRANSLATED_LOCALES.filter((locale) => locale !== "en")) {
   const paths = modulePaths(locale);
@@ -114,6 +205,18 @@ for (const locale of TRANSLATED_LOCALES.filter((locale) => locale !== "en")) {
     const path = paths.get(name);
     if (!path) failures.push(`${locale}/${name}.ts is missing. Create it, even when it is empty.`);
     const translation = path ? await loadModule(path) : {};
+    if (path && !isInOrder(Object.keys(translation), Object.keys(source))) {
+      outOfOrder.push(`${locale}/${name}.ts`);
+      if (fix) {
+        try {
+          writeFileSync(path, sortCatalog(readFileSync(path, "utf8"), Object.keys(source)));
+        } catch (error) {
+          failures.push(
+            `${locale}/${name}.ts: --fix cannot sort it: ${error instanceof Error ? error.message : error}`,
+          );
+        }
+      }
+    }
     let translated = 0;
     for (const [key, message] of Object.entries(translation)) {
       const sourceMessage = source[key];
@@ -145,8 +248,44 @@ for (const locale of TRANSLATED_LOCALES.filter((locale) => locale !== "en")) {
   }
 }
 
-// Each source template, with a number for {count} and its own placeholder text for the rest, must
-// map back to its own key only.
+const gapsFile = relative(ROOT, GAPS);
+const known = JSON.parse(readFileSync(GAPS, "utf8"));
+const listed = new Map<string, readonly unknown[]>();
+if (isDynamicRecord(known)) {
+  for (const [key, locales] of Object.entries(known)) {
+    if (Array.isArray(locales)) listed.set(key, locales);
+    else failures.push(`${gapsFile}: ${key} must have a list of locale tags.`);
+  }
+} else {
+  failures.push(`${gapsFile} must be an object of keys and locale tags.`);
+}
+const accept = process.argv.find((arg) => arg.startsWith("--accept="))?.slice("--accept=".length);
+if (accept !== undefined && !(accept in untranslated)) failures.push(`--accept=${accept} is not a translated locale.`);
+const gaps = new Map<string, string[]>();
+const missing = Object.entries(untranslated).map(([locale, keys]) => [locale, new Set(keys)] as const);
+for (const key of [...owner.keys()].sort()) {
+  const locales: string[] = [];
+  for (const [locale, keys] of missing) {
+    if (!keys.has(key)) continue;
+    if (listed.get(key)?.includes(locale) || locale === accept) locales.push(locale);
+    else failures.push(`${locale}/${owner.get(key)}.ts: ${key} is not translated. Translate it; see docs/i18n.md.`);
+  }
+  if (locales.length > 0) gaps.set(key, locales);
+}
+if (fix || accept) {
+  const entries = [...gaps];
+  const lines = entries.map(([key, locales], index) => {
+    const line = `  ${JSON.stringify(key)}: [${locales.map((locale) => JSON.stringify(locale)).join(", ")}]`;
+    if (line.length + (index < entries.length - 1 ? 1 : 0) <= 120) return line;
+    return `  ${JSON.stringify(key)}: [\n${locales.map((locale) => `    ${JSON.stringify(locale)}`).join(",\n")}\n  ]`;
+  });
+  writeFileSync(GAPS, `{\n${lines.join(",\n")}\n}\n`);
+} else if (
+  [...listed].some(([key, locales]) => locales.some((locale) => !gaps.get(key)?.some((tag) => tag === locale)))
+) {
+  failures.push(`${gapsFile} lists keys that are translated or removed. Run \`bun run i18n:check --fix\`.`);
+}
+
 for (const [name, messages] of english) {
   if (!name.startsWith("error/") && !name.startsWith("status/")) continue;
   for (const [key, message] of Object.entries(messages)) {
@@ -167,6 +306,7 @@ const code = CODE_ROOTS.flatMap((root) => files(resolve(ROOT, root), CODE_EXTENS
   .map((path) => readFileSync(path, "utf8"))
   .join("\n");
 for (const [key, name] of owner) {
+  if (RELEASED_SOURCE_KEYS.has(key)) continue;
   if (!code.includes(`"${key}"`) && !code.includes(`'${key}'`) && !code.includes(`\`${key}\``)) {
     failures.push(`en/${name}.ts: ${key} is not used. Remove it, or name it as a literal where it renders.`);
   }
@@ -176,6 +316,7 @@ const report = {
   keys: owner.size,
   coverage,
   untranslated,
+  outOfOrder,
   failures,
 };
 
@@ -192,6 +333,13 @@ const summary = Object.entries(coverage).map(([locale, areas]) => {
   return `${locale}: ${translated} of ${total} keys translated`;
 });
 logger.info([`${owner.size} English keys.`, ...summary].join("\n"));
+if (outOfOrder.length > 0) {
+  logger.info(
+    fix
+      ? `Put the keys of ${outOfOrder.length} modules in the English order.`
+      : `${outOfOrder.length} modules do not have their keys in the English order. Run \`bun run i18n:check --fix\`.`,
+  );
+}
 
 if (failures.length > 0) {
   logger.error(["The catalogs have problems:", ...failures.map((line) => `  ${line}`)].join("\n"));

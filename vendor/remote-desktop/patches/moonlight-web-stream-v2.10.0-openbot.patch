@@ -2602,7 +2602,7 @@ index 3e6ac5c..c92c1bb 100644
 -                        };
 -                        self.set_transport(Box::new(sender), Box::new(events)).await;
 +                    TransportType::WebSocket => {
-+                        warn!("OpenBot embedded mode rejects WebSocket media transport");
++                        warn!("GoAhead embedded mode rejects WebSocket media transport");
 +                        return;
                      }
                      transport => {
@@ -2707,7 +2707,7 @@ index 0cbbad6..b4fff64 100644
      <script type="module" src="stream.js" defer></script>
  
 +    <style>
-+        /* OpenBot supplies its own controls around this embedded viewer. */
++        /* GoAhead supplies its own controls around this embedded viewer. */
 +        #sidebar-root { display: none !important; }
 +    </style>
 +
@@ -3169,7 +3169,7 @@ index 6231fb2..10a5490 100644
  
 +    async getConnectionRoute(): Promise<"p2p" | "relay"> {
 +        if (!(this.transport instanceof WebRTCTransport)) {
-+            throw new Error("OpenBot requires WebRTC transport")
++            throw new Error("GoAhead requires WebRTC transport")
 +        }
 +        return this.transport.getConnectionRoute()
 +    }

@@ -3,9 +3,8 @@ import { createReadStream, existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
-import { isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import { createOpenBotLogger } from "@openbot/logging";
-import { parse } from "yaml";
+import { readUpdateManifest } from "./update-rollout";
 
 const logger = createOpenBotLogger("verify-update-artifacts");
 
@@ -15,11 +14,6 @@ if (platform !== "linux" && platform !== "linux-arm64" && platform !== "macos" &
   throw new Error("Usage: bun scripts/verify-update-artifacts.ts <linux|linux-arm64|macos|windows>");
 }
 
-/**
- * The artifact electron-updater downloads, and the manifest that names it, for each platform.
- * electron-updater on Linux arm64 reads `latest-linux-arm64.yml`, so each Linux architecture has its
- * own manifest and its own unpacked directory.
- */
 const UPDATE_ARTIFACTS = {
   linux: { extension: ".AppImage", manifest: "latest-linux.yml" },
   "linux-arm64": { extension: ".AppImage", manifest: "latest-linux-arm64.yml" },
@@ -42,8 +36,6 @@ if (platform === "macos") {
   await verifyMaximumSize(join(distRoot, dmg), 750 * MIB);
 }
 const embeddedBlockMapBytes = await verifyManifest(manifestPath, artifactPath);
-// An AppImage carries its block map inside the file, so the size the manifest records is what proves
-// a differential update is possible. The other targets write the block map beside the artifact.
 if (platform === "linux" || platform === "linux-arm64") {
   if (embeddedBlockMapBytes === null) {
     throw new Error(`The manifest records no embedded block map for ${basename(artifactPath)}.`);
@@ -52,7 +44,6 @@ if (platform === "linux" || platform === "linux-arm64") {
   throw new Error(`Missing blockmap for ${basename(artifactPath)}.`);
 }
 
-// Each macOS job builds its own architecture, and electron-builder writes x64 to `dist/mac`.
 const resourcesRoot =
   platform === "macos"
     ? join(
@@ -63,15 +54,16 @@ const resourcesRoot =
         "Resources",
       )
     : join(distRoot, platform === "windows" ? "win-unpacked" : `${platform}-unpacked`, "resources");
-// Linux ships no voice runtime. macOS and Windows ship it, and download the model on first use.
-if (platform === "macos" || platform === "windows") {
-  if (!existsSync(join(resourcesRoot, "voice", "runtime", "sherpa-onnx.node"))) {
-    throw new Error("The packaged application has no voice runtime.");
-  }
+if (!existsSync(join(resourcesRoot, "voice", "runtime", "sherpa-onnx.node"))) {
+  throw new Error("The packaged application has no voice runtime.");
 }
 if (
   existsSync(join(resourcesRoot, "voice", "model")) ||
+  existsSync(join(resourcesRoot, "voice", "parakeet-unified-en-0.6b-int8")) ||
+  existsSync(join(resourcesRoot, "voice", "bark-3.0-plus-int8")) ||
   existsSync(join(resourcesRoot, "voice", "whisper-turbo-int8")) ||
+  existsSync(join(resourcesRoot, "voice", "cohere-transcribe-14-lang-int8")) ||
+  existsSync(join(resourcesRoot, "voice", "supertonic-3-int8")) ||
   existsSync(join(resourcesRoot, "voice", "runtime", "encoder.int8.onnx")) ||
   existsSync(join(resourcesRoot, "voice", "runtime", "turbo-encoder.int8.onnx"))
 ) {
@@ -93,31 +85,21 @@ async function verifyMaximumSize(path: string, maximumBytes: number): Promise<vo
   }
 }
 
-/**
- * Checks the manifest describes the artifact on disk, and reports the size of the block map the
- * manifest records inside it, or `null` when it records none.
- */
 async function verifyManifest(path: string, artifact: string): Promise<number | null> {
-  const manifest = parse(await readFile(path, "utf8"));
-  if (!isDynamicRecord(manifest) || !Array.isArray(manifest.files)) {
-    throw new Error("The update manifest has no file list.");
-  }
+  const manifest = readUpdateManifest(await readFile(path, "utf8"));
   const artifactName = basename(artifact);
-  const entry = manifest.files?.find((candidate) => {
-    if (!isDynamicRecord(candidate) || !isString(candidate.url)) return false;
-    return basename(decodeURIComponent(candidate.url)) === artifactName;
-  });
-  if (!isDynamicRecord(entry)) throw new Error(`The update manifest does not contain ${artifactName}.`);
+  const entry = manifest.files.find((candidate) => basename(decodeURIComponent(candidate.url)) === artifactName);
+  if (entry === undefined) throw new Error(`The update manifest does not contain ${artifactName}.`);
   const size = (await stat(artifact)).size;
-  if (!isNumber(entry.size) || entry.size !== size) {
+  if (entry.size !== size) {
     throw new Error(`The manifest size does not match ${artifactName}.`);
   }
   const hash = createHash("sha512");
   for await (const chunk of createReadStream(artifact)) hash.update(chunk);
-  if (!isString(entry.sha512) || entry.sha512 !== hash.digest("base64")) {
+  if (entry.sha512 !== hash.digest("base64")) {
     throw new Error(`The manifest SHA-512 does not match ${artifactName}.`);
   }
-  return isNumber(entry.blockMapSize) && entry.blockMapSize > 0 ? entry.blockMapSize : null;
+  return entry.blockMapSize !== undefined && entry.blockMapSize > 0 ? entry.blockMapSize : null;
 }
 
 async function walk(root: string): Promise<string[]> {

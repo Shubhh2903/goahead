@@ -41,7 +41,7 @@
 
 The current prototype creates accounts, passwords and sessions separately on
 every host. The client sends the password straight to the host. That model does
-not give one OpenBot account and forces every Mac Mini to handle sign-in data.
+not give one GoAhead account and forces every Mac Mini to handle sign-in data.
 
 After this change a separate Bun + Elysia server will own registration, the
 unique email, the password and the sessions. The host will store only a local
@@ -106,7 +106,7 @@ automatically.
 
 Email normalization: strip leading and trailing whitespace, then lowercase the
 ASCII letters. Do not strip dots or `+tag` parts. A mail provider's rules are not
-OpenBot's identity rules. In the first version accept only ASCII addresses up to
+GoAhead's identity rules. In the first version accept only ASCII addresses up to
 254 characters. A password is between 12 and 128 characters. Do not truncate the
 password and do not change its case.
 
@@ -196,7 +196,7 @@ The relevant files and the existing problem:
 - `src/renderer/src/components/HostPanel.tsx:75-123` asks for local owner data.
 - `src/renderer/src/components/JoinServerDialog.tsx:3-73` asks for the host's
   username and password.
-- `README.md` states that OpenBot has no backend and no account system. Once this
+- `README.md` states that GoAhead has no backend and no account system. Once this
   ships, that statement will be false.
 
 The current shape that must go away:
@@ -732,7 +732,7 @@ Change the existing views:
   host's availability. A whitelist error reads "This email has no access to this
   host".
 
-Keep the existing OpenBot layout and styles. Do not rebuild the chat in this
+Keep the existing GoAhead layout and styles. Do not rebuild the chat in this
 plan.
 
 **Check**:
@@ -783,7 +783,7 @@ provider. The test adapter captures the link in memory.
 
 Change the root documents:
 
-- `README.md`: drop the claim that OpenBot has no backend and no account system.
+- `README.md`: drop the claim that GoAhead has no backend and no account system.
 - `PRIVACY.md`: separate the central data from the local host data. Describe the
   email, the security logs, the retention periods and the account deletion
   process.
@@ -902,7 +902,7 @@ Every condition must hold:
 
 Stop work and report the problem if:
 
-- The OpenBot Remote files are missing, or their contracts do not match the
+- The GoAhead Remote files are missing, or their contracts do not match the
   "Current state" section. They are uncommitted, so the drift risk is high.
 - The current local account system was released to users, but there is no
   decision about migrating v1 to v2. Do not delete data silently.

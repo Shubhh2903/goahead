@@ -17,13 +17,21 @@ and was omitted. It now has `typecheck:mobile`; the old name remains an alias fo
 `@openbot/brand`, `@openbot/contracts`, and `@openbot/team-client`. Its Expo and Uniwind generation
 writes ignored files before TypeScript runs.
 
-Each `typecheck` script starts TypeScript through `node_modules/typescript/bin/tsc`, not a bare
-`tsc`. `storybook-solidjs-vite` installs typescript@6 as `@typescript/old`, and bun links that
-package's `tsc` into `node_modules/.bin` in place of the TypeScript 7 one. A bare `tsc` therefore
-checks with TypeScript 6 without a warning; `scripts/dependency-catalog.test.ts` rejects one.
+Each `typecheck` script starts `scripts/type-checker.ts`, not a bare `tsc`. The script runs tsrs, the
+Rust port of TypeScript, when tsrs has a binary for the computer: macOS arm64 and Linux, so CI too.
+On Windows and Intel Macs it runs `node_modules/typescript/bin/tsc`. tsrs checked the 14 projects in
+about 2.6 seconds and 1 GB per large project; `tsc` took about 13 seconds and 2.5 GB (M4 Pro,
+2026-10-20). tsrs follows a TypeScript 7.1 build and the catalog `typescript` is 7.0, so the two can
+report different errors. CI uses tsrs; for this reason the Windows release job does not check types.
+Editors still use the catalog `typescript`. The script calls
+`tsc` by path because `storybook-solidjs-vite` installs typescript@6 as `@typescript/old`, and bun
+links that package's `tsc` into `node_modules/.bin` in place of the TypeScript 7 one. A bare `tsc`
+therefore checks with TypeScript 6 without a warning.
+
+The `tsrs` version is exact and must be older than `minimumReleaseAge` in `bunfig.toml` (3 days).
 
 Signal had a similar gap: `remote:check` was its only entry point and also required Compose
-validation. `typecheck:remote` and `test:remote` now run in CI. `remote:check:compose` validates both
+validation. `typecheck:remote` now runs in CI. `remote:check:compose` validates both
 Compose files with the Docker CLI; it does not need a daemon. `remote:check` remains the combined
 local command.
 
@@ -38,61 +46,113 @@ findings when it was turned on. `exactOptionalPropertyTypes` is not on yet: it h
 files of the projects that extend `tsconfig.base.json` on 2026-09-26. The type ratchet holds it to
 those counts.
 
+The root `dependencies` are what electron-builder copies into `app.asar`, and what the main and
+preload builds load from `node_modules` at run time. A package that the renderer uses, or that the
+main build bundles (the `@openbot/*` workspaces), goes in `devDependencies`: Vite puts its code in
+`out/`, and a copy in `app.asar` only makes each download and hosted server wake larger.
+
 The Signal Dockerfile installs from a pruned checkout with one manifest copy per workspace.
-CI does not build that image. `scripts/dependency-catalog.test.ts` checks that the copied manifests
-cover the workspace dependency graph; keep that check when changing workspace dependencies.
+CI does not build that image. When you change workspace dependencies, make sure that the copied
+manifests cover the workspace dependency graph.
 
 `check:assets` reads `git ls-files` and fails on an image or video file outside the directories
 listed in `scripts/check-image-assets.ts`. `AGENTS.md` does not permit pull request screenshots in
 the repository, and a screenshot committed for a review stays in the history of `main`. The check
 reads the whole tree, not only the pull request diff, so it gives the same result locally and in CI.
 
-`src/backend/transfer-budget.test.ts` runs two turns with a fake provider. It counts the SQL
-statements of each turn and of one conversation read, and the JSON bytes of that read and of the
-events that one turn sends to the renderer. Each value has a hard cap about 30% above the value
-measured when the cap was set. `src/main/team-api-transfer-budget.test.ts` runs the same two turns
-and measures the response bytes of the Team API conversation routes at the current protocol. Each
-test writes its values and caps to a file in `.openbot-build/transfer-budget/`, and the desktop
-test jobs upload that directory. A red budget means a change made a turn or a read do more work:
-make the change cheaper, or raise the cap and give the reason in the pull request.
-
-After CI completes for a pull request, `.github/workflows/budget-report.yml` adds one comment that
-compares these values with the reports of the last green `main` CI run
-(`scripts/transfer-budget-report.ts`). It runs from `main` and reads the pull request reports only
-as data, so it can write the comment without running pull request code.
+`check:doc-links` reads every tracked Markdown file. It fails on a relative link to a Markdown file
+that does not exist, and on a `#anchor` that the target file has no heading or `<a id>` for. It makes
+anchors the way GitHub does. It does not check web links or links to other file types. When you move
+a section to another file, such as one in `docs/architecture/`, update each link to its anchor.
 
 The pre-commit hook in `.githooks/pre-commit` runs `check:staged`, then `check:ui` and
-`bun run typecheck`. The last two run only when the commit stages code, style, JSON, GritQL or
-`bun.lock` files, so a commit of only text is fast. In CI, `check:desktop:static` (the UI check,
-lint, desktop typecheck, build and preload check) takes about a minute, and each other typecheck takes a few
-seconds. When `openbot-database-schema.ts`, `channel-schema.ts`, `mcp-schema.ts`, the parity test or
+`scripts/staged-typecheck.ts`. The last two run only when the commit stages code, style, GritQL,
+`tsconfig*.json`, `package.json`, `biome.json`, `apps/mobile/app.json` or `bun.lock` files, so a commit
+of only text or data JSON is fast.
+
+`scripts/staged-typecheck.ts` reads the root `typecheck:*` scripts and selects each project that can
+see a staged file: the file is under a fixed part of the project's tsconfig `include`, in its
+workspace package, in a workspace package that it depends on (also through other workspace
+packages), or in a folder that it imports through a relative path. That last list is in the script:
+`scripts` imports mobile and account Worker modules, the account Worker imports the site router, a
+renderer story imports a preload helper, and `.storybook/preview.tsx` imports the renderer.
+A root `tsconfig*.json`, `package.json` or `bun.lock` selects all projects. A mobile codegen input,
+such as `app.json` or the brand CSS, selects mobile. `biome.json` and GritQL files select no project:
+TypeScript does not read them. The script runs the projects one at a time and reports each one that
+fails. `--dry-run` prints each selected script with the path that selected it; paths after the flag
+replace the index. A JSON file that a module imports, such as a Team API fixture, does not start a
+type check in the hook; CI checks it.
+
+`apps/mobile` `typecheck` calls `scripts/mobile-codegen.ts`. It runs `codegen` only when a hash of
+the codegen inputs and of the route file names differs from `.expo/codegen-inputs.sha256`, or when
+an output is missing. File times do not decide: a checkout changes them, and Uniwind does not write a
+file whose content is the same.
+
+In CI, `check:desktop:static` (the UI check, lint, desktop typecheck, build and preload check) takes
+about a minute, and each other typecheck takes a few seconds. When `openbot-database-schema.ts`, a file in `src/backend/migrations/`, the parity test or
 `openbot-database-schema-history.json` is staged, the hook also runs `src/backend/openbot-database-schema-parity.test.ts`.
 
 `check:staged` lets Biome fix the working-tree copy of each staged file, and the hook then stages
 those files again. It stages again only the files that have no unstaged changes; otherwise the commit
 would also take the author's unstaged edits. When Biome changes a file that is only partly staged,
-the hook stops the commit and names the file. `scripts/pre-commit-hook.test.ts` covers the three cases.
+the hook stops the commit and names the file.
 
 One project typecheck, such as `typecheck:node` or `typecheck:renderer`, takes under 10 seconds and
 less than 1.5 GB of memory. The load that the check rules prevent comes from the aggregate command,
-which starts all projects at the same time.
+which starts all projects at the same time. The hook used it until it selected projects: about
+33 CPU-seconds and 8 GB of memory for each commit of code.
 
 The source of truth for CI is [.github/workflows/ci.yml](../.github/workflows/ci.yml).
 Its main jobs are:
 
 | Job | Runner | Commands |
 | --- | --- | --- |
-| Check | `ubuntu-latest` | `bun run knip:check`, `bun run check:assets`, `bun run check:desktop:static`, `bun run lint:ratchet`, `bun run types:ratchet` |
-| Browser smoke | `ubuntu-latest` | `xvfb-run -a bun run test:browser` |
+| Check | `ubuntu-latest` | `bun run knip:check`, `bun run check:assets`, `bun run check:doc-links`, `bun run check:desktop:static`, then `bun run i18n:check`, `bun run types:ratchet`, `bun run check:agent-context`, `bun run check:migrations` and `bun scripts/whats-new-translations.ts` in parallel |
+| Browser smoke | `ubuntu-latest` | `xvfb-run -a bun run test:browser`, then `xvfb-run -a bun run test:browser-agent-session` |
 | Tests (desktop 1/2, 2/2) | `ubuntu-latest` | `bun run test:desktop -- --shard=<n>/2` |
-| Tests (sites) | `ubuntu-latest` | `bun run test:sites` |
-| Tests (remote) | `ubuntu-latest` | `bun run test:remote` |
-| Surfaces | `ubuntu-latest` | `bun run mobile:typecheck`, `bun run typecheck:sites`, `bun run typecheck:team-client`, `bun run typecheck:remote`, `bun run --parallel typecheck:logging typecheck:user-errors typecheck:i18n`, `bun run remote:check:compose` |
-| API | `ubuntu-latest` | `bun run check:api` |
+| Signal E2E | `ubuntu-latest` | `bun run test:signal`, when `remote/` or `scripts/` changes |
+| Local scripts CLI E2E | `ubuntu-latest` | `bun run test:automation-cli` |
+| Team API routes E2E | `ubuntu-latest` | `bun run test:team-api-routes`, when desktop code changes |
+| Team API and reverse actions E2E | `ubuntu-latest` | `test:team-legacy-clients`, `test:team-protocol-v10`, `test:team-webrtc-wire-parity`, `test:remote-viewer-proxy`, `test:server-safe-mode`, `test:team-session-revoke`, `test:sign-in-relay-paste`, `test:server-mute`, `test:routine-pause-resume`, `test:agent-hide-restore`, `test:messaging-pause-resume`, `test:messaging-discord-access`, `test:messaging-discord-embeds`, `test:messaging-place-history`, `test:messaging-slack-ping-reply`, `test:turn-input`, `test:provider-update-busy`, `test:provider-update-automatic`, `test:provider-runtime-remove`, `test:provider-exit-session`, `test:acp-subagents`, `test:codex-subagent-steps`, `test:subagent-status`, `test:codex-hung-app-server`, `test:codex-missing-rollout`, `test:codex-idle-thread-release`, `test:zip-attachments`, `test:mp4-attachments`, `test:svg-attachments`, `test:any-file-attachments`, `test:channel-notifications`, `test:memory-review` and `test:skill-revision`, each with `bun run` in its own step, when the `desktop` lane runs |
+| Provider fakes E2E | `ubuntu-latest` | `test:custom-agents`, `test:custom-agents:login-path`, `test:acp-directories`, `test:acp-flavors`, `test:acp-turn-stall`, `test:agent-database-host-start`, `test:acp-mcp-names`, `test:provider-conformance`, `test:opencode-expired-key`, `test:opencode-downgraded-session`, `test:cline-free-models`, `test:cline-plan-limit-failover` and `test:provider-transcript-replay`, each with `bun run` in its own step, when the `desktop` lane runs. The fake agents are in `scripts/provider-fakes/`; the replayed transcripts of released CLIs are in `scripts/provider-fakes/transcripts/`, and `bun scripts/record-provider-transcript.ts` records a new one |
+| Surfaces | `ubuntu-latest` | Parallel groups described below, then `bun run remote:check:compose` |
+| API | `ubuntu-latest` | `bun run check:api`, then, for a pull request from this repository, upload `apps/auth-api/dist` |
 | Storybook build | `ubuntu-latest` | `bun run build-storybook` |
-| Cloudflare preview build | `ubuntu-latest` | `CLOUDFLARE_ENV=preview bun run api:build`, then upload `apps/auth-api/dist` |
 
-The preview build job has no secrets. After the CI run completes, the trusted
+CI uses native GitHub Actions `parallel` groups. Each group waits for all its steps and fails
+if a step fails. The steps have separate logs. The groups run in this order:
+
+- `Check` completes `check:desktop:static` before it starts translation checks and the TypeScript
+  ratchet together. Both retain the `CODE` condition, so Markdown-only changes run only the link
+  check after setup. The desktop build still completes before `verify:preload`.
+- `Browser smoke` completes checkout, then runs `Set up Bun` and virtual-display installation
+  together. The smoke test starts only after both succeed.
+- `Surfaces` completes setup, then runs three groups: `mobile:typecheck` with
+  `typecheck:team-client`; `typecheck:sites`, `typecheck:remote` and `typecheck:status`; and `typecheck:logging`,
+  `typecheck:telemetry`, `typecheck:user-errors`, and `typecheck:i18n`. Each command uses `bun run`
+  in its own step. Mobile generation stays inside `mobile:typecheck`. Compose validation starts
+  after all groups succeed.
+
+The desktop test shards keep separate runners. The API checks, artifact uploads, and production
+deployment dependencies keep their existing order. Local commands do not change. Compare job
+times on GitHub before claiming a time reduction; parallel steps share the runner's resources.
+
+The `Provider CLI canary` workflow is not a pull request check. It runs every six hours on the newest
+upstream provider CLIs, which reach users without a GoAhead release; see
+[Provider CLI updates](architecture/providers.md#provider-cli-updates).
+
+The `Provider live E2E` workflow is not a pull request check either. It runs only when somebody
+starts it; the release-upgrade-safety skill starts it before a release. On the Mac mini runner, it sends one real message to Codex, Claude and Gemini through the desktop app
+(`bun run test:provider-live`). See [Live provider test](provider-live-e2e.md).
+
+The `Release regression report` workflow is not a pull request check either. Once a day, it compares
+the two newest releases from production analytics and posts the result to a private Discord channel
+when a status changed, on Monday, or on a manual run. It runs only on `main`, with the secrets of the
+`analytics` environment, and its log shows no data. A regression does not fail the run; only a broken
+run fails. See the `openpanel` skill.
+
+`check:api` ends with `api:build:check`, which is the preview build of the Worker, so the API job
+uploads that build as the `cloudflare-preview` artifact. The job has no secrets. After the CI run completes, the trusted
 [cloudflare-preview.yml](../.github/workflows/cloudflare-preview.yml) workflow runs its `main`
 version with the preview deploy token. It skips a closed pull request, a newer commit, and a fork. It
 builds the `main` Worker config, and `scripts/check-preview-worker-config.ts` stops the upload when
@@ -100,21 +160,42 @@ the pull request's generated `wrangler.json` differs from it in anything but the
 compatibility settings. Thus a pull request that changes the preview Worker name, bindings, vars, or
 routes gets no preview. A change to `cloudflare-preview.yml` takes effect only after it merges.
 
-All of these jobs except the preview build gate Cloudflare production deployment on `main`. Surfaces was previously missing from
+All of these jobs gate Cloudflare production deployment on `main`. Surfaces was previously missing from
 that dependency list, which allowed deployment despite a failed mobile or remote check.
 These long suites belong in CI; local desktop runs can reach their time limits under load.
 
-The `Detect changed areas` job lets a pull request skip four lanes it cannot affect: Tests (sites),
-Tests (remote), Surfaces and Storybook build. It compares the merge commit with its first parent, and
-runs a lane when a path the lane reads changed. A path every workspace reads (`package.json`,
-`bun.lock`, `tsconfig*.json`, `biome.json`, `.github/`, `packages/`, `tools/`, `patches/`, `vendor/`)
-runs all four. A push to `main` and a manual run always run every lane, because a skipped need would
-skip `deploy-production`. When a new lane reads another directory, add it to that lane's pattern in
-the `detect` job.
+The `Detect changed areas` job lets a pull request skip the lanes it cannot affect. It compares the
+merge commit with its first parent and first removes Markdown that no build or test reads: `docs/`,
+`plans/` and `changelog.d/` Markdown, every `AGENTS.md`, and the root Markdown files except
+`CHANGELOG.md`, which the API bundles, and `CLA.md`. Markdown under `resources/` is not removed either, because the
+renderer bundles it. Then it selects the lanes:
+
+| Lane | Jobs | Runs when a changed path is |
+| --- | --- | --- |
+| `code` | Check, Tests (desktop) | anything that is left |
+| `docs` | Check, with only `check:doc-links` when `code` is off | any Markdown file, before the removal above, or `scripts/check-doc-links.ts` |
+| `desktop` | Browser smoke, Local scripts CLI E2E, Team API and reverse actions E2E | outside `apps/auth-api`, `apps/mobile`, `apps/mobile-updates`, `apps/site-router`, `apps/status`, `remote` and `docker` |
+| `api` | API | in `apps/auth-api`, `apps/site-router`, `src/renderer` or `resources`, or a `CHANGELOG.md` |
+| `remote` | Signal E2E | in `remote` or `scripts` |
+| `storybook` | Storybook build | in `src`, `apps/auth-api`, `apps/status`, `.storybook`, `resources`, `marketplace` or `build` |
+| `surfaces` | Surfaces, Mobile update server E2E, Mobile runtime version | in `apps/mobile`, `apps/mobile-updates`, `apps/site-router`, `apps/status`, `remote` or `scripts` |
+
+A path every workspace reads (`package.json`, `bun.lock`, `bunfig.toml`, `.nvmrc`, `tsconfig*.json`, `biome.json`,
+`.github/`, `packages/`, `tools/`, `patches/`, `vendor/`) runs every lane. `code` runs for a
+mobile-only pull request: the desktop test run holds a mobile test, and lint and knip cover every
+workspace. The API Worker bundles the
+renderer preview and web client and imports `apps/site-router/src`, so `api` reads them. A push to
+`main` and a manual run always run every lane, because a skipped need would skip
+`deploy-production`. When a lane reads another directory, add it to that lane's pattern in the
+`detect` job. When in doubt, let the lane run.
 
 `All required checks pass` needs every other check job and fails when one of them failed or was
-cancelled; a skipped lane counts as a pass. Branch protection requires only this job, so a new lane
-needs no change in the repository settings: add it to the gate's `needs` list.
+cancelled; a skipped lane counts as a pass. Add a new lane to its `needs` list. Branch protection on
+`main` requires only `Check`, not this job. A skipped required check counts as passed, so `Check`
+runs when `detect` did not succeed, and skips only when `detect` found no code change and no Markdown
+change. A Markdown-only change runs only its link check. The list of
+changed paths uses `git diff --no-renames`: a moved file then lists its old path as well, so a move
+of a file that a lane reads into `docs/` still runs the lane.
 
 `verify:preload` reads `out/preload` after the build. TypeScript checks the preload source, but
 the renderer gets the bundle. The script runs each bundle in a `node:vm` context with a fake
@@ -128,13 +209,16 @@ check, the lint, the desktop typecheck, the build and `verify:preload`, followed
 smoke test. CI is
 the only caller that splits them. The smoke test starts the real Electron binary, so it runs under
 xvfb on Ubuntu rather than on a macOS runner, and reads nothing the build writes, so the order
-between the halves is free. `release.yml` keeps the whole of `check:desktop` on one macOS runner,
-where it checks the machine that builds the release.
+between the halves is free. `release.yml` keeps the whole of `check:desktop` on one macOS runner of
+the same image that builds the release. It is the `repository-check` job, which runs in parallel
+with the platform builds, so the check does not make the signed macOS build wait. The publish job
+needs it.
 
 `bun run knip:check` fails on unused files, unused exports and exported types, unused or unlisted
 dependencies, unresolved imports and unlisted binaries in every workspace. It takes about 6 seconds. `knip.config.ts` names the entry
-points that knip cannot find by itself: the electron-vite inputs, the modules that the renderer HTML
-pages load, the Metro shims, and every command in `scripts/`. Each ignore entry states its reason.
+points that knip cannot find by itself: the Metro shims and stylesheet, and every command in
+`scripts/`. Its electron-vite and wrangler plugins find the electron-vite inputs, the modules that
+the renderer HTML pages load, and the Worker entries. Each ignore entry states its reason.
 Stylesheets go through a small compiler so that `@import "<package>"` counts as a use. The frozen
 Team API protocol files (`packages/contracts/src/team-protocol/v*.ts` and `*-v*.ts`) are exempt
 from the export checks: a released codec keeps its full API. When knip names an unused export,
@@ -142,17 +226,51 @@ remove the `export` keyword, then delete the code if `tsc` or Biome reports it u
 `bunx knip --fix --fix-type exports,types` removes the keywords; check its diff, because it can
 break a destructured export.
 
-`setup-bun` restores the Bun package store before installing. The key falls back through
-`restore-keys`, so a lockfile change re-downloads only what moved. The Electron download is
+`setup-bun` installs with the frozen lockfile without a GitHub Actions cache for the Bun package
+store. In CI run 37915311865, restoring the 996 MB store took 23 seconds before installation.
+The action keeps Bun binary caching and Node tool-cache support. Its `frozen`, `ignore-scripts`,
+and `none` install modes do not change. Compare setup time and total job time when measuring this
+change; removing the restore also requires fresh package downloads on a new runner.
+The Electron download is
 deliberately not cached: `install-electron` takes 2.6s on a runner, and a measured cache hit
 restored 123 MB in 4.4s and left `bun install` at 29.9s against 29.0s with no cache at all.
+`scripts/install-electron.ts` runs `install-electron` in the root `postinstall`. It tries again,
+two times at most, only when the download fails with HTTP 429 or 5xx or a lost connection, because
+`@electron/get` has no retry. Each attempt checks the archive against the package checksums.
+
+## Focused tests
+
+`bun run test:changed` is `vitest run --changed origin/main --maxWorkers=1`. First it runs
+`git merge-base origin/main HEAD`, and stops with an error when `origin/main` or a common commit is
+missing. Without this guard, Vitest ignores the failed `git diff`, finds no test files and exits
+with code 0, so a broken test would pass. Vitest takes the files
+in `git diff origin/main...HEAD`, the staged files, and the unstaged and untracked files. Then it
+runs each test file whose import graph contains one of them. It uses the root `vitest.config.ts`,
+so each file goes to its usual project (`node` or `renderer`) and environment. When
+no test imports a changed file, it finds no test files and exits with code 0. Fetch `origin/main`
+first if it is old: an old base selects tests for changes that are already on `main`.
+
+`bun run test:related -- <source>...` is `vitest related --run --maxWorkers=1`. It runs the test
+files that import the named source files, with no Git query.
+
+A change to `vitest.config.ts`, a setup file or `package.json` selects no test. The root config
+sets `forceRerunTriggers: []`. The Vitest default (`**/package.json/**`,
+`**/{vitest,vite}.config.*/**`) selects every test for such a change, but only when the checkout
+path has no dot directory: `**` does not match a dot directory such as `.t3` or `.claude`. A full
+run on one worker is not a focused check. A setup file is not in a test's import graph. After such
+a change, run the test files that it can affect with
+`bun run test:desktop -- <path>`.
+
+A shared module can have many dependents. Do a list first to see the set without a run:
+`bun x vitest list --filesOnly --changed origin/main`.
 
 ## Test environment guard
 
 `tools/vitest/hermetic-setup.ts` is the first setup file of the `node` and `renderer` projects, so it
 runs before each test file imports anything. It deletes credential-shaped variables (`*_API_KEY`,
 `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_PRIVATE_KEY`, and `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_*`,
-`XAI_*`, `GEMINI_*`, `AWS_*`), the directory overrides `CODEX_HOME`, `CLAUDE_CONFIG_DIR` and `XDG_*`,
+`XAI_*`, `GEMINI_*`, `AWS_*`, `DOTENV_PRIVATE_KEY_*`), the directory overrides `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+`XDG_STATE_HOME` and `XDG_CACHE_HOME`,
 and `ELECTRON_RUN_AS_NODE`. It sets `TZ=UTC` and `LANG=C.UTF-8`, and points `HOME`, `USERPROFILE`,
 `APPDATA` and `LOCALAPPDATA` at a temporary directory for the file, which it removes after the file. The `renderer` project runs
 files in worker threads, and a thread's `process.env` does not reach the native `homedir()`, so
@@ -162,15 +280,16 @@ start.
 A key in the developer's shell could otherwise let a fake-provider test reach a real provider, and
 every profile path (`~/OpenBot`, the app data directory) comes from `homedir()`, so a path bug could
 write into the developer's own conversations. A test that needs a token or a directory sets it
-itself. `tools/vitest/hermetic-environment.test.ts` and `tools/vitest/hermetic-home.dom.test.ts`
-cover the guard.
+itself.
 
-## Why the jsdom projects use `vmThreads`
+## Why the jsdom project uses `vmThreads`
+
+The measurements in this section are from the suite before most unit tests were removed.
 
 `test:desktop` is not slow because of test count. The 54 `renderer` files hold 732 of the 3401
 tests and take three quarters of the run, and what cost the most was per-file setup rather than
 anything in the tests: building a jsdom for each file was 61.8s of a 176.7s CI run. So the
-`renderer` and `mobile-ui` projects use `pool: "vmThreads"`: one jsdom per worker, and a module
+`renderer` project uses `pool: "vmThreads"`: one jsdom per worker, and a module
 registry per file inside a VM context. That took the full suite from 118.7s to 92.6s locally.
 
 The mounts themselves are not the cost, which is worth recording because the file sizes suggest
@@ -209,24 +328,10 @@ to 141.5s, and reached 2.64 on four. Use it, or repeat the run, before believing
 `deps.optimizer` is not enabled: it left `import` unchanged, at 26.1s against 26.2s, because that
 phase is this repository's own module graph re-executing per file rather than dependency resolution.
 
-### The `App.*.test.tsx` files are not at the wrong boundary
-
-`App.read-state.test.tsx` is the largest test file in the repository, and moving its tests down to
-`AppProviders` with no view was investigated and rejected. Of its 27 `render(() => <App />)` tests,
-22 assert the rendered result - the `"1 new message"` badge, the `"New messages"` separator, or
-`"Responded"` on a sidebar row - and the remaining five drive through the view, opening an agent or
-switching servers by clicking it. None mounts the view without using it. Read state spans IPC, the
-conversation store, window focus, which surface covers the conversation, and the badge, so the
-application is the lowest boundary at which those tests hold together.
-
-The five tests that genuinely need no view already use the `AppProviders` harness with a probe
-underneath, and that is the pattern to follow for a new test that asserts only state. Reach for it
-when a test asserts state; do not convert a test that asserts the badge into one that asserts a
-probe, because the badge is the behaviour.
-
-The development setup script checks Bun, migrates local D1, and creates a missing
-`apps/auth-api/.env.dev`. This file is per-machine and untracked. Only `.env.production` remains
-encrypted; a missing `.env.keys` does not block ordinary local setup.
+The development setup script checks Bun, migrates local D1, and creates missing local state in
+`.openbot/dev-state.json`. The committed `apps/auth-api/.env.dev` is encrypted; a missing
+development key does not block ordinary local setup. Existing state is reused. Values stored only
+in the old generated `.env.dev` are reset on update.
 
 ## Lint and UI rules
 
@@ -262,35 +367,83 @@ It rejects direct `window.openbot` and `globalThis.openbot` access, including op
 literal indexed forms. Browser APIs, comments, and string documentation remain valid.
 Its positive and negative fixtures run in `scripts/ui-foundation-check.test.ts`.
 
-### Lint debt ratchet
+### Promise rules
 
-`bun run lint:ratchet` runs the Biome rules in `tools/biome/lint-baseline.json` and compares the
-findings of each file to the baseline. A higher count fails, so a rule stops new debt before the old
-debt is fixed. A lower count also fails until `--write` lowers the baseline: this keeps the baseline
-tight. The script never raises a count; a higher count is a hand edit that a reviewer sees. When a
-rule has no findings left, turn it on in `biome.json` and remove it from the baseline.
+`nursery/noFloatingPromises` is an error in `biome.json`. Await a promise, or write `void` when the
+call is fire-and-forget and the called function handles its own errors. Until 2026-10 a separate
+`lint:ratchet` script held this rule to a per-file baseline. That cost a second full Biome pass in
+CI, so the last findings were fixed and the script was removed.
+`nursery/noMisusedPromises` was rejected: its 37 findings were all `if (cachedPromise)` presence
+checks.
 
-`nursery/noFloatingPromises` is the first rule. `nursery/noMisusedPromises` was rejected: its 37
-findings were all `if (cachedPromise)` presence checks.
-
-Biome cannot select a GritQL plugin with `--only`, and it reports every plugin under the one
-category `plugin`. So a plugin rule enters the baseline as `plugin/<name>`, and its message must
-start with `[<name>]`. The ratchet runs Biome once more with every built-in group skipped, and counts
-each plugin by that prefix. `plugin/no-hardcoded-ui-text`
-(`tools/ui-foundation/no-hardcoded-ui-text.grit`) used this path until its last finding was fixed;
-it is now an error. See [i18n.md](i18n.md). Other new GritQL rules must start clean.
+Biome reports every GritQL plugin under the one category `plugin`, so each plugin message starts
+with `[<name>]`. A new GritQL rule must start with no findings.
 
 ### Type debt ratchet
 
-`bun run types:ratchet` does the same for TypeScript options. For each option in
-`tools/typescript/type-baseline.json`, it runs `tsc` with the option on for every project that
-extends `tsconfig.base.json` (listed in `scripts/type-ratchet.ts`), and compares the errors of each
-file to the baseline. An error that two projects report counts once. `apps/mobile` extends the Expo
-base config, so the ratchet does not check it. The rules for `--write` and `--add=<option>` are the
-same as for the lint ratchet: `scripts/debt-ratchet.ts` holds them for both. The run takes about 4
-seconds. When an option has no errors left, turn it on in
-`tsconfig.base.json` and remove it from the baseline. Do not name the script `typecheck:*`:
+`bun run types:ratchet` holds TypeScript options that are not on yet to a baseline. For each option
+in `tools/typescript/type-baseline.json`, it runs `scripts/type-checker.ts` with the option on for
+every project that extends `tsconfig.base.json` (listed in `scripts/type-ratchet.ts`), and compares
+the errors of each file to the baseline. An error that two projects report counts once.
+`apps/mobile` extends the Expo base config, so the ratchet does not check it. A higher count fails,
+so an option stops new debt before the old debt is fixed. A lower count also fails until `--write`
+lowers the baseline: this keeps the baseline tight. The script never raises a count; a higher count
+is a hand edit that a reviewer sees. `--add=<option>` starts an option at its current counts.
+`scripts/debt-ratchet.ts` holds these rules. The run takes about 2 seconds with tsrs and 4 with
+`tsc`. When an option has no errors left, turn it on in `tsconfig.base.json` and remove it from the
+baseline. Do not name the script `typecheck:*`:
 `bun run typecheck` runs every script that matches that pattern.
+
+### Agent context budget
+
+`bun run check:agent-context` holds the text that GoAhead adds to an agent's context to the byte
+counts in `tools/agent-context/budget.json`. It uses the same rules as the type debt ratchet
+(`scripts/debt-ratchet.ts`): more bytes fail, and fewer bytes fail until `--write` lowers the
+baseline. A raise is a hand edit that a reviewer sees. The fixture agent has no memories, teammates,
+skills, or connected vault, so the counts measure only GoAhead's own text:
+
+- `instructions.claude` and `instructions.codex`: `developerInstructions()` with the options of each
+  provider.
+- `visible-tools`: the visible tool definitions that Codex and the local MCP bridge receive.
+- `catalog.schemas` and `catalog.descriptions`: all built-in catalog tools, which `tool_search` and
+  `tool_describe` return.
+- `guidance`: the distinct `agent/tool-guidance.ts` texts.
+- `list-models.fixture`: the `list_models` result for a synthetic catalog of 200 models.
+
+The script writes the counts to `.openbot-build/agent-context-budget/report.json`. It does not
+measure the schemas that the Claude Agent SDK makes from the Zod shapes of Claude's visible tools.
+CI runs it in the `check` job.
+
+### Frozen migrations
+
+`bun run check:migrations` compares `src/backend/migrations/` with the newest `v*` tag on origin.
+CI checks out one commit and no tags, so the script fetches only that tag commit (`--depth=1`).
+`--tag <tag>` compares with another tag. The rules and the fix for a released bug are in
+[src/backend/AGENTS.md](../src/backend/AGENTS.md#frozen-migrations); the rule fixtures are in
+`scripts/check-frozen-migrations.test.ts`. A tag from before the folder (v0.72.0 and earlier) has
+no frozen files, so only the rules on the current folder apply.
+
+### Plugin cost
+
+Each GritQL plugin walks every file in its scope again. On 2026-10-06 the plugins used about 60 of
+79 CPU-seconds of a full `biome lint .`. To measure one plugin, lint with a temporary config that
+turns off the built-in rules and enables only that plugin, and subtract the time with no plugins.
+
+- Check a cheap condition before a costly one. `no-hardcoded-ui-text` matched its long attribute
+  regex on every JSX attribute: about 16 of its 23 CPU-seconds. It now checks the attribute name
+  first.
+- One snippet with a metavariable can cost less than one snippet per spelling.
+  `Reflect.$method($args)` costs about half as much as two `Reflect.<method>($args)` snippets.
+  `JsCallExpression(callee=...)` was faster still, but it also matched `Reflect.get?.()` and a call
+  with type arguments, so it was rejected.
+- Do not merge rules into one `or { ... }` file. A merged file of the 8 global rules cost 71
+  CPU-seconds, against 24 for the separate files.
+- Scope a plugin only to where its pattern can mean something. `no-collections-in-stores` and
+  `no-cleanup-in-effect-callbacks` run on the SolidJS code only. The type rules stay global,
+  because they apply to scripts and tests too.
+
+Before you change a pattern for speed, show that the old and the new rule report the same
+locations over the whole repository and on a file of edge cases.
 
 ### Removed rules and their limits
 

@@ -3,7 +3,7 @@ name: decision-quality-check
 description: Add a brief, concrete self-check to consequential recommendations, estimates, plans, or interpretations when unverified assumptions could change what the user does.
 ---
 
-<!-- Modified by OpenBot from Anthropic's discernment-nudge skill. See NOTICE.txt. -->
+<!-- Modified by GoAhead from Anthropic's discernment-nudge skill. See NOTICE.txt. -->
 
 # Decision Quality Check
 

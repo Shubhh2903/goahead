@@ -16,8 +16,8 @@ self-hosted account service with its own keys. See
 - Invitations are `openbot://join` links. Copy a link from the app and send it yourself. The app
   does not send an invitation by email.
 - The browser client at `openbot.run/app` does not work with your service.
-- Hosted servers, the GoAhead GitHub App, Slack and the iPhone Live Activity relay stay off. Each
-  needs secrets that only we have.
+- Hosted servers, the GoAhead GitHub App, Slack, the GoAhead Telegram bot and the iPhone Live
+  Activity relay stay off. Each needs secrets that only we have.
 - The other network connections in [PRIVACY.md](../PRIVACY.md) do not change.
 
 ## What you need
@@ -64,11 +64,14 @@ Keep the private JWK secret. With it, a person can open each host that uses your
    ```
 
 2. Edit the top level of `apps/auth-api/wrangler.jsonc`. Do not change the `env` section.
-   - `routes`: replace both entries with `{ "pattern": "api.example.com", "custom_domain": true }`.
+   - `routes`: replace all entries with `{ "pattern": "api.example.com", "custom_domain": true }`.
    - `d1_databases`: set `database_id` to the ID that `d1 create` printed.
    - `r2_buckets`: set the bucket names, if you used other names.
    - `vars`:
      - `EMAIL_SMTP_HOST`, `EMAIL_SMTP_PORT`, `EMAIL_SMTP_USERNAME`, `EMAIL_FROM`: your SMTP account.
+     - `EMAIL_REPLY_TO`: the inbox for replies and contact form messages, or empty to use `EMAIL_FROM`.
+     - `EMAIL_LICENSE_FROM`: the sender of license emails, or empty to use `EMAIL_FROM`.
+     - `EMAIL_LICENSE_REPLY_TO`: the address for replies to license emails, or empty to use their sender.
      - `REMOTE_TICKET_KEY_ID`: the key ID from step 1.
      - `REMOTE_SIGNAL_URL`: `wss://signal.example.com/v1/signal`.
      - `REMOTE_AUTH_WEBHOOK_URL`: `https://signal.example.com/internal/auth-events`.
@@ -106,7 +109,8 @@ Keep the private JWK secret. With it, a person can open each host that uses your
    - `REMOTE_TICKET_JWKS_URL`: `https://api.example.com/.well-known/jwks.json`.
    - `REMOTE_CONTROL_PLANE_URL`: `https://api.example.com`.
    - The Signal secrets from step 1.
-   - Leave `SLACK_SIGNING_SECRET` empty.
+   - Leave `SLACK_SIGNING_SECRET`, `GITHUB_WEBHOOK_SECRET`, `DISCORD_BOT_TOKEN`, `DISCORD_APPLICATION_ID` and the
+     `TELEGRAM_*` values empty.
 
    If a reverse proxy already uses port 443, also set the values in
    [the reverse proxy notes](../remote/README.md#production-requirements).
@@ -151,9 +155,12 @@ Do these steps on each computer that hosts or connects.
    & "$env:LOCALAPPDATA\Programs\OpenBot\OpenBot.exe"
    ```
 
+   This is the default install folder. If you chose a different folder in the installer, use it.
+
 3. Sign in with an email address. The code comes from your SMTP account.
 4. To connect an iPhone, scan the connection QR code from the desktop app. The phone then uses the
-   service of that desktop.
+   service of that desktop. Email sign-in on the phone always uses `goahead.multicodegenius.com`, so it cannot
+   connect to a self-hosted service.
 
 Set the variables each time that you start the app. Without them, the app uses `openbot.run` and
 sends your session token there. To go back to `openbot.run`, sign out first.
