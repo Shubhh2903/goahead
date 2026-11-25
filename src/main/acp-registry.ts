@@ -1,13 +1,8 @@
-// Managed installations from the ACP registry, on this computer only. A registry agent becomes a
-// saved custom agent whose command points at the staged files; agent identity, credentials and
-// conversations belong to the custom agent store and the backend, never to this module.
-
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
-  AcpRegistryDistribution,
   AcpRegistryEntry,
   AcpRegistryInstallation,
   AcpRegistryInstallInput,
@@ -16,141 +11,110 @@ import type {
   CustomAgentSummary,
   SaveCustomAgentInput,
 } from "@openbot/contracts/ipc";
-import { ACP_REGISTRY_DISTRIBUTIONS, isNewCustomAgentId } from "@openbot/contracts/ipc";
-import { isDynamicRecord, isOneOf, isString } from "@openbot/contracts/runtime-values";
+import { isNewCustomAgentId } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import { redactText } from "@openbot/logging";
-import { AcpRegistryError, type RegistryAgent, readAcpRegistry } from "./acp-registry-catalog";
-import {
-  type PrepareRegistryAgent,
-  prepareRegistryAgent,
-  type RegistryPrepared,
-  registryDistributions,
-} from "./acp-registry-install";
+import { Deferred, Effect, Schema, Semaphore } from "effect";
+import { type RegistryAgent, readAcpRegistry } from "./acp-registry-catalog";
+import { prepareRegistryAgent, type RegistryPrepared, registryDistributions } from "./acp-registry-install";
 import type { CustomAgentChanges } from "./custom-agent-changes";
+import { ProviderRuntimeFailure, runtimeIO } from "./provider-runtime-effects";
 
-interface Installed {
-  registryId: string;
-  customAgentId: string;
-  version: string;
-  distribution: AcpRegistryDistribution;
-  removed?: boolean;
-  generation: string;
-  command: string;
-}
-
-function isInstalled(value: unknown): value is Installed {
-  return (
-    isDynamicRecord(value) &&
-    isString(value.registryId) &&
-    isString(value.customAgentId) &&
-    isString(value.version) &&
-    isOneOf(ACP_REGISTRY_DISTRIBUTIONS, value.distribution) &&
-    (value.removed === undefined || typeof value.removed === "boolean") &&
-    isString(value.generation) &&
-    /^[a-f0-9-]{36}$/u.test(value.generation) &&
-    isString(value.command)
-  );
-}
-
+const Installed = Schema.Struct({
+  registryId: Schema.String,
+  customAgentId: Schema.String,
+  version: Schema.String,
+  distribution: Schema.Literals(["binary", "npx", "uvx"]),
+  removed: Schema.optionalKey(Schema.Boolean),
+  generation: Schema.String.check(Schema.isPattern(/^[a-f0-9-]{36}$/u)),
+  command: Schema.String,
+});
+type Installed = typeof Installed.Type;
+const decodeInstalled = Schema.decodeUnknownEffect(Schema.Array(Installed));
 interface Operation {
   controller: AbortController;
-  done: Promise<void>;
+  done: Deferred.Deferred<void>;
   committing: boolean;
 }
-
 export interface AcpRegistryDependencies {
-  /** The application data folder. Installations live in `acp-registry/` under it. */
   directory: string;
-  customAgentChanges: Pick<CustomAgentChanges, "list" | "saveIfUnchanged" | "remove">;
-  /** The host stops the idle ACP runtime, and refuses while it works, before files are removed. */
-  withRuntimeRemoval: (customAgentIds: readonly string[], operation: () => Promise<void>) => Promise<void>;
-  catalog?: (signal?: AbortSignal) => Promise<RegistryAgent[]>;
-  prepare?: PrepareRegistryAgent;
+  customAgentChanges: CustomAgentChanges;
+  withRuntimeRemoval: (
+    customAgentIds: readonly string[],
+    operation: Effect.Effect<void, ProviderRuntimeFailure>,
+  ) => Effect.Effect<void, ProviderRuntimeFailure>;
+  catalog?: () => Effect.Effect<RegistryAgent[], ProviderRuntimeFailure>;
+  prepare?: typeof prepareRegistryAgent;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : sourceText("error.provider.registryInstallFailed");
-}
-
-/** Owns managed ACP installations only. Agent identity, credentials, and history belong elsewhere. */
 export class AcpRegistry {
   readonly #root: string;
-  readonly #dependencies: AcpRegistryDependencies;
   readonly #removing = new Set<string>();
+  readonly #gate = Semaphore.makeUnsafe(1);
   readonly #active = new Map<string, Operation>();
   readonly #status = new Map<string, AcpRegistryOperation>();
-  readonly #catalog: (signal?: AbortSignal) => Promise<RegistryAgent[]>;
-  readonly #prepare: PrepareRegistryAgent;
-  /** One commit or removal at a time, from the record read to the record write. */
-  #gate: Promise<unknown> = Promise.resolve();
-
-  constructor(dependencies: AcpRegistryDependencies) {
-    this.#dependencies = dependencies;
+  readonly #catalog: () => Effect.Effect<RegistryAgent[], ProviderRuntimeFailure>;
+  readonly #prepare: typeof prepareRegistryAgent;
+  constructor(private readonly dependencies: AcpRegistryDependencies) {
     this.#root = join(dependencies.directory, "acp-registry");
     this.#catalog = dependencies.catalog ?? readAcpRegistry;
     this.#prepare = dependencies.prepare ?? prepareRegistryAgent;
   }
 
-  #withGate<T>(run: () => Promise<T>): Promise<T> {
-    const operation = this.#gate.then(run);
-    this.#gate = operation.catch(() => undefined);
-    return operation;
-  }
-
-  async #records(): Promise<Installed[]> {
-    let source: string;
-    try {
-      source = await readFile(join(this.#root, "installed.json"), "utf8");
-    } catch (error) {
-      if (isDynamicRecord(error) && error.code === "ENOENT") return [];
-      throw error;
-    }
-    let raw: unknown;
-    try {
-      raw = JSON.parse(source);
-    } catch (error) {
-      throw new AcpRegistryError(sourceText("error.provider.registryInvalid"), { cause: error });
-    }
-    if (!Array.isArray(raw) || !raw.every(isInstalled))
-      throw new AcpRegistryError(sourceText("error.provider.registryInvalid"));
-    return raw;
-  }
-
-  async #write(records: readonly Installed[]): Promise<void> {
-    await mkdir(this.#root, { recursive: true, mode: 0o700 });
-    const temporary = join(this.#root, `installed-${randomUUID()}.tmp`);
-    try {
-      await writeFile(temporary, JSON.stringify(records), { mode: 0o600 });
-      await rename(temporary, join(this.#root, "installed.json"));
-    } finally {
-      await rm(temporary, { force: true });
-    }
-  }
-
-  /** The records whose command is still the saved custom agent's command. */
-  async #bound(): Promise<Installed[]> {
-    const agents = await this.#dependencies.customAgentChanges.list();
-    return (await this.#records()).filter((record) =>
-      agents.some((agent) => agent.id === record.customAgentId && agent.command === record.command),
+  readonly #records = Effect.fn("AcpRegistry.records")(function* (this: AcpRegistry) {
+    const source = yield* runtimeIO(() => readFile(join(this.#root, "installed.json"), "utf8")).pipe(
+      Effect.catch((error) => {
+        const cause = error.cause;
+        return cause instanceof Error && "code" in cause && cause.code === "ENOENT"
+          ? Effect.succeed(null)
+          : Effect.fail(error);
+      }),
     );
-  }
+    if (source === null) return [];
+    const raw = yield* runtimeIO(() => Promise.resolve(JSON.parse(source)));
+    return yield* decodeInstalled(raw).pipe(
+      Effect.mapError(
+        () => new ProviderRuntimeFailure({ cause: new Error(sourceText("error.provider.registryInvalid")) }),
+      ),
+    );
+  });
+  readonly #write = Effect.fn("AcpRegistry.writeRecords")(function* (this: AcpRegistry, records: readonly Installed[]) {
+    yield* runtimeIO(() => mkdir(this.#root, { recursive: true, mode: 0o700 }));
+    const temporary = join(this.#root, `installed-${randomUUID()}.tmp`);
+    yield* runtimeIO(() => writeFile(temporary, JSON.stringify(records), { mode: 0o600 }));
+    yield* runtimeIO(() => rename(temporary, join(this.#root, "installed.json"))).pipe(
+      Effect.ensuring(runtimeIO(() => rm(temporary, { force: true })).pipe(Effect.orDie)),
+    );
+  });
 
-  async listInstalled(): Promise<AcpRegistryInstallation[]> {
-    return (await this.#bound())
-      .filter((record) => !record.removed)
+  readonly listInstalled = Effect.fn("AcpRegistry.listInstalled")(function* (
+    this: AcpRegistry,
+  ): Effect.fn.Return<AcpRegistryInstallation[], ProviderRuntimeFailure> {
+    const agents = yield* this.dependencies.customAgentChanges.list();
+    const records = yield* this.#records();
+    return records
+      .filter(
+        (record) =>
+          !record.removed &&
+          agents.some((agent) => agent.id === record.customAgentId && agent.command === record.command),
+      )
       .map(({ registryId, customAgentId, version, distribution }) => ({
         registryId,
         customAgentId,
         version,
         distribution,
       }));
-  }
-
-  async search(query = ""): Promise<AcpRegistryEntry[]> {
-    const installed = await this.listInstalled();
-    const entries = await this.#catalog();
-    const bindings = await this.#bound();
+  });
+  readonly search = Effect.fn("AcpRegistry.search")(function* (
+    this: AcpRegistry,
+    query = "",
+  ): Effect.fn.Return<AcpRegistryEntry[], ProviderRuntimeFailure> {
+    const installed = yield* this.listInstalled();
+    const entries = yield* this.#catalog();
+    const agents = yield* this.dependencies.customAgentChanges.list();
+    const bindings = (yield* this.#records()).filter((record) =>
+      agents.some((agent) => agent.id === record.customAgentId && agent.command === record.command),
+    );
     const needle = query.trim().toLowerCase();
     return entries
       .filter((entry) => !needle || `${entry.name} ${entry.id} ${entry.description}`.toLowerCase().includes(needle))
@@ -169,100 +133,117 @@ export class AcpRegistry {
             local?.customAgentId ?? bindings.find((record) => record.registryId === entry.id)?.customAgentId ?? null,
         };
       });
+  });
+  status(): Effect.Effect<AcpRegistryOperation[]> {
+    return Effect.sync(() => [...this.#status.values()]);
   }
-
-  status(): AcpRegistryOperation[] {
-    return [...this.#status.values()];
+  cancel(registryId: string): Effect.Effect<void> {
+    return Effect.sync(() => {
+      const operation = this.#active.get(registryId);
+      if (operation && !operation.committing) operation.controller.abort();
+    });
   }
-
-  /** Stops an installation that has not started to switch the command. */
-  cancel(registryId: string): void {
-    const operation = this.#active.get(registryId);
-    if (operation && !operation.committing) operation.controller.abort();
-  }
-
-  /** Cancels every installation that can still stop, and waits for all of them. */
-  async close(): Promise<void> {
+  readonly close = Effect.fn("AcpRegistry.close")(function* (this: AcpRegistry) {
     const active = [...this.#active.values()];
     for (const operation of active) if (!operation.committing) operation.controller.abort();
-    await Promise.all(active.map((operation) => operation.done));
-  }
+    for (const operation of active) yield* Deferred.await(operation.done);
+  });
 
-  /** Installs or updates one registry agent. A failed or cancelled run keeps the previous command. */
-  async install(input: AcpRegistryInstallInput): Promise<CustomAgentResult> {
+  readonly install = Effect.fn("AcpRegistry.install")(function* (
+    this: AcpRegistry,
+    input: AcpRegistryInstallInput,
+  ): Effect.fn.Return<CustomAgentResult, ProviderRuntimeFailure> {
     if (this.#active.has(input.registryId) || this.#removing.has(input.registryId))
-      throw new AcpRegistryError(sourceText("error.provider.registryBusy"));
-    let finish = () => {};
-    const operation: Operation = {
-      controller: new AbortController(),
-      done: new Promise<void>((resolve) => {
-        finish = resolve;
-      }),
-      committing: false,
-    };
+      return yield* new ProviderRuntimeFailure({ cause: new Error(sourceText("error.provider.registryBusy")) });
+    const operation = { controller: new AbortController(), done: Deferred.makeUnsafe<void>(), committing: false };
     this.#active.set(input.registryId, operation);
     this.#status.set(input.registryId, { registryId: input.registryId, state: "installing", message: null });
-    try {
-      const result = await this.#install(input, operation);
-      this.#status.delete(input.registryId);
-      return result;
-    } catch (error) {
-      if (operation.controller.signal.aborted) {
-        this.#status.delete(input.registryId);
-        throw new AcpRegistryError(sourceText("error.provider.registryCancelled"), { cause: error });
-      }
-      this.#status.set(input.registryId, {
-        registryId: input.registryId,
-        state: "failed",
-        message: redactText(errorMessage(error)),
-      });
-      throw error;
-    } finally {
-      this.#active.delete(input.registryId);
-      finish();
-    }
-  }
+    const cancelled = Effect.callback<never, ProviderRuntimeFailure>((resume) => {
+      const abort = () =>
+        resume(
+          Effect.fail(new ProviderRuntimeFailure({ cause: new Error(sourceText("error.provider.registryCancelled")) })),
+        );
+      operation.controller.signal.addEventListener("abort", abort, { once: true });
+      if (operation.controller.signal.aborted) abort();
+      return Effect.sync(() => operation.controller.signal.removeEventListener("abort", abort));
+    });
+    return yield* Effect.raceFirst(this.#install(input), cancelled).pipe(
+      Effect.tap(() => Effect.sync(() => this.#status.delete(input.registryId))),
+      Effect.tapError((error) =>
+        Effect.sync(() => {
+          if (operation.controller.signal.aborted) this.#status.delete(input.registryId);
+          else
+            this.#status.set(input.registryId, {
+              registryId: input.registryId,
+              state: "failed",
+              message: redactText(
+                error.cause instanceof Error ? error.cause.message : sourceText("error.provider.registryInstallFailed"),
+              ),
+            });
+        }),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          this.#active.delete(input.registryId);
+          Deferred.doneUnsafe(operation.done, Effect.void);
+        }),
+      ),
+    );
+  });
 
-  async #install(input: AcpRegistryInstallInput, operation: Operation): Promise<CustomAgentResult> {
-    const signal = operation.controller.signal;
-    const catalog = await this.#catalog(signal);
+  readonly #install = Effect.fn("AcpRegistry.installVersion")(function* (
+    this: AcpRegistry,
+    input: AcpRegistryInstallInput,
+  ): Effect.fn.Return<CustomAgentResult, ProviderRuntimeFailure> {
+    const catalog = yield* this.#catalog();
     const entry = catalog.find((agent) => agent.id === input.registryId);
-    if (!entry) throw new AcpRegistryError(sourceText("error.provider.registryMissing"));
+    if (!entry)
+      return yield* new ProviderRuntimeFailure({ cause: new Error(sourceText("error.provider.registryMissing")) });
     const distribution = input.distribution ?? registryDistributions(entry)[0];
     if (!distribution || !registryDistributions(entry).includes(distribution))
-      throw new AcpRegistryError(sourceText("error.provider.registryMissing"));
+      return yield* new ProviderRuntimeFailure({ cause: new Error(sourceText("error.provider.registryMissing")) });
     const old =
-      (await this.#dependencies.customAgentChanges.list()).find((agent) => agent.id === input.customAgentId) ?? null;
+      (yield* this.dependencies.customAgentChanges.list()).find((agent) => agent.id === input.customAgentId) ?? null;
     if (!old && !isNewCustomAgentId(input.customAgentId))
-      throw new AcpRegistryError(sourceText("error.provider.customAgentIdInvalid"));
-    const records = await this.#records();
-    // An update replaces only a command that this registry installed for the same agent.
+      return yield* new ProviderRuntimeFailure({ cause: new Error(sourceText("error.provider.customAgentIdInvalid")) });
+    const records = yield* this.#records();
     if (
       old &&
       !records.some(
         (record) => record.registryId === entry.id && record.customAgentId === old.id && record.command === old.command,
       )
     )
-      throw new AcpRegistryError(sourceText("error.provider.registryBindingChanged"));
+      return yield* new ProviderRuntimeFailure({
+        cause: new Error(sourceText("error.provider.registryBindingChanged")),
+      });
     const generation = randomUUID();
     const folder = join(this.#root, "versions", generation);
-    await mkdir(folder, { recursive: true, mode: 0o700 });
+    yield* runtimeIO(() => mkdir(folder, { recursive: true, mode: 0o700 }));
     let activated = false;
-    try {
-      let prepared: RegistryPrepared;
-      try {
-        prepared = await this.#prepare(entry, distribution, folder, signal);
-      } catch (error) {
-        throw new AcpRegistryError(redactText(maskRegistryEnv(errorMessage(error), entry, distribution)), {
-          cause: error,
-        });
-      }
+    return yield* Effect.gen({ self: this }, function* () {
+      const prepared = yield* this.#prepare(entry, distribution, folder).pipe(
+        Effect.mapError((failure) => {
+          let message =
+            failure.cause instanceof Error ? failure.cause.message : sourceText("error.provider.registryInstallFailed");
+          const env =
+            distribution === "binary"
+              ? entry.distribution.binary
+              : distribution === "npx"
+                ? { package: entry.distribution.npx }
+                : { package: entry.distribution.uvx };
+          for (const target of Object.values(env ?? {}))
+            for (const secret of Object.values(target?.env ?? {}))
+              if (typeof secret === "string" && secret.length >= 4) message = message.split(secret).join("•••");
+          return new ProviderRuntimeFailure({ cause: new Error(redactText(message)) });
+        }),
+      );
       const inputToSave: SaveCustomAgentInput = {
         id: input.customAgentId,
         name: old?.name ?? input.name ?? (entry.name.trim() || entry.id).slice(0, INPUT_LIMITS.agentName),
         command: prepared.command,
         args: prepared.args,
         env: Object.entries(prepared.env).map(([name, value]) => ({ name, value })),
+        usagePrompt: old?.usagePrompt ?? null,
       };
       const record: Installed = {
         registryId: entry.id,
@@ -272,97 +253,89 @@ export class AcpRegistry {
         generation,
         command: prepared.command,
       };
-      return await this.#withGate(async () => {
-        if (signal.aborted) throw new AcpRegistryError(sourceText("error.provider.registryCancelled"));
-        operation.committing = true;
-        // Journal the candidate before switching the command. After a crash, only the record whose
-        // command matches the saved custom agent is displayed as installed.
-        await this.#write([...(await this.#records()), record]);
-        let result: CustomAgentResult;
-        try {
-          result = await this.#dependencies.customAgentChanges.saveIfUnchanged(inputToSave, old);
-        } catch (error) {
-          await this.#rollback(record, old, prepared).catch(() => undefined);
-          throw error;
-        }
-        activated = true;
-        return result;
-      });
-    } finally {
-      if (!activated) await this.#discard(folder);
-    }
-  }
+      return yield* this.#gate.withPermit(
+        Effect.gen({ self: this }, function* () {
+          const operation = this.#active.get(input.registryId);
+          if (operation?.controller.signal.aborted)
+            return yield* new ProviderRuntimeFailure({
+              cause: new Error(sourceText("error.provider.registryCancelled")),
+            });
+          if (operation) operation.committing = true;
+          yield* this.#write([...(yield* this.#records()), record]);
+          const result = yield* this.dependencies.customAgentChanges
+            .saveIfUnchanged(inputToSave, old)
+            .pipe(Effect.tapError(() => this.#rollback(record, old, prepared)));
+          activated = true;
+          return result;
+        }).pipe(Effect.uninterruptible),
+      );
+    }).pipe(
+      Effect.ensuring(
+        Effect.gen({ self: this }, function* () {
+          if (activated) return;
+          const agents = yield* this.dependencies.customAgentChanges.list();
+          if (agents.some((agent) => agent.command.startsWith(`${folder}/`) || agent.command.startsWith(`${folder}\\`)))
+            return;
+          yield* runtimeIO(() => rm(folder, { recursive: true, force: true })).pipe(Effect.orDie);
+        }),
+      ),
+    );
+  });
 
-  /** Removes a staged folder unless a saved command still names it (a rollback that failed). */
-  async #discard(folder: string): Promise<void> {
-    const agents = await this.#dependencies.customAgentChanges.list().catch(() => null);
-    if (!agents) return;
-    if (agents.some((agent) => agent.command.startsWith(`${folder}/`) || agent.command.startsWith(`${folder}\\`)))
-      return;
-    await rm(folder, { recursive: true, force: true }).catch(() => undefined);
-  }
-
-  async #rollback(record: Installed, old: CustomAgentSummary | null, prepared: RegistryPrepared): Promise<void> {
-    const current = (await this.#dependencies.customAgentChanges.list()).find(
+  readonly #rollback = Effect.fn("AcpRegistry.rollback")(function* (
+    this: AcpRegistry,
+    record: Installed,
+    old: CustomAgentSummary | null,
+    prepared: RegistryPrepared,
+  ) {
+    const current = (yield* this.dependencies.customAgentChanges.list()).find(
       (agent) => agent.id === record.customAgentId,
     );
     if (current?.command === prepared.command) {
       if (old)
-        await this.#dependencies.customAgentChanges.saveIfUnchanged(
+        yield* this.dependencies.customAgentChanges.saveIfUnchanged(
           {
             id: old.id,
             name: old.name,
             command: old.command,
             args: old.args,
             env: old.envNames.map((name) => ({ name, value: null })),
+            usagePrompt: old.usagePrompt ?? null,
           },
           current,
         );
-      else await this.#dependencies.customAgentChanges.remove(record.customAgentId);
+      else yield* this.dependencies.customAgentChanges.remove(record.customAgentId);
     }
-    await this.#write((await this.#records()).filter((candidate) => candidate.generation !== record.generation));
-  }
+    yield* this.#write((yield* this.#records()).filter((candidate) => candidate.generation !== record.generation));
+  });
 
-  /**
-   * Removes the managed files of one registry agent. The saved custom agent, its settings, secrets,
-   * workspaces and conversations stay; its command then no longer starts until it is reinstalled.
-   */
-  async uninstall(registryId: string): Promise<void> {
-    if (this.#active.has(registryId)) throw new AcpRegistryError(sourceText("error.provider.registryRemoveBusy"));
-    await this.#withGate(async () => {
-      if (this.#active.has(registryId)) throw new AcpRegistryError(sourceText("error.provider.registryRemoveBusy"));
-      this.#removing.add(registryId);
-      try {
-        const records = await this.#records();
+  readonly uninstall = Effect.fn("AcpRegistry.uninstall")(function* (this: AcpRegistry, registryId: string) {
+    if (this.#active.has(registryId))
+      return yield* new ProviderRuntimeFailure({ cause: new Error(sourceText("error.provider.registryRemoveBusy")) });
+    return yield* this.#gate.withPermit(
+      Effect.gen({ self: this }, function* () {
+        if (this.#active.has(registryId))
+          return yield* new ProviderRuntimeFailure({
+            cause: new Error(sourceText("error.provider.registryRemoveBusy")),
+          });
+        this.#removing.add(registryId);
+        const records = yield* this.#records();
         const removed = records.filter((record) => record.registryId === registryId);
-        await this.#dependencies.withRuntimeRemoval(
+        yield* this.dependencies.withRuntimeRemoval(
           removed.map((record) => record.customAgentId),
-          async () => {
+          Effect.gen({ self: this }, function* () {
             for (const record of removed)
-              await rm(join(this.#root, "versions", record.generation), { recursive: true, force: true });
-            await this.#write(
+              yield* runtimeIO(() =>
+                rm(join(this.#root, "versions", record.generation), { recursive: true, force: true }),
+              );
+            yield* this.#write(
               records.map((record) => (record.registryId === registryId ? { ...record, removed: true } : record)),
             );
-          },
+          }),
         );
-      } finally {
-        this.#removing.delete(registryId);
-      }
-    });
-  }
-}
-
-/** A registry environment value can be a default secret; mask it before a message is shown or logged. */
-function maskRegistryEnv(message: string, entry: RegistryAgent, distribution: AcpRegistryDistribution): string {
-  const targets =
-    distribution === "binary"
-      ? Object.values(entry.distribution.binary ?? {})
-      : [distribution === "npx" ? entry.distribution.npx : entry.distribution.uvx];
-  let masked = message;
-  for (const target of targets)
-    for (const secret of Object.values(target?.env ?? {}))
-      if (secret.length >= 4) masked = masked.split(secret).join("•••");
-  return masked;
+      }).pipe(Effect.ensuring(Effect.sync(() => this.#removing.delete(registryId))), Effect.uninterruptible),
+    );
+  });
 }
 
 export function createAcpRegistry(dependencies: AcpRegistryDependencies): AcpRegistry {

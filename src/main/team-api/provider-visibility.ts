@@ -1,38 +1,35 @@
+import { isAgentProvider } from "@openbot/contracts/agent-providers";
 import type { AgentSummary } from "@openbot/contracts/ipc";
 import type { TeamProtocolV1JsonObject, TeamProtocolV1JsonValue } from "@openbot/contracts/team-protocol/v1";
 
-/**
- * Tells if a peer on this protocol must not see the provider. No released protocol knows Pi (`pi`)
- * or Muse (`muse`): GoAhead adds no Team API version for them, so they stay on this computer.
- * Protocols 1 to 5 do not know Cursor
- * (`cursor`) or Cline (`cline`), protocols 1 to 4 do not know Gemini (`antigravity`) or custom ACP
- * agents (`acp`), and protocols 1 to 3 do not know OpenCode.
- */
+const FROZEN_PROVIDERS: ReadonlyMap<number, readonly string[]> = (() => {
+  const v1 = ["codex", "claude", "grok"];
+  const v4 = [...v1, "opencode"];
+  const v5 = [...v4, "antigravity", "acp"];
+  const v6 = [...v5, "cursor", "cline"];
+  const v7 = [...v6, "pi", "muse"];
+  return new Map([
+    [1, v1],
+    [2, v1],
+    [3, v1],
+    [4, v4],
+    [5, v5],
+    [6, v6],
+    [7, v7],
+  ]);
+})();
+
 export function isPeerHiddenProvider(value: unknown, protocol: number): boolean {
-  return (
-    value === "pi" ||
-    value === "muse" ||
-    (protocol < 6 && (value === "cursor" || value === "cline")) ||
-    (protocol < 5 && (value === "antigravity" || value === "acp")) ||
-    (protocol < 4 && value === "opencode")
-  );
+  const known = FROZEN_PROVIDERS.get(Math.max(1, Math.min(protocol, 8)));
+  return known !== undefined && isAgentProvider(value) && !known.includes(value);
 }
 
-/**
- * The same test for an object `id`. `acp`, `cursor` and `cline` count only for a provider status
- * row, which has a `state`, below the protocol that knows them: a custom endpoint saved with that id before the provider existed is a
- * peer-visible endpoint, also in the `providers` list of a custom endpoint save or delete reply, and
- * it must stay one.
- */
 function isPeerHiddenId(value: TeamProtocolV1JsonObject, protocol: number, listKey: string): boolean {
+  if (value.id === "opencode" || value.id === "antigravity") return isPeerHiddenProvider(value.id, protocol);
   const statusRow = listKey === "providers" && typeof value.state === "string";
-  if (value.id === "pi" || value.id === "muse") return statusRow;
-  if (value.id === "acp") return protocol < 5 && statusRow;
-  if (value.id === "cursor" || value.id === "cline") return protocol < 6 && statusRow;
-  return isPeerHiddenProvider(value.id, protocol);
+  return statusRow && isPeerHiddenProvider(value.id, protocol);
 }
 
-/** A protocol view never changes the host's stored agents or provider sessions. */
 export function hiddenProviderAgentIds(agents: readonly AgentSummary[], protocol: number): Set<string> {
   return new Set(agents.filter((agent) => isPeerHiddenProvider(agent.provider, protocol)).map((agent) => agent.id));
 }
@@ -42,14 +39,10 @@ export function legacyProviderView(value: unknown, hiddenIds: ReadonlySet<string
   return project(json, hiddenIds, 1);
 }
 
-/**
- * Removes the named agents and the providers protocol 4, 5 or 6 does not know. Protocol 4 knows
- * OpenCode; protocol 5 also knows Gemini and custom ACP agents; protocol 6 also knows Cursor and Cline.
- */
 export function hiddenAgentView(
   value: unknown,
   hiddenIds: ReadonlySet<string>,
-  protocol: 4 | 5 | 6,
+  protocol: 4 | 5 | 6 | 7 | 8,
 ): TeamProtocolV1JsonValue {
   const json: TeamProtocolV1JsonValue = JSON.parse(JSON.stringify(value));
   return project(json, hiddenIds, protocol);
@@ -74,12 +67,10 @@ function project(
     isPeerHiddenProvider(value.provider, protocol) ||
     isPeerHiddenId(value, protocol, listKey) ||
     (typeof value.id === "string" && hiddenIds.has(value.id)) ||
-    // Sender and reaction identities contain no provider-specific fields and remain valid for old peers.
     (value.kind !== "agent" && typeof value.agentId === "string" && hiddenIds.has(value.agentId))
   )
     return null;
   if (key === "auth" && isPeerHiddenProvider(value.kind, protocol)) return { kind: "unknown" };
-  // An agent status names the version and the message of the provider that its `auth` names.
   const hiddenStatusProvider =
     "cliVersion" in value &&
     typeof value.auth === "object" &&
@@ -94,7 +85,7 @@ function project(
       continue;
     }
     const visible =
-      field === "typingAgentId" && typeof child === "string" && hiddenIds.has(child)
+      (field === "typingAgentId" || field === "leadAgentId") && typeof child === "string" && hiddenIds.has(child)
         ? null
         : project(child, hiddenIds, protocol, field);
     if (visible === null && child !== null && ["snapshot", "page", "approval", "request"].includes(field)) return null;

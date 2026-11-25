@@ -27,12 +27,13 @@ renderer-to-main trust boundary. [Main-process rules](../main/AGENTS.md#trust-bo
   the hidden WebRTC window only one `MessagePort`.
 - Add a method in the same change as its channel, handler, and preview mock. See
   [IPC binding rules](../main/ipc/AGENTS.md#adding-an-endpoint).
-- Keep the sandbox and context isolation. The remote browser session has no preload and no
-  `window.openbot`.
+- Keep the sandbox and context isolation. The browser tabs' preload (`browser-page.ts`) has no IPC
+  and exposes no world: a tab page gets no `window.openbot`. It only runs one function in the page
+  world, and `scripts/verify-preload-bundle.ts` checks both.
 
 - `scripts/verify-preload-bundle.ts` runs the built bundle and compares `window.openbot` with
-  `IPC_ENDPOINTS`. A new endpoint group needs a place in its `GROUP_PATHS`, and a method written by
-  hand needs an entry in `HAND_WRITTEN_METHODS`. CI runs it after the build in `check:desktop:static`.
+  `IPC_ENDPOINTS` at the places that `IPC_GROUP_PATHS` gives. A method written by hand needs an
+  entry in `HAND_WRITTEN_METHODS`. CI runs it after the build in `check:desktop:static`.
 
 Run one test file: `bun run test:desktop -- src/preload/<name>.test.ts`. For a channel change, also
 run `bun run test:desktop -- src/main/ipc-channel-coverage.test.ts`.

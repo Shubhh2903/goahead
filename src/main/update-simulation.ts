@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
 import { sourceText } from "@openbot/i18n/source";
+import { Effect } from "effect";
 import type { UpdateCancellationToken, UpdateCheckOutcome } from "./update-service";
-import { UpdateService } from "./update-service";
+import { UpdateOperationFailure, UpdateService } from "./update-service";
 
 /**
  * A simulated app update for development, so the update notification can be seen without a
@@ -82,7 +83,7 @@ export class SimulatedUpdater extends EventEmitter {
 
 /** The update service with the install refused, so a simulated update never runs shutdown preparation. */
 export class SimulatedUpdateService extends UpdateService {
-  override async installUpdate(): Promise<void> {
-    throw new Error(sourceText("error.update.simulationInstall"));
+  override installUpdate(): Effect.Effect<void, UpdateOperationFailure> {
+    return Effect.fail(new UpdateOperationFailure({ cause: new Error(sourceText("error.update.simulationInstall")) }));
   }
 }

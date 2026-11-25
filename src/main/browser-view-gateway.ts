@@ -1,63 +1,96 @@
-import { sourceText } from "@openbot/i18n/source";
-import { recordRestartActivity } from "../backend/restart-activity";
-// The host's side of the live browser view: a session a member asks for, a socket that carries the
-// frames, and the pointer and key input that comes back on it.
-//
-// It is a gateway rather than a route because a route answers once and this does not: the frames go
-// on for as long as the member watches. The shape follows `remote-screen-gateway.ts`, including how
-// the socket is authorized -- a tunneled socket arrives with the WebRTC session header and no token,
-// because the host itself opened it on the member's behalf.
-
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import type { Duplex } from "node:stream";
 import {
+  BROWSER_VIEW_MAX_CLIPBOARD_TEXT,
+  BROWSER_VIEW_PAGE_COPY_AFTER_INPUT_MS,
+  type BrowserViewContextMenu,
+  type BrowserViewHostMessage,
   type BrowserViewSessionResponse,
+  type BrowserViewViewport,
   browserViewClientAcksFrames,
+  browserViewClientViewport,
+  browserViewClientWantsContextMenu,
+  browserViewClientWantsCursor,
+  browserViewClientWantsPageCopy,
   browserViewStreamPath,
   browserViewStreamSessionId,
   decodeBrowserViewInput,
+  encodeBrowserViewCopied,
   encodeBrowserViewFrame,
+  encodeBrowserViewHostMessage,
+  isBrowserViewUserAction,
 } from "@openbot/contracts/team-protocol/browser-view-v1";
+import { sourceText } from "@openbot/i18n/source";
+import { redactText } from "@openbot/logging";
+import { Context, Deferred, Effect, Layer, Result, Semaphore } from "effect";
 import type * as Ws from "ws";
+import type { BrowserScreencastFrame } from "../backend/browser-cdp";
 import type { BrowserHost } from "../backend/browser-host";
+import { recordRestartActivity } from "../backend/restart-activity";
+import { RemoteWorkflowError, remoteDecode } from "./remote-service-effects";
 import { rawDataSize, rawDataText } from "./ws-raw-data";
 
 const requireModule = createRequire(import.meta.url);
 const webSockets: typeof Ws = requireModule(join(dirname(requireModule.resolve("ws/package.json")), "index.js"));
 
-/**
- * How many frames may wait in the socket before the next one is dropped. A live view that falls
- * behind must show the page as it is now, not replay the seconds the link was slow.
- */
 const MAX_BUFFERED_FRAME_BYTES = 4 * 1024 * 1024;
-/**
- * Frames kept after the one the client has drawn. A client that asked to name frames and then
- * stops saying which one is on screen would otherwise keep one entry per frame for the whole
- * view. Past this the view is closed. The drawn frame is not dropped in place: that is what made
- * a click land on the wrong page.
- */
+const MAX_FRAMES_IN_FLIGHT = 4;
+const HELD_FRAME_DEADLINE_MS = 1_000;
 const MAX_UNACKNOWLEDGED_FRAMES = 120;
+const MAX_ACK_MESSAGE_BYTES = 128;
 
-/** Frames older than the one on the member's screen. The named frame itself stays, so a click on it still expands. */
 function forgetFramesBefore(sizes: Map<number, { width: number; height: number }>, drawn: number): void {
   for (const sequence of sizes.keys()) {
     if (sequence < drawn) sizes.delete(sequence);
   }
 }
+
+function framesInFlight(session: Pick<ManagedViewSession, "frameSizes" | "drawnSequence">) {
+  let count = 0;
+  for (const sequence of session.frameSizes.keys()) {
+    if (sequence > session.drawnSequence) count += 1;
+  }
+  return count;
+}
 const MAX_SESSIONS = 4;
-const MAX_INPUT_MESSAGE_BYTES = 4 * 1024;
+const MAX_INPUT_MESSAGE_BYTES = 6 * BROWSER_VIEW_MAX_CLIPBOARD_TEXT + 4 * 1024;
 
 export interface BrowserViewGatewayOptions {
-  browser: Pick<BrowserHost, "startView" | "dispatchViewInput">;
-  /** Answers the member a direct socket's token belongs to, for a client that is not tunneled. */
+  browser: Pick<BrowserHost, "startView" | "dispatchViewInput" | "copyViewSelection">;
   authenticate: (token: string) => { id: string } | null;
-  /** A member pressed a key or moved the pointer in a view. A hosted server counts it as use. */
   onInput?: () => void;
   maxSessions?: number;
 }
+
+class BrowserViewPort extends Context.Service<
+  BrowserViewPort,
+  {
+    start(
+      ...args: Parameters<BrowserHost["startView"]>
+    ): Effect.Effect<Effect.Success<ReturnType<BrowserHost["startView"]>>, RemoteWorkflowError>;
+    input(...args: Parameters<BrowserHost["dispatchViewInput"]>): Effect.Effect<void, RemoteWorkflowError>;
+    copy(...args: Parameters<BrowserHost["copyViewSelection"]>): Effect.Effect<string | null, RemoteWorkflowError>;
+  }
+>()("openbot/main/BrowserViewPort") {
+  static layer(browser: BrowserViewGatewayOptions["browser"]) {
+    return Layer.succeed(
+      BrowserViewPort,
+      BrowserViewPort.of({
+        start: (...args) =>
+          browser.startView(...args).pipe(Effect.mapError(({ cause }) => new RemoteWorkflowError({ cause }))),
+        input: (...args) =>
+          browser.dispatchViewInput(...args).pipe(Effect.mapError(({ cause }) => new RemoteWorkflowError({ cause }))),
+        copy: (...args) =>
+          browser.copyViewSelection(...args).pipe(Effect.mapError(({ cause }) => new RemoteWorkflowError({ cause }))),
+      }),
+    );
+  }
+}
+
+type ViewInput = Parameters<BrowserHost["dispatchViewInput"]>[1];
 
 interface ManagedViewSession {
   id: string;
@@ -65,26 +98,36 @@ interface ManagedViewSession {
   memberId: string;
   teamSessionId: string;
   socket: Ws.WebSocket | null;
-  stopView: (() => Promise<void>) | null;
-  /** The size of the last frame sent, which is what a fractional input coordinate refers to. */
+  stopView: (() => Effect.Effect<void>) | null;
   frameWidth: number;
   frameHeight: number;
-  /**
-   * The shape of each frame this session sent and the client may still be drawing, by sequence.
-   * Only a client that acknowledged frames at connect fills this. An older client names no frame,
-   * so there is nothing to look up, and keeping one entry per frame would grow for the whole view.
-   */
   frameSizes: Map<number, { width: number; height: number }>;
   rememberFrames: boolean;
+  drawnSequence: number;
+  heldFrame: BrowserScreencastFrame | null;
+  heldFrameTimer: ReturnType<typeof setTimeout> | null;
+  input: Semaphore.Semaphore;
+  waiting: number;
+  heldMove: ViewInput | null;
+  views: Semaphore.Semaphore;
+  reportCursor: boolean;
+  reportContextMenu: boolean;
+  viewport: BrowserViewViewport | null;
+  reportPageCopy: boolean;
+  lastActionAt: number;
 }
 
 export class BrowserViewGateway {
   readonly #options: BrowserViewGatewayOptions;
+  readonly #layer: Layer.Layer<BrowserViewPort>;
+  readonly #operations = new Set<Deferred.Deferred<void>>();
+  #stopping: Deferred.Deferred<void, RemoteWorkflowError> | null = null;
   readonly #webSockets = new webSockets.WebSocketServer({ noServer: true });
   readonly #sessions = new Map<string, ManagedViewSession>();
 
   constructor(options: BrowserViewGatewayOptions) {
     this.#options = options;
+    this.#layer = BrowserViewPort.layer(options.browser);
   }
 
   createSession(input: { memberId: string; teamSessionId: string; tabId: string }): BrowserViewSessionResponse {
@@ -103,18 +146,36 @@ export class BrowserViewGateway {
       frameHeight: 0,
       frameSizes: new Map(),
       rememberFrames: false,
+      drawnSequence: 0,
+      heldFrame: null,
+      heldFrameTimer: null,
+      input: Semaphore.makeUnsafe(1),
+      waiting: 0,
+      heldMove: null,
+      views: Semaphore.makeUnsafe(1),
+      reportCursor: false,
+      reportContextMenu: false,
+      viewport: null,
+      reportPageCopy: false,
+      lastActionAt: 0,
     });
     return { id, tabId: input.tabId, streamPath: browserViewStreamPath(id) };
   }
 
-  async closeMemberSession(id: string, memberId: string): Promise<boolean> {
-    const session = this.#sessions.get(id);
-    if (!session || session.memberId !== memberId) return false;
-    await this.#closeSession(session, "The browser view was closed.");
-    return true;
-  }
+  readonly closeMemberSession = Effect.fn("BrowserViewGateway.closeMemberSession")(
+    function* (
+      this: BrowserViewGateway,
+      id: string,
+      memberId: string,
+    ): Effect.fn.Return<boolean, RemoteWorkflowError, BrowserViewPort> {
+      const session = this.#sessions.get(id);
+      if (!session || session.memberId !== memberId) return false;
+      yield* this.#closeSession(session, "The browser view was closed.");
+      return true;
+    },
+    (operation) => this.#provide(operation),
+  ).bind(this);
 
-  /** Views with a live socket. Created but never opened views do not hold anything. */
   activeViewCount(): number {
     let count = 0;
     for (const session of this.#sessions.values()) {
@@ -123,16 +184,51 @@ export class BrowserViewGateway {
     return count;
   }
 
-  async revokeTeamSession(teamSessionId: string): Promise<void> {
-    for (const session of [...this.#sessions.values()]) {
-      if (session.teamSessionId === teamSessionId) await this.#closeSession(session, "Team access ended.");
-    }
-  }
+  readonly revokeTeamSession = Effect.fn("BrowserViewGateway.revokeTeamSession")(
+    function* (
+      this: BrowserViewGateway,
+      teamSessionId: string,
+    ): Effect.fn.Return<void, RemoteWorkflowError, BrowserViewPort> {
+      for (const session of [...this.#sessions.values()]) {
+        if (session.teamSessionId === teamSessionId) yield* this.#closeSession(session, "Team access ended.");
+      }
+    },
+    (operation) => this.#provide(operation),
+  ).bind(this);
 
-  async stop(): Promise<void> {
-    for (const session of [...this.#sessions.values()]) await this.#closeSession(session, "The host stopped.");
-    this.#webSockets.close();
-  }
+  readonly closeRefusedSessions = Effect.fn("BrowserViewGateway.closeRefusedSessions")(
+    function* (
+      this: BrowserViewGateway,
+      refused: (view: { memberId: string; tabId: string }) => boolean,
+    ): Effect.fn.Return<void, RemoteWorkflowError, BrowserViewPort> {
+      for (const session of [...this.#sessions.values()]) {
+        if (refused(session)) yield* this.#closeSession(session, "Access to the agent ended.");
+      }
+    },
+    (operation) => this.#provide(operation),
+  ).bind(this);
+
+  readonly stop = Effect.fn("BrowserViewGateway.stop")(function* (this: BrowserViewGateway) {
+    if (this.#stopping) return yield* Deferred.await(this.#stopping);
+    const stopped = Deferred.makeUnsafe<void, RemoteWorkflowError>();
+    this.#stopping = stopped;
+    return yield* Effect.gen({ self: this }, function* () {
+      for (const session of [...this.#sessions.values()]) {
+        yield* this.#closeSession(session, "The host stopped.");
+      }
+      while (this.#operations.size > 0) {
+        yield* Effect.all([...this.#operations].map(Deferred.await), { concurrency: "unbounded" });
+      }
+    }).pipe(
+      Effect.provide(this.#layer),
+      Effect.onExit((exit) =>
+        Effect.sync(() => {
+          Deferred.doneUnsafe(stopped, exit);
+          this.#stopping = null;
+        }),
+      ),
+    );
+  }, Effect.uninterruptible).bind(this);
 
   handlesUpgrade(url: URL): boolean {
     return browserViewStreamSessionId(url.pathname) !== null;
@@ -141,24 +237,19 @@ export class BrowserViewGateway {
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer, url: URL): void {
     const sessionId = browserViewStreamSessionId(url.pathname);
     const session = sessionId ? this.#sessions.get(sessionId) : undefined;
-    if (!session || !this.#authorized(request, session)) {
+    if (this.#stopping || !session || !this.#authorized(request, session)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;
     }
-    // A new socket is a new stream. Sizes from the previous one name frames this client never saw.
-    session.frameWidth = 0;
-    session.frameHeight = 0;
-    session.frameSizes.clear();
     session.rememberFrames = browserViewClientAcksFrames(url);
-    this.#webSockets.handleUpgrade(request, socket, head, (client) => void this.#connect(session, client));
+    session.reportCursor = browserViewClientWantsCursor(url);
+    session.reportContextMenu = browserViewClientWantsContextMenu(url);
+    session.reportPageCopy = browserViewClientWantsPageCopy(url);
+    session.viewport = browserViewClientViewport(url);
+    this.#webSockets.handleUpgrade(request, socket, head, (client) => this.#dispatch(this.#connect(session, client)));
   }
 
-  /**
-   * A tunneled socket carries the WebRTC session this host opened it for and no token: the member
-   * never reaches this port themselves. A direct socket carries the member's token, and it has to be
-   * the member the session was made for -- another member's token opens their own view, not this one.
-   */
   #authorized(request: IncomingMessage, session: ManagedViewSession): boolean {
     const remoteSession = request.headers["x-openbot-webrtc-session"];
     if (remoteSession === session.teamSessionId) return true;
@@ -169,72 +260,118 @@ export class BrowserViewGateway {
     return this.#options.authenticate(token)?.id === session.memberId;
   }
 
-  async #connect(session: ManagedViewSession, client: Ws.WebSocket): Promise<void> {
+  readonly #connect = Effect.fn("BrowserViewGateway.connect")(function* (
+    this: BrowserViewGateway,
+    session: ManagedViewSession,
+    client: Ws.WebSocket,
+  ): Effect.fn.Return<void, RemoteWorkflowError, BrowserViewPort> {
     if (session.socket) session.socket.close(1000, "The browser view moved to a new connection.");
     session.socket = client;
+    session.frameWidth = 0;
+    session.frameHeight = 0;
+    session.frameSizes.clear();
+    session.drawnSequence = 0;
+    this.#forgetHeldFrame(session);
     recordRestartActivity();
     client.on("message", (data, binary) => {
       if (binary || session.socket !== client) return;
-      void this.#handleInput(session, data);
+      this.#noteDrawnFrame(session, client, data);
+      session.waiting += 1;
+      this.#dispatch(
+        session.input.withPermits(1)(
+          Effect.suspend(() => {
+            session.waiting -= 1;
+            return this.#handleInput(session, data);
+          }).pipe(Effect.ensuring(this.#sendHeldMove(session, false))),
+        ),
+      );
     });
-    client.once("close", () => void this.#detach(session, client));
-    client.once("error", () => void this.#detach(session, client));
-    try {
-      const stopView = await this.#options.browser.startView(
+    client.once("close", () => this.#dispatch(this.#detach(session, client)));
+    client.once("error", () => this.#dispatch(this.#detach(session, client)));
+    return yield* Effect.gen({ self: this }, function* () {
+      const previousView = session.stopView;
+      session.stopView = null;
+      if (previousView) yield* previousView();
+      if (session.socket !== client) return;
+      const browser = yield* BrowserViewPort;
+      const stopView = yield* browser.start(
         session.tabId,
         (frame) => {
-          if (session.socket !== client || client.readyState !== webSockets.WebSocket.OPEN) return;
-          // A dropped frame is one the client never sees, so it cannot be the frame a fraction is a
-          // fraction of. Recording its shape here would expand the client's next point with a size
-          // only this side knows about, and the click would land somewhere the user never pointed.
-          if (client.bufferedAmount > MAX_BUFFERED_FRAME_BYTES) return;
-          client.send(encodeBrowserViewFrame(frame), { binary: true });
-          session.frameWidth = frame.width;
-          session.frameHeight = frame.height;
-          if (session.rememberFrames) {
-            session.frameSizes.set(frame.sequence, { width: frame.width, height: frame.height });
-            if (session.frameSizes.size > MAX_UNACKNOWLEDGED_FRAMES) {
-              void this.#closeSession(session, "The live view fell too far behind.");
-            }
+          if (session.socket !== client) return;
+          if (session.rememberFrames && framesInFlight(session) >= MAX_FRAMES_IN_FLIGHT) {
+            this.#holdFrame(session, client, frame);
+            return;
           }
+          this.#forgetHeldFrame(session);
+          if (!this.#sendFrame(session, client, frame) && session.rememberFrames)
+            this.#holdFrame(session, client, frame);
         },
         (reason) => {
-          void this.#closeSession(session, reason);
+          this.#dispatch(this.#closeSession(session, reason));
+        },
+        {
+          ...(session.reportCursor
+            ? { onCursor: (cursor) => this.#send(session, client, { type: "cursor", cursor }) }
+            : {}),
+          ...(session.viewport ? { viewport: session.viewport } : {}),
+          ...(session.reportPageCopy
+            ? {
+                onPageCopy: (text: string) => {
+                  if (Date.now() - session.lastActionAt > BROWSER_VIEW_PAGE_COPY_AFTER_INPUT_MS) return;
+                  if (text.length > 0 && text.length <= BROWSER_VIEW_MAX_CLIPBOARD_TEXT)
+                    this.#send(session, client, { type: "pageCopied", text });
+                },
+              }
+            : {}),
         },
       );
       if (session.socket === client) session.stopView = stopView;
-      else await stopView();
-    } catch (error) {
-      client.close(1011, String(error instanceof Error ? error.message : error).slice(0, 120));
-      await this.#detach(session, client);
-    }
-  }
+      else yield* stopView();
+    }).pipe(
+      Effect.catch(({ cause: error }) =>
+        Effect.gen({ self: this }, function* () {
+          client.close(1011, redactText(String(error instanceof Error ? error.message : error)).slice(0, 120));
+          yield* this.#detach(session, client);
+        }),
+      ),
+      session.views.withPermits(1),
+    );
+  });
 
-  async #handleInput(session: ManagedViewSession, data: Ws.RawData): Promise<void> {
+  readonly #handleInput = Effect.fn("BrowserViewGateway.handleInput")(function* (
+    this: BrowserViewGateway,
+    session: ManagedViewSession,
+    data: Ws.RawData,
+  ): Effect.fn.Return<void, RemoteWorkflowError, BrowserViewPort> {
+    if (!session.socket) return;
     if (rawDataSize(data) > MAX_INPUT_MESSAGE_BYTES) return;
-    let input: ReturnType<typeof decodeBrowserViewInput>;
-    try {
-      input = decodeBrowserViewInput(rawDataText(data));
-    } catch {
+
+    const attempt1 = yield* remoteDecode(() => decodeBrowserViewInput(rawDataText(data))).pipe(Effect.result);
+    if (Result.isFailure(attempt1)) {
       session.socket?.close(1008, "Invalid browser view input.");
       return;
     }
-    // The client has drawn this frame. Older ones are no longer on screen, including when the
-    // member never moves the pointer. A frame this session did not send is not a frame to trust.
+    const input = attempt1.success;
     if (input.type === "ack") {
       if (!session.frameSizes.has(input.sequence)) return;
       forgetFramesBefore(session.frameSizes, input.sequence);
       return;
     }
     this.#options.onInput?.();
-    // Input that arrives before the first frame has no frame to be a fraction of.
+    if (isBrowserViewUserAction(input)) session.lastActionAt = Date.now();
+    if (input.type === "copy") {
+      const client = session.socket;
+      const browser = yield* BrowserViewPort;
+      const text = yield* browser
+        .copy(session.tabId, BROWSER_VIEW_MAX_CLIPBOARD_TEXT)
+        .pipe(Effect.catch(() => Effect.succeed("")));
+      if (session.socket !== client || client.readyState !== webSockets.WebSocket.OPEN) return;
+      client.send(encodeBrowserViewCopied(text === null ? { type: "copyTooLarge" } : { type: "copied", text }));
+      return;
+    }
     let frame = { width: session.frameWidth, height: session.frameHeight };
     if (input.type === "pointer") {
       if (frame.width === 0 || frame.height === 0) return;
-      // A client from before the sequence field names no frame and gets the newest one: that is
-      // what every client got before a point could name its own. A named frame this session did
-      // not send, or one the client has already moved past, is not that client. Expanding it with
-      // a newer size clicks a page the user was not looking at, so the point is dropped.
       if (input.sequence !== undefined) {
         const named = session.frameSizes.get(input.sequence);
         if (!named) return;
@@ -242,31 +379,141 @@ export class BrowserViewGateway {
         forgetFramesBefore(session.frameSizes, input.sequence);
       }
     }
-    // The sequence names a frame on this socket. The page is dispatched pixels, and knows nothing
-    // about how they were carried here.
     const dispatched =
       input.type === "pointer"
         ? { ...input, sequence: undefined, x: input.x * frame.width, y: input.y * frame.height }
         : input;
-    await this.#options.browser.dispatchViewInput(session.tabId, dispatched).catch(() => undefined);
+    if (dispatched.type === "pointer" && dispatched.action === "move") {
+      session.heldMove = dispatched;
+      return;
+    }
+    yield* this.#sendHeldMove(session, true);
+    const browser = yield* BrowserViewPort;
+    const client = session.socket;
+    const onContextMenu =
+      session.reportContextMenu && client
+        ? (menu: BrowserViewContextMenu) => this.#send(session, client, { type: "context-menu", ...menu })
+        : undefined;
+    yield* browser.input(session.tabId, dispatched, onContextMenu).pipe(Effect.catch(() => Effect.void));
+  });
+
+  readonly #sendHeldMove = Effect.fn("BrowserViewGateway.sendHeldMove")(function* (
+    this: BrowserViewGateway,
+    session: ManagedViewSession,
+    beforeInput: boolean,
+  ): Effect.fn.Return<void, never, BrowserViewPort> {
+    const move = session.heldMove;
+    if (!move || (!beforeInput && session.waiting > 0)) return;
+    session.heldMove = null;
+    if (!session.socket) return;
+    const browser = yield* BrowserViewPort;
+    yield* browser.input(session.tabId, move).pipe(Effect.catch(() => Effect.void));
+  });
+
+  #sendFrame(session: ManagedViewSession, client: Ws.WebSocket, frame: BrowserScreencastFrame): boolean {
+    if (session.socket !== client || client.readyState !== webSockets.WebSocket.OPEN) return false;
+    if (client.bufferedAmount > MAX_BUFFERED_FRAME_BYTES) return false;
+    client.send(encodeBrowserViewFrame(frame), { binary: true });
+    session.frameWidth = frame.width;
+    session.frameHeight = frame.height;
+    if (session.rememberFrames) {
+      session.frameSizes.set(frame.sequence, { width: frame.width, height: frame.height });
+      if (session.frameSizes.size > MAX_UNACKNOWLEDGED_FRAMES) {
+        this.#dispatch(this.#closeSession(session, "The live view fell too far behind."));
+      }
+    }
+    return true;
   }
 
-  async #detach(session: ManagedViewSession, client: Ws.WebSocket): Promise<void> {
+  #holdFrame(session: ManagedViewSession, client: Ws.WebSocket, frame: BrowserScreencastFrame): void {
+    session.heldFrame = frame;
+    if (session.heldFrameTimer) return;
+    session.heldFrameTimer = setTimeout(() => {
+      session.heldFrameTimer = null;
+      this.#releaseHeldFrame(session, client, true);
+    }, HELD_FRAME_DEADLINE_MS);
+    session.heldFrameTimer.unref?.();
+  }
+
+  #releaseHeldFrame(session: ManagedViewSession, client: Ws.WebSocket, overdue: boolean): void {
+    const held = session.heldFrame;
+    if (!held || session.socket !== client) return;
+    if (!overdue && framesInFlight(session) >= MAX_FRAMES_IN_FLIGHT) return;
+    this.#forgetHeldFrame(session);
+    if (!this.#sendFrame(session, client, held)) this.#holdFrame(session, client, held);
+  }
+
+  #forgetHeldFrame(session: ManagedViewSession): void {
+    if (session.heldFrameTimer) clearTimeout(session.heldFrameTimer);
+    session.heldFrameTimer = null;
+    session.heldFrame = null;
+  }
+
+  #noteDrawnFrame(session: ManagedViewSession, client: Ws.WebSocket, data: Ws.RawData): void {
+    if (!session.rememberFrames || rawDataSize(data) > MAX_ACK_MESSAGE_BYTES) return;
+    let input: ReturnType<typeof decodeBrowserViewInput>;
+    try {
+      input = decodeBrowserViewInput(rawDataText(data));
+    } catch {
+      return;
+    }
+    if (input.type !== "ack" || !session.frameSizes.has(input.sequence)) return;
+    session.drawnSequence = Math.max(session.drawnSequence, input.sequence);
+    this.#releaseHeldFrame(session, client, false);
+  }
+
+  #send(session: ManagedViewSession, client: Ws.WebSocket, message: BrowserViewHostMessage): void {
+    if (session.socket !== client || client.readyState !== webSockets.WebSocket.OPEN) return;
+    client.send(encodeBrowserViewHostMessage(message));
+  }
+
+  readonly #detach = Effect.fn("BrowserViewGateway.detach")(function* (
+    this: BrowserViewGateway,
+    session: ManagedViewSession,
+    client: Ws.WebSocket,
+  ): Effect.fn.Return<void, RemoteWorkflowError, BrowserViewPort> {
     if (session.socket !== client) return;
     this.#sessions.delete(session.id);
     session.socket = null;
+    this.#forgetHeldFrame(session);
     const stopView = session.stopView;
     session.stopView = null;
-    await stopView?.().catch(() => undefined);
-  }
+    if (stopView) yield* stopView().pipe(Effect.catch(() => Effect.void));
+  });
 
-  async #closeSession(session: ManagedViewSession, reason: string): Promise<void> {
+  readonly #closeSession = Effect.fn("BrowserViewGateway.closeSession")(function* (
+    this: BrowserViewGateway,
+    session: ManagedViewSession,
+    reason: string,
+  ): Effect.fn.Return<void, RemoteWorkflowError, BrowserViewPort> {
     this.#sessions.delete(session.id);
     const client = session.socket;
     session.socket = null;
+    this.#forgetHeldFrame(session);
     const stopView = session.stopView;
     session.stopView = null;
     client?.close(1000, reason.slice(0, 120));
-    await stopView?.().catch(() => undefined);
+    if (stopView) yield* stopView().pipe(Effect.catch(() => Effect.void));
+  });
+  #provide<A>(
+    operation: Effect.Effect<A, RemoteWorkflowError, BrowserViewPort>,
+  ): Effect.Effect<A, RemoteWorkflowError> {
+    return Effect.suspend(() => {
+      const completed = Deferred.makeUnsafe<void>();
+      this.#operations.add(completed);
+      return operation.pipe(
+        Effect.provide(this.#layer),
+        Effect.ensuring(
+          Effect.sync(() => {
+            this.#operations.delete(completed);
+            Deferred.doneUnsafe(completed, Effect.void);
+          }),
+        ),
+      );
+    });
+  }
+
+  #dispatch(operation: Effect.Effect<void, RemoteWorkflowError, BrowserViewPort>): void {
+    Effect.runFork(this.#provide(operation));
   }
 }

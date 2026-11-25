@@ -1,27 +1,3 @@
-import type { HostRestartEvent } from "@openbot/contracts/team-protocol/host-update-v1";
-import { optionalTeamEvent } from "@openbot/contracts/team-protocol/optional-events";
-import { decodeTeamProtocolV6BaseCurrentEvent } from "@openbot/contracts/team-protocol/v6-base-adapter";
-// The live event channel for HTTPS servers, and the reconnect policy both transports share.
-//
-// This is the only part of the remote-server family that owns a clock. Everything it does -- the
-// exponential backoff with jitter, the thirty seconds of health that forgive the backoff, the pause
-// that stops retrying credentials the host already rejected, and the abort/generation races between
-// a socket that is closing and a connect that is still negotiating -- is timing, and timing is why
-// it lives alone. It was moved here verbatim: a rewrite of any of it is a separate change with its
-// own reasoning, not a tidy-up.
-//
-// It depends on exactly what `RemoteEventStreamOptions` lists: a server directory, a compatibility
-// source, a connection registry, an agent-state refresher, an optional live transport, and six
-// callbacks that hand facts back rather than writing anywhere. If that interface grows beyond these
-// items, the state machine has absorbed the manager again -- that is the signal to stop and split,
-// not to add a seventh dependency.
-//
-// Two things it deliberately does not do. It never writes persisted state: a `team-identity` event
-// is reported through `onServerIdentity` and the manager decides to store it, which is what keeps
-// the socket layer out of `servers.json`. And it never classifies a failure: it hands the error to
-// the registry, which owns the single error-to-issue table, and hears back through
-// `suspendReconnect` when retrying is pointless.
-
 import type {
   AgentEvent,
   DirectMessageRealtimeEvent,
@@ -33,28 +9,37 @@ import type {
 import { decodeRecord } from "@openbot/contracts/ipc-decoding";
 import { isString } from "@openbot/contracts/runtime-values";
 import { TEAM_API_ROUTES } from "@openbot/contracts/team-api-routes";
-import { TEAM_CURRENT_CAPABILITIES, type TeamCurrentCapability } from "@openbot/contracts/team-protocol/current";
+import {
+  supportsTeamCapability,
+  type TeamCurrentCapability,
+  teamCapabilitiesForProtocol,
+} from "@openbot/contracts/team-protocol/current";
+import type { HostAppearanceEvent } from "@openbot/contracts/team-protocol/host-appearance-v1";
+import type { HostRestartEvent } from "@openbot/contracts/team-protocol/host-update-v1";
+import type { LiveVoiceEvent } from "@openbot/contracts/team-protocol/live-voice-v1";
+import type { MachineAlertEvent } from "@openbot/contracts/team-protocol/machine-resources-v1";
+import { optionalTeamEvent, optionalTeamEventToCurrent } from "@openbot/contracts/team-protocol/optional-events";
+import { addSkillSuggestionNames, SKILL_LEARNING_CAPABILITY } from "@openbot/contracts/team-protocol/skill-learning-v1";
 import { TEAM_PROTOCOL_V1_WEBSOCKET } from "@openbot/contracts/team-protocol/v1";
 import {
   encodeTeamProtocolV1CurrentClientEvent,
   type TeamProtocolV1CurrentClientEvent,
 } from "@openbot/contracts/team-protocol/v1-adapter";
+import { decodeTeamProtocolV8BaseCurrentEvent } from "@openbot/contracts/team-protocol/v8-base-adapter";
 import { sourceText } from "@openbot/i18n/source";
+import { referenceFrom } from "@openbot/user-errors";
+import { Effect, Exit, Result, Scope } from "effect";
 import { RemoteProtocolError, RemoteRequestError } from "./remote-server-errors";
 import { requestJson } from "./remote-server-http";
 import type { RemoteServerDirectory, StoredRemoteServerView } from "./remote-server-store";
+import { RemoteWorkflowError, remoteDecode } from "./remote-service-effects";
 
 const REMOTE_EVENT_RECONNECT_BASE_MS = 1_000;
 const REMOTE_EVENT_RECONNECT_MAX_MS = 60_000;
 const REMOTE_EVENT_RECONNECT_JITTER = 0.2;
-// Signal said the host is not connected. The account directory keeps hosts that went away for good,
-// so a one-minute retry ran all day against them, and each retry spent a Signal ticket. An offline
-// host retries each five minutes while an app window has focus, and each fifteen minutes without
-// focus. Focus and a manual retry still retry at once.
 const REMOTE_HOST_OFFLINE_RETRY_MS = 5 * 60_000;
 const REMOTE_HOST_OFFLINE_UNFOCUSED_RETRY_MS = 15 * 60_000;
-// A hosted server that starts after a wake request comes online in about a minute. It retries at
-// this delay, not with the backoff, so the user does not wait for a long delay after the start.
+const REMOTE_HOST_RECENTLY_ONLINE_MS = 10 * 60_000;
 const HOSTED_SERVER_START_RETRY_MS = 5_000;
 const REMOTE_EVENT_HEALTHY_MS = 30_000;
 const REMOTE_EVENT_PAYLOAD_LIMIT = 1024 * 1024;
@@ -62,37 +47,37 @@ const REMOTE_EVENT_INITIAL_BUFFER_LIMIT = 1_000;
 const REMOTE_EVENT_PROTOCOL = "openbot-events";
 const REMOTE_EVENT_SNAPSHOT_PROTOCOL = "openbot-events-v2";
 
-// What the stream needs of the request client: the negotiated range, and the headers that carry it.
 export interface RemoteEventCompatibilitySource {
-  ensureCompatibility(server: StoredRemoteServerView, refresh?: boolean): Promise<ServerCompatibility>;
+  ensureCompatibility(
+    server: StoredRemoteServerView,
+    refresh?: boolean,
+  ): Effect.Effect<ServerCompatibility, RemoteWorkflowError>;
   requestProtocol(compatibility: ServerCompatibility): {
-    protocol?: number;
-    appVersion?: string;
-    capabilities?: readonly TeamCurrentCapability[];
-    preserveSemanticTags?: boolean;
+    protocol?: number | undefined;
+    appVersion?: string | undefined;
+    capabilities?: readonly TeamCurrentCapability[] | undefined;
+    preserveSemanticTags?: boolean | undefined;
   };
 }
 
-// Reporting only. The stream records what happened and never decides what it means.
 export interface RemoteEventConnectionSink {
   markConnected(serverId: string): void;
   setState(serverId: string, state: ServerSummary["state"]): void;
   setCompatibility(serverId: string, compatibility: ServerCompatibility): void;
   compatibilityFor(serverId: string): ServerCompatibility | null;
   reportError(serverId: string, error: unknown): void;
-  reportUnreachable(serverId: string): void;
+  reportUnreachable(serverId: string, reference?: string): void;
 }
 
 export interface RemoteEventAgentState {
-  refreshAgentState(serverId: string): Promise<void>;
-  forward(serverId: string, event: AgentEvent, bufferedLive?: boolean): void;
+  refreshAgentState(serverId: string): Effect.Effect<void, RemoteWorkflowError>;
+  forward(serverId: string, event: AgentEvent, bufferedLive?: boolean): Effect.Effect<void, RemoteWorkflowError>;
 }
 
-// The WebRTC half of the same channel. Hosts on that transport have no socket of their own, so the
-// stream only starts them and asks for snapshots; their events arrive through the manager.
 export interface RemoteEventLiveTransport {
-  connect(hostId: string): Promise<void>;
-  requestRuntimeSnapshot(hostId: string): Promise<void>;
+  connect(hostId: string): Effect.Effect<void, RemoteWorkflowError>;
+  retry(hostId: string): Effect.Effect<void, RemoteWorkflowError>;
+  requestRuntimeSnapshot(hostId: string): Effect.Effect<void, RemoteWorkflowError>;
 }
 
 export interface RemoteEventStreamOptions {
@@ -107,13 +92,18 @@ export interface RemoteEventStreamOptions {
   onDirectMessage: (serverId: string, event: DirectMessageRealtimeEvent) => void;
   onDirectTyping: (serverId: string, event: DirectTypingRealtimeEvent) => void;
   onHostRestart: (serverId: string, event: HostRestartEvent) => void;
+  onHostAppearance: (serverId: string, event: HostAppearanceEvent) => void;
+  onMachineAlert: (serverId: string, event: MachineAlertEvent) => void;
+  onLiveVoice: (serverId: string, event: LiveVoiceEvent) => void;
   onOffline: (serverId: string) => void;
   onChanged: () => void;
 }
 
 export class RemoteEventStream {
+  readonly #scope = Scope.makeUnsafe();
   readonly #appVersion: string | null;
   readonly #servers: RemoteServerDirectory;
+  #chatWindowServerIds: ReadonlySet<string> = new Set();
   readonly #client: RemoteEventCompatibilitySource;
   readonly #connections: RemoteEventConnectionSink;
   readonly #agents: RemoteEventAgentState;
@@ -123,6 +113,9 @@ export class RemoteEventStream {
   readonly #onDirectMessage: RemoteEventStreamOptions["onDirectMessage"];
   readonly #onDirectTyping: RemoteEventStreamOptions["onDirectTyping"];
   readonly #onHostRestart: RemoteEventStreamOptions["onHostRestart"];
+  readonly #onHostAppearance: RemoteEventStreamOptions["onHostAppearance"];
+  readonly #onMachineAlert: RemoteEventStreamOptions["onMachineAlert"];
+  readonly #onLiveVoice: RemoteEventStreamOptions["onLiveVoice"];
   readonly #onOffline: RemoteEventStreamOptions["onOffline"];
   readonly #onChanged: RemoteEventStreamOptions["onChanged"];
   readonly #controllers = new Map<string, AbortController>();
@@ -131,9 +124,10 @@ export class RemoteEventStream {
   readonly #reconnectAttempts = new Map<string, number>();
   readonly #transportAttempts = new Set<string>();
   readonly #authenticationPaused = new Set<string>();
-  /** When Signal last reported each host offline. */
   readonly #offlineHosts = new Map<string, number>();
-  /** Hosted servers that start after a wake request. */
+  readonly #seenOnlineAt = new Map<string, number>();
+  readonly #transportConnectedAt = new Map<string, number>();
+  readonly #transportDrops = new Map<string, number>();
   readonly #startingHosts = new Set<string>();
   #appFocused = true;
   #enabled = false;
@@ -150,6 +144,9 @@ export class RemoteEventStream {
     this.#onDirectMessage = options.onDirectMessage;
     this.#onDirectTyping = options.onDirectTyping;
     this.#onHostRestart = options.onHostRestart;
+    this.#onHostAppearance = options.onHostAppearance;
+    this.#onMachineAlert = options.onMachineAlert;
+    this.#onLiveVoice = options.onLiveVoice;
     this.#onOffline = options.onOffline;
     this.#onChanged = options.onChanged;
   }
@@ -158,12 +155,12 @@ export class RemoteEventStream {
     return this.#enabled;
   }
 
-  start(): void {
+  readonly start = Effect.fn("RemoteEventStream.start")(function* (this: RemoteEventStream) {
     this.#enabled = true;
-    for (const server of this.#servers.servers) this.ensure(server.id);
-  }
+    for (const server of this.#servers.servers) yield* this.ensure(server.id);
+  }).bind(this);
 
-  stop(): void {
+  readonly stop = Effect.fn("RemoteEventStream.stop")(function* (this: RemoteEventStream) {
     this.#enabled = false;
     for (const controller of this.#controllers.values()) controller.abort();
     this.#controllers.clear();
@@ -171,31 +168,45 @@ export class RemoteEventStream {
     this.#reconnectTimers.clear();
     this.#reconnectAttempts.clear();
     this.#offlineHosts.clear();
+    this.#seenOnlineAt.clear();
+    this.#transportConnectedAt.clear();
+    this.#transportDrops.clear();
     this.#transportAttempts.clear();
     this.#authenticationPaused.clear();
-  }
+    yield* Scope.close(this.#scope, Exit.void);
+  }).bind(this);
 
-  refreshRuntimeSnapshots(): void {
+  readonly refreshRuntimeSnapshots = Effect.fn("RemoteEventStream.refreshRuntimeSnapshots")(function* (
+    this: RemoteEventStream,
+  ) {
     for (const server of this.#servers.servers) {
       if (server.transport === "webrtc-v2") {
-        void this.#transport?.requestRuntimeSnapshot(server.id).catch(() => undefined);
+        const transport = this.#transport;
+        if (transport)
+          yield* Effect.forkIn(
+            transport.requestRuntimeSnapshot(server.id).pipe(Effect.catch(() => Effect.void)),
+            this.#scope,
+            { startImmediately: true },
+          );
         continue;
       }
       const socket = this.#sockets.get(server.id);
       if (socket?.readyState !== WebSocket.OPEN) {
-        this.ensure(server.id);
+        yield* this.ensure(server.id);
         continue;
       }
       if (this.#supportsRuntimeSnapshots(server.id, socket)) {
         socket.send(encodeTeamProtocolV1CurrentClientEvent({ type: "runtime-snapshot-request" }));
       } else {
-        void this.#agents.refreshAgentState(server.id).catch(() => undefined);
+        yield* Effect.forkIn(
+          this.#agents.refreshAgentState(server.id).pipe(Effect.catch(() => Effect.void)),
+          this.#scope,
+          { startImmediately: true },
+        );
       }
     }
-  }
+  }).bind(this);
 
-  // A client event only reaches a host over an open socket. WebRTC hosts are the caller's problem:
-  // they have their own transport method, and no socket here to hold.
   send(serverId: string, event: TeamProtocolV1CurrentClientEvent): void {
     const socket = this.#sockets.get(serverId);
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -206,20 +217,47 @@ export class RemoteEventStream {
     for (const [serverId, socket] of this.#sockets) this.#sendEventScope(serverId, socket);
   }
 
-  // The transport reconnected on its own, so the backoff it earned no longer applies.
+  setChatWindowServers(serverIds: ReadonlySet<string>): void {
+    this.#chatWindowServerIds = serverIds;
+    this.syncScopes();
+  }
+
+  transportConnected(serverId: string): void {
+    this.#cancelPendingReconnect(serverId);
+    const drops = this.#transportDrops.get(serverId);
+    if (drops) this.#reconnectAttempts.set(serverId, drops);
+    else this.#reconnectAttempts.delete(serverId);
+    this.#transportConnectedAt.set(serverId, Date.now());
+  }
+
+  transportDisconnected(serverId: string): boolean {
+    const connectedAt = this.#transportConnectedAt.get(serverId);
+    this.#transportConnectedAt.delete(serverId);
+    if (connectedAt === undefined) return !this.#transportDrops.has(serverId);
+    if (Date.now() - connectedAt >= REMOTE_EVENT_HEALTHY_MS) {
+      this.#transportDrops.delete(serverId);
+      this.#reconnectAttempts.delete(serverId);
+      return true;
+    }
+    const drops = (this.#transportDrops.get(serverId) ?? 0) + 1;
+    this.#transportDrops.set(serverId, drops);
+    return drops === 1;
+  }
+
   clearReconnectBackoff(serverId: string): void {
+    this.#cancelPendingReconnect(serverId);
+    this.#reconnectAttempts.delete(serverId);
+    this.#transportDrops.delete(serverId);
+  }
+
+  #cancelPendingReconnect(serverId: string): void {
     const reconnectTimer = this.#reconnectTimers.get(serverId);
     if (reconnectTimer) clearTimeout(reconnectTimer);
     this.#reconnectTimers.delete(serverId);
-    this.#reconnectAttempts.delete(serverId);
     this.#offlineHosts.delete(serverId);
     this.#startingHosts.delete(serverId);
   }
 
-  /**
-   * A hosted server starts after a wake request: it retries every few seconds until it connects, or
-   * until the caller ends the start. The first retry replaces a longer one already set.
-   */
   setHostStarting(serverId: string, starting: boolean): void {
     if (!starting) {
       this.#startingHosts.delete(serverId);
@@ -233,12 +271,14 @@ export class RemoteEventStream {
     this.scheduleReconnect(serverId);
   }
 
-  /** Signal said that this host is not connected, and no retry has run since. */
   isHostOffline(serverId: string): boolean {
     return this.#offlineHosts.has(serverId);
   }
 
-  /** The next retry for this host waits the offline delay, also over a shorter one already set. */
+  markSeenOnline(serverId: string): void {
+    this.#seenOnlineAt.set(serverId, Date.now());
+  }
+
   markHostOffline(serverId: string): void {
     this.#offlineHosts.set(serverId, Date.now());
     const reconnectTimer = this.#reconnectTimers.get(serverId);
@@ -248,31 +288,34 @@ export class RemoteEventStream {
     this.scheduleReconnect(serverId);
   }
 
-  /** Focus makes an offline host retry at once. */
-  setAppFocused(focused: boolean): void {
+  readonly setAppFocused = Effect.fn("RemoteEventStream.setAppFocused")(function* (
+    this: RemoteEventStream,
+    focused: boolean,
+  ) {
     this.#appFocused = focused;
-    if (focused) this.retryOfflineHosts();
-  }
+    if (focused) yield* this.retryOfflineHosts();
+  }).bind(this);
 
-  /**
-   * The computer woke from sleep. A socket from before the sleep can be dead with no close event,
-   * and the backoff was earned on a network that is gone, so each HTTPS host opens a new socket and
-   * each waiting WebRTC host connects at once. A WebRTC host that still shows as connected keeps its
-   * channel: the transport finds a dead one itself. A host whose credentials were rejected stays
-   * paused.
-   */
-  wake(): void {
+  readonly wake = Effect.fn("RemoteEventStream.wake")(function* (this: RemoteEventStream) {
     if (!this.#enabled) return;
     for (const server of this.#servers.servers) {
       if (this.#authenticationPaused.has(server.id)) continue;
       this.clearReconnectBackoff(server.id);
-      if (server.transport === "webrtc-v2") this.ensure(server.id);
-      else this.restart(server.id);
+      if (server.transport === "webrtc-v2") yield* this.ensure(server.id, true);
+      else yield* this.restart(server.id);
     }
-  }
+  }).bind(this);
 
-  /** Retries each offline host once, unless Signal reported it offline within the last minute. */
-  retryOfflineHosts(): void {
+  readonly retryNow = Effect.fn("RemoteEventStream.retryNow")(function* (this: RemoteEventStream, serverId: string) {
+    const reconnectTimer = this.#reconnectTimers.get(serverId);
+    if (!reconnectTimer || this.#authenticationPaused.has(serverId)) return;
+    clearTimeout(reconnectTimer);
+    this.#reconnectTimers.delete(serverId);
+    this.#offlineHosts.delete(serverId);
+    yield* this.ensure(serverId);
+  }).bind(this);
+
+  readonly retryOfflineHosts = Effect.fn("RemoteEventStream.retryOfflineHosts")(function* (this: RemoteEventStream) {
     const now = Date.now();
     for (const [serverId, markedAt] of this.#offlineHosts) {
       if (now - markedAt < REMOTE_EVENT_RECONNECT_MAX_MS) continue;
@@ -280,28 +323,19 @@ export class RemoteEventStream {
       const reconnectTimer = this.#reconnectTimers.get(serverId);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       this.#reconnectTimers.delete(serverId);
-      this.ensure(serverId);
+      yield* this.ensure(serverId);
     }
-  }
+  }).bind(this);
 
-  // Whether this server's retries are suspended. The manager asks before it records a WebRTC
-  // disconnect as a plain "offline": the HTTPS arm has the same guard inline (`!protocolFailed`
-  // above the `setState` in `#connect`), and the two must agree or the same failure reads as two
-  // different things depending on which transport carried it.
   isReconnectSuspended(serverId: string): boolean {
     return this.#authenticationPaused.has(serverId);
   }
 
-  // The user asked for this server again, which is the act the suspension was waiting for. `restart`
-  // does this for an HTTPS server on its way to reopening the socket; a WebRTC server has no socket
-  // here, so its manual retry calls this on its own and the two must not drift.
   resumeReconnect(serverId: string): void {
     this.#authenticationPaused.delete(serverId);
     this.clearReconnectBackoff(serverId);
   }
 
-  // What a suspended reconnect costs the event stream. The registry decides that a failure is not
-  // worth retrying; this is the only place that knows there is a socket to tear down for it.
   suspendReconnect(serverId: string): void {
     this.#authenticationPaused.add(serverId);
     this.#controllers.get(serverId)?.abort();
@@ -317,12 +351,19 @@ export class RemoteEventStream {
     this.#reconnectTimers.delete(serverId);
     this.#reconnectAttempts.delete(serverId);
     this.#offlineHosts.delete(serverId);
+    this.#seenOnlineAt.delete(serverId);
+    this.#transportConnectedAt.delete(serverId);
+    this.#transportDrops.delete(serverId);
     this.#startingHosts.delete(serverId);
     this.#authenticationPaused.delete(serverId);
     this.#sockets.delete(serverId);
   }
 
-  ensure(serverId: string): void {
+  readonly ensure = Effect.fn("RemoteEventStream.ensure")(function* (
+    this: RemoteEventStream,
+    serverId: string,
+    checkLiveConnection = false,
+  ) {
     const server = this.#servers.find(serverId);
     if (server?.transport === "webrtc-v2") {
       if (
@@ -333,10 +374,20 @@ export class RemoteEventStream {
       )
         return;
       this.#transportAttempts.add(serverId);
-      void this.#transport
-        ?.connect(serverId)
-        .catch(() => this.scheduleReconnect(serverId))
-        .finally(() => this.#transportAttempts.delete(serverId));
+      const transport = this.#transport;
+      if (transport)
+        yield* Effect.forkIn(
+          (checkLiveConnection ? transport.retry(serverId) : transport.connect(serverId)).pipe(
+            Effect.catch(() => Effect.sync(() => this.scheduleReconnect(serverId))),
+            Effect.ensuring(
+              Effect.sync(() => {
+                this.#transportAttempts.delete(serverId);
+              }),
+            ),
+          ),
+          this.#scope,
+          { startImmediately: true },
+        );
       return;
     }
     if (
@@ -348,18 +399,22 @@ export class RemoteEventStream {
     ) {
       return;
     }
-    void this.#connectEvents(serverId);
-  }
+    yield* Effect.forkIn(this.#connectEvents(serverId), this.#scope, { startImmediately: true });
+  }).bind(this);
 
-  restart(serverId: string, resetBackoff = false): void {
+  readonly restart = Effect.fn("RemoteEventStream.restart")(function* (
+    this: RemoteEventStream,
+    serverId: string,
+    resetBackoff = false,
+  ) {
     this.#controllers.get(serverId)?.abort();
     this.#controllers.delete(serverId);
     const reconnectTimer = this.#reconnectTimers.get(serverId);
     if (reconnectTimer) clearTimeout(reconnectTimer);
     this.#reconnectTimers.delete(serverId);
     if (resetBackoff) this.resumeReconnect(serverId);
-    this.ensure(serverId);
-  }
+    yield* this.ensure(serverId);
+  }).bind(this);
 
   scheduleReconnect(serverId: string): void {
     if (!this.#enabled || this.#reconnectTimers.has(serverId)) return;
@@ -367,7 +422,9 @@ export class RemoteEventStream {
     if (this.#authenticationPaused.has(serverId)) return;
     const attempt = (this.#reconnectAttempts.get(serverId) ?? 0) + 1;
     this.#reconnectAttempts.set(serverId, attempt);
-    const hostOffline = this.#offlineHosts.has(serverId);
+    const seenOnlineAt = this.#seenOnlineAt.get(serverId);
+    const recentlyOnline = seenOnlineAt !== undefined && Date.now() - seenOnlineAt < REMOTE_HOST_RECENTLY_ONLINE_MS;
+    const hostOffline = this.#offlineHosts.has(serverId) && !recentlyOnline;
     const offlineDelay = this.#appFocused ? REMOTE_HOST_OFFLINE_RETRY_MS : REMOTE_HOST_OFFLINE_UNFOCUSED_RETRY_MS;
     const maximumDelay = hostOffline ? offlineDelay : REMOTE_EVENT_RECONNECT_MAX_MS;
     const exponentialDelay = hostOffline
@@ -379,17 +436,18 @@ export class RemoteEventStream {
       : Math.min(maximumDelay, Math.max(REMOTE_EVENT_RECONNECT_BASE_MS, Math.round(exponentialDelay + jitter)));
     const timer = setTimeout(() => {
       this.#reconnectTimers.delete(serverId);
-      // Only the attempt that follows was delayed. When it fails for another reason, for example
-      // while the host starts again, the normal retry applies.
       this.#offlineHosts.delete(serverId);
-      this.ensure(serverId);
+      void Effect.runPromise(this.ensure(serverId)).catch(() => undefined);
     }, delay);
     this.#reconnectTimers.set(serverId, timer);
   }
 
-  async #connectEvents(serverId: string): Promise<void> {
+  readonly #connectEvents = Effect.fn("RemoteEventStream.connectEvents")(function* (
+    this: RemoteEventStream,
+    serverId: string,
+  ): Effect.fn.Return<void, RemoteWorkflowError> {
     if (!this.#enabled || this.#controllers.has(serverId)) return;
-    const server = this.#servers.require(serverId);
+    const server = yield* remoteDecode(() => this.#servers.require(serverId));
     if (server.transport === "webrtc-v2") return;
     const controller = new AbortController();
     this.#controllers.set(serverId, controller);
@@ -397,8 +455,9 @@ export class RemoteEventStream {
     let openedAt = 0;
     let authenticationFailed = false;
     let protocolFailed = false;
-    try {
-      const compatibility = await this.#client.ensureCompatibility(server, true);
+    const closed: { code?: number } = {};
+    const attempt0 = yield* Effect.gen({ self: this }, function* () {
+      const compatibility = yield* this.#client.ensureCompatibility(server, true);
       if (controller.signal.aborted || !this.#enabled || !this.#servers.has(serverId)) {
         if (this.#controllers.get(serverId) === controller) this.#controllers.delete(serverId);
         return;
@@ -408,13 +467,16 @@ export class RemoteEventStream {
       const socketProtocols = this.#appVersion
         ? [TEAM_PROTOCOL_V1_WEBSOCKET, `openbot-token.${this.#servers.token(server)}`]
         : [REMOTE_EVENT_SNAPSHOT_PROTOCOL, REMOTE_EVENT_PROTOCOL, `openbot-token.${this.#servers.token(server)}`];
-      const socket = new WebSocket(eventsUrl, socketProtocols);
+      const socket = yield* remoteDecode(() => new WebSocket(eventsUrl, socketProtocols));
       let agentEventsReady = false;
       const bufferedAgentEvents: AgentEvent[] = [];
-      controller.signal.addEventListener("abort", () => socket.close(1000, "Client stopped"), {
+      const abort = () => socket.close(1000, "Client stopped");
+      controller.signal.addEventListener("abort", abort, {
         once: true,
       });
-      await new Promise<void>((resolve, reject) => {
+      yield* Effect.callback<void, RemoteWorkflowError>((resume) => {
+        const resolve = () => resume(Effect.void);
+        const reject = (cause: unknown) => resume(Effect.fail(new RemoteWorkflowError({ cause })));
         socket.addEventListener(
           "open",
           () => {
@@ -429,15 +491,20 @@ export class RemoteEventStream {
             if (this.#supportsRuntimeSnapshots(serverId, socket)) {
               agentEventsReady = true;
             } else {
-              void this.#agents
-                .refreshAgentState(serverId)
-                .then(() => {
-                  if (this.#sockets.get(serverId) !== socket) return;
-                  agentEventsReady = true;
-                  for (const event of bufferedAgentEvents) this.#agents.forward(serverId, event, true);
-                  bufferedAgentEvents.length = 0;
-                })
-                .catch(() => socket.close(1000, "Initial agent state is unavailable"));
+              void Effect.runPromise(
+                Effect.forkIn(
+                  Effect.gen({ self: this }, function* () {
+                    yield* this.#agents.refreshAgentState(serverId);
+                    if (this.#sockets.get(serverId) !== socket) return;
+                    agentEventsReady = true;
+                    for (const event of bufferedAgentEvents) yield* this.#agents.forward(serverId, event, true);
+                    bufferedAgentEvents.length = 0;
+                  }).pipe(
+                    Effect.catch(() => Effect.sync(() => socket.close(1000, "Initial agent state is unavailable"))),
+                  ),
+                  this.#scope,
+                ),
+              ).catch(() => undefined);
             }
           },
           { once: true },
@@ -463,10 +530,10 @@ export class RemoteEventStream {
           }
           try {
             const value = JSON.parse(message.data);
-            const optional = optionalTeamEvent(value);
+            const optional = optionalTeamEvent(value, { agentTaskUiBlocks: true });
             const decoded = optional
-              ? { kind: "known" as const, event: optional }
-              : decodeTeamProtocolV6BaseCurrentEvent(value);
+              ? { kind: "known" as const, event: optionalTeamEventToCurrent(optional) }
+              : decodeTeamProtocolV8BaseCurrentEvent(value);
             if (decoded.kind === "unknown") return;
             if (decoded.kind === "invalid") {
               protocolFailed = true;
@@ -478,6 +545,7 @@ export class RemoteEventStream {
               return;
             }
             const event = decoded.event;
+            if (this.#advertises(serverId, SKILL_LEARNING_CAPABILITY)) addSkillSuggestionNames(event, value);
             if (event.type === "team-identity") {
               this.#onServerIdentity(serverId, { serverName: event.serverName, logoVersion: event.logoVersion });
             } else if (event.type === "team-presence") {
@@ -488,6 +556,13 @@ export class RemoteEventStream {
               this.#onDirectTyping(serverId, event);
             } else if (event.type === "host-restart") {
               this.#onHostRestart(serverId, event);
+            } else if (event.type === "host-appearance") {
+              this.#onHostAppearance(serverId, event);
+            } else if (event.type === "machine-alert") {
+              this.#onMachineAlert(serverId, event);
+            } else if (event.type === "live-voice") {
+              this.#onLiveVoice(serverId, event);
+            } else if (event.type === "client-browser-command") {
             } else {
               if (!agentEventsReady) {
                 if (bufferedAgentEvents.length >= REMOTE_EVENT_INITIAL_BUFFER_LIMIT) {
@@ -496,7 +571,9 @@ export class RemoteEventStream {
                 }
                 bufferedAgentEvents.push(event);
               } else {
-                this.#agents.forward(serverId, event);
+                void Effect.runPromise(
+                  Effect.forkIn(this.#agents.forward(serverId, event), this.#scope, { startImmediately: true }),
+                ).catch(() => undefined);
               }
             }
           } catch {
@@ -518,7 +595,8 @@ export class RemoteEventStream {
         );
         socket.addEventListener(
           "close",
-          () => {
+          (event) => {
+            closed.code = event.code;
             if (this.#sockets.get(serverId) === socket) {
               this.#sockets.delete(serverId);
             }
@@ -526,26 +604,42 @@ export class RemoteEventStream {
           },
           { once: true },
         );
+        return Effect.sync(() => {
+          controller.signal.removeEventListener("abort", abort);
+          socket.close(1000, "Client stopped");
+        });
       });
       if (!controller.signal.aborted && !protocolFailed) {
         this.#connections.setState(serverId, "offline");
         this.#onOffline(serverId);
         this.#onChanged();
       }
-    } catch (error) {
+    }).pipe(Effect.result);
+    if (Result.isFailure(attempt0)) {
+      const error = attempt0.failure.cause;
       if (!controller.signal.aborted) {
         if (error instanceof RemoteProtocolError) {
           protocolFailed = true;
           this.#connections.reportError(serverId, error);
         } else {
-          authenticationFailed = !opened && (await this.#hasRejectedEventCredentials(server));
+          const refused = opened ? null : yield* this.#eventCredentialsRefusalEffect(server);
+          authenticationFailed = refused !== null && (refused.status === 401 || refused.status === 403);
           if (authenticationFailed) {
             this.#connections.reportError(
               serverId,
-              new RemoteRequestError(401, sourceText("error.remote.signInAgain")),
+              new RemoteRequestError(
+                401,
+                sourceText("error.remote.signInAgain"),
+                null,
+                referenceFrom("http", refused?.status, refused?.code),
+              ),
             );
           } else {
-            this.#connections.reportUnreachable(serverId);
+            this.#connections.reportUnreachable(
+              serverId,
+              (refused ? referenceFrom("http", refused.status, refused.code) : null) ??
+                (closed.code === undefined ? undefined : `ws/close/${closed.code}`),
+            );
             this.#onOffline(serverId);
             this.#onChanged();
           }
@@ -557,7 +651,7 @@ export class RemoteEventStream {
       this.#reconnectAttempts.delete(serverId);
     }
     if (!controller.signal.aborted && !authenticationFailed && !protocolFailed) this.scheduleReconnect(serverId);
-  }
+  });
 
   #sendEventScope(serverId: string, socket: WebSocket): void {
     if (socket.readyState !== WebSocket.OPEN) return;
@@ -571,33 +665,52 @@ export class RemoteEventStream {
     socket.send(
       encodeTeamProtocolV1CurrentClientEvent({
         type: "agent-event-scope",
-        includeConversations: this.#servers.activeServerId === serverId,
-        ...(this.#appVersion ? { capabilities: TEAM_CURRENT_CAPABILITIES } : {}),
+        includeConversations: this.#servers.activeServerId === serverId || this.#chatWindowServerIds.has(serverId),
+        ...(this.#appVersion
+          ? {
+              capabilities: teamCapabilitiesForProtocol(
+                this.#connections.compatibilityFor(serverId)?.negotiatedProtocol,
+              ),
+            }
+          : {}),
       }),
     );
   }
 
-  // Whether the socket died because the host rejected these credentials, which is the one failure a
-  // reconnect cannot fix. Asked over HTTP because a closed socket carries no status.
-  async #hasRejectedEventCredentials(server: StoredRemoteServerView): Promise<boolean> {
-    try {
-      const compatibility = await this.#client.ensureCompatibility(server);
-      await requestJson(server.apiUrl, TEAM_API_ROUTES.me, (value) => decodeRecord(value, "team member"), {
+  readonly #eventCredentialsRefusalEffect = Effect.fn("RemoteEventStream.eventCredentialsRefusal")(function* (
+    this: RemoteEventStream,
+    server: StoredRemoteServerView,
+  ): Effect.fn.Return<RemoteRequestError | null, RemoteWorkflowError> {
+    return yield* Effect.gen({ self: this }, function* () {
+      const compatibility = yield* this.#client.ensureCompatibility(server);
+      yield* requestJson(server.apiUrl, TEAM_API_ROUTES.me, (value) => decodeRecord(value, "team member"), {
         token: this.#servers.token(server),
         ...this.#client.requestProtocol(compatibility),
-      });
-      return false;
-    } catch (error) {
-      return error instanceof RemoteRequestError && (error.status === 401 || error.status === 403);
-    }
+      }).pipe(
+        Effect.mapError(
+          (error) =>
+            new RemoteWorkflowError({
+              cause: error instanceof RemoteRequestError || error instanceof RemoteProtocolError ? error : error.cause,
+            }),
+        ),
+      );
+      return null;
+    }).pipe(Effect.catch(({ cause: error }) => Effect.succeed(error instanceof RemoteRequestError ? error : null)));
+  });
+
+  #advertises(serverId: string, capability: TeamCurrentCapability): boolean {
+    if (!this.#appVersion) return false;
+    return supportsTeamCapability(
+      teamCapabilitiesForProtocol(this.#connections.compatibilityFor(serverId)?.negotiatedProtocol),
+      capability,
+    );
   }
 
   #supportsCapability(serverId: string, capability: TeamCurrentCapability): boolean {
-    return this.#connections.compatibilityFor(serverId)?.capabilities.includes(capability) ?? false;
+    const capabilities = this.#connections.compatibilityFor(serverId)?.capabilities;
+    return capabilities ? supportsTeamCapability(capabilities, capability) : false;
   }
 
-  // The pre-`appVersion` hosts predate capability negotiation, so the subprotocol they accepted is
-  // the only thing that says whether they can replay a snapshot. Kept as it shipped.
   #supportsRuntimeSnapshots(serverId: string, socket: WebSocket): boolean {
     return this.#appVersion
       ? this.#supportsCapability(serverId, "agent-runtime-snapshots")

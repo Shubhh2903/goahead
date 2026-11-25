@@ -4,6 +4,7 @@ import { isString } from "@openbot/contracts/runtime-values";
 import { AGENT_PUBLISH_CAPABILITY, AGENT_PUBLISH_ROUTES } from "@openbot/contracts/team-protocol/agent-publish-v1";
 import { sourceText } from "@openbot/i18n/source";
 import { redactText } from "@openbot/logging";
+import { runCauseEffect } from "../../backend/effect-boundary";
 import { parsePublishAgentTemplate } from "../ipc/agent-template-handlers";
 import { requireString } from "../ipc/validation";
 import type { TeamApiAdmin } from "./dependencies";
@@ -11,11 +12,6 @@ import { HttpError } from "./http-error";
 import type { RouteOutcome, TeamApiRequestContext } from "./request-context";
 import { readJson, requireAdmin, requireVisibleBodyAgent } from "./request-helpers";
 
-/**
- * One agent of this computer published as a link-only template from a joined server, updated or
- * unpublished. It runs as the local publish does, with the account signed in here, so the template
- * belongs to that account. Frozen by `agent-publish-v1`.
- */
 export async function routeAgentPublish(
   context: TeamApiRequestContext,
   admin: TeamApiAdmin | undefined,
@@ -31,13 +27,12 @@ export async function routeAgentPublish(
   const body = await readJson(request);
   requireVisibleBodyAgent(body, hiddenAgentIds);
   try {
-    if (route === "preview") return json(200, previewBody(await agentTemplates.preview(agentId(body))));
-    if (route === "publish") return json(200, publicationBody(await agentTemplates.publish(publishInput(body))));
-    await agentTemplates.unpublish(agentId(body));
+    if (route === "preview") return json(200, previewBody(await runCauseEffect(agentTemplates.preview(agentId(body)))));
+    if (route === "publish")
+      return json(200, publicationBody(await runCauseEffect(agentTemplates.publish(publishInput(body)))));
+    await runCauseEffect(agentTemplates.unpublish(agentId(body)));
     return json(200, {});
   } catch (error) {
-    // A signed-out host, a secret in the instructions or a failed upload is a sentence for the admin,
-    // not a host fault. It can name a routine or skill, and a name can hold the secret it reports.
     if (error instanceof Error && !(error instanceof HttpError)) throw new HttpError(409, redactText(error.message));
     throw error;
   }
@@ -58,7 +53,6 @@ function agentId(body: DynamicRecord): string {
   }
 }
 
-/** The base64 card becomes the bytes the local parser checks, so both paths accept the same cards. */
 function publishInput(body: DynamicRecord) {
   try {
     const card = body.card;
@@ -71,11 +65,6 @@ function publishInput(body: DynamicRecord) {
   }
 }
 
-/**
- * `avatarUrl` names a file of this computer, so it stays here; the avatar travels as its bytes.
- * Every text leaves redacted: the preview is read before publishing checks for secrets, and a
- * secret stays on the host. Publishing still refuses it, because the host reads the agent again.
- */
 function previewBody({ avatarUrl: _avatarUrl, avatarImage, publication, ...preview }: AgentTemplatePreview) {
   return {
     ...preview,

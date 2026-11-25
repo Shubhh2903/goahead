@@ -1,22 +1,34 @@
-import type { ConversationMessageSender, DynamicIslandAction, SendMessageInput } from "@openbot/contracts/ipc";
+import {
+  type ConversationMessageSender,
+  type DynamicIslandAction,
+  LOCAL_SERVER_ID,
+  type SendMessageInput,
+} from "@openbot/contracts/ipc";
 import { TEAM_API_ROUTES } from "@openbot/contracts/team-api-routes";
-import { routeToServer } from "./ipc/route-to-server";
+import { Effect } from "effect";
+import type { ApprovalResponder, PromptResponder } from "../backend/agent/attention-registry";
+import type { AgentLifecycleFailed } from "../backend/agent-service";
+import type { RemoteWorkflowError } from "./remote-service-effects";
 
-/** The island actions that main runs against the agent itself, with no help from the main window. */
 export type CriticalAction = Extract<
   DynamicIslandAction,
   { type: "answer-prompt" | "respond-approval" | "send-message" | "stop-agent" }
 >;
 
 export interface DynamicIslandActionAgent {
-  respondToPrompt(input: { requestId: string | number; answers: Record<string, string[]> }): Promise<void>;
-  /** `local-owner`: the island runs on this computer, so the person at it answers. */
+  respondToPrompt(
+    input: { requestId: string | number; answers: Record<string, string[]> },
+    responder?: PromptResponder,
+  ): Effect.Effect<void, AgentLifecycleFailed>;
   respondToApproval(
     input: { requestId: string | number; decision: "accept" | "decline" },
-    from?: "local-owner" | "other",
-  ): Promise<void>;
-  sendMessage(input: SendMessageInput, sender?: ConversationMessageSender): Promise<unknown>;
-  interrupt(agentId: string, turnId: string): Promise<void>;
+    responder?: ApprovalResponder,
+  ): Effect.Effect<void, AgentLifecycleFailed>;
+  sendMessage(
+    input: SendMessageInput,
+    sender?: ConversationMessageSender,
+  ): Effect.Effect<unknown, AgentLifecycleFailed>;
+  interrupt(agentId: string, turnId: string): Effect.Effect<void, AgentLifecycleFailed>;
 }
 
 export interface DynamicIslandRemoteAgent {
@@ -25,59 +37,51 @@ export interface DynamicIslandRemoteAgent {
     path: string,
     decoder: (value: unknown) => unknown,
     init: { method: "POST"; body: unknown },
-  ): Promise<unknown>;
+  ): Effect.Effect<unknown, RemoteWorkflowError>;
 }
 
-export interface DynamicIslandActionDecoders {
-  decodeVoid: (value: unknown) => void;
-  decodeQueuedMessageReceipt: (value: unknown) => unknown;
-}
-
-export async function performDynamicIslandCriticalAction(
+export const performDynamicIslandCriticalAction = Effect.fn("DynamicIsland.criticalAction")(function* (
   action: CriticalAction,
   local: DynamicIslandActionAgent,
   remote: DynamicIslandRemoteAgent,
-  decoders: DynamicIslandActionDecoders,
+  decoders: { decodeVoid: (value: unknown) => void; decodeQueuedMessageReceipt: (value: unknown) => unknown },
   sender: () => ConversationMessageSender | undefined,
-): Promise<void> {
+) {
   const { decodeVoid, decodeQueuedMessageReceipt } = decoders;
   if (action.type === "send-message") {
     const input = { agentId: action.agentId, text: action.text, clientMessageId: action.clientMessageId };
-    await routeToServer<unknown>(action.serverId, {
-      local: () => local.sendMessage(input, sender()),
-      remote: (serverId) =>
-        remote.request(serverId, TEAM_API_ROUTES.agent.messages(action.agentId), decodeQueuedMessageReceipt, {
-          method: "POST",
-          // The host uses this computer's zone for a routine the agent creates from the message.
-          body: { ...input, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
-        }),
-    });
-    return;
+    return yield* action.serverId === LOCAL_SERVER_ID
+      ? local.sendMessage(input, sender()).pipe(Effect.asVoid)
+      : remote
+          .request(action.serverId, TEAM_API_ROUTES.agent.messages(action.agentId), decodeQueuedMessageReceipt, {
+            method: "POST",
+            body: { ...input, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+          })
+          .pipe(Effect.asVoid);
   }
   if (action.type === "stop-agent") {
-    await routeToServer<unknown>(action.serverId, {
-      local: () => local.interrupt(action.agentId, action.turnId),
-      remote: (serverId) =>
-        remote.request(serverId, TEAM_API_ROUTES.agent.interrupt(action.agentId), decodeVoid, {
-          method: "POST",
-          body: { turnId: action.turnId },
-        }),
-    });
-    return;
+    return yield* action.serverId === LOCAL_SERVER_ID
+      ? local.interrupt(action.agentId, action.turnId)
+      : remote
+          .request(action.serverId, TEAM_API_ROUTES.agent.interrupt(action.agentId), decodeVoid, {
+            method: "POST",
+            body: { turnId: action.turnId },
+          })
+          .pipe(Effect.asVoid);
   }
   if (action.type === "answer-prompt") {
     const input = { requestId: action.requestId, answers: action.answers };
-    await routeToServer<unknown>(action.serverId, {
-      local: () => local.respondToPrompt(input),
-      remote: (serverId) =>
-        remote.request(serverId, TEAM_API_ROUTES.respond.prompt, decodeVoid, { method: "POST", body: input }),
-    });
-    return;
+    const owner = action.serverId === LOCAL_SERVER_ID ? sender() : undefined;
+    return yield* action.serverId === LOCAL_SERVER_ID
+      ? local.respondToPrompt(input, { ...(owner ? { sender: owner } : {}), privileged: true })
+      : remote
+          .request(action.serverId, TEAM_API_ROUTES.respond.prompt, decodeVoid, { method: "POST", body: input })
+          .pipe(Effect.asVoid);
   }
   const input = { requestId: action.requestId, decision: action.decision };
-  await routeToServer<unknown>(action.serverId, {
-    local: () => local.respondToApproval(input, "local-owner"),
-    remote: (serverId) =>
-      remote.request(serverId, TEAM_API_ROUTES.respond.approval, decodeVoid, { method: "POST", body: input }),
-  });
-}
+  return yield* action.serverId === LOCAL_SERVER_ID
+    ? local.respondToApproval(input, { owner: true, localDesktop: true })
+    : remote
+        .request(action.serverId, TEAM_API_ROUTES.respond.approval, decodeVoid, { method: "POST", body: input })
+        .pipe(Effect.asVoid);
+});

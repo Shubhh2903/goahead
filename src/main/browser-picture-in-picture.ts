@@ -1,23 +1,31 @@
 import type { BrowserBounds, BrowserPictureInPictureEvent } from "@openbot/contracts/ipc";
+import { Effect, Schema } from "effect";
 import { BrowserWindow, screen, WebContentsView } from "electron";
 import type { BrowserHost } from "../backend/browser-host";
+import { causeHelpers } from "../backend/effect-boundary";
 import {
   BROWSER_PIP_MIN_HEIGHT,
   BROWSER_PIP_MIN_WIDTH,
   constrainBrowserPictureInPictureBounds,
 } from "./browser-picture-in-picture-bounds";
 import { isTrustedRendererUrl } from "./trusted-renderer";
+import { followAppearance, windowBackgroundColor } from "./window-appearance";
 
 interface BrowserPictureInPictureOptions {
   mainWindow: BrowserWindow;
   browser: BrowserHost;
   preloadPath: string;
   iconPath: string;
-  developmentUrl?: string;
+  developmentUrl?: string | undefined;
   onEvent: (event: BrowserPictureInPictureEvent) => void;
 }
 
+export interface BrowserPictureInPictureLiveView {
+  clipboard: boolean;
+}
+
 const HOVER_POLL_INTERVAL_MS = 150;
+const PICTURE_IN_PICTURE_DARK_BACKGROUND = "#111415";
 
 export class BrowserPictureInPicture {
   readonly #options: BrowserPictureInPictureOptions;
@@ -31,7 +39,11 @@ export class BrowserPictureInPicture {
     this.#options = options;
   }
 
-  async open(savedBounds?: BrowserBounds): Promise<BrowserBounds> {
+  readonly open = Effect.fn("BrowserPictureInPicture.open")(function* (
+    this: BrowserPictureInPicture,
+    savedBounds?: BrowserBounds,
+    liveView?: BrowserPictureInPictureLiveView,
+  ): Effect.fn.Return<BrowserBounds, PictureInPictureFailed> {
     const existing = this.#window;
     if (existing && !existing.isDestroyed()) {
       existing.showInactive();
@@ -54,7 +66,7 @@ export class BrowserPictureInPicture {
       fullscreenable: false,
       maximizable: false,
       skipTaskbar: true,
-      backgroundColor: "#111415",
+      backgroundColor: windowBackgroundColor(PICTURE_IN_PICTURE_DARK_BACKGROUND),
       title: "GoAhead Browser",
       icon: this.#options.iconPath,
       webPreferences: {
@@ -66,6 +78,7 @@ export class BrowserPictureInPicture {
         webSecurity: true,
       },
     });
+    followAppearance(window, PICTURE_IN_PICTURE_DARK_BACKGROUND);
     this.#window = window;
     this.#closing = false;
     this.#options.browser.setPictureInPictureWindow(window);
@@ -79,6 +92,7 @@ export class BrowserPictureInPicture {
       },
     });
     this.#controlsView = controlsView;
+    controlsView.webContents.setZoomMode("isolated");
     controlsView.setBackgroundColor("#00000000");
     this.#options.browser.setPictureInPictureOverlayView(controlsView);
     const positionControls = () => {
@@ -109,7 +123,6 @@ export class BrowserPictureInPicture {
       positionControls();
     });
     window.on("closed", () => {
-      // A child view's contents outlive its window. A window that the system closes skips `#close`.
       if (!controlsView.webContents.isDestroyed()) controlsView.webContents.close();
       if (this.#window !== window) return;
       this.#stopHoverTracking();
@@ -122,21 +135,27 @@ export class BrowserPictureInPicture {
     });
 
     const developmentUrl = this.#options.developmentUrl;
-    await (developmentUrl
-      ? window.loadURL(new URL("browser-pip.html", `${developmentUrl}/`).toString())
-      : window.loadURL("openbot-app://app/browser-pip.html"));
-    // The system can close the window during the load, and the `closed` handler closes the controls.
+    const pageUrl = developmentUrl
+      ? new URL("browser-pip.html", `${developmentUrl}/`)
+      : new URL("openbot-app://app/browser-pip.html");
+    if (liveView) {
+      pageUrl.searchParams.set("view", "live");
+      if (liveView.clipboard) pageUrl.searchParams.set("clipboard", "1");
+    }
+    yield* pipCall(() => window.loadURL(pageUrl.toString()));
     if (controlsView.webContents.isDestroyed()) return bounds;
-    await (developmentUrl
-      ? controlsView.webContents.loadURL(new URL("browser-pip-controls.html", `${developmentUrl}/`).toString())
-      : controlsView.webContents.loadURL("openbot-app://app/browser-pip-controls.html"));
+    yield* pipCall(() =>
+      developmentUrl
+        ? controlsView.webContents.loadURL(new URL("browser-pip-controls.html", `${developmentUrl}/`).toString())
+        : controlsView.webContents.loadURL("openbot-app://app/browser-pip-controls.html"),
+    );
     if (!window.isDestroyed()) {
       this.#startHoverTracking(window, controlsView);
       window.showInactive();
       window.moveTop();
     }
     return window.isDestroyed() ? bounds : window.getBounds();
-  }
+  }).bind(this);
 
   dock(): void {
     this.#close("dock");
@@ -204,12 +223,6 @@ export class BrowserPictureInPicture {
         .catch(() => undefined);
     };
     update();
-    // The cursor is polled because a window that is not focused gets no mouse
-    // events, and hover on an unfocused always-on-top window is the whole
-    // feature. 75 ms was 13 reads of the cursor and the window bounds every
-    // second, for the life of the window; a control strip that appears within
-    // 150 ms reads the same to a user and costs half as much. `unref` keeps the
-    // timer from holding the event loop awake between those reads.
     const timer = setInterval(update, HOVER_POLL_INTERVAL_MS);
     timer.unref();
     this.#hoverTimer = timer;
@@ -221,3 +234,9 @@ export class BrowserPictureInPicture {
     this.#controlsVisible = false;
   }
 }
+
+export class PictureInPictureFailed extends Schema.TaggedError<PictureInPictureFailed>()("PictureInPictureFailed", {
+  cause: Schema.Defect(),
+}) {}
+
+const { io: pipCall } = causeHelpers(PictureInPictureFailed);

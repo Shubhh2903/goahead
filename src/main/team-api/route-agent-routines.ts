@@ -1,12 +1,11 @@
-// One agent's routines: the standing instructions that run on a schedule.
-//
-// The bodies are parsed by the same `parseCreateRoutine` / `parseUpdateRoutine` the IPC handlers
-// use, so a routine created over the Team API cannot differ from one created in the app.
-
+import { isReleasedRoutineSchedule } from "@openbot/contracts/ipc";
+import { sourceText } from "@openbot/i18n/source";
+import { runCauseEffect } from "../../backend/effect-boundary";
 import { parseCreateRoutine, parseListRoutineRuns, parseUpdateRoutine } from "../ipc/agent-inputs";
 import type { TeamApiAgents } from "./dependencies";
+import { HttpError } from "./http-error";
 import type { AgentRouteTarget, RouteOutcome, TeamApiRequestContext } from "./request-context";
-import { pathIdentifier, readJson } from "./request-helpers";
+import { pathIdentifier, readJson, requireReleasedSchedule } from "./request-helpers";
 
 export interface AgentRoutineRouteDependencies {
   agents: Pick<
@@ -24,11 +23,13 @@ export async function routeAgentRoutines(
 
   if (action === "routines") {
     if (method === "GET") {
-      return json(200, agents.listRoutines(agentId));
+      return json(200, agents.listRoutines(agentId).filter(isReleasedRoutine));
     }
     if (method === "POST") {
       const body = await readJson(request);
-      return json(201, agents.createRoutine(parseCreateRoutine({ ...body, agentId })));
+      const input = parseCreateRoutine({ ...body, agentId });
+      requireReleasedSchedule(input.schedule);
+      return json(201, agents.createRoutine(input));
     }
   }
   const routineMatch = action.match(/^routines\/([^/]+)(?:\/(test|runs))?$/);
@@ -37,14 +38,19 @@ export async function routeAgentRoutines(
     const routineAction = routineMatch[2] ?? "";
     if (method === "PATCH" && !routineAction) {
       const body = await readJson(request);
-      return json(200, agents.updateRoutine(parseUpdateRoutine({ ...body, agentId, routineId })));
+      if (agents.listRoutines(agentId).some((routine) => routine.id === routineId && !isReleasedRoutine(routine))) {
+        throw new HttpError(404, sourceText("error.backend.routineGone"));
+      }
+      const input = parseUpdateRoutine({ ...body, agentId, routineId });
+      requireReleasedSchedule(input.schedule);
+      return json(200, agents.updateRoutine(input));
     }
     if (method === "DELETE" && !routineAction) {
-      await agents.deleteRoutine({ agentId, routineId });
+      await runCauseEffect(agents.deleteRoutine({ agentId, routineId }));
       return empty(204);
     }
     if (method === "POST" && routineAction === "test") {
-      return json(201, await agents.testRoutine({ agentId, routineId }));
+      return json(201, await runCauseEffect(agents.testRoutine({ agentId, routineId })));
     }
     if (method === "GET" && routineAction === "runs") {
       const rawLimit = url.searchParams.get("limit");
@@ -54,4 +60,8 @@ export async function routeAgentRoutines(
   }
 
   return "unmatched";
+}
+
+function isReleasedRoutine(routine: { trigger: { schedule: unknown } }): boolean {
+  return isReleasedRoutineSchedule(routine.trigger.schedule);
 }

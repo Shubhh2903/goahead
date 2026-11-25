@@ -3,27 +3,14 @@ import { join } from "node:path";
 import type { AgentEvent } from "@openbot/contracts/ipc";
 import { isDynamicRecord } from "@openbot/contracts/runtime-values";
 import { redactValue } from "@openbot/logging";
+import { Effect, Exit, Scope, Semaphore } from "effect";
+import { analyticsIO } from "./analytics-effects";
 
-/**
- * One timed operation. The name is a fixed string - an IPC channel, a turn origin, a crash origin -
- * and the outcome is a status word. A span holds no payload, message, path, URL or identifier, so the
- * file can go into a diagnostics export under the same promise as the rest of it.
- */
 export interface TraceSpan {
-  kind: "ipc" | "turn" | "crash";
+  kind: "ipc" | "turn" | "crash" | "connect" | "exit" | "stall";
   name: string;
   durationMs: number;
   outcome: string;
-}
-
-/** Counts and durations for one span name, over every line the trace file still holds. */
-export interface TraceSummary {
-  kind: string;
-  name: string;
-  count: number;
-  outcomes: Record<string, number>;
-  p95Ms: number;
-  maxMs: number;
 }
 
 export interface TraceFileOptions {
@@ -31,32 +18,22 @@ export interface TraceFileOptions {
 }
 
 const FILE_NAME = "trace.ndjson";
-// Two files at most, the current one and `.1`. About 100 bytes a line gives some 40,000 spans.
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
-// A burst of IPC calls becomes one append rather than one write for each call.
 const FLUSH_DELAY_MS = 1_000;
 const MAX_PENDING_LINES = 256;
-// Lines waiting for a write plus lines in writes that have not finished. When the disk stalls, new
-// spans are dropped at this limit rather than kept in memory.
 const MAX_BUFFERED_LINES = 4_096;
-// A provider can report any status string, which can hold a path or an error text.
 const TURN_STATUSES = new Set(["completed", "failed", "interrupted", "cancelled"]);
-// A turn whose completion never arrives must not keep its start time forever.
 const MAX_OPEN_TURNS = 256;
 
-/**
- * Owns the always-on local trace: IPC calls and provider turns as NDJSON lines in the user data
- * directory. It never sends anything. A write failure is dropped, because a trace must not become
- * the failure it would have recorded.
- */
 export class TraceFile {
   readonly #directory: string;
   readonly #path: string;
   readonly #openTurns = new Map<string, { startedAt: number; origin: string }>();
   #pending: string[] = [];
   #timer: NodeJS.Timeout | null = null;
-  #writes: Promise<void> = Promise.resolve();
+  #writes = Semaphore.makeUnsafe(1);
   #writingLines = 0;
+  readonly #scope = Scope.makeUnsafe();
 
   constructor(options: TraceFileOptions) {
     this.#directory = options.directory;
@@ -74,11 +51,11 @@ export class TraceFile {
     });
     this.#pending.push(JSON.stringify(line));
     if (this.#pending.length >= MAX_PENDING_LINES) {
-      void this.flush();
+      this.#flushLater();
       return;
     }
     if (this.#timer) return;
-    this.#timer = setTimeout(() => void this.flush(), FLUSH_DELAY_MS);
+    this.#timer = setTimeout(() => this.#flushLater(), FLUSH_DELAY_MS);
     this.#timer.unref();
   }
 
@@ -95,7 +72,6 @@ export class TraceFile {
     const started = this.#openTurns.get(event.turnId);
     this.#openTurns.delete(event.turnId);
     if (!started) return;
-    // A completion often has no origin of its own; the start has it.
     this.record({
       kind: "turn",
       name: event.origin && event.origin !== "unknown" ? event.origin : started.origin,
@@ -104,29 +80,38 @@ export class TraceFile {
     });
   }
 
-  /** Writes the pending lines. The returned promise settles after every earlier write. */
-  flush(): Promise<void> {
+  readonly flush = Effect.fn("TraceFile.flush")(function* (this: TraceFile) {
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
     const lines = this.#pending;
     this.#pending = [];
-    if (lines.length === 0) return this.#writes;
     this.#writingLines += lines.length;
-    this.#writes = this.#writes
-      .then(() => this.#append(lines))
-      .catch(() => undefined)
-      .then(() => {
-        this.#writingLines -= lines.length;
-      });
-    return this.#writes;
+    const file = { directory: this.#directory, path: this.#path, maxBytes: MAX_FILE_BYTES };
+    yield* this.#writes
+      .withPermit(lines.length ? appendRotatingLines(file, lines).pipe(Effect.ignore) : Effect.void)
+      .pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            this.#writingLines -= lines.length;
+          }),
+        ),
+      );
+  }, Effect.uninterruptible);
+
+  readonly close = Effect.fn("TraceFile.close")(function* (this: TraceFile) {
+    yield* this.flush();
+    yield* Scope.close(this.#scope, Exit.void);
+  });
+
+  #flushLater(): void {
+    Effect.runFork(Effect.forkIn(this.flush(), this.#scope, { startImmediately: true }));
   }
 
-  async summarize(): Promise<TraceSummary[]> {
-    void this.flush();
-    // The reads join the write chain, so no rotation runs between the read of `.1` and the current file.
-    const files = this.#writes.then(() => Promise.all([`${this.#path}.1`, this.#path].map(readOptional)));
-    this.#writes = files.then(() => undefined);
-    const text = (await files).join("");
+  readonly summarize = Effect.fn("TraceFile.summarize")(function* (this: TraceFile) {
+    yield* this.flush();
+    const text = (yield* this.#writes.withPermit(
+      Effect.forEach([`${this.#path}.1`, this.#path], readOptional, { concurrency: "unbounded" }),
+    )).join("");
     const groups = new Map<
       string,
       { kind: string; name: string; durations: number[]; outcomes: Record<string, number> }
@@ -153,28 +138,27 @@ export class TraceFile {
         };
       })
       .sort((left, right) => left.kind.localeCompare(right.kind) || left.name.localeCompare(right.name));
-  }
-
-  async #append(lines: string[]): Promise<void> {
-    await mkdir(this.#directory, { recursive: true });
-    try {
-      if ((await stat(this.#path)).size >= MAX_FILE_BYTES) await rename(this.#path, `${this.#path}.1`);
-    } catch {
-      // No file yet.
-    }
-    await appendFile(this.#path, `${lines.join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
-  }
+  });
 }
 
-async function readOptional(path: string): Promise<string> {
-  try {
-    return await readFile(path, "utf8");
-  } catch {
-    return "";
-  }
-}
+export const appendRotatingLines = Effect.fn("TraceFile.appendRotatingLines")(function* (
+  file: { directory: string; path: string; maxBytes: number },
+  lines: readonly string[],
+) {
+  yield* analyticsIO(() => mkdir(file.directory, { recursive: true }));
+  yield* analyticsIO(() => stat(file.path)).pipe(
+    Effect.flatMap((stats) =>
+      stats.size >= file.maxBytes ? analyticsIO(() => rename(file.path, `${file.path}.1`)) : Effect.void,
+    ),
+    Effect.catch(() => Effect.void),
+  );
+  yield* analyticsIO(() => appendFile(file.path, `${lines.join("\n")}\n`, { encoding: "utf8", mode: 0o600 }));
+});
 
-// A crash can cut the last line short, so a line that does not parse is skipped.
+const readOptional = Effect.fn("TraceFile.readOptional")((path: string) =>
+  analyticsIO(() => readFile(path, "utf8")).pipe(Effect.catch(() => Effect.succeed(""))),
+);
+
 function parseLine(line: string): TraceSpan | null {
   if (!line) return null;
   let parsed = null;
@@ -185,7 +169,7 @@ function parseLine(line: string): TraceSpan | null {
   }
   if (!isDynamicRecord(parsed)) return null;
   const { kind, name, durationMs, outcome } = parsed;
-  if (kind !== "ipc" && kind !== "turn" && kind !== "crash") return null;
+  if (kind !== "ipc" && kind !== "turn" && kind !== "crash" && kind !== "connect" && kind !== "exit") return null;
   if (typeof name !== "string" || typeof outcome !== "string" || typeof durationMs !== "number") return null;
   return { kind, name, durationMs, outcome };
 }

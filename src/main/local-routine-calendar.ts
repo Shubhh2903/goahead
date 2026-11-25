@@ -1,55 +1,54 @@
-// The routines of this computer, for the in-app calendar and for the iCalendar feed.
-
 import type { RoutineCalendarOwner } from "@openbot/contracts/ipc";
 import type { AppTranslate } from "@openbot/i18n";
 import { buildRoutineCalendar, type RoutineCalendarSource } from "@openbot/team-client/routine-calendar";
+import { Effect } from "effect";
 import type { AgentService } from "../backend/agent-service";
 import { routineFeedIcs } from "./routine-feed-ics";
 import { RoutineFeedAgentNotFound } from "./routine-feed-server";
 
-/** How far ahead the feed lists runs. A calendar app reads the feed again long before the end. */
 const FEED_DAYS = 30;
 
-export function localRoutineCalendarSource(service: AgentService): RoutineCalendarSource {
+export function localRoutineCalendarSource(service: AgentService): RoutineCalendarSource<never> {
   return {
-    owners: async () => {
-      const archived = service.channels.store.archivedIds();
-      return [
-        ...service.listAgents().map((agent): RoutineCalendarOwner => ({ kind: "agent", agentId: agent.id })),
-        ...service.channels.store
-          .ids()
-          .filter((channelId) => !archived.has(channelId))
-          .map((channelId): RoutineCalendarOwner => ({ kind: "channel", channelId })),
-      ];
-    },
-    routines: async (owner) =>
-      owner.kind === "agent" ? service.listRoutines(owner.agentId) : service.listChannelRoutines(owner.channelId),
-    runs: async (owner, routineId, limit) =>
-      owner.kind === "agent"
-        ? service.listRoutineRuns({ agentId: owner.agentId, routineId, limit })
-        : service.listChannelRoutineRuns({ channelId: owner.channelId, routineId, limit }),
+    owners: () =>
+      Effect.sync(() => {
+        const archived = service.channels.store.archivedIds();
+        return [
+          ...service.listAgents().map((agent): RoutineCalendarOwner => ({ kind: "agent", agentId: agent.id })),
+          ...service.channels.store
+            .ids()
+            .filter((channelId) => !archived.has(channelId))
+            .map((channelId): RoutineCalendarOwner => ({ kind: "channel", channelId })),
+        ];
+      }),
+    routines: (owner) =>
+      Effect.sync(() =>
+        owner.kind === "agent" ? service.listRoutines(owner.agentId) : service.listChannelRoutines(owner.channelId),
+      ),
+    runs: (owner, routineId, limit) =>
+      Effect.sync(() =>
+        owner.kind === "agent"
+          ? service.listRoutineRuns({ agentId: owner.agentId, routineId, limit })
+          : service.listChannelRoutineRuns({ channelId: owner.channelId, routineId, limit }),
+      ),
   };
 }
 
-/**
- * The feed of the next 30 days of runs: every active routine, or only those of the agent `agentId`.
- * A paused routine is left out, so it leaves the user's calendar at the next read.
- */
 export function localRoutineFeedDocument(service: AgentService, translate: AppTranslate) {
-  return async (agentId: string | null): Promise<string> => {
+  return Effect.fn("RoutineFeed.document")(function* (agentId: string | null) {
     const agents = service.listAgents();
-    if (agentId !== null && !agents.some((agent) => agent.id === agentId)) throw new RoutineFeedAgentNotFound();
+    if (agentId !== null && !agents.some((agent) => agent.id === agentId)) {
+      return yield* new RoutineFeedAgentNotFound();
+    }
     const local = localRoutineCalendarSource(service);
-    const source: RoutineCalendarSource = {
+    const source: RoutineCalendarSource<never> = {
       ...local,
       owners: () =>
-        agentId === null
-          ? local.owners()
-          : Promise.resolve([{ kind: "agent", agentId } satisfies RoutineCalendarOwner]),
-      routines: async (owner) => (await local.routines(owner)).filter((routine) => routine.active),
+        agentId === null ? local.owners() : Effect.succeed([{ kind: "agent", agentId } satisfies RoutineCalendarOwner]),
+      routines: (owner) => local.routines(owner).pipe(Effect.map((routines) => routines.filter((r) => r.active))),
     };
     const now = new Date();
-    const calendar = await buildRoutineCalendar(
+    const calendar = yield* buildRoutineCalendar(
       { from: now, to: new Date(now.getTime() + FEED_DAYS * 86_400_000) },
       now,
       source,
@@ -72,7 +71,7 @@ export function localRoutineFeedDocument(service: AgentService, translate: AppTr
       },
       now,
     );
-  };
+  });
 }
 
 function channelName(service: AgentService, channelId: string): string {

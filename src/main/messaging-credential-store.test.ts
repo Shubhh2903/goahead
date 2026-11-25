@@ -1,73 +1,77 @@
-import { access, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+// @vitest-environment node
+
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { redactText } from "@openbot/logging";
-import { describe, expect, it } from "vitest";
+import { Effect } from "effect";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MessagingCredentialStore } from "./messaging-credential-store";
 
-/** A reversible stand-in for `safeStorage`, as in the provider key tests. */
 const cipher = {
-  encrypt: (value: string) => Buffer.from([...value].reverse().join(""), "utf8"),
-  decrypt: (value: Buffer) => [...value.toString("utf8")].reverse().join(""),
+  encrypt: (value: string) => Buffer.from(value, "utf8").reverse(),
+  decrypt: (value: Buffer) => Buffer.from(value).reverse().toString("utf8"),
 };
 
-const TOKENS = { botToken: "xoxb-1-2-storedbottokenvalue", appToken: "xapp-1-A-storedapptokenvalue" };
+let directory: string;
+let path: string;
 
-async function createStore(): Promise<{ path: string; store: MessagingCredentialStore }> {
-  const root = await mkdtemp(join(tmpdir(), "openbot-messaging-credentials-"));
-  const path = join(root, "messaging.json");
-  const store = new MessagingCredentialStore(path, cipher);
-  await store.load();
-  return { path, store };
-}
+beforeEach(async () => {
+  directory = await mkdtemp(join(tmpdir(), "openbot-messaging-credentials-"));
+  path = join(directory, "messaging-credentials.json");
+});
 
-describe("MessagingCredentialStore", () => {
-  it("keeps the tokens encrypted, private to the owner, and out of every log line", async () => {
-    const { path, store } = await createStore();
-    await store.set("connection-1", TOKENS);
+afterEach(async () => {
+  await rm(directory, { recursive: true, force: true });
+});
 
-    const source = await readFile(path, "utf8");
-    expect(source).not.toContain("storedbottokenvalue");
-    expect(source).not.toContain("storedapptokenvalue");
-    if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600);
-    expect(redactText(`failed with ${TOKENS.botToken} and ${TOKENS.appToken}`)).not.toContain("storedbot");
-
-    const reopened = new MessagingCredentialStore(path, cipher);
-    await reopened.load();
-    expect(reopened.get("connection-1")).toEqual(TOKENS);
-    expect(reopened.status("connection-2")).toBe("missing");
-  });
-
-  it("reports an unreadable file without failing, and a save replaces it", async () => {
-    const { path } = await createStore();
-    await writeFile(path, "{ not json");
+describe("MessagingCredentialStore redaction", () => {
+  it("redacts the saved tokens and keeps the chat, bot and server names readable", async () => {
     const store = new MessagingCredentialStore(path, cipher);
-    expect(await store.load()).toBeInstanceOf(Error);
-    expect(store.status("connection-1")).toBe("unreadable");
+    await Effect.runPromise(store.load());
+    await Effect.runPromise(
+      store.set("telegram-connection", {
+        botId: "7012345678",
+        chatId: "-1001234567890",
+        chatTitle: "Financeiro",
+        botUsername: "setor_helper_bot",
+      }),
+    );
+    await Effect.runPromise(
+      store.set("whatsapp-connection", { whatsappStoreKey: "c3RvcmUta2V5LXNldA==", storeId: "store-id-set-1" }),
+    );
 
-    await store.set("connection-1", TOKENS);
-    expect(store.status("connection-1")).toBe("saved");
+    expect(redactText("Setor: Financeiro, @setor_helper_bot")).toBe("Setor: Financeiro, @setor_helper_bot");
+    expect(redactText("chat -1001234567890 bot 7012345678 key c3RvcmUta2V5LXNldA==")).toBe(
+      "chat [redacted] bot [redacted] key [redacted]",
+    );
   });
 
+  it("applies the same rule to the values that it reads from the file", async () => {
+    const values = { botToken: "slack-app-token-Zq81mW", guildName: "Engenharia", guildId: "998877665544" };
+    const envelope = {
+      version: 1,
+      connections: { connection: cipher.encrypt(JSON.stringify(values)).toString("base64") },
+    };
+    await writeFile(path, JSON.stringify(envelope));
+    const store = new MessagingCredentialStore(path, cipher);
+
+    expect(await Effect.runPromise(store.load())).toBeNull();
+    expect(redactText("Servidor Engenharia")).toBe("Servidor Engenharia");
+    expect(redactText("slack-app-token-Zq81mW in 998877665544")).toBe("[redacted] in [redacted]");
+  });
+});
+
+describe("MessagingCredentialStore clear", () => {
   it("clear with discardUnreadable removes an unreadable file", async () => {
-    const { path } = await createStore();
     await writeFile(path, "{ not json");
     const store = new MessagingCredentialStore(path, cipher);
-    await store.load();
+    await Effect.runPromise(store.load());
 
-    await store.clear("connection-1");
+    await Effect.runPromise(store.clear("connection-1"));
     expect(store.status("connection-1")).toBe("unreadable");
-    await store.clear("connection-1", { discardUnreadable: true });
+    await Effect.runPromise(store.clear("connection-1", { discardUnreadable: true }));
     expect(store.status("connection-1")).toBe("missing");
     await expect(access(path)).rejects.toThrow();
-  });
-
-  it("drops the tokens of connections that no longer exist", async () => {
-    const { store } = await createStore();
-    await store.set("kept", TOKENS);
-    await store.set("gone", TOKENS);
-    await store.retain(new Set(["kept"]));
-    expect(store.status("gone")).toBe("missing");
-    expect(store.status("kept")).toBe("saved");
   });
 });

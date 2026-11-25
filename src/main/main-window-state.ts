@@ -1,8 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { isDynamicRecord, isNumber } from "@openbot/contracts/runtime-values";
+import { Deferred, Effect } from "effect";
 import type { Rectangle } from "electron";
 import { writeJsonFileAtomically } from "../backend/atomic-json-file";
 import { isMissingFileError } from "../backend/file-errors";
+import { type RemoteWorkflowError, remoteCall, remoteDecode, toRemoteWorkflowError } from "./remote-service-effects";
 
 interface WindowSize {
   width: number;
@@ -12,6 +14,7 @@ interface WindowSize {
 interface MainWindowPresentationTarget {
   isMinimized(): boolean;
   restore(): void;
+  hide(): void;
   show(): void;
   focus(): void;
 }
@@ -30,29 +33,24 @@ export function presentMainWindow(
   window: MainWindowPresentationTarget,
   platform: NodeJS.Platform,
   showApplication: () => void,
+  waylandWindows: boolean,
 ): void {
   if (platform === "darwin") showApplication();
-  if (window.isMinimized()) window.restore();
+  if (window.isMinimized()) {
+    window.restore();
+    if (waylandWindows) window.hide();
+  }
   window.show();
   window.focus();
 }
 
 export interface SecondLaunchState {
-  /** Windows is ending the session; nothing may start again. */
   sessionEnding: boolean;
   quitting: boolean;
   hasMainWindow: boolean;
-  /** Startup has built the services, so a closed main window can be built again. */
   started: boolean;
 }
 
-/**
- * - `present`: show and focus the main window that exists.
- * - `reopen`: build the main window again. Outside macOS, closing it destroys it.
- * - `relaunch`: start a new instance once this one exits. The launch that asked has already exited
- *   because this process holds the single-instance lock, so without this nothing would open.
- * - `ignore`: startup is still building the window and will show it.
- */
 export type SecondLaunchResponse = "present" | "reopen" | "relaunch" | "ignore";
 
 export function secondLaunchResponse(state: SecondLaunchState): SecondLaunchResponse {
@@ -62,9 +60,10 @@ export function secondLaunchResponse(state: SecondLaunchState): SecondLaunchResp
   return state.started ? "reopen" : "ignore";
 }
 
-export async function readMainWindowBounds(path: string): Promise<Rectangle | null> {
-  try {
-    const parsed = JSON.parse(await readFile(path, "utf8"));
+export const readMainWindowBounds = Effect.fn("MainWindow.readBounds")(
+  function* (path: string) {
+    const raw = yield* remoteCall(() => readFile(path, "utf8"));
+    const parsed = yield* remoteDecode(() => JSON.parse(raw));
     if (
       !isDynamicRecord(parsed) ||
       parsed.version !== 1 ||
@@ -87,50 +86,35 @@ export async function readMainWindowBounds(path: string): Promise<Rectangle | nu
       width: Math.round(parsed.width),
       height: Math.round(parsed.height),
     };
-  } catch (error) {
-    if (isMissingFileError(error) || error instanceof SyntaxError) return null;
-    throw error;
-  }
-}
+  },
+  Effect.catch((error) =>
+    isMissingFileError(error.cause) || error.cause instanceof SyntaxError ? Effect.succeed(null) : Effect.fail(error),
+  ),
+);
 
-export async function writeMainWindowBounds(path: string, bounds: Rectangle): Promise<void> {
-  await writeJsonFileAtomically(path, { version: 1, ...bounds });
-}
+export const writeMainWindowBounds = Effect.fn("MainWindow.writeBounds")(function* (path: string, bounds: Rectangle) {
+  yield* writeJsonFileAtomically(path, { version: 1, ...bounds }).pipe(toRemoteWorkflowError);
+});
 
-/**
- * The window the recorder reads. Structural, like `MainWindowPresentationTarget` above, so this
- * module still imports no Electron value and its tests still need no mock.
- */
 interface MainWindowBoundsSource {
   isDestroyed(): boolean;
   getNormalBounds(): Rectangle;
 }
 
 export interface MainWindowBoundsDependencies {
-  /**
-   * Read on every call, never captured: the `closed` handler drops the main window and a later
-   * relaunch builds a new one, so a captured reference would flush a destroyed window.
-   */
   getMainWindow: () => MainWindowBoundsSource | null;
-  /**
-   * The recorder decides *when* to persist; the caller decides *where*. Both of these are
-   * `readMainWindowBounds` / `writeMainWindowBounds` above bound to a path in production - they are
-   * parameters so that this file's own tests can observe how often a write actually happens, which
-   * is the whole point of the debounce and is not otherwise visible from outside.
-   */
-  readBounds: () => Promise<Rectangle | null>;
-  writeBounds: (bounds: Rectangle) => Promise<void>;
+  readBounds: () => Effect.Effect<Rectangle | null, RemoteWorkflowError>;
+  writeBounds: (bounds: Rectangle) => Effect.Effect<void, RemoteWorkflowError>;
   reportError: (message: string, error: unknown) => void;
 }
 
 export interface MainWindowBoundsRecorder {
-  restoreMainWindowBounds: () => Promise<void>;
+  restoreMainWindowBounds: () => Effect.Effect<void>;
   currentMainWindowBounds: () => Rectangle | null;
   rememberMainWindowBounds: (bounds: Rectangle) => void;
-  flushMainWindowBounds: () => Promise<void>;
+  flushMainWindowBounds: () => Effect.Effect<void, RemoteWorkflowError>;
 }
 
-/** Long enough that a drag-resize writes once, short enough to survive a quit that follows it. */
 const BOUNDS_WRITE_DELAY_MS = 250;
 
 export function createMainWindowBoundsRecorder({
@@ -141,46 +125,66 @@ export function createMainWindowBoundsRecorder({
 }: MainWindowBoundsDependencies): MainWindowBoundsRecorder {
   let bounds: Rectangle | null = null;
   let writeTimer: ReturnType<typeof setTimeout> | null = null;
-  let write = Promise.resolve();
+  let write: Deferred.Deferred<void, RemoteWorkflowError> | null = null;
 
-  // One shared chain, with the `.catch` before the `.then` so a rejected write is absorbed instead
-  // of poisoning every write queued after it.
-  function queueWrite(): Promise<void> {
-    if (!bounds) return write;
-    const pending = { ...bounds };
-    write = write
-      .catch((error) => reportError("Unable to save the previous main window position:", error))
-      .then(() => writeBounds(pending));
-    return write;
+  function queueWrite(): Effect.Effect<void, RemoteWorkflowError> {
+    return Effect.suspend(() => {
+      if (!bounds) return write ? Deferred.await(write) : Effect.void;
+      const pending = { ...bounds };
+      const previous = write;
+      const done = Deferred.makeUnsafe<void, RemoteWorkflowError>();
+      write = done;
+      return (previous ? Deferred.await(previous) : Effect.void).pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => reportError("Unable to save the previous main window position:", error.cause)),
+        ),
+        Effect.andThen(writeBounds(pending)),
+        Effect.onExit((exit) => Deferred.done(done, exit)),
+        Effect.uninterruptible,
+      );
+    });
   }
 
   return {
-    async restoreMainWindowBounds() {
-      bounds = await readBounds().catch((error) => {
-        reportError("Unable to restore the main window position:", error);
-        return null;
-      });
-    },
+    restoreMainWindowBounds: () =>
+      readBounds().pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            reportError("Unable to restore the main window position:", error.cause);
+            return null;
+          }),
+        ),
+        Effect.flatMap((restored) =>
+          Effect.sync(() => {
+            bounds = restored;
+          }),
+        ),
+      ),
     currentMainWindowBounds: () => bounds,
     rememberMainWindowBounds(next) {
       bounds = { ...next };
       if (writeTimer) clearTimeout(writeTimer);
       writeTimer = setTimeout(() => {
         writeTimer = null;
-        void queueWrite().catch((error) => reportError("Unable to save the main window position:", error));
+        Effect.runFork(
+          queueWrite().pipe(
+            Effect.catch((error) =>
+              Effect.sync(() => reportError("Unable to save the main window position:", error.cause)),
+            ),
+          ),
+        );
       }, BOUNDS_WRITE_DELAY_MS);
     },
-    async flushMainWindowBounds() {
-      const window = getMainWindow();
-      if (window && !window.isDestroyed()) bounds = window.getNormalBounds();
-      // Cleared before the first await: Windows session-end calls this from a synchronous handler
-      // it never awaits, so a pending timer left here can outlive the decision to quit.
-      if (writeTimer) {
-        clearTimeout(writeTimer);
-        writeTimer = null;
-      }
-      await queueWrite();
-    },
+    flushMainWindowBounds: () =>
+      Effect.suspend(() => {
+        const window = getMainWindow();
+        if (window && !window.isDestroyed()) bounds = window.getNormalBounds();
+        if (writeTimer) {
+          clearTimeout(writeTimer);
+          writeTimer = null;
+        }
+        return queueWrite();
+      }),
   };
 }
 

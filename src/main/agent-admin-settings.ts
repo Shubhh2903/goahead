@@ -1,7 +1,3 @@
-// Access and auto-approve of one agent, as this computer holds them. The local IPC handlers and the
-// `agent-admin-v1` host routes share this, so a remote admin changes the same state as the local
-// window does, through the same writers.
-
 import {
   type AgentAdminSettings,
   type AgentSummary,
@@ -10,7 +6,9 @@ import {
   type UpdateAgentAdminSettingsInput,
 } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
+import { Effect, Schema, Semaphore } from "effect";
 import type { AgentService } from "../backend/agent-service";
+import { causeHelpers } from "../backend/effect-boundary";
 import type { ApprovalAutomation } from "./approval-automation-store";
 
 export interface AgentAdminSettingsDependencies {
@@ -20,7 +18,7 @@ export interface AgentAdminSettingsDependencies {
 
 export interface AgentAdminSettingsService {
   read(agentId: string): AgentAdminSettings;
-  update(input: UpdateAgentAdminSettingsInput): Promise<AgentAdminSettings>;
+  update(input: UpdateAgentAdminSettingsInput): Effect.Effect<AgentAdminSettings, AgentSettingsFailure>;
 }
 
 export class AgentNotFoundError extends Error {}
@@ -39,16 +37,43 @@ export function createAgentAdminSettings({
     return {
       access: agent.access ?? DEFAULT_AGENT_ACCESS,
       autoApprove: agentAutoApprovalEnabled(preference, agent.id),
-      autoApproveLocked: preference.turbo,
+      autoApproveLocked: false,
     };
   }
+  const writes = Semaphore.makeUnsafe(1);
   return {
     read: (agentId) => settings(requireAgent(agentId)),
-    async update({ agentId, access, autoApprove }) {
-      let agent = requireAgent(agentId);
-      if (access !== undefined) agent = await agents.updateAgent({ agentId, access });
-      if (autoApprove !== undefined) await approvalAutomation.set({ agentId, autoApprove });
-      return settings(agent);
+    update(input) {
+      return update(input);
     },
   };
+  function update({ agentId, access, autoApprove }: UpdateAgentAdminSettingsInput) {
+    return Effect.fn("AgentAdminSettings.update")(function* () {
+      let agent = yield* Effect.try({
+        try: () => requireAgent(agentId),
+        catch: (cause) => new AgentSettingsFailure({ cause }),
+      });
+      const writeAccess = Effect.fn("AgentAdminSettings.writeAccess")(function* () {
+        if (access !== undefined) agent = yield* agents.updateAgent({ agentId, access }).pipe(toAgentSettingsFailure);
+      });
+      const writeGrant = Effect.fn("AgentAdminSettings.writeGrant")(function* () {
+        if (autoApprove !== undefined)
+          yield* approvalAutomation.set({ agentId, autoApprove }).pipe(toAgentSettingsFailure);
+      });
+      if (access === "workspace") {
+        yield* writeAccess();
+        yield* writeGrant();
+      } else {
+        yield* writeGrant();
+        yield* writeAccess();
+      }
+      return settings(agent);
+    })().pipe(writes.withPermit, Effect.uninterruptible);
+  }
 }
+
+class AgentSettingsFailure extends Schema.TaggedError<AgentSettingsFailure>()("AgentSettingsFailure", {
+  cause: Schema.Defect(),
+}) {}
+
+const { rewrap: toAgentSettingsFailure } = causeHelpers(AgentSettingsFailure);

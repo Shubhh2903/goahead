@@ -1,6 +1,3 @@
-// The custom agent payloads. `save` and `check` carry environment values, often an API key, so no
-// message here quotes a value.
-
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   type CheckCustomAgentInput,
@@ -9,6 +6,7 @@ import {
   type DeleteCustomAgentInput,
   isCustomAgentEnvName,
   isCustomAgentId,
+  isCustomAgentUsagePrompt,
   type SaveCustomAgentInput,
 } from "@openbot/contracts/ipc";
 import { isString } from "@openbot/contracts/runtime-values";
@@ -16,10 +14,6 @@ import { sourceText } from "@openbot/i18n/source";
 import { agentCommandForm } from "../../backend/acp-agent-command";
 import { isObject, requireString } from "./validation";
 
-/**
- * A saved custom agent id. The change service refuses a provider name (`isNewCustomAgentId`) only for
- * a new agent, so an agent saved under a name that a later provider took can still be edited.
- */
 function parseAgentId(value: unknown): string {
   if (!isString(value) || !isCustomAgentId(value)) throw new Error(sourceText("error.provider.customAgentIdInvalid"));
   return value;
@@ -43,7 +37,6 @@ function parseArgs(value: unknown): string[] {
   return [...value];
 }
 
-/** `value: null` keeps the saved value. An empty value is a value: some agents read a flag as set. */
 function parseEnv(value: unknown): CustomAgentEnvInput[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > CUSTOM_AGENT_LIMITS.env) {
@@ -64,6 +57,12 @@ function parseEnv(value: unknown): CustomAgentEnvInput[] {
   return env;
 }
 
+function parseUsagePrompt(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (!isCustomAgentUsagePrompt(value)) throw new Error(sourceText("error.provider.customAgentUsagePromptInvalid"));
+  return value.trim();
+}
+
 export function parseSaveCustomAgent(input: unknown): SaveCustomAgentInput {
   if (!isObject(input)) throw new Error(sourceText("error.provider.customAgentCommandInvalid"));
   return {
@@ -72,6 +71,7 @@ export function parseSaveCustomAgent(input: unknown): SaveCustomAgentInput {
     command: parseCommand(input.command),
     args: parseArgs(input.args),
     env: parseEnv(input.env),
+    usagePrompt: parseUsagePrompt(input.usagePrompt),
   };
 }
 

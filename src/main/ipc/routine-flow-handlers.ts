@@ -3,7 +3,8 @@
 // No Team API route carries them.
 
 import { sourceText } from "@openbot/i18n/source";
-import type { RoutineFlows } from "../../backend/routine-flows/routine-flows";
+import { runCauseEffect } from "../../backend/effect-boundary";
+import type { RoutineFlowsShape } from "../../backend/routine-flows/routine-flows";
 import { parseAgentId } from "./agent-inputs";
 import type { IpcGroupHandlers } from "./define-ipc-group";
 import {
@@ -16,7 +17,7 @@ import {
 import { scopedHandler } from "./scoped-handler";
 
 interface RoutineFlowIpcDependencies {
-  routineFlows: RoutineFlows;
+  routineFlows: RoutineFlowsShape;
 }
 
 function remoteUnsupported(): never {
@@ -29,27 +30,27 @@ export function routineFlowIpcHandlers({
   return {
     routineFlows: {
       canvas: scopedHandler(parseAgentId, {
-        local: (agentId) => routineFlows.canvas(agentId),
+        local: (agentId) => runCauseEffect(routineFlows.canvas(agentId)),
         remote: remoteUnsupported,
       }),
       savePosition: scopedHandler(parseSaveRoutineFlowPosition, {
-        local: (input) => routineFlows.savePosition(input),
+        local: (input) => runCauseEffect(routineFlows.savePosition(input)),
         remote: remoteUnsupported,
       }),
       removePosition: scopedHandler(parseRemoveRoutineFlowPosition, {
-        local: (input) => routineFlows.removePosition(input),
+        local: (input) => runCauseEffect(routineFlows.removePosition(input)),
         remote: remoteUnsupported,
       }),
       connect: scopedHandler(parseConnectRoutineFlow, {
-        local: (input) => routineFlows.connect(input),
+        local: (input) => runCauseEffect(routineFlows.connect(input)),
         remote: remoteUnsupported,
       }),
       disconnect: scopedHandler(parseDisconnectRoutineFlow, {
-        local: (input) => routineFlows.disconnect(input),
+        local: (input) => runCauseEffect(routineFlows.disconnect(input)),
         remote: remoteUnsupported,
       }),
       updateLink: scopedHandler(parseUpdateRoutineFlowLink, {
-        local: (input) => routineFlows.updateLink(input),
+        local: (input) => runCauseEffect(routineFlows.updateLink(input)),
         remote: remoteUnsupported,
       }),
     },

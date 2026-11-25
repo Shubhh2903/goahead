@@ -16,7 +16,7 @@ below.
   `Pick<IpcGroupHandlers, …>` return type. Do not import from `index.ts`.
 - `registerIpcHandlers` in `index.ts` only supplies dependencies and passes all groups to
   `registerIpcGroups`. The declared types check endpoint and group coverage; do not add a test for
-  this type check. Read [IPC binding rules](ipc/AGENTS.md) for the four handler forms.
+  this type check. Read [IPC binding rules](ipc/AGENTS.md) for the five handler forms.
 - `handleTrusted` and `handleTrustedWithEvent` from `trusted-ipc.ts` are the only registration
   primitives. Only `ipc/define-ipc-group.ts` may call them or use `ipcMain`.
 - Parse every argument with `payloadHandler(decode, handler)`. Use `ipc/validation.ts` primitives
@@ -51,23 +51,8 @@ Keep these implementations separate:
 
 ## Tests
 
-Wait on observable conditions, not fixed delays. A fixed delay is valid only as test input, such as
-configured latency. Use these existing barriers:
-
-| Situation | Barrier |
-| --- | --- |
-| Service status | Its emitter; see `waitFor(manager, predicate)` in `provider-runtime-manager.test.ts` |
-| Handler completion | Its returned promise, including listeners captured from `handleTrusted` |
-| Spy call without an event | `await vi.waitFor(() => expect(spy).toHaveBeenCalledOnce())` |
-| Server ready | `await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))` |
-| Debounce, backoff or polling | `vi.useFakeTimers()` and advance the timers |
-| Remote server state | `waitForServer(fixture, { state: "online" })` from `remote-server-test-harness.ts` |
-| Remote request arrival | `deferredRoute()` from that harness; await `route.arrived`, then use `route.resolve(...)` |
-
-Use `remote-server-test-harness.ts` before writing WebSocket or `fetch` fakes for `remote-server-*`.
-Pair `foo.ts` with `foo.test.ts`. Keep `team-api-server.*.test.ts` split by route domain: these tests
-use real HTTP listeners. Use `team-api-server-test-harness.ts` and read its header for required
-explicit fixture choices. Tests for `HostService` belong in `host-service.test.ts`.
+Unit tests here cover only the trust boundary and redaction (see the root `AGENTS.md`). Wait on
+observable conditions, not fixed delays.
 
 Tests that import Electron code must mock `electron`. Follow `trusted-ipc.test.ts`: use
 `vi.hoisted` for a registrations `Map`, capture listeners with `vi.mock("electron")`, and invoke them
@@ -96,6 +81,7 @@ Keep `index.ts` as the dispatcher and lifecycle module. Do not move these respon
 | `session-configuration.ts` | Renderer CSP, bundle protocol, permissions, attachment/avatar/logo protocols |
 | `renderer-forwarders.ts` | Service events sent to the renderer |
 | `ipc/*-handlers.ts` | IPC endpoints by domain |
+| `start.ts` | The entry: loads `index.ts` and reports a damaged installation. It imports no installed package except `electron` |
 
 Keep `createApplicationServices` as one function that only constructs services. Event wiring,
 `registerIpcHandlers`, `loadRenderer` and `app.on("activate")` stay in `index.ts`. Register each
@@ -115,7 +101,7 @@ error paths by importing each other.
 | Concern | Files |
 | --- | --- |
 | Stored server list and schema | `remote-server-store.ts`, `remote-server-stored-shape.ts` |
-| Team API requests | `remote-server-client.ts`, `remote-server-http.ts`, `remote-server-errors.ts`, `remote-attachment-cache.ts` |
+| Team API requests | `remote-server-client.ts`, `remote-server-http.ts`, `remote-server-errors.ts`, `remote-attachment-cache.ts`, `remote-picture-cache.ts` |
 | User-visible connection failures | `remote-server-connection-status.ts`, `remote-server-connections.ts` |
 | Events and reconnects | `remote-server-event-stream.ts`, `remote-server-event-refresh.ts` |
 | Team directory, presence, host reconciliation | `remote-team-directory.ts`, `remote-server-presence.ts`, `remote-server-host-directory.ts` |
@@ -133,7 +119,7 @@ return type enforces this without a test.
 | Shared error, dependencies, parsing, context | `http-error.ts`, `dependencies.ts`, `request-helpers.ts`, `request-context.ts` |
 | Members, invitations, sessions, presence, authenticated account routes | `route-team.ts` |
 | Screen, direct requests, browser, files | `route-remote-screen.ts`, `route-direct.ts`, `route-browser.ts`, `route-files.ts` |
-| Agent collection and the only `/v1/agents/:agentId` regex | `route-agents.ts` |
+| Agent collection and the only `/v1/agents/:agentId` route regex | `route-agents.ts` |
 | Agent sub-resources, owned by `route-agents.ts` | `route-agent-memories.ts`, `route-agent-routines.ts`, `route-agent-conversation.ts`, `route-agent-queue.ts` |
 
 Preserve these released wire rules:

@@ -8,7 +8,7 @@ export function readAppVariant(value: string | undefined, isPackaged: boolean): 
   return isPackaged ? "production" : "dev";
 }
 
-export function appIconFileName(variant: AppVariant, platform: NodeJS.Platform): string {
+function appIconFileName(variant: AppVariant, platform: NodeJS.Platform): string {
   return platform === "darwin" ? `icon-${variant}-macos-safe-area.png` : `icon-${variant}.png`;
 }
 
@@ -24,10 +24,16 @@ export function resolveAppIconPath(options: {
     : join(options.sourceRoot, "build", appIconFileName(options.variant, options.platform));
 }
 
-/**
- * The icon for a logo color. The default color is the release icon itself, so it has no file in
- * `build/logo-colors/`.
- */
+export function resolveMenuBarIconPath(options: {
+  isPackaged: boolean;
+  resourcesPath: string;
+  sourceRoot: string;
+}): string {
+  return options.isPackaged
+    ? join(options.resourcesPath, "icons", "tray", "trayTemplate.png")
+    : join(options.sourceRoot, "build", "macos", "tray", "trayTemplate.png");
+}
+
 export function resolveLogoColorIconPath(options: {
   color: AppLogoColor;
   platform: NodeJS.Platform;

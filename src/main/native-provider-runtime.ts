@@ -1,19 +1,16 @@
 import { chmod, copyFile, mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { sourceText } from "@openbot/i18n/source";
-import { parseMuseVersion, parsePiVersion } from "../backend/cli";
+import { Effect } from "effect";
+import { ANTIGRAVITY_UPDATE_ENV, COPILOT_ENV, NATIVE_VERSION_PARSERS } from "../backend/cli";
 import { sha256File } from "../backend/file-hash";
 import { assertSafeArchive, extractArchive, extractZipTree, rejectNonRegularFiles } from "./provider-runtime-archive";
 import type { ProviderRuntimeDescriptor, ProviderStageContext } from "./provider-runtime-descriptors";
+import { ProviderRuntimeFailure, runtimeIO } from "./provider-runtime-effects";
 
-/**
- * Pi and Muse downloads share staging and verification, not their wire protocols.
- *
- * Pi publishes an archive with one `pi` folder (a zip with the files at its top level on Windows),
- * which becomes `bin`. Muse publishes one bare executable, which is copied to `bin`. A pinned install
- * is checked file by file against the hashes in `native-runtime.lock.json`.
- */
-export function nativeProviderRuntime(runtime: "pi" | "muse"): ProviderRuntimeDescriptor {
+export function nativeProviderRuntime(
+  runtime: "pi" | "muse" | "devin" | "copilot" | "mistral" | "antigravity",
+): ProviderRuntimeDescriptor {
   return {
     runtime,
     spec: (target, lock) => {
@@ -32,30 +29,67 @@ export function nativeProviderRuntime(runtime: "pi" | "muse"): ProviderRuntimeDe
         executableName: artifact.executable,
       };
     },
-    stage: async ({ spec, downloadedPath, staging }: ProviderStageContext) => {
+    stage: Effect.fn("NativeProvider.stage")(function* ({ spec, downloadedPath, staging }: ProviderStageContext) {
       const message = sourceText("error.provider.nativeArchiveInvalid");
-      const bin = join(staging, "bin");
       if (runtime === "muse") {
-        await mkdir(bin, { recursive: true });
-        await copyFile(downloadedPath, join(bin, spec.executableName));
-      } else if (spec.target === "win32-x64") {
-        await mkdir(bin, { recursive: true });
-        await extractZipTree(downloadedPath, bin, "", message);
+        yield* runtimeIO(() => mkdir(join(staging, "bin"), { recursive: true }));
+        yield* runtimeIO(() => copyFile(downloadedPath, join(staging, "bin", spec.executableName)));
+      } else if (runtime === "copilot" || runtime === "antigravity") {
+        const bin = join(staging, "bin");
+        yield* runtimeIO(() => mkdir(bin, { recursive: true }));
+        if (spec.target === "win32-x64") {
+          yield* extractZipTree(downloadedPath, bin, [spec.executableName], message);
+        } else {
+          yield* assertSafeArchive(downloadedPath, [spec.executableName], message);
+          yield* extractArchive(downloadedPath, bin);
+          yield* rejectNonRegularFiles(bin);
+        }
+      } else if (runtime === "mistral") {
+        const bin = join(staging, "bin");
+        yield* runtimeIO(() => mkdir(bin, { recursive: true }));
+        const roots = [spec.executableName, "_internal"];
+        if (spec.target === "win32-x64") {
+          yield* extractZipTree(downloadedPath, bin, roots, message);
+        } else {
+          yield* assertSafeArchive(downloadedPath, roots, message, { links: true });
+          yield* extractArchive(downloadedPath, bin);
+          yield* rejectNonRegularFiles(bin, { links: true });
+        }
+      } else if (runtime === "devin") {
+        if (spec.target === "win32-x64") {
+          yield* extractZipTree(downloadedPath, staging, ["bin", "share"], message);
+        } else {
+          yield* assertSafeArchive(downloadedPath, ["bin", "share"], message);
+          yield* extractArchive(downloadedPath, staging);
+          yield* rejectNonRegularFiles(staging);
+        }
       } else {
-        await assertSafeArchive(downloadedPath, ["pi"], message);
-        await extractArchive(downloadedPath, staging);
-        await rejectNonRegularFiles(join(staging, "pi"));
-        await rename(join(staging, "pi"), bin);
-      }
-      if (spec.target !== "win32-x64") await chmod(join(bin, spec.executableName), 0o755);
-    },
-    verify: async (root, spec, lock) => {
-      for (const [path, expected] of Object.entries(lock[runtime].artifacts[spec.target].files)) {
-        if ((await sha256File(join(root, path))) !== expected) {
-          throw new Error(sourceText("error.provider.nativeChecksum"));
+        if (spec.target === "win32-x64") {
+          yield* runtimeIO(() => mkdir(join(staging, "bin"), { recursive: true }));
+          yield* extractZipTree(downloadedPath, join(staging, "bin"), "", message);
+        } else {
+          yield* assertSafeArchive(downloadedPath, ["pi"], message);
+          yield* extractArchive(downloadedPath, staging);
+        }
+        if (spec.target !== "win32-x64") {
+          yield* rejectNonRegularFiles(join(staging, "pi"));
+          yield* runtimeIO(() => rename(join(staging, "pi"), join(staging, "bin")));
         }
       }
-    },
-    parseVersion: runtime === "pi" ? parsePiVersion : parseMuseVersion,
+      if (spec.target !== "win32-x64") yield* runtimeIO(() => chmod(join(staging, "bin", spec.executableName), 0o755));
+    }),
+    verify: Effect.fn("NativeProvider.verify")(function* (root, spec, lock) {
+      for (const [path, expected] of Object.entries(lock[runtime].artifacts[spec.target].files)) {
+        const actual = yield* sha256File(join(root, path)).pipe(
+          Effect.mapError(({ cause }) => new ProviderRuntimeFailure({ cause })),
+        );
+        if (actual !== expected)
+          return yield* new ProviderRuntimeFailure({ cause: new Error(sourceText("error.provider.nativeChecksum")) });
+      }
+    }),
+    parseVersion: NATIVE_VERSION_PARSERS[runtime],
+    ...(runtime === "copilot" ? { versionEnvironment: COPILOT_ENV } : {}),
+    ...(runtime === "antigravity" ? { versionEnvironment: ANTIGRAVITY_UPDATE_ENV } : {}),
+    ...(runtime === "antigravity" ? { legacyExecutableNames: ["agy_acp_server.par", "agy_acp_server.exe"] } : {}),
   };
 }

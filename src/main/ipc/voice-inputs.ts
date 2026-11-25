@@ -1,10 +1,40 @@
 import {
+  isCodexLiveVoice,
+  isDictationKeyProvider,
+  isElevenLabsSpeechVoice,
+  isSpeechKeyProvider,
+  isSpeechLanguage,
+  isSpeechModelId,
+  isSpeechSpeed,
+  isSpeechVoice,
+  isVoiceLanguage,
   isVoiceModelId,
+  isVoiceServerRoutes,
+  isVoiceTurnPause,
+  isXaiSpeechVoice,
+  SPEECH_LIMITS,
+  type SpeechApiKeyInput,
+  type SpeechInput,
+  type SpeechSettings,
+  VOICE_API_KEY_MAX_LENGTH,
   VOICE_AUDIO_LIMITS,
+  VOICE_LIVE_LIMITS,
+  VOICE_SERVER_LIMITS,
+  VOICE_STREAM_LIMITS,
+  type VoiceApiKeyInput,
+  type VoiceLiveStart,
+  type VoiceLiveStop,
   type VoiceModelRequest,
+  type VoiceServerConnection,
+  type VoiceServerSave,
   type VoiceSettings,
+  type VoiceStream,
+  type VoiceStreamAudio,
   type VoiceTranscriptionInput,
 } from "@openbot/contracts/ipc";
+import { isString } from "@openbot/contracts/runtime-values";
+import { sourceText } from "@openbot/i18n/source";
+import { parseBaseUrl } from "./custom-provider-inputs";
 import { isObject } from "./validation";
 
 export function parseVoiceTranscription(input: unknown): VoiceTranscriptionInput {
@@ -33,6 +63,22 @@ export function parseVoiceTranscription(input: unknown): VoiceTranscriptionInput
   return { audio };
 }
 
+const EBML_MAGIC = [0x1a, 0x45, 0xdf, 0xa3];
+
+export function parseVoiceRecording(input: unknown): VoiceTranscriptionInput {
+  if (!isObject(input) || !(input.audio instanceof Uint8Array)) {
+    throw new Error("Voice audio is required.");
+  }
+  const audio = input.audio;
+  if (audio.byteLength <= EBML_MAGIC.length || audio.byteLength > VOICE_AUDIO_LIMITS.maximumRecordingBytes) {
+    throw new Error("Voice audio has an invalid length.");
+  }
+  if (EBML_MAGIC.some((byte, index) => audio[index] !== byte)) {
+    throw new Error("Voice audio must be a WebM file.");
+  }
+  return { audio };
+}
+
 function ascii(value: Uint8Array, start: number, end: number): string {
   return String.fromCharCode(...value.subarray(start, end));
 }
@@ -43,8 +89,125 @@ export function parseVoiceModelRequest(input: unknown): VoiceModelRequest {
 }
 
 export function parseVoiceSettings(input: unknown): VoiceSettings {
-  if (!isObject(input) || !isVoiceModelId(input.modelId)) {
-    throw new Error("Voice settings need a known model.");
+  if (!isObject(input) || !isVoiceModelId(input.modelId) || !isVoiceLanguage(input.language)) {
+    throw new Error("Voice settings need a known model and language.");
   }
-  return { modelId: input.modelId };
+  return { modelId: input.modelId, language: input.language };
+}
+
+export function parseVoiceApiKey(input: unknown): VoiceApiKeyInput {
+  if (!isObject(input) || !isDictationKeyProvider(input.provider)) throw new Error("A dictation provider is required.");
+  return { provider: input.provider, key: parseApiKey(input.key) };
+}
+
+function parseApiKey(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string" || !value.trim()) throw new Error(sourceText("error.provider.keyRequired"));
+  if (value.length > VOICE_API_KEY_MAX_LENGTH) throw new Error(sourceText("error.provider.keyTooLong"));
+  const key = value.trim();
+  if (!/^[\x21-\x7e]+$/u.test(key)) throw new Error(sourceText("error.provider.keyInvalidCharacters"));
+  return key;
+}
+
+export function parseSpeechApiKey(input: unknown): SpeechApiKeyInput {
+  if (!isObject(input) || !isSpeechKeyProvider(input.provider)) throw new Error("A speech provider is required.");
+  return { provider: input.provider, key: parseApiKey(input.key) };
+}
+
+export function parseVoiceStream(input: unknown): VoiceStream {
+  if (!isObject(input) || typeof input.streamId !== "string" || !input.streamId || input.streamId.length > 64)
+    throw new Error("A voice stream is required.");
+  return { streamId: input.streamId };
+}
+
+export function parseVoiceStreamAudio(input: unknown): VoiceStreamAudio {
+  const { streamId } = parseVoiceStream(input);
+  if (!isObject(input) || !(input.pcm instanceof Uint8Array)) throw new Error("Voice audio is required.");
+  if (input.pcm.byteLength % 2 !== 0 || input.pcm.byteLength > VOICE_STREAM_LIMITS.maximumChunkBytes)
+    throw new Error("Voice audio has an invalid length.");
+  return { streamId, pcm: input.pcm };
+}
+
+export function parseSpeechSettings(input: unknown): SpeechSettings {
+  if (
+    !isObject(input) ||
+    typeof input.readReplies !== "boolean" ||
+    !isSpeechModelId(input.modelId) ||
+    !isSpeechVoice(input.voice) ||
+    !isElevenLabsSpeechVoice(input.elevenLabsVoice) ||
+    !isXaiSpeechVoice(input.xaiVoice) ||
+    !isSpeechSpeed(input.speed) ||
+    typeof input.codexLive !== "boolean" ||
+    !(input.codexLiveVoice === null || isCodexLiveVoice(input.codexLiveVoice)) ||
+    !isVoiceTurnPause(input.turnPauseMs)
+  ) {
+    throw new Error("Speech settings need a known model, voice, speed and pause.");
+  }
+  return {
+    readReplies: input.readReplies,
+    modelId: input.modelId,
+    voice: input.voice,
+    elevenLabsVoice: input.elevenLabsVoice,
+    xaiVoice: input.xaiVoice,
+    speed: input.speed,
+    codexLive: input.codexLive,
+    codexLiveVoice: input.codexLiveVoice,
+    turnPauseMs: input.turnPauseMs,
+  };
+}
+
+export function parseVoiceLiveStart(input: unknown): VoiceLiveStart {
+  if (!isObject(input) || !isString(input.agentId) || !input.agentId || !isString(input.sdp) || !input.sdp)
+    throw new Error("Live voice needs an agent and an offer.");
+  if (input.sdp.length > VOICE_LIVE_LIMITS.maximumSdpLength) throw new Error("The live voice offer is too long.");
+  return { agentId: input.agentId, sdp: input.sdp };
+}
+
+export function parseVoiceLiveStop(input: unknown): VoiceLiveStop {
+  if (!isObject(input) || !isString(input.sessionId) || !input.sessionId)
+    throw new Error("Live voice needs a session.");
+  return { sessionId: input.sessionId };
+}
+
+export function parseSpeechInput(input: unknown): SpeechInput {
+  if (
+    !isObject(input) ||
+    typeof input.text !== "string" ||
+    !input.text.trim() ||
+    !(input.language === null || isSpeechLanguage(input.language))
+  )
+    throw new Error("Speech needs text and a known language.");
+  if (input.text.length > SPEECH_LIMITS.maximumTextLength) throw new Error("The speech text is too long.");
+  return { text: input.text, language: input.language };
+}
+
+export function parseVoiceServerConnection(input: unknown): VoiceServerConnection {
+  if (!isObject(input)) throw new Error("A voice server is required.");
+  const address = parseBaseUrl(input.address);
+  if (input.apiKey !== null && input.apiKey !== undefined && !isString(input.apiKey))
+    throw new Error("The API key is not text.");
+  const apiKey = isString(input.apiKey) ? input.apiKey.trim() || null : null;
+  if (apiKey && apiKey.length > VOICE_SERVER_LIMITS.apiKey) throw new Error(sourceText("error.provider.apiKeyTooLong"));
+  if (apiKey && !/^[\x21-\x7e]+$/u.test(apiKey)) throw new Error(sourceText("error.provider.keyInvalidCharacters"));
+  return { address, apiKey };
+}
+
+export function parseVoiceServerSave(input: unknown): VoiceServerSave {
+  if (!isObject(input)) throw new Error("A voice server is required.");
+  if (input.server === null) return { server: null };
+  if (!isObject(input.server) || !isVoiceServerRoutes(input.server.routes))
+    throw new Error("A voice server needs valid routes.");
+  const { routes } = input.server;
+  return {
+    server: {
+      ...parseVoiceServerConnection(input.server),
+      routes: {
+        dictation: routes.dictation,
+        speech: routes.speech,
+        transcriptionModel: routes.transcriptionModel,
+        speechModel: routes.speechModel,
+        voice: routes.voice,
+      },
+    },
+  };
 }

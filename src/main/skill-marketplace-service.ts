@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
+import { MANAGED_SKILL_FOLDERS } from "@openbot/contracts/agent-providers";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
   AgentSummary,
   AgentTemplateSkill,
+  GithubSkillSource,
   InstalledSkill,
   InstallSkillInput,
   MarketplaceAgentSkill,
@@ -21,21 +23,40 @@ import {
   AGENT_TEMPLATE_LIMITS,
   decodeMarketplaceSkillDetail,
   decodeMarketplaceSkillPage,
+  isGithubSkillId,
+  isOtherGithubCommit,
   isSkillCategory,
   marketplaceQueryParams,
+  parseGithubSkillId,
   SKILL_DESCRIPTION_MAX_LENGTH,
 } from "@openbot/contracts/ipc";
 import { isBoolean, isDynamicRecord, isNumber, isOneOf, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
+import { Cache, Effect, Exit, Result, Schema, Semaphore } from "effect";
 import { parse as parseYaml } from "yaml";
-import { writeFileAtomically } from "../backend/atomic-json-file";
+import type { AgentLifecycleFailed } from "../backend/agent-service";
+import { isHeldTargetError, writeFileAtomically } from "../backend/atomic-json-file";
+import { causeHelpers } from "../backend/effect-boundary";
+import { toArrayBuffer } from "./agent-marketplace-service";
 import type { CentralAuthManager } from "./central-auth-manager";
-import type { LocalSkillLibrary } from "./local-skill-library";
-import { listManagedSkillsForChat, MANAGED_SKILL_FOLDERS } from "./managed-skill-service";
-import { listFolderSkills } from "./skill-folder-discovery";
-import { archiveDirectory, inspectArchive, inspectSkillMarkdown, normalizedFiles } from "./skill-package";
+import type { GithubSkillSourceReader } from "./github-skill-source";
+import { type LocalSkillLibrary, quotedSkillMarkdown } from "./local-skill-library";
+import { listManagedSkillsForChat, MANAGED_SKILL_SLUGS } from "./managed-skill-service";
+import { listFolderSkills, listHomeFolderSkills } from "./skill-folder-discovery";
+import {
+  archiveDirectory,
+  FINDER_METADATA_FILE,
+  inspectArchive,
+  inspectSkillMarkdown,
+  isRuntimeCacheFile,
+  isRuntimeCacheFolder,
+  normalizedFiles,
+  readSkillArchive,
+} from "./skill-package";
 
 const DRAFT_LIFETIME_MS = 30 * 60 * 1000;
+const CATALOG_VERSION_LIFETIME = "60 seconds";
+const SKILL_FOLDER_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
 interface Draft {
   bytes: Uint8Array;
@@ -53,6 +74,7 @@ interface LockEntry {
   files: Record<string, string>;
   enabled?: boolean;
   description?: string;
+  folders?: string[];
 }
 interface SkillsLock {
   version: 1;
@@ -61,231 +83,354 @@ interface SkillsLock {
 
 export class SkillMarketplaceService {
   readonly #drafts = new Map<string, Draft>();
-  readonly #writes = new Map<string, Promise<void>>();
+  readonly #writes = new Map<string, { gate: Semaphore.Semaphore; users: number }>();
+  readonly #catalogVersions = Effect.runSync(
+    Cache.makeWith((skillId: string) => this.get(skillId).pipe(Effect.map((detail) => detail.version)), {
+      capacity: 1_000,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? CATALOG_VERSION_LIFETIME : 0),
+    }),
+  );
 
   constructor(
-    private readonly auth: CentralAuthManager,
+    private readonly auth: Pick<CentralAuthManager, "requestAuthorized" | "downloadAuthorized" | "resolveApiUrl">,
     private readonly listAgents: () => AgentSummary[],
-    private readonly refreshAgentRuntime: (agentId: string) => Promise<void> = async () => undefined,
+    private readonly refreshAgentRuntime: (agentId: string) => Effect.Effect<void, AgentLifecycleFailed> = () =>
+      Effect.void,
     readonly localLibrary?: LocalSkillLibrary,
+    private readonly github?: GithubSkillSourceReader,
   ) {}
 
-  async list(query: MarketplaceSkillQuery = {}): Promise<MarketplaceSkillPage> {
-    const params = marketplaceQueryParams(query);
-    const page = await this.auth.requestAuthorized(
-      `/v1/skills/?${params}`,
-      { method: "GET" },
-      decodeMarketplaceSkillPage,
-    );
-    return {
-      ...page,
-      skills: page.skills.map((skill) => ({
-        ...skill,
-        iconUrl: this.absoluteUrl(skill.iconUrl),
-        creatorAvatarUrl: this.absoluteUrl(skill.creatorAvatarUrl ?? null),
-      })),
-    };
+  readGithub(link: string): Effect.Effect<GithubSkillSource, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<GithubSkillSource, SkillMarketplaceFailure> {
+      const github = yield* skillSync(() => this.requireGithub());
+      return yield* github.read(link).pipe(toSkillMarketplaceFailure);
+    });
   }
 
-  async get(skillId: string): Promise<MarketplaceSkillDetail> {
-    if (skillId.startsWith("local-skill-")) return this.requireLocalLibrary().get(skillId);
-    const detail = await this.auth.requestAuthorized(
-      `/v1/skills/${encodeURIComponent(skillId)}`,
-      { method: "GET" },
-      decodeMarketplaceSkillDetail,
-    );
-    return {
-      ...detail,
-      iconUrl: this.absoluteUrl(detail.iconUrl),
-      creatorAvatarUrl: this.absoluteUrl(detail.creatorAvatarUrl ?? null),
-    };
+  list(query: MarketplaceSkillQuery = {}): Effect.Effect<MarketplaceSkillPage, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<MarketplaceSkillPage, SkillMarketplaceFailure> {
+      const params = marketplaceQueryParams(query);
+      const page = yield* this.auth
+        .requestAuthorized(`/v1/skills/?${params}`, { method: "GET" }, decodeMarketplaceSkillPage)
+        .pipe(toSkillMarketplaceFailure);
+      return {
+        ...page,
+        skills: page.skills.map((skill) => ({
+          ...skill,
+          iconUrl: this.absoluteUrl(skill.iconUrl),
+          creatorAvatarUrl: this.absoluteUrl(skill.creatorAvatarUrl ?? null),
+        })),
+      };
+    });
   }
 
-  async listMine(): Promise<SkillSubmission[]> {
-    const submissions = await this.auth.requestAuthorized("/v1/skills/mine", { method: "GET" }, decodeSubmissions);
-    return submissions.map((item) => ({ ...item, iconUrl: this.absoluteUrl(item.iconUrl) }));
+  get(skillId: string): Effect.Effect<MarketplaceSkillDetail, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<MarketplaceSkillDetail, SkillMarketplaceFailure> {
+      if (skillId.startsWith("local-skill-"))
+        return yield* this.requireLocalLibrary().get(skillId).pipe(toSkillMarketplaceFailure);
+      if (isGithubSkillId(skillId))
+        return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.notFound")) });
+      const detail = yield* this.auth
+        .requestAuthorized(`/v1/skills/${encodeURIComponent(skillId)}`, { method: "GET" }, decodeMarketplaceSkillDetail)
+        .pipe(toSkillMarketplaceFailure);
+      return {
+        ...detail,
+        iconUrl: this.absoluteUrl(detail.iconUrl),
+        creatorAvatarUrl: this.absoluteUrl(detail.creatorAvatarUrl ?? null),
+      };
+    });
   }
 
-  async stage(path: string): Promise<SkillPackagePreview> {
-    this.expireDrafts();
-    const stats = await lstat(path);
-    const bytes = stats.isDirectory() ? await archiveDirectory(path) : new Uint8Array(await readFile(path));
-    const inspected = inspectArchive(bytes);
-    const draftId = randomUUID();
-    const preview = { draftId, ...inspected, size: bytes.byteLength };
-    this.#drafts.set(draftId, { bytes, preview, createdAt: Date.now() });
-    return preview;
+  getBySlug(slug: string): Effect.Effect<MarketplaceSkillDetail, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<MarketplaceSkillDetail, SkillMarketplaceFailure> {
+      const detail = yield* this.auth
+        .requestAuthorized(
+          `/v1/skills/slug/${encodeURIComponent(slug)}`,
+          { method: "GET" },
+          decodeMarketplaceSkillDetail,
+        )
+        .pipe(toSkillMarketplaceFailure);
+      return {
+        ...detail,
+        iconUrl: this.absoluteUrl(detail.iconUrl),
+        creatorAvatarUrl: this.absoluteUrl(detail.creatorAvatarUrl ?? null),
+      };
+    });
   }
 
-  async submit(input: SubmitSkillInput): Promise<SkillSubmission> {
-    if (!isSkillCategory(input.category)) throw new Error("Unknown skill category.");
-    const draft = this.#drafts.get(input.draftId);
-    if (!draft || Date.now() - draft.createdAt > DRAFT_LIFETIME_MS)
-      throw new Error(sourceText("error.skill.draftExpired"));
-    const form = new FormData();
-    form.set("category", input.category);
-    if (input.showCreatorAvatar !== undefined) form.set("showCreatorAvatar", String(input.showCreatorAvatar));
-    if (input.skillId) form.set("skillId", input.skillId);
-    form.set(
-      "bundle",
-      new Blob([toArrayBuffer(draft.bytes)], { type: "application/zip" }),
-      `${draft.preview.slug}.zip`,
-    );
-    if (input.icon)
-      form.set("icon", new Blob([toArrayBuffer(input.icon.bytes)], { type: input.icon.mimeType }), "icon");
-    const submission = await this.auth.requestAuthorized(
-      "/v1/skills/",
-      { method: "POST", body: form },
-      decodeSubmission,
-      30_000,
-    );
-    this.#drafts.delete(input.draftId);
-    return { ...submission, iconUrl: this.absoluteUrl(submission.iconUrl) };
+  listMine(): Effect.Effect<SkillSubmission[], SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<SkillSubmission[], SkillMarketplaceFailure> {
+      const submissions = yield* this.auth
+        .requestAuthorized("/v1/skills/mine", { method: "GET" }, decodeSubmissions)
+        .pipe(toSkillMarketplaceFailure);
+      return submissions.map((item) => ({ ...item, iconUrl: this.absoluteUrl(item.iconUrl) }));
+    });
   }
 
-  async listInstalled(agentId: string): Promise<InstalledSkill[]> {
-    const agent = this.requireAgent(agentId);
-    const lock = await readLock(agent.workspacePath);
-    const installed: InstalledSkill[] = [];
-    for (const entry of Object.values(lock.skills)) {
-      let availableVersion = entry.version;
-      try {
-        availableVersion = (await this.get(entry.skillId)).version;
-      } catch {
-        /* Keep local state usable offline. */
+  stage(path: string): Effect.Effect<SkillPackagePreview, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<SkillPackagePreview, SkillMarketplaceFailure> {
+      this.expireDrafts();
+      const stats = yield* skillIO(() => lstat(path));
+      const bytes = stats.isDirectory()
+        ? yield* archiveDirectory(path).pipe(Effect.mapError(({ cause }) => new SkillMarketplaceFailure({ cause })))
+        : new Uint8Array(yield* skillIO(() => readFile(path)));
+      const inspected = yield* skillSync(() => inspectArchive(bytes));
+      const draftId = randomUUID();
+      const preview = { draftId, ...inspected, size: bytes.byteLength };
+      this.#drafts.set(draftId, { bytes, preview, createdAt: Date.now() });
+      return preview;
+    });
+  }
+
+  submit(input: SubmitSkillInput): Effect.Effect<SkillSubmission, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<SkillSubmission, SkillMarketplaceFailure> {
+      if (!isSkillCategory(input.category))
+        return yield* new SkillMarketplaceFailure({ cause: new Error("Unknown skill category.") });
+      const draft = this.#drafts.get(input.draftId);
+      if (!draft || Date.now() - draft.createdAt > DRAFT_LIFETIME_MS)
+        return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.draftExpired")) });
+      const form = new FormData();
+      form.set("category", input.category);
+      if (input.showCreatorAvatar !== undefined) form.set("showCreatorAvatar", String(input.showCreatorAvatar));
+      if (input.skillId) form.set("skillId", input.skillId);
+      form.set(
+        "bundle",
+        new Blob([toArrayBuffer(draft.bytes)], { type: "application/zip" }),
+        `${draft.preview.slug}.zip`,
+      );
+      if (input.icon)
+        form.set("icon", new Blob([toArrayBuffer(input.icon.bytes)], { type: input.icon.mimeType }), "icon");
+      const submission = yield* this.auth
+        .requestAuthorized("/v1/skills/", { method: "POST", body: form }, decodeSubmission, 30_000)
+        .pipe(toSkillMarketplaceFailure);
+      this.#drafts.delete(input.draftId);
+      return { ...submission, iconUrl: this.absoluteUrl(submission.iconUrl) };
+    });
+  }
+
+  listInstalled(agentId: string): Effect.Effect<InstalledSkill[], SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<InstalledSkill[], SkillMarketplaceFailure> {
+      const agent = yield* skillSync(() => this.requireAgent(agentId));
+      const lock = yield* readLock(agent.workspacePath);
+      const installed: InstalledSkill[] = [];
+      for (const entry of Object.values(lock.skills)) {
+        let availableVersion = entry.version;
+        const newest = isGithubSkillId(entry.skillId)
+          ? undefined
+          : yield* Effect.result(this.#availableVersion(entry.skillId));
+        if (newest && Result.isSuccess(newest)) availableVersion = newest.success;
+        const state = yield* installedState(agent.workspacePath, entry);
+        installed.push(
+          toInstalledSkill(
+            entry,
+            availableVersion,
+            state,
+            yield* installedSkillDescription(agent.workspacePath, entry),
+          ),
+        );
       }
-      const state = await installedState(agent.workspacePath, entry);
-      installed.push(
-        toInstalledSkill(entry, availableVersion, state, await installedSkillDescription(agent.workspacePath, entry)),
+      installed.push(...(yield* listFolderSkills(agent, lockedSlugs(lock)).pipe(toSkillMarketplaceFailure)));
+      return installed.sort((a, b) => a.name.localeCompare(b.name));
+    });
+  }
+
+  lockedSkillIds(agentId: string): Effect.Effect<string[], SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<string[], SkillMarketplaceFailure> {
+      const agent = yield* skillSync(() => this.requireAgent(agentId));
+      return Object.keys((yield* readLock(agent.workspacePath)).skills);
+    });
+  }
+
+  installedRevision(agentId: string, skillId: string): Effect.Effect<number | null, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<number | null, SkillMarketplaceFailure> {
+      const agent = yield* skillSync(() => this.requireAgent(agentId));
+      return (yield* readLock(agent.workspacePath)).skills[skillId]?.version ?? null;
+    });
+  }
+
+  #availableVersion(skillId: string): Effect.Effect<number, SkillMarketplaceFailure> {
+    return skillId.startsWith("local-skill-")
+      ? this.get(skillId).pipe(Effect.map((detail) => detail.version))
+      : Cache.get(this.#catalogVersions, skillId);
+  }
+
+  listInstalledForChatTags(
+    agentId: string,
+    options: { problems?: boolean } = {},
+  ): Effect.Effect<InstalledSkill[], SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<InstalledSkill[], SkillMarketplaceFailure> {
+      const agent = yield* skillSync(() => this.requireAgent(agentId));
+      const lock = yield* readLock(agent.workspacePath);
+      const installed: InstalledSkill[] = yield* listManagedSkillsForChat(agent).pipe(toSkillMarketplaceFailure);
+      const parents = new Set(Object.values(lock.skills).map((entry) => entry.slug));
+      for (const skill of yield* listFolderSkills(agent, parents).pipe(toSkillMarketplaceFailure))
+        if (!skill.problem || options.problems) installed.push(skill);
+      for (const entry of Object.values(lock.skills)) {
+        if (entry.enabled === false) continue;
+        installed.push(
+          toInstalledSkill(
+            entry,
+            entry.version,
+            yield* installedState(agent.workspacePath, entry),
+            yield* installedSkillDescription(agent.workspacePath, entry),
+          ),
+        );
+      }
+      const usableSlugs = new Set(installed.flatMap((skill) => (skill.problem ? [] : [skill.slug])));
+      const home = yield* listHomeFolderSkills(usableSlugs);
+      const homeSlugs = new Set(home.map((skill) => skill.slug));
+      return [...installed.filter((skill) => !(skill.problem && homeSlugs.has(skill.slug))), ...home].sort((a, b) =>
+        a.name.localeCompare(b.name),
       );
-    }
-    installed.push(...(await listFolderSkills(agent, lockedSlugs(lock))));
-    return installed.sort((a, b) => a.name.localeCompare(b.name));
+    });
   }
 
-  async listInstalledForChatTags(agentId: string): Promise<InstalledSkill[]> {
-    const agent = this.requireAgent(agentId);
-    const lock = await readLock(agent.workspacePath);
-    const installed: InstalledSkill[] = await listManagedSkillsForChat(agent);
-    for (const skill of await listFolderSkills(agent, lockedSlugs(lock))) if (!skill.problem) installed.push(skill);
-    for (const entry of Object.values(lock.skills)) {
-      if (entry.enabled === false) continue;
-      installed.push(
-        toInstalledSkill(
-          entry,
-          entry.version,
-          await installedState(agent.workspacePath, entry),
-          await installedSkillDescription(agent.workspacePath, entry),
-        ),
-      );
-    }
-    return installed.sort((a, b) => a.name.localeCompare(b.name));
+  install(input: InstallSkillInput): Effect.Effect<InstalledSkill, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<InstalledSkill, SkillMarketplaceFailure> {
+      const address = parseGithubSkillId(input.skillId);
+      if (address) {
+        const agent = yield* skillSync(() => this.requireAgent(input.agentId));
+        const github = yield* skillSync(() => this.requireGithub());
+        const { detail, bundle } = yield* github.download(address).pipe(toSkillMarketplaceFailure);
+        return yield* this.installResolved(agent, detail, bundle, input.replaceModified);
+      }
+      if (isGithubSkillId(input.skillId))
+        return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.notFound")) });
+      if (input.versionId) {
+        if (input.skillId.startsWith("local-skill-"))
+          return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.localHasNoVersion")) });
+        return yield* this.installVersion({ ...input, versionId: input.versionId });
+      }
+      const agent = yield* skillSync(() => this.requireAgent(input.agentId));
+      const detail = yield* this.get(input.skillId);
+      const bundle = input.skillId.startsWith("local-skill-")
+        ? yield* this.requireLocalLibrary().bundle(input.skillId, detail.version).pipe(toSkillMarketplaceFailure)
+        : yield* this.auth
+            .downloadAuthorized(`/v1/skills/${encodeURIComponent(input.skillId)}/content`)
+            .pipe(toSkillMarketplaceFailure);
+      if (!input.skillId.startsWith("local-skill-"))
+        yield* Cache.set(this.#catalogVersions, input.skillId, detail.version);
+      return yield* this.installResolved(agent, detail, bundle, input.replaceModified);
+    });
   }
 
-  async install(input: InstallSkillInput): Promise<InstalledSkill> {
-    // A pinned version is served by the versions endpoint, which a local skill has no entry in: a
-    // local skill is held on this computer and has no published version to ask for.
-    if (input.versionId) {
-      if (input.skillId.startsWith("local-skill-")) throw new Error(sourceText("error.skill.localHasNoVersion"));
-      return this.installVersion({ ...input, versionId: input.versionId });
-    }
-    const agent = this.requireAgent(input.agentId);
-    const detail = await this.get(input.skillId);
-    const bundle = input.skillId.startsWith("local-skill-")
-      ? await this.requireLocalLibrary().bundle(input.skillId, detail.version)
-      : await this.auth.downloadAuthorized(`/v1/skills/${encodeURIComponent(input.skillId)}/content`);
-    return this.installResolved(agent, detail, bundle, input.replaceModified);
-  }
-
-  async installVersion(input: {
+  installVersion(input: {
     agentId: string;
     skillId: string;
     versionId: string;
     replaceModified?: boolean;
-  }): Promise<InstalledSkill> {
-    const agent = this.requireAgent(input.agentId);
-    const detail = await this.auth.requestAuthorized(
-      `/v1/skills/${encodeURIComponent(input.skillId)}/versions/${encodeURIComponent(input.versionId)}`,
-      { method: "GET" },
-      decodeMarketplaceSkillDetail,
-    );
-    const bundle = await this.auth.downloadAuthorized(
-      `/v1/skills/${encodeURIComponent(input.skillId)}/versions/${encodeURIComponent(input.versionId)}/content`,
-    );
-    return this.installResolved(agent, detail, bundle, input.replaceModified);
-  }
-
-  async listPublishable(agentId: string): Promise<MarketplaceAgentSkill[]> {
-    const agent = this.requireAgent(agentId);
-    const lock = await readLock(agent.workspacePath);
-    const result: MarketplaceAgentSkill[] = [];
-    for (const entry of Object.values(lock.skills)) {
-      if (entry.enabled === false) continue;
-      if (entry.skillId.startsWith("local-skill-")) throw new Error(sourceText("error.skill.publishLocalFirst"));
-      result.push(await this.publishedReference(agent, entry));
-    }
-    return result.sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  /**
-   * The skills an agent template carries. A marketplace skill is a reference to its exact version;
-   * a local or workspace skill is its `SKILL.md` text only, never its other files.
-   */
-  async listTemplateSkills(agentId: string): Promise<AgentTemplateSkill[]> {
-    const agent = this.requireAgent(agentId);
-    const lock = await readLock(agent.workspacePath);
-    const result: AgentTemplateSkill[] = [];
-    for (const entry of Object.values(lock.skills)) {
-      if (entry.enabled === false) continue;
-      if (entry.skillId.startsWith("local-skill-")) {
-        const [directory] = targetDirectories(agent.workspacePath, entry.slug);
-        result.push(await embeddedSkill(join(directory, "SKILL.md"), entry.name));
-      } else result.push({ kind: "marketplace", ...(await this.publishedReference(agent, entry)) });
-    }
-    for (const skill of await listFolderSkills(agent, lockedSlugs(lock))) {
-      if (skill.problem || !skill.location) continue;
-      result.push(await embeddedSkill(join(agent.workspacePath, skill.location, "SKILL.md"), skill.name));
-    }
-    // An install writes each skill to a folder named by its slug, so two skills with one slug would
-    // make every install of the template fail.
-    const slugs = new Set<string>();
-    for (const skill of result) {
-      if (slugs.has(skill.slug)) throw new Error(sourceText("error.skill.duplicateSlug", { slug: skill.slug }));
-      slugs.add(skill.slug);
-    }
-    return result.sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  private async publishedReference(agent: AgentSummary, entry: LockEntry): Promise<MarketplaceAgentSkill> {
-    const state = await installedState(agent.workspacePath, entry);
-    if (state !== "installed") throw new Error(sourceText("error.skill.publishNeedsRepair", { name: entry.name }));
-    let versionId = entry.versionId;
-    if (!versionId) {
-      const detail = await this.get(entry.skillId);
-      if (detail.version !== entry.version)
-        throw new Error(sourceText("error.skill.publishUntracked", { name: entry.name }));
-      versionId = detail.versionId;
-    }
-    return {
-      skillId: entry.skillId,
-      versionId,
-      slug: entry.slug,
-      name: entry.name,
-      version: entry.version,
-    };
-  }
-
-  private serialize<T>(agentId: string, write: () => Promise<T>): Promise<T> {
-    const result = (this.#writes.get(agentId) ?? Promise.resolve()).then(write);
-    const done = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.#writes.set(agentId, done);
-    void done.then(() => {
-      if (this.#writes.get(agentId) === done) this.#writes.delete(agentId);
+  }): Effect.Effect<InstalledSkill, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<InstalledSkill, SkillMarketplaceFailure> {
+      const agent = yield* skillSync(() => this.requireAgent(input.agentId));
+      const detail = yield* this.auth
+        .requestAuthorized(
+          `/v1/skills/${encodeURIComponent(input.skillId)}/versions/${encodeURIComponent(input.versionId)}`,
+          { method: "GET" },
+          decodeMarketplaceSkillDetail,
+        )
+        .pipe(toSkillMarketplaceFailure);
+      const bundle = yield* this.auth
+        .downloadAuthorized(
+          `/v1/skills/${encodeURIComponent(input.skillId)}/versions/${encodeURIComponent(input.versionId)}/content`,
+        )
+        .pipe(toSkillMarketplaceFailure);
+      return yield* this.installResolved(agent, detail, bundle, input.replaceModified);
     });
-    return result;
+  }
+
+  listPublishable(agentId: string): Effect.Effect<MarketplaceAgentSkill[], SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<MarketplaceAgentSkill[], SkillMarketplaceFailure> {
+      const agent = yield* skillSync(() => this.requireAgent(agentId));
+      const lock = yield* readLock(agent.workspacePath);
+      const result: MarketplaceAgentSkill[] = [];
+      for (const entry of Object.values(lock.skills)) {
+        if (entry.enabled === false) continue;
+        if (entry.skillId.startsWith("local-skill-"))
+          return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.publishLocalFirst")) });
+        if (isGithubSkillId(entry.skillId))
+          return yield* new SkillMarketplaceFailure({
+            cause: new Error(sourceText("error.skill.publishGithub", { name: entry.name })),
+          });
+        result.push(yield* this.publishedReferenceEffect(agent, entry));
+      }
+      return result.sort((a, b) => a.name.localeCompare(b.name));
+    });
+  }
+
+  listTemplateSkills(agentId: string): Effect.Effect<AgentTemplateSkill[], SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<AgentTemplateSkill[], SkillMarketplaceFailure> {
+      const agent = yield* skillSync(() => this.requireAgent(agentId));
+      const lock = yield* readLock(agent.workspacePath);
+      const result: AgentTemplateSkill[] = [];
+      for (const entry of Object.values(lock.skills)) {
+        if (entry.enabled === false) continue;
+        if (entry.skillId.startsWith("local-skill-") || isGithubSkillId(entry.skillId)) {
+          const [directory] = targetDirectories(agent.workspacePath, entry.slug);
+          result.push(yield* embeddedSkill(join(directory, "SKILL.md"), entry.name));
+        } else result.push({ kind: "marketplace", ...(yield* this.publishedReferenceEffect(agent, entry)) });
+      }
+      for (const skill of yield* listFolderSkills(agent, lockedSlugs(lock)).pipe(toSkillMarketplaceFailure)) {
+        if (skill.problem || !skill.location || MANAGED_SKILL_SLUGS.has(skill.slug)) continue;
+        result.push(yield* embeddedSkill(join(agent.workspacePath, skill.location, "SKILL.md"), skill.name));
+      }
+      const slugs = new Set<string>();
+      for (const skill of result) {
+        if (slugs.has(skill.slug))
+          return yield* new SkillMarketplaceFailure({
+            cause: new Error(sourceText("error.skill.duplicateSlug", { slug: skill.slug })),
+          });
+        slugs.add(skill.slug);
+      }
+      return result.sort((a, b) => a.name.localeCompare(b.name));
+    });
+  }
+
+  private publishedReferenceEffect(
+    agent: AgentSummary,
+    entry: LockEntry,
+  ): Effect.Effect<MarketplaceAgentSkill, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<MarketplaceAgentSkill, SkillMarketplaceFailure> {
+      const state = yield* installedState(agent.workspacePath, entry);
+      if (state !== "installed")
+        return yield* new SkillMarketplaceFailure({
+          cause: new Error(sourceText("error.skill.publishNeedsRepair", { name: entry.name })),
+        });
+      let versionId = entry.versionId;
+      if (!versionId) {
+        const detail = yield* this.get(entry.skillId);
+        if (detail.version !== entry.version)
+          return yield* new SkillMarketplaceFailure({
+            cause: new Error(sourceText("error.skill.publishUntracked", { name: entry.name })),
+          });
+        versionId = detail.versionId;
+      }
+      return {
+        skillId: entry.skillId,
+        versionId,
+        slug: entry.slug,
+        name: entry.name,
+        version: entry.version,
+      };
+    });
+  }
+
+  private serialize<A>(
+    agentId: string,
+    operation: Effect.Effect<A, SkillMarketplaceFailure>,
+  ): Effect.Effect<A, SkillMarketplaceFailure> {
+    return Effect.suspend(() => {
+      const entry = this.#writes.get(agentId) ?? { gate: Semaphore.makeUnsafe(1), users: 0 };
+      entry.users += 1;
+      this.#writes.set(agentId, entry);
+      return entry.gate.withPermit(Effect.uninterruptible(operation)).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            entry.users -= 1;
+            if (entry.users === 0) this.#writes.delete(agentId);
+          }),
+        ),
+      );
+    });
   }
 
   private installResolved(
@@ -293,153 +438,265 @@ export class SkillMarketplaceService {
     detail: MarketplaceSkillDetail,
     bundle: Uint8Array,
     replaceModified = false,
-  ): Promise<InstalledSkill> {
-    return this.serialize(agent.id, () => this.writeResolved(agent, detail, bundle, replaceModified));
+  ) {
+    return this.serialize(agent.id, this.writeResolvedEffect(agent, detail, bundle, replaceModified));
   }
 
-  private async writeResolved(
+  private savedRevisionFolders(
+    detail: MarketplaceSkillDetail,
+  ): Effect.Effect<Map<string, Record<string, Uint8Array>>[]> {
+    return Effect.gen({ self: this }, function* () {
+      const library = this.localLibrary;
+      if (!library || !detail.id.startsWith("local-skill-")) return [];
+      const revisions = yield* Effect.result(library.revisions(detail.id));
+      if (Result.isFailure(revisions)) return [];
+      const result: Map<string, Record<string, Uint8Array>>[] = [];
+      for (const revision of revisions.success) {
+        if (revision === detail.version) continue;
+        const files = yield* Effect.result(
+          library.bundle(detail.id, revision).pipe(
+            toSkillMarketplaceFailure,
+            Effect.flatMap((bundle) => skillSync(() => normalizedFiles(bundle))),
+          ),
+        );
+        if (Result.isSuccess(files))
+          result.push(skillFolders(detail.slug, files.success, packChildren(detail.slug, files.success)));
+      }
+      return result;
+    });
+  }
+
+  private writeResolvedEffect(
     agent: AgentSummary,
     detail: MarketplaceSkillDetail,
     bundle: Uint8Array,
     replaceModified = false,
-  ): Promise<InstalledSkill> {
-    if (sha256(bundle) !== detail.bundleSha256) throw new Error(sourceText("error.skill.bundleMismatch"));
-    const archive = inspectArchive(bundle);
-    if (archive.slug !== detail.slug) throw new Error(sourceText("error.skill.metadataMismatch"));
-    const files = normalizedFiles(bundle);
-    await assertSkillPaths(agent.workspacePath, detail.slug);
-    const lock = await readLock(agent.workspacePath);
-    const existing = lock.skills[detail.id];
-    if (Object.values(lock.skills).some((entry) => entry.slug === detail.slug && entry.skillId !== detail.id))
-      throw new Error(sourceText("error.skill.folderTaken"));
-    if (!existing && Object.keys(lock.skills).length >= INPUT_LIMITS.agentSkills) {
-      throw new Error(sourceText("error.skill.tooManySkills", { limit: INPUT_LIMITS.agentSkills }));
-    }
-    if (existing) {
-      const state = await installedState(agent.workspacePath, existing);
-      if (state === "modified" && !replaceModified) throw new Error(sourceText("error.skill.replaceModified"));
-    }
-    for (const target of [
-      ...targetDirectories(agent.workspacePath, detail.slug),
-      disabledDirectory(agent.workspacePath, detail.slug),
-    ]) {
-      const owner = Object.values(lock.skills).find(
-        (entry) => target.endsWith(`/${entry.slug}`) || target.endsWith(`\\${entry.slug}`),
+  ): Effect.Effect<InstalledSkill, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<InstalledSkill, SkillMarketplaceFailure> {
+      if (sha256(bundle) !== detail.bundleSha256)
+        return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.bundleMismatch")) });
+      const archive = yield* skillSync(() => inspectArchive(bundle));
+      if (archive.slug !== detail.slug)
+        return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.metadataMismatch")) });
+      const { files, executable } = yield* skillSync(() => readSkillArchive(bundle));
+      const children = packChildren(detail.slug, files);
+      const folders = skillFolders(detail.slug, files, children);
+      const executableFolders = skillFolders(
+        detail.slug,
+        Object.fromEntries([...executable].map((name) => [name, true])),
+        children,
       );
-      if (!owner && (await pathExists(target)))
-        throw new Error(sourceText("error.skill.unmanagedExists", { path: target }));
-    }
-    const receiptId = existing?.receiptId ?? randomUUID();
-    const stayDisabled = existing?.enabled === false;
-    if (stayDisabled)
-      await replaceTargets(agent.workspacePath, detail.slug, files, [
-        disabledDirectory(agent.workspacePath, detail.slug),
-      ]);
-    else await replaceTargets(agent.workspacePath, detail.slug, files);
-    const entry: LockEntry = {
-      skillId: detail.id,
-      versionId: detail.versionId,
-      slug: detail.slug,
-      name: detail.name,
-      version: detail.version,
-      bundleSha256: detail.bundleSha256,
-      receiptId,
-      files: Object.fromEntries(Object.entries(files).map(([name, bytes]) => [name, sha256(bytes)])),
-      description: detail.description,
-      ...(stayDisabled ? { enabled: false } : {}),
-    };
-    lock.skills[detail.id] = entry;
-    await writeLock(agent.workspacePath, lock);
-    if (!detail.id.startsWith("local-skill-"))
-      await this.auth.requestAuthorized(
-        `/v1/skills/${encodeURIComponent(detail.id)}/install`,
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ receiptId }) },
-        decodeInstalledReceipt,
+      for (const folder of folders.keys()) yield* assertSkillPaths(agent.workspacePath, folder);
+      const lock = yield* readLock(agent.workspacePath);
+      const replacedId = githubPredecessor(lock, detail.id);
+      const existing = lock.skills[detail.id] ?? (replacedId ? lock.skills[replacedId] : undefined);
+      if (
+        Object.values(lock.skills).some(
+          (entry) =>
+            entry.skillId !== detail.id &&
+            entry.skillId !== replacedId &&
+            entryFolders(entry).some((folder) => folders.has(folder)),
+        )
+      )
+        return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.folderTaken")) });
+      if (!existing && Object.keys(lock.skills).length >= INPUT_LIMITS.agentSkills) {
+        return yield* new SkillMarketplaceFailure({
+          cause: new Error(sourceText("error.skill.tooManySkills", { limit: INPUT_LIMITS.agentSkills })),
+        });
+      }
+      if (existing) {
+        const state = yield* installedState(agent.workspacePath, existing);
+        if (
+          state === "modified" &&
+          !replaceModified &&
+          !(yield* onlyNewFiles(agent.workspacePath, existing, [folders])) &&
+          !(yield* onlyNewFiles(agent.workspacePath, existing, [
+            folders,
+            ...(yield* this.savedRevisionFolders(detail)),
+          ]))
+        )
+          return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.replaceModified")) });
+      }
+      const owned = new Set(Object.values(lock.skills).flatMap(entryFolders));
+      for (const folder of folders.keys()) {
+        if (owned.has(folder)) continue;
+        if (MANAGED_SKILL_SLUGS.has(folder))
+          return yield* new SkillMarketplaceFailure({
+            cause: new Error(sourceText("error.skill.managedSlug", { slug: folder })),
+          });
+        for (const target of [
+          ...targetDirectories(agent.workspacePath, folder),
+          disabledDirectory(agent.workspacePath, folder),
+        ]) {
+          if (yield* pathExists(target))
+            return yield* new SkillMarketplaceFailure({
+              cause: new Error(sourceText("error.skill.unmanagedExists", { path: target })),
+            });
+        }
+      }
+      const receiptId = existing?.receiptId ?? randomUUID();
+      const stayDisabled = existing?.enabled === false;
+      yield* replaceTargets(
+        [...folders].flatMap(([folder, folderFiles]) =>
+          (stayDisabled
+            ? [disabledDirectory(agent.workspacePath, folder)]
+            : targetDirectories(agent.workspacePath, folder)
+          ).map((target) => ({
+            target,
+            files: folderFiles,
+            executable: new Set(Object.keys(executableFolders.get(folder) ?? {})),
+          })),
+        ),
       );
-    await this.refreshAgentRuntime(agent.id);
-    return toInstalledSkill(entry, detail.version, "installed", entry.description);
+      for (const folder of existing ? entryFolders(existing) : [])
+        if (!folders.has(folder)) yield* removeFolder(agent.workspacePath, folder, !stayDisabled);
+      const entry: LockEntry = {
+        skillId: detail.id,
+        versionId: detail.versionId,
+        slug: detail.slug,
+        name: detail.name,
+        version: detail.version,
+        bundleSha256: detail.bundleSha256,
+        receiptId,
+        files: Object.fromEntries(Object.entries(files).map(([name, bytes]) => [name, sha256(bytes)])),
+        description: detail.description,
+        ...(stayDisabled ? { enabled: false } : {}),
+        ...(children.length > 0 ? { folders: children } : {}),
+      };
+      if (replacedId) delete lock.skills[replacedId];
+      lock.skills[detail.id] = entry;
+      yield* writeLock(agent.workspacePath, lock);
+      if (!detail.id.startsWith("local-skill-") && !isGithubSkillId(detail.id))
+        yield* this.auth
+          .requestAuthorized(
+            `/v1/skills/${encodeURIComponent(detail.id)}/install`,
+            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ receiptId }) },
+            decodeInstalledReceipt,
+          )
+          .pipe(Effect.catchTag("CentralAuthOperationError", () => Effect.void));
+      yield* this.refreshAgentRuntime(agent.id).pipe(toSkillMarketplaceFailure);
+      return toInstalledSkill(entry, detail.version, "installed", entry.description);
+    });
   }
 
-  uninstall(input: UninstallSkillInput): Promise<void> {
-    return this.serialize(input.agentId, () => this.removeInstalled(input));
+  uninstall(input: UninstallSkillInput): Effect.Effect<void, SkillMarketplaceFailure> {
+    return this.serialize(input.agentId, this.removeInstalledEffect(input));
   }
-  private async removeInstalled(input: UninstallSkillInput): Promise<void> {
-    const agent = this.requireAgent(input.agentId);
-    const lock = await readLock(agent.workspacePath);
-    const entry = lock.skills[input.skillId];
-    if (!entry) return;
-    await assertSkillPaths(agent.workspacePath, entry.slug);
-    if ((await installedState(agent.workspacePath, entry)) === "modified" && !input.removeModified) {
-      throw new Error(sourceText("error.skill.removeModified"));
-    }
-    for (const target of [
-      ...(entry.enabled === false ? [] : targetDirectories(agent.workspacePath, entry.slug)),
-      disabledDirectory(agent.workspacePath, entry.slug),
-    ]) {
-      await rm(target, { recursive: true, force: true });
-    }
-    delete lock.skills[input.skillId];
-    await writeLock(agent.workspacePath, lock);
-    await this.refreshAgentRuntime(input.agentId);
+  private removeInstalledEffect(input: UninstallSkillInput): Effect.Effect<void, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<void, SkillMarketplaceFailure> {
+      const agent = yield* skillSync(() => this.requireAgent(input.agentId));
+      const lock = yield* readLock(agent.workspacePath);
+      const entry = lock.skills[input.skillId];
+      if (!entry) return;
+      for (const folder of entryFolders(entry)) yield* assertSkillPaths(agent.workspacePath, folder);
+      if ((yield* installedState(agent.workspacePath, entry)) === "modified" && !input.removeModified) {
+        return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.removeModified")) });
+      }
+      for (const folder of entryFolders(entry))
+        yield* removeFolder(agent.workspacePath, folder, entry.enabled !== false);
+      delete lock.skills[input.skillId];
+      yield* writeLock(agent.workspacePath, lock);
+      yield* this.refreshAgentRuntime(input.agentId).pipe(toSkillMarketplaceFailure);
+    });
   }
 
-  setEnabled(input: SetEnabledSkillInput): Promise<InstalledSkill> {
-    return this.serialize(input.agentId, () => this.changeEnabled(input));
+  setEnabled(input: SetEnabledSkillInput): Effect.Effect<InstalledSkill, SkillMarketplaceFailure> {
+    return this.serialize(input.agentId, this.changeEnabledEffect(input));
   }
-  private async changeEnabled(input: SetEnabledSkillInput): Promise<InstalledSkill> {
-    const agent = this.requireAgent(input.agentId);
-    const lock = await readLock(agent.workspacePath);
-    const entry = lock.skills[input.skillId];
-    if (!entry) throw new Error(sourceText("error.skill.notFound"));
-    await assertSkillPaths(agent.workspacePath, entry.slug);
-    const currentlyEnabled = entry.enabled !== false;
-    if (currentlyEnabled === input.enabled) {
+  private changeEnabledEffect(input: SetEnabledSkillInput): Effect.Effect<InstalledSkill, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<InstalledSkill, SkillMarketplaceFailure> {
+      const agent = yield* skillSync(() => this.requireAgent(input.agentId));
+      const lock = yield* readLock(agent.workspacePath);
+      const entry = lock.skills[input.skillId];
+      if (!entry) return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.notFound")) });
+      const folders = entryFolders(entry);
+      for (const folder of folders) yield* assertSkillPaths(agent.workspacePath, folder);
+      const currentlyEnabled = entry.enabled !== false;
+      if (currentlyEnabled === input.enabled) {
+        return toInstalledSkill(
+          entry,
+          entry.version,
+          yield* installedState(agent.workspacePath, entry),
+          yield* installedSkillDescription(agent.workspacePath, entry),
+        );
+      }
+      if (!input.enabled) {
+        const state = yield* installedState(agent.workspacePath, entry);
+        if (state === "modified")
+          return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.disableModified")) });
+        if (state === "needs-repair")
+          return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.disableNeedsRepair")) });
+      }
+      if (input.enabled) {
+        for (const folder of folders) {
+          if (!(yield* pathExists(disabledDirectory(agent.workspacePath, folder))))
+            return yield* new SkillMarketplaceFailure({
+              cause: new Error(sourceText("error.skill.enableNeedsRepair")),
+            });
+          for (const target of targetDirectories(agent.workspacePath, folder)) {
+            if (yield* pathExists(target))
+              return yield* new SkillMarketplaceFailure({
+                cause: new Error(sourceText("error.skill.providerFolderOccupied")),
+              });
+          }
+        }
+        const writes: SkillFolderWrite[] = [];
+        for (const folder of folders) {
+          const { files, executable } = yield* readSkillFiles(disabledDirectory(agent.workspacePath, folder));
+          for (const target of targetDirectories(agent.workspacePath, folder))
+            writes.push({ target, files, executable });
+        }
+        yield* replaceTargets(writes);
+        for (const folder of folders)
+          yield* skillIO(() => rm(disabledDirectory(agent.workspacePath, folder), { recursive: true, force: true }));
+        delete entry.enabled;
+      } else {
+        const moves: Array<{ source: string; stash: string }> = [];
+        for (const folder of folders) {
+          const [primary, fallback] = targetDirectories(agent.workspacePath, folder);
+          const source = (yield* pathExists(primary)) ? primary : (yield* pathExists(fallback)) ? fallback : null;
+          const stash = disabledDirectory(agent.workspacePath, folder);
+          if (source) moves.push({ source, stash });
+          else if (!(yield* pathExists(stash)))
+            return yield* new SkillMarketplaceFailure({
+              cause: new Error(sourceText("error.skill.disableNeedsRepair")),
+            });
+        }
+        const moved: typeof moves = [];
+        const outcome = yield* Effect.result(
+          Effect.forEach(
+            moves,
+            (move) =>
+              Effect.gen(function* () {
+                yield* skillIO(() => mkdir(dirname(move.stash), { recursive: true, mode: 0o700 }));
+                if (yield* pathExists(move.stash))
+                  yield* skillIO(() => rm(move.stash, { recursive: true, force: true }));
+                yield* skillIO(() => rename(move.source, move.stash));
+                moved.push(move);
+              }),
+            { discard: true },
+          ),
+        );
+        if (Result.isFailure(outcome)) {
+          for (const move of moved.reverse())
+            yield* skillIO(() => rename(move.stash, move.source)).pipe(Effect.catch(() => Effect.void));
+          return yield* outcome.failure;
+        }
+        for (const folder of folders)
+          for (const target of targetDirectories(agent.workspacePath, folder))
+            yield* skillIO(() => rm(target, { recursive: true, force: true }));
+        entry.enabled = false;
+      }
+      lock.skills[input.skillId] = entry;
+      yield* writeLock(agent.workspacePath, lock);
+      yield* this.refreshAgentRuntime(input.agentId).pipe(toSkillMarketplaceFailure);
       return toInstalledSkill(
         entry,
         entry.version,
-        await installedState(agent.workspacePath, entry),
-        await installedSkillDescription(agent.workspacePath, entry),
+        yield* installedState(agent.workspacePath, entry),
+        yield* installedSkillDescription(agent.workspacePath, entry),
       );
-    }
-    if (!input.enabled) {
-      const state = await installedState(agent.workspacePath, entry);
-      if (state === "modified") throw new Error(sourceText("error.skill.disableModified"));
-      if (state === "needs-repair") throw new Error(sourceText("error.skill.disableNeedsRepair"));
-    }
-    if (input.enabled) {
-      const stash = disabledDirectory(agent.workspacePath, entry.slug);
-      if (!(await pathExists(stash))) throw new Error(sourceText("error.skill.enableNeedsRepair"));
-      for (const target of targetDirectories(agent.workspacePath, entry.slug)) {
-        if (await pathExists(target)) throw new Error(sourceText("error.skill.providerFolderOccupied"));
-      }
-      const files = await readSkillFiles(stash);
-      await replaceTargets(agent.workspacePath, entry.slug, files);
-      await rm(stash, { recursive: true, force: true });
-      delete entry.enabled;
-    } else {
-      const live = targetDirectories(agent.workspacePath, entry.slug);
-      const [primary, fallback] = live;
-      const source = (await pathExists(primary)) ? primary : (await pathExists(fallback)) ? fallback : null;
-      const stash = disabledDirectory(agent.workspacePath, entry.slug);
-      if (source) {
-        await mkdir(dirname(stash), { recursive: true, mode: 0o700 });
-        if (await pathExists(stash)) await rm(stash, { recursive: true, force: true });
-        await rename(source, stash);
-      } else if (!(await pathExists(stash))) {
-        throw new Error(sourceText("error.skill.disableNeedsRepair"));
-      }
-      for (const target of live) await rm(target, { recursive: true, force: true });
-      entry.enabled = false;
-    }
-    lock.skills[input.skillId] = entry;
-    await writeLock(agent.workspacePath, lock);
-    await this.refreshAgentRuntime(input.agentId);
-    return toInstalledSkill(
-      entry,
-      entry.version,
-      await installedState(agent.workspacePath, entry),
-      await installedSkillDescription(agent.workspacePath, entry),
-    );
+    });
   }
 
   private requireAgent(agentId: string): AgentSummary {
@@ -448,18 +705,30 @@ export class SkillMarketplaceService {
     return agent;
   }
 
+  private requireGithub(): GithubSkillSourceReader {
+    if (!this.github) throw new Error(sourceText("error.skill.githubUnavailable"));
+    return this.github;
+  }
+
   requireLocalLibrary(): LocalSkillLibrary {
     if (!this.localLibrary) throw new Error(sourceText("error.skill.localLibraryUnavailable"));
     return this.localLibrary;
   }
 
-  async installLocal(input: { agentId: string; skillId: string; revision: number }): Promise<InstalledSkill> {
-    const detail = await this.requireLocalLibrary().get(input.skillId, input.revision);
-    return this.installResolved(
-      this.requireAgent(input.agentId),
-      detail,
-      await this.requireLocalLibrary().bundle(input.skillId, input.revision),
-    );
+  installLocal(input: {
+    agentId: string;
+    skillId: string;
+    revision: number;
+  }): Effect.Effect<InstalledSkill, SkillMarketplaceFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<InstalledSkill, SkillMarketplaceFailure> {
+      const detail = yield* this.requireLocalLibrary()
+        .get(input.skillId, input.revision)
+        .pipe(toSkillMarketplaceFailure);
+      const bundle = yield* this.requireLocalLibrary()
+        .bundle(input.skillId, input.revision)
+        .pipe(toSkillMarketplaceFailure);
+      return yield* this.installResolved(yield* skillSync(() => this.requireAgent(input.agentId)), detail, bundle);
+    });
   }
 
   private absoluteUrl(value: string | null): string | null {
@@ -478,6 +747,45 @@ function targetDirectories(workspace: string, slug: string): [string, string] {
 
 function disabledDirectory(workspace: string, slug: string): string {
   return join(workspace, ".openbot", "skills-disabled", slug);
+}
+
+function packChildren(slug: string, files: Record<string, Uint8Array>): string[] {
+  return Object.keys(files)
+    .flatMap((path) => {
+      const child = /^skills\/([^/]+)\/SKILL\.md$/u.exec(path)?.[1];
+      return child?.startsWith(`${slug}-`) && SKILL_FOLDER_PATTERN.test(child) ? [child] : [];
+    })
+    .sort();
+}
+
+function skillFolders<T>(slug: string, files: Record<string, T>, children: readonly string[]) {
+  const folders = new Map<string, Record<string, T>>([[slug, {}]]);
+  for (const [path, value] of Object.entries(files)) {
+    const [root, child = "", ...rest] = path.split("/");
+    const nested = root === "skills" && children.includes(child);
+    const folder = nested ? child : slug;
+    const bucket = folders.get(folder) ?? {};
+    bucket[nested ? rest.join("/") : path] = value;
+    folders.set(folder, bucket);
+  }
+  return folders;
+}
+
+function entryFolders(entry: LockEntry): string[] {
+  return [entry.slug, ...(entry.folders ?? [])];
+}
+
+const removeFolder = Effect.fn("SkillMarketplace.removeFolder")(function* (
+  workspace: string,
+  folder: string,
+  enabled: boolean,
+) {
+  for (const target of [...(enabled ? targetDirectories(workspace, folder) : []), disabledDirectory(workspace, folder)])
+    yield* skillIO(() => rm(target, { recursive: true, force: true }));
+});
+
+function githubPredecessor(lock: SkillsLock, skillId: string): string | undefined {
+  return Object.keys(lock.skills).find((key) => isOtherGithubCommit(skillId, key));
 }
 
 function toInstalledSkill(
@@ -501,20 +809,23 @@ function toInstalledSkill(
   };
 }
 
-async function installedSkillDescription(workspace: string, entry: LockEntry): Promise<string | undefined> {
+const installedSkillDescription = Effect.fn("SkillMarketplace.description")(function* (
+  workspace: string,
+  entry: LockEntry,
+) {
   const stored = trimmedSkillDescription(entry.description);
   if (stored) return stored;
   const roots =
     entry.enabled === false ? [disabledDirectory(workspace, entry.slug)] : targetDirectories(workspace, entry.slug);
   for (const root of roots) {
-    try {
-      const parsed = parseSkillMarkdownDescription(await readFile(join(root, "SKILL.md"), "utf8"));
-      if (parsed) return parsed;
-    } catch {
-      /* Keep the lock name usable when SKILL.md is missing or malformed. */
-    }
+    const result = yield* Effect.result(
+      skillIO(() => readFile(join(root, "SKILL.md"), "utf8")).pipe(
+        Effect.flatMap((text) => skillSync(() => parseSkillMarkdownDescription(text))),
+      ),
+    );
+    if (Result.isSuccess(result) && result.success) return result.success;
   }
-}
+});
 
 function trimmedSkillDescription(value: unknown): string | undefined {
   if (!isString(value)) return undefined;
@@ -530,161 +841,333 @@ function parseSkillMarkdownDescription(text: string): string | undefined {
   return trimmedSkillDescription(metadata.description);
 }
 
-async function readSkillFiles(root: string): Promise<Record<string, Uint8Array>> {
+const readSkillFiles = Effect.fn("SkillMarketplace.readFiles")(function* (root: string) {
   const files: Record<string, Uint8Array> = {};
-  async function visit(directory: string): Promise<void> {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      if (entry.isSymbolicLink()) throw new Error(sourceText("error.skill.symlinks"));
-      if (entry.isDirectory()) await visit(path);
-      else if (entry.isFile()) {
-        files[relative(root, path).replaceAll("\\", "/")] = new Uint8Array(await readFile(path));
+  const executable = new Set<string>();
+  const visit = (directory: string): Effect.Effect<void, SkillMarketplaceFailure> =>
+    Effect.gen(function* () {
+      for (const entry of yield* skillIO(() => readdir(directory, { withFileTypes: true }))) {
+        const path = join(directory, entry.name);
+        if (entry.isSymbolicLink())
+          return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.symlinks")) });
+        if (entry.isDirectory()) {
+          if (!isRuntimeCacheFolder(entry.name)) yield* visit(path);
+        } else if (entry.isFile()) {
+          const name = relative(root, path).replaceAll("\\", "/");
+          files[name] = new Uint8Array(yield* skillIO(() => readFile(path)));
+          if ((yield* skillIO(() => lstat(path))).mode & 0o111) executable.add(name);
+        }
       }
-    }
+    });
+  yield* visit(root);
+  return { files, executable };
+});
+
+const HELD_SKILL_FOLDER_WAITS_MS: readonly number[] = [10, 50, 100, 250, 500, 1000, 1000];
+
+const renameSkillFolder = Effect.fn("SkillMarketplace.renameFolder")(function* (from: string, to: string) {
+  for (let attempt = 0; ; attempt += 1) {
+    const renamed = yield* Effect.result(skillIO(() => rename(from, to)));
+    if (Result.isSuccess(renamed)) return;
+    const wait = HELD_SKILL_FOLDER_WAITS_MS[attempt];
+    if (wait === undefined || !isHeldTargetError(renamed.failure.cause)) return yield* renamed.failure;
+    yield* Effect.sleep(wait);
   }
-  await visit(root);
-  return files;
+});
+
+interface SkillFolderContent {
+  files: Record<string, Uint8Array>;
+  executable: ReadonlySet<string>;
 }
 
-async function replaceTargets(
-  workspace: string,
-  slug: string,
-  files: Record<string, Uint8Array>,
-  targets: readonly string[] = targetDirectories(workspace, slug),
-): Promise<void> {
-  const completed: Array<{ target: string; backup: string | null }> = [];
-  try {
-    for (const target of targets) {
-      await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-      const stage = `${target}.openbot-stage-${randomUUID()}`;
-      const backup = (await pathExists(target)) ? `${target}.openbot-backup-${randomUUID()}` : null;
-      await writeFiles(stage, files);
-      if (backup) await rename(target, backup);
-      try {
-        await rename(stage, target);
-      } catch (error) {
-        if (backup) await rename(backup, target);
-        throw error;
+interface SkillFolderWrite extends SkillFolderContent {
+  target: string;
+}
+
+const overwriteSkillFolder = Effect.fn("SkillMarketplace.overwriteFolder")(function* (
+  root: string,
+  { files, executable }: SkillFolderContent,
+) {
+  const paths = Object.keys(files);
+  const prune = (directory: string): Effect.Effect<void, SkillMarketplaceFailure> =>
+    Effect.gen(function* () {
+      for (const entry of yield* skillIO(() => readdir(directory, { withFileTypes: true }))) {
+        const path = join(directory, entry.name);
+        const name = relative(root, path).replaceAll("\\", "/");
+        if (entry.isDirectory()) {
+          if (isRuntimeCacheFolder(entry.name)) continue;
+          if (paths.some((expectedPath) => expectedPath.startsWith(`${name}/`))) yield* prune(path);
+          else yield* skillIO(() => rm(path, { recursive: true, force: true, maxRetries: 5 }));
+        } else if (!Object.hasOwn(files, name)) yield* skillIO(() => rm(path, { force: true, maxRetries: 5 }));
       }
-      completed.push({ target, backup });
-    }
-  } catch (error) {
-    for (const item of completed.reverse()) {
-      await rm(item.target, { recursive: true, force: true });
-      if (item.backup) await rename(item.backup, item.target).catch(() => undefined);
-    }
-    throw error;
-  }
-  await Promise.all(
-    completed.flatMap((item) => (item.backup ? [rm(item.backup, { recursive: true, force: true })] : [])),
+    });
+  yield* prune(root);
+  yield* writeFiles(root, files, executable);
+});
+
+const overwriteHeldSkillFolder = Effect.fn("SkillMarketplace.overwriteHeldFolder")(function* (
+  target: string,
+  next: SkillFolderContent,
+  previous: SkillFolderContent,
+) {
+  const written = yield* Effect.result(overwriteSkillFolder(target, next));
+  if (Result.isSuccess(written)) return;
+  yield* overwriteSkillFolder(target, previous).pipe(Effect.ignore);
+  return yield* written.failure;
+});
+
+const replaceTargets = Effect.fn("SkillMarketplace.replaceTargets")(function* (
+  writes: ReadonlyArray<SkillFolderWrite>,
+) {
+  const completed: Array<{ target: string; backup: string | null; previous?: SkillFolderContent }> = [];
+  const outcome = yield* Effect.result(
+    Effect.gen(function* () {
+      for (const write of writes) {
+        const { target, files, executable } = write;
+        yield* skillIO(() => mkdir(dirname(target), { recursive: true, mode: 0o700 }));
+        const stage = `${target}.openbot-stage-${randomUUID()}`;
+        const backup = (yield* pathExists(target)) ? `${target}.openbot-backup-${randomUUID()}` : null;
+        const previous = yield* Effect.gen(function* () {
+          yield* writeFiles(stage, files, executable);
+          if (backup) {
+            const setAside = yield* Effect.result(renameSkillFolder(target, backup));
+            if (Result.isFailure(setAside)) {
+              if (!isHeldTargetError(setAside.failure.cause)) return yield* setAside.failure;
+              const held = yield* readSkillFiles(target).pipe(Effect.mapError(() => setAside.failure));
+              yield* overwriteHeldSkillFolder(target, write, held);
+              yield* skillIO(() => rm(stage, { recursive: true, force: true, maxRetries: 5 })).pipe(Effect.ignore);
+              return held;
+            }
+          }
+          const moved = yield* Effect.result(renameSkillFolder(stage, target));
+          if (Result.isSuccess(moved)) return;
+          if (isHeldTargetError(moved.failure.cause) && !(yield* pathExists(target))) {
+            const written = yield* Effect.result(writeFiles(target, files, executable));
+            if (Result.isSuccess(written)) {
+              yield* skillIO(() => rm(stage, { recursive: true, force: true, maxRetries: 5 })).pipe(Effect.ignore);
+              return;
+            }
+            yield* skillIO(() => rm(target, { recursive: true, force: true, maxRetries: 5 })).pipe(Effect.ignore);
+          }
+          if (backup) yield* renameSkillFolder(backup, target);
+          return yield* moved.failure;
+        }).pipe(
+          Effect.onError(() =>
+            skillIO(() => rm(stage, { recursive: true, force: true, maxRetries: 5 })).pipe(Effect.ignore),
+          ),
+        );
+        completed.push(previous ? { target, backup: null, previous } : { target, backup });
+      }
+    }),
   );
-}
+  if (Result.isFailure(outcome)) {
+    for (const item of completed.reverse()) {
+      if (item.previous) {
+        yield* overwriteSkillFolder(item.target, item.previous).pipe(Effect.ignore);
+        continue;
+      }
+      yield* skillIO(() => rm(item.target, { recursive: true, force: true }));
+      const backup = item.backup;
+      if (backup) yield* renameSkillFolder(backup, item.target).pipe(Effect.catch(() => Effect.void));
+    }
+    return yield* outcome.failure;
+  }
+  yield* Effect.forEach(
+    completed,
+    (item) => {
+      const backup = item.backup;
+      return backup ? skillIO(() => rm(backup, { recursive: true, force: true })) : Effect.void;
+    },
+    { concurrency: "unbounded", discard: true },
+  );
+}, Effect.uninterruptible);
 
-async function writeFiles(root: string, files: Record<string, Uint8Array>): Promise<void> {
+const writeFiles = Effect.fn("SkillMarketplace.writeFiles")(function* (
+  root: string,
+  files: Record<string, Uint8Array>,
+  executable: ReadonlySet<string>,
+) {
   for (const [name, bytes] of Object.entries(files)) {
     const path = resolve(root, name);
     if (!path.startsWith(`${resolve(root)}/`) && !path.startsWith(`${resolve(root)}\\`))
-      throw new Error("Unsafe skill path.");
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    await writeFile(path, bytes, { mode: 0o600 });
+      return yield* new SkillMarketplaceFailure({ cause: new Error("Unsafe skill path.") });
+    yield* skillIO(() => mkdir(dirname(path), { recursive: true, mode: 0o700 }));
+    yield* skillIO(() => writeFile(path, bytes, { mode: executable.has(name) ? 0o700 : 0o600 }));
   }
-}
+});
 
-async function hasUnexpectedSkillFiles(root: string, expected: Record<string, string>): Promise<boolean> {
+const hasUnexpectedSkillFiles = Effect.fn("SkillMarketplace.checkFiles")(function* (
+  root: string,
+  expected: Record<string, string>,
+) {
   const paths = Object.keys(expected);
-  async function visit(directory: string): Promise<boolean> {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      const name = relative(root, path).replaceAll("\\", "/");
-      if (entry.isSymbolicLink()) return true;
-      if (entry.isDirectory()) {
-        if (!paths.some((expectedPath) => expectedPath.startsWith(`${name}/`)) || (await visit(path))) return true;
-      } else if (!entry.isFile() || !(name in expected)) return true;
-    }
-    return false;
-  }
-  return visit(root);
-}
+  const visit = (directory: string): Effect.Effect<boolean, SkillMarketplaceFailure> =>
+    Effect.gen(function* () {
+      for (const entry of yield* skillIO(() => readdir(directory, { withFileTypes: true }))) {
+        const path = join(directory, entry.name);
+        const name = relative(root, path).replaceAll("\\", "/");
+        if (entry.isSymbolicLink()) return true;
+        if (entry.isDirectory()) {
+          if (isRuntimeCacheFolder(entry.name)) continue;
+          if (!paths.some((expectedPath) => expectedPath.startsWith(`${name}/`)) || (yield* visit(path))) return true;
+        } else if (!entry.isFile() || (!(name in expected) && entry.name !== FINDER_METADATA_FILE)) return true;
+      }
+      return false;
+    });
+  return yield* visit(root);
+});
 
-async function installedState(workspace: string, entry: LockEntry): Promise<"installed" | "modified" | "needs-repair"> {
-  const roots =
-    entry.enabled === false ? [disabledDirectory(workspace, entry.slug)] : targetDirectories(workspace, entry.slug);
+const installedState = Effect.fn("SkillMarketplace.installedState")(function* (
+  workspace: string,
+  entry: LockEntry,
+): Effect.fn.Return<"installed" | "modified" | "needs-repair", SkillMarketplaceFailure> {
+  let state: "installed" | "needs-repair" = "installed";
+  for (const [folder, files] of skillFolders(entry.slug, entry.files, entry.folders ?? [])) {
+    const folderState = yield* installedFolderState(workspace, folder, files, entry.enabled !== false);
+    if (folderState === "modified") return folderState;
+    if (folderState === "needs-repair") state = folderState;
+  }
+  return state;
+});
+
+const onlyNewFiles = Effect.fn("SkillMarketplace.onlyNewFiles")(function* (
+  workspace: string,
+  entry: LockEntry,
+  accepted: ReadonlyArray<ReadonlyMap<string, Record<string, Uint8Array>>>,
+): Effect.fn.Return<boolean, SkillMarketplaceFailure> {
+  const enabled = entry.enabled !== false;
+  for (const [folder, files] of skillFolders(entry.slug, entry.files, entry.folders ?? [])) {
+    const acceptedHashes = accepted.flatMap((folders) => {
+      const acceptedFiles = folders.get(folder);
+      return acceptedFiles
+        ? [Object.fromEntries(Object.entries(acceptedFiles).map(([name, bytes]) => [name, sha256(bytes)]))]
+        : [];
+    });
+    target: for (const target of enabled
+      ? targetDirectories(workspace, folder)
+      : [disabledDirectory(workspace, folder)]) {
+      if (!(yield* pathExists(target))) continue;
+      for (const hashes of [files, ...acceptedHashes]) if (yield* copyHas(target, hashes)) continue target;
+      return false;
+    }
+  }
+  return true;
+});
+
+const copyHas = Effect.fn("SkillMarketplace.copyHas")(function* (
+  target: string,
+  files: Record<string, string>,
+): Effect.fn.Return<boolean, SkillMarketplaceFailure> {
+  const unexpected = yield* Effect.result(hasUnexpectedSkillFiles(target, files));
+  if (Result.isFailure(unexpected) || unexpected.success) return false;
+  for (const [name, hash] of Object.entries(files)) {
+    if (isRuntimeCacheFile(name)) continue;
+    const content = yield* Effect.result(skillIO(() => readFile(join(target, name))));
+    if (Result.isFailure(content)) return false;
+    const bytes = new Uint8Array(content.success);
+    if (sha256(bytes) === hash) continue;
+    if (name !== "SKILL.md") return false;
+    const quoted = yield* Effect.result(skillSync(() => quotedSkillMarkdown(bytes)));
+    if (Result.isFailure(quoted) || !quoted.success || sha256(quoted.success) !== hash) return false;
+  }
+  return true;
+});
+
+const installedFolderState = Effect.fn("SkillMarketplace.installedFolderState")(function* (
+  workspace: string,
+  folder: string,
+  files: Record<string, string>,
+  enabled: boolean,
+): Effect.fn.Return<"installed" | "modified" | "needs-repair", SkillMarketplaceFailure> {
+  const roots = enabled ? targetDirectories(workspace, folder) : [disabledDirectory(workspace, folder)];
   let complete = 0;
   let missing = false;
   for (const target of roots) {
-    if (!(await pathExists(target))) continue;
+    if (!(yield* pathExists(target))) continue;
     complete += 1;
-    try {
-      if (await hasUnexpectedSkillFiles(target, entry.files)) return "modified";
-    } catch {
-      return "modified";
-    }
-    for (const [name, hash] of Object.entries(entry.files)) {
-      try {
-        if (sha256(new Uint8Array(await readFile(join(target, name)))) !== hash) return "modified";
-      } catch (error) {
+    const unexpected = yield* Effect.result(hasUnexpectedSkillFiles(target, files));
+    if (Result.isFailure(unexpected) || unexpected.success) return "modified";
+    for (const [name, hash] of Object.entries(files)) {
+      if (isRuntimeCacheFile(name)) continue;
+      const content = yield* Effect.result(skillIO(() => readFile(join(target, name))));
+      if (Result.isSuccess(content)) {
+        if (sha256(new Uint8Array(content.success)) !== hash) return "modified";
+      } else {
+        const error = content.failure.cause;
         if (!isDynamicRecord(error) || error.code !== "ENOENT") return "modified";
         missing = true;
       }
     }
   }
-  const expected = entry.enabled === false ? 1 : 2;
+  const expected = enabled ? 2 : 1;
   return complete === expected && !missing ? "installed" : "needs-repair";
-}
+});
 
-/**
- * One skill's `SKILL.md` as a template carries it. The slug and name are what an install derives
- * from the same text, so a folder name that is not a valid slug does not travel.
- */
-async function embeddedSkill(path: string, label: string): Promise<AgentTemplateSkill> {
+const embeddedSkill = Effect.fn("SkillMarketplace.embeddedSkill")(function* (
+  path: string,
+  label: string,
+): Effect.fn.Return<AgentTemplateSkill, SkillMarketplaceFailure> {
   const tooLarge = sourceText("error.skill.templateMarkdownTooLarge", { name: label });
-  if ((await stat(path)).size > AGENT_TEMPLATE_LIMITS.skillMarkdown) throw new Error(tooLarge);
-  const markdown = await readFile(path, "utf8");
-  if (markdown.length > AGENT_TEMPLATE_LIMITS.skillMarkdown) throw new Error(tooLarge);
-  let info: { slug: string; name: string };
-  try {
-    info = inspectSkillMarkdown(markdown);
-  } catch (error) {
-    throw new Error(`${label}: ${error instanceof Error ? error.message : "SKILL.md is invalid."}`);
-  }
+  if ((yield* skillIO(() => stat(path))).size > AGENT_TEMPLATE_LIMITS.skillMarkdown)
+    return yield* new SkillMarketplaceFailure({ cause: new Error(tooLarge) });
+  const markdown = yield* skillIO(() => readFile(path, "utf8"));
+  if (markdown.length > AGENT_TEMPLATE_LIMITS.skillMarkdown)
+    return yield* new SkillMarketplaceFailure({ cause: new Error(tooLarge) });
+  const info = yield* skillSync(() => inspectSkillMarkdown(markdown)).pipe(
+    Effect.mapError(
+      ({ cause }) =>
+        new SkillMarketplaceFailure({
+          cause: new Error(`${label}: ${cause instanceof Error ? cause.message : "SKILL.md is invalid."}`),
+        }),
+    ),
+  );
   return { kind: "embedded", slug: info.slug, name: info.name, markdown };
-}
+});
 
 function lockedSlugs(lock: SkillsLock): Set<string> {
-  return new Set(Object.values(lock.skills).map((entry) => entry.slug));
+  return new Set(Object.values(lock.skills).flatMap(entryFolders));
 }
 
 function lockPath(workspace: string): string {
   return join(workspace, ".openbot", "skills-lock.json");
 }
-async function readLock(workspace: string): Promise<SkillsLock> {
-  let text: string;
-  try {
-    text = await readFile(lockPath(workspace), "utf8");
-  } catch (error) {
+const readLock = Effect.fn("SkillMarketplace.readLock")(function* (
+  workspace: string,
+): Effect.fn.Return<SkillsLock, SkillMarketplaceFailure> {
+  const content = yield* Effect.result(skillIO(() => readFile(lockPath(workspace), "utf8")));
+  if (Result.isFailure(content)) {
+    const error = content.failure.cause;
     if (isDynamicRecord(error) && error.code === "ENOENT") return { version: 1, skills: {} };
-    throw error;
+    return yield* content.failure;
   }
-  const value = JSON.parse(text);
-  if (!isSkillsLock(value)) throw new Error(sourceText("error.skill.lockInvalid"));
-  return value;
-}
-async function writeLock(workspace: string, lock: SkillsLock): Promise<void> {
-  await writeFileAtomically(lockPath(workspace), `${JSON.stringify(lock, null, 2)}\n`, { createDirectory: true });
-}
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
+  return yield* skillSync(() => {
+    const value = JSON.parse(content.success);
+    if (!isSkillsLock(value)) throw new Error(sourceText("error.skill.lockInvalid"));
+    return value;
+  });
+});
+export const readPackFolders = Effect.fn("SkillMarketplace.readPackFolders")(function* (workspace: string) {
+  const lock = yield* readLock(workspace);
+  return new Map(
+    Object.values(lock.skills).flatMap(
+      (entry): Array<[string, string[]]> => (entry.folders ? [[entry.slug, entry.folders]] : []),
+    ),
+  );
+});
+const writeLock = Effect.fn("SkillMarketplace.writeLock")((workspace: string, lock: SkillsLock) =>
+  writeFileAtomically(lockPath(workspace), `${JSON.stringify(lock, null, 2)}\n`, { createDirectory: true }).pipe(
+    toSkillMarketplaceFailure,
+  ),
+);
+const pathExists = Effect.fn("SkillMarketplace.pathExists")((path: string) =>
+  skillIO(() => lstat(path)).pipe(
+    Effect.as(true),
+    Effect.catch(() => Effect.succeed(false)),
+  ),
+);
+
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
-}
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return Uint8Array.from(bytes).buffer;
 }
 
 function decodeSubmissions(value: unknown): SkillSubmission[] {
@@ -731,7 +1214,12 @@ function isLockEntry(value: unknown): value is LockEntry {
     isDynamicRecord(value.files) &&
     Object.values(value.files).every(isString) &&
     (value.enabled === undefined || isBoolean(value.enabled)) &&
-    (value.description === undefined || isString(value.description))
+    (value.description === undefined || isString(value.description)) &&
+    (value.folders === undefined ||
+      (Array.isArray(value.folders) &&
+        value.folders.every(
+          (folder) => isString(folder) && folder.startsWith(`${value.slug}-`) && SKILL_FOLDER_PATTERN.test(folder),
+        )))
   );
 }
 
@@ -744,7 +1232,7 @@ function isSkillsLock(value: unknown): value is SkillsLock {
   );
 }
 
-async function assertSkillPaths(workspace: string, slug: string): Promise<void> {
+const assertSkillPaths = Effect.fn("SkillMarketplace.checkPaths")(function* (workspace: string, slug: string) {
   for (const target of [
     ...targetDirectories(workspace, slug),
     disabledDirectory(workspace, slug),
@@ -754,12 +1242,20 @@ async function assertSkillPaths(workspace: string, slug: string): Promise<void> 
     const parts = relative(current, target).split(/[\\/]/u);
     for (const part of ["", ...parts]) {
       current = join(current, part);
-      try {
-        if ((await lstat(current)).isSymbolicLink()) throw new Error(sourceText("error.skill.installPathSymlink"));
-      } catch (error) {
+      const entry = yield* Effect.result(skillIO(() => lstat(current)));
+      if (Result.isFailure(entry)) {
+        const error = entry.failure.cause;
         if (isDynamicRecord(error) && error.code === "ENOENT") break;
-        throw error;
+        return yield* entry.failure;
       }
+      if (entry.success.isSymbolicLink())
+        return yield* new SkillMarketplaceFailure({ cause: new Error(sourceText("error.skill.installPathSymlink")) });
     }
   }
-}
+});
+
+export class SkillMarketplaceFailure extends Schema.TaggedError<SkillMarketplaceFailure>()("SkillMarketplaceFailure", {
+  cause: Schema.Defect(),
+}) {}
+
+const { io: skillIO, sync: skillSync, rewrap: toSkillMarketplaceFailure } = causeHelpers(SkillMarketplaceFailure);

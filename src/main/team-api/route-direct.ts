@@ -1,10 +1,3 @@
-// Direct messages between two people on the team.
-//
-// Every handler goes through the server's own DM facade rather than the chat store, because that
-// facade is where the recipient check and the realtime publish live. It throws a plain `Error`, not
-// an `HttpError`, so misuse of these routes answers 500 and is logged - deliberately, since a
-// member addressing someone who is not on the team is a client bug, not a bad field.
-
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
   DirectConversationPage,

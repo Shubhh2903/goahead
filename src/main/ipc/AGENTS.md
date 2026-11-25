@@ -10,9 +10,9 @@ here registers anything: `index.ts` spreads them all into `registerIpcGroups`, w
    `request<Payload, Result>()("group:wire-name")` or `event<Payload>()("group:wire-name")`. All
    endpoints are typed except `browserInput.sendLiveViewInput`: the renderer sends `BrowserLiveViewInput`
    and main decodes the different wire `BrowserViewInput`. Do not add another `untypedRequest(...)`.
-2. In a group the preload builds with `bridgeGroup` (the `GroupApi` aliases in
-   `packages/contracts/src/ipc-desktop-apis.ts`), skip this step: the method exists already. In a
-   hand-written group, declare the `OpenBotDesktopApi` method as
+2. In a group the preload builds with `bridgeGroup`, skip this step: the method exists already. A
+   new group needs only its place in `IPC_GROUP_PATHS`, beside `IPC_ENDPOINTS`; `OpenBotDesktopApi`
+   is built from that table. In a hand-written group, declare the `OpenBotDesktopApi` method as
    `Invoke<typeof IPC_ENDPOINTS.group.name>` (or `Subscribe<...>` for an event).
 3. Run `bun run typecheck:node`, then `bun run typecheck:renderer`. The errors name the file to
    change and the key to add.
@@ -28,11 +28,11 @@ hand-written signature in step 2 compiles, so review must check that it uses `In
 preload call is found by `src/main/ipc-channel-coverage.test.ts`, not by the types.
 
 A group is the unit one registrar covers in full, which is why a wire prefix can span several: the
-`agent:` channels are four groups, one per registrar, because the exhaustiveness a group buys is only
+`agent:` channels are eight groups in seven registrars, because the exhaustiveness a group buys is only
 worth having when a single object literal can satisfy it. A registrar covering more than one group
 returns `Pick<IpcGroupHandlers, "servers" | "host" | "remoteDesktop">`.
 
-## The four ways to bind a handler
+## The five ways to bind a handler
 
 From `./define-ipc-group.ts`. Pick by what the implementation needs; there is no other way in, and
 none of them lets a payload through undecoded.
@@ -42,15 +42,16 @@ none of them lets a payload through undecoded.
 | `handler(fn)` | takes nothing the renderer sent |
 | `payloadHandler(decode, fn)` | takes a payload — `decode` is what makes it a known shape |
 | `eventHandler(fn)` | needs the `IpcMainInvokeEvent`, for `event.sender` or the window behind it |
+| `eventPayloadHandler(decode, fn)` | takes a payload and needs the event, but any app window may call it |
 | `authorizedHandler(authorize, decode, fn)` | needs a sender-identity check *before* anything is decoded |
 
-There is deliberately no unauthorized event-plus-payload constructor: every endpoint that needs both
-today needs the sender check too. `handleTrustedWithEvent` carries the overload, so add the
-constructor when an endpoint actually wants it rather than before.
+`eventPayloadHandler` has no sender-identity check. Use it only when every app window may call the
+endpoint, and the event only tells which one did, as `browser.startLiveView` does to send the frames
+to that window.
 
 `authorizedHandler` exists because every window of the app shares one origin, so the trusted-URL gate
-in `../trusted-ipc.ts` cannot tell the Dynamic Island overlay from the main renderer.
-`dynamic-island-handlers.ts` is the only user today, and the ordering is the point: a caller already
+in `../trusted-ipc.ts` cannot tell the Dynamic Island or browser dock overlay from the main renderer.
+`dynamic-island-handlers.ts` and `browser-dock-handlers.ts` use it, and the ordering is the point: a caller already
 known to be rejected must not be handed a payload-validation error to read, and must not be what the
 decoder spends its allocations on.
 
@@ -62,7 +63,7 @@ decoder spends its allocations on.
 | every request endpoint has exactly one handler | `GroupHandlers` (`TS2741` / `TS2353`) |
 | every group has a registrar | `registerIpcGroups` at `src/main/index.ts` (`TS2741`) |
 | no handler binds a channel outside the manifest | both entry points here read `IPC_ENDPOINTS` and take a group *name*; `ipc-channel-coverage.test.ts` keeps the wrappers unreachable elsewhere |
-| a payload is decoded before the handler sees it | no constructor pairs one with a raw `unknown` |
+| a payload is decoded before the handler sees it | no constructor pairs one with a raw `unknown`; `bun run test:ipc-input -- --allow-mutations` sends malformed payloads from a running dev app |
 | no channel is in two groups | `ipc-channel-coverage.test.ts` |
 | the preload invokes exactly the request endpoints | `ipc-channel-coverage.test.ts` |
 | the sender check runs first | `trusted-ipc.test.ts`, `define-ipc-group.test.ts` |
@@ -81,3 +82,8 @@ When the whole handler is that one route, bind it with `scopedHandler(decode, { 
 `scopedQueryHandler({ local, remote })` for a `scopedQuery` endpoint, from `./scoped-handler.ts`.
 Each branch gets the decoded payload, and `remote` also gets the server. Use `payloadHandler` with
 `agentRequest(decode)` only when the handler does work outside the route.
+
+A `remote` branch sends the request to the joined server. It throws only for a host that does not
+have the capability (`remoteServers.supportsCapability`). A branch that always throws, or that
+returns empty data, needs a reason that the feature cannot work on a server, written beside it. See
+[Joined servers](../../../AGENTS.md#joined-servers).

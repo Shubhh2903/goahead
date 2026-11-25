@@ -4,8 +4,12 @@ import type { RemoteDesktopIceServer } from "@openbot/contracts/ipc";
 import type { IceServer } from "@openbot/contracts/signal-protocol/messages";
 import type { RemoteMemberRole } from "@openbot/contracts/signal-protocol/ticket";
 import { sourceText } from "@openbot/i18n/source";
-import { BrowserWindow, MessageChannelMain, type MessagePortMain } from "electron";
+import { createOpenBotLogger } from "@openbot/logging";
+import { iceServerErrorDetail, knownIceCandidateRoute } from "@openbot/team-client/ice-diagnostics";
+import { Deferred, Effect, Exit, Fiber, Scope } from "effect";
+import { BrowserWindow, MessageChannelMain, type MessagePortMain, webContents } from "electron";
 import { z } from "zod";
+import { RemoteWorkflowError, remoteCall, remoteDecode } from "./remote-service-effects";
 
 export type TeamWebRtcChannel = "rpc" | "events" | "files" | "desktop";
 
@@ -13,6 +17,10 @@ interface TeamWebRtcBridgeEvents {
   accountProfileChanged: [peerId: string];
   accountServersChanged: [peerId: string];
   signalReady: [peerId: string];
+  signalOpen: [peerId: string];
+  hostWaiting: [peerId: string];
+  signalHeld: [peerId: string, retryInMs: number];
+  signalClosed: [peerId: string, code: string, terminal: boolean];
   incoming: [
     peerId: string,
     connection: {
@@ -27,28 +35,36 @@ interface TeamWebRtcBridgeEvents {
   ];
   connected: [peerId: string, binding?: { localFingerprint: string; remoteFingerprint: string }];
   disconnected: [peerId: string];
+  pathLost: [peerId: string];
+  pathRestored: [peerId: string];
   data: [peerId: string, channel: TeamWebRtcChannel, data: string | ArrayBuffer];
+  egressOpen: [peerId: string];
+  egressClosed: [peerId: string];
+  egressData: [peerId: string, data: string | ArrayBuffer];
   path: [peerId: string, path: "p2p" | "relay"];
-  error: [peerId: string, code: string, message: string];
+  error: [peerId: string, code: string, message: string, terminal?: boolean];
   iceServers: [peerId: string, servers: RemoteDesktopIceServer[]];
 }
 
 interface TeamWebRtcBridgeOptions {
-  developmentUrl?: string | null;
+  developmentUrl?: string | null | undefined;
   preloadPath?: string;
   iceTransportPolicy?: "all" | "relay";
 }
 
-// The envelope the hidden peer window posts back, not the Signal protocol - it is one flat bag
-// because a single `port.on("message")` handler dispatches every reply and event on it, and the
-// discriminated Signal union it carries fragments of has already been decoded on the other side.
-// The schema stays zod and stays strict about it: this is the renderer-to-main trust boundary, and
-// the only thing shared with the wire contract is the shape of what crosses it, tied below.
-const iceServerSchema = z.object({
-  urls: z.union([z.string(), z.array(z.string())]),
-  username: z.string().optional(),
-  credential: z.string().optional(),
-}) satisfies z.ZodType<IceServer>;
+const iceServerSchema = z
+  .object({
+    urls: z.union([z.string(), z.array(z.string())]),
+    username: z.string().optional(),
+    credential: z.string().optional(),
+  })
+  .transform(
+    ({ urls, username, credential }): IceServer => ({
+      urls,
+      ...(username === undefined ? {} : { username }),
+      ...(credential === undefined ? {} : { credential }),
+    }),
+  ) satisfies z.ZodType<IceServer>;
 const bridgeMessageSchema = z
   .object({
     type: z.string().optional(),
@@ -58,8 +74,14 @@ const bridgeMessageSchema = z
     channel: z.enum(["rpc", "events", "files", "desktop"]).optional(),
     data: z.union([z.string(), z.instanceof(ArrayBuffer)]).optional(),
     path: z.enum(["p2p", "relay"]).optional(),
+    route: z.string().optional(),
+    side: z.enum(["host", "client"]).optional(),
+    url: z.string().optional(),
+    errorCode: z.number().int().optional(),
+    errorText: z.string().optional(),
     code: z.string().optional(),
     message: z.string().optional(),
+    terminal: z.boolean().optional(),
     connectionId: z.string().optional(),
     sessionId: z.string().optional(),
     userId: z.string().optional(),
@@ -69,6 +91,7 @@ const bridgeMessageSchema = z
     localFingerprint: z.string().min(1).max(256).optional(),
     remoteFingerprint: z.string().min(1).max(256).optional(),
     iceServers: z.array(iceServerSchema).optional(),
+    retryInMs: z.number().nonnegative().optional(),
   })
   .loose();
 type BridgeMessage = z.infer<typeof bridgeMessageSchema>;
@@ -81,150 +104,338 @@ type BridgeCommand =
       token: string;
       peer: "host" | "client";
       iceTransportPolicy: "all" | "relay";
+      privateNetwork?: boolean;
+      waitForHost?: boolean;
     }
-  | { type: "disconnect" | "disconnect-peer" | "restart-ice" | "close"; peerId: string }
+  | { type: "prepare-signal"; peerId: string; signalUrl: string }
+  | { type: "set-private-network"; peerId: string; privateNetwork: boolean }
+  | {
+      type:
+        | "disconnect"
+        | "disconnect-peer"
+        | "restart-ice"
+        | "renew-host-signal"
+        | "close"
+        | "open-egress"
+        | "close-egress"
+        | "ping";
+      peerId: string;
+    }
+  | { type: "send-egress"; peerId: string; data: string | ArrayBuffer }
   | { type: "send"; peerId: string; channel: TeamWebRtcChannel; data: string | ArrayBuffer };
 
 const COMMAND_TIMEOUT_MS = 15_000;
 const SEND_COMMAND_TIMEOUT_MS = 75_000;
+const LIVENESS_INTERVAL_MS = 30_000;
+const LIVENESS_MISSES = 2;
+
+const logger = createOpenBotLogger("team-webrtc-bridge");
 
 export class TeamWebRtcBridge extends EventEmitter<TeamWebRtcBridgeEvents> {
   readonly #options: TeamWebRtcBridgeOptions;
-  readonly #pending = new Map<
-    string,
-    { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
-  >();
+  readonly #pending = new Map<string, Deferred.Deferred<void, RemoteWorkflowError>>();
   #window: BrowserWindow | null = null;
   #port: MessagePortMain | null = null;
-  #ready: Promise<void> | null = null;
+  #ready: Fiber.Fiber<void, RemoteWorkflowError> | null = null;
+  #scope = Scope.makeUnsafe();
+  #stopping: Deferred.Deferred<void, RemoteWorkflowError> | null = null;
   readonly #iceServers = new Map<string, RemoteDesktopIceServer[]>();
+  readonly #peers = new Set<string>();
+  #lostWindow: BrowserWindow | null = null;
 
   constructor(options: TeamWebRtcBridgeOptions = {}) {
     super();
     this.#options = options;
   }
 
-  start(): Promise<void> {
-    if (this.#ready) return this.#ready;
-    let ready: Promise<void>;
-    ready = this.#start().catch((error) => {
-      if (this.#ready === ready) {
+  readonly start = Effect.fn("TeamWebRtcBridge.start")(function* (this: TeamWebRtcBridge) {
+    if (this.#stopping) yield* Deferred.await(this.#stopping);
+    if (this.#ready) return yield* Fiber.join(this.#ready);
+    const ready = yield* Effect.forkIn(this.#start(), this.#scope, { startImmediately: false });
+    this.#ready = ready;
+    ready.addObserver((exit) => {
+      if (Exit.isFailure(exit) && this.#ready === ready) {
         this.#reset(sourceText("error.remote.bridgeStartFailed"));
         this.#ready = null;
       }
-      throw error;
     });
-    this.#ready = ready;
-    return this.#ready;
-  }
+    yield* Fiber.join(ready);
+  }).bind(this);
 
-  async connect(input: { peerId: string; signalUrl: string; token: string; peer: "host" | "client" }): Promise<void> {
-    await this.start();
-    await this.#command({ type: "connect", ...input, iceTransportPolicy: this.#options.iceTransportPolicy ?? "all" });
-  }
+  readonly connect = Effect.fn("TeamWebRtcBridge.connect")(function* (
+    this: TeamWebRtcBridge,
+    input: {
+      peerId: string;
+      signalUrl: string;
+      token: string;
+      peer: "host" | "client";
+      privateNetwork?: boolean;
+      waitForHost?: boolean;
+    },
+  ) {
+    yield* this.start();
+    this.#peers.add(input.peerId);
+    yield* this.#command({ type: "connect", ...input, iceTransportPolicy: this.#options.iceTransportPolicy ?? "all" });
+  }).bind(this);
 
-  async disconnect(peerId: string): Promise<void> {
-    if (!this.#port) return;
-    await this.#command({ type: "disconnect", peerId });
-  }
+  readonly setPrivateNetwork = Effect.fn("TeamWebRtcBridge.setPrivateNetwork")(function* (
+    this: TeamWebRtcBridge,
+    peerId: string,
+    privateNetwork: boolean,
+  ) {
+    if (this.#port) yield* this.#command({ type: "set-private-network", peerId, privateNetwork });
+  }).bind(this);
 
-  async disconnectPeer(peerId: string): Promise<void> {
-    if (!this.#port) return;
-    await this.#command({ type: "disconnect-peer", peerId });
-  }
+  readonly prepareSignal = Effect.fn("TeamWebRtcBridge.prepareSignal")(function* (
+    this: TeamWebRtcBridge,
+    peerId: string,
+    signalUrl: string,
+  ) {
+    yield* this.start();
+    yield* this.#command({ type: "prepare-signal", peerId, signalUrl });
+  }).bind(this);
 
-  async send(peerId: string, channel: TeamWebRtcChannel, data: string | ArrayBuffer): Promise<void> {
-    await this.start();
-    await this.#command({ type: "send", peerId, channel, data });
-  }
+  readonly disconnect = Effect.fn("TeamWebRtcBridge.disconnect")(function* (this: TeamWebRtcBridge, peerId: string) {
+    this.#peers.delete(peerId);
+    if (this.#port) yield* this.#command({ type: "disconnect", peerId });
+  }).bind(this);
 
-  async restartIce(peerId: string): Promise<void> {
-    await this.#command({ type: "restart-ice", peerId });
-  }
+  readonly disconnectPeer = Effect.fn("TeamWebRtcBridge.disconnectPeer")(function* (
+    this: TeamWebRtcBridge,
+    peerId: string,
+  ) {
+    if (this.#port) yield* this.#command({ type: "disconnect-peer", peerId });
+  }).bind(this);
+
+  readonly send = Effect.fn("TeamWebRtcBridge.send")(function* (
+    this: TeamWebRtcBridge,
+    peerId: string,
+    channel: TeamWebRtcChannel,
+    data: string | ArrayBuffer,
+  ) {
+    yield* this.start();
+    yield* this.#command({ type: "send", peerId, channel, data });
+  }).bind(this);
+
+  readonly openEgress = Effect.fn("TeamWebRtcBridge.openEgress")(function* (this: TeamWebRtcBridge, peerId: string) {
+    yield* this.#command({ type: "open-egress", peerId });
+  }).bind(this);
+
+  readonly closeEgress = Effect.fn("TeamWebRtcBridge.closeEgress")(function* (this: TeamWebRtcBridge, peerId: string) {
+    if (this.#port) yield* this.#command({ type: "close-egress", peerId });
+  }).bind(this);
+
+  readonly sendEgress = Effect.fn("TeamWebRtcBridge.sendEgress")(function* (
+    this: TeamWebRtcBridge,
+    peerId: string,
+    data: string | ArrayBuffer,
+  ) {
+    yield* this.#command({ type: "send-egress", peerId, data });
+  }).bind(this);
+
+  readonly restartIce = Effect.fn("TeamWebRtcBridge.restartIce")(function* (this: TeamWebRtcBridge, peerId: string) {
+    yield* this.#command({ type: "restart-ice", peerId });
+  }).bind(this);
+
+  readonly renewHostSignal = Effect.fn("TeamWebRtcBridge.renewHostSignal")(function* (this: TeamWebRtcBridge) {
+    if (this.#port) yield* this.#command({ type: "renew-host-signal", peerId: "all" });
+  }).bind(this);
 
   getIceServers(peerId: string): RemoteDesktopIceServer[] {
     return structuredClone(this.#iceServers.get(peerId) ?? []);
   }
 
-  async stop(): Promise<void> {
-    if (this.#port) await this.#command({ type: "close", peerId: "all" }).catch(() => undefined);
-    this.#reset(sourceText("error.remote.bridgeStopped"));
-    this.#ready = null;
-  }
+  readonly stop = Effect.fn("TeamWebRtcBridge.stop")(function* (this: TeamWebRtcBridge) {
+    if (this.#stopping) return yield* Deferred.await(this.#stopping);
+    const stopping = Deferred.makeUnsafe<void, RemoteWorkflowError>();
+    this.#stopping = stopping;
+    yield* Effect.gen({ self: this }, function* () {
+      if (this.#port) yield* this.#command({ type: "close", peerId: "all" }).pipe(Effect.ignore);
+      this.#ready = null;
+      yield* Scope.close(this.#scope, Exit.void);
+      yield* remoteDecode(() => this.#reset(sourceText("error.remote.bridgeStopped")));
+      this.#scope = Scope.makeUnsafe();
+    }).pipe(
+      Effect.onExit((exit) =>
+        Effect.gen({ self: this }, function* () {
+          yield* Deferred.done(stopping, exit);
+          if (this.#stopping === stopping) this.#stopping = null;
+        }),
+      ),
+    );
+  }, Effect.uninterruptible).bind(this);
 
   #reset(message: string): void {
-    this.#port?.close();
+    const port = this.#port;
     this.#port = null;
+    port?.close();
     this.#window?.destroy();
     this.#window = null;
+    this.#lostWindow?.destroy();
+    this.#lostWindow = null;
     this.#iceServers.clear();
+    this.#peers.clear();
     for (const pending of this.#pending.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error(message));
+      Deferred.doneUnsafe(pending, Effect.fail(new RemoteWorkflowError({ cause: new Error(message) })));
     }
     this.#pending.clear();
   }
 
-  async #start(): Promise<void> {
-    const window = new BrowserWindow({
-      show: false,
-      webPreferences: {
-        preload: this.#options.preloadPath ?? join(__dirname, "../preload/teamWebrtc.cjs"),
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        webSecurity: true,
-      },
-    });
+  readonly #start = Effect.fn("TeamWebRtcBridge.load")(function* (this: TeamWebRtcBridge) {
+    const window = yield* remoteDecode(
+      () =>
+        new BrowserWindow({
+          show: false,
+          webPreferences: {
+            preload: this.#options.preloadPath ?? join(__dirname, "../preload/teamWebrtc.cjs"),
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+            webSecurity: true,
+          },
+        }),
+    );
     this.#window = window;
-    window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    await (this.#options.developmentUrl
-      ? window.loadURL(new URL("team-webrtc.html", `${this.#options.developmentUrl}/`).toString())
-      : window.loadURL("openbot-app://app/team-webrtc.html"));
-    const { port1, port2 } = new MessageChannelMain();
+    this.#lostWindow?.destroy();
+    this.#lostWindow = null;
+    yield* remoteDecode(() => window.webContents.setWindowOpenHandler(() => ({ action: "deny" })));
+    yield* remoteCall(() =>
+      this.#options.developmentUrl
+        ? window.loadURL(new URL("team-webrtc.html", `${this.#options.developmentUrl}/`).toString())
+        : window.loadURL("openbot-app://app/team-webrtc.html"),
+    );
+    const { port1, port2 } = yield* remoteDecode(() => new MessageChannelMain());
     this.#port = port1;
-    port1.on("message", (event) => this.#handleMessage(bridgeMessageSchema.parse(event.data)));
-    port1.start();
-    const rendererReady = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(sourceText("error.remote.bridgeDidNotStart"))), 10_000);
-      const ready = (message: BridgeMessage) => {
-        if (message.type !== "bridge-ready") return;
-        clearTimeout(timer);
-        port1.off("message", listener);
-        resolve();
-      };
-      const listener = (event: { data: unknown }) => ready(bridgeMessageSchema.parse(event.data));
-      port1.on("message", listener);
-    });
-    window.webContents.postMessage("openbot-team-webrtc-port", null, [port2]);
-    await rendererReady;
-  }
-
-  #command(command: BridgeCommand): Promise<void> {
-    const port = this.#port;
-    if (!port) return Promise.reject(new Error(sourceText("error.remote.bridgeNotReady")));
-    const commandId = crypto.randomUUID();
-    return new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(
-        () => {
-          this.#pending.delete(commandId);
-          reject(new Error(sourceText("error.remote.bridgeCommandTimeout", { command: command.type })));
-        },
-        command.type === "send" ? SEND_COMMAND_TIMEOUT_MS : COMMAND_TIMEOUT_MS,
+    const ready = Deferred.makeUnsafe<void, RemoteWorkflowError>();
+    const listener = (event: { data: unknown }) => {
+      const message = bridgeMessageSchema.parse(event.data);
+      this.#handleMessage(message);
+      if (message.type === "bridge-ready") Deferred.doneUnsafe(ready, Effect.void);
+    };
+    const lost = (reason: string) => {
+      if (this.#port !== port1) return;
+      logger.warn(`The Team WebRTC bridge stopped (${reason}). The next connection starts it again.`);
+      const peers = [...this.#peers];
+      this.#ready = null;
+      this.#window = null;
+      this.#reset(sourceText("error.remote.bridgeStopped"));
+      this.#lostWindow = window;
+      Deferred.doneUnsafe(
+        ready,
+        Effect.fail(new RemoteWorkflowError({ cause: new Error(sourceText("error.remote.bridgeStopped")) })),
       );
-      this.#pending.set(commandId, { resolve, reject, timer });
-      port.postMessage({ ...command, commandId });
+      if (!this.#stopping) for (const peerId of peers) this.emit("disconnected", peerId);
+    };
+    yield* remoteDecode(() => {
+      port1.on("message", listener);
+      port1.on("close", () => lost("port closed"));
+      window.webContents.on("render-process-gone", (_event, details) => lost(details.reason));
+      port1.start();
     });
-  }
+    yield* Effect.gen(function* () {
+      yield* remoteDecode(() => window.webContents.postMessage("openbot-team-webrtc-port", null, [port2]));
+      yield* Deferred.await(ready).pipe(
+        Effect.timeoutOrElse({
+          duration: 10_000,
+          orElse: () =>
+            Effect.fail(new RemoteWorkflowError({ cause: new Error(sourceText("error.remote.bridgeDidNotStart")) })),
+        }),
+      );
+    }).pipe(
+      Effect.onExit((exit) =>
+        Exit.isFailure(exit) ? remoteDecode(() => port1.off("message", listener)).pipe(Effect.orDie) : Effect.void,
+      ),
+    );
+    yield* Effect.forkIn(this.#watch(window, port1).pipe(Effect.ignore), this.#scope);
+  });
+
+  readonly #watch = Effect.fn("TeamWebRtcBridge.watch")(function* (
+    this: TeamWebRtcBridge,
+    window: BrowserWindow,
+    port: MessagePortMain,
+  ) {
+    let misses = 0;
+    while (this.#port === port) {
+      yield* Effect.sleep(LIVENESS_INTERVAL_MS);
+      if (this.#port !== port) return;
+      const answered = yield* this.#command({ type: "ping", peerId: "all" }).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+      if (this.#port !== port) return;
+      misses = answered ? 0 : misses + 1;
+      if (misses < LIVENESS_MISSES) continue;
+      const stopped = yield* remoteDecode(() => {
+        if (this.#port !== port || window.webContents.isDestroyed()) return true;
+        const processId = window.webContents.getOSProcessId();
+        const shared = webContents
+          .getAllWebContents()
+          .some(
+            (other) => other !== window.webContents && !other.isDestroyed() && other.getOSProcessId() === processId,
+          );
+        if (shared) return false;
+        logger.warn(
+          `The Team WebRTC bridge did not answer ${LIVENESS_MISSES} checks. It stops, and the next connection starts it again.`,
+        );
+        window.webContents.forcefullyCrashRenderer();
+        return true;
+      });
+      if (stopped) return;
+      if (misses === LIVENESS_MISSES)
+        logger.warn("The Team WebRTC bridge does not answer. It shares its process with another window, so it stays.");
+    }
+  });
+
+  readonly #command = Effect.fn("TeamWebRtcBridge.command")(function* (this: TeamWebRtcBridge, command: BridgeCommand) {
+    const port = this.#port;
+    if (!port) return yield* new RemoteWorkflowError({ cause: new Error(sourceText("error.remote.bridgeNotReady")) });
+    const commandId = crypto.randomUUID();
+    yield* Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const pending = Deferred.makeUnsafe<void, RemoteWorkflowError>();
+        this.#pending.set(commandId, pending);
+        return pending;
+      }),
+      (pending) =>
+        Effect.gen(function* () {
+          yield* remoteDecode(() => port.postMessage({ ...command, commandId }));
+          yield* Deferred.await(pending).pipe(
+            Effect.timeoutOrElse({
+              duration:
+                command.type === "send" || command.type === "send-egress"
+                  ? SEND_COMMAND_TIMEOUT_MS
+                  : COMMAND_TIMEOUT_MS,
+              orElse: () =>
+                Effect.fail(
+                  new RemoteWorkflowError({
+                    cause: new Error(sourceText("error.remote.bridgeCommandTimeout", { command: command.type })),
+                  }),
+                ),
+            }),
+          );
+        }),
+      () =>
+        Effect.sync(() => {
+          this.#pending.delete(commandId);
+        }),
+    );
+  });
 
   #handleMessage(message: BridgeMessage): void {
     if ((message.type === "command-complete" || message.type === "command-error") && message.commandId) {
       const pending = this.#pending.get(message.commandId);
       if (!pending) return;
-      clearTimeout(pending.timer);
       this.#pending.delete(message.commandId);
-      if (message.type === "command-complete") pending.resolve();
-      else pending.reject(new Error(message.message ?? sourceText("error.remote.bridgeCommandFailed")));
+      Deferred.doneUnsafe(
+        pending,
+        message.type === "command-complete"
+          ? Effect.void
+          : Effect.fail(
+              new RemoteWorkflowError({
+                cause: new Error(message.message ?? sourceText("error.remote.bridgeCommandFailed")),
+              }),
+            ),
+      );
       return;
     }
     if (!message.peerId) return;
@@ -250,24 +461,45 @@ export class TeamWebRtcBridge extends EventEmitter<TeamWebRtcBridgeEvents> {
     } else if (message.type === "account-profile-changed") this.emit("accountProfileChanged", message.peerId);
     else if (message.type === "account-servers-changed") this.emit("accountServersChanged", message.peerId);
     else if (message.type === "signal-ready") this.emit("signalReady", message.peerId);
+    else if (message.type === "signal-open") this.emit("signalOpen", message.peerId);
+    else if (message.type === "host-waiting") this.emit("hostWaiting", message.peerId);
+    else if (message.type === "signal-held" && message.retryInMs !== undefined)
+      this.emit("signalHeld", message.peerId, message.retryInMs);
+    else if (message.type === "signal-closed" && message.code)
+      this.emit("signalClosed", message.peerId, message.code, message.terminal === true);
     else if (message.type === "peer-connected" && message.localFingerprint && message.remoteFingerprint)
       this.emit("connected", message.peerId, {
         localFingerprint: message.localFingerprint,
         remoteFingerprint: message.remoteFingerprint,
       });
     else if (message.type === "peer-disconnected") this.emit("disconnected", message.peerId);
-    else if (message.type === "ice-path" && message.path) this.emit("path", message.peerId, message.path);
+    else if (message.type === "peer-path-lost") this.emit("pathLost", message.peerId);
+    else if (message.type === "peer-path-restored") this.emit("pathRestored", message.peerId);
+    else if (message.type === "ice-path" && message.path) {
+      logger.info(
+        `WebRTC ${message.side ?? "unknown"} connection uses ${message.path}: ${knownIceCandidateRoute(message.route)}.`,
+      );
+      this.emit("path", message.peerId, message.path);
+    } else if (message.type === "ice-candidate-error" && message.errorCode !== undefined)
+      logger.warn(
+        `WebRTC ${message.side ?? "unknown"} connection cannot use ${iceServerErrorDetail(message.url ?? "", message.errorCode, message.errorText ?? "")}`,
+      );
     else if (message.type === "ice-servers" && message.iceServers) {
       this.#iceServers.set(message.peerId, message.iceServers);
       this.emit("iceServers", message.peerId, structuredClone(message.iceServers));
     } else if (message.type === "data" && message.channel && message.data !== undefined)
       this.emit("data", message.peerId, message.channel, message.data);
+    else if (message.type === "egress-open") this.emit("egressOpen", message.peerId);
+    else if (message.type === "egress-closed") this.emit("egressClosed", message.peerId);
+    else if (message.type === "egress-data" && message.data !== undefined)
+      this.emit("egressData", message.peerId, message.data);
     else if (message.type === "peer-error")
       this.emit(
         "error",
         message.peerId,
         message.code ?? "webrtc_error",
         message.message ?? sourceText("error.remote.webRtcFailed"),
+        message.terminal === true,
       );
   }
 }

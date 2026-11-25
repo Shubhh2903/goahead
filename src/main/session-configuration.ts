@@ -1,32 +1,22 @@
-/**
- * Everything that configures the default Electron session: the renderer's Content-Security-Policy,
- * its permission handlers, and the custom protocols that serve the packaged renderer bundle,
- * attachments, visual reply pages, avatars and server logos.
- *
- * **This module body must stay side-effect free.** The main entry point imports it, and an import
- * evaluates before the entry point's own statements - which is where `app.setPath("userData", ...)`
- * and `app.enableSandbox()` run. Anything executed at this module's top level would therefore run
- * against the wrong profile and an unsandboxed default. Every function here touches
- * `session.defaultSession` only when called, and each is called from inside `app.whenReady()`.
- */
-
 import { readFile, stat } from "node:fs/promises";
-import { extname, isAbsolute, relative, resolve } from "node:path";
-import { isChatVisualMimeType } from "@openbot/contracts/chat-visual";
+import { isAbsolute, relative, resolve } from "node:path";
+import { CHAT_VISUAL_PAGE_LIMIT, isChatVisualMimeType } from "@openbot/contracts/chat-visual";
 import { LOCAL_SERVER_ID } from "@openbot/contracts/ipc";
+import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { app, session } from "electron";
 import type { AgentService } from "../backend/agent-service";
+import { runCauseEffect } from "../backend/effect-boundary";
 import type { MailboxStore } from "../backend/mailbox-store";
 import type { MessagingService } from "../backend/messaging/messaging-service";
-import {
-  attachmentCorsHeaders,
-  attachmentDocumentHeaders,
-  CHAT_VISUAL_PAGE_LIMIT,
-  chatVisualResponse,
-} from "./chat-visual-protocol";
+import { applicationContentType } from "./application-content-type";
+import { attachmentCorsHeaders, attachmentDocumentHeaders, chatVisualResponse } from "./chat-visual-protocol";
+import { inlineContentDisposition } from "./content-disposition";
 import { buildContentSecurityPolicy, readSelfHostedSignalOrigin } from "./content-security-policy";
-import { fileResponse } from "./file-response";
+import { filePreviewPages } from "./file-preview-pages";
+import { bytesResponse, fileResponse } from "./file-response";
+import { canAnswerRemoteRanges } from "./remote-attachment-cache";
 import type { RemoteServerManager } from "./remote-server-manager";
+import { parseRemoteAvatarUrl, remoteAttachmentPreviewSize } from "./remote-server-urls";
 import { canCheckRendererPermission, canRequestRendererPermission } from "./renderer-permissions";
 import type { TeamStore } from "./team-store";
 import { isTrustedRendererUrl } from "./trusted-renderer";
@@ -40,7 +30,7 @@ export function configureContentSecurityPolicy(): void {
 
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     if (details.resourceType !== "mainFrame" || !isTrustedRendererUrl(details.url)) {
-      callback({ responseHeaders: details.responseHeaders });
+      callback(details.responseHeaders === undefined ? {} : { responseHeaders: details.responseHeaders });
       return;
     }
     callback({
@@ -56,8 +46,6 @@ export function configureRendererPermissions(): void {
   session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) =>
     canCheckRendererPermission(permission, requestingOrigin, details),
   );
-  // The frame that asks decides, not its window: a visual reply frame inside the trusted window
-  // must not get the microphone or the clipboard.
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
     const mediaTypes = ("mediaTypes" in details ? details.mediaTypes : undefined) ?? [];
     callback(
@@ -78,12 +66,21 @@ export interface AttachmentProtocolDependencies {
   slackInboxFiles: Pick<MessagingService, "resolveInboxFile">;
 }
 
+function asksForPreview(url: URL): boolean {
+  return url.searchParams.get("preview") === "1";
+}
+
+function asksToOpen(url: URL): boolean {
+  return url.searchParams.get("open") === "1";
+}
+
 export function configureAttachmentProtocol({
   mailbox,
   agents,
   remoteServers,
   slackInboxFiles,
 }: AttachmentProtocolDependencies): void {
+  const logger = createOpenBotLogger("attachment-protocol");
   session.defaultSession.protocol.handle("openbot-attachment", async (request) => {
     try {
       const url = new URL(request.url);
@@ -91,16 +88,22 @@ export function configureAttachmentProtocol({
       // main downloaded from Slack with the person's token. The renderer names ids, never an address.
       if (url.hostname === "slack") return await slackInboxFileResponse(url, slackInboxFiles);
       const id = url.pathname.split("/").filter(Boolean).at(-1);
-      const attachment = id ? await mailbox.resolveAttachment(id) : null;
+      const attachment = id ? await runCauseEffect(mailbox.resolveAttachment(id)) : null;
       if (!attachment) return new Response("Not found", { status: 404 });
-      return await fileResponse(attachment.path, {
-        "Content-Type": attachment.mimeType,
-        "Cache-Control": "no-store",
-        ...attachmentCorsHeaders(request.headers.get("Origin")),
-        ...attachmentDocumentHeaders(attachment.mimeType),
-        "X-Content-Type-Options": "nosniff",
-        "Content-Disposition": "inline",
-      });
+      return await runCauseEffect(
+        fileResponse(
+          attachment.path,
+          {
+            "Content-Type": attachment.mimeType,
+            "Cache-Control": "no-store",
+            ...attachmentCorsHeaders(request.headers.get("Origin")),
+            ...attachmentDocumentHeaders(attachment.mimeType),
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": inlineContentDisposition(attachment.name),
+          },
+          request.headers.get("Range"),
+        ),
+      );
     } catch {
       return new Response("Not found", { status: 404 });
     }
@@ -111,28 +114,40 @@ export function configureAttachmentProtocol({
       const serverId = decodeURIComponent(url.hostname);
       const attachmentId = decodeURIComponent(url.pathname.split("/").filter(Boolean)[0] ?? "");
       if (!serverId || !attachmentId) return new Response("Not found", { status: 404 });
-      const attachment = await remoteServers.downloadAttachment(attachmentId, serverId);
-      return new Response(Buffer.from(attachment.bytes), {
-        headers: {
+      const attachment = await runCauseEffect(
+        asksForPreview(url)
+          ? remoteServers.downloadAttachmentPreview(attachmentId, serverId)
+          : remoteServers.downloadAttachment(
+              attachmentId,
+              serverId,
+              true,
+              remoteAttachmentPreviewSize(url),
+              !asksToOpen(url),
+            ),
+      );
+      return bytesResponse(
+        attachment.bytes,
+        {
           "Content-Type": attachment.mimeType,
           "Cache-Control": "no-store",
           ...attachmentCorsHeaders(request.headers.get("Origin")),
           ...attachmentDocumentHeaders(attachment.mimeType),
           "X-Content-Type-Options": "nosniff",
-          "Content-Disposition": "inline",
+          "Content-Disposition": inlineContentDisposition(attachment.name),
         },
-      });
-    } catch {
+        canAnswerRemoteRanges(attachment) ? request.headers.get("Range") : undefined,
+      );
+    } catch (error) {
+      logger.warn("A remote attachment could not be shown.", { cause: toLogValue(error) });
       return new Response("Not found", { status: 404 });
     }
   });
-  // A visual reply page: an HTML attachment with the frame script, in a sandbox. See
-  // `chat-visual-protocol.ts`.
   session.defaultSession.protocol.handle("openbot-visual", async (request) => {
     try {
       const url = new URL(request.url);
+      if (url.hostname === "preview") return await filePreviewPages.response(request);
       const id = url.hostname === "file" ? url.pathname.split("/").filter(Boolean).at(-1) : undefined;
-      const attachment = id ? await mailbox.resolveAttachment(id) : null;
+      const attachment = id ? await runCauseEffect(mailbox.resolveAttachment(id)) : null;
       if (!attachment || !isChatVisualMimeType(attachment.mimeType)) return new Response("Not found", { status: 404 });
       if ((await stat(attachment.path)).size > CHAT_VISUAL_PAGE_LIMIT)
         return new Response("Not found", { status: 404 });
@@ -147,40 +162,43 @@ export function configureAttachmentProtocol({
       const serverId = decodeURIComponent(url.hostname);
       const attachmentId = decodeURIComponent(url.pathname.split("/").filter(Boolean)[0] ?? "");
       if (!serverId || !attachmentId) return new Response("Not found", { status: 404 });
-      const attachment = await remoteServers.downloadAttachment(attachmentId, serverId);
+      const attachment = await runCauseEffect(remoteServers.downloadAttachment(attachmentId, serverId));
       if (!isChatVisualMimeType(attachment.mimeType)) return new Response("Not found", { status: 404 });
       return chatVisualResponse(attachment.bytes);
-    } catch {
+    } catch (error) {
+      logger.warn("A remote visual reply could not be shown.", { cause: toLogValue(error) });
       return new Response("Not found", { status: 404 });
     }
   });
   session.defaultSession.protocol.handle("openbot-avatar", async (request) => {
     try {
       const url = new URL(request.url);
-      if (url.hostname !== "agent") return new Response("Not found", { status: 404 });
-      const agentId = decodeURIComponent(url.pathname.split("/").filter(Boolean)[0] ?? "");
-      const avatar = agentId ? agents.resolveAvatar(agentId) : null;
+      if (url.hostname !== "agent" && url.hostname !== "channel") return new Response("Not found", { status: 404 });
+      const id = decodeURIComponent(url.pathname.split("/").filter(Boolean)[0] ?? "");
+      const avatar = !id ? null : url.hostname === "agent" ? agents.resolveAvatar(id) : agents.resolveChannelImage(id);
       if (!avatar || avatar.version !== url.searchParams.get("v")) {
         return new Response("Not found", { status: 404 });
       }
-      return await fileResponse(avatar.path, {
-        "Content-Type": avatar.mimeType,
-        "Cache-Control": "private, max-age=31536000, immutable",
-        "X-Content-Type-Options": "nosniff",
-      });
+      return await runCauseEffect(
+        fileResponse(avatar.path, {
+          "Content-Type": avatar.mimeType,
+          "Cache-Control": "private, max-age=31536000, immutable",
+          "X-Content-Type-Options": "nosniff",
+        }),
+      );
     } catch {
       return new Response("Not found", { status: 404 });
     }
   });
   session.defaultSession.protocol.handle("openbot-remote-avatar", async (request) => {
     try {
-      const url = new URL(request.url);
-      const serverId = decodeURIComponent(url.hostname);
-      const agentId = decodeURIComponent(url.pathname.split("/").filter(Boolean)[0] ?? "");
-      if (!serverId || !agentId) return new Response("Not found", { status: 404 });
-      const version = url.searchParams.get("v");
-      if (!version) return new Response("Not found", { status: 404 });
-      const avatar = await remoteServers.downloadAgentAvatar(agentId, serverId, version);
+      const target = parseRemoteAvatarUrl(request.url);
+      if (!target) return new Response("Not found", { status: 404 });
+      const avatar = await runCauseEffect(
+        target.kind === "agent"
+          ? remoteServers.downloadAgentAvatar(target.id, target.serverId, target.version)
+          : remoteServers.downloadChannelImage(target.id, target.serverId, target.version),
+      );
       return new Response(Buffer.from(avatar.bytes), {
         headers: {
           "Content-Type": avatar.mimeType,
@@ -202,12 +220,14 @@ async function slackInboxFileResponse(
   if (!workspaceId || !fileId || rest.length > 0) return new Response("Not found", { status: 404 });
   const image = await files.resolveInboxFile(workspaceId, fileId);
   if (!image) return new Response("Not found", { status: 404 });
-  return fileResponse(image.path, {
-    "Content-Type": image.mimeType,
-    "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff",
-    "Content-Disposition": "inline",
-  });
+  return runCauseEffect(
+    fileResponse(image.path, {
+      "Content-Type": image.mimeType,
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Disposition": "inline",
+    }),
+  );
 }
 
 export interface ServerLogoProtocolDependencies {
@@ -223,11 +243,13 @@ export function configureServerLogoProtocols({ teamStore, remoteServers }: Serve
       if (url.hostname !== LOCAL_SERVER_ID || !logo || logo.version !== url.searchParams.get("v")) {
         return new Response("Not found", { status: 404 });
       }
-      return await fileResponse(logo.path, {
-        "Content-Type": logo.mimeType,
-        "Cache-Control": "private, max-age=31536000, immutable",
-        "X-Content-Type-Options": "nosniff",
-      });
+      return await runCauseEffect(
+        fileResponse(logo.path, {
+          "Content-Type": logo.mimeType,
+          "Cache-Control": "private, max-age=31536000, immutable",
+          "X-Content-Type-Options": "nosniff",
+        }),
+      );
     } catch {
       return new Response("Not found", { status: 404 });
     }
@@ -238,7 +260,7 @@ export function configureServerLogoProtocols({ teamStore, remoteServers }: Serve
       const serverId = decodeURIComponent(url.hostname);
       const version = url.searchParams.get("v");
       if (!serverId || !version) return new Response("Not found", { status: 404 });
-      const logo = await remoteServers.downloadServerLogo(serverId, version);
+      const logo = await runCauseEffect(remoteServers.downloadServerLogo(serverId, version));
       return new Response(Buffer.from(logo.bytes), {
         headers: {
           "Content-Type": logo.mimeType,
@@ -275,32 +297,4 @@ export function configureApplicationProtocol(): void {
       return new Response("Not found", { status: 404 });
     }
   });
-}
-
-function applicationContentType(
-  path: string,
-):
-  | "text/html; charset=utf-8"
-  | "text/javascript; charset=utf-8"
-  | "text/css; charset=utf-8"
-  | "image/svg+xml"
-  | "image/png"
-  | "font/woff2"
-  | "application/octet-stream" {
-  switch (extname(path).toLowerCase()) {
-    case ".html":
-      return "text/html; charset=utf-8";
-    case ".js":
-      return "text/javascript; charset=utf-8";
-    case ".css":
-      return "text/css; charset=utf-8";
-    case ".svg":
-      return "image/svg+xml";
-    case ".png":
-      return "image/png";
-    case ".woff2":
-      return "font/woff2";
-    default:
-      return "application/octet-stream";
-  }
 }

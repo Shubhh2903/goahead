@@ -1,27 +1,23 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
+import { Effect, Schema } from "effect";
+import { causeHelpers } from "../backend/effect-boundary";
 
 const logger = createOpenBotLogger("linux-desktop-entry");
 
-/**
- * The file name has to stay `openbot.desktop`: it is `desktopName` in package.json, which is what
- * Electron uses as the application id it hands to `xdg-settings`, and what electron-builder writes
- * into `StartupWMClass` so a window groups with this entry.
- */
 const DESKTOP_FILE_NAME = "openbot.desktop";
 const ICON_FILE_NAME = "openbot.png";
 const WM_CLASS = "openbot";
+const LAUNCHER_READ_CONCURRENCY = 16;
+const GSETTINGS_TIMEOUT_MS = 2_000;
+const execFileAsync = promisify(execFile);
 
-/**
- * The desktop entry that makes a `goahead://` link reach the app.
- *
- * `Exec` names the AppImage itself, because that is the only path that survives a restart, and `%U`
- * is what passes the invitation URL to it.
- */
-export function linuxDesktopEntry(appImagePath: string, iconPath: string): string {
+function linuxDesktopEntry(appImagePath: string, iconPath: string, ownsWindow: boolean): string {
   return `${[
     "[Desktop Entry]",
     "Type=Application",
@@ -30,27 +26,99 @@ export function linuxDesktopEntry(appImagePath: string, iconPath: string): strin
     `Exec=${quoteExecutable(appImagePath)} %U`,
     `Icon=${iconPath}`,
     "Terminal=false",
-    "Categories=Development;",
-    `StartupWMClass=${WM_CLASS}`,
+    ...(ownsWindow ? ["Categories=Development;", `StartupWMClass=${WM_CLASS}`] : ["NoDisplay=true"]),
     `MimeType=x-scheme-handler/${PRODUCT_IDENTITY.linkScheme};`,
   ].join("\n")}\n`;
 }
 
-/**
- * Writes the desktop entry for an AppImage, and reports the path it wrote, or `null` when there was
- * nothing to write.
- *
- * `app.setAsDefaultProtocolClient` calls `xdg-settings` on Linux, and `xdg-settings` can only name a
- * desktop entry that already exists. A downloaded AppImage has none, so without this the scheme
- * registration silently does nothing and every invitation link fails. Any other Linux build was
- * installed by a package manager, which owns the entry; this leaves that one alone.
- */
-export async function installLinuxDesktopEntry(options: {
+function desktopEntryKeys(entry: string): Map<string, string> {
+  const keys = new Map<string, string>();
+  let inMainGroup = false;
+  for (const line of entry.split(/\r?\n/u)) {
+    if (line.startsWith("[")) inMainGroup = line.trim() === "[Desktop Entry]";
+    const separator = line.indexOf("=");
+    if (inMainGroup && separator > 0 && !keys.has(line.slice(0, separator).trim()))
+      keys.set(line.slice(0, separator).trim(), line.slice(separator + 1).trim());
+  }
+  return keys;
+}
+
+function execProgram(exec: string): string {
+  const quoted = /^"((?:[^"\\]|\\.)*)"/u.exec(exec);
+  if (quoted) return (quoted[1] ?? "").replace(/\\(.)/gu, "$1");
+  return exec.split(/\s/u)[0] ?? "";
+}
+
+function programsOfVisibleLauncherWithOurWindow(entry: string): string[] {
+  const keys = desktopEntryKeys(entry);
+  if (keys.get("StartupWMClass") !== WM_CLASS) return [];
+  if (keys.get("NoDisplay") === "true" || keys.get("Hidden") === "true") return [];
+  return [keys.get("TryExec") ?? "", execProgram(keys.get("Exec") ?? "")].filter((program) => program !== "");
+}
+
+function resolvedPath(path: string): Effect.Effect<string> {
+  return desktopEntryIO(() => realpath(path)).pipe(Effect.catch(() => Effect.succeed(path)));
+}
+
+const otherLauncherStartsAppImage = Effect.fn("LinuxDesktopEntry.otherLauncherStartsAppImage")(function* (
+  directory: string,
+  appImagePath: string,
+) {
+  const names = yield* desktopEntryIO(() => readdir(directory)).pipe(Effect.catch(() => Effect.succeed<string[]>([])));
+  const appImage = yield* resolvedPath(appImagePath);
+  const matches = yield* Effect.forEach(
+    names.filter((name) => name.endsWith(".desktop") && name !== DESKTOP_FILE_NAME),
+    (name) =>
+      Effect.gen(function* () {
+        const entry = yield* readEntry(join(directory, name));
+        for (const program of entry === null ? [] : programsOfVisibleLauncherWithOurWindow(entry)) {
+          if (program === appImagePath || (yield* resolvedPath(program)) === appImage) return true;
+        }
+        return false;
+      }),
+    { concurrency: LAUNCHER_READ_CONCURRENCY },
+  );
+  return matches.includes(true);
+});
+
+function runsGnomeShell(environment: NodeJS.ProcessEnv): boolean {
+  return (environment.XDG_CURRENT_DESKTOP ?? "").split(":").some((desktop) => desktop.trim().toUpperCase() === "GNOME");
+}
+
+const gnomeFavoritesLeaveOutOurLauncher = Effect.fn("LinuxDesktopEntry.gnomeFavoritesLeaveOutOurLauncher")(function* (
+  environment: NodeJS.ProcessEnv,
+) {
+  if (!runsGnomeShell(environment)) return false;
+  return yield* desktopEntryIO(() =>
+    execFileAsync("gsettings", ["get", "org.gnome.shell", "favorite-apps"], {
+      encoding: "utf8",
+      timeout: GSETTINGS_TIMEOUT_MS,
+    }),
+  ).pipe(
+    Effect.map(({ stdout }) => stdout.trim().startsWith("[") && !stdout.includes(`'${DESKTOP_FILE_NAME}'`)),
+    Effect.catch(() => Effect.succeed(false)),
+  );
+});
+
+const anotherLauncherShouldOwnWindow = Effect.fn("LinuxDesktopEntry.anotherLauncherShouldOwnWindow")(function* (
+  directory: string,
+  appImagePath: string,
+  environment: NodeJS.ProcessEnv,
+) {
+  if (!(yield* otherLauncherStartsAppImage(directory, appImagePath))) return false;
+  return yield* gnomeFavoritesLeaveOutOurLauncher(environment);
+});
+
+interface DesktopEntryOptions {
   platform: NodeJS.Platform;
   environment: NodeJS.ProcessEnv;
   iconPath: string;
   homeDirectory?: string;
-}): Promise<string | null> {
+}
+
+export const installLinuxDesktopEntry = Effect.fn("LinuxDesktopEntry.install")(function* (
+  options: DesktopEntryOptions,
+) {
   if (options.platform !== "linux") return null;
   const appImagePath = options.environment.APPIMAGE?.trim();
   if (!appImagePath) return null;
@@ -58,65 +126,65 @@ export async function installLinuxDesktopEntry(options: {
   const dataDirectory = dataHome || join(options.homeDirectory ?? homedir(), ".local", "share");
   const directory = join(dataDirectory, "applications");
   const path = join(directory, DESKTOP_FILE_NAME);
-  const entry = linuxDesktopEntry(appImagePath, await installIcon(dataDirectory, options.iconPath));
-  try {
-    if ((await readEntry(path)) === entry) return path;
-    await mkdir(directory, { recursive: true });
-    await writeFile(path, entry, { mode: 0o644 });
-    logger.info(`Installed the desktop entry at ${path}.`);
-    return path;
-  } catch (error) {
-    logger.warn("Unable to install the desktop entry, so openbot:// links stay unregistered.", toLogValue(error));
-    return null;
-  }
-}
+  const iconPath = yield* installIcon(dataDirectory, options.iconPath);
+  const ownsWindow = !(yield* anotherLauncherShouldOwnWindow(directory, appImagePath, options.environment));
+  const entry = linuxDesktopEntry(appImagePath, iconPath, ownsWindow);
+  const result = yield* Effect.result(
+    Effect.gen(function* () {
+      if ((yield* readEntry(path)) === entry) return path;
+      yield* desktopEntryIO(() => mkdir(directory, { recursive: true }));
+      yield* desktopEntryIO(() => writeFile(path, entry, { mode: 0o644 }));
+      logger.info(
+        ownsWindow
+          ? `Installed the desktop entry at ${path}.`
+          : `Installed a hidden desktop entry at ${path}, because another launcher starts this AppImage and the dock does not pin this entry.`,
+      );
+      return path;
+    }),
+  );
+  if (result._tag === "Success") return result.success;
+  logger.warn(
+    "Unable to install the desktop entry, so goahead:// links stay unregistered.",
+    toLogValue(result.failure.cause),
+  );
+  return null;
+});
 
-/**
- * Copies the launcher icon to a path that outlives the process, and reports the path the entry has
- * to name. Reports the packaged path instead when the copy fails, because an entry with an icon
- * that can disappear is still better than no invitation links at all.
- *
- * An AppImage mounts its resources in a temporary directory that the runtime removes when the app
- * exits, so an entry that points there loses its icon as soon as OpenBot is not running. The entry
- * names the copy by absolute path, which the desktop entry specification allows, rather than by
- * icon theme name: one loose file under the data home is not a theme.
- */
-async function installIcon(dataDirectory: string, iconPath: string): Promise<string> {
+const installIcon = Effect.fn("LinuxDesktopEntry.installIcon")(function* (dataDirectory: string, iconPath: string) {
   const directory = join(dataDirectory, "icons");
   const path = join(directory, ICON_FILE_NAME);
-  try {
-    const icon = await readFile(iconPath);
-    if (icon.equals(await readIcon(path))) return path;
-    await mkdir(directory, { recursive: true });
-    await writeFile(path, icon, { mode: 0o644 });
-    logger.info(`Installed the launcher icon at ${path}.`);
-    return path;
-  } catch (error) {
-    logger.warn("Unable to install the launcher icon, so the entry names the packaged one.", toLogValue(error));
-    return iconPath;
-  }
+  const result = yield* Effect.result(
+    Effect.gen(function* () {
+      const icon = yield* desktopEntryIO(() => readFile(iconPath));
+      if (icon.equals(yield* readIcon(path))) return path;
+      yield* desktopEntryIO(() => mkdir(directory, { recursive: true }));
+      yield* desktopEntryIO(() => writeFile(path, icon, { mode: 0o644 }));
+      logger.info(`Installed the launcher icon at ${path}.`);
+      return path;
+    }),
+  );
+  if (result._tag === "Success") return result.success;
+  logger.warn(
+    "Unable to install the launcher icon, so the entry names the packaged one.",
+    toLogValue(result.failure.cause),
+  );
+  return iconPath;
+});
+
+function readIcon(path: string): Effect.Effect<Buffer> {
+  return desktopEntryIO(() => readFile(path)).pipe(Effect.catch(() => Effect.sync(() => Buffer.alloc(0))));
 }
 
-async function readIcon(path: string): Promise<Buffer> {
-  try {
-    return await readFile(path);
-  } catch {
-    return Buffer.alloc(0);
-  }
+function readEntry(path: string): Effect.Effect<string | null> {
+  return desktopEntryIO(() => readFile(path, "utf8")).pipe(Effect.catch(() => Effect.succeed(null)));
 }
 
-async function readEntry(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, "utf8");
-  } catch {
-    return null;
-  }
-}
+class DesktopEntryFailure extends Schema.TaggedError<DesktopEntryFailure>()("DesktopEntryFailure", {
+  cause: Schema.Defect(),
+}) {}
 
-/**
- * Quotes a path for the `Exec` key. The desktop entry specification reserves a set of characters
- * inside a quoted argument, and a backslash is what escapes them.
- */
+const { io: desktopEntryIO } = causeHelpers(DesktopEntryFailure);
+
 function quoteExecutable(path: string): string {
   return `"${path.replace(/(["`$\\])/gu, "\\$1")}"`;
 }

@@ -1,21 +1,18 @@
-// Reading a Team API request: the parsers, the validators and the capability filters that every
-// route module needs and none of them owns.
-//
-// Two rules hold this file together. Every validator here throws `HttpError` rather than returning a
-// failure, because the router has the only `try` and turning a throw into a response in one place is
-// what keeps a route from accidentally answering twice. And every limit is checked here, not at the
-// call site: this is the outside edge of the machine, so `readJson` refusing an oversized body is a
-// property of the reader, not something ~50 routes each have to remember.
-
 import type { IncomingMessage } from "node:http";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
+  AGENT_WELCOME_ITEM_TYPE,
+  type AgentAccessLevel,
+  agentAccessRank,
+  CHANNEL_RESUME_ITEM_TYPE,
+  type ConversationMessage,
   type ConversationMessageSender,
   type ConversationPage,
   type ConversationPageAnchor,
   type ConversationSnapshot,
   type ConversationWithReadState,
   type CreateAgentInput,
+  canAdministerServer,
   conversationMessageSender,
   HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX,
   isAgentModel,
@@ -24,40 +21,135 @@ import {
   isAvatarSeed,
   isLocalOnlyConversationMessage,
   isReasoningEffort,
+  isReleasedRoutineSchedule,
   MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX,
   type RespondToApprovalInput,
   type RespondToBrowserTakeoverInput,
   ROUTINE_EVENT_ITEM_TYPE_PREFIX,
+  ROUTINE_QUIET_ANSWER_ITEM_TYPE,
   ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX,
+  SETTING_LINK_ITEM_TYPE_PREFIX,
   sharedAgentEvent,
   type TeamMemberSummary,
   type UpdateAgentInput,
 } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isBoolean, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
+import { teamProtocolCapabilityLimit } from "@openbot/contracts/team-protocol/capability-limits";
 import {
+  CHANNEL_BROWSER_CAPABILITY,
+  CHANNEL_ISOLATION_CAPABILITY,
+  CHANNEL_PICTURE_CAPABILITY,
+  expandTeamCapabilitiesV10,
   isTeamCurrentCapability,
   supportsTeamSemanticTags,
   TEAM_AGENT_CREATE_MODEL_CAPABILITY,
 } from "@openbot/contracts/team-protocol/current";
 import { teamHttpCodec } from "@openbot/contracts/team-protocol/http-codecs";
+import { PROVIDER_MANY_ACCOUNTS_CAPABILITY } from "@openbot/contracts/team-protocol/provider-many-accounts-v1";
+import { ROUTINE_QUIET_ANSWERS_CAPABILITY } from "@openbot/contracts/team-protocol/routine-quiet-answers-v1";
+import { SETTING_LINK_MARKERS_CAPABILITY } from "@openbot/contracts/team-protocol/setting-link-markers-v1";
 import { teamSideRouteCodec } from "@openbot/contracts/team-protocol/side-routes";
 import {
   TEAM_CAPABILITIES_HEADER,
   TEAM_PROTOCOL_V1,
   TEAM_PROTOCOL_VERSION_HEADER,
 } from "@openbot/contracts/team-protocol/v1";
+import { TEAM_PROTOCOL_V2_MAX_JSON_FRAME_BYTES } from "@openbot/contracts/team-protocol/v2";
+import { TEAM_PROTOCOL_V9 } from "@openbot/contracts/team-protocol/v9";
+import {
+  readTeamCapabilitiesV10,
+  TEAM_ABSENT_CAPABILITIES_HEADER,
+  TEAM_PROTOCOL_V10,
+  type TeamCapabilitiesV10,
+} from "@openbot/contracts/team-protocol/v10";
 import { sourceText } from "@openbot/i18n/source";
+import { readBodyWithin } from "../http-body";
 import { HttpError } from "./http-error";
+import type { TeamApiRequestContext } from "./request-context";
 
 export const JSON_LIMIT = 1024 * 1024;
+export const WEBRTC_FRAME_BODY_BUDGET = Math.floor(TEAM_PROTOCOL_V2_MAX_JSON_FRAME_BYTES * 0.75);
+
+const CUT_TEXT_BYTES = 256 * 1024;
+
+export function messageTextCut(
+  messages: readonly ConversationMessage[],
+  excessBytes: number,
+): (message: ConversationMessage) => ConversationMessage {
+  const sizes = new Map(messages.map((message) => [message, jsonBytes(message.text)]));
+  const ascending = messages.map((message) => sizes.get(message) ?? 0).sort((left, right) => left - right);
+  let remaining = ascending.reduce((sum, size) => sum + size, 0) - excessBytes;
+  if (remaining <= 0) return (message) => message;
+  let cap = Number.POSITIVE_INFINITY;
+  for (const [index, size] of ascending.entries()) {
+    const left = ascending.length - index;
+    if (size * left > remaining) {
+      cap = Math.max(0, Math.floor(remaining / left));
+      break;
+    }
+    remaining -= size;
+  }
+  const limit = Math.min(cap, CUT_TEXT_BYTES);
+  return (message) =>
+    (sizes.get(message) ?? 0) > limit ? { ...message, text: cutText(message.text, limit) } : message;
+}
+
+function cutText(text: string, maxBytes: number): string {
+  const textBytes = Buffer.byteLength(text);
+  for (let keep = Math.floor(text.length / 2); ; ) {
+    const end = isHighSurrogate(text.charCodeAt(keep - 1)) ? keep - 1 : keep;
+    const start = isLowSurrogate(text.charCodeAt(text.length - keep)) ? text.length - keep + 1 : text.length - keep;
+    const head = text.slice(0, end);
+    const tail = text.slice(start);
+    const size = (Math.ceil((textBytes - Buffer.byteLength(head) - Buffer.byteLength(tail)) / 104_857.6) / 10).toFixed(
+      1,
+    );
+    const cut = `${head}\n\n${sourceText("status.remote.messageCut", { size })}\n\n${tail}`;
+    const bytes = jsonBytes(cut);
+    if (bytes <= maxBytes || keep === 0) return cut;
+    keep = Math.floor(keep * Math.min(0.99, maxBytes / bytes));
+  }
+}
+
+function jsonBytes(value: string): number {
+  return Buffer.byteLength(JSON.stringify(value));
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
 
 export function requestCapabilities(request: IncomingMessage): Set<string> {
+  const protocol = requestProtocol(request);
+  if (protocol >= TEAM_PROTOCOL_V10) {
+    const lists = requestCapabilityListsV10(request);
+    return new Set(lists ? expandTeamCapabilitiesV10(lists).filter(isTeamCurrentCapability) : []);
+  }
   const header = request.headers[TEAM_CAPABILITIES_HEADER.toLowerCase()];
   const value = Array.isArray(header) ? header.join(",") : header;
-  if (!value || value.length > 4_096) return new Set();
+  if (!value || value.length > (protocol >= TEAM_PROTOCOL_V9 ? 8_192 : 4_096)) return new Set();
   const capabilities = value.split(",").map((capability) => capability.trim());
-  if (capabilities.length > 64) return new Set();
+  if (capabilities.length > teamProtocolCapabilityLimit(protocol)) return new Set();
   return new Set(capabilities.filter(isTeamCurrentCapability));
+}
+
+export function requestCapabilityListsV10(request: IncomingMessage): TeamCapabilitiesV10 | null {
+  return readTeamCapabilitiesV10(
+    headerCapabilityList(request, TEAM_CAPABILITIES_HEADER),
+    headerCapabilityList(request, TEAM_ABSENT_CAPABILITIES_HEADER),
+  );
+}
+
+function headerCapabilityList(request: IncomingMessage, name: string): string[] | null {
+  const header = request.headers[name.toLowerCase()];
+  const value = Array.isArray(header) ? header.join(",") : header;
+  if (!value) return [];
+  if (value.length > 8_192) return null;
+  return value.split(",").map((capability) => capability.trim());
 }
 
 export function conversationSnapshotForCapabilities(
@@ -130,6 +222,8 @@ export function markerExclusionsForCapabilities(capabilities: ReadonlySet<string
   excludeRoutineRunEvents: boolean;
   excludeHostedSiteEvents: boolean;
   excludeLocalOnly: boolean;
+  excludeRoutineQuietAnswers: boolean;
+  excludeSettingLinks?: boolean;
 } {
   return {
     // A Team API reader is never this desktop: a mail note is not unread for it.
@@ -137,14 +231,16 @@ export function markerExclusionsForCapabilities(capabilities: ReadonlySet<string
     excludeRoutineEvents: !capabilities.has("routine-event-markers"),
     excludeRoutineRunEvents: !capabilities.has("routine-run-event-markers"),
     excludeHostedSiteEvents: !capabilities.has("hosted-site-event-markers"),
+    excludeRoutineQuietAnswers: !capabilities.has(ROUTINE_QUIET_ANSWERS_CAPABILITY),
+    excludeSettingLinks: !capabilities.has(SETTING_LINK_MARKERS_CAPABILITY),
   };
 }
 
-function markerSupported(itemType: string | undefined, capabilities: ReadonlySet<string>): boolean {
-  // A mail note stays on this computer, whatever the client understands.
+export function markerSupported(itemType: string | undefined, capabilities: ReadonlySet<string>): boolean {
   if (isLocalOnlyConversationMessage({ itemType })) return false;
+  if (itemType === ROUTINE_QUIET_ANSWER_ITEM_TYPE) return capabilities.has(ROUTINE_QUIET_ANSWERS_CAPABILITY);
+  if (itemType === AGENT_WELCOME_ITEM_TYPE || itemType === CHANNEL_RESUME_ITEM_TYPE) return false;
   if (itemType?.startsWith(ROUTINE_EVENT_ITEM_TYPE_PREFIX)) return capabilities.has("routine-event-markers");
-  // Paged history drops suggestions with routine events, so live events drop them the same way.
   if (itemType?.startsWith(MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX)) return capabilities.has("routine-event-markers");
   if (itemType?.startsWith(ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX)) {
     return capabilities.has("routine-run-event-markers");
@@ -152,6 +248,7 @@ function markerSupported(itemType: string | undefined, capabilities: ReadonlySet
   if (itemType?.startsWith(HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX)) {
     return capabilities.has("hosted-site-event-markers");
   }
+  if (itemType?.startsWith(SETTING_LINK_ITEM_TYPE_PREFIX)) return capabilities.has(SETTING_LINK_MARKERS_CAPABILITY);
   return true;
 }
 
@@ -176,23 +273,46 @@ export function firstHeaderValue(value: string | string[] | undefined): string |
   return first?.trim();
 }
 
-/** The member who made this request, as the sender the host stamps on the message they write. */
 export function memberSender(member: TeamMemberSummary): ConversationMessageSender | undefined {
   return conversationMessageSender(member.id, member.name?.trim() || member.email || member.username);
 }
 
-export function requireAdmin(member: TeamMemberSummary): void {
-  if (member.role === "member") throw new HttpError(403, sourceText("error.team.adminRequired"));
+export function requireReleasedSchedule(schedule: unknown): void {
+  if (schedule !== undefined && !isReleasedRoutineSchedule(schedule)) {
+    throw new HttpError(400, sourceText("error.backend.routineScheduleInvalid"));
+  }
 }
 
-/**
- * The router checks the agent ID in the path and the query. A module that reads it from the body
- * checks it here: an agent hidden from the caller answers as a missing agent does.
- */
+export function requireAdmin(member: TeamMemberSummary): void {
+  if (!canAdministerServer(member.role)) throw new HttpError(403, sourceText("error.team.adminRequired"));
+}
+
+export function requireOwner(member: TeamMemberSummary): void {
+  if (member.role !== "owner") throw new HttpError(403, sourceText("error.team.ownerRequired"));
+}
+
+export function requireListedAgent(agents: { listAgents(): readonly { id: string }[] }, agentId: string): void {
+  if (!agents.listAgents().some((agent) => agent.id === agentId)) {
+    throw new HttpError(404, sourceText("error.team.agentNotFound"));
+  }
+}
+
 export function requireVisibleBodyAgent(body: DynamicRecord, hiddenAgentIds: ReadonlySet<string>): void {
   if (isString(body.agentId) && hiddenAgentIds.has(body.agentId)) {
     throw new HttpError(404, sourceText("error.team.agentNotFound"));
   }
+}
+
+export function requireAgentLevel(
+  context: Pick<TeamApiRequestContext, "agentLevel">,
+  agentId: string,
+  required: Exclude<AgentAccessLevel, "none">,
+): void {
+  if (agentAccessRank(context.agentLevel(agentId)) >= agentAccessRank(required)) return;
+  throw new HttpError(
+    403,
+    sourceText(required === "manage" ? "error.team.agentManageDenied" : "error.team.agentViewOnly"),
+  );
 }
 
 export function parseBrowserBounds(value: unknown): {
@@ -219,24 +339,23 @@ export function parseBrowserBounds(value: unknown): {
 }
 
 export async function readJson(request: IncomingMessage): Promise<DynamicRecord> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += bytes.length;
-    if (size > JSON_LIMIT) throw new HttpError(413, sourceText("error.team.requestTooLarge"));
-    chunks.push(bytes);
-  }
+  const body = await readBodyWithin(request, JSON_LIMIT);
+  if (body === null) throw new HttpError(413, sourceText("error.team.requestTooLarge"));
   try {
-    const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const value = JSON.parse(body.toString("utf8"));
     const path = request.url ?? "/";
     const sideRoute = teamSideRouteCodec(path);
+    const capabilities = requestCapabilities(request);
     if (sideRoute) {
-      const input = sideRoute.request(path, value);
+      const input = sideRoute.request(path, value, {
+        channelIsolation: capabilities.has(CHANNEL_ISOLATION_CAPABILITY),
+        channelPicture: capabilities.has(CHANNEL_PICTURE_CAPABILITY),
+        channelBrowser: capabilities.has(CHANNEL_BROWSER_CAPABILITY),
+        providerManyAccounts: capabilities.has(PROVIDER_MANY_ACCOUNTS_CAPABILITY),
+      });
       if (!isDynamicRecord(input)) throw new Error("Invalid side-protocol request.");
       return input;
     }
-    const capabilities = requestCapabilities(request);
     return teamHttpCodec(requestProtocol(request)).decodeRequest(request.method ?? "GET", path, value, {
       preserveSemanticTags: supportsTeamSemanticTags(capabilities),
       agentCreateModel: capabilities.has(TEAM_AGENT_CREATE_MODEL_CAPABILITY),
@@ -433,6 +552,7 @@ export function agentCreate(value: DynamicRecord): CreateAgentInput {
     ...(value.provider === undefined ? {} : { provider: value.provider }),
     ...(value.model === undefined ? {} : { model: value.model }),
     ...(value.reasoningEffort === undefined ? {} : { reasoningEffort: value.reasoningEffort }),
+    ...(isString(value.operationId) ? { operationId: value.operationId } : {}),
   };
 }
 
@@ -443,16 +563,10 @@ function requiredCreateText(value: unknown, field: string, maximum: number): str
   return value;
 }
 
-/**
- * Reads a body of up to `limit` bytes into one array. With a `Content-Length`, the chunks go
- * directly into that array, so the body is in memory one time. Without it, the chunks are kept
- * until the end and then copied one time.
- */
 export async function readBinary(request: IncomingMessage, limit: number): Promise<Uint8Array> {
   const tooLarge = () => new HttpError(413, "Attachment exceeds the 100 MB limit.");
   const header = request.headers["content-length"];
   const declared = header !== undefined && /^\d+$/u.test(header) ? Number(header) : null;
-  // Node ends the body at `Content-Length`, so a larger declared body always fails the limit.
   if (declared !== null && declared > limit) throw tooLarge();
   const target = declared === null ? null : new Uint8Array(declared);
   const chunks: Buffer[] = [];

@@ -1,9 +1,18 @@
+import { type CustomServerPlan, optionalCustomServerPayment } from "@openbot/contracts/custom-server-plans";
+import { type HostKeyHandover, optionalHostKeyHandovers } from "@openbot/contracts/host-key-handover";
 import { inviteUseCount, isPermanentInvite } from "@openbot/contracts/invite-links";
-import type { CentralAuthUser, MobileConnectedDevice } from "@openbot/contracts/ipc";
+import {
+  type AvatarColor,
+  type CentralAuthUser,
+  isAvatarColor,
+  type MobileConnectedDevice,
+} from "@openbot/contracts/ipc";
 import { decodeRecord, requiredString } from "@openbot/contracts/ipc-decoding";
 import { type DynamicRecord, isBoolean, isNumber, isString } from "@openbot/contracts/runtime-values";
-
-/** The account API's answers, and the decoders that `CentralAuthManager` checks them with. */
+import {
+  optionalServerAppearanceField,
+  type ServerAppearance,
+} from "@openbot/contracts/team-protocol/host-appearance-v1";
 
 export interface RegisteredRemoteHost {
   hostId: string;
@@ -17,12 +26,18 @@ export interface RemoteHostSummary {
   hostId: string;
   name: string;
   logoKey: string | null;
+  appearance?: ServerAppearance | null;
   devicePublicKey: string | null;
+  keyHandovers: HostKeyHandover[];
   authEpoch: number;
   membershipId: string;
   role: "owner" | "admin" | "member";
-  /** The active members that the host's plan allows. An account server from before plans sends none. */
   memberLimit?: number;
+  hosted?: boolean;
+  restartAvailable?: boolean;
+  storageGb?: number;
+  paymentRequired?: true;
+  customPlan?: CustomServerPlan;
 }
 
 export interface RemoteInviteRecord {
@@ -45,6 +60,7 @@ export interface RemoteInvitePreview {
   emailBound: boolean;
   permanent: boolean;
   devicePublicKey: string | null;
+  keyHandovers: HostKeyHandover[];
 }
 
 export interface RemoteMemberRecord {
@@ -52,6 +68,7 @@ export interface RemoteMemberRecord {
   email: string;
   name: string | null;
   avatarUrl: string | null;
+  chatColor?: AvatarColor | null;
   role: "owner" | "admin" | "member";
   status: "active" | "revoked";
   createdAt: number;
@@ -77,18 +94,33 @@ export function decodeCentralAuthUser(value: unknown): CentralAuthUser {
   const avatarUrl = record.avatarUrl;
   if (name !== null && !isString(name)) throw new Error("Invalid account name.");
   if (avatarUrl !== null && !isString(avatarUrl)) throw new Error("Invalid account avatar.");
+  const analyticsEnabled = record.analyticsEnabled ?? null;
+  if (analyticsEnabled !== null && !isBoolean(analyticsEnabled)) throw new Error("Invalid account analytics answer.");
   return {
     id: requiredString(record, "id"),
     email: requiredString(record, "email"),
     name,
     avatarUrl,
+    analyticsEnabled,
+    ...optionalChatColor(record.chatColor),
   };
+}
+
+function optionalChatColor(value: unknown): { chatColor?: AvatarColor | null } {
+  if (value === undefined) return {};
+  return { chatColor: isAvatarColor(value) ? value : null };
 }
 
 export function decodeTicketResponse(value: unknown): { ticket: string; expiresAt: number } {
   const record = decodeRecord(value, "team ticket");
   if (!isNumber(record.expiresAt)) throw new Error("Invalid team ticket expiration.");
   return { ticket: requiredString(record, "ticket"), expiresAt: record.expiresAt };
+}
+
+export function decodeMobileConnectLinkResponse(value: unknown): { link: string; createdAt: number } {
+  const record = decodeRecord(value, "Mobile Connect link");
+  if (!isNumber(record.createdAt)) throw new Error("Invalid Mobile Connect link date.");
+  return { link: requiredString(record, "link"), createdAt: record.createdAt };
 }
 
 export function decodeMobileConnectedDevices(value: unknown): { devices: MobileConnectedDevice[] } {
@@ -112,6 +144,7 @@ function decodeMobileConnectedDevice(value: unknown): MobileConnectedDevice {
     platform,
     connectedAt: record.connectedAt,
     lastActiveAt: record.lastActiveAt,
+    via: record.via === "link" ? "link" : "code",
   };
 }
 
@@ -140,18 +173,25 @@ export function decodeRemoteHosts(value: unknown): RemoteHostSummary[] {
     if (host.devicePublicKey !== null && !isString(host.devicePublicKey)) throw new Error("Invalid remote host key.");
     if (host.role !== "owner" && host.role !== "admin" && host.role !== "member")
       throw new Error("Invalid remote host role.");
-    // A bad limit drops only the limit, so the host list still loads.
     const memberLimit = host.memberLimit;
     const validLimit = isNumber(memberLimit) && Number.isSafeInteger(memberLimit) && memberLimit >= 1;
+    const storageGb = host.storageGb;
+    const validStorage = isNumber(storageGb) && Number.isSafeInteger(storageGb) && storageGb >= 1;
     return {
       hostId: requiredString(host, "hostId"),
       name: requiredString(host, "name"),
       logoKey: host.logoKey,
+      ...optionalServerAppearanceField(host.appearance),
       devicePublicKey: host.devicePublicKey,
+      keyHandovers: optionalHostKeyHandovers(host.keyHandovers),
       authEpoch: host.authEpoch,
       membershipId: requiredString(host, "membershipId"),
       role: host.role,
       ...(validLimit ? { memberLimit } : {}),
+      ...(isBoolean(host.hosted) ? { hosted: host.hosted } : {}),
+      ...(isBoolean(host.restartAvailable) ? { restartAvailable: host.restartAvailable } : {}),
+      ...(validStorage ? { storageGb } : {}),
+      ...optionalCustomServerPayment(host),
     };
   });
 }
@@ -216,6 +256,7 @@ export function decodeRemoteInvitePreview(value: unknown): RemoteInvitePreview {
     emailBound: record.emailBound,
     permanent: isPermanentInvite(record.permanent, record.expiresAt),
     devicePublicKey: record.devicePublicKey,
+    keyHandovers: optionalHostKeyHandovers(record.keyHandovers),
   };
 }
 
@@ -246,6 +287,7 @@ function decodeRemoteMember(value: unknown): RemoteMemberRecord {
     email: requiredString(record, "email"),
     name: record.name,
     avatarUrl: record.avatarUrl,
+    ...optionalChatColor(record.chatColor),
     role: record.role,
     status: record.status,
     createdAt: record.createdAt,

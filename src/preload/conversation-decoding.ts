@@ -1,37 +1,87 @@
-// What main answers for a conversation: its pages, search, read state, attachments, queue and file
-// previews.
-//
-// Each decoder checks every field the contract type requires and keeps each optional field it
-// carries, so a value the renderer reads always has the shape its type says.
-
 import {
+  type AgentApproval,
+  type AgentTask,
+  type AgentTaskPage,
+  type AgentTaskReadState,
+  type AgentTasksSnapshot,
+  type AgentTaskWindow,
+  type AgentWaitsSnapshot,
+  type ArchivedAgentTasksPage,
+  type AttachmentDownloadProgress,
+  type AttachmentImportProgress,
   type ConversationFileSearchPage,
   type ConversationMessage,
   type ConversationPage,
   type ConversationReadState,
   type ConversationSearchPage,
+  type ConversationSnapshot,
   type ConversationWithReadState,
   type DraftAttachment,
   type FilePreview,
+  isAgentApproval,
+  isAgentTask,
+  isAgentTaskPage,
+  isAgentTaskReadState,
+  isAgentTasksSnapshot,
+  isAgentTaskWindow,
+  isAgentWaitsSnapshot,
+  isArchivedAgentTasksPage,
   isAttachmentSummary,
   isConversationMessage,
   isConversationReadState,
+  isConversationSnapshot,
   isConversationWithReadState,
   isFilePreviewKind,
+  isFilePreviewPageUrl,
+  isPinnedMessagesSnapshot,
   isQueuedMessageReceipt,
   isQueueSnapshot,
+  type PinnedMessagesSnapshot,
   type QueuedMessageReceipt,
   type QueueSnapshot,
+  WITHDRAW_FEEDBACK_STATUSES,
+  type WithdrawFeedbackResult,
 } from "@openbot/contracts/ipc";
 import {
   decodeRecord,
   guardedListDecoder,
   nullableString,
+  optionalHistoryExtent,
   requiredBoolean,
   requiredNumber,
   requiredString,
 } from "@openbot/contracts/ipc-decoding";
-import { isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
+import { isDynamicRecord, isNumber, isOneOf, isString } from "@openbot/contracts/runtime-values";
+import {
+  type AgentActiveQueues,
+  decodeAgentActiveQueues,
+} from "@openbot/contracts/team-protocol/agent-active-queues-v1";
+
+export function decodeAttachmentDownloadProgress(value: unknown): AttachmentDownloadProgress {
+  const progress = decodeRecord(value, "attachment download progress");
+  return {
+    serverId: requiredString(progress, "serverId"),
+    attachmentId: requiredString(progress, "attachmentId"),
+    received: requiredNumber(progress, "received"),
+    total: requiredNumber(progress, "total"),
+  };
+}
+
+export function decodeAttachmentImportProgress(value: unknown): AttachmentImportProgress {
+  const progress = decodeRecord(value, "attachment import progress");
+  return {
+    serverId: requiredString(progress, "serverId"),
+    requestId: requiredString(progress, "requestId"),
+    sent: requiredNumber(progress, "sent"),
+    total: requiredNumber(progress, "total"),
+  };
+}
+
+export function decodeOptionalFilePreviewPageUrl(value: unknown): string | null {
+  if (value === null) return null;
+  if (!isFilePreviewPageUrl(value)) throw new Error("Invalid file preview page URL response.");
+  return value;
+}
 
 export function decodeFilePreview(value: unknown): FilePreview {
   const preview = decodeRecord(value, "file preview");
@@ -40,7 +90,8 @@ export function decodeFilePreview(value: unknown): FilePreview {
     !isNumber(preview.size) ||
     !isString(preview.mimeType) ||
     !isFilePreviewKind(preview.previewKind) ||
-    (preview.bytes !== null && !(preview.bytes instanceof Uint8Array))
+    (preview.bytes !== null && !(preview.bytes instanceof Uint8Array)) ||
+    (preview.pageUrl !== undefined && !isFilePreviewPageUrl(preview.pageUrl))
   ) {
     throw new Error("Invalid file preview response.");
   }
@@ -50,6 +101,7 @@ export function decodeFilePreview(value: unknown): FilePreview {
     mimeType: preview.mimeType,
     previewKind: preview.previewKind,
     bytes: preview.bytes,
+    ...(preview.pageUrl === undefined ? {} : { pageUrl: preview.pageUrl }),
   };
 }
 
@@ -73,6 +125,7 @@ export function decodeConversationPageFromMain(value: unknown): ConversationPage
     pageInfo: {
       hasOlder: requiredBoolean(pageInfo, "hasOlder"),
       olderCursor: nullableString(pageInfo, "olderCursor"),
+      ...optionalHistoryExtent(pageInfo),
     },
     ...(value.readState === undefined ? {} : { readState: decodeReadState(value.readState) }),
   };
@@ -103,7 +156,11 @@ export function decodeConversationSearchPageFromMain(value: unknown): Conversati
     results: item.results.map((value) => {
       const result = decodeRecord(value, "conversation search result");
       if (!isConversationMessage(result.message)) throw new Error("Invalid conversation search message.");
-      return { agentId: requiredString(result, "agentId"), message: result.message };
+      return {
+        agentId: requiredString(result, "agentId"),
+        message: result.message,
+        ...(result.taskId === undefined ? {} : { taskId: requiredString(result, "taskId") }),
+      };
     }),
     total: requiredNumber(item, "total"),
     nextCursor: nullableString(item, "nextCursor"),
@@ -127,6 +184,12 @@ export function decodeReadState(value: unknown): ConversationReadState {
   return value;
 }
 
+export function decodeWithdrawFeedbackResult(value: unknown): WithdrawFeedbackResult {
+  const result = decodeRecord(value, "feedback withdraw result");
+  if (!isOneOf(WITHDRAW_FEEDBACK_STATUSES, result.status)) throw new Error("Invalid feedback withdraw result.");
+  return { status: result.status };
+}
+
 export function decodeReadStates(value: unknown): Record<string, ConversationReadState> {
   const item = decodeRecord(value, "conversation reads");
   return Object.fromEntries(Object.entries(item).map(([agentId, state]) => [agentId, decodeReadState(state)]));
@@ -139,6 +202,11 @@ export function decodeAttachments(value: unknown): DraftAttachment[] {
   return value;
 }
 
+export function decodeAttachment(value: unknown): DraftAttachment {
+  if (!isAttachmentSummary(value)) throw new Error("Invalid attachment response.");
+  return value;
+}
+
 export function decodeReceipt(value: unknown): QueuedMessageReceipt {
   if (!isQueuedMessageReceipt(value)) {
     throw new Error("Invalid queued message response.");
@@ -146,9 +214,90 @@ export function decodeReceipt(value: unknown): QueuedMessageReceipt {
   return value;
 }
 
+export function decodeWaits(value: unknown): AgentWaitsSnapshot {
+  if (!isAgentWaitsSnapshot(value)) {
+    throw new Error("Invalid open waits response.");
+  }
+  return value;
+}
+
+export function decodePinnedMessages(value: unknown): PinnedMessagesSnapshot {
+  if (!isPinnedMessagesSnapshot(value)) {
+    throw new Error("Invalid pinned messages response.");
+  }
+  return value;
+}
+
+export function decodeAgentTaskReadState(value: unknown): AgentTaskReadState {
+  if (!isAgentTaskReadState(value)) {
+    throw new Error("Invalid thread read state.");
+  }
+  return value;
+}
+
+export function decodeAgentTaskReadStates(value: unknown): AgentTaskReadState[] {
+  if (!Array.isArray(value) || !value.every(isAgentTaskReadState)) {
+    throw new Error("Invalid thread read states.");
+  }
+  return value;
+}
+
+export function decodeAgentTasks(value: unknown): AgentTasksSnapshot {
+  if (!isAgentTasksSnapshot(value)) {
+    throw new Error("Invalid task list response.");
+  }
+  return value;
+}
+
+export function decodeArchivedAgentTasks(value: unknown): ArchivedAgentTasksPage {
+  if (!isArchivedAgentTasksPage(value)) {
+    throw new Error("Invalid archived thread list response.");
+  }
+  return value;
+}
+
+export function decodeAgentTask(value: unknown): AgentTask {
+  if (!isAgentTask(value)) {
+    throw new Error("Invalid task response.");
+  }
+  return value;
+}
+
+export function decodeTaskConversation(value: unknown): ConversationSnapshot {
+  if (!isConversationSnapshot(value)) {
+    throw new Error("Invalid task conversation response.");
+  }
+  return value;
+}
+
+export function decodeTaskPage(value: unknown): AgentTaskPage {
+  if (!isAgentTaskPage(value)) {
+    throw new Error("Invalid task page response.");
+  }
+  return value;
+}
+
+export function decodeTaskWindow(value: unknown): AgentTaskWindow {
+  if (!isAgentTaskWindow(value)) {
+    throw new Error("Invalid task part response.");
+  }
+  return value;
+}
+
+export function decodeActiveQueues(value: unknown): AgentActiveQueues | null {
+  return value === null ? null : decodeAgentActiveQueues(value);
+}
+
 export function decodeQueue(value: unknown): QueueSnapshot {
   if (!isQueueSnapshot(value)) {
     throw new Error("Invalid queue response.");
+  }
+  return value;
+}
+
+export function decodePendingApproval(value: unknown): AgentApproval | null {
+  if (value !== null && !isAgentApproval(value)) {
+    throw new Error("Invalid pending approval response.");
   }
   return value;
 }

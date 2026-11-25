@@ -4,10 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { handleTrusted, handleTrustedWithEvent, type IpcCallRecord, setIpcCallObserver } from "./trusted-ipc";
 import { isTrustedRendererUrl } from "./trusted-renderer";
 
-// electron cannot be imported outside an Electron process, and ipcMain is the
-// only thing these wrappers touch, so the registration is captured instead of
-// performed. Hoisted because the factory runs while ./trusted-ipc is imported,
-// before this module's own body.
 const { registrations } = vi.hoisted(() => ({
   registrations: new Map<string, (event: unknown, ...arguments_: unknown[]) => unknown>(),
 }));
@@ -24,7 +20,7 @@ const TRUSTED_EVENT = { senderFrame: { url: "openbot-app://app/index.html" } };
 const UNTRUSTED_EVENT = { senderFrame: { url: "https://evil.example/index.html" } };
 
 describe("trusted IPC renderer boundary", () => {
-  it("accepts only the packaged OpenBot application origin", () => {
+  it("accepts only the packaged GoAhead application origin", () => {
     expect(isTrustedRendererUrl("openbot-app://app/index.html", undefined)).toBe(true);
     expect(isTrustedRendererUrl("openbot-app://other/index.html", undefined)).toBe(false);
     expect(isTrustedRendererUrl("https://app.example/index.html", undefined)).toBe(false);
@@ -39,11 +35,6 @@ describe("trusted IPC renderer boundary", () => {
   });
 });
 
-// The wrappers are the whole renderer-to-main trust boundary: every handler in
-// the main process is registered through one of them. The static scan in
-// ipc-channel-coverage.test.ts asserts that a registration here names the check,
-// which is what catches a new wrapper written without it; these assert that the
-// check actually rejects, which text cannot show.
 describe("trusted IPC wrappers", () => {
   it("rejects a request from an untrusted renderer without running the handler", () => {
     let handled = 0;
@@ -83,8 +74,6 @@ describe("trusted IPC wrappers", () => {
     expect(handled).toBe(0);
   });
 
-  // Ordering, not just outcome: decoding an untrusted renderer's payload is work done on behalf of
-  // a caller already known to be rejected, so the sender check has to come first.
   it("rejects an untrusted renderer before decoding anything it sent", () => {
     let decoded = 0;
     handleTrusted(
@@ -124,10 +113,6 @@ describe("trusted IPC wrappers", () => {
     expect(registrations.get("test:accept-with-event")?.(TRUSTED_EVENT, "one")).toEqual([TRUSTED_EVENT, "decoded:one"]);
   });
 
-  // Ordering again, one level in: every window of the app shares the trusted origin, so a channel
-  // restricted to one of them authorizes by sender identity. That answers "may this caller use this
-  // channel at all", so it has to settle before the decoder runs — otherwise a caller the channel
-  // rejects still gets to choose which payload-validation error comes back.
   it("authorizes the sender before decoding a payload it sent", () => {
     const order: string[] = [];
     handleTrustedWithEvent(
@@ -150,8 +135,32 @@ describe("trusted IPC wrappers", () => {
   });
 });
 
-// The observer feeds the local trace file. It must not change what the renderer receives, and it
-// sees the channel name only: a payload or a result could carry a secret into the file.
+describe("trusted IPC error references", () => {
+  it("keeps the message and names the error after its reference", async () => {
+    handleTrusted("test:refused", () =>
+      Promise.reject(Object.assign(new Error("The host is busy."), { reference: "signal/host_busy" })),
+    );
+    handleTrusted("test:secret", () => Promise.reject(new Error("Request failed with apiKey=sk-secret-value.")));
+
+    const refused = await Promise.resolve(registrations.get("test:refused")?.(TRUSTED_EVENT)).catch((error) => error);
+    expect(String(refused)).toBe("Error[ref:signal/host_busy]: The host is busy.");
+    const secret = await Promise.resolve(registrations.get("test:secret")?.(TRUSTED_EVENT)).catch((error) => error);
+    expect(String(secret)).toBe("Error: Request failed with apiKey=sk-secret-value.");
+  });
+
+  it("still rejects an untrusted renderer before the handler runs", () => {
+    let handled = 0;
+    handleTrusted("test:refused-untrusted", () => {
+      handled += 1;
+      return Promise.reject(Object.assign(new Error("Busy."), { reference: "signal/host_busy" }));
+    });
+    expect(() => registrations.get("test:refused-untrusted")?.(UNTRUSTED_EVENT)).toThrow(
+      "Rejected IPC request from an untrusted renderer.",
+    );
+    expect(handled).toBe(0);
+  });
+});
+
 describe("trusted IPC call observer", () => {
   it("records the channel and outcome and returns the handler's own result or rejection", async () => {
     const calls: IpcCallRecord[] = [];

@@ -1,36 +1,55 @@
-/**
- * Every `BrowserWindow` the desktop app opens, the renderer URLs they load, and the application
- * menu. It is the one surface that legitimately keeps a mutable window handle: macOS destroys the
- * main window when the user closes it and rebuilds it on `activate`, so `holder.current` is null
- * for real stretches of a running app rather than only during startup.
- *
- * `getServices` is the single lazy accessor left on this surface, and it is lazy for the same
- * honest reason: `createWindow` runs at the top of `app.whenReady()`, before
- * `createApplicationServices` has built anything. Every other dependency arrives as a value.
- */
-
 import { join } from "node:path";
 import {
   type AgentEvent,
+  type AgentSummary,
   type AppVariant,
+  type CentralAuthState,
+  type ChatWindowTarget,
   type ComputerUseHighlightPlacement,
+  type HostStatus,
   IPC_ENDPOINTS,
   LOCAL_SERVER_ID,
   type MacPermissionId,
+  type QuitGuard,
 } from "@openbot/contracts/ipc";
-import type { AppTranslate } from "@openbot/i18n";
-import { app, BrowserWindow, clipboard, type Display, Menu, type Point, type Rectangle, screen } from "electron";
+import type { AppTextKey, AppTranslate, LayoutDirection } from "@openbot/i18n";
+import { Effect } from "effect";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  type Display,
+  dialog,
+  type Event as ElectronEvent,
+  type Input,
+  Menu,
+  type MenuItemConstructorOptions,
+  type Point,
+  type Rectangle,
+  type RenderProcessGoneDetails,
+  screen,
+  session,
+  type WebContents,
+  webContents,
+} from "electron";
 import type { AgentService } from "../backend/agent-service";
 import type { BrowserHost } from "../backend/browser-host";
 import {
+  type ChatEditAction,
   chatContextMenuItems,
   isCloseBrowserTabShortcut,
   isSelectAllShortcut,
   isToggleDevToolsShortcut,
 } from "../backend/browser-shortcuts";
+import { allowPinchZoom } from "../backend/pinch-zoom";
 import type { HighlightDisplay } from "./computer-use-highlight-window";
 import { shouldShowDevelopmentWindow } from "./development-profile";
 import { dynamicIslandNotchSizeForDisplay } from "./dynamic-island-window";
+import { type InterfaceSizeService, type InterfaceSizeStep, interfaceSizeShortcut } from "./interface-size-service";
+import { withLocalHostSummary } from "./ipc/team-handlers";
+import { desktopLayoutZoomFactor, onTilingLinuxDesktop, windowMinimumSize } from "./linux-tiling-desktop";
+import { usesX11Windows } from "./linux-wayland-output";
+import { hidePanelFromWindowSwitchers, keepPanelThroughAppHide, preventPanelActivation } from "./mac-panel-activation";
 import {
   createMainWindowBoundsRecorder,
   presentMainWindow,
@@ -38,23 +57,58 @@ import {
   resolveMainWindowBounds,
   writeMainWindowBounds,
 } from "./main-window-state";
+import { createQuitShortcut, isQuitGuarded, type QuitShortcut } from "./quit-shortcut";
 import type { RemoteServerManager } from "./remote-server-manager";
+import type { RemoteWorkflowError } from "./remote-service-effects";
 import { sendToRenderer } from "./renderer-ipc";
 import { isTrustedRendererUrl } from "./trusted-renderer";
 import type { UpdateService } from "./update-service";
+import { followAppearance, followWindowGlass, glassWindowOptions, windowBackgroundColor } from "./window-appearance";
+import { followWindowButtonSide, WINDOW_BUTTON_INSET } from "./window-buttons";
 
-/**
- * What the window surface reads off the running application. Deliberately narrower than
- * `ApplicationServices`: keeping it structural is what lets the composition root import this
- * module without this module importing it back.
- */
+const MAIN_WINDOW_DARK_BACKGROUND = "#0b0d0e";
+
+const RENDERER_RELOAD_MAX = 3;
+const RENDERER_RELOAD_WINDOW_MS = 60_000;
+const RESTARTED_RENDERER_QUERY = "restarted";
+const RELOADABLE_RENDERER_EXITS: ReadonlySet<RenderProcessGoneDetails["reason"]> = new Set([
+  "crashed",
+  "oom",
+  "killed",
+  "abnormal-exit",
+]);
+
 interface MainWindowApplicationServices {
-  service: AgentService;
+  service: Pick<AgentService, "localOnlyApprovals">;
   browser: BrowserHost;
+  centralAuth: { getState(): CentralAuthState };
+  host: { getStatus(): HostStatus };
   remoteServers: RemoteServerManager;
+  interfaceSize: InterfaceSizeService;
 }
 
-/** The two handles that outlive any one window, so `activate` can rebuild into the same slot. */
+const CHAT_EDIT_ACTIONS = {
+  undo: { label: "menu.undo", accelerator: "CommandOrControl+Z", run: (contents) => contents.undo() },
+  redo: {
+    label: "menu.redo",
+    accelerator: process.platform === "win32" ? "Control+Y" : "Shift+CommandOrControl+Z",
+    run: (contents) => contents.redo(),
+  },
+  cut: { label: "menu.cut", accelerator: "CommandOrControl+X", run: (contents) => contents.cut() },
+  copy: { label: "menu.copy", accelerator: "CommandOrControl+C", run: (contents) => contents.copy() },
+  paste: { label: "menu.paste", accelerator: "CommandOrControl+V", run: (contents) => contents.paste() },
+  pasteAndMatchStyle: {
+    label: "menu.pasteAndMatchStyle",
+    accelerator: "Command+Option+Shift+V",
+    run: (contents) => contents.pasteAndMatchStyle(),
+  },
+  delete: { label: "menu.delete", accelerator: undefined, run: (contents) => contents.delete() },
+  selectAll: { label: "menu.selectAll", accelerator: "CommandOrControl+A", run: (contents) => contents.selectAll() },
+} as const satisfies Record<
+  ChatEditAction,
+  { label: AppTextKey; accelerator: string | undefined; run: (contents: WebContents) => void }
+>;
+
 export interface MainWindowHolder {
   current: BrowserWindow | null;
   load: Promise<BrowserWindow> | null;
@@ -71,27 +125,35 @@ export interface MainWindowContext {
   developmentProfile: string | null;
   developmentRemoteRole: "host" | "client" | null;
   developmentTestClientEnabled: boolean;
-  /** A function, not a flag: the window is built long before the first quit is requested. */
   isQuitting: () => boolean;
-  /** A function, not a value: nothing exists yet when the first window is created. */
+  keepRunningInBackground: () => boolean;
   getServices: () => MainWindowApplicationServices | null;
-  /** A function, not a value: the saved language is read after the first window opens. */
   getTranslate: () => AppTranslate;
+  getLayoutDirection: () => LayoutDirection;
   forwardAgentEvent: (serverId: string, event: AgentEvent) => void;
-  /** The renderer is about to be replaced, so a queued invitation has nobody to receive it. */
   onRendererLoadStarted: () => void;
-  /** Where the entry point attaches the Windows session-end handlers, which read its own flags. */
+  onRendererGone: () => void;
   onMainWindowCreated: (window: BrowserWindow) => void;
   reportError: (message: string, error: unknown) => void;
+  quitFromShortcut: () => void;
+  workingAgents: () => AgentSummary[];
+  quitGuard: () => QuitGuard;
+  onHiddenWhileWorking: (hidden: boolean) => void;
 }
 
 export interface MainWindowController {
   getMainWindow: () => BrowserWindow | null;
+  getChatWindows: () => BrowserWindow[];
+  applyInterfaceSize: (zoomFactor: number) => void;
+  chatWindowTarget: (window: BrowserWindow) => ChatWindowTarget | null;
+  chatWindowTargets: () => ChatWindowTarget[];
+  openChatWindow: (target: ChatWindowTarget) => void;
   openMainWindow: () => BrowserWindow;
   ensureMainWindow: () => Promise<BrowserWindow>;
   loadRenderer: (window: BrowserWindow) => Promise<void>;
-  restoreMainWindowBounds: () => Promise<void>;
-  flushMainWindowBounds: () => Promise<void>;
+  restoreMainWindowBounds: () => Effect.Effect<void>;
+  flushMainWindowBounds: () => Effect.Effect<void, RemoteWorkflowError>;
+  handleQuitShortcut: (window: BrowserWindow, input: Input) => boolean;
 }
 
 export function createMainWindowController({
@@ -102,13 +164,30 @@ export function createMainWindowController({
   developmentRemoteRole,
   developmentTestClientEnabled,
   isQuitting,
+  keepRunningInBackground,
   getServices,
   getTranslate,
+  getLayoutDirection,
   forwardAgentEvent,
   onRendererLoadStarted,
+  onRendererGone,
   onMainWindowCreated,
   reportError,
+  quitFromShortcut,
+  workingAgents,
+  quitGuard,
+  onHiddenWhileWorking,
 }: MainWindowContext): MainWindowController {
+  const quitShortcut =
+    process.platform === "darwin"
+      ? createQuitShortcut({
+          quit: quitFromShortcut,
+          isQuitting,
+          workingAgents,
+          guard: quitGuard,
+          showHint: (window, agents) => sendToRenderer(window, IPC_ENDPOINTS.app.quitShortcutHint, agents),
+        })
+      : null;
   const { restoreMainWindowBounds, currentMainWindowBounds, rememberMainWindowBounds, flushMainWindowBounds } =
     createMainWindowBoundsRecorder({
       getMainWindow: () => holder.current,
@@ -116,35 +195,113 @@ export function createMainWindowController({
       writeBounds: (bounds) => writeMainWindowBounds(statePath, bounds),
       reportError,
     });
+  let rendererReloadTimes: number[] = [];
+  let rendererStoppedDialogOpen = false;
+  let closeConfirmationOpen = false;
+  let closeConfirmed = false;
+
+  function reloadStoppedRenderer(window: BrowserWindow): void {
+    setImmediate(() => {
+      if (window.isDestroyed()) return;
+      loadRenderer(window, { restarted: true }).catch((error: unknown) =>
+        reportError("Could not reload the main window after its renderer stopped", error),
+      );
+    });
+  }
+
+  function askAfterRendererStopped(window: BrowserWindow): void {
+    if (rendererStoppedDialogOpen || window.isDestroyed() || !window.webContents.isCrashed()) return;
+    if (!window.isVisible()) {
+      window.once("show", () => askAfterRendererStopped(window));
+      return;
+    }
+    const translate = getTranslate();
+    rendererStoppedDialogOpen = true;
+    void dialog
+      .showMessageBox(window, {
+        type: "warning",
+        message: translate("window.rendererStoppedTitle"),
+        detail: translate("window.rendererStoppedBody"),
+        buttons: [translate("window.rendererStoppedReload"), translate("menu.quitConfirm")],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      })
+      .then(({ response }) => {
+        if (window.isDestroyed() || isQuitting()) return;
+        if (response === 1) {
+          app.quit();
+          return;
+        }
+        rendererReloadTimes = [];
+        reloadStoppedRenderer(window);
+      })
+      .catch((error: unknown) => reportError("Unable to ask after the main window stopped:", error))
+      .finally(() => {
+        rendererStoppedDialogOpen = false;
+      });
+  }
+
+  function confirmCloseWhileWorking(window: BrowserWindow): void {
+    const translate = getTranslate();
+    closeConfirmationOpen = true;
+    void dialog
+      .showMessageBox(window, {
+        type: "question",
+        message: translate("menu.closeWorkingTitle", { count: workingAgents().length }),
+        detail: translate("menu.closeWorkingBody"),
+        buttons: [translate("menu.closeKeepRunning"), translate("menu.quitConfirm"), translate("common.cancel")],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      })
+      .then(({ response }) => {
+        if (window.isDestroyed()) return;
+        if (response === 0) {
+          rememberMainWindowBounds(window.getNormalBounds());
+          getServices()?.browser.releaseUserControlHeldBy({ kind: "local" });
+          onHiddenWhileWorking(true);
+          window.hide();
+        } else if (response === 1) {
+          closeConfirmed = true;
+          window.close();
+        }
+      })
+      .catch((error: unknown) => reportError("Unable to ask before the main window closes:", error))
+      .finally(() => {
+        closeConfirmationOpen = false;
+      });
+  }
+
+  function applyMainWindowZoom(window: BrowserWindow): void {
+    const interfaceSize = getServices()?.interfaceSize;
+    if (!interfaceSize || window.isDestroyed()) return;
+    const zoom = desktopLayoutZoomFactor(window.getContentBounds().width, interfaceSize.zoomFactor);
+    if (window.webContents.getZoomFactor() !== zoom) window.webContents.setZoomFactor(zoom);
+  }
 
   function createWindow(): BrowserWindow {
-    let inspectElementModifierPressed = false;
     const cursor = screen.getCursorScreenPoint();
+    const minimumSize = windowMinimumSize({ minWidth: 960, minHeight: 640 });
     const bounds = resolveMainWindowBounds(
       currentMainWindowBounds(),
       screen.getAllDisplays().map((display) => display.workArea),
       screen.getDisplayNearestPoint(cursor).workArea,
       { width: 1200, height: 820 },
-      { width: 960, height: 640 },
+      { width: minimumSize.minWidth, height: minimumSize.minHeight },
     );
     const window = new BrowserWindow({
       ...bounds,
-      minWidth: 960,
-      minHeight: 640,
+      ...minimumSize,
       show: false,
-      backgroundColor: "#0b0d0e",
+      ...glassWindowOptions(MAIN_WINDOW_DARK_BACKGROUND),
       title:
         developmentProfile === "test-client"
           ? getTranslate()("window.localClientTitle")
           : getTranslate()("window.localHostTitle"),
       icon: appIconPath,
-      // The dots are drawn over the renderer, so this position is a layout value, not a chrome
-      // detail. macOS spaces the three 13px dots 23px apart, so the group is 59px wide: x 12 leaves
-      // it 11px clear of the 82px where the top row's first control starts, in the app frame and in
-      // the full-bleed browser header alike, and y 13 puts its centre line within half a pixel of
-      // both of those rows. The setup window below uses the same offsets.
       ...(process.platform === "darwin"
-        ? { titleBarStyle: "hidden" as const, trafficLightPosition: { x: 12, y: 13 } }
+        ? { titleBarStyle: "hidden" as const, trafficLightPosition: WINDOW_BUTTON_INSET }
         : {}),
       webPreferences: {
         preload: join(__dirname, "../preload/index.cjs"),
@@ -155,9 +312,13 @@ export function createMainWindowController({
         webSecurity: true,
       },
     });
+    hideMenuBar(window);
+    followWindowGlass(window, MAIN_WINDOW_DARK_BACKGROUND);
 
     window.once("ready-to-show", () => {
+      performance.mark("openbot:window-ready");
       if (
+        !windowsKeptHidden &&
         shouldShowDevelopmentWindow({
           remoteRole: developmentRemoteRole,
           testClientEnabled: developmentTestClientEnabled,
@@ -167,115 +328,154 @@ export function createMainWindowController({
       }
     });
     window.on("close", (event) => {
+      if (
+        process.platform !== "darwin" &&
+        !keepRunningInBackground() &&
+        !isQuitting() &&
+        !closeConfirmed &&
+        workingAgents().length > 0
+      ) {
+        event.preventDefault();
+        if (!closeConfirmationOpen) confirmCloseWhileWorking(window);
+        return;
+      }
       rememberMainWindowBounds(window.getNormalBounds());
-      if (process.platform === "darwin" && !isQuitting()) {
-        // The hidden renderer owns the cross-host Dynamic Island coordinator and must outlive its visible window.
+      getServices()?.browser.releaseUserControlHeldBy({ kind: "local" });
+      if ((process.platform === "darwin" || keepRunningInBackground()) && !isQuitting()) {
         event.preventDefault();
         window.hide();
       }
     });
+    window.on("show", () => onHiddenWhileWorking(false));
     onMainWindowCreated(window);
     window.on("closed", () => {
       if (holder.current === window) holder.current = null;
+      for (const chat of chatWindows.values()) chat.window.close();
     });
     window.on("move", () => rememberMainWindowBounds(window.getNormalBounds()));
-    window.on("resize", () => rememberMainWindowBounds(window.getNormalBounds()));
+    window.on("resize", () => {
+      rememberMainWindowBounds(window.getNormalBounds());
+      applyMainWindowZoom(window);
+    });
 
+    if (onTilingLinuxDesktop) window.webContents.setZoomMode("isolated");
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    window.webContents.on("before-input-event", (event, input) => {
-      if (input.key.toLowerCase() === "shift") {
-        inspectElementModifierPressed = input.type === "keyDown";
-      }
-      if (isToggleDevToolsShortcut(input)) {
-        event.preventDefault();
-        window.webContents.toggleDevTools();
+    window.webContents.on("did-navigate", onRendererLoadStarted);
+    window.webContents.on("did-navigate", () => applyMainWindowZoom(window));
+    window.webContents.on("render-process-gone", onRendererGone);
+    window.webContents.once("destroyed", onRendererGone);
+    window.webContents.on("render-process-gone", (_event, details) => {
+      const now = Date.now();
+      rendererReloadTimes = rendererReloadTimes.filter((time) => now - time < RENDERER_RELOAD_WINDOW_MS);
+      if (isQuitting() || window.isDestroyed() || !RELOADABLE_RENDERER_EXITS.has(details.reason)) return;
+      if (rendererReloadTimes.length >= RENDERER_RELOAD_MAX) {
+        askAfterRendererStopped(window);
         return;
       }
-      if (isSelectAllShortcut(input)) {
-        event.preventDefault();
-        void window.webContents.executeJavaScript(
-          `(() => {
-            const active = document.activeElement;
-            if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
-              active.select();
-              return;
-            }
-            if (!(active instanceof HTMLElement) || !active.isContentEditable) return;
-            const range = document.createRange();
-            range.selectNodeContents(active);
-            const selection = window.getSelection();
-            selection?.removeAllRanges();
-            selection?.addRange(range);
-          })()`,
-          true,
-        );
-        return;
-      }
-      const services = getServices();
-      const tabId = services?.browser.activeTabId;
-      if (
-        !services ||
-        !tabId ||
-        services.remoteServers.activeServerId !== LOCAL_SERVER_ID ||
-        !services.browser.visible ||
-        !isCloseBrowserTabShortcut(input)
-      ) {
-        return;
-      }
-      event.preventDefault();
-      setImmediate(() => void services.browser.close(tabId).catch(() => undefined));
+      rendererReloadTimes.push(now);
+      reloadStoppedRenderer(window);
     });
-    window.webContents.on("context-menu", (event, params) => {
-      if (inspectElementModifierPressed) {
-        event.preventDefault();
-        window.webContents.inspectElement(params.x, params.y);
-        return;
-      }
-      // The chat has no custom menu, so selected text would have no way to reach the clipboard.
-      // The native edit menu covers copy, select-all and link copying; anything else keeps no menu.
-      const items = chatContextMenuItems({
-        selectionText: params.selectionText,
-        isEditable: params.isEditable,
-        linkURL: params.linkURL,
-      });
-      if (items.length === 0) return;
-      event.preventDefault();
-      Menu.buildFromTemplate(
-        items.map((item) => {
-          if (item === "separator") return { type: "separator" } as const;
-          if (item === "copy-link")
-            return {
-              label: getTranslate()("menu.copyLink"),
-              click: () => clipboard.writeText(params.linkURL),
-            };
-          if (item === "copy") return { role: "copy" } as const;
-          return { role: "selectAll" } as const;
-        }),
-      ).popup({ window });
-    });
-    window.on("blur", () => {
-      inspectElementModifierPressed = false;
-    });
+    attachAppInput(window, getServices, getTranslate, { closesBrowserTabs: true, quitShortcut });
+    allowPinchZoom(window.webContents);
+    followWindowButtonSide(window, getLayoutDirection);
     window.webContents.on("will-navigate", (event, targetUrl) => {
       if (!isTrustedRendererUrl(targetUrl)) event.preventDefault();
     });
     window.webContents.on("did-finish-load", () => {
       const services = getServices();
       if (services) {
-        forwardAgentEvent("local", {
-          type: "runtime-snapshot",
-          snapshot: services.service.getRuntimeSnapshot("local"),
-        });
-        // The snapshot cuts long text. The full local-only approvals (a mail to send, a meeting to
-        // book) follow, so the card shows the whole request.
         for (const approval of services.service.localOnlyApprovals()) {
           forwardAgentEvent("local", { type: "approval", approval });
         }
-        services.remoteServers.refreshRuntimeSnapshots();
+        Effect.runFork(services.remoteServers.refreshRuntimeSnapshots());
       }
+    });
+    window.webContents.on("did-stop-loading", () => {
+      const services = getServices();
+      if (!services) return;
+      sendToRenderer(window, IPC_ENDPOINTS.auth.event, services.centralAuth.getState());
+      sendToRenderer(
+        window,
+        IPC_ENDPOINTS.servers.event,
+        withLocalHostSummary(services.remoteServers.list(), services.host.getStatus()),
+      );
     });
 
     return window;
+  }
+
+  const chatWindows = new Map<string, { target: ChatWindowTarget; window: BrowserWindow }>();
+
+  function chatWindowTargets(): ChatWindowTarget[] {
+    return [...chatWindows.values()].map(({ target }) => target);
+  }
+
+  function announceChatWindows(): void {
+    const targets = chatWindowTargets();
+    sendToRenderer(holder.current, IPC_ENDPOINTS.app.chatWindows, targets);
+    getServices()?.remoteServers.setChatWindowServers(new Set(targets.map((target) => target.serverId)));
+  }
+
+  function openChatWindow(target: ChatWindowTarget): void {
+    const key = chatWindowKey(target);
+    const existing = chatWindows.get(key)?.window;
+    if (existing && !existing.isDestroyed()) {
+      if (existing.isMinimized()) existing.restore();
+      existing.show();
+      existing.focus();
+      return;
+    }
+    const window = new BrowserWindow({
+      width: 560,
+      height: 760,
+      ...windowMinimumSize({ minWidth: 380, minHeight: 480 }),
+      show: false,
+      ...glassWindowOptions(MAIN_WINDOW_DARK_BACKGROUND),
+      title: getTranslate()("window.localHostTitle"),
+      icon: appIconPath,
+      ...(process.platform === "darwin"
+        ? { titleBarStyle: "hidden" as const, trafficLightPosition: WINDOW_BUTTON_INSET }
+        : {}),
+      webPreferences: {
+        preload: join(__dirname, "../preload/index.cjs"),
+        contextIsolation: true,
+        devTools: true,
+        sandbox: true,
+        nodeIntegration: false,
+        webSecurity: true,
+      },
+    });
+    hideMenuBar(window);
+    followWindowGlass(window, MAIN_WINDOW_DARK_BACKGROUND);
+    chatWindows.set(key, { target: { serverId: target.serverId, agentId: target.agentId }, window });
+    window.once("ready-to-show", () => window.show());
+    window.on("closed", () => {
+      if (chatWindows.get(key)?.window === window) chatWindows.delete(key);
+      announceChatWindows();
+    });
+    window.webContents.on("render-process-gone", () => {
+      if (!window.isDestroyed()) window.destroy();
+    });
+    window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    window.webContents.on("will-navigate", (event, targetUrl) => {
+      if (!isTrustedRendererUrl(targetUrl)) event.preventDefault();
+    });
+    window.webContents.on("did-navigate", () => {
+      const interfaceSize = getServices()?.interfaceSize;
+      if (interfaceSize) window.webContents.setZoomFactor(interfaceSize.zoomFactor);
+    });
+    attachAppInput(window, getServices, getTranslate, { closesBrowserTabs: false, quitShortcut });
+    allowPinchZoom(window.webContents);
+    followWindowButtonSide(window, getLayoutDirection);
+    announceChatWindows();
+    const url = appRendererUrl(process.env.ELECTRON_RENDERER_URL);
+    url.searchParams.set("window", "chat");
+    url.searchParams.set("server", target.serverId);
+    url.searchParams.set("agent", target.agentId);
+    window.loadURL(url.toString()).catch((error: unknown) => {
+      reportError("Could not load the chat window", error);
+      if (!window.isDestroyed()) window.destroy();
+    });
   }
 
   function openMainWindow(): BrowserWindow {
@@ -284,10 +484,14 @@ export function createMainWindowController({
     return window;
   }
 
-  function loadRenderer(window: BrowserWindow): Promise<void> {
+  function loadRenderer(window: BrowserWindow, options: { restarted?: boolean } = {}): Promise<void> {
     onRendererLoadStarted();
-    const developmentUrl = process.env.ELECTRON_RENDERER_URL;
-    return developmentUrl ? window.loadURL(developmentUrl) : window.loadURL("openbot-app://app/index.html");
+    const url = appRendererUrl(process.env.ELECTRON_RENDERER_URL);
+    if (options.restarted) url.searchParams.set(RESTARTED_RENDERER_QUERY, "1");
+    return window.loadURL(url.toString()).catch((error: unknown) => {
+      if (!isReplacedLoad(error) || window.isDestroyed() || !window.webContents.isLoading()) throw error;
+      return replacementLoad(window.webContents, error);
+    });
   }
 
   async function ensureMainWindow(): Promise<BrowserWindow> {
@@ -310,22 +514,164 @@ export function createMainWindowController({
 
   return {
     getMainWindow: () => holder.current,
+    getChatWindows: () =>
+      [...chatWindows.values()].map((chat) => chat.window).filter((window) => !window.isDestroyed()),
+    applyInterfaceSize: (zoomFactor: number) => {
+      if (holder.current) applyMainWindowZoom(holder.current);
+      for (const chat of chatWindows.values())
+        if (!chat.window.isDestroyed()) chat.window.webContents.setZoomFactor(zoomFactor);
+    },
+    chatWindowTarget: (window: BrowserWindow) =>
+      [...chatWindows.values()].find((chat) => chat.window === window)?.target ?? null,
+    chatWindowTargets,
+    openChatWindow,
     openMainWindow,
     ensureMainWindow,
     loadRenderer,
     restoreMainWindowBounds,
     flushMainWindowBounds,
+    handleQuitShortcut: (window, input) => quitShortcut?.handleInput(window, input) ?? false,
   };
 }
 
+function attachAppInput(
+  window: BrowserWindow,
+  getServices: () => MainWindowApplicationServices | null,
+  getTranslate: () => AppTranslate,
+  { closesBrowserTabs, quitShortcut }: { closesBrowserTabs: boolean; quitShortcut: QuitShortcut | null },
+): void {
+  let inspectElementModifierPressed = false;
+  if (quitShortcut) window.on("blur", () => quitShortcut.handleBlur(window));
+  window.webContents.on("before-input-event", (event, input) => {
+    if (quitShortcut?.handleInput(window, input)) {
+      event.preventDefault();
+      return;
+    }
+    if (input.key.toLowerCase() === "shift") {
+      inspectElementModifierPressed = input.type === "keyDown";
+    }
+    if (isToggleDevToolsShortcut(input)) {
+      event.preventDefault();
+      window.webContents.toggleDevTools();
+      return;
+    }
+    const frameFocused = Boolean(window.webContents.focusedFrame?.parent);
+    const sizeStep = interfaceSizeShortcut(input, process.platform === "darwin");
+    const interfaceSize = getServices()?.interfaceSize;
+    const sizeKeyInMenu = !input.shift && input.key !== "+";
+    if (!(frameFocused && sizeKeyInMenu) && sizeStep && interfaceSize) {
+      event.preventDefault();
+      Effect.runFork(interfaceSize.step(sizeStep));
+      return;
+    }
+    if (!frameFocused && isSelectAllShortcut(input)) {
+      event.preventDefault();
+      void window.webContents.executeJavaScript(
+        `(() => {
+          const active = document.activeElement;
+          if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+            active.select();
+            return;
+          }
+          if (active instanceof HTMLCanvasElement) {
+            const key = { key: "a", code: "KeyA", ctrlKey: ${input.control}, metaKey: ${input.meta}, bubbles: true };
+            active.dispatchEvent(new KeyboardEvent("keydown", key));
+            return;
+          }
+          if (!(active instanceof HTMLElement) || !active.isContentEditable) return;
+          const range = document.createRange();
+          range.selectNodeContents(active);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+        })()`,
+        true,
+      );
+      return;
+    }
+    const services = getServices();
+    const tabId = services?.browser.activeTabId;
+    if (
+      !closesBrowserTabs ||
+      !services ||
+      !tabId ||
+      services.remoteServers.activeServerId !== LOCAL_SERVER_ID ||
+      !services.browser.visible ||
+      !isCloseBrowserTabShortcut(input)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    setImmediate(() => void Effect.runPromise(services.browser.close(tabId)).catch(() => undefined));
+  });
+  window.webContents.on("context-menu", (event, params) => {
+    if (inspectElementModifierPressed) {
+      event.preventDefault();
+      window.webContents.inspectElement(params.x, params.y);
+      return;
+    }
+    const items = chatContextMenuItems({
+      selectionText: params.selectionText,
+      isEditable: params.isEditable,
+      linkURL: params.linkURL,
+      mediaType: params.mediaType,
+      hasImageContents: params.hasImageContents,
+      misspelledWord: params.misspelledWord,
+      dictionarySuggestions: params.dictionarySuggestions,
+      editFlags: params.editFlags,
+      pasteAndMatchStyle: process.platform === "darwin",
+    });
+    if (items.length === 0) return;
+    event.preventDefault();
+    const t = getTranslate();
+    Menu.buildFromTemplate(
+      items.map((item) => {
+        if (item.kind === "separator") return { type: "separator" } as const;
+        if (item.kind === "copy-link")
+          return {
+            label: t("menu.copyLink"),
+            click: () => clipboard.writeText(params.linkURL),
+          };
+        if (item.kind === "copy-image")
+          return {
+            label: t("menu.copyImage"),
+            click: () => {
+              if (!window.isDestroyed()) window.webContents.copyImageAt(params.x, params.y);
+            },
+          };
+        if (item.kind === "spelling")
+          return {
+            label: item.suggestion,
+            click: () => {
+              if (!window.isDestroyed()) window.webContents.replaceMisspelling(item.suggestion);
+            },
+          };
+        const action = CHAT_EDIT_ACTIONS[item.action];
+        return {
+          label: t(action.label),
+          ...(action.accelerator ? { accelerator: action.accelerator, registerAccelerator: false } : {}),
+          enabled: item.enabled,
+          click: () => {
+            if (!window.isDestroyed()) action.run(window.webContents);
+          },
+        };
+      }),
+    ).popup({ window });
+  });
+  window.on("blur", () => {
+    inspectElementModifierPressed = false;
+  });
+}
+
 export function createDynamicIslandWindow(bounds: Rectangle, _display: Display): BrowserWindow {
+  const x11 = process.platform === "linux";
   const window = new BrowserWindow({
     ...bounds,
     show: false,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
-    focusable: false,
+    focusable: x11,
     hiddenInMissionControl: true,
     resizable: false,
     movable: false,
@@ -335,7 +681,7 @@ export function createDynamicIslandWindow(bounds: Rectangle, _display: Display):
     enableLargerThanScreen: true,
     hasShadow: false,
     skipTaskbar: true,
-    type: "panel",
+    type: process.platform === "darwin" ? "panel" : x11 ? "dock" : "toolbar",
     backgroundColor: "#00000000",
     webPreferences: {
       preload: join(__dirname, "../preload/index.cjs"),
@@ -346,6 +692,9 @@ export function createDynamicIslandWindow(bounds: Rectangle, _display: Display):
       webSecurity: true,
     },
   });
+  preventPanelActivation(window);
+  hidePanelFromWindowSwitchers(window);
+  window.webContents.setZoomMode("isolated");
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, targetUrl) => {
     if (!isTrustedRendererUrl(targetUrl)) event.preventDefault();
@@ -353,17 +702,46 @@ export function createDynamicIslandWindow(bounds: Rectangle, _display: Display):
   return window;
 }
 
-/**
- * The overlay that carries the Computer Use rim over the window an agent works in.
- *
- * It covers the whole desktop and then stays still: the rim moves inside it, so a window the user
- * drags is followed by a repaint rather than by a window move on every frame.
- *
- * It is a panel that is never focusable and never in Mission Control, so it does not enter the
- * user's window order. It floats over the desktop, because macOS gives no way to hold one
- * application's window between two of another's, and a rim the user cannot see says nothing about
- * where the agent works. It is created hidden and click-through.
- */
+export function createAgentDockWindow(bounds: Rectangle): BrowserWindow {
+  const x11 = process.platform === "linux";
+  const x11Type = process.env.HYPRLAND_INSTANCE_SIGNATURE ? "splash" : "dock";
+  const window = new BrowserWindow({
+    ...bounds,
+    show: false,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    focusable: x11,
+    hiddenInMissionControl: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    hasShadow: false,
+    skipTaskbar: true,
+    type: process.platform === "darwin" ? "panel" : x11 ? x11Type : "toolbar",
+    backgroundColor: "#00000000",
+    webPreferences: {
+      preload: join(__dirname, "../preload/index.cjs"),
+      contextIsolation: true,
+      devTools: true,
+      sandbox: true,
+      nodeIntegration: false,
+      webSecurity: true,
+    },
+  });
+  preventPanelActivation(window);
+  hidePanelFromWindowSwitchers(window);
+  keepPanelThroughAppHide(window);
+  window.webContents.setZoomMode("isolated");
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event, targetUrl) => {
+    if (!isTrustedRendererUrl(targetUrl)) event.preventDefault();
+  });
+  return window;
+}
+
 export function createComputerUseHighlightWindow(bounds: Rectangle): BrowserWindow {
   const window = new BrowserWindow({
     ...bounds,
@@ -392,18 +770,10 @@ export function createComputerUseHighlightWindow(bounds: Rectangle): BrowserWind
       webSecurity: true,
     },
   });
-  // A floating level, which is the only thing that holds this window in front on macOS: both
-  // `moveAbove` and `moveTop` return without an error and leave a transparent panel where it was.
-  // The level stays below the menu bar, and the rim is a thin edge around one window, so being in
-  // front costs the user almost none of what is behind it.
-  window.setAlwaysOnTop(true, "floating");
-  // The agent works wherever the user left the window, which can be another Space or another
-  // application's full screen. One overlay on every Space is what lets the rim follow it there
-  // without a second window and without pulling the user out of the Space they are on.
-  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  // Nothing on this surface may be pressed, and it covers another application's whole window, so
-  // every event is handed straight on to the window below it.
+  window.setAlwaysOnTop(true, process.platform === "darwin" ? "floating" : "normal");
+  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
   window.setIgnoreMouseEvents(true, { forward: true });
+  window.webContents.setZoomMode("isolated");
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, targetUrl) => {
     if (!isTrustedRendererUrl(targetUrl)) event.preventDefault();
@@ -411,23 +781,12 @@ export function createComputerUseHighlightWindow(bounds: Rectangle): BrowserWind
   return window;
 }
 
-/**
- * The small window that stands beside the System Settings pane a permission is granted in.
- *
- * System Settings opens in front of everything and covers OpenBot, so the panel that asked for the
- * grant is no longer on screen at the moment the user has to act. This window carries the steps
- * there: it floats, it is small enough to leave the pane readable, and it reports the grant landing
- * so the user knows they are done without going back to look.
- *
- * It holds no secret and asks for nothing. Every hardening the other surfaces carry is kept:
- * sandboxed, context-isolated, no window may be opened from it, and no navigation away from the
- * renderer's own origin.
- */
-export function createComputerUsePermissionHelpWindow(translate: AppTranslate): BrowserWindow {
+export function createComputerUsePermissionHelpWindow(
+  translate: AppTranslate,
+  getLayoutDirection: () => LayoutDirection,
+): BrowserWindow {
   const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   const width = 340;
-  // The card the user drags out of it, the two steps, and nothing else: a window taller than its
-  // own contents would put empty space over the pane it stands beside.
   const height = 322;
   const window = new BrowserWindow({
     width,
@@ -441,10 +800,10 @@ export function createComputerUsePermissionHelpWindow(translate: AppTranslate): 
     fullscreenable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
-    backgroundColor: "#0b0d0e",
+    backgroundColor: windowBackgroundColor(MAIN_WINDOW_DARK_BACKGROUND),
     title: translate("window.computerUsePermissionTitle"),
     ...(process.platform === "darwin"
-      ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 12, y: 13 } }
+      ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: WINDOW_BUTTON_INSET }
       : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.cjs"),
@@ -455,9 +814,10 @@ export function createComputerUsePermissionHelpWindow(translate: AppTranslate): 
       webSecurity: true,
     },
   });
-  // Over System Settings, which opens in front of everything: a window the pane covers would carry
-  // the steps to nobody.
   window.setAlwaysOnTop(true, "floating");
+  followAppearance(window, MAIN_WINDOW_DARK_BACKGROUND);
+  followWindowButtonSide(window, getLayoutDirection);
+  window.webContents.setZoomMode("isolated");
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, targetUrl) => {
     if (!isTrustedRendererUrl(targetUrl)) event.preventDefault();
@@ -465,7 +825,45 @@ export function createComputerUsePermissionHelpWindow(translate: AppTranslate): 
   return window;
 }
 
-/** The entry for the helper windows. It does not load `App`, so each window uses less memory. */
+function appRendererUrl(developmentUrl: string | undefined): URL {
+  return developmentUrl ? new URL(developmentUrl) : new URL("openbot-app://app/index.html");
+}
+
+function chatWindowKey(target: ChatWindowTarget): string {
+  return JSON.stringify([target.serverId, target.agentId]);
+}
+
+const REPLACED_LOAD_ERROR = -3;
+
+function isReplacedLoad(error: unknown): error is Error {
+  return error instanceof Error && "errno" in error && error.errno === REPLACED_LOAD_ERROR;
+}
+
+function replacementLoad(contents: WebContents, replaced: Error): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const settle = (error: Error | null) => {
+      contents.off("did-finish-load", onFinish);
+      contents.off("did-fail-load", onFail);
+      contents.off("did-stop-loading", onStop);
+      contents.off("destroyed", onStop);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onFinish = () => settle(null);
+    const onFail = (_event: ElectronEvent, code: number, description: string, url: string, isMainFrame: boolean) => {
+      if (!isMainFrame || code === REPLACED_LOAD_ERROR) return;
+      settle(
+        Object.assign(new Error(`${description} (${code}) loading '${url}'`), { errno: code, code: description, url }),
+      );
+    };
+    const onStop = () => settle(replaced);
+    contents.on("did-finish-load", onFinish);
+    contents.on("did-fail-load", onFail);
+    contents.on("did-stop-loading", onStop);
+    contents.on("destroyed", onStop);
+  });
+}
+
 function helperRendererUrl(developmentUrl: string | undefined): URL {
   return developmentUrl ? new URL("helper.html", `${developmentUrl}/`) : new URL("openbot-app://app/helper.html");
 }
@@ -483,6 +881,12 @@ export function loadComputerUsePermissionHelpRenderer(
   return window.loadURL(url.toString());
 }
 
+export function loadBrowserDockRenderer(contents: WebContents): Promise<void> {
+  const url = helperRendererUrl(process.env.ELECTRON_RENDERER_URL);
+  url.searchParams.set("surface", "browser-dock");
+  return contents.loadURL(url.toString());
+}
+
 export function loadComputerUseHighlightRenderer(window: BrowserWindow): Promise<void> {
   const developmentUrl = process.env.ELECTRON_RENDERER_URL;
   const url = helperRendererUrl(developmentUrl);
@@ -490,35 +894,28 @@ export function loadComputerUseHighlightRenderer(window: BrowserWindow): Promise
   return window.loadURL(url.toString());
 }
 
-/**
- * Every display the Computer Use overlay is built over, one overlay for each.
- *
- * Not one window over all of them: macOS gives every display its own Space, so a window the size of
- * the desktop is drawn on one display and clipped away on all the others. An agent working on the
- * second display would then be marked by a rim nobody can see.
- */
 export function computerUseDisplays(): HighlightDisplay[] {
   return screen.getAllDisplays().map((display) => ({ id: display.id, bounds: display.bounds }));
 }
 
-/**
- * One rectangle the driver reports, in the units the displays above are measured in.
- *
- * On Windows the driver is Per-Monitor V2 DPI aware and reports physical pixels, while Electron
- * places every window in DIP. At 125% scaling a maximized window would otherwise be drawn a
- * quarter larger than the display, with its right and bottom edges past the overlay. macOS reports
- * points, which are what Electron uses there. Electron has `screenToDipRect` on Windows only.
- */
 export function computerUseDesktopRect(rect: Rectangle): Rectangle {
   return process.platform === "win32" ? screen.screenToDipRect(null, rect) : rect;
 }
 
-/** One point the driver was asked for, in the same units as `computerUseDesktopRect`. */
+export function computerUseCoveringWindowIds(): Set<number> {
+  const ids = new Set<number>();
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || !window.isVisible() || window.isMinimized() || !window.isFocusable()) continue;
+    const id = Number(window.getMediaSourceId().split(":")[1]);
+    if (Number.isSafeInteger(id)) ids.add(id);
+  }
+  return ids;
+}
+
 export function computerUseDesktopPoint(point: Point): Point {
   return process.platform === "win32" ? screen.screenToDipPoint(point) : point;
 }
 
-/** Where the overlay draws the rim. Sent on every placement, and read by that surface only. */
 export function sendComputerUseHighlightPlacement(
   window: BrowserWindow,
   placement: ComputerUseHighlightPlacement,
@@ -526,18 +923,37 @@ export function sendComputerUseHighlightPlacement(
   sendToRenderer(window, IPC_ENDPOINTS.computerUse.highlightPlacement, placement);
 }
 
+let windowsKeptHidden = false;
+
+export function keepWindowsHidden(): void {
+  windowsKeptHidden = true;
+}
+
+export function hideWindowsForQuit(): void {
+  windowsKeptHidden = true;
+  for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.hide();
+}
+
 export function showMainWindow(window: BrowserWindow): void {
-  presentMainWindow(window, process.platform, () => app.show());
+  if (windowsKeptHidden) return;
+  presentMainWindow(window, process.platform, () => app.show(), process.platform === "linux" && !usesX11Windows());
+}
+
+export function loadAgentDockRenderer(window: BrowserWindow): Promise<void> {
+  const url = helperRendererUrl(process.env.ELECTRON_RENDERER_URL);
+  url.searchParams.set("surface", "agent-dock");
+  return window.loadURL(url.toString());
 }
 
 export function loadDynamicIslandRenderer(window: BrowserWindow, display: Display, variant: AppVariant): Promise<void> {
-  const displayMode = display.internal ? "notch" : "island";
+  const notchDisplay = process.platform !== "linux";
+  const displayMode = notchDisplay && display.internal ? "notch" : "island";
   const developmentUrl = process.env.ELECTRON_RENDERER_URL;
   const url = helperRendererUrl(developmentUrl);
   url.searchParams.set("surface", "dynamic-island");
   url.searchParams.set("display", displayMode);
   url.searchParams.set("variant", variant);
-  const notch = dynamicIslandNotchSizeForDisplay(display);
+  const notch = dynamicIslandNotchSizeForDisplay(display, process.platform);
   if (notch) {
     url.searchParams.set("notch-width", String(notch.width));
     url.searchParams.set("notch-height", String(notch.height));
@@ -545,17 +961,72 @@ export function loadDynamicIslandRenderer(window: BrowserWindow, display: Displa
   return window.loadURL(url.toString());
 }
 
-/**
- * The native application menu.
- *
- * Electron gives no way to relabel a built-in role, so the roles below stay in the system language
- * macOS and Windows draw them in, and only the custom items follow the app language. The caller
- * builds the menu again on a language change, because a `MenuItem` label cannot be changed in place.
- *
- * The custom `appMenu` replaces the default one, so the standard Preferences item with `Cmd + ,`
- * must be declared here: without it macOS has no Settings shortcut.
- */
-export function configureApplicationMenu(service: AgentService, updater: UpdateService, translate: AppTranslate): void {
+function closeFocusedDevTools(): void {
+  webContents
+    .getAllWebContents()
+    .find((contents) => !contents.isDestroyed() && contents.isDevToolsFocused())
+    ?.closeDevTools();
+}
+
+function zoomFocusedContents(interfaceSize: InterfaceSizeService, step: InterfaceSizeStep): void {
+  const focused = webContents.getFocusedWebContents();
+  if (!focused || focused.session === session.defaultSession) {
+    Effect.runFork(interfaceSize.step(step));
+    return;
+  }
+  focused.setZoomLevel(step === "default" ? 0 : focused.getZoomLevel() + (step === "larger" ? 0.5 : -0.5));
+}
+
+function hideMenuBar(window: BrowserWindow): void {
+  if (process.platform !== "darwin") window.setMenuBarVisibility(false);
+}
+
+export type MenuQuitSource = "menu" | "shortcut";
+
+let quitConfirmationOpen = false;
+
+function macQuitItem(
+  translate: AppTranslate,
+  guarded: () => boolean,
+  quit: (source: MenuQuitSource) => void,
+): MenuItemConstructorOptions {
+  return {
+    label: translate("menu.quit"),
+    accelerator: "Command+Q",
+    click: (_item, _window, event) => {
+      if (!event.triggeredByAccelerator) return quit("menu");
+      if (!guarded()) return quit("shortcut");
+      if (quitConfirmationOpen || windowsKeptHidden) return;
+      quitConfirmationOpen = true;
+      void dialog
+        .showMessageBox({
+          type: "question",
+          message: translate("menu.quitConfirmTitle"),
+          detail: translate("menu.quitConfirmBody"),
+          buttons: [translate("menu.quitConfirm"), translate("common.cancel")],
+          defaultId: 0,
+          cancelId: 1,
+        })
+        .then(({ response }) => {
+          if (response === 0) quit("shortcut");
+        })
+        .finally(() => {
+          quitConfirmationOpen = false;
+        });
+    },
+  };
+}
+
+export function configureApplicationMenu(
+  service: AgentService,
+  updater: UpdateService,
+  interfaceSize: InterfaceSizeService,
+  translate: AppTranslate,
+  getMainWindow: () => BrowserWindow | null,
+  workingAgents: () => AgentSummary[],
+  quitGuard: () => QuitGuard,
+  quit: (source: MenuQuitSource) => void,
+): void {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
@@ -564,12 +1035,22 @@ export function configureApplicationMenu(service: AgentService, updater: UpdateS
           {
             label: translate("menu.stopAllAgents"),
             accelerator: "CommandOrControl+.",
-            click: () => void service.interruptAll(),
+            click: () => {
+              Effect.runFork(service.interruptAll());
+            },
           },
           { type: "separator" },
           {
             label: translate("menu.checkForUpdates"),
-            click: () => void updater.checkForUpdates(),
+            click: (_item, focusedWindow) => {
+              const focused = focusedWindow ?? BrowserWindow.getFocusedWindow();
+              const target = focused instanceof BrowserWindow ? focused : getMainWindow();
+              if (target && !target.isDestroyed()) {
+                if (target !== focused) showMainWindow(target);
+                sendToRenderer(target, IPC_ENDPOINTS.app.openUpdateSettings);
+              }
+              Effect.runFork(updater.checkForUpdates());
+            },
           },
           { type: "separator" },
           {
@@ -586,12 +1067,54 @@ export function configureApplicationMenu(service: AgentService, updater: UpdateS
           { role: "hideOthers" },
           { role: "unhide" },
           { type: "separator" },
-          { role: "quit" },
+          process.platform === "darwin"
+            ? macQuitItem(
+                translate,
+                () => {
+                  const choice = quitGuard();
+                  return isQuitGuarded(choice, choice === "working" ? workingAgents() : []);
+                },
+                quit,
+              )
+            : { role: "quit" },
         ],
       },
       { role: "editMenu" },
-      { role: "viewMenu" },
-      { role: "windowMenu" },
+      {
+        role: "viewMenu",
+        submenu: [
+          { role: "reload" },
+          { role: "forceReload" },
+          { role: "toggleDevTools" },
+          {
+            label: translate("menu.closeDeveloperTools"),
+            accelerator: "F12",
+            visible: false,
+            click: closeFocusedDevTools,
+          },
+          { type: "separator" },
+          {
+            label: translate("menu.actualSize"),
+            accelerator: "CommandOrControl+0",
+            click: () => zoomFocusedContents(interfaceSize, "default"),
+          },
+          {
+            label: translate("menu.zoomIn"),
+            accelerator: "CommandOrControl+=",
+            click: () => zoomFocusedContents(interfaceSize, "larger"),
+          },
+          {
+            label: translate("menu.zoomOut"),
+            accelerator: "CommandOrControl+-",
+            click: () => zoomFocusedContents(interfaceSize, "smaller"),
+          },
+          { type: "separator" },
+          { role: "togglefullscreen" },
+        ],
+      },
+      process.platform === "darwin"
+        ? { role: "windowMenu" }
+        : { role: "windowMenu", submenu: [{ role: "minimize" }, { role: "close", accelerator: "Alt+F4" }] },
     ]),
   );
 }

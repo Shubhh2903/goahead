@@ -1,19 +1,14 @@
-// Installs the 1Password CLI into a folder that OpenBot owns, so Connect works without Homebrew,
-// an installer package or administrator rights.
-
 import { createHash, randomBytes } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { chmod, mkdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { sourceText } from "@openbot/i18n/source";
+import { Effect } from "effect";
+import { OnePasswordOperationError, onePasswordCall, toOnePasswordOperationError } from "./onepassword-effects";
 import { extractZipFiles } from "./provider-runtime-archive";
 import type { RuntimeTarget } from "./provider-runtime-descriptors";
 
-/**
- * The release that Install puts in place. 1Password publishes no hash for its downloads, so each
- * archive's SHA-256 is pinned here, taken from 1Password's own CDN. A new release is a code change.
- */
 const ONEPASSWORD_CLI_VERSION = "2.39.0";
 
 const ARCHIVES: Record<RuntimeTarget, { name: string; sha256: string }> = {
@@ -39,7 +34,6 @@ const ARCHIVES: Record<RuntimeTarget, { name: string; sha256: string }> = {
   },
 };
 
-/** Each archive is about 15 MB. A much larger answer is not the archive. */
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 
@@ -54,75 +48,96 @@ function archiveUrl(target: RuntimeTarget): string {
   return `https://cache.agilebits.com/dist/1P/op2/pkg/v${ONEPASSWORD_CLI_VERSION}/${name}_v${ONEPASSWORD_CLI_VERSION}.zip`;
 }
 
-/** Where Install puts the CLI. It exists only after a complete, verified install. */
 function managedCliPath(directory: string, target: RuntimeTarget): string {
   return join(directory, ONEPASSWORD_CLI_VERSION, executableName(target));
 }
 
-/**
- * Downloads the pinned release, checks its hash, and unpacks only `op` and its signature into
- * `<directory>/<version>`. A failed or stopped install leaves nothing in that folder.
- */
-export async function installOnePasswordCli(options: {
+export const installOnePasswordCli = Effect.fn("OnePasswordCli.install")(function* (options: {
   directory: string;
   target: RuntimeTarget;
-  signal: AbortSignal;
+  signal?: AbortSignal;
   fetch?: Fetch;
-}): Promise<string> {
-  const { directory, target, signal } = options;
-  const fetchArchive = options.fetch ?? ((input, init) => fetch(input, init));
+}): Effect.fn.Return<string, OnePasswordOperationError> {
+  const { directory, target } = options;
   const failed = sourceText("error.connector.onePasswordCliInstallFailed");
   const destination = join(directory, ONEPASSWORD_CLI_VERSION);
   const staging = join(directory, `.staging-${randomBytes(6).toString("hex")}`);
   const archive = `${staging}.zip`;
-  await mkdir(directory, { recursive: true });
-  try {
-    const response = await fetchArchive(archiveUrl(target), {
-      signal: AbortSignal.any([signal, AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)]),
-    });
-    if (!response.ok || !response.body) throw new Error(failed);
-    const declared = Number(response.headers.get("content-length") ?? 0);
-    if (declared > MAX_ARCHIVE_BYTES) throw new Error(failed);
-    const hash = createHash("sha256");
-    const reader = response.body.getReader();
-    let size = 0;
-    await pipeline(
-      async function* () {
-        try {
-          while (true) {
-            const chunk = await reader.read();
-            if (chunk.done) return;
-            size += chunk.value.byteLength;
-            if (size > MAX_ARCHIVE_BYTES) throw new Error(failed);
-            hash.update(chunk.value);
-            yield chunk.value;
-          }
-        } finally {
-          await reader.cancel().catch(() => undefined);
-        }
-      },
-      createWriteStream(archive, { mode: 0o600 }),
-      { signal },
+  yield* onePasswordCall(() => mkdir(directory, { recursive: true }));
+  return yield* Effect.gen(function* () {
+    const digest = yield* onePasswordCall((interrupted) =>
+      downloadArchive({
+        url: archiveUrl(target),
+        archive,
+        failed,
+        signal: options.signal ? AbortSignal.any([options.signal, interrupted]) : interrupted,
+        fetch: options.fetch ?? ((input, init) => fetch(input, init)),
+      }),
     );
-    if (hash.digest("hex") !== ARCHIVES[target].sha256) throw new Error(failed);
+    if (digest !== ARCHIVES[target].sha256) return yield* new OnePasswordOperationError({ cause: new Error(failed) });
     const executable = executableName(target);
-    await mkdir(staging);
-    await extractZipFiles(archive, staging, [executable, `${executable}.sig`], failed);
-    await chmod(join(staging, executable), 0o755);
-    await rm(destination, { recursive: true, force: true });
-    await rename(staging, destination);
+    yield* onePasswordCall(() => mkdir(staging));
+    yield* extractZipFiles(archive, staging, [executable, `${executable}.sig`], failed).pipe(
+      toOnePasswordOperationError,
+    );
+    yield* onePasswordCall(async () => {
+      await chmod(join(staging, executable), 0o755);
+      await rm(destination, { recursive: true, force: true });
+      await rename(staging, destination);
+    });
     return managedCliPath(directory, target);
-  } finally {
-    await rm(archive, { force: true });
-    await rm(staging, { recursive: true, force: true });
-  }
+  }).pipe(
+    Effect.ensuring(
+      onePasswordCall(async () => {
+        await rm(archive, { force: true });
+        await rm(staging, { recursive: true, force: true });
+      }).pipe(Effect.ignore),
+    ),
+  );
+});
+
+export async function downloadArchive(options: {
+  url: string;
+  archive: string;
+  failed: string;
+  signal: AbortSignal;
+  fetch: Fetch;
+}): Promise<string> {
+  const { failed, signal } = options;
+  const response = await options.fetch(options.url, {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)]),
+  });
+  if (!response.ok || !response.body) throw new Error(failed);
+  const declared = Number(response.headers.get("content-length") ?? 0);
+  if (declared > MAX_ARCHIVE_BYTES) throw new Error(failed);
+  const hash = createHash("sha256");
+  const reader = response.body.getReader();
+  let size = 0;
+  await pipeline(
+    async function* () {
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) return;
+          size += chunk.value.byteLength;
+          if (size > MAX_ARCHIVE_BYTES) throw new Error(failed);
+          hash.update(chunk.value);
+          yield chunk.value;
+        }
+      } finally {
+        await reader.cancel().catch(() => undefined);
+      }
+    },
+    createWriteStream(options.archive, { mode: 0o600 }),
+    { signal },
+  );
+  return hash.digest("hex");
 }
 
-/** The installed CLI, or null when Install has not completed. */
-export async function installedManagedCli(directory: string, target: RuntimeTarget): Promise<string | null> {
+export function installedManagedCli(directory: string, target: RuntimeTarget): Effect.Effect<string | null> {
   const path = managedCliPath(directory, target);
-  return stat(path).then(
-    (entry) => (entry.isFile() ? path : null),
-    () => null,
+  return onePasswordCall(() => stat(path)).pipe(
+    Effect.map((entry) => (entry.isFile() ? path : null)),
+    Effect.orElseSucceed(() => null),
   );
 }
