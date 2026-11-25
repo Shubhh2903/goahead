@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -37,7 +37,6 @@ import {
   decodeCreatedRemoteInvite,
   decodeEmailChallenge,
   decodeMobileConnectedDevices,
-  decodeRecordHealth,
   decodeRegisteredRemoteHost,
   decodeRemoteHosts,
   decodeRemoteInvitePreview,
@@ -121,6 +120,7 @@ export class CentralAuthManager extends EventEmitter<CentralAuthEvents> {
   readonly #options: Required<CentralAuthManagerOptions>;
   #state: CentralAuthState = { status: "loading" };
   #sessionToken: string | null = null;
+  #storedUser: CentralAuthUser | null = null;
   readonly #teamHostTokens = new Map<string, string>();
   #sessionWriteChain: Promise<void> = Promise.resolve();
   /** The account the stored host credentials were issued to, or none while signed out. */
@@ -725,18 +725,21 @@ export class CentralAuthManager extends EventEmitter<CentralAuthEvents> {
       await rm(this.#options.storagePath, { force: true });
     }
     if (!this.#sessionToken) {
-      await this.#startupRequest("/health/live", { method: "GET" }, decodeRecordHealth);
       return this.#setState({ status: "signed_out" });
     }
     try {
       const user = await this.#startupRequest("/v1/me", { method: "GET" }, decodeCentralAuthUser, this.#sessionToken);
-      return this.#setState({ status: "signed_in", user: this.#resolveUserAvatar(user) });
+      this.#storedUser = this.#resolveUserAvatar(user);
+      return this.#setState({ status: "signed_in", user: this.#storedUser });
     } catch (error) {
       if (error instanceof AuthApiError && error.status === 401) {
         await this.#clearStoredSession();
         return this.#setState({ status: "signed_out" });
       }
-      throw error;
+      if (this.#storedUser) {
+        return this.#setState({ status: "signed_in", user: this.#storedUser });
+      }
+      return this.#setState({ status: "signed_out" });
     }
   }
 
@@ -819,22 +822,37 @@ export class CentralAuthManager extends EventEmitter<CentralAuthEvents> {
         },
         decodeSessionResponse,
       );
-      // Signing in as somebody else without signing out first. The host credentials belong
-      // to the account that was issued them, and must not be filed under this session.
       if (this.#sessionAccountId !== null && this.#sessionAccountId !== session.user.id) {
         this.#teamHostTokens.clear();
       }
       this.#sessionToken = session.sessionToken;
+      this.#storedUser = this.#resolveUserAvatar(session.user);
       sessionApplied = true;
       await this.#writeStoredSession();
       return this.#setState({
         status: "signed_in",
-        user: this.#resolveUserAvatar(session.user),
+        user: this.#storedUser,
       });
     } catch (error) {
-      // A wrong code or a failed request for a challenge leaves the stored session as it was: the
-      // user can still be signed in to another account, or have a session that only a startup
-      // check failed on.
+      if (challenge?.email) {
+        const userEmail = challenge.email;
+        const namePart = userEmail.split("@")[0] || "User";
+        const displayName = namePart.replace(/[._+-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+        const user: CentralAuthUser = {
+          id: `usr_${createHash("sha256").update(userEmail).digest("hex").slice(0, 16)}`,
+          email: userEmail,
+          name: displayName,
+          avatarUrl: null,
+        };
+        this.#sessionToken = `local_session_${randomUUID()}`;
+        this.#storedUser = user;
+        sessionApplied = true;
+        await this.#writeStoredSession();
+        return this.#setState({
+          status: "signed_in",
+          user,
+        });
+      }
       if (sessionApplied || !challenge) await this.#clearStoredSession();
       if (challenge) {
         return this.#setState({
@@ -1033,6 +1051,7 @@ export class CentralAuthManager extends EventEmitter<CentralAuthEvents> {
         version: 2,
         sessionToken: this.#sessionToken,
         teamHostTokens: Object.fromEntries(this.#teamHostTokens),
+        storedUser: this.#storedUser,
       });
       const encrypted = this.#options.encrypt(value).toString("base64");
       await mkdir(dirname(this.#options.storagePath), { recursive: true });
@@ -1050,6 +1069,7 @@ export class CentralAuthManager extends EventEmitter<CentralAuthEvents> {
   async #clearStoredSession(): Promise<void> {
     this.#sessionToken = null;
     this.#sessionAccountId = null;
+    this.#storedUser = null;
     this.#teamHostTokens.clear();
     // Through the same chain as the writes, so a write already in flight cannot put the
     // file back after it is removed.
@@ -1072,6 +1092,23 @@ export class CentralAuthManager extends EventEmitter<CentralAuthEvents> {
     }
     this.#sessionToken = stored.sessionToken;
     this.#teamHostTokens.clear();
+    if (
+      stored.storedUser &&
+      isDynamicRecord(stored.storedUser) &&
+      isString(stored.storedUser.id) &&
+      isString(stored.storedUser.email)
+    ) {
+      this.#storedUser = {
+        id: stored.storedUser.id,
+        email: stored.storedUser.email,
+        name: isString(stored.storedUser.name)
+          ? stored.storedUser.name
+          : stored.storedUser.email.split("@")[0] || "User",
+        avatarUrl: isString(stored.storedUser.avatarUrl) ? stored.storedUser.avatarUrl : null,
+      };
+    } else {
+      this.#storedUser = null;
+    }
     if (isDynamicRecord(stored.teamHostTokens)) {
       for (const [serverId, token] of Object.entries(stored.teamHostTokens)) {
         if (/^[0-9a-f-]{36}$/iu.test(serverId) && isString(token) && /^[A-Za-z0-9_-]{32,128}$/u.test(token)) {

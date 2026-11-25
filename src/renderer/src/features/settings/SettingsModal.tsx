@@ -97,8 +97,8 @@ export function SettingsModal(props: SettingsModalProps) {
   const hostedServers = createSettingsHostedServersStore(props, () => activeTab() === "hosted-servers");
   const voice = createSettingsVoiceStore(() => props.open && activeTab() === "voice");
 
-  // The Dynamic Island exists only on macOS, so other platforms get no tab for it.
-  const isMac = () => props.appInfo?.platform === "darwin";
+  // The Dynamic Island exists on macOS and Windows.
+  const hasDynamicIsland = () => props.appInfo?.platform === "darwin" || props.appInfo?.platform === "win32";
   // Linux builds carry no speech recognition runtime.
   const hasVoice = () => voiceSupported(props.appInfo?.platform);
   // An account that lost access to hosting still sees its servers, so it can delete or start them.
@@ -126,7 +126,7 @@ export function SettingsModal(props: SettingsModalProps) {
   const visibleNavItems = () =>
     navItems.filter(
       (item) =>
-        (item.value !== "dynamic-island" || isMac()) &&
+        (item.value !== "dynamic-island" || hasDynamicIsland()) &&
         (item.value !== "voice" || hasVoice()) &&
         (item.value !== "hosted-servers" || hostedServersShown()),
     );
@@ -142,7 +142,7 @@ export function SettingsModal(props: SettingsModalProps) {
       if (
         value === "general" ||
         (value === "voice" && hasVoice()) ||
-        (value === "dynamic-island" && isMac()) ||
+        (value === "dynamic-island" && hasDynamicIsland()) ||
         value === "computer-use" ||
         value === "profile" ||
         value === "billing" ||
@@ -219,7 +219,7 @@ export function SettingsModal(props: SettingsModalProps) {
           </Tabs.Content>
         </Show>
 
-        <Show when={isMac()}>
+        <Show when={hasDynamicIsland()}>
           <Tabs.Content value="dynamic-island" class="settings-modal-tab-panel" data-tab="dynamic-island">
             <SettingsDynamicIslandTab
               value={props.value}

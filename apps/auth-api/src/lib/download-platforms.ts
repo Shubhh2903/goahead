@@ -36,10 +36,11 @@ export const DOWNLOAD_PLATFORMS: Record<DownloadPlatform, DownloadPlatformDetail
   windows: {
     id: "windows",
     label: "Windows",
-    status: "Coming soon",
-    description: "Not available yet",
-    action: "Windows: not available yet",
-    available: false,
+    status: "Available",
+    description: "Windows 10/11 · 64-bit",
+    action: "Download for Windows",
+    available: true,
+    href: OPENBOT_DOWNLOAD_LINKS.windows,
   },
   linux: {
     id: "linux",
