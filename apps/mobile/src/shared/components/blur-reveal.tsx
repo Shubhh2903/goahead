@@ -1,20 +1,19 @@
 import { BlurTargetView, BlurView } from "expo-blur";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { StyleSheet, type View } from "react-native";
+import { StyleSheet, type ViewInstance } from "react-native";
 import Animated, {
   Easing,
   ReduceMotion,
   useAnimatedStyle,
-  useReducedMotion,
   useSharedValue,
   withDelay,
   withTiming,
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
+import { useReducedMotion } from "@/shared/lib/motion";
 
 const EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1);
 
-/** Retain outgoing content until its exit animation finishes. */
 export function BlurReveal<T>({
   value,
   children,
@@ -30,11 +29,10 @@ export function BlurReveal<T>({
   interactive?: boolean;
   enterDuration?: number;
   exitDuration?: number;
-  /** Waits before the entrance, so several reveals can come in one after another. */
   enterDelay?: number;
 }) {
   const [retained, setRetained] = useState(value);
-  const target = useRef<View | null>(null);
+  const target = useRef<ViewInstance | null>(null);
   const reduceMotion = useReducedMotion();
   const progress = useSharedValue(0);
   const visible = value !== null;

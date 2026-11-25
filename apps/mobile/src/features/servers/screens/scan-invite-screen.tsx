@@ -5,15 +5,12 @@ import { useThemeColor } from "heroui-native/hooks";
 import { View } from "react-native";
 
 import { QrScanner } from "@/features/auth/components/qr-scanner";
-import { ScannerCloseButton } from "@/features/auth/components/scanner-close-button";
 import { useMobileSession } from "@/features/auth/context/mobile-session-context";
 import { rememberIncomingLink } from "@/features/links/model/incoming-links";
+import { StageBackButton } from "@/shared/components/bloub-stage/stage-back-button";
+import { headerTitleFont } from "@/shared/lib/app-font";
 import { useText } from "@/shared/lib/text";
 
-// An inner page of the add-server sheet, or of the plans sheet. The preview fills the whole sheet.
-// The add-server sheet has no header, so the title and the close control ride over the camera. The
-// plans sheet keeps its native header on this page too: a page without the header makes iOS hide the
-// bar during the push, and the page under it jumps when its header inset changes.
 export function ScanInviteScreen({
   joinPath = "/add-server",
   underHeader = false,
@@ -34,17 +31,15 @@ export function ScanInviteScreen({
         } catch {
           throw new Error(t("mobile.server.scan.notInvitation"));
         }
-        // The one-use token stays out of navigation params, as deep links do.
         const request = rememberIncomingLink({ kind: "invite", url: data });
         router.dismissTo({ pathname: joinPath, params: { request } });
       }}
       renderOverlay={(camera) =>
         underHeader ? (
-          // White over the camera, as the overlay title; the theme color over the permission page.
           <Stack.Screen
             options={{
               headerTintColor: camera ? "white" : String(foreground),
-              headerTitleStyle: { color: camera ? "white" : String(foreground) },
+              headerTitleStyle: { ...headerTitleFont, color: camera ? "white" : String(foreground) },
             }}
           />
         ) : (
@@ -55,7 +50,12 @@ export function ScanInviteScreen({
             <Typography.Heading type="h4" className={camera ? "text-white" : undefined}>
               {t("mobile.server.scan.title")}
             </Typography.Heading>
-            <ScannerCloseButton disabled={false} onPress={() => router.back()} />
+            <StageBackButton
+              icon="close"
+              label={t("mobile.auth.closeScanner")}
+              color={camera ? "#ffffff" : String(foreground)}
+              onPress={() => router.back()}
+            />
           </View>
         )
       }

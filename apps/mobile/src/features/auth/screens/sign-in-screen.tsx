@@ -1,41 +1,68 @@
 import { useIsFocused } from "expo-router/react-navigation";
-import { Accordion, Typography } from "heroui-native";
+import { Typography } from "heroui-native";
 import { useThemeColor } from "heroui-native/hooks";
-import { type LucideIcon, X } from "lucide-react-native";
-import { useCallback, useContext, useLayoutEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, useWindowDimensions, View } from "react-native";
-import Animated, { useAnimatedStyle } from "react-native-reanimated";
+import type { LucideIcon } from "lucide-react-native";
+import X from "lucide-react-native/icons/x";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import {
+  AppState,
+  BackHandler,
+  Keyboard,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  type TextInputInstance,
+  View,
+} from "react-native";
+import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import Animated, {
+  FadeIn,
+  useAnimatedReaction,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { mobileAnalytics } from "@/features/analytics/mobile-analytics";
-import { redeemMobileConnectUrl } from "@/features/auth/api/mobile-auth";
-import { AppLogo } from "@/features/auth/components/app-logo";
-import { ScanQrButton } from "@/features/auth/components/scan-qr-button";
-import { type ScannerOrigin, ScanQrSheet } from "@/features/auth/components/scan-qr-sheet";
-import { useMobileSession } from "@/features/auth/context/mobile-session-context";
-import { SplashWallpaper } from "@/shared/components/splash-backdrop";
-import { SPLASH_LOGO_SIZE, SPLASH_MORPH_START, splashReveal, splashTravel } from "@/shared/lib/splash-motion";
-import { useText } from "@/shared/lib/text";
+import { type MobileSession, redeemMobileConnectUrl } from "@/features/auth/api/mobile-auth";
+import type { EmailCodeInputHandle } from "@/features/auth/components/email-code-input";
+import { QrScanner, type ScannerMode, type ScanStatus } from "@/features/auth/components/qr-scanner";
 import {
-  SPLASH_HANDOFF_DEADLINE_MS,
-  SplashContentReadyContext,
-  SplashMotionContext,
-} from "@/shared/lib/use-splash-gate";
+  PANE_ENTER_DELAY_MS,
+  PANE_SIDE_ENTER_DELAY_MS,
+  type PaneDirection,
+  paneExit,
+  SIGN_IN_EASE_MOVE,
+} from "@/features/auth/components/sign-in-motion";
+import { CodePane, EmailPane, HELP_MOVE, OptionsPane, type PaneMotion } from "@/features/auth/components/sign-in-panes";
+import { useMobileSession } from "@/features/auth/context/mobile-session-context";
+import { type SignInStep, useEmailSignIn } from "@/features/auth/model/use-email-sign-in";
+import { BLOUB_MOVE_MS } from "@/shared/components/bloub-stage/bloub-look";
+import { useBloubStage, useBloubStageRequest } from "@/shared/components/bloub-stage/bloub-stage-context";
+import {
+  BLOUB_PRIORITY,
+  type BloubMood,
+  type BloubStageRequest,
+} from "@/shared/components/bloub-stage/bloub-stage-store";
+import { useReducedMotion } from "@/shared/lib/motion";
+import { useText } from "@/shared/lib/text";
+import { SPLASH_HANDOFF_DEADLINE_MS, SplashContentReadyContext } from "@/shared/lib/use-splash-gate";
 
-const HERO_SIZE = 72;
-const HELP_GAP = 12;
+const COLUMN_MAX_WIDTH = 420;
+const SIDE_MARGIN = 24;
+const PANE_GAP = 40;
+const COMPACT_HEADER = 146;
+const FORM_GAP = 26;
+const OPTIONS_HEADER_SHARE = 0.5;
+const MIN_OPTIONS_HEADER = 150;
+const KEYBOARD_GAP = 24;
+const MIN_LIFTED_HEADER = 64;
+const EMAIL_FOCUS_MS = 380;
+const SAD_MS = 1100;
+const DONE_HOLD_MS = 900;
+const SCANNER_RELEASE_MS = 400;
 
-function useContentReveal(delay: number) {
-  const motion = useContext(SplashMotionContext);
-  const progress = motion?.progress;
-  const reducedMotion = motion?.reducedMotion ?? false;
-  return useAnimatedStyle(() => {
-    const opacity = progress ? splashReveal(progress.get(), delay, reducedMotion) : 1;
-    return { opacity, transform: [{ translateY: reducedMotion ? 0 : (1 - opacity) * 8 }] };
-  });
-}
-
-/** A link that waits for sign-in, such as an invitation. A banner above the sign-in content names it. */
 export interface SignInNotice {
   icon: LucideIcon;
   title: string;
@@ -44,9 +71,7 @@ export interface SignInNotice {
   onCancel: () => void;
 }
 
-const BANNER_GAP = 12;
-
-function SignInNoticeBanner({ notice, disabled }: { notice: SignInNotice; disabled: boolean }) {
+function SignInNoticeBanner({ notice }: { notice: SignInNotice }) {
   const [foreground, muted] = useThemeColor(["foreground", "muted"]);
   const Icon = notice.icon;
   return (
@@ -63,8 +88,6 @@ function SignInNoticeBanner({ notice, disabled }: { notice: SignInNotice; disabl
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={notice.cancelLabel}
-        accessibilityState={{ disabled }}
-        disabled={disabled}
         hitSlop={8}
         onPress={notice.onCancel}
         className="size-8 items-center justify-center rounded-full"
@@ -76,191 +99,360 @@ function SignInNoticeBanner({ notice, disabled }: { notice: SignInNotice; disabl
   );
 }
 
+type PaneKey = SignInStep | "none";
+
+function enterFrom(from: PaneKey, to: PaneKey): PaneDirection {
+  if (from === "email" && to === "code") return "right";
+  if (from === "code" && to === "email") return "left";
+  return "vertical";
+}
+
+function exitTo(from: PaneKey, to: PaneKey): PaneDirection {
+  if (from === "email" && to === "code") return "left";
+  if (from === "code" && to === "email") return "right";
+  return "vertical";
+}
+
+interface ScanState {
+  mode: ScannerMode;
+  status: ScanStatus;
+}
+
 export function SignInScreen({ notice }: { notice?: SignInNotice }) {
   const { t } = useText();
   const reportContentReady = useContext(SplashContentReadyContext);
-  const motion = useContext(SplashMotionContext);
   const insets = useSafeAreaInsets();
-  const titleStyle = useContentReveal(280);
-  const actionsStyle = useContentReveal(340);
-  const hero = useRef<View>(null);
-  const [heroOffset, setHeroOffset] = useState({ x: 0, y: 0 });
-  const progress = motion?.progress;
-  const reduced = motion?.reducedMotion ?? false;
-  const heroStyle = useAnimatedStyle(() => {
-    const p = progress ? splashTravel(progress.get(), reduced) : 1;
-    return {
-      opacity: reduced ? p : Math.max(0, (p - SPLASH_MORPH_START) / (1 - SPLASH_MORPH_START)),
-      transform: [
-        { translateX: reduced ? 0 : heroOffset.x * (1 - p) },
-        { translateY: reduced ? 0 : heroOffset.y * (1 - p) },
-        { scale: reduced ? 1 : 1 + (SPLASH_LOGO_SIZE / HERO_SIZE - 1) * (1 - p) },
-      ],
-    };
-  });
   const isFocused = useIsFocused();
-  const { width: windowWidth } = useWindowDimensions();
-  const buttonWidth = Math.min(240, windowWidth - 64);
+  const reduced = useReducedMotion();
   const { connect } = useMobileSession();
-  const measurementDeadline = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const root = useRef<View>(null);
-  const button = useRef<View>(null);
-  const [origin, setOrigin] = useState<ScannerOrigin | null>(null);
-  const scannerOpen = origin !== null;
-  const animationActive = isFocused && !scannerOpen && (motion?.complete ?? true);
+  const { lift, look } = useBloubStage();
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
-  const [mainHeight, setMainHeight] = useState(0);
-  const [helpTriggerHeight, setHelpTriggerHeight] = useState(0);
-  // Centre the closed composition. Expanded help adds scrollable content below it.
-  const closedHeight = mainHeight + HELP_GAP + helpTriggerHeight;
-  // A link banner takes the top of the screen; the sign-in content is centred in the space below it.
-  const [bannerHeight, setBannerHeight] = useState(0);
-  const bannerSpace = notice ? bannerHeight + BANNER_GAP : 0;
-  const top = insets.top + bannerSpace;
-  const contentTop = top + Math.max(32, (viewport.height - top - insets.bottom - closedHeight) / 2);
-  const closeScanner = useCallback(() => {
-    setOrigin(null);
-  }, []);
 
-  const reportHero = useCallback(() => {
-    if (viewport.height <= 0 || viewport.width <= 0 || mainHeight <= 0 || helpTriggerHeight <= 0) return;
-    root.current?.measureInWindow((rootX, rootY, width, height) => {
-      hero.current?.measureInWindow((x, y, heroWidth) => {
-        if (heroWidth <= 0) return;
-        setHeroOffset({ x: rootX + width / 2 - x - heroWidth / 2, y: rootY + height / 2 - y - heroWidth / 2 });
-        reportContentReady({ x, y, size: heroWidth });
-      });
-    });
-  }, [reportContentReady, viewport.height, viewport.width, mainHeight, helpTriggerHeight]);
-
-  useLayoutEffect(() => {
-    if (viewport.height <= 0 || motion?.revealing) return;
-    // Measurement normally completes with layout. A missing native callback must
-    // degrade to a fade, never strand the user behind the splash.
-    measurementDeadline.current = setTimeout(() => reportContentReady(), SPLASH_HANDOFF_DEADLINE_MS);
-    reportHero();
-    return () => {
-      if (measurementDeadline.current) clearTimeout(measurementDeadline.current);
+  const [finished, setFinished] = useState<MobileSession | null>(null);
+  const connectRef = useRef(connect);
+  connectRef.current = connect;
+  useEffect(() => {
+    if (!finished) return;
+    let attached = false;
+    const attach = () => {
+      if (attached) return;
+      attached = true;
+      connectRef.current(finished);
     };
-  }, [motion?.revealing, reportContentReady, reportHero, viewport.height]);
+    const hold = AppState.currentState !== "active" ? 0 : reduced ? DONE_HOLD_MS / 2 : BLOUB_MOVE_MS + DONE_HOLD_MS;
+    const timer = setTimeout(attach, hold);
+    return () => {
+      clearTimeout(timer);
+      attach();
+    };
+  }, [finished, reduced]);
 
-  function openScanner() {
-    motion?.finish();
-    root.current?.measureInWindow((rootX, rootY) => {
-      button.current?.measureInWindow((x, y, width, height) => {
-        if (width <= 0 || height <= 0) return;
-        setOrigin({ x: x - rootX, y: y - rootY, width, height });
-      });
+  const signIn = useEmailSignIn({ connect: setFinished, reduced });
+  const { step } = signIn;
+  const emailInput = useRef<TextInputInstance>(null);
+  const codeInput = useRef<EmailCodeInputHandle>(null);
+
+  const [scan, setScan] = useState<ScanState | null>(null);
+  const [scannerMounted, setScannerMounted] = useState(false);
+  useEffect(() => {
+    if (scan || !scannerMounted) return;
+    const timer = setTimeout(() => setScannerMounted(false), SCANNER_RELEASE_MS);
+    return () => clearTimeout(timer);
+  }, [scan, scannerMounted]);
+  const scanBusy = scan?.status === "connecting";
+  const openScanner = useCallback(() => {
+    Keyboard.dismiss();
+    setScan({ mode: "pending", status: "idle" });
+    setScannerMounted(true);
+  }, []);
+  const closeScanner = useCallback(() => {
+    setScan((current) => (current?.status === "connecting" ? current : null));
+  }, []);
+  const onModeChange = useCallback(
+    (mode: ScannerMode) => setScan((current) => (current && current.mode !== mode ? { ...current, mode } : current)),
+    [],
+  );
+  const onStatusChange = useCallback(
+    (status: ScanStatus) =>
+      setScan((current) => (current && current.status !== status ? { ...current, status } : current)),
+    [],
+  );
+
+  const [sad, setSad] = useState(false);
+  useEffect(() => {
+    if (signIn.rejection === 0) return;
+    setSad(true);
+    const timer = setTimeout(() => setSad(false), SAD_MS);
+    return () => clearTimeout(timer);
+  }, [signIn.rejection]);
+
+  const [optionsHeight, setOptionsHeight] = useState(0);
+  const [helpHeight, setHelpHeight] = useState(0);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const safeWidth = viewport.width - insets.left - insets.right;
+  const columnWidth = Math.max(0, Math.min(COLUMN_MAX_WIDTH, safeWidth - 2 * SIDE_MARGIN));
+  const columnLeft = insets.left + (safeWidth - columnWidth) / 2;
+  const closedHeight = optionsHeight - helpHeight;
+  const bottomPad = Math.max(insets.bottom + 8, 24);
+  const minOptionsTop = insets.top + MIN_OPTIONS_HEADER + PANE_GAP;
+  const maxOptionsTop = Math.round(viewport.height * OPTIONS_HEADER_SHARE) + PANE_GAP;
+  const optionsTop = Math.max(minOptionsTop, Math.min(maxOptionsTop, viewport.height - bottomPad - closedHeight));
+  const measured = viewport.height > 0 && optionsHeight > 0;
+  const optionsBottom = optionsTop - PANE_GAP - (helpOpen ? helpHeight : 0);
+  const compactBottom = insets.top + COMPACT_HEADER;
+  const formTop = compactBottom + FORM_GAP;
+  const helpShift = useSharedValue(0);
+  const staticShift = useSharedValue(0);
+  useEffect(() => {
+    const shift = helpOpen ? helpHeight : 0;
+    helpShift.set(reduced ? shift : withTiming(shift, HELP_MOVE));
+  }, [helpHeight, helpOpen, helpShift, reduced]);
+  useEffect(() => {
+    if (step !== "options") setHelpOpen(false);
+  }, [step]);
+
+  useEffect(() => {
+    if (measured) {
+      reportContentReady();
+      return;
+    }
+    const deadline = setTimeout(reportContentReady, SPLASH_HANDOFF_DEADLINE_MS);
+    return () => clearTimeout(deadline);
+  }, [measured, reportContentReady]);
+
+  const close = {
+    icon: "close" as const,
+    label: t("mobile.auth.closeScanner"),
+    onPress: closeScanner,
+    disabled: scanBusy,
+  };
+  const formMood: BloubMood = signIn.verified
+    ? "happy"
+    : signIn.sending || signIn.verifying
+      ? "think"
+      : sad
+        ? "sad"
+        : "down";
+  const request: BloubStageRequest | null = !isFocused
+    ? null
+    : finished
+      ? {
+          shape: { kind: "cover" },
+          mood: "happy",
+          caption: { title: t("mobile.auth.done.title"), text: t("mobile.auth.done.body") },
+          loader: true,
+        }
+      : scan
+        ? scan.mode === "camera"
+          ? { shape: { kind: "clear" }, mood: scanBusy ? "found" : "frame", back: close }
+          : scan.mode === "permission"
+            ? { shape: { kind: "header", bottom: compactBottom }, mood: "down", back: close }
+            : { shape: { kind: "cover" }, mood: "think", back: close }
+        : scannerMounted
+          ? // The block covers the camera again before it moves to the header, so the camera never
+            { shape: { kind: "cover" }, mood: "idle" }
+          : step === "options"
+            ? { shape: measured ? { kind: "header", bottom: optionsBottom } : { kind: "cover" }, mood: "idle" }
+            : {
+                shape: { kind: "header", bottom: compactBottom },
+                mood: formMood,
+                back: {
+                  icon: "back",
+                  label: t("common.back"),
+                  onPress: signIn.back,
+                  disabled: signIn.sending || signIn.verifying || signIn.verified,
+                },
+              };
+  const active = useBloubStageRequest(request, BLOUB_PRIORITY.screen);
+  const [revealed, setRevealed] = useState(false);
+  useEffect(() => {
+    if (active) setRevealed(true);
+  }, [active]);
+
+  const emailLength = signIn.email.length;
+  const codeLength = signIn.code.length;
+  const looking = !finished && !scan;
+  useEffect(() => {
+    if (!looking || step === "options") look(0, 0);
+    else if (step === "email") look(-16 + Math.min(emailLength, 26) * 1.25, 9);
+    else look(-22 + Math.min(codeLength, 7) * 6.4, 9);
+  }, [codeLength, emailLength, look, looking, step]);
+
+  const target: PaneKey = !revealed || finished || scan || scannerMounted ? "none" : step;
+  const [pane, setPane] = useState<{ key: PaneKey; from: PaneDirection }>({ key: "none", from: "vertical" });
+  useEffect(() => {
+    if (pane.key !== target) setPane({ key: target, from: enterFrom(pane.key, target) });
+  }, [pane.key, target]);
+  const exit = paneExit(exitTo(pane.key, target), reduced);
+  const motion: PaneMotion = {
+    from: pane.from,
+    startMs: pane.from === "vertical" ? PANE_ENTER_DELAY_MS : PANE_SIDE_ENTER_DELAY_MS,
+    reduced,
+  };
+
+  useEffect(() => {
+    if (pane.key !== "email") return;
+    const timer = setTimeout(
+      () => emailInput.current?.focus(),
+      pane.from === "vertical" && !reduced ? EMAIL_FOCUS_MS : 0,
+    );
+    return () => clearTimeout(timer);
+  }, [pane.from, pane.key, reduced]);
+  useEffect(() => {
+    if (pane.key === "code" && signIn.challenge && !signIn.needsNewCode) codeInput.current?.focus();
+  }, [pane.key, signIn.challenge, signIn.needsNewCode]);
+
+  const [formHeight, setFormHeight] = useState(0);
+  const formStep = pane.key === "email" || pane.key === "code";
+  const formBottom = useSharedValue(0);
+  useEffect(() => {
+    const bottom = formStep && formHeight > 0 ? formTop + formHeight : 0;
+    formBottom.set(
+      reduced || formBottom.get() === 0 ? bottom : withTiming(bottom, { duration: 300, easing: SIGN_IN_EASE_MOVE }),
+    );
+  }, [formBottom, formHeight, formStep, formTop, reduced]);
+  const { height: keyboardHeight } = useReanimatedKeyboardAnimation();
+  const viewportHeight = viewport.height;
+  const maxLift = Math.max(0, compactBottom - insets.top - MIN_LIFTED_HEADER);
+  useAnimatedReaction(
+    () => {
+      const bottom = formBottom.get();
+      if (bottom <= 0) return 0;
+      const overlap = bottom + KEYBOARD_GAP - (viewportHeight - Math.abs(keyboardHeight.get()));
+      return Math.min(maxLift, Math.max(0, overlap));
+    },
+    (value) => lift.set(value),
+  );
+  useEffect(() => () => lift.set(0), [lift]);
+  const liftStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -lift.get() }] }));
+
+  const back = useRef(signIn.back);
+  back.current = signIn.back;
+  const scanning = scan !== null;
+  useEffect(() => {
+    if (!scanning && step === "options") return;
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (scanning) closeScanner();
+      else back.current();
+      return true;
     });
-  }
+    return () => subscription.remove();
+  }, [closeScanner, scanning, step]);
+
+  const overflow = optionsTop + closedHeight + bottomPad > viewport.height;
+  const contentHeight = Math.max(viewport.height, pane.key === "options" ? optionsTop + closedHeight + bottomPad : 0);
+  const noticeBanner = notice ? <SignInNoticeBanner notice={notice} /> : null;
+  const column = { position: "absolute" as const, left: columnLeft, width: columnWidth };
 
   return (
     <View
-      ref={root}
       className="flex-1 bg-background"
-      collapsable={false}
       onLayout={({ nativeEvent: { layout } }) => setViewport({ width: layout.width, height: layout.height })}
     >
-      <SplashWallpaper />
+      {columnWidth > 0 ? (
+        <View
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={[column, { top: 0, opacity: 0 }]}
+        >
+          <OptionsPane
+            motion={null}
+            notice={noticeBanner}
+            helpOpen={false}
+            helpShift={staticShift}
+            onToggleHelp={() => undefined}
+            onScan={() => undefined}
+            onEmail={() => undefined}
+            onLayout={setOptionsHeight}
+            onHelpLayout={setHelpHeight}
+            reduced={reduced}
+          />
+        </View>
+      ) : null}
       <ScrollView
-        onScrollBeginDrag={motion?.finish}
-        scrollEnabled={!scannerOpen}
-        pointerEvents={scannerOpen ? "none" : "auto"}
-        accessibilityElementsHidden={scannerOpen}
-        importantForAccessibility={scannerOpen ? "no-hide-descendants" : "auto"}
-        className="flex-1"
-        contentContainerClassName="items-center px-8"
-        contentContainerStyle={{
-          paddingTop: contentTop,
-          paddingBottom: insets.bottom + 32,
-        }}
+        style={StyleSheet.absoluteFill}
+        contentContainerStyle={{ height: contentHeight }}
+        scrollEnabled={pane.key === "options" && overflow}
+        keyboardShouldPersistTaps="handled"
         contentInsetAdjustmentBehavior="never"
         bounces={false}
         showsVerticalScrollIndicator={false}
       >
-        <View className="w-full max-w-80 items-center" style={{ gap: HELP_GAP }} onLayout={reportHero}>
-          <View
-            className="w-full items-center gap-8"
-            onLayout={({ nativeEvent: { layout } }) => setMainHeight(layout.height)}
-          >
-            <View ref={hero} collapsable={false} onLayout={reportHero} style={{ width: HERO_SIZE, height: HERO_SIZE }}>
-              <Animated.View style={heroStyle}>
-                <AppLogo
-                  size={HERO_SIZE}
-                  animation={animationActive ? "blink" : "none"}
-                  interactive={animationActive}
-                />
-              </Animated.View>
-            </View>
-            <Animated.View style={titleStyle} className="items-center gap-3">
-              <Typography.Heading
-                type="h2"
-                accessibilityRole="header"
-                align="center"
-                className="tracking-openbot-tight"
-              >
-                {t("mobile.auth.signIn.title")}
-              </Typography.Heading>
-              <Typography.Paragraph color="muted" align="center">
-                {t("mobile.auth.signIn.subtitle")}
-              </Typography.Paragraph>
-            </Animated.View>
-            <Animated.View style={actionsStyle}>
-              <View ref={button} collapsable={false} style={{ width: buttonWidth, opacity: scannerOpen ? 0 : 1 }}>
-                <ScanQrButton width={buttonWidth} onPress={openScanner} />
-              </View>
-            </Animated.View>
-          </View>
-          <Animated.View style={actionsStyle} className="w-full">
-            <Accordion className="w-full" hideSeparator animation={motion?.reducedMotion ? "disable-all" : undefined}>
-              <Accordion.Item value="desktop-qr">
-                <View onLayout={({ nativeEvent: { layout } }) => setHelpTriggerHeight(layout.height)}>
-                  <Accordion.Trigger className="min-h-11 justify-center gap-2">
-                    <Typography color="muted" className="text-caption">
-                      {t("mobile.auth.signIn.helpTitle")}
-                    </Typography>
-                    <Accordion.Indicator />
-                  </Accordion.Trigger>
-                </View>
-                <Accordion.Content>
-                  <View className="gap-3 pt-3">
-                    <Typography.Paragraph color="muted">{t("mobile.auth.signIn.helpStep1")}</Typography.Paragraph>
-                    <Typography.Paragraph color="muted">{t("mobile.auth.signIn.helpStep2")}</Typography.Paragraph>
-                    <Typography.Paragraph color="muted">{t("mobile.auth.signIn.helpStep3")}</Typography.Paragraph>
-                  </View>
-                </Accordion.Content>
-              </Accordion.Item>
-            </Accordion>
+        {pane.key === "options" ? (
+          <Animated.View key="options" exiting={exit} style={[column, { top: optionsTop }]}>
+            <OptionsPane
+              motion={motion}
+              notice={noticeBanner}
+              helpOpen={helpOpen}
+              helpShift={helpShift}
+              onToggleHelp={() => setHelpOpen((open) => !open)}
+              onScan={openScanner}
+              onEmail={signIn.openEmail}
+              reduced={reduced}
+            />
           </Animated.View>
-        </View>
+        ) : null}
+        {pane.key === "email" ? (
+          <Animated.View key="email" exiting={exit} style={[column, { top: formTop }]}>
+            <Animated.View style={liftStyle}>
+              <EmailPane
+                signIn={signIn}
+                motion={motion}
+                emailInput={emailInput}
+                onScanInstead={openScanner}
+                onLayout={setFormHeight}
+                reduced={reduced}
+              />
+            </Animated.View>
+          </Animated.View>
+        ) : null}
+        {pane.key === "code" ? (
+          <Animated.View key="code" exiting={exit} style={[column, { top: formTop }]}>
+            <Animated.View style={liftStyle}>
+              <CodePane
+                signIn={signIn}
+                motion={motion}
+                codeInput={codeInput}
+                onLayout={setFormHeight}
+                reduced={reduced}
+              />
+            </Animated.View>
+          </Animated.View>
+        ) : null}
       </ScrollView>
-      {notice ? (
-        <Animated.View
-          style={[titleStyle, { position: "absolute", top: insets.top + 8, left: 16, right: 16 }]}
-          pointerEvents={scannerOpen ? "none" : "box-none"}
-          accessibilityElementsHidden={scannerOpen}
-          importantForAccessibility={scannerOpen ? "no-hide-descendants" : "auto"}
-          onLayout={({ nativeEvent: { layout } }) => setBannerHeight(layout.height)}
-        >
-          <SignInNoticeBanner notice={notice} disabled={scannerOpen} />
-        </Animated.View>
-      ) : null}
-      {origin && isFocused ? (
-        <ScanQrSheet
-          origin={origin}
-          viewport={viewport}
-          onClose={closeScanner}
-          onScan={async (data, beforeConnect) => {
-            const session = await mobileAnalytics.operation("mobile_pairing_action", { action: "redeem" }, () =>
-              redeemMobileConnectUrl(data),
-            );
-            try {
-              await beforeConnect();
-            } finally {
-              connect(session);
+      {scannerMounted ? (
+        <View style={StyleSheet.absoluteFill} pointerEvents={scan ? "box-none" : "none"}>
+          <QrScanner
+            immersive
+            contentInsetTop={compactBottom + 16}
+            scanEnabled={scan?.mode === "camera" && !finished}
+            onModeChange={onModeChange}
+            onStatusChange={onStatusChange}
+            renderOverlay={(camera) =>
+              camera && scan?.mode === "camera" && !finished ? (
+                <Animated.View
+                  entering={FadeIn.duration(200).delay(reduced ? 0 : 650)}
+                  pointerEvents="none"
+                  className="absolute items-center"
+                  style={{ top: insets.top + 15, left: insets.left + 64, right: insets.right + 64 }}
+                >
+                  <Typography.Paragraph align="center" className="font-semibold text-white">
+                    {t("mobile.auth.scanner.scanDesktop")}
+                  </Typography.Paragraph>
+                </Animated.View>
+              ) : null
             }
-          }}
-        />
+            onScan={async (data) => {
+              const session = await mobileAnalytics.operation(
+                "mobile_pairing_action",
+                { action: "redeem", entry_point: "qr" },
+                () => redeemMobileConnectUrl(data),
+              );
+              setFinished(session);
+            }}
+          />
+        </View>
       ) : null}
     </View>
   );

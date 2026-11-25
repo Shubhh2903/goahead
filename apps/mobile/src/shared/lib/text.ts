@@ -1,5 +1,5 @@
 import { formatLocale, resolveLocale, type TranslatedLocale } from "@openbot/i18n/mobile";
-import { useEffect, useMemo, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { AppState } from "react-native";
 import { useAppLanguage } from "@/features/settings/model/app-language";
 import { phoneLanguages } from "./phone-languages";
@@ -11,29 +11,53 @@ function phoneLocale(): string {
   return phoneLanguages()[0] ?? "en";
 }
 
-export function currentText(): MobileText {
-  const language = useAppLanguage.getState().value;
-  const systemLocale = phoneLocale();
-  return textFor(resolveLocale(language, systemLocale), formatLocale(language, systemLocale));
+let systemLocale: string | null = null;
+const systemLocaleListeners = new Set<() => void>();
+
+function systemLocaleNow(): string {
+  if (systemLocale === null) {
+    systemLocale = phoneLocale();
+    AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      const next = phoneLocale();
+      if (next === systemLocale) return;
+      systemLocale = next;
+      for (const notify of systemLocaleListeners) notify();
+    });
+  }
+  return systemLocale;
 }
 
-/** The interface language now, for text that the phone asks another computer to write. */
+function subscribeSystemLocale(listener: () => void) {
+  systemLocaleListeners.add(listener);
+  return () => {
+    systemLocaleListeners.delete(listener);
+  };
+}
+
+const texts = new Map<string, MobileText>();
+
+function sharedText(locale: TranslatedLocale, numbers: string): MobileText {
+  const key = `${locale}\u0000${numbers}`;
+  const cached = texts.get(key);
+  if (cached) return cached;
+  const text = textFor(locale, numbers);
+  texts.set(key, text);
+  return text;
+}
+
+export function currentText(): MobileText {
+  const language = useAppLanguage.getState().value;
+  const locale = systemLocaleNow();
+  return sharedText(resolveLocale(language, locale), formatLocale(language, locale));
+}
+
 export function currentLocale(): TranslatedLocale {
-  return resolveLocale(useAppLanguage.getState().value, phoneLocale());
+  return resolveLocale(useAppLanguage.getState().value, systemLocaleNow());
 }
 
 export function useText(): MobileText {
   const language = useAppLanguage((state) => state.value);
-  // The phone's language can change in iOS Settings while GoAhead is in the background, so it is
-  // read again each time the app becomes active.
-  const [systemLocale, setSystemLocale] = useState(phoneLocale);
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") setSystemLocale(phoneLocale());
-    });
-    return () => subscription.remove();
-  }, []);
-  const locale = resolveLocale(language, systemLocale);
-  const numbers = formatLocale(language, systemLocale);
-  return useMemo(() => textFor(locale, numbers), [locale, numbers]);
+  const locale = useSyncExternalStore(subscribeSystemLocale, systemLocaleNow);
+  return sharedText(resolveLocale(language, locale), formatLocale(language, locale));
 }

@@ -1,17 +1,15 @@
 import * as ExpoHaptics from "expo-haptics";
 import { useHapticsPreference } from "../../features/settings/model/haptics";
+import { isAndroid } from "./platform";
 
 async function play(feedback: () => Promise<void>): Promise<void> {
   const { enabled, ready } = useHapticsPreference.getState();
   if (!ready || !enabled) return;
   try {
     await feedback();
-  } catch {
-    // Missing hardware or a native failure must not interrupt the user's action.
-  }
+  } catch {}
 }
 
-/** Shared mobile feedback. From a worklet, call through scheduleOnRN. */
 export const haptics = {
   selection: (): Promise<void> => play(() => ExpoHaptics.selectionAsync()),
   impact: (style: "light" | "medium" | "heavy" | "soft" | "rigid" = "light"): Promise<void> =>
@@ -25,6 +23,12 @@ export const haptics = {
           rigid: ExpoHaptics.ImpactFeedbackStyle.Rigid,
         }[style],
       ),
+    ),
+  longPress: (): Promise<void> =>
+    play(() =>
+      isAndroid
+        ? ExpoHaptics.performAndroidHapticsAsync(ExpoHaptics.AndroidHaptics.Long_Press)
+        : ExpoHaptics.impactAsync(ExpoHaptics.ImpactFeedbackStyle.Medium),
     ),
   notification: (type: "success" | "warning" | "error" = "success"): Promise<void> =>
     play(() =>

@@ -1,36 +1,35 @@
-import type { AttachmentSummary, ImageGenerationAspectRatio, ImageGenerationInfo } from "@openbot/contracts/ipc";
+import {
+  type AttachmentSummary,
+  type ImageGenerationAspectRatio,
+  type ImageGenerationInfo,
+  imageAspectRatioOf,
+  imagePixelSize,
+} from "@openbot/contracts/ipc";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { Image } from "expo-image";
 import { Button, Typography } from "heroui-native";
 import { useThemeColor } from "heroui-native/hooks";
-import { X } from "lucide-react-native";
-import { useEffect, useRef, useState } from "react";
+import X from "lucide-react-native/icons/x";
+import { useEffect, useState } from "react";
 import { Platform, Pressable, useWindowDimensions, View } from "react-native";
-import Animated, {
-  Easing,
-  ReduceMotion,
-  useAnimatedStyle,
-  useReducedMotion,
-  useSharedValue,
-  withTiming,
-} from "react-native-reanimated";
+import Animated, { Easing, ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import Svg, { Defs, RadialGradient, Rect, Stop } from "react-native-svg";
 import { scheduleOnRN } from "react-native-worklets";
-import { haptics } from "@/shared/lib/haptics";
+import { useReducedMotion } from "@/shared/lib/motion";
 import { useText } from "@/shared/lib/text";
 import type { ImageDimensions } from "../model/image-dimensions";
 import { useAttachmentFile } from "./attachment-preview";
+import { isViewableImage, useChatImageSource } from "./chat-image-viewer";
 import { ImageGenerationCanvas } from "./image-generation-canvas";
-import { ImageViewer } from "./image-viewer";
 
 export type ImageGenerationStatus = "generating" | "completed" | "failed" | "interrupted";
 
 const MAX_WIDTH = 300;
 const MAX_HEIGHT = 380;
 const REVEAL_DURATION = 720;
+const FRAME_RADIUS = 22;
 const REVEAL_EASING = Easing.bezier(0.23, 1, 0.32, 1);
 
-/** The same mapping as desktop: a streaming message is still generating its image. */
 export function imageGenerationStatus(streaming: boolean, status: string | undefined): ImageGenerationStatus {
   if (streaming || status === "streaming") return "generating";
   if (status === "failed") return "failed";
@@ -44,7 +43,6 @@ function requestedRatio(aspectRatio: ImageGenerationAspectRatio) {
   return 1;
 }
 
-/** The frame holds the requested shape until the image reports its own, so it does not jump. */
 function generationFrame(ratio: number, maxWidth: number) {
   const width = Math.min(maxWidth, MAX_HEIGHT * ratio);
   return { width: Math.round(width), height: Math.round(width / ratio) };
@@ -67,11 +65,6 @@ export function ChatImageGeneration({
   const [previewError, setPreviewError] = useState(false);
   const [loaded, setLoaded] = useState<ImageDimensions | null>(null);
   const [revealed, setRevealed] = useState(false);
-  const [viewing, setViewing] = useState(false);
-  const [sourceHidden, setSourceHidden] = useState(false);
-  const frameRef = useRef<View>(null);
-  // Only an image the user watched being generated is revealed. History that scrolls back into
-  // view shows its image at once: the reveal is news, and old news should not repeat.
   const [watched, setWatched] = useState(status === "generating");
   if (status === "generating" && !watched) setWatched(true);
   const file = useAttachmentFile(serverId, attachment ?? PLACEHOLDER, status === "completed" && Boolean(attachment));
@@ -79,7 +72,15 @@ export function ChatImageGeneration({
   const downloadFailed = Boolean(file.query.error) || previewError;
   const failed = status === "failed" || status === "interrupted" || unavailable || downloadFailed;
   const ready = status === "completed" && Boolean(file.uri) && !downloadFailed;
-  const dimensions = file.dimensions ?? loaded;
+  const source = useChatImageSource(
+    ready && attachment && isViewableImage(attachment) ? attachment.id : null,
+    FRAME_RADIUS,
+  );
+  const hostSize = status === "completed" ? imagePixelSize(generation.resolution) : null;
+  const dimensions =
+    file.dimensions ??
+    loaded ??
+    (hostSize && imageAspectRatioOf(hostSize) === generation.aspectRatio ? hostSize : null);
   const ratio = dimensions ? dimensions.width / dimensions.height : requestedRatio(generation.aspectRatio);
   const frame = generationFrame(ratio, Math.min(MAX_WIDTH, windowWidth - 64));
   const label = unavailable
@@ -113,8 +114,8 @@ export function ChatImageGeneration({
 
   return (
     <View className="max-w-full gap-2" accessibilityLiveRegion="polite">
-      <View
-        ref={frameRef}
+      <Animated.View
+        ref={source.origin}
         collapsable={false}
         accessible={!loaded}
         accessibilityRole="image"
@@ -124,7 +125,7 @@ export function ChatImageGeneration({
           width: frame.width,
           height: frame.height,
           maxWidth: "100%",
-          borderRadius: 22,
+          borderRadius: FRAME_RADIUS,
           borderCurve: "continuous",
           overflow: "hidden",
           backgroundColor: surface,
@@ -155,7 +156,6 @@ export function ChatImageGeneration({
           </View>
         ) : null}
         {!revealed && !failed ? (
-          // Inside the frame, so the caption below keeps its height when the image lands.
           <View className="absolute bottom-2.5 left-2.5 rounded-full bg-background/70 px-2.5 py-1" pointerEvents="none">
             <Typography.Paragraph type="body-xs" className="font-semibold text-foreground">
               {label}
@@ -174,14 +174,13 @@ export function ChatImageGeneration({
             }
             onRevealed={() => setRevealed(true)}
             onError={() => setPreviewError(true)}
-            hidden={sourceHidden}
+            hiddenStyle={source.hiddenStyle}
             onPress={() => {
-              void haptics.impact("soft");
-              setViewing(true);
+              if (attachment) source.open?.(attachment);
             }}
           />
         ) : null}
-      </View>
+      </Animated.View>
       {generation.prompt || error ? (
         <View className="gap-0.5 px-1" style={{ maxWidth: frame.width }}>
           {failed ? (
@@ -214,27 +213,6 @@ export function ChatImageGeneration({
           <Button.Label>{t("mobile.chat.attachment.retryImage")}</Button.Label>
         </Button>
       ) : null}
-      {viewing && file.uri ? (
-        <ImageViewer
-          uri={file.uri}
-          name={attachment?.name ?? t("mobile.chat.imageGeneration.image")}
-          dimensions={dimensions ?? frame}
-          measureOrigin={(report) =>
-            frameRef.current
-              ? frameRef.current.measureInWindow((x, y, width, height) => report({ x, y, width, height }))
-              : report(null)
-          }
-          originRadius={22}
-          busy={file.busy}
-          onShare={file.share}
-          onSave={file.saveToPhotos}
-          onShown={() => setSourceHidden(true)}
-          onDismissed={() => {
-            setViewing(false);
-            setSourceHidden(false);
-          }}
-        />
-      ) : null}
     </View>
   );
 }
@@ -249,17 +227,13 @@ const PLACEHOLDER: AttachmentSummary = {
   previewUrl: null,
 };
 
-/**
- * The image arrives through a feathered circle that grows from the centre of the canvas, where the
- * ripples started. Android masks in software, so it fades in instead, as does reduced motion.
- */
 function GeneratedImageReveal({
   uri,
   width,
   height,
   prompt,
   animate,
-  hidden,
+  hiddenStyle,
   onLoad,
   onRevealed,
   onError,
@@ -270,8 +244,7 @@ function GeneratedImageReveal({
   height: number;
   prompt: string | undefined;
   animate: boolean;
-  /** The viewer holds the image, so this copy steps aside until it returns. */
-  hidden: boolean;
+  hiddenStyle: ReturnType<typeof useChatImageSource>["hiddenStyle"];
   onLoad: (size: ImageDimensions) => void;
   onRevealed: () => void;
   onError: () => void;
@@ -302,7 +275,6 @@ function GeneratedImageReveal({
   useEffect(() => {
     if (revealed) onRevealed();
   }, [revealed, onRevealed]);
-  // The mask circle spans the frame's diagonal at full size, so its feathered edge clears the corners.
   const diameter = Math.hypot(width, height) * 1.25;
   const maskStyle = useAnimatedStyle(() => ({
     transform: [{ scale: 0.04 + progress.get() * 0.96 }],
@@ -312,26 +284,26 @@ function GeneratedImageReveal({
     transform: [{ scale: 1.03 - progress.get() * 0.03 }],
   }));
   const image = (
-    // A plain pressable: a HeroUI button keeps its own side padding, which pushed the image off
-    // the frame's right edge.
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={t("mobile.chat.imageGeneration.preview")}
       onPress={onPress}
       style={{ width, height }}
     >
-      <Image
-        source={uri}
-        contentFit="cover"
-        transition={0}
-        accessibilityLabel={prompt ?? t("mobile.chat.imageGeneration.image")}
-        style={{ width, height, opacity: hidden ? 0 : 1 }}
-        onLoad={({ source }) => {
-          setDecoded(true);
-          if (source.width > 0 && source.height > 0) onLoad({ width: source.width, height: source.height });
-        }}
-        onError={onError}
-      />
+      <Animated.View style={[{ width, height }, hiddenStyle]}>
+        <Image
+          source={uri}
+          contentFit="cover"
+          transition={0}
+          accessibilityLabel={prompt ?? t("mobile.chat.imageGeneration.image")}
+          style={{ width, height }}
+          onLoad={({ source }) => {
+            setDecoded(true);
+            if (source.width > 0 && source.height > 0) onLoad({ width: source.width, height: source.height });
+          }}
+          onError={onError}
+        />
+      </Animated.View>
     </Pressable>
   );
   if (revealed || !masked)

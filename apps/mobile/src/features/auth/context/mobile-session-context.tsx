@@ -1,4 +1,5 @@
-import { createRemoteAccountRefresh } from "@openbot/team-client";
+import { createRemoteAccountRefresh, runTeamEffect } from "@openbot/team-client";
+import { Effect } from "effect";
 import {
   createContext,
   type PropsWithChildren,
@@ -10,7 +11,12 @@ import {
   useState,
 } from "react";
 import { mobileAnalytics } from "@/features/analytics/mobile-analytics";
-import { loadAnalyticsPreference } from "@/features/analytics/preference";
+import {
+  followAccountAnalytics,
+  loadAnalyticsPreference,
+  type SendAnalyticsChoice,
+  sendAnalyticsChoice,
+} from "@/features/analytics/preference";
 import {
   logoutMobileSession,
   type MobileProfileChange,
@@ -18,10 +24,19 @@ import {
   MobileSessionExpiredError,
   readMobileSession,
   retryMobileSessionRevocations,
+  sameCredential,
   updateMobileProfile,
   validateMobileSession,
 } from "@/features/auth/api/mobile-auth";
+import { deleteComposerDrafts } from "@/features/chat/model/composer-drafts";
+import { deleteLocationAlwaysAllowed } from "@/features/chat/model/location-always-allowed";
+import { deleteSideQuestions } from "@/features/chat/model/side-questions";
+import { deleteAgentBackdrops } from "@/features/settings/model/chat-backdrop";
+import { deleteAgentAvatars } from "@/features/workspace/model/agent-avatar-cache";
+import { type QueryScope, queryKeys } from "@/features/workspace/model/query-keys";
+import { deleteWorkspaceCaches } from "@/features/workspace/model/workspace-cache";
 import { queryClient } from "@/shared/lib/query-client";
+import { untilForeground } from "@/shared/lib/until-foreground";
 import { useAppForeground } from "@/shared/lib/use-app-foreground";
 
 import { resolveSessionValidation } from "./session-validation";
@@ -34,10 +49,18 @@ interface MobileSessionContextValue {
   handleSessionError: (error: unknown, initiatingSession: MobileSession) => void;
   connect: (session: MobileSession) => void;
   signOut: () => Promise<void>;
-  updateProfile: (change: MobileProfileChange) => Promise<void>;
+  updateProfile: (change: MobileProfileChange) => Promise<MobileSession>;
+  sendAnalyticsChoice: () => Promise<void>;
 }
 
 const MobileSessionContext = createContext<MobileSessionContextValue | null>(null);
+
+function deletePhoneCopy() {
+  void deleteWorkspaceCaches();
+  deleteAgentBackdrops();
+  deleteAgentAvatars();
+  deleteLocationAlwaysAllowed();
+}
 
 export function MobileSessionProvider({ children }: PropsWithChildren) {
   const [sessionState, setSessionState] = useState<MobileSession | null | undefined>(undefined);
@@ -53,8 +76,16 @@ export function MobileSessionProvider({ children }: PropsWithChildren) {
   const setCurrentSession = useCallback((session: MobileSession | null) => {
     if (sessionRef.current?.sessionToken !== session?.sessionToken || sessionRef.current?.apiUrl !== session?.apiUrl) {
       sessionScope.current += 1;
-      queryClient.removeQueries({ queryKey: ["account-sessions"] });
+      queryClient.removeQueries({ queryKey: queryKeys.accountSessions() });
+      queryClient.removeQueries({ queryKey: queryKeys.hostedServerPlans() });
+      queryClient.removeQueries({ queryKey: queryKeys.billing() });
+      queryClient.removeQueries({ queryKey: queryKeys.credits() });
+      queryClient.removeQueries({ queryKey: queryKeys.creditActivity() });
+      queryClient.removeQueries({ queryKey: queryKeys.referrals() });
+      deleteComposerDrafts();
+      deleteSideQuestions();
     }
+    if (sessionRef.current && !session) deletePhoneCopy();
     mobileAnalytics.setUser(session?.user ?? null);
     sessionRef.current = session;
     setSessionState(session);
@@ -64,8 +95,8 @@ export function MobileSessionProvider({ children }: PropsWithChildren) {
     (error: unknown, initiatingSession: MobileSession) => {
       if (
         error instanceof MobileSessionExpiredError &&
-        sessionRef.current?.sessionToken === initiatingSession.sessionToken &&
-        sessionRef.current?.apiUrl === initiatingSession.apiUrl
+        sessionRef.current &&
+        sameCredential(sessionRef.current, initiatingSession)
       )
         setCurrentSession(null);
     },
@@ -75,11 +106,15 @@ export function MobileSessionProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     let active = true;
     const scope = sessionScope.current;
-    void loadAnalyticsPreference();
-    void readMobileSession()
-      .then((stored) => {
-        if (active && scope === sessionScope.current) setCurrentSession(stored);
-      })
+    void untilForeground().then(loadAnalyticsPreference);
+    const read = () =>
+      readMobileSession().then((stored) => {
+        if (!active || scope !== sessionScope.current) return;
+        if (!stored) deletePhoneCopy();
+        setCurrentSession(stored);
+      });
+    void read()
+      .catch(() => untilForeground().then(read))
       .catch(() => {
         if (active && scope === sessionScope.current) setCurrentSession(null);
       });
@@ -93,19 +128,21 @@ export function MobileSessionProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     if (!credentialToken || !credentialApiUrl) return;
     let active = true;
-    const controller = createRemoteAccountRefresh(async () => {
-      const current = sessionRef.current;
-      if (!current) return;
-      await validateMobileSession(current, (validated) => {
-        if (!active) return;
-        const next = resolveSessionValidation(sessionRef.current, current, validated);
-        if (next !== sessionRef.current) setCurrentSession(next);
-      });
-    });
+    const controller = createRemoteAccountRefresh(() =>
+      Effect.tryPromise(async () => {
+        const current = sessionRef.current;
+        if (!current) return;
+        await validateMobileSession(current, (validated) => {
+          if (!active) return;
+          const next = resolveSessionValidation(sessionRef.current, current, validated);
+          if (next !== sessionRef.current) setCurrentSession(next);
+        });
+      }),
+    );
     validation.current = controller;
     refreshProfileRef.current = () => {
       controller.invalidate();
-      return controller.refresh().catch(() => undefined);
+      return runTeamEffect(controller.refresh()).catch(() => undefined);
     };
     controller.setActive(foregroundRef.current);
     return () => {
@@ -125,9 +162,8 @@ export function MobileSessionProvider({ children }: PropsWithChildren) {
     const current = sessionRef.current;
     if (!current) return;
     await mobileAnalytics.operation("account_sign_out", {}, () => logoutMobileSession(current));
-    if (sessionRef.current?.sessionToken === current.sessionToken && sessionRef.current?.apiUrl === current.apiUrl) {
-      setCurrentSession(null);
-    }
+    deleteAgentAvatars();
+    if (sessionRef.current && sameCredential(sessionRef.current, current)) setCurrentSession(null);
   }, [setCurrentSession]);
 
   const updateProfile = useCallback(
@@ -135,7 +171,7 @@ export function MobileSessionProvider({ children }: PropsWithChildren) {
       const current = sessionRef.current;
       if (!current) throw new MobileSessionExpiredError();
       try {
-        await updateMobileProfile(current, change, (updated) => {
+        return await updateMobileProfile(current, change, (updated) => {
           const next = resolveSessionValidation(sessionRef.current, current, updated);
           if (next !== sessionRef.current) setCurrentSession(next);
         });
@@ -147,6 +183,19 @@ export function MobileSessionProvider({ children }: PropsWithChildren) {
     [handleSessionError, setCurrentSession],
   );
 
+  const sendAnalytics = useCallback<SendAnalyticsChoice>(
+    async (enabled, ageMs) => (await updateProfile({ analyticsEnabled: enabled, ageMs })).user.analyticsEnabled ?? null,
+    [updateProfile],
+  );
+  const sendUnsentAnalytics = useCallback(() => sendAnalyticsChoice(sendAnalytics), [sendAnalytics]);
+
+  const accountAnalytics = sessionState?.user.analyticsEnabled;
+  const signedIn = Boolean(sessionState);
+  useEffect(() => {
+    if (!signedIn) return;
+    void followAccountAnalytics(accountAnalytics, sendAnalytics).catch(() => undefined);
+  }, [signedIn, accountAnalytics, sendAnalytics]);
+
   const value = useMemo<MobileSessionContextValue>(
     () => ({
       loading: sessionState === undefined,
@@ -157,8 +206,9 @@ export function MobileSessionProvider({ children }: PropsWithChildren) {
       connect: setCurrentSession,
       signOut,
       updateProfile,
+      sendAnalyticsChoice: sendUnsentAnalytics,
     }),
-    [sessionState, setCurrentSession, signOut, updateProfile, handleSessionError, refreshProfile],
+    [sessionState, setCurrentSession, signOut, updateProfile, sendUnsentAnalytics, handleSessionError, refreshProfile],
   );
 
   return <MobileSessionContext.Provider value={value}>{children}</MobileSessionContext.Provider>;
@@ -168,4 +218,9 @@ export function useMobileSession(): MobileSessionContextValue {
   const value = useContext(MobileSessionContext);
   if (!value) throw new Error("useMobileSession must be used within MobileSessionProvider.");
   return value;
+}
+
+export function useQueryScope(): QueryScope {
+  const { session, sessionScope } = useMobileSession();
+  return [session?.apiUrl, session?.user.id, sessionScope];
 }

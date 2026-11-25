@@ -1,9 +1,17 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Gesture, type PanGesture } from "react-native-gesture-handler";
+import {
+  GestureStateManager,
+  type PanGesture,
+  type PanGestureConfig,
+  usePanGesture,
+  useSimultaneousGestures,
+} from "react-native-gesture-handler";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useSharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import { haptics } from "@/shared/lib/haptics";
+import { isAndroid } from "@/shared/lib/platform";
+import { END_X } from "@/shared/lib/text-direction";
 
 export const PIN_REVEAL_DISTANCE = 88;
 export const PIN_COMMIT_DISTANCE = 144;
@@ -17,6 +25,7 @@ export function useAgentPinSwipe(
   openingGesture: PanGesture,
   onPin: (withHaptic: boolean) => void,
   pinBlocked: boolean,
+  dragGesture?: PanGesture,
 ) {
   const swipeable = useRef<SwipeableMethods>(null);
   const restOffset = useSharedValue(0);
@@ -32,8 +41,9 @@ export function useAgentPinSwipe(
 
   const close = useCallback(() => swipeable.current?.close(), []);
   const restore = useCallback(() => {
-    if (restOffset.get() < 0) swipeable.current?.openRight();
-    else swipeable.current?.close();
+    if (restOffset.get() >= 0) swipeable.current?.close();
+    else if (END_X === 1) swipeable.current?.openRight();
+    else swipeable.current?.openLeft();
   }, [restOffset]);
 
   const pin = useCallback(
@@ -71,65 +81,124 @@ export function useAgentPinSwipe(
     }
   };
 
-  // Swipeable owns movement and settling. This simultaneous observer adds only
-  // the full-swipe threshold and resolves conflicts with the server drawer.
-  const gesture = useMemo(
-    () =>
-      Gesture.Pan()
-        .manualActivation(true)
-        .enableTrackpadTwoFingerGesture(true)
-        // A closed row yields rightward movement to the drawer. An exposed row owns
-        // the same movement so it can close without opening the drawer.
-        .blocksExternalGesture(openingGesture)
-        .onTouchesDown((event, manager) => {
-          if (active.get()) return;
-          const touch = event.allTouches[0];
-          if (!touch || event.numberOfTouches > 2 || committing.get()) {
-            manager.fail();
-            return;
+  const config = useMemo<PanGestureConfig>(
+    () => ({
+      manualActivation: true,
+      block: openingGesture,
+      requireToFail: dragGesture,
+      onTouchesDown: (event) => {
+        "worklet";
+        if (active.get()) return;
+        const touch = event.allTouches[0];
+        if (!touch || event.numberOfTouches > 2 || committing.get()) {
+          GestureStateManager.fail(event.handlerTag);
+          return;
+        }
+        origin.set({ x: touch.absoluteX, y: touch.absoluteY });
+      },
+      onTouchesMove: (event) => {
+        "worklet";
+        if (active.get()) return;
+        const touch = event.allTouches[0];
+        if (!touch || event.numberOfTouches > 2) {
+          GestureStateManager.fail(event.handlerTag);
+          return;
+        }
+        const dx = (touch.absoluteX - origin.get().x) * END_X;
+        const dy = touch.absoluteY - origin.get().y;
+        if (Math.abs(dy) > 10) GestureStateManager.fail(event.handlerTag);
+        else if (dx < -10 || (restOffset.get() < 0 && dx > 10)) GestureStateManager.activate(event.handlerTag);
+        else if (dx > 10) GestureStateManager.fail(event.handlerTag);
+      },
+      onActivate: () => {
+        "worklet";
+        active.set(true);
+        start.set(restOffset.get());
+        armed.set(false);
+        feedbackPlayed.set(false);
+      },
+      onUpdate: (event) => {
+        "worklet";
+        const distance = Math.max(0, -(start.get() + event.translationX * END_X));
+        if (distance >= PIN_COMMIT_DISTANCE && !armed.get()) {
+          armed.set(true);
+          if (!pinBlocked && !feedbackPlayed.get()) {
+            feedbackPlayed.set(true);
+            scheduleOnRN(thresholdFeedback);
           }
-          origin.set({ x: touch.absoluteX, y: touch.absoluteY });
-        })
-        .onTouchesMove((event, manager) => {
-          if (active.get()) return;
-          const touch = event.allTouches[0];
-          if (!touch || event.numberOfTouches > 2) {
-            manager.fail();
-            return;
-          }
-          const dx = touch.absoluteX - origin.get().x;
-          const dy = touch.absoluteY - origin.get().y;
-          if (Math.abs(dy) > 10) manager.fail();
-          else if (dx < -10 || (restOffset.get() < 0 && dx > 10)) manager.activate();
-          else if (dx > 10) manager.fail();
-        })
-        .onStart(() => {
-          active.set(true);
-          start.set(restOffset.get());
-          armed.set(false);
-          feedbackPlayed.set(false);
-        })
-        .onUpdate((event) => {
-          const distance = Math.max(0, -(start.get() + event.translationX));
-          if (distance >= PIN_COMMIT_DISTANCE && !armed.get()) {
-            armed.set(true);
-            if (!pinBlocked && !feedbackPlayed.get()) {
-              feedbackPlayed.set(true);
-              scheduleOnRN(thresholdFeedback);
-            }
-          } else if (distance < PIN_DISARM_DISTANCE) armed.set(false);
-        })
-        .onEnd((_event, success) => {
-          if (success && armed.get()) scheduleOnRN(pin, false);
-        })
-        .onFinalize((_event, success) => {
-          if (!active.get()) return;
-          active.set(false);
-          armed.set(false);
-          if (!success && !committing.get()) scheduleOnRN(restore);
-        }),
-    [active, armed, committing, feedbackPlayed, openingGesture, origin, pin, pinBlocked, restOffset, restore, start],
+        } else if (distance < PIN_DISARM_DISTANCE) armed.set(false);
+      },
+      onDeactivate: (event) => {
+        "worklet";
+        if (!event.canceled && armed.get()) scheduleOnRN(pin, false);
+      },
+      onFinalize: (event) => {
+        "worklet";
+        if (!active.get()) return;
+        active.set(false);
+        armed.set(false);
+        if (event.canceled && !committing.get()) scheduleOnRN(restore);
+      },
+    }),
+    [
+      active,
+      armed,
+      committing,
+      dragGesture,
+      feedbackPlayed,
+      openingGesture,
+      origin,
+      pin,
+      pinBlocked,
+      restOffset,
+      restore,
+      start,
+    ],
+  );
+  const gesture = usePanGesture(config);
+
+  const guardOrigin = useSharedValue({ x: 0, y: 0 });
+  const guardVertical = useSharedValue(false);
+  const guardConfig = useMemo<PanGestureConfig>(
+    () => ({
+      manualActivation: true,
+      onTouchesDown: (event) => {
+        "worklet";
+        const touch = event.allTouches[0];
+        if (!touch || event.numberOfTouches > 1) return;
+        guardOrigin.set({ x: touch.absoluteX, y: touch.absoluteY });
+        guardVertical.set(false);
+      },
+      onTouchesMove: (event) => {
+        "worklet";
+        const touch = event.allTouches[0];
+        if (!touch || guardVertical.get()) return;
+        const dx = Math.abs(touch.absoluteX - guardOrigin.get().x);
+        const dy = Math.abs(touch.absoluteY - guardOrigin.get().y);
+        if (dx > 10 && dx > dy) GestureStateManager.fail(event.handlerTag);
+        else if (dy > 10) guardVertical.set(true);
+      },
+    }),
+    [guardOrigin, guardVertical],
+  );
+  const scrollGuard = usePanGesture(guardConfig);
+  const guardedGesture = useSimultaneousGestures(gesture, scrollGuard);
+  const swipeRequires = useMemo(
+    () => [openingGesture, ...(isAndroid ? [scrollGuard] : []), ...(dragGesture ? [dragGesture] : [])],
+    [openingGesture, scrollGuard, dragGesture],
   );
 
-  return { close, gesture, onClose, onWillClose, onWillOpen, pin, pinPending, revealed, swipeable };
+  return {
+    close,
+    gesture,
+    detectorGesture: isAndroid ? guardedGesture : gesture,
+    swipeRequires,
+    onClose,
+    onWillClose,
+    onWillOpen,
+    pin,
+    pinPending,
+    revealed,
+    swipeable,
+  };
 }

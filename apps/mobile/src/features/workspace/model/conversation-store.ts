@@ -1,4 +1,9 @@
-import type { AgentEvent, ConversationMessage, ConversationPage } from "@openbot/contracts/ipc";
+import {
+  type AgentEvent,
+  type ConversationMessage,
+  type ConversationPage,
+  openExchangesOutside,
+} from "@openbot/contracts/ipc";
 
 import { replaceEqualDeep } from "@tanstack/react-query";
 
@@ -6,10 +11,11 @@ type Delta = Extract<AgentEvent, { type: "conversation-delta" }>;
 export interface MobileConversation extends ConversationPage {
   olderLoading: boolean;
   olderError: boolean;
+  detached: boolean;
 }
 type ReadPage = (cursor?: string) => Promise<ConversationPage>;
+const KEPT_MESSAGES = 50;
 
-/** In-memory chat windows. Only subscribers to a changed agent are notified. */
 export class MobileConversationStore {
   #entries = new Map<string, MobileConversation>();
   #listeners = new Map<string, Set<() => void>>();
@@ -17,7 +23,13 @@ export class MobileConversationStore {
   #deltas = new Map<string, Delta[]>();
   #cancelFrame: (() => void) | null = null;
   #olderLoads = new Map<string, symbol>();
-  #loads = new Map<string, { promise: Promise<ConversationPage>; dirty: boolean }>();
+  #loads = new Map<string, { promise: Promise<ConversationPage>; dirty: boolean; attach: boolean }>();
+  #latestPages = new Map<string, { firstId: string; pageInfo: ConversationPage["pageInfo"] }>();
+  #upToDate = new Set<string>();
+  #missedLatest = new Set<string>();
+  #latestReads = new Map<string, number>();
+  #latestLoads = 0;
+  #cached = new Set<string>();
 
   constructor(private schedule: (flush: () => void) => () => void) {}
 
@@ -27,6 +39,35 @@ export class MobileConversationStore {
 
   isObserved(agentId: string) {
     return Boolean(this.#listeners.get(agentId)?.size);
+  }
+
+  isUpToDate(agentId: string) {
+    return this.#upToDate.has(agentId) && this.get(agentId)?.detached === false;
+  }
+
+  holdsRevision(agentId: string, revision: number, threadId?: string | null) {
+    const entry = this.get(agentId);
+    return Boolean(entry && entry.revision >= revision && (threadId === undefined || entry.threadId === threadId));
+  }
+
+  missedLatest(agentId: string) {
+    return this.#missedLatest.has(agentId);
+  }
+
+  #markMissedLatest(agentId: string, load: number) {
+    if ((this.#latestReads.get(agentId) ?? 0) > load) return;
+    this.#upToDate.delete(agentId);
+    this.#missedLatest.add(agentId);
+  }
+
+  markStale() {
+    this.#upToDate.clear();
+  }
+
+  invalidate(agentId: string) {
+    if (this.isObserved(agentId)) return true;
+    this.#upToDate.delete(agentId);
+    return false;
   }
 
   subscribe(agentId: string, listener: () => void) {
@@ -40,13 +81,20 @@ export class MobileConversationStore {
       listeners.delete(listener);
       if (!listeners.size) {
         this.#listeners.delete(agentId);
-        if ((this.get(agentId)?.messages.length ?? 0) > 50) this.remove(agentId);
+        const entry = this.get(agentId);
+        if (entry?.detached) this.remove(agentId);
+        else if (entry) this.#publish(agentId, entry);
       }
     };
   }
 
   remove(agentId: string) {
     this.#entries.delete(agentId);
+    this.#latestPages.delete(agentId);
+    this.#upToDate.delete(agentId);
+    this.#missedLatest.delete(agentId);
+    this.#latestReads.delete(agentId);
+    this.#cached.delete(agentId);
     this.#indices.delete(agentId);
     this.#deltas.delete(agentId);
     this.#loads.delete(agentId);
@@ -54,7 +102,19 @@ export class MobileConversationStore {
     for (const listener of this.#listeners.get(agentId) ?? []) listener();
   }
 
+  removeMessage(agentId: string, messageId: string) {
+    this.flush();
+    const current = this.get(agentId);
+    if (!current) return;
+    const messages = current.messages.filter((message) => message.id !== messageId);
+    if (messages.length === current.messages.length && !(messageId in current.references)) return;
+    const { [messageId]: _removed, ...references } = current.references;
+    this.#publish(agentId, { ...current, messages, references });
+  }
+
   cancelRequests() {
+    this.markStale();
+    for (const agentId of this.#loads.keys()) this.#missedLatest.add(agentId);
     this.#loads.clear();
     this.#olderLoads.clear();
     for (const [id, entry] of this.#entries) {
@@ -69,27 +129,59 @@ export class MobileConversationStore {
     this.cancelRequests();
   }
 
-  #publish(agentId: string, entry: MobileConversation, reindex = true) {
-    if (!this.isObserved(agentId) && entry.messages.length > 50) {
+  #publish(agentId: string, next: MobileConversation, reindex = true) {
+    const entry = this.isObserved(agentId) ? next : this.#trim(agentId, next);
+    if (!entry) {
       this.remove(agentId);
       return;
     }
     const current = this.get(agentId);
     if (entry === current) return;
     this.#entries.set(agentId, entry);
-    if (reindex) this.#indices.set(agentId, new Map(entry.messages.map((message, index) => [message.id, index])));
+    if (reindex || entry !== next)
+      this.#indices.set(agentId, new Map(entry.messages.map((message, index) => [message.id, index])));
     for (const listener of this.#listeners.get(agentId) ?? []) listener();
   }
 
-  applyPage(page: ConversationPage, cursor?: string) {
-    this.flush();
+  #trim(agentId: string, entry: MobileConversation): MobileConversation | undefined {
+    if (entry.messages.length <= KEPT_MESSAGES) return entry;
+    const latest = this.#latestPages.get(agentId);
+    const first = latest ? entry.messages.findIndex((message) => message.id === latest.firstId) : -1;
+    if (!latest || first < 0) return undefined;
+    if (first === 0) return entry;
+    return {
+      ...entry,
+      messages: entry.messages.slice(first),
+      pageInfo: latest.pageInfo,
+      olderLoading: false,
+      olderError: false,
+    };
+  }
+
+  restore(page: ConversationPage) {
+    if (this.get(page.agentId)) return;
+    this.applyPage(page);
+    this.#cached.add(page.agentId);
+  }
+
+  cachedPage(agentId: string): ConversationPage | undefined {
+    const current = this.get(agentId);
+    const entry = current && !current.detached ? this.#trim(agentId, current) : undefined;
+    if (!entry) return undefined;
+    const { olderLoading: _loading, olderError: _error, detached: _detached, ...page } = entry;
+    return page;
+  }
+
+  applyPage(page: ConversationPage, cursor?: string, attach = false) {
+    if (cursor) this.flush();
     const current = this.get(page.agentId);
     if (cursor && (!current || current.threadId !== page.threadId || current.pageInfo.olderCursor !== cursor)) return;
-    if (!cursor && current && page.revision < current.revision) return;
+    if (!cursor && current && page.revision < current.revision && !this.#cached.has(page.agentId)) return;
+    if (!cursor) this.#cached.delete(page.agentId);
     const sameThread = current?.threadId === page.threadId;
     const indices = sameThread ? this.#indices.get(page.agentId) : undefined;
     const overlap = page.messages.find((message) => indices?.has(message.id));
-    // A disconnected latest page must not leave an invisible gap in the history.
+    if (!cursor && current?.detached && !overlap && !attach) return;
     const retain = Boolean(sameThread && (cursor || overlap));
     const oldMessages = retain && current ? current.messages : [];
     const oldById = new Map(oldMessages.map((message) => [message.id, message]));
@@ -121,18 +213,72 @@ export class MobileConversationStore {
       pageInfo: !cursor && retain && current && first > 0 ? current.pageInfo : page.pageInfo,
       olderLoading: current?.olderLoading ?? false,
       olderError: false,
+      detached: cursor ? (current?.detached ?? false) : false,
     });
+    const firstId = page.messages[0]?.id;
+    if (!cursor && firstId) this.#latestPages.set(page.agentId, { firstId, pageInfo: page.pageInfo });
     this.#publish(page.agentId, next);
   }
 
-  loadLatest(agentId: string, read: ReadPage, isCurrent: () => boolean, refresh = false): Promise<ConversationPage> {
+  openExchangesBeforeLatest(agentId: string): string[] {
+    const current = this.get(agentId);
+    const firstId = this.#latestPages.get(agentId)?.firstId;
+    const first = current && firstId ? current.messages.findIndex((message) => message.id === firstId) : -1;
+    return current && first > 0 ? openExchangesOutside(current.messages.slice(0, first), []) : [];
+  }
+
+  replaceMessage(page: ConversationPage, messageId: string) {
+    this.flush();
+    const current = this.get(page.agentId);
+    const message = page.messages.find((candidate) => candidate.id === messageId);
+    if (!current || !message || current.threadId !== page.threadId || page.revision < current.revision) return;
+    const index = current.messages.findIndex((candidate) => candidate.id === messageId);
+    if (index < 0) return;
+    const messages = [...current.messages];
+    messages[index] = replaceEqualDeep(current.messages[index], message);
+    if (messages[index] !== current.messages[index]) this.#publish(page.agentId, { ...current, messages });
+  }
+
+  applyAround(page: ConversationPage) {
+    if (!this.isObserved(page.agentId)) return;
+    this.flush();
+    const current = this.get(page.agentId);
+    const indices =
+      current && !current.detached && current.threadId === page.threadId ? this.#indices.get(page.agentId) : undefined;
+    const overlap = indices ? page.messages.findIndex((message) => indices.has(message.id)) : -1;
+    if (current && overlap >= 0) {
+      if (overlap === 0) return;
+      this.#publish(page.agentId, {
+        ...current,
+        messages: [...page.messages.slice(0, overlap), ...current.messages],
+        references: { ...current.references, ...page.references },
+        pageInfo: page.pageInfo,
+        olderError: false,
+      });
+      return;
+    }
+    this.#latestPages.delete(page.agentId);
+    this.#upToDate.delete(page.agentId);
+    this.#publish(page.agentId, { ...page, olderLoading: false, olderError: false, detached: true });
+  }
+
+  loadLatest(
+    agentId: string,
+    read: ReadPage,
+    isCurrent: () => boolean,
+    refresh = false,
+    attach = false,
+  ): Promise<ConversationPage> {
     const pending = this.#loads.get(agentId);
     if (pending) {
       if (refresh) pending.dirty = true;
+      if (attach) pending.attach = true;
       return pending.promise;
     }
-    const load: { promise: Promise<ConversationPage>; dirty: boolean } = {
+    const serial = ++this.#latestLoads;
+    const load: { promise: Promise<ConversationPage>; dirty: boolean; attach: boolean } = {
       dirty: false,
+      attach,
       promise: Promise.resolve()
         .then(async () => {
           let page: ConversationPage;
@@ -140,13 +286,26 @@ export class MobileConversationStore {
             load.dirty = false;
             page = await read();
             if (page.agentId !== agentId) throw new Error("The server returned a page for another conversation.");
-            if (!isCurrent() || this.#loads.get(agentId) !== load) return page;
-            this.applyPage(page);
+            if (!isCurrent() || this.#loads.get(agentId) !== load) {
+              this.#markMissedLatest(agentId, serial);
+              return page;
+            }
+            this.applyPage(page, undefined, load.attach);
           } while (load.dirty);
+          this.#upToDate.add(agentId);
+          this.#missedLatest.delete(agentId);
+          this.#latestReads.set(agentId, serial);
           return page;
         })
+        .catch((error: unknown) => {
+          this.#markMissedLatest(agentId, serial);
+          throw error;
+        })
         .finally(() => {
-          if (this.#loads.get(agentId) === load) this.#loads.delete(agentId);
+          if (this.#loads.get(agentId) === load) {
+            this.#loads.delete(agentId);
+            if (this.#deltas.has(agentId)) this.flush();
+          }
         }),
     };
     this.#loads.set(agentId, load);
@@ -180,6 +339,8 @@ export class MobileConversationStore {
 
   enqueue(delta: Delta) {
     if (!this.get(delta.agentId)) return;
+    if (!this.isObserved(delta.agentId) && !this.#upToDate.has(delta.agentId) && !this.#loads.has(delta.agentId))
+      return;
     const pending = this.#deltas.get(delta.agentId) ?? [];
     pending.push(delta);
     this.#deltas.set(delta.agentId, pending);
@@ -192,6 +353,11 @@ export class MobileConversationStore {
     const pending = this.#deltas;
     this.#deltas = new Map();
     for (const [agentId, deltas] of pending) {
+      if (this.#loads.has(agentId)) {
+        const later = this.#deltas.get(agentId);
+        this.#deltas.set(agentId, later ? [...deltas, ...later] : deltas);
+        continue;
+      }
       const current = this.get(agentId);
       const indices = this.#indices.get(agentId);
       if (!current || !indices) continue;
@@ -215,6 +381,7 @@ export class MobileConversationStore {
         const text = parts.join("");
         const index = indices.get(messageId);
         if (index === undefined) {
+          if (current.detached) continue;
           added = true;
           messages.push({
             id: messageId,

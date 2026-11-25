@@ -1,5 +1,5 @@
 import { Typography } from "heroui-native";
-import { serverStatusLabel } from "@/features/workspace/model/server-status";
+import { serverStatusLabel, showsOnline } from "@/features/workspace/model/server-status";
 import type { MobileServer } from "@/features/workspace/model/workspace-types";
 import { useText } from "@/shared/lib/text";
 
@@ -8,15 +8,14 @@ export function ServerStatusLabel({ server, prefix = "" }: { server: MobileServe
   const label = serverStatusLabel(server, t);
   return (
     <Typography.Paragraph
-      type="body-xs"
       accessibilityLabel={`${server.name}: ${label}`}
       accessibilityLiveRegion="polite"
       className={
-        server.state === "online"
+        showsOnline(server)
           ? "text-success-text"
           : server.state === "error"
             ? "text-danger-text"
-            : "text-text-secondary"
+            : "text-grouped-secondary"
       }
     >
       {prefix}

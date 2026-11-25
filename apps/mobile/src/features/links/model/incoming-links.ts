@@ -15,15 +15,12 @@ export type IncomingLink =
   | { kind: "template"; url: string; templateId: string }
   | { kind: "invalid" };
 
-export function parseIncomingLink(value: string): IncomingLink {
-  // The other link kinds have separate parsers and cannot weaken invitation validation.
+function parseIncomingLink(value: string): IncomingLink {
   if (isInviteLink(value)) return { kind: "invite", url: value };
   try {
     const templateId = parseAgentTemplateUrl(value);
     return { kind: "template", url: createAgentTemplateShareUrl(templateId), templateId };
-  } catch {
-    // Not an agent link.
-  }
+  } catch {}
   try {
     const url = new URL(value);
     const pairing = parseMobileConnectUrl(value);
@@ -36,18 +33,11 @@ export function parseIncomingLink(value: string): IncomingLink {
   }
 }
 
-/**
- * The session is not loaded when the system opens a link, so a `goahead://join` link for any
- * self-hosted account service counts as an invitation here. The add-server screen checks it again
- * with the service of the session, and refuses a link for another service.
- */
 function isInviteLink(value: string): boolean {
   try {
     parseInviteUrl(value);
     return true;
-  } catch {
-    // Not an invitation for our service.
-  }
+  } catch {}
   try {
     const url = new URL(value);
     if (url.protocol !== PRODUCT_LINK_PROTOCOL) return false;
@@ -58,8 +48,6 @@ function isInviteLink(value: string): boolean {
   }
 }
 
-// Bearer tokens never enter navigation params, persisted state, or analytics.
-// The bounded memory store also keeps an invitation through the QR sign-in flow.
 const requests = new Map<string, IncomingLink>();
 let sequence = 0;
 export function rememberIncomingLink(link: IncomingLink): string {
@@ -85,14 +73,13 @@ export function forgetIncomingLink(id: string | undefined): void {
   if (id) requests.delete(id);
 }
 
-/** The newest invitation or agent link, which the screen opens again after sign-in. */
 export function pendingSignInLinkId(): string | undefined {
   return [...requests].reverse().find(([, link]) => link.kind === "invite" || link.kind === "template")?.[0];
 }
 
-export function redirectIncomingLink(path: string): string {
-  if (path === PRODUCT_LINK_PREFIX || path === `${PRODUCT_LINK_PREFIX}/` || path === PRODUCT_LINK_PROTOCOL) return "/";
-  // Expo Go and ordinary internal routes retain Expo Router's normal behavior.
+export function redirectIncomingLink(path: string, initial: boolean): string | null {
+  if (path === PRODUCT_LINK_PREFIX || path === `${PRODUCT_LINK_PREFIX}/` || path === PRODUCT_LINK_PROTOCOL)
+    return initial ? "/" : null;
   if (/^exps?:\/\//u.test(path)) return path;
   // A development build is opened with `exp+<scheme>://expo-development-client`: it only names Metro.
   if (/^exp\+[a-z0-9.+-]+:\/\/expo-development-client(?:[/?#]|$)/iu.test(path)) return "/";

@@ -11,35 +11,36 @@ import {
 import { useQueries } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { Typography } from "heroui-native";
-import { Check, CirclePause, X } from "lucide-react-native";
+import Check from "lucide-react-native/icons/check";
+import ChevronDown from "lucide-react-native/icons/chevron-down";
+import CirclePause from "lucide-react-native/icons/circle-pause";
+import X from "lucide-react-native/icons/x";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
-import { useCSSVariable } from "uniwind";
+import { useCSSVariable, useUniwind } from "uniwind";
 import { BloubAvatar } from "@/features/agents/components/bloub-avatar";
-import { useMobileSession } from "@/features/auth/context/mobile-session-context";
+import { useQueryScope } from "@/features/auth/context/mobile-session-context";
 import { useChannels } from "@/features/channels/components/use-channels";
 import { DAY_STRIP_LENGTH, DayStrip } from "@/features/servers/components/day-strip";
-import {
-  SettingsContent,
-  SettingsNote,
-  SettingsRow,
-  SettingsSection,
-} from "@/features/settings/components/settings-content";
+import { SettingsNote, SettingsRow, SettingsSection } from "@/features/settings/components/settings-content";
 import { useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
+import { queryKeys } from "@/features/workspace/model/query-keys";
 import type { MobileAgent } from "@/features/workspace/model/workspace-types";
+import { LargeTitleScrollView } from "@/shared/components/large-title";
+import { MenuView } from "@/shared/components/menu-view";
 import { haptics } from "@/shared/lib/haptics";
+import { isAndroid } from "@/shared/lib/platform";
 import { useText } from "@/shared/lib/text";
 
 const DAY = 86_400_000;
-/** As on desktop: a week day shows this many runs. The rest are one step away, in the day view. */
 const WEEK_DAY_LIMIT = 4;
 const UPCOMING_LIMIT = 6;
 const AVATAR_LIMIT = 3;
 const AVATAR_SIZE = 26;
+const PAGE_CONTENT = "gap-7 px-4 pt-3";
 
 type CalendarView = "week" | "day";
 
-/** As on desktop: `active` or `paused` before a run, `completed` or `failed` after it. */
 type RunStatus = "active" | "paused" | "failed" | "completed";
 
 const STATUS_LABEL = {
@@ -58,7 +59,6 @@ interface Entry {
   owner: string | undefined;
 }
 
-/** Before a run, the routine state says what happens; after it, the outcome does. */
 function runStatus(status: RoutineCalendarRunStatus, routineActive: boolean): RunStatus {
   switch (status) {
     case "scheduled":
@@ -76,10 +76,6 @@ function runStatus(status: RoutineCalendarRunStatus, routineActive: boolean): Ru
   }
 }
 
-/**
- * The runs of the shown days in instants. A calendar day in the viewer's zone can start up to 14 hours
- * either side of UTC midnight, so each end takes one more day; the list drops the days it does not show.
- */
 function rangeAround(first: CalendarDay, last: CalendarDay) {
   return {
     from: new Date(Date.parse(first) - DAY).toISOString(),
@@ -89,8 +85,10 @@ function rangeAround(first: CalendarDay, last: CalendarDay) {
 
 export function ServerRoutinesScreen() {
   const { t, format } = useText();
+  const { theme } = useUniwind();
+  const foreground = String(useCSSVariable("--openbot-text-primary"));
   const { serverId } = useLocalSearchParams<{ serverId: string }>();
-  const { session, sessionScope } = useMobileSession();
+  const queryScope = useQueryScope();
   const { servers, agents, loadRoutineCalendar } = useMobileWorkspace();
   const { channels } = useChannels(serverId);
   const server = servers.find((item) => item.id === serverId);
@@ -100,14 +98,11 @@ export function ServerRoutinesScreen() {
   const today = calendarDayOf(now, timeZone);
   const [view, setView] = useState<CalendarView>("week");
   const [anchor, setAnchor] = useState(today);
-  // The first of the seven days on screen. A swipe stops on any day, not only on a Monday.
   const [start, setStart] = useState(() => calendarWeekStart(today, 1));
   const shownDays = calendarDays(start, DAY_STRIP_LENGTH);
   const lastDay = shownDays.at(-1) ?? start;
   const days = view === "week" ? shownDays : [anchor];
 
-  // Runs load by calendar week, so a swipe of one day asks the host only when it reaches a new week.
-  // The weeks on each side load too, so their days are marked before the swipe reaches them.
   const firstWeek = calendarWeekStart(start, 1);
   const lastWeek = calendarWeekStart(lastDay, 1);
   const neededWeeks = firstWeek === lastWeek ? [firstWeek] : [firstWeek, lastWeek];
@@ -116,10 +111,9 @@ export function ServerRoutinesScreen() {
     queries: loadedWeeks.map((weekStart) => {
       const range = rangeAround(weekStart, addCalendarDays(weekStart, 6));
       return {
-        queryKey: ["server-routines", session?.apiUrl, session?.user.id, sessionScope, serverId, range.from, range.to],
+        queryKey: queryKeys.serverRoutines(queryScope, serverId, range.from, range.to),
         enabled: online,
         retry: false,
-        // Host events refresh a week; a swipe back to a loaded week does not ask the host again.
         staleTime: 60_000,
         queryFn: () => loadRoutineCalendar(range, serverId),
       };
@@ -129,17 +123,14 @@ export function ServerRoutinesScreen() {
   const neededData = needed.flatMap((week) => (week.data ? [week.data] : []));
   const ready = neededData.length === needed.length;
 
-  // A planned run that passes without a result keeps its place; the clock only moves "now".
   useEffect(() => {
     const clock = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(clock);
   }, []);
 
-  // A few weeks of runs: building the list on each render costs less than keeping it in step.
   const entries = (() => {
     const routines = new Map<string, RoutineCalendarRoutine>();
     const runs: RoutineCalendarRun[] = [];
-    // Each loaded range reaches into the next week, so a run counts only in the week of its own day.
     loadedWeeks.forEach((weekStart, index) => {
       const data = weeks[index]?.data;
       if (!data) return;
@@ -225,7 +216,6 @@ export function ServerRoutinesScreen() {
     setView(nextView);
   }
 
-  /** Moves the days on screen. The open day keeps its place among them. */
   function moveStart(next: CalendarDay) {
     const shift = Math.round((Date.parse(next) - Date.parse(start)) / DAY);
     setStart(next);
@@ -262,7 +252,43 @@ export function ServerRoutinesScreen() {
     </SettingsRow>
   );
 
-  const header = (
+  const header = isAndroid ? (
+    <Stack.Screen
+      options={{
+        headerRight: () => (
+          <MenuView
+            colorScheme={theme === "dark" ? "dark" : "light"}
+            actions={[
+              {
+                id: "today",
+                title: t("mobile.server.routines.today"),
+                attributes: { disabled: days.includes(today) },
+              },
+              { id: "day", title: t("mobile.server.routines.viewDay"), state: view === "day" ? "on" : "off" },
+              { id: "week", title: t("mobile.server.routines.viewWeek"), state: view === "week" ? "on" : "off" },
+            ]}
+            onPressAction={({ nativeEvent }) => {
+              if (nativeEvent.event === "today") showToday();
+              if (nativeEvent.event === "day") selectDay(anchor, "day");
+              if (nativeEvent.event === "week") selectDay(anchor, "week");
+            }}
+          >
+            <View
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel={t("mobile.server.routines.view")}
+              className="min-h-11 flex-row items-center gap-1 px-2"
+            >
+              <Typography.Paragraph>
+                {t(view === "week" ? "mobile.server.routines.viewWeek" : "mobile.server.routines.viewDay")}
+              </Typography.Paragraph>
+              <ChevronDown color={foreground} size={18} strokeWidth={1.9} />
+            </View>
+          </MenuView>
+        ),
+      }}
+    />
+  ) : (
     <Stack.Toolbar placement="right">
       <Stack.Toolbar.Menu
         accessibilityLabel={t("mobile.server.routines.view")}
@@ -288,17 +314,18 @@ export function ServerRoutinesScreen() {
     </Stack.Toolbar>
   );
 
+  const title = t("mobile.app.route.schedule");
   if (!server)
     return (
-      <SettingsContent>
+      <LargeTitleScrollView title={title} contentContainerClassName={PAGE_CONTENT}>
         <SettingsNote>{t("mobile.server.unavailable")}</SettingsNote>
-      </SettingsContent>
+      </LargeTitleScrollView>
     );
 
   return (
     <>
       {header}
-      <SettingsContent>
+      <LargeTitleScrollView title={title} caption={server.name} contentContainerClassName={PAGE_CONTENT}>
         <View className="gap-2">
           <Typography.Paragraph
             weight="medium"
@@ -379,7 +406,6 @@ export function ServerRoutinesScreen() {
                   : emptyRow("mobile.server.routines.dayEmpty")}
               </SettingsSection>
             )}
-            {/* Next to another day, the next runs read as runs of that day, so only today shows them. */}
             {view === "day" && anchor === today ? (
               <SettingsSection title={t("mobile.server.routines.upcoming")}>
                 {upcoming.length > 0
@@ -392,12 +418,11 @@ export function ServerRoutinesScreen() {
         <Typography.Paragraph type="body-xs" className="px-4 text-grouped-secondary">
           {t("mobile.server.routines.timeZone", { zone: timeZone.replaceAll("_", " ") })}
         </Typography.Paragraph>
-      </SettingsContent>
+      </LargeTitleScrollView>
     </>
   );
 }
 
-/** The agents of a run, as on desktop: the agent of an agent routine, or the members of a channel. */
 function AgentStack({ agents, serverId }: { agents: MobileAgent[]; serverId: string }) {
   const shown = agents.slice(0, AVATAR_LIMIT);
   const hidden = agents.length - shown.length;
@@ -409,6 +434,7 @@ function AgentStack({ agents, serverId }: { agents: MobileAgent[]; serverId: str
             agentId={agent.id}
             serverId={serverId}
             hue={agent.avatarHue}
+            color={agent.avatarColor}
             seed={agent.avatarSeed}
             size={AVATAR_SIZE}
             animateIdle={false}
@@ -424,7 +450,6 @@ function AgentStack({ agents, serverId }: { agents: MobileAgent[]; serverId: str
   );
 }
 
-/** As on desktop: a dot for a planned run, and a mark for a paused, failed or completed one. */
 function StatusMark({ status }: { status: RunStatus }) {
   const muted = String(useCSSVariable("--openbot-text-grouped-secondary"));
   const accent = String(useCSSVariable("--openbot-accent-text"));

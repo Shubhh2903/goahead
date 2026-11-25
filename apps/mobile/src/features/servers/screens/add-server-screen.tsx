@@ -1,20 +1,29 @@
 import { type InviteLinkOptions, parseInviteUrl, selfHostedApiOrigin } from "@openbot/contracts/invite-links";
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import type { AppFormat, MobileTranslate } from "@openbot/i18n/mobile";
+import { runTeamEffect } from "@openbot/team-client";
 import type { RemoteInvitePreview } from "@openbot/team-client/remote-directory";
+import type { UserErrorDetails } from "@openbot/user-errors";
 import * as Clipboard from "expo-clipboard";
 import { type Href, router } from "expo-router";
 import { usePreventRemove } from "expo-router/react-navigation";
 import { Button, Spinner, Typography } from "heroui-native";
 import { useThemeColor } from "heroui-native/hooks";
-import { CircleCheck, ClipboardPaste, ScanLine, Server } from "lucide-react-native";
+import CircleCheck from "lucide-react-native/icons/circle-check";
+import ClipboardPaste from "lucide-react-native/icons/clipboard-paste";
+import ScanLine from "lucide-react-native/icons/scan-line";
+import Server from "lucide-react-native/icons/server";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { AppState, Keyboard, Pressable, View } from "react-native";
 import { useMobileSession } from "@/features/auth/context/mobile-session-context";
+import { LocalServerOptions, type LocalServerPathname } from "@/features/servers/components/local-server-options";
 import { SERVER_ROLE_KEYS } from "@/features/servers/model/server-role";
 import { useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
+import { useLiveServerRecovery } from "@/features/workspace/context/server-recovery-countdown";
+import { ErrorReference } from "@/shared/components/error-reference";
 import { SheetFormField } from "@/shared/components/sheet-form-field";
 import { SheetScrollView } from "@/shared/components/sheet-scroll-view";
+import { readClipboardText } from "@/shared/lib/clipboard";
 import { haptics } from "@/shared/lib/haptics";
 import { isIOS } from "@/shared/lib/platform";
 import { currentText, useText } from "@/shared/lib/text";
@@ -47,23 +56,22 @@ export function AddServerScreen({
   onJoined,
   scanHref = "/add-server/scan",
   underHeader = false,
+  localServerPathname,
 }: {
   initialInvite?: string;
   onJoined?: () => void;
-  /** The scanner page of the sheet that shows this page. */
   scanHref?: Href;
-  /** An inner page under a native header: its back button replaces Cancel. */
   underHeader?: boolean;
+  localServerPathname?: LocalServerPathname;
 } = {}) {
-  const { t, format, errorMessage, sourceText } = useText();
+  const { t, format, errorDetails, sourceText } = useText();
   const [foreground, accentForeground, success] = useThemeColor(["foreground", "accent-foreground", "success"]);
   const { addRemoteServer, servers, teamDirectory } = useMobileWorkspace();
   const { session } = useMobileSession();
   const inviteLinks = { selfHostedApiOrigin: selfHostedApiOrigin(session?.apiUrl) };
   const [joinedId, setJoinedId] = useState<string | null>(null);
-  const joinedServer = servers.find((server) => server.id === joinedId);
+  const joinedServer = useLiveServerRecovery(servers.find((server) => server.id === joinedId));
   const [inviteLink, setInviteLink] = useState(initialInvite);
-  // A new object repeats a failed preview for the same link; an unchanged link keeps the result.
   const [request, setRequest] = useState(() => {
     const url = normalizeInviteUrl(initialInvite, inviteLinks);
     return url ? { url } : null;
@@ -71,12 +79,10 @@ export function AddServerScreen({
   const reviewedInvite = request?.url ?? null;
   const [preview, setPreview] = useState<RemoteInvitePreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<UserErrorDetails | null>(null);
   const [joining, setJoining] = useState(false);
   const joinInFlight = useRef(false);
-  usePreventRemove(joining, () => {
-    // A join can consume a single-use token; wait for its result before leaving.
-  });
+  usePreventRemove(joining, () => {});
 
   useEffect(() => {
     let active = true;
@@ -87,7 +93,7 @@ export function AddServerScreen({
       return;
     }
     setPreviewing(true);
-    void teamDirectory.previewInvite(request.url).then(
+    void runTeamEffect(teamDirectory.previewInvite(request.url)).then(
       (value) => {
         if (!active) return;
         setPreview(value);
@@ -96,7 +102,7 @@ export function AddServerScreen({
       (cause) => {
         if (!active) return;
         const text = currentText();
-        setError(text.errorMessage(cause, text.t("mobile.server.invite.loadFailed")));
+        setError(text.errorDetails(cause, text.t("mobile.server.invite.loadFailed")));
         setPreviewing(false);
       },
     );
@@ -105,8 +111,6 @@ export function AddServerScreen({
     };
   }, [request, teamDirectory]);
 
-  // Verification starts as soon as the field holds a complete invitation, so a paste needs no
-  // separate review step before the server identity is shown.
   function changeLink(value: string): void {
     setInviteLink(value);
     const url = normalizeInviteUrl(value, inviteLinks);
@@ -125,7 +129,7 @@ export function AddServerScreen({
       setJoinedId(serverId);
       void haptics.notification("success");
     } catch (cause) {
-      setError(errorMessage(cause, t("mobile.server.invite.joinFailed")));
+      setError(errorDetails(cause, t("mobile.server.invite.joinFailed")));
       void haptics.notification("error");
       joinInFlight.current = false;
     }
@@ -171,6 +175,9 @@ export function AddServerScreen({
               : joinedStatus(joinedServer?.name, joinStatus)
             : t("mobile.server.join.description")}
         </Typography.Paragraph>
+        {joinedId && !connected ? (
+          <ErrorReference reference={joinedServer?.connectionFailure?.reference} align="center" />
+        ) : null}
       </View>
 
       {joinedId ? (
@@ -239,12 +246,14 @@ export function AddServerScreen({
           ) : null}
 
           {error ? (
-            <Typography.Paragraph accessibilityRole="alert" align="center" className="text-danger-text">
-              {error}
-            </Typography.Paragraph>
+            <View className="items-center gap-1">
+              <Typography.Paragraph accessibilityRole="alert" align="center" className="text-danger-text">
+                {error.message}
+              </Typography.Paragraph>
+              <ErrorReference reference={error.reference} align="center" />
+            </View>
           ) : null}
 
-          {/* The join button shows once the field has text, so an empty sheet has no dimmed button. */}
           {!inviteLink.trim() ? null : preview || !reviewedInvite || previewing ? (
             <Button size="lg" isDisabled={!preview || joining || previewing} onPress={() => void joinServer()}>
               <Button.Label className="font-sans font-semibold">
@@ -256,6 +265,8 @@ export function AddServerScreen({
               <Button.Label className="font-sans font-semibold">{t("common.tryAgain")}</Button.Label>
             </Button>
           )}
+
+          {localServerPathname && !inviteLink.trim() ? <LocalServerOptions pathname={localServerPathname} /> : null}
 
           {underHeader ? null : (
             <Pressable
@@ -278,9 +289,7 @@ export function AddServerScreen({
   );
 }
 
-/** The height and shape of the two quiet actions under the field. */
 const QUICK_ACTION_CLASS = `h-12 flex-1 overflow-hidden bg-control ${isIOS ? "" : "rounded-2xl"}`;
-/** The corners of `SheetFormField` on iOS, so the actions match the field above them. Android uses its class. */
 const QUICK_ACTION_SHAPE = isIOS ? ({ borderCurve: "continuous", borderRadius: 16 } as const) : null;
 
 function QuickAction({
@@ -315,10 +324,6 @@ function QuickAction({
   );
 }
 
-/**
- * Paste the invitation from the clipboard: the text, or a link that another app copied as a link.
- * It is the app's own action, so it always shows; it is dimmed while the clipboard has neither.
- */
 function PasteInviteButton({ disabled, onPaste }: { disabled: boolean; onPaste: (value: string) => void }) {
   const { t } = useText();
   const [foreground] = useThemeColor(["foreground"]);
@@ -329,7 +334,7 @@ function PasteInviteButton({ disabled, onPaste }: { disabled: boolean; onPaste: 
       icon={<ClipboardPaste size={18} strokeWidth={1.8} color={foreground} />}
       label={t("mobile.server.join.paste")}
       onPress={() => {
-        void readClipboardLink().then(
+        void readClipboardText().then(
           (value) => {
             if (value) onPaste(value);
           },
@@ -340,16 +345,6 @@ function PasteInviteButton({ disabled, onPaste }: { disabled: boolean; onPaste: 
   );
 }
 
-async function readClipboardLink(): Promise<string> {
-  const text = (await Clipboard.getStringAsync()).trim();
-  if (text) return text;
-  return ((await Clipboard.getUrlAsync()) ?? "").trim();
-}
-
-/**
- * Whether the clipboard has text or a link. These checks read no content, so iOS shows no paste
- * prompt. The user copies the invitation in another app, so the check runs again on each return.
- */
 function useClipboardHasLink(): boolean {
   const [pasteable, setPasteable] = useState(false);
   useEffect(() => {

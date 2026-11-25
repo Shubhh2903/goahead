@@ -1,6 +1,14 @@
-import { Typography } from "heroui-native";
-import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useRef, useState } from "react";
-import type { TextStyle } from "react-native";
+import {
+  createContext,
+  memo,
+  type PropsWithChildren,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { Text, type TextStyle } from "react-native";
 import Animated, {
   cancelAnimation,
   Easing,
@@ -11,15 +19,17 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
+import { isAndroid } from "@/shared/lib/platform";
 import { createStreamRevealPool, streamRevealWindow } from "../model/stream-reveal-pool";
+import { CHAT_TEXT_STYLES, type ChatTextType } from "./chat-text-styles";
 
-const AnimatedTypography = Animated.createAnimatedComponent(Typography);
 const RevealContext = createContext<ReturnType<typeof createStreamRevealPool> | null>(null);
 const REVEAL_TIMING = {
   duration: 150,
   easing: Easing.bezier(0.23, 1, 0.32, 1),
   reduceMotion: ReduceMotion.System,
 };
+const WORD_FADE = !isAndroid;
 
 export function StreamRevealProvider({ children }: PropsWithChildren) {
   const [pool] = useState(() => createStreamRevealPool());
@@ -29,7 +39,7 @@ export function StreamRevealProvider({ children }: PropsWithChildren) {
 
 interface TextProps {
   text: string;
-  type: "body" | "body-sm" | "h4" | "h5";
+  type: ChatTextType;
   style: TextStyle;
 }
 
@@ -44,20 +54,13 @@ function FadingWord({ text, type, style, onDone }: TextProps & { onDone: () => v
     );
     return () => cancelAnimation(progress);
   }, [onDone, progress]);
-  // Nested native text uses color; view opacity would break inline text layout.
   const revealStyle = useAnimatedStyle(() => ({
     color: interpolateColor(progress.get(), [0, 1], ["transparent", color]),
-    // A zero-offset text shadow supplies a small soft edge without wrapping
-    // inline text in views or blurring the already readable paragraph.
     textShadowColor: interpolateColor(progress.get(), [0, 0.2, 1], ["transparent", color, "transparent"]),
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 2 * (1 - progress.get()),
   }));
-  return (
-    <AnimatedTypography type={type} style={[style, revealStyle]}>
-      {text}
-    </AnimatedTypography>
-  );
+  return <Animated.Text style={[CHAT_TEXT_STYLES[type], style, revealStyle]}>{text}</Animated.Text>;
 }
 
 function useRevealSlot(enabled: boolean) {
@@ -84,7 +87,7 @@ function useRevealSlot(enabled: boolean) {
   return { phase: enabled ? phase : "done", onDone };
 }
 
-function RevealedWord({
+const RevealedWord = memo(function RevealedWord({
   enabled,
   end,
   onSettled,
@@ -96,13 +99,9 @@ function RevealedWord({
   }, [phase, end, onSettled]);
   if (phase === "done") return props.text;
   if (phase === "waiting")
-    return (
-      <Typography type={props.type} style={[props.style, { color: "transparent" }]}>
-        {props.text}
-      </Typography>
-    );
+    return <Text style={[CHAT_TEXT_STYLES[props.type], props.style, { color: "transparent" }]}>{props.text}</Text>;
   return <FadingWord {...props} onDone={onDone} />;
-}
+});
 
 export function StreamingBlock({ children, enabled }: PropsWithChildren<{ enabled: boolean }>) {
   const { phase, onDone } = useRevealSlot(enabled);
@@ -120,19 +119,19 @@ export function StreamingBlock({ children, enabled }: PropsWithChildren<{ enable
     return () => cancelAnimation(opacity);
   }, [phase, opacity, onDone]);
   const style = useAnimatedStyle(() => ({ opacity: opacity.get() }));
-  // Keep native scroll views mounted when the reveal finishes or streaming stops.
   return <Animated.View style={style}>{children}</Animated.View>;
 }
 
-export function StreamingTailText({
+export const StreamingTailText = memo(function StreamingTailText({
   body,
   enabled,
   type,
   style,
 }: Omit<TextProps, "text"> & { body: string; enabled: boolean }) {
-  const [baseline, setBaseline] = useState(enabled ? "" : body);
-  if ((!enabled && baseline !== body) || !body.startsWith(baseline)) setBaseline(body);
-  const { prefix, words } = streamRevealWindow(body, baseline, enabled);
+  const fade = enabled && WORD_FADE;
+  const [baseline, setBaseline] = useState(fade ? "" : body);
+  if ((!fade && baseline !== body) || !body.startsWith(baseline)) setBaseline(body);
+  const { prefix, words } = streamRevealWindow(body, baseline, fade);
   const settle = useCallback(
     (end: number) => {
       setBaseline((previous) => (body.startsWith(previous) && end > previous.length ? body.slice(0, end) : previous));
@@ -150,9 +149,9 @@ export function StreamingTailText({
           onSettled={settle}
           type={type}
           style={style}
-          enabled={enabled}
+          enabled={fade}
         />
       ))}
     </>
   );
-}
+});

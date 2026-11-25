@@ -1,26 +1,32 @@
-import type { AgentTemplateDetail, RoutineSchedule } from "@openbot/contracts/ipc";
+import { type AgentTemplateDetail, canAdministerServer, type RoutineSchedule } from "@openbot/contracts/ipc";
 import type { MobileTextKey } from "@openbot/i18n/mobile";
 import { useQuery } from "@tanstack/react-query";
-import { router, Stack, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { usePreventRemove } from "expo-router/react-navigation";
 import { Button, Typography } from "heroui-native";
 import { useThemeColor } from "heroui-native/hooks";
-import { Check, ChevronDown, ChevronRight } from "lucide-react-native";
+import Check from "lucide-react-native/icons/check";
+import ChevronDown from "lucide-react-native/icons/chevron-down";
+import ChevronRight from "lucide-react-native/icons/chevron-right";
 import { type PropsWithChildren, useEffect, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useCSSVariable } from "uniwind";
 import { BloubAvatarPreview } from "@/features/agents/components/bloub-avatar";
+import { mobileAnalytics } from "@/features/analytics/mobile-analytics";
 import { useMobileSession } from "@/features/auth/context/mobile-session-context";
 import { ThinkingTextGradient } from "@/features/chat/components/thinking-text-gradient";
 import { SettingsRow, SettingsSection } from "@/features/settings/components/settings-content";
 import { useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
-import { serverStatusLabel } from "@/features/workspace/model/server-status";
+import { queryKeys } from "@/features/workspace/model/query-keys";
+import { serverStatusLabel, showsOnline } from "@/features/workspace/model/server-status";
 import type { MobileServer } from "@/features/workspace/model/workspace-types";
 import { BlurReveal } from "@/shared/components/blur-reveal";
+import { SheetCloseAction } from "@/shared/components/sheet-close-action";
 import { SheetSaveAction } from "@/shared/components/sheet-save-action";
 import { SheetScrollView } from "@/shared/components/sheet-scroll-view";
-import { isIOS } from "@/shared/lib/platform";
+import { backOrConnected } from "@/shared/lib/back-or-connected";
 import { type MobileText, useText } from "@/shared/lib/text";
+import { MIRROR_IN_RTL } from "@/shared/lib/text-direction";
 import { AgentTemplateNotFoundError, loadAgentTemplate } from "../api/agent-templates";
 import { forgetIncomingLink, readIncomingLink } from "../model/incoming-links";
 
@@ -29,10 +35,6 @@ export function AgentTemplateInstallScreen() {
   return <AgentTemplateInstall key={request ?? "invalid"} request={request} />;
 }
 
-/**
- * The preview an agent link opens. It installs only when the user presses Add agent, on a server
- * where the user is an owner or admin and whose host advertises `agent-install-v1`.
- */
 function AgentTemplateInstall({ request }: { request?: string }) {
   const { t, errorMessage } = useText();
   const { session } = useMobileSession();
@@ -44,26 +46,18 @@ function AgentTemplateInstall({ request }: { request?: string }) {
   const templateId = link.kind === "template" ? link.templateId : null;
   const apiUrl = session?.apiUrl ?? null;
   const template = useQuery({
-    queryKey: ["agent-template", apiUrl, templateId],
+    queryKey: queryKeys.agentTemplate(apiUrl, templateId),
     queryFn: ({ signal }) => {
       if (!apiUrl || !templateId) throw new AgentTemplateNotFoundError();
       return loadAgentTemplate(apiUrl, templateId, signal);
     },
     enabled: apiUrl !== null && templateId !== null,
-    // Not cached: after an unpublish no copy may still show the instructions.
     gcTime: 0,
     retry: false,
   });
-  // Owners and admins see each of their servers from the start. A server that is still connecting,
-  // offline, or too old stays in the list as a disabled row, so the sheet does not change its layout.
-  const managed = workspace.servers.filter((server) => server.role !== "member");
-  const eligible = managed.filter(
-    (server) => server.state === "online" && workspace.canInstallAgentTemplate(server.id),
-  );
+  const managed = workspace.servers.filter((server) => canAdministerServer(server.role));
+  const eligible = managed.filter((server) => showsOnline(server) && workspace.canInstallAgentTemplate(server.id));
   const [chosenServerId, setChosenServerId] = useState<string | null>(null);
-  // The default applies only until the user selects a server. After that, the choice stays: a
-  // selected server that disconnects keeps its check mark and disables Add agent, so the agent never
-  // goes to a server the user did not select.
   const selectedServerId =
     chosenServerId ?? eligible.find((server) => server.id === workspace.activeServer.id)?.id ?? eligible[0]?.id ?? null;
   const serverId = eligible.some((server) => server.id === selectedServerId) ? selectedServerId : null;
@@ -71,18 +65,10 @@ function AgentTemplateInstall({ request }: { request?: string }) {
   const [finished, setFinished] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lock = useRef(false);
-  // Only while the request runs: after a success the sheet must close itself.
-  usePreventRemove(installing && !finished, () => {
-    // The host may already add the agent. Keep this sheet until the request settles.
-  });
+  usePreventRemove(installing && !finished, () => {});
   useEffect(() => {
     if (finished) router.dismissTo("/connected");
   }, [finished]);
-
-  function close(): void {
-    if (router.canGoBack()) router.back();
-    else router.replace("/connected");
-  }
 
   async function install(detail: AgentTemplateDetail, target: string): Promise<void> {
     if (lock.current || finished) return;
@@ -90,16 +76,17 @@ function AgentTemplateInstall({ request }: { request?: string }) {
     setInstalling(true);
     setError(null);
     try {
-      await workspace.installAgentTemplate(
-        {
-          templateId: detail.id,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          expectedUpdatedAt: detail.updatedAt,
-        },
-        target,
+      await mobileAnalytics.operation("agent_template_action", { action: "installed", entry_point: "deep_link" }, () =>
+        workspace.installAgentTemplate(
+          {
+            templateId: detail.id,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            expectedUpdatedAt: detail.updatedAt,
+          },
+          target,
+        ),
       );
       workspace.selectServer(target);
-      // The agent list shows the new agent; a failed refresh does not make the install fail.
       void workspace.refreshServer(target).catch(() => undefined);
       setFinished(true);
       setInstalling(false);
@@ -119,16 +106,7 @@ function AgentTemplateInstall({ request }: { request?: string }) {
       contentContainerClassName="gap-5 px-5 pb-safe-offset-5 pt-5"
       contentInsetAdjustmentBehavior="automatic"
     >
-      <Stack.Toolbar placement="left">
-        <Stack.Toolbar.Button
-          icon={isIOS ? "xmark" : undefined}
-          accessibilityLabel={t("common.close")}
-          disabled={installing}
-          onPress={close}
-        >
-          {isIOS ? t("common.close") : "×"}
-        </Stack.Toolbar.Button>
-      </Stack.Toolbar>
+      <SheetCloseAction disabled={installing} onPress={backOrConnected} />
       <SheetSaveAction
         dirty={detail !== null}
         canSave={canInstall}
@@ -174,7 +152,6 @@ function AgentTemplateInstall({ request }: { request?: string }) {
           </Cascade>
         </View>
       ) : null}
-      {/* Over the content, so its exit does not move the preview that comes in under it. */}
       <View pointerEvents="none" className="absolute inset-x-0 top-0">
         <BlurReveal value={templateId !== null && template.isPending ? t("mobile.link.template.loading") : null}>
           {(label) => <TemplateLoading label={label} />}
@@ -192,10 +169,6 @@ function AgentTemplateInstall({ request }: { request?: string }) {
 const CASCADE_START_MS = 140;
 const CASCADE_STEP_MS = 70;
 
-/**
- * One part of the preview. The parts come into focus from a blur one after another, from the top
- * down, after the loading label has gone.
- */
 function Cascade({ step, children }: PropsWithChildren<{ step: number }>) {
   return (
     <BlurReveal value={step} interactive enterDuration={360} enterDelay={CASCADE_START_MS + step * CASCADE_STEP_MS}>
@@ -204,16 +177,11 @@ function Cascade({ step, children }: PropsWithChildren<{ step: number }>) {
   );
 }
 
-/** The label shines as the agent's thinking text does, while the account service answers. */
 function TemplateLoading({ label }: { label: string }) {
   const [foreground, muted] = useThemeColor(["foreground", "muted"]);
   return (
     <View accessible accessibilityRole="progressbar" accessibilityLabel={label} className="items-center pt-12">
-      <ThinkingTextGradient text={label} foreground={foreground} muted={muted} enabled fill={false}>
-        <Typography.Paragraph type="body-sm" style={{ color: muted }}>
-          {label}
-        </Typography.Paragraph>
-      </ThinkingTextGradient>
+      <ThinkingTextGradient text={label} foreground={foreground} muted={muted} enabled />
     </View>
   );
 }
@@ -229,7 +197,6 @@ function TemplateMessage({ title, description }: { title: string; description: s
 
 function TemplatePreview({ detail, apiUrl }: { detail: AgentTemplateDetail; apiUrl: string | null }) {
   const { t } = useText();
-  // The account service sends the avatar as a path on its own origin.
   const avatarUrl = detail.avatarUrl && apiUrl ? new URL(detail.avatarUrl, apiUrl).toString() : null;
   return (
     <>
@@ -307,7 +274,6 @@ function TemplatePreview({ detail, apiUrl }: { detail: AgentTemplateDetail; apiU
   );
 }
 
-/** A local skill opens to show the `SKILL.md` text it installs, as on desktop. */
 function EmbeddedSkill({ name, markdown }: { name: string; markdown: string }) {
   const { t } = useText();
   const [open, setOpen] = useState(false);
@@ -328,7 +294,7 @@ function EmbeddedSkill({ name, markdown }: { name: string; markdown: string }) {
             {t("mobile.link.template.skill.local")}
           </Typography.Paragraph>
         </View>
-        <Chevron size={18} color={muted} strokeWidth={1.5} />
+        <Chevron size={18} color={muted} strokeWidth={1.5} style={open ? undefined : MIRROR_IN_RTL} />
       </Pressable>
       {open ? (
         <Typography.Paragraph type="body-xs" className="px-4 pb-3 font-mono text-grouped-secondary">
@@ -383,12 +349,11 @@ function ServerChoices({
       {servers.length > 0 ? (
         servers.map((server) => {
           const eligible = eligibleIds.has(server.id);
-          const reason =
-            server.state !== "online"
-              ? serverStatusLabel(server, t)
-              : eligible
-                ? null
-                : t("mobile.link.template.server.updateRequired");
+          const reason = !showsOnline(server)
+            ? serverStatusLabel(server, t)
+            : eligible
+              ? null
+              : t("mobile.link.template.server.updateRequired");
           return (
             <Pressable
               key={server.id}

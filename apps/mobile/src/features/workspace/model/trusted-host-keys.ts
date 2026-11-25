@@ -1,14 +1,12 @@
 import { type RemoteHostKeyStore, remoteHostFingerprint } from "@openbot/team-client";
-import * as SecureStore from "expo-secure-store";
+import { accountScope } from "@/shared/lib/account-scope";
+import * as LockedKeychain from "@/shared/lib/locked-keychain";
 
 export function trustedHostKeys(apiUrl: string, userId: string): RemoteHostKeyStore {
-  const scope = remoteHostFingerprint(JSON.stringify([new URL(apiUrl).origin, userId]));
+  const scope = accountScope(apiUrl, userId);
   const key = (hostId: string) => `goahead.host-key.v1.${scope}.${remoteHostFingerprint(hostId)}`;
   return {
-    get: (hostId) => SecureStore.getItemAsync(key(hostId)),
-    set: (hostId, publicKey) =>
-      SecureStore.setItemAsync(key(hostId), publicKey, {
-        keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-      }),
+    get: (hostId) => LockedKeychain.getItemAsync(key(hostId)),
+    set: (hostId, publicKey) => LockedKeychain.setItemAsync(key(hostId), publicKey),
   };
 }

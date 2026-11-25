@@ -1,16 +1,29 @@
+import { rankAgentMentions } from "@openbot/contracts/agent-mention-rank";
 import { GlassView } from "expo-glass-effect";
-import { useIsFocused } from "expo-router";
+import { router, useIsFocused } from "expo-router";
+import type { NativeStackNavigationProp } from "expo-router/native-stack";
+import { type ParamListBase, useNavigation } from "expo-router/react-navigation";
 import { Button, Spinner, Typography } from "heroui-native";
-import { ArrowUp, Check, Mic, Plus, Reply, Square, X } from "lucide-react-native";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import ArrowUp from "lucide-react-native/icons/arrow-up";
+import AudioLines from "lucide-react-native/icons/audio-lines";
+import Blocks from "lucide-react-native/icons/blocks";
+import Globe from "lucide-react-native/icons/globe";
+import Link from "lucide-react-native/icons/link";
+import Plus from "lucide-react-native/icons/plus";
+import Reply from "lucide-react-native/icons/reply";
+import Sparkles from "lucide-react-native/icons/sparkles";
+import Square from "lucide-react-native/icons/square";
+import X from "lucide-react-native/icons/x";
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AccessibilityInfo,
-  Alert,
+  Keyboard,
   Text as NativeText,
   Pressable,
   ScrollView,
   TextInput,
-  useWindowDimensions,
+  type TextInputInstance,
+  useColorScheme,
   View,
   type ViewStyle,
 } from "react-native";
@@ -19,76 +32,93 @@ import Animated, {
   cubicBezier,
   Easing,
   Extrapolation,
+  FadeIn,
+  FadeOut,
   interpolate,
+  LayoutAnimationConfig,
   ReduceMotion,
   type SharedValue,
+  useAnimatedReaction,
   useAnimatedStyle,
   useDerivedValue,
-  useReducedMotion,
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
+import { useCSSVariable } from "uniwind";
 import { BloubAvatar } from "@/features/agents/components/bloub-avatar";
-import type { ChatBubbleMessage } from "@/features/chat/context/message-actions-context";
+import type { ChatBubbleMessage } from "@/features/chat/model/chat-messages";
 import type { MobileAgent } from "@/features/workspace/model/workspace-types";
+import { useColumnWidth } from "@/shared/components/adaptive-split";
+import {
+  COMPOSER_FIELD_VERTICAL_PADDING,
+  COMPOSER_TOOLBAR_HEIGHT,
+  composerBottomGap,
+  restingComposerHeight,
+} from "@/shared/lib/composer-metrics";
+import { useFontScale } from "@/shared/lib/font-scale";
 import { haptics } from "@/shared/lib/haptics";
+import { useMotionPreference, useReducedMotion } from "@/shared/lib/motion";
+import { isAndroid, isIOS } from "@/shared/lib/platform";
+import { selectionColorProps } from "@/shared/lib/selection-color";
 import { useText } from "@/shared/lib/text";
+import { END_X, fieldDirectionStyle, layoutDirection, MIRROR_IN_RTL, textDirection } from "@/shared/lib/text-direction";
 import { editMentionDraft, insertMention, mentionDraft, mentionQuery } from "../model/chat-mentions";
-import { markdownListReturn } from "../model/composer-lists";
+import { applyMarkdownListEdit, markdownListReturn } from "../model/composer-lists";
 import { largePastedText } from "../model/composer-paste";
 import { createComposerSendGate } from "../model/composer-send";
 import { composerAction } from "../model/voice-dictation";
-import { attachmentTypeLabel, shareLocalAttachment } from "./attachment-preview";
+import type { VoicePalette } from "../model/voice-palette";
+import { attachmentTypeLabel, shareLocalAttachment, showFileFailure } from "./attachment-preview";
 import { AttachmentPreviewSheet } from "./attachment-preview-sheet";
 import { ComposerAttachmentTile, localPreviewUri } from "./composer-attachment-tile";
+import type { ComposerContextMeter } from "./composer-context-ring";
+import { DictationMic, DictationStrip, LONG_PRESS_MS } from "./composer-dictation";
+import { addPastedFiles, ComposerPasteTarget, type PastedFiles } from "./composer-paste-target";
+import type { ComposerVoice } from "./composer-voice";
 import type { ChatAttachments } from "./use-chat-attachments";
-import { useVoiceDictation } from "./use-voice-dictation";
+import type { ComposerDictation } from "./use-composer-dictation";
+import { VoiceCallBar } from "./voice-call-bar";
 
-// The field grows to this many lines, then keeps its height and scrolls.
 const MAX_INPUT_LINES = 5;
-// Width the controls take from the single row, the card's own text inset, and
-// the gap between the card and the screen edge.
 const ROW_CONTROL_INSET = 48;
 const FIELD_INSET = 16;
 const BAR_INSET = 16;
-// The controls are 40 pt with a 4 pt inset, and one text line sits in the same
-// box: a line plus 13 pt above and below. One formula then covers both shapes.
-const TOOLBAR_HEIGHT = 48;
-const FIELD_VERTICAL_PADDING = 26;
-// A 112 pt tile plus its 8 pt inset. Known, so the block can open and close.
+const TOOLBAR_HEIGHT = COMPOSER_TOOLBAR_HEIGHT;
+const FIELD_VERTICAL_PADDING = COMPOSER_FIELD_VERTICAL_PADDING;
 const ATTACHMENT_BLOCK_HEIGHT = 120;
-// Typing is what drives this, and the user is looking straight at the line they
-// just wrote. An ease-in-out spends its first half barely moving, which reads as
-// the card answering late, so hold the shape open with a strong ease-out instead.
 const SHAPE_DURATION = 120;
-// A control's own box, matching the `size-10` the two of them are drawn in,
-// and the room the toolbar holds around them.
 const CONTROL_SIZE = 40;
 const TOOLBAR_PADDING = 8;
-// At rest the composer is the same bar, smaller: it hugs its placeholder with
-// only this gap to each control, and gives up this much height. The height is
-// taken off the single line the field would otherwise be, so it follows the
-// text size instead of clipping the placeholder at a large one.
+const CONTROL_GAP = 4;
 const REST_TEXT_GAP = 10;
-const REST_HEIGHT_LOSS = 8;
-// The controls keep their layout box, so the touch target never shrinks with
-// the bar: only the drawing scales, and it then slides out to the bar's edge.
 const REST_CONTROL_SCALE = 0.8;
+
+const VOICE_BUTTON_SIZE = 64;
+const CARD_RADIUS = 24;
 
 const AnimatedGlassView = Animated.createAnimatedComponent(GlassView);
 const SHAPE_EASING = cubicBezier(0.23, 1, 0.32, 1);
-// The same curve for worklet-driven values, which take Reanimated's own Easing.
 const SHAPE_EASING_FN = Easing.bezier(0.23, 1, 0.32, 1);
+const PLACEHOLDER_DURATION = 200;
+const PLACEHOLDER_EASING_FN = Easing.bezier(0.77, 0, 0.175, 1);
+const PLACEHOLDER_IN = FadeIn.duration(PLACEHOLDER_DURATION).easing(SHAPE_EASING_FN).reduceMotion(ReduceMotion.System);
+const PLACEHOLDER_OUT = FadeOut.duration(PLACEHOLDER_DURATION)
+  .easing(SHAPE_EASING_FN)
+  .reduceMotion(ReduceMotion.System);
 
 interface ChatComposerProps {
   sendLabel?: string;
   action: ViewStyle["backgroundColor"];
   actionForeground: ViewStyle["backgroundColor"];
   agentName: string;
-  /** Replaces "Ask {name}", such as while the composer answers a question. */
   placeholder?: string;
   mentionAgents: MobileAgent[];
+  mentionSkills?: readonly MentionSkill[];
+  mentionReferences?: readonly MentionReference[];
+  skillPickerVersion?: number;
+  onSuggestionsVisibleChange?: (visible: boolean) => void;
   bottomInset: number;
   disabled: boolean;
   draft: string;
@@ -99,38 +129,67 @@ interface ChatComposerProps {
   raised: ViewStyle["backgroundColor"];
   onChangeDraft: (value: string) => void;
   onSend: (text: string) => void;
-  /** Present only while a turn is running and the surface can stop it. */
   onStop?: () => void;
-  /** 0 with the keyboard down, 1 with it up, and every value a swipe passes through. */
   keyboardProgress: SharedValue<number>;
-  /** The attachment card is open on the plus, which then has to hold still. */
-  menuOpen: boolean;
-  /** The card's open progress, so the plus can cross-fade against the card. */
-  menuProgress: SharedValue<number>;
+  menuOpen?: boolean;
+  menuProgress?: SharedValue<number>;
   stopping?: boolean;
-  attachments: ChatAttachments;
-  sending: boolean;
+  attachments?: ChatAttachments;
   sendRetryVersion: number;
   replyTarget: ChatBubbleMessage | null;
   replyFocusVersion: number;
-  /** Focuses the field each time it changes after the first render, such as to type an answer. */
   focusVersion?: number;
-  /** Focuses the field after another screen, such as Agent info > Skills, handed text to it. */
   handoffFocusVersion?: number;
   onCancelReply: () => void;
+  voice?: ComposerVoice;
+  dictation?: ComposerDictation;
+  voiceAccent?: { fill: string; glyph: string; tint: string; lightGlyph?: boolean };
+  voiceAvatar?: ReactNode;
+  voicePalette?: VoicePalette;
+  contextMeter?: ComposerContextMeter;
 }
 
-/** How long a handoff focus keeps asking for the keyboard, and how often. */
+const NO_FILES: ChatAttachments["items"] = [];
+const NO_SKILLS: readonly MentionSkill[] = [];
+const NO_REFERENCES: readonly MentionReference[] = [];
+
+export interface MentionSkill {
+  kind: "skill" | "mcp";
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface MentionReference {
+  kind: "tab" | "thread";
+  id: string;
+  name: string;
+  detail: string;
+  search: string;
+}
+
+const TAG_GROUPS = [
+  { kind: "tab", title: "mobile.chat.composer.browserTabs", label: "mobile.chat.composer.browserTab", Icon: Globe },
+  { kind: "thread", title: "mobile.chat.composer.threads", label: "mobile.chat.composer.thread", Icon: Link },
+  { kind: "skill", title: "mobile.chat.composer.skills", label: "mobile.chat.composer.useSkill", Icon: Sparkles },
+  { kind: "mcp", title: "mobile.chat.composer.apps", label: "mobile.chat.composer.useApp", Icon: Blocks },
+] as const;
+
 const FOCUS_RETRY_MS = 1500;
 const FOCUS_RETRY_INTERVAL_MS = 100;
+const REPLY_KEYBOARD_WAIT_MS = 400;
 
-export function ChatComposer({
+export const ChatComposer = memo(function ChatComposer({
   sendLabel,
   action,
   actionForeground,
   agentName,
   placeholder,
   mentionAgents,
+  mentionSkills = NO_SKILLS,
+  mentionReferences = NO_REFERENCES,
+  skillPickerVersion = 0,
+  onSuggestionsVisibleChange,
   bottomInset,
   disabled,
   draft,
@@ -143,55 +202,66 @@ export function ChatComposer({
   onSend,
   onStop,
   keyboardProgress,
-  menuOpen,
+  menuOpen = false,
   menuProgress,
   stopping = false,
   attachments,
-  sending,
   sendRetryVersion,
   replyTarget,
   replyFocusVersion,
   focusVersion = 0,
   handoffFocusVersion = 0,
   onCancelReply,
+  voice,
+  dictation,
+  voiceAccent,
+  voiceAvatar,
+  voicePalette,
+  contextMeter,
 }: ChatComposerProps) {
   const { t, format, sourceText } = useText();
+  const still = useSharedValue(0);
+  const menuMotion = menuProgress ?? still;
+  const morph = voice?.presence ?? still;
+  const files = attachments?.items ?? NO_FILES;
+  const preparing = attachments?.preparing ?? false;
   const display = mentionDraft(draft);
   const displayText = display.text;
   const [cursor, setCursor] = useState(0);
-  // The file whose preview is open. An ID, not a copy: a removed file closes its own preview.
   const [previewId, setPreviewId] = useState<string | null>(null);
-  const previewItem = attachments.items.find((item) => item.id === previewId) ?? null;
+  const previewItem = files.find((item) => item.id === previewId) ?? null;
   const query = mentionQuery(draft, cursor);
-  const suggestions = query
-    ? mentionAgents
-        .filter((agent) =>
-          `${agent.name} ${agent.title} ${agent.description}`.toLocaleLowerCase().includes(query.query.trim()),
-        )
+  const [skillsOnly, setSkillsOnly] = useState(false);
+  const hasQuery = query !== null;
+  useEffect(() => {
+    if (!hasQuery) setSkillsOnly(false);
+  }, [hasQuery]);
+  const skillSuggestions = query
+    ? mentionSkills
+        .filter((skill) => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(query.query.trim()))
         .slice(0, 8)
     : [];
-  const hasDraft = Boolean(draft.trim()) || attachments.items.length > 0;
-  // What the bar has to stay open for. Attachments drop out of it the moment a
-  // send starts: they are waiting for their upload then, and the bar already
-  // stops showing them. Text does not drop out, because a draft typed during a
-  // send is a real one waiting to be queued.
-  const composing = Boolean(draft.trim()) || (attachments.items.length > 0 && !sending);
-  const inputRef = useRef<TextInput>(null);
+  const suggestions = query && !skillsOnly ? rankAgentMentions(mentionAgents, query.query).slice(0, 8) : [];
+  const referenceSuggestions =
+    query && !skillsOnly
+      ? mentionReferences
+          .filter((reference) =>
+            `${reference.name} ${reference.search}`.toLocaleLowerCase().includes(query.query.trim()),
+          )
+          .slice(0, 8)
+      : [];
+  const tagSuggestions = [...referenceSuggestions, ...skillSuggestions];
+  const hasDraft = Boolean(draft.trim()) || files.length > 0;
+  const inputRef = useRef<TextInputInstance>(null);
   const isFocused = useIsFocused();
   const latestTextRef = useRef(draft);
   const [sendGate] = useState(createComposerSendGate);
-  // Live dictation writes into the same draft as typing, so the user can read
-  // and edit it before an explicit send. Leaving the chat or losing the server
-  // stops listening and keeps the text.
-  const dictation = useVoiceDictation({
-    enabled: isFocused && !disabled,
-    onDraft: (text) => {
-      sendGate.edit();
-      latestTextRef.current = text;
-      onChangeDraft(text);
-    },
-  });
-  const dictating = dictation.phase !== "idle";
+  const voiceOpen = voice?.open ?? false;
+  const dictating = dictation?.active ?? false;
+  const dictationBusy = dictation?.busy ?? false;
+  const dictationPresence = dictation?.presence ?? still;
+  const dictationMic = Boolean(dictation?.available);
+  const micSlack = dictationMic ? (CONTROL_SIZE + CONTROL_GAP) / 2 : 0;
   const focusedReplyVersion = useRef(0);
   useEffect(() => {
     if (isFocused && !disabled && replyTarget && focusedReplyVersion.current !== replyFocusVersion) {
@@ -211,9 +281,6 @@ export function ChatComposer({
     if (!isFocused || disabled || focusedHandoffVersion.current === handoffFocusVersion) return;
     focusedHandoffVersion.current = handoffFocusVersion;
     inputRef.current?.focus();
-    // The request comes from a native sheet above this chat that is closing. iOS then refuses the
-    // keyboard, or takes it back when the sheet is gone, so ask again until the field keeps it. A
-    // blur by the user in this short time is not told apart and gets the keyboard back once.
     const started = Date.now();
     const retry = setInterval(() => {
       const input = inputRef.current;
@@ -222,6 +289,34 @@ export function ChatComposer({
     }, FOCUS_RETRY_INTERVAL_MS);
     return () => clearInterval(retry);
   }, [isFocused, disabled, handoffFocusVersion]);
+  const keyboardFieldUsable = useRef(false);
+  keyboardFieldUsable.current = !disabled && !voiceOpen && !dictationBusy;
+  const navigation = useNavigation<NativeStackNavigationProp<ParamListBase>>();
+  useEffect(() => {
+    if (!isIOS) return;
+    let keyboardShown = Keyboard.isVisible();
+    const willShow = Keyboard.addListener("keyboardWillShow", () => {
+      keyboardShown = true;
+    });
+    const didHide = Keyboard.addListener("keyboardDidHide", () => {
+      keyboardShown = false;
+    });
+    let opened = false;
+    const stopListening = navigation.addListener("transitionEnd", (event) => {
+      if (event.data.closing || opened) return;
+      opened = true;
+      const input = inputRef.current;
+      if (keyboardShown || !keyboardFieldUsable.current || !input?.isFocused()) return;
+      input.blur();
+      input.focus();
+    });
+    return () => {
+      willShow.remove();
+      didHide.remove();
+      stopListening();
+    };
+  }, [navigation]);
+  const pasteFiles = (pasted: PastedFiles) => addPastedFiles(attachments, pasted);
   const pendingCursor = useRef<number | null>(null);
   useLayoutEffect(() => {
     if (pendingCursor.current === null) return;
@@ -229,61 +324,76 @@ export function ChatComposer({
     pendingCursor.current = null;
     inputRef.current?.setNativeProps({ selection: { start: position, end: position } });
   }, [displayText]);
-  const { fontScale, width: windowWidth } = useWindowDimensions();
+  const pickedSkillVersion = useRef(skillPickerVersion);
+  useEffect(() => {
+    if (pickedSkillVersion.current === skillPickerVersion) return;
+    pickedSkillVersion.current = skillPickerVersion;
+    const source = latestTextRef.current;
+    const next = source && !/\s$/u.test(source) ? `${source} @` : `${source}@`;
+    latestTextRef.current = next;
+    onChangeDraft(next);
+    const position = mentionDraft(next).text.length;
+    setCursor(position);
+    pendingCursor.current = position;
+    setSkillsOnly(true);
+    inputRef.current?.focus();
+  }, [skillPickerVersion, onChangeDraft]);
+  const fontScale = useFontScale();
+  const insets = useSafeAreaInsets();
+  const barWidth = useColumnWidth() - insets.left - insets.right;
   const lineHeight = 22 * fontScale;
-  const rowTextWidth = windowWidth - BAR_INSET * 2 - ROW_CONTROL_INSET * 2;
-  // One reading drives both the shape and the height. Measuring the two widths
-  // separately gave the card two targets in two frames, so it animated twice.
+  const leadingInset = attachments ? ROW_CONTROL_INSET : FIELD_INSET;
+  const trailingInset = ROW_CONTROL_INSET + (dictationMic ? CONTROL_SIZE + CONTROL_GAP : 0);
+  const rowTextWidth = barWidth - BAR_INSET * 2 - trailingInset - leadingInset;
   const [wrap, setWrap] = useState({ lines: 1, width: 0 });
-  // The bar stays a single row while the text fits beside the controls, then
-  // becomes a card with the field on its own line.
-  const stacked = wrap.lines > 1 || wrap.width > rowTextWidth;
+  const stacked = dictating || wrap.lines > 1 || wrap.width > rowTextWidth;
   const fieldHeight = Math.max(
     TOOLBAR_HEIGHT,
     Math.min(MAX_INPUT_LINES, wrap.lines) * lineHeight + FIELD_VERTICAL_PADDING,
   );
-  const attachmentsOpen = !sending && attachments.items.length > 0;
+  const attachmentsOpen = files.length > 0;
   const reducedMotion = useReducedMotion();
   const shapeDuration = reducedMotion ? 0 : SHAPE_DURATION;
+  const resizes = useMotionPreference("composerResize");
 
-  // At rest the composer is a smaller bar: narrower, shorter, with the plus on
-  // the left, the placeholder centred and send on the right. It opens into the
-  // full field as the keyboard rises, so an interactive dismissal closes it
-  // frame by frame instead of snapping when the keyboard finally commits.
   const [placeholderWidth, setPlaceholderWidth] = useState(0);
-  const cardWidth = windowWidth - BAR_INSET * 2;
-  const restHeight = Math.max(TOOLBAR_HEIGHT, lineHeight + FIELD_VERTICAL_PADDING) - REST_HEIGHT_LOSS;
-  // The toolbar keeps its height and the control rides down into the smaller
-  // bar, so the box fills that bar's height.
+  const placeholderText = dictating
+    ? t("mobile.chat.voice.listening")
+    : (placeholder ?? t("mobile.chat.composer.ask", { name: agentName }));
+  const cardWidth = barWidth - BAR_INSET * 2;
+  const restHeight = restingComposerHeight(fontScale);
   const restControlOffset = (TOOLBAR_HEIGHT - restHeight) / 2;
-  // A smaller control leaves its box wider than it draws. Slide it out by that
-  // slack plus the toolbar's own padding, so the gap it keeps from the bar's
-  // side is the same one it keeps from the bar's bottom.
   const restControlShift = TOOLBAR_PADDING + (CONTROL_SIZE - restHeight) / 2;
   const restControlDrawn = CONTROL_SIZE * REST_CONTROL_SCALE;
   const restTextInset = (restHeight - restControlDrawn) / 2 + restControlDrawn + REST_TEXT_GAP;
-  // Sized from the placeholder, so the bar carries no empty space. Full width
-  // until the measurement lands: a bar that starts narrow would jump open.
-  const restWidth = placeholderWidth > 0 ? Math.min(cardWidth, placeholderWidth + restTextInset * 2) : cardWidth;
-  // Content outlives the keyboard: a draft or an attachment has to stay
-  // readable after a dismissal, so it holds the composer open on its own.
-  // What the composer was when the card opened. The card is anchored to that
-  // shape, so the shape holds until the card is gone: choosing the camera puts
-  // the keyboard away, and the plus must not travel out from under a card that
-  // is already growing out of it. Recorded on the press, so opening the card
-  // never changes the shape on its own.
+  const restLeadingInset = attachments ? restTextInset : FIELD_INSET;
+  const restTrailingInset = restTextInset + (dictationMic ? (CONTROL_SIZE + CONTROL_GAP) * REST_CONTROL_SCALE : 0);
+  const restWidth =
+    placeholderWidth > 0 ? Math.min(cardWidth, placeholderWidth + restLeadingInset + restTrailingInset) : cardWidth;
+  const restWidthValue = useSharedValue(restWidth);
+  const restWidthMeasured = useRef(false);
+  useLayoutEffect(() => {
+    if (!restWidthMeasured.current) {
+      restWidthValue.set(restWidth);
+      restWidthMeasured.current = placeholderWidth > 0;
+      return;
+    }
+    restWidthValue.set(
+      withTiming(restWidth, {
+        duration: reducedMotion ? 0 : PLACEHOLDER_DURATION,
+        easing: PLACEHOLDER_EASING_FN,
+        reduceMotion: ReduceMotion.System,
+      }),
+    );
+  }, [restWidth, placeholderWidth, restWidthValue, reducedMotion]);
   const [openedWith, setOpenedWith] = useState<{ expanded: boolean; focused: boolean } | null>(null);
   useEffect(() => {
     if (!menuOpen) setOpenedWith(null);
   }, [menuOpen]);
   useEffect(() => {
-    // Mounting the card resigns first responder somewhere in the native tree
-    // and the keyboard leaves with it. Opening the card is not a reason to
-    // close the keyboard, so take it back. This is a no-op when the input kept
-    // it, which is why it is safe to run on every open.
     if (menuOpen && openedWith?.focused) inputRef.current?.focus();
   }, [menuOpen, openedWith]);
-  const anchored = composing || dictating || Boolean(openedWith?.expanded);
+  const anchored = hasDraft || Boolean(openedWith?.expanded) || dictating;
   const held = useSharedValue(anchored ? 1 : 0);
   useEffect(() => {
     held.set(
@@ -293,48 +403,78 @@ export function ChatComposer({
       }),
     );
   }, [anchored, held, reducedMotion]);
-  // The keyboard drives the shape frame by frame, so zeroing the other
-  // durations leaves this one path moving. Reduced motion answers it by
-  // dropping the resting shape altogether: the composer stays open, and the
-  // keyboard changes nothing about it. Two discrete states would still jump
-  // on every keyboard, which is the motion the setting asks us to remove.
-  const expansion = useDerivedValue(() =>
-    reducedMotion ? 1 : Math.max(Math.min(1, keyboardProgress.get()), held.get()),
+  const [shownReply, setShownReply] = useState(replyTarget);
+  if (replyTarget && replyTarget !== shownReply) setShownReply(replyTarget);
+  const replyActive = replyTarget !== null;
+  const replyActiveValue = useSharedValue(replyActive);
+  const replyPresence = useSharedValue(replyActive ? 1 : 0);
+  const replyRowHeight = useSharedValue(0);
+  const replyHold = useSharedValue(replyActive ? 1 : 0);
+  useEffect(() => {
+    replyActiveValue.set(replyActive);
+    const timing = { duration: shapeDuration, easing: SHAPE_EASING_FN, reduceMotion: ReduceMotion.System };
+    replyPresence.set(
+      withTiming(replyActive ? 1 : 0, timing, (finished) => {
+        if (finished && !replyActive) scheduleOnRN(setShownReply, null);
+      }),
+    );
+    if (!replyActive || disabled) replyHold.set(withTiming(replyActive ? 1 : 0, timing));
+  }, [replyActive, replyActiveValue, replyPresence, replyHold, shapeDuration, disabled]);
+  useAnimatedReaction(
+    () => keyboardProgress.get(),
+    (progress, previous) => {
+      if (!replyActiveValue.get() || replyHold.get() > 0) return;
+      if (progress >= 0.99) replyHold.set(1);
+      else if (previous !== null && progress < previous) {
+        replyHold.set(progress);
+        replyHold.set(
+          withTiming(1, { duration: shapeDuration, easing: SHAPE_EASING_FN, reduceMotion: ReduceMotion.System }),
+        );
+      }
+    },
   );
-  const cardStyle = useAnimatedStyle(() => ({
-    width: interpolate(expansion.get(), [0, 1], [restWidth, cardWidth]),
-  }));
-  // Both controls stay visible and pressable in the smaller bar, so the shape
-  // change owes them only a position and the size they are drawn at. Both are
-  // transforms: neither control re-lays-out on a single frame of the change.
-  const controlStyle = useAnimatedStyle(() => {
-    const progress = expansion.get();
+  const expansion = useDerivedValue(() =>
+    resizes ? Math.max(Math.min(1, keyboardProgress.get()), held.get(), replyHold.get()) : 1,
+  );
+  const replyStyle = useAnimatedStyle(() => {
+    const progress = Math.min(replyPresence.get(), expansion.get());
+    return { height: replyRowHeight.get() * progress, opacity: progress };
+  });
+  const cardStyle = useAnimatedStyle(() => {
+    const voiced = morph.get();
+    const width = interpolate(expansion.get(), [0, 1], [restWidthValue.get(), cardWidth]);
     return {
-      transform: [
-        { translateX: interpolate(progress, [0, 1], [restControlShift, 0]) },
-        { translateY: interpolate(progress, [0, 1], [restControlOffset, 0]) },
-        { scale: interpolate(progress, [0, 1], [REST_CONTROL_SCALE, 1]) },
-      ],
+      width: width + (cardWidth - width) * voiced,
+      borderRadius: CARD_RADIUS + (VOICE_BUTTON_SIZE / 2 - CARD_RADIUS) * voiced,
     };
   });
-  const listeningStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: reducedMotion ? 1 : 1 + dictation.level.get() * 0.2 }],
+  const controlStyle = useAnimatedStyle(() => {
+    const progress = expansion.get();
+    const x = interpolate(progress, [0, 1], [restControlShift, 0]);
+    const y = interpolate(progress, [0, 1], [restControlOffset, 0]);
+    const scale = interpolate(progress, [0, 1], [REST_CONTROL_SCALE, 1]);
+    return {
+      transform: [{ translateX: END_X * (x + micSlack * (1 - scale)) }, { translateY: y }, { scale }],
+      opacity: interpolate(morph.get(), [0, 0.4], [1, 0], Extrapolation.CLAMP),
+    };
+  });
+  const dictationMicStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(morph.get(), [0, 0.3], [1, 0], Extrapolation.CLAMP),
   }));
   const plusStyle = useAnimatedStyle(() => {
     const progress = expansion.get();
-    const width = interpolate(progress, [0, 1], [restWidth, cardWidth]);
+    const voiced = morph.get();
+    const openWidth = interpolate(progress, [0, 1], [restWidthValue.get(), cardWidth]);
+    const width = openWidth + (cardWidth - openWidth) * voiced;
     return {
+      opacity: interpolate(voiced, [0, 0.3], [1, 0], Extrapolation.CLAMP) * (1 - dictationPresence.get()),
       transform: [
-        // The card centres while it is narrow, so follow its left edge in, and
-        // out to it by the same slack the control on the far side takes.
-        { translateX: (cardWidth - width) / 2 - interpolate(progress, [0, 1], [restControlShift, 0]) },
+        { translateX: END_X * ((cardWidth - width) / 2 - interpolate(progress, [0, 1], [restControlShift, 0])) },
         { translateY: interpolate(progress, [0, 1], [restControlOffset, 0]) },
         { scale: interpolate(progress, [0, 1], [REST_CONTROL_SCALE, 1]) },
       ],
     };
   });
-  // The card shape drives the same slide, so it has to tween too. Reading
-  // `stacked` straight from React would snap the text sideways.
   const stackedValue = useSharedValue(stacked ? 1 : 0);
   useEffect(() => {
     stackedValue.set(
@@ -345,9 +485,6 @@ export function ChatComposer({
       }),
     );
   }, [stacked, stackedValue, reducedMotion]);
-  // The field's own height tweens on the UI thread, so the resting shape can
-  // interpolate against it. A React-side transition would jump whenever a line
-  // arrived in the middle of a keyboard dismissal.
   const fieldHeightValue = useSharedValue(fieldHeight);
   useEffect(() => {
     fieldHeightValue.set(
@@ -358,48 +495,61 @@ export function ChatComposer({
       }),
     );
   }, [fieldHeight, fieldHeightValue, shapeDuration]);
-  const fieldBoxStyle = useAnimatedStyle(() => ({
-    height: interpolate(expansion.get(), [0, 1], [restHeight, fieldHeightValue.get()]),
-    // The controls hold the bottom of the card. In a single row they overlay
-    // the field, so the text clears their width instead.
-    marginBottom: interpolate(stackedValue.get(), [0, 1], [0, TOOLBAR_HEIGHT]),
-  }));
-  // Centred at rest, and never further left than the plus: a placeholder wider
-  // than the smaller bar, or one not measured yet, keeps the open position and
-  // truncates instead of starting under a control.
-  const openTextOffset = ROW_CONTROL_INSET - FIELD_INSET;
-  const restTextOffset = placeholderWidth > 0 ? restTextInset - FIELD_INSET : openTextOffset;
+  const fieldBoxStyle = useAnimatedStyle(() => {
+    const voiced = morph.get();
+    const height = interpolate(expansion.get(), [0, 1], [restHeight, fieldHeightValue.get()]);
+    return {
+      opacity: interpolate(voiced, [0, 0.4], [1, 0], Extrapolation.CLAMP),
+      height: height + (VOICE_BUTTON_SIZE - height) * voiced,
+      marginBottom: interpolate(stackedValue.get(), [0, 1], [0, TOOLBAR_HEIGHT]) * (1 - voiced),
+    };
+  });
+  const openTextOffset = leadingInset - FIELD_INSET;
+  const restTextOffset = placeholderWidth > 0 ? restLeadingInset - FIELD_INSET : openTextOffset;
+  const fieldOpenOffset =
+    textDirection(displayText, layoutDirection()) === layoutDirection() ? openTextOffset : FIELD_INSET - trailingInset;
   const fieldSlideStyle = useAnimatedStyle(() => ({
     height: fieldHeightValue.get(),
     transform: [
       {
-        translateX: interpolate(
-          expansion.get(),
-          [0, 1],
-          [restTextOffset, interpolate(stackedValue.get(), [0, 1], [openTextOffset, 0])],
-        ),
+        translateX:
+          END_X *
+          interpolate(
+            expansion.get(),
+            [0, 1],
+            [restTextOffset, interpolate(stackedValue.get(), [0, 1], [fieldOpenOffset, 0])],
+          ),
       },
     ],
   }));
-  // The placeholder rides the same slide on its own node: it has to leave the
-  // centre in step with the text that replaces it.
   const placeholderStyle = useAnimatedStyle(() => ({
     transform: [
       {
-        translateX: interpolate(
-          expansion.get(),
-          [0, 1],
-          [restTextOffset, interpolate(stackedValue.get(), [0, 1], [openTextOffset, 0])],
-        ),
+        translateX:
+          END_X *
+          interpolate(
+            expansion.get(),
+            [0, 1],
+            [restTextOffset, interpolate(stackedValue.get(), [0, 1], [openTextOffset, 0])],
+          ),
       },
     ],
   }));
   const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (!focused || !replyActive) return;
+    const timer = setTimeout(() => {
+      if (replyHold.get() > 0 || keyboardProgress.get() > 0) return;
+      replyHold.set(
+        withTiming(1, { duration: shapeDuration, easing: SHAPE_EASING_FN, reduceMotion: ReduceMotion.System }),
+      );
+    }, REPLY_KEYBOARD_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [focused, replyActive, replyHold, keyboardProgress, shapeDuration]);
 
   useLayoutEffect(() => {
-    // Selecting a file is a draft edit even when TextInput never receives focus.
-    if (attachments.items.length > 0) sendGate.edit();
-  }, [attachments.items, sendGate]);
+    if (files.length > 0) sendGate.edit();
+  }, [files, sendGate]);
 
   useLayoutEffect(() => {
     if (sendRetryVersion > 0) sendGate.allowRetry();
@@ -410,69 +560,105 @@ export function ChatComposer({
   }, [draft]);
 
   useEffect(() => {
-    if (disabled) {
-      sendGate.cancel();
-      inputRef.current?.blur();
-    }
-  }, [disabled, sendGate]);
+    if (disabled) inputRef.current?.blur();
+  }, [disabled]);
 
-  const suggestionsVisible = Boolean(focused && query && suggestions.length > 0 && !disabled);
+  const suggestionCount = suggestions.length + tagSuggestions.length;
+  const suggestionsVisible = Boolean((focused || isAndroid) && query && suggestionCount > 0 && !disabled);
+  useEffect(() => {
+    onSuggestionsVisibleChange?.(suggestionsVisible);
+  }, [onSuggestionsVisibleChange, suggestionsVisible]);
   const announcedSuggestions = useRef("");
   useEffect(() => {
-    // The list opens and closes under the keyboard with no focus change, so a
-    // screen reader gets no event. Announce the count, once per distinct query.
-    const announcement = suggestionsVisible ? `${suggestions.length}:${query?.query ?? ""}` : "";
+    const announcement = suggestionsVisible ? `${suggestionCount}:${query?.query ?? ""}` : "";
     if (announcedSuggestions.current === announcement) return;
     announcedSuggestions.current = announcement;
     if (!suggestionsVisible) return;
     AccessibilityInfo.announceForAccessibility(
-      suggestions.length === 1 ? "1 teammate suggestion" : `${suggestions.length} teammate suggestions`,
+      suggestionCount === 1 ? "1 teammate suggestion" : `${suggestionCount} teammate suggestions`,
     );
-  }, [suggestionsVisible, suggestions.length, query?.query]);
+  }, [suggestionsVisible, suggestionCount, query?.query]);
 
-  // The draft clears the moment a send starts, so the control must not read
-  // its appearance from the draft alone: it would flip to an empty state
-  // under the user's own press.
-  const busy = sending || attachments.preparing;
-  const attachmentsBlocked = disabled || sending || attachments.preparing;
-  // During dictation the plus becomes cancel, which puts back the draft from
-  // before the mic.
-  const leadingBlocked = dictating ? dictation.phase === "stopping" : attachmentsBlocked;
-  // The card covers this glyph and draws the same corner, so the two trade
-  // places on one progress: the glyph is gone by the time the card is drawn,
-  // and back on the frames the card fades out. Waiting for the card to
-  // unmount left the corner empty for the whole length of its collapse.
+  const busy = preparing;
+  const attachmentsBlocked = disabled || preparing;
+  const leadingBlocked = attachmentsBlocked;
+  const [warningColor, dangerColor] = useCSSVariable(["--openbot-warning", "--openbot-danger"]);
+  const contextAlert =
+    contextMeter && !contextMeter.compacting && (contextMeter.level === "warning" || contextMeter.level === "danger")
+      ? contextMeter
+      : undefined;
   const plusGlyphStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(menuProgress.get(), [0, 0.2], [1, 0], Extrapolation.CLAMP) * (leadingBlocked ? 0.45 : 1),
+    opacity: leadingBlocked ? 0.45 : 1,
+    transform: [{ rotate: `${45 * menuMotion.get()}deg` }],
   }));
-  // Where the plus is drawn, in either shape, from the constants that draw it.
-  // Measuring it cannot work: `measureInWindow` reads the layout tree, and the
-  // plus and the composer around it both carry Reanimated transforms that
-  // never reach it. `focused` and `hasDraft` are the React mirror of the two
-  // things that open the composer, and both change once per interaction.
-  const restingPlus = !hasDraft && !focused && !dictating;
+  const restingPlus = resizes && !hasDraft && !focused && !replyActive;
   const plusDrawn = CONTROL_SIZE * (restingPlus ? REST_CONTROL_SCALE : 1);
   const plusInset = (CONTROL_SIZE - plusDrawn) / 2;
   const attachmentAnchor = {
-    left: BAR_INSET + TOOLBAR_PADDING + plusInset + (restingPlus ? (cardWidth - restWidth) / 2 - restControlShift : 0),
+    left:
+      (END_X === 1 ? insets.left : insets.right) +
+      BAR_INSET +
+      TOOLBAR_PADDING +
+      plusInset +
+      (restingPlus ? (cardWidth - restWidth) / 2 - restControlShift : 0),
     bottom: Math.max(bottomInset, 10) + 4 + plusInset - (restingPlus ? restControlOffset : 0),
     size: plusDrawn,
+    barStart: (END_X === 1 ? insets.left : insets.right) + BAR_INSET + (restingPlus ? (cardWidth - restWidth) / 2 : 0),
+    barTop:
+      composerBottomGap(bottomInset) +
+      (restingPlus
+        ? restHeight
+        : fieldHeight + (stacked ? TOOLBAR_HEIGHT : 0) + (attachmentsOpen ? ATTACHMENT_BLOCK_HEIGHT : 0)),
   };
   const control = composerAction({
     disabled,
-    hasDraft,
+    hasDraft: hasDraft || dictationBusy,
     busy,
     canStop: Boolean(onStop),
     stopping,
-    voiceAvailable: dictation.available,
-    dictation: dictation.phase,
+    voiceAvailable: voice?.available ?? false,
   });
+  const controlReady = control.pressable && !dictationBusy;
+
+  const editAfterDictation = useRef(false);
+  useEffect(() => {
+    if (dictationBusy) return;
+    sendGate.edit();
+    if (!editAfterDictation.current) return;
+    editAfterDictation.current = false;
+    inputRef.current?.focus();
+  }, [dictationBusy, sendGate]);
+  const finishDictation = useCallback(() => {
+    if (!dictation) return;
+    editAfterDictation.current = true;
+    dictation.finish();
+  }, [dictation]);
+  const toggleDictation = useCallback(() => {
+    if (!dictation) return;
+    if (dictation.active) finishDictation();
+    else dictation.start();
+  }, [dictation, finishDictation]);
+  const accentFill = voiceAccent?.fill ?? String(action);
+  const dark = useColorScheme() === "dark";
+  const accentGlyph =
+    dark && (voiceAccent?.lightGlyph ?? true) ? String(foreground) : (voiceAccent?.glyph ?? String(actionForeground));
+
+  function sendAndCloseField(text: string): void {
+    const input = inputRef.current;
+    const fieldFocused = input?.isFocused() ?? false;
+    if (!sendGate.submit(fieldFocused)) return;
+    onSend(text);
+    if (fieldFocused) input?.blur();
+  }
 
   function requestSend(): void {
-    if (disabled || sending || attachments.preparing) return;
-    const action = sendGate.request();
-    if (action === "blur") inputRef.current?.blur();
-    else if (action === "send") onSend(latestTextRef.current);
+    if (disabled || preparing) return;
+    sendAndCloseField(latestTextRef.current);
+  }
+
+  function submitKey(text: string): void {
+    if (control.mode !== "send" || !controlReady || voiceOpen) return;
+    sendAndCloseField(editMentionDraft(latestTextRef.current, text));
   }
 
   function pressControl(): void {
@@ -481,24 +667,26 @@ export function ChatComposer({
         onStop?.();
         return;
       case "dictate":
-        // Close the keyboard first: typing and recognition must not edit the
-        // draft at the same time, and the field is read-only until the mic stops.
         inputRef.current?.blur();
-        dictation.start(latestTextRef.current);
-        return;
-      case "finish-dictation":
-        void dictation.finish();
+        voice?.start();
         return;
       case "send":
         requestSend();
     }
   }
 
+  const openVoiceSettings = useCallback(() => {
+    editAfterDictation.current = false;
+    void haptics.selection();
+    inputRef.current?.blur();
+    router.push("/settings/voice");
+  }, []);
+  const voiceSettingsLabel = t("mobile.chat.composer.voiceSettings");
+
   const controlLabel = {
     send: sendLabel ?? t("mobile.chat.composer.send"),
     stop: t("mobile.chat.composer.stop", { name: agentName }),
-    dictate: t("mobile.chat.composer.dictate"),
-    "finish-dictation": t("mobile.chat.composer.stopDictation"),
+    dictate: voice?.startLabel ?? t("mobile.chat.composer.dictate"),
   }[control.mode];
 
   const focusInput = useCallback(() => {
@@ -507,14 +695,14 @@ export function ChatComposer({
   const pan = useMemo(
     () =>
       Gesture.Pan()
-        .enabled(!disabled && !focused)
+        .enabled(!disabled && !focused && !voiceOpen)
         .activeOffsetY(-16)
         .failOffsetY(16)
         .failOffsetX([-24, 24])
         .onEnd((event) => {
           if (event.translationY < -24 || event.velocityY < -250) scheduleOnRN(focusInput);
         }),
-    [disabled, focused, focusInput],
+    [disabled, focused, focusInput, voiceOpen],
   );
 
   return (
@@ -523,7 +711,8 @@ export function ChatComposer({
         <GlassView
           glassEffectStyle={liquidGlassAvailable ? "regular" : "none"}
           style={{
-            marginHorizontal: 16,
+            marginLeft: insets.left + 16,
+            marginRight: insets.right + 16,
             flexGrow: 0,
             maxHeight: 240,
             borderRadius: 24,
@@ -554,6 +743,7 @@ export function ChatComposer({
                   agentId={agent.id}
                   serverId={agent.serverId}
                   hue={agent.avatarHue}
+                  color={agent.avatarColor}
                   seed={agent.avatarSeed}
                   size={28}
                 />
@@ -562,6 +752,53 @@ export function ChatComposer({
                 </Typography.Paragraph>
               </Button>
             ))}
+            {TAG_GROUPS.map(({ kind, title, label, Icon }, groupIndex) => {
+              const group = tagSuggestions.filter((tag) => tag.kind === kind);
+              if (group.length === 0) return null;
+              const titled =
+                suggestions.length > 0 ||
+                tagSuggestions.some((tag) => TAG_GROUPS.findIndex((other) => other.kind === tag.kind) < groupIndex);
+              return (
+                <View key={kind}>
+                  {titled ? (
+                    <Typography type="body-xs" className="px-4 pt-2 pb-1 text-muted">
+                      {t(title)}
+                    </Typography>
+                  ) : null}
+                  {group.map((tag) => (
+                    <Button
+                      key={tag.id}
+                      variant="ghost"
+                      className="min-h-12 flex-row justify-start gap-3 rounded-none px-4"
+                      accessibilityLabel={t(label, { name: tag.name })}
+                      onPress={() => {
+                        void haptics.selection();
+                        const next = insertMention(latestTextRef.current, query, tag, kind);
+                        latestTextRef.current = next;
+                        onChangeDraft(next);
+                        const position = query.start + tag.name.length + (kind === "tab" || kind === "thread" ? 1 : 2);
+                        setCursor(position);
+                        pendingCursor.current = position;
+                        setSkillsOnly(false);
+                        inputRef.current?.focus();
+                      }}
+                    >
+                      <View className="size-7 items-center justify-center rounded-lg bg-control">
+                        <Icon color={String(foreground)} size={16} strokeWidth={1.9} />
+                      </View>
+                      <Typography.Paragraph numberOfLines={1} className="flex-1">
+                        {tag.name}
+                      </Typography.Paragraph>
+                      {"detail" in tag && tag.detail ? (
+                        <Typography type="body-xs" numberOfLines={1} className="max-w-[40%] text-muted">
+                          {tag.detail}
+                        </Typography>
+                      ) : null}
+                    </Button>
+                  ))}
+                </View>
+              );
+            })}
           </ScrollView>
         </GlassView>
       ) : null}
@@ -569,13 +806,12 @@ export function ChatComposer({
         pointerEvents="box-none"
         style={{
           alignItems: "center",
-          paddingHorizontal: BAR_INSET,
+          paddingLeft: insets.left + BAR_INSET,
+          paddingRight: insets.right + BAR_INSET,
           paddingTop: 8,
-          paddingBottom: Math.max(bottomInset, 10),
+          paddingBottom: composerBottomGap(bottomInset),
         }}
       >
-        {/* Measured in the bar, not the card: inside, the card's animating width
-            would clamp the reading and feed an ever narrower pill back into it. */}
         <NativeText
           accessible={false}
           accessibilityElementsHidden
@@ -590,7 +826,7 @@ export function ChatComposer({
             )
           }
         >
-          {placeholder ?? t("mobile.chat.composer.ask", { name: agentName })}
+          {placeholderText}
         </NativeText>
         <GestureDetector gesture={pan}>
           <AnimatedGlassView
@@ -599,17 +835,13 @@ export function ChatComposer({
               {
                 backgroundColor: liquidGlassAvailable ? "transparent" : fallbackBackground,
                 borderCurve: "continuous",
-                borderRadius: 24,
+                borderRadius: CARD_RADIUS,
                 overflow: "hidden",
                 opacity: disabled ? 0.45 : 1,
               },
               cardStyle,
             ]}
           >
-            {/* Measure wrapping independently of UITextView's constrained contentSize.
-                This node keeps the field's width whatever shape the card is in, so
-                its line count gives the height and its widest line says whether the
-                text would still fit beside the controls. */}
             <NativeText
               accessible={false}
               accessibilityElementsHidden
@@ -633,25 +865,31 @@ export function ChatComposer({
             >
               {`${displayText}​`}
             </NativeText>
-            {replyTarget ? (
-              <View className="flex-row items-center gap-2 pt-2 pl-4 pr-2">
-                <Reply color={String(muted)} size={16} />
-                <Typography.Paragraph numberOfLines={1} type="body-sm" className="flex-1 text-text-secondary">
-                  {mentionDraft(replyTarget.body).text || t("mobile.chat.reply.attachment")}
-                </Typography.Paragraph>
-                <Button
-                  isIconOnly
-                  size="sm"
-                  variant="ghost"
-                  accessibilityLabel={t("mobile.chat.composer.cancelReply")}
-                  onPress={() => {
-                    void haptics.selection();
-                    onCancelReply();
-                  }}
+            {shownReply && !voiceOpen ? (
+              <Animated.View style={[{ overflow: "hidden" }, replyStyle]}>
+                <View
+                  className="flex-row items-center gap-2 pt-2 pl-4 pr-2"
+                  style={{ position: "absolute", top: 0, left: 0, right: 0 }}
+                  onLayout={({ nativeEvent }) => replyRowHeight.set(nativeEvent.layout.height)}
                 >
-                  <X color={String(muted)} size={16} />
-                </Button>
-              </View>
+                  <Reply color={String(muted)} size={16} style={MIRROR_IN_RTL} />
+                  <Typography.Paragraph numberOfLines={1} type="body-sm" className="flex-1 text-text-secondary">
+                    {mentionDraft(shownReply.body).text || t("mobile.chat.reply.attachment")}
+                  </Typography.Paragraph>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="ghost"
+                    accessibilityLabel={t("mobile.chat.composer.cancelReply")}
+                    onPress={() => {
+                      void haptics.selection();
+                      onCancelReply();
+                    }}
+                  >
+                    <X color={String(muted)} size={16} />
+                  </Button>
+                </View>
+              </Animated.View>
             ) : null}
             <Animated.View
               style={{
@@ -669,13 +907,13 @@ export function ChatComposer({
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={{ gap: 8, paddingHorizontal: 8, paddingTop: 8 }}
                 >
-                  {attachments.items.map((item, index) => (
+                  {files.map((item, index) => (
                     <ComposerAttachmentTile
                       key={item.id}
                       item={item}
                       index={index}
-                      count={attachments.items.length}
-                      disabled={sending || attachments.preparing}
+                      count={files.length}
+                      disabled={preparing}
                       foreground={foreground}
                       raised={raised}
                       onPreview={() => {
@@ -684,7 +922,7 @@ export function ChatComposer({
                       }}
                       onRemove={() => {
                         void haptics.selection();
-                        attachments.remove(item.id);
+                        attachments?.remove(item.id);
                       }}
                     />
                   ))}
@@ -693,104 +931,100 @@ export function ChatComposer({
             </Animated.View>
             <View>
               <Animated.View style={[{ overflow: "hidden" }, fieldBoxStyle]}>
-                {/* The field keeps its own height while the box closes over it:
-                    re-laying the input out every frame would reflow its text.
-                    The box is only ever shorter than the field while the field
-                    is empty, so nothing readable is ever clipped.
-                    The field also keeps one layout width and slides. Animating
-                    the inset would re-wrap the text on every frame, which reads
-                    as the text shaking. A single row is only ever used while the
-                    text fits the narrower measure, so the slid text still stops
-                    short of the controls. */}
                 <Animated.View
                   style={[{ position: "absolute", left: FIELD_INSET, right: FIELD_INSET, bottom: 0 }, fieldSlideStyle]}
                 >
-                  <TextInput
-                    ref={inputRef}
-                    nativeID="chat-composer-input"
-                    accessibilityLabel={t("mobile.chat.composer.messageAgent", { name: agentName })}
-                    accessibilityState={{ disabled: disabled || dictating }}
-                    editable={!disabled && !dictating}
-                    showSoftInputOnFocus={!disabled && !dictating}
-                    className="min-w-0 font-sans text-foreground"
-                    autoCorrect
-                    autoCapitalize="sentences"
-                    multiline
-                    scrollEnabled={wrap.lines > MAX_INPUT_LINES}
-                    returnKeyType="default"
-                    submitBehavior="newline"
-                    selectionColor={foreground}
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      fontSize: 16,
-                      lineHeight: 22,
-                      paddingVertical: FIELD_VERTICAL_PADDING / 2,
-                      textAlignVertical: "top",
-                    }}
-                    onSelectionChange={({ nativeEvent }) =>
-                      setCursor(
-                        nativeEvent.selection.start === nativeEvent.selection.end ? nativeEvent.selection.end : -1,
-                      )
-                    }
-                    onFocus={() => {
-                      sendGate.focus();
-                      setFocused(true);
-                    }}
-                    onBlur={() => setFocused(false)}
-                    onChangeText={(text) => {
-                      sendGate.edit();
-                      const pasted = !sending ? largePastedText(latestTextRef.current, text) : null;
-                      if (pasted) {
-                        // Keep the pasted text until its attachment is durable. A failed write must not lose it.
-                        latestTextRef.current = text;
-                        onChangeDraft(text);
-                        void Promise.resolve()
-                          .then(() => attachments.paste({ type: "text", text: pasted.text }, () => {}))
-                          .then(() => {
-                            if (latestTextRef.current !== text) return;
-                            latestTextRef.current = pasted.draft;
-                            onChangeDraft(pasted.draft);
-                          })
-                          .catch((error) => {
-                            void haptics.notification("error");
-                            Alert.alert(
-                              t("mobile.chat.composer.pasteFailed"),
-                              error instanceof Error ? sourceText(error.message) : t("mobile.chat.tryAgain"),
-                            );
-                          });
-                        return;
+                  <ComposerPasteTarget onPasteFiles={pasteFiles} onSubmitKey={submitKey}>
+                    <TextInput
+                      ref={inputRef}
+                      nativeID="chat-composer-input"
+                      accessibilityLabel={t("mobile.chat.composer.messageAgent", { name: agentName })}
+                      accessibilityState={{ disabled: disabled || voiceOpen || dictationBusy }}
+                      accessibilityElementsHidden={voiceOpen}
+                      importantForAccessibility={voiceOpen ? "no-hide-descendants" : "auto"}
+                      editable={!disabled && !voiceOpen}
+                      showSoftInputOnFocus={!disabled && !voiceOpen}
+                      className="min-w-0 font-sans text-foreground"
+                      autoCorrect
+                      autoCapitalize="sentences"
+                      multiline
+                      scrollEnabled={wrap.lines > MAX_INPUT_LINES}
+                      returnKeyType="default"
+                      submitBehavior="newline"
+                      {...selectionColorProps(foreground)}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: 16,
+                        lineHeight: 22,
+                        paddingVertical: FIELD_VERTICAL_PADDING / 2,
+                        textAlignVertical: "top",
+                        ...fieldDirectionStyle(displayText),
+                      }}
+                      onSelectionChange={({ nativeEvent }) =>
+                        setCursor(
+                          nativeEvent.selection.start === nativeEvent.selection.end ? nativeEvent.selection.end : -1,
+                        )
                       }
-                      const listEdit = markdownListReturn(mentionDraft(latestTextRef.current).text, text, cursor);
-                      if (listEdit) pendingCursor.current = listEdit.caret;
-                      const next = editMentionDraft(latestTextRef.current, listEdit?.text ?? text);
-                      latestTextRef.current = next;
-                      onChangeDraft(next);
-                    }}
-                    onSubmitEditing={({ nativeEvent }) => {
-                      if (!disabled && !sending && sendGate.submit())
-                        onSend(editMentionDraft(latestTextRef.current, nativeEvent.text));
-                    }}
-                    onEndEditing={({ nativeEvent: { text } }) => {
-                      // Native editing can end before the send button's release event,
-                      // while TextInput.isFocused() is still waiting for onBlur.
-                      latestTextRef.current = editMentionDraft(latestTextRef.current, text);
-                      if (sendGate.commit() && !disabled && !sending) onSend(latestTextRef.current);
-                    }}
-                  >
-                    {/* TextInput requires native text children for editable attributed text. */}
-                    <NativeText>
-                      {display.mentions.map((mention, index) => (
-                        <NativeText key={mention.start}>
-                          {displayText.slice(index ? (display.mentions[index - 1]?.end ?? 0) : 0, mention.start)}
-                          <NativeText style={{ color: action }}>
-                            {displayText.slice(mention.start, mention.end)}
+                      onFocus={() => {
+                        sendGate.focus();
+                        setFocused(true);
+                      }}
+                      onBlur={() => setFocused(false)}
+                      onChangeText={(text) => {
+                        if (sendGate.ignoresFieldText()) return;
+                        if (dictationBusy) {
+                          if (dictating) finishDictation();
+                          return;
+                        }
+                        sendGate.edit();
+                        const pasted = attachments ? largePastedText(latestTextRef.current, text) : null;
+                        if (pasted && attachments) {
+                          latestTextRef.current = text;
+                          onChangeDraft(text);
+                          void Promise.resolve()
+                            .then(() => attachments?.pasteText(pasted.text, () => {}))
+                            .then(() => {
+                              if (latestTextRef.current !== text) return;
+                              latestTextRef.current = pasted.draft;
+                              onChangeDraft(pasted.draft);
+                            })
+                            .catch((error) =>
+                              showFileFailure(error, t("mobile.chat.composer.pasteFailed"), { t, sourceText }),
+                            );
+                          return;
+                        }
+                        const source = latestTextRef.current;
+                        const previous = mentionDraft(source).text;
+                        const listEdit = markdownListReturn(previous, text, cursor);
+                        if (listEdit) pendingCursor.current = listEdit.caret;
+                        const next = listEdit
+                          ? applyMarkdownListEdit(source, previous, cursor, listEdit)
+                          : editMentionDraft(source, text);
+                        latestTextRef.current = next;
+                        onChangeDraft(next);
+                      }}
+                      onSubmitEditing={({ nativeEvent }) => {
+                        if (!disabled) sendAndCloseField(editMentionDraft(latestTextRef.current, nativeEvent.text));
+                      }}
+                      onEndEditing={({ nativeEvent: { text } }) => {
+                        if (sendGate.endEditing()) return;
+                        latestTextRef.current = editMentionDraft(latestTextRef.current, text);
+                      }}
+                    >
+                      <NativeText>
+                        {display.mentions.map((mention, index) => (
+                          <NativeText key={mention.start}>
+                            {displayText.slice(index ? (display.mentions[index - 1]?.end ?? 0) : 0, mention.start)}
+                            <NativeText style={{ color: action }}>
+                              {displayText.slice(mention.start, mention.end)}
+                            </NativeText>
                           </NativeText>
-                        </NativeText>
-                      ))}
-                      {displayText.slice(display.mentions.at(-1)?.end ?? 0)}
-                    </NativeText>
-                  </TextInput>
+                        ))}
+                        {displayText.slice(display.mentions.at(-1)?.end ?? 0)}
+                      </NativeText>
+                    </TextInput>
+                  </ComposerPasteTarget>
                 </Animated.View>
                 {displayText ? null : (
                   <Animated.View
@@ -798,15 +1032,11 @@ export function ChatComposer({
                     accessibilityElementsHidden
                     importantForAccessibility="no-hide-descendants"
                     pointerEvents="none"
-                    // Own placeholder, not TextInput's: only a separate node can
-                    // leave the centre of the resting bar for the field's inset.
-                    // It renders through the native text primitive, like the
-                    // measuring node, so its metrics match the field it covers.
                     style={[
                       {
                         position: "absolute",
                         left: FIELD_INSET,
-                        right: ROW_CONTROL_INSET,
+                        right: trailingInset,
                         top: 0,
                         bottom: 0,
                         justifyContent: "center",
@@ -815,15 +1045,22 @@ export function ChatComposer({
                       placeholderStyle,
                     ]}
                   >
-                    <NativeText
-                      numberOfLines={1}
-                      className="font-sans"
-                      style={{ color: String(muted), fontSize: 16, lineHeight: 22 }}
-                    >
-                      {placeholder ?? t("mobile.chat.composer.ask", { name: agentName })}
-                    </NativeText>
+                    <LayoutAnimationConfig skipEntering skipExiting>
+                      <Animated.View key={placeholderText} entering={PLACEHOLDER_IN} exiting={PLACEHOLDER_OUT}>
+                        <NativeText
+                          numberOfLines={1}
+                          className="font-sans"
+                          style={{ color: String(muted), fontSize: 16, lineHeight: 22 }}
+                        >
+                          {placeholderText}
+                        </NativeText>
+                      </Animated.View>
+                    </LayoutAnimationConfig>
                   </Animated.View>
                 )}
+                {dictating ? (
+                  <Pressable accessible={false} style={{ position: "absolute", inset: 0 }} onPress={finishDictation} />
+                ) : null}
               </Animated.View>
               <View
                 pointerEvents="box-none"
@@ -832,8 +1069,6 @@ export function ChatComposer({
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  // Constant: the smaller bar moves the control down instead of
-                  // resizing this row under it, so the row never re-lays-out.
                   height: TOOLBAR_HEIGHT,
                   flexDirection: "row",
                   alignItems: "center",
@@ -841,99 +1076,136 @@ export function ChatComposer({
                   paddingHorizontal: TOOLBAR_PADDING,
                 }}
               >
-                <Animated.View style={controlStyle}>
-                  {control.mode === "finish-dictation" ? (
-                    // Grows with the input level, so the user sees that the mic hears them.
+                {dictating && dictation ? (
+                  <DictationStrip
+                    level={dictation.level}
+                    presence={dictationPresence}
+                    right={TOOLBAR_PADDING + 2 * (CONTROL_SIZE + CONTROL_GAP)}
+                    foreground={String(foreground)}
+                    accent={accentFill}
+                  />
+                ) : null}
+                <Animated.View
+                  style={[{ flexDirection: "row", alignItems: "center", gap: CONTROL_GAP }, controlStyle]}
+                  pointerEvents={voiceOpen ? "none" : "auto"}
+                >
+                  {dictationMic && dictation ? (
                     <Animated.View
-                      pointerEvents="none"
-                      style={[
-                        {
-                          position: "absolute",
-                          width: CONTROL_SIZE,
-                          height: CONTROL_SIZE,
-                          borderRadius: CONTROL_SIZE / 2,
-                          backgroundColor: action,
-                          opacity: 0.3,
-                        },
-                        listeningStyle,
-                      ]}
-                    />
+                      key="dictation-mic"
+                      style={dictationMicStyle}
+                      pointerEvents={voiceOpen ? "none" : "auto"}
+                      accessibilityElementsHidden={voiceOpen}
+                      importantForAccessibility={voiceOpen ? "no-hide-descendants" : "auto"}
+                    >
+                      <DictationMic
+                        active={dictating}
+                        presence={dictationPresence}
+                        enabled={!disabled && !voiceOpen}
+                        label={t(dictating ? "mobile.chat.composer.stopDictation" : "mobile.chat.composer.dictate")}
+                        foreground={String(foreground)}
+                        onPress={toggleDictation}
+                        onLongPress={openVoiceSettings}
+                        longPressLabel={voiceSettingsLabel}
+                      />
+                    </Animated.View>
                   ) : null}
                   <Pressable
+                    key="control"
                     accessibilityLabel={controlLabel}
                     accessibilityRole="button"
-                    accessibilityState={{ disabled: !control.pressable, busy: control.spinner }}
-                    disabled={!control.pressable}
+                    accessibilityState={{ disabled: !controlReady, busy: control.spinner }}
+                    disabled={!controlReady}
                     className="size-10 items-center justify-center rounded-full"
                     style={{
-                      // Nothing to send reads as a bare glyph on the card, not as a
-                      // filled control the user could press.
-                      backgroundColor: control.primed ? action : "transparent",
-                      // The card dims as a whole when the composer is disabled.
-                      // Dim only this control for a state the card does not show.
-                      opacity: disabled || control.pressable ? 1 : 0.45,
+                      backgroundColor: control.primed || control.mode === "dictate" ? accentFill : "transparent",
+                      opacity: disabled || controlReady ? 1 : 0.45,
                     }}
                     onPress={pressControl}
+                    onLongPress={control.mode === "dictate" ? openVoiceSettings : undefined}
+                    delayLongPress={LONG_PRESS_MS}
+                    accessibilityActions={
+                      control.mode === "dictate" && controlReady
+                        ? [{ name: "activate" }, { name: "longpress", label: voiceSettingsLabel }]
+                        : undefined
+                    }
+                    onAccessibilityAction={({ nativeEvent }) => {
+                      if (!controlReady) return;
+                      if (nativeEvent.actionName === "activate") pressControl();
+                      else if (nativeEvent.actionName === "longpress" && control.mode === "dictate")
+                        openVoiceSettings();
+                    }}
                   >
                     {control.spinner ? (
-                      <Spinner size="sm" color={String(actionForeground)} />
+                      <Spinner size="sm" color={accentGlyph} />
                     ) : control.mode === "stop" ? (
-                      <Square
-                        color={String(actionForeground)}
-                        fill={String(actionForeground)}
-                        size={14}
-                        strokeWidth={2}
-                      />
+                      <Square color={accentGlyph} fill={accentGlyph} size={14} strokeWidth={2} />
                     ) : control.mode === "dictate" ? (
-                      <Mic color={String(foreground)} size={21} strokeWidth={1.8} />
-                    ) : control.mode === "finish-dictation" ? (
-                      <Check color={String(actionForeground)} size={20} strokeWidth={2.4} />
+                      <AudioLines color={accentGlyph} size={20} strokeWidth={2} />
                     ) : (
-                      <ArrowUp color={String(control.primed ? actionForeground : muted)} size={21} strokeWidth={2.2} />
+                      <ArrowUp color={control.primed ? accentGlyph : String(muted)} size={21} strokeWidth={2.2} />
                     )}
                   </Pressable>
                 </Animated.View>
               </View>
             </View>
+            {voiceOpen && voice ? (
+              <VoiceCallBar
+                voice={voice}
+                bar={voice.bar}
+                avatar={voiceAvatar}
+                palette={voicePalette}
+                accent={voiceAccent}
+              />
+            ) : null}
           </AnimatedGlassView>
         </GestureDetector>
-        {/* Outside the glass container on purpose. A SwiftUI Menu anchored
-            inside one makes iOS morph that container into the menu, which ate
-            the whole composer whenever the card was no taller than the row. */}
-        <Animated.View
-          pointerEvents="box-none"
-          // Absolute insets here are measured from the bar's outer edge, so they
-          // have to carry the bar's own padding to land on the card.
-          style={[{ position: "absolute", left: BAR_INSET + 8, bottom: Math.max(bottomInset, 10) + 4 }, plusStyle]}
-        >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={
-              dictating ? t("mobile.chat.composer.cancelDictation") : t("mobile.chat.composer.addAttachment")
-            }
-            accessibilityState={{ disabled: leadingBlocked }}
-            disabled={leadingBlocked}
-            hitSlop={4}
-            className="size-10 items-center justify-center rounded-full"
-            onPress={() => {
-              if (dictating) {
-                dictation.cancel();
-                return;
-              }
-              void haptics.selection();
-              setOpenedWith({ expanded: !restingPlus, focused });
-              attachments.openMenu(attachmentAnchor);
-            }}
+        {attachments ? (
+          <Animated.View
+            pointerEvents={voiceOpen || dictating ? "none" : "box-none"}
+            accessibilityElementsHidden={voiceOpen || dictating}
+            importantForAccessibility={voiceOpen || dictating ? "no-hide-descendants" : "auto"}
+            style={[
+              { position: "absolute", left: insets.left + BAR_INSET + 8, bottom: Math.max(bottomInset, 10) + 4 },
+              plusStyle,
+            ]}
           >
-            <Animated.View style={plusGlyphStyle}>
-              {dictating ? (
-                <X color={String(foreground)} size={22} strokeWidth={1.8} />
-              ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("mobile.chat.composer.addAttachment")}
+              accessibilityValue={contextAlert ? { text: contextAlert.label } : undefined}
+              accessibilityState={{ disabled: leadingBlocked }}
+              disabled={leadingBlocked}
+              hitSlop={4}
+              className="size-10 items-center justify-center rounded-full"
+              onPress={() => {
+                void haptics.selection();
+                setOpenedWith({ expanded: !restingPlus, focused });
+                attachments?.openMenu({
+                  ...attachmentAnchor,
+                  barTop: attachmentAnchor.barTop + (replyActive ? replyRowHeight.get() : 0),
+                });
+              }}
+            >
+              <Animated.View style={plusGlyphStyle}>
                 <Plus color={String(foreground)} size={24} strokeWidth={1.8} />
-              )}
-            </Animated.View>
-          </Pressable>
-        </Animated.View>
+              </Animated.View>
+              {contextAlert ? (
+                <View
+                  pointerEvents="none"
+                  style={{
+                    position: "absolute",
+                    top: 6,
+                    end: 6,
+                    width: 8,
+                    height: 8,
+                    borderRadius: 4,
+                    backgroundColor: String(contextAlert.level === "danger" ? dangerColor : warningColor),
+                  }}
+                />
+              ) : null}
+            </Pressable>
+          </Animated.View>
+        ) : null}
       </View>
       <AttachmentPreviewSheet
         preview={
@@ -954,14 +1226,14 @@ export function ChatComposer({
                   : [{ label: t("common.open"), onPress: () => void shareLocalAttachment(previewItem) }]),
                 {
                   label: t("mobile.chat.attachment.replace"),
-                  disabled: sending || attachments.preparing,
-                  onPress: () => void attachments.replace(previewItem.id),
+                  disabled: preparing,
+                  onPress: () => void attachments?.replace(previewItem.id),
                 },
                 {
                   label: t("common.remove"),
                   variant: "danger-soft" as const,
-                  disabled: sending || attachments.preparing,
-                  onPress: () => attachments.remove(previewItem.id),
+                  disabled: preparing,
+                  onPress: () => attachments?.remove(previewItem.id),
                 },
               ]
             : []
@@ -970,4 +1242,4 @@ export function ChatComposer({
       />
     </View>
   );
-}
+});

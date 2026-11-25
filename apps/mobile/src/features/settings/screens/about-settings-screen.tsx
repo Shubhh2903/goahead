@@ -1,6 +1,6 @@
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
-import * as Application from "expo-application";
 import Constants from "expo-constants";
+import * as Updates from "expo-updates";
 import { Typography } from "heroui-native";
 import { useState } from "react";
 import { Linking, View } from "react-native";
@@ -11,14 +11,15 @@ import {
   SettingsRow,
   SettingsSection,
 } from "@/features/settings/components/settings-content";
+import { nativeBuildVersion } from "@/shared/lib/native-application";
 import { useText } from "@/shared/lib/text";
 
 export function AboutSettingsScreen() {
   const { t } = useText();
   const version = Constants.expoConfig?.version ?? t("mobile.settings.about.development");
-  // The build number of the installed app. EAS sets it at build time, so app.json does not have it.
-  const build = Application.nativeBuildVersion;
-  const versionLabel = build ? `${version} (${build})` : version;
+  const build = nativeBuildVersion();
+  const update = Updates.isEmbeddedLaunch ? null : Updates.updateId?.slice(0, 8);
+  const versionLabel = [build ? `${version} (${build})` : version, ...(update ? [update] : [])].join(" · ");
   const [error, setError] = useState<string | null>(null);
   function open(url: string) {
     setError(null);
@@ -28,7 +29,7 @@ export function AboutSettingsScreen() {
     <SettingsContent>
       <SettingsSection title={t("mobile.settings.about.resources")}>
         <SettingsRow onPress={() => open(PRODUCT_IDENTITY.siteOrigin)}>
-          <Typography.Paragraph type="body-sm">{t("mobile.settings.about.website")}</Typography.Paragraph>
+          <Typography.Paragraph>{t("mobile.settings.about.website")}</Typography.Paragraph>
         </SettingsRow>
         {error ? <SettingsNote>{error}</SettingsNote> : null}
       </SettingsSection>

@@ -17,18 +17,17 @@ export interface AvatarPhoto {
   base64: string;
 }
 
-/**
- * Opens the photo library, then the crop screen at `cropRoute`, and returns a square JPEG avatar,
- * or null when the user cancels. `allowsEditing` would open the slow legacy iOS picker, so the
- * app shows its own crop screen.
- */
-export async function pickAvatarPhoto(cropRoute: Href): Promise<AvatarPhoto | null> {
+export async function pickAvatarPhoto(cropRoute: Href, cornerRatio = 0.5): Promise<AvatarPhoto | null> {
   const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"] });
   if (result.canceled) return null;
   const [asset] = result.assets;
   if (!asset) throw new Error(currentText().t("mobile.shared.photo.openFailed"));
   const source = await ImageManipulator.manipulate(asset.uri).renderAsync();
-  const crop = await requestAvatarCrop({ uri: asset.uri, width: source.width, height: source.height }, cropRoute);
+  const crop = await requestAvatarCrop(
+    { uri: asset.uri, width: source.width, height: source.height },
+    cropRoute,
+    cornerRatio,
+  );
   if (!crop) return null;
   for (const [index, outputSize] of OUTPUT_SIZES.entries()) {
     const image = await ImageManipulator.manipulate(source)

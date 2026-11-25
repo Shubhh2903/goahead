@@ -1,34 +1,29 @@
-import { Host, Switch } from "@expo/ui";
+import { Host } from "@expo/ui";
 import { type InstalledSkill, SKILL_CREATION_REQUEST } from "@openbot/contracts/ipc";
 import type { MobileTranslate } from "@openbot/i18n/mobile";
 import { type QueryKey, useQueryClient } from "@tanstack/react-query";
 import { Stack, useNavigation } from "expo-router";
 import { StackActions } from "expo-router/react-navigation";
 import { Typography } from "heroui-native";
+import Plus from "lucide-react-native/icons/plus";
 import { useEffect, useRef, useState } from "react";
 import { Alert } from "react-native";
 import { useUniwind } from "uniwind";
 import { requestComposerFocus, requestComposerText } from "@/features/chat/model/composer-requests";
 import { SettingsRow, SettingsSection } from "@/features/settings/components/settings-content";
-import { type MobileAgent, useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
+import { type MobileAgent, useMobileWorkspaceActions } from "@/features/workspace/context/mobile-workspace-context";
+import { AndroidHeaderButton } from "@/shared/components/android-header-button";
+import { AppSwitch } from "@/shared/components/app-switch";
 import { haptics } from "@/shared/lib/haptics";
-import { isIOS } from "@/shared/lib/platform";
+import { useNativeLabelFont } from "@/shared/lib/native-label-font";
+import { isAndroid, isIOS } from "@/shared/lib/platform";
 import { currentText, useText } from "@/shared/lib/text";
 
-/** The route name of an agent chat in the app stack, `app/(app)/chat/[agentId].tsx`. */
 const CHAT_ROUTE = "chat/[agentId]";
 
-/**
- * The header plus: as on desktop, it puts the skill-creation request in this agent's composer and
- * closes the sheet. The agent then asks what the skill is for and creates it in the chat.
- */
 export function CreateSkillAction({ agent }: { agent: MobileAgent }) {
   const { t } = useText();
-  // The stack that presents this sheet. The sheet has its own stack inside, so `router.dismissTo`
-  // does not see the chat under it and would open a second, empty chat on top.
   const sheetStack = useNavigation().getParent();
-  // The native stack keeps a closing sheet mounted until its animation ends, so this cleanup runs
-  // after the dismissal, when the chat can keep the keyboard.
   const sent = useRef(false);
   useEffect(
     () => () => {
@@ -36,26 +31,35 @@ export function CreateSkillAction({ agent }: { agent: MobileAgent }) {
     },
     [agent.serverId, agent.id],
   );
+  const create = () => {
+    if (!sheetStack) return;
+    void haptics.impact("light");
+    requestComposerText({ serverId: agent.serverId, agentId: agent.id, text: SKILL_CREATION_REQUEST });
+    sent.current = true;
+    const state = sheetStack.getState();
+    const below = state?.routes[state.index - 1];
+    const params = below?.params;
+    if (below?.name === CHAT_ROUTE && params && "agentId" in params && params.agentId === agent.id) {
+      sheetStack.goBack();
+    } else {
+      sheetStack.dispatch(StackActions.replace(CHAT_ROUTE, { agentId: agent.id }));
+    }
+  };
+  if (isAndroid)
+    return (
+      <AndroidHeaderButton
+        placement="right"
+        icon={Plus}
+        accessibilityLabel={t("mobile.agent.skill.create")}
+        onPress={create}
+      />
+    );
   return (
     <Stack.Toolbar placement="right">
       <Stack.Toolbar.Button
         icon={isIOS ? "plus" : undefined}
         accessibilityLabel={t("mobile.agent.skill.create")}
-        onPress={() => {
-          if (!sheetStack) return;
-          void haptics.impact("light");
-          requestComposerText({ serverId: agent.serverId, agentId: agent.id, text: SKILL_CREATION_REQUEST });
-          sent.current = true;
-          const state = sheetStack.getState();
-          const below = state?.routes[state.index - 1];
-          const params = below?.params;
-          if (below?.name === CHAT_ROUTE && params && "agentId" in params && params.agentId === agent.id) {
-            sheetStack.goBack();
-          } else {
-            // The sheet opened from the list: this agent's chat takes the place of the sheet.
-            sheetStack.dispatch(StackActions.replace(CHAT_ROUTE, { agentId: agent.id }));
-          }
-        }}
+        onPress={create}
       >
         {isIOS ? undefined : "+"}
       </Stack.Toolbar.Button>
@@ -63,10 +67,6 @@ export function CreateSkillAction({ agent }: { agent: MobileAgent }) {
   );
 }
 
-/**
- * Agent info > Skills. An owner or admin turns a skill on or off and uninstalls it, as in the
- * desktop agent settings; a skill in a folder that GoAhead does not manage stays read-only.
- */
 export function AgentSkills({
   agent,
   skills,
@@ -76,11 +76,10 @@ export function AgentSkills({
   agent: MobileAgent;
   skills: InstalledSkill[];
   manage: boolean;
-  /** The query that holds `skills`. A saved change is written to it, so the list shows the host result. */
   queryKey: QueryKey;
 }) {
   const { t } = useText();
-  const workspace = useMobileWorkspace();
+  const workspace = useMobileWorkspaceActions();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const [removing, setRemoving] = useState<ReadonlySet<string>>(new Set());
@@ -107,7 +106,6 @@ export function AgentSkills({
     void haptics.selection();
     const replace = (next: InstalledSkill) =>
       updateSkills((list) => list.map((item) => (item.skillId === skill.skillId ? next : item)));
-    // The switch moves at once. A read that started earlier must not put the old state back.
     void queryClient.cancelQueries({ queryKey, exact: true });
     replace({ ...skill, enabled });
     run(
@@ -199,7 +197,6 @@ export function AgentSkills({
   );
 }
 
-/** One group per skill: the native switch with its details, then the destructive action, as on the routine page. */
 function ManagedSkill({
   skill,
   busy,
@@ -214,6 +211,7 @@ function ManagedSkill({
   onUninstall: () => void;
 }) {
   const { t } = useText();
+  const nativeLabelFont = useNativeLabelFont();
   const { theme } = useUniwind();
   return (
     <SettingsSection>
@@ -223,8 +221,13 @@ function ManagedSkill({
           style={{ width: "100%" }}
           colorScheme={theme === "dark" ? "dark" : "light"}
         >
-          {/* Older hosts send no `enabled`; such a skill is on. */}
-          <Switch label={skill.name} value={skill.enabled !== false} disabled={busy} onValueChange={onEnabledChange} />
+          <AppSwitch
+            label={skill.name}
+            value={skill.enabled !== false}
+            disabled={busy}
+            modifiers={nativeLabelFont}
+            onValueChange={onEnabledChange}
+          />
         </Host>
         <SkillDescription skill={skill} />
       </SettingsRow>
@@ -256,7 +259,6 @@ function withoutItem(set: ReadonlySet<string>, item: string): ReadonlySet<string
   return next;
 }
 
-/** A row with a switch shows the enabled state in the switch, so the text does not repeat it. */
 function skillMeta(skill: InstalledSkill, t: MobileTranslate, showDisabled: boolean): string {
   const parts = [
     skill.origin === "workspace"

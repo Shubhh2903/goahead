@@ -39,6 +39,8 @@ function createNative(): AgentLiveActivityNative {
         // Each update waits for the first show, so it does not find the notification missing.
         const shown = prepare().then(() => showAndroidLiveUpdate(props, nowSeconds()));
         const activity: LiveActivityInstance<AgentLiveActivityProps> = {
+          startedAt: Date.now(),
+          isActive: () => current === activity,
           update: async (next) => {
             await shown;
             // The user can remove the notification. The sync then starts a new one.
@@ -64,7 +66,7 @@ function createNative(): AgentLiveActivityNative {
     // An Android notification shows no agent picture.
     saveAvatar: () => null,
     hasAvatar: () => false,
-    renderBloub: () => null,
+    renderBloub: () => Promise.resolve(""),
     removeAvatars: () => undefined,
   };
 }

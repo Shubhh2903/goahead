@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { createReplyReveal } from "../model/reply-reveal";
-import { replyWordDelay } from "../model/reply-reveal";
+import { REPLY_FLUSH_AFTER_MS, replyFlushes, replyWordDelay } from "../model/reply-reveal";
 
 export interface ReplyPlayback {
   progress: Map<string, number>;
@@ -8,6 +8,7 @@ export interface ReplyPlayback {
   enabled: boolean;
   complete: boolean;
   onWord: (word: string, index: number) => void;
+  onFlush: () => void;
   onComplete: () => void;
 }
 
@@ -15,6 +16,7 @@ export function useReplyPlayback(plan: ReturnType<typeof createReplyReveal>, pla
   const [visible, setVisible] = useState(() =>
     playback?.enabled ? (playback.progress.get(playback.id) ?? 0) : plan.words.length,
   );
+  const [flushed, setFlushed] = useState(false);
   const callbacks = useRef(playback);
   const currentPlan = useRef(plan);
   useEffect(() => {
@@ -36,16 +38,27 @@ export function useReplyPlayback(plan: ReturnType<typeof createReplyReveal>, pla
     let position = progress.get(id) ?? 0;
     let played = false;
     let timer: ReturnType<typeof setTimeout>;
+    const started = Date.now();
     const tick = () => {
       const words = currentPlan.current.words;
+      if (
+        callbacks.current?.complete &&
+        Date.now() - started >= REPLY_FLUSH_AFTER_MS &&
+        replyFlushes(words, position)
+      ) {
+        position = words.length;
+        progress.set(id, position);
+        setVisible(position);
+        setFlushed(true);
+        callbacks.current.onFlush();
+        return;
+      }
       const word = words[position];
       if (word === undefined) {
         if (callbacks.current?.complete) {
           if (played) callbacks.current.onComplete();
           return;
         }
-        // Keep one clock while the provider streams. Incoming chunks must not
-        // reset the next reveal and starve playback during rapid updates.
         timer = setTimeout(tick, 32);
         return;
       }
@@ -59,5 +72,5 @@ export function useReplyPlayback(plan: ReturnType<typeof createReplyReveal>, pla
     timer = setTimeout(tick, 32);
     return () => clearTimeout(timer);
   }, [enabled, id, progress]);
-  return enabled ? plan.at(visible) : plan.at(plan.words.length);
+  return { tokens: enabled ? plan.at(visible) : plan.at(plan.words.length), flushed };
 }

@@ -1,5 +1,6 @@
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { File, Paths } from "expo-file-system";
+import { router } from "expo-router";
 import * as Sharing from "expo-sharing";
 import { Typography } from "heroui-native";
 import { useState, useSyncExternalStore } from "react";
@@ -10,19 +11,11 @@ import {
   SettingsRow,
   SettingsSection,
 } from "@/features/settings/components/settings-content";
-import { formatSupportLogEntry, type SupportLogLevel, supportLog } from "@/features/support/model/support-log";
+import { supportLog } from "@/features/support/model/support-log";
 import { clearSupportLog, supportLogFileText } from "@/features/support/model/support-log-capture";
 import { useText } from "@/shared/lib/text";
 
-/** The issues of the GoAhead repository, the same repository as the release page. GoAhead has no X account. */
 const ISSUES_URL = PRODUCT_IDENTITY.releasesUrl.replace(/\/releases\/latest$/u, "/issues/new");
-/** The screen shows the newest events. The saved file has all of them. */
-const SHOWN_ENTRIES = 100;
-const LEVEL_CLASS = {
-  info: "text-grouped-secondary",
-  warn: "text-warning-text",
-  error: "text-danger-text",
-} as const satisfies Record<SupportLogLevel, string>;
 
 export function SupportSettingsScreen() {
   const { t } = useText();
@@ -45,7 +38,7 @@ export function SupportSettingsScreen() {
     setSaving(true);
     const file = new File(Paths.cache, `goahead-support-log-${new Date().toISOString().replace(/[:.]/gu, "-")}.txt`);
     try {
-      file.write(supportLogFileText());
+      file.writeSync(supportLogFileText());
       await Sharing.shareAsync(file.uri, {
         mimeType: "text/plain",
         UTI: "public.plain-text",
@@ -70,48 +63,24 @@ export function SupportSettingsScreen() {
     <SettingsContent>
       <SettingsSection title={t("mobile.settings.support.help")} footer={t("mobile.settings.support.helpFooter")}>
         <SettingsRow onPress={() => open(ISSUES_URL)}>
-          <Typography.Paragraph type="body-sm">{t("mobile.settings.support.issues")}</Typography.Paragraph>
+          <Typography.Paragraph>{t("mobile.settings.support.issues")}</Typography.Paragraph>
         </SettingsRow>
         {linkError ? <SettingsNote>{linkError}</SettingsNote> : null}
       </SettingsSection>
       <SettingsSection title={t("mobile.settings.support.log")} footer={t("mobile.settings.support.logFooter")}>
         <SettingsRow
-          onPress={() => void save()}
-          disabled={saving}
-          disclosure={false}
+          onPress={() => router.push("/settings/support-log")}
           supportingText={t("mobile.settings.support.events", { count: entries.length })}
         >
-          <Typography.Paragraph type="body-sm">{t("mobile.settings.support.save")}</Typography.Paragraph>
+          <Typography.Paragraph>{t("mobile.settings.support.show")}</Typography.Paragraph>
+        </SettingsRow>
+        <SettingsRow onPress={() => void save()} disabled={saving} disclosure={false}>
+          <Typography.Paragraph>{t("mobile.settings.support.save")}</Typography.Paragraph>
         </SettingsRow>
         <SettingsRow onPress={clear} disabled={entries.length === 0} disclosure={false}>
-          <Typography.Paragraph type="body-sm" className="text-danger-text">
-            {t("mobile.settings.support.clear")}
-          </Typography.Paragraph>
+          <Typography.Paragraph className="text-danger-text">{t("mobile.settings.support.clear")}</Typography.Paragraph>
         </SettingsRow>
         {saveError ? <SettingsNote>{saveError}</SettingsNote> : null}
-      </SettingsSection>
-      <SettingsSection title={t("mobile.settings.support.recent")} footer={t("mobile.settings.support.recentFooter")}>
-        <SettingsRow>
-          {entries.length === 0 ? (
-            <Typography.Paragraph type="body-xs" className="text-grouped-secondary">
-              {t("mobile.settings.support.empty")}
-            </Typography.Paragraph>
-          ) : (
-            entries
-              .slice(-SHOWN_ENTRIES)
-              .reverse()
-              .map((entry) => (
-                <Typography.Paragraph
-                  key={entry.id}
-                  type="body-xs"
-                  className={`font-mono ${LEVEL_CLASS[entry.level]}`}
-                  selectable
-                >
-                  {formatSupportLogEntry(entry)}
-                </Typography.Paragraph>
-              ))
-          )}
-        </SettingsRow>
       </SettingsSection>
     </SettingsContent>
   );

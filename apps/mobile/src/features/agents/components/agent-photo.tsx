@@ -3,14 +3,22 @@ import { Image } from "expo-image";
 import { type ReactNode, useId, useState } from "react";
 import { View } from "react-native";
 import Svg, { Defs, FeColorMatrix, Filter, Image as SvgImage } from "react-native-svg";
-import { useMobileSession } from "@/features/auth/context/mobile-session-context";
+import { AgentOrbitRings } from "@/features/agents/components/agent-orbit-rings";
+import { useQueryScope } from "@/features/auth/context/mobile-session-context";
 import { DISCONNECTED_APPEARANCE } from "@/features/workspace/components/use-connection-appearance";
-import { useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
+import {
+  useMobileWorkspaceReader,
+  useMobileWorkspaceSelector,
+} from "@/features/workspace/context/mobile-workspace-context";
+import { savedAgentAvatar } from "@/features/workspace/model/agent-avatar-cache";
+import { queryKeys } from "@/features/workspace/model/query-keys";
+import { showsOnline } from "@/features/workspace/model/server-status";
 
 export interface AgentPhotoProps {
   agentId?: string;
   serverId?: string;
   imageUrl?: string | null;
+  avatarUrl?: string | null;
   disconnected?: boolean;
 }
 
@@ -18,34 +26,43 @@ export function AgentPhoto({
   agentId,
   serverId,
   imageUrl,
+  avatarUrl: knownAvatarUrl,
   disconnected = false,
   size,
+  rings,
   children,
-}: AgentPhotoProps & { size: number; children: ReactNode }) {
-  const { agents, servers, loadAgentAvatar } = useMobileWorkspace();
-  const { session, sessionScope } = useMobileSession();
-  const agent = agents.find((candidate) => candidate.id === agentId && candidate.serverId === serverId);
-  const avatarUrl = agent?.avatarUrl;
+}: AgentPhotoProps & {
+  size: number;
+  rings?: boolean | undefined;
+  children: ReactNode;
+}) {
+  const workspace = useMobileWorkspaceReader();
+  const queryScope = useQueryScope();
+  const foundAvatarUrl = useMobileWorkspaceSelector((current) =>
+    imageUrl === undefined && knownAvatarUrl === undefined
+      ? current.agents.find((candidate) => candidate.id === agentId && candidate.serverId === serverId)?.avatarUrl
+      : undefined,
+  );
+  const avatarUrl = imageUrl !== undefined ? undefined : knownAvatarUrl !== undefined ? knownAvatarUrl : foundAvatarUrl;
+  const online = useMobileWorkspaceSelector((current) =>
+    current.servers.some((server) => server.id === serverId && showsOnline(server)),
+  );
   const photo = useQuery({
-    queryKey: ["agent-avatar", session?.apiUrl, session?.user.id, sessionScope, serverId, agentId, avatarUrl],
-    enabled:
-      imageUrl === undefined &&
-      Boolean(
-        avatarUrl &&
-          agentId &&
-          serverId &&
-          servers.some((server) => server.id === serverId && server.state === "online"),
-      ),
+    queryKey: queryKeys.agentAvatar(queryScope, serverId, agentId, avatarUrl),
+    enabled: imageUrl === undefined && Boolean(avatarUrl && agentId && serverId && online),
     queryFn: () => {
       if (!agentId || !serverId || !avatarUrl) throw new Error("The agent avatar is unavailable.");
-      return loadAgentAvatar(agentId, avatarUrl, serverId);
+      return workspace().loadAgentAvatar(agentId, avatarUrl, serverId);
     },
+    initialData: () =>
+      agentId && serverId && avatarUrl ? (savedAgentAvatar(serverId, agentId, avatarUrl) ?? undefined) : undefined,
     staleTime: Infinity,
   });
   const uri = imageUrl === undefined ? photo.data : imageUrl;
   const [failed, setFailed] = useState<string | null>(null);
   const filterId = `photo-offline-${useId().replaceAll(":", "")}`;
-  return uri && uri !== failed ? (
+  if (!uri || uri === failed) return children;
+  const picture = (
     <View style={{ width: size, height: size, borderRadius: size / 2, overflow: "hidden" }}>
       <Image
         source={{ uri }}
@@ -54,8 +71,6 @@ export function AgentPhoto({
         style={{ width: size, height: size, opacity: disconnected ? 0 : 1 }}
         onError={() => setFailed(uri)}
       />
-      {/* iOS does not support the native saturation style. Keep Expo's error handling
-          and use the same SVG filter as generated avatars for the offline image. */}
       {disconnected ? (
         <Svg
           width={size}
@@ -79,7 +94,12 @@ export function AgentPhoto({
         </Svg>
       ) : null}
     </View>
+  );
+  return rings === undefined ? (
+    picture
   ) : (
-    children
+    <AgentOrbitRings active={rings} size={size}>
+      {picture}
+    </AgentOrbitRings>
   );
 }

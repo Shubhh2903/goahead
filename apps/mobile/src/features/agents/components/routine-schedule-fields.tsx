@@ -1,19 +1,16 @@
-import { Host, Picker, Switch } from "@expo/ui";
+import { Host } from "@expo/ui";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type { MobileTextKey } from "@openbot/i18n/mobile";
 import {
   ROUTINE_EVERY_DAY,
   ROUTINE_EVERY_HOURS,
-  ROUTINE_SAVED_DRAFT_KIND_VALUES,
   ROUTINE_WORKDAYS,
-  type RoutineDraftKind,
   type RoutineDraftProblem,
   type RoutineScheduleDraft,
   routineDraftProblemCode,
   routineHourlyMinute,
   routineYearlyDaysInMonth,
   sameRoutineDays,
-  switchDraftKind,
   toggleRoutineDay,
 } from "@openbot/team-client/routine-schedule-draft";
 import { Typography } from "heroui-native";
@@ -21,51 +18,39 @@ import type { ReactNode } from "react";
 import { Pressable, View } from "react-native";
 import { useUniwind } from "uniwind";
 import { SettingsRow, SettingsSection } from "@/features/settings/components/settings-content";
+import { SettingsPicker } from "@/features/settings/components/settings-controls";
+import { AppSwitch } from "@/shared/components/app-switch";
 import { SheetFormField } from "@/shared/components/sheet-form-field";
 import { haptics } from "@/shared/lib/haptics";
+import { useNativeLabelFont } from "@/shared/lib/native-label-font";
 import { useText } from "@/shared/lib/text";
 import { RoutineTimePicker } from "./routine-schedule-time";
 
-const KIND_LABEL = {
-  once: "mobile.agent.record.repeat.once",
-  hourly: "mobile.agent.record.repeat.hourly",
-  daily: "mobile.agent.record.repeat.daily",
-  weekly: "mobile.agent.record.repeat.weekly",
-  monthly: "mobile.agent.record.repeat.monthly",
-  yearly: "mobile.agent.record.repeat.yearly",
-  custom: "mobile.agent.record.repeat.custom",
-} as const satisfies Record<RoutineDraftKind, MobileTextKey>;
-
 const PROBLEM_TEXT = {
-  once: "mobile.agent.record.problem.once",
-  endBeforeStart: "mobile.agent.record.problem.endBeforeStart",
   invalidDate: "mobile.agent.record.problem.invalidDate",
   cronRequired: "mobile.agent.record.problem.cronRequired",
   cronTooLong: "mobile.agent.record.problem.cronTooLong",
 } as const satisfies Record<RoutineDraftProblem, MobileTextKey>;
 
-/** The week as a person reads it, from Monday. 0 is Sunday, as in the saved schedule. */
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const DEFAULT_WINDOW = { start: "09:00", end: "18:00" };
 
-/**
- * The schedule as the desktop asks for it: how often, on which days, and at what time. A cron
- * expression is the last choice of the frequency, for a schedule the other choices cannot say.
- */
 export function RoutineScheduleFields({
   draft,
   disabled,
+  header,
   footer,
   onChange,
 }: {
   draft: RoutineScheduleDraft;
   disabled: boolean;
-  /** Rows after the schedule, in the same group, such as the time zone. */
+  header: ReactNode;
   footer?: ReactNode;
   onChange: (draft: RoutineScheduleDraft) => void;
 }) {
   const { t, format } = useText();
+  const nativeLabelFont = useNativeLabelFont();
   const { theme } = useUniwind();
   const colorScheme = theme === "dark" ? "dark" : "light";
   const problem = routineDraftProblemCode(draft);
@@ -79,13 +64,14 @@ export function RoutineScheduleFields({
   ) => (
     <SettingsRow
       trailing={
-        <Host matchContents colorScheme={colorScheme}>
-          <Picker selectedValue={value} enabled={!disabled} onValueChange={(next: T) => change(next)}>
-            {options.map((option) => (
-              <Picker.Item key={option.value} label={option.label} value={option.value} />
-            ))}
-          </Picker>
-        </Host>
+        <SettingsPicker
+          value={value}
+          options={options}
+          enabled={!disabled}
+          dark={colorScheme === "dark"}
+          label={t(label)}
+          onChange={(next: T) => change(next)}
+        />
       }
     >
       <Typography.Paragraph>{t(label)}</Typography.Paragraph>
@@ -119,10 +105,11 @@ export function RoutineScheduleFields({
           <SettingsRow
             trailing={
               <Host matchContents colorScheme={colorScheme}>
-                <Switch
+                <AppSwitch
                   label={t("mobile.agent.record.allDay")}
                   value={draft.window === null}
                   disabled={disabled}
+                  modifiers={nativeLabelFont}
                   onValueChange={(allDay) =>
                     onChange(
                       allDay
@@ -248,22 +235,16 @@ export function RoutineScheduleFields({
 
   return (
     <SettingsSection
-      title={t("mobile.agent.record.schedule")}
+      title={t("mobile.agent.record.whenToRun")}
       footer={problem && problem !== "cronRequired" ? t(PROBLEM_TEXT[problem]) : hint}
     >
-      {pickerRow(
-        "mobile.agent.record.repeat",
-        draft.kind,
-        ROUTINE_SAVED_DRAFT_KIND_VALUES.map((kind) => ({ value: kind, label: t(KIND_LABEL[kind]) })),
-        (kind) => onChange(switchDraftKind(draft, kind, new Date())),
-      )}
+      {header}
       {fields}
       {footer}
     </SettingsSection>
   );
 }
 
-/** The days of a run: seven toggles from Monday, with the name of a common set beside the label. */
 function RoutineDayChips({
   days,
   disabled,

@@ -1,10 +1,15 @@
+import { OPENBOT_CONTROL_PLANE_ORIGIN } from "@openbot/contracts/invite-links";
+import { parseMobileConnectUrl } from "@openbot/contracts/mobile-connect";
 import { Redirect, router, Stack, useLocalSearchParams } from "expo-router";
 import { usePreventRemove } from "expo-router/react-navigation";
 import { openBrowserAsync } from "expo-web-browser";
 import { Button, Typography } from "heroui-native";
-import { Bot, UserPlus } from "lucide-react-native";
+import Bot from "lucide-react-native/icons/bot";
+import UserPlus from "lucide-react-native/icons/user-plus";
 import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { mobileAnalytics } from "@/features/analytics/mobile-analytics";
 import { redeemMobileConnectUrl } from "@/features/auth/api/mobile-auth";
 import { useMobileSession } from "@/features/auth/context/mobile-session-context";
 import { SignInScreen } from "@/features/auth/screens/sign-in-screen";
@@ -19,14 +24,13 @@ export function IncomingLinkScreen() {
 
 function IncomingLinkContent({ request }: { request?: string }) {
   const { t, errorMessage } = useText();
+  const insets = useSafeAreaInsets();
   const { session, connect } = useMobileSession();
   const [link] = useState(() => readIncomingLink(request));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [paired, setPaired] = useState(false);
-  usePreventRemove(busy, () => {
-    // Redemption saves a session. Keep this screen until that operation settles.
-  });
+  usePreventRemove(busy, () => {});
   useEffect(() => {
     if (!paired || busy) return;
     const pending = pendingSignInLinkId();
@@ -37,9 +41,6 @@ function IncomingLinkContent({ request }: { request?: string }) {
   useEffect(() => {
     if (link.kind !== "template" || !signedIn || opened.current) return;
     opened.current = true;
-    // Return to the running workspace, then open the sheet in its stack. A replace from this root
-    // screen would mount a second workspace, which opens a second connection to each host. With no
-    // workspace under this screen, `dismissTo` replaces this screen with one.
     router.dismissTo("/connected");
     router.push({ pathname: "/install-agent", params: { request } });
   }, [link.kind, signedIn, request]);
@@ -64,7 +65,12 @@ function IncomingLinkContent({ request }: { request?: string }) {
     setBusy(true);
     setError(null);
     try {
-      const next = await redeemMobileConnectUrl(link.url);
+      const url = link.url;
+      const next = await mobileAnalytics.operation(
+        "mobile_pairing_action",
+        { action: "redeem", entry_point: "link" },
+        () => redeemMobileConnectUrl(url),
+      );
       connect(next);
       forgetIncomingLink(request);
       void haptics.notification("success");
@@ -108,8 +114,14 @@ function IncomingLinkContent({ request }: { request?: string }) {
     );
   }
 
+  const pairingService = link.kind === "pairing" && !session ? parseMobileConnectUrl(link.url)?.apiUrl : undefined;
+  const accountService = pairingService && pairingService !== OPENBOT_CONTROL_PLANE_ORIGIN ? pairingService : null;
+
   return (
-    <View className="flex-1 justify-center gap-5 bg-background px-6 py-safe-offset-6">
+    <View
+      className="flex-1 justify-center gap-5 bg-background py-safe-offset-6"
+      style={{ paddingLeft: insets.left + 24, paddingRight: insets.right + 24 }}
+    >
       <Stack.Screen options={{ gestureEnabled: !busy, headerShown: false }} />
       <Typography.Heading type="h3">
         {link.kind === "pairing"
@@ -127,6 +139,11 @@ function IncomingLinkContent({ request }: { request?: string }) {
             ? t("mobile.link.plugin.description")
             : t("mobile.link.unavailable.description")}
       </Typography.Paragraph>
+      {accountService ? (
+        <Typography.Paragraph>
+          {t("mobile.link.pairing.accountService", { origin: accountService })}
+        </Typography.Paragraph>
+      ) : null}
       {error ? <Typography.Paragraph className="text-danger-text">{error}</Typography.Paragraph> : null}
       {link.kind === "pairing" && !session ? (
         <Button isDisabled={busy} onPress={() => void pair()}>

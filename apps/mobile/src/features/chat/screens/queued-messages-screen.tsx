@@ -1,7 +1,8 @@
 import type { QueueDelivery } from "@openbot/contracts/ipc";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
+import { StackActions } from "expo-router/react-navigation";
 import { Button, Typography } from "heroui-native";
-import { X } from "lucide-react-native";
+import X from "lucide-react-native/icons/x";
 import { useMemo } from "react";
 import { View } from "react-native";
 import { useCSSVariable } from "uniwind";
@@ -54,8 +55,11 @@ function UploadRow({ pending }: { pending: QueuedUpload }) {
   );
 }
 
+const CHAT_ROUTE = "chat/[agentId]";
+
 export function QueuedMessagesScreen() {
   const { t, format } = useText();
+  const sheetStack = useNavigation().getParent();
   const { chat } = useLocalSearchParams<{ chat: string }>();
   const { queue, pending } = useQueuedChat(chat);
   const queued = queue?.queued;
@@ -87,6 +91,16 @@ export function QueuedMessagesScreen() {
         rows={waiting}
         agents={serverAgents}
         self={serverAgents.find((agent) => agent.id === agentId)}
+        onHide={() => {
+          queue?.hideWaiting();
+          if (count === 0 && !queue?.error) router.back();
+        }}
+        onOpenReply={
+          queue?.activeTurnId && queue.steers
+            ? (deliveryId) => router.push({ pathname: "/queued-messages/actions", params: { chat, deliveryId } })
+            : undefined
+        }
+        onOpenAgent={(teammateId) => sheetStack?.dispatch(StackActions.replace(CHAT_ROUTE, { agentId: teammateId }))}
       />
       {count > 0 ? (
         <SettingsSection title={t("mobile.chat.queue.waitingTitle")}>

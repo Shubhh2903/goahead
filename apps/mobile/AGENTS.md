@@ -13,13 +13,13 @@ This is an Expo/React Native mobile application. Prioritize mobile-first pattern
 
 Read and follow [`DESIGN.md`](./DESIGN.md) before changing mobile UI.
 
-- Build application content with HeroUI Native. Reuse its installed components and the OpenBot theme aliases in `global.css`; do not introduce a parallel component library, theme, or screen-local design language.
+- Build application content with HeroUI Native. Reuse its installed components and the GoAhead theme aliases in `global.css`; do not introduce a parallel component library, theme, or screen-local design language.
 - HeroUI-first does not mean component-heavy. Prefer the smallest composition that communicates the screen: plain layout plus `Typography` and `Button` is better than decorative `Card`, `Chip`, `Surface`, or `Alert` wrappers when those components add no interaction or hierarchy.
 - Render product text with HeroUI Native `Typography` and its semantic variants. Do not import React Native `Text` directly in screens or product components unless an integration boundary explicitly requires the native primitive.
 - Treat system chrome as the deliberate exception to the HeroUI-first rule. Navigation stacks, headers, tab bars, toolbars, search bars, system menus, and route-level sheets must use the native Expo Router or `@expo/ui` APIs whenever they provide the required behavior.
 - Prefer `Stack`, `Stack.Title`, `Stack.Toolbar`, `Stack.SearchBar`, and `NativeTabs` over custom React Native or HeroUI imitations. Native chrome must remain native so iOS can provide Liquid Glass on supported versions and Android can use its platform conventions.
 - Do not fake native chrome with custom blur, gradients, translucent cards, or `GlassView`. Use `expo-glass-effect` only for an intentional custom in-content glass surface, with platform and accessibility fallbacks.
-- If neither an existing OpenBot component nor HeroUI Native fits an application-content need, verify that before creating a reusable component. If native APIs cannot satisfy a system-chrome requirement, document the constraint in the change before using a fallback.
+- If neither an existing GoAhead component nor HeroUI Native fits an application-content need, verify that before creating a reusable component. If native APIs cannot satisfy a system-chrome requirement, document the constraint in the change before using a fallback.
 - Do not add status badges, warnings, or operational guidance unless the application state and repository behavior support the claim. Verify lifecycle and connectivity copy against the implementation before presenting it to users.
 
 ## Interface text
@@ -35,9 +35,9 @@ and inspect the current route options in `src/app/(app)/_layout.tsx`, when addin
 sheet. Four rules decide the shape of the screen before any of that detail applies:
 
 - Use native `formSheet` with fixed detents and a visible grabber. Ordinary standalone forms
-  use `[0.85]`, search uses `[1]`, and message actions use fixed route-specific heights. Do not
-  size sheets from their content. A multi-page flow is ONE outer sheet with a nested native
-  stack. Inner routes use `presentation: "card"` and the native back button, never another sheet.
+  use `[0.85]` and search uses `[1]`. Do not size sheets from their content. A multi-page flow
+  is ONE outer sheet with a nested native stack. Inner routes use `presentation: "card"` and the
+  native back button, never another sheet.
 - `SheetScrollView` is the screen's scroll container and owns header clearance, safe-area behavior
   and scroll-edge effects. Keep scrolling enabled and its viewport bounded with `flex: 1`.
   Do not gate scrolling on content measurements or keyboard visibility, or add screen-local
@@ -74,7 +74,7 @@ bun run doctor               # diagnose dependency and config issues
 bunx expo install --fix      # fix incompatible package versions
 ```
 
-Both are scoped to this app: `lint` is `biome check --max-diagnostics=none src` and `typecheck` runs `codegen` before `tsc`. See "Execution and verification limits" above for when to run them, and [repository checks](../../AGENTS.md#checks) for the repository-wide commands worth avoiding and why.
+Both are scoped to this app: `lint` is `biome check --max-diagnostics=none src` and `typecheck` runs `codegen` before the type checker (`scripts/type-checker.ts`) when the codegen inputs changed. See "Execution and verification limits" above for when to run them, and [repository checks](../../AGENTS.md#checks) for the repository-wide commands worth avoiding and why.
 
 ## Navigation & Routing
 
@@ -86,6 +86,24 @@ Both are scoped to this app: `lint` is `biome check --max-diagnostics=none src` 
 
 Once authorized under "Execution and verification limits", EAS performs the operation in the cloud (`eas build`, `eas submit`, or `eas update`) — no local Xcode or Android Studio required. Run EAS CLI as `bunx eas-cli <command>` in Bun projects, or `npx eas-cli@latest <command>` otherwise; substitute that for bare `eas` in docs examples.
 For a build profile, credential or submission option the command needs, see https://docs.expo.dev/eas/index.md.
+
+## Over-the-air updates
+
+Phones get JavaScript updates from `apps/mobile-updates`, not from EAS Update. Read
+[README.md — Over-the-air updates](./README.md#over-the-air-updates) before a change to `app.json`,
+`eas.json`, `fingerprint.config.js`, `plugins/`, `modules/`, `certs/` or a native dependency.
+
+- A change to a file that the native build reads makes a new runtime version. After it, `main`
+  cannot go to the current store build as an update. Say so in the change, and do not add such a
+  change to a fix that must go out over the air.
+- The `scripts` of this `package.json` are in the runtime version. Put a new script in the root
+  `package.json`.
+- Do not change `updates.url`, `updates.codeSigningCertificate` or `updates.codeSigningMetadata`
+  without an explicit developer decision: binaries with the old values get no update.
+- New JavaScript must not write data that the bundle in the binary cannot read, because a rollback
+  runs that bundle.
+- Do not start `bun run mobile:ota:publish`, `mobile:ota:rollout` or `mobile:ota:rollback` without an
+  explicit user request. `bun run mobile:ota:check` and `mobile:ota:status` are read-only.
 
 ## Rules
 

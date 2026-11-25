@@ -7,18 +7,21 @@ export interface SheetFormFieldProps {
   autoFocus?: boolean;
   editable?: boolean;
   hint?: string;
+  error?: string;
   trailing?: ReactNode;
   inputMode?: TextInputProps["inputMode"];
   isRequired?: boolean;
   label: string;
   maxLength?: number;
   multiline?: boolean;
+  tall?: boolean;
   appearance?: "default" | "soft";
   hideLabel?: boolean;
-  textAlign?: TextInputProps["textAlign"];
+  textAlign?: "left" | "center" | "right";
   onChangeText: (value: string) => void;
   onSubmitEditing?: () => void;
   placeholder?: string;
   returnKeyType?: TextInputProps["returnKeyType"];
+  secureTextEntry?: boolean;
   value: string;
 }

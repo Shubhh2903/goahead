@@ -1,20 +1,32 @@
-import type { MenuAction } from "@expo/ui/community/menu";
-import { SIDEBAR_UNASSIGNED_SECTION_ID } from "@openbot/contracts/ipc";
-import { Link } from "expo-router";
+import { SIDEBAR_UNASSIGNED_SECTION_ID, sidebarFolderParents, sidebarFolderPath } from "@openbot/contracts/ipc";
+import { Link, router } from "expo-router";
 import { useRef, useState } from "react";
-import { Alert } from "react-native";
-import { useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
+import { showFailureAlert } from "@/features/analytics/failure-reports";
+import {
+  useMobileWorkspaceReader,
+  useMobileWorkspaceSelector,
+} from "@/features/workspace/context/mobile-workspace-context";
+import { showsOnline } from "@/features/workspace/model/server-status";
+import type { MenuAction } from "@/shared/components/menu-view";
 import { haptics } from "@/shared/lib/haptics";
 import { currentText, useText } from "@/shared/lib/text";
 
 export function useChatSectionMenu(serverId: string, chatId: string) {
   const { t } = useText();
-  const { sidebarByServer, servers, mutateSidebarLayout } = useMobileWorkspace();
-  const layout = sidebarByServer[serverId]?.layout;
+  const workspace = useMobileWorkspaceReader();
+  const layout = useMobileWorkspaceSelector(({ sidebarByServer }) => sidebarByServer[serverId]?.layout);
+  const online = useMobileWorkspaceSelector(({ servers }) =>
+    servers.some((server) => server.id === serverId && showsOnline(server)),
+  );
   const pending = useRef(false);
   const [saving, setSaving] = useState(false);
-  const disabled = saving || !servers.some((server) => server.id === serverId && server.state === "online");
-  const names = new Map(layout?.sections.map((section) => [section.id, section.name]));
+  const disabled = saving || !online;
+  const names = new Map<string, string>();
+  if (layout) {
+    const parents = sidebarFolderParents(layout);
+    for (const section of layout.sections)
+      names.set(section.id, sidebarFolderPath(layout, parents, section.id).join(" / "));
+  }
   const sections = (layout?.order ?? []).flatMap((id) => {
     const name = id === SIDEBAR_UNASSIGNED_SECTION_ID ? t("mobile.agent.section.unassigned") : names.get(id);
     return name ? [{ id, name }] : [];
@@ -25,7 +37,7 @@ export function useChatSectionMenu(serverId: string, chatId: string) {
     pending.current = true;
     setSaving(true);
     try {
-      await mutateSidebarLayout(serverId, {
+      await workspace().mutateSidebarLayout(serverId, {
         type: "assign",
         agentId: chatId,
         sectionId: sectionId === SIDEBAR_UNASSIGNED_SECTION_ID ? null : sectionId,
@@ -34,7 +46,9 @@ export function useChatSectionMenu(serverId: string, chatId: string) {
     } catch (error) {
       void haptics.notification("error");
       const text = currentText();
-      Alert.alert(
+      showFailureAlert(
+        error,
+        "turn",
         text.t("mobile.agent.section.moveFailed"),
         text.errorMessage(error, text.t("mobile.agent.section.tryAgain")),
       );
@@ -48,20 +62,28 @@ export function useChatSectionMenu(serverId: string, chatId: string) {
         {
           id: "sections",
           title: t("mobile.agent.section.moveTo"),
+          image: "folder",
           attributes: { disabled },
-          subactions: sections.map((section) => ({
-            id: `section:${section.id}`,
-            title: section.name,
-            state: assigned === section.id ? "on" : "off",
-            attributes: { disabled: disabled || assigned === section.id },
-          })),
+          subactions: [
+            ...sections.map((section) => ({
+              id: `section:${section.id}`,
+              title: section.name,
+              state: assigned === section.id ? ("on" as const) : ("off" as const),
+              attributes: { disabled: disabled || assigned === section.id },
+            })),
+            { id: "section-new", title: t("mobile.agent.section.newFolder"), attributes: { disabled } },
+          ],
         },
       ]
     : [];
+  const createFolder = () => {
+    if (!disabled) router.push({ pathname: "/section-form", params: { serverId, agentId: chatId } });
+  };
   return {
     androidActions,
     onAction: (id: string) => {
       if (id.startsWith("section:")) void assign(id.slice("section:".length));
+      if (id === "section-new") createFolder();
     },
     menu: layout ? (
       <Link.Menu icon="folder" title={t("mobile.agent.section.moveTo")}>
@@ -75,6 +97,9 @@ export function useChatSectionMenu(serverId: string, chatId: string) {
             {section.name}
           </Link.MenuAction>
         ))}
+        <Link.MenuAction icon="folder.badge.plus" disabled={disabled} onPress={createFolder}>
+          {t("mobile.agent.section.newFolder")}
+        </Link.MenuAction>
       </Link.Menu>
     ) : null,
   };

@@ -1,15 +1,17 @@
 import type { AvatarMood } from "@openbot/brand/bloub-avatar-motion";
-import { Typography } from "heroui-native";
-import type { ColorValue } from "react-native";
-import Animated, { Easing, ReduceMotion, withTiming } from "react-native-reanimated";
+import ChevronRight from "lucide-react-native/icons/chevron-right";
+import { useState } from "react";
+import { type ColorValue, Pressable, View } from "react-native";
+import Animated, { cubicBezier, Easing, ReduceMotion, withTiming } from "react-native-reanimated";
 import { BloubAvatarPreview } from "@/features/agents/components/bloub-avatar";
 import type { MobileAgent } from "@/features/workspace/model/workspace-types";
-import { StreamingTailText, StreamRevealProvider } from "./streaming-tail-text";
+import { haptics } from "@/shared/lib/haptics";
+import { useReducedMotion } from "@/shared/lib/motion";
+import { useText } from "@/shared/lib/text";
+import { MIRROR_IN_RTL } from "@/shared/lib/text-direction";
 import { ThinkingTextGradient } from "./thinking-text-gradient";
 
 const EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1);
-// The fade carries the state change, so it survives reduced motion. The rise and the settle are
-// decoration and stop with the system setting.
 const FADE_IN = {
   duration: 260,
   easing: EASE_OUT,
@@ -30,6 +32,8 @@ const MOVE_OUT = {
   easing: EASE_OUT,
   reduceMotion: ReduceMotion.System,
 };
+const LABEL_LINES = 2;
+const PRESS_EASING = cubicBezier(0.23, 1, 0.32, 1);
 
 function activityEntering() {
   "worklet";
@@ -56,23 +60,16 @@ function activityExiting() {
   };
 }
 
-/**
- * What the row shows for one agent. The list rebuilds it every render, and
- * {@link import("./use-activity-presence").useActivityPresence} keeps the last one while the next
- * signal for the same turn arrives, so `key` must identify the agent rather than the signal.
- */
 export interface ChatActivitySpec {
   key: string;
   label: string;
-  /** Changes when the wording changes, so only new wording plays the word reveal. */
-  labelKey: string;
   accessibilityLabel: string;
-  agent?: Pick<MobileAgent, "id" | "serverId" | "avatarHue" | "avatarSeed">;
+  agent?: Pick<MobileAgent, "id" | "serverId" | "avatarHue" | "avatarSeed" | "avatarColor">;
   mood: AvatarMood;
   online: boolean;
   animateAvatar: boolean;
   shimmer: boolean;
-  reveal: boolean;
+  onPress?: () => void;
 }
 
 export function ChatActivityRow({
@@ -84,41 +81,60 @@ export function ChatActivityRow({
   foreground: ColorValue;
   muted: ColorValue;
 }) {
+  const { t } = useText();
+  const reducedMotion = useReducedMotion();
+  const [pressed, setPressed] = useState(false);
+  const { onPress } = spec;
   return (
-    <Animated.View
-      entering={activityEntering}
-      exiting={activityExiting}
-      className="flex-row items-center gap-2 px-1 py-2"
-      accessible
-      accessibilityLiveRegion="polite"
-      accessibilityRole="text"
-      accessibilityLabel={spec.accessibilityLabel}
-    >
-      {spec.agent ? (
-        <BloubAvatarPreview
-          agentId={spec.agent.id}
-          serverId={spec.agent.serverId}
-          hue={spec.agent.avatarHue}
-          seed={spec.agent.avatarSeed}
-          size={36}
-          disconnected={!spec.online}
-          mood={spec.mood}
-          animateIdle={spec.animateAvatar}
-        />
-      ) : null}
-      <StreamRevealProvider>
-        <ThinkingTextGradient text={spec.label} foreground={foreground} muted={muted} enabled={spec.shimmer}>
-          <Typography.Paragraph type="body-sm" style={{ color: muted }}>
-            <StreamingTailText
-              key={spec.labelKey}
-              body={spec.label}
-              type="body-sm"
-              style={{ color: muted }}
-              enabled={spec.reveal}
+    <Animated.View entering={activityEntering} exiting={activityExiting}>
+      <Pressable
+        accessible
+        accessibilityLiveRegion="polite"
+        accessibilityRole={onPress ? "button" : "text"}
+        accessibilityLabel={spec.accessibilityLabel}
+        accessibilityHint={onPress ? t("mobile.chat.thinking.openHint") : undefined}
+        onPressIn={() => setPressed(true)}
+        onPressOut={() => setPressed(false)}
+        onPress={() => {
+          if (!onPress) return;
+          void haptics.selection();
+          onPress();
+        }}
+      >
+        <Animated.View
+          className="flex-row items-center gap-2 px-1 py-2"
+          style={{
+            transform: [{ scale: pressed && onPress && !reducedMotion ? 0.98 : 1 }],
+            transitionProperty: "transform",
+            transitionDuration: 120,
+            transitionTimingFunction: PRESS_EASING,
+          }}
+        >
+          {spec.agent ? (
+            <BloubAvatarPreview
+              agentId={spec.agent.id}
+              serverId={spec.agent.serverId}
+              hue={spec.agent.avatarHue}
+              color={spec.agent.avatarColor}
+              seed={spec.agent.avatarSeed}
+              size={36}
+              disconnected={!spec.online}
+              mood={spec.mood}
+              animateIdle={spec.animateAvatar}
             />
-          </Typography.Paragraph>
-        </ThinkingTextGradient>
-      </StreamRevealProvider>
+          ) : null}
+          <View className="min-w-0 flex-1">
+            <ThinkingTextGradient
+              text={spec.label}
+              numberOfLines={LABEL_LINES}
+              foreground={foreground}
+              muted={muted}
+              enabled={spec.shimmer}
+            />
+          </View>
+          {onPress ? <ChevronRight size={16} color={muted} style={MIRROR_IN_RTL} /> : null}
+        </Animated.View>
+      </Pressable>
     </Animated.View>
   );
 }

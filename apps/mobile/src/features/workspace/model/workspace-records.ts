@@ -1,8 +1,15 @@
 import {
   type AgentSummary,
+  type AvatarColor,
+  type ClientAgentSummary,
+  type ForeignProviderId,
+  foreignProvider,
+  isAgentMarketplaceSource,
   isAgentModel,
   isAgentProvider,
+  isAgentProviderRef,
   isAvatarHue,
+  isKnownAgentProvider,
   isReasoningEffort,
   isSidebarLayoutSnapshot,
   type SidebarLayoutSnapshot,
@@ -18,10 +25,13 @@ export type RemoteAgent = Pick<
   "id" | "name" | "title" | "description" | "preview" | "updatedAt" | "avatarSeed" | "avatarHue"
 > &
   Partial<
-    Pick<AgentSummary, "provider" | "model" | "reasoningEffort" | "avatarUrl" | "notifications" | "workspacePath">
-  >;
+    Pick<
+      AgentSummary,
+      "provider" | "model" | "reasoningEffort" | "avatarUrl" | "notifications" | "workspacePath" | "marketplaceSource"
+    >
+  > & { foreignProvider?: ForeignProviderId | undefined };
 
-export function projectAgent(serverId: string, agent: RemoteAgent): MobileAgent {
+export function projectAgent(serverId: string, agent: RemoteAgent, avatarColor: AvatarColor | null): MobileAgent {
   return {
     id: agent.id,
     serverId,
@@ -30,7 +40,9 @@ export function projectAgent(serverId: string, agent: RemoteAgent): MobileAgent 
     description: agent.description,
     preview: agent.preview,
     updatedLabel: formatUpdatedAt(agent.updatedAt),
+    updatedAt: agent.updatedAt,
     provider: agent.provider,
+    foreignProvider: agent.foreignProvider,
     model: agent.model,
     reasoningEffort: agent.reasoningEffort,
     notifications: agent.notifications,
@@ -38,7 +50,18 @@ export function projectAgent(serverId: string, agent: RemoteAgent): MobileAgent 
     avatarUrl: agent.avatarUrl ?? null,
     avatarSeed: agent.avatarSeed,
     avatarHue: agent.avatarHue,
+    avatarColor,
+    marketplaceSource: agent.marketplaceSource
+      ? { listingId: agent.marketplaceSource.listingId, version: agent.marketplaceSource.version }
+      : undefined,
   };
+}
+
+export function remoteAgentOf(agent: ClientAgentSummary): RemoteAgent {
+  const { provider, ...rest } = agent;
+  return isKnownAgentProvider(provider)
+    ? { ...rest, provider }
+    : { ...rest, provider: undefined, foreignProvider: foreignProvider(provider) };
 }
 
 export function decodeAgent(value: unknown): RemoteAgent {
@@ -63,6 +86,7 @@ export function decodeAgent(value: unknown): RemoteAgent {
     preview: value.preview,
     updatedAt: value.updatedAt,
     provider: isAgentProvider(value.provider) ? value.provider : undefined,
+    foreignProvider: isAgentProviderRef(value.provider) ? foreignProvider(value.provider) : undefined,
     model: isAgentModel(value.model) ? value.model : undefined,
     reasoningEffort: isReasoningEffort(value.reasoningEffort) ? value.reasoningEffort : undefined,
     notifications: isBoolean(value.notifications) ? value.notifications : undefined,
@@ -70,6 +94,7 @@ export function decodeAgent(value: unknown): RemoteAgent {
     avatarUrl: isString(value.avatarUrl) ? value.avatarUrl : null,
     avatarSeed: value.avatarSeed,
     avatarHue: value.avatarHue,
+    marketplaceSource: isAgentMarketplaceSource(value.marketplaceSource) ? value.marketplaceSource : undefined,
   };
 }
 
@@ -78,9 +103,14 @@ export function decodeAgentSummaries(value: unknown): RemoteAgent[] {
   return value.map(decodeAgent);
 }
 
-export function decodeConversationReads(value: unknown): Record<string, { unreadCount: number }> {
+export interface MobileConversationRead {
+  unreadCount: number;
+  firstUnreadMessageId: string | null;
+}
+
+export function decodeConversationReads(value: unknown): Record<string, MobileConversationRead> {
   if (!isDynamicRecord(value)) throw new Error("The server returned invalid read states.");
-  const reads: Record<string, { unreadCount: number }> = {};
+  const reads: Record<string, MobileConversationRead> = {};
   for (const [agentId, readState] of Object.entries(value)) {
     if (
       !isDynamicRecord(readState) ||
@@ -90,14 +120,15 @@ export function decodeConversationReads(value: unknown): Record<string, { unread
     ) {
       throw new Error("The server returned an invalid read state.");
     }
-    reads[agentId] = { unreadCount: readState.unreadCount };
+    const firstUnreadMessageId = isString(readState.firstUnreadMessageId) ? readState.firstUnreadMessageId : null;
+    reads[agentId] = { unreadCount: readState.unreadCount, firstUnreadMessageId };
   }
   return reads;
 }
 
 export function ignoreResponse(): void {}
 
-export function updateAgentPayload(input: UpdateAgentInput): TeamProtocolV2Json {
+export function updateAgentPayload(input: UpdateAgentInput): { [key: string]: TeamProtocolV2Json } {
   return {
     agentId: input.agentId,
     ...(input.name === undefined ? {} : { name: input.name }),

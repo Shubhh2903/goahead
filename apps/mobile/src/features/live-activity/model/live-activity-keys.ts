@@ -6,10 +6,10 @@ import {
 } from "@openbot/team-client/live-activity-seal";
 import * as Crypto from "expo-crypto";
 import * as SecureStore from "expo-secure-store";
+import { untilForeground } from "../../../shared/lib/until-foreground";
 
 const key = "goahead.mobile.live-activity-secret.v1";
 
-/** The secret and keys that one host has. */
 export interface LiveActivityHostKeys {
   secret: Uint8Array;
   keys: LiveActivityKeys;
@@ -19,15 +19,11 @@ let loaded: Uint8Array | null = null;
 let loading: Promise<Uint8Array> | null = null;
 const hosts = new Map<string, LiveActivityHostKeys>();
 
-/**
- * The phone secret. Each host gets its own secret made from it, which seals the Live Activity
- * content and signs its button links. So Apple and the GoAhead relay cannot read or change an
- * update, and one host cannot sign an action for another.
- */
 export function loadLiveActivitySecret(): Promise<Uint8Array> {
   if (loaded) return Promise.resolve(loaded);
   loading ??= (async () => {
     try {
+      await untilForeground();
       const stored = await SecureStore.getItemAsync(key);
       const secret = stored ? fromHex(stored) : null;
       loaded = secret?.length === LIVE_ACTIVITY_SECRET_BYTES ? secret : await createSecret();
@@ -39,7 +35,6 @@ export function loadLiveActivitySecret(): Promise<Uint8Array> {
   return loading;
 }
 
-/** The secret and keys of one host, made from the phone secret. */
 export function liveActivityHostKeys(phoneSecret: Uint8Array, serverId: string): LiveActivityHostKeys {
   const cached = hosts.get(serverId);
   if (cached) return cached;
@@ -49,7 +44,6 @@ export function liveActivityHostKeys(phoneSecret: Uint8Array, serverId: string):
   return value;
 }
 
-/** Sign-out makes a new secret, so a host of the removed workspace cannot update the next activity. */
 export async function resetLiveActivitySecret(): Promise<void> {
   loaded = null;
   hosts.clear();

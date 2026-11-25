@@ -2,7 +2,8 @@ import type { RemoteFileUpload } from "@openbot/team-client/remote-peer";
 import type { Href } from "expo-router";
 import { Button, Typography } from "heroui-native";
 import { useThemeColor } from "heroui-native/hooks";
-import { ImagePlus, Trash2 } from "lucide-react-native";
+import ImagePlus from "lucide-react-native/icons/image-plus";
+import Trash2 from "lucide-react-native/icons/trash";
 import { useRef, useState } from "react";
 import { haptics } from "@/shared/lib/haptics";
 import { pickAvatarPhoto } from "@/shared/lib/pick-avatar-photo";
@@ -12,7 +13,6 @@ export interface AgentPhotoDraft extends RemoteFileUpload {
   uri: string;
 }
 
-// Renders inline icon buttons, so the parent row places them beside the other choices.
 export function AgentPhotoPicker({
   hasPhoto,
   cropRoute,

@@ -1,12 +1,14 @@
-import type { MobileWorkspaceContextValue } from "../workspace/model/workspace-types";
+import type { MobileWorkspaceActions, MobileWorkspaceState } from "../workspace/model/workspace-types";
 import { attachmentSizeBucket } from "./events";
 import { mobileAnalytics } from "./mobile-analytics";
 
-/** Instrument user commands, never background reads or host lifecycle broadcasts. */
-export function trackWorkspaceActions(workspace: MobileWorkspaceContextValue): MobileWorkspaceContextValue {
+export function trackWorkspaceActions(
+  workspace: MobileWorkspaceActions,
+  state: () => Pick<MobileWorkspaceState, "agents" | "pinnedAgentIds">,
+): MobileWorkspaceActions {
   const run = mobileAnalytics.operation.bind(mobileAnalytics);
   const agentProperties = (id: string) => {
-    const agent = workspace.agents.find((candidate) => candidate.id === id);
+    const agent = state().agents.find((candidate) => candidate.id === id);
     return { provider: agent?.provider, model: agent?.model, reasoning_effort: agent?.reasoningEffort };
   };
   return {
@@ -16,11 +18,11 @@ export function trackWorkspaceActions(workspace: MobileWorkspaceContextValue): M
       run("agent_action", { action: "update", ...agentProperties(input.agentId) }, () =>
         workspace.updateAgent(input, serverId),
       ),
-    deleteAgent: (id) =>
-      run("agent_action", { action: "delete", ...agentProperties(id) }, () => workspace.deleteAgent(id)),
+    deleteAgent: (id, serverId) =>
+      run("agent_action", { action: "delete", ...agentProperties(id) }, () => workspace.deleteAgent(id, serverId)),
     duplicateAgent: (id) =>
       run("agent_action", { action: "duplicate", ...agentProperties(id) }, () => workspace.duplicateAgent(id)),
-    sendMessage: (id, text, attachments = [], reply = null) =>
+    sendMessage: (id, text, attachments = [], reply = null, server, clientMessageId) =>
       run(
         "message_send",
         {
@@ -30,23 +32,27 @@ export function trackWorkspaceActions(workspace: MobileWorkspaceContextValue): M
           attachment_count: attachments.length,
           is_reply: reply !== null,
         },
-        () => workspace.sendMessage(id, text, attachments, reply),
+        () => workspace.sendMessage(id, text, attachments, reply, server, clientMessageId),
       ),
     respondToPrompt: (id, input) =>
       run("agent_input_action", { kind: "prompt", decision: "answered" }, () => workspace.respondToPrompt(id, input)),
-    uploadAttachment: (id, input) =>
+    respondToApproval: (server, input) =>
+      run("agent_input_action", { kind: "approval", decision: input.decision }, () =>
+        workspace.respondToApproval(server, input),
+      ),
+    uploadAttachment: (id, input, server, onProgress) =>
       run(
         "attachment_action",
         {
           action: "upload",
           attachment_count: 1,
-          size_bucket: attachmentSizeBucket(Math.floor((input.base64.length * 3) / 4)),
+          size_bucket: attachmentSizeBucket(input.file?.size ?? Math.floor((input.base64.length * 3) / 4)),
         },
-        () => workspace.uploadAttachment(id, input),
+        () => workspace.uploadAttachment(id, input, server, onProgress),
       ),
-    discardAttachment: (id, attachment) =>
+    discardAttachment: (id, attachment, server) =>
       run("attachment_action", { action: "remove", attachment_count: 1 }, () =>
-        workspace.discardAttachment(id, attachment),
+        workspace.discardAttachment(id, attachment, server),
       ),
     saveAgentMemory: (id, text, server, memory) =>
       run("memory_action", { action: memory ? "update" : "create" }, () =>
@@ -70,14 +76,17 @@ export function trackWorkspaceActions(workspace: MobileWorkspaceContextValue): M
       run("team_action", { action: "server_joined", server_kind: "remote" }, () => workspace.addRemoteServer(input)),
     leaveServer: (id) =>
       run("team_action", { action: "server_left", server_kind: "remote" }, () => workspace.leaveServer(id)),
+    removeServer: (id) =>
+      run("team_action", { action: "server_removed", server_kind: "remote" }, () => workspace.removeServer(id)),
     selectServer: (id) => {
       workspace.selectServer(id);
       mobileAnalytics.track("team_action", { action: "server_selected", server_kind: "remote", result: "succeeded" });
     },
     toggleAgentPin: (id) => {
+      const pinned = state().pinnedAgentIds.includes(id);
       const result = workspace.toggleAgentPin(id);
       mobileAnalytics.track("conversation_action", {
-        action: workspace.pinnedAgentIds.includes(id) ? "unpin" : "pin",
+        action: pinned ? "unpin" : "pin",
         result: result === "error" ? "failed" : "succeeded",
       });
       return result;

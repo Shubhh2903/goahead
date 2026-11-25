@@ -2,30 +2,39 @@ import { CameraView, type CameraViewProps, useCameraPermissions } from "expo-cam
 import { Stack } from "expo-router";
 import { useIsFocused } from "expo-router/react-navigation";
 import { StatusBar } from "expo-status-bar";
-import { Alert, Button, Card, Spinner, Surface } from "heroui-native";
+import { Alert, Button, Card, Spinner, Surface, Typography } from "heroui-native";
 import { useThemeColor } from "heroui-native/hooks";
-import { Camera, ScanLine } from "lucide-react-native";
+import Camera from "lucide-react-native/icons/camera";
+import ScanLine from "lucide-react-native/icons/scan-line";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { AppState, Linking, ScrollView, StyleSheet, useWindowDimensions, View } from "react-native";
 
 import Animated, {
-  Easing,
+  FadeIn,
+  FadeOut,
   ReduceMotion,
   useAnimatedStyle,
-  useReducedMotion,
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
-
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useCSSVariable } from "uniwind";
 import { mobileAnalytics } from "@/features/analytics/mobile-analytics";
 import { haptics } from "@/shared/lib/haptics";
+import { useReducedMotion } from "@/shared/lib/motion";
 import { isAndroid, isIOS } from "@/shared/lib/platform";
 import { useText } from "@/shared/lib/text";
+import { ScanAgainButton } from "./scan-again-button";
+import { SIGN_IN_EASE_OUT } from "./sign-in-motion";
 
 type ScanState =
   | { status: "idle" }
   | { status: "connecting" }
   | { status: "error"; source: "camera" | "connection"; message: string };
+
+export type ScannerMode = "pending" | "permission" | "camera";
+export type ScanStatus = ScanState["status"];
+const CAMERA_BACKDROP = "radial-gradient(90% 60% at 50% 46%, #2c2a30 0%, #121114 70%)";
 const QR_SCANNER_SETTINGS: CameraViewProps["barcodeScannerSettings"] = { barcodeTypes: ["qr"] };
 
 function ScannerStatus({
@@ -62,15 +71,13 @@ function ScannerStatus({
   return (
     <Card variant="default" className="rounded-3xl p-4">
       <Card.Body className="flex-row items-center gap-3">
-        {scanState.status === "connecting" ? (
-          <Surface variant="tertiary" className="size-11 items-center justify-center rounded-2xl p-0">
+        <Surface variant="tertiary" className="size-11 items-center justify-center rounded-2xl p-0">
+          {scanState.status === "connecting" ? (
             <Spinner size="sm" color={accent} />
-          </Surface>
-        ) : (
-          <Surface variant="tertiary" className="size-11 items-center justify-center rounded-2xl p-0">
+          ) : (
             <ScanLine size={22} color={foreground} strokeWidth={1.75} />
-          </Surface>
-        )}
+          )}
+        </Surface>
         <View className="min-w-0 flex-1 gap-0.5">
           <Card.Title className="font-sans text-body font-semibold">
             {scanState.status === "connecting"
@@ -94,7 +101,40 @@ function ScannerStatus({
   );
 }
 
-// Mount with the session so readiness resets on close, focus loss and background.
+function ScannerPill({ pairing, scanState, onRetry }: { pairing: boolean; scanState: ScanState; onRetry: () => void }) {
+  const { t } = useText();
+  const text =
+    scanState.status === "error"
+      ? scanState.message
+      : scanState.status === "connecting"
+        ? pairing
+          ? t("mobile.auth.scanner.connecting")
+          : t("mobile.auth.scanner.readingInvitation")
+        : t("mobile.auth.scanner.keepCentered");
+  return (
+    <View className="items-center gap-3">
+      <Animated.View
+        key={`${scanState.status}-${text}`}
+        entering={FadeIn.duration(220).easing(SIGN_IN_EASE_OUT)}
+        exiting={FadeOut.duration(120)}
+        accessibilityLiveRegion="polite"
+        className="max-w-full flex-row items-center gap-2.5 rounded-full px-4 py-3"
+        style={{ backgroundColor: "rgba(20,20,22,0.55)", borderCurve: "continuous" }}
+      >
+        {scanState.status === "connecting" ? <Spinner size="sm" color="#ffffff" /> : null}
+        <Typography.Paragraph type="body-sm" align="center" className="shrink text-white">
+          {text}
+        </Typography.Paragraph>
+      </Animated.View>
+      {scanState.status === "error" ? (
+        <Animated.View entering={FadeIn.duration(220).delay(80)} exiting={FadeOut.duration(120)}>
+          <ScanAgainButton label={t("mobile.auth.scanner.scanAgain")} onPress={onRetry} />
+        </Animated.View>
+      ) : null}
+    </View>
+  );
+}
+
 function ScannerCamera({
   onBarcodeScanned,
   onCameraReady,
@@ -123,29 +163,39 @@ function ScannerCamera({
 export function QrScanner({
   onScan,
   pairing = true,
-  embedded = false,
+  embedded: inSheet = false,
+  immersive = false,
+  contentInsetTop,
   scanEnabled = true,
-  onPreviewReady,
+  onModeChange,
+  onStatusChange,
   renderOverlay,
 }: {
   onScan: (data: string) => Promise<void>;
   pairing?: boolean;
   embedded?: boolean;
+  immersive?: boolean;
+  contentInsetTop?: number;
   scanEnabled?: boolean;
-  onPreviewReady?: () => void;
+  onModeChange?: (mode: ScannerMode) => void;
+  onStatusChange?: (status: ScanStatus) => void;
   renderOverlay?: (camera: boolean) => ReactNode;
 }) {
+  const embedded = inSheet || immersive;
   const { t, errorMessage } = useText();
+  const insets = useSafeAreaInsets();
+  const sideLeft = inSheet ? 0 : insets.left;
+  const sideRight = inSheet ? 0 : insets.right;
   const scanLocked = useRef(false);
   const completed = useRef(false);
   const scanPending = useRef(false);
   useEffect(() => {
     if (!pairing) return;
     const scope = mobileAnalytics.scope();
-    scope.track("mobile_pairing_action", { action: "scanner_opened", result: "succeeded" });
+    scope.track("mobile_pairing_action", { action: "scanner_opened", entry_point: "qr", result: "succeeded" });
     return () => {
       if (!completed.current && !scanPending.current)
-        scope.track("mobile_pairing_action", { action: "cancel", result: "cancelled" });
+        scope.track("mobile_pairing_action", { action: "cancel", entry_point: "qr", result: "cancelled" });
     };
   }, [pairing]);
   const [cameraAttempt, setCameraAttempt] = useState(0);
@@ -153,7 +203,8 @@ export function QrScanner({
   const [foreground, setForeground] = useState(AppState.currentState === "active");
   const [permission, requestPermission, getPermission] = useCameraPermissions();
   const [scanState, setScanState] = useState<ScanState>({ status: "idle" });
-  const [foregroundColor, accentForeground] = useThemeColor(["foreground", "accent-foreground"]);
+  const foregroundColor = useThemeColor("foreground");
+  const actionForeground = String(useCSSVariable("--openbot-action-foreground"));
   const { width: windowWidth } = useWindowDimensions();
   const reducedMotion = useReducedMotion();
   const connecting = useSharedValue(0);
@@ -162,7 +213,7 @@ export function QrScanner({
     connecting.set(
       withTiming(isConnecting ? 1 : 0, {
         duration: 220,
-        easing: Easing.bezier(0.23, 1, 0.32, 1),
+        easing: SIGN_IN_EASE_OUT,
         reduceMotion: ReduceMotion.Never,
       }),
     );
@@ -179,10 +230,24 @@ export function QrScanner({
     transform: [{ translateY: reducedMotion ? 0 : -8 * connecting.get() }],
   }));
   const scannerFrameSize = Math.min(windowWidth - 80, 280);
+  const cameraLive = focused && foreground;
+  const cameraKey = `${cameraAttempt}-${cameraLive}`;
+  const [readyFor, setReadyFor] = useState<string | null>(null);
+  if (!cameraLive && readyFor !== null) setReadyFor(null);
+  const previewReady = readyFor === cameraKey;
+  const mode: ScannerMode = !permission
+    ? "pending"
+    : !permission.granted
+      ? "permission"
+      : previewReady
+        ? "camera"
+        : "pending";
   useEffect(() => {
-    // Permission controls must be visible before the camera can start.
-    if (permission && !permission.granted) onPreviewReady?.();
-  }, [onPreviewReady, permission]);
+    onModeChange?.(mode);
+  }, [mode, onModeChange]);
+  useEffect(() => {
+    onStatusChange?.(scanState.status);
+  }, [onStatusChange, scanState.status]);
   useEffect(() => {
     let previousState = AppState.currentState;
     const subscription = AppState.addEventListener("change", (state) => {
@@ -216,6 +281,14 @@ export function QrScanner({
     }
   }
 
+  function retry() {
+    if (scanState.status === "error" && scanState.source === "camera") {
+      setCameraAttempt((attempt) => attempt + 1);
+    }
+    scanLocked.current = false;
+    setScanState({ status: "idle" });
+  }
+
   if (!permission) {
     return (
       <>
@@ -236,6 +309,11 @@ export function QrScanner({
           contentContainerClassName={
             embedded ? "min-h-full grow px-4 pb-4 pt-20" : "min-h-full grow px-5 pb-safe-offset-8 pt-8"
           }
+          contentContainerStyle={{
+            ...(contentInsetTop === undefined ? null : { paddingTop: contentInsetTop }),
+            paddingLeft: sideLeft + (embedded ? 16 : 20),
+            paddingRight: sideRight + (embedded ? 16 : 20),
+          }}
           contentInsetAdjustmentBehavior={embedded ? "never" : "automatic"}
         >
           <View className="mx-auto w-full max-w-md flex-1 justify-center">
@@ -267,27 +345,22 @@ export function QrScanner({
                     canRequestPermission
                       ? async () => {
                           const scope = mobileAnalytics.scope();
-                          try {
-                            const response = await requestPermission();
-                            if (pairing)
-                              scope.track("mobile_pairing_action", {
-                                action: "camera_permission",
-                                result: response.granted ? "succeeded" : "failed",
-                                ...(response.granted ? {} : { failure_code: "permission_denied" }),
-                              });
-                          } catch {
-                            if (pairing)
-                              scope.track("mobile_pairing_action", {
-                                action: "camera_permission",
-                                result: "failed",
-                                failure_code: "permission_denied",
-                              });
-                          }
+                          const granted = await requestPermission().then(
+                            (response) => response.granted,
+                            () => false,
+                          );
+                          if (pairing)
+                            scope.track("mobile_pairing_action", {
+                              action: "camera_permission",
+                              entry_point: "qr",
+                              result: granted ? "succeeded" : "failed",
+                              ...(granted ? {} : { failure_code: "permission_denied" }),
+                            });
                         }
                       : () => void Linking.openSettings()
                   }
                 >
-                  <Camera size={19} color={accentForeground} strokeWidth={2} />
+                  <Camera size={19} color={actionForeground} strokeWidth={2} />
                   <Button.Label className="font-sans font-semibold">
                     {canRequestPermission ? t("mobile.auth.camera.allow") : t("mobile.auth.camera.openSettings")}
                   </Button.Label>
@@ -313,48 +386,53 @@ export function QrScanner({
         />
       ) : null}
       {!embedded ? <StatusBar style="light" /> : null}
-      <View className={embedded ? "flex-1 bg-sheet" : "flex-1 bg-black"}>
-        {focused && foreground ? (
+      <View
+        className={immersive ? "flex-1 bg-black" : embedded ? "flex-1 bg-sheet" : "flex-1 bg-black"}
+        style={immersive ? { experimental_backgroundImage: CAMERA_BACKDROP } : undefined}
+      >
+        {cameraLive ? (
           <ScannerCamera
             key={cameraAttempt}
-            onCameraReady={onPreviewReady}
+            onCameraReady={() => {
+              setReadyFor(cameraKey);
+            }}
             onMountError={() => {
               setScanState({ status: "error", source: "camera", message: t("mobile.auth.scanner.cameraFailed") });
-              onPreviewReady?.();
+              setReadyFor(cameraKey);
             }}
-            // Expo enables native scanning from the presence of this callback.
-            // Keep it enabled from startup; connect guards opening and pending scans.
             onBarcodeScanned={({ data }) => void connect(data)}
           />
         ) : null}
 
-        <Animated.View
-          pointerEvents="none"
-          style={frameStyle}
-          className="absolute inset-0 items-center justify-center px-10 pb-24"
-        >
-          <View
-            className="rounded-[28px] border-2 border-white"
-            style={{ borderCurve: "continuous", height: scannerFrameSize, width: scannerFrameSize }}
-          />
-        </Animated.View>
+        {immersive ? null : (
+          <Animated.View
+            pointerEvents="none"
+            style={frameStyle}
+            className="absolute inset-0 items-center justify-center px-10 pb-24"
+          >
+            <View
+              className="rounded-[28px] border-2 border-white"
+              style={{ borderCurve: "continuous", height: scannerFrameSize, width: scannerFrameSize }}
+            />
+          </Animated.View>
+        )}
 
-        <Animated.View
-          style={statusStyle}
-          className={embedded ? "absolute inset-x-4 bottom-4" : "absolute inset-x-5 bottom-safe-offset-5"}
-        >
-          <ScannerStatus
-            pairing={pairing}
-            scanState={scanState}
-            onRetry={() => {
-              if (scanState.status === "error" && scanState.source === "camera") {
-                setCameraAttempt((attempt) => attempt + 1);
-              }
-              scanLocked.current = false;
-              setScanState({ status: "idle" });
-            }}
-          />
-        </Animated.View>
+        {immersive ? (
+          <View className="absolute items-center" style={{ bottom: "19%", left: sideLeft + 24, right: sideRight + 24 }}>
+            {previewReady ? (
+              <Animated.View entering={FadeIn.duration(200).delay(reducedMotion ? 0 : 650)}>
+                <ScannerPill pairing={pairing} scanState={scanState} onRetry={retry} />
+              </Animated.View>
+            ) : null}
+          </View>
+        ) : (
+          <Animated.View
+            style={[statusStyle, { left: sideLeft + (embedded ? 16 : 20), right: sideRight + (embedded ? 16 : 20) }]}
+            className={embedded ? "absolute bottom-4" : "absolute bottom-safe-offset-5"}
+          >
+            <ScannerStatus pairing={pairing} scanState={scanState} onRetry={retry} />
+          </Animated.View>
+        )}
         <Animated.View
           pointerEvents={isConnecting ? "none" : "box-none"}
           accessibilityElementsHidden={isConnecting}

@@ -6,7 +6,14 @@ export function channelTasksNeedingAction(tasks: readonly ChannelTask[]) {
   return tasks.filter((task) => task.state === "failed" || task.state === "paused");
 }
 
-/** Channel work has its own tasks; single-chat activity can belong to another thread. */
+export function channelTaskCancelCards(tasks: readonly ChannelTask[]) {
+  const byRun = new Map<string, string>();
+  for (const task of tasks) {
+    if (task.id === task.rootTaskId || !byRun.has(task.rootTaskId)) byRun.set(task.rootTaskId, task.id);
+  }
+  return new Set(byRun.values());
+}
+
 export function channelTaskActivities(
   tasks: readonly ChannelTask[],
   messages: readonly ChannelMessage[],
@@ -41,7 +48,7 @@ export function channelTaskActivities(
         activeMessage && latest.message.status === "streaming" && latest.message.itemType !== "commentary"
           ? "responding"
           : "working",
-      detail: "Working on it…",
+      detail: null,
     };
   });
 }

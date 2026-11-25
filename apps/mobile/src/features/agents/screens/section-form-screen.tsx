@@ -1,46 +1,42 @@
-import { router, Stack, useLocalSearchParams, useNavigation } from "expo-router";
-import { usePreventRemove } from "expo-router/react-navigation";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import { Typography } from "heroui-native";
 import { useEffect, useRef, useState } from "react";
-import { Alert } from "react-native";
 import { useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
+import { showsOnline } from "@/features/workspace/model/server-status";
+import { SheetCloseAction } from "@/shared/components/sheet-close-action";
 import { SheetFormField } from "@/shared/components/sheet-form-field";
 import { SheetSaveAction } from "@/shared/components/sheet-save-action";
 import { SheetScrollView } from "@/shared/components/sheet-scroll-view";
 import { haptics } from "@/shared/lib/haptics";
-import { isIOS } from "@/shared/lib/platform";
 import { useText } from "@/shared/lib/text";
+import { useDiscardGuard } from "@/shared/lib/use-discard-guard";
 
 export function SectionFormScreen() {
   const { t, errorMessage } = useText();
-  const { serverId, sectionId } = useLocalSearchParams<{ serverId: string; sectionId?: string }>();
+  const { serverId, sectionId, parentId, agentId } = useLocalSearchParams<{
+    serverId: string;
+    sectionId?: string;
+    parentId?: string;
+    agentId?: string;
+  }>();
   const { servers, sidebarByServer, mutateSidebarLayout } = useMobileWorkspace();
   const layout = sidebarByServer[serverId]?.layout;
   const section = layout?.sections.find((item) => item.id === sectionId);
+  const parentKnown = !parentId || Boolean(layout?.sections.some((item) => item.id === parentId));
   const [initialName] = useState(section?.name ?? "");
   const [name, setName] = useState(initialName);
   const [saving, setSaving] = useState(false);
   const [finished, setFinished] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pending = useRef(false);
-  const navigation = useNavigation();
   const dirty = name.trim() !== initialName;
   const available =
     Boolean(layout) &&
-    servers.some((server) => server.id === serverId && server.state === "online") &&
-    (!sectionId || Boolean(section));
+    servers.some((server) => server.id === serverId && showsOnline(server)) &&
+    (!sectionId || Boolean(section)) &&
+    parentKnown;
   const valid = name.trim().length > 0 && name.trim().length <= 40;
-  usePreventRemove(!finished && (dirty || saving), ({ data }) => {
-    if (pending.current) return;
-    Alert.alert(t("mobile.agent.discard.title"), t("mobile.agent.discard.body"), [
-      { text: t("mobile.agent.discard.keepEditing"), style: "cancel" },
-      {
-        text: t("mobile.agent.discard.discard"),
-        style: "destructive",
-        onPress: () => navigation.dispatch(data.action),
-      },
-    ]);
-  });
+  useDiscardGuard(!finished && (dirty || saving), { busy: () => pending.current });
   useEffect(() => {
     if (finished) router.back();
   }, [finished]);
@@ -52,7 +48,14 @@ export function SectionFormScreen() {
     try {
       await mutateSidebarLayout(
         serverId,
-        sectionId ? { type: "rename", sectionId, name: name.trim() } : { type: "create", name: name.trim() },
+        sectionId
+          ? { type: "rename", sectionId, name: name.trim() }
+          : {
+              type: "create",
+              name: name.trim(),
+              ...(parentId ? { parentId } : {}),
+              ...(agentId ? { agentId } : {}),
+            },
       );
       void haptics.notification("success");
       setFinished(true);
@@ -73,19 +76,13 @@ export function SectionFormScreen() {
       <Stack.Screen
         options={{ title: t(sectionId ? "mobile.agent.sectionForm.renameTitle" : "mobile.agent.sectionForm.newTitle") }}
       />
-      <Stack.Toolbar placement="left">
-        <Stack.Toolbar.Button
-          icon={isIOS ? "xmark" : undefined}
-          accessibilityLabel={t("common.close")}
-          disabled={saving}
-          onPress={() => {
-            void haptics.impact("soft");
-            router.back();
-          }}
-        >
-          {isIOS ? t("common.close") : "×"}
-        </Stack.Toolbar.Button>
-      </Stack.Toolbar>
+      <SheetCloseAction
+        disabled={saving}
+        onPress={() => {
+          void haptics.impact("soft");
+          router.back();
+        }}
+      />
       <SheetSaveAction
         dirty={dirty}
         canSave={available && valid && !finished}

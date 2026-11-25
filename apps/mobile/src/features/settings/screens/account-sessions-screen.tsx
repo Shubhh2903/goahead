@@ -10,13 +10,14 @@ import {
   MobileSessionExpiredError,
   revokeMobileAccountSession,
 } from "@/features/auth/api/mobile-auth";
-import { useMobileSession } from "@/features/auth/context/mobile-session-context";
+import { useMobileSession, useQueryScope } from "@/features/auth/context/mobile-session-context";
 import {
   SettingsContent,
   SettingsNote,
   SettingsRow,
   SettingsSection,
 } from "@/features/settings/components/settings-content";
+import { queryKeys } from "@/features/workspace/model/query-keys";
 import { haptics } from "@/shared/lib/haptics";
 import { useText } from "@/shared/lib/text";
 
@@ -25,7 +26,6 @@ const SESSION_KIND_KEYS = {
   mobile: "mobile.settings.sessions.kindMobile",
 } as const satisfies Record<MobileAccountSession["kind"], MobileTextKey>;
 
-// The same fields as `toLocaleString()` without options.
 const LAST_ACTIVE_FORMAT: Intl.DateTimeFormatOptions = {
   year: "numeric",
   month: "numeric",
@@ -37,10 +37,11 @@ const LAST_ACTIVE_FORMAT: Intl.DateTimeFormatOptions = {
 
 export function AccountSessionsScreen() {
   const { t, format } = useText();
-  const { session, sessionScope, handleSessionError } = useMobileSession();
+  const { session, handleSessionError } = useMobileSession();
+  const queryScope = useQueryScope();
   const revoking = useRef(false);
   const sessions = useQuery({
-    queryKey: ["account-sessions", session?.apiUrl, session?.user.id, sessionScope],
+    queryKey: queryKeys.accountSessions(queryScope),
     enabled: Boolean(session),
     queryFn: async ({ signal }) => {
       if (!session) return [];
@@ -91,7 +92,7 @@ export function AccountSessionsScreen() {
             void sessions.refetch();
           }}
         >
-          <Typography.Paragraph type="body-sm">
+          <Typography.Paragraph>
             {sessions.isFetching ? t("mobile.settings.sessions.loading") : t("mobile.settings.sessions.refresh")}
           </Typography.Paragraph>
         </SettingsRow>
@@ -113,7 +114,7 @@ export function AccountSessionsScreen() {
                   ? "mobile.settings.sessions.rowRevocable"
                   : "mobile.settings.sessions.row",
               {
-                kind: t(SESSION_KIND_KEYS[item.kind]),
+                kind: t(item.hostedServer ? "mobile.settings.sessions.kindHostedServer" : SESSION_KIND_KEYS[item.kind]),
                 date: format.date(new Date(item.lastActiveAt), LAST_ACTIVE_FORMAT),
               },
             )}
@@ -139,7 +140,7 @@ export function AccountSessionsScreen() {
                     )
             }
           >
-            <Typography.Paragraph type="body-sm">{item.name}</Typography.Paragraph>
+            <Typography.Paragraph>{item.name}</Typography.Paragraph>
           </SettingsRow>
         ))}
       </SettingsSection>

@@ -1,15 +1,32 @@
-import { Link as LinkIcon } from "lucide-react-native";
-import { memo } from "react";
+import { Image } from "expo-image";
+import LinkIcon from "lucide-react-native/icons/link";
+import PhoneIcon from "lucide-react-native/icons/phone";
+import { memo, useState } from "react";
 import { type ColorValue, View } from "react-native";
 
+const missingFavicons = new Set<string>();
+
+function faviconUrl(url: string): string | null {
+  const { protocol, origin } = new URL(url);
+  return protocol === "https:" || protocol === "http:" ? `${origin}/favicon.ico` : null;
+}
+
 export const ChatLinkIcon = memo(function ChatLinkIcon({
+  url,
+  favicon: showFavicon,
   color,
   compact,
 }: {
+  url: string;
+  favicon: boolean;
   color: ColorValue | undefined;
   compact: boolean;
 }) {
   const size = compact ? 12 : 14;
+  const favicon = showFavicon ? faviconUrl(url) : null;
+  const [loaded, setLoaded] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const shown = favicon !== null && favicon !== failed && !missingFavicons.has(favicon);
 
   return (
     <View
@@ -19,7 +36,23 @@ export const ChatLinkIcon = memo(function ChatLinkIcon({
       pointerEvents="none"
       style={{ width: size, height: size }}
     >
-      <LinkIcon color={String(color)} size={size} strokeWidth={1.8} />
+      {shown && loaded === favicon ? null : url.startsWith("tel:") ? (
+        <PhoneIcon color={String(color)} size={size} strokeWidth={1.8} />
+      ) : (
+        <LinkIcon color={String(color)} size={size} strokeWidth={1.8} />
+      )}
+      {shown ? (
+        <Image
+          source={{ uri: favicon }}
+          contentFit="contain"
+          style={{ position: "absolute", width: size, height: size, borderRadius: 2 }}
+          onLoad={() => setLoaded(favicon)}
+          onError={() => {
+            missingFavicons.add(favicon);
+            setFailed(favicon);
+          }}
+        />
+      ) : null}
     </View>
   );
 });

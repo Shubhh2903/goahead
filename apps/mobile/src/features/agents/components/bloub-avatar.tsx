@@ -1,126 +1,394 @@
-import { BotEngine } from "@norbert_bodziony/bloub";
-import type { AvatarMood } from "@openbot/brand/bloub-avatar-motion";
-import type { AvatarHue } from "@openbot/contracts/ipc";
-import { memo, useId, useMemo } from "react";
-import Animated, { type DerivedValue, useAnimatedProps } from "react-native-reanimated";
-import Svg, { Circle, Defs, FeColorMatrix, Filter, G, Mask, Path, Rect } from "react-native-svg";
-import { useBloubActivityFrame } from "@/features/agents/components/use-bloub-activity-frame";
+import { avatarHeadColor, avatarStyleForSeed } from "@openbot/brand/bloub-avatar";
+import { type AvatarMood, avatarMoodIsBusy, avatarMoodPresentation } from "@openbot/brand/bloub-avatar-motion";
+import type { AvatarColor, AvatarHue } from "@openbot/contracts/ipc";
+import { Canvas, Picture } from "@shopify/react-native-skia";
+import { Image } from "expo-image";
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PixelRatio, StyleSheet, View } from "react-native";
+import Animated, {
+  convertToRGBA,
+  type DerivedValue,
+  Easing,
+  ReduceMotion,
+  useAnimatedReaction,
+  useAnimatedStyle,
+  useDerivedValue,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
+import { scheduleOnRN } from "react-native-worklets";
+import { usePlushFrame } from "@/features/agents/components/use-plush-frame";
+import { loadedPlushArt, loadPlushArt, plushPixels } from "@/features/agents/model/plush/plush-assets";
+import { type PlushArt, recordPlush } from "@/features/agents/model/plush/plush-draw";
+import { PLUSH_BODY_SCALE } from "@/features/agents/model/plush/plush-felt";
+import { plushGeometry } from "@/features/agents/model/plush/plush-frames";
 import {
-  type BloubActivityFrame,
-  bloubActivityGeometry,
-  getBloubAvatarColor,
-} from "@/features/agents/model/bloub-activity";
+  loadPlushPicture,
+  type PlushPictureSpec,
+  plushPictureName,
+  savedPlushPicture,
+} from "@/features/agents/model/plush/plush-picture";
 import { useAgentActivity } from "@/features/workspace/components/use-agent-activity";
 import {
   DISCONNECTED_APPEARANCE,
   useConnectionAppearance,
 } from "@/features/workspace/components/use-connection-appearance";
-import { useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
+import { useMobileWorkspaceSelector } from "@/features/workspace/context/mobile-workspace-context";
 import { agentActivityMood } from "@/features/workspace/model/agent-activity";
+import { showsOnline } from "@/features/workspace/model/server-status";
+import { useMotionPreference } from "@/shared/lib/motion";
+import { useScreenFocusedWhile } from "@/shared/lib/use-screen-focused-while";
 import { AgentPhoto, type AgentPhotoProps } from "./agent-photo";
 
 interface BloubAvatarProps extends AgentPhotoProps {
   agentId: string;
   hue: AvatarHue | null;
+  color?: AvatarColor | null;
   seed: string;
   size?: number;
   animateIdle?: boolean;
+  paused?: boolean;
+  rings?: boolean;
 }
 
-const AVATAR_PAPER = "#f9f9f9";
-const AnimatedColorMatrix = Animated.createAnimatedComponent(FeColorMatrix);
-const AnimatedGroup = Animated.createAnimatedComponent(G);
-const AnimatedPath = Animated.createAnimatedComponent(Path);
-const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+type PlushTransition = "pop" | "cut";
 
-function AvatarEye({ frame, index }: { frame: DerivedValue<BloubActivityFrame>; index: number }) {
-  const props = useAnimatedProps(() => frame.get().eyes[index] ?? { d: "", opacity: 0, matrix: [1, 0, 0, 1, 0, 0] });
-  return <AnimatedPath fill="#000000" animatedProps={props} />;
+export function BloubAvatar({
+  activityMood,
+  ...props
+}: BloubAvatarProps & {
+  activityMood?: AvatarMood;
+}) {
+  if (activityMood !== undefined) return <LiveBloubAvatar {...props} activityMood={activityMood} />;
+  return <ChatBloubAvatar {...props} />;
 }
 
-function AvatarDot({ frame, index, color }: { frame: DerivedValue<BloubActivityFrame>; index: number; color: string }) {
-  const props = useAnimatedProps(() => frame.get().dots[index] ?? { cx: 0, cy: 0, r: 0, opacity: 0 });
-  return <AnimatedCircle fill={color} animatedProps={props} />;
+function ChatBloubAvatar(props: BloubAvatarProps) {
+  return <LiveBloubAvatar {...props} activityMood={agentActivityMood(useAgentActivity(props.agentId))} />;
 }
 
-export function BloubAvatar({ agentId, serverId: hostId, hue, seed, size = 54, animateIdle = true }: BloubAvatarProps) {
-  const { agents, servers } = useMobileWorkspace();
-  const serverId = hostId ?? agents.find((agent) => agent.id === agentId)?.serverId;
-  const disconnected = !servers.some((server) => server.id === serverId && server.state === "online");
-  const activity = useAgentActivity(agentId);
+function LiveBloubAvatar({
+  agentId,
+  serverId: hostId,
+  avatarUrl,
+  hue,
+  color = null,
+  seed,
+  size = 54,
+  animateIdle = true,
+  paused = false,
+  rings = false,
+  activityMood,
+}: BloubAvatarProps & { activityMood: AvatarMood }) {
+  const serverId = useMobileWorkspaceSelector(
+    (workspace) => hostId ?? workspace.agents.find((agent) => agent.id === agentId)?.serverId,
+  );
+  const disconnected = useMobileWorkspaceSelector(
+    (workspace) => !workspace.servers.some((server) => server.id === serverId && showsOnline(server)),
+  );
   return (
     <BloubAvatarPreview
       agentId={agentId}
       serverId={serverId}
+      avatarUrl={avatarUrl}
       hue={hue}
+      color={color}
       seed={seed}
       size={size}
       animateIdle={animateIdle}
+      paused={paused}
+      rings={rings}
       disconnected={disconnected}
-      mood={disconnected ? "idle" : agentActivityMood(activity)}
+      mood={disconnected ? "idle" : activityMood}
     />
   );
 }
 
+interface AvatarPreviewOptions {
+  disconnected?: boolean;
+  mood?: AvatarMood;
+  transition?: PlushTransition;
+}
+
 export const BloubAvatarPreview = memo(function BloubAvatarPreview(
-  props: Omit<BloubAvatarProps, "agentId"> & AgentPhotoProps & { disconnected?: boolean; mood?: AvatarMood },
+  props: Omit<BloubAvatarProps, "agentId"> & AgentPhotoProps & AvatarPreviewOptions,
 ) {
+  const size = props.size ?? 54;
   return (
-    <AgentPhoto {...props} size={props.size ?? 54}>
-      <AnimatedAvatarPreview {...props} />
+    <AgentPhoto
+      {...props}
+      size={size}
+      rings={props.rings ? !props.disconnected && avatarMoodPresentation(props.mood ?? "idle").rings : undefined}
+    >
+      <PlushAvatar
+        seed={props.seed}
+        hue={props.hue}
+        color={props.color ?? null}
+        size={size}
+        mood={props.mood}
+        animateIdle={props.animateIdle}
+        paused={props.paused}
+        disconnected={props.disconnected}
+        transition={props.transition}
+      />
     </AgentPhoto>
   );
 });
 
-const AnimatedAvatarPreview = memo(function AnimatedAvatarPreview({
-  hue,
+const PlushAvatar = memo(function PlushAvatar({
   seed,
-  size = 54,
-  disconnected = false,
+  hue,
+  color,
+  size,
   mood = "idle",
   animateIdle = true,
-}: Omit<BloubAvatarProps, "agentId"> & { disconnected?: boolean; mood?: AvatarMood }) {
+  paused = false,
+  disconnected = false,
+  transition = "cut",
+}: {
+  seed: string;
+  hue: AvatarHue | null;
+  color: AvatarColor | null;
+  size: number;
+  mood?: AvatarMood;
+  animateIdle?: boolean;
+  paused?: boolean;
+  disconnected?: boolean;
+  transition?: PlushTransition;
+}) {
+  const facesMove = useMotionPreference("agentFaces");
+  const wantsMotion = facesMove && !paused && !disconnected && (avatarMoodIsBusy(mood) || animateIdle);
+  const focused = useScreenFocusedWhile(wantsMotion);
+  const animate = wantsMotion && focused;
+  const [live, setLive] = useState(animate);
+  if (animate && !live) setLive(true);
+  const { shown, style: popStyle } = usePlushPop(seed, hue, color, transition === "pop" && facesMove);
   const appearance = useConnectionAppearance(disconnected);
-  const colorProps = useAnimatedProps(() => ({ values: [appearance.get().saturation] }));
-  const appearanceProps = useAnimatedProps(() => ({ opacity: appearance.get().opacity }));
-  const frame = useBloubActivityFrame(seed, mood, animateIdle && !disconnected);
-  const bodyProps = useAnimatedProps(() => frame.get().body);
-  const maskId = `bloub-${useId().replaceAll(":", "")}`;
-  const color = getBloubAvatarColor(seed, hue);
-
+  const [saturated, setSaturated] = useState(!disconnected);
+  useAnimatedReaction(
+    () => appearance.get().saturation >= 1,
+    (full, previous) => {
+      if (full !== previous) scheduleOnRN(setSaturated, full);
+    },
+  );
+  const settling = live && !wantsMotion && !disconnected;
+  const [stillShown, setStillShown] = useState(false);
+  const showStill = useCallback(() => setStillShown(true), []);
+  if (!settling && stillShown) setStillShown(false);
+  if (settling && stillShown && saturated) setLive(false);
+  const appearanceStyle = useAnimatedStyle(() => ({ opacity: appearance.get().opacity }));
+  const saturation = useDerivedValue(() => appearance.get().saturation);
+  const drawn = size * PLUSH_BODY_SCALE;
+  const pixels = plushPixels(drawn, PixelRatio.get());
+  const picture = (
+    <PlushPicture
+      seed={shown.seed}
+      hue={shown.hue}
+      color={shown.color}
+      mood={mood}
+      size={drawn}
+      pixels={pixels}
+      saturation={disconnected ? DISCONNECTED_APPEARANCE.saturation : 1}
+      onDisplay={settling ? showStill : undefined}
+    />
+  );
   return (
-    <Svg
-      accessibilityElementsHidden
-      accessible={false}
-      height={size}
-      pointerEvents="none"
-      viewBox="-158 -158 316 316"
-      width={size}
-    >
-      <Defs>
-        <Filter id={`${maskId}-offline`}>
-          <AnimatedColorMatrix type="saturate" animatedProps={colorProps} />
-        </Filter>
-        <Mask id={maskId} x={-158} y={-158} width={316} height={316} maskUnits="userSpaceOnUse">
-          <AnimatedPath fill="#ffffff" animatedProps={bodyProps} />
-          <AvatarEye frame={frame} index={0} />
-          <AvatarEye frame={frame} index={1} />
-        </Mask>
-      </Defs>
-      {/* Mobile-only feedback: keep the synced avatar profile and color untouched. */}
-      <AnimatedGroup filter={`url(#${maskId}-offline)`} animatedProps={appearanceProps}>
-        <AnimatedPath fill={AVATAR_PAPER} animatedProps={bodyProps} />
-        <Rect fill={color} height={316} mask={`url(#${maskId})`} width={316} x={-158} y={-158} />
-        <AvatarDot frame={frame} index={0} color={color} />
-        <AvatarDot frame={frame} index={1} color={color} />
-        <AvatarDot frame={frame} index={2} color={color} />
-      </AnimatedGroup>
-    </Svg>
+    <Animated.View pointerEvents="none" style={[{ width: size, height: size }, appearanceStyle]}>
+      <Animated.View
+        style={[
+          { position: "absolute", left: (size - drawn) / 2, top: (size - drawn) / 2, width: drawn, height: drawn },
+          popStyle,
+        ]}
+      >
+        {avatarStyleForSeed(shown.seed) === "flat" ? (
+          <FlatBreath amount={animate ? avatarMoodPresentation(mood).breathe : 0} size={drawn}>
+            {picture}
+          </FlatBreath>
+        ) : (
+          <>
+            {settling || !live ? <View style={StyleSheet.absoluteFill}>{picture}</View> : null}
+            {live ? (
+              <PlushCanvas
+                seed={shown.seed}
+                hue={shown.hue}
+                color={shown.color}
+                mood={mood}
+                size={drawn}
+                pixels={pixels}
+                animate={animate}
+                saturation={saturation}
+                fallback={picture}
+              />
+            ) : null}
+          </>
+        )}
+      </Animated.View>
+    </Animated.View>
   );
 });
 
-// Choices show the same idle pose without mounting animation clocks, worklets,
-// filters, or masks for every item in the picker.
+const BREATH_MS = 1300;
+
+function FlatBreath({ amount, size, children }: { amount: number; size: number; children: ReactNode }) {
+  const scale = useSharedValue(1);
+  useEffect(() => {
+    if (amount <= 0) {
+      scale.set(withTiming(1, { duration: 300 }));
+      return;
+    }
+    const easing = Easing.inOut(Easing.sin);
+    scale.set(
+      withSequence(
+        withTiming(1 - amount, { duration: BREATH_MS / 2, easing }),
+        withRepeat(withTiming(1 + amount, { duration: BREATH_MS, easing }), -1, true),
+      ),
+    );
+  }, [amount, scale]);
+  const style = useAnimatedStyle(() => ({ transform: [{ scale: scale.get() }] }));
+  return <Animated.View style={[{ width: size, height: size }, style]}>{children}</Animated.View>;
+}
+
+function usePlushPop(seed: string, hue: AvatarHue | null, color: AvatarColor | null, pop: boolean) {
+  const [shown, setShown] = useState({ seed, hue, color });
+  const target = useRef({ seed, hue, color });
+  target.current = { seed, hue, color };
+  const scale = useSharedValue(1);
+  const changed = shown.seed !== seed || shown.hue !== hue || shown.color !== color;
+  useEffect(() => {
+    if (!changed) return;
+    if (!pop) {
+      scale.set(1);
+      setShown(target.current);
+      return;
+    }
+    const swap = () => {
+      setShown(target.current);
+      scale.set(withSpring(1, { duration: 420, dampingRatio: 0.55, reduceMotion: ReduceMotion.Never }));
+    };
+    scale.set(
+      withTiming(
+        0,
+        { duration: 225, easing: Easing.inOut(Easing.cubic), reduceMotion: ReduceMotion.Never },
+        (finished) => {
+          if (finished) scheduleOnRN(swap);
+        },
+      ),
+    );
+  }, [changed, pop, scale]);
+  const style = useAnimatedStyle(() => ({ transform: [{ scale: scale.get() }] }));
+  return { shown: changed && !pop ? { seed, hue, color } : shown, style };
+}
+
+function usePlushArt(
+  seed: string,
+  hue: AvatarHue | null,
+  avatarColor: AvatarColor | null,
+  pixels: number,
+): PlushArt | null {
+  const { shape } = plushGeometry(seed);
+  const color = avatarHeadColor(seed, hue, avatarColor);
+  const key = `${shape}|${color}|${pixels}`;
+  const ready = loadedPlushArt(shape, color, pixels);
+  const [loaded, setLoaded] = useState<{ key: string; art: PlushArt } | null>(null);
+  useEffect(() => {
+    if (ready) return;
+    let current = true;
+    loadPlushArt(shape, color, pixels).then(
+      (art) => {
+        if (current) setLoaded({ key, art });
+      },
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [color, key, pixels, ready, shape]);
+  return ready ?? (loaded?.key === key ? loaded.art : null);
+}
+
+function PlushCanvas({
+  seed,
+  hue,
+  color,
+  mood,
+  size,
+  pixels,
+  animate,
+  saturation,
+  fallback,
+}: {
+  seed: string;
+  hue: AvatarHue | null;
+  color: AvatarColor | null;
+  mood: AvatarMood;
+  size: number;
+  pixels: number;
+  animate: boolean;
+  saturation: DerivedValue<number>;
+  fallback: ReactNode;
+}) {
+  const geometry = useMemo(() => plushGeometry(seed, mood), [seed, mood]);
+  const art = usePlushArt(seed, hue, color, pixels);
+  const frame = usePlushFrame(geometry, animate && art !== null);
+  const picture = useDerivedValue(() => recordPlush(frame.get(), art, size, saturation.get()));
+  if (!art) return fallback;
+  return (
+    <Canvas accessibilityElementsHidden accessible={false} pointerEvents="none" style={{ width: size, height: size }}>
+      <Picture picture={picture} />
+    </Canvas>
+  );
+}
+
+function usePlushPicture(spec: PlushPictureSpec): string | null {
+  const name = plushPictureName(spec);
+  const known = savedPlushPicture(spec);
+  const [loaded, setLoaded] = useState<{ name: string; uri: string } | null>(null);
+  const { seed, hue, color, mood, pixels, saturation } = spec;
+  useEffect(() => {
+    if (known) return;
+    let current = true;
+    void loadPlushPicture({ seed, hue, color, mood, pixels, saturation }).then((uri) => {
+      if (current && uri) setLoaded({ name, uri });
+    });
+    return () => {
+      current = false;
+    };
+  }, [color, hue, known, mood, name, pixels, saturation, seed]);
+  return known ?? (loaded?.name === name ? loaded.uri : null);
+}
+
+function PlushPicture({
+  seed,
+  hue,
+  color,
+  mood,
+  size,
+  pixels,
+  saturation,
+  crossfade = false,
+  onDisplay,
+}: PlushPictureSpec & { size: number; crossfade?: boolean; onDisplay?: () => void }) {
+  const drawn = usePlushPicture({ seed, hue, color, mood, pixels, saturation });
+  const identity = `${seed}|${hue ?? ""}|${color ?? ""}`;
+  const last = useRef<{ identity: string; uri: string } | null>(null);
+  if (drawn) last.current = { identity, uri: drawn };
+  const uri = drawn ?? (last.current?.identity === identity ? last.current.uri : null);
+  return (
+    <Image
+      accessible={false}
+      source={uri ? { uri } : null}
+      recyclingKey={identity}
+      cachePolicy="memory"
+      transition={crossfade ? 150 : 0}
+      onDisplay={onDisplay}
+      style={{ width: size, height: size }}
+    />
+  );
+}
+
 export const BloubAvatarThumbnail = memo(function BloubAvatarThumbnail(
   props: Omit<BloubAvatarProps, "agentId"> & AgentPhotoProps & { disconnected?: boolean },
 ) {
@@ -131,47 +399,47 @@ export const BloubAvatarThumbnail = memo(function BloubAvatarThumbnail(
   );
 });
 
-// Draws the idle pose without the photo lookup, for pickers that never show a photo.
 export const AvatarThumbnail = memo(function AvatarThumbnail({
   seed,
   hue,
+  color = null,
   size = 48,
   disconnected = false,
-}: Omit<BloubAvatarProps, "agentId"> & { disconnected?: boolean }) {
-  const frame = useMemo(() => {
-    const geometry = bloubActivityGeometry(seed);
-    return new BotEngine(100, "idle", geometry.radii, geometry.expression).sample(0);
-  }, [seed]);
+  animateColor = false,
+}: Omit<BloubAvatarProps, "agentId"> & {
+  disconnected?: boolean;
+  animateColor?: boolean;
+}) {
+  const drawn = size * PLUSH_BODY_SCALE;
   return (
-    <Svg
-      accessibilityElementsHidden
-      accessible={false}
-      opacity={disconnected ? DISCONNECTED_APPEARANCE.opacity : 1}
-      height={size}
+    <View
       pointerEvents="none"
-      viewBox="-158 -158 316 316"
-      width={size}
+      style={{ width: size, height: size, opacity: disconnected ? DISCONNECTED_APPEARANCE.opacity : 1 }}
     >
-      <Path
-        d={frame.bodyPath}
-        fill={thumbnailColor(getBloubAvatarColor(seed, hue), disconnected)}
-        opacity={frame.bodyAlpha}
-      />
-      {(["left", "right"] as const).map((side) => {
-        const eye = frame.eyes[side === "left" ? 0 : 1];
-        return eye ? (
-          <Path key={side} d={eye.d} fill={AVATAR_PAPER} opacity={eye.alpha} transform={eye.matrix} />
-        ) : null;
-      })}
-    </Svg>
+      <View style={{ position: "absolute", left: (size - drawn) / 2, top: (size - drawn) / 2 }}>
+        <PlushPicture
+          seed={seed}
+          hue={hue}
+          color={color}
+          mood="idle"
+          size={drawn}
+          pixels={plushPixels(drawn, PixelRatio.get())}
+          saturation={disconnected ? DISCONNECTED_APPEARANCE.saturation : 1}
+          crossfade={animateColor}
+        />
+      </View>
+    </View>
   );
 });
 
-export function thumbnailColor(color: string, disconnected: boolean) {
-  if (!disconnected) return color;
-  const r = Number.parseInt(color.slice(1, 3), 16);
-  const g = Number.parseInt(color.slice(3, 5), 16);
-  const b = Number.parseInt(color.slice(5, 7), 16);
+function saturateColor(color: string, saturation: number) {
+  if (saturation >= 1) return color;
+  const [r, g, b, a] = convertToRGBA(color);
   const gray = r * 0.213 + g * 0.715 + b * 0.072;
-  return `rgb(${[r, g, b].map((value) => Math.round(gray + (value - gray) * DISCONNECTED_APPEARANCE.saturation)).join(",")})`;
+  const channel = (value: number) => Math.round((gray + (value - gray) * saturation) * 255);
+  return `rgba(${channel(r)}, ${channel(g)}, ${channel(b)}, ${a})`;
+}
+
+export function thumbnailColor(color: string, disconnected: boolean) {
+  return disconnected ? saturateColor(color, DISCONNECTED_APPEARANCE.saturation) : color;
 }

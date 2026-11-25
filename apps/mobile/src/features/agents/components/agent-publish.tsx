@@ -5,33 +5,26 @@ import { Button, Typography } from "heroui-native";
 import { useState } from "react";
 import { Alert, Share, View } from "react-native";
 import { BloubAvatarPreview } from "@/features/agents/components/bloub-avatar";
-import { useMobileSession } from "@/features/auth/context/mobile-session-context";
+import { showFailureAlert } from "@/features/analytics/failure-reports";
+import { useQueryScope } from "@/features/auth/context/mobile-session-context";
 import { SettingsRow, SettingsSection } from "@/features/settings/components/settings-content";
-import { type MobileAgent, useMobileWorkspace } from "@/features/workspace/context/mobile-workspace-context";
+import { type MobileAgent, useMobileWorkspaceActions } from "@/features/workspace/context/mobile-workspace-context";
+import { queryKeys } from "@/features/workspace/model/query-keys";
 import { AndroidHeaderButton } from "@/shared/components/android-header-button";
 import { haptics } from "@/shared/lib/haptics";
 import { isAndroid, isIOS } from "@/shared/lib/platform";
 import { currentText, type MobileText, useText } from "@/shared/lib/text";
 
-/** The longest instruction summary, so a long text does not fill the page. */
 const SUMMARY_LENGTH = 120;
 
-/**
- * Agent info > Publish: shares the agent as a link-only template, as the desktop publish dialog does.
- * The host builds the template, refuses secrets and publishes it with its own account. The phone
- * sends only the agent id: it draws no share card, so the link preview shows the general GoAhead
- * image. Like the desktop dialog, the page shows a summary of the template. A sheet has no action
- * button in its content, so Publish (Update, when the agent is published) is in the header. Only an
- * owner or admin opens it, and the host checks the role again.
- */
 export function AgentPublish({ agent, available }: { agent: MobileAgent; available: boolean }) {
   const text = useText();
   const { t, format, sourceText } = text;
-  const workspace = useMobileWorkspace();
+  const workspace = useMobileWorkspaceActions();
   const queryClient = useQueryClient();
-  const { session, sessionScope } = useMobileSession();
+  const queryScope = useQueryScope();
   const [pending, setPending] = useState<"publish" | "unpublish" | null>(null);
-  const queryKey = ["agent-info", session?.apiUrl, session?.user.id, sessionScope, agent.serverId, agent.id, "publish"];
+  const queryKey = queryKeys.agentRecord(queryScope, agent.serverId, agent.id, "publish");
   const preview = useQuery({
     queryKey,
     queryFn: () => workspace.loadAgentTemplatePreview(agent.id, agent.serverId),
@@ -71,21 +64,15 @@ export function AgentPublish({ agent, available }: { agent: MobileAgent; availab
     } catch (cause) {
       void haptics.notification("error");
       const latest = currentText();
-      Alert.alert(failed, latest.errorMessage(cause, latest.t("mobile.agent.publish.failedBody")));
+      showFailureAlert(cause, "agent", failed, latest.errorMessage(cause, latest.t("mobile.agent.publish.failedBody")));
     } finally {
       setPending(null);
     }
   }
 
-  // The share sheet is the user's own action: closing it is not a failure.
   const openShareSheet = (link: string) =>
     Share.share(isIOS ? { url: link } : { message: link }).catch(() => undefined);
 
-  /**
-   * Publishes the agent, or updates its template to the current version. After the first publish
-   * the share sheet opens with the new link, as desktop copies it. It opens after the publish ends,
-   * so the page does not show the publish as still running.
-   */
   const publish = () => {
     const first = !publication;
     let link: string | null = null;
@@ -130,6 +117,7 @@ export function AgentPublish({ agent, available }: { agent: MobileAgent; availab
             serverId={agent.serverId}
             seed={agent.avatarSeed}
             hue={agent.avatarHue}
+            color={agent.avatarColor}
             size={80}
           />
         </View>
@@ -209,7 +197,6 @@ export function AgentPublish({ agent, available }: { agent: MobileAgent; availab
   );
 }
 
-/** The header action of the page, a text button as desktop has: the native toolbar on iOS. */
 function PublishAction({ disabled, label, onPress }: { disabled: boolean; label: string; onPress: () => void }) {
   const press = () => {
     if (disabled) return;
@@ -235,7 +222,6 @@ function PublishAction({ disabled, label, onPress }: { disabled: boolean; label:
   );
 }
 
-/** The first line of a text, cut at a word near `SUMMARY_LENGTH`. */
 function firstLine(value: string): string {
   const line = value.trim().split("\n")[0]?.trim() ?? "";
   if (line.length <= SUMMARY_LENGTH) return line;
@@ -243,7 +229,6 @@ function firstLine(value: string): string {
   return `${cut.slice(0, cut.lastIndexOf(" ") > 0 ? cut.lastIndexOf(" ") : SUMMARY_LENGTH).trimEnd()}…`;
 }
 
-/** Up to two names, or the first name and how many more, as the desktop dialog summarizes them. */
 function summary(
   names: string[],
   empty: "mobile.agent.publish.noSkills" | "mobile.agent.publish.noRoutines",

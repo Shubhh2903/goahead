@@ -2,7 +2,7 @@ import type { ConversationPage, ConversationSearchPage, QueuedMessageReceipt } f
 import { type ConversationMessage, type ConversationSnapshot, isConversationMessage } from "@openbot/contracts/ipc";
 import { isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 
-export function decodeConversation(value: unknown): ConversationSnapshot {
+function decodeConversation(value: unknown): ConversationSnapshot {
   if (
     !isDynamicRecord(value) ||
     !isString(value.agentId) ||
@@ -70,7 +70,6 @@ export function decodeConversationSearchPage(value: unknown): ConversationSearch
   };
 }
 
-/** Conversation projections identify user bubbles by recipient delivery, not mailbox message. */
 export function conversationMessageId(receipt: QueuedMessageReceipt, agentId: string): string {
   const delivery = receipt.deliveries.find((item) => item.recipientAgentId === agentId);
   if (!delivery) throw new Error("The host returned no delivery for this agent.");

@@ -1,11 +1,10 @@
-import { Canvas, Fill, Shader, Skia } from "@shopify/react-native-skia";
-import { useEffect, useState } from "react";
-import { AppState, type ColorValue } from "react-native";
-import { useDerivedValue, useFrameCallback, useReducedMotion, useSharedValue } from "react-native-reanimated";
+import { Canvas, Fill, Shader, Skia, type SkRuntimeEffect } from "@shopify/react-native-skia";
+import { useEffect } from "react";
+import type { ColorValue } from "react-native";
+import { useDerivedValue, useFrameCallback, useSharedValue } from "react-native-reanimated";
+import { useReducedMotion } from "@/shared/lib/motion";
+import { useAppActive } from "@/shared/lib/use-app-active";
 
-// A dot grid with rings that travel out from the centre: the canvas the image is painted on.
-// The dots near a crest brighten toward the accent, so the motion reads as work in progress
-// without a percentage that the host never reports.
 const SOURCE = `
 uniform float2 resolution;
 uniform float time;
@@ -31,13 +30,16 @@ half4 main(float2 position) {
 }
 `;
 
-const EFFECT = Skia.RuntimeEffect.Make(SOURCE);
+let effect: SkRuntimeEffect | null | undefined;
+function canvasEffect(): SkRuntimeEffect | null {
+  if (effect === undefined) effect = Skia.RuntimeEffect.Make(SOURCE);
+  return effect;
+}
 
 function rgb(color: ColorValue): number[] {
   return Array.from(Skia.Color(String(color))).slice(0, 3);
 }
 
-/** Decorative: the frame around it carries the state for assistive technology. */
 export function ImageGenerationCanvas({
   width,
   height,
@@ -54,16 +56,12 @@ export function ImageGenerationCanvas({
   accent: ColorValue;
 }) {
   const reducedMotion = useReducedMotion();
-  const [foreground, setForeground] = useState(AppState.currentState === "active");
+  const foreground = useAppActive();
   const time = useSharedValue(0);
   const active = running && foreground && !reducedMotion && !failed;
   const frame = useFrameCallback(({ timeSincePreviousFrame }) => {
     time.set((value) => value + (timeSincePreviousFrame ?? 0) / 1000);
   }, false);
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (state) => setForeground(state === "active"));
-    return () => subscription.remove();
-  }, []);
   useEffect(() => {
     frame.setActive(active);
     return () => frame.setActive(false);
@@ -77,11 +75,12 @@ export function ImageGenerationCanvas({
     base: baseColor,
     accent: accentColor,
   }));
-  if (!EFFECT) return null;
+  const shader = canvasEffect();
+  if (!shader) return null;
   return (
     <Canvas style={{ position: "absolute", inset: 0 }} pointerEvents="none">
       <Fill>
-        <Shader source={EFFECT} uniforms={uniforms} />
+        <Shader source={shader} uniforms={uniforms} />
       </Fill>
     </Canvas>
   );

@@ -1,16 +1,30 @@
+import { File } from "expo-file-system";
 import { create } from "zustand";
 
-/**
- * Text that another screen puts into one agent's composer, such as the skill-creation request from
- * Agent info > Skills. The chat of that agent takes it once, when it is mounted and matches.
- */
-export interface ComposerRequest {
-  serverId: string;
-  agentId: string;
+type ComposerTarget = { serverId: string; agentId: string } | { serverId: string; channelId: string };
+
+export type ComposerRequest = ComposerTarget & {
   text: string;
+  files?: readonly ComposerFile[];
+};
+
+export interface ComposerFile {
+  uri: string;
+  name: string;
 }
 
-type ComposerTarget = Pick<ComposerRequest, "serverId" | "agentId">;
+interface ComposerChat {
+  kind: "agent" | "channel";
+  serverId: string;
+  id: string;
+}
+
+function isFor(target: ComposerTarget, chat: ComposerChat): boolean {
+  if (target.serverId !== chat.serverId) return false;
+  return chat.kind === "agent"
+    ? "agentId" in target && target.agentId === chat.id
+    : "channelId" in target && target.channelId === chat.id;
+}
 
 export const useComposerRequest = create<{ request: ComposerRequest | null; focus: ComposerTarget | null }>(() => ({
   request: null,
@@ -21,27 +35,29 @@ export function requestComposerText(request: ComposerRequest): void {
   useComposerRequest.setState({ request });
 }
 
-/** Removes and returns the request for this agent, or null when it is for another chat. */
-export function takeComposerRequest(serverId: string, agentId: string): string | null {
-  const { request } = useComposerRequest.getState();
-  if (!request || request.serverId !== serverId || request.agentId !== agentId) return null;
-  useComposerRequest.setState({ request: null });
-  return request.text;
+export function deleteComposerFiles(files: readonly ComposerFile[]): void {
+  for (const { uri } of files) {
+    try {
+      const file = new File(uri);
+      if (file.exists) file.delete();
+    } catch {}
+  }
 }
 
-/**
- * Asks that agent's chat to focus its composer and show the keyboard. Send it after the screen that
- * sent the text has gone: iOS gives first responder back to the view it came from when a sheet
- * finishes closing, so a focus during the dismissal is lost.
- */
+export function takeComposerRequest(chat: ComposerChat): ComposerRequest | null {
+  const { request } = useComposerRequest.getState();
+  if (!request || !isFor(request, chat)) return null;
+  useComposerRequest.setState({ request: null });
+  return request;
+}
+
 export function requestComposerFocus(target: ComposerTarget): void {
   useComposerRequest.setState({ focus: target });
 }
 
-/** Removes a focus request for this agent and tells whether there was one. */
-export function takeComposerFocus(serverId: string, agentId: string): boolean {
+export function takeComposerFocus(chat: ComposerChat): boolean {
   const { focus } = useComposerRequest.getState();
-  if (!focus || focus.serverId !== serverId || focus.agentId !== agentId) return false;
+  if (!focus || !isFor(focus, chat)) return false;
   useComposerRequest.setState({ focus: null });
   return true;
 }

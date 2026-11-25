@@ -18,29 +18,48 @@
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         },
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["fetch"],
+        "BGTaskSchedulerPermittedIdentifiers": ["com.multicodegenius.goahead.mobile.refresh"]
       },
       "icon": "./assets/icons/app-icon.icon"
     },
     "android": {
       "package": "com.multicodegenius.goahead.mobile",
       "icon": "./assets/icons/app-icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icons/android-adaptive-eyes.png",
+        "backgroundImage": "./assets/icons/android-adaptive-background.png",
+        "monochromeImage": "./assets/icons/android-adaptive-eyes.png"
+      },
       "predictiveBackGestureEnabled": false,
-      "permissions": ["android.permission.CAMERA"]
+      "permissions": ["android.permission.CAMERA"],
+      "blockedPermissions": [
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ]
     },
     "plugins": [
       "./plugins/with-rocketsim",
       ["./plugins/with-android-display-name", { "displayName": "GoAhead" }],
       "expo-router",
+      "expo-video",
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#E6C5FA",
-          "image": "./assets/icons/app-icon.png",
-          "imageWidth": 112,
+          "backgroundColor": "#CDADEC",
+          "image": "./assets/splash/eyes.png",
+          "imageWidth": 240,
           "resizeMode": "contain",
           "dark": {
-            "backgroundColor": "#181818"
+            "backgroundColor": "#756183",
+            "image": "./assets/splash/eyes.png"
+          },
+          "android": {
+            "imageWidth": 188
           }
         }
       ],
@@ -65,31 +84,151 @@
         "expo-media-library",
         {
           "photosPermission": "Allow GoAhead to access the photos you choose to share.",
-          "savePhotosPermission": "Allow GoAhead to save images you download from a chat to your photo library.",
+          "savePhotosPermission": "Allow GoAhead to save images and videos you download from a chat to your photo library.",
           "granularPermissions": ["photo"]
         }
       ],
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icons/notification-icon.png",
+          "color": "#6960F1"
+        }
+      ],
+      [
+        "./plugins/with-notification-sounds",
+        {
+          "sounds": [
+            "./assets/sounds/openbot-task.wav",
+            "./assets/sounds/openbot-warm.wav",
+            "./assets/sounds/openbot-mech.wav",
+            "./assets/sounds/openbot-bubble.wav",
+            "./assets/sounds/openbot-press.wav"
+          ]
+        }
+      ],
       "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow GoAhead to use Face ID to unlock the app."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow GoAhead to send your current location to an agent when you tap Share once, so it can answer questions about places near you.",
+          "locationAlwaysAndWhenInUsePermission": false,
+          "locationAlwaysPermission": false,
+          "locationFullAccuracyPermission": false,
+          "motionUsagePermission": false,
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": false
+        }
+      ],
       [
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
-          },
-          "ios": {
-            "enableSceneSupport": true
+            "usesCleartextTraffic": true,
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "extraProguardRules": "-dontwarn org.webrtc.Dav1dDecoder$Natives"
           }
         }
       ],
-      "expo-sharing",
-      "expo-font",
+      [
+        "./plugins/with-share-target",
+        {
+          "ios": {
+            "enabled": true,
+            "appGroupId": "group.run.openbot.mobile",
+            "extensionBundleIdentifier": "com.multicodegenius.goahead.mobile.ShareExtension",
+            "activationRule": {
+              "supportsText": true,
+              "supportsWebUrlWithMaxCount": 1,
+              "supportsImageWithMaxCount": 10,
+              "supportsMovieWithMaxCount": 10,
+              "supportsFileWithMaxCount": 10
+            }
+          },
+          "android": {
+            "enabled": true,
+            "singleShareMimeTypes": ["*/*"],
+            "multipleShareMimeTypes": ["*/*"]
+          }
+        }
+      ],
+      [
+        "expo-font",
+        {
+          "ios": {
+            "fonts": [
+              "./assets/fonts/inter/Inter-Regular.ttf",
+              "./assets/fonts/inter/Inter-Italic.ttf",
+              "./assets/fonts/inter/Inter-Medium.ttf",
+              "./assets/fonts/inter/Inter-SemiBold.ttf",
+              "./assets/fonts/inter/Inter-Bold.ttf",
+              "./assets/fonts/inter/Inter-BoldItalic.ttf",
+              "./assets/fonts/inter/Inter-ExtraBold.ttf",
+              "katex/dist/fonts/KaTeX_AMS-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Caligraphic-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Fraktur-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Main-Bold.ttf",
+              "katex/dist/fonts/KaTeX_Main-Italic.ttf",
+              "katex/dist/fonts/KaTeX_Main-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Math-BoldItalic.ttf",
+              "katex/dist/fonts/KaTeX_Math-Italic.ttf",
+              "katex/dist/fonts/KaTeX_SansSerif-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Size1-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Size2-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Typewriter-Regular.ttf"
+            ]
+          },
+          "android": {
+            "fonts": [
+              {
+                "fontFamily": "Inter",
+                "fontDefinitions": [
+                  { "path": "./assets/fonts/inter/Inter-Regular.ttf", "weight": 400 },
+                  { "path": "./assets/fonts/inter/Inter-Italic.ttf", "weight": 400, "style": "italic" },
+                  { "path": "./assets/fonts/inter/Inter-Medium.ttf", "weight": 500 },
+                  { "path": "./assets/fonts/inter/Inter-SemiBold.ttf", "weight": 600 },
+                  { "path": "./assets/fonts/inter/Inter-Bold.ttf", "weight": 700 },
+                  { "path": "./assets/fonts/inter/Inter-BoldItalic.ttf", "weight": 700, "style": "italic" },
+                  { "path": "./assets/fonts/inter/Inter-ExtraBold.ttf", "weight": 800 }
+                ]
+              },
+              "katex/dist/fonts/KaTeX_AMS-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Caligraphic-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Fraktur-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Main-Bold.ttf",
+              "katex/dist/fonts/KaTeX_Main-Italic.ttf",
+              "katex/dist/fonts/KaTeX_Main-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Math-BoldItalic.ttf",
+              "katex/dist/fonts/KaTeX_Math-Italic.ttf",
+              "katex/dist/fonts/KaTeX_SansSerif-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Size1-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Size2-Regular.ttf",
+              "katex/dist/fonts/KaTeX_Typewriter-Regular.ttf"
+            ]
+          }
+        }
+      ],
       "expo-image",
       [
         "expo-speech-recognition",
         {
           "microphonePermission": "Allow GoAhead to use the microphone to dictate messages.",
           "speechRecognitionPermission": "Allow GoAhead to turn your speech into message text."
+        }
+      ],
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Allow GoAhead to use your camera to scan QR codes.",
+          "microphonePermission": "Allow GoAhead to use the microphone to dictate messages."
         }
       ],
       [
@@ -100,7 +239,17 @@
           "enablePushNotifications": true,
           "frequentUpdates": true
         }
-      ]
+      ],
+      [
+        "./plugins/with-notification-service",
+        {
+          "targetName": "OpenBotNotificationService",
+          "bundleIdentifier": "com.multicodegenius.goahead.mobile.NotificationService",
+          "groupIdentifier": "group.run.openbot.mobile"
+        }
+      ],
+      "./plugins/with-shortcuts",
+      "./plugins/with-xcode-warning-fixes"
     ],
     "experiments": {
       "typedRoutes": true,

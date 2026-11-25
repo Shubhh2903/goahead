@@ -1,11 +1,6 @@
 import type { ConversationMessage, QueueDelivery } from "@openbot/contracts/ipc";
-
-/**
- * The rows of the waiting block: which teammates this agent asked, and where each answer is.
- * It follows desktop `agentAwaitingReplies`. An outgoing exchange names each delivery and its
- * state, and an answer is a queued delivery from the teammate that was asked, linked to the
- * question by `replyToMessageId`.
- */
+import { markdownPreviewText } from "@openbot/contracts/markdown-preview-text";
+import type { MobileAgentWait } from "@/features/workspace/model/agent-activity";
 
 export type AwaitingReplyState = "asked" | "working" | "replied" | "failed";
 
@@ -13,16 +8,18 @@ export interface AwaitingReply {
   id: string;
   agentId: string;
   state: AwaitingReplyState;
-  /** The answer, for a teammate that replied. */
   preview: string | null;
+  deliveryId: string | null;
+  wait: MobileAgentWait | null;
 }
 
 export function awaitingReplies(
   messages: readonly ConversationMessage[],
   replies: readonly QueueDelivery[],
+  waits: Readonly<Record<string, MobileAgentWait>> = {},
 ): AwaitingReply[] {
-  // A failed question stays until the person writes again: then they have seen it.
   const lastUserIndex = messages.findLastIndex((message) => message.author === "user");
+  const lastRequestIndex = lastRequestIndexByRecipient(messages);
   const rows: AwaitingReply[] = [];
   const shown = new Set<string>();
   messages.forEach((message, index) => {
@@ -38,23 +35,47 @@ export function awaitingReplies(
       );
       if (reply) {
         shown.add(reply.id);
-        rows.push({ id, agentId: delivery.recipientAgentId, state: "replied", preview: replyPreview(reply) });
+        rows.push({
+          id,
+          agentId: delivery.recipientAgentId,
+          state: "replied",
+          preview: replyPreview(reply),
+          deliveryId: reply.id,
+          wait: null,
+        });
         continue;
       }
       const state = deliveryState(delivery.status);
-      if (!state || (state === "failed" && index < lastUserIndex)) continue;
-      rows.push({ id, agentId: delivery.recipientAgentId, state, preview: null });
+      const superseded = index < lastUserIndex || index < (lastRequestIndex.get(delivery.recipientAgentId) ?? index);
+      if (!state || (state === "failed" && superseded)) continue;
+      const wait = state === "failed" ? null : (waits[delivery.recipientAgentId] ?? null);
+      rows.push({ id, agentId: delivery.recipientAgentId, state, preview: null, deliveryId: null, wait });
     }
   });
-  // An answer to a question on an earlier page, or to one sent from another conversation.
   for (const reply of replies) {
     if (shown.has(reply.id) || reply.sender.kind !== "agent") continue;
-    rows.push({ id: reply.id, agentId: reply.sender.agentId, state: "replied", preview: replyPreview(reply) });
+    rows.push({
+      id: reply.id,
+      agentId: reply.sender.agentId,
+      state: "replied",
+      preview: replyPreview(reply),
+      deliveryId: reply.id,
+      wait: null,
+    });
   }
-  return rows;
+  return [...rows.filter((row) => row.wait), ...rows.filter((row) => !row.wait)];
 }
 
-/** Null for a delivery that has landed: its answer is in the transcript, or it had none. */
+function lastRequestIndexByRecipient(messages: readonly ConversationMessage[]): Map<string, number> {
+  const last = new Map<string, number>();
+  messages.forEach((message, index) => {
+    const exchange = message.exchange;
+    if (exchange?.direction !== "outgoing" || exchange.expectsReply === false) return;
+    for (const delivery of exchange.deliveries) last.set(delivery.recipientAgentId, index);
+  });
+  return last;
+}
+
 function deliveryState(status: QueueDelivery["status"]): Exclude<AwaitingReplyState, "replied"> | null {
   if (status === "queued") return "asked";
   if (status === "starting" || status === "running") return "working";
@@ -62,12 +83,8 @@ function deliveryState(status: QueueDelivery["status"]): Exclude<AwaitingReplySt
   return null;
 }
 
-/**
- * The `Result:` part of a reply in the relay format (`Status:`, `Result:`, `Evidence:` lines, from
- * `delivery-content.ts`), or the whole reply in another form, or its file names.
- */
 function replyPreview(reply: QueueDelivery): string {
   const result = /^\s*Result:[ \t]*(.*?)(?=^\s*Evidence:|(?![\s\S]))/imsu.exec(reply.text)?.[1]?.trim();
-  const text = (result || reply.text).replace(/\s+/gu, " ").trim();
+  const text = markdownPreviewText(result || reply.text);
   return text || reply.attachments.map((file) => file.name).join(", ");
 }

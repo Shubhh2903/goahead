@@ -1,23 +1,40 @@
 import { AGENT_PROVIDERS, AGENT_REASONING_EFFORTS, isAgentModel } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isBoolean, isNumber, isString } from "@openbot/contracts/runtime-values";
+import { isCauseCode } from "@openbot/telemetry";
 
 const result = ["succeeded", "failed", "cancelled"] as const;
 const count = (value: unknown) => isNumber(value) && Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000;
 const duration = (value: unknown) => isNumber(value) && Number.isFinite(value) && value >= 0 && value <= 86_400_000;
 const agent = { provider: AGENT_PROVIDERS, model: isAgentModel, reasoning_effort: AGENT_REASONING_EFFORTS };
 const outcome = {
+  cause_code: isCauseCode,
   result,
   duration_ms: duration,
   failure_code: ["operation_failed", "connection_failed", "permission_denied", "pairing_failed", "load_failed"],
 };
+const seconds = (value: unknown) => isNumber(value) && Number.isFinite(value) && value >= 0 && value <= 86_400;
+const candidate = "(?:host|srflx|prflx|relay|unknown)/(?:udp|tcp|tls|unknown)";
+const ICE_ROUTE = new RegExp(`^${candidate} -> ${candidate}$`, "u");
+const iceRoute = (value: unknown): value is string => isString(value) && ICE_ROUTE.test(value);
+const voice = { server_kind: ["remote"], transcription: ["local", "cloud"] } as const;
 
 export const MOBILE_EVENTS = {
   mobile_app_opened: { kind: ["cold_start", "foreground"], signed_in: isBoolean },
-  mobile_pairing_action: { action: ["scanner_opened", "camera_permission", "redeem", "cancel"], ...outcome },
+  mobile_pairing_action: {
+    action: ["scanner_opened", "camera_permission", "redeem", "cancel"],
+    ...outcome,
+    entry_point: ["qr", "link"],
+  },
   mobile_connection_action: {
     action: ["connect", "reconnect", "lost"],
     ...outcome,
-    stage: ["preferences", "connection", "compatibility", "agents", "reads", "conversations"],
+    stage: ["preferences", "connection", "compatibility", "agents", "reads"],
+    signal_socket_ms: duration,
+    signal_ms: duration,
+    channels_ms: duration,
+    auth_ms: duration,
+    route: iceRoute,
+    vpn: ["off", "on", "proxy", "unknown"],
   },
   conversation_opened: { ...outcome, ...agent },
   message_send: {
@@ -28,7 +45,7 @@ export const MOBILE_EVENTS = {
     attachment_count: count,
     is_reply: isBoolean,
   },
-  agent_input_action: { ...outcome, kind: ["prompt"], decision: ["answered"] },
+  agent_input_action: { ...outcome, kind: ["prompt", "approval"], decision: ["answered", "accept", "decline"] },
   attachment_action: {
     ...outcome,
     action: ["select", "upload", "remove"],
@@ -39,14 +56,47 @@ export const MOBILE_EVENTS = {
   routine_action: {
     ...outcome,
     action: ["create", "update", "delete", "test"],
-    trigger_type: ["hourly", "daily", "weekdays", "weekly", "monthly", "interval", "advanced", "custom"],
+    trigger_type: ["hourly", "daily", "weekdays", "weekly", "monthly", "interval", "advanced", "custom", "once"],
   },
   memory_action: { ...outcome, action: ["create", "update", "delete"] },
   search_action: { ...outcome, scope: ["global"], result_count: count },
-  team_action: { ...outcome, action: ["server_selected", "server_joined", "server_left"], server_kind: ["remote"] },
+  team_action: {
+    ...outcome,
+    action: ["server_selected", "server_joined", "server_left", "server_removed"],
+    server_kind: ["remote"],
+  },
   conversation_action: { ...outcome, action: ["pin", "unpin", "hide", "unhide"] },
-  usage_viewed: {},
+  usage_viewed: { scope: ["agent", "server"] },
   account_sign_out: outcome,
+  account_sign_in_started: { ...outcome, result: ["code_sent", "company_sign_in", "failed"], method: ["email"] },
+  account_sign_in_completed: { ...outcome, method: ["email", "company"] },
+  hosted_server_plans_action: {
+    action: ["viewed", "setup_opened", "closed"],
+    entry_point: ["drawer", "onboarding"],
+  },
+  onboarding_step: {
+    step: ["hello", "server", "agent", "look", "name", "role", "task", "ready"],
+    action: ["viewed", "next", "back", "skipped"],
+  },
+  onboarding_completed: { skipped: isBoolean },
+  notification_settings_action: {
+    action: [
+      "enabled",
+      "disabled",
+      "preview_toggled",
+      "thread_replies_toggled",
+      "permission_prompted",
+      "live_activities_toggled",
+    ],
+    permission: ["granted", "denied", "undetermined"],
+    enabled: isBoolean,
+  },
+  live_activity_action: { action: ["started", "ended"] },
+  voice_conversation_action: { ...outcome, ...voice, action: ["start", "end"], turn_count: count },
+  voice_turn: { ...outcome, ...voice, audio_duration_seconds: seconds },
+  agent_template_action: { ...outcome, action: ["installed"], entry_point: ["deep_link"] },
+  marketplace_action: { ...outcome, entity: ["agent", "skill", "plugin"], action: ["install", "update"] },
+  analytics_preference_changed: { enabled: isBoolean },
 } as const;
 
 type Rule = readonly string[] | ((value: unknown) => boolean);

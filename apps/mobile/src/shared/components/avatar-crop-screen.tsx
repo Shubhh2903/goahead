@@ -6,7 +6,7 @@ import { StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { cancelAnimation, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { clamp, focalTranslation, rubberBandClamp } from "@/features/chat/model/image-viewer-geometry";
+import { focalTranslation, rubberBandClamp } from "@/features/chat/model/image-viewer-geometry";
 import { SheetSaveAction } from "@/shared/components/sheet-save-action";
 import {
   type AvatarCrop,
@@ -16,12 +16,12 @@ import {
 } from "@/shared/lib/avatar-crop-request";
 import { isIOS } from "@/shared/lib/platform";
 import { useText } from "@/shared/lib/text";
+import { clamp } from "@/shared/lib/worklet-math";
 
 const MARGIN = 16;
 const MAX_SCALE = 5;
 const SETTLE_SPRING = { damping: 34, stiffness: 320, mass: 1 } as const;
 
-/** Move and scale a picked photo inside a circle, as the avatar will show it. */
 export function AvatarCropScreen() {
   const { t } = useText();
   const [request] = useState(currentAvatarCropRequest);
@@ -31,7 +31,6 @@ export function AvatarCropScreen() {
   const [frame, setFrame] = useState<{ width: number; height: number } | null>(null);
   useEffect(() => {
     if (!request) router.back();
-    // Going back without a choice cancels the photo.
     return () => {
       if (request) finishAvatarCrop(request, null);
     };
@@ -62,6 +61,7 @@ export function AvatarCropScreen() {
         <CropArea
           source={request.source}
           side={side}
+          cornerRadius={side * request.cornerRatio}
           centerX={area.width / 2}
           centerY={top + area.height / 2}
           extent={area.width + area.height + top}
@@ -75,6 +75,7 @@ export function AvatarCropScreen() {
 function CropArea({
   source,
   side,
+  cornerRadius,
   centerX,
   centerY,
   extent,
@@ -82,14 +83,14 @@ function CropArea({
 }: {
   source: AvatarCropSource;
   side: number;
+  cornerRadius: number;
   centerX: number;
   centerY: number;
-  /** Wide enough for the dimmed ring around the circle to reach every corner of the screen. */
   extent: number;
   readCrop: { current: (() => AvatarCrop) | null };
 }) {
+  const borderCurve = cornerRadius * 2 < side ? "continuous" : "circular";
   const { t } = useText();
-  // At scale 1 the photo just covers the circle's square.
   const base = side / Math.max(Math.min(source.width, source.height), 1);
   const shown = { width: source.width * base, height: source.height * base };
   const scale = useSharedValue(1);
@@ -137,7 +138,6 @@ function CropArea({
     cancelAnimation(ty);
   }
 
-  // Two fingers scale about the point between them and move the photo with it.
   const pinch = Gesture.Pinch()
     .onStart((event) => {
       stop();
@@ -209,7 +209,6 @@ function CropArea({
             style={StyleSheet.absoluteFill}
           />
         </Animated.View>
-        {/* A thick round border leaves a clear circle and dims the rest of the photo. */}
         <View
           pointerEvents="none"
           className="border-black/60"
@@ -219,7 +218,8 @@ function CropArea({
             top: centerY - side / 2 - extent,
             width: side + extent * 2,
             height: side + extent * 2,
-            borderRadius: side / 2 + extent,
+            borderCurve,
+            borderRadius: cornerRadius + extent,
             borderWidth: extent,
           }}
         />
@@ -232,7 +232,8 @@ function CropArea({
             top: centerY - side / 2,
             width: side,
             height: side,
-            borderRadius: side / 2,
+            borderCurve,
+            borderRadius: cornerRadius,
             borderWidth: StyleSheet.hairlineWidth,
           }}
         />

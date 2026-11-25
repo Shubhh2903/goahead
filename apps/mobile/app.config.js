@@ -1,13 +1,14 @@
 const { existsSync } = require("node:fs");
+const { resolve } = require("node:path");
 
-/**
- * `app.json` holds the configuration. This adds the Firebase file of the Android app when it exists:
- * a local build reads `./google-services.json`, and an EAS build the file variable
- * `GOOGLE_SERVICES_JSON`. Without it, the app builds without FCM, and only the running app updates
- * the Android live update notification. JavaScript like `metro.config.js`: the app typecheck has no
- * Node types.
- */
-module.exports = ({ config }) => {
-  const file = process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json";
-  return existsSync(file) ? { ...config, android: { ...config.android, googleServicesFile: file } } : config;
-};
+// Android notifications come through Firebase Cloud Messaging, which needs the Firebase file of the
+// app. The file is optional, so the app builds before the Firebase project exists, and such a build
+// gets no notifications on Android. The file has public identifiers only; the account service has the
+// key that sends. An EAS build gets the file through the file variable `GOOGLE_SERVICES_JSON`.
+const GOOGLE_SERVICES_FILE = process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json";
+
+/** @param {{ config: import('expo/config').ExpoConfig }} context */
+module.exports = ({ config }) =>
+  existsSync(resolve(__dirname, GOOGLE_SERVICES_FILE))
+    ? { ...config, android: { ...config.android, googleServicesFile: GOOGLE_SERVICES_FILE } }
+    : config;

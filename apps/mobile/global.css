@@ -46,17 +46,29 @@
   --tracking-openbot-wide: var(--openbot-tracking-wide);
 }
 
+@theme static {
+  --color-accent-hover: color-mix(in oklab, var(--openbot-action) 90%, var(--openbot-action-foreground) 10%);
+}
+
+@layer components {
+  .button__root--variant-primary {
+    background-color: var(--color-action);
+  }
+
+  .button__label--variant-primary {
+    color: var(--color-action-foreground);
+  }
+}
+
 @layer theme {
   :root {
     color-scheme: light dark;
 
-    /* uniwind reads theme values only from @variant blocks, so a plain :root alias
-     * loses to HeroUI's own near-black dark --background. */
     @variant dark {
       --background: var(--openbot-bg-native-canvas);
+      --overlay: var(--openbot-bg-surface-raised);
     }
 
-    /* HeroUI consumes these aliases; OpenBot tokens remain the source of truth. */
     --foreground: var(--openbot-text-primary);
     --surface: var(--openbot-bg-surface);
     --surface-foreground: var(--openbot-text-primary);
@@ -64,7 +76,6 @@
     --surface-secondary-foreground: var(--openbot-text-primary);
     --surface-tertiary: var(--openbot-bg-surface-raised);
     --surface-tertiary-foreground: var(--openbot-text-primary);
-    --overlay: var(--openbot-bg-surface-raised);
     --overlay-foreground: var(--openbot-text-primary);
     --backdrop: var(--openbot-bg-overlay);
     --muted: var(--openbot-text-muted);
@@ -87,7 +98,6 @@
     --field-placeholder: var(--openbot-text-muted);
     --field-border: var(--openbot-border-strong);
 
-    /* A 4 pt base produces the 8 / 12 / 16 px radius family used on desktop. */
     --radius: 0.25rem;
     --field-radius: 0.75rem;
     --surface-shadow: var(--openbot-shadow-card);
@@ -98,14 +108,22 @@
 
 @media ios {
   :root {
-    --font-sans: system-ui;
+    --font-sans: Inter;
+    --font-normal: Inter;
+    --font-medium: Inter;
+    --font-semibold: Inter;
+    --font-bold: Inter;
     --font-mono: ui-monospace;
   }
 }
 
 @media android {
   :root {
-    --font-sans: sans-serif;
+    --font-sans: Inter;
+    --font-normal: Inter;
+    --font-medium: Inter;
+    --font-semibold: Inter;
+    --font-bold: Inter;
     --font-mono: monospace;
   }
 }

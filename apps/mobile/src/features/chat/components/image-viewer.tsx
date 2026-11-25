@@ -1,32 +1,41 @@
+import type { AttachmentSummary } from "@openbot/contracts/ipc";
 import { BlurView } from "expo-blur";
 import { isLiquidGlassAvailable } from "expo-glass-effect";
 import { Image } from "expo-image";
+import { Typography } from "heroui-native";
 import { useThemeColor } from "heroui-native/hooks";
-import { Check, Download, Share, X } from "lucide-react-native";
-import { useEffect, useState } from "react";
+import Check from "lucide-react-native/icons/check";
+import Copy from "lucide-react-native/icons/copy";
+import Download from "lucide-react-native/icons/download";
+import Share from "lucide-react-native/icons/share";
+import X from "lucide-react-native/icons/x";
+import { useCallback, useEffect, useState } from "react";
 import { AccessibilityInfo, Modal, Platform, StyleSheet, useWindowDimensions, View } from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import Animated, {
+  type AnimatedRef,
   cancelAnimation,
+  measure,
+  type SharedValue,
   useAnimatedProps,
   useAnimatedReaction,
   useAnimatedStyle,
   useDerivedValue,
-  useReducedMotion,
   useSharedValue,
   withDecay,
   withDelay,
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { scheduleOnRN } from "react-native-worklets";
+import { initialWindowMetrics, useSafeAreaInsets } from "react-native-safe-area-context";
+import { scheduleOnRN, scheduleOnUI } from "react-native-worklets";
 import { useUniwind } from "uniwind";
 import { haptics } from "@/shared/lib/haptics";
+import { useReducedMotion } from "@/shared/lib/motion";
 import { useText } from "@/shared/lib/text";
+import { clamp } from "@/shared/lib/worklet-math";
 import type { ImageDimensions } from "../model/image-dimensions";
 import {
-  clamp,
   coverSize,
   dragFade,
   dragScale,
@@ -35,27 +44,36 @@ import {
   hitsRect,
   lerp,
   lerpRect,
+  pageTurn,
   panBound,
   type Rect,
   rubberBandClamp,
   shouldDismiss,
 } from "../model/image-viewer-geometry";
-import { ChatGlassIconButton } from "./chat-glass-icon-button";
+import { knownImageDimensions, useAttachmentFile } from "./attachment-preview";
+import { ChatGlassIconButton, ChatGlassLabel } from "./chat-glass-icon-button";
 
-// Out of the chat: just short of critically damped, so the picture arrives rather than stops.
 const OPEN_SPRING = { damping: 30, stiffness: 260, mass: 1 } as const;
-// Back into the chat: clamped, because a frame that overshoots its thumbnail shrinks past it
-// and grows back at the one moment it should be settling.
 const CLOSE_SPRING = { damping: 32, stiffness: 300, mass: 1, overshootClamping: true } as const;
-// Zoom settling and a drag that snaps back: firm, so it lands without drifting.
 const SETTLE_SPRING = { damping: 34, stiffness: 320, mass: 1 } as const;
-// The open picture keeps this margin to the screen and the safe area, so the blur shows on every
-// side and the photo reads as held up over the chat, not as a new screen.
+const PAGE_SPRING = { damping: 36, stiffness: 300, mass: 1, overshootClamping: true } as const;
 const INSET = 16;
+const HEADER_OFFSET = 8;
+const HEADER_HEIGHT = 48;
+const CHROME_GAP = 12;
+const THUMB_SIZE = 40;
+const THUMB_GAP = 6;
+const THUMB_STEP = THUMB_SIZE + THUMB_GAP;
+const THUMB_RADIUS = 8;
+const STRIP_OFFSET = 8;
+const THUMB_WINDOW = 8;
+const PAGE_GAP = 24;
+const PAGE_WINDOW = 2;
 const CORNER_RADIUS = 16;
 const BLUR_INTENSITY = 50;
 const MAX_SCALE = 4;
 const DOUBLE_TAP_SCALE = 2.5;
+const UNKNOWN_SIZE = { width: 3, height: 4 } as const;
 
 const PHASE_OPENING = 0;
 const PHASE_OPEN = 1;
@@ -63,10 +81,11 @@ const PHASE_CLOSING = 2;
 const MODE_NONE = 0;
 const MODE_PAN = 1;
 const MODE_DISMISS = 2;
+const MODE_PAGE = 3;
+const MODE_UNDECIDED = 4;
 
 const AnimatedBlurView = Animated.createAnimatedComponent(BlurView);
 
-// The device's answer outlives one viewer, so only the first viewer of a launch waits for it.
 let knownReduceTransparency: boolean | null = null;
 function useReduceTransparency() {
   const [enabled, setEnabled] = useState(knownReduceTransparency);
@@ -86,39 +105,47 @@ function useReduceTransparency() {
   return enabled;
 }
 
-/**
- * A photo from the chat, opened over a blur of the chat. The picture on screen is the one that
- * was tapped: its frame grows from the thumbnail's rectangle and corners to the fitted photo,
- * and the crop opens out to the whole image. Pinch or double-tap to zoom; drag it up or down, or
- * tap beside it, to put it back where it came from.
- */
+export interface ImageViewerPage {
+  key: string;
+  attachment: AttachmentSummary;
+  origin: AnimatedRef | null;
+  originRadius: number;
+}
+
+interface ViewerMotion {
+  t: SharedValue<number>;
+  origin: SharedValue<Rect | null>;
+  index: SharedValue<number>;
+  pageOffset: SharedValue<number>;
+  scale: SharedValue<number>;
+  shrink: SharedValue<number>;
+  tx: SharedValue<number>;
+  ty: SharedValue<number>;
+  dragX: SharedValue<number>;
+  dragY: SharedValue<number>;
+}
+
 export function ImageViewer({
-  uri,
-  name,
-  dimensions,
-  measureOrigin,
-  originRadius,
+  serverId,
+  pages,
+  initialIndex,
+  hiddenSource,
   busy,
   onShare,
+  onCopy,
   onSave,
-  onShown,
+  onIndexChange,
   onDismissed,
 }: {
-  uri: string;
-  name: string;
-  dimensions: ImageDimensions;
-  /** Reports where the thumbnail is now, in window coordinates, or null when it cannot. */
-  measureOrigin: (report: (rect: Rect | null) => void) => void;
-  originRadius: number;
+  serverId: string;
+  pages: readonly ImageViewerPage[];
+  initialIndex: number;
+  hiddenSource: SharedValue<string | null>;
   busy: boolean;
   onShare: () => void;
-  onSave: () => Promise<boolean>;
-  /**
-   * Called once the viewer is on screen. The chat hides its own copy only then: hiding it on the
-   * tap would leave an empty frame for the frame or two the modal takes to present.
-   */
-  onShown: () => void;
-  /** Called once the picture is back in its place, so the chat can show its own copy again. */
+  onCopy?: (() => Promise<boolean>) | undefined;
+  onSave?: (() => Promise<boolean>) | undefined;
+  onIndexChange?: (index: number) => void;
   onDismissed: () => void;
 }) {
   const { width: W, height: H } = useWindowDimensions();
@@ -128,18 +155,24 @@ export function ImageViewer({
   const { theme } = useUniwind();
   const [foreground, fallbackBackground] = useThemeColor(["foreground", "default"]);
   const text = useText();
-  // The same glass as the chat header's buttons. Without Liquid Glass, or with Reduce
-  // Transparency on, they fall back to the theme's solid control colour.
   const liquidGlassAvailable = isLiquidGlassAvailable() && reduceTransparency === false;
-  const vertical = Math.max(insets.top, insets.bottom) + INSET;
+  const count = pages.length;
+  const vertical =
+    Math.max(insets.top + HEADER_OFFSET + HEADER_HEIGHT, insets.bottom + (count > 1 ? STRIP_OFFSET + THUMB_SIZE : 0)) +
+    CHROME_GAP;
   const box = { x: INSET, y: vertical, width: Math.max(W - INSET * 2, 1), height: Math.max(H - vertical * 2, 1) };
-  const fit = fitWithin(dimensions, box);
+  const step = W + PAGE_GAP;
+  const [sizes, setSizes] = useState<Readonly<Record<string, ImageDimensions>>>({});
+  const sizeOf = (page: ImageViewerPage) => sizes[page.key] ?? knownImageDimensions(page.key) ?? UNKNOWN_SIZE;
+  const fits = pages.map((page) => fitWithin(sizeOf(page), box));
+  const keys = pages.map((page) => page.key);
+  const origins = pages.map((page) => page.origin);
 
-  // The flight: 0 in the chat, 1 on the screen.
   const t = useSharedValue(0);
   const phase = useSharedValue(PHASE_OPENING);
   const origin = useSharedValue<Rect | null>(null);
-  // Zoom, measured from the screen's centre.
+  const index = useSharedValue(initialIndex);
+  const pageOffset = useSharedValue(0);
   const scale = useSharedValue(1);
   const tx = useSharedValue(0);
   const ty = useSharedValue(0);
@@ -151,7 +184,6 @@ export function ImageViewer({
   const lastFocalX = useSharedValue(0);
   const lastFocalY = useSharedValue(0);
   const pinching = useSharedValue(false);
-  // Dragging the picture away.
   const dragX = useSharedValue(0);
   const dragY = useSharedValue(0);
   const shrink = useSharedValue(1);
@@ -159,27 +191,62 @@ export function ImageViewer({
   const gestureMode = useSharedValue(MODE_NONE);
   const chrome = useSharedValue(0);
   const chromeOn = useSharedValue(true);
-  const [saved, setSaved] = useState(false);
+  const scrub = useSharedValue(0);
+  const scrubStart = useSharedValue(0);
+  const scrubbing = useSharedValue(false);
+  const stripPosition = useDerivedValue(() => (scrubbing.get() ? scrub.get() : index.get() - pageOffset.get() / step));
+  const [shown, setShown] = useState(initialIndex);
+  const [savedKeys, setSavedKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const backdrop = useDerivedValue(() => clamp(t.get(), 0, 1) * fade.get());
+  const motion: ViewerMotion = { t, origin, index, pageOffset, scale, shrink, tx, ty, dragX, dragY };
+  const current = pages[shown] ?? pages[0];
+  const saved = current ? savedKeys.has(current.key) : false;
+  const copied = current !== undefined && copiedKey === current.key;
+  const name = current?.attachment.name ?? "";
+  const position = text.t("mobile.chat.imageViewer.position", { current: shown + 1, total: count });
 
-  function setOrigin(rect: Rect | null) {
-    // A thumbnail that has scrolled away gives nothing to fly to, so the picture fades instead.
-    const onScreen = rect && rect.y + rect.height > 0 && rect.y < H && rect.x + rect.width > 0 && rect.x < W;
-    origin.set(onScreen ? rect : null);
+  const reportSize = useCallback((key: string, size: ImageDimensions) => {
+    setSizes((known) => {
+      const previous = known[key];
+      return previous?.width === size.width && previous.height === size.height ? known : { ...known, [key]: size };
+    });
+  }, []);
+
+  useEffect(() => () => hiddenSource.set(null), [hiddenSource]);
+
+  function currentFit() {
+    "worklet";
+    return fits[index.get()] ?? box;
   }
 
-  /** Starts once the modal is on screen, from wherever the thumbnail is at that moment. */
+  function measureOrigin() {
+    "worklet";
+    const ref = origins[index.get()];
+    const measured = ref ? measure(ref) : null;
+    if (
+      !measured ||
+      measured.pageY + measured.height <= 0 ||
+      measured.pageY >= H ||
+      measured.pageX + measured.width <= 0 ||
+      measured.pageX >= W
+    ) {
+      origin.set(null);
+      return;
+    }
+    origin.set({ x: measured.pageX, y: measured.pageY, width: measured.width, height: measured.height });
+  }
+
   function open() {
-    measureOrigin((rect) => {
-      setOrigin(rect);
-      onShown();
-      const settled = (finished?: boolean) => {
-        "worklet";
-        if (finished) phase.set(PHASE_OPEN);
-      };
-      t.set(reduced ? withTiming(1, { duration: 200 }, settled) : withSpring(1, OPEN_SPRING, settled));
-      chrome.set(withDelay(120, withTiming(1, { duration: 200 })));
-    });
+    "worklet";
+    measureOrigin();
+    hiddenSource.set(keys[index.get()] ?? null);
+    const settled = (finished?: boolean) => {
+      "worklet";
+      if (finished) phase.set(PHASE_OPEN);
+    };
+    t.set(reduced ? withTiming(1, { duration: 200 }, settled) : withSpring(1, OPEN_SPRING, settled));
+    chrome.set(withDelay(120, withTiming(1, { duration: 200 })));
   }
 
   function startClose(velocityX: number, velocityY: number) {
@@ -187,16 +254,21 @@ export function ImageViewer({
     if (phase.get() === PHASE_CLOSING) return;
     phase.set(PHASE_CLOSING);
     gestureMode.set(MODE_NONE);
+    measureOrigin();
     chrome.set(withTiming(0, { duration: 120 }));
     const done = (finished?: boolean) => {
       "worklet";
-      if (finished) scheduleOnRN(onDismissed);
+      if (!finished) return;
+      hiddenSource.set(null);
+      scheduleOnRN(onDismissed);
     };
     if (reduced) {
+      pageOffset.set(0);
       t.set(withTiming(0, { duration: 180 }, done));
       return;
     }
     t.set(withSpring(0, CLOSE_SPRING, done));
+    pageOffset.set(withSpring(0, CLOSE_SPRING));
     dragX.set(withSpring(0, { ...CLOSE_SPRING, velocity: velocityX }));
     dragY.set(withSpring(0, { ...CLOSE_SPRING, velocity: velocityY }));
     shrink.set(withSpring(1, CLOSE_SPRING));
@@ -205,16 +277,40 @@ export function ImageViewer({
     ty.set(withSpring(0, CLOSE_SPRING));
   }
 
-  /** A close from a button or the back action. The chat may have moved, so measure again. */
   function requestClose() {
-    measureOrigin((rect) => {
-      setOrigin(rect);
-      startClose(0, 0);
-    });
+    scheduleOnUI(startClose, 0, 0);
+  }
+
+  function pageChanged(next: number) {
+    setShown(next);
+    onIndexChange?.(next);
+  }
+
+  function turnTo(target: number, velocity: number) {
+    "worklet";
+    const from = index.get();
+    const next = clamp(target, 0, count - 1);
+    if (next !== from) {
+      pageOffset.set(pageOffset.get() + (next - from) * step);
+      index.set(next);
+      hiddenSource.set(keys[next] ?? null);
+      scale.set(1);
+      tx.set(0);
+      ty.set(0);
+      scheduleOnRN(pageChanged, next);
+    }
+    pageOffset.set(reduced ? withTiming(0, { duration: 160 }) : withSpring(0, { ...PAGE_SPRING, velocity }));
+  }
+
+  function turnBy(delta: number) {
+    "worklet";
+    if (phase.get() !== PHASE_OPEN) return;
+    turnTo(index.get() + delta, 0);
   }
 
   function settleZoom() {
     "worklet";
+    const fit = currentFit();
     const target = clamp(scale.get(), 1, MAX_SCALE);
     if (target <= 1.01) {
       scale.set(withSpring(1, SETTLE_SPRING));
@@ -242,12 +338,9 @@ export function ImageViewer({
     void haptics.selection();
   }
 
-  // Which gesture a touch is gets decided when it starts: two fingers zoom, one finger on a
-  // zoomed photo pans it, and any other drag takes the photo away. Deciding once keeps a drag
-  // from changing its mind halfway, which is what makes a viewer feel loose.
   const pinch = Gesture.Pinch()
     .onStart((event) => {
-      if (phase.get() !== PHASE_OPEN) return;
+      if (phase.get() !== PHASE_OPEN || gestureMode.get() === MODE_PAGE) return;
       pinching.set(true);
       cancelAnimation(scale);
       cancelAnimation(tx);
@@ -274,10 +367,27 @@ export function ImageViewer({
       settleZoom();
     });
 
+  function decideDrag(translationX: number, translationY: number) {
+    "worklet";
+    if (!(Math.abs(translationX) + Math.abs(translationY) > 0)) {
+      gestureMode.set(MODE_UNDECIDED);
+      return;
+    }
+    if (count > 1 && Math.abs(translationX) > Math.abs(translationY)) {
+      gestureMode.set(MODE_PAGE);
+      cancelAnimation(pageOffset);
+      startX.set(pageOffset.get());
+      return;
+    }
+    gestureMode.set(MODE_DISMISS);
+    chrome.set(withTiming(0, { duration: 120 }));
+    scheduleOnRN(tick);
+  }
+
   const pan = Gesture.Pan()
     .maxPointers(1)
     .minDistance(8)
-    .onStart(() => {
+    .onStart((event) => {
       if (phase.get() !== PHASE_OPEN || pinching.get()) {
         gestureMode.set(MODE_NONE);
         return;
@@ -290,17 +400,21 @@ export function ImageViewer({
         startY.set(ty.get());
         return;
       }
-      gestureMode.set(MODE_DISMISS);
-      chrome.set(withTiming(0, { duration: 120 }));
-      scheduleOnRN(tick);
+      decideDrag(event.translationX, event.translationY);
     })
     .onUpdate((event) => {
+      if (gestureMode.get() === MODE_UNDECIDED) decideDrag(event.translationX, event.translationY);
       const mode = gestureMode.get();
       if (mode === MODE_PAN) {
+        const fit = currentFit();
         const boundX = panBound(fit.width, scale.get(), W);
         const boundY = panBound(fit.height, scale.get(), H);
         tx.set(rubberBandClamp(startX.get() + event.translationX, -boundX, boundX, W));
         ty.set(rubberBandClamp(startY.get() + event.translationY, -boundY, boundY, H));
+      } else if (mode === MODE_PAGE) {
+        const lower = index.get() < count - 1 ? -step : 0;
+        const upper = index.get() > 0 ? step : 0;
+        pageOffset.set(rubberBandClamp(startX.get() + event.translationX, lower, upper, W));
       } else if (mode === MODE_DISMISS) {
         dragX.set(event.translationX);
         dragY.set(event.translationY);
@@ -312,6 +426,7 @@ export function ImageViewer({
       const mode = gestureMode.get();
       gestureMode.set(MODE_NONE);
       if (mode === MODE_PAN) {
+        const fit = currentFit();
         const boundX = panBound(fit.width, scale.get(), W);
         const boundY = panBound(fit.height, scale.get(), H);
         if (boundX === 0 || Math.abs(tx.get()) > boundX)
@@ -320,6 +435,9 @@ export function ImageViewer({
         if (boundY === 0 || Math.abs(ty.get()) > boundY)
           ty.set(withSpring(clamp(ty.get(), -boundY, boundY), SETTLE_SPRING));
         else ty.set(withDecay({ velocity: event.velocityY, clamp: [-boundY, boundY] }));
+      } else if (mode === MODE_PAGE) {
+        const direction = success ? pageTurn(pageOffset.get(), event.velocityX, step) : 0;
+        turnTo(index.get() + direction, event.velocityX);
       } else if (mode === MODE_DISMISS) {
         if (success && shouldDismiss(event.translationY, event.velocityY)) {
           startClose(event.velocityX, event.velocityY);
@@ -346,6 +464,7 @@ export function ImageViewer({
         chrome.set(withTiming(chromeOn.get() ? 1 : 0, { duration: 180 }));
         return;
       }
+      const fit = currentFit();
       const focalX = event.x - W / 2;
       const focalY = event.y - H / 2;
       const boundX = panBound(fit.width, DOUBLE_TAP_SCALE, W);
@@ -360,8 +479,7 @@ export function ImageViewer({
     .maxDistance(10)
     .onEnd((event, success) => {
       if (!success || phase.get() !== PHASE_OPEN) return;
-      // Beside the photo puts it back; on it, the controls come and go.
-      if (!hitsRect(event.x, event.y, fit, scale.get(), tx.get(), ty.get())) {
+      if (!hitsRect(event.x, event.y, currentFit(), scale.get(), tx.get(), ty.get())) {
         startClose(0, 0);
         return;
       }
@@ -371,43 +489,54 @@ export function ImageViewer({
 
   const gesture = Gesture.Race(Gesture.Simultaneous(pinch, pan), Gesture.Exclusive(doubleTap, singleTap));
 
-  const frameStyle = useAnimatedStyle(() => {
-    const progress = t.get();
-    const from = origin.get();
-    const flies = from !== null && !reduced;
-    const rect = flies ? lerpRect(from, fit, progress) : fit;
-    const settled = clamp(progress, 0, 1);
-    const visualScale = scale.get() * shrink.get() * (flies ? 1 : lerp(0.92, 1, settled));
-    // The corners are drawn inside the scale, so a zoomed photo keeps corners of the same size.
-    const corner = flies ? lerp(originRadius, CORNER_RADIUS, progress) : CORNER_RADIUS;
-    return {
-      left: rect.x,
-      top: rect.y,
-      width: Math.max(rect.width, 1),
-      height: Math.max(rect.height, 1),
-      borderRadius: Math.max(0, corner) / Math.max(visualScale, 0.01),
-      opacity: flies ? 1 : settled,
-      transform: [
-        { translateX: tx.get() + dragX.get() },
-        { translateY: ty.get() + dragY.get() },
-        { scale: visualScale },
-      ],
-    };
-  });
-  // The picture covers its frame at every step, so the chat's crop opens out to the whole photo.
-  const pictureStyle = useAnimatedStyle(() => {
-    const from = origin.get();
-    const rect = from !== null && !reduced ? lerpRect(from, fit, t.get()) : fit;
-    const cover = coverSize(dimensions, rect);
-    return {
-      left: (rect.width - cover.width) / 2,
-      top: (rect.height - cover.height) / 2,
-      width: cover.width,
-      height: cover.height,
-    };
-  });
-  // Glass stops rendering under a parent with zero opacity, so the buttons are never faded from
-  // here. The worklets still decide when they show; React hears only when that flips.
+  const stripPan = Gesture.Pan()
+    .maxPointers(1)
+    .minDistance(4)
+    .onStart(() => {
+      if (phase.get() !== PHASE_OPEN) return;
+      cancelAnimation(pageOffset);
+      scrubStart.set(index.get() - pageOffset.get() / step);
+      scrub.set(scrubStart.get());
+      scrubbing.set(true);
+    })
+    .onUpdate((event) => {
+      if (!scrubbing.get()) return;
+      const position = clamp(scrubStart.get() - event.translationX / THUMB_STEP, 0, count - 1);
+      scrub.set(position);
+      const nearest = Math.round(position);
+      if (nearest !== index.get()) {
+        index.set(nearest);
+        hiddenSource.set(keys[nearest] ?? null);
+        scale.set(1);
+        tx.set(0);
+        ty.set(0);
+        scheduleOnRN(pageChanged, nearest);
+        scheduleOnRN(tick);
+      }
+      pageOffset.set((nearest - position) * step);
+    })
+    .onFinalize(() => {
+      if (!scrubbing.get()) return;
+      scrubbing.set(false);
+      turnTo(index.get(), 0);
+    });
+
+  const stripTap = Gesture.Tap()
+    .maxDistance(10)
+    .onEnd((event, success) => {
+      if (!success || phase.get() !== PHASE_OPEN) return;
+      const target = Math.round(stripPosition.get() + (event.x - W / 2) / THUMB_STEP);
+      if (target < 0 || target >= count || target === index.get()) return;
+      scheduleOnRN(tick);
+      turnTo(target, 0);
+    });
+
+  const stripGesture = Gesture.Race(stripPan, stripTap);
+  const stripStyle = useAnimatedStyle(() => ({ opacity: chrome.get() * clamp(t.get(), 0, 1) * fade.get() }));
+  const stripRowStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: W / 2 - THUMB_SIZE / 2 - stripPosition.get() * THUMB_STEP }],
+  }));
+
   const [chromeVisible, setChromeVisible] = useState(false);
   useAnimatedReaction(
     () => chrome.get() > 0.5 && t.get() > 0.5,
@@ -418,8 +547,10 @@ export function ImageViewer({
   const blurProps = useAnimatedProps(() => ({ intensity: backdrop.get() * BLUR_INTENSITY }));
   const fadeStyle = useAnimatedStyle(() => ({ opacity: backdrop.get() }));
 
-  // Android draws no live blur here and Reduce Transparency asks for none, so both dim instead.
   const blur = Platform.OS === "ios" && reduceTransparency === false;
+  const mounted = pages
+    .map((page, slot) => ({ page, slot }))
+    .filter(({ slot }) => Math.abs(slot - shown) <= PAGE_WINDOW);
 
   return (
     <Modal
@@ -428,7 +559,7 @@ export function ImageViewer({
       animationType="none"
       statusBarTranslucent
       navigationBarTranslucent
-      onShow={open}
+      onShow={() => scheduleOnUI(open)}
       onRequestClose={requestClose}
     >
       <GestureHandlerRootView style={{ flex: 1 }}>
@@ -439,7 +570,6 @@ export function ImageViewer({
               animatedProps={blurProps}
               style={StyleSheet.absoluteFill}
             />
-            {/* A faint dim under the frost, which alone is nearly invisible over a dark chat. */}
             <Animated.View style={[StyleSheet.absoluteFill, fadeStyle]} className="bg-black/10" />
           </View>
         ) : (
@@ -450,48 +580,82 @@ export function ImageViewer({
         )}
         <GestureDetector gesture={gesture}>
           <View
-            style={StyleSheet.absoluteFill}
+            style={[StyleSheet.absoluteFill, { direction: "ltr" }]}
             collapsable={false}
             accessible
             accessibilityViewIsModal
-            accessibilityRole="image"
+            accessibilityRole={count > 1 ? "adjustable" : "image"}
             accessibilityLabel={name}
-            accessibilityActions={[{ name: "escape" }, { name: "magicTap" }]}
-            onAccessibilityAction={requestClose}
+            accessibilityValue={count > 1 ? { text: position } : undefined}
+            accessibilityActions={
+              count > 1
+                ? [{ name: "escape" }, { name: "magicTap" }, { name: "increment" }, { name: "decrement" }]
+                : [{ name: "escape" }, { name: "magicTap" }]
+            }
+            onAccessibilityAction={(event) => {
+              const action = event.nativeEvent.actionName;
+              if (action === "increment") scheduleOnUI(turnBy, 1);
+              else if (action === "decrement") scheduleOnUI(turnBy, -1);
+              else requestClose();
+            }}
             onAccessibilityEscape={requestClose}
           >
-            <Animated.View pointerEvents="none" style={[{ position: "absolute", overflow: "hidden" }, frameStyle]}>
-              <Animated.View style={[{ position: "absolute" }, pictureStyle]}>
-                <Image
-                  source={uri}
-                  contentFit="cover"
-                  transition={0}
-                  accessible={false}
-                  style={StyleSheet.absoluteFill}
-                />
-              </Animated.View>
-            </Animated.View>
+            {mounted.map(({ page, slot }) => (
+              <ViewerPicture
+                key={page.key}
+                serverId={serverId}
+                attachment={page.attachment}
+                dimensions={sizeOf(page)}
+                slot={slot}
+                fit={fits[slot] ?? box}
+                step={step}
+                reduced={reduced}
+                originRadius={page.originRadius}
+                motion={motion}
+                onSize={reportSize}
+              />
+            ))}
           </View>
         </GestureDetector>
-        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-          <View
-            pointerEvents="box-none"
-            className="absolute inset-x-4 flex-row items-center justify-between"
-            style={{ top: insets.top + 8 }}
-          >
-            {/* Close at the leading edge, where the platform puts the way out of a full-screen view. */}
-            <ChatGlassIconButton
-              accessibilityLabel={text.t("common.close")}
-              hidden={!chromeVisible}
-              fallbackBackground={fallbackBackground}
-              liquidGlassAvailable={liquidGlassAvailable}
-              onPress={() => {
-                void haptics.impact("soft");
-                requestClose();
-              }}
-            >
-              <X size={22} color={String(foreground)} />
-            </ChatGlassIconButton>
+        <View
+          pointerEvents="box-none"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              paddingTop: insets.top,
+              paddingLeft: Math.max(insets.left, initialWindowMetrics?.insets.left ?? 0),
+              paddingRight: Math.max(insets.right, initialWindowMetrics?.insets.right ?? 0),
+            },
+          ]}
+        >
+          <View pointerEvents="box-none" className="flex-row items-center justify-between px-4 pt-2">
+            <View className="flex-row items-center gap-2">
+              <ChatGlassIconButton
+                accessibilityLabel={text.t("common.close")}
+                hidden={!chromeVisible}
+                fallbackBackground={fallbackBackground}
+                liquidGlassAvailable={liquidGlassAvailable}
+                onPress={() => {
+                  void haptics.impact("soft");
+                  requestClose();
+                }}
+              >
+                <X size={22} color={String(foreground)} />
+              </ChatGlassIconButton>
+              {count > 1 ? (
+                <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                  <ChatGlassLabel
+                    hidden={!chromeVisible}
+                    fallbackBackground={fallbackBackground}
+                    liquidGlassAvailable={liquidGlassAvailable}
+                  >
+                    <Typography.Paragraph type="body-sm" className="font-semibold text-foreground">
+                      {position}
+                    </Typography.Paragraph>
+                  </ChatGlassLabel>
+                </View>
+              ) : null}
+            </View>
             <View className="flex-row gap-2">
               <ChatGlassIconButton
                 accessibilityLabel={text.t("mobile.chat.imageViewer.share", { name })}
@@ -506,32 +670,240 @@ export function ImageViewer({
               >
                 <Share size={20} color={String(foreground)} />
               </ChatGlassIconButton>
-              <ChatGlassIconButton
-                accessibilityLabel={
-                  saved ? text.t("mobile.chat.imageViewer.saved") : text.t("mobile.chat.imageViewer.save", { name })
-                }
-                hidden={!chromeVisible}
-                disabled={busy || saved}
-                fallbackBackground={fallbackBackground}
-                liquidGlassAvailable={liquidGlassAvailable}
-                onPress={() =>
-                  void onSave().then((done) => {
-                    if (!done) return;
-                    void haptics.notification("success");
-                    setSaved(true);
-                  })
-                }
-              >
-                {saved ? (
-                  <Check size={21} color={String(foreground)} />
-                ) : (
-                  <Download size={20} color={String(foreground)} />
-                )}
-              </ChatGlassIconButton>
+              {onCopy ? (
+                <ChatGlassIconButton
+                  accessibilityLabel={
+                    copied ? text.t("mobile.chat.imageViewer.copied") : text.t("mobile.chat.imageViewer.copy", { name })
+                  }
+                  hidden={!chromeVisible}
+                  disabled={busy}
+                  fallbackBackground={fallbackBackground}
+                  liquidGlassAvailable={liquidGlassAvailable}
+                  onPress={() => {
+                    const key = current?.key;
+                    void haptics.impact("soft");
+                    void onCopy().then((done) => {
+                      if (!done || key === undefined) return;
+                      void haptics.notification("success");
+                      setCopiedKey(key);
+                    });
+                  }}
+                >
+                  {copied ? (
+                    <Check size={21} color={String(foreground)} />
+                  ) : (
+                    <Copy size={20} color={String(foreground)} />
+                  )}
+                </ChatGlassIconButton>
+              ) : null}
+              {onSave ? (
+                <ChatGlassIconButton
+                  accessibilityLabel={
+                    saved ? text.t("mobile.chat.imageViewer.saved") : text.t("mobile.chat.imageViewer.save", { name })
+                  }
+                  hidden={!chromeVisible}
+                  disabled={busy || saved}
+                  fallbackBackground={fallbackBackground}
+                  liquidGlassAvailable={liquidGlassAvailable}
+                  onPress={() => {
+                    const key = current?.key;
+                    void onSave().then((done) => {
+                      if (!done || key === undefined) return;
+                      void haptics.notification("success");
+                      setSavedKeys((keys) => new Set(keys).add(key));
+                    });
+                  }}
+                >
+                  {saved ? (
+                    <Check size={21} color={String(foreground)} />
+                  ) : (
+                    <Download size={20} color={String(foreground)} />
+                  )}
+                </ChatGlassIconButton>
+              ) : null}
             </View>
           </View>
         </View>
+        {count > 1 ? (
+          <GestureDetector gesture={stripGesture}>
+            <Animated.View
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              pointerEvents={chromeVisible ? "auto" : "none"}
+              style={[
+                {
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  bottom: insets.bottom,
+                  height: THUMB_SIZE + STRIP_OFFSET * 2,
+                  paddingVertical: STRIP_OFFSET,
+                  direction: "ltr",
+                },
+                stripStyle,
+              ]}
+            >
+              <Animated.View style={[{ height: THUMB_SIZE, width: count * THUMB_STEP }, stripRowStyle]}>
+                {pages.map((page, slot) =>
+                  Math.abs(slot - shown) <= THUMB_WINDOW ? (
+                    <ViewerThumbnail
+                      key={page.key}
+                      serverId={serverId}
+                      attachment={page.attachment}
+                      slot={slot}
+                      position={stripPosition}
+                    />
+                  ) : null,
+                )}
+              </Animated.View>
+            </Animated.View>
+          </GestureDetector>
+        ) : null}
       </GestureHandlerRootView>
     </Modal>
+  );
+}
+
+function ViewerThumbnail({
+  serverId,
+  attachment,
+  slot,
+  position,
+}: {
+  serverId: string;
+  attachment: AttachmentSummary;
+  slot: number;
+  position: SharedValue<number>;
+}) {
+  const file = useAttachmentFile(serverId, attachment, true);
+  const style = useAnimatedStyle(() => {
+    const closeness = clamp(1 - Math.abs(position.get() - slot), 0, 1);
+    return { opacity: lerp(0.5, 1, closeness), transform: [{ scale: lerp(0.82, 1, closeness) }] };
+  });
+  return (
+    <Animated.View
+      className="bg-control"
+      style={[
+        {
+          position: "absolute",
+          left: slot * THUMB_STEP,
+          top: 0,
+          width: THUMB_SIZE,
+          height: THUMB_SIZE,
+          borderRadius: THUMB_RADIUS,
+          borderCurve: "continuous",
+          overflow: "hidden",
+        },
+        style,
+      ]}
+    >
+      {file.uri ? (
+        <Image
+          source={file.uri}
+          contentFit="cover"
+          transition={120}
+          accessible={false}
+          style={StyleSheet.absoluteFill}
+        />
+      ) : null}
+    </Animated.View>
+  );
+}
+
+function ViewerPicture({
+  serverId,
+  attachment,
+  dimensions,
+  slot,
+  fit,
+  step,
+  reduced,
+  originRadius,
+  motion,
+  onSize,
+}: {
+  serverId: string;
+  attachment: AttachmentSummary;
+  dimensions: ImageDimensions;
+  slot: number;
+  fit: Rect;
+  step: number;
+  reduced: boolean;
+  originRadius: number;
+  motion: ViewerMotion;
+  onSize: (key: string, size: ImageDimensions) => void;
+}) {
+  const file = useAttachmentFile(serverId, attachment, true);
+  const [loaded, setLoaded] = useState(false);
+  const knownWidth = file.dimensions?.width;
+  const knownHeight = file.dimensions?.height;
+  useEffect(() => {
+    if (knownWidth && knownHeight) onSize(attachment.id, { width: knownWidth, height: knownHeight });
+  }, [attachment.id, knownWidth, knownHeight, onSize]);
+  const frameStyle = useAnimatedStyle(() => {
+    const progress = motion.t.get();
+    const settled = clamp(progress, 0, 1);
+    const offset = (slot - motion.index.get()) * step + motion.pageOffset.get();
+    if (slot !== motion.index.get())
+      return {
+        left: fit.x,
+        top: fit.y,
+        width: Math.max(fit.width, 1),
+        height: Math.max(fit.height, 1),
+        borderRadius: CORNER_RADIUS,
+        opacity: settled,
+        transform: [{ translateX: offset }, { translateY: 0 }, { scale: 1 }],
+      };
+    const from = motion.origin.get();
+    const flies = from !== null && !reduced;
+    const rect = flies ? lerpRect(from, fit, progress) : fit;
+    const visualScale = motion.scale.get() * motion.shrink.get() * (flies ? 1 : lerp(0.92, 1, settled));
+    const corner = flies ? lerp(originRadius, CORNER_RADIUS, progress) : CORNER_RADIUS;
+    return {
+      left: rect.x,
+      top: rect.y,
+      width: Math.max(rect.width, 1),
+      height: Math.max(rect.height, 1),
+      borderRadius: Math.max(0, corner) / Math.max(visualScale, 0.01),
+      opacity: flies ? 1 : settled,
+      transform: [
+        { translateX: motion.tx.get() + motion.dragX.get() + offset },
+        { translateY: motion.ty.get() + motion.dragY.get() },
+        { scale: visualScale },
+      ],
+    };
+  });
+  const pictureStyle = useAnimatedStyle(() => {
+    const from = motion.origin.get();
+    const flies = slot === motion.index.get() && from !== null && !reduced;
+    const rect = flies ? lerpRect(from, fit, motion.t.get()) : fit;
+    const cover = coverSize(dimensions, rect);
+    return {
+      left: (rect.width - cover.width) / 2,
+      top: (rect.height - cover.height) / 2,
+      width: cover.width,
+      height: cover.height,
+    };
+  });
+  return (
+    <Animated.View pointerEvents="none" style={[{ position: "absolute", overflow: "hidden" }, frameStyle]}>
+      <Animated.View style={[{ position: "absolute" }, pictureStyle]}>
+        {loaded ? null : <View style={StyleSheet.absoluteFill} className="bg-control" />}
+        {file.uri ? (
+          <Image
+            source={file.uri}
+            contentFit="cover"
+            transition={0}
+            accessible={false}
+            style={StyleSheet.absoluteFill}
+            onLoad={({ source }) => {
+              setLoaded(true);
+              if (source.width > 0 && source.height > 0)
+                onSize(attachment.id, { width: source.width, height: source.height });
+            }}
+          />
+        ) : null}
+      </Animated.View>
+    </Animated.View>
   );
 }
