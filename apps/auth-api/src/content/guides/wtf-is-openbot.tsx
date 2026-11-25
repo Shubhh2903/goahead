@@ -134,9 +134,9 @@ export function WtfIsOpenBot() {
         look more like a project than a conversation.
       </p>
       <p>
-        It is also worth remembering that GoAhead is still a development preview. Agents can access files, run commands,
-        use the network, and control the browser, so you should only give them tasks you trust and keep backups of
-        important work.
+        It is also worth remembering that agents work with full access. They can access files, run commands, use the
+        network, and control the browser, so you should only give them tasks you trust and keep backups of important
+        work.
       </p>
 
       <h2>More Than a Chat Window</h2>
@@ -153,7 +153,7 @@ export function WtfIsOpenBot() {
       <p>
         If you want to see how it works in practice, start with{" "}
         <Link to="/guides/$slug" params={{ slug: "openbot-101" }}>
-          GoAhead 101
+          How to Use GoAhead
         </Link>
         . To see how it differs from an agent app that runs in the cloud, read{" "}
         <Link to="/compare/$slug" params={{ slug: "grok-bot" }}>

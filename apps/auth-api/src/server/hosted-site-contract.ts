@@ -1,11 +1,13 @@
 import {
   checkHostedSitePath,
+  HOSTED_SITE_ACCOUNT_LIMIT,
   HOSTED_SITE_MIME_TYPES,
   HOSTED_SITE_UPLOAD_LIMITS,
   type HostedSitePathProblem,
 } from "@openbot/contracts/hosted-sites";
 import type { HostedSiteFramework } from "@openbot/contracts/ipc";
 import { isBoolean, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
+import { Schema } from "effect";
 
 export const HOSTED_SITE_LIMITS = {
   concurrentUploads: 2,
@@ -13,6 +15,10 @@ export const HOSTED_SITE_LIMITS = {
   uploadAttemptMultiplier: 2,
   creationsPerHour: 20,
   creationsPerDay: 100,
+  activationsPerHour: 20,
+  activationsPerDay: 100,
+  idleUploadMs: 60_000,
+  accountSites: HOSTED_SITE_ACCOUNT_LIMIT,
   ...HOSTED_SITE_UPLOAD_LIMITS,
   siteLifetimeMs: 30 * 24 * 60 * 60_000,
   tombstoneLifetimeMs: 90 * 24 * 60 * 60_000,
@@ -41,13 +47,14 @@ const PATH_PROBLEM_MESSAGES = {
   archive: "Archives and source maps are not allowed.",
 } as const satisfies Record<HostedSitePathProblem, string>;
 
-export class HostedSiteInputError extends Error {
-  constructor(
-    readonly status: 400 | 401 | 404 | 409 | 413 | 429,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
+export class HostedSiteInputError extends Schema.TaggedError<HostedSiteInputError>()("HostedSiteInputError", {
+  status: Schema.Literals([400, 401, 404, 409, 413, 429]),
+  code: Schema.String,
+  message: Schema.String,
+  retryAfterSeconds: Schema.optional(Schema.Number),
+}) {
+  constructor(status: 400 | 401 | 404 | 409 | 413 | 429, code: string, message: string, retryAfterSeconds?: number) {
+    super({ status, code, message, ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }) });
   }
 }
 

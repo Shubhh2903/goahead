@@ -1,15 +1,10 @@
+import { Effect, Schema } from "effect";
+import { androidApkRelease, androidApkVersion } from "../lib/android-apk";
 import { OPENBOT_DOWNLOAD_PAGE_LINKS, OPENBOT_LINKS } from "../lib/landing-links";
 
-/**
- * GoAhead publishes one desktop installer: the macOS Apple silicon (arm64) DMG. `release:local`
- * uploads `GoAhead-<version>-arm64.dmg`, `GoAhead-<version>-arm64.zip` and `latest-mac.yml`.
- * The DMG is stapled after the build, so `latest-mac.yml` lists only the ZIP (`dmg.writeUpdateInfo:
- * false`). The DMG has the same name with the `.dmg` extension.
- */
 const RELEASES_BASE_URL = "https://github.com/Shubhh2903/goahead/releases";
 const MANIFEST = "latest-mac.yml";
 
-/** The systems that have a download page. Any request for them that is not the Apple silicon DMG gets the page. */
 const UNAVAILABLE_DOWNLOAD_PLATFORMS = ["linux", "macos", "windows"] as const;
 type UnavailableDownloadPlatform = (typeof UNAVAILABLE_DOWNLOAD_PLATFORMS)[number];
 
@@ -27,7 +22,6 @@ function redirect(location: string): Response {
   });
 }
 
-/** The arm64 DMG name, from the arm64 DMG or ZIP that the manifest lists. */
 function findInstaller(manifest: string): string | undefined {
   const assetLines = manifest.matchAll(/^\s*-\s+url:\s*["']?([^\s"']+)["']?\s*$/gim);
   for (const match of assetLines) {
@@ -41,46 +35,51 @@ function findInstaller(manifest: string): string | undefined {
   return undefined;
 }
 
-/**
- * The releases page is a working answer but not the one that was asked for, so each fallback says
- * why. Written to the Worker log rather than to analytics: a server event has no session, and the
- * landing reports are defined on sessions. The reason only, never a URL or a response body.
- */
+export function androidApkResponse(): Response {
+  const version = androidApkVersion();
+  if (version === undefined) return new Response("Not found", { status: 404 });
+  return redirect(androidApkRelease(version).url);
+}
+
 function fallbackToReleases(reason: string): Response {
   console.warn(`latest-download: serving the releases page for macos (${reason})`);
   return redirect(OPENBOT_LINKS.releases);
 }
 
-/** The Apple silicon DMG of the latest release. */
-export async function latestDownloadResponse(fetcher: typeof fetch = fetch): Promise<Response> {
-  try {
-    const response = await fetcher(`${RELEASES_BASE_URL}/latest/download/${MANIFEST}`, {
-      headers: { accept: "text/yaml, text/plain" },
-      // A slow release host must not hold the Worker request open; the releases page is the answer.
-      signal: AbortSignal.timeout(5_000),
-    });
-    if (!response.ok) return fallbackToReleases(`manifest status ${response.status}`);
+class DownloadManifestError extends Schema.TaggedError<DownloadManifestError>()("DownloadManifestError", {}) {}
 
-    const installer = findInstaller(await response.text());
-    if (!installer) return fallbackToReleases("no arm64 asset in the manifest");
+const latestDownload = Effect.fn("LatestDownload.resolve")(function* (fetcher: typeof fetch) {
+  const response = yield* Effect.tryPromise({
+    try: (signal) =>
+      fetcher(`${RELEASES_BASE_URL}/latest/download/${MANIFEST}`, {
+        headers: { accept: "text/yaml, text/plain" },
+        signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]),
+      }),
+    catch: () => new DownloadManifestError({}),
+  });
+  if (!response.ok) return fallbackToReleases(`manifest status ${response.status}`);
+  const manifest = yield* Effect.tryPromise({
+    try: () => response.text(),
+    catch: () => new DownloadManifestError({}),
+  });
+  const installer = findInstaller(manifest);
+  if (!installer) return fallbackToReleases("no arm64 asset in the manifest");
+  return redirect(`${RELEASES_BASE_URL}/latest/download/${encodeURIComponent(installer)}`);
+});
 
-    return redirect(`${RELEASES_BASE_URL}/latest/download/${encodeURIComponent(installer)}`);
-  } catch {
-    return fallbackToReleases("the manifest request failed");
-  }
+export function latestDownloadResponse(fetcher: typeof fetch = fetch) {
+  return latestDownload(fetcher).pipe(
+    Effect.catch(() => Effect.sync(() => fallbackToReleases("the manifest request failed"))),
+  );
 }
 
-/**
- * The answer to `/download/<platform>/latest?arch=<arch>`. macOS without `?arch=x64` gets the
- * Apple silicon DMG. An Intel Mac, Windows and Linux have no installer yet, so they get the download
- * page of their system, which says so. They never get an installer for another system.
- */
 export function downloadRouteResponse(
   platform: string,
   arch: string | null,
   fetcher: typeof fetch = fetch,
-): Promise<Response> | Response {
+): Effect.Effect<Response> {
+  if (platform === "android") return Effect.succeed(androidApkResponse());
   if (platform === "macos" && arch !== "x64") return latestDownloadResponse(fetcher);
-  if (isUnavailableDownloadPlatform(platform)) return redirect(OPENBOT_DOWNLOAD_PAGE_LINKS[platform]);
-  return new Response("Not found", { status: 404 });
+  if (isUnavailableDownloadPlatform(platform)) return Effect.succeed(redirect(OPENBOT_DOWNLOAD_PAGE_LINKS[platform]));
+  return Effect.succeed(new Response("Not found", { status: 404 }));
 }

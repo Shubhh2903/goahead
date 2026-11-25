@@ -1,41 +1,30 @@
-// The /download pages: one per operating system, and a hub that lists them. Each statement here
-// comes from the release configuration, README.md or docs/TROUBLESHOOTING.md. Keep it to what the
-// released app does, because these pages are what a search engine shows for "GoAhead for Linux".
-// GoAhead publishes only the macOS Apple silicon installer (`release:local`). The Windows and Linux
-// pages say that their system is not available yet and offer no installer.
+import { ANDROID_APK_AVAILABLE } from "./android-apk";
+import { DOWNLOAD_PLATFORM_ORDER, type DownloadPlatform } from "./download-platforms";
+import { faqStructuredData, type LandingQuestion } from "./landing-faq";
+import { OPENBOT_ANDROID_APK_LINK, OPENBOT_DOWNLOAD_LINKS, OPENBOT_DOWNLOAD_PAGE_LINKS } from "./landing-links";
+import { MOBILE_APP_ORDER, MOBILE_APPS, type MobilePlatform } from "./mobile-apps";
+import { OPENBOT_SITE_URL, OPENBOT_X_HANDLE, type PageSocialImage, pageSocialImageMeta } from "./site-metadata";
+import { OPENBOT_SOFTWARE_APPLICATION } from "./software-application";
 
-import type { DownloadPlatform } from "./download-platforms";
-import { LANDING_FAQ, type LandingQuestion } from "./landing-faq";
-import { OPENBOT_DOWNLOAD_LINKS, OPENBOT_DOWNLOAD_PAGE_LINKS } from "./landing-links";
-import {
-  OPENBOT_SITE_URL,
-  OPENBOT_SOCIAL_IMAGE_ALT,
-  OPENBOT_SOCIAL_IMAGE_META,
-  OPENBOT_SOCIAL_IMAGE_URL,
-  OPENBOT_SOFTWARE_APPLICATION,
-  OPENBOT_X_HANDLE,
-} from "./site-metadata";
+export const DOWNLOAD_PAGES_UPDATED_AT = "2026-10-15";
 
-/** The sitemap date of the four pages. Change it when their text changes. */
-export const DOWNLOAD_PAGES_UPDATED_AT = "2026-10-14";
+export type DownloadPagePlatform = DownloadPlatform | MobilePlatform;
+
+export const DOWNLOAD_PAGE_ORDER: readonly DownloadPagePlatform[] = [...DOWNLOAD_PLATFORM_ORDER, ...MOBILE_APP_ORDER];
 
 export interface DownloadInstaller {
-  /** The button text where the system is not on screen, such as a list of every installer. */
   label: string;
-  /** The button text inside a card or panel that already names the system. */
   shortLabel: string;
-  /** Which computer the file is for, for a reader who has to choose between two. */
   detail: string;
   href: string;
+  external?: boolean;
 }
 
-/** One line of the spec sheet: what the computer needs, or what the download is. */
 interface DownloadSpec {
   label: string;
   value: string;
 }
 
-/** One instruction. `code` is a command to copy, shown under the text. */
 export interface DownloadStep {
   text: string;
   code?: string;
@@ -47,8 +36,7 @@ interface DownloadPageSection {
 }
 
 export interface DownloadPageContent {
-  platform: DownloadPlatform;
-  /** The name a reader uses for the system, which the headings and the breadcrumb show. */
+  platform: DownloadPagePlatform;
   name: string;
   title: string;
   description: string;
@@ -57,17 +45,16 @@ export interface DownloadPageContent {
   installers: readonly DownloadInstaller[];
   specs: readonly DownloadSpec[];
   installSteps: readonly DownloadStep[];
-  /** Optional steps for one situation, such as a distribution that needs a security profile. */
   extraSections: readonly DownloadPageSection[];
   notes: readonly string[];
   faq: readonly LandingQuestion[];
-  /** schema.org `operatingSystem` for this page's installer. A page with no installer uses the site's. */
   operatingSystem: string;
 }
 
-const PROVIDERS_ANSWER = LANDING_FAQ.find((entry) => entry.question === "Which AI models can GoAhead use?")?.answer;
+const PROVIDERS_ANSWER =
+  "Codex, Claude Code, Gemini, Grok, OpenCode, Cursor, Cline, Muse Code and Pi, and Inception's Mercury models. You can also run any agent that speaks the Agent Client Protocol, such as Goose or Qwen Code, connect any OpenAI-compatible endpoint, and use local models in Ollama or LM Studio.";
 const FREE_ANSWER =
-  "Yes. The app costs $0, with no locked features, and needs no account. You pay only your AI provider, through the plan or API key you already have.";
+  "Yes, for personal and other noncommercial use. The app costs $0, with no locked features. You pay only your AI provider, through the plan or API key you already have. Commercial use needs a license.";
 const CONNECT_STEP: DownloadStep = {
   text: "Connect a provider, such as Codex with your ChatGPT plan or Claude Code with your Claude plan. Then describe the agent you want in one prompt and save it.",
 };
@@ -79,16 +66,70 @@ const MAC_INSTEAD_SPEC: DownloadSpec = { label: "Available now", value: "macOS o
 const MAC_INSTEAD_NOTE =
   "Today GoAhead runs only on a Mac with Apple silicon (M1 or newer) and macOS 13 or newer. The download page for macOS has the installer.";
 
+const COMPUTER_STEP: DownloadStep = {
+  text: "Install GoAhead on the Mac, Windows or Linux computer that runs your agents, and sign in to your GoAhead account.",
+};
+const GENERATE_CODE_STEP: DownloadStep = {
+  text: "On the computer, open Settings, then Mobile Connect, and select Generate QR code. The code expires after two minutes and works for one sign-in.",
+};
+const PHONE_NOTES = [
+  "Your chats and files stay on the computer that runs your agents. The phone connects to it over an encrypted connection, directly between your devices when it can, and no cloud stores your chats or files.",
+  "You set up no VPN or tunnel. Remote access needs a GoAhead account.",
+  "The computer must be on and running GoAhead for the phone to reach your agents.",
+  "To remove a phone, open Settings, then Mobile Connect, on the computer and disconnect it. Its access stops at once.",
+];
+const PHONE_COMPUTER_QUESTION: LandingQuestion = {
+  question: "Do I need a computer to use the mobile app?",
+  answer:
+    "Yes. The app controls the agents that run in GoAhead on your Mac, Windows or Linux computer, or on a server that runs GoAhead. Your chats and files stay there.",
+};
+const PHONE_FREE_ANSWER =
+  "Yes. The app costs $0. You pay only your AI provider, through the plan or API key you already have.";
+
+const ANDROID_APK = {
+  installer: {
+    label: "Download the APK",
+    shortLabel: "APK",
+    detail: "For a phone with no Google Play",
+    href: OPENBOT_ANDROID_APK_LINK,
+  },
+  section: {
+    title: "Install from the APK",
+    steps: [
+      {
+        text: "Use the APK when your phone has no Google Play. On the phone, open this page in the browser and select Download the APK.",
+      },
+      {
+        text: "Open the downloaded file. Android asks you to let the browser install apps: allow it, then select Install.",
+      },
+      { text: "Open GoAhead and connect it to your computer with the QR code, as the steps above show." },
+    ],
+  },
+  notes: [
+    "The APK is the build that Google Play has, with the same signature.",
+    "With the APK, the app tells you when a new version is ready. Download the APK from this page again and install it over the app. You keep your sign-in.",
+    "Notifications come through Google's push service. A phone with no Google Play services gets none.",
+  ],
+  question: {
+    question: "Can I install GoAhead for Android without Google Play?",
+    answer:
+      "Yes. Download the APK from this page and open it on your phone. It is the build that Google Play has, and it is free.",
+  },
+} satisfies {
+  installer: DownloadInstaller;
+  section: DownloadPageSection;
+  notes: readonly string[];
+  question: LandingQuestion;
+};
+
 function providersQuestion(system: string): LandingQuestion {
   return {
     question: `Which AI agents can I run on ${system}?`,
-    answer:
-      PROVIDERS_ANSWER ??
-      "Codex, Claude Code, Gemini, Grok and OpenCode, and any OpenAI-compatible endpoint, also one on your own computer.",
+    answer: PROVIDERS_ANSWER,
   };
 }
 
-export const DOWNLOAD_PAGES: Record<DownloadPlatform, DownloadPageContent> = {
+export const DOWNLOAD_PAGES: Record<DownloadPagePlatform, DownloadPageContent> = {
   macos: {
     platform: "macos",
     name: "macOS",
@@ -176,10 +217,10 @@ export const DOWNLOAD_PAGES: Record<DownloadPlatform, DownloadPageContent> = {
         title: "A server with no screen",
         steps: [
           {
-            text: "On Ubuntu 24.04 with systemd, install GoAhead as an always-on server of your account, then sign in with an email code:",
+            text: "On Ubuntu 24.04 or 26.04 with systemd, install GoAhead as an always-on server of your account, then sign in with an email code:",
             code: "curl -fsSL https://raw.githubusercontent.com/Shubhh2903/goahead/master/scripts/install-server.sh | sudo bash\nsudo openbot login",
           },
-          { text: "Then use it from the desktop app, the iPhone app or openbot.run/app." },
+          { text: "Then use it from the desktop app, the mobile app or goahead.multicodegenius.com/app." },
         ],
       },
     ],
@@ -193,6 +234,87 @@ export const DOWNLOAD_PAGES: Record<DownloadPlatform, DownloadPageContent> = {
     ],
     operatingSystem: OPENBOT_SOFTWARE_APPLICATION.operatingSystem,
   },
+  ios: {
+    platform: "ios",
+    name: "iPhone",
+    title: "Download GoAhead for iPhone: your AI agents on your phone",
+    description:
+      "Get GoAhead for iPhone on the App Store. Chat with the AI agents on your computer, follow their work and send files from anywhere.",
+    heading: "GoAhead for iPhone",
+    intro:
+      "Chat with the agents on your computer from anywhere, follow their progress and send them files. Get the app on the App Store.",
+    installers: [
+      {
+        label: "Download on the App Store",
+        shortLabel: "App Store",
+        detail: "For an iPhone with iOS 16.4 or later",
+        href: MOBILE_APPS.ios.href,
+        external: true,
+      },
+    ],
+    specs: [
+      { label: "System", value: "iOS 16.4 or later" },
+      { label: "Store", value: "App Store" },
+      { label: "Needs", value: "GoAhead on a computer" },
+      { label: "Updates", value: "Through the App Store" },
+    ],
+    installSteps: [
+      COMPUTER_STEP,
+      { text: "On your iPhone, install GoAhead from the App Store." },
+      GENERATE_CODE_STEP,
+      { text: "Open GoAhead on your iPhone, choose Scan QR code and point the camera at the code." },
+    ],
+    extraSections: [],
+    notes: PHONE_NOTES,
+    faq: [{ question: "Is GoAhead for iPhone free?", answer: PHONE_FREE_ANSWER }, PHONE_COMPUTER_QUESTION],
+    operatingSystem: "iOS 16.4 or later",
+  },
+  android: {
+    platform: "android",
+    name: "Android",
+    title: "Download GoAhead for Android: your AI agents on your phone",
+    description: ANDROID_APK_AVAILABLE
+      ? "Get GoAhead for Android on Google Play or as an APK. Chat with the AI agents on your computer, follow their work and send files from anywhere."
+      : "Get GoAhead for Android on Google Play. Chat with the AI agents on your computer, follow their work and send files from anywhere.",
+    heading: "GoAhead for Android",
+    intro: ANDROID_APK_AVAILABLE
+      ? "Chat with the agents on your computer from anywhere, follow their progress and send them files. Get the app on Google Play, or download the APK."
+      : "Chat with the agents on your computer from anywhere, follow their progress and send them files. Get the app on Google Play.",
+    installers: [
+      {
+        label: "Get it on Google Play",
+        shortLabel: "Google Play",
+        detail: "For a phone with Android 7.0 or later",
+        href: MOBILE_APPS.android.href,
+        external: true,
+      },
+      ...(ANDROID_APK_AVAILABLE ? [ANDROID_APK.installer] : []),
+    ],
+    specs: [
+      { label: "System", value: "Android 7.0 or later" },
+      { label: "Store", value: ANDROID_APK_AVAILABLE ? "Google Play, or an APK" : "Google Play" },
+      { label: "Needs", value: "GoAhead on a computer" },
+      { label: "Updates", value: ANDROID_APK_AVAILABLE ? "Google Play, or a new APK" : "Through Google Play" },
+    ],
+    installSteps: [
+      COMPUTER_STEP,
+      { text: "On your phone, install GoAhead from Google Play." },
+      GENERATE_CODE_STEP,
+      { text: "Open GoAhead on your phone, choose Scan QR code and point the camera at the code." },
+    ],
+    extraSections: ANDROID_APK_AVAILABLE ? [ANDROID_APK.section] : [],
+    notes: [
+      ...PHONE_NOTES,
+      "The app does not ask for access to all your photos and videos. You choose photos and files with the system picker.",
+      ...(ANDROID_APK_AVAILABLE ? ANDROID_APK.notes : []),
+    ],
+    faq: [
+      { question: "Is GoAhead for Android free?", answer: PHONE_FREE_ANSWER },
+      PHONE_COMPUTER_QUESTION,
+      ...(ANDROID_APK_AVAILABLE ? [ANDROID_APK.question] : []),
+    ],
+    operatingSystem: "Android 7.0 or later",
+  },
 };
 
 export const DOWNLOAD_HUB = {
@@ -204,15 +326,20 @@ export const DOWNLOAD_HUB = {
     "Free for a Mac with Apple silicon. Versions for Intel Macs, Windows and Linux are not available yet. Choose a system below for its requirements and install steps.",
 } as const;
 
-export function downloadPagePath(platform: DownloadPlatform | "hub"): string {
+const DOWNLOAD_SOCIAL_IMAGE: PageSocialImage = {
+  path: "/social/download.jpg",
+  alt: "Teamwork. Now installing. GoAhead agents around a glass ring",
+};
+
+export function downloadPagePath(platform: DownloadPagePlatform | "hub"): string {
   return OPENBOT_DOWNLOAD_PAGE_LINKS[platform];
 }
 
-export function downloadPageUrl(platform: DownloadPlatform | "hub", siteUrl: string = OPENBOT_SITE_URL): string {
+export function downloadPageUrl(platform: DownloadPagePlatform | "hub", siteUrl: string = OPENBOT_SITE_URL): string {
   return new URL(downloadPagePath(platform), siteUrl).toString();
 }
 
-function breadcrumbData(platform: DownloadPlatform | "hub", siteUrl: string) {
+function breadcrumbData(platform: DownloadPagePlatform | "hub", siteUrl: string) {
   const trail = [
     { name: "GoAhead", url: siteUrl },
     { name: "Download", url: downloadPageUrl("hub", siteUrl) },
@@ -230,19 +357,7 @@ function breadcrumbData(platform: DownloadPlatform | "hub", siteUrl: string) {
   };
 }
 
-function faqData(faq: readonly LandingQuestion[]) {
-  return {
-    "@context": "https://schema.org",
-    "@type": "FAQPage",
-    mainEntity: faq.map((entry) => ({
-      "@type": "Question",
-      name: entry.question,
-      acceptedAnswer: { "@type": "Answer", text: entry.answer },
-    })),
-  };
-}
-
-export function downloadPageHead(platform: DownloadPlatform | "hub", siteUrl: string) {
+export function downloadPageHead(platform: DownloadPagePlatform | "hub", siteUrl: string) {
   const page = platform === "hub" ? undefined : DOWNLOAD_PAGES[platform];
   const title = page?.title ?? DOWNLOAD_HUB.title;
   const description = page?.description ?? DOWNLOAD_HUB.description;
@@ -255,6 +370,7 @@ export function downloadPageHead(platform: DownloadPlatform | "hub", siteUrl: st
           downloadUrl: page.installers.map((installer) => new URL(installer.href, siteUrl).toString()),
         }
       : OPENBOT_SOFTWARE_APPLICATION;
+  const image = pageSocialImageMeta(DOWNLOAD_SOCIAL_IMAGE, siteUrl);
 
   return {
     meta: [
@@ -266,16 +382,15 @@ export function downloadPageHead(platform: DownloadPlatform | "hub", siteUrl: st
       { property: "og:url", content: url },
       { property: "og:title", content: title },
       { property: "og:description", content: description },
-      ...OPENBOT_SOCIAL_IMAGE_META,
+      ...image.openGraph,
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:site", content: OPENBOT_X_HANDLE },
       { name: "twitter:title", content: title },
       { name: "twitter:description", content: description },
-      { name: "twitter:image", content: OPENBOT_SOCIAL_IMAGE_URL },
-      { name: "twitter:image:alt", content: OPENBOT_SOCIAL_IMAGE_ALT },
+      ...image.twitter,
       { "script:ld+json": application },
       { "script:ld+json": breadcrumbData(platform, siteUrl) },
-      ...(page ? [{ "script:ld+json": faqData(page.faq) }] : []),
+      ...(page ? [{ "script:ld+json": faqStructuredData(page.faq) }] : []),
     ],
     links: [{ rel: "canonical", href: url }],
   };

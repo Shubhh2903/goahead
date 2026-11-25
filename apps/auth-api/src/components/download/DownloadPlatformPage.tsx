@@ -2,8 +2,12 @@ import { PlatformLogo } from "@openbot/brand";
 import { Link } from "@tanstack/solid-router";
 import { createTrackedEffect, For, Show } from "solid-js";
 import { landingAnalytics } from "../../lib/analytics";
-import { type DownloadPageContent, type DownloadStep, downloadPagePath } from "../../lib/download-pages";
-import { DOWNLOAD_PLATFORM_ORDER } from "../../lib/download-platforms";
+import {
+  DOWNLOAD_PAGE_ORDER,
+  type DownloadPageContent,
+  type DownloadStep,
+  downloadPagePath,
+} from "../../lib/download-pages";
 import { LandingFooter } from "../landing/LandingFooter";
 import { LandingIcon } from "../landing/LandingIcon";
 import { SiteHeader } from "../landing/SiteHeader";
@@ -14,18 +18,13 @@ export interface DownloadPlatformPageProps {
   page: DownloadPageContent;
 }
 
-// One operating system. The landing card of the system opens into a panel in its colour, with the
-// installers and the spec sheet. Under it, each topic is one row: the heading on the left and the
-// text on the right, as plain lists, so a crawler reads what a visitor reads.
 export function DownloadPlatformPage(props: DownloadPlatformPageProps) {
-  // Tracked rather than mounted once: a card under "Other systems" stays on this route and only
-  // changes the parameter. The effect disposes the previous page's listener before it starts the new one.
   createTrackedEffect(() => {
     const path = downloadPagePath(props.page.platform);
     return landingAnalytics.start(document, window.location.hostname, path);
   });
 
-  const otherPlatforms = () => DOWNLOAD_PLATFORM_ORDER.filter((platform) => platform !== props.page.platform);
+  const otherPlatforms = () => DOWNLOAD_PAGE_ORDER.filter((platform) => platform !== props.page.platform);
 
   return (
     <div class="landing-page download-page">
@@ -145,7 +144,6 @@ export function DownloadPlatformPage(props: DownloadPlatformPageProps) {
   );
 }
 
-// The steps are a sequence, so the numbers carry meaning: they come from the list itself.
 function DownloadSteps(props: { steps: readonly DownloadStep[] }) {
   return (
     <ol class="download-steps">

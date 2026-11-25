@@ -9,7 +9,7 @@ export function IntroducingOpenBot() {
 
       <h2>What Is GoAhead?</h2>
       <p>
-        GoAhead is a free, open-source, local-first alternative to Grok Bot. It does not train its own AI model.
+        GoAhead is a free, source-available, local-first alternative to Grok Bot. It does not train its own AI model.
         Instead, it brings the models you already use into one desktop workspace.
       </p>
       <p>

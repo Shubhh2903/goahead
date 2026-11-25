@@ -1,5 +1,4 @@
 export {
-  ARTICLE_GRADIENT_BRAND_HEXES,
   articleGradient,
   articleGradientCss,
   articleGradientUniforms,

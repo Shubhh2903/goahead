@@ -1,41 +1,23 @@
-// The release notes, read from the repository's own CHANGELOG.md and from apps/mobile/CHANGELOG.md
-// for the iPhone app. The files are written for people already, in the Keep a Changelog shape, so
-// the page reads them rather than asking a release to be written twice. No JSX and no Vite imports here, so the parser runs in a plain
-// Node test; the file itself is imported in `changelog-releases.ts`, which only the page and
-// the sitemap read.
-//
-// The parser covers the Markdown the file uses and nothing more: `## [x.y.z] - date` headings,
-// `### Added` style groups, `-` bullets with indented continuation lines, plain paragraphs
-// under a heading, and inline `**bold**`, `code` and [links](url).
-
 import { isDynamicRecord } from "@openbot/contracts/runtime-values";
-import {
-  OPENBOT_SITE_URL,
-  OPENBOT_SOCIAL_IMAGE_ALT,
-  OPENBOT_SOCIAL_IMAGE_URL,
-  OPENBOT_X_HANDLE,
-} from "./site-metadata";
+import { OPENBOT_SITE_URL, OPENBOT_X_HANDLE, type PageSocialImage, pageSocialImageMeta } from "./site-metadata";
 
 export const CHANGELOG_ROUTE = "/changelog";
 const CHANGELOG_TITLE = "GoAhead Changelog: Release Notes for Every Version";
 export const CHANGELOG_DESCRIPTION =
   "Every GoAhead release, newest first: new features, improvements and fixes, with what to do after you upgrade.";
+const CHANGELOG_SOCIAL_IMAGE: PageSocialImage = {
+  path: "/social/changelog.jpg",
+  alt: "Good things in the making. GoAhead agents around a paper sun",
+};
 
-/** The app a changelog covers. The web client ships with the desktop app, so it has no own list. */
 export type ChangelogPlatform = "desktop" | "mobile";
 
-/** In the order of the page's tabs, which is the direction a change of tab moves in. */
 export const CHANGELOG_PLATFORMS: readonly ChangelogPlatform[] = ["desktop", "mobile"];
 
 export interface ChangelogSearch {
-  /** Absent for the desktop list, so `/changelog` stays the address of the page. */
   platform?: "mobile" | undefined;
 }
 
-/**
- * Always sets `platform`: the router lays the validated search over the raw one, so a key left
- * out keeps a value such as `?platform=tablet` that the page has no list for.
- */
 export function changelogSearch(value: unknown): ChangelogSearch {
   return { platform: isDynamicRecord(value) && value.platform === "mobile" ? "mobile" : undefined };
 }
@@ -44,20 +26,24 @@ export type ChangelogGroupType = "added" | "changed" | "fixed" | "removed" | "se
 
 export interface ChangelogGroup {
   type: ChangelogGroupType;
-  /** The heading as the file writes it, for a group this parser has no name for. */
   heading: string;
   items: string[];
 }
 
+export type MobileStore = "ios" | "android";
+
+export interface StoreAvailability {
+  store: MobileStore;
+  date: string;
+  skipped: boolean;
+}
+
 export interface ChangelogRelease {
   version: string;
-  /** `YYYY-MM-DD`, as the heading writes it. Empty when the heading has no real date. */
   date: string;
-  /** The fragment a link to this release uses, such as `v0-22-0`. */
+  stores: StoreAvailability[];
   anchor: string;
-  /** Paragraphs between the heading and the first group. */
   intro: string[];
-  /** Bullets that ask the reader to act after upgrading. The file marks them in bold. */
   notices: string[];
   groups: ChangelogGroup[];
 }
@@ -67,6 +53,13 @@ export type InlineSegment =
   | { kind: "link"; text: string; href: string };
 
 const RELEASE_HEADING = /^## \[([^\]]+)\](?:\s+-\s+(\d{4}-\d{2}-\d{2}))?/;
+const IN_REVIEW_HEADING = /^## \[[^\]]+\]\s+-\s+In review\s*$/;
+const SHARED_DATE_HEADING = /^## \[[^\]]+\]\s+-\s+\d{4}-\d{2}-\d{2}\s*$/;
+const STORE_DATE = /(\d{4}-\d{2}-\d{2}) \((iOS|Android)\)/g;
+const STORE_SKIPPED = /Skipped \((iOS|Android)\)/g;
+const OTA_VERSION = /^\d+\.\d+\.\d+\.\d+$/;
+const STORE_NAMES: Record<string, MobileStore> = { iOS: "ios", Android: "android" };
+const MOBILE_STORES: readonly MobileStore[] = ["ios", "android"];
 const GROUP_HEADING = /^### (.+)$/;
 const BULLET = /^- (.*)$/;
 const CONTINUATION = /^ {2,}(\S.*)$/;
@@ -79,26 +72,49 @@ const GROUP_TYPES: Partial<Record<string, ChangelogGroupType>> = {
   deprecated: "deprecated",
 };
 
-/** A bold run that ends a sentence is an instruction; a bold word such as a tab name is not. */
 const NOTICE = /\*\*[^*]+[.!]\*\*/;
 
 function releaseAnchor(version: string): string {
   return `v${version.replace(/[^0-9a-z]+/gi, "-").toLowerCase()}`;
 }
 
+function isRealDate(date: string): boolean {
+  return !Number.isNaN(Date.parse(`${date}T00:00:00Z`));
+}
+
+function storeAvailability(line: string, date: string): StoreAvailability[] {
+  const dates = new Map<MobileStore, string>();
+  if (SHARED_DATE_HEADING.test(line)) for (const store of MOBILE_STORES) dates.set(store, date);
+  for (const [, day = "", name = ""] of line.matchAll(STORE_DATE)) {
+    const store = STORE_NAMES[name];
+    if (store && isRealDate(day)) dates.set(store, day);
+  }
+  const skipped = new Set<MobileStore>();
+  for (const [, name = ""] of line.matchAll(STORE_SKIPPED)) {
+    const store = STORE_NAMES[name];
+    if (store && !dates.has(store)) skipped.add(store);
+  }
+  return MOBILE_STORES.map((store) => ({ store, date: dates.get(store) ?? "", skipped: skipped.has(store) })).sort(
+    (a, b) => (a.date === "" ? 1 : 0) - (b.date === "" ? 1 : 0) || a.date.localeCompare(b.date),
+  );
+}
+
 function groupType(heading: string): ChangelogGroupType {
   return GROUP_TYPES[heading.trim().toLowerCase()] ?? "other";
 }
 
-/**
- * Every released version, newest first as the file lists them. Unreleased notes are left out.
- * `anchorPrefix` keeps the anchors of two files apart when both have the same version.
- */
-export function parseChangelog(markdown: string, anchorPrefix = ""): ChangelogRelease[] {
+interface ParseChangelogOptions {
+  anchorPrefix?: string;
+  stores?: boolean;
+}
+
+export function parseChangelog(
+  markdown: string,
+  { anchorPrefix = "", stores = false }: ParseChangelogOptions = {},
+): ChangelogRelease[] {
   const releases: ChangelogRelease[] = [];
   let release: ChangelogRelease | undefined;
   let group: ChangelogGroup | undefined;
-  // The list the last line was added to, so a continuation line knows where it belongs.
   let open: string[] | undefined;
 
   const closeItem = () => {
@@ -117,13 +133,24 @@ export function parseChangelog(markdown: string, anchorPrefix = ""): ChangelogRe
     if (heading) {
       closeItem();
       const [, version = "", written = ""] = heading;
-      // A date the page cannot format would stop the whole page from rendering.
-      const date = Number.isNaN(Date.parse(`${written}T00:00:00Z`)) ? "" : written;
+      const firstDate = isRealDate(written) ? written : "";
+      const availability = (stores ? storeAvailability(line, firstDate) : []).filter(
+        (entry) => entry.date !== "" || !OTA_VERSION.test(version),
+      );
       group = undefined;
+      const unavailable = stores && availability.every((entry) => entry.date === "");
       release =
-        version.toLowerCase() === "unreleased"
+        version.toLowerCase() === "unreleased" || IN_REVIEW_HEADING.test(line) || unavailable
           ? undefined
-          : { version, date, anchor: `${anchorPrefix}${releaseAnchor(version)}`, intro: [], notices: [], groups: [] };
+          : {
+              version,
+              date: availability[0]?.date || firstDate,
+              stores: availability,
+              anchor: `${anchorPrefix}${releaseAnchor(version)}`,
+              intro: [],
+              notices: [],
+              groups: [],
+            };
       if (release) releases.push(release);
       continue;
     }
@@ -157,8 +184,6 @@ export function parseChangelog(markdown: string, anchorPrefix = ""): ChangelogRe
       open[open.length - 1] = `${open.at(-1)} ${text}`;
       continue;
     }
-    // A paragraph before the first group. A paragraph after one has no place to go in this
-    // shape, so it stays with the intro rather than being dropped.
     release.intro.push(text);
     open = release.intro;
   }
@@ -194,6 +219,7 @@ export function changelogUrl(siteUrl: string = OPENBOT_SITE_URL, platform: Chang
 
 export function changelogHead(siteUrl: string, platform: ChangelogPlatform = "desktop") {
   const url = changelogUrl(siteUrl, platform);
+  const image = pageSocialImageMeta(CHANGELOG_SOCIAL_IMAGE, siteUrl);
 
   return {
     meta: [
@@ -205,14 +231,12 @@ export function changelogHead(siteUrl: string, platform: ChangelogPlatform = "de
       { property: "og:url", content: url },
       { property: "og:title", content: CHANGELOG_TITLE },
       { property: "og:description", content: CHANGELOG_DESCRIPTION },
-      { property: "og:image", content: OPENBOT_SOCIAL_IMAGE_URL },
-      { property: "og:image:alt", content: OPENBOT_SOCIAL_IMAGE_ALT },
+      ...image.openGraph,
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:site", content: OPENBOT_X_HANDLE },
       { name: "twitter:title", content: CHANGELOG_TITLE },
       { name: "twitter:description", content: CHANGELOG_DESCRIPTION },
-      { name: "twitter:image", content: OPENBOT_SOCIAL_IMAGE_URL },
-      { name: "twitter:image:alt", content: OPENBOT_SOCIAL_IMAGE_ALT },
+      ...image.twitter,
     ],
     links: [{ rel: "canonical", href: url }],
   };

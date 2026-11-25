@@ -4,8 +4,10 @@ export type LandingIconName =
   | "arrow-right"
   | "arrow-up-right"
   | "blocks"
+  | "bot"
   | "check"
   | "chevron-down"
+  | "clock"
   | "cloud"
   | "code"
   | "contact"
@@ -15,12 +17,18 @@ export type LandingIconName =
   | "folder"
   | "globe"
   | "heart"
+  | "key"
   | "laptop"
   | "lock"
+  | "mic"
   | "phone"
   | "puzzle"
+  | "refresh"
   | "tag"
-  | "users";
+  | "user-check"
+  | "user-plus"
+  | "users"
+  | "zap";
 
 export interface LandingIconProps {
   name: LandingIconName;
@@ -69,34 +77,56 @@ export function LandingIcon(props: LandingIconProps) {
           <path d="M7 17 17 7" />
           <path d="M7 7h10v10" />
         </Match>
-        {/* What kind of thing a row on a plugin page is: an app, or a skill. The pair is the
-            one the desktop app already uses for the same two lists. */}
         <Match when={props.name === "puzzle"}>
-          <path d="M15.4 4.4a1 1 0 0 0 1.7-.5 2.5 2.5 0 1 1 3 3 1 1 0 0 0-.5 1.7l1.7 1.7a2.4 2.4 0 0 1 0 3.4l-1.7 1.7a1 1 0 0 1-1.7-.5 2.5 2.5 0 1 0-3 3 1 1 0 0 1 .5 1.7l-1.7 1.7a2.4 2.4 0 0 1-3.4 0l-1.7-1.7a1 1 0 0 0-1.7.5 2.5 2.5 0 1 1-3-3 1 1 0 0 0 .5-1.7l-1.7-1.7a2.4 2.4 0 0 1 0-3.4l1.7-1.7a1 1 0 0 1 1.7.5 2.5 2.5 0 1 0 3-3 1 1 0 0 1-.5-1.7Z" />
+          <path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z" />
         </Match>
         <Match when={props.name === "blocks"}>
           <rect width="7" height="7" x="14" y="3" rx="1" />
           <path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3" />
         </Match>
-        {/* The topics of a comparison table, one per row. Drawn after the Lucide set the
-            desktop app uses, which is not a dependency of this site. */}
         <Match when={props.name === "laptop"}>
           <rect width="18" height="12" x="3" y="4" rx="2" />
           <path d="M2 20h20" />
         </Match>
+        <Match when={props.name === "clock"}>
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 6v6l4 2" />
+        </Match>
         <Match when={props.name === "cloud"}>
-          <path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9Z" />
+          <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />
         </Match>
         <Match when={props.name === "cpu"}>
           <rect width="14" height="14" x="5" y="5" rx="2" />
           <rect width="6" height="6" x="9" y="9" rx="1" />
           <path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" />
         </Match>
+        <Match when={props.name === "user-plus"}>
+          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="M19 8v6" />
+          <path d="M22 11h-6" />
+        </Match>
+        <Match when={props.name === "user-check"}>
+          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="m16 11 2 2 4-4" />
+        </Match>
+        <Match when={props.name === "bot"}>
+          <path d="M12 8V4H8" />
+          <rect width="16" height="12" x="4" y="8" rx="2" />
+          <path d="M2 14h2" />
+          <path d="M20 14h2" />
+          <path d="M15 13v2" />
+          <path d="M9 13v2" />
+        </Match>
+        <Match when={props.name === "zap"}>
+          <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" />
+        </Match>
         <Match when={props.name === "users"}>
           <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
           <circle cx="9" cy="7" r="4" />
-          <path d="M22 21v-2a4 4 0 0 0-3-3.9" />
-          <path d="M16 3.1a4 4 0 0 1 0 7.8" />
+          <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+          <path d="M16 3.128a4 4 0 0 1 0 7.744" />
         </Match>
         <Match when={props.name === "lock"}>
           <rect width="18" height="11" x="3" y="11" rx="2" />
@@ -124,8 +154,23 @@ export function LandingIcon(props: LandingIconProps) {
           <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
           <path d="M2 12h20" />
         </Match>
+        <Match when={props.name === "refresh"}>
+          <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+          <path d="M21 3v5h-5" />
+          <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+          <path d="M8 16H3v5" />
+        </Match>
+        <Match when={props.name === "key"}>
+          <path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4Z" />
+          <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+        </Match>
+        <Match when={props.name === "mic"}>
+          <path d="M12 19v3" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+          <rect width="6" height="13" x="9" y="2" rx="3" />
+        </Match>
         <Match when={props.name === "heart"}>
-          <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z" />
+          <path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5" />
         </Match>
       </Switch>
     </svg>

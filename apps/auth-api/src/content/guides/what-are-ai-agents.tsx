@@ -114,7 +114,7 @@ export function WhatAreAIAgents() {
         GoAhead is local-first, but that does not necessarily mean the model runs on your computer. The workspace can be
         local while a connected provider handles the requests. For a closer look, see{" "}
         <Link to="/guides/$slug" params={{ slug: "openbot-101" }}>
-          GoAhead 101
+          How to Use GoAhead
         </Link>
         . To see how this differs from an agent app that runs in the cloud, read{" "}
         <Link to="/compare/$slug" params={{ slug: "grok-bot" }}>

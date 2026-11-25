@@ -1,38 +1,31 @@
 import { createOpenBotAgentTemplateUrl, createWebAppAgentTemplatePath } from "@openbot/contracts/agent-template-links";
 import type { AgentTemplateDetail } from "@openbot/contracts/ipc";
-import { createSignal, For, lazy, onSettled, Show } from "solid-js";
+import { markdownPlainText, markdownPreviewText } from "@openbot/contracts/markdown-preview-text";
+import { Link } from "@tanstack/solid-router";
+import { createMemo, createSignal, For, Loading, lazy, onSettled, Show } from "solid-js";
 import { agentTemplatePath } from "../../lib/agent-template-path";
 import { landingAnalytics } from "../../lib/analytics";
-import { OPENBOT_LINKS } from "../../lib/landing-links";
+import { LandingFooter } from "../landing/LandingFooter";
 import { SiteHeader } from "../landing/SiteHeader";
 import { PluginOpenButtons } from "../plugins/PluginOpenButtons";
 
-// The Bloub library, which draws the avatar and owns its colours, uses browser-only APIs as soon as
-// its module loads, so the Worker must never import it. The page loads both parts in the browser
-// after hydration.
 const AgentAvatar = lazy(() =>
   import("@openbot/ui/features/agents/AgentAvatar").then((module) => ({ default: module.AgentAvatar })),
+);
+const MarkdownMessageText = lazy(() =>
+  import("@openbot/ui/features/conversation/MarkdownMessageText").then((module) => ({
+    default: module.MarkdownMessageText,
+  })),
 );
 
 export interface AgentTemplatePageProps {
   template: AgentTemplateDetail;
 }
 
-/**
- * One shared agent as a single card: the page a link on X or in a chat opens.
- *
- * The card is tinted with the agent's own avatar colour, so each shared agent looks like itself.
- * The button opens `openbot://agents/<id>`, built from the id, and the app then shows its own preview
- * with Install; nothing here installs. The button below the card links `/app?agent=<id>`, where the
- * browser client shows the same preview.
- */
 export function AgentTemplatePage(props: AgentTemplatePageProps) {
-  // The Worker renders an empty box of the avatar's size, and the browser fills it in.
   const [mounted, setMounted] = createSignal(false);
   const [expanded, setExpanded] = createSignal(false);
-  // Whether the clamp hid any text, measured once the page is in the browser.
   const [clamped, setClamped] = createSignal(false);
-  // The avatar's colour tints the page; until it loads the page keeps the stylesheet's neutral one.
   const [accent, setAccent] = createSignal<string | null>(null);
   let description: HTMLParagraphElement | undefined;
   onSettled(() => {
@@ -44,6 +37,8 @@ export function AgentTemplatePage(props: AgentTemplatePageProps) {
     return landingAnalytics.start(document, window.location.hostname, agentTemplatePath(props.template.id));
   });
 
+  const preview = createMemo(() => markdownPreviewText(props.template.description));
+  const hasMore = () => clamped() || preview() !== props.template.description.replace(/\s+/gu, " ").trim();
   const openUrl = () => createOpenBotAgentTemplateUrl(props.template.id);
   const counts = () =>
     [countLabel(props.template.skills.length, "skill"), countLabel(props.template.routines.length, "routine")].filter(
@@ -55,7 +50,6 @@ export function AgentTemplatePage(props: AgentTemplatePageProps) {
       <SiteHeader page="content" />
 
       <main class="agent-share-main">
-        {/* The landing page's grid, so a shared agent sits on the same backdrop as the product. */}
         <div class="landing-hero-grid" aria-hidden="true" />
         <article class="agent-share-card" aria-labelledby="agent-share-name">
           <div class="agent-share-hero" aria-hidden="true">
@@ -82,12 +76,39 @@ export function AgentTemplatePage(props: AgentTemplatePageProps) {
               </ul>
             </Show>
 
-            <p ref={description} class="agent-share-description" data-expanded={expanded() ? "" : undefined}>
-              {props.template.description}
-            </p>
-            <Show when={clamped()}>
-              <button class="agent-share-more" type="button" onClick={() => setExpanded(!expanded())}>
-                {expanded() ? "Show less" : "Read all instructions"}
+            <Show
+              when={expanded()}
+              fallback={
+                <p ref={description} class="agent-share-description">
+                  {preview()}
+                </p>
+              }
+            >
+              <div class="agent-share-instructions message-markdown">
+                <Loading
+                  fallback={
+                    <p class="agent-share-instructions-text">{markdownPlainText(props.template.description)}</p>
+                  }
+                >
+                  <MarkdownMessageText
+                    imagesAsLinks
+                    linkFavicons={false}
+                    body={props.template.description}
+                    agents={[]}
+                    onSelectAgent={() => undefined}
+                    onOpenLink={(url) => window.open(url, "_blank", "noopener,noreferrer")}
+                  />
+                </Loading>
+              </div>
+            </Show>
+            <Show when={hasMore()}>
+              <button
+                class="agent-share-more"
+                type="button"
+                aria-expanded={expanded() ? "true" : "false"}
+                onClick={() => setExpanded(!expanded())}
+              >
+                {expanded() ? "Show less" : "Read more"}
               </button>
             </Show>
 
@@ -104,11 +125,12 @@ export function AgentTemplatePage(props: AgentTemplatePageProps) {
         </article>
 
         <p class="agent-share-fallback">
-          GoAhead didn't open? <a href={OPENBOT_LINKS.downloadFromOtherPage}>Download it</a>,{" "}
-          <a href={openUrl()}>open the app</a>, or{" "}
+          GoAhead didn't open? <Link to="/download">Download it</Link>, <a href={openUrl()}>open the app</a>, or{" "}
           <a href={createWebAppAgentTemplatePath(props.template.id)}>open in browser</a>.
         </p>
       </main>
+
+      <LandingFooter />
     </div>
   );
 }

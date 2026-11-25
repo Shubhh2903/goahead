@@ -1,5 +1,6 @@
-import { AGENT_TEMPLATE_CARD, type AgentTemplateDetail } from "@openbot/contracts/ipc";
+import type { AgentTemplateDetail } from "@openbot/contracts/ipc";
 import { createFileRoute, notFound } from "@tanstack/solid-router";
+import { AgentTemplateNotSharedPage } from "../../components/agents/AgentTemplateNotSharedPage";
 import { AgentTemplatePage } from "../../components/agents/AgentTemplatePage";
 import { agentTemplatePath } from "../../lib/agent-template-path";
 import { readAgentTemplate } from "../../lib/agent-templates";
@@ -11,15 +12,12 @@ async function loadAgentTemplate(templateId: string): Promise<AgentTemplateDetai
   return template;
 }
 
-/**
- * A shared agent is public to anyone with the link, but it is not a listing: the page asks search
- * engines to stay out and sits in no sitemap.
- */
-function agentTemplateHead(template: AgentTemplateDetail, siteUrl: string) {
+async function agentTemplateHead(template: AgentTemplateDetail, siteUrl: string) {
+  const { AGENT_TEMPLATE_CARD } = await import("@openbot/contracts/ipc");
+  const { markdownPreviewText } = await import("@openbot/contracts/markdown-preview-text");
   const url = new URL(agentTemplatePath(template.id), siteUrl).toString();
   const title = `${template.name} — GoAhead agent`;
-  const description = template.title || template.description.slice(0, 200);
-  // The agent's own share card when the publish sent one, so a post on X shows this agent.
+  const description = template.title || markdownPreviewText(template.description).slice(0, 200);
   const card = template.cardUrl
     ? {
         url: new URL(template.cardUrl, siteUrl).toString(),
@@ -55,12 +53,19 @@ function agentTemplateHead(template: AgentTemplateDetail, siteUrl: string) {
   };
 }
 
+const NOT_SHARED_HEAD = {
+  meta: [{ title: "Agent no longer shared — GoAhead" }, { name: "robots", content: "noindex, nofollow" }],
+};
+
 export const Route = createFileRoute("/agents/$templateId")({
   loader: ({ params }) => loadAgentTemplate(params.templateId),
-  head: ({ loaderData, match }) => (loaderData ? agentTemplateHead(loaderData, match.context.siteUrl) : {}),
-  // Not cached: the page shows the instructions, which an unpublish must take back at once.
+  head: ({ loaderData, match }) => {
+    if (loaderData) return agentTemplateHead(loaderData, match.context.siteUrl);
+    return match.status === "notFound" ? NOT_SHARED_HEAD : {};
+  },
   headers: () => ({ "X-Robots-Tag": "noindex, nofollow", "Cache-Control": "private, no-store" }),
   component: AgentTemplateRoute,
+  notFoundComponent: AgentTemplateNotSharedPage,
 });
 
 function AgentTemplateRoute() {

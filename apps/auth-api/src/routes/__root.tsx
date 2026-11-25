@@ -1,47 +1,86 @@
 import interLatinFont from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url";
 import type { JSX } from "@solidjs/web";
-import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/solid-router";
-import { onSettled } from "solid-js";
+import { createRootRoute, type ErrorComponentProps, HeadContent, Outlet, Scripts } from "@tanstack/solid-router";
+import { createSignal, onSettled, Show } from "solid-js";
 import "@openbot/brand/logo.css";
+import { rememberPromotionCode } from "@openbot/contracts/promotion-code";
+import { rememberReferralCode } from "@openbot/contracts/referral";
 import { installPointerFocusGuard } from "@openbot/ui/pointer-focus";
 import "../styles.css";
 import { NotFoundPage } from "../components/landing/NotFoundPage";
 import { PageError } from "../components/landing/PageError";
+import { SiteTextProvider, useRouteSiteChrome } from "../components/landing/SiteText";
+import { type RootPageText, rootPageText } from "../components/transactional/page-text";
+import { loadPageText, type PageText } from "../lib/page-text";
+import { requestLocale } from "../lib/request-locale";
 import { servingSiteUrl } from "../lib/serving-site-url";
+import { loadSiteChrome } from "../lib/site-locale";
 import { OPENBOT_SECURITY_HEADERS, openBotRootHead } from "../lib/site-metadata";
+import type { SiteChrome } from "../lib/site-text";
+
+const NOT_FOUND_TITLE = "Page not found · GoAhead";
 
 export const Route = createRootRoute({
-  beforeLoad: () => ({ siteUrl: servingSiteUrl() }),
-  head: () => openBotRootHead(interLatinFont),
-  headers: () => OPENBOT_SECURITY_HEADERS,
+  beforeLoad: () => ({ siteUrl: servingSiteUrl(), locale: requestLocale() }),
+  loader: async ({ context }) => {
+    const [page, site] = await Promise.all([loadPageText(context.locale, rootPageText), loadSiteChrome("en")]);
+    return { ...page, site };
+  },
+  shouldReload: false,
+  head: ({ matches }) => {
+    const head = openBotRootHead(interLatinFont);
+    if (!matches.some((match) => match._notFound)) return head;
+    return { ...head, meta: head.meta.map((tag) => ("title" in tag ? { title: NOT_FOUND_TITLE } : tag)) };
+  },
+  headers: () => ({ ...OPENBOT_SECURITY_HEADERS, Vary: "Accept-Language, Cookie" }),
   component: RootComponent,
   shellComponent: RootDocument,
-  errorComponent: (props) => {
-    console.error(props.error);
-    return <PageError onRetry={() => window.location.reload()} />;
-  },
+  errorComponent: RootError,
   notFoundComponent: NotFoundPage,
 });
 
 function RootComponent() {
-  // Runs only in the browser: the server render has no document.
   onSettled(() => installPointerFocusGuard());
+  onSettled(() => rememberPromotionCode(() => window.localStorage, window.location.href, Date.now()));
+  onSettled(() => rememberReferralCode(() => window.localStorage, window.location.href, Date.now()));
   return <Outlet />;
+}
+
+function RootError(props: ErrorComponentProps) {
+  console.error(props.error);
+  const loaded = Route.useMatch({ select: (match) => match.loaderData });
+  const [fallback, setFallback] = createSignal<PageText<RootPageText> & { site: SiteChrome }>();
+  onSettled(() => {
+    if (loaded()) return;
+    void Promise.all([loadPageText("en", rootPageText), loadSiteChrome("en")]).then(([page, site]) =>
+      setFallback({ ...page, site }),
+    );
+  });
+  return (
+    <Show when={loaded() ?? fallback()}>
+      {(page) => (
+        <SiteTextProvider chrome={page().site}>
+          <PageError lang={page().lang} text={page().text.error} onRetry={() => window.location.reload()} />
+        </SiteTextProvider>
+      )}
+    </Show>
+  );
 }
 
 const NO_SCRIPT_STYLE = "<style>[data-revealed=false],[data-revealed=false] *{opacity:1!important}</style>";
 
 function RootDocument(props: { children: JSX.Element }) {
+  const chrome = useRouteSiteChrome();
+  const lang = () => chrome()?.lang ?? "en";
+  const dir = () => chrome()?.dir ?? "ltr";
   return (
-    <html lang="en">
+    <html lang={lang()} dir={dir()}>
       <head>
         <HeadContent />
-        {/* Text waits at opacity 0 for a script to reveal it. Without scripts,
-            show it as it is, so the page can still be read. */}
         <noscript innerHTML={NO_SCRIPT_STYLE} />
       </head>
       <body>
-        {props.children}
+        <SiteTextProvider>{props.children}</SiteTextProvider>
         <Scripts />
       </body>
     </html>

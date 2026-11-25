@@ -5,7 +5,7 @@ import {
 } from "@openbot/contracts/android-live-update-relay";
 import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { importPKCS8, SignJWT } from "jose";
-import type { LiveActivityRelayResult } from "./live-activity-relay";
+import type { ApnsRelayResult as LiveActivityRelayResult } from "./live-activity-relay";
 
 /**
  * Forwards a sealed Android live update from a host to Firebase Cloud Messaging. The host sealed the

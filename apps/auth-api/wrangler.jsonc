@@ -11,20 +11,17 @@
     "cross_version_cache": false
   },
   "observability": {
-    "enabled": true
+    "enabled": false
   },
-  // The outbox, the hosted-site cleanup and the hosted server checks are retry paths: the request path
-  // and the webhooks do the first attempt. A run each minute only repeated empty reads. An idle server
-  // stops 15 to 20 minutes after its last use.
+  "upload_source_maps": false,
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    "crons": ["*/5 * * * *", "*/1 * * * *"]
   },
   "routes": [
     {
       "pattern": "openbot.run/*",
       "zone_id": "bac5e044ba951c390229f0e93673ebd3"
     },
-    // `www` has no origin. The Worker answers it only with a redirect to openbot.run.
     {
       "pattern": "www.openbot.run/*",
       "zone_id": "bac5e044ba951c390229f0e93673ebd3"
@@ -48,25 +45,42 @@
     "AUTH_EXPOSE_DEVELOPMENT_CODE": "false",
     "EMAIL_SMTP_HOST": "mail.privateemail.com",
     "EMAIL_SMTP_PORT": "465",
-    "EMAIL_SMTP_USERNAME": "hello@openbot.run",
-    "EMAIL_FROM": "hello@openbot.run",
+    "EMAIL_SMTP_USERNAME": "no_reply@goahead.multicodegenius.com",
+    "EMAIL_FROM": "no_reply@goahead.multicodegenius.com",
+    "EMAIL_REPLY_TO": "hello@goahead.multicodegenius.com",
+    "EMAIL_LICENSE_REPLY_TO": "licenses@openbot.run",
+    "EMAIL_LICENSE_FROM": "",
     "REMOTE_TICKET_KEY_ID": "openbot-remote-1",
     "REMOTE_SIGNAL_URL": "wss://signal.openbot.run/v1/signal",
+    "REMOTE_SIGNAL_HOMES": "a=wss://signal1.openbot.run/v1/signal,b=wss://signal2.openbot.run/v1/signal,us=wss://signal-us.openbot.run/v1/signal,au=wss://signal-au.openbot.run/v1/signal,sg=wss://signal-sg.openbot.run/v1/signal",
+    "REMOTE_SIGNAL_HOME_LOCATIONS": "a=60.17:24.94,b=60.17:24.94,us=37.34:-121.89,au=-33.87:151.21,sg=1.35:103.82",
+    "REMOTE_SIGNAL_HOME_COUNTRIES": "CN=us",
     "REMOTE_AUTH_WEBHOOK_URL": "https://signal.openbot.run/internal/auth-events",
-    // Creates stay off until the boat and Stripe secrets and the template are set. "false" stops new
-    // servers only.
+    "REMOTE_AUTH_WEBHOOK_URLS": "https://signal1.openbot.run/internal/auth-events,https://signal2.openbot.run/internal/auth-events,https://signal-us.openbot.run/internal/auth-events,https://signal-au.openbot.run/internal/auth-events,https://signal-sg.openbot.run/internal/auth-events",
+    "SIGNAL_ENTRY_ZONE_ID": "bac5e044ba951c390229f0e93673ebd3",
     "HOSTED_SERVERS_ENABLED": "true",
-    // Each account can buy a server in production. Put account IDs here to limit creates to them.
     "HOSTED_SERVERS_ALLOWED_USER_IDS": "*",
-    // The public Client ID of the OpenBotGit GitHub App. Its private key is the optional secret
-    // GITHUB_APP_PRIVATE_KEY (PKCS #8). Without the key, agents act on GitHub as the signed-in user.
+    "LICENSE_TRIAL_END": "2026-12-01T00:00:00Z",
+    "BILLING_COUNTRY_REQUIRED": "true",
     "GITHUB_APP_CLIENT_ID": "Iv23lik5pzHz70cb0RUL",
+    "FEEDBACK_WITHDRAWN_REPOSITORY": "",
     "APNS_TEAM_ID": "ZTRDTUL87R",
     "APNS_TOPIC": "run.openbot.mobile",
-    // The apps that open universal links (`/.well-known/apple-app-site-association`).
     "APPLE_DESKTOP_APP_ID": "ZTRDTUL87R.app.openbot.desktop",
     "APPLE_MOBILE_APP_ID": "ZTRDTUL87R.run.openbot.mobile"
   },
+  "services": [
+    {
+      "binding": "EMAIL_RELAY",
+      "service": "openbot-email-relay"
+    }
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL_FALLBACK",
+      "allowed_sender_addresses": ["no_reply@goahead.multicodegenius.com"]
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
@@ -122,6 +136,11 @@
       "name": "LIVE_ACTIVITY_RATE_LIMITER",
       "namespace_id": "2026092901",
       "simple": { "limit": 300, "period": 60 }
+    },
+    {
+      "name": "FEEDBACK_RATE_LIMITER",
+      "namespace_id": "2026110801",
+      "simple": { "limit": 3, "period": 60 }
     }
   ],
   "env": {
@@ -248,13 +267,19 @@
         "AUTH_EXPOSE_DEVELOPMENT_CODE": "false",
         "EMAIL_SMTP_HOST": "mail.privateemail.com",
         "EMAIL_SMTP_PORT": "465",
-        "EMAIL_SMTP_USERNAME": "hello@openbot.run",
-        "EMAIL_FROM": "hello@openbot.run",
+        "EMAIL_SMTP_USERNAME": "no_reply@goahead.multicodegenius.com",
+        "EMAIL_FROM": "no_reply@goahead.multicodegenius.com",
+        "EMAIL_REPLY_TO": "hello@goahead.multicodegenius.com",
+        "EMAIL_LICENSE_REPLY_TO": "licenses@openbot.run",
+        "EMAIL_LICENSE_FROM": "",
         "SITE_PUBLISH_ENABLED": "false",
         "SITE_COOKIE_ISOLATION_READY": "false",
         "REMOTE_TICKET_KEY_ID": "openbot-remote-1",
         "REMOTE_SIGNAL_URL": "ws://127.0.0.1:8081/v1/signal",
+        "REMOTE_SIGNAL_HOMES": "",
         "REMOTE_AUTH_WEBHOOK_URL": "http://127.0.0.1:8081/internal/auth-events",
+        "REMOTE_AUTH_WEBHOOK_URLS": "",
+        "SIGNAL_ENTRY_ZONE_ID": "",
         "APPLE_DESKTOP_APP_ID": "ZTRDTUL87R.app.openbot.desktop",
         "APPLE_MOBILE_APP_ID": "ZTRDTUL87R.run.openbot.mobile"
       },
@@ -310,6 +335,11 @@
           "name": "LIVE_ACTIVITY_RATE_LIMITER",
           "namespace_id": "2026092902",
           "simple": { "limit": 300, "period": 60 }
+        },
+        {
+          "name": "FEEDBACK_RATE_LIMITER",
+          "namespace_id": "2026110802",
+          "simple": { "limit": 3, "period": 60 }
         }
       ]
     },
@@ -318,15 +348,9 @@
       "workers_dev": true,
       "preview_urls": false,
       "routes": [],
-      // Each minute: the cron starts hosted servers that stopped again, and checks servers that a webhook missed.
       "triggers": {
         "crons": ["* * * * *"]
       },
-      // Hosted servers stay off until these are set. `api:deploy:test` sets the Stripe pair, BOAT_API_KEY,
-      // BOAT_WEBHOOK_SECRET and HOSTED_SERVERS_DEVELOPER_KEY from `.env.shared`, and
-      // HOSTED_SERVERS_ALLOWED_USER_IDS from its HOSTED_SERVERS_TEST_ALLOW_LIST.
-      // Set HOSTED_SERVER_TEMPLATE with `wrangler secret put <name> --env test`.
-      // They are not required, so the test Worker deploys without them. See docs/hosted-servers.md.
       "secrets": {
         "required": [
           "EMAIL_SMTP_PASSWORD",
@@ -341,13 +365,19 @@
         "AUTH_EXPOSE_DEVELOPMENT_CODE": "false",
         "EMAIL_SMTP_HOST": "mail.privateemail.com",
         "EMAIL_SMTP_PORT": "465",
-        "EMAIL_SMTP_USERNAME": "hello@openbot.run",
-        "EMAIL_FROM": "hello@openbot.run",
+        "EMAIL_SMTP_USERNAME": "no_reply@goahead.multicodegenius.com",
+        "EMAIL_FROM": "no_reply@goahead.multicodegenius.com",
+        "EMAIL_REPLY_TO": "hello@goahead.multicodegenius.com",
+        "EMAIL_LICENSE_REPLY_TO": "licenses@openbot.run",
+        "EMAIL_LICENSE_FROM": "",
         "SITE_PUBLISH_ENABLED": "false",
         "SITE_COOKIE_ISOLATION_READY": "false",
         "REMOTE_TICKET_KEY_ID": "openbot-remote-1",
         "REMOTE_SIGNAL_URL": "wss://signal.openbot.run/v1/signal",
+        "REMOTE_SIGNAL_HOMES": "",
         "REMOTE_AUTH_WEBHOOK_URL": "https://signal.openbot.run/internal/auth-events",
+        "REMOTE_AUTH_WEBHOOK_URLS": "",
+        "SIGNAL_ENTRY_ZONE_ID": "",
         "HOSTED_SERVERS_ENABLED": "true",
         "GITHUB_APP_CLIENT_ID": "Iv23lik5pzHz70cb0RUL",
         "APNS_TEAM_ID": "ZTRDTUL87R",
@@ -407,6 +437,11 @@
           "name": "LIVE_ACTIVITY_RATE_LIMITER",
           "namespace_id": "2026092903",
           "simple": { "limit": 300, "period": 60 }
+        },
+        {
+          "name": "FEEDBACK_RATE_LIMITER",
+          "namespace_id": "2026110803",
+          "simple": { "limit": 3, "period": 60 }
         }
       ]
     }

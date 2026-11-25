@@ -8,8 +8,8 @@ import {
   formatArticleDate,
 } from "../../lib/content-collection";
 import { ArticleGradient } from "../content/ArticleGradient";
+import { DataArticleFrame } from "../content/DataArticleFrame";
 import { LandingIcon } from "../landing/LandingIcon";
-import { CompareArticleFrame } from "./CompareArticleFrame";
 import { CompareBenchmark } from "./CompareBenchmark";
 import { CheckedMeta, CompareFaq, CompareMarkRow, CompareSources, RevealSection, SideLabel } from "./CompareParts";
 
@@ -19,17 +19,13 @@ export interface RoundupPageProps {
   roundup: RoundupComparison;
 }
 
-/** GoAhead's entry draws its own logo, which `SideMark` draws when no mark is given. */
 function appMark(app: RoundupApp) {
   return app.mark === "openbot" ? undefined : app.mark;
 }
 
-// Many apps in one list. GoAhead is first, and the page says that we make it. Each
-// other entry links to the comparisons that include it, where its sources are. The
-// summary table is a real table, for the same reason as on a comparison.
 export function RoundupPage(props: RoundupPageProps) {
   return (
-    <CompareArticleFrame collection={props.collection} article={props.article}>
+    <DataArticleFrame collection={props.collection} article={props.article}>
       <header class="compare-hero">
         <div class="compare-hero-copy" data-enter="post-copy">
           <Link class="post-article-back" to={props.collection.indexRoute}>
@@ -131,6 +127,6 @@ export function RoundupPage(props: RoundupPageProps) {
       <CompareFaq faq={props.roundup.faq} />
 
       <CompareSources subject="these apps" page={props.roundup} />
-    </CompareArticleFrame>
+    </DataArticleFrame>
   );
 }

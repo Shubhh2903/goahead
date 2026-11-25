@@ -1,8 +1,10 @@
+import { fileURLToPath } from "node:url";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import solidPlugin from "@solidjs/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/solid-start/plugin/vite";
 import { defineConfig, type Plugin } from "vite";
+import { lazyLanguageCatalogs } from "../../packages/i18n/src/vite-plugin";
 import { contentImages } from "./content-images";
 import { DEVELOPMENT_APNS_PATH, developmentApnsProxy } from "./dev-apns-proxy";
 import { developmentNetworkRequestAllowed } from "./dev-network-access";
@@ -12,7 +14,6 @@ import { readLocalRuntimeVars } from "./src/server/runtime-env";
 export default defineConfig(({ command }) => {
   const port = readApiPort(process.env.OPENBOT_API_PORT);
   const localRuntimeVars = command === "serve" ? readLocalRuntimeVars(process.env) : {};
-  // The local Worker cannot reach Apple over HTTP/2, so it sends Live Activity updates to this server.
   if (localRuntimeVars.APNS_PRIVATE_KEY) {
     localRuntimeVars.APNS_ORIGIN = `http://127.0.0.1:${port}${DEVELOPMENT_APNS_PATH}`;
   }
@@ -24,12 +25,16 @@ export default defineConfig(({ command }) => {
         "@openbot/renderer-web": rendererWebAlias,
       },
     },
+    optimizeDeps: {
+      exclude: ["@norbert_bodziony/bloub", "@norbert_bodziony/bloub/plush"],
+    },
+    // in each copy, so the minifier moves `/*!` and `@license` comments to the end of each file.
+    esbuild: { legalComments: "eof" },
     build: {
-      // A caption file has to stay a file. It is small enough for Vite to fold
-      // into the bundle as a `data:` URL, and a text track fetched from one is
-      // cross-origin to the page that asks for it, so the player drops it and the
-      // video plays with no captions at all. Everything else keeps the default.
       assetsInlineLimit: (file) => (file.endsWith(".vtt") ? false : undefined),
+    },
+    environments: {
+      ssr: { build: { rolldownOptions: { output: { strictExecutionOrder: true } } } },
     },
     server: {
       host: readApiHost(process.env.OPENBOT_API_HOST),
@@ -44,14 +49,16 @@ export default defineConfig(({ command }) => {
       cloudflare({
         viteEnvironment: { name: "ssr" },
         config(config) {
+          if (command === "serve") {
+            config.services = config.services?.filter((service) => service.binding !== "EMAIL_RELAY");
+          }
           return { vars: { ...config.vars, ...localRuntimeVars } };
         },
       }),
+      lazyLanguageCatalogs({ applyToEnvironment: (environment) => environment.name === "client" }),
+      bloubServerBuild(),
       tanstackStart(),
       solidPlugin({ ssr: true }),
-      // Lightning CSS currently reports valid named highlight selectors as
-      // unsupported. Let Vite handle the final CSS bundle until that upstream
-      // parser false positive is fixed.
       tailwindcss({ optimize: false }),
       contentImages(),
     ],
@@ -79,6 +86,35 @@ function developmentLanGuard(): Plugin {
         response.statusCode = 404;
         response.end();
       });
+    },
+  };
+}
+
+const BLOUB_ENTRIES = ["@norbert_bodziony/bloub", "@norbert_bodziony/bloub/plush"] as const;
+
+const BLOUB_ASSET_URL = /new URL\(`(\.\/assets\/[\w.-]+\.webp)`,\s*import\.meta\.url\)\.href/g;
+
+function bloubServerBuild(): Plugin {
+  const serverEntries = new Map<string, string>(
+    BLOUB_ENTRIES.map((entry) => [entry, fileURLToPath(import.meta.resolve(entry))]),
+  );
+  const serverFiles = new Set(serverEntries.values());
+  return {
+    name: "openbot-bloub-server-build",
+    enforce: "pre",
+    applyToEnvironment: (environment) => environment.name === "ssr",
+    resolveId(source) {
+      return serverEntries.get(source) ?? null;
+    },
+    transform(code, id) {
+      if (!serverFiles.has(id)) return null;
+      const imports: string[] = [];
+      const rewritten = code.replace(BLOUB_ASSET_URL, (_match, path: string) => {
+        const name = `bloubAsset${imports.length}`;
+        imports.push(`import ${name} from ${JSON.stringify(`${path}?url`)};`);
+        return name;
+      });
+      return imports.length === 0 ? null : { code: `${imports.join("\n")}\n${rewritten}`, map: null };
     },
   };
 }

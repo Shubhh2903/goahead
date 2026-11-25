@@ -3,9 +3,7 @@ import { PluginPage } from "../../components/plugins/PluginPage";
 import { pluginHead } from "../../lib/content-metadata";
 import { findPlugin, type SitePlugin } from "../../lib/plugins";
 
-// The same reason the article routes give: the lookup is in `loader`, so a slug the catalog does not
-// hold ends as a real not-found response rather than a 200 that draws an error card.
-export function loadPlugin(slug: string): SitePlugin {
+function loadPlugin(slug: string): SitePlugin {
   const plugin = findPlugin(slug);
   if (!plugin) throw notFound();
   return plugin;
@@ -13,7 +11,17 @@ export function loadPlugin(slug: string): SitePlugin {
 
 export const Route = createFileRoute("/plugins/$slug")({
   loader: ({ params }) => loadPlugin(params.slug),
-  head: ({ loaderData, match }) => (loaderData ? pluginHead(loaderData, match.context.siteUrl) : {}),
+  head: async ({ loaderData, match }) => {
+    if (!loaderData) return {};
+    const head = pluginHead(loaderData, match.context.siteUrl);
+    const [{ findPluginGuide }, { comparisonFaqStructuredData }] = await Promise.all([
+      import("../../content/plugins"),
+      import("../../content/compare/comparison"),
+    ]);
+    const guide = findPluginGuide(loaderData.slug);
+    if (!guide) return head;
+    return { ...head, meta: [...head.meta, { "script:ld+json": comparisonFaqStructuredData(guide) }] };
+  },
   component: PluginRoute,
 });
 

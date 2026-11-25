@@ -3,8 +3,8 @@ import { For } from "solid-js";
 import { type Comparison, comparisonScore, OPENBOT_PLANS } from "../../content/compare/comparison";
 import { type CollectionArticle, type ContentCollection, formatArticleDate } from "../../lib/content-collection";
 import { ArticleGradient } from "../content/ArticleGradient";
+import { DataArticleFrame } from "../content/DataArticleFrame";
 import { LandingIcon } from "../landing/LandingIcon";
-import { CompareArticleFrame } from "./CompareArticleFrame";
 import {
   CheckedMeta,
   ChoiceCard,
@@ -27,12 +27,6 @@ export interface ComparisonPageProps {
   comparison: Comparison;
 }
 
-// A comparison is read as a set of answers, not as an essay, so it is drawn from
-// data instead of prose: the two marks side by side, the short answer, a table of
-// the differences, the differences in depth, the questions people ask, and the
-// sources. The table is a real table, so a crawler or an assistant that reads the
-// page gets the same rows a reader sees. Where one side is better, the page says so
-// in words as well as with a mark, and the summary over the table counts it.
 export function ComparisonPage(props: ComparisonPageProps) {
   const rival = () => props.comparison.rival;
   const openbot: SideProps = { side: "openbot", name: "GoAhead" };
@@ -41,7 +35,7 @@ export function ComparisonPage(props: ComparisonPageProps) {
   const topics = () => props.comparison.rows.length;
 
   return (
-    <CompareArticleFrame collection={props.collection} article={props.article}>
+    <DataArticleFrame collection={props.collection} article={props.article}>
       <header class="compare-hero">
         <div class="compare-hero-copy" data-enter="post-copy">
           <Link class="post-article-back" to={props.collection.indexRoute}>
@@ -55,8 +49,6 @@ export function ComparisonPage(props: ComparisonPageProps) {
           <CheckedMeta checkedAt={props.comparison.checkedAt} />
         </div>
 
-        {/* The two marks, over the artwork. Decoration: the title and the table
-            already say all of it. The stage itself never fades: see `.compare-stage`. */}
         <div class="compare-stage" aria-hidden="true">
           <ArticleGradient
             title={props.article.title}
@@ -76,7 +68,6 @@ export function ComparisonPage(props: ComparisonPageProps) {
         </div>
       </RevealSection>
 
-      {/* The first reason to switch: the plans people already pay for. */}
       <RevealSection class="compare-plans" titleId="compare-plans-title" title="Use the plans you already pay for">
         <p class="compare-plans-lead">
           GoAhead sells you no model. Sign in to the AI plans you already have, or connect your own model, and give each
@@ -155,6 +146,6 @@ export function ComparisonPage(props: ComparisonPageProps) {
       <CompareFaq faq={props.comparison.faq} />
 
       <CompareSources subject={rival().name} page={props.comparison} />
-    </CompareArticleFrame>
+    </DataArticleFrame>
   );
 }

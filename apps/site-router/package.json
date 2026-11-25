@@ -4,19 +4,18 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@openbot/contracts": "workspace:*"
+    "@openbot/contracts": "workspace:*",
+    "effect": "catalog:"
   },
   "scripts": {
     "cf:typegen": "wrangler types",
     "deploy": "wrangler deploy --keep-vars",
     "dev": "wrangler dev",
-    "typecheck": "bun ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "typecheck": "bun ../../scripts/type-checker.ts --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:",
     "wrangler": "catalog:"
   }
 }

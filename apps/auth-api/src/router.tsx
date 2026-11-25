@@ -4,8 +4,6 @@ import { routeTree } from "./routeTree.gen";
 const CHUNK_RELOAD_KEY = "openbot:chunk-reload-at";
 const CHUNK_RELOAD_WINDOW_MS = 10_000;
 
-// A deploy removes the previous build's chunks. Reload once to get the new build; if the chunk is
-// still missing after that reload, let the error page show instead of looping.
 if (typeof window !== "undefined") {
   window.addEventListener("vite:preloadError", (event) => {
     try {
@@ -20,11 +18,27 @@ if (typeof window !== "undefined") {
   });
 }
 
+function textCatalogOf(loaderData: unknown): string | undefined {
+  if (typeof loaderData !== "object" || loaderData === null || !("textCatalog" in loaderData)) return undefined;
+  return typeof loaderData.textCatalog === "string" ? loaderData.textCatalog : undefined;
+}
+
 export function getRouter() {
-  return createRouter({
+  const router = createRouter({
     routeTree,
     defaultPreload: "intent",
+    dehydrate: (): { textCatalog: string | undefined } => ({
+      textCatalog: router.state.matches.map((match) => textCatalogOf(match.loaderData)).find(Boolean),
+    }),
+    hydrate: async (data: { textCatalog?: string | undefined }) => {
+      const locale = data.textCatalog;
+      if (!locale || locale === "en") return;
+      const { loadLocale, TRANSLATED_LOCALES } = await import("@openbot/i18n");
+      const translated = TRANSLATED_LOCALES.find((item) => item === locale);
+      if (translated) await loadLocale(translated).catch(() => undefined);
+    },
   });
+  return router;
 }
 
 declare module "@tanstack/solid-router" {

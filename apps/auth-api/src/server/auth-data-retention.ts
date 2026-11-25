@@ -1,3 +1,5 @@
+import { Context, Effect, Layer, Schema } from "effect";
+
 const RATE_LIMIT_WINDOW_MS = 15 * 60_000;
 
 export interface AuthRetentionResult {
@@ -7,15 +9,18 @@ export interface AuthRetentionResult {
   teamTickets: number;
   remoteSessions: number;
   remoteInvites: number;
+  mobileConnectLinks: number;
+  serverClaims: number;
+  companySignIn: number;
 }
 
-export interface AuthRetentionOperation {
+interface AuthRetentionOperation {
   name: keyof AuthRetentionResult;
   sql: string;
   cutoff: number;
 }
 
-export function authRetentionOperations(now: number): AuthRetentionOperation[] {
+function authRetentionOperations(now: number): AuthRetentionOperation[] {
   return [
     {
       name: "challenges",
@@ -62,14 +67,44 @@ export function authRetentionOperations(now: number): AuthRetentionOperation[] {
       sql: "DELETE FROM remote_invites WHERE revoked_at IS NOT NULL AND revoked_at <= ?",
       cutoff: now - 24 * 60 * 60_000,
     },
+    {
+      name: "mobileConnectLinks",
+      sql: "DELETE FROM mobile_connect_links WHERE revoked_at IS NOT NULL AND revoked_at <= ?",
+      cutoff: now,
+    },
+    {
+      name: "serverClaims",
+      sql: "DELETE FROM server_claims WHERE expires_at <= ? OR redeemed_at IS NOT NULL",
+      cutoff: now,
+    },
+    {
+      name: "companySignIn",
+      sql: "DELETE FROM company_sign_in_flows WHERE expires_at <= ?",
+      cutoff: now,
+    },
+    {
+      name: "companySignIn",
+      sql: "DELETE FROM company_sign_in_codes WHERE expires_at <= ? OR redeemed_at IS NOT NULL",
+      cutoff: now,
+    },
   ];
 }
 
-export async function pruneExpiredAuthData(database: D1Database, now: number): Promise<AuthRetentionResult> {
+class AuthRetentionDatabase extends Context.Service<AuthRetentionDatabase, D1Database>()(
+  "@openbot/auth-api/AuthRetentionDatabase",
+) {}
+
+class AuthRetentionError extends Schema.TaggedError<AuthRetentionError>()("AuthRetentionError", {
+  message: Schema.String,
+}) {}
+
+const prune = Effect.fn("AuthRetention.prune")(function* (now: number) {
+  const database = yield* AuthRetentionDatabase;
   const operations = authRetentionOperations(now);
-  const results = await database.batch(
-    operations.map((operation) => database.prepare(operation.sql).bind(operation.cutoff)),
-  );
+  const results = yield* Effect.tryPromise({
+    try: () => database.batch(operations.map((operation) => database.prepare(operation.sql).bind(operation.cutoff))),
+    catch: () => new AuthRetentionError({ message: "Account data retention failed." }),
+  });
   const deleted: AuthRetentionResult = {
     challenges: 0,
     sessions: 0,
@@ -77,9 +112,16 @@ export async function pruneExpiredAuthData(database: D1Database, now: number): P
     teamTickets: 0,
     remoteSessions: 0,
     remoteInvites: 0,
+    mobileConnectLinks: 0,
+    serverClaims: 0,
+    companySignIn: 0,
   };
   for (const [index, operation] of operations.entries()) {
     deleted[operation.name] += results[index]?.meta.changes ?? 0;
   }
   return deleted;
+});
+
+export function pruneExpiredAuthData(database: D1Database, now: number) {
+  return prune(now).pipe(Effect.provide(Layer.succeed(AuthRetentionDatabase)(database)));
 }

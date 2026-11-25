@@ -1,28 +1,55 @@
 import { env, waitUntil } from "cloudflare:workers";
+import { CREDIT_MEDIA_HOST_HEADER, CREDIT_MEDIA_HOST_TOKEN_HEADER } from "@openbot/contracts/credit-media";
+import { FEEDBACK_REPOSITORY } from "@openbot/contracts/feedback";
 import { HOSTING_DEVELOPER_KEY_HEADER } from "@openbot/contracts/hosted-servers";
+import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import { Effect } from "effect";
+import { type AccountAnalytics, createAccountAnalytics } from "./account-analytics";
+import { AccountAttribution } from "./account-attribution";
 import { adminTokenMatches } from "./admin-token";
 import { AgentMarketplace, AgentMarketplaceError } from "./agent-marketplace";
 import { AgentTemplates } from "./agent-templates";
-import { type FcmLiveUpdateSender, sharedFcmSender } from "./android-live-update-relay";
-import { AuthService, AuthServiceError } from "./auth-service";
+import { type FcmLiveUpdateSender, sharedFcmSender as sharedFcmLiveUpdateSender } from "./android-live-update-relay";
+import { type FcmRelaySender, sharedFcmSender } from "./android-notification-relay";
+import { AuthOperationError, AuthService, AuthServiceError } from "./auth-service";
 import { BillingError, type BillingService } from "./billing-service";
+import { CompanySignInError, CompanySignInService } from "./company-sign-in";
+import type { ContactMessageServices } from "./contact-message";
+import { type CreditMediaPayer, CreditMediaService } from "./credit-media-service";
+import { CustomServerOffers } from "./custom-server-offers";
 import { D1AuthRepository } from "./d1-auth-repository";
-import { createEmailCodeDelivery, createTeamInviteEmailDelivery } from "./email-delivery";
+import { DiscordAppError, DiscordAppService } from "./discord-app";
+import { runApiEffect } from "./effect-runtime";
+import {
+  createContactMessageDelivery,
+  createEmailCodeDelivery,
+  createOwnerTransferEmailDelivery,
+  createTeamInviteEmailDelivery,
+} from "./email-delivery";
+import {
+  COUNT_FEEDBACK,
+  DELETE_EARLIER_FEEDBACK_DAYS,
+  FEEDBACK_DAILY_LIMIT,
+  UNCOUNT_FEEDBACK,
+} from "./feedback-daily-counts";
+import { feedbackOwner } from "./feedback-owner";
 import { GitHubInstallationTokens, GitHubInstallationTokensError } from "./github-installation-tokens";
 import { createHostedBilling } from "./hosted-billing";
 import { type HostedServerService, HostedServerServiceError } from "./hosted-server-service";
 import { HostedSiteInputError } from "./hosted-site-contract";
 import { enforceHostedSiteReportRateLimit as enforceReportRateLimit } from "./hosted-site-request-policy";
-import { type HostedSiteScope, resolveHostedSiteScope } from "./hosted-site-server";
+import { adoptUnlinkedHostedSites, resolveHostedSiteScope } from "./hosted-site-server";
 import { HostedSiteService } from "./hosted-site-service";
 import { JsonBodyError } from "./json-body";
-import { type ApnsLiveActivitySender, sharedApnsSender } from "./live-activity-relay";
+import { type ApnsRelaySender, sharedApnsSender } from "./live-activity-relay";
 import { MarketplaceQueryError } from "./marketplace-pagination";
 import {
   enforceMarketplaceMutation,
   type MarketplaceMutationKind,
   MarketplaceRateLimitError,
 } from "./marketplace-request-policy";
+import { mediaUpstreamsFromBindings } from "./media-upstream-bindings";
+import { Referrals } from "./referrals";
 import {
   deliverPendingRemoteAuthEvents,
   notifyAccountProfileChanged,
@@ -32,21 +59,62 @@ import {
 } from "./remote-control-plane";
 import { SkillMarketplace, SkillMarketplaceError } from "./skill-marketplace";
 import { SlackAppError, SlackAppService } from "./slack-app";
-import { requireWorkerBindings, type TeamInviteEmailDelivery } from "./types";
+import {
+  type OwnerTransferEmailDelivery,
+  requireWorkerBindings,
+  type TeamInviteEmailDelivery,
+  type WorkerBindings,
+} from "./types";
+
+function accountAnalytics(bindings: WorkerBindings): AccountAnalytics {
+  return createAccountAnalytics({
+    clientId: bindings.OPENPANEL_CLIENT_ID,
+    clientSecret: bindings.OPENPANEL_CLIENT_SECRET,
+    fetch: (input, init) => fetch(input, init),
+    schedule,
+    database: bindings.DB,
+  });
+}
+
+export function requestAccountAttribution(): AccountAttribution {
+  const bindings = requireWorkerBindings(env);
+  return new AccountAttribution({ database: bindings.DB, analytics: accountAnalytics(bindings) });
+}
 
 export function requestAuthService(): AuthService {
   const bindings = requireWorkerBindings(env);
   const exposeDevelopmentCode = bindings.AUTH_EXPOSE_DEVELOPMENT_CODE === "true";
+  const analytics = accountAnalytics(bindings);
   return new AuthService({
     repository: new D1AuthRepository(bindings.DB),
-    delivery: exposeDevelopmentCode ? null : createEmailCodeDelivery(bindings),
+    delivery: exposeDevelopmentCode ? null : createEmailCodeDelivery(bindings, analytics),
     exposeDevelopmentCode,
-    // The revocation is already written and the cron redelivers it, so the answer does not wait.
-    flushSessionRevocations: async () => {
-      waitUntil(deliverPendingRemoteAuthEvents(bindings, Date.now()));
-    },
-    profileChanged: (userId) => notifyAccountProfileChanged(bindings, userId, waitUntil),
+    flushSessionRevocations: () => Effect.sync(() => schedule(deliverPendingRemoteAuthEvents(bindings, Date.now()))),
+    profileChanged: (userId) => notifyAccountProfileChanged(bindings, userId, schedule),
+    analytics,
+    attribution: new AccountAttribution({ database: bindings.DB, analytics }),
+    referrals: new Referrals({ database: bindings.DB }),
+    usesCompanySignIn: (email) =>
+      new CompanySignInService(bindings)
+        .usesCompanySignIn(email)
+        .pipe(Effect.mapError(() => new AuthOperationError({ message: "Account operation failed." }))),
   });
+}
+
+export function requestCompanySignIn(): CompanySignInService {
+  const bindings = requireWorkerBindings(env);
+  const remote = new RemoteControlPlane(bindings, { schedule });
+  return new CompanySignInService(bindings, {
+    flushSessionRevocations: () => Effect.sync(() => schedule(deliverPendingRemoteAuthEvents(bindings, Date.now()))),
+    revokeMembership: (actorUserId, hostId, membershipId) =>
+      remote.changeMembership(actorUserId, { hostId, membershipId, revoke: true }).pipe(Effect.asVoid),
+    joinServer: (hostId, userId, options) => remote.joinByCompanySignIn(hostId, userId, options),
+  });
+}
+
+export function companySignInErrorResponse(error: unknown): Response {
+  if (error instanceof CompanySignInError) return apiError(error.status, error.code, error.message);
+  return remoteControlPlaneErrorResponse(error);
 }
 
 export function requestAvatarBucket(): R2Bucket {
@@ -67,9 +135,12 @@ export function requestAgentTemplates(): AgentTemplates {
   return new AgentTemplates(requireWorkerBindings(env));
 }
 
-/** The sites that a signed-in `/v1/sites` request can see and change. See `resolveHostedSiteScope`. */
-export function requestHostedSiteScope(request: Request, userId: string): Promise<HostedSiteScope> {
+export function requestHostedSiteScope(request: Request, userId: string) {
   return resolveHostedSiteScope(requireWorkerBindings(env).DB, userId, request);
+}
+
+export function requestAdoptUnlinkedHostedSites(userId: string, serverId: string) {
+  return adoptUnlinkedHostedSites(requireWorkerBindings(env).DB, userId, serverId, Date.now());
 }
 
 export function requestHostedSiteService(): HostedSiteService {
@@ -83,9 +154,51 @@ export function requestHostedSiteService(): HostedSiteService {
   );
 }
 
-/** The billing service, or null when this deployment has no Stripe key. */
+export function requestReferrals(): Referrals {
+  return new Referrals({ database: requireWorkerBindings(env).DB });
+}
+
+export function requestCreditMedia(): CreditMediaService {
+  const bindings = requireWorkerBindings(env);
+  return new CreditMediaService({
+    database: bindings.DB,
+    upstreams: mediaUpstreamsFromBindings(bindings),
+    now: () => Date.now(),
+    analytics: accountAnalytics(bindings),
+  });
+}
+
+export const requestCreditMediaPayer = Effect.fn("CreditMedia.requestPayer")(function* (request: Request) {
+  const hostId = request.headers.get(CREDIT_MEDIA_HOST_HEADER);
+  const machineToken = request.headers.get(CREDIT_MEDIA_HOST_TOKEN_HEADER);
+  if (hostId || machineToken) {
+    if (!hostId || !machineToken || hostId.length > 200 || machineToken.length > 512)
+      return yield* new RemoteControlPlaneError(401, "host_unauthorized", "The host credential is invalid.");
+    yield* requestRemoteControlPlane().authenticateHost(hostId, machineToken);
+    const payer: CreditMediaPayer = { wallet: "server", serverId: hostId };
+    return { payer, actorUserId: null };
+  }
+  const user = yield* requestUser(request);
+  if (!user) return null;
+  const payer: CreditMediaPayer = { wallet: "personal", userId: user.id };
+  return { payer, actorUserId: user.id };
+});
+
+export function creditMediaErrorResponse(error: unknown): Response {
+  if (error instanceof BillingError) {
+    const response = apiError(error.status, error.code, error.message);
+    if (error.code === "media_busy") response.headers.set("Retry-After", "10");
+    return response;
+  }
+  return remoteControlPlaneErrorResponse(error);
+}
+
 export function requestBillingService(): BillingService | null {
   return requestHostedBilling().billing;
+}
+
+export function requestCustomServerOffers(): CustomServerOffers {
+  return new CustomServerOffers({ database: requireWorkerBindings(env).DB, billing: requestBillingService() });
 }
 
 export function billingErrorResponse(error: unknown): Response {
@@ -108,14 +221,14 @@ export function requireSitePublishingEnabled(): void {
 }
 
 export function hostedSiteErrorResponse(error: unknown): Response {
-  if (error instanceof HostedSiteInputError) return apiError(error.status, error.code, error.message);
+  if (error instanceof HostedSiteInputError) {
+    const response = apiError(error.status, error.code, error.message);
+    if (error.retryAfterSeconds !== undefined) response.headers.set("Retry-After", String(error.retryAfterSeconds));
+    return response;
+  }
   return authErrorResponse(error);
 }
 
-/**
- * One service for each key, so the imported key and the app ID are read once for each isolate. Only
- * resolved values are kept: workerd refuses a promise that another request made.
- */
 let githubInstallationTokens: { key: string; service: GitHubInstallationTokens } | null = null;
 
 export function requestGitHubInstallationTokens(): GitHubInstallationTokens {
@@ -135,45 +248,138 @@ export function requestGitHubInstallationTokens(): GitHubInstallationTokens {
   return githubInstallationTokens.service;
 }
 
-export async function enforceGitHubTokenRateLimit(sourceIp: string): Promise<void> {
-  const result = await requireWorkerBindings(env).GITHUB_TOKEN_RATE_LIMITER.limit({ key: `ip:${sourceIp}` });
+export const enforceGitHubTokenRateLimit = Effect.fn("GitHub.enforceTokenRateLimit")(function* (sourceIp: string) {
+  const result = yield* Effect.tryPromise({
+    try: () => requireWorkerBindings(env).GITHUB_TOKEN_RATE_LIMITER.limit({ key: `ip:${sourceIp}` }),
+    catch: () =>
+      new GitHubInstallationTokensError(503, "github_app_unavailable", "The GoAhead GitHub App is unavailable."),
+  });
   if (!result.success) {
-    throw new GitHubInstallationTokensError(429, "rate_limited", "Too many GitHub token requests. Try again later.");
+    return yield* new GitHubInstallationTokensError(
+      429,
+      "rate_limited",
+      "Too many GitHub token requests. Try again later.",
+    );
   }
+});
+
+export const enforceFeedbackSearchRateLimit = Effect.fn("GitHub.enforceFeedbackSearchRateLimit")(function* (
+  userId: string,
+) {
+  const limiter = requireWorkerBindings(env).FEEDBACK_RATE_LIMITER;
+  const unavailable = () =>
+    new GitHubInstallationTokensError(503, "feedback_unavailable", "Feedback is not available.");
+  if (!limiter) return yield* unavailable();
+  const result = yield* Effect.tryPromise({
+    try: () => limiter.limit({ key: `search:${userId}` }),
+    catch: unavailable,
+  });
+  if (!result.success) {
+    return yield* new GitHubInstallationTokensError(429, "rate_limited", "Too many searches. Try again later.");
+  }
+});
+
+export function requestFeedbackOwner(userId: string) {
+  const privateKey = requireWorkerBindings(env).GITHUB_APP_PRIVATE_KEY?.trim();
+  if (!privateKey)
+    return Effect.fail(
+      new GitHubInstallationTokensError(503, "github_app_unavailable", "The GoAhead GitHub App is not configured."),
+    );
+  return feedbackOwner(privateKey, userId);
+}
+
+export function requestFeedbackWithdrawnRepository(): string | null {
+  const repository = requireWorkerBindings(env).FEEDBACK_WITHDRAWN_REPOSITORY?.trim();
+  if (!repository || !/^[\w.-]+\/[\w.-]+$/u.test(repository)) return null;
+  const owner = (name: string) => name.split("/")[0]?.toLowerCase();
+  return owner(repository) === owner(FEEDBACK_REPOSITORY) ? repository : null;
+}
+
+export const enforceFeedbackWithdrawRateLimit = Effect.fn("GitHub.enforceFeedbackWithdrawRateLimit")(function* (
+  userId: string,
+) {
+  const limiter = requireWorkerBindings(env).FEEDBACK_RATE_LIMITER;
+  const unavailable = () =>
+    new GitHubInstallationTokensError(503, "feedback_unavailable", "Feedback is not available.");
+  if (!limiter) return yield* unavailable();
+  const result = yield* Effect.tryPromise({
+    try: () => limiter.limit({ key: `withdraw:${userId}` }),
+    catch: unavailable,
+  });
+  if (!result.success) {
+    return yield* new GitHubInstallationTokensError(429, "rate_limited", "Too many requests. Try again later.");
+  }
+});
+
+export const enforceFeedbackRateLimit = Effect.fn("GitHub.enforceFeedbackRateLimit")(function* (userId: string) {
+  const bindings = requireWorkerBindings(env);
+  const limiter = bindings.FEEDBACK_RATE_LIMITER;
+  const unavailable = () =>
+    new GitHubInstallationTokensError(503, "feedback_unavailable", "Feedback is not available.");
+  if (!limiter) return yield* unavailable();
+  const result = yield* Effect.tryPromise({ try: () => limiter.limit({ key: `user:${userId}` }), catch: unavailable });
+  if (!result.success) {
+    return yield* new GitHubInstallationTokensError(429, "rate_limited", "Too much feedback. Try again later.");
+  }
+  const day = new Date().toISOString().slice(0, 10);
+  const [, counted] = yield* Effect.tryPromise({
+    try: () =>
+      bindings.DB.batch([
+        bindings.DB.prepare(DELETE_EARLIER_FEEDBACK_DAYS).bind(userId, day),
+        bindings.DB.prepare(COUNT_FEEDBACK).bind(userId, day, FEEDBACK_DAILY_LIMIT),
+      ]),
+    catch: unavailable,
+  });
+  if (!counted?.results.length) {
+    return yield* new GitHubInstallationTokensError(
+      429,
+      "feedback_daily_limit",
+      "Too much feedback today. Try again tomorrow.",
+    );
+  }
+  return day;
+});
+
+export const uncountFeedback = Effect.fn("GitHub.uncountFeedback")(function* (userId: string, day: string) {
+  const bindings = requireWorkerBindings(env);
+  yield* Effect.tryPromise(() => bindings.DB.prepare(UNCOUNT_FEEDBACK).bind(userId, day).run()).pipe(Effect.ignore);
+});
+
+function secondsToNextUtcDay(now = Date.now()): number {
+  const day = 86_400_000;
+  return Math.ceil((day - (now % day)) / 1000);
 }
 
 export function githubInstallationTokensErrorResponse(error: unknown): Response {
   if (error instanceof GitHubInstallationTokensError) {
     const response = apiError(error.status, error.code, error.message);
-    if (error.status === 429) response.headers.set("Retry-After", "60");
+    if (error.status === 429)
+      response.headers.set("Retry-After", String(error.code === "feedback_daily_limit" ? secondsToNextUtcDay() : 60));
     return response;
   }
   return authErrorResponse(error);
 }
 
-/**
- * The Live Activity relay: the Apple sender and the limit for each host. `null` when this Worker has
- * no Apple key or no limiter, so the relay is off.
- */
-export function requestLiveActivityRelay(): {
-  sender: ApnsLiveActivitySender;
-  /** A host sends a few updates a minute for each phone. More is a fault or misuse. */
-  allow(hostId: string): Promise<boolean>;
+export function requestApnsRelay(): {
+  sender: ApnsRelaySender;
+  allow(hostId: string): Effect.Effect<boolean, AuthOperationError>;
+  allowNotification(hostId: string): Effect.Effect<boolean, AuthOperationError>;
 } | null {
   const bindings = requireWorkerBindings(env);
   const { APNS_PRIVATE_KEY, APNS_KEY_ID, APNS_TEAM_ID, APNS_TOPIC, APNS_ORIGIN, LIVE_ACTIVITY_RATE_LIMITER } = bindings;
   if (!APNS_PRIVATE_KEY || !APNS_KEY_ID || !APNS_TEAM_ID || !APNS_TOPIC || !LIVE_ACTIVITY_RATE_LIMITER) return null;
   const origin = developmentApnsOrigin(APNS_ORIGIN);
+  const limit = relayLimit(LIVE_ACTIVITY_RATE_LIMITER);
   return {
     sender: sharedApnsSender({
-      // A deploy passes the key as one line, with `\n` for each line break.
       privateKey: APNS_PRIVATE_KEY.replaceAll("\\n", "\n"),
       keyId: APNS_KEY_ID,
       teamId: APNS_TEAM_ID,
       topic: APNS_TOPIC,
       ...(origin ? { origin } : {}),
     }),
-    allow: async (hostId) => (await LIVE_ACTIVITY_RATE_LIMITER.limit({ key: `host:${hostId}` })).success,
+    allow: (hostId) => limit(`host:${hostId}`),
+    allowNotification: (hostId) => limit(`notification:host:${hostId}`),
   };
 }
 
@@ -185,7 +391,7 @@ export function requestAndroidLiveUpdateRelay(): {
   const { FCM_PROJECT_ID, FCM_CLIENT_EMAIL, FCM_PRIVATE_KEY, LIVE_ACTIVITY_RATE_LIMITER } = requireWorkerBindings(env);
   if (!FCM_PROJECT_ID || !FCM_CLIENT_EMAIL || !FCM_PRIVATE_KEY || !LIVE_ACTIVITY_RATE_LIMITER) return null;
   return {
-    sender: sharedFcmSender({
+    sender: sharedFcmLiveUpdateSender({
       projectId: FCM_PROJECT_ID,
       clientEmail: FCM_CLIENT_EMAIL,
       // A deploy passes the key as one line, with `\n` for each line break.
@@ -195,16 +401,36 @@ export function requestAndroidLiveUpdateRelay(): {
   };
 }
 
+export function requestFcmRelay(): {
+  sender: FcmRelaySender;
+  allowNotification(hostId: string): Effect.Effect<boolean, AuthOperationError>;
+} | null {
+  const { FCM_SERVICE_ACCOUNT, LIVE_ACTIVITY_RATE_LIMITER } = requireWorkerBindings(env);
+  if (!FCM_SERVICE_ACCOUNT || !LIVE_ACTIVITY_RATE_LIMITER) return null;
+  const sender = sharedFcmSender(FCM_SERVICE_ACCOUNT);
+  if (!sender) return null;
+  const limit = relayLimit(LIVE_ACTIVITY_RATE_LIMITER);
+  return { sender, allowNotification: (hostId) => limit(`notification:host:${hostId}`) };
+}
+
+function relayLimit(limiter: RateLimit) {
+  return (key: string) =>
+    Effect.tryPromise({
+      try: () => limiter.limit({ key }),
+      catch: () => new AuthOperationError({ message: "Account operation failed." }),
+    }).pipe(Effect.map((result) => result.success));
+}
+
 /** Only a development server on this computer can stand in for Apple. */
 function developmentApnsOrigin(value: string | undefined): string | undefined {
   return value && /^http:\/\/127\.0\.0\.1:\d+\/__dev\/apns$/u.test(value) ? value : undefined;
 }
 
-export function enforceMarketplaceMutationRateLimit(kind: MarketplaceMutationKind, principal: string): Promise<void> {
+export function enforceMarketplaceMutationRateLimit(kind: MarketplaceMutationKind, principal: string) {
   return enforceMarketplaceMutation(requireWorkerBindings(env), kind, principal);
 }
 
-export function enforceHostedSiteReportRateLimit(sourceIp: string): Promise<void> {
+export function enforceHostedSiteReportRateLimit(sourceIp: string) {
   return enforceReportRateLimit(requireWorkerBindings(env), sourceIp);
 }
 
@@ -213,9 +439,9 @@ export function marketplaceErrorResponse(error: unknown): Response {
   return skillErrorResponse(error);
 }
 
-export async function requestUser(request: Request) {
+export function requestUser(request: Request) {
   const token = bearerToken(request);
-  if (!token) return null;
+  if (!token) return Effect.succeed(null);
   return requestAuthService().authenticate(token);
 }
 
@@ -230,36 +456,54 @@ export function skillErrorResponse(error: unknown): Response {
   return authErrorResponse(error);
 }
 
-export async function requireSkillsAdmin(request: Request): Promise<boolean> {
-  return adminTokenMatches(requireWorkerBindings(env).SKILLS_ADMIN_TOKEN, bearerToken(request));
-}
+export const requireSkillsAdmin = Effect.fn("Auth.requireSkillsAdmin")(function* (request: Request) {
+  return yield* adminTokenMatches(requireWorkerBindings(env).SKILLS_ADMIN_TOKEN, bearerToken(request));
+});
 
-export async function requireOperationsAdmin(request: Request): Promise<boolean> {
-  return adminTokenMatches(requireWorkerBindings(env).SITE_OPERATIONS_ADMIN_TOKEN, bearerToken(request));
+export const requireOperationsAdmin = Effect.fn("Auth.requireOperationsAdmin")(function* (request: Request) {
+  return yield* adminTokenMatches(requireWorkerBindings(env).SITE_OPERATIONS_ADMIN_TOKEN, bearerToken(request));
+});
+
+export const requireServerClaimsAdmin = Effect.fn("Auth.requireServerClaimsAdmin")(function* (request: Request) {
+  return yield* adminTokenMatches(requireWorkerBindings(env).SERVER_CLAIMS_ADMIN_TOKEN, bearerToken(request));
+});
+
+export function requestContactMessageServices(): ContactMessageServices {
+  const bindings = requireWorkerBindings(env);
+  return {
+    repository: new D1AuthRepository(bindings.DB),
+    now: () => Date.now(),
+    delivery: () => createContactMessageDelivery(bindings, accountAnalytics(bindings)),
+  };
 }
 
 export function requestTeamInviteEmailDelivery(): TeamInviteEmailDelivery | null {
   const bindings = requireWorkerBindings(env);
-  return createTeamInviteEmailDelivery(bindings);
+  return createTeamInviteEmailDelivery(bindings, accountAnalytics(bindings));
+}
+
+export function requestOwnerTransferEmailDelivery(): OwnerTransferEmailDelivery | null {
+  const bindings = requireWorkerBindings(env);
+  return createOwnerTransferEmailDelivery(bindings, accountAnalytics(bindings));
 }
 
 export function requestRemoteControlPlane(): RemoteControlPlane {
-  return new RemoteControlPlane(requireWorkerBindings(env), { schedule: waitUntil });
+  return new RemoteControlPlane(requireWorkerBindings(env), { schedule });
 }
 
-/** Pass the request when the call checks who can create servers, so its developer key counts. */
 export function requestHostedServerService(request?: Request): HostedServerService {
   return requestHostedBilling(request?.headers.get(HOSTING_DEVELOPER_KEY_HEADER) ?? null).hosting;
 }
 
 function requestHostedBilling(developerKey: string | null = null) {
   const bindings = requireWorkerBindings(env);
-  const remote = new RemoteControlPlane(bindings, { schedule: waitUntil });
+  const remote = new RemoteControlPlane(bindings, { schedule });
   return createHostedBilling(bindings, {
     removeHost: (ownerUserId, hostId) => remote.deleteHost(ownerUserId, hostId),
     developerKey,
     planChanged: (hostId) => remote.planChanged(hostId),
-    schedule: waitUntil,
+    licenseChanged: (userId) => remote.licenseChanged(userId),
+    schedule,
   });
 }
 
@@ -270,9 +514,9 @@ export function hostedServerErrorResponse(error: unknown): Response {
   return remoteControlPlaneErrorResponse(error);
 }
 
-export function verifyRemoteServiceRequest(request: Request, body: string): Promise<boolean> {
+export function verifyRemoteServiceRequest(request: Request, body: string) {
   const secret = requireWorkerBindings(env).REMOTE_AUTH_WEBHOOK_SECRET;
-  if (!secret) return Promise.resolve(false);
+  if (!secret) return Effect.succeed(false);
   return verifyRemoteServiceSignature(
     secret,
     body,
@@ -286,11 +530,15 @@ export function remoteControlPlaneErrorResponse(error: unknown): Response {
   return authErrorResponse(error);
 }
 
+export function githubRouteErrorResponse(error: unknown): Response {
+  if (error instanceof RemoteControlPlaneError) return remoteControlPlaneErrorResponse(error);
+  return githubInstallationTokensErrorResponse(error);
+}
+
 export function requestSlackApp(): SlackAppService {
   const bindings = requireWorkerBindings(env);
-  // The events are already in D1 and the cron redelivers them, so the answer does not wait.
   return new SlackAppService(bindings, {
-    flushAuthEvents: async () => waitUntil(deliverPendingRemoteAuthEvents(bindings, Date.now())),
+    flushAuthEvents: () => Effect.sync(() => schedule(deliverPendingRemoteAuthEvents(bindings, Date.now()))),
   });
 }
 
@@ -299,17 +547,16 @@ export function slackAppErrorResponse(error: unknown): Response {
   return authErrorResponse(error);
 }
 
-export function requestRemoteSignalUrl(): string {
-  const value = requireWorkerBindings(env).REMOTE_SIGNAL_URL?.trim();
-  if (!value)
-    throw new RemoteControlPlaneError(503, "remote_not_configured", "The Remote Signal URL is not configured.");
-  return value;
+export function requestDiscordApp(): DiscordAppService {
+  const bindings = requireWorkerBindings(env);
+  return new DiscordAppService(bindings, {
+    flushAuthEvents: () => Effect.sync(() => schedule(deliverPendingRemoteAuthEvents(bindings, Date.now()))),
+  });
 }
 
-export function requestSourceIp(request: Request): string {
-  return (
-    request.headers.get("CF-Connecting-IP") ?? request.headers.get("X-Forwarded-For")?.split(",")[0] ?? "127.0.0.1"
-  );
+export function discordAppErrorResponse(error: unknown): Response {
+  if (error instanceof DiscordAppError) return apiError(error.status, error.code, error.message);
+  return authErrorResponse(error);
 }
 
 export function bearerToken(request: Request): string | null {
@@ -353,5 +600,19 @@ export function authErrorResponse(error: unknown): Response {
     }
     return response;
   }
-  return apiError(500, "internal_error", "The account service could not complete the request.");
+  const reference = `auth/${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+  console.error("Account service request failed:", reference, errorType(error));
+  return json(
+    { error: { code: "internal_error", message: "The account service could not complete the request.", reference } },
+    500,
+  );
+}
+
+function errorType(error: unknown): string {
+  if (isDynamicRecord(error) && isString(error._tag)) return error._tag;
+  return error instanceof Error ? error.name : typeof error;
+}
+
+export function schedule<E>(work: Effect.Effect<void, E>): void {
+  waitUntil(runApiEffect(work));
 }

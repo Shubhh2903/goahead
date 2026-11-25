@@ -1,11 +1,5 @@
 import { BENCHMARK_SOURCES, type RoundupComparison } from "./comparison";
 
-// Every statement about another app here repeats a statement on the comparison that
-// includes it, where each claim has its own sources and check date. When one of those
-// pages changes, change the entry here too, and move `checkedAt`. `sources` lists the
-// official home or pricing page of each app. The benchmark numbers are read by hand
-// from the Artificial Analysis Coding Agent Index.
-
 const OPENBOT = "https://github.com/Shubhh2903/goahead";
 
 export const BEST_AI_AGENT_APPS: RoundupComparison = {
@@ -21,10 +15,11 @@ export const BEST_AI_AGENT_APPS: RoundupComparison = {
       comparisons: [],
       bestFor: "A team of agents on your own computer, with the AI plans you already pay for.",
       runsOn: "Your computer. Apps for macOS on Apple silicon, iPhone and Android.",
-      models: "Your ChatGPT, Claude, Gemini, Grok or Cursor plan, free models, or your own model.",
-      price: "Free for noncommercial use. Hosted EU server from €20 or $25 a month.",
+      models:
+        "Your ChatGPT, Claude, Gemini, Grok, Cursor, Cline or Muse Code plan, free models, Inception's Mercury models, your own model, or any ACP agent.",
+      price: "Free for noncommercial use. Hosted EU server from €30 or $36 a month.",
       summary:
-        "GoAhead runs Codex, Claude Code, Antigravity, Grok CLI, Cursor CLI and OpenCode as one team on your computer. Each agent gets a job, and they pass work to each other in shared channels. You follow along from the iPhone and Android apps, no VPN needed. Workspaces, chats and files stay in a database on your computer, and you don't need an account to use it on one machine.",
+        "GoAhead runs Codex, Claude Code, Antigravity, Grok CLI, Cursor CLI, Cline, OpenCode, Pi, Muse Code and custom ACP agents as one team on your computer. Each agent gets a job, and they pass work to each other in shared channels. When a plan hits its limit, an agent can move to a backup model on another provider. You follow along from the iPhone and Android apps or the web app, no VPN needed, and agents answer in Slack, Discord and Telegram too. Workspaces, chats and files stay in a database on your computer.",
     },
     {
       name: "Claude Code",
@@ -156,7 +151,7 @@ export const BEST_AI_AGENT_APPS: RoundupComparison = {
       models: "Muse Spark, Meta's own model.",
       price: "Free with a weekly limit. $20 or $100 a month.",
       summary:
-        "Meta's personal agent keeps working after you close the app. You reach it in its iPhone, Android and Mac apps, on the web, or in WhatsApp. It's only for adults (18+) in the US and Canada.",
+        "Meta's personal agent keeps working after you close the app. You reach it in its iPhone, Android and Mac apps, on the web, or in WhatsApp. It's only for adults (18+) in the US and Canada. GoAhead runs Muse Code, Meta's coding agent, not this app.",
     },
   ],
   benchmark: {
@@ -220,7 +215,7 @@ export const BEST_AI_AGENT_APPS: RoundupComparison = {
     {
       question: "Can I use more than one AI agent at a time?",
       answer:
-        "Yes. In GoAhead, Codex, Claude Code, Antigravity, Grok CLI, Cursor CLI and OpenCode work as agents on one team. Each one uses your own plan for its provider, and they hand work to each other in shared channels.",
+        "Yes. In GoAhead, Codex, Claude Code, Antigravity, Grok CLI, Cursor CLI, Cline, OpenCode, Pi and Muse Code work as agents on one team. Each one uses your own plan for its provider, and they hand work to each other in shared channels.",
     },
     {
       question: "Why is GoAhead first on this list?",

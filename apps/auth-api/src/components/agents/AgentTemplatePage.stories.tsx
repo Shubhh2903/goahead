@@ -2,10 +2,9 @@ import type { AgentTemplateDetail } from "@openbot/contracts/ipc";
 import type { JSX } from "@solidjs/web";
 import { createRootRoute, createRoute, createRouter, RouterContextProvider } from "@tanstack/solid-router";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
-// The site's stylesheet, loaded only when a site story opens. See `ArticleMedia.stories.tsx`.
 import "../../styles.css";
-// Stands in for a photo the owner uploaded as the agent's avatar.
 import samplePhoto from "../../../public/icon-512x512.png";
+import { AgentTemplateNotSharedPage } from "./AgentTemplateNotSharedPage";
 import { AgentTemplatePage } from "./AgentTemplatePage";
 
 const TEMPLATE: AgentTemplateDetail = {
@@ -52,17 +51,14 @@ const TEMPLATE: AgentTemplateDetail = {
   ],
 };
 
-/**
- * The site header's links need a router. The real route tree carries Worker-only modules, so this is
- * the same small stand-in tree `test/plugins-page.test.tsx` uses. It is built at module level:
- * creating a router writes reactive state, which Solid refuses inside a component.
- */
 const rootRoute = createRootRoute();
 rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/" }),
   createRoute({ getParentRoute: () => rootRoute, path: "/news" }),
   createRoute({ getParentRoute: () => rootRoute, path: "/guides" }),
-  createRoute({ getParentRoute: () => rootRoute, path: "/plugins" }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/marketplace" }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/marketplace/apps" }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/download" }),
 ]);
 const router = createRouter({ routeTree: rootRoute });
 
@@ -81,10 +77,8 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** What `openbot.run/agents/<id>` shows. "Add to GoAhead" opens `openbot://agents/<id>`. */
 export const SharedAgent: Story = {};
 
-/** The owner uploaded a photo for the agent, so the page shows it instead of the generated avatar. */
 export const WithPhoto: Story = {
   args: { template: { ...TEMPLATE, avatarUrl: samplePhoto } },
 };
@@ -93,7 +87,6 @@ export const InstructionsOnly: Story = {
   args: { template: { ...TEMPLATE, title: "", skills: [], routines: [] } },
 };
 
-/** Long instructions are clamped behind "Read all instructions". */
 export const LongInstructions: Story = {
   args: {
     template: {
@@ -108,4 +101,29 @@ export const LongInstructions: Story = {
       ).join("\n"),
     },
   },
+};
+
+export const MarkdownInstructions: Story = {
+  args: {
+    template: {
+      ...TEMPLATE,
+      name: "Sentinel",
+      title: "",
+      avatarSeed: "sentinel",
+      avatarHue: 150,
+      description: [
+        "## Identity and Mission",
+        "You keep the **production systems** healthy. Read the [runbook](https://example.com/runbook) first.",
+        "## 1. Operating Principles",
+        "- Prefer actual system state over assumptions.\n- Report what changed and why.\n  - Name the command you ran.",
+        "## 2. Daily checks",
+        "1. Read the error logs.\n2. Check the queue depth.\n3. Write a short summary.",
+        '<script>window.agentShareInjected = true</script> <img src="x" onerror="window.agentShareInjected = true">',
+      ].join("\n\n"),
+    },
+  },
+};
+
+export const NoLongerShared: Story = {
+  render: () => <WithRouter>{() => <AgentTemplateNotSharedPage />}</WithRouter>,
 };

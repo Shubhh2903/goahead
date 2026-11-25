@@ -1,24 +1,63 @@
+import {
+  type FIRST_TOUCH_CAMPAIGN_FIELDS,
+  FIRST_TOUCH_CAMPAIGN_VALUE,
+  type FirstTouch,
+  type FirstTouchAcquisitionSource,
+  type FirstTouchSourcePlatform,
+  firstTouchDay,
+  rememberFirstTouch,
+} from "@openbot/contracts/first-touch";
 import { PRODUCT_IDENTITY, PRODUCT_LINK_PREFIX } from "@openbot/contracts/product-identity";
 import { isBoolean, isOneOf } from "@openbot/contracts/runtime-values";
 import { OpenPanel, OpenPanelBase, type OpenPanelOptions, type TrackProperties } from "@openpanel/web";
+import { BRAND_ROUTE } from "./brand-page";
+import { CLA_ROUTE } from "./cla";
+import { COMMERCIAL_LICENSE_ROUTE } from "./commercial-license";
+import { CONTACT_TOPICS } from "./contact";
 import { CONTENT_COLLECTIONS } from "./content";
 import { type CollectionId, type ContentCollection, findArticle } from "./content-collection";
-import { OPENBOT_DOWNLOAD_LINKS, OPENBOT_DOWNLOAD_PAGE_LINKS, OPENBOT_LINKS } from "./landing-links";
+import { DOWNLOAD_PLATFORM_ORDER, type DownloadPlatform } from "./download-platforms";
+import { DPA_ROUTE } from "./dpa";
+import {
+  OPENBOT_ALTERNATE_DOWNLOAD_LINKS,
+  OPENBOT_ANDROID_APK_LINK,
+  OPENBOT_DOWNLOAD_LINKS,
+  OPENBOT_DOWNLOAD_PAGE_LINKS,
+  OPENBOT_LINKS,
+} from "./landing-links";
+import { MARKETPLACE_TAB_ROUTES } from "./marketplace-routes";
+import { MOBILE_APPS } from "./mobile-apps";
+import { PRICING_ROUTE } from "./pricing-page";
+import { PRIVACY_POLICY_ROUTE } from "./privacy-policy";
+import { localizedPagePath, TRANSLATED_SITE_LOCALES } from "./site-paths";
+import { TEAMS_ROUTE } from "./teams-page";
+import { TERMS_ROUTE } from "./terms";
 
-export const OPENPANEL_API_URL = "https://analytics.openbot.run/api";
+const OPENPANEL_API_URL = "https://analytics.openbot.run/api";
 const OPENPANEL_CLIENT_ID = "6c989975-87ef-4f0c-857e-ab449a65b5c2";
-const ANALYTICS_SCHEMA_VERSION = 8;
+const ANALYTICS_SCHEMA_VERSION = 10;
 
-type LandingAcquisitionSource = "direct" | "search" | "social" | "github" | "other";
+type LandingAcquisitionSource = FirstTouchAcquisitionSource;
 
-/** How far into an article the reader got. Reported once per depth per article view. */
 export type ArticleReadDepth = "start" | "half" | "end";
 
-/** An article the registries actually publish. Both fields are closed sets, never free text. */
 export interface ArticleReference {
   collection: CollectionId;
   slug: string;
 }
+
+export type BillingReturnKind = "plan" | "license" | "portal" | "credits";
+export const BILLING_RETURN_KINDS = [
+  "plan",
+  "license",
+  "portal",
+  "credits",
+] as const satisfies readonly BillingReturnKind[];
+type BillingReturnOutcome = "completed" | "cancelled";
+
+type ContactTopicId = (typeof CONTACT_TOPICS)[number]["id"];
+type ContactFormResult = "succeeded" | "failed" | "rate_limited";
+const CONTACT_TOPIC_IDS = CONTACT_TOPICS.map((topic) => topic.id);
 
 interface LandingAnalyticsEvents {
   landing_viewed: Record<string, never>;
@@ -30,7 +69,9 @@ interface LandingAnalyticsEvents {
   join_page_action:
     | { action: "view"; valid_invite: boolean }
     | { action: "open_app" }
-    | { action: "download"; platform: "macos" | "windows" };
+    | { action: "download"; platform: DownloadPlatform };
+  billing_return_viewed: { outcome: BillingReturnOutcome; kind?: BillingReturnKind };
+  contact_form_submitted: { topic?: ContactTopicId; result: ContactFormResult };
 }
 
 type LandingEventName = keyof LandingAnalyticsEvents;
@@ -38,6 +79,9 @@ type LandingPlacement =
   | "header"
   | "hero"
   | "download_section"
+  | "teams_section"
+  | "teams_page"
+  | "pricing_page"
   | "download_page"
   | "footer"
   | "content_index"
@@ -49,6 +93,9 @@ const LANDING_PLACEMENTS = [
   "header",
   "hero",
   "download_section",
+  "teams_section",
+  "teams_page",
+  "pricing_page",
   "download_page",
   "footer",
   "content_index",
@@ -56,14 +103,23 @@ const LANDING_PLACEMENTS = [
   "content_related",
   "other",
 ] as const satisfies readonly LandingPlacement[];
-/** The platforms the landing page can send a visitor to a download for. */
-type LandingDownloadPlatform = "linux" | "macos" | "windows";
+type LandingDownloadPlatform = "linux" | "macos" | "windows" | "ios" | "android";
 type LandingDestination =
   | "download_page"
   | "download_section"
   | "news"
   | "guides"
   | "contact"
+  | "teams"
+  | "pricing"
+  | "x"
+  | "threads"
+  | "linkedin"
+  | "reddit"
+  | "instagram"
+  | "tiktok"
+  | "facebook"
+  | "discord"
   | "repository"
   | "releases"
   | "license"
@@ -77,30 +133,45 @@ type LandingDestination =
 
 type CollectionIndexRoute = ContentCollection["indexRoute"];
 type DownloadPagePath = (typeof OPENBOT_DOWNLOAD_PAGE_LINKS)[keyof typeof OPENBOT_DOWNLOAD_PAGE_LINKS];
-/**
- * The screens a report may name. Article paths carry the slug so one article can be told from
- * another, and `safeScreenPath` keeps the set closed at runtime as well as in the type.
- */
+type MarketplaceTabPath = (typeof MARKETPLACE_TAB_ROUTES)[keyof typeof MARKETPLACE_TAB_ROUTES];
 export type LandingScreenPath =
   | "/"
   | "/join"
+  | "/contact"
+  | "/billing/return"
+  | typeof TEAMS_ROUTE
+  | typeof PRICING_ROUTE
+  | typeof BRAND_ROUTE
+  | typeof PRIVACY_POLICY_ROUTE
+  | typeof TERMS_ROUTE
+  | typeof COMMERCIAL_LICENSE_ROUTE
+  | typeof DPA_ROUTE
+  | typeof CLA_ROUTE
   | DownloadPagePath
+  | MarketplaceTabPath
   | CollectionIndexRoute
   | `${CollectionIndexRoute}/${string}`;
 
 const FIXED_SCREEN_PATHS = [
   "/",
   "/join",
+  "/contact",
+  TEAMS_ROUTE,
+  PRICING_ROUTE,
+  BRAND_ROUTE,
+  PRIVACY_POLICY_ROUTE,
+  TERMS_ROUTE,
+  COMMERCIAL_LICENSE_ROUTE,
+  DPA_ROUTE,
+  CLA_ROUTE,
   ...Object.values(OPENBOT_DOWNLOAD_PAGE_LINKS),
+  ...Object.values(MARKETPLACE_TAB_ROUTES),
   "/news",
   "/guides",
   "/compare",
+  "/providers",
 ] as const satisfies readonly LandingScreenPath[];
 
-/**
- * Any path that is not a fixed screen or a published article reports the landing page instead. A
- * caller cannot widen what reaches analytics by passing a different string.
- */
 export function safeScreenPath(path: string): LandingScreenPath {
   if (isOneOf(FIXED_SCREEN_PATHS, path)) return path;
   const article = articleFromPath(path);
@@ -108,11 +179,7 @@ export function safeScreenPath(path: string): LandingScreenPath {
   return `/${article.collection}/${article.slug}`;
 }
 
-/**
- * Resolves a site path to the article it names, or null. The slug is looked up in the registry, so
- * a link to an article that does not exist reports nothing rather than a new string.
- */
-export function articleFromPath(path: string): ArticleReference | null {
+function articleFromPath(path: string): ArticleReference | null {
   const [pathname = ""] = path.split(/[?#]/u);
   for (const collection of CONTENT_COLLECTIONS) {
     const prefix = `${collection.indexRoute}/`;
@@ -134,11 +201,6 @@ type OpenPanelClient = Pick<OpenPanel, "setGlobalProperties"> & {
 
 type ClientFactory = (options: OpenPanelOptions) => OpenPanelClient;
 
-/**
- * `OpenPanel.track` replaces `__path` with its own `lastPath`, which stays empty because screen
- * tracking is disabled here. The base method only merges the given properties, so both calls use it
- * and pass the reported path explicitly.
- */
 function createOpenPanelClient(options: OpenPanelOptions): OpenPanelClient {
   const client = new OpenPanel(options);
   return {
@@ -149,22 +211,38 @@ function createOpenPanelClient(options: OpenPanelOptions): OpenPanelClient {
   };
 }
 
-/** The download routes of each platform, reversed so a click can name the platform it asked for. */
-const DOWNLOAD_PLATFORMS_BY_HREF = new Map<string, LandingDownloadPlatform>([[OPENBOT_DOWNLOAD_LINKS.macos, "macos"]]);
+const DOWNLOAD_PLATFORMS_BY_HREF = new Map<string, LandingDownloadPlatform>([
+  [OPENBOT_DOWNLOAD_LINKS.macos, "macos"],
+  [OPENBOT_DOWNLOAD_LINKS.windows, "windows"],
+  [OPENBOT_DOWNLOAD_LINKS.linux, "linux"],
+  [OPENBOT_ALTERNATE_DOWNLOAD_LINKS.macos, "macos"],
+  [OPENBOT_ALTERNATE_DOWNLOAD_LINKS.linux, "linux"],
+  [MOBILE_APPS.ios.href, "ios"],
+  [MOBILE_APPS.android.href, "android"],
+  [OPENBOT_ANDROID_APK_LINK, "android"],
+]);
 
 const LINK_DESTINATIONS = new Map<string, LandingDestination>([
   [OPENBOT_LINKS.download, "download_section"],
-  [OPENBOT_LINKS.downloadFromOtherPage, "download_section"],
   ...Object.values(OPENBOT_DOWNLOAD_PAGE_LINKS).map((path) => [path, "download_page"] as const),
   [OPENBOT_LINKS.news, "news"],
   [OPENBOT_LINKS.guides, "guides"],
   [OPENBOT_LINKS.contact, "contact"],
+  [TEAMS_ROUTE, "teams"],
+  [PRICING_ROUTE, "pricing"],
+  ...TRANSLATED_SITE_LOCALES.flatMap((locale) => [
+    [localizedPagePath(locale, "/contact"), "contact"] as const,
+    [localizedPagePath(locale, "/teams"), "teams"] as const,
+    [localizedPagePath(locale, "/pricing"), "pricing"] as const,
+  ]),
+  [OPENBOT_LINKS.x, "x"],
+  [OPENBOT_LINKS.discord, "discord"],
   [OPENBOT_LINKS.repository, "repository"],
   [OPENBOT_LINKS.releases, "releases"],
-  // The same destination on this site: the release notes, reported under the name they had.
   [OPENBOT_LINKS.changelog, "releases"],
   [OPENBOT_LINKS.license, "license"],
   [OPENBOT_LINKS.privacy, "privacy"],
+  [PRIVACY_POLICY_ROUTE, "privacy"],
   [OPENBOT_LINKS.documentation, "documentation"],
   [OPENBOT_LINKS.troubleshooting, "troubleshooting"],
   [OPENBOT_LINKS.architecture, "architecture"],
@@ -181,22 +259,17 @@ const EVENT_PROPERTY_ALLOWLIST = {
   content_article_opened: ["collection", "slug", "placement"],
   content_article_read: ["collection", "slug", "depth"],
   join_page_action: ["action", "valid_invite", "platform"],
+  billing_return_viewed: ["outcome", "kind"],
+  contact_form_submitted: ["topic", "result"],
 } as const satisfies Record<LandingEventName, readonly string[]>;
 
-/**
- * The hero selector runs its platform detection before the page component starts analytics, so an
- * event can arrive first. A small queue keeps that first event instead of dropping it. The wait is
- * for the current page to start, not merely for a client to exist: a visitor who opens an article
- * and then navigates home still has a client, and it holds the article's path and attribution.
- * Nothing flushes until no page has started, so the bound is what stops the queue growing.
- */
 const PENDING_EVENT_LIMIT = 4;
 
 export function shouldEnableLandingAnalytics(hostname: string, productionBuild: boolean): boolean {
   return productionBuild && hostname === new URL(PRODUCT_IDENTITY.siteOrigin).hostname;
 }
 
-export class LandingAnalytics {
+class LandingAnalytics {
   readonly #createClient: ClientFactory;
   readonly #productionBuild: boolean;
   #client: OpenPanelClient | null = null;
@@ -211,19 +284,14 @@ export class LandingAnalytics {
     this.#productionBuild = productionBuild;
   }
 
-  /**
-   * `screenPath` separates the marketing surfaces that share this listener, down to the individual
-   * article. It is passed as a string and narrowed by `safeScreenPath`, so a route that stops
-   * matching the registry degrades to the landing page instead of reporting a new path.
-   */
   start(document: Document, hostname: string, screenPath = "/"): () => void {
     if (isLikelyAutomation(document.defaultView?.navigator)) return () => undefined;
     if (!this.#ensureClient(hostname)) return () => undefined;
     const screen = safeScreenPath(screenPath);
     this.#campaignPath = landingCampaignPath(screen, document.location.href);
-    this.#client?.setGlobalProperties({
-      ...landingAttribution(document, hostname),
-    });
+    const attribution = landingAttribution(document, hostname);
+    this.#client?.setGlobalProperties(attribution);
+    rememberLandingFirstTouch(document, attribution, screen);
     this.#pageStarted = true;
     this.#flushPending();
     this.#screenView(screen);
@@ -232,12 +300,10 @@ export class LandingAnalytics {
     return this.#replaceClickListener(document, handleClick, screen);
   }
 
-  /** The platform the hero offers: once for what was detected, then for each manual change. */
   trackDownloadSelected(platform: LandingDownloadPlatform, detected: boolean): void {
     this.#track("landing_download_selected", { platform, detected });
   }
 
-  /** How far a reader got into an article. The caller reports each depth at most once. */
   trackArticleRead(article: ArticleReference, depth: ArticleReadDepth): void {
     this.#track("content_article_read", { ...article, depth });
   }
@@ -245,14 +311,14 @@ export class LandingAnalytics {
   startJoin(
     document: Document,
     hostname: string,
-    options: { validInvite: boolean; platform: "macos" | "windows" },
+    options: { validInvite: boolean; platform: DownloadPlatform },
   ): () => void {
     if (isLikelyAutomation(document.defaultView?.navigator)) return () => undefined;
     if (!this.#ensureClient(hostname)) return () => undefined;
     this.#campaignPath = landingCampaignPath("/join", document.location.href);
-    this.#client?.setGlobalProperties({
-      ...landingAttribution(document, hostname),
-    });
+    const attribution = landingAttribution(document, hostname);
+    this.#client?.setGlobalProperties(attribution);
+    rememberLandingFirstTouch(document, attribution, "/join");
     this.#pageStarted = true;
     this.#flushPending();
     this.#screenView("/join");
@@ -265,11 +331,36 @@ export class LandingAnalytics {
         return;
       }
       const href = link?.getAttribute("href");
-      if (href === OPENBOT_DOWNLOAD_LINKS.macos) {
-        this.#track("join_page_action", { action: "download", platform: "macos" });
-      }
+      const platform = DOWNLOAD_PLATFORM_ORDER.find((id) => OPENBOT_DOWNLOAD_LINKS[id] === href);
+      if (platform) this.#track("join_page_action", { action: "download", platform });
     };
     return this.#replaceClickListener(document, handleClick, "/join");
+  }
+
+  startBillingReturn(
+    document: Document,
+    hostname: string,
+    options: { cancelled: boolean; kind: BillingReturnKind | undefined },
+  ): () => void {
+    if (isLikelyAutomation(document.defaultView?.navigator)) return () => undefined;
+    if (!this.#ensureClient(hostname)) return () => undefined;
+    this.#campaignPath = "/billing/return";
+    this.#client?.setGlobalProperties(landingAttribution(document, hostname));
+    this.#pageStarted = true;
+    this.#flushPending();
+    this.#screenView("/billing/return");
+    this.#track("billing_return_viewed", {
+      outcome: options.cancelled ? "cancelled" : "completed",
+      ...(options.kind ? { kind: options.kind } : {}),
+    });
+    return this.#replaceClickListener(document, () => undefined, "/billing/return");
+  }
+
+  trackContactFormSubmitted(topic: string, result: ContactFormResult): void {
+    this.#track("contact_form_submitted", {
+      ...(isOneOf(CONTACT_TOPIC_IDS, topic) ? { topic } : {}),
+      result,
+    });
   }
 
   #replaceClickListener(
@@ -286,8 +377,6 @@ export class LandingAnalytics {
       document.removeEventListener("click", listener);
       if (this.#clickCleanup.get(document) === cleanup) this.#clickCleanup.delete(document);
       if (replacement) return;
-      // The page this listener belonged to is gone. Its path must not be reused by an event that
-      // the next page's components send before that page calls `start`.
       this.#pageStarted = false;
       if (this.#lastScreenPath === screenPath) this.#lastScreenPath = null;
     };
@@ -323,7 +412,7 @@ export class LandingAnalytics {
   #handleClick(event: MouseEvent): void {
     const target = event.target;
     const link = target instanceof Element ? target.closest<HTMLAnchorElement>("a[href]") : null;
-    if (!link) return;
+    if (!link || link.closest(".site-language-menu")) return;
     const placement = landingPlacement(link);
     const href = link.getAttribute("href") ?? "";
     const downloadPlatform = DOWNLOAD_PLATFORMS_BY_HREF.get(href);
@@ -336,8 +425,6 @@ export class LandingAnalytics {
       this.#track("landing_link_clicked", { destination, placement });
       return;
     }
-    // Article links carry the slug in the path, so they cannot be matched by an exact href. Without
-    // this every card on an index page is dropped and the section looks like a dead end.
     const article = articleFromPath(href);
     if (article) this.#track("content_article_opened", { ...article, placement });
   }
@@ -348,9 +435,7 @@ export class LandingAnalytics {
       const result = this.#client?.trackScreenView(this.#campaignPath);
       if (result instanceof Promise) void result.catch(() => undefined);
       this.#lastScreenPath = path;
-    } catch {
-      // Analytics must never change landing-page behavior.
-    }
+    } catch {}
   }
 
   #track<Name extends LandingEventName>(name: Name, properties: LandingAnalyticsEvents[Name]): void {
@@ -363,9 +448,7 @@ export class LandingAnalytics {
         ),
       );
       this.#send(name, sanitized);
-    } catch {
-      // Analytics must never change landing-page behavior.
-    }
+    } catch {}
   }
 
   #send(name: LandingEventName, properties: TrackProperties): void {
@@ -385,56 +468,75 @@ export class LandingAnalytics {
 
 function isSafeLandingProperty(name: LandingEventName, key: string, value: unknown): boolean {
   if (key === "action") return isOneOf(["view", "open_app", "download"] as const, value);
+  if (key === "outcome") return name === "billing_return_viewed" && isOneOf(["completed", "cancelled"] as const, value);
+  if (key === "kind") return name === "billing_return_viewed" && isOneOf(BILLING_RETURN_KINDS, value);
+  if (key === "topic") return name === "contact_form_submitted" && isOneOf(CONTACT_TOPIC_IDS, value);
+  if (key === "result")
+    return name === "contact_form_submitted" && isOneOf(["succeeded", "failed", "rate_limited"] as const, value);
   if (key === "valid_invite") return name === "join_page_action" && isBoolean(value);
   if (key === "detected") return name === "landing_download_selected" && isBoolean(value);
-  if (key === "collection") return isOneOf(["news", "guides", "compare"] as const, value);
+  if (key === "collection") return CONTENT_COLLECTIONS.some((collection) => collection.id === value);
   if (key === "slug") return typeof value === "string" && PUBLISHED_SLUGS.has(value);
   if (key === "depth") return isOneOf(["start", "half", "end"] as const, value);
-  // The invitation page only ever offers the two platforms it can detect; the download events cover
-  // every platform the site links to, Linux included.
   if (key === "platform") {
-    if (name === "join_page_action") return value === "macos" || value === "windows";
-    return isOneOf(["linux", "macos", "windows"] as const, value);
+    if (name === "join_page_action") return isOneOf(DOWNLOAD_PLATFORM_ORDER, value);
+    return isOneOf(["linux", "macos", "windows", "ios", "android"] as const, value);
   }
   if (key === "placement") return isOneOf(LANDING_PLACEMENTS, value);
   if (key === "destination") return [...LINK_DESTINATIONS.values()].some((destination) => destination === value);
   return false;
 }
 
-export function isLikelyAutomation(navigator: Pick<Navigator, "userAgent" | "webdriver"> | null | undefined): boolean {
+function isLikelyAutomation(navigator: Pick<Navigator, "userAgent" | "webdriver"> | null | undefined): boolean {
   if (!navigator) return false;
   return navigator.webdriver || /(?:bot|crawler|spider|headless|lighthouse|preview)/iu.test(navigator.userAgent);
 }
 
-const CAMPAIGN_PARAMETERS = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"] as const;
-/**
- * Campaign tags are marketer-authored labels. A value that is not a bounded lowercase label is
- * dropped instead of truncated, so no free text can escape through a campaign link.
- */
-const SAFE_CAMPAIGN_VALUE = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
+const CAMPAIGN_PARAMETERS = [
+  { parameter: "utm_source", field: "utmSource" },
+  { parameter: "utm_medium", field: "utmMedium" },
+  { parameter: "utm_campaign", field: "utmCampaign" },
+  { parameter: "utm_content", field: "utmContent" },
+  { parameter: "utm_term", field: "utmTerm" },
+] as const satisfies readonly { parameter: string; field: (typeof FIRST_TOUCH_CAMPAIGN_FIELDS)[number] }[];
 
-/**
- * OpenPanel reads campaign attribution from the query of the reported path, so the allowlisted tags
- * must travel with the path. Every other parameter and the hash are dropped by construction.
- */
-export function landingCampaignPath(screenPath: LandingScreenPath, href: string): string {
+function campaignTags(href: string): ((typeof CAMPAIGN_PARAMETERS)[number] & { value: string })[] {
   let search: URLSearchParams;
   try {
     search = new URL(href).searchParams;
   } catch {
-    return screenPath;
+    return [];
   }
-  const campaign = new URLSearchParams();
-  for (const key of CAMPAIGN_PARAMETERS) {
-    const value = search.get(key)?.trim().toLowerCase() ?? "";
-    if (SAFE_CAMPAIGN_VALUE.test(value)) campaign.set(key, value);
-  }
-  const query = campaign.toString();
+  return CAMPAIGN_PARAMETERS.flatMap((tag) => {
+    const value = search.get(tag.parameter)?.trim().toLowerCase() ?? "";
+    return FIRST_TOUCH_CAMPAIGN_VALUE.test(value) ? [{ ...tag, value }] : [];
+  });
+}
+
+function landingCampaignPath(screenPath: LandingScreenPath, href: string): string {
+  const query = new URLSearchParams(campaignTags(href).map((tag) => [tag.parameter, tag.value])).toString();
   return query ? `${screenPath}?${query}` : screenPath;
 }
 
-// OpenPanel expects a URL. Keep only the domain, never credentials, ports or URL contents.
-export function landingReferrer(referrer: string, hostname: string): string {
+function rememberLandingFirstTouch(
+  document: Document,
+  attribution: ReturnType<typeof landingAttribution>,
+  screen: LandingScreenPath,
+): void {
+  const view = document.defaultView;
+  if (!view) return;
+  const now = Date.now();
+  const touch: FirstTouch = {
+    acquisitionSource: attribution.acquisition_source,
+    sourcePlatform: attribution.source_platform,
+    landingPage: screen,
+    firstVisitOn: firstTouchDay(now),
+  };
+  for (const tag of campaignTags(document.location.href)) touch[tag.field] = tag.value;
+  rememberFirstTouch(() => view.localStorage, touch, now);
+}
+
+function landingReferrer(referrer: string, hostname: string): string {
   try {
     const url = new URL(referrer);
     if (url.protocol !== "https:" && url.protocol !== "http:") return "";
@@ -445,7 +547,6 @@ export function landingReferrer(referrer: string, hostname: string): string {
   }
 }
 
-// Regional search domains from https://www.google.com/supported_domains (2026-09-07).
 const GOOGLE_DOMAINS = `google.com google.ad google.ae google.com.af google.com.ag google.al google.am google.co.ao
 google.com.ar google.as google.at google.com.au google.az google.ba google.com.bd google.be
 google.bf google.bg google.com.bh google.bi google.bj google.com.bn google.com.bo google.com.br
@@ -485,16 +586,19 @@ const SOURCE_PLATFORMS = [
   { platform: "duckduckgo", category: "search", domains: ["duckduckgo.com"], tags: ["duckduckgo"] },
   { platform: "brave", category: "search", domains: ["search.brave.com"], tags: ["brave"] },
   { platform: "yahoo", category: "search", domains: ["yahoo.com", "yahoo.co.jp"], tags: ["yahoo"] },
-] as const;
+] as const satisfies readonly {
+  platform: FirstTouchSourcePlatform;
+  category: LandingAcquisitionSource;
+  domains: readonly string[];
+  tags: readonly string[];
+}[];
 
-export function landingAttribution(document: Document, hostname: string) {
+function landingAttribution(document: Document, hostname: string) {
   const referrer = landingReferrer(document.referrer, hostname);
   let campaignSource = "";
   try {
     campaignSource = new URL(document.location.href).searchParams.get("utm_source")?.trim().toLowerCase() ?? "";
-  } catch {
-    // Missing campaign data leaves only the referring domain.
-  }
+  } catch {}
   const tagged = SOURCE_PLATFORMS.find((source) => source.tags.some((tag) => campaignSource === tag));
   const domain = referrer ? new URL(referrer).hostname : "";
   const referred = SOURCE_PLATFORMS.find((source) =>
@@ -502,24 +606,24 @@ export function landingAttribution(document: Document, hostname: string) {
   );
   const source = tagged ?? referred;
   const category: LandingAcquisitionSource = source?.category ?? (campaignSource || referrer ? "other" : "direct");
+  const platform: FirstTouchSourcePlatform = source?.platform ?? "unknown";
   return {
     acquisition_source: category,
-    source_platform: source?.platform ?? "unknown",
+    source_platform: platform,
     __referrer: referrer,
   };
 }
 
 function landingPlacement(link: HTMLAnchorElement): LandingPlacement {
   if (link.closest(".landing-header")) return "header";
-  // Checked before `.post-article`, which wraps it: a card in the related row is a different
-  // question from a link inside the article body.
   if (link.closest(".post-more")) return "content_related";
+  if (link.closest(".teams-main")) return "teams_page";
+  if (link.closest(".pricing-page main")) return "pricing_page";
   if (link.closest(".landing-hero")) return "hero";
   if (link.closest(".landing-download")) return "download_section";
+  if (link.closest(".landing-teams")) return "teams_section";
   if (link.closest(".landing-footer")) return "footer";
   if (link.closest(".download-page")) return "download_page";
-  // Without these, every link inside an article body reports "other", which makes
-  // the article pages indistinguishable from each other in the report.
   if (link.closest(".post-index")) return "content_index";
   if (link.closest(".post-article")) return "content_article";
   return "other";

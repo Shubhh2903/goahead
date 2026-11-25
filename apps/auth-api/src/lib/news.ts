@@ -1,11 +1,3 @@
-// The one list of published news articles. The index page, the article pages, the
-// sitemap, the RSS feed and the build-time image generator all read it, so an
-// article is added in exactly one place and nothing can fall out of step.
-//
-// Everything that is not the list itself lives in content-collection.ts, which
-// /guides uses as well. Like that module, this one holds no JSX: article bodies
-// are in src/content/news and are wired up separately.
-
 import { type ContentCollection, publishedFirst } from "./content-collection";
 
 export const NEWS_AUTHOR = "Norbert Bodziony";
@@ -18,6 +10,10 @@ export const NEWS_COLLECTION: ContentCollection<"news"> = {
   indexTitle: "GoAhead News: Updates on the Local AI Agent App",
   indexDescription:
     "Notes on building GoAhead: local-first storage, agents that outlive their provider, and how the pieces fit together.",
+  indexSocialImage: {
+    path: "/social/news.jpg",
+    alt: "Good things in the making. GoAhead agents on a paper moon under the stars",
+  },
   feedTitle: "GoAhead news",
   backLabel: "All news",
   moreTitle: "More from GoAhead",
@@ -75,8 +71,9 @@ export const NEWS_COLLECTION: ContentCollection<"news"> = {
       slug: "run-the-team-server-yourself",
       title: "Run the team server yourself",
       description:
-        "Teams run on a computer you own. The hosted part holds accounts and memberships; it never holds your conversations, your files or your commands.",
+        "Learn how self-hosting a GoAhead team server works, where conversations and files live, what the account service handles, and who is responsible for uptime.",
       publishedAt: "2026-07-11",
+      updatedAt: "2026-10-07",
       author: NEWS_AUTHOR,
     },
     {

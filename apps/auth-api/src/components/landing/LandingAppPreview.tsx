@@ -4,6 +4,7 @@ import {
 } from "@openbot/contracts/landing-preview-messages";
 import { prefersReducedMotion } from "@openbot/ui/utils";
 import { onSettled } from "solid-js";
+import { useLandingText } from "./LandingText";
 
 const LANDING_PREVIEW_URL = "/app-preview";
 const LANDING_PREVIEW_LOAD_DELAY_MS = 300;
@@ -26,7 +27,14 @@ function markPreviewTiming(name: (typeof LANDING_PREVIEW_MARKS)[keyof typeof LAN
   window.performance.mark?.(name);
 }
 
-export function LandingAppPreview() {
+export interface LandingAppPreviewProps {
+  ref?: (element: HTMLElement) => void;
+  onReady?: () => void;
+  revealAfter?: Promise<void>;
+}
+
+export function LandingAppPreview(props: LandingAppPreviewProps) {
+  const text = useLandingText();
   let root: HTMLElement | undefined;
   let iframe: HTMLIFrameElement | undefined;
   let placeholder: HTMLDivElement | undefined;
@@ -42,6 +50,7 @@ export function LandingAppPreview() {
     let loading = false;
     let ready = false;
     let started = false;
+    let alive = true;
     let firstPaintFrame: number | undefined;
     let stablePaintFrame: number | undefined;
     let loadTimer: ReturnType<typeof setTimeout> | undefined;
@@ -77,7 +86,12 @@ export function LandingAppPreview() {
     const handleMessage = (event: MessageEvent) => {
       if (event.origin !== origin || event.source !== previewFrame.contentWindow) return;
       if (event.data?.type !== LANDING_PREVIEW_READY_MESSAGE) return;
-      reveal();
+      props.onReady?.();
+      if (!props.revealAfter) reveal();
+      else
+        void props.revealAfter.then(() => {
+          if (alive) reveal();
+        });
     };
 
     window.addEventListener("message", handleMessage);
@@ -88,6 +102,7 @@ export function LandingAppPreview() {
     });
 
     return () => {
+      alive = false;
       if (firstPaintFrame !== undefined) window.cancelAnimationFrame(firstPaintFrame);
       if (stablePaintFrame !== undefined) window.cancelAnimationFrame(stablePaintFrame);
       if (loadTimer) clearTimeout(loadTimer);
@@ -98,14 +113,17 @@ export function LandingAppPreview() {
 
   return (
     <section
-      ref={root}
+      ref={(element) => {
+        root = element;
+        props.ref?.(element);
+      }}
       class="landing-preview landing-app-preview t-skel"
       aria-labelledby="app-preview-title"
       data-enter="preview"
       data-preview-state="idle"
     >
       <h2 id="app-preview-title" class="landing-visually-hidden">
-        Interactive GoAhead application preview
+        {text().preview.title}
       </h2>
       <span class="landing-preview-window-controls" aria-hidden="true">
         <i />
@@ -116,14 +134,10 @@ export function LandingAppPreview() {
         ref={placeholder}
         class="landing-preview-placeholder t-skel-skeleton"
         role="status"
-        aria-label="Loading GoAhead preview"
+        aria-label={text().preview.loading}
       />
       <div class="landing-preview-stage t-skel-content">
-        <iframe
-          ref={iframe}
-          title="Interactive GoAhead application preview"
-          sandbox="allow-forms allow-same-origin allow-scripts"
-        />
+        <iframe ref={iframe} title={text().preview.title} sandbox="allow-forms allow-same-origin allow-scripts" />
       </div>
     </section>
   );

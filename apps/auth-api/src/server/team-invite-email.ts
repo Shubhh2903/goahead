@@ -1,63 +1,84 @@
-import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import { isCanonicalInviteUrl } from "@openbot/contracts/invite-links";
-import { type DynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import { type InviteLinkPayload, isCanonicalInviteUrl, parseInviteUrl } from "@openbot/contracts/invite-links";
+import type { DynamicRecord } from "@openbot/contracts/runtime-values";
+import { Effect, Schema } from "effect";
 import {
+  AuthOperationError,
   type AuthService,
   AuthServiceError,
   emailDeliveryFailure,
   isEmailDeliveryFailure,
   normalizeEmail,
 } from "./auth-service";
+import { type RemoteControlPlane, RemoteControlPlaneError } from "./remote-control-plane";
 import type { AuthUser, TeamInviteEmailDelivery } from "./types";
 
 export interface TeamInviteEmailServices {
   auth: Pick<AuthService, "enforceTeamInviteRateLimit">;
+  remote: Pick<RemoteControlPlane, "emailableInvite">;
   delivery: () => TeamInviteEmailDelivery | null;
 }
 
-/** The desktop bearer route and the browser cookie route send an invitation email the same way. */
-export async function sendTeamInviteEmail(
+const Invitation = Schema.Struct({
+  email: Schema.String,
+  inviteUrl: Schema.String,
+  role: Schema.Literals(["admin", "member"]),
+});
+
+export const sendTeamInviteEmail = Effect.fn("TeamInviteEmail.send")(function* (
   services: TeamInviteEmailServices,
   user: Pick<AuthUser, "id" | "email">,
-  body: DynamicRecord,
+  input: DynamicRecord,
   sourceIp: string,
-): Promise<void> {
-  if (
-    !isString(body.email) ||
-    !isString(body.serverName) ||
-    !isString(body.inviteUrl) ||
-    (body.role !== "admin" && body.role !== "member") ||
-    body.serverName.trim().length < INPUT_LIMITS.serverNameMin ||
-    body.serverName.trim().length > INPUT_LIMITS.serverName ||
-    /[\r\n]/u.test(body.serverName) ||
-    !isValidInviteUrl(body.inviteUrl)
-  ) {
-    throw new AuthServiceError(400, "invalid_invitation", "The invitation details are invalid.");
-  }
-  const email = normalizeEmail(body.email);
-  await services.auth.enforceTeamInviteRateLimit(user.id, email, sourceIp);
+) {
+  const invalid = () => new AuthServiceError(400, "invalid_invitation", "The invitation details are invalid.");
+  const body = yield* Schema.decodeUnknownEffect(Invitation)(input).pipe(Effect.mapError(invalid));
+  const link = inviteLink(body.inviteUrl);
+  if (!link) return yield* invalid();
+  const email = yield* Effect.try({
+    try: () => normalizeEmail(body.email),
+    catch: (error) => (error instanceof AuthServiceError ? error : invalid()),
+  });
+  const invite = yield* services.remote
+    .emailableInvite(user.id, { hostId: link.serverId, token: link.token, email, role: body.role })
+    .pipe(
+      Effect.mapError((error) =>
+        error instanceof RemoteControlPlaneError
+          ? invalid()
+          : new AuthOperationError({ message: "Account operation failed." }),
+      ),
+    );
+  yield* services.auth
+    .enforceTeamInviteRateLimit(user.id, email, sourceIp)
+    .pipe(
+      Effect.mapError((error) =>
+        error instanceof AuthServiceError ? error : new AuthOperationError({ message: "Account operation failed." }),
+      ),
+    );
   const delivery = services.delivery();
-  if (!delivery) throw new AuthServiceError(503, "email_delivery_not_configured", "Email delivery is unavailable.");
-  try {
-    await delivery.send({
+  if (!delivery)
+    return yield* new AuthServiceError(503, "email_delivery_not_configured", "Email delivery is unavailable.");
+  yield* delivery
+    .send({
       email,
       inviterEmail: user.email,
-      serverName: body.serverName,
+      serverName: invite.hostName.replace(/[\r\n]+/gu, " "),
       inviteUrl: body.inviteUrl,
       role: body.role,
-    });
-  } catch (error) {
-    if (isEmailDeliveryFailure(error))
-      throw emailDeliveryFailure(error.message, "GoAhead could not send the invitation.");
-    throw error;
-  }
-}
+    })
+    .pipe(
+      Effect.mapError((error) =>
+        isEmailDeliveryFailure(error)
+          ? emailDeliveryFailure(error.message, "GoAhead could not send the invitation.")
+          : new AuthOperationError({ message: "Account operation failed." }),
+      ),
+    );
+});
 
-function isValidInviteUrl(value: string): boolean {
-  if (value.length > 4_096 || /[\r\n]/u.test(value)) return false;
+function inviteLink(value: string): InviteLinkPayload | null {
+  if (value.length > 4_096 || /[\r\n]/u.test(value)) return null;
   try {
-    return isCanonicalInviteUrl(value);
+    return isCanonicalInviteUrl(value) ? parseInviteUrl(value) : null;
   } catch {
-    return false;
+    return null;
   }
 }

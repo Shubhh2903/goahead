@@ -3,8 +3,8 @@ import type { ChangelogGroup, ChangelogGroupType, ChangelogRelease as Release } 
 import { formatArticleDate } from "../../lib/content-collection";
 import { createLandingReveal } from "../landing/createLandingReveal";
 import { ChangelogInline } from "./ChangelogInline";
+import { ChangelogStores } from "./ChangelogStores";
 
-/** The file's headings, in the words a reader of release notes expects. */
 const GROUP_LABELS: Record<Exclude<ChangelogGroupType, "other">, string> = {
   added: "New",
   changed: "Improved",
@@ -20,7 +20,6 @@ function groupLabel(group: ChangelogGroup): string {
 
 export interface ChangelogReleaseProps {
   release: Release;
-  /** The app the release is of, such as "GoAhead". */
   product: string;
   latest: boolean;
 }
@@ -28,8 +27,6 @@ export interface ChangelogReleaseProps {
 export function ChangelogRelease(props: ChangelogReleaseProps) {
   let article: HTMLElement | undefined;
   const titleId = () => `${props.release.anchor}-title`;
-  // A small inset, so a release arrives as it comes up the screen, and one reached from the
-  // index is already in place when the scroll stops on it.
   const revealed = createLandingReveal(() => article, { rootMargin: "0px 0px -8% 0px" });
 
   return (
@@ -52,6 +49,7 @@ export function ChangelogRelease(props: ChangelogReleaseProps) {
           <Show when={props.latest}>
             <span class="changelog-release-badge">Latest</span>
           </Show>
+          <ChangelogStores stores={props.release.stores} />
         </div>
         <h2 class="changelog-release-title" id={titleId()}>
           <a class="changelog-release-anchor" href={`#${props.release.anchor}`}>
@@ -94,7 +92,6 @@ export function ChangelogRelease(props: ChangelogReleaseProps) {
             <h3 class="changelog-group-title">
               <span class="changelog-group-dot" aria-hidden="true" />
               {groupLabel(group)}
-              {/* Hidden from a screen reader, which announces the list's length itself. */}
               <span class="changelog-group-count" aria-hidden="true">
                 {group.items.length}
               </span>

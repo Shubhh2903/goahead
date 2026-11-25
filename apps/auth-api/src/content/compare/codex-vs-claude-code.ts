@@ -1,13 +1,5 @@
 import { BENCHMARK_SOURCES, type MatchupComparison } from "./comparison";
 
-// Every statement about Codex here is taken from OpenAI's Codex documentation
-// (developers.openai.com/codex now redirects to learn.chatgpt.com/docs), the OpenAI
-// help center and the openai/codex repository. Every statement about Claude Code is
-// taken from code.claude.com, claude.com and the Claude help center. Each page used is
-// in `sources`. The benchmark numbers are read by hand from the Artificial Analysis
-// Coding Agent Index. Where the sources state nothing, the text says so. Check them
-// again, and move `checkedAt`, whenever this file changes.
-
 const CODEX_DOCS = "https://learn.chatgpt.com/docs";
 const CLAUDE_CODE_DOCS = "https://code.claude.com/docs/en";
 
@@ -92,7 +84,7 @@ export const CODEX_VS_CLAUDE_CODE: MatchupComparison = {
   intro:
     "Codex is OpenAI's coding agent. Claude Code is Anthropic's. They do the same job: read your code, edit files and run commands, on your computer or in their maker's cloud. Both read rules from your repo, use MCP servers, skills and hooks, and review pull requests on GitHub. The real difference is whose models you get, and which subscription you already have.",
   bothInOpenBot:
-    "GoAhead runs both on your computer, each signed in with your own plan: Codex with ChatGPT, Claude Code with Claude. Give each one a job. They pass work to each other in a shared channel, and you can follow along from your phone. Move an agent from one to the other and it keeps its role, workspace and conversation.",
+    "GoAhead runs both on your computer, each signed in with your own plan: Codex with ChatGPT, Claude Code with Claude. Give each one a job. They pass work to each other in a shared channel, and you can follow along from your phone. Move an agent from one to the other and it keeps its role, workspace and conversation. When one plan hits its limit, the agent can move to a backup model on the other.",
   benchmark: {
     takeaway:
       "Claude Code with Sonnet 5.5 at max effort has the top score, 68. It's also the slowest and most expensive run here: $14.19 and 87 minutes a task. Codex with GPT-6.1 Sol at xhigh scores 63, the same as Sonnet 5.5 at xhigh, for $1.04 a task instead of $3.33, and in a bit more than half the time.",

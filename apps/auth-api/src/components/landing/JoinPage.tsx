@@ -1,23 +1,27 @@
 import { AppLogo } from "@openbot/brand";
 import { createWebAppInvitePath, OPENBOT_INVITE_ORIGIN, toOpenBotInviteUrl } from "@openbot/contracts/invite-links";
-import { createSignal, onSettled, Show } from "solid-js";
+import { createSignal, For, onSettled, Show } from "solid-js";
 import { landingAnalytics } from "../../lib/analytics";
 import { detectDownloadPlatform } from "../../lib/download-platforms";
 import { OPENBOT_DOWNLOAD_LINKS } from "../../lib/landing-links";
+import { createOpenAppFallback, OpenAppFallbackDialog } from "../transactional/OpenAppFallback";
+import type { JoinLink, JoinPageText } from "../transactional/page-text";
+import { TransactionalPage } from "../transactional/TransactionalPage";
 import { Button } from "../ui/button";
 
-export function JoinPage() {
+export function JoinPage(props: { lang: string; text: JoinPageText }) {
   const [openUrl, setOpenUrl] = createSignal("");
   const [browserUrl, setBrowserUrl] = createSignal("");
   const [mobile, setMobile] = createSignal(false);
   const [invalid, setInvalid] = createSignal(false);
+  const fallback = createOpenAppFallback();
 
   onSettled(() => {
     setMobile(
       /android|iphone|ipad|ipod/iu.test(navigator.userAgent) ||
         (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1),
     );
-    const platform = detectDownloadPlatform(globalThis.navigator) === "windows" ? "windows" : "macos";
+    const platform = detectDownloadPlatform(globalThis.navigator) ?? "macos";
     let validInvite = true;
     try {
       const pageUrl = new URL(window.location.href);
@@ -32,74 +36,54 @@ export function JoinPage() {
     return cleanup;
   });
 
+  const noApp = () => (mobile() ? props.text.noAppMobile : props.text.noApp);
+  const linkHref = (link: JoinLink) => (link === "browser" ? browserUrl() : OPENBOT_DOWNLOAD_LINKS.macos);
+  const armFallback = () => {
+    if (!mobile()) fallback.arm();
+  };
+
   return (
-    <main class="join-page">
-      <a class="landing-brand join-page-brand" href="/" aria-label="GoAhead home">
-        <AppLogo variant="production" class="landing-brand-logo" />
-        <span>GoAhead</span>
-      </a>
+    <TransactionalPage titleId="join-title" lang={props.lang}>
+      <AppLogo variant="production" animation="blink" class="join-card-logo" />
+      <p class="join-card-eyebrow">{props.text.eyebrow}</p>
+      <h1 id="join-title">{props.text.title}</h1>
+      <p class="join-card-copy">{props.text.intro}</p>
 
-      <section class="join-card" aria-labelledby="join-title">
-        <div class="join-card-signal" aria-hidden="true">
-          <span />
-          <i />
-          <span />
-        </div>
-        <AppLogo variant="production" animation="blink" class="join-card-logo" />
-        <p class="join-card-eyebrow">Private invitation</p>
-        <h1 id="join-title">Connect to a GoAhead host</h1>
-        <p class="join-card-copy">
-          Open this invitation in GoAhead. The app will verify the host and ask for confirmation before it connects.
-        </p>
-
-        <Show
-          when={!invalid()}
-          fallback={
-            <p class="join-card-error">
-              This invitation link is invalid or incomplete. Ask the host for a new invitation.
-            </p>
-          }
-        >
-          <div class="join-card-actions">
-            <Show
-              when={openUrl()}
-              fallback={
-                <span class="landing-button landing-button-primary landing-button-lg join-card-disabled">
-                  Open GoAhead
-                </span>
-              }
-            >
-              {(href) => (
-                <Button href={href()} variant="primary" size="lg" icon="open">
-                  Open GoAhead
-                </Button>
-              )}
-            </Show>
-            <Show when={browserUrl()}>
-              {(href) => (
-                <Button href={href()} variant="secondary" size="lg" icon="arrow-right">
-                  Open in browser
-                </Button>
-              )}
-            </Show>
-            <Show when={!mobile()}>
-              <Button href={OPENBOT_DOWNLOAD_LINKS.macos} variant="secondary" size="lg" icon="download">
-                Download GoAhead
+      <Show when={!invalid()} fallback={<p class="join-card-error">{props.text.invalid}</p>}>
+        <div class="join-card-actions join-card-actions-full">
+          <Show
+            when={openUrl()}
+            fallback={
+              <Button as="button" type="button" disabled variant="primary" size="lg" icon="open">
+                {props.text.open}
               </Button>
-            </Show>
-          </div>
-        </Show>
-
-        <Show when={mobile()}>
-          <p class="join-card-note">
-            If GoAhead is installed, tap Open GoAhead. You can also paste this link into Add server in the app.
+            }
+          >
+            {(href) => (
+              <Button href={href()} variant="primary" size="lg" icon="open" onClick={armFallback}>
+                {props.text.open}
+              </Button>
+            )}
+          </Show>
+        </div>
+        <Show when={browserUrl()}>
+          <p class="join-card-alternatives">
+            <For each={noApp()}>
+              {(part) => (
+                <Show when={part.link} fallback={part.text}>
+                  {(link) => <a href={linkHref(link())}>{part.text}</a>}
+                </Show>
+              )}
+            </For>
           </p>
         </Show>
-        <p class="join-card-note">
-          This link grants access to a host. Share it only with people you want to invite. GoAhead shows its expiry
-          before you join.
-        </p>
-      </section>
-    </main>
+      </Show>
+
+      <Show when={mobile()}>
+        <p class="join-card-note">{props.text.mobile}</p>
+      </Show>
+      <p class="join-card-note">{props.text.email}</p>
+      <OpenAppFallbackDialog fallback={fallback} text={props.text.openAppFallback} />
+    </TransactionalPage>
   );
 }

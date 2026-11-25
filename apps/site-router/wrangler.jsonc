@@ -12,6 +12,9 @@
       "zone_name": "openbot.site"
     }
   ],
+  "vars": {
+    "ACCOUNT_ORIGIN": "https://goahead.multicodegenius.com"
+  },
   "r2_buckets": [
     {
       "binding": "SITES",

@@ -1,23 +1,17 @@
 import { OPENBOT_LINKS } from "../../lib/landing-links";
-import type { Comparison } from "./comparison";
-
-// Every statement about dots here is taken from openai.com, chatgpt.com and the OpenAI
-// help center, and each page used is in `sources`. Where they state nothing, the text
-// says so. Check them again, and move `checkedAt`, whenever this file changes. OpenAI
-// writes the name in lower case, "dots"; this page calls the product ChatGPT dots,
-// because a dot lives in ChatGPT. Dots started on 29 September 2026, at DevDay.
+import { type Comparison, OPENBOT_LANGUAGE_COUNT, OPENBOT_TEXT } from "./comparison";
 
 const OPENAI_HELP = "https://help.openai.com/en/articles";
 
 export const CHATGPT_DOTS_COMPARISON: Comparison = {
   rival: { name: "ChatGPT dots", mark: "chatgpt-dots" },
   answer:
-    "Choose GoAhead if you want a team of agents on your own computer, in any country, with your ChatGPT plan and the other AI plans you already pay for, such as Claude, Gemini or Grok: the app is free and needs no account. Choose ChatGPT dots if you pay for ChatGPT Pro or Business Premium, and you want one always-on agent in OpenAI's cloud.",
+    "Choose GoAhead if you want a team of agents on your own computer, in any country, with your ChatGPT plan and the other AI plans you already pay for, such as Claude, Gemini or Grok: the app is free. Choose ChatGPT dots if you pay for ChatGPT Pro or Business Premium, and you want one always-on agent in OpenAI's cloud.",
   chooseOpenBot: [
     "You live in the European Economic Area, Switzerland or the UK, where ChatGPT Pro does not include dots.",
-    "You want ChatGPT, Claude, Gemini, Grok and Cursor agents in one team, or your own model.",
+    "You want ChatGPT, Claude, Gemini, Grok, Cursor, Cline, Muse Code and Pi agents in one team, or your own model.",
     "Your files and chats must stay on your own computer, not in OpenAI's cloud.",
-    "You want a free app that works without an account, and source code that you can read.",
+    "You want a free app, and source code that you can read.",
   ],
   rivalPlans:
     "ChatGPT dots runs on GPT-6 Astra, an OpenAI model. One dot comes with ChatGPT Pro, from $100 a month, or with Business Premium, from $100 a seat a month. Enterprise plans get a beta.",
@@ -30,8 +24,7 @@ export const CHATGPT_DOTS_COMPARISON: Comparison = {
     {
       icon: "cpu",
       topic: "Models and plans",
-      openbot:
-        "Use the plans you already have: ChatGPT, Claude, Gemini, Grok or Cursor. Or run free models and your own model through OpenCode. Choose one for each agent, and change it later.",
+      openbot: OPENBOT_TEXT.models,
       rival: "GPT-6 Astra, an OpenAI model. OpenAI describes no way to use other models or your own model.",
       better: "openbot",
     },
@@ -46,24 +39,50 @@ export const CHATGPT_DOTS_COMPARISON: Comparison = {
     {
       icon: "cloud",
       topic: "When your computer is off",
-      openbot:
-        "Agents keep working on the computer or server that runs GoAhead, and routines start them on a schedule. If you do not want to keep a computer on, use a hosted GoAhead server in the EU, from €20 or $25 a month.",
+      openbot: OPENBOT_TEXT.offline,
       rival:
         "A dot keeps working on its cloud computer while you are away, and runs reminders and recurring tasks on a schedule.",
     },
     {
       icon: "phone",
       topic: "Remote access",
-      openbot:
-        "Apps for iPhone and Android connect from anywhere. Chats and files go over an encrypted connection between your devices, with no VPN, and no cloud stores them.",
+      openbot: OPENBOT_TEXT.remote,
       rival:
         "After you create a dot on a computer, talk to it in the ChatGPT mobile app where mobile access is available, or in Slack and Microsoft Teams. Its chats and files are in your ChatGPT account.",
     },
     {
+      icon: "refresh",
+      topic: "Backup models",
+      openbot: OPENBOT_TEXT.backupModels,
+      rival:
+        "Dots run only on GPT-6 Astra. OpenAI describes no other model, and no move to another model when you reach a limit.",
+      better: "openbot",
+    },
+    {
+      icon: "key",
+      topic: "Logins and payments",
+      openbot: OPENBOT_TEXT.logins,
+      rival:
+        "For supported sign-ins, you type your password in a secure form that the model does not see, or you take over the browser. A dot can buy with a card that you saved on a store's website, after you approve the purchase.",
+    },
+    {
+      icon: "mic",
+      topic: "Voice",
+      openbot: OPENBOT_TEXT.voice,
+      rival:
+        "You can call your dot in ChatGPT on the web, phone and computer, and talk with it. OpenAI does not say where dots process speech.",
+    },
+    {
+      icon: "contact",
+      topic: "Chat apps",
+      openbot: OPENBOT_TEXT.chatApps,
+      rival:
+        "Slack and Microsoft Teams. Texting is a limited beta for Pro users in the US. OpenAI names no Discord, Telegram or WhatsApp.",
+    },
+    {
       icon: "users",
       topic: "Teams",
-      openbot:
-        "Each agent is a full coding agent with its own job. They give work to each other in shared channels, and coworkers can join one team host.",
+      openbot: OPENBOT_TEXT.teams,
       rival:
         "One dot for each person today; OpenAI plans teams of dots later. A dot works on several projects at once, can give work to other agents, and can join Slack and Teams channels.",
       better: "openbot",
@@ -81,7 +100,7 @@ export const CHATGPT_DOTS_COMPARISON: Comparison = {
       icon: "tag",
       topic: "Price and account",
       openbot:
-        "Free for noncommercial use; commercial use needs a license. No account is necessary on one computer. Your agents use the plans you already pay for.",
+        "Free for noncommercial use; commercial use needs a license. Your agents use the plans you already pay for.",
       rival:
         "Needs ChatGPT Pro, from $100 a month, or Business Premium, from $100 a seat a month for 2 seats or more. The first dot is included; OpenAI gives no price for more.",
       better: "openbot",
@@ -89,8 +108,7 @@ export const CHATGPT_DOTS_COMPARISON: Comparison = {
     {
       icon: "globe",
       topic: "Where you can use it",
-      openbot:
-        "In any country: GoAhead has no region lock. The desktop app is in English, French, Japanese and Turkish, and hosted servers run in the EU. Each AI provider sets the countries for its own plan.",
+      openbot: OPENBOT_TEXT.regions,
       rival:
         "On Pro, in the ChatGPT countries except the European Economic Area, Switzerland and the UK. On Business Premium, in all ChatGPT countries. Only for people 18 and over.",
       better: "openbot",
@@ -116,39 +134,34 @@ export const CHATGPT_DOTS_COMPARISON: Comparison = {
   sections: [
     {
       title: "Models and the plans you pay for",
-      openbot:
-        "GoAhead runs the provider tools you already use, with the plans you already pay for: Codex with your ChatGPT plan, Claude Code with your Claude plan, Gemini with your Google AI Pro or Ultra plan, Grok CLI with your Grok account or an xAI API key, and Cursor CLI with your Cursor plan or a Cursor API key. OpenCode runs free models, or your own model on any OpenAI-compatible server, also one on your computer. You choose the provider, the model and the reasoning effort for each agent. When you move an agent to a different provider, it keeps its role, workspace and conversation.",
+      openbot: OPENBOT_TEXT.plansSection,
       rival:
         "A dot runs on GPT-6 Astra, and OpenAI names no other model for it. Your first dot is included in ChatGPT Pro or Business Premium at no extra cost; OpenAI says that you can add more dots later, but gives no price. Chats with a dot do not count toward your ChatGPT limits, but the Codex and ChatGPT Work tasks that it starts do. For the first month after the start, dots usage does not count toward plan allowances.",
       better: "openbot",
     },
     {
       title: "Where the work happens",
-      openbot:
-        "GoAhead runs on the computer that hosts it. Agent workspaces, conversations and app data stay on that computer, so it must stay on while its agents work. Run it on a desktop or a server that stays on, and your agents keep working while your laptop is closed. If you do not want to keep a computer on, use a hosted GoAhead server. It is a Linux server in the EU (Germany, Finland or France), from €20 or $25 a month, and it keeps the workspaces and chats of its agents. Local-first is not offline: an agent that uses a hosted provider still sends its requests to that provider.",
+      openbot: OPENBOT_TEXT.workSection,
       rival:
         "Each dot has its own cloud computer at OpenAI, with Linux and Chrome, where it browses, makes files and runs tools. It keeps working there while you are away, and it runs reminders and recurring tasks on a schedule. Access to your own computer is off at the start: you allow it, and revoke it, in the ChatGPT desktop app. A dot can then also use your local browser when its cloud browser is blocked.",
       better: "openbot",
     },
     {
       title: "Where you can use it",
-      openbot:
-        "GoAhead has no region lock: download it and run it in any country. The interface is in English, French, Japanese and Turkish. Hosted GoAhead servers run in the EU, and you can pay for them in euros, US dollars or Polish złoty. Each AI provider decides where its own plan works, so check that your provider is available in your country.",
+      openbot: `GoAhead has no region lock: download it and run it in any country. The interface is in ${OPENBOT_LANGUAGE_COUNT} languages. Hosted GoAhead servers run in the EU, and you can pay for them in euros, US dollars or Polish złoty. Each AI provider decides where its own plan works, so check that your provider is available in your country.`,
       rival:
         "On ChatGPT Pro, dots started in the ChatGPT markets except the European Economic Area, Switzerland and the UK, and OpenAI gives no date for them. On Business Premium, dots are in all the countries where ChatGPT is available. You must be 18 or older, and access can take several days to reach your account. Texting a dot is a beta for Pro users in the US only.",
       better: "openbot",
     },
     {
       title: "Phones and remote access",
-      openbot:
-        "The GoAhead apps for iPhone and Android connect to the computer that runs your agents. From anywhere, you chat with them, follow their progress and send files. The connection goes directly between your devices when it can, it is encrypted, and no cloud stores your chats or files. You set up no VPN or tunnel. Remote access needs a GoAhead account.",
+      openbot: OPENBOT_TEXT.phonesSection,
       rival:
         "You create a dot in the ChatGPT desktop app or on the web on a computer, not on a phone. Then you talk to it in the ChatGPT mobile app, where mobile access is available, and in Slack and Microsoft Teams. Dots do not work on the mobile web. You can also talk to a dot by voice.",
     },
     {
       title: "How agents work as a team",
-      openbot:
-        "In GoAhead, each agent is a full coding agent: Codex, Claude Code, Gemini, Grok CLI, Cursor CLI or OpenCode, each with its own job and workspace. A lead agent can give parts of a task to other agents in a shared channel. You follow their work and step in when a decision needs you. For a team of people, one computer runs the host and the others join it; the chats and files stay on the host.",
+      openbot: OPENBOT_TEXT.teamSection,
       rival:
         "Today, each person starts with one primary dot, and OpenAI plans teams of dots that work together later. One dot works on several projects at the same time, and it can give work to other agents; its rules then apply to that work too. You can bring a dot into Slack and Microsoft Teams channels. Companies can preview specialist dots, each with its own identity.",
       better: "openbot",
@@ -176,7 +189,7 @@ export const CHATGPT_DOTS_COMPARISON: Comparison = {
     {
       question: "Can I use my ChatGPT plan with GoAhead?",
       answer:
-        "Yes. GoAhead runs Codex with your own ChatGPT plan, so the ChatGPT plan that you pay for works in GoAhead too. Next to it, Claude Code uses your Claude plan, Gemini a Google AI Pro or Ultra plan, Grok CLI your Grok account or an xAI API key, and Cursor CLI your Cursor plan. GoAhead adds no charge of its own.",
+        "Yes. GoAhead runs Codex with your own ChatGPT plan, so the ChatGPT plan that you pay for works in GoAhead too. Next to it, Claude Code uses your Claude plan, Gemini a Google AI Pro or Ultra plan, Grok CLI your Grok account or an xAI API key, Cursor CLI your Cursor plan, Cline your Cline account, and Muse Code your Meta account. When a plan reaches its limit, an agent can move to a backup model on another provider. GoAhead adds no charge of its own.",
     },
     {
       question: "How much does ChatGPT dots cost?",

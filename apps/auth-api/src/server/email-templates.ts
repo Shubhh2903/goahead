@@ -1,18 +1,7 @@
+import type { BillingCurrency, BillingPlanId } from "@openbot/contracts/billing";
+import { LICENSE_DEVICES_PER_USER, type LicensePlan, type LicenseTier } from "@openbot/contracts/license";
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
-import { OPENBOT_LINKS } from "../lib/landing-links";
-
-// HTML and plain-text bodies for account email. Mail clients render HTML very differently, so the
-// markup keeps to what all of them share:
-// - Tables and inline styles only. Gmail and Outlook drop or limit `<style>`, so that block holds
-//   optional improvements (dark mode, narrow screens) and a client without it still gets the
-//   light layout.
-// - Outlook for Windows renders with Word: it ignores `max-width` and `border-radius` and padding
-//   on links, so `<!--[if mso]>` blocks give it a fixed-width frame and a VML button.
-// - Images are often blocked until the reader allows them, so the logo has styled alt text and no
-//   content is an image.
-// - Clients that force a dark theme (Outlook.com, Gmail apps) rewrite colours on their own; the
-//   `[data-ogsc]` rules answer Outlook.com, and the light palette inverts cleanly elsewhere.
-// Every message also carries the plain-text body, for clients and readers that do not show HTML.
+import { OPENBOT_DOWNLOAD_PAGE_LINKS, OPENBOT_LINKS } from "../lib/landing-links";
 
 export interface RenderedEmail {
   subject: string;
@@ -33,16 +22,67 @@ export interface TeamInviteEmailInput {
   role: "admin" | "member";
 }
 
+export interface OwnerTransferEmailInput {
+  fromEmail: string;
+  serverName: string;
+  appUrl: string;
+}
+
+export interface ContactMessageEmailInput {
+  name: string | null;
+  email: string;
+  company: string | null;
+  topic: string;
+  message: string;
+}
+
+export interface WelcomeEmailInput {
+  plan: BillingPlanId;
+  serverName: string;
+}
+
+interface LicenseWelcomeEmailInput {
+  plan: LicensePlan;
+  users: number;
+  currency: BillingCurrency;
+  amount: number | null;
+  nextPaymentAt: number | null;
+}
+
+interface LicensePaymentFailedEmailInput {
+  plan: LicensePlan;
+  users: number;
+  currency: BillingCurrency;
+  amount: number;
+  nextAttemptAt: number | null;
+  invoiceUrl: string | null;
+}
+
+interface LicenseEndedEmailInput {
+  plan: LicensePlan;
+  users: number;
+  reason: "unpaid" | "canceled";
+}
+
+export type LicenseEmailInput =
+  | ({ kind: "welcome" } & LicenseWelcomeEmailInput)
+  | ({ kind: "payment_failed" } & LicensePaymentFailedEmailInput)
+  | ({ kind: "ended" } & LicenseEndedEmailInput);
+
 const SITE_URL = PRODUCT_IDENTITY.siteOrigin;
+const WEB_APP_URL = `${SITE_URL}/app`;
+const DOWNLOAD_URL = `${SITE_URL}${OPENBOT_DOWNLOAD_PAGE_LINKS.hub}`;
+const PRICING_URL = `${SITE_URL}/pricing`;
+const PLAN_NAMES: Record<BillingPlanId, string> = { starter: "Starter", standard: "Standard", pro: "Pro" };
+const LICENSE_TIER_NAMES: Record<LicenseTier, string> = { starter: "Starter", team: "Team" };
 const LOGO_URL = `${SITE_URL}/icon-192x192.png`;
 const FOOTER_LINKS = [
   { label: new URL(SITE_URL).host, href: SITE_URL },
-  { label: "X", href: OPENBOT_LINKS.contact },
+  { label: "X", href: OPENBOT_LINKS.x },
   { label: "GitHub", href: OPENBOT_LINKS.repository },
 ] as const;
 const FONT_STACK = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, Helvetica, Arial, sans-serif";
 const MONO_STACK = "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace";
-// Filler after the preheader, so a client's inbox preview does not continue into the body text.
 const PREHEADER_FILLER = "&#8199;&#65279;&#847; ".repeat(60);
 
 const COLOR = {
@@ -124,6 +164,326 @@ export function renderTeamInviteEmail(input: TeamInviteEmailInput): RenderedEmai
       footer,
     }),
   };
+}
+
+export function renderOwnerTransferEmail(input: OwnerTransferEmailInput): RenderedEmail {
+  const serverName = input.serverName.trim();
+  const subject = `Take ownership of ${serverName} on GoAhead`;
+  const preheader = `${input.fromEmail} wants to make you the owner of ${serverName}.`;
+  const footer = "If you did not expect this email, you can ignore it. Nothing changes until you accept.";
+  return {
+    subject,
+    preheader,
+    text: textBody(
+      [
+        `${input.fromEmail} wants to make you the owner of ${serverName} on GoAhead.`,
+        "",
+        "Open GoAhead and sign in with this email address to accept or decline:",
+        input.appUrl,
+        "",
+        "When you accept, the server and its agents, routines and data become yours, and the previous owner loses access. Anyone who can still sign in to the computer that runs the server can use your GoAhead account, so change its passwords and SSH keys. The request expires after 7 days.",
+      ],
+      footer,
+    ),
+    html: renderLayout({
+      title: subject,
+      preheader,
+      body: [
+        heading(`Take ownership of ${escapeHtml(serverName)}`),
+        paragraph(
+          `<strong style="color:${COLOR.text};font-weight:600;">${escapeHtml(input.fromEmail)}</strong> wants to make you the owner of a server on GoAhead.`,
+        ),
+        paragraph(
+          "When you accept, the server and its agents, routines and data become yours, and the previous owner loses access. Anyone who can still sign in to the computer that runs the server can use your GoAhead account, so change its passwords and SSH keys.",
+        ),
+        button("Open GoAhead", input.appUrl),
+        paragraph("Sign in with this email address to accept or decline. The request expires after 7 days.", {
+          muted: true,
+        }),
+        linkFallback(input.appUrl),
+      ].join(""),
+      footer,
+    }),
+  };
+}
+
+export function renderContactMessageEmail(input: ContactMessageEmailInput): RenderedEmail {
+  const sender = input.name ? `${input.name} <${input.email}>` : input.email;
+  const fullSubject = `${input.topic} from ${input.name ?? input.email}`;
+  const subject = fullSubject.length > 150 ? `${fullSubject.slice(0, 149)}…` : fullSubject;
+  const preheader = input.message.slice(0, 120);
+  const footer = `Sent from the contact form on goahead.multicodegenius.com. Reply to this email to answer ${input.email}.`;
+  return {
+    subject,
+    preheader,
+    text: textBody(
+      [
+        `From: ${sender}`,
+        ...(input.company ? [`Company: ${input.company}`] : []),
+        `Topic: ${input.topic}`,
+        "",
+        input.message,
+      ],
+      footer,
+    ),
+    html: renderLayout({
+      title: subject,
+      preheader,
+      body: [
+        heading(escapeHtml(input.topic)),
+        detailRow("From", sender),
+        ...(input.company ? [detailRow("Company", input.company)] : []),
+        paragraph(escapeHtml(input.message).replace(/\r?\n/gu, "<br>"), { last: true }),
+      ].join(""),
+      footer,
+    }),
+  };
+}
+
+export function renderWelcomeEmail(input: WelcomeEmailInput): RenderedEmail {
+  const serverName = input.serverName.trim();
+  const planName = PLAN_NAMES[input.plan];
+  const subject = "Welcome to GoAhead!";
+  const thanks = "Thank you for choosing GoAhead to build and run your AI Coworkers.";
+  const reachOut =
+    "I just wanted to personally say hello and let you know that if you run into any issues or have any feedback or suggestions - feel free to reach out to me directly by replying to this email.";
+  const feedback =
+    "Every piece of feedback is incredibly valuable to us. We ship updates almost every day, and your feedback shapes what comes next.";
+  const footer = "You receive this email because you started a GoAhead subscription.";
+  return {
+    subject,
+    preheader: thanks,
+    text: textBody(
+      [
+        "Hi,",
+        "Welcome to GoAhead!",
+        thanks,
+        "",
+        `Plan: ${planName}`,
+        `Server: ${serverName}`,
+        `Open your server: ${WEB_APP_URL}`,
+        "",
+        reachOut,
+        "",
+        feedback,
+        "",
+        "Best,",
+        "Kamil",
+      ],
+      footer,
+    ),
+    html: renderLayout({
+      title: subject,
+      preheader: thanks,
+      body: [
+        heading("Welcome to GoAhead!", { gap: 16 }),
+        paragraph("Hi,", { gap: 16 }),
+        paragraph(thanks, { gap: 16 }),
+        detailRows([
+          ["Plan", planName],
+          ["Server", serverName],
+        ]),
+        button("Open your server", WEB_APP_URL),
+        paragraph(reachOut, { gap: 16 }),
+        paragraph(feedback, { gap: 24 }),
+        paragraph("Best,<br>Kamil", { last: true }),
+      ].join(""),
+      footer,
+    }),
+  };
+}
+
+export function renderLicenseEmail(input: LicenseEmailInput): RenderedEmail {
+  switch (input.kind) {
+    case "welcome":
+      return renderLicenseWelcome(input);
+    case "payment_failed":
+      return renderLicensePaymentFailed(input);
+    case "ended":
+      return renderLicenseEnded(input);
+  }
+}
+
+function renderLicenseWelcome(input: LicenseWelcomeEmailInput): RenderedEmail {
+  const tierName = LICENSE_TIER_NAMES[input.plan.tier];
+  const seats = `${input.users} seat${input.users === 1 ? "" : "s"}`;
+  const subject = `Your GoAhead ${tierName} license is active`;
+  const preheader = `Thank you for buying GoAhead. Your license covers ${seats}.`;
+  const active = "Your license is active. You can use GoAhead for work now.";
+  const team =
+    input.plan.tier === "team"
+      ? "Invite your teammates from your server’s Members settings. The license counts each person once."
+      : "Your license covers you. Change to the Team license when you invite teammates.";
+  const devices = `Each user can use GoAhead on up to ${LICENSE_DEVICES_PER_USER} devices.`;
+  const reply = "If something does not work, or you have an idea, reply to this email. I read every reply.";
+  const footer = "You receive this email because you bought a GoAhead license.";
+  const rows = licenseRows(input.plan, input.users);
+  if (input.amount !== null)
+    rows.push(["Price", `${formatAmount(input.amount, input.currency)} / ${input.plan.interval}`]);
+  if (input.nextPaymentAt !== null) rows.push(["Next payment", formatDate(input.nextPaymentAt)]);
+  return {
+    subject,
+    preheader,
+    text: textBody(
+      [
+        "Hi,",
+        "",
+        "Thank you for buying GoAhead.",
+        active,
+        "",
+        ...rows.map(([label, value]) => `${label}: ${value}`),
+        "",
+        team,
+        devices,
+        `Download GoAhead: ${DOWNLOAD_URL}`,
+        "",
+        reply,
+        ...SIGNATURE_TEXT,
+      ],
+      footer,
+    ),
+    html: renderLayout({
+      title: subject,
+      preheader,
+      body: [
+        heading("Thank you for buying GoAhead", { gap: 16 }),
+        paragraph("Hi,", { gap: 16 }),
+        paragraph(active, { gap: 16 }),
+        detailRows(rows),
+        paragraph(`${escapeHtml(team)} ${devices}`, { gap: 16 }),
+        button("Download GoAhead", DOWNLOAD_URL),
+        paragraph(reply, { gap: 24 }),
+        SIGNATURE_HTML,
+      ].join(""),
+      footer,
+    }),
+  };
+}
+
+function renderLicensePaymentFailed(input: LicensePaymentFailedEmailInput): RenderedEmail {
+  const tierName = LICENSE_TIER_NAMES[input.plan.tier];
+  const subject = `Payment failed for your GoAhead ${tierName} license`;
+  const preheader = "Pay the invoice to keep your license active.";
+  const failed = "The payment for your GoAhead license did not go through.";
+  const retry =
+    input.nextAttemptAt === null
+      ? "This was the last try. If the invoice stays unpaid, your license ends."
+      : `Your license stays active while we try again on ${formatDate(input.nextAttemptAt)}. If no payment goes through, your license ends.`;
+  const action = input.invoiceUrl
+    ? "Pay the invoice now. You can use a different card."
+    : "Open Billing in the GoAhead settings to pay the invoice.";
+  const buttonLabel = input.invoiceUrl ? "Pay the invoice" : "Open GoAhead";
+  const url = input.invoiceUrl ?? WEB_APP_URL;
+  const reply = "If you have a question, reply to this email.";
+  const footer = "You receive this email because you have a GoAhead license.";
+  const rows = licenseRows(input.plan, input.users);
+  rows.push(["Amount due", formatAmount(input.amount, input.currency)]);
+  if (input.nextAttemptAt !== null) rows.push(["Next try", formatDate(input.nextAttemptAt)]);
+  return {
+    subject,
+    preheader,
+    text: textBody(
+      [
+        "Hi,",
+        "",
+        failed,
+        "",
+        ...rows.map(([label, value]) => `${label}: ${value}`),
+        "",
+        retry,
+        action,
+        `${buttonLabel}: ${url}`,
+        "",
+        reply,
+        ...SIGNATURE_TEXT,
+      ],
+      footer,
+    ),
+    html: renderLayout({
+      title: subject,
+      preheader,
+      body: [
+        heading("We could not take your payment", { gap: 16 }),
+        paragraph("Hi,", { gap: 16 }),
+        paragraph(failed, { gap: 16 }),
+        detailRows(rows),
+        paragraph(`${escapeHtml(retry)} ${escapeHtml(action)}`, { gap: 16 }),
+        button(buttonLabel, url),
+        paragraph(reply, { gap: 24 }),
+        SIGNATURE_HTML,
+      ].join(""),
+      footer,
+    }),
+  };
+}
+
+function renderLicenseEnded(input: LicenseEndedEmailInput): RenderedEmail {
+  const tierName = LICENSE_TIER_NAMES[input.plan.tier];
+  const subject = `Your GoAhead ${tierName} license has ended`;
+  const ended =
+    input.reason === "unpaid"
+      ? "We could not take the payment for your GoAhead license, so it has ended."
+      : "Your GoAhead license was canceled, and it has ended.";
+  const preheader = ended;
+  const data = "Your workspaces, chats, and files stay on your computer.";
+  const again = "To use GoAhead for work again, buy a new license at any time.";
+  const reply = "If this is a mistake, or you have a question, reply to this email.";
+  const footer = "You receive this email because you had a GoAhead license.";
+  const rows = licenseRows(input.plan, input.users);
+  return {
+    subject,
+    preheader,
+    text: textBody(
+      [
+        "Hi,",
+        "",
+        ended,
+        "",
+        ...rows.map(([label, value]) => `${label}: ${value}`),
+        "",
+        data,
+        again,
+        `See prices: ${PRICING_URL}`,
+        "",
+        reply,
+        ...SIGNATURE_TEXT,
+      ],
+      footer,
+    ),
+    html: renderLayout({
+      title: subject,
+      preheader,
+      body: [
+        heading("Your license has ended", { gap: 16 }),
+        paragraph("Hi,", { gap: 16 }),
+        paragraph(escapeHtml(ended), { gap: 16 }),
+        detailRows(rows),
+        paragraph(`${escapeHtml(data)} ${escapeHtml(again)}`, { gap: 16 }),
+        button("See prices", PRICING_URL),
+        paragraph(reply, { gap: 24 }),
+        SIGNATURE_HTML,
+      ].join(""),
+      footer,
+    }),
+  };
+}
+
+const SIGNATURE_TEXT = ["", "Best,", "Kamil"];
+const SIGNATURE_HTML = paragraph("Best,<br>Kamil", { last: true });
+
+function licenseRows(plan: LicensePlan, users: number): [label: string, value: string][] {
+  return [
+    ["License", `${LICENSE_TIER_NAMES[plan.tier]} license${plan.bundle ? " (bundle)" : ""}`],
+    ["Seats", String(users)],
+  ];
+}
+
+function formatAmount(amount: number, currency: BillingCurrency): string {
+  return new Intl.NumberFormat("en", { style: "currency", currency: currency.toUpperCase() }).format(amount / 100);
+}
+
+function formatDate(time: number): string {
+  return new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: "UTC" }).format(time);
 }
 
 function textBody(lines: string[], footer: string): string {
@@ -231,14 +591,14 @@ function footerLinks(): string {
   ).join(`<span aria-hidden="true">&nbsp;&nbsp;·&nbsp;&nbsp;</span>`);
 }
 
-function heading(html: string): string {
-  return `<h1 class="ob-text" style="margin:0 0 10px;font-size:22px;line-height:28px;font-weight:600;letter-spacing:-0.2px;color:${COLOR.text};">${html}</h1>`;
+function heading(html: string, options: { gap?: number } = {}): string {
+  return `<h1 class="ob-text" style="margin:0 0 ${options.gap ?? 10}px;font-size:22px;line-height:28px;font-weight:600;letter-spacing:-0.2px;color:${COLOR.text};">${html}</h1>`;
 }
 
-function paragraph(html: string, options: { muted?: boolean; last?: boolean } = {}): string {
+function paragraph(html: string, options: { muted?: boolean; last?: boolean; gap?: number } = {}): string {
   const color = options.muted ? COLOR.muted : COLOR.text;
   const size = options.muted ? "13px;line-height:20px" : "15px;line-height:23px";
-  return `<p class="${options.muted ? "ob-muted" : "ob-text"}" style="margin:0 0 ${options.last ? 0 : 20}px;font-size:${size};color:${color};">${html}</p>`;
+  return `<p class="${options.muted ? "ob-muted" : "ob-text"}" style="margin:0 0 ${options.last ? 0 : (options.gap ?? 20)}px;font-size:${size};color:${color};">${html}</p>`;
 }
 
 function codeBlock(code: string): string {
@@ -250,11 +610,20 @@ function codeBlock(code: string): string {
 }
 
 function detailRow(label: string, value: string): string {
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 24px;">
-  <tr>
-    <td class="ob-rule ob-muted" style="border-top:1px solid ${COLOR.border};border-bottom:1px solid ${COLOR.border};padding:12px 0;font-size:13px;line-height:20px;color:${COLOR.muted};">${escapeHtml(label)}</td>
-    <td class="ob-rule ob-text" align="right" style="border-top:1px solid ${COLOR.border};border-bottom:1px solid ${COLOR.border};padding:12px 0;font-size:13px;line-height:20px;font-weight:600;color:${COLOR.text};">${escapeHtml(value)}</td>
-  </tr>
+  return detailRows([[label, value]]);
+}
+
+function detailRows(rows: [label: string, value: string][]): string {
+  const cells = rows
+    .map(
+      ([label, value]) => `<tr>
+    <td class="ob-rule ob-muted" style="border-bottom:1px solid ${COLOR.border};padding:12px 0;font-size:13px;line-height:20px;color:${COLOR.muted};">${escapeHtml(label)}</td>
+    <td class="ob-rule ob-text" align="right" style="border-bottom:1px solid ${COLOR.border};padding:12px 0;font-size:13px;line-height:20px;font-weight:600;color:${COLOR.text};">${escapeHtml(value)}</td>
+  </tr>`,
+    )
+    .join("");
+  return `<table role="presentation" class="ob-rule" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 24px;border-top:1px solid ${COLOR.border};">
+  ${cells}
 </table>`;
 }
 

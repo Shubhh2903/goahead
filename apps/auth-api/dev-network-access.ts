@@ -4,15 +4,39 @@ const MOBILE_LAN_PATHS = new Set([
   "/v1/mobile-auth/devices",
   "/v1/me",
   "/v1/me/profile",
+  "/v1/me/analytics",
+  "/v1/me/chat-color",
   "/v1/me/avatar",
+  "/v1/me/billing/",
+  "/v1/me/credits/",
+  "/v1/me/credits/activity",
+  "/v1/me/credits/transfer",
+  "/v1/me/referrals",
   "/v1/mobile/features",
+  "/v1/mobile/changelog",
   "/v2/remote/hosts/",
   "/v2/remote/sessions/",
   "/v2/remote/invites/preview",
   "/v2/remote/invites/accept",
+  "/v2/remote/owner-transfers/",
   "/v2/hosting/plans",
   "/v2/hosting/servers/",
 ]);
+
+function publicCatalogRead(segments: string[]): boolean {
+  const [version, area, ...rest] = segments;
+  if (version !== "v1") return false;
+  if (area === "skills") return publicListingPath(rest, "icon");
+  if (area === "marketplace" && rest[0] === "agents") return publicListingPath(rest.slice(1), "avatar");
+  return false;
+}
+
+function publicListingPath(rest: string[], image: string): boolean {
+  if (rest.length === 0) return true;
+  const [id, part, ...more] = rest;
+  if (!id || id === "mine" || id === "admin" || more.length > 0) return false;
+  return part === undefined || part === image;
+}
 
 export function developmentNetworkRequestAllowed(remoteAddress: string | undefined, requestUrl: string): boolean {
   if (remoteAddress === "127.0.0.1" || remoteAddress === "::1" || remoteAddress === "::ffff:127.0.0.1") return true;
@@ -20,8 +44,8 @@ export function developmentNetworkRequestAllowed(remoteAddress: string | undefin
   if (MOBILE_LAN_PATHS.has(pathname)) return true;
   const segments = pathname.split("/").filter(Boolean);
   if (segments.length === 3 && segments[0] === "v1" && segments[1] === "avatars" && segments[2]) return true;
-  // The public preview of one shared agent and its avatar. `mine` lists the user's own templates and
-  // stays on loopback.
+  if (publicCatalogRead(segments)) return true;
+  if (segments.length === 3 && segments[0] === "plugins" && segments[1] === "icon" && segments[2]) return true;
   if (
     (segments.length === 3 || (segments.length === 4 && segments[3] === "avatar")) &&
     segments[0] === "v1" &&
@@ -30,14 +54,13 @@ export function developmentNetworkRequestAllowed(remoteAddress: string | undefin
     segments[2] !== "mine"
   )
     return true;
-  // The phone buys a hosted server, opens its payment page again, and wakes it.
   if (
     segments.length === 5 &&
     segments[0] === "v2" &&
     segments[1] === "hosting" &&
     segments[2] === "servers" &&
     segments[3] &&
-    (segments[4] === "checkout" || segments[4] === "wake")
+    (segments[4] === "checkout" || segments[4] === "wake" || segments[4] === "restart")
   )
     return true;
   if (
@@ -54,7 +77,25 @@ export function developmentNetworkRequestAllowed(remoteAddress: string | undefin
     segments[1] === "remote" &&
     segments[2] === "hosts" &&
     segments[3] &&
-    segments[4] === "logo"
+    (segments[4] === "logo" || segments[4] === "appearance" || segments[4] === "owner-transfer")
+  )
+    return true;
+  if (
+    segments.length === 5 &&
+    segments[0] === "v2" &&
+    segments[1] === "remote" &&
+    segments[2] === "owner-transfers" &&
+    segments[3] &&
+    (segments[4] === "accept" || segments[4] === "decline")
+  )
+    return true;
+  if (
+    segments.length === 4 &&
+    segments[0] === "v2" &&
+    segments[1] === "remote" &&
+    segments[2] === "hosts" &&
+    segments[3] &&
+    segments[3] !== "register"
   )
     return true;
   if (

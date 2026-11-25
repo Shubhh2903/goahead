@@ -5,7 +5,7 @@ Checked against Slack docs and the Slack API Terms of Service on 2026-09-30. Sou
 ## The design
 
 One Slack app, `GoAhead`, for every workspace. A workspace installs it one time from GoAhead
-(**Server settings → Connectors → Slack → Connect Slack**), and the workspace is linked to that
+(**Marketplace → Apps → Slack → Connect Slack**), and the workspace is linked to that
 GoAhead server. People mention @GoAhead in a channel or send it a direct message. The Slack
 Orchestrator, an agent that the connect dialog adds, receives each new request, gives the work to the
 agent that fits best, and posts the answer in the thread. Every answer comes from GoAhead, with the
@@ -72,12 +72,12 @@ Do the steps in this order:
    - [ ] `POST /v2/remote/slack-route/validate` without a signature gives 401.
 4. **Signal**, after the Worker: Signal asks `/v2/remote/slack-route/validate` for 5 minutes after it
    starts, so an older Worker makes every `ingress` hello fail.
-   - [ ] Set `SLACK_SIGNING_SECRET` in the server's `/opt/openbot/remote/.env.production` with the
-         server's Dotenvx key, as `A0C5H5C95NH:<production secret>,A0C5G5XGS83:<development secret>`.
+   - [ ] Set `SLACK_SIGNING_SECRET` as `A0C5H5C95NH:<production secret>,A0C5G5XGS83:<development secret>`.
          Signal binds each secret to its app. A value without app IDs turns the Slack route off (503).
-         The encrypted value in `remote/.env.production` here has the old form, without app IDs:
-         set it again. Not checked: whether the repository file and the server file use the same key
-         pair.
+         `remote/.env.production` here and the server's `/opt/openbot/remote/.env.production` hold the
+         same value, encrypted with the root `DOTENV_PRIVATE_KEY_PRODUCTION`. It lists only
+         `A0C5H5C95NH`. To add the development app, change the repository file with `-fk .env.keys`,
+         then copy it to the server.
    - [ ] Deploy as `docs/remote-session-deployment.md` says, with `remote/nginx/signal.openbot.run.conf`.
    - [ ] `POST https://signal.openbot.run/v1/slack/events` without a signature gives 401, not 404 or
          503.
@@ -87,9 +87,9 @@ Do the steps in this order:
 6. **Desktop.** Run `release-upgrade-safety`, then release. An old Signal refuses the new `ingress`
    hello, so step 4 comes first.
 
-The test Worker (`bun run deploy:test`) reads `.env.shared`, then `.env.production`. `.env.shared` has
-no route key, so it takes the production route key and JWKS. This computer has no key for
-`.env.shared`.
+The test Worker (`bun run deploy:test`) loads the `.env.dev` values, then the production
+inputs. `.env.dev` has no route key, so it takes the production route key and JWKS. Without the
+development key, local startup still works but the shared integration values stay unavailable.
 
 ## End-to-end test
 

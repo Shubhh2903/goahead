@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentMarketplace } from "../src/server/agent-marketplace";
+import { runApiEffect } from "../src/server/effect-runtime";
 import { SkillMarketplace } from "../src/server/skill-marketplace";
 
 const databases: DatabaseSync[] = [];
@@ -68,7 +70,14 @@ describe("marketplace presentation migration", () => {
   it("stores the publisher's category and keeps consent when an older client submits a new version", async () => {
     const database = presentationDatabase();
     const agents = new AgentMarketplace({ DB: d1(database), SKILLS: unusedBucket() });
-    const user = { id: "user-1", name: "Owner", email: "owner@example.com", avatarUrl: null };
+    const user = {
+      id: "user-1",
+      name: "Owner",
+      email: "owner@example.com",
+      avatarUrl: null,
+      analyticsEnabled: null,
+      chatColor: null,
+    };
     const snapshot = {
       botId: "local",
       name: "Writer",
@@ -80,17 +89,21 @@ describe("marketplace presentation migration", () => {
       skills: [],
       routines: [],
     };
-    const published = await agents.submit({
-      user,
-      snapshot,
-      avatar: null,
-      category: "documents",
-      showCreatorAvatar: true,
-    });
+    const published = await runApiEffect(
+      agents.submit({
+        user,
+        snapshot,
+        avatar: null,
+        category: "documents",
+        showCreatorAvatar: true,
+      }),
+    );
     expect(published).toMatchObject({ category: "documents", showCreatorAvatar: true });
-    await agents.review(published.id, "approved", null);
-    expect((await agents.list({ category: "documents" })).agents.map((item) => item.name)).toEqual(["Writer"]);
-    const next = await agents.submit({ user, snapshot, avatar: null, agentId: published.agentId });
+    await runApiEffect(agents.review(published.id, "approved", null));
+    expect((await runApiEffect(agents.list({ category: "documents" }))).agents.map((item) => item.name)).toEqual([
+      "Writer",
+    ]);
+    const next = await runApiEffect(agents.submit({ user, snapshot, avatar: null, agentId: published.agentId }));
     expect(next.showCreatorAvatar).toBe(true);
   });
 
@@ -99,36 +112,115 @@ describe("marketplace presentation migration", () => {
     const bindings = { DB: d1(database), SKILLS: unusedBucket() };
     const agents = new AgentMarketplace(bindings);
     const skills = new SkillMarketplace(bindings);
-    expect((await skills.list({ query: "Owner" })).skills.map((item) => item.id)).toEqual(["skill-1"]);
-    expect((await agents.list({ query: "Owner" })).agents.map((item) => item.id)).toEqual(["agent-1"]);
+    expect((await runApiEffect(skills.list({ query: "Owner" }))).skills.map((item) => item.id)).toEqual(["skill-1"]);
+    expect((await runApiEffect(agents.list({ query: "Owner" }))).agents.map((item) => item.id)).toEqual(["agent-1"]);
     database.exec("UPDATE users SET name = NULL");
-    expect((await skills.list({ query: "owner@example.com" })).skills.map((item) => item.id)).toEqual(["skill-1"]);
-    expect((await agents.list({ query: "owner@example.com" })).agents.map((item) => item.id)).toEqual(["agent-1"]);
+    expect((await runApiEffect(skills.list({ query: "owner@example.com" }))).skills).toEqual([]);
+    expect((await runApiEffect(agents.list({ query: "owner@example.com" }))).agents).toEqual([]);
+    expect((await runApiEffect(skills.list({}))).skills.map((item) => item.creatorName)).toEqual(["GoAhead user"]);
+    expect((await runApiEffect(agents.list({}))).agents.map((item) => item.creatorName)).toEqual(["GoAhead user"]);
 
-    expect((await agents.list({ category: "coding" })).agents).toEqual([]);
-    expect((await agents.list({ category: "other" })).agents.map((item) => item.id)).toEqual(["agent-1"]);
+    expect((await runApiEffect(agents.list({ category: "coding" }))).agents).toEqual([]);
+    expect((await runApiEffect(agents.list({ category: "other" }))).agents.map((item) => item.id)).toEqual(["agent-1"]);
     database.exec("UPDATE marketplace_agent_versions SET category = 'coding'");
-    expect((await agents.list({ category: "coding" })).agents.map((item) => item.id)).toEqual(["agent-1"]);
+    expect((await runApiEffect(agents.list({ category: "coding" }))).agents.map((item) => item.id)).toEqual([
+      "agent-1",
+    ]);
     for (const [service, id] of [
       [agents, "agent-1"],
       [skills, "skill-1"],
     ] as const) {
       const read = async () =>
         service === agents
-          ? (await agents.list()).agents[0]?.creatorAvatarUrl
-          : (await skills.list({})).skills[0]?.creatorAvatarUrl;
+          ? (await runApiEffect(agents.list())).agents[0]?.creatorAvatarUrl
+          : (await runApiEffect(skills.list({}))).skills[0]?.creatorAvatarUrl;
       expect(await read()).toBeNull();
-      await expect(service.setCreatorAvatar("intruder", id, true)).rejects.toMatchObject({ status: 404 });
-      await service.setCreatorAvatar("user-1", id, true);
+      await expect(
+        runApiEffect(
+          Effect.gen(function* () {
+            return yield* service.setCreatorAvatar("intruder", id, true);
+          }),
+        ),
+      ).rejects.toMatchObject({ status: 404 });
+      await runApiEffect(
+        Effect.gen(function* () {
+          return yield* service.setCreatorAvatar("user-1", id, true);
+        }),
+      );
       expect(await read()).toBe("/v1/avatars/user-1?v=one");
       database.exec("UPDATE users SET avatar_url = '/v1/avatars/user-1?v=two'");
       expect(await read()).toBe("/v1/avatars/user-1?v=two");
       database.exec("UPDATE users SET avatar_url = NULL");
       expect(await read()).toBeNull();
       database.exec("UPDATE users SET avatar_url = '/v1/avatars/user-1?v=one'");
-      await service.setCreatorAvatar("user-1", id, false);
+      await runApiEffect(
+        Effect.gen(function* () {
+          return yield* service.setCreatorAvatar("user-1", id, false);
+        }),
+      );
       expect(await read()).toBeNull();
     }
+  });
+});
+
+describe("marketplace verified agents and cards migration", () => {
+  it("keeps listings and gives inserts from the old Worker no verified state and no card", () => {
+    const database = presentationDatabase();
+    expect(count(database, "marketplace_agents")).toBe(1);
+    expect(count(database, "marketplace_agent_versions")).toBe(1);
+    expect(count(database, "marketplace_skill_versions")).toBe(1);
+    expect(database.prepare("SELECT verified, approved_version_id FROM marketplace_agents").get()).toEqual({
+      verified: 0,
+      approved_version_id: "agent-version-1",
+    });
+    database.exec(
+      "INSERT INTO marketplace_agents(id, owner_user_id, created_at, updated_at) VALUES ('old-worker', 'user-1', 2, 2)",
+    );
+    database.exec(
+      `INSERT INTO marketplace_agent_versions(
+        id, agent_id, version, name, title, description, avatar_seed, avatar_hue, skills_json, routines_json, status, created_at
+      ) VALUES ('old-version', 'old-worker', 1, 'Old', 'Title', 'Description', 'seed', NULL, '[]', '[]', 'pending', 2)`,
+    );
+    expect(database.prepare("SELECT verified FROM marketplace_agents WHERE id = 'old-worker'").get()).toEqual({
+      verified: 0,
+    });
+    expect(database.prepare("SELECT card_key FROM marketplace_agent_versions WHERE id = 'old-version'").get()).toEqual({
+      card_key: null,
+    });
+    expect(database.prepare("SELECT card_key FROM marketplace_skill_versions").get()).toEqual({ card_key: null });
+    expect(() => database.exec("UPDATE marketplace_agents SET verified = 2")).toThrow();
+    expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  });
+
+  it("shows a pending agent only by its link, and never a rejected one", async () => {
+    const database = presentationDatabase();
+    const agents = new AgentMarketplace({ DB: d1(database), SKILLS: unusedBucket() });
+    database.exec(
+      "INSERT INTO marketplace_agents(id, owner_user_id, created_at, updated_at) VALUES ('agent-2', 'user-1', 2, 2)",
+    );
+    database.exec(
+      `INSERT INTO marketplace_agent_versions(
+        id, agent_id, version, name, title, description, avatar_seed, avatar_hue, skills_json, routines_json, status, created_at
+      ) VALUES ('agent-version-2', 'agent-2', 1, 'Pending', 'Title', 'Description', 'seed', NULL, '[]', '[]', 'pending', 2)`,
+    );
+    expect((await runApiEffect(agents.list())).agents.map((item) => item.id)).toEqual(["agent-1"]);
+    await expect(runApiEffect(agents.get("agent-2"))).rejects.toMatchObject({ status: 404 });
+    expect(await runApiEffect(agents.getListing("agent-2"))).toMatchObject({ name: "Pending", pending: true });
+    expect(await runApiEffect(agents.getListing("agent-1"))).not.toHaveProperty("pending");
+
+    database.exec("UPDATE marketplace_agent_versions SET status = 'rejected' WHERE id = 'agent-version-2'");
+    await expect(runApiEffect(agents.getListing("agent-2"))).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("filters and marks verified agents", async () => {
+    const database = presentationDatabase();
+    const agents = new AgentMarketplace({ DB: d1(database), SKILLS: unusedBucket() });
+    expect((await runApiEffect(agents.list({ verified: true }))).agents).toEqual([]);
+    await runApiEffect(agents.setVerified("agent-1", true));
+    expect((await runApiEffect(agents.list({ verified: true }))).agents.map((item) => item.verified)).toEqual([true]);
+    expect((await runApiEffect(agents.list({ verified: false }))).agents).toEqual([]);
+    await expect(runApiEffect(agents.setVerified("missing", true))).rejects.toMatchObject({ status: 404 });
   });
 });
 
@@ -142,6 +234,8 @@ function presentationDatabase(): DatabaseSync {
   database.exec(migration("0010_agents_marketplace.sql"));
   seedMarketplace(database);
   database.exec(migration("0019_marketplace_presentation.sql"));
+  database.exec(migration("0042_marketplace_skill_verified.sql"));
+  database.exec(migration("0045_marketplace_verified_agents_and_cards.sql"));
   database.exec("UPDATE users SET avatar_url = '/v1/avatars/user-1?v=one'");
   return database;
 }

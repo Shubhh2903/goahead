@@ -1,18 +1,22 @@
 import { AppLogo } from "@openbot/brand";
 import { Link } from "@tanstack/solid-router";
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import { COMPARE_COLLECTION } from "../../lib/compare";
 import { LANDING_COMPARISON_LINKS } from "../../lib/landing-content";
-import { LANDING_FAQ } from "../../lib/landing-faq";
-import { EXTERNAL_LINK_REL, OPENBOT_LINKS } from "../../lib/landing-links";
+import { EXTERNAL_LINK_REL } from "../../lib/landing-links";
 import { RivalMark } from "../compare/RivalMark";
 import { ArticleGradient } from "../content/ArticleGradient";
 import { createLandingReveal } from "./createLandingReveal";
 import { LandingIcon } from "./LandingIcon";
+import { useLandingText } from "./LandingText";
+import { useSitePath } from "./SiteText";
 
 export function FaqSection() {
   let sectionRef: HTMLElement | undefined;
   const revealed = createLandingReveal(() => sectionRef);
+  const landing = useLandingText();
+  const path = useSitePath();
+  const text = () => landing().faq;
 
   return (
     <section
@@ -24,23 +28,35 @@ export function FaqSection() {
       <div class="landing-section-inner">
         <div class="landing-faq-layout">
           <header class="landing-section-heading landing-faq-heading">
-            <h2 id="faq-title">Questions</h2>
-            <p>Short answers about price, setup, providers and your data.</p>
-            <a class="landing-faq-contact" href={OPENBOT_LINKS.contact} target="_blank" rel={EXTERNAL_LINK_REL}>
-              Ask us something else
-              <LandingIcon name="arrow-up-right" class="landing-faq-contact-icon" />
-            </a>
+            <h2 id="faq-title">{text().title}</h2>
+            <p>{text().description}</p>
+            <Link class="landing-faq-contact" to={path("/contact")}>
+              {text().contact}
+              <LandingIcon name="arrow-right" class="landing-faq-contact-icon" />
+            </Link>
           </header>
           <div class="landing-faq-body">
             <div class="compare-faq-list">
-              <For each={LANDING_FAQ}>
+              <For each={text().questions}>
                 {(entry, index) => (
                   <details class="compare-faq-item" style={{ "--landing-index": index() }}>
                     <summary class="compare-faq-question">
                       {entry.question}
                       <LandingIcon name="chevron-down" class="compare-faq-chevron" />
                     </summary>
-                    <p class="compare-faq-answer">{entry.answer}</p>
+                    <p class="compare-faq-answer">
+                      {entry.answer}
+                      <Show when={entry.link}>
+                        {(link) => (
+                          <>
+                            {" "}
+                            <a href={link().href} target="_blank" rel={EXTERNAL_LINK_REL}>
+                              {link().label}
+                            </a>
+                          </>
+                        )}
+                      </Show>
+                    </p>
                   </details>
                 )}
               </For>
@@ -48,7 +64,7 @@ export function FaqSection() {
           </div>
         </div>
         <nav class="landing-compare-links" aria-labelledby="landing-compare-title">
-          <h3 id="landing-compare-title">Compare GoAhead</h3>
+          <h3 id="landing-compare-title">{text().compare}</h3>
           <ul>
             <For each={LANDING_COMPARISON_LINKS}>
               {(comparison, index) => {
@@ -56,7 +72,6 @@ export function FaqSection() {
                 return (
                   <li style={{ "--landing-index": index() }}>
                     <Link ref={card} to="/compare/$slug" params={{ slug: comparison.slug }}>
-                      {/* The gradient of the comparison's own card, so the two pages match. */}
                       <span class="landing-compare-art" aria-hidden="true">
                         <ArticleGradient
                           title={comparison.title}

@@ -3,28 +3,38 @@ import { handleBrowserApi } from "../../../server/browser-api";
 import { readHostLogo } from "../../../server/host-logo";
 import {
   hostedServerErrorResponse,
+  requestAccountAttribution,
   requestAuthService,
   requestAvatarBucket,
   requestBillingService,
+  requestCompanySignIn,
+  requestCustomServerOffers,
   requestHostedServerService,
   requestHostedSiteService,
+  requestOwnerTransferEmailDelivery,
+  requestReferrals,
   requestRemoteControlPlane,
-  requestRemoteSignalUrl,
-  requestSourceIp,
   requestTeamInviteEmailDelivery,
+  schedule,
 } from "../../../server/request-auth";
+import { requestSourceIp } from "../../../server/source-ip";
 
 function handle({ request }: { request: Request }) {
   return handleBrowserApi(request, {
     auth: requestAuthService(),
     remote: requestRemoteControlPlane(),
+    companySignIn: requestCompanySignIn,
     hostLogo: (hostId, version) => readHostLogo(requestAvatarBucket(), hostId, version),
     hosting: requestHostedServerService,
+    customServerOffers: requestCustomServerOffers,
     inviteEmailDelivery: requestTeamInviteEmailDelivery,
+    ownerTransferEmailDelivery: requestOwnerTransferEmailDelivery,
+    schedule,
+    attribution: requestAccountAttribution,
     billing: requestBillingService,
+    referrals: requestReferrals,
     avatarBucket: requestAvatarBucket,
     hostedSites: requestHostedSiteService,
-    signalUrl: requestRemoteSignalUrl,
     sourceIp: requestSourceIp,
     errorResponse: hostedServerErrorResponse,
   });

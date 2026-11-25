@@ -1,97 +1,159 @@
 import { AppLogo, PlatformLogo, ProviderLogo } from "@openbot/brand";
-import { onSettled } from "solid-js";
+import { For, onSettled, Show } from "solid-js";
 import { landingAnalytics } from "../../lib/analytics";
-import { EXTERNAL_LINK_REL, OPENBOT_LINKS } from "../../lib/landing-links";
-import { Button } from "../ui/button";
+import type { HeroProviderPart, LandingPageText } from "../../lib/landing-page-text";
+import { ContentCallToAction } from "../content/ContentCallToAction";
+import { ButtonLink } from "../ui/button";
+import { AgentNetworkSection } from "./AgentNetworkSection";
 import { DownloadSection } from "./DownloadSection";
 import { FaqSection } from "./FaqSection";
 import { FeaturesSection } from "./FeaturesSection";
 import { HeroDownloadSelector } from "./HeroDownloadSelector";
 import { LandingAppPreview } from "./LandingAppPreview";
+import { LandingBeam } from "./LandingBeam";
 import { LandingFooter } from "./LandingFooter";
 import { LandingGlow } from "./LandingGlow";
+import { LandingTextProvider, useLandingText } from "./LandingText";
 import { PricingSection } from "./PricingSection";
 import { SiteHeader } from "./SiteHeader";
+import { useSitePath } from "./SiteText";
+import { TeamsSection } from "./TeamsSection";
 
-export function LandingPage() {
+function latch(): { open: () => void; opened: Promise<void> } {
+  let open = () => {};
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { open, opened };
+}
+
+export function LandingPage(props: { text: LandingPageText }) {
+  return (
+    <LandingTextProvider text={props.text}>
+      <LandingPageContent />
+    </LandingTextProvider>
+  );
+}
+
+function HeroDescriptionPart(props: { part: string | HeroProviderPart }) {
+  const provider = () => (typeof props.part === "string" ? undefined : props.part);
+  const words = () => (typeof props.part === "string" ? props.part : undefined);
+  return (
+    <Show when={provider()} fallback={words()}>
+      {(part) => <HeroProvider part={part()} />}
+    </Show>
+  );
+}
+
+function HeroProvider(props: { part: HeroProviderPart }) {
+  const name = () => (
+    <span class="landing-provider">
+      <ProviderLogo provider={props.part.provider} class="landing-provider-logo" />
+      {props.part.name}
+    </span>
+  );
+  return (
+    <Show when={props.part.suffix} fallback={name()}>
+      <span class="landing-provider-item">
+        {name()}
+        {props.part.suffix}
+      </span>
+    </Show>
+  );
+}
+
+function LandingPageContent() {
+  const text = useLandingText();
+  const path = useSitePath();
+  const hero = () => text().hero;
+  const previewReady = latch();
+  const beamImpact = latch();
+  let copy: HTMLDivElement | undefined;
+  let preview: HTMLElement | undefined;
+  let download: HTMLElement | undefined;
   onSettled(() => landingAnalytics.start(document, window.location.hostname));
 
   return (
     <div class="landing-page">
-      <SiteHeader page="landing" />
+      <SiteHeader
+        page="landing"
+        downloadRef={(element) => {
+          download = element;
+        }}
+      />
 
       <main>
         <section class="landing-hero" aria-labelledby="landing-title">
-          <div class="landing-hero-grid" data-slot="hero-grid" aria-hidden="true" />
-          <div class="landing-hero-copy">
-            <div class="landing-hero-pills landing-hero-line" style={{ "--landing-hero-line": 0 }}>
-              <p class="landing-availability">
-                <span class="landing-availability-new">NEW</span>
-                <span class="landing-availability-copy">Available on</span>
-                <span class="landing-availability-platform">
-                  <PlatformLogo platform="macos" />
-                  macOS (Apple silicon)
-                </span>
-              </p>
-            </div>
+          <LandingBeam
+            surface={() => preview}
+            source={() => download}
+            avoid={() => (copy ? [...copy.children] : [])}
+            beamPosition={0.78}
+            color="#a46cf5"
+            start={previewReady.opened}
+            onImpact={beamImpact.open}
+          />
+          <div ref={copy} class="landing-hero-copy">
+            <p class="landing-availability landing-hero-line" style={{ "--landing-hero-line": 0 }}>
+              <span class="landing-availability-new">{hero().new}</span>
+              <span class="landing-availability-copy">{hero().availableOn}</span>
+              <span class="landing-availability-platform">
+                <PlatformLogo platform="macos" />
+                macOS (Apple silicon)
+              </span>
+            </p>
 
             <h1 id="landing-title" class="landing-title landing-hero-line" style={{ "--landing-hero-line": 1 }}>
-              {/* The spaces do not render in the flex row. They keep the words apart in
-                  the text that search engines read, which was "MeetOpenBot". */}
-              <span>Meet</span> <AppLogo variant="production" animation="blink" interactive class="landing-hero-logo" />{" "}
+              <Show when={hero().title.before}>
+                {(before) => (
+                  <>
+                    <span>{before()}</span>{" "}
+                  </>
+                )}
+              </Show>
+              <AppLogo variant="production" animation="blink" interactive class="landing-hero-logo" />{" "}
               <span>GoAhead</span>
+              <Show when={hero().title.after}>
+                {(after) => (
+                  <>
+                    {" "}
+                    <span>{after()}</span>
+                  </>
+                )}
+              </Show>
             </h1>
 
             <p class="landing-description landing-hero-line" style={{ "--landing-hero-line": 2 }}>
-              Persistent AI teammates on your own computer. Run{" "}
-              <span class="landing-provider-item">
-                <span class="landing-provider">
-                  <ProviderLogo provider="codex" class="landing-provider-logo" />
-                  Codex
-                </span>
-                ,
-              </span>{" "}
-              <span class="landing-provider-item">
-                <span class="landing-provider">
-                  <ProviderLogo provider="claude" class="landing-provider-logo" />
-                  Claude
-                </span>
-                ,
-              </span>{" "}
-              <span class="landing-provider">
-                <ProviderLogo provider="antigravity" class="landing-provider-logo" />
-                Gemini
-              </span>{" "}
-              and{" "}
-              <span class="landing-provider">
-                <ProviderLogo provider="grok" class="landing-provider-logo" />
-                Grok
-              </span>{" "}
-              with the plans you already pay for, or your own model.
+              <For each={hero().description}>{(part) => <HeroDescriptionPart part={part} />}</For>
             </p>
 
             <div class="landing-actions landing-hero-line" style={{ "--landing-hero-line": 3 }}>
               <HeroDownloadSelector />
-              <Button
-                href={OPENBOT_LINKS.contact}
-                target="_blank"
-                rel={EXTERNAL_LINK_REL}
+              <ButtonLink
+                to={path("/contact")}
                 variant="secondary"
                 size="lg"
                 icon="contact"
                 class="landing-button-glass"
               >
-                Contact
-              </Button>
+                {hero().contact}
+              </ButtonLink>
             </div>
           </div>
 
-          <LandingAppPreview />
+          <LandingAppPreview
+            ref={(element) => (preview = element)}
+            onReady={previewReady.open}
+            revealAfter={beamImpact.opened}
+          />
         </section>
+        <AgentNetworkSection />
         <FeaturesSection />
         <PricingSection />
+        <TeamsSection />
         <FaqSection />
         <DownloadSection />
+        <ContentCallToAction />
       </main>
       <LandingFooter />
       <LandingGlow />

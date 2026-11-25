@@ -1,9 +1,13 @@
+import { DEFAULT_APP_LANGUAGE } from "@openbot/contracts/app-language";
+import { loadLocale, resolveLocale } from "@openbot/i18n";
 import { createLazyFileRoute } from "@tanstack/solid-router";
 import { createSignal, lazy, onSettled, Show } from "solid-js";
-import "../../../../src/renderer/src/preview/preview.css";
 
 const OpenBotPlayground = lazy(() =>
-  import("@openbot/renderer-preview").then((module) => ({ default: module.OpenBotPlayground })),
+  Promise.all([
+    import("@openbot/renderer-preview"),
+    loadLocale(resolveLocale(DEFAULT_APP_LANGUAGE, navigator.language)).catch(() => undefined),
+  ]).then(([module]) => ({ default: module.OpenBotPlayground })),
 );
 
 export const Route = createLazyFileRoute("/app-preview")({ component: AppPreviewPage });
