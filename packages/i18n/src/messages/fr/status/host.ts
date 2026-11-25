@@ -2,11 +2,13 @@ import type { PartialTranslation } from "../../../message";
 import type { messages as source } from "../../en/status/host";
 
 export const messages = {
-  // Status lines of the WebRTC host.
-  "status.host.registered": "Ce GoAhead est enregistré pour l’accès WebRTC.",
+  "status.host.registered": "Cet GoAhead est enregistré pour l’accès WebRTC.",
+  "status.host.keyRotated": "Clé du serveur changée. Les appareils associés restent associés.",
   "status.host.identityUpdated": "Identité du serveur mise à jour.",
   "status.host.starting": "Démarrage de l’hôte WebRTC…",
-  "status.host.ready": "Ce GoAhead est prêt pour les connexions WebRTC.",
-  "status.host.stopping": "Passage de ce GoAhead en mode privé…",
-  "status.host.private": "Ce GoAhead est privé.",
+  "status.host.ready": "Cet GoAhead est prêt pour les connexions WebRTC.",
+  "status.host.signalLost": "Les autres appareils ne peuvent pas joindre cet GoAhead pour le moment. Il se reconnecte.",
+  "status.host.stopping": "Passage de cet GoAhead en mode privé…",
+  "status.host.private": "Cet GoAhead est privé.",
+  "status.host.removed": "Cet GoAhead a été retiré de votre compte. Publiez-le à nouveau pour le partager.",
 } as const satisfies PartialTranslation<typeof source>;

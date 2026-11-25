@@ -1,45 +1,172 @@
-// The live view of a host browser tab, and the pointer and key input that goes back to it.
-//
-// A still image per request is what the released routes offer, and it is not a browser: the page
-// moves, and a client that asks again gets the page as it was when it asked. This carries the
-// screencast the host already produces, as JPEG frames on a socket, with input on the way back.
-//
-// The frames are binary because they are binary: base64 on the JSON channel costs a third more
-// bytes for every frame and holds the same channel the client's requests use. The socket is opened
-// through the tunnel the remote screen already uses, so nothing new is negotiated on the peer.
-//
-// Coordinates are a fraction of the frame, not pixels. The client draws a frame at whatever size
-// its panel is, and the host's viewport is a third size again; sending pixels means one of the two
-// has to know the other's scale, and the one that guesses wrong clicks somewhere else. A fraction
-// means the same point in both.
-
 import { INPUT_LIMITS } from "../input-limits";
 import { isBoundedString, isIdentifier } from "../ipc-bounded-values";
 import { isDynamicRecord, isNumber, isString } from "../runtime-values";
 
 export const TEAM_BROWSER_VIEW_CAPABILITY = "browser-view";
-/**
- * A host that expands a pointer fraction against the frame the point names, and that forgets a
- * frame once the client says a newer one is on screen. Older hosts reject an unknown input, so a
- * client sends the sequence and the drawn-frame acknowledgement only when the host advertises this.
- */
 export const TEAM_BROWSER_VIEW_FRAME_POINT_CAPABILITY = "browser-view-frame-point";
-/** Present on the view socket when this client will acknowledge the frame it has drawn. */
+export const TEAM_BROWSER_VIEW_CLIPBOARD_CAPABILITY = "browser-view-clipboard";
 export const BROWSER_VIEW_FRAME_ACK_QUERY = "frameAck";
 
 export function browserViewClientAcksFrames(url: URL): boolean {
   return url.searchParams.get(BROWSER_VIEW_FRAME_ACK_QUERY) === "1";
 }
 
-/** A frame is one JPEG. The cap is generous for a photograph and refuses a stream that is not one. */
+export const TEAM_BROWSER_VIEW_CURSOR_CAPABILITY = "browser-view-cursor";
+export const BROWSER_VIEW_CURSOR_QUERY = "cursor";
+
+export function browserViewClientWantsCursor(url: URL): boolean {
+  return url.searchParams.get(BROWSER_VIEW_CURSOR_QUERY) === "1";
+}
+
+export const TEAM_BROWSER_VIEW_VIEWPORT_CAPABILITY = "browser-view-viewport";
+export const BROWSER_VIEW_VIEWPORT_QUERY = "viewport";
+export const BROWSER_VIEW_VIEWPORT_LIMITS = {
+  minWidth: 320,
+  minHeight: 240,
+  maxWidth: 2_560,
+  maxHeight: 2_560,
+} as const;
+
+export interface BrowserViewViewport {
+  width: number;
+  height: number;
+}
+
+export function browserViewViewportQuery(viewport: BrowserViewViewport): string {
+  return `${Math.round(viewport.width)}x${Math.round(viewport.height)}`;
+}
+
+export function browserViewClientViewport(url: URL): BrowserViewViewport | null {
+  const match = /^(\d{3,4})x(\d{3,4})$/u.exec(url.searchParams.get(BROWSER_VIEW_VIEWPORT_QUERY) ?? "");
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const limits = BROWSER_VIEW_VIEWPORT_LIMITS;
+  if (width < limits.minWidth || width > limits.maxWidth || height < limits.minHeight || height > limits.maxHeight)
+    return null;
+  return { width, height };
+}
+
+export const TEAM_BROWSER_VIEW_CONTEXT_MENU_CAPABILITY = "browser-view-context-menu";
+export const BROWSER_VIEW_CONTEXT_MENU_QUERY = "menu";
+
+export function browserViewClientWantsContextMenu(url: URL): boolean {
+  return url.searchParams.get(BROWSER_VIEW_CONTEXT_MENU_QUERY) === "1";
+}
+
+export const TEAM_BROWSER_VIEW_PAGE_COPY_CAPABILITY = "browser-view-page-copy-v1";
+export const BROWSER_VIEW_PAGE_COPY_QUERY = "pageCopy";
+
+export function browserViewClientWantsPageCopy(url: URL): boolean {
+  return url.searchParams.get(BROWSER_VIEW_PAGE_COPY_QUERY) === "1";
+}
+export const BROWSER_VIEW_PAGE_COPY_AFTER_INPUT_MS = 5_000;
+
+export const BROWSER_VIEW_CONTEXT_MENU_ITEMS = [
+  "copy-link",
+  "copy-image-address",
+  "cut",
+  "copy",
+  "paste",
+  "select-all",
+] as const;
+export type BrowserViewContextMenuItem = (typeof BROWSER_VIEW_CONTEXT_MENU_ITEMS)[number];
+export const BROWSER_VIEW_CONTEXT_MENU_URL_MAX_LENGTH = 2_048;
+
+export const BROWSER_VIEW_CURSORS = [
+  "default",
+  "pointer",
+  "text",
+  "vertical-text",
+  "crosshair",
+  "cell",
+  "wait",
+  "progress",
+  "help",
+  "move",
+  "grab",
+  "grabbing",
+  "not-allowed",
+  "zoom-in",
+  "zoom-out",
+  "ew-resize",
+  "ns-resize",
+  "nesw-resize",
+  "nwse-resize",
+  "col-resize",
+  "row-resize",
+  "none",
+] as const;
+export type BrowserViewCursor = (typeof BROWSER_VIEW_CURSORS)[number];
+
+export interface BrowserViewContextMenu {
+  items: BrowserViewContextMenuItem[];
+  link?: string;
+  image?: string;
+}
+
+export type BrowserViewHostMessage =
+  | BrowserViewCopied
+  | { type: "cursor"; cursor: BrowserViewCursor }
+  | ({ type: "context-menu" } & BrowserViewContextMenu)
+  | { type: "pageCopied"; text: string };
+
+export function encodeBrowserViewHostMessage(message: BrowserViewHostMessage): string {
+  return JSON.stringify(message);
+}
+
+export function decodeBrowserViewHostMessage(value: string): BrowserViewHostMessage | null {
+  return decodeHostMessageValue(JSON.parse(value));
+}
+
+function decodeHostMessageValue(message: unknown): BrowserViewHostMessage | null {
+  if (!isDynamicRecord(message) || !isString(message.type)) throw new Error("Invalid browser view message.");
+  if (message.type === "copied" || message.type === "copyTooLarge") return decodeBrowserViewCopiedValue(message);
+  if (message.type === "cursor") {
+    if (!isString(message.cursor)) throw new Error("Invalid browser view message.");
+    const cursor = BROWSER_VIEW_CURSORS.find((name) => name === message.cursor) ?? "default";
+    return { type: "cursor", cursor };
+  }
+  if (message.type === "pageCopied") {
+    if (!isBoundedString(message.text, BROWSER_VIEW_MAX_CLIPBOARD_TEXT) || message.text.length === 0)
+      throw new Error("Invalid browser view message.");
+    return { type: "pageCopied", text: message.text };
+  }
+  if (message.type === "context-menu") {
+    const listed = message.items;
+    if (!Array.isArray(listed) || listed.length > 32) throw new Error("Invalid browser view message.");
+    const link = menuUrl(message.link);
+    const image = menuUrl(message.image);
+    const items = BROWSER_VIEW_CONTEXT_MENU_ITEMS.filter(
+      (item) =>
+        listed.includes(item) &&
+        (item !== "copy-link" || link !== undefined) &&
+        (item !== "copy-image-address" || image !== undefined),
+    );
+    return {
+      type: "context-menu",
+      items,
+      ...(link === undefined ? {} : { link }),
+      ...(image === undefined ? {} : { image }),
+    };
+  }
+  return null;
+}
+
+function menuUrl(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isString(value) || value.length > BROWSER_VIEW_CONTEXT_MENU_URL_MAX_LENGTH)
+    throw new Error("Invalid browser view message.");
+  return value;
+}
+
 export const BROWSER_VIEW_MAX_FRAME_BYTES = 2 * 1024 * 1024;
+export const BROWSER_VIEW_MAX_CLIPBOARD_TEXT = 100_000;
 const FRAME_MAGIC = new Uint8Array([0x4f, 0x42, 0x56, 0x31]);
 const FRAME_HEADER_BYTES = FRAME_MAGIC.byteLength + 8;
 
 export interface BrowserViewFrame {
-  /** Counts from 1 on the host, so a client can see that it dropped one. */
   sequence: number;
-  /** The frame's own pixels, which is what a fractional coordinate is a fraction of. */
   width: number;
   height: number;
   image: Uint8Array;
@@ -52,7 +179,6 @@ export interface BrowserViewSessionRequest {
 export interface BrowserViewSessionResponse {
   id: string;
   tabId: string;
-  /** Where the frames are. The host builds it, so the client never assembles a path of its own. */
   streamPath: string;
 }
 
@@ -62,11 +188,6 @@ export type BrowserViewInput =
       action: "move" | "down" | "up" | "wheel";
       x: number;
       y: number;
-      /**
-       * The frame the fraction is a fraction of. Sent only to a host that advertises
-       * `browser-view-frame-point`. A client that omits it, including every client from before
-       * this field, gets the newest frame the host sent.
-       */
       sequence?: number;
       button: "left" | "middle" | "right";
       clickCount: number;
@@ -74,12 +195,17 @@ export type BrowserViewInput =
       deltaY: number;
       modifiers: number;
     }
-  /**
-   * A client sends `char` only for a key whose `key` is one character. The host adds the character
-   * of a named key itself, such as the `\r` of Enter, so a client that also sends it types it twice.
-   */
   | { type: "key"; action: "down" | "up" | "char"; key: string; code: string; text: string; modifiers: number }
-  | { type: "ack"; sequence: number };
+  | { type: "ack"; sequence: number }
+  | { type: "paste"; text: string }
+  | { type: "copy" }
+  | { type: "cut"; text: string };
+
+export function isBrowserViewUserAction(input: BrowserViewInput): boolean {
+  return input.type === "key" || (input.type === "pointer" && (input.action === "down" || input.action === "up"));
+}
+
+export type BrowserViewCopied = { type: "copied"; text: string } | { type: "copyTooLarge" };
 
 export function isBrowserViewSessionsRoute(method: string, path: string): boolean {
   return method === "POST" && pathname(path) === "/v1/browser/view/sessions";
@@ -89,7 +215,6 @@ export function isBrowserViewSessionRoute(method: string, path: string): boolean
   return method === "DELETE" && /^\/v1\/browser\/view\/sessions\/[^/]+$/u.test(pathname(path));
 }
 
-/** The one path the host's tunnel opens a socket for, and the one the host's router answers. */
 export function browserViewStreamPath(sessionId: string): string {
   if (!isIdentifier(sessionId)) throw new Error("Invalid browser view session ID.");
   return `/v1/browser/view/sessions/${sessionId}/stream`;
@@ -153,31 +278,32 @@ export function encodeBrowserViewInput(input: BrowserViewInput): string {
   return JSON.stringify(input);
 }
 
-/**
- * The input a host of this capability is sent. A host that does not name frames still accepts the
- * released payload, and it expands every point with its newest frame. An acknowledgement is not
- * part of that payload: an older host closes the view on an input it does not know.
- */
-export function browserViewInputForHost(input: BrowserViewInput, namesFrames: boolean): BrowserViewInput | null {
+export function browserViewInputForHost(
+  input: BrowserViewInput,
+  namesFrames: boolean,
+  clipboard: boolean,
+): BrowserViewInput | null {
   if (!namesFrames && input.type === "ack") return null;
+  if (!clipboard && (input.type === "paste" || input.type === "copy" || input.type === "cut")) return null;
   if (input.type !== "pointer" || input.sequence === undefined || namesFrames) return input;
   const { sequence: _sequence, ...released } = input;
   return released;
 }
 
-/**
- * The host decodes what a remote member sends. Every field is bounded here rather than where it is
- * dispatched, so a value that reaches CDP has already been read as the small thing it is meant to be.
- */
 export function decodeBrowserViewInput(value: string): BrowserViewInput {
   return decodeBrowserViewInputValue(JSON.parse(value));
 }
 
-/** The same bounds for a value that never was text: what a renderer sends its own main process. */
 export function decodeBrowserViewInputValue(message: unknown): BrowserViewInput {
   if (!isDynamicRecord(message)) throw new Error("Invalid browser view input.");
-  // The client says which frame it has drawn. There is no page event in it.
   if (message.type === "ack") return { type: "ack", sequence: sequenceNumber(message.sequence) };
+  if (message.type === "paste" || message.type === "cut") {
+    if (!isBoundedString(message.text, BROWSER_VIEW_MAX_CLIPBOARD_TEXT) || message.text.length === 0) {
+      throw new Error("Invalid browser view input.");
+    }
+    return { type: message.type, text: message.text };
+  }
+  if (message.type === "copy") return { type: "copy" };
   const modifiers = isNumber(message.modifiers) ? message.modifiers : 0;
   if (!Number.isInteger(modifiers) || modifiers < 0 || modifiers > 15) throw new Error("Invalid browser view input.");
   if (message.type === "pointer") {
@@ -211,11 +337,23 @@ export function decodeBrowserViewInputValue(message: unknown): BrowserViewInput 
     if (!isString(message.key) || !isString(message.code) || message.key.length > 32 || message.code.length > 32) {
       throw new Error("Invalid browser view input.");
     }
-    // One keystroke carries one character; a paste is not sent a key at a time.
     if (text.length > 8) throw new Error("Invalid browser view input.");
     return { type: "key", action, key: message.key, code: message.code, text, modifiers };
   }
   throw new Error("Invalid browser view input.");
+}
+
+export function encodeBrowserViewCopied(message: BrowserViewCopied): string {
+  return JSON.stringify(message);
+}
+
+function decodeBrowserViewCopiedValue(message: unknown): BrowserViewCopied {
+  if (!isDynamicRecord(message)) throw new Error("Invalid browser view message.");
+  if (message.type === "copyTooLarge") return { type: "copyTooLarge" };
+  if (message.type !== "copied" || !isBoundedString(message.text, BROWSER_VIEW_MAX_CLIPBOARD_TEXT)) {
+    throw new Error("Invalid browser view message.");
+  }
+  return { type: "copied", text: message.text };
 }
 
 function fraction(value: unknown): number {

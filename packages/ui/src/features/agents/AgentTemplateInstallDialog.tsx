@@ -1,4 +1,5 @@
 import type { AgentTemplateDetail } from "@openbot/contracts/ipc";
+import { classifyFailure } from "@openbot/telemetry";
 import { Button, Dialog, Heading, IconButton, Text, toast, X } from "@openbot/ui";
 import { createSignal, Show } from "solid-js";
 import { useText } from "../../text";
@@ -8,16 +9,12 @@ import { TemplateInstructions, TemplateRoutines, TemplateSkills } from "./AgentT
 export interface AgentTemplateInstallDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The template a link named. Null while it loads. */
   detail: AgentTemplateDetail | null;
   loading: boolean;
   onInstall: () => Promise<void>;
+  onOpenLink: (url: string) => void;
 }
 
-/**
- * What an `openbot://agents/<id>` link opens. It shows all of what the agent will follow before
- * anything is installed: a link alone never adds an agent.
- */
 export function AgentTemplateInstallDialog(props: AgentTemplateInstallDialogProps) {
   const { t, errorMessage } = useText();
   const [installing, setInstalling] = createSignal(false);
@@ -27,7 +24,9 @@ export function AgentTemplateInstallDialog(props: AgentTemplateInstallDialogProp
     try {
       await props.onInstall();
     } catch (error) {
-      toast.error(errorMessage(error, t("agentTemplate.install.failed")));
+      toast.error(errorMessage(error, t("agentTemplate.install.failed")), {
+        report: { operation: "agent", source: "system", cause_code: classifyFailure(error) },
+      });
     } finally {
       setInstalling(false);
     }
@@ -83,7 +82,11 @@ export function AgentTemplateInstallDialog(props: AgentTemplateInstallDialogProp
                       </Text>
                     </header>
                     <div class="agent-template-detail">
-                      <TemplateInstructions title={detail().title} description={detail().description} />
+                      <TemplateInstructions
+                        title={detail().title}
+                        description={detail().description}
+                        onOpenLink={props.onOpenLink}
+                      />
                       <TemplateSkills skills={detail().skills} expandable />
                       <TemplateRoutines routines={detail().routines} labelled />
                     </div>

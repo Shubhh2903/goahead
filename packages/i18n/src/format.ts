@@ -1,37 +1,27 @@
+import { formatTranslation } from "./format-catalogs";
 import type { TranslatedLocale } from "./locale";
 import { createTranslate } from "./message";
 import { messages as en } from "./messages/en/format";
-import { messages as fr } from "./messages/fr/format";
-import { messages as ja } from "./messages/ja/format";
-import { messages as pt } from "./messages/pt/format";
-import { messages as tr } from "./messages/tr/format";
 
-/**
- * Numbers, dates, lists and sizes in the interface language.
- *
- * A screen formats through this instead of calling `toLocaleString()` with no locale, which reads
- * the computer's language rather than the one chosen in Settings, or with a fixed `"en-US"`.
- *
- * The mobile app runs on Hermes, which may lack `Intl.ListFormat` and compact number notation (not
- * confirmed on a device). Each such method has a fallback, so a missing API renders a plain form,
- * never an exception.
- */
 export interface AppFormat {
   readonly locale: TranslatedLocale;
   number: (value: number, options?: Intl.NumberFormatOptions) => string;
-  /** 1.2K, 3.4M. A plain number where compact notation is not available. */
   compact: (value: number) => string;
-  /** `value` is a ratio: 0.25 renders 25%. */
   percent: (value: number, options?: Intl.NumberFormatOptions) => string;
   currencyUsd: (value: number, options?: Intl.NumberFormatOptions) => string;
   date: (value: Date | number, options?: Intl.DateTimeFormatOptions) => string;
-  /** A conjunction: "a, b, and c". */
+  readonly hour12: boolean;
   list: (items: readonly string[]) => string;
-  /** Binary units, as the attachment cards show them: 512 B, 12 KB, 3.4 MB. */
   fileSize: (bytes: number) => string;
+  fileSizeAmount: (bytes: number, total: number) => string;
+  diskSize: (bytes: number) => string;
 }
 
-const catalogs = { en, fr, ja, pt, tr } as const;
+function fileSizeExponent(bytes: number, base = 1024): number {
+  let exponent = 0;
+  while (exponent < 4 && bytes >= base ** (exponent + 1)) exponent += 1;
+  return exponent;
+}
 
 const numberFormats = new Map<string, Intl.NumberFormat>();
 
@@ -44,6 +34,17 @@ function numberFormat(locale: string | undefined, options: Intl.NumberFormatOpti
   return created;
 }
 
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+
+function dateFormat(locale: string | undefined, options: Intl.DateTimeFormatOptions | undefined): Intl.DateTimeFormat {
+  const cacheKey = `${locale ?? ""}\u0000${new Date().getTimezoneOffset()}\u0000${JSON.stringify(options ?? {})}`;
+  const cached = dateFormats.get(cacheKey);
+  if (cached) return cached;
+  const created = new Intl.DateTimeFormat(locale, options);
+  dateFormats.set(cacheKey, created);
+  return created;
+}
+
 function compactNumber(locale: string | undefined, value: number): string {
   try {
     return numberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(value);
@@ -52,21 +53,43 @@ function compactNumber(locale: string | undefined, value: number): string {
   }
 }
 
+function usesHour12(locale: string | undefined): boolean {
+  try {
+    const formatter = new Intl.DateTimeFormat(locale, { hour: "numeric", timeZone: "UTC" });
+    const { hourCycle, hour12 } = formatter.resolvedOptions();
+    if (hourCycle) return hourCycle === "h11" || hourCycle === "h12";
+    if (typeof hour12 === "boolean") return hour12;
+    return !formatter.format(Date.UTC(2024, 0, 1, 13)).includes("13");
+  } catch {
+    return true;
+  }
+}
+
 const formats = new Map<string, AppFormat>();
 
-/**
- * `locale` selects the words: file size units, list words and compact suffixes. `intlLocale`
- * selects the conventions of numbers and dates (see `formatLocale`). `null` is the runtime's own
- * locale, for a surface with no language setting.
- */
 export function createFormat(locale: TranslatedLocale, intlLocale: string | null = locale): AppFormat {
   const cacheKey = `${locale}\u0000${intlLocale ?? ""}`;
   const cached = formats.get(cacheKey);
   if (cached) return cached;
   const tag = intlLocale ?? undefined;
-  const t = createTranslate({ source: en, translation: catalogs[locale], locale, sourceLocale: "en" });
+  const translation = formatTranslation(locale);
+  const t = createTranslate({ source: en, translation, locale, sourceLocale: "en" });
   const oneDecimal = (value: number) =>
     numberFormat(tag, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false }).format(value);
+  const fileSizeAmount = (bytes: number, exponent: number, base = 1024) => {
+    if (exponent === 0) return String(bytes);
+    if (exponent === 1) return String(Math.round(bytes / base));
+    return oneDecimal(bytes / base ** exponent);
+  };
+  const sizeText = (bytes: number, base: number) => {
+    const exponent = fileSizeExponent(bytes, base);
+    const size = fileSizeAmount(bytes, exponent, base);
+    if (exponent === 0) return t("format.fileSize.bytes", { size });
+    if (exponent === 1) return t("format.fileSize.kilobytes", { size });
+    if (exponent === 2) return t("format.fileSize.megabytes", { size });
+    if (exponent === 3) return t("format.fileSize.gigabytes", { size });
+    return t("format.fileSize.terabytes", { size });
+  };
 
   const format: AppFormat = {
     locale,
@@ -75,7 +98,8 @@ export function createFormat(locale: TranslatedLocale, intlLocale: string | null
     percent: (value, options) => numberFormat(tag, { style: "percent", ...options }).format(value),
     currencyUsd: (value, options) =>
       numberFormat(tag, { style: "currency", currency: "USD", ...options }).format(value),
-    date: (value, options) => new Intl.DateTimeFormat(tag, options).format(value),
+    date: (value, options) => dateFormat(tag, options).format(value),
+    hour12: usesHour12(tag),
     list: (items) => {
       if (typeof Intl.ListFormat === "function") {
         return new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(items);
@@ -87,14 +111,10 @@ export function createFormat(locale: TranslatedLocale, intlLocale: string | null
       const last = items.at(-1) ?? "";
       return t("format.list.last", { items: items.slice(0, -1).join(t("format.list.separator")), last });
     },
-    fileSize: (bytes) => {
-      if (bytes < 1024) return t("format.fileSize.bytes", { size: String(bytes) });
-      if (bytes < 1024 ** 2) return t("format.fileSize.kilobytes", { size: String(Math.round(bytes / 1024)) });
-      if (bytes < 1024 ** 3) return t("format.fileSize.megabytes", { size: oneDecimal(bytes / 1024 ** 2) });
-      if (bytes < 1024 ** 4) return t("format.fileSize.gigabytes", { size: oneDecimal(bytes / 1024 ** 3) });
-      return t("format.fileSize.terabytes", { size: oneDecimal(bytes / 1024 ** 4) });
-    },
+    fileSize: (bytes) => sizeText(bytes, 1024),
+    fileSizeAmount: (bytes, total) => fileSizeAmount(bytes, fileSizeExponent(total)),
+    diskSize: (bytes) => sizeText(bytes, 1000),
   };
-  formats.set(cacheKey, format);
+  if (translation) formats.set(cacheKey, format);
   return format;
 }

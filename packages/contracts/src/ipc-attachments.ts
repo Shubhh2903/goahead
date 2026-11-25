@@ -1,7 +1,8 @@
-import { isXlsxMimeType, playableMediaKind } from "./attachment-files";
+import { isDocxMimeType, isXlsxMimeType, playableMediaKind } from "./attachment-files";
 import { INPUT_LIMITS } from "./input-limits";
-import { isBoundedString, isIdentifier } from "./ipc-bounded-values";
-import { isDynamicRecord, isNumber, isOneOf } from "./runtime-values";
+import { isBoundedString, isIdentifier, isNullableBoundedString } from "./ipc-bounded-values";
+import { guardedDecoder } from "./ipc-decoding";
+import { isBoolean, isDynamicRecord, isNumber, isOneOf } from "./runtime-values";
 
 export type AttachmentKind = "image" | "file";
 export type AttachmentPreviewKind = "image" | "pdf" | "text" | "none";
@@ -30,16 +31,12 @@ export function isAttachmentSummary(value: unknown): value is AttachmentSummary 
   );
 }
 
-/**
- * Whether a surface can show the attachment itself, instead of opening it in another application.
- * Audio, video, and XLSX keep `previewKind: "none"` on the wire, because the released Team API
- * validators accept only image, pdf, text, and none. Their MIME types carry the local preview kind.
- */
 export function canPreviewAttachment(attachment: AttachmentSummary): boolean {
   return (
     attachment.previewKind !== "none" ||
     playableMediaKind(attachment.mimeType) !== null ||
-    isXlsxMimeType(attachment.mimeType)
+    isXlsxMimeType(attachment.mimeType) ||
+    isDocxMimeType(attachment.mimeType)
   );
 }
 
@@ -58,12 +55,26 @@ export interface AttachmentDataInput {
 export interface ImportAttachmentsInput {
   paths: string[];
   data: AttachmentDataInput[];
+  requestId?: string;
+}
+
+export interface AttachmentImportFile {
+  name: string;
+  size: number;
 }
 
 export type AttachmentImportEvent =
-  | { type: "started"; requestId: string; serverId: string }
+  | { type: "started"; requestId: string; serverId: string; files: AttachmentImportFile[] }
+  | { type: "progress"; requestId: string; serverId: string; sent: number; total: number }
   | { type: "completed"; requestId: string; serverId: string; attachments: DraftAttachment[] }
   | { type: "error"; requestId: string; serverId: string; message: string };
+
+export interface AttachmentImportProgress {
+  serverId: string;
+  requestId: string;
+  sent: number;
+  total: number;
+}
 
 export interface DownloadAttachmentsInput {
   attachments: { id: string; name: string }[];
@@ -72,20 +83,86 @@ export interface DownloadAttachmentsInput {
 export interface OpenAttachmentInput {
   attachmentId: string;
   action: "open" | "reveal" | "download";
+  size?: number;
 }
+
+export interface AttachmentDownloadProgress {
+  serverId: string;
+  attachmentId: string;
+  received: number;
+  total: number;
+}
+
+export type FileAction = "open" | "reveal" | "download";
 
 export interface OpenSharedFileInput {
   path: string;
+  action?: FileAction;
 }
 
 export interface OpenWorkspaceFileInput {
   agentId: string;
   path: string;
+  action?: FileAction;
 }
 
-// Wider than AttachmentPreviewKind on purpose: FilePreview never crosses the Team API, so it can
-// gain kinds that the frozen v1-v4 attachment validators would reject. The preload boundary decodes
-// against this list, so a new kind must be added here to reach the renderer.
+export interface PreviewSharedFileInput extends OpenSharedFileInput {
+  maxBytes?: number;
+}
+
+export interface PreviewWorkspaceFileInput extends OpenWorkspaceFileInput {
+  maxBytes?: number;
+  exactPath?: boolean;
+}
+
+export const WORKSPACE_DIRECTORY_LIMIT = 500;
+
+export interface WorkspaceDirectoryEntry {
+  name: string;
+  path: string;
+  kind: "file" | "directory";
+  size: number;
+  modifiedAt: number;
+}
+
+export interface WorkspaceDirectory {
+  name: string;
+  path: string;
+  root: string;
+  parentPath: string | null;
+  entries: WorkspaceDirectoryEntry[];
+  truncated: boolean;
+}
+
+const WORKSPACE_DIRECTORY_ENTRY_KINDS = ["file", "directory"] as const;
+
+function isWorkspaceDirectoryEntry(value: unknown): value is WorkspaceDirectoryEntry {
+  return (
+    isDynamicRecord(value) &&
+    isBoundedString(value.name, 1_024) &&
+    isBoundedString(value.path, INPUT_LIMITS.path) &&
+    isOneOf(WORKSPACE_DIRECTORY_ENTRY_KINDS, value.kind) &&
+    isNumber(value.size) &&
+    isNumber(value.modifiedAt)
+  );
+}
+
+export function isWorkspaceDirectory(value: unknown): value is WorkspaceDirectory {
+  return (
+    isDynamicRecord(value) &&
+    isBoundedString(value.name, 1_024) &&
+    isBoundedString(value.path, INPUT_LIMITS.path) &&
+    isBoundedString(value.root, INPUT_LIMITS.path) &&
+    isNullableBoundedString(value.parentPath, INPUT_LIMITS.path) &&
+    Array.isArray(value.entries) &&
+    value.entries.length <= WORKSPACE_DIRECTORY_LIMIT &&
+    value.entries.every(isWorkspaceDirectoryEntry) &&
+    isBoolean(value.truncated)
+  );
+}
+
+export const decodeWorkspaceDirectory = guardedDecoder(isWorkspaceDirectory, "workspace directory");
+
 export const FILE_PREVIEW_KINDS = [
   "markdown",
   "text",
@@ -94,6 +171,7 @@ export const FILE_PREVIEW_KINDS = [
   "audio",
   "video",
   "spreadsheet",
+  "document",
   "none",
 ] as const;
 
@@ -109,21 +187,24 @@ export interface FilePreview {
   mimeType: string;
   previewKind: FilePreviewKind;
   bytes: Uint8Array | null;
+  pageUrl?: string;
 }
 
-/**
- * The preview kind a file gets from its name and MIME type. Both sides of the IPC boundary read it:
- * `src/main/file-preview.ts` for a file it reads from disk, and the renderer for an attachment it
- * fetches through `previewUrl`. One function keeps the two from drifting apart.
- */
+export function isFilePreviewPageUrl(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^openbot-visual:\/\/preview\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(value)
+  );
+}
+
 export function filePreviewKindForFile(name: string, mimeType: string): FilePreviewKind {
   if (/\.(md|markdown)$/iu.test(name)) return "markdown";
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType === "application/pdf") return "pdf";
   if (isXlsxMimeType(mimeType)) return "spreadsheet";
+  if (isDocxMimeType(mimeType)) return "document";
   const media = playableMediaKind(mimeType);
   if (media) return media;
-  // An email is RFC 822 text. The panel shows the headers and the body without a parser.
   if (mimeType.startsWith("text/") || mimeType === "application/json" || mimeType === "message/rfc822") return "text";
   return "none";
 }

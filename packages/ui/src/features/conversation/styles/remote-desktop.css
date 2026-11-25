@@ -1,10 +1,10 @@
 .conversation-panel.browser-panel-active {
-  padding-right: var(--browser-panel-width, 380px);
+  padding-inline-end: var(--browser-panel-width, 380px);
 }
 
 .remote-desktop-workspace {
   position: fixed;
-  z-index: 120;
+  z-index: var(--openbot-layer-toast);
   inset: 0;
   display: flex;
   min-width: 0;
@@ -39,12 +39,13 @@
   justify-content: flex-start;
   overflow: hidden;
   border-bottom: 1px solid var(--openbot-border);
-  padding: 0 8px 0 0;
+  padding-block: 0;
+  padding-inline: 0 8px;
   background: var(--openbot-bg-sidebar);
 }
 
 .remote-desktop-workspace-darwin .remote-desktop-header {
-  padding-left: 84px;
+  padding-inline-start: 84px;
 }
 
 .remote-desktop-actions {
@@ -54,7 +55,7 @@
   flex: 0 1 auto;
   justify-content: flex-end;
   gap: 4px;
-  margin-left: auto;
+  margin-inline-start: auto;
   white-space: nowrap;
 }
 
@@ -74,8 +75,8 @@
   color: var(--openbot-text-muted);
 }
 
-.remote-desktop-disconnect-button:hover:not(:disabled),
-.remote-desktop-disconnect-button:focus-visible:not(:disabled) {
+.remote-desktop-disconnect-button:hover:not(:disabled, [aria-disabled="true"]),
+.remote-desktop-disconnect-button:focus-visible:not(:disabled, [aria-disabled="true"]) {
   background: var(--openbot-danger-soft);
   color: var(--openbot-danger);
 }
@@ -178,7 +179,7 @@
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: var(--openbot-icon-stroke);
+  stroke-width: var(--openbot-icon-stroke-lg);
 }
 
 .remote-desktop-overlay > button {
@@ -201,18 +202,9 @@
   padding: 0 13px;
 }
 
-.remote-desktop-button {
-  position: relative;
-}
-
-.remote-desktop-button[aria-expanded="true"] {
-  background: var(--openbot-border);
-  color: var(--openbot-text-primary);
-}
-
 .remote-desktop-button-dot {
   position: absolute;
-  right: 4px;
+  inset-inline-end: 4px;
   bottom: 4px;
   width: 5px;
   height: 5px;

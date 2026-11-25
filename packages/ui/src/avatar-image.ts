@@ -1,30 +1,33 @@
-import { isAvatarMimeType } from "@openbot/contracts/avatar-images";
+import { AVATAR_MIME_TYPES } from "@openbot/contracts/avatar-images";
 import { AVATAR_IMAGE_LIMITS } from "@openbot/contracts/input-limits";
 import type { AvatarImageInput } from "@openbot/contracts/ipc";
+import { isOneOf } from "@openbot/contracts/runtime-values";
 import { currentText } from "./text";
 
 const OUTPUT_SIZES = [512, 448, 384, 320] as const;
 const OUTPUT_QUALITIES = [0.88, 0.82, 0.76, 0.7] as const;
 
+const AVATAR_SOURCE_TYPES = [...AVATAR_MIME_TYPES, "image/gif"] as const;
+
 interface AnimationFrame {
-  /** The ALPH, VP8 and VP8L chunks of one resized frame. */
   data: Blob;
   durationMs: number;
 }
 
 export async function normalizeAvatarFile(file: File): Promise<AvatarImageInput> {
-  if (!isAvatarMimeType(file.type)) throw new Error(currentText().t("app.avatar.type"));
+  if (!isOneOf(AVATAR_SOURCE_TYPES, file.type)) throw new Error(currentText().t("app.avatar.type"));
   if (file.size > AVATAR_IMAGE_LIMITS.sourceBytes) {
     throw new Error(currentText().t("app.avatar.size"));
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const source = isAnimatedWebp(bytes) ? null : await createImageBitmap(file);
+  const animated = isAnimatedWebp(bytes) || (file.type === "image/gif" && typeof ImageDecoder !== "undefined");
+  const source = animated ? null : await createImageBitmap(file);
   try {
     for (const [index, outputSize] of OUTPUT_SIZES.entries()) {
       const quality = OUTPUT_QUALITIES[index] ?? 0.7;
       const blob = source
         ? await renderAvatar(source, source.width, source.height, outputSize, quality)
-        : await renderAnimatedAvatar(bytes, outputSize, quality);
+        : await renderAnimatedAvatar(bytes, file.type, outputSize, quality);
       if (blob && blob.size <= AVATAR_IMAGE_LIMITS.storedBytes) {
         return {
           mimeType: "image/webp",
@@ -38,7 +41,6 @@ export async function normalizeAvatarFile(file: File): Promise<AvatarImageInput>
   throw new Error(currentText().t("app.avatar.tooLarge"));
 }
 
-/** A `data:` URL for a preview. The CSP `img-src` allows `data:` but not `blob:`. */
 export function avatarImageDataUrl(image: AvatarImageInput): string {
   let binary = "";
   const chunkSize = 0x8000;
@@ -48,27 +50,28 @@ export function avatarImageDataUrl(image: AvatarImageInput): string {
   return `data:${image.mimeType};base64,${btoa(binary)}`;
 }
 
-/** A RIFF WebP with a VP8X header whose animation flag is set. */
 function isAnimatedWebp(bytes: Uint8Array): boolean {
   const header = String.fromCharCode(...bytes.subarray(0, 16));
   return header.startsWith("RIFF") && header.endsWith("WEBPVP8X") && ((bytes[20] ?? 0) & 0x02) !== 0;
 }
 
-/**
- * Resizes each frame on its own, because a canvas keeps only the first frame of an animation.
- * Returns null as soon as the frames pass the stored size limit, so a large file does not encode
- * every frame again for each output size.
- */
-async function renderAnimatedAvatar(bytes: Uint8Array, outputSize: number, quality: number): Promise<Blob | null> {
-  const decoder = new ImageDecoder({ data: bytes, type: "image/webp" });
+async function renderAnimatedAvatar(
+  bytes: Uint8Array,
+  type: string,
+  outputSize: number,
+  quality: number,
+): Promise<Blob | null> {
+  const decoder = new ImageDecoder({ data: bytes, type });
   try {
     await decoder.tracks.ready;
+    const frameCount = decoder.tracks.selectedTrack?.frameCount ?? 0;
     const frames: AnimationFrame[] = [];
     let frameBytes = 0;
-    for (let frameIndex = 0; frameIndex < (decoder.tracks.selectedTrack?.frameCount ?? 0); frameIndex++) {
+    for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
       const { image } = await decoder.decode({ frameIndex });
       try {
         const still = await renderAvatar(image, image.displayWidth, image.displayHeight, outputSize, quality);
+        if (frameCount === 1) return still;
         const data = await frameData(still);
         frameBytes += data.size;
         if (frameBytes > AVATAR_IMAGE_LIMITS.storedBytes) return null;
@@ -83,10 +86,6 @@ async function renderAnimatedAvatar(bytes: Uint8Array, outputSize: number, quali
   }
 }
 
-/**
- * The image chunks of a still WebP file, which is all one ANMF frame may hold. The canvas encoder
- * also writes VP8X and an sRGB ICCP profile, and sRGB is what a WebP without a profile means.
- */
 async function frameData(still: Blob): Promise<Blob> {
   const bytes = new Uint8Array(await still.arrayBuffer());
   const view = new DataView(bytes.buffer);
@@ -101,15 +100,11 @@ async function frameData(still: Blob): Promise<Blob> {
   return new Blob(chunks);
 }
 
-/** Joins square frames into one animated WebP, laid out as the WebP container specification sets. */
 function animatedWebp(frames: readonly AnimationFrame[], size: number): Blob {
   const extent = [...littleEndian(size - 1, 3), ...littleEndian(size - 1, 3)];
   const body = new Blob([
-    // Alpha (0x10) and animation (0x02) flags, then the canvas size.
     chunk("VP8X", Uint8Array.of(0x12, 0, 0, 0, ...extent)),
-    // A transparent background, and loop count 0 to repeat forever.
     chunk("ANIM", new Uint8Array(6)),
-    // Each frame fills the canvas from 0,0 and replaces it (0x02: do not blend).
     ...frames.map(({ data, durationMs }) =>
       chunk("ANMF", new Blob([Uint8Array.of(0, 0, 0, 0, 0, 0, ...extent, ...littleEndian(durationMs, 3), 0x02), data])),
     ),
@@ -117,7 +112,6 @@ function animatedWebp(frames: readonly AnimationFrame[], size: number): Blob {
   return new Blob(["RIFF", Uint8Array.from(littleEndian(body.size + 4, 4)), "WEBP", body], { type: "image/webp" });
 }
 
-/** A RIFF chunk. A payload of odd size gets one padding byte. */
 function chunk(fourCC: string, payload: Blob | Uint8Array<ArrayBuffer>): Blob {
   const size = payload instanceof Blob ? payload.size : payload.byteLength;
   return new Blob([fourCC, Uint8Array.from(littleEndian(size, 4)), payload, new Uint8Array(size % 2)]);

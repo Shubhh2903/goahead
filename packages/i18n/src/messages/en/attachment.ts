@@ -1,15 +1,16 @@
 import { defineMessages } from "../../message";
 
 export const messages = defineMessages("attachment", {
-  "attachment.downloadAll.pending": "Downloading ZIP…",
-  "attachment.downloadAll.label": "Download all as ZIP",
-  "attachment.downloadAll.count": { one: "{count} attachment", other: "{count} attachments" },
-  "attachment.downloadAll.zipping": "Zipping",
   "attachment.openFile": "Open file",
   "attachment.preview": "Preview {name}",
   "attachment.notFound": "File not found",
   "attachment.download": "Download {name}",
+  "attachment.downloadProgress": "{received} of {total}",
+  "attachment.stopDownload": "Stop download of {name}, {percent}%",
+  "attachment.downloadFailed": "Download failed",
+  "attachment.retryDownload": "Retry download of {name}",
   "attachment.open": "Open {name}",
+  "attachment.loadMedia": "Play {name}",
   "attachment.previewUnavailable": "Preview is unavailable.",
   "attachment.error.preview": "Could not preview {name}. Try again.",
   "attachment.error.download": "Could not download attachments. Try again.",

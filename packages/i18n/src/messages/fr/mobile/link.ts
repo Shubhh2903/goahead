@@ -12,6 +12,8 @@ export const messages = {
     "Vous êtes déjà connecté. Déconnectez-vous dans Réglages avant de connecter un autre compte.",
   "mobile.link.pairing.description":
     "Continuez uniquement si vous avez demandé ce lien Mobile Connect depuis votre ordinateur.",
+  "mobile.link.pairing.accountService":
+    "Ce lien se connecte au service de comptes à l’adresse {origin}, et non au service de comptes GoAhead.",
   "mobile.link.pairing.connect": "Connecter",
   "mobile.link.plugin.title": "Ouvrir la page du plugin",
   "mobile.link.plugin.description": "Consultez ce plugin sur le site web de GoAhead.",

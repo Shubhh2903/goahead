@@ -2,9 +2,11 @@ import { type ButtonRootProps, Root } from "@kobalte/core/button";
 import type { PolymorphicProps } from "@kobalte/core/polymorphic";
 import type { ComponentProps, JSX, ValidComponent } from "@solidjs/web";
 import { cva, type VariantProps } from "class-variance-authority";
-import { createEffect, createSignal, For, omit, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, For, merge, omit, onCleanup, Show, untrack } from "solid-js";
 import { Check, Copy } from "./icons";
 import { Spinner } from "./surface";
+import { useText } from "./text";
+import { LabelTooltip, LabelTooltipTrigger } from "./tooltip";
 import { cx } from "./utils";
 
 export const buttonVariants = cva("ui-button", {
@@ -37,7 +39,6 @@ export const buttonVariants = cva("ui-button", {
 
 export type ButtonSize = NonNullable<VariantProps<typeof buttonVariants>["size"]>;
 
-/** Cue markers that a caller can set in place of the default tap. */
 const OTHER_CUE_MARKERS = [
   "data-cuelume-select",
   "data-cuelume-toggle",
@@ -49,8 +50,8 @@ const OTHER_CUE_MARKERS = [
 type OpenBotButtonProps = VariantProps<typeof buttonVariants> & {
   class?: JSX.HTMLAttributes<HTMLElement>["class"];
   children?: JSX.Element;
-  loading?: boolean;
-  loadingLabel?: string;
+  loading?: boolean | undefined;
+  loadingLabel?: string | undefined;
   fullWidth?: boolean;
 } & { [Marker in (typeof OTHER_CUE_MARKERS)[number]]?: string | undefined };
 
@@ -58,26 +59,53 @@ export type ButtonProps<T extends ValidComponent = "button"> = PolymorphicProps<
   OpenBotButtonProps &
   Partial<Pick<ComponentProps<T>, "class">>;
 
-/** Variants for minor actions. With sound feedback on, they play a softer tap than a main action. */
 const quietVariants = new Set<string>(["outline", "secondary", "ghost", "destructive-ghost", "link"]);
 
+const ACTIVATION_KEYS = new Set(["Enter", " "]);
+
 export function Button<T extends ValidComponent = "button">(props: ButtonProps<T>): JSX.Element {
-  const others = omit(
-    props,
-    "variant",
-    "size",
-    "class",
-    "children",
-    "loading",
-    "loadingLabel",
-    "fullWidth",
-    "disabled",
-  );
+  const others = (keys: readonly (keyof ButtonProps<T>)[]) =>
+    omit(
+      props,
+      ...keys,
+      "variant",
+      "size",
+      "class",
+      "children",
+      "loading",
+      "loadingLabel",
+      "fullWidth",
+      "disabled",
+      "ref",
+    );
+  const asComponent = typeof untrack(() => props.as) === "function";
+  const rootPropsSource = asComponent ? merge(() => others(["as"])) : others([]);
   // biome-ignore lint/nursery/noUnsafeTypeAssertion: Solid 2's omit cannot preserve Kobalte's generic polymorphic props.
-  const rootProps = others as PolymorphicProps<T, ButtonRootProps<T>>;
+  const rootProps = rootPropsSource as PolymorphicProps<T, ButtonRootProps<T>>;
+  const isNative = () => {
+    const as = props.as;
+    return typeof as !== "string" || as === "button" || as === "input";
+  };
+
+  function guardLoading(target: HTMLElement): void {
+    const block = (event: Event): void => {
+      if (!props.loading) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    target.addEventListener("click", block, { capture: true });
+    target.addEventListener(
+      "keydown",
+      (event) => {
+        if (ACTIVATION_KEYS.has(event.key)) block(event);
+      },
+      { capture: true },
+    );
+  }
 
   return (
     <Root<T>
+      ref={[guardLoading, props.ref]}
       class={cx(
         buttonVariants({ variant: props.variant ?? "default", size: props.size ?? "default" }),
         props.fullWidth && "ui-button-full",
@@ -86,10 +114,13 @@ export function Button<T extends ValidComponent = "button">(props: ButtonProps<T
       data-slot="button"
       data-variant={props.variant ?? "default"}
       data-size={props.size ?? "default"}
-      // bind() reads tap before the other markers, so drop the tap when a caller sets another one.
-      data-cuelume-tap={OTHER_CUE_MARKERS.some((marker) => props[marker] !== undefined) ? undefined : ""}
+      data-cuelume-tap={
+        props.loading || OTHER_CUE_MARKERS.some((marker) => props[marker] !== undefined) ? undefined : ""
+      }
       data-cuelume-emphasis={quietVariants.has(props.variant ?? "default") ? "subtle" : undefined}
-      disabled={Boolean(props.disabled || props.loading)}
+      disabled={Boolean(props.disabled)}
+      data-disabled={props.disabled || props.loading ? "" : undefined}
+      aria-disabled={props.loading || (props.disabled && !isNative()) ? "true" : undefined}
       aria-busy={props.loading ? "true" : undefined}
       {...rootProps}
     >
@@ -103,7 +134,18 @@ export function Button<T extends ValidComponent = "button">(props: ButtonProps<T
 
 export type IconButtonSize = Extract<ButtonSize, "icon" | "icon-xs" | "icon-sm" | "icon-lg">;
 
-export interface IconButtonProps extends Omit<ButtonProps, "children" | "fullWidth" | "size"> {
+interface TooltipTriggerHandlers {
+  onPointerEnter?: JSX.EventHandlerUnion<HTMLButtonElement, PointerEvent>;
+  onPointerLeave?: JSX.EventHandlerUnion<HTMLButtonElement, PointerEvent>;
+  onPointerDown?: JSX.EventHandlerUnion<HTMLButtonElement, PointerEvent>;
+  onClick?: JSX.EventHandlerUnion<HTMLButtonElement, MouseEvent>;
+  onFocus?: JSX.EventHandlerUnion<HTMLButtonElement, FocusEvent>;
+  onBlur?: JSX.EventHandlerUnion<HTMLButtonElement, FocusEvent>;
+}
+
+export interface IconButtonProps
+  extends Omit<ButtonProps, "children" | "fullWidth" | "size" | keyof TooltipTriggerHandlers>,
+    TooltipTriggerHandlers {
   label: string;
   children: JSX.Element;
   tooltip?: string;
@@ -113,15 +155,17 @@ export interface IconButtonProps extends Omit<ButtonProps, "children" | "fullWid
 export function IconButton(props: IconButtonProps): JSX.Element {
   const others = omit(props, "label", "tooltip", "children", "class", "size");
   return (
-    <Button
-      class={cx("ui-icon-button", props.class)}
-      size={props.size ?? "icon-sm"}
-      aria-label={props.label}
-      title={props.tooltip ?? props.label}
-      {...others}
-    >
-      {props.children}
-    </Button>
+    <LabelTooltip content={props.tooltip ?? props.label}>
+      <LabelTooltipTrigger
+        as={Button}
+        class={cx("ui-icon-button", props.class)}
+        size={props.size ?? "icon-sm"}
+        aria-label={props.label}
+        {...others}
+      >
+        {props.children}
+      </LabelTooltipTrigger>
+    </LabelTooltip>
   );
 }
 
@@ -130,13 +174,28 @@ export interface CopyButtonProps extends Omit<ButtonProps, "children" | "onClick
   label?: string;
   copiedLabel?: string;
   iconOnly?: boolean;
+  onCopy?: () => void;
   onCopyError?: (error: unknown) => void;
 }
 
 export function CopyButton(props: CopyButtonProps): JSX.Element {
+  const { t } = useText();
+  const label = () => props.label ?? t("common.copy");
+  const copiedLabel = () => props.copiedLabel ?? t("common.copied");
   const [copied, setCopied] = createSignal(false);
   let resetTimer: number | undefined;
-  const others = omit(props, "value", "label", "copiedLabel", "iconOnly", "onCopyError", "disabled", "class", "size");
+  const others = omit(
+    props,
+    "value",
+    "label",
+    "copiedLabel",
+    "iconOnly",
+    "onCopy",
+    "onCopyError",
+    "disabled",
+    "class",
+    "size",
+  );
 
   function clearResetTimer(): void {
     if (resetTimer === undefined) return;
@@ -160,6 +219,7 @@ export function CopyButton(props: CopyButtonProps): JSX.Element {
       await navigator.clipboard.writeText(props.value);
       clearResetTimer();
       setCopied(true);
+      props.onCopy?.();
       resetTimer = window.setTimeout(() => {
         resetTimer = undefined;
         setCopied(false);
@@ -189,21 +249,16 @@ export function CopyButton(props: CopyButtonProps): JSX.Element {
         when={!props.iconOnly}
         fallback={
           <span class="sr-only" aria-live="polite">
-            {copied() ? (props.copiedLabel ?? "Copied") : (props.label ?? "Copy")}
+            {copied() ? copiedLabel() : label()}
           </span>
         }
       >
-        <StableLabel labels={[props.label ?? "Copy", props.copiedLabel ?? "Copied"]} active={copied() ? 1 : 0} live />
+        <StableLabel labels={[label(), copiedLabel()]} active={copied() ? 1 : 0} live />
       </Show>
     </Button>
   );
 }
 
-/**
- * A label that swaps between texts without a change in width: every text takes the same grid cell,
- * and only the active one is visible. A button that says "Copied" after a click does not push the
- * text beside it to a new line.
- */
 export function StableLabel(props: { labels: readonly string[]; active: number; live?: boolean }): JSX.Element {
   return (
     <span class="ui-stable-label">

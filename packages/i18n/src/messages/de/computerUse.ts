@@ -1,0 +1,48 @@
+import type { PartialTranslation } from "../../message";
+import type { messages as source } from "../en/computerUse";
+
+export const messages = {
+  "computerUse.permission.screenRecording.title": "Bildschirmaufnahme",
+  "computerUse.permission.screenRecording.description": "Erlaubt GoAhead, App-Fenster zu sehen.",
+  "computerUse.permission.screenRecording.pane": "Bildschirm- und Systemaudioaufnahme",
+  "computerUse.permission.accessibility.title": "Bedienungshilfen",
+  "computerUse.permission.accessibility.description": "Erlaubt GoAhead, zu klicken und zu tippen.",
+  "computerUse.permission.accessibility.pane": "Bedienungshilfen",
+  "computerUse.error.check": "GoAhead konnte die Computersteuerung nicht prüfen.",
+  "computerUse.error.openSettings": "GoAhead konnte die Systemeinstellungen nicht öffnen.",
+  "computerUse.error.startDriver": "GoAhead konnte den Treiber für die Computersteuerung nicht starten.",
+  "computerUse.checkAgain": "Erneut prüfen",
+  "computerUse.checking": "Computersteuerung wird geprüft",
+  "computerUse.unavailable.title": "Computersteuerung ist noch nicht verfügbar",
+  "computerUse.permissions.title": "Systemberechtigungen",
+  "computerUse.permissions.description": "macOS verwaltet die Berechtigungen.",
+  "computerUse.ready.title": "Die Computersteuerung ist bereit",
+  "computerUse.ready.description":
+    "GoAhead kann Apps auf diesem Computer sehen und bedienen. Dieses System fordert keine zusätzliche Berechtigung an.",
+  "computerUse.limited.title": "Die Computersteuerung ist auf diesem Desktop eingeschränkt",
+  "computerUse.openSettingsFailed.title": "Systemeinstellungen konnten nicht geöffnet werden",
+  "computerUse.restartRequired.title": "Neustart erforderlich",
+  "computerUse.restartRequired.description":
+    "macOS blockiert weiterhin Klicks und Eingaben. Wenn das nach einem Neustart wieder passiert, entferne GoAhead aus „Bedienungshilfen“ und füge es erneut hinzu.",
+  "computerUse.restartRequired.action": "GoAhead neu starten",
+  "computerUse.compact.title": "Computersteuerung aktivieren",
+  "computerUse.compact.description": "Erlaube GoAhead, Apps auf diesem Computer zu sehen und zu bedienen.",
+  "computerUse.granted": "Erteilt",
+  "computerUse.opening": "Wird geöffnet…",
+  "computerUse.manage": "Verwalten",
+  "computerUse.grant": "Erteilen",
+  "computerUse.manageLabel": "{permission} verwalten",
+  "computerUse.grantLabel": "{permission} erteilen",
+  "computerUse.help.title": "{permission} aktivieren",
+  "computerUse.help.paneOpen": "Die Systemeinstellungen sind bei {pane} geöffnet.",
+  "computerUse.help.dragLabel":
+    "Ziehe {name} in die Systemeinstellungen oder drücke darauf, um es im Finder anzuzeigen",
+  "computerUse.help.dragToAdd": "Zum Hinzufügen ziehen",
+  "computerUse.help.findInList": "Suche {name} in der Liste.",
+  "computerUse.help.dragIntoList": "Ziehe {name}.app in die Liste.",
+  "computerUse.help.turnOn": "Aktiviere den Schalter.",
+  "computerUse.help.showInFinder": "Im Finder anzeigen",
+  "computerUse.help.revealFailed": "Die Anwendung konnte nicht im Finder angezeigt werden.",
+  "computerUse.help.dragFailed": "Die Anwendung konnte nicht gezogen werden.",
+  "computerUse.highlight.working": "GoAhead arbeitet in {title}",
+} as const satisfies PartialTranslation<typeof source>;

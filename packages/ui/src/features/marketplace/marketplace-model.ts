@@ -1,104 +1,216 @@
 import type {
-  AgentSummary,
+  ClientAgentSummary,
+  GithubSkillSource,
   InstalledSkill,
   MarketplaceAgentDetail,
   MarketplaceAgentSummary,
   MarketplaceSkillDetail,
   MarketplaceSkillSummary,
+  McpAccessChange,
+  McpServerAccess,
   McpServerConfig,
   SkillCategory,
 } from "@openbot/contracts/ipc";
-import type { BitwardenConnectorPanelProps } from "../settings/BitwardenConnectorPanel";
-import type { GitHubConnectorPanelProps } from "../settings/GitHubConnectorPanel";
-import type { MarketplacePluginDetail, MarketplacePluginPrompt } from "../settings/marketplace-plugins";
-import type { OnePasswordConnectorPanelProps } from "../settings/OnePasswordConnectorPanel";
+import type { MarketplaceListingLink } from "@openbot/contracts/marketplace-links";
+import type { McpConnectFlow } from "@openbot/contracts/mcp-connect-flows";
+import type { JSX } from "@solidjs/web";
+import type { ConnectorDetail } from "../connectors/ConnectorDetailPanel";
+import type { ConnectorId } from "../connectors/connectors";
+import type {
+  MarketplacePluginApp,
+  MarketplacePluginDetail,
+  MarketplacePluginPrompt,
+} from "../settings/marketplace-plugins";
 import type { CatalogList, MarketplaceHomeCache } from "./marketplace-listing";
 
-/** An agent of the user's that a skill can go to. */
-export type MarketplaceAgent = Pick<AgentSummary, "id" | "name" | "avatarSeed" | "avatarHue" | "avatarUrl">;
+export type MarketplaceAgent = Pick<
+  ClientAgentSummary,
+  "id" | "name" | "title" | "avatarSeed" | "avatarHue" | "avatarUrl"
+>;
 
-/** What an agent listing offers the user. */
+export type MarketplaceSkillRef = Pick<MarketplaceSkillSummary, "id" | "name">;
+
+export interface MarketplaceSkillChange {
+  add: readonly string[];
+  remove: readonly string[];
+}
+
 export type AgentListingState = "add" | "added" | "update";
 
-/** How far the read of one agent's installed skills got. An empty list is an answer only when `loaded`. */
 export type SkillRead = "idle" | "loading" | "loaded" | "failed";
 
-export type MarketplaceAppStatus = "connected" | "attention" | "idle";
+export type GithubSkillRead = { status: "found"; source: GithubSkillSource } | { status: "failed"; message: string };
+
+export type MarketplaceAppStatus = "connected" | "attention" | "connecting" | "idle";
+
+export type MarketplaceAppsBlock = { reason: "checking" } | { reason: "update" | "member"; host: string };
 
 interface AppBase {
   id: string;
   name: string;
-  /** The line under the name on the card. */
   tagline: string;
   status: MarketplaceAppStatus;
 }
 
-/**
- * One row of the Apps tab: a catalog app, the GitHub connector, or an MCP server that the host
- * holds and no catalog app claims.
- */
+export interface MarketplaceAppAccount {
+  id: string;
+  name: string;
+  signInNeeded: boolean;
+  signedIn: boolean;
+  renamable: boolean;
+}
+
+export interface MarketplaceAppConnection {
+  held: boolean;
+  signInNeeded: boolean;
+  accounts: readonly MarketplaceAppAccount[];
+  multipleAccounts: boolean;
+  keySaved?: boolean;
+}
+
 export type MarketplaceApp =
-  | (AppBase & { kind: "plugin"; category: SkillCategory; plugin: MarketplacePluginDetail })
-  | (AppBase & { kind: "github"; category: SkillCategory })
-  | (AppBase & { kind: "onepassword"; category: SkillCategory })
-  | (AppBase & { kind: "bitwarden"; category: SkillCategory })
+  | (AppBase & {
+      kind: "plugin";
+      category: SkillCategory;
+      plugin: MarketplacePluginDetail;
+      connections: Readonly<Record<string, MarketplaceAppConnection>>;
+    })
+  | (AppBase & { kind: "connector"; connector: ConnectorId; category: SkillCategory })
   | (AppBase & { kind: "custom"; server: McpServerConfig });
 
-/**
- * What the Marketplace view reads and asks for. The renderer builds it from its IPC calls, and a
- * story builds it from fixtures. Each action reports its own failure through `error`.
- */
+export type AppSetup = "channel" | "vault" | "account" | "key" | "desktop" | "open" | "custom";
+
+const CONNECTOR_SETUP = {
+  slack: "channel",
+  discord: "channel",
+  telegram: "channel",
+  whatsapp: "channel",
+  onepassword: "vault",
+  bitwarden: "vault",
+  protonpass: "vault",
+  github: "account",
+} as const satisfies Record<ConnectorId, AppSetup>;
+
+const FLOW_SETUP = {
+  link: "account",
+  key: "key",
+  local: "desktop",
+} as const satisfies Record<McpConnectFlow["kind"], AppSetup>;
+
+export function pluginAppSetup(app: MarketplacePluginApp): AppSetup {
+  const flow = app.server.auth?.[0];
+  return flow ? FLOW_SETUP[flow.kind] : "open";
+}
+
+export function pluginNeedsMac(
+  model: Pick<MarketplaceModel, "macAppsUnavailable">,
+  plugin: { apps: readonly MarketplacePluginApp[] },
+): boolean {
+  return model.macAppsUnavailable === true && plugin.apps.some((app) => (app.macAutomation?.length ?? 0) > 0);
+}
+
+export function customServerStatus(
+  app: Extract<MarketplaceApp, { kind: "custom" }>,
+): "mcp.status.enabled" | "mcp.status.disabled" {
+  return app.server.enabled ? "mcp.status.enabled" : "mcp.status.disabled";
+}
+
+export function appSetup(app: MarketplaceApp): AppSetup {
+  switch (app.kind) {
+    case "connector":
+      return CONNECTOR_SETUP[app.connector];
+    case "plugin": {
+      const [first] = app.plugin.apps;
+      return first ? pluginAppSetup(first) : "open";
+    }
+    case "custom":
+      return "custom";
+  }
+}
+
+export interface MarketplaceConnector {
+  readonly detail: ConnectorDetail;
+  ready: () => boolean;
+  readonly connect?: (() => void) | undefined;
+}
+
+export interface MarketplaceMacAutomation {
+  askOnInstall: () => boolean;
+  setAskOnInstall: (ask: boolean) => void;
+  request: (app: Extract<MarketplaceApp, { kind: "plugin" }>) => Promise<void>;
+}
+
+export interface MarketplaceMcpAccess {
+  entry: (mcpServerId: string) => McpServerAccess;
+  roles: () => readonly { id: string; name: string }[];
+  busy: () => boolean;
+  set: (changes: readonly McpAccessChange[]) => Promise<boolean>;
+}
+
+export interface MarketplaceServerSlots {
+  form: (props: { id: string | null; onClose: (saved: McpServerConfig | null) => void }) => JSX.Element;
+  controls: (props: { id: string }) => JSX.Element;
+}
+
 export interface MarketplaceModel {
   listAgents: CatalogList<MarketplaceAgentSummary>;
   agentHomeCache?: MarketplaceHomeCache<MarketplaceAgentSummary> | undefined;
   loadAgent: (id: string) => Promise<MarketplaceAgentDetail | undefined>;
-  /** Null when this user cannot add agents. */
   agentState: (listing: MarketplaceAgentSummary) => AgentListingState | null;
   agentBusy: (listingId: string) => boolean;
-  /** Adds the agent, or updates the one the user has when `update` is set. The Marketplace stays open. */
   addAgent: (listing: MarketplaceAgentDetail | MarketplaceAgentSummary, update?: boolean) => Promise<boolean>;
-  /** Opens the conversation of the agent that the listing added, and closes the Marketplace. */
   openChat: (listingId: string) => void;
 
   listSkills: CatalogList<MarketplaceSkillSummary>;
   skillHomeCache?: MarketplaceHomeCache<MarketplaceSkillSummary> | undefined;
   loadSkill: (id: string) => Promise<MarketplaceSkillDetail | undefined>;
-  /** The agents a skill can go to. Empty when this user cannot install skills. */
+  skillListing: (id: string) => Promise<MarketplaceSkillSummary | undefined>;
   agents: () => readonly MarketplaceAgent[];
-  /** The agent whose conversation is open. */
   activeAgentId: () => string;
-  /** Reads the installed skills of each agent that has no fresh answer. */
   readSkills: () => void;
   skillRead: (agentId: string) => SkillRead;
   installedSkill: (agentId: string, skillId: string) => InstalledSkill | undefined;
+  installedSkills?: ((agentId: string) => readonly InstalledSkill[]) | undefined;
   skillBusy: (skillId: string) => boolean;
-  /** Installs the skill on each agent, or removes it, one agent at a time. */
-  setSkill: (skill: MarketplaceSkillSummary, agentIds: readonly string[], on: boolean) => Promise<void>;
-  /** Absent while no composer can take the example. */
+  changeSkill: (skill: MarketplaceSkillRef, change: MarketplaceSkillChange) => Promise<void>;
+  setSkillEnabled: (agentId: string, skillId: string, on: boolean) => Promise<void>;
+  updateSkill: (skill: MarketplaceSkillRef, agentIds: readonly string[]) => Promise<void>;
+  readGithubSkills?: ((link: string) => Promise<GithubSkillRead>) | undefined;
+  createSkill?: ((agentId: string) => void) | undefined;
   trySkill?: ((agentId: string, skill: MarketplaceSkillDetail) => void) | undefined;
 
   apps: () => readonly MarketplaceApp[];
-  /** False for a member of a joined server, who browses and connects nothing. */
   canConnectApps: () => boolean;
+  appsBlocked?: (() => MarketplaceAppsBlock | undefined) | undefined;
   appBusy: (id: string) => boolean;
-  /** Runs the connect step of the app. False when the user closed it. */
-  connectApp: (app: MarketplaceApp) => Promise<boolean>;
-  /** Asks for a confirmation, then removes what the app installed. */
-  disconnectApp: (app: MarketplaceApp) => void;
-  /** Removes a custom MCP server. */
+  connectApp: (app: Extract<MarketplaceApp, { kind: "plugin" }>) => Promise<boolean>;
+  reconnectApp: (
+    app: Extract<MarketplaceApp, { kind: "plugin" }>,
+    appId: string,
+    accountId?: string | undefined,
+  ) => Promise<boolean>;
+  addAccount: (app: Extract<MarketplaceApp, { kind: "plugin" }>, appId: string) => Promise<boolean>;
+  renameAccount: (
+    app: Extract<MarketplaceApp, { kind: "plugin" }>,
+    accountId: string,
+    name: string,
+  ) => Promise<boolean>;
+  removeAccount: (app: Extract<MarketplaceApp, { kind: "plugin" }>, accountId: string) => Promise<boolean>;
+  appHostName?: string | undefined;
+  macAutomation?: MarketplaceMacAutomation | undefined;
+  macAppsUnavailable?: boolean | undefined;
+  disconnectApp: (app: Extract<MarketplaceApp, { kind: "plugin" }>) => void;
   removeServer: (id: string) => Promise<boolean>;
+  mcpAccess?: MarketplaceMcpAccess | undefined;
+  servers?: MarketplaceServerSlots | undefined;
   runPrompt?: ((prompt: MarketplacePluginPrompt) => void) | undefined;
   copyLink: (slug: string) => void;
+  copyListingLink: (link: MarketplaceListingLink) => void;
   openUrl: (url: string) => void;
-  /** The GitHub connector page, when this computer has one. */
-  github?: (() => GitHubConnectorPanelProps) | undefined;
-  /** The 1Password connector page, on the computer that runs OpenBot. */
-  onePassword?: (() => OnePasswordConnectorPanelProps) | undefined;
-  bitwarden?: (() => BitwardenConnectorPanelProps) | undefined;
+  connector: (id: ConnectorId) => MarketplaceConnector | undefined;
 
-  /** The last failure, as a sentence. */
   error: () => string | null;
+  errorReference?: (() => string | null) | undefined;
   clearError: () => void;
-  /** The last result, for a screen reader. */
   notice: () => string;
 }

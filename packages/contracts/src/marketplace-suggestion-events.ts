@@ -2,12 +2,21 @@ import type { ConversationMessage } from "./ipc-conversation-messages";
 import { isPluginSlug } from "./plugin-links";
 
 export const MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX = "marketplace-suggestion:";
-/** The GitHub connection of the computer is a Marketplace app, but not a catalog plugin. Its id is a valid slug. */
-export const GITHUB_MARKETPLACE_APP_ID = "github";
 
-/** A Marketplace app an agent suggests in the conversation. The person decides in the card. */
+export const CONNECTOR_IDS = [
+  "slack",
+  "discord",
+  "telegram",
+  "whatsapp",
+  "github",
+  "onepassword",
+  "bitwarden",
+  "protonpass",
+] as const;
+
+export type ConnectorId = (typeof CONNECTOR_IDS)[number];
+
 export interface MarketplaceSuggestionEvent {
-  /** A catalog plugin slug, or `github`. */
   appId: string;
 }
 

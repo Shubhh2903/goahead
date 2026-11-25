@@ -2,15 +2,16 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/attachment";
 
 export const messages = {
-  "attachment.downloadAll.pending": "ZIP をダウンロードしています…",
-  "attachment.downloadAll.label": "すべて ZIP でダウンロード",
-  "attachment.downloadAll.count": { other: "添付ファイル {count} 件" },
-  "attachment.downloadAll.zipping": "圧縮中",
   "attachment.openFile": "ファイルを開く",
   "attachment.preview": "{name} をプレビュー",
   "attachment.notFound": "ファイルが見つかりません",
   "attachment.download": "{name} をダウンロード",
+  "attachment.downloadProgress": "{received} / {total}",
+  "attachment.stopDownload": "{name} のダウンロードを停止、{percent}%",
+  "attachment.downloadFailed": "ダウンロードに失敗しました",
+  "attachment.retryDownload": "{name} のダウンロードを再試行",
   "attachment.open": "{name} を開く",
+  "attachment.loadMedia": "{name} を再生",
   "attachment.previewUnavailable": "プレビューを利用できません。",
   "attachment.error.preview": "{name} をプレビューできませんでした。もう一度お試しください。",
   "attachment.error.download": "添付ファイルをダウンロードできませんでした。もう一度お試しください。",

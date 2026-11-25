@@ -19,8 +19,13 @@ export const messages = {
   "computerUse.ready.title": "Bilgisayar Kullanımı hazır",
   "computerUse.ready.description":
     "GoAhead bu bilgisayardaki uygulamaları görebilir ve onlarla etkileşime girebilir. Bu sistem fazladan izin istemez.",
+  "computerUse.limited.title": "Bilgisayar Kullanımı bu masaüstünde sınırlı",
   "computerUse.openSettingsFailed.title": "Sistem Ayarları açılamadı",
-  "computerUse.compact.title": "Bilgisayar Kullanımını Etkinleştir",
+  "computerUse.restartRequired.title": "Yeniden başlatma gerekli",
+  "computerUse.restartRequired.description":
+    "macOS hâlâ tıklamayı ve yazmayı engelliyor. Yeniden başlattıktan sonra yine olursa GoAhead'u Erişilebilirlik'ten kaldırıp yeniden ekleyin.",
+  "computerUse.restartRequired.action": "GoAhead'u yeniden başlat",
+  "computerUse.compact.title": "Bilgisayar Kullanımını etkinleştir",
   "computerUse.compact.description":
     "GoAhead'in bu bilgisayardaki uygulamaları görmesine ve etkileşime girmesine izin verin.",
   "computerUse.granted": "Verildi",
@@ -34,9 +39,9 @@ export const messages = {
   "computerUse.help.dragLabel": "{name} uygulamasını Sistem Ayarlarına sürükleyin veya Finder'da göstermek için basın",
   "computerUse.help.dragToAdd": "Eklemek için sürükleyin",
   "computerUse.help.findInList": "Listede {name} uygulamasını bulun.",
-  "computerUse.help.dragIntoList": "{name}.app dosyasını listenin içine sürükleyin.",
+  "computerUse.help.dragIntoList": "{name}.app dosyasını listeye sürükleyin.",
   "computerUse.help.turnOn": "Anahtarı açın.",
-  "computerUse.help.showInFinder": "Finder'da Göster",
+  "computerUse.help.showInFinder": "Finder'da göster",
   "computerUse.help.revealFailed": "Uygulama Finder'da gösterilemedi.",
   "computerUse.help.dragFailed": "Uygulama sürüklenemedi.",
   "computerUse.highlight.working": "GoAhead {title} içinde çalışıyor",

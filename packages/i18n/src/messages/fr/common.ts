@@ -19,6 +19,7 @@ export const messages = {
   "common.create": "Créer",
   "common.open": "Ouvrir",
   "common.search": "Rechercher",
+  "common.noMatches": "Aucun résultat",
   "common.loading": "Chargement…",
   "common.saving": "Enregistrement…",
   "common.tryAgain": "Réessayer",
@@ -26,4 +27,8 @@ export const messages = {
   "common.download": "Télécharger",
   "common.removing": "Suppression…",
   "common.sending": "Envoi…",
+  "common.scrollLeft": "Défiler à gauche",
+  "common.scrollRight": "Défiler à droite",
+  "common.scrollUp": "Défiler vers le haut",
+  "common.scrollDown": "Défiler vers le bas",
 } as const satisfies PartialTranslation<typeof source>;

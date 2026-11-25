@@ -2,12 +2,13 @@ import type { PartialTranslation } from "../../../message";
 import type { messages as source } from "../../en/error/remote";
 
 export const messages = {
-  // Errors from remote servers, WebRTC transport, remote desktop, and the team client.
   "error.remote.desktopSetupClientUpdate": "リモートデスクトップの設定を使うには、クライアントを更新してください。",
   "error.remote.desktopSetupUnavailable": "リモートデスクトップの設定を利用できません。",
   "error.remote.desktopTestUnavailable": "リモートデスクトップのテストを利用できません。",
   "error.remote.controlUnavailable": "リモート操作を利用できません。",
   "error.remote.controlSessionNotFound": "リモート操作のセッションが見つかりません。",
+  "error.remote.controlNotAllowed": "このコンピューターのオーナーは、あなたのロールによる操作を許可していません。",
+  "error.remote.controlDeclined": "このコンピューターの前にいるユーザーがリモート操作を許可しませんでした。",
   "error.remote.testRuntimeUpdate":
     "このテストを実行するには、macOS のリモートデスクトップのランタイムを更新してください。",
   "error.remote.testOtherSessions": "テストを開始する前に、ほかのリモートデスクトップのセッションを終了してください。",
@@ -22,6 +23,18 @@ export const messages = {
   "error.remote.testActive": "リモートデスクトップのテストを実行中です。終了してから再試行してください。",
   "error.remote.screenRecordingDenied":
     "ホストが GoAhead に画面の収録を許可していません。ホストで画面収録を許可してから、再試行してください。",
+  "error.remote.windowsSessionDisconnected":
+    "ホストの Windows セッションが切断されているため、共有する画面がありません。ホストの画面で Windows にサインインしてから、再試行してください。",
+  "error.remote.windowsCaptureDenied":
+    "ホストの Windows が GoAhead による画面の記録を許可していません。ホストの画面で Windows のロックを解除し、管理者の確認画面をすべて閉じてから、再試行してください。解決しない場合は、ホストを再起動してください。",
+  "error.remote.macScreenLocked":
+    "Mac がロックされているため、画面を共有できません。Mac の画面でロックを解除してから、再試行してください。",
+  "error.remote.streamTooSlowLowerQuality":
+    "ホストへの接続が遅すぎて画面を表示できません。再試行してください。次の接続では画質を下げます。",
+  "error.remote.streamTooSlow":
+    "ホストへの接続が遅すぎて画面を表示できません。より速いネットワークを使ってから、再試行してください。",
+  "error.remote.noPictureSwitchEncoder":
+    "ホストから画面が送られてきませんでした。再試行してください。次の接続では、より多くのコンピューターで動作するビデオ設定を使います。",
   "error.remote.teamSessionExpired": "チームのセッションの期限が切れました。",
   "error.remote.finishTestBeforeSwitch":
     "ディスプレイを切り替える前に、リモートデスクトップのテストを終了してください。",
@@ -78,12 +91,19 @@ export const messages = {
   "error.remote.bridgeCommandFailed": "Team WebRTC のコマンドに失敗しました。",
   "error.remote.webRtcFailed": "WebRTC に失敗しました。",
   "error.remote.ownerCannotLeave": "オーナーはこのホストから退出できません。",
+  "error.remote.ownerOnlyRemove": "このサーバーを削除できるのはオーナーだけです。",
   "error.remote.requestTimeout": "リモートリクエストがタイムアウトしました。",
   "error.remote.requestFailed": "リモートリクエストに失敗しました。",
-  "error.remote.pinnedKeyMissing": "リモートホストに固定されたデバイスキーがありません。",
-  "error.remote.hostDidNotConnect": "WebRTC ホストが接続しませんでした。",
+  "error.remote.hostKeyMissing":
+    "セキュリティキーがないか変更されたため、GoAhead はこのサーバーを確認できません。サーバーの所有者にサーバーの確認を依頼してください。",
+  "error.remote.connectionNotStarted":
+    "GoAhead はこのサーバーへの接続を開始できませんでした。問題が続く場合は、GoAhead を終了してもう一度開いてください。",
+  "error.remote.connectionServiceUnreachable":
+    "このコンピューターから GoAhead の接続サービスに接続できません。インターネット接続を確認してください。GoAhead は自動で再接続します。",
+  "error.remote.serverAnswerTimeout": "サーバーが時間内に応答しませんでした。GoAhead は自動で再接続します。",
   "error.remote.connectionCancelled": "リモート接続がキャンセルされました。",
-  "error.remote.hostDisconnected": "WebRTC ホストの接続が切れました。",
+  "error.remote.hostDisconnected":
+    "サーバーとの接続が切れました。操作が完了したか確認してから、もう一度お試しください。",
   "error.remote.eventGap": "ホストのイベントのシーケンスに欠落があります。",
   "error.remote.malformedKnownEvent": "ホストが不正な形式の既知のイベントを返しました。",
   "error.remote.fileTransportIsStopped": "WebRTC ファイル転送は停止しています。",
@@ -93,8 +113,10 @@ export const messages = {
   "error.remote.fileTransferFailed": "WebRTC ファイル転送に失敗しました。",
   "error.remote.fileResumeFailed": "WebRTC ファイル転送を期限までに再開できませんでした。",
   "error.remote.fileTransportStopped": "WebRTC ファイル転送が停止しました。",
+  "error.remote.downloadStopped": "ダウンロードを停止しました。",
   "error.remote.fileResumeExpired": "WebRTC ファイル転送の再開期限が切れました。",
   "error.remote.hostRequestFailed": "ホストがリクエストを完了できませんでした。",
+  "error.remote.responseTooLarge": "ホストからの応答が大きすぎるため、このデバイスに送信できません。",
   "error.remote.sessionNotReady": "リモートセッションの準備ができていません。",
   "error.remote.peerDisconnected": "WebRTC ピアの接続が切れました。",
   "error.remote.tooManyStreams": "開いているホストのストリームが多すぎます。",
@@ -110,9 +132,8 @@ export const messages = {
   "error.remote.operationFailed": "リモート操作に失敗しました。",
   "error.remote.connectionReplaced": "接続が置き換えられました。",
   "error.remote.desktopDidNotConnect": "デスクトップが接続しませんでした。",
-  "error.remote.desktopRestarted": "デスクトップが再起動しました。新しい認証済みセッションで再接続しています。",
+  "error.remote.connectionDropped": "サーバーにこの接続がなくなりました。再接続しています。",
   "error.remote.dataBeforeAuth": "ホストが認証の前にデータを送信しました。",
-  "error.remote.attachmentDownloadFailed": "添付ファイルのダウンロードに失敗しました。",
   "error.remote.eventStreamGap": "ホストのイベントストリームに欠落があります。",
   "error.remote.malformedEvent": "ホストが不正な形式のイベントを返しました。",
   "error.remote.desktopIdentityNotVerified": "デスクトップの ID を確認できませんでした。",
@@ -126,7 +147,6 @@ export const messages = {
   "error.remote.serverDisconnected": "サーバーの接続が切れました。",
   "error.remote.preferencesUnreadable": "保存したチャットの設定を読み取れませんでした。",
   "error.remote.accountAuthRequired": "アカウントの認証が必要です。",
-  "error.remote.serverIdentityChanged": "サーバーの ID が変わりました。信頼済みのホストキーは置き換えません。",
   "error.remote.pairedIdentityChanged":
     "ペアリングしたデスクトップの ID がないか、変わっています。そのデスクトップで新しいコードをスキャンしてください。",
   "error.remote.permanentInviteNoEmail": "永続的な招待はメールで送信できません。",
@@ -149,6 +169,7 @@ export const messages = {
   "error.remote.attachmentRejected": "ホストが添付ファイルを拒否しました。",
   "error.remote.attachmentTooLarge": "添付ファイルは 10 MB 以下にしてください。",
   "error.remote.attachmentBusy": "現在の添付ファイルが完了するまでお待ちください。",
+  "error.remote.attachmentChanged": "ファイルが変更されたか、利用できません。もう一度選択してください。",
   "error.remote.uploadTimeout": "添付ファイルのアップロードがタイムアウトしました。",
   "error.remote.hostSessionActive": "ホストにはすでに有効なリモートセッションがあります。",
   "error.remote.tooManyConnections": "有効なリモート接続が多すぎます。",
@@ -166,11 +187,53 @@ export const messages = {
   "error.remote.signalNotConnected": "Signal に接続していません。",
   "error.remote.signalFrameUnreadable": "Signal から、このピアが読み取れないフレームが送信されました。",
   "error.remote.webRtcCommandFailed": "WebRTC コマンドが失敗しました。",
-  "error.remote.dataChannelFailed": "{kind} チャンネルが失敗しました。",
+  "error.remote.dataChannelFailed": "{kind} チャネルに失敗しました。",
+  "error.remote.hostBusy": "ホストは別の接続を処理中です。しばらくしてからもう一度お試しください。",
+  "error.remote.signalPermissionDenied":
+    "あなたのアカウントにはこのホストへのアクセス権がありません。オーナーにアクセスを依頼してください。",
+  "error.remote.signalRateLimited": "接続の試行が多すぎます。GoAhead は {seconds} 秒後にもう一度試します。",
+  "error.remote.signalProtocolError":
+    "Signal とこのアプリの接続プロトコルが一致しません。GoAhead を更新してから、もう一度お試しください。",
+  "error.remote.signalRefused": "Signal が接続を拒否しました。",
+  "error.remote.signalClosed": "ホストが応答する前に Signal への接続が閉じました。",
+  "error.remote.relayUnavailable": "Signal はこの接続にリレーサーバーを送りませんでした。後でもう一度お試しください。",
+  "error.remote.iceFailed":
+    "ホストに直接接続できませんでした。ファイアウォール、VPN、プロキシが接続をブロックしている可能性があります。",
+  "error.remote.iceDisconnected": "ホストへの直接接続が切れました。",
+  "error.remote.webrtcBlocked":
+    "このデバイスは GoAhead に必要な接続をブロックしています。ロックダウンモードがオンの場合は、設定 > プライバシーとセキュリティ > ロックダウンモードで GoAhead に対してオフにしてください。",
+  "error.remote.directoryUnreachable": "GoAhead は GoAhead サービスに接続できませんでした。接続を確認してください。",
+  "error.remote.directoryTimeout": "GoAhead サービスが時間内に応答しませんでした。もう一度お試しください。",
+  "error.remote.inviteAlreadyUsed": "この招待はすでに使用されています。新しい招待を依頼してください。",
+  "error.remote.inviteNotFound": "この招待は存在しないか、期限が切れています。新しい招待を依頼してください。",
+  "error.remote.licenseUsersFull":
+    "サーバー所有者のライセンスに空きユーザーがありません。所有者にライセンスへのユーザー追加を依頼してください。",
+  "error.remote.memberLimitReached":
+    "このホストはメンバーの上限に達しました。オーナーに空きを作るよう依頼してください。",
+  "error.remote.hostNotRegistered": "このホストは GoAhead サービスに登録されなくなりました。",
+  "error.remote.membershipEnded":
+    "あなたはこのホストのメンバーではなくなりました。オーナーに新しい招待を依頼してください。",
+  "error.remote.membershipChanged":
+    "同時に別の人がこのメンバーを変更しました。メンバーを再読み込みして、もう一度お試しください。",
+  "error.remote.accountSessionInactive": "サインインが無効になりました。もう一度サインインしてください。",
+  "error.remote.hostOtherAccount": "このホストは別のアカウントのものです。",
+  "error.remote.remoteNotConfigured": "この GoAhead サービスではリモート接続が設定されていません。",
+  "error.remote.hostRefused": "ホストがリクエストを拒否しました ({status})。",
   "error.remote.formUnavailable": "このフォームは利用できなくなりました。",
+  "error.remote.hostedServerRemoval": "ホスト型サーバーを削除するには「お支払い」を使用してください。",
+  "error.remote.hostRemoved": "所有者がこのサーバーをアカウントから削除しました。",
+  "error.remote.ownerTransferSelf":
+    "このサーバーはすでにあなたのものです。新しい所有者のメールアドレスを入力してください。",
+  "error.remote.ownerTransferHosted": "GoAhead がホストするサーバーは所有者を変更できません。",
+  "error.remote.ownerTransferInvalid":
+    "この所有権の移行は利用できなくなりました。所有者にもう一度送るよう依頼してください。",
   "error.remote.channelsUnsupported": "チャンネルを使うには、このデスクトップサーバーを更新してください。",
   "error.remote.channelDeleteUnsupported": "チャンネルを削除するには、このデスクトップサーバーを更新してください。",
-  "error.remote.attachmentUploadCancelled": "添付ファイルのアップロードをキャンセルしました。",
   "error.remote.historyRefreshFailed": "メッセージは送信されましたが、チャット履歴を更新できませんでした。",
   "error.remote.taskHistoryRefreshFailed": "タスクは変更されましたが、チャット履歴を更新できませんでした。",
+  "error.remote.serverNotLoaded": "GoAhead はサーバーを読み込めませんでした。もう一度お試しください。",
+  "error.remote.localServerNotStarted":
+    "このコンピューターのサーバーが起動しませんでした。もう一度お試しください。起動しない場合は、このコンピューターで GoAhead を再起動してください。",
+  "error.remote.localServerAccountRemovalFailed":
+    "サーバーはそのコンピュータで削除されましたが、アカウントにはまだ表示されています。アカウントから外すには、もう一度削除してください。",
 } as const satisfies PartialTranslation<typeof source>;

@@ -1,21 +1,18 @@
 import { Button, ChevronRight, FieldContext } from "@openbot/ui";
 import type { JSX } from "@solidjs/web";
-import { createUniqueId, Show } from "solid-js";
+import { children, createUniqueId, onSettled, Show } from "solid-js";
 import { useText } from "../text";
+import { holdFlag } from "../utils";
+import { createScrollFades } from "./createScrollFades";
 import { PanelResizer } from "./PanelResizer";
 
-export const SETTINGS_PANEL_DEFAULT = 296;
-export const SETTINGS_PANEL_MIN = 180;
+export const SETTINGS_PANEL_DEFAULT = 360;
 export const SETTINGS_PANEL_MAX = 1600;
-/** What the chat under the panel keeps for itself, however far the panel is dragged. */
 const CONVERSATION_PANEL_MIN = 96;
 
-/** Shared right-panel shell; caller owns per-owner sections. */
-
-/** How wide the panel may be drawn before the chat beside it is squeezed out of readability. */
 export function settingsPanelMaxWidth(host: HTMLElement | undefined): number {
   const available = (host?.clientWidth || window.innerWidth) - CONVERSATION_PANEL_MIN;
-  return Math.min(SETTINGS_PANEL_MAX, Math.max(SETTINGS_PANEL_MIN, available));
+  return Math.min(SETTINGS_PANEL_MAX, Math.max(SETTINGS_PANEL_DEFAULT, available));
 }
 
 export interface SettingsPanelProps {
@@ -25,13 +22,19 @@ export interface SettingsPanelProps {
   maxWidth: number | (() => number);
   onResize: (width: number) => void;
   onResizeEnd: (width: number) => void;
+  preferredWidth?: (() => number) | undefined;
   children: JSX.Element;
 }
 
 export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
   const { t } = useText();
+  let panel!: HTMLElement;
+  onSettled(() => {
+    const conversation = panel.closest(".conversation-panel");
+    return conversation ? holdFlag(conversation, "settings-panel") : undefined;
+  });
   return (
-    <aside id={props.id} class="settings-panel" aria-label={props.label}>
+    <aside ref={panel} id={props.id} class="settings-panel" aria-label={props.label}>
       <PanelResizer
         class="right-panel-resizer"
         label={t("settings.panel.resize")}
@@ -39,17 +42,21 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
         direction="right"
         value={props.width}
         defaultValue={SETTINGS_PANEL_DEFAULT}
-        min={SETTINGS_PANEL_MIN}
+        min={SETTINGS_PANEL_DEFAULT}
         max={props.maxWidth}
         onResize={props.onResize}
         onResizeEnd={props.onResizeEnd}
+        onParentResize={() => {
+          const max = typeof props.maxWidth === "function" ? props.maxWidth() : props.maxWidth;
+          const next = Math.round(Math.min(max, props.preferredWidth?.() ?? props.width));
+          if (next !== props.width) props.onResize(next);
+        }}
       />
       {props.children}
     </aside>
   );
 }
 
-/** Header glyphs stay here to stop agent/channel drift. */
 export function SettingsBackIcon(): JSX.Element {
   return (
     <svg aria-hidden="true" viewBox="0 0 20 20" class="ui-glyph-20 settings-back-icon fill-none stroke-current">
@@ -60,7 +67,11 @@ export function SettingsBackIcon(): JSX.Element {
 
 export function SettingsForwardIcon(): JSX.Element {
   return (
-    <svg aria-hidden="true" viewBox="0 0 20 20" class="ui-glyph-20 settings-forward-icon fill-none stroke-current">
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 20 20"
+      class="ui-glyph-20 settings-forward-icon fill-none stroke-current ui-rtl-mirror"
+    >
       <path d="m5.5 4 6 6-6 6m5-12 6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   );
@@ -72,13 +83,13 @@ export interface SettingsPanelHeaderProps {
   backLabel?: string;
   onClose: () => void;
   closeLabel: string;
+  paneRoot?: boolean;
 }
 
-/** Fixed 3-column header keeps title centred. */
 export function SettingsPanelHeader(props: SettingsPanelHeaderProps): JSX.Element {
   const { t } = useText();
   return (
-    <header class="settings-panel-header">
+    <header class={["settings-panel-header", { "side-panel-pane-header": props.paneRoot === true }]}>
       <Show when={props.onBack} fallback={<span />}>
         <Button
           variant="ghost"
@@ -95,7 +106,7 @@ export function SettingsPanelHeader(props: SettingsPanelHeaderProps): JSX.Elemen
       <Button
         variant="ghost"
         type="button"
-        class="settings-panel-nav-button"
+        class="settings-panel-nav-button side-panel-pane-close"
         aria-label={props.closeLabel}
         data-cuelume-tap="close"
         onClick={() => props.onClose()}
@@ -107,7 +118,13 @@ export function SettingsPanelHeader(props: SettingsPanelHeaderProps): JSX.Elemen
 }
 
 export function SettingsPanelContent(props: { children: JSX.Element }): JSX.Element {
-  return <div class="settings-panel-content">{props.children}</div>;
+  const fades = createScrollFades();
+  onSettled(() => fades.stop);
+  return (
+    <div class={["settings-panel-content", fades.classes()]} ref={fades.bind} onScroll={fades.measure}>
+      <div ref={fades.watch}>{props.children}</div>
+    </div>
+  );
 }
 
 export interface SettingsFieldProps {
@@ -116,7 +133,6 @@ export interface SettingsFieldProps {
   children: JSX.Element;
 }
 
-/** Label over caller control via shared field id. */
 export function SettingsField(props: SettingsFieldProps): JSX.Element {
   const controlId = `${createUniqueId()}-control`;
   return (
@@ -129,31 +145,61 @@ export function SettingsField(props: SettingsFieldProps): JSX.Element {
   );
 }
 
-/** The bordered stack the link rows sit in; the rows draw the dividers between themselves. */
-export function SettingsLinkGroup(props: { children: JSX.Element }): JSX.Element {
-  return <div class="settings-link-group">{props.children}</div>;
+export interface SettingsLinkGroupProps {
+  title?: JSX.Element;
+  inset?: boolean;
+  class?: string;
+  children: JSX.Element;
+}
+
+export function SettingsLinkGroup(props: SettingsLinkGroupProps): JSX.Element {
+  const titleId = createUniqueId();
+  const rows = () => (
+    <div class={["settings-link-group", props.class ?? "", { "settings-link-group-inset": Boolean(props.inset) }]}>
+      {props.children}
+    </div>
+  );
+  return (
+    <Show when={props.title} fallback={rows()}>
+      <section class="settings-link-section" aria-labelledby={titleId}>
+        <h3 id={titleId} class="settings-link-section-title">
+          {props.title}
+        </h3>
+        {rows()}
+      </section>
+    </Show>
+  );
 }
 
 export interface SettingsLinkRowProps {
+  icon?: JSX.Element;
   label: JSX.Element;
-  /** The state on the right of the row, such as `3 saved`. A row with none shows only the chevron. */
   value?: JSX.Element;
   onClick: (trigger: HTMLButtonElement) => void;
+  ref?: (element: HTMLButtonElement) => void;
 }
 
-/** One row of the group: what it opens on the left, where that stands on the right. */
 export function SettingsLinkRow(props: SettingsLinkRowProps): JSX.Element {
+  const value = children(() => props.value);
   return (
     <Button
+      ref={(element) => props.ref?.(element)}
       variant="ghost"
       type="button"
       class="settings-link"
       data-cuelume-tap="navigate"
       onClick={(event) => props.onClick(event.currentTarget)}
     >
-      <span class="settings-link-label">{props.label}</span>
+      <span class="settings-link-label">
+        <Show when={props.icon}>
+          <span class="settings-link-icon">{props.icon}</span>
+        </Show>
+        <span class="settings-link-text ui-text-truncate">{props.label}</span>
+      </span>
       <span class="settings-link-value">
-        {props.value}
+        <Show when={typeof value() === "string"} fallback={value()}>
+          <span class="settings-link-text ui-text-truncate">{value()}</span>
+        </Show>
         <ChevronRight />
       </span>
     </Button>

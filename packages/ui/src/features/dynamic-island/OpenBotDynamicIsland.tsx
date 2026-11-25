@@ -32,6 +32,7 @@ import {
   type DynamicIslandNotchSize,
   type DynamicIslandStateChangeReason,
   type DynamicIslandViewState,
+  ErrorReference,
   ExternalLink,
   IconButton,
   Input,
@@ -44,6 +45,7 @@ import {
 } from "@openbot/ui";
 import { useText } from "@openbot/ui/text";
 import { prefersReducedMotion } from "@openbot/ui/utils";
+import type { UserErrorDetails } from "@openbot/user-errors";
 import { Dynamic, type JSX } from "@solidjs/web";
 import {
   createEffect,
@@ -58,6 +60,8 @@ import {
   Switch,
   untrack,
 } from "solid-js";
+import { AmbientMotion, useAmbientMotion } from "../../ambient-motion";
+import { ScrollEdges } from "../../components/ScrollEdges";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { StopIcon } from "../conversation/ConversationIcons";
 import { EmotionFace } from "./EmotionFace";
@@ -82,23 +86,18 @@ export interface OpenBotDynamicIslandProps {
   state: DynamicIslandViewState;
   displayMode?: "notch" | "island";
   notchSize?: DynamicIslandNotchSize | undefined;
-  /** The build that draws the island. Its logo color tells a dev or preview build from a release. */
   variant?: AppVariant;
-  /** The user-chosen compact width, as a percent of the default. The physical notch never shrinks. */
   widthPercent?: number;
-  /** The user-chosen compact height, as a percent of the default. */
   heightPercent?: number;
   extendedHoverArea?: boolean;
+  idleInsideNotch?: boolean;
   suppressInitialHover?: boolean;
   onStateChange: (state: DynamicIslandViewState, reason: DynamicIslandStateChangeReason) => void;
-  /** Resolves `false` when the action failed, so a reply field keeps its draft. */
   onAction: (action: DynamicIslandAction) => Promise<boolean> | undefined;
-  /** Shown next to the actions of an attention panel when the last action failed. */
-  actionError?: string | undefined;
+  actionError?: UserErrorDetails | undefined;
   onHaptic?: () => void;
   /** Where the pointer is, from main. The emotion face looks toward it. */
-  gaze?: DynamicIslandGaze;
-  /** Lets the user reply to, answer and stop an agent on the island, so the main window stays where it is. */
+  gaze?: DynamicIslandGaze | undefined;
   inlineReply?: boolean | undefined;
 }
 
@@ -106,18 +105,12 @@ const COMPACT_INDICES = [0, 1, 2] as const;
 const ROW_INDICES = [0, 1, 2] as const;
 const IDLE_GREETING_EMOJIS = ["👋", "😊", "🙌", "✨"] as const;
 type IdleGreetingEmoji = (typeof IDLE_GREETING_EMOJIS)[number];
-/** Each greeting has a small motion of its own when it shows; the CSS finds it by this name. */
 const IDLE_GREETING_NAMES = {
   "👋": "wave",
   "😊": "smile",
   "🙌": "cheer",
   "✨": "sparkles",
 } as const satisfies Record<IdleGreetingEmoji, string>;
-/**
- * The emoji on the back of a greeting's 3D card. The card turns to it as the greeting moves: the
- * wave turns into heart hands, the smile spins into a grin, and the raised hands turn to clap.
- * Heart hands, not a thumbs up or an OK hand: those two are rude in some places.
- */
 const IDLE_GREETING_BACKS: Record<IdleGreetingEmoji, string | undefined> = {
   "👋": "🫶",
   "😊": "😄",
@@ -149,14 +142,8 @@ const STATUS_COMPACT_BADGE_CHROME_WIDTH = 32;
 const STATUS_COMPACT_NOTCH_MIN_WIDTH = 360;
 const STATUS_COMPACT_ISLAND_MIN_WIDTH = 212;
 const STATUS_COMPACT_NAME_MAX_WIDTH = { notch: 72, island: 96 } as const;
-/** The narrowest idle ear beside a notch: the 20px logo, its 16px edge inset and a 4px gap. */
 const IDLE_COMPACT_NOTCH_EAR_MIN_WIDTH = COMPACT_LEADING_SIZE + 20;
-/**
- * The narrowest idle island on a built-in display with no notch: the 20px logo and the 16px greeting,
- * each 16px from its edge, with a 16px gap between them.
- */
 const IDLE_COMPACT_NO_NOTCH_MIN_WIDTH = 16 + COMPACT_LEADING_SIZE + 16 + 16 + 16;
-/** The narrowest idle capsule: the logo and the greeting with their insets and a gap between them. */
 const IDLE_COMPACT_ISLAND_MIN_WIDTH = 74;
 
 interface SharedLeadingMotion {
@@ -165,7 +152,6 @@ interface SharedLeadingMotion {
 }
 
 interface StatusCompactGeometry {
-  /** `minimum` is the narrowest width that still shows all compact content. */
   notch: { width: number; minimum: number };
   island: { width: number; minimum: number };
 }
@@ -377,19 +363,10 @@ function adjustSharedMotion(
   };
 }
 
-/**
- * Scales the ears beside the notch and keeps the notch itself: `floor` is the part that stays.
- * The result never gets narrower than `minimum`, so a small percent cannot clip the content, and
- * `minimum` never makes it wider than `width`, so a small percent never grows the island.
- */
 function scaleCompactWidth(width: number, floor: number, percent: number, minimum = 0): number {
   return Math.max(Math.min(minimum, width), Math.ceil((floor + ((width - floor) * percent) / 100) / 2) * 2);
 }
 
-/**
- * The idle compact width for a width setting, or undefined for the default width. The Settings
- * preview reads it to scale the widest setting into its frame.
- */
 export function openBotIdleCompactWidth(
   displayMode: "notch" | "island" | undefined,
   notchSize: DynamicIslandNotchSize | undefined,
@@ -409,8 +386,6 @@ export function openBotIdleCompactWidth(
       percent,
     );
   }
-  // A built-in display with no notch reports no size. Its gap is only a style, so it shrinks with
-  // the width; a physical notch is hardware and keeps its width.
   const notchWidth = notchSize?.width ?? scaleCompactWidth(STATUS_COMPACT_NOTCH_WIDTH, 0, percent);
   return scaleCompactWidth(
     notchWidth + DYNAMIC_ISLAND_COMPACT_EAR_TRACK_WIDTH * 2,
@@ -420,11 +395,6 @@ export function openBotIdleCompactWidth(
   );
 }
 
-/**
- * An idle width below 100%, on a line from the smallest width at the lowest setting to the default
- * width at 100%. Each step of the setting then changes the island. A scale from zero reached the
- * smallest width at about 30%, so the lowest steps gave the same island.
- */
 function interpolateIdleWidth(defaultWidth: number, minimum: number, percent: number): number {
   const lowest = DYNAMIC_ISLAND_SIZE_LIMITS.widthPercent.min;
   const progress = Math.max(0, (percent - lowest) / (DEFAULT_DYNAMIC_ISLAND_PREFERENCE.widthPercent - lowest));
@@ -446,9 +416,7 @@ function measureCompactText(text: string, weight: number): number {
         context.font = `${weight} 11px Inter, -apple-system, BlinkMacSystemFont, sans-serif`;
         return context.measureText(text).width;
       }
-    } catch {
-      // Test renderers can omit the Canvas 2D context. The estimate below keeps geometry deterministic.
-    }
+    } catch {}
   }
   return Array.from(text).reduce((width, character) => {
     if (character === " ") return width + 3;
@@ -466,6 +434,9 @@ export function OpenBotDynamicIsland(props: OpenBotDynamicIslandProps): JSX.Elem
   const [compactLayoutPresentation, setCompactLayoutPresentation] = createSignal(initialPresentation);
   const [outgoingPresentation, setOutgoingPresentation] = createSignal<DynamicIslandPresentation>();
   const [modeTransitioning, setModeTransitioning] = createSignal(false);
+  const [hovered, setHovered] = createSignal(false);
+  const windowMotion = useAmbientMotion();
+  const ambientMotion = () => windowMotion() && hovered();
   let transitionRoot: HTMLDivElement | undefined;
   let modeAnimations: Animation[] = [];
   let modeTransitionVersion = 0;
@@ -473,22 +444,17 @@ export function OpenBotDynamicIsland(props: OpenBotDynamicIslandProps): JSX.Elem
   let modeTransitionDisposed = false;
   const widthPercent = () => props.widthPercent ?? DEFAULT_DYNAMIC_ISLAND_PREFERENCE.widthPercent;
   const heightPercent = () => props.heightPercent ?? DEFAULT_DYNAMIC_ISLAND_PREFERENCE.heightPercent;
-  // A built-in display with no notch reports no size. Its gap is only a style, so it shrinks with
-  // the width; a physical notch is hardware and keeps its width.
   const physicalNotchWidth = () =>
     props.notchSize?.width ?? scaleCompactWidth(STATUS_COMPACT_NOTCH_WIDTH, 0, widthPercent());
   const islandNotchSize = (): DynamicIslandNotchSize | undefined => {
     if (props.notchSize || props.displayMode === "island") return props.notchSize;
     if (widthPercent() === DEFAULT_DYNAMIC_ISLAND_PREFERENCE.widthPercent) return undefined;
-    // The gap is only a style here, so it gives way before an ear gets narrower than its content.
     const earRoom = (compactWidth() ?? Number.POSITIVE_INFINITY) - IDLE_COMPACT_NOTCH_EAR_MIN_WIDTH * 2;
     return {
       width: Math.max(0, Math.min(physicalNotchWidth(), earRoom)),
       height: DYNAMIC_ISLAND_DEFAULT_COMPACT_HEIGHT,
     };
   };
-  // The shared motion below is placed from these widths, so the size is applied here rather than
-  // in the island primitive: the avatar and badge then land on the resized ears.
   const compactGeometry = createMemo(() => {
     const geometry = compactStatusGeometry(t, compactLayoutPresentation(), physicalNotchWidth());
     const percent = widthPercent();
@@ -504,9 +470,16 @@ export function OpenBotDynamicIsland(props: OpenBotDynamicIslandProps): JSX.Elem
       },
     };
   });
+  const idleFoldedIntoNotch = () =>
+    props.idleInsideNotch === true &&
+    props.displayMode !== "island" &&
+    props.notchSize !== undefined &&
+    compactLayoutPresentation().mode === "idle" &&
+    !hovered();
   const compactWidth = () => {
     const geometry = compactGeometry();
     if (geometry) return props.displayMode === "island" ? geometry.island.width : geometry.notch.width;
+    if (idleFoldedIntoNotch()) return props.notchSize?.width;
     return openBotIdleCompactWidth(props.displayMode, props.notchSize, widthPercent());
   };
   const compactHeight = () => {
@@ -536,8 +509,9 @@ export function OpenBotDynamicIsland(props: OpenBotDynamicIslandProps): JSX.Elem
   );
 
   createEffect(
-    () => ({ nextPresentation: props.presentation, currentPresentation: visiblePresentation() }),
-    ({ nextPresentation, currentPresentation }) => {
+    () => props.presentation,
+    (nextPresentation) => {
+      const currentPresentation = untrack(visiblePresentation);
       if (nextPresentation.mode === currentPresentation.mode) {
         setVisiblePresentation(nextPresentation);
         if (untrack(() => props.state) === "compact") setCompactLayoutPresentation(nextPresentation);
@@ -642,101 +616,104 @@ export function OpenBotDynamicIsland(props: OpenBotDynamicIslandProps): JSX.Elem
       class="openbot-dynamic-island-transition-root"
       data-mode-transitioning={modeTransitioning() ? "true" : undefined}
     >
-      <DynamicIsland
-        label={
-          props.displayMode === "island"
-            ? t("island.label.externalDisplay", { label: t(config().label) })
-            : t(config().label)
-        }
-        ariaLive={config().ariaLive}
-        state={props.state}
-        displayMode={props.displayMode}
-        notchSize={islandNotchSize()}
-        extendedHoverArea={props.extendedHoverArea}
-        suppressInitialHover={props.suppressInitialHover}
-        onStateChange={changeState}
-        compactWidth={compactWidth()}
-        compactHeight={compactHeight()}
-        // A mode change moves its own layers from the old place to the new one, in step with the surface.
-        compactContentFollowsResize={!modeTransitioning()}
-        sharedMotion={{
-          leading: sharedLeading()?.[props.displayMode === "island" ? "island" : "notch"],
-          trailing: sharedTrailing()?.[props.displayMode === "island" ? "island" : "notch"],
-        }}
-        hoverBehavior={config().badge ? "expand" : "grow"}
-        hoverContentMotion={OPENBOT_COMPACT_HOVER_MOTION}
-        pointerToggle={config().badge ? false : undefined}
-        class={[
-          "openbot-dynamic-island",
-          `dynamic-island-${visiblePresentation().mode === "message" ? "message-first" : visiblePresentation().mode}`,
-          config().badge ? "dynamic-island-status" : undefined,
-          visiblePresentation().mode !== "idle" && visiblePresentation().mode !== "working"
-            ? "dynamic-island-panel-wide"
-            : undefined,
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        compactLeading={
-          <IslandModeSwap
-            slot="compact-leading"
-            presentation={visiblePresentation()}
-            outgoingPresentation={outgoingPresentation()}
-            renderOutgoing={(presentation) => (
+      <AmbientMotion when={ambientMotion()}>
+        <DynamicIsland
+          label={
+            props.displayMode === "island"
+              ? t("island.label.externalDisplay", { label: t(config().label) })
+              : t(config().label)
+          }
+          ariaLive={config().ariaLive}
+          state={props.state}
+          displayMode={props.displayMode}
+          notchSize={islandNotchSize()}
+          extendedHoverArea={props.extendedHoverArea}
+          suppressInitialHover={props.suppressInitialHover}
+          onStateChange={changeState}
+          compactWidth={compactWidth()}
+          compactHeight={compactHeight()}
+          compactContentFollowsResize={!modeTransitioning()}
+          sharedMotion={{
+            leading: sharedLeading()?.[props.displayMode === "island" ? "island" : "notch"],
+            trailing: sharedTrailing()?.[props.displayMode === "island" ? "island" : "notch"],
+          }}
+          hoverBehavior={config().badge ? "expand" : "grow"}
+          hoverContentMotion={OPENBOT_COMPACT_HOVER_MOTION}
+          onHoverChange={setHovered}
+          pointerToggle={config().badge ? false : undefined}
+          class={[
+            "openbot-dynamic-island",
+            `dynamic-island-${visiblePresentation().mode === "message" ? "message-first" : visiblePresentation().mode}`,
+            config().badge ? "dynamic-island-status" : undefined,
+            idleFoldedIntoNotch() ? "dynamic-island-idle-in-notch" : undefined,
+            visiblePresentation().mode !== "idle" && visiblePresentation().mode !== "working"
+              ? "dynamic-island-panel-wide"
+              : undefined,
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          compactLeading={
+            <IslandModeSwap
+              slot="compact-leading"
+              presentation={visiblePresentation()}
+              outgoingPresentation={outgoingPresentation()}
+              renderOutgoing={(presentation) => (
+                <CompactLeading
+                  presentation={presentation}
+                  displayMode={props.displayMode}
+                  variant={props.variant}
+                  gaze={props.gaze}
+                />
+              )}
+            >
               <CompactLeading
-                presentation={presentation}
+                presentation={visiblePresentation()}
                 displayMode={props.displayMode}
                 variant={props.variant}
                 gaze={props.gaze}
               />
-            )}
-          >
-            <CompactLeading
+            </IslandModeSwap>
+          }
+          compactTrailing={
+            <IslandModeSwap
+              slot="compact-trailing"
               presentation={visiblePresentation()}
-              displayMode={props.displayMode}
-              variant={props.variant}
-              gaze={props.gaze}
-            />
-          </IslandModeSwap>
-        }
-        compactTrailing={
-          <IslandModeSwap
-            slot="compact-trailing"
-            presentation={visiblePresentation()}
-            outgoingPresentation={outgoingPresentation()}
-            renderOutgoing={(presentation) => <CompactTrailing presentation={presentation} />}
-          >
-            <CompactTrailing presentation={visiblePresentation()} />
-          </IslandModeSwap>
-        }
-        expandedContent={
-          <IslandModeSwap
-            slot="expanded"
-            presentation={visiblePresentation()}
-            outgoingPresentation={outgoingPresentation()}
-            block
-            renderOutgoing={(presentation) => (
+              outgoingPresentation={outgoingPresentation()}
+              renderOutgoing={(presentation) => <CompactTrailing presentation={presentation} hovered={hovered()} />}
+            >
+              <CompactTrailing presentation={visiblePresentation()} hovered={hovered()} />
+            </IslandModeSwap>
+          }
+          expandedContent={
+            <IslandModeSwap
+              slot="expanded"
+              presentation={visiblePresentation()}
+              outgoingPresentation={outgoingPresentation()}
+              block
+              renderOutgoing={(presentation) => (
+                <ExpandedContent
+                  presentation={presentation}
+                  displayMode={props.displayMode}
+                  inlineReply={props.inlineReply}
+                  onAction={props.onAction}
+                  onHaptic={props.onHaptic}
+                  onClose={() => props.onStateChange("compact", "pointer")}
+                />
+              )}
+            >
               <ExpandedContent
-                presentation={presentation}
+                presentation={visiblePresentation()}
                 displayMode={props.displayMode}
                 inlineReply={props.inlineReply}
                 onAction={props.onAction}
+                actionError={props.actionError}
                 onHaptic={props.onHaptic}
                 onClose={() => props.onStateChange("compact", "pointer")}
               />
-            )}
-          >
-            <ExpandedContent
-              presentation={visiblePresentation()}
-              displayMode={props.displayMode}
-              inlineReply={props.inlineReply}
-              onAction={props.onAction}
-              actionError={props.actionError}
-              onHaptic={props.onHaptic}
-              onClose={() => props.onStateChange("compact", "pointer")}
-            />
-          </IslandModeSwap>
-        }
-      />
+            </IslandModeSwap>
+          }
+        />
+      </AmbientMotion>
     </div>
   );
 }
@@ -779,12 +756,14 @@ function IslandModeSwap(props: IslandModeSwapProps): JSX.Element {
 
 function CompactLeading(props: {
   presentation: DynamicIslandPresentation;
-  displayMode?: "notch" | "island";
-  variant?: AppVariant;
-  gaze?: DynamicIslandGaze;
+  displayMode?: "notch" | "island" | undefined;
+  variant?: AppVariant | undefined;
+  gaze?: DynamicIslandGaze | undefined;
 }): JSX.Element {
   const statusAgent = () => compactStatusAgent(props.presentation);
   const working = () => (props.presentation.mode === "working" ? props.presentation.working : []);
+  const ambientMotion = useAmbientMotion();
+  const logoAnimation = () => (ambientMotion() ? "blink" : "none");
   return (
     <span class="dynamic-island-surface-content-swap dynamic-island-surface-compact-swap">
       <Switch
@@ -795,7 +774,7 @@ function CompactLeading(props: {
               fallback={
                 <AppLogo
                   variant={props.variant ?? "production"}
-                  animation="blink"
+                  animation={logoAnimation()}
                   class="dynamic-island-surface-logo"
                 />
               }
@@ -849,13 +828,13 @@ function CompactLeading(props: {
   );
 }
 
-function CompactTrailing(props: { presentation: DynamicIslandPresentation }): JSX.Element {
+function CompactTrailing(props: { presentation: DynamicIslandPresentation; hovered: boolean }): JSX.Element {
   return (
     <IslandContentSwap contentKey={props.presentation.mode} class="dynamic-island-surface-compact-swap">
       <Switch>
         <Match when={statusMode(props.presentation.mode)}>{(mode) => <CompactStatusBadge mode={mode()} />}</Match>
         <Match when={props.presentation.mode === "idle"}>
-          <IdleGreetingEmoji />
+          <IdleGreetingEmoji moving={props.hovered} />
         </Match>
       </Switch>
     </IslandContentSwap>
@@ -864,7 +843,7 @@ function CompactTrailing(props: { presentation: DynamicIslandPresentation }): JS
 
 function CompactAgentIdentity(props: {
   agent: DynamicIslandAgentIdentity;
-  displayMode?: "notch" | "island";
+  displayMode?: "notch" | "island" | undefined;
   working?: boolean;
   emotion?: EmotionId;
   gaze?: DynamicIslandGaze;
@@ -887,7 +866,7 @@ function CompactAgentIdentity(props: {
   );
 }
 
-function CompactAgentName(props: { name: string; displayMode?: "notch" | "island" }): JSX.Element {
+function CompactAgentName(props: { name: string; displayMode?: "notch" | "island" | undefined }): JSX.Element {
   const nameMaxWidth = () =>
     props.displayMode === "island" ? STATUS_COMPACT_NAME_MAX_WIDTH.island : STATUS_COMPACT_NAME_MAX_WIDTH.notch;
   return (
@@ -922,11 +901,6 @@ function CompactStatusBadge(props: { mode: StatusMode }): JSX.Element {
   );
 }
 
-/** A greeting as a card with a front and a back face, so its motion can turn it in 3D. */
-/**
- * The sparkles glyph drawn three times, each copy masked to one star, so each star can light up and
- * twinkle on its own. Together the three copies are the whole glyph.
- */
 const SPARKLE_STAR_CLASSES = [
   "dynamic-island-surface-idle-greeting-sparkle dynamic-island-surface-idle-greeting-sparkle-large",
   "dynamic-island-surface-idle-greeting-sparkle dynamic-island-surface-idle-greeting-sparkle-upper",
@@ -952,40 +926,56 @@ function IdleGreetingCard(props: { emoji: IdleGreetingEmoji }): JSX.Element {
   );
 }
 
-function IdleGreetingEmoji(): JSX.Element {
+function IdleGreetingEmoji(props: { moving: boolean }): JSX.Element {
   const [index, setIndex] = createSignal(0);
   const [activeSlot, setActiveSlot] = createSignal<0 | 1>(0);
   const [firstEmoji, setFirstEmoji] = createSignal<IdleGreetingEmoji>(IDLE_GREETING_EMOJIS[0]);
   const [secondEmoji, setSecondEmoji] = createSignal<IdleGreetingEmoji>(IDLE_GREETING_EMOJIS[0]);
   let animationFrame: number | undefined;
   const layers: [HTMLSpanElement | undefined, HTMLSpanElement | undefined] = [undefined, undefined];
-  // Each layer keeps its motion until it shows again, so the one that fades out keeps its last pose.
   const motions: [Animation[], Animation[]] = [[], []];
 
-  function playMotion(slot: 0 | 1, emoji: IdleGreetingEmoji): void {
+  function playMotion(slot: 0 | 1, emoji: IdleGreetingEmoji, moving: boolean): void {
     for (const motion of motions[slot]) motion.cancel();
     motions[slot] = [];
     const layer = layers[slot];
-    if (!layer || prefersReducedMotion()) return;
+    if (!layer || !moving || prefersReducedMotion()) return;
     motions[slot] = playIdleGreetingMotion(IDLE_GREETING_NAMES[emoji], layer);
   }
 
+  createEffect(
+    () => props.moving,
+    (moving) => {
+      if (!moving || animationFrame !== undefined) return;
+      const slot = untrack(activeSlot);
+      if (motions[slot].some((motion) => motion.playState === "running")) return;
+      playMotion(slot, untrack(slot === 0 ? firstEmoji : secondEmoji), true);
+    },
+  );
+
+  createEffect(
+    () => props.moving,
+    (moving) => {
+      if (!moving) return;
+      const timer = setInterval(() => {
+        const nextIndex = (index() + 1) % IDLE_GREETING_EMOJIS.length;
+        const nextEmoji = IDLE_GREETING_EMOJIS[nextIndex] ?? IDLE_GREETING_EMOJIS[0];
+        const nextSlot = activeSlot() === 0 ? 1 : 0;
+        if (nextSlot === 0) setFirstEmoji(nextEmoji);
+        else setSecondEmoji(nextEmoji);
+        animationFrame = requestAnimationFrame(() => {
+          animationFrame = undefined;
+          setIndex(nextIndex);
+          setActiveSlot(nextSlot);
+          playMotion(nextSlot, nextEmoji, props.moving);
+        });
+      }, IDLE_GREETING_INTERVAL);
+      return () => clearInterval(timer);
+    },
+  );
+
   onSettled(() => {
-    playMotion(0, IDLE_GREETING_EMOJIS[0]);
-    const timer = setInterval(() => {
-      const nextIndex = (index() + 1) % IDLE_GREETING_EMOJIS.length;
-      const nextEmoji = IDLE_GREETING_EMOJIS[nextIndex] ?? IDLE_GREETING_EMOJIS[0];
-      const nextSlot = activeSlot() === 0 ? 1 : 0;
-      if (nextSlot === 0) setFirstEmoji(nextEmoji);
-      else setSecondEmoji(nextEmoji);
-      animationFrame = requestAnimationFrame(() => {
-        setIndex(nextIndex);
-        setActiveSlot(nextSlot);
-        playMotion(nextSlot, nextEmoji);
-      });
-    }, IDLE_GREETING_INTERVAL);
     return () => {
-      clearInterval(timer);
       if (animationFrame !== undefined) cancelAnimationFrame(animationFrame);
       for (const motion of [...motions[0], ...motions[1]]) motion.cancel();
     };
@@ -1025,11 +1015,11 @@ function IdleGreetingEmoji(): JSX.Element {
 
 function ExpandedContent(props: {
   presentation: DynamicIslandPresentation;
-  displayMode?: "notch" | "island";
+  displayMode?: "notch" | "island" | undefined;
   inlineReply?: boolean | undefined;
   onAction: (action: DynamicIslandAction) => Promise<boolean> | undefined;
-  actionError?: string | undefined;
-  onHaptic?: () => void;
+  actionError?: UserErrorDetails | undefined;
+  onHaptic?: (() => void) | undefined;
   onClose: () => void;
 }): JSX.Element {
   const { t } = useText();
@@ -1106,7 +1096,6 @@ function ExpandedContent(props: {
               />
             </IslandContentSwap>
             <Show when={props.inlineReply}>
-              {/* Each recipient gets a new field, so a draft for one agent is not sent to another. */}
               <Show keyed when={`${props.presentation.serverId}:${message().agent.id}`}>
                 {(_recipient) => (
                   <IslandReplyField
@@ -1208,7 +1197,7 @@ function ExpandedContent(props: {
 function MailContent(props: {
   item: DynamicIslandMailItem;
   serverId: string;
-  actionError?: string | undefined;
+  actionError?: UserErrorDetails | undefined;
   onAction: (action: DynamicIslandAction) => Promise<boolean> | undefined;
 }): JSX.Element {
   const { t } = useText();
@@ -1253,7 +1242,7 @@ function MailContent(props: {
 function FailureContent(props: {
   item: DynamicIslandFailureItem;
   serverId: string;
-  actionError?: string | undefined;
+  actionError?: UserErrorDetails | undefined;
   onAction: (action: DynamicIslandAction) => Promise<boolean> | undefined;
 }): JSX.Element {
   const { t } = useText();
@@ -1302,7 +1291,7 @@ function FailureContent(props: {
 function TakeoverContent(props: {
   item: DynamicIslandTakeoverItem;
   serverId: string;
-  actionError?: string | undefined;
+  actionError?: UserErrorDetails | undefined;
   onAction: (action: DynamicIslandAction) => Promise<boolean> | undefined;
 }): JSX.Element {
   const { t } = useText();
@@ -1337,7 +1326,7 @@ function NotificationContent(props: {
   name: string;
   status: string;
   description: string;
-  actionError?: string | undefined;
+  actionError?: UserErrorDetails | undefined;
   action: JSX.Element;
 }): JSX.Element {
   return (
@@ -1358,7 +1347,7 @@ export function ApprovalContent(props: {
   serverId: string;
   remainingCount: number;
   allowDesktopReview?: boolean;
-  actionError?: string | undefined;
+  actionError?: UserErrorDetails | undefined;
   onAction: (action: DynamicIslandAction) => Promise<boolean> | undefined;
 }): JSX.Element {
   const { t, sourceText } = useText();
@@ -1423,9 +1412,9 @@ function QuestionContent(props: {
   serverId: string;
   remainingCount: number;
   inlineReply?: boolean | undefined;
-  actionError?: string | undefined;
+  actionError?: UserErrorDetails | undefined;
   onAction: (action: DynamicIslandAction) => Promise<boolean> | undefined;
-  onHaptic?: () => void;
+  onHaptic?: (() => void) | undefined;
   onClose: () => void;
 }): JSX.Element {
   const { t } = useText();
@@ -1458,7 +1447,6 @@ function QuestionContent(props: {
           Boolean(question.options && question.options.length > 0 && question.options.length <= 3),
       ),
   );
-  // A typed answer works for every question that is not secret, with or without options.
   const typedAnswerAvailable = createMemo(
     () => Boolean(props.inlineReply) && questions().length > 0 && questions().every((question) => !question.isSecret),
   );
@@ -1480,7 +1468,6 @@ function QuestionContent(props: {
 
   function answerWith(label: string): boolean | Promise<boolean> | undefined {
     const question = currentQuestion();
-    // The field keeps a typed answer that did not go anywhere.
     if (!question || !(directAnswerAvailable() || typedAnswerAvailable()) || questionTransitioning()) return false;
     const nextAnswers = { ...answers(), [question.id]: [label] };
     if (questionIndex() < questions().length - 1) {
@@ -1565,6 +1552,13 @@ function QuestionContent(props: {
       />
       <div data-island-motion-content>
         <div ref={questionStep} class="dynamic-island-surface-question-step">
+          <Show when={currentQuestion()?.detail}>
+            {(detail) => (
+              <ScrollEdges axis="y" class="dynamic-island-surface-question-detail">
+                <p>{detail()}</p>
+              </ScrollEdges>
+            )}
+          </Show>
           <Show when={directAnswerAvailable()}>
             <ul class="dynamic-island-surface-question-options" aria-label={t("island.question.suggestedAnswers")}>
               <For each={currentQuestion()?.options ?? []}>
@@ -1588,7 +1582,6 @@ function QuestionContent(props: {
               </For>
             </ul>
           </Show>
-          {/* Each question gets a new field, so a draft for one question is not sent as the answer to another. */}
           <Show keyed when={typedAnswerAvailable() ? answerFieldKey() : undefined}>
             {(_questionId) => (
               <IslandReplyField
@@ -1619,10 +1612,6 @@ function QuestionContent(props: {
   );
 }
 
-/**
- * A one-line reply. Enter sends it. The draft stays when `onSend` resolves `false`, so the user can
- * try again, and a retry of the same text keeps its `clientMessageId`, so the agent gets it once.
- */
 function IslandReplyField(props: {
   label: string;
   onSend: (text: string, clientMessageId: string) => boolean | Promise<boolean> | undefined;
@@ -1669,7 +1658,6 @@ function IslandReplyField(props: {
         placeholder={props.label}
         aria-label={props.label}
         maxlength={INPUT_LIMITS.directMessageText}
-        // Read-only, not disabled: a disabled field loses focus, and the panel collapses with it.
         readonly={sending()}
         autocomplete="off"
       />
@@ -1687,12 +1675,13 @@ function IslandReplyField(props: {
   );
 }
 
-function IslandActionError(props: { message: string | undefined }): JSX.Element {
+function IslandActionError(props: { message: UserErrorDetails | undefined }): JSX.Element {
   return (
     <Show when={props.message}>
-      {(message) => (
+      {(failure) => (
         <p class="dynamic-island-surface-action-error" role="alert">
-          {message()}
+          {failure().message}
+          <ErrorReference reference={failure().reference} />
         </p>
       )}
     </Show>
@@ -1880,22 +1869,12 @@ function ApprovalContext(props: { item: DynamicIslandApprovalItem }): JSX.Elemen
   );
 }
 
-function IslandAvatar(props: { agent: DynamicIslandAgentIdentity; working?: boolean }): JSX.Element {
+function IslandAvatar(props: { agent: DynamicIslandAgentIdentity; working?: boolean | undefined }): JSX.Element {
   return (
     <AgentAvatar
       agent={props.agent}
-      // `"idle"` here meant a morph that never stops. bloub's `autoPause` cannot
-      // help an overlay pinned over the notch - Chromium always calls it visible -
-      // and every drawn frame rewrites 64 bezier segments per path, which costs a
-      // style recalculation and a layout, not just a paint. Measured on one of the
-      // two notch windows: 4.1% of a core and 115 layouts per five seconds with the
-      // avatar, 0.5% and one layout without, all day, whatever application the user
-      // is actually in. `"hover"` holds the resting pose and brings the agent back the
-      // moment a pointer reaches the island, so the motion is there when someone is
-      // looking at it. Work still animates on its own.
       motion="hover"
       mood={props.working ? "working" : "idle"}
-      shape="cercle"
       class="dynamic-island-surface-avatar"
     />
   );

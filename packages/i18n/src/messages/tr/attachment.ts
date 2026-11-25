@@ -2,15 +2,16 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/attachment";
 
 export const messages = {
-  "attachment.downloadAll.pending": "ZIP indiriliyor…",
-  "attachment.downloadAll.label": "Tümünü ZIP olarak indir",
-  "attachment.downloadAll.count": { one: "{count} ek", other: "{count} ek" },
-  "attachment.downloadAll.zipping": "ZIP yapılıyor",
   "attachment.openFile": "Dosyayı aç",
-  "attachment.preview": "{name} önizle",
+  "attachment.preview": "{name} dosyasını önizle",
   "attachment.notFound": "Dosya bulunamadı",
-  "attachment.download": "{name} indir",
-  "attachment.open": "{name} aç",
+  "attachment.download": "{name} dosyasını indir",
+  "attachment.downloadProgress": "{received} / {total}",
+  "attachment.stopDownload": "{name} indirmesini durdur, %{percent}",
+  "attachment.downloadFailed": "İndirme başarısız",
+  "attachment.retryDownload": "{name} indirmesini yeniden dene",
+  "attachment.open": "{name} dosyasını aç",
+  "attachment.loadMedia": "{name} dosyasını oynat",
   "attachment.previewUnavailable": "Önizleme kullanılamıyor.",
   "attachment.error.preview": "{name} önizlenemedi. Tekrar deneyin.",
   "attachment.error.download": "Ekler indirilemedi. Tekrar deneyin.",

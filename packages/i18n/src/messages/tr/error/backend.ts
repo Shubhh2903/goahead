@@ -2,7 +2,14 @@ import type { PartialTranslation } from "../../../message";
 import type { messages as source } from "../../en/error/backend";
 
 export const messages = {
-  // Errors that the backend services send: channels, messages, routines, memories, MCP, browser and remote desktop.
+  "error.backend.eventsUnavailable": "Bu ana makinede etkinlikler kullanılamıyor.",
+  "error.backend.databaseIntegrity": "GoAhead veritabanı bütünlük denetiminden geçemedi.",
+  "error.backend.webhookRouteLimit": "Bir ana makinede en fazla {limit} webhook rutini olabilir.",
+  "error.backend.webhookSettingsInvalid": "Webhook ayarlarını kontrol edin ve tekrar deneyin.",
+  "error.backend.webhookSenderSecretInvalid":
+    "Gönderenin tam imza gizli anahtarını yapıştırın. 16 ile 1024 karakter arasıdır ve boşluk içermez.",
+  "error.backend.webhookRouteUnavailable":
+    "Herkese açık webhook yolu hazır değil. Ana makine bağlantısını kontrol edin ve tekrar deneyin.",
   "error.backend.browserViewRemoteOnly": "Canlı tarayıcı görünümü yalnızca uzak bir ana makine içindir.",
   "error.backend.browserViewUnsupported": "Bu uzak ana makine canlı tarayıcı görünümünü desteklemiyor.",
   "error.backend.browserViewLimit": "Bu ana makinede çok fazla tarayıcı görünümü açık.",
@@ -14,6 +21,7 @@ export const messages = {
   "error.backend.sunshinePortsUnavailable": "Uzak Masaüstü için boş bir Sunshine bağlantı noktası ailesi ayrılamadı.",
   "error.backend.moonlightPortsUnavailable":
     "Uzak Masaüstü için boş bir Moonlight WebRTC bağlantı noktası aralığı ayrılamadı.",
+  "error.backend.iceServerNoPort": "Uzak Masaüstü ICE sunucusu bir bağlantı noktası almadı.",
   "error.backend.remoteDesktopStoppedWhileStarting": "Uzak masaüstü çalışma zamanı başlatılırken durduruldu.",
   "error.backend.sunshineNotStarted": "Sunshine ayrılmış bir bağlantı noktası ailesinde başlamadı.",
   "error.backend.moonlightNoHost": "Moonlight eşleştirilmiş yerel bir ana makineye sahip değil.",
@@ -36,40 +44,106 @@ export const messages = {
   "error.backend.channelDeleteUnsupported": "Kanal silme bu sunucu tarafından desteklenmiyor.",
   "error.backend.browserNavigateUnsupported":
     "Bu uzak ana makine mevcut bir sekmede adres çubuğuyla gezinmeyi desteklemiyor.",
+  "error.backend.browserUserControlBusy":
+    "Bu tarayıcı sekmesi bir gizli bilgi bekliyor. Önce gizli bilgi isteğini yanıtlayın.",
+  "error.backend.browserTeachBusy":
+    "Bu tarayıcı sekmesini başka bir kişi kontrol ediyor. O bitirdiğinde tekrar deneyin.",
+  "error.backend.browserTeachUnavailable": "Bu tarayıcı sekmesinde görev öğrenebilecek bir ajan yok.",
+  "error.backend.browserTeachUnsupported": "Bu uzak ana makine görev kaydını desteklemiyor.",
+  "error.backend.browserUserControlUnsupported":
+    "Bu uzak ana makine bir tarayıcı sekmesinin denetimini almayı desteklemiyor.",
+  "error.backend.browserSignInUnsupported": "Bu uzak ana makine bu bilgisayardan oturum açma alamaz.",
+  "error.backend.browserSignInOpenFailed": "GoAhead oturum açma penceresini açamadı.",
+  "error.backend.browserSignInLoadFailed":
+    "GoAhead oturum açma penceresinde sayfayı yükleyemedi. İnternet bağlantısını kontrol edin, ardından oturum açma penceresini yeniden açın.",
+  "error.backend.browserSignInReadFailed": "GoAhead pencereden oturumu okuyamadı.",
+  "error.backend.browserStopUnsupported": "Bu uzak ana makine sayfa yüklemesini durduramaz.",
   "error.backend.sharedDataLocalOnly": "Paylaşılan veriler bu ajanları çalıştıran bilgisayarda yönetilir.",
   "error.backend.browserUrlProtocol": "Yalnızca HTTP(S) tarayıcı URL'lerine izin verilir.",
   "error.backend.sunshineNotReady": "Sunshine hazır hale gelmedi.",
   "error.backend.sunshineNotReadyReason": "Sunshine hazır hale gelmedi. {reason}",
   "error.backend.channelLeadModelUnavailable": "Kanal lideri modeli kullanılamıyor.",
+  "error.backend.contextCompactionIneffective":
+    "Sıkıştırma bu sohbeti küçültmüyor: iki sıkıştırmadan sonra hâlâ modelin bağlam penceresinin %{percent} kadarını kullanıyor, bu yüzden GoAhead sıkıştırmayı durduruyor. Pencerenin çoğunu araçlar ve talimatlar kullanıyor. Bu ajanın ihtiyaç duymadığı MCP sunucularını veya bilgisayar kullanımını kapatın ya da daha büyük pencereli bir model seçin. Ardından yeni bir sohbet başlatın.",
+  "error.backend.contextCompactionStopped":
+    'Bu sohbetin art arda iki sıkıştırması başarısız oldu, bu yüzden GoAhead onu otomatik olarak sıkıştırmayı bırakıyor. Her deneme tüm sohbeti modele gönderir ve plan sınırınızı kullanır. Yeniden denemek için "Şimdi sıkıştır"ı seçin veya yeni bir sohbet başlatın.',
+  "error.backend.providerModelAtCapacity":
+    "Model kapasitesinin sınırında. Sağlayıcı birkaç dakika içinde yeniden deneyecek. Hemen devam etmek için turu durdurun ve başka bir model seçin.",
+  "error.backend.providerRetrying":
+    "Sağlayıcı bu isteği {attempts} kez tamamlayamadı ve yeniden deniyor. Ajan devam etmezse turu durdurun.",
+  "error.backend.providerRetryingLargeContext":
+    "Sağlayıcı bu isteği {attempts} kez tamamlayamadı ve yeniden deniyor. Bu sohbet modelin bağlam penceresinin %{percent} kadarını kullanıyor. Ajan devam etmezse turu durdurun: GoAhead sohbeti sonraki mesajdan önce sıkıştırır.",
   "error.backend.sharedDataUnavailable": "Paylaşılan veriler kullanılamıyor.",
   "error.backend.shuttingDown": "GoAhead kapanıyor.",
   "error.backend.channelUnconfirmedStart":
     "Kanalda onaylanmamış bir görev başlangıcı var. Silmeden önce sonucunu kontrol edin.",
   "error.backend.channelNotFound": "Kanal bulunamadı.",
   "error.backend.channelMemberUnavailable": "Bir kanal üyesi kullanılamıyor.",
+  "error.backend.channelInstructionsTooLong": "Talimatları 2.000 karaktere kısaltın. Daha uzun talimatlar kaydedilmez.",
+  "error.backend.channelWaitBeforeNewConversation":
+    "Bu kanaldaki iş bitene kadar bekleyin, sonra yeni bir konuşma başlatın.",
+  "error.backend.channelWaitBeforeCompact": "Bu kanaldaki iş bitene kadar bekleyin, sonra kanalı sıkıştırın.",
+  "error.backend.channelWaitBeforeDeleteHistory": "Bu kanaldaki iş bitene kadar bekleyin, sonra geçmişini silin.",
+  "error.backend.channelCompactUnavailable":
+    "Bu kanalın hiçbir üyesi şu anda bağlamını sıkıştıramıyor. Önce bir üyenin kanalda yanıt vermesi ve sağlayıcısının sıkıştırmayı desteklemesi gerekir.",
+  "error.backend.channelCompactNoSession":
+    "Bu kanalın üyelerinin henüz sıkıştırılacak bir konuşması yok. Bir üye kanalda yanıt verdikten sonra sıkıştırın.",
+  "error.backend.channelCompactNotSupported":
+    "Bu kanalın hiçbir üyesi istek üzerine sıkıştıramaz. Bunu destekleyen üyeler, bağlamları neredeyse dolduğunda otomatik olarak sıkıştırır.",
+  "error.backend.channelCompactProviderUnavailable":
+    "Kanal üyelerinin sağlayıcısı şu anda çalışmıyor. Sağlayıcıları yenileyin, ardından kanalı yeniden sıkıştırın.",
   "error.backend.channelArchived": "Mesaj göndermeden veya görevleri değiştirmeden önce bu kanalı geri yükleyin.",
+  "error.backend.channelArchiveRunning": "Bu kanaldaki devam eden işi durdurun, ardından kanalı silin.",
   "error.backend.channelReferenceUnavailable": "Referans verilen kanal mesajı kullanılamıyor.",
   "error.backend.channelTaskNotFound": "Kanal görevi bulunamadı.",
   "error.backend.channelTaskComplete": "Bu görev zaten tamamlandı.",
+  "error.backend.channelTaskNotStopped": "Yalnızca durdurulmuş veya başarısız bir görev iptal edilebilir.",
   "error.backend.channelSelectAgent": "Bir ajan seçin.",
   "error.backend.channelLeadRequired": "Kullanılabilir bir kanal lideri seçin veya bu görevi bir üyeye atayın.",
   "error.backend.channelRoutingTooLong":
     "Bu istek yönlendirme bağlamı sınırını aşıyor. Bir üye seçin veya daha kısa bir istek gönderin.",
   "error.backend.channelTaskMemberRequired": "Bu görev için bir üye seçin.",
+  "error.backend.channelTaskStopped": "Durduruldu. Bu göreve devam edin veya yeniden atayın.",
+  "error.backend.channelRoutingUnreadable": "Lider bu mesajı yönlendiremedi. Bir üyeye yeniden atayın.",
+  "error.backend.channelRoutingFailed": "Yönlendirme başarısız oldu. Bir üye seçin veya tekrar deneyin.",
+  "error.backend.channelLeadTimedOut": "Kanal lideri zamanında yanıt vermedi. Bir üye seçin veya tekrar deneyin.",
+  "error.backend.channelLeadFailed": "Kanal lideri bu mesajı yönlendiremedi. Bir üye seçin veya tekrar deneyin.",
   "error.backend.channelRequestMemberRequired": "Bu istek için bir üye seçin.",
   "error.backend.channelDeliveryNotCreated": "Kanal teslimatı oluşturulamadı.",
   "error.backend.channelAssignmentStopped": "Bu kanal ataması durduruldu veya değiştirildi.",
   "error.backend.channelAssigneeUnavailable": "Atanan ajan kullanılamıyor.",
+  "error.backend.channelAssigneeRemoved": "Atanan üye kaldırıldı.",
+  "error.backend.channelAssigneeReassign": "Atanan üye kullanılamıyor. Bu görevi yeniden atayın.",
   "error.backend.channelAssignmentChanged": "Bu kanal ataması değişti.",
   "error.backend.channelMemberRequired": "Bu kanalın kullanılabilir bir üyesini seçin.",
+  "error.backend.memoryEssentialBudget":
+    "Temel bellekler istem sınırını aşıyor. Bir girdiyi gerektiğinde aranacak şekilde ayarlayın, ardından tekrar deneyin.",
+  "error.backend.memorySelectionConflict": "Bellek değişti. Yeniden yükleyin ve tekrar deneyin.",
+  "error.backend.memorySelectionUserControlled":
+    "Bu bellek seçimini kullanıcı yönetiyor. Kullanıcının seçimini koruyun.",
+  "error.backend.memorySearchQuery": "En fazla 256 karakterden oluşan bir veya daha fazla arama sözcüğü girin.",
+  "error.backend.memoryOperationFailed": "Bellek işlemi başarısız oldu. Tekrar deneyin.",
   "error.backend.memoryGone": "Bu bellek artık mevcut değil.",
   "error.backend.routineGone": "Bu rutin artık mevcut değil.",
+  "error.backend.routineRunGone": "Bu rutin çalıştırması artık mevcut değil.",
+  "error.backend.routineRunFailedNoReason":
+    "Çalıştırma bir hatayla durdu, ancak bir neden gelmedi. Ajanın ne yaptığını görmek için çalıştırmayı açın.",
+  "error.backend.turnNotStarted": "Sağlayıcı bu turu başlatmadı.",
+  "error.backend.turnStartUnconfirmed":
+    "{provider} bu mesajı başlattığını zamanında onaylamadı. İş iki kez çalışmasın diye GoAhead mesajı yeniden göndermez. GoAhead, ajanın başlaması için en fazla 5 dakika bekler.",
+  "error.backend.turnStartAbandoned": "Ajan bu mesajı 5 dakika içinde başlatmadı. Mesajı yeniden gönderin.",
+  "error.backend.routineResultConnectionOff": "Bu mesajlaşma bağlantısı kapalı veya kaldırılmış. Başka bir yer seçin.",
+  "error.backend.routineResultNoDelivery": "Bu çalıştırmanın yeniden gönderilecek bir yanıtı yok.",
   "error.backend.channelMemoryLimit": "Bir kanal en fazla {limit} belleğe sahip olabilir.",
   "error.backend.channelRoutineLimit": "Bir kanal en fazla {limit} rutine sahip olabilir.",
   "error.backend.agentRoutineLimit": "Bir ajan en fazla {limit} rutine sahip olabilir.",
   "error.backend.agentMemoryLimit": "Bir ajan en fazla {limit} belleğe sahip olabilir.",
-  "error.backend.channelHistoryLeadRequired": "Paylaşılan geçmişi hazırlamak için bir kanal lideri seçin.",
+  "error.backend.agentMemoryLimitReached":
+    "{limit} bellekten {saved} tanesi kayıtlı. Yer açmak için ilgili iki belleğin birleşik metniyle bir belleği memoryId ile güncelleyin ve diğerini silin ya da artık doğru olmayan bir belleği silin. Sonra tekrar deneyin.",
+  "error.backend.agentMemoryLimitExceeded":
+    "{saved} belleğiniz var ve sınır {limit}. Kullanıcı sınırı kayıtlı bellek sayısının altına ayarladı. Yer açmak için bellek silmeyin. Kullanıcıya bu belleğin kaydedilmediğini söyleyin.",
   "error.backend.channelHistoryArriving": "Paylaşılan bir mesaj hâlâ geliyor. Tamamlandığında devam edin.",
+  "error.backend.channelHistoryLeadRequired": "Paylaşılan geçmişi hazırlamak için bir kanal lideri seçin.",
   "error.backend.channelHistoryInvalid": "Geçmiş özeti geçersiz. Tekrar denemek için devam edin.",
   "error.backend.channelContextTooLong":
     "Bu atama paylaşılan bağlam sınırını aşıyor. Daha kısa bir istek gönderin veya yeniden atayın.",
@@ -96,11 +170,20 @@ export const messages = {
   "error.backend.mailboxStateCorrupt":
     "Posta kutusu durumu bozuk veya daha yeni bir GoAhead sürümünden; üzerine yazılması reddedildi.",
   "error.backend.recipientDeleting": "Alıcı siliniyor. Silme işlemi tamamlandıktan sonra tekrar deneyin.",
+  "error.backend.recipientHidden": "Bu ajan gizli. Mesaj göndermek için onu geri yükleyin.",
+  "error.backend.agentIdUnknown":
+    "{id} kimliğine sahip bir ajan yok. Kimlikleri openbot.list_agents ile alın ve tekrar deneyin.",
+  "error.backend.agentIdNear":
+    "{id} kimliğine sahip bir ajan yok. {name} ajanının kimliği {nearId} ve neredeyse aynı. Bu ajanı kastediyorsanız onun kimliğiyle tekrar deneyin.",
   "error.backend.attachBetween": "1 ila {limit} dosya ekleyin.",
   "error.backend.attachmentNotFile": "Ek bir dosya değil: {path}",
   "error.backend.generatedImageTooLarge": "Oluşturulan görsel 100 MB sınırını aşıyor.",
+  "error.backend.generatedVideoTooLarge": "Oluşturulan video 100 MB sınırını aşıyor.",
+  "error.backend.videoGenerationFailed": "Video oluşturulamadı.",
+  "error.backend.videoGenerationNoVideo": "Video oluşturma bir video döndürmedi.",
+  "error.backend.videoGenerationInterrupted": "Video oluşturma kesintiye uğradı.",
   "error.backend.attachmentNotRegularFile": "Yalnızca normal dosyalar eklenebilir: {name}",
-  "error.backend.attachmentCopyFailed": "GoAhead {name} ögesini kopyalayamadı.",
+  "error.backend.attachmentCopyFailed": "GoAhead {name} öğesini kopyalayamadı.",
   "error.backend.routineNameRequired": "Bir rutin adı gereklidir.",
   "error.backend.routineNameTooLong": "Rutin adı çok uzun.",
   "error.backend.routineInstructionRequired": "Bir rutin talimatı gereklidir.",
@@ -112,7 +195,8 @@ export const messages = {
     "Rutin aralıkları en az {minutes} dakika olmalıdır. {minutes} dakika veya daha fazlasını ya da sabit bir zamanı kullanın.",
   "error.backend.routineCronTooOften": "Özel zamanlamalar her {minutes} dakikadan daha sık çalışmamalıdır.",
   "error.backend.routineAnchorInvalid": "Rutin aralık çıpası geçersiz.",
-  "error.backend.routineNoOccurrence": "Zamanlama önümüzdeki beş yıl içinde hiçbir gerçekleşmeye sahip değil.",
+  "error.backend.routineNoOccurrence": "Bu zamanlamaya göre önümüzdeki beş yıl içinde hiç çalıştırma yok.",
+  "error.backend.routineOncePassed": "Bu tek seferlik rutinin zamanı geçti. Daha sonraki bir tarih veya saat seçin.",
   "error.backend.routineTimezoneInvalid": "Rutin saat dilimi geçersiz.",
   "error.backend.routineCronFields": "Özel zamanlamalar beş cron alanı kullanmalıdır.",
   "error.backend.routineCronValueInvalid": "Cron {field} değeri geçersiz.",
@@ -125,40 +209,158 @@ export const messages = {
   "error.backend.interruptSelf": "Bir ajan kendi kendini kesintiye uğratamaz.",
   "error.backend.interruptOtherWork":
     "Bu ajan mesajınızın başlatmadığı bir görev üzerinde çalışıyor. Yalnızca kullanıcı veya o görevin göndereni görevi durdurabilir.",
+  "error.backend.interruptSharedWork":
+    "Bu ajanın turu mesajınız ve ayrıca kullanıcıdan ya da başka bir ajandan gelen bir mesaj üzerinde çalışıyor. Onu yalnızca kullanıcı, o ajanın sohbetindeki Ajanı durdur ile durdurabilir.",
   "error.backend.interruptStarting": "Bu ajan hâlâ bir tur başlatıyor. Tur başladıktan sonra tekrar deneyin.",
   "error.backend.interruptNoSession": "GoAhead sağlayıcı oturumu kullanılamadığı için bu ajanı kesintiye uğratamıyor.",
   "error.backend.memoryTextRequired": "Bellek metni gereklidir.",
   "error.backend.memoryTextTooLong": "Bellek metni çok uzun.",
   "error.backend.mcpServerGone": "Bu MCP sunucusu artık mevcut değil.",
+  "error.backend.routineFlowLinkGone": "Bu bağlantı artık yok.",
+  "error.backend.routineFlowSameAgent": "Bir ajan işi kendisine devredemez.",
+  "error.backend.routineFlowIntoOwner": "Rutin kendi ajanıyla başlıyor, bu nedenle o ajan başka bir ajandan iş alamaz.",
+  "error.backend.routineFlowNotOnPath": "Bu ajan henüz rutinin bir parçası değil. Önce onu rutine bağlayın.",
+  "error.backend.routineFlowDuplicate": "Bu ajanlar bu rutinde zaten bağlı.",
+  "error.backend.routineFlowCycle": "Bu bağlantı bir döngü oluşturur.",
+  "error.backend.routineFlowLinkLimit": "Bir rutinde en fazla {limit} bağlantı olabilir.",
+  "error.backend.agentWaitLimit":
+    "Bu ajanın zaten {count} açık beklemesi var. Başka bir bekleme açmadan önce openbot.close_wait ile bir beklemeyi kapatın.",
+  "error.backend.agentWaitGone": "Bu bekleme açık değil. Ajan onu kapattı veya biri iptal etti.",
+  "error.backend.agentWaitNoRequest": "Beklemenin devam etmesi için bir mesaj gerekir. Bu turda mesaj yok.",
+  "error.backend.agentWaitOwnChatOnly":
+    "Beklemeyi kendi sohbetinizde veya bir yan ileti dizisinde açın. Bir kanal veya mesajlaşma konuşması bekleyemez.",
+  "error.backend.agentWaitNoteRequired": "Beklemenin ne için olduğunu belirten kısa bir not yazın.",
+  "error.backend.agentWaitRoutineGone": "Bu ajanın bu kimliğe sahip bir rutini yok.",
+  "error.backend.agentWaitNoRoutine":
+    "Bir beklemeyi yalnızca rutinlerinizden birinin çalıştırılması uyandırır ve hiç rutininiz yok. openbot.create_routine ile bir rutin oluşturun, ardından beklemeyi açın.",
+  "error.backend.markUnreadRemoteUnsupported":
+    "Bir mesajı okunmadı olarak işaretleme yalnızca bu bilgisayardaki ajanlar için kullanılabilir.",
+  "error.backend.messageDeleteUnsupported": "Bu sunucu mesaj silmeyi desteklemiyor.",
+  "error.backend.messageDeleteNotFound": "Bu mesaj sohbette yok.",
+  "error.backend.messageDeleteBusy": "Bu mesaj devam eden bir turun parçası. Tur bitince silin.",
+  "error.backend.messageDeleteForbidden": "Yalnızca gönderdiğiniz mesajları silebilirsiniz.",
+  "error.backend.messagePinNotFound": "Bu mesaj sohbette değil.",
+  "error.backend.messagePinLimit":
+    "Bu sohbette 50 sabitlenmiş mesaj var. Başka bir mesaj sabitlemeden önce birini kaldırın.",
+  "error.backend.routineFlowHandoffFailed": "Rutin işi bu ajana aktaramadı.",
   "error.backend.mcpServerLimit": "GoAhead en fazla {limit} MCP sunucusu tutar.",
   "error.backend.mcpServerNameTaken": "{name} adında bir MCP sunucusu zaten mevcut.",
-  "error.backend.mcpConnectionCancelled": "Bağlantı iptal edildi.",
+  "error.backend.mcpServerInvalid": "GoAhead bu MCP sunucusu yapılandırmasını kaydedemiyor.",
+  "error.backend.mcpHeaderNameInvalid":
+    "Başlık adları boşluk veya : ( ) / gibi simgeler içeremez. Authorization gibi bir ad kullanın ve anahtarı ya da belirteci Değer alanına girin.",
   "error.backend.mcpServerNoAnswer": "Sunucu {seconds} saniye içinde yanıt vermedi.",
   "error.backend.mcpSignInNotAccepted": "Sunucu bu oturum açmayı kabul etmedi.",
+  "error.backend.mcpSignInGrantRefused":
+    "Sunucu oturum açmayı kabul etmedi. Yeniden oturum açın. Sorun devam ederse hesabınızın bu uygulamayla aynı sitede veya bölgede olduğundan emin olun.",
+  "error.backend.mcpSignInAccountRefused":
+    "Sunucu, oturum açtığınız hesabı reddetti. Bu hesabın hizmeti kullanabildiğini kontrol edin. Başka bir hesap kullanmak için oturumu kapatıp yeniden açın.",
+  "error.backend.mcpSignInClientRefused":
+    "Oturum açma sunucusu, oturum açma tamamlanırken GoAhead'u kabul etmedi. Yeniden oturum açın: GoAhead sunucuya yeniden kaydolur.",
+  "error.backend.mcpSignInAppRefused":
+    "Oturum açma sunucusu bu sunucunun oturum açma uygulamasını kabul etmedi. Oturum açma uygulamasının istemci kimliğini ve istemci gizli anahtarını kontrol edip yeniden oturum açın.",
   "error.backend.mcpCommandNotFound": "Komut bulunamadı: {command}",
+  "error.backend.mcpProviderLimit":
+    "Bu ajan yalnızca sınırlı sayıda MCP sunucusu kullanabilir. Bu sunucuyu kullanmak için ajanın ihtiyaç duymadığı bir MCP sunucusunu kapatın.",
   "error.backend.mcpRegistrationRefused":
     "Oturum açma sunucusu GoAhead'u henüz bir uygulama olarak kabul etmiyor. Hesabınız bunun nedeni değildir. Yerel bir MCP sunucusu gibi bağlanmanın başka bir yolunu kullanın.",
-  "error.backend.mcpSignInAbandonedGeneric": "Oturum açma iptal edildi.",
+  "error.backend.mcpRegistrationUnavailable":
+    "Oturum açma sunucusu GoAhead'u uygulama olarak kaydedemiyor. Hesabınız bunun nedeni değildir. Bağlanmak için bu sunucuyu Pazaryeri, Uygulamalar bölümünde kaydedin, ardından ona bir oturum açma uygulaması ekleyin.",
+  "error.backend.mcpSignInAbandonedGeneric": "Oturum açma yarıda bırakıldı.",
   "error.backend.mcpSignInForgotten": "MCP oturum açma işlemi çalışırken unutuldu.",
-  "error.backend.mcpSignInAbandoned": "MCP oturum açma işlemi iptal edildi.",
+  "error.backend.mcpSignInAbandoned": "MCP oturum açma işlemi yarıda bırakıldı.",
   "error.backend.mcpSignInNoBrowser": "Bu MCP oturum açma işlemi bir tarayıcı açamaz.",
   "error.backend.mcpSignInNotWebPage": "Oturum açma adresi bir web sayfası değil.",
+  "error.backend.mcpSignInRequired":
+    "Bu sunucu oturum açmanızı istiyor. Tarayıcınızda devam etmek için Oturum aç'ı seçin.",
+  "error.backend.mcpSignInOnHost": "Bu sunucu oturum açılmasını istiyor. Ana makinedeki GoAhead'ta oturum açın.",
+  "error.backend.mcpSignInNeedsHttps":
+    "Bu sunucu oturum açılmasını istiyor ve GoAhead yalnızca https üzerinden oturum açar. URL'yi {url} olarak değiştirin.",
+  "error.backend.mcpSignInOtherAddress":
+    "Bu sunucu yalnızca {url} adresinde oturum açar. URL'yi bu adresle değiştirin, sonra yeniden oturum açın.",
+  "error.backend.mcpSignInCancelled": "Oturum açma iptal edildi.",
+  "error.backend.mcpSignInTimedOut": "Oturum açma tarayıcıda tamamlanmadı.",
+  "error.backend.mcpSignInRefused": "Oturum açma sayfası erişimi reddetti. Yeniden oturum açın.",
+  "error.backend.mcpSignInResponseTimedOut": "Oturum açma yanıtı zamanında gelmedi.",
+  "error.backend.mcpSignInMetadataUnreadable":
+    "GoAhead bu sunucunun oturum açma bilgilerini okuyamadı. Sunucu adresini denetleyin ve yeniden deneyin.",
+  "error.backend.mcpSignInAnswerUnreadable":
+    "Oturum açma sunucusu GoAhead'un okuyamadığı bir yanıt gönderdi. Hizmet size bir API anahtarı veya belirteç veriyorsa bunu bu sunucunun ayarlarına ekleyin, ardından bağlantıyı yeniden test edin.",
+  "error.backend.mcpServerExited":
+    "Sunucu yanıt vermeden durdu. Hatasını görmek için komutu bir terminalde çalıştırın.",
+  "error.backend.mcpServerExitedWithOutput": "Sunucu yanıt vermeden durdu. Yazdığı: {detail}",
+  "error.backend.mcpServerFailedToStart": "Sunucu başlamadı: {reason}",
+  "error.backend.mcpServerStartAbandoned":
+    "{provider}, sunucu başlamadan beklemeyi bıraktı. Bu yüzden ajanları bu sunucunun araçlarını almıyor.",
+  "error.backend.mcpServerStoppedDuringCall": "MCP sunucusu bu çağrıya yanıt vermeden durdu.",
+  "error.backend.mcpToolSchemaRefused":
+    "Sunucunun {tool} aracının giriş biçimini bu sağlayıcı okuyamıyor. Diğer sağlayıcılardaki ajanlar sunucuyu almaya devam ediyor.",
+  "error.backend.mcpServerSignInForProvider":
+    "{provider}, {name} MCP sunucusunu kullanamadı, çünkü sunucu oturum açmanızı istiyor. Pazaryeri, Uygulamalar bölümünde {name} öğesini açın ve Oturum aç'ı seçin.",
+  "error.backend.mcpServerKeyForProvider":
+    "{provider}, {name} MCP sunucusunu kullanamadı, çünkü sunucu bir anahtar istiyor. Pazaryeri, Uygulamalar bölümünde {name} öğesini açın, Düzenle'yi seçin ve Başlıklar altına doğru anahtarı girin.",
+  "error.backend.mcpServerFailedForProvider":
+    "{provider}, {name} MCP sunucusunu başlatamadı. Nedeni görmek için Pazaryeri, Uygulamalar bölümünde {name} öğesini açın ve Bağlantıyı test et'i seçin.",
+  "error.backend.mcpServerFailedInProvider":
+    "{provider}, {name} MCP sunucusunu başlatamadı. Araçları {provider} için kullanılamıyor. {provider} sunucuyu kendisi başlatır, bu yüzden GoAhead'taki bağlantı testi başarılı olabilir. Yeniden denemek için yeni bir sohbet başlatın.",
+  "error.backend.mcpServerTimedOutInProvider":
+    "{provider}, {name} MCP sunucusunu başlatamadı, çünkü sunucu zamanında yanıt vermedi. Yeniden denemek için yeni bir sohbet başlatın.",
+  "error.backend.mcpServerUnavailableInProvider":
+    "{provider}, {name} MCP sunucusunu başlatamadı, çünkü sunucu şu anda kullanılamıyor. Birkaç dakika bekleyin, ardından yeniden denemek için yeni bir sohbet başlatın.",
+  "error.backend.mcpServerUnreachableInProvider":
+    "{provider}, {name} MCP sunucusuna ulaşamadı. Pazaryeri, Uygulamalar bölümünde {name} öğesini açın ve adresin doğru olduğunu ve sunucunun çalıştığını kontrol edin. Ardından yeniden denemek için yeni bir sohbet başlatın.",
+  "error.backend.githubToolsNotStarted":
+    "{provider}, GitHub yanıt vermediği için GitHub araçlarını alamadı. Pazaryeri, Uygulamalar bölümünde GitHub öğesini açın ve isterse yeniden bağlayın. Ardından yeniden denemek için yeni bir sohbet başlatın.",
+  "error.backend.mcpOAuthProxyUnavailable":
+    "GoAhead bu sunucu için yerel oturum açma bağlantısını başlatamadı. GoAhead'u yeniden başlatın ve tekrar deneyin.",
+  "error.backend.mcpOAuthSignInNeeded":
+    "Bu MCP sunucusundaki oturum sona erdi. Kullanıcının GoAhead'ta yeniden oturum açması gerekiyor.",
+  "error.backend.mcpOAuthRenewalFailed":
+    "GoAhead bu MCP sunucusundaki oturumu şu anda yenileyemedi. Oturum korunuyor ve sonraki istek yeniden deneyecek. Bu hata sürerse kullanıcı GoAhead'ta sunucudan çıkış yapıp yeniden giriş yapabilir.",
+  "error.backend.mcpServerUnreachable": "GoAhead sunucuya ulaşamadı. URL'yi ve ağınızı kontrol edin.",
+  "error.backend.mcpLocalServerOff":
+    "Bu bilgisayarda {address} adresinde yanıt veren bir sunucu yok. Sunucuyu başlatın veya onu çalıştıran uygulamada açın, ardından tekrar deneyin.",
+  "error.backend.mcpServerBlocked":
+    "Bu bilgisayar sunucu bağlantısını engelledi. Güvenlik duvarınızı veya güvenlik yazılımınızı kontrol edin, ardından tekrar deneyin.",
+  "error.backend.mcpServerIncompatible":
+    "Bu adreste bir şey yanıt verdi, ancak Streamable HTTP üzerinden bir MCP sunucusu olarak değil. URL'yi kontrol edin ve sunucuyu çalıştıran uygulamayı güncelleyin.",
+  "error.backend.mcpRemoteBridge":
+    "{reason} Bu komut mcp-remote köprüsünü çalıştırır. Bunun yerine {url} URL'siyle Streamable HTTP'yi seçin; GoAhead oturumunuzu açar.",
   "error.backend.oauthNotHttps": "OAuth uç noktası {origin} https değil, bu nedenle kimlik bilgileri gönderilmedi.",
-  "error.backend.oauthTooManyRedirects": "OAuth uç noktası çok fazla kez yönlendirdi.",
+  "error.backend.oauthTooManyRedirects": "OAuth uç noktası çok fazla yönlendirme yaptı.",
   "error.backend.oauthRedirectOrigin":
-    "OAuth uç noktası {origin} adresine yönlendirildi, bu nedenle kimlik bilgileri iletilmedi.",
+    "OAuth uç noktası {origin} adresine yönlendirme yaptı, bu nedenle kimlik bilgileri iletilmedi.",
+  "error.backend.oauthTimedOut": "OAuth uç noktası {origin} zamanında yanıt vermedi.",
+  "error.backend.oauthResponseTooLarge": "OAuth uç noktası {origin} çok büyük bir yanıt gönderdi.",
+  "error.backend.oauthResponseUnreadable": "OAuth uç noktası {origin} yanıtı okunamadı.",
+  "error.backend.mcpOAuthPrivateEndpoint":
+    "OAuth uç noktası {origin} özel bir ağda, ancak MCP sunucusu herkese açık; bu nedenle kimlik bilgileri gönderilmedi.",
   "error.backend.sidebarSectionLimit": "Bir sunucu en fazla {limit} kenar çubuğu bölümüne sahip olabilir.",
   "error.backend.sectionNameRequired": "Bölüm adı gereklidir.",
   "error.backend.sectionNameTooLong": "Bölüm adı çok uzun.",
+  "error.backend.sidebarFolderTooDeep": "Klasörler en fazla üç seviye derinliğinde olabilir.",
+  "error.backend.sidebarFolderMoveInvalid": "Bu klasör oraya taşınamaz.",
+  "error.backend.libraryFolderName": "Klasör adı 1 ile {limit} karakter arasında olmalıdır.",
+  "error.backend.libraryFolderLimit": "Bir sunucuda en fazla {limit} Kitaplık klasörü olabilir.",
+  "error.backend.libraryFolderFileLimit": "Kitaplık klasörlerinde çok fazla dosya var.",
+  "error.backend.libraryFolderTooDeep": "Kitaplık klasörleri en fazla {limit} düzey derinliğinde olabilir.",
+  "error.backend.libraryFolderGone": "Klasör yok veya zaten silinmiş.",
+  "error.backend.libraryFolderOtherAgent": "Bir dosya yalnızca kendi ajanının klasörüne konabilir.",
+  "error.backend.libraryFolderMoveInvalid": "Bu klasör oraya taşınamaz.",
+  "error.backend.workflowFolderLimit": "Bir sunucuda en fazla {limit} iş akışı klasörü olabilir.",
+  "error.backend.workflowFolderPlacementLimit": "Klasörlerde çok fazla iş akışı var.",
   "error.backend.sectionNameDuplicate": "Bölüm adları benzersiz olmalıdır.",
   "error.backend.directMessageRequired": "Önce bir mesaj yazın.",
   "error.backend.directMessageTooLong": "Doğrudan mesaj en fazla {limit} karakter içerebilir.",
   "error.backend.directMessageSelf": "Kendinize doğrudan mesaj gönderemezsiniz.",
   "error.backend.readBoundaryUnavailable": "Okuma sınırı artık mevcut değil.",
   "error.backend.sharedFileOutside": "Paylaşılan dosya paylaşılan dizinin içinde olmalıdır.",
+  "error.backend.sharedPathIsFolder": "Paylaşılan yol bir dosya değil, bir klasör.",
   "error.backend.sharedPathNotFile": "Paylaşılan yol bir dosya değil.",
   "error.backend.workspaceFileOutside": "Çalışma alanı dosyası ajan çalışma alanının içinde olmalıdır.",
   "error.backend.workspacePathNotFile": "Çalışma alanı yolu bir dosya değil.",
+  "error.backend.workspacePathNotDirectory": "Çalışma alanı yolu bir klasör değil.",
+  "error.backend.workspacePathMissing": "{root} ajan çalışma alanında {path} konumunda hiçbir şey yok.",
+  "error.backend.workspacePathMissingForMember": "Ajan çalışma alanında {path} konumunda hiçbir şey yok.",
   "error.backend.useChannelTaskControls": "Bu atama için kanal görevi kontrollerini kullanın.",
   "error.backend.editFinished": "Bu düzenleme zaten tamamlandı.",
   "error.backend.editCancelled": "Bu düzenleme iptal edildi, bu nedenle mesaj orijinal metnini korur.",
@@ -166,17 +368,48 @@ export const messages = {
   "error.backend.editSavedDifferent": "Bu düzenleme zaten farklı içerikle kaydedildi. Değişiklikleriniz kaydedilmedi.",
   "error.backend.useChannelTaskControlsWork": "Kanal çalışması için kanal görevi kontrollerini kullanın.",
   "error.backend.steerTurnChanged": "Bu mesaj yönlendirilmeden önce etkin tur değişti.",
+  "error.backend.steerUnsupported": "Bu sağlayıcı çalışan bir turu yönlendiremez. Mesajınız kuyrukta kalır.",
+  "error.backend.steerRoutineRun": "Şu anda bir rutin çalışıyor. Mesajınız kuyrukta kalır ve rutinden sonra başlar.",
   "error.backend.steerQueuedOnly": "Yalnızca kuyruğa alınmış mesajlar yönlendirilebilir.",
   "error.backend.promptInactive": "Bu istem artık etkin değil.",
   "error.backend.promptAnswerMismatch": "Bir istem yanıtı etkin bir soruyla eşleşmiyor.",
   "error.backend.approvalInactive": "Bu onay artık etkin değil.",
+  "error.backend.feedbackNeedsPhone":
+    "Bu raporu yalnızca GoAhead telefon uygulaması gönderebilir, çünkü telefonun sürümünü ve destek günlüğünü ekler. Bu sohbeti telefonda açın. Bu mesajı orada görürseniz telefon uygulamasını güncelleyin.",
   "error.backend.takeoverInactive": "Bu tarayıcı devralması artık etkin değil.",
   "error.backend.authSubmitting": "Kimlik doğrulama gönderimi zaten devam ediyor.",
+  "error.backend.apiKeyListFailed": "GoAhead kayıtlı API anahtarlarını okuyamadı.",
+  "error.backend.apiKeySaveFailed": "GoAhead API anahtarını kaydedemedi. Yeniden deneyin.",
+  "error.backend.apiKeySaving": "API anahtarı zaten kaydediliyor.",
+  "error.backend.apiKeyAnswerUnreadable":
+    "GoAhead API anahtarını okuyamadı. En fazla 8.000 karakterlik bir anahtar girin ve onu kimin kullanabileceğini seçin.",
   "error.backend.authRequestInactive": "Bu güvenli kimlik doğrulama isteği artık etkin değil.",
   "error.backend.secureAuthUnavailable": "Güvenli kimlik doğrulaması kullanılamıyor.",
   "error.backend.browserUrlRequired": "Bir tarayıcı URL'si gereklidir.",
   "error.backend.browserUrlTooLong": "Tarayıcı URL'si çok uzun.",
   "error.backend.browserTabLimit": "Tarayıcıda en fazla {limit} açık sekme bulunabilir.",
+  "error.backend.browserProfileMissing":
+    "Bu ajanın tarayıcı profili artık yok. Ajan ayarlarından başka bir profil seçin.",
+  "error.backend.browserProfileNotFound": "Bu tarayıcı profili artık yok.",
+  "error.backend.browserProfileNameTaken": "Bu adla bir tarayıcı profili zaten var.",
+  "error.backend.browserSessionInUse": "Bir sekme bu tarayıcı oturumunu hâlâ kullanıyor. Yeniden deneyin.",
+  "error.backend.browserProfileLimit": "En fazla {limit} tarayıcı profiliniz olabilir.",
+  "error.backend.browserProxyNotFound": "Bu proxy artık yok.",
+  "error.backend.browserProxyAddressInvalid":
+    "socks5://host:1080 veya http://user:password@host:3128 gibi bir proxy adresi yazın.",
+  "error.backend.browserProxyLimit": "En fazla {limit} proxy'niz olabilir.",
+  "error.backend.browserProxyTaken": "Bu adrese sahip bir proxy zaten var.",
+  "error.backend.browserProxyChanged": "Bu proxy siz açtıktan sonra değişti. Yeniden kontrol edip tekrar deneyin.",
+  "error.backend.browserProxyUnreachable": "{name} proxy'si yanıt vermiyor, bu yüzden sayfa açılmadı.",
+  "error.backend.browserProxySignInRefused": "{name} proxy'si oturum açmayı reddetti, bu yüzden sayfa açılmadı.",
+  "error.backend.browserSystemProxyFailed":
+    "GoAhead'u çalıştıran bilgisayarın ayarlarındaki proxy yanıt vermiyor veya bağlantıyı reddetti, bu yüzden sayfa açılmadı. O bilgisayarın proxy ayarlarını kontrol edin.",
+  "error.backend.browserProxyComputerUnreachable":
+    "Bu profilin kullandığı bilgisayar yanıt vermiyor, bu yüzden sayfa açılmadı.",
+  "error.backend.browserProxyComputerLocalAddress":
+    "Bu profilin kullandığı bilgisayar yalnızca herkese açık siteleri açar. Yerel ağdaki adresleri açmaz, bu yüzden sayfa açılmadı.",
+  "error.backend.browserCertificateUntrusted":
+    "Bu sitenin güvenlik sertifikasına güvenilmiyor, bu yüzden sayfa açılmadı.",
   "error.backend.browserLowMemory":
     "Bu sunucunun belleği azaldı, bu nedenle tarayıcı başka bir sekme açamıyor. Bir sekmeyi kapatın veya diğer ajanların bitmesini bekleyin.",
   "error.backend.browserOpenFailed": "{url} açılamadı: {reason}",
@@ -191,7 +424,7 @@ export const messages = {
   "error.backend.popupLoadFailed": "Açılır pencere yüklenemedi. Orijinal sayfadan oturum açmayı tekrar deneyin.",
   "error.backend.browserTabNotFound": "Tarayıcı sekmesi bulunamadı.",
   "error.backend.authActive": "Kimlik doğrulaması zaten etkin.",
-  "error.backend.authHttpsRequired": "Güvenli kimlik doğrulaması HTTPS gerektirir.",
+  "error.backend.authWebPageRequired": "Güvenli kimlik doğrulaması HTTP/HTTPS gerektirir.",
   "error.backend.authDigitsRange": "Kimlik doğrulama kodları 4–12 basamak gerektirir.",
   "error.backend.authExpired": "Kimlik doğrulama isteğinin süresi doldu.",
   "error.backend.authDigitsRequired": "İstenen basamak sayısını girin.",
@@ -202,4 +435,44 @@ export const messages = {
     "Sunucu {status} yanıtı verdi. API anahtarını veya diğer kimlik bilgilerini denetleyin.",
   "error.backend.mcpServerHttpUrl":
     "Sunucu {status} yanıtı verdi. URL'yi denetleyin. Bağlantı yanlış, süresi dolmuş veya silinmiş olabilir.",
+  "error.backend.mcpServerBearerKey":
+    "Bu sunucu oturum açma değil, API anahtarı kullanır. Başlıklar altında anahtarı Authorization, değeri ise Bearer, bir boşluk ve API anahtarınız olarak ayarlayın.",
+  "error.backend.mcpSignInAppUrl": "Oturum açma uygulaması için geçerli bir sunucu URL'si gerekir.",
+  "error.backend.mcpSignInAppClientId": "Oturum açma uygulamasının istemci kimliğini girin.",
+  "error.backend.mcpSignInAppIssuerChanged":
+    "Bu MCP sunucusunun oturum açma sunucusu değişti, bu yüzden GoAhead oturum açma uygulamasını ona göndermedi. Değişiklik doğruysa oturum açma uygulamasını kaldırıp yeniden ekleyin.",
+  "error.backend.mcpSignInAppNoServer":
+    "Oturum açma uygulaması eklemeden önce bu MCP sunucusunu URL sunucusu olarak kaydedin.",
+  "error.backend.mcpSignInAppUnavailable": "Bu bilgisayar oturum açma uygulaması saklayamaz.",
+  "error.backend.taskMoveRefused":
+    "Görev olarak yalnızca, doğrudan ve tek başına bu ajana gönderdiğiniz bir mesaj çalışabilir.",
+  "error.backend.taskNotFound": "Bu görev kullanılamıyor.",
+  "error.backend.taskClosed": "Bu görev kapalı. Mesaj göndermek için yeniden açın.",
+  "error.backend.taskStillRunning": "Bu görev hâlâ çalışıyor. Durmasını bekleyin, ardından kapatın.",
+  "error.backend.threadNotFound": "Bu mesaj dizisi kullanılamıyor.",
+  "error.backend.threadStillRunning": "Bu mesaj dizisi hâlâ çalışıyor. Durdurun, ardından yeniden deneyin.",
+  "error.backend.threadArchived": "Bu mesaj dizisi arşivlendi. Mesaj göndermek için geri yükleyin.",
+  "error.backend.threadTitleRequired": "Mesaj dizisine kısa bir başlık verin.",
+  "error.backend.threadOpenLimitReached":
+    "Bu ajanın {count} açık mesaj dizisi var. Bir mesaj dizisini arşivleyin, ardından başka birini başlatın veya geri yükleyin.",
+  "error.backend.threadRemoteUnsupported": "Mesaj dizileri yalnızca bu bilgisayardaki ajanlar için kullanılabilir.",
+  "error.backend.branchSourceBusy": "Bu sohbeti dallandırmadan önce geçerli turu durdurun.",
+  "error.backend.branchMessageNotFound": "Yalnızca ajanın tamamlanmış bir yanıtından dallandırabilirsiniz.",
+  "error.backend.branchRemoteUnsupported": "Dallar yalnızca bu bilgisayardaki ajanlar için kullanılabilir.",
+  "error.backend.feedbackWithdrawRemoteUnsupported": "Bu raporu kaldırmak için ajandan kaldırmasını isteyin.",
+  "error.backend.threadMoveRefused":
+    "Yeni bir mesaj dizisinde yalnızca, doğrudan ve tek başına bu ajana gönderdiğiniz bir mesaj çalışabilir.",
+  "error.backend.taskTitleRequired": "Göreve kısa bir başlık verin.",
+  "error.backend.taskToolInvalid":
+    "Göreve en fazla 120 karakterlik bir başlık ve ne yapılacağını anlatan kısa bir talimat verin.",
+  "error.backend.taskControlInvalid": "Başlattığınız bir görevin taskId değerini verin. Bir mesajın metni de olmalı.",
+  "error.backend.taskOwnChatOnly":
+    "Görevi yalnızca kendi sohbetinizden başlatın. Bir kanal, bir mesajlaşma konuşması veya başka bir görev yeni bir görev başlatamaz.",
+  "error.backend.taskUnfinishedLimit":
+    "Bu ajanın zaten {count} bitmemiş görevi var. Bunlardan biri bittiğinde başka bir görev başlatın.",
+  "error.backend.taskOpenLimitReached":
+    "Bu ajanın {count} açık görevi var. Bir görevi kapatın, ardından başka bir görev başlatın veya açın.",
+  "error.backend.taskRemoteUnsupported": "Görevler yalnızca bu bilgisayardaki ajanlar için kullanılabilir.",
+  "error.backend.taskMessageFailed": "GoAhead mesajı göreve gönderemedi. Daha sonra yeniden deneyin.",
+  "error.backend.taskStartFailed": "GoAhead görevi başlatamadı. Bunun yerine işi bu turda yapın.",
 } as const satisfies PartialTranslation<typeof source>;

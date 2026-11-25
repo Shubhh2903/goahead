@@ -18,7 +18,7 @@
   line-height: 1.1;
   letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
   margin-bottom: var(--openbot-space-3);
 }
 .agent-usage-providers {
@@ -38,8 +38,7 @@
   align-items: center;
   gap: var(--openbot-space-2);
 }
-/* The legend mark for the row's series. Its colour is an inline style, because it is the
-   provider that decides it rather than the stylesheet. */
+
 .agent-usage-series-dot {
   width: var(--openbot-space-2);
   height: var(--openbot-space-2);
@@ -72,18 +71,17 @@
   margin-bottom: var(--openbot-space-4);
 }
 
-/* One line, never two. A wrapped second row put two entries under five and read as a
-   second, more important group; the entries are a tail of decreasing interest instead, so
-   a panel too narrow to hold them all drops the last ones rather than rewrapping. */
 .agent-usage-totals {
   display: flex;
-  flex-wrap: nowrap;
-  gap: calc(var(--openbot-space-6) * 2);
+  flex-wrap: wrap;
+  gap: var(--openbot-space-4) calc(var(--openbot-space-6) * 2);
+  max-height: calc(var(--openbot-leading-sm) + var(--openbot-space-1) + var(--openbot-leading-xl));
   margin-top: var(--openbot-space-4);
   overflow: hidden;
 }
 .agent-usage-totals dt {
   font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-sm);
   color: var(--openbot-text-muted);
   margin-bottom: var(--openbot-space-1);
   white-space: nowrap;
@@ -91,11 +89,9 @@
 .agent-usage-totals dd {
   margin: 0;
   font-size: var(--openbot-text-xl);
+  line-height: var(--openbot-leading-xl);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-.agent-usage-table {
-  overflow-x: auto;
 }
 .agent-usage-table table {
   width: 100%;
@@ -105,19 +101,19 @@
 }
 .agent-usage-table th,
 .agent-usage-table td {
-  text-align: right;
+  text-align: end;
   padding: var(--openbot-space-2) var(--openbot-space-3);
   border-bottom: 1px solid var(--openbot-border-strong);
   white-space: nowrap;
   font-weight: 400;
 }
 .agent-usage-table th:first-child {
-  text-align: left;
-  padding-left: 0;
+  text-align: start;
+  padding-inline-start: 0;
   white-space: normal;
 }
 .agent-usage-table td:last-child {
-  padding-right: 0;
+  padding-inline-end: 0;
 }
 .agent-usage-table thead th {
   color: var(--openbot-text-muted);
@@ -125,6 +121,21 @@
 }
 .agent-usage-table td {
   color: var(--openbot-text-secondary);
+}
+.agent-usage-table td.agent-usage-table-empty {
+  padding-inline-start: 0;
+  text-align: start;
+  white-space: normal;
+  color: var(--openbot-text-muted);
+}
+
+.agent-usage-breakdown {
+  position: relative;
+}
+.agent-usage-breakdown > .ui-sliding-tabs-content:not([data-selected]) {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
 }
 .agent-usage-model-name {
   display: flex;

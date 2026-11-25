@@ -2,8 +2,10 @@ import type { PartialTranslation } from "../../../message";
 import type { messages as source } from "../../en/error/host";
 
 export const messages = {
-  // Errors from host setup, publishing, and host maintenance.
   "error.host.iceServersMissing": "Remote Signal が ICE サーバーを提供していません。",
+  "error.host.keyRotationUnavailable": "このサーバーはアカウントサービスなしではキーを変更できません。",
+  "error.host.keyRotationRefused":
+    "アカウントサービスが新しいサーバーキーを受け入れませんでした。現在のキーを引き続き使用します。",
   "error.host.webRtcNotConfigured": "WebRTC ホストサービスが設定されていません。",
   "error.host.setupUnavailable": "権限の設定を利用できません。",
   "error.host.accountChangedDuringUpdate": "このサーバーの更新中に、サインイン中のアカウントが変わりました。",
@@ -16,8 +18,13 @@ export const messages = {
   "error.host.publishFailed": "この GoAhead を公開できませんでした。",
   "error.host.mobileConnectPublishFailed": "この GoAhead を Mobile Connect 用に公開できませんでした。",
   "error.host.mobileConnectHostChanged": "Mobile Connect のホストが変わりました。再試行してください。",
+  "error.host.mobileConnectHostMismatch":
+    "アカウントにはこのサーバーの別のキーが登録されています。再試行してください。",
   "error.host.noServer": "このコンピューターには変更できるサーバーがありません。",
   "error.host.identityLocalOnly": "サーバーの名前とロゴは、サーバーを実行しているコンピューターでのみ変更できます。",
+  "error.host.timezoneInvalid": "このタイムゾーンは不明です。",
+  "error.host.signalHomeUnknown": "この Signal サーバーは利用できません。",
+  "error.host.turnLimitInvalid": "このスレッド数の上限は無効です。",
   "error.host.maintenanceInterrupted":
     "ホストのメンテナンスが中断されました。再試行する前に、アプリケーションを確認し、ホストの状態をリセットしてください。",
   "error.host.updateFailed":
@@ -27,4 +34,5 @@ export const messages = {
     "テナントの停止がタイムアウトしました。アプリケーションの置き換えは開始されていません。",
   "error.host.tenantHealthMissing":
     "再起動後のテナントの正常性レポートがないか、異常です。次の更新の前に、テナントのセッションを確認してください。",
+  "error.host.personalityInvalid": "この応答スタイルは不明です。",
 } as const satisfies PartialTranslation<typeof source>;

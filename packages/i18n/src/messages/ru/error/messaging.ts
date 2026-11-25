@@ -1,0 +1,31 @@
+import type { PartialTranslation } from "../../../message";
+import type { messages as source } from "../../en/error/messaging";
+
+export const messages = {
+  "error.messaging.notConnected": "Это рабочее пространство Slack не подключено.",
+  "error.messaging.unsupported": "Этот компьютер не может подключиться к Slack.",
+  "error.messaging.relayUnavailable":
+    "GoAhead не может получать события Slack на этом компьютере. Войдите, дайте компьютеру имя и повторите попытку.",
+  "error.messaging.discordNotConnected": "Этот сервер Discord не подключён.",
+  "error.messaging.discordUnsupported": "Этот компьютер не может подключиться к Discord.",
+  "error.messaging.discordRelayUnavailable":
+    "GoAhead не может получать события Discord на этом компьютере. Войдите, дайте компьютеру имя и повторите попытку.",
+  "error.messaging.discordRolesUnsupported": "GoAhead пока не может показать роли Discord. Повторите попытку позже.",
+  "error.messaging.telegramNotConnected": "Этот чат Telegram не подключён.",
+  "error.messaging.telegramUnsupported": "Этот компьютер не может подключиться к Telegram.",
+  "error.messaging.telegramRelayUnavailable":
+    "GoAhead не может связаться с Telegram на этом компьютере. Войдите в аккаунт, задайте компьютеру имя и повторите попытку.",
+  "error.messaging.telegramRelayUnreachable":
+    "GoAhead не может подключиться к своему сервису с этого компьютера. Проверьте подключение к интернету, VPN, прокси или брандмауэр и повторите попытку.",
+  "error.messaging.telegramServiceUnavailable": "GoAhead сейчас не может подключить Telegram. Повторите попытку позже.",
+  "error.messaging.whatsappNotConnected": "Этот номер WhatsApp не подключён.",
+  "error.messaging.whatsappUnsupported": "Этот компьютер не может подключиться к WhatsApp.",
+  "error.messaging.whatsappTooManySenders": "Номер WhatsApp может разрешить не более 200 контактов и групп.",
+  "error.messaging.whatsappNumberNotFound":
+    "У этого номера нет аккаунта WhatsApp. Введите его с кодом страны, например +44 7700 900123.",
+  "error.messaging.whatsappSenderNotFound": "Этого контакта или группы больше нет в списке.",
+  "error.messaging.whatsappRequestEnded":
+    "Срок этого запроса истёк. Попросите человека написать снова, чтобы получить новый код.",
+  "error.messaging.memoryLimit":
+    "В подключённом рабочем пространстве может быть не более {limit} записей памяти. Сначала удалите одну.",
+} as const satisfies PartialTranslation<typeof source>;

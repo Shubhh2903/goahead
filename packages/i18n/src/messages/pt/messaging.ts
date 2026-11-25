@@ -32,4 +32,14 @@ export const messages = {
   "messaging.inbox.choose": "Escolha uma conversa para lê-la.",
   "messaging.inbox.loadFailed": "A caixa de entrada do Slack não carregou.",
   "messaging.inbox.unread": { one: "{count} não lida", other: "{count} não lidas" },
+  "messaging.help.not_linked":
+    "Este workspace não está vinculado a este servidor. Selecione Reconectar para vinculá-lo.",
+  "messaging.discordHelp.invalid_token":
+    "O Discord não aceita mais o GoAhead neste servidor do Discord. Ele pode ter sido removido. Conecte o servidor do Discord novamente.",
+  "messaging.discordHelp.secret_storage_unavailable":
+    "O GoAhead não consegue ler os tokens salvos neste computador. Desconecte o servidor do Discord e conecte-o novamente.",
+  "messaging.discordHelp.relay_unavailable":
+    "O GoAhead não consegue receber eventos do Discord neste computador. Entre na sua conta, dê um nome a este computador nas configurações do servidor e mantenha o GoAhead aberto.",
+  "messaging.discordHelp.not_linked":
+    "Este servidor do Discord não está vinculado a este servidor do GoAhead. Selecione Reconectar para vinculá-lo.",
 } as const satisfies PartialTranslation<typeof source>;

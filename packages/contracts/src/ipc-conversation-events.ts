@@ -1,3 +1,4 @@
+import { type AgentProviderId, isAgentProvider } from "./agent-providers";
 import { INPUT_LIMITS } from "./input-limits";
 import { isBoundedString, isIdentifier } from "./ipc-bounded-values";
 import type { ConversationMessage } from "./ipc-conversation-messages";
@@ -250,15 +251,10 @@ export function isHostedSiteConversationEventUrl(value: unknown, hostname: unkno
 
 export const CHANNEL_ROUTING_EVENT_ITEM_TYPE_PREFIX = "channel-routing-event:";
 
-/**
- * `assigned` is the first owner a lead chose for a request. `continued` is the same request handed
- * to work that is already under way, so the reader sees that nothing new was started.
- */
 export type ChannelRoutingConversationEventAction = "assigned" | "continued";
 
 export interface ChannelRoutingConversationEvent {
   action: ChannelRoutingConversationEventAction;
-  /** The member the request went to. The roster resolves the name, avatar and colour of the row. */
   agentId: string;
 }
 
@@ -281,26 +277,74 @@ export function parseChannelRoutingConversationEventItemType(
   return { action, agentId };
 }
 
-/**
- * A routing receipt of a channel, not a message a member sent.
- *
- * Unlike the routine and hosted-site events, this one carries no `source`: a channel writes its
- * rows through `ChannelService`, which stamps the author alone. The text stays the readable
- * sentence, so a client that does not know this item type still shows the user what happened.
- */
 export function channelRoutingConversationEvent(message: ConversationMessage): ChannelRoutingConversationEvent | null {
   if (message.author !== "system" || message.status !== "completed") return null;
   return parseChannelRoutingConversationEventItemType(message.itemType);
 }
 
-/**
- * The item type of the marker that clears the context of an agent's own thread.
- *
- * The messages before the marker stay visible, but a new provider session takes only the messages
- * after it. The text is a readable sentence, so a client that does not know this item type still
- * shows the user what happened.
- */
 export const CONTEXT_RESET_ITEM_TYPE = "context-reset";
+
+export const MODEL_SWITCH_ITEM_TYPE_PREFIX = "model-switch:";
+export const MODEL_SWITCH_ITEM_TYPES = {
+  "usage-limit": `${MODEL_SWITCH_ITEM_TYPE_PREFIX}usage-limit`,
+  "usage-limit-ended": `${MODEL_SWITCH_ITEM_TYPE_PREFIX}usage-limit-ended`,
+  "provider-error": `${MODEL_SWITCH_ITEM_TYPE_PREFIX}provider-error`,
+  "provider-error-ended": `${MODEL_SWITCH_ITEM_TYPE_PREFIX}provider-error-ended`,
+} as const;
+export type ModelSwitchReason = keyof typeof MODEL_SWITCH_ITEM_TYPES;
+
+export function modelSwitchReason(message: ConversationMessage): ModelSwitchReason | null {
+  if (message.author !== "system" || message.source !== "system" || message.status !== "completed") return null;
+  if (message.itemType === MODEL_SWITCH_ITEM_TYPES["usage-limit"]) return "usage-limit";
+  if (message.itemType === MODEL_SWITCH_ITEM_TYPES["usage-limit-ended"]) return "usage-limit-ended";
+  if (message.itemType === MODEL_SWITCH_ITEM_TYPES["provider-error"]) return "provider-error";
+  if (message.itemType === MODEL_SWITCH_ITEM_TYPES["provider-error-ended"]) return "provider-error-ended";
+  return null;
+}
+
+export const CHANNEL_CHANGE_ITEM_TYPE = "channel-change";
+
+export function isChannelChangeMarker(message: ConversationMessage): boolean {
+  return (
+    message.author === "system" &&
+    message.source === "system" &&
+    message.status === "completed" &&
+    message.itemType === CHANNEL_CHANGE_ITEM_TYPE
+  );
+}
+
+export const VAULT_CHANGE_ITEM_TYPE = "vault-change";
+
+export function isVaultChangeMarker(message: ConversationMessage): boolean {
+  return (
+    message.author === "system" &&
+    message.source === "system" &&
+    message.status === "completed" &&
+    message.itemType === VAULT_CHANGE_ITEM_TYPE
+  );
+}
+
+export const PLAN_CONTINUATION_ITEM_TYPE = "plan-continuation";
+
+export function isPlanContinuationMarker(message: ConversationMessage): boolean {
+  return (
+    message.author === "system" &&
+    message.source === "system" &&
+    message.status === "completed" &&
+    message.itemType === PLAN_CONTINUATION_ITEM_TYPE
+  );
+}
+
+export const SIGN_IN_FAILURE_ITEM_TYPE_PREFIX = "sign-in-failure:";
+
+export function signInFailureProvider(message: ConversationMessage): AgentProviderId | null {
+  if (message.author !== "system" || message.source !== "system" || message.status !== "completed") return null;
+  if (!message.itemType?.startsWith(SIGN_IN_FAILURE_ITEM_TYPE_PREFIX)) return null;
+  const provider = message.itemType.slice(SIGN_IN_FAILURE_ITEM_TYPE_PREFIX.length);
+  return isAgentProvider(provider) ? provider : null;
+}
+
+export const AGENT_EXCHANGE_ITEM_TYPE = "agent-exchange";
 
 export function isContextResetMarker(message: ConversationMessage): boolean {
   return (

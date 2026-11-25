@@ -1,5 +1,6 @@
 import type { RoutineSchedule } from "@openbot/contracts/ipc";
 import type { AppMessages } from "@openbot/i18n";
+import { currentText } from "../../text";
 import { routineScheduleSummary } from "../conversation/routine-schedule-ui";
 import type { DiagramRunStatus, DiagramStepRun, DiagramStepStatus } from "./diagram-model";
 
@@ -24,7 +25,7 @@ export function diagramStepSeconds(step: DiagramStepRun): number | null {
   return Math.max(0, Math.round((Date.parse(step.finishedAt) - Date.parse(step.startedAt)) / 1000));
 }
 
-/** What starts a routine, in words: its schedule. */
-export function diagramRoutineTrigger(routine: { schedule: RoutineSchedule }, sentence = false): string {
+export function diagramRoutineTrigger(routine: { schedule: RoutineSchedule | null }, sentence = false): string {
+  if (!routine.schedule) return currentText().t("routine.trigger.webhookDescription");
   return routineScheduleSummary(routine.schedule, sentence);
 }

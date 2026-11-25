@@ -29,7 +29,6 @@ export interface AcpRegistrySettingsApi {
   remove(registryId: string): Promise<void>;
 }
 
-/** Commands are installed on the host supplied by the application. Manual agents remain separate. */
 export function AcpRegistrySettings(props: { api: AcpRegistrySettingsApi }) {
   const { t, errorMessage } = useText();
   const [state, setState] = createStore<{
@@ -71,7 +70,7 @@ export function AcpRegistrySettings(props: { api: AcpRegistrySettingsApi }) {
         } catch (error) {
           if (!disposed)
             setState((s) => {
-              s.error = errorMessage(error, t("customProvider.registry.failed"));
+              s.error = errorMessage(error, t("customProvider.registry.statusFailed"));
             });
         } finally {
           reading = false;
@@ -98,7 +97,7 @@ export function AcpRegistrySettings(props: { api: AcpRegistrySettingsApi }) {
       });
     } catch (error) {
       setState((s) => {
-        s.error = errorMessage(error, t("customProvider.registry.failed"));
+        s.error = errorMessage(error, t("customProvider.registry.searchFailed"));
       });
     } finally {
       setState((s) => {
@@ -119,7 +118,10 @@ export function AcpRegistrySettings(props: { api: AcpRegistrySettingsApi }) {
       await search();
     } catch (error) {
       setState((s) => {
-        s.error = errorMessage(error, t("customProvider.registry.failed"));
+        s.error = errorMessage(
+          error,
+          t(entry.installedVersion ? "customProvider.registry.updateFailed" : "customProvider.registry.installFailed"),
+        );
       });
     } finally {
       setState((s) => {
@@ -137,7 +139,7 @@ export function AcpRegistrySettings(props: { api: AcpRegistrySettingsApi }) {
       await search();
     } catch (error) {
       setState((s) => {
-        s.error = errorMessage(error, t("customProvider.registry.failed"));
+        s.error = errorMessage(error, t("customProvider.registry.removeFailed"));
       });
     } finally {
       setState((s) => {
@@ -151,13 +153,14 @@ export function AcpRegistrySettings(props: { api: AcpRegistrySettingsApi }) {
       await search();
     } catch (error) {
       setState((s) => {
-        s.error = errorMessage(error, t("customProvider.registry.failed"));
+        s.error = errorMessage(error, t("customProvider.registry.cancelFailed"));
       });
     }
   }
   return (
     <SettingsSection title={t("customProvider.registry.title")} description={t("customProvider.registry.description")}>
       <form
+        class="acp-registry-form"
         onSubmit={(event) => {
           event.preventDefault();
           void search();
@@ -184,6 +187,7 @@ export function AcpRegistrySettings(props: { api: AcpRegistrySettingsApi }) {
       <Show when={state.selected}>
         {(entry) => (
           <form
+            class="acp-registry-form"
             onSubmit={(event) => {
               event.preventDefault();
               void install(entry(), state.customAgentId);
@@ -220,7 +224,7 @@ export function AcpRegistrySettings(props: { api: AcpRegistrySettingsApi }) {
       <ItemGroup>
         <For each={state.entries}>
           {(entry) => (
-            <Item>
+            <Item class="acp-registry-entry">
               <ItemContent>
                 <ItemTitle>{entry.name}</ItemTitle>
                 <ItemDescription>{entry.description}</ItemDescription>

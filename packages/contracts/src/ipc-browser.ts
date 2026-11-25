@@ -1,3 +1,6 @@
+import type { AvatarColor, AvatarHue } from "./ipc-agent-identity";
+import type { BrowserTabProfile } from "./ipc-browser-profiles";
+
 export interface BrowserTab {
   id: string;
   title: string;
@@ -5,23 +8,37 @@ export interface BrowserTab {
   loading: boolean;
   ownerThreadId: string | null;
   ownerAgentId: string | null;
-  /** Browser Automation V2 metadata. Optional to keep Team API protocol v1 wire-compatible. */
   environment?: BrowserEnvironment;
   recording?: boolean;
   diagnosticErrorCount?: number;
-  /** Live local popup relationship; not restored after an app restart. */
   openerTabId?: string;
-  /** Local popup failure, without authentication URLs or request data. */
   popupFailure?: { id: string; message: string };
+  userControl?: true;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+}
+
+export interface BrowserTeachStep {
+  kind: "page" | "click";
+  host: string;
+  path: string;
+  title?: string;
+  role?: string;
+  name?: string;
+}
+
+export interface BrowserTeachStopInput {
+  tabId: string;
+  save: boolean;
 }
 
 export type BrowserImageMode = "auto" | "always" | "never";
 
 export type BrowserTarget =
   | { kind: "ref"; ref: string; revision: number }
-  | { kind: "role"; role: string; name?: string; exact?: boolean }
-  | { kind: "text"; text: string; exact?: boolean }
-  | { kind: "css"; selector: string }
+  | { kind: "role"; role: string; name?: string | undefined; exact?: boolean | undefined; nth?: number | undefined }
+  | { kind: "text"; text: string; exact?: boolean | undefined; nth?: number | undefined }
+  | { kind: "css"; selector: string; nth?: number | undefined }
   | { kind: "point"; x: number; y: number };
 
 export interface BrowserViewport {
@@ -46,24 +63,16 @@ export interface BrowserElement {
   tag: string;
   value: string | null;
   states: string[];
-  /** Legacy convenience field; the canonical state is also present in states. */
   disabled: boolean;
   bounds: BrowserBounds | null;
   frame: { id: string; url: string } | null;
 }
 
-/**
- * Where a keystroke sent without a target arrives. An application that draws its own surface keeps
- * the focus itself, so this is the only way a caller can tell whether typing will reach the cell it
- * means to fill or the box it last used.
- */
 export interface BrowserFocus {
   tag: string;
   role: string | null;
   name: string;
-  /** True when the node takes text directly: an input, a textarea, or a contenteditable. */
   editable: boolean;
-  /** True when the focused node is inside a frame rather than the main document. */
   inFrame: boolean;
 }
 
@@ -72,17 +81,25 @@ export interface BrowserDiagnosticEntry {
   kind: "console" | "network" | "load";
   level: "debug" | "info" | "warning" | "error";
   message: string;
-  url?: string;
-  method?: string;
-  status?: number;
+  url?: string | undefined;
+  method?: string | undefined;
+  status?: number | undefined;
 }
 
 export interface BrowserActionHistoryEntry {
   timestamp: string;
   action: string;
-  target?: string;
+  target?: string | undefined;
   outcome: "success" | "error";
-  detail?: string;
+  detail?: string | undefined;
+}
+
+export interface BrowserChallenge {
+  vendor: string;
+  status: "cleared" | "checking" | "click-once" | "needs-user" | "blocked";
+  waitedMs: number;
+  target?: { kind: "point"; x: number; y: number } | undefined;
+  next: string;
 }
 
 export interface BrowserSnapshot {
@@ -94,12 +111,19 @@ export interface BrowserSnapshot {
   viewport: BrowserViewport;
   text: string;
   elements: BrowserElement[];
-  /** Page text or elements were left out to keep the snapshot within its size limit. */
   truncated: boolean;
   focus: BrowserFocus | null;
   diagnostics: BrowserDiagnosticEntry[];
   actions: BrowserActionHistoryEntry[];
   image?: { included: boolean; reason: string; width: number; height: number };
+  challenge?: BrowserChallenge;
+  siteMemories?: BrowserSiteMemory[];
+}
+
+export interface BrowserSiteMemory {
+  id: string;
+  site: string;
+  text: string;
 }
 
 export interface BrowserRecordingArtifact {
@@ -110,10 +134,6 @@ export interface BrowserRecordingArtifact {
   stoppedReason: "requested" | "duration-limit" | "size-limit" | "tab-closed" | "error";
 }
 
-/**
- * A JSON value produced by a browser evaluation. The engine round-trips every result through
- * `JSON.stringify` before returning it, so this is the widest shape a caller can observe.
- */
 export type BrowserJsonValue = string | number | boolean | null | BrowserJsonValue[] | BrowserJsonObject;
 
 export interface BrowserJsonObject {
@@ -128,34 +148,40 @@ export interface BrowserPreview {
 
 export type BrowserControlPhase = "acting" | "waiting";
 
-export type BrowserControlAction =
-  | "open"
-  | "list-tabs"
-  | "snapshot"
-  | "click"
-  | "type"
-  | "key"
-  | "scroll"
-  | "back"
-  | "forward"
-  | "reload"
-  | "screenshot"
-  | "close-tab";
+export const BROWSER_CONTROL_ACTIONS = [
+  "open",
+  "list-tabs",
+  "snapshot",
+  "click",
+  "type",
+  "key",
+  "scroll",
+  "back",
+  "forward",
+  "reload",
+  "screenshot",
+  "close-tab",
+] as const;
 
-export type BrowserControlDetailAction =
-  | "status"
-  | "navigate"
-  | "press"
-  | "hover"
-  | "select-option"
-  | "set-checked"
-  | "drag"
-  | "upload-files"
-  | "wait-for"
-  | "evaluate"
-  | "set-environment"
-  | "recording-start"
-  | "recording-stop";
+export type BrowserControlAction = (typeof BROWSER_CONTROL_ACTIONS)[number];
+
+export const BROWSER_CONTROL_DETAIL_ACTIONS = [
+  "status",
+  "navigate",
+  "press",
+  "hover",
+  "select-option",
+  "set-checked",
+  "drag",
+  "upload-files",
+  "wait-for",
+  "evaluate",
+  "set-environment",
+  "recording-start",
+  "recording-stop",
+] as const;
+
+export type BrowserControlDetailAction = (typeof BROWSER_CONTROL_DETAIL_ACTIONS)[number];
 
 export interface BrowserControlSession {
   id: string;
@@ -164,7 +190,6 @@ export interface BrowserControlSession {
   callId: string;
   tabId: string | null;
   action: BrowserControlAction;
-  /** Local V2 UI detail. Team API v1 projection intentionally strips this optional field. */
   detailAction?: BrowserControlDetailAction;
   phase: BrowserControlPhase;
   startedAt: string;
@@ -193,11 +218,85 @@ export type BrowserPictureInPictureEvent =
   | { type: "dock" }
   | { type: "hide" };
 
+export interface BrowserTabAgent {
+  id: string;
+  name: string;
+  avatarSeed: string;
+  avatarHue: AvatarHue | null;
+  avatarColor?: AvatarColor | null;
+  avatarUrl: string | null;
+}
+
+export type BrowserTabLabel = BrowserTabProfile & { proxy?: string | undefined };
+
+export interface BrowserWindowTabDetails {
+  tabId: string;
+  control?: BrowserControlSession | undefined;
+  controller?: BrowserTabAgent | undefined;
+  owner?: BrowserTabAgent | undefined;
+  profile?: BrowserTabLabel | undefined;
+}
+
+export interface BrowserWindowHistoryEntry {
+  url: string;
+  title: string;
+  visits: number;
+}
+
+export interface BrowserWindowModel {
+  tabs: BrowserTab[];
+  activeTabId: string | null;
+  details: BrowserWindowTabDetails[];
+  history: BrowserWindowHistoryEntry[];
+  canReopen: boolean;
+  canCloseTabs: boolean;
+  liveViewTabId: string | null;
+  liveViewClipboard: boolean;
+  shortcuts: "mac" | "pc" | null;
+}
+
+export type BrowserWindowAction =
+  | { type: "activate"; tabId: string }
+  | { type: "close"; tabIds: string[] }
+  | { type: "new-tab"; afterId?: string | undefined }
+  | { type: "duplicate"; tabId: string }
+  | { type: "move"; tabId: string; index: number }
+  | { type: "reopen" }
+  | { type: "reload"; tabId: string }
+  | { type: "stop"; tabId: string }
+  | { type: "navigate"; tabId: string; direction: BrowserNavigationDirection }
+  | { type: "open-address"; url: string; tabId?: string | undefined };
+
+export type BrowserWindowEvent =
+  | { type: "bounds-changed"; bounds: BrowserBounds }
+  | { type: "dock" }
+  | { type: "hide" }
+  | { type: "action"; action: BrowserWindowAction };
+
 export interface BrowserOpenInput {
   url: string;
   ownerThreadId?: string | null;
   ownerAgentId?: string | null;
   focus?: boolean;
+}
+
+export interface BrowserLocalSignInInput {
+  tabId: string;
+  url: string;
+}
+
+export interface BrowserLocalSignInEnd {
+  signedIn: boolean;
+}
+
+export interface BrowserLocalSignInFinish {
+  send: boolean;
+  check?: boolean | undefined;
+}
+
+export interface BrowserLocalSignInResult {
+  cookies: number;
+  signedIn: boolean;
 }
 
 export type BrowserNavigationDirection = "back" | "forward";
@@ -208,27 +307,16 @@ export type BrowserNavigateInput =
 
 export interface BrowserVisibilityInput {
   visible: boolean;
-  bounds?: BrowserBounds;
+  bounds?: BrowserBounds | undefined;
   target?: BrowserViewTarget;
 }
 
-/**
- * A pointer or key event the user made over a live view of a remote tab, or the frame the view
- * has drawn. The acknowledgement is how a view that nobody clicks still tells the host which
- * frames it has left behind.
- *
- * Coordinates are a fraction of the frame the user was looking at, not pixels. The renderer draws a
- * frame at whatever size its panel is and the host's viewport is a third size again, so pixels would
- * mean one side has to know the other's scale. This mirrors the Team protocol's own input shape
- * rather than importing it: the wire may version, and the renderer's API must not move when it does.
- */
 export type BrowserLiveViewInput =
   | {
       type: "pointer";
       action: "move" | "down" | "up" | "wheel";
       x: number;
       y: number;
-      /** The frame the fraction belongs to, so the host expands it against that frame and no other. */
       sequence?: number;
       button: "left" | "middle" | "right";
       clickCount?: number;
@@ -237,9 +325,15 @@ export type BrowserLiveViewInput =
       modifiers?: number;
     }
   | { type: "key"; action: "down" | "up" | "char"; key: string; code: string; text?: string; modifiers?: number }
-  | { type: "ack"; sequence: number };
+  | { type: "ack"; sequence: number }
+  | { type: "paste"; text: string }
+  | { type: "copy" }
+  | { type: "cut"; text: string };
 
-/** What a live view sends the renderer. The image is the host's own JPEG, not a data URL. */
+export const BROWSER_LIVE_VIEW_MAX_PASTE_TEXT = 100_000;
+
 export type BrowserLiveViewEvent =
   | { type: "frame"; tabId: string; sequence: number; width: number; height: number; image: Uint8Array }
-  | { type: "stopped"; tabId: string; reason: string };
+  | { type: "stopped"; tabId: string; reason: string }
+  | { type: "copied"; tabId: string; text: string }
+  | { type: "copyTooLarge"; tabId: string };

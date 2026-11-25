@@ -44,7 +44,7 @@
   min-width: 0;
   min-height: 0;
   flex: 1;
-  grid-template-rows: minmax(430px, 1fr) auto;
+  grid-template-rows: minmax(min-content, 1fr) auto;
   overflow-y: auto;
 }
 
@@ -72,6 +72,10 @@
   height: 72px;
 }
 
+.first-agent-live-avatar .agent-avatar > svg {
+  pointer-events: none;
+}
+
 .first-agent-avatar-fieldset {
   min-width: 0;
   margin: 0;
@@ -79,15 +83,17 @@
   padding: 0;
 }
 
-.first-agent-color-options,
-.first-agent-face-options {
-  display: flex;
-  align-items: center;
+.first-agent-color-options {
+  display: grid;
+  grid-template-columns: repeat(9, 28px);
   justify-content: center;
   gap: var(--openbot-space-1);
 }
 
 .first-agent-face-options {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   gap: var(--openbot-space-0-5);
 }
 
@@ -121,7 +127,6 @@
   background: var(--openbot-hover);
 }
 
-.first-agent-color-choice[aria-pressed="true"],
 .first-agent-face-choice[aria-pressed="true"] {
   border-color: var(--openbot-accent-text);
   box-shadow: 0 0 0 2px var(--openbot-accent-soft);
@@ -133,6 +138,11 @@
   height: 18px;
   border: 1px solid var(--openbot-border-strong);
   border-radius: var(--openbot-radius-pill);
+}
+
+.first-agent-color-choice[aria-pressed="true"] .first-agent-color-swatch {
+  outline: 1px solid var(--openbot-accent-text);
+  outline-offset: 4px;
 }
 
 .first-agent-face-choice .agent-avatar {
@@ -159,10 +169,6 @@
   min-width: 132px;
 }
 
-/*
- * The model picker in this form reads as a form control, like the inputs above it: the same
- * border, radius and background, and no press-down scale, so opening it never moves it.
- */
 .first-agent-fields .provider-model-trigger-field {
   border: 1px solid var(--openbot-border-strong);
   border-radius: var(--openbot-radius-md);
@@ -183,7 +189,6 @@
 .first-agent-fields .provider-model-trigger-field:focus-visible {
   border-color: var(--openbot-border-focus);
   outline: none;
-  box-shadow: var(--openbot-focus-ring);
 }
 
 .first-agent-submit-actions {
@@ -281,7 +286,7 @@
   background: transparent;
   padding: var(--openbot-space-4);
   cursor: grab;
-  text-align: left;
+  text-align: start;
   white-space: normal;
   transition:
     border-color var(--openbot-duration-hover) var(--openbot-ease-out),
@@ -336,10 +341,6 @@
 }
 
 @media (max-width: 800px) {
-  .first-agent-setup-content {
-    grid-template-rows: minmax(410px, 1fr) auto;
-  }
-
   .first-agent-editor {
     width: min(400px, calc(100% - 32px));
     padding-block: var(--openbot-space-4);

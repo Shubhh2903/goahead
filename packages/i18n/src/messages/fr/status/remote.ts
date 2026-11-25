@@ -2,7 +2,6 @@ import type { PartialTranslation } from "../../../message";
 import type { messages as source } from "../../en/status/remote";
 
 export const messages = {
-  // Status lines of remote desktop setup and remote connection recovery.
   "status.remote.setupMacOnly": "La configuration des autorisations est disponible sous macOS.",
   "status.remote.setupInstallHost": "Installez le composant d’hôte du bureau à distance, puis vérifiez à nouveau.",
   "status.remote.setupUpdateRuntime":
@@ -20,7 +19,6 @@ export const messages = {
   "status.remote.stageCompatibility": "Vérification de la compatibilité de l’ordinateur : {reason}",
   "status.remote.stageAgents": "Chargement des agents : {reason}",
   "status.remote.stageReads": "Chargement de l’état de lecture : {reason}",
-  "status.remote.stageConversations": "Chargement des conversations : {reason}",
   "status.remote.suspendedDetail": "Mettez à jour GoAhead Mobile ou l’app de bureau avant de vous connecter.\n{detail}",
   "status.remote.cooldownDetail":
     "La connexion a échoué après {limit} tentatives. Nouvelle tentative dans {minutes}:{seconds}.\n{detail}",
@@ -47,4 +45,6 @@ export const messages = {
     other: "Reconnexion {attempt}/{count}\n{detail}",
   },
   "status.remote.reconnecting": { one: "Reconnexion {attempt}/{count}", other: "Reconnexion {attempt}/{count}" },
+  "status.remote.messageCut":
+    "[{size} Mo de ce message ne sont pas affichés sur cet appareil. Ouvrez-le sur l’ordinateur qui exécute le serveur pour le lire en entier.]",
 } as const satisfies PartialTranslation<typeof source>;

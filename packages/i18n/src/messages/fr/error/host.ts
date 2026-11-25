@@ -2,8 +2,10 @@ import type { PartialTranslation } from "../../../message";
 import type { messages as source } from "../../en/error/host";
 
 export const messages = {
-  // Errors from host setup, publishing, and host maintenance.
   "error.host.iceServersMissing": "Remote Signal n’a pas fourni de serveurs ICE.",
+  "error.host.keyRotationUnavailable": "Ce serveur ne peut pas changer sa clé sans le service de comptes.",
+  "error.host.keyRotationRefused":
+    "Le service de comptes n’a pas accepté la nouvelle clé du serveur. La clé actuelle reste utilisée.",
   "error.host.webRtcNotConfigured": "Le service d’hôte WebRTC n’est pas configuré.",
   "error.host.setupUnavailable": "La configuration des autorisations n’est pas disponible.",
   "error.host.accountChangedDuringUpdate": "Le compte connecté a changé pendant la mise à jour de ce serveur.",
@@ -16,9 +18,13 @@ export const messages = {
   "error.host.publishFailed": "Impossible de publier ce GoAhead.",
   "error.host.mobileConnectPublishFailed": "Impossible de publier ce GoAhead pour Mobile Connect.",
   "error.host.mobileConnectHostChanged": "L’hôte Mobile Connect a changé. Réessayez.",
+  "error.host.mobileConnectHostMismatch": "Votre compte a une autre clé pour ce serveur. Réessayez.",
   "error.host.noServer": "Cet ordinateur n’a aucun serveur à modifier.",
   "error.host.identityLocalOnly":
     "Le nom et le logo du serveur ne peuvent être modifiés que sur l’ordinateur qui l’exécute.",
+  "error.host.timezoneInvalid": "Ce fuseau horaire est inconnu.",
+  "error.host.signalHomeUnknown": "Ce serveur Signal n'est pas disponible.",
+  "error.host.turnLimitInvalid": "Cette limite de fils n’est pas valide.",
   "error.host.maintenanceInterrupted":
     "La maintenance de l’hôte a été interrompue. Vérifiez l’application et réinitialisez l’état de l’hôte avant de réessayer.",
   "error.host.updateFailed":
@@ -27,5 +33,6 @@ export const messages = {
   "error.host.tenantShutdownTimeout":
     "L’arrêt des locataires a expiré. Aucun remplacement de l’application n’a démarré.",
   "error.host.tenantHealthMissing":
-    "Les rapports d’état des locataires sont absents ou mauvais après le redémarrage. Examinez les sessions des locataires avant une autre mise à jour.",
+    "Les rapports d’état des locataires sont absents ou signalent un problème après le redémarrage. Examinez les sessions des locataires avant une autre mise à jour.",
+  "error.host.personalityInvalid": "Ce style de réponse est inconnu.",
 } as const satisfies PartialTranslation<typeof source>;

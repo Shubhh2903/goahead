@@ -1,12 +1,8 @@
-.composer-wrap:has(.composer-attachment) .agent-queue-panel {
-  margin-bottom: 0;
-}
-
 .agent-queue-panel-list {
-  /* Seven rows, then the list scrolls. */
   max-height: calc(7 * var(--queue-row-height) + 2 * var(--queue-row-gutter));
   overflow-y: auto;
-  padding: var(--queue-row-gutter) var(--queue-row-inset-end) var(--queue-row-gutter) var(--queue-row-inset-start);
+  padding-block: var(--queue-row-gutter);
+  padding-inline: var(--queue-row-inset-start) var(--queue-row-inset-end);
   overscroll-behavior: contain;
 }
 
@@ -52,12 +48,12 @@
   will-change: transform;
 }
 
-/* The fill reaches past the row to the gutter, which the two insets above leave unequal. */
 .agent-queue-item::before {
   position: absolute;
   z-index: 0;
-  inset: 0 calc(var(--queue-row-gutter) - var(--queue-row-inset-end)) 0
-    calc(var(--queue-row-gutter) - var(--queue-row-inset-start));
+  inset-block: 0;
+  inset-inline: calc(var(--queue-row-gutter) - var(--queue-row-inset-start))
+    calc(var(--queue-row-gutter) - var(--queue-row-inset-end));
   border-radius: var(--openbot-radius-md);
   background: transparent;
   content: "";
@@ -190,11 +186,6 @@
   stroke-width: var(--openbot-icon-stroke);
 }
 
-.agent-queue-icon-button .conversation-more-icon {
-  fill: currentColor;
-  stroke: none;
-}
-
 .agent-queue-message {
   min-width: 0;
   overflow: hidden;
@@ -259,11 +250,6 @@
 }
 
 @media (max-width: 620px) {
-  .agent-queue-panel {
-    margin-right: 2px;
-    margin-left: 2px;
-  }
-
   .agent-queue-steer {
     width: 26px;
     padding: 0;

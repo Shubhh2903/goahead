@@ -1,7 +1,17 @@
 import { defineMessages } from "../../../message";
 
 export const messages = defineMessages("error.backend", {
-  // Errors that the backend services send: channels, messages, routines, memories, MCP, browser and remote desktop.
+  "error.backend.eventsUnavailable": "Events are not available on this host.",
+  "error.backend.databaseIntegrity": "GoAhead database failed its integrity check.",
+  "error.backend.webhookRouteLimit": "A host can have at most {limit} webhook routines.",
+  "error.backend.webhookSettingsInvalid": "Check the webhook settings and try again.",
+  "error.backend.webhookSenderSecretInvalid":
+    "Paste the complete signing secret from the sender. It has 16 to 1024 characters and no spaces.",
+  "error.backend.webhookRouteUnavailable":
+    "The public webhook route is not ready. Check the host connection and try again.",
+  "error.backend.webhookTestUnavailable":
+    "The host cannot take the test event now. Make sure it is signed in, then try again.",
+  "error.backend.webhookTestFailed": "The test event did not reach the routine. Try again.",
   "error.backend.browserViewRemoteOnly": "A live browser view is only for a remote host.",
   "error.backend.browserViewUnsupported": "This remote host does not support a live browser view.",
   "error.backend.browserViewLimit": "Too many browser views are open on this host.",
@@ -12,6 +22,7 @@ export const messages = defineMessages("error.backend", {
   "error.backend.sunshineApiHttp": "Sunshine API failed with HTTP {status}.",
   "error.backend.sunshinePortsUnavailable": "Could not reserve a free Sunshine port family for Remote Desktop.",
   "error.backend.moonlightPortsUnavailable": "Could not reserve a free Moonlight WebRTC port range for Remote Desktop.",
+  "error.backend.iceServerNoPort": "The Remote Desktop ICE server did not get a port.",
   "error.backend.remoteDesktopStoppedWhileStarting": "The remote desktop runtime was stopped while it started.",
   "error.backend.sunshineNotStarted": "Sunshine did not start on a reserved port family.",
   "error.backend.moonlightNoHost": "Moonlight has no paired local host.",
@@ -34,30 +45,74 @@ export const messages = defineMessages("error.backend", {
   "error.backend.channelDeleteUnsupported": "Channel deletion is not supported by this server.",
   "error.backend.browserNavigateUnsupported":
     "This remote host does not support address-bar navigation in an existing tab.",
+  "error.backend.browserUserControlBusy": "This browser tab waits for a secret. Answer the secret request first.",
+  "error.backend.browserTeachBusy": "Another person controls this browser tab. Try again when they finish.",
+  "error.backend.browserTeachUnavailable": "This browser tab has no agent that can learn a task.",
+  "error.backend.browserTeachUnsupported": "This remote host does not support the recording of a task.",
+  "error.backend.browserUserControlUnsupported": "This remote host does not support taking control of a browser tab.",
+  "error.backend.browserSignInUnsupported": "This remote host cannot take a sign-in from this computer.",
+  "error.backend.browserSignInOpenFailed": "GoAhead could not open the sign-in window.",
+  "error.backend.browserSignInLoadFailed":
+    "GoAhead could not load the page in the sign-in window. Check the internet connection, then open the sign-in window again.",
+  "error.backend.browserSignInReadFailed": "GoAhead could not read the sign-in from the window.",
+  "error.backend.browserStopUnsupported": "This remote host cannot stop a page load.",
   "error.backend.sharedDataLocalOnly": "Shared data is managed on the computer that runs these agents.",
   "error.backend.browserUrlProtocol": "Only HTTP(S) browser URLs are allowed.",
   "error.backend.sunshineNotReady": "Sunshine did not become ready.",
   "error.backend.sunshineNotReadyReason": "Sunshine did not become ready. {reason}",
   "error.backend.channelLeadModelUnavailable": "The channel lead model is unavailable.",
+  "error.backend.contextCompactionIneffective":
+    "Compaction does not make this chat smaller: after two compactions it still uses {percent}% of the model's context window, so GoAhead stops compacting it. Tools and instructions use most of the window. Turn off the MCP servers or computer use that this agent does not need, or select a model with a larger window. Then start a new chat.",
+  "error.backend.contextCompactionStopped":
+    "Two compactions of this chat failed in a row, so GoAhead stops compacting it automatically. Each try sends the whole chat to the model and uses your plan limit. Select Compact now to try again, or start a new chat.",
+  "error.backend.providerModelAtCapacity":
+    "The model is at capacity. The provider tries again in a few minutes. To continue now, stop the turn and choose a different model.",
+  "error.backend.providerRetrying":
+    "The provider failed this request {attempts} times and tries again. If the agent does not continue, stop the turn.",
+  "error.backend.providerRetryingLargeContext":
+    "The provider failed this request {attempts} times and tries again. This chat uses {percent}% of the model's context window. If the agent does not continue, stop the turn: GoAhead then compacts the chat before the next message.",
   "error.backend.sharedDataUnavailable": "Shared data is unavailable.",
   "error.backend.shuttingDown": "GoAhead is shutting down.",
   "error.backend.channelUnconfirmedStart":
     "The channel has an unconfirmed assignment start. Check its outcome before deleting it.",
   "error.backend.channelNotFound": "Channel not found.",
   "error.backend.channelMemberUnavailable": "A channel member is unavailable.",
+  "error.backend.channelInstructionsTooLong":
+    "Shorten the instructions to 2,000 characters. Longer instructions are not saved.",
+  "error.backend.channelWaitBeforeNewConversation":
+    "Wait until the work in this channel stops, then start a new conversation.",
+  "error.backend.channelWaitBeforeCompact": "Wait until the work in this channel stops, then compact it.",
+  "error.backend.channelWaitBeforeDeleteHistory": "Wait until the work in this channel stops, then delete its history.",
+  "error.backend.channelCompactUnavailable":
+    "No member of this channel can compact its context now. A member must answer in the channel first, and its provider must support compaction.",
+  "error.backend.channelCompactNoSession":
+    "The members of this channel have no conversation to compact yet. Compact it after a member answers in the channel.",
+  "error.backend.channelCompactNotSupported":
+    "No member of this channel can compact on request. Members that support it compact their context automatically when it is almost full.",
+  "error.backend.channelCompactProviderUnavailable":
+    "The provider of the channel members does not work now. Refresh the providers, then compact the channel again.",
   "error.backend.channelArchived": "Restore this channel before sending messages or changing tasks.",
+  "error.backend.channelArchiveRunning": "Stop the running work in this channel, then delete it.",
   "error.backend.channelReferenceUnavailable": "The referenced channel message is unavailable.",
   "error.backend.channelTaskNotFound": "Channel task not found.",
   "error.backend.channelTaskComplete": "This task is already complete.",
+  "error.backend.channelTaskNotStopped": "Only a stopped or failed task can be cancelled.",
   "error.backend.channelSelectAgent": "Select an agent.",
   "error.backend.channelLeadRequired": "Choose an available channel lead or assign this task to a member.",
   "error.backend.channelRoutingTooLong":
     "This request exceeds the routing context limit. Select a member or send a shorter request.",
   "error.backend.channelTaskMemberRequired": "Choose a member for this task.",
+  "error.backend.channelTaskStopped": "Stopped. Continue or reassign this task.",
+  "error.backend.channelRoutingUnreadable": "The lead could not route this message. Reassign it to a member.",
+  "error.backend.channelRoutingFailed": "Routing failed. Choose a member or try again.",
+  "error.backend.channelLeadTimedOut": "The channel lead did not answer in time. Choose a member or try again.",
+  "error.backend.channelLeadFailed": "The channel lead could not route this message. Choose a member or try again.",
   "error.backend.channelRequestMemberRequired": "Choose a member for this request.",
   "error.backend.channelDeliveryNotCreated": "Channel delivery was not created.",
   "error.backend.channelAssignmentStopped": "This channel assignment has been stopped or replaced.",
   "error.backend.channelAssigneeUnavailable": "The assigned agent is unavailable.",
+  "error.backend.channelAssigneeRemoved": "The assigned member was removed.",
+  "error.backend.channelAssigneeReassign": "The assigned member is unavailable. Reassign this task.",
   "error.backend.channelAssignmentChanged": "This channel assignment has changed.",
   "error.backend.channelMemberRequired": "Select an available member of this channel.",
   "error.backend.memoryEssentialBudget":
@@ -70,6 +125,15 @@ export const messages = defineMessages("error.backend", {
   "error.backend.routineGone": "This routine no longer exists.",
   "error.backend.routineRunConditionUnchanged": "Skipped: the run condition printed the same output as last time.",
   "error.backend.routineRunConditionNotMet": "Skipped: the run condition command did not succeed.",
+  "error.backend.routineRunGone": "This routine run no longer exists.",
+  "error.backend.routineRunFailedNoReason":
+    "The run stopped with an error, but no reason came with it. Open the run to see what the agent did.",
+  "error.backend.turnNotStarted": "The provider did not start this turn.",
+  "error.backend.turnStartUnconfirmed":
+    "{provider} did not confirm in time that it started this message. GoAhead does not send it again, so the work does not run twice. GoAhead waits up to 5 minutes for the agent to start.",
+  "error.backend.turnStartAbandoned": "The agent did not start this message in 5 minutes. Send the message again.",
+  "error.backend.routineResultConnectionOff": "This messaging connection is off or removed. Choose another place.",
+  "error.backend.routineResultNoDelivery": "This run has no answer to send again.",
   "error.backend.channelMemoryLimit": "A channel can have up to {limit} memories.",
   "error.backend.channelRoutineLimit": "A channel can have at most {limit} routines.",
   "error.backend.agentRoutineLimit": "An agent can have at most {limit} routines.",
@@ -106,9 +170,20 @@ export const messages = defineMessages("error.backend", {
   "error.backend.mailboxStateCorrupt":
     "Mailbox state is corrupt or from a newer GoAhead version; refusing to overwrite it.",
   "error.backend.recipientDeleting": "The recipient is being deleted. Retry after deletion finishes.",
+  "error.backend.recipientHidden": "This agent is hidden. Restore it to send messages.",
+  "error.backend.agentIdUnknown": "No agent has the id {id}. Get the ids from openbot.list_agents, then try again.",
+  "error.backend.agentIdNear":
+    "No agent has the id {id}. Agent {name} has the id {nearId}, which is almost the same. If you mean that agent, try again with its id.",
+  "error.backend.replyReferenceUnknown":
+    "replyToMessageId {id} names no message. Use the Message ID of the message that you answer, or leave replyToMessageId out.",
+  "error.backend.replyReferenceRequests": "Messages from these recipients in this turn: {ids}.",
   "error.backend.attachBetween": "Attach between 1 and {limit} files.",
   "error.backend.attachmentNotFile": "Attachment is not a file: {path}",
   "error.backend.generatedImageTooLarge": "Generated image exceeds the 100 MB limit.",
+  "error.backend.generatedVideoTooLarge": "Generated video exceeds the 100 MB limit.",
+  "error.backend.videoGenerationFailed": "Video generation failed.",
+  "error.backend.videoGenerationNoVideo": "Video generation did not return a video.",
+  "error.backend.videoGenerationInterrupted": "Video generation was interrupted.",
   "error.backend.attachmentNotRegularFile": "Only regular files can be attached: {name}",
   "error.backend.attachmentCopyFailed": "GoAhead could not copy {name}.",
   "error.backend.routineNameRequired": "A routine name is required.",
@@ -123,6 +198,7 @@ export const messages = defineMessages("error.backend", {
   "error.backend.routineCronTooOften": "Custom schedules must run no more often than every {minutes} minutes.",
   "error.backend.routineAnchorInvalid": "The routine interval anchor is invalid.",
   "error.backend.routineNoOccurrence": "The schedule has no occurrence within the next five years.",
+  "error.backend.routineOncePassed": "The time of this one-time routine is in the past. Choose a later date or time.",
   "error.backend.routineTimezoneInvalid": "The routine timezone is invalid.",
   "error.backend.routineCronFields": "Custom schedules must use five cron fields.",
   "error.backend.routineCronValueInvalid": "The cron {field} value is invalid.",
@@ -135,6 +211,8 @@ export const messages = defineMessages("error.backend", {
   "error.backend.interruptSelf": "An agent cannot interrupt itself.",
   "error.backend.interruptOtherWork":
     "This agent works on a task that your message did not start. Only the user or the sender of that task can stop it.",
+  "error.backend.interruptSharedWork":
+    "This agent's turn works on your message and also on a message from the user or another agent. Only the user can stop it, with Stop agent in that agent's chat.",
   "error.backend.interruptStarting": "This agent is still starting a turn. Try again after the turn starts.",
   "error.backend.interruptNoSession":
     "GoAhead cannot interrupt this agent because its provider session is unavailable.",
@@ -149,37 +227,153 @@ export const messages = defineMessages("error.backend", {
   "error.backend.routineFlowDuplicate": "These agents are already connected in this routine.",
   "error.backend.routineFlowCycle": "This connection would make a loop.",
   "error.backend.routineFlowLinkLimit": "A routine can have at most {limit} connections.",
+  "error.backend.agentWaitLimit":
+    "This agent already has {count} open waits. Close a wait with openbot.close_wait before you open another one.",
+  "error.backend.agentWaitGone": "This wait is not open. The agent closed it, or someone cancelled it.",
+  "error.backend.agentWaitNoRequest": "A wait needs a message to continue. This turn has no message.",
+  "error.backend.agentWaitOwnChatOnly":
+    "Open a wait in your own chat or in a side thread. A channel or messaging conversation cannot wait.",
+  "error.backend.agentWaitNoteRequired": "Give a short note that says what the wait is for.",
+  "error.backend.agentWaitRoutineGone": "This agent has no routine with this id.",
+  "error.backend.agentWaitNoRoutine":
+    "Only a run of one of your routines wakes a wait, and you have no routine. Create one with openbot.create_routine, then open the wait.",
+  "error.backend.markUnreadRemoteUnsupported":
+    "Marking a message unread is only available for agents on this computer.",
+  "error.backend.messageDeleteUnsupported": "Deleting messages is not supported by this server.",
+  "error.backend.messageDeleteNotFound": "This message is not in the chat.",
+  "error.backend.messageDeleteBusy": "This message is part of a running turn. Delete it when the turn ends.",
+  "error.backend.messageDeleteForbidden": "You can delete only the messages that you sent.",
+  "error.backend.messagePinNotFound": "The message to pin is not in this chat.",
+  "error.backend.messagePinLimit": "This chat has 50 pinned messages. Unpin one before you pin another.",
   "error.backend.routineFlowHandoffFailed": "The routine could not pass the work on to this agent.",
   "error.backend.routineFlowRemoteUnsupported": "Routine flows are only available for agents on this computer.",
   "error.backend.mcpServerLimit": "GoAhead keeps up to {limit} MCP servers.",
   "error.backend.mcpServerNameTaken": "An MCP server named {name} already exists.",
-  "error.backend.mcpConnectionCancelled": "The connection was cancelled.",
+  "error.backend.mcpServerInvalid": "GoAhead cannot save this MCP server configuration.",
+  "error.backend.mcpHeaderNameInvalid":
+    "Header names cannot contain spaces or symbols such as : ( ) /. Use a name such as Authorization, and put the key or token in Value.",
   "error.backend.mcpServerNoAnswer": "The server did not answer in {seconds} seconds.",
   "error.backend.mcpSignInNotAccepted": "The server did not accept that sign-in.",
+  "error.backend.mcpSignInGrantRefused":
+    "The server did not accept the sign-in. Sign in again. If the problem continues, make sure that your account is on the same site or region as this app.",
+  "error.backend.mcpSignInAccountRefused":
+    "The server refused the account that you signed in with. Check that this account can use the service. To use another account, sign out, then sign in again.",
+  "error.backend.mcpSignInClientRefused":
+    "The sign-in server did not accept GoAhead when it completed the sign-in. Sign in again: GoAhead registers with the server again.",
+  "error.backend.mcpSignInAppRefused":
+    "The sign-in server did not accept the sign-in app of this server. Check the client ID and the client secret of the sign-in app, then sign in again.",
   "error.backend.mcpCommandNotFound": "Command not found: {command}",
+  "error.backend.mcpProviderLimit":
+    "This agent can use only a limited number of MCP servers. To use this server, turn off an MCP server that the agent does not need.",
   "error.backend.mcpRegistrationRefused":
     "The sign-in server does not accept GoAhead as an app yet. Your account is not the cause. Use another way to connect, such as a local MCP server.",
+  "error.backend.mcpRegistrationUnavailable":
+    "The sign-in server cannot register GoAhead as an app. Your account is not the cause. To connect, save this server in Marketplace, Apps, then add a sign-in app to it.",
   "error.backend.mcpSignInAbandonedGeneric": "The sign-in was abandoned.",
   "error.backend.mcpSignInForgotten": "The MCP sign-in was forgotten while it was running.",
   "error.backend.mcpSignInAbandoned": "The MCP sign-in was abandoned.",
   "error.backend.mcpSignInNoBrowser": "This MCP sign-in cannot open a browser.",
   "error.backend.mcpSignInNotWebPage": "The sign-in address is not a web page.",
+  "error.backend.mcpSignInRequired": "This server asks you to sign in. Choose Sign in to continue in your browser.",
+  "error.backend.mcpSignInOnHost": "This server asks for a sign-in. Sign in to it in GoAhead on the host computer.",
+  "error.backend.mcpSignInNeedsHttps":
+    "This server asks for a sign-in, and GoAhead signs in only over https. Change the URL to {url}.",
+  "error.backend.mcpSignInOtherAddress":
+    "This server signs in only at {url}. Change the URL to this address, then sign in again.",
+  "error.backend.mcpSignInCancelled": "The sign-in was cancelled.",
+  "error.backend.mcpSignInTimedOut": "The sign-in was not finished in the browser.",
+  "error.backend.mcpSignInRefused": "The sign-in page refused access. Sign in again.",
+  "error.backend.mcpSignInResponseTimedOut": "The sign-in response did not arrive in time.",
+  "error.backend.mcpSignInMetadataUnreadable":
+    "GoAhead could not read the sign-in information of this server. Check the server address and try again.",
+  "error.backend.mcpSignInAnswerUnreadable":
+    "The sign-in server sent an answer that GoAhead cannot read. If the service gives you an API key or a token, add it to the settings of this server, then test the connection again.",
+  "error.backend.mcpServerExited":
+    "The server stopped before it answered. Run the command in a terminal to see its error.",
+  "error.backend.mcpServerExitedWithOutput": "The server stopped before it answered. It wrote: {detail}",
+  "error.backend.mcpServerFailedToStart": "The server did not start: {reason}",
+  "error.backend.mcpServerStartAbandoned":
+    "{provider} stopped waiting before the server started, so its agents do not get the tools of this server.",
+  "error.backend.mcpServerStoppedDuringCall": "The MCP server stopped before it answered this call.",
+  "error.backend.mcpToolSchemaRefused":
+    "Its tool {tool} has an input format that this provider cannot read. Agents on other providers still get the server.",
+  "error.backend.mcpServerSignInForProvider":
+    "{provider} could not use the MCP server {name}, because the server asks for a sign-in. Open {name} in Marketplace, Apps, and choose Sign in.",
+  "error.backend.mcpServerKeyForProvider":
+    "{provider} could not use the MCP server {name}, because the server asks for a key. Open {name} in Marketplace, Apps, choose Edit, and enter the correct key under Headers.",
+  "error.backend.mcpServerFailedForProvider":
+    "{provider} could not start the MCP server {name}. Open {name} in Marketplace, Apps, and choose Test connection to see the cause.",
+  "error.backend.mcpServerFailedInProvider":
+    "{provider} could not start the MCP server {name}. Its tools are not available to {provider}. {provider} starts the server itself, so the connection test in GoAhead can pass. Start a new chat to try again.",
+  "error.backend.mcpServerTimedOutInProvider":
+    "{provider} could not start the MCP server {name}, because the server did not answer in time. Start a new chat to try again.",
+  "error.backend.mcpServerUnavailableInProvider":
+    "{provider} could not start the MCP server {name}, because the server is not available now. Wait a few minutes, then start a new chat to try again.",
+  "error.backend.mcpServerUnreachableInProvider":
+    "{provider} could not reach the MCP server {name}. Open {name} in Marketplace, Apps, and make sure that its address is correct and that the server is running. Then start a new chat to try again.",
+  "error.backend.githubToolsNotStarted":
+    "{provider} could not get the GitHub tools, because GitHub did not answer. Open GitHub in Marketplace, Apps, and connect it again if it asks you to. Then start a new chat to try again.",
+  "error.backend.mcpAppReconnect":
+    "{name} on ChatGPT asks you to sign in again. Reconnect {name} on ChatGPT, then ask the agent again.",
+  "error.backend.mcpServerSignInPage":
+    "The MCP server {name} asked you to sign in on a web page. GoAhead does not open this page for a server, so it declined. Open {name} in Marketplace, Apps, and sign in, then ask the agent again.",
+  "error.backend.mcpServerRequestDeclined":
+    "The MCP server {name} asked for something that GoAhead cannot show, so GoAhead declined it.",
+  "error.backend.mcpRequestDeclined":
+    "An MCP server asked for something that GoAhead cannot show, so GoAhead declined it.",
+  "error.backend.mcpOAuthProxyUnavailable":
+    "GoAhead could not start its local sign-in connection for this server. Restart GoAhead, then try again.",
+  "error.backend.mcpOAuthSignInNeeded":
+    "The sign-in to this MCP server has ended. The user must sign in to it again in GoAhead.",
+  "error.backend.mcpOAuthRenewalFailed":
+    "GoAhead could not renew the sign-in to this MCP server now. The sign-in is kept, and the next request tries again. If this error continues, the user can sign out of the server in GoAhead and sign in again.",
+  "error.backend.mcpOAuthRequestRefused":
+    "The MCP server refused this request, but the sign-in to it is still active. Possibly the account cannot use this tool, or the sign-in did not give all the necessary access. The user can examine the plan and the access of the account at the service, or sign in to the server again in GoAhead and allow all the access that it asks for.",
+  "error.backend.mcpServerUnreachable": "GoAhead could not reach the server. Check the URL and your network.",
+  "error.backend.mcpLocalServerOff":
+    "No server answers at {address} on this computer. Start the server, or turn it on in the app that runs it, then try again.",
+  "error.backend.mcpServerBlocked":
+    "This computer blocked the connection to the server. Check your firewall or security software, then try again.",
+  "error.backend.mcpServerIncompatible":
+    "Something answered at this address, but not as an MCP server over Streamable HTTP. Check the URL, and update the app that runs the server.",
+  "error.backend.mcpRemoteBridge":
+    "{reason} This command runs the mcp-remote bridge. Choose Streamable HTTP with the URL {url} instead, and GoAhead signs you in.",
   "error.backend.oauthNotHttps": "The OAuth endpoint {origin} is not https, so the credentials were not sent.",
   "error.backend.oauthTooManyRedirects": "The OAuth endpoint redirected too many times.",
   "error.backend.oauthRedirectOrigin":
     "The OAuth endpoint redirected to {origin}, so the credentials were not forwarded.",
+  "error.backend.oauthTimedOut": "No answer came from the OAuth endpoint {origin} in time.",
+  "error.backend.oauthResponseTooLarge": "The OAuth endpoint {origin} sent a response that is too large.",
+  "error.backend.oauthResponseUnreadable": "The response of the OAuth endpoint {origin} could not be read.",
+  "error.backend.mcpOAuthPrivateEndpoint":
+    "The OAuth endpoint {origin} is on a private network, but the MCP server is public, so the credentials were not sent.",
   "error.backend.sidebarSectionLimit": "A server can have up to {limit} sidebar sections.",
   "error.backend.sectionNameRequired": "Section name is required.",
   "error.backend.sectionNameTooLong": "Section name is too long.",
+  "error.backend.sidebarFolderTooDeep": "Folders can go only three levels deep.",
+  "error.backend.sidebarFolderMoveInvalid": "This folder cannot move there.",
+  "error.backend.libraryFolderName": "A folder name must have 1 to {limit} characters.",
+  "error.backend.libraryFolderLimit": "A server can have up to {limit} Library folders.",
+  "error.backend.libraryFolderFileLimit": "Too many files are in Library folders.",
+  "error.backend.libraryFolderTooDeep": "Library folders can go only {limit} levels deep.",
+  "error.backend.libraryFolderGone": "The folder does not exist or is already deleted.",
+  "error.backend.libraryFolderOtherAgent": "A file can go only into a folder of its agent.",
+  "error.backend.libraryFolderMoveInvalid": "This folder cannot go there.",
+  "error.backend.workflowFolderLimit": "A server can have up to {limit} workflow folders.",
+  "error.backend.workflowFolderPlacementLimit": "Too many workflows are in folders.",
   "error.backend.sectionNameDuplicate": "Section names must be unique.",
   "error.backend.directMessageRequired": "Write a message first.",
   "error.backend.directMessageTooLong": "A direct message can have up to {limit} characters.",
   "error.backend.directMessageSelf": "You cannot send a direct message to yourself.",
   "error.backend.readBoundaryUnavailable": "The read boundary is no longer available.",
   "error.backend.sharedFileOutside": "Shared file must be inside the shared directory.",
+  "error.backend.sharedPathIsFolder": "Shared path is a folder, not a file.",
   "error.backend.sharedPathNotFile": "Shared path is not a file.",
   "error.backend.workspaceFileOutside": "Workspace file must be inside the agent workspace.",
   "error.backend.workspacePathNotFile": "Workspace path is not a file.",
+  "error.backend.workspacePathNotDirectory": "Workspace path is not a folder.",
+  "error.backend.workspacePathMissing": "Nothing exists at {path} in the agent workspace {root}.",
+  "error.backend.workspacePathMissingForMember": "Nothing exists at {path} in the agent workspace.",
   "error.backend.useChannelTaskControls": "Use the channel task controls for this assignment.",
   "error.backend.editFinished": "This edit has already finished.",
   "error.backend.editCancelled": "This edit was cancelled, so the message keeps its original text.",
@@ -189,17 +383,52 @@ export const messages = defineMessages("error.backend", {
   "error.backend.useChannelTaskControlsWork": "Use the channel task controls for channel work.",
   "error.backend.steerTurnChanged": "The active turn changed before this message could be steered.",
   "error.backend.steerUnsupported": "This provider cannot steer a running turn. Your message stays in the queue.",
+  "error.backend.steerRoutineRun":
+    "A routine is running now. Your message stays in the queue and starts after the routine.",
   "error.backend.steerQueuedOnly": "Only queued messages can be steered.",
   "error.backend.promptInactive": "This prompt is no longer active.",
   "error.backend.promptAnswerMismatch": "A prompt answer does not match an active question.",
+  "error.backend.uiBlockAnswerInvalid": "This answer does not fit the agent's block.",
+  "error.backend.uiBlockActionNotAllowed": "Only the server owner or an admin can choose this action.",
   "error.backend.approvalInactive": "This approval is no longer active.",
+  "error.backend.approvalOwnerOnly": "Only the server owner can approve this action.",
+  "error.backend.feedbackNeedsPhone":
+    "Only the GoAhead phone app can send this report, because it adds the phone's version and support log. Open this chat on the phone. If you see this message there, update the phone app.",
   "error.backend.takeoverInactive": "This browser takeover is no longer active.",
   "error.backend.authSubmitting": "Authentication submission is already in progress.",
+  "error.backend.apiKeyListFailed": "GoAhead could not read the saved API keys.",
+  "error.backend.apiKeySaveFailed": "GoAhead could not save the API key. Try again.",
+  "error.backend.apiKeySaving": "The API key is already being saved.",
+  "error.backend.apiKeyAnswerUnreadable":
+    "GoAhead could not read the API key. Enter a key of 8,000 characters or less, and select who can use it.",
+  "error.backend.vaultItemSaving": "The Vault item is already being saved.",
   "error.backend.authRequestInactive": "This secure authentication request is no longer active.",
   "error.backend.secureAuthUnavailable": "Secure authentication is unavailable.",
   "error.backend.browserUrlRequired": "A browser URL is required.",
   "error.backend.browserUrlTooLong": "The browser URL is too long.",
   "error.backend.browserTabLimit": "The browser can have up to {limit} open tabs.",
+  "error.backend.browserProfileMissing":
+    "The browser profile of this agent no longer exists. Choose another profile in the agent settings.",
+  "error.backend.browserProfileNotFound": "This browser profile no longer exists.",
+  "error.backend.browserProfileNameTaken": "A browser profile with this name already exists.",
+  "error.backend.browserSessionInUse": "A tab still uses this browser session. Try again.",
+  "error.backend.browserProfileLimit": "You can have up to {limit} browser profiles.",
+  "error.backend.browserProxyNotFound": "This proxy no longer exists.",
+  "error.backend.browserProxyAddressInvalid":
+    "Type a proxy address such as socks5://host:1080 or http://user:password@host:3128.",
+  "error.backend.browserProxyLimit": "You can have up to {limit} proxies.",
+  "error.backend.browserProxyTaken": "A proxy with this address already exists.",
+  "error.backend.browserProxyChanged": "This proxy changed after you opened it. Look at it again, then try again.",
+  "error.backend.browserProxyUnreachable": "The proxy {name} does not answer, so the page did not open.",
+  "error.backend.browserProxySignInRefused": "The proxy {name} refused the sign-in, so the page did not open.",
+  "error.backend.browserSystemProxyFailed":
+    "The proxy in the settings of the computer that runs GoAhead does not answer or refused the connection, so the page did not open. Check the proxy settings of that computer.",
+  "error.backend.browserProxyComputerUnreachable":
+    "The computer that this profile uses does not answer, so the page did not open.",
+  "error.backend.browserProxyComputerLocalAddress":
+    "The computer that this profile uses opens only public sites. It does not open addresses on a local network, so the page did not open.",
+  "error.backend.browserCertificateUntrusted":
+    "The security certificate of this site is not trusted, so the page did not open.",
   "error.backend.browserLowMemory":
     "This server is low on memory, so the browser cannot open another tab. Close a tab, or wait for other agents to finish.",
   "error.backend.browserOpenFailed": "Unable to open {url}: {reason}",
@@ -213,14 +442,58 @@ export const messages = defineMessages("error.backend", {
   "error.backend.popupLoadFailed": "The popup could not load. Retry sign-in from the original page.",
   "error.backend.browserTabNotFound": "Browser tab not found.",
   "error.backend.authActive": "Authentication is already active.",
-  "error.backend.authHttpsRequired": "Secure authentication requires HTTPS.",
+  "error.backend.authWebPageRequired": "Secure authentication requires HTTP or HTTPS.",
   "error.backend.authDigitsRange": "Authentication codes require 4–12 digits.",
   "error.backend.authExpired": "Authentication request expired.",
   "error.backend.authDigitsRequired": "Enter the requested number of digits.",
   "error.backend.browserViewProtected": "Browser view is protected during authentication.",
   "error.backend.browserPreviewPageChanged": "The browser page changed during the preview. Try again.",
   "error.backend.browserInputProtected": "Browser input is protected during authentication.",
+  "error.backend.browserClickMoved":
+    "Nothing was clicked. The page moved the target when the pointer came near, and the press went to {element}. Take a fresh snapshot.",
+  "error.backend.browserTypingFocusMoved":
+    "The page moved focus away from the target before typing. Nothing was typed. Take a fresh snapshot.",
+  "error.backend.browserTypingFocusMovedWhileTyping":
+    "The page moved focus away before all the text was typed. Only the first part of the text is in the field. Take a fresh snapshot and check the field before you type again.",
+  "error.backend.browserTypingSubmitSkipped":
+    "The text is in the field, but the page moved focus away, so Enter was not sent. Do not type the text again. Take a fresh snapshot.",
   "error.backend.mcpServerHttpCredentials": "The server answered {status}. Check the API key or other credentials.",
   "error.backend.mcpServerHttpUrl":
     "The server answered {status}. Check the URL. The link may be wrong, expired, or deleted.",
+  "error.backend.mcpServerBearerKey":
+    "This server takes an API key, not a sign-in. Under Headers, set the key to Authorization and the value to Bearer, a space, and your API key.",
+  "error.backend.mcpSignInAppUrl": "The sign-in app needs a valid server URL.",
+  "error.backend.mcpSignInAppClientId": "Enter the client ID of the sign-in app.",
+  "error.backend.mcpSignInAppIssuerChanged":
+    "The sign-in server of this MCP server changed, so GoAhead did not send it the sign-in app. If the change is correct, remove the sign-in app and add it again.",
+  "error.backend.mcpSignInAppNoServer": "Save this MCP server as a URL server before you add a sign-in app.",
+  "error.backend.mcpSignInAppUnavailable": "This computer cannot keep a sign-in app.",
+  "error.backend.taskMoveRefused": "Only a message that you sent to this agent alone can run as a task.",
+  "error.backend.taskNotFound": "This task is not available.",
+  "error.backend.taskClosed": "This task is closed. Open it again to send a message.",
+  "error.backend.taskStillRunning": "This task still runs. Wait until it stops, then close it.",
+  "error.backend.threadNotFound": "This thread is not available.",
+  "error.backend.threadStillRunning": "This thread still runs. Stop it, then try again.",
+  "error.backend.threadArchived": "This thread is archived. Restore it to send a message.",
+  "error.backend.threadTitleRequired": "Give the thread a short title.",
+  "error.backend.threadOpenLimitReached":
+    "This agent has {count} open threads. Archive a thread, then start or restore another one.",
+  "error.backend.threadRemoteUnsupported": "Threads are only available for agents on this computer.",
+  "error.backend.branchSourceBusy": "Stop the current turn before you branch this chat.",
+  "error.backend.branchMessageNotFound": "You can branch only from a finished answer of the agent.",
+  "error.backend.branchRemoteUnsupported": "Branches are only available for agents on this computer.",
+  "error.backend.feedbackWithdrawRemoteUnsupported": "To remove this report, ask the agent to remove it.",
+  "error.backend.threadMoveRefused": "Only a message that you sent to this agent alone can run in a new thread.",
+  "error.backend.taskTitleRequired": "Give the task a short title.",
+  "error.backend.taskToolInvalid": "Give the task a title of at most 120 characters and a brief that says what to do.",
+  "error.backend.taskControlInvalid": "Give the taskId of a task that you started. A message also needs text.",
+  "error.backend.taskOwnChatOnly":
+    "Start a task only from your own chat. A channel, a messaging conversation or another task cannot start one.",
+  "error.backend.taskUnfinishedLimit":
+    "This agent already has {count} unfinished tasks. Start another task when one of them ends.",
+  "error.backend.taskOpenLimitReached":
+    "This agent has {count} open tasks. Close a task, then start or open another one.",
+  "error.backend.taskRemoteUnsupported": "Tasks are only available for agents on this computer.",
+  "error.backend.taskMessageFailed": "GoAhead could not send the message to the task. Try again later.",
+  "error.backend.taskStartFailed": "GoAhead could not start the task. Do the work in this turn instead.",
 });

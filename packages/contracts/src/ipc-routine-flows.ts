@@ -1,21 +1,8 @@
 import { INPUT_LIMITS } from "./input-limits";
 import { isBoundedString, isFiniteNumber, isIdentifier } from "./ipc-bounded-values";
-import {
-  isRoutineRun,
-  isRoutineSchedule,
-  ROUTINE_LIMIT_POLICIES,
-  ROUTINE_MISSED_POLICIES,
-  type Routine,
-  type RoutineRun,
-  type RoutineSchedule,
-} from "./ipc-routines";
+import { type EventRoutine, isEventRoutineTrigger } from "./ipc-events";
+import { isRoutineRun, type RoutineRun } from "./ipc-routines";
 import { isBoolean, isDynamicRecord, isOneOf, isString } from "./runtime-values";
-
-/**
- * Routine flows: what happens after an agent routine's own agent answers. A link hands that answer
- * on to another agent, inside one routine; each agent's part of one run is a step. Only this
- * computer's host keeps flows, so these types never cross the Team API.
- */
 
 export const ROUTINE_FLOW_STEP_STATUSES = ["running", "succeeded", "failed", "skipped", "cancelled"] as const;
 export type RoutineFlowStepStatus = (typeof ROUTINE_FLOW_STEP_STATUSES)[number];
@@ -25,7 +12,6 @@ export interface RoutineFlowLink {
   routineId: string;
   fromAgentId: string;
   toAgentId: string;
-  /** What the receiving agent is asked to do with the answer. May be empty. */
   instruction: string;
   createdAt: string;
 }
@@ -34,7 +20,6 @@ export interface RoutineFlowStep {
   id: string;
   runId: string;
   agentId: string;
-  /** The delivery that carried the input; null for the routine's own agent. */
   deliveryId: string | null;
   input: string;
   output: string | null;
@@ -44,39 +29,21 @@ export interface RoutineFlowStep {
   updatedAt: string;
 }
 
-/** Where a node sits on one agent's canvas. `nodeKey` is `routine:<id>` or `agent:<id>`. */
 export interface RoutineFlowPosition {
   nodeKey: string;
   x: number;
   y: number;
 }
 
-/**
- * What starts a routine on a canvas. GoAhead routines start on a schedule only; the `kind` tag keeps
- * the shape of upstream OpenBot, where a webhook can start one too.
- */
-export interface RoutineFlowTrigger {
-  kind: "schedule";
-  schedule: RoutineSchedule;
-}
-
-/** A routine on a canvas, with the schedule that starts it. */
-export type RoutineFlowRoutineInfo = Omit<Routine, "trigger"> & { trigger: RoutineFlowTrigger };
+export type RoutineFlowRoutineInfo = Omit<EventRoutine, "owner"> & { agentId: string };
 
 export interface RoutineFlowRoutine {
   routine: RoutineFlowRoutineInfo;
-  /** Newest first. */
   recentRuns: RoutineRun[];
-  /** The times it fires in the next seven days, soonest first. Empty while it is paused. */
   upcomingRuns: string[];
-  /** The steps of its newest run. */
   steps: RoutineFlowStep[];
 }
 
-/**
- * One agent's canvas: every routine that starts it or passes work through it, the links of those
- * routines, where the nodes sit, and the agents placed on it before any link reaches them.
- */
 export interface RoutineFlowCanvas {
   agentId: string;
   routines: RoutineFlowRoutine[];
@@ -86,7 +53,6 @@ export interface RoutineFlowCanvas {
 }
 
 export interface SaveRoutineFlowPositionInput {
-  /** The agent whose canvas it is. */
   agentId: string;
   nodeKey: string;
   x: number;
@@ -109,18 +75,21 @@ export interface DisconnectRoutineFlowInput {
   linkId: string;
 }
 
-/** A new instruction for one link: what the next agent is asked to do with the answer. May be empty. */
 export interface UpdateRoutineFlowLinkInput {
   linkId: string;
   instruction: string;
 }
 
-/** The agents whose canvases changed, so the views showing them reload. */
+export interface StopRoutineFlowRunInput {
+  routineId: string;
+  runId: string;
+}
+
+/** The agents whose canvases changed, so the views showing them reload. Local IPC only. */
 export interface RoutineFlowsChanged {
   agentIds: string[];
 }
 
-/** The largest coordinate a node may take; far beyond any canvas a person would build. */
 export const ROUTINE_FLOW_MAX_COORDINATE = 1_000_000;
 
 export function routineFlowAgentKey(agentId: string): string {
@@ -184,11 +153,7 @@ function isRoutineFlowRoutineInfo(value: unknown): value is RoutineFlowRoutineIn
     isString(value.instruction) &&
     isBoolean(value.active) &&
     isString(value.timezone) &&
-    isDynamicRecord(value.trigger) &&
-    value.trigger.kind === "schedule" &&
-    isRoutineSchedule(value.trigger.schedule) &&
-    (value.limitPolicy === undefined || isOneOf(ROUTINE_LIMIT_POLICIES, value.limitPolicy)) &&
-    (value.missedPolicy === undefined || isOneOf(ROUTINE_MISSED_POLICIES, value.missedPolicy)) &&
+    isEventRoutineTrigger(value.trigger) &&
     isString(value.createdAt) &&
     isString(value.updatedAt)
   );
@@ -252,6 +217,10 @@ export function isConnectRoutineFlowInput(value: unknown): value is ConnectRouti
 
 export function isDisconnectRoutineFlowInput(value: unknown): value is DisconnectRoutineFlowInput {
   return isDynamicRecord(value) && isIdentifier(value.linkId);
+}
+
+export function isStopRoutineFlowRunInput(value: unknown): value is StopRoutineFlowRunInput {
+  return isDynamicRecord(value) && isIdentifier(value.routineId) && isIdentifier(value.runId);
 }
 
 export function isUpdateRoutineFlowLinkInput(value: unknown): value is UpdateRoutineFlowLinkInput {

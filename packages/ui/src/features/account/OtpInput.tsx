@@ -6,6 +6,8 @@ import { useText } from "../../text";
 
 export type OtpInputStatus = "idle" | "verifying" | "error" | "success";
 
+export type OtpInputSize = "default" | "compact";
+
 interface OtpInputProps {
   value: string;
   length?: number;
@@ -13,6 +15,7 @@ interface OtpInputProps {
   masked?: boolean;
   label?: string;
   status?: OtpInputStatus;
+  size?: OtpInputSize;
   hint?: string;
   errorMessage?: string | null;
   successMessage?: string;
@@ -36,8 +39,6 @@ export function OtpInput(props: OtpInputProps) {
   let inputElement: HTMLInputElement | undefined;
   let slotsElement: HTMLDivElement | undefined;
   let composing = false;
-  // An IME can still change composed text, so a code that it completes is
-  // submitted at `compositionend`, not before.
   let completeAfterComposition = false;
 
   const status = () => props.status ?? "idle";
@@ -68,12 +69,6 @@ export function OtpInput(props: OtpInputProps) {
     },
   );
 
-  // The native input keeps the code as its value. iOS and Android autofill and
-  // keyboard suggestions read and replace that value, and a soft keyboard that
-  // sends no key name edits it in place. An IME owns the value while it
-  // composes, so the copy waits for `compositionend`. A masked code is a
-  // browser secret: its field is cleared after each input, so the DOM never
-  // holds it.
   createEffect(
     () => slots().join(""),
     () => syncNativeValue(),
@@ -163,35 +158,26 @@ export function OtpInput(props: OtpInputProps) {
       syncNativeValue();
       return;
     }
-    // Android keyboards send `Unidentified` keydown events, so one typed
-    // character or a backspace arrives here and edits the active slot.
     const typed = event.inputType === "insertText" && !event.isComposing ? sanitize(event.data ?? "") : "";
     if (typed.length === 1) {
       insert(typed);
     } else if (event.inputType === "deleteContentBackward") {
       backspace();
     } else {
-      // Autofill, a suggestion, or IME text: the inserted text can be the full
-      // code, with its hyphen.
       const inserted = sanitize(event.data ?? "");
       if (inserted.length === length()) applyCode(inserted);
       else applyFieldValue(event.currentTarget.value);
     }
-    // The field can hold text that the code drops, such as a hyphen or a
-    // ninth character, and then the slots do not change to start the effect.
     flush();
     syncNativeValue();
   }
 
   function applyFieldValue(raw: string): void {
     const value = sanitize(raw);
-    // A masked field holds only the text of this input.
     if (props.masked) {
       insert(value, 0);
       return;
     }
-    // The field does not show empty slots, so text that adds no code
-    // character, such as a hyphen, must not move the characters after one.
     if (value !== slots().join("")) applyCode(value);
   }
 
@@ -276,14 +262,7 @@ export function OtpInput(props: OtpInputProps) {
   }
 
   return (
-    <div class="otp-input" data-status={status()}>
-      {/*
-        The slot characters below are loose text in the accessibility tree.
-        Naming this group is what lets both consumers tell what they are:
-        assistive tech announces the context, and `dev:automation` recognizes
-        the subtree whose text and control values it must not print into an
-        agent transcript.
-      */}
+    <div class="otp-input" data-status={status()} data-size={props.size ?? "default"}>
       <fieldset
         class="otp-input-fieldset"
         aria-label={t("account.otp.entry")}

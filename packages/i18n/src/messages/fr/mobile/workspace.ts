@@ -12,17 +12,21 @@ export const messages = {
   "mobile.workspace.status.retryIn": "Nouvel essai dans {seconds} secondes",
   "mobile.workspace.section.agents": "Agents",
   "mobile.workspace.error.directoryUnavailable": "L’annuaire des serveurs est indisponible.",
-  "mobile.workspace.error.sectionsLoadFailed": "Impossible de charger les sections. Réessayez.",
+  "mobile.workspace.error.sectionsLoadFailed": "Impossible de charger les dossiers. Réessayez.",
   "mobile.workspace.error.transportNotReady": "La connexion mobile n’est pas prête.",
-  "mobile.workspace.error.sectionsUnsupported": "Cet hôte ne prend pas en charge la modification des sections.",
+  "mobile.workspace.error.sectionsUnsupported": "Cet hôte ne prend pas en charge la modification des dossiers.",
   "mobile.workspace.error.leaveOwnServer":
     "Vous pouvez quitter uniquement les serveurs distants que vous avez rejoints.",
+  "mobile.workspace.error.removeOwnedServerOnly": "Seul le propriétaire peut supprimer ce serveur.",
   "mobile.workspace.error.agentNotOnHost": "L’agent n’est pas sur cet hôte.",
   "mobile.workspace.error.filesUnsupported":
     "Cet hôte ne prend pas en charge la gestion des fichiers. Mettez à jour GoAhead sur l’hôte.",
   "mobile.workspace.error.agentUnavailableOnHost": "L’agent est indisponible sur cet hôte.",
   "mobile.workspace.error.agentUnavailable": "L’agent est indisponible.",
   "mobile.workspace.error.formUnavailable": "Ce formulaire n’est plus disponible.",
+  "mobile.workspace.error.approvalInactive":
+    "Cette demande n’est plus en attente. Un autre appareil y a répondu, ou la tâche s’est arrêtée.",
+  "mobile.workspace.error.approvalOffline": "Connectez-vous au serveur pour répondre à cette demande.",
   "mobile.workspace.alert.preferencesTitle": "Impossible d’enregistrer les préférences de discussion",
   "mobile.workspace.alert.preferencesBody": "Vos préférences précédentes ont été conservées. Réessayez.",
   "mobile.workspace.alert.updateRequiredTitle": "Mise à jour requise",
@@ -30,6 +34,9 @@ export const messages = {
     "Mettez à jour ce serveur de bureau pour marquer les conversations comme non lues.",
   "mobile.workspace.alert.markUnreadTitle": "Impossible de marquer comme non lu",
   "mobile.workspace.alert.markUnreadBody": "Reconnectez-vous au serveur et réessayez.",
+  "mobile.workspace.alert.markAllReadTitle": "Impossible de tout marquer comme lu",
+  "mobile.workspace.alert.markAllReadBody":
+    "Certaines discussions sont encore non lues. Reconnectez-vous au serveur et réessayez.",
   "mobile.workspace.alert.serverOrderTitle": "Impossible d’enregistrer l’ordre des serveurs",
   "mobile.workspace.alert.serverOrderBody": "L’ordre précédent a été conservé. Réessayez.",
   "mobile.workspace.error.connectFailed": "La connexion au serveur a échoué.",

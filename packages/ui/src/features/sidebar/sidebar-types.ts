@@ -1,25 +1,44 @@
 import type {
+  AvatarColor,
   AvatarHue,
   ChannelSummary,
   DirectThreadSummary,
+  HiddenAgent,
   MessagingThreadSummary,
   SidebarLayoutAction,
   SidebarLayoutSnapshot,
   TeamPresenceMember,
 } from "@openbot/contracts/ipc";
+import type { AppTextKey } from "@openbot/i18n";
 import type { JSX } from "@solidjs/web";
 import type { AvatarMood } from "../../bloub-avatar";
 import type { AgentProfile } from "../../data";
+import type { ThreadItem } from "../conversation/threads/thread-types";
 import type { ServerMenuProps } from "../servers/ServerMenu";
 import type { SidebarPinnedItem } from "./sidebar-pins";
 
-/**
- * What the sidebar is, as data. These live apart from `Sidebar.tsx` because
- * nine of this feature's modules - the drag engine, the filtering, the scope
- * and every store - name one of these types and none of them render anything.
- * Reading them from the entry component made the pure logic depend on the whole
- * view to borrow a name.
- */
+export const SIDEBAR_HIDDEN_GROUP_OPEN_ID = "hidden-agents:open";
+
+export type SidebarChatOrder = "manual" | "recent" | "unread-group" | "unread-first";
+
+export const SIDEBAR_CHAT_ORDERS = [
+  "manual",
+  "recent",
+  "unread-group",
+  "unread-first",
+] as const satisfies readonly SidebarChatOrder[];
+
+export const SIDEBAR_CHAT_ORDER_LABEL = {
+  manual: "sidebar.order.manual",
+  recent: "sidebar.order.recent",
+  "unread-group": "sidebar.order.unreadGroup",
+  "unread-first": "sidebar.order.unreadFirst",
+} as const satisfies Record<SidebarChatOrder, AppTextKey>;
+
+export function sidebarChatOrderSortsSections(order: SidebarChatOrder | undefined): boolean {
+  return order === "recent" || order === "unread-first";
+}
+
 /**
  * What the main area shows for the chat picked in the list: its conversation, or its routines. The
  * list itself is the same in both.
@@ -28,49 +47,58 @@ export type SidebarView = "agents" | "routines";
 
 export interface SidebarProps {
   /** The switch over the list is shown only when the caller handles `onViewChange`. */
-  view?: SidebarView;
+  view?: SidebarView | undefined;
   onViewChange?: ((view: SidebarView) => void) | undefined;
-  deleteSupported?: boolean;
-  marketplaceSupported?: boolean;
-  channels?: ChannelSummary[];
-  deletedChannels?: ChannelSummary[];
-  activeChannelId?: string | null;
-  onSelectChannel?: (channelId: string) => void;
-  showingArchivedChannels?: boolean;
+  deleteSupported?: boolean | undefined;
+  marketplaceSupported?: boolean | undefined;
+  channels?: ChannelSummary[] | undefined;
+  deletedChannels?: ChannelSummary[] | undefined;
+  activeChannelId?: string | null | undefined;
+  onSelectChannel?: ((channelId: string) => void) | undefined;
+  showingArchivedChannels?: boolean | undefined;
   onToggleArchivedChannels?: (() => void) | undefined;
   onCreateChannel?: (() => void) | undefined;
-  /** Marks every agent chat and channel read. The free-area menu offers it while `hasUnread` is set. */
   onMarkAllRead?: (() => void) | undefined;
-  hasUnread?: boolean;
-  onEditChannel?: (channelId: string) => void;
+  hasUnread?: boolean | undefined;
+  onEditChannel?: ((channelId: string) => void) | undefined;
   onDeleteChannel?: ((channelId: string) => Promise<void>) | undefined;
+  onRestoreChannel?: ((channelId: string) => void) | undefined;
   serverName: string;
-  onOpenServerSettings?: (trigger: HTMLElement) => void;
-  /** The desktop server menu. Without it, the server name opens the server settings. */
-  serverMenu?: Omit<ServerMenuProps, "serverName" | "compact">;
+  onOpenServerSettings?: ((trigger: HTMLElement) => void) | undefined;
+  serverMenu?: Omit<ServerMenuProps, "serverName" | "compact"> | undefined;
+  chatHistory?: SidebarChatHistory | undefined;
+  serverUpdate?: { version: string; running: boolean; onOpen: () => void } | undefined;
+  topbarDetail?: JSX.Element | undefined;
   agents: AgentProfile[];
   activeAgentId: string;
   /** Slack conversations, newest first. Each one shows as a row under the agent that answers it. */
-  messagingThreads?: MessagingThreadSummary[];
-  activeMessagingThreadId?: string | null;
-  onSelectMessagingThread?: (threadId: string) => void;
+  messagingThreads?: MessagingThreadSummary[] | undefined;
+  activeMessagingThreadId?: string | null | undefined;
+  onSelectMessagingThread?: ((threadId: string) => void) | undefined;
   /** Hides Slack conversations from the sidebar. Nothing is deleted; a newer message shows one again. */
-  onHideMessagingThreads?: (threadIds: string[]) => Promise<void>;
+  onHideMessagingThreads?: ((threadIds: string[]) => Promise<void>) | undefined;
   /** The person's local Slack inbox, as the first row under the agent that holds it. */
-  messagingInbox?: { agentId: string; unreadCount: number } | null;
-  messagingInboxActive?: boolean;
-  onSelectMessagingInbox?: () => void;
-  showPeople?: boolean;
+  messagingInbox?: { agentId: string; unreadCount: number } | null | undefined;
+  messagingInboxActive?: boolean | undefined;
+  onSelectMessagingInbox?: (() => void) | undefined;
+  showPeople?: boolean | undefined;
   people: TeamPresenceMember[];
   directThreads: DirectThreadSummary[];
   activeDirectMemberId: string | null;
   agentStates: Record<string, SidebarAgentState>;
-  /** The face each agent wears, from `computeAgentAvatarMoods`. A missing entry rests. */
+  channelWaits?: Record<string, SidebarChannelWait> | undefined;
+  channelPreviewsPending?: boolean | undefined;
   agentMoods: Record<string, AvatarMood>;
   layout: SidebarLayoutSnapshot;
-  layoutMutable?: boolean;
+  layoutMutable?: boolean | undefined;
+  chatOrder?: SidebarChatOrder | undefined;
+  onChatOrderChange?: ((order: SidebarChatOrder) => void) | undefined;
   collapsedSectionIds: string[];
   onMutateLayout: (action: SidebarLayoutAction) => Promise<void>;
+  foldersSupported?: boolean | undefined;
+  sectionDuplicateSupported?: boolean | undefined;
+  duplicatingSectionIds?: ReadonlySet<string> | undefined;
+  onDuplicateSection?: ((sectionId: string) => Promise<void>) | undefined;
   onToggleSection: (sectionId: string) => void;
   pinnedItems: SidebarPinnedItem[];
   peopleOrder: string[];
@@ -80,55 +108,79 @@ export interface SidebarProps {
   onReorderPeople: (memberIds: string[]) => void;
   onSelectAgent: (agentId: string) => void;
   onSelectPerson: (memberId: string) => void;
-  onPreloadDirectConversation?: () => void;
-  /** Whether this server currently accepts new agents. Desktop keeps the default enabled. */
-  createSupported?: boolean;
+  onPreloadDirectConversation?: (() => void) | undefined;
+  createSupported?: boolean | undefined;
   onCreateAgent: () => void;
   onEditAgent: (agentId: string) => void;
-  duplicateSupported?: boolean;
-  duplicatingAgentIds?: ReadonlySet<string>;
-  onDuplicateAgent?: (agentId: string) => Promise<void>;
+  duplicateSupported?: boolean | undefined;
+  duplicatingAgentIds?: ReadonlySet<string> | undefined;
+  onDuplicateAgent?: ((agentId: string) => Promise<void>) | undefined;
   onDeleteAgent: (agentId: string) => Promise<void>;
+  userHiddenAgents?: HiddenAgent[] | undefined;
+  userHiddenAgentsWork?: boolean | undefined;
+  unreadAgentIds?: ReadonlySet<string> | undefined;
+  onMarkAgentRead?: ((agentId: string) => void) | undefined;
+  onMarkAgentUnread?: ((agentId: string) => void) | undefined;
+  mutedAgentIds?: ReadonlySet<string> | undefined;
+  onSetAgentMuted?: ((agentId: string, muted: boolean) => void) | undefined;
+  onHideAgent?: ((agentId: string) => void) | undefined;
+  onRestoreAgent?: ((agentId: string) => void) | undefined;
+  onNewAgentThread?: ((agentId: string) => void) | undefined;
+  agentThreads?: SidebarAgentThreads | undefined;
+  onOpenAgentWindow?: ((agentId: string) => void) | undefined;
+  windowAgentIds?: ReadonlySet<string> | undefined;
   compact: boolean;
-  /** A card under the chat list, such as an announcement. The compact sidebar has no room for it. */
   footer?: JSX.Element;
   onExpand: () => void;
+  onCollapse?: (() => void) | undefined;
+  onOpenSearch: () => void;
   onOpenMarketplace: () => void;
   /** Opens the usage report of the active server. Without it, the topbar shows no usage button. */
   onOpenUsage?: ((trigger: HTMLElement) => void) | undefined;
+  agentsConnecting?: boolean | undefined;
   emptyAction?:
     | {
         label: string;
         avatarSeed: string;
         avatarHue: AvatarHue | null;
+        avatarColor: AvatarColor | null;
         onSelect: () => void;
       }
     | undefined;
 }
 
+export interface SidebarAgentThreads {
+  threads: (agentId: string) => readonly ThreadItem[];
+  openId: (agentId: string) => string | undefined;
+  load: (agentId: string) => void;
+  onOpen: (agentId: string, threadId: string) => void;
+  onNew?: ((agentId: string) => void) | undefined;
+}
+
+export interface SidebarChatHistory {
+  back: { name: string } | null;
+  forward: { name: string } | null;
+  keys: { back: string; forward: string };
+  onBack: () => void;
+  onForward: () => void;
+}
+
 export type SidebarRoutinePhase = "running" | "queued" | "failed";
 
-/** What an agent waits for: an answer to its question, an approval, or the user in the browser. */
 export type SidebarWaitReason = "question" | "approval" | "takeover";
 
 export type SidebarAgentState =
-  /** `detail` is the question or the command, for the row tooltip. `null` when there is none. */
   | { kind: "waiting"; reason: SidebarWaitReason; detail: string | null }
   | { kind: "working" }
   | { kind: "responded" }
   | { kind: "unread"; count: number }
   | { kind: "routine"; phase: SidebarRoutinePhase; count: number }
-  /** The provider plan is spent, so the queue waits. `resetsAt` is in epoch seconds, `null` when unknown. */
   | { kind: "limited"; resetsAt: number | null };
 
-/** A pin paired with the chat it names, so the pinned strip renders the same two kinds the list does. */
+export type SidebarChannelWait = Extract<SidebarAgentState, { kind: "waiting" }>;
+
 export type ResolvedPinnedItem = { ref: SidebarPinnedItem; chat: SidebarChatItem };
 
-/**
- * A row inside a section. Agents and channels share the sidebar layout - one order, one set of
- * section assignments - so the list, the grouping and the drag pipeline carry them as one type and
- * only the row component asks which kind it has.
- */
 export type SidebarChatItem =
   | { kind: "agent"; id: string; agent: AgentProfile }
   | { kind: "channel"; id: string; channel: ChannelSummary };

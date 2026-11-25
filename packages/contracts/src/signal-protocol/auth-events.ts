@@ -1,21 +1,13 @@
-// The signed webhook body that the account server (`apps/auth-api`) posts to Signal
-// (`remote/api`) at `/internal/auth-events`. Signal closes or refreshes the sockets it names.
-// Types only: the account server writes these events, and Signal checks them with its own schema.
-
 export type RemoteAuthEvent =
   | { type: "remote-auth-changed"; hostId: string; authEpoch: number }
   | { type: "remote-session-ended"; hostId: string; sessionId: string }
-  // Addressed to an account rather than to a host: the device that accepted an invitation already
-  // knows, and the user's other devices are the ones with a stale server list. Signal forwards it
-  // to every socket that account holds, and each of them re-reads `/v2/remote/hosts/` once.
   | { type: "account-servers-changed"; userId: string }
-  // Addressed to an account: its other devices re-read the account profile.
   | { type: "account-profile-changed"; userId: string }
-  // A Slack workspace was unlinked from an app or moved to another host. Signal drops that app's route
-  // of the workspace when its link is from `through` (milliseconds) or before, and refuses route
-  // tickets with such a link.
   | { type: "slack-route-revoked"; appId: string; teamId: string; through: number }
   // One person's route in a Slack workspace was removed or moved to another host. Signal drops that
   // person's route when its link is from `through` (milliseconds) or before, and refuses route
   // tickets with such a link. The workspace's default route does not change.
-  | { type: "slack-person-route-revoked"; appId: string; teamId: string; userId: string; through: number };
+  | { type: "slack-person-route-revoked"; appId: string; teamId: string; userId: string; through: number }
+  | { type: "telegram-route-revoked"; botId: string; chatId: string; through: number }
+  | { type: "discord-route-revoked"; guildId: string; through: number }
+  | { type: "webhook-route-revoked"; routeId: string; through: number };

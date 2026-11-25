@@ -2,10 +2,34 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/menu";
 
 export const messages = {
-  // The native application menu. Electron localizes its own `role:` entries from the operating
-  // system, so only the custom items are here.
   "menu.stopAllAgents": "Arrêter tous les agents",
   "menu.checkForUpdates": "Rechercher des mises à jour…",
   "menu.preferences": "Réglages…",
+  "menu.actualSize": "Taille réelle",
+  "menu.zoomIn": "Zoom avant",
+  "menu.zoomOut": "Zoom arrière",
+  "menu.closeDeveloperTools": "Fermer les outils de développement",
   "menu.copyLink": "Copier le lien",
+  "menu.copyImage": "Copier l’image",
+  "menu.quit": "Quitter GoAhead",
+  "menu.quitConfirmTitle": "Quitter GoAhead ?",
+  "menu.quitConfirmBody": "Les agents et les routines s’arrêtent jusqu’à la prochaine ouverture d’GoAhead.",
+  "menu.quitConfirm": "Quitter",
+  "menu.quitHint": "Maintenez ⌘Q ou appuyez deux fois pour quitter",
+  "menu.closeWorkingTitle": { one: "{count} agent travaille encore", other: "{count} agents travaillent encore" },
+  "menu.closeWorkingBody":
+    "Si vous quittez GoAhead, les agents s’arrêtent. Laissez-le tourner pour qu’ils terminent. Pour revoir la fenêtre, ouvrez GoAhead.",
+  "menu.closeKeepRunning": "Continuer",
+  "menu.trayOpen": "Ouvrir GoAhead",
+  "menu.trayQuit": "Quitter GoAhead",
+  "menu.trayTooltip": "GoAhead",
+  "menu.hideDynamicIsland": "Masquer Dynamic Island",
+  "menu.undo": "Annuler",
+  "menu.redo": "Rétablir",
+  "menu.cut": "Couper",
+  "menu.copy": "Copier",
+  "menu.paste": "Coller",
+  "menu.pasteAndMatchStyle": "Coller et adapter le style",
+  "menu.delete": "Supprimer",
+  "menu.selectAll": "Tout sélectionner",
 } as const satisfies PartialTranslation<typeof source>;

@@ -11,6 +11,8 @@ export const messages = {
   "mobile.link.pairing.alreadySignedIn":
     "すでにサインインしています。別のアカウントを接続する前に、設定でサインアウトしてください。",
   "mobile.link.pairing.description": "この Mobile Connect リンクをデスクトップから要求した場合にのみ続行してください。",
+  "mobile.link.pairing.accountService":
+    "このリンクは GoAhead のアカウントサービスではなく、{origin} のアカウントサービスに接続します。",
   "mobile.link.pairing.connect": "接続",
   "mobile.link.plugin.title": "プラグインのページを開く",
   "mobile.link.plugin.description": "このプラグインを GoAhead の Web サイトで表示します。",
@@ -29,7 +31,7 @@ export const messages = {
   "mobile.link.template.section.routines": "ルーティン",
   "mobile.link.template.section.noRoutines": "ルーティンはありません。",
   "mobile.link.template.skill.local": "ローカルスキル (SKILL.md のみ)",
-  "mobile.link.template.skill.marketplace": "Marketplace のスキル、バージョン {version}",
+  "mobile.link.template.skill.marketplace": "マーケットプレイスのスキル、バージョン {version}",
   "mobile.link.template.server.title": "追加先のサーバー",
   "mobile.link.template.server.footer": "オーナーまたは管理者であるサーバーのみが表示されます。",
   "mobile.link.template.server.updateRequired":

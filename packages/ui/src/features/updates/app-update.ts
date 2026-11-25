@@ -50,7 +50,7 @@ export function presentAppUpdate(
         failed: true,
         actionLabel: t("common.retry"),
         title: t("update.provider.failed", { name }),
-        detail: text.errorMessage(status.message, t("update.provider.interrupted")),
+        detail: text.errorMessage(status.message, t("update.provider.downloadFailedRetry")),
       };
     default:
       return null;

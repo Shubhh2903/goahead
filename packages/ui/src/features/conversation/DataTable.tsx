@@ -1,6 +1,8 @@
 import { Button, Check, Copy } from "@openbot/ui";
 import type { JSX } from "@solidjs/web";
 import { createSignal, For, onCleanup } from "solid-js";
+import { ScrollEdges } from "../../components/ScrollEdges";
+import { firstTextDirection } from "../../content-direction";
 import { useText } from "../../text";
 
 export type DataTableAlignment = "left" | "center" | "right";
@@ -43,7 +45,6 @@ export function DataTable(props: { table: DataTableBlock; renderCell?: (text: st
     if (copiedTimer) clearTimeout(copiedTimer);
   });
 
-  // Markdown keeps the cells' own markdown. CSV is for a spreadsheet, so it takes the text as shown.
   const copy = async (format: DataTableFormat) => {
     const text =
       format === "markdown"
@@ -75,18 +76,24 @@ export function DataTable(props: { table: DataTableBlock; renderCell?: (text: st
 
   return (
     <div class="message-data-table-frame">
-      <section class="message-data-table-scroll" aria-label={t("chat.table.data")} tabindex="0">
+      <ScrollEdges
+        axis="x"
+        class="message-table-frame"
+        viewClass="message-data-table-scroll"
+        label={t("chat.table.data")}
+      >
         <table
           ref={(element) => (table = element)}
           class="message-data-table"
           style={`--message-data-table-columns: ${props.table.headers.length}`}
+          dir={firstTextDirection([...props.table.headers, ...props.table.rows.flat()])}
         >
           <thead>
             <tr>
               <For each={props.table.headers}>
                 {(header, index) => (
                   <th scope="col" data-align={props.table.alignments[index()]}>
-                    <span class="message-data-table-cell-text">{props.renderCell?.(header) ?? header}</span>
+                    {props.renderCell?.(header) ?? header}
                   </th>
                 )}
               </For>
@@ -98,9 +105,7 @@ export function DataTable(props: { table: DataTableBlock; renderCell?: (text: st
                 <tr>
                   <For each={row}>
                     {(cell, index) => (
-                      <td data-align={props.table.alignments[index()]}>
-                        <span class="message-data-table-cell-text">{props.renderCell?.(cell) ?? cell}</span>
-                      </td>
+                      <td data-align={props.table.alignments[index()]}>{props.renderCell?.(cell) ?? cell}</td>
                     )}
                   </For>
                 </tr>
@@ -108,7 +113,7 @@ export function DataTable(props: { table: DataTableBlock; renderCell?: (text: st
             </For>
           </tbody>
         </table>
-      </section>
+      </ScrollEdges>
       <div class="message-data-table-actions">
         {copyButton("markdown", t("chat.table.copyMarkdown"))}
         {copyButton("csv", t("chat.table.copyCsv"))}
@@ -117,7 +122,6 @@ export function DataTable(props: { table: DataTableBlock; renderCell?: (text: st
   );
 }
 
-/** The table as Markdown source again. A cell keeps its own markdown, with `|` escaped. */
 export function dataTableMarkdown(table: Pick<DataTableBlock, "headers" | "alignments" | "rows">): string {
   const row = (cells: readonly string[]) =>
     `| ${cells.map((cell) => cell.replace(/\\(?=[\\|]|$)/gu, "\\\\").replace(/\|/gu, "\\|")).join(" | ")} |`;
@@ -128,7 +132,6 @@ export function dataTableMarkdown(table: Pick<DataTableBlock, "headers" | "align
   return [row(table.headers), `| ${separator.join(" | ")} |`, ...table.rows.map(row)].join("\n");
 }
 
-/** Rows as CSV (RFC 4180): a cell with a comma, a quote or a line break goes in quotes. */
 export function dataTableCsv(rows: readonly (readonly string[])[]): string {
   return rows
     .map((cells) => cells.map((cell) => (/[",\r\n]/u.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell)).join(","))
@@ -175,11 +178,6 @@ export function messageContentBlocks(body: string, streaming = false): MessageCo
   return foundStructuredBlock ? blocks : [{ type: "text", text: body }];
 }
 
-/**
- * Gives back `next` with each block that equals the block at the same index in `previous` replaced
- * by that earlier object. A streaming reply is parsed again on each revealed word; this keeps the
- * blocks that did not grow unchanged, so they do not render again.
- */
 export function reuseUnchangedBlocks(
   previous: readonly MessageContentBlock[],
   next: MessageContentBlock[],
@@ -359,6 +357,7 @@ function parseRow(line: string): string[] | null {
 }
 
 function hasUnescapedPipe(value: string): boolean {
+  if (!value.includes("|")) return false;
   for (let index = 0; index < value.length; index += 1) {
     if (value[index] !== "|") continue;
     let slashCount = 0;

@@ -1,28 +1,40 @@
-// Form side of the user-named endpoint: field names are the form's own (labels/error index),
-// submit produces the contract `SaveCustomProviderInput` verbatim. Every bound/pattern comes
-// from the contract; main rechecks on save, so a drifted copy would pass the form and fail save.
-
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import type { SaveCustomProviderInput } from "@openbot/contracts/ipc";
+import type {
+  CustomProviderHarness,
+  CustomProviderInputKind,
+  CustomProviderReasoningEffort,
+  CustomProviderSummary,
+  SaveCustomProviderInput,
+  UpdateCustomProviderInput,
+} from "@openbot/contracts/ipc";
 import {
   AGENT_PROVIDERS,
   CUSTOM_PROVIDER_ID_PATTERN,
+  CUSTOM_PROVIDER_INPUT_KINDS,
   CUSTOM_PROVIDER_LIMITS,
+  CUSTOM_PROVIDER_REASONING_EFFORTS,
   composedCustomModelId,
   isAgentModel,
+  isCustomProviderContextWindow,
   isCustomProviderHeaderName,
+  isCustomProviderMaxOutput,
 } from "@openbot/contracts/ipc";
-import type { AppTranslate } from "@openbot/i18n";
+import type { AppFormat, AppTranslate } from "@openbot/i18n";
 import { currentText } from "../../text";
 
 export interface CustomModelDraft {
   id: string;
   name: string;
+  contextWindow?: string;
+  maxOutput?: string;
+  reasoningEfforts?: CustomProviderReasoningEffort[];
+  inputs?: CustomProviderInputKind[];
 }
 
 export interface CustomHeaderDraft {
   name: string;
   value: string;
+  savedName?: string;
 }
 
 export interface CustomProviderDraft {
@@ -32,15 +44,14 @@ export interface CustomProviderDraft {
   apiKey: string;
   models: CustomModelDraft[];
   headers: CustomHeaderDraft[];
+  harness?: CustomProviderHarness;
 }
 
-/** One message per field, plus one per repeatable row, indexed the way the form renders them. */
 export interface CustomProviderErrors {
   providerId?: string;
   displayName?: string;
-  baseUrl?: string;
+  baseUrl?: string | undefined;
   apiKey?: string;
-  /** Nothing usable in the whole list, so no single row owns the message. */
   models?: string;
   modelRows: (string | undefined)[];
   headerRows: (string | undefined)[];
@@ -57,19 +68,91 @@ export function emptyCustomProviderDraft(): CustomProviderDraft {
   };
 }
 
-/** A row the user has not filled in yet: carried by the form, ignored by validation and submit. */
-function blankModel(model: CustomModelDraft): boolean {
-  return !model.id.trim() && !model.name.trim();
+export function savedHeaderDrafts(names: readonly string[] | undefined): CustomHeaderDraft[] {
+  return names && names.length > 0
+    ? names.map((name) => ({ name, value: "", savedName: name }))
+    : [{ name: "", value: "" }];
+}
+
+export function savedCustomProviderDraft(
+  provider: CustomProviderSummary,
+  format: Pick<AppFormat, "number">,
+): CustomProviderDraft {
+  return {
+    providerId: provider.id,
+    displayName: provider.name,
+    baseUrl: provider.baseUrl,
+    apiKey: "",
+    models:
+      provider.models.length > 0
+        ? provider.models.map((model) => ({
+            id: model.id,
+            name: model.name,
+            contextWindow: model.contextWindow === undefined ? "" : tokenCountText(model.contextWindow, format),
+            maxOutput: model.maxOutput === undefined ? "" : tokenCountText(model.maxOutput, format),
+            ...(model.reasoningEfforts ? { reasoningEfforts: [...model.reasoningEfforts] } : {}),
+            ...(model.inputs ? { inputs: [...model.inputs] } : {}),
+          }))
+        : [{ id: "", name: "" }],
+    headers: savedHeaderDrafts(provider.headerNames),
+    ...(provider.harness ? { harness: provider.harness } : {}),
+  };
+}
+
+export function blankModel(model: CustomModelDraft): boolean {
+  return (
+    !model.id.trim() &&
+    !model.name.trim() &&
+    !model.contextWindow?.trim() &&
+    !model.maxOutput?.trim() &&
+    !model.reasoningEfforts?.length
+  );
+}
+
+function tokenCount(text: string | undefined, inRange: (value: number) => boolean): number | null | undefined {
+  const typed = text?.trim() ?? "";
+  if (!typed) return undefined;
+  if (!/^(?:\d+|\d{1,3}(?:([\s,._'’])\d{3})(?:\1\d{3})*)$/u.test(typed)) return null;
+  const value = Number(typed.replace(/\D/gu, ""));
+  return inRange(value) ? value : null;
+}
+
+export function tokenCountText(value: number, format: Pick<AppFormat, "number">): string {
+  const text = format.number(value);
+  return tokenCount(text, () => true) === value ? text : value.toString();
+}
+
+export function tokenCountEditText(text: string): string {
+  const value = tokenCount(text, () => true);
+  return typeof value === "number" ? value.toString() : text;
+}
+
+export function tokenCountRestText(text: string, format: Pick<AppFormat, "number">): string {
+  const value = tokenCount(text, () => true);
+  return typeof value === "number" ? tokenCountText(value, format) : text;
+}
+
+function contextWindowValue(model: CustomModelDraft): number | null | undefined {
+  return tokenCount(model.contextWindow, isCustomProviderContextWindow);
+}
+
+function maxOutputValue(model: CustomModelDraft): number | null | undefined {
+  return tokenCount(model.maxOutput, isCustomProviderMaxOutput);
 }
 
 function blankHeader(header: CustomHeaderDraft): boolean {
   return !header.name.trim() && !header.value.trim();
 }
 
+export function keepsHeaderValue(header: CustomHeaderDraft): boolean {
+  return header.savedName !== undefined && header.name.trim() === header.savedName && !header.value.trim();
+}
+
 export function validateCustomProvider(
   draft: CustomProviderDraft,
-  takenProviderIds: readonly string[] = [],
+  ids: { taken?: readonly string[] | undefined; locked?: boolean | undefined } = {},
   t: AppTranslate = currentText().t,
+  format: AppFormat = currentText().format,
 ): CustomProviderErrors {
   const providerId = draft.providerId.trim();
   const errors: CustomProviderErrors = {
@@ -77,17 +160,17 @@ export function validateCustomProvider(
     headerRows: draft.headers.map(() => undefined),
   };
 
-  if (!providerId) errors.providerId = t("customProvider.error.providerIdRequired");
-  else if (!CUSTOM_PROVIDER_ID_PATTERN.test(providerId)) {
-    errors.providerId = t("customProvider.error.providerIdPattern");
-  } else if (providerId.length > INPUT_LIMITS.identifier) {
-    errors.providerId = t("customProvider.error.providerIdLength", { max: INPUT_LIMITS.identifier });
-  } else if (AGENT_PROVIDERS.some((provider) => provider === providerId)) {
-    errors.providerId = t("customProvider.error.providerIdBuiltIn", { id: providerId });
-  } else if (takenProviderIds.includes(providerId)) {
-    // There is no edit path, so a saved ID is not a field the user can overwrite: main refuses the
-    // save, and this says so before the round trip.
-    errors.providerId = t("customProvider.error.providerIdSaved", { id: providerId });
+  if (!ids.locked) {
+    if (!providerId) errors.providerId = t("customProvider.error.providerIdRequired");
+    else if (!CUSTOM_PROVIDER_ID_PATTERN.test(providerId)) {
+      errors.providerId = t("customProvider.error.providerIdPattern");
+    } else if (providerId.length > INPUT_LIMITS.identifier) {
+      errors.providerId = t("customProvider.error.providerIdLength", { max: INPUT_LIMITS.identifier });
+    } else if (AGENT_PROVIDERS.some((provider) => provider === providerId)) {
+      errors.providerId = t("customProvider.error.providerIdBuiltIn", { id: providerId });
+    } else if (ids.taken?.includes(providerId)) {
+      errors.providerId = t("customProvider.error.providerIdSaved", { id: providerId });
+    }
   }
 
   const displayName = draft.displayName.trim();
@@ -125,9 +208,24 @@ export function validateCustomProvider(
       errors.modelRows[index] = t("customProvider.error.displayNameLength", { max: INPUT_LIMITS.modelName });
       return;
     }
-    // OpenCode reports this model as `<provider id>/<model id>`, and both the IPC and Team API list
-    // decoders fail closed on the whole array when one id is malformed - which empties the picker
-    // rather than hiding one row. So the composed id is checked here, where the user can still fix it.
+    if (contextWindowValue(model) === null) {
+      errors.modelRows[index] = t("customProvider.error.contextWindowInvalid", {
+        min: format.number(CUSTOM_PROVIDER_LIMITS.contextWindowMin),
+        max: format.number(CUSTOM_PROVIDER_LIMITS.contextWindowMax),
+      });
+      return;
+    }
+    if (maxOutputValue(model) === null) {
+      errors.modelRows[index] = t("customProvider.error.maxOutputInvalid", {
+        min: format.number(CUSTOM_PROVIDER_LIMITS.maxOutputMin),
+        max: format.number(CUSTOM_PROVIDER_LIMITS.maxOutputMax),
+      });
+      return;
+    }
+    if (model.maxOutput?.trim() && contextWindowValue(model) === undefined) {
+      errors.modelRows[index] = t("customProvider.error.maxOutputNeedsWindow");
+      return;
+    }
     if (!errors.providerId && !isAgentModel(composedCustomModelId(providerId, id))) {
       errors.modelRows[index] = t("customProvider.error.modelIdInvalid");
     }
@@ -141,7 +239,8 @@ export function validateCustomProvider(
     else if (!isCustomProviderHeaderName(name)) errors.headerRows[index] = t("customProvider.error.headerNameInvalid");
     else if (headerNames.has(name.toLowerCase()))
       errors.headerRows[index] = t("customProvider.error.headerDuplicate", { name });
-    else if (!header.value.trim()) errors.headerRows[index] = t("customProvider.error.headerValueRequired");
+    else if (!header.value.trim() && !keepsHeaderValue(header))
+      errors.headerRows[index] = t("customProvider.error.headerValueRequired");
     else headerNames.add(name.toLowerCase());
   });
   if (draft.headers.filter((header) => !blankHeader(header)).length > CUSTOM_PROVIDER_LIMITS.headers) {
@@ -161,7 +260,6 @@ function parseUrl(value: string): URL | null {
   }
 }
 
-/** The base URL rules on their own, for an address that is not part of a full endpoint form. */
 export function endpointUrlError(url: string, t: AppTranslate = currentText().t): string | undefined {
   return baseUrlError(url.trim(), t);
 }
@@ -173,12 +271,7 @@ function baseUrlError(baseUrl: string, t: AppTranslate): string | undefined {
   }
   const parsed = parseUrl(baseUrl);
   if (!parsed) return t("customProvider.error.baseUrlInvalid", { example: "http://127.0.0.1:11434/v1" });
-  // `http:` is the main case, not the exception: a custom provider is usually a model server on this
-  // computer, which has no certificate. Anything else - `file:`, `ws:`, `javascript:` - is not an
-  // endpoint OpenCode can call.
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return t("customProvider.error.baseUrlProtocol");
-  // A credential in the URL is stored and listed as plain text, because only the key and the headers
-  // are encrypted. The user is told where it belongs instead.
   if (parsed.username || parsed.password) return t("customProvider.error.baseUrlCredential");
   return undefined;
 }
@@ -195,40 +288,99 @@ export function hasCustomProviderError(errors: CustomProviderErrors): boolean {
   );
 }
 
-/** The wire payload: trimmed, with the blank placeholder rows dropped. */
 export function customProviderValue(draft: CustomProviderDraft): SaveCustomProviderInput {
   const models = draft.models
     .filter((model) => !blankModel(model))
-    .map((model) => ({ id: model.id.trim(), name: model.name.trim() || model.id.trim() }));
+    .map((model) => {
+      const id = model.id.trim();
+      const name = model.name.trim() || id;
+      const contextWindow = contextWindowValue(model);
+      const maxOutput = maxOutputValue(model);
+      const reasoningEfforts = CUSTOM_PROVIDER_REASONING_EFFORTS.filter((effort) =>
+        model.reasoningEfforts?.includes(effort),
+      );
+      const inputs = model.inputs && CUSTOM_PROVIDER_INPUT_KINDS.filter((kind) => model.inputs?.includes(kind));
+      return {
+        id,
+        name,
+        ...(typeof contextWindow === "number" ? { contextWindow } : {}),
+        ...(typeof maxOutput === "number" ? { maxOutput } : {}),
+        ...(model.reasoningEfforts ? { reasoningEfforts } : {}),
+        ...(inputs ? { inputs } : {}),
+      };
+    });
   return {
     id: draft.providerId.trim(),
     name: draft.displayName.trim(),
     baseUrl: draft.baseUrl.trim(),
-    // An empty key is not an empty string downstream: it means "this endpoint needs no key", and a
-    // blank `apiKey` in the OpenCode config would be sent as an empty Authorization header.
     apiKey: draft.apiKey.trim() || null,
     models,
     headers: draft.headers
       .filter((header) => !blankHeader(header))
       .map((header) => ({ name: header.name.trim(), value: header.value.trim() })),
+    ...(draft.harness ? { harness: draft.harness } : {}),
   };
 }
 
-/** The address and credentials that a model list request needs. The form does not send it itself. */
+export function customProviderUpdate(value: SaveCustomProviderInput): UpdateCustomProviderInput {
+  return {
+    id: value.id,
+    name: value.name,
+    baseUrl: value.baseUrl,
+    models: value.models,
+    ...(value.apiKey === null ? {} : { apiKey: value.apiKey }),
+    headers: value.headers.map((header) => ({ name: header.name, value: header.value || null })),
+    ...(value.harness ? { harness: value.harness } : {}),
+  };
+}
+
 export interface CustomProviderEndpoint {
   baseUrl: string;
   apiKey: string | null;
   headers: CustomHeaderDraft[];
-  /** The saved endpoint that the form edits, so main can use its stored key for the same origin. */
   savedProviderId?: string;
 }
 
 export interface DiscoveredModel {
   id: string;
   name?: string;
+  contextWindow?: number;
+  maxOutput?: number;
+  reasoningEfforts?: CustomProviderReasoningEffort[];
+  inputs?: CustomProviderInputKind[];
 }
 
-/** The state of one `GET {baseUrl}/models` request, owned by the host that makes it. */
+export function holdsFoundValues(row: CustomModelDraft, found: DiscoveredModel): boolean {
+  const window = found.contextWindow !== undefined && contextWindowValue(row) === found.contextWindow;
+  const inputs = found.inputs !== undefined && row.inputs?.join() === found.inputs.join();
+  const efforts =
+    found.reasoningEfforts !== undefined && row.reasoningEfforts?.join() === found.reasoningEfforts.join();
+  return window || inputs || efforts;
+}
+
+export function fillFoundValues(
+  row: CustomModelDraft,
+  found: DiscoveredModel,
+  format: Pick<AppFormat, "number">,
+): void {
+  if (!row.contextWindow?.trim() && found.contextWindow !== undefined) {
+    row.contextWindow = tokenCountText(found.contextWindow, format);
+  }
+  const window = contextWindowValue(row);
+  if (
+    !row.maxOutput?.trim() &&
+    typeof window === "number" &&
+    found.maxOutput !== undefined &&
+    found.maxOutput < window
+  ) {
+    row.maxOutput = tokenCountText(found.maxOutput, format);
+  }
+  if (row.inputs === undefined && found.inputs !== undefined) row.inputs = [...found.inputs];
+  if (row.reasoningEfforts === undefined && found.reasoningEfforts !== undefined) {
+    row.reasoningEfforts = [...found.reasoningEfforts];
+  }
+}
+
 export type ModelDiscovery =
   | { status: "idle" }
   | { status: "loading" }

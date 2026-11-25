@@ -1,12 +1,31 @@
-import type { BillingCurrency, BillingPlanId } from "@openbot/contracts/billing";
+import {
+  type BillingCurrency,
+  type BillingInterval,
+  type BillingPlanId,
+  siteLimitForPlan,
+} from "@openbot/contracts/billing";
 import type { HostedServerCatalog } from "@openbot/contracts/hosted-servers";
+import {
+  LICENSE_BUNDLE_DISCOUNT_PERCENT,
+  LICENSE_INCLUDED_USERS,
+  LICENSE_MAX_USERS,
+  LICENSE_TRIAL_DATE_FORMAT,
+  licenseListMonthly,
+  licenseOrderFor,
+  licenseOrderMonthly,
+  stepLicenseUsers,
+} from "@openbot/contracts/license";
 import type { AppFormat, AppTextKey } from "@openbot/i18n";
 import {
   Badge,
   Button,
   Clock3,
   Gauge,
+  Globe2,
   HardDrive,
+  IconButton,
+  Minus,
+  Plus,
   RadioGroup,
   Select,
   SelectContent,
@@ -14,92 +33,185 @@ import {
   SelectTrigger,
   SelectValue,
   Server,
+  ShieldCheck,
+  toast,
   UsersRound,
 } from "@openbot/ui";
-import { createDigitRoll } from "@openbot/ui/digit-roll";
-import { prefersReducedMotion } from "@openbot/ui/utils";
-import { createMemo, For, Show, untrack } from "solid-js";
+import { RollingPrice } from "@openbot/ui/rolling-price";
+import { createSignal, For, onSettled, Show } from "solid-js";
 import { useText } from "../../text";
 
 export type HostedServerPlanId = BillingPlanId;
 export type HostedServerBilling = "monthly" | "yearly";
 
-export const HOSTED_CURRENCIES = ["EUR", "USD", "PLN"] as const;
+export const HOSTED_CURRENCIES = ["EUR", "USD", "PLN", "BRL"] as const;
 export type HostedCurrency = (typeof HOSTED_CURRENCIES)[number];
+type HostedBaseCurrency = Exclude<HostedCurrency, "BRL">;
+const HOSTED_BASE_CURRENCIES: readonly HostedBaseCurrency[] = ["EUR", "USD", "PLN"];
 
-/** The Stripe currency of each shown currency. */
 export const HOSTED_BILLING_CURRENCY = {
   EUR: "eur",
   USD: "usd",
   PLN: "pln",
+  BRL: "brl",
 } as const satisfies Record<HostedCurrency, BillingCurrency>;
 
-/**
- * A first guess of the currency from the computer's time zone, for when the consumer does not know
- * the user's country. It reads only local settings and sends nothing.
- */
-export function guessHostedCurrency(timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone): HostedCurrency {
+const BRAZIL_TIME_ZONES = new Set([
+  "America/Araguaina",
+  "America/Bahia",
+  "America/Belem",
+  "America/Boa_Vista",
+  "America/Campo_Grande",
+  "America/Cuiaba",
+  "America/Eirunepe",
+  "America/Fortaleza",
+  "America/Maceio",
+  "America/Manaus",
+  "America/Noronha",
+  "America/Porto_Velho",
+  "America/Recife",
+  "America/Rio_Branco",
+  "America/Santarem",
+  "America/Sao_Paulo",
+  "Brazil/Acre",
+  "Brazil/DeNoronha",
+  "Brazil/East",
+  "Brazil/West",
+]);
+
+export function guessHostedCurrency(
+  offered: readonly HostedCurrency[] = HOSTED_BASE_CURRENCIES,
+  timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+): HostedCurrency {
   if (timeZone === "Europe/Warsaw") return "PLN";
   if (timeZone.startsWith("Europe/")) return "EUR";
+  if (BRAZIL_TIME_ZONES.has(timeZone) && offered.includes("BRL")) return "BRL";
   return "USD";
 }
 
-export interface HostedServerPlan {
-  id: HostedServerPlanId;
-  /**
-   * The price for one month on monthly billing, in each currency. These are set prices, not
-   * conversions, so each one is a round number.
-   */
-  monthlyPrice: Record<HostedCurrency, number>;
-  /** The price for one year on yearly billing, in each currency. */
-  yearlyPrice: Record<HostedCurrency, number>;
-  diskGb: number;
-  /** The most active members of the server, the owner included. */
-  memberLimit: number;
-  /** The speed compared with the smallest plan. 1 is the base speed. */
-  relativeSpeed: number;
+export function hostedCurrencies(plans: readonly HostedServerPlan[]): HostedCurrency[] {
+  const brl = plans.length > 0 && plans.every((plan) => plan.monthlyPrice.BRL !== undefined);
+  return HOSTED_CURRENCIES.filter((currency) => currency !== "BRL" || brl);
 }
 
-/**
- * How much less yearly billing costs than twelve monthly payments, in whole percent, from the prices of
- * the catalog. It is the smallest discount of the plans, so the text is true for each plan. 0 means no discount.
- */
+function hostedPrice(plan: HostedServerPlan, interval: "month" | "year", currency: HostedCurrency): number {
+  return (interval === "month" ? plan.monthlyPrice[currency] : plan.yearlyPrice[currency]) ?? 0;
+}
+
+type HostedPrices = Record<HostedBaseCurrency, number> & Partial<Record<HostedCurrency, number>>;
+
+export interface HostedServerPlan {
+  id: HostedServerPlanId;
+  monthlyPrice: HostedPrices;
+  yearlyPrice: HostedPrices;
+  diskGb: number;
+  memberLimit: number;
+  siteLimit: number;
+  relativeSpeed: number;
+  soldOut: boolean;
+}
+
 export function hostedYearlyDiscountPercent(plans: readonly HostedServerPlan[], currency: HostedCurrency): number {
   const discounts = plans.map((plan) => {
-    // In cents, so that the division does not get a floating point error such as 19.999.
-    const twelveMonths = Math.round(plan.monthlyPrice[currency] * 100) * 12;
-    const year = Math.round(plan.yearlyPrice[currency] * 100);
+    const twelveMonths = Math.round(hostedPrice(plan, "month", currency) * 100) * 12;
+    const year = Math.round(hostedPrice(plan, "year", currency) * 100);
     return twelveMonths > 0 ? Math.floor(((twelveMonths - year) * 100) / twelveMonths) : 0;
   });
   return discounts.length === 0 ? 0 : Math.max(0, Math.min(...discounts));
 }
 
-/** The price for one month. On yearly billing this is the yearly price divided by 12. */
 export function hostedPlanMonthlyPrice(
   plan: HostedServerPlan,
   billing: HostedServerBilling,
   currency: HostedCurrency,
 ): number {
-  return billing === "yearly" ? plan.yearlyPrice[currency] / 12 : plan.monthlyPrice[currency];
+  return billing === "yearly" ? hostedPrice(plan, "year", currency) / 12 : hostedPrice(plan, "month", currency);
 }
 
-/** The plans of the Stripe catalog. The catalog has amounts in cents; the plans show whole units. */
+const BILLING_INTERVAL = { monthly: "month", yearly: "year" } as const satisfies Record<
+  HostedServerBilling,
+  BillingInterval
+>;
+
+export interface HostedOrderPrice {
+  regular: number;
+  monthly: number;
+}
+
+export function hostedOrderMonthlyPrice(
+  plan: HostedServerPlan,
+  billing: HostedServerBilling,
+  currency: HostedCurrency,
+  people: number,
+): HostedOrderPrice {
+  const regular = hostedPrice(plan, "month", currency);
+  const monthly = hostedPlanMonthlyPrice(plan, billing, currency);
+  if (people === 0) return { regular, monthly };
+  const license = licenseOrderFor(people);
+  const stripe = HOSTED_BILLING_CURRENCY[currency];
+  const bundle = { tier: license.tier, interval: BILLING_INTERVAL[billing], bundle: true };
+  return {
+    regular: regular + licenseListMonthly(license.tier, license.users, stripe) / 100,
+    monthly: monthly + licenseOrderMonthly(bundle, license.users, stripe) / 100,
+  };
+}
+
+const WORK_PEOPLE = Array.from({ length: LICENSE_MAX_USERS }, (_, index) => index + 1);
+
+export function hostedWorkYearlyDiscountPercent(plans: readonly HostedServerPlan[], currency: HostedCurrency): number {
+  const discounts = WORK_PEOPLE.flatMap((people) =>
+    plans
+      .filter((plan) => plan.memberLimit >= people)
+      .map((plan) => {
+        const month = Math.round(hostedOrderMonthlyPrice(plan, "monthly", currency, people).monthly * 100);
+        const year = Math.round(hostedOrderMonthlyPrice(plan, "yearly", currency, people).monthly * 100);
+        return month > 0 ? Math.floor(((month - year) * 100) / month) : 0;
+      }),
+  );
+  return discounts.length === 0 ? 0 : Math.max(0, Math.min(...discounts));
+}
+
+export function hostedLongestOrderPrice(
+  plans: readonly HostedServerPlan[],
+  currency: HostedCurrency,
+  format: AppFormat,
+): { was: string; now: string } {
+  const longest = { was: "", now: "" };
+  for (const billing of BILLING_OPTIONS)
+    for (const people of [0, ...WORK_PEOPLE])
+      for (const plan of plans) {
+        if (plan.memberLimit < people) continue;
+        const price = hostedOrderMonthlyPrice(plan, billing, currency, people);
+        const was = formatHostedPrice(format, price.regular, currency);
+        const now = formatHostedPrice(format, price.monthly, currency);
+        if (was.length > longest.was.length) longest.was = was;
+        if (now.length > longest.now.length) longest.now = now;
+      }
+  return longest;
+}
+
 export function hostedServerPlansFromCatalog(catalog: HostedServerCatalog): HostedServerPlan[] {
   const amounts = (
     prices: HostedServerCatalog["plans"][number]["prices"],
     interval: "month" | "year",
-  ): Record<HostedCurrency, number> => ({
-    EUR: prices.eur[interval] / 100,
-    USD: prices.usd[interval] / 100,
-    PLN: prices.pln[interval] / 100,
-  });
+  ): HostedPrices => {
+    const result: HostedPrices = {
+      EUR: prices.eur[interval] / 100,
+      USD: prices.usd[interval] / 100,
+      PLN: prices.pln[interval] / 100,
+    };
+    if (prices.brl) result.BRL = prices.brl[interval] / 100;
+    return result;
+  };
   return catalog.plans.map((plan) => ({
     id: plan.id,
     monthlyPrice: amounts(plan.prices, "month"),
     yearlyPrice: amounts(plan.prices, "year"),
     diskGb: plan.diskGb,
     memberLimit: plan.memberLimit,
+    siteLimit: siteLimitForPlan(plan.id),
     relativeSpeed: plan.relativeSpeed,
+    soldOut: plan.soldOut === true,
   }));
 }
 
@@ -116,13 +228,11 @@ const BILLING_OPTIONS: readonly HostedServerBilling[] = ["monthly", "yearly"];
 
 interface HostedBillingSwitchProps {
   billing: HostedServerBilling;
-  /** The yearly discount in whole percent. The switch does not show a discount of 0. */
   discountPercent: number;
   onChange: (billing: HostedServerBilling) => void;
   disabled?: boolean | undefined;
 }
 
-/** Monthly or yearly billing. The yearly option shows the discount. */
 export function HostedBillingSwitch(props: HostedBillingSwitchProps) {
   const { t } = useText();
   return (
@@ -156,36 +266,35 @@ export function HostedBillingSwitch(props: HostedBillingSwitchProps) {
   );
 }
 
-/** Kobalte takes a mutable array. */
-const CURRENCY_OPTIONS: HostedCurrency[] = [...HOSTED_CURRENCIES];
-
 interface HostedCurrencySelectProps {
+  options: HostedCurrency[];
   currency: HostedCurrency;
   onChange: (currency: HostedCurrency) => void;
   disabled?: boolean | undefined;
-  /** The dialog element the popover portals into, so that it stays inside the dialog's focus trap. */
+  locked?: boolean | undefined;
   mount?: HTMLElement | undefined;
 }
 
-/** The currency of the prices. The ISO code is the same in each language. */
 export function HostedCurrencySelect(props: HostedCurrencySelectProps) {
   const { t } = useText();
   return (
-    <Select<HostedCurrency>
-      class="hosted-currency"
-      options={CURRENCY_OPTIONS}
-      value={props.currency}
-      disabled={props.disabled ?? false}
-      onChange={(currency) => currency && props.onChange(currency)}
-      placement="bottom-start"
-      sameWidth={false}
-      itemComponent={(itemProps) => <SelectItem item={itemProps.item}>{itemProps.item.rawValue}</SelectItem>}
-    >
-      <SelectTrigger size="sm" aria-label={t("server.add.currency.label")}>
-        <SelectValue<HostedCurrency>>{(state) => state.selectedOption()}</SelectValue>
-      </SelectTrigger>
-      <SelectContent mount={props.mount} />
-    </Select>
+    <Show when={!props.locked} fallback={<span class="hosted-currency hosted-currency-locked">{props.currency}</span>}>
+      <Select<HostedCurrency>
+        class="hosted-currency"
+        options={props.options}
+        value={props.currency}
+        disabled={props.disabled ?? false}
+        onChange={(currency) => currency && props.onChange(currency)}
+        placement="bottom-start"
+        sameWidth={false}
+        itemComponent={(itemProps) => <SelectItem item={itemProps.item}>{itemProps.item.rawValue}</SelectItem>}
+      >
+        <SelectTrigger size="sm" aria-label={t("server.add.currency.label")}>
+          <SelectValue<HostedCurrency>>{(state) => state.selectedOption()}</SelectValue>
+        </SelectTrigger>
+        <SelectContent mount={props.mount} />
+      </Select>
+    </Show>
   );
 }
 
@@ -194,93 +303,134 @@ interface HostedServerPlansProps {
   billing: HostedServerBilling;
   currency: HostedCurrency;
   onChoose: (plan: HostedServerPlanId) => void;
-  /** The plan that shows the "Best value" badge and the primary button. */
   recommended?: HostedServerPlanId | undefined;
-  /** The plan whose button shows the loading state. All buttons are disabled while it is set. */
   pendingPlan?: HostedServerPlanId | null | undefined;
-  /** Disables all buttons, such as when the account has the maximum number of servers. */
   disabled?: boolean | undefined;
+  people?: number | undefined;
+  longestPrice?: { was: string; now: string } | undefined;
+  licenseTrialEnd?: number | undefined;
 }
 
-/** A plan price: "zł 90" in place of "PLN 90", so that the old and the new price fit in a column. */
 export function formatHostedPrice(format: AppFormat, value: number, currency: HostedCurrency): string {
+  const whole = Math.round(value * 100) % 100 === 0;
   return format.number(value, {
     style: "currency",
     currency,
     currencyDisplay: "narrowSymbol",
-    minimumFractionDigits: 0,
+    minimumFractionDigits: whole ? 0 : 2,
     maximumFractionDigits: 2,
   });
 }
 
-/**
- * The most characters that the old and the new yearly price of one plan have together, for example
- * 12 for "zł 440" and "zł 352". The dialog uses it to make the columns wide enough, so that the
- * price line does not break. It uses the yearly prices on both billings, so the width does not
- * change when the billing changes.
- */
+const NARROW_PRICE_CHARACTERS = /[\s.,'ł]/gu;
+
+function priceTextWidth(text: string): number {
+  return text.length - (text.match(NARROW_PRICE_CHARACTERS)?.length ?? 0) / 2;
+}
+
 export function hostedPriceLength(
   plans: readonly HostedServerPlan[],
   currency: HostedCurrency,
   format: AppFormat,
 ): number {
-  return Math.max(
-    0,
-    ...plans.map(
-      (plan) =>
-        formatHostedPrice(format, plan.monthlyPrice[currency], currency).length +
-        formatHostedPrice(format, hostedPlanMonthlyPrice(plan, "yearly", currency), currency).length,
+  return Math.ceil(
+    Math.max(
+      0,
+      ...plans.map(
+        (plan) =>
+          priceTextWidth(formatHostedPrice(format, hostedPrice(plan, "month", currency), currency)) +
+          priceTextWidth(formatHostedPrice(format, hostedPlanMonthlyPrice(plan, "yearly", currency), currency)),
+      ),
     ),
   );
 }
 
-/** One column for each plan, in one panel. Each column has its own button, so one click creates the server. */
 export function HostedServerPlans(props: HostedServerPlansProps) {
   const { t, format } = useText();
   const price = (value: number) => formatHostedPrice(format, value, props.currency);
+  const people = () => props.people ?? 0;
+  const [stacked, setStacked] = createSignal(false);
+  const licenseLine = () => {
+    const license = licenseOrderFor(people());
+    return license.tier === "team"
+      ? t("billing.order.summary.license", { count: license.users })
+      : t("billing.order.summary.starterLicense");
+  };
+  const licenseIncluded = () => {
+    const end = props.licenseTrialEnd;
+    if (end === undefined) return t("server.add.license.included", { license: licenseLine() });
+    return t("server.add.license.includedTrial", {
+      license: licenseLine(),
+      date: format.date(end, LICENSE_TRIAL_DATE_FORMAT),
+    });
+  };
 
   return (
-    <ul class="hosted-plans" aria-label={t("settings.hostedServers.plan.label")}>
+    <ul
+      class="hosted-plans"
+      aria-label={t("settings.hostedServers.plan.label")}
+      data-license={props.people === undefined ? undefined : ""}
+      data-stacked={stacked() ? "" : undefined}
+    >
       <For each={props.plans}>
         {(plan, index) => {
           const recommended = () => plan.id === props.recommended;
-          const yearly = () => props.billing === "yearly";
-          const regular = () => plan.monthlyPrice[props.currency];
-          const monthly = () => hostedPlanMonthlyPrice(plan, props.billing, props.currency);
+          const fits = () => plan.memberLimit >= people();
+          const work = () => people() > 0 && fits();
+          const order = () => hostedOrderMonthlyPrice(plan, props.billing, props.currency, fits() ? people() : 0);
+          const regular = () => order().regular;
+          const monthly = () => order().monthly;
+          const discounted = () => monthly() < regular();
           return (
             <li
               class="hosted-plan"
               data-recommended={recommended() ? "" : undefined}
-              data-dimmed={props.pendingPlan != null && props.pendingPlan !== plan.id ? "" : undefined}
+              data-dimmed={
+                plan.soldOut || (props.pendingPlan != null && props.pendingPlan !== plan.id) || !fits() ? "" : undefined
+              }
               style={{ "--plan-index": index() }}
             >
               <div class="hosted-plan-head">
                 <h3 class="hosted-plan-name">{t(PLAN_TEXT[plan.id].name)}</h3>
-                <Show when={recommended()}>
-                  <Badge class="hosted-plan-badge" variant="outline">
-                    {t("settings.hostedServers.plan.recommended")}
-                  </Badge>
+                <Show
+                  when={!plan.soldOut}
+                  fallback={<Badge variant="outline">{t("settings.hostedServers.plan.soldOut")}</Badge>}
+                >
+                  <Show
+                    when={work()}
+                    fallback={
+                      <Show when={recommended()}>
+                        <Badge class="hosted-plan-badge" variant="outline">
+                          {t("settings.hostedServers.plan.recommended")}
+                        </Badge>
+                      </Show>
+                    }
+                  >
+                    <span class="hosted-plan-bundle">
+                      {t("server.add.license.bundle", { percent: LICENSE_BUNDLE_DISCOUNT_PERCENT })}
+                    </span>
+                  </Show>
                 </Show>
               </div>
               <p class="hosted-plan-price">
-                {/* Always in the layout, so that it can grow in when the yearly price shows. */}
+                <Show when={index() === 0 ? props.longestPrice : undefined}>
+                  {(longest) => <LongestPrice was={longest().was} now={longest().now} onStackedChange={setStacked} />}
+                </Show>
                 <span
                   class="hosted-plan-was"
-                  data-shown={yearly() ? "" : undefined}
-                  aria-hidden={yearly() ? undefined : "true"}
+                  data-shown={discounted() ? "" : undefined}
+                  aria-hidden={discounted() ? undefined : "true"}
                 >
                   <span class="hosted-plan-was-inner">
                     <span class="sr-only">{t("server.add.regularPrice", { price: price(regular()) })}</span>
                     <s aria-hidden="true">{price(regular())}</s>
                   </span>
                 </span>
-                {/* The new price and "/ month" stay on one line. */}
                 <span class="hosted-plan-now">
                   <RollingPrice value={monthly()} format={price} />
                   <span class="hosted-plan-period">{t("settings.hostedServers.plan.perMonth")}</span>
                 </span>
               </p>
-              {/* A new line for each billing period, so that it fades in again. */}
               <Show when={props.billing} keyed>
                 {(billing) => (
                   <p class="hosted-plan-billed">
@@ -295,14 +445,19 @@ export function HostedServerPlans(props: HostedServerPlansProps) {
                   </p>
                 )}
               </Show>
-              <p class="hosted-plan-summary">{t(PLAN_TEXT[plan.id].summary)}</p>
+              <p class="hosted-plan-summary" data-license={work() ? "" : undefined}>
+                <Show when={work()} fallback={t(PLAN_TEXT[plan.id].summary)}>
+                  <ShieldCheck aria-hidden="true" />
+                  {licenseIncluded()}
+                </Show>
+              </p>
               <Button
                 class="hosted-plan-choose"
                 variant={recommended() ? "default" : "secondary"}
                 fullWidth
                 loading={props.pendingPlan === plan.id}
                 loadingLabel={t("settings.hostedServers.creating")}
-                disabled={props.disabled || props.pendingPlan != null}
+                disabled={props.disabled || plan.soldOut || props.pendingPlan != null || !fits()}
                 onClick={() => props.onChoose(plan.id)}
               >
                 {t("server.add.choosePlan", { plan: t(PLAN_TEXT[plan.id].name) })}
@@ -325,6 +480,29 @@ export function HostedServerPlans(props: HostedServerPlansProps) {
                   {t("settings.hostedServers.plan.disk", { count: plan.diskGb })}
                 </li>
                 <li>
+                  <Globe2 aria-hidden="true" />
+                  {t("settings.hostedServers.plan.sites", { count: plan.siteLimit })}
+                </li>
+                <Show when={props.people !== undefined && !work()}>
+                  <li>
+                    <ShieldCheck aria-hidden="true" />
+                    <Show
+                      when={plan.memberLimit < LICENSE_INCLUDED_USERS}
+                      fallback={t("settings.hostedServers.plan.license.team")}
+                    >
+                      {t("settings.hostedServers.plan.license.starter", {
+                        price: price(
+                          licenseOrderMonthly(
+                            { tier: "starter", interval: BILLING_INTERVAL[props.billing], bundle: true },
+                            1,
+                            HOSTED_BILLING_CURRENCY[props.currency],
+                          ) / 100,
+                        ),
+                      })}
+                    </Show>
+                  </li>
+                </Show>
+                <li>
                   <Gauge aria-hidden="true" />
                   {plan.relativeSpeed === 1
                     ? t("settings.hostedServers.plan.speed.base")
@@ -339,48 +517,100 @@ export function HostedServerPlans(props: HostedServerPlansProps) {
   );
 }
 
-/**
- * The price, with digits that roll to each new value, as in the task list. They fall when the
- * price goes down and rise when it goes up. Assistive technology reads the plain text.
- */
-function RollingPrice(props: { value: number; format: (value: number) => string }) {
-  const roll = createDigitRoll(() => props.value, { settleMs: 0, animate: () => !prefersReducedMotion() });
-  let previous = untrack(roll.displayed);
-  const direction = createMemo(() => {
-    const next = roll.displayed();
-    const result = next < previous ? -1 : 1;
-    previous = next;
-    return result;
+function LongestPrice(props: { was: string; now: string; onStackedChange: (stacked: boolean) => void }) {
+  const { t } = useText();
+  let line: HTMLSpanElement | undefined;
+  let now: HTMLSpanElement | undefined;
+  onSettled(() => {
+    const resize = new ResizeObserver(() => props.onStackedChange((now?.offsetTop ?? 0) > 0));
+    if (line) resize.observe(line);
+    return () => resize.disconnect();
   });
-  // The digits follow the displayed value, so that the new digits do not show before the roll starts.
-  const characters = () => props.format(roll.displayed()).split("");
-  // The last two digits trail the others, so the number that changes most lands last.
-  const stagger = (index: number) => {
-    const digits = characters().flatMap((character, position) => (isDigit(character) ? [position] : []));
-    if (index === digits.at(-1)) return "2";
-    if (index === digits.at(-2)) return "1";
-    return undefined;
-  };
   return (
-    <span class="hosted-plan-amount">
-      <span class="sr-only">{props.format(props.value)}</span>
-      <span ref={roll.ref} class="t-digit-group" style={{ "--digit-dir-y": direction() }} aria-hidden="true">
-        {/* Only the digits roll. The currency sign stays still. */}
-        <For each={characters()} keyed={false}>
-          {(character, index) => (
-            <span
-              class={isDigit(character()) ? "t-digit" : undefined}
-              data-stagger={isDigit(character()) ? stagger(index) : undefined}
-            >
-              {character()}
-            </span>
-          )}
-        </For>
+    <span ref={line} class="hosted-plan-longest" aria-hidden="true">
+      <span class="hosted-plan-was" data-shown="">
+        <span class="hosted-plan-was-inner">
+          <s>{props.was}</s>
+        </span>
+      </span>
+      <span ref={now} class="hosted-plan-now">
+        <span class="hosted-plan-amount">{props.now}</span>
+        <span class="hosted-plan-period">{t("settings.hostedServers.plan.perMonth")}</span>
       </span>
     </span>
   );
 }
 
-function isDigit(character: string) {
-  return /\d/u.test(character);
+export function HostedUseSwitch(props: {
+  work: boolean;
+  onChange: (work: boolean) => void;
+  disabled?: boolean | undefined;
+}) {
+  const { t } = useText();
+  return (
+    <RadioGroup.Root
+      class="hosted-billing hosted-use"
+      data-use={props.work ? "work" : "personal"}
+      aria-label={t("server.add.use.label")}
+      value={props.work ? "work" : "personal"}
+      disabled={props.disabled ?? false}
+      onChange={(value) => props.onChange(value === "work")}
+    >
+      <RadioGroup.Item class="hosted-billing-option" value="personal">
+        <RadioGroup.ItemInput />
+        <RadioGroup.ItemControl class="hosted-billing-control">
+          <RadioGroup.ItemLabel>{t("server.add.use.personal")}</RadioGroup.ItemLabel>
+        </RadioGroup.ItemControl>
+      </RadioGroup.Item>
+      <RadioGroup.Item class="hosted-billing-option" value="work">
+        <RadioGroup.ItemInput />
+        <RadioGroup.ItemControl class="hosted-billing-control">
+          <RadioGroup.ItemLabel>{t("server.add.use.work")}</RadioGroup.ItemLabel>
+        </RadioGroup.ItemControl>
+      </RadioGroup.Item>
+    </RadioGroup.Root>
+  );
+}
+
+const LICENSE_MINIMUM_TOAST = "hosted-license-minimum";
+
+export function HostedLicensePeople(props: {
+  value: number;
+  min: number;
+  used: number;
+  disabled: boolean;
+  onChange: (value: number) => void;
+}) {
+  const { t } = useText();
+  function fewer(): void {
+    if (props.value > props.min) props.onChange(stepLicenseUsers(props.value, -1));
+    else toast(t("server.add.license.minimum", { count: props.used }), { id: LICENSE_MINIMUM_TOAST });
+  }
+  return (
+    <div class="hosted-license-people" data-disabled={props.disabled ? "" : undefined}>
+      <span>{t("server.add.license.people")}</span>
+      <fieldset class="hosted-license-stepper">
+        <legend class="sr-only">{t("billing.order.license.members")}</legend>
+        <IconButton
+          label={t("billing.order.license.fewer")}
+          variant="outline"
+          size="icon-sm"
+          disabled={props.disabled || props.value <= 1}
+          onClick={fewer}
+        >
+          <Minus aria-hidden="true" />
+        </IconButton>
+        <span aria-live="polite">{t("billing.order.memberCount", { count: props.value })}</span>
+        <IconButton
+          label={t("billing.order.license.more")}
+          variant="outline"
+          size="icon-sm"
+          disabled={props.disabled || props.value >= LICENSE_MAX_USERS}
+          onClick={() => props.onChange(stepLicenseUsers(props.value, 1))}
+        >
+          <Plus aria-hidden="true" />
+        </IconButton>
+      </fieldset>
+    </div>
+  );
 }

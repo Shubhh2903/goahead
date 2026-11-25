@@ -11,11 +11,8 @@ export interface SliderFieldProps {
   maxValue: number;
   step?: number;
   disabled?: boolean;
-  /** The text shown beside the label and read by screen readers for the current value. */
   formatValue: (value: number) => string;
-  /** Runs on each step while the user drags or presses a key. */
   onChange?: (value: number) => void;
-  /** Runs once when the user releases the thumb, so a caller can save the final value only. */
   onChangeEnd?: (value: number) => void;
   class?: string;
 }
@@ -31,12 +28,8 @@ const SLIDER_STEP_KEYS = new Set([
   "PageDown",
 ]);
 
-/** One labelled value on a track, with the current value shown beside the label. */
 export function SliderField(props: SliderFieldProps): JSX.Element {
   const percent = () => ((props.value - props.minValue) / (props.maxValue - props.minValue)) * 100;
-  // On each thumb move, Kobalte reports the new value and then its own value again. Solid has not
-  // applied the write yet, so the second report is the old value and would undo the drag. The first
-  // report of a task is the real one.
   let reportedThisTask = false;
   function reportChange(value: number): void {
     if (reportedThisTask) return;
@@ -53,8 +46,8 @@ export function SliderField(props: SliderFieldProps): JSX.Element {
       value={[props.value]}
       minValue={props.minValue}
       maxValue={props.maxValue}
-      step={props.step}
-      disabled={props.disabled}
+      step={props.step ?? 1}
+      disabled={props.disabled ?? false}
       getValueLabel={(params) => props.formatValue(params.values[0] ?? props.value)}
       onChange={(values) => reportChange(values[0] ?? props.value)}
       onChangeEnd={(values) => props.onChangeEnd?.(values[0] ?? props.value)}
@@ -66,18 +59,12 @@ export function SliderField(props: SliderFieldProps): JSX.Element {
       <Show when={props.description}>
         <SliderPrimitive.Description class="ui-slider-description">{props.description}</SliderPrimitive.Description>
       </Show>
-      {/* The track keeps the pointer during a drag, so the cue plays once, when the user releases it. */}
       <SliderPrimitive.Track
         class="ui-slider-track"
         data-cuelume-select={props.disabled ? undefined : ""}
         data-cuelume-emphasis="subtle"
       >
         <SliderPrimitive.Fill class="ui-slider-fill" />
-        {/* Kobalte renders `calc(NaN%)` until the thumb registers, so the wrapper sets the position.
-            Its thumb value text ignores getValueLabel, so the wrapper sets that too,
-            and aria-disabled, which Kobalte leaves off.
-            Kobalte also ends a keyboard change only on blur, so a key release ends it here. There is no
-            Slider.Input: nothing submits a form, and a second slider role would repeat the control. */}
         <SliderPrimitive.Thumb
           class="ui-slider-thumb"
           style={{ left: `${percent()}%` }}
@@ -85,6 +72,82 @@ export function SliderField(props: SliderFieldProps): JSX.Element {
           aria-disabled={props.disabled ? "true" : undefined}
           onKeyUp={(event) => {
             if (SLIDER_STEP_KEYS.has(event.key)) props.onChangeEnd?.(props.value);
+          }}
+        />
+      </SliderPrimitive.Track>
+    </SliderPrimitive.Root>
+  );
+}
+
+export interface SeekSliderProps {
+  label: string;
+  value: number;
+  maxValue: number;
+  step?: number;
+  disabled?: boolean;
+  formatValue: (value: number) => string;
+  onChange?: (value: number) => void;
+  onChangeEnd: (value: number) => void;
+  class?: string;
+  children?: JSX.Element;
+}
+
+export function SeekSlider(props: SeekSliderProps): JSX.Element {
+  const percent = () => (props.maxValue > 0 ? (props.value / props.maxValue) * 100 : 0);
+  let userChange = false;
+  let lastValue = props.value;
+  const startUserChange = () => {
+    userChange = true;
+    lastValue = props.value;
+  };
+  const startPointerChange = () => {
+    startUserChange();
+    document.addEventListener("pointerup", () => endChange(lastValue), { once: true });
+  };
+  let reportedThisTask = false;
+  function reportChange(value: number): void {
+    if (!userChange || reportedThisTask) return;
+    lastValue = value;
+    reportedThisTask = true;
+    queueMicrotask(() => {
+      reportedThisTask = false;
+    });
+    props.onChange?.(value);
+  }
+  function endChange(value: number): void {
+    if (!userChange) return;
+    userChange = false;
+    props.onChangeEnd(value);
+  }
+  return (
+    <SliderPrimitive.Root
+      data-slot="seek-slider"
+      class={cx("ui-seek-slider", props.class)}
+      value={[props.value]}
+      minValue={0}
+      maxValue={Math.max(props.maxValue, 0)}
+      step={props.step ?? 1}
+      disabled={props.disabled ?? false}
+      getValueLabel={(params) => props.formatValue(params.values[0] ?? props.value)}
+      onChange={(values) => reportChange(values[0] ?? props.value)}
+      onChangeEnd={(values) => endChange(values[0] ?? props.value)}
+    >
+      <SliderPrimitive.Track class="ui-seek-slider-track">
+        <span class="ui-seek-slider-picture" onPointerDown={startPointerChange}>
+          {props.children}
+        </span>
+        <SliderPrimitive.Thumb
+          class="ui-seek-slider-thumb"
+          style={{ left: `${percent()}%` }}
+          aria-label={props.label}
+          aria-valuetext={props.formatValue(props.value)}
+          aria-disabled={props.disabled ? "true" : undefined}
+          onPointerDown={startPointerChange}
+          onKeyDown={(event) => {
+            if (SLIDER_STEP_KEYS.has(event.key)) startUserChange();
+          }}
+          onKeyUp={(event) => {
+            if (SLIDER_STEP_KEYS.has(event.key)) endChange(props.value);
           }}
         />
       </SliderPrimitive.Track>

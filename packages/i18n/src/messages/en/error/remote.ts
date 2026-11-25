@@ -1,12 +1,13 @@
 import { defineMessages } from "../../../message";
 
 export const messages = defineMessages("error.remote", {
-  // Errors from remote servers, WebRTC transport, remote desktop, and the team client.
   "error.remote.desktopSetupClientUpdate": "Update the client to use remote desktop setup.",
   "error.remote.desktopSetupUnavailable": "Remote desktop setup is unavailable.",
   "error.remote.desktopTestUnavailable": "Remote desktop testing is unavailable.",
   "error.remote.controlUnavailable": "Remote control is unavailable.",
   "error.remote.controlSessionNotFound": "Remote control session not found.",
+  "error.remote.controlNotAllowed": "The owner of this computer does not let your role control it.",
+  "error.remote.controlDeclined": "The person at this computer did not allow remote control.",
   "error.remote.testRuntimeUpdate": "Update the macOS remote desktop runtime to run this test.",
   "error.remote.testOtherSessions": "End other remote desktop sessions before you start a test.",
   "error.remote.testPermissions": "Check permissions and the GUI session on the host before starting the test.",
@@ -19,6 +20,18 @@ export const messages = defineMessages("error.remote", {
   "error.remote.testActive": "A remote desktop test is active. Try again when it ends.",
   "error.remote.screenRecordingDenied":
     "The host has not allowed GoAhead to record its screen. Grant screen recording on the host, then try again.",
+  "error.remote.windowsSessionDisconnected":
+    "The Windows session on the host is disconnected, so it has no screen to share. Sign in to Windows at the screen of the host, then try again.",
+  "error.remote.windowsCaptureDenied":
+    "Windows on the host does not let GoAhead record its screen. Unlock Windows at the screen of the host and close any administrator prompt, then try again. If this continues, restart the host.",
+  "error.remote.macScreenLocked":
+    "The Mac is locked, so it cannot share its screen. Unlock the Mac at its screen, then try again.",
+  "error.remote.streamTooSlowLowerQuality":
+    "The connection to the host is too slow for the picture. Try again: the next connection uses a lower quality.",
+  "error.remote.streamTooSlow":
+    "The connection to the host is too slow for the picture. Use a faster network, then try again.",
+  "error.remote.noPictureSwitchEncoder":
+    "The host did not send a picture. Try again: the next connection uses a video setting that works on more computers.",
   "error.remote.teamSessionExpired": "The team session has expired.",
   "error.remote.finishTestBeforeSwitch": "Finish the remote desktop test before switching displays.",
   "error.remote.displayNotFound": "Remote display not found.",
@@ -72,12 +85,19 @@ export const messages = defineMessages("error.remote", {
   "error.remote.bridgeCommandFailed": "The Team WebRTC command failed.",
   "error.remote.webRtcFailed": "WebRTC failed.",
   "error.remote.ownerCannotLeave": "The owner cannot leave this host.",
+  "error.remote.ownerOnlyRemove": "Only the owner can remove this server.",
   "error.remote.requestTimeout": "The remote request timed out.",
   "error.remote.requestFailed": "The remote request failed.",
-  "error.remote.pinnedKeyMissing": "The remote host does not have a pinned device key.",
-  "error.remote.hostDidNotConnect": "The WebRTC host did not connect.",
+  "error.remote.hostKeyMissing":
+    "GoAhead cannot verify this server because its security key is missing or changed. Ask the server owner to check the server.",
+  "error.remote.connectionNotStarted":
+    "GoAhead could not start the connection to this server. If this continues, quit GoAhead and open it again.",
+  "error.remote.connectionServiceUnreachable":
+    "This computer cannot reach the GoAhead connection service. Check its internet connection. GoAhead connects again automatically.",
+  "error.remote.serverAnswerTimeout": "The server did not answer in time. GoAhead connects again automatically.",
   "error.remote.connectionCancelled": "The remote connection was cancelled.",
-  "error.remote.hostDisconnected": "The WebRTC host disconnected.",
+  "error.remote.hostDisconnected":
+    "The connection to the server was lost. Check whether the action finished, then try again.",
   "error.remote.eventGap": "The host event sequence has a gap.",
   "error.remote.malformedKnownEvent": "The host returned a malformed known event.",
   "error.remote.fileTransportIsStopped": "The WebRTC file transport is stopped.",
@@ -87,8 +107,10 @@ export const messages = defineMessages("error.remote", {
   "error.remote.fileTransferFailed": "The WebRTC file transfer failed.",
   "error.remote.fileResumeFailed": "The WebRTC file transfer could not resume before its deadline.",
   "error.remote.fileTransportStopped": "The WebRTC file transport stopped.",
+  "error.remote.downloadStopped": "The download was stopped.",
   "error.remote.fileResumeExpired": "The WebRTC file transfer resume deadline expired.",
   "error.remote.hostRequestFailed": "The host could not complete the request.",
+  "error.remote.responseTooLarge": "The reply from the host is too large to send to this device.",
   "error.remote.sessionNotReady": "The remote session is not ready.",
   "error.remote.peerDisconnected": "The WebRTC peer disconnected.",
   "error.remote.tooManyStreams": "Too many host streams are open.",
@@ -104,9 +126,8 @@ export const messages = defineMessages("error.remote", {
   "error.remote.operationFailed": "The remote operation failed.",
   "error.remote.connectionReplaced": "The connection was replaced.",
   "error.remote.desktopDidNotConnect": "The desktop did not connect.",
-  "error.remote.desktopRestarted": "The desktop restarted. Reconnecting with a new authenticated session.",
+  "error.remote.connectionDropped": "The server no longer has this connection. Connecting again.",
   "error.remote.dataBeforeAuth": "The host sent data before authentication.",
-  "error.remote.attachmentDownloadFailed": "The attachment download failed.",
   "error.remote.eventStreamGap": "The host event stream has a gap.",
   "error.remote.malformedEvent": "The host returned a malformed event.",
   "error.remote.desktopIdentityNotVerified": "The desktop identity could not be verified.",
@@ -120,7 +141,6 @@ export const messages = defineMessages("error.remote", {
   "error.remote.serverDisconnected": "The server disconnected.",
   "error.remote.preferencesUnreadable": "The saved chat preferences could not be read.",
   "error.remote.accountAuthRequired": "Account authentication is required.",
-  "error.remote.serverIdentityChanged": "The server identity changed. Refusing to replace the trusted host key.",
   "error.remote.pairedIdentityChanged":
     "The paired desktop identity is missing or changed. Scan a new code from that desktop.",
   "error.remote.permanentInviteNoEmail": "Permanent invitations cannot be sent by email.",
@@ -143,6 +163,7 @@ export const messages = defineMessages("error.remote", {
   "error.remote.attachmentRejected": "The host rejected the attachment.",
   "error.remote.attachmentTooLarge": "Attachments must be 10 MB or smaller.",
   "error.remote.attachmentBusy": "Wait for the current attachment to finish.",
+  "error.remote.attachmentChanged": "The file changed or is not available. Select it again.",
   "error.remote.uploadTimeout": "The attachment upload timed out.",
   "error.remote.hostSessionActive": "The host already has an active remote session.",
   "error.remote.tooManyConnections": "Too many active remote connections.",
@@ -161,11 +182,52 @@ export const messages = defineMessages("error.remote", {
   "error.remote.signalFrameUnreadable": "Signal sent a frame this peer cannot read.",
   "error.remote.webRtcCommandFailed": "The WebRTC command failed.",
   "error.remote.dataChannelFailed": "{kind} channel failed.",
-  // Channel actions on mobile.
+  "error.remote.hostBusy": "The host is busy with another connection. Try again in a moment.",
+  "error.remote.signalPermissionDenied": "Your account does not have access to this host. Ask the owner for access.",
+  "error.remote.signalRateLimited": "Too many connection attempts. GoAhead tries again in {seconds} seconds.",
+  "error.remote.signalProtocolError":
+    "Signal and this app do not agree on the connection protocol. Update GoAhead, then try again.",
+  "error.remote.signalRefused": "Signal refused the connection.",
+  "error.remote.signalClosed": "The connection to Signal closed before the host answered.",
+  "error.remote.relayUnavailable": "Signal sent no relay servers for this connection. Try again later.",
+  "error.remote.iceFailed": "A direct connection to the host could not be made. A firewall, VPN or proxy can block it.",
+  "error.remote.iceDisconnected": "The direct connection to the host was lost.",
+  "error.remote.webrtcBlocked":
+    "This device blocks the connection that GoAhead needs. If Lockdown Mode is on, turn it off for GoAhead in Settings > Privacy & Security > Lockdown Mode.",
+  "error.remote.directoryUnreachable": "GoAhead could not reach the GoAhead service. Check your connection.",
+  "error.remote.directoryTimeout": "The GoAhead service did not answer in time. Try again.",
+  "error.remote.inviteAlreadyUsed": "This invitation was already used. Ask for a new invitation.",
+  "error.remote.inviteNotFound": "This invitation does not exist or has expired. Ask for a new invitation.",
+  "error.remote.licenseUsersFull":
+    "The server owner's license has no free user. Ask the owner to add a user to the license.",
+  "error.remote.memberLimitReached": "This host has reached its member limit. Ask the owner to make space.",
+  "error.remote.hostNotRegistered": "This host is no longer registered with the GoAhead service.",
+  "error.remote.membershipEnded": "You are no longer a member of this host. Ask the owner for a new invitation.",
+  "error.remote.membershipChanged":
+    "Someone changed this member at the same time. Load the members again and try again.",
+  "error.remote.accountSessionInactive": "Your sign-in is no longer active. Sign in again.",
+  "error.remote.hostOtherAccount": "This host belongs to another account.",
+  "error.remote.remoteNotConfigured": "Remote connections are not set up on this GoAhead service.",
+  "error.remote.hostRefused": "The host refused the request ({status}).",
   "error.remote.formUnavailable": "This form is no longer available.",
+  "error.remote.hostedServerRemoval": "Use Billing to delete a hosted server.",
+  "error.remote.hostRemoved": "The owner removed this server from the account.",
+  "error.remote.ownerTransferSelf": "You already own this server. Enter the email of the new owner.",
+  "error.remote.ownerTransferHosted": "A server that GoAhead hosts cannot change its owner.",
+  "error.remote.ownerTransferInvalid":
+    "This ownership transfer is no longer available. Ask the owner to send it again.",
   "error.remote.channelsUnsupported": "Update this desktop server to use channels.",
   "error.remote.channelDeleteUnsupported": "Update this desktop server to delete channels.",
-  "error.remote.attachmentUploadCancelled": "Attachment upload cancelled.",
   "error.remote.historyRefreshFailed": "The message was sent, but chat history could not refresh.",
   "error.remote.taskHistoryRefreshFailed": "The task was changed, but chat history could not refresh.",
+  "error.remote.serverNotLoaded": "GoAhead could not load the server. Try again.",
+  "error.remote.localServerNotStarted":
+    "The server on this computer did not start. Try again. If it does not start, restart GoAhead on this computer.",
+  "error.remote.localServerNotFound": "This server is not on this computer.",
+  "error.remote.localServerAccountRemovalFailed":
+    "The server is deleted on its computer, but the account still lists it. Delete it again to remove it from the account.",
+  "error.remote.localServerLimit":
+    "You can have at most {limit} servers on this computer. Delete one to create another.",
+  "error.remote.localServersReadOnly":
+    "This version of GoAhead cannot read the list of servers on this computer. Update GoAhead.",
 });

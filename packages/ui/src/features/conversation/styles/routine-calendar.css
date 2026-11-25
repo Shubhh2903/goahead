@@ -1,4 +1,3 @@
-/* Routine calendar: the runs of every routine, by day, with the next runs beside them. */
 .routine-planner {
   container-type: inline-size;
   display: grid;
@@ -10,37 +9,6 @@
 .routine-planner-header {
   display: grid;
   gap: var(--openbot-space-3);
-}
-
-.routine-planner-title {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--openbot-space-3);
-}
-
-.routine-planner-identity {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: var(--openbot-space-2);
-}
-
-/* The arrow lines up with the content edge, not its hit area. */
-.routine-planner-identity .ui-icon-button {
-  margin-left: calc(-1 * var(--openbot-space-2));
-}
-
-.routine-planner-title h2 {
-  font-size: var(--openbot-text-lg);
-  font-weight: var(--openbot-weight-semibold);
-}
-
-.routine-planner-title h2 span {
-  color: var(--openbot-text-muted);
-  font-weight: var(--openbot-weight-regular);
 }
 
 .routine-planner-title p,
@@ -66,7 +34,7 @@
 }
 
 .routine-planner-range {
-  margin-left: var(--openbot-space-2);
+  margin-inline-start: var(--openbot-space-2);
   font-size: var(--openbot-text-md);
   font-weight: var(--openbot-weight-medium);
   font-variant-numeric: tabular-nums;
@@ -89,7 +57,24 @@
   gap: var(--openbot-space-4);
 }
 
-/* Each day is a list, not a time grid: runs at the same minute stack and stay readable. */
+.routine-planner-grid {
+  display: grid;
+  min-width: 0;
+  gap: var(--openbot-space-1);
+}
+
+.routine-planner-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--openbot-space-1);
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+}
+
+.routine-planner-weekdays > * {
+  padding-inline: calc(1px + var(--openbot-space-1-5));
+}
+
 .routine-planner-week {
   display: grid;
   min-width: 0;
@@ -186,7 +171,7 @@
 }
 
 .routine-planner-avatars .routine-planner-avatar + .routine-planner-avatar {
-  margin-left: calc(var(--openbot-space-1-5) * -1);
+  margin-inline-start: calc(var(--openbot-space-1-5) * -1);
 }
 
 .routine-planner-run.ui-button {
@@ -203,7 +188,7 @@
   border-radius: var(--openbot-radius-sm);
   background: var(--openbot-bg-control);
   padding: var(--openbot-space-1) var(--openbot-space-1-5);
-  text-align: left;
+  text-align: start;
   font-size: var(--openbot-text-sm);
 }
 
@@ -217,7 +202,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Two lines before an ellipsis: a day column is narrow, and the name is what tells runs apart. */
 .routine-planner-run-name {
   display: -webkit-box;
   grid-area: name;
@@ -234,7 +218,6 @@
   grid-area: avatars;
 }
 
-/* A paused run would happen if the routine resumed. It keeps its place but loses its weight. */
 .routine-planner-run[data-status="paused"],
 .routine-planner-entry[data-status="paused"] {
   opacity: 0.6;
@@ -257,6 +240,40 @@
 .routine-planner-more.ui-button {
   justify-self: start;
   color: var(--openbot-text-muted);
+}
+
+.routine-planner[data-view="month"] .routine-planner-day {
+  min-height: 7rem;
+}
+
+.routine-planner[data-view="month"] .routine-planner-day-button > span {
+  display: none;
+}
+
+.routine-planner[data-view="month"] .routine-planner-run.ui-button {
+  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-areas: "mark time name";
+}
+
+.routine-planner[data-view="month"] .routine-planner-run-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.routine-planner[data-view="month"] .routine-planner-run .routine-planner-avatars {
+  display: none;
+}
+
+.routine-planner-day[data-outside] {
+  border-color: var(--openbot-border);
+  background: var(--openbot-transparent);
+}
+
+.routine-planner-day[data-outside] .routine-planner-day-button strong {
+  color: var(--openbot-text-muted);
+  font-weight: var(--openbot-weight-regular);
 }
 
 .routine-planner-upcoming,
@@ -311,7 +328,7 @@
   gap: var(--openbot-space-2);
   border-radius: var(--openbot-radius-md);
   padding: var(--openbot-space-1-5) var(--openbot-space-2);
-  text-align: left;
+  text-align: start;
 }
 
 .routine-planner-entry-text {
@@ -350,21 +367,220 @@
   height: var(--openbot-control-xs);
 }
 
-.routine-planner-empty {
+.routine-planner-empty,
+.routine-planner-empty-board {
   display: grid;
+  min-width: 0;
+}
+
+.routine-planner-empty > *,
+.routine-planner-empty-board > * {
+  grid-area: 1 / 1;
+}
+
+.routine-planner-empty-board {
+  pointer-events: none;
+  user-select: none;
+}
+
+.routine-planner-empty-cells,
+.routine-planner-empty-runs {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-rows: 10rem;
+}
+
+.routine-planner-empty-cells {
+  mask-image:
+    radial-gradient(ellipse 36% 36% at 50% 50%, var(--openbot-transparent) 68%, var(--openbot-text-primary) 100%),
+    radial-gradient(ellipse 72% 78% at 50% 50%, var(--openbot-text-primary) 50%, var(--openbot-transparent) 100%);
+  mask-composite: intersect;
+}
+
+.routine-planner-empty-cell {
+  border-top: 1px solid var(--openbot-border);
+  border-inline-start: 1px solid var(--openbot-border);
+  padding: var(--openbot-space-2) var(--openbot-space-3);
+  color: var(--openbot-text-dim);
+  font-size: var(--openbot-text-md);
+}
+
+.routine-planner-empty-cell[data-outside] {
+  opacity: 0.45;
+}
+
+.routine-planner-empty-cell[data-today] {
+  color: var(--openbot-text-primary);
+  font-weight: var(--openbot-weight-semibold);
+}
+
+.routine-planner-empty-run {
+  display: grid;
+  min-width: 0;
+  align-self: start;
+  justify-items: start;
+  gap: var(--openbot-space-2);
+  grid-row: var(--routine-planner-empty-row);
+  grid-column: var(--routine-planner-empty-column);
+  margin-top: calc(var(--openbot-space-8) + var(--openbot-space-1));
+  padding-inline: var(--openbot-space-2);
+  animation: routine-planner-empty-life var(--routine-planner-empty-life) var(--openbot-ease-out) both;
+}
+
+.routine-planner-empty-run > .routine-planner-run {
+  width: 100%;
+}
+
+.routine-planner-empty-day {
+  display: none;
+}
+
+.routine-planner-empty-check {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  opacity: 0;
+  animation: routine-planner-empty-draw 420ms var(--openbot-ease-out) 380ms forwards;
+}
+
+@keyframes routine-planner-empty-life {
+  0% {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateY(10px) scale(0.96);
+  }
+
+  8%,
+  88% {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+
+  100% {
+    opacity: 0;
+    filter: blur(3px);
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes routine-planner-empty-draw {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
+}
+
+.routine-planner-hand {
+  color: var(--openbot-accent-text);
+  font-family: "Bradley Hand", "Noteworthy", "Segoe Print", cursive;
+  font-weight: var(--openbot-weight-semibold);
+}
+
+.routine-planner-empty-note {
+  display: grid;
+  width: fit-content;
+  padding-inline: var(--openbot-space-1);
+  font-size: var(--openbot-text-xl);
+  line-height: 1.3;
+  transform: rotate(-1.5deg);
+  transform-origin: left top;
+}
+
+.routine-planner-empty-line {
+  clip-path: inset(-0.4em 100% -0.4em -0.2em);
+  animation: routine-planner-empty-write var(--routine-planner-empty-length) linear var(--routine-planner-empty-delay)
+    forwards;
+}
+
+@keyframes routine-planner-empty-write {
+  to {
+    clip-path: inset(-0.4em -0.2em -0.4em -0.2em);
+  }
+}
+
+.routine-planner-empty-underline {
+  width: 100%;
+  height: var(--openbot-space-2);
+  overflow: visible;
+}
+
+.routine-planner-empty-underline path {
+  fill: none;
+  stroke: currentColor;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  stroke-linecap: round;
+  opacity: 0;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  animation: routine-planner-empty-draw 520ms var(--openbot-ease-out) var(--routine-planner-empty-delay) forwards;
+}
+
+.routine-planner-empty-pitch {
+  z-index: 1;
+  display: grid;
+  max-width: 34rem;
+  place-self: center;
   justify-items: center;
-  gap: var(--openbot-space-3);
-  border: 1px dashed var(--openbot-border-grouped);
-  border-radius: var(--openbot-radius-lg);
-  padding: var(--openbot-space-8) var(--openbot-space-4);
-  color: var(--openbot-text-muted);
+  gap: var(--openbot-space-4);
+  padding: var(--openbot-space-6);
   text-align: center;
 }
 
-.routine-planner-empty > svg {
-  width: var(--openbot-space-6);
-  height: var(--openbot-space-6);
-  stroke-width: var(--openbot-icon-stroke);
+.routine-planner-empty-title {
+  display: grid;
+  font-size: var(--openbot-text-display);
+  font-weight: var(--openbot-weight-semibold);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.routine-planner-empty-title > .routine-planner-empty-lead {
+  color: var(--openbot-text-muted);
+}
+
+.routine-planner-empty-done {
+  clip-path: inset(-0.4em 100% -0.4em -0.2em);
+  animation: routine-planner-empty-write 520ms linear 500ms forwards;
+}
+
+.routine-planner-empty-lines {
+  display: grid;
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-xl);
+  line-height: 1.5;
+}
+
+.routine-planner-empty-action.ui-button {
+  width: 100%;
+  max-width: 22rem;
+  height: var(--openbot-control-lg);
+  margin-top: var(--openbot-space-2);
+}
+
+.routine-planner-empty-menu {
+  min-width: 14rem;
+  max-height: min(520px, calc(100dvh - 16px), var(--kb-popper-content-available-height, 520px));
+  overflow-y: auto;
+}
+
+.routine-planner-empty[data-still]
+  :is(
+    .routine-planner-empty-run,
+    .routine-planner-empty-check,
+    .routine-planner-empty-line,
+    .routine-planner-empty-underline path,
+    .routine-planner-empty-done
+  ) {
+  animation: none;
+  clip-path: none;
+  stroke-dashoffset: 0;
+  opacity: 1;
 }
 
 .routine-planner-skeleton-heading {
@@ -375,14 +591,12 @@
   height: var(--openbot-control-md);
 }
 
-/* Seven day columns need the full width: the next runs move below the week. */
 @container (max-width: 1160px) {
   .routine-planner-body {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
-/* A narrow pane, such as a phone or a side panel: the week becomes a list of days. */
 @container (max-width: 920px) {
   .routine-planner-week {
     grid-template-columns: minmax(0, 1fr);
@@ -405,4 +619,162 @@
   .routine-planner-loading .routine-planner-day > * {
     grid-column: 1;
   }
+
+  .routine-planner-weekdays,
+  .routine-planner-day[data-outside] {
+    display: none;
+  }
+
+  .routine-planner[data-view="month"] .routine-planner-day {
+    min-height: 0;
+  }
+
+  .routine-planner[data-view="month"] .routine-planner-day-button > span {
+    display: inline;
+  }
+
+  .routine-planner-empty > .routine-planner-empty-board {
+    grid-area: 2 / 1;
+  }
+
+  .routine-planner-empty-pitch {
+    padding-inline: 0;
+  }
+
+  .routine-planner-empty-title {
+    font-size: var(--openbot-text-3xl);
+  }
+
+  .routine-planner-empty-lines {
+    font-size: var(--openbot-text-lg);
+  }
+
+  .routine-planner-empty-cells {
+    display: none;
+  }
+
+  .routine-planner-empty-runs {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(3, 8rem);
+    grid-auto-rows: 0;
+  }
+
+  .routine-planner-empty-run {
+    width: 100%;
+    grid-row: var(--routine-planner-empty-slot);
+    grid-column: 1;
+    margin-top: 0;
+    padding-inline: 0;
+  }
+
+  .routine-planner-empty-day {
+    display: block;
+    color: var(--openbot-text-dim);
+    font-size: var(--openbot-text-sm);
+  }
+
+  .routine-planner-empty-note {
+    font-size: var(--openbot-text-lg);
+  }
+}
+
+:dir(rtl) .routine-planner-empty-note {
+  transform-origin: right top;
+}
+
+:dir(rtl) .routine-planner-empty-line {
+  clip-path: inset(-0.4em -0.2em -0.4em 100%);
+}
+
+:dir(rtl) .routine-planner-nav :is(svg[class~="lucide-chevron-left"], svg[class~="lucide-chevron-right"]) {
+  transform: scaleX(-1);
+}
+
+.routine-planner[data-create] .routine-planner-day {
+  position: relative;
+}
+
+.routine-planner-day[data-opens] {
+  cursor: pointer;
+}
+
+.routine-planner-day[data-opens]:hover,
+.routine-planner-day[data-slot] {
+  border-color: var(--openbot-border-focus);
+}
+
+.routine-planner-add.ui-button {
+  position: absolute;
+  top: var(--openbot-space-1-5);
+  inset-inline-end: var(--openbot-space-1-5);
+  opacity: 0;
+}
+
+.routine-planner-day:hover .routine-planner-add,
+.routine-planner-day[data-slot] .routine-planner-add,
+.routine-planner-add.ui-button:focus-visible {
+  opacity: 1;
+}
+
+.routine-planner-day-add.ui-button {
+  justify-self: start;
+  color: var(--openbot-text-secondary);
+}
+
+.routine-planner-create.ui-popover-menu-surface {
+  z-index: var(--openbot-layer-popover);
+  width: 360px;
+  max-height: min(680px, calc(100vh - var(--openbot-space-8)));
+  overflow: auto;
+  border-radius: var(--openbot-radius-lg);
+  box-shadow: 0 0 0 1px var(--openbot-border);
+  padding: var(--openbot-space-3);
+}
+
+.routine-planner-create-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--openbot-space-2);
+  margin-bottom: var(--openbot-space-3);
+}
+
+.routine-planner-create-title {
+  margin: 0;
+  color: var(--openbot-text-primary);
+  font-size: var(--openbot-text-md);
+  font-weight: var(--openbot-weight-semibold);
+}
+
+.routine-planner-create .settings-field:last-child {
+  margin-bottom: 0;
+}
+
+.routine-planner-create-when {
+  margin: 0 0 17px;
+}
+
+.routine-planner-create-when h3 {
+  margin: 0 0 6px;
+  margin-inline-start: 8px;
+  color: var(--openbot-text-secondary);
+  font-size: var(--openbot-text-sm);
+  font-weight: var(--openbot-weight-medium);
+}
+
+.routine-planner-create-agent.ui-button {
+  justify-content: flex-start;
+  gap: var(--openbot-space-1-5);
+  width: 100%;
+}
+
+.routine-planner-create-agent .tasks-page-agent-chevron {
+  margin-inline-start: auto;
+}
+
+.routine-planner-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--openbot-space-2);
+  margin-top: var(--openbot-space-3);
 }

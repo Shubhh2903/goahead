@@ -1,87 +1,178 @@
+import { attachmentMimeTypeForName, playableMediaKind } from "@openbot/contracts/attachment-files";
 import { type AttachmentSummary, canPreviewAttachment } from "@openbot/contracts/ipc";
-import { Button, Download, Spinner } from "@openbot/ui";
-import { createSignal, createUniqueId, For, Show } from "solid-js";
+import {
+  AudioLines,
+  Button,
+  Download,
+  ExternalLink,
+  Film,
+  LabelTooltip,
+  LabelTooltipTrigger,
+  Play,
+  RadialProgress,
+  RefreshCw,
+  Square,
+} from "@openbot/ui";
+import { createSignal, For, Match, Show, Switch } from "solid-js";
 import { useText } from "../../text";
-import { AnchoredTooltip } from "./AnchoredTooltip";
 import { attachmentReferenceTone } from "./AttachmentReference";
+import { MediaFilePreview } from "./MediaFilePreview";
+import type { VideoStageMenu } from "./VideoStage";
 
-/**
- * The whole-list action, shaped like the account update island: a tinted bar
- * that states what is attached, with a light action button beside it. The
- * bottom edge tucks under the first attachment card, so the stack reads as one
- * object rather than a button parked above a list.
- */
-export function AttachmentDownloadAll(props: { count: number; pending: boolean; onDownload: () => void }) {
-  const { t } = useText();
-  const label = () => (props.pending ? t("attachment.downloadAll.pending") : t("attachment.downloadAll.label"));
-  return (
-    <div class="attachment-download-island">
-      <p class="attachment-download-island__copy">{t("attachment.downloadAll.count", { count: props.count })}</p>
-      <div class="attachment-download-island__action-shell">
-        <Button
-          type="button"
-          size="xs"
-          class="attachment-download-island__action"
-          aria-label={label()}
-          aria-busy={props.pending ? "true" : undefined}
-          disabled={props.pending}
-          onClick={() => props.onDownload()}
-        >
-          <span class="attachment-download-island__action-content">
-            <span class="attachment-download-island__icon t-icon-swap" data-state={props.pending ? "b" : "a"}>
-              <span class="t-icon" data-icon="a" aria-hidden="true">
-                <Download />
-              </span>
-              <span class="t-icon" data-icon="b" aria-hidden="true">
-                <Spinner size="sm" />
-              </span>
-            </span>
-            <span
-              class="attachment-download-island__action-label"
-              data-state={props.pending ? "pending" : "action"}
-              aria-hidden="true"
-            >
-              <span data-text="action">{t("common.download")}</span>
-              <span data-text="pending">{t("attachment.downloadAll.zipping")}</span>
-            </span>
-          </span>
-        </Button>
-      </div>
-    </div>
-  );
+export interface AttachmentMediaSource {
+  url(attachmentId: string): string | undefined;
+  load(attachment: AttachmentSummary, limit?: "thumbnail" | "generated"): Promise<boolean>;
+  thumbnailLimit: number;
+  generatedImageLimit: number;
+  mediaLimit: number;
 }
+
+export type AttachmentDownloadState = { phase: "downloading"; received: number; total: number } | { phase: "failed" };
+
+export interface AttachmentDownloads {
+  state(attachmentId: string): AttachmentDownloadState | undefined;
+  stop(attachment: AttachmentSummary): void;
+  retry(attachment: AttachmentSummary): void;
+}
+
+const REMOTE_PREVIEW_URL = /^openbot-remote-attachment:/;
 
 export function AttachmentCards(props: {
   attachments: AttachmentSummary[];
-  /** `origin` is the clicked card, for a viewer that zooms out of it. */
+  mediaSource?: AttachmentMediaSource | undefined;
+  downloads?: AttachmentDownloads | undefined;
   onPreview: (attachment: AttachmentSummary, origin: HTMLElement) => void;
   onAction: (attachment: AttachmentSummary, action: "open" | "reveal" | "download") => void;
 }) {
   const { t, format } = useText();
-  const tooltipId = `attachment-action-tooltip-${createUniqueId()}`;
-  const [tooltip, setTooltip] = createSignal<{ anchor: HTMLElement; content: string } | null>(null);
-  // An image whose preview does not load was deleted from the host, or never arrived. The card
-  // keeps its place in the message and says so, instead of an empty frame.
   const [missing, setMissing] = createSignal<ReadonlySet<string>>(new Set());
+  const mediaKind = (attachment: AttachmentSummary) =>
+    playableMediaKind(attachment.mimeType || attachmentMimeTypeForName(attachment.name));
   const isMissing = (attachment: AttachmentSummary) => missing().has(attachment.id);
   const markMissing = (attachment: AttachmentSummary) => setMissing((current) => new Set(current).add(attachment.id));
-
-  const openTooltip = (anchor: HTMLElement) => {
-    setTooltip({ anchor, content: t("attachment.openFile") });
+  const [loadingMedia, setLoadingMedia] = createSignal<ReadonlySet<string>>(new Set());
+  const [playRequested, setPlayRequested] = createSignal<ReadonlySet<string>>(new Set());
+  const started = (attachment: AttachmentSummary) => {
+    if (!playRequested().has(attachment.id)) return;
+    setPlayRequested((current) => {
+      const next = new Set(current);
+      next.delete(attachment.id);
+      return next;
+    });
   };
-  const closeTooltip = (anchor: HTMLElement) => {
-    if (tooltip()?.anchor === anchor) setTooltip(null);
+  const [unplayable, setUnplayable] = createSignal<ReadonlySet<string>>(new Set());
+  const markUnplayable = (attachment: AttachmentSummary) =>
+    setUnplayable((current) => new Set(current).add(attachment.id));
+  const sourceUrl = (attachment: AttachmentSummary) =>
+    attachment.previewUrl ? undefined : props.mediaSource?.url(attachment.id);
+  const imageUrl = (attachment: AttachmentSummary) => attachment.previewUrl ?? sourceUrl(attachment);
+  const canLoadMedia = (attachment: AttachmentSummary) =>
+    !attachment.previewUrl &&
+    Boolean(mediaKind(attachment)) &&
+    props.mediaSource !== undefined &&
+    attachment.size <= props.mediaSource.mediaLimit &&
+    !sourceUrl(attachment);
+  const showsPlayer = (attachment: AttachmentSummary) =>
+    !isMissing(attachment) &&
+    (Boolean(imageUrl(attachment)) || (mediaKind(attachment) === "video" && canLoadMedia(attachment)));
+  const showsVideo = (attachment: AttachmentSummary) =>
+    mediaKind(attachment) === "video" && showsPlayer(attachment) && !unplayable().has(attachment.id);
+  const download = (attachment: AttachmentSummary) => props.downloads?.state(attachment.id);
+  const downloading = (attachment: AttachmentSummary) => {
+    const state = download(attachment);
+    return state?.phase === "downloading" ? state : undefined;
   };
-  const closeTooltipOnEscape = (event: KeyboardEvent) => {
-    if (event.key === "Escape" && event.currentTarget instanceof HTMLElement) closeTooltip(event.currentTarget);
+  const percent = (state: { received: number; total: number }) =>
+    state.total > 0 ? Math.min(100, Math.floor((state.received / state.total) * 100)) : 0;
+  const status = (attachment: AttachmentSummary) => {
+    if (isMissing(attachment)) return t("attachment.notFound");
+    const state = download(attachment);
+    if (state?.phase === "failed") return t("attachment.downloadFailed");
+    if (state?.phase === "downloading")
+      return t("attachment.downloadProgress", {
+        received: format.fileSizeAmount(state.received, state.total),
+        total: format.fileSize(state.total),
+      });
+    return format.fileSize(attachment.size);
+  };
+  const mediaPreload = (attachment: AttachmentSummary) => {
+    if (mediaKind(attachment) === "video")
+      return REMOTE_PREVIEW_URL.test(attachment.previewUrl ?? "") ? "none" : "metadata";
+    return attachment.previewUrl ? "none" : "metadata";
+  };
+  const loadMedia = async (attachment: AttachmentSummary) => {
+    const source = props.mediaSource;
+    if (!source || loadingMedia().has(attachment.id)) return;
+    setLoadingMedia((current) => new Set(current).add(attachment.id));
+    try {
+      if (await source.load(attachment)) setPlayRequested((current) => new Set(current).add(attachment.id));
+      else markUnplayable(attachment);
+    } finally {
+      setLoadingMedia((current) => {
+        const next = new Set(current);
+        next.delete(attachment.id);
+        return next;
+      });
+    }
   };
 
   return (
-    <>
-      <div class="message-attachments">
-        <For each={props.attachments}>
-          {(attachment) => (
-            <div class="message-attachment" data-status={isMissing(attachment) ? "missing" : undefined}>
+    <div class="message-attachments">
+      <For each={props.attachments}>
+        {(attachment) => {
+          const source = props.mediaSource;
+          if (
+            source &&
+            !attachment.previewUrl &&
+            attachment.previewKind === "image" &&
+            attachment.size <= source.thumbnailLimit
+          )
+            void source.load(attachment);
+          let card: HTMLDivElement | undefined;
+          const videoMenu = (): VideoStageMenu => {
+            const actions = [
+              { label: t("common.download"), onSelect: () => props.onAction(attachment, "download") },
+              { label: t("attachment.openFile"), onSelect: () => props.onAction(attachment, "open") },
+            ];
+            if (canPreviewAttachment(attachment) && card) {
+              const origin = card;
+              actions.unshift({
+                label: t("chat.preview.preview"),
+                onSelect: () => props.onPreview(attachment, origin),
+              });
+            }
+            return {
+              details: [attachment.name, status(attachment)],
+              actions,
+            };
+          };
+          const player = () => (
+            <MediaFilePreview
+              kind={mediaKind(attachment)}
+              src={imageUrl(attachment)}
+              name={attachment.name}
+              class="attachment-media-player"
+              preload={mediaPreload(attachment)}
+              autoplay={playRequested().has(attachment.id)}
+              attachmentId={attachment.id}
+              loading={loadingMedia().has(attachment.id)}
+              onLoad={() => void loadMedia(attachment)}
+              onPlay={() => started(attachment)}
+              onError={() => markUnplayable(attachment)}
+              menu={videoMenu()}
+              onDownload={() => props.onAction(attachment, "download")}
+            />
+          );
+          return (
+            <div
+              ref={card}
+              class="message-attachment"
+              data-media={mediaKind(attachment) ?? undefined}
+              data-player={showsVideo(attachment) ? "video" : undefined}
+              data-status={isMissing(attachment) ? "missing" : undefined}
+              data-download={download(attachment)?.phase}
+            >
+              <Show when={showsVideo(attachment)}>{player()}</Show>
               <Button
                 variant="ghost"
                 type="button"
@@ -93,14 +184,18 @@ export function AttachmentCards(props: {
                 onClick={(event) => props.onPreview(attachment, event.currentTarget)}
               >
                 <Show
-                  when={attachment.previewKind === "image" && attachment.previewUrl && !isMissing(attachment)}
+                  when={attachment.previewKind === "image" && imageUrl(attachment) && !isMissing(attachment)}
                   fallback={
                     <span
                       class="attachment-file-visual"
                       data-file-tone={attachmentReferenceTone(attachment.name)}
                       aria-hidden="true"
                     >
-                      <AttachmentFileIcon />
+                      <Show when={mediaKind(attachment)} fallback={<AttachmentFileIcon />}>
+                        <Show when={mediaKind(attachment) === "audio"} fallback={<Film />}>
+                          <AudioLines />
+                        </Show>
+                      </Show>
                     </span>
                   }
                 >
@@ -108,56 +203,99 @@ export function AttachmentCards(props: {
                     class="attachment-file-visual attachment-file-image"
                     data-file-tone={attachmentReferenceTone(attachment.name)}
                   >
-                    <img src={attachment.previewUrl ?? ""} alt="" onError={() => markMissing(attachment)} />
+                    <img
+                      src={imageUrl(attachment) ?? ""}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      onError={() => {
+                        if (attachment.previewUrl) markMissing(attachment);
+                      }}
+                    />
                   </span>
                 </Show>
                 <span class="attachment-file-copy">
-                  <strong>{attachment.name}</strong>
-                  <small>{isMissing(attachment) ? t("attachment.notFound") : format.fileSize(attachment.size)}</small>
+                  <strong title={attachment.name}>{attachment.name}</strong>
+                  <small>{status(attachment)}</small>
                 </span>
               </Button>
               <Show when={!isMissing(attachment)}>
-                <Button
-                  variant="ghost"
-                  type="button"
-                  class="attachment-open-button"
-                  aria-label={t("attachment.download", { name: attachment.name })}
-                  onClick={() => {
-                    setTooltip(null);
-                    props.onAction(attachment, "download");
-                  }}
+                <Show when={canLoadMedia(attachment) && mediaKind(attachment) === "audio"}>
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    class="attachment-open-button"
+                    aria-label={t("attachment.loadMedia", { name: attachment.name })}
+                    disabled={loadingMedia().has(attachment.id)}
+                    aria-busy={loadingMedia().has(attachment.id) ? "true" : undefined}
+                    onClick={() => void loadMedia(attachment)}
+                  >
+                    <Play />
+                  </Button>
+                </Show>
+                <Switch
+                  fallback={
+                    <Button
+                      variant="ghost"
+                      type="button"
+                      class="attachment-open-button"
+                      aria-label={t("attachment.download", { name: attachment.name })}
+                      onClick={() => props.onAction(attachment, "download")}
+                    >
+                      <Download />
+                    </Button>
+                  }
                 >
-                  <Download />
-                </Button>
-                <Button
-                  variant="ghost"
-                  type="button"
-                  class="attachment-open-button"
-                  aria-label={t("attachment.open", { name: attachment.name })}
-                  aria-describedby={tooltipId}
-                  onPointerEnter={(event) => openTooltip(event.currentTarget)}
-                  onMouseEnter={(event) => openTooltip(event.currentTarget)}
-                  onPointerLeave={(event) => closeTooltip(event.currentTarget)}
-                  onMouseLeave={(event) => closeTooltip(event.currentTarget)}
-                  onFocus={(event) => openTooltip(event.currentTarget)}
-                  onBlur={(event) => closeTooltip(event.currentTarget)}
-                  onKeyDown={closeTooltipOnEscape}
-                  onClick={() => {
-                    setTooltip(null);
-                    props.onAction(attachment, "open");
-                  }}
-                >
-                  <AttachmentOpenIcon />
-                </Button>
+                  <Match when={downloading(attachment)}>
+                    {(state) => (
+                      <Button
+                        variant="ghost"
+                        type="button"
+                        class="attachment-open-button attachment-download-stop"
+                        aria-label={t("attachment.stopDownload", {
+                          name: attachment.name,
+                          percent: String(percent(state())),
+                        })}
+                        onClick={() => props.downloads?.stop(attachment)}
+                      >
+                        <RadialProgress class="attachment-download-ring" value={percent(state())} aria-hidden="true">
+                          <Square />
+                        </RadialProgress>
+                      </Button>
+                    )}
+                  </Match>
+                  <Match when={download(attachment)?.phase === "failed"}>
+                    <Button
+                      variant="ghost"
+                      type="button"
+                      class="attachment-open-button"
+                      aria-label={t("attachment.retryDownload", { name: attachment.name })}
+                      onClick={() => props.downloads?.retry(attachment)}
+                    >
+                      <RefreshCw />
+                    </Button>
+                  </Match>
+                </Switch>
+                <LabelTooltip content={t("attachment.openFile")}>
+                  <LabelTooltipTrigger
+                    as={Button}
+                    variant="ghost"
+                    type="button"
+                    class="attachment-open-button"
+                    aria-label={t("attachment.open", { name: attachment.name })}
+                    disabled={downloading(attachment) !== undefined}
+                    onClick={() => props.onAction(attachment, "open")}
+                  >
+                    <ExternalLink />
+                  </LabelTooltipTrigger>
+                </LabelTooltip>
               </Show>
+              <Show when={showsPlayer(attachment) && !showsVideo(attachment)}>{player()}</Show>
             </div>
-          )}
-        </For>
-      </div>
-      <Show when={tooltip()}>
-        {(current) => <AnchoredTooltip id={tooltipId} anchor={current().anchor} content={current().content} />}
-      </Show>
-    </>
+          );
+        }}
+      </For>
+    </div>
   );
 }
 
@@ -172,15 +310,6 @@ function AttachmentFileIcon() {
     <svg aria-hidden="true" viewBox="0 0 20 20">
       <path d="M5.5 2.75h5.75l3.25 3.5v11H5.5z" />
       <path d="M11.25 2.75v3.5h3.25M7.75 10h4.5M7.75 13h4.5" />
-    </svg>
-  );
-}
-
-function AttachmentOpenIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 20 20">
-      <path d="M8.25 5.25H5.5v9.25h9.25v-2.75" />
-      <path d="M10.25 5.25h4.5v4.5M14.5 5.5l-6 6" />
     </svg>
   );
 }

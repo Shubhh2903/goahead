@@ -3,10 +3,10 @@ import type { AppTranslate } from "@openbot/i18n";
 import { Button, ChevronDown, ChevronRight, Text } from "@openbot/ui";
 import { createSignal, For, Show } from "solid-js";
 import { useText } from "../../text";
+import { MarkdownMessageText } from "../conversation/MarkdownMessageText";
 import { routineScheduleSummary } from "../conversation/routine-schedule-ui";
 
-/** The agent's standing remit: its title and description. */
-export function TemplateInstructions(props: { title: string; description: string }) {
+export function TemplateInstructions(props: { title: string; description: string; onOpenLink: (url: string) => void }) {
   const { t } = useText();
   return (
     <section class="agent-template-section" aria-label={t("agentTemplate.section.instructions")}>
@@ -16,17 +16,20 @@ export function TemplateInstructions(props: { title: string; description: string
       <Show when={props.title}>
         <Text variant="body-sm">{props.title}</Text>
       </Show>
-      <Text variant="body-sm" tone="secondary" class="agent-template-prose">
-        {props.description}
-      </Text>
+      <div class="agent-template-prose message-markdown">
+        <MarkdownMessageText
+          imagesAsLinks
+          linkFavicons={false}
+          body={props.description}
+          agents={[]}
+          onSelectAgent={() => undefined}
+          onOpenLink={props.onOpenLink}
+        />
+      </div>
     </section>
   );
 }
 
-/**
- * The skills a template carries. With `expandable`, a local skill can open to show the `SKILL.md`
- * text it installs, so a user reads what an agent from another person will follow.
- */
 export function TemplateSkills(props: { skills: readonly AgentTemplateSkill[]; expandable?: boolean }) {
   const { t } = useText();
   return (
@@ -97,7 +100,6 @@ function EmbeddedSkill(props: { name: string; markdown: string }) {
   );
 }
 
-/** Each routine with its schedule and instruction. `labelled` adds the heading a mixed page needs. */
 export function TemplateRoutines(props: { routines: readonly MarketplaceAgentRoutine[]; labelled?: boolean }) {
   const text = useText();
   const { t } = text;

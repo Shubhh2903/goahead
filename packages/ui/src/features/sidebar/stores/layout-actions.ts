@@ -1,10 +1,3 @@
-/**
- * Every sidebar change that leaves the component: `onMutateLayout`, `onPin`, `onUnpin`,
- * `onReorderPinned` and `onReorderPeople`, each paired with what it announces. Gathered here so the
- * list of things the sidebar can ask its host to do is one file, reachable from the drag engine,
- * from the context menus and from the keyboard reorder shortcuts alike.
- */
-
 import {
   SIDEBAR_UNASSIGNED_SECTION_ID,
   type SidebarLayoutAction,
@@ -20,7 +13,7 @@ import type {
   SidebarDropTarget,
 } from "../sidebar-drag-model";
 import { type SidebarPinnedItem, sidebarPinnedItemKey } from "../sidebar-pins";
-import type { SidebarChatItem, SidebarProps } from "../sidebar-types";
+import { type SidebarChatItem, type SidebarProps, sidebarChatOrderSortsSections } from "../sidebar-types";
 
 export function createSidebarLayoutActions(deps: {
   chatPinnedItems: () => SidebarPinnedItem[];
@@ -31,12 +24,15 @@ export function createSidebarLayoutActions(deps: {
   chatName: (chatId: string) => string;
   draggedSidebarItem: () => SidebarPinnedItem | null;
   filteredChatsBySection: () => Map<string, SidebarChatItem[]>;
-  filteredPeople: () => TeamPresenceMember[];
+  foldersSupported: () => boolean;
   layoutMutable: () => boolean;
   orderedPeople: () => TeamPresenceMember[];
   personById: () => Map<string, TeamPresenceMember>;
   props: SidebarProps;
+  sectionCanNest: (sectionId: string, parentId: string | null) => boolean;
+  sectionChildren: (parentId: string | null) => string[];
   sectionLabel: (sectionId: string) => string;
+  sectionParent: (sectionId: string) => string | null;
   visiblePinnedKeys: () => string[];
   visibleSectionIds: () => string[];
 }) {
@@ -49,18 +45,58 @@ export function createSidebarLayoutActions(deps: {
     chatPinnedItems,
     draggedSidebarItem,
     filteredChatsBySection,
-    filteredPeople,
+    foldersSupported,
     layoutMutable,
     orderedPeople,
     personById,
     props,
+    sectionCanNest,
+    sectionChildren,
     sectionLabel,
+    sectionParent,
     visiblePinnedKeys,
     visibleSectionIds,
   } = deps;
   const { t } = currentText();
 
+  function sectionSiblingIndex(sectionId: string): { index: number; total: number } {
+    const siblings = foldersSupported() ? sectionChildren(sectionParent(sectionId)) : visibleSectionIds();
+    return { index: siblings.indexOf(sectionId), total: siblings.length };
+  }
+
+  function nestSection(sectionId: string, parentId: string | null, beforeSectionId: string | null): void {
+    if (!sectionCanNest(sectionId, parentId)) return;
+    void props.onMutateLayout({ type: "nest", sectionId, parentId, beforeSectionId }).then(() => {
+      const siblings = sectionChildren(parentId);
+      announce(
+        t("sidebar.announce.movedToPosition", {
+          name: sectionLabel(sectionId),
+          position: siblings.indexOf(sectionId) + 1,
+          total: siblings.length,
+        }),
+      );
+    }, announceError);
+  }
+
+  function moveFolderTo(sectionId: string, parentId: string | null): void {
+    if (sectionParent(sectionId) === parentId) return;
+    nestSection(sectionId, parentId, null);
+  }
+
   function moveSection(sectionId: string, direction: "up" | "down"): void {
+    if (foldersSupported()) {
+      const parentId = sectionParent(sectionId);
+      const siblings = sectionChildren(parentId);
+      const index = siblings.indexOf(sectionId);
+      if (index < 0) return;
+      if (direction === "up") {
+        const before = siblings[index - 1];
+        if (before) nestSection(sectionId, parentId, before);
+      } else if (index + 1 < siblings.length) {
+        nestSection(sectionId, parentId, siblings[index + 2] ?? null);
+      }
+      return;
+    }
     const visibleOrder = visibleSectionIds();
     const index = visibleOrder.indexOf(sectionId);
     const targetSectionId = visibleOrder[index + (direction === "up" ? -1 : 1)];
@@ -71,15 +107,14 @@ export function createSidebarLayoutActions(deps: {
     void props.onMutateLayout({ type: "move", sectionId, direction, steps }).catch(announceError);
   }
 
-  /**
-   * Moves one chat into a section, or out of every section when `sectionId` is null. The action
-   * keeps its released `agentId` field name; a channel id travels in it the same way.
-   */
+  function duplicateSection(sectionId: string): void {
+    void props.onDuplicateSection?.(sectionId).catch(announceError);
+  }
+
   function assignChatSection(chatId: string, sectionId: string | null): void {
     void props.onMutateLayout({ type: "assign", agentId: chatId, sectionId }).catch(announceError);
   }
 
-  /** The ids a section shows, in order, without the chat that is being dragged out of it. */
   function sectionChatIdsWithout(sectionId: string, chatId: string): string[] {
     return (filteredChatsBySection().get(sectionId) ?? [])
       .map((item) => item.id)
@@ -106,7 +141,7 @@ export function createSidebarLayoutActions(deps: {
   }
 
   function movePersonByKeyboard(memberId: string, direction: -1 | 1): void {
-    const visibleMemberIds = filteredPeople().map((member) => member.id);
+    const visibleMemberIds = orderedPeople().map((member) => member.id);
     const index = visibleMemberIds.indexOf(memberId);
     const targetMemberId = visibleMemberIds[index + direction];
     if (index < 0 || !targetMemberId) return;
@@ -130,6 +165,18 @@ export function createSidebarLayoutActions(deps: {
 
   function reorderDraggedSection(sourceSectionId: string, target: SectionDropTarget): void {
     if (sourceSectionId === target.sectionId) return;
+    if (foldersSupported()) {
+      const parentId = sectionParent(target.sectionId);
+      const siblings = sectionChildren(parentId).filter((sectionId) => sectionId !== sourceSectionId);
+      const index = siblings.indexOf(target.sectionId);
+      if (index < 0) return;
+      nestSection(
+        sourceSectionId,
+        parentId,
+        target.placement === "before" ? target.sectionId : (siblings[index + 1] ?? null),
+      );
+      return;
+    }
     const sourceIndex = props.layout.order.indexOf(sourceSectionId);
     if (sourceIndex < 0) return;
     const orderWithoutSource = props.layout.order.filter((sectionId) => sectionId !== sourceSectionId);
@@ -165,6 +212,7 @@ export function createSidebarLayoutActions(deps: {
   }
 
   function moveChatAction(chatId: string, target: ChatDropTarget): SidebarLayoutAction | null {
+    if (sidebarChatOrderSortsSections(props.chatOrder)) return appendChatAction(chatId, target.sectionId);
     const idsWithoutSource = sectionChatIdsWithout(target.sectionId, chatId);
     const targetIndex = idsWithoutSource.indexOf(target.chatId);
     if (targetIndex < 0) return null;
@@ -185,7 +233,6 @@ export function createSidebarLayoutActions(deps: {
     };
   }
 
-  /** The pin a dragged tile stands for, found by the key the tile carries. */
   function pinnedRef(key: string): SidebarPinnedItem | undefined {
     return chatPinnedItems().find((item) => sidebarPinnedItemKey(item) === key);
   }
@@ -218,11 +265,6 @@ export function createSidebarLayoutActions(deps: {
     }
   }
 
-  /**
-   * The one signature that takes its source as a parameter. Everything below decides where a drag
-   * lands, and the engine holds the only source that is current in this tick - reading it back off
-   * the drag store would be one flush stale, and would land the drag in the previous target.
-   */
   function commitSidebarDrop(source: SidebarDragSource, target: SidebarDropTarget | null): void {
     if ("origin" in source && source.origin === "pinned") {
       if (target?.kind === "pinned") {
@@ -256,6 +298,7 @@ export function createSidebarLayoutActions(deps: {
     }
 
     if (target?.kind === "section-order") reorderDraggedSection(source.id, target.target);
+    else if (target?.kind === "section-into") nestSection(source.id, target.sectionId, null);
   }
 
   function reorderPinnedItem(sourceKey: string, targetKey: string): void {
@@ -283,7 +326,9 @@ export function createSidebarLayoutActions(deps: {
   return {
     assignChatSection,
     commitSidebarDrop,
+    duplicateSection,
     moveDraggedChat,
+    moveFolderTo,
     movePersonByKeyboard,
     movePinnedItem,
     moveSection,
@@ -291,5 +336,6 @@ export function createSidebarLayoutActions(deps: {
     reorderDraggedPerson,
     reorderDraggedSection,
     reorderPinnedItem,
+    sectionSiblingIndex,
   };
 }

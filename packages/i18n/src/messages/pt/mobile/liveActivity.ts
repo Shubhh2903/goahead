@@ -7,7 +7,7 @@ export const messages = {
   "mobile.liveActivity.badge.message": "Mensagem",
   "mobile.liveActivity.badge.question": "Perguntas",
   "mobile.liveActivity.badge.approval": "Aprovação",
-  "mobile.liveActivity.badge.takeover": "Assumir controle",
+  "mobile.liveActivity.badge.takeover": "Assumir",
   "mobile.liveActivity.badge.failed": "Falhou",
   "mobile.liveActivity.unread": { one: "{count} não lida", other: "{count} não lidas" },
   "mobile.liveActivity.moreRequests": { one: "+{count} solicitação", other: "+{count} solicitações" },
@@ -39,8 +39,7 @@ export const messages = {
   "mobile.liveActivity.island.questionText": "Abra o GoAhead para responder a esta pergunta.",
   "mobile.liveActivity.island.optionFallback": "Opção {number}",
   "mobile.liveActivity.island.takeoverTitle": "Uma etapa no navegador precisa de você",
-  "mobile.liveActivity.island.takeoverDetail":
-    "Conclua o acesso à conta, a verificação ou o consentimento no navegador.",
+  "mobile.liveActivity.island.takeoverDetail": "Conclua o login, a verificação ou o consentimento no navegador.",
   "mobile.liveActivity.island.failureTitle": "A tarefa falhou",
   "mobile.liveActivity.island.failureDetail":
     "A tarefa parou antes de terminar. Abra a conversa para tentar novamente.",

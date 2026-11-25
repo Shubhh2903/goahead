@@ -1,25 +1,26 @@
+import { fileQuoteId, fileQuoteTarget } from "@openbot/contracts/chat-tag-references";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import { Button, Input } from "@openbot/ui";
+import {
+  SELECTION_ACTION_INSTRUCTIONS,
+  serializeFileSelectionInstruction,
+  serializeSelectionInstruction,
+} from "@openbot/contracts/selection-instruction";
+import { Button, Input, TextQuote } from "@openbot/ui";
 import { clamp } from "@openbot/ui/utils";
 import { Portal } from "@solidjs/web";
 import type { Element as SolidElement } from "solid-js";
-import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
 import { useText } from "../../text";
 
-const MESSAGE_TEXT_SELECTOR = ".message-copy[data-selection-message-id]";
+const MESSAGE_TEXT_SELECTOR = "[data-selection-message-id]";
+const FILE_TEXT_SELECTOR = "[data-selection-file-quote]";
+const SCOPE_SELECTOR = "[data-selection-scope]";
 const INTERACTIVE_SELECTOR =
   'a, button, input, textarea, select, [contenteditable="true"], [role="button"], .message-citation';
+const FILE_REFERENCE_SELECTOR = ".message-file-reference";
 const HIGHLIGHT_NAME = "openbot-message-selection";
 const VIEWPORT_MARGIN = 12;
 const TOOLBAR_GAP = 8;
-
-export const SELECTION_ACTION_INSTRUCTIONS = {
-  Explain: "Explain this selected text.",
-  Improve: "Improve this selected text.",
-  Shorten: "Shorten this selected text.",
-  Tone: "Change the tone of this selected text.",
-  Grammar: "Fix the grammar in this selected text.",
-} as const;
 
 export interface MessageTextSelection {
   messageId: string;
@@ -27,10 +28,7 @@ export interface MessageTextSelection {
   range: Range;
 }
 
-export interface SelectionInstruction {
-  instruction: string;
-  quote: string;
-}
+export type QuoteShortcutModifier = "meta" | "ctrl";
 
 export interface SelectionRect {
   top: number;
@@ -47,29 +45,6 @@ export interface SelectionActionsPosition {
   placement: "top" | "bottom";
 }
 
-export function serializeSelectionInstruction(instruction: string, quote: string): string {
-  const normalizedInstruction = instruction.trim();
-  const normalizedQuote = quote.replace(/\r\n?/gu, "\n").trim();
-  const quoted = normalizedQuote
-    .split("\n")
-    .map((line) => `> ${line}`)
-    .join("\n");
-  return `${normalizedInstruction}\n\n${quoted}`;
-}
-
-export function parseSelectionInstruction(body: string): SelectionInstruction | null {
-  const separator = body.lastIndexOf("\n\n>");
-  if (separator <= 0) return null;
-  const instruction = body.slice(0, separator).trim();
-  const quoteLines = body.slice(separator + 2).split("\n");
-  if (!instruction || quoteLines.length === 0 || quoteLines.some((line) => !/^>(?: |$)/u.test(line))) return null;
-  const quote = quoteLines
-    .map((line) => line.replace(/^> ?/u, ""))
-    .join("\n")
-    .trim();
-  return quote ? { instruction, quote } : null;
-}
-
 export function messageTextSelection(selection: Selection | null): MessageTextSelection | null {
   if (selection?.rangeCount !== 1 || selection.isCollapsed) return null;
   const range = selection.getRangeAt(0);
@@ -77,7 +52,7 @@ export function messageTextSelection(selection: Selection | null): MessageTextSe
   const startBlock = messageTextBlock(range.startContainer);
   const endBlock = messageTextBlock(range.endContainer);
   if (!startBlock || startBlock !== endBlock) return null;
-  const messageId = startBlock.dataset.selectionMessageId;
+  const messageId = startBlock.dataset.selectionMessageId ?? fileSelectionQuoteId(startBlock, range);
   const text = selection
     .toString()
     .replace(/\u00a0/gu, " ")
@@ -109,25 +84,46 @@ export function selectionActionsPosition(
   return { top: clamp(idealTop, VIEWPORT_MARGIN, maximumTop), left, placement };
 }
 
+let closeShownAction: (() => void) | undefined;
+
+export function showSelectionAction(close: () => void): void {
+  if (closeShownAction !== close) closeShownAction?.();
+  closeShownAction = close;
+}
+
+export function releaseSelectionAction(close: () => void): void {
+  if (closeShownAction === close) closeShownAction = undefined;
+}
+
 export function MessageSelectionActions(props: {
   contextKey: string | undefined;
   disabled: boolean;
   onSend: (messageId: string, body: string) => Promise<boolean>;
+  onQuote?: ((messageId: string, text: string) => void) | undefined;
+  quoteShortcut?: QuoteShortcutModifier;
+  scope?: HTMLElement | undefined;
 }) {
   const [selection, setSelection] = createSignal<MessageTextSelection | null>(null);
   const [fallbackHighlight, setFallbackHighlight] = createSignal(false);
+  const [documentHolds, setDocumentHolds] = createSignal(true);
   let lastContextKey: string | undefined;
 
   const clearSelection = () => {
+    if (!selection()) return;
     setSelection(null);
     clearPersistentHighlight();
   };
 
-  // Only for deliberate dismissals: the composer is contenteditable, so its caret is the document
-  // selection and clearing it here would wipe the caret out from under the person typing.
   const dismiss = () => {
     clearSelection();
     window.getSelection()?.removeAllRanges();
+  };
+
+  const quote = () => {
+    const active = selection();
+    if (!active || !props.onQuote) return;
+    dismiss();
+    props.onQuote(active.messageId, active.text);
   };
 
   const captureSelection = () => {
@@ -136,10 +132,12 @@ export function MessageSelectionActions(props: {
       return;
     }
     const next = messageTextSelection(window.getSelection());
-    if (!next) {
+    if (!next || selectionScope(next.range.startContainer) !== (props.scope ?? null)) {
       clearSelection();
       return;
     }
+    showSelectionAction(clearSelection);
+    setDocumentHolds(true);
     setSelection(next);
   };
 
@@ -159,9 +157,8 @@ export function MessageSelectionActions(props: {
   );
 
   createEffect(
-    () => selection(),
+    () => (documentHolds() ? null : selection()),
     (active) => {
-      clearPersistentHighlight();
       if (!active) {
         setFallbackHighlight(false);
         return;
@@ -173,8 +170,6 @@ export function MessageSelectionActions(props: {
 
   onSettled(() => {
     const onPointerDown = (event: PointerEvent) => {
-      // A secondary button opens the native context menu, which reads the live selection: dismissing
-      // here would clear the text before Copy ever sees it.
       if (event.button !== 0) return;
       if (event.target instanceof Element && event.target.closest(".selection-actions-layer")) return;
       if (selection()) dismiss();
@@ -185,20 +180,35 @@ export function MessageSelectionActions(props: {
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        dismiss();
+        if (event.target instanceof HTMLElement && event.target.isContentEditable) clearSelection();
+        else dismiss();
         return;
       }
       if (event.target instanceof Element && event.target.closest(".selection-actions-layer")) return;
       captureSelection();
     };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!selection() || !props.onQuote || !isQuoteShortcut(event, props.quoteShortcut ?? "ctrl")) return;
+      event.preventDefault();
+      quote();
+    };
+    const onSelectionChange = () => {
+      const active = selection();
+      if (active) setDocumentHolds(selectionCovers(window.getSelection(), active.range));
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
     window.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointerup", onPointerUp);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("keydown", onKeyDown);
     return () => {
+      document.removeEventListener("selectionchange", onSelectionChange);
       window.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("keyup", onKeyUp);
-      clearPersistentHighlight();
+      window.removeEventListener("keydown", onKeyDown);
+      releaseSelectionAction(clearSelection);
+      if (selection()) clearPersistentHighlight();
     };
   });
 
@@ -210,6 +220,8 @@ export function MessageSelectionActions(props: {
           fallbackHighlight={fallbackHighlight()}
           onDismiss={dismiss}
           onSend={props.onSend}
+          onQuote={props.onQuote ? quote : undefined}
+          quoteShortcut={props.quoteShortcut}
         />
       )}
     </Show>
@@ -221,6 +233,8 @@ export function SelectionActionsBar(props: {
   fallbackHighlight?: boolean;
   onDismiss: () => void;
   onSend: (messageId: string, body: string) => Promise<boolean>;
+  onQuote?: (() => void) | undefined;
+  quoteShortcut?: QuoteShortcutModifier | undefined;
 }) {
   const { t } = useText();
   const [prompt, setPrompt] = createSignal("");
@@ -235,10 +249,18 @@ export function SelectionActionsBar(props: {
   let content: HTMLDivElement | undefined;
   let animationFrame: number | undefined;
   let previousSelectionKey = "";
+  let selectionGeneration = 0;
+  onCleanup(() => {
+    selectionGeneration += 1;
+  });
 
   const hasPrompt = createMemo(() => prompt().trim().length > 0);
+  const selectionBody = (instruction: string) =>
+    fileQuoteTarget(props.selection.messageId)
+      ? serializeFileSelectionInstruction(instruction, props.selection.text, props.selection.messageId)
+      : serializeSelectionInstruction(instruction, props.selection.text);
   const maximumInstructionLength = createMemo(() => {
-    const quoteOnly = serializeSelectionInstruction("", props.selection.text).length;
+    const quoteOnly = selectionBody("").length;
     return Math.max(1, INPUT_LIMITS.messageText - quoteOnly);
   });
 
@@ -300,6 +322,7 @@ export function SelectionActionsBar(props: {
         setExpanded(false);
         setMode("idle");
         setLastInstruction("");
+        selectionGeneration += 1;
       }
       previousSelectionKey = key;
       schedulePosition();
@@ -344,7 +367,7 @@ export function SelectionActionsBar(props: {
   const submit = async (instruction: string) => {
     const normalized = instruction.trim();
     if (!normalized || mode() === "sending") return;
-    const body = serializeSelectionInstruction(normalized, props.selection.text);
+    const body = selectionBody(normalized);
     if (body.length > INPUT_LIMITS.messageText) {
       setLastInstruction(normalized);
       setMode("error");
@@ -353,12 +376,16 @@ export function SelectionActionsBar(props: {
     setLastInstruction(normalized);
     setExpanded(false);
     setMode("sending");
+    const generation = selectionGeneration;
+    let sent: boolean;
     try {
-      if (await props.onSend(props.selection.messageId, body)) props.onDismiss();
-      else setMode("error");
+      sent = await props.onSend(props.selection.messageId, body);
     } catch {
-      setMode("error");
+      sent = false;
     }
+    if (generation !== selectionGeneration) return;
+    if (sent) props.onDismiss();
+    else setMode("error");
   };
 
   return (
@@ -477,10 +504,19 @@ export function SelectionActionsBar(props: {
                     "selection-actions-presets-expanded": expanded(),
                   },
                 ]}
-                style={{ "max-width": hasPrompt() ? "0px" : expanded() ? "462px" : "224px" }}
+                style={{
+                  "max-width": hasPrompt()
+                    ? "0px"
+                    : `${(expanded() ? 462 : 224) + (props.onQuote ? QUOTE_ACTION_WIDTH : 0)}px`,
+                }}
               >
                 <Show when={!expanded()}>
                   <span class="selection-actions-divider" aria-hidden="true" />
+                </Show>
+                <Show when={props.onQuote}>
+                  {(onQuote) => (
+                    <QuoteSelectionButton quoteShortcut={props.quoteShortcut} onQuote={() => onQuote()()} />
+                  )}
                 </Show>
                 <PresetButton
                   label={t("chat.selection.explain")}
@@ -566,19 +602,86 @@ function PresetButton(props: { label: string; icon: SolidElement; onSelect: () =
   );
 }
 
+export function QuoteSelectionButton(props: { quoteShortcut: QuoteShortcutModifier | undefined; onQuote: () => void }) {
+  const { t } = useText();
+  return (
+    <Button
+      variant="ghost"
+      type="button"
+      class="selection-actions-control"
+      aria-label={t("chat.selection.quote")}
+      aria-keyshortcuts={props.quoteShortcut === "meta" ? "Meta+Shift+Period" : "Control+Shift+Period"}
+      title={t(
+        props.quoteShortcut === "meta" ? "chat.selection.quoteShortcutMac" : "chat.selection.quoteShortcutOther",
+      )}
+      onPointerDown={(event) => event.preventDefault()}
+      onClick={() => props.onQuote()}
+    >
+      <TextQuote class="selection-actions-icon" aria-hidden="true" />
+      <span class="selection-actions-label">{t("chat.selection.quote")}</span>
+    </Button>
+  );
+}
+
+const QUOTE_ACTION_WIDTH = 84;
+
+export function isQuoteShortcut(
+  event: Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "shiftKey" | "altKey" | "code">,
+  modifier: QuoteShortcutModifier,
+): boolean {
+  const modifierDown = modifier === "meta" ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+  return modifierDown && event.shiftKey && !event.altKey && event.code === "Period";
+}
+
+function selectionScope(node: Node): HTMLElement | null {
+  const element = node instanceof HTMLElement ? node : node.parentElement;
+  return element?.closest<HTMLElement>(SCOPE_SELECTOR) ?? null;
+}
+
 function messageTextBlock(node: Node): HTMLElement | null {
   const element = node instanceof HTMLElement ? node : node.parentElement;
-  return element?.closest<HTMLElement>(MESSAGE_TEXT_SELECTOR) ?? null;
+  return element?.closest<HTMLElement>(`${MESSAGE_TEXT_SELECTOR}, ${FILE_TEXT_SELECTOR}`) ?? null;
+}
+
+function fileSelectionQuoteId(block: HTMLElement, range: Range): string | undefined {
+  const id = block.dataset.selectionFileQuote;
+  const target = id ? fileQuoteTarget(id) : null;
+  if (!id || !target || block.dataset.selectionFileLines !== "true") return id;
+  const before = block.ownerDocument.createRange();
+  before.setStart(block, 0);
+  before.setEnd(range.startContainer, range.startOffset);
+  const selected = range.toString();
+  const leading = selected.slice(0, selected.length - selected.trimStart().length);
+  const start = lineBreaks(before.toString()) + lineBreaks(leading) + 1;
+  return fileQuoteId({ ...target, lines: { start, end: start + lineBreaks(selected.trim()) } });
+}
+
+function lineBreaks(value: string): number {
+  return value.split("\n").length - 1;
 }
 
 function rangeIntersectsInteractiveContent(range: Range, root: HTMLElement): boolean {
   return Array.from(root.querySelectorAll(INTERACTIVE_SELECTOR)).some((element) => {
+    if (element.matches(FILE_REFERENCE_SELECTOR)) return false;
     try {
       return range.intersectsNode(element);
     } catch {
       return false;
     }
   });
+}
+
+function selectionCovers(selection: Selection | null, range: Range): boolean {
+  if (selection?.rangeCount !== 1 || selection.isCollapsed) return false;
+  const current = selection.getRangeAt(0);
+  try {
+    return (
+      current.compareBoundaryPoints(Range.END_TO_START, range) < 0 &&
+      current.compareBoundaryPoints(Range.START_TO_END, range) > 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 function installPersistentHighlight(range: Range): boolean {

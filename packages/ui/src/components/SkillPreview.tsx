@@ -1,10 +1,11 @@
 import type { MarketplaceSkillDetail } from "@openbot/contracts/ipc";
 import type { AppTranslate } from "@openbot/i18n";
-import { ArrowRight, IconButton, Puzzle } from "@openbot/ui";
+import { ArrowRight, ErrorReference, IconButton, Puzzle } from "@openbot/ui";
 import { MarkdownMessageText } from "@openbot/ui/features/conversation/MarkdownMessageText";
 import { safeBrowserUrl } from "@openbot/ui/features/conversation/RichMessageText";
 import { ReferenceChip } from "@openbot/ui/reference-chip";
 import { SkillGradient } from "@openbot/ui/skill-gradient";
+import { errorReference, type UserErrorDetails } from "@openbot/user-errors";
 import type { JSX } from "@solidjs/web";
 import { createSignal, Show } from "solid-js";
 import { currentText, useText } from "../text";
@@ -16,8 +17,9 @@ export function skillExamplePrompt(
   return skill.examplePrompt?.trim() || t("skill.preview.examplePrompt");
 }
 
-/** The SKILL.md body without its first heading, when that heading only repeats the name. */
-export function skillInstructions(skill: MarketplaceSkillDetail): string {
+export function skillInstructions(
+  skill: Pick<MarketplaceSkillDetail, "name" | "description" | "instructions">,
+): string {
   const instructions = skill.instructions || skill.description;
   const [first, ...rest] = instructions.split(/\r?\n/u);
   return first?.replace(/^#\s+/u, "").trim() === skill.name ? rest.join("\n").trim() : instructions;
@@ -25,16 +27,14 @@ export function skillInstructions(skill: MarketplaceSkillDetail): string {
 
 export function SkillPreview(props: {
   onOpenUrl: (url: string) => Promise<void>;
-  skill: MarketplaceSkillDetail;
-  onTry?: () => void;
+  skill: Pick<MarketplaceSkillDetail, "name" | "description" | "iconUrl" | "instructions" | "examplePrompt">;
+  onTry?: (() => void) | undefined;
   unavailableReason?: string;
-  /** The creator line under the name, where the page that shows the preview names one. */
   creatorName?: string;
-  /** What the page offers for this skill, on the name's line. */
   action?: JSX.Element;
 }) {
   const { t } = useText();
-  const [linkError, setLinkError] = createSignal<string | null>(null);
+  const [linkError, setLinkError] = createSignal<UserErrorDetails | null>(null);
   const [iconTint, setIconTint] = createSignal<{ url: string; color: string } | null>(null);
   const [failedIcon, setFailedIcon] = createSignal<string | null>(null);
   const iconUrl = () => (props.skill.iconUrl && failedIcon() !== props.skill.iconUrl ? props.skill.iconUrl : null);
@@ -65,13 +65,16 @@ export function SkillPreview(props: {
           url,
           color: `rgb(${Math.round(red / total)} ${Math.round(green / total)} ${Math.round(blue / total)})`,
         });
-    } catch {
-      // Cross-origin artwork can still display when its pixels cannot be sampled.
-    }
+    } catch {}
   };
   const openLink = (url: string) => {
     const safe = safeBrowserUrl(url);
-    if (safe) void props.onOpenUrl(safe).catch(() => setLinkError(t("skill.preview.linkFailed")));
+    if (safe)
+      void props
+        .onOpenUrl(safe)
+        .catch((error: unknown) =>
+          setLinkError({ message: t("skill.preview.linkFailed"), reference: errorReference(error) }),
+        );
   };
   return (
     <section class="skill-preview t-stagger is-shown" aria-label={t("skill.preview.label", { name: props.skill.name })}>
@@ -139,7 +142,14 @@ export function SkillPreview(props: {
           onOpenLink={openLink}
         />
       </div>
-      <Show when={linkError()}>{(error) => <p role="alert">{error()}</p>}</Show>
+      <Show when={linkError()}>
+        {(error) => (
+          <p role="alert">
+            {error().message}
+            <ErrorReference reference={error().reference} />
+          </p>
+        )}
+      </Show>
     </section>
   );
 }

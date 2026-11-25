@@ -34,7 +34,6 @@ export function SidebarDialogs() {
     },
     onCancel: closeDelete,
   };
-  // Each dialog unmounts with its target, so its text never shows an empty name while it closes.
   return (
     <>
       <Show when={deleteTarget()}>
@@ -59,7 +58,15 @@ export function SidebarDialogs() {
             open
             pending={deleting()}
             error={deleteError()}
-            media={<ChannelAvatar members={channel().members} agents={props.agents} layout="cluster" />}
+            media={
+              <ChannelAvatar
+                members={channel().members}
+                agents={props.agents}
+                layout="cluster"
+                icon={channel().icon}
+                imageUrl={channel().imageUrl}
+              />
+            }
             title={t("sidebar.delete.title", { name: channel().name })}
             description={t("sidebar.delete.channelDescription")}
             onConfirm={confirmDelete}

@@ -1,38 +1,72 @@
-/** The search field, and the compact-mode button that expands the sidebar to reach it. */
-
-import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import { Button, Input } from "@openbot/ui";
+import { Bot, Button, DropdownMenu, FolderPlus, Hash } from "@openbot/ui";
+import { Show } from "solid-js";
 import { useText } from "../../text";
-import { SearchIcon } from "./SidebarIcons";
+import { SidebarFilterMenu } from "./SidebarFilterMenu";
+import { PlusIcon, SearchIcon } from "./SidebarIcons";
 import { useSidebarScope } from "./sidebar-scope";
 
 export function SidebarSearch() {
-  const { expandToSearch, props, query, setQuery, setSearchInputElement } = useSidebarScope();
+  const { layoutMutable, props, startCreateSection } = useSidebarScope();
   const { t } = useText();
   return (
     <div class="sidebar-search-wrap">
-      <label class="search-field" aria-hidden={props.compact ? "true" : undefined}>
-        <span class="sr-only">{t("sidebar.search.label")}</span>
+      <Button
+        variant="ghost"
+        type="button"
+        class="search-field sidebar-search-trigger"
+        aria-label={t("conversation.globalSearch.title")}
+        aria-haspopup="dialog"
+        aria-hidden={props.compact ? "true" : undefined}
+        tabindex={props.compact ? -1 : 0}
+        onClick={props.onOpenSearch}
+      >
         <SearchIcon />
-        <Input
-          ref={setSearchInputElement}
-          type="search"
-          value={query()}
-          onValueChange={setQuery}
-          placeholder={t("common.search")}
-          aria-label={t("sidebar.search.label")}
-          tabindex={props.compact ? -1 : 0}
-          maxlength={INPUT_LIMITS.agentName}
-        />
-      </label>
+        <span class="sidebar-search-placeholder">{t("common.search")}</span>
+      </Button>
+      <SidebarFilterMenu />
+      <Show when={props.createSupported !== false || props.onCreateChannel || layoutMutable()}>
+        <DropdownMenu.Root placement="bottom-end" gutter={4}>
+          <DropdownMenu.Trigger
+            class="sidebar-icon-button sidebar-new-button no-drag"
+            aria-label={props.onCreateChannel ? t("sidebar.new.menuWithChannel") : t("sidebar.new.menu")}
+            aria-hidden={props.compact ? "true" : undefined}
+            tabindex={props.compact ? -1 : 0}
+          >
+            <PlusIcon />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content>
+              <Show when={props.createSupported !== false}>
+                <DropdownMenu.Item onSelectAfterClose={props.onCreateAgent}>
+                  <Bot aria-hidden="true" />
+                  {t("sidebar.new.agent")}
+                </DropdownMenu.Item>
+              </Show>
+              <Show when={props.onCreateChannel}>
+                <DropdownMenu.Item onSelectAfterClose={() => props.onCreateChannel?.()}>
+                  <Hash aria-hidden="true" />
+                  {t("sidebar.new.channel")}
+                </DropdownMenu.Item>
+              </Show>
+              <Show when={layoutMutable()}>
+                <DropdownMenu.Item onSelectAfterClose={() => startCreateSection()}>
+                  <FolderPlus aria-hidden="true" />
+                  {t("sidebar.new.section")}
+                </DropdownMenu.Item>
+              </Show>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </Show>
       <Button
         variant="ghost"
         type="button"
         class="sidebar-compact-search"
-        aria-label={t("sidebar.search.expand")}
+        aria-label={t("conversation.globalSearch.title")}
+        aria-haspopup="dialog"
         aria-hidden={props.compact ? undefined : "true"}
         tabindex={props.compact ? 0 : -1}
-        onClick={expandToSearch}
+        onClick={props.onOpenSearch}
       >
         <SearchIcon />
       </Button>

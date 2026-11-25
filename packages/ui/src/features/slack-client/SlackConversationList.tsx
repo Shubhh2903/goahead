@@ -155,7 +155,7 @@ export function SlackConversationList(props: SlackConversationListProps) {
                               {(name) => <span class="slack-conversation-row-workspace">{name()}</span>}
                             </Show>
                             <Show when={unread() > 0}>
-                              <Badge class="slack-conversation-row-badge" tone="accent" shape="pill" aria-hidden="true">
+                              <Badge class="slack-conversation-row-badge" variant="primary-light" aria-hidden="true">
                                 {Math.min(unread(), 99)}
                               </Badge>
                             </Show>

@@ -1,8 +1,5 @@
-/* Keep the working faces in one stack at the message avatars' left edge. The face itself takes the
-   agent chat's size and optical offset, so the two indicators only differ in how many faces they
-   hold. */
 .agent-activity-content.channel-activity-content {
-  padding-left: var(--openbot-space-0-5);
+  padding-inline-start: var(--openbot-space-0-5);
 }
 
 .channel-activity-faces {
@@ -10,13 +7,45 @@
   flex: 0 0 auto;
   align-items: center;
 }
+.channel-activity-faces .agent-activity-avatar {
+  transition:
+    transform var(--openbot-duration-overlay) var(--openbot-ease-out),
+    opacity var(--openbot-duration-overlay) var(--openbot-ease-out),
+    margin-inline-end var(--openbot-duration-overlay) var(--openbot-ease-in-out);
+}
 .channel-activity-faces .agent-activity-avatar + .agent-activity-avatar {
-  margin-left: calc(-1 * var(--openbot-space-2));
+  margin-inline-start: calc(-1 * var(--openbot-space-2));
 }
 
-/* Reserve space outside the transcript. Only the panel's padded lower edge sits behind the composer.
-   The top edge is pulled over the transcript's own bottom padding, so messages pass behind the glass
-   as the reader scrolls while that padding still clears the last one at rest. */
+.channel-activity-faces .channel-activity-face-leaving {
+  margin-inline-end: calc(-1 * var(--openbot-space-6));
+  opacity: 0;
+  transform: translateY(4px) scale(0.6);
+}
+@media (prefers-reduced-motion: reduce) {
+  .channel-activity-faces .agent-activity-avatar {
+    transition: none;
+  }
+}
+
+.channel-activity-names {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-inline-start: var(--openbot-space-2);
+  overflow: hidden;
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.channel-activity-name {
+  color: var(--channel-activity-name-color, var(--openbot-text-muted));
+}
+.channel-activity-content .agent-activity-label {
+  flex-shrink: 0;
+}
+
 .channel-paused-tasks {
   position: relative;
   max-height: 35dvh;
@@ -31,8 +60,6 @@
   color: var(--openbot-accent-text);
 }
 
-/* Under the waiting block, the panel covers that block's lower edge, as the queue does, instead of
-   the transcript's padding. */
 .awaiting-replies + .channel-paused-tasks {
   z-index: 10;
   margin-top: 0;
@@ -49,9 +76,18 @@
 .channel-paused-task + .channel-paused-task {
   border-top: 1px solid var(--openbot-accent-soft);
 }
-.channel-paused-task-reason {
+.channel-paused-task-text {
   min-width: 0;
   flex: 1 1 24ch;
+}
+.channel-paused-task-subject {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--openbot-text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.channel-paused-task-reason {
   margin: 0;
   overflow-wrap: anywhere;
   font-size: var(--openbot-text-sm);

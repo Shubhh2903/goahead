@@ -1,5 +1,7 @@
 import { isFunction } from "@openbot/contracts/runtime-values";
-import { createSignal, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
+import { useText } from "../text";
+import { createPointerDrag } from "./createPointerDrag";
 
 interface PanelResizerProps {
   label: string;
@@ -24,10 +26,9 @@ interface PanelResizerProps {
 }
 
 export function PanelResizer(props: PanelResizerProps) {
-  let cleanupDrag: (() => void) | undefined;
+  const { t } = useText();
   let handle: HTMLHRElement | undefined;
   let parentResizeObserver: ResizeObserver | undefined;
-  const [isResizing, setIsResizing] = createSignal(false);
 
   const maximum = () => Math.max(props.min, isFunction(props.max) ? props.max() : props.max);
   const clamp = (value: number) => Math.round(Math.min(maximum(), Math.max(props.min, value)));
@@ -76,61 +77,38 @@ export function PanelResizer(props: PanelResizerProps) {
     const resizeTarget = props.onParentResize ? handle?.parentElement?.parentElement : handle?.parentElement;
     if (resizeTarget) {
       parentResizeObserver = new ResizeObserver(enforceBounds);
-      // Observe outer size only: inner padding changes must not reset a drag.
       parentResizeObserver.observe(resizeTarget, { box: "border-box" });
     }
     return () => {
-      cleanupDrag?.();
+      drag.cancel();
       parentResizeObserver?.disconnect();
       window.removeEventListener("resize", enforceBounds);
     };
   });
 
-  const beginDrag = (event: PointerEvent) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    if (!(event.currentTarget instanceof HTMLElement)) return;
-    const handle = event.currentTarget;
-    handle.setPointerCapture?.(event.pointerId);
-    const startX = event.clientX;
-    const startValue = displayedValue();
-    let latestValue = startValue;
-    setIsResizing(true);
-    document.documentElement.classList.add("panel-resizing");
-
-    const move = (moveEvent: PointerEvent) => {
-      if (moveEvent.pointerId !== event.pointerId) return;
-      const delta = moveEvent.clientX - startX;
-      latestValue = startValue + (props.direction === "left" ? delta : -delta);
-      resize(latestValue);
-    };
-    const finish = (finishEvent?: PointerEvent) => {
-      if (finishEvent && finishEvent.pointerId !== event.pointerId) return;
-      if (finishEvent) {
-        const delta = finishEvent.clientX - startX;
-        latestValue = startValue + (props.direction === "left" ? delta : -delta);
-      }
-      commit(latestValue);
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", finish);
-      window.removeEventListener("pointercancel", cancel);
-      window.removeEventListener("blur", cancel);
-      document.documentElement.classList.remove("panel-resizing");
-      setIsResizing(false);
-      cleanupDrag = undefined;
-      if (handle.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
-    };
-    const cancel = () => finish();
-
-    cleanupDrag?.();
-    cleanupDrag = cancel;
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", finish);
-    window.addEventListener("pointercancel", cancel);
-    window.addEventListener("blur", cancel);
+  const panelSide = (): "left" | "right" => {
+    if (!handle || getComputedStyle(handle).direction !== "rtl") return props.direction;
+    return props.direction === "left" ? "right" : "left";
   };
 
+  let dragStartValue = 0;
+  let dragSide: "left" | "right" = "left";
+  const fromDelta = (delta: number) => dragStartValue + (dragSide === "left" ? delta : -delta);
+  const drag = createPointerDrag({
+    axis: "x",
+    rootClass: "panel-resizing",
+    onStart: () => {
+      dragStartValue = displayedValue();
+      dragSide = panelSide();
+    },
+    onMove: (delta) => resize(fromDelta(delta)),
+    onEnd: (delta) => commit(fromDelta(delta)),
+  });
+
   const handleKeyDown = (event: KeyboardEvent) => {
+    const side = panelSide();
+    const growKey = side === "left" ? "ArrowRight" : "ArrowLeft";
+    const shrinkKey = side === "left" ? "ArrowLeft" : "ArrowRight";
     let next: number | undefined;
     if (event.key === "Home") {
       event.preventDefault();
@@ -141,14 +119,14 @@ export function PanelResizer(props: PanelResizerProps) {
       });
       return;
     } else if (event.key === "End") next = maximum();
-    else if (event.key === "ArrowRight" && props.snap?.compact) next = props.min;
-    else if (event.key === "ArrowLeft" && props.snap && props.value <= props.min) {
+    else if (event.key === growKey && props.snap?.compact) next = props.min;
+    else if (event.key === shrinkKey && props.snap && props.value <= props.min) {
       event.preventDefault();
       event.stopPropagation();
       withoutTransition(() => props.snap?.onCompactChange(true));
       return;
-    } else if (event.key === "ArrowLeft") next = props.value + (props.direction === "right" ? 12 : -12);
-    else if (event.key === "ArrowRight") next = props.value + (props.direction === "left" ? 12 : -12);
+    } else if (event.key === growKey) next = props.value + 12;
+    else if (event.key === shrinkKey) next = props.value - 12;
     if (next === undefined) return;
     event.preventDefault();
     event.stopPropagation();
@@ -158,7 +136,7 @@ export function PanelResizer(props: PanelResizerProps) {
   return (
     <hr
       ref={(element) => (handle = element)}
-      class={`panel-resizer no-drag ${isResizing() ? "panel-resizer-active" : ""} ${props.class ?? ""}`}
+      class={`panel-resizer no-drag ${drag.isDragging() ? "panel-resizer-active" : ""} ${props.class ?? ""}`}
       tabindex={0}
       aria-label={props.label}
       aria-controls={props.controls}
@@ -166,8 +144,10 @@ export function PanelResizer(props: PanelResizerProps) {
       aria-valuemin={props.snap?.compactValue ?? props.min}
       aria-valuemax={maximum()}
       aria-valuenow={displayedValue()}
-      aria-valuetext={props.snap?.compact ? `Compact (${props.snap.compactValue}px)` : `${props.value}px`}
-      onPointerDown={beginDrag}
+      aria-valuetext={
+        props.snap?.compact ? t("sidebar.resizer.compactWidth", { width: props.snap.compactValue }) : `${props.value}px`
+      }
+      onPointerDown={drag.begin}
       onKeyDown={handleKeyDown}
       onDblClick={(event) => {
         event.preventDefault();

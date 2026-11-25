@@ -33,10 +33,9 @@ interface CronSpec {
   exactTimes?: Set<string>;
 }
 
-/** A routine request the caller can correct. Other errors are faults. */
 export class RoutineInputError extends Error {}
 
-export function validateRoutineSchedule(schedule: RoutineSchedule, timezone: string): void {
+export function validateStoredRoutineSchedule(schedule: RoutineSchedule, timezone: string): void {
   if (!isRoutineSchedule(schedule)) throw new RoutineInputError(sourceText("error.backend.routineScheduleInvalid"));
   validateTimezone(timezone);
   if (schedule.kind === "interval") {
@@ -55,27 +54,49 @@ export function validateRoutineSchedule(schedule: RoutineSchedule, timezone: str
     }
   }
   if (schedule.kind !== "custom") return;
-  const spec = parseCron(schedule.expression);
+  if (hasRunsTooClose(parseCron(schedule.expression), timezone)) {
+    throw new RoutineInputError(
+      sourceText("error.backend.routineCronTooOften", { minutes: ROUTINE_MINIMUM_INTERVAL_MINUTES }),
+    );
+  }
+}
+
+function hasRunsTooClose(spec: CronSpec, timezone: string): boolean {
   const reference = new Date("2026-01-01T00:00:00.000Z");
   let previous = nextCronOccurrence(spec, timezone, reference);
   for (let index = 0; index < 200; index += 1) {
     const next = nextCronOccurrence(spec, timezone, previous);
-    if (next.getTime() - previous.getTime() < MINIMUM_INTERVAL_MS) {
-      throw new RoutineInputError(
-        sourceText("error.backend.routineCronTooOften", { minutes: ROUTINE_MINIMUM_INTERVAL_MINUTES }),
-      );
-    }
+    if (next.getTime() - previous.getTime() < MINIMUM_INTERVAL_MS) return true;
     previous = next;
+  }
+  return false;
+}
+
+export function validateRoutineSchedule(schedule: RoutineSchedule, timezone: string): void {
+  validateStoredRoutineSchedule(schedule, timezone);
+  if (schedule.kind === "custom") validateCronSaveSyntax(schedule.expression);
+  if (
+    schedule.kind === "advanced" &&
+    schedule.time.kind === "every" &&
+    hasRunsTooClose(scheduleCronSpec(schedule), timezone)
+  ) {
+    throw new RoutineInputError(
+      sourceText("error.backend.routineIntervalTooShortFixed", { minutes: ROUTINE_MINIMUM_INTERVAL_MINUTES }),
+    );
   }
 }
 
 export function nextRoutineOccurrence(schedule: RoutineSchedule, timezone: string, after: Date): Date {
-  validateRoutineSchedule(schedule, timezone);
+  validateStoredRoutineSchedule(schedule, timezone);
   return nextValidRoutineOccurrence(schedule, timezone, after);
 }
 
-/** For a schedule that `validateRoutineSchedule` accepted: a custom one costs 200 searches to validate. */
 export function nextValidRoutineOccurrence(schedule: RoutineSchedule, timezone: string, after: Date): Date {
+  if (schedule.kind === "once") {
+    const due = routineOnceInstant(schedule, timezone);
+    if (after.getTime() < due.getTime()) return due;
+    throw new RoutineInputError(sourceText("error.backend.routineOncePassed"));
+  }
   if (schedule.kind === "interval") {
     const duration = intervalMilliseconds(schedule.amount, schedule.unit);
     const anchor = Date.parse(schedule.anchorAt);
@@ -87,13 +108,37 @@ export function nextValidRoutineOccurrence(schedule: RoutineSchedule, timezone: 
   return nextCronOccurrence(scheduleCronSpec(schedule), timezone, after);
 }
 
+export function routineOnceInstant(schedule: Extract<RoutineSchedule, { kind: "once" }>, timezone: string): Date {
+  const [year = Number.NaN, month = Number.NaN, day = Number.NaN] = schedule.date.split("-").map(Number);
+  const [hour, minute] = parseTime(schedule.time);
+  const start = Date.UTC(year, month - 1, day, hour, minute);
+  for (let step = 0; step <= MAX_GAP_MINUTES; step += 1) {
+    const local = new Date(start + step * 60_000);
+    const [candidate] = zonedDateTimeCandidates(
+      {
+        year: local.getUTCFullYear(),
+        month: local.getUTCMonth() + 1,
+        day: local.getUTCDate(),
+        weekday: local.getUTCDay(),
+        hour: local.getUTCHours(),
+        minute: local.getUTCMinutes(),
+      },
+      timezone,
+    );
+    if (candidate) return candidate;
+  }
+  throw new RoutineInputError(sourceText("error.backend.routineNoOccurrence"));
+}
+
+const MAX_GAP_MINUTES = 3 * 60;
+
 export function normalizeRoutineSchedule(schedule: RoutineSchedule, now = new Date()): RoutineSchedule {
   if (schedule.kind !== "interval") return structuredClone(schedule);
   const anchor = Number.isNaN(Date.parse(schedule.anchorAt)) ? now.toISOString() : schedule.anchorAt;
   return { ...schedule, anchorAt: anchor };
 }
 
-function scheduleCronSpec(schedule: Exclude<RoutineSchedule, { kind: "interval" }>): CronSpec {
+function scheduleCronSpec(schedule: Exclude<RoutineSchedule, { kind: "interval" | "once" }>): CronSpec {
   switch (schedule.kind) {
     case "hourly":
       return cronSpec(
@@ -172,9 +217,7 @@ function nextCronOccurrence(spec: CronSpec, timezone: string, after: Date): Date
   const start = zonedParts(after, timezone);
   const calendar = new Date(Date.UTC(start.year, start.month - 1, start.day));
   const exactTimes = spec.exactTimes;
-  const repeatedStartHour =
-    zonedDateTimeCandidates({ ...start, minute: 0 }, timezone).length > 1 ||
-    zonedDateTimeCandidates({ ...start, minute: 30 }, timezone).length > 1;
+  const repeatedStart = zonedDateTimeCandidates(start, timezone).length > 1;
   for (let offset = 0; offset <= MAX_SEARCH_DAYS; offset += 1) {
     const current = new Date(calendar.getTime() + offset * 86_400_000);
     const year = current.getUTCFullYear();
@@ -194,30 +237,34 @@ function nextCronOccurrence(spec: CronSpec, timezone: string, after: Date): Date
             : dayMatches || weekdayMatches;
     if (!calendarMatches) continue;
 
+    let repeatedCandidate: Date | undefined;
     for (const hour of spec.hour.values) {
       for (const minute of spec.minute.values) {
         if (exactTimes && !exactTimes.has(`${hour}:${minute}`)) continue;
-        if (
-          offset === 0 &&
-          (hour < start.hour || (hour === start.hour && minute < start.minute)) &&
-          !(repeatedStartHour && hour === start.hour)
-        ) {
+        if (offset === 0 && (hour < start.hour || (hour === start.hour && minute < start.minute)) && !repeatedStart) {
           continue;
         }
-        for (const candidate of zonedDateTimeCandidates({ year, month, day, weekday, hour, minute }, timezone)) {
+        const candidates = zonedDateTimeCandidates({ year, month, day, weekday, hour, minute }, timezone);
+        for (const [index, candidate] of candidates.entries()) {
           if (candidate.getTime() <= after.getTime()) continue;
-          return candidate;
+          if (index === 0) {
+            return repeatedCandidate && repeatedCandidate.getTime() < candidate.getTime()
+              ? repeatedCandidate
+              : candidate;
+          }
+          if (!repeatedCandidate || candidate.getTime() < repeatedCandidate.getTime()) {
+            repeatedCandidate = candidate;
+          }
         }
       }
     }
+    if (repeatedCandidate) return repeatedCandidate;
   }
   throw new RoutineInputError(sourceText("error.backend.routineNoOccurrence"));
 }
 
 function zonedDateTimeCandidates(parts: CalendarParts, timezone: string): Date[] {
   const approximate = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute);
-  // A local time falls at its UTC time less an offset that the zone uses near it. A time in a gap
-  // has no candidate, and a time that repeats has two.
   const offsets = new Set(
     [-18, 0, 18].map((hours) => {
       const instant = approximate + hours * 3_600_000;
@@ -286,6 +333,30 @@ function parseCron(expression: string): CronSpec {
     parseCronField(values[3], 1, 12, "month"),
     parseCronField(values[4], 0, 6, "weekday", true),
   );
+}
+
+const CRON_DECIMAL = /^[0-9]+$/;
+
+function validateCronSaveSyntax(expression: string): void {
+  const values = expression.trim().split(/\s+/);
+  if (!hasFiveFields(values)) throw new RoutineInputError(sourceText("error.backend.routineCronFields"));
+  const fields = [
+    [values[0], "minute"],
+    [values[1], "hour"],
+    [values[2], "day"],
+    [values[3], "month"],
+    [values[4], "weekday"],
+  ] as const;
+  for (const [source, label] of fields) {
+    for (const segment of source.split(",")) {
+      const [rangeSource = "", stepSource, ...extra] = segment.split("/");
+      const bounds = rangeSource === "*" ? [] : rangeSource.split("-");
+      const step = stepSource === undefined ? [] : [stepSource];
+      if (extra.length > 0 || ![...bounds, ...step].every((value) => CRON_DECIMAL.test(value))) {
+        throw new RoutineInputError(sourceText("error.backend.routineCronValueInvalid", { field: label }));
+      }
+    }
+  }
 }
 
 function hasFiveFields(values: string[]): values is [string, string, string, string, string] {
@@ -359,11 +430,6 @@ function intervalMilliseconds(amount: number, unit: RoutineIntervalUnit): number
 
 const WEEKDAY_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
-/**
- * Walks a trigger forward over every occurrence the process slept through and returns the last one
- * plus the first still in the future. Missed occurrences are collapsed, never replayed: an app that
- * was closed for a week must not wake into a week of firings.
- */
 export function collapseMissedOccurrences(
   schedule: RoutineSchedule,
   timezone: string,

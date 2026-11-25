@@ -2,7 +2,7 @@ import type { PolymorphicProps } from "@kobalte/core/polymorphic";
 import * as SwitchPrimitive from "@kobalte/core/switch";
 import type { ComponentProps, JSX, ValidComponent } from "@solidjs/web";
 import { createEffect, createSignal, createUniqueId, omit, onCleanup, Show, untrack } from "solid-js";
-import { cx } from "./utils";
+import { cx, prefersReducedMotion } from "./utils";
 
 export type SwitchSize = "sm" | "default";
 
@@ -39,7 +39,7 @@ function SwitchMotionThumb(props: SwitchMotionThumbProps): JSX.Element {
   let velocity = 0;
   let frame: number | undefined;
   let lastTimestamp: number | undefined;
-  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  const reducedMotion = prefersReducedMotion();
 
   function paint(): void {
     if (!thumb) return;
@@ -188,7 +188,7 @@ function SwitchMotionControl(props: SwitchMotionControlProps): JSX.Element {
     (element) => {
       if (!element) return;
       element.addEventListener("click", suppressDraggedClick, true);
-      onCleanup(() => element.removeEventListener("click", suppressDraggedClick, true));
+      return () => element.removeEventListener("click", suppressDraggedClick, true);
     },
   );
 
@@ -248,7 +248,6 @@ export function Switch<T extends ValidComponent = "div">(props: SwitchProps<T>):
       data-slot="switch"
       data-size={props.size ?? "default"}
       data-pointer-focus={pointerFocus() ? "" : undefined}
-      // Kobalte flips the switch in its own click handler, so the cue has no on or off direction.
       data-cuelume-toggle=""
       class={cx("ui-switch", props.class)}
       {...rootProps}

@@ -1,10 +1,4 @@
 .join-server-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: var(--openbot-layer-dialog);
-  display: grid;
-  place-items: center;
-  padding: var(--openbot-space-6);
   animation: join-server-backdrop-in var(--modal-open-dur) var(--modal-ease) both;
   will-change: opacity;
 }
@@ -22,15 +16,13 @@
   border-radius: var(--openbot-radius-xl);
   background: var(--openbot-bg-sidebar);
   color: var(--openbot-text-primary);
-  box-shadow:
-    0 0 0 1px var(--openbot-border-strong),
-    0 24px 64px var(--openbot-shadow-dialog);
+  box-shadow: 0 0 0 1px var(--openbot-border-strong);
 }
 
 .join-server-close {
   position: absolute;
   top: var(--openbot-space-6);
-  right: var(--openbot-space-6);
+  inset-inline-end: var(--openbot-space-6);
   z-index: 2;
   color: var(--openbot-text-muted);
 }
@@ -43,14 +35,19 @@
 }
 
 .join-server-pages {
+  --join-server-reference: 0px;
   width: 100%;
   height: 336px;
   overflow: hidden;
   transition: height var(--page-slide-dur) var(--page-slide-ease);
 }
 
+.join-server-pages[data-reference] {
+  --join-server-reference: calc(var(--openbot-control-xs) + var(--openbot-space-0-5));
+}
+
 .join-server-pages[data-page="1"][data-preview-error] {
-  height: 356px;
+  height: calc(356px + var(--join-server-reference));
 }
 
 .join-server-pages[data-page="2"] {
@@ -58,7 +55,7 @@
 }
 
 .join-server-pages[data-page="2"][data-error] {
-  height: 364px;
+  height: calc(364px + var(--join-server-reference));
 }
 
 .join-server-page {
@@ -306,7 +303,7 @@
 
   .join-server-close {
     top: var(--openbot-space-3);
-    right: var(--openbot-space-3);
+    inset-inline-end: var(--openbot-space-3);
   }
 
   .join-server-content {
@@ -318,7 +315,7 @@
   }
 
   .join-server-pages[data-page="1"][data-preview-error] {
-    height: 368px;
+    height: calc(368px + var(--join-server-reference));
   }
 
   .join-server-pages[data-page="2"] {
@@ -326,7 +323,7 @@
   }
 
   .join-server-pages[data-page="2"][data-error] {
-    height: 376px;
+    height: calc(376px + var(--join-server-reference));
   }
 }
 

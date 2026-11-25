@@ -1,10 +1,3 @@
-/**
- * The agent an install goes to.
- *
- * The skill page and the plugin page both install into one agent, so they share this control rather
- * than each growing its own: the target is the same question, and the answer reads the same way.
- */
-
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@openbot/ui";
 import { createSignal } from "solid-js";
 import { useText } from "../../text";
@@ -27,13 +20,10 @@ export function AgentSelect(props: {
       ref={(element: HTMLElement) => {
         root = element;
       }}
-      // The dialog is in the tree only once the control is, so the list finds it as it opens.
       onOpenChange={(open) => {
         if (open) setMount(root?.closest<HTMLElement>(".skills-marketplace, .settings-modal") ?? undefined);
       }}
       class="skills-agent-select"
-      /* Kobalte prints the children of the value only once one is chosen, so the empty state is
-         named here instead; without it the control reads as a blank pill. */
       placeholder={props.agents.length ? t("settings.agentSelect.placeholder") : t("settings.agentSelect.empty")}
       options={props.agents}
       value={selected()}

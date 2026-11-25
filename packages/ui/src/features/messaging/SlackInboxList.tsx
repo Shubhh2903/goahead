@@ -58,7 +58,7 @@ export function SlackInboxList(props: SlackInboxListProps) {
                   <span class="slack-inbox-row-preview">{item().preview}</span>
                 </span>
                 <Show when={unread() > 0}>
-                  <Badge class="slack-inbox-row-badge" tone="accent" shape="pill" aria-hidden="true">
+                  <Badge class="slack-inbox-row-badge" variant="primary-light" aria-hidden="true">
                     {Math.min(unread(), 99)}
                   </Badge>
                 </Show>

@@ -1,14 +1,16 @@
-/**
- * The parts that every integration page shares: the logo on its tile, the status pill, the page
- * header, the danger zone, and the connect dialog with OpenBot and the other app side by side.
- * GitHub and Slack use them. Discord uses the same layout when it ships.
- */
-
 import { AppLogo } from "@openbot/brand";
+import type { AppTextKey } from "@openbot/i18n";
 import {
+  Alert,
+  AlertActions,
+  AlertContent,
+  AlertDescription,
+  AlertIcon,
+  AlertTitle,
   Badge,
   Button,
   Check,
+  ConfirmDialog,
   Dialog,
   Heading,
   IconButton,
@@ -18,51 +20,19 @@ import {
   ItemDescription,
   ItemGroup,
   ItemTitle,
+  OctagonX,
   SettingsSection,
   Text,
+  TriangleAlert,
   X,
 } from "@openbot/ui";
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
+import type { AgentProfile } from "../../data";
 import { useText } from "../../text";
 
-const GITHUB_MARK_PATH =
-  "M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12";
+export type IntegrationAgent = Pick<AgentProfile, "id" | "name" | "avatarSeed" | "avatarHue" | "avatarUrl">;
 
-/** GitHub's mark. Lucide has no brand icons, so the path is GitHub's own. */
-export function GitHubMark(props: { class?: string | undefined }) {
-  return (
-    <svg class={props.class} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d={GITHUB_MARK_PATH} />
-    </svg>
-  );
-}
-
-const SLACK_MARK_PATH =
-  "M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z";
-
-/** Slack's mark, for the same reason. */
-export function SlackMark(props: { class?: string | undefined }) {
-  return (
-    <svg class={props.class} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d={SLACK_MARK_PATH} />
-    </svg>
-  );
-}
-
-const ONEPASSWORD_MARK_PATH =
-  "M12 0c6.627 0 12 5.373 12 12 0 6.628-5.373 12-12 12S0 18.628 0 12C0 5.373 5.373 0 12 0m-.893 4.86c-.485 0-.727.001-.913.095a.87.87 0 0 0-.378.379c-.094.185-.095.428-.095.912v2.747c0 .12 0 .182.016.238q.02.075.065.138a1 1 0 0 0 .175.162l.695.564c.113.092.17.139.19.194a.22.22 0 0 1 0 .15c-.02.056-.077.102-.19.194l-.695.564a1 1 0 0 0-.175.162.4.4 0 0 0-.065.138 1 1 0 0 0-.016.238v6.019c0 .485 0 .728.095.913a.87.87 0 0 0 .378.378c.186.094.428.094.913.094h1.786c.485 0 .727 0 .913-.094a.87.87 0 0 0 .378-.378c.095-.185.095-.428.095-.913v-2.747c0-.12 0-.182-.016-.238a.4.4 0 0 0-.065-.138 1 1 0 0 0-.175-.162l-.695-.564c-.113-.092-.17-.138-.191-.193a.22.22 0 0 1 0-.152c.02-.055.078-.1.19-.193l.696-.564a1 1 0 0 0 .175-.162.4.4 0 0 0 .065-.138 1 1 0 0 0 .016-.238V6.246c0-.484 0-.727-.095-.912a.87.87 0 0 0-.378-.379c-.186-.094-.428-.094-.913-.094Z";
-
-/** 1Password's mark, for the same reason. */
-export function OnePasswordMark(props: { class?: string | undefined }) {
-  return (
-    <svg class={props.class} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d={ONEPASSWORD_MARK_PATH} />
-    </svg>
-  );
-}
-
-/** A logo on a quiet square. `size` "lg" is the page header. */
 export function LogoTile(props: { children: JSX.Element; size?: "md" | "lg" }) {
   return (
     <span class="integration-logo-tile" data-size={props.size ?? "md"}>
@@ -71,11 +41,12 @@ export function LogoTile(props: { children: JSX.Element; size?: "md" | "lg" }) {
   );
 }
 
-export type IntegrationStatus = "connected" | "attention" | "idle" | "unavailable";
+export type IntegrationStatus = "connected" | "attention" | "connecting" | "idle" | "unavailable";
 
 const STATUS_VARIANT = {
   connected: "success-light",
   attention: "warning-light",
+  connecting: "secondary",
   idle: "secondary",
   unavailable: "outline",
 } as const satisfies Record<IntegrationStatus, string>;
@@ -89,22 +60,112 @@ export function StatusPill(props: { status: IntegrationStatus; label: string }) 
   );
 }
 
-/** The top of an integration page: the logo, the name with its status, what it gives, and its action. */
-export function DetailHeader(props: {
+export const UNKNOWN_STATUS = {
+  status: "attention",
+  label: "connector.statusUnknown",
+} as const satisfies { status: IntegrationStatus; label: AppTextKey };
+
+export function ReadFailedAlert(props: { message: string; onRetry?: (() => void) | undefined }) {
+  const { t } = useText();
+  const title = () => t("connector.readFailed");
+  return (
+    <Alert tone="warning" role="alert">
+      <AlertIcon>
+        <TriangleAlert />
+      </AlertIcon>
+      <AlertContent>
+        <AlertTitle>{title()}</AlertTitle>
+        <Show when={props.message !== title()}>
+          <AlertDescription>{props.message}</AlertDescription>
+        </Show>
+      </AlertContent>
+      <Show when={props.onRetry}>
+        {(retry) => (
+          <AlertActions>
+            <Button type="button" size="sm" variant="outline" onClick={() => retry()()}>
+              {t("common.retry")}
+            </Button>
+          </AlertActions>
+        )}
+      </Show>
+    </Alert>
+  );
+}
+
+export function ActionFailedAlert(props: { title: string; message: string }) {
+  const { sourceText } = useText();
+  return (
+    <Alert tone="danger" role="alert">
+      <AlertIcon>
+        <OctagonX />
+      </AlertIcon>
+      <AlertContent>
+        <AlertTitle>{props.title}</AlertTitle>
+        <AlertDescription>{sourceText(props.message)}</AlertDescription>
+      </AlertContent>
+    </Alert>
+  );
+}
+
+export interface DetailHeaderProps {
   logo: JSX.Element;
   name: string;
+  nameMark?: JSX.Element;
   status: IntegrationStatus;
   statusLabel: string;
   subtitle: JSX.Element;
   actions?: JSX.Element;
-}) {
+}
+
+export interface IntegrationPageSlots {
+  tagline?: string | undefined;
+  intro?: JSX.Element;
+  details?: JSX.Element;
+}
+
+export function IntegrationPage(
+  props: DetailHeaderProps &
+    IntegrationPageSlots & {
+      class: string;
+      readError?: string | null | undefined;
+      onRetry?: (() => void) | undefined;
+      failure?: { title: string; message: string } | null | undefined;
+      alert?: JSX.Element;
+      danger?: JSX.Element;
+      children?: JSX.Element;
+    },
+) {
+  return (
+    <div class={`integration-page ${props.class}`}>
+      <DetailHeader
+        logo={props.logo}
+        name={props.name}
+        nameMark={props.nameMark}
+        status={props.status}
+        statusLabel={props.statusLabel}
+        subtitle={props.tagline ?? props.subtitle}
+        actions={props.actions}
+      />
+      <Show when={props.readError}>{(message) => <ReadFailedAlert message={message()} onRetry={props.onRetry} />}</Show>
+      <Show when={props.failure}>{(failure) => <ActionFailedAlert {...failure()} />}</Show>
+      {props.alert}
+      {props.intro}
+      {props.children}
+      {props.details}
+      {props.danger}
+    </div>
+  );
+}
+
+export function DetailHeader(props: DetailHeaderProps) {
   return (
     <div class="integration-detail-header">
       <LogoTile size="lg">{props.logo}</LogoTile>
       <div class="integration-detail-copy">
         <div class="integration-detail-title">
-          <Heading as="h3" size="md">
+          <Heading as="h3" size="md" class="integration-detail-name">
             {props.name}
+            {props.nameMark}
           </Heading>
           <StatusPill status={props.status} label={props.statusLabel} />
         </div>
@@ -124,9 +185,11 @@ export function DangerZone(props: {
   description: string;
   action: string;
   busy?: boolean;
+  confirm?: boolean;
   onAction: () => void;
 }) {
   const { t } = useText();
+  const [confirming, setConfirming] = createSignal(false);
   return (
     <SettingsSection title={t("connector.dangerZone")}>
       <ItemGroup class="settings-modal-card">
@@ -141,18 +204,31 @@ export function DangerZone(props: {
               size="sm"
               variant="destructive-ghost"
               loading={props.busy ?? false}
-              onClick={props.onAction}
+              onClick={() => (props.confirm ? setConfirming(true) : props.onAction())}
             >
               {props.action}
             </Button>
           </ItemActions>
         </Item>
       </ItemGroup>
+      <Show when={props.confirm}>
+        <ConfirmDialog
+          open={confirming()}
+          initialFocus="cancel"
+          title={props.title}
+          description={props.description}
+          confirmLabel={props.action}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false);
+            props.onAction();
+          }}
+        />
+      </Show>
     </SettingsSection>
   );
 }
 
-/** Numbered steps. Only the numbers show: the dialog title names the step, and readers hear each label. */
 export function Stepper(props: { steps: readonly string[]; current: number; label: string }) {
   return (
     <ol class="integration-stepper" aria-label={props.label}>
@@ -175,7 +251,6 @@ export function Stepper(props: { steps: readonly string[]; current: number; labe
   );
 }
 
-/** The line between OpenBot and the other app: moving while connecting, solid when done, broken on an error. */
 export type WizardLink = "connecting" | "connected" | "broken";
 
 export interface WizardProps {
@@ -186,9 +261,9 @@ export interface WizardProps {
   stepper?: JSX.Element;
   children?: JSX.Element;
   footer: JSX.Element;
+  onSubmit?: () => void;
 }
 
-/** The body of a connect dialog. `heading` is the title element, so a dialog can give its own. */
 export function WizardContent(props: WizardProps & { heading: JSX.Element }) {
   return (
     <>
@@ -206,6 +281,25 @@ export function WizardContent(props: WizardProps & { heading: JSX.Element }) {
           {props.description}
         </Text>
       </div>
+      <Show when={props.onSubmit} fallback={<WizardParts footer={props.footer}>{props.children}</WizardParts>}>
+        <form
+          class="integration-wizard-form"
+          novalidate
+          onSubmit={(event) => {
+            event.preventDefault();
+            props.onSubmit?.();
+          }}
+        >
+          <WizardParts footer={props.footer}>{props.children}</WizardParts>
+        </form>
+      </Show>
+    </>
+  );
+}
+
+function WizardParts(props: { footer: JSX.Element; children?: JSX.Element }) {
+  return (
+    <>
       <Show when={props.children}>
         <div class="integration-wizard-body">{props.children}</div>
       </Show>
@@ -214,13 +308,18 @@ export function WizardContent(props: WizardProps & { heading: JSX.Element }) {
   );
 }
 
-/**
- * A connect dialog over the settings window. With `dismissible` false, a click outside does not close
- * it: the user may come back from the browser while a flow runs, and that click must not stop the flow.
- */
 export function WizardDialog(
-  props: WizardProps & { open: boolean; closeLabel: string; dismissible?: boolean; onClose: () => void },
+  props: WizardProps & {
+    open: boolean;
+    closeLabel: string;
+    dismissible?: boolean;
+    closeDisabled?: boolean | undefined;
+    nested?: boolean | undefined;
+    wide?: boolean | undefined;
+    onClose: () => void;
+  },
 ) {
+  let content: HTMLElement | undefined;
   return (
     <Dialog.Root
       open={props.open}
@@ -229,10 +328,24 @@ export function WizardDialog(
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay class="integration-dialog-backdrop" />
+        <Dialog.Overlay class="integration-dialog-backdrop" data-nested={props.nested ? "" : undefined} />
         <Dialog.Content
           class="integration-wizard integration-wizard-dialog"
+          data-nested={props.nested ? "" : undefined}
+          data-wide={props.wide ? "" : undefined}
           as="section"
+          ref={(element) => {
+            content = element;
+          }}
+          onOpenAutoFocus={(event) => {
+            const form = content?.querySelector("form.integration-wizard-form");
+            const target = form?.querySelector<HTMLElement>(
+              "input:not(:disabled), textarea:not(:disabled), button[type=submit]:not(:disabled)",
+            );
+            if (!target) return;
+            event.preventDefault();
+            target.focus({ preventScroll: true });
+          }}
           onInteractOutside={(event) => {
             if (props.dismissible === false) event.preventDefault();
           }}
@@ -251,6 +364,7 @@ export function WizardDialog(
             label={props.closeLabel}
             variant="ghost"
             data-cuelume-tap="close"
+            disabled={props.closeDisabled}
             onClick={props.onClose}
           >
             <X />

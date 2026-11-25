@@ -1,13 +1,12 @@
 import { ConfirmDialog } from "@openbot/ui";
 import { useText } from "@openbot/ui/text";
 
-/** Explains the same standing grant from the approval card and the model picker. */
 export function StandingApprovalConfirmation(props: {
   open: boolean;
-  agentName?: string;
+  agentName?: string | undefined;
   onCancel: () => void;
   onConfirm: () => void;
-  restoreFocusTarget?: HTMLElement;
+  restoreFocusTarget?: HTMLElement | undefined;
 }) {
   const { t } = useText();
   return (

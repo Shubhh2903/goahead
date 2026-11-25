@@ -2,7 +2,6 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/computerUse";
 
 export const messages = {
-  // Computer Use settings, the permission help window, and the window highlight.
   "computerUse.permission.screenRecording.title": "Enregistrement de l’écran",
   "computerUse.permission.screenRecording.description": "Permet à GoAhead de voir les fenêtres des apps.",
   "computerUse.permission.screenRecording.pane": "Enregistrement de l’écran et de l’audio du système",
@@ -12,7 +11,7 @@ export const messages = {
   "computerUse.error.check": "GoAhead n’a pas pu vérifier Computer Use.",
   "computerUse.error.openSettings": "GoAhead n’a pas pu ouvrir Réglages Système.",
   "computerUse.error.startDriver": "GoAhead n’a pas pu démarrer le pilote de Computer Use.",
-  "computerUse.checkAgain": "Vérifier à nouveau",
+  "computerUse.checkAgain": "Revérifier",
   "computerUse.checking": "Vérification de Computer Use",
   "computerUse.unavailable.title": "Computer Use n’est pas encore disponible",
   "computerUse.permissions.title": "Autorisations du système",
@@ -20,7 +19,12 @@ export const messages = {
   "computerUse.ready.title": "Computer Use est prêt",
   "computerUse.ready.description":
     "GoAhead peut voir les apps de cet ordinateur et interagir avec elles. Ce système ne demande aucune autorisation supplémentaire.",
+  "computerUse.limited.title": "Computer Use est limité sur ce bureau",
   "computerUse.openSettingsFailed.title": "Impossible d’ouvrir Réglages Système",
+  "computerUse.restartRequired.title": "Redémarrage nécessaire",
+  "computerUse.restartRequired.description":
+    "macOS bloque toujours les clics et la saisie. Si cela revient après un redémarrage, retirez GoAhead d’Accessibilité, puis ajoutez-le de nouveau.",
+  "computerUse.restartRequired.action": "Redémarrer GoAhead",
   "computerUse.compact.title": "Activer Computer Use",
   "computerUse.compact.description":
     "Permettez à GoAhead de voir les apps de cet ordinateur et d’interagir avec elles.",

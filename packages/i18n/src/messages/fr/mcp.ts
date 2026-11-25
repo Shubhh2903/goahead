@@ -7,6 +7,8 @@ export const messages = {
   "mcp.connect.notConnected": "Non connecté",
   "mcp.connect.close": "Fermer la connexion à {name}",
   "mcp.connect.getKey": "Obtenir une clé",
+  "mcp.connect.useKey": "Utiliser plutôt une clé API",
+  "mcp.connect.useSignIn": "Se connecter plutôt",
   "mcp.connect.keyDescription":
     "Collez un identifiant de votre compte {name}. GoAhead se connecte avec et le conserve sur {host}.",
   "mcp.connect.thisComputer": "cet ordinateur",
@@ -20,19 +22,31 @@ export const messages = {
     "{name} exécute ce serveur dans son application de bureau, sur cet ordinateur. Activez-le, puis connectez-vous.",
   "mcp.local.stepsTitle": "Activer le serveur dans {name}",
   "mcp.local.address": "Adresse",
-  "mcp.local.docs": "Guide d'installation",
+  "mcp.local.docs": "Guide d’installation",
   "mcp.signIn.description":
     "Connectez-vous à votre compte {name}. GoAhead obtient les outils accessibles à ce compte, sans mot de passe.",
   "mcp.signIn.waiting": "En attente du navigateur…",
   "mcp.signIn.continue": "Continuer vers {name}",
-  "mcp.server.loadFailed": "Impossible de charger les serveurs MCP.",
+  "mcp.signIn.pageDescription": "Cette page est ouverte dans le navigateur de {host}. Connectez-vous ici.",
+  "mcp.signIn.copyHint": "Si la page ne se charge pas, copiez le lien et ouvrez-le dans un autre navigateur.",
+  "mcp.signIn.copyLink": "Copier le lien",
+  "mcp.signIn.pasteHint":
+    "Si vous vous connectez sur un autre appareil, copiez l’adresse que son navigateur affiche à la fin et collez-la ici.",
   "mcp.test.connected": { one: "Connecté · {count} outil", other: "Connecté · {count} outils" },
   "mcp.status.testing": "Test…",
   "mcp.status.failed": "Échec",
   "mcp.status.enabled": "Activé",
   "mcp.status.disabled": "Désactivé",
+  "mcp.status.signedIn": "Connecté",
+  "mcp.status.signingIn": "Connexion…",
+  "mcp.status.signInNeeded": "Connexion requise",
+  "mcp.status.refused": "Refusé",
+  "mcp.status.checkUrl": "Vérifiez l’URL",
+  "mcp.status.noAnswer": "Pas de réponse",
+  "mcp.status.didNotStart": "Non démarré",
+  "mcp.status.unreachable": "Injoignable",
   "mcp.server.providerLimitNote":
-    "Claude uniquement : un serveur avec un répertoire de travail n’est pas transmis aux autres fournisseurs.",
+    "Claude et Codex uniquement : un serveur avec un répertoire de travail n’est pas transmis aux autres fournisseurs.",
   "mcp.server.runtimeDownloading":
     "Téléchargement de l’environnement d’exécution des serveurs STDIO. Un serveur peut ne pas démarrer avant la fin.",
   "mcp.server.runtimeDownloadingProgress":
@@ -43,12 +57,6 @@ export const messages = {
   "mcp.panel.noAnswer": "Ce serveur n’a pas répondu.",
   "mcp.panel.connectTitle": "Connecter un MCP personnalisé",
   "mcp.panel.editTitle": "Modifier le serveur MCP",
-  "mcp.panel.changesNotSaved": "Modifications non enregistrées",
-  "mcp.panel.title": "Serveurs MCP",
-  "mcp.panel.description":
-    "Les serveurs Model Context Protocol donnent des outils supplémentaires aux agents de ce serveur. Les agents Claude et Codex reçoivent uniquement les serveurs de cette liste ; les agents OpenCode et Grok peuvent aussi démarrer des serveurs depuis leurs propres fichiers de configuration.",
-  "mcp.panel.connectCustom": "Connecter un MCP personnalisé",
-  "mcp.panel.empty": "Aucun serveur MCP pour le moment.",
   "mcp.panel.enable": "Activer {name}",
   "mcp.panel.detailsTitle": "Détails",
   "mcp.panel.detailsDescription": "Nommez ce serveur et choisissez comment GoAhead le joint.",
@@ -74,7 +82,7 @@ export const messages = {
   "mcp.panel.removePassthroughVariable": "Supprimer la variable transmise {position}",
   "mcp.panel.workingDirectory": "Répertoire de travail",
   "mcp.panel.workingDirectoryDescription":
-    "Les agents Claude et le test de connexion démarrent le serveur ici. Laissez vide pour donner ce serveur à tous les fournisseurs : aucun autre fournisseur ne peut définir de répertoire, il ignore donc un serveur qui en indique un.",
+    "Les agents Claude et Codex et le test de connexion démarrent le serveur ici. Laissez vide pour donner ce serveur à tous les fournisseurs : les autres fournisseurs ne peuvent pas définir de répertoire, ils ignorent donc un serveur qui en indique un.",
   "mcp.panel.endpointTitle": "Point de terminaison",
   "mcp.panel.endpointDescription": "Tous les fournisseurs peuvent utiliser un serveur MCP HTTP.",
   "mcp.panel.serverUrl": "URL du serveur",
@@ -90,10 +98,58 @@ export const messages = {
     "Se connecte une fois avec ces réglages et indique les outils proposés. Rien n’est enregistré ni conservé.",
   "mcp.panel.testConnection": "Tester la connexion",
   "mcp.panel.notTested": "Pas encore testé.",
-  "mcp.panel.removeTitle": "Supprimer {name} ?",
-  "mcp.panel.removeDescription":
-    "Ses outils ne sont plus proposés aux agents de ce serveur. La configuration n’est pas conservée.",
-  "mcp.panel.removeConfirm": "Supprimer le serveur MCP",
-  "mcp.panel.actionsFor": "Actions pour {name}",
-  "mcp.panel.testUnavailable": "Ce serveur ne peut pas être testé ici.",
+  "mcp.panel.signIn": "Se connecter",
+  "mcp.panel.signOut": "Se déconnecter",
+  "mcp.panel.cancelSignIn": "Annuler la connexion",
+  "mcp.panel.useAddress": "Utiliser cette adresse",
+  "mcp.panel.signInTo": "Se connecter à {name}",
+  "mcp.panel.signInWaiting": {
+    one: "Terminez la connexion dans votre navigateur. GoAhead cesse d’attendre après {count} minute.",
+    other: "Terminez la connexion dans votre navigateur. GoAhead cesse d’attendre après {count} minutes.",
+  },
+  "mcp.panel.signInWaitingOn": {
+    one: "Ouverture de la page de connexion sur {host}. GoAhead cesse d’attendre après {count} minute.",
+    other: "Ouverture de la page de connexion sur {host}. GoAhead cesse d’attendre après {count} minutes.",
+  },
+  "mcp.panel.appTitle": "App de connexion",
+  "mcp.panel.appDescription":
+    "Utilisez une app OAuth que vous avez enregistrée auprès du fournisseur du serveur. GoAhead l’utilise quand le serveur ne peut pas enregistrer GoAhead lui-même. Laissez vide pour qu’GoAhead s’enregistre.",
+  "mcp.panel.appSaveFirst": "Enregistrez d’abord ce serveur. Vous pourrez ensuite ajouter une app de connexion.",
+  "mcp.panel.appUrlChanged":
+    "Enregistrez d’abord la nouvelle URL du serveur. L’app de connexion appartient à l’URL enregistrée.",
+  "mcp.panel.appLoadFailed": "Impossible de lire l’app de connexion.",
+  "mcp.panel.callbackUrl": "URL de rappel",
+  "mcp.panel.callbackUrlDescription": "Ajoutez exactement cette URL aux URL de redirection autorisées de l’app.",
+  "mcp.panel.callbackUrlOnHost":
+    "{host} se connecte avec son propre navigateur : cette URL est donc sur {host}. Ajoutez exactement cette URL aux URL de redirection autorisées de l’app.",
+  "mcp.panel.callbackUrlUnavailable": "Aucune URL de rappel n’est disponible.",
+  "mcp.panel.copyCallbackUrl": "Copier l’URL de rappel",
+  "mcp.panel.clientId": "ID client",
+  "mcp.panel.clientSecret": "Secret client",
+  "mcp.panel.clientSecretDescription": "Facultatif. Uniquement pour une app qui a un secret.",
+  "mcp.panel.clientSecretSaved": "Secret enregistré. Saisissez un nouveau secret pour le remplacer.",
+  "mcp.panel.clientSecretRemoved": "Le secret est supprimé quand vous enregistrez l’app.",
+  "mcp.panel.removeClientSecret": "Supprimer le secret",
+  "mcp.panel.scopes": "Portées",
+  "mcp.panel.scopesDescription": "Facultatif. Séparez les portées par des espaces.",
+  "mcp.panel.saveApp": "Enregistrer l’app",
+  "mcp.panel.removeApp": "Supprimer l’app",
+  "mcp.panel.appSaved": "App enregistrée. Connectez-vous pour l’utiliser.",
+  "mcp.panel.appRemoved": "App supprimée.",
+  "mcp.signIn.relayDescription":
+    "Connectez-vous sur {page} dans votre navigateur. Quand vous avez terminé, GoAhead envoie la connexion à {host}.",
+  "mcp.signIn.relayOpenDescription":
+    "Connectez-vous sur {page} dans votre navigateur. Quand vous avez terminé, collez ici l’adresse affichée. GoAhead envoie ensuite la connexion à {host}.",
+  "mcp.signIn.relayDeviceDescription":
+    "Connectez-vous sur {page} dans votre navigateur et terminez-y la connexion. {host} détecte la connexion lui-même.",
+  "mcp.signIn.relayOpen": "Ouvrir la page de connexion",
+  "mcp.signIn.relayCopy": "Copier le lien",
+  "mcp.signIn.relayPasteHint":
+    "Si le navigateur ne revient pas vers GoAhead, copiez l’adresse qu’il affiche et collez-la ici.",
+  "mcp.signIn.relayPasteRequired":
+    "GoAhead ne peut pas récupérer seul la connexion depuis le navigateur. Quand vous avez terminé, copiez l’adresse affichée et collez-la ici.",
+  "mcp.signIn.relayAddress": "Adresse du navigateur",
+  "mcp.signIn.relaySend": "Envoyer",
+  "mcp.panel.callbackUrlRelayed":
+    "La page de connexion s’ouvre dans votre navigateur, et GoAhead sur votre ordinateur envoie la connexion à {host}. Ajoutez exactement cette URL aux URL de redirection autorisées de l’app.",
 } as const satisfies PartialTranslation<typeof source>;

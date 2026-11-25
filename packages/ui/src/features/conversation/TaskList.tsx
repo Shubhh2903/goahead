@@ -1,25 +1,22 @@
 import { Button, ChevronDown } from "@openbot/ui";
-import { createMemo, createSignal, createUniqueId, For, Show, untrack } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, onSettled, Show, untrack } from "solid-js";
 import { createDigitRoll } from "../../digit-roll";
+import { DigitRuns } from "../../digit-runs";
 import { useText } from "../../text";
 
 export type TaskListItemState = "pending" | "active" | "done";
-/** The glyph states. `failed` is for work that another agent could not finish. */
 export type TaskMarkState = TaskListItemState | "failed";
 
 export interface TaskListItem {
   id: string;
   label: string;
   state: TaskListItemState;
-  /** The part of an active task that is complete, from 0 to 1. Other states ignore it. */
   progress?: number | undefined;
 }
 
 export interface TaskListProps {
   items: readonly TaskListItem[];
-  /** The header text. The default is "Tasks". */
   title?: string;
-  /** The list starts collapsed when this is false. */
   defaultOpen?: boolean;
   class?: string;
 }
@@ -30,23 +27,23 @@ const STATE_LABEL = {
   done: "chat.taskList.state.done",
 } as const;
 
-// The ring radius of the 16-unit glyph box, inside a 1.5-unit stroke.
 const RING_RADIUS = 7.25;
 const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
 
-/**
- * The chat block of a plan an agent works through. The header shows how many tasks are done and
- * opens or closes the list. Each task shows its state, and an active task can show its progress.
- */
 export function TaskList(props: TaskListProps) {
   const { t } = useText();
   const panelId = createUniqueId();
+  const playState = createTaskListPlayState();
   const [open, setOpen] = createSignal(untrack(() => props.defaultOpen ?? true));
   const total = () => props.items.length;
   const done = () => props.items.filter((item) => item.state === "done").length;
   const active = () => props.items.find((item) => item.state === "active");
   return (
-    <section class={["task-list", props.class]} data-open={open() ? "" : undefined}>
+    <section
+      style={{ "--task-list-play-state": playState() }}
+      class={["task-list", props.class]}
+      data-open={open() ? "" : undefined}
+    >
       <TaskListHeader
         open={open()}
         onToggle={() => setOpen((value) => !value)}
@@ -75,7 +72,6 @@ export function TaskList(props: TaskListProps) {
                   <span class="task-list-item-label">
                     <span class="task-list-item-text">{item().label}</span>
                   </span>
-                  {/* A progress of 0 still shows, so the badge does not flicker when a task starts. */}
                   <Show when={percent() !== undefined}>
                     <TaskProgress value={percent() ?? 0} />
                   </Show>
@@ -96,28 +92,21 @@ export interface TaskListHeaderProps {
   done: number;
   total: number;
   title: string;
-  /** The work that runs now. A closed list names it in place of the title. */
   active?: { id: string; label: string } | undefined;
-  /** The count for assistive technology, such as "2 of 5 tasks done". */
   summary: string;
-  /** The count that shows. The default is "{done}/{total}". */
   count?: string;
+  mark?: TaskMarkState | undefined;
 }
 
-/**
- * The header of a task list card: the progress ring, the title, the count and the chevron. The
- * whole row opens or closes the panel. The waiting block uses the same header.
- */
 export function TaskListHeader(props: TaskListHeaderProps) {
   const { t } = useText();
   const complete = () => props.total > 0 && props.done === props.total;
-  // The last active work stays as the header text while it fades out, so the fade is not empty.
+  const mark = () => props.mark ?? (complete() ? "done" : undefined);
   let lastActive: { id: string; label: string } | undefined;
   const headerTask = createMemo(() => {
     lastActive = props.active ?? lastActive;
     return lastActive;
   });
-  // A closed list names the work that runs, so the person can see the work go on.
   const showTask = () => !props.open && props.active !== undefined;
   return (
     <Button
@@ -131,7 +120,7 @@ export function TaskListHeader(props: TaskListHeaderProps) {
     >
       <span class="task-list-summary-glyph" aria-hidden="true">
         <Show
-          when={complete()}
+          when={mark()}
           fallback={
             <svg viewBox="0 0 16 16" fill="none" class="task-list-donut" aria-hidden="true">
               <circle class="task-list-donut-track" cx="8" cy="8" r={RING_RADIUS} />
@@ -147,7 +136,7 @@ export function TaskListHeader(props: TaskListHeaderProps) {
             </svg>
           }
         >
-          <TaskMark state="done" />
+          {(state) => <TaskMark state={state()} />}
         </Show>
       </span>
       <span class="task-list-title" data-showing={showTask() ? "task" : "title"}>
@@ -155,7 +144,6 @@ export function TaskListHeader(props: TaskListHeaderProps) {
           {props.title}
         </span>
         <span class="task-list-title-layer task-list-title-task" aria-hidden={showTask() ? undefined : "true"}>
-          {/* Keyed by task, so the next task enters with its own blur instead of replacing the text. */}
           <For each={headerTask() ? [headerTask()] : []} keyed={(item) => item?.id}>
             {(item) => <span class="task-list-title-task-text">{item()?.label}</span>}
           </For>
@@ -170,15 +158,10 @@ export function TaskListHeader(props: TaskListHeaderProps) {
   );
 }
 
-/**
- * The percent of an active task. The digits roll to each settled value, as in the update island;
- * assistive technology reads the live value.
- */
 function TaskProgress(props: { value: number }) {
   const { format } = useText();
   const roll = createDigitRoll(() => Math.round(props.value * 100));
   const characters = () => format.percent(roll.displayed() / 100).split("");
-  // The last two digits trail the others, so the number that changes most lands last.
   const stagger = (index: number) => {
     const digits = characters().flatMap((character, position) => (isDigit(character) ? [position] : []));
     if (index === digits.at(-1)) return "2";
@@ -188,17 +171,17 @@ function TaskProgress(props: { value: number }) {
   return (
     <span class="task-list-item-progress">
       <span ref={roll.ref} class="task-list-item-progress-digits t-digit-group" aria-hidden="true">
-        {/* Only the digits roll. The percent sign and the spaces of the locale stay still. */}
-        <For each={characters()} keyed={false}>
-          {(character, index) => (
+        <DigitRuns
+          text={characters().join("")}
+          digit={(character, index) => (
             <span
               class={isDigit(character()) ? "t-digit" : undefined}
-              data-stagger={isDigit(character()) ? stagger(index) : undefined}
+              data-stagger={isDigit(character()) ? stagger(index()) : undefined}
             >
               {character()}
             </span>
           )}
-        </For>
+        />
       </span>
       <span class="sr-only">{format.percent(props.value, { maximumFractionDigits: 0 })}</span>
     </span>
@@ -209,10 +192,6 @@ function isDigit(character: string) {
   return /\d/u.test(character);
 }
 
-/**
- * One glyph for all states, so a change of state animates in place: a dotted ring while pending,
- * a turning arc while active, a filled disc with a check when done, and a cross when failed.
- */
 export function TaskMark(props: { state: TaskMarkState }) {
   return (
     <svg viewBox="0 0 16 16" fill="none" class="task-list-mark" data-state={props.state} aria-hidden="true">
@@ -224,4 +203,15 @@ export function TaskMark(props: { state: TaskMarkState }) {
       <path class="task-list-mark-cross" d="M5.6 5.6 10.4 10.4M10.4 5.6 5.6 10.4" pathLength="1" />
     </svg>
   );
+}
+
+export function createTaskListPlayState() {
+  const [playState, setPlayState] = createSignal(document.hidden ? "paused" : "running");
+  onSettled(() => {
+    const refresh = () => setPlayState(document.hidden ? "paused" : "running");
+    refresh();
+    document.addEventListener("visibilitychange", refresh);
+    return () => document.removeEventListener("visibilitychange", refresh);
+  });
+  return playState;
 }

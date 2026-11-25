@@ -20,7 +20,7 @@ export const messages = {
   "import.guide.openAgent": "Ouvrir l’agent d’export",
   "import.guide.agentNote": "Installez l’agent prêt à l’emploi depuis sa page Grok Bot. L’export ne l’inclut pas.",
   "import.guide.skillCopied": "Compétence copiée",
-  "import.guide.saveFile": "Enregistrer le fichier…",
+  "import.guide.saveFile": "Enregistrer…",
   "import.guide.skillNote":
     "Ajoutez cette compétence à un nouvel agent dans Grok Bot, utilisé uniquement pour l’export. L’export ne l’inclut pas.",
   "import.guide.step2": "Envoyez-lui ce message",
@@ -32,6 +32,11 @@ export const messages = {
   "import.guide.reading": "Lecture de l’export…",
   "import.guide.choose": "Choisir le fichier d’export",
   "import.guide.chooseNote": "Vous voyez ses agents avant toute modification.",
+  "import.guide.hermesLedeServer":
+    "Chaque profil Hermes devient un agent. Lisez les profils sur le serveur, ou laissez la compétence d’export de Hermes les regrouper dans un seul fichier .zip.",
+  "import.guide.hermesLedeExport":
+    "Chaque profil Hermes devient un agent. La compétence d’export de Hermes les regroupe dans un seul fichier .zip.",
+  "import.guide.setupServer": "Lire le serveur",
   "import.review.title": "Export {source}",
   "import.review.exported": "Exporté le {date}",
   "import.review.fileSize": "{size} de fichiers",
@@ -52,16 +57,24 @@ export const messages = {
   "import.review.nameExists": "Un agent nommé {name} existe déjà. L’import en ajoute un autre.",
   "import.review.duplicatesTitle": "Importer des agents en double ?",
   "import.review.duplicatesDescription":
-    "Ces agents existent déjà sur ce serveur : {names}. L’import ajoute une deuxième copie de chacun. Chaque copie est un agent distinct, avec ses propres conversations, fichiers et mémoires.",
+    "Ces agents existent déjà sur ce serveur : {names}. L’import ajoute une deuxième copie de chacun. Chaque copie est un agent distinct, avec ses propres discussions, fichiers et souvenirs.",
   "import.review.duplicatesConfirm": "Importer les doublons",
   "import.result.title": "Import terminé",
-  "import.result.importedAgents": "{agents} importés",
+  "import.result.importedAgents": "Import réussi : {agents}",
   "import.result.importedBoth": "{agents} et {channels} importés",
-  "import.result.notImported": "{items} non importés.",
+  "import.result.notImported": "Non importés : {items}.",
   "import.result.notImportedBoth": "{agents} et {channels} non importés.",
   "import.result.imported": "Importés",
   "import.result.open": "Ouvrir {name}",
   "import.result.channel": "Canal",
   "import.result.notImportedTitle": "Non importés",
   "import.result.warnings": "Certains éléments n’ont pas été transférés",
+  "import.source.ledeServer":
+    "GoAhead les copie sur le serveur. Vous voyez chaque élément avant que quoi que ce soit ne change.",
+  "import.source.hermesNoteServer":
+    "Lisez le dossier Hermes sur le serveur, ou exportez un fichier .zip depuis Hermes.",
+  "import.source.hermesNoteExport": "Exportez un fichier .zip depuis Hermes.",
+  "import.hermes.notFoundServer": "Aucun profil Hermes sur ce serveur",
+  "import.hermes.notFoundServerNote":
+    "GoAhead lit le dossier Hermes du serveur. Pour importer Hermes depuis cet ordinateur, exportez un fichier .zip depuis Hermes.",
 } as const satisfies PartialTranslation<typeof source>;

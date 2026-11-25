@@ -18,7 +18,6 @@ export const messages = {
   "status.remote.stageCompatibility": "Masaüstü uyumluluğu kontrol ediliyor: {reason}",
   "status.remote.stageAgents": "Ajanlar yükleniyor: {reason}",
   "status.remote.stageReads": "Okuma durumu yükleniyor: {reason}",
-  "status.remote.stageConversations": "Konuşmalar yükleniyor: {reason}",
   "status.remote.suspendedDetail": "Bağlanmadan önce GoAhead Mobile veya masaüstü uygulamasını güncelleyin.\n{detail}",
   "status.remote.cooldownDetail":
     "{limit} denemeden sonra bağlantı başarısız oldu. {minutes}:{seconds} içinde yeniden deneniyor.\n{detail}",
@@ -48,4 +47,6 @@ export const messages = {
     one: "Yeniden bağlanılıyor {attempt}/{count}",
     other: "Yeniden bağlanılıyor {attempt}/{count}",
   },
+  "status.remote.messageCut":
+    "[Bu mesajın {size} MB'lık kısmı bu cihazda gösterilmiyor. Tamamını okumak için sunucuyu çalıştıran bilgisayarda açın.]",
 } as const satisfies PartialTranslation<typeof source>;

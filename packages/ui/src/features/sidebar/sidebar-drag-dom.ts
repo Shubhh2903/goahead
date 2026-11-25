@@ -1,8 +1,3 @@
-/**
- * The DOM half of the sidebar drag: what it queries, what it measures, and the drag card it builds.
- * Kept apart from the model so the geometry can be produced in one place and read as plain values.
- */
-
 import type {
   ChatDragSlot,
   DragSlot,
@@ -11,15 +6,9 @@ import type {
   SidebarDragGeometry,
 } from "./sidebar-drag-model";
 
-/**
- * Everything `measureSidebarDragSlots` asks the list for. Each name is emitted by exactly one JSX
- * site: `sectionRegion` by the People and agent sections, `chatRow` by the agent and channel rows, `personRow`
- * by the people section, `pinnedTile` by the pinned group. Renaming one here without renaming the
- * emitter leaves an empty slot map behind: the drag starts, tracks nothing and drops nowhere, and
- * no test fails loudly on it.
- */
 export const SIDEBAR_DRAG_SELECTORS = {
   chatRow: "[data-chat-id]",
+  closedBody: ".sidebar-section-collapse[data-collapsed]",
   personRow: "[data-person-id]",
   pinnedEmptyDrop: ".sidebar-pinned-empty-drop",
   pinnedGroup: ".sidebar-pinned-group",
@@ -28,13 +17,21 @@ export const SIDEBAR_DRAG_SELECTORS = {
   sectionRegion: "[data-section-id]",
 } as const;
 
-/** One pass over the list: every slot cache plus the two rectangles the drop resolver guards on. */
 export interface SidebarDragMeasurement {
   chats: Map<string, ChatDragSlot>;
   geometry: SidebarDragGeometry;
   people: Map<string, PersonDragSlot>;
   pinned: DragSlot[];
   sections: Map<string, SectionDragSlot>;
+}
+
+function visiblePinnedBounds(group: HTMLElement, target: HTMLElement): DOMRect {
+  const bounds = target.getBoundingClientRect();
+  if (target === group) return bounds;
+  const clip = group.getBoundingClientRect();
+  const top = Math.max(bounds.top, clip.top);
+  const bottom = Math.min(bounds.bottom, clip.bottom);
+  return new DOMRect(bounds.left, top, bounds.width, Math.max(0, bottom - top));
 }
 
 export function measureSidebarDragSlots(
@@ -47,24 +44,34 @@ export function measureSidebarDragSlots(
   const pinned: DragSlot[] = [];
   const pinnedGroup = list.querySelector<HTMLElement>(SIDEBAR_DRAG_SELECTORS.pinnedGroup);
   const pinnedTarget = pinnedGroup?.querySelector<HTMLElement>(SIDEBAR_DRAG_SELECTORS.pinnedEmptyDrop) ?? pinnedGroup;
+  const listBounds = list.getBoundingClientRect();
   const geometry: SidebarDragGeometry = {
-    list: list.getBoundingClientRect(),
-    pinned: pinnedTarget?.getBoundingClientRect() ?? null,
+    list: listBounds,
+    pinned: pinnedGroup && pinnedTarget ? visiblePinnedBounds(pinnedGroup, pinnedTarget) : null,
   };
   for (const section of list.querySelectorAll<HTMLElement>(SIDEBAR_DRAG_SELECTORS.sectionRegion)) {
     const sectionId = section.dataset.sectionId;
-    if (!sectionId) continue;
+    if (!sectionId || isInClosedSection(section)) continue;
     const bounds = section.getBoundingClientRect();
+    const header = section.querySelector<HTMLElement>(":scope > header");
+    const headerStyle = header ? getComputedStyle(header) : null;
+    const stickOffset = headerStyle?.position === "sticky" ? Number.parseFloat(headerStyle.top) : Number.NaN;
     sections.set(sectionId, {
       bottom: bounds.bottom,
       sectionId,
       top: bounds.top,
       centerY: bounds.top + bounds.height / 2,
+      header: header
+        ? {
+            height: header.offsetHeight,
+            stickTop: Number.isFinite(stickOffset) ? listBounds.top + list.clientTop + stickOffset : null,
+          }
+        : null,
     });
   }
   for (const row of list.querySelectorAll<HTMLElement>(SIDEBAR_DRAG_SELECTORS.chatRow)) {
     const chatId = row.dataset.chatId;
-    if (!chatId) continue;
+    if (!chatId || isInClosedSection(row)) continue;
     const bounds = row.getBoundingClientRect();
     chats.set(chatId, {
       bottom: bounds.bottom,
@@ -105,7 +112,10 @@ export function measureSidebarDragSlots(
   return { chats, geometry, people, pinned, sections };
 }
 
-/** Takes the drop highlight off every section and off the pinned group. */
+function isInClosedSection(element: HTMLElement): boolean {
+  return Boolean(element.parentElement?.closest(SIDEBAR_DRAG_SELECTORS.closedBody));
+}
+
 export function clearSidebarDragDecorations(list: HTMLElement | undefined): void {
   list?.querySelector(SIDEBAR_DRAG_SELECTORS.pinnedGroup)?.classList.remove("sidebar-pinned-group-agent-drop-target");
   for (const section of list?.querySelectorAll<HTMLElement>(SIDEBAR_DRAG_SELECTORS.section) ?? []) {
@@ -113,6 +123,7 @@ export function clearSidebarDragDecorations(list: HTMLElement | undefined): void
       "sidebar-section-agent-drop-target",
       "sidebar-section-drop-before",
       "sidebar-section-drop-after",
+      "sidebar-section-drop-into",
     );
   }
 }

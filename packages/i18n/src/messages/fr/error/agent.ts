@@ -2,10 +2,35 @@ import type { PartialTranslation } from "../../../message";
 import type { messages as source } from "../../en/error/agent";
 
 export const messages = {
+  "error.agent.historyUnavailable":
+    "L’historique n’est pas disponible pour cette demande. Relisez l’historique récent, ou utilisez channel_history pour le travail dans un canal.",
+  "error.agent.historyArgumentsInvalid":
+    "Arguments d’historique incorrects : {detail} Corrige les arguments et réessaie. openbot.tool_describe donne le schéma.",
+  "error.agent.toolRequestInvalid":
+    "Arguments de découverte d’outils non valides. Utilisez le schéma déclaré et un nom d’outil qualifié d’origine.",
+  "error.agent.toolCallArgumentsNotObject":
+    "L’outil ne s’est pas exécuté. Dans tool_call, arguments doit être un objet JSON, pas du texte. Renvoyez l’appel avec arguments sous forme d’objet.",
+  "error.agent.toolCallDiscoveryTool":
+    "L’outil ne s’est pas exécuté. tool_call ne peut pas exécuter openbot.tool_search ni openbot.tool_describe. Appelez-les directement avec les mêmes arguments.",
+  "error.agent.toolCallEnvelopeKeys":
+    "L’outil ne s’est pas exécuté. tool_call accepte seulement name et arguments. Mettez les arguments de l’outil dans arguments, sous forme d’objet, puis renvoyez l’appel.",
+  "error.agent.toolCallMissingName":
+    "L’outil ne s’est pas exécuté. Le tool_call n’a pas de name. Mettez dans name le nom qualifié que donne tool_search, par exemple openbot.history_read, et envoyez l’appel à nouveau.",
+  "error.agent.toolCallUnknownTool":
+    "L’outil ne s’est pas exécuté. tool_call n’a trouvé aucun outil avec ce nom. Utilisez le nom qualifié exact que donne tool_search, par exemple openbot_browser.snapshot.",
+  "error.agent.toolCallUnknownToolSuggest":
+    "L’outil ne s’est pas exécuté. tool_call n’a trouvé aucun outil avec ce nom. Le nom qualifié est peut-être {name}. Si c’est le cas, renvoyez l’appel avec ce nom.",
+  "error.agent.toolDescribeUnknownNames":
+    "tool_describe n’a trouvé aucun outil GoAhead nommé {names}. Il décrit uniquement les outils GoAhead et du navigateur que liste openbot.tool_search, pas les outils MCP.",
+  "error.agent.toolDescribeDiscoveryNames":
+    "Appelle {names} directement. tool_describe ne décrit pas les outils de recherche.",
+  "error.agent.routineScheduleArgumentsInvalid":
+    "La planification de la routine n’est pas valide : {detail} Corrigez la planification et réessayez. openbot.tool_describe donne le schéma.",
   "error.agent.approvalWhileDeleting": "Impossible d’accorder l’approbation pendant la suppression de l’agent.",
   "error.agent.accessLocalOnly": "L’accès à l’agent ne peut être modifié que sur l’ordinateur qui exécute l’agent.",
   "error.agent.duplicateCleanupFailed":
     "La duplication de l’agent a échoué et la copie incomplète n’a pas pu être supprimée.",
+  "error.agent.commitEffectsFailed": "La transaction a été validée, mais ses effets enregistrés ont échoué.",
   "error.agent.settingsLocalOnly":
     "Les réglages de l’agent ne peuvent être modifiés que sur l’ordinateur qui exécute l’agent.",
   "error.agent.skillsLocalOnly": "Les compétences ne peuvent être modifiées que sur l’ordinateur qui exécute l’agent.",
@@ -16,7 +41,15 @@ export const messages = {
   "error.agent.messageOrAttachmentRequired": "Un message ou une pièce jointe est requis.",
   "error.agent.promptAnswersTooLong": "Les réponses sont trop longues.",
   "error.agent.gone": "Cet agent n’existe plus.",
+  "error.agent.instructionsTooLarge":
+    "Le fichier d’instructions est trop volumineux pour être ouvert ici. Raccourcissez-le dans un éditeur de texte.",
+  "error.agent.instructionsOutside":
+    "Le fichier d’instructions renvoie vers un emplacement hors de l’espace de travail de l’agent : GoAhead ne l’ouvre pas.",
+  "error.agent.instructionsReadFailed": "Impossible de lire le fichier d’instructions.",
+  "error.agent.instructionsSaveFailed": "Impossible d’enregistrer le fichier d’instructions.",
   "error.agent.profileGenerationBusy": "La génération de profil est occupée. Réessayez dans un instant.",
+  "error.agent.instructionsChanged":
+    "L'agent a modifié le fichier d'instructions. Votre dernière modification n'a pas été enregistrée. Refaites-la.",
   "error.agent.initialMessageRequired": "Le message initial est requis.",
   "error.agent.initialMessageTooLong": "Le message initial est trop long.",
   "error.agent.setupCleanupFailed":
@@ -24,24 +57,45 @@ export const messages = {
   "error.agent.modelUnavailable": "Le modèle d’agent sélectionné est indisponible.",
   "error.agent.modelProviderNotConnected":
     "Le modèle d’agent sélectionné « {model} » est indisponible : {provider} n’est pas connecté.",
+  "error.agent.modelProviderSignInRequired":
+    "Le modèle d’agent sélectionné « {model} » est indisponible : {provider} demande une connexion. Connectez-vous à {provider}, puis réessayez.",
+  "error.agent.modelProviderNotInstalled":
+    "Le modèle d’agent sélectionné « {model} » est indisponible : {provider} n’est pas installé.",
+  "error.agent.modelProviderOutdated":
+    "Le modèle d’agent sélectionné « {model} » est indisponible : {provider} doit être mis à jour.",
   "error.agent.modelListEmpty":
     "Le modèle d’agent sélectionné « {model} » est indisponible : {provider} n’a listé aucun modèle. Dernière erreur : {detail}",
   "error.agent.modelListEmptyNoError":
     "Le modèle d’agent sélectionné « {model} » est indisponible : {provider} n’a listé aucun modèle.",
   "error.agent.modelNotInProviderList":
     "Le modèle d’agent sélectionné « {model} » est indisponible : {provider} ne le liste pas.",
+  "error.agent.modelVariantNotListed":
+    "Le modèle d’agent sélectionné « {model} » est indisponible : {provider} ne le liste pas. Utilisez une de ces valeurs que {provider} liste pour ce modèle : {models}.",
   "error.agent.modelProviderMismatch": "Le modèle sélectionné n’appartient pas à ce fournisseur.",
   "error.agent.modelNotListed": "Le modèle « {model} » n’est pas disponible. Modèles disponibles : {models}.",
   "error.agent.providerNotListed":
     "Aucun modèle {provider} n’est disponible pour le moment. Appelez list_models pour voir les modèles disponibles.",
+  "error.agent.creatorModelNotListed":
+    "Votre modèle « {model} » n’est pas dans la liste des modèles pour le moment, donc le nouvel agent ne peut pas démarrer avec. Réessayez dans quelques secondes, ou indiquez dans provider et model un modèle que list_models affiche.",
   "error.agent.reasoningEffortUnsupported":
     "Le modèle « {model} » ne prend pas en charge l’effort de raisonnement « {effort} ». Efforts pris en charge : {efforts}.",
+  "error.agent.reasoningEffortNotConfigurable":
+    "Le modèle « {model} » n’a pas de réglage d’effort de raisonnement : vous ne pouvez pas le modifier.",
+  "error.agent.noStartingModelInSettings":
+    "{provider} ne propose aucun modèle disponible, et aucun autre fournisseur connecté non plus. Connectez-vous à un fournisseur ou changez le fournisseur par défaut dans Réglages du serveur → Fournisseurs.",
   "error.agent.noStartingModel":
     "{provider} n’a aucun modèle disponible, et aucun autre fournisseur connecté n’en a. Connectez-vous à un fournisseur, ou changez le fournisseur par défaut dans Fournisseurs et autorisations.",
   "error.agent.waitBeforeProviderChange":
     "Attendez la fin du tour actif et de la file d’attente avant de changer de fournisseur.",
+  "error.agent.waitForTasksBeforeProviderChange":
+    "Des tâches de cet agent sont en cours. Attendez qu’elles se terminent ou arrêtez-les avant de changer de fournisseur.",
   "error.agent.waitBeforeClearContext":
     "Attendez la fin du tour actif et de la file d’attente avant de commencer une nouvelle discussion.",
+  "error.agent.waitBeforeCompactContext":
+    "Attendez la fin du tour actif et de la file d’attente avant de compacter le contexte.",
+  "error.agent.waitBeforeDeleteHistory":
+    "Attendez la fin du tour actif et de la file d’attente avant de supprimer l’historique.",
+  "error.agent.compactContextUnavailable": "Cet agent ne peut pas compacter son contexte maintenant.",
   "error.agent.unknown": "Agent inconnu : {id}",
   "error.agent.onlyUserWidensSettings":
     "Seul l’utilisateur peut donner à un agent l’accès complet ou activer Computer Use. Demandez à l’utilisateur de le modifier dans les réglages de l’agent.",
@@ -58,6 +112,19 @@ export const messages = {
   "error.agent.copyNameFailed": "GoAhead n’a pas pu créer un nom unique pour la copie de l’agent.",
   "error.agent.endpointRemoved":
     "Le point de terminaison utilisé par cet agent a été supprimé. Choisissez un autre modèle pour lui.",
+  "error.agent.turnStalled":
+    "{provider} ne répond plus, donc GoAhead a terminé ce tour. Renvoyez le message ou choisissez un autre modèle.",
+  "error.agent.promptCancelled": "{provider} a annulé ce message avant son début. Renvoyez le message.",
+  "error.agent.toolLoopStopped":
+    "{provider} a répété de nombreuses fois une étape en échec, donc GoAhead a arrêté ce tour. Renvoyez le message ou choisissez un autre modèle.",
+  "error.agent.answerCutOff":
+    "L’agent s’est arrêté avant de terminer sa réponse, donc la réponse n’est pas complète. Renvoyez le message.",
+  "error.agent.compactionConnectionLost":
+    "La connexion s’est interrompue pendant que l’agent compactait son contexte, la tâche s’est donc arrêtée. Vérifiez votre connexion internet, puis envoyez un message pour continuer.",
+  "error.agent.compactionConnectionLostAddress":
+    "La connexion s’est interrompue pendant que l’agent compactait son contexte, la tâche s’est donc arrêtée. Vérifiez votre connexion internet et que {variable}, sous Variables dans les réglages de {provider}, est l’adresse API de votre service de modèles (souvent en /v1). Puis envoyez un message.",
+  "error.agent.compactionLoopStopped":
+    "{provider} a compacté le contexte encore et encore, et il restait chaque fois trop plein pour continuer : GoAhead a donc arrêté ce tour. Désactivez les serveurs MCP ou l'utilisation de l'ordinateur dont cet agent n'a pas besoin, puis envoyez un message. Si vous ou l'agent avez changé le moment où {provider} compacte, annulez ce changement.",
   "error.agent.selectedGone": "L’agent sélectionné n’existe plus.",
   "error.agent.profileEndpointsChanged":
     "Les points de terminaison personnalisés ont changé pendant la génération. Réessayez.",
@@ -74,6 +141,12 @@ export const messages = {
   "error.agent.stopBeforeDelete": "Arrêtez l’agent et annulez ses messages en file d’attente avant de le supprimer.",
   "error.agent.deleteIncomplete":
     "Les données de l’agent n’ont pas pu être entièrement supprimées. Relancez la suppression de l’agent.",
+  "error.agent.deleteFolderInUse":
+    "Le travail d'un autre agent utilise encore le dossier de cet agent. Supprimez à nouveau cet agent quand ce travail se termine, ou après avoir redémarré GoAhead.",
+  "error.agent.deleteFolderLocked":
+    "Un autre programme utilise encore le dossier de cet agent, par exemple un programme que l’agent a lancé. Fermez ce programme ou redémarrez l’ordinateur sur lequel cet agent fonctionne, puis supprimez à nouveau l’agent.",
+  "error.agent.deleteWhenFolderFree":
+    "Le travail d'un autre agent utilise encore le dossier de cet agent. GoAhead supprime cet agent quand ce travail se termine.",
   "error.agent.duplicationBusy": "Cet agent est déjà en cours de duplication.",
   "error.agent.waitBeforeDuplicate":
     "Attendez que l’agent ait terminé et videz sa file d’attente avant de le dupliquer.",
@@ -85,10 +158,64 @@ export const messages = {
     "Le profil d’agent enregistré {id} a une valeur « {field} » illisible ; mettez à jour les données avant de démarrer GoAhead.",
   "error.agent.queueEditRejected": "Modification de la file d’attente refusée : {reason}",
   "error.agent.computerUseLocalOnly": "Computer Use ne peut être modifié que sur l’ordinateur qui exécute l’agent.",
+  "error.agent.automationLocalOnly":
+    "Les scripts locaux ne peuvent être autorisés que sur l’ordinateur qui exécute l’agent.",
+  "error.agent.newChatLocalOnly":
+    "Seul l’ordinateur qui exécute l’agent peut l’autoriser à démarrer de nouvelles discussions.",
+  "error.agent.quickAcknowledgementLocalOnly": "Seul l’ordinateur qui exécute l’agent peut modifier ce réglage.",
+  "error.agent.sideQuestionBusy": "Trop de questions annexes sont en cours. Réessayez dans un instant.",
+  "error.agent.sideQuestionFailed": "L’agent n’a pas pu répondre à la question annexe. Réessayez.",
+  "error.agent.webSearchSignIn": "La recherche web nécessite une connexion à Codex avec un compte ChatGPT.",
+  "error.agent.webSearchBusy": "Trop de recherches et de questions annexes sont en cours. Réessayez dans un instant.",
+  "error.agent.webSearchFailed": "La recherche web n’a pas abouti. Réessayez.",
+  "error.agent.busyMessageModeLocalOnly":
+    "Le comportement des messages pendant le travail de l’agent ne peut être réglé que sur l’ordinateur qui exécute l’agent.",
+  "error.agent.backupModelsLocalOnly":
+    "Les modèles de secours ne peuvent être réglés que sur l’ordinateur qui exécute l’agent.",
+  "error.agent.backupModelsAtLimit":
+    "Aucun modèle de secours ne peut prendre le relais : chacun a atteint sa limite d’utilisation ou a échoué il y a peu. Les modèles d’un même compte peuvent partager une limite. Pour continuer, ajoutez un modèle de secours d’un autre fournisseur ou d’un autre compte, ou attendez la réinitialisation.",
+  "error.agent.taskLimitLocalOnly": "La limite de tâches se règle uniquement sur l’ordinateur qui exécute l’agent.",
+  "error.agent.localScriptsOff": "Cet agent n’autorise pas les scripts locaux.",
+  "error.agent.localScriptsRateLimited":
+    "Des scripts locaux ont envoyé à cet agent {limit} demandes de message ou de routine au cours de la dernière heure. Réessayez plus tard.",
+  "error.agent.automationOff": "Cet agent n’autorise pas les scripts locaux à exécuter ses routines.",
+  "error.agent.automationPayloadTooLong": "Les données envoyées dépassent {limit} caractères.",
+  "error.agent.automationRateLimited":
+    "Des scripts locaux ont exécuté les routines de cet agent {limit} fois au cours de la dernière heure. Réessayez plus tard.",
   "error.agent.workspaceOnlyMacOnly":
     "« Espace de travail uniquement » n’est disponible pour ce fournisseur que sur macOS. Choisissez « Accès complet » dans les réglages de l’agent.",
   "error.agent.lowMemory":
-    "Ce serveur manque de mémoire. Votre message attend dans la file et démarre quand la mémoire est libre. Une offre plus grande donne plus de mémoire au serveur.",
+    "Ce serveur manque de mémoire. Votre message attend dans la file et démarre quand la mémoire est libre. Une offre supérieure donne plus de mémoire au serveur.",
+  "error.agent.lowMemoryServer":
+    "Ce serveur manque de mémoire. Votre message attend dans la file et démarre quand la mémoire est libre.",
   "error.agent.workspaceOnlyToolMissing":
-    "« Espace de travail uniquement » nécessite {tool}, que GoAhead n’a pas trouvé. Installez-le, ou choisissez « Accès complet » dans les réglages de l’agent.",
+    "« Espace de travail uniquement » nécessite {tool}, qu’GoAhead n’a pas trouvé. Installez-le, ou choisissez « Accès complet » dans les réglages de l’agent.",
+  "error.agent.codexSandboxUnavailable":
+    "« Espace de travail uniquement » nécessite le bac à sable de Codex, que Codex ne peut pas démarrer sur cet ordinateur : les commandes de l’agent échouent. Choisissez « Demander d’abord » ou « Accès complet » dans les réglages de l’agent.",
+  "error.agent.claudeSandboxUnavailable":
+    "« Espace de travail uniquement » nécessite le bac à sable de Claude, que Claude ne peut pas démarrer sur cet ordinateur : {reason}. Choisissez « Accès complet » ou un autre fournisseur dans les réglages de l’agent.",
+  "error.agent.claudeNoSandbox":
+    "Claude ne peut pas utiliser de bac à sable sur cet ordinateur, donc « Espace de travail uniquement » ne fonctionne pas avec lui. Choisissez « Accès complet » ou un autre fournisseur dans les réglages de l’agent.",
+  "error.agent.claudeSandboxBlocked":
+    "« Espace de travail uniquement » nécessite le bac à sable de Claude, que Claude ne peut pas démarrer sur cet ordinateur : les commandes de l’agent échouent. Choisissez « Accès complet » ou un autre fournisseur dans les réglages de l’agent.",
+  "error.agent.screenCaptureOff":
+    "La capture d’écran est désactivée pour cet agent. L’utilisateur peut activer Computer Use dans les réglages de l’agent.",
+  "error.agent.screenCaptureUnavailable": "La capture d’écran n’est pas disponible sur cet ordinateur.",
+  "error.agent.screenCaptureShared":
+    "La capture d’écran ne fonctionne pas dans une conversation Slack, Discord ou Telegram, car d’autres personnes reçoivent ses fichiers.",
+  "error.agent.screenCaptureDeclined": "L’utilisateur n’a pas autorisé cette capture d’écran. Rien n’a été capturé.",
+  "error.agent.mcpToolDeclined": "L’utilisateur n’a pas autorisé cet appel d’outil MCP. L’outil n’a pas été exécuté.",
+  "error.agent.screenCaptureWindowMissing":
+    "Cette fenêtre n’est pas ouverte. Appelez list_capture_sources pour obtenir les identifiants actuels des fenêtres.",
+  "error.agent.screenCaptureDisplayMissing":
+    "Cet écran n’est pas connecté. Appelez list_capture_sources pour obtenir les identifiants actuels des écrans.",
+  "error.agent.screenCaptureRegionOutside":
+    "La zone n’est pas entièrement dans un seul écran. Utilisez des points du bureau situés dans les limites d’un écran renvoyées par list_capture_sources.",
+  "error.agent.screenCapturePermissionMissing":
+    "GoAhead n’a pas l’autorisation « Enregistrement de l’écran ». Demandez à l’utilisateur d’ouvrir Réglages Système > Confidentialité et sécurité > Enregistrement de l’écran et de l’audio du système, d’activer GoAhead, puis de quitter et de rouvrir GoAhead.",
+  "error.agent.screenCaptureListPermission":
+    "GoAhead n’a pas encore l’autorisation « Enregistrement de l’écran » et ne peut donc pas lister les fenêtres. Pour capturer un écran, appelez capture_screen avec target screen. L’utilisateur approuve d’abord la capture, puis macOS peut lui demander l’autorisation.",
+  "error.agent.screenCaptureEmptyWindows":
+    "Windows a renvoyé une image vide. Demandez à l’utilisateur de déverrouiller l’ordinateur et de fermer le contenu protégé. Une stratégie de l’organisation peut aussi bloquer la capture d’écran.",
+  "error.agent.screenCaptureFailed": "La capture d’écran a échoué. Réessayez.",
 } as const satisfies PartialTranslation<typeof source>;

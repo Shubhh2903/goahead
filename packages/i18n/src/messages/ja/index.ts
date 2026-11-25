@@ -14,9 +14,11 @@ import { messages as composer } from "./composer";
 import { messages as computerUse } from "./computerUse";
 import { messages as connector } from "./connector";
 import { messages as conversation } from "./conversation";
+import { messages as crm } from "./crm";
 import { messages as customProvider } from "./customProvider";
 import { messages as diagram } from "./diagram";
 import { messages as dialog } from "./dialog";
+import { messages as extension } from "./extension";
 import { messages as files } from "./files";
 import { messages as importAgent } from "./import";
 import { messages as island } from "./island";
@@ -39,26 +41,19 @@ import { messages as settings } from "./settings";
 import { shared } from "./shared";
 import { messages as sharedTable } from "./sharedTable";
 import { messages as sidebar } from "./sidebar";
+import { messages as sitePage } from "./sitePage";
 import { messages as skill } from "./skill";
 import { source } from "./source";
 import { messages as startup } from "./startup";
 import { messages as team } from "./team";
+import { messages as uiBlock } from "./uiBlock";
 import { messages as update } from "./update";
 import { messages as usage } from "./usage";
+import { messages as vault } from "./vault";
 import { messages as webClient } from "./webClient";
 import { messages as window } from "./window";
+import { messages as workflow } from "./workflow";
 
-/**
- * Japanese. Written from the English source and not yet reviewed by a native speaker: read it as a
- * first draft that is safe to ship behind an explicit language choice, not as final copy. A key that
- * is missing here renders its English source.
- *
- * Notes for a reviewer. The interface uses です・ます throughout, because the English source speaks
- * to the user directly rather than reporting state. Product names stay in Latin script: GoAhead is
- * the application name, and ZIP and JSON are the file formats a picker shows.
- *
- * This is the desktop catalog: shared keys, source text, and every desktop area.
- */
 export const ja = {
   ...shared,
   ...source,
@@ -94,11 +89,13 @@ export const ja = {
   ...mcp,
   ...messaging,
   ...webClient,
+  ...extension,
   ...account,
   ...onboarding,
   ...usage,
   ...sidebar,
   ...channel,
+  ...workflow,
   ...agent,
   ...agentTemplate,
   ...importAgent,
@@ -107,4 +104,8 @@ export const ja = {
   ...computerUse,
   ...connector,
   ...diagram,
+  ...vault,
+  ...uiBlock,
+  ...sitePage,
+  ...crm,
 } as const satisfies PartialTranslation<AppMessages>;

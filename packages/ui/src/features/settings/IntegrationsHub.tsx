@@ -26,17 +26,12 @@ export interface IntegrationsHubRow {
   status: IntegrationStatus;
   statusLabel: string;
   summary: string;
-  /** The agents that use the integration, when it belongs to some agents and not to all. */
   agents?: IntegrationAgent[] | undefined;
   onOpen: () => void;
 }
 
 const FACES = 4;
 
-/**
- * Server settings > Connectors: one quiet row per integration. The whole row opens its page. A row
- * that is set up sorts into the first section with its status; the others wait below with Set up.
- */
 export function IntegrationsHub(props: { rows: IntegrationsHubRow[] }) {
   const { t } = useText();
   const active = () => props.rows.filter((row) => row.status !== "idle");

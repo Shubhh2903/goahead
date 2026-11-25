@@ -1,81 +1,111 @@
-import {
-  type Block,
-  BloubBot,
-  BotEngine,
-  type BotFrame,
-  DEMI_VIEWBOX,
-  makeBlock,
-  POSES,
-  RAYON,
-} from "@norbert_bodziony/bloub";
-import {
-  type AvatarMood,
-  avatarMoodIsBusy,
-  avatarMoodPresentation,
-  type ShapeSafeStateId,
-} from "@openbot/brand/bloub-avatar-motion";
-import type { AvatarHue } from "@openbot/contracts/ipc";
+import { BloubBot, type ExpressionId, POSES } from "@norbert_bodziony/bloub";
+import { PlushBot, type PlushState, type PlushTransition } from "@norbert_bodziony/bloub/plush";
+import { type AvatarMood, avatarMoodPresentation, type ShapeSafeStateId } from "@openbot/brand/bloub-avatar-motion";
+import type { AgentStepActivity, AvatarColor, AvatarHue } from "@openbot/contracts/ipc";
 import { prefersReducedMotion } from "@openbot/ui/utils";
-import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
-import { type AvatarMotion, bloubAvatarProfile, type SupportedAvatarSilhouetteId } from "../../bloub-avatar";
+import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
+import { useAmbientMotion } from "../../ambient-motion";
+import {
+  AVATAR_EXPRESSIONS,
+  type AvatarMotion,
+  avatarStyleForSeed,
+  bloubAvatarProfile,
+  type SupportedAvatarSilhouetteId,
+} from "../../bloub-avatar";
 import type { AgentProfile } from "../../data";
+import { documentFocused } from "../../document-focus";
+import { documentStillFaces } from "../../document-rendering";
+import { observeOnScreen } from "../../on-screen";
 
-// Cap avatar animation at 30fps: uncapped bloub clocks measured 30% renderer / 24% GPU
-// for two visible avatars. The shape is 24-40px, so the eye cannot see the difference.
-const AVATAR_FPS = 30;
-const SIDEBAR_MOTION_HOLD_FACTOR = 1.25;
+const AVATAR_FPS = 80;
 
-// Resting montage shown on hover: shape-safe blocks only, so the seeded silhouette stays
-// on screen while the face carries the personality (blink, wink, wide eyes).
-const DEFAULT_CYCLE: Block[] = [
-  slowerBlock("idle"),
-  makeBlock("wink"),
-  slowerBlock("idle"),
-  makeBlock("wide"),
-  slowerBlock("idle"),
-];
-
-// Decor rings are sampled from the `orbit` pose, not played as a state: `orbit`
-// replaces the body, while sampling only `frame.arcs` keeps the silhouette.
-const RING_POSE = "orbit";
-
-// Motions that rest until pointer/focus arrives. The sidebar is not virtualized, so every
-// row would otherwise animate on screen; idle-window profiles showed 83 recalcs/s from
-// four resting avatars. A mood with its own motion keeps animating as the busy signal.
-const STATIC_MOTIONS: ReadonlySet<AvatarMotion> = new Set(["hover", "idle"]);
-
-// Hover group lookup: the first `[data-avatar-hover]`/control ancestor, since dialogs and
-// scroll regions with `[tabindex]` are too wide to count as one.
-const HOVER_GROUP = "[data-avatar-hover], button, a, [role='button'], [role='link'], [role='menuitem']";
-
-function slowerBlock(state: ShapeSafeStateId): Block {
-  const block = makeBlock(state);
-  return { ...block, duration: block.duration * SIDEBAR_MOTION_HOLD_FACTOR };
+interface PlushMood {
+  state: PlushState;
+  expression: ExpressionId | null;
+  busy: boolean;
 }
 
+const PLUSH_MOODS: Readonly<Record<AvatarMood, PlushMood>> = {
+  idle: { state: "idle", expression: null, busy: false },
+  working: { state: "thinking", expression: "attentif", busy: true },
+  connecting: { state: "thinking", expression: "attentif", busy: true },
+  waiting: { state: "notify", expression: "curieux", busy: false },
+  failed: { state: "failed", expression: null, busy: false },
+  responded: { state: "idle", expression: "heureux", busy: false },
+  asleep: { state: "asleep", expression: null, busy: false },
+};
+
+interface HoverFace {
+  state: PlushState;
+  expression: ExpressionId | null;
+}
+
+const HOVER_WINK: HoverFace = { state: "wink", expression: null };
+const HOVER_FACES: readonly HoverFace[] = [
+  HOVER_WINK,
+  { state: "idle", expression: "surpris" },
+  { state: "idle", expression: "excite" },
+  { state: "idle", expression: "attentif" },
+  { state: "idle", expression: "curieux" },
+];
+
+const WORKING_FACE_MIN_MS = 700;
+const WORKING_FACE_MAX_MS = 3200;
+
+const ACTIVITY_MOODS: Readonly<Record<AgentStepActivity, PlushMood>> = {
+  searching: { state: "idle", expression: "curieux", busy: true },
+  browsing: { state: "wide", expression: null, busy: true },
+  reading: { state: "idle", expression: "attentif", busy: true },
+  running: { state: "idle", expression: "excite", busy: true },
+  editing: { state: "idle", expression: "fier", busy: true },
+  delegating: { state: "wink", expression: null, busy: true },
+  working: { state: "idle", expression: "attentif", busy: true },
+  reviewing: PLUSH_MOODS.working,
+};
+
+const ACTIVITY_HOLD_MS = 1_400;
+
+const PHOTO_BREATHE = "0.03";
+
+const PLUSH_BODY_STYLE = { transform: "scale(1.15)" } as const;
+
+function frozenPose(state: PlushState): number {
+  return POSES[state === "wink" || state === "wide" || state === "notify" ? state : "idle"];
+}
+
+const STATIC_MOTIONS: ReadonlySet<AvatarMotion> = new Set(["hover", "idle"]);
+
+const HOVER_GROUP = "[data-avatar-hover], button, a, [role='button'], [role='link'], [role='menuitem']";
+
 interface AgentAvatarProps {
-  agent?: Pick<AgentProfile, "avatarSeed" | "avatarHue" | "avatarUrl"> | undefined;
+  agent?: Pick<AgentProfile, "avatarSeed" | "avatarHue" | "avatarColor" | "avatarUrl"> | undefined;
   seed?: string | undefined;
   hue?: AvatarHue | null;
-  url?: string | null;
+  color?: AvatarColor | null | undefined;
+  url?: string | null | undefined;
   motion?: AvatarMotion;
-  /** What the agent is doing. It chooses the face, never the silhouette. */
   mood?: AvatarMood;
-  cycleOffset?: number;
   animationOffset?: number;
   shape?: SupportedAvatarSilhouetteId;
+  expression?: ExpressionId;
+  transition?: PlushTransition;
+  followPointer?: boolean;
+  workingFaces?: boolean;
+  activity?: AgentStepActivity | null | undefined;
+  eyeScale?: number;
   class?: string;
   style?: Record<string, string>;
 }
 
 export function AgentAvatar(props: AgentAvatarProps) {
-  const seed = () => props.seed ?? props.agent?.avatarSeed ?? "agent";
-  const hue = () => (props.hue !== undefined ? props.hue : (props.agent?.avatarHue ?? null));
+  const seed = createMemo(() => props.seed ?? props.agent?.avatarSeed ?? "agent");
+  const hue = createMemo(() => (props.hue !== undefined ? props.hue : (props.agent?.avatarHue ?? null)));
+  const color = createMemo(() =>
+    props.color !== undefined || props.hue !== undefined ? (props.color ?? null) : (props.agent?.avatarColor ?? null),
+  );
   const motion = () => props.motion ?? "hover";
-  const url = () => (props.url !== undefined ? props.url : (props.agent?.avatarUrl ?? null));
+  const url = createMemo(() => (props.url !== undefined ? props.url : (props.agent?.avatarUrl ?? null)));
   const mood = (): AvatarMood => props.mood ?? "idle";
-  const presentation = () => avatarMoodPresentation(mood());
   const [imageFailed, setImageFailed] = createSignal(false);
   createEffect(
     () => url(),
@@ -84,11 +114,9 @@ export function AgentAvatar(props: AgentAvatarProps) {
     },
   );
   const className = () => `agent-avatar agent-avatar-motion-${motion()} ${props.class ?? ""}`;
-  // The custom property rides with the attribute rather than being set on every avatar: the
-  // keyframe is an infinite animation, and a selector that matched all of them would start one
-  // behind every resting row in the sidebar.
-  const breathe = () => (presentation().breathe > 0 ? String(presentation().breathe) : undefined);
-  const style = (): Record<string, string> => {
+  const ambientMotion = useAmbientMotion();
+  const breathe = () => (PLUSH_MOODS[mood()].busy && ambientMotion() ? PHOTO_BREATHE : undefined);
+  const photoStyle = (): Record<string, string> => {
     const amount = breathe();
     return amount ? { ...props.style, "--agent-avatar-breathe": amount } : { ...props.style };
   };
@@ -99,31 +127,31 @@ export function AgentAvatar(props: AgentAvatarProps) {
         <GeneratedAvatar
           seed={seed()}
           hue={hue()}
+          color={color()}
           motion={motion()}
           mood={mood()}
-          cycleOffset={props.cycleOffset}
           animationOffset={props.animationOffset}
           shape={props.shape}
-          breathe={breathe()}
+          expression={props.expression}
+          transition={props.transition ?? "pop"}
+          followPointer={props.followPointer === true}
+          workingFaces={props.workingFaces === true}
+          activity={props.activity ?? null}
+          eyeScale={props.eyeScale}
           class={className()}
-          style={style()}
+          style={props.style}
         />
       }
     >
       <span
         class={`${className()} agent-avatar-custom`}
-        style={style()}
+        style={photoStyle()}
         data-avatar="image"
         data-mood={mood()}
         data-breathe={breathe()}
         aria-hidden="true"
       >
-        {/* A photo cannot wear an expression, so the Bloub's own decor carries the mood around it.
-            A working agent used to hide behind three dots, which hid the one thing the person
-            chose; it now keeps its face and flies the same rings the generated avatar does. */}
-        <AvatarRings when={presentation().rings}>
-          <AvatarImage url={url()} onFailed={() => setImageFailed(true)} />
-        </AvatarRings>
+        <AvatarImage url={url()} onFailed={() => setImageFailed(true)} />
       </span>
     </Show>
   );
@@ -133,180 +161,131 @@ function AvatarImage(props: { url: string | null; onFailed: () => void }) {
   return <img src={props.url ?? ""} alt="" draggable={false} onError={() => props.onFailed()} />;
 }
 
-/**
- * Orbit rings drawn around the avatar instead of in place of it, sampled from a second
- * engine so a working avatar keeps its silhouette (`orbit` as a state is not shape-safe).
- */
-function AvatarRings(props: { when: boolean; children: JSX.Element }) {
-  return (
-    <Show when={props.when} fallback={props.children}>
-      <OrbitRings>{props.children}</OrbitRings>
-    </Show>
-  );
-}
-
-function OrbitRings(props: { children: JSX.Element }) {
-  let elapsed = POSES[RING_POSE];
-  let ringsSeen = false;
-  let anchor: SVGSVGElement | undefined;
-  const engine = new BotEngine(RAYON, RING_POSE);
-  const [arcs, setArcs] = createSignal<BotFrame["arcs"]>(engine.sample(elapsed).arcs, { equals: false });
-
-  onSettled(() => {
-    if (prefersReducedMotion()) return;
-    let handle = 0;
-    let previousFrameAt = 0;
-    let drawnAt = -Infinity;
-    const step = (now: number) => {
-      handle = requestAnimationFrame(step);
-      elapsed += previousFrameAt ? Math.min((now - previousFrameAt) / 1000, 0.064) : 0;
-      previousFrameAt = now;
-      if (elapsed - drawnAt < 1 / AVATAR_FPS) return;
-      drawnAt = elapsed;
-      let sampled = engine.sample(elapsed);
-      // A pose plays once, and its rings fade out before it ends - orbit holds them for 3.6s of a
-      // 4.3s block. So the pose restarts on the frame its rings run out, which is the engine's own
-      // measure of the cycle rather than a duration restated here.
-      if (ringsSeen && sampled.arcs.length === 0) {
-        ringsSeen = false;
-        engine.reset(RING_POSE, elapsed);
-        sampled = engine.sample(elapsed);
-      }
-      ringsSeen ||= sampled.arcs.length > 0;
-      setArcs(sampled.arcs);
-    };
-    const stop = () => {
-      if (!handle) return;
-      cancelAnimationFrame(handle);
-      handle = 0;
-    };
-    const start = () => {
-      if (handle) return;
-      // The clock restarts from the next frame, so a row that scrolls back in resumes where it
-      // stopped rather than jumping forward by the time it spent out of sight.
-      previousFrameAt = 0;
-      handle = requestAnimationFrame(step);
-    };
-    // A `BloubBot` pauses itself off screen through its own observer. These rings are our loop, so
-    // without the same gate every working row in a long sidebar keeps sampling an engine and
-    // writing paths that nobody can see.
-    const observer =
-      anchor && window.IntersectionObserver
-        ? new IntersectionObserver(([entry]) => {
-            if (entry?.isIntersecting) start();
-            else stop();
-          })
-        : undefined;
-    if (observer && anchor) observer.observe(anchor);
-    else start();
-    return () => {
-      observer?.disconnect();
-      stop();
-    };
-  });
-
-  return (
-    <>
-      <AvatarArcs arcs={arcs()} half="back" ref={(element) => (anchor = element)} />
-      {props.children}
-      <AvatarArcs arcs={arcs()} half="front" />
-    </>
-  );
-}
-
-function AvatarArcs(props: { arcs: BotFrame["arcs"]; half: "back" | "front"; ref?: (element: SVGSVGElement) => void }) {
-  const gradientId = createUniqueId();
-  return (
-    <svg
-      ref={props.ref}
-      class="agent-avatar-arcs"
-      viewBox={`${-DEMI_VIEWBOX} ${-DEMI_VIEWBOX} ${DEMI_VIEWBOX * 2} ${DEMI_VIEWBOX * 2}`}
-      fill="none"
-      stroke-linecap="round"
-      aria-hidden="true"
-    >
-      <defs>
-        <For each={props.arcs} keyed={false}>
-          {(arc) => (
-            <linearGradient
-              id={`${gradientId}-${arc().id}`}
-              gradientUnits="userSpaceOnUse"
-              x1={arc().grad.x1}
-              y1={arc().grad.y1}
-              x2={arc().grad.x2}
-              y2={arc().grad.y2}
-            >
-              <For each={arc().grad.stops} keyed={false}>
-                {(stop, index) => (
-                  <stop offset={index / Math.max(1, arc().grad.stops.length - 1)} stop-color={stop()} />
-                )}
-              </For>
-            </linearGradient>
-          )}
-        </For>
-      </defs>
-      <For each={props.arcs} keyed={false}>
-        {(arc) => (
-          <path
-            d={props.half === "back" ? arc().back : arc().front}
-            stroke={`url(#${gradientId}-${arc().id})`}
-            stroke-width={arc().width}
-            opacity={arc().opacity}
-          />
-        )}
-      </For>
-    </svg>
-  );
-}
-
 function GeneratedAvatar(props: {
   seed: string;
   hue: AvatarHue | null;
+  color: AvatarColor | null;
   motion: AvatarMotion;
   mood: AvatarMood;
-  cycleOffset?: number;
-  animationOffset?: number;
-  shape?: SupportedAvatarSilhouetteId;
-  breathe?: string;
+  animationOffset?: number | undefined;
+  shape?: SupportedAvatarSilhouetteId | undefined;
+  expression?: ExpressionId | undefined;
+  transition: PlushTransition;
+  followPointer: boolean;
+  workingFaces: boolean;
+  activity: AgentStepActivity | null;
+  eyeScale?: number | undefined;
   class: string;
-  style?: Record<string, string>;
+  style?: Record<string, string> | undefined;
 }) {
   let element: HTMLSpanElement | undefined;
   const [interacting, setInteracting] = createSignal(false);
-  const [reducedMotion, setReducedMotion] = createSignal(prefersReducedMotion());
-  const presentation = createMemo(() => avatarMoodPresentation(props.mood));
-  const profile = createMemo(() => bloubAvatarProfile(props.seed, props.hue));
-  // The silhouette and the colour are identity and come only from the seed. The mood may lend the
-  // face an expression; when it does not, the seeded one is the resting face.
-  const appearance = createMemo(() => ({
-    shape: props.shape ?? profile().shape,
-    color: profile().color,
-    expression: presentation().expression ?? profile().expression,
-    state: presentation().state,
-  }));
-  const cycle = createMemo(() => offsetCycle(DEFAULT_CYCLE, props.cycleOffset ?? 0));
-  // A mood that carries its own motion has to be seen without being pointed at; the resting moods
-  // keep the hover gating that the perf note above is about.
-  const animated = () =>
-    !reducedMotion() && (avatarMoodIsBusy(props.mood) || !STATIC_MOTIONS.has(props.motion) || interacting());
-  const motionCycle = () => {
-    if (props.mood !== "idle") return [slowerBlock(presentation().state)];
-    return cycle();
+  const [prefersReduced, setPrefersReduced] = createSignal(prefersReducedMotion());
+  const [onScreen, setOnScreen] = createSignal(true);
+  const reducedMotion = () => prefersReduced() || documentStillFaces();
+  const ambientMotion = useAmbientMotion();
+  const cyclesFaces = () => props.workingFaces && props.mood === "working";
+  const [workingFace, setWorkingFace] = createSignal<ExpressionId>(nextWorkingFace(null));
+  const requestedActivity = () =>
+    props.mood === "working" && !props.workingFaces && !reducedMotion() ? props.activity : null;
+  const shownActivity = createHeldActivity(requestedActivity, ACTIVITY_HOLD_MS);
+  const activityMood = () => {
+    const activity = shownActivity();
+    return activity ? ACTIVITY_MOODS[activity] : null;
   };
+  const plushMood = createMemo((): PlushMood => {
+    if (cyclesFaces()) return { state: "idle", expression: reducedMotion() ? "attentif" : workingFace(), busy: true };
+    return activityMood() ?? PLUSH_MOODS[props.mood];
+  });
+  const profile = createMemo(() => bloubAvatarProfile(props.seed, props.hue, props.color));
+  const restingExpression = () => props.expression ?? profile().expression;
+  const hovered = () =>
+    interacting() &&
+    !reducedMotion() &&
+    props.mood === "idle" &&
+    props.shape === undefined &&
+    props.expression === undefined;
+  const [hoverFace, setHoverFace] = createSignal<HoverFace | null>(null);
+  const appearance = createMemo(
+    () => {
+      const hover = hovered() ? hoverFace() : null;
+      return {
+        shape: props.shape ?? profile().shape,
+        color: profile().color,
+        expression: plushMood().expression ?? hover?.expression ?? restingExpression(),
+        state: hover?.state ?? plushMood().state,
+      };
+    },
+    { equals: sameAppearance },
+  );
+  const flat = createMemo(() => avatarStyleForSeed(props.seed) === "flat");
+  const flatAppearance = createMemo(
+    () => {
+      const presentation = avatarMoodPresentation(props.mood);
+      const hover = hovered() ? hoverFace() : null;
+      const stepMood = activityMood();
+      const working = cyclesFaces() ? plushMood().expression : (stepMood?.expression ?? null);
+      const motionState = stepMood?.state === "wide" || stepMood?.state === "wink" ? stepMood.state : null;
+      const state: ShapeSafeStateId = hover?.state === "wink" ? "wink" : (motionState ?? presentation.state);
+      return {
+        shape: props.shape ?? profile().shape,
+        color: profile().color,
+        expression: working ?? presentation.expression ?? hover?.expression ?? restingExpression(),
+        state,
+      };
+    },
+    { equals: sameAppearance },
+  );
+  const flatBreathe = () => {
+    const amount = flat() && ambientMotion() ? avatarMoodPresentation(props.mood).breathe : 0;
+    return amount > 0 ? String(amount) : undefined;
+  };
+  const spanStyle = () => {
+    const amount = flatBreathe();
+    return amount ? { ...props.style, "--agent-avatar-breathe": amount } : props.style;
+  };
+  const animated = () =>
+    (props.followPointer && documentFocused() && onScreen()) ||
+    (plushMood().busy && ambientMotion()) ||
+    (!STATIC_MOTIONS.has(props.motion) && documentFocused()) ||
+    interacting();
+
+  createEffect(
+    () => cyclesFaces() && !reducedMotion() && ambientMotion() && onScreen(),
+    (cycling) => {
+      if (!cycling) return;
+      let timer = 0;
+      const schedule = () => {
+        timer = window.setTimeout(
+          () => {
+            setWorkingFace((current) => nextWorkingFace(current));
+            schedule();
+          },
+          WORKING_FACE_MIN_MS + Math.random() * (WORKING_FACE_MAX_MS - WORKING_FACE_MIN_MS),
+        );
+      };
+      schedule();
+      return () => window.clearTimeout(timer);
+    },
+  );
 
   onSettled(() => {
     const media = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-    const syncReducedMotion = () => setReducedMotion(media?.matches ?? false);
+    const syncReducedMotion = () => setPrefersReduced(media?.matches ?? false);
     syncReducedMotion();
     media?.addEventListener?.("change", syncReducedMotion);
+    const stopObservingVisibility = element ? observeOnScreen(element, setOnScreen) : undefined;
 
-    // What must be hovered or focused for a resting avatar to move: the control the avatar sits in or
-    // beside, marked with `data-avatar-hover` when the avatar is only a neighbour of it. A dialog and a
-    // scroll region are focusable as well, and taking one of those would start every avatar on it at once.
     const group = element?.closest<HTMLElement>(`${HOVER_GROUP}, [tabindex]`);
     const interactionTarget = group?.matches(HOVER_GROUP) ? group : element;
-    const startInteraction = () => setInteracting(true);
+    const startInteraction = () => {
+      if (!interacting()) setHoverFace((previous) => randomHoverFace(previous, restingExpression()));
+      setInteracting(true);
+    };
     const stopInteraction = () => setInteracting(false);
+    const startFocusInteraction = (event: FocusEvent) => {
+      if (event.target instanceof Element && event.target.matches(":focus-visible")) startInteraction();
+    };
     const stopFocusInteraction = (event: FocusEvent) => {
       if (!(event.relatedTarget instanceof Node) || !interactionTarget?.contains(event.relatedTarget)) {
         stopInteraction();
@@ -314,51 +293,97 @@ function GeneratedAvatar(props: {
     };
     interactionTarget?.addEventListener("pointerenter", startInteraction);
     interactionTarget?.addEventListener("pointerleave", stopInteraction);
-    interactionTarget?.addEventListener("focusin", startInteraction);
+    interactionTarget?.addEventListener("focusin", startFocusInteraction);
     interactionTarget?.addEventListener("focusout", stopFocusInteraction);
 
     return () => {
+      stopObservingVisibility?.();
       media?.removeEventListener?.("change", syncReducedMotion);
       interactionTarget?.removeEventListener("pointerenter", startInteraction);
       interactionTarget?.removeEventListener("pointerleave", stopInteraction);
-      interactionTarget?.removeEventListener("focusin", startInteraction);
+      interactionTarget?.removeEventListener("focusin", startFocusInteraction);
       interactionTarget?.removeEventListener("focusout", stopFocusInteraction);
     };
   });
 
   const avatar = () => (
-    <BloubBot
+    <PlushBot
       size={100}
       shape={appearance().shape}
       color={appearance().color}
       expression={appearance().expression}
-      cycle={motionCycle()}
-      playing={true}
+      state={appearance().state}
+      transition={props.transition}
+      paused={!animated()}
       fps={AVATAR_FPS}
+      autoPause
       initialPhase={props.animationOffset ?? avatarAnimationPhase(props.seed)}
+      follow={props.followPointer}
+      eyeScale={props.eyeScale ?? 1}
+      ariaLabel=""
+      class="bloub-avatar-svg"
+      style={PLUSH_BODY_STYLE}
+    />
+  );
+
+  const flatAvatar = () => (
+    <BloubBot
+      size={100}
+      shape={flatAppearance().shape}
+      color={flatAppearance().color}
+      expression={flatAppearance().expression}
+      state={flatAppearance().state}
+      paused={!animated()}
+      fps={AVATAR_FPS}
+      autoPause
+      initialPhase={props.animationOffset ?? avatarAnimationPhase(props.seed)}
+      follow={props.followPointer}
       ariaLabel=""
       class="bloub-avatar-svg"
     />
+  );
+
+  const plushAvatar = () => (
+    <Show
+      when={!reducedMotion()}
+      fallback={
+        <Show when={appearance()} keyed>
+          {(frozen) => (
+            <PlushBot
+              size={100}
+              shape={frozen.shape}
+              color={frozen.color}
+              expression={frozen.expression}
+              state={frozen.state}
+              frozenAt={frozenPose(frozen.state)}
+              eyeScale={props.eyeScale ?? 1}
+              ariaLabel=""
+              class="bloub-avatar-svg"
+              style={PLUSH_BODY_STYLE}
+            />
+          )}
+        </Show>
+      }
+    >
+      {avatar()}
+    </Show>
   );
 
   return (
     <span
       ref={element}
       class={`${props.class} agent-avatar-bloub`}
-      style={props.style}
+      style={spanStyle()}
       data-avatar="generated"
       data-mood={props.mood}
-      data-breathe={props.breathe}
+      data-breathe={flatBreathe()}
       aria-hidden="true"
     >
-      <AvatarRings when={presentation().rings}>
+      <Show when={flat()} fallback={plushAvatar()}>
         <Show
-          when={animated()}
+          when={!reducedMotion()}
           fallback={
-            /* A frozen Bloub frame cannot finish a morph, and the engine reads `state` only when it
-               is built, so a mood change has to rebuild the bot. Keying on the appearance, state
-               included, does both: `frozenAt` alone would sample the seeded idle face. */
-            <Show when={appearance()} keyed>
+            <Show when={flatAppearance()} keyed>
               {(frozen) => (
                 <BloubBot
                   size={100}
@@ -374,11 +399,45 @@ function GeneratedAvatar(props: {
             </Show>
           }
         >
-          {avatar()}
+          {flatAvatar()}
         </Show>
-      </AvatarRings>
+      </Show>
     </span>
   );
+}
+
+function randomHoverFace(previous: HoverFace | null, resting: ExpressionId): HoverFace {
+  const choices = HOVER_FACES.filter((face) => face !== previous && face.expression !== resting);
+  return choices[Math.floor(Math.random() * choices.length)] ?? HOVER_WINK;
+}
+
+function nextWorkingFace(current: ExpressionId | null): ExpressionId {
+  const choices = AVATAR_EXPRESSIONS.filter((face) => face !== current);
+  return choices[Math.floor(Math.random() * choices.length)] ?? "attentif";
+}
+
+function createHeldActivity(value: () => AgentStepActivity | null, holdMs: number): () => AgentStepActivity | null {
+  const [shown, setShown] = createSignal<AgentStepActivity | null>(null);
+  let shownAt = 0;
+  createEffect(value, (next) => {
+    const wait = shownAt + holdMs - Date.now();
+    const show = () => {
+      shownAt = Date.now();
+      setShown(next);
+    };
+    if (wait <= 0) {
+      show();
+      return;
+    }
+    const timer = window.setTimeout(show, wait);
+    return () => window.clearTimeout(timer);
+  });
+  return shown;
+}
+
+function sameAppearance<T extends object>(a: T, b: T): boolean {
+  for (const key in a) if (a[key] !== b[key]) return false;
+  return true;
 }
 
 function avatarAnimationPhase(seed: string): number {
@@ -388,11 +447,4 @@ function avatarAnimationPhase(seed: string): number {
     hash = Math.imul(hash, 0x01000193);
   }
   return ((hash >>> 0) / 0x100000000) * 1.4;
-}
-
-function offsetCycle(blocks: Block[], offset: number): Block[] {
-  if (blocks.length === 0) return blocks;
-  const start = ((Math.trunc(offset) % blocks.length) + blocks.length) % blocks.length;
-  if (start === 0) return blocks;
-  return [...blocks.slice(start), ...blocks.slice(0, start)];
 }

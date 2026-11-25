@@ -2,12 +2,13 @@ import type { PartialTranslation } from "../../../message";
 import type { messages as source } from "../../en/error/remote";
 
 export const messages = {
-  // Errors from remote servers, WebRTC transport, remote desktop, and the team client.
   "error.remote.desktopSetupClientUpdate": "Uzak masaüstü kurulumunu kullanmak için istemciyi güncelleyin.",
   "error.remote.desktopSetupUnavailable": "Uzak masaüstü kurulumu kullanılamıyor.",
   "error.remote.desktopTestUnavailable": "Uzak masaüstü testi kullanılamıyor.",
   "error.remote.controlUnavailable": "Uzaktan kontrol kullanılamıyor.",
   "error.remote.controlSessionNotFound": "Uzaktan kontrol oturumu bulunamadı.",
+  "error.remote.controlNotAllowed": "Bu bilgisayarın sahibi, rolünüzün onu kontrol etmesine izin vermiyor.",
+  "error.remote.controlDeclined": "Bu bilgisayarın başındaki kişi uzaktan kontrole izin vermedi.",
   "error.remote.testRuntimeUpdate": "Bu testi çalıştırmak için macOS uzak masaüstü çalışma zamanını güncelleyin.",
   "error.remote.testOtherSessions": "Bir teste başlamadan önce diğer uzak masaüstü oturumlarını sonlandırın.",
   "error.remote.testPermissions": "Testi başlatmadan önce ana makinedeki izinleri ve GUI oturumunu kontrol edin.",
@@ -19,7 +20,19 @@ export const messages = {
     "Sunshine ve Moonlight Web çalışma zamanı eksik veya bu ana makinede desteklenmiyor. Mac, Windows x64 veya Linux x64 ana makinesine tam GoAhead sürümünü yükleyin, ardından GoAhead'u yeniden başlatın.",
   "error.remote.testActive": "Bir uzak masaüstü testi etkin. Bittiğinde tekrar deneyin.",
   "error.remote.screenRecordingDenied":
-    "Ana makine GoAhead'in ekranını kaydetmesine izin vermedi. Ana makinede ekran kaydı izni verin, ardından tekrar deneyin.",
+    "Ana makine GoAhead'un ekranını kaydetmesine izin vermedi. Ana makinede ekran kaydı izni verin, ardından tekrar deneyin.",
+  "error.remote.windowsSessionDisconnected":
+    "Ana makinedeki Windows oturumunun bağlantısı kesik, bu yüzden paylaşılacak ekran yok. Ana makinenin ekranında Windows'ta oturum açın, ardından tekrar deneyin.",
+  "error.remote.windowsCaptureDenied":
+    "Ana makinedeki Windows, GoAhead'un ekranı kaydetmesine izin vermiyor. Ana makinenin ekranında Windows'un kilidini açın, yönetici onay pencerelerini kapatın, ardından tekrar deneyin. Sorun devam ederse ana makineyi yeniden başlatın.",
+  "error.remote.macScreenLocked":
+    "Mac kilitli, bu yüzden ekranını paylaşamıyor. Mac'in kilidini kendi ekranında açın, ardından tekrar deneyin.",
+  "error.remote.streamTooSlowLowerQuality":
+    "Ana makineyle bağlantı görüntü için çok yavaş. Tekrar deneyin: sonraki bağlantı daha düşük bir kalite kullanır.",
+  "error.remote.streamTooSlow":
+    "Ana makineyle bağlantı görüntü için çok yavaş. Daha hızlı bir ağ kullanın, ardından tekrar deneyin.",
+  "error.remote.noPictureSwitchEncoder":
+    "Ana makine görüntü göndermedi. Tekrar deneyin: sonraki bağlantı daha fazla bilgisayarda çalışan bir video ayarı kullanır.",
   "error.remote.teamSessionExpired": "Ekip oturumunun süresi doldu.",
   "error.remote.finishTestBeforeSwitch": "Ekranları değiştirmeden önce uzak masaüstü testini tamamlayın.",
   "error.remote.displayNotFound": "Uzak ekran bulunamadı.",
@@ -27,6 +40,14 @@ export const messages = {
   "error.remote.localTestListenerUnavailable": "Yerel test dinleyicisi kullanılamıyor.",
   "error.remote.localTestNotFound": "Yerel test oturumu bulunamadı.",
   "error.remote.runtimeUnavailable": "Uzak masaüstü çalışma zamanı kullanılamıyor.",
+  "error.remote.sunshineStartFailed":
+    "Sunshine ana makinede başlamadı. Ana makinedeki uzak masaüstü günlüklerini kontrol edin, ardından tekrar deneyin.",
+  "error.remote.moonlightStartFailed":
+    "Moonlight Web ana makinede başlamadı. Ana makinedeki uzak masaüstü günlüklerini kontrol edin, ardından tekrar deneyin.",
+  "error.remote.pairingFailed":
+    "Moonlight, ana makinedeki Sunshine ile eşleşemedi. Tekrar deneyin. Sorun devam ederse ana makinede GoAhead'u yeniden başlatın.",
+  "error.remote.runtimeStartFailed":
+    "Uzak masaüstü çalışma zamanı ana makinede başlamadı. Ana makinedeki uzak masaüstü günlüklerini kontrol edin, ardından tekrar deneyin.",
   "error.remote.hostUnreachable": "Ana makineye ulaşılamıyor.",
   "error.remote.signInToHostAgain": "Bu ana makinede tekrar oturum açın.",
   "error.remote.invalidData": "Ana makine geçersiz veri döndürdü.",
@@ -45,9 +66,9 @@ export const messages = {
   "error.remote.eventsUnavailable": "Uzak etkinlikler kullanılamıyor.",
   "error.remote.signInAgain": "Tekrar oturum açın.",
   "error.remote.emailDeliveryUnavailable": "E-posta teslimatı kullanılamıyor.",
-  "error.remote.inviteHostMismatch": "Davet ana makinesi kendi token'ı ile eşleşmiyor.",
-  "error.remote.inviteIdentityMismatch": "Davet ana makine kimliği kendi token'ı ile eşleşmiyor.",
-  "error.remote.inviteAcceptedOtherHost": "Hesap servisi farklı bir ana makineyi kabul etti.",
+  "error.remote.inviteHostMismatch": "Davet ana makinesi, davet belirteciyle eşleşmiyor.",
+  "error.remote.inviteIdentityMismatch": "Davet ana makinesinin kimliği, davet belirteciyle eşleşmiyor.",
+  "error.remote.inviteAcceptedOtherHost": "Hesap hizmeti farklı bir ana makineyi kabul etti.",
   "error.remote.inviteIdentityChanged": "Davet ana makine kimliği kabul edilirken değişti.",
   "error.remote.localServerRemove": "Yerel sunucu kaldırılamaz.",
   "error.remote.desktopSetupHostUpdate":
@@ -67,12 +88,19 @@ export const messages = {
   "error.remote.bridgeCommandFailed": "Ekip WebRTC komutu başarısız oldu.",
   "error.remote.webRtcFailed": "WebRTC başarısız oldu.",
   "error.remote.ownerCannotLeave": "Sahip bu ana makineden ayrılamaz.",
+  "error.remote.ownerOnlyRemove": "Bu sunucuyu yalnızca sahibi kaldırabilir.",
   "error.remote.requestTimeout": "Uzak istek zaman aşımına uğradı.",
   "error.remote.requestFailed": "Uzak istek başarısız oldu.",
-  "error.remote.pinnedKeyMissing": "Uzak ana makinenin sabitlenmiş bir cihaz anahtarı yok.",
-  "error.remote.hostDidNotConnect": "WebRTC ana makinesi bağlanmadı.",
+  "error.remote.hostKeyMissing":
+    "Güvenlik anahtarı eksik olduğu veya değiştiği için GoAhead bu sunucuyu doğrulayamıyor. Sunucu sahibinden sunucuyu kontrol etmesini isteyin.",
+  "error.remote.connectionNotStarted":
+    "GoAhead bu sunucuyla bağlantıyı başlatamadı. Sorun devam ederse GoAhead'tan çıkın ve yeniden açın.",
+  "error.remote.connectionServiceUnreachable":
+    "Bu bilgisayar GoAhead bağlantı hizmetine ulaşamıyor. İnternet bağlantısını kontrol edin. GoAhead otomatik olarak yeniden bağlanır.",
+  "error.remote.serverAnswerTimeout": "Sunucu zamanında yanıt vermedi. GoAhead otomatik olarak yeniden bağlanır.",
   "error.remote.connectionCancelled": "Uzak bağlantı iptal edildi.",
-  "error.remote.hostDisconnected": "WebRTC ana makinesinin bağlantısı kesildi.",
+  "error.remote.hostDisconnected":
+    "Sunucuyla bağlantı kesildi. Eylemin tamamlanıp tamamlanmadığını kontrol edin, ardından tekrar deneyin.",
   "error.remote.eventGap": "Ana makine etkinlik dizisinde bir boşluk var.",
   "error.remote.malformedKnownEvent": "Ana makine bozuk biçimli bir bilinen etkinlik döndürdü.",
   "error.remote.fileTransportIsStopped": "WebRTC dosya iletimi durduruldu.",
@@ -82,14 +110,16 @@ export const messages = {
   "error.remote.fileTransferFailed": "WebRTC dosya aktarımı başarısız oldu.",
   "error.remote.fileResumeFailed": "WebRTC dosya aktarımı son tarihinden önce sürdürülemedi.",
   "error.remote.fileTransportStopped": "WebRTC dosya iletimi durdu.",
+  "error.remote.downloadStopped": "İndirme durduruldu.",
   "error.remote.fileResumeExpired": "WebRTC dosya aktarımı sürdürme süresi doldu.",
   "error.remote.hostRequestFailed": "Ana makine isteği tamamlayamadı.",
+  "error.remote.responseTooLarge": "Ana makinenin yanıtı bu cihaza gönderilemeyecek kadar büyük.",
   "error.remote.sessionNotReady": "Uzak oturum hazır değil.",
   "error.remote.peerDisconnected": "WebRTC eşinin bağlantısı kesildi.",
   "error.remote.tooManyStreams": "Çok fazla ana makine akışı açık.",
   "error.remote.streamSocketFailed": "Ana makine akış soketi başarısız oldu.",
-  "error.remote.signalRecoveryFailed": "Uzak Sinyal kurtarma başarısız oldu.",
-  "error.remote.signalTimeout": "Uzak Sinyal bağlantısı zaman aşımına uğradı.",
+  "error.remote.signalRecoveryFailed": "Remote Signal kurtarma işlemi başarısız oldu.",
+  "error.remote.signalTimeout": "Remote Signal bağlantısı zaman aşımına uğradı.",
   "error.remote.serverConnectionReplaced": "Sunucu bağlantısı değiştirildi.",
   "error.remote.selectedServerOffline": "Seçilen sunucu çevrim dışı.",
   "error.remote.hostConnectionOffline": "Ana makine bağlantısı çevrim dışı.",
@@ -99,10 +129,8 @@ export const messages = {
   "error.remote.operationFailed": "Uzak işlem başarısız oldu.",
   "error.remote.connectionReplaced": "Bağlantı değiştirildi.",
   "error.remote.desktopDidNotConnect": "Masaüstü bağlanmadı.",
-  "error.remote.desktopRestarted":
-    "Masaüstü yeniden başlatıldı. Yeni bir kimliği doğrulanmış oturumla yeniden bağlanılıyor.",
+  "error.remote.connectionDropped": "Sunucuda artık bu bağlantı yok. Yeniden bağlanılıyor.",
   "error.remote.dataBeforeAuth": "Ana makine kimlik doğrulamasından önce veri gönderdi.",
-  "error.remote.attachmentDownloadFailed": "Ek indirme başarısız oldu.",
   "error.remote.eventStreamGap": "Ana makine etkinlik akışında bir boşluk var.",
   "error.remote.malformedEvent": "Ana makine bozuk biçimli bir etkinlik döndürdü.",
   "error.remote.desktopIdentityNotVerified": "Masaüstü kimliği doğrulanamadı.",
@@ -111,23 +139,21 @@ export const messages = {
   "error.remote.requestNotSent": "İstek gönderilemedi.",
   "error.remote.channelNotOpen": "WebRTC kanalı açık değil.",
   "error.remote.channelBackpressure": "WebRTC kanalı geri basınç altında kaldı.",
-  "error.remote.signalOffline": "Sinyal çevrim dışı.",
+  "error.remote.signalOffline": "Signal çevrim dışı.",
   "error.remote.webRtcConnectionFailed": "WebRTC bağlantısı başarısız oldu.",
   "error.remote.serverDisconnected": "Sunucu bağlantısı kesildi.",
   "error.remote.preferencesUnreadable": "Kayıtlı sohbet tercihleri okunamadı.",
   "error.remote.accountAuthRequired": "Hesap kimlik doğrulaması gereklidir.",
-  "error.remote.serverIdentityChanged":
-    "Sunucu kimliği değişti. Güvenilen ana makine anahtarının değiştirilmesi reddedildi.",
   "error.remote.pairedIdentityChanged":
     "Eşleştirilen masaüstü kimliği eksik veya değişti. O masaüstünden yeni bir kod tarayın.",
   "error.remote.permanentInviteNoEmail": "Kalıcı davetler e-posta ile gönderilemez.",
   "error.remote.selfHostedInviteNoEmail":
-    "Kendi kendine barındırılan bir hesap servisinden gelen bir davet e-posta ile gönderilemez. Bağlantıyı kopyalayın.",
-  "error.remote.inviteOtherService": "Bu davet başka bir GoAhead servisine ait.",
+    "Kendi kendine barındırılan bir hesap hizmetinden gelen bir davet e-posta ile gönderilemez. Bağlantıyı kopyalayın.",
+  "error.remote.inviteOtherService": "Bu davet başka bir GoAhead hizmetine ait.",
   "error.remote.inviteFingerprintMismatch": "Davet ana makine kimliği parmak iziyle eşleşmiyor.",
   "error.remote.inviteHostKeyMissing": "Davet ana makine anahtarı eksik.",
   "error.remote.inviteKeyConflict": "Davet güvenilen ana makine anahtarıyla çakışıyor.",
-  "error.remote.serviceRequestFailed": "GoAhead servis isteği başarısız oldu.",
+  "error.remote.serviceRequestFailed": "GoAhead hizmet isteği başarısız oldu.",
   "error.remote.downloadTimeout": "Ek indirme zaman aşımına uğradı. Tekrar deneyin.",
   "error.remote.attachmentConnectionClosed": "Ek bağlantısı kapandı.",
   "error.remote.tooManyDownloads": "Çok fazla ek indirmesi.",
@@ -140,6 +166,7 @@ export const messages = {
   "error.remote.attachmentRejected": "Ana makine eki reddetti.",
   "error.remote.attachmentTooLarge": "Ekler 10 MB veya daha küçük olmalıdır.",
   "error.remote.attachmentBusy": "Mevcut ekin tamamlanmasını bekleyin.",
+  "error.remote.attachmentChanged": "Dosya değişti veya kullanılamıyor. Yeniden seçin.",
   "error.remote.uploadTimeout": "Ek yükleme zaman aşımına uğradı.",
   "error.remote.hostSessionActive": "Ana makinede zaten etkin bir uzak oturum var.",
   "error.remote.tooManyConnections": "Çok fazla etkin uzak bağlantı.",
@@ -149,20 +176,57 @@ export const messages = {
   "error.remote.hostOffline": "Ana makine çevrim dışı.",
   "error.remote.sessionEnded": "Uzak oturum sona erdi.",
   "error.remote.ticketInvalidOrExpired": "Uzak bilet geçersiz veya süresi dolmuş.",
-  "error.remote.signalInvalidMessage": "Sinyal geçersiz bir mesaj döndürdü.",
+  "error.remote.signalInvalidMessage": "Signal geçersiz bir mesaj döndürdü.",
   "error.remote.sessionInvalid": "Uzak oturum geçersiz.",
   "error.remote.ticketInvalid": "Bağlantı bileti geçersiz.",
   "error.remote.mobileUpdateRequired": "Bağlanmadan önce GoAhead Mobile veya masaüstü uygulamasını güncelleyin.",
   "error.remote.connectionStepFailed": "Bu bağlantı adımı tamamlanamadı.",
-  "error.remote.signalNotConnected": "Sinyal bağlı değil.",
-  "error.remote.signalFrameUnreadable": "Sinyal bu eşin okuyamayacağı bir çerçeve gönderdi.",
+  "error.remote.signalNotConnected": "Signal bağlı değil.",
+  "error.remote.signalFrameUnreadable": "Signal, bu eşin okuyamayacağı bir çerçeve gönderdi.",
   "error.remote.webRtcCommandFailed": "WebRTC komutu başarısız oldu.",
   "error.remote.dataChannelFailed": "{kind} kanalı başarısız oldu.",
-  // Channel actions on mobile.
+  "error.remote.hostBusy": "Ana makine başka bir bağlantıyla meşgul. Biraz sonra tekrar deneyin.",
+  "error.remote.signalPermissionDenied": "Hesabınızın bu ana makineye erişimi yok. Sahibinden erişim isteyin.",
+  "error.remote.signalRateLimited": "Çok fazla bağlantı denemesi. GoAhead {seconds} saniye içinde tekrar deneyecek.",
+  "error.remote.signalProtocolError":
+    "Signal ve bu uygulama bağlantı protokolünde uyuşmuyor. GoAhead'u güncelleyin, ardından tekrar deneyin.",
+  "error.remote.signalRefused": "Signal bağlantıyı reddetti.",
+  "error.remote.signalClosed": "Signal ile bağlantı, ana makine yanıt vermeden kapandı.",
+  "error.remote.relayUnavailable": "Signal bu bağlantı için aktarma sunucusu göndermedi. Daha sonra tekrar deneyin.",
+  "error.remote.iceFailed":
+    "Ana makineyle doğrudan bağlantı kurulamadı. Bir güvenlik duvarı, VPN veya proxy bunu engelleyebilir.",
+  "error.remote.iceDisconnected": "Ana makineyle doğrudan bağlantı kesildi.",
+  "error.remote.webrtcBlocked":
+    "Bu cihaz GoAhead'un ihtiyaç duyduğu bağlantıyı engelliyor. Kilitlenme Modu açıksa Ayarlar > Gizlilik ve Güvenlik > Kilitlenme Modu'nda GoAhead için kapatın.",
+  "error.remote.directoryUnreachable": "GoAhead, GoAhead hizmetine ulaşamadı. Bağlantınızı kontrol edin.",
+  "error.remote.directoryTimeout": "GoAhead hizmeti zamanında yanıt vermedi. Tekrar deneyin.",
+  "error.remote.inviteAlreadyUsed": "Bu davet zaten kullanıldı. Yeni bir davet isteyin.",
+  "error.remote.inviteNotFound": "Bu davet yok veya süresi doldu. Yeni bir davet isteyin.",
+  "error.remote.licenseUsersFull":
+    "Sunucu sahibinin lisansında boş kullanıcı yok. Sahibinden lisansa kullanıcı eklemesini isteyin.",
+  "error.remote.memberLimitReached": "Bu ana makine üye sınırına ulaştı. Sahibinden yer açmasını isteyin.",
+  "error.remote.hostNotRegistered": "Bu ana makine artık GoAhead hizmetine kayıtlı değil.",
+  "error.remote.membershipEnded": "Artık bu ana makinenin üyesi değilsiniz. Sahibinden yeni bir davet isteyin.",
+  "error.remote.membershipChanged":
+    "Başka biri bu üyeyi aynı anda değiştirdi. Üyeleri yeniden yükleyin ve tekrar deneyin.",
+  "error.remote.accountSessionInactive": "Oturumunuz artık etkin değil. Tekrar oturum açın.",
+  "error.remote.hostOtherAccount": "Bu ana makine başka bir hesaba ait.",
+  "error.remote.remoteNotConfigured": "Bu GoAhead hizmetinde uzak bağlantılar ayarlanmamış.",
+  "error.remote.hostRefused": "Ana makine isteği reddetti ({status}).",
   "error.remote.formUnavailable": "Bu form artık kullanılamıyor.",
+  "error.remote.hostedServerRemoval": "Barındırılan bir sunucuyu silmek için Faturalandırma'yı kullanın.",
+  "error.remote.hostRemoved": "Sahibi bu sunucuyu hesaptan kaldırdı.",
+  "error.remote.ownerTransferSelf": "Bu sunucunun sahibi zaten sizsiniz. Yeni sahibin e-posta adresini girin.",
+  "error.remote.ownerTransferHosted": "GoAhead'un barındırdığı bir sunucunun sahibi değiştirilemez.",
+  "error.remote.ownerTransferInvalid":
+    "Bu sahiplik devri artık geçerli değil. Sahibinden yeniden göndermesini isteyin.",
   "error.remote.channelsUnsupported": "Kanalları kullanmak için bu masaüstü sunucusunu güncelleyin.",
   "error.remote.channelDeleteUnsupported": "Kanalları silmek için bu masaüstü sunucusunu güncelleyin.",
-  "error.remote.attachmentUploadCancelled": "Ek yükleme iptal edildi.",
   "error.remote.historyRefreshFailed": "Mesaj gönderildi, ancak sohbet geçmişi yenilenemedi.",
   "error.remote.taskHistoryRefreshFailed": "Görev değiştirildi, ancak sohbet geçmişi yenilenemedi.",
+  "error.remote.serverNotLoaded": "GoAhead sunucuyu yükleyemedi. Tekrar deneyin.",
+  "error.remote.localServerNotStarted":
+    "Bu bilgisayardaki sunucu başlamadı. Tekrar deneyin. Başlamazsa GoAhead'u bu bilgisayarda yeniden başlatın.",
+  "error.remote.localServerAccountRemovalFailed":
+    "Sunucu kendi bilgisayarında silindi ancak hesap onu hâlâ listeliyor. Hesaptan kaldırmak için yeniden silin.",
 } as const satisfies PartialTranslation<typeof source>;

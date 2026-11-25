@@ -1,283 +1,355 @@
+import { PlatformLogo } from "@openbot/brand";
 import type { MobileConnectedDevice } from "@openbot/contracts/ipc";
-import type { AppTranslate } from "@openbot/i18n";
 import {
-  Alert,
-  AlertContent,
-  AlertDescription,
-  AlertIcon,
-  AlertTitle,
   Button,
-  CircleCheck,
-  CopyButton,
-  Info,
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemTitle,
-  QrCode,
+  buttonVariants,
+  ChevronDown,
+  ConfirmDialog,
+  DropdownMenu,
+  Ellipsis,
+  Globe2,
+  Link2,
+  Lock,
+  Plus,
+  Popover,
+  RotateCcw,
+  Scan,
   SettingsSection,
   Smartphone,
   Text,
+  Trash2,
 } from "@openbot/ui";
-import { For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import { useText } from "../../text";
-import { IOS_TESTFLIGHT_URL } from "../mobile-app/ios-testflight";
+import {
+  MobileConnectAddPhoneDialog,
+  MobileConnectLinkDialog,
+  type MobileInstallRequest,
+} from "./MobileConnectDialogs";
+import { RemoteNetworkRouteChoice } from "./RemoteNetworkRouteChoice";
 import type { SettingsMobileConnectStore } from "./stores/mobile-connect-store";
+
+export type { MobileInstallRequest };
 
 interface SettingsMobileConnectTabProps {
   store: SettingsMobileConnectStore;
   canCreateTicket: boolean;
+  canCancelTicket: boolean;
+  canManageLink: boolean;
   canRevokeDevice: boolean;
+  canSetRoute: boolean;
+  installRequest?: MobileInstallRequest | null | undefined;
+  onInstallRequestHandled?: (() => void) | undefined;
 }
 
 const IOS_PLATFORM_LABEL = "iOS";
 const ANDROID_PLATFORM_LABEL = "Android";
 
-function devicePlatformLabel(platform: MobileConnectedDevice["platform"], t: AppTranslate): string {
-  if (platform === "ios") return IOS_PLATFORM_LABEL;
-  if (platform === "android") return ANDROID_PLATFORM_LABEL;
-  return t("settings.mobileConnect.platform.mobile");
-}
-
 export function SettingsMobileConnectTab(props: SettingsMobileConnectTabProps) {
   const { t } = useText();
+  const [adding, setAdding] = createSignal(false);
+  const [linkOpen, setLinkOpen] = createSignal(false);
+  const [dialogInstallRequest, setDialogInstallRequest] = createSignal<MobileInstallRequest | null>(null);
+  createEffect(
+    () => (props.canCreateTicket ? props.installRequest : null),
+    (request) => {
+      if (!request) return;
+      setDialogInstallRequest(request);
+      setAdding(true);
+      props.onInstallRequestHandled?.();
+    },
+  );
+  const devices = () => props.store.state.devices.devices;
+  const addButton = () => (
+    <Button
+      type="button"
+      size="sm"
+      data-settings-row="settings.mobileConnect.phones.add"
+      disabled={!props.canCreateTicket}
+      onClick={() => setAdding(true)}
+    >
+      <Plus aria-hidden="true" />
+      {t("settings.mobileConnect.phones.add")}
+    </Button>
+  );
   return (
-    <SettingsSection title={t("settings.mobileConnect.title")} description={t("settings.mobileConnect.description")}>
-      {/* Always here, so the install steps stay available after the sidebar announcement is closed. */}
-      <ItemGroup class="settings-modal-card settings-mobile-connect-card">
-        <Item class="settings-modal-row settings-mobile-connect-action-row">
-          <ItemContent>
-            <ItemTitle>{t("settings.mobileConnect.iosApp.title")}</ItemTitle>
-            <ItemDescription>{t("settings.mobileConnect.iosApp.description")}</ItemDescription>
-          </ItemContent>
-          <ItemActions>
-            <CopyButton
-              variant="outline"
-              value={IOS_TESTFLIGHT_URL}
-              label={t("settings.mobileConnect.iosApp.copyLink")}
-              copiedLabel={t("settings.mobileConnect.iosApp.linkCopied")}
-            />
-          </ItemActions>
-        </Item>
-        <div class="settings-mobile-app-install">
-          <QrCode value={IOS_TESTFLIGHT_URL} size={132} label={t("settings.mobileConnect.iosApp.qrLabel")} />
-          <ol class="settings-mobile-app-steps">
-            <li>{t("settings.mobileConnect.iosApp.step.testFlight")}</li>
-            <li>{t("settings.mobileConnect.iosApp.step.invite")}</li>
-            <li>{t("settings.mobileConnect.iosApp.step.install")}</li>
-            <li>{t("settings.mobileConnect.iosApp.step.signIn")}</li>
-          </ol>
-        </div>
-      </ItemGroup>
-
-      <ItemGroup class="settings-modal-card settings-mobile-connect-card">
-        <Item class="settings-modal-row settings-mobile-connect-action-row">
-          <ItemContent>
-            <ItemTitle>{t("settings.mobileConnect.signIn.title")}</ItemTitle>
-            <ItemDescription>{t("settings.mobileConnect.signIn.description")}</ItemDescription>
-            <Show when={props.store.state.connect.error}>
-              {(error) => (
-                <ItemDescription class="settings-modal-error" role="alert">
-                  {error()}
-                </ItemDescription>
-              )}
-            </Show>
-          </ItemContent>
-          <ItemActions>
-            <Button
-              type="button"
-              size="sm"
-              loading={props.store.state.connect.busy}
-              loadingLabel={t("settings.mobileConnect.generating")}
-              disabled={!props.canCreateTicket}
-              onClick={() => void props.store.createTicket()}
-            >
-              {props.store.state.connect.session
-                ? t("settings.mobileConnect.generateNew")
-                : t("settings.mobileConnect.generate")}
-            </Button>
-          </ItemActions>
-        </Item>
-
-        <Show when={props.store.state.connect.session}>
-          {(session) => (
-            <div
-              class="settings-mobile-connect-code-collapse"
-              data-collapsing={session().collapsing ? "" : undefined}
-              aria-hidden={session().collapsing ? "true" : undefined}
-            >
-              <div class="settings-mobile-connect-code-collapse-body">
-                <div class="settings-mobile-connect-code" aria-live="polite">
-                  <Show
-                    when={!props.store.expired()}
-                    fallback={
-                      <div class="settings-mobile-connect-expired" role="status">
-                        <Smartphone aria-hidden="true" />
-                        <Text class="settings-mobile-connect-code-title" variant="body">
-                          {t("settings.mobileConnect.expired.title")}
-                        </Text>
-                        <Text variant="caption" tone="muted">
-                          {t("settings.mobileConnect.expired.description")}
-                        </Text>
-                      </div>
-                    }
-                  >
-                    <div
-                      class="settings-mobile-connect-qr-stage"
-                      data-success={session().successDeviceName ? "" : undefined}
-                    >
-                      <QrCode value={session().ticket.qrData} label={t("settings.mobileConnect.qrLabel")} />
-                      <Show when={session().successDeviceName}>
-                        <div class="settings-mobile-connect-success-mark" aria-hidden="true">
-                          <CircleCheck />
-                        </div>
-                      </Show>
-                    </div>
-                    <div class="settings-mobile-connect-code-copy">
-                      <Show
-                        when={session().successDeviceName}
-                        fallback={
-                          <>
-                            <Text class="settings-mobile-connect-code-title" variant="body">
-                              {t("settings.mobileConnect.scan.title")}
-                            </Text>
-                            <Text variant="caption" tone="muted">
-                              {t("settings.mobileConnect.scan.description")}
-                            </Text>
-                            <Text class="settings-mobile-connect-expiry" variant="caption" aria-atomic="true">
-                              {t("settings.mobileConnect.expiresIn", { time: props.store.expiryLabel() })}
-                            </Text>
-                          </>
-                        }
-                      >
-                        {(deviceName) => (
-                          <>
-                            <Text
-                              class="settings-mobile-connect-code-title settings-mobile-connect-success-title"
-                              variant="body"
-                            >
-                              {t("settings.mobileConnect.connected.title")}
-                            </Text>
-                            <Text variant="caption" tone="muted" role="status">
-                              {t("settings.mobileConnect.connected.description", { name: deviceName() })}
-                            </Text>
-                          </>
-                        )}
-                      </Show>
-                    </div>
-                  </Show>
-                </div>
-              </div>
-            </div>
-          )}
-        </Show>
-      </ItemGroup>
-
-      <section class="settings-mobile-devices" aria-labelledby="settings-mobile-devices-title">
-        <div class="settings-mobile-devices-heading">
-          <h3 id="settings-mobile-devices-title">{t("settings.mobileConnect.devices.title")}</h3>
+    <SettingsSection
+      title={t("settings.mobileConnect.phones.title")}
+      description={t("settings.mobileConnect.phones.description")}
+      actions={
+        <>
           <Show when={props.store.state.devices.loading}>
             <Text as="span" variant="caption" tone="muted" role="status">
               {t("settings.mobileConnect.devices.refreshing")}
             </Text>
           </Show>
-        </div>
-        <Alert tone="neutral">
-          <AlertIcon>
-            <Info />
-          </AlertIcon>
-          <AlertContent>
-            <AlertTitle>{t("settings.mobileConnect.disconnectInfo.title")}</AlertTitle>
-            <AlertDescription>{t("settings.mobileConnect.disconnectInfo.description")}</AlertDescription>
-          </AlertContent>
-        </Alert>
-        <div class="settings-mobile-devices-states">
-          <div
-            class="settings-mobile-devices-state"
-            data-expanded={props.store.state.devices.devices.length === 0 ? "" : undefined}
-            aria-hidden={props.store.state.devices.devices.length > 0 ? "true" : undefined}
-          >
-            <div class="settings-mobile-devices-state-body">
-              <div class="settings-mobile-devices-empty" role="status">
-                <Smartphone aria-hidden="true" />
-                <div>
-                  <Text class="settings-mobile-devices-empty-title" variant="body">
-                    {t("settings.mobileConnect.devices.empty.title")}
-                  </Text>
-                  <Text variant="caption" tone="muted">
-                    {t("settings.mobileConnect.devices.empty.description")}
-                  </Text>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div
-            class="settings-mobile-devices-state"
-            data-expanded={props.store.state.devices.devices.length > 0 ? "" : undefined}
-            aria-hidden={props.store.state.devices.devices.length === 0 ? "true" : undefined}
-          >
-            <div class="settings-mobile-devices-state-body">
-              <div class="settings-mobile-devices-table-frame">
-                <table class="settings-mobile-devices-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">{t("settings.mobileConnect.devices.column.device")}</th>
-                      <th scope="col">{t("settings.mobileConnect.devices.column.platform")}</th>
-                      <th scope="col">{t("settings.mobileConnect.devices.column.connected")}</th>
-                      <th scope="col">{t("settings.mobileConnect.devices.column.lastActive")}</th>
-                      <th scope="col">
-                        <span class="sr-only">{t("settings.mobileConnect.devices.column.actions")}</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <For each={props.store.state.devices.devices}>
-                      {(device) => (
-                        <tr>
-                          <td>
-                            <span class="settings-mobile-device-name">
-                              <Smartphone aria-hidden="true" />
-                              {device.name}
-                            </span>
-                          </td>
-                          <td>{devicePlatformLabel(device.platform, t)}</td>
-                          <td>{props.store.deviceTimeLabel(device.connectedAt)}</td>
-                          <td>{props.store.deviceTimeLabel(device.lastActiveAt)}</td>
-                          <td class="settings-mobile-device-action">
-                            <Button
-                              type="button"
-                              variant="destructive-ghost"
-                              size="xs"
-                              loading={props.store.state.devices.revokingSessionId === device.sessionId}
-                              loadingLabel={t("settings.disconnect.pending")}
-                              disabled={!props.canRevokeDevice}
-                              data-cuelume-tap="close"
-                              data-cuelume-emphasis="strong"
-                              aria-label={t("settings.mobileConnect.devices.disconnectLabel", { name: device.name })}
-                              onClick={() => void props.store.revokeDevice(device)}
-                            >
-                              {t("settings.disconnect.action")}
-                            </Button>
-                          </td>
-                        </tr>
-                      )}
-                    </For>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-        <Show when={props.store.state.devices.error}>
-          {(error) => (
-            <Text class="settings-modal-error" variant="caption" role="alert">
-              {error()}
+          <RouteChip store={props.store} disabled={!props.canSetRoute} />
+          <Show when={devices().length > 0}>{addButton()}</Show>
+        </>
+      }
+    >
+      <Show when={props.store.state.route.error}>
+        {(error) => (
+          <Text class="settings-modal-error" variant="caption" role="alert">
+            {error()}
+          </Text>
+        )}
+      </Show>
+      <div class="settings-mobile-phones" data-settings-row="settings.mobileConnect.phones.title">
+        <Show when={devices().length === 0}>
+          <div class="settings-mobile-phones-empty">
+            <span class="settings-mobile-phones-empty-icon" aria-hidden="true">
+              <Smartphone />
+            </span>
+            <Text variant="body" class="settings-mobile-phones-empty-title">
+              {t("settings.mobileConnect.phones.empty.title")}
             </Text>
-          )}
+            <Text variant="caption" tone="muted">
+              {t("settings.mobileConnect.phones.empty.description")}
+            </Text>
+            {addButton()}
+          </div>
         </Show>
-      </section>
+        <For each={devices()}>
+          {(device) => <PhoneCard store={props.store} device={device} canRevoke={props.canRevokeDevice} />}
+        </For>
+        <Show when={props.canManageLink}>
+          <LinkCard store={props.store} onOpen={() => setLinkOpen(true)} />
+        </Show>
+      </div>
+      <Show when={props.store.state.devices.error}>
+        {(error) => (
+          <Text class="settings-modal-error" variant="caption" role="alert">
+            {error()}
+          </Text>
+        )}
+      </Show>
+      <Show when={devices().length > 0}>
+        <Text variant="caption" tone="muted">
+          {t("settings.mobileConnect.disconnectInfo.description")}
+        </Text>
+      </Show>
+
+      <MobileConnectAddPhoneDialog
+        open={adding()}
+        store={props.store}
+        canCancelTicket={props.canCancelTicket}
+        installRequest={dialogInstallRequest()}
+        onClose={() => setAdding(false)}
+      />
+      <Show when={props.canManageLink}>
+        <MobileConnectLinkDialog open={linkOpen()} store={props.store} onClose={() => setLinkOpen(false)} />
+        <ConfirmDialog
+          open={props.store.state.link.confirm === "replace"}
+          onCancel={() => props.store.setLinkConfirm(null)}
+          onConfirm={async () => {
+            await props.store.createLink();
+            if (props.store.state.link.revealed) setLinkOpen(true);
+          }}
+          tone="default"
+          title={t("settings.mobileConnect.link.replaceConfirm.title")}
+          description={t("settings.mobileConnect.link.confirm.description")}
+          confirmLabel={t("settings.mobileConnect.link.replace")}
+        />
+        <ConfirmDialog
+          open={props.store.state.link.confirm === "revoke"}
+          onCancel={() => props.store.setLinkConfirm(null)}
+          onConfirm={() => props.store.revokeLink()}
+          title={t("settings.mobileConnect.link.revokeConfirm.title")}
+          description={t("settings.mobileConnect.link.revokeConfirm.description")}
+          confirmLabel={t("settings.mobileConnect.link.revoke")}
+        />
+      </Show>
     </SettingsSection>
+  );
+}
+
+function PhoneCard(props: { store: SettingsMobileConnectStore; device: MobileConnectedDevice; canRevoke: boolean }) {
+  const { t } = useText();
+  const platformLabel = () => {
+    if (props.device.platform === "ios") return IOS_PLATFORM_LABEL;
+    if (props.device.platform === "android") return ANDROID_PLATFORM_LABEL;
+    return t("settings.mobileConnect.platform.mobile");
+  };
+  return (
+    <div class="settings-mobile-phone-card">
+      <span class="settings-mobile-phone-icon">
+        <Show
+          when={props.device.platform !== "unknown" && props.device.platform}
+          fallback={<Smartphone aria-hidden="true" />}
+        >
+          {(platform) => <PlatformLogo platform={platform()} />}
+        </Show>
+      </span>
+      <div class="settings-mobile-phone-copy">
+        <Text variant="body-sm" class="settings-mobile-phone-name">
+          {props.device.name}
+        </Text>
+        <Text variant="caption" tone="muted">
+          {platformLabel()} ·{" "}
+          {t("settings.mobileConnect.devices.lastActive", {
+            time: props.store.deviceTimeLabel(props.device.lastActiveAt),
+          })}
+        </Text>
+        <span class="settings-mobile-phone-via">
+          <Show when={props.device.via === "link"} fallback={<Scan aria-hidden="true" />}>
+            <Link2 aria-hidden="true" />
+          </Show>
+          {props.device.via === "link"
+            ? t("settings.mobileConnect.devices.via.link")
+            : t("settings.mobileConnect.devices.via.code")}
+        </span>
+      </div>
+      <Button
+        type="button"
+        variant="destructive-ghost"
+        size="xs"
+        loading={props.store.state.devices.revokingSessionId === props.device.sessionId}
+        loadingLabel={t("settings.disconnect.pending")}
+        disabled={!props.canRevoke}
+        data-cuelume-tap="close"
+        data-cuelume-emphasis="strong"
+        aria-label={t("settings.mobileConnect.devices.disconnectLabel", { name: props.device.name })}
+        onClick={() => void props.store.revokeDevice(props.device)}
+      >
+        {t("settings.disconnect.action")}
+      </Button>
+    </div>
+  );
+}
+
+function LinkCard(props: { store: SettingsMobileConnectStore; onOpen: () => void }) {
+  const { t, format } = useText();
+  const link = () => props.store.state.link;
+  const phones = () => props.store.state.devices.devices.filter((device) => device.via === "link").length;
+  return (
+    <div class="settings-mobile-link-card-slot" data-settings-row="settings.mobileConnect.link.title">
+      <Show
+        when={link().link}
+        fallback={
+          <Button
+            type="button"
+            variant="ghost"
+            class="settings-mobile-phone-card settings-mobile-link-card"
+            data-empty=""
+            disabled={!link().loaded}
+            onClick={() => props.onOpen()}
+          >
+            <span class="settings-mobile-phone-icon">
+              <Plus aria-hidden="true" />
+            </span>
+            <span class="settings-mobile-phone-copy">
+              <span class="settings-mobile-phone-name">{t("settings.mobileConnect.link.title")}</span>
+              <span class="settings-mobile-link-card-hint">{t("settings.mobileConnect.link.cardHint")}</span>
+            </span>
+          </Button>
+        }
+      >
+        {(current) => (
+          <div class="settings-mobile-phone-card settings-mobile-link-card">
+            <span class="settings-mobile-phone-icon" data-active="">
+              <Link2 aria-hidden="true" />
+            </span>
+            <div class="settings-mobile-phone-copy">
+              <Text variant="body-sm" class="settings-mobile-phone-name">
+                {t("settings.mobileConnect.link.title")}
+              </Text>
+              <Text variant="caption" tone="muted">
+                {phones() === 0
+                  ? t("settings.mobileConnect.link.unused")
+                  : t("settings.mobileConnect.link.usedBy", { count: phones() })}
+              </Text>
+              <Text variant="caption" tone="muted">
+                {t("settings.mobileConnect.link.created", {
+                  date: format.date(current().createdAt, { dateStyle: "medium" }),
+                })}
+              </Text>
+            </div>
+            <div class="settings-mobile-link-card-actions">
+              <Button type="button" size="xs" variant="outline" onClick={() => props.onOpen()}>
+                {t("settings.mobileConnect.link.showCode")}
+              </Button>
+              <DropdownMenu.Root placement="bottom-end" gutter={4}>
+                <DropdownMenu.Trigger
+                  class={buttonVariants({ variant: "ghost", size: "icon-sm" })}
+                  aria-label={t("settings.mobileConnect.link.actions")}
+                  disabled={link().busy !== null}
+                >
+                  <Ellipsis aria-hidden="true" />
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content>
+                    <DropdownMenu.Item onSelect={() => props.store.setLinkConfirm("replace")}>
+                      <RotateCcw aria-hidden="true" />
+                      {t("settings.mobileConnect.link.replace")}
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator />
+                    <DropdownMenu.Item
+                      class="ui-action-menu-danger"
+                      onSelect={() => props.store.setLinkConfirm("revoke")}
+                    >
+                      <Trash2 aria-hidden="true" />
+                      {t("settings.mobileConnect.link.revokeLink")}
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
+            </div>
+          </div>
+        )}
+      </Show>
+      <Show when={link().error}>
+        {(error) => (
+          <Text class="settings-modal-error" variant="caption" role="alert">
+            {error()}
+          </Text>
+        )}
+      </Show>
+    </div>
+  );
+}
+
+function RouteChip(props: { store: SettingsMobileConnectStore; disabled: boolean }) {
+  const { t } = useText();
+  return (
+    <Show when={props.store.state.route.current}>
+      {(current) => {
+        const title = () =>
+          current().route === "private"
+            ? t("settings.mobileConnect.route.private.title")
+            : t("settings.mobileConnect.route.openbot.title");
+        return (
+          <Popover.Root placement="bottom-end" gutter={6}>
+            <Popover.Trigger
+              class={`${buttonVariants({ variant: "ghost", size: "sm" })} settings-mobile-route-chip`}
+              aria-label={t("settings.mobileConnect.route.chipLabel", { route: title() })}
+              data-settings-row="settings.mobileConnect.route.title"
+            >
+              <Show when={current().route === "private"} fallback={<Globe2 aria-hidden="true" />}>
+                <Lock aria-hidden="true" />
+              </Show>
+              {title()}
+              <ChevronDown aria-hidden="true" />
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content class="ui-popover-menu-surface settings-mobile-route-popover">
+                <Popover.Title class="settings-mobile-route-popover-title">
+                  {t("settings.mobileConnect.route.title")}
+                </Popover.Title>
+                <Popover.Description class="settings-mobile-route-popover-description">
+                  {t("settings.mobileConnect.route.description")}
+                </Popover.Description>
+                <RemoteNetworkRouteChoice
+                  value={current().route}
+                  tailscaleConnected={current().tailscaleConnected}
+                  disabled={props.disabled || props.store.state.route.busy}
+                  onChange={(route) => void props.store.setRoute(route)}
+                />
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
+        );
+      }}
+    </Show>
   );
 }

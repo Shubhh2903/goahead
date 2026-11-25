@@ -12,6 +12,7 @@ import {
   AlertTitle,
   Button,
   Dialog,
+  ErrorReference,
   Field,
   Heading,
   IconButton,
@@ -21,6 +22,7 @@ import {
   X,
 } from "@openbot/ui";
 import { motionDuration, prefersReducedMotion } from "@openbot/ui/utils";
+import type { UserErrorDetails } from "@openbot/user-errors";
 import { createSignal, onCleanup, onSettled, Show, untrack } from "solid-js";
 import { useText } from "../../text";
 
@@ -37,11 +39,11 @@ type DialogPhase = "idle" | "previewing" | "joining";
 const INVITE_URL_PLACEHOLDER = `${PRODUCT_IDENTITY.siteOrigin}/join?…`;
 
 export function JoinServerDialog(props: JoinServerDialogProps) {
-  const { t, errorMessage } = useText();
+  const { t, errorDetails } = useText();
   const [inviteUrl, setInviteUrl] = createSignal(untrack(() => props.inviteUrl));
   const [preview, setPreview] = createSignal<InvitePreview | null>(null);
   const [phase, setPhase] = createSignal<DialogPhase>("idle");
-  const [error, setError] = createSignal<string | null>(null);
+  const [error, setError] = createSignal<UserErrorDetails | null>(null);
   const [rendered, setRendered] = createSignal(true);
   const [opened, setOpened] = createSignal(false);
   const [closing, setClosing] = createSignal(false);
@@ -89,7 +91,7 @@ export function JoinServerDialog(props: JoinServerDialogProps) {
       setPreview(await props.onPreview({ inviteUrl: normalizedInviteUrl }));
     } catch (cause) {
       setPreview(null);
-      setError(errorMessage(cause, t("server.join.verifyFailed")));
+      setError(errorDetails(cause, t("server.join.verifyFailed")));
       queueMicrotask(showInputError);
     } finally {
       setPhase("idle");
@@ -111,7 +113,7 @@ export function JoinServerDialog(props: JoinServerDialogProps) {
       setPhase("idle");
       startClose();
     } catch (cause) {
-      setError(errorMessage(cause, t("server.join.joinFailed")));
+      setError(errorDetails(cause, t("server.join.joinFailed")));
       setPhase("idle");
       queueMicrotask(showJoinError);
     }
@@ -214,6 +216,7 @@ export function JoinServerDialog(props: JoinServerDialogProps) {
                 data-page={page()}
                 data-preview-error={previewError() ? "" : undefined}
                 data-error={joinError() ? "" : undefined}
+                data-reference={error()?.reference ? "" : undefined}
               >
                 <form
                   class="join-server-page t-page"
@@ -237,7 +240,14 @@ export function JoinServerDialog(props: JoinServerDialogProps) {
                     class={`join-server-field t-input-wrap${previewError() ? " is-error" : ""}`}
                     label={t("server.join.inviteLink")}
                     htmlFor="join-server-invite-url"
-                    error={previewError() ? <span class="t-error-msg">{previewError()}</span> : undefined}
+                    error={
+                      previewError() ? (
+                        <>
+                          <span class="t-error-msg">{previewError()?.message}</span>
+                          <ErrorReference reference={previewError()?.reference} />
+                        </>
+                      ) : undefined
+                    }
                   >
                     <Input
                       ref={(element) => (inviteInput = element)}
@@ -310,7 +320,7 @@ export function JoinServerDialog(props: JoinServerDialogProps) {
                   </Show>
 
                   <Show when={joinError()}>
-                    {(message) => (
+                    {(failure) => (
                       <Alert
                         ref={(element) => (joinErrorAlert = element)}
                         class={`join-server-alert t-input${joinErrorShaking() ? " is-shaking" : ""}`}
@@ -322,7 +332,8 @@ export function JoinServerDialog(props: JoinServerDialogProps) {
                         </AlertIcon>
                         <AlertContent>
                           <AlertTitle>{t("server.join.connectionFailed")}</AlertTitle>
-                          <AlertDescription>{message()}</AlertDescription>
+                          <AlertDescription>{failure().message}</AlertDescription>
+                          <ErrorReference reference={failure().reference} />
                         </AlertContent>
                       </Alert>
                     )}

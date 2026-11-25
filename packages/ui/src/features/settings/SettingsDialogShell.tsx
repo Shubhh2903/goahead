@@ -1,28 +1,39 @@
-import { Dialog, IconButton, X } from "@openbot/ui";
-import { cx } from "@openbot/ui/utils";
-import type { JSX } from "@solidjs/web";
-import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
-import { useText } from "../../text";
+import { PageHeader, type PageHeaderParent } from "@openbot/ui/features/window/PageHeader";
+import { cx, prefersReducedMotion } from "@openbot/ui/utils";
+import { type JSX, Portal } from "@solidjs/web";
+import { createEffect, createSignal, createUniqueId, onCleanup, Show, untrack } from "solid-js";
+
+export interface SettingsPagePlacement {
+  nav: HTMLElement;
+  content: HTMLElement;
+  path: HTMLElement;
+  onBack?: (back: SettingsPageBack | null) => void;
+}
+
+export interface SettingsCrumb {
+  title: string;
+  back: () => void;
+}
+
+export interface SettingsPageBack {
+  name: string;
+  back: () => void;
+}
 
 interface SettingsDialogShellProps {
   open: boolean;
-  onOpenChange: (open: boolean) => void;
-  title: JSX.Element;
+  title: string;
   description: JSX.Element;
+  crumb?: SettingsCrumb | null | undefined;
   sidebar: JSX.Element;
   contentKey: string;
   children: JSX.Element;
   class?: string;
   footer?: JSX.Element;
-  /**
-   * Content the shell places over the end of the panel, such as an error toast. It is the caller's
-   * to position, and the caller sets `--settings-modal-floating-space` on the modal element with its
-   * height, so the panel keeps its last control above it.
-   */
   floatingContent?: JSX.Element;
-  closeLabel?: string;
   onContentElement?: (element: HTMLElement) => void;
-  restoreFocusTarget?: HTMLElement | null;
+  restoreFocusTarget?: HTMLElement | null | undefined;
+  page: SettingsPagePlacement | undefined;
 }
 
 function durationToMilliseconds(value: string, fallback: number): number {
@@ -32,47 +43,18 @@ function durationToMilliseconds(value: string, fallback: number): number {
   return fallback;
 }
 
-function closeDuration(): number {
-  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return 0;
-  return durationToMilliseconds(
-    getComputedStyle(document.documentElement).getPropertyValue("--openbot-duration-fast"),
-    120,
-  );
-}
-
-/** The collapse clock when the stylesheet cannot answer, so a closing bar always leaves the tree. */
 const SAVE_BAR_CLOSE_FALLBACK = 250;
 
 function saveBarCloseDuration(element: HTMLElement | undefined): number {
-  if (!element || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return 0;
+  if (!element || prefersReducedMotion()) return 0;
   return durationToMilliseconds(getComputedStyle(element).getPropertyValue("--acc-collapse"), SAVE_BAR_CLOSE_FALLBACK);
 }
 
 interface SaveBarDockProps<T> {
-  /** What the bar reports, or `null` when there is nothing to save. The dock holds the last one it got. */
   value: T | null;
-  /** The bar itself. It is called with the held value, so it keeps its content through the close. */
   children: (value: () => T) => JSX.Element;
 }
 
-/**
- * A dock for a dialog's save bar: the bar grows out of the bottom edge when there is something to
- * save and shrinks back into it when there is not. The dock is a grid track that opens from `0fr` to
- * `1fr`, so the bar's own height is what the transition tweens and no pixel value is measured.
- *
- * Any `SettingsDialogShell` footer can use it. The bar mounts closed, because an element that mounts
- * already open cannot transition, and it stays mounted through the close, because a bar that leaves
- * the tree at once has nothing left to shrink. It is `inert` while closed, so a bar on its way out
- * cannot take focus.
- *
- * ```tsx
- * footer={
- *   <SaveBarDock value={dirty() ? true : null}>
- *     {() => <section class="settings-modal-save-bar" aria-label="Unsaved changes">…</section>}
- *   </SaveBarDock>
- * }
- * ```
- */
 export function SaveBarDock<T>(props: SaveBarDockProps<T>) {
   const [held, setHeld] = createSignal<T | null>(null);
   const [open, setOpen] = createSignal(false);
@@ -85,7 +67,6 @@ export function SaveBarDock<T>(props: SaveBarDockProps<T>) {
       window.clearTimeout(closeTimer);
       if (next !== null) {
         setHeld(() => next);
-        // Reading a layout property settles the closed state before the open attribute lands.
         window.requestAnimationFrame(() => {
           void dock?.offsetHeight;
           setOpen(true);
@@ -112,30 +93,39 @@ export function SaveBarDock<T>(props: SaveBarDockProps<T>) {
   );
 }
 
+export function SettingsNavGroupLabel(props: { label: string }) {
+  return (
+    <div class="settings-modal-nav-heading" aria-hidden="true">
+      {props.label}
+    </div>
+  );
+}
+
 export function SettingsDialogShell(props: SettingsDialogShellProps) {
-  const { t } = useText();
-  const [rendered, setRendered] = createSignal(untrack(() => props.open));
-  const [closing, setClosing] = createSignal(false);
+  const titleId = createUniqueId();
+  const descriptionId = createUniqueId();
+  const pathTitle = () => props.crumb?.title ?? props.title;
+  const pathParents = (): PageHeaderParent[] => {
+    const crumb = props.crumb;
+    return crumb ? [{ title: props.title, onSelect: crumb.back }] : [];
+  };
   const [canScrollUp, setCanScrollUp] = createSignal(false);
   const [canScrollDown, setCanScrollDown] = createSignal(false);
-  let closeTimer: number | undefined;
+  let shown = untrack(() => props.open);
   let restoreTarget: HTMLElement | null = untrack(() => props.restoreFocusTarget ?? null);
   let restoreFrame: number | undefined;
-  let modalElement: HTMLElement | undefined;
   let scrollElement: HTMLDivElement | undefined;
   let scrollResizeObserver: ResizeObserver | undefined;
-
-  function clearCloseTimer(): void {
-    if (closeTimer === undefined) return;
-    window.clearTimeout(closeTimer);
-    closeTimer = undefined;
-  }
 
   function restoreFocus(): void {
     if (!restoreTarget?.isConnected) return;
     const target = restoreTarget;
     restoreFrame = window.requestAnimationFrame(() => {
-      restoreFrame = window.requestAnimationFrame(() => target.focus());
+      restoreFrame = window.requestAnimationFrame(() => {
+        const active = document.activeElement;
+        if (active && active !== document.body) return;
+        target.focus();
+      });
     });
   }
 
@@ -164,99 +154,85 @@ export function SettingsDialogShell(props: SettingsDialogShellProps) {
   createEffect(
     () => ({ open: props.open, restoreFocusTarget: props.restoreFocusTarget }),
     ({ open, restoreFocusTarget }) => {
-      clearCloseTimer();
-      const isRendered = untrack(rendered);
-
       if (open) {
-        const explicitTarget = restoreFocusTarget;
-        if (explicitTarget) restoreTarget = explicitTarget;
-        if (!isRendered) {
-          restoreTarget ??= document.activeElement instanceof HTMLElement ? document.activeElement : null;
-        }
-        setRendered(true);
-        setClosing(false);
+        if (restoreFocusTarget) restoreTarget = restoreFocusTarget;
+        if (!shown) restoreTarget ??= document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        shown = true;
         return;
       }
+      if (!shown) return;
+      shown = false;
+      restoreFocus();
+    },
+  );
 
-      if (!isRendered) return;
-      setClosing(true);
-      closeTimer = window.setTimeout(() => {
-        closeTimer = undefined;
-        setRendered(false);
-        setClosing(false);
-        restoreFocus();
-      }, closeDuration());
+  createEffect(
+    () => {
+      const page = props.open ? props.page : undefined;
+      const crumb = props.crumb;
+      return page ? { page, back: crumb ? { name: props.title, back: crumb.back } : null } : undefined;
+    },
+    (shown) => {
+      if (!shown) return;
+      shown.page.onBack?.(shown.back);
+      return () => shown.page.onBack?.(null);
     },
   );
 
   onCleanup(() => {
-    clearCloseTimer();
     scrollResizeObserver?.disconnect();
     if (restoreFrame !== undefined) window.cancelAnimationFrame(restoreFrame);
   });
 
-  function requestOpenChange(open: boolean): void {
-    if (!open && closing()) return;
-    props.onOpenChange(open);
-  }
-
   return (
-    <Dialog.Root open={rendered()} onOpenChange={requestOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay
-          class="settings-modal-backdrop"
-          data-motion={closing() ? "closing" : "open"}
-          onPointerDown={(event) => {
-            if (event.target === event.currentTarget) requestOpenChange(false);
-          }}
-        >
-          <Dialog.Content
-            as="section"
-            ref={(element) => {
-              modalElement = element;
-              props.onContentElement?.(element);
-            }}
-            class={cx("settings-modal", props.class)}
-            data-motion={closing() ? "closing" : "open"}
-            onOpenAutoFocus={(event) => {
-              event.preventDefault();
-              queueMicrotask(() => modalElement?.focus({ preventScroll: true }));
-            }}
-          >
-            <aside class="settings-modal-sidebar">{props.sidebar}</aside>
-
-            <div class="settings-modal-main">
-              <header class="settings-modal-header">
-                <div>
-                  <Dialog.Title class="settings-modal-title">{props.title}</Dialog.Title>
-                  <Dialog.Description class="settings-modal-description">{props.description}</Dialog.Description>
-                </div>
-                <IconButton
-                  label={props.closeLabel ?? t("settings.dialog.close")}
-                  tooltip={props.closeLabel ?? t("settings.dialog.close")}
-                  variant="ghost"
-                  data-cuelume-tap="close"
-                  onClick={() => requestOpenChange(false)}
+    <Show when={props.open && props.page}>
+      {(page) => (
+        <>
+          <Portal mount={page().nav}>
+            <div class="settings-page-nav-group">{props.sidebar}</div>
+          </Portal>
+          <Portal mount={page().content}>
+            <section
+              ref={(element) => props.onContentElement?.(element)}
+              class={cx("settings-modal settings-modal-page", props.class)}
+              aria-labelledby={titleId}
+              aria-describedby={descriptionId}
+            >
+              <div class="settings-modal-main">
+                <Show when={props.crumb}>
+                  <Portal mount={page().path}>
+                    <PageHeader
+                      class="settings-page-path"
+                      title={pathTitle()}
+                      headingId={titleId}
+                      path={pathParents()}
+                    />
+                  </Portal>
+                </Show>
+                <p id={descriptionId} class="settings-page-description">
+                  {props.description}
+                </p>
+                <div
+                  class="settings-modal-scroll-frame"
+                  data-scroll-up={canScrollUp() ? "" : undefined}
+                  data-scroll-down={canScrollDown() ? "" : undefined}
                 >
-                  <X />
-                </IconButton>
-              </header>
-
-              <div
-                class="settings-modal-scroll-frame"
-                data-scroll-up={canScrollUp() ? "" : undefined}
-                data-scroll-down={canScrollDown() ? "" : undefined}
-              >
-                <div ref={registerScrollElement} class="settings-modal-content" onScroll={updateScrollFades}>
-                  {props.children}
+                  <div ref={registerScrollElement} class="settings-modal-content" onScroll={updateScrollFades}>
+                    <Show when={!props.crumb}>
+                      <h2 id={titleId} class="settings-page-heading">
+                        {props.title}
+                      </h2>
+                    </Show>
+                    {props.children}
+                  </div>
                 </div>
+                <div class="settings-modal-footer">{props.footer}</div>
+                {props.floatingContent}
               </div>
-              <div class="settings-modal-footer">{props.footer}</div>
-              {props.floatingContent}
-            </div>
-          </Dialog.Content>
-        </Dialog.Overlay>
-      </Dialog.Portal>
-    </Dialog.Root>
+            </section>
+          </Portal>
+        </>
+      )}
+    </Show>
   );
 }

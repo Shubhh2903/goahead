@@ -1,6 +1,3 @@
-/* The Billing panel in desktop Settings and the web Billing dialog: one row for each server that has
- * a plan, and the Customer Portal button above them. */
-
 .billing-panel {
   display: flex;
   flex-direction: column;
@@ -17,8 +14,15 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--openbot-space-3);
   min-height: 32px;
+}
+
+.billing-toolbar .ui-button {
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
 }
 
 .billing-empty {
@@ -29,9 +33,7 @@
 }
 
 .billing-server-logo {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--openbot-radius-md);
+  --server-plush-logo-size: 32px;
 }
 
 .billing-server-title {
@@ -50,14 +52,7 @@
   white-space: nowrap;
 }
 
-/* The web client's Billing dialog. */
 .billing-dialog-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: var(--openbot-layer-dialog);
-  display: grid;
-  place-items: center;
-  padding: var(--openbot-space-6);
   background: var(--openbot-bg-overlay);
 }
 
@@ -104,4 +99,118 @@
   min-height: 0;
   overflow-y: auto;
   padding: 0 var(--openbot-space-6) var(--openbot-space-6);
+}
+
+.billing-license {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--openbot-space-3);
+}
+
+@container (max-width: 560px) {
+  .billing-license .ui-alert {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .billing-license .ui-alert-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+}
+
+.billing-license-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: var(--openbot-radius-md);
+  background: var(--openbot-bg-control);
+  color: var(--openbot-text-secondary);
+}
+
+.billing-license-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: var(--openbot-icon-stroke-lg);
+}
+
+.billing-license-row .ui-item-actions {
+  gap: var(--openbot-space-2);
+}
+
+.billing-license-menu.ui-action-menu {
+  z-index: var(--openbot-layer-dialog-host);
+}
+
+.billing-license-divider {
+  width: 100%;
+  margin: var(--openbot-space-2) 0;
+  border: 0;
+  border-top: 1px solid var(--openbot-border);
+}
+
+.billing-license-change {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openbot-space-3);
+}
+
+.billing-license-quote {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openbot-space-2);
+  border-top: 1px solid var(--openbot-border);
+  padding-top: var(--openbot-space-3);
+}
+
+.billing-license-lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openbot-space-1);
+  margin: 0;
+  color: var(--openbot-text-secondary);
+  font-size: var(--openbot-text-sm);
+}
+
+.billing-license-lines div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--openbot-space-3);
+}
+
+.billing-license-lines dd {
+  margin: 0;
+  color: var(--openbot-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.billing-license-total {
+  display: flex;
+  align-items: baseline;
+  gap: var(--openbot-space-2);
+  margin: 0;
+}
+
+.billing-license-total-amount {
+  font-size: var(--openbot-text-2xl);
+  font-weight: var(--openbot-weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
+.billing-license-users {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.billing-details-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  align-items: start;
+  gap: var(--openbot-space-3);
+}
+
+.billing-details-country[data-empty] {
+  color: var(--openbot-text-muted);
 }

@@ -1,5 +1,6 @@
 export const INPUT_LIMITS = {
   identifier: 128,
+  vaultLoginId: 520,
   email: 254,
   accountName: 120,
   profileNameMin: 3,
@@ -12,20 +13,18 @@ export const INPUT_LIMITS = {
   avatarUrl: 2_048,
   browserActionText: 50_000,
   agentName: 80,
-  // Model names come from a CLI's `displayName`, which nothing bounds, and the released Team v1
-  // adapter already accepts 160 — so the agent-name limit would reject a model list a shipped peer
-  // is entitled to send.
   modelName: 160,
+  serviceTier: 64,
   agentTitle: 120,
   agentDescription: 2_000,
-  // The default of the app setting `AGENT_MEMORY_LIMITS`; a user can raise it.
+  storedChannelInstructions: 32_000,
+  agentInstructionsFile: 32_000,
   agentMemories: 64,
   agentSkills: 32,
   sharedTables: 64,
   sharedTableName: 64,
-  // Half the default agent cap. A channel packet is rebuilt every turn and the memories block is paid in
-  // full each time, against `ChannelHistory.prepare`'s hard character budget.
   channelMemories: 32,
+  messagingMemories: 32,
   agentMemoryText: 500,
   // Folders on this computer that an agent works in besides its workspace.
   agentProjectFolders: 10,
@@ -34,15 +33,34 @@ export const INPUT_LIMITS = {
   routineName: 80,
   routineInstruction: 100_000,
   routineRunsPage: 100,
-  // Handoffs inside one routine. A flow wider than this is no longer readable on one canvas.
   routineFlowLinks: 50,
-  // The text a local script adds to a routine run through the automation server.
+  workflowNodes: 200,
+  workflowEdges: 400,
+  workflowNodeFields: 32,
+  workflowNodeText: 20_000,
+  workflowStrokes: 500,
+  workflowStrokePoints: 2_000,
+  workflowTitle: 160,
+  workflowGraphBytes: 1024 * 1024,
+  workflowRunsPage: 50,
+  workflowStepInput: 32_000,
+  workflowWebhookPayload: 64_000,
+  routineFailureReason: 500,
+  agentWaits: 20,
+  agentWaitNote: 500,
+  agentTasks: 50,
+  agentTaskTitle: 120,
+  agentTaskProgress: 500,
+  agentTaskError: 2_000,
   automationPayload: 4_000,
-  // Six weeks: the longest range the routine calendar reads, with room for a month view.
-  routineCalendarDays: 42,
+  routineCalendarDays: 44,
   routineCron: 255,
   messageText: 100_000,
+  pastedText: 4_000,
   directMessageText: 20_000,
+  sideQuestionTurns: 20,
+  sideQuestionAnswer: 32_000,
+  sideQuestionEarlierText: 4_000,
   promptQuestions: 32,
   promptOptions: 5,
   promptHeader: 120,
@@ -55,6 +73,7 @@ export const INPUT_LIMITS = {
   attachments: 10,
   draftAttachments: 50,
   messageRecipients: 32,
+  queueReorder: 100,
   attachmentName: 255,
   mimeType: 255,
   path: 4_096,
@@ -64,10 +83,7 @@ export const INPUT_LIMITS = {
   browserTabs: 25,
   browserCoordinate: 100_000,
   browserDimension: 16_384,
-  // MCP server configuration. `identifier` covers the id and `path` covers the working directory.
-  // The two value bounds are equal today and kept apart on purpose: an environment value and an
-  // HTTP header are different things, and only one of them has a protocol that bounds it.
-  mcpServers: 32,
+  mcpServers: 100,
   mcpServerName: 80,
   mcpCommand: 4_096,
   mcpArgs: 64,
@@ -80,16 +96,16 @@ export const INPUT_LIMITS = {
   mcpUrl: 2_048,
   mcpToolCount: 10_000,
   mcpErrorText: 2_000,
+  mcpClientId: 1_024,
+  mcpClientSecret: 4_096,
+  mcpScope: 2_048,
+  signInRelayAddress: 8_192,
   teamMembers: 100,
   activeInvites: 100,
-  // Permanent links accept unlimited joins until revoked, so a leaked link is open
-  // enrollment. The cap stays small; single-use invitations keep the larger budget.
   maxPermanentInvites: 5,
   sessionsPerMember: 10,
 } as const;
 
-// Active members of one host with no plan, owner included: the owner and two others. A plan sets
-// its own limit (`memberLimitForPlan`). `INPUT_LIMITS.teamMembers` stays the wire cap for stored members.
 export const DEFAULT_TEAM_MEMBER_LIMIT = 3;
 
 export const ATTACHMENT_LIMITS = {

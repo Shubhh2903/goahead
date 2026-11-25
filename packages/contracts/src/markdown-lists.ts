@@ -1,25 +1,56 @@
-/**
- * The Markdown list edit that desktop, web and mobile composers make for a line break, so each app
- * continues and ends a list the same way.
- *
- * A line break after a list item with text starts the next item: `- `, `* `, `+ `, `1. ` or `1) `,
- * with the same indent, the next number, and an empty task box after a task item. A line break on
- * an item with no text removes its marker, which ends the list and leaves the line empty. The next
- * line break is then a plain one, so blank lines stay possible. Inside a fenced code block, and on a
- * thematic break such as `- - -`, a line break is always plain.
- */
 export interface MarkdownListEdit {
   text: string;
-  /** The caret offset in `text` after the edit. */
   caret: number;
+  replacements?: MarkdownListReplacement[];
+}
+
+export interface MarkdownListReplacement {
+  start: number;
+  end: number;
+  text: string;
 }
 
 const LIST_ITEM = /^([ \t]*)(?:([-*+])|(\d{1,9})([.)]))([ \t]+)(\[[ xX]\][ \t]+)?/u;
 const THEMATIC_BREAK = /^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/u;
-// Any indent, and a list marker before it, so a fence inside a list item counts too.
 const CODE_FENCE = /^([ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?)(`{3,}|~{3,})(.*)$/u;
 
-/** The edit for a line break typed at `caret` in `text`, or null when the line break is plain. */
+function renumberFollowingItems(
+  text: string,
+  lineEnd: number,
+  indent: string,
+  number: number,
+  delimiter: string,
+): { text: string; replacements: MarkdownListReplacement[] } {
+  const lines = text.slice(lineEnd).split("\n");
+  const replacements: MarkdownListReplacement[] = [];
+  let lineStart = lineEnd + 1;
+  let expected = number + 1;
+  for (let index = 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line === undefined) break;
+    if (!line.trim() || line.length - line.trimStart().length > indent.length) {
+      lineStart += line.length + 1;
+      continue;
+    }
+    const item = LIST_ITEM.exec(line);
+    const [, itemIndent = "", bullet, itemNumber, itemDelimiter] = item ?? [];
+    if (
+      bullet ||
+      itemIndent !== indent ||
+      itemDelimiter !== delimiter ||
+      itemNumber === undefined ||
+      Number(itemNumber) !== expected
+    )
+      break;
+    const start = lineStart + indent.length;
+    replacements.push({ start, end: start + itemNumber.length, text: String(expected + 1) });
+    lines[index] = `${line.slice(0, indent.length)}${expected + 1}${line.slice(indent.length + itemNumber.length)}`;
+    lineStart += line.length + 1;
+    expected += 1;
+  }
+  return { text: text.slice(0, lineEnd) + lines.join("\n"), replacements };
+}
+
 export function markdownListLineBreak(text: string, caret: number): MarkdownListEdit | null {
   const lineStart = text.lastIndexOf("\n", caret - 1) + 1;
   const nextBreak = text.indexOf("\n", caret);
@@ -33,16 +64,20 @@ export function markdownListLineBreak(text: string, caret: number): MarkdownList
   if (!line.slice(marker.length).trim()) {
     return { text: text.slice(0, lineStart) + text.slice(lineEnd), caret: lineStart };
   }
-  const nextMarker = bullet ?? `${Number(number) + 1}${delimiter}`;
+  const currentNumber = number === undefined ? null : Number(number);
+  const nextMarker = bullet ?? `${(currentNumber ?? 0) + 1}${delimiter}`;
   const insert = `\n${indent}${nextMarker}${spacing}${task ? "[ ] " : ""}`;
-  return { text: text.slice(0, caret) + insert + text.slice(caret), caret: caret + insert.length };
+  const renumbered =
+    currentNumber === null || delimiter === undefined
+      ? { text, replacements: [] }
+      : renumberFollowingItems(text, lineEnd, indent, currentNumber, delimiter);
+  return {
+    text: renumbered.text.slice(0, caret) + insert + renumbered.text.slice(caret),
+    caret: caret + insert.length,
+    ...(renumbered.replacements.length > 0 ? { replacements: renumbered.replacements } : {}),
+  };
 }
 
-/*
- * A fence inside a list item also ends with that item: a later line with less indent than the
- * item's text starts a new item or leaves the list. A fence counts as inside an item when it is on
- * the item's line, or indented at least to the text of the last item.
- */
 function insideCodeFence(lines: string): boolean {
   let open: { marks: string; itemIndent: number } | null = null;
   let itemIndent: number | null = null;
@@ -59,7 +94,6 @@ function insideCodeFence(lines: string): boolean {
     const [, lead = "", marks = "", rest = ""] = fence;
     if (open === null) {
       if (marks[0] === "`" && rest.includes("`")) continue;
-      // A lead longer than the indent holds a list marker: the fence is on the item's line.
       const onItemLine = lead.length > indent ? lead.length : null;
       open = { marks, itemIndent: onItemLine ?? (itemIndent !== null && indent >= itemIndent ? itemIndent : 0) };
     } else if (

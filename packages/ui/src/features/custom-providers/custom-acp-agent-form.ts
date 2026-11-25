@@ -1,7 +1,3 @@
-// Form side of a user-named ACP agent: a command that OpenBot starts on this computer and talks to
-// over the Agent Client Protocol on stdio. The dialog hands the trimmed draft to its host, which
-// turns it into the IPC input with `customAgentInput`.
-
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   type AcpAgentPreset,
@@ -10,6 +6,7 @@ import {
   CUSTOM_AGENT_ID_PATTERN,
   CUSTOM_AGENT_LIMITS,
   type CustomAgentSummary,
+  isCustomAgentUsagePrompt,
   isNewCustomAgentId,
   type SaveCustomAgentInput,
 } from "@openbot/contracts/ipc";
@@ -19,10 +16,6 @@ import { currentText } from "../../text";
 export interface CustomAcpEnvDraft {
   name: string;
   value: string;
-  /**
-   * The saved name whose value main holds. An empty value under this same name keeps that value,
-   * because the value never comes back to the renderer.
-   */
   savedName?: string;
 }
 
@@ -30,19 +23,19 @@ export interface CustomAcpAgentDraft {
   agentId: string;
   displayName: string;
   command: string;
-  /** Separated by spaces, as a user types them in a terminal. */
   args: string;
   env: CustomAcpEnvDraft[];
+  usagePrompt: string;
 }
 
 export interface CustomAcpAgentErrors {
   agentId?: string;
   displayName?: string;
   command?: string;
+  usagePrompt?: string;
   envRows: (string | undefined)[];
 }
 
-/** The state of one trial start: OpenBot runs the command and sends `initialize`, then stops it. */
 export type AcpAgentCheck =
   | { status: "idle" }
   | { status: "checking" }
@@ -51,13 +44,13 @@ export type AcpAgentCheck =
       agentName: string;
       version?: string;
       protocolVersion: number;
-      /** Capability names as the agent reports them, such as `loadSession` or `image`. */
       capabilities: readonly string[];
+      models: readonly string[];
     }
   | { status: "failed"; message: string };
 
 export function emptyCustomAcpAgentDraft(): CustomAcpAgentDraft {
-  return { agentId: "", displayName: "", command: "", args: "", env: [{ name: "", value: "" }] };
+  return { agentId: "", displayName: "", command: "", args: "", env: [{ name: "", value: "" }], usagePrompt: "" };
 }
 
 export function presetAcpAgentDraft(preset: AcpAgentPreset): CustomAcpAgentDraft {
@@ -67,10 +60,10 @@ export function presetAcpAgentDraft(preset: AcpAgentPreset): CustomAcpAgentDraft
     command: preset.command,
     args: formatAgentArgs(preset.args),
     env: [{ name: "", value: "" }],
+    usagePrompt: "",
   };
 }
 
-/** The form for a saved agent: each saved variable is a row whose empty value keeps the saved one. */
 export function savedAcpAgentDraft(agent: CustomAgentSummary): CustomAcpAgentDraft {
   return {
     agentId: agent.id,
@@ -81,6 +74,7 @@ export function savedAcpAgentDraft(agent: CustomAgentSummary): CustomAcpAgentDra
       agent.envNames.length > 0
         ? agent.envNames.map((name) => ({ name, value: "", savedName: name }))
         : [{ name: "", value: "" }],
+    usagePrompt: agent.usagePrompt ?? "",
   };
 }
 
@@ -88,7 +82,6 @@ function blankEnv(row: CustomAcpEnvDraft): boolean {
   return !row.name.trim() && !row.value.trim();
 }
 
-/** A saved variable whose value the user left empty. Main fills it in. */
 function keepsValue(row: CustomAcpEnvDraft): boolean {
   return row.savedName !== undefined && row.name.trim() === row.savedName && row.value === "";
 }
@@ -115,6 +108,11 @@ export function validateCustomAcpAgent(
 
   if (!draft.command.trim()) errors.command = t("customProvider.acp.error.commandRequired");
 
+  const usagePrompt = draft.usagePrompt.trim();
+  if (usagePrompt && !isCustomAgentUsagePrompt(usagePrompt)) {
+    errors.usagePrompt = t("customProvider.acp.error.usagePromptInvalid", { max: CUSTOM_AGENT_LIMITS.usagePrompt });
+  }
+
   const names = new Set<string>();
   draft.env.forEach((row, index) => {
     if (blankEnv(row)) return;
@@ -132,7 +130,9 @@ export function validateCustomAcpAgent(
 }
 
 export function hasCustomAcpAgentError(errors: CustomAcpAgentErrors): boolean {
-  return Boolean(errors.agentId || errors.displayName || errors.command || errors.envRows.some(Boolean));
+  return Boolean(
+    errors.agentId || errors.displayName || errors.command || errors.usagePrompt || errors.envRows.some(Boolean),
+  );
 }
 
 export function customAcpAgentValue(draft: CustomAcpAgentDraft): CustomAcpAgentDraft {
@@ -148,14 +148,10 @@ export function customAcpAgentValue(draft: CustomAcpAgentDraft): CustomAcpAgentD
         value: row.value,
         ...(row.savedName === undefined ? {} : { savedName: row.savedName }),
       })),
+    usagePrompt: draft.usagePrompt.trim(),
   };
 }
 
-/**
- * Splits the arguments line with no shell. Quotes keep an argument with spaces as one argument; in
- * double quotes, `\"` and `\\` are one character. A backslash out of quotes stays, so a Windows path
- * needs no escape. Main refuses a line break and more than 32 arguments.
- */
 function draftArgs(text: string): string[] {
   const args: string[] = [];
   let current: string | null = null;
@@ -181,7 +177,6 @@ function draftArgs(text: string): string[] {
   return args;
 }
 
-/** The arguments line that `draftArgs` reads back as the same arguments. */
 export function formatAgentArgs(args: readonly string[]): string {
   return args.map((arg) => (/^[^\s"']+$/.test(arg) ? arg : `"${arg.replace(/["\\]/g, "\\$&")}"`)).join(" ");
 }
@@ -198,10 +193,10 @@ export function customAgentInput(draft: CustomAcpAgentDraft): SaveCustomAgentInp
     command: value.command,
     args: draftArgs(value.args),
     env: draftEnv(value),
+    usagePrompt: value.usagePrompt || null,
   };
 }
 
-/** A kept value is read from `savedAgentId`, so a check of an edited agent needs no retyped key. */
 export function customAgentCheckInput(draft: CustomAcpAgentDraft, savedAgentId?: string): CheckCustomAgentInput {
   const value = customAcpAgentValue(draft);
   return {

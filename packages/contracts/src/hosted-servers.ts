@@ -1,18 +1,25 @@
 import {
+  BILLING_BASE_CURRENCIES,
   BILLING_CURRENCIES,
   BILLING_INTERVALS,
+  BILLING_OPTIONAL_CURRENCIES,
   BILLING_PLAN_IDS,
+  type BillingBaseCurrency,
   type BillingCurrency,
   type BillingInterval,
   type BillingPlanId,
   isBillingAmount,
+  isStorageGb,
   isStripeCheckoutUrl,
 } from "./billing";
 import { INPUT_LIMITS } from "./input-limits";
+import type { ConversationMessage } from "./ipc-conversation-messages";
+import type { MachineMetrics } from "./ipc-machine-resources";
+import type { StorageDisk } from "./ipc-storage";
+import { type LicenseOrder, parseLicenseOrder } from "./license";
 import { isBoolean, isDynamicRecord, isNumber, isOneOf, isString } from "./runtime-values";
 import { slugifyTeamServerName } from "./validation";
 
-/** The provider machine sizes, from the boat machine table (docs.boat.dev/machines). */
 export const HOSTED_SERVER_SIZES = {
   small: { vcpu: 2, memoryGb: 4, diskGb: 12 },
   default: { vcpu: 4, memoryGb: 8, diskGb: 50 },
@@ -23,15 +30,43 @@ export type HostedServerSize = keyof typeof HOSTED_SERVER_SIZES;
 
 export const HOSTED_SERVER_SIZE_NAMES = ["small", "default", "large"] as const satisfies readonly HostedServerSize[];
 
-/** The machine of each plan. The plan decides the size: a user never selects a size. */
 export const HOSTED_PLAN_SIZE: Readonly<Record<BillingPlanId, HostedServerSize>> = {
   starter: "small",
   standard: "default",
   pro: "large",
 };
 
+export const HOSTED_BOAT_PLAN_SIZE: Readonly<Record<BillingPlanId, HostedServerSize>> = {
+  ...HOSTED_PLAN_SIZE,
+  starter: "default",
+};
+
+export const HOSTED_SERVER_BASE_IMAGE_GB = 22;
+
+const GB = 1024 ** 3;
+
+export function hostedPlanDisk(disk: StorageDisk, storageGb: number): StorageDisk {
+  const { freeBytes, totalBytes } = disk;
+  if (freeBytes === null || totalBytes === null) return disk;
+  const planBytes = storageGb * GB;
+  const userBytes = disk.userBytes ?? Math.max(0, totalBytes - freeBytes - HOSTED_SERVER_BASE_IMAGE_GB * GB);
+  return { freeBytes: Math.max(0, Math.min(freeBytes, planBytes - userBytes)), totalBytes: planBytes };
+}
+
+export function hostedPlanMachineMetrics(
+  metrics: MachineMetrics,
+  storageGb: number,
+  userBytes: number | null,
+): MachineMetrics {
+  const { freeBytes, totalBytes } = hostedPlanDisk(
+    { freeBytes: metrics.diskFreeBytes, totalBytes: metrics.diskTotalBytes, userBytes },
+    storageGb,
+  );
+  if (freeBytes === null || totalBytes === null) return metrics;
+  return { ...metrics, diskUsedBytes: totalBytes - freeBytes, diskFreeBytes: freeBytes, diskTotalBytes: totalBytes };
+}
+
 export const HOSTED_SERVER_STATES = [
-  /** The row exists, and the account server waits for Stripe to confirm the first payment. */
   "awaiting_payment",
   "creating",
   "starting",
@@ -45,10 +80,6 @@ export const HOSTED_SERVER_STATES = [
 
 export type HostedServerState = (typeof HOSTED_SERVER_STATES)[number];
 
-/**
- * The reason codes for a server in the error state, or for a server that stopped. They never contain
- * provider text. `plan_ended`: the plan was cancelled or not paid, so the server stopped. Its data stays.
- */
 export const HOSTED_SERVER_ERRORS = [
   "provider_error",
   "provider_billing",
@@ -59,10 +90,6 @@ export const HOSTED_SERVER_ERRORS = [
 
 export type HostedServerError = (typeof HOSTED_SERVER_ERRORS)[number];
 
-/**
- * Returns the trimmed name, or null for a name that the team store of the server refuses. The server
- * cannot publish its host with such a name.
- */
 export function parseHostedServerName(value: string): string | null {
   const name = value.trim();
   if (name.length < INPUT_LIMITS.serverNameMin || name.length > INPUT_LIMITS.serverName || /\p{Cc}/u.test(name)) {
@@ -71,16 +98,22 @@ export function parseHostedServerName(value: string): string | null {
   return slugifyTeamServerName(name).length >= INPUT_LIMITS.serverNameMin ? name : null;
 }
 
-/** "Contact us" in the add server dialog, for a plan that the dialog does not have. */
-export const HOSTED_SERVER_CONTACT_URL = "mailto:hello@openbot.run";
-/**
- * A development build sends the shared developer key in this header. A Worker with the same
- * `HOSTED_SERVERS_DEVELOPER_KEY` lets the account create servers, as the allow list does.
- */
+const HOSTED_SERVER_CONTACT_SUBJECT = "Custom GoAhead setup";
+const HOSTED_SERVER_CONTACT_BODY = [
+  "I’d like to discuss a custom GoAhead setup for my needs. Please get in touch so we can explore the available options.",
+  "",
+  "Here’s some additional context:",
+  "",
+  "[Tell us what you need]",
+].join("\r\n");
+
+export const HOSTED_SERVER_CONTACT_URL = `mailto:hello@goahead.multicodegenius.com?subject=${encodeURIComponent(
+  HOSTED_SERVER_CONTACT_SUBJECT,
+)}&body=${encodeURIComponent(HOSTED_SERVER_CONTACT_BODY)}`;
 export const HOSTING_DEVELOPER_KEY_HEADER = "OpenBot-Hosting-Developer-Key";
 
 export interface HostedServerSummary {
-  /** The same value as the Remote host id of the server. */
+  deletionScheduledAt?: number | null;
   serverId: string;
   name: string;
   size: HostedServerSize;
@@ -91,27 +124,23 @@ export interface HostedServerSummary {
   error: HostedServerError | null;
   createdAt: string;
   updatedAt: string;
+  storageGb?: number;
+  restoring?: boolean;
+  dataKeptUntil?: number | null;
 }
 
-/**
- * The state of one hosted server, for its owner and its members. `sleeping`: the Worker stopped the
- * server because nobody used it. A client then waits for the user's next input before it wakes it.
- */
 export interface HostedServerStatus {
   serverId: string;
   state: HostedServerState;
   error: HostedServerError | null;
   sleeping: boolean;
+  restoring?: boolean;
 }
 
 export interface HostedServerList {
-  /** False when this account cannot create hosted servers, or when the account server has no billing. */
+  lifecycleAvailable?: boolean;
   available: boolean;
   servers: HostedServerSummary[];
-  /**
-   * The most servers that the account can have. Each server in `servers` counts, also one that waits
-   * for its first payment. Null from an account server that does not send it.
-   */
   maxServers: number | null;
 }
 
@@ -130,7 +159,6 @@ export function isHostedServerState(value: unknown): value is HostedServerState 
   return isOneOf(HOSTED_SERVER_STATES, value);
 }
 
-/** Returns null for a value that is not a hosted server summary. */
 export function parseHostedServerSummary(value: unknown): HostedServerSummary | null {
   if (
     !isDynamicRecord(value) ||
@@ -147,11 +175,16 @@ export function parseHostedServerSummary(value: unknown): HostedServerSummary | 
   ) {
     return null;
   }
-  // A state or an error that a newer Worker added shows as an error, so an older app still lists the server.
   const state: HostedServerState = isHostedServerState(value.state) ? value.state : "error";
   const error: HostedServerError | null =
     state !== value.state ? "provider_error" : isOneOf(HOSTED_SERVER_ERRORS, value.error) ? value.error : null;
   return {
+    deletionScheduledAt:
+      typeof value.deletionScheduledAt === "number" &&
+      Number.isSafeInteger(value.deletionScheduledAt) &&
+      value.deletionScheduledAt > 0
+        ? value.deletionScheduledAt
+        : null,
     serverId: value.serverId,
     name: value.name,
     size: value.size,
@@ -162,10 +195,16 @@ export function parseHostedServerSummary(value: unknown): HostedServerSummary | 
     error,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
+    ...(isStorageGb(value.storageGb) ? { storageGb: value.storageGb } : {}),
+    ...(value.restoring === true ? { restoring: true } : {}),
+    ...(isTimestamp(value.dataKeptUntil) ? { dataKeptUntil: value.dataKeptUntil } : {}),
   };
 }
 
-/** Returns null for a value that is not a hosted server status. */
+function isTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
 export function parseHostedServerStatus(value: unknown): HostedServerStatus | null {
   if (
     !isDynamicRecord(value) ||
@@ -176,17 +215,18 @@ export function parseHostedServerStatus(value: unknown): HostedServerStatus | nu
   ) {
     return null;
   }
-  // As in the summary: a state that a newer Worker added shows as an error.
   const state: HostedServerState = isHostedServerState(value.state) ? value.state : "error";
   const error: HostedServerError | null =
     state !== value.state ? "provider_error" : isOneOf(HOSTED_SERVER_ERRORS, value.error) ? value.error : null;
-  return { serverId: value.serverId, state, error, sleeping: value.sleeping };
+  return {
+    serverId: value.serverId,
+    state,
+    error,
+    sleeping: value.sleeping,
+    ...(value.restoring === true ? { restoring: true } : {}),
+  };
 }
 
-/**
- * Returns null for a value that is not a hosted server list. A server that this app cannot read, for
- * example with a plan that a newer Worker added, is left out, so the others still show.
- */
 export function parseHostedServerList(value: unknown): HostedServerList | null {
   if (!isDynamicRecord(value) || !isBoolean(value.available) || !Array.isArray(value.servers)) return null;
   const servers: HostedServerSummary[] = [];
@@ -198,10 +238,9 @@ export function parseHostedServerList(value: unknown): HostedServerList | null {
     isNumber(value.maxServers) && Number.isSafeInteger(value.maxServers) && value.maxServers >= 0
       ? value.maxServers
       : null;
-  return { available: value.available, servers, maxServers };
+  return { available: value.available, lifecycleAvailable: value.lifecycleAvailable === true, servers, maxServers };
 }
 
-/** Returns null for a value that is not a redeemed claim. */
 export function parseHostedServerClaim(value: unknown): HostedServerClaim | null {
   if (
     !isDynamicRecord(value) ||
@@ -229,31 +268,44 @@ export function parseHostedServerClaim(value: unknown): HostedServerClaim | null
   };
 }
 
+export const HOSTED_SERVER_ENTRY_POINTS = [
+  "server_rail",
+  "settings_billing",
+  "upsell",
+  "empty_state",
+  "checkout_resume",
+  "drawer",
+  "onboarding",
+  "pricing_page",
+] as const;
+export type HostedServerEntryPoint = (typeof HOSTED_SERVER_ENTRY_POINTS)[number];
+
 export interface CreateHostedServerInput {
   name: string;
   plan: BillingPlanId;
   interval: BillingInterval;
   currency: BillingCurrency;
-  /** One ID for each opened create form, so a repeated submit does not create a second server. */
   requestId: string;
+  entryPoint?: HostedServerEntryPoint;
+  license?: LicenseOrder;
+  earlyStart?: true;
 }
 
-/**
- * The account server's answer to a create or a new payment page. `checkoutUrl` is the Stripe Checkout
- * page, or null when the server needs no payment page (its plan started already).
- */
 export interface HostedServerCheckout {
   server: HostedServerSummary;
   checkoutUrl: string | null;
 }
 
-/** One plan as the create dialog shows it. Amounts are in the minor unit of the currency. */
+export type HostedServerPlanPrices = Record<BillingBaseCurrency, Record<BillingInterval, number>> &
+  Partial<Record<BillingCurrency, Record<BillingInterval, number>>>;
+
 export interface HostedServerCatalogPlan {
   id: BillingPlanId;
   diskGb: number;
   memberLimit: number;
   relativeSpeed: number;
-  prices: Record<BillingCurrency, Record<BillingInterval, number>>;
+  prices: HostedServerPlanPrices;
+  soldOut?: boolean;
 }
 
 export interface HostedServerCatalog {
@@ -262,13 +314,11 @@ export interface HostedServerCatalog {
 
 export interface DeleteHostedServerInput {
   serverId: string;
-  /** The server name as the user typed it. The account server compares it to the stored name. */
   confirmName: string;
 }
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u;
 
-/** Returns null for a value that is not a valid create request. */
 export function parseCreateHostedServerInput(value: unknown): CreateHostedServerInput | null {
   if (
     !isDynamicRecord(value) ||
@@ -282,10 +332,23 @@ export function parseCreateHostedServerInput(value: unknown): CreateHostedServer
   const name = parseHostedServerName(value.name);
   if (!name) return null;
   if (!isString(value.requestId) || !REQUEST_ID_PATTERN.test(value.requestId)) return null;
-  return { name, plan: value.plan, interval: value.interval, currency: value.currency, requestId: value.requestId };
+  const input: CreateHostedServerInput = {
+    name,
+    plan: value.plan,
+    interval: value.interval,
+    currency: value.currency,
+    requestId: value.requestId,
+  };
+  if (isOneOf(HOSTED_SERVER_ENTRY_POINTS, value.entryPoint)) input.entryPoint = value.entryPoint;
+  if (value.license !== undefined) {
+    const license = parseLicenseOrder(value.license);
+    if (!license) return null;
+    input.license = license;
+  }
+  if (value.earlyStart === true) input.earlyStart = true;
+  return input;
 }
 
-/** Returns null for a value that is not a checkout answer, or whose URL is not a Stripe Checkout page. */
 export function parseHostedServerCheckout(value: unknown): HostedServerCheckout | null {
   if (!isDynamicRecord(value)) return null;
   const server = parseHostedServerSummary(value.server);
@@ -293,19 +356,34 @@ export function parseHostedServerCheckout(value: unknown): HostedServerCheckout 
   return { server, checkoutUrl: value.checkoutUrl };
 }
 
-function parsePlanPrices(value: unknown): HostedServerCatalogPlan["prices"] | null {
-  if (!isDynamicRecord(value)) return null;
-  const prices: Partial<HostedServerCatalogPlan["prices"]> = {};
-  for (const currency of BILLING_CURRENCIES) {
-    const entry = value[currency];
-    if (!isDynamicRecord(entry) || !isBillingAmount(entry.month) || !isBillingAmount(entry.year)) return null;
-    prices[currency] = { month: entry.month, year: entry.year };
-  }
-  const { eur, usd, pln } = prices;
-  return eur && usd && pln ? { eur, usd, pln } : null;
+function parsePlanPrice(value: unknown): Record<BillingInterval, number> | null {
+  if (!isDynamicRecord(value) || !isBillingAmount(value.month) || !isBillingAmount(value.year)) return null;
+  return { month: value.month, year: value.year };
 }
 
-/** Returns null for a value that is not a plan catalog. A plan that this app cannot read is left out. */
+function parsePlanPrices(value: unknown): HostedServerPlanPrices | null {
+  if (!isDynamicRecord(value)) return null;
+  const eur = parsePlanPrice(value.eur);
+  const usd = parsePlanPrice(value.usd);
+  const pln = parsePlanPrice(value.pln);
+  if (!eur || !usd || !pln) return null;
+  const prices: HostedServerPlanPrices = { eur, usd, pln };
+  for (const currency of BILLING_OPTIONAL_CURRENCIES) {
+    const price = parsePlanPrice(value[currency]);
+    if (price) prices[currency] = price;
+  }
+  return prices;
+}
+
+export function catalogCurrencies(plans: readonly HostedServerCatalogPlan[]): BillingCurrency[] {
+  const optional = BILLING_OPTIONAL_CURRENCIES.filter(
+    (currency) => plans.length > 0 && plans.every((plan) => plan.prices[currency] !== undefined),
+  );
+  return BILLING_CURRENCIES.filter(
+    (currency) => isOneOf(BILLING_BASE_CURRENCIES, currency) || isOneOf(optional, currency),
+  );
+}
+
 export function parseHostedServerCatalog(value: unknown): HostedServerCatalog | null {
   if (!isDynamicRecord(value) || !Array.isArray(value.plans)) return null;
   const plans: HostedServerCatalogPlan[] = [];
@@ -321,18 +399,19 @@ export function parseHostedServerCatalog(value: unknown): HostedServerCatalog | 
     }
     const prices = parsePlanPrices(entry.prices);
     if (!prices) continue;
-    plans.push({
+    const plan: HostedServerCatalogPlan = {
       id: entry.id,
       diskGb: entry.diskGb,
       memberLimit: entry.memberLimit,
       relativeSpeed: entry.relativeSpeed,
       prices,
-    });
+    };
+    if (entry.soldOut === true) plan.soldOut = true;
+    plans.push(plan);
   }
   return { plans };
 }
 
-/** Returns null for a value that is not a valid delete request. */
 export function parseDeleteHostedServerInput(value: unknown): DeleteHostedServerInput | null {
   if (!isDynamicRecord(value) || !isString(value.serverId) || !isString(value.confirmName)) return null;
   if (!value.serverId || value.serverId.length > INPUT_LIMITS.identifier) return null;
@@ -340,19 +419,112 @@ export function parseDeleteHostedServerInput(value: unknown): DeleteHostedServer
   return { serverId: value.serverId, confirmName: value.confirmName };
 }
 
-/** A hosted server sends this to the account server, so that the account server stops and starts it at the right time. */
 export interface HostedServerActivityReport {
-  /** A client works with the server, or an agent works. */
   inUse: boolean;
-  /** The next routine run, in milliseconds since the epoch, or null for none. Undefined keeps the stored run. */
   nextRunAt?: number | null;
 }
 
-/** An empty body is from an older server, which reports only when it is in use. */
 export function parseHostedServerActivityReport(value: unknown): HostedServerActivityReport | null {
   if (value === null) return { inUse: true };
   if (!isDynamicRecord(value) || !isBoolean(value.inUse)) return null;
   if (value.nextRunAt === undefined) return { inUse: value.inUse };
   if (value.nextRunAt !== null && !(isNumber(value.nextRunAt) && Number.isSafeInteger(value.nextRunAt))) return null;
   return { inUse: value.inUse, nextRunAt: value.nextRunAt };
+}
+
+export interface HostedServerLifecycleInput {
+  serverId: string;
+  action: "cancel" | "keep" | "delete";
+  timing?: "period-end" | "now";
+  confirmName?: string;
+  expectedPeriodEnd?: number;
+}
+
+export function parseHostedServerLifecycleInput(value: unknown): HostedServerLifecycleInput | null {
+  if (
+    !isDynamicRecord(value) ||
+    !isString(value.serverId) ||
+    !value.serverId ||
+    value.serverId.length > INPUT_LIMITS.identifier ||
+    !isOneOf(["cancel", "keep", "delete"] as const, value.action)
+  )
+    return null;
+  if (
+    value.expectedPeriodEnd !== undefined &&
+    (!isNumber(value.expectedPeriodEnd) ||
+      !Number.isSafeInteger(value.expectedPeriodEnd) ||
+      value.expectedPeriodEnd <= 0)
+  )
+    return null;
+  if (value.action === "delete") {
+    if (
+      !isOneOf(["period-end", "now"] as const, value.timing) ||
+      !isString(value.confirmName) ||
+      value.confirmName.length > INPUT_LIMITS.serverName
+    )
+      return null;
+    return {
+      serverId: value.serverId,
+      action: value.action,
+      timing: value.timing,
+      confirmName: value.confirmName,
+      ...(value.expectedPeriodEnd === undefined ? {} : { expectedPeriodEnd: value.expectedPeriodEnd }),
+    };
+  }
+  return { serverId: value.serverId, action: value.action };
+}
+
+export interface ServerClaim {
+  claim: string;
+  expiresAt: number;
+}
+
+const SERVER_CLAIM_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+
+export function parseServerClaim(value: unknown): ServerClaim | null {
+  if (!isDynamicRecord(value) || !isString(value.claim) || !SERVER_CLAIM_PATTERN.test(value.claim)) return null;
+  if (!isNumber(value.expiresAt) || !Number.isFinite(value.expiresAt)) return null;
+  return { claim: value.claim, expiresAt: value.expiresAt };
+}
+
+export const INSTALL_SERVER_SCRIPT_URL =
+  "https://raw.githubusercontent.com/Shubhh2903/goahead/master/scripts/install-server.sh";
+
+function shellWord(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function installServerCommand(claim: string, name?: string): string {
+  const named = name === undefined ? "" : ` -- --name ${shellWord(name)}`;
+  return `{ echo OPENBOT_CLAIM=${claim}; curl -fsSL ${INSTALL_SERVER_SCRIPT_URL}; } | sudo bash -s${named}`;
+}
+
+const SERVER_INSTALL_ITEM_TYPE_PREFIX = "server-install:";
+const ITEM_TYPE_LIMIT = 128;
+
+export interface ServerInstallEvent {
+  expiresAt: number;
+  name: string | null;
+}
+
+export function serverInstallItemType(event: ServerInstallEvent): string {
+  if (!Number.isSafeInteger(event.expiresAt) || event.expiresAt < 0) throw new Error("A valid expiry is required.");
+  const base = `${SERVER_INSTALL_ITEM_TYPE_PREFIX}${event.expiresAt}:`;
+  const named = event.name === null ? base : `${base}${encodeURIComponent(event.name)}`;
+  return named.length <= ITEM_TYPE_LIMIT ? named : base;
+}
+
+export function serverInstallEvent(message: ConversationMessage): ServerInstallEvent | null {
+  if (message.author !== "system" || message.source !== "system" || message.status !== "completed") return null;
+  if (!message.itemType?.startsWith(SERVER_INSTALL_ITEM_TYPE_PREFIX)) return null;
+  const match = /^([0-9]{1,16}):(.*)$/su.exec(message.itemType.slice(SERVER_INSTALL_ITEM_TYPE_PREFIX.length));
+  if (!match?.[1] || match[2] === undefined) return null;
+  const expiresAt = Number(match[1]);
+  if (!Number.isSafeInteger(expiresAt)) return null;
+  if (!match[2]) return { expiresAt, name: null };
+  try {
+    return { expiresAt, name: parseHostedServerName(decodeURIComponent(match[2])) };
+  } catch {
+    return null;
+  }
 }

@@ -24,7 +24,6 @@ import {
   routineWeekdayText,
 } from "./routine-schedule-ui";
 
-// The draft model is shared with the phone; this module adds the desktop labels.
 export {
   isRoutineDraftKind,
   parseRoutineDateKey,
@@ -44,7 +43,6 @@ export {
   toggleRoutineDay,
 } from "@openbot/team-client/routine-schedule-draft";
 
-/** A frequency the menu offers. `label` is the key of its name. */
 export interface RoutineDraftKindOption {
   value: RoutineDraftKind;
   label: AppTextKey;
@@ -94,7 +92,6 @@ const NAMED_DAY_SET_LABEL = {
 export function routineDaySetLabel(days: number[], text: RoutineText = currentText()): string {
   const named = routineNamedDaySet(days);
   if (named) return text.t(NAMED_DAY_SET_LABEL[named]);
-  // Three or more days in a row read as a range, so six days stay short: "Mon–Sat".
   return routineDayRuns(days)
     .map((run) => {
       const first = run[0] ?? 0;
@@ -108,16 +105,11 @@ export function routineDaySetLabel(days: number[], text: RoutineText = currentTe
     .join(", ");
 }
 
-/** The days chip: the day set, or a count when the list is too long for one row. */
 export function routineDayChipLabel(days: number[], text: RoutineText = currentText()): string {
   const label = routineDaySetLabel(days, text);
   return label.length > 13 ? text.t("routine.days.count", { count: new Set(days).size }) : label;
 }
 
-/**
- * The days as runs of consecutive days, in week order. A run that crosses from Saturday to
- * Sunday joins into one range at the end when it is long enough: Friday to Monday is "Fri–Mon".
- */
 function routineDayRuns(days: number[]): number[][] {
   const runs: number[][] = [];
   for (const day of [...new Set(days)].sort((left, right) => left - right)) {
@@ -146,10 +138,6 @@ export function routineWeekdayInitial(day: number, text: RoutineText = currentTe
   return routineWeekdayText(day, "narrow", text);
 }
 
-/**
- * The hours chip: "All day", "All day at :30" for runs past the hour, "9 AM–6 PM", or
- * "10:30–11:30 AM" when both ends share a half of the day. The step is on the frequency chip.
- */
 export function routineHoursLabel(window: RoutineHoursWindow, minute = 0, text: RoutineText = currentText()): string {
   const { t } = text;
   if (!window) {
@@ -157,9 +145,15 @@ export function routineHoursLabel(window: RoutineHoursWindow, minute = 0, text: 
       ? t("routine.hours.allDayAt", { minute: String(minute).padStart(2, "0") })
       : t("routine.hours.allDay");
   }
+  if (!text.format.hour12) {
+    return t("routine.hours.window", {
+      start: formatRoutineClock(window.start, text),
+      end: formatRoutineClock(window.end, text),
+    });
+  }
   const start = splitClock(window.start);
   const end = splitClock(window.end);
-  if (start.meridiem === end.meridiem) {
+  if (start.meridiem === end.meridiem && window.end >= window.start) {
     return t("routine.hours.windowSameHalf", {
       start: shortClockDigits(start),
       end: shortClockDigits(end),
@@ -172,18 +166,16 @@ export function routineHoursLabel(window: RoutineHoursWindow, minute = 0, text: 
   });
 }
 
-/** The frequency chip of an hourly run: "Hourly", or "Every 2h" with a longer step. */
 export function routineHourlyLabel(everyHours: number, text: RoutineText = currentText()): string {
   return everyHours <= 1 ? text.t("routine.kind.hourly") : text.t("routine.hours.everyShort", { hours: everyHours });
 }
 
-/** "9" on the hour and "9:30" otherwise. */
 function shortClockDigits(parts: RoutineClockParts): string {
   return parts.minute === 0 ? String(parts.hour) : `${parts.hour}:${String(parts.minute).padStart(2, "0")}`;
 }
 
-/** "9 AM" on the hour and "9:30 AM" otherwise, for labels that must stay short. */
 export function formatRoutineClockShort(value: RoutineClock, text: RoutineText = currentText()): string {
+  if (!text.format.hour12) return formatRoutineClock(value, text);
   const parts = splitClock(value);
   return routineClockText(shortClockDigits(parts), parts.meridiem === "PM", text);
 }
@@ -193,17 +185,13 @@ export function routineRunsPerDayLabel(
   everyHours: number,
   text: RoutineText = currentText(),
 ): string {
-  const runs = routineRunsPerDay(window, everyHours);
-  if (runs === 0) return text.t("routine.hours.endBeforeStart");
-  return text.t("routine.hours.runsPerDay", { count: runs });
+  return text.t("routine.hours.runsPerDay", { count: routineRunsPerDay(window, everyHours) });
 }
 
-/** "Thu, Sep 24". */
 export function formatRoutineDate(value: string, text: RoutineText = currentText()): string {
   return text.format.date(parseRoutineDateKey(value), { weekday: "short", month: "short", day: "numeric" });
 }
 
-/** The date chip: "Sep 24", with the year only when it is not the current one. */
 export function routineDateChipLabel(value: string, today: Date, text: RoutineText = currentText()): string {
   const date = parseRoutineDateKey(value);
   return date.getFullYear() === today.getFullYear()
@@ -317,17 +305,21 @@ export function joinClock(parts: RoutineClockParts): RoutineClock {
   return `${String(hour24).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
-/**
- * Reads a typed hour. The box shows a 12-hour clock, but a person can type a 24-hour one: 18 is
- * 6 PM and 0 is 12 AM. Other values keep the half of the day that is set.
- */
+export function clockHour24(value: RoutineClock): number {
+  return Math.floor(routineTimeMinutes(value) / 60) % 24;
+}
+
+export function clockHourFrom24(hour24: number): Pick<RoutineClockParts, "hour" | "meridiem"> {
+  const hour = clamp(Math.trunc(hour24), 0, 23);
+  return { hour: hour % 12 || 12, meridiem: hour >= 12 ? "PM" : "AM" };
+}
+
 export function typedClockHour(typed: number, meridiem: RoutineMeridiem): Pick<RoutineClockParts, "hour" | "meridiem"> {
   if (typed === 0) return { hour: 12, meridiem: "AM" };
   if (typed > 12 && typed < 24) return { hour: typed - 12, meridiem: "PM" };
   return { hour: typed, meridiem };
 }
 
-/** Wraps a stepped value inside its range, so ArrowUp on 12 gives 1 and ArrowDown on 0 gives 59. */
 export function wrapClockValue(value: number, min: number, max: number): number {
   const span = max - min + 1;
   return ((((value - min) % span) + span) % span) + min;

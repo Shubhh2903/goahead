@@ -7,7 +7,6 @@ export const messages = {
   "plugin.link.terms": "Termos de serviço",
   "plugin.copyLink": "Copiar link",
   "plugin.askPrompt": "Pergunte a {name}: {prompt}",
-  "plugin.section.apps": "Aplicativos",
   "plugin.section.skills": "Habilidades",
   "plugin.section.information": "Informações",
   "plugin.info.developer": "Desenvolvedor",
@@ -20,7 +19,7 @@ export const messages = {
   "plugin.uninstallDialog.appsLabel": "Aplicativos para remover, {number}",
   "plugin.uninstallDialog.appsTitle": "Aplicativos removidos deste computador anfitrião",
   "plugin.uninstallDialog.appsNote":
-    "As ferramentas deixam de estar disponíveis e qualquer acesso à conta que o GoAhead mantinha para eles é esquecido.",
+    "As ferramentas deixam de estar disponíveis e qualquer login que o GoAhead guardava para eles é esquecido.",
   "plugin.uninstallDialog.skillsLabel": "Habilidades para remover, {number}",
   "plugin.uninstallDialog.skillsTitle": "Habilidades removidas de {agentName}",
 } as const satisfies PartialTranslation<typeof source>;

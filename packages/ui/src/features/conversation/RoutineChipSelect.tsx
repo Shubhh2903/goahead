@@ -7,18 +7,13 @@ interface RoutineChipSelectProps {
   value: string;
   options: RoutineSelectOption[];
   onChange: (value: string) => void;
-  disabled?: boolean;
-  /** Shown in place of the selected option's label, when the chip says more than the menu. */
-  valueLabel?: string;
-  /** A value chip that can cut its label short when the row is too narrow. */
+  disabled?: boolean | undefined;
+  valueLabel?: string | undefined;
   flexible?: boolean;
-  /** The element that holds the list. A select inside a modal popover opens in it, or the popover hides the list. */
-  mount?: HTMLElement;
-  /** A pick is complete: the menu closed, or a key chose a value while the menu was closed. */
+  mount?: HTMLElement | undefined;
   onClose?: () => void;
 }
 
-/** A `Select` dressed as a chip. The chip has no icon: its fill shows that it opens a menu. */
 export function RoutineChipSelect(props: RoutineChipSelectProps) {
   const { t } = useText();
   const selected = () => props.options.find((option) => option.value === props.value) ?? null;
@@ -30,7 +25,7 @@ export function RoutineChipSelect(props: RoutineChipSelectProps) {
       value={selected()}
       optionValue="value"
       optionTextValue="label"
-      disabled={props.disabled}
+      disabled={props.disabled ?? false}
       sameWidth={false}
       placement="bottom-start"
       gutter={6}
@@ -40,13 +35,12 @@ export function RoutineChipSelect(props: RoutineChipSelectProps) {
           props.onClose?.();
           return;
         }
-        // A long list, like the 31 days of a month, opens on the day already chosen.
         window.requestAnimationFrame(() =>
           document.querySelector(".routine-chip-select-content [data-selected]")?.scrollIntoView({ block: "center" }),
         );
       }}
       onChange={(option) => {
-        if (!option) return;
+        if (!option || option.value === props.value) return;
         props.onChange(option.value);
         if (!open) props.onClose?.();
       }}

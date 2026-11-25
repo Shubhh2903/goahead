@@ -8,9 +8,9 @@
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
   AgentModelId,
-  AgentModelOption,
   AgentProviderId,
   AgentStatus,
+  ClientAgentModelOption,
   CustomAgentSummary,
   CustomProviderSummary,
 } from "@openbot/contracts/ipc";
@@ -26,7 +26,7 @@ export type DiagramNewAgentDraft = Pick<FirstAgentDraft, "name" | "purpose" | "a
 
 /** What the model picker of a new agent offers, and the model it starts on. */
 export interface DiagramModelChoice {
-  options: AgentModelOption[];
+  options: ClientAgentModelOption[];
   status: AgentStatus;
   initial: { provider: AgentProviderId; model: AgentModelId };
   customProviders?: readonly CustomProviderSummary[] | undefined;

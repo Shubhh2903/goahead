@@ -1,0 +1,59 @@
+import type { PartialTranslation } from "../../../message";
+import type { messages as source } from "../../en/status/messaging";
+
+export const messages = {
+  "status.messaging.working": "正在处理…",
+  "status.messaging.queued": "等待中：之前的请求尚未完成，回答会发到这里。",
+  "status.messaging.busy": "等待中的请求太多，请稍后再试。",
+  "status.messaging.failed": "GoAhead 未能完成该请求，详情请见 GoAhead 主机。",
+  "status.messaging.noAnswer": "GoAhead 已完成，但没有书面回答。",
+  "status.messaging.noAgent": "这里还没有助手能回答。请在 GoAhead 中添加 Slack 调度助手。",
+  "status.messaging.delegated": "团队成员正在处理，回答会发到这里。",
+  "status.messaging.stopped": "已停止。",
+  "status.messaging.stop": "停止",
+  "status.messaging.approvalTitle": "GoAhead 请求批准以继续。",
+  "status.messaging.approvalTitleTeammate": "团队成员 {agent} 请求批准以继续。",
+  "status.messaging.approvalCommand": "运行命令",
+  "status.messaging.approvalFileChange": "修改文件",
+  "status.messaging.approvalPermissions": "获取更多权限",
+  "status.messaging.approve": "批准",
+  "status.messaging.deny": "拒绝",
+  "status.messaging.approvedBy": "已由 {user} 批准。",
+  "status.messaging.deniedBy": "已由 {user} 拒绝。",
+  "status.messaging.answeredOnHost": "已在 GoAhead 主机上回答。",
+  "status.messaging.requestInactive": "该请求已失效。",
+  "status.messaging.onlyRequester": "只有 {user} 可以操作，GoAhead 主机也可以回答。",
+  "status.messaging.hostOnly": "只有 GoAhead 主机可以回答该请求。",
+  "status.messaging.filesSkipped": "部分文件未发送：{names}。",
+  "status.messaging.orchestratorName": "Slack 调度助手",
+  "status.messaging.orchestratorTitle": "在 Slack 中回答并调度团队",
+  "status.messaging.discordNoAgent": "这里还没有助手能回答。请在 GoAhead 中添加 Discord 调度助手。",
+  "status.messaging.discordOrchestratorName": "Discord 调度助手",
+  "status.messaging.discordOrchestratorTitle": "在 Discord 中回答并调度团队",
+  "status.messaging.integrationsSection": "集成",
+  "status.messaging.signInReceived": "GoAhead 已收到 Slack 安装请求，你可以关闭该标签页。",
+  "status.messaging.signInUnknown": "该 Slack 安装不是由 GoAhead 发起的，请在 GoAhead 中重新开始。",
+  "status.messaging.telegramNoAgent":
+    "这里还没有助手能回答。请在 GoAhead 中打开 市场 > 应用 > Telegram，然后点击 添加助手。",
+  "status.messaging.telegramLinked": "GoAhead 已连接到该聊天。提及 {bot} 或回复 GoAhead 的消息即可向助手提问。",
+  "status.messaging.telegramNotLinked":
+    "GoAhead 未连接到该聊天。要连接，请打开 GoAhead 应用，前往 市场 → 应用 → Telegram，然后选择“加入群组”或“开启私聊”。",
+  "status.messaging.telegramOrchestratorName": "Telegram 调度助手",
+  "status.messaging.telegramOrchestratorTitle": "在 Telegram 中回答并调度团队",
+  "status.messaging.whatsappNoAgent": "这里还没有助手能回答。请在 GoAhead 中添加 WhatsApp 调度助手。",
+  "status.messaging.whatsappApprovalMenu": "回复 1 批准，回复 2 拒绝。",
+  "status.messaging.whatsappStopMenu": "回复“stop”即可停止。",
+  "status.messaging.whatsappPairingCode": "该号码只回答其所有者允许的人。请把这个代码交给所有者：{code}",
+  "status.messaging.whatsappPairingApproved": "你现在可以向该号码发送请求了。",
+  "status.messaging.whatsappOwnChat": "给自己发消息",
+  "status.messaging.whatsappWelcomeOwn":
+    "👋 *GoAhead 已连接*\n\n在这里写下内容即可向你的智能体提问。WhatsApp Orchestrator 会直接回答，或把工作交给合适的智能体。\n\n发送 *stop* 可停止请求。",
+  "status.messaging.whatsappWelcomeDedicated":
+    "👋 *GoAhead 已连接*\n\n你在 GoAhead 中允许的人现在可以给这个号码发消息。新的联系人会收到一个代码：请在 GoAhead 的“请求”中批准。\n\n发送 *stop* 可停止请求。",
+  "status.messaging.whatsappOtherOpenBot":
+    "此 WhatsApp 号码还关联了另一个 GoAhead，所以你可能会收到两条回复。要解决此问题，请在手机上的 WhatsApp 中打开“已关联设备”，然后退出你不用的 GoAhead。",
+  "status.messaging.whatsappPaused":
+    "短时间内收到的消息太多，GoAhead 已在此暂停回复 10 分钟。如果此号码还关联了另一个 GoAhead，请在手机上的 WhatsApp 中打开“已关联设备”，然后退出你不用的 GoAhead。",
+  "status.messaging.whatsappOrchestratorName": "WhatsApp 调度助手",
+  "status.messaging.whatsappOrchestratorTitle": "在 WhatsApp 中回答并调度团队",
+} as const satisfies PartialTranslation<typeof source>;

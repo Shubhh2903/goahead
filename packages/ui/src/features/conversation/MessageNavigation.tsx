@@ -1,10 +1,11 @@
 import type { AppTranslate } from "@openbot/i18n";
-import { Button, X } from "@openbot/ui";
+import { Button, CornerDownLeft, X } from "@openbot/ui";
 import { Show } from "solid-js";
 import { useText } from "../../text";
+import { prefersReducedMotion } from "../../utils";
 
 export function preferredMessageScrollBehavior(): ScrollBehavior {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  return prefersReducedMotion() ? "auto" : "smooth";
 }
 
 export function scrollToLatestMessage(scrollElement: HTMLElement): void {
@@ -18,18 +19,6 @@ export function newMessagesLabel(count: number, t: AppTranslate): string {
   return t("chat.newMessages.count", { count });
 }
 
-/**
- * The way back to the newest message, and how much of it the reader has not seen.
- *
- * With a count the round arrow becomes a labelled pill, and the dismiss button drops the count
- * without moving the view. The two buttons are siblings inside the pill, not one inside the other:
- * a button in a button is invalid, and a dismiss click would also read as a jump.
- *
- * `aria-live="off"` is deliberate. The channel transcript is a polite live region and the direct
- * transcript is a log, so every step of the count would be read out from inside them, over the
- * unread banner that already announces the same news. The count still reaches a screen reader
- * through the name of the jump button.
- */
 export function ScrollToLatestButton(props: { onClick: () => void; newMessageCount?: number; onDismiss?: () => void }) {
   const { t } = useText();
   const count = () => props.newMessageCount ?? 0;
@@ -63,6 +52,34 @@ export function ScrollToLatestButton(props: { onClick: () => void; newMessageCou
           <X aria-hidden="true" />
         </Button>
       </Show>
+    </div>
+  );
+}
+
+export function ReplyReturnButton(props: { onBack: () => void; onStay: () => void }) {
+  const { t } = useText();
+  return (
+    <div class="scroll-to-latest" data-reply-return="true" aria-live="off">
+      <Button
+        variant="ghost"
+        type="button"
+        class="scroll-to-latest-button"
+        data-cuelume-tap="navigate"
+        onClick={props.onBack}
+      >
+        <CornerDownLeft class="scroll-to-latest-reply-icon" aria-hidden="true" />
+        <span class="scroll-to-latest-count">{t("chat.reply.back")}</span>
+      </Button>
+      <Button
+        variant="ghost"
+        type="button"
+        class="scroll-to-latest-dismiss"
+        aria-label={t("chat.reply.stay")}
+        data-cuelume-tap="close"
+        onClick={props.onStay}
+      >
+        <X aria-hidden="true" />
+      </Button>
     </div>
   );
 }

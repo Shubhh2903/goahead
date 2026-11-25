@@ -1,61 +1,150 @@
-import { Button, Folder, Lock, Upload } from "@openbot/ui";
+import { Badge, Button, Clock3, Lock } from "@openbot/ui";
 import { ProviderModelPicker } from "@openbot/ui/components/ProviderModelPicker";
 import type { AgentProfile } from "@openbot/ui/data";
 import { AgentAvatar } from "@openbot/ui/features/agents/AgentAvatar";
 import { agentAccessLockLabel } from "@openbot/ui/features/agents/agent-access";
-import { ComputerIcon, RemoteDesktopIcon } from "@openbot/ui/features/conversation/ConversationIcons";
+import { RemoteDesktopIcon } from "@openbot/ui/features/conversation/ConversationIcons";
+import { PinnedMessages, type PinnedMessagesProps } from "@openbot/ui/features/conversation/PinnedMessages";
+import { SidePanelToggle, type SidePanelToggleProps } from "@openbot/ui/features/conversation/SidePanel";
+import { TabShape } from "@openbot/ui/features/conversation/TabShape";
 import { useText } from "@openbot/ui/text";
-import type { ComponentProps } from "@solidjs/web";
-import { Show } from "solid-js";
+import type { ComponentProps, JSX } from "@solidjs/web";
+import { createEffect, onSettled, Show } from "solid-js";
+import { modelPickerFit } from "./model-picker-fit";
 
 export interface ConversationHeaderProps {
   agent: AgentProfile | null | undefined;
+  title?: JSX.Element | undefined;
   modelPicker: ComponentProps<typeof ProviderModelPicker>;
+  pendingModel?: ConversationHeaderPendingModel | undefined;
   onSettingsIntent: () => void;
   onOpenSettings: () => void;
-  remoteControl?: {
-    enabled: boolean;
-    active: boolean;
-    visible: boolean;
-    onOpen: (trigger: HTMLButtonElement) => void;
+  onOpenChat?: (() => void) | undefined;
+  remoteControl?: ConversationHeaderRemoteControl | undefined;
+  pinnedMessages?: PinnedMessagesProps | undefined;
+  sidePanel?: SidePanelToggleProps | undefined;
+  threads?: JSX.Element | undefined;
+  titleSelected?: boolean | undefined;
+}
+
+export interface ConversationHeaderPendingModel {
+  running: string;
+  next: string;
+}
+
+export interface ConversationHeaderRemoteControl {
+  enabled: boolean;
+  active: boolean;
+  visible: boolean;
+  onOpen: (trigger: HTMLButtonElement) => void;
+}
+
+const AGENT_TITLE_MIN_EM = 4;
+
+function AgentTitle(props: { title: string }) {
+  let room: HTMLSpanElement | undefined;
+  let title: HTMLSpanElement | undefined;
+  let schedule: (() => void) | undefined;
+  createEffect(
+    () => props.title,
+    () => schedule?.(),
+  );
+  onSettled(() => {
+    const header = room?.closest(".conversation-header");
+    if (!room || !header) return;
+    let frame = 0;
+    schedule = () => {
+      if (frame === 0)
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          measure();
+        });
+    };
+    const observer = new ResizeObserver(schedule);
+    const measure = () => {
+      if (!room) return;
+      for (const part of header.querySelectorAll(
+        ".conversation-title, .conversation-heading-group, .conversation-header-actions, .agent-threads-header",
+      )) {
+        observer.observe(part);
+      }
+      room.removeAttribute("data-hidden");
+      const style = getComputedStyle(room);
+      if (style.display === "none") return;
+      const minimum = AGENT_TITLE_MIN_EM * (Number.parseFloat(style.fontSize) || 12);
+      const cut = title ? title.scrollWidth > title.clientWidth : false;
+      room.toggleAttribute("data-hidden", cut && room.getBoundingClientRect().width < minimum);
+    };
+    observer.observe(room);
+    observer.observe(header);
+    measure();
+    return () => {
+      schedule = undefined;
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  });
+  return (
+    <span ref={room} class="conversation-agent-title-room">
+      <span ref={title} class="conversation-agent-title" dir="auto">
+        {props.title}
+      </span>
+    </span>
+  );
+}
+
+function fitHeaderPicker(header: HTMLElement) {
+  const parts = () =>
+    header.querySelectorAll<HTMLElement>(
+      ":scope > .conversation-heading-group, :scope > .conversation-header-actions, :scope > .conversation-header-actions > *",
+    );
+  const overflows = () => [...parts()].some((part) => part.scrollWidth - part.clientWidth > 1);
+  const picker = modelPickerFit(header, overflows, () => measure());
+  const measure = () => {
+    for (const part of parts()) observer.observe(part);
+    const row = header.querySelector(":scope > .conversation-heading-group > .agent-threads-header");
+    if (row) observer.observe(row);
+    if (header.querySelector('.agent-threads-tabs, .agent-threads-header:not([data-mode="tabs"])')) return;
+    if (header.querySelector(".provider-model-trigger")) picker.fit();
+    else delete header.dataset.modelFit;
   };
-  /** The Files panel of this chat. Left out when the host cannot list them. */
-  files?: {
-    open: boolean;
-    onToggle: () => void;
-  };
-  /** Publishes this agent as a shared template. Left out for an agent this computer does not host. */
-  publish?: {
-    onOpen: () => void;
-  };
-  browser?: {
-    acting: boolean;
-    agentName?: string;
-    open: boolean;
-    disabled?: boolean;
-    onToggle: () => void;
+  const observer = new ResizeObserver(measure);
+  observer.observe(header);
+  measure();
+  return () => {
+    observer.disconnect();
+    picker.stop();
   };
 }
 
 export function ConversationHeader(props: ConversationHeaderProps) {
   const { t } = useText();
+  const titleTab = () => (props.titleSelected === undefined ? undefined : "");
+  const titleSelected = () => (props.titleSelected ? "" : undefined);
+  let header: HTMLElement | undefined;
+  onSettled(() => (header ? fitHeaderPicker(header) : undefined));
   return (
-    <header class="window-drag conversation-header">
+    <header ref={header} class="window-drag conversation-header">
       <div class="conversation-heading-group">
-        <Show when={props.agent}>
+        <Show when={props.agent} fallback={props.title}>
           {(agent) => (
             <Button
               variant="ghost"
               size="sm"
               type="button"
               class="conversation-title no-drag"
-              aria-label={t("conversation.header.settings")}
-              onPointerEnter={props.onSettingsIntent}
-              onFocus={props.onSettingsIntent}
-              onClick={props.onOpenSettings}
+              data-tab={titleTab()}
+              data-selected={titleSelected()}
+              aria-label={props.onOpenChat ? t("conversation.header.mainChat") : t("conversation.header.settings")}
+              onPointerEnter={() => props.onOpenChat || props.onSettingsIntent()}
+              onFocus={() => props.onOpenChat || props.onSettingsIntent()}
+              onClick={() => (props.onOpenChat ?? props.onOpenSettings)()}
             >
               <AgentAvatar agent={agent()} />
-              <h1>{agent().name}</h1>
+              <h1 class="conversation-agent-heading" dir="auto">
+                <span class="conversation-agent-name">{agent().name}</span>
+                <Show when={agent().title.trim()}>{(title) => <AgentTitle title={title()} />}</Show>
+              </h1>
             </Button>
           )}
         </Show>
@@ -66,8 +155,21 @@ export function ConversationHeader(props: ConversationHeaderProps) {
             </span>
           )}
         </Show>
+        {props.threads}
       </div>
       <div class="conversation-header-actions no-drag">
+        <Show when={props.agent && props.pendingModel}>
+          {(change) => {
+            const detail = () => t("conversation.header.modelNextTurnDetail", change());
+            return (
+              <Badge variant="info-light" class="conversation-model-pending" role="status" title={detail()}>
+                <Clock3 aria-hidden="true" />
+                {t("conversation.header.modelNextTurn")}
+                <span class="sr-only">{detail()}</span>
+              </Badge>
+            );
+          }}
+        </Show>
         <Show when={props.agent}>
           <ProviderModelPicker {...props.modelPicker} />
         </Show>
@@ -90,63 +192,16 @@ export function ConversationHeader(props: ConversationHeaderProps) {
             </Button>
           )}
         </Show>
-        <Show when={props.files}>
-          {(files) => (
-            <Button
-              variant="ghost"
-              type="button"
-              class="header-panel-toggle"
-              aria-label={t(files().open ? "conversation.header.hideFiles" : "conversation.header.showFiles")}
-              aria-expanded={files().open ? "true" : "false"}
-              onClick={() => files().onToggle()}
-              data-cuelume-tap={files().open ? "close" : "open"}
-            >
-              <Folder aria-hidden="true" class="size-[14px]" />
-            </Button>
-          )}
-        </Show>
-        <Show when={props.publish}>
-          {(publish) => (
-            <Button
-              variant="ghost"
-              type="button"
-              class="header-panel-toggle"
-              aria-label={t("conversation.header.publish")}
-              aria-haspopup="dialog"
-              onClick={() => publish().onOpen()}
-              data-cuelume-tap="open"
-            >
-              <Upload aria-hidden="true" class="size-[14px]" />
-            </Button>
-          )}
-        </Show>
-        <Show when={props.browser}>
-          <Button
-            variant="ghost"
-            type="button"
-            class={[
-              "header-panel-toggle computer-button",
-              { "computer-button-agent-active": props.browser?.acting === true },
-            ]}
-            aria-label={
-              props.browser?.acting
-                ? t("conversation.header.browserActing", {
-                    name: props.browser?.agentName ?? t("conversation.header.agentFallback"),
-                  })
-                : t(props.browser?.open ? "conversation.header.hideComputer" : "conversation.header.openComputer")
-            }
-            aria-expanded={props.browser?.open ? "true" : "false"}
-            disabled={props.browser?.disabled}
-            onClick={() => props.browser?.onToggle()}
-            data-cuelume-tap={props.browser?.open ? "close" : "open"}
-          >
-            <ComputerIcon />
-            <Show when={props.browser?.acting}>
-              <span class="computer-control-dot" aria-hidden="true" />
-            </Show>
-          </Button>
-        </Show>
+        <Show when={props.pinnedMessages}>{(pins) => <PinnedMessages {...pins()} />}</Show>
+        <Show when={props.sidePanel}>{(sidePanel) => <SidePanelToggle {...sidePanel()} />}</Show>
       </div>
+      <Show when={props.agent && titleTab() !== undefined}>
+        <TabShape
+          selected='.conversation-title[data-tab][data-selected], .agent-threads-tab[aria-selected="true"], .agent-threads-switcher'
+          sized=".conversation-title, .agent-threads-tabs, .agent-threads-tab, .agent-threads-switcher"
+          scroller=".agent-threads-tabs"
+        />
+      </Show>
     </header>
   );
 }

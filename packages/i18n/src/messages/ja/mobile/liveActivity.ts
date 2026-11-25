@@ -7,7 +7,7 @@ export const messages = {
   "mobile.liveActivity.badge.message": "メッセージ",
   "mobile.liveActivity.badge.question": "質問",
   "mobile.liveActivity.badge.approval": "承認",
-  "mobile.liveActivity.badge.takeover": "操作を代わる",
+  "mobile.liveActivity.badge.takeover": "引き継ぐ",
   "mobile.liveActivity.badge.failed": "失敗",
   "mobile.liveActivity.unread": { other: "未読 {count} 件" },
   "mobile.liveActivity.moreRequests": { other: "ほか {count} 件のリクエスト" },

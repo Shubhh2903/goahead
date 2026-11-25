@@ -1,0 +1,26 @@
+import type { PartialTranslation } from "../../message";
+import type { messages as source } from "../en/dialog";
+
+export const messages = {
+  "dialog.chooseSiteDirectory": "Выберите папку статического сайта",
+  "dialog.chooseAgentFolder": "Выберите папку для агента {agent}",
+  "dialog.chooseChannelFolder": "Выберите папку для канала {channel}",
+  "dialog.chooseAgentExclusion": "Выберите папку, которую {agent} не должен изменять",
+  "dialog.chooseSkill": "Выберите папку навыка или ZIP",
+  "dialog.filter.skillPackages": "Пакеты навыков",
+  "dialog.filter.images": "Изображения",
+  "dialog.filter.supportedFiles": "Поддерживаемые файлы",
+  "dialog.filter.attachment": "Вложение",
+  "dialog.filter.zipArchive": "Архив ZIP",
+  "dialog.filter.jsonDocument": "Документ JSON",
+  "dialog.chooseAgentExport": "Выберите экспорт агента",
+  "dialog.filter.agentExports": "Экспорты агентов",
+  "dialog.saveExportSkill": "Сохранить навык экспорта",
+  "dialog.saveTransfer": "Сохранение файла переноса",
+  "dialog.chooseTransfer": "Выбор файла переноса",
+  "dialog.filter.transfer": "Файлы переноса GoAhead",
+  "dialog.saveWorkflow": "Сохранить файл рабочего процесса",
+  "dialog.filter.workflow": "Файлы рабочих процессов GoAhead",
+  "dialog.chooseExternalLinkApp": "Выберите браузер",
+  "dialog.filter.applications": "Приложения",
+} as const satisfies PartialTranslation<typeof source>;

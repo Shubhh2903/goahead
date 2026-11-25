@@ -7,6 +7,8 @@ export const messages = {
   "error.remote.desktopTestUnavailable": "O teste de área de trabalho remota está indisponível.",
   "error.remote.controlUnavailable": "O controle remoto está indisponível.",
   "error.remote.controlSessionNotFound": "Sessão de controle remoto não encontrada.",
+  "error.remote.controlNotAllowed": "O proprietário deste computador não permite que sua função o controle.",
+  "error.remote.controlDeclined": "A pessoa neste computador não permitiu o controle remoto.",
   "error.remote.testRuntimeUpdate":
     "Atualize o ambiente de execução da área de trabalho remota do macOS para executar este teste.",
   "error.remote.testOtherSessions": "Encerre as outras sessões de área de trabalho remota antes de iniciar um teste.",
@@ -22,6 +24,18 @@ export const messages = {
   "error.remote.testActive": "Um teste de área de trabalho remota está ativo. Tente novamente quando terminar.",
   "error.remote.screenRecordingDenied":
     "O computador anfitrião não permitiu que o GoAhead grave a tela. Conceda a permissão de gravação de tela no computador anfitrião e tente novamente.",
+  "error.remote.windowsSessionDisconnected":
+    "A sessão do Windows no computador anfitrião está desconectada, então não há tela para compartilhar. Entre no Windows na tela do computador anfitrião e tente novamente.",
+  "error.remote.windowsCaptureDenied":
+    "O Windows no computador anfitrião não permite que o GoAhead grave a tela. Desbloqueie o Windows na tela do computador anfitrião, feche qualquer aviso de administrador e tente novamente. Se o problema continuar, reinicie o computador anfitrião.",
+  "error.remote.macScreenLocked":
+    "O Mac está bloqueado, então não pode compartilhar a tela. Desbloqueie o Mac na tela dele e tente novamente.",
+  "error.remote.streamTooSlowLowerQuality":
+    "A conexão com o computador anfitrião está lenta demais para a imagem. Tente novamente: a próxima conexão usará uma qualidade mais baixa.",
+  "error.remote.streamTooSlow":
+    "A conexão com o computador anfitrião está lenta demais para a imagem. Use uma rede mais rápida e tente novamente.",
+  "error.remote.noPictureSwitchEncoder":
+    "O computador anfitrião não enviou nenhuma imagem. Tente novamente: a próxima conexão usa uma configuração de vídeo que funciona em mais computadores.",
   "error.remote.teamSessionExpired": "A sessão da equipe expirou.",
   "error.remote.finishTestBeforeSwitch": "Conclua o teste de área de trabalho remota antes de trocar de tela.",
   "error.remote.displayNotFound": "Tela remota não encontrada.",
@@ -30,13 +44,13 @@ export const messages = {
   "error.remote.localTestNotFound": "Sessão de teste local não encontrada.",
   "error.remote.runtimeUnavailable": "O ambiente de execução da área de trabalho remota não está disponível.",
   "error.remote.sunshineStartFailed":
-    "O Sunshine não iniciou no host. Verifique os logs da área de trabalho remota no host e tente de novo.",
+    "O Sunshine não iniciou no computador anfitrião. Verifique os logs da área de trabalho remota no computador anfitrião e tente novamente.",
   "error.remote.moonlightStartFailed":
-    "O Moonlight Web não iniciou no host. Verifique os logs da área de trabalho remota no host e tente de novo.",
+    "O Moonlight Web não iniciou no computador anfitrião. Verifique os logs da área de trabalho remota no computador anfitrião e tente novamente.",
   "error.remote.pairingFailed":
-    "O Moonlight não conseguiu parear com o Sunshine no host. Tente de novo. Se o problema continuar, reinicie o GoAhead no host.",
+    "O Moonlight não conseguiu parear com o Sunshine no computador anfitrião. Tente novamente. Se o problema continuar, reinicie o GoAhead no computador anfitrião.",
   "error.remote.runtimeStartFailed":
-    "O ambiente de execução da área de trabalho remota não iniciou no host. Verifique os logs da área de trabalho remota no host e tente de novo.",
+    "O ambiente de execução da área de trabalho remota não iniciou no computador anfitrião. Verifique os logs da área de trabalho remota no computador anfitrião e tente novamente.",
   "error.remote.hostUnreachable": "Não é possível acessar o computador anfitrião.",
   "error.remote.signInToHostAgain": "Entre neste computador anfitrião novamente.",
   "error.remote.invalidData": "O computador anfitrião retornou dados inválidos.",
@@ -79,12 +93,19 @@ export const messages = {
   "error.remote.bridgeCommandFailed": "O comando do Team WebRTC falhou.",
   "error.remote.webRtcFailed": "O WebRTC falhou.",
   "error.remote.ownerCannotLeave": "O proprietário não pode sair deste computador anfitrião.",
+  "error.remote.ownerOnlyRemove": "Somente o proprietário pode remover este servidor.",
   "error.remote.requestTimeout": "O tempo da solicitação remota esgotou.",
   "error.remote.requestFailed": "A solicitação remota falhou.",
-  "error.remote.pinnedKeyMissing": "O computador anfitrião remoto não tem uma chave de dispositivo fixada.",
-  "error.remote.hostDidNotConnect": "O computador anfitrião WebRTC não se conectou.",
+  "error.remote.hostKeyMissing":
+    "O GoAhead não pode verificar este servidor porque a chave de segurança dele está ausente ou mudou. Peça ao proprietário do servidor para verificá-lo.",
+  "error.remote.connectionNotStarted":
+    "O GoAhead não conseguiu iniciar a conexão com este servidor. Se isso continuar, feche o GoAhead e abra-o novamente.",
+  "error.remote.connectionServiceUnreachable":
+    "Este computador não consegue acessar o serviço de conexão do GoAhead. Verifique a conexão com a internet. O GoAhead se reconecta automaticamente.",
+  "error.remote.serverAnswerTimeout": "O servidor não respondeu a tempo. O GoAhead se reconecta automaticamente.",
   "error.remote.connectionCancelled": "A conexão remota foi cancelada.",
-  "error.remote.hostDisconnected": "O computador anfitrião WebRTC se desconectou.",
+  "error.remote.hostDisconnected":
+    "A conexão com o servidor foi perdida. Verifique se a ação foi concluída e tente novamente.",
   "error.remote.eventGap": "Há uma lacuna na sequência de eventos do computador anfitrião.",
   "error.remote.malformedKnownEvent": "O computador anfitrião retornou um evento conhecido malformado.",
   "error.remote.fileTransportIsStopped": "O transporte de arquivos WebRTC está parado.",
@@ -94,8 +115,11 @@ export const messages = {
   "error.remote.fileTransferFailed": "A transferência de arquivos WebRTC falhou.",
   "error.remote.fileResumeFailed": "A transferência de arquivos WebRTC não conseguiu retomar dentro do prazo.",
   "error.remote.fileTransportStopped": "O transporte de arquivos WebRTC parou.",
+  "error.remote.downloadStopped": "O download foi interrompido.",
   "error.remote.fileResumeExpired": "O prazo para retomar a transferência de arquivos WebRTC expirou.",
   "error.remote.hostRequestFailed": "O computador anfitrião não conseguiu concluir a solicitação.",
+  "error.remote.responseTooLarge":
+    "A resposta do computador anfitrião é grande demais para ser enviada a este dispositivo.",
   "error.remote.sessionNotReady": "A sessão remota não está pronta.",
   "error.remote.peerDisconnected": "O par WebRTC se desconectou.",
   "error.remote.tooManyStreams": "Há fluxos demais abertos no computador anfitrião.",
@@ -103,17 +127,16 @@ export const messages = {
   "error.remote.signalRecoveryFailed": "A recuperação do Remote Signal falhou.",
   "error.remote.signalTimeout": "O tempo da conexão com o Remote Signal esgotou.",
   "error.remote.serverConnectionReplaced": "A conexão com o servidor foi substituída.",
-  "error.remote.selectedServerOffline": "O servidor selecionado está desconectado.",
-  "error.remote.hostConnectionOffline": "A conexão com o computador anfitrião está inativa.",
+  "error.remote.selectedServerOffline": "O servidor selecionado está offline.",
+  "error.remote.hostConnectionOffline": "A conexão com o computador anfitrião está offline.",
   "error.remote.appInBackground": "O aplicativo está em segundo plano.",
   "error.remote.desktopRestoreNeeded": "A conexão com o computador precisa ser restaurada.",
-  "error.remote.desktopOffline": "O computador ficou desconectado.",
+  "error.remote.desktopOffline": "O computador ficou offline.",
   "error.remote.operationFailed": "A operação remota falhou.",
   "error.remote.connectionReplaced": "A conexão foi substituída.",
   "error.remote.desktopDidNotConnect": "O computador não se conectou.",
-  "error.remote.desktopRestarted": "O computador reiniciou. Reconectando com uma nova sessão autenticada.",
+  "error.remote.connectionDropped": "O servidor não tem mais esta conexão. Conectando novamente.",
   "error.remote.dataBeforeAuth": "O computador anfitrião enviou dados antes da autenticação.",
-  "error.remote.attachmentDownloadFailed": "O download do anexo falhou.",
   "error.remote.eventStreamGap": "Há uma lacuna no fluxo de eventos do computador anfitrião.",
   "error.remote.malformedEvent": "O computador anfitrião retornou um evento malformado.",
   "error.remote.desktopIdentityNotVerified": "Não foi possível verificar a identidade do computador.",
@@ -122,13 +145,11 @@ export const messages = {
   "error.remote.requestNotSent": "Não foi possível enviar a solicitação.",
   "error.remote.channelNotOpen": "O canal WebRTC não está aberto.",
   "error.remote.channelBackpressure": "O canal WebRTC permaneceu com dados pendentes acima da capacidade de envio.",
-  "error.remote.signalOffline": "O Signal está desconectado.",
+  "error.remote.signalOffline": "O Signal está offline.",
   "error.remote.webRtcConnectionFailed": "A conexão WebRTC falhou.",
   "error.remote.serverDisconnected": "O servidor se desconectou.",
   "error.remote.preferencesUnreadable": "Não foi possível ler as preferências salvas do chat.",
   "error.remote.accountAuthRequired": "É necessário autenticar a conta.",
-  "error.remote.serverIdentityChanged":
-    "A identidade do servidor mudou. A chave confiável do computador anfitrião não será substituída.",
   "error.remote.pairedIdentityChanged":
     "A identidade do computador pareado está ausente ou mudou. Leia um novo código desse computador.",
   "error.remote.permanentInviteNoEmail": "Convites permanentes não podem ser enviados por e-mail.",
@@ -152,13 +173,14 @@ export const messages = {
   "error.remote.attachmentRejected": "O computador anfitrião rejeitou o anexo.",
   "error.remote.attachmentTooLarge": "Os anexos devem ter no máximo 10 MB.",
   "error.remote.attachmentBusy": "Aguarde o anexo atual terminar.",
+  "error.remote.attachmentChanged": "O arquivo mudou ou não está disponível. Selecione-o novamente.",
   "error.remote.uploadTimeout": "O tempo para enviar o anexo esgotou.",
   "error.remote.hostSessionActive": "O computador anfitrião já tem uma sessão remota ativa.",
   "error.remote.tooManyConnections": "Há conexões remotas ativas demais.",
   "error.remote.serverRequestFailed": "A solicitação ao servidor falhou.",
   "error.remote.sessionNotActive": "A sessão remota não está ativa.",
   "error.remote.accountSessionEnded": "A sessão da conta terminou.",
-  "error.remote.hostOffline": "O computador anfitrião está desconectado.",
+  "error.remote.hostOffline": "O computador anfitrião está offline.",
   "error.remote.sessionEnded": "A sessão remota terminou.",
   "error.remote.ticketInvalidOrExpired": "O tíquete remoto é inválido ou expirou.",
   "error.remote.signalInvalidMessage": "O Signal retornou uma mensagem inválida.",
@@ -170,10 +192,52 @@ export const messages = {
   "error.remote.signalFrameUnreadable": "O Signal enviou um quadro que este par não consegue ler.",
   "error.remote.webRtcCommandFailed": "O comando WebRTC falhou.",
   "error.remote.dataChannelFailed": "O canal {kind} falhou.",
+  "error.remote.hostBusy": "O computador anfitrião está ocupado com outra conexão. Tente novamente em instantes.",
+  "error.remote.signalPermissionDenied":
+    "Sua conta não tem acesso a este computador anfitrião. Peça acesso ao proprietário.",
+  "error.remote.signalRateLimited": "Muitas tentativas de conexão. O GoAhead tenta novamente em {seconds} segundos.",
+  "error.remote.signalProtocolError":
+    "O Signal e este aplicativo usam protocolos de conexão incompatíveis. Atualize o GoAhead e tente novamente.",
+  "error.remote.signalRefused": "O Signal recusou a conexão.",
+  "error.remote.signalClosed": "A conexão com o Signal foi fechada antes de o computador anfitrião responder.",
+  "error.remote.relayUnavailable":
+    "O Signal não enviou servidores de retransmissão para esta conexão. Tente novamente mais tarde.",
+  "error.remote.iceFailed":
+    "Não foi possível estabelecer uma conexão direta com o computador anfitrião. Um firewall, VPN ou proxy pode bloqueá-la.",
+  "error.remote.iceDisconnected": "A conexão direta com o computador anfitrião foi perdida.",
+  "error.remote.webrtcBlocked":
+    "Este dispositivo bloqueia a conexão de que o GoAhead precisa. Se o Modo de Isolamento estiver ativado, desative-o para o GoAhead em Ajustes > Privacidade e Segurança > Modo de Isolamento.",
+  "error.remote.directoryUnreachable": "O GoAhead não conseguiu acessar o serviço do GoAhead. Verifique sua conexão.",
+  "error.remote.directoryTimeout": "O serviço do GoAhead não respondeu a tempo. Tente novamente.",
+  "error.remote.inviteAlreadyUsed": "Este convite já foi usado. Peça um novo convite.",
+  "error.remote.inviteNotFound": "Este convite não existe ou expirou. Peça um novo convite.",
+  "error.remote.licenseUsersFull":
+    "A licença do proprietário do servidor não tem usuários livres. Peça ao proprietário para adicionar um usuário à licença.",
+  "error.remote.memberLimitReached":
+    "Este computador anfitrião atingiu o limite de membros. Peça ao proprietário para liberar espaço.",
+  "error.remote.hostNotRegistered": "Este computador anfitrião não está mais registrado no serviço do GoAhead.",
+  "error.remote.membershipEnded":
+    "Você não é mais membro deste computador anfitrião. Peça um novo convite ao proprietário.",
+  "error.remote.membershipChanged":
+    "Outra pessoa alterou este membro ao mesmo tempo. Carregue os membros novamente e tente de novo.",
+  "error.remote.accountSessionInactive": "Seu login não está mais ativo. Entre novamente.",
+  "error.remote.hostOtherAccount": "Este computador anfitrião pertence a outra conta.",
+  "error.remote.remoteNotConfigured": "As conexões remotas não estão configuradas neste serviço do GoAhead.",
+  "error.remote.hostRefused": "O computador anfitrião recusou a solicitação ({status}).",
   "error.remote.formUnavailable": "Este formulário não está mais disponível.",
+  "error.remote.hostedServerRemoval": "Use a seção Cobrança para excluir um servidor hospedado.",
+  "error.remote.hostRemoved": "O proprietário removeu este servidor da conta.",
+  "error.remote.ownerTransferSelf": "Você já é o proprietário deste servidor. Digite o e-mail do novo proprietário.",
+  "error.remote.ownerTransferHosted": "Um servidor hospedado pela GoAhead não pode mudar de proprietário.",
+  "error.remote.ownerTransferInvalid":
+    "Esta transferência de propriedade não está mais disponível. Peça ao proprietário para enviá-la de novo.",
   "error.remote.channelsUnsupported": "Atualize este servidor no computador para usar canais.",
   "error.remote.channelDeleteUnsupported": "Atualize este servidor no computador para excluir canais.",
-  "error.remote.attachmentUploadCancelled": "Envio do anexo cancelado.",
   "error.remote.historyRefreshFailed": "A mensagem foi enviada, mas não foi possível atualizar o histórico do chat.",
   "error.remote.taskHistoryRefreshFailed": "A tarefa foi alterada, mas não foi possível atualizar o histórico do chat.",
+  "error.remote.serverNotLoaded": "O GoAhead não conseguiu carregar o servidor. Tente novamente.",
+  "error.remote.localServerNotStarted":
+    "O servidor neste computador não iniciou. Tente novamente. Se ele não iniciar, reinicie o GoAhead neste computador.",
+  "error.remote.localServerAccountRemovalFailed":
+    "O servidor foi excluído no computador dele, mas a conta ainda o mostra. Exclua de novo para removê-lo da conta.",
 } as const satisfies PartialTranslation<typeof source>;

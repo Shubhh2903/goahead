@@ -8,13 +8,15 @@ export interface UserAvatarProps {
   decorative?: boolean;
 }
 
+export function userInitials(user: Pick<CentralAuthUser, "name" | "email">): string {
+  const accountName = user.name?.trim() || user.email.split("@")[0] || "GoAhead";
+  const parts = accountName.split(/[._\-\s]+/).filter(Boolean);
+  return (parts.length > 1 ? `${parts[0]?.[0]}${parts[1]?.[0]}` : accountName.slice(0, 2)).toUpperCase();
+}
+
 export function UserAvatar(props: UserAvatarProps): JSX.Element {
   const [imageFailed, setImageFailed] = createSignal(false);
-  const initials = createMemo(() => {
-    const accountName = props.user.name?.trim() || props.user.email.split("@")[0] || "GoAhead";
-    const parts = accountName.split(/[._\-\s]+/).filter(Boolean);
-    return (parts.length > 1 ? `${parts[0]?.[0]}${parts[1]?.[0]}` : accountName.slice(0, 2)).toUpperCase();
-  });
+  const initials = createMemo(() => userInitials(props.user));
 
   createEffect(
     () => props.user.avatarUrl,

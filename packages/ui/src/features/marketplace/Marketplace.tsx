@@ -1,69 +1,83 @@
-import { Button, ChevronRight, Dialog, IconButton, X } from "@openbot/ui";
+import { ErrorReference, IconButton, X } from "@openbot/ui";
 import { createScrollFades } from "@openbot/ui/components/createScrollFades";
+import { PageHeader, type PageHeaderParent } from "@openbot/ui/features/window/PageHeader";
 import { useText } from "@openbot/ui/text";
-import { createEffect, For, Match, onCleanup, Show, Switch } from "solid-js";
+import { holdFlag } from "@openbot/ui/utils";
+import { createEffect, Match, onCleanup, onSettled, Show, Switch } from "solid-js";
 import { MarketplaceAgentPage } from "./MarketplaceAgentPage";
-import { MarketplaceAppPage } from "./MarketplaceAppPage";
-import { MarketplaceBrowse } from "./MarketplaceBrowse";
-import { MarketplaceSkillPage } from "./MarketplaceSkillPage";
-import { createMarketplaceListing } from "./marketplace-listing";
+import { AgentGroupPage } from "./MarketplaceAgents";
+import { MarketplaceAppPage, MarketplaceServerPage } from "./MarketplaceAppPage";
+import { AppGroupPage, createBrowseLists, MarketplaceBrowse } from "./MarketplaceBrowse";
+import { MarketplaceNav } from "./MarketplaceNav";
+import { MarketplaceLocalSkillPage, MarketplaceSkillPage } from "./MarketplaceSkillPage";
+import { SkillGroupPage } from "./MarketplaceSkills";
+import { CATEGORY_LABELS, createMarketplaceListing } from "./marketplace-listing";
 import type { MarketplaceModel } from "./marketplace-model";
-import type { MarketplaceNavigation, MarketplaceScope, MarketplaceView } from "./marketplace-view";
+import { createMovingNavigation } from "./marketplace-motion";
+import {
+  MARKETPLACE_TAB_LABEL,
+  type MarketplaceNavigation,
+  type MarketplaceScope,
+  type MarketplaceView,
+  sourceVerified,
+} from "./marketplace-view";
 
 export interface MarketplaceProps {
   model: MarketplaceModel;
-  /** Where the user is. The caller owns it, so a link can open the window on an app page. */
   nav: MarketplaceNavigation;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-function viewTitle(scope: MarketplaceScope, view: MarketplaceView, fallback: string): string {
+type Translate = ReturnType<typeof useText>["t"];
+
+function viewTitle(scope: MarketplaceScope, view: MarketplaceView, fallback: string, t: Translate): string {
   switch (view.kind) {
     case "browse":
       return fallback;
     case "agent":
     case "skill":
       return view.listing.name;
+    case "agentGroup":
+    case "appGroup":
+      return t(CATEGORY_LABELS[view.category]);
     case "app":
       return scope.model.apps().find((app) => app.id === view.id)?.name ?? fallback;
+    case "skillGroup":
+      return view.group === "yours" ? t("marketplace.skills.yours") : t(CATEGORY_LABELS[view.group]);
+    case "server":
+      return view.id === null ? t("mcp.panel.connectTitle") : t("mcp.panel.editTitle");
+    case "localSkill":
+      for (const agent of scope.model.agents()) {
+        const skill = scope.model.installedSkill(agent.id, view.skillId);
+        if (skill) return skill.name;
+      }
+      return fallback;
   }
 }
 
-/** Marketplace › Linear. A parent crumb goes back to that view. */
-function Crumbs(props: { scope: MarketplaceScope }) {
+function MarketplaceHeader(props: { scope: MarketplaceScope }) {
   const { t } = useText();
   const stack = () => props.scope.nav.state.stack;
-  const title = (view: MarketplaceView) => viewTitle(props.scope, view, t("marketplace.title"));
+  const title = (view: MarketplaceView) =>
+    viewTitle(props.scope, view, t(MARKETPLACE_TAB_LABEL[props.scope.nav.state.tab]), t);
+  const parents = (): PageHeaderParent[] =>
+    stack()
+      .slice(0, -1)
+      .map((view, index) => ({ title: title(view), onSelect: () => props.scope.nav.backTo(index) }));
+  const current = () => title(stack().at(-1) ?? { kind: "browse" });
   return (
-    <nav class="marketplace-crumbs" aria-label={t("marketplace.crumbs.label")}>
-      <For each={stack().slice(0, -1)}>
-        {(view, index) => (
-          <>
-            <Button
-              type="button"
-              variant="ghost"
-              class="marketplace-crumb-parent"
-              data-cuelume-tap="navigate"
-              onClick={() => props.scope.nav.backTo(index())}
-            >
-              {title(view)}
-            </Button>
-            <ChevronRight class="marketplace-crumb-separator" aria-hidden="true" />
-          </>
-        )}
-      </For>
-      <Dialog.Title class="marketplace-title" tabindex={-1}>
-        {title(stack().at(-1) ?? { kind: "browse" })}
-      </Dialog.Title>
-    </nav>
+    <Show when={stack().length > 1}>
+      <PageHeader
+        class="marketplace-heading"
+        title={current()}
+        path={parents()}
+        pathLabel={t("marketplace.crumbs.label")}
+      />
+    </Show>
   );
 }
 
-/**
- * The inside of the open window. The listings live here, so the catalog loads only while the window
- * is open.
- */
 function MarketplaceWindow(props: MarketplaceProps) {
   const { t } = useText();
   const nav = props.nav;
@@ -76,65 +90,63 @@ function MarketplaceWindow(props: MarketplaceProps) {
       list: (query) => props.model.listAgents(query),
       homeCache: props.model.agentHomeCache,
       query: () => nav.state.query,
-      category: () => nav.state.agentCategory,
+      category: () => null,
+      verified: () => sourceVerified(nav.state.agentSource),
     }),
     skills: createMarketplaceListing({
       list: (query) => props.model.listSkills(query),
       homeCache: props.model.skillHomeCache,
       query: () => nav.state.query,
-      category: () => nav.state.skillCategory,
+      category: () => null,
+      verified: () => sourceVerified(nav.state.skillSource),
     }),
   };
+  const lists = createBrowseLists(scope);
   let body: HTMLDivElement | undefined;
-  // A tab, a search or a new view changes the content height but not the body size, so the frame
-  // is observed too.
   const fades = createScrollFades();
   const frameObserver = new ResizeObserver(() => fades.measure());
   onCleanup(() => {
     fades.stop();
     frameObserver.disconnect();
   });
-  // For each open view: its scroll offset, and the name of the control the user last clicked, which
-  // opened the next view. Back returns to that place and that control.
   const places: { top: number; opener: string | null }[] = [];
   const remember = (place: Partial<(typeof places)[number]>) => {
     const depth = nav.state.stack.length - 1;
     places[depth] = { top: 0, opener: null, ...places[depth], ...place };
   };
-  // A new view moves the focus to its name, as a route change does. The first view keeps the focus.
   createEffect(
-    () => nav.state.stack.length,
-    (length, previous) => {
+    () => [nav.state.stack.length, nav.state.stack.at(-1)] as const,
+    ([length, view], previous) => {
       if (previous === undefined) return;
-      const place = length < previous ? places[length - 1] : undefined;
-      places.length = length;
+      const [previousLength, previousView] = previous;
+      if (length === previousLength && view === previousView) return;
+      const place = length < previousLength ? places[length - 1] : undefined;
+      places.length = length < previousLength ? length : length - 1;
       body?.scrollTo({ top: place?.top ?? 0 });
+      if (document.activeElement?.closest(".marketplace-nav")) return;
       const opener = place?.opener
         ? body?.querySelector<HTMLElement>(`[aria-label="${CSS.escape(place.opener)}"]`)
         : null;
       const heading = length > 1 ? body?.querySelector<HTMLElement>(".marketplace-view h3") : null;
       if (heading && !heading.hasAttribute("tabindex")) heading.tabIndex = -1;
-      (opener ?? heading ?? document.querySelector<HTMLElement>(".skills-marketplace .marketplace-title"))?.focus({
+      (opener ?? heading ?? document.querySelector<HTMLElement>(".skills-marketplace .marketplace-nav-title"))?.focus({
         preventScroll: true,
       });
+    },
+  );
+  createEffect(
+    () => nav.state.tab,
+    (_tab, previous) => {
+      if (previous !== undefined) body?.scrollTo({ top: 0 });
     },
   );
 
   return (
     <>
-      <header class="skills-marketplace-topbar">
-        <Crumbs scope={scope} />
-        <div class="skills-marketplace-topbar-actions">
-          <IconButton
-            label={t("marketplace.close")}
-            variant="ghost"
-            data-cuelume-tap="close"
-            onClick={() => props.onOpenChange(false)}
-          >
-            <X />
-          </IconButton>
-        </div>
-      </header>
+      <div class="skills-marketplace-topbar">
+        <MarketplaceHeader scope={scope} />
+      </div>
+      <MarketplaceNav scope={scope} lists={lists} />
       <div
         class={["skills-marketplace-body", fades.classes()]}
         ref={(element) => {
@@ -159,16 +171,31 @@ function MarketplaceWindow(props: MarketplaceProps) {
             {(view) => (
               <Switch>
                 <Match when={view.kind === "browse"}>
-                  <MarketplaceBrowse scope={scope} />
+                  <MarketplaceBrowse scope={scope} lists={lists} />
                 </Match>
-                <Match when={view.kind === "agent" && view.listing} keyed>
-                  {(listing) => <MarketplaceAgentPage scope={scope} listing={listing} />}
+                <Match when={view.kind === "agent" && view} keyed>
+                  {(agent) => <MarketplaceAgentPage scope={scope} listing={agent.listing} detail={agent.detail} />}
+                </Match>
+                <Match when={view.kind === "agentGroup" && view.category} keyed>
+                  {(category) => <AgentGroupPage scope={scope} category={category} />}
                 </Match>
                 <Match when={view.kind === "skill" && view.listing} keyed>
                   {(listing) => <MarketplaceSkillPage scope={scope} listing={listing} />}
                 </Match>
+                <Match when={view.kind === "appGroup" && view.category} keyed>
+                  {(category) => <AppGroupPage scope={scope} category={category} />}
+                </Match>
                 <Match when={view.kind === "app" && view.id} keyed>
                   {(id) => <MarketplaceAppPage scope={scope} id={id} />}
+                </Match>
+                <Match when={view.kind === "skillGroup" && view.group} keyed>
+                  {(group) => <SkillGroupPage scope={scope} group={group} />}
+                </Match>
+                <Match when={view.kind === "localSkill" && view.skillId} keyed>
+                  {(skillId) => <MarketplaceLocalSkillPage scope={scope} skillId={skillId} />}
+                </Match>
+                <Match when={view.kind === "server" && view} keyed>
+                  {(server) => <MarketplaceServerPage scope={scope} id={server.id} />}
                 </Match>
               </Switch>
             )}
@@ -177,7 +204,10 @@ function MarketplaceWindow(props: MarketplaceProps) {
         <Show when={props.model.error()}>
           {(message) => (
             <div class="skills-marketplace-error">
-              <span>{message()}</span>
+              <span>
+                {message()}
+                <ErrorReference reference={props.model.errorReference?.()} />
+              </span>
               <IconButton label={t("common.close")} variant="ghost" size="icon-sm" onClick={props.model.clearError}>
                 <X />
               </IconButton>
@@ -185,11 +215,6 @@ function MarketplaceWindow(props: MarketplaceProps) {
           )}
         </Show>
       </div>
-      {/*
-        The skill install menu stays open while installs run, and an open menu hides the rest of the
-        window from screen readers. It keeps an element with `data-live-announcer` visible, so the
-        results are said from here.
-      */}
       <p class="marketplace-visually-hidden" role="status" data-live-announcer="">
         {props.model.notice()}
       </p>
@@ -200,9 +225,7 @@ function MarketplaceWindow(props: MarketplaceProps) {
   );
 }
 
-/** The Marketplace window: agents, apps and skills, and a page for each. */
 export function Marketplace(props: MarketplaceProps) {
-  // A closed window starts again from the first tab, with no search and no filter.
   createEffect(
     () => props.open,
     (open, previous) => {
@@ -210,14 +233,48 @@ export function Marketplace(props: MarketplaceProps) {
     },
   );
   return (
-    <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay class="skills-marketplace-backdrop">
-          <Dialog.Content class="skills-marketplace" onOpenAutoFocus={(event: Event) => event.preventDefault()}>
-            <MarketplaceWindow {...props} />
-          </Dialog.Content>
-        </Dialog.Overlay>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Show when={props.open}>
+      <MarketplacePage {...props} />
+    </Show>
+  );
+}
+
+function MarketplacePage(props: MarketplaceProps) {
+  const { t } = useText();
+  const nav = createMovingNavigation(props.nav);
+  let root!: HTMLElement;
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  onCleanup(holdFlag(document.body, "skills-marketplace"));
+  onSettled(() => {
+    root.querySelector<HTMLElement>(".marketplace-nav-title")?.focus({ preventScroll: true });
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("[role=dialog], [role=alertdialog], [role=menu], [role=listbox]")) return;
+      if (target && !root.contains(target) && target.closest("input, textarea, select, [contenteditable]")) return;
+      event.preventDefault();
+      if (nav.state.stack.length > 1) nav.back();
+      else if (nav.state.query)
+        nav.set((draft) => {
+          draft.query = "";
+        });
+      else props.onOpenChange(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("keydown", closeOnEscape);
+      const focus = document.activeElement;
+      if (focus && focus !== document.body && !root.contains(focus)) return;
+      queueMicrotask(() => {
+        if (opener?.isConnected && (!document.activeElement || document.activeElement === document.body)) {
+          opener.focus({ preventScroll: true });
+        }
+      });
+    };
+  });
+  return (
+    <section ref={root} class="skills-marketplace skills-marketplace-page" aria-label={t("marketplace.title")}>
+      <MarketplaceWindow model={props.model} nav={nav} open={props.open} onOpenChange={props.onOpenChange} />
+    </section>
   );
 }

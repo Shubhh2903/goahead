@@ -1,7 +1,6 @@
 import { defineMessages } from "../../message";
 
 export const messages = defineMessages("connector", {
-  // Server settings > Connectors: the Gmail and Google Calendar connection of this computer.
   "connector.google.title": "Gmail and Google Calendar",
   "connector.google.description":
     "GoAhead tells you about important mail and meeting requests. The agent that handles mail, and the Slack Orchestrator in your own direct message with GoAhead, read and sort your Gmail, write replies and book Google Meet calls. Mail is sent and meetings are booked only after you approve.",
@@ -27,7 +26,6 @@ export const messages = defineMessages("connector", {
   "connector.google.mailAgentDescription":
     "This agent gets the notes about important mail and meeting requests, and can use Gmail and Google Calendar when you ask it in GoAhead. The Slack Orchestrator can use them too, in your own direct message with GoAhead.",
   "connector.google.mailAgentNone": "Pick an agent to get notes about new mail.",
-  // Server settings > Connectors: the built-in GitHub connection of this computer.
   "connector.github.title": "GitHub",
   "connector.github.description":
     "Every agent on this computer can use your GitHub repositories, issues and pull requests, and gh and git.",
@@ -47,9 +45,7 @@ export const messages = defineMessages("connector", {
   "connector.github.repositoriesLoading": "Reading the repositories from GitHub",
   "connector.github.repositoriesFailed": "GoAhead could not read the repositories from GitHub.",
   "connector.github.noRepositories": "The GoAhead GitHub App is not installed on a repository yet.",
-  // {count} is a number, such as 12.
   "connector.github.moreRepositories": { one: "And {count} more repository", other: "And {count} more repositories" },
-  // A badge next to a repository that only its members can see.
   "connector.github.private": "Private",
   "connector.github.disconnect": "Disconnect",
   "connector.github.disconnectTitle": "Disconnect GitHub",
@@ -58,63 +54,57 @@ export const messages = defineMessages("connector", {
   "connector.github.expiredDescription": "Connect again as @{login} to give agents GitHub again.",
   "connector.github.reconnect": "Reconnect",
   "connector.github.actionFailed": "GoAhead could not change the GitHub connection.",
-  // The status next to the name at the top of the GitHub page.
   "connector.github.statusConnected": "Connected",
   "connector.github.statusConnecting": "Connecting",
   "connector.github.statusExpired": "Expired",
-  "connector.github.statusNotSetUp": "Not set up",
   "connector.github.accountTitle": "Account",
-  // {count} is the number of repositories in the list, such as 12.
   "connector.github.filterPlaceholder": { one: "Filter {count} repository", other: "Filter {count} repositories" },
   "connector.github.filterLabel": "Filter repositories",
-  // {query} is the text the user typed in the filter.
   "connector.github.noMatch": "No repository matches “{query}”.",
-  // The connect dialog. The steps show as numbers; screen readers read the names.
   "connector.github.stepSignIn": "Sign in",
   "connector.github.stepConnected": "Connected",
   "connector.github.requestingCode": "GoAhead asks GitHub for a code.",
-  // {code} is the code to type on GitHub, such as WDJB-MJHT.
   "connector.github.codeLabel": "Code {code}",
   "connector.github.failedTitle": "GitHub did not connect",
   "connector.github.cancelConnecting": "Cancel connecting GitHub",
-  // {count} is the number of repositories that agents can use.
   "connector.github.connectedSummary": {
     one: "{count} repository · every agent on this computer",
     other: "{count} repositories · every agent on this computer",
   },
   "connector.github.done": "Done",
   "connector.github.later": "Later",
-  // The confirmation before Disconnect. {login} is the GitHub account name, such as octocat.
   "connector.github.disconnectConfirmTitle": "Disconnect GitHub?",
   "connector.github.disconnectConfirmDescription": "Disconnect removes the sign-in of @{login} from this computer.",
   "connector.github.disconnectEffectTools": "Every agent loses the GitHub tools, gh and git.",
   "connector.github.disconnectEffectRevoke": "Then GitHub opens, where you can revoke GoAhead.",
   "connector.github.disconnectEffectKept": "Chats, files and agent memory stay on this computer.",
+  "connector.github.descriptionHost":
+    "Every agent on {host} can use your GitHub repositories, issues and pull requests, and gh and git.",
+  "connector.github.connectedSummaryHost": {
+    one: "{count} repository · every agent on {host}",
+    other: "{count} repositories · every agent on {host}",
+  },
+  "connector.github.disconnectConfirmDescriptionHost": "Disconnect removes the sign-in of @{login} from {host}.",
+  "connector.github.disconnectEffectKeptHost": "Chats, files and agent memory stay on {host}.",
   "connector.github.keepConnected": "Keep connected",
   "connector.github.close": "Close",
-  // The last section of an integration page, with the action that removes it.
   "connector.dangerZone": "Danger zone",
+  "connector.statusUnknown": "Unknown",
+  "connector.readFailed": "GoAhead could not read the state of this connection.",
 
-  // Server settings > Connectors: the list of integrations. Each row opens its page.
   "connector.hub.onThisComputer": "On this computer",
   "connector.hub.notSetUp": "Not set up",
   "connector.hub.available": "Available",
-  // {name} is the name of an integration, such as Slack.
   "connector.hub.open": "Open {name}",
   "connector.hub.setUp": "Set up",
   "connector.hub.back": "All connectors",
-  // {names} lists the agents, such as "Chief, Research".
   "connector.hub.usedBy": "Used by {names}",
 
-  // Server settings > Connectors > Slack: a workspace installs the one OpenBot app, and the Slack
-  // Orchestrator agent receives each request, asks the team and answers.
   "connector.slack.title": "Slack",
   "connector.slack.description":
     "People mention @GoAhead in Slack or send it a direct message. The Slack Orchestrator asks the right agent and answers.",
-  "connector.slack.statusNotSetUp": "Not set up",
   "connector.slack.statusConnected": "Connected",
   "connector.slack.statusAttention": "Needs attention",
-  // {workspace} is the Slack workspace name.
   "connector.slack.summaryConnected": "{workspace} · Slack Orchestrator answers",
   "connector.slack.summaryNoAgent": "{workspace} · No agent answers yet",
   "connector.slack.attentionTitle": {
@@ -125,7 +115,7 @@ export const messages = defineMessages("connector", {
   "connector.slack.connect": "Connect Slack",
   "connector.slack.addAgent": "Add agent",
   "connector.slack.actionFailed": "Slack did not accept the change",
-  "connector.slack.workspaceTitle": "Workspace",
+  "connector.slack.workspaceTitle": "Workspaces",
   "connector.slack.workspaceDescription": "People mention @GoAhead or send it a direct message.",
   // {name} is the Slack handle of the person who connected the workspace.
   "connector.slack.connectedAs": "Connected as @{name}. People mention @GoAhead or send it a direct message.",
@@ -134,12 +124,17 @@ export const messages = defineMessages("connector", {
   "connector.slack.connectAsYou":
     "Reconnect to also connect as you, so your agents can read what you see and reply as you after you approve.",
   "connector.slack.disconnectWorkspace": "Disconnect",
+  "connector.slack.disconnectAllTitle": "Disconnect Slack",
+  "connector.slack.disconnectAllSummary":
+    "Every workspace disconnects. People can no longer reach your agents through @GoAhead.",
+  "connector.slack.disconnectAllSummaryOrchestrator":
+    "Every workspace disconnects. The Slack Orchestrator and its conversations are deleted from GoAhead.",
   "connector.slack.missingScopes":
     "GoAhead does not have these permissions in Slack: {scopes}. Disconnect the workspace, then connect it again.",
   "connector.slack.retryAt": "Slack asked GoAhead to wait. It tries again at {time}.",
   "connector.slack.reconnect": "Reconnect",
+  "connector.slack.pause": "Pause",
   "connector.slack.resume": "Resume",
-  // {action} is a button, such as Pause; {name} is the workspace name.
   "connector.slack.rowAction": "{action}: {name}",
   "connector.slack.orchestratorTitle": "Slack Orchestrator",
   "connector.slack.orchestratorDescription":
@@ -148,7 +143,6 @@ export const messages = defineMessages("connector", {
   "connector.slack.orchestratorNoneDescription": "Add the Slack Orchestrator, or Slack gets no answer.",
   "connector.slack.inviteNote":
     "GoAhead joins every public channel by itself, and each new one. For a private channel, invite it: /invite @GoAhead.",
-  // The connect dialog. The steps show as numbers; screen readers read the names.
   "connector.slack.stepWorkspace": "Workspace",
   "connector.slack.stepAgent": "Agent",
   "connector.slack.connectTitle": "Connect a Slack workspace",
@@ -160,7 +154,6 @@ export const messages = defineMessages("connector", {
   "connector.slack.connectInSlack": "Connect in Slack",
   "connector.slack.connectWaiting": "Waiting for Slack. Finish the install in your browser.",
   "connector.slack.agentStepTitle": "Add the Slack Orchestrator",
-  // {workspace} is the Slack workspace name.
   "connector.slack.agentStepDescription":
     "This new agent answers everything that people send to @GoAhead in {workspace}.",
   "connector.slack.orchestratorName": "Slack Orchestrator",
@@ -175,6 +168,8 @@ export const messages = defineMessages("connector", {
   "connector.slack.disconnectTitle": "Disconnect {workspace}?",
   "connector.slack.disconnectDescription":
     "GoAhead stops answering in {workspace} and removes its Slack token from this computer.",
+  "connector.slack.disconnectDescriptionHost":
+    "GoAhead stops answering in {workspace} and removes its Slack token from {host}.",
   "connector.slack.disconnectEffect": "People in {workspace} can no longer reach your agents through @GoAhead.",
   "connector.slack.disconnectEffectUser": "GoAhead can no longer read or reply as you in Slack.",
   "connector.slack.disconnectEffectInbox": "The Slack messages GoAhead kept on this computer are deleted.",
@@ -216,28 +211,358 @@ export const messages = defineMessages("connector", {
     other: "Sent in the last hour: {count}",
   },
   "connector.slack.removeEffectKept": "The conversations and the Slack Orchestrator stay in GoAhead.",
+  "connector.slack.removeEffectDeleted": "The Slack Orchestrator and its conversations are deleted from GoAhead.",
   "connector.slack.keep": "Keep connected",
   "connector.slack.close": "Close",
-  // Which computer answers the people of a workspace who do not use GoAhead.
   "connector.slack.defaultOn": "This computer answers people who do not use GoAhead.",
   "connector.slack.defaultOff": "Another person's computer answers people who do not use GoAhead.",
   "connector.slack.handOver": "Hand over…",
   "connector.slack.handOverTitle": "Answer people who do not use GoAhead from another computer",
   "connector.slack.userAccessRequired":
     "Connect Slack again and allow GoAhead to act as you. Another person already connected this workspace.",
-  // Marketplace > 1Password: a vault that the user shares with OpenBot through a service account.
+  "connector.slack.addWorkspace": "Add workspace",
+  "connector.slack.limitReached": {
+    one: "You can connect a maximum of {count} workspace.",
+    other: "You can connect a maximum of {count} workspaces.",
+  },
+  "connector.slack.summaryMany": {
+    one: "{count} workspace · Slack Orchestrator answers",
+    other: "{count} workspaces · Slack Orchestrator answers",
+  },
+
+  "connector.discord.title": "Discord",
+  "connector.discord.description":
+    "People mention @GoAhead in a channel of a Discord server. The Discord Orchestrator asks the right agent and answers.",
+  "connector.discord.statusConnected": "Connected",
+  "connector.discord.statusAttention": "Needs attention",
+  "connector.discord.summaryConnected": "{workspace} · Discord Orchestrator answers",
+  "connector.discord.summaryNoAgent": "{workspace} · No agent answers yet",
+  "connector.discord.attentionTitle": {
+    one: "{count} Discord server needs attention",
+    other: "{count} Discord servers need attention",
+  },
+  "connector.discord.attentionDescription": "The status below says what to do.",
+  "connector.discord.connect": "Connect Discord",
+  "connector.discord.addAgent": "Add agent",
+  "connector.discord.actionFailed": "Discord did not accept the change",
+  "connector.discord.workspaceTitle": "Discord servers",
+  "connector.discord.workspaceDescription": "Mention @GoAhead in a channel. Reply to GoAhead to continue.",
+  "connector.discord.disconnectWorkspace": "Disconnect",
+  "connector.discord.disconnectAllTitle": "Disconnect Discord",
+  "connector.discord.disconnectAllSummary":
+    "Every server disconnects. People can no longer reach your agents through @GoAhead.",
+  "connector.discord.disconnectAllSummaryOrchestrator":
+    "Every server disconnects. The Discord Orchestrator and its conversations are deleted from GoAhead.",
+  "connector.discord.missingScopes":
+    "GoAhead does not have these permissions in Discord: {scopes}. Disconnect the Discord server, then connect it again.",
+  "connector.discord.retryAt": "Discord asked GoAhead to wait. It tries again at {time}.",
+  "connector.discord.reconnect": "Reconnect",
+  "connector.discord.pause": "Pause",
+  "connector.discord.resume": "Resume",
+  "connector.discord.rowAction": "{action}: {name}",
+  "connector.discord.orchestratorTitle": "Discord Orchestrator",
+  "connector.discord.orchestratorDescription":
+    "This agent receives every request from Discord. It answers short ones itself, gives other work to the right agent, and replies with the answer in the channel.",
+  "connector.discord.orchestratorNone": "No agent answers yet",
+  "connector.discord.orchestratorNoneDescription": "Add the Discord Orchestrator, or Discord gets no answer.",
+  "connector.discord.channelsNote": "GoAhead sees the channels that its role can view.",
+  "connector.discord.stepWorkspace": "Discord server",
+  "connector.discord.stepAgent": "Agent",
+  "connector.discord.connectTitle": "Connect a Discord server",
+  "connector.discord.connectDescription": "GoAhead adds one bot, named GoAhead, to the Discord server.",
+  "connector.discord.connectStepBrowser": "Discord opens in your browser",
+  "connector.discord.connectStepAllow": "Select the server, then Authorize",
+  "connector.discord.connectStepReturn": "This dialog continues when Discord is done",
+  "connector.discord.connectInDiscord": "Connect in Discord",
+  "connector.discord.connectWaiting": "Waiting for Discord. Finish the authorization in your browser.",
+  "connector.discord.agentStepTitle": "Add the Discord Orchestrator",
+  "connector.discord.agentStepDescription":
+    "This new agent answers everything that people send to @GoAhead in {workspace}.",
+  "connector.discord.orchestratorName": "Discord Orchestrator",
+  "connector.discord.orchestratorRole": "Answers in Discord and asks the team",
+  "connector.discord.orchestratorDoesReceive": "Receives every Discord request first",
+  "connector.discord.orchestratorDoesDelegate": "Gives each task to the agent that fits best",
+  "connector.discord.orchestratorDoesAnswer": "Replies with the answer in the Discord channel",
+  "connector.discord.orchestratorModel": "Model",
+  "connector.discord.doneTitle": "GoAhead is in {workspace}",
+  "connector.discord.doneDescription": "Mention @GoAhead in a channel. Reply to GoAhead to continue.",
+  "connector.discord.done": "Done",
+  "connector.discord.disconnectTitle": "Disconnect {workspace}?",
+  "connector.discord.disconnectDescription":
+    "GoAhead stops answering in {workspace} and removes the Discord connection from this computer.",
+  "connector.discord.disconnectDescriptionHost":
+    "GoAhead stops answering in {workspace} and removes the Discord connection from {host}.",
+  "connector.discord.disconnectEffect": "People in {workspace} can no longer reach your agents through @GoAhead.",
+  "connector.discord.removeEffectKept": "The conversations and the Discord Orchestrator stay in GoAhead.",
+  "connector.discord.removeEffectDeleted": "The Discord Orchestrator and its conversations are deleted from GoAhead.",
+  "connector.discord.keep": "Keep connected",
+  "connector.discord.close": "Close",
+  "connector.discord.addWorkspace": "Add Discord server",
+  "connector.discord.limitReached": {
+    one: "You can connect a maximum of {count} Discord server.",
+    other: "You can connect a maximum of {count} Discord servers.",
+  },
+  "connector.discord.summaryMany": {
+    one: "{count} Discord server · Discord Orchestrator answers",
+    other: "{count} Discord servers · Discord Orchestrator answers",
+  },
+  "connector.discord.accessTitle": "Who can use GoAhead",
+  "connector.discord.accessDescription": "GoAhead answers only these people. It ignores mentions from others.",
+  "connector.discord.accessEveryone": "Everyone in the server",
+  "connector.discord.accessEveryoneDescription": "Anyone who can post in a channel that GoAhead sees can mention it.",
+  "connector.discord.accessRoles": "Members with {roles}",
+  "connector.discord.accessChoose": "Choose roles",
+  "connector.discord.accessDialogTitle": "Who can use GoAhead in {workspace}?",
+  "connector.discord.accessDialogDescription": "With no role selected, everyone can mention GoAhead.",
+  "connector.discord.accessLoading": "Loading roles…",
+  "connector.discord.accessLoadFailed": "Discord roles did not load",
+  "connector.discord.accessNoRoles": "This server has no roles to pick.",
+  "connector.discord.accessRoleDeleted": "{role} (deleted)",
+  "connector.discord.accessSave": "Save",
+  "connector.discord.accessHostUpdate": "Update GoAhead on {host} to choose roles.",
+
+  "connector.telegram.title": "Telegram",
+  "connector.telegram.description":
+    "Add the GoAhead bot to a Telegram group or open a direct chat with it. The Telegram Orchestrator asks the right agent and answers.",
+  "connector.telegram.statusConnected": "Connected",
+  "connector.telegram.statusAttention": "Needs attention",
+  "connector.telegram.summaryConnected": {
+    one: "{count} chat · Telegram Orchestrator answers",
+    other: "{count} chats · Telegram Orchestrator answers",
+  },
+  "connector.telegram.summaryNoAgent": {
+    one: "{count} chat · No agent answers yet",
+    other: "{count} chats · No agent answers yet",
+  },
+  "connector.telegram.attentionTitle": {
+    one: "{count} chat needs attention",
+    other: "{count} chats need attention",
+  },
+  "connector.telegram.attentionDescription": "The status below says what to do.",
+  "connector.telegram.connect": "Connect Telegram",
+  "connector.telegram.addAgent": "Add agent",
+  "connector.telegram.actionFailed": "Telegram did not accept the change",
+  "connector.telegram.chatsTitle": "Chats",
+  "connector.telegram.groupDescription": "People mention the bot or reply to its messages.",
+  "connector.telegram.directDescription": "Every message in this chat goes to the Telegram Orchestrator.",
+  "connector.telegram.helpRemoved":
+    "The GoAhead bot is no longer in this chat. Disconnect the chat, then add the bot again.",
+  "connector.telegram.helpRelayUnavailable":
+    "GoAhead cannot receive Telegram messages on this computer. Sign in, give this computer a name in Server settings, and keep GoAhead open.",
+  "connector.telegram.helpRelayUnavailableHost":
+    "GoAhead on {host} cannot receive Telegram messages. On {host}, sign in, give the server a name in Server settings, and keep GoAhead open.",
+  "connector.telegram.helpError": "GoAhead cannot reach this chat. Reconnect, or disconnect the chat.",
+  "connector.telegram.helpNotLinked": "This chat is not linked to this server. Select Reconnect to link it.",
+  "connector.telegram.retryAt": "Telegram asked GoAhead to wait. It tries again at {time}.",
+  "connector.telegram.pause": "Pause",
+  "connector.telegram.resume": "Resume",
+  "connector.telegram.reconnect": "Reconnect",
+  "connector.telegram.disconnectChat": "Disconnect",
+  "connector.telegram.disconnectAllTitle": "Disconnect Telegram",
+  "connector.telegram.disconnectAllSummary":
+    "Every chat disconnects. People can no longer reach your agents through the GoAhead bot.",
+  "connector.telegram.disconnectAllSummaryOrchestrator":
+    "Every chat disconnects. The Telegram Orchestrator and its conversations are deleted from GoAhead.",
+  "connector.telegram.rowAction": "{action}: {name}",
+  "connector.telegram.linkChat": "Link a chat",
+  "connector.telegram.addToGroup": "Add to a group",
+  "connector.telegram.openDirectChat": "Open a direct chat",
+  "connector.telegram.orchestratorTitle": "Telegram Orchestrator",
+  "connector.telegram.orchestratorDescription":
+    "This agent receives the messages for GoAhead from all your Telegram chats. It answers short ones itself, gives other work to the right agent, and posts the answer in the chat.",
+  "connector.telegram.orchestratorNone": "No agent answers yet",
+  "connector.telegram.orchestratorNoneDescription": "Add the Telegram Orchestrator, or Telegram gets no answer.",
+  "connector.telegram.mentionNote":
+    "In a group, mention the bot or reply to its messages. In a direct chat, every message goes to the bot.",
+  "connector.telegram.stepChat": "Chat",
+  "connector.telegram.stepAgent": "Agent",
+  "connector.telegram.connectTitle": "Link a Telegram chat",
+  "connector.telegram.connectDescription":
+    "Add the GoAhead bot to a group, or open a direct chat with it. One bot serves all your chats.",
+  "connector.telegram.connectStepBrowser": "Telegram opens in your browser",
+  "connector.telegram.connectStepPick": "Select the group, or press Start in the direct chat",
+  "connector.telegram.connectStepReturn": "This dialog continues when the chat is linked",
+  "connector.telegram.connectWaiting": "Waiting for Telegram. Select the chat in Telegram.",
+  "connector.telegram.agentStepTitle": "Add the Telegram Orchestrator",
+  "connector.telegram.agentStepDescription":
+    "This new agent answers the messages for GoAhead in {chat} and in each chat that you link later.",
+  "connector.telegram.orchestratorName": "Telegram Orchestrator",
+  "connector.telegram.orchestratorRole": "Answers in Telegram and asks the team",
+  "connector.telegram.orchestratorDoesReceive": "Receives every Telegram message for GoAhead first",
+  "connector.telegram.orchestratorDoesDelegate": "Gives each task to the agent that fits best",
+  "connector.telegram.orchestratorDoesAnswer": "Posts the answer in the Telegram chat",
+  "connector.telegram.orchestratorModel": "Model",
+  "connector.telegram.doneTitle": "GoAhead is in {chat}",
+  "connector.telegram.done": "Done",
+  "connector.telegram.disconnectTitle": "Disconnect {chat}?",
+  "connector.telegram.leaveDescription": "The GoAhead bot leaves {chat}, and GoAhead stops answering there.",
+  "connector.telegram.disconnectEffect": "People in {chat} can no longer reach your agents through the GoAhead bot.",
+  "connector.telegram.removeEffectKept": "The conversations and the Telegram Orchestrator stay in GoAhead.",
+  "connector.telegram.removeEffectDeleted":
+    "This is the last chat, so the Telegram Orchestrator and its conversations are deleted from GoAhead.",
+  "connector.telegram.keep": "Keep connected",
+  "connector.telegram.close": "Close",
+  "connector.whatsapp.title": "WhatsApp",
+  "connector.whatsapp.description":
+    "Link a WhatsApp number to this computer. The WhatsApp Orchestrator asks the right agent and answers.",
+  "connector.whatsapp.descriptionHost":
+    "Link a WhatsApp number to this server. The WhatsApp Orchestrator asks the right agent and answers.",
+  "connector.whatsapp.statusConnected": "Connected",
+  "connector.whatsapp.statusAttention": "Needs attention",
+  "connector.whatsapp.summaryConnected": {
+    one: "{count} number · WhatsApp Orchestrator answers",
+    other: "{count} numbers · WhatsApp Orchestrator answers",
+  },
+  "connector.whatsapp.summaryNoAgent": {
+    one: "{count} number · No agent answers yet",
+    other: "{count} numbers · No agent answers yet",
+  },
+  "connector.whatsapp.attentionTitle": {
+    one: "{count} number needs attention",
+    other: "{count} numbers need attention",
+  },
+  "connector.whatsapp.attentionDescription": "The status below says what to do.",
+  "connector.whatsapp.connect": "Link WhatsApp",
+  "connector.whatsapp.addAgent": "Add agent",
+  "connector.whatsapp.actionFailed": "WhatsApp did not accept the change",
+  "connector.whatsapp.numbersTitle": "Numbers",
+  "connector.whatsapp.linkNumber": "Link a number",
+  "connector.whatsapp.ownNumberNote": "Your “Message yourself” chat and the people you allow reach GoAhead.",
+  "connector.whatsapp.dedicatedNote":
+    "Your “Message yourself” chat and the people you allow reach GoAhead. Other people get a code to give you.",
+  "connector.whatsapp.helpLoggedOut": "WhatsApp removed this computer from the linked devices. Link the number again.",
+  "connector.whatsapp.helpLoggedOutHost":
+    "WhatsApp removed this server from the linked devices. Link the number again.",
+  "connector.whatsapp.helpError": "GoAhead cannot reach WhatsApp on this number. Reconnect, or disconnect the number.",
+  "connector.whatsapp.helpKeysUnreadable": "GoAhead cannot read the saved keys of this number. Link the number again.",
+  "connector.whatsapp.retryAt": "WhatsApp asked GoAhead to wait. It tries again at {time}.",
+  "connector.whatsapp.pause": "Pause",
+  "connector.whatsapp.resume": "Resume",
+  "connector.whatsapp.reconnect": "Reconnect",
+  "connector.whatsapp.linkAgain": "Link again",
+  "connector.whatsapp.disconnect": "Disconnect",
+  "connector.whatsapp.disconnectAllTitle": "Disconnect WhatsApp",
+  "connector.whatsapp.disconnectAllSummary":
+    "Every number disconnects. People can no longer reach your agents through WhatsApp.",
+  "connector.whatsapp.disconnectAllSummaryOrchestrator":
+    "Every number disconnects. The WhatsApp Orchestrator and its conversations are deleted from GoAhead.",
+  "connector.whatsapp.rowAction": "{action}: {name}",
+  "connector.whatsapp.ownNumber": "Personal number",
+  "connector.whatsapp.ownNumberDescription":
+    "Only your “Message yourself” chat and the people you allow can write. Other people get no reply. When it is off, GoAhead replies to unknown people with a code.",
+  "connector.whatsapp.workingMessage": "“Working on it…” message",
+  "connector.whatsapp.workingMessageDescription":
+    "GoAhead posts it while the agent works, then replaces it with the answer. A request that waits for an earlier request gets a waiting message too. Turn off to post only the answer.",
+  "connector.whatsapp.statusReactions": "Status reactions",
+  "connector.whatsapp.statusReactionsDescription":
+    "GoAhead reacts with 👀 when a message arrives and with ✅ when the answer is ready. Turn off to send no reactions.",
+  "connector.whatsapp.orchestratorTitle": "WhatsApp Orchestrator",
+  "connector.whatsapp.orchestratorDescription":
+    "This agent receives the messages for GoAhead from all your linked numbers. It answers short ones itself, gives other work to the right agent, and answers in WhatsApp.",
+  "connector.whatsapp.orchestratorNone": "No agent answers yet",
+  "connector.whatsapp.orchestratorNoneDescription": "Add the WhatsApp Orchestrator, or WhatsApp gets no answer.",
+  "connector.whatsapp.note":
+    "On your personal number, write in your “Message yourself” chat. The people you allow write to the number.",
+  "connector.whatsapp.stepNumber": "Number",
+  "connector.whatsapp.stepAgent": "Agent",
+  "connector.whatsapp.connectTitle": "Link WhatsApp",
+  "connector.whatsapp.connectDescription": "Select the number, then link this computer from WhatsApp on your phone.",
+  "connector.whatsapp.connectDescriptionHost": "Select the number, then link this server from WhatsApp on your phone.",
+  "connector.whatsapp.kindLabel": "Number",
+  "connector.whatsapp.kindPersonal": "My personal number",
+  "connector.whatsapp.kindPersonalDescription":
+    "GoAhead answers only your “Message yourself” chat and the people you allow. Other people get no reply.",
+  "connector.whatsapp.kindDedicated": "A number only for GoAhead",
+  "connector.whatsapp.kindDedicatedDescription":
+    "GoAhead replies from this number to each unknown person, with a code to give you. You approve them here.",
+  "connector.whatsapp.methodLabel": "How to link",
+  "connector.whatsapp.methodQr": "QR code",
+  "connector.whatsapp.methodCode": "Pairing code",
+  "connector.whatsapp.phoneLabel": "Phone number",
+  "connector.whatsapp.phoneDescription": "With the country code, such as +44 7700 900123.",
+  "connector.whatsapp.phoneInvalid": "Type the phone number with its country code.",
+  "connector.whatsapp.showQr": "Show QR code",
+  "connector.whatsapp.getCode": "Get code",
+  "connector.whatsapp.starting": "Asking WhatsApp for a code…",
+  "connector.whatsapp.connectStepOpen": "Open WhatsApp on your phone",
+  "connector.whatsapp.connectStepDevices": "Tap Settings, then Linked devices, then Link a device",
+  "connector.whatsapp.connectStepScan": "Point the phone at this code",
+  "connector.whatsapp.connectWaiting": "Waiting for the phone. The code changes about every 20 seconds.",
+  "connector.whatsapp.qrLabel": "WhatsApp link code",
+  "connector.whatsapp.codeStepDevices": "In WhatsApp, open Linked devices and tap Link a device",
+  "connector.whatsapp.codeStepPhone": "Tap Link with phone number instead",
+  "connector.whatsapp.codeStepType": "Type this code on the phone",
+  "connector.whatsapp.codeLabel": "Pairing code {code}",
+  "connector.whatsapp.copyCode": "Copy code",
+  "connector.whatsapp.codeWaiting": "Waiting for the phone.",
+  "connector.whatsapp.failedTitle": "WhatsApp did not link",
+  "connector.whatsapp.failedTimeout": "The code expired before the phone used it.",
+  "connector.whatsapp.failedRefused": "WhatsApp refused the link. Wait a few minutes, then try again.",
+  "connector.whatsapp.failedBusy": "Another link is running. Wait for it to end, then try again.",
+  "connector.whatsapp.failedUnavailable": "GoAhead cannot reach WhatsApp. Check the internet connection.",
+  "connector.whatsapp.tryAgain": "Try again",
+  "connector.whatsapp.agentStepTitle": "Add the WhatsApp Orchestrator",
+  "connector.whatsapp.agentStepDescription":
+    "This new agent answers the messages for GoAhead on {number} and on each number that you link later.",
+  "connector.whatsapp.orchestratorName": "WhatsApp Orchestrator",
+  "connector.whatsapp.orchestratorRole": "Answers in WhatsApp and asks the team",
+  "connector.whatsapp.orchestratorDoesReceive": "Receives every WhatsApp message for GoAhead first",
+  "connector.whatsapp.orchestratorDoesDelegate": "Gives each task to the agent that fits best",
+  "connector.whatsapp.orchestratorDoesAnswer": "Answers in the WhatsApp chat",
+  "connector.whatsapp.orchestratorModel": "Model",
+  "connector.whatsapp.doneTitle": "GoAhead is linked to {number}",
+  "connector.whatsapp.done": "Done",
+  "connector.whatsapp.disconnectTitle": "Disconnect {number}?",
+  "connector.whatsapp.disconnectDescription":
+    "GoAhead logs out of WhatsApp on {number}. If GoAhead was off, also remove the device in WhatsApp > Linked devices.",
+  "connector.whatsapp.disconnectEffect": "People can no longer reach your agents through {number}.",
+  "connector.whatsapp.removeEffectKept": "The conversations and the WhatsApp Orchestrator stay in GoAhead.",
+  "connector.whatsapp.removeEffectDeleted":
+    "This is the last number, so the WhatsApp Orchestrator and its conversations are deleted from GoAhead.",
+  "connector.whatsapp.keep": "Keep linked",
+  "connector.whatsapp.close": "Close",
+  "connector.whatsapp.sendersTitle": "Who can write to {number}",
+  "connector.whatsapp.sendersDescription": "These contacts and groups can give work to your agents.",
+  "connector.whatsapp.sendersEmpty": "Only you can write. Add a contact or a group.",
+  "connector.whatsapp.sendersLimit": "A number can allow up to {count} contacts and groups.",
+  "connector.whatsapp.senderGroup": "Group",
+  "connector.whatsapp.removeSender": "Remove",
+  "connector.whatsapp.senderAccess": "Access for {name}",
+  "connector.whatsapp.senderReplies": "Can give work",
+  "connector.whatsapp.senderReadOnly": "Read only",
+  "connector.whatsapp.addContact": "Add contact",
+  "connector.whatsapp.addGroup": "Add group",
+  "connector.whatsapp.contactTitle": "Add a contact",
+  "connector.whatsapp.contactDescription": "This person can give work to your agents from WhatsApp.",
+  "connector.whatsapp.contactName": "Name",
+  "connector.whatsapp.contactNameDescription": "Optional. Empty, the list shows the phone number.",
+  "connector.whatsapp.add": "Add",
+  "connector.whatsapp.groupTitle": "Add a group",
+  "connector.whatsapp.groupDescription":
+    "People in this group can give work to your agents when they mention the number or reply to its messages.",
+  "connector.whatsapp.groupSearch": "Search groups",
+  "connector.whatsapp.groupsLoading": "Reading the groups…",
+  "connector.whatsapp.groupsLoadFailed": "GoAhead could not read the groups",
+  "connector.whatsapp.groupsEmpty": "This number is in no group.",
+  "connector.whatsapp.groupsNoMatch": "No group has this name.",
+  "connector.whatsapp.groupAdded": "Added",
+  "connector.whatsapp.requestsTitle": "Requests for {number}",
+  "connector.whatsapp.requestsDescription":
+    "These people wrote to the number and got a code. Approve a person only when they gave you the same code.",
+  "connector.whatsapp.requestsEmpty": "No requests.",
+  "connector.whatsapp.requestDetail": "Code {code} · {number}",
+  "connector.whatsapp.approve": "Approve",
+  "connector.whatsapp.deny": "Deny",
   "connector.onePassword.title": "1Password",
   "connector.onePassword.description":
     "Share a dedicated 1Password vault with GoAhead through a service account, so agents can sign in to sites in the GoAhead browser.",
   "connector.onePassword.howItWorks":
     "Connecting sets up a “Shared with OpenBot” vault in your 1Password account and a service account that can read only that vault. GoAhead fills saved logins in its browser on this computer, so only the items you move into that vault are ever shared. Agents never see a password.",
   "connector.onePassword.connect": "Connect 1Password",
-  // The three setup steps before a connection, each with the one button it needs.
   "connector.onePassword.setupTitle": "Set up",
   "connector.onePassword.stepCliTitle": "Install the 1Password CLI",
   "connector.onePassword.stepCliChecking": "Looking for the 1Password CLI on this computer",
   "connector.onePassword.stepCliInstalling": "Downloading the 1Password CLI from 1Password",
-  // {version} is a version number, such as 2.39.0.
   "connector.onePassword.stepCliReady": "Version {version} is installed.",
   "connector.onePassword.stepCliMissing":
     "GoAhead downloads it from 1Password into its own folder. It needs no administrator password.",
@@ -249,11 +574,14 @@ export const messages = defineMessages("connector", {
     "In the 1Password app, open Settings > Developer and turn on “Integrate with 1Password CLI”.",
   "connector.onePassword.stepAppReady": "The 1Password app lets the CLI create the shared vault.",
   "connector.onePassword.openApp": "Open 1Password",
+  "connector.onePassword.openAppFailed": "GoAhead could not open 1Password.",
   "connector.onePassword.checkAgain": "Check again",
   "connector.onePassword.stepVaultTitle": "Create the shared vault",
   "connector.onePassword.stepVaultDescription":
     "GoAhead creates the vault “Shared with OpenBot” and a service account that can only read it. 1Password asks you to approve.",
-  "connector.onePassword.useToken": "Use a service account token instead",
+  "connector.onePassword.useTokenDescription":
+    "Instead of these steps, paste a service account token from 1Password.com.",
+  "connector.onePassword.useTokenAction": "Use token",
   "connector.onePassword.tokenLabel": "Service account token",
   "connector.onePassword.tokenPlaceholder": "ops_…",
   "connector.onePassword.connectWithToken": "Connect",
@@ -266,7 +594,6 @@ export const messages = defineMessages("connector", {
   "connector.onePassword.vaultDescription":
     "Move a login into this vault in 1Password to let agents sign in with it. Remove it to stop.",
   "connector.onePassword.loginsLoading": "Reading the logins from 1Password",
-  // {count} is a number, such as 3.
   "connector.onePassword.loginCount": { one: "{count} login", other: "{count} logins" },
   "connector.onePassword.disconnect": "Disconnect",
   "connector.onePassword.disconnectTitle": "Disconnect 1Password",
@@ -276,6 +603,12 @@ export const messages = defineMessages("connector", {
   "connector.onePassword.statusConnected": "Connected",
   "connector.onePassword.statusConnecting": "Connecting",
   "connector.onePassword.statusNotSetUp": "Not set up",
+  "connector.onePassword.descriptionHost":
+    "Share a dedicated 1Password vault with GoAhead on {host} through a service account, so agents on {host} can sign in to sites in its browser.",
+  "connector.onePassword.howItWorksHost":
+    "{host} connects with a service account token. On 1Password.com, create a service account that can read only the vault you share with GoAhead, then paste its token here. {host} checks the token and keeps it; this computer does not. Agents never see a password.",
+  "connector.onePassword.disconnectSummaryHost":
+    "{host} forgets the token. The vault and the service account stay in 1Password; remove them there if you no longer need them.",
   "connector.bitwarden.title": "Bitwarden",
   "connector.bitwarden.description": "Fill browser logins from Bitwarden.",
   "connector.bitwarden.setup":
@@ -287,7 +620,96 @@ export const messages = defineMessages("connector", {
   "connector.bitwarden.sessionKey": "Bitwarden session key",
   "connector.bitwarden.connect": "Connect Bitwarden",
   "connector.bitwarden.disconnect": "Disconnect Bitwarden",
+  "connector.bitwarden.disconnectAction": "Disconnect",
+  "connector.bitwarden.disconnectSummary":
+    "GoAhead forgets the session key. Agents can no longer fill logins from Bitwarden. Other Bitwarden clients stay unlocked.",
+  "connector.bitwarden.disconnectSummaryHost":
+    "{host} removes the API key and the master password. Agents on {host} can no longer fill logins from Bitwarden.",
   "connector.bitwarden.connected": "Connected",
   "connector.bitwarden.disconnected": "Not connected",
   "connector.bitwarden.failed": "Could not connect to Bitwarden.",
+  "connector.bitwarden.actionFailed": "GoAhead could not change the Bitwarden connection.",
+  "connector.bitwarden.descriptionHost": "Fill browser logins on {host} from Bitwarden or Vaultwarden.",
+  "connector.bitwarden.setupHost":
+    "{host} signs in with its own Bitwarden CLI. In your vault, create a folder named Shared with OpenBot and put only the logins that agents may use in it. In the web vault, open Settings › Security › Keys and view your API key. Enter the server address, client_id, client_secret and your master password below.",
+  "connector.bitwarden.scopeHost":
+    "All agents on {host} can use matching logins in Shared with OpenBot. GoAhead uses exact HTTPS origins. It does not use items that require a master password prompt or a custom URI match rule.",
+  "connector.bitwarden.sessionHost":
+    "{host} keeps the API key and the master password encrypted, so it can unlock again after a restart. This computer does not keep them. Disconnect removes them from {host}. {host} must reach the server address over HTTPS.",
+  "connector.bitwarden.serverUrl": "Server address",
+  "connector.bitwarden.folderTitle": "Shared folder",
+  "connector.bitwarden.folderDescription":
+    "Move a login into this folder in Bitwarden to let agents sign in with it. Remove it to stop.",
+  "connector.bitwarden.folderName": "Shared with OpenBot",
+  "connector.bitwarden.folderKind": "Folder in Bitwarden",
+  "connector.bitwarden.clientId": "API key client_id",
+  "connector.bitwarden.clientSecret": "API key client_secret",
+  "connector.bitwarden.masterPassword": "Master password",
+  "connector.bitwarden.connecting": "Connecting",
+  "connector.protonPass.title": "Proton Pass",
+  "connector.protonPass.description": "Let agents sign in to sites with the logins in a shared Proton Pass vault.",
+  "connector.protonPass.descriptionHost":
+    "Let agents on {host} sign in to sites with the logins in a shared Proton Pass vault.",
+  "connector.protonPass.connect": "Connect",
+  "connector.protonPass.moreWays": "More ways to connect",
+  "connector.protonPass.useKey": "Use an access key",
+  "connector.protonPass.keyLabel": "Access key",
+  "connector.protonPass.keyPlaceholder": "pst_…",
+  "connector.protonPass.setupTitle": "Set up",
+  "connector.protonPass.setupDescription":
+    "Connect opens the Proton sign-in in your browser. Then GoAhead makes the shared vault and keeps only a read-only key for it.",
+  "connector.protonPass.setupDescriptionHost":
+    "Connect opens the Proton sign-in in your browser. Then {host} makes the shared vault and keeps only a read-only key for it.",
+  "connector.protonPass.vaultName": "Shared with OpenBot",
+  "connector.protonPass.vaultSetup": "GoAhead makes this vault when you connect. Move logins into it to share them.",
+  "connector.protonPass.showSteps": "Show steps",
+  "connector.protonPass.stepsLabel": "Connect steps",
+  "connector.protonPass.stepSignIn": "Sign in",
+  "connector.protonPass.stepVault": "Make the shared vault",
+  "connector.protonPass.stepDone": "Done",
+  "connector.protonPass.signInTitle": "Sign in to Proton",
+  "connector.protonPass.signInStarting": "GoAhead starts the sign-in. The Proton page opens in your browser.",
+  "connector.protonPass.signInDescription":
+    "The sign-in is open in your browser. Proton asks for your password and your second factor.",
+  "connector.protonPass.signInDescriptionHost":
+    "The sign-in for {host} is open in your browser. Proton asks for your password and your second factor.",
+  "connector.protonPass.extraPasswordDescription": "Proton Pass asks for your extra password.",
+  "connector.protonPass.extraPasswordWrong": "The extra password is not correct. Enter it again.",
+  "connector.protonPass.extraPasswordLabel": "Extra password",
+  "connector.protonPass.continue": "Continue",
+  "connector.protonPass.setupStepTitle": "Making the shared vault",
+  "connector.protonPass.setupStepDescription":
+    "GoAhead makes the vault “{vault}” and a read-only key for it. Then it signs out of your Proton session.",
+  "connector.protonPass.doneTitle": "Proton Pass is connected",
+  "connector.protonPass.doneDescription": "Move logins into “{vault}” to let agents sign in with them.",
+  "connector.protonPass.failedTitle": "Proton Pass did not connect",
+  "connector.protonPass.copyLink": "Copy link",
+  "connector.protonPass.linkCopied": "Copied",
+  "connector.protonPass.openAgain": "Open again",
+  "connector.protonPass.done": "Done",
+  "connector.protonPass.close": "Close",
+  "connector.protonPass.statusConnecting": "Connecting",
+  "connector.protonPass.statusConnected": "Connected",
+  "connector.protonPass.statusExpired": "Key expired",
+  "connector.protonPass.expiredTitle": "The Proton Pass key expired",
+  "connector.protonPass.expiredDescription": "Agents cannot sign in with your shared logins until you sign in again.",
+  "connector.protonPass.reconnect": "Reconnect",
+  "connector.protonPass.planTitle": "Proton Pass needs a plan with Pass Plus",
+  "connector.protonPass.planDescription":
+    "The Proton Pass CLI needs a Proton plan that includes Pass Plus. Other paid plans, such as Mail Plus, do not include it. Change your plan, then connect again.",
+  "connector.protonPass.vaultTitle": "Shared vault",
+  "connector.protonPass.vaultDescription":
+    "Agents can sign in with the logins in this vault. Move a login into it to share it.",
+  "connector.protonPass.loginCount": { one: "{count} login", other: "{count} logins" },
+  "connector.protonPass.loginsLoading": "Counting logins…",
+  "connector.protonPass.keyExpires": "Read only. Expires on {date}.",
+  "connector.protonPass.keyExpired": "Read only. Expired on {date}.",
+  "connector.protonPass.keyNoExpiry": "Read only. Does not expire.",
+  "connector.protonPass.disconnectTitle": "Disconnect Proton Pass",
+  "connector.protonPass.disconnectSummary":
+    "GoAhead deletes its access key on this computer. The vault and its logins stay in your Proton account.",
+  "connector.protonPass.disconnectSummaryHost":
+    "GoAhead deletes its access key on {host}. The vault and its logins stay in your Proton account.",
+  "connector.protonPass.disconnect": "Disconnect",
+  "connector.protonPass.actionFailed": "GoAhead could not change the Proton Pass connection.",
 });

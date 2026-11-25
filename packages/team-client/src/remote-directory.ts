@@ -1,4 +1,5 @@
-import { sha256 } from "@noble/hashes/sha2.js";
+import { type CustomServerPlan, optionalCustomServerPayment } from "@openbot/contracts/custom-server-plans";
+import { type HostKeyHandover, optionalHostKeyHandovers } from "@openbot/contracts/host-key-handover";
 import {
   createInviteUrl,
   type InviteLinkOptions,
@@ -10,21 +11,48 @@ import {
   selfHostedApiOrigin,
 } from "@openbot/contracts/invite-links";
 import type { MobileConnectHostBinding } from "@openbot/contracts/mobile-connect";
+import {
+  type AcceptedOwnerTransfer,
+  decodeAcceptedOwnerTransfer,
+  decodeIncomingOwnerTransfers,
+  decodeOwnerTransfer,
+  decodePendingOwnerTransfer,
+  type OwnerTransfer,
+} from "@openbot/contracts/owner-transfer";
 import { PRODUCT_IDENTITY } from "@openbot/contracts/product-identity";
 import { decodeRemoteSession, decodeRemoteSessionTicket } from "@openbot/contracts/remote-control-plane";
 import { isBoolean, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
+import {
+  optionalServerAppearanceField,
+  type ServerAppearance,
+} from "@openbot/contracts/team-protocol/host-appearance-v1";
 import { sourceText } from "@openbot/i18n/source";
+import { referenceFrom, safeReference } from "@openbot/user-errors/reference";
+import { Deferred, Effect, Schema, Semaphore } from "effect";
+import { runTeamEffect } from "./effect-boundary";
+import {
+  followHostKeyHandovers,
+  type HostKeySignatureCheck,
+  hostKeyChangedAt,
+  remoteHostFingerprint,
+} from "./host-key-handover";
 import type { TeamClientFetch } from "./index";
 
 export interface RemoteTeamHost {
   hostId: string;
   name: string;
   logoKey: string | null;
+  appearance?: ServerAppearance | null;
   devicePublicKey: string;
   membershipId: string;
   role: "owner" | "admin" | "member";
-  /** The active members that the host's plan allows. An account server from before plans sends none. */
   memberLimit?: number;
+  hosted?: boolean;
+  restartAvailable?: boolean;
+  storageGb?: number;
+  keyChangedAt?: number;
+  paymentRequired?: true;
+  customPlan?: CustomServerPlan;
 }
 
 export interface RemoteTeamMember {
@@ -34,7 +62,6 @@ export interface RemoteTeamMember {
   role: "owner" | "admin" | "member";
   status: "active" | "revoked";
   avatarUrl?: string | null;
-  /** Epoch milliseconds. */
   createdAt?: number;
 }
 
@@ -63,6 +90,7 @@ export interface RemoteInvitePreview {
   emailBound: boolean;
   permanent: boolean;
   devicePublicKey: string | null;
+  keyHandovers: HostKeyHandover[];
 }
 
 export interface RemoteHostKeyStore {
@@ -70,21 +98,48 @@ export interface RemoteHostKeyStore {
   set(hostId: string, publicKey: string): Promise<void>;
 }
 
-export function remoteHostFingerprint(publicKey: string): string {
-  const digest = sha256(new TextEncoder().encode(publicKey));
-  return btoa(String.fromCharCode(...digest))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/u, "");
+export class RemoteDirectoryError extends Schema.TaggedError<RemoteDirectoryError>()("RemoteDirectoryError", {
+  status: Schema.Number,
+  message: Schema.String,
+  code: Schema.NullOr(Schema.String),
+  reference: Schema.NullOr(Schema.String),
+}) {
+  constructor(status: number, message: string, code: string | null = null, reference: string | null = null) {
+    super({ status, message, code, reference: reference ?? referenceFrom("http", status, code) });
+  }
+}
+class RemoteDirectoryOperationError extends Schema.TaggedError<RemoteDirectoryOperationError>()(
+  "RemoteDirectoryOperationError",
+  { message: Schema.String, reference: Schema.optional(Schema.NullOr(Schema.String)) },
+) {}
+type DirectoryFailure = RemoteDirectoryError | RemoteDirectoryOperationError;
+function directoryFailure(message: string, reference: string | null = null): RemoteDirectoryOperationError {
+  return new RemoteDirectoryOperationError({ message, reference });
 }
 
-export class RemoteDirectoryError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
+const DIRECTORY_ERROR_TEXT = new Map<string, string>([
+  ["invite_already_used", sourceText("error.remote.inviteAlreadyUsed")],
+  ["invite_not_found", sourceText("error.remote.inviteNotFound")],
+  ["member_limit_reached", sourceText("error.remote.memberLimitReached")],
+  ["license_users_full", sourceText("error.remote.licenseUsersFull")],
+  ["host_not_found", sourceText("error.remote.hostNotRegistered")],
+  ["membership_not_found", sourceText("error.remote.membershipEnded")],
+  ["membership_changed", sourceText("error.remote.membershipChanged")],
+  ["session_inactive", sourceText("error.remote.accountSessionInactive")],
+  ["host_owner_mismatch", sourceText("error.remote.hostOtherAccount")],
+  ["remote_not_configured", sourceText("error.remote.remoteNotConfigured")],
+]);
+function directoryIO<A>(operation: () => Promise<A>): Effect.Effect<A, RemoteDirectoryOperationError> {
+  return Effect.tryPromise({
+    try: operation,
+    catch: (error) => directoryFailure(error instanceof Error ? error.message : String(error)),
+  });
+}
+function directoryDecode<A>(decode: () => A): Effect.Effect<A, RemoteDirectoryOperationError> {
+  return Effect.try({
+    try: decode,
+    catch: (error) => directoryFailure(error instanceof Error ? error.message : String(error)),
+  });
 }
 
 export class RemoteTeamDirectoryClient {
@@ -94,7 +149,8 @@ export class RemoteTeamDirectoryClient {
   readonly #hostKeys: RemoteHostKeyStore;
   readonly #pairedHost: MobileConnectHostBinding | undefined;
   readonly #inviteLinks: InviteLinkOptions;
-  #pinTail: Promise<void> = Promise.resolve();
+  readonly #verifyHostKeySignature: HostKeySignatureCheck;
+  readonly #pinLock = Semaphore.makeUnsafe(1);
 
   constructor(
     input: {
@@ -102,8 +158,8 @@ export class RemoteTeamDirectoryClient {
       fetch: TeamClientFetch;
       hostKeys?: RemoteHostKeyStore;
       pairedHost?: MobileConnectHostBinding;
-      /** A development client passes `allowLocalDevelopmentApiUrl` to use a local account service. */
       inviteLinks?: InviteLinkOptions;
+      verifyHostKeySignature: HostKeySignatureCheck;
     } & ({ token: string; authentication?: never } | { token?: never; authentication: { kind: "browser" } }),
   ) {
     this.#apiUrl = input.apiUrl;
@@ -111,8 +167,7 @@ export class RemoteTeamDirectoryClient {
     this.#authentication = input.authentication ?? { kind: "bearer", token: input.token ?? "" };
     this.#fetch = input.fetch;
     this.#pairedHost = input.pairedHost;
-    // A self-hosted account service accepts invitations that name it. `previewInvite` still refuses
-    // an invitation for any other service.
+    this.#verifyHostKeySignature = input.verifyHostKeySignature;
     this.#inviteLinks = { selfHostedApiOrigin: selfHostedApiOrigin(input.apiUrl), ...input.inviteLinks };
     const keys = new Map<string, string>();
     this.#hostKeys = input.hostKeys ?? {
@@ -123,181 +178,298 @@ export class RemoteTeamDirectoryClient {
     };
   }
 
-  async listHosts(): Promise<RemoteTeamHost[]> {
-    const value = await this.#request("/v2/remote/hosts/");
-    if (!isDynamicRecord(value) || !Array.isArray(value.hosts)) throw new Error("The server list is invalid.");
-    const hosts = await Promise.all(
-      value.hosts.map(async (candidate): Promise<RemoteTeamHost[]> => {
-        if (!isDynamicRecord(candidate) || !isString(candidate.devicePublicKey) || !candidate.devicePublicKey)
-          return [];
-        const memberLimit = candidate.memberLimit;
+  listHosts(): Effect.Effect<RemoteTeamHost[], DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<RemoteTeamHost[], DirectoryFailure> {
+      const value = yield* this.#request("/v2/remote/hosts/");
+      if (!isDynamicRecord(value) || !Array.isArray(value.hosts))
+        return yield* directoryFailure("The server list is invalid.");
+      const handoversByHost = new Map<string, HostKeyHandover[]>();
+      const hosts = yield* Effect.all(
+        value.hosts.map((candidate) =>
+          Effect.gen({ self: this }, function* (): Effect.fn.Return<RemoteTeamHost[], DirectoryFailure> {
+            if (!isDynamicRecord(candidate) || !isString(candidate.devicePublicKey) || !candidate.devicePublicKey)
+              return [];
+            const memberLimit = candidate.memberLimit;
+            const hosted = candidate.hosted;
+            const restartAvailable = candidate.restartAvailable;
+            const storageGb = candidate.storageGb;
+            if (
+              (memberLimit !== undefined &&
+                (!isNumber(memberLimit) || !Number.isSafeInteger(memberLimit) || memberLimit < 1)) ||
+              !isString(candidate.hostId) ||
+              !isString(candidate.name) ||
+              (candidate.logoKey !== null && !isString(candidate.logoKey)) ||
+              !isString(candidate.membershipId) ||
+              (candidate.role !== "owner" && candidate.role !== "admin" && candidate.role !== "member")
+            ) {
+              return yield* directoryFailure("A server record is invalid.");
+            }
+            const hostId = candidate.hostId;
+            const handovers = optionalHostKeyHandovers(candidate.keyHandovers);
+            handoversByHost.set(hostId, handovers);
+            const devicePublicKey = yield* this.#trustedHostKey(hostId, candidate.devicePublicKey, handovers);
+            const keyChangedAt = handovers.length
+              ? yield* hostKeyChangedAt({
+                  hostId,
+                  publicKey: devicePublicKey,
+                  handovers,
+                  verify: this.#verifyHostKeySignature,
+                })
+              : null;
+            return [
+              {
+                hostId: candidate.hostId,
+                name: candidate.name,
+                logoKey: candidate.logoKey,
+                ...optionalServerAppearanceField(candidate.appearance),
+                devicePublicKey,
+                membershipId: candidate.membershipId,
+                role: candidate.role,
+                ...(memberLimit === undefined ? {} : { memberLimit }),
+                ...(isBoolean(hosted) ? { hosted } : {}),
+                ...(isBoolean(restartAvailable) ? { restartAvailable } : {}),
+                ...(isNumber(storageGb) && Number.isSafeInteger(storageGb) && storageGb >= 1 ? { storageGb } : {}),
+                ...(keyChangedAt === null ? {} : { keyChangedAt }),
+                ...optionalCustomServerPayment(candidate),
+              },
+            ];
+          }),
+        ),
+        { concurrency: "unbounded" },
+      );
+      const directory = hosts.flat();
+      if (this.#pairedHost) {
+        const binding = this.#pairedHost;
+        const paired = directory.find((host) => host.hostId === binding.hostId);
         if (
-          (memberLimit !== undefined &&
-            (!isNumber(memberLimit) || !Number.isSafeInteger(memberLimit) || memberLimit < 1)) ||
-          !isString(candidate.hostId) ||
-          !isString(candidate.name) ||
-          (candidate.logoKey !== null && !isString(candidate.logoKey)) ||
-          !isString(candidate.membershipId) ||
-          (candidate.role !== "owner" && candidate.role !== "admin" && candidate.role !== "member")
+          paired &&
+          remoteHostFingerprint(paired.devicePublicKey) !== binding.fingerprint &&
+          !(yield* followHostKeyHandovers({
+            hostId: paired.hostId,
+            trustedFingerprint: binding.fingerprint,
+            advertisedPublicKey: paired.devicePublicKey,
+            handovers: handoversByHost.get(paired.hostId) ?? [],
+            verify: this.#verifyHostKeySignature,
+          }))
         ) {
-          throw new Error("A server record is invalid.");
+          return yield* directoryFailure(sourceText("error.remote.pairedIdentityChanged"));
         }
-        const pinnedKey = await this.#hostKeys.get(candidate.hostId);
-        if (pinnedKey && remoteHostFingerprint(candidate.devicePublicKey) !== remoteHostFingerprint(pinnedKey)) {
-          throw new Error(sourceText("error.remote.serverIdentityChanged"));
-        }
-        return [
-          {
-            hostId: candidate.hostId,
-            name: candidate.name,
-            logoKey: candidate.logoKey,
-            devicePublicKey: pinnedKey ?? candidate.devicePublicKey,
-            membershipId: candidate.membershipId,
-            role: candidate.role,
-            ...(memberLimit === undefined ? {} : { memberLimit }),
-          },
-        ];
-      }),
-    );
-    const directory = hosts.flat();
-    if (this.#pairedHost) {
-      const paired = directory.find((host) => host.hostId === this.#pairedHost?.hostId);
-      if (paired && remoteHostFingerprint(paired.devicePublicKey) !== this.#pairedHost.fingerprint) {
-        throw new Error(sourceText("error.remote.pairedIdentityChanged"));
+        if (paired) yield* this.#pinHostKey(paired.hostId, paired.devicePublicKey);
       }
-      if (paired) await this.#pinHostKey(paired.hostId, paired.devicePublicKey);
-    }
-    return directory;
+      return directory;
+    });
   }
 
-  async listMembers(hostId: string): Promise<RemoteTeamMember[]> {
-    const value = await this.#request(`/v2/remote/hosts/${encodeURIComponent(hostId)}/members/`);
-    if (!isDynamicRecord(value) || !Array.isArray(value.members)) throw new Error("The member list is invalid.");
-    return value.members.map(decodeMember);
+  listMembers(hostId: string): Effect.Effect<RemoteTeamMember[], DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<RemoteTeamMember[], DirectoryFailure> {
+      const value = yield* this.#request(`/v2/remote/hosts/${encodeURIComponent(hostId)}/members/`);
+      if (!isDynamicRecord(value) || !Array.isArray(value.members))
+        return yield* directoryFailure("The member list is invalid.");
+      const members = value.members;
+      return yield* directoryDecode(() => members.map(decodeMember));
+    });
   }
 
-  async listInvites(hostId: string): Promise<RemoteTeamInvite[]> {
-    const value = await this.#request(`/v2/remote/hosts/${encodeURIComponent(hostId)}/invites`);
-    if (!isDynamicRecord(value) || !Array.isArray(value.invites)) throw new Error("The invitation list is invalid.");
-    return value.invites.map(decodeInvite);
+  listInvites(hostId: string): Effect.Effect<RemoteTeamInvite[], DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<RemoteTeamInvite[], DirectoryFailure> {
+      const value = yield* this.#request(`/v2/remote/hosts/${encodeURIComponent(hostId)}/invites`);
+      if (!isDynamicRecord(value) || !Array.isArray(value.invites))
+        return yield* directoryFailure("The invitation list is invalid.");
+      const invites = value.invites;
+      return yield* directoryDecode(() => invites.map(decodeInvite));
+    });
   }
 
-  async createInvite(
+  createInvite(
     host: { hostId: string; devicePublicKey: string },
     input: { role: "admin" | "member"; email?: string; permanent?: boolean },
-  ): Promise<{ inviteId: string; inviteUrl: string; expiresAt: number }> {
-    if (input.permanent && input.email) throw new Error(sourceText("error.remote.permanentInviteNoEmail"));
-    // Validate the URL before creating an invitation.
-    const payload = {
-      apiUrl: this.#inviteApiUrl(),
-      serverId: host.hostId,
-      fingerprint: remoteHostFingerprint(host.devicePublicKey),
-      token: "x".repeat(32),
-    };
-    createInviteUrl(payload, this.#inviteLinks);
-    // The account service sends only an openbot.run link, and a self-hosted invitation is not one.
-    if (input.email && selfHostedApiOrigin(payload.apiUrl))
-      throw new Error(sourceText("error.remote.selfHostedInviteNoEmail"));
-    const value = await this.#request(`/v2/remote/hosts/${encodeURIComponent(host.hostId)}/invites`, {
-      method: "POST",
-      body: input,
+  ): Effect.Effect<{ inviteId: string; inviteUrl: string; expiresAt: number }, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<
+      { inviteId: string; inviteUrl: string; expiresAt: number },
+      DirectoryFailure
+    > {
+      if (input.permanent && input.email)
+        return yield* directoryFailure(sourceText("error.remote.permanentInviteNoEmail"));
+      const payload = {
+        apiUrl: yield* directoryDecode(() => this.#inviteApiUrl()),
+        serverId: host.hostId,
+        fingerprint: remoteHostFingerprint(host.devicePublicKey),
+        token: "x".repeat(32),
+      };
+      yield* directoryDecode(() => createInviteUrl(payload, this.#inviteLinks));
+      if (input.email && selfHostedApiOrigin(payload.apiUrl))
+        return yield* directoryFailure(sourceText("error.remote.selfHostedInviteNoEmail"));
+      const value = yield* this.#request(`/v2/remote/hosts/${encodeURIComponent(host.hostId)}/invites`, {
+        method: "POST",
+        body: input,
+      });
+      if (!isDynamicRecord(value) || !isString(value.inviteId) || !isString(value.token) || !isNumber(value.expiresAt))
+        return yield* directoryFailure("The invitation is invalid.");
+      const token = value.token;
+      return {
+        inviteId: value.inviteId,
+        inviteUrl: yield* directoryDecode(() => createInviteUrl({ ...payload, token }, this.#inviteLinks)),
+        expiresAt: value.expiresAt,
+      };
     });
-    if (!isDynamicRecord(value) || !isString(value.inviteId) || !isString(value.token) || !isNumber(value.expiresAt))
-      throw new Error("The invitation is invalid.");
-    return {
-      inviteId: value.inviteId,
-      inviteUrl: createInviteUrl({ ...payload, token: value.token }, this.#inviteLinks),
-      expiresAt: value.expiresAt,
-    };
   }
 
-  async sendInviteEmail(
+  sendInviteEmail(
     host: { hostId: string; devicePublicKey: string; name: string },
     input: { role: "admin" | "member"; email: string },
-  ): Promise<{ inviteId: string; inviteUrl: string; expiresAt: number }> {
-    const invite = await this.createInvite(host, input);
-    try {
-      await this.#request("/v1/team-invitations/email", {
+  ): Effect.Effect<{ inviteId: string; inviteUrl: string; expiresAt: number }, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<
+      { inviteId: string; inviteUrl: string; expiresAt: number },
+      DirectoryFailure
+    > {
+      const invite = yield* this.createInvite(host, input);
+      yield* this.#request("/v1/team-invitations/email", {
         method: "POST",
         body: { ...input, serverName: host.name, inviteUrl: invite.inviteUrl },
-      });
-    } catch (error) {
-      await this.revokeInvite(invite.inviteId).catch(() => undefined);
-      throw error;
-    }
-    return invite;
+      }).pipe(
+        Effect.catch((error) =>
+          this.revokeInvite(invite.inviteId).pipe(
+            Effect.catch(() => Effect.void),
+            Effect.andThen(Effect.fail(error)),
+          ),
+        ),
+      );
+      return invite;
+    });
   }
 
-  async revokeInvite(inviteId: string): Promise<void> {
-    await this.#request(`/v2/remote/invites/${encodeURIComponent(inviteId)}`, { method: "DELETE" });
+  revokeInvite(inviteId: string): Effect.Effect<void, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<void, DirectoryFailure> {
+      yield* this.#request(`/v2/remote/invites/${encodeURIComponent(inviteId)}`, { method: "DELETE" });
+    });
   }
 
-  async updateMember(
+  updateMember(
     hostId: string,
     membershipId: string,
     role: "admin" | "member",
     reactivate = false,
-  ): Promise<void> {
-    await this.#request(`/v2/remote/hosts/${encodeURIComponent(hostId)}/members/${encodeURIComponent(membershipId)}`, {
-      method: "PATCH",
-      body: { role, ...(reactivate ? { reactivate: true } : {}) },
+  ): Effect.Effect<void, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<void, DirectoryFailure> {
+      yield* this.#request(
+        `/v2/remote/hosts/${encodeURIComponent(hostId)}/members/${encodeURIComponent(membershipId)}`,
+        {
+          method: "PATCH",
+          body: { role, ...(reactivate ? { reactivate: true } : {}) },
+        },
+      );
     });
   }
 
-  async leaveHost(hostId: string, membershipId: string): Promise<void> {
-    await this.#request(`/v2/remote/hosts/${encodeURIComponent(hostId)}/members/${encodeURIComponent(membershipId)}`, {
-      method: "DELETE",
+  leaveHost(hostId: string, membershipId: string): Effect.Effect<void, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<void, DirectoryFailure> {
+      yield* this.#request(
+        `/v2/remote/hosts/${encodeURIComponent(hostId)}/members/${encodeURIComponent(membershipId)}`,
+        {
+          method: "DELETE",
+        },
+      );
     });
-    // Keep the identity pin: leaving a team must not silently trust a substituted key on rejoin.
   }
 
-  async createBootstrap(
+  pendingOwnerTransfer(hostId: string): Effect.Effect<OwnerTransfer | null, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<OwnerTransfer | null, DirectoryFailure> {
+      const value = yield* this.#request(`/v2/remote/hosts/${encodeURIComponent(hostId)}/owner-transfer`);
+      return yield* directoryDecode(() => decodePendingOwnerTransfer(value));
+    });
+  }
+
+  startOwnerTransfer(hostId: string, email: string): Effect.Effect<OwnerTransfer, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<OwnerTransfer, DirectoryFailure> {
+      const value = yield* this.#request(`/v2/remote/hosts/${encodeURIComponent(hostId)}/owner-transfer`, {
+        method: "POST",
+        body: { email },
+      });
+      return yield* directoryDecode(() => decodeOwnerTransfer(value));
+    });
+  }
+
+  cancelOwnerTransfer(hostId: string): Effect.Effect<void, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<void, DirectoryFailure> {
+      yield* this.#request(`/v2/remote/hosts/${encodeURIComponent(hostId)}/owner-transfer`, { method: "DELETE" });
+    });
+  }
+
+  incomingOwnerTransfers(): Effect.Effect<OwnerTransfer[], DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<OwnerTransfer[], DirectoryFailure> {
+      const value = yield* this.#request("/v2/remote/owner-transfers/");
+      return yield* directoryDecode(() => decodeIncomingOwnerTransfers(value));
+    });
+  }
+
+  acceptOwnerTransfer(transferId: string): Effect.Effect<AcceptedOwnerTransfer, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<AcceptedOwnerTransfer, DirectoryFailure> {
+      const value = yield* this.#request(`/v2/remote/owner-transfers/${encodeURIComponent(transferId)}/accept`, {
+        method: "POST",
+      });
+      return yield* directoryDecode(() => decodeAcceptedOwnerTransfer(value));
+    });
+  }
+
+  declineOwnerTransfer(transferId: string): Effect.Effect<void, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<void, DirectoryFailure> {
+      yield* this.#request(`/v2/remote/owner-transfers/${encodeURIComponent(transferId)}/decline`, {
+        method: "POST",
+      });
+    });
+  }
+
+  removeOwnedHost(hostId: string): Effect.Effect<void, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<void, DirectoryFailure> {
+      yield* this.#request(`/v2/remote/hosts/${encodeURIComponent(hostId)}/`, { method: "DELETE" }).pipe(
+        Effect.catch((error) =>
+          error instanceof RemoteDirectoryError && (error.status === 403 || error.status === 404)
+            ? this.listHosts().pipe(
+                Effect.flatMap((hosts) =>
+                  hosts.some((host) => host.hostId === hostId) ? Effect.fail(error) : Effect.void,
+                ),
+              )
+            : Effect.fail(error),
+        ),
+      );
+    });
+  }
+
+  createBootstrap(
     hostId: string,
     clientPublicKey: string,
     existingSessionId: string | null = null,
-  ): Promise<RemoteTeamBootstrap> {
-    if (existingSessionId) {
-      try {
-        const ticket = decodeRemoteSessionTicket(
-          await this.#request(`/v2/remote/sessions/${encodeURIComponent(existingSessionId)}/ticket`, {
-            method: "POST",
-            body: { clientPublicKey },
-          }),
+  ): Effect.Effect<RemoteTeamBootstrap, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<RemoteTeamBootstrap, DirectoryFailure> {
+      if (existingSessionId) {
+        const existing = yield* this.#ticket(existingSessionId, clientPublicKey).pipe(
+          Effect.catch((error) =>
+            error instanceof RemoteDirectoryError && (error.status === 403 || error.status === 404)
+              ? Effect.succeed(null)
+              : Effect.fail(error),
+          ),
         );
-        return { sessionId: existingSessionId, signalUrl: ticket.signalUrl, ticket: ticket.ticket };
-      } catch (error) {
-        // Only an ended session is replaced. Another failure keeps it, so a retry does not leave it active.
-        if (!(error instanceof RemoteDirectoryError) || (error.status !== 403 && error.status !== 404)) throw error;
+        if (existing) return existing;
       }
-    }
-    const session = decodeRemoteSession(
-      await this.#request("/v2/remote/sessions/", { method: "POST", body: { hostId } }),
-    );
-    try {
-      const ticket = decodeRemoteSessionTicket(
-        await this.#request(`/v2/remote/sessions/${encodeURIComponent(session.sessionId)}/ticket`, {
-          method: "POST",
-          body: { clientPublicKey },
-        }),
+      const sessionId = yield* this.startSession(hostId);
+      return yield* this.#ticket(sessionId, clientPublicKey).pipe(
+        Effect.catch((error) =>
+          this.endSession(sessionId).pipe(
+            Effect.catch(() => Effect.void),
+            Effect.andThen(Effect.fail(error)),
+          ),
+        ),
       );
-      return {
-        sessionId: session.sessionId,
-        signalUrl: ticket.signalUrl,
-        ticket: ticket.ticket,
-      };
-    } catch (error) {
-      // The session is account-scoped and the host refuses a second one, so a failure between
-      // creating it and holding a ticket has to give it back or the next attempt is locked out.
-      await this.endSession(session.sessionId).catch(() => undefined);
-      throw error;
-    }
+    });
   }
 
-  /**
-   * The account service an invitation names. The public website serves the same Worker as
-   * `api.openbot.run`, but an invitation must name `api.openbot.run`: the desktop and mobile apps
-   * accept only that address.
-   */
+  startSession(hostId: string): Effect.Effect<string, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<string, DirectoryFailure> {
+      const value = yield* this.#request("/v2/remote/sessions/", { method: "POST", body: { hostId } });
+      return (yield* directoryDecode(() => decodeRemoteSession(value))).sessionId;
+    });
+  }
+
   #inviteApiUrl(): string {
     const url = new URL(this.#apiUrl);
     return this.#authentication.kind === "browser" && url.origin === OPENBOT_INVITE_ORIGIN
@@ -305,104 +477,176 @@ export class RemoteTeamDirectoryClient {
       : url.toString();
   }
 
-  async endSession(sessionId: string): Promise<void> {
-    await this.#request(`/v2/remote/sessions/${encodeURIComponent(sessionId)}/end`, { method: "POST" });
-  }
-
-  async previewInvite(inviteUrl: string): Promise<RemoteInvitePreview> {
-    const invite = parseInviteUrl(inviteUrl, this.#inviteLinks);
-    const inviteOrigin = new URL(invite.apiUrl).origin;
-    const origin = new URL(this.#apiUrl).origin;
-    // These production origins serve the same account Worker. Requests still use this client's origin.
-    const publicWebsiteInvite =
-      this.#authentication.kind === "browser" &&
-      origin === PRODUCT_IDENTITY.siteOrigin &&
-      inviteOrigin === PRODUCT_IDENTITY.controlPlaneOrigin;
-    if (inviteOrigin !== origin && !publicWebsiteInvite) {
-      throw new Error(sourceText("error.remote.inviteOtherService"));
-    }
-    const value = await this.#request("/v2/remote/invites/preview", {
-      method: "POST",
-      body: { token: invite.token },
-      authenticated: false,
+  endSession(sessionId: string): Effect.Effect<void, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<void, DirectoryFailure> {
+      yield* this.#request(`/v2/remote/sessions/${encodeURIComponent(sessionId)}/end`, { method: "POST" });
     });
-    const preview = decodeInvitePreview(value, invite.serverId);
-    if (!preview.devicePublicKey || remoteHostFingerprint(preview.devicePublicKey) !== invite.fingerprint) {
-      throw new Error(sourceText("error.remote.inviteFingerprintMismatch"));
-    }
-    return preview;
   }
 
-  async acceptInvite(inviteUrl: string): Promise<RemoteTeamHost> {
-    const invite = parseInviteUrl(inviteUrl, this.#inviteLinks);
-    const preview = await this.previewInvite(inviteUrl);
-    if (!preview.devicePublicKey) throw new Error(sourceText("error.remote.inviteHostKeyMissing"));
-    // Save the pin before consuming the one-use token, including across app restarts.
-    await this.#pinHostKey(invite.serverId, preview.devicePublicKey);
-    const accepted = await this.#request("/v2/remote/invites/accept", {
-      method: "POST",
-      body: { token: invite.token },
-    });
-    if (
-      !isDynamicRecord(accepted) ||
-      accepted.hostId !== invite.serverId ||
-      !isString(accepted.membershipId) ||
-      !accepted.membershipId ||
-      accepted.role !== preview.role
-    )
-      throw new Error("The account service returned an invalid invitation acceptance.");
-    return {
-      hostId: invite.serverId,
-      name: preview.hostName,
-      logoKey: null,
-      devicePublicKey: preview.devicePublicKey,
-      membershipId: accepted.membershipId,
-      role: preview.role,
-    };
-  }
-
-  #pinHostKey(hostId: string, publicKey: string): Promise<void> {
-    const operation = this.#pinTail.then(async () => {
-      const pinned = await this.#hostKeys.get(hostId);
-      if (pinned && remoteHostFingerprint(pinned) !== remoteHostFingerprint(publicKey)) {
-        throw new Error(sourceText("error.remote.inviteKeyConflict"));
+  previewInvite(inviteUrl: string): Effect.Effect<RemoteInvitePreview, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<RemoteInvitePreview, DirectoryFailure> {
+      const invite = yield* directoryDecode(() => parseInviteUrl(inviteUrl, this.#inviteLinks));
+      const inviteOrigin = new URL(invite.apiUrl).origin;
+      const origin = new URL(this.#apiUrl).origin;
+      const publicWebsiteInvite =
+        this.#authentication.kind === "browser" &&
+        origin === PRODUCT_IDENTITY.siteOrigin &&
+        inviteOrigin === PRODUCT_IDENTITY.controlPlaneOrigin;
+      if (inviteOrigin !== origin && !publicWebsiteInvite) {
+        return yield* directoryFailure(sourceText("error.remote.inviteOtherService"));
       }
-      await this.#hostKeys.set(hostId, publicKey);
+      const value = yield* this.#request("/v2/remote/invites/preview", {
+        method: "POST",
+        body: { token: invite.token },
+        authenticated: false,
+      });
+      const preview = yield* directoryDecode(() => decodeInvitePreview(value, invite.serverId));
+      if (
+        !preview.devicePublicKey ||
+        (remoteHostFingerprint(preview.devicePublicKey) !== invite.fingerprint &&
+          !(yield* followHostKeyHandovers({
+            hostId: invite.serverId,
+            trustedFingerprint: invite.fingerprint,
+            advertisedPublicKey: preview.devicePublicKey,
+            handovers: preview.keyHandovers,
+            verify: this.#verifyHostKeySignature,
+          })))
+      ) {
+        return yield* directoryFailure(sourceText("error.remote.inviteFingerprintMismatch"));
+      }
+      return preview;
     });
-    this.#pinTail = operation.catch(() => undefined);
-    return operation;
   }
 
-  async #request(
+  acceptInvite(inviteUrl: string): Effect.Effect<RemoteTeamHost, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* (): Effect.fn.Return<RemoteTeamHost, DirectoryFailure> {
+      const invite = yield* directoryDecode(() => parseInviteUrl(inviteUrl, this.#inviteLinks));
+      const preview = yield* this.previewInvite(inviteUrl);
+      if (!preview.devicePublicKey) return yield* directoryFailure(sourceText("error.remote.inviteHostKeyMissing"));
+      yield* this.#trustedHostKey(invite.serverId, preview.devicePublicKey, preview.keyHandovers);
+      yield* this.#pinHostKey(invite.serverId, preview.devicePublicKey);
+      const accepted = yield* this.#request("/v2/remote/invites/accept", {
+        method: "POST",
+        body: { token: invite.token },
+      });
+      if (
+        !isDynamicRecord(accepted) ||
+        accepted.hostId !== invite.serverId ||
+        !isString(accepted.membershipId) ||
+        !accepted.membershipId ||
+        accepted.role !== preview.role
+      )
+        return yield* directoryFailure("The account service returned an invalid invitation acceptance.");
+      return {
+        hostId: invite.serverId,
+        name: preview.hostName,
+        logoKey: null,
+        devicePublicKey: preview.devicePublicKey,
+        membershipId: accepted.membershipId,
+        role: preview.role,
+      };
+    });
+  }
+
+  #trustedHostKey(
+    hostId: string,
+    advertisedPublicKey: string,
+    handovers: readonly HostKeyHandover[],
+  ): Effect.Effect<string, DirectoryFailure> {
+    return this.#pinLock.withPermit(
+      Effect.gen({ self: this }, function* () {
+        const pinnedKey = yield* directoryIO(() => this.#hostKeys.get(hostId));
+        if (!pinnedKey) {
+          yield* directoryIO(() => this.#hostKeys.set(hostId, advertisedPublicKey));
+          return advertisedPublicKey;
+        }
+        const pinnedFingerprint = remoteHostFingerprint(pinnedKey);
+        if (remoteHostFingerprint(advertisedPublicKey) === pinnedFingerprint) return pinnedKey;
+        const followed = yield* followHostKeyHandovers({
+          hostId,
+          trustedFingerprint: pinnedFingerprint,
+          advertisedPublicKey,
+          handovers,
+          verify: this.#verifyHostKeySignature,
+        });
+        if (!followed) return pinnedKey;
+        yield* directoryIO(() => this.#hostKeys.set(hostId, advertisedPublicKey));
+        return advertisedPublicKey;
+      }),
+    );
+  }
+
+  #pinHostKey(hostId: string, publicKey: string): Effect.Effect<void, DirectoryFailure> {
+    return this.#pinLock.withPermit(
+      Effect.gen({ self: this }, function* () {
+        const pinned = yield* directoryIO(() => this.#hostKeys.get(hostId));
+        if (pinned && remoteHostFingerprint(pinned) !== remoteHostFingerprint(publicKey)) {
+          return yield* directoryFailure(sourceText("error.remote.inviteKeyConflict"));
+        }
+        yield* directoryIO(() => this.#hostKeys.set(hostId, publicKey));
+      }),
+    );
+  }
+
+  #ticket(sessionId: string, clientPublicKey: string): Effect.Effect<RemoteTeamBootstrap, DirectoryFailure> {
+    return Effect.gen({ self: this }, function* () {
+      const value = yield* this.#request(`/v2/remote/sessions/${encodeURIComponent(sessionId)}/ticket`, {
+        method: "POST",
+        body: { clientPublicKey },
+      });
+      const ticket = yield* directoryDecode(() => decodeRemoteSessionTicket(value));
+      return { sessionId, signalUrl: ticket.signalUrl, ticket: ticket.ticket };
+    });
+  }
+
+  #request(
     path: string,
     options: { method?: string; body?: object; authenticated?: boolean } = {},
-  ): Promise<unknown> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15_000);
-    try {
-      const browser = this.#authentication.kind === "browser";
-      const response = await this.#fetch(new URL(browser ? `/api/browser${path}` : path, this.#apiUrl), {
-        ...(browser ? { credentials: "same-origin" as const } : {}),
-        method: options.method ?? "GET",
-        headers: {
-          ...(this.#authentication.kind === "bearer" && options.authenticated !== false
-            ? { Authorization: `Bearer ${this.#authentication.token}` }
-            : {}),
-          ...(browser
-            ? { "X-OpenBot-Browser": "1", "Content-Type": "application/json" }
-            : options.body
-              ? { "Content-Type": "application/json" }
-              : {}),
-        },
-        ...(options.body || (browser && options.method === "POST") ? { body: JSON.stringify(options.body ?? {}) } : {}),
-        signal: controller.signal,
-      });
-      const value = await response.json().catch(() => null);
-      if (!response.ok) throw new RemoteDirectoryError(response.status, errorMessage(value));
-      return value;
-    } finally {
-      clearTimeout(timer);
-    }
+  ): Effect.Effect<unknown, DirectoryFailure> {
+    return Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15_000);
+        return { controller, timer };
+      }),
+      ({ controller }) =>
+        Effect.gen({ self: this }, function* () {
+          const browser = this.#authentication.kind === "browser";
+          const response = yield* Effect.tryPromise({
+            try: () =>
+              this.#fetch(new URL(browser ? `/api/browser${path}` : path, this.#apiUrl), {
+                ...(browser ? { credentials: "same-origin" as const } : {}),
+                method: options.method ?? "GET",
+                headers: {
+                  ...(this.#authentication.kind === "bearer" && options.authenticated !== false
+                    ? { Authorization: `Bearer ${this.#authentication.token}` }
+                    : {}),
+                  ...(browser
+                    ? { "X-OpenBot-Browser": "1", "Content-Type": "application/json" }
+                    : options.body
+                      ? { "Content-Type": "application/json" }
+                      : {}),
+                },
+                ...(options.body || (browser && options.method === "POST")
+                  ? { body: JSON.stringify(options.body ?? {}) }
+                  : {}),
+                signal: controller.signal,
+              }),
+            catch: () =>
+              controller.signal.aborted
+                ? directoryFailure(sourceText("error.remote.directoryTimeout"), "timeout/directory")
+                : directoryFailure(sourceText("error.remote.directoryUnreachable"), "network/directory"),
+          });
+          const value = yield* directoryIO(() => response.json()).pipe(Effect.catch(() => Effect.succeed(null)));
+          if (!response.ok) return yield* directoryError(response.status, value);
+          return value;
+        }),
+      ({ controller, timer }) =>
+        Effect.sync(() => {
+          clearTimeout(timer);
+          controller.abort();
+        }),
+    );
   }
 }
 
@@ -426,15 +670,22 @@ function decodeInvitePreview(value: unknown, expectedHostId: string): RemoteInvi
     emailBound: value.emailBound,
     permanent: isPermanentInvite(value.permanent, value.expiresAt),
     devicePublicKey: value.devicePublicKey,
+    keyHandovers: optionalHostKeyHandovers(value.keyHandovers),
   };
 }
 
-function errorMessage(value: unknown): string {
-  if (isDynamicRecord(value)) {
-    if (isString(value.error)) return value.error;
-    if (isDynamicRecord(value.error) && isString(value.error.message)) return value.error.message;
-  }
-  return sourceText("error.remote.serviceRequestFailed");
+function directoryError(status: number, value: unknown): RemoteDirectoryError {
+  const body = isDynamicRecord(value) ? value.error : undefined;
+  if (isString(body)) return new RemoteDirectoryError(status, body);
+  if (!isDynamicRecord(body)) return new RemoteDirectoryError(status, sourceText("error.remote.serviceRequestFailed"));
+  const code = isString(body.code) && /^[a-z][a-z0-9_]{0,39}$/u.test(body.code) ? body.code : null;
+  const known = code === null ? undefined : DIRECTORY_ERROR_TEXT.get(code);
+  const message = known
+    ? known
+    : isString(body.message)
+      ? body.message
+      : sourceText("error.remote.serviceRequestFailed");
+  return new RemoteDirectoryError(status, message, code, safeReference(body.reference));
 }
 
 function decodeMember(value: unknown): RemoteTeamMember {
@@ -483,30 +734,34 @@ function decodeInvite(value: unknown): RemoteTeamInvite {
 
 export const REMOTE_ACCOUNT_CHECK_INTERVAL_MS = 15 * 60_000;
 
-/** The caller starts this watcher in the foreground and stops it on background entry. */
-export function watchRemoteDirectory(refresh: () => Promise<void>): () => void {
-  const timer = setInterval(() => void refresh().catch(() => undefined), REMOTE_ACCOUNT_CHECK_INTERVAL_MS);
+export function watchRemoteDirectory<E>(refresh: () => Effect.Effect<void, E>): () => void {
+  const timer = setInterval(
+    () => void runTeamEffect(refresh()).catch(() => undefined),
+    REMOTE_ACCOUNT_CHECK_INTERVAL_MS,
+  );
   return () => clearInterval(timer);
 }
 
-/** Refresh on demand or foreground entry; coalesce requests and rate-limit automatic retries. */
-export function createRemoteDirectoryRefresh(load: () => Promise<void>, now = Date.now) {
-  let pending: Promise<void> | null = null;
+export function createRemoteDirectoryRefresh<E, R>(load: () => Effect.Effect<void, E, R>, now = Date.now) {
+  let pending: Deferred.Deferred<void, E> | null = null;
   let lastAttempt = Number.NEGATIVE_INFINITY;
-  return {
-    refresh(force = false): Promise<void> {
-      if (pending) return pending;
-      if (!force && now() - lastAttempt < REMOTE_ACCOUNT_CHECK_INTERVAL_MS) return Promise.resolve();
-      lastAttempt = now();
-      const operation = load();
-      pending = operation;
-      void operation
-        .finally(() => {
+  const refresh = Effect.fn("RemoteDirectory.refresh")(function* (force = false) {
+    if (pending) return yield* Deferred.await(pending);
+    if (!force && now() - lastAttempt < REMOTE_ACCOUNT_CHECK_INTERVAL_MS) return;
+    lastAttempt = now();
+    const operation = Deferred.makeUnsafe<void, E>();
+    pending = operation;
+    return yield* load().pipe(
+      Effect.onExit((exit) =>
+        Effect.gen(function* () {
+          yield* Deferred.done(operation, exit);
           if (pending === operation) pending = null;
-        })
-        .catch(() => undefined);
-      return operation;
-    },
+        }),
+      ),
+    );
+  });
+  return {
+    refresh,
     invalidate(): void {
       pending = null;
       lastAttempt = Number.NEGATIVE_INFINITY;

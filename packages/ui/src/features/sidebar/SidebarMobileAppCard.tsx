@@ -1,88 +1,112 @@
-import { Button, ConfirmDialog, IconButton, QrCode, Smartphone, StableLabel, X } from "@openbot/ui";
-import { createSignal, onCleanup } from "solid-js";
+import { type MobilePlatformLogoVariant, PlatformLogo } from "@openbot/brand";
+import type { AvatarHue } from "@openbot/contracts/ipc";
+import { Button, IconButton, X } from "@openbot/ui";
+import { createSignal, For, onSettled } from "solid-js";
+import type { AgentProfile } from "../../data";
 import { useText } from "../../text";
-import { IOS_TESTFLIGHT_URL } from "../mobile-app/ios-testflight";
+import { AgentAvatar } from "../agents/AgentAvatar";
 
-/**
- * The announcement of the iOS public beta at the bottom of the sidebar. The steps and the invite
- * QR code open in a dialog: the user reads this on a computer, and the install happens on a phone.
- */
-export function SidebarMobileAppCard(props: { onCopyInvite: () => Promise<void>; onDismiss: () => void }) {
+type CrewAgent = Pick<AgentProfile, "avatarSeed" | "avatarHue" | "avatarColor" | "avatarUrl">;
+
+const CREW_SIZE = 5;
+const LEAD_INDEX = Math.floor(CREW_SIZE / 2);
+const CENTER_FIRST_PLACES = [2, 1, 3, 0, 4];
+
+const STAND_IN_CREW: readonly CrewAgent[] = (
+  [
+    { seed: "research", hue: 215 },
+    { seed: "inbox", hue: 30 },
+    { seed: "planner", hue: 150 },
+    { seed: "design", hue: 320 },
+    { seed: "writer", hue: 280 },
+  ] satisfies { seed: string; hue: AvatarHue }[]
+).map((member) => ({ avatarSeed: member.seed, avatarHue: member.hue, avatarColor: null, avatarUrl: null }));
+
+const PLATFORMS: readonly {
+  platform: MobilePlatformLogoVariant;
+  label: "sidebar.mobileApp.iphone" | "sidebar.mobileApp.android";
+}[] = [
+  { platform: "ios", label: "sidebar.mobileApp.iphone" },
+  { platform: "android", label: "sidebar.mobileApp.android" },
+];
+
+function crewMembers(agents: readonly CrewAgent[]): CrewAgent[] {
+  const crew = [...STAND_IN_CREW];
+  agents.slice(0, CREW_SIZE).forEach((agent, order) => {
+    crew[CENTER_FIRST_PLACES[order] ?? order] = agent;
+  });
+  return crew;
+}
+
+export function SidebarMobileAppCard(props: {
+  agents: readonly CrewAgent[];
+  onInstall: (platform: MobilePlatformLogoVariant) => void;
+  onDismiss: () => void;
+}) {
   const { t } = useText();
-  const [open, setOpen] = createSignal(false);
-  const [copy, setCopy] = createSignal<"idle" | "copied" | "failed">("idle");
-  let resetTimer: number | undefined;
-  onCleanup(() => window.clearTimeout(resetTimer));
-
-  async function copyInvite(): Promise<void> {
-    window.clearTimeout(resetTimer);
-    try {
-      await props.onCopyInvite();
-      setCopy("copied");
-      resetTimer = window.setTimeout(() => setCopy("idle"), 1_500);
-    } catch {
-      setCopy("failed");
-    }
-  }
-
-  function close(): void {
-    window.clearTimeout(resetTimer);
-    setCopy("idle");
-    setOpen(false);
-  }
+  const [pointerInSidebar, setPointerInSidebar] = createSignal(false);
+  let section: HTMLElement | undefined;
+  onSettled(() => {
+    const track = (event: PointerEvent) => {
+      const area = section?.closest(".sidebar") ?? section;
+      setPointerInSidebar(event.target instanceof Node && area?.contains(event.target) === true);
+    };
+    const leave = () => setPointerInSidebar(false);
+    document.addEventListener("pointerover", track);
+    document.addEventListener("pointerleave", leave);
+    return () => {
+      document.removeEventListener("pointerover", track);
+      document.removeEventListener("pointerleave", leave);
+    };
+  });
   return (
-    <section class="sidebar-mobile-app" aria-labelledby="sidebar-mobile-app-title">
-      <div class="sidebar-mobile-app-header">
-        <Smartphone class="sidebar-mobile-app-icon" aria-hidden="true" />
-        <strong id="sidebar-mobile-app-title">{t("sidebar.mobileApp.title")}</strong>
-        <IconButton
-          class="sidebar-mobile-app-dismiss"
-          size="icon-xs"
-          variant="ghost"
-          label={t("sidebar.mobileApp.dismiss")}
-          data-cuelume-tap="close"
-          onClick={() => props.onDismiss()}
-        >
-          <X aria-hidden="true" />
-        </IconButton>
-      </div>
-      <p class="sidebar-mobile-app-body">{t("sidebar.mobileApp.body")}</p>
-      <Button type="button" variant="secondary" size="sm" fullWidth onClick={() => setOpen(true)}>
-        {t("sidebar.mobileApp.howToInstall")}
-      </Button>
-      <ConfirmDialog
-        open={open()}
-        tone="default"
-        initialFocus="cancel"
-        media={
-          <QrCode
-            class="sidebar-mobile-app-qr"
-            value={IOS_TESTFLIGHT_URL}
-            size={132}
-            label={t("sidebar.mobileApp.qrLabel")}
-          />
-        }
-        title={t("sidebar.mobileApp.dialog.title")}
-        description={t("sidebar.mobileApp.dialog.description")}
-        confirmLabel={
-          <StableLabel
-            labels={[t("sidebar.mobileApp.dialog.copyLink"), t("sidebar.mobileApp.dialog.linkCopied")]}
-            active={copy() === "copied" ? 1 : 0}
-            live
-          />
-        }
-        cancelLabel={t("sidebar.mobileApp.dialog.close")}
-        error={copy() === "failed" ? t("sidebar.mobileApp.dialog.copyFailed") : undefined}
-        onCancel={close}
-        onConfirm={copyInvite}
+    <section
+      ref={section}
+      class="sidebar-mobile-app sidebar-mobile-app-crew"
+      data-pointer-in-sidebar={pointerInSidebar() ? "" : undefined}
+      aria-labelledby="sidebar-mobile-app-title"
+    >
+      <IconButton
+        class="sidebar-mobile-app-dismiss"
+        size="icon-xs"
+        variant="ghost"
+        label={t("sidebar.mobileApp.dismiss")}
+        data-cuelume-tap="close"
+        onClick={() => props.onDismiss()}
       >
-        <ol>
-          <li>{t("sidebar.mobileApp.step.testFlight")}</li>
-          <li>{t("sidebar.mobileApp.step.invite")}</li>
-          <li>{t("sidebar.mobileApp.step.install")}</li>
-          <li>{t("sidebar.mobileApp.step.connect")}</li>
-        </ol>
-      </ConfirmDialog>
+        <X aria-hidden="true" />
+      </IconButton>
+      <div class="sidebar-mobile-app-crew-stage" aria-hidden="true">
+        <For each={crewMembers(props.agents)}>
+          {(member, index) => (
+            <span
+              class="sidebar-mobile-app-crew-member"
+              data-lead={index() === LEAD_INDEX ? "" : undefined}
+              style={{ "--sidebar-crew-index": String(index()) }}
+            >
+              <AgentAvatar
+                agent={member}
+                motion="idle"
+                followPointer={pointerInSidebar()}
+                class="sidebar-mobile-app-crew-avatar"
+              />
+            </span>
+          )}
+        </For>
+      </div>
+      <strong id="sidebar-mobile-app-title" class="sidebar-mobile-app-crew-title">
+        {t("sidebar.mobileApp.pocketTitle")}
+      </strong>
+      <div class="sidebar-mobile-app-platforms">
+        <For each={PLATFORMS}>
+          {(entry) => (
+            <Button type="button" size="sm" onClick={() => props.onInstall(entry.platform)}>
+              <PlatformLogo platform={entry.platform} class="sidebar-mobile-app-platform-logo" />
+              {t(entry.label)}
+            </Button>
+          )}
+        </For>
+      </div>
     </section>
   );
 }

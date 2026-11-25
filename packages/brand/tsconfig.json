@@ -3,7 +3,7 @@
   "compilerOptions": {
     "jsx": "preserve",
     "jsxImportSource": "@solidjs/web",
-    "types": ["vitest/globals", "@testing-library/jest-dom"]
+    "types": []
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

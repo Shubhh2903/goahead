@@ -14,9 +14,11 @@ import { messages as composer } from "./composer";
 import { messages as computerUse } from "./computerUse";
 import { messages as connector } from "./connector";
 import { messages as conversation } from "./conversation";
+import { messages as crm } from "./crm";
 import { messages as customProvider } from "./customProvider";
 import { messages as diagram } from "./diagram";
 import { messages as dialog } from "./dialog";
+import { messages as extension } from "./extension";
 import { messages as files } from "./files";
 import { messages as importAgent } from "./import";
 import { messages as island } from "./island";
@@ -39,16 +41,19 @@ import { messages as settings } from "./settings";
 import { shared } from "./shared";
 import { messages as sharedTable } from "./sharedTable";
 import { messages as sidebar } from "./sidebar";
+import { messages as sitePage } from "./sitePage";
 import { messages as skill } from "./skill";
 import { source } from "./source";
 import { messages as startup } from "./startup";
 import { messages as team } from "./team";
+import { messages as uiBlock } from "./uiBlock";
 import { messages as update } from "./update";
 import { messages as usage } from "./usage";
+import { messages as vault } from "./vault";
 import { messages as webClient } from "./webClient";
 import { messages as window } from "./window";
+import { messages as workflow } from "./workflow";
 
-/** Brazilian Portuguese: shared keys, source text, and desktop areas. */
 export const pt = {
   ...shared,
   ...source,
@@ -84,11 +89,13 @@ export const pt = {
   ...mcp,
   ...messaging,
   ...webClient,
+  ...extension,
   ...account,
   ...onboarding,
   ...usage,
   ...sidebar,
   ...channel,
+  ...workflow,
   ...agent,
   ...agentTemplate,
   ...importAgent,
@@ -97,4 +104,8 @@ export const pt = {
   ...computerUse,
   ...connector,
   ...diagram,
+  ...vault,
+  ...uiBlock,
+  ...sitePage,
+  ...crm,
 } as const satisfies PartialTranslation<AppMessages>;

@@ -1,51 +1,77 @@
-import type { FilePreview } from "@openbot/contracts/ipc";
-import { Button, Code, CopyButton, Download, ExternalLink, File, FolderOpen, WrapText, X } from "@openbot/ui";
+import type { ChatVisualKey } from "@openbot/contracts/chat-visual";
+import { ATTACHMENT_LIMITS } from "@openbot/contracts/input-limits";
+import {
+  type FilePreview,
+  filePreviewKindForFile,
+  type WorkspaceDirectory,
+  type WorkspaceDirectoryEntry,
+} from "@openbot/contracts/ipc";
+import {
+  ArrowLeft,
+  Button,
+  Code,
+  CopyButton,
+  Download,
+  ExternalLink,
+  File,
+  Folder,
+  FolderOpen,
+  LabelTooltip,
+  LabelTooltipTrigger,
+  WrapText,
+  X,
+} from "@openbot/ui";
 import { PanelResizer } from "@openbot/ui/components/PanelResizer";
+import { SETTINGS_PANEL_DEFAULT } from "@openbot/ui/components/SettingsPanel";
 import type { AgentProfile } from "@openbot/ui/data";
 import { ChatVisual } from "@openbot/ui/features/conversation/ChatVisual";
 import { type CodeToken, fileCodeLanguage, highlightedCodeLines } from "@openbot/ui/features/conversation/CodeBlock";
 import { MarkdownFilePreview } from "@openbot/ui/features/conversation/MarkdownFilePreview";
+import type { QuoteShortcutModifier } from "@openbot/ui/features/conversation/SelectionActions";
 import { SpreadsheetFilePreview } from "@openbot/ui/features/conversation/SpreadsheetFilePreview";
+import { WordFilePreview } from "@openbot/ui/features/conversation/WordFilePreview";
 import { useText } from "@openbot/ui/text";
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { holdFlag } from "@openbot/ui/utils";
+import type { JSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show, untrack } from "solid-js";
 
-const PANEL_MIN = 220;
-const PANEL_MAX = 1600;
+import { MediaFilePreview } from "./MediaFilePreview";
+
+const PANEL_MIN = SETTINGS_PANEL_DEFAULT;
 const TEXT_LIMIT = 1_000_000;
-/** Longer text shows as plain text, so the panel stays responsive. */
 const HIGHLIGHT_LIMIT = 200_000;
-/**
- * Text with a longer line also shows as plain text. The tokenizer time for one string literal
- * grows with the square of its length, and a long string is usually on one line.
- */
 const HIGHLIGHT_LINE_LIMIT = 5_000;
-/** Kinds the panel hands to the browser as an object URL instead of decoding itself. */
 const BLOB_PREVIEW_KINDS = new Set<FilePreview["previewKind"]>(["image", "pdf", "audio", "video"]);
 
 interface FilePreviewPanelProps {
-  readWidth: (fallback: number, min: number, max: number) => number;
+  readWidth: () => number;
   onResizeEnd: (width: number) => void;
   onResetWidth: () => void;
   readWrapLines: () => boolean;
   onWrapLinesChange: (wrap: boolean) => void;
-  preview: FilePreview;
+  preview: FilePreview | null;
+  fileKey?: string | undefined;
+  directory?: WorkspaceDirectory | null;
   agents: AgentProfile[];
-  defaultWidth: () => number;
   maxWidth: () => number;
   onWidthChange: (width: number) => void;
   onOpenLink: (url: string) => void;
   onOpenSharedFile: (path: string) => void;
-  onOpenWorkspaceFile: (path: string) => void;
-  /** Set when the file already has a URL the panel can point at, as an attachment does. */
+  onOpenWorkspaceFile?: ((path: string) => void) | undefined;
+  onOpenWorkspaceFolder?: (path: string) => void;
+  onBack?: (() => void) | undefined;
   sourceUrl?: string | null;
-  /**
-   * Set for an HTML file that the app can serve as a sandboxed page with its scripts. The panel
-   * shows the page, and the source on request. Without it the panel shows the source.
-   */
   pageUrl?: string | null | undefined;
+  pageHtml?: string | null | undefined;
+  selectionQuoteId?: string | undefined;
+  onPageQuote?: ((text: string) => void) | undefined;
+  onPageContext?: ((text: string) => void) | undefined;
+  onPageMessage?: ((text: string) => void) | undefined;
+  isPageAppShortcut?: ((key: ChatVisualKey) => boolean) | undefined;
+  quoteShortcut?: QuoteShortcutModifier | undefined;
+  macWindowControls?: boolean | undefined;
   onOpenExternally: () => void;
   allowExternalOpen?: boolean;
-  /** Present for an attachment, which the user can also save or locate. A file already has a path. */
   onDownload?: () => void;
   onReveal?: (() => void) | undefined;
   onClose: () => void;
@@ -53,23 +79,39 @@ interface FilePreviewPanelProps {
 
 export default function FilePreviewPanel(props: FilePreviewPanelProps) {
   const { t, format } = useText();
-  const defaultPanelWidth = () => Math.round(Math.min(PANEL_MAX, Math.max(PANEL_MIN, props.defaultWidth())));
-  const [panelWidth, setPanelWidth] = createSignal(props.readWidth(defaultPanelWidth(), PANEL_MIN, PANEL_MAX));
+  const [panelWidth, setPanelWidth] = createSignal(props.readWidth());
   const [previewUrl, setPreviewUrl] = createSignal<string | null>(null);
-  // The panel mounts when a file opens, so it has to paint its closed state
-  // first. Two frames guarantee that paint before the open state applies.
   const [revealed, setRevealed] = createSignal(false);
-  const [wrapLines, setWrapLines] = createSignal(untrack(() => props.readWrapLines()));
   const [rawSource, setRawSource] = createSignal(false);
+  const [wrapLines, setWrapLines] = createSignal(untrack(() => props.readWrapLines()));
   let currentPreviewUrl: string | null = null;
-  const pageUrl = () => (props.preview.previewKind === "text" ? props.pageUrl : null) ?? null;
-  /** The whole text of a text or Markdown file. Copy takes all of it; the view shows up to `TEXT_LIMIT`. */
+  let revealFrame: number | undefined;
+  const file = () => (props.directory ? null : props.preview);
+  const previewKind = () => file()?.previewKind;
+  const pageUrl = () => (previewKind() === "text" ? props.pageUrl : null) ?? null;
+  const pageHtml = () => (previewKind() === "text" ? props.pageHtml : null) ?? null;
+  const hasPage = () => pageHtml() !== null || pageUrl() !== null;
+  const tooLarge = () => {
+    const preview = file();
+    return (
+      preview?.previewKind === "none" &&
+      preview.size > ATTACHMENT_LIMITS.fileBytes &&
+      filePreviewKindForFile(preview.name, preview.mimeType) !== "none"
+    );
+  };
+  const showsSourceText = () =>
+    (previewKind() === "text" && (rawSource() || !hasPage())) || (previewKind() === "markdown" && rawSource());
+  const title = () => props.directory?.name ?? props.preview?.name ?? "";
   const source = createMemo(() => {
-    const preview = props.preview;
-    if (!preview.bytes || (preview.previewKind !== "text" && preview.previewKind !== "markdown")) return "";
+    const preview = file();
+    if (!preview?.bytes || (preview.previewKind !== "text" && preview.previewKind !== "markdown")) return "";
     return new TextDecoder().decode(preview.bytes);
   });
   const text = createMemo(() => ({ value: source().slice(0, TEXT_LIMIT), truncated: source().length > TEXT_LIMIT }));
+  const openEntry = (entry: WorkspaceDirectoryEntry) => {
+    if (entry.kind === "directory") props.onOpenWorkspaceFolder?.(entry.path);
+    else props.onOpenWorkspaceFile?.(entry.path);
+  };
 
   createEffect(
     () => panelWidth(),
@@ -77,41 +119,65 @@ export default function FilePreviewPanel(props: FilePreviewPanelProps) {
       props.onWidthChange(width);
     },
   );
+  const shownFile = createMemo(() => props.fileKey ?? file());
+  createEffect(shownFile, () => {
+    setRawSource(false);
+  });
   createEffect(
-    () => props.preview,
-    () => {
-      setRawSource(false);
-    },
-  );
-  createEffect(
-    () => ({ preview: props.preview, sourceUrl: props.sourceUrl }),
-    ({ preview, sourceUrl }) => {
+    () => ({ preview: file(), sourceUrl: props.sourceUrl, pageUrl: props.pageUrl }),
+    ({ preview, sourceUrl, pageUrl }) => {
       if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl);
       currentPreviewUrl = null;
-      if (sourceUrl && BLOB_PREVIEW_KINDS.has(preview.previewKind)) {
-        setPreviewUrl(sourceUrl);
+      if (!preview) {
+        setPreviewUrl(null);
+        return;
+      }
+      const directUrl = sourceUrl || (preview.previewKind === "pdf" ? pageUrl : null);
+      if (directUrl && BLOB_PREVIEW_KINDS.has(preview.previewKind)) {
+        setPreviewUrl(directUrl);
         return;
       }
       if (!preview.bytes || !BLOB_PREVIEW_KINDS.has(preview.previewKind)) {
         setPreviewUrl(null);
         return;
       }
-      const url = URL.createObjectURL(new Blob([new Uint8Array(preview.bytes).buffer], { type: preview.mimeType }));
+      const blob = new Blob([new Uint8Array(preview.bytes).buffer], { type: preview.mimeType });
+      if (preview.previewKind === "image") {
+        let current = true;
+        setPreviewUrl(null);
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (current && typeof reader.result === "string") setPreviewUrl(reader.result);
+        };
+        reader.readAsDataURL(blob);
+        return () => {
+          current = false;
+          reader.abort();
+        };
+      }
+      const url = URL.createObjectURL(blob);
       currentPreviewUrl = url;
       setPreviewUrl(url);
     },
   );
-  onCleanup(() => {
+  onSettled(() => () => {
     if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl);
+    if (revealFrame !== undefined) cancelAnimationFrame(revealFrame);
   });
 
-  const revealPanel = () => {
-    let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => {
+  let panel!: HTMLElement;
+  onSettled(() => {
+    const conversation = panel.closest(".conversation-panel");
+    return conversation ? holdFlag(conversation, "file-preview-panel") : undefined;
+  });
+
+  const revealPanel = (element: HTMLElement) => {
+    panel = element;
+    revealFrame = requestAnimationFrame(() => {
+      revealFrame = requestAnimationFrame(() => {
         setRevealed(true);
       });
     });
-    onCleanup(() => cancelAnimationFrame(frame));
   };
 
   const toggleWrapLines = () => {
@@ -121,7 +187,7 @@ export default function FilePreviewPanel(props: FilePreviewPanelProps) {
   };
 
   const resizeDefaultPanel = () => {
-    setPanelWidth(Math.round(Math.min(props.maxWidth(), Math.max(PANEL_MIN, defaultPanelWidth()))));
+    setPanelWidth(Math.round(Math.min(props.maxWidth(), Math.max(PANEL_MIN, props.readWidth()))));
   };
 
   return (
@@ -138,7 +204,7 @@ export default function FilePreviewPanel(props: FilePreviewPanelProps) {
         controls="file-preview-panel"
         direction="right"
         value={panelWidth()}
-        defaultValue={defaultPanelWidth()}
+        defaultValue={PANEL_MIN}
         min={PANEL_MIN}
         max={props.maxWidth}
         onResize={setPanelWidth}
@@ -146,101 +212,133 @@ export default function FilePreviewPanel(props: FilePreviewPanelProps) {
         onParentResize={resizeDefaultPanel}
         onReset={() => {
           props.onResetWidth();
-          setPanelWidth(defaultPanelWidth());
+          setPanelWidth(props.readWidth());
         }}
       />
       <header class="file-preview-header">
-        <File class="file-preview-file-icon" />
-        <h2 title={props.preview.name}>{props.preview.name}</h2>
-        <Show when={pageUrl()}>
-          <Button
-            variant="ghost"
-            type="button"
-            class="browser-toolbar-button"
-            aria-label={t("preview.panel.rawHtml")}
-            aria-pressed={rawSource() ? "true" : "false"}
+        <Show when={props.onBack}>
+          {(back) => (
+            <HeaderButton label={t("preview.panel.back")} onClick={() => back()()}>
+              <ArrowLeft class="browser-toolbar-icon" />
+            </HeaderButton>
+          )}
+        </Show>
+        <Show when={props.directory} fallback={<File class="file-preview-file-icon" />}>
+          <Folder class="file-preview-file-icon" />
+        </Show>
+        <h2 title={props.directory?.path ?? title()}>{title()}</h2>
+        <Show when={previewKind() === "markdown"}>
+          <HeaderButton
+            label={t("preview.panel.rawMarkdown")}
+            pressed={rawSource()}
             onClick={() => setRawSource((raw) => !raw)}
           >
             <Code class="browser-toolbar-icon" />
-          </Button>
+          </HeaderButton>
         </Show>
-        <Show when={props.preview.previewKind === "text"}>
-          <Button
-            variant="ghost"
-            type="button"
-            class="browser-toolbar-button"
-            aria-label={t("preview.panel.wrapLines")}
-            aria-pressed={wrapLines() ? "true" : "false"}
-            onClick={toggleWrapLines}
+        <Show when={hasPage()}>
+          <HeaderButton
+            label={t("preview.panel.rawHtml")}
+            pressed={rawSource()}
+            onClick={() => setRawSource((raw) => !raw)}
           >
+            <Code class="browser-toolbar-icon" />
+          </HeaderButton>
+        </Show>
+        <Show when={showsSourceText()}>
+          <HeaderButton label={t("preview.panel.wrapLines")} pressed={wrapLines()} onClick={toggleWrapLines}>
             <WrapText class="browser-toolbar-icon" />
-          </Button>
+          </HeaderButton>
         </Show>
         <Show when={source()}>
           {(value) => (
-            <CopyButton
-              class="browser-toolbar-button file-preview-copy"
-              value={value()}
-              label={t("preview.panel.copy")}
-              iconOnly
-            />
+            <LabelTooltip content={t("preview.panel.copy")}>
+              <LabelTooltipTrigger
+                as={CopyButton}
+                class="browser-toolbar-button file-preview-copy"
+                value={value()}
+                label={t("preview.panel.copy")}
+                iconOnly
+              />
+            </LabelTooltip>
           )}
         </Show>
-        <Show when={props.allowExternalOpen !== false}>
-          <Button
-            variant="ghost"
-            type="button"
-            class="browser-toolbar-button"
-            aria-label={t("preview.panel.openExternally")}
-            onClick={props.onOpenExternally}
-          >
+        <Show when={file() && props.allowExternalOpen !== false}>
+          <HeaderButton label={t("preview.panel.openExternally")} onClick={props.onOpenExternally}>
             <ExternalLink class="browser-toolbar-icon" />
-          </Button>
+          </HeaderButton>
         </Show>
-        <Show when={props.onDownload}>
+        <Show when={file() && props.onDownload}>
           {(download) => (
-            <Button
-              variant="ghost"
-              type="button"
-              class="browser-toolbar-button"
-              aria-label={t("preview.panel.download")}
-              onClick={() => download()()}
-            >
+            <HeaderButton label={t("preview.panel.download")} onClick={() => download()()}>
               <Download class="browser-toolbar-icon" />
-            </Button>
+            </HeaderButton>
           )}
         </Show>
-        <Show when={props.onReveal}>
+        <Show when={file() && props.onReveal}>
           {(reveal) => (
-            <Button
-              variant="ghost"
-              type="button"
-              class="browser-toolbar-button"
-              aria-label={t("preview.panel.reveal")}
-              onClick={() => reveal()()}
-            >
+            <HeaderButton label={t("preview.panel.reveal")} onClick={() => reveal()()}>
               <FolderOpen class="browser-toolbar-icon" />
-            </Button>
+            </HeaderButton>
           )}
         </Show>
-        <Button
-          variant="ghost"
-          type="button"
-          class="browser-toolbar-button"
-          aria-label={t("preview.panel.close")}
+        <HeaderButton
+          label={t("preview.panel.close")}
+          class="side-panel-pane-close"
           data-cuelume-tap="close"
           onClick={props.onClose}
         >
           <X class="browser-toolbar-icon" />
-        </Button>
+        </HeaderButton>
       </header>
       <div class="file-preview-content">
-        <Show when={props.preview.previewKind === "markdown"}>
+        <Show when={props.directory}>
+          {(directory) => (
+            <Show
+              when={directory().entries.length > 0}
+              fallback={<p class="file-preview-folder-empty">{t("preview.folder.empty")}</p>}
+            >
+              <ul class="file-preview-folder" aria-label={directory().name}>
+                <For each={directory().entries}>
+                  {(entry) => (
+                    <li>
+                      <Button
+                        variant="ghost"
+                        type="button"
+                        class="file-preview-folder-entry"
+                        title={entry.path}
+                        onClick={() => openEntry(entry)}
+                      >
+                        <Show when={entry.kind === "directory"} fallback={<File class="file-preview-file-icon" />}>
+                          <Folder class="file-preview-file-icon" />
+                        </Show>
+                        <span class="file-preview-folder-name">{entry.name}</span>
+                        <span class="file-preview-folder-meta">
+                          {entry.kind === "file" ? format.fileSize(entry.size) : ""}
+                        </span>
+                        <span class="file-preview-folder-meta">
+                          {entry.modifiedAt > 0 ? format.date(entry.modifiedAt, { dateStyle: "medium" }) : ""}
+                        </span>
+                      </Button>
+                    </li>
+                  )}
+                </For>
+              </ul>
+              <Show when={directory().truncated}>
+                <p class="file-preview-truncated">
+                  {t("preview.folder.truncated", { limit: format.number(directory().entries.length) })}
+                </p>
+              </Show>
+            </Show>
+          )}
+        </Show>
+        <Show when={previewKind() === "markdown" && !rawSource()}>
           <MarkdownFilePreview
             class="file-preview-markdown"
             renderedClass="message-markdown"
             statusClass="file-preview-markdown-status"
             truncatedClass="file-preview-truncated"
+            selectionQuoteId={props.selectionQuoteId}
             body={text().value}
             truncated={text().truncated}
             agents={props.agents}
@@ -250,44 +348,60 @@ export default function FilePreviewPanel(props: FilePreviewPanelProps) {
             onOpenWorkspaceFile={props.onOpenWorkspaceFile}
           />
         </Show>
-        <Show when={!rawSource() && pageUrl()}>
-          {(url) => <ChatVisual fill src={url()} title={props.preview.name} onOpenLink={props.onOpenLink} />}
+        <Show when={!rawSource() && hasPage()}>
+          <ChatVisual
+            fill
+            src={pageUrl() ?? undefined}
+            html={pageHtml() ?? undefined}
+            title={title()}
+            onOpenLink={props.onOpenLink}
+            onQuote={props.onPageQuote}
+            onContext={props.onPageContext}
+            onMessage={props.onPageMessage}
+            isAppShortcut={props.isPageAppShortcut}
+            quoteShortcut={props.quoteShortcut}
+            macWindowControls={props.macWindowControls}
+          />
         </Show>
-        <Show when={props.preview.previewKind === "text" && (rawSource() || !pageUrl())}>
-          <FileSourceText name={props.preview.name} text={text().value} wrap={wrapLines()} />
-          <Show when={text().truncated}>
+        <Show when={showsSourceText()}>
+          <FileSourceText
+            name={title()}
+            text={text().value}
+            wrap={wrapLines()}
+            selectionQuoteId={props.selectionQuoteId}
+          />
+          <Show when={previewKind() === "text" && text().truncated}>
             <p class="file-preview-truncated">{t("preview.truncated", { limit: format.number(TEXT_LIMIT) })}</p>
           </Show>
         </Show>
-        <Show when={props.preview.previewKind === "image" && previewUrl()}>
+        <Show when={previewKind() === "image" && previewUrl()}>
           <div class="file-preview-image-wrap">
-            <img class="file-preview-image" src={previewUrl() ?? ""} alt={props.preview.name} />
+            <img class="file-preview-image" src={previewUrl() ?? ""} alt={title()} />
           </div>
         </Show>
-        <Show when={props.preview.previewKind === "pdf" && previewUrl()}>
-          <iframe class="file-preview-pdf" title={props.preview.name} src={previewUrl() ?? ""} />
+        <Show when={previewKind() === "pdf" && previewUrl()}>
+          <iframe class="file-preview-pdf" title={title()} src={previewUrl() ?? ""} />
         </Show>
-        <Show when={props.preview.previewKind === "audio" && previewUrl()}>
-          <audio class="file-preview-audio" controls src={previewUrl() ?? ""}>
-            {/* A file on the user's computer carries no caption track. The empty element declares
-                that, which browsers ignore, and keeps the media-caption rule satisfied. */}
-            <track kind="captions" />
-          </audio>
+        <Show when={previewUrl()}>
+          <MediaFilePreview
+            kind={previewKind() === "audio" ? "audio" : previewKind() === "video" ? "video" : null}
+            src={previewUrl() ?? undefined}
+            name={title()}
+            class={previewKind() === "audio" ? "file-preview-audio" : "file-preview-video"}
+          />
         </Show>
-        <Show when={props.preview.previewKind === "video" && previewUrl()}>
-          <video class="file-preview-video" controls src={previewUrl() ?? ""}>
-            <track kind="captions" />
-          </video>
+        <Show when={previewKind() === "spreadsheet"}>
+          <SpreadsheetFilePreview class="file-preview-spreadsheet" bytes={file()?.bytes ?? null} />
         </Show>
-        <Show when={props.preview.previewKind === "spreadsheet"}>
-          <SpreadsheetFilePreview class="file-preview-spreadsheet" bytes={props.preview.bytes} />
+        <Show when={previewKind() === "document"}>
+          <WordFilePreview class="file-preview-markdown" bytes={file()?.bytes ?? null} />
         </Show>
-        <Show when={props.preview.previewKind === "none"}>
+        <Show when={previewKind() === "none"}>
           <div class="file-preview-unsupported">
             <File />
-            <strong>{t("preview.unsupported.title")}</strong>
+            <strong>{tooLarge() ? t("preview.tooLarge.title") : t("preview.unsupported.title")}</strong>
             <Show when={props.allowExternalOpen !== false}>
-              <span>{t("preview.unsupported.description")}</span>
+              <span>{tooLarge() ? t("preview.tooLarge.description") : t("preview.unsupported.description")}</span>
               <Button variant="outline" type="button" onClick={props.onOpenExternally}>
                 {t("preview.unsupported.openExternally")}
               </Button>
@@ -299,8 +413,34 @@ export default function FilePreviewPanel(props: FilePreviewPanelProps) {
   );
 }
 
-/** The text of a file, highlighted as code when its name gives a language that chat code blocks highlight. */
-function FileSourceText(props: { name: string; text: string; wrap: boolean }) {
+function HeaderButton(props: {
+  label: string;
+  class?: string;
+  pressed?: boolean;
+  onClick: () => void;
+  "data-cuelume-tap"?: string;
+  children: JSX.Element;
+}) {
+  const pressed = () => (props.pressed === undefined ? undefined : String(props.pressed));
+  return (
+    <LabelTooltip content={props.label}>
+      <LabelTooltipTrigger
+        as={Button}
+        variant="ghost"
+        type="button"
+        class={["browser-toolbar-button", props.class]}
+        aria-label={props.label}
+        aria-pressed={pressed()}
+        data-cuelume-tap={props["data-cuelume-tap"]}
+        onClick={() => props.onClick()}
+      >
+        {props.children}
+      </LabelTooltipTrigger>
+    </LabelTooltip>
+  );
+}
+
+function FileSourceText(props: { name: string; text: string; wrap: boolean; selectionQuoteId?: string | undefined }) {
   const [tokens, setTokens] = createSignal<CodeToken[] | null>(null);
   let highlightRun = 0;
 
@@ -312,7 +452,7 @@ function FileSourceText(props: { name: string; text: string; wrap: boolean }) {
       if (language === "plain" || text.length > HIGHLIGHT_LIMIT) return;
       if (text.split("\n").some((line) => line.length > HIGHLIGHT_LINE_LIMIT)) return;
       void highlightedCodeLines(text, language).then((lines) => {
-        if (run !== highlightRun) return;
+        if (run !== highlightRun || !lines) return;
         setTokens(lines.flatMap((line, index) => (index === 0 ? line : [{ text: "\n" }, ...line])));
       });
     },
@@ -322,7 +462,11 @@ function FileSourceText(props: { name: string; text: string; wrap: boolean }) {
   });
 
   return (
-    <pre class={{ "file-preview-text": true, "file-preview-text-wrap": props.wrap }}>
+    <pre
+      class={{ "file-preview-text": true, "file-preview-text-wrap": props.wrap }}
+      data-selection-file-quote={props.selectionQuoteId}
+      data-selection-file-lines={props.selectionQuoteId ? "true" : undefined}
+    >
       <Show when={tokens()} fallback={props.text}>
         {(highlighted) => (
           <For each={highlighted()}>{(token) => <span data-code-token={token.type}>{token.text}</span>}</For>

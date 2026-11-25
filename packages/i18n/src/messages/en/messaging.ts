@@ -1,20 +1,17 @@
 import { defineMessages } from "../../message";
 
 export const messages = defineMessages("messaging", {
-  // What the user can do about a Slack workspace connection that stopped.
   "messaging.help.invalid_token":
     "Slack no longer accepts GoAhead in this workspace. It may have been uninstalled. Connect the workspace again.",
   "messaging.help.secret_storage_unavailable":
     "GoAhead cannot read the saved tokens on this computer. Disconnect the workspace, then connect it again.",
   "messaging.help.relay_unavailable":
     "GoAhead cannot receive Slack events on this computer. Sign in, give this computer a name in Server settings, and keep GoAhead open.",
-  // The read-only view of one Slack conversation that an agent answers.
   "messaging.thread.label": "Slack conversation: {title}",
   "messaging.thread.readOnly": "Read-only. The agent answers this conversation in Slack.",
   "messaging.thread.slackPerson": "Slack user",
   "messaging.thread.empty": "No messages yet.",
   "messaging.thread.loadFailed": "The Slack conversation did not load.",
-  // A message an agent drafted, which waits for the person on the desktop.
   "messaging.draft.label": "Message draft to {recipient}",
   "messaging.draft.title": "Message waits for your approval",
   "messaging.draft.to": "To {recipient}",
@@ -26,7 +23,6 @@ export const messages = defineMessages("messaging", {
   "messaging.draft.deny": "Deny",
   "messaging.draft.sending": "Sending…",
   "messaging.draft.failed": "The draft could not be answered.",
-  // The read-only view of the person's local Slack inbox.
   "messaging.inbox.title": "Slack inbox",
   "messaging.inbox.conversations": "Inbox conversations",
   "messaging.inbox.messages": "Messages",
@@ -36,15 +32,12 @@ export const messages = defineMessages("messaging", {
   "messaging.inbox.file.open": "Open {name} in Slack",
   "messaging.inbox.loadFailed": "The Slack inbox did not load.",
   "messaging.inbox.unread": { one: "{count} unread", other: "{count} unread" },
-  // The box that sends a reply as the person in the open inbox conversation.
   "messaging.inbox.reply.placeholder": "Reply as you",
   "messaging.inbox.reply.send": "Send",
   "messaging.inbox.reply.failed": "Slack did not accept the reply.",
-  // Text that starts with `@chief` goes to the Slack Orchestrator, not to Slack.
   "messaging.inbox.reply.askChief": "Ask Chief",
   "messaging.inbox.reply.chiefHint": "Start with @chief to ask the Slack Orchestrator instead of sending.",
   "messaging.inbox.reply.askFailed": "The Slack Orchestrator did not get the request.",
-  // The Slack client: every conversation of the connected person, in three panes.
   "messaging.client.section.unreads": "Unreads",
   "messaging.client.section.channels": "Channels",
   "messaging.client.section.direct": "Direct messages",
@@ -70,4 +63,13 @@ export const messages = defineMessages("messaging", {
   "messaging.client.uploading": "Uploading {name}…",
   "messaging.client.thread.title": "Thread",
   "messaging.client.thread.close": "Close",
+  "messaging.help.not_linked": "This workspace is not linked to this server. Select Reconnect to link it.",
+  "messaging.discordHelp.invalid_token":
+    "Discord no longer accepts GoAhead in this Discord server. It may have been removed. Connect the Discord server again.",
+  "messaging.discordHelp.secret_storage_unavailable":
+    "GoAhead cannot read the saved tokens on this computer. Disconnect the Discord server, then connect it again.",
+  "messaging.discordHelp.relay_unavailable":
+    "GoAhead cannot receive Discord events on this computer. Sign in, give this computer a name in Server settings, and keep GoAhead open.",
+  "messaging.discordHelp.not_linked":
+    "This Discord server is not linked to this GoAhead server. Select Reconnect to link it.",
 });

@@ -13,13 +13,13 @@ export interface MarkdownFilePreviewProps {
   renderedClass: string;
   statusClass: string;
   truncatedClass: string;
+  selectionQuoteId?: string | undefined;
   onSelectAgent: (agentId: string) => void;
   onOpenLink: (url: string) => void;
   onOpenSharedFile: (path: string) => void;
-  onOpenWorkspaceFile: (path: string) => void;
+  onOpenWorkspaceFile?: ((path: string) => void) | undefined;
 }
 
-/** The text limit of the callers that set `truncated`. */
 const TRUNCATED_AFTER = 1_000_000;
 
 export function MarkdownFilePreview(props: MarkdownFilePreviewProps) {
@@ -36,8 +36,9 @@ export function MarkdownFilePreview(props: MarkdownFilePreviewProps) {
           </pre>
         }
       >
-        <article class={props.renderedClass}>
+        <article class={props.renderedClass} data-selection-file-quote={props.selectionQuoteId}>
           <MarkdownMessageText
+            document
             body={props.body}
             agents={props.agents}
             attachments={[]}

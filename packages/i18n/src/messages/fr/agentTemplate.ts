@@ -28,8 +28,8 @@ export const messages = {
   "agentTemplate.publish.description":
     "Partagez cet agent comme modèle. Ses instructions, compétences et routines sont publiées. Ses fichiers et souvenirs ne le sont pas.",
   "agentTemplate.publish.published": "Publié",
-  "agentTemplate.publish.unpublish": "Retirer la publication",
-  "agentTemplate.publish.unpublishing": "Retrait de la publication…",
+  "agentTemplate.publish.unpublish": "Dépublier",
+  "agentTemplate.publish.unpublishing": "Dépublication…",
   "agentTemplate.publish.unpublishFailed": "Impossible de retirer la publication de l’agent.",
   "agentTemplate.publish.lastUpdated": "Dernière mise à jour : {date}",
   "agentTemplate.publish.context": "Contexte",
@@ -52,7 +52,7 @@ export const messages = {
   "agentTemplate.publish.updated": "Agent mis à jour",
   "agentTemplate.publish.publishedToast": "Agent publié",
   "agentTemplate.publish.linkCopied": "Le lien est copié.",
-  "agentTemplate.publish.copyHint": "Utilisez Copier le lien pour le partager.",
+  "agentTemplate.publish.copyHint": "Utilisez « Copier le lien » pour le partager.",
   "agentTemplate.publish.unpublished": "Publication de l’agent retirée",
   "agentTemplate.publish.linkRemoved": "Le lien ne fonctionne plus.",
 } as const satisfies PartialTranslation<typeof source>;

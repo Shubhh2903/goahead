@@ -1,7 +1,5 @@
-/** The right-click menu on a channel, in the pinned strip and in a section alike. */
-
 import type { ChannelSummary } from "@openbot/contracts/ipc";
-import { ContextMenu, Hash, Pin, PinOff } from "@openbot/ui";
+import { ContextMenu, Hash, Pin, PinOff, RotateCcw } from "@openbot/ui";
 import { Show } from "solid-js";
 import { useText } from "../../text";
 import { DeleteIcon, EditIcon } from "./SidebarIcons";
@@ -40,12 +38,28 @@ export function SidebarChannelContextMenu(menuProps: { channel: ChannelSummary; 
           <ContextMenu.Separator />
           <ContextMenu.Item
             class="ui-action-menu-danger agent-context-danger"
+            disabled={menuProps.channel.activeTasks > 0}
             onSelect={() => openDelete("channel", menuProps.channel.id)}
           >
             <DeleteIcon />
             <span>{t("sidebar.channelMenu.delete")}</span>
           </ContextMenu.Item>
         </Show>
+      </ContextMenu.Content>
+    </ContextMenu.Portal>
+  );
+}
+
+export function SidebarDeletedChannelContextMenu(menuProps: { channel: ChannelSummary }) {
+  const { props } = useSidebarScope();
+  const { t } = useText();
+  return (
+    <ContextMenu.Portal>
+      <ContextMenu.Content class="agent-context-menu" aria-label={t("sidebar.channelMenu.label")}>
+        <ContextMenu.Item onSelectAfterClose={() => props.onRestoreChannel?.(menuProps.channel.id)}>
+          <RotateCcw class="agent-context-icon size-4" aria-hidden="true" />
+          <span>{t("sidebar.channelMenu.restore")}</span>
+        </ContextMenu.Item>
       </ContextMenu.Content>
     </ContextMenu.Portal>
   );

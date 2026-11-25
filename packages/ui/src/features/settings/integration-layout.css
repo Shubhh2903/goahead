@@ -1,5 +1,3 @@
-/* The shared integration layout: see IntegrationLayout.tsx. */
-
 .integration-logo-tile {
   --integration-tile: 36px;
   display: inline-grid;
@@ -21,6 +19,20 @@
 .integration-logo-tile > svg {
   width: 55%;
   height: 55%;
+  stroke-width: var(--openbot-icon-stroke-lg);
+}
+
+.integration-logo-tile > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.integration-logo-tile > .connector-brand-tile {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
 }
 
 .integration-status {
@@ -39,7 +51,10 @@
   box-shadow: inset 0 0 0 1px currentColor;
 }
 
-/* ------------------------------------------------ page header */
+.integration-page {
+  display: grid;
+  gap: var(--openbot-space-6);
+}
 
 .integration-detail-header {
   display: flex;
@@ -60,13 +75,17 @@
   align-items: center;
 }
 
+.integration-detail-name {
+  display: inline-flex;
+  gap: var(--openbot-space-1-5);
+  align-items: center;
+}
+
 .integration-detail-actions {
   display: flex;
   flex: none;
   gap: var(--openbot-space-2);
 }
-
-/* ------------------------------------------------ connect dialog */
 
 .integration-wizard {
   display: grid;
@@ -96,7 +115,6 @@
   height: 36px;
 }
 
-/* Dots flow from OpenBot to the other app while the flow runs. */
 .integration-wizard-link {
   width: 40px;
   height: 2px;
@@ -124,7 +142,6 @@
   animation: none;
 }
 
-/* The other app breathes while OpenBot waits for it. */
 .integration-wizard-target {
   display: inline-grid;
   border-radius: var(--openbot-radius-md);
@@ -159,24 +176,28 @@
   gap: var(--openbot-space-3);
 }
 
+.integration-wizard-body:empty {
+  display: none;
+}
+
+.integration-wizard-form {
+  display: grid;
+  gap: var(--openbot-space-4);
+}
+
 .integration-wizard-foot {
   display: flex;
   gap: var(--openbot-space-2);
   justify-content: flex-end;
 }
 
-/* CopyButton draws its icon at full size; match the 14px icons of the other footer buttons. */
 .integration-wizard-foot .ui-button > svg {
   width: var(--openbot-icon-sm);
   height: var(--openbot-icon-sm);
 }
 
-/* Above the settings window the flow opens from. */
 .integration-dialog-backdrop {
-  position: fixed;
-  inset: 0;
   z-index: calc(var(--openbot-layer-dialog) + 1);
-  background: var(--openbot-dialog-overlay);
 }
 
 .integration-wizard-dialog {
@@ -191,6 +212,14 @@
   transform: translate(-50%, -50%);
 }
 
+.integration-wizard-dialog[data-wide] {
+  width: min(720px, calc(100vw - var(--openbot-space-6) * 2));
+}
+
+:is(.integration-dialog-backdrop, .integration-wizard-dialog)[data-nested] {
+  z-index: calc(var(--openbot-layer-dialog-host) + 2);
+}
+
 .integration-wizard-dialog h2 {
   margin: 0;
 }
@@ -198,10 +227,8 @@
 .integration-dialog-close {
   position: absolute;
   top: var(--openbot-space-3);
-  right: var(--openbot-space-3);
+  inset-inline-end: var(--openbot-space-3);
 }
-
-/* ------------------------------------------------ stepper */
 
 .integration-stepper {
   display: flex;
@@ -218,7 +245,6 @@
   font-size: var(--openbot-text-sm);
 }
 
-/* The line to a step: quiet until the flow reaches that step, then it fills from the left. */
 .integration-step + .integration-step::before {
   display: block;
   width: 24px;
@@ -295,14 +321,77 @@
   color: var(--openbot-success);
 }
 
-/* ------------------------------------------------ Connectors list */
-
-.integrations-hub {
+.integration-card-body {
   display: grid;
-  gap: var(--openbot-space-6);
+  gap: var(--openbot-space-3);
+  padding: var(--openbot-space-3) var(--openbot-space-4);
 }
 
-/* The whole row opens the integration, as on Marketplace cards. Buttons in the row stay on top. */
+.integration-card-body :where(.ui-input) {
+  font-size: var(--openbot-text-lg);
+  line-height: var(--openbot-leading-lg);
+}
+
+.integration-card-note {
+  padding: var(--openbot-space-3) var(--openbot-space-4);
+}
+
+.integration-card-note[data-tone="danger"] {
+  color: var(--openbot-danger-text);
+}
+
+.integration-effects {
+  display: grid;
+  margin: 0;
+  padding: var(--openbot-space-1);
+  border-radius: var(--openbot-radius-lg);
+  background: var(--openbot-bg-surface);
+  list-style: none;
+  color: var(--openbot-text-secondary);
+  font-size: var(--openbot-text-sm);
+}
+
+.integration-effects li {
+  display: flex;
+  gap: var(--openbot-space-3);
+  align-items: center;
+  padding: var(--openbot-space-2);
+}
+
+.integration-effects li + li {
+  border-top: 1px solid var(--openbot-border);
+}
+
+.integration-effect-icon {
+  display: inline-grid;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: var(--openbot-radius-md);
+  background: var(--openbot-bg-surface-raised);
+  color: var(--openbot-text-muted);
+}
+
+.integration-effects .integration-effect-icon > svg {
+  width: var(--openbot-icon-sm);
+  height: var(--openbot-icon-sm);
+}
+
+.integration-effects li[data-tone="danger"] .integration-effect-icon {
+  background: var(--openbot-danger-soft);
+  color: var(--openbot-danger-text);
+}
+
+.integration-effects li[data-tone="success"] .integration-effect-icon {
+  background: var(--openbot-success-soft);
+  color: var(--openbot-success);
+}
+
+.integration-confirm.ui-button-variant-destructive {
+  color: var(--openbot-danger-text);
+}
+
 .integrations-hub-row {
   position: relative;
   border-radius: var(--openbot-radius-md);
@@ -332,7 +421,7 @@
 }
 
 .integrations-hub-hitarea:focus-visible {
-  outline: 2px solid var(--openbot-accent-strong);
+  outline: 2px solid var(--openbot-border-focus);
   outline-offset: -2px;
 }
 
@@ -352,14 +441,8 @@
   color: var(--openbot-text-muted);
 }
 
-.integrations-hub-title {
-  display: inline-flex;
-  gap: var(--openbot-space-2);
-  align-items: center;
-}
-
-.integrations-hub-summary[data-status="attention"] {
-  color: var(--openbot-warning-text);
+.integrations-hub-chevron:dir(rtl) {
+  transform: scaleX(-1);
 }
 
 .integrations-face-stack {
@@ -381,22 +464,23 @@
 }
 
 .integrations-agent-face {
+  --integrations-agent-face-size: 32px;
   display: inline-block;
   flex: none;
-  width: 32px;
-  height: 32px;
+  width: var(--integrations-agent-face-size);
+  height: var(--integrations-agent-face-size);
 }
 
 .integrations-agent-face[data-size="sm"] {
-  width: 24px;
-  height: 24px;
+  --integrations-agent-face-size: 24px;
+}
+
+.ui-item-group:has(.integrations-agent-face:not([data-size="sm"])) .ui-item-media > svg {
+  margin-inline: calc((32px - var(--openbot-icon-lg)) / 2);
 }
 
 .integrations-agent-face > * {
+  --agent-avatar-optical-offset: calc(var(--integrations-agent-face-size) * -0.14);
   width: 100%;
   height: 100%;
-}
-
-.integrations-back {
-  justify-self: start;
 }

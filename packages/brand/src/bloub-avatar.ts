@@ -6,39 +6,94 @@ import {
   SHAPES,
   type ShapeId,
 } from "@norbert_bodziony/bloub";
-import type { AvatarHue } from "@openbot/contracts/ipc";
+import { type AvatarColor, type AvatarHue, nearestAvatarHue } from "@openbot/contracts/ipc";
 
 export type SupportedAvatarSilhouetteId = Exclude<ShapeId, "goutte">;
 
 export interface BloubAvatarProfile {
   shape: SupportedAvatarSilhouetteId;
-  color: ColorId;
+  color: string;
   expression: ExpressionId;
 }
 
 const AUTOMATIC_COLORS = ["rouge", "orange", "ambre", "vert", "turquoise", "bleu", "violet", "rose"] as const;
 const UNSUPPORTED_AVATAR_SILHOUETTE = "goutte" as const satisfies ShapeId;
-const SUPPORTED_AVATAR_SILHOUETTES = SHAPES.map((option) => option.id).filter(
-  (silhouette): silhouette is SupportedAvatarSilhouetteId => silhouette !== UNSUPPORTED_AVATAR_SILHOUETTE,
-);
+function isSupportedSilhouette<Silhouette extends ShapeId>(
+  silhouette: Silhouette,
+): silhouette is Exclude<Silhouette, typeof UNSUPPORTED_AVATAR_SILHOUETTE> {
+  return silhouette !== UNSUPPORTED_AVATAR_SILHOUETTE;
+}
+export const SUPPORTED_AVATAR_SILHOUETTES = SHAPES.map((option) => option.id).filter(isSupportedSilhouette);
+const SEEDED_AVATAR_SILHOUETTES = [
+  "cercle",
+  "galet",
+  "squircle",
+  "capsule",
+  "triangle",
+  "hexagone",
+  "nuage",
+  "goutte",
+  "carre",
+  "losange",
+  "pentagone",
+] as const satisfies readonly ShapeId[];
+type SeededSilhouette = (typeof SEEDED_AVATAR_SILHOUETTES)[number];
+type SeededSupportedSilhouette = Exclude<SeededSilhouette, typeof UNSUPPORTED_AVATAR_SILHOUETTE>;
+type NamedSilhouette = Exclude<ShapeId, SeededSilhouette>;
+const SEEDED_SUPPORTED_SILHOUETTES = SEEDED_AVATAR_SILHOUETTES.filter(isSupportedSilhouette);
+const NAMED_SILHOUETTE_LOOKALIKES: Readonly<Record<NamedSilhouette, SeededSupportedSilhouette>> = {
+  fantome: "squircle",
+  meduse: "galet",
+  poulpe: "nuage",
+};
+const NAMED_SILHOUETTE_SEED_PATTERN = /:([a-z]+):(?:face|flat):\d+$/;
 
-const HUE_COLORS: Readonly<Record<AvatarHue, ColorId>> = {
-  0: "rouge",
-  30: "orange",
-  55: "ambre",
-  100: "vert",
-  150: "vert",
-  185: "turquoise",
-  215: "bleu",
-  245: "violet",
-  280: "violet",
-  320: "rose",
+function isNamedSilhouette(silhouette: string): silhouette is NamedSilhouette {
+  return Object.hasOwn(NAMED_SILHOUETTE_LOOKALIKES, silhouette);
+}
+
+function namedSilhouette(seed: string): NamedSilhouette | null {
+  const silhouette = NAMED_SILHOUETTE_SEED_PATTERN.exec(seed)?.[1];
+  return silhouette !== undefined && isNamedSilhouette(silhouette) ? silhouette : null;
+}
+
+function seededSilhouette(seed: string): SeededSupportedSilhouette {
+  const silhouette = requiredItem(
+    SEEDED_AVATAR_SILHOUETTES,
+    stableIndex(`${seed}:shape`, SEEDED_AVATAR_SILHOUETTES.length),
+  );
+  return silhouette === UNSUPPORTED_AVATAR_SILHOUETTE
+    ? requiredItem(
+        SEEDED_SUPPORTED_SILHOUETTES,
+        stableIndex(`${seed}:shape:replacement`, SEEDED_SUPPORTED_SILHOUETTES.length),
+      )
+    : silhouette;
+}
+
+function seededLookalike(silhouette: SupportedAvatarSilhouetteId): SeededSupportedSilhouette {
+  return isNamedSilhouette(silhouette) ? NAMED_SILHOUETTE_LOOKALIKES[silhouette] : silhouette;
+}
+
+function seededExpression(seed: string): ExpressionId {
+  return requiredItem(EXPRESSIONS, stableIndex(`${seed}:expression`, EXPRESSIONS.length)).id;
+}
+
+const HUE_COLORS: Readonly<Record<AvatarHue, string>> = {
+  0: colorHex("rouge"),
+  30: colorHex("orange"),
+  55: colorHex("ambre"),
+  100: "#8ece34",
+  150: colorHex("vert"),
+  185: colorHex("turquoise"),
+  215: colorHex("bleu"),
+  245: "#5d67ee",
+  280: colorHex("violet"),
+  320: colorHex("rose"),
 };
 
-export const AVATAR_HUE_OPTIONS: ReadonlyArray<{
-  hue: AvatarHue;
-  label: string;
-}> = [
+export const AVATAR_EXPRESSIONS: readonly ExpressionId[] = EXPRESSIONS.map((option) => option.id);
+
+export const AVATAR_HUE_CHOICES: ReadonlyArray<{ hue: AvatarHue; label: string }> = [
   { hue: 0, label: "Red" },
   { hue: 30, label: "Orange" },
   { hue: 55, label: "Yellow" },
@@ -51,42 +106,99 @@ export const AVATAR_HUE_OPTIONS: ReadonlyArray<{
   { hue: 320, label: "Magenta" },
 ];
 
-// Hues 100 and 280 stay valid for stored agents, but draw the same color as 150 and 245.
-export const AVATAR_HUE_CHOICES = AVATAR_HUE_OPTIONS.filter((option) => option.hue !== 100 && option.hue !== 280);
+export const AVATAR_COLOR_PRESETS = {
+  pink: "#f27ba5",
+  sky: "#38bdf8",
+  navy: "#34479c",
+  wine: "#a8324e",
+  brown: "#8b5e3c",
+  sand: "#d6b98c",
+  grey: "#a3a3a3",
+} as const satisfies Record<string, AvatarColor>;
+export type AvatarColorPresetId = keyof typeof AVATAR_COLOR_PRESETS;
 
-export function bloubAvatarProfile(seed: string, hue: AvatarHue | null): BloubAvatarProfile {
-  const storedSilhouette = requiredItem(SHAPES, stableIndex(`${seed}:shape`, SHAPES.length)).id;
-  const silhouette =
-    storedSilhouette === UNSUPPORTED_AVATAR_SILHOUETTE
-      ? requiredItem(
-          SUPPORTED_AVATAR_SILHOUETTES,
-          stableIndex(`${seed}:shape:replacement`, SUPPORTED_AVATAR_SILHOUETTES.length),
-        )
-      : storedSilhouette;
-  const expression = requiredItem(EXPRESSIONS, stableIndex(`${seed}:expression`, EXPRESSIONS.length)).id;
+export type AvatarColorChoice =
+  | { kind: "hue"; hue: AvatarHue; color: null; swatch: string }
+  | { kind: "preset"; preset: AvatarColorPresetId; hue: AvatarHue | null; color: AvatarColor; swatch: string };
+
+function hueChoice(hue: AvatarHue): AvatarColorChoice {
+  return { kind: "hue", hue, color: null, swatch: HUE_COLORS[hue] };
+}
+
+function presetChoice(preset: AvatarColorPresetId): AvatarColorChoice {
+  const color = AVATAR_COLOR_PRESETS[preset];
+  return { kind: "preset", preset, hue: nearestAvatarHue(color), color, swatch: color };
+}
+
+export const AVATAR_COLOR_CHOICES: readonly AvatarColorChoice[] = [
+  hueChoice(0),
+  hueChoice(30),
+  hueChoice(55),
+  hueChoice(100),
+  hueChoice(150),
+  hueChoice(185),
+  presetChoice("sky"),
+  hueChoice(215),
+  presetChoice("navy"),
+  hueChoice(245),
+  hueChoice(280),
+  hueChoice(320),
+  presetChoice("pink"),
+  presetChoice("wine"),
+  presetChoice("brown"),
+  presetChoice("sand"),
+  presetChoice("grey"),
+];
+
+export function isAvatarColorChoice(
+  choice: AvatarColorChoice,
+  hue: AvatarHue | null,
+  color: AvatarColor | null | undefined,
+): boolean {
+  return choice.color === null ? (color ?? null) === null && hue === choice.hue : color === choice.color;
+}
+
+export function bloubAvatarProfile(
+  seed: string,
+  hue: AvatarHue | null,
+  color: AvatarColor | null = null,
+): BloubAvatarProfile {
+  const silhouette = namedSilhouette(seed) ?? seededSilhouette(seed);
+  const expression = seededExpression(seed);
 
   return {
     shape: silhouette,
     expression,
-    color:
-      hue === null
-        ? requiredItem(AUTOMATIC_COLORS, stableIndex(`${seed}:color`, AUTOMATIC_COLORS.length))
-        : HUE_COLORS[hue],
+    color: color ?? (hue === null ? colorHex(automaticColor(seed)) : HUE_COLORS[hue]),
   };
 }
 
 export function avatarHueSwatch(hue: AvatarHue): string {
-  return colorHex(HUE_COLORS[hue]);
+  return HUE_COLORS[hue];
 }
 
-export function avatarHeadColor(seed: string, hue: AvatarHue | null): string {
-  return colorHex(bloubAvatarProfile(seed, hue).color);
+export function avatarHeadColor(seed: string, hue: AvatarHue | null, color: AvatarColor | null = null): string {
+  return bloubAvatarProfile(seed, hue, color).color;
+}
+
+export type ServerPlushColor = (typeof AUTOMATIC_COLORS)[number];
+
+export function serverPlushColor(serverId: string): ServerPlushColor {
+  return automaticColor(serverId);
+}
+
+export function serverPlushHex(serverId: string, color: string | null | undefined): string {
+  return (color ?? colorHex(automaticColor(serverId))).toLowerCase();
+}
+
+function automaticColor(seed: string): ServerPlushColor {
+  return requiredItem(AUTOMATIC_COLORS, stableIndex(`${seed}:color`, AUTOMATIC_COLORS.length));
 }
 
 export function avatarCandidateSeeds(agentId: string, currentSeed: string, batch: number): string[] {
   const candidates = [currentSeed];
   const firstProfile = bloubAvatarProfile(currentSeed, null);
-  const unseenSilhouetteIds = new Set<SupportedAvatarSilhouetteId>(SUPPORTED_AVATAR_SILHOUETTES);
+  const unseenSilhouetteIds = new Set<SupportedAvatarSilhouetteId>(SEEDED_SUPPORTED_SILHOUETTES);
   const usedExpressions = new Set<ExpressionId>([firstProfile.expression]);
   unseenSilhouetteIds.delete(firstProfile.shape);
   let index = 1;
@@ -112,6 +224,51 @@ export function avatarCandidateSeeds(agentId: string, currentSeed: string, batch
   }
 
   return candidates;
+}
+
+const FACE_SEED_TRIES = 10_000;
+
+export type AvatarStyle = "plush" | "flat";
+
+export const AVATAR_STYLES: readonly AvatarStyle[] = ["plush", "flat"];
+
+const STYLE_SEED_SEGMENT: Readonly<Record<AvatarStyle, string>> = { plush: "face", flat: "flat" };
+
+const FLAT_SEED_PATTERN = /:flat:\d+$/;
+
+export function avatarStyleForSeed(seed: string): AvatarStyle {
+  return FLAT_SEED_PATTERN.test(seed) ? "flat" : "plush";
+}
+
+export function avatarDefaultSeed(agentId: string, style: AvatarStyle): string {
+  if (style === "plush") return agentId;
+  const face = bloubAvatarProfile(agentId, null);
+  return avatarSeedForFace(agentId, { shape: face.shape, expression: face.expression }, style);
+}
+
+export function avatarSeedForFace(
+  agentId: string,
+  face: { shape: SupportedAvatarSilhouetteId; expression: ExpressionId },
+  style: AvatarStyle = "plush",
+): string {
+  const named = isNamedSilhouette(face.shape) ? face.shape : null;
+  const prefix = named ? `${agentId}:${named}` : agentId;
+  const seededShape = seededLookalike(face.shape);
+  for (let index = 0; index < FACE_SEED_TRIES; index += 1) {
+    const candidate = `${prefix}:${STYLE_SEED_SEGMENT[style]}:${index}`;
+    if (
+      namedSilhouette(candidate) === named &&
+      seededSilhouette(candidate) === seededShape &&
+      seededExpression(candidate) === face.expression
+    ) {
+      return candidate;
+    }
+  }
+  throw new Error("No avatar seed draws this face.");
+}
+
+export function avatarHueForColor(color: string): AvatarHue | null {
+  return AVATAR_HUE_CHOICES.find((option) => HUE_COLORS[option.hue] === color)?.hue ?? null;
 }
 
 function stableIndex(value: string, length: number): number {

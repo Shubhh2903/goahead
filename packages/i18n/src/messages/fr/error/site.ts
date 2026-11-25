@@ -2,7 +2,6 @@ import type { PartialTranslation } from "../../../message";
 import type { messages as source } from "../../en/error/site";
 
 export const messages = {
-  // Hosted site errors.
   "error.site.absolutePath": "Choisissez un chemin absolu pour le dossier du site.",
   "error.site.rootSymlink": "Les liens symboliques ne sont pas autorisés dans les sites hébergés.",
   "error.site.notDirectory": "La source du site doit être un dossier.",
@@ -29,4 +28,18 @@ export const messages = {
   "error.site.fileType": "Ce type de fichier n’est pas autorisé : {path}",
   "error.site.fileOutsideRoot": "Les fichiers du site doivent rester dans la racine source : {path}",
   "error.site.fileTooLarge": "Un fichier dépasse la limite de 1 Mo : {path}",
+  "error.site.serverLimit": {
+    one: "Ce serveur a atteint sa limite de {count} site actif. Pour publier un autre site, supprimez un site ou utilisez un serveur cloud avec un forfait qui a plus de sites.",
+    other:
+      "Ce serveur a atteint sa limite de {count} sites actifs. Pour publier un autre site, supprimez un site ou utilisez un serveur cloud avec un forfait qui a plus de sites.",
+  },
+  "error.site.sharedLimit":
+    "Les serveurs de votre compte sans forfait partagent leurs sites actifs, et tous sont utilisés. Pour publier un site ici, supprimez un site sur l'un de ces serveurs, ajoutez des utilisateurs à votre licence ou utilisez un serveur cloud avec un forfait qui a plus de sites.",
+  "error.site.accountLimit":
+    "Votre compte a le nombre maximal de sites actifs sur tous ses serveurs : {count}. Pour publier un autre site, supprimez un site.",
+  "error.site.unlinkedLimit": {
+    one: "Cet ordinateur n’est pas un serveur, et son compte a atteint la limite de {count} site actif. Pour publier un autre site, supprimez un site ou utilisez un serveur cloud avec un forfait qui a plus de sites.",
+    other:
+      "Cet ordinateur n’est pas un serveur, et son compte a atteint la limite de {count} sites actifs. Pour publier un autre site, supprimez un site ou utilisez un serveur cloud avec un forfait qui a plus de sites.",
+  },
 } as const satisfies PartialTranslation<typeof source>;

@@ -1,6 +1,8 @@
-import type { AgentProviderId } from "./agent-providers";
+import { type AgentProviderId, isAgentProvider } from "./agent-providers";
 import { INPUT_LIMITS } from "./input-limits";
+import { type AgentModelOption, isAgentModelOption } from "./ipc-agent-identity";
 import { isBoundedString, isFiniteNumber, isNullableBoundedString } from "./ipc-bounded-values";
+import type { McpSignInRelayPage } from "./ipc-mcp-servers";
 import { isDynamicRecord, isOneOf } from "./runtime-values";
 
 export const AGENT_PHASES = ["idle", "starting", "ready", "restarting", "blocked", "stopped"] as const;
@@ -9,9 +11,6 @@ export type AgentPhase = (typeof AGENT_PHASES)[number];
 export const CAPABILITY_STATES = ["ready", "setup-required", "unavailable"] as const;
 export type CapabilityState = (typeof CAPABILITY_STATES)[number];
 
-// The provider list lives in `agent-providers.ts` with everything else that is per-provider. It is
-// re-exported here because this module was its home first and about forty files import it from
-// here; the re-export keeps those imports where they are.
 export { AGENT_PROVIDERS, type AgentProviderId, isAgentProvider } from "./agent-providers";
 export type AgentProviderState =
   | "not-started"
@@ -23,38 +22,121 @@ export type AgentProviderState =
   | "error";
 
 export interface AgentProviderStatus {
-  /**
-   * One of `AgentProviderId`, but treated as an open string at the trust boundary for the same
-   * reason as `state`. Consumers look this up in a map or compare it, so one they do not know
-   * misses rather than throws.
-   */
+  off?: boolean;
   id: AgentProviderId;
-  /**
-   * One of `AgentProviderState`, but treated as an open string at the trust boundary: a remote
-   * server one release ahead may send a member we do not know yet.
-   */
+  displayName?: string;
   state: AgentProviderState;
   version: string | null;
   message: string | null;
   email?: string | null;
   connectionState?: "connecting";
+  signInPending?: boolean;
   checkError?: string | null;
-  /**
-   * Who owns the CLI binary in use. `system` is an install the user made and can update themselves,
-   * with the CLI's own updater; `managed` is the pinned copy OpenBot downloaded, which only an
-   * OpenBot release moves. The two have different update stories, so the picker has to tell them
-   * apart, and only the provider that resolved a CLI reports one at all.
-   */
   cliSource?: "system" | "managed";
-  /** A restart the user asked for waits for the provider's turns to end. New turns wait for it. */
+  cliIncomplete?: boolean;
+  otherCliVersion?: string;
   restartPending?: boolean;
-  /**
-   * The last failure of the provider, redacted, kept after its toast is gone and cleared by the next
-   * good model list. Only the computer that runs the provider sends it; the Team API does not.
-   */
+  endpointsPending?: boolean;
+  apiKeyInUse?: boolean;
   lastError?: string | null;
-  /** When `lastError` happened, in milliseconds since the epoch. */
   lastErrorAt?: number;
+  accounts?: ProviderAccountStatus[];
+  accountPool?: ProviderAccountPool;
+  liveVoiceAccount?: string;
+  modelSource?: ProviderModelSource;
+}
+
+export const PROVIDER_MODEL_SOURCE_NAME_LIMIT = 80;
+
+export type ProviderModelSource = { kind: "provider"; name: string } | { kind: "catalog" };
+
+export function isProviderModelSource(value: unknown): value is ProviderModelSource {
+  if (!isDynamicRecord(value)) return false;
+  if (value.kind === "catalog") return true;
+  return (
+    value.kind === "provider" &&
+    isBoundedString(value.name, PROVIDER_MODEL_SOURCE_NAME_LIMIT) &&
+    value.name.trim().length > 0
+  );
+}
+
+export interface ProviderModelSourceEntry {
+  provider: string;
+  source: ProviderModelSource;
+}
+
+const AGENT_PROVIDER_LIMIT = 64;
+
+export function decodeProviderModelSources(value: unknown): ProviderModelSourceEntry[] {
+  if (
+    !isDynamicRecord(value) ||
+    !Array.isArray(value.sources) ||
+    value.sources.length > AGENT_PROVIDER_LIMIT ||
+    !value.sources.every(
+      (entry: unknown) =>
+        isDynamicRecord(entry) &&
+        isBoundedString(entry.provider, INPUT_LIMITS.identifier) &&
+        isProviderModelSource(entry.source),
+    )
+  )
+    throw new Error("Invalid model source list.");
+  return value.sources.map((entry: ProviderModelSourceEntry) => ({
+    provider: entry.provider,
+    source: entry.source.kind === "provider" ? { kind: "provider", name: entry.source.name } : { kind: "catalog" },
+  }));
+}
+
+export function withModelSources(status: AgentStatus, sources: readonly ProviderModelSourceEntry[]): AgentStatus {
+  if (!status.providers || sources.length === 0) return status;
+  const byProvider = new Map(sources.map((entry) => [entry.provider, entry.source]));
+  return {
+    ...status,
+    providers: status.providers.map((row) => {
+      const source = byProvider.get(row.id);
+      return source ? { ...row, modelSource: source } : row;
+    }),
+  };
+}
+
+export interface ProviderAccountPool {
+  leftOut: string[];
+  inUse: string | null;
+}
+
+export const DEFAULT_PROVIDER_ACCOUNT_ID = "default";
+
+const PROVIDER_ACCOUNT_ID = /^(?:default|a[0-9a-f]{16})$/u;
+
+export function isProviderAccountId(value: unknown): value is string {
+  return typeof value === "string" && PROVIDER_ACCOUNT_ID.test(value);
+}
+
+export const MAX_PROVIDER_ACCOUNTS = 20;
+
+export const PROVIDER_ACCOUNT_STATES = ["connected", "connecting", "checking", "signed-out", "error"] as const;
+export type ProviderAccountState = (typeof PROVIDER_ACCOUNT_STATES)[number];
+
+export interface ProviderAccountStatus {
+  id: string;
+  label: string | null;
+  email: string | null;
+  state: ProviderAccountState;
+  message: string | null;
+  models?: AgentModelOption[];
+}
+
+export const PROVIDER_ACCOUNT_LABEL_MAX_LENGTH = 60;
+
+export function isProviderAccountStatus(value: unknown): value is ProviderAccountStatus {
+  return (
+    isDynamicRecord(value) &&
+    isProviderAccountId(value.id) &&
+    isNullableBoundedString(value.label, PROVIDER_ACCOUNT_LABEL_MAX_LENGTH) &&
+    isNullableBoundedString(value.email, INPUT_LIMITS.email) &&
+    isBoundedString(value.state, INPUT_LIMITS.identifier) &&
+    isNullableBoundedString(value.message, INPUT_LIMITS.messageText) &&
+    (value.models === undefined || (Array.isArray(value.models) && value.models.every(isAgentModelOption)))
+  );
 }
 
 function isAgentProviderStatus(value: unknown): value is AgentProviderStatus {
@@ -62,15 +144,39 @@ function isAgentProviderStatus(value: unknown): value is AgentProviderStatus {
     isDynamicRecord(value) &&
     isBoundedString(value.id, INPUT_LIMITS.identifier) &&
     isBoundedString(value.state, INPUT_LIMITS.identifier) &&
+    (value.displayName === undefined || isBoundedString(value.displayName, 80)) &&
     isNullableBoundedString(value.version, 160) &&
     isNullableBoundedString(value.message, INPUT_LIMITS.messageText) &&
     (value.email === undefined || isNullableBoundedString(value.email, INPUT_LIMITS.email)) &&
     (value.connectionState === undefined || isBoundedString(value.connectionState, INPUT_LIMITS.identifier)) &&
+    (value.signInPending === undefined || typeof value.signInPending === "boolean") &&
     (value.checkError === undefined || isNullableBoundedString(value.checkError, INPUT_LIMITS.messageText)) &&
     (value.cliSource === undefined || isBoundedString(value.cliSource, INPUT_LIMITS.identifier)) &&
+    (value.cliIncomplete === undefined || typeof value.cliIncomplete === "boolean") &&
+    (value.otherCliVersion === undefined || isBoundedString(value.otherCliVersion, 160)) &&
+    (value.off === undefined || typeof value.off === "boolean") &&
     (value.restartPending === undefined || typeof value.restartPending === "boolean") &&
+    (value.endpointsPending === undefined || typeof value.endpointsPending === "boolean") &&
+    (value.apiKeyInUse === undefined || typeof value.apiKeyInUse === "boolean") &&
     (value.lastError === undefined || isNullableBoundedString(value.lastError, INPUT_LIMITS.messageText)) &&
-    (value.lastErrorAt === undefined || isFiniteNumber(value.lastErrorAt))
+    (value.lastErrorAt === undefined || isFiniteNumber(value.lastErrorAt)) &&
+    (value.accounts === undefined ||
+      (Array.isArray(value.accounts) &&
+        value.accounts.length <= MAX_PROVIDER_ACCOUNTS &&
+        value.accounts.every(isProviderAccountStatus))) &&
+    (value.accountPool === undefined || isProviderAccountPool(value.accountPool)) &&
+    (value.liveVoiceAccount === undefined || isProviderAccountId(value.liveVoiceAccount)) &&
+    (value.modelSource === undefined || isProviderModelSource(value.modelSource))
+  );
+}
+
+export function isProviderAccountPool(value: unknown): value is ProviderAccountPool {
+  return (
+    isDynamicRecord(value) &&
+    Array.isArray(value.leftOut) &&
+    value.leftOut.length <= MAX_PROVIDER_ACCOUNTS &&
+    value.leftOut.every(isProviderAccountId) &&
+    (value.inUse === null || isProviderAccountId(value.inUse))
   );
 }
 
@@ -85,8 +191,16 @@ export type AgentAuthState =
   | { kind: "antigravity"; email: string | null }
   | { kind: "cursor"; email: string | null }
   | { kind: "cline"; email: string | null }
+  | { kind: "kimi"; email: string | null }
+  | { kind: "devin"; email: string | null }
+  | { kind: "copilot"; email: string | null }
+  | { kind: "mistral"; email: string | null }
   | { kind: "pi"; email: string | null }
   | { kind: "muse"; email: string | null }
+  | { kind: "inception"; email: string | null }
+  | { kind: "deepseek"; email: string | null }
+  | { kind: "openrouter"; email: string | null }
+  | { kind: "hermes"; email: string | null }
   | { kind: "acp"; email: string | null };
 
 export interface AccountUsageWindow {
@@ -95,7 +209,7 @@ export interface AccountUsageWindow {
   resetsAt: number | null;
 }
 
-function isAccountUsageWindow(value: unknown): value is AccountUsageWindow {
+export function isAccountUsageWindow(value: unknown): value is AccountUsageWindow {
   return (
     isDynamicRecord(value) &&
     isFiniteNumber(value.usedPercent) &&
@@ -107,10 +221,23 @@ function isAccountUsageWindow(value: unknown): value is AccountUsageWindow {
   );
 }
 
-export interface AccountUsageLimit {
-  id: string;
+export interface AccountUsageGroup {
+  name: string;
+  models: string[];
   primary: AccountUsageWindow | null;
   secondary: AccountUsageWindow | null;
+}
+
+export interface AccountUsageLimit {
+  id: string;
+  accountId?: string;
+  primary: AccountUsageWindow | null;
+  secondary: AccountUsageWindow | null;
+  tertiary?: AccountUsageWindow;
+  groups?: AccountUsageGroup[];
+  sharedQuotaWith?: AgentProviderId;
+  creditsAvailable?: boolean;
+  readFailed?: true;
 }
 
 export interface AccountUsage {
@@ -133,22 +260,78 @@ export function isAccountUsage(value: unknown): value is AccountUsage {
       (limit) =>
         isDynamicRecord(limit) &&
         isBoundedString(limit.id, INPUT_LIMITS.identifier) &&
+        (limit.accountId === undefined || isProviderAccountId(limit.accountId)) &&
         (limit.primary === null || isAccountUsageWindow(limit.primary)) &&
-        (limit.secondary === null || isAccountUsageWindow(limit.secondary)),
+        (limit.secondary === null || isAccountUsageWindow(limit.secondary)) &&
+        (limit.tertiary === undefined || isAccountUsageWindow(limit.tertiary)) &&
+        (limit.groups === undefined ||
+          (Array.isArray(limit.groups) &&
+            limit.groups.length <= MAX_USAGE_GROUPS &&
+            limit.groups.every(isAccountUsageGroup))) &&
+        (limit.sharedQuotaWith === undefined || isAgentProvider(limit.sharedQuotaWith)) &&
+        (limit.creditsAvailable === undefined || typeof limit.creditsAvailable === "boolean") &&
+        (limit.readFailed === undefined || limit.readFailed === true),
     )
+  );
+}
+
+export interface UsageCredits {
+  provider: AgentProviderId;
+  accountId: string;
+  available: boolean;
+}
+
+export function decodeUsageCredits(value: unknown): UsageCredits[] {
+  const invalid = () => new Error("Invalid usage credits.");
+  if (!Array.isArray(value)) throw invalid();
+  return value.flatMap((row: unknown) => {
+    if (!isDynamicRecord(row) || !isProviderAccountId(row.accountId) || typeof row.available !== "boolean")
+      throw invalid();
+    return isAgentProvider(row.provider)
+      ? [{ provider: row.provider, accountId: row.accountId, available: row.available }]
+      : [];
+  });
+}
+
+export function withUsageCredits(usage: AccountUsage, credits: readonly UsageCredits[]): AccountUsage {
+  const byAccount = new Map(credits.map((row) => [JSON.stringify([row.provider, row.accountId]), row.available]));
+  return {
+    limits: usage.limits.map((limit) => {
+      const available = byAccount.get(JSON.stringify([limit.id, limit.accountId ?? DEFAULT_PROVIDER_ACCOUNT_ID]));
+      return available === undefined ? limit : { ...limit, creditsAvailable: available };
+    }),
+  };
+}
+
+export function keepUsageCredits(previous: AccountUsageLimit | undefined, next: AccountUsageLimit): AccountUsageLimit {
+  return next.creditsAvailable !== undefined || previous?.creditsAvailable === undefined
+    ? next
+    : { ...next, creditsAvailable: previous.creditsAvailable };
+}
+
+export function withReadCredits(read: AccountUsageLimit | undefined, limit: AccountUsageLimit): AccountUsageLimit {
+  return read?.creditsAvailable === undefined ? limit : { ...limit, creditsAvailable: read.creditsAvailable };
+}
+
+export const MAX_USAGE_GROUPS = 16;
+
+export function isAccountUsageGroup(value: unknown): value is AccountUsageGroup {
+  return (
+    isDynamicRecord(value) &&
+    isBoundedString(value.name, INPUT_LIMITS.identifier) &&
+    Array.isArray(value.models) &&
+    value.models.length <= MAX_USAGE_GROUPS &&
+    value.models.every((model) => isBoundedString(model, INPUT_LIMITS.identifier)) &&
+    (value.primary === null || isAccountUsageWindow(value.primary)) &&
+    (value.secondary === null || isAccountUsageWindow(value.secondary))
   );
 }
 
 export interface AgentStatus {
   phase: AgentPhase;
   cliVersion: string | null;
-  /**
-   * `kind` is one of the members above, but treated as an open string at the trust boundary: a
-   * remote server one release ahead may send a member we do not know yet, and rejecting the whole
-   * status would stop every update from it.
-   */
   auth: AgentAuthState;
-  providers?: AgentProviderStatus[];
+  providers?: AgentProviderStatus[] | undefined;
   capabilities: {
     chat: CapabilityState;
     browser: CapabilityState;
@@ -181,61 +364,122 @@ export interface SetProviderApiKeyInput {
   key: string;
 }
 
-/** The code a `paste` sign-in's page showed. It is a credential: it only travels towards the host. */
+export interface ConnectProviderAccountInput {
+  provider: AgentProviderId;
+  accountId: string | null;
+}
+
+export interface ConnectProviderAccountKeyInput extends ConnectProviderAccountInput {
+  key: string;
+}
+
+export interface RenameProviderAccountInput {
+  provider: AgentProviderId;
+  accountId: string;
+  label: string | null;
+}
+
+export interface SetProviderAccountPoolInput {
+  provider: AgentProviderId;
+  enabled: boolean;
+  leftOut: string[];
+}
+
+export interface SetLiveVoiceAccountInput {
+  accountId: string | null;
+}
+
+export interface RemoveProviderAccountInput {
+  provider: AgentProviderId;
+  accountId: string;
+}
+
+export interface ResetProviderUsageInput {
+  provider: AgentProviderId;
+  accountId: string;
+}
+
+export interface ProviderUsageResets {
+  provider: AgentProviderId;
+  accountId: string;
+  available: number;
+}
+
+export const PROVIDER_USAGE_RESET_OUTCOMES = ["reset", "nothingToReset", "noCredit", "alreadyRedeemed"] as const;
+export type ProviderUsageResetOutcome = (typeof PROVIDER_USAGE_RESET_OUTCOMES)[number];
+
+export interface HostProviderAccounts {
+  providers: { provider: AgentProviderId; accounts: ProviderAccountStatus[] }[];
+  pools?: { provider: AgentProviderId; pool: ProviderAccountPool }[];
+  liveVoiceAccount?: string | null;
+  agents: { agentId: string; accountId: string }[];
+}
+
+export interface HostProviderAccountModels {
+  providers: { provider: AgentProviderId; accounts: { accountId: string; models: AgentModelOption[] }[] }[];
+}
+
+export interface SetAgentProviderAccountInput {
+  agentId: string;
+  accountId: string | null;
+}
+
 export interface SubmitProviderCodeLoginInput {
   provider: AgentProviderId;
   code: string;
 }
 
-/**
- * Whether a key is stored. `unreadable` is a key file OpenBot could not decrypt or parse: the
- * provider then runs with no key, and the file stays on disk until the user replaces or removes it.
- */
+export interface SubmitProviderAccountCodeLoginInput extends SubmitProviderCodeLoginInput {
+  accountId: string;
+}
+
 export type ProviderApiKeyStatus = "missing" | "saved" | "unreadable";
 
-/** What the renderer may know about a stored key: its status. Never the key. */
 export interface ProviderApiKeyState {
   provider: AgentProviderId;
   status: ProviderApiKeyStatus;
 }
 
-/**
- * What a started code sign-in gives the renderer: a code to show, or nothing left to do.
- *
- * `connected` is the provider that turned out to be signed in already, which the user reaches by
- * asking for a code on a computer where the account arrived some other way. The token traded for
- * the code never crosses this boundary; how the sign-in ends arrives as a provider status, the same
- * way the browser sign-in's does.
- */
 export type ProviderCodeLoginStart =
   | {
       kind: "code";
-      /** The one-time code the user types on the other device. Safe to show and to read out. */
       userCode: string;
-      /** The page to type it on. Always https. */
       verificationUrl: string;
-      /** The same page with the code filled in, when the provider gives one. The dialog's QR code opens it. */
       verificationUrlComplete?: string;
-      /** Epoch milliseconds. When OpenBot gives up on this code, which is what the dialog counts down to. */
       expiresAt: number;
     }
   | {
-      /**
-       * The user signs in on the page, which then shows a code for them to copy back. OpenBot types
-       * it into the provider's CLI with `submitProviderCodeLogin`.
-       */
       kind: "paste";
-      /** The provider's sign-in page. Always https. */
       verificationUrl: string;
-      /** Epoch milliseconds, as for `code`. */
       expiresAt: number;
     }
   | {
-      /** The user signs in on the page, and the provider's CLI sees it by itself. No code is shown or copied. */
       kind: "link";
-      /** The provider's sign-in page. Always https. */
       verificationUrl: string;
-      /** Epoch milliseconds, as for `code`. */
       expiresAt: number;
     }
   | { kind: "connected" };
+
+export interface ProviderAccountCodeLoginStart {
+  accountId: string;
+  start: ProviderCodeLoginStart;
+}
+
+export interface ProviderAccountCodeLoginStatus {
+  result: { error: string | null } | null;
+}
+
+export interface ProviderHostSignInStatus {
+  tabId: string | null;
+  result: { error: string | null } | null;
+}
+
+export interface ProviderRelaySignInStatus {
+  page: McpSignInRelayPage | null;
+  result: { error: string | null } | null;
+}
+
+export interface PasteProviderRelaySignInInput {
+  provider: AgentProviderId;
+  address: string;
+}

@@ -1,12 +1,12 @@
 import { type ChatTagKind, chatTagReferences } from "@openbot/contracts/chat-tag-references";
-import type { AttachmentSummary, InstalledSkill } from "@openbot/contracts/ipc";
+import type { AttachmentSummary } from "@openbot/contracts/ipc";
 import type { AppTextKey } from "@openbot/i18n";
-import { Blocks, Button, Puzzle } from "@openbot/ui";
+import { AppWindow, Blocks, Button, Puzzle, Split, TextQuote } from "@openbot/ui";
 import { ReferenceChip } from "@openbot/ui/reference-chip";
 import { usesTouchLayout } from "@openbot/ui/utils";
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, createUniqueId, For, Show, untrack } from "solid-js";
-import type { AgentProfile, MessageCitation } from "../../data";
+import type { ComposerAgent, ComposerSkill, MessageCitation } from "../../data";
 import { useText } from "../../text";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { AnchoredTooltip } from "./AnchoredTooltip";
@@ -23,36 +23,46 @@ import {
 
 export interface RichMessageTextProps {
   body: string;
-  agents: AgentProfile[];
-  skills?: InstalledSkill[];
-  attachments?: AttachmentSummary[];
-  citations?: MessageCitation[];
+  agents: ComposerAgent[];
+  skills?: ComposerSkill[] | undefined;
+  attachments?: AttachmentSummary[] | undefined;
+  citations?: MessageCitation[] | undefined;
   onSelectAgent: (agentId: string) => void;
   onOpenLink: (url: string) => void;
-  onOpenAttachment?: (attachment: AttachmentSummary) => void;
-  onOpenSharedFile?: (path: string) => void;
-  onOpenWorkspaceFile?: (path: string) => void;
+  onOpenAttachment?: ((attachment: AttachmentSummary) => void) | undefined;
+  onOpenSharedFile?: ((path: string, asWritten?: string) => void) | undefined;
+  onOpenWorkspaceFile?: ((path: string, asWritten?: string) => void) | undefined;
+  onOpenQuote?: ((messageId: string, text: string) => void) | undefined;
+  onOpenTag?: ((kind: "tab" | "thread", id: string) => void) | undefined;
   showCitationFooter?: boolean;
-  /** The characters of a streaming body after this text. It fades the words revealed last. */
   streamingTailAfter?: number | undefined;
+  linkFavicons?: boolean | undefined;
 }
 
 const UNAVAILABLE_TAG_LABELS = {
   agent: "chat.tag.unavailableAgent",
   skill: "chat.tag.unavailableSkill",
   mcp: "chat.tag.unavailableMcp",
-} as const satisfies Record<ChatTagKind, AppTextKey>;
+} as const satisfies Record<UnavailableTagKind, AppTextKey>;
+
+type UnavailableTagKind = Exclude<ChatTagKind, "quote" | "tab" | "thread">;
 
 export function RichMessageText(props: RichMessageTextProps) {
   const { t } = useText();
+  const citationList = createMemo(() => props.citations);
+  const attachmentList = createMemo(() => props.attachments);
+  const skillList = createMemo(() => props.skills);
   const citationsByNumber = createMemo(
-    () => new Map((props.citations ?? []).map((citation) => [citation.number, citation])),
+    () => new Map((citationList() ?? []).map((citation) => [citation.number, citation])),
   );
   const attachmentsById = createMemo(
-    () => new Map((props.attachments ?? []).map((attachment) => [attachment.id, attachment])),
+    () => new Map((attachmentList() ?? []).map((attachment) => [attachment.id, attachment])),
   );
+  const taggedAgents = createMemo(() => props.agents, { equals: sameAgentNames });
+  const agentsById = createMemo(() => new Map(props.agents.map((agent) => [agent.id, agent])));
+  const liveAgent = (agent: ComposerAgent) => agentsById().get(agent.id) ?? agent;
   const parts = createMemo(() =>
-    richMessageParts(props.body, props.agents, props.skills ?? [], citationsByNumber(), attachmentsById()),
+    richMessageParts(props.body, taggedAgents(), skillList() ?? [], citationsByNumber(), attachmentsById()),
   );
   const trail = useStreamingReveal();
   const tailAfter = createMemo(
@@ -73,8 +83,7 @@ export function RichMessageText(props: RichMessageTextProps) {
   } | null>(null);
 
   const openTooltip = (anchor: HTMLElement, content: string, onlyWhenTruncated = false) => {
-    const label = anchor.querySelector<HTMLElement>(".inline-file-reference-name");
-    if (onlyWhenTruncated && (!label || label.scrollWidth <= label.clientWidth + 1)) {
+    if (onlyWhenTruncated && anchor.scrollWidth <= anchor.clientWidth + 1) {
       setTooltip(null);
       return;
     }
@@ -125,39 +134,76 @@ export function RichMessageText(props: RichMessageTextProps) {
                 }}
               >
                 <AttachmentReferenceVisual name={name} />
-                <span class="inline-file-reference-name">{name}</span>
+                <span class="inline-file-reference-name" dir="auto">
+                  {name}
+                </span>
               </Button>
             );
           }
           if (part.url) {
             return (
-              <MessageLink url={part.url} onOpenLink={props.onOpenLink}>
+              <MessageLink
+                url={part.url}
+                title={linkTitle(part.text, part.url)}
+                isolate={linkTitle(part.text, part.url) === undefined}
+                favicon={props.linkFavicons !== false}
+                onOpenLink={props.onOpenLink}
+              >
                 {part.text}
               </MessageLink>
             );
           }
-          if (part.agent) {
+          const agent = part.agent;
+          if (agent) {
             return (
               <ReferenceChip
                 kind="agent"
-                name={part.agent.name}
-                class="message-agent-tag"
-                icon={<AgentAvatar agent={part.agent} />}
-                onClick={() => props.onSelectAgent(part.agent?.id ?? "")}
+                name={agent.name}
+                class="message-reference-chip message-agent-tag"
+                icon={<AgentAvatar agent={liveAgent(agent)} />}
+                onClick={() => props.onSelectAgent(agent.id)}
               />
             );
           }
           if (part.skill) {
-            return <ReferenceChip kind="skill" name={part.skill.name} icon={<Puzzle />} />;
+            return (
+              <ReferenceChip class="message-reference-chip" kind="skill" name={part.skill.name} icon={<Puzzle />} />
+            );
           }
           if (part.mcpName) {
-            return <ReferenceChip kind="mcp" name={part.mcpName} icon={<Blocks />} />;
+            return <ReferenceChip class="message-reference-chip" kind="mcp" name={part.mcpName} icon={<Blocks />} />;
+          }
+          if (part.quote) {
+            const quote = part.quote;
+            const onOpenQuote = props.onOpenQuote;
+            return (
+              <ReferenceChip
+                kind="quote"
+                name={quote.text}
+                class="message-reference-chip message-quote-tag"
+                icon={<TextQuote />}
+                onClick={onOpenQuote ? () => onOpenQuote(quote.messageId, quote.text) : undefined}
+              />
+            );
+          }
+          if (part.reference) {
+            const reference = part.reference;
+            const onOpenTag = props.onOpenTag;
+            return (
+              <ReferenceChip
+                kind={reference.kind}
+                name={part.text}
+                class="message-reference-chip"
+                icon={reference.kind === "tab" ? <AppWindow /> : <Split />}
+                onClick={onOpenTag ? () => onOpenTag(reference.kind, reference.id) : undefined}
+              />
+            );
           }
           if (part.unavailableKind) {
             return (
               <span class="message-tag-unavailable">
                 <span class="sr-only">{t(UNAVAILABLE_TAG_LABELS[part.unavailableKind])} </span>
-                {part.text}
+                <span dir="auto">{part.text}</span>
               </span>
             );
           }
@@ -212,7 +258,9 @@ export function RichMessageText(props: RichMessageTextProps) {
                 }}
               >
                 <span class="message-citation-mark">{citation.number}</span>
-                <span class="message-citation-ref-label">{citation.label}</span>
+                <span class="message-citation-ref-label" dir="auto">
+                  {citation.label}
+                </span>
                 <span class="message-citation-separator" aria-hidden="true">
                   ·
                 </span>
@@ -248,8 +296,6 @@ function StreamingTailText(props: { body: string; after: number }) {
       {parts().prefix}
       <For each={parts().chunks}>
         {(chunk) => (
-          /* The block that holds the tail renders again on each step. A delay of minus the step's
-             age continues its fade where it was, instead of starting it again. */
           <span
             class="t-stream-w"
             style={{ "animation-delay": `${Math.min(0, chunk.revealedAt - performance.now())}ms` }}
@@ -264,17 +310,20 @@ function StreamingTailText(props: { body: string; after: number }) {
 
 export function MessageLink(props: {
   url: string;
-  title?: string | null;
+  title?: string | undefined;
   children: JSX.Element;
+  favicon?: boolean;
+  isolate?: boolean | undefined;
   onOpenLink: (url: string) => void;
 }) {
   return (
     <a
       class="message-link"
       href={props.url}
+      dir={props.isolate ? "auto" : undefined}
       data-cuelume-navigate=""
       data-cuelume-emphasis="subtle"
-      title={props.title ?? props.url}
+      title={props.title}
       onClick={(event) => {
         event.preventDefault();
         props.onOpenLink(props.url);
@@ -282,26 +331,29 @@ export function MessageLink(props: {
     >
       <span class="message-link-icon" aria-hidden="true">
         <LinkIcon />
-        <img
-          src={faviconUrl(props.url)}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          referrerpolicy="no-referrer"
-          onError={(event) => event.currentTarget.remove()}
-        />
+        <Show when={props.favicon !== false}>
+          <img
+            src={faviconUrl(props.url)}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            referrerpolicy="no-referrer"
+            onError={(event) => event.currentTarget.remove()}
+          />
+        </Show>
       </span>
       {props.children}
     </a>
   );
 }
 
-/** A part that shows its source text as it is, so its length counts body characters. */
 function plainTextPart(part: RichMessagePart): boolean {
   return !(
     part.agent ||
     part.skill ||
     part.mcpName ||
+    part.quote ||
+    part.reference ||
     part.unavailableKind ||
     part.citation ||
     part.attachment ||
@@ -311,30 +363,42 @@ function plainTextPart(part: RichMessagePart): boolean {
 
 interface RichMessagePart {
   text: string;
-  agent?: AgentProfile;
-  skill?: InstalledSkill;
-  /**
-   * An MCP server tag carries the name it was written with, and nothing looks it up. A message is a
-   * record of what the user asked, and a server removed since does not make that record wrong.
-   */
+  agent?: ComposerAgent | undefined;
+  skill?: ComposerSkill;
   mcpName?: string;
-  unavailableKind?: ChatTagKind;
+  quote?: { messageId: string; text: string };
+  reference?: { kind: "tab" | "thread"; id: string };
+  unavailableKind?: UnavailableTagKind;
   citation?: MessageCitation;
   attachment?: AttachmentSummary;
   sharedPath?: string;
   url?: string;
 }
 
+function sameAgentNames(left: ComposerAgent[], right: ComposerAgent[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((agent, index) => agent.id === right[index]?.id && agent.name === right[index]?.name)
+  );
+}
+
 function richMessageParts(
   body: string,
-  agents: AgentProfile[],
-  skills: InstalledSkill[],
+  agents: ComposerAgent[],
+  skills: ComposerSkill[],
   citationsByNumber: Map<number, MessageCitation>,
   attachmentsById: Map<string, AttachmentSummary>,
 ): RichMessagePart[] {
   const parts: RichMessagePart[] = [];
   for (const taggedReference of semanticTagParts(body, agents, skills)) {
-    if (taggedReference.agent || taggedReference.skill || taggedReference.mcpName || taggedReference.unavailableKind) {
+    if (
+      taggedReference.agent ||
+      taggedReference.skill ||
+      taggedReference.mcpName ||
+      taggedReference.quote ||
+      taggedReference.reference ||
+      taggedReference.unavailableKind
+    ) {
       parts.push(taggedReference);
       continue;
     }
@@ -360,7 +424,7 @@ function richMessageParts(
   return parts;
 }
 
-function semanticTagParts(body: string, agents: AgentProfile[], skills: InstalledSkill[]): RichMessagePart[] {
+function semanticTagParts(body: string, agents: ComposerAgent[], skills: ComposerSkill[]): RichMessagePart[] {
   const references = chatTagReferences(body);
   if (references.length === 0) return [{ text: body }];
   const parts: RichMessagePart[] = [];
@@ -372,9 +436,14 @@ function semanticTagParts(body: string, agents: AgentProfile[], skills: Installe
       parts.push(agent ? { text: agent.name, agent } : { text: reference.name, unavailableKind: "agent" });
     } else if (reference.kind === "mcp") {
       parts.push({ text: reference.name, mcpName: reference.name });
+    } else if (reference.kind === "quote") {
+      parts.push({ text: reference.name, quote: { messageId: reference.id, text: reference.name } });
+    } else if (reference.kind === "tab" || reference.kind === "thread") {
+      parts.push({ text: reference.name, reference: { kind: reference.kind, id: reference.id } });
     } else {
       const skill = skills.find(
-        (candidate) => candidate.skillId === reference.id && candidate.state !== "needs-repair",
+        (candidate) =>
+          candidate.skillId === reference.id && candidate.state !== "needs-repair" && candidate.problem === undefined,
       );
       parts.push(skill ? { text: skill.name, skill } : { text: reference.name, unavailableKind: "skill" });
     }
@@ -445,6 +514,10 @@ function linkedMessageParts(body: string): RichMessagePart[] {
   return parts.length > 0 ? parts : [{ text: body }];
 }
 
+export function linkTitle(text: string, url: string): string | undefined {
+  return text === url || `${text}/` === url ? undefined : url;
+}
+
 export function safeBrowserUrl(value: string): string | null {
   try {
     const url = new URL(value);
@@ -476,12 +549,12 @@ function CitationArrowIcon() {
 
 interface AgentTagMatcher {
   expression: RegExp;
-  agentsByName: Map<string, AgentProfile>;
+  agentsByName: Map<string, ComposerAgent>;
 }
 
-const agentTagMatchers = new WeakMap<AgentProfile[], AgentTagMatcher>();
+const agentTagMatchers = new WeakMap<ComposerAgent[], AgentTagMatcher>();
 
-function agentTagMatcher(agents: AgentProfile[]): AgentTagMatcher | null {
+function agentTagMatcher(agents: ComposerAgent[]): AgentTagMatcher | null {
   if (agents.length === 0) return null;
   const cached = agentTagMatchers.get(agents);
   if (cached) return cached;
@@ -497,12 +570,12 @@ function agentTagMatcher(agents: AgentProfile[]): AgentTagMatcher | null {
   return matcher;
 }
 
-function taggedMessageParts(body: string, agents: AgentProfile[]) {
+function taggedMessageParts(body: string, agents: ComposerAgent[]) {
   if (!body.includes("@")) return [{ text: body, agent: undefined }];
   const matcher = agentTagMatcher(agents);
   if (!matcher) return [{ text: body, agent: undefined }];
   matcher.expression.lastIndex = 0;
-  const parts: Array<{ text: string; agent: AgentProfile | undefined }> = [];
+  const parts: Array<{ text: string; agent: ComposerAgent | undefined }> = [];
   let cursor = 0;
   for (const match of body.matchAll(matcher.expression)) {
     const index = match.index ?? 0;

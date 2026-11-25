@@ -2,14 +2,27 @@ import type { PartialTranslation } from "../../../message";
 import type { messages as source } from "../../en/error/mcp";
 
 export const messages = {
-  // MCP sign-in errors, and the sign-in page in the browser.
   "error.mcp.redirectByName": "Cette adresse n’est pas accessible par un nom.",
-  "error.mcp.redirectGetOnly": "Cette adresse répond uniquement aux requêtes GET.",
   "error.mcp.redirectNotSignIn": "Cette adresse ne fait pas partie d’une connexion.",
   "error.mcp.redirectRefused": "La connexion a été refusée. Revenez à GoAhead, puis réessayez.",
-  "error.mcp.redirectNoSignIn": "Aucune connexion n’attend cette réponse. Elle est peut-être terminée.",
+  "error.mcp.redirectNoSignIn": "Cette connexion n’est plus active. Revenez dans GoAhead et relancez la connexion.",
   "error.mcp.redirectSignedIn": "GoAhead est connecté. Vous pouvez fermer cette fenêtre.",
+  "error.mcp.redirectNotSaved": "La connexion n’a pas abouti. Revenez dans GoAhead pour en voir la raison.",
   "error.mcp.signInFileUnreadable": "Impossible de lire le fichier de connexion MCP.",
   "error.mcp.signInFileTooLarge": "Le fichier de connexion MCP est trop volumineux.",
   "error.mcp.unsupported": "Ce serveur ne prend pas en charge les serveurs MCP.",
+  "error.mcp.signInOnHost": "La connexion à un serveur MCP ne fonctionne que dans GoAhead sur l’ordinateur hôte.",
+  "error.mcp.signInPageOnServer":
+    "Cette page de connexion s’ouvre uniquement sur le serveur. Demandez à un propriétaire ou à un administrateur du serveur de se connecter.",
+  "error.mcp.signInPageOnServerSwitch":
+    "Cette page de connexion s’ouvre uniquement sur le serveur. Passez à ce serveur, puis choisissez à nouveau Se connecter.",
+  "error.mcp.signInAppUnsupported":
+    "Ce serveur ne prend pas en charge les apps de connexion. Mettez à jour GoAhead sur l’hôte.",
+  "error.mcp.redirectRelayed": "GoAhead a envoyé la connexion au serveur. Vous pouvez fermer cette fenêtre.",
+  "error.mcp.relayEnded": "Cette connexion est terminée. Relancez-la.",
+  "error.mcp.signInLinkNotReady": "La page de connexion n’est pas encore ouverte. Réessayez dans un instant.",
+  "error.mcp.relayNoState":
+    "La page de connexion du serveur ne protège pas son adresse de retour : GoAhead ne l’ouvre donc pas sur cet ordinateur.",
+  "error.mcp.relayAddressInvalid":
+    "Ce n’est pas l’adresse de fin de cette connexion. Copiez l’adresse complète depuis le navigateur.",
 } as const satisfies PartialTranslation<typeof source>;

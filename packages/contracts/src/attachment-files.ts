@@ -2,6 +2,14 @@ export const IMAGE_ATTACHMENT_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp",
 
 export const MEDIA_ATTACHMENT_EXTENSIONS = ["mp3", "mov"] as const;
 
+const NAMED_AUDIO_EXTENSIONS = ["m4a", "wav", "aac", "ogg", "oga", "opus", "flac"] as const;
+
+export const ARCHIVE_ATTACHMENT_EXTENSIONS = ["zip"] as const;
+
+export const MP4_ATTACHMENT_EXTENSIONS = ["mp4"] as const;
+
+export const SVG_ATTACHMENT_EXTENSIONS = ["svg"] as const;
+
 export const CONTEXT_ATTACHMENT_EXTENSIONS = [
   "pdf",
   "doc",
@@ -73,29 +81,59 @@ export const CONTEXT_ATTACHMENT_EXTENSIONS = [
 export const ATTACHMENT_FILE_EXTENSIONS = [
   ...IMAGE_ATTACHMENT_EXTENSIONS,
   ...MEDIA_ATTACHMENT_EXTENSIONS,
+  ...ARCHIVE_ATTACHMENT_EXTENSIONS,
+  ...MP4_ATTACHMENT_EXTENSIONS,
+  ...SVG_ATTACHMENT_EXTENSIONS,
   ...CONTEXT_ATTACHMENT_EXTENSIONS,
 ] as const;
 
-/** What a host accepts beyond the base list. An older remote host rejects EML, MP3, and MOV. */
+export const OPENABLE_ATTACHMENT_EXTENSIONS = [
+  ...IMAGE_ATTACHMENT_EXTENSIONS,
+  ...MEDIA_ATTACHMENT_EXTENSIONS,
+  ...NAMED_AUDIO_EXTENSIONS,
+  ...MP4_ATTACHMENT_EXTENSIONS,
+  "pdf",
+  "docx",
+  "odt",
+  "rtf",
+  "xlsx",
+  "ods",
+  "pptx",
+  "odp",
+  "eml",
+  "txt",
+  "md",
+  "markdown",
+  "csv",
+  "log",
+] as const;
+
 export interface AttachmentSupport {
   eml: boolean;
   media: boolean;
+  zip: boolean;
+  mp4: boolean;
+  svg: boolean;
+  anyFile: boolean;
 }
 
-export function supportedAttachmentExtensions(support: AttachmentSupport): string[] {
+export function supportedAttachmentExtensions(support: Omit<AttachmentSupport, "anyFile">): string[] {
   return ATTACHMENT_FILE_EXTENSIONS.filter(
     (extension) =>
       (support.eml || extension !== "eml") &&
-      (support.media || !MEDIA_ATTACHMENT_EXTENSIONS.some((media) => media === extension)),
+      (support.media || !MEDIA_ATTACHMENT_EXTENSIONS.some((media) => media === extension)) &&
+      (support.zip || !ARCHIVE_ATTACHMENT_EXTENSIONS.some((archive) => archive === extension)) &&
+      (support.mp4 || !MP4_ATTACHMENT_EXTENSIONS.some((mp4) => mp4 === extension)) &&
+      (support.svg || !SVG_ATTACHMENT_EXTENSIONS.some((svg) => svg === extension)),
   );
 }
 
-export const IMAGE_ATTACHMENT_ACCEPT = IMAGE_ATTACHMENT_EXTENSIONS.map((extension) => `.${extension}`).join(",");
 export const ATTACHMENT_FILE_ACCEPT = ATTACHMENT_FILE_EXTENSIONS.map((extension) => `.${extension}`).join(",");
 export const SUPPORTED_ATTACHMENT_DESCRIPTION =
-  "images, MP3 audio, MOV video, PDF, Office documents, EML, text, Markdown, data, or source files";
+  "images, MP3 audio, MOV or MP4 video, ZIP archives, PDF, Office documents, EML, text, Markdown, data, or source files";
 
 export const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+export const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 const SUPPORTED_EXTENSIONS = new Set<string>(ATTACHMENT_FILE_EXTENSIONS);
 const EXTENSIONLESS_TEXT_FILES = new Set(["dockerfile", "makefile", "procfile"]);
@@ -112,28 +150,33 @@ export function isSupportedAttachmentName(name: string): boolean {
   return EXTENSIONLESS_TEXT_FILES.has(basename) || (extension !== null && SUPPORTED_EXTENSIONS.has(extension));
 }
 
-/**
- * The name check for a surface that picks files for one host, such as mobile. It accepts the same
- * files as the desktop picker filter that `supportedAttachmentExtensions` builds for that host.
- */
+const OPENABLE_EXTENSIONS = new Set<string>(OPENABLE_ATTACHMENT_EXTENSIONS);
+
+export function isOpenableAttachmentName(name: string): boolean {
+  const extension = attachmentFileExtension(name);
+  return extension !== null && OPENABLE_EXTENSIONS.has(extension);
+}
+
+export function rasterImageMimeType(name: string): string | null {
+  const extension = attachmentFileExtension(name);
+  return IMAGE_ATTACHMENT_EXTENSIONS.some((image) => image === extension) ? attachmentMimeTypeForName(name) : null;
+}
+
 export function isSupportedAttachmentNameFor(name: string, support: AttachmentSupport): boolean {
-  if (!isSupportedAttachmentName(name)) return false;
+  if (!isSupportedAttachmentName(name)) return support.anyFile;
   const extension = attachmentFileExtension(name);
   if (extension === "eml") return support.eml;
   if (MEDIA_ATTACHMENT_EXTENSIONS.some((media) => media === extension)) return support.media;
+  if (ARCHIVE_ATTACHMENT_EXTENSIONS.some((archive) => archive === extension)) return support.zip;
+  if (MP4_ATTACHMENT_EXTENSIONS.some((mp4) => mp4 === extension)) return support.mp4;
+  if (SVG_ATTACHMENT_EXTENSIONS.some((svg) => svg === extension)) return support.svg;
   return true;
 }
 
-/**
- * The one rejection message for an unsupported attachment. Both import paths throw it: the renderer
- * drop and file-picker handlers in `src/main/ipc/attachment-handlers.ts`, and the draft and transfer
- * operations in `src/backend/attachment-files.ts`. A user must not read two different sentences for
- * the same refused file.
- */
 export function assertSupportedAttachmentName(name: string): void {
   if (isSupportedAttachmentName(name)) return;
   throw new Error(
-    `${name} is not supported. Attach ${SUPPORTED_ATTACHMENT_DESCRIPTION}. For other audio or video formats, export as MP3 or MOV, or attach a text transcript.`,
+    `${name} is not supported. Attach ${SUPPORTED_ATTACHMENT_DESCRIPTION}. For other audio or video formats, export as MP3, MOV, or MP4, or attach a text transcript.`,
   );
 }
 
@@ -152,13 +195,26 @@ export function attachmentMimeTypeForName(name: string) {
       return "image/avif";
     case "mp3":
       return "audio/mpeg";
+    case "m4a":
+      return "audio/mp4";
+    case "wav":
+      return "audio/wav";
+    case "aac":
+      return "audio/aac";
+    case "ogg":
+    case "oga":
+    case "opus":
+      return "audio/ogg";
+    case "flac":
+      return "audio/flac";
     case "mov":
       return "video/quicktime";
+    case "mp4":
+      return "video/mp4";
+    case "zip":
+      return "application/zip";
     case "pdf":
       return "application/pdf";
-    // SVG is not in ATTACHMENT_FILE_EXTENSIONS, so it cannot be attached: an attachment with an
-    // `image/*` type becomes `kind: "image"` and reaches the provider as a raster image block.
-    // The file preview panel previews any workspace file, so it still needs the type.
     case "svg":
       return "image/svg+xml";
     case "eml":
@@ -166,7 +222,7 @@ export function attachmentMimeTypeForName(name: string) {
     case "doc":
       return "application/msword";
     case "docx":
-      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      return DOCX_MIME_TYPE;
     case "odt":
       return "application/vnd.oasis.opendocument.text";
     case "rtf":
@@ -186,6 +242,9 @@ export function attachmentMimeTypeForName(name: string) {
     case "md":
     case "markdown":
       return "text/markdown";
+    case "html":
+    case "htm":
+      return "text/html";
     case "json":
     case "jsonl":
     case "ipynb":
@@ -195,11 +254,6 @@ export function attachmentMimeTypeForName(name: string) {
   }
 }
 
-/**
- * The media kinds a browser can play. Attachments keep `previewKind: "none"` on the wire, because
- * the released Team API v1-v4 validators accept only image, pdf, text, and none. The renderer reads
- * the MIME type instead, which is already a free string in those protocols.
- */
 export function playableMediaKind(mimeType: string): "audio" | "video" | null {
   if (mimeType.startsWith("audio/")) return "audio";
   if (mimeType.startsWith("video/")) return "video";
@@ -208,4 +262,8 @@ export function playableMediaKind(mimeType: string): "audio" | "video" | null {
 
 export function isXlsxMimeType(mimeType: string): boolean {
   return mimeType === XLSX_MIME_TYPE;
+}
+
+export function isDocxMimeType(mimeType: string): boolean {
+  return mimeType === DOCX_MIME_TYPE;
 }

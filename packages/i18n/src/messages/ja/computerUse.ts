@@ -2,16 +2,15 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/computerUse";
 
 export const messages = {
-  // Computer Use settings, the permission help window, and the window highlight.
   "computerUse.permission.screenRecording.title": "画面収録",
-  "computerUse.permission.screenRecording.description": "GoAhead がアプリのウインドウを見られるようにします。",
+  "computerUse.permission.screenRecording.description": "GoAhead がアプリのウィンドウを見られるようにします。",
   "computerUse.permission.screenRecording.pane": "画面収録とシステムオーディオ録音",
   "computerUse.permission.accessibility.title": "アクセシビリティ",
   "computerUse.permission.accessibility.description": "GoAhead がクリックや入力をできるようにします。",
   "computerUse.permission.accessibility.pane": "アクセシビリティ",
   "computerUse.error.check": "GoAhead は Computer Use を確認できませんでした。",
   "computerUse.error.openSettings": "GoAhead はシステム設定を開けませんでした。",
-  "computerUse.error.startDriver": "GoAhead は Computer Use ドライバを起動できませんでした。",
+  "computerUse.error.startDriver": "GoAhead は Computer Use ドライバーを起動できませんでした。",
   "computerUse.checkAgain": "もう一度確認",
   "computerUse.checking": "Computer Use を確認しています",
   "computerUse.unavailable.title": "Computer Use はまだ利用できません",
@@ -19,10 +18,15 @@ export const messages = {
   "computerUse.permissions.description": "権限は macOS が管理します。",
   "computerUse.ready.title": "Computer Use の準備ができました",
   "computerUse.ready.description":
-    "GoAhead はこのコンピュータのアプリを見て操作できます。このシステムでは追加の権限は必要ありません。",
+    "GoAhead はこのコンピューターのアプリを見て操作できます。このシステムでは追加の権限は必要ありません。",
+  "computerUse.limited.title": "このデスクトップでは Computer Use が制限されています",
   "computerUse.openSettingsFailed.title": "システム設定を開けませんでした",
+  "computerUse.restartRequired.title": "再起動が必要です",
+  "computerUse.restartRequired.description":
+    "macOS がクリックと入力をまだブロックしています。再起動後も続く場合は、「アクセシビリティ」から GoAhead を削除して、もう一度追加してください。",
+  "computerUse.restartRequired.action": "GoAhead を再起動",
   "computerUse.compact.title": "Computer Use を有効にする",
-  "computerUse.compact.description": "GoAhead がこのコンピュータのアプリを見て操作できるようにします。",
+  "computerUse.compact.description": "GoAhead がこのコンピューターのアプリを見て操作できるようにします。",
   "computerUse.granted": "許可済み",
   "computerUse.opening": "開いています…",
   "computerUse.manage": "管理",

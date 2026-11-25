@@ -1,48 +1,146 @@
+import { classifyFailure, type FailureProperties, type NotificationMetadata } from "@openbot/telemetry";
+import { errorReference } from "@openbot/user-errors";
 import type { ComponentProps, JSX } from "@solidjs/web";
-import { createSignal, onSettled } from "solid-js";
-import { Toaster as Sonner, toast } from "solid-sonner";
+import { createEffect, omit, onSettled } from "solid-js";
+import {
+  Toaster as Sonner,
+  type ExternalToast as SonnerExternalToast,
+  toast as sonnerToast,
+  useSonner,
+} from "solid-sonner";
+import { documentColorScheme } from "./document-color-scheme";
+import { ErrorReference } from "./error-reference";
 import { CircleCheck, Info, LoaderCircle, OctagonX, TriangleAlert } from "./icons";
-import { useText } from "./text";
+import { currentText } from "./text";
 import { cx } from "./utils";
 
-export type ToasterProps = ComponentProps<typeof Sonner>;
+export type ToasterProps = ComponentProps<typeof Sonner> & {
+  onToastShown?: (metadata: FailureProperties) => void;
+  hidden?: boolean;
+};
+export type ExternalToast = SonnerExternalToast & {
+  report?: NotificationMetadata;
+  error?: unknown;
+  fallback?: string;
+};
+const reports = new Map<string | number, NotificationMetadata>();
+const shown = new Set<string | number>();
+let promiseId = 0;
+function rememberReport(id: string | number, report: NotificationMetadata): void {
+  reports.set(id, report);
+  while (reports.size > 1_000) {
+    const oldest = reports.keys().next();
+    if (oldest.done) break;
+    reports.delete(oldest.value);
+  }
+}
+function outcomeToast(kind: "error" | "warning") {
+  return (message: Parameters<typeof sonnerToast>[0], options?: ExternalToast) => {
+    const { report, error, fallback, ...data } = options ?? {};
+    if (error !== undefined) data.description = withReference(error, data.description, fallback);
+    const id = sonnerToast[kind](message, data);
+    if (report) rememberReport(id, report);
+    return id;
+  };
+}
+function withReference(
+  error: unknown,
+  description: SonnerExternalToast["description"],
+  fallback: string | undefined,
+): SonnerExternalToast["description"] {
+  const reference = errorReference(error);
+  const text = description ?? (fallback === undefined ? undefined : currentText().errorMessage(error, fallback));
+  if (!reference) return text;
+  return () => (
+    <>
+      {typeof text === "function" ? text() : text}
+      <ErrorReference reference={reference} />
+    </>
+  );
+}
 
-/** Toast lifetime; exported so manual timers settle on the same count. */
+function promiseToast<T>(
+  promise: Parameters<typeof sonnerToast.promise<T>>[0],
+  data?: Parameters<typeof sonnerToast.promise<T>>[1] & { report?: NotificationMetadata },
+) {
+  if (!data) return sonnerToast.promise(promise, data);
+  const { report, ...options } = data;
+  const id = options.id ?? `openbot-promise-${++promiseId}`;
+  const failed = (error: unknown): never => {
+    rememberReport(id, {
+      operation: report?.operation ?? "other",
+      source: report?.source ?? "action",
+      cause_code: classifyFailure(error),
+    });
+    throw error;
+  };
+  return sonnerToast.promise(typeof promise === "function" ? () => promise().catch(failed) : promise.catch(failed), {
+    ...options,
+    id,
+  });
+}
+export const toast = Object.assign((...args: Parameters<typeof sonnerToast>) => sonnerToast(...args), sonnerToast, {
+  error: outcomeToast("error"),
+  warning: outcomeToast("warning"),
+  promise: promiseToast,
+});
+
 export const TOAST_DURATION = 6_000;
 
-const [hasVisibleToasts, setHasVisibleToasts] = createSignal(false);
-
 export function Toaster(props: ToasterProps): JSX.Element {
-  const { t } = useText();
+  const { t } = currentText();
+  const notifications = useSonner();
+  const sonnerProps = omit(props, "onToastShown", "hidden");
+  createEffect(
+    () => ({ toasts: notifications.toasts(), hidden: props.hidden }),
+    ({ toasts, hidden }) => {
+      if (!props.onToastShown || hidden) return;
+      const current = new Set(sonnerToast.getToasts().map((item) => item.id));
+      for (const id of shown)
+        if (!current.has(id)) {
+          shown.delete(id);
+          reports.delete(id);
+        }
+      const visibleCounts = new Map<string, number>();
+      for (const item of toasts) {
+        if (item.toasterId !== props.id) continue;
+        const position = item.position ?? props.position ?? "top-right";
+        const count = visibleCounts.get(position) ?? 0;
+        visibleCounts.set(position, count + 1);
+        if (count >= (props.visibleToasts ?? 6)) continue;
+        if (item.delete || (item.type !== "error" && item.type !== "warning") || shown.has(item.id)) continue;
+        shown.add(item.id);
+        props.onToastShown?.({
+          ...(reports.get(item.id) ?? { operation: "other", source: "system", cause_code: "unknown" }),
+          severity: item.type,
+          presentation: "toast",
+        });
+      }
+    },
+  );
   let layer: HTMLDivElement | undefined;
   onSettled(() => {
     if (!layer) return;
-    const updateVisibility = () => {
-      setHasVisibleToasts(Boolean(layer?.querySelector("[data-sonner-toast]")));
-      // solid-sonner renders the close button, so mark it here for the close cue.
+    const markCloseButtons = () => {
       for (const button of layer?.querySelectorAll("[data-close-button]:not([data-cuelume-close])") ?? []) {
         button.setAttribute("data-cuelume-close", "");
         button.setAttribute("data-cuelume-emphasis", "subtle");
       }
     };
-    // Track mounted toasts so native content stays behind their exit animation too.
-    const observer = new MutationObserver(updateVisibility);
+    const observer = new MutationObserver(markCloseButtons);
     observer.observe(layer, { childList: true, subtree: true });
-    updateVisibility();
+    markCloseButtons();
     return () => {
       observer.disconnect();
-      setHasVisibleToasts(false);
     };
   });
   return (
-    <div ref={layer} data-kb-top-layer="" class="ui-toast-layer">
+    <div ref={layer} data-kb-top-layer="" class={cx("ui-toast-layer", props.hidden && "ui-toast-layer-hidden")}>
       <Sonner
-        {...props}
+        {...sonnerProps}
         class={cx("ui-toaster", (props.closeButton ?? true) && "ui-toaster-closeable", props.class)}
-        theme={props.theme ?? "dark"}
+        theme={props.theme ?? documentColorScheme()}
         position={props.position ?? "top-right"}
-        // A toast past the visible count stays hidden even when hover expands the stack, so an update
-        // offer would wait behind another. Six providers can offer an update at once.
         visibleToasts={props.visibleToasts ?? 6}
         duration={props.duration ?? TOAST_DURATION}
         gap={props.gap ?? 8}
@@ -64,5 +162,4 @@ export function Toaster(props: ToasterProps): JSX.Element {
   );
 }
 
-export type { ExternalToast, ToastT } from "solid-sonner";
-export { hasVisibleToasts, toast };
+export type { ToastT } from "solid-sonner";

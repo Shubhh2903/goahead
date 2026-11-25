@@ -3,6 +3,7 @@ import { Button, Dialog, Maximize2, SlidingTabs } from "@openbot/ui";
 import { prefersReducedMotion } from "@openbot/ui/utils";
 import type { JSX } from "@solidjs/web";
 import { createEffect, createSignal, Match, onSettled, Show, Switch } from "solid-js";
+import { documentColorScheme } from "../../document-color-scheme";
 import { useText } from "../../text";
 import { CodeBlock } from "./CodeBlock";
 import { CloseIcon } from "./ConversationIcons";
@@ -42,13 +43,15 @@ export function CodePreview(props: {
   createEffect(
     () => {
       diagramAttempt();
-      return props.kind === "mermaid" && !props.streaming ? props.block.code : null;
+      return props.kind === "mermaid" && !props.streaming
+        ? { source: props.block.code, scheme: documentColorScheme() }
+        : null;
     },
-    (source) => {
+    (drawn) => {
       const run = ++diagramRun;
-      if (source === null) return;
+      if (drawn === null) return;
       setDiagram({ status: "drawing" });
-      void mermaidDiagram(source).then((result) => {
+      void mermaidDiagram(drawn.source, drawn.scheme).then((result) => {
         if (run === diagramRun) setDiagram(result);
       });
     },
@@ -56,7 +59,6 @@ export function CodePreview(props: {
   onSettled(() => () => {
     diagramRun += 1;
   });
-  // The block eases to the height of the view that the switch selects.
   createSmoothHeightResize({ container: () => resize, content: () => views });
 
   const diagramFailure = () => {
@@ -118,7 +120,11 @@ export function CodePreview(props: {
             <>
               <span>{t("chat.preview.diagramInvalid")}</span>
               <Show when={invalidDiagramMessage()}>
-                {(message) => <pre class="message-preview-failure-detail">{message()}</pre>}
+                {(message) => (
+                  <pre class="message-preview-failure-detail" dir="ltr">
+                    {message()}
+                  </pre>
+                )}
               </Show>
             </>
           }
@@ -193,11 +199,6 @@ function diagramUrl(state: DiagramState): string | undefined {
 const CONTENT_FADE_IN: KeyframeAnimationOptions = { ...IMAGE_FADE_IN, delay: 90, fill: "backwards" };
 const CONTENT_FADE_OUT: KeyframeAnimationOptions = { duration: 120, easing: "linear", fill: "forwards" };
 
-/**
- * The larger view. It grows out of the block that opened it and goes back into it when it
- * closes, as the image viewer does with a thumbnail. With reduced motion, or when the block has
- * left the list, it only fades.
- */
 function PreviewDialog(props: {
   title: string;
   kind: ChatPreviewKind;
@@ -212,7 +213,6 @@ function PreviewDialog(props: {
   let frame: number | undefined;
   let closing = false;
 
-  /** The transform that puts the dialog on the block, or undefined when it only fades. */
   const originTransform = (): string | undefined => {
     const origin = props.origin();
     if (!surface || !origin?.isConnected || prefersReducedMotion()) return undefined;
@@ -226,7 +226,6 @@ function PreviewDialog(props: {
 
   const open = () => {
     frame = undefined;
-    // The portal can attach after this component settles; the dialog stays hidden until then.
     if (!surface?.isConnected || !backdrop) {
       frame = requestAnimationFrame(open);
       return;
@@ -254,7 +253,6 @@ function PreviewDialog(props: {
     if (to) {
       animations.push(
         surface.animate([{ transform: "none" }, { transform: to }], ZOOM_OUT),
-        // The dialog fades at the end, so the block under it takes its place.
         surface.animate([{ opacity: 1 }, { opacity: 1, offset: 0.6 }, { opacity: 0 }], {
           duration: ZOOM_OUT_DURATION,
           fill: "forwards",
@@ -305,11 +303,6 @@ function PreviewDialog(props: {
   );
 }
 
-/**
- * Agent HTML in a sandboxed frame. Without `allow-scripts` nothing in the page runs, and the page
- * policy blocks every request, so the page can only draw itself. `allow-same-origin` is safe
- * without scripts, and it lets the app read the page height and open its links in the browser.
- */
 function HtmlPreviewFrame(props: { html: string; title: string; fill: boolean; onOpenLink: (url: string) => void }) {
   const [height, setHeight] = createSignal<number>();
   let frame: HTMLIFrameElement | undefined;
@@ -333,7 +326,6 @@ function HtmlPreviewFrame(props: { html: string; title: string; fill: boolean; o
     if (url) props.onOpenLink(url);
   };
   onSettled(() => {
-    // The page reflows when the message gets narrower or wider.
     const observer = new ResizeObserver(measure);
     if (frame) observer.observe(frame);
     return () => observer.disconnect();

@@ -22,6 +22,7 @@ import {
 import { TeamPersonAvatar, teamMemberName } from "@openbot/ui/features/team/TeamPersonAvatar";
 import { type TextValue, useText } from "@openbot/ui/text";
 import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
+import { ChatScrollRail, createChatScrollRail, type UnloadedHistory } from "./ChatScrollRail";
 import { calculateChatScrollMargin, chatHistoryBoundaryReached, createChatVirtualizer } from "./createChatVirtualizer";
 import { anchorNewMessages, type NewMessageTally, tallyNewMessages } from "./new-message-tally";
 import { isSendShortcutKey, type SendShortcut, sendShortcutAriaKey, sendShortcutHintKey } from "./send-shortcut";
@@ -33,18 +34,16 @@ interface DirectConversationProps {
   loading: boolean;
   loadError: string | null;
   hasOlder?: boolean;
+  unloadedHistory?: UnloadedHistory | undefined;
   loadingOlder?: boolean;
   olderError?: string | null;
   typing: boolean;
+  connectionReady?: boolean;
   onSend: (text: string, clientMessageId: string) => Promise<{ message: DirectMessage; readError?: string }>;
   onMarkRead: () => Promise<void>;
   onLoadOlder?: () => void;
   onOpenMessage?: (messageId: string) => Promise<void>;
   onTypingChange: (typing: boolean) => void;
-  /**
-   * Which chord sends the message. Enter keeps the current behavior; in the modifier mode
-   * plain Enter adds a line. The renderer resolves the platform and passes it.
-   */
   sendShortcut?: SendShortcut;
 }
 
@@ -67,7 +66,6 @@ export function DirectConversation(props: DirectConversationProps) {
   let stickToLatest = true;
   let lastThreadId: string | undefined;
   let newMessages: NewMessageTally = { count: 0, anchorId: undefined };
-  /* Every message anchors the count, but the reader's own arrival is not news to them. */
   const timelineRows = createMemo(
     () =>
       props.snapshot?.messages.map((message) => ({
@@ -92,13 +90,23 @@ export function DirectConversation(props: DirectConversationProps) {
     onChange: (instance) => {
       const first = instance.getVirtualItems()[0];
       if (!first) return;
-      // The reader has to be at the top as well: a short thread renders row 0 at the newest message.
       if (chatHistoryBoundaryReached(messageList, first.index) && props.hasOlder && !props.loadingOlder) {
         props.onLoadOlder?.();
       }
     },
   });
   const virtualMessageRows = createMemo(() => messageVirtualizer.getVirtualItems());
+  const rail = createChatScrollRail({
+    rows: () => props.snapshot?.messages ?? [],
+    question: (message) => (message.senderMemberId === props.currentMemberId ? message.text : undefined),
+    reply: (message) => (message.senderMemberId === props.currentMemberId ? undefined : message.text),
+    unloaded: () => props.unloadedHistory,
+    virtualizer: messageVirtualizer,
+    onLoadOlder: () => props.onLoadOlder?.(),
+    onJump: () => {
+      stickToLatest = false;
+    },
+  });
   const unreadBannerReady = (): boolean => {
     const unreadMessageId = props.snapshot?.readState?.firstUnreadMessageId;
     if (!unreadMessageId) return true;
@@ -127,7 +135,6 @@ export function DirectConversation(props: DirectConversationProps) {
         newMessages = anchorNewMessages(rows);
         setNewMessageCount(0);
       } else {
-        // The sticky flag has to be read here: the frame below has already moved the view.
         newMessages = tallyNewMessages(newMessages, rows, stickToLatest);
         setNewMessageCount(newMessages.count);
       }
@@ -199,7 +206,7 @@ export function DirectConversation(props: DirectConversationProps) {
 
   async function send(): Promise<void> {
     const body = text().trim();
-    if (!body || sending()) return;
+    if (!body || sending() || props.connectionReady === false) return;
     if (typingIdleTimer) clearTimeout(typingIdleTimer);
     props.onTypingChange(false);
     setSending(true);
@@ -289,6 +296,7 @@ export function DirectConversation(props: DirectConversationProps) {
       <div
         ref={(element) => {
           messageList = element;
+          rail.ref(element);
           updateVirtualScrollMargin();
         }}
         class="direct-message-list"
@@ -300,6 +308,7 @@ export function DirectConversation(props: DirectConversationProps) {
           updateUnreadDividerVisibility();
         }}
       >
+        <ChatScrollRail {...rail.props} />
         <Show when={showScrollToLatest()}>
           <ScrollToLatestButton
             onClick={jumpToLatestMessage}
@@ -356,7 +365,6 @@ export function DirectConversation(props: DirectConversationProps) {
                     if (!message) return null;
                     const own = () => message.senderMemberId === props.currentMemberId;
                     const previous = () => props.snapshot?.messages[virtualRow.index - 1];
-                    // The unread boundary keeps the full entry gap so its divider stays legible.
                     const grouped = () =>
                       previous()?.senderMemberId === message.senderMemberId &&
                       message.id !== props.snapshot?.readState?.firstUnreadMessageId;
@@ -431,11 +439,8 @@ export function DirectConversation(props: DirectConversationProps) {
             disabled={sending()}
             onValueChange={updateText}
             onKeyDown={(event) => {
-              // The browser owns the key that commits an IME composition. Safari sends it
-              // after `compositionend` without `isComposing`; keyCode 229 marks it.
               if (event.isComposing || event.keyCode === 229) return;
               const shortcut = props.sendShortcut ?? "enter";
-              // Enter to send keeps the previous chord: every Enter without Shift sends.
               if (shortcut === "enter") {
                 if (event.key !== "Enter" || event.shiftKey) return;
               } else if (!isSendShortcutKey(event, shortcut)) return;
@@ -449,7 +454,7 @@ export function DirectConversation(props: DirectConversationProps) {
             aria-label={t("conversation.direct.send")}
             aria-keyshortcuts={sendShortcutAriaKey(props.sendShortcut ?? "enter")}
             title={t(sendShortcutHintKey(props.sendShortcut ?? "enter", "send"))}
-            disabled={!text().trim() || sending()}
+            disabled={!text().trim() || sending() || props.connectionReady === false}
             onClick={() => void send()}
           >
             {sending() ? "…" : "↑"}

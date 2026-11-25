@@ -1,17 +1,3 @@
-/* The "What's new" dialog after an app update. One centred card: the logo and version on top, the
- * notes in a scroll area, and the actions in a footer. The groups use the colours of the
- * changelog page on openbot.run, so a reader sees the same notes in the same way. */
-
-.whats-new-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: var(--openbot-layer-dialog);
-  display: grid;
-  place-items: center;
-  padding: var(--openbot-space-6);
-  animation: whats-new-fade-in var(--openbot-duration-overlay) var(--openbot-ease-out);
-}
-
 .whats-new-dialog {
   position: relative;
   display: flex;
@@ -181,7 +167,6 @@
   list-style: none;
 }
 
-/* A hanging mark in the group's colour, so a long item wraps under its own text. */
 .whats-new-item {
   position: relative;
   padding-inline-start: var(--openbot-space-6);
@@ -245,12 +230,6 @@
   border-block-start: 1px solid var(--openbot-border);
 }
 
-@keyframes whats-new-fade-in {
-  from {
-    opacity: 0;
-  }
-}
-
 @media (max-width: 560px) {
   .whats-new-backdrop {
     padding: var(--openbot-space-3);
@@ -271,4 +250,24 @@
     animation: none;
     transition: none;
   }
+}
+
+.help-menu {
+  width: 320px;
+}
+
+.help-menu .help-menu-news {
+  gap: var(--openbot-space-3);
+}
+
+.help-menu-news-headline {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.help-menu-news .ui-menu-trailing {
+  flex: none;
 }

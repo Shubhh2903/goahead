@@ -2,8 +2,10 @@ import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/dialog";
 
 export const messages = {
-  // Native file pickers.
   "dialog.chooseSiteDirectory": "Choisir un dossier de site statique",
+  "dialog.chooseAgentFolder": "Choisir un dossier pour {agent}",
+  "dialog.chooseChannelFolder": "Choisir un dossier pour {channel}",
+  "dialog.chooseAgentExclusion": "Choisir un dossier que {agent} ne doit pas modifier",
   "dialog.chooseSkill": "Choisir un dossier ou un fichier ZIP de compétence",
   "dialog.filter.skillPackages": "Paquets de compétences",
   "dialog.filter.images": "Images",
@@ -14,4 +16,11 @@ export const messages = {
   "dialog.chooseAgentExport": "Choisir une exportation d’agents",
   "dialog.filter.agentExports": "Exportations d’agents",
   "dialog.saveExportSkill": "Enregistrer la compétence d’exportation",
+  "dialog.saveTransfer": "Enregistrer le fichier de transfert",
+  "dialog.chooseTransfer": "Choisir un fichier de transfert",
+  "dialog.filter.transfer": "Fichiers de transfert GoAhead",
+  "dialog.saveWorkflow": "Enregistrer le fichier du workflow",
+  "dialog.filter.workflow": "Fichiers de workflow GoAhead",
+  "dialog.chooseExternalLinkApp": "Choisir un navigateur",
+  "dialog.filter.applications": "Applications",
 } as const satisfies PartialTranslation<typeof source>;

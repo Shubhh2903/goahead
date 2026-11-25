@@ -1,8 +1,8 @@
 import { defineMessages } from "../../message";
 
 export const messages = defineMessages("island", {
-  // The Dynamic Island window over the MacBook notch or on an external display.
   "island.surface.label": "GoAhead MacBook notch",
+  "island.surface.labelIsland": "GoAhead Dynamic Island",
   "island.surface.interactionArea": "Dynamic Island interaction area",
   "island.label.idle": "Open GoAhead",
   "island.label.working": "GoAhead working status",

@@ -1,0 +1,63 @@
+import type { PartialTranslation } from "../../../message";
+import type { messages as source } from "../../en/status/messaging";
+
+export const messages = {
+  "status.messaging.working": "Trabajando en ello…",
+  "status.messaging.queued": "En espera hasta que termine una solicitud anterior. La respuesta llegará aquí.",
+  "status.messaging.busy": "Hay demasiadas solicitudes en espera. Inténtalo más tarde.",
+  "status.messaging.failed": "GoAhead no pudo completar esta solicitud. El host de GoAhead tiene los detalles.",
+  "status.messaging.noAnswer": "GoAhead terminó sin una respuesta escrita.",
+  "status.messaging.noAgent": "Aún no puede responder ningún agente aquí. Añade el Orquestador de Slack en GoAhead.",
+  "status.messaging.delegated": "Un compañero está trabajando en ello. La respuesta llegará aquí.",
+  "status.messaging.stopped": "Detenido.",
+  "status.messaging.stop": "Detener",
+  "status.messaging.approvalTitle": "GoAhead pide aprobación para continuar.",
+  "status.messaging.approvalTitleTeammate": "El compañero {agent} pide aprobación para continuar.",
+  "status.messaging.approvalCommand": "Ejecutar un comando",
+  "status.messaging.approvalFileChange": "Cambiar archivos",
+  "status.messaging.approvalPermissions": "Obtener más permisos",
+  "status.messaging.approve": "Aprobar",
+  "status.messaging.deny": "Rechazar",
+  "status.messaging.approvedBy": "Aprobado por {user}.",
+  "status.messaging.deniedBy": "Rechazado por {user}.",
+  "status.messaging.answeredOnHost": "Respondido en el host de GoAhead.",
+  "status.messaging.requestInactive": "Esta solicitud ya no está activa.",
+  "status.messaging.onlyRequester": "Solo {user} puede hacerlo. El host de GoAhead también puede responder.",
+  "status.messaging.hostOnly": "Solo el host de GoAhead puede responder a esta solicitud.",
+  "status.messaging.filesSkipped": "Algunos archivos no se enviaron: {names}.",
+  "status.messaging.orchestratorName": "Orquestador de Slack",
+  "status.messaging.orchestratorTitle": "Responde en Slack y consulta al equipo",
+  "status.messaging.discordNoAgent":
+    "Aún no puede responder ningún agente aquí. Añade el Orquestador de Discord en GoAhead.",
+  "status.messaging.discordOrchestratorName": "Orquestador de Discord",
+  "status.messaging.discordOrchestratorTitle": "Responde en Discord y consulta al equipo",
+  "status.messaging.integrationsSection": "Integraciones",
+  "status.messaging.signInReceived": "GoAhead recibió la instalación de Slack. Puedes cerrar esta pestaña.",
+  "status.messaging.signInUnknown": "GoAhead no inició esta instalación de Slack. Iníciala de nuevo en GoAhead.",
+  "status.messaging.telegramNoAgent":
+    "Aún no hay ningún agente que pueda responder aquí. En GoAhead, abre Marketplace > Apps > Telegram y haz clic en Añadir agente.",
+  "status.messaging.telegramLinked":
+    "GoAhead está conectado a este chat. Menciona a {bot} o responde a un mensaje de GoAhead para consultar a los agentes.",
+  "status.messaging.telegramNotLinked":
+    "GoAhead no está conectado a este chat. Para conectarlo, abre la app de GoAhead, ve a Marketplace → Apps → Telegram y selecciona «Añadir a un grupo» o «Abrir un chat directo».",
+  "status.messaging.telegramOrchestratorName": "Orquestador de Telegram",
+  "status.messaging.telegramOrchestratorTitle": "Responde en Telegram y consulta al equipo",
+  "status.messaging.whatsappNoAgent":
+    "Aún no hay ningún agente que pueda responder aquí. Añade el Orquestador de WhatsApp en GoAhead.",
+  "status.messaging.whatsappApprovalMenu": "Responde 1 para aprobar o 2 para rechazar.",
+  "status.messaging.whatsappStopMenu": "Responde «stop» para detener.",
+  "status.messaging.whatsappPairingCode":
+    "Este número solo responde a las personas que su propietario permitió. Dale este código al propietario: {code}",
+  "status.messaging.whatsappPairingApproved": "Ya puedes enviar solicitudes a este número.",
+  "status.messaging.whatsappOwnChat": "Envíate un mensaje",
+  "status.messaging.whatsappWelcomeOwn":
+    "👋 *GoAhead está conectado*\n\nEscribe aquí para preguntar a tus agentes. El WhatsApp Orchestrator responde o pasa el trabajo al agente adecuado.\n\nEnvía *stop* para detener una solicitud.",
+  "status.messaging.whatsappWelcomeDedicated":
+    "👋 *GoAhead está conectado*\n\nLas personas que permitas en GoAhead ya pueden escribir a este número. Una persona nueva recibe un código: apruébalo en GoAhead, en Solicitudes.\n\nEnvía *stop* para detener una solicitud.",
+  "status.messaging.whatsappOtherOpenBot":
+    "Otro GoAhead está vinculado a este número de WhatsApp, así que puedes recibir dos respuestas. Para solucionarlo, abre Dispositivos vinculados en WhatsApp en tu teléfono y cierra la sesión del GoAhead que no usas.",
+  "status.messaging.whatsappPaused":
+    "GoAhead dejó de responder aquí durante 10 minutos: llegaron demasiados mensajes en poco tiempo. Si otro GoAhead está vinculado a este número, abre Dispositivos vinculados en WhatsApp en tu teléfono y cierra la sesión del GoAhead que no usas.",
+  "status.messaging.whatsappOrchestratorName": "Orquestador de WhatsApp",
+  "status.messaging.whatsappOrchestratorTitle": "Responde en WhatsApp y consulta al equipo",
+} as const satisfies PartialTranslation<typeof source>;

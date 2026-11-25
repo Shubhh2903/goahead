@@ -1,38 +1,84 @@
-/**
- * The stack of member avatars. It takes the agents to look members up in rather than reading the
- * Agents context: the sidebar renders channel rows from the agent list it is already given, and a
- * row that reached for a context of its own would be the one row in the list that cannot render
- * without it.
- *
- * Two layouts: a row of overlapping avatars, and the cluster the sidebar uses, which holds the
- * members in the square one agent avatar occupies. The cluster keeps a channel row the same shape
- * as the agent rows around it, and it counts the members it cannot show.
- */
-
-import type { ChannelMember } from "@openbot/contracts/ipc";
+import type { AvatarHue, ChannelIcon, ChannelIconName, ChannelMember } from "@openbot/contracts/ipc";
 import { UsersRound } from "@openbot/ui";
-import { For, Show } from "solid-js";
-import type { AgentProfile } from "../../data";
+import { avatarHueSwatch } from "@openbot/ui/bloub-avatar";
+import { createMemo, createSignal, For, Show } from "solid-js";
+import type { ComposerAgent } from "../../data";
 import { AgentAvatar } from "../agents/AgentAvatar";
+import { CHANNEL_ICONS, knownChannelIcon } from "./channel-icons";
 
 const ROW_LIMIT = 3;
 const CLUSTER_CELLS = 4;
 
-export function ChannelAvatar(props: { members: ChannelMember[]; agents: AgentProfile[]; layout?: "row" | "cluster" }) {
+interface ChannelAvatarProps {
+  members: ChannelMember[];
+  agents: readonly ComposerAgent[];
+  layout?: "row" | "cluster";
+  icon?: ChannelIcon | null | undefined;
+  imageUrl?: string | null | undefined;
+}
+
+export function ChannelAvatar(props: ChannelAvatarProps) {
+  const [failedUrl, setFailedUrl] = createSignal<string | null>(null);
+  const imageUrl = () => (props.imageUrl && props.imageUrl !== failedUrl() ? props.imageUrl : null);
+  const icon = () => knownChannelIcon(props.icon);
+  const hasPicture = () => Boolean(imageUrl() || icon());
+  return (
+    <Show when={hasPicture()} fallback={<MemberFaces {...props} />}>
+      <span
+        class={["channel-avatar", "channel-avatar-picture", { "channel-avatar-cluster": props.layout === "cluster" }]}
+        aria-hidden="true"
+      >
+        <Show when={imageUrl()} fallback={<Show when={icon()}>{(choice) => <ChannelIconTile {...choice()} />}</Show>}>
+          {(url) => (
+            <img
+              class="channel-picture channel-picture-image"
+              src={url()}
+              alt=""
+              draggable={false}
+              onError={() => setFailedUrl(url())}
+            />
+          )}
+        </Show>
+      </span>
+    </Show>
+  );
+}
+
+export function ChannelIconTile(props: { name: ChannelIconName; hue: AvatarHue }) {
+  return (
+    <span class="channel-picture" style={{ "--channel-picture-hue": avatarHueSwatch(props.hue) }} aria-hidden="true">
+      <Show when={props.name} keyed>
+        {(name) => {
+          const Glyph = CHANNEL_ICONS[name].component;
+          return <Glyph aria-hidden="true" />;
+        }}
+      </Show>
+    </span>
+  );
+}
+
+function MemberFaces(props: ChannelAvatarProps) {
   const agentFor = (member: ChannelMember) => props.agents.find((agent) => agent.id === member.agentId);
+  const members = createMemo(() => {
+    const seen = new Set<string>();
+    return props.members.filter((member) => !seen.has(member.agentId) && Boolean(seen.add(member.agentId)));
+  });
   const cluster = () => props.layout === "cluster";
-  /* The last cell of a full cluster is the count, so a fifth member costs a face rather than
-   * hiding without a trace. Four members still get four faces. */
   const shown = () => {
-    if (!cluster()) return props.members.slice(0, ROW_LIMIT);
-    return props.members.slice(0, props.members.length > CLUSTER_CELLS ? CLUSTER_CELLS - 1 : CLUSTER_CELLS);
+    if (!cluster()) return members().slice(0, ROW_LIMIT);
+    if (members().length <= CLUSTER_CELLS) return members();
+    const countWithThreeFaces = members().length - (CLUSTER_CELLS - 1);
+    return members().slice(0, countWithThreeFaces >= 10 ? CLUSTER_CELLS - 2 : CLUSTER_CELLS - 1);
   };
-  const hidden = () => props.members.length - shown().length;
+  const hidden = () => members().length - shown().length;
   return (
     <span class={["channel-avatar", { "channel-avatar-cluster": cluster() }]} aria-hidden="true">
-      <Show when={props.members.length} fallback={<UsersRound />}>
-        <For each={shown()}>
-          {(member) => <AgentAvatar agent={agentFor(member)} seed={agentFor(member)?.avatarSeed ?? member.agentId} />}
+      <Show when={members().length} fallback={<UsersRound />}>
+        <For each={shown()} keyed={(member) => member.agentId}>
+          {(member) => {
+            const agent = createMemo(() => agentFor(member()));
+            return <AgentAvatar agent={agent()} seed={agent()?.avatarSeed ?? member().agentId} />;
+          }}
         </For>
         <Show when={cluster() && hidden() > 0}>
           <span class="channel-avatar-count">+{hidden()}</span>

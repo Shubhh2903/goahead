@@ -6,8 +6,10 @@ export const messages = {
   "status.computerUse.driverStoppedBeforeAnswer": "O driver de Uso do computador parou antes de responder.",
   "status.computerUse.driverNoAnswer": "O driver de Uso do computador não respondeu. {reason}",
   "status.computerUse.driverStopped": "O driver de Uso do computador parou.",
-  "status.computerUse.unsupported": "Uso do computador está disponível no macOS, Windows e Linux.",
+  "status.computerUse.unsupported": "O Uso do computador está disponível no macOS, Windows e Linux.",
   "status.computerUse.driverMissing": "Esta versão do GoAhead não inclui um driver de Uso do computador.",
+  "status.computerUse.inputRefused":
+    "Nesta área de trabalho, o GoAhead não pode digitar nem clicar em outros apps. Para tarefas em sites, peça ao agente para usar o navegador do GoAhead.",
   "status.computerUse.progressActing": "Usando um aplicativo neste computador…",
   "status.computerUse.progressDeciding": "Decidindo a próxima etapa no aplicativo…",
 } as const satisfies PartialTranslation<typeof source>;

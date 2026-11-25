@@ -39,6 +39,11 @@ export interface MobileConnectTicket {
   expiresAt: number;
 }
 
+export interface MobileConnectLink {
+  url: string;
+  createdAt: number;
+}
+
 export type MobileDevicePlatform = "ios" | "android" | "unknown";
 
 export interface MobileConnectedDevice {
@@ -47,6 +52,7 @@ export interface MobileConnectedDevice {
   platform: MobileDevicePlatform;
   connectedAt: number;
   lastActiveAt: number;
+  via: "code" | "link";
 }
 
 export interface AccountSession {
@@ -56,6 +62,7 @@ export interface AccountSession {
   current: boolean;
   connectedAt: number;
   lastActiveAt: number;
+  hostedServer?: boolean;
 }
 
 export interface MobileConnectPayload {

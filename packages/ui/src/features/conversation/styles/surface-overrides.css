@@ -41,17 +41,11 @@
   background: var(--openbot-bg-sidebar);
 }
 
-.remote-desktop-button[aria-expanded="true"] {
-  background: var(--openbot-accent-soft);
-  color: var(--openbot-accent-hover);
-}
-
 .voice-button:active,
 .voice-button-active:active {
   transform: scale(0.97);
 }
 
-/* A filled field with no border, in the menu item shape. */
 .provider-model-search {
   height: var(--openbot-control-md);
   flex-shrink: 0;
@@ -68,6 +62,7 @@
 }
 
 .provider-model-scroll {
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;

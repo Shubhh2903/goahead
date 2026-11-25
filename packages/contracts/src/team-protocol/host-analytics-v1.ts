@@ -1,4 +1,3 @@
-// Frozen wire shape for the optional host-analytics capability. Do not import current IPC types here.
 import { isDynamicRecord, isString } from "../runtime-values";
 import type { TeamProtocolV1JsonObject } from "./v1";
 
@@ -80,8 +79,6 @@ export function decodeHostAnalyticsV1Response(value: unknown): TeamProtocolV1Jso
         ...(agent.models === undefined ? {} : { models: modelList(agent.models) }),
       };
     }),
-    // A cell of the daily-by-provider grid carries only the two measures the chart draws,
-    // so it does not go through totals().
     providerDaily: input.providerDaily.map((value) => {
       const cell = record(value);
       return {

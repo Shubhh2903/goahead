@@ -66,7 +66,7 @@ export function SidebarMessagingThreads(threadProps: { agent: AgentProfile }) {
                 </span>
                 <span class="sidebar-messaging-thread-title">{t("sidebar.messagingInbox.row")}</span>
                 <Show when={current().unreadCount > 0}>
-                  <Badge class="sidebar-messaging-thread-badge" tone="accent" shape="pill" aria-hidden="true">
+                  <Badge class="sidebar-messaging-thread-badge" variant="primary-light" aria-hidden="true">
                     {Math.min(current().unreadCount, 99)}
                   </Badge>
                 </Show>
@@ -124,7 +124,7 @@ export function SidebarMessagingThreads(threadProps: { agent: AgentProfile }) {
                       </span>
                     </Show>
                     <Show when={unread() > 0}>
-                      <Badge class="sidebar-messaging-thread-badge" tone="accent" shape="pill" aria-hidden="true">
+                      <Badge class="sidebar-messaging-thread-badge" variant="primary-light" aria-hidden="true">
                         {Math.min(unread(), 99)}
                       </Badge>
                     </Show>

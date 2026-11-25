@@ -1,8 +1,3 @@
-/**
- * The type mark of a file that a message names: a short badge such as "JSON", and the colour
- * family (`--openbot-file-*`) of its name. Desktop and mobile draw file references with it, so a
- * file reads the same on both.
- */
 const CODE_BADGES = new Set([
   "c",
   "cc",
@@ -74,7 +69,6 @@ export function fileReferenceTone(name: string): FileReferenceTone {
   return "default";
 }
 
-/** The last part of a path, decoded when it is URL-encoded. */
 export function fileReferenceName(path: string): string {
   const name = path.replaceAll("\\", "/").split("/").at(-1) || "file";
   try {
@@ -84,12 +78,11 @@ export function fileReferenceName(path: string): string {
   }
 }
 
-/** Whether inline code names a file, by its extension or a known file name, not by a lookup. */
 export function isFileReference(value: string): boolean {
   if (!value || /[\0\r\n]/u.test(value) || /[/\\]$/u.test(value)) return false;
   const name = fileReferenceName(value);
   if (/^(Dockerfile|Makefile|\.gitignore)$/iu.test(name)) return true;
-  return /\.(?:avif|bash|c|conf|cpp|cs|css|csv|env|fish|gif|go|h|hpp|html?|ini|java|jpe?g|jsx?|json|kt|kts|log|markdown|md|pdf|php|png|ps1|py|rb|rs|scala|sh|sql|swift|toml|tsx?|txt|webp|xml|ya?ml|zsh)$/iu.test(
+  return /\.(?:avif|bash|c|conf|cpp|cs|css|csv|env|fish|gif|go|h|heic|hpp|html?|ini|java|jpe?g|jsx?|json|kt|kts|log|markdown|md|pdf|php|png|ps1|py|rb|rs|scala|sh|sql|svg|swift|toml|tsx?|txt|webp|xml|ya?ml|zsh)$/iu.test(
     name,
   );
 }

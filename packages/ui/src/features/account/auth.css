@@ -1,7 +1,7 @@
 .account-login-screen,
 .initial-setup-screen {
   position: absolute;
-  z-index: 100;
+  z-index: var(--openbot-layer-dialog);
   inset: 0;
   min-height: 100vh;
   display: grid;
@@ -11,7 +11,8 @@
 }
 
 .account-login-screen {
-  padding: 32px 24px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  padding: 32px 24px var(--openbot-space-4);
   background: var(--openbot-bg-canvas);
 }
 
@@ -83,7 +84,7 @@
   color: var(--openbot-danger);
   font-size: var(--openbot-text-sm);
   line-height: 17px;
-  text-align: left;
+  text-align: start;
 }
 
 .account-login > .account-login-error {
@@ -153,9 +154,35 @@
   margin-top: 24px;
 }
 
+.account-login-footer {
+  display: grid;
+  gap: 4px;
+}
+
+.account-login-local-data {
+  margin: 4px 0 0;
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  line-height: 17px;
+  text-align: center;
+  text-wrap: balance;
+}
+
+.account-login-local-data svg {
+  display: inline-block;
+  margin-inline-end: 6px;
+  vertical-align: -2px;
+}
+
 .account-login-email-field {
   display: grid;
-  gap: 12px;
+  grid-template-rows: auto 0px;
+  transition: grid-template-rows var(--openbot-duration-fast) ease-out var(--revert-dur, 280ms);
+}
+
+.account-login-email-field.is-error {
+  grid-template-rows: auto 24px;
+  transition: grid-template-rows var(--openbot-duration-fast) ease-out;
 }
 
 .account-login-form input:not(.otp-input-native) {
@@ -177,7 +204,6 @@
 .account-login-form input:not(.otp-input-native):focus {
   border-color: var(--openbot-border-focus);
   background: var(--openbot-bg-surface);
-  box-shadow: 0 0 0 3px var(--openbot-accent-soft);
 }
 
 .account-login-form input:not(.otp-input-native)[aria-invalid="true"] {
@@ -189,13 +215,14 @@
 }
 
 .account-login-field-error {
+  align-self: start;
   height: 16px;
   overflow: hidden;
-  margin: -2px 0 0;
+  margin: 8px 0 0;
   color: var(--openbot-danger);
   font-size: var(--openbot-text-sm);
   line-height: 16px;
-  text-align: left;
+  text-align: start;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -205,7 +232,9 @@
 }
 
 .account-login-primary:disabled,
-.account-login-code-action:disabled {
+.account-login-primary[aria-disabled="true"],
+.account-login-code-action:disabled,
+.account-login-code-action[aria-disabled="true"] {
   cursor: default;
   opacity: 0.48;
 }
@@ -231,17 +260,176 @@
   justify-content: flex-end;
 }
 
+.account-login-language {
+  position: absolute;
+  top: var(--openbot-space-4);
+  inset-inline-end: var(--openbot-space-6);
+  width: auto;
+  color: var(--openbot-text-muted);
+  -webkit-app-region: no-drag;
+}
+
+.account-login-page-footer {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: var(--openbot-space-4);
+  align-items: center;
+  margin-top: var(--openbot-space-6);
+  -webkit-app-region: no-drag;
+}
+
+.account-login-page-footer:not([data-shown]) {
+  visibility: hidden;
+}
+
+.account-login-page-footer-start {
+  display: flex;
+  min-width: 0;
+}
+
+.account-login-legal {
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+}
+
+.account-login-legal .account-login-local-data {
+  margin: 0;
+}
+
+.account-login-quiet {
+  display: inline-flex;
+  height: var(--openbot-control-sm);
+  align-items: center;
+  gap: var(--openbot-space-1-5);
+  border: 0;
+  border-radius: var(--openbot-radius-sm);
+  background: transparent;
+  padding: 0 var(--openbot-space-1-5);
+  margin-inline-start: calc(var(--openbot-space-1-5) * -1);
+  color: var(--openbot-text-muted);
+  font: inherit;
+  font-size: var(--openbot-text-sm);
+  cursor: pointer;
+  transition: color var(--openbot-duration-hover) ease;
+}
+
+.account-login-quiet:hover,
+.account-login-quiet[data-expanded],
+.account-login-quiet[data-has-code] {
+  color: var(--openbot-text-primary);
+}
+
+.account-login-quiet:focus-visible {
+  outline: 1px solid var(--openbot-border-focus);
+  outline-offset: 0;
+}
+
+.account-login-quiet[data-has-code] {
+  animation: account-login-invite-pop 420ms var(--openbot-ease-out) both;
+}
+
+@keyframes account-login-invite-pop {
+  40% {
+    transform: scale(1.12);
+  }
+}
+
+.account-login-invite {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--openbot-space-1);
+}
+
+.account-login-invite-code {
+  font-family: var(--openbot-font-mono);
+  letter-spacing: 0.02em;
+}
+
+.account-login-invite-remove {
+  color: var(--openbot-text-muted);
+}
+
+.account-login-invite-popover.ui-action-menu {
+  --ui-menu-panel-shadow: inset 0 1px 0 var(--ui-menu-highlight), 0 0 0 1px var(--ui-menu-edge);
+
+  z-index: calc(var(--openbot-layer-dialog) + var(--openbot-layer-popover) + 1);
+  width: 288px;
+  max-width: none;
+  overflow: visible;
+  padding: var(--openbot-space-1-5);
+}
+
+.account-login-invite-entry {
+  display: grid;
+  gap: var(--openbot-space-1-5);
+}
+
+.account-login-invite-field {
+  display: flex;
+  height: var(--openbot-control-md);
+  align-items: center;
+  border: 1px solid var(--openbot-border-strong);
+  border-radius: var(--openbot-radius-md);
+  background: var(--openbot-bg-control);
+  padding-inline-end: 3px;
+  transition: border-color var(--openbot-duration-hover) ease;
+}
+
+.account-login-invite-field:focus-within {
+  border-color: var(--openbot-border-focus);
+}
+
+.account-login-invite-field[data-invalid] {
+  border-color: var(--openbot-danger);
+}
+
+.account-login-invite-field input {
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0 var(--openbot-space-2);
+  color: var(--openbot-text-primary);
+  font-family: var(--openbot-font-mono);
+  font-size: var(--openbot-text-md);
+}
+
+.account-login-invite-field input::placeholder {
+  color: var(--openbot-text-placeholder);
+  font-family: var(--openbot-font-sans);
+}
+
+.account-login-invite-error {
+  margin: 0;
+  padding-inline: 2px;
+  color: var(--openbot-danger);
+  font-size: var(--openbot-text-sm);
+  line-height: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-login-quiet[data-has-code] {
+    animation: none;
+  }
+}
+
 .account-login-development-code {
   margin: 0;
   color: var(--openbot-warning);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: var(--openbot-text-sm);
   line-height: 16px;
-  text-align: left;
+  text-align: start;
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .account-login-primary:hover:not(:disabled) {
+  .account-login-primary:hover:not(:disabled, [aria-disabled="true"]) {
     background: var(--openbot-text-primary);
   }
 
@@ -251,7 +439,7 @@
   }
 }
 
-.account-login-primary:active:not(:disabled) {
+.account-login-primary:active:not(:disabled, [aria-disabled="true"]) {
   transform: scale(0.98);
 }
 
@@ -260,7 +448,7 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  text-align: left;
+  text-align: start;
   -webkit-app-region: no-drag;
 }
 
@@ -305,7 +493,7 @@
 }
 
 .initial-setup-signout {
-  margin-left: 2px;
+  margin-inline-start: 2px;
   padding: 5px 7px;
   font-size: var(--openbot-text-sm);
 }
@@ -320,7 +508,7 @@
   height: 28px;
   display: grid;
   place-items: center;
-  margin-right: 3px;
+  margin-inline-end: 3px;
   border-radius: var(--openbot-radius-pill);
   padding: 0;
 }
@@ -335,7 +523,7 @@
   stroke: currentcolor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: var(--openbot-icon-stroke);
+  stroke-width: var(--openbot-icon-stroke-lg);
 }
 
 .initial-setup-eyebrow {
@@ -384,7 +572,7 @@
   background: var(--openbot-bg-canvas);
   padding: 15px 17px;
   color: var(--openbot-text-primary);
-  text-align: left;
+  text-align: start;
   transition:
     border-color var(--openbot-duration-hover) ease,
     background-color var(--openbot-duration-hover) ease,
@@ -420,7 +608,7 @@
   stroke: currentcolor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: var(--openbot-icon-stroke);
+  stroke-width: var(--openbot-icon-stroke-lg);
 }
 
 .setup-route-icon i {
@@ -465,6 +653,10 @@
 
 .setup-route-button:hover .setup-route-arrow {
   transform: translateX(2px);
+}
+
+.setup-route-button:hover .setup-route-arrow:dir(rtl) {
+  transform: translateX(-2px) scaleX(-1);
 }
 
 .setup-local-content {
@@ -578,7 +770,7 @@
   padding-inline: var(--openbot-space-2);
 }
 
-.ui-button.provider-picker-refresh:hover:not(:disabled) {
+.ui-button.provider-picker-refresh:hover:not(:disabled, [aria-disabled="true"]) {
   color: var(--openbot-text-primary);
 }
 
@@ -605,11 +797,11 @@
   grid-template-columns: 16px 18px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  padding: 8px 0 8px 12px;
+  padding-block: 8px;
+  padding-inline: 12px 0;
   cursor: pointer;
 }
 
-/* The custom row follows the radio group rather than a radio, so the sibling rule cannot reach it. */
 .provider-picker-option + .provider-picker-option,
 .provider-picker-option-custom {
   border-top: 1px solid var(--openbot-border);
@@ -647,8 +839,6 @@
   accent-color: var(--openbot-text-primary);
 }
 
-/* The actions share the grid cell the row reserves for them. In this variant the buttons carry
-   their own trailing margin, which both separates them and holds the last one off the edge. */
 .provider-picker-actions {
   display: flex;
   align-items: center;
@@ -657,7 +847,7 @@
 .ui-button.provider-picker-install {
   min-width: 58px;
   min-height: 28px;
-  margin-right: 8px;
+  margin-inline-end: 8px;
   border-radius: var(--openbot-radius-md);
   padding-inline: 9px;
 }
@@ -680,14 +870,12 @@
   fill: var(--openbot-provider-current);
 }
 
-/* A custom endpoint has no brand mark, so a stroke icon takes the logo column. Until an endpoint
-   exists the radio column before it stays empty, because the row can then only add. */
 .provider-picker-custom-mark {
   width: 18px;
   height: 18px;
   grid-column: 2;
   color: var(--openbot-text-secondary);
-  stroke-width: var(--openbot-icon-stroke);
+  stroke-width: var(--openbot-icon-stroke-lg);
 }
 
 .provider-picker-option-unavailable .provider-picker-logo,
@@ -736,13 +924,17 @@
   white-space: nowrap;
 }
 
-/* The agents that keep a provider on, on a line of its own below the row and in line with the name.
-   The row grows to show the whole sentence, because the user must read which agents to change. */
+.provider-picker-status-message {
+  overflow: visible;
+  white-space: normal;
+}
+
 .provider-picker-check-error.provider-picker-used-by {
   grid-column: 1 / -1;
   overflow: visible;
   margin-top: -6px;
-  padding: 0 0 8px 66px;
+  padding-block: 0 8px;
+  padding-inline: 66px 0;
   white-space: normal;
 }
 
@@ -750,9 +942,55 @@
   color: var(--openbot-text-readable);
 }
 
-/* The version and the status badge, in the one cell the row's last column reserves. They are read
-   together - "v2.1.246" and "Ready" answer one question between them - and a shared cell keeps a
-   provider with no version to report from leaving a gap where the badge used to sit. */
+.provider-picker-add-account svg {
+  width: var(--openbot-icon-sm);
+  height: var(--openbot-icon-sm);
+  stroke-width: var(--openbot-icon-stroke);
+}
+
+.provider-picker-accounts {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+  margin-top: -6px;
+  padding-block: 0 8px;
+  padding-inline: 66px 0;
+}
+
+.provider-picker-account-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-picker-account {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.provider-picker-account + .provider-picker-account {
+  border-top: 1px solid var(--openbot-border);
+}
+
+.provider-picker-account-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
+}
+
+.provider-picker-account .provider-picker-check-error {
+  white-space: normal;
+}
+
+.provider-picker-account-rename {
+  max-width: 220px;
+}
+
 .provider-picker-state {
   min-width: 0;
   display: flex;
@@ -760,9 +998,6 @@
   gap: 8px;
 }
 
-/* The installed version. Muted, because it answers a question a user asks once and then stops
-   asking, and tabular so that a version which changes under a running update replaces itself
-   without shifting the badge beside it. */
 .provider-picker-version {
   overflow: hidden;
   color: var(--text-muted);
@@ -787,8 +1022,6 @@
   white-space: nowrap;
 }
 
-/* How many endpoints the Custom provider row stands for. It reads like a status badge, because it
-   sits in the same cell and answers the same kind of question, but it reports no state. */
 .provider-picker-custom-count {
   color: var(--text-muted);
   font-size: var(--openbot-text-sm);
@@ -796,11 +1029,9 @@
   white-space: nowrap;
 }
 
-/* The same count, as the button that opens the saved endpoints. It keeps the badge's quiet colour
-   and sits with the row's other actions, so it needs their margin and the button's own specificity. */
 .ui-button.provider-picker-custom-count {
   min-height: 28px;
-  margin-right: 8px;
+  margin-inline-end: 8px;
   border-radius: var(--openbot-radius-md);
   padding-inline: 9px;
   color: var(--text-muted);
@@ -866,8 +1097,6 @@
   line-height: 16px;
 }
 
-/* "More providers" is a button below the list, beside the hint. It uses the style of the heading's
- * Refresh button, so the picker has one kind of small list action. */
 .provider-picker-footer {
   position: relative;
   display: flex;
@@ -915,8 +1144,6 @@
   height: 12px;
 }
 
-/* The "More providers" dialog uses the custom provider dialog frame: a title, a close button and
- * one plain list. It is pinned near the top, so it does not move when a search changes its height. */
 .custom-provider-backdrop.provider-more-backdrop {
   align-items: start;
   padding-top: min(14vh, 120px);
@@ -932,7 +1159,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--openbot-space-1) var(--openbot-space-1) var(--openbot-space-1) var(--openbot-space-3);
+  padding-block: var(--openbot-space-1);
+  padding-inline: var(--openbot-space-3) var(--openbot-space-1);
 }
 
 .provider-more-title {
@@ -955,7 +1183,6 @@
   overflow-y: auto;
 }
 
-/* The name and description that the picker rows use; the full row is the target. */
 .ui-button.provider-more-row {
   width: 100%;
   height: auto;
@@ -970,7 +1197,7 @@
   color: inherit;
   font: inherit;
   line-height: normal;
-  text-align: left;
+  text-align: start;
   white-space: normal;
 }
 
@@ -1011,8 +1238,7 @@
   margin-top: 20px;
 }
 
-.initial-setup-save,
-.initial-setup-secondary {
+.initial-setup-save {
   min-height: 40px;
   border: 1px solid var(--openbot-border-strong);
   border-radius: var(--openbot-radius-md);
@@ -1043,15 +1269,6 @@
   transform: scale(0.992);
 }
 
-.initial-setup-secondary {
-  background: transparent;
-  color: var(--text-secondary);
-}
-
-.initial-setup-secondary:hover {
-  background: var(--openbot-hover);
-}
-
 @media (max-width: 620px) {
   .initial-setup-screen {
     place-items: start center;
@@ -1063,8 +1280,7 @@
   }
 
   .initial-setup-actions,
-  .initial-setup-save,
-  .initial-setup-secondary {
+  .initial-setup-save {
     width: 100%;
   }
 
@@ -1118,12 +1334,29 @@
     animation-delay: 18ms;
   }
 
-  .account-login[data-transition="forward"] .account-login-form[data-auth-panel="code"] {
+  .account-login[data-transition="forward"]
+    .account-login-form:is([data-auth-panel="code"], [data-auth-panel="company"]) {
     animation: account-login-panel-forward var(--openbot-duration-overlay) 32ms var(--openbot-ease-out) both;
   }
 
   .account-login[data-transition="back"] .account-login-form[data-auth-panel="email"] {
     animation: account-login-panel-back var(--openbot-duration-overlay) 32ms var(--openbot-ease-out) both;
+  }
+
+  .account-login:dir(rtl)[data-transition="forward"] :is(.account-login-title, .account-login-description) {
+    animation-name: account-login-copy-back;
+  }
+
+  .account-login:dir(rtl)[data-transition="back"] :is(.account-login-title, .account-login-description) {
+    animation-name: account-login-copy-forward;
+  }
+
+  .account-login:dir(rtl)[data-transition="forward"] .account-login-form[data-auth-panel="code"] {
+    animation-name: account-login-panel-back;
+  }
+
+  .account-login:dir(rtl)[data-transition="back"] .account-login-form[data-auth-panel="email"] {
+    animation-name: account-login-panel-forward;
   }
 
   @keyframes setup-enter {
@@ -1184,8 +1417,8 @@ button {
 }
 
 button:not(.ui-button):focus-visible,
-input:focus-visible,
-textarea:focus-visible {
+input:not(.ui-input):focus-visible,
+textarea:not(.ui-textarea):focus-visible {
   outline: 2px solid var(--openbot-border-focus);
   outline-offset: 2px;
 }
@@ -1194,21 +1427,13 @@ textarea:focus-visible {
   background: var(--openbot-accent-strong);
 }
 
-/* No vertical scroll bar: the wheel, the trackpad and the keyboard still scroll. Horizontal bars
- * stay, because a mouse wheel cannot scroll a code block or a table sideways. */
+* {
+  scrollbar-width: none;
+}
+
 ::-webkit-scrollbar {
   width: 0;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: var(--openbot-radius-pill);
-  background: var(--openbot-border-strong);
-  background-clip: padding-box;
+  height: 0;
 }
 
 .scroll-fade-top:not(.scroll-fade-bottom) {
@@ -1258,18 +1483,6 @@ textarea:focus-visible {
   );
 }
 
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 body,
 .account-login-screen,
 .initial-setup-screen,
@@ -1281,8 +1494,6 @@ body,
 
 .panel-edge,
 .direct-conversation-header,
-.browser-panel-header,
-.browser-toolbar,
 .remote-desktop-header,
 .settings-panel,
 .browser-panel,
@@ -1292,7 +1503,6 @@ body,
 }
 
 .search-field,
-.browser-address-bar input,
 .composer,
 .direct-composer,
 .settings-field input,
@@ -1307,7 +1517,6 @@ body,
 }
 
 .search-field:focus-within,
-.browser-address-bar input:focus,
 .composer:focus-within,
 .direct-composer:focus-within,
 .settings-field input:focus,
@@ -1321,7 +1530,6 @@ body,
 }
 
 .search-field input::placeholder,
-.browser-address-bar input::placeholder,
 .composer-editor-placeholder,
 .direct-composer textarea::placeholder,
 .settings-field input::placeholder,
@@ -1333,8 +1541,7 @@ body,
 }
 
 .provider-picker-option-selected,
-.provider-model-option-selected,
-.browser-tab-controlled .browser-tab {
+.provider-model-option-selected {
   border-color: var(--openbot-border-focus);
   background: var(--openbot-accent-soft);
   color: var(--openbot-text-primary);
@@ -1366,7 +1573,7 @@ body,
 .voice-button:hover,
 .voice-button-active:hover,
 .initial-setup-save:hover:not(:disabled),
-.account-login-primary:hover:not(:disabled) {
+.account-login-primary:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--openbot-text-primary);
   color: var(--openbot-text-on-light);
 }
@@ -1383,8 +1590,7 @@ body,
 }
 
 .account-login-error,
-.initial-setup-error,
-.account-popover-error {
+.initial-setup-error {
   border-color: var(--openbot-danger-soft);
   background: var(--openbot-danger-soft);
   color: var(--openbot-danger);
@@ -1413,4 +1619,8 @@ body,
 .provider-picker-status-sign-in-required i,
 .provider-picker-status-outdated i {
   color: var(--openbot-warning);
+}
+
+.account-login-code-action-change > svg[class~="lucide-arrow-left"]:dir(rtl) {
+  transform: scaleX(-1);
 }

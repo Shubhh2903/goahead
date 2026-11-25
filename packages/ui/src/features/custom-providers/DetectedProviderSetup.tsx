@@ -1,8 +1,8 @@
-import type { CustomProviderRestart } from "@openbot/contracts/ipc";
+import type { CustomProviderHarness, CustomProviderRestart } from "@openbot/contracts/ipc";
 import { createEffect, createSignal } from "solid-js";
 import { useText } from "../../text";
 import { CustomAcpAgentDialog } from "./CustomAcpAgentDialog";
-import { CustomProviderDialog } from "./CustomProviderDialog";
+import { CustomProviderDialog, type CustomProviderHarnessChoice } from "./CustomProviderDialog";
 import type { AcpAgentCheck, CustomAcpAgentDraft } from "./custom-acp-agent-form";
 import type { CustomProviderEndpoint, ModelDiscovery } from "./custom-provider-form";
 import {
@@ -14,22 +14,20 @@ import {
 } from "./detected-providers";
 
 interface DetectedProviderSetupProps {
-  /** The provider to add or edit. `null` keeps both forms closed. */
   provider: DetectedProvider | null;
   api: DetectedProviderApi;
+  host?: boolean | undefined;
   takenProviderIds?: readonly string[] | undefined;
   takenAgentIds?: readonly string[] | undefined;
+  harnesses?: readonly CustomProviderHarnessChoice[] | undefined;
+  onDownloadHarness?: ((harness: CustomProviderHarness) => void) | undefined;
+  harnessError?: string | undefined;
   onClose: () => void;
-  /** After a save, so the host can say when the new models appear. */
   onSaved?: ((kind: DetectedProvider["kind"], restart: CustomProviderRestart | undefined) => void) | undefined;
 }
 
-/**
- * The step between Add and a saved provider: the form of its kind, filled from what the scan found,
- * so the user sees and can change every value before OpenBot saves it.
- */
 export function DetectedProviderSetup(props: DetectedProviderSetupProps) {
-  const { t, errorMessage } = useText();
+  const { t, format, errorMessage } = useText();
   const [saving, setSaving] = createSignal(false);
   const [submitError, setSubmitError] = createSignal<string | null>(null);
   const [discovery, setDiscovery] = createSignal<ModelDiscovery>({ status: "idle" });
@@ -39,24 +37,21 @@ export function DetectedProviderSetup(props: DetectedProviderSetupProps) {
   const agent = () => (props.provider?.kind === "agent" ? props.provider : undefined);
   const modelsDraft = () => {
     const provider = models();
-    return provider ? detectedModelsDraft(provider) : undefined;
+    return provider ? detectedModelsDraft(provider, format) : undefined;
   };
   const agentDraft = () => {
     const provider = agent();
     return provider ? detectedAgentDraft(provider) : undefined;
   };
-  /** A provider that is already saved keeps its own ID, so its ID is not a duplicate of itself. */
   const taken = (ids: readonly string[] | undefined) =>
     (ids ?? []).filter((id) => !(props.provider?.added && id === props.provider.id));
 
-  // Each open starts from the scan result: the models it listed are already found and selected.
   createEffect(
     () => props.provider,
     (provider) => {
       setSaving(false);
       setSubmitError(null);
       setCheck({ status: "idle" });
-      // A preset with no scan result has no list yet, not an empty one.
       setDiscovery(
         provider?.kind === "models" && provider.models.length > 0
           ? { status: "found", models: provider.models }
@@ -118,6 +113,10 @@ export function DetectedProviderSetup(props: DetectedProviderSetupProps) {
         takenProviderIds={taken(props.takenProviderIds)}
         providerIdLocked={Boolean(models()?.added)}
         apiKeyKept={Boolean(models()?.added && models()?.keyStored)}
+        contextWindows={!props.host}
+        harnesses={props.harnesses}
+        onDownloadHarness={props.onDownloadHarness}
+        harnessError={props.harnessError}
         onSubmit={(value) => void save({ kind: "models", value })}
         onCancel={props.onClose}
       />
@@ -130,6 +129,7 @@ export function DetectedProviderSetup(props: DetectedProviderSetupProps) {
         submitError={submitError()}
         takenAgentIds={taken(props.takenAgentIds)}
         editing={Boolean(agent()?.added)}
+        host={props.host}
         onSubmit={(value) => void save({ kind: "agent", value })}
         onCancel={props.onClose}
       />

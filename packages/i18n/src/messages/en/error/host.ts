@@ -1,9 +1,12 @@
 import { defineMessages } from "../../../message";
 
 export const messages = defineMessages("error.host", {
-  // Errors from host setup, publishing, and host maintenance.
   "error.host.iceServersMissing": "Remote Signal has not supplied ICE servers.",
+  "error.host.keyRotationUnavailable": "This server cannot change its key without the account service.",
+  "error.host.keyRotationRefused":
+    "The account service did not accept the new server key. The current key stays in use.",
   "error.host.webRtcNotConfigured": "The WebRTC host service is not configured.",
+  "error.host.runtimeNotInstalled": "The remote desktop runtime is not installed.",
   "error.host.setupUnavailable": "Permission setup is not available.",
   "error.host.accountChangedDuringUpdate": "The signed-in account changed while this server was being updated.",
   "error.host.nameBeforePublish": "Name this GoAhead before publishing it.",
@@ -15,8 +18,12 @@ export const messages = defineMessages("error.host", {
   "error.host.publishFailed": "This GoAhead could not be published.",
   "error.host.mobileConnectPublishFailed": "This GoAhead could not be published for Mobile Connect.",
   "error.host.mobileConnectHostChanged": "The Mobile Connect host changed. Try again.",
+  "error.host.mobileConnectHostMismatch": "Your account has a different key for this server. Try again.",
   "error.host.noServer": "This computer has no server to change.",
   "error.host.identityLocalOnly": "The server name and logo can only be changed on the computer that runs it.",
+  "error.host.timezoneInvalid": "This timezone is not known.",
+  "error.host.signalHomeUnknown": "This Signal server is not available.",
+  "error.host.turnLimitInvalid": "This thread limit is not valid.",
   "error.host.maintenanceInterrupted":
     "Interrupted host maintenance. Verify the application and reset host state before retrying.",
   "error.host.updateFailed":
@@ -25,4 +32,5 @@ export const messages = defineMessages("error.host", {
   "error.host.tenantShutdownTimeout": "Tenant shutdown timed out. No application replacement was started.",
   "error.host.tenantHealthMissing":
     "Tenant health reports are missing or unhealthy after restart. Inspect tenant sessions before another update.",
+  "error.host.personalityInvalid": "This response style is not known.",
 });

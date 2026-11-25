@@ -8,6 +8,8 @@ export const messages = {
   "status.computerUse.driverStopped": "Computer Use ドライバーが停止しました。",
   "status.computerUse.unsupported": "Computer Use は macOS、Windows、Linux で使用できます。",
   "status.computerUse.driverMissing": "この GoAhead ビルドには Computer Use ドライバーが含まれていません。",
+  "status.computerUse.inputRefused":
+    "このデスクトップでは、GoAhead は他のアプリで入力やクリックができません。Web サイトでの作業は、エージェントに GoAhead ブラウザーを使うよう頼んでください。",
   "status.computerUse.progressActing": "このコンピューターのアプリを操作しています…",
   "status.computerUse.progressDeciding": "アプリでの次の操作を決めています…",
 } as const satisfies PartialTranslation<typeof source>;

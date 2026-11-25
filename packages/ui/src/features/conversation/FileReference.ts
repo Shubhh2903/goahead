@@ -27,7 +27,7 @@ const UNQUOTED_PATH_PATTERNS = [
   new RegExp(`~[/\\\\][^${PATH_CHARACTER_EXCLUSIONS}]+`, "gu"),
   new RegExp(`[A-Za-z]:[/\\\\][^${PATH_CHARACTER_EXCLUSIONS}]+`, "gu"),
   new RegExp(`[/\\\\][^${PATH_CHARACTER_EXCLUSIONS}]+`, "gu"),
-  /(?:^|[\s"'`([{])((?:OpenBot[/\\])?Shared[/\\][^\s"'`<>()[\]]+)/gu,
+  /(?:^|[\s"'`([{])((?:GoAhead[/\\])?Shared[/\\][^\s"'`<>()[\]]+)/gu,
 ];
 const QUOTED_PATH_PATTERN = /(["'`])([^"'`\r\n]+)\1/gu;
 const FILENAME_CHARACTER_PATTERN = /[\p{L}\p{N}_.-]/u;
@@ -108,7 +108,7 @@ function isSharedFilePath(value: string): boolean {
   const normalized = value.replaceAll("\\", "/");
   const segments = normalized.split("/").filter(Boolean);
   if (segments[0] === "Shared" && segments.length > 1) return true;
-  return segments.some((segment, index) => segment === "OpenBot" && segments[index + 1] === "Shared");
+  return segments.some((segment, index) => segment === "GoAhead" && segments[index + 1] === "Shared");
 }
 
 function sharedPathCandidates(body: string): TextRange[] {
@@ -188,11 +188,6 @@ function rangesOverlap(left: TextRange, right: TextRange): boolean {
   return left.start < right.end && right.start < left.end;
 }
 
-/**
- * `occupied` grows with every reference found, and the scan above probes it
- * once per candidate. A linear scan makes this quadratic on long messages;
- * the ranges are insert-sorted by start so only neighbors can overlap.
- */
 function isOccupied(occupied: TextRange[], range: TextRange): boolean {
   let low = 0;
   let high = occupied.length;

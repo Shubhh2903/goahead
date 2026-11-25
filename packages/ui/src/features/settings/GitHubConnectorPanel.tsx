@@ -1,4 +1,5 @@
 import type { GitHubConnectorRepositories, GitHubConnectorStatus } from "@openbot/contracts/ipc";
+import type { AppTextKey } from "@openbot/i18n";
 import {
   Alert,
   AlertActions,
@@ -19,33 +20,31 @@ import {
   ItemTitle,
   Link2Off,
   Lock,
-  OctagonX,
+  PlushLoader,
   Search,
   SettingsSection,
-  Spinner,
   Text,
   TriangleAlert,
   UserAvatar,
 } from "@openbot/ui";
 import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { useText } from "../../text";
+import { GitHubTile } from "./brand-marks";
 import {
   DangerZone,
-  DetailHeader,
-  GitHubMark,
+  IntegrationPage,
+  type IntegrationPageSlots,
   type IntegrationStatus,
   Stepper,
   WizardDialog,
   type WizardLink,
 } from "./IntegrationLayout";
 
-export interface GitHubConnectorPanelProps {
+export interface GitHubConnectorPanelProps extends IntegrationPageSlots {
+  hostName?: string | undefined;
   status: GitHubConnectorStatus;
-  /** True while an action runs. Every button waits for it. */
   busy: boolean;
-  /** Null while the first list is read. */
   repositories: GitHubConnectorRepositories | null;
-  /** Why the last list could not be read. */
   repositoriesError: string | null;
   onConnect: () => void;
   onCancel: () => void;
@@ -54,10 +53,19 @@ export interface GitHubConnectorPanelProps {
   onOpenInstall: () => void;
 }
 
-/**
- * The connect dialog shows one of these. `waiting` is before GitHub sends a code, `failed` is a
- * connect that stopped with no sign-in, and `connected` stays until the user closes the dialog.
- */
+export type GitHubConnection = Pick<
+  GitHubConnectorPanelProps,
+  | "hostName"
+  | "status"
+  | "busy"
+  | "repositories"
+  | "repositoriesError"
+  | "onConnect"
+  | "onCancel"
+  | "onOpenVerification"
+  | "onOpenInstall"
+>;
+
 type ConnectStep = "waiting" | "code" | "failed" | "connected";
 
 function connectStep(status: GitHubConnectorStatus, busy: boolean): ConnectStep {
@@ -66,20 +74,13 @@ function connectStep(status: GitHubConnectorStatus, busy: boolean): ConnectStep 
   return busy ? "waiting" : "failed";
 }
 
-const HEADER_STATUS = {
-  disconnected: { status: "idle", label: "connector.github.statusNotSetUp" },
-  pending: { status: "idle", label: "connector.github.statusConnecting" },
+export const GITHUB_STATUS = {
+  disconnected: { status: "idle", label: "marketplace.app.notConnected" },
+  pending: { status: "connecting", label: "connector.github.statusConnecting" },
   connected: { status: "connected", label: "connector.github.statusConnected" },
   expired: { status: "attention", label: "connector.github.statusExpired" },
-} as const satisfies Record<GitHubConnectorStatus["state"], { status: IntegrationStatus; label: string }>;
+} as const satisfies Record<GitHubConnectorStatus["state"], { status: IntegrationStatus; label: AppTextKey }>;
 
-/**
- * The GitHub page of one OpenBot computer. The token never reaches this component: the status holds
- * the account name and, during a sign-in, the code that the user types.
- *
- * Connect opens a dialog that follows the status: the wait for a code, the code, and the result.
- * A sign-in that is pending when the page opens shows the same dialog. Disconnect asks first.
- */
 export function GitHubConnectorPanel(props: GitHubConnectorPanelProps) {
   const { t } = useText();
   const [connectOpen, setConnectOpen] = createSignal(false);
@@ -90,17 +91,20 @@ export function GitHubConnectorPanel(props: GitHubConnectorPanelProps) {
       if (state === "pending") setConnectOpen(true);
     },
   );
-  const header = () => HEADER_STATUS[props.status.state];
+  const header = () => GITHUB_STATUS[props.status.state];
   const login = () => props.status.login ?? "";
+  const failure = () => {
+    const message = props.status.error;
+    if (connectOpen() || props.status.state === "expired" || !message) return null;
+    return { title: t("connector.github.actionFailed"), message };
+  };
 
   const connect = () => {
     setConnectOpen(true);
     props.onConnect();
   };
   const closeConnect = () => {
-    // Closing during the wait or the code stops the sign-in, as Cancel does.
-    const step = connectStep(props.status, props.busy);
-    if (step === "waiting" || step === "code") props.onCancel();
+    cancelRunning(props);
     setConnectOpen(false);
   };
   const confirmDisconnect = () => {
@@ -109,44 +113,58 @@ export function GitHubConnectorPanel(props: GitHubConnectorPanelProps) {
   };
 
   return (
-    <div class="github-connector">
-      <DetailHeader
-        logo={<GitHubMark />}
-        name={t("connector.github.title")}
-        status={header().status}
-        statusLabel={t(header().label)}
-        subtitle={t("connector.github.description")}
-        actions={
-          <Show when={props.status.state === "disconnected"}>
-            <Button type="button" size="sm" loading={props.busy} onClick={connect}>
-              {t("connector.github.connect")}
-            </Button>
-          </Show>
-        }
-      />
-
-      {/* The dialog shows a failure while it is open, and the expired alert already tells the user why. */}
-      <Show when={!connectOpen() && props.status.state !== "expired" && props.status.error}>
-        {(message) => <FailedAlert message={message()} />}
-      </Show>
-
-      <Show when={props.status.state === "expired"}>
-        <Alert tone="warning">
-          <AlertIcon>
-            <TriangleAlert />
-          </AlertIcon>
-          <AlertContent>
-            <AlertTitle>{t("connector.github.expiredTitle")}</AlertTitle>
-            <AlertDescription>{t("connector.github.expiredDescription", { login: login() })}</AlertDescription>
-          </AlertContent>
-          <AlertActions>
-            <Button type="button" size="sm" loading={props.busy} onClick={connect}>
-              {t("connector.github.reconnect")}
-            </Button>
-          </AlertActions>
-        </Alert>
-      </Show>
-
+    <IntegrationPage
+      class="github-connector"
+      logo={<GitHubTile />}
+      name={t("connector.github.title")}
+      status={header().status}
+      statusLabel={t(header().label)}
+      subtitle={
+        props.hostName
+          ? t("connector.github.descriptionHost", { host: props.hostName })
+          : t("connector.github.description")
+      }
+      actions={
+        <Show when={props.status.state === "disconnected"}>
+          <Button type="button" size="sm" loading={props.busy} onClick={connect}>
+            {t("connector.github.connect")}
+          </Button>
+        </Show>
+      }
+      failure={failure()}
+      alert={
+        <Show when={props.status.state === "expired"}>
+          <Alert tone="warning" role="alert">
+            <AlertIcon>
+              <TriangleAlert />
+            </AlertIcon>
+            <AlertContent>
+              <AlertTitle>{t("connector.github.expiredTitle")}</AlertTitle>
+              <AlertDescription>{t("connector.github.expiredDescription", { login: login() })}</AlertDescription>
+            </AlertContent>
+            <AlertActions>
+              <Button type="button" size="sm" loading={props.busy} onClick={connect}>
+                {t("connector.github.reconnect")}
+              </Button>
+            </AlertActions>
+          </Alert>
+        </Show>
+      }
+      tagline={props.tagline}
+      intro={props.intro}
+      details={props.details}
+      danger={
+        <Show when={props.status.state === "connected" || props.status.state === "expired"}>
+          <DangerZone
+            title={t("connector.github.disconnectTitle")}
+            description={t("connector.github.disconnectSummary")}
+            action={t("connector.github.disconnect")}
+            busy={props.busy}
+            onAction={() => setConfirmOpen(true)}
+          />
+        </Show>
+      }
+    >
       <Show when={props.status.state === "connected" || props.status.state === "expired"}>
         <SettingsSection title={t("connector.github.accountTitle")}>
           <ItemGroup class="settings-modal-card">
@@ -171,43 +189,18 @@ export function GitHubConnectorPanel(props: GitHubConnectorPanelProps) {
         />
       </Show>
 
-      <Show when={props.status.state === "connected" || props.status.state === "expired"}>
-        <DangerZone
-          title={t("connector.github.disconnectTitle")}
-          description={t("connector.github.disconnectSummary")}
-          action={t("connector.github.disconnect")}
-          busy={props.busy}
-          onAction={() => setConfirmOpen(true)}
-        />
-      </Show>
-
-      <ConnectDialog {...props} open={connectOpen()} onRetry={props.onConnect} onClose={closeConnect} />
+      <ConnectDialog {...props} open={connectOpen()} onClose={closeConnect} />
       <DisconnectDialog
         open={confirmOpen()}
         login={login()}
+        hostName={props.hostName}
         onConfirm={confirmDisconnect}
         onClose={() => setConfirmOpen(false)}
       />
-    </div>
+    </IntegrationPage>
   );
 }
 
-function FailedAlert(props: { message: string }) {
-  const { t, sourceText } = useText();
-  return (
-    <Alert tone="danger" role="alert">
-      <AlertIcon>
-        <OctagonX />
-      </AlertIcon>
-      <AlertContent>
-        <AlertTitle>{t("connector.github.actionFailed")}</AlertTitle>
-        <AlertDescription>{sourceText(props.message)}</AlertDescription>
-      </AlertContent>
-    </Alert>
-  );
-}
-
-/** GitHub's picture of the account, or its initials when there is none or it does not load. */
 function GitHubAvatar(props: { login: string; avatarUrl: string | null }) {
   return (
     <UserAvatar
@@ -245,7 +238,7 @@ function RepositoriesSection(props: {
       <ItemGroup class="settings-modal-card">
         <Show when={props.repositoriesError}>
           {(message) => (
-            <Text class="github-connector-line" tone="danger" variant="caption" role="alert">
+            <Text class="integration-card-note" tone="danger" variant="caption" role="alert">
               {message()}
             </Text>
           )}
@@ -254,7 +247,7 @@ function RepositoriesSection(props: {
           when={props.repositories}
           fallback={
             <Show when={!props.repositoriesError}>
-              <Text class="github-connector-line" tone="muted" variant="caption">
+              <Text class="integration-card-note" tone="muted" variant="caption">
                 {t("connector.github.repositoriesLoading")}
               </Text>
             </Show>
@@ -264,56 +257,58 @@ function RepositoriesSection(props: {
             <Show
               when={list().repositories.length > 0}
               fallback={
-                <Text class="github-connector-line" tone="muted" variant="caption">
+                <Text class="integration-card-note" tone="muted" variant="caption">
                   {t("connector.github.noRepositories")}
                 </Text>
               }
             >
-              <div class="github-connector-search">
-                <Search aria-hidden="true" />
-                <Input
-                  type="search"
-                  size="sm"
-                  placeholder={t("connector.github.filterPlaceholder", { count: list().repositories.length })}
-                  aria-label={t("connector.github.filterLabel")}
-                  value={query()}
-                  onInput={(event) => setQuery(event.currentTarget.value)}
-                />
+              <div class="integration-card-body">
+                <div class="github-connector-search">
+                  <Search aria-hidden="true" />
+                  <Input
+                    type="search"
+                    size="sm"
+                    placeholder={t("connector.github.filterPlaceholder", { count: list().repositories.length })}
+                    aria-label={t("connector.github.filterLabel")}
+                    value={query()}
+                    onInput={(event) => setQuery(event.currentTarget.value)}
+                  />
+                </div>
+                <Show
+                  when={matches().length > 0}
+                  fallback={
+                    <Text variant="caption" tone="muted">
+                      {t("connector.github.noMatch", { query: query().trim() })}
+                    </Text>
+                  }
+                >
+                  <ul class="github-connector-repository-list" aria-label={t("connector.github.repositoriesTitle")}>
+                    <For each={matches()} keyed={(repository) => repository.fullName}>
+                      {(repository) => {
+                        const slash = () => repository().fullName.indexOf("/");
+                        return (
+                          <li class="github-connector-repository">
+                            <Text as="span" class="github-connector-repository-name" variant="body-sm" truncate>
+                              <span class="github-connector-repository-owner">
+                                {repository().fullName.slice(0, slash() + 1)}
+                              </span>
+                              {repository().fullName.slice(slash() + 1)}
+                            </Text>
+                            <Show when={repository().private}>
+                              <Badge variant="secondary" class="github-connector-private">
+                                <Lock size={12} aria-hidden="true" />
+                                {t("connector.github.private")}
+                              </Badge>
+                            </Show>
+                          </li>
+                        );
+                      }}
+                    </For>
+                  </ul>
+                </Show>
               </div>
-              <Show
-                when={matches().length > 0}
-                fallback={
-                  <Text class="github-connector-line" variant="caption" tone="muted">
-                    {t("connector.github.noMatch", { query: query().trim() })}
-                  </Text>
-                }
-              >
-                <ul class="github-connector-repository-list" aria-label={t("connector.github.repositoriesTitle")}>
-                  <For each={matches()} keyed={(repository) => repository.fullName}>
-                    {(repository) => {
-                      const slash = () => repository().fullName.indexOf("/");
-                      return (
-                        <li class="github-connector-repository">
-                          <Text as="span" class="github-connector-repository-name" variant="body-sm" truncate>
-                            <span class="github-connector-repository-owner">
-                              {repository().fullName.slice(0, slash() + 1)}
-                            </span>
-                            {repository().fullName.slice(slash() + 1)}
-                          </Text>
-                          <Show when={repository().private}>
-                            <Badge variant="secondary" class="github-connector-private">
-                              <Lock size={12} aria-hidden="true" />
-                              {t("connector.github.private")}
-                            </Badge>
-                          </Show>
-                        </li>
-                      );
-                    }}
-                  </For>
-                </ul>
-              </Show>
               <Show when={list().total > list().repositories.length}>
-                <Text class="github-connector-line" tone="muted" variant="caption">
+                <Text class="integration-card-note" tone="muted" variant="caption">
                   {t("connector.github.moreRepositories", { count: list().total - list().repositories.length })}
                 </Text>
               </Show>
@@ -325,12 +320,24 @@ function RepositoriesSection(props: {
   );
 }
 
-function ConnectDialog(props: GitHubConnectorPanelProps & { open: boolean; onRetry: () => void; onClose: () => void }) {
+function cancelRunning(connection: GitHubConnection) {
+  const step = connectStep(connection.status, connection.busy);
+  if (step === "waiting" || step === "code") connection.onCancel();
+}
+
+export function GitHubConnectDialog(props: GitHubConnection & { open: boolean; onClose: () => void }) {
+  const close = () => {
+    cancelRunning(props);
+    props.onClose();
+  };
+  return <ConnectDialog {...props} onClose={close} />;
+}
+
+function ConnectDialog(props: GitHubConnection & { open: boolean; onClose: () => void }) {
   const { t, sourceText } = useText();
   const step = () => connectStep(props.status, props.busy);
   const link = (): WizardLink => (step() === "connected" ? "connected" : step() === "failed" ? "broken" : "connecting");
   const noRepositories = () => props.repositories?.total === 0;
-  /** While the sign-in runs, closing the dialog cancels it. */
   const running = () => step() === "waiting" || step() === "code";
   const title = () => {
     switch (step()) {
@@ -363,7 +370,7 @@ function ConnectDialog(props: GitHubConnectorPanelProps & { open: boolean; onRet
       closeLabel={running() ? t("connector.github.cancelConnecting") : t("connector.github.close")}
       dismissible={!running()}
       onClose={props.onClose}
-      logo={<GitHubMark />}
+      logo={<GitHubTile />}
       link={link()}
       title={title()}
       description={description()}
@@ -407,7 +414,7 @@ function ConnectDialog(props: GitHubConnectorPanelProps & { open: boolean; onRet
             <Button type="button" size="sm" variant="ghost" onClick={props.onClose}>
               {t("connector.github.cancel")}
             </Button>
-            <Button type="button" size="sm" onClick={props.onRetry}>
+            <Button type="button" size="sm" onClick={props.onConnect}>
               {t("connector.github.connect")}
             </Button>
           </Match>
@@ -435,7 +442,7 @@ function ConnectDialog(props: GitHubConnectorPanelProps & { open: boolean; onRet
       <Switch>
         <Match when={step() === "waiting"}>
           <div class="github-connector-center">
-            <Spinner label={t("connector.github.waiting")} />
+            <PlushLoader size={48} label={t("connector.github.waiting")} />
           </div>
         </Match>
         <Match when={step() === "code" && props.status.userCode}>
@@ -443,7 +450,7 @@ function ConnectDialog(props: GitHubConnectorPanelProps & { open: boolean; onRet
             <>
               <DeviceCode code={code()} />
               <div class="github-connector-waiting" aria-live="polite">
-                <Spinner size="sm" />
+                <PlushLoader size={32} />
                 <Text variant="caption" tone="muted">
                   {t("connector.github.waiting")}
                 </Text>
@@ -477,7 +484,9 @@ function ConnectDialog(props: GitHubConnectorPanelProps & { open: boolean; onRet
               >
                 {(list) => (
                   <Text variant="caption" tone="muted">
-                    {t("connector.github.connectedSummary", { count: list().total })}
+                    {props.hostName
+                      ? t("connector.github.connectedSummaryHost", { count: list().total, host: props.hostName })
+                      : t("connector.github.connectedSummary", { count: list().total })}
                   </Text>
                 )}
               </Show>
@@ -489,7 +498,6 @@ function ConnectDialog(props: GitHubConnectorPanelProps & { open: boolean; onRet
   );
 }
 
-/** The code in large separate characters, because the user types it on another screen. */
 function DeviceCode(props: { code: string }) {
   const { t } = useText();
   return (
@@ -510,17 +518,27 @@ function DeviceCode(props: { code: string }) {
   );
 }
 
-function DisconnectDialog(props: { open: boolean; login: string; onConfirm: () => void; onClose: () => void }) {
+function DisconnectDialog(props: {
+  open: boolean;
+  login: string;
+  hostName: string | undefined;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
   const { t } = useText();
   return (
     <WizardDialog
       open={props.open}
       closeLabel={t("connector.github.close")}
       onClose={props.onClose}
-      logo={<GitHubMark />}
+      logo={<GitHubTile />}
       link="broken"
       title={t("connector.github.disconnectConfirmTitle")}
-      description={t("connector.github.disconnectConfirmDescription", { login: props.login })}
+      description={
+        props.hostName
+          ? t("connector.github.disconnectConfirmDescriptionHost", { login: props.login, host: props.hostName })
+          : t("connector.github.disconnectConfirmDescription", { login: props.login })
+      }
       footer={
         <>
           <Button type="button" variant="ghost" onClick={props.onClose}>
@@ -529,7 +547,7 @@ function DisconnectDialog(props: { open: boolean; login: string; onConfirm: () =
           <Button
             type="button"
             variant="destructive"
-            class="github-connector-confirm"
+            class="integration-confirm"
             data-cuelume-tap="close"
             data-cuelume-emphasis="strong"
             onClick={props.onConfirm}
@@ -540,24 +558,26 @@ function DisconnectDialog(props: { open: boolean; login: string; onConfirm: () =
         </>
       }
     >
-      <ul class="github-connector-effects">
+      <ul class="integration-effects">
         <li data-tone="danger">
-          <span class="github-connector-effect-icon" aria-hidden="true">
+          <span class="integration-effect-icon" aria-hidden="true">
             <Link2Off />
           </span>
           {t("connector.github.disconnectEffectTools")}
         </li>
         <li>
-          <span class="github-connector-effect-icon" aria-hidden="true">
+          <span class="integration-effect-icon" aria-hidden="true">
             <ExternalLink />
           </span>
           {t("connector.github.disconnectEffectRevoke")}
         </li>
         <li data-tone="success">
-          <span class="github-connector-effect-icon" aria-hidden="true">
+          <span class="integration-effect-icon" aria-hidden="true">
             <Check />
           </span>
-          {t("connector.github.disconnectEffectKept")}
+          {props.hostName
+            ? t("connector.github.disconnectEffectKeptHost", { host: props.hostName })
+            : t("connector.github.disconnectEffectKept")}
         </li>
       </ul>
     </WizardDialog>

@@ -3,6 +3,9 @@ import type { messages as source } from "../en/dialog";
 
 export const messages = {
   "dialog.chooseSiteDirectory": "Escolha um diretório de site estático",
+  "dialog.chooseAgentFolder": "Escolha uma pasta para {agent}",
+  "dialog.chooseChannelFolder": "Escolha uma pasta para {channel}",
+  "dialog.chooseAgentExclusion": "Escolha uma pasta que {agent} não deve alterar",
   "dialog.chooseSkill": "Escolha uma pasta de habilidade ou um ZIP",
   "dialog.filter.skillPackages": "Pacotes de habilidades",
   "dialog.filter.images": "Imagens",
@@ -13,4 +16,11 @@ export const messages = {
   "dialog.chooseAgentExport": "Escolha uma exportação de agente",
   "dialog.filter.agentExports": "Exportações de agentes",
   "dialog.saveExportSkill": "Salvar a habilidade de exportação",
+  "dialog.saveTransfer": "Salvar o arquivo de transferência",
+  "dialog.chooseTransfer": "Escolher um arquivo de transferência",
+  "dialog.filter.transfer": "Arquivos de transferência do GoAhead",
+  "dialog.saveWorkflow": "Salvar o arquivo do fluxo de trabalho",
+  "dialog.filter.workflow": "Arquivos de fluxo de trabalho do GoAhead",
+  "dialog.chooseExternalLinkApp": "Escolha um navegador",
+  "dialog.filter.applications": "Aplicativos",
 } as const satisfies PartialTranslation<typeof source>;

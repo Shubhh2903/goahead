@@ -20,7 +20,7 @@ export type DiagramNode =
       name: string;
       /** What the routine asks for. The agents it starts receive it as their input. */
       instruction: string;
-      schedule: RoutineSchedule;
+      schedule: RoutineSchedule | null;
       active: boolean;
       /**
        * The times it fires next, soonest first. The host expands the schedule, so the canvas never

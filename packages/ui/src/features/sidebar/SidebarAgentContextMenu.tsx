@@ -1,9 +1,18 @@
-/**
- * The right-click menu on an agent, in the pinned group and in a section alike. Filing the agent
- * away is `SidebarMoveToSubmenu`, which the channel menu shows too; everything here is agent-only.
- */
-
-import { ContextMenu, Copy, Eraser, Pin, PinOff } from "@openbot/ui";
+import {
+  AppWindow,
+  Bell,
+  BellOff,
+  CheckCheck,
+  CircleDot,
+  ContextMenu,
+  Copy,
+  Eraser,
+  MessageCirclePlus,
+  Moon,
+  Pin,
+  PinOff,
+  RotateCcw,
+} from "@openbot/ui";
 import { Show } from "solid-js";
 import type { AgentProfile } from "../../data";
 import { useText } from "../../text";
@@ -12,14 +21,21 @@ import { SidebarMoveToSubmenu } from "./SidebarMoveToSubmenu";
 import type { SidebarPinnedItem } from "./sidebar-pins";
 import { useSidebarScope } from "./sidebar-scope";
 
-export function SidebarAgentContextMenu(menuProps: { agent: AgentProfile; pinned: boolean }) {
-  const { openDelete, props } = useSidebarScope();
+export function SidebarAgentContextMenu(menuProps: { agent: AgentProfile; pinned: boolean; userHidden?: boolean }) {
+  const { customSectionById, openDelete, props } = useSidebarScope();
   const { t } = useText();
   const ref = (): SidebarPinnedItem => ({ kind: "agent", id: menuProps.agent.id });
   // The Slack Orchestrator is the agent that answers Slack conversations, so it has rows to clear.
   const hasSlackHistory = () =>
     Boolean(props.onHideMessagingThreads) &&
     (props.messagingThreads ?? []).some((thread) => thread.agentId === menuProps.agent.id);
+  const unread = () => props.unreadAgentIds?.has(menuProps.agent.id) ?? false;
+  const muted = () => props.mutedAgentIds?.has(menuProps.agent.id) ?? false;
+  const restoreLabel = () => {
+    const assigned = props.layout.agentAssignments[menuProps.agent.id];
+    const section = assigned ? customSectionById().get(assigned) : undefined;
+    return section ? t("sidebar.agentMenu.restoreTo", { section: section.name }) : t("sidebar.agentMenu.restore");
+  };
   return (
     <ContextMenu.Portal>
       <ContextMenu.Content class="agent-context-menu" aria-label={t("sidebar.agentMenu.label")}>
@@ -32,6 +48,48 @@ export function SidebarAgentContextMenu(menuProps: { agent: AgentProfile; pinned
           </Show>
           <span>{menuProps.pinned ? t("sidebar.unpin") : t("sidebar.pin")}</span>
         </ContextMenu.Item>
+        <Show when={unread() && props.onMarkAgentRead}>
+          {(markRead) => (
+            <ContextMenu.Item onSelect={() => markRead()(menuProps.agent.id)}>
+              <CheckCheck class="agent-context-icon size-4" aria-hidden="true" />
+              <span>{t("sidebar.agentMenu.markRead")}</span>
+            </ContextMenu.Item>
+          )}
+        </Show>
+        <Show when={!unread() && props.onMarkAgentUnread}>
+          {(markUnread) => (
+            <ContextMenu.Item onSelect={() => markUnread()(menuProps.agent.id)}>
+              <CircleDot class="agent-context-icon size-4" aria-hidden="true" />
+              <span>{t("sidebar.agentMenu.markUnread")}</span>
+            </ContextMenu.Item>
+          )}
+        </Show>
+        <Show when={props.onSetAgentMuted}>
+          {(setMuted) => (
+            <ContextMenu.Item data-cuelume-tap="toggle" onSelect={() => setMuted()(menuProps.agent.id, !muted())}>
+              <Show when={muted()} fallback={<BellOff class="agent-context-icon size-4" aria-hidden="true" />}>
+                <Bell class="agent-context-icon size-4" aria-hidden="true" />
+              </Show>
+              <span>{muted() ? t("sidebar.agentMenu.unmute") : t("sidebar.agentMenu.mute")}</span>
+            </ContextMenu.Item>
+          )}
+        </Show>
+        <Show when={!menuProps.userHidden && props.onNewAgentThread}>
+          {(start) => (
+            <ContextMenu.Item onSelectAfterClose={() => start()(menuProps.agent.id)}>
+              <MessageCirclePlus class="agent-context-icon size-4" aria-hidden="true" />
+              <span>{t("sidebar.agentMenu.newThread")}</span>
+            </ContextMenu.Item>
+          )}
+        </Show>
+        <Show when={!menuProps.userHidden && props.onOpenAgentWindow}>
+          {(open) => (
+            <ContextMenu.Item onSelect={() => open()(menuProps.agent.id)}>
+              <AppWindow class="agent-context-icon size-4" aria-hidden="true" />
+              <span>{t("sidebar.agentMenu.openWindow")}</span>
+            </ContextMenu.Item>
+          )}
+        </Show>
         <SidebarMoveToSubmenu chatId={menuProps.agent.id} />
         <ContextMenu.Item onSelect={() => props.onEditAgent(menuProps.agent.id)}>
           <EditIcon />
@@ -39,7 +97,7 @@ export function SidebarAgentContextMenu(menuProps: { agent: AgentProfile; pinned
         </ContextMenu.Item>
         <Show when={props.duplicateSupported !== false && props.onDuplicateAgent}>
           <ContextMenu.Item
-            disabled={props.duplicatingAgentIds?.has(menuProps.agent.id)}
+            disabled={props.duplicatingAgentIds?.has(menuProps.agent.id) ?? false}
             onSelect={() => void props.onDuplicateAgent?.(menuProps.agent.id).catch(() => undefined)}
           >
             <Copy class="agent-context-icon size-4" aria-hidden="true" />
@@ -54,6 +112,18 @@ export function SidebarAgentContextMenu(menuProps: { agent: AgentProfile; pinned
           <ContextMenu.Item onSelect={() => openDelete("history", menuProps.agent.id)}>
             <Eraser class="agent-context-icon size-4" aria-hidden="true" />
             <span>{t("sidebar.clearHistory.action")}</span>
+          </ContextMenu.Item>
+        </Show>
+        <Show when={!menuProps.userHidden && props.onHideAgent}>
+          <ContextMenu.Item onSelectAfterClose={() => props.onHideAgent?.(menuProps.agent.id)}>
+            <Moon class="agent-context-icon size-4" aria-hidden="true" />
+            <span>{t("sidebar.agentMenu.hide")}</span>
+          </ContextMenu.Item>
+        </Show>
+        <Show when={menuProps.userHidden && props.onRestoreAgent}>
+          <ContextMenu.Item onSelectAfterClose={() => props.onRestoreAgent?.(menuProps.agent.id)}>
+            <RotateCcw class="agent-context-icon size-4" aria-hidden="true" />
+            <span>{restoreLabel()}</span>
           </ContextMenu.Item>
         </Show>
         <Show when={props.deleteSupported !== false}>

@@ -30,7 +30,6 @@ export function isBrowserSecretRequest(value: unknown): value is BrowserSecretRe
   }
 }
 
-/** Never include the rejected payload in validation errors. */
 export function parseBrowserSecretResponse(value: unknown): RespondToBrowserSecretInput {
   if (!isDynamicRecord(value) || !isRequestId(value.requestId) || !isIdentifier(value.agentId))
     throw new Error("Invalid secure authentication response.");
@@ -39,4 +38,21 @@ export function parseBrowserSecretResponse(value: unknown): RespondToBrowserSecr
   if (value.decision !== "submit" || !isString(value.secret) || value.secret.length === 0 || value.secret.length > 4096)
     throw new Error("Invalid secure authentication response.");
   return { ...identity, decision: "submit", secret: value.secret };
+}
+
+export type LocalBrowserSecretResponse = RespondToBrowserSecretInput & { saveToVault?: true };
+
+export function parseLocalBrowserSecretResponse(value: unknown): LocalBrowserSecretResponse {
+  const parsed = parseBrowserSecretResponse(value);
+  if (!isDynamicRecord(value) || value.saveToVault === undefined) return parsed;
+  if (value.saveToVault !== true || parsed.decision !== "submit")
+    throw new Error("Invalid secure authentication response.");
+  return { ...parsed, saveToVault: true };
+}
+
+export function remoteBrowserSecretResponse(input: LocalBrowserSecretResponse): RespondToBrowserSecretInput {
+  const identity = { requestId: input.requestId, agentId: input.agentId };
+  return input.decision === "submit"
+    ? { ...identity, decision: "submit", secret: input.secret }
+    : { ...identity, decision: input.decision };
 }

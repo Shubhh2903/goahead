@@ -15,7 +15,6 @@ export const messages = {
   "skill.emptyEnabled": "Cet agent n’a aucune compétence activée.",
   "skill.emptyAssigned": "Cet agent n’a encore aucune compétence attribuée.",
   "skill.folderSkill": "GoAhead n’a pas installé cette compétence. Modifiez-la ou retirez-la dans {location}.",
-  "skill.localOnHost": "Cette compétence locale est stockée sur l’hôte. Ouvrez ses détails sur cet ordinateur.",
   "skill.moreFor": "Plus d’options pour {name}",
   "skill.update": "Mettre à jour",
   "skill.updateName": "Mettre à jour {name}",
@@ -48,7 +47,7 @@ export const messages = {
   "skill.unavailable.updateVersion": "Mettez à jour cette compétence pour essayer cette version.",
   "skill.unavailable.updateRevision": "Mettez à jour cette compétence pour essayer cette révision.",
   "skill.unavailable.saving": "Attendez la fin de l’enregistrement de cette compétence, puis essayez-la.",
-  "skill.unavailable.composer": "Le champ de message de l’agent n’est pas disponible.",
+  "skill.unavailable.composer": "La zone de message de l’agent n’est pas disponible.",
 
   "skill.toolbar.source": "Source des compétences",
   "skill.toolbar.all": "Toutes",
@@ -61,7 +60,7 @@ export const messages = {
   "skill.local.addFailed": "Impossible d’ajouter la compétence locale.",
   "skill.local.back": "Retour aux compétences locales",
   "skill.local.added": "Ajoutée",
-  "skill.local.add": "Ajouter la compétence",
+  "skill.local.add": "Ajouter",
   "skill.local.loading": "Chargement des compétences locales…",
   "skill.local.empty": "Aucune compétence locale pour le moment.",
 
@@ -70,4 +69,18 @@ export const messages = {
   "skill.preview.examplePrompt": "Aidez-moi à utiliser cette compétence.",
   "skill.preview.try": "Essayer la compétence",
   "skill.preview.linkFailed": "Impossible d’ouvrir le lien.",
+
+  "skill.marketplace.changed": {
+    one: "{name} modifié sur {count} agent.",
+    other: "{name} modifié sur {count} agents.",
+  },
+  "skill.marketplace.updated": {
+    one: "{name} mis à jour sur {count} agent.",
+    other: "{name} mis à jour sur {count} agents.",
+  },
+  "skill.marketplace.undone": "La modification de {name} est annulée.",
+  "skill.marketplace.confirmAgents": "Agents : {agents}.",
+  "skill.marketplace.limitReason": "Un agent peut avoir jusqu’à {limit} compétences.",
+  "skill.marketplace.cannotRemove":
+    "GoAhead ne peut pas retirer une compétence intégrée ni une compétence qu’il n’a pas installée.",
 } as const satisfies PartialTranslation<typeof source>;

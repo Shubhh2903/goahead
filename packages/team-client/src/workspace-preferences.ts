@@ -1,13 +1,27 @@
-import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
-import { remoteHostFingerprint } from "./remote-directory";
+import { Effect, Result, Schema } from "effect";
+import { remoteHostFingerprint } from "./host-key-handover";
 
-export interface RemoteWorkspacePreferences {
-  hidden: string[];
-  pinned: string[];
-  pinnedChannels?: string[];
-  hiddenChannels?: string[];
-}
+const WorkspacePreferences = Schema.Struct({
+  hidden: Schema.mutableKey(Schema.mutable(Schema.Array(Schema.String))),
+  pinned: Schema.mutableKey(Schema.mutable(Schema.Array(Schema.String))),
+  pinnedChannels: Schema.mutableKey(Schema.optional(Schema.mutable(Schema.Array(Schema.String)))),
+  hiddenChannels: Schema.mutableKey(Schema.optional(Schema.mutable(Schema.Array(Schema.String)))),
+  pinnedWorkflows: Schema.mutableKey(Schema.optional(Schema.mutable(Schema.Array(Schema.String)))),
+  collapsedSections: Schema.mutableKey(Schema.optional(Schema.mutable(Schema.Array(Schema.String)))),
+  pinOrder: Schema.mutableKey(
+    Schema.optional(
+      Schema.mutable(Schema.Array(Schema.Struct({ kind: Schema.Literals(["agent", "channel"]), id: Schema.String }))),
+    ),
+  ),
+  pinsPending: Schema.mutableKey(Schema.optional(Schema.Boolean)),
+});
+export type RemoteWorkspacePreferences = typeof WorkspacePreferences.Type;
+const StoredPreferences = Schema.Struct({ version: Schema.Literal(1), ...WorkspacePreferences.fields });
+
+class WorkspacePreferencesError extends Schema.TaggedError<WorkspacePreferencesError>()("WorkspacePreferencesError", {
+  message: Schema.String,
+}) {}
 
 export function createWorkspacePreferences(
   apiUrl: string,
@@ -16,44 +30,55 @@ export function createWorkspacePreferences(
 ) {
   const scope = remoteHostFingerprint(JSON.stringify([new URL(apiUrl).origin, userId]));
   const key = (hostId: string) => `openbot.workspace.v1.${scope}.${remoteHostFingerprint(hostId)}`;
-  // This store is the only writer of its keys, so a value read or written once stays current. Mobile
-  // reads preferences for each delivered message, and each storage read is a synchronous Keychain call.
   const cache = new Map<string, RemoteWorkspacePreferences>();
+  const read = Effect.fn("WorkspacePreferences.read")(function* (hostId: string) {
+    const cached = cache.get(hostId);
+    if (cached) return cached;
+    const stored = yield* preferencesCall(() => storage.get(key(hostId)));
+    if (!stored) {
+      const empty: RemoteWorkspacePreferences = { hidden: [], pinned: [] };
+      cache.set(hostId, empty);
+      return empty;
+    }
+    const parsed = yield* preferencesCall(() => JSON.parse(stored));
+    const value = yield* Schema.decodeUnknownEffect(StoredPreferences)(parsed).pipe(
+      Effect.mapError(
+        () => new WorkspacePreferencesError({ message: sourceText("error.remote.preferencesUnreadable") }),
+      ),
+    );
+    const preferences: RemoteWorkspacePreferences = {
+      hidden: value.hidden,
+      pinned: value.pinned,
+      ...(value.pinnedChannels ? { pinnedChannels: value.pinnedChannels } : {}),
+      ...(value.hiddenChannels ? { hiddenChannels: value.hiddenChannels } : {}),
+      ...(value.pinnedWorkflows ? { pinnedWorkflows: value.pinnedWorkflows } : {}),
+      ...(value.collapsedSections ? { collapsedSections: value.collapsedSections } : {}),
+      ...(value.pinOrder ? { pinOrder: value.pinOrder } : {}),
+      ...(value.pinsPending ? { pinsPending: true } : {}),
+    };
+    cache.set(hostId, preferences);
+    return preferences;
+  });
+  const write = Effect.fn("WorkspacePreferences.write")(function* (hostId: string, value: RemoteWorkspacePreferences) {
+    yield* preferencesCall(() => storage.set(key(hostId), JSON.stringify({ version: 1, ...value })));
+    cache.set(hostId, value);
+  });
   return {
-    read(hostId: string): RemoteWorkspacePreferences {
-      const cached = cache.get(hostId);
-      if (cached) return cached;
-      const stored = storage.get(key(hostId));
-      const value = stored ? decodePreferences(JSON.parse(stored)) : { hidden: [], pinned: [] };
-      cache.set(hostId, value);
-      return value;
-    },
-    write(hostId: string, value: RemoteWorkspacePreferences): void {
-      storage.set(key(hostId), JSON.stringify({ version: 1, ...value }));
-      cache.set(hostId, value);
-    },
+    read: (hostId: string) => runPreferences(read(hostId)),
+    write: (hostId: string, value: RemoteWorkspacePreferences) => runPreferences(write(hostId, value)),
   };
 }
 
-function decodePreferences(value: unknown): RemoteWorkspacePreferences {
-  if (
-    !isDynamicRecord(value) ||
-    value.version !== 1 ||
-    !Array.isArray(value.hidden) ||
-    !value.hidden.every(isString) ||
-    !Array.isArray(value.pinned) ||
-    !value.pinned.every(isString) ||
-    (value.pinnedChannels !== undefined &&
-      (!Array.isArray(value.pinnedChannels) || !value.pinnedChannels.every(isString))) ||
-    (value.hiddenChannels !== undefined &&
-      (!Array.isArray(value.hiddenChannels) || !value.hiddenChannels.every(isString)))
-  ) {
-    throw new Error(sourceText("error.remote.preferencesUnreadable"));
-  }
-  return {
-    hidden: value.hidden,
-    pinned: value.pinned,
-    ...(value.pinnedChannels ? { pinnedChannels: value.pinnedChannels } : {}),
-    ...(value.hiddenChannels ? { hiddenChannels: value.hiddenChannels } : {}),
-  };
+function preferencesCall<A>(operation: () => A): Effect.Effect<A, WorkspacePreferencesError> {
+  return Effect.try({
+    try: operation,
+    catch: (error) =>
+      new WorkspacePreferencesError({ message: error instanceof Error ? error.message : String(error) }),
+  });
+}
+
+function runPreferences<A>(operation: Effect.Effect<A, WorkspacePreferencesError>): A {
+  const result = Effect.runSync(Effect.result(operation));
+  if (Result.isFailure(result)) throw result.failure;
+  return result.success;
 }

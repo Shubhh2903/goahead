@@ -11,7 +11,7 @@ export const messages = {
   "computerUse.error.check": "O GoAhead não conseguiu verificar o Uso do computador.",
   "computerUse.error.openSettings": "O GoAhead não conseguiu abrir os Ajustes do Sistema.",
   "computerUse.error.startDriver": "O GoAhead não conseguiu iniciar o driver de Uso do computador.",
-  "computerUse.checkAgain": "Verificar novamente",
+  "computerUse.checkAgain": "Verificar de novo",
   "computerUse.checking": "Verificando o Uso do computador",
   "computerUse.unavailable.title": "O Uso do computador ainda não está disponível",
   "computerUse.permissions.title": "Permissões do sistema",
@@ -19,7 +19,12 @@ export const messages = {
   "computerUse.ready.title": "O Uso do computador está pronto",
   "computerUse.ready.description":
     "O GoAhead pode ver e interagir com aplicativos neste computador. Este sistema não pede nenhuma permissão adicional.",
+  "computerUse.limited.title": "O Uso do computador está limitado nesta área de trabalho",
   "computerUse.openSettingsFailed.title": "Não foi possível abrir os Ajustes do Sistema",
+  "computerUse.restartRequired.title": "Reinicialização necessária",
+  "computerUse.restartRequired.description":
+    "O macOS ainda bloqueia cliques e digitação. Se isso voltar após reiniciar, remova o GoAhead de Acessibilidade e adicione-o de novo.",
+  "computerUse.restartRequired.action": "Reiniciar o GoAhead",
   "computerUse.compact.title": "Ativar Uso do computador",
   "computerUse.compact.description": "Permitir que o GoAhead veja e interaja com aplicativos neste computador.",
   "computerUse.granted": "Concedida",

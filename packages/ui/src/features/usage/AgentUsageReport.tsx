@@ -1,8 +1,15 @@
-import type { AgentModelOption, AnalyticsAgent, AnalyticsTotals, HostAnalytics } from "@openbot/contracts/ipc";
+import {
+  type AnalyticsAgent,
+  type AnalyticsTotals,
+  analyticsTokens,
+  type ClientAgentModelOption,
+  type HostAnalytics,
+} from "@openbot/contracts/ipc";
 import type { AppTextKey } from "@openbot/i18n";
 import { Button, SlidingTabs } from "@openbot/ui";
 import { createMemo, createStore, For, onSettled, Show } from "solid-js";
 import { pickerModels } from "../../components/provider-model-options";
+import { ScrollEdges } from "../../components/ScrollEdges";
 import { useText } from "../../text";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { UsageChart } from "./UsageChart";
@@ -38,7 +45,6 @@ const TOTAL_ROWS = [
   { field: "assistantMessages", label: "usage.totals.assistantMessages" },
 ] as const satisfies ReadonlyArray<{ field: UsageTotalField; label: AppTextKey }>;
 
-// The fields that `Date.prototype.toLocaleString()` shows when it gets no options.
 const UPDATED_AT_FORMAT: Intl.DateTimeFormatOptions = {
   year: "numeric",
   month: "numeric",
@@ -57,10 +63,6 @@ function Amount(props: { value: number | null; cost?: boolean }) {
     </>
   );
 }
-// The model and agent tables carry the same three value columns, so they share them and
-// the metric switch changes the same one column in both by construction. The headers name
-// the measure only: every cost cell carries its currency, and the note under the tables
-// already says a share is of the known amount.
 function BreakdownColumns(props: { label: string }) {
   const { t } = useText();
   return (
@@ -78,9 +80,9 @@ function BreakdownCells(props: { row: AnalyticsTotals; cost: boolean; share: (am
       <td>
         <Amount value={props.row.estimatedCostUsd} cost />
       </td>
-      <td>{props.share(props.cost ? props.row.estimatedCostUsd : props.row.processedTokens)}</td>
+      <td>{props.share(props.cost ? props.row.estimatedCostUsd : analyticsTokens(props.row))}</td>
       <td>
-        <Amount value={props.row.processedTokens} />
+        <Amount value={analyticsTokens(props.row)} />
       </td>
     </>
   );
@@ -116,10 +118,10 @@ function AgentTokensRow(props: {
           </span>
           <span class="agent-row-time">
             <span aria-hidden="true">
-              {t("usage.tokensAmount", { tokens: usageCompact(props.agent.processedTokens, text) })}
+              {t("usage.tokensAmount", { tokens: usageCompact(analyticsTokens(props.agent), text) })}
             </span>
             <span class="sr-only">
-              {t("usage.tokensAmount", { tokens: usageNumber(props.agent.processedTokens, text) })}
+              {t("usage.tokensAmount", { tokens: usageNumber(analyticsTokens(props.agent), text) })}
             </span>
           </span>
         </span>
@@ -139,14 +141,12 @@ export function AgentUsageReport(props: {
   metric: UsageMetric;
   agentLabel: (agentId: string) => UsageAgentLabel;
   /** The models of the host, to name the model ids of an agent row. An unknown id shows as it is. */
-  modelOptions?: AgentModelOption[];
+  modelOptions?: ClientAgentModelOption[];
   onReady: () => void;
 }) {
   const text = useText();
   const { t, format } = text;
   onSettled(() => queueMicrotask(props.onReady));
-  // The host report answers "which teammate spent this" first, so the split by agent is
-  // the tab that opens.
   const [state, setState] = createStore({ breakdown: "agent" });
   const totals = () => props.result.totals;
   const cost = () => props.metric === "cost";
@@ -157,18 +157,18 @@ export function AgentUsageReport(props: {
   );
   const models = createMemo(() =>
     [...props.result.models].sort((a, b) =>
-      cost() ? (b.estimatedCostUsd ?? -1) - (a.estimatedCostUsd ?? -1) : b.processedTokens - a.processedTokens,
+      cost() ? (b.estimatedCostUsd ?? -1) - (a.estimatedCostUsd ?? -1) : analyticsTokens(b) - analyticsTokens(a),
     ),
   );
   const agents = createMemo(() =>
     [...props.result.agents].sort((a, b) =>
-      cost() ? (b.estimatedCostUsd ?? -1) - (a.estimatedCostUsd ?? -1) : b.processedTokens - a.processedTokens,
+      cost() ? (b.estimatedCostUsd ?? -1) - (a.estimatedCostUsd ?? -1) : analyticsTokens(b) - analyticsTokens(a),
     ),
   );
   const tokenAgents = createMemo(() =>
     props.result.agents
-      .filter((agent) => agent.processedTokens > 0)
-      .sort((a, b) => b.processedTokens - a.processedTokens),
+      .filter((agent) => analyticsTokens(agent) > 0)
+      .sort((a, b) => analyticsTokens(b) - analyticsTokens(a)),
   );
   // The same names the model picker shows. A host before the `models` field sends none, and
   // the row then names no model.
@@ -184,7 +184,7 @@ export function AgentUsageReport(props: {
   const partial = () =>
     totals().missingUsageTurns > 0 || totals().unpricedRecords > 0 || totals().incompleteRecords > 0;
   const share = (amount: number | null) => {
-    const total = cost() ? totals().estimatedCostUsd : totals().processedTokens;
+    const total = cost() ? totals().estimatedCostUsd : analyticsTokens(totals());
     return amount === null || total === null
       ? t("usage.unavailable")
       : format.percent(total ? amount / total : 0, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -216,7 +216,7 @@ export function AgentUsageReport(props: {
         <section class="agent-usage-summary" aria-label={t("usage.summary")}>
           <div>
             <p class="agent-usage-hero">
-              <Amount value={cost() ? totals().estimatedCostUsd : totals().processedTokens} cost={cost()} />
+              <Amount value={cost() ? totals().estimatedCostUsd : analyticsTokens(totals())} cost={cost()} />
             </p>
             <p class="agent-usage-secondary">
               {t("usage.sessions", { count: totals().sessions, sessions: usageNumber(totals().sessions, text) })} ·{" "}
@@ -229,9 +229,6 @@ export function AgentUsageReport(props: {
                 <div class="agent-usage-provider">
                   <div class="agent-usage-provider-heading">
                     <span>
-                      {/* The chart needs a legend, and this list already names every
-                          series, so the dot is it - which is why the colour follows the
-                          provider rather than the row's place in a metric-sorted list. */}
                       <span
                         class="agent-usage-series-dot"
                         style={{ background: usageSeriesColor(provider.provider) }}
@@ -245,10 +242,12 @@ export function AgentUsageReport(props: {
                     </strong>
                   </div>
                   <p>
-                    {cost()
-                      ? t("usage.provider.shareOfCost", { share: share(provider.cost) })
-                      : t("usage.provider.shareOfTokens", { share: share(provider.tokens) })}{" "}
-                    ·{" "}
+                    <Show when={!cost() || provider.cost !== null}>
+                      {cost()
+                        ? t("usage.provider.shareOfCost", { share: share(provider.cost) })
+                        : t("usage.provider.shareOfTokens", { share: share(provider.tokens) })}{" "}
+                      ·{" "}
+                    </Show>
                     {cost()
                       ? t("usage.tokensAmount", { tokens: usageCompact(provider.tokens, text) })
                       : usageCost(provider.cost, text)}
@@ -293,6 +292,12 @@ export function AgentUsageReport(props: {
       <section aria-label={t("usage.totals.title")}>
         <h3>{t("usage.totals.title")}</h3>
         <dl class="agent-usage-totals">
+          <div>
+            <dt>{t("usage.totals.tokens")}</dt>
+            <dd>
+              <Amount value={analyticsTokens(totals())} />
+            </dd>
+          </div>
           <For each={TOTAL_ROWS}>
             {(item) => (
               <div>
@@ -319,13 +324,14 @@ export function AgentUsageReport(props: {
             <SlidingTabs.Trigger value="model">{t("usage.breakdown.model")}</SlidingTabs.Trigger>
             <SlidingTabs.Trigger value="agent">{t("usage.breakdown.agent")}</SlidingTabs.Trigger>
             <SlidingTabs.Trigger value="day">{t("usage.breakdown.day")}</SlidingTabs.Trigger>
+            <Show when={props.result.skills}>
+              <SlidingTabs.Trigger value="skill">{t("usage.breakdown.skill")}</SlidingTabs.Trigger>
+            </Show>
           </SlidingTabs.List>
         </div>
-        {/* Every panel is force-mounted, and the grid slot is what makes the hidden ones
-            share one cell instead of each reserving its own height below the visible table. */}
-        <SlidingTabs.ContentSlot>
+        <SlidingTabs.ContentSlot class="agent-usage-breakdown">
           <SlidingTabs.Content value="model">
-            <div class="agent-usage-table">
+            <ScrollEdges axis="x" viewClass="agent-usage-table" label={t("usage.breakdown.byModel")}>
               <table>
                 <caption class="sr-only">{t("usage.breakdown.byModel")}</caption>
                 <thead>
@@ -340,8 +346,6 @@ export function AgentUsageReport(props: {
                             <UsageProviderMark provider={model.provider} />
                             <span>
                               {model.model || t("usage.unknownModel")}
-                              {/* The logo carries the provider for a reader who sees it, and the
-                                  row stays one line high; the name is still spoken. */}
                               <span class="sr-only">{usageProviderName(model.provider)}</span>
                             </span>
                           </span>
@@ -352,10 +356,10 @@ export function AgentUsageReport(props: {
                   </For>
                 </tbody>
               </table>
-            </div>
+            </ScrollEdges>
           </SlidingTabs.Content>
           <SlidingTabs.Content value="agent">
-            <div class="agent-usage-table">
+            <ScrollEdges axis="x" viewClass="agent-usage-table" label={t("usage.breakdown.byAgent")}>
               <table>
                 <caption class="sr-only">{t("usage.breakdown.byAgent")}</caption>
                 <thead>
@@ -377,17 +381,17 @@ export function AgentUsageReport(props: {
                   </For>
                 </tbody>
               </table>
-            </div>
+            </ScrollEdges>
           </SlidingTabs.Content>
           <SlidingTabs.Content value="day">
-            <div class="agent-usage-table">
+            <ScrollEdges axis="x" viewClass="agent-usage-table" label={t("usage.breakdown.byDay")}>
               <table ref={dailyTable} tabindex={-1}>
                 <caption class="sr-only">{t("usage.breakdown.byDay")}</caption>
                 <thead>
                   <tr>
                     <th scope="col">{t("usage.column.date")}</th>
                     <th scope="col">{t("usage.column.costUsd")}</th>
-                    <th scope="col">{t("usage.totals.processedTokens")}</th>
+                    <th scope="col">{t("usage.column.tokens")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -396,14 +400,64 @@ export function AgentUsageReport(props: {
                       <tr>
                         <th scope="row">{day.date}</th>
                         <td>{usageExactCost(day.estimatedCostUsd, text)}</td>
-                        <td>{usageNumber(day.processedTokens, text)}</td>
+                        <td>{usageNumber(analyticsTokens(day), text)}</td>
                       </tr>
                     )}
                   </For>
                 </tbody>
               </table>
-            </div>
+            </ScrollEdges>
           </SlidingTabs.Content>
+          <Show when={props.result.skills}>
+            {(skills) => (
+              <SlidingTabs.Content value="skill">
+                <ScrollEdges axis="x" viewClass="agent-usage-table" label={t("usage.breakdown.bySkill")}>
+                  <table>
+                    <caption class="sr-only">{t("usage.breakdown.bySkill")}</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">{t("usage.breakdown.skill")}</th>
+                        <th scope="col">{t("usage.column.loads")}</th>
+                        <th scope="col">{t("usage.column.cost")}</th>
+                        <th scope="col">{t("usage.column.share")}</th>
+                        <th scope="col">{t("usage.column.tokens")}</th>
+                        <th scope="col">{t("usage.column.agents")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <For
+                        each={skills()}
+                        fallback={
+                          <tr>
+                            <td colspan={6} class="agent-usage-table-empty">
+                              {t("usage.breakdown.skillEmpty")}
+                            </td>
+                          </tr>
+                        }
+                      >
+                        {(skill) => (
+                          <tr>
+                            <th scope="row">{skill.skill}</th>
+                            <td>{format.number(skill.loads)}</td>
+                            <td>
+                              <Amount value={skill.estimatedCostUsd} cost />
+                            </td>
+                            <td>
+                              {format.percent(skill.share, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                            </td>
+                            <td>
+                              <Amount value={skill.tokens} />
+                            </td>
+                            <td>{format.number(skill.agents)}</td>
+                          </tr>
+                        )}
+                      </For>
+                    </tbody>
+                  </table>
+                </ScrollEdges>
+              </SlidingTabs.Content>
+            )}
+          </Show>
         </SlidingTabs.ContentSlot>
       </SlidingTabs.Root>
       <footer class="agent-usage-footer">
@@ -418,6 +472,7 @@ export function AgentUsageReport(props: {
         <details>
           <summary>{t("usage.about.title")}</summary>
           <p>{t("usage.about.body")}</p>
+          <p>{t("usage.about.tokens")}</p>
         </details>
       </footer>
     </>

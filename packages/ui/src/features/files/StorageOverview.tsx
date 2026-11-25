@@ -1,3 +1,4 @@
+import { agentProviderDescriptor, type ManagedProviderId } from "@openbot/contracts/agent-providers";
 import { CLEARABLE_STORAGE_CATEGORIES, type ClearableStorageCategory } from "@openbot/contracts/ipc";
 import { isOneOf } from "@openbot/contracts/runtime-values";
 import type { AppFormat, AppTextKey, AppTranslate } from "@openbot/i18n";
@@ -14,6 +15,7 @@ import {
 import { SettingsBackIcon } from "@openbot/ui/components/SettingsPanel";
 import type { AgentProfile } from "@openbot/ui/data";
 import { useText } from "@openbot/ui/text";
+import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, createUniqueId, For, Show } from "solid-js";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { FileList } from "./FileList";
@@ -36,17 +38,14 @@ import { StorageUsageBar } from "./StorageUsageBar";
 export type StorageScanState = "scanning" | "ready" | "error";
 
 export interface StorageOverviewProps {
-  /** The computer the numbers belong to, such as "This Mac" or a server name. */
   hostName: string;
   state: StorageScanState;
-  /** 0–100 while `state` is "scanning". Leave it out when the scan cannot tell. */
   scanProgress?: number;
   error?: string | null;
-  /** ISO time of the last completed scan. */
   scannedAt?: string | null;
   breakdown: readonly StorageBreakdown[];
-  /** Free space on the disk that holds the OpenBot folder. */
   freeBytes?: number | null;
+  hostedPlan?: boolean;
   agents: readonly AgentProfile[];
   agentUsage: readonly AgentStorageRow[];
   conversations: readonly ConversationStorageRow[];
@@ -55,33 +54,34 @@ export interface StorageOverviewProps {
   onRescan: () => void;
   onOpenAgent: (agentId: string) => void;
   onOpenConversation: (conversationId: string) => void;
-  /** The viewer can clear caches and delete files. Off for a member of a remote server. */
   canManage?: boolean;
   onClear: (category: ClearableStorageCategory) => void | Promise<void>;
+  runtimeBytes?: number;
+  runtimeProviders?: readonly ManagedProviderId[];
+  onRemoveRuntimes?: () => void | Promise<void>;
   onPreviewFile: (file: StoredFileRow) => void;
   onFileAction: (file: StoredFileRow, action: StoredFileAction) => void | Promise<void>;
+  machine?: JSX.Element;
 }
 
 const LARGEST_CHATS = 5;
 
-/**
- * The Storage page: how much space OpenBot takes on one computer, which agents and chats take it,
- * every file in one list, and what can go without losing work. Chats and workspaces are never
- * cleared from here; the user deletes them where they live.
- */
 export function StorageOverview(props: StorageOverviewProps) {
   const { t, format } = useText();
   const headingId = `storage-${createUniqueId()}`;
   const [showFiles, setShowFiles] = createSignal(false);
   const total = createMemo(() => storageTotal(props.breakdown));
   const groups = createMemo(() => storageGroupTotals(props.breakdown, t));
-  const removable = createMemo(() =>
-    props.breakdown.flatMap((entry) =>
+  const removable = createMemo((): CleanupEntry[] => [
+    ...props.breakdown.flatMap((entry) =>
       entry.removable && entry.bytes > 0 && isOneOf(CLEARABLE_STORAGE_CATEGORIES, entry.category)
         ? [{ category: entry.category, bytes: entry.bytes }]
         : [],
     ),
-  );
+    ...(props.onRemoveRuntimes && props.runtimeBytes
+      ? [{ category: "runtimes" as const, bytes: props.runtimeBytes, providers: props.runtimeProviders ?? [] }]
+      : []),
+  ]);
   const removableBytes = () => removable().reduce((sum, entry) => sum + entry.bytes, 0);
   const agentRows = createMemo(() =>
     [...props.agentUsage]
@@ -130,6 +130,7 @@ export function StorageOverview(props: StorageOverviewProps) {
       }
     >
       <div class="storage-overview" aria-busy={props.state === "scanning" ? "true" : undefined}>
+        {props.machine}
         <section class="storage-summary" aria-labelledby={`${headingId}-summary`}>
           <div class="storage-summary-heading">
             <div>
@@ -149,6 +150,7 @@ export function StorageOverview(props: StorageOverviewProps) {
                   state={props.state}
                   scannedAt={props.scannedAt}
                   freeBytes={props.freeBytes}
+                  hostedPlan={props.hostedPlan}
                   now={props.now}
                 />
               </p>
@@ -320,7 +322,7 @@ export function StorageOverview(props: StorageOverviewProps) {
             entries={removable()}
             totalBytes={removableBytes()}
             disabled={props.state === "scanning"}
-            onClear={props.onClear}
+            onClear={(category) => (category === "runtimes" ? props.onRemoveRuntimes?.() : props.onClear(category))}
           />
         </Show>
       </div>
@@ -330,9 +332,10 @@ export function StorageOverview(props: StorageOverviewProps) {
 
 function StorageCaption(props: {
   state: StorageScanState;
-  scannedAt?: string | null;
-  freeBytes?: number | null;
-  now?: Date;
+  scannedAt?: string | null | undefined;
+  freeBytes?: number | null | undefined;
+  hostedPlan?: boolean | undefined;
+  now?: Date | undefined;
 }) {
   const { t, format } = useText();
   const parts = () => {
@@ -342,7 +345,10 @@ function StorageCaption(props: {
       result.push(
         t("files.storage.measured", { time: relativeTime(props.scannedAt, props.now ?? new Date(), t, format) }),
       );
-    if (props.freeBytes != null) result.push(t("files.storage.free", { size: format.fileSize(props.freeBytes) }));
+    if (props.freeBytes != null) {
+      const size = props.hostedPlan ? format.fileSize(props.freeBytes) : format.diskSize(props.freeBytes);
+      result.push(t("files.storage.free", { size }));
+    }
     return result.join(" · ");
   };
   return <>{parts()}</>;
@@ -357,31 +363,57 @@ function relativeTime(iso: string, now: Date, t: AppTranslate, format: AppFormat
   return format.date(new Date(iso), { month: "short", day: "numeric" });
 }
 
+type CleanupCategory = ClearableStorageCategory | "runtimes";
+
 interface CleanupEntry {
-  category: ClearableStorageCategory;
+  category: CleanupCategory;
   bytes: number;
+  providers?: readonly ManagedProviderId[];
 }
 
 const CLEANUP_DESCRIPTIONS = {
   caches: "files.cleanup.description.caches",
   logs: "files.cleanup.description.logs",
-} as const satisfies Record<ClearableStorageCategory, AppTextKey>;
+  runtimes: "files.cleanup.description.runtimes",
+} as const satisfies Record<CleanupCategory, AppTextKey>;
 
 const CLEANUP_CONFIRM_TITLES = {
   caches: "files.cleanup.confirm.caches",
   logs: "files.cleanup.confirm.logs",
-} as const satisfies Record<ClearableStorageCategory, AppTextKey>;
+  runtimes: "files.cleanup.confirm.runtimes",
+} as const satisfies Record<CleanupCategory, AppTextKey>;
+
+function cleanupDescription(entry: CleanupEntry, t: AppTranslate, format: AppFormat): string {
+  const providers = entry.providers ?? [];
+  if (providers.length === 0) return t(CLEANUP_DESCRIPTIONS[entry.category]);
+  return t("files.cleanup.description.runtimeDownloads", {
+    providers: format.list(providers.map((provider) => agentProviderDescriptor(provider).displayName)),
+  });
+}
+
+function cleanupConfirmTitle(entry: CleanupEntry, t: AppTranslate): string {
+  return (entry.providers ?? []).length > 0
+    ? t("files.cleanup.confirm.runtimeDownloads")
+    : t(CLEANUP_CONFIRM_TITLES[entry.category]);
+}
 
 function StorageCleanup(props: {
   entries: readonly CleanupEntry[];
   totalBytes: number;
   disabled: boolean;
-  onClear: (category: ClearableStorageCategory) => void | Promise<void>;
+  onClear: (category: CleanupCategory) => void | Promise<void>;
 }) {
   const { t, format, errorMessage } = useText();
   const headingId = `storage-cleanup-${createUniqueId()}`;
   const [pending, setPending] = createSignal<CleanupEntry | null>(null);
   const [error, setError] = createSignal<string | null>(null);
+  const pendingEntry = (): CleanupEntry => pending() ?? { category: "caches", bytes: 0 };
+  const pendingTitle = () => cleanupConfirmTitle(pendingEntry(), t);
+  const pendingDescription = () =>
+    t("files.cleanup.confirmDescription", {
+      size: format.fileSize(pendingEntry().bytes),
+      description: cleanupDescription(pendingEntry(), t, format),
+    });
 
   async function confirm(): Promise<void> {
     const entry = pending();
@@ -411,7 +443,7 @@ function StorageCleanup(props: {
             <li class="storage-cleanup-row">
               <span class="storage-row-copy">
                 <span class="storage-row-title">{t(STORAGE_CATEGORY_LABELS[entry.category])}</span>
-                <span class="storage-row-meta">{t(CLEANUP_DESCRIPTIONS[entry.category])}</span>
+                <span class="storage-row-meta">{cleanupDescription(entry, t, format)}</span>
               </span>
               <span class="storage-row-size">{format.fileSize(entry.bytes)}</span>
               <Button
@@ -435,11 +467,8 @@ function StorageCleanup(props: {
         open={pending() !== null}
         onCancel={() => setPending(null)}
         onConfirm={confirm}
-        title={t(CLEANUP_CONFIRM_TITLES[pending()?.category ?? "caches"])}
-        description={t("files.cleanup.confirmDescription", {
-          size: format.fileSize(pending()?.bytes ?? 0),
-          description: t(CLEANUP_DESCRIPTIONS[pending()?.category ?? "caches"]),
-        })}
+        title={pendingTitle()}
+        description={pendingDescription()}
         confirmLabel={t("files.cleanup.clear")}
         pendingLabel={t("files.cleanup.clearing")}
         error={error() ?? undefined}

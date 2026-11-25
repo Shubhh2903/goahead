@@ -1,12 +1,16 @@
-// The desktop notification switch and the event main sends when the user clicks a notification.
-
 export interface NotificationPreference {
   desktopNotifications: boolean;
+  messagePreview: boolean;
 }
 
-// The conversation a clicked notification was about. The renderer opens it.
 export interface NotificationOpenedEvent {
   serverId: string;
   agentId: string;
   threadId: string | null;
+  channelId?: string;
+}
+
+export interface WorkflowNotificationOpenedEvent {
+  serverId: string;
+  workflowId: string;
 }

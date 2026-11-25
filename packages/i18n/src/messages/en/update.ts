@@ -1,7 +1,6 @@
 import { defineMessages } from "../../message";
 
 export const messages = defineMessages("update", {
-  // The app update button in Settings, one label for each updater phase.
   "update.action.check": "Check for updates",
   "update.action.checking": "Checking for updates…",
   "update.action.download": "Download update",
@@ -12,15 +11,19 @@ export const messages = defineMessages("update", {
   "update.managedByHost": "Managed by host",
   "update.upToDate": "Up to date",
 
-  // The provider CLI update notification.
   "update.provider.update": "Update",
   "update.provider.upToDate": "{name} is up to date",
   "update.provider.checking": "Checking for {name} updates",
   "update.provider.available": "{name} update available",
   "update.provider.updating": "Updating {name}",
+  "update.provider.downloading": "Downloading {name}",
+  "update.provider.downloaded": "{name} is downloaded",
+  "update.provider.downloadFailed": "{name} download failed",
+  "update.provider.downloadFailedRetry": "The download failed. Try again.",
+  "update.provider.waiting": "Waiting to update {name}",
   "update.provider.failed": "{name} update failed",
   "update.provider.settingUp": "Setting up",
-  "update.provider.interrupted": "The update was interrupted. Try again.",
+  "update.provider.failedRetry": "The update failed. Try again.",
   "update.provider.unknownVersion": "unknown version",
   "update.provider.remoteHost": "Provider CLI updates run on the computer that hosts them.",
   "update.provider.unavailable": "Provider updates are unavailable.",
@@ -29,30 +32,29 @@ export const messages = defineMessages("update", {
   "update.provider.showDetails": "Show details",
   "update.provider.hideDetails": "Hide details",
 
-  // The update notification of the app itself. {name} is the product name.
   "update.app.ready": "{name} update ready",
   "update.app.restart": "Restart",
 
-  // An update that an admin of this server asked for. {name} is the admin.
   "update.scheduled.title": "{name} scheduled a GoAhead update",
-  // The same notice when "Install updates automatically" scheduled the restart.
   "update.scheduled.automaticTitle": "GoAhead installs an update",
   "update.scheduled.whenIdle": "GoAhead restarts when the agents are idle.",
   "update.scheduled.now": "GoAhead restarts when the update is downloaded.",
   "update.scheduled.cancel": "Cancel update",
   "update.scheduled.cancelFailed": "The update could not be cancelled.",
 
-  // A restart that the user of this computer asked for. It waits until no work runs.
   "update.idleRestart.relaunchTitle": "GoAhead restarts when the agents are idle",
   "update.idleRestart.updateTitle": "GoAhead installs the update when the agents are idle",
   "update.idleRestart.description": "New routine runs wait until the restart.",
   "update.idleRestart.waitingFor": "Waiting for {reasons}.",
   "update.idleRestart.cancel": "Cancel restart",
+  "update.idleRestart.restartNow": "Restart now",
+  "update.idleRestart.restartNowTitle": "Restart GoAhead now?",
+  "update.idleRestart.restartNowDescription": "Agent turns and routine runs that did not finish stop now.",
+  "update.idleRestart.keepWaiting": "Keep waiting",
   "update.idleRestart.cancelFailed": "The restart could not be cancelled.",
   "update.idleRestart.requestFailed": "The restart could not be scheduled.",
   "update.idleRestart.failedTitle": "GoAhead did not restart",
 
-  // The "What's new" dialog after an app update.
   "update.whatsNew.title": "What’s new in GoAhead",
   "update.whatsNew.description": "The new features and changes in this version of GoAhead.",
   "update.whatsNew.version": "Version {version}",
@@ -70,5 +72,12 @@ export const messages = defineMessages("update", {
   "update.whatsNew.empty.title": "No new features in this version",
   "update.whatsNew.empty.body": "This version has no notes to show here. The full changelog shows all changes.",
   "update.whatsNew.changelog": "Full changelog",
+  "update.whatsNew.changelogFailed": "GoAhead could not open the changelog.",
   "update.whatsNew.done": "Got it",
+
+  "update.required.title": "Update required",
+  "update.required.description": "GoAhead {version} is no longer supported. Update to {minimum} or newer to continue.",
+  "update.required.download": "Download GoAhead",
+  "update.required.continue": "Continue without updating",
+  "update.required.failed": "The update did not finish.",
 });

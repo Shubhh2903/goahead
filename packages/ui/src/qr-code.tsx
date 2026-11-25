@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import QRCode from "qrcode";
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { children, createEffect, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { Spinner } from "./surface";
 import { useText } from "./text";
 import { cx } from "./utils";
@@ -10,6 +10,39 @@ export interface QrCodeProps {
   label?: string;
   size?: number;
   class?: string;
+  children?: JSX.Element;
+}
+
+const QR_MARGIN = 2;
+
+interface MarkBox {
+  width: number;
+  height: number;
+}
+
+function holeModules(pixels: number, modulePixels: number): number {
+  const modules = Math.ceil(pixels / modulePixels) + 2;
+  return modules % 2 === 1 ? modules : modules + 1;
+}
+
+function qrSvg(value: string, size: number, mark: MarkBox | null): string {
+  const code = QRCode.create(value, { errorCorrectionLevel: mark ? "H" : "M" });
+  const count = code.modules.size;
+  const total = count + QR_MARGIN * 2;
+  const modulePixels = size / total;
+  const holeWidth = mark && mark.width > 0 ? Math.min(holeModules(mark.width, modulePixels), count) : 0;
+  const holeHeight = mark && mark.height > 0 ? Math.min(holeModules(mark.height, modulePixels), count) : 0;
+  const holeLeft = (count - holeWidth) / 2;
+  const holeTop = (count - holeHeight) / 2;
+  let path = "";
+  for (let row = 0; row < count; row += 1) {
+    const inHoleRow = row >= holeTop && row < holeTop + holeHeight;
+    for (let column = 0; column < count; column += 1) {
+      if (inHoleRow && column >= holeLeft && column < holeLeft + holeWidth) continue;
+      if (code.modules.get(row, column)) path += `M${column + QR_MARGIN} ${row + QR_MARGIN}h1v1h-1z`;
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${total}" width="${size}" height="${size}" shape-rendering="crispEdges"><rect width="${total}" height="${total}" fill="#ffffff"/><path d="${path}" fill="#000000"/></svg>`;
 }
 
 export function QrCode(props: QrCodeProps): JSX.Element {
@@ -17,33 +50,42 @@ export function QrCode(props: QrCodeProps): JSX.Element {
   const size = () => props.size ?? 196;
   const [source, setSource] = createSignal<string | null>(null);
   const [error, setError] = createSignal(false);
-  let revision = 0;
+  const [markBox, setMarkBox] = createSignal<MarkBox | null>(null);
+  const mark = children(() => props.children);
+  const hasMark = () => mark.toArray().length > 0;
+  let markElement: HTMLSpanElement | undefined;
+  let disposed = false;
+
+  onSettled(() => {
+    const element = markElement;
+    if (!element) return;
+    const observer = new ResizeObserver(() => {
+      const width = element.offsetWidth;
+      const height = element.offsetHeight;
+      if (width === 0 || height === 0) return;
+      const current = markBox();
+      if (current?.width !== width || current.height !== height) setMarkBox({ width, height });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  });
 
   createEffect(
-    () => ({ value: props.value, size: size() }),
-    ({ value, size: requestedSize }) => {
-      const requestedRevision = ++revision;
-      setSource(null);
-      setError(false);
-      void QRCode.toString(value, {
-        type: "svg",
-        width: requestedSize,
-        margin: 2,
-        errorCorrectionLevel: "M",
-        color: { dark: "#000000", light: "#ffffff" },
-      })
-        .then((svg) => {
-          if (revision !== requestedRevision) return;
-          setSource(`data:image/svg+xml,${encodeURIComponent(svg)}`);
-        })
-        .catch(() => {
-          if (revision === requestedRevision) setError(true);
-        });
+    () => ({ value: props.value, size: size(), marked: hasMark(), box: markBox() }),
+    ({ value, size: requestedSize, marked, box }) => {
+      if (disposed || (marked && !box)) return;
+      try {
+        setSource(`data:image/svg+xml,${encodeURIComponent(qrSvg(value, requestedSize, marked ? box : null))}`);
+        setError(false);
+      } catch {
+        setSource(null);
+        setError(true);
+      }
     },
   );
 
   onCleanup(() => {
-    revision += 1;
+    disposed = true;
   });
 
   return (
@@ -63,6 +105,11 @@ export function QrCode(props: QrCodeProps): JSX.Element {
         }
       >
         {(url) => <img src={url()} alt="" width={size()} height={size()} />}
+      </Show>
+      <Show when={hasMark()}>
+        <span ref={markElement} class="ui-qr-code-mark" data-ready={source() ? "" : undefined} aria-hidden="true">
+          {mark()}
+        </span>
       </Show>
     </div>
   );

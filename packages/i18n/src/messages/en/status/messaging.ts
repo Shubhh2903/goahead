@@ -1,10 +1,8 @@
 import { defineMessages } from "../../../message";
 
 export const messages = defineMessages("status.messaging", {
-  // Text that OpenBot posts in a Slack conversation. Slack users read it. It names no agent: in
-  // Slack, every answer comes from OpenBot.
   "status.messaging.working": "Working on it…",
-  "status.messaging.queued": "Waiting: GoAhead is working on another request. The answer comes here.",
+  "status.messaging.queued": "Waiting for an earlier request to finish. The answer comes here.",
   "status.messaging.busy": "Too many requests are waiting. Try again later.",
   "status.messaging.failed": "GoAhead could not finish this request. The GoAhead host has the details.",
   "status.messaging.noAnswer": "GoAhead finished without a written answer.",
@@ -13,6 +11,7 @@ export const messages = defineMessages("status.messaging", {
   "status.messaging.stopped": "Stopped.",
   "status.messaging.stop": "Stop",
   "status.messaging.approvalTitle": "GoAhead asks for approval to continue.",
+  "status.messaging.approvalTitleTeammate": "Teammate {agent} asks for approval to continue.",
   "status.messaging.approvalCommand": "Run a command",
   "status.messaging.approvalFileChange": "Change files",
   "status.messaging.approvalPermissions": "Get more permissions",
@@ -25,21 +24,15 @@ export const messages = defineMessages("status.messaging", {
   "status.messaging.onlyRequester": "Only {user} can do this. The GoAhead host can also answer.",
   "status.messaging.hostOnly": "Only the GoAhead host can answer this request.",
   "status.messaging.filesSkipped": "Some files were not sent: {names}.",
-  // A message an agent drafted for a person or channel. {to} and {user} are Slack mentions.
   "status.messaging.sendDraftTitle": "GoAhead asks for approval to send a message.",
   "status.messaging.sendDraftTo": "To: {to}",
   "status.messaging.sendAsUser": "As: {user}",
   "status.messaging.sendAsBot": "Sent by the GoAhead app, not as you.",
-  // The first line of a message that the GoAhead app sends for someone other than the GoAhead user.
   "status.messaging.sentFor": "{name} asked me to send this:",
   "status.messaging.sent": "Sent. Approved by {user}.",
   "status.messaging.sendFailed": "Not sent: {reason}",
-  // A card in the Slack Orchestrator's chat in GoAhead, which starts no turn. {conversation} is a person or channel name.
   "status.messaging.autoReplyLoopPaused":
     "Auto-reply paused in {conversation}: it looks like a reply loop. Check it, then tell me to continue.",
-  // One status message in a Slack thread while a teammate works on a request from it. Each hand-off
-  // has two lines: who asked whom to do what, and how far the teammate is. {from} and {agent} are
-  // agent names; {name} is a program, a file name or a tool, never its arguments.
   "status.messaging.handoffTask": "{from} → {agent}: {task}",
   "status.messaging.handoffQueued": "{agent}: waiting to start",
   "status.messaging.handoffThinking": "{agent}: thinking…",
@@ -49,25 +42,22 @@ export const messages = defineMessages("status.messaging", {
   "status.messaging.handoffUsing": "{agent}: using {name}…",
   "status.messaging.handoffDone": "{agent}: done",
   "status.messaging.handoffFailed": "{agent}: stopped before it finished",
-  // The name and title of the agent that OpenBot adds to answer in Slack. The user can rename it.
   "status.messaging.orchestratorName": "Slack Orchestrator",
   "status.messaging.orchestratorTitle": "Answers in Slack and asks the team",
-  // The sidebar section that OpenBot puts the Slack Orchestrator in. The user can rename it.
+  "status.messaging.discordNoAgent": "No agent can answer here yet. Add the Discord Orchestrator in GoAhead.",
+  "status.messaging.discordOrchestratorName": "Discord Orchestrator",
+  "status.messaging.discordOrchestratorTitle": "Answers in Discord and asks the team",
   "status.messaging.integrationsSection": "Integrations",
-  // The page a development Slack install ends on.
   "status.messaging.signInReceived": "GoAhead received the Slack install. You can close this tab.",
   "status.messaging.signInUnknown": "GoAhead did not start this Slack install. Start it again in GoAhead.",
-  // A note from GoAhead in the chat of the agent that handles mail. It starts no turn.
   "status.messaging.googleImportantMail": "Important mail from {from}: {subject}",
   "status.messaging.googleMeetingRequest": "Meeting request from {from}: {subject}",
-  // The approval card of a Google action. The person approves the real draft or event.
   "status.messaging.googleSendDetail":
     "To: {to}\nCc: {cc}\nBcc: {bcc}\nAttachments: {attachments}\nSubject: {subject}\n\n{body}",
   "status.messaging.googleDraftUnreadable": "GoAhead could not read the draft text. It is in Gmail Drafts.",
   "status.messaging.googleMeetingDetail": "{title}\n{start} to {end} ({timeZone})\nGuests: {guests}\n\n{description}",
   "status.messaging.googleNone": "none",
   "status.messaging.googleUnknown": "unknown",
-  // A note from GoAhead in the chat after an approval. It starts no turn.
   "status.messaging.googleSent": 'Gmail sent the mail "{subject}".',
   "status.messaging.googleSendDeclined": 'You declined to send the mail "{subject}". The draft stays in Gmail Drafts.',
   "status.messaging.googleSendError":
@@ -87,4 +77,29 @@ export const messages = defineMessages("status.messaging", {
     'Google Calendar did not create the meeting "{title}": {detail}. Nothing was created.',
   "status.messaging.googleBookError":
     'Google Calendar did not create the meeting "{title}": {detail}. Nothing was created. To try again, approve the new card.',
+  "status.messaging.telegramNoAgent":
+    "No agent can answer here yet. In GoAhead, open Marketplace > Apps > Telegram and click Add agent.",
+  "status.messaging.telegramLinked":
+    "GoAhead is connected to this chat. Mention {bot} or reply to a message of GoAhead to ask the agents.",
+  "status.messaging.telegramNotLinked":
+    "GoAhead is not connected to this chat. To connect it, open the GoAhead app, go to Marketplace → Apps → Telegram, and select Add to a group or Open a direct chat.",
+  "status.messaging.telegramOrchestratorName": "Telegram Orchestrator",
+  "status.messaging.telegramOrchestratorTitle": "Answers in Telegram and asks the team",
+  "status.messaging.whatsappNoAgent": "No agent can answer here yet. Add the WhatsApp Orchestrator in GoAhead.",
+  "status.messaging.whatsappApprovalMenu": "Reply 1 to approve or 2 to deny.",
+  "status.messaging.whatsappStopMenu": "Reply stop to stop.",
+  "status.messaging.whatsappPairingCode":
+    "This number answers only people that its owner allowed. Give the owner this code: {code}",
+  "status.messaging.whatsappPairingApproved": "You can now send requests to this number.",
+  "status.messaging.whatsappOwnChat": "Message yourself",
+  "status.messaging.whatsappWelcomeOwn":
+    "👋 *GoAhead is connected*\n\nWrite here to ask your agents. The WhatsApp Orchestrator answers, or gives the work to the right agent.\n\nSend *stop* to stop a request.",
+  "status.messaging.whatsappWelcomeDedicated":
+    "👋 *GoAhead is connected*\n\nThe people you allow in GoAhead can now write to this number. A new person gets a code: approve it in GoAhead under Requests.\n\nSend *stop* to stop a request.",
+  "status.messaging.whatsappOtherOpenBot":
+    "Another GoAhead is linked to this WhatsApp number, so you can get two answers. To fix this, open Linked devices in WhatsApp on your phone and log out the GoAhead that you do not use.",
+  "status.messaging.whatsappPaused":
+    "GoAhead stopped answering here for 10 minutes: too many messages came in a short time. If another GoAhead is linked to this number, open Linked devices in WhatsApp on your phone and log out the GoAhead that you do not use.",
+  "status.messaging.whatsappOrchestratorName": "WhatsApp Orchestrator",
+  "status.messaging.whatsappOrchestratorTitle": "Answers in WhatsApp and asks the team",
 });

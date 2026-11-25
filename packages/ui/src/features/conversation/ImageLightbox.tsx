@@ -1,9 +1,19 @@
 import type { AttachmentSummary } from "@openbot/contracts/ipc";
-import { Button, ChevronLeft, ChevronRight, Dialog, X } from "@openbot/ui";
+import { Button, ChevronLeft, ChevronRight, Dialog, Spinner, toast, X } from "@openbot/ui";
 import { prefersReducedMotion } from "@openbot/ui/utils";
-import { createMemo, createSignal, createStore, For, onCleanup, onSettled, Show, untrack } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  createStore,
+  For,
+  onCleanup,
+  onSettled,
+  Show,
+  untrack,
+} from "solid-js";
 import { useText } from "../../text";
-import { CloseIcon, DownloadIcon } from "./ConversationIcons";
+import { CheckIcon, CloseIcon, CopyIcon, DownloadIcon } from "./ConversationIcons";
 import { justifiedGalleryLayout } from "./image-gallery-layout";
 import {
   BACKDROP_IN,
@@ -18,8 +28,10 @@ import {
   ZOOM_OUT,
   ZOOM_OUT_DURATION,
 } from "./lightbox-motion";
+import { rememberedMediaSize, rememberMediaSize } from "./media-size-memory";
+import { createSteadyImageUrl } from "./steady-image-url";
+import { type Camera, DOUBLE_CLICK_ZOOM, MAX_SCALE, WHEEL_ZOOM_RATE, ZOOM_STEP, ZoomControls } from "./ZoomControls";
 
-/** The images that the viewer steps through, the one it opens on, and the thumbnail it grows from. */
 export interface ImageLightboxOpening {
   images: AttachmentSummary[];
   index: number;
@@ -33,26 +45,41 @@ export function isLightboxImage(attachment: AttachmentSummary): boolean {
 const GALLERY_ROW_HEIGHT = 160;
 const GALLERY_MAX_ROW_HEIGHT = 240;
 const GALLERY_GAP = 6;
-/* A panorama or a tall screenshot would otherwise take a whole row or a sliver of one. */
 const GALLERY_MIN_RATIO = 0.5;
 const GALLERY_MAX_RATIO = 3;
 const SWIPE_DISTANCE = 48;
+const DRAG_DISTANCE = 4;
+const COPIED_DURATION = 1500;
 
-/** Several images of one message, laid out in justified rows. */
+const FIT: Camera = { x: 0, y: 0, scale: 1 };
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+function galleryRatio(width: number, height: number): number {
+  return Math.min(GALLERY_MAX_RATIO, Math.max(GALLERY_MIN_RATIO, width / height));
+}
+
+function rememberedGalleryRatio(attachmentId: string): number {
+  const size = rememberedMediaSize(attachmentId);
+  return size ? galleryRatio(size.width, size.height) : 1;
+}
+
 export function ImageGallery(props: {
   images: AttachmentSummary[];
   onOpen: (attachment: AttachmentSummary, origin: HTMLElement) => void;
-  /** A tile whose preview fails downloads the file, so the file stays reachable. */
   onDownload?: ((attachment: AttachmentSummary) => void) | undefined;
 }) {
   const { t } = useText();
-  const [ratios, setRatios] = createStore<Record<string, number>>({});
+  const [ratios, setRatios] = createStore<Record<number, number>>({});
   const [missing, setMissing] = createStore<Record<string, boolean>>({});
   const [width, setWidth] = createSignal(0);
   let gallery: HTMLUListElement | undefined;
   const layout = createMemo(() =>
     justifiedGalleryLayout(
-      props.images.map((image) => ratios[image.id] ?? 1),
+      props.images.map((image, index) => ratios[index] ?? rememberedGalleryRatio(image.id)),
       {
         width: width(),
         rowHeight: GALLERY_ROW_HEIGHT,
@@ -80,11 +107,26 @@ export function ImageGallery(props: {
       aria-label={t("chat.image.gallery", { count: props.images.length })}
       style={{ height: `${layout().height}px` }}
     >
-      <For each={props.images}>
+      <For each={props.images} keyed={false}>
         {(image, index) => {
-          const box = () => layout().boxes[index()];
-          // Keyed by URL: a new URL for the same attachment gets a new try.
-          const isMissing = () => missing[image.previewUrl ?? image.id] === true;
+          const box = () => layout().boxes[index];
+          const [loaded, setLoaded] = createSignal(false);
+          const url = createSteadyImageUrl(() => image().previewUrl);
+          const key = () => url() ?? image().id;
+          const isMissing = () => missing[key()] === true;
+          let element: HTMLImageElement | undefined;
+          const measure = ({ naturalHeight, naturalWidth }: HTMLImageElement) => {
+            setLoaded(true);
+            if (naturalWidth <= 0 || naturalHeight <= 0) return;
+            rememberMediaSize(image().id, { width: naturalWidth, height: naturalHeight });
+            const ratio = galleryRatio(naturalWidth, naturalHeight);
+            setRatios((state) => {
+              state[index] = ratio;
+            });
+          };
+          createEffect(url, () => {
+            if (element?.complete && element.naturalWidth > 0) measure(element);
+          });
           return (
             <li
               class="image-gallery-item"
@@ -99,41 +141,39 @@ export function ImageGallery(props: {
                 variant="ghost"
                 type="button"
                 class={["image-gallery-tile", { "image-gallery-tile-missing": isMissing() }]}
-                data-attachment-id={image.id}
+                data-attachment-id={image().id}
                 disabled={isMissing() && !props.onDownload}
                 data-cuelume-tap={isMissing() ? undefined : "open"}
                 aria-label={
                   !isMissing()
-                    ? t("chat.image.preview", { name: image.name })
+                    ? t("chat.image.preview", { name: image().name })
                     : props.onDownload
-                      ? t("chat.image.download", { name: image.name })
+                      ? t("chat.image.download", { name: image().name })
                       : t("chat.image.unavailable")
                 }
                 onClick={(event) => {
-                  if (!isMissing()) props.onOpen(image, event.currentTarget);
-                  else props.onDownload?.(image);
+                  if (!isMissing()) props.onOpen(image(), event.currentTarget);
+                  else props.onDownload?.(image());
                 }}
               >
                 <Show when={!isMissing()} fallback={props.onDownload ? <DownloadIcon /> : <X aria-hidden="true" />}>
+                  <Show when={!loaded()}>
+                    <span class="image-gallery-tile-loading">
+                      <Spinner />
+                    </span>
+                  </Show>
                   <img
-                    src={image.previewUrl ?? ""}
+                    src={url() ?? ""}
                     alt=""
                     decoding="async"
                     draggable={false}
-                    onLoad={(event) => {
-                      const { naturalHeight, naturalWidth } = event.currentTarget;
-                      if (naturalWidth <= 0 || naturalHeight <= 0) return;
-                      const ratio = Math.min(
-                        GALLERY_MAX_RATIO,
-                        Math.max(GALLERY_MIN_RATIO, naturalWidth / naturalHeight),
-                      );
-                      setRatios((state) => {
-                        state[image.id] = ratio;
-                      });
+                    ref={(node) => {
+                      element = node;
                     }}
+                    onLoad={(event) => measure(event.currentTarget)}
                     onError={() =>
                       setMissing((state) => {
-                        state[image.previewUrl ?? image.id] = true;
+                        state[key()] = true;
                       })
                     }
                   />
@@ -147,7 +187,6 @@ export function ImageGallery(props: {
   );
 }
 
-/** The thumbnail's box, when enough of it is on screen to zoom from or back into. */
 function visibleRect(element: HTMLElement | undefined): DOMRect | undefined {
   if (!element?.isConnected) return undefined;
   const rect = element.getBoundingClientRect();
@@ -158,7 +197,6 @@ function visibleRect(element: HTMLElement | undefined): DOMRect | undefined {
   return rect;
 }
 
-/** The thumbnail button can clip through its own corners or through its frame's. */
 function cornerRadius(element: HTMLElement | undefined): number {
   for (const node of [element, element?.parentElement]) {
     if (!node) continue;
@@ -168,11 +206,6 @@ function cornerRadius(element: HTMLElement | undefined): number {
   return 0;
 }
 
-/**
- * Grows the image laid out at `to` out of the thumbnail at `from`. A thumbnail crops its image to
- * cover the tile, so the image scales evenly and a clip path trims it to the tile's shape: a scale
- * on each axis would stretch the picture.
- */
 function zoomKeyframes(from: DOMRect, to: DOMRect, fromRadius: number, toRadius: number): Keyframe[] {
   const scale = Math.max(from.width / to.width, from.height / to.height);
   const x = from.left + from.width / 2 - (to.left + to.width / 2);
@@ -188,24 +221,72 @@ function zoomKeyframes(from: DOMRect, to: DOMRect, fromRadius: number, toRadius:
   ];
 }
 
+const screenPixelRatio = () => window.devicePixelRatio || 1;
+
+function fitScreenPixels(image: HTMLImageElement, mimeType: string): void {
+  if (mimeType === "image/svg+xml") return;
+  const ratio = screenPixelRatio();
+  image.style.setProperty("--image-lightbox-screen-width", `${image.naturalWidth / ratio}px`);
+  image.style.setProperty("--image-lightbox-screen-height", `${image.naturalHeight / ratio}px`);
+}
+
+const canCopyImages = () => typeof ClipboardItem !== "undefined" && typeof navigator.clipboard?.write === "function";
+
+function drawPng(source: CanvasImageSource, width: number, height: number): Promise<Blob> {
+  const canvas = new OffscreenCanvas(width, height);
+  canvas.getContext("2d")?.drawImage(source, 0, 0);
+  return canvas.convertToBlob({ type: "image/png" });
+}
+
+async function pngImage(image: HTMLImageElement): Promise<Blob> {
+  const file = await fetch(image.currentSrc).then(
+    (response) => (response.ok ? response.blob() : undefined),
+    () => undefined,
+  );
+  if (file?.type === "image/png") return file;
+  const bitmap = file && (await createImageBitmap(file).catch(() => undefined));
+  if (!bitmap) return drawPng(image, image.naturalWidth, image.naturalHeight);
+  try {
+    return await drawPng(bitmap, bitmap.width, bitmap.height);
+  } finally {
+    bitmap.close();
+  }
+}
+
+const selectsText = (viewer: Node) => {
+  const selection = window.getSelection();
+  return Boolean(selection?.toString()) && viewer.contains(selection?.anchorNode ?? null);
+};
+
+const isCopyKey = (event: KeyboardEvent) => {
+  const key = event.key.toLowerCase();
+  return (
+    (event.metaKey || event.ctrlKey) &&
+    !event.altKey &&
+    !event.shiftKey &&
+    (key === "c" || (!/^[a-z]$/.test(key) && event.code === "KeyC"))
+  );
+};
+
 const FADE_KEYFRAMES: Keyframe[] = [
   { opacity: 0, transform: "scale(0.96)" },
   { opacity: 1, transform: "none" },
 ];
 
-/** A full-window viewer for the images of one message. It opens with a zoom out of the thumbnail. */
 export function ImageLightbox(props: {
   opening: ImageLightboxOpening;
-  /** Finds the thumbnail of an image, so the viewer closes back into the one it shows. */
   thumbnail?: (attachment: AttachmentSummary) => HTMLElement | undefined;
   onDownload?: ((attachment: AttachmentSummary) => void) | undefined;
+  canDownload?: ((attachment: AttachmentSummary) => boolean) | undefined;
+  macWindowControls?: boolean | undefined;
+  stripLabel?: string | undefined;
+  stripUrl?: ((attachment: AttachmentSummary) => string | null) | undefined;
   onClose: () => void;
 }) {
   const { t } = useText();
   const motion = !prefersReducedMotion();
   const originRect = untrack(() => (motion ? visibleRect(props.opening.origin) : undefined));
   const openedId = untrack(() => props.opening.images[props.opening.index]?.id);
-  // The viewer unmounts while it is still open, so Kobalte does not give focus back. The viewer does.
   const opener =
     untrack(() => props.opening.origin) ??
     (document.activeElement instanceof HTMLElement && document.activeElement !== document.body
@@ -218,9 +299,20 @@ export function ImageLightbox(props: {
   const [failed, setFailed] = createStore<Record<string, boolean>>({});
   const images = () => props.opening.images;
   const current = createMemo(() => images()[Math.min(index(), images().length - 1)]);
+  const downloadable = () => {
+    const image = current();
+    return image && (props.canDownload?.(image) ?? true) ? image : undefined;
+  };
+  const shownImageLoaded = () => {
+    const image = current();
+    return image !== undefined && loaded[image.id] === true && failed[image.id] !== true;
+  };
   const imageElements = new Map<string, HTMLImageElement>();
+  const copyable = canCopyImages();
+  const [copied, setCopied] = createSignal<string>();
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(copiedTimer));
   const tiles = createTileMotion();
-  // The thumbnails move only when the viewer grows out of one of them.
   const tilesMove = Boolean(originRect && props.thumbnail);
   let overlay: HTMLElement | undefined;
   let track: HTMLDivElement | undefined;
@@ -228,6 +320,190 @@ export function ImageLightbox(props: {
   let opened = false;
   let swipeStart: { x: number; y: number } | undefined;
   let swiped = false;
+  const [zoom, setZoom] = createSignal(1);
+  const [zoomed, setZoomed] = createSignal(false);
+  let stage: HTMLDivElement | undefined;
+  let camera = FIT;
+  const pointers = new Map<number, Point>();
+  let gesture: { camera: Camera; point: Point; distance: number } | undefined;
+
+  const zoomImage = (entry = current()) => {
+    const image = entry ? imageElements.get(entry.id) : undefined;
+    return image?.isConnected && image.complete && image.naturalWidth ? image : undefined;
+  };
+  const limited = (scale: number, image: HTMLImageElement) =>
+    Math.min(Math.max(scale, 1), Math.max(1, (MAX_SCALE * image.naturalWidth) / image.offsetWidth));
+  const settled = (from: Camera, image: HTMLImageElement): Camera => {
+    const scale = limited(from.scale, image);
+    const axis = (position: number, size: number, length: number) => {
+      const room = Math.max(0, (size * scale - length) / 2);
+      return Math.min(Math.max(position, -room), room);
+    };
+    return {
+      scale,
+      x: axis(from.x, image.offsetWidth, stage?.clientWidth ?? 0),
+      y: axis(from.y, image.offsetHeight, stage?.clientHeight ?? 0),
+    };
+  };
+  const move = (next: Camera, animate = false, entry = current()) => {
+    const image = zoomImage(entry);
+    camera = image ? settled(next, image) : FIT;
+    const isZoomed = camera.scale > 1;
+    setZoomed(isZoomed);
+    if (!image) {
+      setZoom(1);
+      stage?.removeAttribute("data-zoomed");
+      return;
+    }
+    setZoom((camera.scale * image.offsetWidth * screenPixelRatio()) / image.naturalWidth);
+    const glide = animate && motion;
+    image.toggleAttribute("data-settling", glide);
+    if (glide && !isZoomed && image.hasAttribute("data-zoomed")) {
+      const fitted = () => {
+        if (camera.scale > 1) return;
+        stage?.removeAttribute("data-zoomed");
+        image.removeAttribute("data-zoomed");
+      };
+      image.addEventListener("transitionend", fitted, { once: true });
+    } else {
+      stage?.toggleAttribute("data-zoomed", isZoomed);
+      image.toggleAttribute("data-zoomed", isZoomed);
+    }
+    image.style.scale = isZoomed ? String(camera.scale) : "";
+    image.style.translate = isZoomed ? `${camera.x}px ${camera.y}px` : "";
+  };
+  const zoomAround = (from: Camera, point: Point, scale: number): Camera => {
+    const image = zoomImage();
+    const next = image ? limited(scale, image) : 1;
+    return {
+      scale: next,
+      x: point.x - ((point.x - from.x) * next) / from.scale,
+      y: point.y - ((point.y - from.y) * next) / from.scale,
+    };
+  };
+  const copy = () => {
+    const entry = current();
+    const image = entry ? imageElements.get(entry.id) : undefined;
+    if (!entry || !image?.isConnected || !copyable) return;
+    navigator.clipboard.write([new ClipboardItem({ "image/png": pngImage(image) })]).then(
+      () => {
+        setCopied(entry.id);
+        clearTimeout(copiedTimer);
+        copiedTimer = setTimeout(() => setCopied(undefined), COPIED_DURATION);
+      },
+      () => toast.error(t("chat.image.copyFailed")),
+    );
+  };
+  const zoomBy = (factor: number) => move(zoomAround(camera, { x: 0, y: 0 }, camera.scale * factor), true);
+  const stagePoint = (event: MouseEvent): Point => {
+    const rect = stage?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return { x: event.clientX - rect.left - rect.width / 2, y: event.clientY - rect.top - rect.height / 2 };
+  };
+  const startGesture = () => {
+    const [first, second] = [...pointers.values()];
+    gesture =
+      first && (second || zoomed())
+        ? {
+            camera,
+            point: second ? { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 } : first,
+            distance: second ? Math.hypot(second.x - first.x, second.y - first.y) : 0,
+          }
+        : undefined;
+    if (gesture) stage?.setAttribute("data-dragging", "");
+    else stage?.removeAttribute("data-dragging");
+  };
+
+  onSettled(() => {
+    const area = stage;
+    if (!area) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) {
+        move(zoomAround(camera, stagePoint(event), camera.scale * Math.exp(-event.deltaY * WHEEL_ZOOM_RATE)));
+        return;
+      }
+      if (!zoomed()) return;
+      const sideways = event.shiftKey && event.deltaX === 0 ? event.deltaY : event.deltaX;
+      const down = event.shiftKey && event.deltaX === 0 ? 0 : event.deltaY;
+      move({ ...camera, x: camera.x - sideways, y: camera.y - down });
+    };
+    const onDown = (event: PointerEvent) => {
+      if (event.button !== 0 || !zoomImage() || (event.pointerType === "mouse" && !zoomed())) return;
+      if (event.target instanceof Element && event.target.closest("button")) return;
+      pointers.set(event.pointerId, stagePoint(event));
+      startGesture();
+    };
+    const onMove = (event: PointerEvent) => {
+      if (!pointers.has(event.pointerId)) return;
+      pointers.set(event.pointerId, stagePoint(event));
+      const start = gesture;
+      const [first, second] = [...pointers.values()];
+      if (!start || !first) return;
+      const point = second ? { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 } : first;
+      const from =
+        second && start.distance
+          ? zoomAround(
+              start.camera,
+              start.point,
+              (start.camera.scale * Math.hypot(second.x - first.x, second.y - first.y)) / start.distance,
+            )
+          : start.camera;
+      move({ ...from, x: from.x + point.x - start.point.x, y: from.y + point.y - start.point.y });
+      if (Math.hypot(point.x - start.point.x, point.y - start.point.y) <= DRAG_DISTANCE) return;
+      swiped = true;
+      if (!area.hasPointerCapture(event.pointerId)) area.setPointerCapture(event.pointerId);
+    };
+    const onUp = (event: PointerEvent) => {
+      if (pointers.delete(event.pointerId)) startGesture();
+    };
+    const onDoubleClick = (event: MouseEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest(".image-lightbox-image")) return;
+      if (zoomed()) move(FIT, true);
+      else move(zoomAround(camera, stagePoint(event), DOUBLE_CLICK_ZOOM), true);
+    };
+    const keepZoom = () => {
+      const image = zoomImage();
+      move(
+        image && zoomed()
+          ? { ...camera, scale: (zoom() * image.naturalWidth) / (image.offsetWidth * screenPixelRatio()) }
+          : camera,
+      );
+    };
+    const onResize = new ResizeObserver(keepZoom);
+    let resolution: MediaQueryList | undefined;
+    const onResolution = () => {
+      for (const entry of images()) {
+        const image = imageElements.get(entry.id);
+        if (image?.isConnected && image.naturalWidth) fitScreenPixels(image, entry.mimeType);
+      }
+      keepZoom();
+      watchResolution();
+    };
+    const watchResolution = () => {
+      resolution?.removeEventListener("change", onResolution);
+      resolution = matchMedia(`(resolution: ${screenPixelRatio()}dppx)`);
+      resolution.addEventListener("change", onResolution);
+    };
+    watchResolution();
+    area.addEventListener("wheel", onWheel, { passive: false });
+    area.addEventListener("pointerdown", onDown);
+    area.addEventListener("pointermove", onMove);
+    area.addEventListener("pointerup", onUp);
+    area.addEventListener("pointercancel", onUp);
+    area.addEventListener("dblclick", onDoubleClick);
+    onResize.observe(area);
+    return () => {
+      area.removeEventListener("wheel", onWheel);
+      area.removeEventListener("pointerdown", onDown);
+      area.removeEventListener("pointermove", onMove);
+      area.removeEventListener("pointerup", onUp);
+      area.removeEventListener("pointercancel", onUp);
+      area.removeEventListener("dblclick", onDoubleClick);
+      onResize.disconnect();
+      resolution?.removeEventListener("change", onResolution);
+    };
+  });
 
   onSettled(() => {
     if (!motion) return;
@@ -240,12 +516,10 @@ export function ImageLightbox(props: {
   });
   onCleanup(() => tiles.cancel());
 
-  /** Where a slide sits on the track: -1, 0 or 1 is before, on or after the stage; others do not mount. */
   const slideOffset = (position: number): -1 | 0 | 1 | undefined => {
     const count = images().length;
     const offset = (position - index() + count) % count;
     if (offset === 0) return 0;
-    // With two images, the other one is on the side that the viewer came from.
     if (count === 2) return direction() > 0 ? -1 : 1;
     if (offset === 1) return 1;
     if (offset === count - 1) return -1;
@@ -256,10 +530,10 @@ export function ImageLightbox(props: {
     setLoaded((state) => {
       state[shown.id] = true;
     });
+    if (shown.id === current()?.id) move(FIT);
     if (opened || shown.id !== current()?.id) return;
     opened = true;
     if (!motion) return;
-    // After a step before the first load, the image shown is not the thumbnail's image.
     if (originRect && shown.id === openedId) {
       element.animate(
         zoomKeyframes(
@@ -278,18 +552,18 @@ export function ImageLightbox(props: {
     }
   };
 
-  /** Shows the image at `next`. A step to a neighbour slides the track; a jump fades the image in. */
   const go = (next: number, offset: number) => {
     if (next === index() || closing()) return;
     const previous = current();
     const count = images().length;
     const distance = (next - index() + count) % count;
     const neighbour = count === 2 || distance === (offset > 0 ? 1 : count - 1);
-    // A step during a slide goes on from where the track is now.
     const from = motion && track ? new DOMMatrixReadOnly(getComputedStyle(track).transform).m41 : 0;
     slide?.cancel();
+    move(FIT);
     setDirection(offset);
     setIndex(next);
+    move(FIT, false, images()[next]);
     const shown = current();
     if (tilesMove && originRect && previous && shown) {
       const left = props.thumbnail?.(previous);
@@ -325,7 +599,7 @@ export function ImageLightbox(props: {
       const image = imageElements.get(shown.id);
       const target = visibleRect(thumbnail);
       const imageRect = image?.isConnected && loaded[shown.id] ? image.getBoundingClientRect() : undefined;
-      if (image && imageRect && target && thumbnail) {
+      if (image && imageRect && target && thumbnail && !zoomed()) {
         animations.push(
           image.animate(
             zoomKeyframes(target, imageRect, cornerRadius(thumbnail), cornerRadius(image)).reverse(),
@@ -354,12 +628,15 @@ export function ImageLightbox(props: {
       <Dialog.Portal>
         <Dialog.Overlay ref={overlay} class="image-lightbox-backdrop" />
         <Dialog.Content
-          class="image-lightbox"
+          class={`image-lightbox${props.macWindowControls ? " image-lightbox-mac-controls" : ""}`}
           data-dialog-surface="unstyled"
           data-closing={closing() ? "" : undefined}
           onPointerDown={(event: PointerEvent) => {
             swiped = false;
-            swipeStart = event.pointerType === "mouse" ? undefined : { x: event.clientX, y: event.clientY };
+            swipeStart =
+              event.pointerType === "mouse" || zoomed() || pointers.size > 1
+                ? undefined
+                : { x: event.clientX, y: event.clientY };
           }}
           onPointerUp={(event: PointerEvent) => {
             const start = swipeStart;
@@ -374,17 +651,21 @@ export function ImageLightbox(props: {
             swipeStart = undefined;
           }}
           onClick={(event: MouseEvent) => {
-            // A click anywhere but the image or a control closes the viewer, as a click beside a
-            // dialog does.
             if (swiped) swiped = false;
             else if (event.target instanceof Element && !event.target.closest("button, a, .image-lightbox-image"))
               close();
           }}
-          onKeyDown={(event: KeyboardEvent) => {
+          onContextMenu={(event: MouseEvent) => event.stopPropagation()}
+          onKeyDown={(event: KeyboardEvent & { currentTarget: HTMLElement }) => {
             const offset = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
             if (offset !== undefined) step(offset);
             else if (event.key === "Home") go(0, -1);
             else if (event.key === "End") go(images().length - 1, 1);
+            else if (isCopyKey(event) && !selectsText(event.currentTarget)) copy();
+            else if (event.metaKey || event.ctrlKey || event.altKey) return;
+            else if (event.key === "+" || event.key === "=") zoomBy(ZOOM_STEP);
+            else if (event.key === "-") zoomBy(1 / ZOOM_STEP);
+            else if (event.key === "0") move(FIT, true);
             else return;
             event.preventDefault();
           }}
@@ -399,8 +680,17 @@ export function ImageLightbox(props: {
                 </span>
               </Show>
             </span>
-            <span class="image-lightbox-actions">
-              <Show when={props.onDownload && current()}>
+            <div class="image-lightbox-actions">
+              <ZoomControls
+                class="image-lightbox-zoom"
+                levelClass="image-lightbox-zoom-level"
+                buttonClass="image-lightbox-action"
+                zoom={zoom()}
+                onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
+                onFit={() => move(FIT, true)}
+                onZoomIn={() => zoomBy(ZOOM_STEP)}
+              />
+              <Show when={props.onDownload && downloadable()}>
                 {(shown) => (
                   <Button
                     variant="ghost"
@@ -415,6 +705,24 @@ export function ImageLightbox(props: {
                   </Button>
                 )}
               </Show>
+              <Show when={copyable}>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  type="button"
+                  class="image-lightbox-action image-lightbox-copy"
+                  title={t("chat.image.copy")}
+                  disabled={!shownImageLoaded()}
+                  onClick={copy}
+                >
+                  <Show when={copied() === current()?.id} fallback={<CopyIcon />}>
+                    <CheckIcon />
+                  </Show>
+                  <span class="sr-only" aria-live="polite">
+                    {copied() === current()?.id ? t("chat.image.copied") : t("chat.image.copy")}
+                  </span>
+                </Button>
+              </Show>
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -427,16 +735,15 @@ export function ImageLightbox(props: {
               >
                 <CloseIcon />
               </Button>
-            </span>
+            </div>
           </header>
-          <div class="image-lightbox-stage">
+          <div ref={(element) => (stage = element)} class="image-lightbox-stage">
             <div ref={(element) => (track = element)} class="image-lightbox-track">
               <For each={images()}>
                 {(entry, position) => {
                   const offset = () => slideOffset(position());
                   return (
                     <Show when={offset() !== undefined}>
-                      {/* The neighbours load before a step, so the slide shows them at once. */}
                       <div
                         class="image-lightbox-slide"
                         style={{ "--image-lightbox-slide": offset() ?? 0 }}
@@ -457,7 +764,10 @@ export function ImageLightbox(props: {
                             alt={entry.name}
                             referrerpolicy="no-referrer"
                             draggable={false}
-                            onLoad={(event) => reveal(entry, event.currentTarget)}
+                            onLoad={(event) => {
+                              fitScreenPixels(event.currentTarget, entry.mimeType);
+                              reveal(entry, event.currentTarget);
+                            }}
                             onError={() => {
                               if (entry.id === current()?.id) opened = true;
                               setFailed((state) => {
@@ -498,7 +808,10 @@ export function ImageLightbox(props: {
             </Show>
           </div>
           <Show when={images().length > 1}>
-            <nav class="image-lightbox-strip image-lightbox-chrome" aria-label={t("chat.image.lightbox.strip")}>
+            <nav
+              class="image-lightbox-strip image-lightbox-chrome"
+              aria-label={props.stripLabel ?? t("chat.image.lightbox.strip")}
+            >
               <For each={images()}>
                 {(entry, position) => (
                   <Button
@@ -511,8 +824,9 @@ export function ImageLightbox(props: {
                     onClick={() => go(position(), Math.sign(position() - index()))}
                   >
                     <img
-                      src={entry.previewUrl ?? ""}
+                      src={(props.stripUrl ? props.stripUrl(entry) : entry.previewUrl) ?? ""}
                       alt=""
+                      loading="lazy"
                       decoding="async"
                       referrerpolicy="no-referrer"
                       draggable={false}

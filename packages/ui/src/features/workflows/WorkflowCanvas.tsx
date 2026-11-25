@@ -1,0 +1,4206 @@
+import {
+  decodeWorkflowFile,
+  isWorkflowStepKind,
+  type StoredFileRow,
+  WORKFLOW_FILE_MAX_BYTES,
+  WORKFLOW_GROUP_FIELDS,
+  WORKFLOW_PICTURE_TYPES,
+  WORKFLOW_STEP_NAME_FIELD,
+  type WorkflowDetail,
+  type WorkflowFile,
+  type WorkflowFileSaveResult,
+  type WorkflowFolderAction,
+  type WorkflowFoldersSnapshot,
+  type WorkflowGraph,
+  type WorkflowNodeKind,
+  type WorkflowSummary,
+  type WorkflowTriggerState,
+  type WorkflowVersion,
+  type WorkflowVersionKind,
+  workflowFieldsWithoutIds,
+  workflowStepFields,
+} from "@openbot/contracts/ipc";
+import type { AppTextKey, AppTranslate } from "@openbot/i18n";
+import {
+  BringToFront,
+  Button,
+  buttonVariants,
+  ChevronDown,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  ClipboardPaste,
+  ContextMenu,
+  Copy,
+  CopyPlus,
+  DropdownMenu,
+  Eraser,
+  Eye,
+  EyeOff,
+  Group as GroupIcon,
+  Hand,
+  Highlighter,
+  Input,
+  Kbd,
+  Lock,
+  LockOpen,
+  MousePointer2,
+  Network,
+  Pencil,
+  Play,
+  Plus,
+  Redo2,
+  RotateCcw,
+  Scan,
+  Search,
+  SendToBack,
+  Spinner,
+  Trash2,
+  Type,
+  toast,
+  Undo2,
+  Ungroup,
+  Zap,
+} from "@openbot/ui";
+import type { JSX } from "@solidjs/web";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  createStore,
+  createUniqueId,
+  For,
+  onCleanup,
+  onSettled,
+  Show,
+  untrack,
+} from "solid-js";
+import { avatarHeadColor } from "../../bloub-avatar";
+import { useText } from "../../text";
+import {
+  type AddItem,
+  addGroups,
+  dropKinds,
+  insertKinds,
+  KIND_LABEL,
+  WorkflowAddMenu,
+  WorkflowDropMenu,
+} from "./WorkflowAddMenu";
+import { AgentNode } from "./WorkflowAgentNode";
+import { ApprovalNode } from "./WorkflowApprovalNode";
+import { AssetNode, assetPicture } from "./WorkflowAssetNode";
+import {
+  ColorButtons,
+  HudButton,
+  type HudRun,
+  type HudStep,
+  hudBarRect,
+  timeLabel,
+  WorkflowCanvasHeader,
+} from "./WorkflowCanvasHud";
+import { ConditionNode } from "./WorkflowConditionNode";
+import { showWorkflowDeleteToast } from "./WorkflowDeleteUndoToast";
+import { ImageNode } from "./WorkflowImageNode";
+import { WorkflowImportDialog } from "./WorkflowImportDialog";
+import { LlmNode } from "./WorkflowLlmNode";
+import { WorkflowMediaComposer } from "./WorkflowMediaComposer";
+import { minimapLayout, WorkflowMinimap } from "./WorkflowMinimap";
+import { NoteNode } from "./WorkflowNoteNode";
+import { OutputNode } from "./WorkflowOutputNode";
+import { type PickerGroup, PickerMenu } from "./WorkflowPicker";
+import { PromptNode } from "./WorkflowPromptNode";
+import { WorkflowSearch } from "./WorkflowSearch";
+import { SHAPES, ShapeIcon, ShapeNode, ShapeSurface, shapeSize } from "./WorkflowShapeNode";
+import {
+  type CornerEdit,
+  type FolderMenuAction,
+  type SwitcherAction,
+  type SwitcherWorkflow,
+  WorkflowCorner,
+  WorkflowSwitcher,
+} from "./WorkflowSwitcher";
+import { nextWorkflowAfterDelete, WorkflowsEmpty } from "./WorkflowsEmpty";
+import { type WorkflowCanvasTabs, type WorkflowTab, WorkflowTabs } from "./WorkflowTabs";
+import { TextNode } from "./WorkflowTextNode";
+import { TriggerNode } from "./WorkflowTriggerNode";
+import { WorkflowVersionBar } from "./WorkflowVersionBar";
+import { TIDY_KEYS, WorkflowZoomMenu } from "./WorkflowZoomMenu";
+import {
+  BoardProvider,
+  createBoard,
+  customStepName,
+  inCanvas,
+  isEditable,
+  MOD_KEY,
+  type PortRef,
+  resizeCursor,
+  showsStrip,
+  takesKeys,
+  type WfnAnchor,
+  type WfnEdge,
+  type WfnFields,
+  type WfnHandle,
+  type WfnPoint,
+  type WfnPortType,
+  type WfnRunStatus,
+  type WfnSize,
+  type WfnStretch,
+  type WorkflowAgentProgress,
+} from "./workflow-board";
+import { type WorkflowBuild, workflowBuildPlan } from "./workflow-build";
+import { type Camera, type CameraMotion, glideCamera } from "./workflow-camera";
+import { CLIP_TYPE, type Clip, copied, setCopied } from "./workflow-clipboard";
+import { workflowExportProblemText, workflowImportProblemText } from "./workflow-file-text";
+import type { WorkflowGitHubCanvas } from "./workflow-github";
+import {
+  type CanvasGroup,
+  frameBox,
+  GroupFrame,
+  type GroupPort,
+  groupPatch,
+  groupsOf,
+  inputPoint,
+  joinPatch,
+  leavePatch,
+  outputTypes,
+  portPoint,
+  regroupCopies,
+  STACK_PICTURES,
+  sameGroups,
+} from "./workflow-groups";
+import {
+  type CanvasItem,
+  type CanvasSnapshot,
+  createCanvasHistory,
+  graphFromSnapshot,
+  hostDefaults,
+  newTriggerSchedule,
+  snapshotFromGraph,
+  stableJson,
+} from "./workflow-history";
+import {
+  type Box,
+  type Brush,
+  ERASER_RADIUS,
+  INK_STEP,
+  INK_WIDTH,
+  inkPath,
+  overlaps,
+  type Stroke,
+  strokeBox,
+  touches,
+  union,
+} from "./workflow-ink";
+import { workflowLoops } from "./workflow-loops";
+import { mediaTakes } from "./workflow-media-step";
+import { mergeWorkflowGraphs } from "./workflow-merge";
+import type { WorkflowCatalogs, WorkflowFeatures } from "./workflow-model";
+import {
+  BLOCK_RESIZE,
+  type CanvasColor,
+  COLORS,
+  colorVar,
+  type NoteTone,
+  type ShapeKind,
+  Swatch,
+  TONES,
+  ToolAction,
+  translated,
+} from "./workflow-node-parts";
+import {
+  BuilderCursor,
+  FollowFrame,
+  PeerCursors,
+  PresenceBar,
+  peersOf,
+  type WorkflowBuilderSpot,
+  type WorkflowPeer,
+  type WorkflowPresence,
+} from "./workflow-presence";
+import { activeRun, indexRunView, isOpenRun, type WorkflowRunView } from "./workflow-run-view";
+import { type TidyUnit, tidyLayout } from "./workflow-tidy";
+import { DrawArt, ShapesArt, StickyArt } from "./workflow-tool-art";
+
+export interface WorkflowCanvasProps {
+  workflow: WorkflowDetail;
+  resetKey?: number | undefined;
+  runs: WorkflowRunView;
+  features: WorkflowFeatures;
+  catalogs: WorkflowCatalogs;
+  github?: WorkflowGitHubCanvas | undefined;
+  versions: readonly WorkflowVersion[];
+  versionPreview?: { versionId: string; graph: WorkflowGraph } | undefined;
+  library: readonly WorkflowSummary[];
+  opening?: boolean | undefined;
+  readOnly?: boolean | undefined;
+  presence?: WorkflowPresence | undefined;
+  build?: WorkflowBuild | undefined;
+  frame?: "window" | undefined;
+  server?: string | undefined;
+  agentProgress?: ((agentId: string) => WorkflowAgentProgress | undefined) | undefined;
+  onGraphChange: (graph: WorkflowGraph) => void;
+  onRun: (input: { fromNodeId?: string }) => void;
+  onRunStep: (nodeId: string, takes?: number) => void;
+  onStopStep: (stepId: string) => void;
+  onStopRun: (runId: string) => void;
+  onRetry: (stepId: string) => void;
+  onDecide: (stepId: string, approved: boolean) => Promise<unknown>;
+  onRotateWebhookSecret?: ((nodeId: string) => Promise<string>) | undefined;
+  onLoadOlderRuns: () => void;
+  onRestoreVersion: (versionId: string) => void;
+  onPreviewVersion?: ((versionId: string | null) => void) | undefined;
+  onSelect: (workflowId: string) => void;
+  onCreate: (input: { title: string; graph?: WorkflowGraph; paused?: true }) => void;
+  onRename: (workflowId: string, title: string) => void;
+  onSetPaused?: ((workflowId: string, paused: boolean) => void) | undefined;
+  onExport?: ((workflowId: string) => Promise<WorkflowFileSaveResult>) | undefined;
+  onDelete: (workflowId: string) => Promise<unknown>;
+  tabs?: WorkflowCanvasTabs | undefined;
+  folders?: WorkflowFoldersSnapshot | undefined;
+  onFolderAction?: ((action: WorkflowFolderAction) => void) | undefined;
+}
+
+type MenuTarget =
+  | { kind: "node"; id: string }
+  | { kind: "edge"; id: string; at: WfnPoint }
+  | { kind: "canvas"; at: WfnPoint };
+
+const MENU_LABEL = {
+  node: "workflow.canvas.menu.node",
+  edge: "workflow.canvas.menu.edge",
+  canvas: "workflow.canvas.menu.canvas",
+} satisfies Record<MenuTarget["kind"], AppTextKey>;
+
+const VERSION_NOTE = {
+  auto: "workflow.canvas.version.auto",
+  restore: "workflow.canvas.version.restore",
+  run: "workflow.canvas.version.run",
+} satisfies Record<WorkflowVersionKind, AppTextKey>;
+
+function MenuItem(props: {
+  icon: JSX.Element;
+  label: string;
+  keys?: readonly string[];
+  danger?: boolean;
+  onAim?: (aimed: boolean) => void;
+  onSelect?: () => void;
+  onSelectAfterClose?: () => void;
+}) {
+  return (
+    <ContextMenu.Item
+      class={props.danger ? "ui-action-menu-danger" : ""}
+      onFocus={() => props.onAim?.(true)}
+      onBlur={() => props.onAim?.(false)}
+      onSelect={() => props.onSelect?.()}
+      onSelectAfterClose={props.onSelectAfterClose}
+    >
+      <span class="wfn-menu-glyph" aria-hidden="true">
+        {props.icon}
+      </span>
+      <span class="wfn-menu-text">{props.label}</span>
+      <Show when={props.keys}>
+        {(keys) => (
+          <span class="wfn-keys" aria-hidden="true">
+            <For each={keys()}>{(key) => <Kbd>{key}</Kbd>}</For>
+          </span>
+        )}
+      </Show>
+    </ContextMenu.Item>
+  );
+}
+
+interface Range {
+  min: number;
+  max: number;
+}
+
+const TEXT_FONT = { min: 12, max: 120 };
+
+const RESIZE: Record<WorkflowNodeKind, { width: Range; height?: Range }> = {
+  text: { width: { min: 120, max: 960 } },
+  prompt: { width: { min: 240, max: 640 }, height: { min: 151, max: 640 } },
+  asset: { width: { min: 200, max: 480 }, height: { min: 136, max: 480 } },
+  llm: { width: { min: 304, max: 720 }, height: { min: 160, max: 960 } },
+  agent: { width: { min: 304, max: 720 }, height: { min: 160, max: 960 } },
+  image: { width: { min: 200, max: 720 } },
+  ...BLOCK_RESIZE,
+};
+
+const MIN_SCALE = 0.25;
+const MAX_SCALE = 2;
+const ZOOM_STEP = 1.2;
+const WHEEL_PAN_SPEED = 0.5;
+const PINCH_ZOOM_RATE = 0.007;
+const WHEEL_ZOOM_RATE = 0.002;
+const WHEEL_ZOOM_MAX = Math.log(ZOOM_STEP);
+const FOLLOW_ZONE = 0.25;
+const FOLLOW_EASE = 180;
+const BUILD_START = 240;
+const BUILD_GLIDE = 380;
+const BUILD_STEP = 620;
+const BUILD_LINGER = 900;
+const BUILD_FADE = 240;
+const FIT_MARGIN = 64;
+const FOLDED_STATUS: readonly WfnRunStatus[] = ["failed", "approval", "running"];
+const HOST_TRIGGERS: readonly string[] = ["github", "discord", "telegram", "slack"];
+const HOST_OUTPUTS: readonly string[] = [...HOST_TRIGGERS, "chat-channel"];
+const TOOLBAR_GAP = 12;
+const STRIP_ROOM = 8 + 52 + 8;
+const DRAG_THRESHOLD = 4;
+const SNAP = 8;
+const GRID = 20;
+const DUPLICATE_OFFSET = 32;
+const NEW_NODE = { width: 300, height: 240 };
+const PICTURE_ROW = 4;
+const PLACE_STEP = 40;
+const TIDY_LABELS: ReadonlySet<WorkflowNodeKind> = new Set(["text", "note", "shape"]);
+const TIDY_REACH = 160;
+const TIDY_CLEAR_GAP = 24;
+const TIDY_MOTION_MS = 320;
+const SEARCH_FIELDS: Record<WorkflowNodeKind, readonly string[]> = {
+  trigger: [],
+  prompt: ["text"],
+  asset: ["file"],
+  llm: ["prompt", "system"],
+  agent: ["task"],
+  image: ["prompt"],
+  condition: ["rule"],
+  approval: ["question"],
+  output: ["path", "title", "message"],
+  text: ["text"],
+  note: ["text"],
+  shape: ["text"],
+};
+const NUDGE = { step: SNAP, large: SNAP * 4 };
+const GUIDE_DISTANCE = 6;
+const INSERT_GAP = 64;
+const DROP_MENU = { width: 240, gap: 8, inset: 16 };
+
+type Tool = "select" | "pan" | "draw" | "note" | "shape";
+type DrawMode = Brush | "eraser";
+
+const NOTE_SIZE = { width: 240, height: 240 };
+
+function InkLine(props: { stroke: Stroke; erasing?: boolean; points?: readonly WfnPoint[] }) {
+  return (
+    <path
+      class="wfn-ink-line"
+      d={inkPath(props.points ?? props.stroke.points)}
+      stroke-width={props.stroke.width}
+      data-brush={props.stroke.brush}
+      data-erasing={props.erasing ? "" : undefined}
+      style={{ "--wfn-ink": colorVar(props.stroke.color) }}
+    />
+  );
+}
+
+function smoothstep(from: number, to: number, value: number) {
+  const t = Math.min(1, Math.max(0, (value - from) / (to - from)));
+  return t * t * (3 - 2 * t);
+}
+
+function dotGrid(camera: Camera) {
+  const level = Math.max(0, Math.ceil(Math.log2(1 / camera.scale) - 1e-9));
+  const step = GRID * 2 ** level * camera.scale;
+  const quarter = step / 4;
+  const wrap = (value: number) => (((value - quarter) % step) + step) % step;
+  return {
+    x: wrap(camera.x),
+    y: wrap(camera.y),
+    step,
+    quarter,
+    minor: level === 0 ? 0 : smoothstep((GRID * 2) / 3, GRID, step / 2),
+  };
+}
+
+function DotGrid(props: { camera: Camera }) {
+  const id = createUniqueId();
+  const grid = createMemo(() => dotGrid(props.camera));
+  const far = () => grid().quarter * 3;
+  return (
+    <svg class="wfn-dots" aria-hidden="true">
+      <pattern id={id} x={grid().x} y={grid().y} width={grid().step} height={grid().step} patternUnits="userSpaceOnUse">
+        <circle cx={grid().quarter} cy={grid().quarter} r="1" />
+        <g opacity={grid().minor}>
+          <circle cx={far()} cy={grid().quarter} r="1" />
+          <circle cx={grid().quarter} cy={far()} r="1" />
+          <circle cx={far()} cy={far()} r="1" />
+        </g>
+      </pattern>
+      <rect width="100%" height="100%" fill={`url(#${id})`} />
+    </svg>
+  );
+}
+
+const snapWithin = (value: number, range: Range) =>
+  Math.min(Math.max(Math.round(value / SNAP) * SNAP, range.min), range.max);
+
+const devicePixel = (value: number) => Math.round(value * window.devicePixelRatio) / window.devicePixelRatio;
+
+function stretchOf(kind: WorkflowNodeKind): WfnStretch {
+  if (kind === "text") return "text";
+  return RESIZE[kind].height || kind === "image" ? "xy" : "x";
+}
+
+const sideX = (handle: string) => (handle.includes("e") ? 1 : handle.includes("w") ? -1 : 0);
+const sideY = (handle: string) => (handle.includes("s") ? 1 : handle.includes("n") ? -1 : 0);
+
+const HANDLES: readonly WfnHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+
+function contentHeight(node: HTMLElement, card: HTMLElement) {
+  const set = node.style.getPropertyValue("--wfn-height");
+  node.style.setProperty("--wfn-height", "0px");
+  const height = card.offsetHeight;
+  if (set) node.style.setProperty("--wfn-height", set);
+  else node.style.removeProperty("--wfn-height");
+  return height;
+}
+
+function textFont(node: HTMLElement) {
+  const input = node.querySelector(".wfn-text-input");
+  return input ? Number.parseFloat(getComputedStyle(input).fontSize) : TEXT_FONT.min;
+}
+
+const DRAG_FIELD = "textarea, input.wfn-input, input.wfn-step-name, .wfn-name-field";
+
+const ITEM_FIELD = ".wfn-note-input, .wfn-shape-input, .wfn-text-input, .wfn-step-name";
+
+function caretAt(field: HTMLElement, x: number, y: number): () => void {
+  const position = document.caretPositionFromPoint?.(x, y);
+  if (field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement) {
+    const caret = position?.offsetNode === field ? position.offset : field.value.length;
+    return () => field.setSelectionRange(caret, caret);
+  }
+  return () => {
+    const selection = document.getSelection();
+    if (position && field.contains(position.offsetNode)) selection?.collapse(position.offsetNode, position.offset);
+    else {
+      selection?.selectAllChildren(field);
+      selection?.collapseToEnd();
+    }
+  };
+}
+
+const NO_DRAG = [
+  ".wfn-port",
+  `input:not(${DRAG_FIELD})`,
+  "[data-wfn-portal]",
+  ".wfn-edge-actions",
+  "button:not(.wfn-asset-trigger)",
+  "[role=tab]",
+  ".ui-seek-slider",
+].join(", ");
+
+function CanvasNodeView(props: { node: CanvasItem; trigger: WorkflowTriggerState | undefined }) {
+  const node = untrack(() => props.node);
+  switch (node.kind) {
+    case "text":
+      return <TextNode id={node.id} />;
+    case "prompt":
+      return <PromptNode id={node.id} />;
+    case "asset":
+      return <AssetNode id={node.id} />;
+    case "llm":
+      return <LlmNode id={node.id} />;
+    case "agent":
+      return <AgentNode id={node.id} />;
+    case "image":
+      return <ImageNode id={node.id} />;
+    case "trigger":
+      return (
+        <TriggerNode
+          id={node.id}
+          webhookUrl={props.trigger?.webhookUrl ?? undefined}
+          nextRun={props.trigger?.nextDueAt ?? undefined}
+        />
+      );
+    case "condition":
+      return <ConditionNode id={node.id} />;
+    case "approval":
+      return <ApprovalNode id={node.id} />;
+    case "output":
+      return <OutputNode id={node.id} />;
+    case "note":
+      return <NoteNode id={node.id} />;
+    case "shape":
+      return <ShapeNode id={node.id} />;
+  }
+}
+
+interface Guide {
+  axis: "x" | "y";
+  at: number;
+  from: number;
+  to: number;
+}
+
+const fillMenu = (t: AppTranslate): readonly PickerGroup<CanvasColor>[] => [
+  {
+    options: COLORS.map((color) => ({
+      value: color.value,
+      label: t(color.label),
+      tile: () => <Swatch color={color.value} />,
+    })),
+  },
+];
+
+const asSaved = (graph: WorkflowGraph) => graphFromSnapshot(snapshotFromGraph(graph));
+const savedJson = (graph: WorkflowGraph) => stableJson(asSaved(graph));
+
+const SENT_LIMIT = 200;
+
+export function WorkflowCanvas(props: WorkflowCanvasProps) {
+  const { t, format, errorMessage } = useText();
+  const initial = untrack(() => snapshotFromGraph(props.workflow.graph));
+  const [nodes, setNodes] = createSignal<readonly CanvasItem[]>(initial.nodes);
+  const [positions, setPositions] = createStore<Record<string, WfnPoint>>(initial.positions);
+  const [sizes, setSizes] = createStore<Record<string, WfnSize>>(initial.sizes);
+  const [slotSizes, setSlotSizes] = createStore<Record<string, { width: number; height: number }>>({});
+  const slotResize = new ResizeObserver((entries) =>
+    setSlotSizes((draft) => {
+      for (const entry of entries) {
+        if (!(entry.target instanceof HTMLElement)) continue;
+        const id = entry.target.dataset.slot;
+        if (id) draft[id] = { width: entry.target.offsetWidth, height: entry.target.offsetHeight };
+      }
+    }),
+  );
+  const [camera, setCamera] = createStore({ x: 0, y: 0, scale: 1 });
+
+  const running = () => openRun() !== undefined;
+  const statusOf = (id: string) => runIndex().get(id)?.status;
+  const waitingOf = (id: string) => statusOf(id) === "running" && runIndex().get(id)?.step.waiting === true;
+  const stepOf = (id: string) => runIndex().get(id)?.step.id;
+
+  let viewport: HTMLElement | undefined;
+  let root: HTMLElement | undefined;
+  let cameraMoved = false;
+  const glide: { stop: () => void; goal: Camera | undefined } = { stop: () => {}, goal: undefined };
+  const [drop, setDrop] = createSignal<
+    { start: PortRef; at: WfnPoint } | { edge: WfnEdge; at: WfnPoint } | { at: WfnPoint }
+  >();
+  const [dropQuery, setDropQuery] = createSignal("");
+  const [marquee, setMarquee] = createSignal<Box>();
+  const [guides, setGuides] = createSignal<readonly Guide[]>([]);
+  let pressing = false;
+  let scheduleEdit: string | undefined;
+  const [dropHeight, setDropHeight] = createSignal(0);
+  const [hoveredNode, setHoveredNode] = createSignal<string | null>(null);
+
+  const canvas = createBoard({
+    focus: () => focusAsset(),
+    catalogs: () => props.catalogs,
+    graph: () => graph(),
+    buildState: (id) => buildState(id),
+    github: () => props.github,
+    features: () => props.features,
+    edges: initial.board.edges,
+    locked: initial.board.locked,
+    fields: initial.board.fields,
+    focusAfterRemove: (ids, from) => {
+      const deleted = from instanceof HTMLElement && from.matches("[data-node-id]") ? from.dataset.nodeId : undefined;
+      if (!deleted) return undefined;
+      const order = (step: 1 | -1) => {
+        let id: string | undefined = deleted;
+        do id = nextNode(id, step);
+        while (id && ids.includes(id));
+        return id;
+      };
+      const after = order(1) ?? order(-1);
+      if (!after) return undefined;
+      reveal(after);
+      return slot(after)?.querySelector<HTMLElement>("[data-node-id]") ?? undefined;
+    },
+    scale: () => camera.scale,
+    origin: (id) => positions[id],
+    box: (id) => {
+      const at = positions[id];
+      const rendered = slotSizes[id];
+      if (!at || !rendered) return undefined;
+      const strip = showsStrip(board, id) ? STRIP_ROOM / camera.scale : 0;
+      return { ...at, width: rendered.width, height: rendered.height + strip };
+    },
+    loops: () => loops(),
+    size: (id) => sizes[id],
+    stretch: (id) => {
+      const kind = kindOf(id);
+      return kind ? stretchOf(kind) : "x";
+    },
+    status: statusOf,
+    waiting: waitingOf,
+    progress: (id) => {
+      const agentId = statusOf(id) === "running" && !waitingOf(id) ? runIndex().get(id)?.step.agentId : null;
+      return agentId ? props.agentProgress?.(agentId) : undefined;
+    },
+    error: (id) => runIndex().get(id)?.error,
+    resultsOf: (id) => runIndex().get(id)?.results ?? [],
+    pendingOf: (id) => (kindOf(id) === "image" ? (runIndex().get(id)?.pending ?? []) : []),
+    duplicate: (id) => duplicateNodes([id]),
+    resetSize: (id) => resetSize(id),
+    beforeChange: () => commit(),
+    canChange: () => !editsBlocked() && !deleted(),
+    root: () => root,
+    retry: (id) => {
+      const step = stepOf(id);
+      if (step) props.onRetry(step);
+    },
+    retryResult: (result) => props.onRetry(result),
+    runFrom: (id) => props.onRun({ fromNodeId: id }),
+    schedule: (id) => nodes().find((node) => node.id === id)?.schedule,
+    setSchedule: (id, schedule) => {
+      if (scheduleEdit !== id) {
+        commit();
+        scheduleEdit = id;
+      }
+      setNodes((list) => list.map((node) => (node.id === id ? { ...node, schedule } : node)));
+    },
+    endScheduleEdit: () => {
+      scheduleEdit = undefined;
+    },
+    rotateWebhookSecret: untrack(() => props.onRotateWebhookSecret),
+    runStep: (id) => runNode(id),
+    stopStep: (id) => {
+      const pending = runIndex().get(id)?.pending ?? [];
+      if (pending.length === 0) {
+        const step = stepOf(id);
+        if (step) props.onStopStep(step);
+        return;
+      }
+      for (const take of pending) props.onStopStep(take.id);
+    },
+    running,
+    toolbarBelow: (id, bar) => toolbarBelow(id, bar),
+    anchor: (port, other, slot) => groupAnchor(port, other, slot),
+    hides: (edge) => hiddenLine(edge),
+    dropFiles: (id, files) => dropOnAsset(id, files),
+    release: (start, at, event) => {
+      const hit = document.elementFromPoint(event.clientX, event.clientY);
+      if (!hit || !viewport?.contains(hit) || hit.closest("[data-node-id], .wfn-hud, [data-wfn-portal]")) return false;
+      if (dropKinds(start, props.features.kinds).length === 0) return false;
+      setDropQuery("");
+      setDrop({ start, at });
+      return true;
+    },
+    decide: (id, approved) => {
+      const step = stepOf(id);
+      return step && statusOf(id) === "approval" ? props.onDecide(step, approved) : undefined;
+    },
+    step: stepOf,
+    edgeTone: (edge) => {
+      const viewing = viewedRun();
+      if (viewing) return ranIn(edge.from, viewing) && ranIn(edge.to, viewing) ? "done" : "idle";
+      const from = toneOf(edge.from);
+      const to = toneOf(edge.to);
+      if (to === "running" && (from === "done" || !running())) return "run";
+      if (from === "done" && to === "done") return "done";
+      return "idle";
+    },
+  });
+  const board = canvas.board;
+  const openRun = createMemo(() => {
+    const number = board.viewing();
+    const viewed = props.runs.runs.find((entry) => entry.run.number === number);
+    return viewed && isOpenRun(viewed) ? viewed : activeRun(props.runs);
+  });
+  const runIndex = createMemo(() => indexRunView(props.runs, openRun()?.run.id));
+
+  const [strokes, setStrokes] = createSignal<readonly Stroke[]>(initial.strokes);
+  const [ink, setInk] = createStore<{ sketch: Stroke | null; erasing: readonly string[]; eraser: WfnPoint | null }>({
+    sketch: null,
+    erasing: [],
+    eraser: null,
+  });
+  const [sketchPoints, setSketchPoints] = createSignal<readonly WfnPoint[]>([], { equals: false });
+
+  let tidyGoals: ReadonlyMap<string, WfnPoint> | undefined;
+  let tidyFrame = 0;
+  const capture = (): CanvasSnapshot => ({
+    nodes: nodes(),
+    positions: Object.fromEntries(Object.entries(positions).map(([id, at]) => [id, { ...(tidyGoals?.get(id) ?? at) }])),
+    sizes: Object.fromEntries(Object.entries(sizes).map(([id, size]) => [id, { ...size }])),
+    board: canvas.snapshot(),
+    strokes: strokes(),
+  });
+  const putPlaces = (saved: CanvasSnapshot) => {
+    setPositions((draft) => {
+      for (const id of Object.keys(draft)) if (!(id in saved.positions)) delete draft[id];
+      for (const [id, at] of Object.entries(saved.positions)) draft[id] = { ...at };
+    });
+    setSizes((draft) => {
+      for (const id of Object.keys(draft)) if (!(id in saved.sizes)) delete draft[id];
+      for (const [id, size] of Object.entries(saved.sizes)) draft[id] = { ...size };
+    });
+  };
+  const apply = (saved: CanvasSnapshot) => {
+    endTidy(false);
+    scheduleEdit = undefined;
+    const ids = new Set(saved.nodes.map((node) => node.id));
+    const later = nodes().filter((node) => !ids.has(node.id));
+    setNodes([...saved.nodes, ...later]);
+    putPlaces(saved);
+    canvas.restore({ ...saved.board, removed: [...saved.board.removed, ...later.map((node) => node.id)] });
+    setStrokes(saved.strokes);
+  };
+  const edits = createCanvasHistory({
+    capture,
+    apply,
+    beforeCommit: () => {
+      canvas.endTyping();
+      scheduleEdit = undefined;
+    },
+  });
+  const { steps } = edits;
+  const commit = () => {
+    edits.commit();
+    endTidy(true);
+  };
+
+  const frames = new Map<number, () => void>();
+  const afterLayout = (run: () => void, drop: () => void = () => {}) => {
+    const frame = requestAnimationFrame(() => {
+      frames.delete(frame);
+      run();
+    });
+    frames.set(frame, drop);
+  };
+  const dropFrames = () => {
+    for (const [frame, drop] of frames) {
+      cancelAnimationFrame(frame);
+      drop();
+    }
+    frames.clear();
+  };
+  onCleanup(dropFrames);
+  let stopGesture = () => {};
+  const undo = () => {
+    stopGesture();
+    dropFrames();
+    edits.undo();
+  };
+  const redo = () => {
+    stopGesture();
+    dropFrames();
+    edits.redo();
+  };
+
+  let liveCanvas: CanvasSnapshot | undefined;
+  const previewing = () => props.versionPreview !== undefined;
+  const frozen = () => previewing() || props.readOnly === true;
+  const editsBlocked = () => frozen() || props.opening === true;
+  const versionList = () =>
+    props.versions.map((version) => ({
+      id: version.id,
+      label: timeLabel(t, format, version.at),
+      meta: t(VERSION_NOTE[version.kind]),
+    }));
+  const openVersion = (id: string) => {
+    if (running()) return;
+    if (!props.onPreviewVersion) return props.onRestoreVersion(id);
+    canvas.endTyping();
+    closeDrop();
+    closeSearch();
+    setTool("select");
+    setUi((draft) => {
+      draft.hidden = false;
+    });
+    props.onPreviewVersion(id);
+  };
+  createEffect(
+    () => props.versionPreview,
+    (open) =>
+      untrack(() => {
+        if (open) {
+          liveCanvas ??= capture();
+          apply(snapshotFromGraph(open.graph));
+          canvas.select([]);
+          return;
+        }
+        const live = liveCanvas;
+        liveCanvas = undefined;
+        if (live) apply(live);
+      }),
+  );
+  const closeVersion = () => {
+    if (previewing()) props.onPreviewVersion?.(null);
+  };
+  const makeCurrent = () => {
+    const open = props.versionPreview;
+    const live = liveCanvas;
+    if (!open || !live) return;
+    edits.push(live);
+    savedGraph = stableJson(graph());
+    liveCanvas = undefined;
+    props.onRestoreVersion(open.versionId);
+    props.onPreviewVersion?.(null);
+  };
+
+  const group = () => canvas.selection().filter((id) => !board.isRemoved(id));
+  const selectAll = () => canvas.select(live().map((node) => node.id));
+  const targets = (id: string) => (board.isSelected(id) && group().length > 1 ? group() : [id]);
+  const groupLocked = () => group().every((id) => board.isLocked(id));
+
+  const live = createMemo(() => nodes().filter((node) => !board.isRemoved(node.id)));
+  const kindOf = (id: string) => nodes().find((node) => node.id === id)?.kind;
+  const focusAsset = createMemo(() => {
+    const hovered = hoveredNode();
+    if (hovered !== null && kindOf(hovered) === "asset" && !board.isRemoved(hovered)) return hovered;
+    const selected = board.selected();
+    return selected !== null && kindOf(selected) === "asset" && !board.isRemoved(selected) ? selected : null;
+  });
+  createEffect(
+    () => {
+      const hovered = hoveredNode();
+      return hovered !== null && (board.isRemoved(hovered) || kindOf(hovered) === undefined);
+    },
+    (gone) => {
+      if (gone) setHoveredNode(null);
+    },
+  );
+  const focusSet = createMemo(() => {
+    const focus = focusAsset();
+    if (focus === null) return null;
+    const linked = new Set([focus]);
+    for (const edge of canvas.edges()) {
+      if (edge.from === focus) linked.add(edge.to);
+      else if (edge.to === focus) linked.add(edge.from);
+    }
+    return linked;
+  });
+  const triggers = createMemo(() => {
+    const byNode = new Map<string, WorkflowDetail["triggers"][number]>();
+    for (const trigger of props.workflow.triggers) if (!byNode.has(trigger.nodeId)) byNode.set(trigger.nodeId, trigger);
+    return byNode;
+  });
+  const triggerOf = (id: string) => triggers().get(id);
+  const passive = (id: string) => {
+    const kind = kindOf(id);
+    return kind === "prompt" || kind === "asset";
+  };
+  const toneOf = (id: string) => statusOf(id) ?? (passive(id) && props.runs.runs.length > 0 ? "done" : undefined);
+  const viewedRun = () => {
+    const number = board.viewing();
+    return number === null ? undefined : props.runs.runs.find((entry) => entry.run.number === number);
+  };
+  const ranIn = (id: string, detail: NonNullable<ReturnType<typeof viewedRun>>) =>
+    passive(id) || detail.steps.some((step) => step.nodeId === id && step.status === "done");
+  const [menuTarget, setMenuTarget] = createSignal<MenuTarget>({ kind: "canvas", at: { x: 0, y: 0 } });
+  const [name, setName] = createSignal(untrack(() => props.workflow.summary.title));
+  const [renaming, setRenaming] = createSignal(false);
+  let nameBefore = untrack(() => props.workflow.summary.title);
+  createEffect(
+    () => props.workflow.summary.title,
+    (title) => {
+      if (!untrack(renaming)) setName(title);
+    },
+  );
+  const [deleted, setDeleted] = createSignal(false);
+  const composerId = createMemo(() => {
+    const id = board.selected();
+    return id && !frozen() && !deleted() && !board.isRemoved(id) && kindOf(id) === "image" ? id : null;
+  });
+  let closeDelete: (() => void) | undefined;
+  let workflowMenu: HTMLButtonElement | undefined;
+  const deleteWorkflow = () => {
+    if (deleted()) return;
+    const id = props.workflow.summary.id;
+    canvas.endTyping();
+    setDeleted(true);
+    closeDelete = showWorkflowDeleteToast(name(), {
+      onUndo: () => {
+        closeDelete = undefined;
+        setDeleted(false);
+        requestAnimationFrame(() => workflowMenu?.focus());
+      },
+      onKeep: () => {
+        closeDelete = undefined;
+        props.onDelete(id).catch(() => {
+          if (props.workflow.summary.id === id) setDeleted(false);
+        });
+      },
+    });
+  };
+  onCleanup(() => closeDelete?.());
+  createEffect(deleted, (hidden) => {
+    for (const layer of Array.from(root?.children ?? [])) {
+      if (!layer.classList.contains("wfn-none")) layer.toggleAttribute("inert", hidden);
+    }
+  });
+  const [ui, setUi] = createStore<{
+    tool: Tool;
+    draw: DrawMode;
+    ink: CanvasColor;
+    note: NoteTone;
+    shape: ShapeKind;
+    fill: CanvasColor;
+    minimap: boolean;
+    hidden: boolean;
+    search: boolean;
+  }>({
+    tool: "select",
+    draw: "pen",
+    ink: "ink",
+    note: "yellow",
+    shape: "rectangle",
+    fill: "ink",
+    minimap: false,
+    hidden: false,
+    search: false,
+  });
+  const setTool = (tool: Tool) => {
+    if (tool !== "select" && tool !== "pan") canvas.select([]);
+    setUi((draft) => {
+      draft.tool = tool;
+    });
+  };
+  const setDraw = (mode: DrawMode) => {
+    setTool("draw");
+    setUi((draft) => {
+      draft.draw = mode;
+    });
+  };
+  const setInkColor = (color: CanvasColor) =>
+    setUi((draft) => {
+      draft.ink = color;
+      if (draft.draw === "eraser") draft.draw = "pen";
+    });
+  const setNoteTone = (tone: NoteTone) =>
+    setUi((draft) => {
+      draft.note = tone;
+    });
+  const setShape = (shape: ShapeKind) =>
+    setUi((draft) => {
+      draft.shape = shape;
+    });
+  const setFill = (color: CanvasColor) =>
+    setUi((draft) => {
+      draft.fill = color;
+    });
+  const allows = (kind: WorkflowNodeKind) => props.features.kinds.includes(kind);
+  const [ghost, setGhost] = createSignal<WfnPoint | null>(null);
+  const placing = () => ui.tool === "note" || ui.tool === "shape";
+  const [drawn, setDrawn] = createSignal<Box | null>(null);
+  const toggleHud = () =>
+    setUi((draft) => {
+      draft.hidden = !draft.hidden;
+    });
+  const [query, setQuery] = createSignal("");
+  const clipboard = () => copied()?.clip;
+  let pointer: WfnPoint | undefined;
+  let copying: readonly string[] | undefined;
+  let pastedAt: WfnPoint | undefined;
+
+  const [gesturing, setGesturing] = createSignal(false);
+  const graph = createMemo<WorkflowGraph>((previous) =>
+    previous && gesturing() ? previous : graphFromSnapshot(capture()),
+  );
+  const loops = createMemo(() => workflowLoops(graph()));
+  let worldElement: HTMLElement | undefined;
+  let snapFrame = 0;
+  const snapBars = () => {
+    const bars = [...(worldElement?.querySelectorAll<HTMLElement>(".wfn-toolbar, .wfn-strip") ?? [])];
+    const moves = bars.map((bar) => {
+      const box = bar.getBoundingClientRect();
+      const x = box.x - Number(bar.dataset.snapX ?? 0);
+      const y = box.y - Number(bar.dataset.snapY ?? 0);
+      return { bar, x: devicePixel(x) - x, y: devicePixel(y) - y };
+    });
+    for (const { bar, x, y } of moves) {
+      bar.dataset.snapX = String(x);
+      bar.dataset.snapY = String(y);
+      bar.style.setProperty("--wfn-snap-x", `${x}px`);
+      bar.style.setProperty("--wfn-snap-y", `${y}px`);
+    }
+  };
+  createEffect(
+    () => [camera.x, camera.y, camera.scale, graph(), canvas.selection()],
+    () => {
+      cancelAnimationFrame(snapFrame);
+      snapFrame = requestAnimationFrame(snapBars);
+    },
+  );
+  onCleanup(() => cancelAnimationFrame(snapFrame));
+  let savedGraph = untrack(() => savedJson(props.workflow.graph));
+  let baseGraph = untrack(() => asSaved(props.workflow.graph));
+  let baseJson = savedGraph;
+  let sent: string[] = [];
+  const send = (next: WorkflowGraph) => {
+    const json = stableJson(next);
+    if (json === savedGraph) return;
+    savedGraph = json;
+    sent = [...sent, json].slice(-SENT_LIMIT);
+    untrack(() => props.onGraphChange(next));
+  };
+  createEffect(
+    () => (editsBlocked() || deleted() ? undefined : graph()),
+    (next) => {
+      if (next) send(next);
+    },
+  );
+
+  const reset = (next: WorkflowGraph, same: boolean) => {
+    const before = same ? (liveCanvas ?? capture()) : undefined;
+    endTidy(false);
+    const snapshot = snapshotFromGraph(next);
+    baseGraph = graphFromSnapshot(snapshot);
+    savedGraph = stableJson(baseGraph);
+    baseJson = savedGraph;
+    sent = [];
+    liveCanvas = undefined;
+    scheduleEdit = undefined;
+    canvas.endTyping();
+    closeDrop();
+    closeSearch();
+    setNodes(snapshot.nodes);
+    const kept = new Set(snapshot.nodes.map((node) => node.id));
+    setSlotSizes((draft) => {
+      for (const id of Object.keys(draft)) if (!kept.has(id)) delete draft[id];
+    });
+    putPlaces(snapshot);
+    canvas.restore(snapshot.board);
+    setStrokes(snapshot.strokes);
+    if (!before) edits.clear();
+    else if (stableJson(graphFromSnapshot(before)) !== savedGraph) edits.push(before);
+    board.view(null);
+    cameraMoved = false;
+    requestAnimationFrame(() => fitView(false));
+  };
+  const resetToken = createMemo(() => `${props.workflow.summary.id}\u0000${props.resetKey ?? ""}`);
+  let openedId: string | undefined;
+  let baseToken: string | undefined;
+  createEffect(resetToken, (token) => {
+    const id = untrack(() => props.workflow.summary.id);
+    const before = openedId;
+    openedId = id;
+    baseToken = token;
+    if (before !== undefined) untrack(() => reset(props.workflow.graph, before === id));
+  });
+
+  const mergeIn = (merged: WorkflowGraph) => {
+    const snapshot = snapshotFromGraph(merged);
+    const ids = new Set(snapshot.nodes.map((node) => node.id));
+    const known = new Map(nodes().map((node) => [node.id, node]));
+    const items = snapshot.nodes.map((item) => {
+      const old = known.get(item.id);
+      return old && stableJson(old) === stableJson(item) ? old : item;
+    });
+    const later = nodes().filter((node) => !ids.has(node.id));
+    const next = [...items, ...later];
+    if (next.some((node, index) => nodes()[index] !== node) || next.length !== nodes().length) setNodes(next);
+    setPositions((draft) => {
+      for (const id of Object.keys(draft)) if (!(id in snapshot.positions)) delete draft[id];
+      for (const [id, at] of Object.entries(snapshot.positions)) {
+        if (draft[id]?.x !== at.x || draft[id]?.y !== at.y) draft[id] = { ...at };
+      }
+    });
+    setSizes((draft) => {
+      for (const id of Object.keys(draft)) if (!(id in snapshot.sizes)) delete draft[id];
+      for (const [id, size] of Object.entries(snapshot.sizes)) {
+        if (stableJson(draft[id]) !== stableJson(size)) draft[id] = { ...size };
+      }
+    });
+    canvas.sync({ ...snapshot.board, removed: later.map((node) => node.id) });
+    const drawn = new Map(strokes().map((stroke) => [stroke.id, stroke]));
+    const lines = snapshot.strokes.map((stroke) => {
+      const old = drawn.get(stroke.id);
+      return old && stableJson(old) === stableJson(stroke) ? old : stroke;
+    });
+    if (lines.length !== strokes().length || lines.some((stroke, index) => strokes()[index] !== stroke)) {
+      setStrokes(lines);
+    }
+  };
+  const takeHostGraph = (incoming: WorkflowGraph) => {
+    const theirs = asSaved(incoming);
+    const json = stableJson(theirs);
+    if (json === baseJson) return;
+    const before = baseGraph;
+    baseGraph = theirs;
+    baseJson = json;
+    savedGraph = json;
+    const echo = sent.indexOf(json);
+    if (echo !== -1) {
+      sent = sent.slice(echo + 1);
+      savedGraph = sent.at(-1) ?? json;
+      return;
+    }
+    sent = [];
+    const rebase = (snapshot: CanvasSnapshot): CanvasSnapshot => {
+      const graphOf = mergeWorkflowGraphs(before, graphFromSnapshot(snapshot), theirs);
+      const next = snapshotFromGraph(graphOf);
+      const ids = new Set(graphOf.nodes.map((node) => node.id));
+      return { ...next, board: { ...next.board, selection: snapshot.board.selection.filter((id) => ids.has(id)) } };
+    };
+    edits.rebase(rebase);
+    if (liveCanvas) {
+      liveCanvas = rebase(liveCanvas);
+      return;
+    }
+    const merged = asSaved(mergeWorkflowGraphs(before, graphFromSnapshot(capture()), theirs));
+    mergeIn(merged);
+    if (!editsBlocked() && !deleted() && !gesturing()) send(merged);
+  };
+  createEffect(
+    () => [resetToken(), props.workflow.graph] as const,
+    ([token, incoming]) => {
+      if (token === baseToken) untrack(() => takeHostGraph(incoming));
+    },
+  );
+  const workflowId = createMemo(() => props.workflow.summary.id);
+  createEffect(workflowId, () => {
+    closeDelete?.();
+    setDeleted(false);
+  });
+
+  const openId = () => props.workflow.summary.id;
+  const serverKey = () => props.server ?? "";
+  const listed = (): readonly SwitcherWorkflow[] => {
+    const list = props.library.some((workflow) => workflow.id === openId())
+      ? props.library
+      : [props.workflow.summary, ...props.library];
+    return list.map((workflow) =>
+      workflow.id === openId()
+        ? {
+            id: workflow.id,
+            title: name(),
+            steps: live().filter((node) => isWorkflowStepKind(node.kind)).length,
+            paused: workflow.paused === true,
+          }
+        : { id: workflow.id, title: workflow.title, steps: workflow.steps, paused: workflow.paused === true },
+    );
+  };
+  const onSwitcher = (action: SwitcherAction) => {
+    if (action.startsWith("version:")) return openVersion(action.slice("version:".length));
+    if (action === "live") return closeVersion();
+    if (action !== "rename") closeVersion();
+    if (action === "new") props.onCreate({ title: t("workflow.canvas.untitled") });
+    else if (action === "rename") startRename();
+    else if (action === "duplicate")
+      props.onCreate({
+        title: t("workflow.canvas.copyOf", { name: name() }),
+        graph: liveCanvas ? graphFromSnapshot(liveCanvas) : graph(),
+        ...(props.onSetPaused ? { paused: true } : {}),
+      });
+    else if (action === "pause" || action === "resume") props.onSetPaused?.(openId(), action === "pause");
+    else if (action === "export") exportWorkflow();
+    else if (action === "import") importInput?.click();
+    else if (action === "delete") deleteWorkflow();
+    else if (action !== `open:${openId()}`) props.onSelect(action.slice("open:".length));
+  };
+  let importInput: HTMLInputElement | undefined;
+  const [importing, setImporting] = createSignal<WorkflowFile>();
+  const [exporting, setExporting] = createSignal(false);
+  const exportWorkflow = () => {
+    const run = props.onExport;
+    if (!run || exporting()) return;
+    setExporting(true);
+    const nodes = graph().nodes;
+    run(openId())
+      .then(
+        (result) => {
+          if (result.problem) toast.error(workflowExportProblemText(t, result.problem, nodes));
+        },
+        (cause: unknown) => {
+          toast.error(errorMessage(cause, t("workflow.file.export.failed")));
+        },
+      )
+      .finally(() => setExporting(false));
+  };
+  const chooseImport = (file: File) => {
+    if (file.size > WORKFLOW_FILE_MAX_BYTES) {
+      toast.error(t("workflow.file.import.invalid"));
+      return;
+    }
+    file.text().then(
+      (text) => {
+        const decoded = decodeWorkflowFile(text);
+        if (decoded.ok) setImporting(decoded.file);
+        else toast.error(workflowImportProblemText(t, decoded.problem));
+      },
+      (cause: unknown) => {
+        toast.error(errorMessage(cause, t("workflow.file.import.failed")));
+      },
+    );
+  };
+  const finishImport = (input: { title: string; graph: WorkflowGraph }) => {
+    setImporting(undefined);
+    props.onCreate({ ...input, ...(props.onSetPaused ? { paused: true } : {}) });
+  };
+  const startRename = () => {
+    setFolderEdit(undefined);
+    nameBefore = name();
+    setRenaming(true);
+  };
+  const endRename = (keep: boolean) => {
+    if (!renaming()) return;
+    const trimmed = name().trim();
+    const next = keep && trimmed ? trimmed : nameBefore;
+    setName(next);
+    setRenaming(false);
+    if (next !== nameBefore) props.onRename(openId(), next);
+    requestAnimationFrame(() => workflowMenu?.focus());
+  };
+  const renameTab = (workflowId: string, title: string) => {
+    if (workflowId === openId()) {
+      setRenaming(false);
+      setName(title);
+    }
+    props.onRename(workflowId, title);
+  };
+  const tabItems = (): readonly WorkflowTab[] => {
+    const known = new Map(props.library.map((workflow) => [workflow.id, workflow]));
+    const ids = props.tabs?.ids.includes(openId()) ? props.tabs.ids : [...(props.tabs?.ids ?? []), openId()];
+    return ids.flatMap((id) => {
+      if (id === openId())
+        return [{ id, title: name(), updatedAt: props.workflow.summary.updatedAt, running: running() }];
+      const workflow = known.get(id);
+      return workflow
+        ? [
+            {
+              id,
+              title: workflow.title,
+              updatedAt: workflow.updatedAt,
+              running: workflow.lastRun?.status === "running",
+            },
+          ]
+        : [];
+    });
+  };
+  const [folderEdit, setFolderEdit] = createSignal<{ folderId: string; value: string; before: string }>();
+  const startFolderEdit = (folderId: string, value: string) => {
+    endRename(true);
+    setFolderEdit({ folderId, value, before: value });
+  };
+  const endFolderEdit = (keep: boolean) => {
+    const edit = folderEdit();
+    if (!edit) return;
+    setFolderEdit(undefined);
+    const trimmed = edit.value.trim();
+    if (keep && trimmed && trimmed !== edit.before)
+      props.onFolderAction?.({ type: "rename", folderId: edit.folderId, name: trimmed });
+    requestAnimationFrame(() => workflowMenu?.focus());
+  };
+  const onFolderMenu = (action: FolderMenuAction) => {
+    const act = props.onFolderAction;
+    if (!act) return;
+    if (action.type === "place") act({ type: "place", workflowIds: [openId()], folderId: action.folderId });
+    else if (action.type === "delete") act({ type: "delete", folderId: action.folderId });
+    else if (action.type === "new") {
+      const id = crypto.randomUUID();
+      const folderName = t("workflow.canvas.folder.new");
+      act({ type: "create", id, name: folderName, workflowIds: [openId()] });
+      startFolderEdit(id, folderName);
+    } else {
+      const folder = props.folders?.folders.find((entry) => entry.id === action.folderId);
+      if (folder) startFolderEdit(folder.id, folder.name);
+    }
+  };
+  const cornerEdit = (): CornerEdit | undefined => {
+    if (renaming()) return { label: t("workflow.canvas.switcher.name"), value: name() };
+    const edit = folderEdit();
+    return edit && { label: t("workflow.canvas.folder.name"), value: edit.value };
+  };
+  const onCornerEdit = (value: string) => {
+    if (renaming()) setName(value);
+    else setFolderEdit((edit) => edit && { ...edit, value });
+  };
+  const onEndCornerEdit = (keep: boolean) => {
+    if (renaming()) endRename(keep);
+    else endFolderEdit(keep);
+  };
+  const paused = () => props.workflow.summary.paused === true;
+  const switcherPaused = () => (props.onSetPaused ? paused() : undefined);
+  const resumeAction = () => {
+    const setPaused = props.readOnly ? undefined : props.onSetPaused;
+    return setPaused && (() => setPaused(openId(), false));
+  };
+  const switcherFolders = () =>
+    props.folders && props.onFolderAction
+      ? { folders: props.folders.folders, placement: props.folders.placement }
+      : undefined;
+  const corner = () => (
+    <WorkflowCorner
+      count={listed().length}
+      edit={cornerEdit()}
+      menuRef={(element) => {
+        workflowMenu = element;
+      }}
+      menu={
+        <WorkflowSwitcher
+          workflows={listed()}
+          current={openId()}
+          versions={versionList()}
+          viewing={props.versionPreview?.versionId}
+          versionsDisabled={running()}
+          readOnly={props.readOnly === true}
+          paused={switcherPaused()}
+          portable={props.onExport !== undefined}
+          copyable={props.workflow.needsNewerApp !== true}
+          folders={switcherFolders()}
+          onAction={onSwitcher}
+          onFolder={onFolderMenu}
+        />
+      }
+      onEdit={onCornerEdit}
+      onEndEdit={onEndCornerEdit}
+    />
+  );
+
+  const clampScale = (scale: number) => Math.min(Math.max(scale, MIN_SCALE), MAX_SCALE);
+  const view = () => ({ width: viewport?.clientWidth ?? 0, height: viewport?.clientHeight ?? 0 });
+  const local = (event: { clientX: number; clientY: number }): WfnPoint => {
+    const rect = viewport?.getBoundingClientRect();
+    return { x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) };
+  };
+  const toWorld = (point: WfnPoint): WfnPoint => ({
+    x: (point.x - camera.x) / camera.scale,
+    y: (point.y - camera.y) / camera.scale,
+  });
+  const placeCamera = (next: Camera) => {
+    setCamera((draft) => {
+      draft.x = next.x;
+      draft.y = next.y;
+      draft.scale = clampScale(next.scale);
+    });
+  };
+  const stopGlide = () => {
+    glide.stop();
+    glide.goal = undefined;
+    if (viewport) delete viewport.dataset.cameraMoving;
+  };
+  const [following, setFollowing] = createSignal<string | undefined>();
+  let followFrame = 0;
+  const stopFollow = () => {
+    if (followFrame) cancelAnimationFrame(followFrame);
+    followFrame = 0;
+    setFollowing(undefined);
+  };
+  onCleanup(() => cancelAnimationFrame(followFrame));
+  const moveCamera = (next: Camera, byUser = true) => {
+    stopGlide();
+    if (byUser) stopFollow();
+    cameraMoved ||= byUser;
+    placeCamera(next);
+  };
+  const glideTo = (next: Camera, motion: CameraMotion) => {
+    stopGlide();
+    stopFollow();
+    cameraMoved = true;
+    const goal = { ...next, scale: clampScale(next.scale) };
+    glide.goal = goal;
+    if (viewport) viewport.dataset.cameraMoving = "";
+    glide.stop = glideCamera({ x: camera.x, y: camera.y, scale: camera.scale }, goal, motion, view(), (at, done) => {
+      placeCamera(at);
+      if (!done) return;
+      glide.goal = undefined;
+      if (viewport) delete viewport.dataset.cameraMoving;
+    });
+  };
+  const target = (): Camera => glide.goal ?? camera;
+  const zoomAround = (scale: number, point: WfnPoint, from: Camera = camera) => {
+    const next = clampScale(scale);
+    return {
+      scale: next,
+      x: point.x - ((point.x - from.x) * next) / from.scale,
+      y: point.y - ((point.y - from.y) * next) / from.scale,
+    };
+  };
+  const zoomTo = (scale: number) =>
+    glideTo(zoomAround(scale, { x: view().width / 2, y: view().height / 2 }, target()), "step");
+  const zoomBy = (factor: number) => zoomTo(target().scale * factor);
+  const fitView = (byUser: boolean) => {
+    const { width, height } = view();
+    const boxes = [
+      ...live().flatMap((node) => {
+        const box = boxOf(node.id);
+        if (box) return [box];
+        const element = slot(node.id);
+        const at = positions[node.id];
+        return element && at ? [{ ...at, width: element.offsetWidth, height: element.offsetHeight }] : [];
+      }),
+      ...strokes()
+        .filter((stroke) => stroke.points.length > 0)
+        .map(strokeBox),
+    ];
+    if (!width || !height || boxes.length === 0) return;
+    const left = Math.min(...boxes.map((box) => box.x));
+    const top = Math.min(...boxes.map((box) => box.y));
+    const right = Math.max(...boxes.map((box) => box.x + box.width));
+    const bottom = Math.max(...boxes.map((box) => box.y + box.height));
+    const scale = clampScale(
+      Math.min((width - FIT_MARGIN * 2) / (right - left), (height - FIT_MARGIN * 2) / (bottom - top), 1),
+    );
+    const next = {
+      scale,
+      x: (width - (right - left) * scale) / 2 - left * scale,
+      y: (height - (bottom - top) * scale) / 2 - top * scale,
+    };
+    if (byUser) glideTo(next, "flight");
+    else moveCamera(next, false);
+  };
+
+  const endTidy = (land: boolean) => {
+    const goals = tidyGoals;
+    if (!goals) return;
+    tidyGoals = undefined;
+    cancelAnimationFrame(tidyFrame);
+    if (land)
+      setPositions((draft) => {
+        for (const [id, at] of goals) if (draft[id]) draft[id] = { ...at };
+      });
+    setGesturing(false);
+  };
+  onCleanup(() => cancelAnimationFrame(tidyFrame));
+  const glidePlaces = (goals: ReadonlyMap<string, WfnPoint>) => {
+    const starts = new Map([...goals.keys()].flatMap((id) => (positions[id] ? [[id, { ...positions[id] }]] : [])));
+    tidyGoals = goals;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      endTidy(true);
+      fitView(true);
+      return;
+    }
+    setGesturing(true);
+    const begin = performance.now();
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - begin) / TIDY_MOTION_MS);
+      if (progress >= 1) {
+        endTidy(true);
+        fitView(true);
+        return;
+      }
+      const eased = 1 - (1 - progress) ** 3;
+      setPositions((draft) => {
+        for (const [id, goal] of goals) {
+          const start = starts.get(id);
+          if (start && draft[id])
+            draft[id] = { x: start.x + (goal.x - start.x) * eased, y: start.y + (goal.y - start.y) * eased };
+        }
+      });
+      tidyFrame = requestAnimationFrame(step);
+    };
+    tidyFrame = requestAnimationFrame(step);
+  };
+  const tidyPlaces = (): Map<string, WfnPoint> => {
+    const edges = canvas.edges().filter((edge) => !board.isRemoved(edge.from) && !board.isRemoved(edge.to));
+    const linked = new Set(edges.flatMap((edge) => [edge.from, edge.to]));
+    const members = new Map<string, readonly string[]>();
+    const units: TidyUnit[] = [];
+    const labels: { id: string; box: Box }[] = [];
+    for (const entry of nodeGroups()) {
+      const box = frameOf(entry);
+      if (!box || entry.members.some((id) => board.isLocked(id))) continue;
+      units.push({ id: entry.id, box });
+      members.set(entry.id, entry.members);
+    }
+    for (const node of live()) {
+      const box = boxOf(node.id);
+      if (!box || groupIndex().has(node.id) || board.isLocked(node.id)) continue;
+      if (TIDY_LABELS.has(node.kind) && !linked.has(node.id)) labels.push({ id: node.id, box });
+      else {
+        units.push({ id: node.id, box });
+        members.set(node.id, [node.id]);
+      }
+    }
+    const unitOf = (id: string) => groupIndex().get(id)?.id ?? id;
+    const layout = tidyLayout(
+      units,
+      edges.map((edge) => ({ from: unitOf(edge.from), to: unitOf(edge.to) })),
+    );
+    const labelIds = new Set(labels.map((label) => label.id));
+    const moving = new Set([...members.values()].flat());
+    const fixed = live().flatMap((node) => {
+      const box = boxOf(node.id);
+      return box && !moving.has(node.id) && !labelIds.has(node.id) ? [box] : [];
+    });
+    const below = (hit: Box) => Math.ceil((hit.y + hit.height + TIDY_CLEAR_GAP) / SNAP) * SNAP;
+    const placed = units.flatMap((unit) => {
+      const at = layout.get(unit.id);
+      return at ? [{ unit, box: { ...unit.box, ...snapPoint(at) } }] : [];
+    });
+    const dropPast = (drop: number) => {
+      for (const { box } of placed) {
+        const hit = fixed.find((other) => overlaps({ ...box, y: box.y + drop }, other));
+        if (hit) return below(hit) - box.y;
+      }
+      return undefined;
+    };
+    let drop = 0;
+    for (let next = dropPast(drop); next !== undefined; next = dropPast(drop)) drop = next;
+    const shifts = new Map(
+      placed.map(({ unit, box }) => [unit.id, { x: box.x - unit.box.x, y: box.y + drop - unit.box.y }]),
+    );
+    const goals = new Map<string, WfnPoint>();
+    const move = (id: string, shift: WfnPoint) => {
+      const at = positions[id];
+      if (at) goals.set(id, { x: at.x + shift.x, y: at.y + shift.y });
+    };
+    for (const unit of units) {
+      const shift = shifts.get(unit.id);
+      if (shift) for (const id of members.get(unit.id) ?? []) move(id, shift);
+    }
+    const gap = (one: Box, other: Box) =>
+      Math.hypot(
+        Math.max(0, one.x - (other.x + other.width), other.x - (one.x + one.width)),
+        Math.max(0, one.y - (other.y + other.height), other.y - (one.y + one.height)),
+      );
+    const shifted = (box: Box, shift: WfnPoint): Box => ({ ...box, x: box.x + shift.x, y: box.y + shift.y });
+    const taken: Box[] = [...units.map((unit) => shifted(unit.box, shifts.get(unit.id) ?? { x: 0, y: 0 })), ...fixed];
+    const clearSpot = (box: Box): Box => {
+      let spot = box;
+      for (
+        let hit = taken.find((other) => overlaps(spot, other));
+        hit;
+        hit = taken.find((other) => overlaps(spot, other))
+      )
+        spot = { ...spot, y: below(hit) };
+      return spot;
+    };
+    for (const label of [...labels].sort((one, other) => one.box.y - other.box.y)) {
+      const nearest = units
+        .map((unit) => ({ unit, distance: gap(label.box, unit.box) }))
+        .filter((entry) => entry.distance <= TIDY_REACH)
+        .sort((one, other) => one.distance - other.distance)[0];
+      const follow = nearest && shifts.get(nearest.unit.id);
+      const spot = clearSpot(follow ? { ...label.box, ...snapPoint(shifted(label.box, follow)) } : label.box);
+      taken.push(spot);
+      if (spot.x !== label.box.x || spot.y !== label.box.y) goals.set(label.id, { x: spot.x, y: spot.y });
+    }
+    return goals;
+  };
+  const canTidy = () => !editsBlocked() && !deleted() && live().length > 1;
+  const tidyUp = () => {
+    if (!canTidy() || tidyGoals) return;
+    stopGesture();
+    dropFrames();
+    const goals = tidyPlaces();
+    const moved = [...goals].some(([id, at]) => positions[id]?.x !== at.x || positions[id]?.y !== at.y);
+    if (!moved) {
+      fitView(true);
+      return;
+    }
+    commit();
+    glidePlaces(goals);
+  };
+
+  const canRun = () => !props.readOnly && live().some((node) => isWorkflowStepKind(node.kind));
+  const pastRuns = (): readonly HudRun[] =>
+    props.runs.runs.flatMap(({ run }) =>
+      run.endedAt === null
+        ? []
+        : [
+            {
+              number: run.number,
+              at: run.startedAt,
+              status: run.status,
+              seconds: Math.max(0, (Date.parse(run.endedAt) - Date.parse(run.startedAt)) / 1000),
+              item: runItems().get(run.id),
+            },
+          ],
+    );
+  const runItems = createMemo(
+    () => new Map(props.github?.history().runs.map((entry) => [entry.runId, `#${entry.item.number}`]) ?? []),
+  );
+  const openRuns = (): readonly HudRun[] =>
+    props.runs.runs.flatMap(({ run }) =>
+      run.endedAt === null
+        ? [{ number: run.number, at: run.startedAt, status: run.status, seconds: null, item: runItems().get(run.id) }]
+        : [],
+    );
+  const waitingEvents = () =>
+    props.github?.history().deliveries.filter((delivery) => delivery.outcome === "waiting").length ?? 0;
+  const progress = () => {
+    const total = live().filter((node) => isWorkflowStepKind(node.kind)).length;
+    const detail = openRun();
+    if (!detail) return { done: 0, total };
+    const newest = new Map<string, string>();
+    for (const step of [...detail.steps].sort((left, right) => left.attempt - right.attempt))
+      newest.set(step.nodeId, step.status);
+    const done = [...newest.values()].filter((status) => status === "done" || status === "skipped").length;
+    return { done: Math.min(done, total), total };
+  };
+  const stopRun = () => {
+    const detail = openRun();
+    if (detail) props.onStopRun(detail.run.id);
+  };
+
+  const current = (): HudStep | undefined => {
+    const shown = live().flatMap((node) => {
+      const status = statusOf(node.id);
+      return status ? [{ id: node.id, status }] : [];
+    });
+    const find = (status: HudStep["status"]) =>
+      shown.filter((entry) => entry.status === status).map((entry) => entry.id);
+    for (const status of ["approval", "failed", "running"] as const) {
+      const ids = find(status);
+      const id = ids.find((candidate) => !waitingOf(candidate)) ?? ids[0];
+      if (id !== undefined) return { id, status, waiting: waitingOf(id), name: stepName(id), more: ids.length - 1 };
+    }
+    return undefined;
+  };
+  const stepName = (id: string) => {
+    const custom = customStepName(board.field(id, WORKFLOW_STEP_NAME_FIELD));
+    if (custom) return custom;
+    const [label = t("workflow.canvas.step"), ...fields] = searchTexts(id);
+    const words = fields
+      .find((field) => field.trim())
+      ?.replace(/\s+/g, " ")
+      .trim();
+    if (!words) return label;
+    return `${label} · ${words.length > 32 ? `${words.slice(0, 31).trimEnd()}…` : words}`;
+  };
+
+  const snapPoint = (point: WfnPoint): WfnPoint => ({
+    x: Math.round(point.x / SNAP) * SNAP,
+    y: Math.round(point.y / SNAP) * SNAP,
+  });
+  const drawnBox = (from: WfnPoint, to: WfnPoint): Box => {
+    const start = snapPoint(toWorld(from));
+    const end = toWorld(to);
+    const limits = RESIZE.shape;
+    const width = snapWithin(Math.abs(end.x - start.x), limits.width);
+    const height = snapWithin(Math.abs(end.y - start.y), limits.height ?? limits.width);
+    return {
+      x: end.x < start.x ? start.x - width : start.x,
+      y: end.y < start.y ? start.y - height : start.y,
+      width,
+      height,
+    };
+  };
+
+  const freePlace = (size: { width: number; height: number }, except: string): WfnPoint => {
+    const { width, height } = view();
+    const { x, y, scale } = target();
+    const cards = untrack(() => [
+      ...live().flatMap((node) => {
+        if (node.kind === "text" || node.kind === "shape" || node.id === except) return [];
+        const at = positions[node.id];
+        const box = boxOf(node.id) ?? (at && { ...at, ...NEW_NODE });
+        return box ? [box] : [];
+      }),
+      ...nodeGroups().flatMap((entry) => frameOf(entry) ?? []),
+    ]);
+    const margin = FIT_MARGIN / scale;
+    const left = -x / scale + margin;
+    const top = -y / scale + margin;
+    const right = left + width / scale - 2 * margin - size.width;
+    const bottom = top + height / scale - 2 * margin - size.height;
+    const center = snapPoint({ x: (left + right) / 2, y: (top + bottom) / 2 });
+    if (right < left || bottom < top) return center;
+    const step = Math.max(SNAP, Math.round(PLACE_STEP / scale / SNAP) * SNAP);
+    const across = Math.floor((right - left) / 2 / step);
+    const down = Math.floor((bottom - top) / 2 / step);
+    const places: WfnPoint[] = [];
+    for (let column = -across; column <= across; column++)
+      for (let row = -down; row <= down; row++) places.push({ x: center.x + column * step, y: center.y + row * step });
+    const distance = (at: WfnPoint) => Math.hypot(at.x - center.x, at.y - center.y);
+    places.sort((one, other) => distance(one) - distance(other));
+    const free = (gap: number) => (at: WfnPoint) =>
+      !cards.some((box) =>
+        overlaps({ x: at.x - gap, y: at.y - gap, width: size.width + gap * 2, height: size.height + gap * 2 }, box),
+      );
+    return places.find(free(GRID * 2)) ?? places.find(free(0)) ?? center;
+  };
+
+  const addNode = (kind: WorkflowNodeKind, point?: WfnPoint, fields?: WfnFields): string => {
+    commit();
+    const id = `${kind}-${crypto.randomUUID()}`;
+    setPositions((draft) => {
+      draft[id] = point ? snapPoint(point) : freePlace(NEW_NODE, id);
+    });
+    canvas.putFields(id, { ...fields, ...hostDefaults(kind, props.catalogs, props.features, fields) });
+    setNodes((list) => [...list, kind === "trigger" ? { id, kind, schedule: newTriggerSchedule() } : { id, kind }]);
+    if (!point)
+      afterLayout(() => {
+        const element = slot(id);
+        if (!element) return;
+        const next = freePlace({ width: element.offsetWidth, height: element.offsetHeight }, id);
+        setPositions((draft) => {
+          draft[id] = next;
+        });
+      });
+    return id;
+  };
+
+  const placeItem = (tool: "note" | "shape", point: WfnPoint, box?: Box) => {
+    commit();
+    const id = `${tool}-${crypto.randomUUID()}`;
+    const size = box ? { width: box.width, height: box.height } : tool === "shape" ? shapeSize(ui.shape) : NOTE_SIZE;
+    const at = box ? { x: box.x, y: box.y } : snapPoint({ x: point.x - size.width / 2, y: point.y - size.height / 2 });
+    setPositions((draft) => {
+      draft[id] = at;
+    });
+    if (tool === "shape")
+      setSizes((draft) => {
+        draft[id] = { ...size };
+      });
+    const writer = props.catalogs.self;
+    canvas.putFields(
+      id,
+      tool === "note"
+        ? { tone: ui.note, ...(writer ? { authorName: writer } : {}) }
+        : { shape: ui.shape, color: ui.fill },
+    );
+    setNodes((list) => [...list, { id, kind: tool }]);
+    setGhost(null);
+    setTool("select");
+    afterLayout(() => {
+      const element = slot(id);
+      let label = 0;
+      for (
+        let part = element?.querySelector<HTMLElement>(".wfn-card") ?? null;
+        part && part !== element;
+        part = part.offsetParent instanceof HTMLElement ? part.offsetParent : null
+      )
+        label += part.offsetTop;
+      if (label > 0)
+        setPositions((draft) => {
+          draft[id] = snapPoint({ x: at.x, y: at.y - label });
+        });
+      canvas.select([id]);
+      element?.querySelector<HTMLElement>(".wfn-card :is(textarea, .wfn-name-field)")?.focus();
+    });
+  };
+
+  const collect = (ids: readonly string[]): Clip => {
+    const picked = nodes().flatMap((node) => {
+      const at = positions[node.id];
+      return ids.includes(node.id) && at && !board.isRemoved(node.id) ? [{ ...node, at: { ...at } }] : [];
+    });
+    const inside = new Set(picked.map((node) => node.id));
+    return {
+      nodes: picked,
+      sizes: Object.fromEntries(picked.flatMap((node) => (sizes[node.id] ? [[node.id, { ...sizes[node.id] }]] : []))),
+      fields: Object.fromEntries(picked.map((node) => [node.id, canvas.fields(node.id)])),
+      edges: canvas.edges().filter((edge) => inside.has(edge.from) && inside.has(edge.to)),
+    };
+  };
+
+  const place = (clip: Clip, shift: WfnPoint, tag: string) => {
+    if (clip.nodes.length === 0) return;
+    commit();
+    const ids = new Map<string, string>();
+    for (const node of clip.nodes) {
+      ids.set(node.id, `${node.kind}-${tag}-${crypto.randomUUID()}`);
+    }
+    const kinds = new Map(clip.nodes.map((node) => [node.id, node.kind]));
+    const kept = new Set(clip.edges.map((edge) => `${edge.from}>${edge.to}`));
+    const relinked = (id: string, fields: WfnFields): WfnFields => {
+      const kind = kinds.get(id);
+      if (!kind) return fields;
+      const next = { ...fields };
+      for (const name of workflowStepFields(kind)) {
+        const value = fields[name];
+        if (typeof value === "string" && value !== "")
+          next[name] = ids.get(value) ?? (kept.has(`${value}>${id}`) ? value : "");
+      }
+      return next;
+    };
+    const copies = clip.nodes.map((node) => ({
+      ...node,
+      id: ids.get(node.id) ?? node.id,
+      at: { x: node.at.x + shift.x, y: node.at.y + shift.y },
+    }));
+    setPositions((draft) => {
+      for (const node of copies) draft[node.id] = node.at;
+    });
+    setSizes((draft) => {
+      for (const [id, size] of Object.entries(clip.sizes)) draft[ids.get(id) ?? id] = { ...size };
+    });
+    for (const [id, fields] of Object.entries(regroupCopies(clip.fields)))
+      canvas.putFields(ids.get(id) ?? id, relinked(id, fields));
+    setNodes((list) => [...list, ...copies]);
+    canvas.addEdges(
+      clip.edges.flatMap((edge) => {
+        const from = ids.get(edge.from) ?? edge.from;
+        const to = ids.get(edge.to);
+        if (!to) return [];
+        const copy: WfnEdge = {
+          id: `${from}${edge.branch ? `.${edge.branch}` : ""}>${to}:${edge.type}`,
+          from,
+          to,
+          type: edge.type,
+        };
+        if (edge.branch) copy.branch = edge.branch;
+        return [copy];
+      }),
+    );
+    canvas.select(copies.map((node) => node.id));
+  };
+
+  const withoutIds = (clip: Clip): Clip => {
+    const kinds = new Map(clip.nodes.map((node) => [node.id, node.kind]));
+    return {
+      ...clip,
+      fields: Object.fromEntries(
+        Object.entries(clip.fields).map(([id, fields]) => {
+          const kind = kinds.get(id);
+          return [id, kind ? workflowFieldsWithoutIds(kind, fields) : fields];
+        }),
+      ),
+    };
+  };
+
+  const referencesInto = (clip: Clip): WfnEdge[] => {
+    const inside = new Set(clip.nodes.map((node) => node.id));
+    const pictures = new Set(clip.nodes.flatMap((node) => (node.kind === "image" ? [node.id] : [])));
+    return canvas
+      .edges()
+      .filter(
+        (edge) =>
+          edge.type === "image" && pictures.has(edge.to) && !inside.has(edge.from) && !board.isRemoved(edge.from),
+      );
+  };
+
+  const duplicateNodes = (ids: readonly string[]) => {
+    const clip = collect(ids);
+    place(
+      { ...clip, edges: [...clip.edges, ...referencesInto(clip)] },
+      { x: DUPLICATE_OFFSET, y: DUPLICATE_OFFSET },
+      "copy",
+    );
+  };
+
+  const resetSize = (id: string) => {
+    if (!sizes[id]) return;
+    commit();
+    setSizes((draft) => {
+      delete draft[id];
+    });
+  };
+
+  const slot = (id: string) => viewport?.querySelector<HTMLElement>(`[data-slot="${id}"]`) ?? undefined;
+  const boxOf = (id: string): Box | undefined => {
+    const at = positions[id];
+    const rendered = slotSizes[id];
+    return at && rendered
+      ? { ...at, width: sizes[id]?.width ?? rendered.width, height: sizes[id]?.height ?? rendered.height }
+      : undefined;
+  };
+  const boxesOf = (ids: readonly string[]) => ids.flatMap((id) => boxOf(id) ?? []);
+
+  const nodeGroups = createMemo(
+    () =>
+      groupsOf(
+        live().map((node) => node.id),
+        (id, key) => board.field(id, key),
+      ),
+    { equals: sameGroups },
+  );
+  const groupIndex = createMemo(() => {
+    const index = new Map<string, CanvasGroup>();
+    for (const entry of nodeGroups()) for (const id of entry.members) index.set(id, entry);
+    return index;
+  });
+  const frameOf = (entry: CanvasGroup) => {
+    const members = union(boxesOf(entry.members));
+    return members ? frameBox(entry, members) : undefined;
+  };
+  const shownBox = (id: string) => {
+    const entry = groupIndex().get(id);
+    return entry?.folded ? frameOf(entry) : boxOf(id);
+  };
+  const shownBoxes = (ids: readonly string[]) => ids.flatMap((id) => shownBox(id) ?? []);
+  const typeMembers = (entry: CanvasGroup, type: WfnPortType) =>
+    entry.members.filter((id) => canvas.outputs(id).includes(type));
+  const typesOfGroups = createMemo(
+    () => new Map(nodeGroups().map((entry) => [entry.id, outputTypes(entry.members.map((id) => canvas.outputs(id)))])),
+  );
+  const groupTypes = (entry: CanvasGroup) => typesOfGroups().get(entry.id) ?? [];
+  const groupFeeds = createMemo(() => {
+    const counts = new Map<string, number>();
+    for (const edge of canvas.edges()) {
+      const entry = groupIndex().get(edge.from);
+      if (!entry || edge.branch !== undefined || canvas.slots(edge).length > 0) continue;
+      const key = `${entry.id}>${edge.to}:${edge.type}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  });
+  const groupAnchor = (port: PortRef, other: string | undefined, slot?: string): WfnAnchor | undefined => {
+    const entry = groupIndex().get(port.node);
+    if (!entry || (other !== undefined && groupIndex().get(other)?.id === entry.id)) return undefined;
+    const types = groupTypes(entry);
+    const index = types.indexOf(port.type);
+    const at = (place: (box: Box) => WfnPoint) => () => {
+      const box = frameOf(entry);
+      return box && place(box);
+    };
+    if (entry.folded) {
+      if (port.side === "in") return { key: `group:${entry.id}:in`, at: at(inputPoint) };
+      return {
+        key: `group:${entry.id}:out:${port.type}`,
+        at: at((box) => portPoint(box, Math.max(index, 0), index < 0 ? 1 : types.length, true)),
+      };
+    }
+    if (port.side === "in" || port.branch !== undefined || slot !== undefined || index < 0) return undefined;
+    const many =
+      other === undefined
+        ? typeMembers(entry, port.type).every((id) => board.isSelected(id))
+        : (groupFeeds().get(`${entry.id}>${other}:${port.type}`) ?? 0) > 1;
+    if (!many) return undefined;
+    return { key: `group:${entry.id}:out:${port.type}`, at: at((box) => portPoint(box, index, types.length, false)) };
+  };
+  const hiddenLine = (edge: WfnEdge) => {
+    const entry = groupIndex().get(edge.from);
+    return entry?.folded === true && groupIndex().get(edge.to)?.id === entry.id;
+  };
+  const framePorts = (entry: CanvasGroup): GroupPort[] =>
+    groupTypes(entry).map((type) => {
+      const members = typeMembers(entry, type);
+      return {
+        type,
+        connected: canvas
+          .edges()
+          .some(
+            (edge) =>
+              members.includes(edge.from) &&
+              edge.type === type &&
+              groupAnchor(
+                { node: edge.from, side: "out", type, branch: edge.branch },
+                edge.to,
+                canvas.slots(edge)[0],
+              ) !== undefined,
+          ),
+        armed: members.length > 0 && members.every((id) => board.armed(id, "out", type)),
+      };
+    });
+  const groupPortDown = (entry: CanvasGroup, type: WfnPortType, event: PointerEvent) => {
+    const members = typeMembers(entry, type);
+    const [first] = members;
+    if (!first || event.button !== 0) return;
+    canvas.select(members);
+    board.dragPort(first, "out", type, event);
+  };
+  const groupPortPress = (entry: CanvasGroup, type: WfnPortType) => {
+    const members = typeMembers(entry, type);
+    const [first] = members;
+    if (!first) return;
+    canvas.select(members);
+    board.pressPort(first, "out", type);
+  };
+  const foldedStatus = (entry: CanvasGroup): WfnRunStatus | undefined => {
+    if (!entry.folded) return undefined;
+    const states = entry.members.map(statusOf);
+    return FOLDED_STATUS.find((status) => states.includes(status));
+  };
+  const stackPictures = (entry: CanvasGroup) =>
+    entry.members.flatMap((id) => assetPicture(board, id) ?? []).slice(0, STACK_PICTURES);
+  const isWhole = (entry: CanvasGroup) => {
+    const ids = group();
+    return ids.length === entry.members.length && entry.members.every((id) => board.isSelected(id));
+  };
+  const selectedGroup = createMemo(() => {
+    const [first] = group();
+    const entry = first === undefined ? undefined : groupIndex().get(first);
+    return entry && isWhole(entry) ? entry : undefined;
+  });
+  const heldGroup = createMemo((last?: CanvasGroup) => selectedGroup() ?? last);
+  const groupable = (id: string) => {
+    const kind = live().find((node) => node.id === id)?.kind;
+    const type = board.field(id, kind === "trigger" ? "trigger" : "target");
+    if (typeof type !== "string") return true;
+    if (kind === "trigger") return !HOST_TRIGGERS.includes(type) || props.features.triggers.some((one) => one === type);
+    if (kind === "output") return !HOST_OUTPUTS.includes(type) || props.features.outputs.some((one) => one === type);
+    return true;
+  };
+  const changeable = (entry: CanvasGroup) => !frozen() && entry.members.every(groupable);
+  const groupNodes = (ids: readonly string[], name = "") => {
+    const members = ids.filter((id) => !board.isRemoved(id) && groupable(id));
+    if (members.length < 2 || frozen() || selectedGroup()) return;
+    const left = nodeGroups().flatMap((entry) => {
+      const rest = entry.members.filter((id) => !members.includes(id));
+      return rest.length === 1 ? rest.filter(groupable) : [];
+    });
+    canvas.patchFields({ ...leavePatch(left), ...joinPatch(members, name) });
+    canvas.select(members);
+  };
+  const ungroup = (ids: readonly string[]) => {
+    const ended = nodeGroups().filter((entry) => entry.members.some((id) => ids.includes(id)) && changeable(entry));
+    if (ended.length === 0) return;
+    canvas.patchFields(leavePatch(ended.flatMap((entry) => entry.members)));
+  };
+  const foldGroup = (entry: CanvasGroup, folded: boolean) => {
+    if (!changeable(entry)) return;
+    canvas.patchFields(groupPatch(entry, WORKFLOW_GROUP_FIELDS.folded, folded || undefined));
+  };
+  const renameGroup = (entry: CanvasGroup, name: string) => {
+    if (!changeable(entry)) return;
+    canvas.patchFields(
+      groupPatch(entry, WORKFLOW_GROUP_FIELDS.name, name || undefined),
+      `${entry.members[0]}:${WORKFLOW_GROUP_FIELDS.name}`,
+    );
+  };
+  const foldText = (entry: CanvasGroup) =>
+    t(entry.folded ? "workflow.canvas.group.expand" : "workflow.canvas.group.collapse");
+  const FoldIcon = (props: { folded: boolean }) => (
+    <Show when={props.folded} fallback={<ChevronsDownUp />}>
+      <ChevronsUpDown />
+    </Show>
+  );
+
+  const rowPlaces = (count: number, from: WfnPoint) =>
+    Array.from({ length: count }, (_, index) => ({
+      x: from.x + (index % PICTURE_ROW) * (NEW_NODE.width + GRID * 2),
+      y: from.y + Math.floor(index / PICTURE_ROW) * (NEW_NODE.height + GRID * 2),
+    }));
+  const rowsRightOf = (box: Box, count: number, group?: string): WfnPoint => {
+    const size = rowsSize(count);
+    const blocks = blocksBut(group);
+    let at = { x: box.x + box.width + GRID * 2, y: box.y };
+    for (;;) {
+      const row = { ...at, ...size };
+      const hit = blocks.find((block) => overlaps(row, block));
+      if (!hit) return at;
+      at = { x: hit.x + hit.width + GRID * 2, y: at.y };
+    }
+  };
+  const rowsSize = (count: number) => ({
+    width: Math.min(count, PICTURE_ROW) * (NEW_NODE.width + GRID * 2) - GRID * 2,
+    height: Math.ceil(count / PICTURE_ROW) * (NEW_NODE.height + GRID * 2) - GRID * 2,
+  });
+  const blocksBut = (group?: string) =>
+    untrack(() => [
+      ...live().flatMap((node) => shownBox(node.id) ?? []),
+      ...nodeGroups().flatMap((entry) => (entry.id === group ? [] : (frameOf(entry) ?? []))),
+    ]);
+  const rowsBox = (at: WfnPoint, count: number): Box => {
+    const size = rowsSize(count);
+    if (count < 2) return { ...at, ...size };
+    return frameBox({ id: "", name: "", folded: false, members: [] }, { ...at, ...size });
+  };
+  const reflowRows = (ids: readonly string[], from: WfnPoint) =>
+    afterLayout(() => {
+      const next: Record<string, WfnPoint> = {};
+      let y = from.y;
+      for (let row = 0; row * PICTURE_ROW < ids.length; row++) {
+        let x = from.x;
+        let tallest = 0;
+        for (const id of ids.slice(row * PICTURE_ROW, (row + 1) * PICTURE_ROW)) {
+          const element = slot(id);
+          if (!element || board.isRemoved(id)) continue;
+          next[id] = snapPoint({ x, y });
+          x += element.offsetWidth + GRID * 2;
+          tallest = Math.max(tallest, element.offsetHeight);
+        }
+        y += tallest + GRID * 2;
+      }
+      setPositions((draft) => {
+        for (const [id, at] of Object.entries(next)) draft[id] = at;
+      });
+    });
+  const filesName = (files: readonly StoredFileRow[]) =>
+    files.every((file) => file.previewKind === "image") ? t("workflow.canvas.group.imagesName") : "";
+  const addFiles = (files: readonly StoredFileRow[], from?: WfnPoint) => {
+    if (files.length === 0 || deleted() || frozen() || !allows("asset")) return;
+    const blocks = blocksBut();
+    const fits = (at: WfnPoint) => !blocks.some((block) => overlaps(rowsBox(at, files.length), block));
+    const room = rowsBox({ x: 0, y: 0 }, files.length);
+    const free = () => {
+      const at = freePlace({ width: room.width, height: room.height }, "");
+      return { x: at.x - room.x, y: at.y - room.y };
+    };
+    const start = from && fits(from) ? from : free();
+    commit();
+    const release = edits.join();
+    try {
+      const places = rowPlaces(files.length, start);
+      const ids = files.map((file, index) =>
+        addNode("asset", places[index] ?? start, { file: file.name, fileId: file.id }),
+      );
+      if (ids.length > 1) canvas.patchFields(joinPatch(ids, filesName(files)));
+      canvas.select(ids);
+      reflowRows(ids, snapPoint(start));
+    } finally {
+      release();
+    }
+  };
+  const uploadAll = (files: readonly File[]) =>
+    Promise.allSettled(files.map((file) => board.upload(file))).then((results) =>
+      results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])),
+    );
+  const dropOnAsset = (id: string, files: readonly File[]) => {
+    if (frozen() || !props.features.uploads) return;
+    void uploadAll(files).then((stored) => {
+      const [first, ...rest] = stored;
+      if (!first || deleted() || frozen() || board.isRemoved(id) || !allows("asset")) return;
+      const box = boxOf(id);
+      const entry = groupIndex().get(id);
+      const start = box ? rowsRightOf(box, rest.length, entry?.id) : undefined;
+      commit();
+      const release = edits.join();
+      try {
+        canvas.patchFields({ [id]: { file: first.name, fileId: first.id } });
+        if (rest.length === 0) return;
+        const places = start ? rowPlaces(rest.length, start) : [];
+        const added = rest.map((file, index) => addNode("asset", places[index], { file: file.name, fileId: file.id }));
+        canvas.patchFields(
+          entry
+            ? Object.fromEntries(
+                added.map((member) => [
+                  member,
+                  {
+                    [WORKFLOW_GROUP_FIELDS.id]: entry.id,
+                    [WORKFLOW_GROUP_FIELDS.name]: entry.name || undefined,
+                    [WORKFLOW_GROUP_FIELDS.folded]: entry.folded || undefined,
+                  },
+                ]),
+              )
+            : joinPatch([id, ...added], filesName(stored)),
+        );
+        canvas.select([id, ...added]);
+        if (start) reflowRows(added, snapPoint(start));
+      } finally {
+        release();
+      }
+    });
+  };
+
+  const peers = createMemo(() => (props.features.presence && props.presence ? peersOf(props.presence) : []));
+  const self = () =>
+    props.features.presence ? props.presence?.members.find((member) => member.id === props.presence?.self) : undefined;
+  const spots = () => props.presence?.spots ?? {};
+  const peerOn = (id: string) => peers().find((peer) => spots()[peer.member.id]?.selected === id);
+  const peerTag = (id: string) => {
+    const peer = peerOn(id);
+    const at = peer && spots()[peer.member.id]?.at;
+    const box = boxOf(id);
+    if (!peer || !at || !box) return undefined;
+    const near = at.x >= box.x && at.x <= box.x + box.width && at.y >= box.y - 40 && at.y <= box.y + box.height + 40;
+    return near ? undefined : peer;
+  };
+  const showPeer = (peer: WorkflowPeer) => {
+    const at = spots()[peer.member.id]?.at;
+    if (!at) return;
+    const { width, height } = view();
+    const scale = target().scale;
+    glideTo({ scale, x: width / 2 - at.x * scale, y: height / 2 - at.y * scale }, "flight");
+  };
+  const follow = (peer: WorkflowPeer) => {
+    stopFollow();
+    showPeer(peer);
+    setFollowing(peer.member.id);
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let centring = false;
+    let last = performance.now();
+    const tick = (now: number) => {
+      if (!followedPeer()) return stopFollow();
+      const elapsed = Math.max(0, now - last);
+      last = now;
+      followFrame = requestAnimationFrame(tick);
+      const at = spots()[peer.member.id]?.at;
+      if (!at || glide.goal) return;
+      const { width, height } = view();
+      const dx = width / 2 - (at.x * camera.scale + camera.x);
+      const dy = height / 2 - (at.y * camera.scale + camera.y);
+      centring ||= Math.abs(dx) > width * FOLLOW_ZONE || Math.abs(dy) > height * FOLLOW_ZONE;
+      if (!centring) return;
+      if (Math.hypot(dx, dy) < 0.5) {
+        centring = false;
+        return;
+      }
+      const share = still ? 1 : 1 - Math.exp(-elapsed / FOLLOW_EASE);
+      placeCamera({ scale: camera.scale, x: camera.x + dx * share, y: camera.y + dy * share });
+    };
+    followFrame = requestAnimationFrame(tick);
+  };
+  const toggleFollow = (peer: WorkflowPeer) => (following() === peer.member.id ? stopFollow() : follow(peer));
+  const followedPeer = () => peers().find((peer) => peer.member.id === following());
+
+  const [unbuilt, setUnbuilt] = createSignal<ReadonlySet<string>>(new Set());
+  const [arrived, setArrived] = createSignal<ReadonlySet<string>>(new Set());
+  const [builder, setBuilder] = createSignal<WorkflowBuilderSpot>();
+  let playedBuild: number | undefined;
+  let buildTimers: number[] = [];
+  const buildState = (id: string) => (unbuilt().has(id) ? "unbuilt" : arrived().has(id) ? "arrived" : undefined);
+  const ringOn = (id: string) => peerOn(id)?.color ?? (builder()?.on === id ? builder()?.color : undefined);
+  const endBuild = () => {
+    for (const timer of buildTimers) clearTimeout(timer);
+    buildTimers = [];
+    setUnbuilt(new Set<string>());
+    setArrived(new Set<string>());
+    setBuilder(undefined);
+  };
+  onCleanup(endBuild);
+  const buildPoint = (id: string): WfnPoint | undefined => {
+    const box = boxOf(id);
+    return box ? { x: box.x + Math.min(56, box.width / 2), y: box.y + Math.min(30, box.height / 2) } : positions[id];
+  };
+  const playBuild = () => {
+    endBuild();
+    const build = props.build;
+    if (!build || build.key === playedBuild || build.workflowId !== props.workflow.summary.id) return;
+    playedBuild = build.key;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const agent = props.catalogs.agents.find((entry) => entry.id === build.agentId);
+    const plan = workflowBuildPlan(build.before, props.workflow.graph);
+    if (!agent || plan.steps.length === 0) return;
+    const later = (run: () => void, wait: number) => buildTimers.push(window.setTimeout(run, wait));
+    const show = (ids: readonly string[]) => {
+      setUnbuilt((hidden) => new Set([...hidden].filter((id) => !ids.includes(id))));
+      setArrived((shown) => new Set([...shown, ...ids]));
+    };
+    setUnbuilt(
+      new Set([
+        ...plan.steps.flatMap((step) => (step.added ? [step.node] : [])),
+        ...plan.steps.flatMap((step) => step.edges),
+        ...plan.rest,
+      ]),
+    );
+    const color = avatarHeadColor(agent.avatarSeed, agent.avatarHue, agent.avatarColor ?? null);
+    later(() => {
+      const first = buildPoint(plan.steps[0]?.node ?? "");
+      if (!first) return endBuild();
+      setBuilder({ name: agent.name, color, at: { x: first.x - 80, y: first.y - 60 }, on: undefined, leaving: false });
+    }, BUILD_START);
+    plan.steps.forEach((step, index) => {
+      const at = BUILD_START + BUILD_GLIDE / 2 + index * BUILD_STEP;
+      later(() => {
+        const point = buildPoint(step.node);
+        setBuilder((spot) => spot && { ...spot, at: point ?? spot.at, on: step.node });
+      }, at);
+      later(() => show([step.node, ...step.edges]), at + BUILD_GLIDE);
+    });
+    const end = BUILD_START + BUILD_GLIDE / 2 + plan.steps.length * BUILD_STEP;
+    later(() => {
+      show(plan.rest);
+      setBuilder((spot) => spot && { ...spot, on: undefined });
+    }, end);
+    later(() => setBuilder((spot) => spot && { ...spot, leaving: true }), end + BUILD_LINGER);
+    later(endBuild, end + BUILD_LINGER + BUILD_FADE);
+  };
+  createEffect(resetToken, () => untrack(playBuild));
+  const hudBoxes = (): Box[] => {
+    const frame = viewport?.getBoundingClientRect();
+    const stage = viewport?.closest(".wfn-stage");
+    if (!frame || !stage) return [];
+    return [...stage.querySelectorAll<HTMLElement>(".wfn-hud-top, .wfn-hud")].map((element) => {
+      const rect = element.getBoundingClientRect();
+      const start = toWorld({ x: rect.left - frame.left, y: rect.top - frame.top });
+      return { x: start.x, y: start.y, width: rect.width / camera.scale, height: rect.height / camera.scale };
+    });
+  };
+  const toolbarBelow = (id: string, bar: { width: number; height: number }) => {
+    const box = boxOf(id);
+    if (!box) return false;
+    const width = bar.width / camera.scale;
+    const height = bar.height / camera.scale;
+    const zone = (y: number): Box => ({ x: box.x + (box.width - width) / 2, y, width, height });
+    const onNode = (area: Box) =>
+      live().some((node) => {
+        const other = node.id === id || node.kind === "text" || node.kind === "shape" ? undefined : boxOf(node.id);
+        return other !== undefined && overlaps(area, other);
+      });
+    const hud = hudBoxes();
+    const top = toWorld({ x: 0, y: 0 }).y;
+    const bottom = top + (viewport?.clientHeight ?? 0) / camera.scale;
+    const blocked = (area: Box) =>
+      area.y < top || area.y + area.height > bottom || hud.some((other) => overlaps(area, other));
+    const above = zone(box.y - (TOOLBAR_GAP / camera.scale + height));
+    const room = showsStrip(board, id) ? STRIP_ROOM : TOOLBAR_GAP;
+    const below = zone(box.y + box.height + room / camera.scale);
+    if (blocked(above)) return !blocked(below);
+    if (!onNode(above)) return false;
+    return !onNode(below) && !blocked(below);
+  };
+
+  const groupBox = createMemo(() => {
+    const whole = selectedGroup();
+    if (whole) return frameOf(whole);
+    const ids = group();
+    return ids.length > 1 ? union(shownBoxes(ids)) : undefined;
+  });
+
+  const nudge = (dx: number, dy: number, again: boolean) => {
+    const ids = group().filter((id) => !board.isLocked(id));
+    if (ids.length === 0) return;
+    if (!again) commit();
+    setPositions((draft) => {
+      for (const id of ids) {
+        const at = draft[id];
+        if (at) draft[id] = { x: at.x + dx, y: at.y + dy };
+      }
+    });
+  };
+
+  const closeDrop = () => {
+    setDrop(undefined);
+    canvas.cancelDraft();
+  };
+  const dropGroups = (): { label: AppTextKey; items: AddItem[] }[] => {
+    const open = drop();
+    if (!open) return [];
+    const words = dropQuery().trim().toLowerCase();
+    const allowed = props.features.kinds;
+    const kinds =
+      "edge" in open
+        ? insertKinds(open.edge.type, allowed)
+        : "start" in open
+          ? dropKinds(open.start, allowed)
+          : addGroups(allowed).flatMap((group) => group.items);
+    return addGroups(allowed)
+      .map((group) => ({
+        label: group.label,
+        items: group.items.filter((item) => kinds.includes(item) && t(item.label).toLowerCase().includes(words)),
+      }))
+      .filter((group) => group.items.length > 0);
+  };
+  const dropAt = () => {
+    const open = drop();
+    const frame = viewport?.getBoundingClientRect();
+    if (!open || !frame) return { x: 0, y: 0 };
+    const { width, height } = view();
+    const x = camera.x + open.at.x * camera.scale;
+    const y = camera.y + open.at.y * camera.scale;
+    const left =
+      "edge" in open
+        ? x - DROP_MENU.width / 2
+        : !("start" in open) || open.start.side === "out"
+          ? x + DROP_MENU.gap
+          : x - DROP_MENU.gap - DROP_MENU.width;
+    return {
+      x: frame.left + Math.max(DROP_MENU.inset, Math.min(left, width - DROP_MENU.width - DROP_MENU.inset)),
+      y: frame.top + Math.max(DROP_MENU.inset, Math.min(y + DROP_MENU.gap, height - dropHeight() - DROP_MENU.inset)),
+    };
+  };
+  const dropConnected = () => {
+    const open = drop();
+    return open !== undefined && ("edge" in open || "start" in open);
+  };
+  const pickDrop = (item: AddItem) => {
+    const open = drop();
+    if (!open) return;
+    setDrop(undefined);
+    if ("edge" in open) return insertNode(item, open.edge, open.at);
+    if (!("start" in open)) {
+      canvas.select([addNode(item.kind, open.at, item.fields)]);
+      return;
+    }
+    const { start } = open;
+    commit();
+    const release = edits.join();
+    const id = addNode(item.kind, open.at, item.fields);
+    afterLayout(() => {
+      const element = slot(id);
+      const side = start.side === "out" ? "in" : "out";
+      const port = element?.querySelector(
+        `.wfn-port[data-wfn-port-side="${side}"][data-wfn-port-type="${start.type}"]`,
+      );
+      if (element && port) {
+        const box = element.getBoundingClientRect();
+        const dot = port.getBoundingClientRect();
+        const offset = {
+          x: (dot.left + dot.width / 2 - box.left) / camera.scale,
+          y: (dot.top + dot.height / 2 - box.top) / camera.scale,
+        };
+        setPositions((draft) => {
+          draft[id] = snapPoint({ x: open.at.x - offset.x, y: open.at.y - offset.y });
+        });
+      }
+      canvas.attach(start, id);
+      canvas.select([id]);
+      release();
+    }, release);
+  };
+
+  const insertNode = (item: AddItem, edge: WfnEdge, at: WfnPoint) => {
+    commit();
+    const release = edits.join();
+    const id = addNode(item.kind, at, item.fields);
+    afterLayout(() => {
+      const element = slot(id);
+      const from = boxOf(edge.from);
+      const to = positions[edge.to];
+      if (element && loops().has(edge.id))
+        setPositions((draft) => {
+          draft[id] = snapPoint({ x: at.x - element.offsetWidth / 2, y: at.y - element.offsetHeight / 2 });
+        });
+      else if (element && from && to) {
+        const width = element.offsetWidth;
+        const room = to.x - (from.x + from.width);
+        const need = width + Math.max(INSERT_GAP, room) * 2;
+        const shift = Math.ceil(Math.max(0, need - room) / SNAP) * SNAP;
+        setPositions((draft) => {
+          if (shift > 0)
+            for (const node of live()) {
+              const point = draft[node.id];
+              if (point && node.id !== id && point.x >= to.x) draft[node.id] = { x: point.x + shift, y: point.y };
+            }
+          draft[id] = snapPoint({
+            x: from.x + from.width + (room + shift - width) / 2,
+            y: from.y === to.y ? from.y : at.y - element.offsetHeight / 2,
+          });
+        });
+      }
+      canvas.splice(edge.id, id);
+      canvas.select([id]);
+      release();
+    }, release);
+  };
+
+  const copyNodes = (ids: readonly string[]) => {
+    const clip = collect(ids);
+    if (clip.nodes.length === 0) return;
+    copying = ids;
+    const written = document.execCommand("copy");
+    copying = undefined;
+    if (!written) setCopied({ key: "", clip, from: openId(), server: serverKey() });
+  };
+
+  const pasteNodes = (point?: WfnPoint) => {
+    const held = copied();
+    const foreign = held !== undefined && held.server !== serverKey();
+    const clip = held && (foreign ? withoutIds(held.clip) : held.clip);
+    const box = clip ? union(clip.nodes.map((node) => ({ ...node.at, width: 0, height: 0 }))) : undefined;
+    if (!held || !clip || !box) return;
+    const center = () => {
+      const middle = toWorld({ x: view().width / 2, y: view().height / 2 });
+      return { x: middle.x - box.width / 2, y: middle.y - box.height / 2 };
+    };
+    const at = point && snapPoint(point);
+    const again = at && pastedAt && at.x === pastedAt.x && at.y === pastedAt.y;
+    const target =
+      at && !again
+        ? at
+        : held.from === openId() && !foreign
+          ? snapPoint({ x: box.x + DUPLICATE_OFFSET, y: box.y + DUPLICATE_OFFSET })
+          : snapPoint(center());
+    pastedAt = at;
+    const shift = { x: target.x - box.x, y: target.y - box.y };
+    place(clip, shift, "paste");
+    setCopied({
+      key: held.key,
+      from: openId(),
+      server: serverKey(),
+      clip: {
+        ...clip,
+        nodes: clip.nodes.map((node) => ({ ...node, at: { x: node.at.x + shift.x, y: node.at.y + shift.y } })),
+      },
+    });
+  };
+
+  const restack = (id: string, where: "front" | "back") => {
+    commit();
+    setNodes((list) => {
+      const node = list.find((entry) => entry.id === id);
+      if (!node) return list;
+      const rest = list.filter((entry) => entry.id !== id);
+      return where === "front" ? [...rest, node] : [node, ...rest];
+    });
+  };
+
+  const runnable = (id: string) => {
+    const kind = kindOf(id);
+    return kind !== undefined && kind !== "approval" && isWorkflowStepKind(kind) && !running() && !frozen();
+  };
+  const runNode = (id: string) => {
+    if (board.creditsShort(id)) return;
+    if (kindOf(id) === "trigger") props.onRun({ fromNodeId: id });
+    else props.onRunStep(id, takesOf(id));
+  };
+  const takesOf = (id: string) => (kindOf(id) === "image" ? mediaTakes(board.field(id, "batch")) : 1);
+
+  const showNode = (id: string) => {
+    const entry = groupIndex().get(id);
+    const element = slot(id);
+    const at = positions[id];
+    const box = entry?.folded
+      ? frameOf(entry)
+      : at && element && { ...at, width: element.offsetWidth, height: element.offsetHeight };
+    if (!box) return;
+    const { width, height } = view();
+    const scale = clampScale(Math.max(target().scale, 0.75));
+    glideTo(
+      {
+        scale,
+        x: width / 2 - (box.x + box.width / 2) * scale,
+        y: height / 2 - (box.y + box.height / 2) * scale,
+      },
+      "flight",
+    );
+    canvas.select(entry?.folded ? entry.members : [id]);
+  };
+
+  const reveal = (id: string) => {
+    const box = boxOf(id);
+    if (!box) return;
+    const { width, height } = view();
+    const margin = 48;
+    const from = target();
+    const left = from.x + box.x * from.scale;
+    const top = from.y + box.y * from.scale;
+    const right = left + box.width * from.scale;
+    const bottom = top + box.height * from.scale;
+    const dx = left < margin ? margin - left : right > width - margin ? width - margin - right : 0;
+    const dy = top < margin ? margin - top : bottom > height - margin ? height - margin - bottom : 0;
+    if (dx !== 0 || dy !== 0) glideTo({ scale: from.scale, x: from.x + dx, y: from.y + dy }, "flight");
+  };
+
+  const focusNode = (id: string) => {
+    reveal(id);
+    slot(id)?.querySelector<HTMLElement>("[data-node-id]")?.focus({ preventScroll: true });
+  };
+
+  const nextNode = (id: string, step: 1 | -1) => {
+    const order = live()
+      .flatMap((node) => {
+        const at = positions[node.id];
+        return at && (node.id === id || !groupIndex().get(node.id)?.folded) ? [{ id: node.id, at }] : [];
+      })
+      .sort((a, b) => a.at.x - b.at.x || a.at.y - b.at.y)
+      .map((node) => node.id);
+    const index = order.indexOf(id);
+    return index < 0 ? undefined : order[index + step];
+  };
+
+  const searchTexts = (id: string) => {
+    const kind = kindOf(id);
+    if (!kind) return [];
+    const fields = SEARCH_FIELDS[kind].map((key) => {
+      const value = board.field(id, key);
+      return typeof value === "string" ? value : "";
+    });
+    return [t(KIND_LABEL[kind]), ...fields];
+  };
+  const matches = () => {
+    const words = query().trim().toLowerCase();
+    if (!words) return [];
+    return live()
+      .flatMap((node) => {
+        const [label = "", ...fields] = searchTexts(node.id);
+        const name = customStepName(board.field(node.id, WORKFLOW_STEP_NAME_FIELD));
+        const texts = name ? [name, ...fields] : fields;
+        const hit = texts.find((text) => text.toLowerCase().includes(words));
+        if (!hit && !label.toLowerCase().includes(words)) return [];
+        return [{ node, text: hit ?? texts.find((text) => text.trim()) ?? "" }];
+      })
+      .slice(0, 8);
+  };
+  const openSearch = () => {
+    setUi((draft) => {
+      draft.search = true;
+      draft.hidden = false;
+    });
+  };
+  const closeSearch = () => {
+    setUi((draft) => {
+      draft.search = false;
+    });
+    setQuery("");
+  };
+
+  const minimap = createMemo(() => {
+    if (!ui.minimap) return undefined;
+    const boxes = live().flatMap((node) => {
+      const box = boxOf(node.id);
+      return box ? [{ id: node.id, kind: node.kind, ...box }] : [];
+    });
+    const { width, height } = view();
+    const seen = { ...toWorld({ x: 0, y: 0 }), width: width / camera.scale, height: height / camera.scale };
+    return minimapLayout(boxes, strokes(), seen);
+  });
+  let minimapPress: WfnPoint | undefined;
+  const panMinimap = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
+    const map = minimap();
+    if (!map) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const press = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    const pressed = event.type === "pointerdown";
+    if (pressed) minimapPress = press;
+    else if (minimapPress && Math.hypot(press.x - minimapPress.x, press.y - minimapPress.y) < DRAG_THRESHOLD) return;
+    else minimapPress = undefined;
+    const point = map.toWorld(press);
+    const { width, height } = view();
+    const from = target();
+    const next = { scale: from.scale, x: width / 2 - point.x * from.scale, y: height / 2 - point.y * from.scale };
+    if (pressed) glideTo(next, "flight");
+    else moveCamera(next);
+  };
+
+  const onContextMenu = (event: MouseEvent) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const node = target?.closest<HTMLElement>("[data-node-id]")?.dataset.nodeId;
+    const edge = target?.closest<HTMLElement>("[data-edge-id]")?.dataset.edgeId;
+    setMenuTarget(
+      node
+        ? { kind: "node", id: node }
+        : edge
+          ? { kind: "edge", id: edge, at: toWorld(local(event)) }
+          : { kind: "canvas", at: toWorld(local(event)) },
+    );
+  };
+  const menuNode = () => {
+    const target = menuTarget();
+    return target.kind === "node" ? target.id : undefined;
+  };
+  const menuEdge = () => {
+    const target = menuTarget();
+    return target.kind === "edge" ? target : undefined;
+  };
+  const insertAt = (id: string, at: WfnPoint) => {
+    const edge = canvas.edges().find((entry) => entry.id === id);
+    if (!edge) return;
+    setDropQuery("");
+    setDrop({ edge, at });
+  };
+  const addAt = (at: WfnPoint) => {
+    setDropQuery("");
+    setDrop({ at });
+  };
+  const menuPoint = () => {
+    const target = menuTarget();
+    return target.kind === "canvas" ? target.at : undefined;
+  };
+
+  const eraseAlong = (from: WfnPoint, to: WfnPoint) => {
+    const radius = ERASER_RADIUS / camera.scale;
+    const count = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / radius));
+    const samples = Array.from({ length: count + 1 }, (_, index) => ({
+      x: from.x + ((to.x - from.x) * index) / count,
+      y: from.y + ((to.y - from.y) * index) / count,
+    }));
+    const hit = strokes().filter(
+      (stroke) => !ink.erasing.includes(stroke.id) && samples.some((at) => touches(stroke, at, radius)),
+    );
+    if (hit.length === 0) return;
+    setInk((draft) => {
+      draft.erasing = [...draft.erasing, ...hit.map((stroke) => stroke.id)];
+    });
+  };
+
+  onSettled(() => {
+    const area = viewport;
+    if (!area) return;
+    let gesture:
+      | { kind: "pan"; start: WfnPoint; camera: WfnPoint; moved: boolean }
+      | {
+          kind: "node";
+          id: string;
+          start: WfnPoint;
+          origin: WfnPoint;
+          moved: boolean;
+          focus?: { field: HTMLElement; place: () => void };
+          group: readonly { id: string; origin: WfnPoint }[];
+          box: Box;
+          others: readonly Box[];
+          whole?: boolean;
+        }
+      | {
+          kind: "box";
+          start: WfnPoint;
+          base: readonly string[];
+          boxes: readonly { id: string; box: Box }[];
+          moved: boolean;
+        }
+      | {
+          kind: "resize";
+          id: string;
+          start: WfnPoint;
+          node: WorkflowNodeKind;
+          corner: WfnHandle;
+          cursor: string;
+          element: HTMLElement;
+          origin: { at: WfnPoint; width: number; height: number; floor: number; font?: number; wrap?: number };
+          moved: boolean;
+        }
+      | { kind: "draw"; start: WfnPoint; moved: boolean; stroke: Stroke; points: WfnPoint[] }
+      | { kind: "erase"; start: WfnPoint; moved: boolean; last: WfnPoint }
+      | { kind: "place"; start: WfnPoint; moved: boolean }
+      | undefined;
+    let space = false;
+    const onResize = new ResizeObserver(() => {
+      if (!cameraMoved) fitView(false);
+    });
+    const stopClick = (event: MouseEvent) => {
+      event.stopPropagation();
+      event.preventDefault();
+    };
+    const onWheel = (event: WheelEvent) => {
+      if (event.target instanceof Element && event.target.closest(":popover-open")) return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest(event.ctrlKey ? "[data-wfn-portal]" : "textarea, .wfn-name-field, [data-wfn-portal]")
+      )
+        return;
+      event.preventDefault();
+      const unit =
+        event.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? 16
+          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? view().height
+            : 1;
+      const dx = event.deltaX * unit;
+      const dy = event.deltaY * unit;
+      if (event.ctrlKey || event.metaKey) {
+        const zoom = -dy * (event.ctrlKey ? PINCH_ZOOM_RATE : WHEEL_ZOOM_RATE);
+        const step = Math.max(-WHEEL_ZOOM_MAX, Math.min(WHEEL_ZOOM_MAX, zoom));
+        moveCamera(zoomAround(camera.scale * Math.exp(step), local(event)));
+        return;
+      }
+      moveCamera({
+        x: camera.x - dx * WHEEL_PAN_SPEED,
+        y: camera.y - dy * WHEEL_PAN_SPEED,
+        scale: camera.scale,
+      });
+    };
+    const onMove = (event: PointerEvent) => {
+      const current = gesture;
+      if (!current) return;
+      if (current.kind === "draw" || current.kind === "erase") {
+        current.moved = true;
+        const coalesced = event.getCoalescedEvents?.() ?? [];
+        for (const sample of coalesced.length > 0 ? coalesced : [event]) {
+          const at = toWorld(local(sample));
+          if (current.kind === "erase") {
+            eraseAlong(current.last, at);
+            current.last = at;
+            continue;
+          }
+          const last = current.points.at(-1);
+          if (last && Math.hypot(at.x - last.x, at.y - last.y) * camera.scale < INK_STEP) continue;
+          current.points.push(at);
+        }
+        if (current.kind === "draw") setSketchPoints(current.points);
+        return;
+      }
+      const point = local(event);
+      const dx = point.x - current.start.x;
+      const dy = point.y - current.start.y;
+      if (!current.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      if (!current.moved && (current.kind === "node" || current.kind === "resize")) {
+        commit();
+        setGesturing(true);
+      }
+      current.moved = true;
+      if (current.kind === "place") {
+        setDrawn(drawnBox(current.start, point));
+        return;
+      }
+      if (current.kind === "box") {
+        const left = Math.min(point.x, current.start.x);
+        const top = Math.min(point.y, current.start.y);
+        const screen = { x: left, y: top, width: Math.abs(dx), height: Math.abs(dy) };
+        setMarquee(screen);
+        const world = {
+          ...toWorld(screen),
+          width: screen.width / camera.scale,
+          height: screen.height / camera.scale,
+        };
+        const hits = current.boxes.filter((entry) => overlaps(entry.box, world)).map((entry) => entry.id);
+        canvas.select([...current.base, ...hits.filter((id) => !current.base.includes(id))]);
+        return;
+      }
+      if (current.kind === "pan") {
+        area.dataset.panning = "";
+        moveCamera({ x: current.camera.x + dx, y: current.camera.y + dy, scale: camera.scale });
+        return;
+      }
+      if (current.kind === "resize") {
+        area.dataset.resizing = current.cursor;
+        const { origin } = current;
+        const { font: base, wrap } = origin;
+        const across = sideX(current.corner);
+        const down = sideY(current.corner);
+        const limits = RESIZE[current.node];
+        const place = (width: number, height: number) =>
+          setPositions((draft) => {
+            draft[current.id] = {
+              x: across < 0 ? origin.at.x + origin.width - width : origin.at.x,
+              y: down < 0 ? origin.at.y + origin.height - height : origin.at.y,
+            };
+          });
+        if (base !== undefined && down !== 0) {
+          const { width, height } = origin;
+          const ratio =
+            1 + (across * dx * width + down * dy * height) / camera.scale / (width * width + height * height);
+          const font = Math.min(Math.max(Math.round(base * ratio), TEXT_FONT.min), TEXT_FONT.max);
+          setSizes((draft) => {
+            draft[current.id] = wrap === undefined ? { font } : { font, width: Math.round((wrap * font) / base) };
+          });
+          place((width * font) / base, (height * font) / base);
+          return;
+        }
+        if (base !== undefined) {
+          const width = snapWithin(origin.width + (across * dx) / camera.scale, limits.width);
+          setSizes((draft) => {
+            draft[current.id] = { ...draft[current.id], width };
+          });
+          place(width, origin.height);
+          return;
+        }
+        const free = limits.height;
+        let width = across === 0 ? origin.width : snapWithin(origin.width + (across * dx) / camera.scale, limits.width);
+        let height = origin.height;
+        if (free && down !== 0) {
+          height = Math.max(snapWithin(origin.height + (down * dy) / camera.scale, free), origin.floor);
+        } else if (current.node === "image") {
+          if (across === 0)
+            width = snapWithin(
+              (origin.width * (origin.height + (down * dy) / camera.scale)) / origin.height,
+              limits.width,
+            );
+          height = (origin.height * width) / origin.width;
+        }
+        setSizes((draft) => {
+          const set = draft[current.id];
+          draft[current.id] = free
+            ? {
+                ...(across === 0 && set?.width === undefined ? {} : { width }),
+                ...(down === 0 && set?.height === undefined ? {} : { height }),
+              }
+            : { width };
+        });
+        place(width, height);
+        return;
+      }
+      area.dataset.dragging = "";
+      const x = align("x", current, dx / camera.scale);
+      const y = align("y", current, dy / camera.scale);
+      setGuides([...x.guides, ...y.guides]);
+      setPositions((draft) => {
+        for (const member of current.group)
+          draft[member.id] = { x: member.origin.x + x.delta, y: member.origin.y + y.delta };
+      });
+    };
+    const align = (
+      axis: "x" | "y",
+      current: { origin: WfnPoint; box: Box; others: readonly Box[] },
+      move: number,
+    ): { delta: number; guides: Guide[] } => {
+      const across = axis === "x" ? "y" : "x";
+      const length = (box: Box) => (axis === "x" ? box.width : box.height);
+      const lines = (box: Box) => [box[axis], box[axis] + length(box) / 2, box[axis] + length(box)];
+      const moved = { ...current.box, [axis]: current.box[axis] + move };
+      let best: number | undefined;
+      for (const other of current.others)
+        for (const line of lines(other))
+          for (const mine of lines(moved)) {
+            const gap = line - mine;
+            if (
+              Math.abs(gap) <= GUIDE_DISTANCE / camera.scale &&
+              (best === undefined || Math.abs(gap) < Math.abs(best))
+            )
+              best = gap;
+          }
+      if (best === undefined) {
+        const start = current.origin[axis];
+        return { delta: Math.round((start + move) / SNAP) * SNAP - start, guides: [] };
+      }
+      const delta = move + best;
+      const placed = { ...current.box, [axis]: current.box[axis] + delta };
+      const guides: Guide[] = [];
+      for (const line of lines(placed)) {
+        const matched = current.others.filter((other) => lines(other).some((value) => Math.abs(value - line) < 0.5));
+        if (matched.length === 0) continue;
+        const span = [placed, ...matched];
+        guides.push({
+          axis,
+          at: line,
+          from: Math.min(...span.map((box) => box[across])),
+          to: Math.max(...span.map((box) => box[across] + (across === "x" ? box.width : box.height))),
+        });
+      }
+      return { delta, guides };
+    };
+    const endGesture = () => {
+      const current = gesture;
+      gesture = undefined;
+      setGesturing(false);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      delete area.dataset.panning;
+      delete area.dataset.dragging;
+      delete area.dataset.resizing;
+      if (current?.kind === "resize") delete current.element.dataset.resizing;
+      setMarquee(undefined);
+      setGuides([]);
+      return current;
+    };
+    stopGesture = () => {
+      const current = endGesture();
+      if (current?.kind === "place") setDrawn(null);
+      if (current?.kind === "draw" || current?.kind === "erase")
+        setInk((draft) => {
+          draft.sketch = null;
+          draft.erasing = [];
+        });
+    };
+    const onUp = (event: PointerEvent) => {
+      const current = endGesture();
+      if (!current) return;
+      if (current.kind === "draw") {
+        const stroke = { ...current.stroke, points: current.points };
+        commit();
+        setStrokes((list) => [...list, stroke]);
+        setInk((draft) => {
+          draft.sketch = null;
+        });
+        return;
+      }
+      if (current.kind === "erase") {
+        const gone = new Set(ink.erasing);
+        if (gone.size > 0) {
+          commit();
+          setStrokes((list) => list.filter((stroke) => !gone.has(stroke.id)));
+        }
+        setInk((draft) => {
+          draft.erasing = [];
+        });
+        return;
+      }
+      if (current.kind === "place") {
+        const box = drawn();
+        setDrawn(null);
+        if (event.type !== "pointercancel")
+          placeItem("shape", toWorld(current.start), current.moved && box ? box : undefined);
+        return;
+      }
+      if (current.kind === "node" && !current.moved) {
+        if (current.focus && event.type !== "pointercancel") {
+          const { field, place } = current.focus;
+          field.focus({ preventScroll: true });
+          place();
+        }
+        if (current.group.length > 1 && !current.whole) canvas.select([current.id]);
+      }
+      if (current.moved) {
+        window.addEventListener("click", stopClick, { capture: true, once: true });
+        setTimeout(() => window.removeEventListener("click", stopClick, { capture: true }));
+      }
+    };
+    const closeField = () => {
+      const open = document.activeElement;
+      if (open instanceof HTMLElement && area.contains(open) && isEditable(open)) open.blur();
+    };
+    const onDown = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest(":popover-open")) return;
+      if ((event.button !== 0 && event.button !== 1) || !(event.target instanceof Element)) return;
+      stopGlide();
+      const target = event.target;
+      const start = local(event);
+      if ((event.button === 1 || space || ui.tool === "pan" || frozen()) && !target.closest("[data-wfn-portal]")) {
+        event.preventDefault();
+        gesture = { kind: "pan", start, camera: { x: camera.x, y: camera.y }, moved: false };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
+        return;
+      }
+      if (event.button !== 0) return;
+      if (ui.tool === "draw" && !target.closest("[data-wfn-portal]")) {
+        event.preventDefault();
+        const at = toWorld(start);
+        const mode = ui.draw;
+        if (mode === "eraser") {
+          gesture = { kind: "erase", start, moved: false, last: at };
+          eraseAlong(at, at);
+        } else {
+          const stroke: Stroke = {
+            id: crypto.randomUUID(),
+            brush: mode,
+            color: ui.ink,
+            width: INK_WIDTH[mode] / camera.scale,
+            points: [at],
+          };
+          const points = [at];
+          gesture = { kind: "draw", start, moved: false, stroke, points };
+          setSketchPoints(points);
+          setInk((draft) => {
+            draft.sketch = stroke;
+          });
+        }
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
+        return;
+      }
+      if (ui.tool === "note" && !target.closest("[data-wfn-portal]")) {
+        event.preventDefault();
+        placeItem("note", toWorld(start));
+        return;
+      }
+      if (ui.tool === "shape" && !target.closest("[data-wfn-portal]")) {
+        event.preventDefault();
+        gesture = { kind: "place", start, moved: false };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
+        return;
+      }
+      const handle = target.closest<HTMLElement>("[data-wfn-resize]");
+      const resized = handle?.dataset.wfnResize;
+      const resizedKind = resized ? kindOf(resized) : undefined;
+      const resizedAt = resized ? positions[resized] : undefined;
+      const node = handle?.closest<HTMLElement>("[data-node-id]");
+      if (handle && resized && resizedKind && resizedAt && node) {
+        event.preventDefault();
+        const card = node.querySelector<HTMLElement>(".wfn-card") ?? node;
+        const corner = HANDLES.find((value) => value === handle.dataset.corner) ?? "se";
+        const wrap = sizes[resized]?.width;
+        const cursor = resizeCursor(stretchOf(resizedKind), corner);
+        area.dataset.resizing = cursor;
+        node.dataset.resizing = "";
+        gesture = {
+          kind: "resize",
+          id: resized,
+          node: resizedKind,
+          corner,
+          cursor,
+          element: node,
+          start,
+          origin: {
+            at: resizedAt,
+            width: node.offsetWidth,
+            height: card.offsetHeight,
+            floor: contentHeight(node, card),
+            ...(resizedKind === "text" ? { font: textFont(node), ...(wrap === undefined ? {} : { wrap }) } : {}),
+          },
+          moved: false,
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
+        return;
+      }
+      if (target.closest(NO_DRAG) || target.closest(".wfn-edge-hit")) return;
+      const frame = target.closest<HTMLElement>("[data-wfn-group]")?.dataset.wfnGroup;
+      const pressed = frame === undefined ? undefined : nodeGroups().find((entry) => entry.id === frame);
+      if (pressed) {
+        event.preventDefault();
+        closeField();
+        if (event.shiftKey) {
+          const rest = group().filter((member) => !pressed.members.includes(member));
+          canvas.select(
+            isWhole(pressed) || pressed.members.every((member) => board.isSelected(member))
+              ? rest
+              : [...rest, ...pressed.members],
+          );
+          return;
+        }
+        canvas.select(pressed.members);
+        const members = pressed.members.filter((member) => !board.isLocked(member));
+        const moving = members.flatMap((member) => {
+          const origin = positions[member];
+          return origin ? [{ id: member, origin }] : [];
+        });
+        const [lead] = moving;
+        const box = frameOf(pressed);
+        if (!lead || !box) return;
+        gesture = {
+          kind: "node",
+          id: lead.id,
+          start,
+          origin: lead.origin,
+          moved: false,
+          group: moving,
+          box,
+          others: shownBoxes(live().flatMap((node) => (pressed.members.includes(node.id) ? [] : [node.id]))),
+          whole: true,
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
+        return;
+      }
+      const id = target.closest<HTMLElement>("[data-node-id]")?.dataset.nodeId;
+      const at = id && !board.isLocked(id) ? positions[id] : undefined;
+      if (id && at) {
+        const field = target.closest<HTMLElement>(DRAG_FIELD);
+        if (field && document.activeElement === field) return;
+        if (event.shiftKey) return;
+        const edits = field !== null && (board.isSelected(id) || !field.matches(ITEM_FIELD));
+        if (field) {
+          event.preventDefault();
+          closeField();
+        }
+        const members = board.isSelected(id)
+          ? group().filter((member) => member === id || !board.isLocked(member))
+          : [id];
+        const moving = members.flatMap((member) => {
+          const origin = positions[member];
+          return origin ? [{ id: member, origin }] : [];
+        });
+        const box = union(boxesOf(members));
+        if (!box) return;
+        gesture = {
+          kind: "node",
+          id,
+          start,
+          origin: at,
+          moved: false,
+          group: moving,
+          box,
+          others: shownBoxes(live().flatMap((node) => (members.includes(node.id) ? [] : [node.id]))),
+          ...(field && edits ? { focus: { field, place: caretAt(field, event.clientX, event.clientY) } } : {}),
+        };
+      } else if (!target.closest("[data-node-id]")) {
+        event.preventDefault();
+        closeField();
+        gesture = {
+          kind: "box",
+          start,
+          base: event.shiftKey ? group() : [],
+          boxes: live().flatMap((node) => {
+            const box = shownBox(node.id);
+            return box ? [{ id: node.id, box }] : [];
+          }),
+          moved: false,
+        };
+      } else {
+        return;
+      }
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+    };
+    const onDoubleClick = (event: MouseEvent) => {
+      const id =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-wfn-resize]")?.dataset.wfnResize
+          : undefined;
+      if (id) resetSize(id);
+    };
+    const onHover = (event: PointerEvent) => {
+      const over = event.target instanceof Element && !event.target.closest("[data-wfn-portal]");
+      pointer = over ? local(event) : undefined;
+      if (placing()) setGhost(over ? local(event) : null);
+      const show = ui.tool === "draw" && ui.draw === "eraser" && over;
+      if (!show && ink.eraser === null) return;
+      const at = show ? local(event) : null;
+      setInk((draft) => {
+        draft.eraser = at;
+      });
+    };
+    const onLeave = () => {
+      pointer = undefined;
+      setGhost(null);
+      setInk((draft) => {
+        draft.eraser = null;
+      });
+    };
+    area.addEventListener("wheel", onWheel, { passive: false });
+    area.addEventListener("pointerdown", onDown);
+    area.addEventListener("pointermove", onHover);
+    area.addEventListener("pointerleave", onLeave);
+    const onNativeMenu = (event: MouseEvent) => {
+      if (event.target instanceof Element && event.target === document.activeElement && isEditable(event.target))
+        event.stopPropagation();
+    };
+    const withMod: Partial<Record<string, () => void>> = {
+      "=": () => zoomBy(ZOOM_STEP),
+      "+": () => zoomBy(ZOOM_STEP),
+      "-": () => zoomBy(1 / ZOOM_STEP),
+      "0": () => zoomTo(1),
+      Enter: () => {
+        if (canRun() && !running()) props.onRun({});
+      },
+    };
+    const onNodes: Partial<Record<string, (ids: readonly string[]) => void>> = {
+      d: duplicateNodes,
+    };
+    const selectsText = () => {
+      const active = document.activeElement;
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)
+        return active.selectionStart !== active.selectionEnd;
+      return !(document.getSelection()?.isCollapsed ?? true);
+    };
+    const onCopy = (event: ClipboardEvent) => {
+      const active = document.activeElement;
+      const owner =
+        active instanceof HTMLElement ? active.closest<HTMLElement>("[data-node-id]")?.dataset.nodeId : undefined;
+      const ids = copying ?? (owner ? targets(owner) : group());
+      if (deleted() || !inCanvas(root, active) || (!copying && selectsText())) return;
+      if (ids.length === 0 || !event.clipboardData) return;
+      const clip = collect(ids);
+      if (clip.nodes.length === 0) return;
+      event.preventDefault();
+      const key = crypto.randomUUID();
+      event.clipboardData.setData(CLIP_TYPE, key);
+      setCopied({ key, clip, from: openId(), server: serverKey() });
+      pastedAt = undefined;
+      if (event.type === "cut") canvas.deleteNodes(ids);
+    };
+    const pastePictures = (event: ClipboardEvent) => {
+      const data = event.clipboardData;
+      const active = document.activeElement;
+      const pictures = [...(data?.files ?? [])].filter((file) => WORKFLOW_PICTURE_TYPES.has(file.type));
+      if (pictures.length === 0 || !allows("asset") || !props.features.uploads) return;
+      if (!inCanvas(root, active) && (!pointer || isEditable(active))) return;
+      if (isEditable(active) && data?.types.includes("text/plain")) return;
+      event.preventDefault();
+      const start = pointer ? toWorld(pointer) : undefined;
+      void uploadAll(pictures).then((files) => addFiles(files, start));
+    };
+    const takesFiles = (event: DragEvent) =>
+      event.dataTransfer?.types.includes("Files") === true &&
+      !deleted() &&
+      !editsBlocked() &&
+      allows("asset") &&
+      props.features.uploads === true &&
+      !(event.target instanceof Element && event.target.closest("[data-node-id], [data-wfn-portal], .wfn-hud"));
+    const onDragOver = (event: DragEvent) => {
+      if (!takesFiles(event) || !event.dataTransfer) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    };
+    const onDrop = (event: DragEvent) => {
+      const files = [...(event.dataTransfer?.files ?? [])];
+      if (!takesFiles(event) || files.length === 0) return;
+      event.preventDefault();
+      const at = toWorld(local(event));
+      void uploadAll(files).then((stored) => addFiles(stored, at));
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      const key = event.clipboardData?.getData(CLIP_TYPE);
+      if (deleted() || editsBlocked()) return;
+      if (!key || copied()?.key !== key) {
+        pastePictures(event);
+        return;
+      }
+      if (!inCanvas(root, document.activeElement)) return;
+      event.preventDefault();
+      pasteNodes(pointer && toWorld(pointer));
+    };
+    const ARROWS: Partial<Record<string, WfnPoint>> = {
+      ArrowLeft: { x: -1, y: 0 },
+      ArrowRight: { x: 1, y: 0 },
+      ArrowUp: { x: 0, y: -1 },
+      ArrowDown: { x: 0, y: 1 },
+    };
+    const onCanvas = (element: Element | null) =>
+      element === null ||
+      element === document.body ||
+      (element instanceof HTMLElement && (element.matches("[data-node-id]") || element === area));
+    const plain: Partial<Record<string, () => void>> = {
+      v: () => setTool("select"),
+      h: () => setTool("pan"),
+      p: () => setDraw("pen"),
+      m: () => setDraw("marker"),
+      e: () => setDraw("eraser"),
+      n: () => setTool("note"),
+      r: () => setTool("shape"),
+    };
+    const onShortcut = (event: KeyboardEvent) => {
+      const active = document.activeElement;
+      if (deleted() || active?.closest(":popover-open") || !inCanvas(root, active)) return;
+      const editing = isEditable(active);
+      const mod = event.metaKey || event.ctrlKey;
+      const key = event.key.toLowerCase();
+      const ids = group();
+      const inMenu = Boolean(active?.closest("[data-wfn-portal]"));
+      const node = active instanceof HTMLElement ? active.closest<HTMLElement>("[data-node-id]") : null;
+      const arrow = ARROWS[event.key];
+      const action = (() => {
+        if (editsBlocked()) {
+          if (inMenu) return undefined;
+          if (event.key === "Escape" && following()) return stopFollow;
+          if (event.key === "Escape") return previewing() ? closeVersion : undefined;
+          if (event.shiftKey && event.code === "Digit1") return () => fitView(true);
+          return mod && event.key !== "Enter" ? withMod[event.key] : undefined;
+        }
+        if (mod && key === "f") return openSearch;
+        if (mod && key === "/") return toggleHud;
+        if (mod && event.shiftKey && key === "l" && ids.length > 0)
+          return () => canvas.lockAll(ids, !ids.every((id) => board.isLocked(id)));
+        if (mod && !editing && key === "z") return event.shiftKey ? redo : undo;
+        if (mod && !editing && key === "y") return redo;
+        if (mod && !editing && key === "a") return selectAll;
+        if (mod && !editing && key === "g" && event.shiftKey && ids.length > 0) return () => ungroup(ids);
+        if (mod && !editing && key === "g" && ids.length > 1) return () => groupNodes(ids);
+        if (mod && !editing && ids.length > 0 && onNodes[key]) return () => onNodes[key]?.(ids);
+        if (mod) return withMod[event.key];
+        if (event.key === "Escape" && editing && node && !inMenu) return () => node.focus();
+        if (editing || event.altKey) return undefined;
+        if (arrow && ids.length > 0 && onCanvas(active)) {
+          const step = event.shiftKey ? NUDGE.large : NUDGE.step;
+          return () => nudge(arrow.x * step, arrow.y * step, event.repeat);
+        }
+        const next =
+          event.key === "Tab" && node && active === node
+            ? nextNode(node.dataset.nodeId ?? "", event.shiftKey ? -1 : 1)
+            : undefined;
+        if (next) return () => focusNode(next);
+        if (event.key === "Enter" && node && active === node)
+          return () =>
+            node
+              .querySelector<HTMLElement>(
+                ".wfn-card :is(textarea, .wfn-name-field, input, button:not(:disabled)), .wfn-text-input, textarea, input",
+              )
+              ?.focus();
+        if (event.shiftKey && event.code === "Digit1") return () => fitView(true);
+        if (event.shiftKey && event.code === "KeyT") return tidyUp;
+        if (event.key === "Escape" && ui.search) return closeSearch;
+        if (event.key === "Escape" && (ui.tool === "draw" || placing()) && !inMenu) return () => setTool("select");
+        if (event.key === "Escape" && following() && !inMenu) return stopFollow;
+        if (event.key === "Escape" && ids.length > 0 && !inMenu && !drop()) return () => canvas.select([]);
+        return event.shiftKey || inMenu || takesKeys(active) ? undefined : plain[key];
+      })();
+      if (!action) return;
+      event.preventDefault();
+      action();
+    };
+    let pointed = false;
+    const onPoint = () => {
+      pointed = true;
+    };
+    const clickedButton = (element: Element | null) =>
+      pointed &&
+      element instanceof HTMLButtonElement &&
+      area.contains(element) &&
+      element.closest("[data-node-id]") !== null;
+    const onSpace = (event: KeyboardEvent) => {
+      if (event.code !== "Space") {
+        if (event.type === "keydown") pointed = false;
+        return;
+      }
+      if (isEditable(document.activeElement)) return;
+      const clicked = clickedButton(document.activeElement);
+      if (event.type === "keydown" && !clicked && !onCanvas(document.activeElement)) return;
+      space = event.type === "keydown";
+      if (space && clicked) event.stopPropagation();
+      if (space) {
+        event.preventDefault();
+        area.dataset.space = "";
+      } else delete area.dataset.space;
+    };
+    area.addEventListener("dblclick", onDoubleClick);
+    area.addEventListener("dragover", onDragOver);
+    area.addEventListener("drop", onDrop);
+    area.addEventListener("contextmenu", onNativeMenu, { capture: true });
+    document.addEventListener("keydown", onShortcut);
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("cut", onCopy);
+    document.addEventListener("paste", onPaste);
+    document.addEventListener("pointerdown", onPoint, { capture: true });
+    document.addEventListener("keydown", onSpace, { capture: true });
+    document.addEventListener("keyup", onSpace, { capture: true });
+    onResize.observe(area);
+    return () => {
+      area.removeEventListener("wheel", onWheel);
+      area.removeEventListener("pointerdown", onDown);
+      area.removeEventListener("pointermove", onHover);
+      area.removeEventListener("pointerleave", onLeave);
+      area.removeEventListener("dblclick", onDoubleClick);
+      area.removeEventListener("dragover", onDragOver);
+      area.removeEventListener("drop", onDrop);
+      area.removeEventListener("contextmenu", onNativeMenu, { capture: true });
+      document.removeEventListener("keydown", onShortcut);
+      document.removeEventListener("copy", onCopy);
+      document.removeEventListener("cut", onCopy);
+      document.removeEventListener("paste", onPaste);
+      document.removeEventListener("pointerdown", onPoint, { capture: true });
+      document.removeEventListener("keydown", onSpace, { capture: true });
+      document.removeEventListener("keyup", onSpace, { capture: true });
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      onResize.disconnect();
+      slotResize.disconnect();
+      glide.stop();
+    };
+  });
+
+  return (
+    <BoardProvider board={board}>
+      <main
+        ref={root}
+        class="wfn-stage wfn-canvas"
+        data-deleted={deleted() ? "" : undefined}
+        data-preview={previewing() ? "" : undefined}
+        data-tool={ui.tool}
+        data-draw={ui.tool === "draw" ? ui.draw : undefined}
+        data-hud-hidden={ui.hidden ? "" : undefined}
+        data-frame={props.frame}
+        data-composer={composerId() ? "" : undefined}
+        aria-label={t("workflow.canvas.label", { name: name() })}
+        onPointerDown={(event) => {
+          if (deleted()) return;
+          const outside = document.activeElement;
+          const pressedInView = event.target instanceof Node && viewport?.contains(event.target) === true;
+          if (
+            pressedInView &&
+            outside instanceof HTMLElement &&
+            !viewport?.contains(outside) &&
+            !outside.closest("[data-wfn-portal]")
+          )
+            outside.blur();
+          if (builder() || unbuilt().size > 0) endBuild();
+          if (drop() && !(event.target instanceof Element && event.target.closest(".wfn-drop-menu"))) closeDrop();
+          pressing = true;
+          const release = () => {
+            pressing = false;
+            window.removeEventListener("pointerup", release, { capture: true });
+            window.removeEventListener("pointercancel", release, { capture: true });
+          };
+          window.addEventListener("pointerup", release, { capture: true });
+          window.addEventListener("pointercancel", release, { capture: true });
+          const panning = event.button === 1 || ui.tool === "pan" || frozen() || viewport?.hasAttribute("data-space");
+          if (!panning && ui.tool === "select") canvas.selectFrom(event.target, event.shiftKey);
+        }}
+        onFocusIn={(event) => {
+          if (!pressing && !deleted()) canvas.selectFrom(event.target);
+        }}
+      >
+        <ContextMenu.Root modal={false}>
+          <ContextMenu.Trigger
+            ref={(element: HTMLElement) => {
+              viewport = element;
+            }}
+            class="wfn-viewport"
+            disabled={frozen()}
+            onContextMenu={onContextMenu}
+          >
+            <DotGrid camera={camera} />
+            <div
+              ref={(element: HTMLElement) => {
+                worldElement = element;
+                canvas.setWorld(element);
+              }}
+              class="wfn-world"
+              inert={frozen()}
+              data-group={groupBox() ? "" : undefined}
+              style={{
+                transform: `translate(${devicePixel(camera.x)}px, ${devicePixel(camera.y)}px) scale(${camera.scale})`,
+                "--wfn-scale": camera.scale,
+              }}
+            >
+              <For each={nodeGroups()} keyed={(entry) => entry.id}>
+                {(entry) => (
+                  <Show when={frameOf(entry())}>
+                    {(box) => (
+                      <GroupFrame
+                        group={entry()}
+                        box={box()}
+                        selected={isWhole(entry())}
+                        ports={framePorts(entry())}
+                        pictures={stackPictures(entry())}
+                        status={foldedStatus(entry())}
+                        readOnly={frozen()}
+                        fixed={!changeable(entry())}
+                        onRename={(name) => renameGroup(entry(), name)}
+                        onEndRename={() => canvas.endTyping()}
+                        onExpand={() => foldGroup(entry(), false)}
+                        onSelect={() => canvas.select(entry().members)}
+                        onPortDown={(type, event) => groupPortDown(entry(), type, event)}
+                        onPortPress={(type) => groupPortPress(entry(), type)}
+                      />
+                    )}
+                  </Show>
+                )}
+              </For>
+              <canvas.Edges />
+              <For each={nodes()} keyed={(node) => node.id}>
+                {(node) => {
+                  let slotElement: HTMLElement | undefined;
+                  onCleanup(() => {
+                    if (slotElement) slotResize.unobserve(slotElement);
+                  });
+                  return (
+                    <div
+                      class="wfn-slot"
+                      data-slot={node().id}
+                      ref={(element) => {
+                        slotElement = element;
+                        slotResize.observe(element);
+                      }}
+                      data-kind={node().kind}
+                      data-folded={groupIndex().get(node().id)?.folded ? "" : undefined}
+                      data-peer={ringOn(node().id) ? "" : undefined}
+                      data-build={buildState(node().id)}
+                      data-focus={focusSet()?.has(node().id) ? "" : undefined}
+                      data-dim={focusSet()?.has(node().id) === false ? "" : undefined}
+                      onPointerEnter={(event) => {
+                        if (event.buttons === 0) setHoveredNode(node().id);
+                      }}
+                      onPointerLeave={() => {
+                        if (hoveredNode() === node().id) setHoveredNode(null);
+                      }}
+                      style={{
+                        left: `${positions[node().id]?.x ?? 0}px`,
+                        top: `${positions[node().id]?.y ?? 0}px`,
+                        "--wfn-peer": ringOn(node().id),
+                      }}
+                    >
+                      <CanvasNodeView node={node()} trigger={triggerOf(node().id)} />
+                      <Show when={peerTag(node().id)}>
+                        {(peer) => (
+                          <span class="wfn-peer-tag" aria-hidden="true">
+                            {peer().name}
+                          </span>
+                        )}
+                      </Show>
+                    </div>
+                  );
+                }}
+              </For>
+              <svg class="wfn-ink" aria-hidden="true">
+                <For each={strokes()}>
+                  {(stroke) => <InkLine stroke={stroke} erasing={ink.erasing.includes(stroke.id)} />}
+                </For>
+                <Show when={ink.sketch}>{(stroke) => <InkLine stroke={stroke()} points={sketchPoints()} />}</Show>
+              </svg>
+              <For each={guides()} keyed={(guide) => `${guide.axis}:${guide.at}`}>
+                {(guide) => (
+                  <span
+                    class="wfn-guide"
+                    data-axis={guide().axis}
+                    style={
+                      guide().axis === "x"
+                        ? {
+                            left: `${guide().at}px`,
+                            top: `${guide().from}px`,
+                            height: `${guide().to - guide().from}px`,
+                          }
+                        : { top: `${guide().at}px`, left: `${guide().from}px`, width: `${guide().to - guide().from}px` }
+                    }
+                  />
+                )}
+              </For>
+              <Show when={groupBox()}>
+                {(box) => (
+                  <div
+                    class="wfn-group"
+                    data-whole={selectedGroup() ? "" : undefined}
+                    style={{
+                      left: `${box().x}px`,
+                      top: `${box().y}px`,
+                      width: `${box().width}px`,
+                      height: `${box().height}px`,
+                    }}
+                  >
+                    <div
+                      class="wfn-toolbar wfn-group-bar"
+                      data-wfn-portal=""
+                      role="toolbar"
+                      aria-label={t("workflow.canvas.selection")}
+                    >
+                      <span class="wfn-group-count">{t("workflow.canvas.selected", { count: group().length })}</span>
+                      <span class="wfn-toolbar-separator" aria-hidden="true" />
+                      <Show
+                        when={selectedGroup()}
+                        fallback={
+                          <Show when={group().filter(groupable).length > 1}>
+                            <ToolAction
+                              text={t("workflow.canvas.group.make")}
+                              keys={[MOD_KEY, "G"]}
+                              icon={<GroupIcon />}
+                              onClick={() => groupNodes(group())}
+                            />
+                          </Show>
+                        }
+                      >
+                        {(entry) => {
+                          const shown = () => heldGroup() ?? entry();
+                          return (
+                            <Show when={changeable(shown())}>
+                              <ToolAction
+                                text={foldText(shown())}
+                                icon={<FoldIcon folded={shown().folded} />}
+                                onClick={() => foldGroup(shown(), !shown().folded)}
+                              />
+                              <ToolAction
+                                text={t("workflow.canvas.group.ungroup")}
+                                keys={["⇧", MOD_KEY, "G"]}
+                                icon={<Ungroup />}
+                                onClick={() => ungroup(shown().members)}
+                              />
+                            </Show>
+                          );
+                        }}
+                      </Show>
+                      <ToolAction
+                        text={t("workflow.node.toolbar.duplicate")}
+                        keys={[MOD_KEY, "D"]}
+                        icon={<CopyPlus />}
+                        onClick={() => duplicateNodes(group())}
+                      />
+                      <ToolAction
+                        text={groupLocked() ? t("workflow.node.toolbar.unlock") : t("workflow.node.toolbar.lock")}
+                        keys={["⇧", MOD_KEY, "L"]}
+                        pressed={groupLocked()}
+                        icon={
+                          <Show when={groupLocked()} fallback={<Lock />}>
+                            <LockOpen />
+                          </Show>
+                        }
+                        onClick={() => canvas.lockAll(group(), !groupLocked())}
+                      />
+                      <Show when={!groupLocked()}>
+                        <ToolAction
+                          text={t("workflow.node.toolbar.delete")}
+                          keys={["⌫"]}
+                          tone="danger"
+                          icon={<Trash2 />}
+                          onAim={(aimed) => canvas.aimRemove(aimed ? group() : [])}
+                          onClick={() => canvas.deleteNodes(group())}
+                        />
+                      </Show>
+                    </div>
+                  </div>
+                )}
+              </Show>
+              <PeerCursors peers={peers()} spots={spots()} />
+              <Show when={builder()}>{(spot) => <BuilderCursor spot={spot()} glide={BUILD_GLIDE} />}</Show>
+            </div>
+            <Show when={marquee()}>
+              {(box) => (
+                <div
+                  class="wfn-marquee"
+                  aria-hidden="true"
+                  style={{
+                    left: `${box().x}px`,
+                    top: `${box().y}px`,
+                    width: `${box().width}px`,
+                    height: `${box().height}px`,
+                  }}
+                />
+              )}
+            </Show>
+            <Show when={ui.tool === "draw" && ui.draw === "eraser" ? ink.eraser : null}>
+              {(at) => (
+                <span class="wfn-eraser" aria-hidden="true" style={{ left: `${at().x}px`, top: `${at().y}px` }} />
+              )}
+            </Show>
+            <Show when={drawn()}>
+              {(box) => (
+                <span
+                  class="wfn-ghost"
+                  data-kind="shape"
+                  data-drawn=""
+                  aria-hidden="true"
+                  style={{
+                    left: `${box().x * camera.scale + camera.x}px`,
+                    top: `${box().y * camera.scale + camera.y}px`,
+                    width: `${box().width * camera.scale}px`,
+                    height: `${box().height * camera.scale}px`,
+                    "--wfn-shape": colorVar(ui.fill),
+                  }}
+                >
+                  <ShapeSurface shape={ui.shape} color={ui.fill} />
+                </span>
+              )}
+            </Show>
+            <Show when={placing() && !drawn() ? ghost() : null}>
+              {(at) => {
+                const size = () => (ui.tool === "shape" ? shapeSize(ui.shape) : NOTE_SIZE);
+                return (
+                  <span
+                    class="wfn-ghost"
+                    data-kind={ui.tool}
+                    aria-hidden="true"
+                    style={{
+                      left: `${at().x}px`,
+                      top: `${at().y}px`,
+                      width: `${size().width * camera.scale}px`,
+                      height: `${size().height * camera.scale}px`,
+                      "--wfn-note": colorVar(ui.note),
+                      "--wfn-shape": colorVar(ui.fill),
+                    }}
+                  >
+                    <Show when={ui.tool === "shape"}>
+                      <ShapeSurface shape={ui.shape} color={ui.fill} />
+                    </Show>
+                  </span>
+                );
+              }}
+            </Show>
+          </ContextMenu.Trigger>
+          <ContextMenu.Portal>
+            <ContextMenu.Content class="wfn-menu" data-wfn-portal="" aria-label={t(MENU_LABEL[menuTarget().kind])}>
+              <Show when={menuNode()}>
+                {(id) => (
+                  <>
+                    <Show when={runnable(id())}>
+                      <ContextMenu.Item disabled={board.creditsShort(id())} onSelect={() => board.runStep(id())}>
+                        <Play aria-hidden="true" />
+                        <span class="wfn-menu-text">
+                          {kindOf(id()) === "trigger"
+                            ? t("workflow.canvas.action.runFromTrigger")
+                            : t("workflow.canvas.action.runStep")}
+                        </span>
+                      </ContextMenu.Item>
+                      <Show when={kindOf(id()) !== "trigger"}>
+                        <ContextMenu.Item onSelect={() => props.onRun({ fromNodeId: id() })}>
+                          <Play aria-hidden="true" />
+                          <span class="wfn-menu-text">{t("workflow.canvas.action.runFromStep")}</span>
+                        </ContextMenu.Item>
+                      </Show>
+                      <ContextMenu.Separator />
+                    </Show>
+                    <MenuItem
+                      icon={<Copy />}
+                      label={t("workflow.canvas.action.copy")}
+                      keys={[MOD_KEY, "C"]}
+                      onSelect={() => copyNodes(targets(id()))}
+                    />
+                    <Show when={clipboard()}>
+                      <MenuItem
+                        icon={<ClipboardPaste />}
+                        label={t("workflow.canvas.action.paste")}
+                        keys={[MOD_KEY, "V"]}
+                        onSelectAfterClose={() => pasteNodes()}
+                      />
+                    </Show>
+                    <MenuItem
+                      icon={<CopyPlus />}
+                      label={t("workflow.node.toolbar.duplicate")}
+                      keys={[MOD_KEY, "D"]}
+                      onSelectAfterClose={() => duplicateNodes(targets(id()))}
+                    />
+                    <ContextMenu.Separator />
+                    <MenuItem
+                      icon={<BringToFront />}
+                      label={t("workflow.canvas.action.bringToFront")}
+                      onSelect={() => restack(id(), "front")}
+                    />
+                    <MenuItem
+                      icon={<SendToBack />}
+                      label={t("workflow.canvas.action.sendToBack")}
+                      onSelect={() => restack(id(), "back")}
+                    />
+                    <Show when={sizes[id()]}>
+                      <MenuItem
+                        icon={<RotateCcw />}
+                        label={t("workflow.canvas.action.resetSize")}
+                        onSelect={() => resetSize(id())}
+                      />
+                    </Show>
+                    <MenuItem
+                      icon={board.isLocked(id()) ? <LockOpen /> : <Lock />}
+                      label={board.isLocked(id()) ? t("workflow.node.toolbar.unlock") : t("workflow.node.toolbar.lock")}
+                      keys={["⇧", MOD_KEY, "L"]}
+                      onSelect={() => canvas.lockAll(targets(id()), !board.isLocked(id()))}
+                    />
+                    <Show when={!targets(id()).every((target) => board.isLocked(target))}>
+                      <ContextMenu.Separator />
+                      <MenuItem
+                        danger
+                        icon={<Trash2 />}
+                        label={t("workflow.node.toolbar.delete")}
+                        keys={["⌫"]}
+                        onAim={(aimed) => canvas.aimRemove(aimed ? targets(id()) : [])}
+                        onSelect={() => canvas.deleteNodes(targets(id()))}
+                      />
+                    </Show>
+                  </>
+                )}
+              </Show>
+              <Show when={menuEdge()}>
+                {(target) => (
+                  <>
+                    <MenuItem
+                      icon={<Plus />}
+                      label={t("workflow.canvas.action.addHere")}
+                      onSelect={() => insertAt(target().id, target().at)}
+                    />
+                    <ContextMenu.Separator />
+                    <MenuItem
+                      danger
+                      icon={<Trash2 />}
+                      label={t("workflow.canvas.action.deleteConnection")}
+                      onAim={(aimed) => canvas.aimDisconnect(aimed ? target().id : null)}
+                      onSelect={() => canvas.disconnect(target().id)}
+                    />
+                  </>
+                )}
+              </Show>
+              <Show when={menuPoint()}>
+                {(at) => (
+                  <>
+                    <MenuItem icon={<Plus />} label={t("workflow.canvas.add.node")} onSelect={() => addAt(at())} />
+                    <Show when={clipboard()}>
+                      <MenuItem
+                        icon={<ClipboardPaste />}
+                        label={t("workflow.canvas.action.pasteHere")}
+                        keys={[MOD_KEY, "V"]}
+                        onSelect={() => pasteNodes(at())}
+                      />
+                    </Show>
+                    <Show when={live().length > 0}>
+                      <MenuItem
+                        icon={<MousePointer2 />}
+                        label={t("workflow.canvas.action.selectAll")}
+                        keys={[MOD_KEY, "A"]}
+                        onSelect={selectAll}
+                      />
+                    </Show>
+                    <Show when={steps().undo > 0}>
+                      <MenuItem
+                        icon={<Undo2 />}
+                        label={t("workflow.canvas.action.undo")}
+                        keys={[MOD_KEY, "Z"]}
+                        onSelect={undo}
+                      />
+                    </Show>
+                    <Show when={steps().redo > 0}>
+                      <MenuItem
+                        icon={<Redo2 />}
+                        label={t("workflow.canvas.action.redo")}
+                        keys={["⇧", MOD_KEY, "Z"]}
+                        onSelect={redo}
+                      />
+                    </Show>
+                    <ContextMenu.Separator />
+                    <MenuItem
+                      icon={<Search />}
+                      label={t("workflow.canvas.action.search")}
+                      keys={[MOD_KEY, "F"]}
+                      onSelect={openSearch}
+                    />
+                    <MenuItem
+                      icon={<Scan />}
+                      label={t("workflow.canvas.zoom.fit")}
+                      keys={["⇧", "1"]}
+                      onSelect={() => fitView(true)}
+                    />
+                    <Show when={canTidy()}>
+                      <MenuItem
+                        icon={<Network />}
+                        label={t("workflow.canvas.action.tidy")}
+                        keys={TIDY_KEYS}
+                        onSelect={tidyUp}
+                      />
+                    </Show>
+                    <MenuItem
+                      icon={ui.hidden ? <Eye /> : <EyeOff />}
+                      label={ui.hidden ? t("workflow.canvas.hud.show") : t("workflow.canvas.hud.hide")}
+                      keys={[MOD_KEY, "/"]}
+                      onSelect={toggleHud}
+                    />
+                    <Show when={board.lockedCount() > 0}>
+                      <ContextMenu.Separator />
+                      <MenuItem
+                        icon={<LockOpen />}
+                        label={t("workflow.canvas.action.unlockAll")}
+                        onSelect={board.unlockAll}
+                      />
+                    </Show>
+                  </>
+                )}
+              </Show>
+            </ContextMenu.Content>
+          </ContextMenu.Portal>
+        </ContextMenu.Root>
+        <Show when={composerId()} keyed>
+          {(id) => (
+            <WorkflowMediaComposer
+              id={id}
+              root={() => root}
+              moves={() => [camera.x, camera.y, camera.scale, positions[id]?.x, positions[id]?.y]}
+            />
+          )}
+        </Show>
+        <Show when={followedPeer()}>{(peer) => <FollowFrame peer={peer()} />}</Show>
+        <Show when={props.opening}>
+          <div class="wfn-opening">
+            <Spinner label={t("workflow.canvas.opening")} />
+          </div>
+        </Show>
+        <Show when={live().length === 0 && !frozen() && !props.opening && allows("trigger")}>
+          <div class="wfn-empty">
+            <span class="wfn-menu-icon wfn-empty-icon" data-kind="trigger" aria-hidden="true">
+              <Zap />
+            </span>
+            <h2 class="wfn-empty-title">{t("workflow.canvas.empty.title")}</h2>
+            <Button size="sm" onClick={() => addNode("trigger")}>
+              <Plus aria-hidden="true" />
+              {t("workflow.canvas.empty.add")}
+            </Button>
+          </div>
+        </Show>
+        <Show when={props.frame === "window"}>{corner()}</Show>
+        <Show when={props.onExport && !props.readOnly}>
+          <Input
+            ref={(element) => {
+              importInput = element;
+            }}
+            class="sr-only"
+            type="file"
+            accept=".json,application/json"
+            tabindex={-1}
+            aria-label={t("workflow.canvas.switcher.import")}
+            onChange={(event) => {
+              const chosen = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (chosen) chooseImport(chosen);
+            }}
+          />
+        </Show>
+        <Show when={importing()}>
+          {(file) => (
+            <WorkflowImportDialog
+              file={file()}
+              agents={props.catalogs.agents}
+              channels={props.catalogs.channels ?? []}
+              paused={props.onSetPaused !== undefined}
+              upload={props.catalogs.upload}
+              onCancel={() => setImporting(undefined)}
+              onImport={finishImport}
+            />
+          )}
+        </Show>
+        <Show when={deleted()}>
+          <WorkflowsEmpty
+            next={nextWorkflowAfterDelete(listed(), openId())}
+            onOpen={(workflowId) => onSwitcher(`open:${workflowId}`)}
+            onCreate={() => onSwitcher("new")}
+          />
+        </Show>
+
+        <WorkflowCanvasHeader
+          frame={props.frame}
+          title={
+            <Show when={props.frame === "window"} fallback={corner()}>
+              <WorkflowTabs
+                tabs={tabItems()}
+                current={openId()}
+                readOnly={props.readOnly === true}
+                control={props.tabs}
+                onOpen={(workflowId) => onSwitcher(`open:${workflowId}`)}
+                onNew={() => onSwitcher("new")}
+                onRename={renameTab}
+              />
+            </Show>
+          }
+          previewing={previewing()}
+          viewing={board.viewing()}
+          onView={board.view}
+          pastRuns={pastRuns()}
+          openRuns={openRuns()}
+          waiting={waitingEvents()}
+          olderRuns={props.runs.nextBefore !== null}
+          onLoadOlderRuns={props.onLoadOlderRuns}
+          step={current()}
+          onShowStep={showNode}
+          canRun={canRun()}
+          running={running()}
+          progress={progress()}
+          onRun={() => props.onRun({})}
+          onStop={stopRun}
+          paused={paused()}
+          onResume={resumeAction()}
+          people={
+            <Show when={peers().length > 0}>
+              <PresenceBar self={self()} peers={peers()} following={following()} onFollow={toggleFollow} />
+            </Show>
+          }
+        />
+
+        <Show when={ui.tool === "draw"}>
+          <div class="wfn-hud wfn-hud-sub" role="toolbar" aria-label={t("workflow.canvas.tool.draw")}>
+            <HudButton
+              label={t("workflow.canvas.tool.pen")}
+              keys={["P"]}
+              pressed={ui.draw === "pen"}
+              onClick={() => setDraw("pen")}
+            >
+              <Pencil />
+            </HudButton>
+            <HudButton
+              label={t("workflow.canvas.tool.marker")}
+              keys={["M"]}
+              pressed={ui.draw === "marker"}
+              onClick={() => setDraw("marker")}
+            >
+              <Highlighter />
+            </HudButton>
+            <HudButton
+              label={t("workflow.canvas.tool.eraser")}
+              keys={["E"]}
+              pressed={ui.draw === "eraser"}
+              onClick={() => setDraw("eraser")}
+            >
+              <Eraser />
+            </HudButton>
+            <span class="wfn-hud-separator" aria-hidden="true" />
+            <ColorButtons
+              options={translated(t, COLORS)}
+              value={ui.ink}
+              name={(label) => t("workflow.canvas.tool.inkColor", { name: label })}
+              onPick={setInkColor}
+            />
+          </div>
+        </Show>
+        <Show when={ui.tool === "note"}>
+          <div class="wfn-hud wfn-hud-sub" role="toolbar" aria-label={t("workflow.canvas.tool.note")}>
+            <ColorButtons
+              options={translated(t, TONES)}
+              value={ui.note}
+              name={(label) => t("workflow.canvas.tool.noteTone", { name: label })}
+              onPick={setNoteTone}
+            />
+          </div>
+        </Show>
+        <Show when={ui.tool === "shape"}>
+          <div class="wfn-hud wfn-hud-sub" role="toolbar" aria-label={t("workflow.canvas.tool.shapes")}>
+            <DropdownMenu.Root placement="top" gutter={8} getAnchorRect={hudBarRect} modal={false}>
+              <DropdownMenu.Trigger
+                class={`${buttonVariants({ variant: "ghost", size: "sm" })} wfn-hud-button wfn-hud-fill`}
+                aria-label={t("workflow.canvas.tool.fillNamed", {
+                  name: t(COLORS.find((option) => option.value === ui.fill)?.label ?? "workflow.color.ink"),
+                })}
+              >
+                <Swatch color={ui.fill} />
+                <ChevronDown class="wfn-hud-chevron" aria-hidden="true" />
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <PickerMenu
+                  label={t("workflow.canvas.tool.fill")}
+                  groups={fillMenu(t)}
+                  value={ui.fill}
+                  onSelect={setFill}
+                />
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+            <span class="wfn-hud-separator" aria-hidden="true" />
+            <For each={SHAPES}>
+              {(option) => (
+                <HudButton
+                  label={t(option.label)}
+                  pressed={ui.shape === option.value}
+                  onClick={() => setShape(option.value)}
+                >
+                  <ShapeIcon shape={option.value} />
+                </HudButton>
+              )}
+            </For>
+          </div>
+        </Show>
+        <Show when={props.versionPreview}>
+          {(open) => (
+            <WorkflowVersionBar
+              at={versionList().find((version) => version.id === open().versionId)?.label ?? ""}
+              onBack={closeVersion}
+              onMakeCurrent={makeCurrent}
+            />
+          )}
+        </Show>
+        <div
+          class="wfn-hud wfn-hud-tools"
+          role="toolbar"
+          aria-label={t("workflow.canvas.tool.label")}
+          hidden={frozen()}
+        >
+          <HudButton
+            label={t("workflow.canvas.tool.select")}
+            keys={["V"]}
+            pressed={ui.tool === "select"}
+            onClick={() => setTool("select")}
+          >
+            <MousePointer2 />
+          </HudButton>
+          <HudButton
+            label={t("workflow.canvas.tool.pan")}
+            keys={["H"]}
+            pressed={ui.tool === "pan"}
+            onClick={() => setTool("pan")}
+          >
+            <Hand />
+          </HudButton>
+          <span class="wfn-hud-separator" aria-hidden="true" />
+          <HudButton
+            label={t("workflow.canvas.tool.draw")}
+            keys={["P"]}
+            art="draw"
+            pressed={ui.tool === "draw"}
+            onClick={() => setTool("draw")}
+          >
+            <DrawArt color={ui.ink} eraser={ui.draw === "eraser"} />
+          </HudButton>
+          <Show when={allows("note")}>
+            <HudButton
+              label={t("workflow.canvas.tool.note")}
+              keys={["N"]}
+              art="note"
+              pressed={ui.tool === "note"}
+              onClick={() => setTool("note")}
+            >
+              <StickyArt tone={ui.note} />
+            </HudButton>
+          </Show>
+          <Show when={allows("shape")}>
+            <HudButton
+              label={t("workflow.canvas.tool.shapes")}
+              keys={["R"]}
+              art="shape"
+              pressed={ui.tool === "shape"}
+              onClick={() => setTool("shape")}
+            >
+              <ShapesArt shape={ui.shape} color={ui.fill} />
+            </HudButton>
+          </Show>
+          <Show when={allows("text")}>
+            <HudButton label={t("workflow.canvas.tool.text")} onClick={() => addNode("text")}>
+              <Type />
+            </HudButton>
+          </Show>
+          <span class="wfn-hud-separator" aria-hidden="true" />
+          <HudButton
+            label={t("workflow.canvas.action.search")}
+            keys={[MOD_KEY, "F"]}
+            pressed={ui.search}
+            onClick={() => (ui.search ? closeSearch() : openSearch())}
+          >
+            <Search />
+          </HudButton>
+          <WorkflowAddMenu
+            allowed={props.features.kinds}
+            getAnchorRect={hudBarRect}
+            onAdd={(item) => addNode(item.kind, undefined, item.fields)}
+          />
+        </div>
+
+        <Show when={ui.search}>
+          <WorkflowSearch
+            query={query()}
+            matches={matches()}
+            onQuery={setQuery}
+            onShow={showNode}
+            onClose={closeSearch}
+          />
+        </Show>
+
+        <WorkflowDropMenu
+          open={drop() !== undefined}
+          at={dropAt}
+          connected={dropConnected()}
+          query={dropQuery()}
+          groups={dropGroups()}
+          onQuery={setDropQuery}
+          onPick={pickDrop}
+          onClose={closeDrop}
+          onHeight={setDropHeight}
+        />
+
+        <Show when={minimap()}>
+          {(map) => <WorkflowMinimap map={map()} selected={board.selected()} onPan={panMinimap} />}
+        </Show>
+
+        <WorkflowZoomMenu
+          scale={camera.scale}
+          minScale={MIN_SCALE}
+          maxScale={MAX_SCALE}
+          minimap={ui.minimap}
+          canTidy={canTidy()}
+          onTidy={tidyUp}
+          onZoom={(action) => {
+            if (action === "in") zoomBy(ZOOM_STEP);
+            else if (action === "out") zoomBy(1 / ZOOM_STEP);
+            else if (action === "reset") zoomTo(1);
+            else fitView(true);
+          }}
+          onZoomTo={zoomTo}
+          onToggleMinimap={() =>
+            setUi((draft) => {
+              draft.minimap = !draft.minimap;
+            })
+          }
+        />
+
+        <Show when={ui.hidden}>
+          <Button variant="secondary" size="sm" class="wfn-hud-show" onClick={toggleHud}>
+            <Eye aria-hidden="true" />
+            {t("workflow.canvas.hud.show")}
+          </Button>
+        </Show>
+      </main>
+    </BoardProvider>
+  );
+}

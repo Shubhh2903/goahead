@@ -14,13 +14,13 @@ export const messages = {
   "remoteDesktop.viewerTitle": "Área de trabalho remota do Sunshine",
   "remoteDesktop.viewerLoadFailed": "Não foi possível carregar o visualizador Moonlight.",
   "remoteDesktop.streamNotReady":
-    "O host não iniciou a transmissão. O Sunshine pode ter parado no host. Tente de novo.",
-  "remoteDesktop.hostOfflineTitle": "O computador anfitrião está offline",
-  "remoteDesktop.hostOfflineMessage": "Reconecte ao computador anfitrião antes de abrir sua área de trabalho.",
+    "O servidor não iniciou a transmissão. O Sunshine pode ter parado no servidor. Tente de novo.",
+  "remoteDesktop.hostOfflineTitle": "O servidor está offline",
+  "remoteDesktop.hostOfflineMessage": "Reconecte-se ao servidor antes de abrir sua área de trabalho.",
   "remoteDesktop.openFailed": "Não foi possível abrir a área de trabalho",
   "remoteDesktop.notSharingTitle": "{name} não está compartilhando a tela",
   "remoteDesktop.notSharingDescription":
-    "O computador anfitrião impede o GoAhead de gravar a tela. Nesse computador, abra Ajustes do Sistema → Privacidade e Segurança → Gravação de Tela, ative o GoAhead e tente novamente aqui.",
+    "O servidor impede o GoAhead de gravar a tela. Nesse servidor, abra Ajustes do Sistema → Privacidade e Segurança → Gravação de Tela, ative o GoAhead e tente novamente aqui.",
   "remoteDesktop.setup.check.screenRecording": "Gravação de Tela",
   "remoteDesktop.setup.check.accessibility": "Acessibilidade",
   "remoteDesktop.setup.check.service": "Serviço Sunshine",
@@ -41,18 +41,18 @@ export const messages = {
   "remoteDesktop.setup.startFailed": "Não foi possível iniciar o teste da área de trabalho remota.",
   "remoteDesktop.setup.connectionLost": "A conexão de teste foi perdida.",
   "remoteDesktop.setup.hostUpdateRequired":
-    "Atualize o GoAhead no computador anfitrião para verificar as permissões e testar a área de trabalho remota.",
+    "Atualize o GoAhead no servidor para verificar as permissões e testar a área de trabalho remota.",
   "remoteDesktop.setup.permissions": "Permissões",
   "remoteDesktop.setup.checked": "Verificado",
   "remoteDesktop.setup.checkAgain": "Verificar novamente",
   "remoteDesktop.setup.grantAccess": "Conceder acesso a {name}",
   "remoteDesktop.setup.grant": "Conceder",
   "remoteDesktop.setup.restartRequired":
-    "O Sunshine precisa reiniciar. Encerre as sessões ativas de área de trabalho remota e verifique novamente. As sessões ativas não serão reiniciadas.",
+    "O Sunshine precisa ser reiniciado. Encerre as sessões ativas de área de trabalho remota e verifique novamente. As sessões ativas não serão reiniciadas.",
   "remoteDesktop.setup.liveTest": "Teste de conexão ao vivo",
   "remoteDesktop.setup.liveTestLocal": "Teste a imagem, o mouse e o teclado neste Mac.",
   "remoteDesktop.setup.liveTestRemote":
-    "O teste abre um painel temporário no computador anfitrião. Encerre as outras sessões remotas primeiro. Os comandos ficam limitados ao painel.",
+    "O teste abre um painel temporário no servidor. Encerre as outras sessões remotas primeiro. Os comandos ficam limitados ao painel.",
   "remoteDesktop.setup.testSummary": "Vídeo: {video} · Imagem: {picture} · Mouse: {mouse} · Teclado: {keyboard}",
   "remoteDesktop.setup.received": "recebido",
   "remoteDesktop.setup.notReceived": "não recebido",
@@ -64,11 +64,21 @@ export const messages = {
   "remoteDesktop.setup.testRemote": "Testar área de trabalho remota",
   "remoteDesktop.setup.videoFailed": "A conexão de vídeo do teste falhou.",
   "remoteDesktop.setup.inputInstructions":
-    "Clique no alvo no computador anfitrião e digite {code}. Mouse: {mouse}. Teclado: {keyboard}.",
+    "Clique no alvo do painel de teste e digite {code}. Mouse: {mouse}. Teclado: {keyboard}.",
   "remoteDesktop.setup.videoOnly":
     "Somente teste de vídeo. O teste de mouse e teclado exige uma versão atualizada do Sunshine.",
   "remoteDesktop.setup.pictureConfirmed": "Imagem confirmada",
   "remoteDesktop.setup.seeDesktop": "Consigo ver minha área de trabalho",
   "remoteDesktop.setup.seeTestPanel": "Consigo ver o painel de teste",
   "remoteDesktop.setup.finishTest": "Concluir teste",
+  "remoteDesktop.host.questionTitle": "{name} quer controlar este computador",
+  "remoteDesktop.host.questionDetail":
+    "{name} verá sua tela e poderá usar seu mouse e teclado. Se você não responder em 30 segundos, o GoAhead recusará a solicitação.",
+  "remoteDesktop.host.allow": "Permitir",
+  "remoteDesktop.host.deny": "Negar",
+  "remoteDesktop.host.startedTitle": "Controle remoto iniciado",
+  "remoteDesktop.host.startedBody": "{name} está controlando este computador agora.",
+  "remoteDesktop.host.trayTooltip": "GoAhead: controle remoto ativo",
+  "remoteDesktop.host.trayControlledBy": "{name} está controlando este computador",
+  "remoteDesktop.host.stopAll": "Parar todo o controle remoto",
 } as const satisfies PartialTranslation<typeof source>;

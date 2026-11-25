@@ -3,14 +3,16 @@ import type { messages as source } from "../../en/mobile/link";
 
 export const messages = {
   "mobile.link.connectFailed": "GoAhead bağlanamadı. Tekrar deneyin.",
-  "mobile.link.invite.signInTitle": "Bu sunucuya katılmak için giriş yapın",
+  "mobile.link.invite.signInTitle": "Bu sunucuya katılmak için oturum açın",
   "mobile.link.invite.signInDescription":
     "Bilgisayarınızdaki GoAhead'de QR kodunu tarayın. Ardından daveti inceleyebilirsiniz.",
   "mobile.link.invite.cancel": "Daveti iptal et",
   "mobile.link.pairing.title": "Bu telefonu bağlayın",
   "mobile.link.pairing.alreadySignedIn":
-    "Zaten giriş yapmış durumdasınız. Başka bir hesap bağlamadan önce Ayarlar'dan çıkış yapın.",
+    "Zaten oturum açtınız. Başka bir hesap bağlamadan önce Ayarlar'dan oturumu kapatın.",
   "mobile.link.pairing.description": "Yalnızca bu Mobile Connect bağlantısını masaüstünüzden istediyseniz devam edin.",
+  "mobile.link.pairing.accountService":
+    "Bu bağlantı GoAhead hesap hizmetine değil, {origin} adresindeki hesap hizmetine bağlanır.",
   "mobile.link.pairing.connect": "Bağlan",
   "mobile.link.plugin.title": "Eklenti sayfasını aç",
   "mobile.link.plugin.description": "Bu eklentiyi GoAhead web sitesinde görüntüleyin.",
@@ -18,7 +20,7 @@ export const messages = {
   "mobile.link.plugin.view": "Eklentiyi görüntüle",
   "mobile.link.unavailable.title": "Bağlantı kullanılamıyor",
   "mobile.link.unavailable.description": "Bu bağlantı geçersiz, artık kullanılamıyor veya mobilde desteklenmiyor.",
-  "mobile.link.template.signInTitle": "Bu ajanı eklemek için giriş yapın",
+  "mobile.link.template.signInTitle": "Bu ajanı eklemek için oturum açın",
   "mobile.link.template.signInDescription":
     "Bilgisayarınızdaki GoAhead'de QR kodunu tarayın. Ardından ajanı eklemeden önce inceleyebilirsiniz.",
   "mobile.link.template.loading": "Ajan yükleniyor…",
@@ -29,7 +31,7 @@ export const messages = {
   "mobile.link.template.section.routines": "Rutinler",
   "mobile.link.template.section.noRoutines": "Rutin yok.",
   "mobile.link.template.skill.local": "Yerel beceri (yalnızca SKILL.md)",
-  "mobile.link.template.skill.marketplace": "Pazar yeri becerisi, sürüm {version}",
+  "mobile.link.template.skill.marketplace": "Pazaryeri becerisi, sürüm {version}",
   "mobile.link.template.server.title": "Sunucuya ekle",
   "mobile.link.template.server.footer": "Yalnızca sahip veya yönetici olduğunuz sunucular listelenir.",
   "mobile.link.template.server.updateRequired": "Paylaşılan ajanları eklemek için bu sunucudaki GoAhead'i güncelleyin.",

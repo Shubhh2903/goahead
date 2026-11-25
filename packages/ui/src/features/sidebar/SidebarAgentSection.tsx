@@ -1,48 +1,49 @@
-/**
- * One section - the unassigned one included. A custom section stays visible while empty so it can
- * be dropped into, but only when nothing is being searched for: during a search an empty section is
- * noise, not a target.
- *
- * The unassigned section keeps its heading only once a custom section exists. Before that it is the
- * whole list, and "Unassigned" names it against nothing.
- */
-
 import { SIDEBAR_UNASSIGNED_SECTION_ID } from "@openbot/contracts/ipc";
 import { For, Match, Show, Switch } from "solid-js";
 import { useText } from "../../text";
 import { SidebarAgentRow } from "./SidebarAgentRow";
 import { SidebarChannelRow } from "./SidebarChannelRow";
+import { SidebarSectionDraft } from "./SidebarSectionEditor";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
 import { useSidebarScope } from "./sidebar-scope";
 
-export function SidebarAgentSection(sectionProps: { sectionId: string }) {
+export function SidebarAgentSection(sectionProps: { sectionId: string; depth: number }) {
   const {
     customSectionById,
     dragOffset,
     filteredChatsBySection,
-    normalizedQuery,
+    listFiltered,
     props,
+    sectionChildren,
     sectionDragClasses,
     sectionIsCollapsed,
+    sectionLabel,
   } = useSidebarScope();
   const { t } = useText();
   const sectionId = () => sectionProps.sectionId;
   const chats = () => filteredChatsBySection().get(sectionId()) ?? [];
   const custom = () => customSectionById().get(sectionId());
+  const children = () => (custom() ? sectionChildren(sectionId()) : []);
   const name = () =>
     sectionId() === SIDEBAR_UNASSIGNED_SECTION_ID ? t("sidebar.section.unassigned") : (custom()?.name ?? "");
-  const headed = () => Boolean(custom()) || props.layout.sections.length > 0;
+  const headed = () =>
+    (Boolean(custom()) || props.layout.sections.length > 0) && !(listFiltered() && custom() && chats().length === 0);
   const collapsed = () => headed() && sectionIsCollapsed(sectionId());
   return (
-    <Show when={name() && (chats().length > 0 || (custom() && !normalizedQuery()))}>
+    <Show when={name() && (chats().length > 0 || custom())}>
       <section
-        class={["sidebar-chat-group sidebar-section", sectionDragClasses(sectionId())]}
+        class={[
+          "sidebar-chat-group sidebar-section",
+          { "sidebar-folder": Boolean(custom()) },
+          sectionDragClasses(sectionId()),
+        ]}
         style={`--sidebar-drag-y: ${dragOffset(sectionId()).y}px;`}
-        aria-label={name()}
+        aria-label={custom() ? sectionLabel(sectionId()) : name()}
         data-section-id={sectionId()}
+        data-depth={custom() ? String(sectionProps.depth) : undefined}
       >
         <Show when={headed()}>
-          <SidebarSectionHeader sectionId={sectionId()} name={name()} />
+          <SidebarSectionHeader sectionId={sectionId()} name={name()} depth={sectionProps.depth} />
         </Show>
         <div
           class="sidebar-section-collapse"
@@ -63,6 +64,12 @@ export function SidebarAgentSection(sectionProps: { sectionId: string }) {
                 </Switch>
               )}
             </For>
+            <For each={children()}>
+              {(childId) => <SidebarAgentSection sectionId={childId} depth={sectionProps.depth + 1} />}
+            </For>
+            <Show when={custom()}>
+              <SidebarSectionDraft parentId={sectionId()} />
+            </Show>
           </div>
         </div>
       </section>

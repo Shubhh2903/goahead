@@ -2,22 +2,28 @@ import type { PartialTranslation } from "../../../message";
 import type { messages as source } from "../../en/error/host";
 
 export const messages = {
-  // Errors from host setup, publishing, and host maintenance.
-  "error.host.iceServersMissing": "Uzak Sinyal ICE sunucuları sağlamadı.",
+  "error.host.iceServersMissing": "Remote Signal ICE sunucularını sağlamadı.",
+  "error.host.keyRotationUnavailable": "Bu sunucu, hesap hizmeti olmadan anahtarını değiştiremez.",
+  "error.host.keyRotationRefused":
+    "Hesap hizmeti yeni sunucu anahtarını kabul etmedi. Mevcut anahtar kullanılmaya devam ediyor.",
   "error.host.webRtcNotConfigured": "WebRTC ana makine hizmeti yapılandırılmamış.",
   "error.host.setupUnavailable": "İzin kurulumu kullanılamıyor.",
   "error.host.accountChangedDuringUpdate": "Bu sunucu güncellenirken oturum açmış hesap değişti.",
-  "error.host.nameBeforePublish": "Yayınlamadan önce bu GoAhead'e bir ad verin.",
+  "error.host.nameBeforePublish": "Yayımlamadan önce bu GoAhead'a bir ad verin.",
   "error.host.memberNotFound": "Uzak üye mevcut değil.",
   "error.host.publishBeforeInvite": "Davet oluşturmadan önce bu GoAhead'i herkese açık hale getirin.",
   "error.host.teamAccessUnavailable": "Ekip erişiminiz kullanılamıyor.",
   "error.host.ownerIdentityUnavailable": "Ana makine sahibi kimliği kullanılamıyor.",
   "error.host.reserveAddressFailed": "Genel adres rezerve edilemedi.",
-  "error.host.publishFailed": "Bu GoAhead yayınlanamadı.",
-  "error.host.mobileConnectPublishFailed": "Bu GoAhead Mobile Connect için yayınlanamadı.",
+  "error.host.publishFailed": "Bu GoAhead yayımlanamadı.",
+  "error.host.mobileConnectPublishFailed": "Bu GoAhead Mobile Connect için yayımlanamadı.",
   "error.host.mobileConnectHostChanged": "Mobile Connect ana makinesi değişti. Tekrar deneyin.",
+  "error.host.mobileConnectHostMismatch": "Hesabınızda bu sunucu için farklı bir anahtar var. Tekrar deneyin.",
   "error.host.noServer": "Bu bilgisayarda değiştirilecek bir sunucu yok.",
   "error.host.identityLocalOnly": "Sunucu adı ve logosu yalnızca onu çalıştıran bilgisayarda değiştirilebilir.",
+  "error.host.timezoneInvalid": "Bu saat dilimi bilinmiyor.",
+  "error.host.signalHomeUnknown": "Bu Signal sunucusu kullanılamıyor.",
+  "error.host.turnLimitInvalid": "Bu iş parçacığı sınırı geçerli değil.",
   "error.host.maintenanceInterrupted":
     "Ana makine bakımı kesintiye uğradı. Tekrar denemeden önce uygulamayı doğrulayın ve ana makine durumunu sıfırlayın.",
   "error.host.updateFailed":
@@ -26,4 +32,5 @@ export const messages = {
   "error.host.tenantShutdownTimeout": "Kiracı kapatması zaman aşımına uğradı. Hiçbir uygulama değişimi başlatılmadı.",
   "error.host.tenantHealthMissing":
     "Yeniden başlatmanın ardından kiracı sağlık raporları eksik veya sağlıksız. Başka bir güncellemeden önce kiracı oturumlarını inceleyin.",
+  "error.host.personalityInvalid": "Bu yanıt stili bilinmiyor.",
 } as const satisfies PartialTranslation<typeof source>;

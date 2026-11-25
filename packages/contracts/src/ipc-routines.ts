@@ -4,7 +4,6 @@ import { isBoolean, isDynamicRecord, isOneOf, isString } from "./runtime-values"
 
 export type RoutineIntervalUnit = "minutes" | "hours" | "days";
 
-/** Minimum polling frequency for interval, advanced-every, and custom routine schedules. */
 export const ROUTINE_MINIMUM_INTERVAL_MINUTES = 3;
 export type RoutineDaySelection =
   | { kind: "every-day" }
@@ -27,7 +26,8 @@ export type RoutineSchedule =
       days: RoutineDaySelection;
       time: RoutineTimeSelection;
     }
-  | { kind: "custom"; expression: string };
+  | { kind: "custom"; expression: string }
+  | { kind: "once"; date: string; time: string };
 
 export function isRoutineSchedule(value: unknown): value is RoutineSchedule {
   if (!isDynamicRecord(value) || !isString(value.kind)) return false;
@@ -60,6 +60,8 @@ export function isRoutineSchedule(value: unknown): value is RoutineSchedule {
       return (
         isString(value.expression) && value.expression.length > 0 && value.expression.length <= INPUT_LIMITS.routineCron
       );
+    case "once":
+      return isRoutineDate(value.date) && isRoutineTime(value.time);
     default:
       return false;
   }
@@ -67,6 +69,21 @@ export function isRoutineSchedule(value: unknown): value is RoutineSchedule {
 
 function isRoutineTime(value: unknown): value is string {
   return isString(value) && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+}
+
+export type ReleasedRoutineSchedule = Exclude<RoutineSchedule, { kind: "once" }>;
+
+export function isReleasedRoutineSchedule(value: unknown): value is ReleasedRoutineSchedule {
+  return isRoutineSchedule(value) && value.kind !== "once";
+}
+
+export function isRoutineDate(value: unknown): value is string {
+  if (!isString(value)) return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function isRoutineDaySelection(value: unknown): value is RoutineDaySelection {
@@ -109,17 +126,9 @@ function isRoutineTrigger(value: unknown): value is RoutineTrigger {
   );
 }
 
-/**
- * What a run does while the provider plan of its agent is spent: `wait` stays in the queue until the
- * reset, `skip` is dropped, for a routine whose result is no use when late.
- */
 export const ROUTINE_LIMIT_POLICIES = ["wait", "skip"] as const;
 export type RoutineLimitPolicy = (typeof ROUTINE_LIMIT_POLICIES)[number];
 
-/**
- * What a routine does with the occurrences that came due while GoAhead was closed: `skip` records
- * them and drops them, `run-once` runs the newest one when GoAhead opens and records the others.
- */
 export const ROUTINE_MISSED_POLICIES = ["skip", "run-once"] as const;
 export type RoutineMissedPolicy = (typeof ROUTINE_MISSED_POLICIES)[number];
 
@@ -147,11 +156,17 @@ export function isRoutineRunCondition(value: unknown): value is RoutineRunCondit
   );
 }
 
-/**
- * The part of a routine that does not name its owner. One store and one settings panel serve both
- * an agent and a channel; `Routine` and `ChannelRoutine` only add the owner id and keep their own
- * shapes exactly.
- */
+export const ROUTINE_RUN_PLACES = ["chat", "thread"] as const;
+export type RoutineRunPlace = (typeof ROUTINE_RUN_PLACES)[number];
+
+export interface RoutinePausedByRun {
+  scheduledFor: string;
+}
+
+export function isRoutinePausedByRun(value: unknown): value is RoutinePausedByRun {
+  return isDynamicRecord(value) && isString(value.scheduledFor) && !Number.isNaN(Date.parse(value.scheduledFor));
+}
+
 export interface RoutineFields {
   id: string;
   name: string;
@@ -159,12 +174,12 @@ export interface RoutineFields {
   active: boolean;
   timezone: string;
   trigger: RoutineTrigger;
-  /** Absent from a host that does not store it: the released Team API projects a fixed key list. */
   limitPolicy?: RoutineLimitPolicy;
-  /** Absent from a host that does not store it, for the same reason as `limitPolicy`. */
   missedPolicy?: RoutineMissedPolicy;
   /** Absent when every scheduled run starts the agent. Only the local host stores and shows it. */
   runCondition?: RoutineRunCondition;
+  runIn?: RoutineRunPlace;
+  pausedByRun?: RoutinePausedByRun;
   createdAt: string;
   updatedAt: string;
 }
@@ -185,6 +200,8 @@ export function isRoutineFields(value: unknown): value is RoutineFields {
     (value.limitPolicy === undefined || isOneOf(ROUTINE_LIMIT_POLICIES, value.limitPolicy)) &&
     (value.missedPolicy === undefined || isOneOf(ROUTINE_MISSED_POLICIES, value.missedPolicy)) &&
     (value.runCondition === undefined || isRoutineRunCondition(value.runCondition)) &&
+    (value.runIn === undefined || isOneOf(ROUTINE_RUN_PLACES, value.runIn)) &&
+    (value.pausedByRun === undefined || isRoutinePausedByRun(value.pausedByRun)) &&
     isString(value.createdAt) &&
     isString(value.updatedAt)
   );
@@ -203,30 +220,27 @@ export type RoutineRunStatus =
   | "interrupted"
   | "cancelled";
 
-/** The largest count a missed-run record names exactly. A larger count means "more than this". */
 export const ROUTINE_MISSED_COUNT_LIMIT = 999;
 
-/**
- * The occurrences that one `cancelled` run stands for: they came due while GoAhead was closed, and
- * none of them ran. `until` is the last of them, or null for one occurrence at `scheduledFor`.
- */
 export interface RoutineMissedRuns {
   count: number;
   until: string | null;
 }
 
-/** A run without its owner and without the handle that names the work it started. */
+export const ROUTINE_RUN_SOURCES = ["test", "script", "webhook"] as const;
+export type RoutineRunSource = (typeof ROUTINE_RUN_SOURCES)[number];
+
 export interface RoutineRunFields {
   id: string;
   routineId: string;
   triggerId: string | null;
   kind: "scheduled" | "manual";
+  source?: RoutineRunSource;
   scheduledFor: string;
   routineName: string;
   instruction: string;
   status: RoutineRunStatus;
   error: string | null;
-  /** Set only on a run that records missed occurrences. A host that does not store it leaves it out. */
   missed?: RoutineMissedRuns;
   createdAt: string;
   updatedAt: string;
@@ -244,6 +258,7 @@ export function isRoutineRunFields(value: unknown): value is RoutineRunFields {
     isString(value.routineId) &&
     (value.triggerId === null || isString(value.triggerId)) &&
     isOneOf(["scheduled", "manual"] as const, value.kind) &&
+    (value.source === undefined || isOneOf(ROUTINE_RUN_SOURCES, value.source)) &&
     isString(value.scheduledFor) &&
     isString(value.routineName) &&
     isString(value.instruction) &&
@@ -283,12 +298,11 @@ export interface CreateRoutineInput {
   active: boolean;
   timezone: string;
   schedule: RoutineSchedule;
-  /** `wait` when absent. */
   limitPolicy?: RoutineLimitPolicy;
-  /** `skip` when absent. */
   missedPolicy?: RoutineMissedPolicy;
   /** No condition when absent. */
   runCondition?: RoutineRunCondition;
+  runIn?: RoutineRunPlace;
 }
 
 export interface UpdateRoutineInput {
@@ -302,6 +316,7 @@ export interface UpdateRoutineInput {
   missedPolicy?: RoutineMissedPolicy;
   /** Kept when absent; `null` removes the condition. */
   runCondition?: RoutineRunCondition | null;
+  runIn?: RoutineRunPlace;
 }
 
 export interface DeleteRoutineInput {
@@ -320,7 +335,6 @@ export interface ListRoutineRunsInput {
   limit?: number;
 }
 
-/** A time range of the routine calendar, as two ISO instants. The host limits its length. */
 export interface RoutineCalendarInput {
   from: string;
   to: string;
@@ -328,7 +342,6 @@ export interface RoutineCalendarInput {
 
 export type RoutineCalendarOwner = { kind: "agent"; agentId: string } | { kind: "channel"; channelId: string };
 
-/** One routine of an agent or a channel, with what the calendar needs to place and name it. */
 export interface RoutineCalendarRoutine {
   id: string;
   name: string;
@@ -338,7 +351,6 @@ export interface RoutineCalendarRoutine {
   schedule: RoutineSchedule;
 }
 
-/** `scheduled` is a run the schedule will make. The other values are the status of a run the host made. */
 export type RoutineCalendarRunStatus = RoutineRunStatus | "scheduled";
 
 export interface RoutineCalendarRun {
@@ -348,7 +360,6 @@ export interface RoutineCalendarRun {
   status: RoutineCalendarRunStatus;
 }
 
-/** Every routine of a host, and its runs in the range: past runs from history, later runs from the schedule. */
 export interface RoutineCalendar {
   routines: RoutineCalendarRoutine[];
   runs: RoutineCalendarRun[];
@@ -404,10 +415,6 @@ export function isRoutineCalendar(value: unknown): value is RoutineCalendar {
   );
 }
 
-/**
- * The iCalendar feed of this computer's routines. `url` holds the private token: anyone who has it
- * can read the routine names and times. Null while the feed is off.
- */
 export interface RoutineFeed {
   url: string | null;
 }

@@ -1,20 +1,45 @@
-/**
- * The replies of a host's `providers-v1` to `providers-v4` routes, as the desktop main process and the browser client
- * both read them. The route codec has already checked their fields; these give them their IPC types
- * and fail closed on anything else. They decode what a host sends, so the preload does not use them.
- */
-
-import type { ProviderApiKeyStatus, ProviderCodeLoginStart } from "./ipc-agent-status";
+import { isAgentProvider } from "./agent-providers";
+import { INPUT_LIMITS } from "./input-limits";
+import { type AgentModelOption, isAgentModelOption, isReasoningEffort } from "./ipc-agent-identity";
+import {
+  type AccountUsage,
+  type HostProviderAccountModels,
+  type HostProviderAccounts,
+  isAccountUsage,
+  isProviderAccountId,
+  isProviderAccountPool,
+  isProviderAccountStatus,
+  MAX_PROVIDER_ACCOUNTS,
+  PROVIDER_USAGE_RESET_OUTCOMES,
+  type ProviderAccountCodeLoginStart,
+  type ProviderAccountCodeLoginStatus,
+  type ProviderApiKeyStatus,
+  type ProviderCodeLoginStart,
+  type ProviderHostSignInStatus,
+  type ProviderRelaySignInStatus,
+  type ProviderUsageResetOutcome,
+  type ProviderUsageResets,
+} from "./ipc-agent-status";
 import type { ProviderRuntimeSnapshot, ProviderRuntimeStatus } from "./ipc-app-auth";
+import { isBoundedString, isIdentifier, isNullableBoundedString } from "./ipc-bounded-values";
+import {
+  CUSTOM_AGENT_LIMITS,
+  type CustomAgentResult,
+  type CustomAgentSummary,
+  isCustomAgentResult,
+  isCustomAgentSummary,
+} from "./ipc-custom-agents";
 import {
   type CustomProviderResult,
   type CustomProviderSummary,
   isCustomProviderResult,
   isCustomProviderSummary,
 } from "./ipc-custom-providers";
+import { decodeMcpSignInRelayPage } from "./ipc-mcp-servers";
 import { isDynamicRecord, isHttpsUrl, isNumber, isOneOf, isString } from "./runtime-values";
+import { PROVIDER_ACCOUNTS_MESSAGE_LIMIT } from "./team-protocol/provider-accounts-v1";
+import { PROVIDER_HOST_SIGN_IN_ERROR_LIMIT } from "./team-protocol/provider-host-sign-in-v1";
 
-/** Each URL becomes a link the admin opens, so it is held to https here as well. */
 export function decodeProviderCodeLoginStart(value: unknown): ProviderCodeLoginStart {
   if (!isDynamicRecord(value)) throw new Error("Invalid code login.");
   if (value.kind === "connected") return { kind: "connected" };
@@ -34,6 +59,148 @@ export function decodeProviderCodeLoginStart(value: unknown): ProviderCodeLoginS
     ...(value.verificationUrlComplete === undefined ? {} : { verificationUrlComplete: value.verificationUrlComplete }),
     expiresAt: value.expiresAt,
   };
+}
+
+export function decodeProviderAccountCodeLoginStart(value: unknown): ProviderAccountCodeLoginStart {
+  if (!isDynamicRecord(value) || !isProviderAccountId(value.accountId)) throw new Error("Invalid code login.");
+  return { accountId: value.accountId, start: decodeProviderCodeLoginStart(value.start) };
+}
+
+export function decodeProviderAccountCodeLoginStatus(value: unknown): ProviderAccountCodeLoginStatus {
+  const invalid = () => new Error("Invalid sign-in response.");
+  if (!isDynamicRecord(value)) throw invalid();
+  if (value.result === null) return { result: null };
+  if (!isDynamicRecord(value.result) || !isNullableBoundedString(value.result.error, PROVIDER_ACCOUNTS_MESSAGE_LIMIT))
+    throw invalid();
+  return { result: { error: value.result.error } };
+}
+
+export function decodeProviderHostSignInStatus(value: unknown): ProviderHostSignInStatus {
+  const invalid = () => new Error("Invalid sign-in response.");
+  if (!isDynamicRecord(value) || (value.tabId !== null && !isBoundedString(value.tabId, INPUT_LIMITS.identifier)))
+    throw invalid();
+  if (value.result === null) return { tabId: value.tabId, result: null };
+  if (!isDynamicRecord(value.result) || !isNullableBoundedString(value.result.error, PROVIDER_HOST_SIGN_IN_ERROR_LIMIT))
+    throw invalid();
+  return { tabId: value.tabId, result: { error: value.result.error } };
+}
+
+export function decodeHostProviderAccounts(value: unknown): HostProviderAccounts {
+  const invalid = () => new Error("Invalid provider accounts.");
+  if (!isDynamicRecord(value) || !Array.isArray(value.providers) || !Array.isArray(value.agents)) throw invalid();
+  const providers = value.providers.flatMap((row: unknown) => {
+    if (
+      !isDynamicRecord(row) ||
+      !Array.isArray(row.accounts) ||
+      row.accounts.length > MAX_PROVIDER_ACCOUNTS ||
+      !row.accounts.every(isProviderAccountStatus)
+    )
+      throw invalid();
+    return isAgentProvider(row.provider) ? [{ provider: row.provider, accounts: row.accounts }] : [];
+  });
+  const agents = value.agents.map((row: unknown) => {
+    if (!isDynamicRecord(row) || !isIdentifier(row.agentId) || !isProviderAccountId(row.accountId)) throw invalid();
+    return { agentId: row.agentId, accountId: row.accountId };
+  });
+  return { providers, agents };
+}
+
+export function decodeHostProviderAccountModels(value: unknown): HostProviderAccountModels {
+  const invalid = () => new Error("Invalid provider account models.");
+  if (!isDynamicRecord(value) || !Array.isArray(value.providers)) throw invalid();
+  const providers = value.providers.flatMap((row: unknown) => {
+    if (!isDynamicRecord(row) || !Array.isArray(row.accounts) || row.accounts.length > MAX_PROVIDER_ACCOUNTS)
+      throw invalid();
+    const provider = row.provider;
+    if (!isAgentProvider(provider)) return [];
+    const accounts = row.accounts.map((account: unknown) => {
+      if (!isDynamicRecord(account) || !isProviderAccountId(account.accountId) || !Array.isArray(account.models))
+        throw invalid();
+      const models = account.models.flatMap((model: unknown): AgentModelOption[] => {
+        if (!isDynamicRecord(model) || !Array.isArray(model.supportedReasoningEfforts)) throw invalid();
+        const option = {
+          ...model,
+          provider,
+          supportedReasoningEfforts: model.supportedReasoningEfforts.filter(isReasoningEffort),
+        };
+        return isAgentModelOption(option) ? [option] : [];
+      });
+      return { accountId: account.accountId, models };
+    });
+    return [{ provider, accounts }];
+  });
+  return { providers };
+}
+
+export function decodeHostProviderAccountPools(value: unknown): NonNullable<HostProviderAccounts["pools"]> {
+  const invalid = () => new Error("Invalid provider account pools.");
+  if (!isDynamicRecord(value) || !Array.isArray(value.pools)) throw invalid();
+  return value.pools.flatMap((row: unknown) => {
+    if (!isDynamicRecord(row)) throw invalid();
+    const pool = { leftOut: row.leftOut, inUse: row.inUse };
+    if (!isProviderAccountPool(pool)) throw invalid();
+    return isAgentProvider(row.provider) ? [{ provider: row.provider, pool }] : [];
+  });
+}
+
+export function withHostProviderAccountModels(
+  accounts: HostProviderAccounts,
+  models: HostProviderAccountModels,
+): HostProviderAccounts {
+  const byAccount = new Map(
+    models.providers.flatMap((row) =>
+      row.accounts.map((account) => [`${row.provider}\n${account.accountId}`, account.models] as const),
+    ),
+  );
+  return {
+    ...accounts,
+    providers: accounts.providers.map((row) => ({
+      ...row,
+      accounts: row.accounts.map((account) => {
+        const extra = byAccount.get(`${row.provider}\n${account.id}`);
+        return extra?.length ? { ...account, models: extra } : account;
+      }),
+    })),
+  };
+}
+
+export function decodeHostProviderAccountUsage(value: unknown): AccountUsage {
+  if (!isAccountUsage(value) || value.limits.some((limit) => limit.accountId === undefined))
+    throw new Error("Invalid provider account usage.");
+  return value;
+}
+
+export function decodeProviderUsageResets(value: unknown): ProviderUsageResets[] {
+  const invalid = () => new Error("Invalid provider usage resets.");
+  if (!Array.isArray(value)) throw invalid();
+  return value.flatMap((row: unknown) => {
+    if (
+      !isDynamicRecord(row) ||
+      !isProviderAccountId(row.accountId) ||
+      !isNumber(row.available) ||
+      !Number.isInteger(row.available) ||
+      row.available < 0
+    )
+      throw invalid();
+    return isAgentProvider(row.provider)
+      ? [{ provider: row.provider, accountId: row.accountId, available: row.available }]
+      : [];
+  });
+}
+
+export function decodeProviderUsageResetOutcome(value: unknown): ProviderUsageResetOutcome {
+  if (!isOneOf(PROVIDER_USAGE_RESET_OUTCOMES, value)) throw new Error("Invalid provider usage reset.");
+  return value;
+}
+
+export function decodeProviderRelaySignInStatus(value: unknown): ProviderRelaySignInStatus {
+  const invalid = () => new Error("Invalid sign-in response.");
+  if (!isDynamicRecord(value)) throw invalid();
+  const page = decodeMcpSignInRelayPage(value.page ?? null);
+  if (value.result === null) return { page, result: null };
+  if (!isDynamicRecord(value.result) || !isNullableBoundedString(value.result.error, PROVIDER_HOST_SIGN_IN_ERROR_LIMIT))
+    throw invalid();
+  return { page, result: { error: value.result.error } };
 }
 
 export function decodeProviderApiKeyStatus(value: unknown): ProviderApiKeyStatus {
@@ -62,6 +229,12 @@ function decodeProviderRuntimeStatus(value: unknown): ProviderRuntimeStatus {
   };
 }
 
+function decodeLaterRuntime(value: unknown): ProviderRuntimeStatus {
+  return value === undefined
+    ? { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null }
+    : decodeProviderRuntimeStatus(value);
+}
+
 export function decodeProviderRuntimeSnapshot(value: unknown): ProviderRuntimeSnapshot {
   if (
     !isDynamicRecord(value) ||
@@ -79,38 +252,53 @@ export function decodeProviderRuntimeSnapshot(value: unknown): ProviderRuntimeSn
       claude: decodeProviderRuntimeStatus(providers.claude),
       grok: decodeProviderRuntimeStatus(providers.grok),
       opencode: decodeProviderRuntimeStatus(providers.opencode),
-      // `providers-v1` has no Gemini entry, and this client cannot download Gemini on that host, so
-      // the status is "not downloaded". `providers-v2` has one.
-      antigravity:
-        providers.antigravity === undefined
-          ? { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null }
-          : decodeProviderRuntimeStatus(providers.antigravity),
-      // Only `providers-v4` carries Cursor and Cline; on an older host this client cannot download them.
-      cursor:
-        providers.cursor === undefined
-          ? { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null }
-          : decodeProviderRuntimeStatus(providers.cursor),
-      cline:
-        providers.cline === undefined
-          ? { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null }
-          : decodeProviderRuntimeStatus(providers.cline),
-      // No released `providers-*` route carries Pi or Muse; only this computer's snapshot names them.
-      pi:
-        providers.pi === undefined
-          ? { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null }
-          : decodeProviderRuntimeStatus(providers.pi),
-      muse:
-        providers.muse === undefined
-          ? { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null }
-          : decodeProviderRuntimeStatus(providers.muse),
+      antigravity: decodeLaterRuntime(providers.antigravity),
+      cursor: decodeLaterRuntime(providers.cursor),
+      cline: decodeLaterRuntime(providers.cline),
+      kimi: decodeLaterRuntime(providers.kimi),
+      devin: decodeLaterRuntime(providers.devin),
+      copilot: decodeLaterRuntime(providers.copilot),
+      mistral: decodeLaterRuntime(providers.mistral),
+      pi: decodeLaterRuntime(providers.pi),
+      muse: decodeLaterRuntime(providers.muse),
+      ...(providers.hermes === undefined ? {} : { hermes: decodeProviderRuntimeStatus(providers.hermes) }),
     },
     toolRuntimes: { bun: decodeProviderRuntimeStatus(toolRuntimes.bun) },
   };
 }
 
-// The contract guard asserts that a summary carries no key, and fails closed on the whole list.
+export function decodeProviderRuntimeSnapshotV8(value: unknown): ProviderRuntimeSnapshot {
+  if (!isDynamicRecord(value) || !Array.isArray(value.providers) || !Array.isArray(value.toolRuntimes))
+    throw new Error("Invalid provider runtimes.");
+  return decodeProviderRuntimeSnapshot({
+    revision: value.revision,
+    providers: Object.fromEntries(runtimeRows(value.providers)),
+    toolRuntimes: Object.fromEntries(runtimeRows(value.toolRuntimes)),
+  });
+}
+
+function runtimeRows(rows: readonly unknown[]): Map<string, unknown> {
+  const byId = new Map<string, unknown>();
+  for (const row of rows) {
+    if (!isDynamicRecord(row) || !isString(row.id) || byId.has(row.id)) throw new Error("Invalid provider runtimes.");
+    byId.set(row.id, row);
+  }
+  return byId;
+}
+
 export function decodeCustomProviderSummaries(value: unknown): CustomProviderSummary[] {
   if (!Array.isArray(value) || !value.every(isCustomProviderSummary)) throw new Error("Invalid custom providers.");
+  return value;
+}
+
+export function decodeCustomAgentSummaries(value: unknown): CustomAgentSummary[] {
+  if (!Array.isArray(value) || value.length > CUSTOM_AGENT_LIMITS.agents || !value.every(isCustomAgentSummary))
+    throw new Error("Invalid custom agents.");
+  return value;
+}
+
+export function decodeCustomAgentResult(value: unknown): CustomAgentResult {
+  if (!isCustomAgentResult(value)) throw new Error("Invalid custom agent result.");
   return value;
 }
 

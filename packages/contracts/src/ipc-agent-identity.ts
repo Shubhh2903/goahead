@@ -1,50 +1,80 @@
-import { AGENT_PROVIDER_DESCRIPTORS, agentProviderDescriptor } from "./agent-providers";
+import {
+  AGENT_PROVIDER_DESCRIPTORS,
+  type AgentProviderId,
+  type AgentProviderRef,
+  agentProviderDescriptor,
+  isAgentProvider,
+  isAgentProviderRef,
+} from "./agent-providers";
 import { INPUT_LIMITS } from "./input-limits";
-import { type AgentProviderId, isAgentProvider } from "./ipc-agent-status";
 import { isBoundedString } from "./ipc-bounded-values";
-import { isDynamicRecord, isOneOf, isString } from "./runtime-values";
+import { type DynamicRecord, isBoolean, isDynamicRecord, isOneOf, isString } from "./runtime-values";
 
 export type AgentModelId = string;
 
-export const AGENT_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export const AGENT_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export type AgentReasoningEffort = (typeof AGENT_REASONING_EFFORTS)[number];
+
+export const LEGACY_AGENT_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type LegacyAgentReasoningEffort = (typeof LEGACY_AGENT_REASONING_EFFORTS)[number];
+
+export function legacyReasoningEffort(effort: AgentReasoningEffort): LegacyAgentReasoningEffort {
+  if (effort === "none" || effort === "minimal") return "low";
+  return effort === "ultra" ? "max" : effort;
+}
 
 export const AVATAR_HUES = [0, 30, 55, 100, 150, 185, 215, 245, 280, 320] as const;
 export type AvatarHue = (typeof AVATAR_HUES)[number];
 
-// Square brackets are in the set because a provider CLI puts them there: the Claude CLI reports its
-// 1M-context Fable variant as `claude-fable-5-1[1m]`, and every id this guard sees was minted by a
-// CLI OpenBot does not control. `=` and `,` are there for the same reason: the Cursor CLI lists its
-// variants as `gpt-5.6-sol[context=272k,reasoning=medium,fast=false]`, and takes that id back whole.
-// Without them the model was unselectable and, worse, unlistable --
-// `isAgentModelOption` refuses the option, and the list decoders on both the IPC and the Team API
-// side fail closed on the whole array with it, so one such id emptied the model picker locally and
-// took a remote server offline entirely. Failing closed is what the contract asks of a malformed
-// known payload and it stays, which leaves this charset as the only thing between a legitimate CLI
-// id and a bricked server -- so an id is a single opaque token here rather than a list of the models
-// this build happens to know: no whitespace, quotes, control characters or path separators beyond
-// the `/` a provider prefix uses, and nothing downstream builds a filesystem path or a URL out of
-// one -- `/v1/agents/models` takes no model parameter.
+export type AvatarColor = `#${string}`;
+
+const AVATAR_COLOR_PATTERN = /^#[0-9a-f]{6}$/;
+
+export function isAvatarColor(value: unknown): value is AvatarColor {
+  return isString(value) && AVATAR_COLOR_PATTERN.test(value);
+}
+
+const NEUTRAL_SATURATION = 0.15;
+
+export function nearestAvatarHue(color: AvatarColor): AvatarHue | null {
+  const red = Number.parseInt(color.slice(1, 3), 16) / 255;
+  const green = Number.parseInt(color.slice(3, 5), 16) / 255;
+  const blue = Number.parseInt(color.slice(5, 7), 16) / 255;
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+  const lightness = (max + min) / 2;
+  const saturation = delta === 0 ? 0 : delta / (1 - Math.abs(2 * lightness - 1));
+  if (saturation < NEUTRAL_SATURATION) return null;
+  const sector =
+    max === red
+      ? ((green - blue) / delta + 6) % 6
+      : max === green
+        ? (blue - red) / delta + 2
+        : (red - green) / delta + 4;
+  const angle = sector * 60;
+  let nearest: AvatarHue = AVATAR_HUES[0];
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const hue of AVATAR_HUES) {
+    const distance = Math.min(Math.abs(angle - hue), 360 - Math.abs(angle - hue));
+    if (distance < nearestDistance) {
+      nearest = hue;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
+}
+
 export function isAgentModel(value: unknown): value is AgentModelId {
   return (
     isString(value) && value.length > 0 && value.length <= 160 && /^[A-Za-z0-9][A-Za-z0-9._:/[\],=-]*$/.test(value)
   );
 }
 
-/**
- * The model each provider starts on, and the one the model picker marks as the default.
- *
- * A provider lists its own models, so an id here can be missing from a given CLI: every caller
- * falls back to the first model that provider does list, and the picker simply marks nothing.
- */
 export function defaultProviderModel(provider: AgentProviderId): AgentModelId {
   return agentProviderDescriptor(provider).defaultModel;
 }
 
-/**
- * `codex` is the historical answer for a model no prefix claims, and it has to stay that way: an
- * import that never named a provider already landed there, and moving it would move those agents.
- */
 export function providerForLegacyModel(model: AgentModelId): AgentProviderId {
   for (const descriptor of AGENT_PROVIDER_DESCRIPTORS) {
     if (descriptor.legacyModelPrefix !== null && model.startsWith(descriptor.legacyModelPrefix)) return descriptor.id;
@@ -66,6 +96,9 @@ export function isAvatarHue(value: unknown): value is AvatarHue {
   return isOneOf(AVATAR_HUES, value);
 }
 
+export const AGENT_MODEL_LISTINGS = ["new", "older", "kept"] as const;
+export type AgentModelListing = (typeof AGENT_MODEL_LISTINGS)[number];
+
 export interface AgentModelOption {
   provider: AgentProviderId;
   id: AgentModelId;
@@ -73,17 +106,37 @@ export interface AgentModelOption {
   description: string;
   defaultReasoningEffort: AgentReasoningEffort;
   supportedReasoningEfforts: AgentReasoningEffort[];
+  reasoningEffortConfigurable?: boolean;
+  fastServiceTier?: string;
+  ultrafastServiceTier?: string;
+  listing?: AgentModelListing;
+  steersTurns?: boolean;
+  workspaceOnlyUnavailable?: boolean;
 }
 
 export function isAgentModelOption(value: unknown): value is AgentModelOption {
+  return isDynamicRecord(value) && isAgentProvider(value.provider) && hasAgentModelOptionFields(value);
+}
+
+export type ClientAgentModelOption = Omit<AgentModelOption, "provider"> & { provider: AgentProviderRef };
+
+export function isClientAgentModelOption(value: unknown): value is ClientAgentModelOption {
+  return isDynamicRecord(value) && isAgentProviderRef(value.provider) && hasAgentModelOptionFields(value);
+}
+
+function hasAgentModelOptionFields(value: DynamicRecord): boolean {
   return (
-    isDynamicRecord(value) &&
-    isAgentProvider(value.provider) &&
     isAgentModel(value.id) &&
     isBoundedString(value.name, INPUT_LIMITS.modelName) &&
     isBoundedString(value.description, INPUT_LIMITS.agentDescription) &&
     isReasoningEffort(value.defaultReasoningEffort) &&
     Array.isArray(value.supportedReasoningEfforts) &&
-    value.supportedReasoningEfforts.every(isReasoningEffort)
+    value.supportedReasoningEfforts.every(isReasoningEffort) &&
+    (value.reasoningEffortConfigurable === undefined || isBoolean(value.reasoningEffortConfigurable)) &&
+    (value.fastServiceTier === undefined || isBoundedString(value.fastServiceTier, INPUT_LIMITS.serviceTier)) &&
+    (value.ultrafastServiceTier === undefined ||
+      isBoundedString(value.ultrafastServiceTier, INPUT_LIMITS.serviceTier)) &&
+    (value.listing === undefined || isOneOf(AGENT_MODEL_LISTINGS, value.listing)) &&
+    (value.steersTurns === undefined || isBoolean(value.steersTurns))
   );
 }

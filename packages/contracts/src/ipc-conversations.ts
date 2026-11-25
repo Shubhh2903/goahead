@@ -3,6 +3,8 @@ import { isIdentifier } from "./ipc-bounded-values";
 import { type ConversationMessage, isConversationMessage, type MessageReaction } from "./ipc-conversation-messages";
 import { isDynamicRecord, isNumber } from "./runtime-values";
 
+export const CONVERSATION_SNAPSHOT_MESSAGE_LIMIT = 100;
+
 export interface ConversationSnapshot {
   agentId: string;
   threadId: string | null;
@@ -62,11 +64,13 @@ export type ConversationPageAnchor =
 export interface ConversationPageInfo {
   hasOlder: boolean;
   olderCursor: string | null;
+  olderCount?: number;
+  oldestAt?: string;
 }
 
 export interface ReadConversationPageInput {
   agentId: string;
-  anchor?: ConversationPageAnchor;
+  anchor?: ConversationPageAnchor | undefined;
   limit?: number;
 }
 
@@ -81,16 +85,32 @@ export interface ConversationPage {
   readState?: ConversationReadState;
 }
 
+export interface OpenMessageLinkInput {
+  agentId: string;
+  url: string;
+}
+
+export interface PasteMessageLinkInput {
+  url: string;
+  address: string;
+}
+
+export interface CancelMessageLinkInput {
+  url: string;
+}
+
 export interface SearchConversationMessagesInput {
   query: string;
   agentId?: string;
   cursor?: string;
   limit?: number;
+  includeSideThreads?: boolean;
 }
 
 export interface ConversationSearchResult {
   agentId: string;
   message: ConversationMessage;
+  taskId?: string;
 }
 
 export interface ConversationSearchPage {
@@ -99,14 +119,12 @@ export interface ConversationSearchPage {
   nextCursor: string | null;
 }
 
-/** A file name search across the local agent chats. An empty query lists the newest files. */
 export interface SearchConversationFilesInput {
   query: string;
   cursor?: string;
   limit?: number;
 }
 
-/** One file that a message in an agent chat carries. */
 export interface ConversationFileSearchResult {
   agentId: string;
   messageId: string;
@@ -124,16 +142,45 @@ export interface MarkConversationReadInput {
   throughMessageId: string | null;
 }
 
+export interface MarkConversationUnreadInput {
+  agentId: string;
+  fromMessageId: string;
+}
+
 export interface SendMessageInput {
   agentId: string;
   text: string;
   attachmentDraftIds?: string[];
   replyToMessageId?: string | null;
-  /**
-   * The sender's id for this message. A second send with the same id, from the same sender to the
-   * same agent, returns the first receipt instead of a new message, so a lost reply can be retried.
-   */
   clientMessageId?: string;
+  taskId?: string;
+  voiceRecordingDraftId?: string;
+}
+
+export interface DeleteConversationMessageInput {
+  agentId: string;
+  messageId: string;
+  taskId?: string;
+}
+
+export interface WithdrawFeedbackInput {
+  agentId: string;
+  messageId: string;
+}
+
+export const WITHDRAW_FEEDBACK_STATUSES = [
+  "withdrawn",
+  "signedOut",
+  "notYours",
+  "unavailable",
+  "limited",
+  "notFound",
+  "moved",
+] as const;
+export type WithdrawFeedbackStatus = (typeof WITHDRAW_FEEDBACK_STATUSES)[number];
+
+export interface WithdrawFeedbackResult {
+  status: WithdrawFeedbackStatus;
 }
 
 export interface SetMessageReactionInput {

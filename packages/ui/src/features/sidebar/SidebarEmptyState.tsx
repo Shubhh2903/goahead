@@ -1,9 +1,3 @@
-/**
- * What the list shows with nothing in it. Two different empty states: a search that matched nothing
- * says so, while a brand new profile offers `props.emptyAction` - the first agent, rendered as a
- * pressed row so the sidebar is never a blank column.
- */
-
 import { Button } from "@openbot/ui";
 import { Show } from "solid-js";
 import { useText } from "../../text";
@@ -11,19 +5,13 @@ import { AgentAvatar } from "../agents/AgentAvatar";
 import { useSidebarScope } from "./sidebar-scope";
 
 export function SidebarEmptyState() {
-  const { props, query } = useSidebarScope();
+  const { props } = useSidebarScope();
   const { t } = useText();
   return (
     <Show
-      when={!query().trim() && props.emptyAction}
+      when={props.emptyAction}
       fallback={
-        <p class="empty-search">
-          {query().trim()
-            ? t("sidebar.empty.noMatches")
-            : props.agents.length
-              ? t("sidebar.empty.noMatches")
-              : t("sidebar.empty.noAgents")}
-        </p>
+        <p class="empty-search">{props.agentsConnecting ? t("common.connecting") : t("sidebar.empty.noAgents")}</p>
       }
     >
       {(action) => (
@@ -39,7 +27,12 @@ export function SidebarEmptyState() {
             onClick={action().onSelect}
           >
             <span class="agent-row-avatar">
-              <AgentAvatar seed={action().avatarSeed} hue={action().avatarHue} motion="hover" />
+              <AgentAvatar
+                seed={action().avatarSeed}
+                hue={action().avatarHue}
+                color={action().avatarColor}
+                motion="hover"
+              />
             </span>
             <span class="agent-row-copy">
               <span class="agent-row-heading">

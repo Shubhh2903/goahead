@@ -1,7 +1,3 @@
-// The routine calendar: every routine of a host, of agents and channels, with its runs in a range.
-// A past run comes from the run history, a later one from the schedule. The local host, a remote
-// one and the phone give the same source, so every calendar places runs with the same schedule code.
-
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   ROUTINE_MINIMUM_INTERVAL_MINUTES,
@@ -11,36 +7,45 @@ import {
   type RoutineFields,
   type RoutineRunFields,
 } from "@openbot/contracts/ipc";
-import { nextValidRoutineOccurrence, validateRoutineSchedule } from "./routine-schedule";
+import { Effect } from "effect";
+import { nextValidRoutineOccurrence, validateStoredRoutineSchedule } from "./routine-schedule";
 
-/** A remote host gets one request for each owner and each routine; this many run at the same time. */
 const PARALLEL_REQUESTS = 8;
 
-export interface RoutineCalendarSource {
-  owners(): Promise<RoutineCalendarOwner[]>;
-  routines(owner: RoutineCalendarOwner): Promise<RoutineFields[]>;
-  /** The newest runs of one routine, newest first. */
-  runs(owner: RoutineCalendarOwner, routineId: string, limit: number): Promise<RoutineRunFields[]>;
+export interface RoutineCalendarSource<E> {
+  owners(): Effect.Effect<RoutineCalendarOwner[], E>;
+  routines(owner: RoutineCalendarOwner): Effect.Effect<RoutineFields[], E>;
+  runs(owner: RoutineCalendarOwner, routineId: string, limit: number): Effect.Effect<RoutineRunFields[], E>;
 }
 
-export async function buildRoutineCalendar(
+export const buildRoutineCalendar = Effect.fn("RoutineCalendar.build")(function* <E>(
   range: { from: Date; to: Date },
   now: Date,
-  source: RoutineCalendarSource,
-): Promise<RoutineCalendar> {
-  const owners = await source.owners();
-  const routineLists = await mapLimited(owners, async (owner) =>
-    (await source.routines(owner)).map((routine) => ({ owner, routine })),
+  source: RoutineCalendarSource<E>,
+): Effect.fn.Return<RoutineCalendar, E> {
+  const owners = yield* source.owners();
+  const lists = yield* Effect.forEach(
+    owners,
+    (owner) => source.routines(owner).pipe(Effect.map((routines) => routines.map((routine) => ({ owner, routine })))),
+    { concurrency: PARALLEL_REQUESTS },
   );
-  const routines = routineLists.flat();
-  const runLists = await mapLimited(routines, async ({ owner, routine }) => {
-    // History reaches back from now, so a range that ends before the oldest run kept here has no history.
-    const history =
-      range.from.getTime() < now.getTime() ? await source.runs(owner, routine.id, INPUT_LIMITS.routineRunsPage) : [];
-    // Planning does not wait, so the event loop gets a turn between routines.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    return routineRuns(routine, history, range, now);
-  });
+  const routines = lists.flat();
+  const runLists = yield* Effect.forEach(
+    routines,
+    ({ owner, routine }) =>
+      Effect.gen(function* () {
+        const history =
+          range.from.getTime() < now.getTime()
+            ? yield* source.runs(owner, routine.id, INPUT_LIMITS.routineRunsPage)
+            : [];
+        yield* Effect.callback<void>((resume) => {
+          const timer = setTimeout(() => resume(Effect.void), 0);
+          return Effect.sync(() => clearTimeout(timer));
+        });
+        return routineRuns(routine, history, range, now);
+      }),
+    { concurrency: PARALLEL_REQUESTS },
+  );
   return {
     routines: routines.map(({ owner, routine }) => ({
       id: routine.id,
@@ -52,19 +57,7 @@ export async function buildRoutineCalendar(
     })),
     runs: runLists.flat(),
   };
-}
-
-/** Like `Promise.all` over `map`, with at most `PARALLEL_REQUESTS` calls in flight. Results keep the input order. */
-async function mapLimited<T, R>(items: readonly T[], map: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  // The workers share one iterator, so each item is taken once.
-  const queue = items.entries();
-  const worker = async () => {
-    for (const [index, item] of queue) results[index] = await map(item);
-  };
-  await Promise.all(Array.from({ length: Math.min(PARALLEL_REQUESTS, items.length) }, worker));
-  return results;
-}
+});
 
 function routineRuns(
   routine: RoutineFields,
@@ -80,14 +73,11 @@ function routineRuns(
     made.add(at);
     runs.push({ id: run.id, routineId: routine.id, at: new Date(at).toISOString(), status: run.status });
   }
-  // A paused routine keeps its place: the calendar shows the runs it would make if it resumed.
   try {
-    validateRoutineSchedule(routine.trigger.schedule, routine.timezone);
+    validateStoredRoutineSchedule(routine.trigger.schedule, routine.timezone);
   } catch {
-    // A stored schedule that no longer validates fires nothing either; its past runs still show.
     return runs;
   }
-  // Valid runs are at least the minimum interval apart, so the range holds no more than this.
   const maxRuns =
     Math.ceil((range.to.getTime() - range.from.getTime()) / (ROUTINE_MINIMUM_INTERVAL_MINUTES * 60_000)) + 1;
   let cursor = new Date(Math.max(range.from.getTime() - 1, now.getTime()));
@@ -96,7 +86,6 @@ function routineRuns(
     try {
       next = nextValidRoutineOccurrence(routine.trigger.schedule, routine.timezone, cursor);
     } catch {
-      // An interval with an anchor that does not parse validates, but has no next run.
       break;
     }
     if (next.getTime() >= range.to.getTime()) break;

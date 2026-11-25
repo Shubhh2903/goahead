@@ -1,5 +1,21 @@
 import type { PartialTranslation } from "../../message";
 import type { messages as source } from "../en/messaging";
 
-// Not translated yet: the screen shows the English text.
-export const messages = {} as const satisfies PartialTranslation<typeof source>;
+export const messages = {
+  "messaging.help.invalid_token":
+    "Slack はこのワークスペースで GoAhead を受け付けなくなりました。アンインストールされた可能性があります。ワークスペースをもう一度接続してください。",
+  "messaging.help.secret_storage_unavailable":
+    "GoAhead はこのコンピューターに保存されたトークンを読み取れません。ワークスペースの接続を解除してから、もう一度接続してください。",
+  "messaging.help.relay_unavailable":
+    "GoAhead はこのコンピューターで Slack のイベントを受信できません。サインインし、サーバー設定でこのコンピューターに名前を付けて、GoAhead を開いたままにしてください。",
+  "messaging.help.not_linked":
+    "このワークスペースはこのサーバーにリンクされていません。リンクするには「再接続」を選択してください。",
+  "messaging.discordHelp.invalid_token":
+    "Discord はこの Discord サーバーで GoAhead を受け付けなくなりました。削除された可能性があります。Discord サーバーをもう一度接続してください。",
+  "messaging.discordHelp.secret_storage_unavailable":
+    "GoAhead はこのコンピューターに保存されたトークンを読み取れません。Discord サーバーの接続を解除してから、もう一度接続してください。",
+  "messaging.discordHelp.relay_unavailable":
+    "GoAhead はこのコンピューターで Discord のイベントを受信できません。サインインし、サーバー設定でこのコンピューターに名前を付けて、GoAhead を開いたままにしてください。",
+  "messaging.discordHelp.not_linked":
+    "この Discord サーバーはこの GoAhead サーバーにリンクされていません。リンクするには「再接続」を選択してください。",
+} as const satisfies PartialTranslation<typeof source>;

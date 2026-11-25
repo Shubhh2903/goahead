@@ -1,7 +1,7 @@
 /**
- * The color the user picks for the OpenBot logo: the Dock or taskbar icon, the Dynamic Island and
+ * The color the user picks for the GoAhead logo: the Dock or taskbar icon, the Dynamic Island and
  * the logos in the app. Only a release build shows it. A dev or preview build keeps its own color,
- * so two OpenBot apps that are open at the same time stay easy to tell apart.
+ * so two GoAhead apps that are open at the same time stay easy to tell apart.
  *
  * The identifiers cross the IPC boundary and are saved as written. Add a color, never rename one:
  * a renamed identifier reads back as the default on the next launch. The order is the Settings

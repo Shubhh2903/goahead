@@ -20,7 +20,6 @@ export const messages = {
   "status.remote.stageCompatibility": "Verificando a compatibilidade do computador: {reason}",
   "status.remote.stageAgents": "Carregando agentes: {reason}",
   "status.remote.stageReads": "Carregando o status de leitura: {reason}",
-  "status.remote.stageConversations": "Carregando conversas: {reason}",
   "status.remote.suspendedDetail":
     "Atualize o GoAhead Mobile ou o aplicativo para computador antes de conectar.\n{detail}",
   "status.remote.cooldownDetail":
@@ -47,4 +46,6 @@ export const messages = {
     other: "Reconectando {attempt}/{count}\n{detail}",
   },
   "status.remote.reconnecting": { one: "Reconectando {attempt}/{count}", other: "Reconectando {attempt}/{count}" },
+  "status.remote.messageCut":
+    "[{size} MB desta mensagem não aparecem neste dispositivo. Abra-a no computador que executa o servidor para ler tudo.]",
 } as const satisfies PartialTranslation<typeof source>;

@@ -1,15 +1,22 @@
 import type { SaveAgentProfileInput, SaveAgentProfileResult } from "@openbot/contracts/ipc";
+import { Effect, Schema } from "effect";
 
-/** Reconcile an ambiguous save before applying later edits, retaining a single created identity. */
-export async function saveReviewedAgentProfile(
+class AgentProfileSaveFailure extends Schema.TaggedError<AgentProfileSaveFailure>()("AgentProfileSaveFailure", {
+  cause: Schema.Defect(),
+}) {}
+
+export const saveReviewedAgentProfile = Effect.fn("AgentProfile.saveReviewed")(function* (
   send: (input: SaveAgentProfileInput) => Promise<SaveAgentProfileResult>,
   input: SaveAgentProfileInput,
   pending?: SaveAgentProfileInput,
-): Promise<SaveAgentProfileResult> {
-  if (!pending) return send(input);
-  // Reuse the original identity with the latest valid fields. If the first attempt never committed
-  // (for example its section was deleted), correcting that draft must still allow a retry.
-  const recovered = await send({ ...input, operationId: pending.operationId });
+) {
+  const submit = (value: SaveAgentProfileInput) =>
+    Effect.tryPromise({
+      try: () => send(value),
+      catch: (cause) => new AgentProfileSaveFailure({ cause }),
+    });
+  if (!pending) return yield* submit(input);
+  const recovered = yield* submit({ ...input, operationId: pending.operationId });
   if (pending.operationId === input.operationId) return recovered;
-  return send({ operationId: input.operationId, agentId: recovered.agent.id, draft: input.draft });
-}
+  return yield* submit({ operationId: input.operationId, agentId: recovered.agent.id, draft: input.draft });
+});

@@ -30,16 +30,21 @@ export const messages = {
   "import.guide.messageNote":
     "ワークスペースのファイルを含めるか確認したあと、.zip ファイルを「ダウンロード」に保存します。",
   "import.guide.step3": ".zip ファイルを選択します",
-  "import.guide.reading": "エクスポートを読み込んでいます…",
+  "import.guide.reading": "読み込み中…",
   "import.guide.choose": "エクスポートファイルを選択",
   "import.guide.chooseNote": "変更の前に、含まれるエージェントを確認できます。",
+  "import.guide.hermesLedeServer":
+    "Hermes の各プロファイルが 1 つのエージェントになります。サーバー上のプロファイルを読み込むか、Hermes のエクスポート用スキルで 1 つの .zip ファイルにまとめます。",
+  "import.guide.hermesLedeExport":
+    "Hermes の各プロファイルが 1 つのエージェントになります。Hermes のエクスポート用スキルが、それらを 1 つの .zip ファイルにまとめます。",
+  "import.guide.setupServer": "サーバーから読み込む",
   "import.review.title": "{source} のエクスポート",
   "import.review.exported": "{date} にエクスポート",
   "import.review.fileSize": "ファイル {size}",
   "import.review.noFiles": "ワークスペースのファイルはありません",
   "import.review.importAgents": "{agents}をインポート",
   "import.review.importBoth": "{agents}と{channels}をインポート",
-  "import.review.reading": "読み込んでいます…",
+  "import.review.reading": "読み込み中…",
   "import.review.chooseAnother": "別のファイルを選択",
   "import.review.startFailed": "インポートを開始できませんでした",
   "import.review.warnings": "移行されない項目があります",
@@ -47,7 +52,7 @@ export const messages = {
   "import.review.channels": "チャンネル",
   "import.review.selected": "{total} 件中 {selected} 件を選択",
   "import.review.importItem": "{name} をインポート",
-  "import.review.importing": "インポートしています…",
+  "import.review.importing": "インポート中…",
   "import.review.channelNeedsMember": "インポートするには、このチャンネルのエージェントを 1 つ以上選択してください。",
   "import.review.channelWithout": "{names} を除いてインポートします。",
   "import.review.nameExists":
@@ -66,4 +71,12 @@ export const messages = {
   "import.result.channel": "チャンネル",
   "import.result.notImportedTitle": "インポートされなかった項目",
   "import.result.warnings": "移行されなかった項目があります",
+  "import.source.ledeServer":
+    "GoAhead はこれらをサーバーにコピーします。何かが変わる前に、すべての項目を確認できます。",
+  "import.source.hermesNoteServer":
+    "サーバー上の Hermes フォルダーを読み込むか、Hermes から .zip ファイルをエクスポートします。",
+  "import.source.hermesNoteExport": "Hermes から .zip ファイルをエクスポートします。",
+  "import.hermes.notFoundServer": "このサーバーに Hermes のプロファイルがありません",
+  "import.hermes.notFoundServerNote":
+    "GoAhead はサーバーの Hermes フォルダーを読み込みます。このコンピューターの Hermes を取り込むには、Hermes から .zip ファイルを書き出してください。",
 } as const satisfies PartialTranslation<typeof source>;

@@ -2,7 +2,7 @@ import type { ConversationSlackAsk } from "@openbot/contracts/ipc";
 import { Button, ChevronDown, ExternalLink } from "@openbot/ui";
 import { createSignal, createUniqueId, For, Show } from "solid-js";
 import { useText } from "../../text";
-import { SlackMark } from "../settings/IntegrationLayout";
+import { SlackMark } from "../settings/brand-marks";
 
 export interface SlackAskCardProps {
   slackAsk: ConversationSlackAsk;

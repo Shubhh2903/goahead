@@ -1,6 +1,6 @@
 import { type AvatarHue, isAvatarHue, isAvatarSeed } from "./ipc-agent-identity";
-import type { AgentSummary } from "./ipc-agents";
-import { isRoutineSchedule, type RoutineSchedule } from "./ipc-routines";
+import type { ClientAgentSummary } from "./ipc-agents";
+import { isReleasedRoutineSchedule, type ReleasedRoutineSchedule } from "./ipc-routines";
 import { isSkillCategory, type SkillCategory } from "./ipc-skills";
 import { isBoolean, isDynamicRecord, isNumber, isString } from "./runtime-values";
 
@@ -18,7 +18,7 @@ export interface MarketplaceAgentRoutine {
   name: string;
   instruction: string;
   active: boolean;
-  schedule: RoutineSchedule;
+  schedule: ReleasedRoutineSchedule;
 }
 
 export interface MarketplaceAgentSummary {
@@ -32,6 +32,7 @@ export interface MarketplaceAgentSummary {
   version: number;
   installs: number;
   featured: boolean;
+  verified?: boolean;
   avatarSeed: string;
   avatarHue: AvatarHue | null;
   avatarUrl: string | null;
@@ -43,6 +44,8 @@ export interface MarketplaceAgentSummary {
 
 export interface MarketplaceAgentDetail extends MarketplaceAgentSummary {
   versionId: string;
+  pending?: boolean;
+  cardUrl?: string | null;
   skills: MarketplaceAgentSkill[];
   routines: MarketplaceAgentRoutine[];
 }
@@ -54,10 +57,11 @@ export interface MarketplaceAgentPage {
 
 export interface MarketplaceAgentQuery {
   category?: SkillCategory;
-  query?: string;
+  query?: string | undefined;
   featured?: boolean;
-  sort?: "installs";
-  cursor?: string;
+  verified?: boolean | undefined;
+  sort?: "installs" | undefined;
+  cursor?: string | undefined;
   limit?: number;
 }
 
@@ -108,7 +112,7 @@ export interface InstallMarketplaceAgentInput {
 }
 
 export interface InstallMarketplaceAgentResult {
-  agent: AgentSummary;
+  agent: ClientAgentSummary;
 }
 
 export function decodeMarketplaceAgentPage(value: unknown): MarketplaceAgentPage {
@@ -128,6 +132,8 @@ export function decodeMarketplaceAgentDetail(value: unknown): MarketplaceAgentDe
   const item = value;
   if (
     !isString(item.versionId) ||
+    (item.pending !== undefined && !isBoolean(item.pending)) ||
+    (item.cardUrl !== undefined && item.cardUrl !== null && !isString(item.cardUrl)) ||
     !Array.isArray(item.skills) ||
     !item.skills.every(isSkill) ||
     !Array.isArray(item.routines) ||
@@ -171,6 +177,7 @@ function isMarketplaceAgentSummary(value: unknown): value is MarketplaceAgentSum
     isNumber(value.version) &&
     isNumber(value.installs) &&
     isBoolean(value.featured) &&
+    (value.verified === undefined || isBoolean(value.verified)) &&
     isAvatarSeed(value.avatarSeed) &&
     (value.avatarHue === null || isAvatarHue(value.avatarHue)) &&
     (value.avatarUrl === null || isString(value.avatarUrl)) &&
@@ -198,6 +205,6 @@ function isRoutine(value: unknown): value is MarketplaceAgentRoutine {
     isString(value.name) &&
     isString(value.instruction) &&
     isBoolean(value.active) &&
-    isRoutineSchedule(value.schedule)
+    isReleasedRoutineSchedule(value.schedule)
   );
 }
