@@ -4,18 +4,13 @@
   font-family: var(--openbot-font-sans);
 }
 
-.ui-server-gradient-logo {
-  width: var(--server-gradient-logo-size, 40px);
-  height: var(--server-gradient-logo-size, 40px);
+.ui-server-plush-logo {
+  width: var(--server-plush-logo-size, 40px);
+  height: var(--server-plush-logo-size, 40px);
   display: block;
   flex: 0 0 auto;
-  overflow: hidden;
-  border-radius: var(--server-gradient-logo-radius, var(--openbot-radius-lg));
-  background-color: var(--server-gradient-base);
-  background-image: var(--server-gradient-layers);
-  background-repeat: no-repeat;
-  outline: 1px solid var(--openbot-image-outline);
-  outline-offset: -1px;
+  object-fit: contain;
+  user-select: none;
 }
 
 :where(.ui-text)[data-tone="secondary"],
@@ -150,6 +145,18 @@
   padding-inline: var(--openbot-space-6);
 }
 
+:where(.ui-button > svg[width="24"]) {
+  width: var(--openbot-icon-md);
+  height: var(--openbot-icon-md);
+  flex: 0 0 auto;
+  stroke-width: var(--openbot-icon-stroke);
+}
+
+:where(.ui-button-size-xs > svg[width="24"], .ui-button-size-sm > svg[width="24"]) {
+  width: var(--openbot-icon-sm);
+  height: var(--openbot-icon-sm);
+}
+
 :where(.ui-button-variant-default) {
   background: var(--openbot-surface-light);
   color: var(--openbot-text-on-light);
@@ -234,10 +241,6 @@
   border-color: var(--openbot-danger-focus);
 }
 
-:where(.ui-button-variant-destructive, .ui-button-variant-destructive-ghost):focus-visible {
-  box-shadow: 0 0 0 3px var(--openbot-danger-focus);
-}
-
 :where(.ui-button)[aria-invalid="true"] {
   border-color: var(--openbot-danger-border);
   box-shadow: 0 0 0 3px var(--openbot-danger-focus);
@@ -302,7 +305,7 @@
   position: absolute;
   z-index: 1;
   top: -8px;
-  right: -8px;
+  inset-inline-end: -8px;
   border: 1px solid var(--openbot-border-strong);
   border-radius: var(--openbot-radius-pill);
   background: color-mix(in srgb, var(--openbot-bg-surface-raised) 72%, transparent);
@@ -352,6 +355,12 @@
   white-space: nowrap;
 }
 
+:where(.z-badge) > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 :where(.z-badge) > svg {
   width: 12px;
   height: 12px;
@@ -360,27 +369,11 @@
 }
 
 :where(.z-badge):has(> [data-icon="inline-start"]) {
-  padding-left: var(--openbot-space-1-5);
+  padding-inline-start: var(--openbot-space-1-5);
 }
 
 :where(.z-badge):has(> [data-icon="inline-end"]) {
-  padding-right: var(--openbot-space-1-5);
-}
-
-:where(.z-badge)[data-size="sm"] {
-  min-height: 18px;
-  height: 18px;
-  padding: 0 var(--openbot-space-1);
-  font-size: var(--openbot-text-sm);
-}
-
-:where(.z-badge)[data-size="md"] {
-  min-height: 22px;
-  padding: var(--openbot-space-0-5) var(--openbot-space-1-5);
-}
-
-:where(.z-badge)[data-shape="rounded"] {
-  border-radius: var(--openbot-radius-sm);
+  padding-inline-end: var(--openbot-space-1-5);
 }
 
 :where(.z-badge-variant-default) {
@@ -432,10 +425,6 @@
   color: var(--openbot-danger);
 }
 
-/* The design's "New" chip. Not a --openbot-success or --openbot-accent variant: an
- * announcement that something is newly available is neither a report that something
- * succeeded nor an action the user can take. The heavier weight and the open tracking
- * are part of the look, which is why this variant sets them and the others do not. */
 :where(.z-badge-variant-new) {
   background: var(--openbot-badge-new-soft);
   color: var(--openbot-badge-new);
@@ -478,10 +467,10 @@
   color: var(--openbot-accent-text);
 }
 
-/* The hand-drawn SVGs, which are on a 20-unit viewBox where lucide's is 24. Feeding them
- * --openbot-icon-stroke raw would paint them 20% heavier than every lucide icon beside
- * them, so it is scaled to the smaller grid instead. These carried 1.35 to 1.6 by hand
- * before, i.e. 1.08 to 1.43 device px against lucide's 1.0. */
+:where(svg.lucide) {
+  stroke-width: var(--openbot-icon-stroke);
+}
+
 :where(.ui-glyph-20) {
   stroke-width: calc(var(--openbot-icon-stroke) * 20 / 24);
 }
@@ -534,8 +523,7 @@
 .ui-checkbox-visual svg {
   width: var(--openbot-icon-xs);
   height: var(--openbot-icon-xs);
-  /* Heavier than --openbot-icon-stroke deliberately: a tick is a state indicator, and the
-   * shared weight paints 0.75 device px inside this 12px box. */
+
   stroke-width: 2.5;
 }
 
@@ -592,13 +580,64 @@
   background-size: 50% 50%;
 }
 
+.ui-textarea-resizable {
+  position: relative;
+  display: grid;
+}
+
+.ui-textarea-resizer {
+  --ui-textarea-grip: var(--openbot-text-dim);
+
+  position: absolute;
+  inset-inline-end: 1px;
+  bottom: 1px;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  border: 0;
+  border-end-end-radius: var(--openbot-radius-md);
+  padding: 0;
+  background-image: linear-gradient(
+    135deg,
+    transparent 48%,
+    var(--ui-textarea-grip) 48% 56%,
+    transparent 56% 68%,
+    var(--ui-textarea-grip) 68% 76%,
+    transparent 76%
+  );
+  background-repeat: no-repeat;
+  background-position: right 3px bottom 3px;
+  background-size: 12px 12px;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.ui-textarea-resizer:hover,
+.ui-textarea-resizer:focus-visible,
+.ui-textarea-resizer[data-active] {
+  --ui-textarea-grip: var(--openbot-text-primary);
+}
+
+.ui-textarea-resizer:focus-visible {
+  outline: 0;
+}
+
+.ui-textarea-resizer:dir(rtl) {
+  scale: -1 1;
+}
+
+html.ui-textarea-resizing {
+  cursor: ns-resize;
+  user-select: none;
+}
+
 :where(.ui-input, .ui-textarea)::placeholder {
   color: var(--openbot-text-placeholder);
 }
 
 :where(.ui-input, .ui-textarea, .ui-native-select):focus-visible {
   border-color: var(--openbot-border-focus);
-  box-shadow: var(--openbot-focus-ring);
 }
 
 :where(.ui-input, .ui-textarea, .ui-native-select)[aria-invalid="true"] {
@@ -627,13 +666,14 @@
   border-radius: var(--openbot-radius-md);
   outline: 0;
   background: transparent;
-  padding: var(--openbot-space-2) var(--openbot-space-2) var(--openbot-space-2) 10px;
+  padding-block: var(--openbot-space-2);
+  padding-inline: 10px var(--openbot-space-2);
   box-shadow: 0 1px 2px var(--openbot-shadow-popover-ambient);
   color: var(--openbot-text-primary);
   font-family: var(--openbot-font-sans);
   font-size: var(--openbot-text-md);
   line-height: var(--openbot-leading-md);
-  text-align: left;
+  text-align: start;
   transition:
     background-color var(--openbot-duration-hover) ease,
     border-color var(--openbot-duration-hover) ease,
@@ -655,9 +695,8 @@
 }
 
 .ui-select .ui-select-trigger:focus-visible {
-  border-color: var(--openbot-border-strong);
+  border-color: var(--openbot-border-focus);
   outline: 0;
-  box-shadow: 0 0 0 3px var(--openbot-hover);
 }
 
 .ui-select-trigger[data-disabled] {
@@ -721,6 +760,72 @@
   outline: 0;
 }
 
+.ui-search-select-content {
+  display: flex;
+  flex-direction: column;
+  width: max(var(--kb-popper-anchor-width, 0px), 240px);
+  overflow: hidden;
+  transform-origin: var(--kb-popover-content-transform-origin);
+}
+
+.ui-search-select-search {
+  position: relative;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--openbot-border);
+  padding: var(--openbot-space-1);
+}
+
+.ui-search-select-search > svg {
+  position: absolute;
+  top: 50%;
+  inset-inline-start: var(--openbot-space-3);
+  width: var(--openbot-icon-sm);
+  height: var(--openbot-icon-sm);
+  color: var(--openbot-text-muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.ui-search-select-input {
+  width: 100%;
+  padding-inline-start: var(--openbot-space-8);
+}
+
+.ui-search-select-root {
+  min-height: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.ui-search-select-content .ui-select-listbox {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.ui-search-select-empty {
+  margin: 0;
+  padding: var(--openbot-space-2) var(--openbot-space-3);
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-sm);
+}
+
+.ui-select-footer {
+  border-top: 1px solid var(--openbot-border);
+  padding: var(--openbot-space-1);
+}
+
+.ui-select-section {
+  padding: var(--openbot-space-2) var(--openbot-space-2) var(--openbot-space-1);
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  font-weight: var(--openbot-weight-medium);
+  line-height: var(--openbot-leading-sm);
+  list-style: none;
+}
+
 .ui-select-item {
   position: relative;
   display: flex;
@@ -729,7 +834,8 @@
   user-select: none;
   border-radius: var(--openbot-radius-sm);
   outline: 0;
-  padding: var(--openbot-space-1-5) var(--openbot-space-8) var(--openbot-space-1-5) var(--openbot-space-2);
+  padding-block: var(--openbot-space-1-5);
+  padding-inline: var(--openbot-space-2) var(--openbot-space-8);
   color: var(--openbot-text-primary);
   font-size: var(--openbot-text-sm);
   line-height: var(--openbot-leading-sm);
@@ -765,7 +871,7 @@
 
 .ui-select-item-indicator {
   position: absolute;
-  right: var(--openbot-space-2);
+  inset-inline-end: var(--openbot-space-2);
   width: var(--openbot-icon-md);
   height: var(--openbot-icon-md);
   display: inline-flex;
@@ -825,7 +931,7 @@
 }
 
 .ui-field-required {
-  margin-left: var(--openbot-space-0-5);
+  margin-inline-start: var(--openbot-space-0-5);
 }
 
 .ui-field-description,
@@ -836,6 +942,11 @@
 
 .ui-field-description {
   color: var(--openbot-text-muted);
+}
+
+.ui-field-limit {
+  display: grid;
+  gap: var(--openbot-space-0-5);
 }
 
 .ui-switch {
@@ -1005,15 +1116,12 @@
   cursor: pointer;
 }
 
-/* The drawn track is 4px high, too thin to hit. A press on this area belongs to the track, so it
-   still sets the value from the pointer position and starts a drag. */
 .ui-slider-track::before {
   content: "";
   position: absolute;
   inset: -10px 0;
 }
 
-/* Kobalte places the fill and the thumb with inline `left`/`right` percentages. */
 .ui-slider-fill {
   position: absolute;
   height: 100%;
@@ -1021,8 +1129,6 @@
   background: var(--openbot-text-secondary);
 }
 
-/* Kobalte owns the inline `transform` that centres the thumb on its value, so the vertical centring
-   uses `top` instead. */
 .ui-slider-thumb {
   top: calc(50% - (var(--openbot-switch-thumb) / 2));
   width: var(--openbot-switch-thumb);
@@ -1041,6 +1147,48 @@
 
 .ui-slider-thumb[data-dragging] {
   cursor: grabbing;
+}
+
+.ui-seek-slider {
+  display: flex;
+  touch-action: none;
+}
+
+.ui-seek-slider-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.ui-seek-slider-picture {
+  display: flex;
+}
+
+.ui-seek-slider[data-disabled] .ui-seek-slider-track {
+  cursor: default;
+}
+
+.ui-seek-slider-thumb {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  display: block;
+  border-radius: var(--openbot-radius-pill);
+  outline: none;
+  background: var(--openbot-text-primary);
+  opacity: 0;
+}
+
+.ui-seek-slider-track:hover .ui-seek-slider-thumb,
+.ui-seek-slider-thumb:focus-visible,
+.ui-seek-slider-thumb[data-dragging] {
+  opacity: 1;
+}
+
+.ui-seek-slider-thumb:focus-visible {
+  box-shadow: var(--openbot-focus-ring);
 }
 
 .ui-slider-field[data-disabled] {
@@ -1114,6 +1262,12 @@
 
 .ui-item-media {
   color: var(--openbot-text-muted);
+}
+
+:where(.ui-item-media) > svg {
+  width: var(--openbot-icon-lg);
+  height: var(--openbot-icon-lg);
+  stroke-width: var(--openbot-icon-stroke-lg);
 }
 
 .ui-item-content {
@@ -1352,10 +1506,26 @@
   background: var(--openbot-qr-background);
 }
 
+.ui-qr-code > * {
+  grid-area: 1 / 1;
+}
+
 .ui-qr-code > img {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+.ui-qr-code-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--openbot-space-1);
+  color: var(--openbot-paper-text);
+  visibility: hidden;
+}
+
+.ui-qr-code-mark[data-ready] {
+  visibility: visible;
 }
 
 .ui-alert {
@@ -1422,9 +1592,6 @@
   line-height: var(--openbot-leading-sm);
 }
 
-/* A toned alert puts a wash over whatever is behind it, which lifts the background towards the
-   muted text colour and leaves this line under 4.5:1 on a panel. The tone carries the meaning;
-   the description only has to be readable. */
 .ui-alert[data-tone] .ui-alert-description {
   color: var(--openbot-text-secondary);
 }
@@ -1448,8 +1615,6 @@
   background: var(--openbot-border-strong);
 }
 
-/* Kobalte reports the value as a custom property and leaves the width to us, so a fill without this
-   line is a full bar at every value. */
 .ui-progress-fill {
   width: var(--kb-progress-fill-width, 0%);
   height: 100%;
@@ -1458,8 +1623,6 @@
   transition: width var(--openbot-duration-normal) var(--openbot-ease-out);
 }
 
-/* An operation with no measurable end reports that it is still running, rather than sitting at a
-   number. Kobalte publishes no width for one, so the fill is a short bar that travels the track. */
 .ui-progress-fill[data-indeterminate] {
   width: 35%;
   animation: ui-progress-travel 1.4s var(--openbot-ease-in-out) infinite;
@@ -1473,6 +1636,20 @@
 
   to {
     transform: translateX(286%);
+  }
+}
+
+.ui-progress-fill[data-indeterminate]:dir(rtl) {
+  animation-name: ui-progress-travel-rtl;
+}
+
+@keyframes ui-progress-travel-rtl {
+  from {
+    transform: translateX(100%);
+  }
+
+  to {
+    transform: translateX(-286%);
   }
 }
 
@@ -1531,7 +1708,7 @@
   color: var(--openbot-text-primary);
 }
 
-.ui-toaster[data-sonner-toaster][data-sonner-theme="dark"] {
+.ui-toaster[data-sonner-toaster][data-sonner-theme] {
   z-index: var(--openbot-layer-toast);
   color: var(--openbot-text-primary);
   font-family: var(--openbot-font-sans);
@@ -1540,31 +1717,25 @@
   --normal-border: var(--openbot-border);
   --normal-border-hover: var(--openbot-border-focus);
   --normal-text: var(--openbot-text-primary);
-  --border-radius: var(--openbot-radius-lg);
+  --border-radius: var(--openbot-radius-card);
 }
 
-/* Three columns and two rows: the mark, the words, and an action row under them. Sonner lays the
-   toast out as one flex line, which works until an action is present — the button then sits between
-   the description and the close control, and the description wraps early around it. Placing the
-   action on its own row gives the words the full width and puts the button where a reader looks for
-   it last. The columns are laid out by hand rather than by auto-placement because a toast without an
-   icon renders no `[data-icon]` element at all. */
 .ui-toaster [data-sonner-toast][data-styled="true"] {
   --ui-toast-tone: transparent;
   --ui-toast-motion-duration: var(--openbot-duration-toast-enter);
+  --toast-svg-margin-start: 0px;
+  --toast-svg-margin-end: 0px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) max-content max-content;
   align-items: start;
   column-gap: 0;
-  row-gap: var(--openbot-space-2);
+  row-gap: var(--openbot-space-3);
   min-height: var(--openbot-control-xl);
   padding: var(--openbot-space-3) var(--openbot-space-4);
   border-color: transparent;
-  border-radius: var(--openbot-radius-lg);
+  border-radius: var(--openbot-radius-card);
   background: var(--openbot-bg-surface-raised);
-  box-shadow:
-    0 0 0 1px var(--openbot-border),
-    var(--openbot-shadow-raised);
+  box-shadow: 0 0 0 1px var(--openbot-border);
   color: var(--openbot-text-primary);
   font-family: var(--openbot-font-sans);
   font-size: var(--openbot-text-md);
@@ -1580,8 +1751,13 @@
   --ui-toast-motion-duration: var(--openbot-duration-toast-exit);
 }
 
+.ui-toaster [data-sonner-toast][data-styled="true"]:has([data-button]) {
+  padding-bottom: var(--openbot-space-2);
+}
+
 .ui-toaster [data-sonner-toast][data-styled="true"] [data-content] {
   grid-area: 1 / 2 / 2 / -1;
+  gap: var(--openbot-space-1);
 }
 
 .ui-toaster [data-sonner-toast][data-styled="true"] [data-button] {
@@ -1589,26 +1765,28 @@
 }
 
 .ui-toaster [data-sonner-toast][data-styled="true"] [data-cancel] {
-  grid-column: 2;
+  grid-column: 3;
   justify-self: end;
 }
 
 .ui-toaster [data-sonner-toast][data-styled="true"] [data-action] {
-  grid-column: 3;
+  grid-column: 4;
 }
 
-/* The close control floats over the top right corner, so only the words have to keep clear of it.
-   Reserving the room on the toast instead left a hole beside every action button, which is visible
-   even while the control itself is hidden. */
+.ui-toaster [data-sonner-toast][data-styled="true"]:has([data-cancel]) [data-action] {
+  margin-inline-start: var(--openbot-space-1);
+}
+
 .ui-toaster.ui-toaster-closeable [data-sonner-toast][data-styled="true"] [data-content],
 .ui-toaster [data-sonner-toast][data-styled="true"]:has([data-close-button]) [data-content] {
-  padding-right: var(--openbot-space-6);
+  padding-inline-end: var(--openbot-space-1);
 }
 
 .ui-toaster [data-sonner-toast][data-styled="true"] [data-title] {
   color: var(--openbot-text-primary);
   font-weight: var(--openbot-weight-medium);
   line-height: var(--openbot-leading-md);
+  text-wrap: balance;
 }
 
 .ui-toaster [data-sonner-toast][data-styled="true"] [data-description] {
@@ -1616,6 +1794,22 @@
   font-size: var(--openbot-text-sm);
   line-height: var(--openbot-leading-sm);
   text-wrap: pretty;
+}
+
+.ui-error-reference {
+  display: flex;
+  align-items: center;
+  gap: var(--openbot-space-1);
+  margin-top: var(--openbot-space-0-5);
+  color: var(--openbot-text-muted);
+}
+
+.ui-error-reference-code {
+  font-family: var(--openbot-font-mono);
+  font-size: var(--openbot-text-xs);
+  line-height: var(--openbot-leading-sm);
+  user-select: text;
+  overflow-wrap: anywhere;
 }
 
 .ui-toaster [data-sonner-toast][data-type="success"] {
@@ -1650,9 +1844,9 @@
   grid-area: 1 / 1;
   width: var(--openbot-icon-md);
   height: var(--openbot-icon-md);
-  /* The column gap is zero so that a toast with no icon starts its text at the padding edge. The
-     space between the mark and the words is this margin instead. */
-  margin: 1px var(--openbot-space-3) 0 0;
+
+  margin-block: 1px 0;
+  margin-inline: 0 var(--openbot-space-3);
 }
 
 .ui-toast-icon {
@@ -1666,22 +1860,28 @@
 }
 
 .ui-toaster [data-sonner-toast][data-styled="true"] [data-button] {
-  height: var(--openbot-control-md);
-  border-radius: var(--openbot-radius-md);
-  background: var(--openbot-bg-control-hover);
-  box-shadow: inset 0 0 0 1px var(--openbot-border);
+  height: var(--openbot-control-sm);
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: var(--openbot-radius-sm);
+  background: var(--openbot-surface-light);
+  box-shadow: none;
   padding-inline: var(--openbot-space-3);
-  color: var(--openbot-text-primary);
+  color: var(--openbot-text-on-light);
   font-family: var(--openbot-font-sans);
   font-size: var(--openbot-text-sm);
   font-weight: var(--openbot-weight-medium);
   transition:
-    background-color var(--openbot-duration-normal) ease,
-    color var(--openbot-duration-normal) ease,
+    background-color var(--openbot-duration-hover) ease,
+    color var(--openbot-duration-hover) ease,
     transform var(--openbot-duration-normal) var(--openbot-ease-out);
 }
 
-.ui-toaster [data-sonner-toast][data-styled="true"] [data-cancel] {
+.ui-toaster [data-sonner-toast][data-styled="true"] [data-button]:last-of-type {
+  margin-inline-end: calc(var(--openbot-space-2) - var(--openbot-space-4));
+}
+
+.ui-toaster[data-sonner-toaster][data-sonner-theme] [data-sonner-toast][data-styled="true"] [data-cancel] {
   background: transparent;
   color: var(--openbot-text-secondary);
 }
@@ -1692,22 +1892,26 @@
   box-shadow: var(--openbot-focus-ring);
 }
 
-.ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button]:focus-visible {
+.ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button]:focus-visible,
+.ui-toast-card-close:focus-visible {
   outline: 0;
   box-shadow:
     inset 0 0 0 1px var(--openbot-border-strong),
     0 0 0 2px var(--openbot-border-strong);
 }
 
-.ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button] {
-  top: var(--openbot-space-1);
-  right: var(--openbot-space-1);
-  left: auto;
-  width: var(--openbot-control-md);
-  height: var(--openbot-control-md);
+.ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button],
+.ui-toast-card-close {
+  position: absolute;
+  top: calc(-1 * var(--openbot-space-1-5));
+  inset-inline-end: calc(-1 * var(--openbot-space-1-5));
+  inset-inline-start: auto;
+  width: var(--openbot-icon-lg);
+  height: var(--openbot-icon-lg);
   border: 0;
-  border-radius: var(--openbot-radius-md);
-  background: transparent;
+  border-radius: var(--openbot-radius-pill);
+  background: var(--openbot-bg-surface-raised);
+  box-shadow: 0 0 0 1px var(--openbot-border-strong);
   color: var(--openbot-text-muted);
   pointer-events: auto;
   opacity: 1;
@@ -1720,7 +1924,8 @@
     transform var(--openbot-duration-normal) var(--openbot-ease-out);
 }
 
-.ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button]::after {
+.ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button]::after,
+.ui-toast-card-close::after {
   position: absolute;
   top: 50%;
   left: 50%;
@@ -1731,25 +1936,34 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button] {
+  .ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button],
+  .ui-toast-card-close {
     pointer-events: none;
     opacity: 0;
   }
 
   .ui-toaster [data-sonner-toast][data-styled="true"]:hover [data-close-button],
   .ui-toaster [data-sonner-toast][data-styled="true"]:focus-within [data-close-button],
-  .ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button]:focus-visible {
+  .ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button]:focus-visible,
+  [data-sonner-toast]:hover .ui-toast-card-close,
+  [data-sonner-toast]:focus-within .ui-toast-card-close {
     pointer-events: auto;
     opacity: 1;
   }
 
-  .ui-toaster [data-sonner-toast][data-styled="true"] [data-button]:hover {
-    background: var(--openbot-bg-control-active);
+  .ui-toaster [data-sonner-toast][data-styled="true"] [data-action]:hover {
+    background: color-mix(in srgb, var(--openbot-surface-light) 82%, transparent);
   }
 
-  .ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button]:hover:not(:focus-visible) {
-    background: var(--openbot-danger-soft);
-    color: var(--openbot-danger);
+  .ui-toaster[data-sonner-toaster][data-sonner-theme] [data-sonner-toast][data-styled="true"] [data-cancel]:hover {
+    background: var(--openbot-bg-control-hover);
+    color: var(--openbot-text-primary);
+  }
+
+  .ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button]:hover:not(:focus-visible),
+  .ui-toast-card-close:hover:not(:focus-visible) {
+    background: var(--openbot-bg-control-active);
+    color: var(--openbot-text-primary);
   }
 }
 
@@ -1765,8 +1979,49 @@
   transform: scale(0.96);
 }
 
-.ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button]:active {
+.ui-toaster [data-sonner-toast][data-styled="true"] [data-close-button]:active,
+.ui-toast-card-close:active {
   transform: scale(0.96);
+}
+
+.ui-toast-card-close > svg {
+  width: var(--openbot-icon-xs);
+  height: var(--openbot-icon-xs);
+}
+
+.ui-toast-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--openbot-space-1);
+  margin-inline-end: calc(var(--openbot-space-2) - var(--openbot-space-4));
+}
+
+.ui-toast-card-actions .ui-button {
+  height: var(--openbot-control-sm);
+  border-radius: var(--openbot-radius-sm);
+  transition:
+    background-color var(--openbot-duration-hover) ease,
+    border-color var(--openbot-duration-hover) ease,
+    color var(--openbot-duration-hover) ease,
+    box-shadow var(--openbot-duration-hover) ease,
+    opacity var(--openbot-duration-hover) ease,
+    transform var(--openbot-duration-normal) var(--openbot-ease-out);
+}
+
+.ui-toast-card-actions .ui-button-variant-ghost {
+  color: var(--openbot-text-secondary);
+}
+
+.ui-toast-card-actions .ui-button:active {
+  transform: scale(0.96);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ui-toast-card-actions .ui-button-variant-ghost:hover {
+    background: var(--openbot-bg-control-hover);
+    color: var(--openbot-text-primary);
+  }
 }
 
 .ui-separator[data-orientation="horizontal"] {
@@ -1808,6 +2063,225 @@
   }
 }
 
+.ui-plush-loader {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  gap: calc(var(--ui-plush-size) * 0.18);
+}
+
+.ui-plush-loader[data-layout="stack"] {
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--ui-plush-size) * 0.3);
+}
+
+.ui-plush-mascot {
+  --ui-plush-look: calc(var(--ui-plush-size) * 0.035);
+  position: relative;
+  display: block;
+  width: var(--ui-plush-size);
+  flex: 0 0 auto;
+}
+
+.ui-plush-body {
+  position: relative;
+  display: block;
+  transform-origin: 50% 100%;
+}
+
+.ui-plush-body-image,
+.ui-plush-ball {
+  display: block;
+  width: 100%;
+  max-width: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.ui-plush-eyes,
+.ui-plush-eye {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  max-width: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.ui-plush-eye {
+  transform-origin: 35.6% 48.1%;
+  transition: scale var(--openbot-duration-overlay) var(--openbot-ease-out);
+}
+
+.ui-plush-eye[data-side="right"] {
+  transform-origin: 64.4% 48.1%;
+}
+
+.ui-plush-mascot[data-face="wide"] .ui-plush-eye {
+  scale: 1.18;
+}
+
+.ui-plush-balls {
+  display: flex;
+  gap: calc(var(--ui-plush-size) * 0.08);
+  padding-bottom: calc(var(--ui-plush-size) * 0.04);
+}
+
+.ui-plush-ball {
+  width: calc(var(--ui-plush-size) * 0.24);
+  transform-origin: 50% 100%;
+}
+
+.ui-plush-loader[data-layout="stack"] .ui-plush-balls {
+  padding-bottom: 0;
+}
+
+.ui-plush-loader[data-layout="stack"] .ui-plush-ball {
+  width: calc(var(--ui-plush-size) * 0.2);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ui-plush-body {
+    animation: ui-plush-breathe 3.2s ease-in-out 600ms infinite;
+  }
+
+  .ui-plush-eye {
+    animation: ui-plush-blink 5.2s ease-in-out 1.8s infinite;
+  }
+
+  .ui-plush-eyes {
+    animation: ui-plush-look 6s ease-in-out 2.2s infinite;
+  }
+
+  .ui-plush-mascot[data-face="wink"] .ui-plush-eye[data-side="left"] {
+    animation: ui-plush-wink 600ms var(--openbot-ease-out);
+  }
+
+  .ui-plush-mascot[data-face="happy"] .ui-plush-eye {
+    animation: ui-plush-squint 220ms var(--openbot-ease-out) forwards;
+  }
+
+  .ui-plush-loader > .ui-plush-mascot {
+    animation: ui-plush-pop-in 520ms var(--openbot-ease-out) both;
+  }
+
+  .ui-plush-loader .ui-plush-eyes {
+    animation: ui-plush-follow 1.2s ease-in-out 700ms infinite;
+  }
+
+  .ui-plush-ball {
+    animation:
+      ui-plush-pop-in 360ms var(--openbot-ease-out) 300ms backwards,
+      ui-plush-ball-bounce 1.2s ease-in-out 700ms infinite;
+  }
+
+  .ui-plush-ball:nth-child(2) {
+    animation-delay: 380ms, 850ms;
+  }
+
+  .ui-plush-ball:nth-child(3) {
+    animation-delay: 460ms, 1s;
+  }
+}
+
+@keyframes ui-plush-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+@keyframes ui-plush-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.012, 0.978);
+  }
+}
+
+@keyframes ui-plush-blink {
+  0%,
+  93%,
+  100% {
+    transform: scaleY(1);
+  }
+  96% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes ui-plush-wink {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  30%,
+  60% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes ui-plush-squint {
+  to {
+    transform: translateY(-1.5%) scaleY(0.35);
+  }
+}
+
+@keyframes ui-plush-look {
+  0%,
+  28%,
+  86%,
+  100% {
+    transform: translate(0, 0);
+  }
+  34%,
+  50% {
+    transform: translate(calc(var(--ui-plush-look) * -1), calc(var(--ui-plush-look) * 0.2));
+  }
+  58%,
+  78% {
+    transform: translate(var(--ui-plush-look), calc(var(--ui-plush-look) * -0.3));
+  }
+}
+
+@keyframes ui-plush-follow {
+  0%,
+  18% {
+    transform: translate(calc(var(--ui-plush-look) * -0.9), calc(var(--ui-plush-look) * 0.6));
+  }
+  32% {
+    transform: translate(0, calc(var(--ui-plush-look) * 0.6));
+  }
+  46%,
+  70% {
+    transform: translate(calc(var(--ui-plush-look) * 0.9), calc(var(--ui-plush-look) * 0.6));
+  }
+  100% {
+    transform: translate(calc(var(--ui-plush-look) * -0.9), calc(var(--ui-plush-look) * 0.6));
+  }
+}
+
+@keyframes ui-plush-ball-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  22% {
+    transform: translateY(-110%) scale(0.95, 1.06);
+  }
+  42% {
+    transform: translateY(0) scale(1.14, 0.84);
+  }
+  50% {
+    transform: translateY(0) scale(1);
+  }
+}
+
 .ui-skeleton {
   min-height: var(--openbot-leading-md);
   border-radius: var(--openbot-radius-sm);
@@ -1819,6 +2293,29 @@
   50% {
     opacity: 0.56;
   }
+}
+
+:where(
+  svg:is(
+    [class~="lucide-chevron-left"],
+    [class~="lucide-chevron-right"],
+    [class~="lucide-chevrons-left"],
+    [class~="lucide-chevrons-right"],
+    [class~="lucide-arrow-left"],
+    [class~="lucide-arrow-right"],
+    [class~="lucide-arrow-right-to-line"],
+    [class~="lucide-panel-left"],
+    [class~="lucide-panel-right"],
+    [class~="lucide-undo-2"],
+    [class~="lucide-redo-2"],
+    [class~="lucide-log-in"],
+    [class~="lucide-log-out"],
+    [class~="lucide-corner-down-left"],
+    [class~="lucide-message-square-reply"],
+    .ui-rtl-mirror
+  ):dir(rtl):not(.ui-kbd *)
+) {
+  transform: scaleX(-1);
 }
 
 .ui-kbd {
@@ -1834,11 +2331,13 @@
   font-family: var(--openbot-font-mono);
   font-size: var(--openbot-text-sm);
   line-height: 1;
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 
 .ui-tooltip {
   position: relative;
-  z-index: 80;
+  z-index: var(--openbot-layer-tooltip);
   border: 0;
   border-radius: var(--openbot-radius-sm);
   background: var(--openbot-bg-canvas);
@@ -1876,6 +2375,42 @@
   transform: translateX(-50%) rotate(45deg);
 }
 
+.ui-tooltip[data-placement="bottom"] {
+  transform-origin: top center;
+}
+
+.ui-tooltip[data-placement="bottom"]::after {
+  top: -4px;
+  bottom: auto;
+  box-shadow: -1px -1px 0 var(--openbot-border-strong);
+}
+
+.ui-tooltip:is([data-placement="left"], [data-placement="right"])::after {
+  top: 50%;
+  bottom: auto;
+}
+
+.ui-tooltip[data-placement="left"] {
+  transform-origin: center right;
+}
+
+.ui-tooltip[data-placement="left"]::after {
+  right: -4px;
+  left: auto;
+  box-shadow: 1px -1px 0 var(--openbot-border-strong);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.ui-tooltip[data-placement="right"] {
+  transform-origin: center left;
+}
+
+.ui-tooltip[data-placement="right"]::after {
+  left: -4px;
+  box-shadow: -1px 1px 0 var(--openbot-border-strong);
+  transform: translateY(-50%) rotate(45deg);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ui-button,
   .ui-switch,
@@ -1898,14 +2433,25 @@
     animation: none;
   }
 }
+
+:root[data-openbot-no-blur] *,
+:root[data-openbot-no-blur] *::before,
+:root[data-openbot-no-blur] *::after {
+  backdrop-filter: none !important;
+}
+
 .ui-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--openbot-layer-dialog);
+  display: grid;
+  place-items: center;
+  padding: var(--openbot-space-6);
   background: var(--openbot-dialog-overlay);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
-  /* The window swallows mouse events over a `-webkit-app-region: drag` area, such as the server rail
-   * and the window headers, and hands them to the window manager instead. A click there while a
-   * dialog was open started a window drag and never reached this overlay, so that side of the window
-   * could not dismiss the dialog. The overlay takes the region back for as long as it is on screen. */
+  animation: ui-dialog-overlay-in var(--openbot-duration-overlay) var(--openbot-ease-out);
+
   -webkit-app-region: no-drag;
 }
 
@@ -1920,7 +2466,6 @@
   box-shadow: none;
 }
 
-/* `StableLabel`: all texts share one grid cell, so the widest one sets the width. */
 .ui-stable-label {
   display: inline-grid;
 }
@@ -1934,21 +2479,13 @@
   visibility: hidden;
 }
 
-/* The standard confirmation: the icon beside a left-aligned title and description, and the actions
- * on a footer below a divider. The surface uses the dialog ring and shadow of the other dialogs.
- * A confirmation always answers the surface that opened it, so it takes the top nested dialog step:
- * it also opens over the marketplace and skills modals on `--openbot-layer-dialog-host`. */
 .ui-confirm-dialog-overlay {
-  position: fixed;
   z-index: calc(var(--openbot-layer-dialog-host) + 2);
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: var(--openbot-space-6);
-  animation: ui-confirm-dialog-fade-in var(--openbot-duration-overlay) var(--openbot-ease-out);
 }
 
 .ui-dialog-content.ui-confirm-dialog {
+  --agent-avatar-outline: var(--openbot-bg-sidebar);
+
   width: min(460px, 100%);
   max-height: calc(100dvh - 2 * var(--openbot-space-6));
   display: flex;
@@ -1958,9 +2495,8 @@
   border-radius: var(--openbot-radius-xl);
   background: var(--openbot-bg-sidebar);
   color: var(--openbot-text-primary);
-  box-shadow:
-    0 0 0 1px var(--openbot-dialog-ring),
-    0 24px 64px var(--openbot-shadow-dialog);
+  border: 1px solid var(--openbot-dialog-ring);
+  box-shadow: none;
   animation: ui-confirm-dialog-in var(--openbot-duration-slow) var(--openbot-ease-out);
 }
 
@@ -1987,7 +2523,7 @@
 .ui-confirm-dialog-icon svg {
   width: var(--openbot-icon-lg);
   height: var(--openbot-icon-lg);
-  stroke-width: var(--openbot-icon-stroke);
+  stroke-width: var(--openbot-icon-stroke-lg);
 }
 
 .ui-confirm-dialog[data-tone="destructive"] .ui-confirm-dialog-icon {
@@ -2039,7 +2575,8 @@
   border: 1px solid var(--openbot-border);
   border-radius: var(--openbot-radius-lg);
   background: var(--openbot-bg-control);
-  padding: var(--openbot-space-3) var(--openbot-space-4) var(--openbot-space-3) var(--openbot-space-8);
+  padding-block: var(--openbot-space-3);
+  padding-inline: var(--openbot-space-8) var(--openbot-space-4);
   list-style: disc;
 }
 
@@ -2075,8 +2612,6 @@
   stroke-width: var(--openbot-icon-stroke);
 }
 
-/* Status text on a tinted fill reads the text step of its colour: the solid danger step measures
- * 3.7:1 on its own soft fill, under the 4.5:1 a label needs. */
 .ui-confirm-dialog-confirm.ui-button-variant-destructive {
   color: var(--openbot-danger-text);
 }
@@ -2091,7 +2626,7 @@
   transform: scale(0.97);
 }
 
-@keyframes ui-confirm-dialog-fade-in {
+@keyframes ui-dialog-overlay-in {
   from {
     opacity: 0;
   }
@@ -2124,7 +2659,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ui-dialog-content.ui-confirm-dialog {
-    animation-name: ui-confirm-dialog-fade-in;
+    animation-name: ui-dialog-overlay-in;
   }
 
   .ui-confirm-dialog-actions .ui-button:active {
@@ -2177,7 +2712,7 @@ a.ui-bubble-content {
   background: transparent;
   color: inherit;
   font: inherit;
-  text-align: left;
+  text-align: start;
   transition: color var(--openbot-duration-hover) ease;
 }
 
@@ -2194,7 +2729,7 @@ button.ui-bubble-content {
 }
 
 .ui-bubble-variant-default .message-reply-context {
-  border-left-color: var(--openbot-text-muted-on-light);
+  border-inline-start-color: var(--openbot-text-muted-on-light);
   color: var(--openbot-text-on-light);
 }
 
@@ -2281,11 +2816,11 @@ button.ui-bubble-content {
 }
 
 .ui-bubble-reactions-align-start {
-  left: var(--openbot-space-3);
+  inset-inline-start: var(--openbot-space-3);
 }
 
 .ui-bubble-reactions-align-end {
-  right: var(--openbot-space-3);
+  inset-inline-end: var(--openbot-space-3);
 }
 
 .ui-bubble-reaction-overflow {
@@ -2381,7 +2916,15 @@ button.ui-bubble-content {
   justify-content: flex-end;
 }
 
-/* Keep notification actions usable while a Kobalte modal blocks the page. */
 .ui-toast-layer {
   pointer-events: auto;
+}
+
+.ui-toast-layer-hidden {
+  visibility: hidden;
+}
+
+.ui-toaster [data-sonner-toast],
+.ui-toaster [data-sonner-toast]::after {
+  -webkit-app-region: no-drag;
 }

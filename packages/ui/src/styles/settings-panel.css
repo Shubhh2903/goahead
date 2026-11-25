@@ -1,33 +1,33 @@
-/*
- * The right-hand settings panel, shared by the agent chat and the channel chat.
- *
- * These rules were the agent panel's alone, under an `agent-` prefix. That prefix is why the
- * channel panel became a second copy of them instead of a second user of them, so the shared part
- * moved here under neutral names. What stays in `conversation.css` is what only an agent has: the
- * avatar picker, the runtime section and the notification row.
- */
-
 .settings-panel {
-  /*
-   * The step between one block of settings and the next: the fields, the link group, the agent's
-   * runtime card, the channel's member list. It is declared here, on the panel both surfaces open,
-   * because a section that stands further from the link group in one panel than in the other is
-   * exactly the drift this file exists to stop.
-   */
   --settings-panel-section-gap: 25px;
 
   position: absolute;
   z-index: 15;
   top: 0;
-  right: 0;
+  inset-inline-end: 0;
   bottom: 0;
   display: flex;
-  width: var(--settings-panel-width, 296px);
+  width: var(--settings-panel-width, 360px);
   flex-direction: column;
-  border-left: 1px solid var(--openbot-border);
+  border-inline-start: 1px solid var(--openbot-border);
   background: var(--openbot-bg-canvas);
   color: var(--openbot-text-primary);
   animation: settings-panel-in var(--openbot-duration-slow) cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.settings-panel:dir(rtl) {
+  animation-name: settings-panel-in-rtl;
+}
+
+@keyframes settings-panel-in-rtl {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .settings-panel-header {
@@ -79,7 +79,6 @@
 .settings-panel-nav-button > svg {
   width: 16px;
   height: 16px;
-  /* The weight is left to .ui-glyph-20 on the icons themselves, as in .message-action-button. */
 }
 
 .settings-panel-nav-button:hover {
@@ -87,9 +86,17 @@
   color: var(--openbot-text-primary);
 }
 
-/* The chevron reads a hair right of centre in its box, so it is nudged back onto the axis. */
 .settings-back-icon {
   transform: translateX(-0.5px);
+}
+
+.settings-back-icon:dir(rtl) {
+  transform: scaleX(-1) translateX(-0.5px);
+}
+
+.settings-forward-icon:dir(rtl),
+.settings-link-value > svg[class~="lucide-chevron-right"]:dir(rtl) {
+  transform: scaleX(-1);
 }
 
 .settings-panel-content {
@@ -105,10 +112,17 @@
 
 .settings-field > span {
   display: block;
-  margin: 0 0 6px 8px;
+  margin-block: 0 6px;
+  margin-inline: 8px 0;
   color: var(--openbot-text-secondary);
   font-size: var(--openbot-text-md);
   line-height: 18px;
+}
+
+.settings-field > .ui-field-limit {
+  display: grid;
+  margin-block: var(--openbot-space-1-5) 0;
+  margin-inline: var(--openbot-space-2) 0;
 }
 
 .settings-field input,
@@ -163,6 +177,103 @@
   overflow-y: auto;
 }
 
+.settings-field .settings-instructions-input {
+  field-sizing: fixed;
+  height: 120px;
+  min-height: 120px;
+  max-height: none;
+  resize: none;
+}
+
+.settings-field .settings-description-input {
+  height: 72px;
+  min-height: 72px;
+}
+
+.agent-instructions-bar {
+  position: sticky;
+  z-index: 1;
+  top: calc(var(--openbot-space-6) * -1);
+  display: flex;
+  align-items: center;
+  gap: var(--openbot-space-2);
+  margin-top: calc(var(--openbot-space-6) * -1);
+  border-bottom: 1px solid var(--openbot-border);
+  background: var(--openbot-bg-canvas);
+  padding: var(--openbot-space-6) 0 var(--openbot-space-3);
+}
+
+.agent-instructions-bar-icon {
+  width: var(--openbot-icon-lg);
+  height: var(--openbot-icon-lg);
+  flex: none;
+  color: var(--openbot-text-muted);
+  stroke-width: var(--openbot-icon-stroke-lg);
+}
+
+.agent-instructions-bar-file {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.agent-instructions-bar-name {
+  color: var(--openbot-text-primary);
+  font-size: var(--openbot-text-md);
+  font-weight: var(--openbot-weight-medium);
+}
+
+.agent-instructions-bar-folder {
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.agent-instructions-text {
+  color: var(--openbot-text-secondary);
+  font-size: var(--openbot-text-md);
+  line-height: var(--openbot-leading-lg);
+  overflow-wrap: anywhere;
+}
+
+.agent-instructions-text .message-markdown-heading[data-level] {
+  margin: var(--openbot-space-6) 0 var(--openbot-space-1-5);
+  color: var(--openbot-text-primary);
+  font-size: var(--openbot-text-md);
+  font-weight: var(--openbot-weight-semibold);
+  line-height: var(--openbot-leading-md);
+}
+
+.agent-instructions-text .message-markdown-heading[data-level="1"] {
+  font-size: var(--openbot-text-xl);
+  line-height: var(--openbot-leading-2xl);
+}
+
+.agent-instructions-text > .message-markdown-heading:first-child {
+  margin-top: 0;
+}
+
+.agent-instructions-text :is(ul, ol) {
+  margin: 0;
+  padding-inline-start: var(--openbot-space-4);
+}
+
+.agent-instructions-text li + li {
+  margin-top: var(--openbot-space-1);
+}
+
+.agent-instructions-empty {
+  margin: 0;
+  color: var(--openbot-text-muted);
+}
+
+.agent-memories-field.agent-instructions-field {
+  max-height: none;
+  font-size: var(--openbot-text-md);
+  line-height: var(--openbot-leading-lg);
+}
+
 .settings-field input::placeholder,
 .settings-field textarea::placeholder {
   color: var(--openbot-text-muted);
@@ -173,6 +284,11 @@
 .settings-field select:focus {
   border-color: var(--openbot-text-muted);
   background: var(--openbot-shadow-popover-ambient);
+}
+
+.settings-field input[aria-invalid="true"],
+.settings-field textarea[aria-invalid="true"] {
+  border-color: var(--openbot-danger);
 }
 
 .settings-field input:focus-visible,
@@ -193,14 +309,15 @@
   width: 100%;
   min-height: 42px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, auto) minmax(0, max-content);
+  justify-content: space-between;
   align-items: center;
   gap: var(--openbot-space-3);
   border: 0;
   border-radius: 0;
   background: transparent;
   padding: 0 var(--openbot-space-1);
-  text-align: left;
+  text-align: start;
   transition: none;
 }
 
@@ -209,18 +326,42 @@
 }
 
 .settings-link-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--openbot-space-2);
   color: var(--openbot-text-primary);
   font-size: var(--openbot-text-md);
   font-weight: var(--openbot-weight-medium);
 }
 
+.settings-link-icon {
+  display: grid;
+  width: var(--openbot-icon-sm);
+  height: var(--openbot-icon-sm);
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--openbot-text-secondary);
+}
+
+.settings-link-icon > svg {
+  width: var(--openbot-icon-sm);
+  height: var(--openbot-icon-sm);
+  stroke-width: var(--openbot-icon-stroke);
+}
+
 .settings-link-value {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: var(--openbot-space-2);
   color: var(--openbot-text-muted);
   font-size: var(--openbot-text-sm);
   font-variant-numeric: tabular-nums;
+}
+
+.settings-link-text {
+  line-height: var(--openbot-leading-md);
 }
 
 .settings-link-value svg {
@@ -238,4 +379,47 @@
   .settings-link:hover .settings-link-value {
     color: var(--openbot-text-secondary);
   }
+}
+
+.settings-link-section {
+  display: grid;
+  gap: var(--openbot-space-1-5);
+}
+
+.settings-link-section-title {
+  margin-block: 0;
+  margin-inline: var(--openbot-space-1) 0;
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  font-weight: var(--openbot-weight-medium);
+  line-height: var(--openbot-leading-sm);
+}
+
+.settings-link-group-inset {
+  margin: 0;
+  border: 1px solid var(--openbot-border);
+  border-radius: var(--openbot-radius-md);
+  background: var(--openbot-bg-surface);
+}
+
+.settings-link-group-inset > * + * {
+  border-top: 1px solid var(--openbot-border);
+}
+
+.settings-link-group-inset > :first-child,
+.settings-link-group-inset > :first-child > button {
+  border-top-left-radius: calc(var(--openbot-radius-md) - 1px);
+  border-top-right-radius: calc(var(--openbot-radius-md) - 1px);
+}
+
+.settings-link-group-inset > :last-child,
+.settings-link-group-inset > :last-child > button {
+  border-bottom-left-radius: calc(var(--openbot-radius-md) - 1px);
+  border-bottom-right-radius: calc(var(--openbot-radius-md) - 1px);
+}
+
+.settings-link-group-inset .settings-link {
+  min-height: 40px;
+  gap: var(--openbot-space-2);
+  padding: 0 var(--openbot-space-3);
 }
