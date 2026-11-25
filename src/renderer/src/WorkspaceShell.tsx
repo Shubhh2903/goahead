@@ -1,161 +1,454 @@
 import type { CentralAuthUser } from "@openbot/contracts/ipc";
-import { createMemo, Show } from "solid-js";
-import { WorkspaceAccountDock } from "./features/account/WorkspaceAccountDock";
+import { AGENT_TASKS_CAPABILITY } from "@openbot/contracts/team-protocol/agent-tasks-v1";
+import { CRM_CAPABILITY } from "@openbot/contracts/team-protocol/crm-v1";
+import {
+  ConversationLoadNotice,
+  ServerConnectionNotice,
+  ServerPanelLoadNotice,
+  serverWorkspacePhase,
+} from "@openbot/ui/features/servers/ServerConnectionNotice";
+import { createServerPaywall } from "@openbot/ui/features/servers/ServerPaywall";
+import { serverPlanBlocks, serverPlanScreenShown } from "@openbot/ui/features/servers/ServerPlanEnd";
+import { useText } from "@openbot/ui/text";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { appPort } from "./app-port";
+import { useAccountUsagePolling } from "./features/account/account-usage-polling";
+import { AgentDockHost, useAgentDockPlacement } from "./features/agent-dock/AgentDockHost";
 import { useAgents } from "./features/agents/agents-context";
 import { WorkspaceAgentSetup } from "./features/agents/WorkspaceAgentSetup";
 import { useChannels } from "./features/channels/channels-context";
 import { WorkspaceChannelConversation } from "./features/channels/WorkspaceChannelConversation";
+import { ConnectorsProvider } from "./features/connectors/connectors-context";
+import { useConversation } from "./features/conversation/conversation-context";
 import { useDirectMessages } from "./features/conversation/direct-messages-context";
 import { WorkspaceConversation } from "./features/conversation/WorkspaceConversation";
 import { WorkspaceDirectConversation } from "./features/conversation/WorkspaceDirectConversation";
+import { useCustomAgentUsagePolling } from "./features/custom-agents/custom-agent-usage-polling";
+import { serverHasStorage } from "./features/files/storage-usage";
 import { MessagingThreadConversation } from "./features/messaging-threads/MessagingThreadConversation";
 import { useMessagingThreads } from "./features/messaging-threads/messaging-threads-context";
 import { WorkspaceServerOnboarding } from "./features/onboarding/WorkspaceServerOnboarding";
 import { useRemoteDesktop } from "./features/remote-desktop/remote-desktop-context";
-import { WorkspaceRoutineFlows } from "./features/routine-flows/WorkspaceRoutineFlows";
-import { SchedulePanel } from "./features/schedule/SchedulePanel";
+import { createRoutineTimezonePrompt, desktopRoutineZoneTargets } from "./features/schedule/routine-timezone-prompt";
+import { createHostedUpsellOffline } from "./features/servers/hosted-server-upsell-controller";
+import { createRemoteSyncMarks } from "./features/servers/remote-sync-marks";
+import { renewServerPlan } from "./features/servers/server-actions";
+import { serverCanAdminister } from "./features/servers/server-capabilities";
+import { createServerConnectionToast } from "./features/servers/server-connection-toast";
+import { useServerScope } from "./features/servers/server-scope";
+import { followsServerUpdate, ServerUpdateDialogHost } from "./features/servers/server-update-flow";
 import { useServers } from "./features/servers/servers-context";
+import { serversPort } from "./features/servers/servers-port";
 import { WorkspaceServerRail } from "./features/servers/WorkspaceServerRail";
+import { useSettings } from "./features/settings/settings-context";
 import { WorkspaceSidebar } from "./features/sidebar/WorkspaceSidebar";
 import { SlackClientView } from "./features/slack-client/SlackClientView";
-import { AgentUsagePanel } from "./features/usage/AgentUsagePanel";
+import { TasksPanel } from "./features/tasks/TasksPanel";
+import { createHostRestartToasts, type HostRestartView, noteServerAgents } from "./features/updates/host-restart-toast";
 import { useUsage } from "./features/usage/usage-context";
-import { WorkspacePlanLimits } from "./features/usage/WorkspacePlanLimits";
+import { finishRestartedStart, startsAfterRestart } from "./features/window/restarted-start";
+import { WindowBackdrop } from "./features/window/WindowBackdrop";
+import { WindowPageView } from "./features/window/WindowPageView";
+import { WorkspacePageRail } from "./features/window/WorkspacePageRail";
+import { useWindowPage } from "./features/window/window-page-context";
+import { useWorkspaceShortcuts } from "./features/window/workspace-shortcuts";
 import { useLayout } from "./layout";
 import { usePlatform } from "./platform";
+import { startupLoadingScene } from "./startup-animation-preference";
 import { WorkspaceFrame } from "./WorkspaceFrame";
 import { WorkspaceOverlays } from "./WorkspaceOverlays";
 
-/**
- * The desktop application frame, and nothing else: which pane occupies the
- * middle and whether the whole frame is hidden behind the remote-desktop
- * workspace. `WorkspaceFrame` draws the grid, which the web client shares.
- *
- * Each pane below reads the domains it needs through its own `use*()`, so this
- * component reads only what the frame itself decides with. That is the point of
- * the split - the shell used to call every context in the renderer because it
- * assembled every pane's props, and a change to any one pane went through here.
- * Two derived values stay because they choose *which* pane renders, and one of
- * them is passed on rather than derived twice.
- *
- * The order of the children is the paint order the stylesheet expects, and the
- * middle-pane `<Show>`s are mutually exclusive by construction: a blocked remote
- * server wins over everything, then a joined server's provider step, then the
- * Agent form, then a channel, then a Slack conversation, then a
- * person, then a Agent: its chat, or on the Routines view its routine canvas. The usage panel sits
- * outside that group and inerts it.
- */
-export function WorkspaceShell(props: { account: () => CentralAuthUser }) {
+export function WorkspaceShell(props: {
+  account: () => CentralAuthUser;
+  behindSplash?: () => boolean;
+  onStartupReady?: () => void;
+}) {
   const platform = usePlatform();
+  const chatWindow = platform.chatWindow !== null;
+  const { sourceText, t, errorMessage } = useText();
+  const scope = useServerScope();
+  const settings = useSettings();
   const channels = useChannels();
   const channelOpen = () => channels.state.selectedId !== null;
+  const windowPage = useWindowPage();
   const messagingThreads = useMessagingThreads();
-  // A channel wins over a Slack conversation, which wins over a person and an agent.
-  // The Slack client (the "Slack inbox" row) and a Slack conversation take the same place; opening one
-  // closes the other.
-  const inboxOpen = () => !channelOpen() && messagingThreads.inbox.open;
-  const threadOpen = () => !channelOpen() && (messagingThreads.state.selectedId !== null || inboxOpen());
   const usage = useUsage();
+  useAccountUsagePolling();
+  useCustomAgentUsagePolling();
   const layout = useLayout();
-  const { activeServer, activeServerId, activeServerSupportsCapability, retryServerConnection, servers } = useServers();
+  const {
+    activeServer,
+    activeServerSupportsCapability,
+    retryServerConnection,
+    servers,
+    serversLoaded,
+    serversLoadFailed,
+    refreshServers,
+    refreshHostedServersAvailable,
+    planDeletesAt,
+  } = useServers();
   const { remoteDesktopWorkspaceVisible } = useRemoteDesktop();
-  const { agentSetupOpen, serverOnboardingOpen } = useAgents();
+  const agentDockPlacement = useAgentDockPlacement();
+  const windowAgentDock = () => agentDockPlacement() === "window" && activeServer() !== undefined;
+  const { agentSetupOpen, serverOnboardingOpen, activeAgent, agentList, agentListSettled, openAgentSetup } =
+    useAgents();
+  const { conversations, retryConversation } = useConversation();
+  const activeConversation = () => conversations[activeAgent()?.id ?? ""];
   const { activeDirectMember } = useDirectMessages();
-
-  const blockedRemoteServer = createMemo(() => {
-    const server = activeServer();
-    // A hosted server that sleeps or wakes keeps the workspace on screen. The next input wakes it.
-    if (server?.kind !== "remote" || server.hostedSleep) return null;
-    return server.state === "incompatible" || server.issue != null ? server : null;
+  const middlePane = createMemo(() => {
+    if (chatWindow) return "agent";
+    if (windowPage.page() === "tasks") return "tasks";
+    if (agentSetupOpen()) return "agent-setup";
+    if (channelOpen()) return "channel";
+    if (messagingThreads.inbox.open) return "slack-inbox";
+    if (messagingThreads.state.selectedId !== null) return "messaging-thread";
+    if (activeDirectMember()) return "direct";
+    return "agent";
   });
+  const agentChatOpen = () => middlePane() === "agent";
+  if (chatWindow) {
+    createEffect(
+      () => activeAgent()?.name,
+      (name) => {
+        if (name) document.title = name;
+      },
+    );
+    createEffect(
+      () => agentListSettled() && !agentList().some((agent) => agent.id === platform.chatWindow?.agentId),
+      (gone) => {
+        if (gone) window.close();
+      },
+    );
+  }
+  const tasksSupported = () => activeServerSupportsCapability(AGENT_TASKS_CAPABILITY);
+  createEffect(
+    () => {
+      const server = activeServer();
+      return middlePane() === "tasks" && !tasksSupported() && !!server?.compatibility?.hostAppVersion;
+    },
+    (unsupported) => {
+      if (unsupported) usage.closeUsage();
+    },
+  );
+  createEffect(
+    () => {
+      const server = activeServer();
+      if (usage.state.serverId === null || usage.state.view !== "library") return false;
+      return !!server?.compatibility?.hostAppVersion && !serverHasStorage(server);
+    },
+    (unsupported) => {
+      if (unsupported) usage.closeUsage();
+    },
+  );
+  createEffect(
+    () => {
+      const server = activeServer();
+      if (usage.state.serverId === null || usage.state.view !== "crm") return false;
+      if (usage.crmEnabled() === false) return true;
+      return !!server?.compatibility?.hostAppVersion && !serverCanAdminister(server, CRM_CAPABILITY);
+    },
+    (unsupported) => {
+      if (unsupported) usage.closeUsage();
+    },
+  );
+  const paywall = createServerPaywall({
+    server: activeServer,
+    subscribe: (request) => serversPort().hostedServers.openCustomCheckout(request),
+    billingDetails: appPort().billing,
+    errorMessage: (error) => errorMessage(error, t("server.paywall.checkoutFailed")),
+  });
+  const fullScreenServer = () => planScreenShown() || paywall.server() !== null;
+  const blockedRemoteServer = createMemo(() => {
+    const paywallServer = paywall.server();
+    if (paywallServer) return paywallServer;
+    const server = activeServer();
+    if (server?.kind !== "remote" || server.hostedSleep) return null;
+    return server.state === "incompatible" ||
+      serverPlanBlocks(server, planDeletesAt(server.id)) ||
+      (server.issue && server.issue.code !== "network_unavailable")
+      ? server
+      : null;
+  });
+  const planScreenShown = () => serverPlanScreenShown(blockedRemoteServer(), planDeletesAt);
+  const retryBlockedServer = (serverId: string) => {
+    void refreshHostedServersAvailable();
+    return retryServerConnection(serverId);
+  };
   const activePeopleEnabled = createMemo(
     () => platform.peopleEnabled && activeServerSupportsCapability("direct-messages"),
   );
 
-  return (
-    <WorkspaceFrame
-      compact={layout.leftPanelCompact()}
-      hidden={remoteDesktopWorkspaceVisible()}
-      blockedServer={blockedRemoteServer()}
-      onRetryServer={retryServerConnection}
-      usageOpen={!!usage.state.serverId}
-      left={
-        <>
-          <WorkspaceServerRail />
-          <WorkspaceSidebar peopleEnabled={activePeopleEnabled()} />
-          <WorkspaceAccountDock account={props.account} />
-        </>
+  const remote = () => activeServer()?.kind === "remote";
+  createRemoteSyncMarks({
+    "workspace-shell": () => remote() && serversLoaded(),
+    "workspace-ready": () => remote() && scope.loaded(),
+    "conversation-ready": () => remote() && activeConversation()?.loaded === true,
+  });
+  const hostUnavailable = () => remote() && activeServer()?.issue?.reference === "signal/host_unavailable";
+  const offlineUpsell = createHostedUpsellOffline(hostUnavailable);
+  const connectionFailure = () => {
+    if (activeServer()?.hostRestart?.state === "restarting") return null;
+    const issue = activeServer()?.issue;
+    if (issue && hostUnavailable() && activeServer()?.hosted !== true)
+      return {
+        message: t("server.connection.computerOffline", { name: activeServer()?.name ?? "" }),
+        reference: issue.reference ?? null,
+      };
+    if (issue) return { message: sourceText(issue.message), reference: issue.reference ?? null };
+    return scope.connection.failed ? scope.connection.failure : null;
+  };
+  const checkRemoteConnection = () => {
+    const server = activeServer();
+    if (server?.kind === "remote" && server.state === "online") void retryServerConnection(server.id);
+  };
+  const retryConversationLoad = () => {
+    checkRemoteConnection();
+    retryConversation();
+  };
+  const retry = () => {
+    const server = activeServer();
+    if (!serversLoaded()) {
+      void refreshServers();
+      return;
+    }
+    if (!server) return;
+    if (server.state === "online") {
+      checkRemoteConnection();
+      scope.retry();
+    } else void retryServerConnection(server.id);
+  };
+  if (!chatWindow)
+    createServerConnectionToast(() => {
+      const server = activeServer();
+      return server?.kind === "remote"
+        ? {
+            id: server.id,
+            name: server.name,
+            ready: scope.loaded(),
+            quiet: Boolean(server.hostedSleep || server.hostRestart?.state === "restarting" || blockedRemoteServer()),
+          }
+        : null;
+    });
+
+  const connectionShown = () =>
+    (!serversLoaded() || !scope.connection.synced || (remote() && !scope.loaded())) && !blockedRemoteServer();
+  const connectionPhase = () =>
+    serverWorkspacePhase({
+      hostedSleep: activeServer()?.hostedSleep,
+      updating: activeServer()?.hostRestart?.state === "restarting",
+      blocked: serversLoadFailed(),
+      waiting: scope.connection.failed,
+      loading: activeServer()?.state === "online",
+      hasContent: scope.connection.synced,
+    });
+  const fullWindowLoading = () =>
+    connectionShown() &&
+    !scope.connection.synced &&
+    (connectionPhase() === "loading" || connectionPhase() === "connecting") &&
+    (!serversLoaded() ||
+      activeServer()?.state === "online" ||
+      activeServer()?.state === "connecting" ||
+      (activeServer()?.state === "offline" && !activeServer()?.issue));
+  const [loadingCover, setLoadingCover] = createSignal(false);
+  const [coverOpen, setCoverOpen] = createSignal(false);
+  const chatHeld = () => !!props.behindSplash?.() || (loadingCover() && !coverOpen());
+  createEffect(
+    () =>
+      !platform.landingPreview &&
+      !startsAfterRestart() &&
+      fullWindowLoading() &&
+      !loadingCover() &&
+      !props.behindSplash?.(),
+    (show) => {
+      if (!show) return;
+      setCoverOpen(false);
+      setLoadingCover(true);
+    },
+  );
+  createEffect(fullWindowLoading, (loading) => {
+    if (!loading) finishRestartedStart();
+  });
+  createEffect(
+    () => (fullWindowLoading() ? undefined : props.onStartupReady),
+    (onStartupReady) => {
+      onStartupReady?.();
+    },
+  );
+  const connectionNotice = (cover = false, screen = true) => (
+    <ServerConnectionNotice
+      screen={screen}
+      loadingScene={startupLoadingScene()}
+      name={activeServer()?.name ?? ""}
+      initial={cover || !scope.connection.synced}
+      ready={cover ? !fullWindowLoading() : undefined}
+      onExited={cover ? () => setLoadingCover(false) : undefined}
+      onMountViews={cover ? () => setCoverOpen(true) : undefined}
+      issue={activeServer()?.hostedIssue ?? null}
+      start={activeServer()?.hostedStart ?? null}
+      detail={connectionFailure()?.message ?? null}
+      reference={connectionFailure()?.reference ?? null}
+      updateVersion={activeServer()?.hostRestart?.version ?? null}
+      phase={connectionPhase()}
+      fullWindow={fullWindowLoading()}
+      remainingSeconds={
+        scope.connection.recovery.phase === "waiting" || scope.connection.recovery.phase === "cooldown"
+          ? scope.connection.recovery.remainingSeconds
+          : 0
       }
-      usage={
-        <Show when={usage.state.serverId}>
-          {(serverId) => (
-            <Show
-              when={usage.state.view === "schedule"}
-              fallback={
-                <AgentUsagePanel
-                  serverId={serverId()}
-                  hostName={servers().find((server) => server.id === serverId())?.name ?? "Host"}
-                  agentId={usage.state.agentId}
-                  onBack={usage.closeUsage}
-                  // The account reading answers for the active server only.
-                  planLimits={serverId() === activeServerId() ? <WorkspacePlanLimits /> : undefined}
+      busy={
+        activeServer()?.state === "connecting" ||
+        (activeServer()?.state === "online" && scope.connection.recovery.phase === "connecting")
+      }
+      onRetry={retry}
+      onManage={() => settings.openAppSettings(null, "hosted-servers")}
+      upsell={offlineUpsell()}
+    />
+  );
+
+  createEffect(
+    () => {
+      const server = activeServer();
+      return server?.kind === "remote" && agentListSettled()
+        ? { id: server.id, empty: agentList().length === 0 }
+        : null;
+    },
+    (seen) => {
+      if (seen) noteServerAgents(seen.id, seen.empty);
+    },
+  );
+
+  const remoteHosts = (): HostRestartView[] =>
+    servers().flatMap((server) =>
+      server.kind === "remote"
+        ? [
+            {
+              id: server.id,
+              name: server.name,
+              online: server.id === activeServer()?.id ? scope.loaded() : server.state === "online",
+              restart: server.hostRestart?.state ?? null,
+              version: server.hostRestart?.version ?? null,
+              ...(server.id === activeServer()?.id
+                ? { firstRun: !agentListSettled() || agentList().length === 0 }
+                : {}),
+            },
+          ]
+        : [],
+    );
+  if (!chatWindow) {
+    useWorkspaceShortcuts({
+      newAgent: () => {
+        if (!activeServer() || platform.landingPreview) return false;
+        channels.close();
+        openAgentSetup();
+        return true;
+      },
+      toggleSidebar: () => {
+        if (layout.sidebarClosed()) layout.expandSidebar();
+        else layout.setSidebarClosed(true);
+        return true;
+      },
+      showShortcuts: () => {
+        settings.openAppSettings(undefined, "keyboard");
+        return true;
+      },
+    });
+    createHostRestartToasts(() => remoteHosts().filter((host) => !followsServerUpdate(host.id)));
+    createRoutineTimezonePrompt(() => desktopRoutineZoneTargets(servers()));
+  }
+
+  return (
+    <ConnectorsProvider>
+      <WindowBackdrop />
+      <div class="app-window">
+        <WorkspacePageRail hidden={chatWindow || remoteDesktopWorkspaceVisible()} />
+        <WorkspaceFrame
+          class={chatWindow ? "app-frame-chat-window" : windowAgentDock() ? "app-frame-agent-dock" : undefined}
+          compact={layout.leftPanelCompact()}
+          initialLoading={!serversLoaded() || !scope.connection.synced}
+          connection={
+            <>
+              <Show when={connectionShown() && !fullWindowLoading()}>{connectionNotice()}</Show>
+              <Show when={scope.loaded() && agentChatOpen() && !serverOnboardingOpen()}>
+                <ConversationLoadNotice
+                  name={activeAgent()?.name ?? ""}
+                  loading={!activeConversation()?.loaded && activeConversation()?.loading === true}
+                  error={activeConversation()?.loadError ?? null}
+                  onRetry={retryConversationLoad}
                 />
-              }
-            >
-              <SchedulePanel
+              </Show>
+              <Show when={scope.loaded() && scope.connection.panelsFailed}>
+                <ServerPanelLoadNotice
+                  busy={scope.connection.panelsLoading}
+                  onRetry={() => {
+                    checkRemoteConnection();
+                    void scope.retryPanels();
+                  }}
+                />
+              </Show>
+            </>
+          }
+          hidden={remoteDesktopWorkspaceVisible()}
+          blockedServer={blockedRemoteServer()}
+          paywall={paywall}
+          onRetryServer={retryBlockedServer}
+          planDeletesAt={planDeletesAt}
+          onRenewPlan={renewServerPlan}
+          windowPage={windowPage.page()}
+          left={
+            <Show when={!chatWindow}>
+              <WorkspaceServerRail />
+              <Show when={!fullScreenServer()}>
+                <WorkspaceSidebar peopleEnabled={activePeopleEnabled()} />
+              </Show>
+            </Show>
+          }
+          page={<WindowPageView />}
+          after={
+            <>
+              <WorkspaceOverlays account={props.account} />
+              <Show when={!chatWindow}>
+                <ServerUpdateDialogHost hosts={remoteHosts()} />
+                <AgentDockHost />
+              </Show>
+            </>
+          }
+        >
+          <Show when={middlePane() === "tasks" && tasksSupported() ? usage.state.serverId : null}>
+            {(serverId) => (
+              <TasksPanel
                 serverId={serverId()}
-                hostName={servers().find((server) => server.id === serverId())?.name ?? "Host"}
+                hostName={servers().find((server) => server.id === serverId())?.name ?? t("app.page.serverFallback")}
                 onBack={usage.closeUsage}
               />
-            </Show>
-          )}
+            )}
+          </Show>
+          <Show when={serverOnboardingOpen() && middlePane() !== "tasks"}>
+            <WorkspaceServerOnboarding />
+          </Show>
+          <Show when={middlePane() === "agent-setup" && !serverOnboardingOpen()}>
+            <WorkspaceAgentSetup />
+          </Show>
+          <Show when={activePeopleEnabled() && middlePane() === "direct" && activeDirectMember()?.id} keyed>
+            <Show when={activeDirectMember()}>{(member) => <WorkspaceDirectConversation member={member()} />}</Show>
+          </Show>
+          <Show when={agentChatOpen() && !chatHeld()}>
+            <WorkspaceConversation account={props.account} />
+          </Show>
+          <Show when={middlePane() === "channel"}>
+            <WorkspaceChannelConversation account={props.account} />
+          </Show>
+          <Show when={middlePane() === "messaging-thread"}>
+            <MessagingThreadConversation />
+          </Show>
+          <Show when={middlePane() === "slack-inbox"}>
+            <SlackClientView />
+          </Show>
+        </WorkspaceFrame>
+        <Show when={loadingCover()}>{connectionNotice(true)}</Show>
+        <Show when={fullWindowLoading() && !loadingCover() && props.behindSplash?.()}>
+          {connectionNotice(true, false)}
         </Show>
-      }
-      after={<WorkspaceOverlays account={props.account} />}
-    >
-      <Show when={serverOnboardingOpen()}>
-        <WorkspaceServerOnboarding />
-      </Show>
-      <Show when={agentSetupOpen() && !serverOnboardingOpen()}>
-        <WorkspaceAgentSetup />
-      </Show>
-      <Show when={!agentSetupOpen() && threadOpen() && !inboxOpen()}>
-        <MessagingThreadConversation />
-      </Show>
-      <Show when={!agentSetupOpen() && inboxOpen()}>
-        <SlackClientView />
-      </Show>
-      <Show
-        when={activePeopleEnabled() && !agentSetupOpen() && !channelOpen() && !threadOpen() && activeDirectMember()}
-        keyed
-      >
-        {(member) => <WorkspaceDirectConversation member={member} />}
-      </Show>
-      <Show
-        when={
-          !agentSetupOpen() &&
-          !channelOpen() &&
-          !threadOpen() &&
-          !activeDirectMember() &&
-          layout.sidebarView() !== "routines"
-        }
-      >
-        <WorkspaceConversation account={props.account} />
-      </Show>
-      <Show
-        when={
-          !agentSetupOpen() &&
-          !channelOpen() &&
-          !threadOpen() &&
-          !activeDirectMember() &&
-          layout.sidebarView() === "routines"
-        }
-      >
-        <WorkspaceRoutineFlows />
-      </Show>
-      <Show when={!agentSetupOpen() && channelOpen()}>
-        <WorkspaceChannelConversation />
-      </Show>
-    </WorkspaceFrame>
+      </div>
+    </ConnectorsProvider>
   );
 }

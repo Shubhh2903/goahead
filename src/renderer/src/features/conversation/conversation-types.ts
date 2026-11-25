@@ -1,45 +1,61 @@
 import type {
   AccountUsage,
+  AgentApproval,
+  AgentContextState,
+  AgentDefaults,
   AgentEvent,
-  AgentModelOption,
+  AgentModelChoice,
   AgentProviderId,
   AgentStatus,
+  AgentTask,
+  AgentWait,
   AttachmentSummary,
+  AvatarColor,
   AvatarImageInput,
   BrowserControlState,
   BrowserTab,
   BusyMessageMode,
+  ClientAgentModelOption,
+  ConversationSnapshot,
   CustomAgentSummary,
+  CustomProviderRestart,
   CustomProviderSummary,
   DraftAttachment,
   FilePreview,
   ProviderRuntimeStatus,
   QueueSnapshot,
+  ResponseStyle,
   RoutineFields,
   ServerSummary,
   TeamPresenceSnapshot,
+  UpdateAgentAdminSettingsInput,
   UpdateAgentInput,
+  UpdateCustomProviderInput,
+  WorkspaceDirectory,
 } from "@openbot/contracts/ipc";
-import type { AgentMessage, AgentProfile } from "@openbot/ui/data";
+import type { ConversationUiBlock } from "@openbot/contracts/ui-blocks";
+import type { AgentMessage, AgentProfile, ComposerThreadMessageMatch } from "@openbot/ui/data";
 import type { BrowserViewRuntime } from "@openbot/ui/features/browser/BrowserLiveView";
-import type { AccountProfilePanelProps } from "@openbot/ui/features/settings/AccountProfilePanel";
+import type { ChannelWorker } from "@openbot/ui/features/channels/ChannelActivityIndicator";
+import type { AwaitingReplyItem } from "@openbot/ui/features/conversation/AwaitingReplies";
+import type { UsageLimitAskCardProps } from "@openbot/ui/features/conversation/BackupModels";
+import type { ChatMessageAuthor } from "@openbot/ui/features/conversation/ChatMessageRow";
+import type { UnloadedHistory } from "@openbot/ui/features/conversation/ChatScrollRail";
+import type { SidePanelPane } from "@openbot/ui/features/conversation/SidePanel";
+import type { AgentThreadOlderMessages } from "@openbot/ui/features/conversation/threads/AgentThreadView";
+import type { ThreadHeaderProps, ThreadItem } from "@openbot/ui/features/conversation/threads/thread-types";
+import type { SidebarAgentWait } from "@openbot/ui/features/sidebar/sidebar-agent-states";
 import type { JSX } from "@solidjs/web";
+import type { ConnectorRegistry } from "../connectors/connector-registry";
+import type { AppSettingLinkId } from "../settings/setting-link-targets";
 import type { ConversationRuntime } from "./conversation-runtime";
+import type { ServerInstallWatch } from "./ServerInstallChatCard";
+import type { TurnStepLines } from "./turn-step-lines";
 
-/**
- * What a conversation is, as data. These live apart from `ConversationView.tsx`
- * because fifteen of this feature's modules - the scope, the controller, the
- * draft logic and every store - name one of these types and none of them render
- * anything. Reading them from the entry component made `conversation-scope.ts`
- * and `ConversationView.tsx` import each other: a cycle `noImportCycles` lets
- * through only because one direction is `import type`.
- */
-
-/** Opens an agent's settings panel. A `routine` opens that routine's settings in it. */
 export interface AgentSettingsRequest {
   agentId: string;
   nonce: number;
-  routine?: { routineId: string; name: string };
+  routine?: { routineId: string; name: string } | "new";
 }
 
 export interface ConversationTarget {
@@ -47,116 +63,136 @@ export interface ConversationTarget {
   serverId: string;
 }
 
-/** What was said so far in a recording, and the conversation it is dictated into. */
 export interface VoiceLiveTranscript extends ConversationTarget {
   text: string;
+  threadKey?: string | undefined;
+}
+
+export type BrowserTakeoverRequest = Extract<AgentEvent, { type: "browser-takeover-requested" }>["request"];
+
+export interface PromptAnswerOptions {
+  onError?: ((error: unknown) => void) | undefined;
+}
+
+export interface ConversationChannelSource {
+  id: string;
+  name: () => string;
+  readOnly: () => boolean;
+  author: (message: AgentMessage) => ChatMessageAuthor;
+  ownMessage: (message: AgentMessage) => boolean;
+  workers: () => ChannelWorker[];
+  memberThreadIds: () => ReadonlySet<string>;
+  memberAgentIds: () => ReadonlySet<string>;
+  browserOwner: () => { agentId: string; threadId: string } | null;
+  workingTurns: () => readonly string[];
+  interactionAgentName: () => string | undefined;
+  awaitingReplies: () => readonly AwaitingReplyItem[];
+  stopAwaitingReply?: ((taskId: string) => void) | undefined;
+  HeaderTitle: (props: { onOpenSettings: () => void }) => JSX.Element;
+  SettingsPane: (props: ConversationChannelSettingsPaneProps) => JSX.Element;
+  AboveComposer: () => JSX.Element;
+  EmptyState: () => JSX.Element;
+}
+
+export interface ConversationChannelSettingsPaneProps {
+  maxWidth: () => number;
+  onWidthChange: (width: number) => void;
+  onClose: () => void;
 }
 
 export interface ConversationProps {
-  runtime?: ConversationRuntime;
-  notice?: JSX.Element;
-  onOpenUsage?: (trigger: HTMLButtonElement) => void;
-  onOpenMarketplace?: () => void;
-  /**
-   * Opens Marketplace at one app, from a suggestion card. `connect` is true only when the person
-   * pressed Connect or Install on the card: the page then starts the connect step.
-   */
-  onOpenMarketplaceApp?: (request: { appId: string; connect: boolean }) => void;
-  /** Opens one Slack conversation in the Slack inbox, from a Slack ask card. Only the local host has Slack. */
-  onOpenSlackConversation?: (place: { workspaceId: string; channelId: string }) => void;
-  platform?: import("@openbot/contracts/ipc").AppInfo["platform"];
+  channel?: ConversationChannelSource | undefined;
+  contextState?: AgentContextState | undefined;
+  runtime?: ConversationRuntime | undefined;
+  notice?: JSX.Element | undefined;
+  onOpenUsage?: ((trigger: HTMLButtonElement) => void) | undefined;
+  onOpenMarketplace?: (() => void) | undefined;
+  onOpenMarketplaceApp?: ((request: { appId: string; connect: boolean }) => void) | undefined;
+  onOpenSlackConversation?: ((place: { workspaceId: string; channelId: string }) => void) | undefined;
+  appSettingOpener?: ((settingId: AppSettingLinkId) => (() => void) | undefined) | undefined;
+  connectors?: ConnectorRegistry | undefined;
+  onOpenMcpSignIn?: ((mcpServerId: string, trigger: HTMLElement | null) => void) | undefined;
+  mcpSignedIn?: ((mcpServerId: string) => boolean) | undefined;
+  refreshMcpSignIns?: (() => void) | undefined;
+  serverInstall?: ServerInstallWatch | undefined;
+  platform?: import("@openbot/contracts/ipc").AppInfo["platform"] | undefined;
 
   agentStatus: AgentStatus;
-  /**
-   * The plan windows for the active agent's provider and model, when the account dock has them.
-   * The composer reads them for one thing only: a window at 100% means the next send is refused by
-   * the provider, so the notice has to say so before the user writes the message.
-   */
-  accountUsage?: AccountUsage | null;
-  providerRuntimeStatuses?: Partial<Record<AgentProviderId, ProviderRuntimeStatus>>;
-  /**
-   * The endpoints the user named, so both model pickers can tell a custom model from an OpenCode
-   * one. It travels as a prop rather than through `useCustomProviders()`, because
-   * `AgentSettingsPanel.test.tsx` mounts that component bare and a context `use()` throws without
-   * its provider - the same path `providerRuntimeStatuses` above already takes.
-   */
-  customProviders?: readonly CustomProviderSummary[];
-  /** The user's own ACP agents on this computer, for the model picker's Custom tab. */
-  customAgents?: readonly CustomAgentSummary[];
-  onDownloadProvider?: (provider: AgentProviderId) => void | Promise<void>;
-  onCancelProviderDownload?: (provider: AgentProviderId) => void | Promise<void>;
-  onConnectProvider?: (provider: AgentProviderId) => void | Promise<void>;
-  /**
-   * Take the user to the provider's sign-in. Separate from `onConnectProvider`, which is the
-   * managed-download path and is withheld when downloads are unavailable: a signed-out provider
-   * needs a way in whether or not OpenBot manages its CLI.
-   */
-  onSignInProvider?: (provider: AgentProviderId) => void | Promise<void>;
+  agentsConnecting?: boolean | undefined;
+  accountUsage?: AccountUsage | null | undefined;
+  providerRuntimeStatuses?: Partial<Record<AgentProviderId, ProviderRuntimeStatus>> | undefined;
+  customProviders?: readonly CustomProviderSummary[] | undefined;
+  onUpdateCustomProvider?: ((input: UpdateCustomProviderInput) => Promise<CustomProviderRestart>) | undefined;
+  customAgents?: readonly CustomAgentSummary[] | undefined;
+  onDownloadProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
+  onCancelProviderDownload?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
+  onConnectProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
+  canConnectProvider?: ((provider: AgentProviderId) => boolean) | undefined;
+  onSignInProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
+  onSignInWithCodeProvider?: ((provider: AgentProviderId) => void) | undefined;
+  onManageProviders?: ((trigger: HTMLElement) => void) | undefined;
+  onManageBrowserProfiles?: ((trigger: HTMLElement) => void) | undefined;
+  onOpenNotificationSettings?: ((serverId: string, trigger: HTMLElement) => void) | undefined;
   agent: AgentProfile | undefined;
   agents: AgentProfile[];
-  availableRoutineIds?: readonly string[];
-  /** The agent's routines, for the chat card of a routine the agent created or changed. */
-  routines?: readonly RoutineFields[];
-  modelOptions: AgentModelOption[];
-  messages: AgentMessage[];
-  messageReferences?: Record<string, AgentMessage>;
+  mentionAgents?: AgentProfile[] | undefined;
+  availableRoutineIds?: readonly string[] | undefined;
+  routines?: readonly RoutineFields[] | undefined;
+  modelOptions: ClientAgentModelOption[];
+  messages: readonly AgentMessage[];
+  messageReferences?: Record<string, AgentMessage> | undefined;
+  missingMessageReferences?: Readonly<Record<string, true>> | undefined;
   unreadCount: number;
   firstUnreadMessageId: string | null;
   loaded: boolean;
-  hasOlder?: boolean;
-  discontinuous?: boolean;
-  loadingOlder?: boolean;
-  olderError?: string | null;
+  hasOlder?: boolean | undefined;
+  unloadedHistory?: UnloadedHistory | undefined;
+  discontinuous?: boolean | undefined;
+  loadingOlder?: boolean | undefined;
+  olderError?: string | null | undefined;
   activeTurnId: string | null | undefined;
-  activityDetail?: string;
-  /** The end of the text the active turn is writing and has not published yet. */
-  textPreview?: string;
-  skillsMarketplaceOpen?: boolean;
-  /**
-   * True while a surface that can add or remove one of the host's MCP servers is open: the server
-   * settings dialog and the marketplace, where a plugin installs its app. The composer reads the
-   * list again when the last of them closes, so a server added there can be tagged without a
-   * restart.
-   */
-  mcpSettingsOpen?: boolean;
+  subagentTurnId?: string | null | undefined;
+  activityDetail?: string | undefined;
+  textPreview?: string | undefined;
+  activityRunning?: boolean | undefined;
+  activityKind?: string | undefined;
+  backgroundWorkSince?: ((taskId: string | null) => number | undefined) | undefined;
+  turnStepLines?: TurnStepLines | undefined;
+  skillsMarketplaceOpen?: boolean | undefined;
+  mcpSettingsOpen?: boolean | undefined;
   globalOverlayOpen: boolean;
   settingsRequest: AgentSettingsRequest | null;
-  /** The account Profile panel, for a client that has no settings dialog. `profileRequest` opens it. */
-  accountProfile?: Pick<
-    AccountProfilePanelProps,
-    "account" | "onUpdateAccountName" | "onUpdateAccountAvatar" | "onListAccountSessions" | "onRevokeAccountSession"
-  >;
-  profileRequest?: { agentId: string; nonce: number } | null;
   messageFocusRequest: { agentId: string; messageId: string; nonce: number } | null;
   queue: QueueSnapshot | undefined;
+  waits?: readonly AgentWait[] | undefined;
+  threads?: ConversationThreads | undefined;
   browserTabs: BrowserTab[];
   activeBrowserTabId: string | null;
   browserVisibilitySuspended: boolean;
-  /**
-   * The workspace content is covered by a panel above it, the Usage report today.
-   * The conversation stays mounted, so its document-level keyboard listeners are
-   * still registered; `inert` on the covered markup does not reach them.
-   */
-  workspaceCovered?: boolean;
+  workspaceCovered?: boolean | undefined;
   browserControlState: BrowserControlState;
-  /** Optional browser stream adapter for a non-Electron client. */
-  browserRuntime?: BrowserViewRuntime;
+  browserRuntime?: BrowserViewRuntime | undefined;
   server: ServerSummary | undefined;
+  responseStyle?: ResponseStyle | undefined;
   presence: TeamPresenceSnapshot;
   currentUserEmail: string;
-  /**
-   * Is the stamped sender of a message the reader? Only another person's message draws a face and a
-   * name; a message with no sender is the reader's own, as every message was before senders.
-   */
+  currentUserChatColor?: AvatarColor | null | undefined;
   isOwnSender: (senderId: string) => boolean;
-  browserEnabled?: boolean;
-  remoteDesktopEnabled?: boolean;
+  browserEnabled?: boolean | undefined;
+  openLinksInBrowser?: boolean | undefined;
+  remoteDesktopEnabled?: boolean | undefined;
   remoteDesktopSessionActive: boolean;
   remoteDesktopVisible: boolean;
   prompt: Extract<AgentEvent, { type: "prompt" }> | undefined;
+  promptUiBlock?: ConversationUiBlock | undefined;
   approval: Extract<AgentEvent, { type: "approval" }>["approval"] | undefined;
-  browserTakeover: Extract<AgentEvent, { type: "browser-takeover-requested" }>["request"] | undefined;
-  onSelectAgent: (agentId: string) => void;
+  usageLimitAsk?: UsageLimitAskCardProps | undefined;
+  usageLimited?: ((choice: AgentModelChoice) => boolean) | undefined;
+  providerFailed?: ((choice: AgentModelChoice) => boolean) | undefined;
+  browserTakeover: BrowserTakeoverRequest | undefined;
+  onSelectAgent: (agentId: string, tabId?: string) => void;
+  agentWaits?: Record<string, SidebarAgentWait> | undefined;
+  agentTakeoverTabIds?: Record<string, string> | undefined;
   onUpdateAgent: (agentId: string, updates: Omit<UpdateAgentInput, "agentId">) => Promise<void>;
   onSetAgentAvatar: (agentId: string, image: AvatarImageInput | null) => Promise<void>;
   /**
@@ -169,40 +205,45 @@ export interface ConversationProps {
     replyToMessageId: string | null,
     target?: ConversationTarget,
     clientMessageId?: string,
+    voiceRecordingDraftId?: string,
   ) => Promise<SendMessageResult>;
   onMarkRead: () => Promise<void>;
-  onLoadOlder?: () => void;
-  onLoadLatest?: () => Promise<void>;
-  onSearchMessages?: (query: string) => Promise<{ messageIds: string[]; total: number }>;
-  onOpenSearchMessage?: (messageId: string) => Promise<void>;
+  onMarkUnread?: ((messageId: string) => Promise<void>) | undefined;
+  onDeleteMessage?: ((messageId: string) => Promise<void>) | undefined;
+  canDeleteMessage?: ((message: AgentMessage) => boolean) | undefined;
+  messagePins?: ConversationMessagePins | undefined;
+  sendToChannel?:
+    | { channels: { id: string; name: string }[]; onSend: (channelId: string, text: string) => void }
+    | undefined;
+  onLoadOlder?: (() => void) | undefined;
+  onLoadLatest?: (() => Promise<void>) | undefined;
+  onSearchMessages?: ((query: string) => Promise<{ messageIds: string[]; total: number }>) | undefined;
+  onSearchThreads?: ((query: string) => Promise<ComposerThreadMessageMatch[]>) | undefined;
+  onOpenSearchMessage?: ((messageId: string) => Promise<void>) | undefined;
   onTypingChange: (agentId: string, typing: boolean) => void;
-  onAnswerPrompt: (answers: Record<string, string[]>) => Promise<boolean>;
-  onPromptResolutionPresented?: (agentId: string, turnId: string, requestId: string | number) => void;
+  onAnswerPrompt: (answers: Record<string, string[]>, options?: PromptAnswerOptions) => Promise<boolean>;
+  onPromptResolutionPresented?: ((agentId: string, turnId: string, requestId: string | number) => void) | undefined;
   onRespondToApproval: (decision: "accept" | "decline") => Promise<boolean>;
-  /**
-   * Grants the agent a standing approval and accepts the request in hand. Absent where the grant
-   * cannot be given: the approval widens the agent's access, or the agent belongs to a remote
-   * server, whose own computer holds that choice.
-   */
-  onAlwaysAllowApproval?: () => Promise<boolean>;
-  /**
-   * Whether this agent acts without asking, by Turbo mode or by its own grant. Shown in the header,
-   * because standing consent the user cannot see is consent they cannot take back.
-   */
-  agentAutoApproves?: boolean;
-  /** Turbo mode covers every agent, so the per-agent switch is read-only while it is on. */
-  agentAutoApproveLocked?: boolean;
-  /** The app default an agent without its own busy-message setting follows. Local agents only. */
-  defaultBusyMessageMode?: BusyMessageMode;
-  /** The app memory cap. Local agents only. */
-  agentMemoryLimit?: number;
-  /** Absent for a remote agent: its own computer holds that choice. */
-  onSetAgentAutoApprove?: (autoApprove: boolean) => Promise<void>;
-  /** Starts a new chat with the agent. Absent when its host does not serve `context-reset-v1`. */
-  onClearAgentContext?: () => Promise<void>;
-  onRespondToBrowserTakeover: (decision: "complete" | "cancel") => Promise<boolean>;
-  onCancelQueuedMessage: (deliveryId: string) => void;
+  onAlwaysAllowApproval?: (() => Promise<boolean>) | undefined;
+  agentAutoApproves?: boolean | undefined;
+  remoteBackupModelsLoaded?: boolean | undefined;
+  remotePlanCardLoaded?: boolean | undefined;
+  remoteBuiltinMemoryLoaded?: boolean | undefined;
+  remoteComputerUseLoaded?: boolean | undefined;
+  remoteNewChatLoaded?: boolean | undefined;
+  remoteBusyMessageModeLoaded?: boolean | undefined;
+  defaultBusyMessageMode?: BusyMessageMode | undefined;
+  agentDefaults?: AgentDefaults | undefined;
+  agentMemoryLimit?: number | undefined;
+  onUpdateAgentPermissions?: ((input: UpdateAgentAdminSettingsInput) => Promise<void>) | undefined;
+  onClearAgentContext?: (() => Promise<void>) | undefined;
+  onDeleteAgentHistory?: (() => Promise<void>) | undefined;
+  onCompactAgentContext?: (() => Promise<void>) | undefined;
+  onRespondToBrowserTakeover: (decision: "complete" | "cancel", options?: PromptAnswerOptions) => Promise<boolean>;
+  onCancelQueuedMessage: (deliveryId: string, recipientAgentId?: string) => void;
+  onCancelWait?: ((waitId: string) => void) | undefined;
   onSteerQueuedMessage: (deliveryId: string) => void;
+  onSendQueuedMessageNow?: ((deliveryId: string) => void) | undefined;
   onUpdateQueuedMessage: (
     deliveryId: string,
     text: string,
@@ -217,8 +258,7 @@ export interface ConversationProps {
   onStop: () => void;
 }
 
-/** `messageId` is the conversation message the host stored: the delivery id of the receipt. */
-export type SendMessageResult = { messageId: string } | { error: string };
+export type SendMessageResult = { messageId: string } | { error: string; reference?: string | null };
 
 export interface ComposerDraft {
   text: string;
@@ -226,28 +266,103 @@ export interface ComposerDraft {
   replyToMessageId: string | null;
 }
 
-/**
- * What the file preview panel is showing. A shared or workspace file is named by its path, which
- * the main process reads; an attachment is named by its record, because its bytes arrive over
- * `previewUrl` and "open externally" goes through the attachment handler instead of a path.
- */
 type SidebarFilePreviewSource =
   | { kind: "shared"; path: string }
-  | { kind: "workspace"; path: string }
+  | { kind: "workspace"; agentId: string; path: string; folder?: string | undefined }
   | { kind: "attachment"; attachment: AttachmentSummary };
 
-export interface SidebarFilePreview {
-  ownerAgentId: string;
-  source: SidebarFilePreviewSource;
-  preview: FilePreview;
-}
+export type SidebarFilePreview =
+  | { ownerAgentId: string; source: SidebarFilePreviewSource; preview: FilePreview; directory?: undefined }
+  | {
+      ownerAgentId: string;
+      source: { kind: "workspace-folder"; agentId: string; path: string };
+      preview: null;
+      directory: WorkspaceDirectory;
+    };
 
 export type RightPanelMode =
   | "none"
-  | "browser"
+  | "side-panel"
+  | SidePanelPane
   | "browser-expanded"
   | "browser-pip"
-  | "settings"
-  | "profile"
   | "file-preview"
-  | "files";
+  | "thread";
+
+export type { SidePanelPane };
+
+export interface ConversationMessagePins {
+  list: (agentId: string) => Promise<import("@openbot/contracts/ipc").PinnedMessagesSnapshot>;
+  set: (
+    input: import("@openbot/contracts/ipc").SetMessagePinnedInput,
+  ) => Promise<import("@openbot/contracts/ipc").PinnedMessagesSnapshot>;
+  subscribe: (agentId: string, changed: () => void) => () => void;
+}
+
+export interface ConversationThreads {
+  header: ThreadHeaderProps;
+  side: SideThreads;
+  open: AgentTask | null | undefined;
+  tasks: readonly AgentTask[];
+  limit: number;
+  running: number;
+  conversation: ConversationSnapshot | undefined;
+  olderMessages: AgentThreadOlderMessages | undefined;
+  newerMessages: AgentThreadOlderMessages | undefined;
+  approval: AgentApproval | undefined;
+  acceptsFiles: boolean;
+  acceptsReplies: boolean;
+  onSend: (text: string, attachmentDraftIds: string[], replyToMessageId?: string | null) => Promise<boolean>;
+  onStop: () => void;
+  onRead: (messageId: string) => void;
+  onRespondApproval: (decision: "accept" | "decline", options?: PromptAnswerOptions) => Promise<boolean>;
+  contextState: AgentContextState | undefined;
+  onCompactContext?: (() => Promise<void>) | undefined;
+  onRunQueuedMessage?: ((deliveryId: string) => void) | undefined;
+  queueActions?: ThreadQueueActions | undefined;
+  onBranch?: ((sourceTaskId: string | null, messageId: string) => Promise<boolean>) | undefined;
+  onDeleteMessage?: ((taskId: string, messageId: string) => Promise<void>) | undefined;
+  branchSource: (task: AgentTask) => ConversationBranchSource | undefined;
+  routineThread: (routineId: string) => (() => void) | undefined;
+  onOpenRoutineThread: (routineId: string) => Promise<boolean>;
+  onOpenRoutineRun: (routineId: string, messageId: string) => Promise<boolean>;
+  focusMessage: { taskId: string; messageId: string; nonce: number } | null;
+  onOpenMessage: (taskId: string | null, messageId: string) => Promise<boolean>;
+}
+
+interface ThreadQueueActions {
+  cancel: (deliveryId: string) => void;
+  steer: (task: AgentTask, deliveryId: string) => void;
+  reorder: (taskId: string, deliveryIds: string[]) => void;
+}
+
+export interface ConversationBranchSource {
+  throughMessageId: string;
+  title: string | null;
+  deleted: boolean;
+  onOpen: () => void;
+}
+
+interface SideThreads {
+  tabs: readonly ThreadItem[];
+  thread: (id: string) => SideThread | undefined;
+  onToSide: (id: string) => void;
+  onToChat: (id: string) => void;
+  onClose: (id: string) => void;
+  onMove: (id: string, index: number) => void;
+}
+
+export interface SideThread {
+  task: AgentTask;
+  conversation: ConversationSnapshot | undefined;
+  olderMessages: AgentThreadOlderMessages | undefined;
+  newerMessages: AgentThreadOlderMessages | undefined;
+  focusMessage: { messageId: string; nonce: number } | undefined;
+  approval: AgentApproval | undefined;
+  onSend: (text: string, attachmentDraftIds: string[], replyToMessageId?: string | null) => Promise<boolean>;
+  onStop: () => void;
+  onRead: (messageId: string) => void;
+  onRespondApproval: (decision: "accept" | "decline", options?: PromptAnswerOptions) => Promise<boolean>;
+  contextState: AgentContextState | undefined;
+  onCompactContext?: (() => Promise<void>) | undefined;
+}

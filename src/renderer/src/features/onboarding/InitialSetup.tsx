@@ -9,7 +9,7 @@ import {
   type InvitePreview,
   type JoinServerInput,
 } from "@openbot/contracts/ipc";
-import { Button, Dialog, Textarea } from "@openbot/ui";
+import { Button, Dialog, ErrorReference, Textarea } from "@openbot/ui";
 import { InvitePreviewCard } from "@openbot/ui/features/servers/JoinServerDialog";
 import { useText } from "@openbot/ui/text";
 import { createEffect, createMemo, createSignal, onSettled, Show, untrack } from "solid-js";
@@ -22,15 +22,10 @@ import {
 } from "./SetupProviderPicker";
 
 interface InitialSetupProps extends SetupProviderProps {
-  reviewing?: boolean;
   state: AppSetupState;
   platform: DesktopPlatform;
   accountEmail: string;
   inviteUrl?: string;
-  /**
-   * Records the choice. An omitted model keeps the saved one while the provider stays the same;
-   * `null` clears it; the custom row names the endpoint model that new agents start on.
-   */
   onSave: (provider: AgentProviderId, model?: AgentModelId | null) => Promise<void>;
   onPreviewInvite: (input: JoinServerInput) => Promise<InvitePreview>;
   onJoinRemote: (input: JoinServerInput, provider: AgentProviderId) => Promise<void>;
@@ -40,7 +35,6 @@ interface InitialSetupProps extends SetupProviderProps {
 
 type SetupRoute = "local" | "remote";
 
-// A custom agent is added in Settings after setup, so it is not a first provider.
 const PROVIDERS: Array<{ id: AgentProviderId; name: string }> = AGENT_PROVIDERS.filter((id) => id !== "acp").map(
   (id) => ({ id, name: agentProviderName(id) }),
 );
@@ -50,21 +44,11 @@ const TEXT_MARKER = "\u0000";
 export function InitialSetup(props: InitialSetupProps) {
   const { t, errorMessage } = useText();
   const initialInviteUrl = untrack(() => props.inviteUrl?.trim() ?? "");
-  const [route, setRoute] = createSignal<SetupRoute | null>(
-    untrack(() => (props.reviewing ? "local" : initialInviteUrl ? "remote" : null)),
-  );
-  /**
-   * The saved endpoint model, when the saved choice is the custom row. The state is the one saved
-   * when the screen opened; the endpoint list can load later.
-   */
+  const [route, setRoute] = createSignal<SetupRoute | null>(untrack(() => (initialInviteUrl ? "remote" : null)));
   const savedState = untrack(() => props.state);
   const savedEndpointModel = createMemo(() =>
     savedCustomModel(savedState.preferredProvider, savedState.preferredModel, props.customProviders),
   );
-  /**
-   * Stays true once the saved model is known to be an endpoint's. A removal of that endpoint then
-   * empties `savedEndpointModel`, but the save must still clear the model.
-   */
   let savedModelIsEndpoint = false;
   createEffect(savedEndpointModel, (model) => {
     if (model) savedModelIsEndpoint = true;
@@ -76,7 +60,6 @@ export function InitialSetup(props: InitialSetupProps) {
   const selectedProvider = providers.selectedProvider;
   const setError = providers.setError;
   const error = providers.error;
-  /** The screen sits on the dialog layer, so the row menus mount in it rather than behind it. */
   const [dialogElement, setDialogElement] = createSignal<HTMLElement | undefined>();
   const [saving, setSaving] = createSignal(false);
   const [inviteUrl, setInviteUrl] = createSignal(initialInviteUrl);
@@ -107,14 +90,12 @@ export function InitialSetup(props: InitialSetupProps) {
     setSaving(true);
     setError("");
     try {
-      // The custom row names its model. A built-in row keeps the saved model, unless the saved
-      // model was the custom row's: the user chose another row, so that model must go.
       await props.onSave(
         provider,
         providers.customSelected() ? providers.customModel() : savedModelIsEndpoint ? null : undefined,
       );
     } catch (cause) {
-      setError(errorMessage(cause, t("onboarding.setup.saveFailed")));
+      setError(errorMessage(cause, t("onboarding.setup.saveFailed")), cause);
       setSaving(false);
     }
   }
@@ -128,7 +109,7 @@ export function InitialSetup(props: InitialSetupProps) {
       return true;
     } catch (cause) {
       setInvitePreview(null);
-      setError(errorMessage(cause, t("onboarding.setup.verifyFailed")));
+      setError(errorMessage(cause, t("onboarding.setup.verifyFailed")), cause);
       return false;
     } finally {
       setSaving(false);
@@ -147,7 +128,7 @@ export function InitialSetup(props: InitialSetupProps) {
     try {
       await props.onJoinRemote({ inviteUrl: inviteUrl().trim() }, provider);
     } catch (cause) {
-      setError(errorMessage(cause, t("onboarding.setup.connectFailed")));
+      setError(errorMessage(cause, t("onboarding.setup.connectFailed")), cause);
       setSaving(false);
     }
   }
@@ -157,7 +138,6 @@ export function InitialSetup(props: InitialSetupProps) {
     return [before, after] as const;
   };
 
-  /** "ChatGPT, Claude, or Grok", built from the registry so a new provider joins the sentence. */
   function providerSentence(): string {
     const names = PROVIDERS.map((provider) => provider.name);
     const last = names[names.length - 1];
@@ -170,16 +150,12 @@ export function InitialSetup(props: InitialSetupProps) {
   }
 
   const title = () => {
-    if (props.reviewing) return t("onboarding.setup.reviewTitle");
     if (route() === "local") return t("onboarding.setup.localTitle");
     if (route() === "remote") return t("onboarding.setup.remoteTitle");
     return t("onboarding.setup.title");
   };
 
   const description = () => {
-    if (props.reviewing) {
-      return t("onboarding.setup.reviewDescription");
-    }
     if (route() === "local") {
       return t("onboarding.setup.localDescription");
     }
@@ -195,7 +171,7 @@ export function InitialSetup(props: InitialSetupProps) {
         <Dialog.Content as="section" class="initial-setup" data-dialog-surface="unstyled" ref={setDialogElement}>
           <header class="initial-setup-header">
             <div class="initial-setup-account-row">
-              <Show when={!props.reviewing && route()}>
+              <Show when={route()}>
                 <Button
                   variant="ghost"
                   type="button"
@@ -235,7 +211,7 @@ export function InitialSetup(props: InitialSetupProps) {
             </Dialog.Description>
           </header>
 
-          <Show when={!props.reviewing && route() === null}>
+          <Show when={route() === null}>
             <ul class="setup-route-list" aria-label={t("onboarding.setup.connectionType")}>
               <li>
                 <Button variant="ghost" type="button" class="setup-route-button" onClick={() => chooseRoute("local")}>
@@ -290,7 +266,7 @@ export function InitialSetup(props: InitialSetupProps) {
             </div>
           </Show>
 
-          <Show when={!props.reviewing && route() === "remote"}>
+          <Show when={route() === "remote"}>
             <form
               class="setup-remote-form"
               onSubmit={(event) => {
@@ -351,16 +327,12 @@ export function InitialSetup(props: InitialSetupProps) {
           <Show when={error()}>
             <p class="initial-setup-error" role="alert">
               {error()}
+              <ErrorReference reference={providers.errorReference()} />
             </p>
           </Show>
 
           <Show when={route() !== null}>
             <div class="initial-setup-actions">
-              <Show when={props.reviewing}>
-                <Button variant="ghost" type="button" class="initial-setup-secondary" onClick={props.onClose}>
-                  {t("common.cancel")}
-                </Button>
-              </Show>
               <Button
                 variant="default"
                 type="button"
@@ -376,19 +348,17 @@ export function InitialSetup(props: InitialSetupProps) {
                   ? route() === "remote"
                     ? t("common.connecting")
                     : t("common.saving")
-                  : props.reviewing
-                    ? t("onboarding.setup.saveChanges")
-                    : route() === "remote"
-                      ? invitePreview()
-                        ? t("onboarding.setup.connect")
-                        : t("onboarding.setup.reviewInvitation")
-                      : selectedProvider()
-                        ? t("onboarding.setup.continueWith", {
-                            provider: providers.customSelected()
-                              ? t("provider.custom.name")
-                              : providerName(selectedProvider()),
-                          })
-                        : t("onboarding.setup.chooseProvider")}
+                  : route() === "remote"
+                    ? invitePreview()
+                      ? t("onboarding.setup.connect")
+                      : t("onboarding.setup.reviewInvitation")
+                    : selectedProvider()
+                      ? t("onboarding.setup.continueWith", {
+                          provider: providers.customSelected()
+                            ? t("provider.custom.name")
+                            : providerName(selectedProvider()),
+                        })
+                      : t("onboarding.setup.chooseProvider")}
               </Button>
             </div>
           </Show>

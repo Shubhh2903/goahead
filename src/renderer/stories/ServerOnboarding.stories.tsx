@@ -6,10 +6,9 @@ import type { Meta, StoryObj } from "storybook-solidjs-vite";
 import { hostSetupProviderProps } from "../src/features/onboarding/host-setup-provider-props";
 import { ServerOnboarding } from "../src/features/onboarding/ServerOnboarding";
 import type { HostProviderSettings } from "../src/features/settings/ProviderSettingsSection";
-import { createFakeCodeLogin } from "./code-login-fixture";
 import { STORY_AGENT_STATUS } from "./fixtures";
+import { createFakeConnection } from "./provider-connection-fixture";
 
-/** A new hosted server: every CLI is on the host, and none is signed in. */
 const newHostStatus: AgentStatus = {
   ...STORY_AGENT_STATUS,
   phase: "blocked",
@@ -42,7 +41,7 @@ function host(agentStatus: AgentStatus): HostProviderSettings {
       opencode: ready("1.18.27"),
     },
     customProviders: [],
-    codeLogin: createFakeCodeLogin({ providers: ["codex", "claude", "grok"], finishAfterMs: 0 }),
+    connection: createFakeConnection({ connect: ["codex", "claude", "grok"], alternative: [], finishAfterMs: 0 }),
   };
 }
 
@@ -77,10 +76,8 @@ const meta = {
 export default meta;
 type StoryEntry = StoryObj<typeof meta>;
 
-/** Nothing is signed in on the host. Connect on the Claude row opens the paste sign-in. */
 export const NothingConnected: StoryEntry = {};
 
-/** The host is signed in to Claude, so Continue opens the agent form. */
 export const Connected: StoryEntry = {
   args: { agentStatus: connectedHostStatus },
 };

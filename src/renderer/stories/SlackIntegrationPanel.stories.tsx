@@ -1,4 +1,4 @@
-import type { MessagingConnection } from "@openbot/contracts/ipc";
+import { MESSAGING_LIMITS, type MessagingConnection } from "@openbot/contracts/ipc";
 import {
   SlackConnectDialog,
   type SlackIntegrationAgent,
@@ -7,11 +7,13 @@ import {
 import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
 import { STORY_AGENT_SUMMARIES } from "./fixtures";
+import { SettledArgs } from "./settled-args";
 
 const meta = {
   title: "Settings/SlackIntegrationPanel",
   component: SlackIntegrationPanel,
   parameters: { layout: "padded", a11y: { test: "error" } },
+  render: (args) => <SettledArgs>{() => <SlackIntegrationPanel {...args} />}</SettledArgs>,
 } satisfies Meta<typeof SlackIntegrationPanel>;
 
 export default meta;
@@ -55,12 +57,25 @@ function workspace(update: Partial<MessagingConnection> = {}): MessagingConnecti
   };
 }
 
+const SECOND_ORCHESTRATOR: SlackIntegrationAgent = {
+  ...ORCHESTRATOR,
+  id: "agent-slack-orchestrator-2",
+  name: "Slack Orchestrator 2",
+  avatarSeed: "slack-orchestrator-2",
+};
+
+const SECOND_WORKSPACE: Partial<MessagingConnection> = {
+  workspaceId: "T0STORY2",
+  workspaceName: "Acme Labs",
+};
+
 const args = (connections: MessagingConnection[], busy = false) => ({
-  agents: [ORCHESTRATOR, ...AGENTS],
+  agents: [ORCHESTRATOR, SECOND_ORCHESTRATOR, ...AGENTS],
   connections,
   busy,
   onConnectWorkspace: fn(),
   onDisconnectWorkspace: fn(),
+  onDisconnectAll: fn(),
   onReconnect: fn(),
   onSetEnabled: fn(),
   onAddOrchestrator: fn(),
@@ -73,13 +88,10 @@ const args = (connections: MessagingConnection[], busy = false) => ({
   onSetSendGuards: fn(),
 });
 
-/** No workspace yet: Connect Slack opens the dialog. */
 export const NotSetUp: Story = { args: args([]) };
 
-/** The workspace is connected, and the Slack Orchestrator answers. */
 export const Connected: Story = { args: args([workspace()]) };
 
-/** The workspace is connected, and no agent answers yet. */
 export const NoOrchestrator: Story = { args: args([workspace({ orchestratorAgentId: null })]) };
 
 /** Connected before the app asked for the person's token: only the bot is connected. */
@@ -103,8 +115,28 @@ export const Paused: Story = { args: args([workspace({ enabled: false, state: "p
 
 export const Uninstalled: Story = { args: args([workspace({ state: "invalid_token" })]) };
 
+export const NotLinked: Story = { args: args([workspace({ state: "not_linked" })]) };
+
 export const MissingPermissions: Story = {
   args: args([workspace({ state: "missing_scope", missingScopes: ["files:read"] })]),
+};
+
+export const TwoServers: Story = { args: args([workspace(), workspace(SECOND_WORKSPACE)]) };
+
+export const EarlierBuildTwoOrchestrators: Story = {
+  args: args([workspace(), workspace({ ...SECOND_WORKSPACE, orchestratorAgentId: SECOND_ORCHESTRATOR.id })]),
+};
+
+export const SecondServerNoOrchestrator: Story = {
+  args: args([workspace(), workspace({ ...SECOND_WORKSPACE, orchestratorAgentId: null })]),
+};
+
+export const AtLimit: Story = {
+  args: args(
+    Array.from({ length: MESSAGING_LIMITS.connections }, (_, index) =>
+      workspace({ workspaceId: `T0STORY${index + 1}`, workspaceName: `Acme ${index + 1}` }),
+    ),
+  ),
 };
 
 type DialogStory = StoryObj<typeof SlackConnectDialog>;
@@ -119,19 +151,16 @@ const dialogArgs = (connection: MessagingConnection | null) => ({
   onClose: fn(),
 });
 
-/** Step 1: Slack's install page opens in the browser. */
 export const ConnectWorkspace: DialogStory = {
   render: (props) => <SlackConnectDialog {...props} />,
   args: dialogArgs(null),
 };
 
-/** Step 2: the workspace is connected, and the Slack Orchestrator is added next. */
 export const AddOrchestrator: DialogStory = {
   render: (props) => <SlackConnectDialog {...props} />,
   args: dialogArgs(workspace({ orchestratorAgentId: null })),
 };
 
-/** Done: the workspace has its Slack Orchestrator. */
 export const ConnectDone: DialogStory = {
   render: (props) => <SlackConnectDialog {...props} />,
   args: dialogArgs(workspace()),

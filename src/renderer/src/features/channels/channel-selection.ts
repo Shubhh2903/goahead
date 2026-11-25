@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const CHANNEL_SELECTION_STORAGE_KEY = "openbot:selected-channel:v1";
+const CHANNEL_SELECTION_STORAGE_KEY = "openbot:selected-channel:v1";
 
 export type ChannelSelectionsByAccount = Record<string, Record<string, string>>;
 
@@ -47,7 +47,5 @@ export function writeChannelSelection(
       else delete selections[accountId];
     }
     target.setItem(CHANNEL_SELECTION_STORAGE_KEY, JSON.stringify(selections));
-  } catch {
-    // A local display preference must not block channel navigation.
-  }
+  } catch {}
 }

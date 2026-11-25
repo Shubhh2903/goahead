@@ -1,20 +1,19 @@
 import { TEAM_AGENT_CREATE_MODEL_CAPABILITY } from "@openbot/contracts/team-protocol/current";
+import { PROVIDER_ACCOUNTS_CAPABILITY } from "@openbot/contracts/team-protocol/provider-accounts-v1";
+import { resolveCreationModel } from "@openbot/ui/features/agents/agent-creation-model";
 import { FIRST_AGENT_SUGGESTIONS, FirstAgentSetup } from "@openbot/ui/features/agents/FirstAgentSetup";
 import { createEffect, createMemo, createSignal } from "solid-js";
 import { useProviders } from "../../providers";
+import { useAuth } from "../account/account-context";
 import { useCustomAgents } from "../custom-agents/custom-agents-context";
-import { useCustomProviders } from "../custom-providers/custom-providers-context";
 import { useSetup } from "../onboarding/onboarding-context";
+import { serverCanAdminister } from "../servers/server-capabilities";
+import { useServerSettings } from "../servers/server-settings";
 import { useServers } from "../servers/servers-context";
 import { useAgentActions } from "./agent-actions";
-import { resolveCreationModel } from "./agent-creation-model";
 import { useAgents } from "./agents-context";
+import { withHostAccountUsage } from "./host-provider-accounts";
 
-/**
- * The create-an-agent form, which takes over the conversation pane instead of
- * opening over it. `mode` is derived from the agent list rather than passed in
- * because the first agent and the fifth are the same command with different copy.
- */
 export function WorkspaceAgentSetup() {
   const {
     agentList,
@@ -26,12 +25,11 @@ export function WorkspaceAgentSetup() {
     modelOptions,
     agentStatus,
     serverSetupChoice,
+    hostAccountLimits,
+    developmentCreation,
   } = useAgents();
   const { createAgent } = useAgentActions();
   const { setupState } = useSetup();
-  // Not gated on the server: the picker needs these IDs to label a model it is already showing,
-  // and a remote server's OpenCode has its own catalogue. Only the write paths are local-only.
-  const { customProviders } = useCustomProviders();
   const { customAgents } = useCustomAgents();
   const { activeServer, activeServerSupportsCapability } = useServers();
   const {
@@ -40,38 +38,49 @@ export function WorkspaceAgentSetup() {
     downloadProviderRuntime,
     cancelProviderRuntimeDownload,
     connectProvider,
+    providerAdminServerId,
+    activeCustomProviders,
   } = useProviders();
-  /** Provider downloads are the local machine's business, never a remote host's. */
+  const { openServerSettings } = useServerSettings();
+  const auth = useAuth();
+  const accountChoice = createMemo(() => serverCanAdminister(activeServer(), PROVIDER_ACCOUNTS_CAPABILITY));
   const localProviderDownloads = createMemo(
     () => activeServer()?.kind === "local" && providerRuntimeDownloadsAvailable(),
   );
-  /**
-   * A remote host without the capability drops the pair in its frozen projection and starts the
-   * agent on its own default, so the form offers no choice there: the backend default stands.
-   */
+  const manageProviders = createMemo(() => activeServer()?.kind === "local" || providerAdminServerId() !== undefined);
+  const openProviderSettings = (trigger: HTMLElement) => {
+    const server = activeServer();
+    if (server) openServerSettings(server.id, trigger, "providers");
+  };
   const createModelSupported = createMemo(
     () => activeServer()?.kind !== "remote" || activeServerSupportsCapability(TEAM_AGENT_CREATE_MODEL_CAPABILITY),
   );
-  /**
-   * The draft opens on the hard-coded default, which would bypass the saved setup choice and fail
-   * outright after onboarding with a provider the default does not cover. Resolve it from the
-   * saved choice and the live catalog until the user picks a model themselves. A joined server's
-   * provider step chose for that server, so its choice comes first.
-   */
   const [modelTouched, setModelTouched] = createSignal(false);
   createEffect(
     () => ({
       touched: modelTouched(),
       setup: serverSetupChoice() ?? setupState(),
       options: modelOptions(),
+      status: agentStatus(),
+      development: developmentCreation(),
       draft: agentSetupDraft(),
     }),
-    ({ touched, setup, options, draft }) => {
+    ({ touched, setup, options, status, development, draft }) => {
       if (touched) return;
-      const resolved = resolveCreationModel(setup, options);
+      const resolved = resolveCreationModel(setup, options, status, development);
       if (!resolved) return;
-      if (draft.provider === resolved.provider && draft.model === resolved.model) return;
-      setAgentSetupDraft({ ...draft, provider: resolved.provider, model: resolved.model });
+      if (
+        draft.provider === resolved.provider &&
+        draft.model === resolved.model &&
+        draft.reasoningEffort === resolved.reasoningEffort
+      )
+        return;
+      setAgentSetupDraft({
+        ...draft,
+        provider: resolved.provider,
+        model: resolved.model,
+        reasoningEffort: resolved.reasoningEffort,
+      });
     },
   );
 
@@ -84,16 +93,25 @@ export function WorkspaceAgentSetup() {
       error={agentSetupError()}
       modelOptions={createModelSupported() ? modelOptions() : undefined}
       agentStatus={agentStatus()}
+      accountChoice={accountChoice()}
+      accountUsage={accountChoice() ? withHostAccountUsage(auth.accountUsage(), hostAccountLimits()) : undefined}
       runtimeStatuses={localProviderDownloads() ? providerRuntimeStatuses() : undefined}
-      customProviders={customProviders()}
-      // The custom agents are this computer's. A joined host's picker counts its own from its models.
+      customProviders={activeCustomProviders()}
       customAgents={activeServer()?.kind === "local" ? customAgents() : undefined}
       onDownloadProvider={localProviderDownloads() ? downloadProviderRuntime : undefined}
       onCancelProviderDownload={localProviderDownloads() ? cancelProviderRuntimeDownload : undefined}
       onConnectProvider={localProviderDownloads() ? connectProvider : undefined}
+      onAddCustomProvider={manageProviders() ? openProviderSettings : undefined}
+      onManageProviders={manageProviders() ? openProviderSettings : undefined}
       onChange={(next) => {
         const current = agentSetupDraft();
-        if (next.provider !== current.provider || next.model !== current.model) setModelTouched(true);
+        if (
+          next.provider !== current.provider ||
+          next.model !== current.model ||
+          next.reasoningEffort !== current.reasoningEffort ||
+          next.providerAccountId !== current.providerAccountId
+        )
+          setModelTouched(true);
         setAgentSetupDraft(next);
       }}
       onSubmit={createAgent}

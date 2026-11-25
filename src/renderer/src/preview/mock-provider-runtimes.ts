@@ -12,7 +12,8 @@ export interface MockProviderRuntimeOptions {
   providerRuntimeFailure?: boolean;
 }
 
-/** The provider CLIs and tool runtimes the app downloads, with progress the preview makes up. */
+const MOCK_DOWNLOAD = { bytes: 612_000_000, versions: 2 };
+
 export function createMockProviderRuntimes(options: MockProviderRuntimeOptions, { schedule }: MockRuntime) {
   const runtimeSnapshot: ProviderRuntimeSnapshot = clone(
     options.providerRuntimeSnapshot ?? {
@@ -25,11 +26,13 @@ export function createMockProviderRuntimes(options: MockProviderRuntimeOptions, 
         antigravity: { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null },
         cursor: { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null },
         cline: { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null },
+        kimi: { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null },
         pi: { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null },
         muse: { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null },
+        devin: { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null },
+        copilot: { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null },
+        mistral: { phase: "not-downloaded", progress: null, message: null, version: null, availableVersion: null },
       },
-      // No `availableVersion`: a tool runtime is downloaded once and replaced by a release, so the
-      // preview never offers an update for one.
       toolRuntimes: { bun: { phase: "not-downloaded", progress: null, message: null, version: null } },
     },
   );
@@ -44,7 +47,6 @@ export function createMockProviderRuntimes(options: MockProviderRuntimeOptions, 
 
   const providerRuntimes: OpenBotDesktopApi["providerRuntimes"] = {
     getStatus: async () => clone(runtimeSnapshot),
-    // The preview has no upstream to ask: every offer it makes is already in the snapshot.
     checkForUpdates: async () => clone(runtimeSnapshot),
     download: async (provider) => {
       if (!isManagedRuntimeProvider(provider)) throw new Error("GoAhead does not manage this provider's CLI.");
@@ -94,6 +96,14 @@ export function createMockProviderRuntimes(options: MockProviderRuntimeOptions, 
       if (current.phase !== "downloading") return clone(runtimeSnapshot);
       runtimeTransfers.delete(provider);
       setRuntimeStatus(provider, { ...current, phase: "not-downloaded", progress: null, message: null });
+      return clone(runtimeSnapshot);
+    },
+    measureDownload: async (provider) =>
+      runtimeSnapshot.providers[provider].phase === "ready" ? MOCK_DOWNLOAD : { bytes: 0, versions: 0 },
+    removeDownload: async (provider) => {
+      if (!isManagedRuntimeProvider(provider)) throw new Error("GoAhead does not manage this provider's CLI.");
+      if (runtimeTransfers.has(provider)) throw new Error("Wait for the download to end.");
+      setRuntimeStatus(provider, { phase: "not-downloaded", progress: null, message: null, version: null });
       return clone(runtimeSnapshot);
     },
     onEvent: (listener) => {

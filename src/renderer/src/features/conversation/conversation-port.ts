@@ -1,28 +1,47 @@
 import type { DeleteSharedTableInput, OpenBotDesktopApi, SharedTable } from "@openbot/contracts/ipc";
 
-/**
- * What the conversation domain reaches in main: agent and direct message pages, sends, reads,
- * shared tables, and the browser seams a view takes when no runtime is injected.
- */
 export interface ConversationPort {
+  dynamicIsland: Pick<OpenBotDesktopApi["dynamicIsland"], "openBrowserTakeover">;
   agent: Pick<
     OpenBotDesktopApi["agent"],
     | "addProjectFolder"
+    | "addPreviewPage"
+    | "readAgentSessionSettings"
+    | "listAgentNotificationLevels"
+    | "askSideQuestion"
+    | "saveSkillSuggestion"
+    | "setAgentSessionSetting"
+    | "resetAgentSessionSetting"
+    | "onScopedEvent"
+    | "deleteConversationMessage"
     | "deleteTable"
     | "listMemories"
+    | "listPinnedMessages"
     | "listProjectFolders"
     | "listRoutines"
     | "listTables"
     | "markConversationRead"
+    | "markConversationUnread"
     | "readConversationPage"
+    | "releaseFilePreview"
     | "removeProjectFolder"
     | "renameProjectFolder"
     | "searchConversationMessages"
     | "sendMessage"
+    | "setMessagePinned"
+    | "withdrawFeedback"
   >;
   browser: Pick<
     OpenBotDesktopApi["browser"],
-    "capturePreview" | "onLiveViewEvent" | "sendLiveViewInput" | "startLiveView" | "stopLiveView"
+    | "capturePreview"
+    | "closeWindow"
+    | "finishLocalSignIn"
+    | "onLiveViewEvent"
+    | "onWindowEvent"
+    | "openLocalSignIn"
+    | "sendLiveViewInput"
+    | "startLiveView"
+    | "stopLiveView"
   >;
   servers: Pick<
     OpenBotDesktopApi["servers"],
@@ -35,14 +54,21 @@ export interface ConversationPort {
     | "setDirectTyping"
   >;
   storage: Pick<OpenBotDesktopApi["storage"], "openLocation">;
+  hostAdmin: Pick<OpenBotDesktopApi["hostAdmin"], "getAgentAccess">;
+  browserDock: Pick<OpenBotDesktopApi["browserDock"], "publishPresentation" | "onAction" | "onShown">;
 }
 
-/** Read on each call: tests and stories replace `window.openbot` per case. */
 export function conversationPort(): ConversationPort {
   return window.openbot;
 }
 
-/** The tables every agent shares. The web client reaches them on the host through the Team API. */
+export function releaseFilePreviewPage(pageUrl: string | undefined): void {
+  if (!pageUrl) return;
+  void conversationPort()
+    .agent.releaseFilePreview(pageUrl)
+    .catch(() => undefined);
+}
+
 export interface SharedTableCalls {
   listTables(): Promise<SharedTable[]>;
   deleteTable(input: DeleteSharedTableInput): Promise<void>;

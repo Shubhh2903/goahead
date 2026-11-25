@@ -1,47 +1,45 @@
-import type { AgentEvent, AgentSummary } from "@openbot/contracts/ipc";
+import type { AgentEvent, ClientAgentSummary } from "@openbot/contracts/ipc";
+import { teammateTurnCompleted } from "@openbot/team-client/agent-notifications";
+import { TASK_SOUND_CHOICES, type TaskSoundChoice } from "@openbot/ui/features/settings/app-settings";
+import { play, unlock } from "cuelume";
 
+const TASK_SOUND_STORAGE_KEY = "openbot:task-sound";
 const COMPLETION_SOUND_STORAGE_KEY = "openbot:completion-sound-enabled";
 const COMPLETION_SOUND_DURATION_SECONDS = 0.22;
 
 let completionAudioContext: AudioContext | undefined;
 
-type NotificationAgent = Pick<AgentSummary, "id" | "notifications">;
+type NotificationAgent = Pick<ClientAgentSummary, "id" | "notifications">;
 type PreferenceStorage = Pick<Storage, "getItem">;
 
-/** The choice for this page after the browser did not save it. It wins over an older saved value. */
-let unsavedPreference: boolean | undefined;
+let unsavedPreference: TaskSoundChoice | undefined;
 
-/**
- * The sound is on unless the user turned it off; it played before the switch was saved. Reading
- * `window.localStorage` throws when the browser blocks storage, so it is read inside the guard.
- */
-export function isCompletionSoundEnabled(storage?: PreferenceStorage): boolean {
+export function readTaskSound(storage?: PreferenceStorage): TaskSoundChoice {
   if (unsavedPreference !== undefined) return unsavedPreference;
   try {
-    return (storage ?? window.localStorage).getItem(COMPLETION_SOUND_STORAGE_KEY) !== "false";
+    const source = storage ?? window.localStorage;
+    if (source.getItem(COMPLETION_SOUND_STORAGE_KEY) === "false") return "off";
+    const saved = source.getItem(TASK_SOUND_STORAGE_KEY);
+    return TASK_SOUND_CHOICES.find((choice) => choice === saved && choice !== "off") ?? "classic";
   } catch {
-    return true;
+    return "classic";
   }
 }
 
-export function setCompletionSoundEnabled(enabled: boolean, storage?: Pick<Storage, "setItem">): void {
+export function setTaskSound(choice: TaskSoundChoice, storage?: Pick<Storage, "setItem">): void {
   try {
-    (storage ?? window.localStorage).setItem(COMPLETION_SOUND_STORAGE_KEY, String(enabled));
+    const target = storage ?? window.localStorage;
+    target.setItem(COMPLETION_SOUND_STORAGE_KEY, String(choice !== "off"));
+    target.setItem(TASK_SOUND_STORAGE_KEY, choice);
     unsavedPreference = undefined;
   } catch {
-    // Blocked or full storage keeps the switch for this page only.
-    unsavedPreference = enabled;
+    unsavedPreference = choice;
   }
 }
 
-export function shouldPlayCompletionSound(
-  event: AgentEvent,
-  agents: NotificationAgent[],
-  storage?: PreferenceStorage,
-): boolean {
-  // A quiet routine run posted nothing, so it has no reply to announce.
-  if (event.type !== "turn-completed" || event.status !== "completed" || event.quiet) return false;
-  if (!isCompletionSoundEnabled(storage)) return false;
+function shouldPlayCompletionSound(event: AgentEvent, agents: NotificationAgent[]): boolean {
+  if (event.type !== "turn-completed" || event.status !== "completed" || event.quiet || event.continues) return false;
+  if (teammateTurnCompleted(event)) return false;
   return agents.some((agent) => agent.id === event.agentId && agent.notifications);
 }
 
@@ -50,15 +48,17 @@ export function playCompletionSoundForAgentEvent(
   agents: NotificationAgent[],
   storage?: PreferenceStorage,
 ): void {
-  if (!shouldPlayCompletionSound(event, agents, storage)) return;
-  void playCompletionSound();
+  if (shouldPlayCompletionSound(event, agents)) playSoundChoice(readTaskSound(storage));
 }
 
-/**
- * Starts the audio context from a user action. Safari starts a context only from one, a turn can end
- * long after the last action, and iOS can interrupt a running context.
- */
+export function playSoundChoice(choice: TaskSoundChoice): void {
+  if (choice === "classic") void playClassicTone();
+  else if (choice !== "off") play("success", { theme: choice, force: true });
+}
+
 export function unlockCompletionSound(): void {
+  const choice = readTaskSound();
+  if (choice !== "off" && choice !== "classic") void unlock();
   try {
     completionAudioContext ??= new AudioContext();
     if (completionAudioContext.state !== "running") void completionAudioContext.resume().catch(() => undefined);
@@ -67,11 +67,35 @@ export function unlockCompletionSound(): void {
   }
 }
 
-async function playCompletionSound(): Promise<void> {
+let preparing = false;
+
+export function prepareCompletionSound(): void {
+  if (completionAudioContext || preparing || readTaskSound() !== "classic") return;
+  preparing = true;
+  requestIdleCallback(() => {
+    preparing = false;
+    try {
+      completionAudioContext ??= new AudioContext();
+    } catch {
+      completionAudioContext = undefined;
+    }
+  });
+}
+
+export async function appSoundContext(): Promise<AudioContext> {
   try {
     completionAudioContext ??= new AudioContext();
-    const context = completionAudioContext;
-    if (context.state === "suspended") await context.resume();
+    if (completionAudioContext.state === "suspended") await completionAudioContext.resume();
+    return completionAudioContext;
+  } catch (error) {
+    completionAudioContext = undefined;
+    throw error;
+  }
+}
+
+async function playClassicTone(): Promise<void> {
+  try {
+    const context = await appSoundContext();
 
     const startedAt = context.currentTime;
     const oscillator = context.createOscillator();

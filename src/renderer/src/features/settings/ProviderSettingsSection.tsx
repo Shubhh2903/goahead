@@ -1,16 +1,27 @@
-import type {
-  AgentProviderId,
-  AgentStatus,
-  CustomProviderRestart,
-  CustomProviderSummary,
-  ProviderApiKeyStatus,
-  ProviderRuntimeStatus,
-  SaveCustomProviderInput,
+import {
+  type AgentModelId,
+  type AgentProviderId,
+  type AgentStatus,
+  type AppSetupState,
+  agentProviderName,
+  CUSTOM_PROVIDER_HARNESSES,
+  type CustomProviderRestart,
+  type CustomProviderSummary,
+  customProviderOfModel,
+  DEFAULT_CUSTOM_PROVIDER_HARNESS,
+  isCustomProviderHarness,
+  type ManagedProviderId,
+  type ProviderApiKeyStatus,
+  type ProviderRuntimeDownload,
+  type ProviderRuntimeStatus,
+  type SaveCustomProviderInput,
+  savedCustomModelId,
+  type UpdateCustomProviderInput,
 } from "@openbot/contracts/ipc";
-import { agentProviderDescriptor } from "@openbot/contracts/ipc";
 import { Text } from "@openbot/ui";
-import { ProviderCodeLoginDialog } from "@openbot/ui/components/ProviderCodeLoginDialog";
-import { ProviderPicker } from "@openbot/ui/components/ProviderPicker";
+import type { ProviderAccountActions } from "@openbot/ui/components/provider-accounts";
+import { servesCustomProvider } from "@openbot/ui/components/provider-row";
+import type { AccountUsageProviderRow } from "@openbot/ui/features/account/account-usage-view";
 import {
   AcpRegistrySettings,
   type AcpRegistrySettingsApi,
@@ -20,8 +31,8 @@ import {
   type CustomAgentSettingsApi,
 } from "@openbot/ui/features/custom-providers/CustomAgentSettings";
 import { CustomProviderDialog } from "@openbot/ui/features/custom-providers/CustomProviderDialog";
-import { CustomProviderListDialog } from "@openbot/ui/features/custom-providers/CustomProviderListDialog";
 import { CustomProviderPresetDialog } from "@openbot/ui/features/custom-providers/CustomProviderPresetDialog";
+import { savedCustomProviderDraft } from "@openbot/ui/features/custom-providers/custom-provider-form";
 import { localServerProbes, presetSetupProvider } from "@openbot/ui/features/custom-providers/custom-provider-presets";
 import { DetectedProviderSetup } from "@openbot/ui/features/custom-providers/DetectedProviderSetup";
 import { DetectedProviders } from "@openbot/ui/features/custom-providers/DetectedProviders";
@@ -34,129 +45,286 @@ import {
   ProviderDetectionSettings,
   type ProviderDetectionSettingsValue,
 } from "@openbot/ui/features/custom-providers/ProviderDetectionSettings";
-import { OpenCodeKeyDialog, type ProviderKeyApi } from "@openbot/ui/features/settings/OpenCodeKeyDialog";
-import { createEffect, createSignal, Show, untrack } from "solid-js";
-import type { ProviderCodeLoginApi } from "../../components/provider-code-login-api";
-import { useI18n } from "../../i18n-context";
+import {
+  isKeyDialogProvider,
+  type KeyDialogProvider,
+  OpenCodeKeyDialog,
+  type ProviderKeyApi,
+} from "@openbot/ui/features/settings/OpenCodeKeyDialog";
+import {
+  type ProviderClaudeCompactWindow,
+  type ProviderClaudeUserSetup,
+  type ProviderDefaultChoice,
+  type ProviderEnvironmentControl,
+  type ProviderModelVisibilityControl,
+  type ProviderPromptCache,
+  type ProviderSettingsDetail,
+  ProviderSettingsPage,
+} from "@openbot/ui/features/settings/ProviderSettingsPage";
+import { useText } from "@openbot/ui/text";
+import type { JSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, createStore, Show, untrack } from "solid-js";
+import { ProviderSignInDialogs } from "../../components/ProviderSignInDialogs";
+import type { ProviderConnectionApi } from "../../components/provider-connection-api";
 import { createCustomProviderHostState } from "../custom-providers/custom-provider-host-state";
+import {
+  createProviderClaudeCompactWindow,
+  type ProviderClaudeCompactWindowSource,
+} from "./provider-claude-compact-window";
+import { createProviderClaudeUserSetup, type ProviderClaudeUserSetupSource } from "./provider-claude-user-setup";
+import { createProviderEnvironment, type ProviderEnvironmentSource } from "./provider-environment";
+import { createHostDefaultProvider, type HostDefaultProviderSource } from "./provider-host-default";
+import { createProviderModelVisibility, type ProviderModelVisibilitySource } from "./provider-model-visibility";
+import { createProviderPromptCache, type ProviderPromptCacheSource } from "./provider-prompt-cache";
 import { createSettingsGeneralStore, type SettingsGeneralStore } from "./stores/general-store";
 
+interface DefaultProviderSettings extends Pick<AppSetupState, "preferredProvider" | "preferredModel"> {
+  save: (provider: AgentProviderId, model?: AgentModelId | null) => Promise<void>;
+}
+
 interface ProviderSettingsSectionProps {
+  defaultProvider?: DefaultProviderSettings | undefined;
   store: SettingsGeneralStore;
-  /** The dialog element the Select popovers portal into, captured when the section was created. */
   selectMount: HTMLElement | undefined;
   onDownloadProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
   onCancelProviderDownload?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
   onUpdateProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
   onRestartProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
   onCancelProviderRestart?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
+  onChooseInstalledCli?: ((provider: ManagedProviderId, installed: boolean) => void | Promise<void>) | undefined;
   onSetProviderOn?: ((provider: AgentProviderId, on: boolean) => void | Promise<void>) | undefined;
+  onMeasureProviderDownload?: ((provider: AgentProviderId) => Promise<ProviderRuntimeDownload>) | undefined;
+  onRemoveProviderDownload?: ((provider: AgentProviderId) => Promise<void>) | undefined;
   onInstallProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
-  onConnectProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
-  /**
-   * Accepts a described endpoint. Without it the section offers no custom provider at all, which is
-   * how a remote server hides the whole feature: these endpoints merge into the OpenCode process on
-   * this computer.
-   */
+  onCancelProviderSignIn?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
   onAddCustomProvider?: ((value: SaveCustomProviderInput) => Promise<CustomProviderRestart>) | undefined;
-  /** The endpoints already saved, without their keys. Empty until the first list arrives. */
   customProviders?: readonly CustomProviderSummary[] | undefined;
-  /** Without it the rows are listed but not removable, which is what a story without the callback shows. */
   onDeleteCustomProvider?: ((id: string) => Promise<CustomProviderRestart>) | undefined;
+  onUpdateCustomProvider?: ((input: UpdateCustomProviderInput) => Promise<CustomProviderRestart>) | undefined;
+  localEndpoints?: boolean | undefined;
+  customProviderHarnessChoice?: boolean | undefined;
   onSignInProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
-  /** Opens the code sign-in. Absent in the stories, where there is no provider to answer it. */
-  onSignInWithCodeProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
-  /** The providers the code sign-in reaches. Without it, the providers whose descriptor offers one. */
-  codeSignInProviders?: readonly AgentProviderId[] | undefined;
-  /** Local model servers and ACP agents that the host found. Without it the section shows no such list. */
+  accountActions?: ProviderAccountActions | undefined;
+  connection?: ProviderConnectionApi | undefined;
   providerDetection?: ProviderDetection | undefined;
   detectedProviderApi?: DetectedProviderApi | undefined;
   takenAgentIds?: readonly string[] | undefined;
-  /** The user's own ACP agents. This computer only, so a joined server's section never has it. */
   customAgents?: CustomAgentSettingsApi | undefined;
-  /** The ACP registry. This computer only, like `customAgents`. */
   acpRegistry?: AcpRegistrySettingsApi | undefined;
+  detectionSettings?: JSX.Element;
+  usage?: readonly AccountUsageProviderRow[] | undefined;
+  onDetailChange?: ((detail: ProviderSettingsDetail | null) => void) | undefined;
+  promptCache?: ProviderPromptCache | undefined;
+  claudeUserSetup?: ProviderClaudeUserSetup | undefined;
+  claudeCompactWindow?: ProviderClaudeCompactWindow | undefined;
+  environment?: ((provider: AgentProviderId) => ProviderEnvironmentControl | undefined) | undefined;
+  modelVisibility?: ((provider: AgentProviderId) => ProviderModelVisibilityControl) | undefined;
 }
 
-/** The provider list of the computer the agents run on, with its custom endpoint dialogs. */
 function ProviderSettingsSection(props: ProviderSettingsSectionProps) {
-  const i18n = useI18n();
+  const i18n = useText();
   const customProviders = () => props.customProviders ?? [];
-  /**
-   * Which row holds the check here. Nothing stores it: the whole Settings picker is local state
-   * today, so this row matches its neighbours and no more. Do not wire it to a saved default without
-   * first deciding what a saved default means for the four rows beside it.
-   */
-  const [customSelected, setCustomSelected] = createSignal(false);
-  /**
-   * With a detection API, Add first asks what to add: a local server, any compatible endpoint, or
-   * an ACP agent. Without one, as on a joined server's host, Add opens the endpoint form at once.
-   */
+  const [saving, setSaving] = createStore<{
+    pending: { provider: AgentProviderId; custom: boolean } | null;
+    error: string;
+  }>({ pending: null, error: "" });
+  const [downloadError, setDownloadError] = createSignal("");
+  const defaultCustomModel = () => {
+    const choice = props.defaultProvider;
+    const endpoint = customProviderOfModel(choice?.preferredModel, customProviders());
+    return endpoint && choice?.preferredProvider === harnessOf(endpoint) ? (choice.preferredModel ?? null) : null;
+  };
+  const harnesses = () =>
+    props.localEndpoints || props.customProviderHarnessChoice
+      ? CUSTOM_PROVIDER_HARNESSES.map((id) => {
+          const option = props.store.providerOptions().find((item) => item.id === id);
+          return { id, ready: servesCustomProvider(option), runtime: option?.runtimeStatus };
+        })
+      : undefined;
+  const downloadHarness = () =>
+    props.onDownloadProvider ? (id: AgentProviderId) => void downloadProvider(id) : undefined;
+  const customProvider = (): AgentProviderId => {
+    const model = defaultCustomModel() ?? firstEndpointModel();
+    return harnessOf(customProviderOfModel(model, customProviders()));
+  };
+  const firstEndpointModel = () => {
+    const endpoint = customProviders().find((item) => item.models.length > 0);
+    const firstModel = endpoint?.models[0];
+    return endpoint && firstModel ? savedCustomModelId(endpoint.id, endpoint.harness, firstModel.id) : null;
+  };
+
+  async function selectProvider(
+    provider: AgentProviderId,
+    custom = false,
+    selectedModel?: AgentModelId | null,
+  ): Promise<void> {
+    if (saving.pending) return;
+    const choice = props.defaultProvider;
+    if (!choice) return;
+    const model = custom ? (defaultCustomModel() ?? firstEndpointModel()) : defaultCustomModel() ? null : undefined;
+    setSaving(() => ({ pending: { provider, custom }, error: "" }));
+    try {
+      await choice.save(provider, selectedModel === undefined ? model : selectedModel);
+    } catch (error) {
+      setSaving((state) => {
+        state.error = i18n.errorMessage(error, i18n.t("onboarding.setup.saveFailed"));
+      });
+    } finally {
+      setSaving((state) => {
+        state.pending = null;
+      });
+    }
+  }
+  async function downloadProvider(provider: AgentProviderId): Promise<void> {
+    const download = props.onDownloadProvider;
+    if (!download) return;
+    setDownloadError("");
+    try {
+      await download(provider);
+    } catch (error) {
+      setDownloadError(
+        i18n.errorMessage(error, i18n.t("onboarding.error.download", { provider: agentProviderName(provider) })),
+      );
+    }
+  }
+  async function selectSavedEndpoint(value: SaveCustomProviderInput): Promise<void> {
+    const firstModel = value.models[0];
+    if (props.defaultProvider && firstModel) {
+      await selectProvider(
+        value.harness ?? DEFAULT_CUSTOM_PROVIDER_HARNESS,
+        true,
+        savedCustomModelId(value.id, value.harness, firstModel.id),
+      );
+    }
+  }
+  const detectedApi = createMemo((): DetectedProviderApi | undefined => {
+    const api = props.detectedProviderApi;
+    if (!api || !props.defaultProvider) return api;
+    return {
+      ...api,
+      save: async (provider, value) => {
+        const restart = await api.save(provider, value);
+        if (value.kind === "models") await selectSavedEndpoint(value.value);
+        return restart;
+      },
+    };
+  });
   const [choosing, setChoosing] = createSignal(false);
   const [presetFor, setPresetFor] = createSignal<DetectedProvider | null>(null);
   const host = createCustomProviderHostState({
     onAdd: (value) => props.onAddCustomProvider?.(value),
     onDelete: (id) => props.onDeleteCustomProvider?.(id),
-    onRemoved: () => {
-      if (customProviders().length === 0) {
-        setCustomSelected(false);
+    onUpdate: (input) => props.onUpdateCustomProvider?.(input),
+    discoverModels: () => props.detectedProviderApi?.discoverModels,
+    onSaved: (value) => void selectSavedEndpoint(value),
+    onRemoved: (id) => {
+      const provider = props.defaultProvider?.preferredProvider ?? null;
+      if (isCustomProviderHarness(provider) && props.defaultProvider?.preferredModel?.startsWith(`${id}/`)) {
+        void selectProvider(provider, false, null);
+      }
+    },
+    onUpdated: (input) => {
+      const provider = props.defaultProvider?.preferredProvider ?? null;
+      if (!isCustomProviderHarness(provider)) return;
+      const model = props.defaultProvider?.preferredModel;
+      if (!model?.startsWith(`${input.id}/`)) return;
+      const kept = input.models.find((item) => model === savedCustomModelId(input.id, provider, item.id));
+      if (!kept) {
+        void selectProvider(provider, false, null);
+      } else if (input.harness && input.harness !== provider) {
+        void selectProvider(input.harness, true, savedCustomModelId(input.id, input.harness, kept.id));
       }
     },
   });
+  const editing = () => host.state.editing;
+  const editDraft = () => {
+    const provider = editing();
+    return provider ? savedCustomProviderDraft(provider, i18n.format) : undefined;
+  };
 
   return (
-    // The tab title already names this list, so it has no heading of its own.
     <div class="settings-provider-section">
-      <ProviderPicker
-        value={props.store.selectedProvider()}
+      <ProviderSettingsPage
         options={props.store.providerOptions()}
-        ariaLabel={i18n.t("settings.providers.title")}
-        embedded
-        allowUnavailableSelection
+        defaultProvider={
+          props.defaultProvider
+            ? {
+                get value(): ProviderDefaultChoice | null {
+                  if (saving.pending) return saving.pending.custom ? "custom" : saving.pending.provider;
+                  return defaultCustomModel() ? "custom" : (props.defaultProvider?.preferredProvider ?? null);
+                },
+                get pending() {
+                  return Boolean(saving.pending);
+                },
+                onChange: (choice: ProviderDefaultChoice) =>
+                  void (choice === "custom" ? selectProvider(customProvider(), true) : selectProvider(choice)),
+              }
+            : undefined
+        }
+        disabled={Boolean(saving.pending)}
+        usage={props.usage}
         customProviders={customProviders()}
-        customSelected={customSelected()}
-        onChange={(provider) => {
-          setCustomSelected(false);
-          props.store.setSelectedProvider(provider);
-        }}
-        onDownloadProvider={props.onDownloadProvider}
+        customProviderHarnesses={Boolean(harnesses())}
+        onDownloadProvider={props.onDownloadProvider ? downloadProvider : undefined}
         onCancelProviderDownload={props.onCancelProviderDownload}
         onUpdateProvider={props.onUpdateProvider}
         onRestartProvider={props.onRestartProvider}
         onCancelProviderRestart={props.onCancelProviderRestart}
+        onChooseInstalledCli={props.onChooseInstalledCli}
         onSetProviderOn={props.onSetProviderOn}
-        onConnectProvider={props.onConnectProvider}
+        onMeasureProviderDownload={props.onMeasureProviderDownload}
+        onRemoveProviderDownload={props.onRemoveProviderDownload}
+        connection={props.connection}
+        onCancelProviderSignIn={props.onCancelProviderSignIn}
         onInstallProvider={props.onInstallProvider}
         onAddCustomProvider={
           props.onAddCustomProvider ? (props.detectedProviderApi ? () => setChoosing(true) : host.openForm) : undefined
         }
-        onSelectCustomProvider={props.onAddCustomProvider ? () => setCustomSelected(true) : undefined}
-        onManageCustomProviders={props.onAddCustomProvider ? host.openList : undefined}
+        onEditCustomProvider={props.onUpdateCustomProvider ? host.openEdit : undefined}
+        onRemoveCustomProvider={props.onDeleteCustomProvider ? (provider) => void host.remove(provider) : undefined}
+        removingCustomProvider={host.state.removing}
         onSignInProvider={props.onSignInProvider}
-        onSignInWithCodeProvider={props.onSignInWithCodeProvider}
-        codeSignInProviders={props.codeSignInProviders}
+        accountActions={props.accountActions}
         menuMount={props.selectMount}
-        detected={
-          <Show when={props.providerDetection}>
-            {(detection) => (
-              <Show when={props.detectedProviderApi}>
-                {(api) => (
-                  <DetectedProviders
-                    detection={detection()}
-                    api={api()}
-                    takenProviderIds={customProviders().map((provider) => provider.id)}
-                    takenAgentIds={props.takenAgentIds}
-                    onSaved={host.showSaved}
-                  />
-                )}
-              </Show>
-            )}
-          </Show>
+        onDetailChange={props.onDetailChange}
+        promptCache={props.promptCache}
+        claudeUserSetup={props.claudeUserSetup}
+        claudeCompactWindow={props.claudeCompactWindow}
+        environment={props.environment}
+        modelVisibility={props.modelVisibility}
+        footer={
+          <>
+            <Show when={props.providerDetection}>
+              {(detection) => (
+                <Show when={detectedApi()}>
+                  {(api) => (
+                    <DetectedProviders
+                      detection={detection()}
+                      onServer={!props.localEndpoints}
+                      api={api()}
+                      takenProviderIds={customProviders().map((provider) => provider.id)}
+                      takenAgentIds={props.takenAgentIds}
+                      onSaved={host.showSaved}
+                    />
+                  )}
+                </Show>
+              )}
+            </Show>
+            <Show when={props.acpRegistry} keyed>
+              {(api) => <AcpRegistrySettings api={api} />}
+            </Show>
+            <Show when={props.customAgents}>{(api) => <CustomAgentSettings api={api()} />}</Show>
+            {props.detectionSettings}
+          </>
         }
       />
-      {/* The outcome is shown where the user is looking. While the list is open the section behind
-        it is hidden from assistive technology, so a status left here could not be read. */}
-      <Show when={host.state.manageOpen ? null : host.state.note}>
+      <Show when={saving.error}>
+        <Text role="alert">{saving.error}</Text>
+      </Show>
+      <Show when={downloadError()}>
+        <Text role="alert">{downloadError()}</Text>
+      </Show>
+      <Show when={host.state.note}>
         {(message) => (
           <Text tone="muted" variant="caption" role="status">
             {message()}
@@ -166,22 +334,23 @@ function ProviderSettingsSection(props: ProviderSettingsSectionProps) {
       <Show when={props.onAddCustomProvider}>
         <CustomProviderDialog
           open={host.state.open}
+          draft={editDraft()}
+          providerIdLocked={Boolean(editing())}
+          apiKeyKept={Boolean(editing()?.hasApiKey)}
+          contextWindows={Boolean(props.localEndpoints)}
+          harnesses={harnesses()}
+          onDownloadHarness={downloadHarness()}
+          harnessError={downloadError()}
+          discovery={host.discovery()}
+          onDiscoverModels={host.discover()}
           busy={host.state.saving}
           submitError={host.state.submitError}
           takenProviderIds={customProviders().map((provider) => provider.id)}
           onSubmit={(value) => void host.submit(value)}
           onCancel={host.closeForm}
         />
-        <CustomProviderListDialog
-          open={host.state.manageOpen}
-          providers={customProviders()}
-          removing={host.state.removing}
-          note={host.state.note}
-          onDelete={props.onDeleteCustomProvider ? (provider) => void host.remove(provider) : undefined}
-          onClose={host.closeList}
-        />
       </Show>
-      <Show when={props.detectedProviderApi}>
+      <Show when={detectedApi()}>
         {(api) => (
           <>
             <CustomProviderPresetDialog
@@ -196,63 +365,86 @@ function ProviderSettingsSection(props: ProviderSettingsSectionProps) {
             <DetectedProviderSetup
               provider={presetFor()}
               api={api()}
+              host={!props.localEndpoints}
               takenProviderIds={customProviders().map((provider) => provider.id)}
               takenAgentIds={props.takenAgentIds}
+              harnesses={harnesses()}
+              onDownloadHarness={downloadHarness()}
+              harnessError={downloadError()}
               onClose={() => setPresetFor(null)}
               onSaved={host.showSaved}
             />
           </>
         )}
       </Show>
-      <Show when={props.acpRegistry} keyed>
-        {(api) => <AcpRegistrySettings api={api} />}
-      </Show>
-      <Show when={props.customAgents}>{(api) => <CustomAgentSettings api={api()} />}</Show>
     </div>
   );
 }
 
-/**
- * Whether the OpenCode key dialog is open, and whether the key is saved, for the row's badge.
- *
- * The badge is read through the key API like the dialog does, on open and after the dialog closes
- * with a save or a removal. Absent until the first read, and on a read failure, so the row shows no
- * key badge rather than a wrong one.
- */
-function createProviderKeyState(props: { readonly open: boolean; readonly providerKeys?: ProviderKeyApi | undefined }) {
+function createProviderKeyState(props: {
+  readonly open: boolean;
+  readonly providerKeys?: ProviderKeyApi | undefined;
+  readonly codexState?: string | undefined;
+}) {
   const [keyDialogOpen, setKeyDialogOpen] = createSignal(false);
-  const [keyProvider, setKeyProvider] = createSignal<"opencode" | "muse">("opencode");
+  const [keyProvider, setKeyProvider] = createSignal<KeyDialogProvider>("opencode");
   const [openCodeKeyStatus, setOpenCodeKeyStatus] = createSignal<ProviderApiKeyStatus | undefined>(undefined);
+  const [claudeKeyStatus, setClaudeKeyStatus] = createSignal<ProviderApiKeyStatus | undefined>(undefined);
+  const [codexKeyStatus, setCodexKeyStatus] = createSignal<ProviderApiKeyStatus | undefined>(undefined);
+  async function readKeyStatus(keys: ProviderKeyApi, provider: AgentProviderId) {
+    try {
+      return (await keys.getProviderApiKeyState(provider)).status;
+    } catch {
+      return undefined;
+    }
+  }
   async function refreshOpenCodeKeyStatus(): Promise<void> {
     const keys = props.providerKeys;
     if (!keys) return;
-    let status: ProviderApiKeyStatus | undefined;
-    try {
-      status = (await keys.getProviderApiKeyState("opencode")).status;
-    } catch {
-      status = undefined;
-    }
-    // An answer from a source the modal has since left belongs to the other computer.
-    if (keys === props.providerKeys) setOpenCodeKeyStatus(status);
+    const [openCode, claude, codex] = await Promise.all([
+      readKeyStatus(keys, "opencode"),
+      keys.readsClaudeKey ? readKeyStatus(keys, "claude") : undefined,
+      keys.readsCodexKey && keys.onHost ? readKeyStatus(keys, "codex") : undefined,
+    ]);
+    if (keys !== props.providerKeys) return;
+    setOpenCodeKeyStatus(openCode);
+    setClaudeKeyStatus(claude);
+    setCodexKeyStatus(codex);
   }
-  // The badge has to answer on first paint: the key state arrives after the rows, so an open
-  // without a read would show no badge until something else re-renders the list. The keys can move
-  // to a joined server's host while the modal is open, when that host's admin role arrives, so a
-  // new source is read again rather than keeping the other computer's answer.
   createEffect(
     () => (props.open ? props.providerKeys : undefined),
     (keys) => {
       setOpenCodeKeyStatus(undefined);
+      setClaudeKeyStatus(undefined);
+      setCodexKeyStatus(undefined);
       if (keys) void untrack(refreshOpenCodeKeyStatus);
+    },
+  );
+  let codexState: string | undefined;
+  createEffect(
+    () => props.codexState,
+    (state) => {
+      const previous = codexState;
+      codexState = state;
+      const keys = untrack(() => props.providerKeys);
+      if (previous === undefined || state === previous || !keys?.readsCodexKey || !keys.onHost) return;
+      void readKeyStatus(keys, "codex").then((status) => {
+        if (keys === props.providerKeys) setCodexKeyStatus(status);
+      });
     },
   );
   return {
     keyDialogOpen,
     keyProvider,
     openCodeKeyStatus,
-    /** OpenCode and Muse take a pasted key, so only their rows are served. */
+    claudeKeyStatus,
+    codexKeyStatus,
     openKeyDialog(provider: AgentProviderId): void {
-      if (provider === "opencode" || provider === "muse") {
+      if (
+        isKeyDialogProvider(provider) &&
+        (provider !== "claude" || props.providerKeys?.readsClaudeKey) &&
+        (provider !== "codex" || props.providerKeys?.readsCodexKey)
+      ) {
         setKeyProvider(provider);
         setKeyDialogOpen(true);
       }
@@ -266,12 +458,10 @@ function createProviderKeyState(props: { readonly open: boolean; readonly provid
 
 type ProviderKeyState = ReturnType<typeof createProviderKeyState>;
 
-/** The key and code sign-in dialogs the section opens. Both portal over the dialog they open from. */
 function ProviderSettingsDialogs(props: {
   keys: ProviderKeyState;
   providerKeys?: ProviderKeyApi | undefined;
-  codeLogin?: ProviderCodeLoginApi | undefined;
-  onConnectProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
+  connection?: ProviderConnectionApi | undefined;
 }) {
   return (
     <>
@@ -282,55 +472,45 @@ function ProviderSettingsDialogs(props: {
             provider={props.keys.keyProvider()}
             onClose={props.keys.closeKeyDialog}
             onReconnect={
-              props.onConnectProvider ? () => props.onConnectProvider?.(props.keys.keyProvider()) : undefined
+              props.connection?.connectKind(props.keys.keyProvider()) === "browser"
+                ? () => props.connection?.connect(props.keys.keyProvider())
+                : undefined
             }
           />
         )}
       </Show>
-      <Show when={props.codeLogin?.provider() ? props.codeLogin : undefined}>
-        {(api) => (
-          <ProviderCodeLoginDialog
-            open={true}
-            providerName={agentProviderDescriptor(api().provider() ?? "codex").displayName}
-            state={api().state()}
-            onOpenVerificationUrl={api().openVerificationUrl}
-            onCancel={api().cancel}
-            onSubmitCode={api().submit}
-          />
-        )}
-      </Show>
+      <ProviderSignInDialogs api={props.connection} />
     </>
   );
 }
 
-/** The providers of one server's computer, as its server settings section takes them. */
 export interface HostProviderSettings {
+  defaultProvider?: DefaultProviderSettings | undefined;
   agentStatus: AgentStatus;
   providerRuntimeStatuses?: Partial<Record<AgentProviderId, ProviderRuntimeStatus>> | undefined;
   providerAvailableVersions?: Partial<Record<AgentProviderId, string | null>> | undefined;
   onDownloadProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
   onCancelProviderDownload?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
   onUpdateProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
-  /** The provider restart is of this computer, so only its section has it. */
   onRestartProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
   onCancelProviderRestart?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
-  /**
-   * The providers the user turned off, and the switch that turns one on or off. Only the stories
-   * give them until OpenBot saves the setting (issue #1261).
-   */
+  onChooseInstalledCli?: ((provider: ManagedProviderId, installed: boolean) => void | Promise<void>) | undefined;
   offProviders?: readonly AgentProviderId[] | undefined;
-  /** The names of the agents that use each provider. A provider with one stays on. */
   providerUsers?: Partial<Record<AgentProviderId, readonly string[]>> | undefined;
+  providerAccountUsers?: Partial<Record<AgentProviderId, Readonly<Record<string, readonly string[]>>>> | undefined;
+  accountActions?: ProviderAccountActions | undefined;
   onSetProviderOn?: ((provider: AgentProviderId, on: boolean) => void | Promise<void>) | undefined;
+  onMeasureProviderDownload?: ((provider: AgentProviderId) => Promise<ProviderRuntimeDownload>) | undefined;
+  onRemoveProviderDownload?: ((provider: AgentProviderId) => Promise<void>) | undefined;
   customProviders?: readonly CustomProviderSummary[] | undefined;
   onAddCustomProvider?: ((value: SaveCustomProviderInput) => Promise<CustomProviderRestart>) | undefined;
   onDeleteCustomProvider?: ((id: string) => Promise<CustomProviderRestart>) | undefined;
+  onUpdateCustomProvider?: ((input: UpdateCustomProviderInput) => Promise<CustomProviderRestart>) | undefined;
+  customProviderHarnessChoice?: boolean | undefined;
   providerKeys?: ProviderKeyApi | undefined;
-  codeLogin?: ProviderCodeLoginApi | undefined;
-  /** The browser sign-in and the install guide open on this computer, so only its section has them. */
-  onConnectProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
+  connection?: ProviderConnectionApi | undefined;
+  onCancelProviderSignIn?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
   onInstallProvider?: ((provider: AgentProviderId) => void | Promise<void>) | undefined;
-  /** The scan is of this computer, so a joined server's section shows no found list. */
   providerDetection?: ProviderDetection | undefined;
   detectedProviderApi?: DetectedProviderApi | undefined;
   takenAgentIds?: readonly string[] | undefined;
@@ -339,21 +519,51 @@ export interface HostProviderSettings {
   detectionSettings?: ProviderDetectionSettingsValue | undefined;
   onDetectionSettingsChange?: ((value: ProviderDetectionSettingsValue) => void) | undefined;
   detectionSettingsError?: string | null | undefined;
-  /** Called each time the section is shown, for the scan of this computer. */
   onShown?: (() => void) | undefined;
+  usage?: readonly AccountUsageProviderRow[] | undefined;
 }
 
-/**
- * The whole Providers section for a server: its list, and the dialogs it opens. Without `hostName`
- * the providers are this computer's.
- */
 export function HostProviderSettingsPanel(
-  props: HostProviderSettings & { hostName?: string | undefined; selectMount: HTMLElement | undefined },
+  props: HostProviderSettings & {
+    hostName?: string | undefined;
+    selectMount: HTMLElement | undefined;
+    onDetailChange?: ((detail: ProviderSettingsDetail | null) => void) | undefined;
+    promptCache?: ProviderPromptCacheSource | undefined;
+    claudeUserSetup?: ProviderClaudeUserSetupSource | undefined;
+    claudeCompactWindow?: ProviderClaudeCompactWindowSource | undefined;
+    providerEnvironment?: ProviderEnvironmentSource | undefined;
+    modelVisibility?: ProviderModelVisibilitySource | undefined;
+    hostDefaultProvider?: HostDefaultProviderSource | undefined;
+  },
 ) {
+  const hostDefaultProvider = createHostDefaultProvider(() => props.hostDefaultProvider);
+  const promptCache = createProviderPromptCache(
+    () => props.promptCache,
+    () => props.agentStatus,
+  );
+  const modelVisibility = createProviderModelVisibility(
+    () => props.modelVisibility,
+    () => props.agentStatus,
+  );
+  const claudeUserSetup = createProviderClaudeUserSetup(
+    () => props.claudeUserSetup,
+    () => props.agentStatus,
+  );
+  const claudeCompactWindow = createProviderClaudeCompactWindow(
+    () => props.claudeCompactWindow,
+    () => props.agentStatus,
+  );
+  const environment = createProviderEnvironment(
+    () => props.providerEnvironment,
+    () => props.agentStatus,
+  );
   const keys = createProviderKeyState({
     open: true,
     get providerKeys() {
       return props.providerKeys;
+    },
+    get codexState() {
+      return props.agentStatus?.providers?.find((provider) => provider.id === "codex")?.state;
     },
   });
   const store = createSettingsGeneralStore({
@@ -367,6 +577,8 @@ export function HostProviderSettingsPanel(
       return props.providerAvailableVersions;
     },
     openCodeKeyStatus: keys.openCodeKeyStatus,
+    claudeKeyStatus: keys.claudeKeyStatus,
+    codexKeyStatus: keys.codexKeyStatus,
     get providerHostName() {
       return props.hostName;
     },
@@ -376,10 +588,14 @@ export function HostProviderSettingsPanel(
     get providerUsers() {
       return props.providerUsers;
     },
+    get providerAccountUsers() {
+      return props.providerAccountUsers;
+    },
   });
   return (
     <>
       <ProviderSettingsSection
+        defaultProvider={props.defaultProvider ?? hostDefaultProvider()}
         store={store}
         selectMount={props.selectMount}
         onDownloadProvider={props.onDownloadProvider}
@@ -387,37 +603,51 @@ export function HostProviderSettingsPanel(
         onUpdateProvider={props.onUpdateProvider}
         onRestartProvider={props.onRestartProvider}
         onCancelProviderRestart={props.onCancelProviderRestart}
+        onChooseInstalledCli={props.onChooseInstalledCli}
         onSetProviderOn={props.onSetProviderOn}
-        onConnectProvider={props.onConnectProvider}
+        onMeasureProviderDownload={props.onMeasureProviderDownload}
+        onRemoveProviderDownload={props.onRemoveProviderDownload}
+        connection={props.connection}
+        onCancelProviderSignIn={props.onCancelProviderSignIn}
         onInstallProvider={props.onInstallProvider}
         onAddCustomProvider={props.onAddCustomProvider}
         customProviders={props.customProviders}
         onDeleteCustomProvider={props.onDeleteCustomProvider}
-        // With detection off there is no list, not an empty one.
+        onUpdateCustomProvider={props.onUpdateCustomProvider}
+        localEndpoints={props.hostName === undefined}
+        customProviderHarnessChoice={props.customProviderHarnessChoice}
+        accountActions={props.accountActions}
         providerDetection={props.detectionSettings?.enabled === false ? undefined : props.providerDetection}
         detectedProviderApi={props.detectedProviderApi}
         takenAgentIds={props.takenAgentIds}
         customAgents={props.customAgents}
         acpRegistry={props.acpRegistry}
         onSignInProvider={props.providerKeys ? keys.openKeyDialog : undefined}
-        onSignInWithCodeProvider={props.codeLogin?.start}
-        codeSignInProviders={props.codeLogin?.providers()}
+        usage={props.usage}
+        onDetailChange={props.onDetailChange}
+        promptCache={promptCache()}
+        claudeUserSetup={claudeUserSetup()}
+        claudeCompactWindow={claudeCompactWindow()}
+        environment={environment()}
+        modelVisibility={modelVisibility()}
+        detectionSettings={
+          <Show when={props.detectionSettings}>
+            {(value) => (
+              <ProviderDetectionSettings
+                value={value()}
+                error={props.detectionSettingsError}
+                onServer={props.hostName !== undefined}
+                onChange={(next) => props.onDetectionSettingsChange?.(next)}
+              />
+            )}
+          </Show>
+        }
       />
-      <Show when={props.detectionSettings}>
-        {(value) => (
-          <ProviderDetectionSettings
-            value={value()}
-            error={props.detectionSettingsError}
-            onChange={(next) => props.onDetectionSettingsChange?.(next)}
-          />
-        )}
-      </Show>
-      <ProviderSettingsDialogs
-        keys={keys}
-        providerKeys={props.providerKeys}
-        codeLogin={props.codeLogin}
-        onConnectProvider={props.onConnectProvider}
-      />
+      <ProviderSettingsDialogs keys={keys} providerKeys={props.providerKeys} connection={props.connection} />
     </>
   );
+}
+
+function harnessOf(endpoint: CustomProviderSummary | undefined): AgentProviderId {
+  return endpoint?.harness ?? DEFAULT_CUSTOM_PROVIDER_HARNESS;
 }

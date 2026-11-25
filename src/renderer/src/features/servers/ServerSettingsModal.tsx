@@ -3,13 +3,15 @@ import type {
   HostedSitesDesktopApi,
   HostStatus,
   InviteSummary,
-  ServerNotificationLevel,
+  ServerAppearance,
   ServerSummary,
   TeamInviteSummary,
   TeamPresenceMember,
   UpdateTeamMemberInput,
 } from "@openbot/contracts/ipc";
+import { CRM_CAPABILITY } from "@openbot/contracts/team-protocol/crm-v1";
 import type { AppTextKey } from "@openbot/i18n";
+import { classifyFailure } from "@openbot/telemetry";
 import {
   Alert,
   AlertActions,
@@ -17,57 +19,101 @@ import {
   AlertDescription,
   AlertIcon,
   AlertTitle,
-  Blocks,
+  AppWindow,
+  ArrowLeftRight,
+  Bot,
+  Brain,
   Button,
   CalendarClock,
-  ChevronRight,
   Download,
+  FlaskConical,
   Globe2,
   HardDrive,
+  History,
+  ItemGroup,
+  KeyRound,
   Monitor,
   Plug,
   RefreshCw,
   Settings,
+  SettingsSection,
   ShieldCheck,
+  Smile,
   Sparkles,
+  Store,
   Tabs,
   Text,
   UsersRound,
 } from "@openbot/ui";
 import type { AgentProfile } from "@openbot/ui/data";
-import type { BitwardenConnectorPanelProps } from "@openbot/ui/features/settings/BitwardenConnectorPanel";
-import { SaveBarDock, SettingsDialogShell } from "@openbot/ui/features/settings/SettingsDialogShell";
+import type { LicenseCalls } from "@openbot/ui/features/billing/license-store";
+import type { ProviderSettingsDetail } from "@openbot/ui/features/settings/ProviderSettingsPage";
+import {
+  SaveBarDock,
+  SettingsDialogShell,
+  SettingsNavGroupLabel,
+  type SettingsPagePlacement,
+} from "@openbot/ui/features/settings/SettingsDialogShell";
 import { SettingsHostedSitesTab } from "@openbot/ui/features/settings/SettingsHostedSitesTab";
 import {
   createSettingsHostedSitesStore,
   type HostedSiteDeleteResult,
 } from "@openbot/ui/features/settings/stores/hosted-sites-store";
 import { useText } from "@openbot/ui/text";
-import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
 import { actionToast } from "../../action-toast";
+import { type ServerBrowserProfilesOptions, ServerBrowserProfilesPanel } from "../browser/ServerBrowserProfilesPanel";
 import { ConnectorsPanel } from "../connectors/ConnectorsPanel";
-import type { GitHubConnectorController } from "../connectors/github-connector";
 import type { GoogleConnectorController } from "../connectors/google-connector";
-import type { OnePasswordConnectorController } from "../connectors/onepassword-connector";
 import type { SlackConnectorController } from "../connectors/slack-connector";
+import type { CrmHost } from "../crm/crm-port";
 import { type ServerStorageOptions, ServerStoragePanel } from "../files/ServerStoragePanel";
+import { hostedPlanStorageGb } from "../files/storage-usage";
 import { type HostProviderSettings, HostProviderSettingsPanel } from "../settings/ProviderSettingsSection";
-import type { McpServerConfig, McpTestResult } from "./mcp-servers";
+import type {
+  HostClaudeCompactWindowOptions,
+  ProviderClaudeCompactWindowSource,
+} from "../settings/provider-claude-compact-window";
+import type { HostClaudeUserSetupOptions, ProviderClaudeUserSetupSource } from "../settings/provider-claude-user-setup";
+import type { HostProviderEnvironmentOptions, ProviderEnvironmentSource } from "../settings/provider-environment";
+import type { HostDefaultProviderOptions, HostDefaultProviderSource } from "../settings/provider-host-default";
+import type { HostModelVisibilityOptions, ProviderModelVisibilitySource } from "../settings/provider-model-visibility";
+import type { HostPromptCacheTtlOptions, ProviderPromptCacheSource } from "../settings/provider-prompt-cache";
+import { type ServerVaultOptions, ServerVaultPanel } from "../vault/ServerVaultPanel";
+import { createServerAgentsSection, type ServerAgentDefaultsOptions } from "./ServerAgentsSection";
+import { createServerAuditSection, type ServerAuditOptions } from "./ServerAuditSection";
+import type { ServerBrowsingMemoryOptions } from "./ServerBrowsingMemorySetting";
+import { type CompanySignInCalls, createServerCompanySignInSection } from "./ServerCompanySignInSection";
+import { ServerCrmSetting } from "./ServerCrmSetting";
 import { ServerDesktopPanel } from "./ServerDesktopPanel";
 import { createServerGeneralSection } from "./ServerGeneralSection";
-import { type ServerImportOptions, ServerImportPanel } from "./ServerImportPanel";
-import { type McpPanelDetail, ServerMcpPanel } from "./ServerMcpPanel";
+import {
+  type HermesFolderPlace,
+  type ServerImportDetail,
+  type ServerImportOptions,
+  ServerImportPanel,
+} from "./ServerImportPanel";
 import { createServerMembersSection } from "./ServerMembersSection";
+import type { ServerMemoryLimitOptions } from "./ServerMemoryLimitSetting";
+import type { ServerMemoryReviewOptions } from "./ServerMemoryReviewSetting";
+import { createServerMemorySection } from "./ServerMemorySection";
+import { createServerOwnerTransferSection, type OwnerTransferCalls } from "./ServerOwnerTransferSection";
+import { type ServerPersonalityOptions, ServerPersonalitySetting } from "./ServerPersonalitySetting";
+import { createServerRolesSection, type ServerAgentAccessOptions } from "./ServerRolesSection";
 import { type ServerRoutineFeedOptions, ServerRoutineFeedPanel } from "./ServerRoutineFeedPanel";
+import type { ServerSignalHomeOptions } from "./ServerSignalHomeSetting";
+import type { ServerSkillLearningOptions } from "./ServerSkillLearningSetting";
+import type { ServerTimezoneOptions } from "./ServerTimezoneSetting";
+import { type ServerTransferOptions, ServerTransferPanel } from "./ServerTransferPanel";
+import type { ServerTurnLimitsOptions } from "./ServerTurnLimitsSetting";
 import { type ServerUpdateOptions, ServerUpdatePanel } from "./ServerUpdatePanel";
-import { serverRoleCanAdminister } from "./server-capabilities";
+import type { ServerVoiceModelOptions } from "./ServerVoiceModelSetting";
+import { serverCanAdminister, serverRoleCanAdminister } from "./server-capabilities";
 import type { ServerSettingsSectionHost } from "./server-settings-section";
 
 export interface ServerSettingsModalProps {
   open: boolean;
-  onOpenChange: (open: boolean) => void;
   platform: "darwin" | "win32" | "linux";
-  /** False where no remote desktop can start, such as the browser client. The section is then absent. */
   remoteDesktopSupported?: boolean;
   server: ServerSummary;
   hostStatus?: HostStatus | null;
@@ -78,161 +124,254 @@ export interface ServerSettingsModalProps {
   restoreFocusTarget?: HTMLElement | null;
   onRetry: () => Promise<void>;
   onSaveIdentity: (input: { serverName: string; logo?: AvatarImageInput | null }) => Promise<void>;
+  onSaveAppearance?: ((appearance: ServerAppearance | null) => Promise<void>) | undefined;
   onSetPublished: (published: boolean) => Promise<void>;
-  /** The Notifications section appears only when a caller supplies both: they are desktop notifications. */
-  onSetMuted?: (muted: boolean) => Promise<void>;
-  onSetNotificationLevel?: (level: ServerNotificationLevel) => Promise<void>;
+  onRotateHostKey?: (() => Promise<void>) | undefined;
   onCreateInvite: (input: { role: "admin" | "member"; email?: string; permanent?: boolean }) => Promise<InviteSummary>;
+  license?: Pick<LicenseCalls, "getState" | "setUsers" | "changePlan"> | undefined;
+  companySignIn?: CompanySignInCalls | undefined;
+  ownerTransfer?: OwnerTransferCalls | undefined;
+  onDownloadDesktopApp?: (() => void) | undefined;
+  onContactUs?: () => void;
   onUpdateMember: (input: UpdateTeamMemberInput) => Promise<void>;
   onRemoveMember: (memberId: string) => Promise<void>;
   onRevokeInvite: (inviteId: string) => Promise<void>;
-  /**
-   * Ends this account's membership of a joined server. The Leave section appears only when a
-   * caller supplies this: the browser client is attached to one host and cannot leave it.
-   */
   onLeaveServer?: () => Promise<void>;
-  /** Opens the macOS pane that grants OpenBot screen recording, for the host that was refused it. */
+  onRemoveServer?: (() => Promise<void>) | undefined;
   onOpenScreenRecordingSettings: () => Promise<void>;
-  /** Asks the host to read the grant again, so the owner who gave it sees the warning go. */
   onRecheckScreenRecording: () => Promise<void>;
-  /**
-   * The MCP section appears only when a caller supplies these. A caller that cannot manage MCP
-   * servers - a remote host without the capability, or a `member` account - passes nothing, and
-   * then neither the tab nor the panel exists.
-   */
-  mcpServers?: McpServerConfig[] | undefined;
-  /** Why the MCP list is empty, when the read failed rather than found nothing. */
-  mcpLoadError?: string | null;
-  /**
-   * What the managed runtime under a STDIO server is doing, when there is anything to say. The
-   * caller decides: it describes this computer, and this dialog also opens for a remote server.
-   */
-  mcpToolRuntimeNote?: string | null;
-  onRetryMcpServers?: () => void;
-  onSaveMcpServer?: (config: McpServerConfig) => Promise<void>;
-  onRemoveMcpServer?: (id: string) => Promise<void>;
-  onSetMcpServerEnabled?: (id: string, enabled: boolean) => Promise<void>;
-  onTestMcpServer?: (config: McpServerConfig) => Promise<McpTestResult>;
-  /**
-   * Fired when the MCP section becomes visible. The list is read then, not when the dialog opens,
-   * because most visits to this dialog never reach that section.
-   */
-  onMcpSectionShown?: () => void;
-  /**
-   * The Storage section appears only when a caller supplies this: a remote host without
-   * `storage-v1` passes nothing. Every member reads it; `canManage` adds Clear and Delete.
-   */
   storage?: ServerStorageOptions | undefined;
-  /**
-   * The Sites section appears only when a caller supplies this: this computer, or a remote host with
-   * `hosted-sites-v1`. Every member reads the list; an owner or admin can delete.
-   */
   hostedSites?: ServerHostedSitesOptions | undefined;
-  /**
-   * The Providers section: this computer, or a remote host with `providers-v1` that this account
-   * administers. A member gets no section.
-   */
   providers?: HostProviderSettings | undefined;
-  /**
-   * For a server that the window has not selected. The provider state belongs to the selected server,
-   * so the Providers section shows a note and this action in place of the list.
-   */
   onSwitchToManageProviders?: (() => void) | undefined;
-  /**
-   * The Import section appears only when a caller supplies this: the local server, or a remote host
-   * with `agent-import-v1`. Any member can import.
-   */
   agentImport?: ServerImportOptions | undefined;
-  /**
-   * The Connectors section appears only when a caller supplies one of these: the GitHub connection
-   * and the Slack apps belong to this computer, so a remote server passes neither, and a build
-   * without a GitHub App passes no GitHub.
-   */
-  githubConnector?: GitHubConnectorController | undefined;
-  /** This computer's Google connection. A remote server passes none. */
-  googleConnector?: GoogleConnectorController | undefined;
-  /** This computer's 1Password connection. A remote server passes none. */
-  onePasswordConnector?: OnePasswordConnectorController | undefined;
-  /** This computer's Bitwarden connection. A remote server passes none. */
-  bitwardenConnector?: BitwardenConnectorPanelProps | undefined;
-  slackConnector?: SlackConnectorController | undefined;
-  /** This computer's agents, for the Slack page. */
-  connectorAgents?: AgentProfile[] | undefined;
-  /**
-   * The Updates section appears only when a caller supplies this: a remote host with
-   * `host-update-v1` that this member administers.
-   */
+  instanceTransfer?: ServerTransferOptions | undefined;
   hostUpdate?: ServerUpdateOptions | undefined;
-  /**
-   * The Routines section appears only when a caller supplies this: the feed listens on this
-   * computer, so a remote server passes nothing.
-   */
+  hostTimezone?: ServerTimezoneOptions | undefined;
+  hostVoiceModel?: ServerVoiceModelOptions | undefined;
+  hostSignalHome?: ServerSignalHomeOptions | undefined;
+  hostTurnLimits?: ServerTurnLimitsOptions | undefined;
+  hostPersonality?: ServerPersonalityOptions | undefined;
+  hostMemoryLimit?: ServerMemoryLimitOptions | undefined;
+  memoryReview?: ServerMemoryReviewOptions | undefined;
+  skillLearning?: ServerSkillLearningOptions | undefined;
+  browsingMemory?: ServerBrowsingMemoryOptions | undefined;
+  hostPromptCacheTtl?: HostPromptCacheTtlOptions | undefined;
+  claudeUserSetup?: HostClaudeUserSetupOptions | undefined;
+  claudeCompactWindow?: HostClaudeCompactWindowOptions | undefined;
+  providerEnvironment?: HostProviderEnvironmentOptions | undefined;
+  hostModelVisibility?: HostModelVisibilityOptions | undefined;
+  hostDefaultProvider?: HostDefaultProviderOptions | undefined;
+  agentAccess?: ServerAgentAccessOptions | undefined;
+  serverAudit?: ServerAuditOptions | undefined;
+  agentDefaults?: ServerAgentDefaultsOptions | undefined;
   routineFeed?: ServerRoutineFeedOptions | undefined;
-  /** The section to show when the dialog opens. Updates shows General when the server has no Updates section. */
+  browserProfiles?: ServerBrowserProfilesOptions | undefined;
+  vault?: ServerVaultOptions | undefined;
+  crm?: CrmHost | undefined;
+  googleConnector?: GoogleConnectorController | undefined;
+  slackConnector?: SlackConnectorController | undefined;
+  connectorAgents?: AgentProfile[] | undefined;
   initialSection?: ServerSettingsSection | null;
+  initialSectionRequest?: number | undefined;
+  onSectionChange?: ((section: ServerSettingsSection) => void) | undefined;
+  page: SettingsPagePlacement | undefined;
+  sectionQuery?: string | undefined;
+  openFirstSectionRequest?: number | undefined;
+  onFirstSectionOpened?: (() => void) | undefined;
+  onOpenMarketplaceApps?: (() => void) | undefined;
 }
 
 export interface ServerHostedSitesOptions {
-  /** Called with this dialog's server. */
   api: Pick<HostedSitesDesktopApi, "list" | "delete">;
   onOpenSite: (url: string) => void;
-  /** Called as a deletion starts. It returns the call that records the result. */
   trackDelete?: () => (result: HostedSiteDeleteResult) => void;
+  onSeePlans?: (() => void) | undefined;
 }
 
 export type ServerSettingsSection =
   | "general"
+  | "personality"
+  | "agents"
+  | "memory"
+  | "vault"
   | "members"
+  | "roles"
+  | "audit"
   | "desktop"
-  | "mcp"
   | "storage"
   | "sites"
   | "providers"
   | "updates"
   | "import"
+  | "transfer"
   | "routines"
+  | "browser-profiles"
+  | "experimental"
   | "connectors";
 type Section = ServerSettingsSection;
 
 const sections = {
   general: { title: "server.settings.generalTitle", description: "server.settings.generalDescription" },
+  personality: { title: "server.settings.personalityTitle", description: "server.settings.personalityDescription" },
+  agents: { title: "server.settings.agentDefaultsTitle", description: "server.settings.agentsDescription" },
+  memory: { title: "server.settings.memoryTitle", description: "server.settings.memoryDescription" },
+  vault: { title: "server.settings.vaultTitle", description: "server.settings.vaultDescription" },
   members: { title: "server.settings.membersTitle", description: "server.settings.membersDescription" },
+  roles: { title: "server.settings.rolesTitle", description: "server.settings.rolesDescription" },
+  audit: { title: "server.settings.auditTitle", description: "server.settings.auditDescription" },
   desktop: { title: "server.settings.desktopTitle", description: "server.settings.desktopDescription" },
-  mcp: { title: "server.settings.mcpTitle", description: "server.settings.mcpDescription" },
   storage: { title: "server.settings.storageTitle", description: "server.settings.storageDescription" },
   sites: { title: "server.settings.hostedSitesTitle", description: "server.settings.hostedSitesDescription" },
   providers: { title: "server.settings.providersTitle", description: "server.settings.providersDescription" },
   updates: { title: "server.settings.updatesTitle", description: "server.settings.updatesDescription" },
   import: { title: "server.settings.importTitle", description: "server.settings.importDescription" },
+  transfer: { title: "server.settings.transferTitle", description: "server.settings.transferDescription" },
   routines: { title: "server.settings.routinesTitle", description: "server.settings.routinesDescription" },
+  "browser-profiles": { title: "browser.profiles.title", description: "browser.profiles.subtitle" },
+  experimental: {
+    title: "server.settings.experimentalTitle",
+    description: "server.settings.experimentalDescription",
+  },
   connectors: { title: "server.settings.connectorsTitle", description: "server.settings.connectorsDescription" },
 } as const satisfies Record<Section, { title: AppTextKey; description: AppTextKey }>;
+
+const SECTION_ROWS: Partial<Record<Section, readonly AppTextKey[]>> = {
+  general: [
+    "server.settings.name",
+    "server.settings.logo",
+    "server.settings.hostKeyTitle",
+    "server.settings.leaveTitle",
+    "server.settings.removeTitle",
+  ],
+  agents: [
+    "server.settings.timezone",
+    "server.settings.turnLimit",
+    "server.settings.voiceModel.section",
+    "server.settings.agentTaskLimit",
+    "agentSettings.automation.title",
+    "agentSettings.agentNewChat.title",
+    "agentSettings.quickAcknowledgement.title",
+    "settings.busyMessage.title",
+    "settings.commitCoAuthor.sectionTitle",
+  ],
+  memory: [
+    "server.settings.memoryLimit",
+    "server.settings.memoryReview",
+    "server.settings.skillLearning",
+    "server.settings.browsingMemory",
+  ],
+  members: [
+    "server.settings.publish",
+    "server.companySignIn.title",
+    "server.companySignIn.sso",
+    "server.companySignIn.scim",
+    "server.ownerTransfer.title",
+  ],
+  storage: ["settings.backgroundProcesses.title"],
+  experimental: ["server.settings.experimentalCrm"],
+};
+
+const NAV_SECTIONS: ReadonlyArray<{ value: Section; icon: typeof Settings; group?: AppTextKey }> = [
+  { value: "general", icon: Settings },
+  { value: "providers", icon: Sparkles },
+  { value: "personality", icon: Smile },
+  { value: "agents", icon: Bot, group: "server.settings.group.agents" },
+  { value: "memory", icon: Brain, group: "server.settings.group.agents" },
+  { value: "vault", icon: KeyRound, group: "server.settings.group.agents" },
+  { value: "browser-profiles", icon: AppWindow, group: "server.settings.group.agents" },
+  { value: "routines", icon: CalendarClock, group: "server.settings.group.agents" },
+  { value: "connectors", icon: Plug, group: "server.settings.group.agents" },
+  { value: "sites", icon: Globe2, group: "server.settings.group.agents" },
+  { value: "members", icon: UsersRound, group: "server.settings.group.people" },
+  { value: "roles", icon: ShieldCheck, group: "server.settings.group.people" },
+  { value: "audit", icon: History, group: "server.settings.group.people" },
+  { value: "storage", icon: HardDrive, group: "server.settings.group.server" },
+  { value: "updates", icon: RefreshCw, group: "server.settings.group.server" },
+  { value: "desktop", icon: Monitor, group: "server.settings.group.server" },
+  { value: "import", icon: Download, group: "server.settings.group.server" },
+  { value: "transfer", icon: ArrowLeftRight, group: "server.settings.group.server" },
+  { value: "experimental", icon: FlaskConical, group: "server.settings.group.server" },
+];
 
 export function ServerSettingsModal(props: ServerSettingsModalProps) {
   const { t, errorMessage } = useText();
   const [section, setSection] = createSignal<Section>("general");
-  /** Set while the MCP panel shows a form, so the header reads `MCP › Connect to a custom MCP`. */
-  const [mcpDetail, setMcpDetail] = createSignal<McpPanelDetail | null>(null);
-  /** The key of the one action in flight, gating every panel at once rather than belonging to any. */
+  createEffect(
+    () => ({ shown: section(), notify: props.onSectionChange }),
+    ({ shown, notify }) => {
+      notify?.(shown);
+    },
+  );
+  const [providerDetail, setProviderDetail] = createSignal<ProviderSettingsDetail | null>(null);
+  const [importDetail, setImportDetail] = createSignal<ServerImportDetail | null>(null);
+  const crumbDetail = () => {
+    if (section() === "import") return importDetail();
+    if (section() === "roles") return roles.crumb();
+    if (section() === "agents") return agents.crumb();
+    return section() === "providers" ? providerDetail() : null;
+  };
   const [busy, setBusy] = createSignal<string | null>(null);
   const [modalElement, setModalElement] = createSignal<HTMLElement | undefined>();
-  /**
-   * The height of the error toast, or 0 while no toast is shown. The panel reserves this much
-   * room at its end: the toast floats over the bottom of the panel, so without the reserve it
-   * covers - and swallows the clicks of - whatever the open panel puts last.
-   */
   const [toastHeight, setToastHeight] = createSignal(0);
   let syncedServerId = "";
 
   const local = () => props.server.kind === "local";
-  const remoteDesktopSection = () => props.remoteDesktopSupported !== false && props.platform === "darwin";
+  const hostName = () => (local() ? undefined : props.server.name);
+  const remoteDesktopSection = () => props.remoteDesktopSupported !== false && (props.platform === "darwin" || local());
   const configured = () => (local() ? Boolean(props.hostStatus?.configured) : true);
-  /**
-   * The role check without `configured()`. MCP servers belong to this machine and are spawned
-   * by the agents on it, so they are manageable before the user publishes a Team API host at all.
-   */
-  const canManageMcp = () => serverRoleCanAdminister(props.server);
   const actionsAvailable = () => local() || props.server.state === "online";
+  const hermesFolderPlace = (): HermesFolderPlace | undefined => {
+    if (local()) return "computer";
+    return serverCanAdminister(props.server, "hermes-import-v1") ? "server" : undefined;
+  };
+  function promptCacheSource(): ProviderPromptCacheSource | undefined {
+    const options = props.hostPromptCacheTtl;
+    if (!options || !actionsAvailable() || !serverCanAdminister(props.server, "prompt-cache-ttl-v1")) return undefined;
+    return {
+      ...options,
+      serverId: props.server.id,
+      appliesToPi: local() || serverCanAdminister(props.server, "prompt-cache-ttl-pi-v1"),
+      compaction: local() || serverCanAdminister(props.server, "cache-expiry-compaction-v1"),
+    };
+  }
+  function claudeUserSetupSource(): ProviderClaudeUserSetupSource | undefined {
+    const options = props.claudeUserSetup;
+    if (!options || !actionsAvailable() || !serverCanAdminister(props.server, "claude-user-setup-v1")) return undefined;
+    return { ...options, serverId: props.server.id, remote: !local() };
+  }
+  function claudeCompactWindowSource(): ProviderClaudeCompactWindowSource | undefined {
+    const options = props.claudeCompactWindow;
+    if (!options || !actionsAvailable() || !serverCanAdminister(props.server, "claude-compact-window-v1"))
+      return undefined;
+    return { ...options, serverId: props.server.id };
+  }
+  function providerEnvironmentSource(): ProviderEnvironmentSource | undefined {
+    const options = props.providerEnvironment;
+    if (!options || !actionsAvailable() || !serverCanAdminister(props.server, "provider-environment-v1"))
+      return undefined;
+    return { ...options, serverId: props.server.id };
+  }
+  function modelVisibilitySource(): ProviderModelVisibilitySource | undefined {
+    const options = props.hostModelVisibility;
+    if (!options || !actionsAvailable() || !serverCanAdminister(props.server, "model-visibility-v1")) return undefined;
+    return { ...options, serverId: props.server.id };
+  }
+  function hostDefaultProviderSource(): HostDefaultProviderSource | undefined {
+    const options = props.hostDefaultProvider;
+    if (!options || local() || !actionsAvailable() || !serverCanAdminister(props.server, "provider-default-v1"))
+      return undefined;
+    return { ...options, serverId: props.server.id };
+  }
+  function personalityOptions(): ServerPersonalityOptions | undefined {
+    const options = props.hostPersonality;
+    if (!options || !actionsAvailable() || !serverCanAdminister(props.server, "host-personality-v1")) return undefined;
+    return options;
+  }
+  function crmHost(): CrmHost | undefined {
+    if (!props.crm || !actionsAvailable() || !serverCanAdminister(props.server, CRM_CAPABILITY)) return undefined;
+    return props.crm;
+  }
   const availableInitialSection = (): Section | null =>
     props.initialSection === "updates" && !props.hostUpdate ? null : (props.initialSection ?? null);
   const published = () => (local() ? props.hostStatus?.phase === "online" : props.server.state === "online");
@@ -245,7 +384,10 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
       return true;
     } catch (error) {
       actionToast.error(t("server.settings.actionFailedTitle"), {
-        description: errorMessage(error, t("server.settings.actionFailed")),
+        ...{
+          description: errorMessage(error, t("server.settings.actionFailed")),
+        },
+        report: { operation: "settings", source: "action", cause_code: classifyFailure(error) },
       });
       return false;
     } finally {
@@ -263,11 +405,117 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
     busy,
     run,
     showCopyError() {
-      actionToast.error(t("server.settings.copyFailedTitle"), { description: t("server.settings.copyFailed") });
+      actionToast.error(t("server.settings.copyFailedTitle"), {
+        ...{ description: t("server.settings.copyFailed") },
+        report: { operation: "settings", source: "action", cause_code: "unknown" },
+      });
     },
   };
-  const general = createServerGeneralSection(host, { onSetUpDesktop: () => setSection("desktop") });
-  const members = createServerMembersSection(host);
+  const general = createServerGeneralSection(host);
+  const roles = createServerRolesSection(host, () => section() === "roles" || section() === "members");
+  const audit = createServerAuditSection(host, () => section() === "audit");
+  const agents = createServerAgentsSection(host, () => section() === "agents");
+  const memory = createServerMemorySection(host);
+
+  const sectionSupported = (value: Section): boolean => {
+    switch (value) {
+      case "general":
+      case "members":
+        return true;
+      case "personality":
+        return Boolean(personalityOptions());
+      case "agents":
+        return agents.available();
+      case "memory":
+        return memory.available();
+      case "vault":
+        return Boolean(props.vault);
+      case "roles":
+        return roles.available();
+      case "audit":
+        return audit.available();
+      case "desktop":
+        return remoteDesktopSection();
+      case "storage":
+        return Boolean(props.storage);
+      case "sites":
+        return Boolean(props.hostedSites);
+      case "providers":
+        return Boolean(props.providers || props.onSwitchToManageProviders);
+      case "updates":
+        return Boolean(props.hostUpdate);
+      case "import":
+        return Boolean(props.agentImport);
+      case "transfer":
+        return Boolean(props.instanceTransfer);
+      case "routines":
+        return Boolean(props.routineFeed);
+      case "browser-profiles":
+        return Boolean(props.browserProfiles);
+      case "experimental":
+        return Boolean(crmHost());
+      case "connectors":
+        return Boolean(props.googleConnector || props.slackConnector);
+    }
+  };
+  const sectionMatches = (value: Section): boolean => {
+    const needle = props.sectionQuery?.trim().toLocaleLowerCase();
+    if (!needle) return true;
+    const { title, description } = sections[value];
+    return [title, description, ...(SECTION_ROWS[value] ?? [])].some((key) =>
+      t(key).toLocaleLowerCase().includes(needle),
+    );
+  };
+  const matchingSections = createMemo(() =>
+    NAV_SECTIONS.filter((item) => sectionSupported(item.value) && sectionMatches(item.value)),
+  );
+  const navSections = createMemo(() =>
+    NAV_SECTIONS.filter(
+      (item) => matchingSections().includes(item) || (item.value === section() && sectionSupported(item.value)),
+    ),
+  );
+  const marketplaceAppsMatches = () => {
+    const needle = props.sectionQuery?.trim().toLocaleLowerCase();
+    if (!needle || !props.onOpenMarketplaceApps) return false;
+    return t("app.settingsPage.marketplaceApps").toLocaleLowerCase().includes(needle);
+  };
+  let handledOpenFirstRequest = untrack(() => props.openFirstSectionRequest ?? 0);
+  createEffect(
+    () => props.openFirstSectionRequest ?? 0,
+    (request) => {
+      if (request === handledOpenFirstRequest) return;
+      handledOpenFirstRequest = request;
+      const first = untrack(matchingSections)[0];
+      if (first) setSection(first.value);
+      else if (untrack(marketplaceAppsMatches)) untrack(() => props.onOpenMarketplaceApps?.());
+      else return;
+      untrack(() => props.onFirstSectionOpened?.());
+    },
+  );
+  const searchStatus = () => {
+    if (!props.sectionQuery?.trim()) return "";
+    const count = matchingSections().length + (marketplaceAppsMatches() ? 1 : 0);
+    return count > 0 ? t("app.settingsPage.resultCount", { count }) : t("app.settingsPage.noResults");
+  };
+  const members = createServerMembersSection(
+    host,
+    {
+      onSetUpDesktop: () => setSection("desktop"),
+      saveIdentityDraft: general.saveIdentityDraft,
+    },
+    roles,
+  );
+  const companySignIn = createServerCompanySignInSection(
+    host,
+    () => props.companySignIn,
+    () => props.onDownloadDesktopApp,
+    () => props.open && section() === "members",
+  );
+  const ownerTransfer = createServerOwnerTransferSection(
+    host,
+    () => props.ownerTransfer,
+    () => props.open && section() === "members",
+  );
   const hostedSites = createSettingsHostedSitesStore(
     {
       get open() {
@@ -286,14 +534,12 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
     () => section() === "sites",
   );
 
-  /** Publishes the reserve to the shell stylesheet, which spends it as the panel's end padding. */
   createEffect(
     () => ({ element: modalElement(), height: toastHeight() }),
     ({ element, height }) => {
       element?.style.setProperty("--settings-modal-floating-space", `${height}px`);
     },
   );
-  /** Follows the toast, which grows with the length of the sentence the failure produced. */
   function measureToast(element: HTMLElement): void {
     const observer = new ResizeObserver(() => setToastHeight(element.offsetHeight));
     observer.observe(element);
@@ -303,10 +549,7 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
       setToastHeight(0);
     });
   }
-  // Both save bars dock in the same place, so the toast has to lift for either one. It is
-  // `position: absolute` over the footer: without this it covers the bar and swallows its clicks.
-  const saveBarDocked = () =>
-    (section() === "general" && general.identityDirty()) || (section() === "mcp" && Boolean(mcpDetail()?.saveBar()));
+  const saveBarDocked = () => section() === "general" && general.identityDirty();
 
   createEffect(
     () => ({
@@ -323,34 +566,63 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
         setSection(untrack(availableInitialSection) ?? "general");
         general.resetForServer();
         members.resetForServer();
+        companySignIn.resetForServer();
+        ownerTransfer.resetForServer();
+        roles.resetForServer();
+        audit.resetForServer();
+        agents.resetForServer();
       }
       if (!editing) general.syncFromServer(name, logoUrl);
     },
   );
 
-  /** An opener that names a section of the same server moves to it; the effect above covers a new server. */
   createEffect(
-    () => (props.open ? availableInitialSection() : null),
-    (requested) => {
+    () => section() === "roles" && !roles.available(),
+    (gone) => {
+      if (gone) setSection("members");
+    },
+  );
+
+  createEffect(
+    () => section() === "audit" && !audit.available(),
+    (gone) => {
+      if (gone) setSection("members");
+    },
+  );
+
+  createEffect(
+    () => section() === "agents" && !agents.available(),
+    (gone) => {
+      if (gone) setSection("general");
+    },
+  );
+
+  createEffect(
+    () => section() === "memory" && !memory.available(),
+    (gone) => {
+      if (gone) setSection("general");
+    },
+  );
+
+  createEffect(
+    () => section() === "vault" && !props.vault,
+    (gone) => {
+      if (gone) setSection("general");
+    },
+  );
+
+  const requestedSection = createMemo(() => (props.open ? availableInitialSection() : null));
+  createEffect(
+    () => ({ requested: requestedSection(), request: props.initialSectionRequest }),
+    ({ requested }) => {
       if (requested) setSection(requested);
     },
   );
 
   createEffect(
-    () => props.open && section() === "providers" && props.providers !== undefined,
+    () => props.open && section() === "providers" && props.providers?.onShown !== undefined,
     (visible) => {
       if (visible) untrack(() => props.providers?.onShown?.());
-    },
-  );
-
-  /** The latch keeps a section the user is already in from being reported again on every change. */
-  let mcpSectionVisible = false;
-  createEffect(
-    () => props.open && section() === "mcp" && Boolean(props.mcpServers),
-    (visible) => {
-      if (visible === mcpSectionVisible) return;
-      mcpSectionVisible = visible;
-      if (visible) untrack(() => props.onMcpSectionShown?.());
     },
   );
 
@@ -363,15 +635,23 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
     onChange(value: string) {
       if (
         value === "general" ||
+        value === "personality" ||
+        value === "agents" ||
+        value === "memory" ||
+        value === "vault" ||
         value === "members" ||
+        value === "roles" ||
+        value === "audit" ||
         value === "desktop" ||
-        value === "mcp" ||
         value === "storage" ||
         value === "sites" ||
         value === "providers" ||
         value === "updates" ||
         value === "import" ||
+        value === "transfer" ||
         value === "routines" ||
+        value === "browser-profiles" ||
+        value === "experimental" ||
         value === "connectors"
       )
         setSection(value);
@@ -382,24 +662,12 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
     <Tabs.Root {...sectionTabsProps} class="settings-modal-tabs-root">
       <SettingsDialogShell
         class="server-settings-modal-shell"
+        page={props.page}
         open={props.open}
-        onOpenChange={props.onOpenChange}
-        title={
-          <Show when={section() === "mcp" && mcpDetail()} fallback={t(sections[section()].title)}>
-            {(detail) => (
-              <span class="settings-modal-crumbs">
-                <Button type="button" variant="ghost" class="settings-modal-crumb-parent" onClick={detail().back}>
-                  {t(sections.mcp.title)}
-                </Button>
-                <ChevronRight class="settings-modal-crumb-separator" aria-hidden="true" />
-                <span class="settings-modal-crumb-current">{detail().title}</span>
-              </span>
-            )}
-          </Show>
-        }
+        title={t(sections[section()].title)}
+        crumb={crumbDetail()}
         description={t(sections[section()].description)}
         contentKey={`${props.server.id}:${section()}`}
-        closeLabel={t("server.settings.close")}
         restoreFocusTarget={props.restoreFocusTarget}
         onContentElement={(element) => setModalElement(element)}
         floatingContent={
@@ -434,202 +702,160 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
           </Show>
         }
         footer={
-          <>
-            {/* The MCP form's save bar belongs to the dialog, not to the panel: the footer sits
-                outside the scroll area, so the bar stays on screen and spans the whole panel. It
-                appears only once the form holds a change, the way the General tab's bar does. */}
-            <Show when={section() === "mcp" ? mcpDetail() : null}>
-              {(detail) => (
-                <SaveBarDock value={detail().saveBar()}>
-                  {(bar) => (
-                    <section class="settings-modal-save-bar" aria-label={t("server.settings.unsavedMcpChanges")}>
-                      <Show
-                        when={bar().failed}
-                        fallback={
-                          <Text variant="caption" tone="muted">
-                            {bar().message}
-                          </Text>
-                        }
-                      >
-                        <Text variant="caption" tone="danger" role="alert">
-                          {bar().message}
-                        </Text>
-                      </Show>
-                      <div class="settings-modal-save-actions">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          disabled={bar().resetDisabled}
-                          onClick={detail().reset}
-                        >
-                          {t("server.settings.reset")}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="default"
-                          loading={bar().saving}
-                          loadingLabel={t("common.saving")}
-                          disabled={bar().saveDisabled}
-                          onClick={detail().save}
-                        >
-                          {t("common.save")}
-                        </Button>
-                      </div>
-                    </section>
-                  )}
-                </SaveBarDock>
-              )}
-            </Show>
-            {/* `true` while the identity form is dirty: the dock only needs to know that there is
-                something to show, so the bar's own markup stays as it was. */}
-            <SaveBarDock value={section() === "general" && general.identityDirty() ? true : null}>
-              {() => (
-                <section class="settings-modal-save-bar" aria-label={t("server.settings.unsavedChanges")}>
-                  <Text variant="caption" tone="muted">
-                    {t("server.settings.changesNotSaved")}
-                  </Text>
-                  <div class="settings-modal-save-actions">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      disabled={Boolean(busy())}
-                      onClick={general.resetIdentity}
-                    >
-                      {t("server.settings.reset")}
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="default"
-                      loading={busy() === "identity"}
-                      loadingLabel={t("common.saving")}
-                      disabled={Boolean(busy())}
-                      onClick={() => void general.saveIdentity()}
-                    >
-                      {t("common.save")}
-                    </Button>
-                  </div>
-                </section>
-              )}
-            </SaveBarDock>
-          </>
+          <SaveBarDock value={section() === "general" && general.identityDirty() ? true : null}>
+            {() => (
+              <section class="settings-modal-save-bar" aria-label={t("server.settings.unsavedChanges")}>
+                <Text variant="caption" tone="muted">
+                  {t("server.settings.changesNotSaved")}
+                </Text>
+                <div class="settings-modal-save-actions">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={Boolean(busy())}
+                    onClick={general.resetIdentity}
+                  >
+                    {t("server.settings.reset")}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="default"
+                    loading={busy() === "identity"}
+                    loadingLabel={t("common.saving")}
+                    disabled={Boolean(busy())}
+                    onClick={() => void general.saveIdentity()}
+                  >
+                    {t("common.save")}
+                  </Button>
+                </div>
+              </section>
+            )}
+          </SaveBarDock>
         }
         sidebar={
-          <Tabs.List class="settings-modal-nav" aria-label={t("server.settings.sections")}>
-            <Tabs.Trigger class="settings-modal-nav-item" value="general">
-              <Settings aria-hidden="true" />
-              <span>{t(sections.general.title)}</span>
-            </Tabs.Trigger>
-            <Tabs.Trigger class="settings-modal-nav-item" value="members">
-              <UsersRound aria-hidden="true" />
-              <span>{t(sections.members.title)}</span>
-            </Tabs.Trigger>
-            <Show when={remoteDesktopSection()}>
-              <Tabs.Trigger class="settings-modal-nav-item" value="desktop">
-                <Monitor aria-hidden="true" />
-                <span>{t(sections.desktop.title)}</span>
-              </Tabs.Trigger>
+          <>
+            <Tabs.List class="settings-modal-nav" aria-label={t("server.settings.sections")}>
+              <For each={navSections()}>
+                {(item, index) => {
+                  const Icon = item.icon;
+                  return (
+                    <>
+                      <Show when={item.group !== navSections()[index() - 1]?.group && item.group}>
+                        {(group) => <SettingsNavGroupLabel label={t(group())} />}
+                      </Show>
+                      <Tabs.Trigger class="settings-modal-nav-item" value={item.value}>
+                        <Icon aria-hidden="true" />
+                        <span>{t(sections[item.value].title)}</span>
+                      </Tabs.Trigger>
+                    </>
+                  );
+                }}
+              </For>
+            </Tabs.List>
+            <Show when={marketplaceAppsMatches()}>
+              <ul class="settings-page-results" aria-label={t("app.settingsPage.results")}>
+                <li>
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    class="settings-page-result"
+                    onClick={() => props.onOpenMarketplaceApps?.()}
+                  >
+                    <span class="settings-page-result-section">
+                      <Store aria-hidden="true" />
+                      {t("marketplace.title")}
+                    </span>
+                    <span class="settings-page-result-title">{t("app.settingsPage.marketplaceApps")}</span>
+                  </Button>
+                </li>
+              </ul>
             </Show>
-            <Show when={props.mcpServers}>
-              <Tabs.Trigger class="settings-modal-nav-item" value="mcp">
-                <Blocks aria-hidden="true" />
-                <span>{t(sections.mcp.title)}</span>
-              </Tabs.Trigger>
+            <Show when={matchingSections().length === 0 && !marketplaceAppsMatches()}>
+              <p class="settings-page-empty">{t("app.settingsPage.noResults")}</p>
             </Show>
-            <Show when={props.storage}>
-              <Tabs.Trigger class="settings-modal-nav-item" value="storage">
-                <HardDrive aria-hidden="true" />
-                <span>{t(sections.storage.title)}</span>
-              </Tabs.Trigger>
-            </Show>
-            <Show when={props.hostedSites}>
-              <Tabs.Trigger class="settings-modal-nav-item" value="sites">
-                <Globe2 aria-hidden="true" />
-                <span>{t(sections.sites.title)}</span>
-              </Tabs.Trigger>
-            </Show>
-            <Show when={props.providers || props.onSwitchToManageProviders}>
-              <Tabs.Trigger class="settings-modal-nav-item" value="providers">
-                <Sparkles aria-hidden="true" />
-                <span>{t(sections.providers.title)}</span>
-              </Tabs.Trigger>
-            </Show>
-            <Show when={props.hostUpdate}>
-              <Tabs.Trigger class="settings-modal-nav-item" value="updates">
-                <RefreshCw aria-hidden="true" />
-                <span>{t(sections.updates.title)}</span>
-              </Tabs.Trigger>
-            </Show>
-            <Show when={props.agentImport}>
-              <Tabs.Trigger class="settings-modal-nav-item" value="import">
-                <Download aria-hidden="true" />
-                <span>{t(sections.import.title)}</span>
-              </Tabs.Trigger>
-            </Show>
-            <Show when={props.routineFeed}>
-              <Tabs.Trigger class="settings-modal-nav-item" value="routines">
-                <CalendarClock aria-hidden="true" />
-                <span>{t(sections.routines.title)}</span>
-              </Tabs.Trigger>
-            </Show>
-            <Show
-              when={
-                props.githubConnector ||
-                props.googleConnector ||
-                props.onePasswordConnector ||
-                props.bitwardenConnector ||
-                props.slackConnector
-              }
-            >
-              <Tabs.Trigger class="settings-modal-nav-item" value="connectors">
-                <Plug aria-hidden="true" />
-                <span>{t(sections.connectors.title)}</span>
-              </Tabs.Trigger>
-            </Show>
-          </Tabs.List>
+            <span class="sr-only" role="status">
+              {searchStatus()}
+            </span>
+          </>
         }
       >
         <Tabs.Content value="general" class="settings-modal-tab-panel server-settings-panel" data-tab="general">
           <general.Panel />
         </Tabs.Content>
-        <Tabs.Content value="members" class="settings-modal-tab-panel server-settings-panel" data-tab="members">
-          <members.Panel />
-        </Tabs.Content>
-        <Show when={remoteDesktopSection()}>
-          <Tabs.Content value="desktop" class="settings-modal-tab-panel server-settings-panel" data-tab="desktop">
-            <ServerDesktopPanel server={props.server} platform={props.platform} hostStatus={props.hostStatus} />
+        <Show when={memory.available()}>
+          <Tabs.Content value="memory" class="settings-modal-tab-panel server-settings-panel" data-tab="memory">
+            <memory.Panel />
           </Tabs.Content>
         </Show>
-        <Show when={props.mcpServers}>
-          {(servers) => (
-            <Tabs.Content value="mcp" class="settings-modal-tab-panel server-settings-panel" data-tab="mcp">
-              <ServerMcpPanel
-                servers={servers()}
-                canManage={canManageMcp()}
-                menuMount={modalElement()}
-                loadError={props.mcpLoadError}
-                toolRuntimeNote={props.mcpToolRuntimeNote}
-                onRetryLoad={props.onRetryMcpServers}
-                onDetailChange={setMcpDetail}
-                onSave={(config) => props.onSaveMcpServer?.(config) ?? Promise.resolve()}
-                onRemove={(id) => props.onRemoveMcpServer?.(id) ?? Promise.resolve()}
-                onSetEnabled={(id, enabled) => props.onSetMcpServerEnabled?.(id, enabled) ?? Promise.resolve()}
-                onTest={(config) =>
-                  props.onTestMcpServer?.(config) ??
-                  Promise.resolve({ toolCount: 0, error: t("mcp.panel.testUnavailable") })
-                }
-              />
+        <Show when={personalityOptions()}>
+          {(options) => (
+            <Tabs.Content
+              value="personality"
+              class="settings-modal-tab-panel server-settings-panel"
+              data-tab="personality"
+            >
+              <SettingsSection title={t("server.settings.agents")}>
+                <ItemGroup class="settings-modal-card">
+                  <ServerPersonalitySetting
+                    {...options()}
+                    serverId={props.server.id}
+                    disabled={Boolean(busy())}
+                    menuMount={modalElement()}
+                    run={run}
+                  />
+                </ItemGroup>
+              </SettingsSection>
             </Tabs.Content>
           )}
         </Show>
-        {/* Mounted only while selected, so the host is measured when the section opens. */}
+        <Show when={agents.available()}>
+          <Tabs.Content value="agents" class="settings-modal-tab-panel server-settings-panel" data-tab="agents">
+            <agents.Panel />
+          </Tabs.Content>
+        </Show>
+        <Show when={props.vault}>
+          {(vault) => (
+            <Tabs.Content value="vault" class="settings-modal-tab-panel server-settings-panel" data-tab="vault">
+              <ServerVaultPanel {...vault()} menuMount={modalElement()} />
+            </Tabs.Content>
+          )}
+        </Show>
+        <Tabs.Content value="members" class="settings-modal-tab-panel server-settings-panel" data-tab="members">
+          <members.Panel />
+          <companySignIn.Panel />
+          <ownerTransfer.Panel />
+        </Tabs.Content>
+        <Show when={roles.available()}>
+          <Tabs.Content value="roles" class="settings-modal-tab-panel server-settings-panel" data-tab="roles">
+            <roles.Panel />
+          </Tabs.Content>
+        </Show>
+        <Show when={audit.available()}>
+          <Tabs.Content value="audit" class="settings-modal-tab-panel server-settings-panel" data-tab="audit">
+            <audit.Panel />
+          </Tabs.Content>
+        </Show>
+        <Show when={remoteDesktopSection()}>
+          <Tabs.Content value="desktop" class="settings-modal-tab-panel server-settings-panel" data-tab="desktop">
+            <ServerDesktopPanel
+              server={props.server}
+              platform={props.platform}
+              hostStatus={props.hostStatus}
+              menuMount={modalElement()}
+            />
+          </Tabs.Content>
+        </Show>
         <Show when={props.storage}>
           {(storage) => (
             <Tabs.Content value="storage" class="settings-modal-tab-panel server-settings-panel" data-tab="storage">
-              <ServerStoragePanel serverId={props.server.id} {...storage()} />
+              <ServerStoragePanel
+                serverId={props.server.id}
+                storageGb={hostedPlanStorageGb(props.server)}
+                members={props.members}
+                {...storage()}
+              />
             </Tabs.Content>
           )}
         </Show>
@@ -641,6 +867,7 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
                 available
                 canDelete={serverRoleCanAdminister(props.server)}
                 onOpenSite={sites().onOpenSite}
+                onSeePlans={sites().onSeePlans}
               />
             </Tabs.Content>
           )}
@@ -670,8 +897,15 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
               {(providers) => (
                 <HostProviderSettingsPanel
                   {...providers()}
-                  hostName={local() ? undefined : props.server.name}
+                  hostName={hostName()}
                   selectMount={modalElement()}
+                  onDetailChange={setProviderDetail}
+                  promptCache={promptCacheSource()}
+                  claudeUserSetup={claudeUserSetupSource()}
+                  claudeCompactWindow={claudeCompactWindowSource()}
+                  providerEnvironment={providerEnvironmentSource()}
+                  modelVisibility={modelVisibilitySource()}
+                  hostDefaultProvider={hostDefaultProviderSource()}
                 />
               )}
             </Show>
@@ -692,9 +926,26 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
         <Show when={props.agentImport}>
           {(agentImport) => (
             <Tabs.Content value="import" class="settings-modal-tab-panel server-settings-panel" data-tab="import">
-              {/* Keyed: an open export belongs to one server, so another server starts a new panel. */}
               <Show when={props.server.id} keyed>
-                {(serverId) => <ServerImportPanel serverId={serverId} {...agentImport()} />}
+                {(serverId) => (
+                  <ServerImportPanel
+                    serverId={serverId}
+                    {...agentImport()}
+                    hermes={hermesFolderPlace()}
+                    onServer={!local()}
+                    onOpenTransfer={props.instanceTransfer ? () => setSection("transfer") : undefined}
+                    onDetailChange={setImportDetail}
+                  />
+                )}
+              </Show>
+            </Tabs.Content>
+          )}
+        </Show>
+        <Show when={props.instanceTransfer}>
+          {(instanceTransfer) => (
+            <Tabs.Content value="transfer" class="settings-modal-tab-panel server-settings-panel" data-tab="transfer">
+              <Show when={props.server.id} keyed>
+                {(serverId) => <ServerTransferPanel serverId={serverId} {...instanceTransfer()} />}
               </Show>
             </Tabs.Content>
           )}
@@ -712,30 +963,47 @@ export function ServerSettingsModal(props: ServerSettingsModalProps) {
             </Tabs.Content>
           )}
         </Show>
-        <Show
-          when={
-            props.githubConnector ||
-            props.googleConnector ||
-            props.onePasswordConnector ||
-            props.bitwardenConnector ||
-            props.slackConnector
-          }
-        >
+        <Show when={props.googleConnector || props.slackConnector}>
           <Tabs.Content value="connectors" class="settings-modal-tab-panel server-settings-panel" data-tab="connectors">
             <ConnectorsPanel
-              github={props.githubConnector}
               google={props.googleConnector}
-              onePassword={props.onePasswordConnector}
-              bitwarden={props.bitwardenConnector}
               slack={props.slackConnector}
               agents={props.connectorAgents ?? []}
             />
           </Tabs.Content>
         </Show>
+        <Show when={props.browserProfiles}>
+          {(browserProfiles) => (
+            <Tabs.Content
+              value="browser-profiles"
+              class="settings-modal-tab-panel server-settings-panel"
+              data-tab="browser-profiles"
+            >
+              <ServerBrowserProfilesPanel {...browserProfiles()} menuMount={modalElement()} />
+            </Tabs.Content>
+          )}
+        </Show>
+        <Show when={crmHost()}>
+          {(crm) => (
+            <Tabs.Content
+              value="experimental"
+              class="settings-modal-tab-panel server-settings-panel"
+              data-tab="experimental"
+            >
+              <SettingsSection title={t("server.settings.experimentalFeatures")}>
+                <ItemGroup class="settings-modal-card">
+                  <ServerCrmSetting host={crm()} disabled={Boolean(busy())} run={run} />
+                </ItemGroup>
+              </SettingsSection>
+            </Tabs.Content>
+          )}
+        </Show>
       </SettingsDialogShell>
 
-      <members.RemoveDialog />
+      <members.ConfirmDialogs />
+      <ownerTransfer.Dialogs />
       <general.LeaveDialog />
+      <general.RotateKeyDialog />
     </Tabs.Root>
   );
 }

@@ -1,14 +1,12 @@
-import type { AccountSession, AvatarImageInput } from "@openbot/contracts/ipc";
+import type { AccountSession, AvatarColor, AvatarImageInput } from "@openbot/contracts/ipc";
 import { isBoolean, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import { currentText } from "@openbot/ui/text";
 
-/**
- * The desktop Settings > Profile calls for a signed-in browser. They use the
- * `/api/browser/v1/...` operations, which authenticate with the browser cookie instead of a bearer token.
- */
 export interface WebAccountCalls {
   updateName: (name: string) => Promise<void>;
+  updateAnalytics: (enabled: boolean, ageMs: number) => Promise<boolean | null>;
   updateAvatar: (image: AvatarImageInput | null) => Promise<void>;
+  setChatColor: (color: AvatarColor | null) => Promise<void>;
   listSessions: () => Promise<AccountSession[]>;
   revokeSession: (sessionId: string) => Promise<void>;
 }
@@ -23,7 +21,6 @@ export function createWebAccountCalls(
     path: string,
     init: { method: string; body?: BodyInit; contentType?: string } = { method: "GET" },
   ): Promise<Response> {
-    // As the team client's browser requests: a stalled request fails, so the panel does not stay busy.
     const response = await accountFetch(`/api/browser/${path}`, {
       method: init.method,
       credentials: "same-origin",
@@ -49,6 +46,12 @@ export function createWebAccountCalls(
       await request("v1/me/profile", { method: "PATCH", body: JSON.stringify({ name }) });
       await onAccountChanged();
     },
+    async updateAnalytics(enabled, ageMs) {
+      const response = await request("v1/me/analytics", { method: "PUT", body: JSON.stringify({ enabled, ageMs }) });
+      const user = await response.json().catch(() => null);
+      await onAccountChanged();
+      return isDynamicRecord(user) && isBoolean(user.analyticsEnabled) ? user.analyticsEnabled : null;
+    },
     async updateAvatar(image) {
       await request(
         "v1/me/avatar",
@@ -56,6 +59,10 @@ export function createWebAccountCalls(
           ? { method: "PUT", body: new Uint8Array(image.bytes), contentType: image.mimeType }
           : { method: "DELETE", body: "{}" },
       );
+      await onAccountChanged();
+    },
+    async setChatColor(color) {
+      await request("v1/me/chat-color", { method: "PUT", body: JSON.stringify({ chatColor: color }) });
       await onAccountChanged();
     },
     async listSessions() {
@@ -83,7 +90,8 @@ function decodeSession(value: unknown): AccountSession {
     (value.kind !== "desktop" && value.kind !== "mobile") ||
     !isBoolean(value.current) ||
     !isNumber(value.connectedAt) ||
-    !isNumber(value.lastActiveAt)
+    !isNumber(value.lastActiveAt) ||
+    (value.hostedServer !== undefined && !isBoolean(value.hostedServer))
   )
     throw new Error(errorMessage(null));
   return {
@@ -93,5 +101,6 @@ function decodeSession(value: unknown): AccountSession {
     current: value.current,
     connectedAt: value.connectedAt,
     lastActiveAt: value.lastActiveAt,
+    ...(value.hostedServer === undefined ? {} : { hostedServer: value.hostedServer }),
   };
 }

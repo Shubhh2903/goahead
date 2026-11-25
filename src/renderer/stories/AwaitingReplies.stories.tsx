@@ -4,23 +4,20 @@ import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
 import { requireFixture, STORY_AGENTS } from "../src/preview/fixtures";
 
-/*
- * The block above the composer while an agent waits for other agents. The agent chat shows the
- * agents it asked; a channel shows the sub-tasks that an owner waits for.
- */
-
 const research: AgentProfile = requireFixture(STORY_AGENTS[1], "Research agent");
 const sales: AgentProfile = requireFixture(STORY_AGENTS[2], "Sales agent");
 
+const researchReplied: AwaitingReplyItem = {
+  id: "reply-research",
+  agent: research,
+  name: research.name,
+  state: "replied",
+  preview: "All four sources check out. The pricing link now points to the new page.",
+  detail: "Chief reads it next",
+};
+
 const items: AwaitingReplyItem[] = [
-  {
-    id: "reply-research",
-    agent: research,
-    name: research.name,
-    state: "replied",
-    preview: "All four sources check out. The pricing link now points to the new page.",
-    detail: "Chief reads it next",
-  },
+  researchReplied,
   { id: "reply-sales", agent: sales, name: sales.name, state: "working" },
   { id: "reply-support", name: "Support", state: "asked" },
 ];
@@ -42,7 +39,6 @@ type Story = StoryObj<typeof meta>;
 
 export const Waiting: Story = {};
 
-/** The person closed the block. The header names the agent that works. */
 export const Collapsed: Story = { args: { defaultOpen: false } };
 
 export const OneFailed: Story = {
@@ -54,7 +50,16 @@ export const OneFailed: Story = {
   },
 };
 
-/** Every agent is done, so the block has a close button. */
+export const AllFailed: Story = {
+  args: {
+    onDismiss: fn(),
+    items: [
+      { id: "reply-research", agent: research, name: research.name, state: "failed" },
+      { id: "reply-sales", agent: sales, name: sales.name, state: "failed" },
+    ],
+  },
+};
+
 export const AllReplied: Story = {
   args: {
     onDismiss: fn(),
@@ -62,10 +67,10 @@ export const AllReplied: Story = {
   },
 };
 
-/** A channel owner that waits for the sub-tasks it gave out. */
 export const ChannelSubtasks: Story = {
   args: {
     title: "Waiting for sub-tasks",
+    onStop: fn(),
     items: [
       {
         id: "task-research",
@@ -81,6 +86,74 @@ export const ChannelSubtasks: Story = {
         name: sales.name,
         state: "working",
         preview: "Draft the pricing section for the launch post",
+      },
+    ],
+  },
+};
+
+export const StopAskedRequest: Story = {
+  args: {
+    onStop: fn(),
+    stopDisplay: "icon",
+    items: [
+      researchReplied,
+      { id: "reply-sales", agent: sales, name: sales.name, state: "working", stoppable: false },
+      { id: "reply-support", name: "Support", state: "asked" },
+      { id: "reply-design", name: "Design Review", state: "stopped", stoppable: false },
+    ],
+  },
+};
+
+export const NeedsApproval: Story = {
+  args: {
+    onOpenAgent: fn(),
+    items: [
+      researchReplied,
+      {
+        id: "reply-sales",
+        agent: sales,
+        name: sales.name,
+        state: "working",
+        wait: { kind: "waiting", reason: "approval", detail: "rm -r drafts/pricing-old" },
+      },
+    ],
+  },
+};
+
+export const AsksQuestion: Story = {
+  args: {
+    onOpenAgent: fn(),
+    items: [
+      researchReplied,
+      {
+        id: "reply-sales",
+        agent: sales,
+        name: sales.name,
+        state: "working",
+        wait: { kind: "waiting", reason: "question", detail: "Which region should we launch in first?" },
+      },
+    ],
+  },
+};
+
+export const SteerReply: Story = {
+  args: {
+    onSteer: fn(),
+    items: [{ ...researchReplied, deliveryId: "delivery-research" }, ...items.slice(1)],
+  },
+};
+
+export const UsageLimit: Story = {
+  args: {
+    onOpenAgent: fn(),
+    items: [
+      researchReplied,
+      {
+        id: "reply-sales",
+        agent: sales,
+        name: sales.name,
+        state: "asked",
+        wait: { kind: "limited", resetsAt: Math.floor(Date.now() / 1_000) + 2 * 60 * 60 },
       },
     ],
   },

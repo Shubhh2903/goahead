@@ -1,4 +1,4 @@
-import { CHAT_VISUAL_ITEM_TYPE_PREFIX } from "@openbot/contracts/chat-visual";
+import { itemTypeCountsAsUnread } from "@openbot/contracts/conversation-read";
 import type {
   ConversationMessageAuthor,
   ConversationReadState,
@@ -9,69 +9,43 @@ import {
   CONTEXT_RESET_ITEM_TYPE,
   HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX,
   MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX,
+  MODEL_SWITCH_ITEM_TYPE_PREFIX,
   ROUTINE_EVENT_ITEM_TYPE_PREFIX,
   ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX,
+  SETTING_LINK_ITEM_TYPE_PREFIX,
   SKILL_EVENT_ITEM_TYPE_PREFIX,
 } from "@openbot/contracts/ipc";
 import type { AgentMessage } from "@openbot/ui/data";
 
-/**
- * What the renderer has already asked main to mark read, per conversation. A
- * pending entry carries the state it optimistically painted so a repeat for the
- * same message repaints it instead of asking again; a succeeded entry carries
- * what main actually returned.
- */
 export type AgentAutoReadEntry =
   | { messageId: string; status: "pending"; optimisticState: ConversationReadState | null }
   | { messageId: string; status: "succeeded"; state: ConversationReadState };
 
-/**
- * Routine, routine-run, hosted-site and Marketplace suggestion markers are
- * bookkeeping the agent writes about itself, so they never make a conversation
- * unread.
- */
-export function isRoutineEventItem(message: { itemType?: string }): boolean {
+export function isRoutineEventItem(message: { itemType?: string | undefined }): boolean {
   return (
     message.itemType?.startsWith(ROUTINE_EVENT_ITEM_TYPE_PREFIX) === true ||
     message.itemType?.startsWith(ROUTINE_RUN_EVENT_ITEM_TYPE_PREFIX) === true ||
     message.itemType?.startsWith(HOSTED_SITE_EVENT_ITEM_TYPE_PREFIX) === true ||
     message.itemType?.startsWith(SKILL_EVENT_ITEM_TYPE_PREFIX) === true ||
     message.itemType?.startsWith(MARKETPLACE_SUGGESTION_ITEM_TYPE_PREFIX) === true ||
+    message.itemType?.startsWith(SETTING_LINK_ITEM_TYPE_PREFIX) === true ||
+    message.itemType?.startsWith(MODEL_SWITCH_ITEM_TYPE_PREFIX) === true ||
     message.itemType === CONTEXT_RESET_ITEM_TYPE
   );
 }
 
-/**
- * Whether a message is something the user has yet to see: it did not come from
- * them, and it is not one of the rows an agent writes about its own work.
- *
- * The two shapes this applies to disagree on how the user is spelled - the IPC
- * message authors them `"user"`, the renderer projection `"you"` - so each gets
- * its own entry point over this one rule rather than a predicate typed loosely
- * enough to accept both and silently take either spelling.
- */
-function isIncoming(message: { itemType?: string }, fromUser: boolean): boolean {
-  return (
-    !fromUser &&
-    message.itemType !== "commentary" &&
-    message.itemType !== "agent_attachment" &&
-    !message.itemType?.startsWith(CHAT_VISUAL_ITEM_TYPE_PREFIX) &&
-    message.itemType !== "plan" &&
-    !isRoutineEventItem(message)
-  );
+function isIncoming(message: { itemType?: string | undefined }, fromUser: boolean): boolean {
+  return !fromUser && itemTypeCountsAsUnread(message.itemType);
 }
 
-/** The rule for a message as main sends it. */
-function isIncomingConversationMessage(message: { author: ConversationMessageAuthor; itemType?: string }): boolean {
+function isIncomingConversationMessage(message: {
+  author: ConversationMessageAuthor;
+  itemType?: string | undefined;
+}): boolean {
   return isIncoming(message, message.author === "user");
 }
 
-/**
- * The rule for a message as the renderer holds it, which also excludes the two
- * kinds of row the renderer synthesizes itself: streamed thinking and UI notices.
- * Neither exists in main, so neither can be read.
- */
-function isIncomingAgentMessage(message: AgentMessage): boolean {
+export function isIncomingAgentMessage(message: AgentMessage): boolean {
   return (
     isIncoming(message, message.author === "you") &&
     !message.id.startsWith("thinking:") &&
@@ -79,9 +53,8 @@ function isIncomingAgentMessage(message: AgentMessage): boolean {
   );
 }
 
-/** The newest message that could move the read boundary, or `undefined`. */
 export function latestIncomingConversationMessage<
-  Message extends { author: ConversationMessageAuthor; itemType?: string },
+  Message extends { author: ConversationMessageAuthor; itemType?: string | undefined },
 >(messages: readonly Message[]): Message | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -90,7 +63,6 @@ export function latestIncomingConversationMessage<
   return undefined;
 }
 
-/** The same boundary over what the renderer is showing. */
 export function latestVisibleAgentMessageId(messages: readonly AgentMessage[] | undefined): string | null {
   if (!messages) return null;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -100,10 +72,9 @@ export function latestVisibleAgentMessageId(messages: readonly AgentMessage[] | 
   return null;
 }
 
-/** Recounts a read state against the messages it applies to. */
 export function readStateForMessages(
   state: ConversationReadState,
-  messages: readonly { author: ConversationMessageAuthor; id: string; itemType?: string }[],
+  messages: readonly { author: ConversationMessageAuthor; id: string; itemType?: string | undefined }[],
 ): ConversationReadState {
   const throughIndex = state.throughMessageId
     ? messages.findIndex((message) => message.id === state.throughMessageId)
@@ -116,12 +87,6 @@ export function readStateForMessages(
   };
 }
 
-/**
- * Raises a stored read state to match messages the renderer can already see.
- * Main counts unread from what it has persisted; the renderer may hold newer
- * messages, and a count that is already at least as high is left alone so a
- * refresh never walks the badge backwards.
- */
 export function preserveKnownAgentUnread(
   state: ConversationReadState,
   boundary: string | null,
@@ -139,7 +104,6 @@ export function preserveKnownAgentUnread(
   };
 }
 
-/** The same guard for a direct thread, where the boundary is a sequence number. */
 export function preserveKnownDirectUnread(
   state: NonNullable<DirectConversationSnapshot["readState"]>,
   boundary: number,
@@ -158,42 +122,20 @@ export function preserveKnownDirectUnread(
   };
 }
 
-/**
- * The read state an in-flight or finished mark-read still stands behind: what
- * main returned if it answered, otherwise what the renderer painted ahead of it.
- */
 export function retainedAutoReadState(entry: AgentAutoReadEntry | undefined): ConversationReadState | null {
   if (!entry) return null;
   return entry.status === "succeeded" ? entry.state : entry.optimisticState;
 }
 
-/** What to do about a message the renderer would like to mark read. */
 export type AgentAutoReadDecision =
-  /** Already asked for this message: repaint what that ask stands behind. */
   | { readonly kind: "retained"; readonly state: ConversationReadState | null }
-  /** Unread the user has not acknowledged: leave the badge alone. */
   | { readonly kind: "deferred" }
-  /** Ask main, painting `optimisticState` now and restoring `rollbackState` if it fails. */
   | {
       readonly kind: "mark";
       readonly optimisticState: ConversationReadState | null;
       readonly rollbackState: ConversationReadState | null;
     };
 
-/**
- * Whether opening a conversation clears its badge.
- *
- * Unread the user never acknowledged survives: arriving at a conversation that
- * already had unread messages does not silently read them. Three things
- * override that - the caller clearing optimistically (a page that arrived while
- * the conversation was open and focused), the user having opened this
- * conversation themselves, and a retry of a mark-read that failed earlier.
- *
- * `rollbackState` is non-null exactly when `optimisticState` is, because there
- * is nothing to restore unless something was painted; when the conversation had
- * unread that the caller cleared anyway, restoring means putting back the count
- * that was there, and otherwise it means putting back a single unread message.
- */
 export function decideAgentAutoRead(input: {
   readonly messageId: string;
   readonly current: ConversationReadState | undefined;

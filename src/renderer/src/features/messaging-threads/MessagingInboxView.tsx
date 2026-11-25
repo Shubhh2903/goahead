@@ -26,7 +26,9 @@ export function MessagingInboxView() {
   const { agentList } = useAgents();
   const { selectAgent } = useNavigation();
   // An `@chief` instruction opens the orchestrator's conversation, where its answer arrives.
-  const ask = async (text: string) => selectAgent(await threads.askOrchestratorAboutInbox(text));
+  const ask = async (text: string) => {
+    selectAgent(await threads.askOrchestratorAboutInbox(text));
+  };
   const items = createMemo(() =>
     threads.inbox.workspaces.flatMap((workspace) =>
       workspace.conversations.map((conversation) => ({ ...conversation, workspaceId: workspace.workspaceId })),
@@ -206,7 +208,7 @@ function OutgoingRow(props: { item: MessagingInboxOutgoing; name: string }) {
       showAuthor={false}
       showTime={false}
       agents={agentList()}
-      footer={
+      actions={
         <Show when={props.item.sending}>
           <span class="messaging-inbox-sending-note">{t("common.sending")}</span>
         </Show>

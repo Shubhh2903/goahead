@@ -2,6 +2,7 @@ import type { RoutineFeed, RoutineFeedDesktopApi } from "@openbot/contracts/ipc"
 import {
   Button,
   CalendarClock,
+  ConfirmDialog,
   CopyButton,
   Input,
   Item,
@@ -18,41 +19,74 @@ import {
   SelectTrigger,
   SelectValue,
   SettingsSection,
+  Spinner,
   Text,
 } from "@openbot/ui";
 import { useText } from "@openbot/ui/text";
-import { createSignal, Show, untrack } from "solid-js";
+import { createSignal, createStore, Show, untrack } from "solid-js";
 import type { ServerSettingsSectionHost } from "./server-settings-section";
 
 export interface ServerRoutineFeedOptions {
   api: RoutineFeedDesktopApi;
-  /** This computer's agents, for the filter. */
   listAgents: () => Promise<readonly { id: string; name: string }[]>;
 }
 
-/** The select value for the feed of every routine. An agent's value is `agent:<id>`, so it never collides. */
 const ALL_AGENTS = "all";
 const AGENT_PREFIX = "agent:";
 
-/** Server Settings > Routines: the iCalendar feed of this computer's routines. */
+type FeedConfirm = "regenerate" | "turnOff";
+
 export function ServerRoutineFeedPanel(
   props: ServerRoutineFeedOptions & Pick<ServerSettingsSectionHost, "busy" | "run" | "menuMount" | "showCopyError">,
 ) {
   const { t, errorMessage } = useText();
-  const [feed, setFeed] = createSignal<RoutineFeed | null>(null);
-  const [loadError, setLoadError] = createSignal<string | null>(null);
-  const [agents, setAgents] = createSignal<readonly { id: string; name: string }[]>([]);
+  const [state, setState] = createStore<{
+    feed: RoutineFeed | null;
+    loading: boolean;
+    loadError: string | null;
+    agents: readonly { id: string; name: string }[];
+    agentsFailed: boolean;
+  }>({ feed: null, loading: true, loadError: null, agents: [], agentsFailed: false });
   const [agentId, setAgentId] = createSignal(ALL_AGENTS);
+  const [confirm, setConfirm] = createSignal<FeedConfirm | null>(null);
 
-  // The panel mounts when the section opens, so each visit reads the feed again.
-  untrack(() => {
-    props.api.get().then(setFeed, (error) => setLoadError(errorMessage(error, t("server.settings.actionFailed"))));
-    // Without names the filter has only "All"; the feed still works.
-    props.listAgents().then(setAgents, () => undefined);
-  });
+  const read = () => {
+    props.api.get().then(
+      (feed) =>
+        setState((current) => {
+          current.feed = feed;
+          current.loading = false;
+        }),
+      (error) =>
+        setState((current) => {
+          current.loadError = errorMessage(error, t("server.settings.actionFailed"));
+          current.loading = false;
+        }),
+    );
+    props.listAgents().then(
+      (agents) =>
+        setState((current) => {
+          current.agents = agents;
+          current.agentsFailed = false;
+        }),
+      () =>
+        setState((current) => {
+          current.agentsFailed = true;
+        }),
+    );
+  };
+  const retry = () => {
+    setState((current) => {
+      current.loading = true;
+      current.loadError = null;
+    });
+    read();
+  };
+
+  untrack(read);
 
   const url = () => {
-    const base = feed()?.url;
+    const base = state.feed?.url;
     if (!base) return null;
     const value = agentId();
     return value === ALL_AGENTS ? base : `${base}?agent=${encodeURIComponent(value.slice(AGENT_PREFIX.length))}`;
@@ -60,22 +94,38 @@ export function ServerRoutineFeedPanel(
   const agentName = (value: string) =>
     value === ALL_AGENTS
       ? t("server.routineFeed.allAgents")
-      : (agents().find((agent) => `${AGENT_PREFIX}${agent.id}` === value)?.name ?? "");
+      : (state.agents.find((agent) => `${AGENT_PREFIX}${agent.id}` === value)?.name ?? "");
   const change = (key: string, action: () => Promise<RoutineFeed>) =>
-    void props.run(key, async () => {
-      setFeed(await action());
+    props.run(key, async () => {
+      const feed = await action();
+      setState((current) => {
+        current.feed = feed;
+      });
     });
+  const confirmChange = async (key: string, action: () => Promise<RoutineFeed>) => {
+    if (await change(key, action)) setConfirm(null);
+  };
 
   return (
     <SettingsSection title={t("server.routineFeed.title")}>
-      <Show when={loadError()}>
+      <Show when={state.loading}>
+        <div class="server-settings-routine-feed-loading">
+          <Spinner label={t("server.routineFeed.loading")} />
+        </div>
+      </Show>
+      <Show when={state.loadError}>
         {(message) => (
-          <Text variant="caption" tone="danger" role="alert">
-            {message()}
-          </Text>
+          <div class="server-settings-routine-feed-error">
+            <Text variant="caption" tone="danger" role="alert">
+              {message()}
+            </Text>
+            <Button type="button" size="sm" variant="outline" onClick={retry}>
+              {t("common.retry")}
+            </Button>
+          </div>
         )}
       </Show>
-      <Show when={feed()}>
+      <Show when={state.feed}>
         <ItemGroup class="settings-modal-card">
           <Show
             when={url()}
@@ -96,7 +146,7 @@ export function ServerRoutineFeedPanel(
                     size="sm"
                     loading={props.busy() === "routine-feed-create"}
                     disabled={Boolean(props.busy())}
-                    onClick={() => change("routine-feed-create", props.api.create)}
+                    onClick={() => void change("routine-feed-create", props.api.create)}
                   >
                     {t("server.routineFeed.create")}
                   </Button>
@@ -110,7 +160,7 @@ export function ServerRoutineFeedPanel(
                   <div class="server-settings-routine-feed-row">
                     <Select<string>
                       class="server-settings-routine-feed-agent"
-                      options={[ALL_AGENTS, ...agents().map((agent) => `${AGENT_PREFIX}${agent.id}`)]}
+                      options={[ALL_AGENTS, ...state.agents.map((agent) => `${AGENT_PREFIX}${agent.id}`)]}
                       value={agentId()}
                       placement="bottom-start"
                       onChange={(value) => setAgentId(value ?? ALL_AGENTS)}
@@ -140,6 +190,11 @@ export function ServerRoutineFeedPanel(
                       onCopyError={props.showCopyError}
                     />
                   </div>
+                  <Show when={state.agentsFailed}>
+                    <Text variant="caption" tone="muted">
+                      {t("server.routineFeed.agentsLoadFailed")}
+                    </Text>
+                  </Show>
                   <ItemDescription class="server-settings-routine-feed-text">
                     {t("server.routineFeed.privacy")}
                   </ItemDescription>
@@ -151,7 +206,7 @@ export function ServerRoutineFeedPanel(
                       title={t("server.routineFeed.regenerateLabel")}
                       loading={props.busy() === "routine-feed-create"}
                       disabled={Boolean(props.busy())}
-                      onClick={() => change("routine-feed-create", props.api.create)}
+                      onClick={() => setConfirm("regenerate")}
                     >
                       <RefreshCw aria-hidden="true" />
                       {t("server.routineFeed.regenerate")}
@@ -162,7 +217,7 @@ export function ServerRoutineFeedPanel(
                       variant="ghost"
                       loading={props.busy() === "routine-feed-remove"}
                       disabled={Boolean(props.busy())}
-                      onClick={() => change("routine-feed-remove", props.api.remove)}
+                      onClick={() => setConfirm("turnOff")}
                     >
                       {t("server.routineFeed.turnOff")}
                     </Button>
@@ -173,6 +228,28 @@ export function ServerRoutineFeedPanel(
           </Show>
         </ItemGroup>
       </Show>
+      <ConfirmDialog
+        open={confirm() === "regenerate"}
+        tone="default"
+        icon={<RefreshCw />}
+        initialFocus="cancel"
+        pending={props.busy() === "routine-feed-create"}
+        title={t("server.routineFeed.regenerateTitle")}
+        description={t("server.routineFeed.regenerateDescription")}
+        confirmLabel={t("server.routineFeed.regenerateConfirm")}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => confirmChange("routine-feed-create", props.api.create)}
+      />
+      <ConfirmDialog
+        open={confirm() === "turnOff"}
+        initialFocus="cancel"
+        pending={props.busy() === "routine-feed-remove"}
+        title={t("server.routineFeed.turnOffTitle")}
+        description={t("server.routineFeed.turnOffDescription")}
+        confirmLabel={t("server.routineFeed.turnOff")}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => confirmChange("routine-feed-remove", props.api.remove)}
+      />
     </SettingsSection>
   );
 }

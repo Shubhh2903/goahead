@@ -1,5 +1,12 @@
+import {
+  type AgentProviderRef,
+  agentProviderDescriptor,
+  isKnownAgentProvider,
+  MANAGED_SKILL_FOLDERS,
+} from "@openbot/contracts/agent-providers";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import type { InstalledSkill, MarketplaceSkillDetail } from "@openbot/contracts/ipc";
+import type { FilePreview, InstalledSkill, MarketplaceSkillDetail } from "@openbot/contracts/ipc";
+import { assignedSkillCount, isFolderSkill, isSkillEnabled, userAssignedSkills } from "@openbot/contracts/ipc";
 import type { AppTranslate } from "@openbot/i18n";
 import {
   Button,
@@ -25,30 +32,30 @@ import { SkillPreview } from "../../components/SkillPreview";
 import { type AgentSkillCalls, agentSkillCalls, type SkillCatalogCalls, skillsPort } from "../../skills-port";
 import { LocalSkillsLibrary } from "./LocalSkillsLibrary";
 
-/**
- * `mutable`: an agent on this computer. `host`: an agent on a joined server where this account is an
- * owner or admin; the host installs and removes, and its local skills library stays on the host.
- */
 export type AgentSkillsMode = "mutable" | "host" | "readonly" | "hidden";
 
 interface AgentSkillsModalProps {
-  selectionRequest?: { skillId: string } | null;
+  selectionRequest?: { skillId: string } | null | undefined;
   agentId: string;
   agentName: string;
+  agentProvider: AgentProviderRef;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCountChange: (count: number) => void;
   skillsMode?: AgentSkillsMode;
-  /** The joined server that runs the agent. Read in `host` mode only. */
   serverId?: string | undefined;
-  /** Replaces the desktop calls, for a client that reaches the host another way. */
   calls?: AgentSkillCalls | undefined;
-  /** `null`: no marketplace catalog, so the list and details show only what the host sends. */
   catalog?: SkillCatalogCalls | null | undefined;
-  onCreateSkill?: () => void;
-  onTrySkill?: (skill: MarketplaceSkillDetail) => void;
-  onAddFromMarketplace?: (agentId: string) => void;
+  onCreateSkill?: (() => void) | undefined;
+  onTrySkill?: ((skill: SkillDetail) => void) | undefined;
+  previewWorkspaceFile?: ((path: string) => Promise<FilePreview>) | undefined;
+  onAddFromMarketplace?: ((agentId: string) => void) | undefined;
 }
+
+export type SkillDetail = Pick<
+  MarketplaceSkillDetail,
+  "id" | "name" | "description" | "iconUrl" | "instructions" | "examplePrompt" | "version"
+>;
 
 type ConfirmKind = "remove" | "replace";
 
@@ -62,13 +69,13 @@ export function AgentSkillsModal(props: AgentSkillsModalProps) {
   const [skills, setSkills] = createSignal<InstalledSkill[]>([]);
   const [catalog, setCatalog] = createSignal<Record<string, { description: string; iconUrl: string | null }>>({});
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
-  const [detail, setDetail] = createSignal<MarketplaceSkillDetail | null>(null);
+  const [detail, setDetail] = createSignal<SkillDetail | null>(null);
   const [detailLoading, setDetailLoading] = createSignal(false);
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [filter, setFilter] = createSignal("all");
   const libraryOpen = () => filter() === "local";
-  const visibleSkills = createMemo(() => (filter() === "enabled" ? skills().filter(isEnabled) : skills()));
+  const visibleSkills = createMemo(() => (filter() === "enabled" ? skills().filter(isSkillEnabled) : skills()));
   const [savingId, setSavingId] = createSignal<string | null>(null);
   const [confirm, setConfirm] = createSignal<ConfirmRequest | null>(null);
   const scrollFades = createScrollFades();
@@ -78,14 +85,12 @@ export function AgentSkillsModal(props: AgentSkillsModalProps) {
   let confirmationTrigger: HTMLButtonElement | undefined;
   const skillsMode = () => props.skillsMode ?? "mutable";
   const mutable = () => skillsMode() === "mutable" || skillsMode() === "host";
-  /** The local skills library is on this computer, so only its own agents can use it. */
   const localLibrary = () => skillsMode() === "mutable";
   const calls = () => props.calls ?? agentSkillCalls(skillsMode() === "host" ? props.serverId : undefined);
   const catalogCalls = () => (props.catalog === undefined ? skillsPort().skills : props.catalog);
   const assignmentCount = createMemo(() => assignedSkillCount(skills()));
   const atCap = createMemo(() => assignmentCount() >= INPUT_LIMITS.agentSkills);
   const canAdd = createMemo(() => mutable() && !atCap() && props.onAddFromMarketplace !== undefined && !loading());
-  /** A folder skill problem is English text from main. */
   const problemText = (skill: InstalledSkill) => (skill.problem === undefined ? undefined : sourceText(skill.problem));
   const selectedSkill = createMemo(() => {
     const id = selectedId();
@@ -111,7 +116,7 @@ export function AgentSkillsModal(props: AgentSkillsModalProps) {
       );
       if (request !== listRequest || agentId !== props.agentId || !props.open) return;
       setSkills(next);
-      props.onCountChange(assignedSkillCount(next));
+      props.onCountChange(next.length);
       const targetId = props.selectionRequest?.skillId;
       if (showLoading && targetId) {
         const target = next.find((skill) => skill.skillId === targetId);
@@ -121,13 +126,14 @@ export function AgentSkillsModal(props: AgentSkillsModalProps) {
     } catch (caught) {
       if (request === listRequest) setError(errorMessage(caught, t("skill.loadFailed")));
     } finally {
-      // The latest request ends the wait, also when it replaced a first load that showed it.
       if (request === listRequest) setLoading(false);
     }
   }
 
+  const agentId = createMemo(() => props.agentId);
+  const selectionRequest = createMemo(() => props.selectionRequest);
   createEffect(
-    () => [props.open, props.agentId, skillsMode(), props.selectionRequest] as const,
+    () => [props.open, agentId(), skillsMode(), selectionRequest()] as const,
     ([open]) => {
       closeDetail();
       if (!open) {
@@ -142,13 +148,11 @@ export function AgentSkillsModal(props: AgentSkillsModalProps) {
     },
   );
 
-  // A change made on another device, in the chat or in another window shows while the dialog is open.
   createEffect(
     () => [props.open, props.agentId, calls()] as const,
     ([open, agentId, current]) => {
       if (!open || !current.onChanged) return;
       return current.onChanged((changedId) => {
-        // During the first load, load in full again, so the skill the dialog was opened for still opens.
         if (changedId === agentId) void loadSkills(untrack(loading));
       });
     },
@@ -188,21 +192,35 @@ export function AgentSkillsModal(props: AgentSkillsModalProps) {
     setDetailLoading(false);
   }
 
+  function detailCall(skill: InstalledSkill): (() => Promise<SkillDetail>) | null {
+    const readHostFile = props.previewWorkspaceFile;
+    const listing = listingCall(skill);
+    if (readHostFile && (!isFolderSkill(skill) || skill.location))
+      return () => hostSkillDetail(skill, props.agentProvider, readHostFile, listing);
+    return listing;
+  }
+
+  function listingCall(skill: InstalledSkill): (() => Promise<SkillDetail>) | null {
+    const catalogPort = catalogCalls();
+    if (!catalogPort || isFolderSkill(skill)) return null;
+    if (!skill.skillId.startsWith("local-skill-")) return () => catalogPort.get(skill.skillId);
+    if (!localLibrary()) return null;
+    return () => skillsPort().skills.localGet({ skillId: skill.skillId, revision: skill.installedVersion });
+  }
+
   async function openDetail(skill: InstalledSkill): Promise<void> {
     const request = ++detailRequest;
     setSelectedId(skill.skillId);
     setDetail(null);
     setDetailLoading(true);
     setError(null);
-    const catalogPort = catalogCalls();
-    if (isFolderSkill(skill) || !catalogPort || (!localLibrary() && skill.skillId.startsWith("local-skill-"))) {
+    const load = detailCall(skill);
+    if (!load) {
       setDetailLoading(false);
       return;
     }
     try {
-      const next = skill.skillId.startsWith("local-skill-")
-        ? await skillsPort().skills.localGet({ skillId: skill.skillId, revision: skill.installedVersion })
-        : await catalogPort.get(skill.skillId);
+      const next = await load();
       if (request === detailRequest) setDetail(next);
     } catch (caught) {
       if (request === detailRequest) setError(errorMessage(caught, t("skill.loadDetailsFailed")));
@@ -376,8 +394,8 @@ export function AgentSkillsModal(props: AgentSkillsModalProps) {
                         onUninstall={() => requestRemove(skill())}
                       />
                       <Switch
-                        aria-label={`Enable ${skill().name}`}
-                        checked={isEnabled(skill())}
+                        aria-label={t("skill.enableName", { name: skill().name })}
+                        checked={isSkillEnabled(skill())}
                         disabled={savingId() === skill().skillId}
                         onChange={(enabled) => void setEnabled(skill(), enabled)}
                       />
@@ -491,7 +509,7 @@ export function AgentSkillsModal(props: AgentSkillsModalProps) {
                                       {(skill) => (
                                         <div
                                           class={
-                                            isEnabled(skill())
+                                            isSkillEnabled(skill())
                                               ? "agent-skill-row"
                                               : "agent-skill-row agent-skill-row-disabled"
                                           }
@@ -546,8 +564,8 @@ export function AgentSkillsModal(props: AgentSkillsModalProps) {
                                               }}
                                             />
                                             <Switch
-                                              aria-label={`Enable ${skill().name}`}
-                                              checked={isEnabled(skill())}
+                                              aria-label={t("skill.enableName", { name: skill().name })}
+                                              checked={isSkillEnabled(skill())}
                                               disabled={savingId() === skill().skillId}
                                               onChange={(enabled) => void setEnabled(skill(), enabled)}
                                             />
@@ -570,20 +588,17 @@ export function AgentSkillsModal(props: AgentSkillsModalProps) {
                                     <Show when={skill().problem}>
                                       {(problem) => <p class="agent-memory-error">{sourceText(problem())}</p>}
                                     </Show>
-                                    <Show when={skill().description}>
+                                    <Show when={!detail() && skill().description}>
                                       {(description) => <p class="agent-memory-state">{description()}</p>}
                                     </Show>
                                     <p class="agent-memory-state">
                                       {t("skill.folderSkill", { location: skill().location ?? "" })}
                                     </p>
                                   </Show>
-                                  <Show when={!catalogCalls() && !isFolderSkill(skill())}>
+                                  <Show
+                                    when={!catalogCalls() && !isFolderSkill(skill()) && !detail() && !detailLoading()}
+                                  >
                                     <p class="agent-memory-state">{skill().description ?? skillMeta(skill(), t)}</p>
-                                  </Show>
-                                  <Show when={!localLibrary() && skill().skillId.startsWith("local-skill-")}>
-                                    <p class="agent-memory-state" role="status">
-                                      {t("skill.localOnHost")}
-                                    </p>
                                   </Show>
                                   <Show when={detailLoading()}>
                                     <p class="agent-memory-state">{t("skill.loadingDetails")}</p>
@@ -602,7 +617,8 @@ export function AgentSkillsModal(props: AgentSkillsModalProps) {
                                                 const selected = skill();
                                                 const preview = current();
                                                 const agentId = props.agentId;
-                                                if (!isEnabled(selected) && !(await setEnabled(selected, true))) return;
+                                                if (!isSkillEnabled(selected) && !(await setEnabled(selected, true)))
+                                                  return;
                                                 if (
                                                   !props.open ||
                                                   props.agentId !== agentId ||
@@ -614,9 +630,6 @@ export function AgentSkillsModal(props: AgentSkillsModalProps) {
                                               }
                                             : undefined
                                         }
-                                        // The conditions on `onTry` above, in the same order: a
-                                        // save in flight reads as an unavailable composer without
-                                        // this, which names the wrong cause.
                                         unavailableReason={
                                           !mutable()
                                             ? t("skill.unavailable.readOnly")
@@ -699,31 +712,51 @@ function SkillMoreMenu(props: {
   );
 }
 
-function isBuiltInSkill(skill: InstalledSkill): boolean {
-  return (
-    skill.origin === "managed" || skill.slug === "openbot-site-hosting" || skill.skillId === "openbot-site-hosting"
-  );
+function hostSkillPaths(skill: InstalledSkill, provider: AgentProviderRef): string[] {
+  if (isFolderSkill(skill)) return [`${skill.location}/SKILL.md`];
+  if (!isSkillEnabled(skill)) return [`.openbot/skills-disabled/${skill.slug}/SKILL.md`];
+  return installedSkillFolders(provider).map((folder) => `${folder}/${skill.slug}/SKILL.md`);
 }
 
-/** A skill in a skill folder that OpenBot lists but does not manage. */
-function isFolderSkill(skill: InstalledSkill): boolean {
-  return skill.origin === "workspace";
+function installedSkillFolders(provider: AgentProviderRef): string[] {
+  if (!isKnownAgentProvider(provider)) return [...MANAGED_SKILL_FOLDERS];
+  const reads = agentProviderDescriptor(provider).skillFolders;
+  const rank = (folder: string) => (reads.includes(folder) ? reads.indexOf(folder) : reads.length);
+  return MANAGED_SKILL_FOLDERS.toSorted((left, right) => rank(left) - rank(right));
 }
 
-function isEnabled(skill: InstalledSkill): boolean {
-  return skill.enabled !== false;
-}
-
-function userAssignedSkills(skills: InstalledSkill[]): InstalledSkill[] {
-  return skills
-    .filter((skill) => !isBuiltInSkill(skill))
-    .slice()
-    .sort((left, right) => left.name.localeCompare(right.name));
-}
-
-/** A skill in a folder OpenBot did not write is not an assignment, so it does not count toward the cap. */
-export function assignedSkillCount(skills: InstalledSkill[]): number {
-  return skills.filter((skill) => !isBuiltInSkill(skill) && !isFolderSkill(skill)).length;
+async function hostSkillDetail(
+  skill: InstalledSkill,
+  provider: AgentProviderRef,
+  readHostFile: (path: string) => Promise<FilePreview>,
+  listing: (() => Promise<SkillDetail>) | null,
+): Promise<SkillDetail> {
+  const pendingEntry = listing?.().catch(() => null) ?? Promise.resolve(null);
+  let file: FilePreview | null = null;
+  let failure: unknown;
+  for (const path of hostSkillPaths(skill, provider)) {
+    try {
+      file = await readHostFile(path);
+      break;
+    } catch (error) {
+      failure ??= error;
+    }
+  }
+  const entry = await pendingEntry;
+  if (!file) {
+    if (entry) return entry;
+    throw failure;
+  }
+  const text = file.bytes ? new TextDecoder().decode(file.bytes) : "";
+  return {
+    id: skill.skillId,
+    name: skill.name,
+    description: skill.description ?? entry?.description ?? "",
+    iconUrl: entry?.iconUrl ?? null,
+    ...(entry?.examplePrompt ? { examplePrompt: entry.examplePrompt } : {}),
+    instructions: text.replace(/^---\s*\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u, "").trim(),
+    version: skill.installedVersion,
+  };
 }
 
 function skillMeta(skill: InstalledSkill, t: AppTranslate): string {

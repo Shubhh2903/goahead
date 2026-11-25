@@ -1,16 +1,14 @@
 import { Bubble, BubbleContent } from "@openbot/ui";
 import type { AgentMessage } from "@openbot/ui/data";
 import { MessageBody } from "@openbot/ui/features/conversation/MessageRendering";
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show, untrack } from "solid-js";
 import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
 import FilePreviewPanel from "../src/features/conversation/FilePreviewPanel";
+import { INLINE_SVG_CHART, publishChatVisualPage } from "./chat-visual-fixtures";
 import { filePreviewForPath, WORKSPACE_FILE_PREVIEWS } from "./file-previews";
 import { STORY_AGENTS } from "./fixtures";
 
-// The chat opens the file preview as a conversation does: a file link in the text of a
-// message calls `onOpenWorkspaceFile`, and the panel shows the file on the right side.
-// An attachment card is a different flow: it opens the media lightbox, not this panel.
 const WORKSPACE = "/Users/test/OpenBot/Agents/agent-4f2c";
 
 const MESSAGES: AgentMessage[] = [
@@ -67,6 +65,7 @@ const MESSAGES: AgentMessage[] = [
       `- [invoice-2026-09.pdf](${WORKSPACE}/invoice-2026-09.pdf)`,
       `- [standup-recap.mp3](${WORKSPACE}/standup-recap.mp3)`,
       `- [operating-plan.xlsx](${WORKSPACE}/operating-plan.xlsx)`,
+      `- [weekly-signups.html](${WORKSPACE}/weekly-signups.html)`,
     ].join("\n"),
     time: "10:09",
     status: "Done",
@@ -80,11 +79,12 @@ const PANEL_DEFAULT = 480;
 
 function FilePreviewChat(props: {
   openFile?: string;
+  htmlPageUrl?: string | undefined;
   onOpenLink: (url: string) => void;
   onOpenExternally: () => void;
   onWidthChange: (width: number) => void;
 }) {
-  const [openName, setOpenName] = createSignal<string | null>(props.openFile ?? null);
+  const [openName, setOpenName] = createSignal<string | null>(untrack(() => props.openFile ?? null));
   const [width, setWidth] = createSignal(PANEL_DEFAULT);
   let stage: HTMLDivElement | undefined;
   const stageWidth = () => stage?.clientWidth || window.innerWidth;
@@ -136,8 +136,8 @@ function FilePreviewChat(props: {
         {(file) => (
           <FilePreviewPanel
             preview={file()}
+            pageUrl={file().mimeType === "text/html" ? props.htmlPageUrl : undefined}
             agents={STORY_AGENTS}
-            defaultWidth={() => PANEL_DEFAULT}
             maxWidth={() => Math.min(PANEL_MAX, Math.max(PANEL_MIN, stageWidth() - CONVERSATION_MIN))}
             onWidthChange={(next) => {
               setWidth(next);
@@ -169,11 +169,18 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** A chat with Markdown, CSV, JSON, plain text, SVG, PDF, audio, image, and XLSX files. */
 export const Chat: Story = {};
 
-/** The same chat with the markdown file already open, as after a click. */
 export const ChatWithOpenFile: Story = {
   name: "Chat (file open)",
   args: { openFile: "RELEASE-NOTES.md" },
+};
+
+export const HtmlWorkspacePage: Story = {
+  name: "Workspace HTML (page)",
+  render: (args) => {
+    const [pageUrl, setPageUrl] = createSignal<string>();
+    void publishChatVisualPage(INLINE_SVG_CHART).then(setPageUrl);
+    return <FilePreviewChat {...args} htmlPageUrl={pageUrl()} />;
+  },
 };

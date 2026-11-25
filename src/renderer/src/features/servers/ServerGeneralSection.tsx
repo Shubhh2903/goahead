@@ -1,11 +1,9 @@
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
-import type { AvatarImageInput, ServerNotificationLevel } from "@openbot/contracts/ipc";
-import { SERVER_NOTIFICATION_LEVELS } from "@openbot/contracts/ipc";
+import type { AvatarImageInput, ServerAppearance } from "@openbot/contracts/ipc";
 import {
-  Badge,
   Button,
+  buttonVariants,
   ConfirmDialog,
-  CopyButton,
   Image,
   ImageRemoveButton,
   Input,
@@ -15,35 +13,23 @@ import {
   ItemDescription,
   ItemGroup,
   ItemTitle,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Popover,
   SettingsSection,
-  SwitchField,
   Text,
-  toast,
 } from "@openbot/ui";
 import { avatarImageDataUrl, normalizeAvatarFile } from "@openbot/ui/avatar-image";
-import {
-  SERVER_NOTIFICATION_LEVEL_LABELS,
-  serverMuteDescription,
-} from "@openbot/ui/features/servers/ServerActionItems";
+import { LeaveServerDialog } from "@openbot/ui/features/servers/LeaveServerDialog";
+import { ServerAppearancePicker } from "@openbot/ui/features/servers/ServerAppearancePicker";
 import { ServerLogo } from "@openbot/ui/features/servers/ServerLogo";
+import { ServerPlushLogo } from "@openbot/ui/server-plush-logo";
 import { useText } from "@openbot/ui/text";
-import { truncateMiddle } from "@openbot/ui/utils";
 import type { JSX } from "@solidjs/web";
 import { type Accessor, createStore, Show, snapshot } from "solid-js";
+import { actionToast } from "../../action-toast";
+import { ServerSignalHomeSetting } from "./ServerSignalHomeSetting";
 import { serverCanAdminister } from "./server-capabilities";
 import type { ServerSettingsSectionHost } from "./server-settings-section";
 
-/**
- * The identity form: the name and logo as the server last confirmed them, the draft the user is
- * editing, and the validation feedback that belongs to that draft. `logo` is `undefined` while the
- * saved image stands, `null` once the user removes it, and an image once one is chosen, so it
- * carries the difference between "unchanged" and "cleared" that a save has to send.
- */
 interface ServerIdentityDraft {
   editing: boolean;
   logo: AvatarImageInput | null | undefined;
@@ -56,41 +42,33 @@ interface ServerIdentityDraft {
   savedName: string;
 }
 
-/**
- * The General section's state. Each group's fields are written together - a reset rewrites the
- * whole identity draft at once - so they are one store rather than a signal each, and replacing one
- * field re-renders only what read that field.
- */
 interface GeneralPanels {
-  offerRemoteDesktopSetup: boolean;
   confirmLeave: boolean;
+  confirmRotateKey: boolean;
   identity: ServerIdentityDraft;
+  appearance: ServerAppearance | null | undefined;
+  appearancePickerOpen: boolean;
 }
 
 interface ServerGeneralSection {
   Panel: () => JSX.Element;
   LeaveDialog: () => JSX.Element;
-  /** True while the user edits the identity, so the server's own name and logo do not replace the draft. */
+  RotateKeyDialog: () => JSX.Element;
   editing: Accessor<boolean>;
   identityDirty: Accessor<boolean>;
   resetIdentity(): void;
   saveIdentity(): Promise<void>;
-  /** Shows the name and logo the server holds now, while the user does not edit them. */
+  saveIdentityDraft(): Promise<boolean>;
   syncFromServer(name: string, logoUrl: string | null): void;
-  /** Forgets the draft state of the previous server when the dialog shows another one. */
   resetForServer(): void;
 }
 
-/** The General section: server identity, access, notifications, and leaving a joined server. */
-export function createServerGeneralSection(
-  host: ServerSettingsSectionHost,
-  options: { onSetUpDesktop: () => void },
-): ServerGeneralSection {
-  const { t, format, errorMessage } = useText();
-  const { props, local, configured, published, actionsAvailable, busy, run } = host;
+export function createServerGeneralSection(host: ServerSettingsSectionHost): ServerGeneralSection {
+  const { t, errorMessage, format } = useText();
+  const { props, local, configured, published, actionsAvailable, busy, run, menuMount } = host;
   const [panels, setPanels] = createStore<GeneralPanels>({
-    offerRemoteDesktopSetup: false,
     confirmLeave: false,
+    confirmRotateKey: false,
     identity: {
       editing: false,
       logo: undefined,
@@ -102,13 +80,22 @@ export function createServerGeneralSection(
       savedLogoUrl: null,
       savedName: "",
     },
+    appearance: undefined,
+    appearancePickerOpen: false,
   });
   let logoInput: HTMLInputElement | undefined;
   let nameInput: HTMLInputElement | undefined;
 
-  /** The host changes its own name and logo; an admin elsewhere asks it to while it is online. */
   const canEditIdentity = () => serverCanAdminister(props.server, "host-admin-v1") && actionsAvailable();
-  const address = () => (local() ? props.hostStatus?.apiUrl : props.server.apiUrl);
+  const canEditAppearance = () =>
+    Boolean(props.onSaveAppearance) &&
+    serverCanAdminister(props.server, "host-appearance-v1") &&
+    actionsAvailable() &&
+    (!local() || configured());
+  const appearance = (): ServerAppearance | null =>
+    panels.appearance === undefined ? (props.server.appearance ?? null) : panels.appearance;
+  let queuedAppearance: ServerAppearance | null | undefined;
+  let savingAppearance = false;
   const trimmedName = () => panels.identity.name.trim();
   const nameError = () => {
     if (!canEditIdentity()) return null;
@@ -119,28 +106,19 @@ export function createServerGeneralSection(
     return null;
   };
   const visibleNameError = () => (panels.identity.nameTouched ? nameError() : null);
-  /** The owner cannot leave the host they own, and the local server is this computer. */
   const canLeave = () => Boolean(props.onLeaveServer) && !local() && props.server.role !== "owner";
+  const canRemove = () => Boolean(props.onRemoveServer) && !local() && props.server.role === "owner";
+  const canRotateKey = () => Boolean(props.onRotateHostKey) && (local() ? published() : actionsAvailable());
+  const keyChangedAt = () => props.server.keyChangedAt;
+  const signalHome = () =>
+    serverCanAdminister(props.server, "host-signal-home-v1") && (local() ? published() : actionsAvailable())
+      ? props.hostSignalHome
+      : undefined;
   const identityDirty = () =>
     canEditIdentity() &&
     (trimmedName() !== panels.identity.savedName ||
       panels.identity.logo !== undefined ||
       panels.identity.logoUrl !== panels.identity.savedLogoUrl);
-
-  async function setPublished(value: boolean): Promise<void> {
-    const serverId = props.server.id;
-    const succeeded = await run("publish", () => props.onSetPublished(value));
-    if (!succeeded || props.server.id !== serverId) return;
-    setPanels((state) => {
-      state.offerRemoteDesktopSetup = value && local() && props.platform === "darwin";
-    });
-  }
-
-  function dismissRemoteDesktopSetup(): void {
-    setPanels((state) => {
-      state.offerRemoteDesktopSetup = false;
-    });
-  }
 
   async function chooseLogo(file: File | undefined): Promise<void> {
     if (!file) return;
@@ -177,8 +155,6 @@ export function createServerGeneralSection(
   function updateDraftName(value: string): void {
     const namePristine = value.trim() === panels.identity.savedName;
     const logoPristine = panels.identity.logo === undefined && panels.identity.logoUrl === panels.identity.savedLogoUrl;
-    // Decided before the write, so `nameError()` still sees the pre-write draft name - the same
-    // value it saw when this was a signal, whose write was equally deferred.
     const stopShaking = namePristine || !nameError();
     setPanels((state) => {
       state.identity.name = value;
@@ -216,8 +192,6 @@ export function createServerGeneralSection(
     const saved = await run("identity", () =>
       props.onSaveIdentity({
         serverName,
-        // The image crosses to IPC, which structured-clones it, so it goes as a snapshot rather
-        // than as whatever the store hands back.
         ...(logo === undefined ? {} : { logo: snapshot(logo) }),
       }),
     );
@@ -230,6 +204,41 @@ export function createServerGeneralSection(
       state.identity.nameTouched = false;
       state.identity.nameShaking = false;
     });
+  }
+
+  async function saveAppearance(next: ServerAppearance | null): Promise<void> {
+    setPanels((state) => {
+      state.appearance = next;
+    });
+    if (savingAppearance) {
+      queuedAppearance = next;
+      return;
+    }
+    const save = props.onSaveAppearance;
+    if (!save) return;
+    savingAppearance = true;
+    let value = next;
+    try {
+      for (;;) {
+        const sent = value;
+        const saved = await run("appearance", () => save(sent));
+        if (queuedAppearance === undefined || !saved) break;
+        value = queuedAppearance;
+        queuedAppearance = undefined;
+      }
+    } finally {
+      savingAppearance = false;
+      queuedAppearance = undefined;
+      setPanels((state) => {
+        state.appearance = undefined;
+      });
+    }
+  }
+
+  async function saveIdentityDraft(): Promise<boolean> {
+    if (!identityDirty() || nameError()) return true;
+    await saveIdentity();
+    return !identityDirty();
   }
 
   function syncFromServer(name: string, logoUrl: string | null): void {
@@ -246,18 +255,14 @@ export function createServerGeneralSection(
 
   function resetForServer(): void {
     setPanels((state) => {
-      state.offerRemoteDesktopSetup = false;
       state.confirmLeave = false;
+      state.confirmRotateKey = false;
+      state.appearance = undefined;
+      state.appearancePickerOpen = false;
       state.identity.editing = false;
       state.identity.nameTouched = false;
       state.identity.nameShaking = false;
     });
-  }
-
-  function accessDescription() {
-    if (!local()) return published() ? t("server.settings.remoteOnline") : t("server.settings.remoteOffline");
-    if (!configured()) return t("server.settings.saveIdentityFirst");
-    return published() ? t("server.settings.reachable") : t("server.settings.notReachable");
   }
 
   function Panel() {
@@ -269,7 +274,7 @@ export function createServerGeneralSection(
             hidden
             type="file"
             aria-label={t("server.settings.logo")}
-            accept="image/png,image/jpeg,image/webp"
+            accept="image/png,image/jpeg,image/gif,image/webp"
             disabled={!canEditIdentity()}
             onChange={(event) => {
               void chooseLogo(event.currentTarget.files?.[0]);
@@ -357,10 +362,44 @@ export function createServerGeneralSection(
                 </ItemDescription>
               </ItemContent>
               <ItemActions class="settings-identity-image-control">
+                <Show when={canEditAppearance() && !panels.identity.logoUrl}>
+                  <Popover.Root
+                    open={panels.appearancePickerOpen}
+                    placement="bottom-end"
+                    gutter={8}
+                    onOpenChange={(open) =>
+                      setPanels((state) => {
+                        state.appearancePickerOpen = open;
+                      })
+                    }
+                  >
+                    <Popover.Trigger
+                      class={buttonVariants({
+                        variant: "outline",
+                        size: "icon-lg",
+                        class: "settings-identity-image-trigger server-appearance-trigger",
+                      })}
+                      aria-label={t("server.settings.appearance")}
+                      disabled={Boolean(busy()) && busy() !== "appearance"}
+                    >
+                      <ServerPlushLogo class="server-settings-plush" seed={props.server.id} appearance={appearance()} />
+                    </Popover.Trigger>
+                    <Popover.Portal>
+                      <Popover.Content class="avatar-editor">
+                        <Popover.Title class="sr-only">{t("server.settings.appearance")}</Popover.Title>
+                        <ServerAppearancePicker
+                          serverId={props.server.id}
+                          appearance={appearance()}
+                          onChange={(next) => void saveAppearance(next)}
+                        />
+                      </Popover.Content>
+                    </Popover.Portal>
+                  </Popover.Root>
+                </Show>
                 <Show
                   when={canEditIdentity()}
                   fallback={
-                    <ServerLogo name={panels.identity.name || props.server.name} url={panels.identity.logoUrl} />
+                    <ServerLogo serverId={props.server.id} url={panels.identity.logoUrl} appearance={appearance()} />
                   }
                 >
                   <div class="settings-identity-image-picker ui-removable-image">
@@ -378,7 +417,9 @@ export function createServerGeneralSection(
                         when={panels.identity.logoUrl}
                         fallback={<Image class="server-settings-logo-placeholder" aria-hidden="true" />}
                       >
-                        {(logoUrl) => <ServerLogo name={panels.identity.name || props.server.name} url={logoUrl()} />}
+                        {(logoUrl) => (
+                          <ServerLogo serverId={props.server.id} url={logoUrl()} appearance={appearance()} />
+                        )}
                       </Show>
                     </Button>
                     <Show when={panels.identity.logoUrl}>
@@ -401,122 +442,55 @@ export function createServerGeneralSection(
             </Item>
           </ItemGroup>
         </SettingsSection>
-        <SettingsSection title={t("server.settings.access")}>
-          <ItemGroup class="settings-modal-card">
-            <SwitchField
-              class="server-settings-publish-setting"
-              size="default"
-              checked={published()}
-              disabled={!local() || !configured() || Boolean(busy())}
-              onChange={(value) => void setPublished(value)}
-              label={local() ? t("server.settings.publish") : t("server.settings.published")}
-              description={accessDescription()}
+        <Show when={signalHome()}>
+          {(options) => (
+            <ServerSignalHomeSetting
+              {...options()}
+              serverId={props.server.id}
+              disabled={Boolean(busy())}
+              menuMount={menuMount()}
+              run={run}
             />
-            <Item class="server-settings-address-setting">
-              <ItemContent>
-                <ItemTitle>{t("server.settings.address")}</ItemTitle>
-                <ItemDescription>{t("server.settings.addressDescription")}</ItemDescription>
-              </ItemContent>
-              <Show
-                when={address()}
-                fallback={
-                  <Badge tone="neutral" size="md" shape="pill">
-                    {t("server.settings.private")}
-                  </Badge>
-                }
-              >
-                {(serverAddress) => (
-                  <CopyButton
-                    value={serverAddress()}
-                    label={truncateMiddle(serverAddress(), 31)}
-                    copiedLabel={t("common.copied")}
-                    aria-label={t("server.settings.copyAddress")}
-                    title={serverAddress()}
-                    onCopyError={host.showCopyError}
-                    class="server-settings-address-control"
-                  />
-                )}
-              </Show>
-            </Item>
-          </ItemGroup>
-        </SettingsSection>
-        <Show when={panels.offerRemoteDesktopSetup}>
-          <ItemGroup class="settings-modal-card">
-            <Item>
-              <ItemContent>
-                <ItemTitle>{t("server.settings.setUpDesktopTitle")}</ItemTitle>
-                <ItemDescription>{t("server.settings.setUpDesktopDescription")}</ItemDescription>
-              </ItemContent>
-              <ItemActions>
-                <Button size="sm" variant="ghost" onClick={dismissRemoteDesktopSetup}>
-                  {t("server.settings.later")}
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    dismissRemoteDesktopSetup();
-                    options.onSetUpDesktop();
-                  }}
-                >
-                  {t("server.settings.setUp")}
-                </Button>
-              </ItemActions>
-            </Item>
-          </ItemGroup>
+          )}
         </Show>
-        <Show when={props.onSetMuted && props.onSetNotificationLevel}>
-          <SettingsSection title={t("server.settings.notifications")}>
+        <Show when={canRotateKey() || keyChangedAt() !== undefined}>
+          <SettingsSection title={t("server.settings.hostKeyTitle")}>
             <ItemGroup class="settings-modal-card">
-              <SwitchField
-                class="server-settings-mute-setting"
-                size="default"
-                checked={props.server.notificationsMuted}
-                disabled={Boolean(busy())}
-                onChange={(value) => void run("mute", () => props.onSetMuted?.(value) ?? Promise.resolve())}
-                label={t("server.settings.muteNotifications")}
-                description={
-                  props.server.notificationsMutedUntil === null
-                    ? t("server.settings.muteDescription")
-                    : t("server.settings.mutedUntilDescription", {
-                        until: serverMuteDescription(props.server, t, format),
-                      })
-                }
-              />
-              <Item>
-                <ItemContent>
-                  <ItemTitle id="server-settings-notification-level-label">
-                    {t("server.settings.notifyAbout")}
-                  </ItemTitle>
-                  <ItemDescription>{t("server.settings.notifyAboutDescription")}</ItemDescription>
-                </ItemContent>
-                <ItemActions>
-                  <Select<ServerNotificationLevel>
-                    options={[...SERVER_NOTIFICATION_LEVELS]}
-                    value={props.server.notificationLevel}
-                    disabled={Boolean(busy())}
-                    placement="bottom-end"
-                    onChange={(level) => {
-                      if (level)
-                        void run(
-                          "notification-level",
-                          () => props.onSetNotificationLevel?.(level) ?? Promise.resolve(),
-                        );
-                    }}
-                    itemComponent={(item) => (
-                      <SelectItem item={item.item}>
-                        {t(SERVER_NOTIFICATION_LEVEL_LABELS[item.item.rawValue])}
-                      </SelectItem>
-                    )}
-                  >
-                    <SelectTrigger size="sm" aria-labelledby="server-settings-notification-level-label">
-                      <SelectValue<ServerNotificationLevel>>
-                        {(state) => t(SERVER_NOTIFICATION_LEVEL_LABELS[state.selectedOption()])}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent mount={host.menuMount()} />
-                  </Select>
-                </ItemActions>
-              </Item>
+              <Show when={keyChangedAt() !== undefined}>
+                <Item>
+                  <ItemContent>
+                    <ItemTitle>{t("server.settings.hostKeyChanged")}</ItemTitle>
+                    <ItemDescription>
+                      {t("server.settings.hostKeyChangedDescription", {
+                        date: format.date(new Date(keyChangedAt() ?? 0), { dateStyle: "medium", timeStyle: "short" }),
+                      })}
+                    </ItemDescription>
+                  </ItemContent>
+                </Item>
+              </Show>
+              <Show when={canRotateKey()}>
+                <Item>
+                  <ItemContent>
+                    <ItemTitle>{t("server.settings.hostKeyRotate")}</ItemTitle>
+                    <ItemDescription>{t("server.settings.hostKeyDescription")}</ItemDescription>
+                  </ItemContent>
+                  <ItemActions>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={Boolean(busy())}
+                      onClick={() =>
+                        setPanels((state) => {
+                          state.confirmRotateKey = true;
+                        })
+                      }
+                    >
+                      {t("server.settings.hostKeyRotateAction")}
+                    </Button>
+                  </ItemActions>
+                </Item>
+              </Show>
             </ItemGroup>
           </SettingsSection>
         </Show>
@@ -547,35 +521,77 @@ export function createServerGeneralSection(
             </ItemGroup>
           </SettingsSection>
         </Show>
+        <Show when={canRemove()}>
+          <SettingsSection title={t("server.settings.removeTitle")}>
+            <ItemGroup class="settings-modal-card">
+              <Item>
+                <ItemContent>
+                  <ItemTitle>{t("server.settings.removeTitle")}</ItemTitle>
+                  <ItemDescription>{t("server.settings.removeDescription")}</ItemDescription>
+                </ItemContent>
+                <ItemActions>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    disabled={Boolean(busy())}
+                    onClick={() =>
+                      setPanels((state) => {
+                        state.confirmLeave = true;
+                      })
+                    }
+                  >
+                    {t("server.settings.removeTitle")}
+                  </Button>
+                </ItemActions>
+              </Item>
+            </ItemGroup>
+          </SettingsSection>
+        </Show>
       </>
     );
   }
 
   function LeaveDialog() {
     return (
-      <Show when={panels.confirmLeave && canLeave()}>
-        <ConfirmDialog
-          open
-          initialFocus="cancel"
-          pending={busy() === "leave"}
-          title={t("server.settings.leaveConfirmTitle", { name: props.server.name })}
-          description={t("server.settings.leaveConfirmDescription")}
-          confirmLabel={t("server.settings.leaveTitle")}
-          pendingLabel={t("server.settings.leaving")}
-          onCancel={() =>
+      <Show when={panels.confirmLeave && (canLeave() || canRemove())}>
+        <LeaveServerDialog
+          server={props.server}
+          removeOwned={canRemove()}
+          onClose={() =>
             setPanels((state) => {
               state.confirmLeave = false;
             })
           }
+          onLeave={async () => {
+            await (canRemove() ? props.onRemoveServer?.() : props.onLeaveServer?.());
+          }}
+        />
+      </Show>
+    );
+  }
+
+  function RotateKeyDialog() {
+    const close = () =>
+      setPanels((state) => {
+        state.confirmRotateKey = false;
+      });
+    return (
+      <Show when={panels.confirmRotateKey && canRotateKey()}>
+        <ConfirmDialog
+          open
+          tone="default"
+          initialFocus="cancel"
+          pending={busy() === "rotate-host-key"}
+          title={t("server.settings.hostKeyConfirmTitle")}
+          description={t("server.settings.hostKeyConfirmDescription")}
+          confirmLabel={t("server.settings.hostKeyRotateAction")}
+          onCancel={close}
           onConfirm={async () => {
-            // Read now: a successful leave takes the server out of the list and unmounts this dialog.
-            const name = props.server.name;
-            await run("leave", async () => {
-              await props.onLeaveServer?.();
-              setPanels((state) => {
-                state.confirmLeave = false;
-              });
-              toast.success(t("server.settings.leftTitle", { name }));
+            await run("rotate-host-key", async () => {
+              await props.onRotateHostKey?.();
+              close();
+              actionToast.success(t("server.settings.hostKeyRotated"));
             });
           }}
         />
@@ -586,10 +602,12 @@ export function createServerGeneralSection(
   return {
     Panel,
     LeaveDialog,
+    RotateKeyDialog,
     editing: () => panels.identity.editing,
     identityDirty,
     resetIdentity,
     saveIdentity,
+    saveIdentityDraft,
     syncFromServer,
     resetForServer,
   };

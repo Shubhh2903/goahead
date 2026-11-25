@@ -1,80 +1,124 @@
+import { AppLoadingScreen } from "@openbot/ui/features/account/AppLoadingScreen";
+import { UpdateRequiredScreen } from "@openbot/ui/features/updates/UpdateRequiredScreen";
 import { useText } from "@openbot/ui/text";
-import { createSignal, Loading, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Loading, Show } from "solid-js";
+import { appPort } from "./app-port";
 import { useAuth } from "./features/account/account-context";
 import { useProviderDetection } from "./features/custom-providers/provider-detection-context";
+import { createLanguageStep } from "./features/onboarding/language-step";
 import { useSetup } from "./features/onboarding/onboarding-context";
+import { SetupReadError } from "./features/onboarding/SetupReadError";
 import { useSetupProviderProps } from "./features/onboarding/setup-provider-props";
+import { useServerScope } from "./features/servers/server-scope";
 import { useServerSelection } from "./features/servers/server-selection";
+import { useServers } from "./features/servers/servers-context";
 import { useSettings } from "./features/settings/settings-context";
-import type { SoundFeedbackChoice } from "./features/settings/sound-feedback";
-import { StartupSplash } from "./features/startup/StartupSplash";
+import { useUpdates } from "./features/updates/updates-context";
 import { WhatsNewOverlay } from "./features/updates/WhatsNewOverlay";
-import { AccountLogin, InitialSetup, OnboardingFlow } from "./lazy-views";
+import { QuitShortcutHint } from "./features/window/QuitShortcutHint";
+import { startsAfterRestart } from "./features/window/restarted-start";
+import { useI18n } from "./i18n-context";
+import { AccountLogin, FirstRunFlow, InitialSetup, LanguageStep } from "./lazy-views";
 import { usePlatform } from "./platform";
+import { reportWorkspaceReady } from "./renderer-timing";
+import { startupLoadingScene } from "./startup-animation-preference";
 import { WorkspaceShell } from "./WorkspaceShell";
 
-/** The placeholder every lazy view below falls back to while its code loads. */
+let startupSplashPlayed = false;
+
+export function skipStartupSplash(): void {
+  startupSplashPlayed = true;
+}
+
 function LoadingScreen() {
   const { t } = useText();
   return <div class="initial-setup-screen" role="status" aria-label={t("app.loading")} />;
 }
 
-/**
- * Which of four things the window shows: the startup splash until the build and
- * the saved setup are known, the sign-in screen, one of the two first-run flows,
- * or the workspace. The splash stays over the next screen until it fades out.
- *
- * The ladder is written as nested `<Show>` rather than pushed into the providers
- * as readiness gates. A gated provider withholds its subtree, and the only
- * subtree here is the whole application, so a gate would replace these
- * placeholders with a blank window and serialize the bootstrap loads that
- * currently run in parallel. See `app-providers.tsx`.
- *
- * `account` is threaded down as an accessor because the innermost `<Show>` is
- * what proves it non-null; the workspace and its overlays need the account, and
- * re-reading `signedInAccount()` below would hand them a nullable value the
- * gate has already ruled out.
- */
 export function AppAccessGate() {
+  const { t } = useText();
   const platform = usePlatform();
+  const i18n = useI18n();
   const auth = useAuth();
   const setup = useSetup();
-  // Setup is ungated: it only ever runs against this computer, so there is no remote server to hide
-  // the endpoints from. Settings gates on `activeServer()`; see `WorkspaceOverlays.tsx`.
+  const scope = useServerScope();
   const setupProviders = useSetupProviderProps();
   const detection = useProviderDetection();
-  const { joinRemoteDuringSetup } = useServerSelection();
-  const { generalSettings, updateGeneralSettings } = useSettings();
-  const soundFeedback: SoundFeedbackChoice = {
-    get value() {
-      const settings = generalSettings();
-      return settings.soundFeedback ? settings.soundTheme : "off";
+  const settings = useSettings();
+  const { joinRemoteDuringSetup, openServerDuringSetup } = useServerSelection();
+  const { servers } = useServers();
+  const accountServers = createMemo(() =>
+    servers().filter((server) => server.kind === "remote" && server.thisComputer !== true),
+  );
+  const updates = useUpdates();
+  const [requiredUpdateDismissed, setRequiredUpdateDismissed] = createSignal(false);
+  const updateRequired = () => updates.status().requiredVersion !== undefined && !requiredUpdateDismissed();
+  const languageLoaded = createMemo<boolean>((was) => was === true || i18n.ready());
+  const started = () => setup.setupLoaded() && platform.appInfo() !== null && languageLoaded();
+  const [splashShown, setSplashShown] = createSignal(!platform.landingPreview && !startsAfterRestart());
+  const splashPlaysThrough = !startupSplashPlayed && platform.chatWindow === null;
+  const [splashOpen, setSplashOpen] = createSignal(false);
+  const splashMoving = () => splashShown() && !splashOpen();
+  const [workspaceReady, setWorkspaceReady] = createSignal(false);
+  const workspaceShown = () =>
+    !!auth.visibleSignedInAccount() && (setup.setupState()?.completed === true || !scope.connection.hasContent);
+  const splashReady = () =>
+    started() && auth.centralAuth().status !== "loading" && (!workspaceShown() || workspaceReady() || updateRequired());
+  const languageStep = createLanguageStep();
+  const languageStepShown = () =>
+    !languageStep.done() && (languageStep.reopened() || auth.centralAuth().status === "signed_out");
+  createEffect(
+    () => auth.centralAuth().status === "signed_in",
+    (signedIn) => {
+      if (signedIn && !languageStep.done()) languageStep.complete();
     },
-    onChange: (value) =>
-      updateGeneralSettings({
-        ...generalSettings(),
-        soundFeedback: value !== "off",
-        ...(value === "off" ? {} : { soundTheme: value }),
-      }),
-  };
-  const started = () => setup.setupLoaded() && platform.appInfo() !== null;
-  const [splashShown, setSplashShown] = createSignal(true);
+  );
+  createEffect(started, (ready) => {
+    if (ready) performance.mark("openbot:app-started");
+  });
+  createEffect(workspaceReady, (ready) => {
+    if (ready && platform.chatWindow === null) reportWorkspaceReady();
+  });
 
   return (
     <>
-      <Show when={started()}>
+      <Show when={started() && updateRequired()}>
+        <UpdateRequiredScreen
+          status={updates.status()}
+          logoVariant={platform.appInfo()?.variant ?? "production"}
+          onUpdate={updates.runAction}
+          onOpenDownloadPage={() => void appPort().openExternal("download")}
+          onDismiss={() => setRequiredUpdateDismissed(true)}
+        />
+      </Show>
+      <Show when={started() && !updateRequired()}>
         <Show
           when={auth.visibleSignedInAccount()}
           fallback={
             <Loading fallback={<LoadingScreen />}>
-              <AccountLogin
-                variant={platform.appInfo()?.variant ?? "production"}
-                state={auth.centralAuth()}
-                onRetry={auth.retryCentralAccount}
-                onRequestEmailCode={auth.requestEmailCode}
-                onVerifyEmailCode={auth.verifyEmailCode}
-                onReset={auth.logoutCentralAccount}
-              />
+              <Show
+                when={languageStepShown()}
+                fallback={
+                  <AccountLogin
+                    variant={platform.appInfo()?.variant ?? "production"}
+                    state={auth.centralAuth()}
+                    onRetry={auth.retryCentralAccount}
+                    onRequestEmailCode={auth.requestEmailCode}
+                    onVerifyEmailCode={auth.verifyEmailCode}
+                    inviteField
+                    onReset={auth.logoutCentralAccount}
+                    onOpenCompanySignIn={auth.openCompanySignIn}
+                    language={i18n.locale()}
+                    onChangeLanguage={languageStep.reopen}
+                  />
+                }
+              >
+                <LanguageStep
+                  variant={platform.appInfo()?.variant ?? "production"}
+                  reopened={languageStep.reopened()}
+                  onDone={languageStep.complete}
+                />
+              </Show>
             </Loading>
           }
         >
@@ -83,52 +127,92 @@ export function AppAccessGate() {
               when={setup.setupState()?.completed}
               fallback={
                 <Show
-                  when={setup.pendingInviteUrl().trim()}
+                  when={scope.connection.hasContent}
                   fallback={
-                    <Loading fallback={<LoadingScreen />}>
-                      <OnboardingFlow
-                        {...setupProviders}
-                        state={
-                          setup.setupState() ?? { completed: false, preferredProvider: null, preferredModel: null }
-                        }
-                        platform={platform.appInfo()?.platform ?? "darwin"}
-                        onSave={setup.saveSetup}
-                        onProviderStepShown={detection.scanOnce}
-                        soundFeedback={soundFeedback}
-                      />
-                    </Loading>
+                    <WorkspaceShell
+                      account={account}
+                      behindSplash={splashMoving}
+                      onStartupReady={() => setWorkspaceReady(true)}
+                    />
                   }
                 >
-                  <Loading fallback={<LoadingScreen />}>
-                    <InitialSetup
-                      {...setupProviders}
-                      state={setup.setupState() ?? { completed: false, preferredProvider: null, preferredModel: null }}
-                      platform={platform.appInfo()?.platform ?? "darwin"}
-                      accountEmail={account().email}
-                      inviteUrl={setup.pendingInviteUrl()}
-                      onSave={setup.saveSetup}
-                      onPreviewInvite={setup.previewInvite}
-                      onJoinRemote={joinRemoteDuringSetup}
-                      onLogout={auth.logoutCentralAccount}
-                    />
-                  </Loading>
+                  <Show when={!setup.setupReadFailed()} fallback={<SetupReadError />}>
+                    <Show
+                      when={setup.pendingInviteUrl().trim()}
+                      fallback={
+                        <Loading fallback={<LoadingScreen />}>
+                          <FirstRunFlow
+                            {...setupProviders}
+                            state={
+                              setup.setupState() ?? { completed: false, preferredProvider: null, preferredModel: null }
+                            }
+                            platform={platform.appInfo()?.platform ?? "darwin"}
+                            onSave={setup.saveSetup}
+                            onAnalyticsChoice={(enabled, chosen) =>
+                              settings.updateGeneralSettings(
+                                { ...settings.generalSettings(), productAnalytics: enabled },
+                                { analyticsChosen: chosen },
+                              )
+                            }
+                            onProviderStepShown={detection.scanOnce}
+                            logoVariant={platform.appInfo()?.variant ?? "production"}
+                            existingServers={accountServers()}
+                            onOpenServer={openServerDuringSetup}
+                          />
+                        </Loading>
+                      }
+                    >
+                      <Loading fallback={<LoadingScreen />}>
+                        <InitialSetup
+                          {...setupProviders}
+                          state={
+                            setup.setupState() ?? { completed: false, preferredProvider: null, preferredModel: null }
+                          }
+                          platform={platform.appInfo()?.platform ?? "darwin"}
+                          accountEmail={account().email}
+                          inviteUrl={setup.pendingInviteUrl()}
+                          onSave={setup.saveSetup}
+                          onPreviewInvite={setup.previewInvite}
+                          onJoinRemote={joinRemoteDuringSetup}
+                          onLogout={auth.logoutCentralAccount}
+                        />
+                      </Loading>
+                    </Show>
+                  </Show>
                 </Show>
               }
             >
-              <WorkspaceShell account={account} />
+              <WorkspaceShell
+                account={account}
+                behindSplash={splashMoving}
+                onStartupReady={() => setWorkspaceReady(true)}
+              />
             </Show>
           )}
         </Show>
       </Show>
       <WhatsNewOverlay
-        ready={!splashShown() && !!auth.visibleSignedInAccount() && setup.setupState()?.completed === true}
+        ready={
+          !platform.chatWindow &&
+          !updateRequired() &&
+          !splashShown() &&
+          !!auth.visibleSignedInAccount() &&
+          (setup.setupState()?.completed === true || !scope.connection.hasContent)
+        }
       />
+      <QuitShortcutHint />
       <Show when={splashShown()}>
-        {/* Before `appInfo` loads, the build's own mode picks the logo colour. */}
-        <StartupSplash
-          variant={platform.appInfo()?.variant ?? (import.meta.env.DEV ? "dev" : "production")}
-          ready={started()}
-          onExited={() => setSplashShown(false)}
+        <AppLoadingScreen
+          label={t("app.loading")}
+          title={t("app.loading")}
+          scene={startupLoadingScene()}
+          ready={splashReady()}
+          quickExit={!splashPlaysThrough}
+          onMountViews={() => setSplashOpen(true)}
+          onExited={() => {
+            startupSplashPlayed = true;
+            setSplashShown(false);
+          }}
         />
       </Show>
     </>

@@ -6,22 +6,64 @@ import {
 import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
 
+const nowSeconds = Math.floor(Date.now() / 1_000);
+const fiveHourReset = nowSeconds + 2 * 3_600 + 14 * 60;
+const weeklyReset = nowSeconds + 4 * 86_400 + 6 * 3_600;
+const monthlyReset = nowSeconds + 18 * 86_400;
+
 const mixedRows = accountUsageProviderRows({
   limits: [
     {
       id: "codex",
-      primary: { usedPercent: 28, windowDurationMins: 300, resetsAt: 1_786_563_600 },
-      secondary: { usedPercent: 15, windowDurationMins: 10_080, resetsAt: 1_787_040_000 },
+      primary: { usedPercent: 28, windowDurationMins: 300, resetsAt: fiveHourReset },
+      secondary: { usedPercent: 15, windowDurationMins: 10_080, resetsAt: weeklyReset },
     },
     {
       id: "claude",
-      primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1_786_563_600 },
-      secondary: { usedPercent: 64, windowDurationMins: 10_080, resetsAt: 1_787_040_000 },
+      primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: fiveHourReset },
+      secondary: { usedPercent: 64, windowDurationMins: 10_080, resetsAt: weeklyReset },
     },
     {
       id: "grok",
       primary: null,
-      secondary: { usedPercent: 22, windowDurationMins: 10_080, resetsAt: 1_787_040_000 },
+      secondary: { usedPercent: 22, windowDurationMins: 10_080, resetsAt: weeklyReset },
+    },
+    {
+      id: "antigravity",
+      primary: null,
+      secondary: { usedPercent: 4, windowDurationMins: 10_080, resetsAt: weeklyReset },
+      groups: [
+        {
+          name: "Gemini Models",
+          models: ["Gemini Flash", "Gemini Pro"],
+          primary: null,
+          secondary: { usedPercent: 4, windowDurationMins: 10_080, resetsAt: weeklyReset },
+        },
+        {
+          name: "Gemini 4 Argon",
+          models: ["Gemini 4 Argon"],
+          primary: null,
+          secondary: { usedPercent: 100, windowDurationMins: 10_080, resetsAt: fiveHourReset },
+        },
+        {
+          name: "Claude and GPT models",
+          models: ["Claude Opus", "Claude Sonnet", "GPT-OSS"],
+          primary: null,
+          secondary: { usedPercent: 12, windowDurationMins: 10_080, resetsAt: weeklyReset },
+        },
+      ],
+    },
+    {
+      id: "cursor",
+      primary: { usedPercent: 37, windowDurationMins: 43_200, resetsAt: monthlyReset },
+      secondary: { usedPercent: 82, windowDurationMins: 43_200, resetsAt: monthlyReset },
+      tertiary: { usedPercent: 60, windowDurationMins: 43_200, resetsAt: monthlyReset },
+    },
+    {
+      id: "opencode",
+      primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: fiveHourReset },
+      secondary: { usedPercent: 58, windowDurationMins: 43_200, resetsAt: monthlyReset },
+      tertiary: { usedPercent: 31, windowDurationMins: 10_080, resetsAt: weeklyReset },
     },
   ],
 });
@@ -33,15 +75,56 @@ const unreportedRows = accountUsageProviderRows(
       {
         id: "codex",
         primary: null,
-        secondary: { usedPercent: 42, windowDurationMins: 10_080, resetsAt: 1_787_040_000 },
+        secondary: { usedPercent: 42, windowDurationMins: 10_080, resetsAt: weeklyReset },
       },
     ],
   },
-  [{ id: "grok", state: "available" }],
+  [
+    { id: "grok", state: "available" },
+    { id: "antigravity", state: "available" },
+  ],
 );
-const warningRows: AccountUsageProviderRow[] = mixedRows.map((row) =>
-  row.provider === "claude" ? { ...row, remainingPercent: 29, windowLabel: "Weekly", tone: "warning" } : row,
-);
+const claudeGroupOnlyRows = accountUsageProviderRows({
+  limits: [
+    {
+      id: "antigravity",
+      primary: null,
+      secondary: { usedPercent: 4, windowDurationMins: 10_080, resetsAt: weeklyReset },
+      groups: [
+        {
+          name: "Claude and GPT models",
+          models: ["Claude Opus", "Claude Sonnet", "GPT-OSS"],
+          primary: null,
+          secondary: { usedPercent: 4, windowDurationMins: 10_080, resetsAt: weeklyReset },
+        },
+      ],
+    },
+  ],
+});
+const twoWindowGroupRows = accountUsageProviderRows({
+  limits: [
+    {
+      id: "antigravity",
+      primary: { usedPercent: 0, windowDurationMins: 300, resetsAt: fiveHourReset },
+      secondary: { usedPercent: 0, windowDurationMins: 10_080, resetsAt: weeklyReset },
+      groups: ["Gemini Models", "Claude and GPT models"].map((name) => ({
+        name,
+        models: [],
+        primary: { usedPercent: 0, windowDurationMins: 300, resetsAt: fiveHourReset },
+        secondary: { usedPercent: 0, windowDurationMins: 10_080, resetsAt: weeklyReset },
+      })),
+    },
+  ],
+});
+const warningRows = accountUsageProviderRows({
+  limits: [
+    {
+      id: "claude",
+      primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: fiveHourReset },
+      secondary: { usedPercent: 71, windowDurationMins: 10_080, resetsAt: weeklyReset },
+    },
+  ],
+});
 
 function UsagePopover(props: { rows: AccountUsageProviderRow[]; loading?: boolean; error?: string | null }) {
   return (
@@ -73,6 +156,14 @@ export const ConnectedProviders: Story = {};
 
 export const OneProvider: Story = {
   args: { rows: oneProviderRows },
+};
+
+export const AntigravityClaudeGroupOnly: Story = {
+  args: { rows: claudeGroupOnlyRows },
+};
+
+export const AntigravityTwoWindowGroups: Story = {
+  args: { rows: twoWindowGroupRows },
 };
 
 export const Warning: Story = {

@@ -8,11 +8,13 @@ const args: Parameters<typeof ServerRail>[0] = {
   servers: STORY_SERVERS,
   onSelect: fn(),
   onSetMuted: fn(),
-  onSetNotificationLevel: fn(),
+  onOpenNotificationSettings: fn(),
   onReorder: fn(),
   onAdd: fn(),
   onOpenSettings: fn(),
-  onOpenUsage: fn(),
+  onLeave: fn(),
+  onDelete: fn(),
+  canDelete: (serverId) => serverId === "6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f",
 };
 
 const MANY_SERVERS = createManyServers();
@@ -60,10 +62,12 @@ function InteractiveServerRail(props: Parameters<typeof ServerRail>[0]) {
         props.onReorder(serverIds);
       }}
       onSetMuted={props.onSetMuted}
-      onSetNotificationLevel={props.onSetNotificationLevel}
+      onOpenNotificationSettings={props.onOpenNotificationSettings}
       onAdd={props.onAdd}
       onOpenSettings={props.onOpenSettings}
-      onOpenUsage={props.onOpenUsage}
+      onLeave={props.onLeave}
+      onDelete={props.onDelete}
+      canDelete={props.canDelete}
     />
   );
 }
@@ -104,11 +108,16 @@ export const RemoteSelected: Story = {
   },
 };
 
+export const JoinedServer: Story = {
+  args: {
+    servers: STORY_SERVERS.map((server) => (server.id === "team" ? { ...server, role: "member" as const } : server)),
+  },
+};
+
 export const Muted: Story = {
   args: { servers: STORY_SERVERS.map((server) => ({ ...server, notificationsMuted: server.kind === "remote" })) },
 };
 
-/** A remote server muted for one hour, with notifications set to only when it needs me. */
 export const MutedUntil: Story = {
   args: {
     servers: STORY_SERVERS.map((server) =>

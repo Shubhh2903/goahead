@@ -1,10 +1,14 @@
 import type { GlobalSearchPage } from "@openbot/ui/components/GlobalSearch";
 import type { AgentMessage } from "@openbot/ui/data";
+import { DRAFT_THREAD_ID, MAIN_THREAD_ID } from "@openbot/ui/features/conversation/threads/thread-types";
 import { currentText } from "@openbot/ui/text";
-import { createSignal } from "solid-js";
+import { createEffect, createSignal, onSettled, untrack } from "solid-js";
 import { desktopAnalytics } from "./analytics";
 import { toAgentMessage } from "./app-message-projection";
 import { appPort } from "./app-port";
+import { type ChatHistoryEntry, chatHistoryShortcut, createChatHistory } from "./chat-history";
+import { useAgentTasks } from "./features/agent-tasks/agent-tasks-context";
+import { useAgentThreads } from "./features/agent-threads/agent-threads-context";
 import { useAgents } from "./features/agents/agents-context";
 import { useChannels } from "./features/channels/channels-context";
 import { useConversation } from "./features/conversation/conversation-context";
@@ -12,24 +16,21 @@ import { useDirectMessages } from "./features/conversation/direct-messages-conte
 import { useMessagingThreads } from "./features/messaging-threads/messaging-threads-context";
 import { useServers } from "./features/servers/servers-context";
 import { usePresence } from "./features/team/team-context";
-import { useUsage } from "./features/usage/usage-context";
+import { useWindowPage } from "./features/window/window-page-context";
 import { usePlatform } from "./platform";
 import { createScopeGuard } from "./scope-lifetime";
 import { createSimpleContext } from "./simple-context";
 
-/**
- * Cross-domain open/select commands (agent chat, direct conversation, message focus, global
- * search). Leaf context below agents/conversation/direct-messages so one call can write to
- * all three without cycles (`noImportCycles` is an error). See docs/ARCHITECTURE.md.
- * Ungated - see `app-providers.tsx`.
- */
 const Navigation = createSimpleContext({
   name: "Navigation",
   init: () => {
-    const { peopleEnabled } = usePlatform();
+    const platform = usePlatform();
+    const { peopleEnabled } = platform;
     const { activeServerId } = useServers();
     const { currentTeamMember, directPeople } = usePresence();
     const {
+      agentList,
+      activeAgent,
       activeAgentId,
       setActiveAgentId,
       agentSetupOpen,
@@ -40,10 +41,12 @@ const Navigation = createSimpleContext({
       setExplicitlyOpenedAgentChatId,
       appendUiError,
     } = useAgents();
-    const { setDirectTyping, clearDirectSelection, openDirectConversation } = useDirectMessages();
+    const { activeDirectMember, setDirectTyping, clearDirectSelection, openDirectConversation } = useDirectMessages();
     const channels = useChannels();
     const messagingThreads = useMessagingThreads();
-    const { dismissUsage } = useUsage();
+    const agentTasks = useAgentTasks();
+    const agentThreads = useAgentThreads();
+    const windowPage = useWindowPage();
     const scopeIsCurrent = createScopeGuard();
     const {
       pruneInactiveAgentHistory,
@@ -60,17 +63,23 @@ const Navigation = createSimpleContext({
       nonce: number;
     } | null>(null);
 
-    function selectAgent(agentId: string) {
-      if (agentSetupOpen() && creatingAgent()) return;
-      // The rail and the sidebar sit outside the markup the report covers, so a
-      // conversation is one click away while the report hides where it opens. Opening
-      // one that stays hidden also reads it: `requestConversationRead` below is the
-      // explicit read, and a search result runs `openAgentMessage`, which marks every
-      // message through the match. Both would be messages nobody saw.
-      dismissUsage();
-      // An open channel covers the workspace the same way the report does, so it has to leave here
-      // rather than in each caller: Edit agent and a global-search result open a chat that would
-      // otherwise stay hidden under it. An open Slack conversation covers it too.
+    function selectAgent(agentId: string, tabId?: string): boolean {
+      if (agentSetupOpen() && creatingAgent()) return false;
+      return openAgent(agentId, tabId);
+    }
+
+    function openCreatedAgent(agentId: string): boolean {
+      return openAgent(agentId);
+    }
+
+    function openAgent(agentId: string, tabId?: string): boolean {
+      if (tabId !== undefined) agentThreads.open(agentId, tabId);
+      const chatWindow = platform.chatWindow;
+      if (chatWindow && agentId !== chatWindow.agentId) {
+        void appPort().openChatWindow({ serverId: chatWindow.serverId, agentId });
+        return false;
+      }
+      windowPage.showAgents();
       channels.close();
       messagingThreads.close();
       const previousAgentId = activeAgentId();
@@ -83,13 +92,13 @@ const Navigation = createSimpleContext({
       setExplicitlyOpenedAgentChatId(agentId);
       setActiveAgentId(agentId);
       requestConversationRead(agentId, true);
+      return true;
     }
 
     async function selectDirectMember(memberId: string): Promise<void> {
       if (agentSetupOpen() && creatingAgent()) return;
       if (!peopleEnabled || !currentTeamMember() || !directPeople().some((member) => member.id === memberId)) return;
-      // Past the guards, so a call that opens nothing leaves the report or the channel alone.
-      dismissUsage();
+      windowPage.showAgents();
       channels.close();
       messagingThreads.close();
       const previousAgentId = activeAgentId();
@@ -101,8 +110,6 @@ const Navigation = createSimpleContext({
       await openDirectConversation(memberId);
     }
 
-    // The element that had focus before the search opened. A dialog that the search opens returns
-    // focus to it, because the search input is gone when that dialog closes.
     let globalSearchOpener: HTMLElement | null = null;
 
     function setGlobalSearchVisibility(open: boolean): void {
@@ -111,6 +118,9 @@ const Navigation = createSimpleContext({
       }
       setGlobalSearchOpen(open);
     }
+
+    const searchHitThreads = new Map<string, string>();
+    const searchHitKey = (agentId: string, messageId: string) => `${agentId}\n${messageId}`;
 
     async function searchGlobalMessages(
       query: string,
@@ -122,8 +132,12 @@ const Navigation = createSimpleContext({
           query,
           ...(cursor === undefined ? {} : { cursor }),
           limit: 100,
+          includeSideThreads: true,
         });
-        // One search counts once, not once per page.
+        if (cursor === undefined) searchHitThreads.clear();
+        for (const result of page.results) {
+          if (result.taskId) searchHitThreads.set(searchHitKey(result.agentId, result.message.id), result.taskId);
+        }
         if (cursor === undefined) {
           analytics.track("search_action", { scope: "global", result: "succeeded", result_count: page.total });
         }
@@ -144,43 +158,140 @@ const Navigation = createSimpleContext({
     }
 
     function selectGlobalSearchMessage(agentId: string, messageId: string): void {
-      selectAgent(agentId);
+      const taskId = searchHitThreads.get(searchHitKey(agentId, messageId));
+      if (taskId) {
+        agentThreads.open(agentId, taskId);
+        selectAgent(agentId);
+        return;
+      }
+      if (!selectAgent(agentId) && platform.chatWindow) return;
       void openAgentMessage(agentId, messageId);
     }
 
-    async function openAgentMessage(agentId: string, messageId: string): Promise<void> {
+    async function openAgentMessage(agentId: string, messageId: string): Promise<boolean> {
       const serverId = activeServerId();
       await Promise.resolve();
-      if (!scopeIsCurrent()) return;
+      if (!scopeIsCurrent()) return false;
       try {
         const page = await loadAgentMessagePage(agentId, messageId);
-        if (!page) return;
+        if (!page) return false;
         setMessageFocusRequest({ agentId, messageId, nonce: Date.now() });
         try {
           let readBoundary = page.messages.at(-1)?.id ?? messageId;
           try {
-            if (!scopeIsCurrent()) return;
+            if (!scopeIsCurrent()) return true;
             const latestPage = await appPort().agent.readConversationPage({
               agentId,
               anchor: { type: "latest" },
               limit: 1,
             });
-            if (!scopeIsCurrent()) return;
+            if (!scopeIsCurrent()) return true;
             readBoundary = latestPage.messages.at(-1)?.id ?? readBoundary;
-          } catch {
-            // The focused page still gives us a safe read boundary when the latest-page refresh fails.
-          }
+          } catch {}
           await markAgentMessagesRead(agentId, readBoundary, serverId);
         } catch (error) {
           appendUiError(agentId, error, currentText().t("chat.errorStatus.readState"), serverId);
         }
+        return true;
       } catch (error) {
         appendUiError(agentId, error, currentText().t("app.errorStatus.messageLoad"), serverId);
+        return false;
       }
     }
 
+    const threadShown = (agentId: string, thread: string | undefined): boolean => {
+      if (thread === undefined || thread === MAIN_THREAD_ID) return true;
+      if (thread === DRAFT_THREAD_ID) return agentThreads.hasDraft(agentId);
+      return agentThreads.openIds(agentId).includes(thread);
+    };
+    const history = createChatHistory((entry) => {
+      if (entry.kind === "agent") {
+        return agentList().some((agent) => agent.id === entry.id) && threadShown(entry.id, entry.thread);
+      }
+      if (entry.kind === "channel") {
+        return (
+          channels.supported() &&
+          channels.state.channels.some((channel) => channel.id === entry.id && !channel.archived)
+        );
+      }
+      return peopleEnabled && directPeople().some((member) => member.id === entry.id);
+    });
+    let historyTarget: number | null = null;
+
+    const currentChat = (): ChatHistoryEntry | null => {
+      if (agentSetupOpen()) return null;
+      const channelId = channels.state.selectedId;
+      if (channelId) return { kind: "channel", id: channelId };
+      const member = activeDirectMember();
+      if (member) return { kind: "person", id: member.id };
+      const agent = activeAgent();
+      if (!agent) return null;
+      if (!agentTasks.snapshot(agent.id)) return { kind: "agent", id: agent.id };
+      return { kind: "agent", id: agent.id, thread: agentThreads.activeId(agent.id) };
+    };
+    const openChat = (): ChatHistoryEntry | null => (windowPage.page() === "agents" ? currentChat() : null);
+    const chatUnderPage = (): ChatHistoryEntry | null => (windowPage.page() === "agents" ? null : currentChat());
+    createEffect(
+      () => {
+        const entry = openChat();
+        return entry ? `${entry.kind}:${entry.id}:${entry.thread ?? ""}` : null;
+      },
+      () =>
+        untrack(() => {
+          const entry = openChat();
+          if (!entry) return;
+          history.record(entry, historyTarget);
+          historyTarget = null;
+        }),
+    );
+
+    function goInHistory(offset: 1 | -1): void {
+      const index = history.nearest(offset);
+      const entry = history.entryAt(index);
+      if (!entry) return;
+      historyTarget = index;
+      if (entry.kind === "agent") selectAgent(entry.id, entry.thread);
+      else if (entry.kind === "channel") void channels.open(entry.id);
+      else void selectDirectMember(entry.id);
+    }
+    const goBack = () => {
+      const pageBack = windowPage.pageBack();
+      if (pageBack) pageBack.back();
+      else if (chatUnderPage()) windowPage.showAgents();
+      else goInHistory(-1);
+    };
+    const goForward = () => goInHistory(1);
+
+    const handledElsewhere = (event: Event): boolean =>
+      event.defaultPrevented ||
+      (event.target instanceof Element &&
+        event.target.closest("[role=dialog], [role=alertdialog], [role=menu]") !== null);
+
+    onSettled(() => {
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (handledElsewhere(event)) return;
+        const command = chatHistoryShortcut(event);
+        if (!command) return;
+        event.preventDefault();
+        if (command === "back") goBack();
+        else goForward();
+      };
+      const onMouseUp = (event: MouseEvent) => {
+        if (handledElsewhere(event)) return;
+        if (event.button === 3) goBack();
+        else if (event.button === 4) goForward();
+      };
+      window.addEventListener("keydown", onKeyDown);
+      window.addEventListener("mouseup", onMouseUp);
+      return () => {
+        window.removeEventListener("keydown", onKeyDown);
+        window.removeEventListener("mouseup", onMouseUp);
+      };
+    });
+
     return {
       selectAgent,
+      openCreatedAgent,
       selectDirectMember,
       openAgentMessage,
       messageFocusRequest,
@@ -189,6 +300,14 @@ const Navigation = createSimpleContext({
       globalSearchOpener: () => globalSearchOpener,
       searchGlobalMessages,
       selectGlobalSearchMessage,
+      chatHistory: {
+        previous: history.previous,
+        next: history.next,
+        pageBack: windowPage.pageBack,
+        chatUnderPage,
+        goBack,
+        goForward,
+      },
     };
   },
 });

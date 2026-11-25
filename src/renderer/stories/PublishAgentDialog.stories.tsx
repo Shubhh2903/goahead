@@ -12,6 +12,7 @@ const args: Parameters<typeof PublishAgentDialog>[0] = {
   onPublish: fn(async () => undefined),
   onUnpublish: fn(async () => undefined),
   onCopyLink: fn(async () => undefined),
+  onOpenLink: fn(),
 };
 
 const meta = {
@@ -42,7 +43,6 @@ export const NoRoutinesOrSkills: Story = {
   args: { preview: { ...storyAgentTemplatePreview("dr-eggbot"), skills: [], routines: [] } },
 };
 
-/** A published agent whose skill has local changes: it can still be unpublished. */
 export const SkillsNeedAttention: Story = {
   args: {
     preview: {

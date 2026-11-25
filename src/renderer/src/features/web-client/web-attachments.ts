@@ -1,23 +1,63 @@
 import { attachmentMimeTypeForName } from "@openbot/contracts/attachment-files";
+import { CHAT_VISUAL_PAGE_LIMIT, isChatVisualMimeType } from "@openbot/contracts/chat-visual";
 import { type AttachmentSummary, type FilePreview, filePreviewKindForFile } from "@openbot/contracts/ipc";
+import { base64ToBytes } from "@openbot/team-client/base64";
 import { currentText } from "@openbot/ui/text";
+import type { WebAttachmentMedia } from "./web-attachment-media";
+import { createDownloadLimit, type DownloadLimit } from "./web-download-limit";
 import { createWebFileSaver } from "./web-file-download";
 import type { WebFile, WebWorkspaceRuntime } from "./web-runtime";
 
-/**
- * Host files in the browser. There is no host file URL here, so a file is read through the host
- * connection: saved as a download, or previewed from its bytes.
- */
+const VISUAL_PAGE_CACHE = 8;
+const VISUAL_PAGE_READS = 4;
+const visualPageReads = new WeakMap<VisualPageRemote, DownloadLimit>();
+
+type VisualPageRemote = Pick<WebWorkspaceRuntime, "download">;
+
 export function createWebAttachmentFiles(
   remote: Pick<WebWorkspaceRuntime, "download" | "sharedFile" | "workspaceFile">,
+  hostId: () => string,
+  media: Pick<WebAttachmentMedia, "file" | "keep">,
 ) {
   const save = createWebFileSaver();
+  const pages = new Map<string, Promise<string>>();
+  const readPage = visualPageQueue(remote);
   return {
     async download(id: string): Promise<void> {
-      save(await remote.download(id));
+      const held = await media.file(id);
+      save(
+        held
+          ? { name: held.name, blob: new Blob([held.blob], { type: "application/octet-stream" }) }
+          : await remote.download(id),
+      );
     },
     async preview(attachment: AttachmentSummary): Promise<FilePreview> {
-      return filePreview(await remote.download(attachment.id));
+      const held = await media.file(attachment.id);
+      if (held) {
+        const bytes = new Uint8Array(await held.blob.arrayBuffer());
+        return previewOf(attachment.name, attachment.mimeType || held.blob.type, bytes);
+      }
+      const file = await remote.download(attachment.id);
+      const bytes = base64ToBytes(file.base64);
+      media.keep(attachment, bytes);
+      return previewOf(file.name, file.mimeType, bytes);
+    },
+    visualPage(attachment: AttachmentSummary): Promise<string> {
+      const key = `${hostId()}:${attachment.id}`;
+      const cached = pages.get(key);
+      if (cached) {
+        pages.delete(key);
+        pages.set(key, cached);
+        return cached;
+      }
+      const page = readPage(() => readVisualPage(remote, attachment));
+      pages.set(key, page);
+      page.catch(() => pages.delete(key));
+      for (const old of pages.keys()) {
+        if (pages.size <= VISUAL_PAGE_CACHE) break;
+        pages.delete(old);
+      }
+      return page;
     },
     async saveShared(path: string): Promise<void> {
       save(await remote.sharedFile(path));
@@ -25,30 +65,51 @@ export function createWebAttachmentFiles(
     async saveWorkspace(agentId: string, path: string): Promise<void> {
       save(await remote.workspaceFile(agentId, path));
     },
-    // The host sends a shared or workspace file as `application/octet-stream`, so its name gives the type.
     async previewShared(path: string): Promise<FilePreview> {
       const file = await remote.sharedFile(path);
       return filePreview({ ...file, mimeType: attachmentMimeTypeForName(file.name) });
     },
-    async previewWorkspace(agentId: string, path: string): Promise<FilePreview> {
-      const file = await remote.workspaceFile(agentId, path);
+    async previewWorkspace(agentId: string, path: string, options?: { exactPath?: boolean }): Promise<FilePreview> {
+      const file = await remote.workspaceFile(agentId, path, options);
       return filePreview({ ...file, mimeType: attachmentMimeTypeForName(file.name) });
     },
   };
 }
 
+function visualPageQueue(remote: VisualPageRemote) {
+  const shared = visualPageReads.get(remote);
+  if (shared) return shared;
+  const queue = createDownloadLimit(VISUAL_PAGE_READS);
+  visualPageReads.set(remote, queue);
+  return queue;
+}
+
+async function readVisualPage(
+  remote: Pick<WebWorkspaceRuntime, "download">,
+  attachment: AttachmentSummary,
+): Promise<string> {
+  const unavailable = () => new Error(currentText().t("webClient.error.fileTransfer"));
+  if (!isChatVisualMimeType(attachment.mimeType) || attachment.size > CHAT_VISUAL_PAGE_LIMIT) throw unavailable();
+  const file = filePreview(await remote.download(attachment.id));
+  if (!isChatVisualMimeType(file.mimeType) || !file.bytes || file.bytes.byteLength > CHAT_VISUAL_PAGE_LIMIT)
+    throw unavailable();
+  return new TextDecoder().decode(file.bytes);
+}
+
 function filePreview(file: WebFile): FilePreview {
-  const bytes = Uint8Array.from(atob(file.base64), (char) => char.charCodeAt(0));
+  return previewOf(file.name, file.mimeType, base64ToBytes(file.base64));
+}
+
+function previewOf(name: string, mimeType: string, bytes: Uint8Array<ArrayBuffer>): FilePreview {
   return {
-    name: file.name,
+    name,
     size: bytes.byteLength,
-    mimeType: file.mimeType,
-    previewKind: filePreviewKindForFile(file.name, file.mimeType),
+    mimeType,
+    previewKind: filePreviewKindForFile(name, mimeType),
     bytes,
   };
 }
 
-/** Opens a link from a message in a new tab. Only web links open; anything else is refused. */
 export async function openWebLink(value: string): Promise<void> {
   const url = new URL(value);
   if (url.protocol !== "https:" && url.protocol !== "http:")

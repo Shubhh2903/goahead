@@ -1,6 +1,7 @@
-import { AttachmentCards, AttachmentDownloadAll } from "@openbot/ui/features/conversation/AttachmentCards";
+import { AttachmentCards, type AttachmentDownloadState } from "@openbot/ui/features/conversation/AttachmentCards";
 import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
+import { AUDIO_PREVIEW } from "./file-previews";
 import { STORY_ATTACHMENTS } from "./fixtures";
 
 const compactFile = {
@@ -66,22 +67,95 @@ export const Empty: Story = {
   args: { attachments: [] },
 };
 
-export const WithDownloadAll: Story = {
-  name: "With download all as ZIP",
+export const AudioTakes: Story = {
+  name: "Inline audio takes",
+  args: {
+    attachments: [1, 2, 3].map((take) => ({
+      id: `audio-take-${take}`,
+      name: `voice-over-${take}.mp3`,
+      size: AUDIO_PREVIEW.size,
+      kind: "file",
+      mimeType: AUDIO_PREVIEW.mimeType,
+      previewKind: "none",
+      previewUrl: `data:audio/mpeg;base64,${btoa(String.fromCharCode(...(AUDIO_PREVIEW.bytes ?? [])))}`,
+    })),
+  },
+};
+
+export const NarrowAudioTakes: Story = {
+  ...AudioTakes,
+  name: "Inline audio in a narrow layout",
   render: (storyArgs) => (
-    <div class="message-attachments-group">
-      <AttachmentDownloadAll count={storyArgs.attachments.length} pending={false} onDownload={fn()} />
+    <div style={{ width: "220px" }}>
       <AttachmentCards {...storyArgs} />
     </div>
   ),
 };
 
-export const DownloadingZip: Story = {
-  name: "Downloading ZIP",
-  render: (storyArgs) => (
-    <div class="message-attachments-group">
-      <AttachmentDownloadAll count={storyArgs.attachments.length} pending onDownload={fn()} />
-      <AttachmentCards {...storyArgs} />
-    </div>
-  ),
+const videoClip = new URL("../../../packages/ui/src/assets/plush/fishing.webm", import.meta.url).href;
+
+export const VideoFile: Story = {
+  name: "Inline video",
+  args: {
+    attachments: [
+      {
+        id: "video-episode-report",
+        name: "episode-report-720p.webm",
+        size: 9.8 * 1024 * 1024,
+        kind: "file",
+        mimeType: "video/webm",
+        previewKind: "video",
+        previewUrl: videoClip,
+      },
+    ],
+  },
+};
+
+export const VideoFromHost: Story = {
+  name: "Inline video that loads from a host",
+  args: {
+    attachments: [
+      {
+        id: "video-host-report",
+        name: "episode-report-720p.mp4",
+        size: 9.8 * 1024 * 1024,
+        kind: "file",
+        mimeType: "video/mp4",
+        previewKind: "video",
+        previewUrl: null,
+      },
+    ],
+    mediaSource: {
+      url: () => undefined,
+      load: () => new Promise<boolean>(() => undefined),
+      thumbnailLimit: 2 * 1024 * 1024,
+      mediaLimit: 25 * 1024 * 1024,
+    },
+  },
+};
+
+const remoteArchive = {
+  ...compactFile,
+  id: "attachment-release-archive",
+  name: "release-assets-2026-11.zip",
+  size: 412 * 1024 * 1024,
+  mimeType: "application/zip",
+  previewKind: "none" as const,
+};
+
+function downloadsOf(state: AttachmentDownloadState) {
+  return { state: () => state, stop: fn(), retry: fn() };
+}
+
+export const Downloading: Story = {
+  name: "Download from a joined server",
+  args: {
+    attachments: [remoteArchive],
+    downloads: downloadsOf({ phase: "downloading", received: 148 * 1024 * 1024, total: remoteArchive.size }),
+  },
+};
+
+export const DownloadFailed: Story = {
+  name: "Failed download",
+  args: { attachments: [remoteArchive], downloads: downloadsOf({ phase: "failed" }) },
 };

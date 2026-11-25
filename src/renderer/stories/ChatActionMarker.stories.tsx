@@ -1,3 +1,4 @@
+import type { WithdrawFeedbackStatus } from "@openbot/contracts/ipc";
 import { Heading, Text } from "@openbot/ui";
 import type { AgentProfile, ChatActionMarkerModel } from "@openbot/ui/data";
 import { ChatActionMarker } from "@openbot/ui/features/conversation/ChatActionMarker";
@@ -14,6 +15,7 @@ const agents: AgentProfile[] = [
 const onSelectAgent = fn();
 const onOpenRoutine = fn();
 const onOpenHostedSite = fn();
+const onSignInProvider = fn();
 
 const meta = {
   title: "Conversation/Chat Action Marker",
@@ -74,8 +76,18 @@ export const AllStates: Story = {
             agents={agents}
             onSelectAgent={onSelectAgent}
             onOpenRoutine={onOpenRoutine}
+            routineRunFailure={(runId) =>
+              runId === "run-failed" ? "The calendar service did not answer, so the brief has no meetings." : undefined
+            }
           />
         ))}
+        <ChatActionMarker
+          marker={{ ...routineMarker("failed"), runId: "run-failed-long" }}
+          agents={agents}
+          onSelectAgent={onSelectAgent}
+          onOpenRoutine={onOpenRoutine}
+          routineRunFailure={() => longRunError}
+        />
         {routineActions.map((action) => (
           <ChatActionMarker
             marker={lifecycleMarker(action)}
@@ -101,6 +113,17 @@ export const AllStates: Story = {
           onSelectAgent={onSelectAgent}
         />
         <ChatActionMarker marker={{ kind: "context-reset", timestamp }} agents={agents} onSelectAgent={onSelectAgent} />
+        <ChatActionMarker
+          marker={{
+            kind: "sign-in-failure",
+            provider: "claude",
+            text: "Your Claude sign-in expired. Sign in again to continue.",
+            timestamp,
+          }}
+          agents={agents}
+          onSelectAgent={onSelectAgent}
+          onSignInProvider={onSignInProvider}
+        />
       </section>
     </main>
   ),
@@ -185,6 +208,47 @@ export const ReducedMotion: Story = {
   parameters: { chromatic: { prefersReducedMotion: "reduce" } },
 };
 
+function FeedbackSentStory(props: { withdrawn: boolean; result?: WithdrawFeedbackStatus; remote?: boolean }) {
+  return (
+    <main class="foundation-story">
+      <section class="chat-primitives-stage chat-primitives-stage-narrow" aria-label="Feedback sent card">
+        <ChatActionMarker
+          marker={{
+            kind: "feedback-sent",
+            messageId: "feedback-card",
+            title: "The chat stops scrolling after a long reply",
+            number: 5712,
+            url: "https://github.com/Shubhh2903/goahead/issues/5712",
+            withdrawn: props.withdrawn,
+            timestamp: "2026-11-08T10:02:00.000Z",
+          }}
+          agents={agents}
+          onSelectAgent={onSelectAgent}
+          onWithdrawFeedback={
+            props.remote
+              ? undefined
+              : () =>
+                  new Promise<WithdrawFeedbackStatus>((resolve) =>
+                    setTimeout(() => resolve(props.result ?? "withdrawn"), 1200),
+                  )
+          }
+          onRequestFeedbackChange={() => {}}
+        />
+      </section>
+    </main>
+  );
+}
+
+export const FeedbackSent: Story = { render: () => <FeedbackSentStory withdrawn={false} /> };
+
+export const FeedbackSentRemoveFails: Story = {
+  render: () => <FeedbackSentStory withdrawn={false} result="unavailable" />,
+};
+
+export const FeedbackSentJoinedServer: Story = { render: () => <FeedbackSentStory withdrawn={false} remote /> };
+
+export const FeedbackWithdrawn: Story = { render: () => <FeedbackSentStory withdrawn /> };
+
 export const RoutineRunSummary: Story = {
   render: () => (
     <main class="foundation-story">
@@ -204,6 +268,39 @@ export const RoutineRunSummary: Story = {
               { status: "running", timestamp: "2026-09-01T08:03:00.000Z" },
             ],
           }}
+          agents={agents}
+          onSelectAgent={onSelectAgent}
+          onOpenRoutine={onOpenRoutine}
+        />
+      </section>
+    </main>
+  ),
+};
+
+export const RoutineRunGroup: Story = {
+  render: () => (
+    <main class="foundation-story">
+      <Heading as="h1" size="lg">
+        Routine run group
+      </Heading>
+      <Text tone="secondary">
+        Consecutive completed runs of one routine show as one row that opens. A failed run keeps its own row.
+      </Text>
+      <section class="chat-primitives-stage chat-primitives-stage-narrow" aria-label="Routine run group">
+        <ChatActionMarker
+          marker={routineRunGroupMarker(["17:15", "17:30", "17:45", "18:00"])}
+          agents={agents}
+          onSelectAgent={onSelectAgent}
+          onOpenRoutine={onOpenRoutine}
+        />
+        <ChatActionMarker
+          marker={{ ...watchRun("18:15"), status: "failed" }}
+          agents={agents}
+          onSelectAgent={onSelectAgent}
+          onOpenRoutine={onOpenRoutine}
+        />
+        <ChatActionMarker
+          marker={routineRunGroupMarker(["18:30", "18:45"])}
           agents={agents}
           onSelectAgent={onSelectAgent}
           onOpenRoutine={onOpenRoutine}
@@ -255,6 +352,29 @@ export const AgentMessageGroup: Story = {
   ),
 };
 
+export const AgentMessageText: Story = {
+  render: () => {
+    const [open, setOpen] = createSignal(true);
+    return (
+      <main class="foundation-story">
+        <Heading as="h1" size="lg">
+          Agent message text
+        </Heading>
+        <Text tone="secondary">The chevron of an agent message opens its text under the marker.</Text>
+        <section class="chat-primitives-stage chat-primitives-stage-narrow" aria-label="Agent message text">
+          <ChatActionMarker
+            marker={{ ...agentMarker([{ agentId: "research", status: "completed" }], "completed"), expanded: open() }}
+            agents={agents}
+            onSelectAgent={onSelectAgent}
+            onToggleAgentMessage={() => setOpen((value) => !value)}
+            agentMessageText={() => <Text>Which launch sources are still not confirmed?</Text>}
+          />
+        </section>
+      </main>
+    );
+  },
+};
+
 const timestamp = "2026-09-01T08:00:00.000Z";
 const routineStatuses: Array<Extract<ChatActionMarkerModel, { kind: "routine-run" }>["status"]> = [
   "queued",
@@ -300,6 +420,8 @@ function agentMarker(
   };
 }
 
+const longRunError = `Provider request failed: 529 overloaded_error. ${"The service is busy now. Try the request again later. ".repeat(12)}request_id=req_011CXa9`;
+
 function routineMarker(
   status: Extract<ChatActionMarkerModel, { kind: "routine-run" }>["status"],
 ): Extract<ChatActionMarkerModel, { kind: "routine-run" }> {
@@ -311,6 +433,30 @@ function routineMarker(
     routineName: "Morning brief",
     status,
     timestamp,
+  };
+}
+
+function watchRun(time: string): Extract<ChatActionMarkerModel, { kind: "routine-run" }> {
+  return {
+    kind: "routine-run",
+    sourceAgentId: "research",
+    routineId: "routine-watch",
+    runId: `watch-${time}`,
+    routineName: "Watchdog",
+    status: "succeeded",
+    timestamp: `2026-09-01T${time}:00.000Z`,
+    previousTransitions: [{ status: "running", timestamp: `2026-09-01T${time}:00.000Z` }],
+  };
+}
+
+function routineRunGroupMarker(times: string[]): Extract<ChatActionMarkerModel, { kind: "routine-run-group" }> {
+  const runs = times.map((time) => ({ id: `watch-${time}`, marker: watchRun(time) }));
+  return {
+    kind: "routine-run-group",
+    routineId: "routine-watch",
+    routineName: "Watchdog",
+    runs,
+    timestamp: runs.at(-1)?.marker.timestamp ?? timestamp,
   };
 }
 
@@ -407,11 +553,26 @@ function SkillMarkers() {
           onOpenSkill={setSelected}
         />
       ))}
+      <ChatActionMarker
+        marker={{
+          kind: "skill-lifecycle",
+          action: "installed",
+          skillId: "skill-release-notes",
+          revision: 3,
+          skillName: "Release notes",
+          timestamp: "2026-09-13T12:01:00Z",
+          installMessageIds: Array.from({ length: 38 }, (_, index) => `install-${index}`),
+        }}
+        agents={agents}
+        onSelectAgent={onSelectAgent}
+        onOpenSkill={setSelected}
+      />
       <AgentSkillsModal
         open={Boolean(selected())}
         selectionRequest={selected()}
         agentId="chief"
         agentName="Chief"
+        agentProvider="claude"
         onOpenChange={(open) => {
           if (!open) setSelected(null);
         }}

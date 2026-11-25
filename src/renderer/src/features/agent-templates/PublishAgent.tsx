@@ -1,12 +1,26 @@
 import { type AgentTemplatePreview, isAgentTemplateCardPng } from "@openbot/contracts/ipc";
+import { classifyFailure } from "@openbot/telemetry";
 import { toast } from "@openbot/ui";
 import { PublishAgentDialog } from "@openbot/ui/features/agents/PublishAgentDialog";
 import { currentText } from "@openbot/ui/text";
 import { createStore } from "solid-js";
 import { actionToast } from "../../action-toast";
+import { type DesktopAnalyticsProperties, desktopAnalytics } from "../../analytics";
 import { writeClipboardText } from "../../clipboard";
 import { renderAgentTemplateCard } from "./agent-template-card";
 import { type AgentTemplatePublishCalls, agentTemplatesPort } from "./agent-templates-port";
+
+type TemplateAction = DesktopAnalyticsProperties<"agent_template_action">["action"];
+
+async function tracked(action: TemplateAction, run: () => Promise<void>): Promise<void> {
+  try {
+    await run();
+    desktopAnalytics.track("agent_template_action", { action, result: "succeeded", entry_point: "in_app" });
+  } catch (error) {
+    desktopAnalytics.track("agent_template_action", { action, result: "failed", entry_point: "in_app" });
+    throw error;
+  }
+}
 
 interface PublishState {
   open: boolean;
@@ -15,12 +29,10 @@ interface PublishState {
   loading: boolean;
 }
 
-/**
- * The publish dialog of the conversation header, and the calls behind it. `open` is what the header
- * button runs; `dialog` is mounted once beside the header. `calls` is read on each call; by default
- * it is this computer's.
- */
-export function createPublishAgent(calls: () => AgentTemplatePublishCalls = () => agentTemplatesPort().agentTemplates) {
+export function createPublishAgent(
+  openLink: (url: string) => void,
+  calls: () => AgentTemplatePublishCalls = () => agentTemplatesPort().agentTemplates,
+) {
   const [state, setState] = createStore<PublishState>({
     open: false,
     agentId: null,
@@ -38,14 +50,15 @@ export function createPublishAgent(calls: () => AgentTemplatePublishCalls = () =
       });
     } catch (error) {
       if (state.agentId !== agentId) return;
-      // Nothing can be shown without the preview, so the dialog closes and the toast says why.
       setState((draft) => {
         draft.open = false;
         draft.agentId = null;
         draft.loading = false;
       });
       const { t, errorMessage } = currentText();
-      actionToast.error(errorMessage(error, t("agentTemplate.publish.readFailed")));
+      actionToast.error(errorMessage(error, t("agentTemplate.publish.readFailed")), {
+        report: { operation: "agent", source: "action", cause_code: classifyFailure(error) },
+      });
     }
   }
 
@@ -59,7 +72,6 @@ export function createPublishAgent(calls: () => AgentTemplatePublishCalls = () =
     void load(agentId);
   }
 
-  /** The preload rebuilt `shareUrl` from the id, on `openbot.run` or, in development, the local Worker. */
   async function copyShareLink(): Promise<boolean> {
     const publication = state.preview?.publication;
     if (!publication) return false;
@@ -80,8 +92,10 @@ export function createPublishAgent(calls: () => AgentTemplatePublishCalls = () =
     const preview = state.preview;
     if (!agentId || !preview) return;
     const update = preview.publication !== null;
-    // The card is only the link preview image: when it cannot be drawn, or is too large for the
-    // Worker to accept, the agent is published without it.
+    await tracked(update ? "updated" : "published", () => publishTemplate(agentId, preview, update));
+  }
+
+  async function publishTemplate(agentId: string, preview: AgentTemplatePreview, update: boolean): Promise<void> {
     const drawn = await renderAgentTemplateCard(preview).catch(() => null);
     const card = drawn && isAgentTemplateCardPng(drawn) ? drawn : null;
     const publication = await calls().publish({ agentId, card });
@@ -89,7 +103,6 @@ export function createPublishAgent(calls: () => AgentTemplatePublishCalls = () =
     setState((draft) => {
       if (draft.preview) draft.preview.publication = publication;
     });
-    // The agent is published even when the copy fails, so that is said, not reported as a failure.
     const copied = await copyShareLink();
     const { t } = currentText();
     actionToast.success(update ? t("agentTemplate.publish.updated") : t("agentTemplate.publish.publishedToast"), {
@@ -100,7 +113,7 @@ export function createPublishAgent(calls: () => AgentTemplatePublishCalls = () =
   async function unpublish(): Promise<void> {
     const agentId = state.agentId;
     if (!agentId) return;
-    await calls().unpublish(agentId);
+    await tracked("unpublished", () => calls().unpublish(agentId));
     if (state.agentId !== agentId) return;
     setState((draft) => {
       if (draft.preview) draft.preview.publication = null;
@@ -124,7 +137,8 @@ export function createPublishAgent(calls: () => AgentTemplatePublishCalls = () =
       loading={state.loading}
       onPublish={publish}
       onUnpublish={unpublish}
-      onCopyLink={copyLink}
+      onCopyLink={() => tracked("link_copied", copyLink)}
+      onOpenLink={openLink}
     />
   );
 

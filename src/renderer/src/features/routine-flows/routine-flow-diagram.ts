@@ -185,7 +185,7 @@ export function routineFlowDiagram(
         position: positionOf(key, { x: 0, y: index * ROUTINE_ROW }),
         name: entry.routine.name,
         instruction: entry.routine.instruction,
-        schedule: entry.routine.trigger.schedule,
+        schedule: entry.routine.trigger.kind === "schedule" ? entry.routine.trigger.schedule : null,
         active: entry.routine.active,
         upcomingRuns: entry.upcomingRuns,
         recentRuns: entry.recentRuns.map(routineRun),

@@ -1,4 +1,4 @@
-import { Bot, CalendarClock, Hash, Server, Store, UsersRound } from "@openbot/ui";
+import { BookMarked, Bot, CalendarClock, Hash, Server, Sparkles, Store, UsersRound } from "@openbot/ui";
 import type {
   GlobalSearchAction,
   GlobalSearchFile,
@@ -12,26 +12,27 @@ import { appPort } from "./app-port";
 import { useAgents } from "./features/agents/agents-context";
 import { useChannels } from "./features/channels/channels-context";
 import { globalSearchChannels } from "./features/channels/global-search-channels";
+import {
+  activeServerHasProviderSettings,
+  serverCanAdminister,
+  serverHasAgentDefaults,
+  serverSupportsCapability,
+} from "./features/servers/server-capabilities";
 import { useServerSettings } from "./features/servers/server-settings";
 import { useServers } from "./features/servers/servers-context";
 import { useSettings } from "./features/settings/settings-context";
-import { navItems } from "./features/settings/settings-tabs";
+import { navItems, settingsTabShown } from "./features/settings/settings-tabs";
 import { useUsage } from "./features/usage/usage-context";
 import { useNavigation } from "./navigation";
 import { usePlatform } from "./platform";
 
 const FILE_SEARCH_LIMIT = 50;
 
-/**
- * What global search finds besides agents and messages: channels, routines, files, commands and
- * settings pages. Routines load each time the search opens, as no store keeps every agent's list.
- * Files come from this computer's database, so a joined server shows no Files filter.
- */
 export function useGlobalSearchSources(open: () => boolean) {
-  const { t } = useText();
+  const { t, sourceText } = useText();
   const platform = usePlatform();
   const channels = useChannels();
-  const { agentList, agentSetupOpen, creatingAgent, openBotSetup, setSettingsRequest } = useAgents();
+  const { agentList, agentSetupOpen, creatingAgent, openAgentSetup, setSettingsRequest } = useAgents();
   const { selectAgent, globalSearchOpener } = useNavigation();
   const { activeServer } = useServers();
   const { openServerSettings } = useServerSettings();
@@ -41,11 +42,13 @@ export function useGlobalSearchSources(open: () => boolean) {
   const [routinesLoading, setRoutinesLoading] = createSignal(false);
   let routineRequest = 0;
 
-  const local = () => activeServer()?.kind === "local";
+  const filesSearchable = () => {
+    const server = activeServer();
+    return server?.kind === "local" || serverSupportsCapability(server, "conversation-file-search-v1");
+  };
 
-  // Lazy: the overlay reads these only while the search is open.
   const searchChannels = createMemo(
-    () => (channels.supported() ? globalSearchChannels(channels.state.channels) : undefined),
+    () => (channels.supported() ? globalSearchChannels(channels.state.channels, sourceText) : undefined),
     { lazy: true },
   );
 
@@ -100,7 +103,6 @@ export function useGlobalSearchSources(open: () => boolean) {
 
   function selectRoutine(routine: GlobalSearchRoutine): void {
     const agentId = routine.agentId;
-    // As in `editAgent`: the agent cannot change while a new agent is being created.
     if (!agentId || (agentSetupOpen() && creatingAgent())) return;
     selectAgent(agentId);
     setSettingsRequest({ agentId, nonce: Date.now(), routine: { routineId: routine.id, name: routine.name } });
@@ -109,7 +111,7 @@ export function useGlobalSearchSources(open: () => boolean) {
   const actions = createMemo<GlobalSearchAction[]>(
     () => {
       const server = activeServer();
-      const isMac = platform.appInfo()?.platform === "darwin";
+      const settingsWindow = { platform: platform.appInfo()?.platform, chatWindow: platform.chatWindow !== null };
       const list: GlobalSearchAction[] = [
         {
           id: "new-agent",
@@ -118,7 +120,7 @@ export function useGlobalSearchSources(open: () => boolean) {
           icon: Bot,
           run: () => {
             channels.close();
-            openBotSetup();
+            openAgentSetup();
           },
         },
       ];
@@ -148,8 +150,7 @@ export function useGlobalSearchSources(open: () => boolean) {
         });
       }
       for (const item of navItems) {
-        // Hosted servers shows only for an account with hosting, which the dialog checks when it opens.
-        if (item.value === "hosted-servers" || (item.value === "dynamic-island" && !isMac)) continue;
+        if (!settingsTabShown(item.value, settingsWindow)) continue;
         list.push({
           id: `settings:${item.value}`,
           label: t(item.titleKey),
@@ -178,6 +179,62 @@ export function useGlobalSearchSources(open: () => boolean) {
             run: () => openServerSettings(server.id, globalSearchOpener(), "members"),
           },
         );
+        if (
+          serverCanAdminister(server, "agent-memory-limit-v1") &&
+          (server.kind === "local" || server.state === "online")
+        ) {
+          list.push({
+            id: "server:memory-limit",
+            label: t("server.settings.memoryLimit"),
+            detail: server.name,
+            group: "settings",
+            icon: BookMarked,
+            run: () => openServerSettings(server.id, globalSearchOpener(), "memory"),
+          });
+        }
+        if (serverCanAdminister(server, "memory-review-v1") && (server.kind === "local" || server.state === "online")) {
+          list.push({
+            id: "server:memory-review",
+            label: t("server.settings.memoryReview"),
+            detail: server.name,
+            group: "settings",
+            icon: BookMarked,
+            run: () => openServerSettings(server.id, globalSearchOpener(), "memory"),
+          });
+        }
+        if (
+          serverCanAdminister(server, "skill-learning-v1") &&
+          (server.kind === "local" || server.state === "online")
+        ) {
+          list.push({
+            id: "server:skill-learning",
+            label: t("server.settings.skillLearning"),
+            detail: server.name,
+            group: "settings",
+            icon: BookMarked,
+            run: () => openServerSettings(server.id, globalSearchOpener(), "memory"),
+          });
+        }
+        if (serverHasAgentDefaults(server)) {
+          list.push({
+            id: "server:agents",
+            label: t("server.settings.agentDefaultsTitle"),
+            detail: server.name,
+            group: "settings",
+            icon: Bot,
+            run: () => openServerSettings(server.id, globalSearchOpener(), "agents"),
+          });
+        }
+        if (activeServerHasProviderSettings(server)) {
+          list.push({
+            id: "server:providers",
+            label: t("server.settings.providersTitle"),
+            detail: server.name,
+            group: "settings",
+            icon: Sparkles,
+            run: () => openServerSettings(server.id, globalSearchOpener(), "providers"),
+          });
+        }
       }
       return list;
     },
@@ -189,7 +246,7 @@ export function useGlobalSearchSources(open: () => boolean) {
     routines,
     routinesLoading,
     actions,
-    searchFiles: () => (local() ? searchFiles : undefined),
+    searchFiles: () => (filesSearchable() ? searchFiles : undefined),
     openChannel: (channelId: string) => void channels.open(channelId),
     selectRoutine,
   };

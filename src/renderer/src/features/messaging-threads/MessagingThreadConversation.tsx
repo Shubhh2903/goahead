@@ -72,10 +72,10 @@ export function MessagingThreadConversation() {
           </Button>
         </p>
       </Show>
-      <section class="conversation-scroll" aria-label={t("channel.conversation.messages")} aria-live="polite">
+      <section class="conversation-scroll" aria-label={t("messaging.inbox.messages")} aria-live="polite">
         <Show when={threads.state.page?.pageInfo.hasOlder}>
           <Button variant="ghost" disabled={threads.state.loading} onClick={threads.loadOlder}>
-            {t("channel.conversation.loadOlder")}
+            {t("messaging.client.loadOlder")}
           </Button>
         </Show>
         <Show when={threads.state.page && messages().length === 0}>

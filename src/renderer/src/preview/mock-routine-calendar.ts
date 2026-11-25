@@ -11,11 +11,6 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const MAX_RUNS = 500;
 
-/**
- * The preview calendar. The host expands each schedule with its cron code in the routine's zone; the
- * preview steps from the stored next run by the schedule's period, which is the same away from a
- * daylight-saving change. A custom or advanced schedule shows only its next run.
- */
 export function mockRoutineCalendar(
   input: RoutineCalendarInput,
   routines: ReadonlyMap<string, Routine[]>,
@@ -33,10 +28,11 @@ export function mockRoutineCalendar(
         runs.push({ id: run.id, routineId: routine.id, at: run.scheduledFor, status: run.status });
     }
     let at = Date.parse(routine.trigger.nextRunAt);
-    for (let count = 0; count < MAX_RUNS && at < to; count += 1) {
+    for (let count = 0; count < MAX_RUNS && at < to; ) {
       if (at >= from && at >= now) {
         const iso = new Date(at).toISOString();
         runs.push({ id: `${routine.id}@${iso}`, routineId: routine.id, at: iso, status: "scheduled" });
+        count += 1;
       }
       const next = nextAt(routine.trigger.schedule, at);
       if (next === null) break;

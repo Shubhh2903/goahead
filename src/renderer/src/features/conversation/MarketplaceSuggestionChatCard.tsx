@@ -1,58 +1,86 @@
-import { GITHUB_MARKETPLACE_APP_ID, type GitHubConnectorStatus } from "@openbot/contracts/ipc";
+import type { McpServerConfig } from "@openbot/contracts/ipc";
+import type { AgentMessage } from "@openbot/ui/data";
+import { connectorSummary } from "@openbot/ui/features/connectors/ConnectorDetailPanel";
+import { CONNECTOR_LISTINGS } from "@openbot/ui/features/connectors/connector-catalog";
+import { isConnectorId } from "@openbot/ui/features/connectors/connectors";
 import {
   MarketplaceSuggestionCard,
   type MarketplaceSuggestionState,
 } from "@openbot/ui/features/conversation/MarketplaceSuggestionCard";
-import { GitHubMark } from "@openbot/ui/features/settings/IntegrationLayout";
+import { isPluginAppConfig } from "@openbot/ui/features/settings/marketplace-plugins";
 import { useText } from "@openbot/ui/text";
-import { createMemo, createSignal, onSettled, untrack } from "solid-js";
-import { githubConnectorPort } from "../connectors/github-connector-port";
+import { createMemo } from "solid-js";
+import type { ConnectorRegistry } from "../connectors/connector-registry";
 import { MARKETPLACE_PLUGINS } from "../settings/marketplace-plugin-catalog";
+import { localizedPlugin } from "../settings/marketplace-plugin-text";
+import { useConversationViewScope } from "./conversation-scope";
 import { dismissMarketplaceSuggestion, marketplaceSuggestionDismissed } from "./marketplace-suggestion-dismissals";
 
 export interface MarketplaceSuggestionChatCardProps {
   messageId: string;
   appId: string;
-  /** GitHub connects only on the computer that runs OpenBot. */
-  localServer: boolean;
+  connectors?: ConnectorRegistry | undefined;
+  mcpServers?: readonly McpServerConfig[] | undefined;
   onOpenMarketplaceApp?: ((request: { appId: string; connect: boolean }) => void) | undefined;
 }
 
-/** True when this client can draw a card for the app: a catalog plugin, or GitHub. */
 export function marketplaceSuggestionKnown(appId: string): boolean {
-  return appId === GITHUB_MARKETPLACE_APP_ID || MARKETPLACE_PLUGINS.some((plugin) => plugin.slug === appId);
+  return isConnectorId(appId) || MARKETPLACE_PLUGINS.some((plugin) => plugin.slug === appId);
 }
 
-/**
- * The Marketplace app an agent suggested in this chat. Connect and the name open the app in
- * Marketplace, where the connect step and its dialogs run.
- */
 export function MarketplaceSuggestionChatCard(props: MarketplaceSuggestionChatCardProps) {
   const { t } = useText();
   const plugin = createMemo(() => MARKETPLACE_PLUGINS.find((candidate) => candidate.slug === props.appId));
-  const github = () => props.appId === GITHUB_MARKETPLACE_APP_ID;
-  // Only the desktop app of the computer that runs OpenBot has this connection, and `window.openbot`.
-  const githubStatus = createGitHubStatus(untrack(() => github() && props.localServer));
+  const connector = () => {
+    const id = props.appId;
+    return isConnectorId(id) ? (props.connectors?.get(id) ?? { id, access: "hidden" as const }) : undefined;
+  };
+  const listing = () => {
+    const entry = connector();
+    return entry ? CONNECTOR_LISTINGS[entry.id] : undefined;
+  };
+  const description = () => {
+    const known = listing();
+    if (known) return t(known.tagline);
+    const found = plugin();
+    return found ? localizedPlugin(found, t).tagline : "";
+  };
+  const pluginState = (): MarketplaceSuggestionState => {
+    const apps = plugin()?.apps ?? [];
+    const held = apps.map((app) => (props.mcpServers ?? []).some((config) => isPluginAppConfig(config, app)));
+    if (held.length > 0 && held.every(Boolean)) return "connected";
+    return held.some(Boolean) ? "attention" : "available";
+  };
   const state = (): MarketplaceSuggestionState => {
-    if (!github()) return "available";
-    const status = githubStatus();
-    if (!props.localServer || status?.available === false) return "unavailable";
-    if (status?.state === "connected") return "connected";
-    if (status?.state === "pending") return "busy";
-    return status?.state === "expired" ? "attention" : "available";
+    const entry = connector();
+    if (!entry) return pluginState();
+    if (entry.access === "loading") return "busy";
+    if (entry.access !== "available") return "unavailable";
+    if (entry.controller.busy()) return "busy";
+    const { status } = connectorSummary(entry.controller.detail, t);
+    if (status === "connected") return "connected";
+    if (status === "connecting") return "busy";
+    return status === "attention" ? "attention" : "available";
+  };
+  const name = () => {
+    const known = listing();
+    return known ? t(known.title) : (plugin()?.name ?? props.appId);
   };
   const open = (connect: boolean) => props.onOpenMarketplaceApp?.({ appId: props.appId, connect });
+  const unavailableText = () => {
+    if (connector()?.access === "local-only") return t("chat.suggestion.localOnly", { name: name() });
+    if (props.connectors && !props.connectors.canManage()) return t("chat.suggestion.notAllowed", { name: name() });
+    return t("chat.suggestion.unavailable", { name: name() });
+  };
   return (
     <MarketplaceSuggestionCard
       kind="app"
-      name={github() ? t("connector.github.title") : (plugin()?.name ?? props.appId)}
-      description={github() ? t("marketplace.app.githubTagline") : (plugin()?.tagline ?? "")}
+      name={name()}
+      description={description()}
       iconUrl={plugin()?.iconUrl ?? null}
-      mark={github() ? <GitHubMark /> : undefined}
+      mark={listing()?.Mark()}
       state={state()}
-      unavailableText={
-        props.localServer ? t("chat.suggestion.githubUnavailable") : t("chat.suggestion.githubLocalOnly")
-      }
+      unavailableText={unavailableText()}
       dismissed={marketplaceSuggestionDismissed(props.messageId)}
       onConnect={props.onOpenMarketplaceApp ? () => open(true) : undefined}
       onOpenDetails={props.onOpenMarketplaceApp && state() !== "unavailable" ? () => open(false) : undefined}
@@ -62,29 +90,19 @@ export function MarketplaceSuggestionChatCard(props: MarketplaceSuggestionChatCa
   );
 }
 
-/**
- * This computer's GitHub connection, read once and then followed, for a GitHub card. Null until the
- * first read. A failed read keeps the last status, as the Marketplace does.
- */
-function createGitHubStatus(enabled: boolean) {
-  const [status, setStatus] = createSignal<GitHubConnectorStatus | null>(null);
-  onSettled(() => {
-    if (!enabled) return;
-    let live = true;
-    const port = githubConnectorPort();
-    const unsubscribe = port.onChanged((next) => {
-      if (live) setStatus(next);
-    });
-    void port
-      .status()
-      .then((next) => {
-        if (live) setStatus(next);
-      })
-      .catch(() => undefined);
-    return () => {
-      live = false;
-      unsubscribe();
-    };
-  });
-  return status;
+export function useThreadMarketplaceSuggestionCard() {
+  const { props, mcpServers } = useConversationViewScope();
+  return (message: AgentMessage) => {
+    const marker = message.actionMarker;
+    if (marker?.kind !== "marketplace-suggestion" || !marketplaceSuggestionKnown(marker.appId)) return undefined;
+    return (
+      <MarketplaceSuggestionChatCard
+        messageId={message.id}
+        appId={marker.appId}
+        connectors={props.connectors}
+        mcpServers={mcpServers()}
+        onOpenMarketplaceApp={props.onOpenMarketplaceApp}
+      />
+    );
+  };
 }

@@ -1,7 +1,14 @@
 import { serializeAttachmentReference } from "@openbot/contracts/attachment-references";
 import type { AgentEvent, AttachmentSummary, DraftAttachment, QueueSnapshot } from "@openbot/contracts/ipc";
-import type { AgentMessage as RendererAgentMessage } from "@openbot/ui/data";
+import {
+  type ConversationUiBlock,
+  type UiChoiceBlock,
+  type UiConfirmBlock,
+  uiBlockFallbackQuestions,
+} from "@openbot/contracts/ui-blocks";
+import type { AgentMessage as RendererAgentMessage, RoutineRunMarkerModel } from "@openbot/ui/data";
 import { BrowserTakeoverCard } from "@openbot/ui/features/conversation/ConversationPrompts";
+import type { VoicePhase } from "@openbot/ui/features/conversation/VoiceRecordingMorph";
 import { currentText } from "@openbot/ui/text";
 import { Portal } from "@solidjs/web";
 import { createEffect, createSignal, onCleanup, onSettled, Show } from "solid-js";
@@ -12,56 +19,27 @@ import { Conversation, createConversationController } from "../src/features/conv
 import { ConversationView } from "../src/features/conversation/ConversationView";
 import { ConversationControllerProvider } from "../src/features/conversation/conversation-controller-context";
 import { composerDraftKey } from "../src/features/conversation/conversation-keys";
-import type { VoicePhase } from "../src/features/conversation/voice-status";
 import browserTakeoverPreviewUrl from "./assets/browser-takeover-preview.svg";
-import { CONVERSATION_STORY_ARGS, StoryAppProviders } from "./conversation-story-support";
+import {
+  CONVERSATION_STORY_ARGS,
+  CONVERSATION_STORY_ATTACHMENT,
+  CONVERSATION_STORY_MESSAGES,
+  StoryAppProviders,
+} from "./conversation-story-support";
 import {
   requireFixture,
   STORY_AGENT_STATUS,
   STORY_AGENTS,
   STORY_ATTACHMENTS,
-  STORY_CONVERSATION_MESSAGES,
   STORY_PRESENCE,
   STORY_QUEUES,
+  STORY_REPLY_QUOTE_BODY,
 } from "./fixtures";
 import { createMockOpenBot } from "./mock-openbot";
 
-const storyAttachment = requireFixture(STORY_ATTACHMENTS[0], "Story attachment");
-
-const messages: RendererAgentMessage[] = STORY_CONVERSATION_MESSAGES.map((message) => ({
-  id: message.id,
-  author: message.author === "user" ? "you" : "agent",
-  body:
-    message.id === "message-agent-1"
-      ? `${message.text}\n\nPlease review ${serializeAttachmentReference(storyAttachment.name, storyAttachment.id)} before editing the implementation notes.\n\nTransformers scale well with data and compute [1], though attention is quadratic in sequence length [2].`
-      : message.text,
-  time: "10:00",
-  itemType: message.itemType,
-  senderAgentId: message.senderAgentId,
-  replyToMessageId: message.replyToMessageId,
-  attachments: message.attachments,
-  citations:
-    message.id === "message-agent-1"
-      ? [
-          {
-            number: 1,
-            label: "Attention Is All You Need",
-            url: "https://arxiv.org/abs/1706.03762",
-            host: "arxiv.org",
-          },
-          {
-            number: 2,
-            label: "Efficient Transformers: A Survey",
-            url: "https://arxiv.org/abs/2009.06732",
-            host: "arxiv.org",
-          },
-        ]
-      : undefined,
-  exchange: message.exchange,
-  reaction: message.reaction,
-  kind: message.exchange ? "exchange" : message.plan ? "plan" : "text",
-  plan: message.plan && { ...message.plan, stopped: false },
-}));
+const storyAttachment = CONVERSATION_STORY_ATTACHMENT;
+const messages = CONVERSATION_STORY_MESSAGES;
+const args = CONVERSATION_STORY_ARGS;
 
 const unreadStoryMessages: RendererAgentMessage[] = [
   ...Array.from(
@@ -439,6 +417,30 @@ const dataTableMessages: RendererAgentMessage[] = [
     time: "10:03",
     kind: "text",
   },
+  {
+    id: "data-table-wide-user",
+    author: "you",
+    body: "Add the form and the expected goals for each team.",
+    time: "10:04",
+    kind: "text",
+  },
+  {
+    id: "data-table-wide-agent",
+    author: "agent",
+    body: [
+      "A wide table takes more of the chat:",
+      "",
+      "| Fixture | Kickoff | Home form | Away form | Home xG | Away xG | Market odds H/D/A | Implied H/D/A | Scenario | Pick |",
+      "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+      "| Ipswich–Liverpool | Sat 12:30 | L D L W L | W W D W W | 1.02 | 2.14 | 5.25 / 4.60 / 1.57 | 18% / 21% / 61% | 20% / 22% / 58% | Liverpool win |",
+      "| Newcastle–Bournemouth | Sat 15:00 | W W L D W | D L W W L | 1.71 | 1.18 | 2.20 / 3.70 / 3.00 | 43% / 26% / 32% | 45% / 27% / 28% | Newcastle, cautiously |",
+      "| Brighton–Leeds | Sun 14:00 | W D W L W | L L D W D | 1.88 | 0.97 | 1.90 / 3.60 / 4.00 | 50% / 26% / 24% | 48% / 27% / 25% | Brighton win |",
+      "",
+      `![Remote desktop](${new URL("./assets/remote-desktop-mac-mock.png", import.meta.url).href})`,
+    ].join("\n"),
+    time: "10:05",
+    kind: "text",
+  },
 ];
 
 const codeBlockMessages: RendererAgentMessage[] = [
@@ -524,6 +526,51 @@ const markdownImageMessages: RendererAgentMessage[] = [
     ].join("\n"),
     time: "10:03",
     kind: "text",
+  },
+];
+
+const longPathReplyMessages: RendererAgentMessage[] = [
+  {
+    id: "long-path-user",
+    author: "you",
+    body: "Clean up the old build logs, and keep a copy of what you delete first.",
+    time: "10:02",
+    kind: "text",
+  },
+  {
+    id: "long-path-agent",
+    author: "agent",
+    body: [
+      "I deleted 42 build logs older than 30 days. Together they took 3.2 GB, and none of them belonged to an open release.",
+      "",
+      "- **Nightly builds:** removed. The 28 logs of the nightly channel from before the last release are gone.",
+      "- **Disk after the clean-up:**",
+      "  - Used: 81% → **64%**. The next full rotation is due in 12 days.",
+      "  - Largest folder now: **release-candidates**, with 410 MB.",
+      "- **Copies:** I kept the list of deleted logs and their checksums in `/Users/test/OpenBot/Agents/agent-5b0c2e7a-91d4-4f3e-8a6b-2c7d9e1f0a3b/backups/build-log-cleanup-2026-10-15/deleted-build-logs-with-checksums.json`.",
+      "",
+      "Nothing else on the disk changed. Tell me if you also want the crash dumps archived.",
+    ].join("\n"),
+    time: "10:03",
+    kind: "text",
+  },
+];
+
+const replyQuoteMessages: RendererAgentMessage[] = [
+  {
+    id: "reply-quote-agent",
+    author: "agent",
+    body: STORY_REPLY_QUOTE_BODY,
+    time: "10:02",
+    kind: "text",
+  },
+  {
+    id: "reply-quote-user",
+    author: "you",
+    body: "Approved. Tag it after the checks pass.",
+    time: "10:03",
+    kind: "text",
+    replyToMessageId: "reply-quote-agent",
   },
 ];
 
@@ -670,6 +717,65 @@ function StreamingMarkdownConversation(props: { args: Parameters<typeof Conversa
   return <MockedConversation args={{ ...props.args, activeTurnId: "streaming-markdown" }} messages={stableMessages} />;
 }
 
+const readingHistoryMessages = (length: number) =>
+  Array.from(
+    { length },
+    (_, index): RendererAgentMessage => ({
+      id: `reading-history-${index + 1}`,
+      author: index % 2 === 0 ? "you" : "agent",
+      body:
+        index % 2 === 0
+          ? `Can you check step ${index + 1} of the release plan?`
+          : `I checked step ${index + 1}. The owner, the date and the open risk are in the plan now.`,
+      time: "10:00",
+      kind: "text",
+    }),
+  );
+
+const readingHistoryStreamSentence = "I am still checking the release plan and adding each finding to this reply. ";
+
+function StreamingWhileReadingHistoryConversation(props: {
+  args: Parameters<typeof Conversation>[0];
+  history: RendererAgentMessage[];
+}) {
+  const [tick, setTick] = createSignal(0);
+  const thinkingMessage: RendererAgentMessage = {
+    id: "reading-history-thinking",
+    author: "agent",
+    body: "",
+    time: "10:01",
+    kind: "thinking",
+    streaming: true,
+  };
+  Object.defineProperty(thinkingMessage, "items", {
+    configurable: true,
+    enumerable: true,
+    get: () => [`Checking step ${Math.floor(tick() / 4) + 1} of the release plan`],
+  });
+  const streamingMessage: RendererAgentMessage = {
+    id: "reading-history-reply",
+    author: "agent",
+    body: "",
+    time: "10:01",
+    kind: "text",
+    streaming: true,
+  };
+  Object.defineProperty(streamingMessage, "body", {
+    configurable: true,
+    enumerable: true,
+    get: () => readingHistoryStreamSentence.repeat(tick() + 1),
+  });
+  const interval = window.setInterval(() => setTick((current) => current + 1), 150);
+  onCleanup(() => window.clearInterval(interval));
+
+  return (
+    <MockedConversation
+      args={{ ...props.args, activeTurnId: "reading-history-turn" }}
+      messages={[...props.history, thinkingMessage, streamingMessage]}
+    />
+  );
+}
+
 const comparisonTableMessages: RendererAgentMessage[] = [
   {
     id: "comparison-table-user",
@@ -783,6 +889,87 @@ const promptChatMessages: RendererAgentMessage[] = [
   },
 ];
 
+const uiBlockLetter: UiConfirmBlock = {
+  type: "confirm",
+  title: "Send the letter to the board?",
+  danger: true,
+  fields: [
+    { label: "To", value: "board@example.com" },
+    { label: "From", select: "from", options: ["me@example.com", "team@example.com"] },
+  ],
+  preview: "Hello,\n\nThe **heating** is off in block B since Monday. Could you send someone?",
+  actions: [
+    { id: "send", label: "Send", style: "primary" },
+    { id: "cancel", label: "Do not send", style: "ghost" },
+  ],
+};
+
+const uiBlockAudience: UiChoiceBlock = {
+  type: "choice",
+  title: "Who gets the offer?",
+  options: [
+    { id: "active", label: "Active customers", meta: "1 284" },
+    { id: "sleeping", label: "Sleeping customers", meta: "3 102" },
+  ],
+};
+
+const uiBlockPendingLetter: ConversationUiBlock = {
+  version: 1,
+  blockId: "letter",
+  spec: uiBlockLetter,
+  state: { status: "pending" },
+};
+
+const uiBlockPrompt: Extract<AgentEvent, { type: "prompt" }> = {
+  type: "prompt",
+  requestId: "ui-block-letter",
+  agentId: "chief",
+  threadId: "thread-chief",
+  turnId: "turn-ui-block",
+  questions: uiBlockFallbackQuestions(uiBlockLetter),
+};
+
+const uiBlockChatMessages: RendererAgentMessage[] = [
+  {
+    id: "ui-block-chat-user",
+    author: "you",
+    body: "Write to the board about the heating, and pick who gets the spring offer.",
+    time: "10:00",
+    kind: "text",
+  },
+  {
+    id: "question-prompt:turn-ui-block-earlier:ui-block-audience",
+    turnId: "turn-ui-block-earlier",
+    author: "agent",
+    body: "",
+    time: "10:01",
+    kind: "question",
+    itemType: "question_prompt",
+    questionPrompt: {
+      requestId: "ui-block-audience",
+      questions: uiBlockFallbackQuestions(uiBlockAudience),
+      resolution: { status: "answered", responses: {} },
+    },
+    uiBlock: {
+      version: 1,
+      blockId: "audience",
+      spec: uiBlockAudience,
+      state: {
+        status: "answered",
+        response: { actionId: "submit", values: { selected: ["sleeping"] } },
+        outcome: "Sleeping customers",
+      },
+    },
+  },
+  {
+    id: "ui-block-chat-agent",
+    author: "agent",
+    body: "The offer goes to sleeping customers. Here is the letter for the board.",
+    time: "10:02",
+    kind: "text",
+  },
+];
+
 type QueueDeliveryFixture = QueueSnapshot["deliveries"][number];
 
 const queuedDelivery: QueueDeliveryFixture = {
@@ -800,10 +987,6 @@ const queuedDelivery: QueueDeliveryFixture = {
   createdAt: "2026-08-19T10:00:00.000Z",
 };
 
-/**
- * The panel shows what waits behind the work that runs now, so `presentQueueDeliveries` returns
- * nothing for a queue with no running delivery. Every queue fixture carries this one.
- */
 const runningDelivery: QueueDeliveryFixture = {
   ...queuedDelivery,
   id: "queued-running",
@@ -868,10 +1051,6 @@ const referenceQueue: QueueSnapshot = {
 const LIVE_DICTATION =
   "Can you check the release notes for 2.18 and tell me which fixes still need a changelog entry before Friday?";
 
-/**
- * Live dictation as the app shows it: a partial pass about once a second, a few words longer each
- * time, then the final pass (darker text) and the transcript in the draft. The animated story loops.
- */
 function playLiveDictation(
   controller: ReturnType<typeof createConversationController>,
   target: { agentId: string; serverId: string },
@@ -918,6 +1097,7 @@ function MockedConversation(props: {
   voicePhase?: VoicePhase;
   takeoverStateGallery?: boolean;
   conversationError?: string;
+  replyToMessageId?: string;
 }) {
   const previousApi = window.openbot;
   const mock = createMockOpenBot();
@@ -931,6 +1111,12 @@ function MockedConversation(props: {
       controller.setDrafts({
         [initialAgentId]: { text: "", attachments: props.initialAttachments ?? [], replyToMessageId: null },
       });
+    });
+  }
+  const replyToMessageId = props.replyToMessageId;
+  if (initialAgentId && replyToMessageId) {
+    onSettled(() => {
+      controller.setDrafts({ [initialAgentId]: { text: "", attachments: [], replyToMessageId } });
     });
   }
   if (props.voiceModelProgress !== undefined) {
@@ -951,8 +1137,6 @@ function MockedConversation(props: {
       controller.setVoicePhase(voicePhase);
     });
   }
-  // The same keyed entry `agent-event-bridge` writes when a provider reports an error, so the
-  // story shows the banner where the chat it belongs to actually renders it.
   if (initialAgentId && props.conversationError) {
     onSettled(() => {
       controller.setConversationErrors({
@@ -1039,7 +1223,7 @@ function MockedConversation(props: {
         </ConversationControllerProvider>
       </StoryAppProviders>
       <Show when={props.takeoverStateGallery && takeoverGalleryMount()}>
-        <Portal mount={takeoverGalleryMount() ?? undefined}>
+        <Portal mount={takeoverGalleryMount() ?? document.body}>
           <div class="browser-takeover-story-states">
             <BrowserTakeoverCard
               agentName={props.args.agent?.name ?? "the agent"}
@@ -1093,8 +1277,6 @@ function RecordingConversation(props: { args: Parameters<typeof Conversation>[0]
   return <MockedConversation args={props.args} />;
 }
 
-const args: Parameters<typeof Conversation>[0] = { ...CONVERSATION_STORY_ARGS, messages };
-
 const meta = {
   title: "Conversation/Conversation",
   component: Conversation,
@@ -1108,7 +1290,38 @@ type Story = StoryObj<typeof meta>;
 
 export const RichConversation: Story = {};
 
-/** The real composer with a signed-out provider: the notice takes the queue's place above the input. */
+const contextStoryAgent = requireFixture(args.agent, "Context story agent");
+
+export const ContextIndication: Story = {
+  args: {
+    contextState: {
+      agentId: contextStoryAgent.id,
+      threadId: contextStoryAgent.threadId ?? "story-context-thread",
+      usage: { usedTokens: 168400, windowTokens: 272000, autoCompactAt: 0.8, nativeManaged: false },
+      compaction: {
+        id: "story-context-compaction",
+        startedAt: Date.now() - 10000,
+        status: "running",
+        beforeTokens: 219000,
+      },
+    },
+  },
+};
+export const ContextCompactionFailed: Story = {
+  args: {
+    ...ContextIndication.args,
+    contextState: {
+      ...ContextIndication.args.contextState,
+      compaction: {
+        id: "story-context-failed",
+        startedAt: Date.now() - 10000,
+        status: "failed",
+        beforeTokens: 219000,
+      },
+    },
+  },
+};
+
 export const ProviderSignInRequired: Story = {
   name: "Provider sign in required",
   args: {
@@ -1122,34 +1335,27 @@ export const ProviderSignInRequired: Story = {
   },
 };
 
-/** The real composer with the plan window spent: the card states the reset and offers no button. */
 export const UsageLimitReached: Story = {
   name: "Usage limit reached",
   args: {
     accountUsage: {
       limits: [
         {
-          id: "codex-primary",
-          primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: Date.UTC(2026, 8, 21, 9, 0) / 1_000 },
-          secondary: { usedPercent: 62, windowDurationMins: 10_080, resetsAt: Date.UTC(2026, 8, 26, 9, 0) / 1_000 },
+          id: "codex",
+          primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: Math.floor(Date.now() / 1_000) + 3_600 },
+          secondary: null,
         },
       ],
     },
   },
 };
 
-/**
- * The real composer after a provider reported an error. The report stands above the input, in the
- * same column as the usage-limit and sign-in notices, rather than as a bubble in the transcript:
- * a provider that retries a dropped transport reports the same failure once per attempt, and one
- * banner stands for the whole run. One press clears it.
- */
 export const ProviderErrorBanner: Story = {
   name: "Provider error banner",
   render: (storyArgs) => (
     <MockedConversation
       args={storyArgs}
-      conversationError="Falling back from WebSockets to HTTPS transport. stream disconnected before completion: Connection refused (os error 61)"
+      conversationError="stream disconnected before completion: Connection refused (os error 61)"
     />
   ),
 };
@@ -1185,7 +1391,6 @@ export const VoiceRequestingMicrophone: Story = {
   render: (storyArgs) => <MockedConversation args={storyArgs} voicePhase="requesting" />,
 };
 
-/** After Stop: the last live text shows in full colour until the final pass replaces the draft. */
 export const VoiceTranscribing: Story = {
   name: "Voice transcribing",
   render: (storyArgs) => (
@@ -1259,7 +1464,27 @@ export const ScrollToLatest: Story = {
   },
 };
 
-/** One agent chat on a team: two other people write, their runs group, and a reply quotes one. */
+export const LongHistory: Story = {
+  args: {
+    messages: Array.from({ length: 120 }, (_, index): RendererAgentMessage => {
+      const createdAt = new Date(2026, 8, 1 + Math.floor(index / 24), 9, (index % 24) * 2);
+      return {
+        id: `long-history-${index + 1}`,
+        author: index % 3 === 0 ? "you" : "agent",
+        body:
+          index % 3 === 0
+            ? `Can you check step ${index + 1} of the release plan?`
+            : `I checked step ${index + 1}. The owner, the date and the open risk are in the plan now.`,
+        time: `${String(createdAt.getHours()).padStart(2, "0")}:${String(createdAt.getMinutes()).padStart(2, "0")}`,
+        createdAt: createdAt.toISOString(),
+        kind: "text",
+      };
+    }),
+    unreadCount: 0,
+    firstUnreadMessageId: null,
+  },
+};
+
 export const SeveralPeople: Story = {
   name: "Several people",
   args: {
@@ -1367,6 +1592,26 @@ export const MarkdownInChat: Story = {
   },
 };
 
+export const LongFilePathInReply: Story = {
+  name: "Long file path in a reply",
+  args: {
+    messages: longPathReplyMessages,
+  },
+  render: (storyArgs) => (
+    <section style={{ width: "720px", height: "820px", overflow: "hidden" }}>
+      <MockedConversation args={storyArgs} />
+    </section>
+  ),
+};
+
+export const MarkdownReplyQuote: Story = {
+  name: "Markdown reply quote",
+  args: {
+    messages: replyQuoteMessages,
+  },
+  render: (storyArgs) => <MockedConversation args={storyArgs} replyToMessageId="reply-quote-agent" />,
+};
+
 export const StreamingMarkdownInChat: Story = {
   name: "Streaming Markdown in chat",
   args: {
@@ -1374,6 +1619,75 @@ export const StreamingMarkdownInChat: Story = {
     activeTurnId: "streaming-markdown",
   },
   render: (storyArgs) => <StreamingMarkdownConversation args={storyArgs} />,
+};
+
+const shortReadingHistory = readingHistoryMessages(40);
+
+export const StreamingWhileReadingHistory: Story = {
+  args: {
+    messages: shortReadingHistory,
+    activeTurnId: "reading-history-turn",
+    unreadCount: 0,
+    firstUnreadMessageId: null,
+  },
+  render: (storyArgs) => <StreamingWhileReadingHistoryConversation args={storyArgs} history={shortReadingHistory} />,
+};
+
+const longReadingHistory = readingHistoryMessages(120);
+
+export const StreamingWhileReadingLongHistory: Story = {
+  args: {
+    messages: longReadingHistory,
+    activeTurnId: "reading-history-turn",
+    unreadCount: 0,
+    firstUnreadMessageId: null,
+  },
+  render: (storyArgs) => <StreamingWhileReadingHistoryConversation args={storyArgs} history={longReadingHistory} />,
+};
+
+function ReplyBurstConversation(props: { args: Parameters<typeof Conversation>[0]; history: RendererAgentMessage[] }) {
+  const [count, setCount] = createSignal(1);
+  const replies = () =>
+    Array.from(
+      { length: count() },
+      (_, index): RendererAgentMessage => ({
+        id: `reply-burst-${index + 1}`,
+        author: "agent",
+        body: `Update ${index + 1}: I finished one more step of the release plan and noted its owner and date.`,
+        time: "10:01",
+        kind: "text",
+        ...(index === count() - 1 ? { streaming: true } : {}),
+      }),
+    );
+  const interval = window.setInterval(() => setCount((current) => current + 1), 400);
+  onCleanup(() => window.clearInterval(interval));
+
+  return (
+    <MockedConversation
+      args={{ ...props.args, activeTurnId: "reply-burst-turn" }}
+      messages={[...props.history, ...replies()]}
+    />
+  );
+}
+
+export const ReplyBurstWhileReadingHistory: Story = {
+  args: {
+    messages: shortReadingHistory,
+    activeTurnId: "reply-burst-turn",
+    unreadCount: 0,
+    firstUnreadMessageId: null,
+  },
+  render: (storyArgs) => <ReplyBurstConversation args={storyArgs} history={shortReadingHistory} />,
+};
+
+export const ReplyBurstWhileReadingLongHistory: Story = {
+  args: {
+    messages: longReadingHistory,
+    activeTurnId: "reply-burst-turn",
+    unreadCount: 0,
+    firstUnreadMessageId: null,
+  },
+  render: (storyArgs) => <ReplyBurstConversation args={storyArgs} history={longReadingHistory} />,
 };
 
 export const ComparisonTableInChat: Story = {
@@ -1450,6 +1764,15 @@ export const BrowserTakeover: Story = {
   render: (storyArgs) => <MockedConversation args={storyArgs} takeoverStateGallery />,
 };
 
+export const QueuedDuringBrowserTakeover: Story = {
+  ...BrowserTakeover,
+  name: "Queued during browser takeover",
+  args: {
+    ...BrowserTakeover.args,
+    queue: { ...queue, deliveries: [queuedDelivery, { ...runningDelivery, turnId: "turn-takeover" }] },
+  },
+};
+
 export const PromptQuestionsInChat: Story = {
   name: "Prompt questions in chat",
   args: {
@@ -1458,14 +1781,178 @@ export const PromptQuestionsInChat: Story = {
   },
 };
 
+export const AnsweredQuestionsInChat: Story = {
+  name: "Answered questions in chat",
+  args: {
+    messages: [
+      ...promptChatMessages,
+      {
+        id: "question-prompt:turn-answered:answered-auth",
+        turnId: "turn-answered",
+        author: "agent",
+        body: "",
+        time: "10:02",
+        kind: "question",
+        itemType: "question_prompt",
+        questionPrompt: {
+          requestId: "answered-auth",
+          questions: promptQuestions.questions.slice(0, 1),
+          resolution: { status: "answered", responses: { approach: { status: "skipped" } } },
+        },
+      },
+      {
+        id: "answered-chat-agent",
+        author: "agent",
+        body: "Session cookies it is. I will keep the secrets where they are and ship to everyone.",
+        time: "10:03",
+        kind: "text",
+      },
+    ],
+  },
+};
+
+export const UiBlocksInChat: Story = {
+  name: "Agent UI blocks in chat",
+  args: {
+    messages: uiBlockChatMessages,
+    prompt: uiBlockPrompt,
+    promptUiBlock: uiBlockPendingLetter,
+  },
+};
+
+const uiBlockEpicTable = [
+  "Recommendation: **Sunday — reliability and finish**, with 7 items.",
+  "",
+  "| Issue | Proposed delivery | Size | Area |",
+  "| --- | --- | --- | --- |",
+  "| #5476 | Isolate the test foundation contention; accept 10 runs in a row without a timeout | M | Backend tests |",
+  "| #5258 | Make the auth connection and cache lock tests deterministic; 20 runs without a failure | M | Tests/CI |",
+  "| #5454 | Make the actions test really exercise the kept snapshot during a failure and API recovery | M | Frontend cache |",
+  "| #4700 | Count every FETCH miss without a double hit or miss | S | Observability |",
+  "| #4703 | Limit the memory of the PDF extraction subprocess; keep the parent alive | M | Backend security |",
+  "| #4720 | Remove duplicate historical alerts and keep new anomalies, repairs and repeats | M | Data quality |",
+  "| #4722 | Document reference_date of the options hub, also for an old trading session | S | API contract |",
+].join("\n");
+
+const uiBlockEpic: UiConfirmBlock = {
+  type: "confirm",
+  title: "Approve the Sunday epic before I open it?",
+  preview: uiBlockEpicTable,
+  actions: [
+    { id: "open", label: "Open the epic", style: "primary" },
+    { id: "change", label: "Change items" },
+  ],
+};
+
+const uiBlockEarlierEpic: UiConfirmBlock = {
+  ...uiBlockEpic,
+  title: "Approve the Saturday epic before I open it?",
+  preview: [
+    "| Issue | Proposed delivery | Size | Area | Owner | Risk | Tests | Docs | Release |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| #5476 | Isolate the test foundation contention | M | Backend tests | Ana | Low | 10 runs | None | 0.71 |",
+    "| #5258 | Make the auth and cache lock tests deterministic | M | Tests/CI | Rui | Low | 20 runs | None | 0.71 |",
+  ].join("\n"),
+};
+
+const uiBlockEpicScript: UiConfirmBlock = {
+  type: "confirm",
+  title: "Run the script that opens the epics?",
+  preview: [
+    "```sh",
+    'gh issue create --title "Sunday — reliability and finish" --label epic --body-file sunday-epic.md --milestone 0.71',
+    "```",
+  ].join("\n"),
+  actions: [{ id: "run", label: "Run", style: "primary" }],
+};
+
+export const UiBlockWithTable: Story = {
+  name: "Agent UI block with a table",
+  args: {
+    messages: [
+      {
+        id: "ui-block-table-user",
+        author: "you",
+        body: "Plan the weekend epics from the open issues.",
+        time: "10:00",
+        kind: "text",
+      },
+      {
+        id: "question-prompt:turn-ui-block-table-earlier:ui-block-saturday",
+        turnId: "turn-ui-block-table-earlier",
+        author: "agent",
+        body: "",
+        time: "10:01",
+        kind: "question",
+        itemType: "question_prompt",
+        questionPrompt: {
+          requestId: "ui-block-saturday",
+          questions: uiBlockFallbackQuestions(uiBlockEarlierEpic),
+          resolution: { status: "answered", responses: {} },
+        },
+        uiBlock: {
+          version: 1,
+          blockId: "saturday",
+          spec: uiBlockEarlierEpic,
+          state: { status: "answered", response: { actionId: "open" }, outcome: "Open the epic" },
+        },
+      },
+      {
+        id: "question-prompt:turn-ui-block-table-script:ui-block-script",
+        turnId: "turn-ui-block-table-script",
+        author: "agent",
+        body: "",
+        time: "10:02",
+        kind: "question",
+        itemType: "question_prompt",
+        questionPrompt: {
+          requestId: "ui-block-script",
+          questions: uiBlockFallbackQuestions(uiBlockEpicScript),
+          resolution: { status: "answered", responses: {} },
+        },
+        uiBlock: {
+          version: 1,
+          blockId: "script",
+          spec: uiBlockEpicScript,
+          state: { status: "answered", response: { actionId: "run" }, outcome: "Run" },
+        },
+      },
+    ],
+    prompt: {
+      type: "prompt",
+      requestId: "ui-block-sunday",
+      agentId: "chief",
+      threadId: "thread-chief",
+      turnId: "turn-ui-block-table",
+      questions: uiBlockFallbackQuestions(uiBlockEpic),
+    },
+    promptUiBlock: { version: 1, blockId: "sunday", spec: uiBlockEpic, state: { status: "pending" } },
+  },
+};
+
 export const Queued: Story = {
   args: { queue },
 };
 
-/**
- * Chief asked Research and Sales. Research answered while Chief worked, so its answer waits above
- * the composer with the question, not in the queue panel. The person's own message stays queued.
- */
+export const QueuedDuringApproval: Story = {
+  args: {
+    activeTurnId: "turn-active",
+    queue,
+    approval: {
+      requestId: "queued-approval",
+      agentId: "chief",
+      threadId: "thread-chief",
+      turnId: "turn-active",
+      kind: "command",
+      command: "bun run release:notes",
+      cwd: null,
+      reason: null,
+      grantRoot: null,
+      permissions: null,
+    },
+  },
+};
+
 export const WaitingForReplies: Story = {
   args: {
     queue: { agentId: "chief", deliveries: [...(STORY_QUEUES.chief ?? []), queuedDelivery, runningDelivery] },
@@ -1473,7 +1960,10 @@ export const WaitingForReplies: Story = {
   },
 };
 
-/** The plan of the turn that runs: the block is open and the running step shimmers. */
+export const WaitingForRepliesWithUsageLimit: Story = {
+  args: { ...WaitingForReplies.args, accountUsage: UsageLimitReached.args?.accountUsage },
+};
+
 export const PlanInProgress: Story = {
   args: {
     activeTurnId: "turn-plan-live",
@@ -1512,7 +2002,6 @@ export const ThreeQueuedMessages: Story = {
   args: { queue: queueWithItems(3), activeTurnId: "turn-active" },
 };
 
-/** Messages sent to steer that wait in the queue instead, each with the reason on its row. */
 export const QueuedAfterSteerFallback: Story = {
   args: {
     activeTurnId: "turn-active",
@@ -1821,8 +2310,6 @@ export const ActionMarkerSpacing: Story = {
   args: actionMarkerArgs,
 };
 
-/* The history opens and closes inside a real timeline, where the messages under
-   the marker move with it. The isolated marker story cannot show that. */
 export const ActionMarkerHistory: Story = {
   name: "Action marker history",
   args: {
@@ -1862,7 +2349,7 @@ function agentExchangeMessage(
   direction: "incoming" | "outgoing",
   otherAgentId: string,
   time: string,
-  expectsReply = true,
+  options: { body?: string; replyTo?: string; expectsReply?: boolean } = {},
 ): RendererAgentMessage {
   const timestamp = `2026-08-19T${time}:00.000Z`;
   const sourceAgentId = direction === "outgoing" ? "chief" : otherAgentId;
@@ -1870,7 +2357,7 @@ function agentExchangeMessage(
   return {
     id,
     author: "agent",
-    body: "",
+    body: options.body ?? "",
     time,
     createdAt: timestamp,
     kind: "exchange",
@@ -1879,7 +2366,7 @@ function agentExchangeMessage(
       messageId: id,
       senderAgentId: sourceAgentId,
       recipientAgentIds: [targetAgentId],
-      replyToMessageId: null,
+      replyToMessageId: options.replyTo ?? null,
       deliveries: [],
     },
     actionMarker: {
@@ -1890,13 +2377,12 @@ function agentExchangeMessage(
       status: "completed",
       timestamp,
       messageId: id,
-      replyToMessageId: null,
-      expectsReply,
+      replyToMessageId: options.replyTo ?? null,
+      expectsReply: options.expectsReply ?? true,
     },
   };
 }
 
-/* Consecutive messages with other agents show as one row in the chat. */
 export const AgentMessageGroupInChat: Story = {
   name: "Agent message group in chat",
   args: {
@@ -1909,11 +2395,25 @@ export const AgentMessageGroupInChat: Story = {
         createdAt: "2026-08-19T09:00:00.000Z",
         kind: "text",
       },
-      agentExchangeMessage("group-1", "outgoing", "research", "09:01"),
-      agentExchangeMessage("group-2", "outgoing", "sales", "09:01"),
-      agentExchangeMessage("group-3", "incoming", "research", "09:03"),
-      agentExchangeMessage("group-4", "incoming", "sales", "09:04"),
-      agentExchangeMessage("group-5", "outgoing", "research", "09:05", false),
+      agentExchangeMessage("group-1", "outgoing", "research", "09:01", {
+        body: "Which launch sources are still not confirmed?",
+      }),
+      agentExchangeMessage("group-2", "outgoing", "sales", "09:01", {
+        body: "How many accounts are ready for the launch email?",
+      }),
+      agentExchangeMessage("group-3", "incoming", "research", "09:03", {
+        body: "Two sources are left: the pricing page archive and the analyst note from June.",
+        replyTo: "group-1",
+      }),
+      agentExchangeMessage("group-4", "incoming", "sales", "09:04", {
+        body: "14 accounts are ready. Three more wait for a contact name.",
+        replyTo: "group-2",
+      }),
+      agentExchangeMessage("group-5", "outgoing", "research", "09:05", {
+        body: "Thanks. I will tell the user that two sources are still open.",
+        replyTo: "group-3",
+        expectsReply: false,
+      }),
       {
         id: "group-agent",
         author: "agent",
@@ -1924,4 +2424,169 @@ export const AgentMessageGroupInChat: Story = {
       },
     ],
   },
+};
+
+function routineRunMessages(
+  hour: number,
+  minute: number,
+  status: RoutineRunMarkerModel["status"] = "succeeded",
+): RendererAgentMessage[] {
+  const runId = `watch-${hour}-${minute}`;
+  return (["running", status] as const).map((markerStatus, offset) => {
+    const timestamp = new Date(Date.UTC(2026, 7, 19, hour, minute + offset)).toISOString();
+    return {
+      id: `${runId}-${markerStatus}`,
+      author: "agent",
+      body: "Watchdog",
+      time: timestamp.slice(11, 16),
+      createdAt: timestamp,
+      kind: "action-marker",
+      actionMarker: {
+        kind: "routine-run",
+        sourceAgentId: null,
+        routineId: "routine-watch",
+        runId,
+        routineName: "Watchdog",
+        status: markerStatus,
+        timestamp,
+      },
+    };
+  });
+}
+
+export const RoutineRunGroupInChat: Story = {
+  name: "Routine run group in chat",
+  args: {
+    messages: [
+      {
+        id: "watch-user",
+        author: "you",
+        body: "Check the site every 15 minutes and tell me only when something breaks.",
+        time: "17:00",
+        createdAt: "2026-08-19T17:00:00.000Z",
+        kind: "text",
+      },
+      ...routineRunMessages(17, 15),
+      ...routineRunMessages(17, 30),
+      ...routineRunMessages(17, 45),
+      ...routineRunMessages(18, 0),
+      ...routineRunMessages(18, 15, "failed"),
+      ...routineRunMessages(18, 30),
+      ...routineRunMessages(18, 45),
+    ],
+  },
+};
+
+function NaturalSendLoopConversation(props: { args: Parameters<typeof Conversation>[0]; historyRows: number }) {
+  const [chat, setChat] = createSignal<RendererAgentMessage[]>(readingHistoryMessages(props.historyRows));
+  const [activeTurnId, setActiveTurnId] = createSignal<string | null>(null);
+  const [deliveries, setDeliveries] = createSignal<QueueSnapshot["deliveries"]>([]);
+  const timers = new Set<number>();
+  const later = (delay: number, step: () => void) => {
+    const timer = window.setTimeout(() => {
+      timers.delete(timer);
+      step();
+    }, delay);
+    timers.add(timer);
+  };
+  onCleanup(() => {
+    for (const timer of timers) window.clearTimeout(timer);
+  });
+  let sends = 0;
+  const sendMessage = async (body: string) => {
+    sends += 1;
+    const id = `natural-send-${sends}`;
+    const delivery = {
+      ...queuedDelivery,
+      id,
+      messageId: id,
+      text: body,
+      status: "queued" as const,
+      position: 0,
+      createdAt: new Date().toISOString(),
+    };
+    setDeliveries((current) => [...current, delivery]);
+    later(220, () => {
+      setDeliveries((current) =>
+        current.map((item) => (item.id === id ? { ...item, status: "running" as const, turnId: id } : item)),
+      );
+      setActiveTurnId(id);
+      setChat((current) => [
+        ...current,
+        { id, author: "you", body, time: "10:02", createdAt: new Date().toISOString(), kind: "text" },
+      ]);
+    });
+    later(500, () =>
+      setChat((current) => [
+        ...current,
+        {
+          id: `thinking:${id}`,
+          author: "agent",
+          body: "",
+          time: "10:02",
+          kind: "thinking",
+          items: ["Read the message", "Checked the release plan"],
+          streaming: true,
+        },
+      ]),
+    );
+    const reply = `I checked it. The owner, the date and the open risk for "${body}" are in the plan now.`;
+    later(1600, () =>
+      setChat((current) => [
+        ...current,
+        {
+          id: `${id}:assistant`,
+          author: "agent",
+          body: reply.slice(0, 20),
+          time: "10:02",
+          kind: "text",
+          streaming: true,
+        },
+      ]),
+    );
+    later(2200, () =>
+      setChat((current) =>
+        current.map((message) => {
+          if (message.id === `${id}:assistant`) return { ...message, body: reply, streaming: false };
+          if (message.id === `thinking:${id}`) return { ...message, streaming: false };
+          return message;
+        }),
+      ),
+    );
+    later(2260, () => {
+      setActiveTurnId((current) => (current === id ? null : current));
+      setDeliveries((current) =>
+        current.map((item) => (item.id === id ? { ...item, status: "completed" as const, position: null } : item)),
+      );
+    });
+    await new Promise<void>((resolve) => later(200, resolve));
+    return { messageId: id };
+  };
+  return (
+    <MockedConversation
+      args={{
+        ...props.args,
+        responseStyle: "natural",
+        activeTurnId: activeTurnId(),
+        queue: { agentId: queuedDelivery.recipientAgentId, deliveries: deliveries() },
+        onSendMessage: sendMessage,
+      }}
+      messages={chat()}
+    />
+  );
+}
+
+export const NaturalSendLoop: Story = {
+  args: { messages: [], activeTurnId: null, queue: undefined, unreadCount: 0, firstUnreadMessageId: null },
+  render: (storyArgs) => <NaturalSendLoopConversation args={storyArgs} historyRows={20} />,
+};
+
+export const NaturalSendLoopAtRowLimit: Story = {
+  args: NaturalSendLoop.args,
+  render: (storyArgs) => <NaturalSendLoopConversation args={storyArgs} historyRows={99} />,
+};
+
+export const NaturalSendLoopLongHistory: Story = {
+  args: NaturalSendLoop.args,
+  render: (storyArgs) => <NaturalSendLoopConversation args={storyArgs} historyRows={300} />,
 };

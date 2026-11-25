@@ -1,11 +1,11 @@
 import { type AppLanguage, DEFAULT_APP_LANGUAGE, isAppLanguage } from "@openbot/contracts/app-language";
+import { loadLocale, resolveLocale } from "@openbot/i18n";
 import { createSignal, onCleanup } from "solid-js";
 
 const STORAGE_KEY = "openbot.web.language";
 
 type LanguageStorage = Pick<Storage, "getItem" | "setItem">;
 
-/** Reading `window.localStorage` throws when the browser blocks storage, so it is read inside the guard. */
 function read(storage: LanguageStorage | undefined): AppLanguage {
   try {
     const value = (storage ?? window.localStorage).getItem(STORAGE_KEY);
@@ -15,10 +15,10 @@ function read(storage: LanguageStorage | undefined): AppLanguage {
   }
 }
 
-/**
- * The web client's interface language. The web client has no main process, so this browser keeps it,
- * also before sign-in. Other tabs follow through `storage`.
- */
+export function loadSavedLanguage(): Promise<void> {
+  return loadLocale(resolveLocale(read(undefined), navigator.language));
+}
+
 export function createWebLanguagePreference(storage?: LanguageStorage) {
   const [language, setStoredLanguage] = createSignal<AppLanguage>(read(storage));
   function listen(event: StorageEvent): void {
@@ -33,9 +33,7 @@ export function createWebLanguagePreference(storage?: LanguageStorage) {
       setStoredLanguage(value);
       try {
         (storage ?? window.localStorage).setItem(STORAGE_KEY, value);
-      } catch {
-        // The choice holds for this tab when browser storage is unavailable.
-      }
+      } catch {}
     },
   };
 }

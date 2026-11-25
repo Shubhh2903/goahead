@@ -1,25 +1,23 @@
 import type {
   AvatarImageInput,
   InviteSummary,
-  McpServerConfig,
-  McpTestResult,
+  ServerAppearance,
   ServerSummary,
   TeamInviteSummary,
   TeamPresenceMember,
   TeamPresenceSnapshot,
   UpdateTeamMemberInput,
 } from "@openbot/contracts/ipc";
+import { runTeamEffect } from "@openbot/team-client";
 import {
-  listMcpServers,
-  removeMcpServer as removeMcpServerRequest,
-  saveMcpServer as saveMcpServerRequest,
-  setMcpServerEnabled as setMcpServerEnabledRequest,
-  testMcpServer as testMcpServerRequest,
+  rotateHostKey as rotateHostKeyRequest,
+  setHostAppearance,
   updateHostIdentity,
 } from "@openbot/team-client/team-admin-requests";
 import { currentText } from "@openbot/ui/text";
+import { Effect } from "effect";
 import { createEffect, createStore, untrack } from "solid-js";
-import { serverCanAdminister, serverRoleCanAdminister } from "../servers/server-capabilities";
+import { serverCanAdminister, serverRoleCanAdminister, serverRotatesHostKey } from "../servers/server-capabilities";
 import type { WebAdminRuntime } from "./web-runtime";
 
 interface WebServerSettingsState {
@@ -28,22 +26,14 @@ interface WebServerSettingsState {
   invites: TeamInviteSummary[];
   loading: boolean;
   error: string | null;
-  mcp: McpServerConfig[];
-  mcpError: string | null;
 }
 
-/**
- * The settings dialog of the connected host, as the desktop `server-settings.tsx` shows it for a
- * remote server. The web connects to one host at a time, so the dialog is for that host only.
- *
- * Every mutation ends in a new read rather than a patch of the lists: the account service and the
- * host are the authority, and a failed write must not leave a row that they did not accept.
- */
 export function createWebServerSettings(options: {
   server: () => ServerSummary | undefined;
   admin: () => WebAdminRuntime | undefined;
   presence: () => TeamPresenceSnapshot | null;
   refreshHosts: () => Promise<void>;
+  setAppearance: (hostId: string, appearance: ServerAppearance | null) => void;
 }) {
   const [state, setState] = createStore<WebServerSettingsState>({
     open: false,
@@ -51,13 +41,8 @@ export function createWebServerSettings(options: {
     invites: [],
     loading: false,
     error: null,
-    mcp: [],
-    mcpError: null,
   });
-  /** Bumped by every open and refresh, so a slower earlier load cannot paint over a newer one. */
   let request = 0;
-  /** The same guard for the MCP list. It loads from a different event, so it has its own counter. */
-  let mcpRequest = 0;
   let restoreTarget: HTMLElement | null = null;
 
   function requireAdmin(): { server: ServerSummary; admin: WebAdminRuntime } {
@@ -68,8 +53,6 @@ export function createWebServerSettings(options: {
     return { server, admin };
   }
 
-  // Typing updates do not read the account service again. Membership and online changes are enough
-  // to show an accepted invitation.
   let previousPresence = "";
   createEffect(
     () => (state.open ? options.presence() : null),
@@ -84,7 +67,6 @@ export function createWebServerSettings(options: {
     },
   );
 
-  // A member change revokes every session on the host, this one too. Load again after it reconnects.
   let previousState: ServerSummary["state"] | undefined;
   createEffect(
     () => (state.open ? options.server()?.state : undefined),
@@ -134,15 +116,12 @@ export function createWebServerSettings(options: {
 
   function open(trigger: HTMLElement | null): void {
     request += 1;
-    mcpRequest += 1;
     restoreTarget = trigger;
     previousPresence = "";
     setState((draft) => {
       draft.open = true;
       draft.members = [];
       draft.invites = [];
-      draft.mcp = [];
-      draft.mcpError = null;
       draft.error = null;
     });
     void refresh();
@@ -158,43 +137,36 @@ export function createWebServerSettings(options: {
     const { server, admin } = requireAdmin();
     if (!serverCanAdminister(server, "host-admin-v1"))
       throw new Error(currentText().t("server.settings.identityLocalOnly"));
-    await updateHostIdentity(admin.request, input);
+    await runTeamEffect(updateHostIdentity(admin.request, input).pipe(Effect.mapError((error) => error.cause)));
     await options.refreshHosts();
     await refresh();
+  }
+
+  async function saveAppearance(appearance: ServerAppearance | null): Promise<void> {
+    const { server, admin } = requireAdmin();
+    if (!serverCanAdminister(server, "host-appearance-v1"))
+      throw new Error(currentText().t("error.team.hostIdentityUnsupported"));
+    const previous = server.appearance ?? null;
+    options.setAppearance(server.id, appearance);
+    try {
+      await runTeamEffect(setHostAppearance(admin.request, appearance).pipe(Effect.mapError((error) => error.cause)));
+    } catch (error) {
+      options.setAppearance(server.id, previous);
+      throw error;
+    }
+  }
+
+  async function rotateHostKey(): Promise<void> {
+    const { server, admin } = requireAdmin();
+    if (!serverRotatesHostKey(server)) throw new Error(currentText().t("server.settings.hostKeyOwnerOnly"));
+    await runTeamEffect(rotateHostKeyRequest(admin.request).pipe(Effect.mapError((error) => error.cause)));
+    await options.refreshHosts();
   }
 
   async function mutateTeam<T>(mutate: (admin: WebAdminRuntime) => Promise<T>): Promise<T> {
     const result = await mutate(requireAdmin().admin);
     await refresh();
     return result;
-  }
-
-  async function refreshMcp(): Promise<void> {
-    const current = ++mcpRequest;
-    try {
-      const configs = await listMcpServers(requireAdmin().admin.request);
-      if (current !== mcpRequest) return;
-      setState((draft) => {
-        draft.mcp = configs;
-        draft.mcpError = null;
-      });
-    } catch (error) {
-      // Shown in the panel: nothing waits for this promise when a section opens.
-      if (current === mcpRequest)
-        setState((draft) => {
-          draft.mcpError = currentText().errorMessage(error, currentText().t("mcp.server.loadFailed"));
-        });
-    }
-  }
-
-  /** The host answers each change with the whole list. A read still in flight has the old list. */
-  async function mutateMcp(mutate: (admin: WebAdminRuntime) => Promise<McpServerConfig[]>): Promise<void> {
-    const configs = await mutate(requireAdmin().admin);
-    mcpRequest += 1;
-    setState((draft) => {
-      draft.mcp = configs;
-      draft.mcpError = null;
-    });
   }
 
   return {
@@ -204,6 +176,8 @@ export function createWebServerSettings(options: {
     setOpen,
     refresh,
     saveIdentity,
+    saveAppearance,
+    rotateHostKey,
     createInvite: (input: { role: "admin" | "member"; email?: string; permanent?: boolean }): Promise<InviteSummary> =>
       mutateTeam((admin) => admin.team.createInvite(input)),
     updateMember: async (input: UpdateTeamMemberInput): Promise<void> => {
@@ -211,13 +185,5 @@ export function createWebServerSettings(options: {
     },
     removeMember: (memberId: string): Promise<void> => mutateTeam((admin) => admin.team.removeMember(memberId)),
     revokeInvite: (inviteId: string): Promise<void> => mutateTeam((admin) => admin.team.revokeInvite(inviteId)),
-    refreshMcp,
-    saveMcpServer: (config: McpServerConfig) => mutateMcp((admin) => saveMcpServerRequest(admin.request, { config })),
-    removeMcpServer: (mcpServerId: string) =>
-      mutateMcp((admin) => removeMcpServerRequest(admin.request, { mcpServerId })),
-    setMcpServerEnabled: (mcpServerId: string, enabled: boolean) =>
-      mutateMcp((admin) => setMcpServerEnabledRequest(admin.request, { mcpServerId, enabled })),
-    testMcpServer: (config: McpServerConfig): Promise<McpTestResult> =>
-      testMcpServerRequest(requireAdmin().admin.request, { config }),
   };
 }

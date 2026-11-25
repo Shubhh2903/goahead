@@ -1,24 +1,14 @@
+import { isKeyOnlyProvider } from "@openbot/contracts/agent-providers";
 import type { AgentProviderId } from "@openbot/contracts/ipc";
 import { toast } from "@openbot/ui";
 import { useText } from "@openbot/ui/text";
 import { createMemo } from "solid-js";
 import type { SetupProviders } from "./SetupProviderPicker";
 
-/**
- * The main button of a provider step while the selected provider is not connected, as the first-run
- * flow and the server step both show it.
- */
 export function createSetupNext(providers: SetupProviders) {
   const { t, sourceText } = useText();
   const selectedOption = () => providers.options().find((candidate) => candidate.id === providers.selectedProvider());
 
-  /**
-   * Why `Next` refuses, or an empty string when it does not.
-   *
-   * The sentence is the only account the screen gives. A first run whose providers are all still
-   * being checked otherwise shows a list of rows and a dead button, which reads as a broken
-   * application rather than as work left to do.
-   */
   const blockedReason = createMemo(() => {
     if (providers.selectedProviderConnected()) return "";
     const option = selectedOption();
@@ -30,8 +20,6 @@ export function createSetupNext(providers: SetupProviders) {
       case "finishing":
         return t("onboarding.next.finishing", { provider });
       case "download-error": {
-        // The reason is what a support report needs. A download that worked can still fail here,
-        // when the new CLI does not start.
         const reason = option.runtimeStatus.message;
         return reason
           ? t("onboarding.next.downloadErrorReason", { provider, reason: sourceText(reason) })
@@ -46,33 +34,32 @@ export function createSetupNext(providers: SetupProviders) {
     return t("onboarding.next.connect", { provider });
   });
 
-  /**
-   * How the button connects `provider` now, or undefined when it cannot. This computer connects in
-   * its own browser. A host has no browser the user can see, so it signs in with a code, or with the
-   * OpenCode key; each opens a dialog, which is the feedback.
-   */
   function connectAction(provider: AgentProviderId): (() => void) | undefined {
     const source = providers.props;
-    if (source.onConnectProvider) {
+    if (isKeyOnlyProvider(provider) && source.providerKeys) return () => providers.signInProvider(provider);
+    const kind = source.connection?.connectKind(provider);
+    if (kind === "browser") {
       return () => {
         toast.info(t("onboarding.toast.connecting", { provider: selectedOption()?.name ?? provider }));
         void providers.connectProvider(provider);
       };
     }
-    const codeLogin = source.codeLogin;
-    if (codeLogin?.providers().includes(provider)) return () => codeLogin.start(provider);
+    if (kind === "dialog") return () => void providers.connectProvider(provider);
     if (provider === "opencode" && source.providerKeys) return () => providers.signInProvider(provider);
     return undefined;
   }
 
-  /**
-   * It stays pressable: a disabled `Next` beside rows of "Ready" badges read as a broken screen
-   * (issue #643). It connects the provider when a connection can start now, and else the toast says
-   * what is missing.
-   */
   function connectSelected(): void {
     const option = selectedOption();
     const runtimePhase = option?.runtimeStatus?.phase ?? "ready";
+    if (
+      option &&
+      (runtimePhase === "not-downloaded" || runtimePhase === "download-error") &&
+      providers.props.onDownloadProvider
+    ) {
+      void providers.downloadProvider(option.id);
+      return;
+    }
     const connect =
       option &&
       !providers.props.refreshingProviders &&

@@ -1,4 +1,12 @@
-import type { AgentProfile } from "@openbot/ui/data";
+import {
+  type AgentModelId,
+  type AgentProviderRef,
+  type AgentReasoningEffort,
+  type AgentStepActivity,
+  agentStepActivity,
+} from "@openbot/contracts/ipc";
+import { markdownPreviewText } from "@openbot/contracts/markdown-preview-text";
+import type { AgentMessage, AgentProfile } from "@openbot/ui/data";
 import { type AgentActivityLabel, nextAgentActivityLabel } from "@openbot/ui/features/conversation/AgentActivity";
 import {
   agentActivityExitDelay,
@@ -7,22 +15,35 @@ import {
 } from "@openbot/ui/features/conversation/activity-timing";
 import { currentText } from "@openbot/ui/text";
 import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { agentConversationKey } from "../conversation-keys";
 import type { ConversationProps } from "../conversation-types";
+
+const PROVIDER_SILENT_AFTER_MS = 60_000;
+const OFFLINE_SILENT_AFTER_MS = 5_000;
 
 export interface RenderedAgentActivity {
   activityId: string;
   agent: AgentProfile | undefined;
   detail: string | null;
-  /** When the current line started, so the indicator can show how long a long step has run. */
   since: number;
   phase: "active" | "exiting";
   label: AgentActivityLabel;
 }
 
+export interface TurnRuntime {
+  turnId: string;
+  provider: AgentProviderRef;
+  model: AgentModelId;
+  reasoningEffort: AgentReasoningEffort;
+  providerAccountId?: string | undefined;
+}
+
 export interface ActivityStoreDeps {
   props: ConversationProps;
-  activeDeliveries: () => Array<{ id: string }>;
+  activeDeliveries: () => Array<{ id: string; turnId?: string | null }>;
+  shownMessages: () => readonly AgentMessage[];
   agentActivityLabels: Map<string, { activityId: string; label: AgentActivityLabel }>;
+  turnRuntimes: Map<string, TurnRuntime>;
 }
 
 export function createActivityStore(deps: ActivityStoreDeps) {
@@ -31,15 +52,14 @@ export function createActivityStore(deps: ActivityStoreDeps) {
   const streamingAgentMessage = createMemo(() => {
     for (let index = deps.props.messages.length - 1; index >= 0; index -= 1) {
       const message = deps.props.messages[index];
-      // A plan streams for the whole turn. It is not the text that the turn writes now.
-      if (message?.author === "agent" && message.streaming && message.kind !== "plan") return message;
+      if (message?.author === "agent" && message.streaming && message.kind !== "plan" && message.kind !== "subagents")
+        return message;
     }
     return null;
   });
-  /** The channel work of this very agent, which the chat has no turn of its own to show. */
   const heldByOwnChannelWork = createMemo(() => {
     const hold = deps.props.queue?.hold;
-    if (!hold || hold.agentId !== deps.props.agent?.id) return null;
+    if (hold?.reason !== "channel-task" || hold.agentId !== deps.props.agent?.id) return null;
     return deps.props.activeTurnId ? null : hold;
   });
   const activeActivityId = createMemo(() => {
@@ -48,10 +68,8 @@ export function createActivityStore(deps: ActivityStoreDeps) {
     const delivery = deps.activeDeliveries()[0];
     if (delivery) return `${agentId}:delivery:${delivery.id}`;
     if (deps.props.activeTurnId) return `${agentId}:turn:${deps.props.activeTurnId}`;
-    // The agent is working, on a channel thread rather than this one. Its turn belongs to that
-    // thread, so nothing above reports it, and without this the chat shows an idle agent that
-    // answers nothing. Only the agent the work belongs to: the same channel assignment holds the
-    // queue of every other agent, and those agents are waiting, not working.
+    const queue = deps.props.queue;
+    if (queue?.welcome && queue.agentId === agentId) return `${agentId}:welcome`;
     const hold = heldByOwnChannelWork();
     if (hold) return `${agentId}:hold:${hold.channelId}`;
     const streamingMessage = streamingAgentMessage();
@@ -60,38 +78,89 @@ export function createActivityStore(deps: ActivityStoreDeps) {
     if (current?.agent?.id === agentId) return current.activityId;
     return `${agentId}:message:${streamingMessage.id}`;
   });
+  const turnOutputShown = () => {
+    if (deps.props.activityDetail?.trim()) return true;
+    const turnId = deps.activeDeliveries()[0]?.turnId ?? deps.props.activeTurnId;
+    if (!turnId) return false;
+    const rows = deps.shownMessages();
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      const row = rows[index];
+      if (row?.turnId === turnId && row.author === "agent" && row.kind !== "thinking") return true;
+    }
+    return false;
+  };
+  const activityOutput = createMemo<{ activityId: string | null; shown: boolean }>(
+    (previous) => {
+      const activityId = activeActivityId();
+      if (!activityId) return previous ?? { activityId: null, shown: false };
+      if (previous?.activityId === activityId && previous.shown) return previous;
+      return { activityId, shown: turnOutputShown() };
+    },
+    { lazy: true },
+  );
+  const activeTurnOutputShown = () => activityOutput().shown;
   const latestActiveCommentary = createMemo(() => {
     const activeTurnId = deps.props.activeTurnId;
     if (!activeTurnId) return null;
     const streamingMessage = streamingAgentMessage();
     if (streamingMessage && streamingMessage.itemType !== "commentary") return null;
+    if (!deps.props.channel && deps.props.responseStyle === "natural") return null;
     for (let index = deps.props.messages.length - 1; index >= 0; index -= 1) {
       const message = deps.props.messages[index];
       if (message?.turnId !== activeTurnId || message.itemType !== "commentary") continue;
       const items = message.items ?? [message.body];
       for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-        const detail = items[itemIndex]?.trim();
+        const detail = markdownPreviewText(items[itemIndex] ?? "");
         if (detail) return detail;
       }
     }
     return null;
   });
   const activeActivityDetail = createMemo(() => {
+    if (deps.props.prompt) return currentText().t("chat.activity.waitingForAnswer");
+    if (deps.props.approval) return currentText().t("chat.activity.waitingForApproval");
+    if (deps.props.browserTakeover) return currentText().t("chat.activity.waitingForBrowser");
     const hold = heldByOwnChannelWork();
     if (hold) return currentText().t("chat.activity.workingIn", { channel: hold.channelName });
     const progress = deps.props.activityDetail?.trim();
-    // The agent's own commentary is shown as it is; the host's progress text is in the host's source
-    // English and is read here in the user's language.
     return latestActiveCommentary() ?? (progress ? currentText().sourceText(progress) : null);
   });
+  const activeStepActivity = createMemo((): AgentStepActivity | null => {
+    if (deps.props.prompt || deps.props.approval || deps.props.browserTakeover || heldByOwnChannelWork()) return null;
+    return agentStepActivity(deps.props.activityKind);
+  });
   const agentActivity = createMemo<"Working" | null>(() => (activeActivityId() ? "Working" : null));
+  const runningTurnRuntime = createMemo<TurnRuntime | null>(() => {
+    const agent = deps.props.agent;
+    if (!agent) return null;
+    const key = agentConversationKey(deps.props.server?.id ?? "local", agent.id);
+    const turnId = deps.props.activeTurnId;
+    if (!turnId) {
+      deps.turnRuntimes.delete(key);
+      return null;
+    }
+    const known = deps.turnRuntimes.get(key);
+    if (known?.turnId === turnId) return known;
+    const runtime = untrack(() => ({
+      turnId,
+      provider: agent.provider,
+      model: agent.model,
+      reasoningEffort: agent.reasoningEffort,
+      providerAccountId: agent.providerAccountId,
+    }));
+    deps.turnRuntimes.set(key, runtime);
+    return runtime;
+  });
   const activityLabel = createMemo<AgentActivityLabel | null>(() => {
     const agentId = deps.props.agent?.id;
     const activityId = activeActivityId();
     if (!agentId || !activityId) return null;
     const previous = deps.agentActivityLabels.get(agentId);
     if (previous?.activityId === activityId) return previous.label;
-    const label = nextAgentActivityLabel(previous?.label);
+    const label: AgentActivityLabel =
+      !deps.props.channel && deps.props.responseStyle === "natural"
+        ? "Thinking it through…"
+        : nextAgentActivityLabel(previous?.label);
     deps.agentActivityLabels.set(agentId, { activityId, label });
     return label;
   });
@@ -113,27 +182,37 @@ export function createActivityStore(deps: ActivityStoreDeps) {
     window.clearTimeout(agentActivityExitDelayTimer);
     agentActivityExitDelayTimer = undefined;
   };
+  const chat = createMemo(() => agentConversationKey(deps.props.server?.id ?? "local", deps.props.agent?.id ?? ""));
+  const waitsForUser = createMemo(() =>
+    Boolean(deps.props.prompt || deps.props.approval || deps.props.browserTakeover),
+  );
+  let openChat: string | undefined;
   createEffect(
     () => ({
       activityId: activeActivityId(),
       agent: deps.props.agent,
+      chat: chat(),
       label: activityLabel(),
+      waitsForUser: waitsForUser(),
     }),
-    ({ activityId, agent, label }) => {
+    ({ activityId, agent, chat, label, waitsForUser }) => {
       clearAgentActivityShowTimer();
       clearAgentActivityExitDelayTimer();
       clearAgentActivityExitTimer();
+      const opened = chat !== openChat;
+      openChat = chat;
+      if (opened) setAgentActivitySpaceReserved(Boolean(activityId && label));
       if (activityId && label) {
+        const current = untrack(renderedAgentActivity);
         const nextActivity = {
           activityId,
           agent,
           detail: untrack(activeActivityDetail),
-          since: Date.now(),
+          since: current?.activityId === activityId ? current.since : Date.now(),
           phase: "active" as const,
           label,
         };
-        const current = untrack(renderedAgentActivity);
-        if (current?.agent?.id === agent?.id) {
+        if (current?.agent?.id === agent?.id || opened || waitsForUser) {
           setAgentActivitySpaceReserved(true);
           setRenderedAgentActivity(nextActivity);
           return;
@@ -188,10 +267,68 @@ export function createActivityStore(deps: ActivityStoreDeps) {
       );
     },
   );
+  const waitsForProvider = createMemo(
+    () =>
+      Boolean(deps.props.agent && deps.props.activeTurnId) &&
+      !deps.props.prompt &&
+      !deps.props.approval &&
+      !deps.props.browserTakeover,
+  );
+  const compactionRunning = () => {
+    const state = deps.props.contextState;
+    const agent = deps.props.agent;
+    return state?.compaction?.status === "running" && state.agentId === agent?.id && state.threadId === agent?.threadId;
+  };
+  const turnUpdate = () => {
+    const turnId = deps.props.activeTurnId;
+    if (!turnId) return null;
+    const parts: unknown[] = [
+      turnId,
+      deps.props.activityDetail,
+      deps.props.turnStepLines?.[turnId]?.at(-1)?.id,
+      compactionRunning(),
+    ];
+    for (let index = deps.props.messages.length - 1; index >= 0; index -= 1) {
+      const message = deps.props.messages[index];
+      if (message?.author !== "agent") continue;
+      if (message.turnId !== turnId) break;
+      parts.push(message.id, message.body.length, message.items?.length, message.items?.at(-1)?.length);
+      if (message.plan) parts.push(JSON.stringify(message.plan));
+      for (const subagent of message.subagents ?? [])
+        parts.push(subagent.id, subagent.status, subagent.steps.at(-1)?.id, subagent.steps.at(-1)?.text.length);
+    }
+    return parts.join("\u0000");
+  };
+  const [lastTurnUpdateAt, setLastTurnUpdateAt] = createSignal(Date.now());
+  createEffect(turnUpdate, () => {
+    setLastTurnUpdateAt(Date.now());
+  });
+  const [clock, setClock] = createSignal(Date.now());
+  createEffect(waitsForProvider, (waiting) => {
+    if (!waiting) return;
+    setLastTurnUpdateAt(Date.now());
+    setClock(Date.now());
+    const timer = window.setInterval(() => setClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  });
+  const [online, setOnline] = createSignal(navigator.onLine);
+  const updateOnline = () => setOnline(navigator.onLine);
+  window.addEventListener("online", updateOnline);
+  window.addEventListener("offline", updateOnline);
+  const providerSilentMinutes = createMemo(() => {
+    if (!waitsForProvider() || deps.props.activityRunning || compactionRunning()) return null;
+    const minutes = Math.floor((clock() - lastTurnUpdateAt()) / PROVIDER_SILENT_AFTER_MS);
+    return minutes >= 1 ? minutes : null;
+  });
+  const providerOffline = createMemo(
+    () => waitsForProvider() && !online() && clock() - lastTurnUpdateAt() >= OFFLINE_SILENT_AFTER_MS,
+  );
   onCleanup(() => {
     clearAgentActivityShowTimer();
     clearAgentActivityExitDelayTimer();
     clearAgentActivityExitTimer();
+    window.removeEventListener("online", updateOnline);
+    window.removeEventListener("offline", updateOnline);
   });
 
   return {
@@ -202,7 +339,12 @@ export function createActivityStore(deps: ActivityStoreDeps) {
     streamingAgentMessage,
     activeActivityId,
     activeActivityDetail,
+    activeStepActivity,
+    activeTurnOutputShown,
     agentActivity,
     activityLabel,
+    runningTurnRuntime,
+    providerSilentMinutes,
+    providerOffline,
   };
 }

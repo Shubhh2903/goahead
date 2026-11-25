@@ -2,7 +2,7 @@ import { normalizeSidebarPinnedItems, type SidebarPinnedItem } from "@openbot/ui
 import { z } from "zod";
 export type SidebarPinsByServer = Record<string, SidebarPinnedItem[]>;
 
-export const SIDEBAR_PINS_STORAGE_KEY = "openbot:sidebar-pins:v1";
+const SIDEBAR_PINS_STORAGE_KEY = "openbot:sidebar-pins:v1";
 
 type SidebarPinStorage = Pick<Storage, "getItem" | "setItem">;
 
@@ -36,7 +36,27 @@ export function writeSidebarPins(
 ): void {
   try {
     storage.setItem(SIDEBAR_PINS_STORAGE_KEY, JSON.stringify(pinsByServer));
+  } catch {}
+}
+
+const SIDEBAR_PINS_PENDING_STORAGE_KEY = "openbot:sidebar-pins-pending:v1";
+
+const pendingSchema = z.array(z.string().trim().min(1).nullable().catch(null)).catch([]);
+
+export function readPendingSidebarPinScopes(storage: SidebarPinStorage = window.localStorage): Set<string> {
+  try {
+    const parsed = pendingSchema.safeParse(JSON.parse(storage.getItem(SIDEBAR_PINS_PENDING_STORAGE_KEY) ?? "[]"));
+    return new Set(parsed.success ? parsed.data.flatMap((scope) => (scope ? [scope] : [])) : []);
   } catch {
-    // A UI preference must not block navigation when browser storage is unavailable.
+    return new Set();
   }
+}
+
+export function writePendingSidebarPinScopes(
+  scopes: ReadonlySet<string>,
+  storage: SidebarPinStorage = window.localStorage,
+): void {
+  try {
+    storage.setItem(SIDEBAR_PINS_PENDING_STORAGE_KEY, JSON.stringify([...scopes]));
+  } catch {}
 }

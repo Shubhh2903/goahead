@@ -1,12 +1,14 @@
 import { AppLogo } from "@openbot/brand";
-import { Button, buttonVariants, Download, Heading, Link2, RefreshCw, Text } from "@openbot/ui";
+import { Button, buttonVariants, Download, ErrorReference, Heading, Link2, RefreshCw, Server, Text } from "@openbot/ui";
 import { useText } from "@openbot/ui/text";
+import { Show } from "solid-js";
 
-/** The first screen of the web client when the account has no computer to connect to. */
 export function WebConnectComputer(props: {
   loading: boolean;
   failed: boolean;
+  reference?: string | null;
   onJoin: () => void;
+  onCreateServer?: (() => void) | undefined;
   onRefresh: () => void;
 }) {
   const { t } = useText();
@@ -18,8 +20,20 @@ export function WebConnectComputer(props: {
           <Heading as="h2" size="lg" id="web-connect-title">
             {props.failed ? t("webClient.notice.hostsFailed") : t("webClient.notice.connectComputer")}
           </Heading>
-          <Text tone="muted">{t("webClient.connect.description")}</Text>
+          <Text tone="muted">
+            {props.onCreateServer ? t("webClient.connect.descriptionHosted") : t("webClient.connect.description")}
+          </Text>
+          <ErrorReference reference={props.failed ? props.reference : null} />
         </header>
+
+        <Show when={props.onCreateServer}>
+          {(createServer) => (
+            <Button class="web-connect-hosted" onClick={() => createServer()()}>
+              <Server aria-hidden="true" />
+              {t("webClient.notice.createServer")}
+            </Button>
+          )}
+        </Show>
 
         <ol class="web-connect-steps">
           <li>
@@ -45,8 +59,8 @@ export function WebConnectComputer(props: {
         <footer class="web-connect-actions">
           <div class="web-connect-primary-actions">
             <a
-              class={`web-connect-download ${buttonVariants({ variant: "default" })}`}
-              href="/#download"
+              class={`web-connect-download ${buttonVariants({ variant: props.onCreateServer ? "outline" : "default" })}`}
+              href="/download"
               target="_blank"
               rel="noreferrer"
             >

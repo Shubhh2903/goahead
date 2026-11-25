@@ -1,0 +1,301 @@
+import {
+  WORKFLOW_FORMAT,
+  WORKFLOW_NODE_KINDS,
+  WORKFLOW_OUTPUT_TARGETS,
+  WORKFLOW_TRIGGER_TYPES,
+  type WorkflowRunPage,
+  type WorkflowVersion,
+} from "@openbot/contracts/ipc";
+import { accountUsageProviderRows } from "@openbot/ui/features/account/account-usage-view";
+import { Sidebar } from "@openbot/ui/features/sidebar/Sidebar";
+import { HelpMenu } from "@openbot/ui/features/updates/HelpMenu";
+import { PageRail, type PageRailPage } from "@openbot/ui/features/window/PageRail";
+import { WorkflowCanvas } from "@openbot/ui/features/workflows/WorkflowCanvas";
+import {
+  WORKFLOW_FEATURES_V1,
+  type WorkflowCatalogs,
+  type WorkflowFeatures,
+} from "@openbot/ui/features/workflows/workflow-model";
+import type { WorkflowPresence } from "@openbot/ui/features/workflows/workflow-presence";
+import type { WorkflowRunView } from "@openbot/ui/features/workflows/workflow-run-view";
+import type { JSX } from "@solidjs/web";
+import { createSignal, Show, untrack } from "solid-js";
+import { fn } from "storybook/test";
+import { defaultSidebarLayout } from "../src/features/sidebar/sidebar-sections";
+import { createWorkflowsController } from "../src/features/workflows/workflows-controller";
+import { keptPicture, type WorkflowHost } from "../src/features/workflows/workflows-port";
+import { createMockGitHubConnector } from "../src/preview/mock-github-connector";
+import { mockWorkflows } from "../src/preview/mock-workflows";
+import { STORY_AGENTS } from "./fixtures";
+import { STORY_CATALOGS, type StoryWorkflow } from "./workflow-story-data";
+
+export const STORY_ALL_FEATURES: WorkflowFeatures = {
+  kinds: WORKFLOW_NODE_KINDS,
+  triggers: WORKFLOW_TRIGGER_TYPES,
+  outputs: WORKFLOW_OUTPUT_TARGETS,
+  uploads: true,
+  presence: false,
+  format: WORKFLOW_FORMAT,
+};
+
+const newestFirst = (left: string | null, right: string | null) => (right ?? "").localeCompare(left ?? "");
+
+function mergeRuns(fixture: WorkflowRunView | undefined, live: WorkflowRunPage): WorkflowRunPage {
+  if (!fixture) return live;
+  const offset = Math.max(0, ...fixture.runs.map((entry) => entry.run.number));
+  const renumbered = live.runs.map((entry) => ({ ...entry, run: { ...entry.run, number: entry.run.number + offset } }));
+  return {
+    runs: [...renumbered, ...fixture.runs].sort((left, right) => newestFirst(left.run.startedAt, right.run.startedAt)),
+    soloSteps: [...live.soloSteps, ...fixture.soloSteps].sort((left, right) =>
+      newestFirst(left.startedAt, right.startedAt),
+    ),
+    nextBefore: live.nextBefore,
+  };
+}
+
+function storyWorkflowHost(workflows: readonly StoryWorkflow[]): WorkflowHost {
+  const fixtures = new Map(workflows.map((workflow) => [workflow.id, workflow]));
+  const fixtureRuns = new Set(workflows.flatMap((workflow) => workflow.runs?.runs ?? []).map((entry) => entry.run.id));
+  const fixtureSteps = new Map(
+    workflows
+      .flatMap((workflow) => [
+        ...(workflow.runs?.runs.flatMap((entry) => entry.steps) ?? []),
+        ...(workflow.runs?.soloSteps ?? []),
+      ])
+      .map((step) => [step.id, step]),
+  );
+  const fixtureVersion = (workflowId: string, versionId: string) =>
+    fixtures.get(workflowId)?.versions?.find(({ version }) => version.id === versionId);
+  const listeners = new Set<(workflowId: string | null) => void>();
+  const folderListeners = new Set<() => void>();
+  const now = Date.now();
+  const api = mockWorkflows(
+    workflows.map(({ id, title, graph }, index) => ({
+      id,
+      title,
+      graph,
+      updatedAt: new Date(now - index * 60_000).toISOString(),
+    })),
+    (workflowId) => {
+      for (const listener of listeners) listener(workflowId);
+    },
+    () => {
+      for (const listener of folderListeners) listener();
+    },
+  );
+  return {
+    workflows: {
+      ...api,
+      list: async () =>
+        (await api.list()).map((summary) => {
+          const newest = fixtures.get(summary.id)?.runs?.runs[0]?.run;
+          if (summary.lastRun || !newest) return summary;
+          return { ...summary, lastRun: { status: newest.status, at: newest.startedAt } };
+        }),
+      runs: async (input) => mergeRuns(fixtures.get(input.workflowId)?.runs, await api.runs(input)),
+      versions: async (workflowId) => {
+        const fixture = fixtures.get(workflowId)?.versions ?? [];
+        return [...(await api.versions(workflowId)), ...fixture.map(({ version }) => version)].sort(
+          (left: WorkflowVersion, right: WorkflowVersion) => newestFirst(left.at, right.at),
+        );
+      },
+      versionGraph: async (input) =>
+        fixtureVersion(input.workflowId, input.versionId)?.graph ?? (await api.versionGraph(input)),
+      restoreVersion: async (input) => {
+        const fixture = fixtureVersion(input.workflowId, input.versionId);
+        if (!fixture) return api.restoreVersion(input);
+        const latest = await api.get(input.workflowId);
+        const result = await api.saveGraph({
+          workflowId: input.workflowId,
+          baseRevision: latest.revision,
+          graph: fixture.graph,
+        });
+        return result.ok ? api.get(input.workflowId) : result.conflict;
+      },
+      stopStep: async (stepId) => {
+        if (!fixtureSteps.has(stepId)) await api.stopStep(stepId);
+      },
+      stopRun: async (runId) => {
+        if (!fixtureRuns.has(runId)) await api.stopRun(runId);
+      },
+      retryStep: async (input) => {
+        const fixture = fixtureSteps.get(input.stepId);
+        if (!fixture) return api.retryStep(input);
+        const started = await api.startRun({
+          workflowId: fixture.workflowId,
+          requestId: input.requestId,
+          fromNodeId: fixture.nodeId,
+        });
+        return started.steps.find((step) => step.nodeId === fixture.nodeId) ?? fixture;
+      },
+      decide: async (input) => {
+        if (!fixtureSteps.has(input.stepId)) await api.decide(input);
+      },
+      githubHistory: async (workflowId) => {
+        const live = await api.githubHistory(workflowId);
+        const fixture = fixtures.get(workflowId)?.github;
+        if (!fixture) return live;
+        return { deliveries: [...live.deliveries, ...fixture.deliveries], runs: [...live.runs, ...fixture.runs] };
+      },
+    },
+    onChanged(changed) {
+      listeners.add(changed);
+      return () => listeners.delete(changed);
+    },
+    places: async () => [...STORY_CATALOGS.places],
+    channels: async () => [...(STORY_CATALOGS.channels ?? [])],
+    discordServers: async () => [],
+    telegramChats: async () => [],
+    slackWorkspaces: async () => [],
+    agentLevels: async () => null,
+    githubSupported: () => true,
+    mediaSupported: () => true,
+    mediaAccountSupported: () => true,
+    mediaTransparentSupported: () => true,
+    mediaSizeSupported: () => true,
+    agentFilesSupported: () => true,
+    answersSupported: () => true,
+    stepSettingsSupported: () => true,
+    pauseSupported: () => true,
+    portableSupported: () => true,
+    foldersSupported: () => true,
+    folders: () => api.folders(),
+    folderAction: (action) => api.folderAction(action),
+    onFoldersChanged(changed) {
+      folderListeners.add(changed);
+      return () => folderListeners.delete(changed);
+    },
+    pictures: async () => [],
+    uploadPicture: async (file) => keptPicture(crypto.randomUUID(), file, URL.createObjectURL(file)),
+    mediaUrl: () => null,
+    mediaPreviewUrl: () => null,
+    githubConnector: createMockGitHubConnector(),
+    hostName: () => undefined,
+    openUrl: async () => undefined,
+  };
+}
+
+export function WorkflowStory(props: {
+  workflows: readonly StoryWorkflow[];
+  features?: WorkflowFeatures;
+  catalogs?: WorkflowCatalogs;
+  presence?: WorkflowPresence;
+}) {
+  const story = createWorkflowsController(storyWorkflowHost(untrack(() => props.workflows)));
+  const features = () => props.features ?? WORKFLOW_FEATURES_V1;
+  return (
+    <Show when={story.detail()}>
+      {(workflow) => (
+        <WorkflowCanvas
+          workflow={workflow()}
+          features={features()}
+          catalogs={props.catalogs ?? STORY_CATALOGS}
+          github={story.github}
+          presence={props.presence}
+          {...story.props}
+        />
+      )}
+    </Show>
+  );
+}
+
+const usageRows = accountUsageProviderRows(null);
+
+function WorkflowAppWindow(props: { children: JSX.Element }) {
+  const [page, setPage] = createSignal<PageRailPage | null>("workflows");
+  return (
+    <div class="app-window wfn-app">
+      <PageRail
+        hidden={false}
+        current={page()}
+        pinned={["workflows", "usage"]}
+        onPinChange={fn()}
+        usageRows={usageRows}
+        onAgents={() => setPage("agents")}
+        onWorkflows={() => setPage("workflows")}
+        onSchedule={() => setPage("schedule")}
+        onUsage={() => setPage("usage")}
+        onMarketplace={fn()}
+        onSettings={() => setPage("settings")}
+        help={
+          <HelpMenu
+            news={[]}
+            triggerClass="window-rail-button"
+            onOpenWhatsNew={fn()}
+            onOpenChangelog={fn()}
+            onOpenGuides={fn()}
+            onOpenDiscord={fn()}
+            onReportProblem={fn()}
+            onSendFeedback={fn()}
+          />
+        }
+      />
+      <div
+        class="app-frame app-frame-edge app-frame-platform-darwin"
+        data-window-page-kind="titled"
+        style="--left-panel-width: 280px"
+      >
+        <Sidebar
+          serverName="Local"
+          onOpenServerSettings={fn()}
+          agents={STORY_AGENTS}
+          activeAgentId=""
+          people={[]}
+          directThreads={[]}
+          activeDirectMemberId={null}
+          agentStates={{}}
+          agentMoods={{}}
+          layout={defaultSidebarLayout()}
+          collapsedSectionIds={[]}
+          onMutateLayout={fn(async () => undefined)}
+          onToggleSection={fn()}
+          pinnedItems={[]}
+          peopleOrder={[]}
+          onPin={fn()}
+          onUnpin={fn()}
+          onReorderPinned={fn()}
+          onReorderPeople={fn()}
+          onSelectAgent={fn()}
+          onSelectPerson={fn()}
+          onCreateAgent={fn()}
+          onEditAgent={fn()}
+          onDeleteAgent={async () => undefined}
+          compact={false}
+          onExpand={fn()}
+          onOpenSearch={fn()}
+          onOpenMarketplace={fn()}
+          channels={[]}
+          onSelectChannel={fn()}
+          onCreateChannel={fn()}
+        />
+        <div class="window-page wfn-app-pane">{props.children}</div>
+      </div>
+    </div>
+  );
+}
+
+export function WorkflowInAppStory(props: {
+  workflows: readonly StoryWorkflow[];
+  features?: WorkflowFeatures;
+  opening?: boolean;
+}) {
+  const story = createWorkflowsController(storyWorkflowHost(untrack(() => props.workflows)));
+  const features = () => props.features ?? WORKFLOW_FEATURES_V1;
+  return (
+    <WorkflowAppWindow>
+      <Show when={story.detail()}>
+        {(workflow) => (
+          <WorkflowCanvas
+            workflow={workflow()}
+            features={features()}
+            catalogs={STORY_CATALOGS}
+            github={story.github}
+            frame="window"
+            {...story.props}
+            opening={props.opening === true || story.props.opening}
+          />
+        )}
+      </Show>
+    </WorkflowAppWindow>
+  );
+}

@@ -84,6 +84,7 @@ export function RemoteDesktopSetup(props: { server: ServerSummary; platform: "da
   });
   const local = () => props.server.id === LOCAL_SERVER_ID;
   const supported = () => local() || serverSupportsCapability(props.server, REMOTE_DESKTOP_SETUP_CAPABILITY);
+  const shown = () => !local() || props.platform === "darwin";
   let disposed = false;
   let returnFromSettings = false;
   let polling = false;
@@ -140,7 +141,6 @@ export function RemoteDesktopSetup(props: { server: ServerSummary; platform: "da
   }
 
   async function release(session: RemoteDesktopSession) {
-    // Disconnect also removes a host panel when a stop request cannot reach the host.
     try {
       if (!state.videoOnly)
         await serversPort().remoteDesktop.test({ serverId: session.serverId, sessionId: session.id, action: "stop" });
@@ -253,6 +253,7 @@ export function RemoteDesktopSetup(props: { server: ServerSummary; platform: "da
   }
 
   onSettled(() => {
+    if (shown()) void check();
     const focus = () => {
       if (returnFromSettings) {
         returnFromSettings = false;
@@ -282,7 +283,7 @@ export function RemoteDesktopSetup(props: { server: ServerSummary; platform: "da
 
   return (
     <Show when={supported()} fallback={<Text>{t("remoteDesktop.setup.hostUpdateRequired")}</Text>}>
-      <Show when={!local() || props.platform === "darwin"}>
+      <Show when={shown()}>
         <ItemGroup class="settings-modal-card">
           <Item>
             <ItemContent>
@@ -333,12 +334,18 @@ export function RemoteDesktopSetup(props: { server: ServerSummary; platform: "da
                     <ItemTitle>{t(label)}</ItemTitle>
                   </ItemContent>
                   <ItemActions>
-                    <Badge tone={status() === "allowed" ? "success" : "warning"}>
+                    <Badge variant={status() === "allowed" ? "success-light" : "warning-light"}>
                       {status() === "allowed" && key !== "screenRecording" && key !== "accessibility"
                         ? t("remoteDesktop.setup.state.available")
                         : t(LABELS[status()])}
                     </Badge>
-                    <Show when={local() && (key === "screenRecording" || key === "accessibility")}>
+                    <Show
+                      when={
+                        local() &&
+                        (key === "screenRecording" || key === "accessibility") &&
+                        (state.result ? state.result[key] !== "allowed" : !state.checking)
+                      }
+                    >
                       <Button
                         size="sm"
                         variant="default"

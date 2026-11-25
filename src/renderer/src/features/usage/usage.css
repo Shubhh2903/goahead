@@ -1,20 +1,18 @@
-/*
- * The workspace keeps its place in the app frame grid while Usage is open, so the wrapper draws no
- * box of its own. Its children are still grid items of the frame, but they are no longer its DOM
- * children, so `.app-frame > *` no longer reaches them: without this, a conversation panel grows to
- * its content height and pushes the composer under the window edge.
- */
-.usage-workspace-content {
+.app-frame-panes {
   display: contents;
 }
-.usage-workspace-content > * {
+.app-frame-panes > * {
   min-height: 0;
 }
-.app-frame-usage-open .usage-workspace-content {
+.app-frame-page-open .app-frame-panes {
   visibility: hidden;
   pointer-events: none;
 }
-.agent-usage-workspace {
+
+.app-frame.app-frame-page-open .app-frame-panes * {
+  visibility: hidden;
+}
+.window-page {
   z-index: 1;
   min-height: 0;
   overflow: hidden;
@@ -31,47 +29,18 @@
   background: var(--openbot-bg-canvas);
 }
 .agent-usage-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--openbot-space-3);
   padding: var(--openbot-space-4) var(--openbot-space-6);
   border-bottom: 1px solid var(--openbot-border);
 }
-.agent-usage-identity,
-.agent-usage-controls {
-  display: flex;
-  align-items: center;
-  gap: var(--openbot-space-3);
-  min-width: 0;
-}
-.agent-usage-identity {
-  flex-wrap: wrap;
-}
-/* What lines up with the header's inset is the arrow, not the 32px hit area around it, so
-   the button hangs its padding back into the header rather than pushing the glyph right. */
-.agent-usage-identity .ui-icon-button {
-  margin-left: calc(-1 * var(--openbot-space-2));
-}
-.agent-usage-identity h2 {
-  display: flex;
-  gap: var(--openbot-space-3);
-  font-size: var(--openbot-text-lg);
-  color: var(--openbot-text-muted);
-}
-.agent-usage-identity h2 span:last-child {
-  color: var(--openbot-text-primary);
-  overflow-wrap: anywhere;
-}
 
-/* The three filters and the refresh button need more width than the header can always
-   give, so the row wraps from the right rather than clipping its last controls. */
 .agent-usage-controls {
-  margin-left: auto;
+  display: flex;
+  min-width: 0;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--openbot-space-3);
+  margin-inline-start: auto;
 }
 .agent-usage-body {
   width: 100%;
@@ -117,33 +86,6 @@
     gap: calc(var(--openbot-space-6) * 2);
   }
 }
-/* The drop order is the reading order reversed: message counts go before token
-   categories, and the processed total is the one entry that always stays. */
-@container (max-width: 1000px) {
-  .agent-usage-totals > div:nth-child(n + 7) {
-    display: none;
-  }
-}
-@container (max-width: 820px) {
-  .agent-usage-totals > div:nth-child(n + 6) {
-    display: none;
-  }
-}
-@container (max-width: 660px) {
-  .agent-usage-totals > div:nth-child(n + 5) {
-    display: none;
-  }
-}
-@container (max-width: 540px) {
-  .agent-usage-totals > div:nth-child(n + 4) {
-    display: none;
-  }
-}
-@container (max-width: 400px) {
-  .agent-usage-totals > div:nth-child(n + 3) {
-    display: none;
-  }
-}
 @container (max-width: 480px) {
   .agent-usage-hero {
     font-size: var(--openbot-text-display);
@@ -155,7 +97,7 @@
     padding: var(--openbot-space-3);
   }
   .agent-usage-controls {
-    margin-left: 0;
+    margin-inline-start: 0;
     justify-content: flex-start;
   }
   .agent-usage-section-header {
@@ -163,9 +105,6 @@
   }
 }
 
-/* The header holds one row of filters, so every dropdown and the refresh button share
-   a body colour and a 32px height rather than each wearing its own form-field or
-   toolbar look. */
 .agent-usage-controls .ui-select {
   width: auto;
   flex-shrink: 0;
@@ -177,4 +116,27 @@
   box-shadow: none;
   font-size: var(--openbot-text-md);
   font-weight: var(--openbot-weight-medium);
+}
+
+.app-frame-panes.server-connection-workspace {
+  position: relative;
+  grid-column: -2 / -1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.server-connection-workspace > .app-loading {
+  z-index: 1;
+}
+
+.server-connection-content > * {
+  min-height: 0;
+  flex: 1;
+}
+
+.app-window > .app-loading {
+  position: fixed;
 }

@@ -19,8 +19,10 @@ import {
   type GroupApi,
   groupApiMethodName,
   IPC_ENDPOINTS,
+  IPC_GROUP_PATHS,
   type IpcEndpointGroup,
   type OpenBotDesktopApi,
+  type PathApi,
   type QueueDelivery,
   type ScopedAgentEvent,
   type ServerSummary,
@@ -29,13 +31,18 @@ import {
 } from "@openbot/contracts/ipc";
 import { screen } from "@solidjs/testing-library";
 import { vi } from "vitest";
-import { type AnalyticsEventName, type DesktopAnalyticsEvents, desktopAnalytics } from "./analytics";
+import { type DesktopAnalyticsProperties, desktopAnalytics } from "./analytics";
 import { createMockChannels } from "./preview/mock-channels";
+
+type AnalyticsEventName = Parameters<typeof desktopAnalytics.track>[0];
 
 /** Shared by every harness helper, so `expect(trackAnalytics)` works without re-importing the spy. */
 export const trackAnalytics =
-  vi.fn<<Name extends AnalyticsEventName>(name: Name, properties: DesktopAnalyticsEvents[Name]) => void>();
-function trackScopedAnalytics<Name extends AnalyticsEventName>(name: Name, properties: DesktopAnalyticsEvents[Name]) {
+  vi.fn<<Name extends AnalyticsEventName>(name: Name, properties: DesktopAnalyticsProperties<Name>) => void>();
+function trackScopedAnalytics<Name extends AnalyticsEventName>(
+  name: Name,
+  properties: DesktopAnalyticsProperties<Name>,
+) {
   trackAnalytics(name, properties);
 }
 
@@ -44,6 +51,18 @@ function installAnalyticsSpies(): void {
   vi.spyOn(desktopAnalytics, "scope").mockImplementation(() => ({ track: trackScopedAnalytics }));
   vi.spyOn(desktopAnalytics, "anonymousScope").mockImplementation(() => ({ track: trackScopedAnalytics }));
 }
+function notInstalledStatus(id: AgentProviderId): AgentStatus {
+  return {
+    phase: "blocked",
+    cliVersion: null,
+    auth: { kind: "unknown" },
+    providers: [{ id, state: "not-installed", connectionState: "connecting", version: null, message: null }],
+    capabilities: { chat: "unavailable", browser: "ready", computerUse: "unavailable" },
+    message: null,
+    fullAccess: true,
+  };
+}
+
 const CONNECTING_STATUS: Record<AgentProviderId, AgentStatus> = {
   opencode: {
     phase: "blocked",
@@ -181,6 +200,14 @@ const CONNECTING_STATUS: Record<AgentProviderId, AgentStatus> = {
     message: null,
     fullAccess: true,
   },
+  inception: notInstalledStatus("inception"),
+  deepseek: notInstalledStatus("deepseek"),
+  openrouter: notInstalledStatus("openrouter"),
+  hermes: notInstalledStatus("hermes"),
+  kimi: notInstalledStatus("kimi"),
+  devin: notInstalledStatus("devin"),
+  copilot: notInstalledStatus("copilot"),
+  mistral: notInstalledStatus("mistral"),
 };
 
 /** A fresh Mac: the driver is there and neither grant has been given yet. */
@@ -531,6 +558,27 @@ function stubGroup(
   return api;
 }
 
+function stubPath<Path extends string>(path: Path, stubbed: NoInfer<Partial<PathApi<Path>>>): PathApi<Path>;
+function stubPath(path: string, stubbed: Readonly<Record<string, StubMethod | undefined>>): object {
+  const paths: Readonly<Record<string, string | null>> = IPC_GROUP_PATHS;
+  const groups: Readonly<Record<string, IpcEndpointGroup>> = IPC_ENDPOINTS;
+  const api: Record<string, StubMethod> = {};
+  for (const [name, group] of Object.entries(groups)) {
+    if (paths[name] !== path) continue;
+    for (const [key, endpoint] of Object.entries(group)) {
+      const method = groupApiMethodName(key, endpoint);
+      const given = stubbed[method];
+      if (given !== undefined) api[method] = given;
+      else if (endpoint.kind === "event") api[method] = vi.fn(() => () => undefined);
+      else api[method] = notStubbed(`${path}.${method}`);
+    }
+  }
+  for (const name of Object.keys(stubbed)) {
+    if (!Object.hasOwn(api, name)) throw new Error(`window.openbot.${path} has no ${name}`);
+  }
+  return api;
+}
+
 export function installOpenbotStub(): void {
   for (const bridge of Object.values(eventBridges)) bridge.reset();
   trackAnalytics.mockClear();
@@ -570,11 +618,8 @@ export function installOpenbotStub(): void {
       getApprovalAutomation: vi
         .fn()
         .mockResolvedValue({ turbo: false, defaultAutoApprove: false, autoApproveOverrides: {} }),
-      setApprovalAutomation: vi.fn(async () => ({ turbo: false, defaultAutoApprove: false, autoApproveOverrides: {} })),
       getBusyMessageModePreference: vi.fn().mockResolvedValue({ mode: "queue" }),
-      setBusyMessageModePreference: vi.fn(async ({ mode }) => ({ mode })),
       getAgentMemoryLimitPreference: vi.fn().mockResolvedValue({ limit: 64 }),
-      setAgentMemoryLimitPreference: vi.fn(async ({ limit }) => ({ limit })),
       getAppLanguagePreference: vi.fn().mockResolvedValue({ language: "system" }),
       setAppLanguagePreference: vi.fn(async ({ language }) => ({ language })),
       openExternal: vi.fn().mockResolvedValue(undefined),
@@ -710,296 +755,303 @@ export function installOpenbotStub(): void {
       onEvent: vi.fn(authBridge.subscribe),
     }),
     agent: {
-      ...createMockChannels(
-        (event) => emitAgentEvent?.(event),
-        (agentId) => AGENTS.find((agent) => agent.id === agentId)?.name ?? agentId,
-      ),
-      generateProfile: notStubbed("agent.generateProfile"),
-      saveProfile: notStubbed("agent.saveProfile"),
-      createRoutine: notStubbed("agent.createRoutine"),
-      updateRoutine: notStubbed("agent.updateRoutine"),
-      deleteRoutine: notStubbed("agent.deleteRoutine"),
-      testRoutine: notStubbed("agent.testRoutine"),
-      automationRunCommand: notStubbed("agent.automationRunCommand"),
-      saveMcpServer: notStubbed("agent.saveMcpServer"),
-      removeMcpServer: notStubbed("agent.removeMcpServer"),
-      setMcpServerEnabled: notStubbed("agent.setMcpServerEnabled"),
-      testMcpServer: notStubbed("agent.testMcpServer"),
-      getAgentAdminSettings: notStubbed("agent.getAgentAdminSettings"),
-      updateAgentAdminSettings: notStubbed("agent.updateAgentAdminSettings"),
-      listAgentSkills: notStubbed("agent.listAgentSkills"),
-      installAgentSkill: notStubbed("agent.installAgentSkill"),
-      uninstallAgentSkill: notStubbed("agent.uninstallAgentSkill"),
-      setAgentSkillEnabled: notStubbed("agent.setAgentSkillEnabled"),
-      addMarketplaceAgent: notStubbed("agent.addMarketplaceAgent"),
-      addTemplateAgent: notStubbed("agent.addTemplateAgent"),
-      getStatus: vi.fn().mockResolvedValue({
-        phase: "ready",
-        cliVersion: "0.144.1",
-        auth: { kind: "chatgpt", email: "norbert@example.com" },
-        providers: [
-          {
-            id: "codex",
-            state: "available",
-            version: "0.144.1",
-            message: null,
-            email: "norbert@example.com",
-          },
-          {
-            id: "claude",
-            state: "available",
-            version: "2.1.231",
-            message: null,
-            email: "claude@example.com",
-          },
-        ],
-        capabilities: { chat: "ready", browser: "ready", computerUse: "ready" },
-        message: null,
-        fullAccess: true,
-      }),
-      getAnalytics: vi.fn().mockResolvedValue(null),
-      getHostAnalytics: vi.fn().mockResolvedValue(null),
-      getUsage: vi.fn().mockResolvedValue({
-        limits: [
-          {
-            id: "codex",
-            primary: { usedPercent: 28, windowDurationMins: 300, resetsAt: 1_786_563_600 },
-            secondary: {
-              usedPercent: 41,
-              windowDurationMins: 10_080,
-              resetsAt: 1_787_040_000,
+      ...stubPath("agent", {
+        ...createMockChannels(
+          (event) => emitAgentEvent?.(event),
+          (agentId) => AGENTS.find((agent) => agent.id === agentId)?.name ?? agentId,
+        ),
+        generateProfile: notStubbed("agent.generateProfile"),
+        saveProfile: notStubbed("agent.saveProfile"),
+        createRoutine: notStubbed("agent.createRoutine"),
+        updateRoutine: notStubbed("agent.updateRoutine"),
+        deleteRoutine: notStubbed("agent.deleteRoutine"),
+        testRoutine: notStubbed("agent.testRoutine"),
+        automationRunCommand: notStubbed("agent.automationRunCommand"),
+        saveMcpServer: notStubbed("agent.saveMcpServer"),
+        removeMcpServer: notStubbed("agent.removeMcpServer"),
+        setMcpServerEnabled: notStubbed("agent.setMcpServerEnabled"),
+        testMcpServer: notStubbed("agent.testMcpServer"),
+        getAgentAdminSettings: notStubbed("agent.getAgentAdminSettings"),
+        updateAgentAdminSettings: notStubbed("agent.updateAgentAdminSettings"),
+        listAgentSkills: notStubbed("agent.listAgentSkills"),
+        installAgentSkill: notStubbed("agent.installAgentSkill"),
+        uninstallAgentSkill: notStubbed("agent.uninstallAgentSkill"),
+        setAgentSkillEnabled: notStubbed("agent.setAgentSkillEnabled"),
+        addMarketplaceAgent: notStubbed("agent.addMarketplaceAgent"),
+        addTemplateAgent: notStubbed("agent.addTemplateAgent"),
+        getStatus: vi.fn().mockResolvedValue({
+          phase: "ready",
+          cliVersion: "0.144.1",
+          auth: { kind: "chatgpt", email: "norbert@example.com" },
+          providers: [
+            {
+              id: "codex",
+              state: "available",
+              version: "0.144.1",
+              message: null,
+              email: "norbert@example.com",
             },
+            {
+              id: "claude",
+              state: "available",
+              version: "2.1.231",
+              message: null,
+              email: "claude@example.com",
+            },
+          ],
+          capabilities: { chat: "ready", browser: "ready", computerUse: "ready" },
+          message: null,
+          fullAccess: true,
+        }),
+        getAnalytics: vi.fn().mockResolvedValue(null),
+        getHostAnalytics: vi.fn().mockResolvedValue(null),
+        getUsage: vi.fn().mockResolvedValue({
+          limits: [
+            {
+              id: "codex",
+              primary: { usedPercent: 28, windowDurationMins: 300, resetsAt: 1_786_563_600 },
+              secondary: {
+                usedPercent: 41,
+                windowDurationMins: 10_080,
+                resetsAt: 1_787_040_000,
+              },
+            },
+          ],
+        }),
+        listModels: vi.fn().mockResolvedValue([
+          {
+            provider: "codex",
+            id: "gpt-5.6-luna",
+            name: "GPT-5.6 Luna",
+            description: "Fast and efficient for everyday agent work.",
+            defaultReasoningEffort: "medium",
+            supportedReasoningEfforts: ["low", "medium", "high"],
           },
-        ],
-      }),
-      listModels: vi.fn().mockResolvedValue([
-        {
-          provider: "codex",
-          id: "gpt-5.6-luna",
-          name: "GPT-5.6 Luna",
-          description: "Fast and efficient for everyday agent work.",
-          defaultReasoningEffort: "medium",
-          supportedReasoningEfforts: ["low", "medium", "high"],
-        },
-        {
-          provider: "codex",
-          id: "gpt-5.6-terra",
-          name: "GPT-5.6 Terra",
-          description: "Balanced speed and capability for involved tasks.",
-          defaultReasoningEffort: "medium",
-          supportedReasoningEfforts: ["medium", "high"],
-        },
-        {
-          provider: "codex",
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          description: "Most capable for complex, long-running work.",
-          defaultReasoningEffort: "high",
-          supportedReasoningEfforts: ["medium", "high", "xhigh"],
-        },
-        {
-          provider: "claude",
-          id: "claude-opus-5",
-          name: "Claude Opus 5",
-          description: "Most capable Claude model for complex work.",
-          defaultReasoningEffort: "high",
-          supportedReasoningEfforts: ["low", "medium", "high"],
-        },
-        {
-          provider: "claude",
-          id: "claude-sonnet-5",
-          name: "Claude Sonnet 5",
-          description: "Balanced Claude model for general agent work.",
-          defaultReasoningEffort: "high",
-          supportedReasoningEfforts: ["low", "medium", "high"],
-        },
-      ]),
-      listAgents: vi.fn().mockResolvedValue(AGENTS),
-      listInstalledSkills: vi.fn().mockResolvedValue([]),
-      listMcpServers: vi.fn().mockResolvedValue([]),
-      getMemorySelection: vi.fn().mockResolvedValue(null),
-      setMemoryInclusion: notStubbed("agent.setMemoryInclusion"),
-      listMemories: vi.fn().mockResolvedValue([]),
-      listRoutines: vi.fn().mockResolvedValue([]),
-      listRoutineRuns: vi.fn().mockResolvedValue([]),
-      routineCalendar: vi.fn().mockResolvedValue({ routines: [], runs: [] }),
-      listTables: vi.fn().mockResolvedValue([]),
-      deleteTable: vi.fn().mockResolvedValue(undefined),
-      createMemory: vi.fn().mockImplementation(async (input) => ({
-        id: "memory-new",
-        agentId: input.agentId,
-        text: input.text,
-        origin: "manual",
-        sourceTurnId: null,
-        createdAt: "2026-08-25T12:00:00.000Z",
-        updatedAt: "2026-08-25T12:00:00.000Z",
-      })),
-      updateMemory: vi.fn().mockImplementation(async (input) => ({
-        id: input.memoryId,
-        agentId: input.agentId,
-        text: input.text,
-        origin: "manual",
-        sourceTurnId: null,
-        createdAt: "2026-08-25T12:00:00.000Z",
-        updatedAt: "2026-08-25T12:01:00.000Z",
-      })),
-      deleteMemory: vi.fn().mockResolvedValue(undefined),
-      clearMemories: vi.fn().mockResolvedValue(undefined),
-      getSidebarLayout: vi.fn().mockResolvedValue({
-        revision: 0,
-        sections: [],
-        order: ["people", "unassigned"],
-        agentAssignments: {},
-        agentOrder: [],
-      }),
-      mutateSidebarLayout: vi.fn().mockResolvedValue({
-        revision: 1,
-        sections: [],
-        order: ["people", "unassigned"],
-        agentAssignments: {},
-        agentOrder: [],
-      }),
-      createAgent: vi.fn().mockImplementation(async (input) => ({
-        ...AGENTS[0],
-        id: "agent-new",
-        name: input.name,
-        title: "",
-        description: input.description,
-        avatarSeed: input.avatarSeed,
-        avatarHue: input.avatarHue,
-        provider: input.provider ?? AGENTS[0]?.provider,
-        model: input.model ?? AGENTS[0]?.model,
-      })),
-      duplicateAgent: vi.fn().mockImplementation(async (agentId) => {
-        const source = AGENTS.find((agent) => agent.id === agentId) ?? AGENTS[0];
-        const agent = {
-          ...source,
-          id: `${agentId}-copy`,
-          name: `${source.name} copy`,
+          {
+            provider: "codex",
+            id: "gpt-5.6-terra",
+            name: "GPT-5.6 Terra",
+            description: "Balanced speed and capability for involved tasks.",
+            defaultReasoningEffort: "medium",
+            supportedReasoningEfforts: ["medium", "high"],
+          },
+          {
+            provider: "codex",
+            id: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            description: "Most capable for complex, long-running work.",
+            defaultReasoningEffort: "high",
+            supportedReasoningEfforts: ["medium", "high", "xhigh"],
+          },
+          {
+            provider: "claude",
+            id: "claude-opus-5",
+            name: "Claude Opus 5",
+            description: "Most capable Claude model for complex work.",
+            defaultReasoningEffort: "high",
+            supportedReasoningEfforts: ["low", "medium", "high"],
+          },
+          {
+            provider: "claude",
+            id: "claude-sonnet-5",
+            name: "Claude Sonnet 5",
+            description: "Balanced Claude model for general agent work.",
+            defaultReasoningEffort: "high",
+            supportedReasoningEfforts: ["low", "medium", "high"],
+          },
+        ]),
+        listAgents: vi.fn().mockResolvedValue(AGENTS),
+        listInstalledSkills: vi.fn().mockResolvedValue([]),
+        listMcpServers: vi.fn().mockResolvedValue([]),
+        getMemorySelection: vi.fn().mockResolvedValue(null),
+        setMemoryInclusion: notStubbed("agent.setMemoryInclusion"),
+        listMemories: vi.fn().mockResolvedValue([]),
+        listRoutines: vi.fn().mockResolvedValue([]),
+        listRoutineRuns: vi.fn().mockResolvedValue([]),
+        routineCalendar: vi.fn().mockResolvedValue({ routines: [], runs: [] }),
+        listTables: vi.fn().mockResolvedValue([]),
+        deleteTable: vi.fn().mockResolvedValue(undefined),
+        createMemory: vi.fn().mockImplementation(async (input) => ({
+          id: "memory-new",
+          agentId: input.agentId,
+          text: input.text,
+          origin: "manual",
+          sourceTurnId: null,
+          createdAt: "2026-08-25T12:00:00.000Z",
+          updatedAt: "2026-08-25T12:00:00.000Z",
+        })),
+        updateMemory: vi.fn().mockImplementation(async (input) => ({
+          id: input.memoryId,
+          agentId: input.agentId,
+          text: input.text,
+          origin: "manual",
+          sourceTurnId: null,
+          createdAt: "2026-08-25T12:00:00.000Z",
+          updatedAt: "2026-08-25T12:01:00.000Z",
+        })),
+        deleteMemory: vi.fn().mockResolvedValue(undefined),
+        clearMemories: vi.fn().mockResolvedValue(undefined),
+        getSidebarLayout: vi.fn().mockResolvedValue({
+          revision: 0,
+          sections: [],
+          order: ["people", "unassigned"],
+          agentAssignments: {},
+          agentOrder: [],
+        }),
+        mutateSidebarLayout: vi.fn().mockResolvedValue({
+          revision: 1,
+          sections: [],
+          order: ["people", "unassigned"],
+          agentAssignments: {},
+          agentOrder: [],
+        }),
+        createAgent: vi.fn().mockImplementation(async (input) => ({
+          ...AGENTS[0],
+          id: "agent-new",
+          name: input.name,
+          title: "",
+          description: input.description,
+          avatarSeed: input.avatarSeed,
+          avatarHue: input.avatarHue,
+          provider: input.provider ?? AGENTS[0]?.provider,
+          model: input.model ?? AGENTS[0]?.model,
+        })),
+        duplicateAgent: vi.fn().mockImplementation(async (agentId) => {
+          const source = AGENTS.find((agent) => agent.id === agentId) ?? AGENTS[0];
+          const agent = {
+            ...source,
+            id: `${agentId}-copy`,
+            name: `${source.name} copy`,
+            threadId: null,
+            workspacePath: `/tmp/OpenBot/Agents/${agentId}-copy`,
+            preview: "No messages yet",
+            updatedAt: null,
+          };
+          return {
+            agent,
+            layout: {
+              revision: 1,
+              sections: [],
+              order: ["people", "unassigned"],
+              agentAssignments: {},
+              agentOrder: ["chief", "sales-outbound", agent.id],
+            },
+          };
+        }),
+        updateAgent: vi.fn().mockImplementation(async (input) => ({
+          ...AGENTS.find((agent) => agent.id === input.agentId),
+          ...input,
+        })),
+        setAvatar: vi.fn().mockImplementation(async (input) => ({
+          ...AGENTS.find((agent) => agent.id === input.agentId),
+          avatarUrl: input.image ? "openbot-avatar://agent/chief?v=test" : null,
+        })),
+        deleteAgent: vi.fn().mockResolvedValue(undefined),
+        listProjectFolders: vi.fn().mockResolvedValue([]),
+        addProjectFolder: notStubbed("agent.addProjectFolder"),
+        renameProjectFolder: notStubbed("agent.renameProjectFolder"),
+        removeProjectFolder: notStubbed("agent.removeProjectFolder"),
+        readConversation: vi.fn().mockImplementation(async (agentId) => ({
+          agentId,
           threadId: null,
-          workspacePath: `/tmp/OpenBot/Agents/${agentId}-copy`,
-          preview: "No messages yet",
-          updatedAt: null,
-        };
-        return {
-          agent,
-          layout: {
-            revision: 1,
-            sections: [],
-            order: ["people", "unassigned"],
-            agentAssignments: {},
-            agentOrder: ["chief", "sales-outbound", agent.id],
-          },
-        };
+          activeTurnId: null,
+          revision: 0,
+          messages: [],
+          readState: { unreadCount: 0, firstUnreadMessageId: null, throughMessageId: null },
+        })),
+        readConversationPage: vi.fn().mockImplementation(async (input) => {
+          const snapshot = await window.openbot.agent.readConversation(input.agentId);
+          const messages = snapshot.messages.slice(-Math.min(input.limit ?? 50, 100));
+          return {
+            ...snapshot,
+            messages,
+            references: {},
+            pageInfo: { hasOlder: snapshot.messages.length > messages.length, olderCursor: null },
+          };
+        }),
+        searchConversationMessages: vi.fn().mockResolvedValue({ results: [], total: 0, nextCursor: null }),
+        searchConversationFiles: vi.fn().mockResolvedValue({ results: [], nextCursor: null }),
+        listConversationReads: vi.fn().mockResolvedValue({}),
+        markConversationRead: vi.fn().mockImplementation(async (input) => ({
+          unreadCount: 0,
+          firstUnreadMessageId: null,
+          throughMessageId: input.throughMessageId,
+        })),
+        chooseAttachments: vi.fn().mockResolvedValue([]),
+        discardDraftAttachment: vi.fn().mockResolvedValue(undefined),
+        downloadAttachments: vi.fn().mockResolvedValue(undefined),
+        openAttachment: vi.fn().mockResolvedValue(undefined),
+        openSharedFile: vi.fn().mockResolvedValue(undefined),
+        openWorkspaceFile: vi.fn().mockResolvedValue(undefined),
+        previewSharedFile: vi.fn().mockResolvedValue({
+          name: "preview.md",
+          size: 9,
+          mimeType: "text/plain",
+          previewKind: "markdown",
+          bytes: new TextEncoder().encode("# Preview"),
+        }),
+        previewWorkspaceFile: vi.fn().mockResolvedValue({
+          name: "preview.md",
+          size: 9,
+          mimeType: "text/plain",
+          previewKind: "markdown",
+          bytes: new TextEncoder().encode("# Preview"),
+        }),
+        sendMessage: vi.fn().mockResolvedValue({
+          messageId: "message-1",
+          deliveries: [{ id: "delivery-1", recipientAgentId: "chief", status: "queued", position: 1 }],
+        }),
+        setMessageReaction: vi.fn().mockResolvedValue(undefined),
+        listQueue: vi.fn().mockImplementation(async (agentId) => ({ agentId, deliveries: [] })),
+        acknowledgeFailedTurn: vi.fn().mockResolvedValue(undefined),
+        cancelQueuedMessage: vi.fn().mockResolvedValue(undefined),
+        steerQueuedMessage: vi.fn().mockResolvedValue(undefined),
+        editQueuedMessage: vi.fn().mockImplementation(async (input) => window.openbot.agent.listQueue(input.agentId)),
+        updateQueuedMessage: vi.fn().mockResolvedValue(undefined),
+        reorderQueue: vi.fn().mockResolvedValue(undefined),
+        interrupt: vi.fn().mockResolvedValue(undefined),
+        clearContext: vi.fn().mockResolvedValue(undefined),
+        respondToPrompt: vi.fn().mockResolvedValue(undefined),
+        respondToApproval: vi.fn().mockResolvedValue(undefined),
+        respondToBrowserSecret: vi.fn().mockResolvedValue(undefined),
+        respondToBrowserTakeover: vi.fn().mockResolvedValue(undefined),
+        onScopedEvent: vi.fn(scopedAgentEventBridge.subscribe),
       }),
-      updateAgent: vi.fn().mockImplementation(async (input) => ({
-        ...AGENTS.find((agent) => agent.id === input.agentId),
-        ...input,
-      })),
-      setAvatar: vi.fn().mockImplementation(async (input) => ({
-        ...AGENTS.find((agent) => agent.id === input.agentId),
-        avatarUrl: input.image ? "openbot-avatar://agent/chief?v=test" : null,
-      })),
-      deleteAgent: vi.fn().mockResolvedValue(undefined),
-      listProjectFolders: vi.fn().mockResolvedValue([]),
-      addProjectFolder: notStubbed("agent.addProjectFolder"),
-      renameProjectFolder: notStubbed("agent.renameProjectFolder"),
-      removeProjectFolder: notStubbed("agent.removeProjectFolder"),
-      readConversation: vi.fn().mockImplementation(async (agentId) => ({
-        agentId,
-        threadId: null,
-        activeTurnId: null,
-        revision: 0,
-        messages: [],
-        readState: { unreadCount: 0, firstUnreadMessageId: null, throughMessageId: null },
-      })),
-      readConversationPage: vi.fn().mockImplementation(async (input) => {
-        const snapshot = await window.openbot.agent.readConversation(input.agentId);
-        const messages = snapshot.messages.slice(-Math.min(input.limit ?? 50, 100));
-        return {
-          ...snapshot,
-          messages,
-          references: {},
-          pageInfo: { hasOlder: snapshot.messages.length > messages.length, olderCursor: null },
-        };
-      }),
-      searchConversationMessages: vi.fn().mockResolvedValue({ results: [], total: 0, nextCursor: null }),
-      searchConversationFiles: vi.fn().mockResolvedValue({ results: [], nextCursor: null }),
-      listConversationReads: vi.fn().mockResolvedValue({}),
-      markConversationRead: vi.fn().mockImplementation(async (input) => ({
-        unreadCount: 0,
-        firstUnreadMessageId: null,
-        throughMessageId: input.throughMessageId,
-      })),
-      chooseAttachments: vi.fn().mockResolvedValue([]),
       onAttachmentImport: vi.fn(attachmentImportBridge.subscribe),
-      discardDraftAttachment: vi.fn().mockResolvedValue(undefined),
-      downloadAttachments: vi.fn().mockResolvedValue(undefined),
-      openAttachment: vi.fn().mockResolvedValue(undefined),
-      openSharedFile: vi.fn().mockResolvedValue(undefined),
-      openWorkspaceFile: vi.fn().mockResolvedValue(undefined),
-      previewSharedFile: vi.fn().mockResolvedValue({
-        name: "preview.md",
-        size: 9,
-        mimeType: "text/plain",
-        previewKind: "markdown",
-        bytes: new TextEncoder().encode("# Preview"),
-      }),
-      previewWorkspaceFile: vi.fn().mockResolvedValue({
-        name: "preview.md",
-        size: 9,
-        mimeType: "text/plain",
-        previewKind: "markdown",
-        bytes: new TextEncoder().encode("# Preview"),
-      }),
-      sendMessage: vi.fn().mockResolvedValue({
-        messageId: "message-1",
-        deliveries: [{ id: "delivery-1", recipientAgentId: "chief", status: "queued", position: 1 }],
-      }),
-      setMessageReaction: vi.fn().mockResolvedValue(undefined),
-      listQueue: vi.fn().mockImplementation(async (agentId) => ({ agentId, deliveries: [] })),
-      acknowledgeFailedTurn: vi.fn().mockResolvedValue(undefined),
-      cancelQueuedMessage: vi.fn().mockResolvedValue(undefined),
-      steerQueuedMessage: vi.fn().mockResolvedValue(undefined),
-      editQueuedMessage: vi.fn().mockImplementation(async (input) => window.openbot.agent.listQueue(input.agentId)),
-      updateQueuedMessage: vi.fn().mockResolvedValue(undefined),
-      reorderQueue: vi.fn().mockResolvedValue(undefined),
-      interrupt: vi.fn().mockResolvedValue(undefined),
-      clearContext: vi.fn().mockResolvedValue(undefined),
-      respondToPrompt: vi.fn().mockResolvedValue(undefined),
-      respondToApproval: vi.fn().mockResolvedValue(undefined),
-      respondToBrowserSecret: vi.fn().mockResolvedValue(undefined),
-      respondToBrowserTakeover: vi.fn().mockResolvedValue(undefined),
       onEvent: vi.fn(agentEventBridge.subscribe),
-      onScopedEvent: vi.fn(scopedAgentEventBridge.subscribe),
+      addDroppedAgentFolder: notStubbed("agent.addDroppedAgentFolder"),
+      retryAttachmentImport: vi.fn(),
+      discardAttachmentImport: vi.fn(),
     },
     browser: {
-      open: vi.fn().mockResolvedValue(undefined),
-      activate: vi.fn().mockResolvedValue(undefined),
-      navigate: vi.fn().mockResolvedValue(undefined),
-      reload: vi.fn().mockResolvedValue(undefined),
-      close: vi.fn().mockResolvedValue(undefined),
-      listTabs: vi.fn().mockResolvedValue([]),
-      getDisplayState: vi.fn().mockResolvedValue({ tabs: [], activeTabId: null }),
-      getControlState: vi.fn().mockResolvedValue({ sessions: [] }),
-      capturePreview: vi.fn().mockResolvedValue({
-        dataUrl: "data:image/jpeg;base64,YWJj",
-        width: 960,
-        height: 600,
+      ...stubGroup(IPC_ENDPOINTS.browser, "browser", {
+        open: vi.fn().mockResolvedValue(undefined),
+        activate: vi.fn().mockResolvedValue(undefined),
+        navigate: vi.fn().mockResolvedValue(undefined),
+        reload: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+        listTabs: vi.fn().mockResolvedValue([]),
+        getDisplayState: vi.fn().mockResolvedValue({ tabs: [], activeTabId: null }),
+        getControlState: vi.fn().mockResolvedValue({ sessions: [] }),
+        capturePreview: vi.fn().mockResolvedValue({
+          dataUrl: "data:image/jpeg;base64,YWJj",
+          width: 960,
+          height: 600,
+        }),
+        setVisible: vi.fn().mockResolvedValue(undefined),
+        startLiveView: vi.fn().mockResolvedValue(undefined),
+        stopLiveView: vi.fn().mockResolvedValue(undefined),
+        onLiveViewEvent: vi.fn(browserLiveViewBridge.subscribe),
+        onDisplayState: vi.fn().mockReturnValue(() => undefined),
+        openPictureInPicture: vi
+          .fn()
+          .mockImplementation(async (bounds) => bounds ?? { x: 900, y: 500, width: 420, height: 300 }),
+        closePictureInPicture: vi.fn().mockResolvedValue(undefined),
+        dockPictureInPicture: vi.fn().mockResolvedValue(undefined),
+        hidePictureInPicture: vi.fn().mockResolvedValue(undefined),
+        onPictureInPictureEvent: vi.fn(browserPictureInPictureBridge.subscribe),
       }),
-      setVisible: vi.fn().mockResolvedValue(undefined),
-      startLiveView: vi.fn().mockResolvedValue(undefined),
-      stopLiveView: vi.fn().mockResolvedValue(undefined),
       sendLiveViewInput: vi.fn().mockResolvedValue(undefined),
-      onLiveViewEvent: vi.fn(browserLiveViewBridge.subscribe),
-      onDisplayState: vi.fn().mockReturnValue(() => undefined),
-      openPictureInPicture: vi
-        .fn()
-        .mockImplementation(async (bounds) => bounds ?? { x: 900, y: 500, width: 420, height: 300 }),
-      closePictureInPicture: vi.fn().mockResolvedValue(undefined),
-      dockPictureInPicture: vi.fn().mockResolvedValue(undefined),
-      hidePictureInPicture: vi.fn().mockResolvedValue(undefined),
-      onPictureInPictureEvent: vi.fn(browserPictureInPictureBridge.subscribe),
     },
     update: stubGroup(IPC_ENDPOINTS.update, "update", {
       getStatus: vi.fn().mockResolvedValue({
@@ -1047,125 +1099,127 @@ export function installOpenbotStub(): void {
       exportDiagnostics: vi.fn().mockResolvedValue({ saved: true }),
     }),
     servers: {
-      reorder: notStubbed("servers.reorder"),
-      setMuted: vi
-        .fn()
-        .mockImplementation(async ({ serverId, muted }) => [
-          { ...testServer(serverId, true), notificationsMuted: muted },
+      ...stubGroup(IPC_ENDPOINTS.servers, "servers", {
+        reorder: notStubbed("servers.reorder"),
+        setMuted: vi
+          .fn()
+          .mockImplementation(async ({ serverId, muted }) => [
+            { ...testServer(serverId, true), notificationsMuted: muted },
+          ]),
+        setNotificationLevel: vi
+          .fn()
+          .mockImplementation(async ({ serverId, level }) => [
+            { ...testServer(serverId, true), notificationLevel: level },
+          ]),
+        list: vi.fn().mockResolvedValue([
+          {
+            id: "local",
+            name: "Local",
+            logoUrl: null,
+            notificationsMuted: false,
+            notificationsMutedUntil: null,
+            notificationLevel: "all",
+            kind: "local",
+            state: "online",
+            apiUrl: null,
+            remoteDesktopAvailable: false,
+            role: null,
+            active: true,
+          },
         ]),
-      setNotificationLevel: vi
-        .fn()
-        .mockImplementation(async ({ serverId, level }) => [
-          { ...testServer(serverId, true), notificationLevel: level },
+        select: vi.fn().mockResolvedValue([
+          {
+            id: "local",
+            name: "Local",
+            logoUrl: null,
+            notificationsMuted: false,
+            notificationsMutedUntil: null,
+            notificationLevel: "all",
+            kind: "local",
+            state: "online",
+            apiUrl: null,
+            remoteDesktopAvailable: false,
+            role: null,
+            active: true,
+          },
         ]),
-      list: vi.fn().mockResolvedValue([
-        {
-          id: "local",
-          name: "Local",
-          logoUrl: null,
-          notificationsMuted: false,
-          notificationsMutedUntil: null,
-          notificationLevel: "all",
-          kind: "local",
-          state: "online",
-          apiUrl: null,
-          remoteDesktopAvailable: false,
-          role: null,
-          active: true,
-        },
-      ]),
-      select: vi.fn().mockResolvedValue([
-        {
-          id: "local",
-          name: "Local",
-          logoUrl: null,
-          notificationsMuted: false,
-          notificationsMutedUntil: null,
-          notificationLevel: "all",
-          kind: "local",
-          state: "online",
-          apiUrl: null,
-          remoteDesktopAvailable: false,
-          role: null,
-          active: true,
-        },
-      ]),
-      join: vi.fn().mockResolvedValue(undefined),
-      previewInvite: vi.fn().mockResolvedValue({
-        serverId: "00000000-0000-4000-8000-000000000000",
-        serverName: "Studio Mac",
-        apiHostname: "studio-host.openbot.run",
-        role: "member",
-        expiresAt: "2026-08-21T10:00:00.000Z",
-        emailBound: false,
-        permanent: false,
+        join: vi.fn().mockResolvedValue(undefined),
+        previewInvite: vi.fn().mockResolvedValue({
+          serverId: "00000000-0000-4000-8000-000000000000",
+          serverName: "Studio Mac",
+          apiHostname: "studio-host.openbot.run",
+          role: "member",
+          expiresAt: "2026-08-21T10:00:00.000Z",
+          emailBound: false,
+          permanent: false,
+        }),
+        takePendingInvite: vi.fn().mockResolvedValue(null),
+        login: vi.fn().mockResolvedValue(undefined),
+        retryConnection: vi.fn().mockRejectedValue(new Error("The host is still incompatible.")),
+        remove: vi.fn().mockResolvedValue(undefined),
+        getPresence: vi.fn().mockResolvedValue({ serverId: null, members: [], updatedAt: "" }),
+        getPresenceFor: vi.fn().mockResolvedValue({ serverId: null, members: [], updatedAt: "" }),
+        refreshIdentity: vi.fn().mockImplementation(async (serverId) => {
+          const server = (await window.openbot.servers.list()).find((item) => item.id === serverId);
+          if (!server) throw new Error("Server not found");
+          return server;
+        }),
+        listMembers: vi.fn().mockResolvedValue([]),
+        updateMember: vi.fn().mockResolvedValue(undefined),
+        removeMember: vi.fn().mockResolvedValue(undefined),
+        listInvites: vi.fn().mockResolvedValue([]),
+        revokeInvite: vi.fn().mockResolvedValue(undefined),
+        createInvite: vi.fn().mockResolvedValue({
+          inviteUrl: "https://team.example.com/invite/test",
+          expiresAt: "2026-08-21T10:00:00.000Z",
+          role: "member",
+          email: null,
+          permanent: false,
+          useCount: 0,
+        }),
+        setTyping: vi.fn().mockResolvedValue(undefined),
+        listDirectThreads: vi.fn().mockResolvedValue([]),
+        readDirectConversation: vi.fn().mockImplementation(async (memberId) => ({
+          threadId: `thread-${memberId}`,
+          otherMemberId: memberId,
+          messages: [],
+          revision: 0,
+          readState: { unreadCount: 0, firstUnreadMessageId: null, throughSequence: 0 },
+        })),
+        readDirectConversationPage: vi.fn().mockImplementation(async (input) => {
+          const snapshot = await window.openbot.servers.readDirectConversation(input.memberId);
+          const messages = snapshot.messages.slice(-Math.min(input.limit ?? 50, 100));
+          return {
+            ...snapshot,
+            messages,
+            pageInfo: { hasOlder: snapshot.messages.length > messages.length, olderCursor: null },
+          };
+        }),
+        sendDirectMessage: vi.fn().mockImplementation(async (input) => ({
+          id: input.clientMessageId,
+          threadId: `thread-${input.memberId}`,
+          senderMemberId: "member-self",
+          recipientMemberId: input.memberId,
+          text: input.text,
+          createdAt: "2026-08-19T10:00:00.000Z",
+          sequence: 1,
+        })),
+        markDirectRead: vi.fn().mockImplementation(async (input) => ({
+          unreadCount: 0,
+          firstUnreadMessageId: null,
+          throughSequence: input.throughSequence,
+        })),
+        setDirectTyping: vi.fn().mockResolvedValue(undefined),
+        // The preload narrows these to one server as `onPresence` and the two above. The app reads only those.
+        onScopedPresence: vi.fn(() => () => undefined),
+        onScopedDirectMessage: vi.fn(() => () => undefined),
+        onScopedDirectTyping: vi.fn(() => () => undefined),
+        onEvent: vi.fn(serversBridge.subscribe),
+        onInvite: vi.fn(inviteBridge.subscribe),
       }),
-      takePendingInvite: vi.fn().mockResolvedValue(null),
-      login: vi.fn().mockResolvedValue(undefined),
-      retryConnection: vi.fn().mockRejectedValue(new Error("The host is still incompatible.")),
-      remove: vi.fn().mockResolvedValue(undefined),
-      getPresence: vi.fn().mockResolvedValue({ serverId: null, members: [], updatedAt: "" }),
-      getPresenceFor: vi.fn().mockResolvedValue({ serverId: null, members: [], updatedAt: "" }),
-      refreshIdentity: vi.fn().mockImplementation(async (serverId) => {
-        const server = (await window.openbot.servers.list()).find((item) => item.id === serverId);
-        if (!server) throw new Error("Server not found");
-        return server;
-      }),
-      listMembers: vi.fn().mockResolvedValue([]),
-      updateMember: vi.fn().mockResolvedValue(undefined),
-      removeMember: vi.fn().mockResolvedValue(undefined),
-      listInvites: vi.fn().mockResolvedValue([]),
-      revokeInvite: vi.fn().mockResolvedValue(undefined),
-      createInvite: vi.fn().mockResolvedValue({
-        inviteUrl: "https://team.example.com/invite/test",
-        expiresAt: "2026-08-21T10:00:00.000Z",
-        role: "member",
-        email: null,
-        permanent: false,
-        useCount: 0,
-      }),
-      setTyping: vi.fn().mockResolvedValue(undefined),
       onPresence: vi.fn(presenceBridge.subscribe),
-      listDirectThreads: vi.fn().mockResolvedValue([]),
-      readDirectConversation: vi.fn().mockImplementation(async (memberId) => ({
-        threadId: `thread-${memberId}`,
-        otherMemberId: memberId,
-        messages: [],
-        revision: 0,
-        readState: { unreadCount: 0, firstUnreadMessageId: null, throughSequence: 0 },
-      })),
-      readDirectConversationPage: vi.fn().mockImplementation(async (input) => {
-        const snapshot = await window.openbot.servers.readDirectConversation(input.memberId);
-        const messages = snapshot.messages.slice(-Math.min(input.limit ?? 50, 100));
-        return {
-          ...snapshot,
-          messages,
-          pageInfo: { hasOlder: snapshot.messages.length > messages.length, olderCursor: null },
-        };
-      }),
-      sendDirectMessage: vi.fn().mockImplementation(async (input) => ({
-        id: input.clientMessageId,
-        threadId: `thread-${input.memberId}`,
-        senderMemberId: "member-self",
-        recipientMemberId: input.memberId,
-        text: input.text,
-        createdAt: "2026-08-19T10:00:00.000Z",
-        sequence: 1,
-      })),
-      markDirectRead: vi.fn().mockImplementation(async (input) => ({
-        unreadCount: 0,
-        firstUnreadMessageId: null,
-        throughSequence: input.throughSequence,
-      })),
-      setDirectTyping: vi.fn().mockResolvedValue(undefined),
       onDirectMessage: vi.fn(directMessageBridge.subscribe),
       onDirectTyping: vi.fn(directTypingBridge.subscribe),
-      // The preload narrows these to one server as `onPresence` and the two above. The app reads only those.
-      onScopedPresence: vi.fn(() => () => undefined),
-      onScopedDirectMessage: vi.fn(() => () => undefined),
-      onScopedDirectTyping: vi.fn(() => () => undefined),
-      onEvent: vi.fn(serversBridge.subscribe),
-      onInvite: vi.fn(inviteBridge.subscribe),
     },
     plugins: stubGroup(IPC_ENDPOINTS.plugins, "plugins", {
       takePendingListing: vi.fn().mockResolvedValue(null),
@@ -1209,13 +1263,13 @@ export function installOpenbotStub(): void {
       selectDisplay: vi.fn().mockResolvedValue(undefined),
       disconnect: vi.fn().mockResolvedValue(undefined),
     }),
-    storage: {
+    storage: stubGroup(IPC_ENDPOINTS.storage, "storage", {
       getUsage: vi.fn().mockResolvedValue(null),
       deleteFile: vi.fn().mockResolvedValue(undefined),
       clear: vi.fn().mockResolvedValue(undefined),
       openFile: vi.fn().mockResolvedValue(undefined),
       openLocation: vi.fn().mockResolvedValue(undefined),
-    },
+    }),
     agentImport: stubGroup(IPC_ENDPOINTS.agentImport, "agentImport", {}),
     // The custom providers context lists on mount, so every harnessed mount reaches this group.
     customProviders: stubGroup(IPC_ENDPOINTS.customProviders, "customProviders", {
@@ -1241,6 +1295,23 @@ export function installOpenbotStub(): void {
     messaging: stubGroup(IPC_ENDPOINTS.messaging, "messaging", {}),
     slackClient: stubGroup(IPC_ENDPOINTS.slackClient, "slackClient", {}),
     handoffs: stubGroup(IPC_ENDPOINTS.handoffs, "handoffs", { list: vi.fn().mockResolvedValue([]) }),
+    agentDock: stubPath("agentDock", {}),
+    backgroundProcesses: stubPath("backgroundProcesses", {}),
+    browserDock: stubPath("browserDock", {}),
+    credits: stubPath("credits", {}),
+    crm: stubPath("crm", {}),
+    events: stubPath("events", {}),
+    instanceTransfer: stubPath("instanceTransfer", {}),
+    license: stubPath("license", {}),
+    linkAccount: stubPath("linkAccount", {}),
+    localServers: stubPath("localServers", {}),
+    macAutomation: stubPath("macAutomation", {}),
+    marketplace: stubPath("marketplace", {}),
+    passwordManagers: stubPath("passwordManagers", {}),
+    referral: stubPath("referral", {}),
+    routineResults: stubPath("routineResults", {}),
+    vault: stubPath("vault", {}),
+    workflows: stubPath("workflows", {}),
     // `providerRuntimes` stays out: the renderer shows the sign-in and Refresh flow when it is
     // absent, and these tests cover that flow. A stub member switches every screen to downloads.
   } satisfies Omit<OpenBotDesktopApi, "providerRuntimes">;

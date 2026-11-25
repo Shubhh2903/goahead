@@ -1,9 +1,10 @@
 import { attachmentReferenceIds } from "@openbot/contracts/attachment-references";
+import { appendVoiceTranscript } from "@openbot/ui/voice-recording";
 import { createMemo } from "solid-js";
-import { appendVoiceTranscript } from "../../../voice-recording";
-import { EMPTY_DRAFT, type StoredQueueEdit } from "../composer-draft";
+import { EMPTY_DRAFT, rowAttachments, type StoredQueueEdit } from "../composer-draft";
 import { composerDraftKey } from "../conversation-keys";
 import type { ComposerDraft, ConversationProps, ConversationTarget } from "../conversation-types";
+import type { PastePreview } from "./composer-actions";
 
 export interface ComposerStoreDeps {
   props: ConversationProps;
@@ -17,11 +18,21 @@ export interface ComposerStoreDeps {
   editingServerId: () => string | null;
   editingDeliveryId: () => string | null;
   editingPendingSave: () => StoredQueueEdit["pendingSave"] | null;
+  pastePreviews: () => readonly PastePreview[];
   seenMessageIds: Set<string>;
 }
 
+type ConversationOwner = {
+  agent?: Pick<NonNullable<ConversationProps["agent"]>, "id"> | undefined;
+  channel?: Pick<NonNullable<ConversationProps["channel"]>, "id"> | undefined;
+};
+
+export function conversationOwnerId(props: ConversationOwner): string | undefined {
+  return props.channel?.id ?? props.agent?.id;
+}
+
 export function currentConversationTarget(props: ConversationProps): ConversationTarget | undefined {
-  const agentId = props.agent?.id;
+  const agentId = conversationOwnerId(props);
   return agentId ? { agentId, serverId: props.server?.id ?? "local" } : undefined;
 }
 
@@ -50,6 +61,12 @@ export function createComposerStore(deps: ComposerStoreDeps) {
     const referencedIds = attachmentReferenceIds(currentDraft().text);
     return currentDraft().attachments.filter((attachment) => !referencedIds.has(attachment.id));
   });
+  const rowDraftAttachments = createMemo(() => rowAttachments(currentDraft().text, currentDraft().attachments));
+  const currentPastePreviews = createMemo(() => {
+    const target = currentTarget();
+    const key = target ? composerDraftKey(target) : undefined;
+    return deps.pastePreviews().filter((preview) => preview.draftKey === key);
+  });
   const composerHasContent = createMemo(
     () => Boolean(currentDraft().text.trim()) || currentDraft().attachments.length > 0,
   );
@@ -59,7 +76,7 @@ export function createComposerStore(deps: ComposerStoreDeps) {
   });
 
   const markMessageSeen = (messageId: string): boolean => {
-    const key = `${deps.props.agent?.id ?? "none"}:${messageId}`;
+    const key = `${conversationOwnerId(deps.props) ?? "none"}:${messageId}`;
     if (deps.seenMessageIds.has(key)) return false;
     deps.seenMessageIds.add(key);
     return true;
@@ -96,7 +113,6 @@ export function createComposerStore(deps: ComposerStoreDeps) {
   const updateCurrentDraft = (patch: Partial<ComposerDraft>) => {
     const target = currentTarget();
     if (!target) return;
-    // A pending Save owns the outcome: keep the exact request for retry.
     if (
       deps.editingPendingSave() &&
       deps.editingAgentId() === target.agentId &&
@@ -159,6 +175,8 @@ export function createComposerStore(deps: ComposerStoreDeps) {
     currentComposerError,
     currentChatError,
     unreferencedDraftAttachments,
+    rowDraftAttachments,
+    currentPastePreviews,
     composerHasContent,
     replyTarget,
     markMessageSeen,

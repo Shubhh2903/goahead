@@ -1,5 +1,5 @@
 import type { ServerSummary } from "@openbot/contracts/ipc";
-import { Heading, Text } from "@openbot/ui";
+import { Heading, Text, Toaster } from "@openbot/ui";
 import { AddServerDialog, type HostedServerSetupStatus } from "@openbot/ui/features/servers/AddServerDialog";
 import { hostedServerPlansFromCatalog } from "@openbot/ui/features/servers/HostedServerPricing";
 import { ServerRail } from "@openbot/ui/features/servers/ServerRail";
@@ -8,31 +8,23 @@ import type { Meta, StoryObj } from "storybook-solidjs-vite";
 import { MOCK_HOSTED_SERVER_CATALOG } from "../src/preview/mock-hosted-servers";
 import { STORY_SERVERS } from "./fixtures";
 
-/** The plans of the preview catalog, which has the Stripe sandbox prices. */
 const PLANS = hostedServerPlansFromCatalog(MOCK_HOSTED_SERVER_CATALOG);
 
-/** How long each fake setup step takes, so the progress is easy to watch. */
 const STEP_MS = 5_000;
 
 interface FlowProps {
-  /** Open the add-server dialog when the story loads. */
   startOpen?: boolean;
-  /** The fake setup stops with an error at the "Start GoAhead" step on the first try. */
   failFirstTry?: boolean;
-  /** The account has this many servers, the maximum, so the plans are disabled. */
   serverLimit?: number;
+  licenseOffer?: { used: number; trialEnd?: number };
 }
 
-/**
- * The server rail with a working plus button. Create a hosted server: the fake payment page
- * "confirms" after one step, then the setup runs and the new server is added to the rail. Nothing
- * leaves the browser: every call is fake.
- */
 function AddServerFlow(props: FlowProps) {
   const [servers, setServers] = createSignal<ServerSummary[]>(STORY_SERVERS);
   const [addOpen, setAddOpen] = createSignal(props.startOpen ?? false);
   const [contactNote, setContactNote] = createSignal(false);
   const [joinNote, setJoinNote] = createSignal(false);
+  const [localNote, setLocalNote] = createSignal(false);
   const [manageNote, setManageNote] = createSignal(false);
   const [setupStatus, setSetupStatus] = createSignal<HostedServerSetupStatus | null>(null);
   const [pending, setPending] = createSignal({ id: "", name: "" });
@@ -71,6 +63,7 @@ function AddServerFlow(props: FlowProps) {
 
   return (
     <>
+      <Toaster />
       <ServerRail
         servers={servers()}
         onSelect={(serverId) =>
@@ -99,6 +92,11 @@ function AddServerFlow(props: FlowProps) {
         <Show when={joinNote()}>
           <Text tone="muted">"Join a server" was clicked. The app opens the invite dialog here.</Text>
         </Show>
+        <Show when={localNote()}>
+          <Text tone="muted">
+            "New server on this computer" was clicked. The app opens the dialog that names the server here.
+          </Text>
+        </Show>
       </main>
 
       <Show when={addOpen()}>
@@ -107,12 +105,17 @@ function AddServerFlow(props: FlowProps) {
           recommendedPlan="standard"
           setupStatus={setupStatus()}
           serverLimit={props.serverLimit}
+          licenseOffer={props.licenseOffer}
           onManageServers={() => setManageNote(true)}
           onClose={() => setAddOpen(false)}
           onContactUs={() => setContactNote(true)}
           onJoinWithInvite={() => {
             setAddOpen(false);
             setJoinNote(true);
+          }}
+          onCreateLocal={() => {
+            setAddOpen(false);
+            setLocalNote(true);
           }}
           onCreate={async () => {
             await new Promise((resolve) => window.setTimeout(resolve, 700));
@@ -169,28 +172,36 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Click the plus button, then create a hosted server. */
 export const ClickPlus: Story = {
   render: () => <AddServerFlow />,
 };
 
-/** The dialog is open when the story loads. */
 export const DialogOpen: Story = {
   render: () => <AddServerFlow startOpen />,
 };
 
-/** The first setup stops at "Start GoAhead". "Try again" then succeeds. */
 export const SetupFails: Story = {
   render: () => <AddServerFlow startOpen failFirstTry />,
 };
 
-/** The account has the maximum number of servers. "Manage servers" closes the dialog. */
 export const ServerLimit: Story = {
   render: () => <AddServerFlow startOpen serverLimit={3} />,
 };
 
-/** A narrow window: the plan cards stack. */
 export const Narrow: Story = {
   globals: { viewport: { value: "addServerNarrow", isRotated: false } },
   render: () => <AddServerFlow startOpen />,
+};
+
+export const WithLicense: Story = {
+  render: () => <AddServerFlow startOpen licenseOffer={{ used: 3 }} />,
+};
+
+export const WithLicenseTrial: Story = {
+  render: () => <AddServerFlow startOpen licenseOffer={{ used: 3, trialEnd: Date.UTC(2026, 11, 1) }} />,
+};
+
+export const WithLicenseNarrow: Story = {
+  globals: { viewport: { value: "addServerNarrow", isRotated: false } },
+  render: () => <AddServerFlow startOpen licenseOffer={{ used: 3 }} />,
 };

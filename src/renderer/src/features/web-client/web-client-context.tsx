@@ -1,16 +1,28 @@
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type {
   AgentApproval,
+  AgentColorEntry,
+  AgentContextState,
   AgentEvent,
   AgentRuntimeApproval,
   AgentStatus,
-  AgentSummary,
   AttachmentSummary,
   BrowserControlState,
   BrowserTab,
   BrowserTakeoverRequest,
+  ChannelSummary,
+  ChatColors,
+  ClientAgentModelOption,
+  ClientAgentSummary,
+  ConversationMessage,
   ConversationPage,
+  ConversationReadState,
+  HiddenAgent,
+  HostedServerIssue,
   HostedServerSleep,
+  HostedServerStart,
+  MemberChatColorEntry,
+  ProviderModelSourceEntry,
   QueueSnapshot,
   RespondToApprovalInput,
   RespondToPromptInput,
@@ -19,66 +31,160 @@ import type {
   TeamPresenceSnapshot,
   TeamRealtimeEvent,
 } from "@openbot/contracts/ipc";
+import { canAdministerServer, openExchangesOutside, withModelSources } from "@openbot/contracts/ipc";
+import {
+  AGENT_ACTIVE_QUEUES_CAPABILITY,
+  AGENT_ACTIVE_QUEUES_LIMIT,
+  type AgentActiveQueues,
+} from "@openbot/contracts/team-protocol/agent-active-queues-v1";
+import {
+  AGENT_COLORS_CAPABILITY,
+  AGENT_HIDDEN_CAPABILITY,
+  CHAT_COLORS_CAPABILITY,
+} from "@openbot/contracts/team-protocol/current";
+import { FOCUS_USE_CAPABILITY } from "@openbot/contracts/team-protocol/focus-use-v1";
+import { HOST_APPEARANCE_CAPABILITY, type ServerAppearance } from "@openbot/contracts/team-protocol/host-appearance-v1";
+import { HOST_RESTART_CAPABILITY } from "@openbot/contracts/team-protocol/host-restart-v1";
+import { MESSAGE_DELETE_CAPABILITY } from "@openbot/contracts/team-protocol/message-delete-v1";
+import { SIDEBAR_PINS_CAPABILITY } from "@openbot/contracts/team-protocol/sidebar-pins-v1";
 import { cleanAgentMessageText } from "@openbot/team-client/agent-message-text";
+import { createFocusUsePing } from "@openbot/team-client/focus-use";
 import { WAKE_RECONNECT_DELAY_MS } from "@openbot/team-client/hosted-server-wake";
 import type { RemoteTeamHost } from "@openbot/team-client/remote-directory";
-import { reconcilePendingRequests } from "@openbot/team-client/runtime-attention";
+import {
+  createRemoteConnectionRecovery,
+  isSafeConnectionError,
+  type RemoteRecoveryStatus,
+} from "@openbot/team-client/remote-recovery";
+import {
+  approvalIsCut,
+  keepWholeApprovals,
+  reconcilePendingRequests,
+  withWholeApproval,
+} from "@openbot/team-client/runtime-attention";
+import { markRemoteSync } from "@openbot/team-client/sync-profile";
+import { duplicateSection as duplicateSectionWith } from "@openbot/ui/features/sidebar/duplicate-section";
 import { currentText } from "@openbot/ui/text";
+import { errorReference, type UserErrorDetails } from "@openbot/user-errors";
 import { createEffect, createMemo, createSignal, createStore, onSettled } from "solid-js";
 import { toAgentProfile } from "../../app-message-projection";
-import { mergeConversationPage } from "../conversation/conversation-merge";
+import { backgroundWorkKey } from "../conversation/background-work-key";
+import { messagePromptRequestKey, promptRequestKey } from "../conversation/conversation-keys";
+import {
+  mergeConversationPage,
+  missingReplyOriginals,
+  windowedSnapshotMessages,
+} from "../conversation/conversation-merge";
+import { latestIncomingConversationMessage } from "../conversation/conversation-read-state";
+import type { PromptAnswerOptions } from "../conversation/conversation-types";
+import { appendTurnStepLine, type TurnStepLines } from "../conversation/turn-step-lines";
+import {
+  deleteRemoteWorkspaceFrame,
+  deleteRemoteWorkspaceFrames,
+  readRemoteWorkspaceFrame,
+  saveRemoteFrameUnreadCounts,
+  saveRemoteWorkspaceFrame,
+} from "../servers/remote-workspace-frame";
+import { followsServerUpdate } from "../servers/server-update-flow";
 import { createSidebarPreferences } from "../sidebar/sidebar-preferences";
 import { defaultSidebarLayout } from "../sidebar/sidebar-sections";
-import { createHostRestartToasts } from "../updates/host-restart-toast";
+import { createHostRestartToasts, type HostRestartView } from "../updates/host-restart-toast";
+import { deleteCachedWorkflows, keepCachedWorkflows } from "../workflows/workflow-cache";
+import {
+  agentPictureMark,
+  deleteSavedAgentPictures,
+  deleteSavedServerPictures,
+  keepSavedAgentPictures,
+  readSavedAgentPicture,
+  saveAgentPicture,
+} from "./web-agent-pictures";
 import type { WebHostNotice } from "./web-host-connections";
-import type { WebHostState } from "./web-host-lock";
-import { createWebHostedServerWake } from "./web-hosted-server-wake";
+import { createWebHostLifecycle } from "./web-host-lifecycle";
+import { WebHostOtherTabError, type WebHostState } from "./web-host-lock";
 import {
   createWebWorkspaceRuntime,
+  WebHostConnectionError,
   WebHostIncompatibleError,
   type WebRuntimeEvents,
   type WebWorkspaceRuntime,
 } from "./web-runtime";
 import { orderWebHosts, readWebServerOrder, writeWebServerOrder } from "./web-server-order";
+import { readWebServerSelection, writeWebServerSelection } from "./web-server-selection";
 
 interface WebConversation {
   page: ConversationPage | null;
+  missingReferences?: Record<string, true>;
   draft: string;
   attachments: AttachmentSummary[];
   loading: boolean;
+  error?: string | null;
+  trimmed?: boolean;
+  olderError?: string | null;
+  around?: boolean;
 }
+
+const LATEST_PAGE_SIZE = 50;
+const PRELOADED_AGENTS = 3;
+const EVENT_READS_INTERVAL_MS = 1_000;
+
+function trimToLatestPage(conversation: WebConversation): void {
+  const page = conversation.page;
+  if (!page) return;
+  conversation.trimmed = true;
+  conversation.around = false;
+  if (page.messages.length <= LATEST_PAGE_SIZE) return;
+  const kept = page.messages.slice(-LATEST_PAGE_SIZE);
+  const removedById = new Map(page.messages.slice(0, -LATEST_PAGE_SIZE).map((message) => [message.id, message]));
+  const references: Record<string, ConversationMessage> = {};
+  for (const message of kept) {
+    const originalId = message.replyToMessageId;
+    const original = originalId ? (removedById.get(originalId) ?? page.references[originalId]) : undefined;
+    if (originalId && original) references[originalId] = original;
+  }
+  page.messages = kept;
+  page.references = references;
+  page.pageInfo = { ...page.pageInfo, hasOlder: true };
+}
+
 interface WebWorkspaceState {
   hosts: RemoteTeamHost[];
   host: RemoteTeamHost | null;
-  agents: AgentSummary[];
-  /** The host answered an agent list. Until then, an empty `agents` does not mean the host has none. */
+  agents: ClientAgentSummary[];
   agentsLoaded: boolean;
+  agentsFromFrame: boolean;
+  frameChannels: ChannelSummary[];
   selectedId: string | null;
   conversations: Record<string, WebConversation>;
-  /** The queues read from the host, by agent. Each agent's queue is read on connect and on each change. */
   queues: Record<string, QueueSnapshot>;
   approvals: Array<AgentApproval | AgentRuntimeApproval>;
   prompts: Array<Extract<AgentEvent, { type: "prompt" }>>;
-  /** The latest progress detail of each agent's running turn. */
-  progress: Record<string, { turnId: string; detail: string }>;
+  progress: Record<string, { turnId: string; detail: string; running?: boolean; activity?: string }>;
   takeovers: BrowserTakeoverRequest[];
+  contextStates: Record<string, AgentContextState>;
+  threadContextStates: Record<string, AgentContextState>;
+  backgroundWork: Record<string, number>;
   browserTabs: BrowserTab[];
   activeBrowserTabId: string | null;
   browserControlState: BrowserControlState;
-  /** Who is on the connected host. Null until the host answers. */
   presence: TeamPresenceSnapshot | null;
   capabilities: string[];
   status: "connecting" | "online" | "offline";
-  /**
-   * The opened host is a hosted server that the account service stopped for no use (`sleeping`), or that
-   * starts after the user's input (`waking`). Cleared when it is online again.
-   */
   hostedSleep: HostedServerSleep | null;
-  /** The opened host said it restarts into an update (`host-update-v1`). Cleared when it is online again. */
+  hostedIssue: HostedServerIssue | null;
+  hostedStart: HostedServerStart | null;
+  connectionError: UserErrorDetails | null;
+  hostOffline: boolean;
+  otherTab: boolean;
+  recovery: RemoteRecoveryStatus | null;
+  workspaceLoaded: boolean;
+  synced: boolean;
+  panelsFailed: boolean;
+  panelsLoading: boolean;
+  agentStatus: AgentStatus | null;
+  models: ClientAgentModelOption[];
   hostRestart: { state: "waiting" | "restarting"; version: string | null } | null;
-  /** The state of each host that this tab has not opened, from its status connection. */
+  restartReady: boolean;
   hostStates: Record<string, WebHostState>;
-  /** The last connection found that the host speaks no protocol this build speaks. */
   incompatibility: {
     hostId: string;
     code: WebHostIncompatibleError["code"];
@@ -88,22 +194,20 @@ interface WebWorkspaceState {
   } | null;
   hostsLoaded: boolean;
   hostsLoading: boolean;
-  hostsError: string | null;
+  hostsError: UserErrorDetails | null;
   revocationRevision: number;
-  error: string | null;
+  error: UserErrorDetails | null;
   busy: boolean;
   uploading: boolean;
   hiddenIds: string[];
-  /** The team member this connection signs in as, once the host has answered. */
   memberId: string | null;
   duplicatingAgentIds: string[];
   sidebarLayout: SidebarLayoutSnapshot;
+  userHiddenAgents: HiddenAgent[];
+  agentColors: AgentColorEntry[];
+  chatColors: ChatColors;
+  reads: Record<string, ConversationReadState>;
 }
-/** A host restarts in under a minute; the retries stop after three. */
-const HOST_RESTART_RETRY_MS = 5_000;
-const HOST_RESTART_RETRY_LIMIT = 36;
-/** A sleeping server can start for a routine. The tab asks the account service again after this long. */
-const SLEEP_RECHECK_MS = 5 * 60_000;
 
 export type WebRuntimeFactory = (
   accountId: string,
@@ -111,17 +215,17 @@ export type WebRuntimeFactory = (
   accountFetch: typeof fetch,
 ) => WebWorkspaceRuntime;
 
+export type WebWorkspace = ReturnType<typeof createWebWorkspace>;
+
 export function createWebWorkspace(
   props: {
     accountId: string;
     accountFetch: typeof fetch;
     onSessionCheck: () => Promise<void>;
-    /** Read when the workspace closes: true when its account session has ended. */
     accountSessionEnded?: () => boolean;
-    createRuntime?: WebRuntimeFactory;
+    createRuntime?: WebRuntimeFactory | undefined;
   },
   hooks: {
-    /** A new agent status of the connected host, such as the end of a provider sign-in. */
     onStatus?: (status: AgentStatus) => void;
   } = {},
 ) {
@@ -130,6 +234,8 @@ export function createWebWorkspace(
     host: null,
     agents: [],
     agentsLoaded: false,
+    agentsFromFrame: false,
+    frameChannels: [],
     selectedId: null,
     conversations: {},
     queues: {},
@@ -137,6 +243,9 @@ export function createWebWorkspace(
     prompts: [],
     progress: {},
     takeovers: [],
+    contextStates: {},
+    threadContextStates: {},
+    backgroundWork: {},
     browserTabs: [],
     activeBrowserTabId: null,
     browserControlState: { sessions: [] },
@@ -144,7 +253,20 @@ export function createWebWorkspace(
     capabilities: [],
     status: "offline",
     hostedSleep: null,
+    hostedIssue: null,
+    hostedStart: null,
+    connectionError: null,
+    hostOffline: false,
+    otherTab: false,
+    recovery: null,
+    workspaceLoaded: false,
+    synced: false,
+    panelsFailed: false,
+    panelsLoading: false,
+    agentStatus: null,
+    models: [],
     hostRestart: null,
+    restartReady: false,
     hostStates: {},
     incompatibility: null,
     hostsLoaded: false,
@@ -158,8 +280,14 @@ export function createWebWorkspace(
     memberId: null,
     duplicatingAgentIds: [],
     sidebarLayout: defaultSidebarLayout(),
+    userHiddenAgents: [],
+    agentColors: [],
+    chatColors: { agents: [], members: [] },
+    reads: {},
   });
+  const [stepLines, setStepLines] = createSignal<TurnStepLines>({});
   let generation = 0;
+  let restartCapable = false;
   let selectedId: string | null = null;
   let hostId: string | null = null;
   let disposed = false;
@@ -167,30 +295,186 @@ export function createWebWorkspace(
   let pendingReload = false;
   let reloadPromise: Promise<void> | null = null;
   let hostsRefreshPromise: Promise<void> | null = null;
+  const leftHostIds = new Set<string>();
   let acceptedInvite: { inviteUrl: string; host: RemoteTeamHost } | null = null;
-  /** Set when a revoked session connects again by itself; cleared when the host is online. */
   let revokedReconnect = false;
-  /** The next reconnect to a host that restarts into an update. The opened host has no other retry. */
-  let restartRetry: ReturnType<typeof setTimeout> | null = null;
-  /** The queue read in flight by agent. An event during a read asks for one more read. */
+  let syncedAt = 0;
   const queueLoads = new Map<string, { generation: number; again: boolean }>();
-  /** Counts queue snapshots from events by agent. A read that started before a newer snapshot is dropped. */
   const queueRevisions = new Map<string, number>();
+  const partialQueues = new Set<string>();
+  const queueListPending = new Set<string>();
+  let queueListRunning: number | null = null;
   const readWrites = new Map<string, Promise<void>>();
-  /** The conversation reads in flight by agent, and the deltas that wait for them to finish. */
   const conversationReads = new Map<string, number>();
+  const aroundReads = new Map<string, number>();
   const heldDeltas = new Map<string, Array<Extract<AgentEvent, { type: "conversation-delta" }>>>();
   const hostEventListeners = new Set<(event: AgentEvent | TeamRealtimeEvent) => void>();
-  const hostedServer = createWebHostedServerWake(props.accountFetch);
-  let wakeReconnectTimer: number | undefined;
-  let sleepRecheckTimer: number | undefined;
-  /** Removes the listeners that wait for the user's input while the opened server sleeps. */
-  let stopWaitingForInput: (() => void) | null = null;
-  const hostNoticeListeners = new Set<(hostId: string, event: WebHostNotice, agents: AgentSummary[]) => void>();
+  let connectionPromise: { hostId: string; opened: boolean; promise: Promise<void> } | null = null;
+  let recoveryBlocked = false;
+  let recovery = makeRecovery();
+  function makeRecovery() {
+    return createRemoteConnectionRecovery(
+      async () => {
+        const host = state.host;
+        if (!host || document.hidden) return;
+        await attemptConnection(host);
+        if (state.status !== "online") throw new Error(currentText().t("webClient.notice.connecting"));
+      },
+      noteConnectionFailure,
+      (status) => {
+        if (!disposed)
+          setState((draft) => {
+            draft.recovery = status;
+          });
+      },
+      () => (state.hostedSleep === "waking" ? WAKE_RECONNECT_DELAY_MS : null),
+    );
+  }
+  function noteConnectionFailure(error: unknown) {
+    if (disposed || state.connectionError || !errorReference(error)) return;
+    const text = currentText();
+    setState((draft) => {
+      draft.connectionError = text.errorDetails(
+        error,
+        text.t("server.connection.reconnecting", { name: draft.host?.name ?? "" }),
+      );
+    });
+  }
+  function recover() {
+    if (disposed || !hostId || recoveryBlocked) return;
+    recovery.offline();
+    recovery.setActive(!document.hidden);
+  }
+  function recoverNow() {
+    if (disposed || !hostId || recoveryBlocked) return;
+    if (state.recovery?.phase !== "waiting" && state.recovery?.phase !== "cooldown") return recover();
+    recovery.refresh();
+    recovery.setActive(!document.hidden);
+  }
+  const hostLifecycle = createWebHostLifecycle({
+    accountFetch: props.accountFetch,
+    hostId: () => hostId,
+    disposed: () => disposed,
+    status: () => state.status,
+    hostedSleep: () => state.hostedSleep,
+    setHostedSleep,
+    setIssue: (issue) =>
+      setState((draft) => {
+        draft.hostedIssue = issue;
+      }),
+    setStart: (start) =>
+      setState((draft) => {
+        draft.hostedStart = start;
+      }),
+    suspend: () => {
+      recoveryBlocked = true;
+      recovery.suspend();
+    },
+    recover: () => {
+      recoveryBlocked = false;
+      recovery.refresh();
+      recover();
+    },
+  });
+  const hostNoticeListeners = new Set<(hostId: string, event: WebHostNotice, agents: ClientAgentSummary[]) => void>();
+  const wholeApprovalReads = new Set<string>();
+  let promptListRead: "idle" | "reading" | "again" = "idle";
+  const resolvedDuringPromptListRead = new Set<string>();
+  let listedPrompts: { generation: number; prompts: Array<Extract<AgentEvent, { type: "prompt" }>> } = {
+    generation,
+    prompts: [],
+  };
+  function withListedPrompts(prompts: Array<Extract<AgentEvent, { type: "prompt" }>>) {
+    if (listedPrompts.generation !== generation) return prompts;
+    const known = new Set(prompts.map((item) => String(item.requestId)));
+    const missing = listedPrompts.prompts.filter((prompt) => !known.has(String(prompt.requestId)));
+    return missing.length > 0 ? [...prompts, ...missing] : prompts;
+  }
+  function forgetListedPrompt(requestId: string | number): void {
+    if (promptListRead !== "idle") resolvedDuringPromptListRead.add(String(requestId));
+    listedPrompts.prompts = listedPrompts.prompts.filter((prompt) => String(prompt.requestId) !== String(requestId));
+  }
+  function readListedPrompts(): void {
+    const list = runtime.listPendingPrompts;
+    if (!list) return;
+    if (promptListRead !== "idle") {
+      promptListRead = "again";
+      return;
+    }
+    promptListRead = "reading";
+    resolvedDuringPromptListRead.clear();
+    const current = generation;
+    void list()
+      .then((prompts) => {
+        if (disposed || current !== generation) return;
+        listedPrompts = {
+          generation: current,
+          prompts: prompts
+            .filter((prompt) => !resolvedDuringPromptListRead.has(String(prompt.requestId)))
+            .map((prompt) => ({ ...prompt, type: "prompt" as const })),
+        };
+        setState((draft) => {
+          draft.prompts = withListedPrompts(draft.prompts);
+        });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        const again = promptListRead === "again";
+        promptListRead = "idle";
+        if (again && !disposed) readListedPrompts();
+      });
+  }
+  function readWholeApprovals(): void {
+    const read = runtime.readPendingApproval;
+    if (!read) return;
+    const current = generation;
+    for (const approval of state.approvals.filter(approvalIsCut)) {
+      const key = JSON.stringify([hostId, approval.agentId, approval.turnId, approval.requestId]);
+      if (wholeApprovalReads.has(key)) continue;
+      wholeApprovalReads.add(key);
+      void read({ agentId: approval.agentId, requestId: approval.requestId }).then(
+        (whole) => {
+          if (disposed) return;
+          if (!whole || current !== generation) {
+            wholeApprovalReads.delete(key);
+            return;
+          }
+          setState((draft) => {
+            draft.approvals = [...withWholeApproval(draft.approvals, whole)];
+          });
+        },
+        () => wholeApprovalReads.delete(key),
+      );
+    }
+  }
+  let hostStatus: AgentStatus | null = null;
+  let hostSources: { hostId: string | null; sources: ProviderModelSourceEntry[] } = { hostId: null, sources: [] };
+  let sourceRead = 0;
+  function applyHostStatus(status: AgentStatus): void {
+    hostStatus = status;
+    const current = hostId;
+    hooks.onStatus?.(withModelSources(status, hostSources.hostId === current ? hostSources.sources : []));
+    if (!runtime.modelSources) return;
+    const read = ++sourceRead;
+    runtime
+      .modelSources()
+      .then((sources) => {
+        if (disposed || read !== sourceRead || current !== hostId || !hostStatus) return;
+        const previous = hostSources.hostId === current ? hostSources.sources : [];
+        hostSources = { hostId: current, sources };
+        if (JSON.stringify(previous) !== JSON.stringify(sources))
+          hooks.onStatus?.(withModelSources(hostStatus, sources));
+      })
+      .catch(() => undefined);
+  }
   const runtime = (props.createRuntime ?? createWebWorkspaceRuntime)(
     props.accountId,
     {
       accountChanged: props.onSessionCheck,
+      serversChanged: retryHosts,
+      accessDenied(id, error) {
+        if (!disposed && id === hostId) blockAccess(error);
+      },
       hostNotice(id, event, agents) {
         if (disposed) return;
         for (const listener of hostNoticeListeners) listener(id, event, agents);
@@ -202,58 +486,81 @@ export function createWebWorkspace(
           });
       },
       hostSessionRevoked: () => void retryHosts(),
+      hostTaken(id) {
+        if (disposed || id !== hostId) return;
+        generation += 1;
+        restartCapable = false;
+        hostLifecycle.endSleep();
+        recoveryBlocked = true;
+        recovery.suspend();
+        setState((draft) => {
+          draft.otherTab = true;
+          draft.status = "offline";
+          draft.restartReady = false;
+          draft.connectionError = null;
+        });
+      },
       connection(update) {
         if (disposed || update.hostId !== hostId) return;
+        if (recoveryBlocked && update.state === "offline" && !update.code) return;
+        const unavailable =
+          (update.state === "offline" || update.hostOffline === true) && !update.code && !state.hostRestart;
         setState((draft) => {
-          draft.status = update.state;
-          draft.error = update.message;
+          if (update.state !== "online") draft.status = update.state;
+          draft.restartReady = update.state === "online" && restartCapable;
+          if (update.state !== "online") syncedAt = 0;
+          if (update.hostOffline) draft.hostOffline = true;
+          else if (update.state !== "connecting") draft.hostOffline = false;
+          const text = currentText();
+          const reference = update.reference ?? null;
+          if (update.state === "online") draft.connectionError = null;
+          else if (update.message || reference) {
+            const reconnecting = text.t("server.connection.reconnecting", { name: draft.host?.name ?? "" });
+            draft.connectionError = {
+              message:
+                update.message && isSafeConnectionError(update.message)
+                  ? text.errorMessage(update.message, reconnecting)
+                  : reconnecting,
+              reference,
+            };
+          }
+          if (update.code)
+            draft.connectionError = {
+              message: text.t(
+                update.code === "session_revoked"
+                  ? "webClient.error.accessEnded"
+                  : "server.compatibility.unsafeDataDescription",
+              ),
+              reference,
+            };
           if (update.state !== "online") {
             draft.approvals = [];
+            draft.contextStates = {};
+            draft.backgroundWork = {};
+            draft.threadContextStates = {};
             draft.prompts = [];
             draft.progress = {};
             draft.takeovers = [];
-            draft.browserTabs = [];
-            draft.activeBrowserTabId = null;
             draft.browserControlState = { sessions: [] };
-            draft.sidebarLayout = defaultSidebarLayout();
             draft.duplicatingAgentIds = [];
           }
         });
+        if (update.state === "offline") generation += 1;
+        if (update.code) {
+          hostLifecycle.endSleep();
+          recoveryBlocked = true;
+          recovery.suspend();
+        }
         if (update.code === "session_revoked") {
-          // A revoked session must not leave private conversations visible while the directory
-          // decides whether this membership still exists. Keep the host shell for a possible
-          // authorized reconnect, but invalidate every private read and pending action now.
-          generation += 1;
-          selectedId = null;
-          setState((draft) => {
-            draft.revocationRevision += 1;
-            draft.agents = [];
-            draft.agentsLoaded = false;
-            draft.conversations = {};
-            draft.queues = {};
-            draft.selectedId = null;
-            draft.approvals = [];
-            draft.prompts = [];
-            draft.progress = {};
-            draft.takeovers = [];
-            draft.browserTabs = [];
-            draft.activeBrowserTabId = null;
-            draft.browserControlState = { sessions: [] };
-            draft.sidebarLayout = defaultSidebarLayout();
-            draft.capabilities = [];
-            draft.presence = null;
-            draft.duplicatingAgentIds = [];
-          });
+          clearRevokedWorkspace();
           const revokedHostId = hostId;
           const revokedGeneration = generation;
+          const revokedConnection = connectionPromise?.promise;
           void props
             .onSessionCheck()
             .then(() => refreshHosts())
-            .then(() => {
-              // A member or role change anywhere on the host revokes every session, this one
-              // too. The directory still lists the host, so this account can connect again.
-              // Try once: a second revocation before the host is online waits for Reconnect.
-              // The directory copy has the new role; `state.host` keeps the role of the last connect.
+            .then(async () => {
+              await revokedConnection?.catch(() => undefined);
               const host = state.hosts.find((listed) => listed.hostId === revokedHostId);
               if (disposed || revokedReconnect || hostId !== revokedHostId || generation !== revokedGeneration || !host)
                 return;
@@ -263,38 +570,33 @@ export function createWebWorkspace(
             .catch(report);
           return;
         }
-        // A host that announced a restart comes back by itself; a wake is only for a stopped server.
-        if (update.state === "offline" && !update.code && !state.hostRestart) hostUnavailable(update.hostId);
-        if (update.state === "online") {
-          revokedReconnect = false;
-          endSleep();
-        } else if (state.hostRestart) retryAfterRestart();
-        if (update.state === "online" && update.resync) {
-          // A host that still waits to restart says so again when the connection declares capabilities.
-          setState((draft) => {
-            draft.hostRestart = null;
+        if (unavailable) {
+          const current = generation;
+          void hostLifecycle.hostUnavailable(update.hostId, connectionPromise?.opened ?? false).then((retry) => {
+            if (retry && !update.hostOffline && !disposed && current === generation) recover();
           });
-          void resync();
-        }
+        } else if (state.hostRestart && update.state === "offline") recover();
+        if (update.state === "online" && update.resync && !connectionPromise) recover();
       },
       event(id, event) {
         if (disposed || id !== hostId) return;
         for (const listener of hostEventListeners) listener(event);
         if (event.type === "team-presence")
           setState((draft) => {
-            draft.presence = event.snapshot;
+            draft.presence = presenceWithChatColors(event.snapshot, draft.chatColors.members);
           });
         if (event.type === "host-restart")
           setState((draft) => {
             draft.hostRestart = event.state === "none" ? null : { state: event.state, version: event.version };
           });
-        if (event.type === "status") hooks.onStatus?.(event.status);
+        if (event.type === "host-appearance") setHostAppearance(id, event.appearance);
+        if (event.type === "status") applyHostStatus(event.status);
         if (event.type === "runtime-snapshot") {
           const { attentionComplete } = event.snapshot;
           setState((draft) => {
             draft.approvals = reconcilePendingRequests(
               draft.approvals,
-              event.snapshot.pendingApprovals,
+              keepWholeApprovals(draft.approvals, event.snapshot.pendingApprovals),
               attentionComplete,
             );
             draft.prompts = reconcilePendingRequests(
@@ -302,12 +604,28 @@ export function createWebWorkspace(
               event.snapshot.pendingPrompts.map((prompt) => ({ ...prompt, type: "prompt" as const })),
               attentionComplete,
             );
+            if (attentionComplete) listedPrompts = { generation, prompts: [] };
+            else draft.prompts = withListedPrompts(draft.prompts);
             draft.takeovers = reconcilePendingRequests(
               draft.takeovers,
               event.snapshot.pendingBrowserTakeovers,
               attentionComplete,
             );
+            draft.contextStates = Object.fromEntries(
+              (event.snapshot.contextStates ?? []).map((context) => [context.agentId, context]),
+            );
+            draft.threadContextStates = Object.fromEntries(
+              (event.snapshot.threadContextStates ?? []).map((context) => [context.threadId, context]),
+            );
+            draft.backgroundWork = Object.fromEntries(
+              (event.snapshot.backgroundWork ?? []).map((work) => [
+                backgroundWorkKey(work.agentId, work.taskId),
+                work.since,
+              ]),
+            );
           });
+          readWholeApprovals();
+          if (!attentionComplete) readListedPrompts();
         } else if (event.type === "prompt") {
           setState((draft) => {
             draft.prompts = [...draft.prompts.filter((item) => item.requestId !== event.requestId), event];
@@ -320,14 +638,23 @@ export function createWebWorkspace(
             ];
           });
         } else if (event.type === "agent-input-resolved") {
+          forgetListedPrompt(event.requestId);
           setState((draft) => {
             draft.approvals = draft.approvals.filter((item) => String(item.requestId) !== String(event.requestId));
             draft.prompts = draft.prompts.filter((item) => String(item.requestId) !== String(event.requestId));
           });
         } else if (event.type === "turn-progress") {
           setState((draft) => {
-            draft.progress[event.agentId] = { turnId: event.turnId, detail: cleanAgentMessageText(event.detail) };
+            draft.progress[event.agentId] = {
+              turnId: event.turnId,
+              detail: cleanAgentMessageText(event.detail),
+              ...(event.running ? { running: true } : {}),
+              ...(event.activity ? { activity: event.activity } : {}),
+            };
           });
+          setStepLines((current) =>
+            appendTurnStepLine(current, event.turnId, cleanAgentMessageText(event.detail), event.error),
+          );
         } else if (event.type === "turn-started") {
           setState((draft) => {
             delete draft.progress[event.agentId];
@@ -337,10 +664,6 @@ export function createWebWorkspace(
         } else if (event.type === "turn-completed") {
           setState((draft) => {
             if (draft.progress[event.agentId]?.turnId === event.turnId) delete draft.progress[event.agentId];
-            draft.prompts = draft.prompts.filter(
-              (item) =>
-                item.agentId !== event.agentId || item.threadId !== event.threadId || item.turnId !== event.turnId,
-            );
             draft.approvals = draft.approvals.filter(
               (item) =>
                 item.agentId !== event.agentId || item.threadId !== event.threadId || item.turnId !== event.turnId,
@@ -360,8 +683,32 @@ export function createWebWorkspace(
           });
         if (event.type === "browser-changed")
           setState((draft) => {
-            draft.browserTabs = event.tabs;
+            const previous = new Map(draft.browserTabs.map((tab) => [tab.id, tab]));
+            draft.browserTabs = event.tabs.map((tab) => {
+              const kept = previous.get(tab.id);
+              return {
+                ...tab,
+                ...(kept?.userControl ? { userControl: true as const } : {}),
+                ...(kept?.canGoBack === undefined ? {} : { canGoBack: kept.canGoBack }),
+                ...(kept?.canGoForward === undefined ? {} : { canGoForward: kept.canGoForward }),
+              };
+            });
             draft.activeBrowserTabId = event.activeTabId;
+          });
+        if (event.type === "browser-page-state-changed")
+          setState((draft) => {
+            const states = new Map(event.tabs.map(({ tabId, ...state }) => [tabId, state]));
+            draft.browserTabs = draft.browserTabs.map(({ canGoBack: _back, canGoForward: _forward, ...tab }) => ({
+              ...tab,
+              ...states.get(tab.id),
+            }));
+          });
+        if (event.type === "browser-user-control-changed")
+          setState((draft) => {
+            const held = new Set(event.tabIds);
+            draft.browserTabs = draft.browserTabs.map(({ userControl: _, ...tab }) =>
+              held.has(tab.id) ? { ...tab, userControl: true } : tab,
+            );
           });
         if (event.type === "browser-control-changed")
           setState((draft) => {
@@ -369,57 +716,216 @@ export function createWebWorkspace(
           });
         if (event.type === "agents-changed") {
           reconcileAgents(event.agents);
-          for (const agent of event.agents) if (!state.queues[agent.id]) loadQueue(agent.id);
+          loadQueues(event.agents.flatMap((agent) => (state.queues[agent.id] ? [] : [agent.id])));
         }
         if (event.type === "queue-changed") {
           const { snapshot } = event;
           queueRevisions.set(snapshot.agentId, (queueRevisions.get(snapshot.agentId) ?? 0) + 1);
+          partialQueues.delete(snapshot.agentId);
           setState((draft) => {
             draft.queues[snapshot.agentId] = snapshot;
           });
         }
         if (event.type === "queue-invalidated" && state.agents.some((agent) => agent.id === event.agentId))
-          loadQueue(event.agentId);
+          loadQueues([event.agentId]);
         if (event.type === "sidebar-layout-changed")
           setState((draft) => {
             if (event.layout.revision >= draft.sidebarLayout.revision) draft.sidebarLayout = event.layout;
           });
-        if (
-          [
-            "conversation",
-            "conversation-page",
-            "conversation-invalidated",
-            "turn-started",
-            "turn-completed",
-            "prompt",
-            "agent-input-resolved",
-          ].includes(event.type)
-        )
-          void refresh();
+        if (event.type === "hidden-agents-changed")
+          setState((draft) => {
+            draft.userHiddenAgents = event.agents;
+          });
+        if (event.type === "agent-colors-changed")
+          setState((draft) => {
+            draft.agentColors = event.agents;
+          });
+        if (event.type === "chat-colors-changed") receiveChatColors({ agents: event.agents, members: event.members });
+        if (event.type === "sidebar-pins-changed")
+          preferences.receiveServerPins(pinScope(), { items: event.items, updatedAt: event.updatedAt });
+        if (event.type === "conversation" || event.type === "conversation-invalidated") loadReadsSoon();
+        const changed = changedConversation(event);
+        if (changed !== undefined && changed === selectedId) void refresh();
       },
     },
     props.accountFetch,
   );
+  const pinScope = () => (state.host ? `${props.accountId}:${state.host.hostId}` : "");
+  const pinScopes = new Set<string>();
+  const openHostPins = (scope: string) => {
+    const pins = runtime.sidebarPins;
+    if (!pins || scope !== pinScope()) throw new Error(currentText().t("error.team.sidebarPinsUnsupported"));
+    return pins;
+  };
   const preferences = createSidebarPreferences({
-    scope: () => (state.host ? `${props.accountId}:${state.host.hostId}` : ""),
+    scope: pinScope,
+    sync: {
+      supports: (scope) => pinScopes.has(scope),
+      read: async (scope) => openHostPins(scope).read(),
+      set: async (scope, items) => openHostPins(scope).set(items),
+      seed: async (scope, items) => openHostPins(scope).seed(items),
+    },
   });
-  // The other tabs show the opened host with the state this tab has for it.
   createEffect(
     () => ({ id: state.host?.hostId, status: state.status }),
     ({ id, status }) => {
       if (id) runtime.hosts?.reportSelected(id, status);
     },
   );
+  createEffect(
+    () =>
+      state.status === "online" && state.host && !state.panelsLoading && !state.panelsFailed
+        ? { hostId: state.host.hostId, sidebarLayout: state.sidebarLayout, hiddenAgents: state.userHiddenAgents }
+        : null,
+    (frame) => {
+      if (frame)
+        saveRemoteWorkspaceFrame(props.accountId, frame.hostId, {
+          sidebarLayout: frame.sidebarLayout,
+          hiddenAgents: frame.hiddenAgents,
+        });
+    },
+  );
+  createEffect(
+    () =>
+      state.status === "online" && state.host && !state.panelsLoading && !state.panelsFailed
+        ? {
+            hostId: state.host.hostId,
+            unreadCounts: Object.fromEntries(
+              Object.entries(state.reads).flatMap(([agentId, read]) =>
+                read.unreadCount > 0 ? [[agentId, read.unreadCount]] : [],
+              ),
+            ),
+          }
+        : null,
+    (frame) => {
+      if (frame) saveRemoteFrameUnreadCounts(props.accountId, frame.hostId, frame.unreadCounts);
+    },
+  );
+  const [duplicatingSectionIds, setDuplicatingSectionIds] = createSignal<ReadonlySet<string>>(new Set());
+  const [pageFocused, setPageFocused] = createSignal(!document.hidden && document.hasFocus());
+  const focusUse = createFocusUsePing(() => void runtime.focusUse().catch(() => undefined));
+  createEffect(
+    () =>
+      pageFocused() && state.status === "online" && state.capabilities.includes(FOCUS_USE_CAPABILITY)
+        ? (state.host?.hostId ?? null)
+        : null,
+    (id) => focusUse.setTarget(id),
+  );
   const [serverOrder, setServerOrder] = createSignal(readWebServerOrder(props.accountId));
   const orderedHosts = createMemo(() => orderWebHosts(state.hosts, serverOrder()));
-  const profiles = createMemo(() => state.agents.map(toAgentProfile));
+  const [avatars, setAvatars] = createSignal<ReadonlyMap<string, { source: string; url: string }>>(new Map());
+  const avatarLoads = new Set<string>();
+  const avatarMisses = new Set<string>();
+  const avatarQueue: { hostId: string; id: string; source: string }[] = [];
+  let avatarReads = 0;
+  let avatarHost: string | null = null;
+  let avatarOnline = false;
+  let avatarAgents = "";
+  async function loadAvatar(hostId: string, id: string, source: string): Promise<string | null> {
+    const saved = await readSavedAgentPicture(props.accountId, hostId, id, source);
+    if (saved || !avatarOnline || avatarHost !== hostId) return saved;
+    const mark = agentPictureMark(props.accountId, hostId);
+    const url = await runtime.agentAvatar(id, source);
+    if (avatarHost === hostId) void saveAgentPicture(props.accountId, hostId, id, source, url, mark);
+    return url;
+  }
+  function loadAvatars() {
+    while (avatarReads < 2) {
+      const next = avatarQueue.shift();
+      if (!next) return;
+      const { hostId, id, source } = next;
+      const key = `${id} ${source}`;
+      avatarReads += 1;
+      void loadAvatar(hostId, id, source)
+        .then(
+          (url) => {
+            if (avatarHost !== hostId) return;
+            if (url) setAvatars((current) => new Map(current).set(id, { source, url }));
+            else if (avatarOnline) avatarQueue.push(next);
+            else {
+              avatarLoads.delete(key);
+              avatarMisses.add(key);
+            }
+          },
+          () => {
+            if (avatarHost === hostId) avatarLoads.delete(key);
+          },
+        )
+        .finally(() => {
+          avatarReads -= 1;
+          loadAvatars();
+        });
+    }
+  }
+  createEffect(
+    () => ({
+      hostId: state.host?.hostId ?? null,
+      online: state.status === "online",
+      listed: state.status === "online" && !state.agentsFromFrame && state.agents.length > 0,
+      sources: state.agents.flatMap((agent) =>
+        agent.avatarUrl?.startsWith("openbot-avatar:") ? [{ id: agent.id, source: agent.avatarUrl }] : [],
+      ),
+    }),
+    ({ hostId, online, listed, sources }) => {
+      if (hostId !== avatarHost) {
+        avatarHost = hostId;
+        avatarAgents = "";
+        avatarLoads.clear();
+        avatarMisses.clear();
+        avatarQueue.length = 0;
+        setAvatars(new Map());
+      }
+      avatarOnline = online;
+      if (!hostId) return;
+      for (const { id, source } of sources) {
+        const key = `${id} ${source}`;
+        if (avatarLoads.has(key) || (!online && avatarMisses.has(key))) continue;
+        avatarLoads.add(key);
+        avatarQueue.push({ hostId, id, source });
+      }
+      loadAvatars();
+      const agents = sources.map(({ id }) => id).join(" ");
+      if (!listed || agents === avatarAgents) return;
+      avatarAgents = agents;
+      void keepSavedAgentPictures(
+        props.accountId,
+        hostId,
+        sources.map(({ id }) => id),
+      );
+    },
+  );
+  const shownAgents = createMemo(() => {
+    const colors = new Map(state.agentColors.map((entry) => [entry.agentId, entry.color]));
+    const chatColors = new Map(state.chatColors.agents.map((entry) => [entry.agentId, entry.color]));
+    return state.agents.map((agent) => {
+      const avatar = avatars().get(agent.id);
+      const {
+        avatarColor: _avatarColor,
+        chatColor: _chatColor,
+        ...shown
+      } = avatar && avatar.source === agent.avatarUrl ? { ...agent, avatarUrl: avatar.url } : agent;
+      const color = colors.get(agent.id);
+      const chatColor = chatColors.get(agent.id);
+      return {
+        ...shown,
+        ...(color ? { avatarColor: color } : {}),
+        ...(chatColor ? { chatColor } : {}),
+      };
+    });
+  });
+  const profiles = createMemo(() =>
+    shownAgents().map((agent) => {
+      const profile = toAgentProfile(agent);
+      return state.agentsFromFrame ? { ...profile, preview: "" } : profile;
+    }),
+  );
   const selected = createMemo(() => profiles().find((agent) => agent.id === state.selectedId));
   const conversation = createMemo(() => (state.selectedId ? state.conversations[state.selectedId] : undefined));
 
   function report(error: unknown) {
     if (!disposed)
       setState((draft) => {
-        draft.error = error instanceof Error ? error.message : currentText().t("webClient.error.requestFailed");
+        draft.error = currentText().errorDetails(error, currentText().t("webClient.error.requestFailed"));
       });
   }
   async function run(action: () => Promise<void>) {
@@ -451,7 +957,28 @@ export function createWebWorkspace(
       return { ...defaultSidebarLayout(), agentOrder: [...agentIds] };
     return read();
   }
-  function reconcileAgents(agents: AgentSummary[]): void {
+  async function readUserHiddenAgents(capabilities: readonly string[]): Promise<HiddenAgent[]> {
+    const read = runtime.listHiddenAgents;
+    if (!capabilities.includes(AGENT_HIDDEN_CAPABILITY) || !read) return [];
+    return (await read()).agents;
+  }
+  async function readAgentColors(capabilities: readonly string[]): Promise<AgentColorEntry[]> {
+    const read = runtime.listAgentColors;
+    if (!capabilities.includes(AGENT_COLORS_CAPABILITY) || !read) return [];
+    return (await read()).agents;
+  }
+  async function readChatColors(capabilities: readonly string[]): Promise<ChatColors> {
+    const read = runtime.listChatColors;
+    if (!capabilities.includes(CHAT_COLORS_CAPABILITY) || !read) return { agents: [], members: [] };
+    return read();
+  }
+  function receiveChatColors(colors: ChatColors): void {
+    setState((draft) => {
+      draft.chatColors = colors;
+      if (draft.presence) draft.presence = presenceWithChatColors(draft.presence, colors.members);
+    });
+  }
+  function reconcileAgents(agents: ClientAgentSummary[]): void {
     const ids = new Set(agents.map((agent) => agent.id));
     const nextSelected = selectedId && ids.has(selectedId) ? selectedId : null;
     selectedId = nextSelected;
@@ -459,6 +986,7 @@ export function createWebWorkspace(
       const removed = draft.agents.filter((agent) => !ids.has(agent.id)).map((agent) => agent.id);
       draft.agents = agents;
       draft.agentsLoaded = true;
+      draft.agentsFromFrame = false;
       draft.hiddenIds = draft.hiddenIds.filter((id) => ids.has(id));
       draft.duplicatingAgentIds = draft.duplicatingAgentIds.filter((id) => ids.has(id));
       for (const id of removed) {
@@ -467,7 +995,6 @@ export function createWebWorkspace(
         delete draft.progress[id];
       }
       if (nextSelected === null) draft.selectedId = null;
-      // The layout also orders channels, so only the agents that left may be dropped from it.
       const gone = new Set(removed);
       draft.sidebarLayout = {
         ...draft.sidebarLayout,
@@ -476,6 +1003,13 @@ export function createWebWorkspace(
           Object.entries(draft.sidebarLayout.agentAssignments).filter(([id]) => !gone.has(id)),
         ),
       };
+    });
+  }
+  function setHostAppearance(id: string, appearance: ServerAppearance | null): void {
+    setState((draft) => {
+      if (draft.host?.hostId === id) draft.host.appearance = appearance;
+      const listed = draft.hosts.find((host) => host.hostId === id);
+      if (listed) listed.appearance = appearance;
     });
   }
   function refreshHosts(): Promise<void> {
@@ -489,16 +1023,35 @@ export function createWebWorkspace(
         draft.hostsError = null;
       });
       try {
+        markRemoteSync("hosts-start");
         const hosts = await runtime.listHosts();
+        markRemoteSync("hosts");
         if (disposed) return;
+        deleteRemoteWorkspaceFrames(
+          props.accountId,
+          hosts.map((host) => host.hostId),
+        );
+        void deleteSavedAgentPictures(
+          props.accountId,
+          hosts.map((host) => host.hostId),
+        );
+        keepCachedWorkflows(
+          props.accountId,
+          hosts.map((host) => host.hostId),
+        );
         const activeGeneration = refreshGeneration === generation && refreshHostId === hostId;
         if (!activeGeneration) return;
         if (refreshHostId && !hosts.some((host) => host.hostId === refreshHostId)) {
           generation += 1;
           hostId = null;
+          recovery.dispose();
+          recovery = makeRecovery();
+          hostLifecycle.endSleep();
           selectedId = null;
           setState((draft) => {
             draft.host = null;
+            draft.workspaceLoaded = false;
+            draft.synced = false;
             draft.memberId = null;
             draft.selectedId = null;
             draft.agents = [];
@@ -506,42 +1059,56 @@ export function createWebWorkspace(
             draft.conversations = {};
             draft.queues = {};
             draft.approvals = [];
+            draft.contextStates = {};
+            draft.backgroundWork = {};
+            draft.threadContextStates = {};
             draft.prompts = [];
             draft.progress = {};
+            setStepLines({});
             draft.takeovers = [];
             draft.browserTabs = [];
             draft.activeBrowserTabId = null;
             draft.browserControlState = { sessions: [] };
             draft.sidebarLayout = defaultSidebarLayout();
+            draft.userHiddenAgents = [];
+            draft.agentColors = [];
+            draft.reads = {};
+            draft.chatColors = { agents: [], members: [] };
             draft.duplicatingAgentIds = [];
             draft.capabilities = [];
             draft.status = "offline";
-            draft.error = currentText().t("webClient.error.accessEnded");
+            draft.error = leftHostIds.has(refreshHostId)
+              ? null
+              : { message: currentText().t("webClient.error.accessEnded"), reference: null };
           });
-          // First, so the host that left does not get a status connection when it stops being open.
           runtime.hosts?.setHosts(hosts);
           await runtime.disconnect().catch(() => undefined);
         }
         const connected = hosts.find((host) => host.hostId === hostId);
         setState((draft) => {
-          // The connected host is a copy from `connect`. An admin can rename it while connected.
           if (connected && draft.host?.hostId === connected.hostId) {
             draft.host.name = connected.name;
             draft.host.logoKey = connected.logoKey;
+            if (connected.appearance !== undefined && !draft.capabilities.includes(HOST_APPEARANCE_CAPABILITY))
+              draft.host.appearance = connected.appearance;
           }
           draft.hosts = hosts;
           draft.hostsLoaded = true;
           draft.hostsError = null;
         });
-        const first = orderWebHosts(hosts, serverOrder())[0];
-        if (!hostId && first) await connect(first);
-        // After the opened host, so it takes its Signal connection before the status connections.
+        for (const left of leftHostIds) if (!hosts.some((host) => host.hostId === left)) leftHostIds.delete(left);
+        if (!hostId) {
+          const savedHostId = readWebServerSelection(props.accountId);
+          const initialHost =
+            hosts.find((host) => host.hostId === savedHostId) ?? orderWebHosts(hosts, serverOrder())[0];
+          if (initialHost) await connect(initialHost);
+        }
         if (!disposed) runtime.hosts?.setHosts(hosts);
       } catch (error) {
         if (!disposed) {
-          const message = error instanceof Error ? error.message : currentText().t("webClient.error.hostsFailed");
+          const failure = currentText().errorDetails(error, currentText().t("webClient.error.hostsFailed"));
           setState((draft) => {
-            draft.hostsError = message;
+            draft.hostsError = failure;
           });
         }
         throw error;
@@ -563,57 +1130,26 @@ export function createWebWorkspace(
     );
     return promise;
   }
+  async function leaveHost(host: RemoteTeamHost): Promise<void> {
+    await departHost(host, () => runtime.leaveHost(host.hostId, host.membershipId));
+  }
+  async function removeOwnedHost(host: RemoteTeamHost): Promise<void> {
+    const remove = runtime.removeOwnedHost;
+    if (!remove) throw new Error(currentText().t("server.settings.actionFailed"));
+    await departHost(host, () => remove(host.hostId));
+  }
+  async function departHost(host: RemoteTeamHost, operation: () => Promise<void>): Promise<void> {
+    leftHostIds.add(host.hostId);
+    try {
+      await operation();
+    } catch (error) {
+      leftHostIds.delete(host.hostId);
+      throw error;
+    }
+    void (hostsRefreshPromise ?? Promise.resolve()).catch(() => undefined).then(retryHosts);
+  }
   function retryHosts(): Promise<void> {
     return refreshHosts().catch(() => undefined);
-  }
-  /**
-   * The opened host is offline. A hosted server that the account service stopped for no use waits for the
-   * user's input. Another stopped hosted server starts, and the tab connects again. A server that starts
-   * already is asked to start again, with no status read in between.
-   */
-  function hostUnavailable(id: string): void {
-    const starting = state.hostedSleep === "waking";
-    void (starting ? hostedServer.wake(id) : Promise.resolve(false)).then(async (waking) => {
-      const availability = waking ? "waking" : await hostedServer.unavailable(id);
-      if (disposed || hostId !== id || state.status === "online") return;
-      // The 5-minute recheck can find that the server does not sleep now, so input does not wake it.
-      if (availability !== "sleeping") stopWaitingForInput?.();
-      setHostedSleep(availability === "sleeping" ? "sleeping" : availability === "waking" ? "waking" : null);
-      if (availability === "waking") reconnectAfterWake(id);
-      else if (availability === "sleeping") waitForInput(id);
-    });
-  }
-  function reconnectAfterWake(id: string): void {
-    window.clearTimeout(wakeReconnectTimer);
-    wakeReconnectTimer = window.setTimeout(() => {
-      if (!disposed && hostId === id && state.status === "offline") void reconnect().catch(report);
-    }, WAKE_RECONNECT_DELAY_MS);
-  }
-  /** The next key or pointer press in the tab starts the sleeping server. */
-  function waitForInput(id: string): void {
-    stopWaitingForInput?.();
-    const onInput = () => {
-      stopWaitingForInput?.();
-      if (disposed || hostId !== id || state.status === "online") return;
-      setHostedSleep("waking");
-      void hostedServer.wakeForInput(id).then((waking) => {
-        if (disposed || hostId !== id || state.status === "online") return;
-        if (waking) reconnectAfterWake(id);
-        else {
-          setHostedSleep(null);
-          hostUnavailable(id);
-        }
-      });
-    };
-    window.addEventListener("pointerdown", onInput, true);
-    window.addEventListener("keydown", onInput, true);
-    sleepRecheckTimer = window.setTimeout(() => hostUnavailable(id), SLEEP_RECHECK_MS);
-    stopWaitingForInput = () => {
-      window.removeEventListener("pointerdown", onInput, true);
-      window.removeEventListener("keydown", onInput, true);
-      window.clearTimeout(sleepRecheckTimer);
-      stopWaitingForInput = null;
-    };
   }
   function setHostedSleep(hostedSleep: HostedServerSleep | null): void {
     if (state.hostedSleep !== hostedSleep)
@@ -621,29 +1157,72 @@ export function createWebWorkspace(
         draft.hostedSleep = hostedSleep;
       });
   }
-  function endSleep(): void {
-    stopWaitingForInput?.();
-    setHostedSleep(null);
+  function clearRevokedWorkspace(): void {
+    if (hostId) {
+      deleteRemoteWorkspaceFrame(props.accountId, hostId);
+      void deleteSavedServerPictures(props.accountId, hostId);
+      deleteCachedWorkflows(hostId);
+    }
+    generation += 1;
+    restartCapable = false;
+    selectedId = null;
+    setState((draft) => {
+      draft.revocationRevision += 1;
+      draft.restartReady = false;
+      draft.workspaceLoaded = false;
+      draft.synced = false;
+      draft.agents = [];
+      draft.agentsLoaded = false;
+      draft.conversations = {};
+      draft.queues = {};
+      draft.selectedId = null;
+      draft.approvals = [];
+      draft.contextStates = {};
+      draft.backgroundWork = {};
+      draft.threadContextStates = {};
+      draft.prompts = [];
+      draft.progress = {};
+      setStepLines({});
+      draft.takeovers = [];
+      draft.browserTabs = [];
+      draft.activeBrowserTabId = null;
+      draft.browserControlState = { sessions: [] };
+      draft.sidebarLayout = defaultSidebarLayout();
+      draft.userHiddenAgents = [];
+      draft.agentColors = [];
+      draft.reads = {};
+      draft.chatColors = { agents: [], members: [] };
+      draft.capabilities = [];
+      draft.presence = null;
+      draft.duplicatingAgentIds = [];
+    });
   }
-
-  /** `connect` clears `hostRestart`, so the retries count down instead of reading it again. */
-  function retryAfterRestart(retries = HOST_RESTART_RETRY_LIMIT): void {
-    if (restartRetry || disposed || retries <= 0) return;
-    const retryHostId = hostId;
-    restartRetry = setTimeout(() => {
-      restartRetry = null;
-      if (disposed || hostId !== retryHostId || state.status === "online") return;
-      void reconnect()
-        .catch(() => undefined)
-        .then(() => {
-          if (!disposed && hostId === retryHostId && state.status !== "online") retryAfterRestart(retries - 1);
-        });
-    }, HOST_RESTART_RETRY_MS);
+  function blockAccess(error: unknown): boolean {
+    if (
+      !(error instanceof WebHostConnectionError) ||
+      (error.code !== "authentication_required" && error.code !== "access_ended")
+    )
+      return false;
+    clearRevokedWorkspace();
+    hostLifecycle.endSleep();
+    recoveryBlocked = true;
+    recovery.suspend();
+    const failure = { message: error.message, reference: errorReference(error) };
+    setState((draft) => {
+      draft.status = "offline";
+      draft.connectionError = failure;
+    });
+    return true;
   }
   async function reconnect(): Promise<void> {
-    const host = state.hosts.find((listed) => listed.hostId === state.host?.hostId) ?? state.host;
-    if (!host || state.status === "connecting") return;
-    await connect({ ...host });
+    const host = state.hosts.find((listed) => listed.hostId === hostId) ?? state.host;
+    if (!host || connectionPromise) return;
+    if (state.hostedSleep === "sleeping" || state.hostedIssue) await hostLifecycle.retry();
+    else {
+      await props.onSessionCheck();
+      recoveryBlocked = false;
+      await connect(host);
+    }
   }
   async function joinInvite(inviteUrl: string): Promise<void> {
     const normalizedInviteUrl = inviteUrl.trim();
@@ -658,24 +1237,68 @@ export function createWebWorkspace(
       throw new Error(currentText().t("webClient.error.invitationOffline"));
     acceptedInvite = null;
   }
-  async function connect(host: RemoteTeamHost) {
-    if (state.status === "connecting") return;
+  async function connect(host: RemoteTeamHost, takeOver = false) {
+    recoveryBlocked = false;
+    recovery.dispose();
+    recovery = makeRecovery();
+    if (!connectionPromise || connectionPromise.hostId !== host.hostId) hostLifecycle.endSleep();
+    try {
+      await attemptConnection(host, true, takeOver);
+    } catch (error) {
+      if (!disposed && hostId === host.hostId) noteConnectionFailure(error);
+      if (!disposed && hostId === host.hostId && state.recovery?.phase !== "suspended") recover();
+    }
+  }
+  function restartRequested(): void {
+    if (state.status !== "online") generation += 1;
+  }
+  async function useHere(): Promise<void> {
+    const host = state.host;
+    if (host && state.otherTab) await connect(host, true);
+  }
+  function attemptConnection(host: RemoteTeamHost, opened = false, takeOver = false): Promise<void> {
+    if (connectionPromise?.hostId === host.hostId) return connectionPromise.promise;
+    const promise = connectWorkspace(host, opened, takeOver).finally(() => {
+      if (connectionPromise?.promise === promise) connectionPromise = null;
+    });
+    connectionPromise = { hostId: host.hostId, opened, promise };
+    return promise;
+  }
+  async function connectWorkspace(host: RemoteTeamHost, opened: boolean, takeOver: boolean) {
     const current = ++generation;
     const sameHost = hostId === host.hostId;
-    // A hosted server that sleeps or wakes keeps the workspace visible, so each retry keeps its agents and the selection.
-    const keepWorkspace = sameHost && state.hostedSleep !== null;
-    const previousSelected = sameHost ? selectedId : null;
+    const keepWorkspace = sameHost && state.workspaceLoaded;
+    const savedFrame = keepWorkspace ? null : readRemoteWorkspaceFrame(props.accountId, host.hostId);
+    const frame = savedFrame?.agents.length ? savedFrame : null;
+    const frameSelected = frame?.agents.find((agent) => agent.id === frame.selectedAgentId) ?? frame?.agents[0];
+    const previousSelected = (sameHost ? selectedId : null) ?? frameSelected?.id ?? null;
+    const recentAgentIds = frame?.recentAgentIds ?? [];
     hostId = host.hostId;
+    writeWebServerSelection(props.accountId, host.hostId);
     if (!keepWorkspace) selectedId = null;
-    if (!sameHost) endSleep();
+    if (!sameHost) hostLifecycle.endSleep();
+    if (!sameHost) restartCapable = false;
     setState((draft) => {
       draft.host = host;
+      draft.recovery = null;
+      if (!sameHost) draft.connectionError = null;
+      if (!sameHost) draft.hostOffline = false;
+      if (!sameHost) draft.otherTab = false;
+      if (!sameHost) {
+        draft.workspaceLoaded = false;
+        draft.synced = false;
+        draft.agentStatus = null;
+        draft.models = [];
+      }
       draft.status = "connecting";
       draft.hostRestart = null;
+      if (!sameHost) draft.restartReady = false;
       draft.memberId = sameHost ? draft.memberId : null;
       if (!keepWorkspace) {
         draft.agents = [];
         draft.agentsLoaded = false;
+        draft.agentsFromFrame = false;
+        draft.frameChannels = [];
         draft.selectedId = null;
       }
       if (!sameHost) {
@@ -684,43 +1307,123 @@ export function createWebWorkspace(
         draft.hiddenIds = [];
       }
       draft.approvals = [];
+      draft.contextStates = {};
+      draft.backgroundWork = {};
+      draft.threadContextStates = {};
       draft.prompts = [];
-      draft.progress = {};
       draft.takeovers = [];
-      draft.browserTabs = [];
-      draft.activeBrowserTabId = null;
       draft.browserControlState = { sessions: [] };
-      draft.sidebarLayout = defaultSidebarLayout();
-      draft.duplicatingAgentIds = [];
-      draft.capabilities = [];
-      draft.presence = null;
+      if (!keepWorkspace) {
+        draft.progress = {};
+        draft.browserTabs = [];
+        draft.activeBrowserTabId = null;
+        draft.sidebarLayout = defaultSidebarLayout();
+        draft.userHiddenAgents = [];
+        draft.agentColors = [];
+        draft.reads = {};
+        draft.chatColors = { agents: [], members: [] };
+        draft.duplicatingAgentIds = [];
+        draft.capabilities = [];
+        draft.presence = null;
+      }
       draft.error = null;
       draft.incompatibility = null;
     });
     try {
-      const capabilities = await runtime.connect(host);
-      const agents = await runtime.listAgents();
-      const [browserTabs, sidebarLayout] = await Promise.all([
-        capabilities.includes("browser-control") ? runtime.browserTabs() : Promise.resolve([]),
-        readSidebarLayout(
-          capabilities,
-          agents.map((agent) => agent.id),
-        ),
-      ]);
+      markRemoteSync("connect-start");
+      const early: { gate: Promise<[ClientAgentSummary[], AgentStatus, ClientAgentModelOption[]]> | null } = {
+        gate: null,
+      };
+      const readGate = () => Promise.all([runtime.listAgents(), runtime.status(), runtime.models()]);
+      const connecting = runtime.connect(host, {
+        takeOver,
+        early: {
+          start: () => {
+            early.gate = readGate();
+            early.gate.catch(() => undefined);
+          },
+          drop: () => {
+            early.gate = null;
+          },
+        },
+      });
+      if (frame) {
+        if (frameSelected) selectedId = frameSelected.id;
+        setState((draft) => {
+          draft.agents = frame.agents;
+          draft.agentsLoaded = true;
+          draft.agentsFromFrame = true;
+          draft.workspaceLoaded = true;
+          draft.models = frame.models;
+          draft.sidebarLayout = frame.sidebarLayout ?? {
+            ...defaultSidebarLayout(),
+            agentOrder: frame.agents.map((agent) => agent.id),
+          };
+          draft.userHiddenAgents = frame.hiddenAgents;
+          draft.frameChannels = frame.channels;
+          draft.reads = Object.fromEntries(
+            Object.entries(frame.unreadCounts).map(([agentId, unreadCount]) => [
+              agentId,
+              { unreadCount, firstUnreadMessageId: null, throughMessageId: null },
+            ]),
+          );
+          if (frameSelected) {
+            draft.selectedId = frameSelected.id;
+            draft.conversations[frameSelected.id] ??= { page: null, draft: "", attachments: [], loading: true };
+          }
+        });
+        markRemoteSync("workspace-frame");
+      }
+      const capabilities = await connecting;
+      markRemoteSync("connected");
+      if (!disposed && current === generation) {
+        restartCapable = capabilities.includes(HOST_RESTART_CAPABILITY);
+        setState((draft) => {
+          draft.restartReady = restartCapable;
+        });
+      }
+      const [agents, agentStatus, models] = await (early.gate ?? readGate());
       if (disposed || current !== generation) return;
       revokedReconnect = false;
-      endSleep();
+      hostLifecycle.endSleep();
+      const unblocked = recoveryBlocked;
+      if (unblocked) {
+        recoveryBlocked = false;
+        recovery.dispose();
+        recovery = makeRecovery();
+      }
       setState((draft) => {
+        if (unblocked) draft.recovery = null;
         draft.capabilities = capabilities;
         draft.agents = agents;
         draft.agentsLoaded = true;
+        draft.agentsFromFrame = false;
+        draft.workspaceLoaded = true;
+        draft.synced = true;
+        draft.agentStatus = agentStatus;
+        draft.models = models;
+        draft.connectionError = null;
+        draft.otherTab = false;
         draft.status = "online";
-        draft.browserTabs = browserTabs;
-        draft.activeBrowserTabId = browserTabs[0]?.id ?? null;
-        if (sidebarLayout.revision >= draft.sidebarLayout.revision) draft.sidebarLayout = sidebarLayout;
       });
+      syncedAt = Date.now();
+      markRemoteSync("workspace-ready");
+      saveRemoteWorkspaceFrame(props.accountId, host.hostId, { agents, models });
+      if (capabilities.includes(SIDEBAR_PINS_CAPABILITY)) pinScopes.add(pinScope());
+      else pinScopes.delete(pinScope());
       preferences.reconcileActiveServerPins(agents.map((agent) => agent.id));
-      for (const agent of agents) loadQueue(agent.id);
+      void preferences.syncActiveServerPins().catch(() => undefined);
+      const wanted = selectedId ?? previousSelected;
+      const first = agents.find((agent) => agent.id === wanted) ?? agents[0];
+      const opened = first ? select(first.id) : null;
+      if (first) loadQueue(first.id);
+      void loadPanels(
+        capabilities,
+        agents.map((agent) => agent.id),
+      ).then(() => {
+        if (!disposed && current === generation) saveFrame();
+        markRemoteSync("panels-ready");
+      });
       void runtime
         .currentMemberId?.()
         .then((memberId) => {
@@ -730,23 +1433,30 @@ export function createWebWorkspace(
             });
         })
         .catch(() => undefined);
-      // Presence only names people. A host that does not answer leaves the list empty.
       void runtime.admin?.team.getPresence().then(
         (presence) => {
           if (!disposed && current === generation && !state.presence)
             setState((draft) => {
-              draft.presence = presence;
+              draft.presence = presenceWithChatColors(presence, draft.chatColors.members);
             });
         },
         () => undefined,
       );
-      const first = agents.find((agent) => agent.id === previousSelected) ?? agents[0];
-      if (first) await select(first.id);
+      if (opened) {
+        await opened;
+        markRemoteSync("conversation-ready");
+      }
+      if (disposed || current !== generation) return;
+      void preloadRecent(
+        recentAgentIds.filter((id) => id !== first?.id && agents.some((agent) => agent.id === id)),
+        current,
+      );
+      loadQueues(agents.flatMap((agent) => (agent.id === first?.id ? [] : [agent.id])));
     } catch (error) {
       if (disposed || current !== generation) return;
       setState((draft) => {
         draft.status = "offline";
-        // The workspace shows an incompatible host in full, so it is not also reported as an error.
+        draft.otherTab = error instanceof WebHostOtherTabError;
         if (error instanceof WebHostIncompatibleError)
           draft.incompatibility = {
             hostId: host.hostId,
@@ -756,15 +1466,112 @@ export function createWebWorkspace(
             hostProtocol: { ...error.hostProtocol },
           };
       });
-      if (!(error instanceof WebHostIncompatibleError)) {
-        report(error);
-        hostUnavailable(host.hostId);
+      if (blockAccess(error)) throw error;
+      if (error instanceof WebHostOtherTabError) {
+        hostLifecycle.endSleep();
+        recoveryBlocked = true;
+        recovery.suspend();
+        setState((draft) => {
+          draft.connectionError = null;
+        });
+      } else if (error instanceof WebHostIncompatibleError || error instanceof WebHostConnectionError) {
+        hostLifecycle.endSleep();
+        recoveryBlocked = true;
+        recovery.suspend();
+        const failure = { message: error.message, reference: errorReference(error) };
+        setState((draft) => {
+          draft.connectionError = failure;
+        });
+      } else {
+        const text = currentText();
+        const failure = text.errorDetails(error, text.t("server.connection.reconnecting", { name: host.name }));
+        setState((draft) => {
+          draft.connectionError = failure;
+        });
+        await hostLifecycle.hostUnavailable(host.hostId, opened);
       }
+      throw error;
     }
   }
+  function saveFrame(): void {
+    if (state.status !== "online" || !state.host) return;
+    const panelsRead = !state.panelsLoading && !state.panelsFailed;
+    saveRemoteWorkspaceFrame(props.accountId, state.host.hostId, {
+      agents: state.agents,
+      models: state.models,
+      selectedAgentId: state.selectedId,
+      ...(panelsRead ? { sidebarLayout: state.sidebarLayout, hiddenAgents: state.userHiddenAgents } : {}),
+    });
+  }
+  async function loadPanels(capabilities = state.capabilities, agentIds = state.agents.map((agent) => agent.id)) {
+    const current = generation;
+    const isCurrent = () => !disposed && current === generation;
+    setState((draft) => {
+      draft.panelsFailed = false;
+      draft.panelsLoading = true;
+    });
+    const failed = () => {
+      if (isCurrent())
+        setState((draft) => {
+          draft.panelsFailed = true;
+        });
+    };
+    await Promise.all([
+      (capabilities.includes("browser-control") ? runtime.browserTabs() : Promise.resolve([]))
+        .then((browserTabs) => {
+          if (!isCurrent()) return;
+          setState((draft) => {
+            draft.browserTabs = browserTabs;
+            draft.activeBrowserTabId = browserTabs.some((tab) => tab.id === draft.activeBrowserTabId)
+              ? draft.activeBrowserTabId
+              : (browserTabs[0]?.id ?? null);
+          });
+        })
+        .catch(failed),
+      readSidebarLayout(capabilities, agentIds)
+        .then((layout) => {
+          if (isCurrent())
+            setState((draft) => {
+              if (layout.revision >= draft.sidebarLayout.revision) draft.sidebarLayout = layout;
+            });
+        })
+        .catch(failed),
+      readUserHiddenAgents(capabilities)
+        .then((agents) => {
+          if (isCurrent())
+            setState((draft) => {
+              draft.userHiddenAgents = agents;
+            });
+        })
+        .catch(failed),
+      readAgentColors(capabilities)
+        .then((colors) => {
+          if (isCurrent())
+            setState((draft) => {
+              draft.agentColors = colors;
+            });
+        })
+        .catch(() => undefined),
+      readChatColors(capabilities)
+        .then((colors) => {
+          if (isCurrent()) receiveChatColors(colors);
+        })
+        .catch(() => undefined),
+      readReads(),
+    ]);
+    if (isCurrent())
+      setState((draft) => {
+        draft.panelsLoading = false;
+      });
+  }
+
   async function load(id: string, older = false) {
     const current = generation;
     const previous = state.conversations[id];
+    if (older && previous?.trimmed) {
+      if (!conversationReads.has(id)) await load(id);
+      return;
+    }
     const before = older ? (previous?.page?.pageInfo.olderCursor ?? undefined) : undefined;
     if (older && !before) return;
     conversationReads.set(id, (conversationReads.get(id) ?? 0) + 1);
@@ -777,32 +1584,59 @@ export function createWebWorkspace(
         if (!item) return;
         const old = item.page?.threadId === page.threadId ? item.page : null;
         if (old && page.revision < old.revision) return;
+        if (older && (item.trimmed || old?.pageInfo.olderCursor !== before)) return;
+        const merge = older ? "older" : old && !item.trimmed ? "latest" : "replace";
+        const around = !older && merge === "latest" && item.around === true && page.pageInfo.hasOlder;
         const resolvedRequests = new Set(
           page.messages.flatMap((message) =>
-            message.questionPrompt?.resolution ? [String(message.questionPrompt.requestId)] : [],
+            message.questionPrompt?.resolution ? [messagePromptRequestKey(message)] : [],
           ),
         );
         draft.prompts = draft.prompts.filter(
           (prompt) =>
             prompt.agentId !== id ||
             prompt.threadId !== page.threadId ||
-            !resolvedRequests.has(String(prompt.requestId)),
+            !resolvedRequests.has(promptRequestKey(prompt.turnId, prompt.requestId)),
         );
+        const pageIds = new Set(page.messages.map((message) => message.id));
+        const apart =
+          merge === "latest" &&
+          !around &&
+          page.pageInfo.hasOlder &&
+          !(old?.messages ?? []).some((message) => pageIds.has(message.id));
         item.page = {
           ...page,
-          messages: mergeConversationPage(
-            old?.messages ?? [],
-            page.messages,
-            older ? "older" : old ? "latest" : "replace",
-          ),
-          references: { ...old?.references, ...page.references },
-          pageInfo: !older && old ? old.pageInfo : page.pageInfo,
-          // An older page has the thread's current revision but not its newest messages. The loaded
-          // newest messages keep their revision, so a delta held during this read still applies.
+          messages: around
+            ? windowedSnapshotMessages(old?.messages ?? [], page.messages, { mode: "around", capped: true })
+            : mergeConversationPage(old?.messages ?? [], page.messages, apart ? "replace" : merge),
+          references: merge === "replace" ? page.references : { ...old?.references, ...page.references },
+          pageInfo: merge === "latest" && !apart ? (old?.pageInfo ?? page.pageInfo) : page.pageInfo,
           revision: older && old ? old.revision : page.revision,
         };
+        item.missingReferences = {
+          ...(merge === "replace" ? {} : item.missingReferences),
+          ...missingReplyOriginals(page),
+        };
+        if (!older && page.readState) draft.reads[id] = page.readState;
+        if (!older && draft.selectedId === id) item.trimmed = false;
+        if (!older && !around) item.around = false;
         item.loading = false;
+        item.error = null;
+        item.olderError = null;
       });
+      if (!older)
+        for (const messageId of openExchangesOutside(state.conversations[id]?.page?.messages ?? [], page.messages))
+          refreshOpenExchange(id, messageId);
+    } catch (error) {
+      if (!disposed && current === generation && !blockAccess(error))
+        setState((draft) => {
+          const item = draft.conversations[id];
+          if (!item) return;
+          item.loading = false;
+          if (older) item.olderError = currentText().errorMessage(error, currentText().t("chat.history.olderFailed"));
+          else item.error = currentText().t("webClient.error.requestFailed");
+        });
+      throw error;
     } finally {
       const reads = (conversationReads.get(id) ?? 1) - 1;
       if (reads > 0) conversationReads.set(id, reads);
@@ -814,32 +1648,30 @@ export function createWebWorkspace(
       }
     }
   }
-  /**
-   * Appends streamed text to the selected conversation without a read. A delta that arrives during
-   * a read waits for it: the page read may already hold the text, and its revision tells which
-   * deltas are newer. A delta for another thread asks for a read.
-   */
   function applyDelta(event: Extract<AgentEvent, { type: "conversation-delta" }>) {
     if (disposed || event.agentId !== selectedId) return;
     if (conversationReads.has(event.agentId)) {
-      heldDeltas.set(event.agentId, [...(heldDeltas.get(event.agentId) ?? []), event]);
+      const held = heldDeltas.get(event.agentId);
+      if (held) held.push(event);
+      else heldDeltas.set(event.agentId, [event]);
       return;
     }
     let otherThread = false;
-    // The checks read the draft: a page that a read just wrote is not visible outside it until a flush.
     setState((draft) => {
-      const value = draft.conversations[event.agentId]?.page;
+      const item = draft.conversations[event.agentId];
+      const value = item?.page;
       if (!value) return;
       if (value.threadId !== event.threadId) {
         otherThread = true;
         return;
       }
       if (event.revision <= value.revision) return;
-      const message = value.messages.find((item) => item.id === event.messageId);
+      const message = value.messages.findLast((entry) => entry.id === event.messageId);
       if (message) {
         message.text += event.delta;
         message.status = "streaming";
-      } else
+      } else if (item.around) return;
+      else
         value.messages.push({
           id: event.messageId,
           turnId: event.turnId,
@@ -854,7 +1686,6 @@ export function createWebWorkspace(
     });
     if (otherThread) void refresh();
   }
-  // Coalesce event bursts per agent, as `refresh` does for the conversation.
   function loadQueue(id: string): void {
     const running = queueLoads.get(id);
     if (running?.generation === generation) {
@@ -870,6 +1701,7 @@ export function createWebWorkspace(
           const revision = queueRevisions.get(id) ?? 0;
           const queue = await runtime.queue(id);
           if (disposed || load.generation !== generation || (queueRevisions.get(id) ?? 0) !== revision) continue;
+          partialQueues.delete(id);
           setState((draft) => {
             draft.queues[id] = queue;
           });
@@ -881,7 +1713,53 @@ export function createWebWorkspace(
       }
     })();
   }
-  /** Sends one queue change for the selected agent. The host then sends the new queue as an event. */
+  function loadQueues(ids: readonly string[]): void {
+    if (ids.length === 0) return;
+    if (!state.capabilities.includes(AGENT_ACTIVE_QUEUES_CAPABILITY)) {
+      for (const id of ids) loadQueue(id);
+      return;
+    }
+    for (const id of ids) queueListPending.add(id);
+    if (queueListRunning === generation) return;
+    const current = generation;
+    queueListRunning = current;
+    void (async () => {
+      try {
+        while (queueListPending.size > 0 && !disposed && current === generation) {
+          const pending = [...queueListPending];
+          queueListPending.clear();
+          const listed = pending.filter((id) => id !== selectedId).slice(0, AGENT_ACTIVE_QUEUES_LIMIT);
+          const inList = new Set(listed);
+          for (const id of pending) if (!inList.has(id)) loadQueue(id);
+          if (listed.length === 0) continue;
+          const revisions = new Map(listed.map((id) => [id, queueRevisions.get(id) ?? 0]));
+          let answer: AgentActiveQueues;
+          try {
+            answer = await runtime.activeQueues(listed);
+          } catch {
+            if (!disposed && current === generation) for (const id of listed) loadQueue(id);
+            continue;
+          }
+          if (disposed || current !== generation) return;
+          const fresh = answer.queues.filter(
+            (queue) =>
+              queue.agentId !== selectedId &&
+              revisions.has(queue.agentId) &&
+              (queueRevisions.get(queue.agentId) ?? 0) === revisions.get(queue.agentId),
+          );
+          for (const queue of fresh) partialQueues.add(queue.agentId);
+          if (fresh.length > 0)
+            setState((draft) => {
+              for (const queue of fresh) draft.queues[queue.agentId] = queue;
+            });
+          for (const id of answer.omitted) if (revisions.has(id)) loadQueue(id);
+          if (selectedId && revisions.has(selectedId)) loadQueue(selectedId);
+        }
+      } finally {
+        if (queueListRunning === current) queueListRunning = null;
+      }
+    })();
+  }
   function changeQueue(change: (agentId: string) => Promise<void>) {
     const id = selectedId;
     const current = generation;
@@ -893,7 +1771,15 @@ export function createWebWorkspace(
   async function select(id: string) {
     const current = generation;
     selectedId = id;
+    if (partialQueues.has(id)) loadQueue(id);
+    if (state.status === "online" && state.host)
+      saveRemoteWorkspaceFrame(props.accountId, state.host.hostId, { selectedAgentId: id });
     setState((draft) => {
+      const previous = draft.selectedId;
+      if (previous && previous !== id) {
+        const closed = draft.conversations[previous];
+        if (closed) trimToLatestPage(closed);
+      }
       draft.selectedId = id;
       draft.conversations[id] ??= {
         page: null,
@@ -901,39 +1787,131 @@ export function createWebWorkspace(
         attachments: [],
         loading: true,
       };
+      draft.conversations[id].loading = true;
+      draft.conversations[id].error = null;
     });
     try {
       await load(id);
     } catch (error) {
       if (disposed || current !== generation) return;
       report(error);
-      setState((draft) => {
-        if (draft.conversations[id]) draft.conversations[id].loading = false;
-      });
     }
+  }
+  async function preloadRecent(ids: readonly string[], current: number) {
+    for (const id of ids.slice(0, PRELOADED_AGENTS)) {
+      if (disposed || current !== generation) return;
+      if (state.conversations[id]) continue;
+      setState((draft) => {
+        draft.conversations[id] ??= { page: null, draft: "", attachments: [], loading: false, trimmed: true };
+      });
+      try {
+        await load(id);
+      } catch {}
+    }
+  }
+  let readsLoad: { generation: number; promise: Promise<void> } | null = null;
+  let pendingReads = false;
+  let readsStartedAt = 0;
+  let readsTimer: ReturnType<typeof setTimeout> | null = null;
+  function readReads(): Promise<void> {
+    pendingReads = true;
+    if (readsLoad?.generation === generation) return readsLoad.promise;
+    const current = generation;
+    const promise = (async () => {
+      while (pendingReads && !disposed && current === generation) {
+        pendingReads = false;
+        readsStartedAt = Date.now();
+        const value = await runtime.conversationReads().catch(() => null);
+        if (!value || disposed || current !== generation) continue;
+        setState((draft) => {
+          draft.reads = value;
+        });
+      }
+    })().finally(() => {
+      if (readsLoad?.promise === promise) readsLoad = null;
+    });
+    readsLoad = { generation: current, promise };
+    return promise;
+  }
+  function loadReads(): void {
+    void readReads();
+  }
+  function loadReadsSoon(): void {
+    if (readsTimer) return;
+    const wait = readsStartedAt + EVENT_READS_INTERVAL_MS - Date.now();
+    if (wait <= 0) {
+      loadReads();
+      return;
+    }
+    readsTimer = setTimeout(() => {
+      readsTimer = null;
+      loadReads();
+    }, wait);
   }
   async function resync() {
     const current = generation;
     try {
-      const agents = await runtime.listAgents();
+      const [{ agents, sidebarLayout }, userHiddenAgents, agentColors, chatColors] = await Promise.all([
+        runtime.listAgents().then(async (agents) => ({
+          agents,
+          sidebarLayout: await readSidebarLayout(
+            state.capabilities,
+            agents.map((agent) => agent.id),
+          ),
+        })),
+        readUserHiddenAgents(state.capabilities),
+        readAgentColors(state.capabilities).catch(() => state.agentColors),
+        readChatColors(state.capabilities).catch(() => state.chatColors),
+      ]);
       if (disposed || current !== generation) return;
-      const sidebarLayout = await readSidebarLayout(
-        state.capabilities,
-        agents.map((agent) => agent.id),
-      );
-      if (disposed || current !== generation) return;
+      syncedAt = Date.now();
       reconcileAgents(agents);
       setState((draft) => {
         if (sidebarLayout.revision >= draft.sidebarLayout.revision) draft.sidebarLayout = sidebarLayout;
+        draft.userHiddenAgents = userHiddenAgents;
+        draft.agentColors = agentColors;
       });
-      for (const agent of agents) loadQueue(agent.id);
+      receiveChatColors(chatColors);
+      loadQueues(agents.map((agent) => agent.id));
+      loadReads();
       if (!selectedId && agents[0]) await select(agents[0].id);
       await refresh();
     } catch (error) {
       if (current === generation) report(error);
     }
   }
-  // Coalesce event bursts; an event during a read schedules one further authoritative read.
+  const openExchangeReads = new Map<string, { again: boolean }>();
+  function refreshOpenExchange(id: string, messageId: string) {
+    const readAround = runtime.conversationAround;
+    if (!readAround || !state.capabilities.includes("conversation-pagination")) return;
+    const key = `${id}\0${messageId}`;
+    const running = openExchangeReads.get(key);
+    if (running) {
+      running.again = true;
+      return;
+    }
+    const read = { again: true };
+    openExchangeReads.set(key, read);
+    const current = generation;
+    void (async () => {
+      try {
+        while (read.again && !disposed && current === generation) {
+          read.again = false;
+          const page = await readAround(id, messageId, 1);
+          const message = page.messages.find((candidate) => candidate.id === messageId);
+          if (disposed || current !== generation || !message) return;
+          setState((draft) => {
+            const loaded = draft.conversations[id]?.page;
+            if (!loaded || loaded.threadId !== page.threadId || page.revision < loaded.revision) return;
+            const index = loaded.messages.findIndex((candidate) => candidate.id === messageId);
+            if (index >= 0) loaded.messages[index] = message;
+          });
+        }
+      } finally {
+        openExchangeReads.delete(key);
+      }
+    })().catch(() => undefined);
+  }
   async function refresh() {
     pendingReload = true;
     if (reloadPromise) return reloadPromise;
@@ -957,10 +1935,6 @@ export function createWebWorkspace(
       reloadPromise = null;
     }
   }
-  /**
-   * Sends one message to an agent of the open host. The chat shows it as pending and the answer says
-   * whether it arrived; a failure is never resent here. `clientMessageId` lets the host drop a retry.
-   */
   async function send(
     id: string,
     text: string,
@@ -978,14 +1952,12 @@ export function createWebWorkspace(
     } catch (error) {
       return { error: errorMessage(error, t("webClient.error.deliveryUnconfirmed")) };
     }
-    // The next pending send of the chat waits for this answer, so the history reload runs beside it.
     if (current === generation && !disposed)
       refresh().catch((error: unknown) => {
         if (current === generation) report(error);
       });
     return { messageId };
   }
-  /** Marks the selected agent's messages read through the newest loaded one. Writes for one agent run in order. */
   function markRead() {
     const id = selectedId;
     if (!id || state.status !== "online") return Promise.resolve();
@@ -993,48 +1965,72 @@ export function createWebWorkspace(
     const write = (readWrites.get(id) ?? Promise.resolve())
       .catch(() => undefined)
       .then(async () => {
-        const page = state.conversations[id]?.page;
-        if (!page || disposed || current !== generation) return;
+        const conversation = state.conversations[id];
+        const page = conversation?.page;
+        if (!page || conversation.around || disposed || current !== generation) return;
         const readState = await runtime.markRead(id, page.messages.at(-1)?.id ?? null);
         if (disposed || current !== generation) return;
         setState((draft) => {
           const value = draft.conversations[id]?.page;
           if (value?.threadId === page.threadId) value.readState = readState;
+          draft.reads[id] = readState;
         });
       });
     readWrites.set(id, write);
     return write;
   }
-  /** Marks every agent with unread messages read through its newest one, loaded or not. */
+  function markAgentRead(id: string) {
+    const current = generation;
+    const write = (readWrites.get(id) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => {
+        if (disposed || current !== generation) return;
+        const page = await runtime.conversation(id);
+        const latestMessageId = page.messages.at(-1)?.id;
+        if (!latestMessageId || disposed || current !== generation) return;
+        const readState = await runtime.markRead(id, latestMessageId);
+        if (disposed || current !== generation) return;
+        setState((draft) => {
+          const value = draft.conversations[id]?.page;
+          if (value?.threadId === page.threadId) value.readState = readState;
+          draft.reads[id] = readState;
+        });
+      });
+    readWrites.set(id, write);
+    return write;
+  }
   async function markAllRead() {
     if (state.status !== "online") return;
     const current = generation;
     const reads = await runtime.conversationReads();
     if (disposed || current !== generation) return;
-    const unread = Object.entries(reads)
-      .filter(([, read]) => read.unreadCount > 0)
-      .map(([id]) => id);
-    const writes = unread.map((id) => {
-      const write = (readWrites.get(id) ?? Promise.resolve())
-        .catch(() => undefined)
-        .then(async () => {
-          if (disposed || current !== generation) return;
-          const page = await runtime.conversation(id);
-          const latestMessageId = page.messages.at(-1)?.id;
-          if (!latestMessageId || disposed || current !== generation) return;
-          const readState = await runtime.markRead(id, latestMessageId);
-          if (disposed || current !== generation) return;
-          setState((draft) => {
-            const value = draft.conversations[id]?.page;
-            if (value?.threadId === page.threadId) value.readState = readState;
-          });
-        });
-      readWrites.set(id, write);
-      return write;
-    });
-    await Promise.all(writes);
+    await Promise.all(
+      Object.entries(reads)
+        .filter(([, read]) => read.unreadCount > 0)
+        .map(([id]) => markAgentRead(id)),
+    );
   }
-  createHostRestartToasts(() =>
+  async function markUnreadFrom(agentId: string, messageId: string): Promise<void> {
+    const current = generation;
+    const write = (readWrites.get(agentId) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => {
+        const readState = await runtime.markUnreadFrom(agentId, messageId);
+        if (disposed || current !== generation) return;
+        setState((draft) => {
+          const value = draft.conversations[agentId]?.page;
+          if (value) value.readState = readState;
+          draft.reads[agentId] = readState;
+        });
+      });
+    readWrites.set(agentId, write);
+    await write;
+  }
+  async function markLatestReplyUnread(agentId: string): Promise<void> {
+    const reply = latestIncomingConversationMessage((await runtime.conversation(agentId)).messages);
+    if (reply) await markUnreadFrom(agentId, reply.id);
+  }
+  const hostViews = (): HostRestartView[] =>
     state.host
       ? [
           {
@@ -1043,53 +2039,84 @@ export function createWebWorkspace(
             online: state.status === "online",
             restart: state.hostRestart?.state ?? null,
             version: state.hostRestart?.version ?? null,
+            firstRun: !state.agentsLoaded || state.agents.length === 0,
           },
         ]
-      : [],
-  );
+      : [];
+  createHostRestartToasts(() => hostViews().filter((host) => !followsServerUpdate(host.id)));
   onSettled(() => {
     void refreshHosts().catch(report);
+    const pageFocus = () => setPageFocused(!document.hidden && document.hasFocus());
     const focus = () => {
+      pageFocus();
       runtime.hosts?.refresh();
       void props
         .onSessionCheck()
         .then(() => refreshHosts())
-        .then(() => refresh())
+        .then(() => {
+          if (state.status === "online") return Date.now() - syncedAt < FOCUS_RESYNC_MS ? undefined : resync();
+          if (state.recovery?.phase !== "suspended") recoverNow();
+        })
         .catch(report);
     };
+    const visibility = () => {
+      pageFocus();
+      if (document.hidden) {
+        hostLifecycle.cancelPending();
+        if (hostId && state.status !== "online") generation += 1;
+        recovery.setActive(false);
+      } else {
+        hostLifecycle.resume();
+        if (state.status !== "online" && state.recovery?.phase !== "suspended") recoverNow();
+      }
+    };
+    const network = () => {
+      if (!document.hidden) recovery.networkRestored();
+    };
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("online", network);
     window.addEventListener("focus", focus);
+    window.addEventListener("blur", pageFocus);
     return () => {
       disposed = true;
       generation += 1;
-      window.clearTimeout(wakeReconnectTimer);
-      stopWaitingForInput?.();
+      if (readsTimer) clearTimeout(readsTimer);
+      readsTimer = null;
+      recovery.dispose();
+      hostLifecycle.dispose();
+      focusUse.dispose();
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("online", network);
       acceptedInvite = null;
-      if (restartRetry) clearTimeout(restartRetry);
       window.removeEventListener("focus", focus);
+      window.removeEventListener("blur", pageFocus);
       void runtime.dispose({ sessionsEnded: props.accountSessionEnded?.() ?? false }).catch(() => undefined);
     };
   });
   return {
     state,
+    stepLines,
+    hostViews,
+    shownAgents,
     profiles,
+    retryPanels: loadPanels,
     selected,
     conversation,
     runtime,
     preferences,
     orderedHosts,
+    duplicatingSectionIds,
     reorderHosts(hostIds: string[]) {
       setServerOrder(hostIds);
       writeWebServerOrder(props.accountId, hostIds);
     },
-    /** Every event of the connected host. Returns the unsubscribe function. */
     onHostEvent(listener: (event: AgentEvent | TeamRealtimeEvent) => void) {
       hostEventListeners.add(listener);
       return () => {
         hostEventListeners.delete(listener);
       };
     },
-    /** The events of the hosts this tab has not opened that a notification can show. Returns the unsubscribe function. */
-    onHostNotice(listener: (hostId: string, event: WebHostNotice, agents: AgentSummary[]) => void) {
+    onHostNotice(listener: (hostId: string, event: WebHostNotice, agents: ClientAgentSummary[]) => void) {
       hostNoticeListeners.add(listener);
       return () => {
         hostNoticeListeners.delete(listener);
@@ -1097,17 +2124,30 @@ export function createWebWorkspace(
     },
     run,
     refreshHosts,
+    setHostAppearance,
+    leaveHost,
+    removeOwnedHost,
     retryHosts,
     reconnect,
+    restartRequested,
+    useHere,
     joinInvite,
     connect,
     select,
     refresh,
     send,
-    cancelQueued: (deliveryId: string) => changeQueue((agentId) => runtime.cancelQueued({ agentId, deliveryId })),
+    cancelQueued: (deliveryId: string, recipientAgentId?: string) =>
+      changeQueue((agentId) => runtime.cancelQueued({ agentId: recipientAgentId ?? agentId, deliveryId })),
     steerQueued(deliveryId: string) {
       const expectedTurnId = conversation()?.page?.activeTurnId;
-      if (expectedTurnId) changeQueue((agentId) => runtime.steerQueued({ agentId, deliveryId, expectedTurnId }));
+      if (!expectedTurnId) return;
+      changeQueue((agentId) =>
+        runtime.steerQueued({ agentId, deliveryId, expectedTurnId }).catch((error: unknown) => {
+          const delivery = state.queues[agentId]?.deliveries.find((item) => item.id === deliveryId);
+          if (delivery && delivery.status !== "queued") return;
+          throw error;
+        }),
+      );
     },
     reorderQueue: (deliveryIds: string[]) => changeQueue((agentId) => runtime.reorderQueue({ agentId, deliveryIds })),
     async updateQueued(
@@ -1119,7 +2159,6 @@ export function createWebWorkspace(
     ): Promise<boolean> {
       const agentId = target?.agentId ?? selectedId;
       if (!agentId) return false;
-      // The edit belongs to the host that queued the message. This client talks only to the connected one.
       if (target && target.serverId !== hostId) {
         report(new Error(currentText().t("webClient.error.hostChanged")));
         return false;
@@ -1134,7 +2173,26 @@ export function createWebWorkspace(
       }
     },
     markRead,
+    markAgentRead,
     markAllRead,
+    markUnreadFrom,
+    markLatestReplyUnread,
+    async deleteMessage(agentId: string, messageId: string): Promise<void> {
+      const remove = runtime.deleteMessage;
+      if (state.status !== "online" || !remove || !state.capabilities.includes(MESSAGE_DELETE_CAPABILITY))
+        throw new Error(currentText().t("error.team.messageDeleteUnsupported"));
+      const current = generation;
+      await remove({ kind: "agent", agentId, messageId });
+      if (disposed || current !== generation) return;
+      setState((draft) => {
+        const item = draft.conversations[agentId];
+        const page = item?.page;
+        if (!item || !page) return;
+        page.messages = page.messages.filter((message) => message.id !== messageId);
+        delete page.references[messageId];
+        item.missingReferences = { ...item.missingReferences, [messageId]: true };
+      });
+    },
     async mutateSidebarLayout(action: SidebarLayoutAction) {
       if (state.status !== "online" || !state.capabilities.includes("sidebar-layout")) {
         throw new Error(currentText().t("webClient.error.sidebarLayout"));
@@ -1175,9 +2233,99 @@ export function createWebWorkspace(
           });
       }
     },
+    async duplicateSection(sectionId: string): Promise<void> {
+      if (
+        state.status !== "online" ||
+        !state.capabilities.includes("agent-duplication") ||
+        !state.capabilities.includes("sidebar-layout")
+      ) {
+        return;
+      }
+      const mutate = runtime.mutateSidebarLayout;
+      if (!mutate || duplicatingSectionIds().has(sectionId)) return;
+      const current = generation;
+      const isCurrent = () => !disposed && current === generation;
+      const acceptLayout = (layout: SidebarLayoutSnapshot) =>
+        setState((draft) => {
+          if (layout.revision >= draft.sidebarLayout.revision) draft.sidebarLayout = layout;
+        });
+      setDuplicatingSectionIds((ids) => new Set(ids).add(sectionId));
+      try {
+        const hidden = new Set(state.userHiddenAgents.map((entry) => entry.agentId));
+        await duplicateSectionWith(
+          {
+            layout: state.sidebarLayout,
+            agentIds: state.agents.filter((agent) => !hidden.has(agent.id)).map((agent) => agent.id),
+            duplicateAgent: async (agentId) => {
+              if (!isCurrent()) return null;
+              setState((draft) => {
+                draft.duplicatingAgentIds = [...draft.duplicatingAgentIds, agentId];
+              });
+              try {
+                const result = await runtime.duplicateAgent(agentId);
+                if (!isCurrent()) return null;
+                setState((draft) => {
+                  draft.agents = [result.agent, ...draft.agents.filter((agent) => agent.id !== result.agent.id)];
+                });
+                acceptLayout(result.layout);
+                return { agentId: result.agent.id, layout: result.layout };
+              } finally {
+                if (isCurrent())
+                  setState((draft) => {
+                    draft.duplicatingAgentIds = draft.duplicatingAgentIds.filter((id) => id !== agentId);
+                  });
+              }
+            },
+            mutateLayout: async (action) => {
+              if (!isCurrent()) return null;
+              const layout = await mutate(action);
+              if (!isCurrent()) return null;
+              acceptLayout(layout);
+              return layout;
+            },
+          },
+          sectionId,
+        );
+      } catch (error) {
+        if (current === generation) report(error);
+        throw error;
+      } finally {
+        setDuplicatingSectionIds((ids) => {
+          const next = new Set(ids);
+          next.delete(sectionId);
+          return next;
+        });
+      }
+    },
+    async setAgentHidden(agentId: string, hidden: boolean): Promise<boolean> {
+      const write = runtime.setAgentHidden;
+      if (state.status !== "online" || !state.capabilities.includes(AGENT_HIDDEN_CAPABILITY) || !write) return false;
+      if (!state.agents.some((agent) => agent.id === agentId)) return false;
+      if (state.userHiddenAgents.some((entry) => entry.agentId === agentId) === hidden) return false;
+      const current = generation;
+      const previous = state.userHiddenAgents.find((entry) => entry.agentId === agentId);
+      const apply = (entry: HiddenAgent | undefined) =>
+        setState((draft) => {
+          const others = draft.userHiddenAgents.filter((candidate) => candidate.agentId !== agentId);
+          draft.userHiddenAgents = entry ? [...others, entry] : others;
+        });
+      apply(hidden ? { agentId, hiddenAt: new Date().toISOString() } : undefined);
+      try {
+        const snapshot = await write({ agentId, hidden });
+        if (disposed || current !== generation) return true;
+        setState((draft) => {
+          draft.userHiddenAgents = snapshot.agents;
+        });
+        return true;
+      } catch (error) {
+        if (!disposed && current === generation) apply(previous);
+        throw error;
+      }
+    },
     async deleteAgent(agentId: string): Promise<void> {
       if (state.status !== "online") throw new Error(currentText().t("webClient.error.deleteOffline"));
-      if (state.host?.role === "member") throw new Error(currentText().t("error.team.membersCannotDeleteAgents"));
+      if (state.host && !canAdministerServer(state.host.role))
+        throw new Error(currentText().t("error.team.membersCannotDeleteAgents"));
       if (!state.agents.some((agent) => agent.id === agentId)) return;
       const current = generation;
       const wasSelected = selectedId === agentId;
@@ -1205,14 +2353,19 @@ export function createWebWorkspace(
       const current = generation;
       await runtime.answer(input);
       if (disposed || current !== generation) return;
+      forgetListedPrompt(input.requestId);
       setState((draft) => {
         draft.prompts = draft.prompts.filter((item) => String(item.requestId) !== String(input.requestId));
       });
       await refresh();
     },
-    async respondToBrowserTakeover(decision: "complete" | "cancel") {
+    async respondToBrowserTakeover(
+      decision: "complete" | "cancel",
+      sideThreadId?: string,
+      options?: PromptAnswerOptions,
+    ) {
       const current = generation;
-      const threadId = state.agents.find((agent) => agent.id === selectedId)?.threadId;
+      const threadId = sideThreadId ?? state.agents.find((agent) => agent.id === selectedId)?.threadId;
       const request = state.takeovers.find((item) => item.agentId === selectedId && item.threadId === threadId);
       if (!request) return false;
       try {
@@ -1223,7 +2376,9 @@ export function createWebWorkspace(
         });
         return true;
       } catch (error) {
-        if (current === generation) report(error);
+        if (current !== generation) return false;
+        if (options?.onError) options.onError(error);
+        else report(error);
         return false;
       }
     },
@@ -1233,18 +2388,59 @@ export function createWebWorkspace(
           draft.activeBrowserTabId = tabId;
         });
     },
-    async openSearchMessage(messageId: string) {
+    async openSearchMessage(messageId: string): Promise<boolean> {
       const id = selectedId;
       const current = generation;
-      if (!id) return;
-      while (!state.conversations[id]?.page?.messages.some((message) => message.id === messageId)) {
-        const page = state.conversations[id]?.page;
-        if (!page?.pageInfo.hasOlder || !page.pageInfo.olderCursor) break;
-        const cursor = page.pageInfo.olderCursor;
-        await load(id, true);
-        if (disposed || current !== generation || selectedId !== id) return;
-        if (state.conversations[id]?.page?.pageInfo.olderCursor === cursor) break;
+      if (!id) return false;
+      const loaded = () => state.conversations[id]?.page?.messages.some((message) => message.id === messageId) === true;
+      if (loaded()) return true;
+      const readAround = runtime.conversationAround;
+      try {
+        if (readAround && state.capabilities.includes("conversation-pagination")) {
+          const request = (aroundReads.get(id) ?? 0) + 1;
+          aroundReads.set(id, request);
+          const page = await readAround(id, messageId);
+          if (disposed || current !== generation || selectedId !== id || aroundReads.get(id) !== request) return false;
+          if (loaded()) return true;
+          if (page.agentId !== id || !page.messages.some((message) => message.id === messageId)) return false;
+          setState((draft) => {
+            const item = draft.conversations[id];
+            if (!item) return;
+            item.page = { ...page, messages: [...page.messages] };
+            item.missingReferences = missingReplyOriginals(page);
+            item.around = true;
+            item.trimmed = false;
+            item.loading = false;
+            item.error = null;
+            item.olderError = null;
+          });
+          return true;
+        }
+        while (!state.conversations[id]?.page?.messages.some((message) => message.id === messageId)) {
+          const page = state.conversations[id]?.page;
+          if (!page?.pageInfo.hasOlder || !page.pageInfo.olderCursor) break;
+          const cursor = page.pageInfo.olderCursor;
+          await load(id, true);
+          if (disposed || current !== generation || selectedId !== id) return false;
+          if (state.conversations[id]?.page?.pageInfo.olderCursor === cursor) break;
+        }
+      } catch (error) {
+        if (current === generation) report(error);
+        return false;
       }
+      return !disposed && current === generation && loaded();
+    },
+    loadLatest() {
+      const id = selectedId;
+      if (!id) return Promise.resolve();
+      aroundReads.set(id, (aroundReads.get(id) ?? 0) + 1);
+      setState((draft) => {
+        const item = draft.conversations[id];
+        if (!item?.around) return;
+        item.around = false;
+        item.trimmed = true;
+      });
+      return refresh();
     },
     async approve(input: RespondToApprovalInput) {
       const current = generation;
@@ -1257,7 +2453,7 @@ export function createWebWorkspace(
     },
     older: () => {
       const id = selectedId;
-      return id ? run(() => load(id, true)) : Promise.resolve();
+      return id ? run(() => load(id, true).catch(() => undefined)) : Promise.resolve();
     },
     setDraft(text: string) {
       const id = selectedId;
@@ -1282,7 +2478,6 @@ export function createWebWorkspace(
         try {
           const attachment = await runtime.upload(file);
           if (current !== generation || disposed) return;
-          // The agent was removed during the upload, so the host must not keep the file.
           if (!state.conversations[id]) {
             await runtime.discard(attachment.id);
             return;
@@ -1332,5 +2527,38 @@ export function createWebWorkspace(
           });
       });
     },
+  };
+}
+
+const FOCUS_RESYNC_MS = 30_000;
+
+function changedConversation(event: AgentEvent | TeamRealtimeEvent): string | undefined {
+  switch (event.type) {
+    case "conversation":
+      return event.snapshot.agentId;
+    case "conversation-page":
+      return event.page.agentId;
+    case "conversation-invalidated":
+    case "turn-started":
+    case "turn-completed":
+    case "prompt":
+    case "agent-input-resolved":
+      return event.agentId;
+    default:
+      return undefined;
+  }
+}
+
+function presenceWithChatColors(
+  presence: TeamPresenceSnapshot,
+  colors: readonly MemberChatColorEntry[],
+): TeamPresenceSnapshot {
+  const byMember = new Map(colors.map((entry) => [entry.memberId, entry.color]));
+  return {
+    ...presence,
+    members: presence.members.map(({ chatColor: _chatColor, ...member }) => {
+      const color = byMember.get(member.id);
+      return color ? { ...member, chatColor: color } : member;
+    }),
   };
 }

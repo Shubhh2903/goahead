@@ -1,14 +1,19 @@
+import type { AgentMessage } from "@openbot/ui/data";
+import { prefersReducedMotion } from "@openbot/ui/utils";
 import { createEffect, onCleanup } from "solid-js";
+import { matchesShortcut } from "../../../keyboard-shortcut-preference";
 import type { ChatSearchMatch } from "../chat-search";
 import { clearChatSearchHighlights, findChatSearchMatches, renderChatSearchHighlights } from "../chat-search";
 import type { ConversationProps } from "../conversation-types";
 
 export interface SearchStoreDeps {
-  props: ConversationProps;
+  props: Pick<ConversationProps, "onSearchMessages" | "onOpenSearchMessage"> & {
+    messages: readonly Pick<AgentMessage, "id" | "body" | "items">[];
+  };
   chatSearchOpen: () => boolean;
   chatSearchQuery: () => string;
   activeChatSearchIndex: () => number;
-  scrollElement: () => HTMLDivElement | undefined;
+  scrollElement: () => HTMLElement | undefined;
   revealMatch: () => void;
   setChatSearchOpen: (open: boolean) => void;
   setChatSearchQuery: (query: string) => void;
@@ -30,21 +35,29 @@ export function createSearchStore(deps: SearchStoreDeps) {
   let lastChatSearchQuery = "";
 
   createEffect(
-    () => ({
-      open: deps.chatSearchOpen(),
-      query: deps.chatSearchQuery(),
-      messageSignature: deps.props.messages
-        .map((message) => `${message.id}:${message.body}:${message.items?.join("\u0000") ?? ""}`)
-        .join("\u0001"),
-      remoteMessageIds: deps.chatSearchMessageIds(),
-      activeRemoteIndex: deps.activeChatSearchIndex(),
-    }),
+    () => {
+      const open = deps.chatSearchOpen();
+      const query = deps.chatSearchQuery();
+      return {
+        open,
+        query,
+        messageSignature:
+          open && query.trim()
+            ? deps.props.messages
+                .map((message) => `${message.id}:${message.body}:${message.items?.join("\u0000") ?? ""}`)
+                .join("\u0001")
+            : "",
+        remoteMessageIds: deps.chatSearchMessageIds(),
+        activeRemoteIndex: deps.activeChatSearchIndex(),
+      };
+    },
     ({ open, query, remoteMessageIds, activeRemoteIndex }) => {
       if (chatSearchFrame !== undefined) cancelAnimationFrame(chatSearchFrame);
       if (chatSearchTimer !== undefined) clearTimeout(chatSearchTimer);
       const queryChanged = query !== lastChatSearchQuery;
       lastChatSearchQuery = query;
       if (!open || !query.trim()) {
+        chatSearchRequest += 1;
         deps.setChatSearchMatches([]);
         if (remoteMessageIds.length > 0) deps.setChatSearchMessageIds([]);
         deps.setChatSearchTotal(0);
@@ -116,7 +129,7 @@ export function createSearchStore(deps: SearchStoreDeps) {
       if (!match) return;
       deps.revealMatch();
       match.message.scrollIntoView({
-        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
         block: "center",
         inline: "nearest",
       });
@@ -124,6 +137,7 @@ export function createSearchStore(deps: SearchStoreDeps) {
   );
 
   onCleanup(() => {
+    chatSearchRequest += 1;
     if (chatSearchFrame !== undefined) cancelAnimationFrame(chatSearchFrame);
     if (chatSearchTimer !== undefined) clearTimeout(chatSearchTimer);
     clearChatSearchHighlights();
@@ -141,6 +155,7 @@ export function createSearchStore(deps: SearchStoreDeps) {
   }
 
   function closeChatSearch(restoreFocus = true): void {
+    chatSearchRequest += 1;
     deps.setChatSearchOpen(false);
     deps.setChatSearchQuery("");
     deps.setChatSearchMatches([]);
@@ -170,9 +185,10 @@ export function createSearchStore(deps: SearchStoreDeps) {
   }
 
   function handleChatSearchShortcut(event: KeyboardEvent): void {
+    if (event.defaultPrevented) return;
     const primaryModifier = event.metaKey || event.ctrlKey;
     const key = event.key.toLocaleLowerCase();
-    if (primaryModifier && !event.altKey && !event.shiftKey && key === "f") {
+    if (matchesShortcut(event, "searchChat")) {
       event.preventDefault();
       event.stopPropagation();
       openChatSearch();

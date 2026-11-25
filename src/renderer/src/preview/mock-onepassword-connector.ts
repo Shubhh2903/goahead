@@ -5,7 +5,6 @@ import {
   type OnePasswordSetup,
 } from "@openbot/contracts/ipc";
 
-/** How long the mock CLI takes to download, and to create the vault and the service account. */
 const MOCK_INSTALL_MS = 1_500;
 const MOCK_CONNECT_MS = 1_500;
 
@@ -19,18 +18,12 @@ const CONNECTED: OnePasswordConnectorStatus = {
   loginCount: 3,
 };
 
-/**
- * Starts with no CLI. Install puts one in place after a moment. Open 1Password stands for the user
- * turning on the CLI integration, which the next check finds. Connect then asks for one of two
- * accounts, as a CLI signed in to several does, and connects. A pasted token connects at once.
- */
 export function createMockOnePasswordConnector(): OnePasswordConnectorDesktopApi {
   let status: OnePasswordConnectorStatus = {
     ...DISCONNECTED_ONEPASSWORD_CONNECTOR,
     setup: { cli: "missing", cliVersion: null, canInstall: true, appIntegration: null },
   };
   let appOpened = false;
-  /** Each connect, cancel and disconnect replaces the connection that a connect waits for. */
   let attempt = 0;
   const listeners = new Set<(status: OnePasswordConnectorStatus) => void>();
   const set = (next: OnePasswordConnectorStatus): OnePasswordConnectorStatus => {
@@ -42,7 +35,7 @@ export function createMockOnePasswordConnector(): OnePasswordConnectorDesktopApi
     ...DISCONNECTED_ONEPASSWORD_CONNECTOR,
     setup: status.setup,
   });
-  return {
+  const api = {
     status: async () => ({ ...status }),
     checkSetup: async () => {
       if (status.setup.cli !== "ready") return { ...status };
@@ -73,7 +66,7 @@ export function createMockOnePasswordConnector(): OnePasswordConnectorDesktopApi
       if (current !== attempt) return { ...status };
       return set(CONNECTED);
     },
-    connectWithToken: async () => {
+    connectWithToken: async (_token: string) => {
       attempt += 1;
       return set({ ...CONNECTED, setup: status.setup });
     },
@@ -85,9 +78,15 @@ export function createMockOnePasswordConnector(): OnePasswordConnectorDesktopApi
       attempt += 1;
       return set(disconnected());
     },
-    onChanged: (listener) => {
+    onChanged: (listener: (status: OnePasswordConnectorStatus) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+  } satisfies Omit<OnePasswordConnectorDesktopApi, `host${string}`>;
+  return {
+    ...api,
+    hostStatus: api.status,
+    hostConnectWithToken: ({ token }) => api.connectWithToken(token),
+    hostDisconnect: api.disconnect,
   };
 }

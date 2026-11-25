@@ -1,6 +1,7 @@
-import { APP_LOADING_FPS, APP_LOADING_LOOP_S, AppLoadingScreen } from "@openbot/ui/features/account/AppLoadingScreen";
+import { AppLoadingScreen } from "@openbot/ui/features/account/AppLoadingScreen";
+import { ConversationLoadNotice, ServerConnectionNotice } from "@openbot/ui/features/servers/ServerConnectionNotice";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
-import { SplashPlayground } from "./splash-concept";
+import { SplashPlayground } from "./splash-story-support";
 
 interface LoadingStoryArgs {
   readyAfterMs: number;
@@ -27,22 +28,80 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** The crew hops while the app loads, then jumps out of the screen. */
 export const Sequence: Story = {};
 
-/** The app is ready at once, so the screen only fades. */
 export const FastLoad: Story = { args: { readyAfterMs: 300 } };
 
-/** The screen never finishes, so the loop and every status line can be inspected. */
 export const Loading: Story = {
   render: () => <AppLoadingScreen />,
 };
 
-/** One frame of the loop. The same time always shows the same frame. */
-export const Scrub: StoryObj<{ at: number }> = {
-  args: { at: 1.5 },
-  argTypes: {
-    at: { control: { type: "range", min: 0, max: APP_LOADING_LOOP_S * 3, step: 1 / APP_LOADING_FPS } },
-  },
-  render: (args) => <AppLoadingScreen at={args.at} />,
+export const QuietLoading: Story = {
+  render: () => <AppLoadingScreen scene="quiet" title="Loading GoAhead" />,
+};
+
+export const QuietStartingServer: Story = {
+  render: () => (
+    <ServerConnectionNotice name="My server" phase="waking" initial loadingScene="quiet" onRetry={() => {}} />
+  ),
+};
+
+export const Seeded: StoryObj<{ seed: number }> = {
+  args: { seed: 7 },
+  argTypes: { seed: { control: { type: "number", min: 0, step: 1 } } },
+  render: (args) => <AppLoadingScreen seed={args.seed} />,
+};
+
+export const HistoryLoading: Story = {
+  render: () => <ConversationLoadNotice name="Research agent" loading error={null} onRetry={() => {}} />,
+};
+
+export const StartingServer: Story = {
+  render: () => <ServerConnectionNotice name="My server" phase="waking" initial onRetry={() => {}} />,
+};
+export const StartingOpenBot: Story = {
+  render: () => (
+    <ServerConnectionNotice
+      name="My server"
+      phase="waking"
+      start={{ step: "openbot", startedAt: Date.now() - 4 * 60_000 }}
+      initial
+      onRetry={() => {}}
+    />
+  ),
+};
+export const StartRestoring: Story = {
+  render: () => (
+    <ServerConnectionNotice
+      name="My server"
+      phase="waking"
+      start={{ step: "restore", startedAt: Date.now() - 3 * 60_000 }}
+      initial
+      onRetry={() => {}}
+    />
+  ),
+};
+export const StartRateLimited: Story = {
+  render: () => (
+    <ServerConnectionNotice
+      name="My server"
+      phase="waking"
+      start={{ step: "provider_limit", startedAt: Date.now() - 45_000 }}
+      initial={false}
+      onRetry={() => {}}
+    />
+  ),
+};
+export const UpdatingServer: Story = {
+  render: () => <ServerConnectionNotice name="My server" phase="updating" initial={false} onRetry={() => {}} />,
+};
+export const StartFailed: Story = {
+  render: () => (
+    <ServerConnectionNotice name="My server" phase="blocked" issue="start_timeout" initial onRetry={() => {}} />
+  ),
+};
+export const Reconnecting: Story = {
+  render: () => (
+    <ServerConnectionNotice name="My server" phase="waiting" remainingSeconds={12} initial={false} onRetry={() => {}} />
+  ),
 };

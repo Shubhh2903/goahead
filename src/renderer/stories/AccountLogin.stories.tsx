@@ -13,6 +13,9 @@ const args: Parameters<typeof AccountLogin>[0] = {
   onRequestEmailCode: async () => undefined,
   onVerifyEmailCode: async () => undefined,
   onReset: async () => undefined,
+  inviteField: true,
+  language: "en",
+  onChangeLanguage: fn(),
 };
 
 const meta = {
@@ -38,6 +41,10 @@ function codeSentState(overrides: Partial<Extract<CentralAuthState, { status: "c
 }
 
 export const SignIn: Story = {};
+
+export const FromInviteLink: Story = {
+  args: { initialInviteCode: "b5c9ygn2" },
+};
 
 export const Interactive: Story = {
   render: (storyArgs) => {
@@ -89,6 +96,10 @@ export const Interactive: Story = {
       },
     },
   },
+};
+
+export const KeyringChanged: Story = {
+  args: { state: { status: "signed_out", reason: "keyring_changed" } },
 };
 
 export const SendingCode: Story = {

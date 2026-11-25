@@ -10,18 +10,11 @@ import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
 import { requireFixture, STORY_AGENTS } from "./fixtures";
 
-/*
- * The chat record of a routine an agent created or changed. The person moves the run from the
- * chat with the same chip row the routine settings use. `onChange` is a spy here; in the app,
- * `RoutineChatCard` saves each change. The card is a variant of "Conversation/Chat action card".
- */
-
 const STORY_TODAY = new Date(2026, 8, 24, 10, 0);
 const chief = requireFixture(STORY_AGENTS[0], "Story agent 0");
 
 type CardArgs = Omit<RoutineScheduleCardProps, "onChange"> & { onChange: (schedule: RoutineScheduleDraft) => void };
 
-/** Holds the schedule, so a chip change redraws the row the way a saved update will. */
 function CardStage(props: CardArgs & { editable?: boolean }) {
   const [schedule, setSchedule] = createSignal(() => props.schedule);
   return (
@@ -59,7 +52,7 @@ const meta = {
   },
   argTypes: {
     action: { control: "inline-radio", options: ["created", "updated"] },
-    state: { control: "select", options: ["idle", "saving", "saved", "error", "deleted", "superseded"] },
+    state: { control: "select", options: ["idle", "saving", "saved", "error", "deleted"] },
   },
   parameters: { layout: "centered", a11y: { test: "error" } },
 } satisfies Meta<CardArgs>;
@@ -82,12 +75,16 @@ export const Saving: Story = { args: { state: "saving" } };
 
 export const Saved: Story = { args: { action: "updated", state: "saved" } };
 
-/** A later card changed this routine. This one keeps the old schedule as a record only. */
-export const Superseded: Story = {
-  args: { state: "superseded", nextRunLabel: undefined, onShowLatest: fn() },
+export const PausedByItsRun: Story = {
+  args: {
+    action: "updated",
+    routineName: "Check buyer chats",
+    schedule: { kind: "custom", expression: "0 8-22/2 * * *" },
+    nextRunLabel: undefined,
+    pausedLabel: "Paused by its 8:00 AM run",
+  },
 };
 
-/** The routine runs in a zone that is not the viewer's, for example a teammate's computer. */
 export const OtherTimeZone: Story = { args: { timeZoneLabel: "Warsaw time" } };
 
 export const SaveError: Story = {
@@ -118,7 +115,6 @@ const reply = message(
   "9:59 AM",
 );
 
-/** The card between the request and the reply, at the width of a chat. */
 export const InConversation: Story = {
   parameters: { layout: "fullscreen" },
   render: (args) => (

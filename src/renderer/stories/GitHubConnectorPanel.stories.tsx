@@ -2,11 +2,13 @@ import type { GitHubConnectorRepositories, GitHubConnectorStatus } from "@openbo
 import { GitHubConnectorPanel } from "@openbot/ui/features/settings/GitHubConnectorPanel";
 import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
+import { SettledArgs } from "./settled-args";
 
 const meta = {
   title: "Settings/GitHubConnectorPanel",
   component: GitHubConnectorPanel,
   parameters: { layout: "padded", a11y: { test: "error" } },
+  render: (args) => <SettledArgs>{() => <GitHubConnectorPanel {...args} />}</SettledArgs>,
 } satisfies Meta<typeof GitHubConnectorPanel>;
 
 export default meta;
@@ -54,19 +56,16 @@ export const Pending: Story = {
   args: args({ state: "pending", userCode: "WDJB-MJHT", verificationUri: "https://github.com/login/device" }),
 };
 
-/** GitHub has not answered the device code request yet. */
 export const PendingWithoutCode: Story = { args: args({ state: "pending" }) };
 
 export const Connected: Story = { args: args({ state: "connected", login: "octocat" }) };
 
-/** The first repository list has not arrived. */
 export const ConnectedLoading: Story = { args: args({ state: "connected", login: "octocat" }, false, null) };
 
 export const ConnectedWithoutRepositories: Story = {
   args: args({ state: "connected", login: "octocat" }, false, { repositories: [], total: 0 }),
 };
 
-/** The list stops at a limit. The rest is a count. */
 export const ConnectedWithMoreRepositories: Story = {
   args: args({ state: "connected", login: "octocat" }, false, { ...REPOSITORIES, total: 540 }),
 };

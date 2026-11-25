@@ -1,19 +1,12 @@
+import { ROUTINE_QUIET_ANSWER_ITEM_TYPE } from "@openbot/contracts/ipc";
 import type { AgentMessage, AgentMessageMarkerModel } from "@openbot/ui/data";
-import { dayMarkerLabel } from "./chat-day-markers";
+import { dayMarkerLabel } from "@openbot/ui/features/conversation/chat-day-markers";
 
 interface AgentMessageRow {
   message: AgentMessage;
   marker: AgentMessageMarkerModel;
 }
 
-/**
- * Joins consecutive messages to and from other agents into one row, so a long exchange between
- * agents does not fill the chat. The row keeps the id of the first message, so it stays the same row
- * while the exchange grows. The stored messages stay unchanged.
- *
- * A run stops at the first unread message and at a new day, so the unread divider and the day
- * separator keep a row of their own.
- */
 export function groupAgentMessageMarkers(
   messages: readonly AgentMessage[],
   firstUnreadMessageId?: string | null,
@@ -55,10 +48,42 @@ export function groupAgentMessageMarkers(
   return rows;
 }
 
-/**
- * A message with attachments draws them under its marker, so it keeps a row of its own. So does a
- * request this agent sent to teammates: it can draw hand-off cards with their live status.
- */
+export function markOpenAgentMessages(
+  messages: readonly AgentMessage[],
+  open: ReadonlySet<string>,
+  answers: ReadonlyMap<string, readonly AgentMessage[]>,
+): AgentMessage[] {
+  return messages.map((message) => {
+    const marker = message.actionMarker;
+    if (marker?.kind !== "agent-message") return message;
+    if (message.body.trim() === "" && !answers.has(marker.messageId)) return message;
+    return { ...message, actionMarker: { ...marker, expanded: open.has(marker.messageId) } };
+  });
+}
+
+export function teammateTurnAnswers(messages: readonly AgentMessage[]): Map<string, AgentMessage[]> {
+  const updateByTurn = new Map<string, string>();
+  for (const message of messages) {
+    const exchange = message.exchange;
+    if (
+      message.turnId &&
+      exchange?.direction === "incoming" &&
+      (exchange.expectsReply === false || !exchange.replyToMessageId)
+    )
+      updateByTurn.set(message.turnId, exchange.messageId);
+  }
+  const answers = new Map<string, AgentMessage[]>();
+  if (updateByTurn.size === 0) return answers;
+  for (const message of messages) {
+    const exchangeId = message.turnId && updateByTurn.get(message.turnId);
+    if (!exchangeId || message.itemType !== ROUTINE_QUIET_ANSWER_ITEM_TYPE) continue;
+    const turnAnswers = answers.get(exchangeId) ?? [];
+    turnAnswers.push(message);
+    answers.set(exchangeId, turnAnswers);
+  }
+  return answers;
+}
+
 function groupableMarker(message: AgentMessage): AgentMessageMarkerModel | null {
   if (message.actionMarker?.kind !== "agent-message") return null;
   if (message.exchange?.direction === "incoming" && (message.attachments?.length ?? 0) > 0) return null;
@@ -66,13 +91,14 @@ function groupableMarker(message: AgentMessage): AgentMessageMarkerModel | null 
   return message.actionMarker;
 }
 
-function startsDay(previous: AgentMessage, current: AgentMessage): boolean {
+export function startsDay(previous: AgentMessage, current: AgentMessage): boolean {
   return current.createdAt !== undefined && dayMarkerLabel(previous.createdAt, current.createdAt) !== null;
 }
 
-/** The ids of the messages in a group row, separated by spaces, so a search or focus request finds the row. */
 export function groupedMessageIds(message: AgentMessage | undefined): string | undefined {
   const marker = message?.actionMarker;
-  if (marker?.kind !== "agent-message-group") return undefined;
-  return marker.messages.map((entry) => entry.id).join(" ");
+  if (marker?.kind === "agent-message-group") return marker.messages.map((entry) => entry.id).join(" ");
+  if (marker?.kind === "routine-run-group") return marker.runs.map((entry) => entry.id).join(" ");
+  if (marker?.kind === "skill-lifecycle") return marker.installMessageIds?.join(" ");
+  return undefined;
 }

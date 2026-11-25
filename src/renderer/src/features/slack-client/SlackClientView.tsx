@@ -48,7 +48,9 @@ function SlackClientLayout() {
         ...(thread === null ? {} : { threadTs: thread, ...(broadcast === undefined ? {} : { broadcast }) }),
       });
     },
-    onAsk: async (text) => selectAgent(await client.askOrchestrator(text)),
+    onAsk: async (text) => {
+      selectAgent(await client.askOrchestrator(text));
+    },
     onMentionSearch: client.mentionCandidates,
     onAttach: (text) => client.attach(threadTs(), text),
     onDropFile: (file, text) => client.uploadFile(file, threadTs(), text),

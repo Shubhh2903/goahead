@@ -7,21 +7,36 @@
   color: var(--openbot-text-primary);
   background: var(--openbot-bg-canvas);
 }
+
+:root[data-openbot-window-glass] .web-app {
+  background: transparent;
+}
 .web-app-frame {
   min-width: 0;
   height: 100%;
 }
 
-/* The browser has no window controls, so the rail starts at the top. */
-.web-app-frame > .server-rail {
+.web-slow-load-notice {
+  position: fixed;
+  z-index: var(--openbot-layer-toast);
+  bottom: var(--openbot-space-6);
+  left: 50%;
+  width: min(356px, calc(100vw - 2 * var(--openbot-space-4)));
+  translate: -50% 0;
+}
+
+.web-app-frame > .server-rail,
+.web-other-tab-window > .server-rail {
   padding-top: var(--openbot-space-3);
 }
 
-.web-app-frame > .server-rail::before {
+.web-app-frame > .server-rail::before,
+.web-other-tab-window > .server-rail::before {
   display: none;
 }
 
-.web-app-frame > .server-rail::after {
+.web-app-frame > .server-rail::after,
+.web-other-tab-window > .server-rail::after {
   top: 0;
 }
 
@@ -29,10 +44,73 @@
   display: none;
 }
 
+.web-phone-app-stores {
+  width: 100%;
+  display: grid;
+  gap: var(--openbot-space-3);
+  margin-top: 30px;
+}
+
+.web-phone-app-store {
+  width: 100%;
+  height: 44px;
+}
+
+.web-phone-app-store-logo {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.web-phone-app-continue {
+  margin-top: var(--openbot-space-4);
+  color: var(--openbot-text-muted);
+}
+
+.web-consent-row.first-run-choice-improve {
+  align-items: flex-start;
+  border-top: 0;
+  padding: var(--openbot-space-1) 0 0;
+}
+
+.web-consent-row .ui-checkbox {
+  margin-top: 1px;
+}
+
+.account-login-legal .first-run-consent-notice {
+  width: auto;
+  margin: 0;
+}
+
+.web-consent-row .first-run-choice-improve-pop {
+  top: 0;
+  inset-inline-end: 0;
+}
+
+.web-app-window[data-loading-waited-long] > .app-loading {
+  z-index: var(--openbot-layer-dropdown);
+}
+
+.web-app-window[data-loading-waited-long] > .window-rail {
+  z-index: calc(var(--openbot-layer-dropdown) + 1);
+  background: var(--window-frame);
+}
+
 @media (max-width: 720px) {
-  .web-app-frame {
+  .web-app-window {
     --web-mobile-navigation-height: 64px;
-    /* The workspace pane gives the rail a 56px column, also in the macOS geometry. */
+  }
+
+  .web-app-window:has(> .web-app-frame[data-web-mobile-pane="workspace"]) > .window-rail {
+    display: flex;
+    padding-bottom: calc(
+      var(--web-mobile-navigation-height) +
+      env(safe-area-inset-bottom, 0px) +
+      var(--openbot-space-3)
+    );
+  }
+
+  .web-app-frame {
     --server-rail-width: 56px;
 
     grid-template-columns: minmax(0, 1fr);
@@ -44,12 +122,10 @@
   }
 
   .web-app-frame[data-web-mobile-pane="conversation"] > .server-rail,
-  .web-app-frame[data-web-mobile-pane="conversation"] > .sidebar,
-  .web-app-frame[data-web-mobile-pane="conversation"] > .account-dock {
+  .web-app-frame[data-web-mobile-pane="conversation"] > .sidebar {
     display: none;
   }
 
-  /* One pane at a time leaves nothing to resize. */
   .web-app-frame > .left-panel-resizer {
     display: none;
   }
@@ -65,7 +141,8 @@
   }
 
   .web-app-frame[data-web-mobile-pane="workspace"] .conversation-panel,
-  .web-app-frame[data-web-mobile-pane="workspace"] .remote-compatibility-screen {
+  .web-app-frame[data-web-mobile-pane="workspace"] .remote-compatibility-screen,
+  .web-app-frame[data-web-mobile-pane="workspace"] > .server-connection-workspace {
     display: none;
   }
 
@@ -82,19 +159,12 @@
     width: auto;
   }
 
-  /* The server menu view draws no rail, so the sidebar takes the full width. */
   .web-app-frame[data-web-mobile-pane="workspace"]:not(.app-frame-with-server-rail) {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .web-app-frame[data-web-mobile-pane="workspace"]:not(.app-frame-with-server-rail) > .sidebar {
     grid-column: 1;
-  }
-
-  .web-app-frame[data-web-mobile-pane="workspace"] > .account-dock {
-    display: block;
-    width: 100%;
-    bottom: calc(var(--web-mobile-navigation-height) + env(safe-area-inset-bottom, 0px));
   }
 
   .web-mobile-navigation {
@@ -160,22 +230,58 @@
     max-width: 132px;
   }
 
-  .web-app-frame[data-web-mobile-pane="conversation"] .agent-settings-runtime .provider-model-trigger-field {
-    width: 100%;
-    max-width: none;
-  }
-
-  .web-app-frame[data-web-mobile-pane="conversation"] .conversation-panel:has(.settings-panel) .settings-panel {
+  .web-app-frame[data-web-mobile-pane="conversation"] .conversation-panel[data-settings-panel] .settings-panel {
     width: 100%;
   }
 
   .web-app-frame[data-web-mobile-pane="conversation"] .conversation-panel.browser-panel-active {
-    padding-right: 0;
+    padding-inline-end: 0;
   }
 
   .web-app-frame[data-web-mobile-pane="conversation"] .browser-panel {
     width: 100%;
     max-width: 100%;
+  }
+
+  .web-app-frame[data-web-mobile-pane="conversation"]
+    .side-panel-docked:not(.side-panel-maximized)
+    > .conversation-header {
+    width: 100%;
+  }
+
+  .web-app-frame[data-web-mobile-pane="conversation"]
+    .side-panel-docked
+    > :is(.conversation-scroll, .composer-wrap, .unread-messages-banner, .chat-search, .subagents-dock) {
+    visibility: hidden;
+  }
+
+  .web-app-frame[data-web-mobile-pane="conversation"] .side-panel-docked > .side-panel-header {
+    width: 100%;
+  }
+
+  .web-app-frame[data-web-mobile-pane="conversation"]
+    .side-panel-docked:not(.side-panel-maximized)
+    > .side-panel-header {
+    top: var(--left-header-height, 38px);
+  }
+
+  .web-app-frame[data-web-mobile-pane="conversation"] .side-panel-docked > .side-panel-header::before,
+  .web-app-frame[data-web-mobile-pane="conversation"] .side-panel-docked .right-panel-resizer {
+    display: none;
+  }
+
+  .web-app-frame[data-web-mobile-pane="conversation"]
+    .side-panel-docked:not(.side-panel-maximized)
+    > :is(.browser-panel, .settings-panel) {
+    top: calc(2 * var(--left-header-height, 38px));
+  }
+
+  .web-app-frame[data-web-mobile-pane="conversation"] .side-panel-docked:has(> .side-panel-empty) > .side-panel-header {
+    display: none;
+  }
+
+  .web-app-frame[data-web-mobile-pane="conversation"] .side-panel-docked:has(> .side-panel-empty) > .side-panel-empty {
+    top: var(--left-header-height, 38px);
   }
 
   .web-app .join-server-backdrop {
@@ -197,7 +303,6 @@
   }
 }
 
-/* Takes the conversation-panel grid cell, so it follows the same desktop and mobile placement. */
 .web-connect.conversation-panel {
   display: grid;
   place-items: center;
@@ -291,7 +396,6 @@
   gap: var(--openbot-space-3);
 }
 
-/* Side by side; the buttons stack when the card is too narrow for both labels. */
 .web-connect-primary-actions {
   display: flex;
   width: 100%;
@@ -304,20 +408,30 @@
   flex: 1 1 0;
 }
 
-/* The public site sets `a { color: inherit }`, which beats the zero-specificity button colour. */
-.web-connect-download.ui-button,
-.web-connect-download.ui-button:hover {
+.web-connect-download.ui-button-variant-default,
+.web-connect-download.ui-button-variant-default:hover {
   color: var(--openbot-text-on-light);
 }
 
-.web-host-offline-reconnect.ui-button {
-  min-width: 160px;
+.web-connect-download.ui-button-variant-outline {
+  color: var(--openbot-text-secondary);
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 601px) {
+  .web-connect-download.ui-button-variant-outline:hover {
+    color: var(--openbot-text-primary);
+  }
+}
+
+.web-connect-hosted.ui-button {
+  width: 100%;
 }
 
 .web-connect-refresh.ui-button {
   color: var(--openbot-text-muted);
 }
 
+.web-connect-hosted.ui-button svg,
 .web-connect-actions .ui-button svg {
   width: var(--openbot-icon-md);
   height: var(--openbot-icon-md);
@@ -328,4 +442,19 @@
 .web-connect-refresh.ui-button svg {
   width: var(--openbot-icon-sm);
   height: var(--openbot-icon-sm);
+}
+
+.web-other-tab-window {
+  display: flex;
+  height: 100%;
+}
+
+.web-other-tab.web-connect.conversation-panel {
+  height: 100%;
+  flex: 1;
+  min-width: 0;
+}
+
+.web-other-tab-use.ui-button {
+  min-width: 200px;
 }

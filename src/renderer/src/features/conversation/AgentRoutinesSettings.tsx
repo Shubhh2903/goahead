@@ -1,23 +1,36 @@
+import {
+  type EventFilterDraft,
+  eventFilterDraft,
+  eventFilterDraftsValid,
+  eventFiltersFromDrafts,
+} from "@openbot/contracts/event-filter-value";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   ROUTINE_LIMIT_POLICIES,
   ROUTINE_MISSED_POLICIES,
   ROUTINE_RUN_CONDITION_COMMAND_LIMIT,
   ROUTINE_RUN_CONDITION_MODES,
-  type RoutineFields,
   type RoutineLimitPolicy,
   type RoutineMissedPolicy,
+  type RoutineResultConnectionOption,
+  type RoutineResultDelivery,
+  type RoutineResultDestination,
+  type RoutineRunCondition,
   type RoutineRunConditionMode,
   type RoutineRunFields,
+  type RoutineRunPlace,
   type RoutineSchedule,
 } from "@openbot/contracts/ipc";
+import type { RoutineWebhookTriggerInput, WebhookTestResult } from "@openbot/contracts/ipc-events";
 import type { AppTextKey } from "@openbot/i18n";
 import {
   Button,
-  CirclePause,
+  CircleCheck,
   Clock3,
   ConfirmDialog,
   Input,
+  ItemGroup,
+  Link,
   Plus,
   Select,
   SelectContent,
@@ -25,34 +38,52 @@ import {
   SelectTrigger,
   SelectValue,
   Switch,
+  SwitchField,
   Text,
   Textarea,
   toast,
+  Webhook,
 } from "@openbot/ui";
 import { createScrollFades } from "@openbot/ui/components/createScrollFades";
 import { SettingsBackIcon, SettingsForwardIcon } from "@openbot/ui/components/SettingsPanel";
+import {
+  type RoutineResultChoice,
+  RoutineResultDestinationField,
+} from "@openbot/ui/features/conversation/RoutineResultDestinationField";
 import { RoutineRunHistory } from "@openbot/ui/features/conversation/RoutineRunHistory";
 import { RoutineSchedulePicker } from "@openbot/ui/features/conversation/RoutineSchedulePicker";
+import { RoutineTriggerMenu } from "@openbot/ui/features/conversation/RoutineTriggerMenu";
+import {
+  RoutineWebhookTrigger,
+  type RoutineWebhookTriggerProps,
+} from "@openbot/ui/features/conversation/RoutineWebhookTrigger";
 import {
   ROUTINE_EVERY_DAY,
   type RoutineScheduleDraft,
-  routineDraftSummary,
+  switchDraftKind,
 } from "@openbot/ui/features/conversation/routine-schedule-draft";
 import {
+  ROUTINE_LOCAL_DRAFT_KINDS,
   ROUTINE_SAVED_DRAFT_KINDS,
   routineDraftProblem,
+  routineOnceCompleted,
+  routineOncePassed,
   routineScheduleFromDraft,
   routineScheduleToDraft,
 } from "@openbot/ui/features/conversation/routine-schedule-saved";
-import { type RoutineText, routineScheduleSummary } from "@openbot/ui/features/conversation/routine-schedule-ui";
 import { useText } from "@openbot/ui/text";
-import { createEffect, createSignal, For, onCleanup, Show, untrack } from "solid-js";
-import { type DesktopAnalyticsScope, desktopAnalytics } from "../../analytics";
+import type { JSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, createStore, For, onCleanup, Show, untrack } from "solid-js";
+import { actionToast } from "../../action-toast";
+import { desktopAnalytics } from "../../analytics";
 import { writeClipboardText } from "../../clipboard";
-import type { RoutinesPort } from "./routines-port";
+import { HostedUpsellRoutinesNotice, hostedUpsellRoutineCreated } from "../servers/hosted-server-upsell-controller";
+import { trackRoutineAction } from "./routine-analytics";
+import { isEventRoutine, routineListSummary, routinePausedByRunLabel, routineScheduleOf } from "./routine-summary";
+import type { RoutineEditorRecord, RoutinesPort } from "./routines-port";
 
 export interface RoutineSelectionRequest {
-  routineId: string;
+  routineId: string | null;
   routineName: string;
   nonce: number;
 }
@@ -60,33 +91,50 @@ export interface RoutineSelectionRequest {
 type PendingRoutineExit =
   | "list"
   | "close"
-  | { kind: "routine-selection"; routine: RoutineFields | null; routineName: string }
-  | { kind: "conversation-message"; messageId: string };
+  | "new"
+  | { kind: "routine-selection"; routine: RoutineEditorRecord | null; routineName: string }
+  | { kind: "conversation-message"; messageId: string; routineId: string | null }
+  | { kind: "routine-thread"; routineId: string }
+  | { kind: "leave"; leave: () => void };
+
+export type DetailLeaveGuard = (leave: () => void) => void;
 
 interface RoutineDraft {
   id: string | null;
   name: string;
   instruction: string;
   active: boolean;
-  /** Saved as it is until the user changes a chip, so a rename keeps a schedule the chips cannot show. */
   schedule: RoutineSchedule;
   scheduleDraft: RoutineScheduleDraft;
   limitPolicy: RoutineLimitPolicy;
   missedPolicy: RoutineMissedPolicy;
-  /** Empty for no run condition. */
   conditionCommand: string;
   conditionWhen: RoutineRunConditionMode;
+  runIn: RoutineRunPlace;
+  triggerKind: "schedule" | "webhook";
+  eventType: string;
+  eventFilters: EventFilterDraft[];
+  destination: RoutineResultChoice | null | undefined;
 }
+
+interface WebhookEditorState {
+  secret: string | null;
+  connected: boolean | null;
+}
+
+const LIMIT_POLICY_LABELS = {
+  wait: "routine.settings.limitPolicy.wait",
+  skip: "routine.settings.limitPolicy.skip",
+} as const satisfies Record<RoutineLimitPolicy, AppTextKey>;
 
 const RUN_CONDITION_LABELS = {
   "output-changes": "routine.settings.runConditionWhen.outputChanges",
   "exit-zero": "routine.settings.runConditionWhen.exitZero",
 } as const satisfies Record<RoutineRunConditionMode, AppTextKey>;
 
-const LIMIT_POLICY_LABELS = {
-  wait: "routine.settings.limitPolicy.wait",
-  skip: "routine.settings.limitPolicy.skip",
-} as const satisfies Record<RoutineLimitPolicy, AppTextKey>;
+function routineRunCondition(routine: RoutineEditorRecord | null | undefined): RoutineRunCondition | undefined {
+  return routine && "runCondition" in routine ? routine.runCondition : undefined;
+}
 
 const MISSED_POLICY_LABELS = {
   skip: "routine.settings.missedPolicy.skip",
@@ -96,38 +144,56 @@ const MISSED_POLICY_LABELS = {
 const NEW_ROUTINE_SCHEDULE: RoutineScheduleDraft = { kind: "daily", days: ROUTINE_EVERY_DAY, time: "09:00" };
 
 interface AgentRoutinesSettingsProps {
-  /** Names the owner and owns every call. A channel passes `channelRoutinesPort` here. */
   port: RoutinesPort;
   onCountChange: (count: number) => void;
-  onBack?: () => void;
-  onClose?: () => void;
-  selectionRequest?: RoutineSelectionRequest | null;
-  onSelectionRequestHandled?: (nonce: number) => void;
-  onOpenRun?: (messageId: string) => void;
+  onBack?: (() => void) | undefined;
+  onClose?: (() => void) | undefined;
+  registerLeaveGuard?: ((guard: DetailLeaveGuard | null) => void) | undefined;
+  selectionRequest?: RoutineSelectionRequest | null | undefined;
+  onSelectionRequestHandled?: ((nonce: number) => void) | undefined;
+  onOpenRun?: ((messageId: string, routineId?: string) => void) | undefined;
+  onOpenThread?: ((routineId: string) => Promise<boolean>) | undefined;
+  agentName?: string | undefined;
+}
+
+function codeUnitOrder(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
 }
 
 export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
   const text = useText();
   const { t, errorMessage } = text;
-  const [routines, setRoutines] = createSignal<RoutineFields[]>([]);
+  const [routines, setRoutines] = createSignal<RoutineEditorRecord[]>([]);
+  const listedRoutines = createMemo(() =>
+    [...routines()].sort((a, b) => codeUnitOrder(b.createdAt, a.createdAt) || codeUnitOrder(a.id, b.id)),
+  );
   const [draft, setDraft] = createSignal<RoutineDraft | null>(null);
   const [runs, setRuns] = createSignal<RoutineRunFields[]>([]);
+  const [resultOptions, setResultOptions] = createSignal<RoutineResultConnectionOption[]>([]);
+  const [savedDestination, setSavedDestination] = createSignal<RoutineResultDestination | null>(null);
+  const [deliveries, setDeliveries] = createSignal<RoutineResultDelivery[]>([]);
+  const [webhook, setWebhook] = createStore<WebhookEditorState>({
+    secret: null,
+    connected: null,
+  });
   const [loading, setLoading] = createSignal(true);
   const [routinesLoaded, setRoutinesLoaded] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
   const [dirty, setDirty] = createSignal(false);
   const [testing, setTesting] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const [showErrors, setShowErrors] = createSignal(false);
   const [confirmDelete, setConfirmDelete] = createSignal(false);
+  const [deleting, setDeleting] = createSignal(false);
+  const [togglingIds, setTogglingIds] = createSignal<ReadonlySet<string>>(new Set());
   const [pendingExit, setPendingExit] = createSignal<PendingRoutineExit | null>(null);
   const scrollFades = createScrollFades();
   let draftRevision = 0;
-  // The saved routine the open draft started from. A field that still matches it is unedited.
-  let draftBase: RoutineFields | null = null;
+  let draftBase: RoutineEditorRecord | null = null;
 
   onCleanup(scrollFades.stop);
 
-  // Only the newest list applies: an older response can arrive after a save and undo it.
   let listRequest = 0;
 
   async function loadRoutines(): Promise<void> {
@@ -159,23 +225,72 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
     }
   }
 
+  async function loadResults(routineId: string): Promise<void> {
+    const results = props.port.results;
+    if (!results) return;
+    try {
+      const [destination, items] = await Promise.all([
+        results.destination(routineId),
+        results.deliveries?.(routineId) ?? Promise.resolve([]),
+      ]);
+      if (draft()?.id !== routineId) return;
+      setSavedDestination(destination);
+      setDeliveries(items);
+    } catch (caught) {
+      if (draft()?.id === routineId) setError(errorMessage(caught, t("routine.settings.resultDestination.loadFailed")));
+    }
+  }
+
+  async function loadResultOptions(): Promise<void> {
+    const results = props.port.results;
+    if (!results) return;
+    try {
+      setResultOptions(await results.options());
+    } catch (caught) {
+      setError(errorMessage(caught, t("routine.settings.resultDestination.loadFailed")));
+    }
+  }
+
+  function resetResults(): void {
+    setSavedDestination(null);
+    setDeliveries([]);
+  }
+
   createEffect(
     () => props.port,
     (port) =>
       port.subscribe(() => {
         void loadRoutines();
         const routineId = draft()?.id;
-        if (routineId) void loadRuns(routineId);
+        if (routineId) {
+          void loadRuns(routineId);
+          void loadResults(routineId);
+        }
       }),
   );
 
+  const ownerId = createMemo(() => props.port.ownerId);
+  createEffect(ownerId, () => {
+    closeEditor();
+    setLoading(true);
+    setRoutinesLoaded(false);
+    void untrack(loadRoutines);
+  });
+
   createEffect(
-    () => props.port.ownerId,
-    () => {
-      closeEditor();
-      setLoading(true);
-      setRoutinesLoaded(false);
-      void untrack(loadRoutines);
+    () => (draft()?.triggerKind === "webhook" ? props.port.events?.api : undefined),
+    (api) => {
+      if (!api) return;
+      void api.getStatus().then(
+        (status) =>
+          setWebhook((state) => {
+            state.connected = status.connected;
+          }),
+        () =>
+          setWebhook((state) => {
+            state.connected = null;
+          }),
+      );
     },
   );
 
@@ -192,9 +307,38 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
       lastSelectionRequestNonce = request.nonce;
       props.onSelectionRequestHandled?.(request.nonce);
       if (!loaded) return;
-      requestRoutineSelection(request, currentRoutines.find((routine) => routine.id === request.routineId) ?? null);
+      untrack(() => {
+        if (request.routineId === null) {
+          requestExit("new");
+          return;
+        }
+        requestRoutineSelection(request, currentRoutines.find((routine) => routine.id === request.routineId) ?? null);
+      });
     },
   );
+
+  const [waitingLeave, setWaitingLeave] = createSignal<(() => void) | null>(null);
+  function requestLeave(leave: () => void): void {
+    if (!draft()) {
+      leave();
+      return;
+    }
+    if (saving()) {
+      setWaitingLeave(() => leave);
+      return;
+    }
+    requestExit({ kind: "leave", leave });
+  }
+  createEffect(
+    () => ({ leave: waitingLeave(), saving: saving() }),
+    ({ leave, saving: isSaving }) => {
+      if (!leave || isSaving) return;
+      setWaitingLeave(null);
+      untrack(() => requestLeave(leave));
+    },
+  );
+  untrack(() => props.registerLeaveGuard?.(requestLeave));
+  onCleanup(() => props.registerLeaveGuard?.(null));
 
   createEffect(
     () => [draft(), routines().length, runs().length, loading(), confirmDelete(), error()] as const,
@@ -203,17 +347,17 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
     },
   );
 
-  /**
-   * Takes a change saved elsewhere, such as from a chat card, into each field the person did not
-   * edit here. Without it, the next Save would write the old values back.
-   */
-  function refreshDraft(routine: RoutineFields): void {
+  function refreshDraft(routine: RoutineEditorRecord): void {
     const base = draftBase;
     draftBase = routine;
     if (base?.id !== routine.id) return;
     setDraft((current) => {
       if (current?.id !== routine.id) return current;
-      const scheduleEdited = JSON.stringify(current.schedule) !== JSON.stringify(base.trigger.schedule);
+      const scheduleEdited = JSON.stringify(current.schedule) !== JSON.stringify(routineScheduleOf(base));
+      const triggerEdited = current.triggerKind !== routineTriggerKind(base);
+      const webhookEdited =
+        current.triggerKind === "webhook" &&
+        JSON.stringify(webhookTriggerOf(current)) !== JSON.stringify(webhookTriggerOf(base));
       return {
         ...current,
         name: current.name === base.name ? routine.name : current.name,
@@ -226,24 +370,20 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
             ? (routine.missedPolicy ?? "skip")
             : current.missedPolicy,
         conditionCommand:
-          current.conditionCommand === (base.runCondition?.command ?? "")
-            ? (routine.runCondition?.command ?? "")
+          current.conditionCommand === (routineRunCondition(base)?.command ?? "")
+            ? (routineRunCondition(routine)?.command ?? "")
             : current.conditionCommand,
         conditionWhen:
-          current.conditionWhen === (base.runCondition?.when ?? "output-changes")
-            ? (routine.runCondition?.when ?? "output-changes")
+          current.conditionWhen === (routineRunCondition(base)?.when ?? "output-changes")
+            ? (routineRunCondition(routine)?.when ?? "output-changes")
             : current.conditionWhen,
-        ...(scheduleEdited
-          ? {}
-          : {
-              schedule: structuredClone(routine.trigger.schedule),
-              scheduleDraft: routineScheduleToDraft(routine.trigger.schedule),
-            }),
+        runIn: current.runIn === (base.runIn ?? "chat") ? (routine.runIn ?? "chat") : current.runIn,
+        ...(triggerEdited || scheduleEdited || webhookEdited ? {} : triggerDraftOf(routine)),
       };
     });
   }
 
-  function openRoutine(routine: RoutineFields): void {
+  function openRoutine(routine: RoutineEditorRecord): void {
     draftBase = routine;
     setConfirmDelete(false);
     setError(null);
@@ -254,14 +394,20 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
       name: routine.name,
       instruction: routine.instruction,
       active: routine.active,
-      schedule: structuredClone(routine.trigger.schedule),
-      scheduleDraft: routineScheduleToDraft(routine.trigger.schedule),
       limitPolicy: routine.limitPolicy ?? "wait",
       missedPolicy: routine.missedPolicy ?? "skip",
-      conditionCommand: routine.runCondition?.command ?? "",
-      conditionWhen: routine.runCondition?.when ?? "output-changes",
+      conditionCommand: routineRunCondition(routine)?.command ?? "",
+      conditionWhen: routineRunCondition(routine)?.when ?? "output-changes",
+      runIn: routine.runIn ?? "chat",
+      ...triggerDraftOf(routine),
+      destination: undefined,
     });
+    resetWebhookState();
+    setShowErrors(false);
+    resetResults();
     void loadRuns(routine.id);
+    void loadResults(routine.id);
+    void loadResultOptions();
   }
 
   function createDraft(): void {
@@ -282,6 +428,21 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
       missedPolicy: "skip",
       conditionCommand: "",
       conditionWhen: "output-changes",
+      runIn: "chat",
+      triggerKind: "schedule",
+      eventType: "",
+      eventFilters: [],
+      destination: undefined,
+    });
+    resetWebhookState();
+    setShowErrors(false);
+    resetResults();
+    void loadResultOptions();
+  }
+
+  function resetWebhookState(): void {
+    setWebhook((state) => {
+      state.secret = null;
     });
   }
 
@@ -294,9 +455,12 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
     setDirty(false);
     setConfirmDelete(false);
     setPendingExit(null);
+    resetWebhookState();
+    setShowErrors(false);
+    resetResults();
   }
 
-  function requestRoutineSelection(request: RoutineSelectionRequest, routine: RoutineFields | null): void {
+  function requestRoutineSelection(request: RoutineSelectionRequest, routine: RoutineEditorRecord | null): void {
     const current = draft();
     if (routine && current?.id === routine.id) {
       if (!dirty()) openRoutine(routine);
@@ -325,7 +489,7 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
   }
 
   function requestOpenRun(messageId: string): void {
-    requestExit({ kind: "conversation-message", messageId });
+    requestExit({ kind: "conversation-message", messageId, routineId: draft()?.id ?? null });
   }
 
   function performExit(target: PendingRoutineExit): void {
@@ -338,8 +502,21 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
       props.onClose?.();
       return;
     }
+    if (target === "new") {
+      createDraft();
+      return;
+    }
     if (target.kind === "conversation-message") {
-      props.onOpenRun?.(target.messageId);
+      props.onOpenRun?.(target.messageId, target.routineId ?? undefined);
+      return;
+    }
+    if (target.kind === "routine-thread") {
+      void props.onOpenThread?.(target.routineId);
+      return;
+    }
+    if (target.kind === "leave") {
+      closeEditor();
+      target.leave();
       return;
     }
     closeEditor();
@@ -355,6 +532,12 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
     if (target) performExit(target);
   }
 
+  function reopened(value: RoutineDraft): RoutineDraft {
+    const base = draftBase;
+    if (value.active || value.schedule.kind !== "once" || !base || !routineCompleted(base)) return value;
+    return routineOncePassed(value.schedule, base.timezone) ? value : { ...value, active: true };
+  }
+
   function changeDraft(change: (current: RoutineDraft) => RoutineDraft): void {
     setDraft((current) => (current ? change(current) : current));
     draftRevision += 1;
@@ -363,7 +546,11 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
 
   async function saveDraft(): Promise<void> {
     const current = draft();
-    if (!current || !dirty() || !validDraft(current) || saving()) return;
+    if (!current || !dirty() || saving()) return;
+    if (!validDraft(current)) {
+      setShowErrors(true);
+      return;
+    }
     const savingRevision = draftRevision;
     setSaving(true);
     setError(null);
@@ -371,38 +558,99 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
     const action = current.id ? "update" : "create";
     const analytics = desktopAnalytics.scope();
     try {
-      const saved = await props.port.save({
+      const result = await props.port.save({
         routineId: current.id,
         name: current.name.trim(),
         instruction: current.instruction.trim(),
         active: current.active,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        timezone:
+          (current.id ? draftBase?.timezone : undefined) ?? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"),
         schedule: current.schedule,
+        trigger: webhookTriggerOf(current) ?? { kind: "schedule", schedule: current.schedule },
         limitPolicy: current.limitPolicy,
         missedPolicy: current.missedPolicy,
-        runCondition: current.conditionCommand.trim()
-          ? { command: current.conditionCommand.trim(), when: current.conditionWhen }
-          : null,
+        ...(props.port.runCondition
+          ? {
+              runCondition: current.conditionCommand.trim()
+                ? { command: current.conditionCommand.trim(), when: current.conditionWhen }
+                : null,
+            }
+          : {}),
+        ...(props.port.runIn && current.runIn !== ((current.id ? draftBase?.runIn : undefined) ?? "chat")
+          ? { runIn: current.runIn }
+          : {}),
       });
+      const saved =
+        props.port.runIn && result.routine.runIn === undefined
+          ? { ...result.routine, runIn: current.runIn }
+          : result.routine;
       setRoutines((items) => {
-        const next = [saved, ...items.filter((routine) => routine.id !== saved.id)];
+        const next = items.some((routine) => routine.id === saved.id)
+          ? items.map((routine) => (routine.id === saved.id ? saved : routine))
+          : [saved, ...items];
         props.onCountChange(next.length);
         return next;
       });
       setDraft((latest) => (latest && latest.id === current.id ? { ...latest, id: saved.id } : latest));
       if (draft()?.id === current.id) draftBase = saved;
-      if (draftRevision === savingRevision) setDirty(false);
+      const destinationSaved = await saveDestination(saved.id, current.destination);
+      const placeSaved = !props.port.runIn || saved.runIn === current.runIn;
+      if (!placeSaved) setError(t("routine.settings.runInSaveFailed"));
+      if (draftRevision === savingRevision && destinationSaved && placeSaved) setDirty(false);
       if (!current.id) void loadRuns(saved.id);
-      trackRoutineAction(analytics, action, current.schedule, startedAt, "succeeded");
+      if (result.secret && draft()?.id === saved.id) {
+        const secret = result.secret;
+        setWebhook((state) => {
+          state.secret = secret;
+        });
+      }
+      trackRoutineAction(analytics, action, current, startedAt, "succeeded");
+      if (action === "create" && saved.active) {
+        hostedUpsellRoutineCreated({ id: saved.id, name: saved.name, agentId: null });
+      }
     } catch (caught) {
-      trackRoutineAction(analytics, action, current.schedule, startedAt, "failed");
+      trackRoutineAction(analytics, action, current, startedAt, "failed", caught);
       setError(errorMessage(caught, t("routine.settings.saveFailed")));
     } finally {
       setSaving(false);
     }
   }
 
+  async function saveDestination(
+    routineId: string,
+    destination: RoutineResultChoice | null | undefined,
+  ): Promise<boolean> {
+    const results = props.port.results;
+    if (!results || destination === undefined) return true;
+    try {
+      const saved = await results.setDestination(routineId, destination);
+      if (draft()?.id !== routineId) return true;
+      setSavedDestination(saved);
+      setDraft((latest) => {
+        if (!latest || latest.id !== routineId || latest.destination !== destination) return latest;
+        return { ...latest, destination: undefined };
+      });
+      return true;
+    } catch (caught) {
+      setError(errorMessage(caught, t("routine.settings.resultDestination.saveFailed")));
+      return false;
+    }
+  }
+
+  function deliveryHistory() {
+    return props.port.results?.deliveries ? { items: deliveries(), onResend: resendDelivery } : undefined;
+  }
+
+  async function resendDelivery(runId: string): Promise<void> {
+    const resend = props.port.results?.resend;
+    const routineId = draft()?.id;
+    if (!resend || !routineId) return;
+    await resend(runId);
+    await loadResults(routineId);
+  }
+
   async function deleteRoutine(): Promise<void> {
+    if (deleting()) return;
     const current = draft();
     if (!current?.id) {
       closeEditor();
@@ -410,6 +658,8 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
     }
     const startedAt = performance.now();
     const analytics = desktopAnalytics.scope();
+    setDeleting(true);
+    setError(null);
     try {
       await props.port.remove(current.id);
       setRoutines((items) => {
@@ -418,10 +668,46 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
         return next;
       });
       closeEditor();
-      trackRoutineAction(analytics, "delete", current.schedule, startedAt, "succeeded");
+      trackRoutineAction(analytics, "delete", current, startedAt, "succeeded");
     } catch (caught) {
-      trackRoutineAction(analytics, "delete", current.schedule, startedAt, "failed");
+      trackRoutineAction(analytics, "delete", current, startedAt, "failed", caught);
       setError(errorMessage(caught, t("routine.settings.deleteFailed")));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function setRoutineActive(routine: RoutineEditorRecord, active: boolean): Promise<void> {
+    if (togglingIds().has(routine.id)) return;
+    setTogglingIds((current) => new Set(current).add(routine.id));
+    const schedule = routineScheduleOf(routine);
+    const tracked = { triggerKind: routineTriggerKind(routine), schedule };
+    const startedAt = performance.now();
+    const analytics = desktopAnalytics.scope();
+    try {
+      const { routine: saved } = await props.port.save({
+        routineId: routine.id,
+        name: routine.name,
+        instruction: routine.instruction,
+        active,
+        timezone: routine.timezone,
+        schedule,
+        trigger: webhookTriggerOf(routine) ?? { kind: "schedule", schedule },
+        ...(routine.limitPolicy ? { limitPolicy: routine.limitPolicy } : {}),
+        ...(routine.missedPolicy ? { missedPolicy: routine.missedPolicy } : {}),
+      });
+      setRoutines((items) => items.map((item) => (item.id === saved.id ? saved : item)));
+      trackRoutineAction(analytics, "update", tracked, startedAt, "succeeded");
+    } catch (caught) {
+      trackRoutineAction(analytics, "update", tracked, startedAt, "failed", caught);
+      const fallback = active ? t("routine.settings.resumeFailed") : t("routine.settings.pauseFailed");
+      actionToast.error(errorMessage(caught, fallback));
+    } finally {
+      setTogglingIds((current) => {
+        const next = new Set(current);
+        next.delete(routine.id);
+        return next;
+      });
     }
   }
 
@@ -434,15 +720,108 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
     const analytics = desktopAnalytics.scope();
     try {
       await props.port.test(current.id);
-      trackRoutineAction(analytics, "test", current.schedule, startedAt, "succeeded");
+      trackRoutineAction(analytics, "test", current, startedAt, "succeeded");
       await loadRuns(current.id);
+      if (props.onOpenThread && draftBase?.runIn === "thread")
+        requestExit({ kind: "routine-thread", routineId: current.id });
     } catch (caught) {
-      trackRoutineAction(analytics, "test", current.schedule, startedAt, "failed");
+      trackRoutineAction(analytics, "test", current, startedAt, "failed");
       setError(errorMessage(caught, t("routine.settings.testFailed")));
     } finally {
       setTesting(false);
     }
   }
+
+  function triggerMenu(current: () => RoutineDraft): JSX.Element {
+    if (!props.port.events) return undefined;
+    return (
+      <RoutineTriggerMenu
+        value={current().scheduleDraft.kind}
+        kinds={scheduleKinds()}
+        onSelect={(choice) =>
+          changeDraft((value) =>
+            reopened(withSchedule(value, switchDraftKind(value.scheduleDraft, choice, new Date()))),
+          )
+        }
+      />
+    );
+  }
+
+  function scheduleKinds() {
+    return props.port.onceSchedule ? ROUTINE_LOCAL_DRAFT_KINDS : ROUTINE_SAVED_DRAFT_KINDS;
+  }
+
+  function sendTestEvent(): (() => Promise<WebhookTestResult>) | undefined {
+    const events = props.port.events;
+    const send = events?.api.sendTestEvent;
+    if (!events || !send) return undefined;
+    return async () => {
+      const id = draft()?.id;
+      if (!id) throw new Error(t("routine.webhook.testFailed"));
+      const result = await send({ id, owner: events.owner });
+      if (draft()?.id === id) await loadRuns(id);
+      return result;
+    };
+  }
+
+  async function regenerateSecret(): Promise<void> {
+    const events = props.port.events;
+    const id = draft()?.id;
+    if (!events || !id) return;
+    const { secret } = await events.api.rotateSecret({ id, owner: events.owner });
+    if (draft()?.id !== id) return;
+    setWebhook((state) => {
+      state.secret = secret;
+    });
+  }
+
+  function senderSecret(): ((secret: string) => Promise<void>) | undefined {
+    const events = props.port.events;
+    const set = events?.api.setSecret;
+    if (!events || !set) return undefined;
+    return async (secret) => {
+      const id = draft()?.id;
+      if (!id) throw new Error(t("routine.webhook.senderSecretFailed"));
+      await set({ id, owner: events.owner, secret });
+      if (draft()?.id !== id) return;
+      setWebhook((state) => {
+        state.secret = null;
+      });
+    };
+  }
+
+  function agentSecret(): RoutineWebhookTriggerProps["agentSecret"] {
+    const events = props.port.events;
+    const give = events?.api.giveSecretToAgent;
+    const agentName = props.agentName;
+    const id = draft()?.id;
+    if (!events || !give || !agentName || !id || events.owner.kind !== "agent") return undefined;
+    return {
+      routineId: id,
+      agentName,
+      give: async () => {
+        await give({ id, owner: events.owner });
+        if (draft()?.id !== id) return;
+        setWebhook((state) => {
+          state.secret = null;
+        });
+      },
+    };
+  }
+
+  const savedRoutine = () => {
+    const id = draft()?.id;
+    return id ? routines().find((routine) => routine.id === id) : undefined;
+  };
+  const savedWebhook = () => {
+    const routine = savedRoutine();
+    return routine && isEventRoutine(routine) && routine.trigger.kind === "webhook" ? routine.trigger : null;
+  };
+  const webhookActivity = () => {
+    const events = props.port.events;
+    const id = draft()?.id;
+    return events && id && savedWebhook() ? { api: events.api, routine: { id, owner: events.owner } } : undefined;
+  };
 
   async function copyRunCommand(): Promise<void> {
     const routineId = draft()?.id;
@@ -510,32 +889,52 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                   fallback={<p class="agent-routines-empty">{t("routine.settings.empty")}</p>}
                 >
                   <div class="agent-routines-list">
-                    <For each={routines()}>
+                    <For each={listedRoutines()} keyed={(routine) => routine.id}>
                       {(routine) => (
-                        <Button
-                          variant="ghost"
-                          type="button"
-                          class="agent-routine-row"
-                          onClick={() => openRoutine(routine)}
-                        >
-                          <span
-                            class={
-                              routine.active ? "agent-routine-status-icon-active" : "agent-routine-status-icon-paused"
-                            }
-                          >
-                            <Show when={routine.active} fallback={<CirclePause aria-hidden="true" />}>
-                              <Clock3 aria-hidden="true" />
-                            </Show>
-                          </span>
-                          <span>
-                            <strong>{routine.name}</strong>
-                            <small>
-                              {routine.active
-                                ? routineListSummary(routine.trigger.schedule, text)
-                                : t("routine.settings.paused")}
-                            </small>
-                          </span>
-                        </Button>
+                        <ItemGroup class="agent-routine-card">
+                          <div class="agent-routine-list-item">
+                            <Button
+                              variant="ghost"
+                              type="button"
+                              class="agent-routine-row"
+                              onClick={() => openRoutine(routine())}
+                            >
+                              <span
+                                class={
+                                  routine().active
+                                    ? "agent-routine-status-icon-active"
+                                    : "agent-routine-status-icon-paused"
+                                }
+                              >
+                                <Show when={!routineCompleted(routine())} fallback={<CircleCheck aria-hidden="true" />}>
+                                  <Show
+                                    when={routineTriggerKind(routine()) === "webhook"}
+                                    fallback={<Clock3 aria-hidden="true" />}
+                                  >
+                                    <Link aria-hidden="true" />
+                                  </Show>
+                                </Show>
+                              </span>
+                              <span>
+                                <strong>{routine().name}</strong>
+                                <small>
+                                  {routineCompleted(routine())
+                                    ? t("routine.settings.completed", { schedule: routineListSummary(routine(), text) })
+                                    : routineListSummary(routine(), text)}
+                                </small>
+                                <Show when={routinePausedByRunLabel(routine(), text)}>
+                                  {(reason) => <small>{reason()}</small>}
+                                </Show>
+                              </span>
+                            </Button>
+                            <Switch
+                              aria-label={routine().name}
+                              checked={routine().active}
+                              disabled={routineCompleted(routine()) || togglingIds().has(routine().id)}
+                              onChange={(active) => void setRoutineActive(routine(), active)}
+                            />
+                          </div>
+                        </ItemGroup>
                       )}
                     </For>
                   </div>
@@ -547,26 +946,34 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
           {(current) => (
             <div class="agent-routine-editor">
               <div class="agent-routine-editor-actions">
-                <div class="agent-routine-active-toggle">
-                  <Switch
-                    id="routine-active"
-                    aria-label={t("routine.settings.activeToggle")}
-                    checked={current().active}
-                    onChange={(active) => changeDraft((value) => ({ ...value, active }))}
-                  />
-                  <label for="routine-active">
-                    {current().active ? t("routine.settings.active") : t("routine.settings.paused")}
-                  </label>
-                </div>
+                <SwitchField
+                  class="agent-routine-active-toggle"
+                  label={current().active ? t("routine.settings.active") : t("routine.settings.paused")}
+                  checked={current().active}
+                  onChange={(active) => changeDraft((value) => ({ ...value, active }))}
+                />
                 <div class="agent-routine-action-buttons">
                   <Show
                     when={!confirmDelete()}
                     fallback={
                       <>
-                        <Button variant="destructive" type="button" size="sm" onClick={() => void deleteRoutine()}>
+                        <Button
+                          variant="destructive"
+                          type="button"
+                          size="sm"
+                          loading={deleting()}
+                          loadingLabel={t("routine.settings.deleting")}
+                          onClick={() => void deleteRoutine()}
+                        >
                           {t("routine.settings.deleteNow")}
                         </Button>
-                        <Button variant="secondary" type="button" size="sm" onClick={() => setConfirmDelete(false)}>
+                        <Button
+                          variant="secondary"
+                          type="button"
+                          size="sm"
+                          disabled={deleting()}
+                          onClick={() => setConfirmDelete(false)}
+                        >
                           {t("common.cancel")}
                         </Button>
                       </>
@@ -588,7 +995,7 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                             type="button"
                             size="sm"
                             class="agent-routine-test"
-                            disabled={!current().id || testing() || !validDraft(current())}
+                            disabled={!current().id || !validDraft(current())}
                             loading={testing()}
                             loadingLabel={t("routine.settings.starting")}
                             onClick={() => void testRun()}
@@ -601,7 +1008,6 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                       <Button
                         type="button"
                         size="sm"
-                        disabled={saving() || !validDraft(current())}
                         loading={saving()}
                         loadingLabel={t("common.saving")}
                         onClick={() => void saveDraft()}
@@ -619,27 +1025,90 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                   value={current().name}
                   placeholder={t("routine.settings.namePlaceholder")}
                   maxlength={INPUT_LIMITS.routineName}
+                  invalid={showErrors() && !current().name.trim()}
+                  aria-describedby={showErrors() && !current().name.trim() ? "agent-routine-name-error" : undefined}
                   onValueChange={(name) => changeDraft((value) => ({ ...value, name }))}
                 />
+                <Show when={showErrors() && !current().name.trim()}>
+                  <Text
+                    as="p"
+                    id="agent-routine-name-error"
+                    variant="caption"
+                    tone="danger"
+                    class="agent-routine-field-error"
+                  >
+                    {t("routine.settings.nameRequired")}
+                  </Text>
+                </Show>
               </label>
               <section class="agent-routine-when" aria-labelledby="agent-routine-when-heading">
                 <h3 id="agent-routine-when-heading">{t("routine.settings.whenToRun")}</h3>
-                <RoutineSchedulePicker
-                  schedule={current().scheduleDraft}
-                  kinds={ROUTINE_SAVED_DRAFT_KINDS}
-                  onChange={(scheduleDraft) =>
-                    changeDraft((value) => ({
-                      ...value,
-                      schedule: routineScheduleFromDraft(scheduleDraft),
-                      scheduleDraft,
-                    }))
+                <Show when={props.port.events}>
+                  <fieldset class="agent-routine-trigger-kind">
+                    <legend class="sr-only">{t("routine.trigger.kind")}</legend>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={current().triggerKind === "schedule" ? "secondary" : "ghost"}
+                      aria-pressed={current().triggerKind === "schedule" ? "true" : "false"}
+                      onClick={() => {
+                        if (current().triggerKind !== "schedule")
+                          changeDraft((value) => ({ ...value, triggerKind: "schedule" }));
+                      }}
+                    >
+                      <Clock3 class="agent-routine-trigger-kind-icon" aria-hidden="true" />
+                      {t("routine.trigger.groupSchedule")}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={current().triggerKind === "webhook" ? "secondary" : "ghost"}
+                      aria-pressed={current().triggerKind === "webhook" ? "true" : "false"}
+                      onClick={() => {
+                        if (current().triggerKind !== "webhook")
+                          changeDraft((value) => ({ ...value, triggerKind: "webhook" }));
+                      }}
+                    >
+                      <Webhook class="agent-routine-trigger-kind-icon" aria-hidden="true" />
+                      {t("routine.settings.triggerWebhook")}
+                    </Button>
+                  </fieldset>
+                </Show>
+                <Show
+                  when={current().triggerKind === "schedule"}
+                  fallback={
+                    <RoutineWebhookTrigger
+                      url={savedWebhook()?.url ?? null}
+                      saved={savedWebhook() !== null}
+                      connected={webhook.connected}
+                      eventType={current().eventType}
+                      filters={current().eventFilters}
+                      onEventTypeChange={(eventType) => changeDraft((value) => ({ ...value, eventType }))}
+                      onFiltersChange={(eventFilters) => changeDraft((value) => ({ ...value, eventFilters }))}
+                      secret={webhook.secret}
+                      onSecretDismiss={resetWebhookState}
+                      onRegenerateSecret={regenerateSecret}
+                      onUseSenderSecret={senderSecret()}
+                      agentSecret={agentSecret()}
+                      onSave={() => void saveDraft()}
+                      saving={saving()}
+                      onSendTest={sendTestEvent()}
+                    />
                   }
-                />
+                >
+                  <RoutineSchedulePicker
+                    schedule={current().scheduleDraft}
+                    kinds={scheduleKinds()}
+                    action={triggerMenu(current)}
+                    onChange={(scheduleDraft) => changeDraft((value) => reopened(withSchedule(value, scheduleDraft)))}
+                  />
+                </Show>
               </section>
               <div class="settings-field agent-routine-instruction-field">
                 <span id="agent-routine-instruction-label">{t("routine.settings.instruction")}</span>
                 <Textarea
                   aria-labelledby="agent-routine-instruction-label"
+                  invalid={showErrors() && !current().instruction.trim()}
                   value={current().instruction}
                   placeholder={
                     props.port.ownerNoun === "channel"
@@ -647,17 +1116,39 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                       : t("routine.settings.instructionPlaceholderAgent")
                   }
                   maxlength={INPUT_LIMITS.routineInstruction}
-                  aria-describedby={props.port.ownerNoun === "channel" ? undefined : "agent-routine-no-update-hint"}
+                  aria-describedby={
+                    [
+                      showErrors() && !current().instruction.trim() ? "agent-routine-instruction-error" : "",
+                      props.port.ownerNoun === "channel" ? "" : "agent-routine-no-update-hint",
+                    ]
+                      .filter(Boolean)
+                      .join(" ") || undefined
+                  }
                   onValueChange={(instruction) => changeDraft((value) => ({ ...value, instruction }))}
                 />
-                {/* A scheduled run of an agent routine that answers only the marker posts nothing. */}
+                <Show when={showErrors() && !current().instruction.trim()}>
+                  <Text
+                    as="p"
+                    id="agent-routine-instruction-error"
+                    variant="caption"
+                    tone="danger"
+                    class="agent-routine-field-error"
+                  >
+                    {t("routine.settings.instructionRequired")}
+                  </Text>
+                </Show>
                 <Show when={props.port.ownerNoun !== "channel"}>
                   <Text id="agent-routine-no-update-hint" variant="caption" tone="muted">
                     {t("routine.settings.instructionNoUpdateHint")}
                   </Text>
                 </Show>
               </div>
-              <Show when={props.port.limitPolicy}>
+              <Show
+                when={
+                  props.port.limitPolicy &&
+                  !(current().triggerKind === "schedule" && current().scheduleDraft.kind === "once")
+                }
+              >
                 <div class="settings-field">
                   <span id="agent-routine-limit-policy-label">{t("routine.settings.limitPolicy")}</span>
                   <Select<RoutineLimitPolicy>
@@ -679,7 +1170,7 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                   </Select>
                 </div>
               </Show>
-              <Show when={props.port.missedPolicy}>
+              <Show when={props.port.missedPolicy && current().triggerKind === "schedule"}>
                 <div class="settings-field">
                   <span id="agent-routine-missed-policy-label">{t("routine.settings.missedPolicy")}</span>
                   <Select<RoutineMissedPolicy>
@@ -702,7 +1193,7 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                 </div>
               </Show>
 
-              <Show when={props.port.runCondition}>
+              <Show when={props.port.runCondition && current().triggerKind === "schedule"}>
                 <label class="settings-field">
                   <span>{t("routine.settings.runCondition")}</span>
                   <Input
@@ -741,7 +1232,31 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                 </Text>
               </Show>
 
-              <RoutineRunHistory runs={runs()} onOpenRun={props.onOpenRun ? requestOpenRun : undefined} />
+              <Show when={props.port.runIn}>
+                <div class="settings-field agent-routine-run-in">
+                  <SwitchField
+                    label={t("routine.settings.runInThread")}
+                    checked={current().runIn === "thread"}
+                    onChange={(thread) => changeDraft((value) => ({ ...value, runIn: thread ? "thread" : "chat" }))}
+                  />
+                </div>
+              </Show>
+
+              <Show when={props.port.results && (resultOptions().length > 0 || savedDestination())}>
+                <RoutineResultDestinationField
+                  options={resultOptions()}
+                  saved={savedDestination()}
+                  value={current().destination === undefined ? savedDestination() : (current().destination ?? null)}
+                  onChange={(destination) => changeDraft((value) => ({ ...value, destination }))}
+                />
+              </Show>
+
+              <RoutineRunHistory
+                runs={runs()}
+                onOpenRun={props.onOpenRun ? requestOpenRun : undefined}
+                activity={webhookActivity()}
+                deliveries={deliveryHistory()}
+              />
             </div>
           )}
         </Show>
@@ -753,6 +1268,11 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
           )}
         </Show>
       </div>
+      <Show when={!draft() && !loading()}>
+        <div class="agent-routines-footer">
+          <HostedUpsellRoutinesNotice count={routines().filter((routine) => routine.active).length} />
+        </div>
+      </Show>
       <ConfirmDialog
         open={pendingExit() !== null}
         onCancel={() => setPendingExit(null)}
@@ -767,36 +1287,65 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
   );
 }
 
-/**
- * The list row reads the schedule as the chips do. A schedule the chips show only as cron, such
- * as an interval, keeps its own summary: "Every 15 minutes", not the cron text.
- */
-function routineListSummary(schedule: RoutineSchedule, text: RoutineText): string {
-  const draft = routineScheduleToDraft(schedule);
-  if (draft.kind === "custom") return routineScheduleSummary(schedule, false, text);
-  return routineDraftSummary(draft, text);
+function routineCompleted(routine: RoutineEditorRecord): boolean {
+  if (routineTriggerKind(routine) === "webhook") return false;
+  return routineOnceCompleted({
+    active: routine.active,
+    timezone: routine.timezone,
+    schedule: routineScheduleOf(routine),
+    updatedAt: routine.updatedAt,
+  });
+}
+
+function withSchedule(value: RoutineDraft, scheduleDraft: RoutineScheduleDraft): RoutineDraft {
+  const missedPolicy =
+    scheduleDraft.kind === "once" && value.scheduleDraft.kind !== "once" ? "run-once" : value.missedPolicy;
+  return {
+    ...value,
+    triggerKind: "schedule",
+    schedule: routineScheduleFromDraft(scheduleDraft),
+    scheduleDraft,
+    missedPolicy,
+  };
+}
+
+function routineTriggerKind(routine: RoutineEditorRecord): RoutineDraft["triggerKind"] {
+  return isEventRoutine(routine) && routine.trigger.kind === "webhook" ? "webhook" : "schedule";
+}
+
+function triggerDraftOf(
+  routine: RoutineEditorRecord,
+): Pick<RoutineDraft, "schedule" | "scheduleDraft" | "triggerKind" | "eventType" | "eventFilters"> {
+  const trigger = isEventRoutine(routine) && routine.trigger.kind === "webhook" ? routine.trigger : null;
+  return {
+    schedule: structuredClone(routineScheduleOf(routine)),
+    scheduleDraft: routineScheduleToDraft(routineScheduleOf(routine)),
+    triggerKind: routineTriggerKind(routine),
+    eventType: trigger?.eventType ?? "",
+    eventFilters: trigger?.filters.map(eventFilterDraft) ?? [],
+  };
+}
+
+function webhookTriggerOf(routine: RoutineEditorRecord | RoutineDraft): RoutineWebhookTriggerInput | null {
+  if ("triggerKind" in routine) {
+    return routine.triggerKind === "webhook"
+      ? {
+          kind: "webhook",
+          eventType: routine.eventType.trim() || null,
+          filters: eventFiltersFromDrafts(routine.eventFilters),
+        }
+      : null;
+  }
+  if (!isEventRoutine(routine) || routine.trigger.kind !== "webhook") return null;
+  return { kind: "webhook", eventType: routine.trigger.eventType, filters: routine.trigger.filters };
 }
 
 function validDraft(draft: RoutineDraft): boolean {
-  return Boolean(draft.name.trim() && draft.instruction.trim()) && routineDraftProblem(draft.scheduleDraft) === null;
+  if (!draft.name.trim() || !draft.instruction.trim()) return false;
+  if (draft.triggerKind === "webhook") return eventFilterDraftsValid(draft.eventFilters);
+  return routineDraftProblem(draft.scheduleDraft) === null;
 }
 
 function isBlankNewDraft(draft: RoutineDraft): boolean {
-  return draft.id === null && !draft.name.trim() && !draft.instruction.trim();
-}
-
-function trackRoutineAction(
-  analytics: DesktopAnalyticsScope,
-  action: "create" | "update" | "delete" | "test",
-  schedule: RoutineSchedule,
-  startedAt: number,
-  result: "succeeded" | "failed",
-): void {
-  analytics.track("routine_action", {
-    action,
-    trigger_type: schedule.kind,
-    duration_ms: Math.max(0, Math.round(performance.now() - startedAt)),
-    result,
-    ...(result === "failed" ? { failure_code: `${action}_failed` } : {}),
-  });
+  return draft.id === null && draft.triggerKind === "schedule" && !draft.name.trim() && !draft.instruction.trim();
 }

@@ -1,11 +1,9 @@
-import { Blocks, HardDrive, Monitor, Settings, Tabs, UsersRound } from "@openbot/ui";
 import { SettingsLinkGroup, SettingsLinkRow } from "@openbot/ui/components/SettingsPanel";
 import AgentSettingsPanel from "@openbot/ui/features/conversation/AgentSettingsPanel";
 import { AgentFilesView, agentFilesLinkValue } from "@openbot/ui/features/files/AgentFilesView";
 import { ConversationFilesPanel } from "@openbot/ui/features/files/ConversationFilesPanel";
 import { FileList } from "@openbot/ui/features/files/FileList";
 import { StorageOverview } from "@openbot/ui/features/files/StorageOverview";
-import { SettingsDialogShell } from "@openbot/ui/features/settings/SettingsDialogShell";
 import { createSignal, Show } from "solid-js";
 import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
@@ -21,10 +19,12 @@ import {
   FILES_LAUNCH_ROWS,
   FILES_LONG_NAME_ROWS,
   FILES_NOW,
+  FILES_REMOVABLE_RUNTIMES,
   FILES_ROWS,
   FILES_STATUS_ROWS,
 } from "./files-fixtures";
-import { STORY_AGENT, STORY_AGENT_STATUS, STORY_MODELS } from "./fixtures";
+import { STORY_AGENT, STORY_AGENT_STATUS, STORY_MODELS, storyRuntimeSettings } from "./fixtures";
+import { ServerSettingsStory, STORY_REMOTE_SERVER, serverSettingsArgs } from "./server-settings-story";
 
 const meta = {
   title: "Files/Storage",
@@ -33,8 +33,6 @@ const meta = {
 
 export default meta;
 type Story = StoryObj<typeof meta>;
-
-// Settings > Storage -------------------------------------------------------
 
 type OverviewArgs = Parameters<typeof StorageOverview>[0];
 
@@ -54,6 +52,9 @@ const overviewArgs = (): OverviewArgs => ({
   onOpenAgent: fn(),
   onOpenConversation: fn(),
   onClear: fn(async () => undefined),
+  runtimeBytes: FILES_REMOVABLE_RUNTIMES.bytes,
+  runtimeProviders: FILES_REMOVABLE_RUNTIMES.providers,
+  onRemoveRuntimes: fn(async () => undefined),
   onPreviewFile: fn(),
   onFileAction: fn(async () => undefined),
 });
@@ -73,7 +74,6 @@ export const StorageReady: Story = {
   render: () => <OverviewStage args={overviewArgs()} />,
 };
 
-// A member of a remote server reads the same page, without Clean up and without Delete.
 export const StorageMember: Story = {
   name: "Storage: Member",
   render: () => <OverviewStage args={{ ...overviewArgs(), hostName: "Studio server", canManage: false }} />,
@@ -154,77 +154,40 @@ export const StorageNarrow: Story = {
   render: () => <OverviewStage args={overviewArgs()} narrow />,
 };
 
-// The same sections and icons as the real ServerSettingsModal, with Storage added last.
-const SERVER_SETTINGS_NAV = [
-  { value: "general", label: "General", icon: Settings },
-  { value: "members", label: "Members", icon: UsersRound },
-  { value: "desktop", label: "Remote desktop", icon: Monitor },
-  { value: "mcp", label: "MCP", icon: Blocks },
-  { value: "storage", label: "Storage", icon: HardDrive },
-] as const;
-
-function ServerSettingsStage(props: { args: OverviewArgs }) {
-  const [tab, setTab] = createSignal("storage");
-  return (
-    <Tabs.Root value={tab()} onChange={setTab} orientation="vertical" class="settings-modal-tabs-root">
-      <SettingsDialogShell
-        class="server-settings-modal-shell"
-        open
-        onOpenChange={() => undefined}
-        title="Storage"
-        description="See how much disk space this server uses."
-        contentKey={tab()}
-        closeLabel="Close server settings"
-        sidebar={
-          <Tabs.List class="settings-modal-nav" aria-label="Server settings sections">
-            {SERVER_SETTINGS_NAV.map((item) => {
-              const NavIcon = item.icon;
-              return (
-                <Tabs.Trigger class="settings-modal-nav-item" value={item.value}>
-                  <NavIcon aria-hidden="true" />
-                  <span>{item.label}</span>
-                </Tabs.Trigger>
-              );
-            })}
-          </Tabs.List>
-        }
-      >
-        <Tabs.Content value="storage" class="settings-modal-tab-panel server-settings-panel" data-tab="storage">
-          <StorageOverview {...props.args} />
-        </Tabs.Content>
-      </SettingsDialogShell>
-    </Tabs.Root>
-  );
-}
+const storageArgs = (hostName: string) => ({
+  hostName,
+  canManage: true,
+  onOpenAgent: fn(),
+  onShowMessage: fn(),
+});
 
 export const StorageInServerSettings: Story = {
   name: "Storage: Server settings, this Mac",
-  render: () => <ServerSettingsStage args={overviewArgs()} />,
+  render: () => (
+    <ServerSettingsStory
+      settings={{ ...serverSettingsArgs(), storage: storageArgs("This Mac"), initialSection: "storage" }}
+    />
+  ),
 };
 
 export const StorageInRemoteServerSettings: Story = {
   name: "Storage: Server settings, remote server",
   render: () => (
-    <ServerSettingsStage
-      args={{
-        ...overviewArgs(),
-        hostName: "studio-server",
-        freeBytes: 3.1 * 1024 ** 4,
-        breakdown: FILES_BREAKDOWN_LARGE,
+    <ServerSettingsStory
+      settings={{
+        ...serverSettingsArgs(),
+        server: { ...STORY_REMOTE_SERVER, role: "admin" },
+        hostStatus: null,
+        storage: storageArgs(STORY_REMOTE_SERVER.name),
+        initialSection: "storage",
       }}
     />
   ),
 };
 
-// Agent settings > Files ---------------------------------------------------
-
 const agentPanelArgs = {
   agent: STORY_AGENT,
-  runtimeSettings: {
-    provider: STORY_AGENT.provider,
-    model: STORY_AGENT.model,
-    reasoningEffort: STORY_AGENT.reasoningEffort,
-  },
+  runtimeSettings: storyRuntimeSettings(STORY_AGENT),
   agentStatus: STORY_AGENT_STATUS,
   modelOptions: STORY_MODELS,
   working: false,
@@ -297,8 +260,6 @@ export const AgentFilesLoading: Story = {
   render: () => <AgentFilesStory initiallyOpen loading />,
 };
 
-// Chat > Files ------------------------------------------------------------
-
 function ConversationStage(props: Partial<Parameters<typeof ConversationFilesPanel>[0]>) {
   return (
     <main class="agent-memories-story-stage files-story-chat">
@@ -343,8 +304,6 @@ export const ConversationLongNames: Story = {
   name: "Chat files: Long names",
   render: () => <ConversationStage files={FILES_LONG_NAME_ROWS} width={300} />,
 };
-
-// The shared list ----------------------------------------------------------
 
 function ListStage(props: Partial<Parameters<typeof FileList>[0]>) {
   return (

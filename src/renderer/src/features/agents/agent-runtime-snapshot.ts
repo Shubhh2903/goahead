@@ -1,33 +1,69 @@
-import {
-  type AgentApproval,
-  type AgentEvent,
-  type AgentRuntimeSnapshot,
-  isLocalOnlyApprovalRequestId,
-} from "@openbot/contracts/ipc";
+import type { AgentApproval, AgentEvent, AgentRuntimePrompt, AgentRuntimeSnapshot } from "@openbot/contracts/ipc";
 import { cleanAgentMessageText } from "@openbot/team-client/agent-message-text";
+import { keepWholeApprovals, reconcilePendingRequests } from "@openbot/team-client/runtime-attention";
 import type { AgentMessage } from "@openbot/ui/data";
+import { createStoredMessage } from "../../app-stored-values";
 import { promptRequestKey } from "../conversation/conversation-keys";
 
 type PromptEvent = Extract<AgentEvent, { type: "prompt" }>;
 type BrowserTakeoverEvent = Extract<AgentEvent, { type: "browser-takeover-requested" }>;
 
-export type PendingAttentionPrompts = Record<string, PromptEvent | BrowserTakeoverEvent | undefined>;
+type AttentionEvent = PromptEvent | BrowserTakeoverEvent;
 
-/**
- * Folding a runtime snapshot into what the renderer already holds.
- *
- * A snapshot is main's whole answer to "what are the agents doing", and it
- * arrives both on reconnect and as a compact update that main may have had to
- * truncate. `attentionComplete` is the flag that separates the two: when it is
- * true the snapshot lists every prompt and approval there is, so anything the
- * renderer still shows and the snapshot omits is gone; when it is false the
- * snapshot is a partial view and dropping what it omits would clear a prompt
- * the user is looking at.
- *
- * Kept apart from `agent-event-bridge.tsx` because that file is routing - one
- * event, several domains - while this is the arithmetic underneath it, and the
- * arithmetic is where the reconnect edge cases live.
- */
+export type PendingAttentionPrompts = Record<string, AttentionEvent | undefined>;
+
+export function attentionKey(agentId: string, threadId: string | null): string {
+  return `${agentId}\u0000${threadId ?? ""}`;
+}
+
+function promptAnswerInFlight(
+  prompt: { agentId: string; threadId: string; turnId: string; requestId: string | number },
+  submittedRequests: Record<string, string | undefined>,
+): boolean {
+  const key = promptRequestKey(prompt.turnId, prompt.requestId);
+  return (
+    key === submittedRequests[prompt.agentId] ||
+    key === submittedRequests[attentionKey(prompt.agentId, prompt.threadId)]
+  );
+}
+
+export function attentionEventKey(event: AttentionEvent): string {
+  return event.type === "prompt"
+    ? attentionKey(event.agentId, event.threadId)
+    : attentionKey(event.request.agentId, event.request.threadId);
+}
+
+export function attentionAgentId(event: AttentionEvent): string {
+  return event.type === "prompt" ? event.agentId : event.request.agentId;
+}
+
+export function attentionOfAgent(prompts: PendingAttentionPrompts, agentId: string): AttentionEvent[] {
+  return Object.values(prompts).filter(
+    (event): event is AttentionEvent => event !== undefined && attentionAgentId(event) === agentId,
+  );
+}
+
+export function withoutAttention(
+  prompts: PendingAttentionPrompts,
+  matches: (event: AttentionEvent) => boolean,
+): PendingAttentionPrompts {
+  const kept = Object.entries(prompts).filter(([, event]) => event !== undefined && !matches(event));
+  return kept.length === Object.keys(prompts).length ? prompts : Object.fromEntries(kept);
+}
+
+export function attentionByAgent(
+  prompts: PendingAttentionPrompts,
+  agents: readonly { id: string; threadId: string | null }[],
+): PendingAttentionPrompts {
+  const byAgent: PendingAttentionPrompts = {};
+  for (const event of Object.values(prompts)) if (event) byAgent[attentionAgentId(event)] = event;
+  for (const agent of agents) {
+    const own = prompts[attentionKey(agent.id, agent.threadId)];
+    if (own) byAgent[agent.id] = own;
+  }
+  return byAgent;
+}
+
 export function reconcileAttentionPrompts(
   current: PendingAttentionPrompts,
   snapshot: Pick<AgentRuntimeSnapshot, "attentionComplete" | "pendingPrompts" | "pendingBrowserTakeovers">,
@@ -35,35 +71,82 @@ export function reconcileAttentionPrompts(
 ): PendingAttentionPrompts {
   const next: PendingAttentionPrompts = snapshot.attentionComplete ? {} : { ...current };
   for (const prompt of snapshot.pendingPrompts) {
-    // A prompt whose answer is already on its way to main would otherwise come
-    // back the moment a snapshot crosses the answer in flight.
-    if (promptRequestKey(prompt.turnId, prompt.requestId) !== submittedRequests[prompt.agentId]) {
-      next[prompt.agentId] = { type: "prompt", ...prompt };
+    if (!promptAnswerInFlight(prompt, submittedRequests)) {
+      next[attentionKey(prompt.agentId, prompt.threadId)] = { type: "prompt", ...prompt };
     }
   }
   for (const request of snapshot.pendingBrowserTakeovers) {
-    next[request.agentId] = { type: "browser-takeover-requested", request };
+    next[attentionKey(request.agentId, request.threadId)] = { type: "browser-takeover-requested", request };
   }
-  return next;
+  return keepEqualRecord(current, next);
 }
 
-/**
- * The prompts a server scope starts with, out of what the coordinator remembers
- * that server was blocked on.
- *
- * The coordinator's memory is the renderer's own projection played back, so it
- * still lists a prompt the user answered while main was working out that the
- * answer had arrived. Seeding it unfiltered remounts `QuestionPromptBubble` on
- * its first page - the bubble hides the questions in local state that the
- * remount throws away - and the user is asked again. The two markers outlive the
- * scope for exactly this window; `reconcileAttentionPrompts` consults the
- * submitted one against main's snapshots, and this consults both against the
- * coordinator's, which is the only other way a prompt enters the scope.
- *
- * Only prompts are filtered. A browser takeover leaves `pendingPrompts` the
- * moment main accepts the response, so the projection above this has already
- * dropped it.
- */
+export function withListedPrompts(
+  current: PendingAttentionPrompts,
+  prompts: readonly AgentRuntimePrompt[],
+  submittedRequests: Record<string, string | undefined>,
+  askedDuringRead: ReadonlySet<string>,
+): PendingAttentionPrompts {
+  const next: PendingAttentionPrompts = { ...current };
+  for (const prompt of prompts) {
+    const key = attentionKey(prompt.agentId, prompt.threadId);
+    const shown = next[key];
+    const replaceable =
+      shown === undefined ||
+      (shown.type === "prompt" &&
+        String(shown.requestId) !== String(prompt.requestId) &&
+        !askedDuringRead.has(String(shown.requestId)));
+    if (replaceable && !promptAnswerInFlight(prompt, submittedRequests)) next[key] = { type: "prompt", ...prompt };
+  }
+  return keepEqualRecord(current, next);
+}
+
+export function sameData(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (typeof left !== "object" || typeof right !== "object" || left === null || right === null) return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((item, index) => sameData(item, right[index]));
+  }
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  return (
+    leftEntries.length === rightEntries.length &&
+    leftEntries.every(([key, value], index) => {
+      const other = rightEntries[index];
+      return other !== undefined && other[0] === key && sameData(value, other[1]);
+    })
+  );
+}
+
+export function keepEqualRecord<Value>(
+  current: Record<string, Value>,
+  next: Record<string, Value>,
+): Record<string, Value> {
+  const currentKeys = Object.keys(current);
+  const nextKeys = Object.keys(next);
+  let changed = currentKeys.length !== nextKeys.length;
+  for (const [index, key] of nextKeys.entries()) {
+    const previous = current[key];
+    if (Object.hasOwn(current, key) && sameData(previous, next[key])) {
+      if (previous !== undefined) next[key] = previous;
+      if (currentKeys[index] !== key) changed = true;
+    } else changed = true;
+  }
+  return changed ? next : current;
+}
+
+export function keepEqualList<Item>(current: Item[], next: Item[]): Item[] {
+  let changed = current.length !== next.length;
+  for (const [index, item] of next.entries()) {
+    const previous = current[index];
+    if (index < current.length && sameData(previous, item)) {
+      if (previous !== undefined) next[index] = previous;
+    } else changed = true;
+  }
+  return changed ? next : current;
+}
+
 export function seededAttentionPrompts(
   seed: PendingAttentionPrompts | undefined,
   presentedResolutions: Record<string, string | undefined>,
@@ -71,52 +154,29 @@ export function seededAttentionPrompts(
 ): PendingAttentionPrompts {
   if (!seed) return {};
   const next: PendingAttentionPrompts = {};
-  for (const [agentId, entry] of Object.entries(seed)) {
+  for (const entry of Object.values(seed)) {
     if (!entry) continue;
+    const agentId = attentionAgentId(entry);
     if (entry.type === "prompt") {
       const key = promptRequestKey(entry.turnId, entry.requestId);
-      if (key === presentedResolutions[agentId] || key === submittedRequests[agentId]) continue;
+      if (key === presentedResolutions[agentId] || promptAnswerInFlight(entry, submittedRequests)) continue;
     }
-    next[agentId] = entry;
+    next[attentionEventKey(entry)] = entry;
   }
   return next;
 }
 
 export function reconcileAttentionApprovals(
-  current: Record<string, AgentApproval | undefined>,
+  current: readonly AgentApproval[],
   snapshot: Pick<AgentRuntimeSnapshot, "attentionComplete" | "pendingApprovals">,
-): Record<string, AgentApproval | undefined> {
-  return {
-    ...(snapshot.attentionComplete ? {} : current),
-    ...Object.fromEntries(
-      snapshot.pendingApprovals.map((approval) => {
-        // The snapshot copy cuts long text. The full copy from the `approval` event stays.
-        const held = current[approval.agentId];
-        const fuller = held && String(held.requestId) === String(approval.requestId) && held.truncated !== true;
-        return [approval.agentId, fuller ? held : approval];
-      }),
-    ),
-  };
+): AgentApproval[] {
+  return reconcilePendingRequests(
+    current,
+    keepWholeApprovals(current, snapshot.pendingApprovals),
+    snapshot.attentionComplete,
+  );
 }
 
-/**
- * The approvals after an agent's turn ended. A provider approval ends with its turn; a local-only
- * approval (a mail to send, a meeting to book) waits for the person after the turn.
- */
-export function approvalsAfterTurnCompleted(
-  current: Record<string, AgentApproval | undefined>,
-  agentId: string,
-): Record<string, AgentApproval | undefined> {
-  const approval = current[agentId];
-  if (!approval || isLocalOnlyApprovalRequestId(approval.requestId)) return current;
-  return { ...current, [agentId]: undefined };
-}
-
-/**
- * The tail of each agent's transcript, as the snapshot last saw it. A message
- * the renderer already has stays as it is: it may be further along than the
- * snapshot's copy, which is capped at `AGENT_RUNTIME_TEXT_LIMIT`.
- */
 export function appendLatestRuntimeMessages(
   current: Record<string, AgentMessage[]>,
   latestMessages: AgentRuntimeSnapshot["latestMessages"],
@@ -125,15 +185,17 @@ export function appendLatestRuntimeMessages(
   for (const message of latestMessages) {
     const messages = next[message.agentId] ?? [];
     if (messages.some((candidate) => candidate.id === message.id)) continue;
+    const oldestLoaded = messages.find((candidate) => candidate.createdAt)?.createdAt ?? "";
+    if (Date.parse(message.createdAt) < Date.parse(oldestLoaded)) continue;
     next[message.agentId] = [
       ...messages,
-      {
+      createStoredMessage({
         id: message.id,
         author: "agent",
         body: cleanAgentMessageText(message.text),
         time: message.createdAt,
         createdAt: message.createdAt,
-      },
+      }),
     ];
   }
   return next;

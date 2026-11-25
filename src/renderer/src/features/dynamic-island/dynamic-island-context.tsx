@@ -1,44 +1,29 @@
+import { isDynamicIslandServerVisible } from "@openbot/contracts/ipc";
 import { DynamicIslandCoordinator } from "@openbot/team-client/dynamic-island-coordinator";
 import type { DynamicIslandText } from "@openbot/team-client/dynamic-island-presentation";
 import { currentText } from "@openbot/ui/text";
-import { createEffect, flush, onSettled, untrack } from "solid-js";
+import { createEffect, flush, onCleanup, onSettled, untrack } from "solid-js";
 import { usePlatform } from "../../platform";
 import { createSimpleContext } from "../../simple-context";
 import { useServers } from "../servers/servers-context";
+import { useSettings } from "../settings/settings-context";
 import { dynamicIslandPort } from "./dynamic-island-port";
 
-/**
- * The macOS Dynamic Island projection: what the desktop shows about servers the
- * user is *not* looking at.
- *
- * This is the one domain that is deliberately cross-server, so it sits above
- * everything per-server. `DynamicIslandCoordinator` keeps a runtime per server
- * id and hands the six turn signals back on a switch (`serverState(serverId)`),
- * which is why it must outlive any subtree keyed by the active server.
- * `onScopedEvent` is the other half of that: events for a background server
- * arrive here and nowhere else, because no per-server domain exists to receive
- * them.
- *
- * Publishing is batched through `queueMicrotask` rather than an effect. Several
- * of the callers below fire in the same flush - a scoped event, the retain
- * effect, a resolved action - and main only needs the last presentation, so the
- * scheduled flag collapses them into one IPC call.
- *
- * The coordinator itself is exposed rather than wrapped. Its three remaining
- * callers (`serverState` on a switch, `replaceServer` from the projection
- * effect, `resolveAction` from the action handler) each still live outside this
- * module, and a wrapper per call would only re-declare their signatures.
- */
+const PUBLISH_INTERVAL_MS = 100;
+
 const DynamicIsland = createSimpleContext({
   name: "Dynamic Island",
   init: () => {
     const platform = usePlatform();
     const { servers, activeServerId } = useServers();
+    const { generalSettings } = useSettings();
     const coordinator = new DynamicIslandCoordinator(islandText);
     const connectedServers = new Set(["local"]);
     let presentationScheduled = false;
+    let publishedPresentation: string | undefined;
+    let lastPublishedAt = Number.NEGATIVE_INFINITY;
+    let publishTimer: ReturnType<typeof setTimeout> | undefined;
 
-    /** Active server first: main renders the head of this list as the leading item. */
     function serverOrder(): string[] {
       const activeId = activeServerId();
       const current = servers();
@@ -47,34 +32,50 @@ const DynamicIsland = createSimpleContext({
         .map((server) => server.id);
       ids.sort((left, right) => Number(right === activeId) - Number(left === activeId));
       const ordered = ids.length > 0 ? ids : ["local"];
-      // A muted server is muted here too: it contributes neither a presentation nor an attention
-      // count. The filter runs after the `["local"]` fallback so that fallback cannot put a muted
-      // local server back. An empty list is fine - the coordinator reads it as idle.
       const muted = new Set(current.filter((server) => server.notificationsMuted).map((server) => server.id));
-      return ordered.filter((serverId) => !muted.has(serverId));
+      const settings = generalSettings();
+      const choices = {
+        serverVisibility: settings.macBookNotchServers,
+        newServersVisible: settings.macBookNotchNewServers,
+      };
+      return ordered.filter((serverId) => !muted.has(serverId) && isDynamicIslandServerVisible(choices, serverId));
+    }
+
+    function islandCanShow(): boolean {
+      const info = platform.appInfo();
+      return info !== null && info.dynamicIslandUnavailable !== true && generalSettings().macBookNotch;
     }
 
     function publishPresentation(): void {
-      if (platform.landingPreview || presentationScheduled) return;
+      if (platform.landingPreview || platform.chatWindow || presentationScheduled) return;
+      if (!untrack(islandCanShow)) return;
       presentationScheduled = true;
-      queueMicrotask(() => {
+      const send = () => {
         presentationScheduled = false;
+        publishTimer = undefined;
+        lastPublishedAt = performance.now();
         const presentation = coordinator.presentation(serverOrder());
+        const serialized = JSON.stringify(presentation);
+        if (serialized === publishedPresentation) return;
+        publishedPresentation = serialized;
         void dynamicIslandPort()
           .dynamicIsland.publishPresentation(presentation)
-          .catch(() => undefined);
-      });
+          .catch(() => {
+            if (publishedPresentation === serialized) publishedPresentation = undefined;
+          });
+      };
+      const wait = lastPublishedAt + PUBLISH_INTERVAL_MS - performance.now();
+      if (wait > 0) publishTimer = setTimeout(send, wait);
+      else queueMicrotask(send);
     }
+    onCleanup(() => clearTimeout(publishTimer));
 
     createEffect(
       () =>
         servers()
-          // Mute belongs in this key: it changes what `serverOrder` returns, and the user has to
-          // see that without restarting the app.
           .map((server) => `${server.id}:${server.state}:${server.notificationsMuted}`)
           .join("\u0000"),
       () => {
-        // The key above decides when this runs; the list is read once for the current state.
         const currentServers = untrack(servers);
         const configuredServerIds = new Set(currentServers.map((server) => server.id));
         for (const serverId of connectedServers) {
@@ -87,6 +88,15 @@ const DynamicIsland = createSimpleContext({
         coordinator.retainServers([...configuredServerIds]);
         publishPresentation();
       },
+    );
+
+    createEffect(
+      () => {
+        const settings = generalSettings();
+        return `${islandCanShow()}:${settings.macBookNotchNewServers}:${JSON.stringify(settings.macBookNotchServers)}`;
+      },
+      () => publishPresentation(),
+      { defer: true },
     );
 
     onSettled(() =>
@@ -111,7 +121,6 @@ const DynamicIsland = createSimpleContext({
 export const DynamicIslandProvider = DynamicIsland.provider;
 export const useDynamicIsland = DynamicIsland.use;
 
-/** The island text in the current interface language, read for each presentation. */
 function islandText(): DynamicIslandText {
   const { t, errorMessage } = currentText();
   return {

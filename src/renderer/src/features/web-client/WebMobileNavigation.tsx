@@ -11,16 +11,17 @@ interface WebMobileNavigationProps {
   onChange: (pane: WebMobilePane) => void;
 }
 
-const PANES: ReadonlyArray<{
+interface PaneButton {
   id: WebMobilePane;
   label: AppTextKey;
   Icon: typeof MessageCircle;
-}> = [
+}
+
+const PANES: ReadonlyArray<PaneButton> = [
   { id: "conversation", label: "webClient.pane.chat", Icon: MessageCircle },
   { id: "workspace", label: "webClient.pane.workspace", Icon: Globe2 },
 ];
 
-/** The small-screen switch for the existing workspace and conversation surfaces. */
 export function WebMobileNavigation(props: WebMobileNavigationProps) {
   const { t } = useText();
   return (

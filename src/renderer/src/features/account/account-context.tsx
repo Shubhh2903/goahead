@@ -1,18 +1,22 @@
-import type { AccountUsage, AvatarImageInput, CentralAuthState } from "@openbot/contracts/ipc";
+import {
+  type AccountUsage,
+  type AccountUsageLimit,
+  type AvatarColor,
+  type AvatarImageInput,
+  type CentralAuthState,
+  keepUsageCredits,
+  withReadCredits,
+} from "@openbot/contracts/ipc";
 import { currentText } from "@openbot/ui/text";
 import { createMemo, createSignal, createStore, flush, onCleanup, onSettled } from "solid-js";
-import { desktopAnalytics } from "../../analytics";
+import { type DesktopAnalyticsProperties, desktopAnalytics } from "../../analytics";
 import { createSimpleContext } from "../../simple-context";
 import { accountPort } from "./account-port";
 
-/** How long the sign-in success animation holds the account out of the view. */
+type MobileConnectAction = DesktopAnalyticsProperties<"mobile_connect_action">["action"];
+
 const AUTH_SUCCESS_HOLD_MS = 600;
 
-/**
- * Analytics only carries codes the account service is known to send, so an
- * unrecognised one becomes `unknown` rather than leaking a new string into the
- * property vocabulary.
- */
 function authFailureCode(value: string | undefined): string {
   switch (value) {
     case "auth_api_error":
@@ -34,26 +38,6 @@ function authFailureCode(value: string | undefined): string {
   }
 }
 
-/**
- * The cloud account: sign-in state, the signed-in user, plan usage, and the
- * commands that change any of them.
- *
- * Ungated, against the plan's `centralAuth().status !== "loading"`. Two reasons,
- * and the second is decisive:
- *
- * - `"loading"` is not only a startup state. `retryCentralAccount` sets it
- *   deliberately, so a gate here would unmount the whole app - including the
- *   sign-in form whose Retry button was just pressed - and remount it when the
- *   retry resolved.
- * - `AccountLogin` is handed `centralAuth()` and renders the loading state
- *   itself, behind `AppAccessGate`'s own `<Show>`. A provider gate would
- *   withhold that placeholder too, leaving a blank window instead, and would
- *   serialize every bootstrap load that runs in parallel with `auth.getState()`
- *   today.
- *
- * The account is still a gate for the *view*; `visibleSignedInAccount` is what
- * `AppAccessGate` waits on, and it stays here.
- */
 const Auth = createSimpleContext({
   name: "Auth",
   init: () => {
@@ -65,23 +49,17 @@ const Auth = createSimpleContext({
       refreshRevision: number;
     }>({ targetKey: null, data: null, refreshRevision: 0 });
     let accountUsageRequestGeneration = 0;
-    /** The providers an event updated while the current refresh runs. Their rows are newer than it. */
     let accountUsageEventIds = new Set<string>();
     let authSuccessTimer: ReturnType<typeof setTimeout> | undefined;
+    let knownMobileDevices: ReadonlySet<string> | null = null;
 
     onCleanup(() => {
       if (authSuccessTimer !== undefined) clearTimeout(authSuccessTimer);
     });
 
-    /**
-     * Every state change the account service reports, plus the two side effects
-     * that ride along: the analytics identity, and the hold that keeps the
-     * workspace out of view while the sign-in success animation plays. The hold
-     * only starts on a completed code challenge, so a restart into an already
-     * signed-in account goes straight to the workspace.
-     */
     function applyCentralAuthState(state: CentralAuthState): void {
       desktopAnalytics.setUser(state.status === "signed_in" ? state.user : null);
+      if (state.status !== "signed_in") knownMobileDevices = null;
       const completedCodeChallenge = centralAuth().status === "code_sent" && state.status === "signed_in";
       if (state.status !== "signed_in") {
         if (authSuccessTimer !== undefined) clearTimeout(authSuccessTimer);
@@ -102,10 +80,6 @@ const Auth = createSimpleContext({
       const unsubscribe = accountPort().auth.onEvent((state) => {
         flush(() => applyCentralAuthState(state));
       });
-      // The bootstrap read sets the signal directly, not through
-      // `applyCentralAuthState`: there is no earlier state to have completed a
-      // code challenge against, so a restart into a signed-in account must not
-      // play the success hold.
       void accountPort()
         .auth.getState()
         .then(setCentralAuth)
@@ -126,7 +100,7 @@ const Auth = createSimpleContext({
       try {
         const state = await accountPort().auth.requestEmailCode(email);
         analytics.track("account_sign_in_started", {
-          result: state.status === "code_sent" ? "code_sent" : "failed",
+          result: state.status === "code_sent" || state.status === "company_sign_in" ? state.status : "failed",
           ...(state.status === "error" ? { failure_code: authFailureCode(state.issue.code) } : {}),
         });
         applyCentralAuthState(state);
@@ -139,15 +113,23 @@ const Auth = createSimpleContext({
       }
     }
 
+    async function openCompanySignIn(): Promise<void> {
+      applyCentralAuthState(await accountPort().auth.openCompanySignIn());
+    }
+
     async function retryCentralAccount(): Promise<void> {
       applyCentralAuthState({ status: "loading" });
       applyCentralAuthState(await accountPort().auth.retry());
     }
 
-    async function verifyEmailCode(challengeId: string, code: string): Promise<void> {
+    async function verifyEmailCode(challengeId: string, code: string, referralCode?: string): Promise<void> {
       const anonymousAnalytics = desktopAnalytics.anonymousScope();
       try {
-        const state = await accountPort().auth.verifyEmailCode({ challengeId, code });
+        const state = await accountPort().auth.verifyEmailCode({
+          challengeId,
+          code,
+          ...(referralCode ? { referralCode } : {}),
+        });
         applyCentralAuthState(state);
         desktopAnalytics.track("account_sign_in_completed", {
           result: state.status === "signed_in" ? "succeeded" : "failed",
@@ -185,15 +167,19 @@ const Auth = createSimpleContext({
       applyCentralAuthState(await accountPort().auth.updateName(name));
     }
 
+    async function setChatColor(color: AvatarColor | null): Promise<void> {
+      applyCentralAuthState(await accountPort().auth.updateChatColor(color));
+    }
+
     const accountUsage = () => accountUsageState.data;
     const accountUsageRefreshRevision = () => accountUsageState.refreshRevision;
+    const accountUsageTargetKey = () => accountUsageState.targetKey;
 
     function selectAccountUsageTarget(targetKey: string | null): void {
       if (accountUsageState.targetKey === targetKey) return;
       accountUsageRequestGeneration += 1;
       setAccountUsageState((state) => {
         state.targetKey = targetKey;
-        state.data = null;
       });
     }
 
@@ -213,10 +199,13 @@ const Auth = createSimpleContext({
         });
         return;
       }
-      for (const limit of usage.limits) accountUsageEventIds.add(limit.id);
+      for (const limit of usage.limits) accountUsageEventIds.add(usageLimitKey(limit));
       setAccountUsageState((state) => {
-        const byId = new Map((state.data?.limits ?? []).map((limit) => [limit.id, limit]));
-        for (const limit of usage.limits) byId.set(limit.id, limit);
+        const byId = new Map((state.data?.limits ?? []).map((limit) => [usageLimitKey(limit), limit]));
+        for (const limit of usage.limits) {
+          const key = usageLimitKey(limit);
+          byId.set(key, keepUsageCredits(byId.get(key), limit));
+        }
         state.data = { limits: [...byId.values()] };
       });
     }
@@ -227,12 +216,11 @@ const Auth = createSimpleContext({
       accountUsageEventIds = new Set();
       const usage = await accountPort().agent.getUsage();
       if (generation === accountUsageRequestGeneration && accountUsageState.targetKey === targetKey) {
-        // The refresh reads every provider, so a row it omits has stopped reporting, such as a revoked
-        // OpenCode Go key. It keeps only the rows an event updated after it started.
         setAccountUsageState((state) => {
-          const byId = new Map(usage.limits.map((limit) => [limit.id, limit]));
+          const byId = new Map(usage.limits.map((limit) => [usageLimitKey(limit), limit]));
           for (const limit of state.data?.limits ?? []) {
-            if (accountUsageEventIds.has(limit.id)) byId.set(limit.id, limit);
+            const key = usageLimitKey(limit);
+            if (accountUsageEventIds.has(key)) byId.set(key, withReadCredits(byId.get(key), limit));
           }
           state.data = { limits: [...byId.values()] };
         });
@@ -240,23 +228,45 @@ const Auth = createSimpleContext({
       return usage;
     }
 
-    function createMobileConnect() {
-      return accountPort().auth.createMobileConnect();
+    function trackMobileConnect<Result>(action: MobileConnectAction, call: () => Promise<Result>): Promise<Result> {
+      return call().then(
+        (result) => {
+          desktopAnalytics.track("mobile_connect_action", { action, result: "succeeded" });
+          return result;
+        },
+        (error: unknown) => {
+          desktopAnalytics.track("mobile_connect_action", { action, result: "failed" });
+          throw error;
+        },
+      );
     }
 
-    function listMobileConnectedDevices() {
-      return accountPort().auth.listMobileConnectedDevices();
+    function createMobileConnect() {
+      return trackMobileConnect("code_shown", () => accountPort().auth.createMobileConnect());
+    }
+
+    async function listMobileConnectedDevices() {
+      const devices = await accountPort().auth.listMobileConnectedDevices();
+      const ids = new Set(devices.map((device) => device.sessionId));
+      const known = knownMobileDevices;
+      if (known) {
+        for (const id of ids) {
+          if (!known.has(id))
+            desktopAnalytics.track("mobile_connect_action", { action: "connected", result: "succeeded" });
+        }
+      }
+      knownMobileDevices = ids;
+      return devices;
     }
 
     function revokeMobileConnectedDevice(sessionId: string) {
-      return accountPort().auth.revokeMobileConnectedDevice(sessionId);
+      return trackMobileConnect("revoked", () => accountPort().auth.revokeMobileConnectedDevice(sessionId));
     }
 
     const signedInAccount = createMemo(() => {
       const state = centralAuth();
       return state.status === "signed_in" ? state.user : null;
     });
-    /** Null while the success animation holds, so the workspace mounts after it. */
     const visibleSignedInAccount = createMemo(() => (authSuccessVisible() ? null : signedInAccount()));
 
     return {
@@ -265,17 +275,26 @@ const Auth = createSimpleContext({
       visibleSignedInAccount,
       accountUsage,
       accountUsageRefreshRevision,
+      accountUsageTargetKey,
       selectAccountUsageTarget,
       invalidateAccountUsage,
       applyAccountUsage,
       refreshAccountUsage,
       requestEmailCode,
+      openCompanySignIn,
       retryCentralAccount,
       verifyEmailCode,
       logoutCentralAccount,
       updateAccountName,
       updateAccountAvatar,
+      setChatColor,
       createMobileConnect,
+      cancelMobileConnect: () => trackMobileConnect("cancelled", () => accountPort().auth.cancelMobileConnect()),
+      getMobileConnectLink: () => accountPort().auth.getMobileConnectLink(),
+      createMobileConnectLink: () =>
+        trackMobileConnect("link_created", () => accountPort().auth.createMobileConnectLink()),
+      revokeMobileConnectLink: () =>
+        trackMobileConnect("link_revoked", () => accountPort().auth.revokeMobileConnectLink()),
       listMobileConnectedDevices,
       revokeMobileConnectedDevice,
       listAccountSessions: () => accountPort().auth.listAccountSessions(),
@@ -286,3 +305,7 @@ const Auth = createSimpleContext({
 
 export const AuthProvider = Auth.provider;
 export const useAuth = Auth.use;
+
+function usageLimitKey(limit: AccountUsageLimit): string {
+  return `${limit.id}\n${limit.accountId ?? ""}`;
+}

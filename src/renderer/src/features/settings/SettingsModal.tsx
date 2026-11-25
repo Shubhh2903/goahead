@@ -1,22 +1,51 @@
+import type { CreditsState } from "@openbot/contracts/credits";
 import type {
   AccountSession,
   AppInfo,
+  AvatarColor,
   AvatarImageInput,
   BillingDesktopApi,
   CentralAuthUser,
+  CreditsDesktopApi,
   DynamicIslandGeometry,
   HostedServersDesktopApi,
+  LicenseDesktopApi,
   MobileConnectedDevice,
+  MobileConnectLink,
   MobileConnectTicket,
+  ReferralDesktopApi,
+  RemoteNetworkRoute,
+  RemoteNetworkRouteState,
+  ServerNotificationLevel,
+  ServerSummary,
   UpdateStatus,
 } from "@openbot/contracts/ipc";
-import { Tabs } from "@openbot/ui";
+import {
+  Alert,
+  AlertActions,
+  AlertContent,
+  AlertDescription,
+  AlertIcon,
+  Button,
+  Tabs,
+  TriangleAlert,
+} from "@openbot/ui";
 import { BillingPanel } from "@openbot/ui/features/billing/BillingPanel";
 import { createBillingStore } from "@openbot/ui/features/billing/billing-store";
+import { LicenseSection } from "@openbot/ui/features/billing/LicenseSection";
+import { createLicenseStore } from "@openbot/ui/features/billing/license-store";
+import { CreditActivitySection } from "@openbot/ui/features/credits/CreditActivitySection";
+import { CreditsSection } from "@openbot/ui/features/credits/CreditsSection";
+import { createCreditsStore } from "@openbot/ui/features/credits/credits-store";
+import { ReferralPanel } from "@openbot/ui/features/referral/ReferralPanel";
+import { createReferralStore } from "@openbot/ui/features/referral/referral-store";
 import type { GeneralSettingsValue } from "@openbot/ui/features/settings/app-settings";
-import { ProfileNameSaveBar } from "@openbot/ui/features/settings/ProfileNameSaveBar";
-import { SettingsDialogShell } from "@openbot/ui/features/settings/SettingsDialogShell";
-import { SettingsHostedServersTab } from "@openbot/ui/features/settings/SettingsHostedServersTab";
+import {
+  SettingsDialogShell,
+  SettingsNavGroupLabel,
+  type SettingsPagePlacement,
+} from "@openbot/ui/features/settings/SettingsDialogShell";
+import type { MobileInstallRequest } from "@openbot/ui/features/settings/SettingsMobileConnectTab";
 import { SettingsMobileConnectTab } from "@openbot/ui/features/settings/SettingsMobileConnectTab";
 import { SettingsProfileTab } from "@openbot/ui/features/settings/SettingsProfileTab";
 import { SettingsUpdatesTab } from "@openbot/ui/features/settings/SettingsUpdatesTab";
@@ -27,108 +56,150 @@ import { createSettingsUpdatesStore } from "@openbot/ui/features/settings/stores
 import { createEffect, createSignal, Show, untrack } from "solid-js";
 import { useI18n } from "../../i18n-context";
 import { ComputerUseSetup } from "../computer-use/ComputerUseSetup";
-import { voiceSupported } from "../conversation/voice-status";
+import type { CodexLiveAccess } from "../speech/codex-live-access";
+import type { LiveVoiceAccountChoice } from "./LiveVoiceAccountRow";
+import { licenseContactUs, trackLicenseEvent } from "./license-analytics";
+import { createNotificationLevelsStore } from "./notification-levels-store";
+import { createProfileActivityStore } from "./profile-activity-store";
+import { renderProfileShareImage } from "./profile-share-image";
+import { type AgentDockSettingsModel, SettingsAgentDockTab } from "./SettingsAgentDockTab";
 import { SettingsDynamicIslandTab } from "./SettingsDynamicIslandTab";
 import { SettingsGeneralTab } from "./SettingsGeneralTab";
+import { SettingsKeyboardTab } from "./SettingsKeyboardTab";
+import { SettingsNotificationsTab } from "./SettingsNotificationsTab";
 import { SettingsVoiceTab } from "./SettingsVoiceTab";
-import { navItem, navItems, type SettingsTab } from "./settings-tabs";
+import { dynamicIslandSettingsShown, navItem, navItems, type SettingsTab, settingsTabShown } from "./settings-tabs";
 import { createSettingsVoiceStore } from "./settings-voice-store";
 
 export interface SettingsModalProps {
   open: boolean;
-  onOpenChange: (open: boolean) => void;
   value: GeneralSettingsValue;
   onValueChange: (value: GeneralSettingsValue) => void;
+  preferencesLoadFailed?: boolean;
+  onRetryPreferencesLoad?: () => void;
   appInfo: AppInfo | null;
-  /** The built-in display's notch, null when it has none, or undefined before main answers. */
+  chatWindow?: boolean;
   builtInDisplayGeometry?: DynamicIslandGeometry | undefined;
+  agentDock?: AgentDockSettingsModel | undefined;
+  servers?: readonly ServerSummary[];
+  onSetServerNotificationLevel?: ((serverId: string, level: ServerNotificationLevel) => Promise<void>) | undefined;
+  onSetServerMuted?: ((serverId: string, muted: boolean, durationMs?: number) => Promise<void>) | undefined;
+  notificationFocusRequest?: { serverId: string; nonce: number } | null | undefined;
   updateStatus: UpdateStatus;
   onUpdateAction: () => Promise<void>;
   onOpenWhatsNew?: (() => void) | undefined;
   onCancelScheduledRestart?: () => Promise<void>;
   onRestartWhenIdle?: () => Promise<void>;
   onCancelIdleRestart?: () => Promise<void>;
-  onOpenReleases?: () => void;
+  onRestartNow?: () => Promise<void>;
+  onOpenReleases?: (() => void) | undefined;
   account: CentralAuthUser;
   onUpdateAccountName: (name: string) => Promise<void>;
   onUpdateAccountAvatar: (image: AvatarImageInput | null) => Promise<void>;
+  onSetChatColor: (color: AvatarColor | null) => Promise<void>;
   onCreateMobileConnect?: () => Promise<MobileConnectTicket>;
+  onCancelMobileConnect?: () => Promise<void>;
+  onGetMobileConnectLink?: () => Promise<MobileConnectLink | null>;
+  onCreateMobileConnectLink?: () => Promise<MobileConnectLink>;
+  onRevokeMobileConnectLink?: () => Promise<void>;
   onListMobileConnectedDevices?: () => Promise<MobileConnectedDevice[]>;
   onRevokeMobileConnectedDevice?: (sessionId: string) => Promise<void>;
+  onGetRemoteNetworkRoute?: () => Promise<RemoteNetworkRouteState>;
+  onSetRemoteNetworkRoute?: (route: RemoteNetworkRoute) => Promise<RemoteNetworkRouteState>;
   onListAccountSessions?: () => Promise<AccountSession[]>;
   onRevokeAccountSession?: (sessionId: string) => Promise<void>;
+  onSignOut?: (() => Promise<void>) | undefined;
   processAvatarFile?: (file: File) => Promise<AvatarImageInput>;
   billingApi?: BillingDesktopApi;
-  /** The account's hosted servers. The tab is shown only when the account server offers them. */
-  hostedServersApi?: HostedServersDesktopApi;
-  /** Opens the add server dialog from the Hosted servers tab. */
-  onAddHostedServer?: () => void;
-  /** The agents granted a standing approval, so the user can see and undo each one. */
-  turboModePending?: boolean;
+  referralApi?: ReferralDesktopApi | undefined;
+  licenseApi?: LicenseDesktopApi | undefined;
+  creditsApi?: CreditsDesktopApi | undefined;
+  onCreditsChange?: ((credits: CreditsState) => void) | undefined;
+  onBuyCredits?: ((serverId: string | null) => void) | undefined;
+  onContactUs?: (() => void) | undefined;
+  hostedServersApi?: HostedServersDesktopApi | undefined;
+  onAddHostedServer?: (() => void) | undefined;
+  codexLiveAccess?: CodexLiveAccess | undefined;
+  liveVoiceAccount?: LiveVoiceAccountChoice | undefined;
+  onConnectCodex?: (() => void) | undefined;
+  hostedServerDeleteRequest?: { serverId: string; nonce: number } | null;
+  mobileInstallRequest?: MobileInstallRequest | null;
+  onMobileInstallRequestHandled?: (() => void) | undefined;
   onTestNotification?: () => void | Promise<void>;
-  /** Opens the operating system notification settings. Shown only on macOS and Windows. */
   onOpenNotificationSettings?: () => void | Promise<void>;
   restoreFocusTarget?: HTMLElement | null;
-  /** The tab shown when the modal is created. Read once; the user moves between tabs after that. */
-  initialTab?: SettingsTab;
-  /** The tab shown each time the modal opens. Without it, the modal shows the tab that was open last. */
+  initialTab?: SettingsTab | undefined;
   openTab?: SettingsTab | undefined;
+  page: SettingsPagePlacement | undefined;
 }
 
-/**
- * The dialog shell: the tab list, the header, the footer save bar, and one delegation per panel.
- *
- * Every panel's state is a store created here rather than inside its tab, because Kobalte unmounts
- * an unselected `Tabs.Content` when the dialog closes. A list owned by the tab would lose the rows
- * it is showing while it refetches on reopen, and the footer below could not read the profile
- * draft while another tab is selected.
- */
 export function SettingsModal(props: SettingsModalProps) {
   const i18n = useI18n();
-  const [activeTab, setActiveTab] = createSignal<SettingsTab>(untrack(() => props.initialTab) ?? "general");
+  const [activeTab, setActiveTab] = createSignal<SettingsTab>(
+    untrack(() => (props.initialTab === "hosted-servers" ? "billing" : props.initialTab)) ?? "general",
+  );
   let modalElement: HTMLElement | undefined;
   const profile = createSettingsProfileStore(props, () => activeTab() === "profile");
+  const profileActivity = createProfileActivityStore(
+    () => props.open && activeTab() === "profile",
+    (stats) => renderProfileShareImage(props.account, stats),
+  );
   const mobileConnect = createSettingsMobileConnectStore(props, () => activeTab() === "mobile-connect");
   const updates = createSettingsUpdatesStore(props);
   const billing = createBillingStore(
     () => props.billingApi,
     () => props.open && activeTab() === "billing",
   );
-  const hostedServers = createSettingsHostedServersStore(props, () => activeTab() === "hosted-servers");
+  const referral = createReferralStore(
+    () => props.referralApi,
+    () => props.open && activeTab() === "referral",
+  );
+  const license = createLicenseStore(
+    () => props.licenseApi,
+    () => props.open && activeTab() === "billing",
+    trackLicenseEvent,
+  );
+  const credits = createCreditsStore(
+    () => props.creditsApi,
+    () => props.open && activeTab() === "billing",
+    (state) => props.onCreditsChange?.(state),
+    { activity: true },
+  );
+  const hostedServers = createSettingsHostedServersStore(props, () => activeTab() === "billing");
   const voice = createSettingsVoiceStore(() => props.open && activeTab() === "voice");
-
-  // The Dynamic Island exists only on macOS, so other platforms get no tab for it.
-  const isMac = () => props.appInfo?.platform === "darwin";
-  // Linux builds carry no speech recognition runtime.
-  const hasVoice = () => voiceSupported(props.appInfo?.platform);
-  // An account that lost access to hosting still sees its servers, so it can delete or start them.
-  const hostedServersShown = () => hostedServers.state.available || hostedServers.state.servers.length > 0;
-  // A deep link, or the last server's delete, can leave the Hosted servers tab open without its panel.
+  const notificationLevels = createNotificationLevelsStore({
+    visible: () => props.open && activeTab() === "notifications",
+    servers: () => props.servers ?? [],
+  });
+  let handledHostedServerDeleteNonce = 0;
   createEffect(
-    () =>
-      activeTab() === "hosted-servers" &&
-      !hostedServersShown() &&
-      (hostedServers.state.loaded || hostedServers.state.error !== null || !props.hostedServersApi),
-    (hidden) => {
-      if (hidden) setActiveTab("general");
+    () => (props.open ? props.hostedServerDeleteRequest : null),
+    (request) => {
+      if (!request || request.nonce === handledHostedServerDeleteNonce) return;
+      handledHostedServerDeleteNonce = request.nonce;
+      hostedServers.requestDeleteById(request.serverId);
     },
   );
-  // The Hosted servers tab exists only after its list loads. A tab with no trigger falls back to General.
+
+  const dynamicIslandShown = () => dynamicIslandSettingsShown(props.appInfo?.platform, props.chatWindow === true);
   createEffect(
     () => {
       const tab = props.open ? props.openTab : undefined;
-      return tab === "hosted-servers" && !hostedServersShown() ? undefined : tab;
+      return tab === "hosted-servers" ? "billing" : tab;
     },
     (tab) => {
-      if (tab) setActiveTab(tab);
+      if (!tab) return;
+      setActiveTab(tab);
     },
   );
+  const agentDockShown = () =>
+    settingsTabShown("agent-dock", { platform: props.appInfo?.platform, chatWindow: props.chatWindow === true }) &&
+    props.agentDock !== undefined;
   const visibleNavItems = () =>
     navItems.filter(
       (item) =>
-        (item.value !== "dynamic-island" || isMac()) &&
-        (item.value !== "voice" || hasVoice()) &&
-        (item.value !== "hosted-servers" || hostedServersShown()),
+        settingsTabShown(item.value, { platform: props.appInfo?.platform, chatWindow: props.chatWindow === true }) &&
+        (item.value !== "agent-dock" || props.agentDock !== undefined),
     );
 
   const title = () => i18n.t(navItem(activeTab()).titleKey);
@@ -141,14 +212,19 @@ export function SettingsModal(props: SettingsModalProps) {
     onChange(value: string) {
       if (
         value === "general" ||
-        (value === "voice" && hasVoice()) ||
-        (value === "dynamic-island" && isMac()) ||
+        value === "appearance" ||
+        value === "app-behavior" ||
+        value === "notifications" ||
+        value === "voice" ||
+        value === "keyboard" ||
+        (value === "dynamic-island" && dynamicIslandShown()) ||
+        (value === "agent-dock" && agentDockShown()) ||
         value === "computer-use" ||
         value === "profile" ||
         value === "billing" ||
+        value === "referral" ||
         value === "mobile-connect" ||
-        value === "updates" ||
-        (value === "hosted-servers" && hostedServersShown())
+        value === "updates"
       ) {
         setActiveTab(value);
       }
@@ -156,6 +232,28 @@ export function SettingsModal(props: SettingsModalProps) {
     orientation: "vertical" as const,
     activationMode: "automatic" as const,
   };
+
+  const preferencesLoadError = () => (
+    <Show when={props.preferencesLoadFailed}>
+      <Alert tone="danger" role="alert" report={{ operation: "settings", source: "system", cause_code: "unknown" }}>
+        <AlertIcon>
+          <TriangleAlert aria-hidden="true" />
+        </AlertIcon>
+        <AlertContent>
+          <AlertDescription>{i18n.t("settings.preferences.loadFailed")}</AlertDescription>
+        </AlertContent>
+        <Show when={props.onRetryPreferencesLoad}>
+          {(retry) => (
+            <AlertActions>
+              <Button type="button" variant="outline" size="sm" onClick={() => retry()()}>
+                {i18n.t("common.retry")}
+              </Button>
+            </AlertActions>
+          )}
+        </Show>
+      </Alert>
+    </Show>
+  );
 
   function updateSetting<Key extends keyof GeneralSettingsValue>(key: Key, value: GeneralSettingsValue[Key]): void {
     props.onValueChange({ ...props.value, [key]: value });
@@ -169,94 +267,203 @@ export function SettingsModal(props: SettingsModalProps) {
     <Tabs.Root {...tabsProps} class="settings-modal-tabs-root">
       <SettingsDialogShell
         class="app-settings-modal-shell"
+        page={props.page}
         open={props.open}
-        onOpenChange={props.onOpenChange}
         title={title()}
         description={description()}
         contentKey={activeTab()}
         restoreFocusTarget={props.restoreFocusTarget}
         onContentElement={(element) => (modalElement = element)}
-        footer={<ProfileNameSaveBar store={profile} />}
         sidebar={
           <Tabs.List class="settings-modal-nav" aria-label={i18n.t("settings.sections.label")}>
-            {visibleNavItems().map((item) => {
+            {visibleNavItems().map((item, index, items) => {
               const NavIcon = item.icon;
+              const group = item.group !== items[index - 1]?.group ? item.group : undefined;
               return (
-                <Tabs.Trigger
-                  class="settings-modal-nav-item"
-                  value={item.value}
-                  aria-current={activeTab() === item.value ? "page" : undefined}
-                >
-                  <NavIcon aria-hidden="true" />
-                  <span>{i18n.t(item.titleKey)}</span>
-                </Tabs.Trigger>
+                <>
+                  {group ? <SettingsNavGroupLabel label={i18n.t(group)} /> : null}
+                  <Tabs.Trigger
+                    class="settings-modal-nav-item"
+                    value={item.value}
+                    aria-current={activeTab() === item.value ? "page" : undefined}
+                  >
+                    <NavIcon aria-hidden="true" />
+                    <span>{i18n.t(item.titleKey)}</span>
+                  </Tabs.Trigger>
+                </>
               );
             })}
           </Tabs.List>
         }
       >
         <Tabs.Content value="general" class="settings-modal-tab-panel" data-tab="general">
+          {preferencesLoadError()}
           <SettingsGeneralTab
+            part="general"
             value={props.value}
             variant={props.appInfo?.variant ?? "production"}
             platform={props.appInfo?.platform}
             onUpdateSetting={updateSetting}
             onUpdateSettings={updateSettings}
             selectMount={modalElement}
-            turboModePending={props.turboModePending}
+            chatColor={props.account.chatColor ?? null}
+            onSetChatColor={props.onSetChatColor}
+          />
+        </Tabs.Content>
+
+        <Tabs.Content value="appearance" class="settings-modal-tab-panel" data-tab="appearance">
+          {preferencesLoadError()}
+          <SettingsGeneralTab
+            part="appearance"
+            value={props.value}
+            variant={props.appInfo?.variant ?? "production"}
+            platform={props.appInfo?.platform}
+            onUpdateSetting={updateSetting}
+            onUpdateSettings={updateSettings}
+            selectMount={modalElement}
+            chatColor={props.account.chatColor ?? null}
+            onSetChatColor={props.onSetChatColor}
+          />
+        </Tabs.Content>
+
+        <Tabs.Content value="app-behavior" class="settings-modal-tab-panel" data-tab="app-behavior">
+          {preferencesLoadError()}
+          <SettingsGeneralTab
+            part="app-behavior"
+            value={props.value}
+            variant={props.appInfo?.variant ?? "production"}
+            platform={props.appInfo?.platform}
+            onUpdateSetting={updateSetting}
+            onUpdateSettings={updateSettings}
+            selectMount={modalElement}
+            chatColor={props.account.chatColor ?? null}
+            onSetChatColor={props.onSetChatColor}
+          />
+        </Tabs.Content>
+
+        <Tabs.Content value="notifications" class="settings-modal-tab-panel" data-tab="notifications">
+          {preferencesLoadError()}
+          <SettingsNotificationsTab
+            value={props.value}
+            onUpdateSetting={updateSetting}
+            onUpdateSettings={updateSettings}
             onTestNotification={props.onTestNotification}
             onOpenNotificationSettings={
               props.appInfo?.platform === "darwin" || props.appInfo?.platform === "win32"
                 ? props.onOpenNotificationSettings
                 : undefined
             }
+            levels={notificationLevels}
+            onSetServerLevel={(serverId, level) =>
+              props.onSetServerNotificationLevel?.(serverId, level) ?? Promise.resolve()
+            }
+            onSetServerMuted={(serverId, muted, durationMs) =>
+              props.onSetServerMuted?.(serverId, muted, durationMs) ?? Promise.resolve()
+            }
+            focusRequest={props.notificationFocusRequest}
+            menuMount={modalElement}
           />
         </Tabs.Content>
 
-        <Show when={hasVoice()}>
-          <Tabs.Content value="voice" class="settings-modal-tab-panel" data-tab="voice">
-            <SettingsVoiceTab store={voice} />
-          </Tabs.Content>
-        </Show>
+        <Tabs.Content value="voice" class="settings-modal-tab-panel" data-tab="voice">
+          <SettingsVoiceTab
+            store={voice}
+            selectMount={modalElement}
+            codexLiveAccess={props.codexLiveAccess}
+            onConnectCodex={props.onConnectCodex}
+            liveVoiceAccount={props.liveVoiceAccount}
+            platform={props.appInfo?.platform}
+          />
+        </Tabs.Content>
 
-        <Show when={isMac()}>
+        <Tabs.Content value="keyboard" class="settings-modal-tab-panel" data-tab="keyboard">
+          <SettingsKeyboardTab />
+        </Tabs.Content>
+
+        <Show when={dynamicIslandShown()}>
           <Tabs.Content value="dynamic-island" class="settings-modal-tab-panel" data-tab="dynamic-island">
+            {preferencesLoadError()}
             <SettingsDynamicIslandTab
               value={props.value}
               variant={props.appInfo?.variant ?? "production"}
+              platform={props.appInfo?.platform}
               builtInDisplayGeometry={props.builtInDisplayGeometry}
+              servers={props.servers ?? []}
               onUpdateSetting={updateSetting}
               onUpdateSettings={updateSettings}
             />
           </Tabs.Content>
         </Show>
 
+        <Show when={agentDockShown() && props.agentDock}>
+          {(model) => (
+            <Tabs.Content value="agent-dock" class="settings-modal-tab-panel" data-tab="agent-dock">
+              <SettingsAgentDockTab model={model()} selectMount={modalElement} />
+            </Tabs.Content>
+          )}
+        </Show>
+
         <Tabs.Content value="computer-use" class="settings-modal-tab-panel" data-tab="computer-use">
           <ComputerUseSetup variant="settings" />
         </Tabs.Content>
 
-        <Tabs.Content value="profile" class="settings-modal-tab-panel" data-tab="profile">
+        <Tabs.Content value="profile" class="settings-modal-tab-panel profile-panel" data-tab="profile">
           <SettingsProfileTab
             store={profile}
             account={props.account}
+            activity={profileActivity}
             canListSessions={Boolean(props.onListAccountSessions)}
             canRevokeSession={Boolean(props.onRevokeAccountSession)}
+            onSignOut={props.onSignOut}
           />
         </Tabs.Content>
 
         <Tabs.Content value="billing" class="settings-modal-tab-panel" data-tab="billing">
-          <BillingPanel store={billing} available={Boolean(props.billingApi)} />
+          <BillingPanel
+            store={billing}
+            available={Boolean(props.billingApi)}
+            hostedServers={hostedServers}
+            onAddServer={hostedServers.state.available ? props.onAddHostedServer : undefined}
+            license={
+              <LicenseSection
+                store={license}
+                onManagePayment={() => void billing.openPortal({ flow: "manage" })}
+                onContactUs={licenseContactUs(props.onContactUs)}
+                billingDetails={props.billingApi}
+              />
+            }
+            credits={
+              <Show when={props.onBuyCredits}>
+                {(onBuy) => (
+                  <>
+                    <CreditsSection store={credits} onBuy={(serverId) => onBuy()(serverId)} />
+                    <CreditActivitySection store={credits} />
+                  </>
+                )}
+              </Show>
+            }
+          />
+        </Tabs.Content>
+
+        <Tabs.Content value="referral" class="settings-modal-tab-panel" data-tab="referral">
+          <ReferralPanel store={referral} available={props.referralApi !== undefined} />
         </Tabs.Content>
 
         <Tabs.Content value="mobile-connect" class="settings-modal-tab-panel" data-tab="mobile-connect">
           <SettingsMobileConnectTab
             store={mobileConnect}
             canCreateTicket={Boolean(props.onCreateMobileConnect)}
+            canCancelTicket={Boolean(props.onCancelMobileConnect)}
+            canManageLink={Boolean(props.onCreateMobileConnectLink && props.onRevokeMobileConnectLink)}
             canRevokeDevice={Boolean(props.onRevokeMobileConnectedDevice)}
+            canSetRoute={Boolean(props.onSetRemoteNetworkRoute)}
+            installRequest={props.open ? props.mobileInstallRequest : null}
+            onInstallRequestHandled={props.onMobileInstallRequestHandled}
           />
         </Tabs.Content>
 
         <Tabs.Content value="updates" class="settings-modal-tab-panel" data-tab="updates">
+          {preferencesLoadError()}
           <SettingsUpdatesTab
             store={updates}
             onOpenWhatsNew={props.onOpenWhatsNew}
@@ -265,14 +472,6 @@ export function SettingsModal(props: SettingsModalProps) {
             selectMount={modalElement}
           />
         </Tabs.Content>
-        <Show when={hostedServersShown()}>
-          <Tabs.Content value="hosted-servers" class="settings-modal-tab-panel" data-tab="hosted-servers">
-            <SettingsHostedServersTab
-              store={hostedServers}
-              onAddServer={hostedServers.state.available ? props.onAddHostedServer : undefined}
-            />
-          </Tabs.Content>
-        </Show>
       </SettingsDialogShell>
     </Tabs.Root>
   );

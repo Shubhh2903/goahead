@@ -61,9 +61,6 @@
     filter var(--panel-open-dur) var(--panel-ease);
 }
 
-/* The island only enters the DOM once there is an update to announce, so it is
-   already `data-open="true"` on its first frame and the closed rule above never
-   applies. This gives that first frame something to slide in from. */
 @starting-style {
   .account-update-island.t-panel-slide[data-open="true"] {
     transform: translateY(var(--panel-translate-y));
@@ -128,8 +125,13 @@
 .account-update-island__action-shell {
   position: relative;
   display: grid;
-  width: calc(var(--openbot-control-xl) + var(--openbot-control-xl) + var(--openbot-space-6) + var(--openbot-space-1));
-  min-width: calc(var(--openbot-control-xl) + var(--openbot-control-xl) + var(--openbot-space-3));
+
+  min-width: calc(
+    var(--openbot-control-xl) +
+    var(--openbot-control-xl) +
+    var(--openbot-space-6) +
+    var(--openbot-space-1)
+  );
   flex-shrink: 0;
 }
 
@@ -140,7 +142,8 @@
   border-radius: var(--openbot-radius-sm);
   background: var(--openbot-surface-light);
   box-shadow: 0 1px 2px var(--openbot-shadow-popover-ambient);
-  padding: 0 var(--openbot-space-3) 0 var(--openbot-space-2);
+  padding-block: 0;
+  padding-inline: var(--openbot-space-2) var(--openbot-space-3);
   color: var(--openbot-text-on-light);
   transition:
     box-shadow var(--openbot-duration-normal) var(--openbot-ease-out),
@@ -174,13 +177,14 @@
   min-width: calc(var(--openbot-control-xl) + var(--openbot-space-3));
   color: var(--openbot-text-on-light);
   font-weight: var(--openbot-weight-semibold);
-  text-align: left;
+  text-align: start;
 }
 
 .account-update-island__progress-value {
   display: inline-grid;
   align-items: baseline;
   grid-template-columns: 3ch max-content;
+  direction: ltr;
   font-size: var(--openbot-text-sm);
   font-weight: var(--openbot-weight-semibold);
   font-variant-numeric: tabular-nums;
@@ -317,4 +321,14 @@
   .account-update-island__progress-value .t-digit {
     animation: none;
   }
+}
+
+.sidebar-update-island > .account-update-island {
+  position: relative;
+  inset: auto;
+  min-height: 0;
+  margin: var(--openbot-space-2) var(--openbot-space-3) var(--openbot-space-3);
+  border-radius: var(--openbot-radius-lg);
+  padding-block: var(--openbot-space-1-5);
+  padding-inline: var(--openbot-space-3) var(--openbot-space-1-5);
 }

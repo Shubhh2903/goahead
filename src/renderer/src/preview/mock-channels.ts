@@ -1,4 +1,4 @@
-import { expandChatTagReferences } from "@openbot/contracts/chat-tag-references";
+import { leadingAddress } from "@openbot/contracts/chat-tag-references";
 import type {
   AgentEvent,
   Channel,
@@ -17,15 +17,46 @@ import type {
   ListChannelRoutineRunsInput,
   RoutineSchedule,
   RoutineTrigger,
+  SetChannelImageInput,
   TestChannelRoutineInput,
   UpdateChannelMemoryInput,
   UpdateChannelRoutineInput,
 } from "@openbot/contracts/ipc";
-import { channelRoutingConversationEventItemType } from "@openbot/contracts/ipc";
+import {
+  CONTEXT_RESET_ITEM_TYPE,
+  channelRoutingConversationEventItemType,
+  isContextResetMarker,
+  withBrowserMember,
+} from "@openbot/contracts/ipc";
+import { markdownPreviewText } from "@openbot/contracts/markdown-preview-text";
+import { sourceText } from "@openbot/i18n/source";
+import { avatarImageDataUrl } from "@openbot/ui/avatar-image";
 
-export function createMockChannels(emit: (event: AgentEvent) => void, agentName: (agentId: string) => string) {
-  const channels = new Map<string, Channel>();
-  const messages = new Map<string, ChannelMessage[]>();
+function storedPicture(channel: Channel | undefined): Pick<Channel, "icon" | "imageUrl"> {
+  return {
+    ...(channel?.icon === undefined ? {} : { icon: channel.icon }),
+    ...(channel?.imageUrl === undefined ? {} : { imageUrl: channel.imageUrl }),
+  };
+}
+
+function storedBrowser(channel: Channel | undefined): Pick<Channel, "browser"> {
+  return channel?.browser === undefined ? {} : { browser: channel.browser };
+}
+
+export interface MockChannelSeed {
+  channel: Channel;
+  messages: ChannelMessage[];
+}
+
+export function createMockChannels(
+  emit: (event: AgentEvent) => void,
+  agentName: (agentId: string) => string,
+  seeds: readonly MockChannelSeed[] = [],
+) {
+  const channels = new Map<string, Channel>(seeds.map((seed) => [seed.channel.id, structuredClone(seed.channel)]));
+  const messages = new Map<string, ChannelMessage[]>(
+    seeds.map((seed) => [seed.channel.id, structuredClone(seed.messages)]),
+  );
   const tasks = new Map<string, ChannelTask[]>();
   const receipts = new Map<string, Channel>();
   const memories = new Map<string, ChannelMemory[]>();
@@ -48,7 +79,7 @@ export function createMockChannels(emit: (event: AgentEvent) => void, agentName:
           lastMessage: latest
             ? {
                 authorName: latest.author.name,
-                text: expandChatTagReferences(latest.message.text),
+                text: markdownPreviewText(latest.message.text),
                 at: latest.message.createdAt,
               }
             : null,
@@ -67,6 +98,9 @@ export function createMockChannels(emit: (event: AgentEvent) => void, agentName:
       let channel =
         input.type === "save"
           ? {
+              ...storedPicture(channels.get(input.channelId)),
+              ...(channels.get(input.channelId)?.isolated ? { isolated: true } : {}),
+              ...storedBrowser(channels.get(input.channelId)),
               ...input.draft,
               id: input.channelId,
               revision: channels.get(input.channelId)?.revision ?? 0,
@@ -74,13 +108,25 @@ export function createMockChannels(emit: (event: AgentEvent) => void, agentName:
               createdAt: channels.get(input.channelId)?.createdAt ?? new Date().toISOString(),
             }
           : requireChannel(input.channelId);
-      channel = { ...channel, revision: channel.revision + 1 };
+      if (input.type === "archive" && (tasks.get(input.channelId) ?? []).some((task) => task.state === "running"))
+        throw new Error(sourceText("error.backend.channelArchiveRunning"));
+      channel = withBrowserMember({ ...channel, revision: channel.revision + 1 });
       if (input.type === "archive" || input.type === "restore") channel.archived = input.type === "archive";
       const work = tasks.get(channel.id) ?? [];
       if (input.type === "archive")
         for (const task of work) {
           if (task.state !== "completed" && task.state !== "cancelled") task.state = "paused";
         }
+      if (input.type === "cancel") {
+        const task = work.find((item) => item.id === input.taskId);
+        if (!task) throw new Error("Channel task not found.");
+        for (const item of work)
+          if (item.rootTaskId === task.rootTaskId && item.state !== "completed" && item.state !== "cancelled") {
+            item.state = "cancelled";
+            item.error = null;
+            item.revision += 1;
+          }
+      }
       if (input.type === "stop" || input.type === "resume" || input.type === "reassign") {
         const task = work.find((item) => item.id === input.taskId);
         if (!task) throw new Error("Channel task not found.");
@@ -92,17 +138,23 @@ export function createMockChannels(emit: (event: AgentEvent) => void, agentName:
         const list = messages.get(channel.id) ?? [];
         const id = crypto.randomUUID();
         const taskId = crypto.randomUUID();
-        // The real service routes a request with no recipient through the lead's model and posts the
-        // choice as a channel message. It skips both when the answer is already known: a named
-        // recipient, or a channel with one member. The preview has no model, so it keeps assigning
-        // the lead, but it reproduces which requests get a visible dispatch row and which do not.
-        const routed = !input.recipientAgentId && channel.members.length > 1 && channel.leadAgentId !== null;
+        const address = leadingAddress(input.text);
+        const recipients = [
+          ...new Set([
+            ...(input.recipientAgentId ? [input.recipientAgentId] : []),
+            ...address.mentions
+              .map((mention) => mention.id)
+              .filter((agentId) => channel.members.some((member) => member.agentId === agentId)),
+            ...(address.everyone ? channel.members.map((member) => member.agentId) : []),
+          ]),
+        ];
+        const routed = !recipients.length && channel.members.length > 1 && channel.leadAgentId !== null;
         work.push({
           id: taskId,
           channelId: channel.id,
           rootTaskId: taskId,
           parentTaskId: null,
-          ownerAgentId: input.recipientAgentId ?? channel.leadAgentId,
+          ownerAgentId: recipients[0] ?? channel.leadAgentId,
           requestMessageId: id,
           instruction: input.text,
           attachmentDraftIds: input.attachmentDraftIds,
@@ -115,6 +167,27 @@ export function createMockChannels(emit: (event: AgentEvent) => void, agentName:
           assignmentCount: 0,
           error: null,
         });
+        for (const agentId of recipients.slice(1)) {
+          const siblingId = crypto.randomUUID();
+          work.push({
+            id: siblingId,
+            channelId: channel.id,
+            rootTaskId: siblingId,
+            parentTaskId: null,
+            ownerAgentId: agentId,
+            requestMessageId: id,
+            instruction: input.text,
+            attachmentDraftIds: [],
+            expectedResult: "Complete the requested work and report the result.",
+            sourceMessageIds: [id],
+            dependencies: [],
+            resources: ["host"],
+            state: "queued",
+            revision: 0,
+            assignmentCount: 0,
+            error: null,
+          });
+        }
         list.push({
           id,
           channelId: channel.id,
@@ -133,7 +206,6 @@ export function createMockChannels(emit: (event: AgentEvent) => void, agentName:
         });
         if (routed && channel.leadAgentId) {
           const dispatchId = crypto.randomUUID();
-          // The name is resolved from the agent roster by the timeline, so the id stands in for it.
           list.push({
             id: dispatchId,
             channelId: channel.id,
@@ -158,6 +230,66 @@ export function createMockChannels(emit: (event: AgentEvent) => void, agentName:
       receipts.set(input.operationId, structuredClone(channel));
       changed(channel.id, channel.revision);
       return structuredClone(channel);
+    },
+    setChannelImage: async (input: SetChannelImageInput): Promise<Channel> => {
+      const current = requireChannel(input.channelId);
+      const channel = {
+        ...current,
+        imageUrl: input.image ? avatarImageDataUrl(input.image) : null,
+        revision: current.revision + 1,
+      };
+      channels.set(channel.id, structuredClone(channel));
+      changed(channel.id, channel.revision);
+      return structuredClone(channel);
+    },
+    clearChannelContext: async (channelId: string): Promise<void> => {
+      const channel = requireChannel(channelId);
+      if ((tasks.get(channelId) ?? []).some((task) => ["queued", "running", "waiting"].includes(task.state)))
+        throw new Error(sourceText("error.backend.channelWaitBeforeNewConversation"));
+      const list = messages.get(channelId) ?? [];
+      const last = list.at(-1);
+      if (!last || isContextResetMarker(last.message)) return;
+      const id = `context-reset-${crypto.randomUUID()}`;
+      list.push({
+        id,
+        channelId,
+        sequence: (last.sequence ?? list.length) + 1,
+        author: { kind: "member", id: "preview", name: "You" },
+        taskId: null,
+        superseded: false,
+        message: {
+          id,
+          author: "system",
+          source: "system",
+          text: sourceText("status.agent.contextCleared"),
+          createdAt: new Date().toISOString(),
+          status: "completed",
+          itemType: CONTEXT_RESET_ITEM_TYPE,
+        },
+      });
+      messages.set(channelId, list);
+      changed(channel.id, channel.revision);
+    },
+    compactChannelContext: async (channelId: string): Promise<void> => {
+      requireChannel(channelId);
+    },
+    deleteChannelHistory: async (channelId: string): Promise<void> => {
+      const channel = requireChannel(channelId);
+      if ((tasks.get(channelId) ?? []).some((task) => ["queued", "running", "waiting"].includes(task.state)))
+        throw new Error(sourceText("error.backend.channelWaitBeforeDeleteHistory"));
+      messages.set(channelId, []);
+      changed(channel.id, channel.revision);
+    },
+    deleteChannelMessage: async (input: { channelId: string; messageId: string }): Promise<void> => {
+      const channel = requireChannel(input.channelId);
+      const list = messages.get(input.channelId) ?? [];
+      if (!list.some((entry) => entry.id === input.messageId))
+        throw new Error(sourceText("error.backend.messageDeleteNotFound"));
+      messages.set(
+        input.channelId,
+        list.filter((entry) => entry.id !== input.messageId),
+      );
+      changed(channel.id, channel.revision);
     },
     deleteChannel: async (channelId: string): Promise<void> => {
       requireChannel(channelId);
@@ -297,7 +429,6 @@ export function createMockChannels(emit: (event: AgentEvent) => void, agentName:
   };
 }
 
-/** One fire an hour from now is enough for the preview: nothing here evaluates a schedule. */
 function nextTrigger(routineId: string, schedule: RoutineSchedule, now: string): RoutineTrigger {
   return {
     id: crypto.randomUUID(),

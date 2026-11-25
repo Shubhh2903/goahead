@@ -1,71 +1,81 @@
-import type { BitwardenConnectorStatus } from "@openbot/contracts/ipc";
-import { toast } from "@openbot/ui";
-import type { BitwardenConnectorPanelProps } from "@openbot/ui/features/settings/BitwardenConnectorPanel";
+import { type BitwardenConnectorStatus, DISCONNECTED_BITWARDEN_CONNECTOR } from "@openbot/contracts/ipc";
 import { currentText } from "@openbot/ui/text";
-import { createStore, onSettled } from "solid-js";
-import { bitwardenConnectorPort } from "./bitwarden-connector-port";
+import { createSignal, onCleanup, onSettled } from "solid-js";
+import { type BitwardenConnectorPort, bitwardenConnectorPort } from "./bitwarden-connector-port";
+import {
+  type ConnectorAnalyticsAction,
+  type ConnectorController,
+  createConnectorActions,
+  NO_WATCH,
+} from "./connector-controller";
 
-/** The local connection is shared by the Marketplace and server settings. */
-export function createBitwardenConnector(port = bitwardenConnectorPort): BitwardenConnectorPanelProps {
-  const [state, setState] = createStore({ status: { connected: false }, busy: false });
-  let disposed = false;
-  let attempt = 0;
-  onSettled(() => {
-    const unsubscribe = port().onChanged((status) => {
-      if (!disposed)
-        setState((draft) => {
-          draft.status = status;
-        });
-    });
-    const current = attempt;
+export function createBitwardenConnector(
+  port: () => BitwardenConnectorPort = bitwardenConnectorPort,
+  hostName?: () => string | undefined,
+): ConnectorController {
+  const [status, setStatus] = createSignal<BitwardenConnectorStatus>(DISCONNECTED_BITWARDEN_CONNECTOR);
+  const [read, setRead] = createSignal(false);
+  const [statusError, setStatusError] = createSignal<string | null>(null);
+  const actions = createConnectorActions("connector.bitwarden.actionFailed", "bitwarden");
+  let statuses = 0;
+  const show = (next: BitwardenConnectorStatus) => {
+    statuses += 1;
+    setStatus(next);
+    setStatusError(null);
+  };
+
+  const unsubscribe = port().onChanged((next) => {
+    if (!actions.disposed()) show(next);
+  });
+  const reload = () => {
+    const before = statuses;
     void port()
       .status()
-      .then((status) => {
-        if (!disposed && current === attempt)
-          setState((draft) => {
-            draft.status = status;
-          });
-      })
-      .catch(() => undefined);
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
-  });
-  const run = (action: () => Promise<BitwardenConnectorStatus>) => {
-    const current = ++attempt;
-    setState((draft) => {
-      draft.busy = true;
-    });
-    void action()
-      .then((status) => {
-        if (!disposed && current === attempt)
-          setState((draft) => {
-            draft.status = status;
-          });
+      .then((next) => {
+        if (!actions.disposed()) show(next);
       })
       .catch((error: unknown) => {
-        if (disposed || current !== attempt) return;
+        if (actions.disposed() || before !== statuses) return;
         const { t, errorMessage } = currentText();
-        toast.error(errorMessage(error, t("connector.bitwarden.failed")));
+        setStatusError(errorMessage(error, t("connector.readFailed")));
       })
       .finally(() => {
-        if (!disposed && current === attempt)
-          setState((draft) => {
-            draft.busy = false;
-          });
+        if (!actions.disposed()) setRead(true);
       });
   };
+  onSettled(reload);
+  onCleanup(unsubscribe);
+
+  const run = (action: () => Promise<BitwardenConnectorStatus>, track: ConnectorAnalyticsAction) =>
+    actions.run(action, { done: show, track });
+
   return {
-    get status() {
-      return state.status;
+    id: "bitwarden",
+    ready: read,
+    available: () => true,
+    busy: actions.busy,
+    reload,
+    watch: NO_WATCH,
+    detail: {
+      id: "bitwarden",
+      props: {
+        get status() {
+          return status();
+        },
+        get busy() {
+          return actions.busy();
+        },
+        get statusError() {
+          return statusError();
+        },
+        get hostName() {
+          return hostName?.();
+        },
+        onRetry: reload,
+        onConnect: (key) => run(() => port().connect(key), "connected"),
+        onConnectHost: (input) => run(() => port().connectHost(input), "connected"),
+        onDisconnect: () => run(() => port().disconnect(), "disconnected"),
+      },
     },
-    get busy() {
-      return state.busy;
-    },
-    onConnect: (key) => {
-      if (!state.busy) run(() => port().connect(key));
-    },
-    onDisconnect: () => run(() => port().disconnect()),
   };
 }

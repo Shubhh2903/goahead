@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@openbot/ui/data";
-import { MessageActions } from "@openbot/ui/features/conversation/MessageRendering";
+import { MessageActions, MessageMenuItems } from "@openbot/ui/features/conversation/MessageRendering";
 import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
 
@@ -13,15 +13,12 @@ const message: AgentMessage = {
 const args: Parameters<typeof MessageActions>[0] = {
   message,
   pickerOpen: false,
-  moreOpen: false,
   expandedEmoji: false,
-  copied: false,
   onTogglePicker: fn(),
-  onToggleMore: fn(),
   onExpandEmoji: fn(),
   onReact: fn(),
   onReply: fn(),
-  onCopy: fn(),
+  menu: () => <MessageMenuItems message={message} onReact={fn()} onReply={fn()} onCopy={fn()} />,
 };
 
 const meta = {
@@ -38,10 +35,6 @@ export const Default: Story = {};
 
 export const ReactionPicker: Story = {
   args: { pickerOpen: true },
-};
-
-export const MoreMenu: Story = {
-  args: { moreOpen: true },
 };
 
 export const PreviewOnly: Story = {

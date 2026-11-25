@@ -10,7 +10,7 @@ import type {
   SlackOrchestratorModels,
 } from "@openbot/ui/features/settings/SlackIntegrationPanel";
 import { currentText } from "@openbot/ui/text";
-import { createSignal, onCleanup } from "solid-js";
+import { createSignal, onCleanup, untrack } from "solid-js";
 import { actionToast } from "../../action-toast";
 import { type SlackConnectorPort, slackConnectorPort } from "./slack-connector-port";
 
@@ -25,6 +25,7 @@ export interface SlackConnectorController {
   watch: () => () => void;
   connectWorkspace: () => void;
   disconnectWorkspace: (workspaceId: string) => void;
+  disconnectAll: () => void;
   reconnect: (workspaceId: string) => void;
   setEnabled: (workspaceId: string, enabled: boolean) => void;
   /** The catalog for the orchestrator's model picker, or undefined to start on a new agent's default. */
@@ -121,6 +122,12 @@ export function createSlackConnector(
     },
     connectWorkspace: () => run(() => messaging().connectSlackWorkspace()),
     disconnectWorkspace: (workspaceId) => run(() => messaging().disconnectSlackWorkspace({ workspaceId })),
+    disconnectAll: () => {
+      const workspaceIds = (untrack(overview)?.connections ?? []).map((connection) => connection.workspaceId);
+      run(async () => {
+        for (const workspaceId of workspaceIds) await messaging().disconnectSlackWorkspace({ workspaceId });
+      });
+    },
     reconnect: (workspaceId) => run(() => messaging().reconnectSlackWorkspace({ workspaceId })),
     setEnabled: (workspaceId, enabled) => run(() => messaging().setSlackEnabled({ workspaceId, enabled })),
     models,

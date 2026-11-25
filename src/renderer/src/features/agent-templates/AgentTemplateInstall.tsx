@@ -1,8 +1,10 @@
 import type { AddedAgent, AgentTemplateDetail, ServerSummary } from "@openbot/contracts/ipc";
+import { classifyFailure } from "@openbot/telemetry";
 import { AgentTemplateInstallDialog } from "@openbot/ui/features/agents/AgentTemplateInstallDialog";
 import { useText } from "@openbot/ui/text";
 import { createEffect, createStore } from "solid-js";
 import { actionToast } from "../../action-toast";
+import { desktopAnalytics } from "../../analytics";
 import { type AgentTemplateInstallCalls, agentTemplatesPort } from "./agent-templates-port";
 
 interface InstallState {
@@ -10,16 +12,11 @@ interface InstallState {
   loading: boolean;
 }
 
-/**
- * The dialog an `openbot://agents/<id>` link opens. It reads the template by the id the link named
- * and installs it only when the user presses Add agent: on `server` when one is given, whose host
- * downloads the template itself, otherwise on this computer.
- */
 export function AgentTemplateInstall(props: {
   templateId: string | null;
   server?: ServerSummary | undefined;
-  /** Defaults to the desktop port. */
   calls?: AgentTemplateInstallCalls | undefined;
+  onOpenLink: (url: string) => void;
   onClose: () => void;
   onInstalled: (agent: AddedAgent, serverId?: string) => Promise<void>;
 }) {
@@ -47,12 +44,13 @@ export function AgentTemplateInstall(props: {
         })
         .catch((error: unknown) => {
           if (!current) return;
-          // Nothing can be shown without the template, so the dialog closes and the toast says why.
           setState((draft) => {
             draft.loading = false;
           });
           props.onClose();
-          actionToast.error(errorMessage(error, t("agentTemplate.install.readFailed")));
+          actionToast.error(errorMessage(error, t("agentTemplate.install.readFailed")), {
+            report: { operation: "agent", source: "action", cause_code: classifyFailure(error) },
+          });
         });
       return () => {
         current = false;
@@ -71,9 +69,22 @@ export function AgentTemplateInstall(props: {
       expectedUpdatedAt: reviewed.updatedAt,
     };
     const port = calls();
-    const agent = server
-      ? await port.agent.addTemplateAgent(input, server.id)
-      : (await port.agentTemplates.install(input)).agent;
+    const agent = await (server
+      ? port.agent.addTemplateAgent(input, server.id)
+      : port.agentTemplates.install(input).then((installed) => installed.agent)
+    ).catch((error: unknown) => {
+      desktopAnalytics.track("agent_template_action", {
+        action: "installed",
+        result: "failed",
+        entry_point: "deep_link",
+      });
+      throw error;
+    });
+    desktopAnalytics.track("agent_template_action", {
+      action: "installed",
+      result: "succeeded",
+      entry_point: "deep_link",
+    });
     props.onClose();
     actionToast.success(
       server
@@ -81,7 +92,6 @@ export function AgentTemplateInstall(props: {
         : t("agentTemplate.install.added", { name: agent.name }),
       { description: t("agentTemplate.install.ready") },
     );
-    // Opening the new agent reports its own failure and never rejects, so it cannot read as a failed install.
     await props.onInstalled(agent, server?.id);
   }
 
@@ -94,6 +104,7 @@ export function AgentTemplateInstall(props: {
       detail={state.detail}
       loading={state.loading}
       onInstall={install}
+      onOpenLink={props.onOpenLink}
     />
   );
 }

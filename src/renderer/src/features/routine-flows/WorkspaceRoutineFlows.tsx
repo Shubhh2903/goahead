@@ -8,13 +8,13 @@
 import { type RoutineFlowCanvas, type RoutineFlowLink, routineFlowAgentKey } from "@openbot/contracts/ipc";
 import { toast } from "@openbot/ui";
 import type { AgentProfile } from "@openbot/ui/data";
+import { resolveCreationModel } from "@openbot/ui/features/agents/agent-creation-model";
 import type { DiagramModelChoice } from "@openbot/ui/features/diagrams/DiagramNewAgentCard";
 import { DiagramView } from "@openbot/ui/features/diagrams/DiagramView";
 import type { DiagramPoint } from "@openbot/ui/features/diagrams/diagram-model";
 import { useText } from "@openbot/ui/text";
 import { createEffect, createMemo, createStore, onSettled, Show } from "solid-js";
 import { useAgentActions } from "../agents/agent-actions";
-import { resolveCreationModel } from "../agents/agent-creation-model";
 import { useAgents } from "../agents/agents-context";
 import { useCustomAgents } from "../custom-agents/custom-agents-context";
 import { useCustomProviders } from "../custom-providers/custom-providers-context";
@@ -48,7 +48,7 @@ export function WorkspaceRoutineFlows(props: { port?: RoutineFlowsPort }) {
   const { customAgents } = useCustomAgents();
   /** A new agent starts on the model the agent form would pick, and the user can change it. */
   const newAgentModels = createMemo((): DiagramModelChoice | undefined => {
-    const initial = resolveCreationModel(serverSetupChoice() ?? setupState(), modelOptions());
+    const initial = resolveCreationModel(serverSetupChoice() ?? setupState(), modelOptions(), agentStatus());
     return initial
       ? {
           options: modelOptions(),

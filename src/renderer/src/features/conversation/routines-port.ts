@@ -1,14 +1,22 @@
-// The routines twin of `memories-port.ts`: one settings panel, two owners.
-
-import type {
-  OpenBotDesktopApi,
-  RoutineFields,
-  RoutineLimitPolicy,
-  RoutineMissedPolicy,
-  RoutineRunCondition,
-  RoutineRunFields,
-  RoutineSchedule,
+import {
+  LOCAL_SERVER_ID,
+  type OpenBotDesktopApi,
+  type RoutineFields,
+  type RoutineLimitPolicy,
+  type RoutineMissedPolicy,
+  type RoutineResultConnectionOption,
+  type RoutineResultDelivery,
+  type RoutineResultDestination,
+  type RoutineResultRoutineInput,
+  type RoutineRunCondition,
+  type RoutineRunFields,
+  type RoutineRunPlace,
+  type RoutineSchedule,
+  type SetRoutineResultDestinationInput,
+  type TestRoutineInput,
 } from "@openbot/contracts/ipc";
+import type { EventRoutine, EventRoutineOwner, EventRoutineTriggerInput } from "@openbot/contracts/ipc-events";
+import type { EventRoutinesApi, RoutineWebhooksApi } from "./routine-webhooks-api";
 
 interface RoutineSaveInput {
   routineId: string | null;
@@ -17,89 +25,147 @@ interface RoutineSaveInput {
   active: boolean;
   timezone: string;
   schedule: RoutineSchedule;
-  /** Left out, an update keeps the saved policy. */
   limitPolicy?: RoutineLimitPolicy;
-  /** Left out, an update keeps the saved policy. */
   missedPolicy?: RoutineMissedPolicy;
-  /** Left out, an update keeps the saved condition; `null` removes it. */
   runCondition?: RoutineRunCondition | null;
+  runIn?: RoutineRunPlace;
+  trigger?: EventRoutineTriggerInput;
+}
+
+export type RoutineEditorRecord = RoutineFields | EventRoutine;
+
+interface RoutineSaveResult {
+  routine: RoutineEditorRecord;
+  secret: string | null;
+}
+
+interface RoutineResultsPort {
+  options: () => Promise<RoutineResultConnectionOption[]>;
+  destination: (routineId: string) => Promise<RoutineResultDestination | null>;
+  setDestination: (
+    routineId: string,
+    destination: { connectionId: string; placeId: string; placeName: string } | null,
+  ) => Promise<RoutineResultDestination | null>;
+  deliveries?: (routineId: string) => Promise<RoutineResultDelivery[]>;
+  resend?: (runId: string) => Promise<void>;
 }
 
 export interface RoutinesPort {
   ownerId: string;
-  /** The word the editor reads in its placeholder: "Describe what this agent should do." */
   ownerNoun: "agent" | "channel";
-  /**
-   * Whether the host keeps what a routine does at a spent plan. Only this computer's host does: the
-   * released Team API drops the field, so a remote host would ignore the choice.
-   */
   limitPolicy: boolean;
-  /**
-   * Whether the host keeps what a routine does with a run that came due while GoAhead was closed.
-   * Only this computer's host does, for the same reason as `limitPolicy`.
-   */
   missedPolicy: boolean;
-  /**
-   * Whether the host can check a run condition before a scheduled run. Only this computer's host
-   * does: the command runs on the host, and the released Team API drops the field.
-   */
-  runCondition: boolean;
-  list: () => Promise<RoutineFields[]>;
+  runCondition?: boolean;
+  onceSchedule: boolean;
+  runIn: boolean;
+  list: () => Promise<RoutineEditorRecord[]>;
   listRuns: (routineId: string, limit: number) => Promise<RoutineRunFields[]>;
-  save: (input: RoutineSaveInput) => Promise<RoutineFields>;
+  save: (input: RoutineSaveInput) => Promise<RoutineSaveResult>;
   remove: (routineId: string) => Promise<void>;
   test: (routineId: string) => Promise<void>;
-  /** Only for an agent on this computer that allows local scripts. */
   runCommand?: (routineId: string) => Promise<string>;
   subscribe: (reload: () => void) => () => void;
+  events?: { owner: EventRoutineOwner; api: RoutineWebhooksApi };
+  results?: RoutineResultsPort;
 }
 
-export function agentRoutinesPort(agentId: string, automation = false, localHost = false): RoutinesPort {
+export interface RoutineResultsCalls {
+  options: () => Promise<RoutineResultConnectionOption[]>;
+  destination: (input: RoutineResultRoutineInput) => Promise<RoutineResultDestination | null>;
+  setDestination: (input: SetRoutineResultDestinationInput) => Promise<RoutineResultDestination | null>;
+}
+
+function agentRoutineResults(agentId: string, serverId?: string | RoutineResultsCalls): RoutineResultsPort {
+  if (typeof serverId === "object")
+    return {
+      options: () => serverId.options(),
+      destination: (routineId) => serverId.destination({ agentId, routineId }),
+      setDestination: (routineId, destination) => serverId.setDestination({ agentId, routineId, destination }),
+    };
+  const api = window.openbot.routineResults;
+  const server = serverId ?? LOCAL_SERVER_ID;
+  const destinations: RoutineResultsPort = {
+    options: () => api.options(server),
+    destination: (routineId) => api.destination({ agentId, routineId }, server),
+    setDestination: (routineId, destination) => api.setDestination({ agentId, routineId, destination }, server),
+  };
+  if (serverId) return destinations;
+  return {
+    ...destinations,
+    deliveries: (routineId) => api.deliveries({ agentId, routineId }),
+    resend: (runId) => api.resend({ agentId, runId }),
+  };
+}
+
+export type AgentRoutinesApi = Pick<
+  OpenBotDesktopApi["agent"],
+  "listRoutines" | "listRoutineRuns" | "createRoutine" | "updateRoutine" | "deleteRoutine" | "testRoutine" | "onEvent"
+>;
+
+export function agentRoutinesPort(
+  agentId: string,
+  runCommand?: (input: TestRoutineInput) => Promise<string>,
+  localHost = false,
+  api: AgentRoutinesApi = window.openbot.agent,
+  runPlace = localHost,
+  resultsServerId?: string | RoutineResultsCalls,
+  onceSchedule = localHost,
+): RoutinesPort {
+  const results = localHost || resultsServerId ? agentRoutineResults(agentId, resultsServerId) : undefined;
   return {
     ownerId: agentId,
     ownerNoun: "agent",
     limitPolicy: localHost,
     missedPolicy: localHost,
     runCondition: localHost,
-    list: () => window.openbot.agent.listRoutines(agentId),
-    listRuns: (routineId, limit) => window.openbot.agent.listRoutineRuns({ agentId, routineId, limit }),
+    onceSchedule,
+    runIn: runPlace,
+    list: () => api.listRoutines(agentId),
+    listRuns: (routineId, limit) => api.listRoutineRuns({ agentId, routineId, limit }),
     save: (input) => {
-      const { routineId, name, instruction, active, timezone, schedule } = input;
-      return routineId
-        ? window.openbot.agent.updateRoutine({
-            agentId,
-            routineId,
-            name,
-            instruction,
-            active,
-            schedule,
-            ...updatePolicy(localHost, input),
-          })
-        : window.openbot.agent.createRoutine({
-            agentId,
-            name,
-            instruction,
-            active,
-            timezone,
-            schedule,
-            ...createPolicy(localHost, input),
-          });
+      const { routineId, name, instruction, active, timezone, schedule, limitPolicy, missedPolicy, runIn } = input;
+      const policy = {
+        ...(localHost && limitPolicy ? { limitPolicy } : {}),
+        ...(localHost && missedPolicy ? { missedPolicy } : {}),
+        ...(runPlace && runIn ? { runIn } : {}),
+      };
+      return (
+        routineId
+          ? api.updateRoutine({
+              agentId,
+              routineId,
+              name,
+              instruction,
+              active,
+              schedule,
+              ...policy,
+              ...updateRunCondition(localHost, input.runCondition),
+            })
+          : api.createRoutine({
+              agentId,
+              name,
+              instruction,
+              active,
+              timezone,
+              schedule,
+              ...policy,
+              ...createRunCondition(localHost, input.runCondition),
+            })
+      ).then((routine) => ({ routine, secret: null }));
     },
-    remove: (routineId) => window.openbot.agent.deleteRoutine({ agentId, routineId }),
+    remove: (routineId) => api.deleteRoutine({ agentId, routineId }),
     test: async (routineId) => {
-      await window.openbot.agent.testRoutine({ agentId, routineId });
+      await api.testRoutine({ agentId, routineId });
     },
-    ...(automation
-      ? { runCommand: (routineId: string) => window.openbot.agent.automationRunCommand({ agentId, routineId }) }
-      : {}),
+    ...(runCommand ? { runCommand: (routineId: string) => runCommand({ agentId, routineId }) } : {}),
+    ...(results ? { results } : {}),
     subscribe: (reload) =>
-      window.openbot.agent.onEvent((event) => {
+      api.onEvent((event) => {
         if (event.type === "routines-changed" && event.agentId === agentId) reload();
       }),
   };
 }
 
-/** The host calls a channel's routines make. The desktop sends them through preload. */
 export type ChannelRoutinesApi = Pick<
   OpenBotDesktopApi["agent"],
   | "listChannelRoutines"
@@ -115,6 +181,7 @@ export function channelRoutinesPort(
   channelId: string,
   api: ChannelRoutinesApi = window.openbot.agent,
   localHost = false,
+  onceSchedule = localHost,
 ): RoutinesPort {
   return {
     ownerId: channelId,
@@ -122,29 +189,38 @@ export function channelRoutinesPort(
     limitPolicy: localHost,
     missedPolicy: localHost,
     runCondition: localHost,
+    onceSchedule,
+    runIn: false,
     list: () => api.listChannelRoutines(channelId),
     listRuns: (routineId, limit) => api.listChannelRoutineRuns({ channelId, routineId, limit }),
     save: (input) => {
-      const { routineId, name, instruction, active, timezone, schedule } = input;
-      return routineId
-        ? api.updateChannelRoutine({
-            channelId,
-            routineId,
-            name,
-            instruction,
-            active,
-            schedule,
-            ...updatePolicy(localHost, input),
-          })
-        : api.createChannelRoutine({
-            channelId,
-            name,
-            instruction,
-            active,
-            timezone,
-            schedule,
-            ...createPolicy(localHost, input),
-          });
+      const { routineId, name, instruction, active, timezone, schedule, limitPolicy, missedPolicy } = input;
+      const policy = localHost
+        ? { ...(limitPolicy ? { limitPolicy } : {}), ...(missedPolicy ? { missedPolicy } : {}) }
+        : {};
+      return (
+        routineId
+          ? api.updateChannelRoutine({
+              channelId,
+              routineId,
+              name,
+              instruction,
+              active,
+              schedule,
+              ...policy,
+              ...updateRunCondition(localHost, input.runCondition),
+            })
+          : api.createChannelRoutine({
+              channelId,
+              name,
+              instruction,
+              active,
+              timezone,
+              schedule,
+              ...policy,
+              ...createRunCondition(localHost, input.runCondition),
+            })
+      ).then((routine) => ({ routine, secret: null }));
     },
     remove: (routineId) => api.deleteChannelRoutine({ channelId, routineId }),
     test: async (routineId) => {
@@ -157,26 +233,67 @@ export function channelRoutinesPort(
   };
 }
 
-/** The fields only this computer's host keeps, for a new routine: no condition is left out. */
-function createPolicy(
+function createRunCondition(
   localHost: boolean,
-  { limitPolicy, missedPolicy, runCondition }: RoutineSaveInput,
-): { limitPolicy?: RoutineLimitPolicy; missedPolicy?: RoutineMissedPolicy; runCondition?: RoutineRunCondition } {
-  if (!localHost) return {};
-  return {
-    ...(limitPolicy ? { limitPolicy } : {}),
-    ...(missedPolicy ? { missedPolicy } : {}),
-    ...(runCondition ? { runCondition } : {}),
-  };
+  runCondition: RoutineRunCondition | null | undefined,
+): { runCondition?: RoutineRunCondition } {
+  return localHost && runCondition ? { runCondition } : {};
 }
 
-/** The same fields for an update, where `null` removes the saved condition. */
-function updatePolicy(
+function updateRunCondition(
   localHost: boolean,
-  input: RoutineSaveInput,
-): { limitPolicy?: RoutineLimitPolicy; missedPolicy?: RoutineMissedPolicy; runCondition?: RoutineRunCondition | null } {
+  runCondition: RoutineRunCondition | null | undefined,
+): { runCondition?: RoutineRunCondition | null } {
+  if (!localHost || runCondition === undefined) return {};
+  return { runCondition };
+}
+
+export function eventRoutinesPort(
+  owner: EventRoutineOwner,
+  api: EventRoutinesApi,
+  legacy: Pick<
+    RoutinesPort,
+    "listRuns" | "subscribe" | "runCommand" | "missedPolicy" | "onceSchedule" | "runIn" | "results"
+  >,
+): RoutinesPort {
+  const { runCommand, results } = legacy;
+  const recoveryRuns = api.listRuns;
+  const missedPolicyKept = legacy.missedPolicy || recoveryRuns !== undefined;
   return {
-    ...createPolicy(localHost, input),
-    ...(localHost && input.runCondition === null ? { runCondition: null } : {}),
+    ownerId: owner.id,
+    ownerNoun: owner.kind,
+    limitPolicy: true,
+    missedPolicy: missedPolicyKept,
+    runCondition: false,
+    onceSchedule: legacy.onceSchedule,
+    runIn: legacy.runIn,
+    list: () => api.listRoutines({ owner }),
+    listRuns: recoveryRuns
+      ? async (routineId, limit) => {
+          const runs = await recoveryRuns({ owner, routineId, limit });
+          return owner.kind === "agent"
+            ? runs.map(({ deliveryId, ...run }) => ({ ...run, agentId: owner.id, deliveryId: deliveryId ?? null }))
+            : runs;
+        }
+      : legacy.listRuns,
+    events: { owner, api },
+    save: ({ routineId, name, instruction, active, timezone, schedule, trigger, limitPolicy, missedPolicy, runIn }) =>
+      api.saveRoutine({
+        ...(routineId ? { id: routineId } : {}),
+        owner,
+        name,
+        instruction,
+        active,
+        timezone,
+        trigger: trigger ?? { kind: "schedule", schedule },
+        ...(limitPolicy ? { limitPolicy } : {}),
+        ...(missedPolicyKept && missedPolicy ? { missedPolicy } : {}),
+        ...(legacy.runIn && runIn ? { runIn } : {}),
+      }),
+    remove: (routineId) => api.deleteRoutine({ id: routineId, owner }),
+    test: (routineId) => api.testRoutine({ id: routineId, owner }),
+    ...(runCommand ? { runCommand } : {}),
+    ...(results ? { results } : {}),
+    subscribe: legacy.subscribe,
   };
 }

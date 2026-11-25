@@ -1,47 +1,61 @@
 import {
+  type AppInfo,
   type AppVariant,
   DEFAULT_DYNAMIC_ISLAND_PREFERENCE,
   DYNAMIC_ISLAND_SIZE_LIMITS,
   type DynamicIslandGeometry,
   type DynamicIslandNotchSize,
   IDLE_DYNAMIC_ISLAND_PRESENTATION,
+  isDynamicIslandServerVisible,
+  type ServerSummary,
 } from "@openbot/contracts/ipc";
-import { Button, ItemGroup, SettingsSection, SliderField, SwitchField } from "@openbot/ui";
+import {
+  Button,
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+  SettingsSection,
+  SliderField,
+  Switch,
+  SwitchField,
+} from "@openbot/ui";
 import {
   OpenBotDynamicIsland,
   openBotIdleCompactWidth,
 } from "@openbot/ui/features/dynamic-island/OpenBotDynamicIsland";
+import { ServerMark, serverStatusLabels } from "@openbot/ui/features/servers/ServerRail";
 import type { GeneralSettingsValue } from "@openbot/ui/features/settings/app-settings";
 import type { JSX } from "@solidjs/web";
-import { createSignal, onSettled } from "solid-js";
+import { createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
 import { useI18n } from "../../i18n-context";
+import { usePlatform } from "../../platform";
+import { settingsPort } from "./settings-port";
+import { XWaylandRestartRow } from "./XWaylandRestartRow";
 
 const PREVIEW_NOTCH_SIZE: DynamicIslandNotchSize = { width: 192, height: 32 };
-/** The space the preview keeps on each side of an island that it scales down to fit. */
 const PREVIEW_FIT_INSET = 12;
 
 export interface SettingsDynamicIslandTabProps {
   value: GeneralSettingsValue;
-  /** The previews draw the logo in the color of this build, as the real island does. */
   variant: AppVariant;
-  /**
-   * The built-in display's notch, or null when it has none: the built-in preview then draws the
-   * island that display shows. Undefined before main answers, and the preview draws a notch.
-   */
+  platform: AppInfo["platform"] | undefined;
   builtInDisplayGeometry?: DynamicIslandGeometry | undefined;
+  servers: readonly ServerSummary[];
   onUpdateSetting: <Key extends keyof GeneralSettingsValue>(key: Key, value: GeneralSettingsValue[Key]) => void;
-  /** Saves several fields as one change, so a reset writes the preference once. */
   onUpdateSettings: (patch: Partial<GeneralSettingsValue>) => void;
 }
 
-/**
- * The Dynamic Island switches and its size.
- *
- * Each slider step saves at once, so the island on the screen follows the thumb during a drag. A
- * step is 5%, so one drag across the track writes the preference at most 12 times.
- */
 export function SettingsDynamicIslandTab(props: SettingsDynamicIslandTabProps) {
   const i18n = useI18n();
+  const isMac = () => props.platform === "darwin";
+  const showKey = () => (isMac() ? "settings.notch.show.title" : "settings.notch.show.titleTopOfScreen");
+  const platform = usePlatform();
+  const linux = () => props.platform === "linux";
+  const screenSupport = () => (linux() && props.value.macBookNotch ? platform.appInfo()?.aboveAppsSupport : undefined);
   const widthPercent = () => props.value.macBookNotchWidthPercent;
   const heightPercent = () => props.value.macBookNotchHeightPercent;
   const widestBuiltInWidth = () =>
@@ -52,6 +66,22 @@ export function SettingsDynamicIslandTab(props: SettingsDynamicIslandTabProps) {
   const isDefaultSize = () =>
     props.value.macBookNotchWidthPercent === DEFAULT_DYNAMIC_ISLAND_PREFERENCE.widthPercent &&
     props.value.macBookNotchHeightPercent === DEFAULT_DYNAMIC_ISLAND_PREFERENCE.heightPercent;
+
+  const serverShown = (serverId: string) =>
+    isDynamicIslandServerVisible(
+      { serverVisibility: props.value.macBookNotchServers, newServersVisible: props.value.macBookNotchNewServers },
+      serverId,
+    );
+
+  function saveServerChoices(patch: Record<string, boolean>, newServersVisible: boolean): void {
+    props.onUpdateSettings({
+      macBookNotchServers: {
+        ...Object.fromEntries(props.servers.map((server) => [server.id, serverShown(server.id)])),
+        ...patch,
+      },
+      macBookNotchNewServers: newServersVisible,
+    });
+  }
 
   function resetSize(): void {
     props.onUpdateSettings({
@@ -65,12 +95,24 @@ export function SettingsDynamicIslandTab(props: SettingsDynamicIslandTabProps) {
       <SettingsSection title={i18n.t("settings.notch.title")}>
         <ItemGroup class="settings-modal-card">
           <SwitchField
+            data-settings-row={showKey()}
             checked={props.value.macBookNotch}
             onChange={(checked) => props.onUpdateSetting("macBookNotch", checked)}
-            label={i18n.t("settings.notch.show.title")}
+            label={i18n.t(showKey())}
             description={i18n.t("settings.notch.show.description")}
           />
+          <XWaylandRestartRow
+            support={screenSupport()}
+            keys={{
+              title: "settings.notch.xwayland.title",
+              description: "settings.notch.xwayland.description",
+              unsupported: "settings.notch.xwayland.unsupported",
+              restart: "settings.notch.xwayland.restart",
+            }}
+            onRestart={() => settingsPort().dynamicIsland.setXWayland({ enabled: true })}
+          />
           <SwitchField
+            data-settings-row="settings.notch.idle.title"
             checked={props.value.macBookNotchIdle}
             disabled={!props.value.macBookNotch}
             onChange={(checked) => props.onUpdateSetting("macBookNotchIdle", checked)}
@@ -78,32 +120,63 @@ export function SettingsDynamicIslandTab(props: SettingsDynamicIslandTabProps) {
             description={i18n.t("settings.notch.idle.description")}
           />
           <SwitchField
+            data-settings-row="settings.notch.displays.title"
             checked={props.value.macBookNotchAdditionalDisplays}
             disabled={!props.value.macBookNotch}
             onChange={(checked) => props.onUpdateSetting("macBookNotchAdditionalDisplays", checked)}
             label={i18n.t("settings.notch.displays.title")}
             description={i18n.t("settings.notch.displays.description")}
           />
+          <Show when={isMac()}>
+            <SwitchField
+              data-settings-row="settings.notch.haptics.title"
+              checked={props.value.macBookNotchHaptics}
+              disabled={!props.value.macBookNotch}
+              onChange={(checked) => props.onUpdateSetting("macBookNotchHaptics", checked)}
+              label={i18n.t("settings.notch.haptics.title")}
+              description={i18n.t("settings.notch.haptics.description")}
+            />
+          </Show>
           <SwitchField
+            data-settings-row="settings.dynamicIsland.emotions.title"
             checked={props.value.macBookNotchEmotions}
             disabled={!props.value.macBookNotch}
             onChange={(checked) => props.onUpdateSetting("macBookNotchEmotions", checked)}
             label={i18n.t("settings.dynamicIsland.emotions.title")}
             description={i18n.t("settings.dynamicIsland.emotions.description")}
           />
+        </ItemGroup>
+      </SettingsSection>
+
+      <SettingsSection
+        data-settings-row="settings.notch.servers.title"
+        title={i18n.t("settings.notch.servers.title")}
+        description={i18n.t("settings.notch.servers.description")}
+      >
+        <ItemGroup class="settings-modal-card">
+          <For each={props.servers}>
+            {(server) => (
+              <IslandServerRow
+                server={server}
+                shown={serverShown(server.id)}
+                disabled={!props.value.macBookNotch}
+                onChange={(shown) => saveServerChoices({ [server.id]: shown }, props.value.macBookNotchNewServers)}
+              />
+            )}
+          </For>
           <SwitchField
-            checked={props.value.macBookNotchHaptics}
+            checked={props.value.macBookNotchNewServers}
             disabled={!props.value.macBookNotch}
-            onChange={(checked) => props.onUpdateSetting("macBookNotchHaptics", checked)}
-            label={i18n.t("settings.notch.haptics.title")}
-            description={i18n.t("settings.notch.haptics.description")}
+            onChange={(checked) => saveServerChoices({}, checked)}
+            label={i18n.t("settings.notch.servers.later")}
           />
         </ItemGroup>
       </SettingsSection>
 
       <SettingsSection
+        data-settings-row="settings.notch.size.title"
         title={i18n.t("settings.notch.size.title")}
-        description={i18n.t("settings.notch.size.description")}
+        description={linux() ? undefined : i18n.t("settings.notch.size.description")}
         actions={
           <Button
             type="button"
@@ -118,24 +191,26 @@ export function SettingsDynamicIslandTab(props: SettingsDynamicIslandTabProps) {
       >
         <ItemGroup class="settings-modal-card settings-dynamic-island-size">
           <div class="settings-dynamic-island-preview">
-            <figure class="settings-dynamic-island-preview-display">
-              <PreviewFit widestWidth={widestBuiltInWidth()}>
-                <OpenBotDynamicIsland
-                  presentation={IDLE_DYNAMIC_ISLAND_PRESENTATION}
-                  state="compact"
-                  displayMode="notch"
-                  notchSize={builtInNotchSize()}
-                  variant={props.variant}
-                  widthPercent={widthPercent()}
-                  heightPercent={heightPercent()}
-                  onStateChange={() => undefined}
-                  onAction={() => undefined}
-                />
-              </PreviewFit>
-              <figcaption class="settings-dynamic-island-preview-caption">
-                {i18n.t("settings.notch.size.previewNotch")}
-              </figcaption>
-            </figure>
+            <Show when={!linux()}>
+              <figure class="settings-dynamic-island-preview-display">
+                <PreviewFit widestWidth={widestBuiltInWidth()}>
+                  <OpenBotDynamicIsland
+                    presentation={IDLE_DYNAMIC_ISLAND_PRESENTATION}
+                    state="compact"
+                    displayMode="notch"
+                    notchSize={builtInNotchSize()}
+                    variant={props.variant}
+                    widthPercent={widthPercent()}
+                    heightPercent={heightPercent()}
+                    onStateChange={() => undefined}
+                    onAction={() => undefined}
+                  />
+                </PreviewFit>
+                <figcaption class="settings-dynamic-island-preview-caption">
+                  {i18n.t("settings.notch.size.previewNotch")}
+                </figcaption>
+              </figure>
+            </Show>
             <figure class="settings-dynamic-island-preview-display">
               <PreviewFit widestWidth={widestExternalWidth}>
                 <OpenBotDynamicIsland
@@ -149,9 +224,11 @@ export function SettingsDynamicIslandTab(props: SettingsDynamicIslandTabProps) {
                   onAction={() => undefined}
                 />
               </PreviewFit>
-              <figcaption class="settings-dynamic-island-preview-caption">
-                {i18n.t("settings.notch.size.previewIsland")}
-              </figcaption>
+              <Show when={!linux()}>
+                <figcaption class="settings-dynamic-island-preview-caption">
+                  {i18n.t("settings.notch.size.previewIsland")}
+                </figcaption>
+              </Show>
             </figure>
           </div>
           <SliderField
@@ -180,11 +257,36 @@ export function SettingsDynamicIslandTab(props: SettingsDynamicIslandTabProps) {
   );
 }
 
-/**
- * A preview frame. It scales its island so that the widest width setting fits, such as the
- * built-in island with no notch at 130%. The scale changes only with the frame, not with the
- * setting, so a slider drag moves the island alone and every width shows at the same scale.
- */
+function IslandServerRow(props: {
+  server: ServerSummary;
+  shown: boolean;
+  disabled: boolean;
+  onChange: (shown: boolean) => void;
+}): JSX.Element {
+  const i18n = useI18n();
+  const titleId = createUniqueId();
+  const status = () => serverStatusLabels(props.server, i18n.t).join(" · ");
+  return (
+    <Item>
+      <ItemMedia class="settings-dynamic-island-server-mark" aria-hidden="true">
+        <ServerMark server={props.server} />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle id={titleId}>{props.server.name}</ItemTitle>
+        <Show when={status()}>{(text) => <ItemDescription>{text()}</ItemDescription>}</Show>
+      </ItemContent>
+      <ItemActions>
+        <Switch
+          checked={props.shown && !props.server.notificationsMuted}
+          disabled={props.disabled || props.server.notificationsMuted}
+          onChange={props.onChange}
+          aria-labelledby={titleId}
+        />
+      </ItemActions>
+    </Item>
+  );
+}
+
 function PreviewFit(props: { widestWidth: number | undefined; children: JSX.Element }): JSX.Element {
   let frame: HTMLDivElement | undefined;
   const [available, setAvailable] = createSignal(0);

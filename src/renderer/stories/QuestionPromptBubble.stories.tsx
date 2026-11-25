@@ -1,20 +1,8 @@
 import type { AgentPromptQuestion } from "@openbot/contracts/ipc";
-import {
-  ArrowUp,
-  Bubble,
-  BubbleContent,
-  Button,
-  ChevronDown,
-  Message,
-  MessageContent,
-  MessageFooter,
-  Plus,
-  Textarea,
-} from "@openbot/ui";
-import { QuestionPromptBubble, type QuestionPromptBubbleProps } from "@openbot/ui/components/QuestionPromptBubble";
-import { AgentAvatar } from "@openbot/ui/features/agents/AgentAvatar";
+import { QuestionPromptBubble } from "@openbot/ui/components/QuestionPromptBubble";
 import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
+import { StoryConversation } from "./conversation-story-support";
 
 const singleQuestion: AgentPromptQuestion[] = [
   {
@@ -35,6 +23,7 @@ const multipleQuestions: AgentPromptQuestion[] = [
     id: "approach",
     header: "Approach",
     question: "Which auth approach should we use?",
+    detail: "Sign-in for the desktop app and the web client.",
     isSecret: false,
     options: [
       { label: "Session cookies", description: "Best fit for the desktop session." },
@@ -78,6 +67,21 @@ const customQuestion: AgentPromptQuestion[] = [
   },
 ];
 
+const multiSelectQuestion: AgentPromptQuestion[] = [
+  {
+    id: "checks",
+    header: "Checks",
+    question: "Which checks should run before the release?",
+    isSecret: false,
+    multiSelect: true,
+    options: [
+      { label: "Unit tests", description: "Run the test files of the changed code." },
+      { label: "Type check", description: "Check the types of the changed projects." },
+      { label: "Smoke test", description: "Start the app and try the new feature." },
+    ],
+  },
+];
+
 const secretQuestion: AgentPromptQuestion[] = [
   {
     id: "token",
@@ -88,119 +92,23 @@ const secretQuestion: AgentPromptQuestion[] = [
   },
 ];
 
-function QuestionPromptChatPreview(props: QuestionPromptBubbleProps) {
-  return (
-    <section class="conversation-panel question-prompt-chat-preview" aria-label="Conversation preview">
-      <header class="conversation-header">
-        <div class="conversation-heading-group">
-          <Button variant="ghost" size="sm" type="button" class="conversation-title" aria-label="View Chief settings">
-            <AgentAvatar seed="chief" motion="idle" />
-            <h1>Chief</h1>
-          </Button>
-        </div>
-        <div class="conversation-header-actions">
-          <Button
-            variant="ghost"
-            size="sm"
-            type="button"
-            class="provider-model-trigger question-prompt-chat-model"
-            aria-label="Change model"
-          >
-            <span class="provider-model-trigger-name">GPT-5.6 Luna</span>
-            <ChevronDown aria-hidden="true" />
-          </Button>
-        </div>
-      </header>
-
-      <div class="conversation-scroll">
-        <div class="question-prompt-chat-thread">
-          <time class="time-marker" datetime="2026-08-28T10:00:00.000Z">
-            Today, 10:00
-          </time>
-
-          <Message role="article" align="end" class="message-entry message-entry-user" aria-label="You at 10:00">
-            <MessageContent>
-              <div class="message-shell">
-                <Bubble align="end" variant="secondary">
-                  <BubbleContent>Help me choose the safest auth setup for the launch.</BubbleContent>
-                </Bubble>
-              </div>
-              <MessageFooter>10:00</MessageFooter>
-            </MessageContent>
-          </Message>
-
-          <Message role="article" align="start" class="message-entry message-entry-agent" aria-label="Chief at 10:01">
-            <MessageContent>
-              <div class="message-shell">
-                <Bubble variant="muted">
-                  <BubbleContent>I need a few decisions before I finish the setup.</BubbleContent>
-                </Bubble>
-              </div>
-              <MessageFooter>10:01</MessageFooter>
-            </MessageContent>
-          </Message>
-
-          <Message
-            role="article"
-            align="start"
-            class="message-entry message-entry-agent question-prompt-chat-question"
-            aria-label="Chief asks questions at 10:01"
-          >
-            <MessageContent>
-              <QuestionPromptBubble {...props} />
-              <MessageFooter>10:01</MessageFooter>
-            </MessageContent>
-          </Message>
-        </div>
-      </div>
-
-      <div class="composer-wrap question-prompt-chat-composer-wrap">
-        <div class="composer" data-compact="">
-          <div class="composer-input-label">
-            <Textarea aria-label="Message Chief" placeholder="Message Chief" rows={1} />
-          </div>
-          <div class="composer-toolbar">
-            <Button
-              variant="ghost"
-              type="button"
-              class="composer-button"
-              aria-label="Add to prompt"
-              title="Add to prompt"
-            >
-              <Plus aria-hidden="true" />
-            </Button>
-            <div class="composer-primary-actions">
-              <Button
-                variant="ghost"
-                type="button"
-                class="voice-button"
-                aria-label="Send message"
-                title="Send message"
-                disabled
-              >
-                <ArrowUp aria-hidden="true" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 const meta = {
   title: "Conversation/QuestionPromptBubble",
   component: QuestionPromptBubble,
   args: {
     questions: singleQuestion,
     onSubmit: fn(async () => false),
+    onOpenLink: fn(),
   },
   decorators: [
-    (Story) => (
-      <main class="question-prompt-story-stage">
+    (Story, context) =>
+      context.parameters.stage === false ? (
         <Story />
-      </main>
-    ),
+      ) : (
+        <main class="question-prompt-story-stage">
+          <Story />
+        </main>
+      ),
   ],
   parameters: { layout: "fullscreen", a11y: { test: "error" } },
 } satisfies Meta<typeof QuestionPromptBubble>;
@@ -208,46 +116,73 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-const renderInChat: Story["render"] = (args) => <QuestionPromptChatPreview {...args} />;
-
 export const InChat: Story = {
   name: "In chat",
   args: { questions: multipleQuestions, onSubmit: fn(async () => true) },
-  render: renderInChat,
+  parameters: { stage: false },
+  render: (args) => (
+    <StoryConversation
+      messages={[
+        {
+          id: "question-chat-user",
+          author: "you",
+          body: "Help me choose the safest auth setup for the launch.",
+          time: "10:00",
+          kind: "text",
+        },
+        {
+          id: "question-chat-agent",
+          author: "agent",
+          body: "I need a few decisions before I finish the setup.",
+          time: "10:01",
+          kind: "text",
+        },
+      ]}
+      prompt={{
+        type: "prompt",
+        requestId: "question-chat",
+        agentId: "chief",
+        threadId: "thread-chief",
+        turnId: "turn-question-chat",
+        questions: args.questions,
+      }}
+      onAnswerPrompt={args.onSubmit}
+    />
+  ),
 };
 
-export const SingleQuestion: Story = {
-  render: renderInChat,
-};
+export const SingleQuestion: Story = {};
 
 export const MultipleQuestions: Story = {
   args: { questions: multipleQuestions },
-  render: renderInChat,
+};
+
+export const AnswersSent: Story = {
+  args: { questions: multipleQuestions, onSubmit: fn(async () => true) },
 };
 
 export const CustomAnswer: Story = {
   args: { questions: customQuestion },
-  render: renderInChat,
+};
+
+export const MultiSelect: Story = {
+  args: { questions: multiSelectQuestion },
 };
 
 export const SecretAnswer: Story = {
   args: { questions: secretQuestion },
-  render: renderInChat,
 };
 
 export const Sending: Story = {
   args: { pending: true },
-  render: renderInChat,
 };
 
 export const Empty: Story = {
   args: { questions: [] },
-  render: renderInChat,
 };
 
 export const Narrow: Story = {
   args: { questions: multipleQuestions },
-  render: renderInChat,
   decorators: [
     (Story) => (
       <div class="question-prompt-story-narrow">
@@ -269,12 +204,24 @@ export const PersistedAnswered: Story = {
       },
     },
   },
-  render: renderInChat,
+};
+
+export const PersistedMultiSelect: Story = {
+  args: {
+    questions: multiSelectQuestion,
+    resolution: {
+      status: "answered",
+      responses: { checks: { status: "answered", answers: ["Unit tests", "Smoke test", "Lint the changed files"] } },
+    },
+  },
+};
+
+export const PersistedCancelled: Story = {
+  args: { questions: multipleQuestions, resolution: { status: "cancelled" } },
 };
 
 export const PersistedExpired: Story = {
   args: { questions: multipleQuestions, resolution: { status: "expired" } },
-  render: renderInChat,
 };
 
 export const PersistedSingleAnswer: Story = {
@@ -285,7 +232,6 @@ export const PersistedSingleAnswer: Story = {
       responses: { reply: { status: "answered", answers: ["Send that reply"] } },
     },
   },
-  render: renderInChat,
 };
 
 export const PersistedPrivateAnswer: Story = {
@@ -296,7 +242,6 @@ export const PersistedPrivateAnswer: Story = {
       responses: { token: { status: "answered" } },
     },
   },
-  render: renderInChat,
 };
 
 export const PersistedLongAnswer: Story = {
@@ -323,7 +268,6 @@ export const PersistedLongAnswer: Story = {
       },
     },
   },
-  render: renderInChat,
 };
 
 export const PersistedLongAnswerNarrow: Story = {
@@ -339,5 +283,4 @@ export const PersistedLongAnswerNarrow: Story = {
 
 export const PreviewOnly: Story = {
   args: { readOnly: true },
-  render: renderInChat,
 };

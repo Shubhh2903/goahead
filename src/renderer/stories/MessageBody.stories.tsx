@@ -3,7 +3,7 @@ import type { AgentMessage } from "@openbot/ui/data";
 import { MessageBody } from "@openbot/ui/features/conversation/MessageRendering";
 import { fn } from "storybook/test";
 import type { Meta, StoryObj } from "storybook-solidjs-vite";
-import { STORY_AGENTS, STORY_ATTACHMENTS } from "./fixtures";
+import { STORY_AGENTS, STORY_ATTACHMENTS, STORY_REPLY_QUOTE_BODY } from "./fixtures";
 
 const message: AgentMessage = {
   id: "message-body-1",
@@ -57,11 +57,6 @@ function MessageBodySurface(props: {
 
 export const RichMessage: Story = {};
 
-/**
- * A signed-out provider. The bubble names the state and nothing else: the raw 401 exchange the
- * provider returned is replaced upstream, and the Sign in action lives on the composer notice, so
- * one stale bubble cannot offer a second, competing way in.
- */
 export const AuthError: Story = {
   args: {
     message: {
@@ -85,6 +80,63 @@ export const WithReplyContext: Story = {
       time: "09:55",
     },
   },
+};
+
+const reply: AgentMessage = {
+  id: "message-reply",
+  author: "you",
+  body: "Approved. Renew it today and tell me the new expiry date.",
+  time: "10:00",
+  replyToMessageId: "message-reference",
+  attachments: [],
+};
+
+const quoted: AgentMessage = {
+  id: "message-reference",
+  author: "agent",
+  body: "Without a renewed certificate, macOS rejects the update on Friday. I need your approval to buy the renewal.",
+  time: "09:55",
+};
+
+export const ReplyOpensOriginal: Story = {
+  args: { message: reply, referencedMessage: quoted, onOpenReference: fn() },
+  render: (storyArgs) => <MessageBodySurface args={storyArgs} author="user" width="360px" />,
+};
+
+export const ReplyLoadingOriginal: Story = {
+  args: { message: reply, referencedMessage: quoted, onOpenReference: fn(), referenceState: "loading" },
+  render: (storyArgs) => <MessageBodySurface args={storyArgs} author="user" width="360px" />,
+};
+
+export const ReplyOriginalUnavailable: Story = {
+  args: { message: reply, referenceState: "unavailable" },
+  render: (storyArgs) => <MessageBodySurface args={storyArgs} author="user" width="360px" />,
+};
+
+const markdownQuoted: AgentMessage = {
+  id: "message-reference",
+  author: "agent",
+  body: STORY_REPLY_QUOTE_BODY,
+  time: "09:55",
+};
+
+export const ReplyMarkdownOriginal: Story = {
+  args: { message: reply, referencedMessage: markdownQuoted, onOpenReference: fn() },
+  render: (storyArgs) => <MessageBodySurface args={storyArgs} author="user" width="360px" />,
+};
+
+export const ReplyMarkdownOpenFence: Story = {
+  args: {
+    message: reply,
+    referencedMessage: {
+      ...markdownQuoted,
+      body: ["Run these before the tag:", "", "```bash", "bun run check", "bun run test:changed", "bun run lint"].join(
+        "\n",
+      ),
+    },
+    onOpenReference: fn(),
+  },
+  render: (storyArgs) => <MessageBodySurface args={storyArgs} author="user" width="360px" />,
 };
 
 export const WithSelectedTextInstruction: Story = {
@@ -182,6 +234,45 @@ export const CodeBlock: Story = {
   render: (storyArgs) => <MessageBodySurface args={storyArgs} variant="ghost" width="460px" />,
 };
 
+export const UnknownConstructorLanguage: Story = {
+  args: {
+    message: {
+      ...message,
+      id: "message-unknown-constructor-language",
+      body: ["Before the code.", "", "```constructor", "const total = 42;", "```", "", "After the code."].join("\n"),
+      status: undefined,
+      attachments: [],
+    },
+  },
+  render: (storyArgs) => <MessageBodySurface args={storyArgs} variant="ghost" width="460px" />,
+};
+
+export const UnknownPrototypeLanguage: Story = {
+  args: {
+    message: {
+      ...message,
+      id: "message-unknown-prototype-language",
+      body: ["Before the code.", "", "```__proto__", "const fallback = 7;", "```", "", "After the code."].join("\n"),
+      status: undefined,
+      attachments: [],
+    },
+  },
+  render: (storyArgs) => <MessageBodySurface args={storyArgs} variant="ghost" width="460px" />,
+};
+
+export const UnknownOrdinaryLanguage: Story = {
+  args: {
+    message: {
+      ...message,
+      id: "message-unknown-ordinary-language",
+      body: ["Before the code.", "", "```mylang", "const ordinary = 3;", "```", "", "After the code."].join("\n"),
+      status: undefined,
+      attachments: [],
+    },
+  },
+  render: (storyArgs) => <MessageBodySurface args={storyArgs} variant="ghost" width="460px" />,
+};
+
 export const StreamingCodeBlock: Story = {
   args: {
     message: {
@@ -237,6 +328,25 @@ export const DataTableNarrow: Story = {
   render: (storyArgs) => <MessageBodySurface args={storyArgs} variant="ghost" width="320px" />,
 };
 
+export const DataTableLongText: Story = {
+  args: {
+    message: {
+      ...message,
+      id: "message-data-table-long-text",
+      body: [
+        "| Step | Owner | Notes | Reference |",
+        "| --- | --- | --- | --- |",
+        "| Migrate | Research | Copy every workspace to the new layout, then confirm that each conversation still opens with its attachments and its full history. | https://goahead.multicodegenius.com/docs/guides/workspaces/migrating-an-existing-workspace-to-the-new-layout |",
+        "| Verify | Review | Run the checks on a clean profile and compare the results with the previous release before you approve the change. | `bun run test:desktop -- src/renderer/src/features/conversation/MessageRendering.test.tsx` |",
+        "| Ship | Release | Write the release notes. | `OPENBOT_RELEASE_CHANNEL_OVERRIDE_FOR_INTERNAL_TESTING_ONLY` |",
+      ].join("\n"),
+      status: undefined,
+      attachments: [],
+    },
+  },
+  render: (storyArgs) => <MessageBodySurface args={storyArgs} variant="ghost" width="720px" />,
+};
+
 export const ComparisonTable: Story = {
   args: {
     message: {
@@ -286,6 +396,44 @@ export const CompletedAnswerReveal: Story = {
       streaming: false,
       attachments: [],
     },
+  },
+  render: (storyArgs) => <MessageBodySurface args={storyArgs} variant="ghost" width="460px" />,
+};
+
+const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240"><rect width="240" height="240" rx="32" fill="#1f5c3a"/><path d="M60 170 L170 60 L185 75 L75 185 Z" fill="#d8dde3"/><rect x="40" y="168" width="40" height="22" rx="6" transform="rotate(-45 60 179)" fill="#8a5a2b"/></svg>`;
+const BANNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 200"><rect width="480" height="200" fill="#f6a62f"/><circle cx="100" cy="100" r="60" fill="#12141a"/><rect x="190" y="80" width="240" height="40" rx="8" fill="#12141a"/></svg>`;
+const svgDataUrl = (svg: string) => `data:image/svg+xml;base64,${btoa(svg)}`;
+const NAMED_IMAGES: Record<string, string> = {
+  "/data/OpenBot/Shared/demo/maczeciarz/logo.svg": svgDataUrl(LOGO_SVG),
+  "/data/OpenBot/Shared/demo/maczeciarz/banner.svg": svgDataUrl(BANNER_SVG),
+};
+const loadNamedImage: Parameters<typeof MessageBody>[0]["loadImageFile"] = (file) =>
+  Promise.resolve(NAMED_IMAGES[file.path] ?? null);
+
+export const NamedImageFile: Story = {
+  args: {
+    message: {
+      ...message,
+      id: "named-image-file",
+      body: "Done. Logo delivered to Boss:\n\n- `/data/OpenBot/Shared/demo/maczeciarz/logo.svg` — machete icon and wordmark.",
+      attachments: [],
+    },
+    onOpenSharedFile: fn(),
+    loadImageFile: loadNamedImage,
+  },
+  render: (storyArgs) => <MessageBodySurface args={storyArgs} variant="ghost" width="460px" />,
+};
+
+export const NamedImageFiles: Story = {
+  args: {
+    message: {
+      ...message,
+      id: "named-image-files",
+      body: "Status: done\nResult: logo and banner are in the shared folder.\nEvidence: `/data/OpenBot/Shared/demo/maczeciarz/logo.svg`, `/data/OpenBot/Shared/demo/maczeciarz/banner.svg`, `/data/OpenBot/Shared/demo/maczeciarz/missing.png`",
+      attachments: [],
+    },
+    onOpenSharedFile: fn(),
+    loadImageFile: loadNamedImage,
   },
   render: (storyArgs) => <MessageBodySurface args={storyArgs} variant="ghost" width="460px" />,
 };

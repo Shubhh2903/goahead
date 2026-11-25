@@ -1,14 +1,15 @@
 import {
-  type AgentModelOption,
-  type AgentSummary,
   analyticsRange,
+  type ClientAgentModelOption,
+  type ClientAgentSummary,
   type HostAnalytics,
   type HostAnalyticsInput,
+  WORKFLOWS_USAGE_ID,
 } from "@openbot/contracts/ipc";
 import type { AppTextKey } from "@openbot/i18n";
 import {
-  ArrowLeft,
   Button,
+  ErrorReference,
   IconButton,
   RefreshCw,
   Select,
@@ -28,55 +29,59 @@ import {
   usagePeriodLabels,
   usagePeriods,
 } from "@openbot/ui/features/usage/usage-format";
+import { PageHeader } from "@openbot/ui/features/window/PageHeader";
 import { useText } from "@openbot/ui/text";
+import { errorReference } from "@openbot/user-errors";
 import type { JSX } from "@solidjs/web";
 import { createEffect, createStore, onSettled, Show } from "solid-js";
+import { desktopAnalytics } from "../../analytics";
+import { createPageHeaderFrame } from "../window/page-header-frame";
 import { type UsagePort, usagePort } from "./usage-port";
 
 interface AgentUsagePanelProps {
-  agentId?: string;
+  agentId?: string | undefined;
   agentName?: string;
   serverId: string;
   hostName: string;
   onBack: () => void;
-  /** The web client reads the host through its own connection. The default is the desktop bridge. */
   port?: UsagePort;
   /** The plan limits above the report. The desktop passes the Claude plan limits of its account. */
   planLimits?: JSX.Element;
+  machine?: JSX.Element;
 }
 interface UsageState {
   range: HostAnalyticsInput;
   result: HostAnalytics | null;
   phase: "loading" | "ready" | "unsupported" | "error";
-  agents: AgentSummary[];
+  errorReference: string | null;
+  agents: ClientAgentSummary[];
   metric: UsageMetric;
   period: UsagePeriod;
   serverId: string;
   /** The models of the host, which name the models of each agent row. */
-  models: AgentModelOption[];
+  models: ClientAgentModelOption[];
+}
+
+function usageRange(days: number, agentId: string | undefined): HostAnalyticsInput {
+  const { startDate, endDate, timeZone } = analyticsRange("", days);
+  return agentId === undefined ? { startDate, endDate, timeZone } : { startDate, endDate, timeZone, agentId };
 }
 
 export function AgentUsagePanel(props: AgentUsagePanelProps) {
   const { t } = useText();
   const port = () => props.port ?? usagePort();
   const [state, setState] = createStore<UsageState>({
-    range: { ...analyticsRange("range"), agentId: props.agentId },
+    range: usageRange(usagePeriodDays["30d"], props.agentId),
     agents: [],
     result: null,
     phase: "loading",
+    errorReference: null,
     metric: "cost",
     period: "30d",
     serverId: props.serverId,
     models: [],
   });
   let generation = 0;
-  /**
-   * A refresh nobody asked for keeps the report on screen. Clearing `result` unmounts
-   * `AgentUsageReport`, which returns on the next response with its breakdown back to
-   * Agent and scrolled to the total - and a turn completes while the report is open
-   * often enough that this is the common case, not the rare one. Only a request the
-   * user made may blank the body: the first load, a filter change, Refresh.
-   */
   async function load(range = state.range, background = false): Promise<void> {
     const request = ++generation;
     const serverId = props.serverId;
@@ -88,7 +93,6 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
       });
     try {
       const [result, agents, models] = await Promise.all([
-        // Electron cannot clone the Solid store proxy across the context bridge.
         port().agent.getHostAnalytics({ ...range }, serverId),
         port().agent.listAgents(serverId),
         // The model names are a label only: without them a row shows the model id.
@@ -104,17 +108,13 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
           draft.result = result;
           draft.phase = result ? "ready" : "unsupported";
         });
-    } catch {
-      // A background refresh that fails leaves the last good report where it is rather
-      // than replacing it with an error the user cannot act on; the next turn retries.
-      // Only while a report is on screen, though: a background request that overtakes the
-      // first load takes the generation with it, so the foreground response is discarded
-      // too, and a silent failure would leave the panel on Loading with no Retry.
+    } catch (error) {
       if (background && state.result) return;
       if (request === generation && props.serverId === serverId && state.range.agentId === agentId)
         setState((draft) => {
           draft.result = null;
           draft.phase = "error";
+          draft.errorReference = errorReference(error);
         });
     }
   }
@@ -122,8 +122,19 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
     () => [props.agentId, props.serverId],
     () => {
       setState((draft) => {
-        draft.range.agentId = props.agentId;
+        if (props.agentId === undefined) delete draft.range.agentId;
+        else draft.range.agentId = props.agentId;
         draft.agents = [];
+      });
+    },
+  );
+  createEffect(
+    () => [state.range.agentId, props.serverId, state.period] as const,
+    ([agentId, , range]) => {
+      desktopAnalytics.track("usage_viewed", {
+        scope: agentId ? "agent" : "server",
+        ...(range === "1d" ? {} : { range }),
+        filtered: agentId !== props.agentId,
       });
     },
   );
@@ -152,9 +163,8 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
       reconnect();
     };
   });
-  // The filter and the per-agent table both name an agent by id, and props.agentName only
-  // names the panel's own agent, so it must not label another agent's row.
   const agentLabel = (id: string): UsageAgentLabel => {
+    if (id === WORKFLOWS_USAGE_ID) return { name: t("usage.panel.workflows"), provider: "" };
     const agent = state.agents.find((candidate) => candidate.id === id);
     return {
       name: agent?.name ?? (id === props.agentId ? props.agentName : undefined) ?? id,
@@ -163,26 +173,27 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
     };
   };
   let reportBody: HTMLDivElement | undefined;
-  let heading: HTMLHeadingElement | undefined;
-  onSettled(() => heading?.focus());
+  const headerFrame = createPageHeaderFrame();
   return (
     <section class="agent-usage" aria-label={t("usage.panel.label")}>
-      <header class="agent-usage-header">
-        <div class="agent-usage-identity">
-          <IconButton variant="ghost" label={t("common.back")} onClick={props.onBack}>
-            <ArrowLeft />
-          </IconButton>
-          <h2 ref={heading} tabindex={-1}>
-            {t("usage.panel.title")} <span aria-hidden="true">/</span> <span>{props.hostName}</span>
-          </h2>
-        </div>
+      <PageHeader
+        class="agent-usage-header"
+        title={t("usage.panel.title")}
+        hostName={props.hostName}
+        onBack={props.onBack}
+        frame={headerFrame()}
+      >
         <div class="agent-usage-controls">
+          {props.machine}
           <Select
             options={[
               "all",
               ...[
                 ...new Set([
                   ...state.agents.map((agent) => agent.id),
+                  ...(state.result?.agents.some((agent) => agent.agentId === WORKFLOWS_USAGE_ID)
+                    ? [WORKFLOWS_USAGE_ID]
+                    : []),
                   ...(state.range.agentId ? [state.range.agentId] : []),
                 ]),
               ].map((id) => `agent:${id}`),
@@ -191,7 +202,8 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
             onChange={(value) => {
               if (value)
                 setState((draft) => {
-                  draft.range.agentId = value === "all" ? undefined : value.slice(6);
+                  if (value === "all") delete draft.range.agentId;
+                  else draft.range.agentId = value.slice(6);
                 });
             }}
             itemComponent={(itemProps) => (
@@ -232,10 +244,7 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
             onChange={(value) => {
               setState((draft) => {
                 draft.period = value;
-                draft.range = {
-                  ...analyticsRange("range", usagePeriodDays[value]),
-                  agentId: draft.range.agentId,
-                };
+                draft.range = usageRange(usagePeriodDays[value], draft.range.agentId);
               });
             }}
           />
@@ -248,7 +257,7 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
             <RefreshCw />
           </IconButton>
         </div>
-      </header>
+      </PageHeader>
       <div ref={reportBody} class="agent-usage-body">
         {props.planLimits}
         <Show when={state.phase === "loading"}>
@@ -264,7 +273,10 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
         </Show>
         <Show when={state.phase === "error"}>
           <div class="agent-usage-notice">
-            <p role="alert">{t("usage.panel.loadFailed")}</p>
+            <p role="alert">
+              {t("usage.panel.loadFailed")}
+              <ErrorReference reference={state.errorReference} />
+            </p>
             <Button variant="secondary" onClick={() => void load()}>
               {t("common.retry")}
             </Button>
@@ -287,7 +299,6 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
               agentLabel={agentLabel}
               modelOptions={state.models}
               onReady={() => {
-                // Start each loaded report at its total, after the tabs settle their initial selection.
                 if (reportBody) reportBody.scrollTop = 0;
               }}
             />
@@ -298,8 +309,6 @@ export function AgentUsagePanel(props: AgentUsagePanelProps) {
   );
 }
 
-// The header filters share one chip dropdown so the metric and period read as the
-// same kind of control as the agent picker beside them.
 function UsageSelect<Value extends string>(props: {
   label: string;
   options: readonly Value[];

@@ -1,7 +1,7 @@
 import { z } from "zod";
 export type SidebarCollapsedByServer = Record<string, string[]>;
 
-export const SIDEBAR_COLLAPSED_STORAGE_KEY = "openbot:sidebar-collapsed:v1";
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "openbot:sidebar-collapsed:v1";
 
 type SidebarCollapsedStorage = Pick<Storage, "getItem" | "setItem">;
 
@@ -31,7 +31,5 @@ export function writeSidebarCollapsed(
 ): void {
   try {
     storage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, JSON.stringify(collapsedByServer));
-  } catch {
-    // A private display preference must not block shared sidebar navigation.
-  }
+  } catch {}
 }

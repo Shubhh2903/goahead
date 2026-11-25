@@ -210,3 +210,73 @@ export const InlineAlignment: Story = {
     </article>
   ),
 };
+
+const logAttachment: AttachmentSummary = {
+  id: "attachment-log",
+  name: "provider-session.log",
+  size: 9_216,
+  kind: "file",
+  mimeType: "text/plain",
+  previewKind: "text",
+  previewUrl: null,
+};
+
+const allChipAttachments = [logAttachment, secondFileTypeAttachment, fourthFileTypeAttachment, longAttachment];
+
+const allChipKindsBody = [
+  "Ask @Research to use",
+  serializeChatTagReference("skill", "Release notes", "skill-release-notes"),
+  "with",
+  serializeChatTagReference("mcp", "GitHub", "mcp-github"),
+  "and",
+  serializeChatTagReference("skill", "Removed skill", "skill-removed"),
+  "on",
+  serializeAttachmentReference(logAttachment.name, logAttachment.id),
+  serializeAttachmentReference(secondFileTypeAttachment.name, secondFileTypeAttachment.id),
+  serializeAttachmentReference(fourthFileTypeAttachment.name, fourthFileTypeAttachment.id),
+  "and ~/OpenBot/Shared/brief.pdf, then compare",
+  serializeAttachmentReference(longAttachment.name, longAttachment.id),
+  "with https://goahead.multicodegenius.com/docs [1].",
+].join(" ");
+
+const allChipKindsArgs = {
+  body: allChipKindsBody,
+  skills: STORY_INSTALLED_SKILLS.chief,
+  attachments: allChipAttachments,
+  citations,
+  onOpenSharedFile: fn(),
+};
+
+export const AllChipKinds: Story = {
+  name: "All chip kinds",
+  args: allChipKindsArgs,
+  render: (storyArgs) => (
+    <article aria-label="All chip kinds sample" style={{ width: "560px" }}>
+      <RichMessageText {...storyArgs} />
+    </article>
+  ),
+};
+
+export const ChipsInReply: Story = {
+  name: "Chips in a reply",
+  args: allChipKindsArgs,
+  render: (storyArgs) => (
+    <div class="message-copy message-markdown" style={{ width: "640px" }}>
+      <p>
+        <RichMessageText {...storyArgs} />
+      </p>
+    </div>
+  ),
+};
+
+export const ChipsInNarrowReply: Story = {
+  name: "Chips in a narrow reply",
+  args: allChipKindsArgs,
+  render: (storyArgs) => (
+    <div class="message-copy message-markdown" style={{ width: "240px" }}>
+      <p>
+        <RichMessageText {...storyArgs} />
+      </p>
+    </div>
+  ),
+};

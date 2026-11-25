@@ -25,7 +25,6 @@ export const Pill: Story = {
   args: { reasoningEffort: "medium", onReasoningEffortChange: fn() },
 };
 
-/** A Claude model with every effort level, and the auto-approve switch. */
 export const AllEffortLevels: Story = {
   args: {
     provider: "claude",
@@ -37,8 +36,29 @@ export const AllEffortLevels: Story = {
     ),
     reasoningEffort: "high",
     onReasoningEffortChange: fn(),
-    agentName: "Researcher",
-    onAutoApproveChange: fn(),
+  },
+};
+
+export const LimitedEffort: Story = {
+  args: {
+    provider: "claude",
+    value: "claude-opus-5-5",
+    modelOptions: STORY_MODELS.map((model) =>
+      model.id === "claude-opus-5-5" ? { ...model, supportedReasoningEfforts: ["low", "medium"] } : model,
+    ),
+    reasoningEffort: "medium",
+    onReasoningEffortChange: fn(),
+  },
+};
+
+export const Ultrafast: Story = {
+  args: {
+    value: "gpt-5.6-sol",
+    reasoningEffort: "high",
+    onReasoningEffortChange: fn(),
+    fastMode: true,
+    ultrafast: true,
+    onFastModeChange: fn(),
   },
 };
 
@@ -52,21 +72,32 @@ export const Disabled: Story = {
 
 export const UnavailableProvidersOpen: Story = {
   args: {
-    modelOptions: STORY_MODELS.filter((model) => model.provider === "codex"),
+    modelOptions: STORY_MODELS.filter((model) => model.provider === "claude"),
     agentStatus: {
       ...STORY_AGENT_STATUS,
       providers: STORY_AGENT_STATUS.providers?.map((provider) =>
-        provider.id === "codex"
+        provider.id === "claude"
           ? provider
           : {
               ...provider,
               state: "not-installed" as const,
               version: null,
-              message:
-                provider.id === "grok"
-                  ? "Run `grok login` or set XAI_API_KEY to use Grok."
-                  : "Run `claude auth login` to use Claude.",
+              message: provider.id === "codex" ? "Run `codex login` to use Codex." : null,
             },
+      ),
+    },
+  },
+};
+
+export const ConnectedProvidersOnly: Story = {
+  args: {
+    onManageProviders: fn(),
+    agentStatus: {
+      ...STORY_AGENT_STATUS,
+      providers: STORY_AGENT_STATUS.providers?.map((provider) =>
+        provider.id === "codex" || provider.id === "claude"
+          ? provider
+          : { ...provider, state: "sign-in-required" as const },
       ),
     },
   },
@@ -192,7 +223,6 @@ const customProviders = [
   },
 ];
 
-/** Nothing configured: the Custom tab is the one entry point, so it must not be a dead end. */
 export const CustomTabEmpty: Story = {
   args: {
     provider: "opencode",
@@ -220,10 +250,86 @@ export const CustomTabWithModels: Story = {
   },
 };
 
-/** The same catalog on the OpenCode tab, which must not list the two custom endpoints again. */
+export const CustomTabPending: Story = {
+  args: {
+    provider: "opencode",
+    value: "opencode/example",
+    agentStatus: { ...STORY_AGENT_STATUS, providers: [{ ...openCodeStatus.providers[0], endpointsPending: true }] },
+    customProviders,
+    onAddCustomProvider: fn(),
+    onManageProviders: fn(),
+    modelOptions: openCodeCatalog([["opencode/example", "OpenCode Zen/Example"]]),
+  },
+};
+
+export const CustomTabUnlisted: Story = {
+  args: {
+    ...CustomTabPending.args,
+    agentStatus: { ...STORY_AGENT_STATUS, providers: [{ ...openCodeStatus.providers[0], endpointsPending: false }] },
+  },
+};
+
 export const OpenCodeTabExcludesCustom: Story = {
   args: {
     ...CustomTabWithModels.args,
     value: "opencode/example-free",
+  },
+};
+
+const spentWeekResetsAt = Math.floor(Date.now() / 1_000) + 3 * 24 * 60 * 60;
+
+const usageLimitArgs: Parameters<typeof ProviderModelPicker>[0] = {
+  ...args,
+  provider: "claude",
+  value: "claude-opus-5-5",
+  reasoningEffort: "high",
+  onReasoningEffortChange: fn(),
+  accountUsage: {
+    limits: [
+      {
+        id: "claude",
+        primary: { usedPercent: 64, windowDurationMins: 300, resetsAt: spentWeekResetsAt - 2 * 24 * 60 * 60 },
+        secondary: { usedPercent: 100, windowDurationMins: 10_080, resetsAt: spentWeekResetsAt },
+      },
+      {
+        id: "codex",
+        primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: spentWeekResetsAt },
+        secondary: null,
+      },
+    ],
+  },
+};
+
+export const UsageLimitReached: Story = { render: () => <ProviderModelPicker {...usageLimitArgs} /> };
+
+const codexOllamaModels = ["gemma4:latest", "qwen3.6:latest", "glm-5.2:cloud", "kimi-k2.7-code:cloud"].map((id) => ({
+  provider: "codex" as const,
+  id,
+  name: id,
+  description: "Codex model discovered from the local CLI.",
+  defaultReasoningEffort: "medium" as const,
+  supportedReasoningEfforts: ["medium" as const],
+}));
+
+const codexStatusWithSource = (modelSource: { kind: "provider"; name: string } | { kind: "catalog" }) => ({
+  ...STORY_AGENT_STATUS,
+  providers: STORY_AGENT_STATUS.providers?.map((provider) =>
+    provider.id === "codex" ? { ...provider, modelSource } : provider,
+  ),
+});
+
+export const CodexModelProviderSource: Story = {
+  args: {
+    value: "gemma4:latest",
+    modelOptions: [...codexOllamaModels, ...STORY_MODELS.filter((model) => model.provider !== "codex")],
+    agentStatus: codexStatusWithSource({ kind: "provider", name: "Ollama" }),
+  },
+};
+
+export const CodexModelCatalogSource: Story = {
+  args: {
+    value: "gemma4:latest",
+    modelOptions: [...codexOllamaModels, ...STORY_MODELS.filter((model) => model.provider !== "codex")],
+    agentStatus: codexStatusWithSource({ kind: "catalog" }),
   },
 };

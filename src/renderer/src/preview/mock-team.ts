@@ -1,6 +1,6 @@
 import type {
   AgentEvent,
-  AgentSummary,
+  ClientAgentSummary,
   ConfigureHostInput,
   CreateTeamInviteInput,
   DirectConversationSnapshot,
@@ -12,8 +12,10 @@ import type {
   InviteSummary,
   JoinServerInput,
   OpenBotDesktopApi,
+  RemoteControlPolicy,
   RemoteDesktopSession,
   SendDirectMessageInput,
+  ServerAppearance,
   ServerSummary,
   SetTeamTypingInput,
   TeamInviteSummary,
@@ -22,6 +24,9 @@ import type {
   TeamSessionSummary,
   UpdateTeamMemberInput,
 } from "@openbot/contracts/ipc";
+import { DEFAULT_REMOTE_CONTROL_POLICY } from "@openbot/contracts/ipc";
+import type { OwnerTransfer } from "@openbot/contracts/owner-transfer";
+import { sourceText } from "@openbot/i18n/source";
 import {
   STORY_DIRECT_SNAPSHOTS,
   STORY_DIRECT_THREADS,
@@ -45,17 +50,16 @@ export interface MockTeamOptions {
   invites?: TeamInviteSummary[];
   sessions?: TeamSessionSummary[];
   remoteDesktopSessions?: RemoteDesktopSession[];
+  ownerTransfers?: Record<string, OwnerTransfer>;
 }
 
-/**
- * The team side: the server list, the local host with its members and invitations, direct messages
- * between members, and remote desktop sessions. They share one host status and one presence.
- */
+const OWNER_TRANSFER_LIFETIME_MS = 7 * 24 * 60 * 60_000;
+
 export function createMockTeam(
   options: MockTeamOptions,
   { emit }: MockRuntime,
   emitAgentEvent: (event: AgentEvent) => void,
-  readAgents: () => AgentSummary[],
+  readAgents: () => ClientAgentSummary[],
 ) {
   let servers = clone(options.servers ?? STORY_SERVERS);
   let presence = clone(options.presence ?? STORY_PRESENCE);
@@ -65,8 +69,11 @@ export function createMockTeam(
   let teamMembers = clone(options.teamMembers ?? STORY_TEAM_MEMBERS);
   let invites = clone(options.invites ?? STORY_INVITES);
   let sessions = clone(options.sessions ?? STORY_SESSIONS);
+  const ownerTransfers = new Map(Object.entries(clone(options.ownerTransfers ?? {})));
+  let remoteControlPolicy: RemoteControlPolicy = { ...DEFAULT_REMOTE_CONTROL_POLICY };
   let remoteDesktopSessions = clone(options.remoteDesktopSessions ?? [STORY_REMOTE_DESKTOP_SESSION]);
   let directMessageCounter = 10;
+  const serverListeners = new Set<Listener<ServerSummary[]>>();
   const presenceListeners = new Set<Listener<TeamPresenceSnapshot>>();
   const directMessageListeners = new Set<Listener<DirectMessageRealtimeEvent>>();
   const directTypingListeners = new Set<Listener<DirectTypingRealtimeEvent>>();
@@ -125,6 +132,11 @@ export function createMockTeam(
   function emitRemoteDesktopSessions(sessionsValue: RemoteDesktopSession[]): void {
     remoteDesktopSessions = clone(sessionsValue);
     emit(remoteDesktopListeners, sessionsValue);
+  }
+
+  function setServerAppearance(serverId: string, appearance: ServerAppearance | null): void {
+    servers = servers.map((server) => (server.id === serverId ? { ...server, appearance } : server));
+    emit(serverListeners, servers);
   }
 
   const serversApi: OpenBotDesktopApi["servers"] = {
@@ -194,7 +206,19 @@ export function createMockTeam(
     retryConnection: async (serverId) => {
       const server = servers.find((candidate) => candidate.id === serverId);
       if (!server) throw new Error("Server not found");
-      return clone(server);
+      if (server.state === "online" && !server.issue && !server.hostedSleep && !server.hostedIssue)
+        return clone(server);
+      const connected = {
+        ...server,
+        state: "online" as const,
+        hostedSleep: null,
+        hostedIssue: null,
+        hostedStart: null,
+        connectionSequence: (server.connectionSequence ?? 0) + 1,
+      };
+      servers = servers.map((item) => (item.id === serverId ? connected : item));
+      emit(serverListeners, servers);
+      return clone(connected);
     },
     remove: async (serverId) => {
       servers = servers.filter((server) => server.id !== serverId);
@@ -231,6 +255,27 @@ export function createMockTeam(
       permanent: input.permanent ?? false,
       useCount: 0,
     }),
+    getOwnerTransfer: async (serverId) => clone(ownerTransfers.get(serverId) ?? null),
+    startOwnerTransfer: async (email, serverId) => {
+      const server = servers.find((candidate) => candidate.id === serverId);
+      if (!server) throw new Error("Server not found");
+      const createdAt = Date.now();
+      const transfer: OwnerTransfer = {
+        transferId: `transfer-${crypto.randomUUID()}`,
+        hostId: serverId,
+        hostName: server.name,
+        fromEmail: "person@example.com",
+        fromName: "Norbert",
+        toEmail: email.trim().toLowerCase(),
+        createdAt,
+        expiresAt: createdAt + OWNER_TRANSFER_LIFETIME_MS,
+      };
+      ownerTransfers.set(serverId, transfer);
+      return clone(transfer);
+    },
+    cancelOwnerTransfer: async (serverId) => {
+      ownerTransfers.delete(serverId);
+    },
     setTyping: async (_input: SetTeamTypingInput) => undefined,
     onPresence: (listener, serverId) => {
       const receive = (snapshot: TeamPresenceSnapshot) => {
@@ -316,13 +361,12 @@ export function createMockTeam(
       directTypingListeners.add(listener);
       return () => directTypingListeners.delete(listener);
     },
-    // The unfiltered streams the preload narrows to one server. The preview sends only the narrowed ones.
     onScopedPresence: () => () => undefined,
     onScopedDirectMessage: () => () => undefined,
     onScopedDirectTyping: () => () => undefined,
     onEvent: (listener) => {
-      void listener;
-      return () => undefined;
+      serverListeners.add(listener);
+      return () => serverListeners.delete(listener);
     },
     onInvite: (listener) => {
       inviteListeners.add(listener);
@@ -346,7 +390,17 @@ export function createMockTeam(
       hostStatus = {
         ...hostStatus,
         ...(input.serverName === undefined ? {} : { serverName: input.serverName }),
+        ...(input.appearance === undefined ? {} : { appearance: input.appearance }),
       };
+      if (input.appearance !== undefined) {
+        const local = servers.find((server) => server.kind === "local");
+        if (local) setServerAppearance(local.id, input.appearance);
+      }
+      emitHostStatus(hostStatus);
+      return clone(hostStatus);
+    },
+    rotateIdentityKey: async () => {
+      hostStatus = { ...hostStatus, message: sourceText("status.host.keyRotated") };
       emitHostStatus(hostStatus);
       return clone(hostStatus);
     },
@@ -361,7 +415,6 @@ export function createMockTeam(
       emitHostStatus(hostStatus);
       return clone(hostStatus);
     },
-    // The preview has no runtime to ask, so the check is what a granted permission looks like.
     recheckScreenRecording: async () => {
       hostStatus = { ...hostStatus, remoteDesktopScreenRecordingDenied: false };
       emitHostStatus(hostStatus);
@@ -381,6 +434,16 @@ export function createMockTeam(
     listSessions: async () => clone(sessions),
     revokeSession: async (sessionId) => {
       sessions = sessions.filter((session) => session.id !== sessionId);
+    },
+    getRemoteControlPolicy: async () => clone(remoteControlPolicy),
+    setRemoteControlPolicy: async (policy) => {
+      remoteControlPolicy = { access: policy.access, askOnHost: policy.askOnHost };
+      return clone(remoteControlPolicy);
+    },
+    stopRemoteControl: async () => {
+      hostStatus = { ...hostStatus, remoteDesktopActiveSessions: 0 };
+      emitHostStatus(hostStatus);
+      return clone(hostStatus);
     },
     listInvites: async () => clone(invites),
     revokeInvite: async (inviteId) => {
@@ -448,8 +511,40 @@ export function createMockTeam(
     },
   };
 
+  const localServersApi: OpenBotDesktopApi["localServers"] = {
+    create: async (name) => {
+      const server: ServerSummary = {
+        id: `local-server-${servers.length + 1}`,
+        name: name.trim(),
+        logoUrl: null,
+        notificationsMuted: false,
+        notificationsMutedUntil: null,
+        notificationLevel: "all",
+        kind: "remote",
+        thisComputer: true,
+        state: "online",
+        apiUrl: "http://127.0.0.1:0",
+        remoteDesktopAvailable: false,
+        role: "owner",
+        active: true,
+      };
+      servers = [...servers.map((candidate) => ({ ...candidate, active: false })), server];
+      emit(serverListeners, servers);
+      return clone(server);
+    },
+    restart: async (serverId) => {
+      if (!servers.some((server) => server.id === serverId && server.thisComputer)) throw new Error("Server not found");
+    },
+    delete: async (serverId) => {
+      servers = servers.filter((server) => server.id !== serverId);
+      emit(serverListeners, servers);
+    },
+  };
+
   return {
     servers: serversApi,
+    localServers: localServersApi,
+    activeServerId: () => servers.find((server) => server.active)?.id ?? "local",
     host,
     remoteDesktop,
     emitPresence,
@@ -457,6 +552,7 @@ export function createMockTeam(
     emitDirectTyping,
     emitInvite,
     emitHostStatus,
+    setServerAppearance,
     emitRemoteDesktopSessions,
     readDirectConversationSnapshot,
     updateDirectConversationSnapshot,

@@ -7,13 +7,6 @@ import {
   type UpdateStatus,
 } from "@openbot/contracts/ipc";
 
-/**
- * What the renderer shows before main has answered, and what it falls back to
- * when a call fails. Every one of these is a projection of "nothing known yet",
- * never durable state.
- */
-
-/** No runtime known yet. One object, because the fallback is the same for every provider. */
 const NO_PROVIDER_RUNTIME = { phase: "not-downloaded", progress: null, message: null, version: null } as const;
 
 export const FALLBACK_STATUS: AgentStatus = {
@@ -50,8 +43,12 @@ export const FALLBACK_PROVIDER_RUNTIMES: ProviderRuntimeSnapshot = {
     antigravity: NO_PROVIDER_RUNTIME,
     cursor: NO_PROVIDER_RUNTIME,
     cline: NO_PROVIDER_RUNTIME,
+    kimi: NO_PROVIDER_RUNTIME,
     pi: NO_PROVIDER_RUNTIME,
     muse: NO_PROVIDER_RUNTIME,
+    devin: NO_PROVIDER_RUNTIME,
+    copilot: NO_PROVIDER_RUNTIME,
+    mistral: NO_PROVIDER_RUNTIME,
   },
   toolRuntimes: { bun: NO_PROVIDER_RUNTIME },
 };
@@ -63,10 +60,12 @@ export const FALLBACK_HOST_STATUS: HostStatus = {
   serverId: null,
   serverName: null,
   logoUrl: null,
+  appearance: null,
   apiUrl: null,
   apiOnline: false,
   remoteDesktopReady: false,
   remoteDesktopScreenRecordingDenied: false,
+  remoteDesktopNeedsX11Session: false,
   remoteDesktopUnattended: false,
   remoteDesktopActiveSessions: 0,
   remoteDesktopMaxSessions: 4,

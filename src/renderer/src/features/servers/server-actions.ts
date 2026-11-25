@@ -1,45 +1,64 @@
 import type { ServerSummary } from "@openbot/contracts/ipc";
+import { classifyFailure } from "@openbot/telemetry";
 import type { ServerActionCallbacks } from "@openbot/ui/features/servers/ServerActionItems";
+import type { HiddenLocalServer } from "@openbot/ui/features/servers/ServerRail";
 import { useText } from "@openbot/ui/text";
 import { actionToast } from "../../action-toast";
 import { usePlatform } from "../../platform";
-import { useUsage } from "../usage/usage-context";
+import { useSettings } from "../settings/settings-context";
+import { openServerPlanCheckout } from "./ServerPlanReminder";
+import { serverSupportsCapability } from "./server-capabilities";
 import { useServerSelection } from "./server-selection";
 import { useServerSettings } from "./server-settings";
 import { useServers } from "./servers-context";
+import { serversPort } from "./servers-port";
 
-/**
- * What the server rail and the server menu on the sidebar title both do with a server. The two
- * views show the same servers in the same order and must not disagree on an action.
- */
+export function renewServerPlan(serverId: string): Promise<void> {
+  return openServerPlanCheckout((id) => serversPort().hostedServers.openCheckout(id), serverId);
+}
+
 export function useServerActions() {
   const platform = usePlatform();
   const { t, errorMessage } = useText();
-  const { openUsage, openSchedule } = useUsage();
   const {
-    activeServerId,
     servers,
     setServerMuted,
-    setServerNotificationLevel,
     setJoinServerOpen,
     setAddServerOpen,
+    setCreateLocalServerOpen,
+    setInstallServerOpen,
     hostedServersAvailable,
+    hostedServerIds,
+    hostedServersLoaded,
+    planDeletesAt,
     refreshHostedServersAvailable,
+    localServerHidden,
+    setLocalServerHidden,
   } = useServers();
   const { selectServer } = useServerSelection();
-  const { openServerSettings } = useServerSettings();
+  const { openServerSettings, requestLeaveServer, requestRestartServer } = useServerSettings();
+  const { openHostedServerDelete, openNotificationLevels } = useSettings();
 
-  /** Local servers above the saved remote-server order, as the rail draws them. */
+  function remoteServers(): ServerSummary[] {
+    return servers().filter((server) => server.kind === "remote");
+  }
+
+  function hiddenLocalServer(): ServerSummary | undefined {
+    if (!localServerHidden() || remoteServers().length === 0) return undefined;
+    return servers().find((server) => server.kind === "local" && !server.active);
+  }
+
   function orderedServers(): ServerSummary[] {
-    return [
-      ...servers().filter((server) => server.kind === "local"),
-      ...servers().filter((server) => server.kind === "remote"),
-    ];
+    const hidden = hiddenLocalServer();
+    return [...servers().filter((server) => server.kind === "local" && server !== hidden), ...remoteServers()];
   }
 
   function selectFailed(error: unknown): void {
     actionToast.error(t("server.select.failedTitle"), {
-      description: errorMessage(error, t("server.select.failedDescription")),
+      ...{
+        description: errorMessage(error, t("server.select.failedDescription")),
+      },
+      report: { operation: "team", source: "action", cause_code: classifyFailure(error) },
     });
   }
 
@@ -47,34 +66,80 @@ export function useServerActions() {
     void selectServer(serverId).catch(selectFailed);
   }
 
-  /**
-   * Opens the hosted server plans when the account can create a hosted server, otherwise the invite
-   * dialog. It uses the last answer, so the click does not wait for the network; the read after it is
-   * for the next click.
-   */
   function add(): void {
     if (platform.landingPreview) return;
-    if (hostedServersAvailable()) setAddServerOpen(true);
+    if (hostedServersAvailable()) setAddServerOpen(true, "server_rail");
     else setJoinServerOpen(true);
     void refreshHostedServersAvailable();
   }
 
-  const callbacks: Required<ServerActionCallbacks> = {
-    onSetMuted: (serverId, muted, durationMs) => void setServerMuted(serverId, muted, durationMs),
-    onSetNotificationLevel: (serverId, level) => void setServerNotificationLevel(serverId, level),
-    onOpenUsage: openUsage,
-    onOpenSchedule: (serverId, trigger) => {
-      if (serverId === activeServerId()) return openSchedule(serverId, trigger);
-      // The schedule opens agents and channels in the active server, so it shows the active one.
-      // The trigger goes with the old server.
-      // A selection can also end without the server, as when a newer selection replaces it.
-      void selectServer(serverId).then(
-        (selected) => selected && openSchedule(serverId, null),
-        (error) => selectFailed(error),
-      );
-    },
-    onOpenSettings: openServerSettings,
-  };
+  const createLocal = platform.landingPreview ? undefined : () => setCreateLocalServerOpen(true);
 
-  return { orderedServers, select, add, addCreatesServer: hostedServersAvailable, callbacks };
+  function addMenuCreateLocal(): (() => void) | undefined {
+    return hostedServersAvailable() ? undefined : createLocal;
+  }
+
+  const installServer = platform.landingPreview ? undefined : () => setInstallServerOpen(true);
+
+  function addMenuInstallServer(): (() => void) | undefined {
+    return hostedServersAvailable() ? undefined : installServer;
+  }
+
+  async function hideLocal(serverId: string): Promise<void> {
+    const other = remoteServers().find((server) => server.state === "online") ?? remoteServers()[0];
+    if (!other) return;
+    if (servers().some((server) => server.id === serverId && server.active)) {
+      try {
+        if (!(await selectServer(other.id))) return;
+      } catch (error) {
+        selectFailed(error);
+        return;
+      }
+    }
+    setLocalServerHidden(true);
+  }
+
+  function hiddenLocal(): HiddenLocalServer | undefined {
+    const server = hiddenLocalServer();
+    return server ? { name: server.name, show: () => setLocalServerHidden(false) } : undefined;
+  }
+
+  function onThisComputer(serverId: string): boolean {
+    return servers().some((server) => server.id === serverId && server.thisComputer === true);
+  }
+
+  const callbacks = {
+    onSetMuted: (serverId, muted, durationMs) => void setServerMuted(serverId, muted, durationMs),
+    onOpenNotificationSettings: openNotificationLevels,
+    onOpenSettings: openServerSettings,
+    onLeave: requestLeaveServer,
+    onRemove: requestLeaveServer,
+    canRemove: (serverId) => hostedServersLoaded() && !hostedServerIds().has(serverId) && !onThisComputer(serverId),
+    onDelete: (serverId, trigger) =>
+      onThisComputer(serverId) ? requestLeaveServer(serverId, trigger) : openHostedServerDelete(serverId, trigger),
+    canDelete: (serverId) => hostedServerIds().has(serverId) || onThisComputer(serverId),
+    onRestart: requestRestartServer,
+    canRestart: (serverId) => {
+      if (hostedServerIds().has(serverId) || onThisComputer(serverId)) return true;
+      const server = servers().find((candidate) => candidate.id === serverId);
+      return server?.state === "online" && serverSupportsCapability(server, "host-restart-v1");
+    },
+    onHide: (serverId) => void hideLocal(serverId),
+    canHide: () => remoteServers().length > 0,
+    planDeletesAt,
+    onRenewPlan: renewServerPlan,
+  } satisfies ServerActionCallbacks;
+
+  return {
+    orderedServers,
+    select,
+    add,
+    createLocal,
+    addMenuCreateLocal,
+    installServer,
+    addMenuInstallServer,
+    addCreatesServer: hostedServersAvailable,
+    hiddenLocal,
+    callbacks,
+  };
 }

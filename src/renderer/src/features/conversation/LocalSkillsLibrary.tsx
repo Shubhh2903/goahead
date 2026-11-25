@@ -1,18 +1,19 @@
 import type { InstalledSkill, MarketplaceSkillDetail } from "@openbot/contracts/ipc";
-import { Button, Switch } from "@openbot/ui";
+import { Button, ErrorReference, Switch } from "@openbot/ui";
 import { SkillGlyph } from "@openbot/ui/features/conversation/SkillGlyph";
 import { useText } from "@openbot/ui/text";
+import { errorReference } from "@openbot/user-errors";
 import { createEffect, createSignal, createStore, For, onSettled, Show } from "solid-js";
 import { SkillPreview } from "../../components/SkillPreview";
 import { skillsPort } from "../../skills-port";
 
 export function LocalSkillsLibrary(props: {
-  initialSkillId?: string;
+  initialSkillId?: string | undefined;
   agentId: string;
   disabled?: boolean;
   installed: InstalledSkill[];
   onInstalled: () => Promise<void>;
-  onTry?: (skill: MarketplaceSkillDetail) => void;
+  onTry?: ((skill: MarketplaceSkillDetail) => void) | undefined;
 }) {
   const { t, errorMessage } = useText();
   const [reload, setReload] = createSignal(0);
@@ -26,18 +27,20 @@ export function LocalSkillsLibrary(props: {
     loading: boolean;
     busy: boolean;
     error: string;
+    reference: string | null;
   }>({
     skills: [],
     selected: null,
     loading: true,
     busy: false,
     error: "",
+    reference: null,
   });
   createEffect(
     () => [props.agentId, reload(), props.initialSkillId] as const,
     () => {
       let disposed = false;
-      setState((current) => ({ ...current, loading: true, error: "", selected: null }));
+      setState((current) => ({ ...current, loading: true, error: "", reference: null, selected: null }));
       void skillsPort()
         .skills.localList()
         .then(
@@ -50,8 +53,14 @@ export function LocalSkillsLibrary(props: {
                 selected: skills.find((skill) => skill.id === props.initialSkillId) ?? null,
               }));
           },
-          () => {
-            if (!disposed) setState((current) => ({ ...current, error: t("skill.local.loadFailed"), loading: false }));
+          (error) => {
+            if (!disposed)
+              setState((current) => ({
+                ...current,
+                error: t("skill.local.loadFailed"),
+                reference: errorReference(error),
+                loading: false,
+              }));
           },
         );
       return () => {
@@ -64,7 +73,7 @@ export function LocalSkillsLibrary(props: {
     if (state.busy || props.disabled) return;
     const agentId = props.agentId;
     const assigned = props.installed.find((item) => item.skillId === skill.id);
-    setState((current) => ({ ...current, busy: true, error: "" }));
+    setState((current) => ({ ...current, busy: true, error: "", reference: null }));
     try {
       if (!assigned && enabled) {
         await skillsPort().skills.localInstall({ agentId, skillId: skill.id, revision: skill.version });
@@ -77,6 +86,7 @@ export function LocalSkillsLibrary(props: {
         setState((current) => ({
           ...current,
           error: errorMessage(error, t("skill.local.toggleFailed")),
+          reference: errorReference(error),
         }));
     } finally {
       if (active && props.agentId === agentId) setState((current) => ({ ...current, busy: false }));
@@ -84,7 +94,7 @@ export function LocalSkillsLibrary(props: {
   }
   async function install(skill: MarketplaceSkillDetail) {
     const agentId = props.agentId;
-    setState((current) => ({ ...current, busy: true, error: "" }));
+    setState((current) => ({ ...current, busy: true, error: "", reference: null }));
     try {
       await skillsPort().skills.localInstall({ agentId, skillId: skill.id, revision: skill.version });
       if (!active || props.agentId !== agentId) return;
@@ -93,6 +103,7 @@ export function LocalSkillsLibrary(props: {
       setState((current) => ({
         ...current,
         error: errorMessage(error, t("skill.local.addFailed")),
+        reference: errorReference(error),
       }));
     } finally {
       setState((current) => ({ ...current, busy: false }));
@@ -100,15 +111,15 @@ export function LocalSkillsLibrary(props: {
   }
   async function trySkill(skill: MarketplaceSkillDetail) {
     const agentId = props.agentId;
-    setState((current) => ({ ...current, busy: true, error: "" }));
+    setState((current) => ({ ...current, busy: true, error: "", reference: null }));
     try {
       if (installed()?.enabled === false)
         await skillsPort().skills.setEnabled({ agentId, skillId: skill.id, enabled: true });
       if (!active || props.agentId !== agentId) return;
       await props.onInstalled();
       if (active && props.agentId === agentId && state.selected?.id === skill.id) props.onTry?.(skill);
-    } catch {
-      setState((current) => ({ ...current, error: t("skill.enableFailed") }));
+    } catch (error) {
+      setState((current) => ({ ...current, error: t("skill.enableFailed"), reference: errorReference(error) }));
     } finally {
       setState((current) => ({ ...current, busy: false }));
     }
@@ -118,7 +129,10 @@ export function LocalSkillsLibrary(props: {
       <Show when={state.selected}>
         <div class="skill-preview-toolbar">
           <Show when={state.selected}>
-            <Button variant="ghost" onClick={() => setState((current) => ({ ...current, selected: null, error: "" }))}>
+            <Button
+              variant="ghost"
+              onClick={() => setState((current) => ({ ...current, selected: null, error: "", reference: null }))}
+            >
               {t("skill.local.back")}
             </Button>
           </Show>
@@ -146,6 +160,7 @@ export function LocalSkillsLibrary(props: {
       <Show when={state.error}>
         <p class="agent-memory-error" role="alert">
           {state.error}
+          <ErrorReference reference={state.reference} />
         </p>
         <Show when={!state.selected}>
           <Button variant="ghost" onClick={() => setReload((value) => value + 1)}>
@@ -180,7 +195,9 @@ export function LocalSkillsLibrary(props: {
                     <Button
                       variant="ghost"
                       class="agent-skill-open"
-                      onClick={() => setState((current) => ({ ...current, selected: skill, error: "" }))}
+                      onClick={() =>
+                        setState((current) => ({ ...current, selected: skill, error: "", reference: null }))
+                      }
                     >
                       <SkillGlyph iconUrl={skill.iconUrl} />
                       <span class="agent-skill-copy">
@@ -213,7 +230,7 @@ export function LocalSkillsLibrary(props: {
                     <Switch
                       aria-label={t("skill.enableName", { name: skill.name })}
                       checked={props.installed.some((item) => item.skillId === skill.id && item.enabled !== false)}
-                      disabled={state.busy || props.disabled}
+                      disabled={state.busy || props.disabled === true}
                       onChange={(enabled) => void toggleSkill(skill, enabled)}
                     />
                   </div>

@@ -5,19 +5,12 @@ import macMockUrl from "./assets/remote-desktop-mac-mock.png?inline";
 
 const PAGES_ROUTE = "/__openbot/chat-visual";
 
-/** Publishes a page to the Storybook server (`.storybook/chat-visual-pages.ts`) and gives its URL. */
 export async function publishChatVisualPage(html: string): Promise<string> {
   const response = await fetch(PAGES_ROUTE, { method: "POST", body: chatVisualDocument(html) });
   if (!response.ok) throw new Error(`The Storybook server did not keep the page: ${response.status}`);
   return response.text();
 }
 
-/*
- * Pages that an agent could publish as a visual reply. Each follows the layout rules that the agent
- * gets: no background on the page, no outer card or title, and the theme variables for colour.
- */
-
-/** A bar chart that its own script draws as SVG, with no library. */
 export const INLINE_SVG_CHART = `<!doctype html>
 <html><head>
 <style>
@@ -58,7 +51,6 @@ export const INLINE_SVG_CHART = `<!doctype html>
 </script>
 </body></html>`;
 
-/** A line chart with Chart.js from a CDN, which a visual reply can load. */
 export const CDN_CHART = `<!doctype html>
 <html><head>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
@@ -92,7 +84,6 @@ export const CDN_CHART = `<!doctype html>
 </script>
 </body></html>`;
 
-/** A comparison in boxes, as a mockup or a decision table. */
 export const COMPARISON_MOCKUP = `<!doctype html>
 <html><head>
 <style>
@@ -112,7 +103,6 @@ export const COMPARISON_MOCKUP = `<!doctype html>
 </div>
 </body></html>`;
 
-/** A list of sources. A click on a link asks the app to open it in the browser. */
 export const LINK_OUT = `<!doctype html>
 <html><head>
 <style>
@@ -130,7 +120,6 @@ export const LINK_OUT = `<!doctype html>
 <p id="notes"><small>Only http and https links go to the app.</small></p>
 </body></html>`;
 
-/** A page that is higher than a frame can be, so the frame stops at its limit and the page scrolls. */
 export const TALL_PAGE = `<!doctype html>
 <html><head>
 <style>
@@ -147,10 +136,6 @@ export const TALL_PAGE = `<!doctype html>
 </script>
 </body></html>`;
 
-/**
- * A collage of screenshots. The agent gives local image paths, and the app puts each image into the
- * page as a data URL when it publishes the page, so the page does not need the files later.
- */
 export const IMAGE_COLLAGE = `<!doctype html>
 <html><head>
 <style>
@@ -165,6 +150,48 @@ export const IMAGE_COLLAGE = `<!doctype html>
 <div class="grid">
   <figure class="wide"><img src="${macMockUrl}" alt="Remote desktop on a Mac"><figcaption>Remote desktop, full screen</figcaption></figure>
   <figure><img src="${takeoverUrl}" alt="Browser takeover"><figcaption>Browser takeover</figcaption></figure>
-  <figure><img src="${logoUrl}" alt="OpenBot logo" style="object-fit: contain"><figcaption>App logo</figcaption></figure>
+  <figure><img src="${logoUrl}" alt="GoAhead logo" style="object-fit: contain"><figcaption>App logo</figcaption></figure>
 </div>
+</body></html>`;
+
+export const INTERACTIVE_CHOICE = `<!doctype html>
+<html><head>
+<style>
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button { font: inherit; color: var(--foreground); background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  p { color: var(--muted-foreground); font-size: 13px; }
+  img { display: block; width: 100%; max-width: 480px; margin-top: 12px; border-radius: var(--radius); }
+</style>
+</head><body>
+<p>Which plan do you want?</p>
+<div class="row">
+  <button type="button" data-plan="A">Pick A</button>
+  <button type="button" data-plan="B">Pick B</button>
+  <button type="button" id="count">Count: 0</button>
+  <button type="button" id="large">Full screen</button>
+</div>
+<img id="chart" alt="Runs per day">
+<script>
+  // The chart is an image, drawn here with the theme colours, so a click on it opens the image viewer.
+  const canvas = document.createElement("canvas");
+  canvas.width = 480;
+  canvas.height = 200;
+  const context = canvas.getContext("2d");
+  context.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--chart-1");
+  [80, 130, 180, 110, 60].forEach((height, index) => context.fillRect(30 + index * 90, 200 - height, 60, height));
+  document.getElementById("chart").src = canvas.toDataURL("image/png");
+  let count = 0;
+  for (const button of document.querySelectorAll("[data-plan]")) {
+    button.addEventListener("click", () => openbotPage.sendMessage("I pick plan " + button.dataset.plan + "."));
+  }
+  document.getElementById("count").addEventListener("click", (event) => {
+    count += 1;
+    event.currentTarget.textContent = "Count: " + count;
+    openbotPage.setContext("The counter shows " + count + ".");
+  });
+  document.getElementById("large").addEventListener("click", () =>
+    openbotPage.displayMode === "fullscreen" ? openbotPage.exitFullscreen() : openbotPage.requestFullscreen(),
+  );
+</script>
 </body></html>`;

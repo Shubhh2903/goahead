@@ -1,132 +1,198 @@
+import { foreignProvider, isKnownAgentProvider } from "@openbot/contracts/agent-providers";
+import {
+  type AgentModelId,
+  type AgentProviderRef,
+  type AgentReasoningEffort,
+  agentNextProviderAccountId,
+  DEFAULT_PROVIDER_ACCOUNT_ID,
+  providerDisplayName,
+  workspaceAccessEnforced,
+} from "@openbot/contracts/ipc";
+import { reasoningLabel } from "@openbot/ui/components/ProviderModelPicker";
+import { findModelOption, providerAccountName } from "@openbot/ui/components/provider-accounts";
 import { ConversationHeader as SharedConversationHeader } from "@openbot/ui/features/conversation/ConversationHeader";
+import { ThreadHeader } from "@openbot/ui/features/conversation/threads/ThreadHeader";
+import { DRAFT_THREAD_ID, MAIN_THREAD_ID } from "@openbot/ui/features/conversation/threads/thread-types";
+import { Show } from "solid-js";
+import { actionToast } from "../../action-toast";
 import { useConversationViewScope } from "./conversation-scope";
 
 const loadAgentSettingsPanel = () => import("./AgentSettingsPanel");
 
-import { useText } from "@openbot/ui/text";
-import { createMemo } from "solid-js";
-import { actionToast } from "../../action-toast";
-import { agentTemplatesPort } from "../agent-templates/agent-templates-port";
-import { createPublishAgent } from "../agent-templates/PublishAgent";
-import { serverHasStorage } from "../files/storage-usage";
-import { serverCanAdminister } from "../servers/server-capabilities";
+interface BadgeRuntime {
+  provider: AgentProviderRef;
+  model: AgentModelId;
+  reasoningEffort: AgentReasoningEffort;
+  providerAccountId?: string | undefined;
+}
 
-/** @internal Stable HMR boundary for conversation header. */
+import { useText } from "@openbot/ui/text";
+
 export function ConversationHeader() {
-  const { t, errorMessage } = useText();
+  const { t } = useText();
   const {
     actingBrowserControl,
     agentActivity,
     browserControlAgent,
-    hideBrowserPanel,
+    channel,
+    fastMode,
+    ultrafast,
+    fastModeChange,
     props,
-    screenOpen,
+    runningTurnRuntime,
     selectAndConfirmModel,
     selectAndConfirmReasoning,
     setActiveRightPanel,
     settingsModel,
     settingsProvider,
     settingsReasoning,
-    showBrowserPanel,
-    filesOpen,
-    toggleFilesPanel,
+    sidePanelOpen,
+    sideThreadOpen,
+    messagePins,
+    replyJump,
+    toggleSidePanel,
+    moveThreadToPanel,
+    startNewThread,
   } = useConversationViewScope();
-  const changeAutoApprove = createMemo(() => {
-    const save = props.onSetAgentAutoApprove;
-    const name = props.agent?.name ?? t("conversation.header.thisAgent");
-    if (!save) return undefined;
-    return (next: boolean) => {
-      void save(next).catch((error) => {
-        actionToast.error(
-          next
-            ? errorMessage(error, t("conversation.header.grantFailed", { name }))
-            : t("settings.autoApprove.revokeFailed", { name }),
-        );
-      });
+  const runningThreads = () => props.threads?.running ?? 0;
+  const openMainChat = () => {
+    const header = props.threads?.header;
+    return header && sideThreadOpen() ? () => header.onOpen(MAIN_THREAD_ID) : undefined;
+  };
+  const titleSelected = () => (props.threads ? !sideThreadOpen() : undefined);
+  const viewTaskId = () => (sideThreadOpen() ? (props.threads?.open?.id ?? DRAFT_THREAD_ID) : undefined);
+  let pinOpens = 0;
+  async function openPin(key: string): Promise<void> {
+    const pin = messagePins.pin(key);
+    if (!pin) return;
+    const open = ++pinOpens;
+    const opened =
+      pin.taskId === null && !sideThreadOpen()
+        ? await replyJump.jumpTo(pin.messageId)
+        : ((await props.threads?.onOpenMessage(pin.taskId, pin.messageId)) ?? false);
+    if (opened || open !== pinOpens) return;
+    actionToast.error(t("chat.pins.missing"));
+    messagePins.load();
+  }
+  const pinnedMessages = () => {
+    if (!messagePins.available()) return undefined;
+    return {
+      pins: messagePins.items(viewTaskId()),
+      agents: props.agents,
+      onOpenChange: (open: boolean) => {
+        if (open) messagePins.load();
+      },
+      onJump: (key: string) => void openPin(key),
+      onUnpin: (key: string) => {
+        const pin = messagePins.pin(key);
+        if (pin) messagePins.set(pin.taskId ?? undefined, pin.messageId, false);
+      },
     };
-  });
-  const publishAgent = createPublishAgent(
-    () => props.runtime?.admin?.agentTemplates ?? agentTemplatesPort().agentTemplates,
-  );
-  // This computer reads the skills of its own agents from the workspace. A joined host publishes its
-  // own agents, for an owner or admin, when it serves `agent-publish-v1`.
-  const canPublish = () =>
-    props.runtime
-      ? props.runtime.admin !== undefined && serverCanAdminister(props.server, "agent-publish-v1")
-      : props.server?.kind === "local";
+  };
+  const working = () => agentActivity() === "Working";
+  const providerName = (provider: AgentProviderRef) =>
+    isKnownAgentProvider(provider) ? providerDisplayName(provider) : String(provider);
+  const accountId = (runtime: BadgeRuntime) => runtime.providerAccountId ?? DEFAULT_PROVIDER_ACCOUNT_ID;
+  const accountName = (runtime: BadgeRuntime) =>
+    providerAccountName(
+      t,
+      props.agentStatus?.providers?.find((status) => status.id === runtime.provider)?.accounts ?? [],
+      accountId(runtime),
+    );
+  const runtimeLabel = (runtime: BadgeRuntime, other: BadgeRuntime) => {
+    const parts = [
+      findModelOption(props.modelOptions, props.agentStatus?.providers, runtime.provider, runtime.model)?.name ??
+        runtime.model,
+    ];
+    if (runtime.provider !== other.provider) parts.unshift(providerName(runtime.provider));
+    else if (accountId(runtime) !== accountId(other)) parts.unshift(accountName(runtime));
+    if (runtime.reasoningEffort !== other.reasoningEffort) parts.push(reasoningLabel(runtime.reasoningEffort, t));
+    return parts.join(" · ");
+  };
+  const pendingModel = () => {
+    const agent = props.agent;
+    if (!agent || !(working() || runningThreads() > 0)) return undefined;
+    const running: BadgeRuntime = (working() ? runningTurnRuntime() : null) ?? agent;
+    const next: BadgeRuntime = agent.pendingRuntime ?? {
+      provider: settingsProvider(),
+      model: settingsModel(),
+      reasoningEffort: settingsReasoning(),
+      providerAccountId: agent.providerAccountId,
+    };
+    if (
+      running.provider === next.provider &&
+      running.model === next.model &&
+      running.reasoningEffort === next.reasoningEffort &&
+      accountId(running) === accountId(next)
+    )
+      return undefined;
+    return { running: runtimeLabel(running, next), next: runtimeLabel(next, running) };
+  };
   return (
-    <>
-      <SharedConversationHeader
-        agent={props.agent}
-        onSettingsIntent={() => void loadAgentSettingsPanel()}
-        onOpenSettings={() => setActiveRightPanel("settings")}
-        modelPicker={{
-          provider: settingsProvider(),
-          value: settingsModel(),
-          reasoningEffort: settingsReasoning(),
-          modelOptions: props.modelOptions,
-          agentStatus: props.agentStatus,
-          runtimeStatuses: props.providerRuntimeStatuses,
-          customProviders: props.customProviders,
-          customAgents: props.customAgents,
-          onDownloadProvider: props.onDownloadProvider,
-          onCancelProviderDownload: props.onCancelProviderDownload,
-          onConnectProvider: props.onConnectProvider,
-          modelChangesDisabled: agentActivity() === "Working",
-          disabledReason:
-            agentActivity() === "Working"
-              ? t("conversation.header.modelsBusy")
-              : t("conversation.header.modelsUnavailable"),
-          onChange: (model, provider) => void selectAndConfirmModel(model, provider),
-          onReasoningEffortChange: (effort) => void selectAndConfirmReasoning(effort),
-          autoApprove: props.agentAutoApproves,
-          agentName: props.agent?.name,
-          autoApproveLocked: props.agentAutoApproveLocked,
-          onAutoApproveChange: changeAutoApprove(),
-        }}
-        remoteControl={
-          props.remoteDesktopEnabled !== false && props.server?.kind === "remote"
-            ? {
-                enabled: Boolean(props.remoteDesktopSessionActive || props.server.state === "online"),
-                active: Boolean(props.remoteDesktopSessionActive),
-                visible: Boolean(props.remoteDesktopVisible),
-                onOpen: (trigger) => {
-                  if (props.server) void props.onOpenRemoteDesktop(props.server.id, trigger);
-                },
-              }
-            : undefined
-        }
-        files={
-          // The web client has no conversation Files panel, and a chat without a thread has no files to list.
-          !props.runtime && props.agent?.threadId && serverHasStorage(props.server)
-            ? { open: filesOpen(), onToggle: toggleFilesPanel }
-            : undefined
-        }
-        publish={
-          canPublish() && props.agent
-            ? {
-                onOpen: () => {
-                  if (props.agent) publishAgent.open(props.agent.id);
-                },
-              }
-            : undefined
-        }
-        browser={
-          props.browserEnabled !== false
-            ? {
-                acting: Boolean(actingBrowserControl()),
-                agentName: browserControlAgent()?.name,
-                open: screenOpen(),
-                disabled: props.browserVisibilitySuspended,
-                onToggle: () => {
-                  if (screenOpen()) hideBrowserPanel();
-                  else showBrowserPanel();
-                },
-              }
-            : undefined
-        }
-      />
-      {publishAgent.dialog()}
-    </>
+    <SharedConversationHeader
+      agent={props.agent}
+      title={channel ? <channel.HeaderTitle onOpenSettings={() => setActiveRightPanel("settings")} /> : undefined}
+      onSettingsIntent={() => void loadAgentSettingsPanel()}
+      onOpenSettings={() => setActiveRightPanel("settings")}
+      onOpenChat={openMainChat()}
+      titleSelected={titleSelected()}
+      pendingModel={pendingModel()}
+      modelPicker={{
+        provider: settingsProvider(),
+        foreignProvider: props.agent ? foreignProvider(props.agent.provider) : undefined,
+        value: settingsModel(),
+        reasoningEffort: settingsReasoning(),
+        modelOptions: props.modelOptions,
+        agentStatus: props.agentStatus,
+        runtimeStatuses: props.providerRuntimeStatuses,
+        customProviders: props.customProviders,
+        customAgents: props.customAgents,
+        onDownloadProvider: props.onDownloadProvider,
+        onCancelProviderDownload: props.onCancelProviderDownload,
+        onConnectProvider: props.onConnectProvider,
+        canConnectProvider: props.canConnectProvider,
+        onManageProviders: props.onManageProviders,
+        disabledReason: t("conversation.header.modelsUnavailable"),
+        accountChoice: true,
+        providerAccountId: props.agent ? agentNextProviderAccountId(props.agent) : undefined,
+        workspaceOnly: props.agent ? workspaceAccessEnforced(props.agent) : false,
+        accountUsage: props.accountUsage,
+        onChange: (model, provider, accountId, effort) =>
+          void selectAndConfirmModel(model, provider, accountId, effort),
+        onReasoningEffortChange: (effort) => void selectAndConfirmReasoning(effort),
+        fastMode: fastMode(),
+        ultrafast: ultrafast(),
+        onFastModeChange: fastModeChange(),
+      }}
+      remoteControl={
+        props.remoteDesktopEnabled !== false && props.server?.kind === "remote"
+          ? {
+              enabled: Boolean(props.remoteDesktopSessionActive || props.server.state === "online"),
+              active: Boolean(props.remoteDesktopSessionActive),
+              visible: Boolean(props.remoteDesktopVisible),
+              onOpen: (trigger) => {
+                if (props.server) void props.onOpenRemoteDesktop(props.server.id, trigger);
+              },
+            }
+          : undefined
+      }
+      threads={
+        <Show when={props.threads}>
+          {(threads) => <ThreadHeader {...threads().header} onNew={startNewThread} onMoveToSide={moveThreadToPanel} />}
+        </Show>
+      }
+      pinnedMessages={pinnedMessages()}
+      sidePanel={
+        channel?.readOnly()
+          ? undefined
+          : {
+              open: sidePanelOpen(),
+              actingAgentName: actingBrowserControl()
+                ? (browserControlAgent()?.name ?? t("conversation.header.agentFallback"))
+                : undefined,
+              onToggle: toggleSidePanel,
+            }
+      }
+    />
   );
 }
