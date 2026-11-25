@@ -6,6 +6,104 @@ All notable changes to OpenBot will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-11-25
+
+### Added
+
+- Agent settings have a new "Choose model automatically" switch for Claude and ChatGPT agents. It is
+  off for every agent until you turn it on, and it stays on this computer: a remote host does not get
+  it.
+- When it is on, a short chat message from you, with no attachments and no work words such as "fix"
+  or "plan", can run on the provider's cheaper model (Claude Sonnet 5.5 or GPT-6 Luna) at low effort.
+  Longer messages, attachments, routines, teammate messages and Slack or channel work keep the
+  agent's own model.
+- The switch happens only from a larger model: Opus or Fable on Claude, and Sol, Terra or Astra on
+  ChatGPT.
+- It happens only when the conversation has been quiet for 5 minutes, or when the cheaper model
+  answered just before.
+- The first turn on the other model reads the conversation without the provider's cache, so that
+  turn can cost more than usual.
+- The agent keeps its chat, workspace and session. The answer shows "Answered by" and the model name
+  when the cheaper model answered.
+- Settings > General has a new Backdrop row. Choose an animated scene (Koi pond, Jellyfish, Retro
+  sunset, Snowfall or Fireflies) or upload your own image or video to show behind the whole window.
+  Images can be PNG, JPEG, GIF, WebP or AVIF up to 20 MB. Videos can be MP4 or WebM up to 100 MB,
+  and play muted in a loop. GoAhead keeps up to 12 uploads on this computer, and an update keeps
+  them.
+- Scenes and videos stand still when the system asks for less motion, and stop while the window is
+  hidden.
+- Three new avatar shapes: ghost, jellyfish and octopus. Existing agents keep their shape. An older
+  GoAhead version shows a similar shape with the same eyes.
+- Put sidebar folders inside folders, three levels deep. A folder menu has "New folder inside" and
+  "Move to". A folder in a folder shows its path, such as "Work / Product". This works on your own
+  computer; a joined server keeps a flat list of folders.
+- Filter the chat list with the new filter button beside New: only agents or only channels, only
+  unread chats or chats with an agent at work, and only the chats in the folders you select. Rows do
+  not drag while a filter is set.
+- A first-run setup wizard for new users: sign in to Claude or ChatGPT, create the first agent, connect Slack and Gmail if you want, and scan a QR code to connect your phone. You can skip each step, or the whole wizard. After you finish or skip it, it does not show again. Existing users do not see it.
+- Settings has a new Keyboard tab. It shows the keyboard shortcuts, and you can change or reset
+  each one. The changes apply to this computer only. The tab refuses a key with no modifier, a key
+  that the system uses, and a key that another command uses.
+- New shortcuts: Cmd+Shift+E (Ctrl+Shift+E) adds an agent, Cmd+B (Ctrl+B) shows or hides the
+  sidebar, and Cmd+/ (Ctrl+/) opens the Keyboard tab.
+- Agents on all providers can ask a question that takes more than one answer. You tick the answers
+  in the question card and select Submit answer. In a channel, the question still shows as single
+  choice. Lock-screen and notification buttons do not answer a question that takes more than one
+  answer: open the chat to answer it.
+- Routine run conditions have a "Use a template" menu. Pick "A new git commit", "A new file in a
+  folder", "A web page changed" or "A file exists", and the command is filled in for you. GoAhead
+  asks for the folder, address or path first and quotes it safely.
+- Sort the sidebar chats by "Recent activity": each folder shows its most recent chat first. Pins
+  and "Needs you" stay on top, and your manual order does not change. Choose it in "Sort chats"
+  (right-click the free part of the chat list). While "Recent activity" is on, you cannot drag a chat
+  to reorder or pin it.
+- Settings > Providers has an "Update all" button. It shows when one or more providers have an update.
+  It starts each update once, and it shows the result for each provider. A failure on one provider does
+  not stop the others. On a joined server, it works for an owner or admin of that server.
+- When GoAhead waits for the agents to become idle before it installs an update or restarts,
+  Settings > Updates now has a "Restart now" button. A confirm tells you that agent turns and routine
+  runs that did not finish stop now. "Keep waiting" keeps the wait.
+- Settings has a new Usage tab. It shows the tokens that the agents on this computer used in the last
+  7 or 30 days: the total, cached input against uncached input, the top agents, and the tokens per
+  day for each agent and provider. Days follow your time zone.
+- The Usage tab also counts the scheduled routine runs that a run condition skipped. These runs used
+  no tokens.
+- The Usage tab shows only this computer. A joined server shows its usage in its own usage report.
+- The Usage tab lists each agent that has a weekly token budget, with the tokens of this week, the budget
+  and the percent used. Agents over the budget come first and show "Over budget"; agents at 80% or more
+  show "Near budget". The week starts on Monday at 00:00, as for the budget alert.
+
+### Changed
+
+- Sidebar sections are now called folders. When you delete a folder, its chats and folders move up one
+  level. No agent or channel is deleted.
+- A long chat list uses less CPU: the sidebar does not draw the rows that are off screen.
+- Hand-offs between agents use fewer turns. When an agent sends requests to several teammates in one
+  turn, their answers come back together in one turn, not one turn for each answer. An answer waits
+  at most 5 minutes for the slower teammates of the same turn, and it does not wait for a teammate
+  whose plan limit is used up. A message from you still takes the answers that are in with it.
+- Search everything (Cmd+K) and search in chat (Cmd+F) now use the shortcuts that you set in
+  Settings > Keyboard. A changed search shortcut does not work while the built-in browser has focus.
+- On macOS, Ctrl+K and Ctrl+F no longer open search. Use Cmd+K and Cmd+F.
+- GoAhead now updates the provider CLIs that it downloaded by itself to the version that this GoAhead
+  release ships with, at start and then each hour. It does not install a newer upstream release by
+  itself: that stays an "Update available" offer. It starts only when the agents of that provider are
+  idle. It downloads the new CLI first; new messages to that provider wait only for the short switch to
+  the new CLI, not for the download.
+  A CLI that you installed yourself and a CLI with a custom path are not changed. If you cancel an
+  automatic update, GoAhead does not start it again until GoAhead restarts.
+
+### Fixed
+
+- A teammate's answer longer than 100,000 characters no longer gets lost. The requesting agent gets
+  a shortened copy, and the full answer stays in the teammate's conversation.
+- A message that you send to a busy Claude agent now reaches it while a tool or a subagent runs. Before,
+  the agent read the message only after the tool was done. A message that you send while the agent
+  waits for your answer to a question or an approval still waits for that answer.
+- Stop now ends a Claude chat that stays "working" after Claude has stopped. The next message in the
+  queue then runs. Stop also removes the live text preview at once.
+- For a Claude agent on a joined server, that server must also run v0.40 to get these fixes.
+
 ## [0.39.0] - 2026-11-23
 
 ### Added
