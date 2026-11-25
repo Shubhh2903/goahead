@@ -3,10 +3,16 @@
   "blocked": {
     "codex": [],
     "claude": [],
-    "opencode": [],
+    "opencode": ["2.3.0", "2.3.1", "2.3.2"],
     "grok": [],
     "antigravity": [],
     "cursor": [],
-    "cline": []
+    "cline": [],
+    "kimi": [],
+    "pi": [],
+    "muse": [],
+    "devin": [],
+    "copilot": [],
+    "mistral": []
   }
 }

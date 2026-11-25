@@ -1,19 +1,19 @@
 language js(typescript)
 
-// scope: src/renderer/src, packages/ui/src, apps/mobile/src, except tests and stories
-
-// User-facing text written as a literal: JSX text, a literal accessible name, label or
-// placeholder, a literal toast or alert, and a literal fallback to `errorMessage`. Each one shows
-// English to a reader who chose another language. Text without a letter, such as "·" or "/", is not
-// matched. The message starts with the rule name, so `lint:ratchet` can count this rule.
-
 or {
   JsxText() as $text where {
     $text <: r"(?s).*\p{L}.*",
     register_diagnostic(span=$text, message="[no-hardcoded-ui-text] Render user-facing text through a catalog key with t() from useText(). See docs/i18n.md.", severity="error")
   },
-  JsxAttribute() as $attr where {
-    $attr <: r"(?s)(?:aria-label|title|placeholder|alt|label|description|accessibilityLabel|accessibilityHint)=(?:\"[^\"]*\p{L}[^\"]*\"|'[^']*\p{L}[^']*'|\{\s*\"[^\"]*\p{L}[^\"]*\"\s*\}|\{\s*'[^']*\p{L}[^']*'\s*\}|\{\s*`[^`$]*\p{L}[^`$]*`\s*\})",
+  JsxAttribute(name=$name, initializer=$value) as $attr where {
+    $name <: r"(?:aria-label|title|placeholder|alt|label|description|accessibilityLabel|accessibilityHint)",
+    or {
+      $attr <: r"(?s)(?:aria-label|title|placeholder|alt|label|description|accessibilityLabel|accessibilityHint)=(?:\"[^\"]*\p{L}[^\"]*\"|'[^']*\p{L}[^']*'|\{\s*\"[^\"]*\p{L}[^\"]*\"\s*\}|\{\s*'[^']*\p{L}[^']*'\s*\})",
+      and {
+        $value <: JsxAttributeInitializerClause(value=JsxExpressionAttributeValue(expression=JsTemplateExpression(tag=., elements=$elements))),
+        $elements <: some JsTemplateChunkElement() as $chunk where { $chunk <: r"(?s).*\p{L}.*" }
+      }
+    },
     register_diagnostic(span=$attr, message="[no-hardcoded-ui-text] Render user-facing text through a catalog key with t() from useText(). See docs/i18n.md.", severity="error")
   },
   JsxExpressionChild() as $child where {

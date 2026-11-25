@@ -6,22 +6,24 @@
 GoAhead is a local-first desktop workspace for persistent AI teammates. It supports the local
 [Codex App Server](https://learn.chatgpt.com/docs/app-server) and
 [Claude Code](https://code.claude.com/docs/en/overview), plus [Grok CLI](https://docs.x.ai/build/overview),
-OpenCode, Gemini, [Cursor CLI](https://cursor.com/cli), and [Cline CLI](https://cline.bot/cli) through ACP, and Pi and
-Muse through their native protocols. It gives every agent its own workspace and
+OpenCode, Gemini, [Cursor CLI](https://cursor.com/cli), [Cline CLI](https://cline.bot/cli), [Kimi Code CLI](https://github.com/MoonshotAI/kimi-cli),
+[Devin CLI](https://cli.devin.ai), [GitHub Copilot CLI](https://github.com/github/copilot-cli), [Mistral Vibe](https://github.com/mistralai/mistral-vibe), and [Hermes Agent](https://hermes-agent.nousresearch.com) through ACP. It gives every agent its own workspace and
 conversation, and provides local queues, file transfers, an embedded browser, and agent-to-agent
 messaging in one desktop app.
 
+GoAhead is ready for production use. A new release ships almost every day.
+
 > [!WARNING]
-> GoAhead is a development preview. Agents currently run with `danger-full-access` and
-> `approvalPolicy: never`. They can read and modify files, run commands, use the network, and control
-> the embedded browser without per-action confirmations after the explicit first-launch consent.
+> Agents run with `danger-full-access` and `approvalPolicy: never`. They can read and modify files,
+> run commands, use the network, and control the embedded browser without per-action confirmations
+> after the explicit first-launch consent.
 > Run only agents and tasks you trust, keep backups, and review [Security](#security) before use.
 
 ## What works
 
 - Prompt-driven agent creation and editing on desktop and mobile, with editable instructions, avatar, and section review before saving.
-- Persistent agents backed by independent Codex, Claude, Grok, OpenCode, Gemini, Cursor, Cline, Pi, or Muse sessions and local workspaces.
-- Custom OpenAI-compatible endpoints and custom ACP agents, with detection of local model servers (Ollama, LM Studio) and installed agents, and install from the ACP registry.
+- Persistent agents backed by independent Codex, Claude, Grok, OpenCode, Gemini, Cursor, Cline, Kimi, Devin, GitHub Copilot, Mistral, or Hermes sessions and local workspaces.
+- Custom OpenAI-compatible endpoints and custom ACP agents, with detection of local model servers (Ollama, LM Studio) and installed agents.
 - Per-agent context monitoring with automatic compaction before long threads exhaust the model window.
 - FIFO message queues with pause, resume, cancellation, and crash-safe persistence.
 - Agent-to-agent messages, replies, reactions, images, and managed file transfers.
@@ -34,6 +36,7 @@ messaging in one desktop app.
 
 GoAhead is local-first, not offline-only. Codex connects to OpenAI, Claude connects to Anthropic,
 Grok connects to xAI, Gemini connects to Google, Cursor connects to Cursor, Cline connects to Cline,
+Kimi connects to Moonshot AI, Devin connects to Cognition, GitHub Copilot connects to GitHub, Mistral connects to Mistral AI, Hermes connects to Nous Portal and to the providers you set up in Hermes,
 visited pages use the network, and installed plugins may connect to their own services.
 
 ## Install
@@ -56,6 +59,9 @@ or arm64 Linux as an AppImage.
 1. Download the latest `OpenBot-*-x86_64.AppImage` (or `OpenBot-*-arm64.AppImage` on arm64) from [GitHub Releases](https://github.com/nightly-labs/openbot/releases).
 2. Make it executable with `chmod +x OpenBot-*.AppImage`, then run it.
 
+The AppImage does not need libfuse2, so it also runs on Arch Linux and Omarchy. It mounts itself
+with `fusermount3` from the `fuse3` package.
+
 On Ubuntu 23.10 or newer and on Debian 13, unprivileged user namespaces are restricted by AppArmor
 and GoAhead exits during launch until you install an AppArmor profile:
 
@@ -72,13 +78,53 @@ On the first start from an AppImage, GoAhead writes `~/.local/share/applications
 and `~/.local/share/icons/openbot.png`, which is what lets an `openbot://` link - an invitation, or
 a plugin listing - open the app and gives the launcher an icon that stays after the app exits. Delete the two files to undo it.
 
-Voice prompts are not available on Linux. Remote desktop works on Linux x64 in an X11 session,
+#### Theme palette files
+
+GoAhead reads each `<name>.json` file in the `themes` folder of its data folder
+(`~/.config/OpenBot/themes/` on Linux) and lists it under Settings > Appearance > Theme. Another
+program, such as an Omarchy theme script, can write the file. GoAhead follows each change to the
+file with no restart. Replace the file with a rename, so that GoAhead never reads half of it:
+
+```json
+{
+  "name": "Omarchy",
+  "appearance": "dark",
+  "colors": {
+    "canvas": "#1a1b26",
+    "frame": "#13141c",
+    "sidebar": "#13141c",
+    "surface": "#24283b",
+    "text": "#a9b1d6",
+    "textMuted": "#565f89",
+    "border": "#414868",
+    "accent": "#7aa2f7",
+    "accentForeground": "#1a1b26",
+    "success": "#9ece6a",
+    "warning": "#e0af68",
+    "danger": "#f7768e"
+  }
+}
+```
+
+The file name is the palette id: lowercase letters, digits and `-`. `appearance` is `light` or
+`dark`, and selects the base that the colors go over. In a dark palette, `surface` colors cards and
+controls. A light palette makes them lighter than `canvas`, as the light base does, because a light
+theme's `surface` is usually darker than its background. Each color is `#rrggbb` or `#rrggbbaa`.
+GoAhead ignores a file with a missing or different color, and then shows the saved light, dark or
+system choice. While no theme choice is saved, GoAhead shows the first palette.
+
+Remote desktop works on Linux x64 in an X11 session,
 such as Xorg or Xvfb. It does not work under Wayland, and the arm64 AppImage does not include it.
+
+For Gemini sign-in, install a desktop browser and `xdg-utils`. Open the sign-in page in a
+desktop session on the same host or VM. Google sends the callback to that host through
+`127.0.0.1`; a server with no desktop cannot complete this sign-in. See
+[Gemini setup](docs/architecture/providers.md#gemini).
 
 #### Linux server with no screen
 
-To run GoAhead as an always-on server of your account on a VPS or home server (Ubuntu 24.04 with
-systemd), install it from a terminal and sign in with an email code:
+To run GoAhead as an always-on server of your account on a VPS or home server (Ubuntu 24.04 or
+26.04 with systemd), install it from a terminal and sign in with an email code:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nightly-labs/openbot/main/scripts/install-server.sh | sudo bash
@@ -102,7 +148,23 @@ docker run -d --name openbot --restart unless-stopped \
 docker exec -it openbot openbot login
 ```
 
-See [Docker](docs/docker.md) for Compose, the data volume, upgrades and the security limits.
+See [Docker](docs/docker.md) for Compose, the data volume, upgrades and the security limits. For Amazon ECS,
+see [AWS ECS](docs/aws-ecs.md). For an Umbrel home server, see [Umbrel](docs/umbrel.md).
+
+### Nix
+
+The flake installs the desktop app from the latest release on x64 or arm64 Linux and on Apple silicon:
+
+```bash
+nix run github:nightly-labs/openbot
+nix profile install github:nightly-labs/openbot
+```
+
+`overlays.default` adds `pkgs.openbot`. GoAhead is not free software, so your nixpkgs must allow it,
+for example with `nixpkgs.config.allowUnfreePredicate = pkg: lib.getName pkg == "openbot";`.
+Nix installs GoAhead updates. GoAhead does not update itself from the Nix store. On Linux, the Nix
+package does not include the remote desktop runtime, because nixpkgs does not have a library that it
+needs.
 
 > [!IMPORTANT]
 > Windows releases are signed by `SYNTHETIFY LABS SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ`. Older
@@ -140,19 +202,24 @@ need no account and no sign-in: select OpenCode, click Connect, and GoAhead read
 the CLI advertises. To use the paid OpenCode Go models, click Sign in on the OpenCode row and
 paste a Go key from [opencode.ai/auth](https://opencode.ai/auth). GoAhead encrypts the key on this
 computer and gives it only to the local CLI. GoAhead supports OpenCode Go only: the Zen models a
-Go key does not buy stay out of the picker. If you installed OpenCode yourself, GoAhead
+Go key does not buy stay out of the picker. Models with the Free label in the model picker need no
+sign-in. Other models need a sign-in with their provider: a Go key for the `opencode-go/` models, or
+`opencode auth login` in a terminal for OpenCode Zen and third-party providers. Without it, the turn
+fails with an error that names the provider. If you installed OpenCode yourself, GoAhead
 keeps that install and offers no download. Set `OPENBOT_OPENCODE_PATH` to select an executable
 outside your shell's search path. Remote OpenCode agents require Team API v4; older clients do not
 show these agents.
 
-Gemini uses a Google AI Pro or Ultra plan. GoAhead downloads Google's Antigravity ACP server on
-this computer when you select Download on the Gemini row, because Google's license does not let
-GoAhead include it. Sign in opens Google's sign-in page in your browser. GoAhead never uses an
+Gemini uses a Google AI Pro or Ultra plan. GoAhead downloads Google's Antigravity CLI on this
+computer when you select Download on the Gemini row, because Google's license does not let GoAhead
+include it. Sign in opens Google's sign-in page in your browser. GoAhead never uses an
 `antigravity` command on your search path, because the Antigravity editor installs a command with
-that name. Set `OPENBOT_ANTIGRAVITY_PATH` to select a server executable yourself. Put it in a
-`bin/` folder, and put an `antigravity-package.json` file with its `version` in the folder above
-`bin/`. When that path is set, GoAhead uses only it. Gemini agents stay on this computer: team
-members do not see them.
+that name. Set `OPENBOT_ANTIGRAVITY_PATH` to select an Antigravity CLI 1.5.3 or later executable
+yourself. GoAhead reads its version with `--version`. When that path is set, GoAhead uses only
+it. Connect remains available in the host's local Server settings > Providers screen. Remote
+settings cannot perform Google sign-in; use a browser on the host. See
+[Gemini setup and download recovery](docs/architecture/providers.md#gemini) for the required
+layout, the reported IPv6 download failure, and checks that do not change host networking.
 
 Cursor uses a Cursor plan or a Cursor API key. GoAhead downloads and pins the Cursor CLI
 (`cursor-agent`) when you select Download on the Cursor row in More providers, and starts it with
@@ -163,7 +230,8 @@ starts the Cursor editor. Set `OPENBOT_CURSOR_PATH` to select an executable your
 agents stay on this computer: team members do not see them.
 
 Cline uses a Cline account, which has free models with limits for each model. The provider of a
-free model can use your prompts to train models. GoAhead downloads and pins the Cline CLI (`cline`) when you
+free model can use your prompts to train models. With a ClinePass subscription, select a model with
+"(ClinePass)" in its name: it runs on the subscription, and other paid models use Cline Credits. GoAhead downloads and pins the Cline CLI (`cline`) when you
 select Download on the Cline row in More providers, and starts it with `cline --acp`. Sign in opens
 Cline's sign-in page in your browser. You can also set `CLINE_API_KEY` in the environment used to
 launch GoAhead. If you installed `cline` 3.0.68 or newer yourself, GoAhead uses it until a download
@@ -178,6 +246,50 @@ Pi 1.1.0 or newer, or Muse, yourself, GoAhead uses it until a download exists. S
 or `OPENBOT_MUSE_PATH` to select an executable yourself. Pi and Muse agents stay on this computer:
 team members do not see them.
 
+Kimi uses a Kimi Code account. GoAhead downloads and pins the Kimi Code CLI (`kimi`) when you select
+Download on the Kimi row in More providers, and starts it with `kimi acp`. Sign in runs `kimi login`,
+which opens Kimi's sign-in page in your browser. If you installed `kimi` 1.52.0 or newer yourself,
+GoAhead uses it until a download exists. Set `OPENBOT_KIMI_PATH` to select an executable yourself.
+When a Full access Kimi agent changes its model, the CLI saves that model as its default in
+`~/.kimi/config.toml`, so a Kimi session that you start in a terminal also uses it. Kimi agents run
+on this computer. Team members see them when their app supports Kimi.
+
+Devin uses a Devin account. GoAhead downloads and pins the Devin CLI (`devin`) when you select
+Download on the Devin row in More providers, and starts it with `devin acp`. Sign in opens Devin's
+sign-in page in your browser. If you installed `devin` yourself, GoAhead uses it until a download
+exists. Set `OPENBOT_DEVIN_PATH` to select an executable yourself. Devin agents run on this computer.
+Team members see them when their app supports Devin.
+
+GitHub Copilot uses a GitHub account with a Copilot plan. GoAhead downloads and pins the GitHub
+Copilot CLI (`copilot`) when you select Download on the GitHub Copilot row in More providers, and
+starts it with `copilot --acp`. Sign in opens GitHub's sign-in page in your browser. The CLI keeps
+the sign-in in the system keychain. If `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN` is set
+for GoAhead, the CLI uses that token instead, and Disconnect cannot remove it. If you installed
+`copilot` yourself, GoAhead uses it until a download exists. Set `OPENBOT_COPILOT_PATH` to select
+an executable yourself. Copilot agents run on this computer. Team members see them when their app
+supports GitHub Copilot.
+
+Mistral uses a Mistral account or a Mistral API key. GoAhead downloads and pins Mistral Vibe's ACP
+server (`vibe-acp`) when you select Download on the Mistral row in More providers. Sign in opens
+Mistral's sign-in page in your browser. Vibe saves an API key in the system keychain, or in
+`~/.vibe/.env` when there is no keychain. If `MISTRAL_API_KEY` is set for GoAhead, Vibe uses that key,
+and Disconnect cannot remove it. GoAhead turns off Vibe's telemetry, and turns on Vibe's model
+catalogue, so the model picker shows the models of your Mistral account, not only Mistral Medium 3.5. If you installed `vibe-acp`
+yourself, GoAhead uses it until a download exists. Set `OPENBOT_MISTRAL_PATH` to select an executable
+yourself. When a Full access Mistral agent changes its model or thinking level, Vibe saves it as its
+default in `~/.vibe/config.toml`. Mistral agents run on this computer. Team members see them when
+their app supports Mistral.
+
+Hermes uses the Hermes Agent (`hermes`) that you install yourself, with your own `~/.hermes` (or
+`$HERMES_HOME`): its memories, skills, sign-ins and `SOUL.md` apply to GoAhead agents too. GoAhead
+does not update Hermes. When it is missing on macOS, Linux or a server, Download on the Hermes row runs
+the official Hermes installer; on Windows, the row opens the installation guide. GoAhead
+starts it with `hermes acp`. Sign in runs `hermes auth add nous` for a Nous Portal plan, or run
+`hermes setup` in a terminal for other providers. The model menu lists the models of each provider
+that Hermes is signed in to. Hermes reads `AGENTS.md` only in a workspace with no `.hermes.md`, and
+`.agents/skills` only in a git project that `skills.trusted_project_dirs` in `config.yaml` names.
+Team members see the host's Hermes agents when their app uses Team API protocol 8 or newer.
+
 On Windows, install the native CLI and make sure `codex`, `claude`, or `grok` is available in PowerShell.
 Claude Code also requires Git for Windows. Then authenticate the installed CLI and restart GoAhead.
 
@@ -186,7 +298,8 @@ macOS, Windows and Linux, and the release carries the driver, so there is nothin
 macOS asks for a permission for it: Screen Recording and Accessibility.
 
 GoAhead uses the existing local CLI login. It does not copy provider credentials. Grok's
-`XAI_API_KEY` and per-session MCP bearer tokens are never persisted or logged.
+`XAI_API_KEY` and per-session MCP bearer tokens are never persisted or logged. Each provider's terms
+apply to your sign-in. See [provider terms](docs/provider-terms.md) for Claude subscriptions.
 
 For setup problems, data reset, and uninstall instructions, see
 [Troubleshooting](docs/TROUBLESHOOTING.md). GoAhead's data and network behavior is documented in
@@ -194,19 +307,19 @@ For setup problems, data reset, and uninstall instructions, see
 
 ## Development
 
-Development requires stable [Bun](https://bun.sh/) 1.4.0, Node.js 24 (the version in `.nvmrc`, matching
+Development requires stable [Bun](https://bun.sh/) 1.4.2, Node.js 24 (the version in `.nvmrc`, matching
 the Node that Electron bundles - run `nvm use`), and at least one supported agent CLI.
 
 Install the exact Bun version on macOS or Linux:
 
 ```bash
-curl -fsSL https://bun.com/install | bash -s "bun-v1.4.0"
+curl -fsSL https://bun.com/install | bash -s "bun-v1.4.2"
 ```
 
 Install it on Windows in PowerShell:
 
 ```powershell
-iex "& {$(irm https://bun.com/install.ps1)} -Version 1.4.0"
+iex "& {$(irm https://bun.com/install.ps1)} -Version 1.4.2"
 ```
 
 ```bash
@@ -224,24 +337,32 @@ In a new git worktree, run `bun run dev:bootstrap`. It copies the files that `.w
 lists from the main checkout when they are missing, installs dependencies, migrates the local API,
 and seeds the isolated profile. Set it as the worktree setup command of your agent harness.
 
+On macOS, a worktree's `node_modules` uses almost no new disk space. Bun clones packages from its
+cache, and the root `postinstall` clones Electron from `~/Library/Caches/OpenBot/electron-dist`.
+`du` still shows the full size of each clone.
+The first install of an Electron version extracts it once and saves it there. Delete the directory
+to clear the cache; an entry that nobody used for 30 days is removed by the next save.
+
 To reset only the local development state, quit the dev app and test client, then run
 `bun run dev:reset`.
 The command deletes the app and test-client development profiles plus the legacy host profile,
-including `openbot.db` and its WAL files. It does not change the production profile, agent
-workspaces, `~/.codex`, or `~/.claude`.
+including `openbot.db` and its WAL files. It prints each profile before it deletes it, and it
+deletes nothing while a dev app has one of them open. It does not change the production profile,
+the worktree profiles that `bun run dev` opens (`OpenBot Dev wt-<hash>`), agent workspaces,
+`~/.codex`, or `~/.claude`.
 
 `bun run dev` seeds a development profile it creates, so a first start already shows this data.
-To replace a profile that exists, quit the dev app, then run:
+`bun run dev:seed` replaces the shared `OpenBot Dev` profile. To use it, quit the dev app, then run:
 
 ```bash
 bun run dev:seed
-bun run dev
+bun run dev --shared
 ```
 
 The seeded agents run on `opencode-go/muse-spark-1.3-contributor` at medium effort while this
-computer's OpenCode CLI lists it, and on `gpt-5.6-luna` at low effort otherwise. A dev build starts a
+computer's OpenCode CLI lists it, and on `gpt-6-luna` at low effort otherwise. A dev build starts a
 new agent on the same pair, so a seeded agent and one you create agree; a packaged build always uses
-`gpt-5.6-luna`.
+`gpt-6-luna`.
 
 The seed adds agents, rich conversations, managed files and references, reactions, completed
 agent exchanges, two channels with a delegated task run, channel memories and routines, and local
@@ -249,10 +370,12 @@ team chat data. It dates every record backwards from the run, so the transcripts
 Yesterday. It does not add live queue items, open routine runs, or queued channel tasks, so it
 starts no model turn.
 Use `bun run dev:seed --dry-run` to inspect the target and fixture counts without changing files.
+`dev:seed`, `dev:reset`, `dev:verify`, `dev:bench`, and `dev:automation` print their usage for
+`--help` and change nothing. They stop with exit code 2 on an option that they do not know.
 
 ### Marketplace launch catalog
 
-Seed the approved GoAhead team catalog locally with `bun run marketplace:seed:local`, then start or reuse `bun run dev --isolated`. Search **GoAhead** in Marketplace to review its Skills and Agents. This seed adds catalog records without resetting app data.
+Seed the approved GoAhead team catalog locally with `bun run marketplace:seed:local`, then start or reuse `bun run dev`. Search **GoAhead** in Marketplace to review its Skills and Agents. This seed adds catalog records without resetting app data.
 
 `bun run marketplace:build` creates the launch bundles. `bun run marketplace:publish:production` is a dry run; production writes require explicit flags and admin credentials. See the [catalog and publication guide](marketplace/production-catalog/README.md).
 
@@ -266,7 +389,7 @@ The skill preview shows this text. **Try skill** appends it and a skill referenc
 
 ## Local skills
 
-Ask an agent to create a skill from a reusable workflow. It prepares a folder with `SKILL.md` and calls `create_skill`. The skill is saved in a shared local library and enabled for that agent. No account is required. Other agents can add it through **Settings → Skills → Local skills**.
+Ask an agent to create a skill from a reusable workflow. It prepares a folder with `SKILL.md` and calls `create_skill`. The skill is saved in a shared local library and enabled for that agent. Other agents can add it through **Settings → Skills → Local skills**.
 
 Agents can use `list_local_skills`, `read_local_skill`, `revise_skill`, and `install_local_skill`. Revisions require the version read by the agent and retain previous versions. Updating a library skill does not update installed copies: use the Update chip or install an exact revision. Modified installed files are protected. To publish a local skill, submit its folder separately through the marketplace.
 
@@ -275,22 +398,23 @@ Optional scripts, references, and assets follow the Codex skill folder structure
 ## Import agents from Grok Bot
 
 Open **Server settings → Import** on this computer, or on a joined server in the desktop app or the browser client. Every member of a server can import, not only an owner or admin. Add the [OpenBot export agent](https://x.ai/bot/gI0XdhhDYPJeyQaqQBC0O) to Grok Bot and say "Export my agents for OpenBot". It saves one `.zip` file to Downloads. Choose that file in GoAhead, select the agents, and import them.
+Open **Server settings → Import** on this computer, or on a joined server in the desktop app or the browser client. Every member of a server can import, not only an owner or admin. Add the [GoAhead export agent](https://x.ai/bot/pOUBH2kQK8CKvM7nW8stG) to Grok Bot and say "Export my agents for GoAhead". It saves one `.zip` file to Downloads. Choose that file in GoAhead, select the agents, and import them.
 
-The import adds each agent's name, instructions, avatar, skills, routines, and memories. Workspace files are copied to `imported/` in the agent's workspace if you included them. Chat history is not copied: the export agent keeps the important facts as memories. For this computer, the file is read here and is not uploaded. For a joined server, the file (at most 100 MB) goes to the computer that runs that server through the encrypted host connection. A member's import uses a skill that the server already has instead of changing it. The export skill and its format are in [`resources/agent-import/grok-bot/SKILL.md`](resources/agent-import/grok-bot/SKILL.md).
+The import adds each agent's name, instructions, avatar, skills, routines, and memories. Workspace files are copied to `imported/` in the agent's workspace if you included them. Chat history is not copied: the export agent keeps the important facts as memories. For this computer, the file is read here and is not uploaded, and it has no size limit: GoAhead reads it from disk one file at a time and skips an agent whose files do not fit in the free disk space. For a joined server, the file goes to the computer that runs that server through the encrypted host connection, in parts, so it has no size limit either; the server must have free disk space for it. A server on an older version of GoAhead takes a file of at most 100 MB. A member's import uses a skill that the server already has instead of changing it. The export skill and its format are in [`resources/agent-import/grok-bot/SKILL.md`](resources/agent-import/grok-bot/SKILL.md).
 
 ## Commands
 
 The browser client is served at `/app` by the public web app. For local development, run
-`bun run dev:api --isolated` and open `/app` on the API URL printed by the supervisor. Use
-`bun run dev --isolated` when a desktop host is also needed.
+`bun run dev:api` and open `/app` on the API URL printed by the supervisor. Use
+`bun run dev` when a desktop host is also needed.
 Use `bun run storybook` and **Web → Workspace → Connected** for shared UI test data.
 See [web client delivery](docs/web-client.md) for the release gate and focused checks.
 
 | Command | Purpose |
 | --- | --- |
-| `bun run dev` | Start the local Auth API, Signal service, and Electron client with renderer HMR on its app profile. Ports are allocated through the dev registry, so a sibling worktree never takes one this stack won. It refuses a second stack in the same worktree unless you pass `--force`, and `--isolated` gives the worktree a profile of its own keyed to its path instead of the shared `OpenBot Dev` one. `--hosting=test` signs the app in to the `test` account Worker, on a profile that all worktrees share, so that a hosted server is a real VM; see [docs/hosted-servers.md](docs/hosted-servers.md#real-servers-from-a-development-build). A profile that does not exist yet is seeded with the showcase data of `bun run dev:seed` before the client starts, so a first start never opens an empty app; an existing profile is left as it is. An isolated profile still shares the computer's provider CLI store, so it does not download the pinned CLIs again. |
+| `bun run dev` | Start the local Auth API, Signal service, and Electron client with renderer HMR on its app profile. Ports are allocated through the dev registry, so a sibling worktree never takes one this stack won. It refuses a second stack in the same worktree unless you pass `--force`. Each worktree opens a profile of its own, keyed to its path; `--shared` opens the shared `OpenBot Dev` profile instead. `--isolated` is still accepted and changes nothing. A profile that you used before stays on disk unchanged. `--hosting=test` signs the app in to the `test` account Worker, on a profile that all worktrees share, so that a hosted server is a real VM; see [docs/hosted-servers.md](docs/hosted-servers.md#real-servers-from-a-development-build). A profile that does not exist yet is seeded with the showcase data of `bun run dev:seed` before the client starts, so a first start never opens an empty app; an existing profile is left as it is. An isolated profile still shares the computer's provider CLI store, so it does not download the pinned CLIs again. Before it starts, it runs `bun install --frozen-lockfile` and `bun run api:migrate:local` only when `bun.lock`, a workspace `package.json`, a patch, or a migration changed since their last successful run. The stamps are in `node_modules` and `apps/auth-api/.wrangler/state/v3/d1`, and each `bun install` writes the install stamp too; delete one to run its step again. |
 | `bun run preview` | Preview the built Electron client with the green preview icon. |
-| `bun run mobile:go` | Start the mobile app in Expo Go and clear the Metro cache. |
+| `bun run mobile:go` | Start the mobile app in Expo Go and clear the Metro cache. When the branch name ends in `-<number>`, such as `mobile-triage-12555`, Expo Go shows the server as `Issue #12555`. Set `OPENBOT_EXPO_SESSION_NAME` to use a different name. |
 | `bun mobile:ios` | Build and launch the iOS simulator app without RocketSim. |
 | `bun run dev:mobile` | Start or reuse this worktree's `bun run dev` stack, build and launch the iOS simulator app, and pair them without a QR scan. The desktop issues a Mobile Connect ticket over CDP, and `simctl openurl` opens the link in the development build, which accepts only loopback or private-network account services. Other arguments go to `bun mobile:ios`. `--pair-only` pairs an app that already runs; `--simulator=<udid>` chooses one of several booted simulators. It stops when the Metro port is already in use, because another worktree's Metro would serve the same app id; pass `--port=<n>` then. |
 | `bun run mobile:ios:build:local` | Build a production iOS `.ipa` locally for upload with Transporter. See [TestFlight setup](apps/mobile/README.md#local-testflight-build). |
@@ -298,51 +422,61 @@ See [web client delivery](docs/web-client.md) for the release gate and focused c
 | `bun mobile:ios:rocketsim` | Start RocketSim and build and launch the iOS simulator app with RocketSim Connect. See [mobile setup](apps/mobile/README.md#development). |
 | `bun run mobile:go:tunnel` | Start the mobile app in Expo Go through a Metro tunnel and clear the cache. The GoAhead API and Signal still need their own reachable addresses. |
 | `bun run dev:api` | Start the TanStack Start API and its local D1 database on `127.0.0.1:3100`. |
-| `bun run smoke:google-connector` | Start this worktree's dev stack with an isolated profile against a fake Google on `127.0.0.1`, connect Google in Server settings > Connectors with `bun run dev:automation`, check the Gmail watcher, disconnect, and write `.openbot-build/google-connector/smoke.json`. It stops only the stack it started, and refuses to run while this worktree already runs one. See [docs/google-connector-setup.md](docs/google-connector-setup.md). |
-| `bun run dev:apns-key -- <AuthKey_ID.p8> [KEY_ID]` | Save an Apple Push Notification service key in `apps/auth-api/.env.dev`, so the local Auth API sends iPhone Live Activity updates. The local server forwards them to Apple over HTTP/2. Restart `bun run dev` after it. |
+| `bun run --cwd apps/browser-extension build` | Build the Chrome extension into `apps/browser-extension/dist`; load that folder in `chrome://extensions` with **Load unpacked**. With `-- --mode development` and `VITE_OPENBOT_API_URL=<local Auth API>`, it uses the local stack. `bun scripts/browser-extension-e2e.ts` drives it against `bun run dev`. |
+| `bun run dev:apns-key -- <AuthKey_ID.p8> [KEY_ID]` | Save an Apple Push Notification service key in ignored development state, so the local Auth API sends iPhone Live Activity updates. The local server forwards them to Apple over HTTP/2. Restart `bun run dev` after it. |
 | `bun run api:start` | Build and preview the Cloudflare Worker locally. |
 | `bun run api:images` | Draw the article artwork into `apps/auth-api/content-art/` after you add an article or change a title. Commit the result; the site build fails until it matches. Needs Electron and a GPU, so run it on your own machine. |
 | `bun run api:migrate:local` | Apply D1 migrations to the local development database. |
 | `bun run api:migrate:remote` | Apply D1 migrations to the configured remote database. |
 | `bun run api:deploy` | Build and deploy the account API to Cloudflare Workers. It sets the Stripe, boat, claim and OpenPanel secret sets that are in the production environment. A set that is not there keeps the value that the Worker has. |
-| `bun run api:stripe:bootstrap` | Create or update the Stripe plan catalog and the Customer Portal settings from `STRIPE_SECRET_KEY` in the encrypted `apps/auth-api/.env.shared` (a value in `apps/auth-api/.env.dev` replaces it). It refuses a live key unless you add `--live`. For local webhooks, run `stripe listen --forward-to localhost:<API port>/v1/stripe/webhook` and put the signing secret in `STRIPE_WEBHOOK_SECRET`. See [Billing](docs/ARCHITECTURE.md#billing). |
-| `bun run hosting:setup --target=production\|test` | Set up the Stripe catalog, the Customer Portal, and the Stripe and boat webhooks of one account server, and store the webhook signing secrets: production in the `cloudflare-production` GitHub Environment, test in `apps/auth-api/.env.shared`. See [hosted servers](docs/hosted-servers.md#production). |
+| `bun run api:stripe:bootstrap` | Create or update the Stripe plan catalog and the Customer Portal settings from `STRIPE_SECRET_KEY` in the encrypted `apps/auth-api/.env.dev` (shell values replace it). It refuses a live key unless you add `--live`. For local webhooks, run `stripe listen --forward-to localhost:<API port>/v1/stripe/webhook` and set the signing secret in `STRIPE_WEBHOOK_SECRET`. See [Billing](docs/architecture/servers.md#billing). |
+| `bun run hosting:setup --target=production\|test` | Set up the Stripe catalog, the Customer Portal, and the Stripe and boat webhooks of one account server, and store the webhook signing secrets: production in the `cloudflare-production` GitHub Environment, test in the encrypted `apps/auth-api/.env.dev`. See [hosted servers](docs/hosted-servers.md#production). |
 | `bun run hosting:template` | Build the boat named snapshot that new hosted servers start from. Needs `BOAT_TEMPLATE_API_KEY` and `--version`, `--appimage-url`, `--appimage-sha256` and `--auth-api-url`. See [hosted servers](docs/hosted-servers.md). |
+| `bun run status:build` | Build the public status page in `apps/status/dist`. The `status-page` workflow adds `status.json` and `feed.xml` and publishes it to GitHub Pages at `status.openbot.run`. |
+| `bun run status:smoke` | Run the status page smoke test: update runs against a local fake service, the status webhooks against a local receiver, one read-only run against the live checks, and the built page in Chrome. It writes `.openbot-build/status-page/report.json`. |
 | `bun run remote:up` | Build and start the self-hosted Signal, coturn, and ACME stack. |
 | `bun run remote:check` | Check the Remote API and both Docker Compose configurations. |
 | `bun run remote:check:compose` | Validate both Docker Compose configurations alone, without a running daemon. |
 | `bun run remote:update` | Update Signal, then drain and update the single coturn instance. |
 | `bun run dev:all` | Start the Auth API, Signal service, and single local Electron instance. |
-| `bun run dev:slack` | Start the same stack as `bun run dev`, with a `cloudflared` quick tunnel to Signal, so that Slack can send the development Slack app's events to the agents on this computer. It reads `OPENBOT_DEV_SLACK_SIGNING_SECRET` from the ignored `.env.slack-dev`, and needs `SLACK_ROUTE_PRIVATE_JWK` and `SLACK_ROUTE_KEY_ID` in `apps/auth-api/.env.dev`. Takes the same options as `bun run dev`, such as `--isolated`. See [docs/messaging.md](docs/messaging.md#test-slack-locally). |
+| `bun run dev:slack` | Start the same stack as `bun run dev`, with two `cloudflared` quick tunnels, one to Signal and one to the local account API, so that Slack can send the development Slack app's events and install return to the agents on this computer. It reads `OPENBOT_DEV_SLACK_SIGNING_SECRET` from the ignored `.env.slack-dev`, and needs `SLACK_ROUTE_PRIVATE_JWK` and `SLACK_ROUTE_KEY_ID` in the shell environment. Takes the same options as `bun run dev`, such as `--shared`. See [docs/messaging.md](docs/messaging.md#test-slack-locally). |
 | `bun run dev:test-client` | Start the Auth API, Signal service, local instance, and an isolated second client for team testing. |
 | `bun run dev:seed` | Replace only the app development profile with durable showcase data. `--if-missing` keeps an existing profile, which is how `bun run dev` seeds a first start. `--scale=agents:N,messages:M,channels:C,channelMessages:K,attachments:A` adds generated agents, chat history, channel history and large images to the showcase data, for memory and CPU measurements. |
-| `bun run dev:reset` | Delete the local app, test-client, and legacy host development state. |
-| `bun run dev:status` | Print, as JSON, every dev stack and dev app instance live on this machine: services, ports, pids, which of them belong to this worktree, and which are orphaned - a supervisor that is gone with its children still holding the ports. Each recorded process carries the state a stop command acts on: `live`, `gone` with `groupLive` for a survivor of a dead leader, and `unverified` for a pid this machine cannot date. |
+| `bun run dev:reset` | Delete the local app, test-client, and legacy host development state. It refuses while a dev app has one of these profiles open. |
+| `bun run dev:status` | Print, as JSON, every dev stack and dev app instance live on this machine: services, ports, pids, which of them belong to this worktree, and which are orphaned - a supervisor that is gone with its children still holding the ports. Each recorded process carries the state a stop command acts on: `live`, `gone` with `groupLive` for a survivor of a dead leader, and `unverified` for a pid this machine cannot date. `registryDirectory` is the directory it read: `~/Library/Caches/OpenBot/dev` on macOS, `$XDG_RUNTIME_DIR/openbot-dev` (else `~/.cache/openbot/dev`) on Linux, `%LOCALAPPDATA%\GoAhead\openbot-dev-instances` on Windows, or `OPENBOT_DEV_REGISTRY_DIR` when set. It does not depend on `TMPDIR`. |
 | `bun run dev:verify` | Print a stable JSON verification plan for this worktree: `ready`/`reasons` for safe checks, setup state, changed files and affected surfaces, nearby tests, runtime state, `qa.required`/`qa.ready`/`qa.reasons`, the renderer QA loop, safe `runnableCommands`, and all suggested `commands`. Add `--run` to execute only the safe non-mutating checks in the plan. Renderer QA follows `snapshot → action with --wait-for → snapshot → screenshot` when appearance matters. |
+| `bun run dev:extension` | Open Chrome for Testing with the browser extension for this worktree's running `bun run dev` stack: it builds the extension for the stack's Auth API, loads it in a profile of its own (`.openbot-build/dev-extension-chrome`), and signs the side panel in to the dev host's account. Chrome stays open. Run it again after an extension change: it rebuilds the extension and reloads it in the open Chrome. `--fresh` starts with an empty profile, `--signed-out` leaves the side panel signed out, `--email=<address>` signs in another account, and `--browser=<path>` names the browser (default: Playwright's Chromium; branded Chrome does not load an unpacked extension from the command line). |
+| `bun run dev:restart-client` | Restart only the test client of this worktree's `dev:test-client` stack. The host and the other services stay live. The supervisor stops its own test-client child by PID and starts it again. Not on Windows. |
 | `bun run dev:stop` | Stop this worktree's dev stack, children included, using the pids in the registry rather than a process-name pattern. It signals only a pid whose start time still matches the record, so a recycled pid is never sent SIGTERM; anything it cannot confirm is reported, left running and kept in the registry, and the command exits non-zero. `--pid=<supervisor pid>` stops one other stack, `--all` stops every stack on the machine. |
 | `bun run dev:forget` | Drop this worktree's stack record without signalling anything, for the one case `dev:stop` refuses to resolve on its own. It is also the only command that reads a dead record: nothing else deletes one, because a reader that removes what it judged can remove a record the supervisor rewrote in between. Takes the same `--pid=` and `--all`. |
 | `bun run storybook` | Start Storybook on a port allocated through the same registry, so two worktrees never announce one port. `OPENBOT_STORYBOOK_PORT` moves where the search starts; `--port` is refused. |
 | `bun run build-storybook` | Build static Storybook. CI sets `OPENBOT_STORYBOOK_CHECK=true` to skip automatic prop documentation during its build check. |
-| `bun run dev:automation` | Drive the running dev app over CDP: `instances`, `pages`, `snapshot`, `screenshot`, `click`/`type` by accessible role. `--page=<target-id\|url-substring>` aims at any window, including embedded browser views; `--wait-for=<role>,<name>` settles on an accessible target instead of polling; mutations need `--allow-mutations` and a named instance (this worktree's record, `--instance=<id>` or `--port=`). |
+| `bun run dev:automation` | Drive the running dev app over CDP: `instances`, `pages`, `snapshot`, `screenshot`, `record` (a `.webm` video of one page under `.openbot-build/dev-automation/`; `--duration=<ms>`, default 60000, maximum 90000; SIGINT stops it early; needs Playwright's ffmpeg: `bun node_modules/playwright-core/cli.js install ffmpeg`), `click`/`type` by accessible role. `--page=<target-id\|url-substring>` aims at any window, including embedded browser views; `--wait-for=<role>,<name>` settles on an accessible target instead of polling; mutations need `--allow-mutations` and a named instance (this worktree's record, `--instance=<id>` or `--port=`). |
 | `bun run dev:cpu` | Measure idle CPU on the running dev app, per process kind and per page. `--duration=<ms>` (default 60000), `--interval=<ms>` (default 5000), `--label=<name>`, `--out=<name>.json` (always under `.openbot-build/dev-automation/cpu/`, and refused if it would leave that directory or pass through a symbolic link) and `--compare=<file>` for a before/after delta. Read-only. Take a baseline before a change and a second run after it: only the difference between two runs on the same machine is a result, because a dev build carries the Vite server and the source maps as well. |
 | `bun run dev:memory` | Measure the running dev app's memory once: resident memory per process kind (main, renderer, GPU, provider CLIs and their MCP servers), with the dev tooling kept out of the app total, plus JS heap and DOM counters per page. `--label=<name>`, `--out=<name>.json` (always under `.openbot-build/dev-automation/memory/`) and `--heap-snapshot=<target-id\|url-substring>` to also write a V8 heap snapshot of one page to that directory. Read-only. |
-| `bun run dev:bench` | Run repeatable RAM and CPU scenarios on the built app (`bun run build` first). Each run seeds a bench profile of its own, starts the built app, samples the process tree every second (resident memory, macOS physical footprint and CPU per process kind, provider memory per CLI) with the main-process and page heaps, drives the scenario, and reads a settled state after garbage collection. `--scenario=<id\|prefix\|all>` (required; without it the command lists the scenarios), `--runs=<n>` (default 3; the report shows the median and range), `--label=<name>`, `--compare=<report.json>` and `--cpu-profile` (records the app window's JavaScript for 15 s after the first run settles, as a `.cpuprofile` for DevTools). Reports go to `.openbot-build/dev-automation/bench/`. Turn scenarios (`s5` to `s9`) use the real claude, opencode and grok CLIs and spend model quota. It never touches a dev instance or your own profile, and `bun run dev:stop` stops an app a failed run left behind. |
+| `bun run dev:bench` | Run repeatable RAM and CPU scenarios on the built app (`bun run build` first). Each run seeds a bench profile of its own, starts the built app, samples the process tree every second (resident memory, macOS physical footprint and CPU per process kind, provider memory per CLI) with the main-process and page heaps, drives the scenario, and reads a settled state after garbage collection. `--scenario=<id\|prefix\|all>` (required; without it the command lists the scenarios), `--runs=<n>` (default 3; the report shows the median and range), `--label=<name>`, `--compare=<report.json>`, `--cpu-profile` (records the app window's JavaScript for 15 s after the first run settles, as a `.cpuprofile` for DevTools), `--frames` (counts frames slower than 17 ms and 50 ms while the scenario runs; the loop keeps the renderer drawing, so CPU readings rise) and `--call-counts` (V8 call counts per function while the scenario runs, top 25 in a `-call-counts.json` file; slows JavaScript). Every run also reports the startup marks (`startup.*`, ms) and the app window's layout and style recalculation counts, script and task time, and long tasks (`render.*`). Reports go to `.openbot-build/dev-automation/bench/`. Turn scenarios (`s5` to `s9`) use the real claude, opencode and grok CLIs and spend model quota. `s14-agents-100` streams 96 agents at once with a fake Codex (`scripts/dev-automation/bench-fake-codex.ts`) and spends no quota; it reports main-process CPU and event-loop delay and the app window's busy time and lag while the agents stream (`stream.*`), and with `OPENBOT_BENCH_PROFILE_STREAM=1` it writes a `.cpuprofile` of the main process and of the app window for that time. It never touches a dev instance or your own profile, and `bun run dev:stop` stops an app a failed run left behind. |
+| `bun run perf:remote` | Measure how fast a remote client gets into the workspace, and which host requests it sends before and after that point. Start `OPENBOT_DEV_SYNC_PROFILE=1 bun run dev:test-client` in this worktree first. The web runs sign in to `/app` as the dev host user and open it in a new browser context each time; the desktop run reads the cold start of the test client, and with `--allow-mutations` each further run reloads its window. `--clients=desktop-start` restarts only the test client (with `--allow-mutations`) and measures from its main process start. `--latency=<ms>` delays the web page's requests and data channel; start the stack with `OPENBOT_DEV_RTT_MS=<ms>` for the same delay in the desktop client, and with `OPENBOT_DEV_CLIENT_TRANSPORT=webrtc` to connect the test client over WebRTC as the dev host user. `--runs=<n>` (default 5), `--label=<name>`, `--clients=web,desktop,desktop-start`, `--api=<url>`, `--compare=<report.json>`, `--browser-executable=<path>`. Writes `report.json` and `waterfall.md` to `.openbot-build/remote-sync-perf/<label>/`. See [remote connect measurement](docs/architecture/servers.md#remote-connect-measurement). |
 | `bun run check` | Run Biome, both typechecks, offline tests, the browser smoke test, and the production build. |
-| `bun run typecheck` | Check all 12 projects in parallel with a separate incremental cache for each project in this worktree. |
+| `bun run typecheck` | Check all 15 projects in parallel with a separate incremental cache for each project in this worktree. |
 | `bun run knip:check` | Find unused files, exports, and types, unused or unlisted dependencies, and unresolved imports in all workspaces. CI runs it. |
 | `bun run check:ui` | Check the renderer against the design system: shared primitives, Kobalte and Lucide confined to `@openbot/ui`, palette tokens instead of colour, size, radius and transition literals. Checks renderer and shared UI source. |
 | `bun run check:assets` | Fail when a tracked image or video file is outside the product asset directories. Pull request screenshots go in the pull request body. |
+| `bun run check:doc-links` | Fail when a link in a tracked Markdown file names a Markdown file that does not exist, or an anchor that the file does not have. |
 | `bun run verify:preload` | After `bun run build`, run the built preload with a fake Electron. Fail when it loads a module that a sandboxed preload cannot load, uses `import()`, or exposes a method that `IPC_ENDPOINTS` does not name. |
-| `bun run types:ratchet` | Hold each TypeScript option in `tools/typescript/type-baseline.json` to its error count per file in every project that extends `tsconfig.base.json`. A new error fails. `--write` and `--add=<option>` work as in `lint:ratchet`. |
-| `bun run i18n:check` | Check the translation catalogs: key prefixes, placeholders, plural forms, ambiguous source text, and unused keys. `--json` writes `.openbot-build/i18n-report.json`. See [docs/i18n.md](docs/i18n.md). |
-| `bun run lint:ratchet` | Hold each Biome rule in `tools/biome/lint-baseline.json` to its finding count per file. A new finding fails. Add `--write` after a fix to lower the baseline, or `--add=<rule>` to start a rule at its current counts. |
+| `bun run types:ratchet` | Hold each TypeScript option in `tools/typescript/type-baseline.json` to its error count per file in every project that extends `tsconfig.base.json`. A new error fails. Add `--write` after a fix to lower the baseline, or `--add=<option>` to start an option at its current counts. |
+| `bun run i18n:check` | Check the translation catalogs: key prefixes, placeholders, plural forms, ambiguous source text, unused keys, and new untranslated keys that `packages/i18n/untranslated.json` does not list. `--fix` puts translated keys in the English order and removes translated keys from `untranslated.json`. `--json` writes `.openbot-build/i18n-report.json`. See [docs/i18n.md](docs/i18n.md). |
 | `bun run test:backend` | Run backend tests only. |
+| `bun run test:changed` | Run, on one worker, only the desktop and mobile test files that import a file changed since `origin/main`, including staged, unstaged and untracked files. It stops with an error when `origin/main` is missing. A change to a vitest config, a setup file or `package.json` selects no test. See [docs/development-checks.md](docs/development-checks.md#focused-tests). |
+| `bun run test:related -- <source>...` | Run, on one worker, only the test files that import the named source files. |
+| `bun run test:browser-agent-session` | Check that an agent with its own browser session, and the agents of a named browser profile, keep their cookies and storage apart, across popups, a restart, a deleted profile, and a clear. |
+| `bun run test:browser-profile-agents` | Check that the shared profile, an agent's own session, a named profile, and the delete of a named profile change the stored browser profile of an agent, and that the choice stays after a restart. |
+| `bun run test:browser-takeover-deadline` | Run the real attention registry past a provider's tool-call deadline (#9689): a password or takeover card stays open after its call gets the waiting answer, the next call for the tab waits on the same card, a result between calls reaches that call, and the end of the turn closes the card. With no provider deadline, a takeover or a question that the user does not answer in the time limit ends its call; the takeover card stays open past the turn, and the user's later result reaches the agent once as a new message. A Claude question detaches at the limit in the same way. A secret question, or a question in a chat that cannot get a late answer, expires at the limit. A secure fill that fails gives the page to the user and tells the agent only a fixed reason (#10536). Offline; writes `.openbot-build/browser-takeover-deadline-e2e/report.json`. |
 | `bun run test:browser` | Run the complete local embedded-browser smoke test, including cross-process persistence. Use `--scenario=controls`, `--scenario=tool-boundary`, `--scenario=evaluation`, `--scenario=wait-deadlines`, or `--scenario=popups` for one isolated scenario. |
 | `bun run test:codex` | Probe the real CLI handshake and account without starting a paid turn. |
 | `bun run test:durations` | Re-record how long each desktop test file takes. CI splits its shards by this table, so run it when the two shards stop finishing together. |
 | `bun run cua-driver:doctor` | Print, as JSON, which `cua-driver` binary GoAhead would use for Computer Use, and the driver's own `doctor` report. Read-only, and it starts no daemon. `OPENBOT_CUA_DRIVER_PATH` selects a different binary in a checkout; an installed application runs only the driver it was released with. |
 | `bun run prepare:cua-driver` | Write the pinned Computer Use driver to `build/cua-driver/<platform>/<arch>`, verifying every SHA-256 in `native-runtime.lock.json`. Name another target with `bun scripts/install-cua-driver.ts <platform> <arch>`. Every packaging command runs this first. |
-| `bun run pin:cua-driver <version>` | Print a new `cuaDriver` block for `native-runtime.lock.json` from a published `cua-driver` release. Downloads all three targets and hashes each shipped file. |
+| `bun run pin:cua-driver <version>` | Print a new `cuaDriver` block for `native-runtime.lock.json` from a published `cua-driver` release. Downloads the release assets of all five targets and hashes each shipped file. |
 | `bun run package` | Build an unpacked local application for the architecture of this Mac. |
 | `bun run package:verify` | Build and verify the real app bundle for this Mac, icon, metadata, ASAR, and fuses. |
 | `bun run package:win` | Build an unpacked local Windows x64 application on Windows. |
@@ -359,8 +493,17 @@ See [web client delivery](docs/web-client.md) for the release gate and focused c
 | `bun run dist:linux` | Build an unsigned Linux x64 AppImage on Linux. |
 | `bun run dist:linux:arm64` | Build an unsigned Linux arm64 AppImage on arm64 Linux. |
 | `bun run release:patch` | Create the next patch version commit and tag. |
+| `bun run mobile:release` | Open the mobile release menu: prepare a version, build it, mark it available or skipped on a store (with its flags), write the Discord highlights, and see the live state. Each step that changes files opens its pull request. |
 | `bun run mobile:release:patch` | Move the iPhone app notes from `apps/mobile/changelog.d` into `apps/mobile/CHANGELOG.md` and set the next patch version in `app.json`. Also `mobile:release:minor` and `mobile:release:major`. |
-| `bun run test:custom-agents` | Run two fake ACP agents through the agent store, Check agent and the `acp` provider router: equal session ids, restart and resume, switch, and delete. Offline; writes `.openbot-build/custom-acp-agent-e2e/report.json`. |
+| `bun run mobile:ota:check` | Show the native runtime version of this checkout and the mobile store builds that can get it as an over-the-air update. Read-only. See [over-the-air updates](apps/mobile/README.md#over-the-air-updates). |
+| `bun run mobile:ota:publish -- --platform <ios\|android\|all> --message <text>` | Start the `Mobile OTA update` workflow for the current branch (`main` or `mobile-hotfix/*`): it sends the JavaScript bundle to the phones of the store builds with the same runtime version, with no store review. `--rollout <1-100>` limits the phones, `--dry-run` publishes nothing. `mobile:ota:rollout` changes the percentage, `mobile:ota:rollback` takes the update back, and `mobile:ota:status` shows what the update server gives each store build. |
+| `bun run mobile:release:ota -- --base <store build tag> --platform <ios\|android\|all>` | Move the note files that are new since the store build into an over-the-air section of `apps/mobile/CHANGELOG.md`, such as `1.5.0.1`. The store version does not change. |
+| `bun run test:mobile-ota` | Run the mobile update server (`apps/mobile-updates`) on a local R2 bucket with the real publish commands, and ask for updates as a phone does: signatures, file hashes, rollout, rollback and the publish guard. Offline; writes `.openbot-build/mobile-ota-e2e/report.json`. |
+| `bun run mobile:release:published <ios\|android\|both>` | Write today's date for a store that made the mobile build available. `/changelog` shows each store, and a store that still reviews the build as "In review". Also raises that store's flags in `mobile-features-config.ts`. Add `--version x.y.z` for a version that is not in `app.json`, and `--skip-older` to mark the older versions that the store still reviews as skipped. |
+| `bun run test:acp-directories` | Run three fake ACP agents through the `acp` provider driver: new, load and resume requests carry the workspace roots as `additionalDirectories` only when the agent advertises them. Offline; writes `.openbot-build/acp-additional-directories-e2e/report.json`. |
+| `bun run test:custom-agents` | Run two fake ACP agents through the agent store, Check agent (with its model list) and the `acp` provider router: equal session ids, restart and resume, switch, and delete. Offline; writes `.openbot-build/custom-acp-agent-e2e/report.json`. |
+| `bun run test:mcp-tool-consent` | Run the real Codex app-server with a fake model, a real MCP server and the real attention registry: tool consent at Ask first and Full access, Always allow and a restart, refusals, and the requests that stay with the user (forms, sign-in, look-alikes). Needs a Codex CLI; offline; writes `.openbot-build/mcp-tool-consent-e2e/report.json`. |
+| `bun run test:ui-blocks` | Run the real attention registry and Team API codecs on `ask_ui` blocks: answers from the owner, an admin, a member and a released client, the member and local script refusal for privileged actions, a secret form value that is never stored, skip and expiry, and the `ui-blocks-v1` wire on protocols 6 and 7. Offline; writes `.openbot-build/ui-blocks-e2e/report.json`. |
 | `bun run test:filesystem` | **Online/manual:** run real full-access Codex and Claude filesystem turns across private and shared workspaces. |
 | `bun run test:imagegen` | **Online/manual:** run a real full-access image-generation turn. |
 | `bun run test:workspace-only` | **Online/manual:** run real Workspace only Codex, Claude, Grok and OpenCode turns that try to write outside; writes a JSON report per provider to `.openbot-build/workspace-only-smoke/`. Add `--provider <id>` for one, and `--model <id>` to choose its model. |
@@ -396,8 +539,9 @@ only the credential in secure storage for revocation retries at startup, on retu
 and on the next connection attempt. Remote revocation completes when the account API is reachable.
 
 For manual team testing, `bun run dev:test-client` starts a complete two-client harness. The second
-client uses the isolated `OpenBot Dev Test Client` profile and renderer port 5174. `dev:reset` also
-removes that profile and the legacy `OpenBot Dev Host` profile. It does not remove the downloaded
+client uses the `OpenBot Dev Test Client wt-<hash>` profile of this worktree (`OpenBot Dev Test Client`
+with `--shared`) and renderer port 5174. `dev:reset` removes the shared one and the legacy
+`OpenBot Dev Host` profile. It does not remove the downloaded
 provider CLIs, which the whole computer shares. Press `Ctrl+C` in the runner terminal
 to stop only the processes started by that runner, or run `bun run dev:stop` from the worktree once
 that terminal is gone. Never stop a dev stack with `pkill -f electron` or `pkill -f bun`: on a
@@ -406,6 +550,11 @@ machine running several worktrees those kill the other checkouts' work mid-write
 
 Set `OPENBOT_DEV_ICE_TRANSPORT_POLICY=relay` before this command to force Team API traffic through
 coturn. This test option works only with the development renderer. Production always starts with `all`.
+Set `OPENBOT_DEV_SYNC_PROFILE=1` as well to let `bun run perf:remote` read the host requests of the
+desktop client.
+Set `OPENBOT_DEV_AWAY_SECONDS=<seconds>` to change the time without input on the computer after which
+a phone gets the notifications of a host (30 seconds by default), for example `5` to test it. The host
+and the desktop client of the stack both read it. A packaged app ignores it.
 
 Set `OPENBOT_DEV_UPDATE_SIMULATION=1` before `bun run dev` (or `bun run dev:slack`) to see the app
 update notification without a packaged build. The development app offers the next patch version a
@@ -468,9 +617,10 @@ Cloudflare Workers
 - `src/backend` owns provider adapters, persistence, message scheduling, transfers, and the browser host.
 - `src/preload` exposes only the typed `window.openbot` API.
 - `src/renderer` contains the SolidJS interface.
-- `apps/auth-api` contains the TanStack Start account API, one-time email codes, rate limits, and D1 migrations. It also serves the public site: the landing page, `/news`, `/guides`, and the plugin pages at `/plugins` and `/plugins/<slug>`.
+- `apps/auth-api` contains the TanStack Start account API, one-time email codes, rate limits, and D1 migrations. It also serves the public site: the landing page, `/news`, `/guides`, and the Marketplace pages at `/marketplace` (Agents, Skills, and Apps), `/marketplace/agents/<id>`, `/marketplace/skills/<slug>`, and `/plugins/<slug>`. `/plugins` redirects to `/marketplace/apps`.
+- `apps/status` contains the public status page at `status.openbot.run`, the script that the `status-page` workflow runs to check the services, and the script that sends the [status webhooks](docs/status-webhooks.md) of the team. GitHub hosts it, so it stays up when Cloudflare does not.
 - `packages/contracts` contains process-boundary contracts, shared limits, and pure validation.
-- `packages/i18n` contains the interface text in English, French, Japanese, Brazilian Portuguese and Turkish for desktop, web and mobile. See [docs/i18n.md](docs/i18n.md) to add text or a language.
+- `packages/i18n` contains the interface text in English and 14 other languages, Arabic and Hebrew with a right-to-left layout, for desktop, web and mobile. See [docs/i18n.md](docs/i18n.md) to add text or a language.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for dependency direction, state ownership, and
 rules for new modules.
@@ -480,9 +630,28 @@ rules for new modules.
 Attach MP3 audio and MOV video through the file picker or drag and drop. The limits are 100 MB per
 file, 250 MB per message, and 10 files per message. GoAhead gives the agent the original file; it does
 not play, decode, transcribe, or validate the recording during import. Damaged recordings can be
-attached for inspection. Analysis depends on the tools available to the agent. For other audio or
-video formats, export as MP3 or MOV, or attach a text transcript. Remote hosts must advertise the
+attached for inspection. Analysis depends on the tools available to the agent. Other audio or video
+formats attach as files of other types do (see below). Remote hosts must advertise the
 `media-attachments` capability; update the host if this feature is unavailable.
+
+MP4 video uses the same limits and rules as MOV. Remote hosts must also advertise the
+`mp4-attachments` capability.
+
+ZIP archives use the same limits. GoAhead does not extract or inspect an archive: the agent gets the
+original file and extracts it with its own tools. An agent sends a ZIP archive back with
+`openbot.attach_files_to_response`, and the user downloads it from the chat. Open shows a ZIP
+archive in the file manager instead of opening it. Remote hosts must advertise the `zip-attachments`
+capability.
+
+SVG images use the same limits. The chat shows an SVG as an image, but the agent gets it as a file,
+not as an image: providers take only raster images, so the agent reads the SVG text. Open shows an SVG
+in the file manager. Remote hosts must advertise the `svg-attachments` capability.
+
+Files of all other types use the same limits, for example VPN profiles, certificates, and
+infrastructure configuration. GoAhead stores the file unchanged, with no preview, and the agent gets
+its path and reads it with its own tools. Open shows the file in the file manager. Remote hosts must
+advertise the `any-file-attachments` capability. An older host takes only the types above and its
+list of documents, text, data, and source files.
 
 ## Local data and network boundaries
 
@@ -505,12 +674,23 @@ video formats, export as MP3 or MOV, or attach a text transcript. Remote hosts m
 - `~/.claude` — login and session history managed exclusively by Claude CLI.
 - `~/.grok` — login and session history managed exclusively by Grok CLI.
 - `~/.gemini` (or `$GEMINI_HOME`) — login and session history managed exclusively by the
-  Antigravity ACP server that Gemini uses.
+  Antigravity CLI that Gemini uses.
 - `~/.cursor` — login and session history managed exclusively by the Cursor CLI. A confined Cursor
   process keeps its settings in `~/.cursor/openbot-confined`, so it never changes yours.
 - `~/.cline` (or `$CLINE_DIR`) — login and session history managed exclusively by the Cline CLI.
 - `~/.pi/agent` (or `$PI_CODING_AGENT_DIR`) — login and sessions managed exclusively by the Pi CLI.
 - `~/.local/share/muse` (or `$XDG_DATA_HOME/muse`) — sessions managed exclusively by the Muse CLI.
+- `~/.kimi` (or `$KIMI_SHARE_DIR`) — login and session history managed exclusively by the Kimi Code CLI.
+- `~/.local/share/devin`, `~/.config/devin` and `~/.devin` (or the XDG folders) — login, settings and
+  session history managed exclusively by the Devin CLI.
+- `~/.copilot` (or `$COPILOT_HOME`) — settings and session history managed exclusively by the GitHub
+  Copilot CLI. Its sign-in is in the system keychain.
+- `~/.vibe` (or `$VIBE_HOME`) — settings, logs and session history managed exclusively by Mistral
+  Vibe. GoAhead makes an empty `trusted_folders.toml` there when it is missing. The sign-in is in the
+  system keychain, or in `.env`.
+- `~/.hermes` (or `$HERMES_HOME`) — your own Hermes Agent settings, memories, skills, sign-ins and
+  session history. GoAhead reads only the change time of `auth.json`, `.env` and `config.yaml`, to
+  see a sign-in.
 
 Deleting an agent removes its workspace, owned generated attachments, and deliveries addressed only
 to that agent. A transfer remains when another agent still uses the same message.
@@ -529,6 +709,9 @@ authentication records from D1. The embedded browser uses a separate sandboxed E
 cannot access `window.openbot` or managed local attachments.
 
 To run your own account service, Signal and TURN, see [Self-hosted remote access](docs/self-hosting.md).
+
+To trigger routines from external services, see
+[Webhooks](docs/webhooks.md). Public webhook requests require the host to be online.
 
 ## Security
 
@@ -553,17 +736,20 @@ popover. Release signing secrets and the complete procedure are documented in
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). By contributing, you agree that your contribution is licensed
-under PolyForm Noncommercial 1.0.0. Community behavior is governed by the
+See [CONTRIBUTING.md](CONTRIBUTING.md). Before we merge a contribution, each
+author from outside the organization signs the [Contributor License Agreement](CLA.md), which
+gives Synthetify Labs a license to use the contribution. Community behavior is governed by the
 [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License and attribution
 
-Copyright 2026 Norbert Bodziony.
+Copyright 2026 Synthetify Labs spółka z ograniczoną odpowiedzialnością.
 
 Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use, modify, and
 distribute the code for permitted noncommercial purposes. Commercial use requires a separate license
-from the copyright owner. Versions up to and including 0.1.11 remain available under Apache-2.0.
+from the copyright owner. Buy a commercial license in Settings → Billing (Starter for 1 user, or
+Team for 2 to 10 users), or contact [licenses@openbot.run](mailto:licenses@openbot.run). Versions up to and including 0.1.11 remain
+available under Apache-2.0.
 See [NOTICE](NOTICE) for attribution and third-party notices.
 
 GoAhead is an independent source-available project and is not affiliated with, endorsed by, or

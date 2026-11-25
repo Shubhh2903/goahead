@@ -2,6 +2,7 @@
 # YAML cannot import it, so keep the two the same.
 appId: com.multicodegenius.goahead
 productName: GoAhead
+copyright: Copyright © 2026 Synthetify Labs spółka z ograniczoną odpowiedzialnością
 protocols:
   - name: GoAhead links
     schemes:
@@ -34,11 +35,14 @@ files:
   - "!node_modules/@anthropic-ai/claude-agent-sdk-darwin-*/**/*"
   - "!node_modules/@anthropic-ai/claude-agent-sdk-linux-*/**/*"
   - "!node_modules/@anthropic-ai/claude-agent-sdk-win32-*/**/*"
+  - "!node_modules/effect/src/**/*"
+  - "!node_modules/**/*.map"
 asarUnpack:
-  # The database host is loaded by path as a separate process, not required into the main bundle.
   - out/main/agent-database-host.js
-  # The voice transcription host is started by path in the same way.
   - out/main/voice-transcription-host.js
+  - out/main/voice-speech-host.js
+  - node_modules/effect/**/*
+  - node_modules/@koromix/koffi-*/**/*
 extraResources:
   - from: resources/managed-skills
     to: managed-skills
@@ -46,14 +50,16 @@ extraResources:
     to: plugin-catalog
   - from: resources/agent-import
     to: agent-import
+  - from: resources/cli
+    to: cli
+  - from: resources/agent-runtime
+    to: agent-runtime
   - from: build/icon-production.png
     to: icons/icon-production.png
   - from: build/icon-dev.png
     to: icons/icon-dev.png
   - from: build/icon-preview.png
     to: icons/icon-preview.png
-  # The Dock and window icons for the logo color setting. macOS has no alternate app icon API, so
-  # the app sets one of these while it runs.
   - from: build/logo-colors
     to: icons/logo-colors
   - from: node_modules/electron/dist/LICENSE
@@ -66,12 +72,20 @@ extraResources:
     to: licenses/onnxruntime-LICENSE
   - from: build/licenses/NVIDIA-Parakeet-TDT-0.6B-v3-LICENSE
     to: licenses/NVIDIA-Parakeet-TDT-0.6B-v3-LICENSE
-# Voice and remote desktop are prepared for macOS and Windows only, and each Computer Use driver
-# is built for one target, so their resources are listed under each platform instead of here.
-# electron-builder merges the root and platform lists, so every build still gets its own, while a
-# build has no missing `from` to fail on and no other platform's driver to carry.
+  - from: build/licenses/NVIDIA-Parakeet-Unified-EN-0.6B-LICENSE
+    to: licenses/NVIDIA-Parakeet-Unified-EN-0.6B-LICENSE
+  - from: build/licenses/Underdog-Bark-3.0-Plus-LICENSE
+    to: licenses/Underdog-Bark-3.0-Plus-LICENSE
+  - from: build/licenses/OpenAI-Whisper-LICENSE
+    to: licenses/OpenAI-Whisper-LICENSE
+  - from: build/licenses/Cohere-Transcribe-LICENSE
+    to: licenses/Cohere-Transcribe-LICENSE
+  - from: build/licenses/Supertone-Supertonic-3-LICENSE
+    to: licenses/Supertone-Supertonic-3-LICENSE
 directories:
   output: dist
+toolsets:
+  appimage: "1.0.3"
 mac:
   category: public.app-category.productivity
   minimumSystemVersion: "13.0"
@@ -79,6 +93,8 @@ mac:
   hardenedRuntime: true
   icon: build/icon-production.icns
   extraResources:
+    - from: build/macos/Assets.car
+      to: Assets.car
     - from: build/icon-production-macos-safe-area.png
       to: icons/icon-production-macos-safe-area.png
     - from: build/icon-dev-macos-safe-area.png
@@ -88,6 +104,10 @@ mac:
     # The Dock icons for the emotion faces. Only macOS has a Dock, so only the Mac build ships them.
     - from: build/emotions
       to: icons/emotions
+    - from: build/macos/tray
+      to: icons/tray
+      filter:
+        - "*.png"
     # The sherpa-onnx addon and its libraries. The Parakeet model is downloaded on demand.
     - from: .openbot-build/voice/runtime
       to: voice/runtime
@@ -95,10 +115,6 @@ mac:
       to: remote-desktop-runtime
     - from: build/cua-driver/darwin/${arch}
       to: cua-driver/darwin/${arch}
-  # The Computer Use driver arrives signed by Cua AI with the hardened runtime, a secure timestamp
-  # and `com.apple.security.automation.apple-events`. Re-signing it with GoAhead's inherited
-  # entitlements would drop that entitlement and break the driver's Automation route, so its own
-  # Developer ID signature is kept. Notarization accepts a nested binary signed by another team.
   signIgnore:
     - Contents/Resources/cua-driver/
   entitlements: build/entitlements.mac.plist
@@ -107,18 +123,18 @@ mac:
   # `ElectronTeamID` is the Apple Team ID of the company Developer ID certificate (not a secret). The
   # tag workflow also passes it from the `APPLE_TEAM_ID` secret, which wins when the two differ.
   extendInfo:
+    CFBundleIconName: Icon
     ElectronTeamID: S29HD2MDR4
     NSMicrophoneUsageDescription: GoAhead uses the microphone to transcribe voice prompts locally on this Mac.
-    # Computer Use runs the driver as a child process, so macOS asks for both grants in GoAhead's
-    # name and shows these sentences.
     NSScreenCaptureUsageDescription: GoAhead captures the screen so an agent can see the app windows you ask it to control.
     NSAppleEventsUsageDescription: GoAhead sends Automation events so an agent can control the apps you ask it to control.
+    NSCalendarsFullAccessUsageDescription: GoAhead lets the commands that an agent runs read and change your calendar events.
+    NSCalendarsWriteOnlyAccessUsageDescription: GoAhead lets the commands that an agent runs add events to your calendars.
+    NSCalendarsUsageDescription: GoAhead lets the commands that an agent runs use your calendars.
+    NSRemindersFullAccessUsageDescription: GoAhead lets the commands that an agent runs read and change your reminders.
+    NSRemindersUsageDescription: GoAhead lets the commands that an agent runs use your reminders.
     NSUserActivityTypes:
       - NSUserActivityTypeBrowsingWeb
-  # No `arch` here: a target's own `arch` list replaces the one given on the command line, so
-  # `--x64` would still build ARM64. With no flag, electron-builder builds for the machine it runs
-  # on. Build one architecture at a time: the voice runtime and remote desktop builds on disk are for the
-  # architecture of the machine that made them.
   target:
     - dmg
     - zip
@@ -135,6 +151,9 @@ win:
     - target: nsis
       arch:
         - x64
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
 linux:
   category: Development
   icon: build/icon-production.png
@@ -142,21 +161,17 @@ linux:
   extraResources:
     - from: build/linux/openbot.apparmor
       to: linux/openbot.apparmor
-    # A hosted server installs the packages, scripts and units of the release that it updates to.
     - from: scripts/hosting
       to: hosting
       filter:
         - "**/*"
         - "!*.ts"
-    # Only the x64 build installs this runtime. For arm64 the directory does not exist, and
-    # electron-builder skips a missing source with a warning.
+    - from: .openbot-build/voice/runtime
+      to: voice/runtime
     - from: build/remote-desktop-runtime
       to: remote-desktop-runtime
     - from: build/cua-driver/linux/${arch}
       to: cua-driver/linux/${arch}
-  # Electron takes its Linux app id from `desktopName` in package.json, and the window manager
-  # matches a running window to the launcher through `StartupWMClass`. Syncing the two from one
-  # value is what makes the taskbar icon group with the window it belongs to.
   syncDesktopName: true
   target:
     - target: AppImage

@@ -2,44 +2,44 @@
   "schemaVersion": 1,
   "codex": {
     "repository": "https://github.com/openai/codex",
-    "version": "0.160.1",
-    "tag": "rust-v0.160.1",
+    "version": "0.170.0",
+    "tag": "rust-v0.170.0",
     "license": "Apache-2.0",
     "licenseSha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
     "artifacts": {
       "darwin-arm64": {
         "asset": "codex-package-aarch64-apple-darwin.tar.gz",
-        "assetSha256": "f73527ee09c6db869acbb37b709866b339ea74ef91d2de255e9c74ec960c6314",
-        "downloadBytes": 129977637,
-        "installedBytes": 360000000,
+        "assetSha256": "975524bf13aedd1b122d8d0e00c09ee67091b8f688c0b374943dbb3cf22c7893",
+        "downloadBytes": 173593904,
+        "installedBytes": 490000000,
         "executable": "bin/codex"
       },
       "darwin-x64": {
         "asset": "codex-package-x86_64-apple-darwin.tar.gz",
-        "assetSha256": "a98f330c9b1652cef2edc7bc2ee4c47a0fe19fa098b686381be3c8842abf0ac0",
-        "downloadBytes": 141316108,
-        "installedBytes": 380000000,
+        "assetSha256": "2e971524460a570b913dbdc9b49e5e9c14556e44e7f62f00b95b4a8f1e2cdf25",
+        "downloadBytes": 188621592,
+        "installedBytes": 510000000,
         "executable": "bin/codex"
       },
       "linux-x64": {
         "asset": "codex-package-x86_64-unknown-linux-musl.tar.gz",
-        "assetSha256": "340801565906a7028f6baaa9ab6853addaef221f0016a1417a7c1ffdd96c21f0",
-        "downloadBytes": 160785122,
-        "installedBytes": 410000000,
+        "assetSha256": "a77ff87be7ba809d715728270a78f5ce3527dc07529416d1ef8929b90b8475eb",
+        "downloadBytes": 193641516,
+        "installedBytes": 510000000,
         "executable": "bin/codex"
       },
       "linux-arm64": {
         "asset": "codex-package-aarch64-unknown-linux-musl.tar.gz",
-        "assetSha256": "dff0954438fa455c2197ddb1f421d8d68625d98de610f76bedb6e5bc837ea35b",
-        "downloadBytes": 150931915,
-        "installedBytes": 380000000,
+        "assetSha256": "3f7e1ae38c4fe27322e082b855e8eec936d08fa538d62b71c07e2a53f34e8847",
+        "downloadBytes": 195884517,
+        "installedBytes": 500000000,
         "executable": "bin/codex"
       },
       "win32-x64": {
         "asset": "codex-package-x86_64-pc-windows-msvc.tar.gz",
-        "assetSha256": "25c6fe4e46d5bff939312fc46de67ace37561f6f1f89b409af63fd8cc6098425",
-        "downloadBytes": 157434529,
-        "installedBytes": 450000000,
+        "assetSha256": "6ff4b22c63645ffd83aed9b722cbb0b9e5b79dc6e8916f50e362b3015fb327a9",
+        "downloadBytes": 210098091,
+        "installedBytes": 610000000,
         "executable": "bin/codex.exe"
       }
     }
@@ -106,57 +106,61 @@
   "opencode": {
     "registry": "https://registry.npmjs.org",
     "repository": "https://github.com/anomalyco/opencode",
-    "version": "1.18.30",
+    "version": "2.2.5",
     "license": "MIT",
+    "licensePackage": {
+      "name": "opencode-ai",
+      "version": "1.19.5"
+    },
     "licenseSha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
     "artifacts": {
       "darwin-arm64": {
-        "package": "opencode-darwin-arm64",
-        "asset": "opencode-darwin-arm64-1.18.30.tgz",
-        "assetSha256": "25b722fcdc8c46aebcb6501e1156dc1dc5a392492cc278c65b7775311674e7f8",
-        "binarySha256": "2d0c9c339bb91046c6ea951c97664bc2f8a8eaca707f31fbfbb7bc73c4eddc62",
-        "downloadBytes": 45975576,
-        "installedBytes": 160000000,
+        "package": "@opencode/cli-darwin-arm64",
+        "asset": "cli-darwin-arm64-2.2.5.tgz",
+        "assetSha256": "dfd827de3281b4c3ca2b0bfc8f4beb103fa660c419d148a1a515c4344f9e9c02",
+        "binarySha256": "abe4d88594bffb12b364375b8a6732d2d1f7a977195ed1a35c5c76f8e89c9e0e",
+        "downloadBytes": 105814595,
+        "installedBytes": 240000000,
         "executable": "opencode",
         "platformDirectory": "mac"
       },
       "darwin-x64": {
-        "package": "opencode-darwin-x64",
-        "asset": "opencode-darwin-x64-1.18.30.tgz",
-        "assetSha256": "d7119bd0adbacf86c1176f07b35d429909d1d702ca0c90dcd31415e66220f590",
-        "binarySha256": "a0db851dd5c9538896aeecce1cd13af510d62a6873d2eb5030955548e5779156",
-        "downloadBytes": 48153052,
-        "installedBytes": 160000000,
+        "package": "@opencode/cli-darwin-x64",
+        "asset": "cli-darwin-x64-2.2.5.tgz",
+        "assetSha256": "304f4666e7e37eac338de258f763b7f5b8987ab1bde2341dc1a613a8205c0010",
+        "binarySha256": "5e0cf9c94ee0fd4a4635807534e9ca4bf51ffe1c83260ada3510bf60e7333173",
+        "downloadBytes": 111044366,
+        "installedBytes": 260000000,
         "executable": "opencode",
         "platformDirectory": "mac"
       },
       "linux-x64": {
-        "package": "opencode-linux-x64",
-        "asset": "opencode-linux-x64-1.18.30.tgz",
-        "assetSha256": "aa31a7e68ce5c73cba302c6a4f31c2e308398db125e49d3dbea32f61862fe6de",
-        "binarySha256": "87bd160e053af86b5b409daabf71f8dc05bbc3a2a3a5f563f36011cdf706a999",
-        "downloadBytes": 60202013,
-        "installedBytes": 200000000,
+        "package": "@opencode/cli-linux-x64",
+        "asset": "cli-linux-x64-2.2.5.tgz",
+        "assetSha256": "92690eee07a680d3cb760ca02ba43878de9eab1b4e5d5dfae8795518c53628f4",
+        "binarySha256": "8d060e1d2fbb9bb44cf09ae6ed1f3f6a7cff070b5227e2f90970132b23a92050",
+        "downloadBytes": 118637290,
+        "installedBytes": 270000000,
         "executable": "opencode",
         "platformDirectory": "linux"
       },
       "linux-arm64": {
-        "package": "opencode-linux-arm64",
-        "asset": "opencode-linux-arm64-1.18.30.tgz",
-        "assetSha256": "1e20b66e76afbb7c1e5cd9be7515d2744cb4ea3476ff57add1f7e9ad6fb3a32d",
-        "binarySha256": "01edb5839aa10d5b09133fedcb335a062ecad6e82552933bb14f71756f2b296b",
-        "downloadBytes": 59985069,
-        "installedBytes": 200000000,
+        "package": "@opencode/cli-linux-arm64",
+        "asset": "cli-linux-arm64-2.2.5.tgz",
+        "assetSha256": "f8c5a82075fede9b5b044ed6c8a6d13ad807a7e62caea1cd0a878adef49eb053",
+        "binarySha256": "dcc7e6f4ac1672e1884dcb8d26ab333e55ffc3f080e01a7a60177aa05f54935f",
+        "downloadBytes": 117223869,
+        "installedBytes": 270000000,
         "executable": "opencode",
         "platformDirectory": "linux"
       },
       "win32-x64": {
-        "package": "opencode-windows-x64",
-        "asset": "opencode-windows-x64-1.18.30.tgz",
-        "assetSha256": "1a5cc50f529cf359fbb6d1a1750c6ae521799f463d00a0215e6eff579a08b036",
-        "binarySha256": "c1bdbb18767048e1853af4238311b3f7e16ff2f91b68fb4c7ced3c5175347eea",
-        "downloadBytes": 60117264,
-        "installedBytes": 190000000,
+        "package": "@opencode/cli-windows-x64",
+        "asset": "cli-windows-x64-2.2.5.tgz",
+        "assetSha256": "7a9e1dbe80965b75ace78d512c91ce4e6c9e4683fa5a5a25b00ff0b736f1c15c",
+        "binarySha256": "0c346fdaf519d2f23a31d3b6cb9d65e369a72d77cac6f027b5e0a06376ec3a43",
+        "downloadBytes": 121997426,
+        "installedBytes": 280000000,
         "executable": "opencode.exe",
         "platformDirectory": "win"
       }
@@ -237,63 +241,63 @@
   },
   "cuaDriver": {
     "repository": "https://github.com/trycua/cua",
-    "tag": "cua-driver-rs-v0.34.0",
-    "version": "0.34.0",
+    "tag": "cua-driver-rs-v0.52.9",
+    "version": "0.52.9",
     "license": "MIT",
     "licenseSha256": "c0779290c1d4783169aa3dbfb55feb505e563ef8a004bbf55298ceffcfbda8d9",
     "artifacts": {
       "darwin-arm64": {
-        "asset": "cua-driver-rs-0.34.0-darwin-universal-binary.tar.gz",
-        "assetSha256": "940dc008e0f7c5d217d14c0f247d1ebab91b1bac965f4a649d19e8c789bdfd81",
-        "downloadBytes": 47108179,
+        "asset": "cua-driver-rs-0.52.9-darwin-universal-binary.tar.gz",
+        "assetSha256": "1d04663140a0beec9a9caaacf5ee2eef0d2ce305f47fc0d049a5d676fcc2aa3b",
+        "downloadBytes": 43494805,
         "files": {
-          "cua-driver": "47fa8722003066246ee8a828d3fe2c769f2194d6cf3ad63ae6f0becdc00d383a"
+          "cua-driver": "52d5d0cf107c312769878dc33c67077b035980ab26a154cd5bd8da1f170e6316"
         }
       },
       "darwin-x64": {
-        "asset": "cua-driver-rs-0.34.0-darwin-universal-binary.tar.gz",
-        "assetSha256": "940dc008e0f7c5d217d14c0f247d1ebab91b1bac965f4a649d19e8c789bdfd81",
-        "downloadBytes": 47108179,
+        "asset": "cua-driver-rs-0.52.9-darwin-universal-binary.tar.gz",
+        "assetSha256": "1d04663140a0beec9a9caaacf5ee2eef0d2ce305f47fc0d049a5d676fcc2aa3b",
+        "downloadBytes": 43494805,
         "files": {
-          "cua-driver": "47fa8722003066246ee8a828d3fe2c769f2194d6cf3ad63ae6f0becdc00d383a"
+          "cua-driver": "52d5d0cf107c312769878dc33c67077b035980ab26a154cd5bd8da1f170e6316"
         }
       },
       "linux-x64": {
-        "asset": "cua-driver-rs-0.34.0-linux-x86_64-binary.tar.gz",
-        "assetSha256": "629ac96eff829d4dfd5cf221f3f2165c2d813aed91e5efb7b20777a741cd70a7",
-        "downloadBytes": 34818314,
+        "asset": "cua-driver-rs-0.52.9-linux-x86_64-binary.tar.gz",
+        "assetSha256": "f20c3d3b468778d03ec25bef32a40be2b83b3ef8961cf7816295acdbcf5ff273",
+        "downloadBytes": 30098066,
         "files": {
-          "cua-driver": "5fa60c7ab35194e0e050a337521ca0e0b0ae0a8fe898813b340f65c94e15264c",
-          "wayland-helper/install.sh": "e13fc5700d281fed547fbb529a31bc1a0df250e6f9811c9cdddc99d465e219a0",
-          "wayland-helper/README.md": "d43b236d07a46b91c3dacaddcf19284d37b51361fcf46b9cebd3cc72f0a369e1",
-          "wayland-helper/winrects@cua/metadata.json": "3f6624c882bde9d611848201e2f245c813fbc322a57a003d52847afc8e6f4c50",
-          "wayland-helper/winrects@cua/extension.js": "27aac56799574ecd201e810d32772d3695d8b6ace5ab4a68d026648009004eed"
+          "cua-driver": "d0f329e0304ccb54059b8bfce940694b945475730380b463da67a22fbcd34600",
+          "wayland-helper/install.sh": "1f36c163562d8d7a3a711e69625adc33895a511a1ca0f2bb8f516c3aca0906fb",
+          "wayland-helper/README.md": "359bc52eb9639b7242a05d597e4a2ac6d0ea91622d4d4eed89412b594d5f2e17",
+          "wayland-helper/winrects@cua/metadata.json": "1853170d66280f1a096af0e33bb400e3740cddf07bf3e2f1e3bbeaf33550e1d0",
+          "wayland-helper/winrects@cua/extension.js": "80903729beb0f4d87fc6e70ee302e969706c70e05ce41e268e5bae87ca43ac4e"
         }
       },
       "linux-arm64": {
-        "asset": "cua-driver-rs-0.34.0-linux-arm64-binary.tar.gz",
-        "assetSha256": "9db8b9084add57eb97be8164367b24b6be54ed4f3dc01213e64b72d7fc09fddb",
-        "downloadBytes": 34607515,
+        "asset": "cua-driver-rs-0.52.9-linux-arm64-binary.tar.gz",
+        "assetSha256": "b3c1be792b132b9af8a0b3f54e9d2e3edab74860d27c1ed539f4907d111daf0a",
+        "downloadBytes": 28009360,
         "files": {
-          "cua-driver": "e989fa537a8c06a8d5ec7e9be692b04b2f7e76e46feb52e9c222420556bbf476",
-          "wayland-helper/install.sh": "e13fc5700d281fed547fbb529a31bc1a0df250e6f9811c9cdddc99d465e219a0",
-          "wayland-helper/README.md": "d43b236d07a46b91c3dacaddcf19284d37b51361fcf46b9cebd3cc72f0a369e1",
-          "wayland-helper/winrects@cua/metadata.json": "3f6624c882bde9d611848201e2f245c813fbc322a57a003d52847afc8e6f4c50",
-          "wayland-helper/winrects@cua/extension.js": "27aac56799574ecd201e810d32772d3695d8b6ace5ab4a68d026648009004eed"
+          "cua-driver": "09779104ad8e5fd26bc6d6ba8e85cca1be426f46938e938e4e74fc2ed8475d35",
+          "wayland-helper/install.sh": "1f36c163562d8d7a3a711e69625adc33895a511a1ca0f2bb8f516c3aca0906fb",
+          "wayland-helper/README.md": "359bc52eb9639b7242a05d597e4a2ac6d0ea91622d4d4eed89412b594d5f2e17",
+          "wayland-helper/winrects@cua/metadata.json": "1853170d66280f1a096af0e33bb400e3740cddf07bf3e2f1e3bbeaf33550e1d0",
+          "wayland-helper/winrects@cua/extension.js": "80903729beb0f4d87fc6e70ee302e969706c70e05ce41e268e5bae87ca43ac4e"
         }
       },
       "win32-x64": {
-        "asset": "cua-driver-rs-0.34.0-windows-x86_64-binary.zip",
-        "assetSha256": "bcc520e50861c7092cf775846fec76ae386d7dcd6b5b408608b0ea4423a8b888",
-        "downloadBytes": 31314221,
+        "asset": "cua-driver-rs-0.52.9-windows-x86_64-binary.zip",
+        "assetSha256": "b05c6ab050100d2b532dfa948c94742d0b95bfaf13e46e6ce44c1ee4224290e3",
+        "downloadBytes": 32377889,
         "files": {
-          "cua-driver.exe": "77f5cac754b42b6a8bae126414fc8f7487432ace93466967965188e24e9e53fb"
+          "cua-driver.exe": "e21d21d25205d7c188fea6776185abb1cbd437410df6243c512d1523b0c8cbfa"
         }
       }
     }
   },
   "remoteDesktop": {
-    "recipeVersion": 15,
+    "recipeVersion": 18,
     "sunshine": {
       "sourceMode": "upstream-with-patch",
       "repository": "https://github.com/LizardByte/Sunshine.git",
@@ -309,7 +313,7 @@
       "licenseSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
       "patch": {
         "path": "vendor/remote-desktop/patches/sunshine-v2026.516.143833-openbot.patch",
-        "sha256": "3fac721b1d894005ea2206dc93c248bbbf87b8f689cc333de5becdafd1cbcda0"
+        "sha256": "4ea91062099f401949cecc744ff7023b9b7d2f3d7335dacc70323709d9a6eb6c"
       },
       "overrides": [
         {
@@ -378,124 +382,141 @@
       "win32-x64": ["sunshine.exe", "web-server.exe", "streamer.exe"],
       "linux-x64": ["sunshine", "web-server", "streamer"]
     },
-    "releaseArtifacts": {}
+    "releaseArtifacts": {
+      "darwin-arm64": {
+        "asset": "remote-desktop-runtime-darwin-arm64.tar.gz",
+        "sha256": "bc3dec7efe4d1fc8f0aa9a0ae76f013eedde751d5dec67233138938ac4c4c63a"
+      },
+      "darwin-x64": {
+        "asset": "remote-desktop-runtime-darwin-x64.tar.gz",
+        "sha256": "9bd4f16fe6bc39b3c3da876729f3ab17473039856b59ac477564c78c619f7900"
+      },
+      "win32-x64": {
+        "asset": "remote-desktop-runtime-win32-x64.tar.gz",
+        "sha256": "75b55c4163e8fde18fbcc34454e222aaf1001433d3c9962872618c4223763e38"
+      },
+      "linux-x64": {
+        "asset": "remote-desktop-runtime-linux-x64.tar.gz",
+        "sha256": "92d8235b681ee5e3e4ff88e968a2834736c0fd7738212a2ba2214cb86dbccb5d"
+      }
+    },
+    "artifactRelease": {
+      "repository": "nightly-labs/openbot",
+      "tag": "remote-desktop-runtime-1a675ecdf05e7b581279162ec3ffc3fb235681acceb48450aaeb9421d43b1d2c",
+      "inputDigest": "1a675ecdf05e7b581279162ec3ffc3fb235681acceb48450aaeb9421d43b1d2c",
+      "manifestAsset": "remote-desktop-runtime-manifest.json",
+      "manifestSha256": "4a66653f745d42272c1c1efa5f3b10257d3974967d1f5e1036173a1de82b765a"
+    }
   },
   "bun": {
     "registry": "https://registry.npmjs.org",
     "repository": "https://github.com/oven-sh/bun",
-    "version": "1.4.3",
-    "tag": "bun-v1.4.3",
+    "version": "1.4.5",
+    "tag": "bun-v1.4.5",
     "license": "MIT",
-    "licenseSha256": "056696884250b0d682365260cf1487a6501b1665a343ec60e23a1e647043c572",
+    "licenseSha256": "362fe32c954ec829240bd7429c53d705eef08c6bfa45ffc2d02005f857cba4dd",
     "artifacts": {
       "darwin-arm64": {
         "package": "@oven/bun-darwin-aarch64",
-        "asset": "bun-darwin-aarch64-1.4.3.tgz",
-        "assetSha256": "efac3433b75cbbe8478bd0a339f2bf196d2cc1bc8dd348118c689391b412bf79",
-        "binarySha256": "28c7dd0a06916aba284d570ef44a2d70e9c538eaf2ba58dfe0910525563b3f79",
-        "downloadBytes": 31464445,
-        "installedBytes": 150000000,
+        "asset": "bun-darwin-aarch64-1.4.5.tgz",
+        "assetSha256": "88c398ee13212e8b189119a2bddc7d240ae4f1252c1d0ae2ac1fd44c921fdcb1",
+        "binarySha256": "e2984124f1514e1e6bbda20adedbf07a02c443c6a5828853a15c7c7abf78e19f",
+        "downloadBytes": 41036588,
+        "installedBytes": 190000000,
         "executable": "bun"
       },
       "darwin-x64": {
         "package": "@oven/bun-darwin-x64-baseline",
-        "asset": "bun-darwin-x64-baseline-1.4.3.tgz",
-        "assetSha256": "787aeaf068b670af4646d647c9c180554e9bf253ae5903617ee727531a1944d6",
-        "binarySha256": "c2a945a9d33f9088b32ac3550d1d1fd485a7fc10d71c66f91ef0d33b41cefa7c",
-        "downloadBytes": 33567478,
-        "installedBytes": 170000000,
+        "asset": "bun-darwin-x64-baseline-1.4.5.tgz",
+        "assetSha256": "477144886f6cb00238da93e805b225cc85a8933a1d6da895234794dd28aab6b1",
+        "binarySha256": "88f97645b270aef20f9f9442f1658461cab3e7128e658af4615144e3396f084a",
+        "downloadBytes": 43925447,
+        "installedBytes": 210000000,
         "executable": "bun"
       },
       "linux-x64": {
         "package": "@oven/bun-linux-x64-baseline",
-        "asset": "bun-linux-x64-baseline-1.4.3.tgz",
-        "assetSha256": "1a81395cfbd4c36573ef9b2d51da5231b63b2d0ad0e2a8ed2b075dada0de6dfb",
-        "binarySha256": "7ce7d6b654eddeec20afddf2396317fba6dc19ab52788a27e894e1806bf8f24b",
-        "downloadBytes": 42541791,
-        "installedBytes": 190000000,
+        "asset": "bun-linux-x64-baseline-1.4.5.tgz",
+        "assetSha256": "c18ff4130882eaa8209f0b3e66a202abd1e07a137f38a254d0b7431bc6a03827",
+        "binarySha256": "f05d28a3862f4b84395c7fa32480b835dd47482e80b7e7a49a115227f0c06083",
+        "downloadBytes": 51946584,
+        "installedBytes": 230000000,
         "executable": "bun"
       },
       "linux-arm64": {
         "package": "@oven/bun-linux-aarch64",
-        "asset": "bun-linux-aarch64-1.4.3.tgz",
-        "assetSha256": "557e9d56871b316ccc56856995283e798839b2fcb21adeef39d6413b715633e1",
-        "binarySha256": "029ece746ac9f970c76d8f48bdd1b1d0c52f3636b74d19f546f5e7c1165c0abe",
-        "downloadBytes": 42985210,
-        "installedBytes": 190000000,
+        "asset": "bun-linux-aarch64-1.4.5.tgz",
+        "assetSha256": "c3cd56594c9d5d025df87f77c68ad4699a49b52551f0f3232be6f727533fe08c",
+        "binarySha256": "04778f1f42399a69d086853e9c7af4acf574b2f21a43d0dc673853d8b84a2923",
+        "downloadBytes": 52595012,
+        "installedBytes": 230000000,
         "executable": "bun"
       },
       "win32-x64": {
         "package": "@oven/bun-windows-x64-baseline",
-        "asset": "bun-windows-x64-baseline-1.4.3.tgz",
-        "assetSha256": "f8d394e4cf3e941c69d6e4c8d3210333e68714b6a48e60224a5701a8efa9e2ac",
-        "binarySha256": "095db4abae203d42f29fdec26da4a882fcde6333cdd84e40c0c7828c0cf543f6",
-        "downloadBytes": 45372800,
-        "installedBytes": 210000000,
+        "asset": "bun-windows-x64-baseline-1.4.5.tgz",
+        "assetSha256": "a1ff85b3016f55d7bf28cc12284fc7d445f3e2601211a898d7c6b33e07b2e0e8",
+        "binarySha256": "e06ad0864463c68892ae71a2a64af7eae1585cac5dd9b80bc042f45605587cb1",
+        "downloadBytes": 55298167,
+        "installedBytes": 250000000,
         "executable": "bun.exe"
       }
     }
   },
   "antigravity": {
-    "registry": "https://raw.githubusercontent.com/agentclientprotocol/registry/main/antigravity-acp/agent.json",
-    "distribution": "https://dl.google.com/agy-extensions/releases",
-    "version": "1.2.1",
+    "version": "1.5.4",
     "license": "Proprietary",
     "licenseUrl": "https://antigravity.google/terms",
     "artifacts": {
       "darwin-arm64": {
-        "asset": "agy-acp-server-1.2.1-darwin-arm64.zip",
-        "assetSha256": "0fab9938812e6b32b3b543e65e4f3a0025ceef755413db13542d9a9b81ea803c",
-        "downloadBytes": 111725488,
-        "installedBytes": 400000000,
-        "executable": "agy_acp_server.par",
-        "executableSha256": "c93c86c0f505fcdf8b13c695bed26d306141ef5446189d591397074d324db34e",
-        "harness": "localharness_external",
-        "harnessSha256": "1b8a2b712ca312c9769e425b800bfbcceec4770f19736404474d1e8e50d65456",
-        "platformDirectory": "macos"
+        "url": "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.4/agy_cli_mac_arm64.tar.gz",
+        "assetSha256": "196e677727a0542f040a92e4a192bef844bfb40bd56d8925ddfa389aaac65834",
+        "downloadBytes": 65394664,
+        "installedBytes": 209477856,
+        "executable": "antigravity",
+        "files": {
+          "bin/antigravity": "bfa89f0d8cbf1b6961395cc54ac5a75bc2776bc4f6a5e50dd91d3dd1ba076b03"
+        }
       },
       "darwin-x64": {
-        "asset": "agy-acp-server-1.2.1-darwin-x86_64.zip",
-        "assetSha256": "d09bf99bdea7b82021e1afcff829da35e4aa583d8f0984ef364dc3a7c064e07e",
-        "downloadBytes": 117493869,
-        "installedBytes": 430000000,
-        "executable": "agy_acp_server.par",
-        "executableSha256": "928d195a8600f649629c8b0e8ff5acbc84cb8dee7482e11d492e17c985fa3116",
-        "harness": "localharness_external",
-        "harnessSha256": "e92d5478a2a777f4e805aa525c3495e48d287381f59a0dee20616ef3c9f9b461",
-        "platformDirectory": "macos"
+        "url": "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.4/agy_cli_mac_x64.tar.gz",
+        "assetSha256": "214f8fbceacc0f79fa886501923c6a254ee0080343d3a829ea136e51f8b3e6d3",
+        "downloadBytes": 71090923,
+        "installedBytes": 218487520,
+        "executable": "antigravity",
+        "files": {
+          "bin/antigravity": "80abff019289adf481215c544da080d6d5a31d2ef1af4cea1e42fa9aeb673e22"
+        }
       },
       "linux-x64": {
-        "asset": "agy-acp-server-1.2.1-linux-x86_64.zip",
-        "assetSha256": "9fbf0bd584a26478161f637cabd75113f72541c842d148f578ef1a6a9edcb843",
-        "downloadBytes": 333590110,
-        "installedBytes": 1055000000,
-        "executable": "agy_acp_server.par",
-        "executableSha256": "adbf34295671d1fd68b347efe4e4e2587816023cf41b9eff92c451834eb3de95",
-        "harness": "localharness_external",
-        "harnessSha256": "428236f899a22181ecb47b2885b167e71d4f1a661f8ce0046225174a32018f72",
-        "platformDirectory": "linux"
+        "url": "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.4/agy_cli_linux_x64.tar.gz",
+        "assetSha256": "96cccfec6f205db8fa4016531bda1567827f1d056095238735af6b8b55a7f7d6",
+        "downloadBytes": 73930009,
+        "installedBytes": 247460240,
+        "executable": "antigravity",
+        "files": {
+          "bin/antigravity": "c77851d1fc99b45bb7fc1dc4cddf09f5b668418cc498f92a09c73cddbc696343"
+        }
       },
       "linux-arm64": {
-        "asset": "agy-acp-server-1.2.1-linux-arm64.zip",
-        "assetSha256": "7e7ef4088bc185e1af4204029e0f4ec4210af20724f3ff262186ac0bcea6aa0e",
-        "downloadBytes": 321280184,
-        "installedBytes": 1050000000,
-        "executable": "agy_acp_server.par",
-        "executableSha256": "422da6b0a2691006d69b89f8d4ea6d8818f3fe90eddcdf5bf78b20fbd502c68a",
-        "harness": "localharness_external",
-        "harnessSha256": "f3ac92c3c19327659d4721b78d1741f809a6106858a3a47be97aa334ad8cbbd5",
-        "platformDirectory": "linux"
+        "url": "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.4/agy_cli_linux_arm64.tar.gz",
+        "assetSha256": "aa8870d1b93b646ed52fd0862752b3ec8c5e91afd22d943eb2a9a0b0671fd939",
+        "downloadBytes": 70055573,
+        "installedBytes": 236147064,
+        "executable": "antigravity",
+        "files": {
+          "bin/antigravity": "874d86300e64ff6f378abd55bcb45cbc1f8749fa422629c10ddecbac683b7b97"
+        }
       },
       "win32-x64": {
-        "asset": "agy-acp-server-1.2.1-windows-x86_64.zip",
-        "assetSha256": "9b82493819bc14613baa76264d55ad307ddd8ab4a8d6e110edb32da35498c07b",
-        "downloadBytes": 124869770,
-        "installedBytes": 230000000,
-        "executable": "agy_acp_server.exe",
-        "executableSha256": "04fd51b5c6dfb6d11e649c2cfc61a64ca31d9a4a58a9a3e5c93db934cd7a9695",
-        "harness": "localharness_external.exe",
-        "harnessSha256": "d9283bd0505014ca44f0e02259b78209c13b2426c9780bd43b7779f8eafe438f",
-        "platformDirectory": "windows"
+        "url": "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.4/agy_cli_windows_x64.zip",
+        "assetSha256": "73b426d62f06c9d81926d406590831b1c5946e8156e34bfcab84f562e1e5e974",
+        "downloadBytes": 70308500,
+        "installedBytes": 225746584,
+        "executable": "antigravity.exe",
+        "files": {
+          "bin/antigravity.exe": "df853652519e7a235271524776a31011d330d0ca50d568255a5072183fc7f057"
+        }
       }
     }
   },
@@ -1813,6 +1834,261 @@
         "executable": "muse.exe",
         "files": {
           "bin/muse.exe": "5caacb02eea2734405786e50cb42aeea3eeb46b4fa9801cfa666cda225101749"
+        }
+      }
+    }
+  },
+  "kimi": {
+    "repository": "https://github.com/MoonshotAI/kimi-cli",
+    "version": "1.52.0",
+    "tag": "1.52.0",
+    "license": "Apache-2.0",
+    "licenseSha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+    "artifacts": {
+      "darwin-arm64": {
+        "asset": "kimi-1.52.0-aarch64-apple-darwin-onedir.tar.gz",
+        "assetSha256": "1d87d0c6d39e30593e44571ce6f78b20345735e6e836c1b175283ddabf5b9028",
+        "downloadBytes": 67577902,
+        "installedBytes": 150000000,
+        "executable": "kimi",
+        "files": {
+          "kimi": "52fe62da5118ccadbbc26fe195751f7050e8c65fc42dc9486d743bc6473f2be2",
+          "_internal/base_library.zip": "c9565951309b343eac33428623548a1611e875d7a5bd54a3c6a7a8ce8ca79cc2",
+          "_internal/Python.framework/Versions/3.14/Python": "9c4bb24d772ea86352166776dae56223042f1a89c04a256d9a7d9744f92ff7e4"
+        }
+      },
+      "darwin-x64": {
+        "asset": "kimi-1.52.0-x86_64-apple-darwin-onedir.tar.gz",
+        "assetSha256": "5b0977d6823cc36c0011707521d7b5f111d488b4680e697e94c801ca9d9778c7",
+        "downloadBytes": 69427316,
+        "installedBytes": 155000000,
+        "executable": "kimi",
+        "files": {
+          "kimi": "9b308f6c3376f4ce930709ac1498f06edda578fb25ce878b68fcf5123793168e",
+          "_internal/base_library.zip": "86ecffe17abeca77ecb8bb0e19e0f22ae7b9c84523507629f5fa9f8ce03c3f02",
+          "_internal/Python.framework/Versions/3.14/Python": "f0361be4d20d3b473e3a00a6b0f569fe5a10884b1b5dc4f15e576c756fda8af7"
+        }
+      },
+      "linux-x64": {
+        "asset": "kimi-1.52.0-x86_64-unknown-linux-gnu-onedir.tar.gz",
+        "assetSha256": "23d11d2cbe5211beb7d7cc7552e92fa2268021eaca58a7482852e60b16fc148f",
+        "downloadBytes": 95685385,
+        "installedBytes": 230000000,
+        "executable": "kimi",
+        "files": {
+          "kimi": "aa0d3f28e5a92775b2b3e9c85910debd2b3d6daa4b2bf5184f86f5abac037756",
+          "_internal/base_library.zip": "b0e68e532df7eb30c61d6950291c79e7354fa4123be1be65f987f17edc6cb539",
+          "_internal/libpython3.14.so.1.0": "4131f23ceebb53864abe82c8da4cd512f98e4d939e40e51de8f5536a944decad"
+        }
+      },
+      "linux-arm64": {
+        "asset": "kimi-1.52.0-aarch64-unknown-linux-gnu-onedir.tar.gz",
+        "assetSha256": "61c49cd8d3aa92d91939f2b72b8fc448d59565ed769e6a9ff8afc64a899f2bf0",
+        "downloadBytes": 92945609,
+        "installedBytes": 230000000,
+        "executable": "kimi",
+        "files": {
+          "kimi": "ee420d7fbb295843bac0de36fe6f794f4aecbf606aa5ec9f2a7686593a42859b",
+          "_internal/base_library.zip": "8e38fbea715db949ebf5e0ada7ee81e468390dca60c027f48d880680642b09bc",
+          "_internal/libpython3.14.so.1.0": "0c9a7e987d3c7607cf0b3d2371796df60eb64bd6a316751b2c6943db55a3e50c"
+        }
+      },
+      "win32-x64": {
+        "asset": "kimi-1.52.0-x86_64-pc-windows-msvc-onedir.zip",
+        "assetSha256": "7c424b7ce9a2918091c1d37738c90b410d766107de7e46039922e7ffd5c3d09a",
+        "downloadBytes": 73776124,
+        "installedBytes": 150000000,
+        "executable": "kimi.exe",
+        "files": {
+          "kimi.exe": "4a2aff3980d941ce90ac6d7a8062a255059929d011418c63952bfb2680699e99",
+          "_internal/base_library.zip": "308de2cc818eeb94415a4534a2bcfb3391c8b231197935405a1baa9405dcfd01",
+          "_internal/python314.dll": "0f9857ffdfe010fe6b99328d58c2e3c7472ce75f336bf9c2ad9bd5bca3bce700"
+        }
+      }
+    }
+  },
+  "devin": {
+    "version": "3000.14.30821",
+    "license": "Proprietary",
+    "licenseUrl": "https://cognition.com/legal/platform-terms-of-service",
+    "artifacts": {
+      "darwin-arm64": {
+        "url": "https://static.devin.ai/cli/3000.14.30821/devin-3000.14.30821-aarch64-apple-darwin.tar.gz",
+        "assetSha256": "46ef1a75d8bd851665179e136b7e39ad597d3d7913b95d67fd2b88e9c8af0061",
+        "downloadBytes": 80496229,
+        "installedBytes": 231967827,
+        "executable": "devin",
+        "files": {
+          "bin/devin": "985a79f99180f081e13781ac88993a10dfe133d4ba415ffb4c95b22dde037935"
+        }
+      },
+      "darwin-x64": {
+        "url": "https://static.devin.ai/cli/3000.14.30821/devin-3000.14.30821-x86_64-apple-darwin.tar.gz",
+        "assetSha256": "e0ffc5fb0bc367270f20f15686bba74a2851959e782a37c016c68b91229ec0db",
+        "downloadBytes": 87867075,
+        "installedBytes": 244950355,
+        "executable": "devin",
+        "files": {
+          "bin/devin": "963f86fbcab7a49a373b469935264a3c4823afc4fb6eae092e86dc58a61cffc0"
+        }
+      },
+      "linux-x64": {
+        "url": "https://static.devin.ai/cli/3000.14.30821/devin-3000.14.30821-x86_64-unknown-linux.tar.gz",
+        "assetSha256": "4dc43e3e4388bace60fe2aa8010cbb399402e724892d7175845b1cdef00e7ddb",
+        "downloadBytes": 88661435,
+        "installedBytes": 257669195,
+        "executable": "devin",
+        "files": {
+          "bin/devin": "b855dafc39ab228c7394cf1d16d60df583fdc75c613a544afff5cd9dd5583f24"
+        }
+      },
+      "linux-arm64": {
+        "url": "https://static.devin.ai/cli/3000.14.30821/devin-3000.14.30821-aarch64-unknown-linux.tar.gz",
+        "assetSha256": "3deb8af6b026060e975ed371936e139818020e5dc5abbcba07cde039f473a5a5",
+        "downloadBytes": 82712471,
+        "installedBytes": 231307971,
+        "executable": "devin",
+        "files": {
+          "bin/devin": "02b5ca13f932d5d6537435bbe09acbf836b227e1aded7a875cfa773223b5e23d"
+        }
+      },
+      "win32-x64": {
+        "url": "https://static.devin.ai/cli/3000.14.30821/devin-3000.14.30821-x86_64-pc-windows.zip",
+        "assetSha256": "23e723a68f4bebe4c5f57f42e0f9d8b069c91407d62584afefa05e246c51cf4d",
+        "downloadBytes": 87687963,
+        "installedBytes": 254202139,
+        "executable": "devin.exe",
+        "files": {
+          "bin/devin.exe": "de9a5783b74c7a66a8d400557efc0a343e8feadfac2736793969c642a5bc1c9c"
+        }
+      }
+    }
+  },
+  "copilot": {
+    "version": "1.0.105",
+    "license": "GitHub Copilot CLI License",
+    "licenseUrl": "https://github.com/github/copilot-cli/blob/main/LICENSE.md",
+    "artifacts": {
+      "darwin-arm64": {
+        "url": "https://github.com/github/copilot-cli/releases/download/v1.0.105/copilot-darwin-arm64.tar.gz",
+        "assetSha256": "34aacd03fb478d47e4b3cfc5ca045c37278c5d8d86239466521a16ea54ac84aa",
+        "downloadBytes": 119263282,
+        "installedBytes": 181873376,
+        "executable": "copilot",
+        "files": {
+          "bin/copilot": "5fd7d15ff02deb08a58593b1b488015bb52c1686014b80b5509e28263cb3ad70"
+        }
+      },
+      "darwin-x64": {
+        "url": "https://github.com/github/copilot-cli/releases/download/v1.0.105/copilot-darwin-x64.tar.gz",
+        "assetSha256": "de5684eeb118ad1e54f9a01f4535cf74e121b8226d26473550b01a7565ce54f5",
+        "downloadBytes": 126087256,
+        "installedBytes": 190321008,
+        "executable": "copilot",
+        "files": {
+          "bin/copilot": "83e8dfacc3e79e55e4ab723edaf5b9a38d83aec85e9e115a131b973c98265801"
+        }
+      },
+      "linux-x64": {
+        "url": "https://github.com/github/copilot-cli/releases/download/v1.0.105/copilot-linux-x64.tar.gz",
+        "assetSha256": "aba1f06f27bc0447656647f76e0a4cf58b4b2a341c75ff04a750982b6aeb6bd2",
+        "downloadBytes": 129108148,
+        "installedBytes": 198511424,
+        "executable": "copilot",
+        "files": {
+          "bin/copilot": "3bd8bdc75670d7b4ec445725f6a5b9af66ee7ec49e6194646e4a40a0bc09091c"
+        }
+      },
+      "linux-arm64": {
+        "url": "https://github.com/github/copilot-cli/releases/download/v1.0.105/copilot-linux-arm64.tar.gz",
+        "assetSha256": "e7b488cc04ac3e2ed800e1bf0aace33ada42dcf167529b3d2f48a61e1535a847",
+        "downloadBytes": 130063152,
+        "installedBytes": 194644736,
+        "executable": "copilot",
+        "files": {
+          "bin/copilot": "0e0bde8da81405c2e2bf76d072160c6ec74121721e0be5bbd08784af494d9a22"
+        }
+      },
+      "win32-x64": {
+        "url": "https://github.com/github/copilot-cli/releases/download/v1.0.105/copilot-win32-x64.zip",
+        "assetSha256": "34e16e9cf47de0e1534920171d6f39fa246638bddbb6ece820870b382bcc061a",
+        "downloadBytes": 112637935,
+        "installedBytes": 172637984,
+        "executable": "copilot.exe",
+        "files": {
+          "bin/copilot.exe": "ab6d710d551c137c766a6c8ef6ee2e7779c106870c96b9a91a91fa17b9748624"
+        }
+      }
+    }
+  },
+  "mistral": {
+    "version": "3.1.0",
+    "license": "Apache-2.0",
+    "licenseUrl": "https://github.com/mistralai/mistral-vibe/blob/v3.1.0/LICENSE",
+    "artifacts": {
+      "darwin-arm64": {
+        "url": "https://github.com/mistralai/mistral-vibe/releases/download/v3.1.0/vibe-acp-darwin-aarch64-3.1.0.tar.gz",
+        "assetSha256": "c56ec63bd6bcd60591bee441cf31f3fe555da493275a1756b2f5152039f65ec4",
+        "downloadBytes": 69104346,
+        "installedBytes": 185000000,
+        "executable": "vibe-acp",
+        "files": {
+          "bin/vibe-acp": "b4082a8de6cf0a6a1248a5a1978896e9f7c18d4b2e36c664e72258ad706c857a",
+          "bin/_internal/base_library.zip": "591eb6a30c681cff56440bfe4f42272fabd8d928b9098f6d1b982a612650d49c",
+          "bin/_internal/Python.framework/Versions/3.12/Python": "523e4fc99e08c08c37bc536925db01bc2fff54a5205d62c0b2e75155526d6364",
+          "bin/_internal/mistral_vibe-3.1.0.dist-info/licenses/LICENSE": "3375b98d59c50073c1ea6667fda7df54d122f4e8c67d1ae2fb7afdfe311abf27"
+        }
+      },
+      "darwin-x64": {
+        "url": "https://github.com/mistralai/mistral-vibe/releases/download/v3.1.0/vibe-acp-darwin-x86_64-3.1.0.tar.gz",
+        "assetSha256": "6a7e3399f344e43ad38851b56cbff522cde5af714fca1139c5d04d778ba2dea9",
+        "downloadBytes": 70891457,
+        "installedBytes": 186000000,
+        "executable": "vibe-acp",
+        "files": {
+          "bin/vibe-acp": "a8535061d647b723ade952b424f7ed8c38d938f15f5277acdbbce2d220de2a5b",
+          "bin/_internal/base_library.zip": "be457ea991aab90c005bff004e7c2ed0d4c2625cb35b6ad3d370e99b516bdba7",
+          "bin/_internal/Python.framework/Versions/3.12/Python": "3ef9e1a1c7650daafc87bdc1d0ecd1e961be5aab1be387f40f0679be9d22d42c",
+          "bin/_internal/mistral_vibe-3.1.0.dist-info/licenses/LICENSE": "3375b98d59c50073c1ea6667fda7df54d122f4e8c67d1ae2fb7afdfe311abf27"
+        }
+      },
+      "linux-x64": {
+        "url": "https://github.com/mistralai/mistral-vibe/releases/download/v3.1.0/vibe-acp-linux-x86_64-3.1.0.tar.gz",
+        "assetSha256": "31e03174516ddc1b8dc2a229a3085ba59a50f4b380753a510ebb204730da4def",
+        "downloadBytes": 117539856,
+        "installedBytes": 376000000,
+        "executable": "vibe-acp",
+        "files": {
+          "bin/vibe-acp": "1f8df17f65ef0683efba39a9a2cd3b0c9e1d9a72582707e568994d5a5c41da05",
+          "bin/_internal/base_library.zip": "8bc684394d36c2aed21e7f71ed4a9149e2541ca1bbe2aa414f7f79a56b1749ce",
+          "bin/_internal/libpython3.12.so.1.0": "03a0af33071a152cb92274e07310c2988b4cd0ae548a416a490dfefa5661fbd6",
+          "bin/_internal/mistral_vibe-3.1.0.dist-info/licenses/LICENSE": "3375b98d59c50073c1ea6667fda7df54d122f4e8c67d1ae2fb7afdfe311abf27"
+        }
+      },
+      "linux-arm64": {
+        "url": "https://github.com/mistralai/mistral-vibe/releases/download/v3.1.0/vibe-acp-linux-aarch64-3.1.0.tar.gz",
+        "assetSha256": "96276b6d7cc49473e48a79f95c397a05dc7f8b1d5c459893562e0dd533112074",
+        "downloadBytes": 111005824,
+        "installedBytes": 365000000,
+        "executable": "vibe-acp",
+        "files": {
+          "bin/vibe-acp": "63147aa865b30cd1fd4b0a38594d6b1fa4d5071cf9c1a9176912a28a6b906444",
+          "bin/_internal/base_library.zip": "ae7f738fb3034de2148fdd37c905f24c4c7e0942d19de5e0071cf20128e3349c",
+          "bin/_internal/libpython3.12.so.1.0": "557081cd2f74a3c820be3983d5d1ee1e1e317046886a5467af975ef5876fb4bf",
+          "bin/_internal/mistral_vibe-3.1.0.dist-info/licenses/LICENSE": "3375b98d59c50073c1ea6667fda7df54d122f4e8c67d1ae2fb7afdfe311abf27"
+        }
+      },
+      "win32-x64": {
+        "url": "https://github.com/mistralai/mistral-vibe/releases/download/v3.1.0/vibe-acp-windows-x86_64-3.1.0.zip",
+        "assetSha256": "2b65e70d0dc5cc0a5edba0ae836b225edf2068b6aebd321f047ccfae32275416",
+        "downloadBytes": 68844142,
+        "installedBytes": 165000000,
+        "executable": "vibe-acp.exe",
+        "files": {
+          "bin/vibe-acp.exe": "5f49f055a27f6338fb04e2177ddd11e758bbe5bb927f2758c2bc862f4c4c189a",
+          "bin/_internal/base_library.zip": "a8b0a9e18c7094a85b8fa49e396c230f1e827163e9ebf3838b297ec7620a197f",
+          "bin/_internal/python312.dll": "9a0e3435aaa680d868150f87ab3e388ad2eebc22f87e036155c7b4eda8cd2120",
+          "bin/_internal/mistral_vibe-3.1.0.dist-info/licenses/LICENSE": "815ad2f988bc0e55678643ccd41ce6b17f879c7a5a78857e546af1bc26d0d401"
         }
       }
     }

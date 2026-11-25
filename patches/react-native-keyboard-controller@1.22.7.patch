@@ -1,8 +1,97 @@
+diff --git a/android/src/main/java/com/reactnativekeyboardcontroller/interactive/KeyboardAnimationController.kt b/android/src/main/java/com/reactnativekeyboardcontroller/interactive/KeyboardAnimationController.kt
+index ff483614f48c538275e449a29544394fbc11efa0..d1b44931a2237bd2a1a8f07013631392140070ea 100644
+--- a/android/src/main/java/com/reactnativekeyboardcontroller/interactive/KeyboardAnimationController.kt
++++ b/android/src/main/java/com/reactnativekeyboardcontroller/interactive/KeyboardAnimationController.kt
+@@ -139,6 +139,8 @@ internal class KeyboardAnimationController {
+         )
+ 
+     InteractiveKeyboardProvider.isInteractive = true
++    // The finger takes control from the spring of the previous gesture.
++    stopSpringAnimation()
+     // Call updateInsetTo() with the new inset value
+     return insetTo(controller.currentInsets.bottom - dy)
+   }
+@@ -159,6 +161,12 @@ internal class KeyboardAnimationController {
+             "This should only be called if isAnimationInProgress() returns true",
+         )
+ 
++    // `onFinished` and `onCancelled` can arrive after the controller ends, and the ended controller
++    // throws on `setInsetsAndAlpha`.
++    if (controller.isFinished || controller.isCancelled) {
++      return 0
++    }
++
+     val hiddenBottom = controller.hiddenStateInsets.bottom
+     val shownBottom = controller.shownStateInsets.bottom
+     val startBottom = if (isImeShownAtStart) shownBottom else hiddenBottom
+@@ -208,8 +216,8 @@ internal class KeyboardAnimationController {
+     insetsAnimationController?.finish(isImeShownAtStart)
+     pendingRequestCancellationSignal?.cancel()
+ 
+-    // Cancel the current spring animation
+-    currentSpringAnimation?.cancel()
++    // Cancel the current spring animation. Its end listener must not finish the controller again.
++    stopSpringAnimation()
+ 
+     reset()
+   }
+@@ -333,8 +341,7 @@ internal class KeyboardAnimationController {
+ 
+     isImeShownAtStart = false
+ 
+-    currentSpringAnimation?.cancel()
+-    currentSpringAnimation = null
++    stopSpringAnimation()
+ 
+     pendingRequestOnReady = null
+ 
+@@ -345,6 +352,15 @@ internal class KeyboardAnimationController {
+     InteractiveKeyboardProvider.isInteractive = false
+   }
+ 
++  /**
++   * Cancel the current spring animation without finishing the controller from its end listener.
++   */
++  private fun stopSpringAnimation() {
++    val springAnimation = currentSpringAnimation ?: return
++    currentSpringAnimation = null
++    springAnimation.cancel()
++  }
++
+   /**
+    * Animate the IME to a given visibility.
+    *
+@@ -362,6 +378,10 @@ internal class KeyboardAnimationController {
+       insetsAnimationController
+         ?: throw IllegalStateException("Controller should not be null")
+ 
++    // A gesture can end while the spring of the previous gesture still runs. Stop that spring:
++    // otherwise it moves the IME after the controller is reset and `insetTo` throws.
++    stopSpringAnimation()
++
+     currentSpringAnimation =
+       springAnimationOf(
+         setter = {
+@@ -385,11 +405,12 @@ internal class KeyboardAnimationController {
+           setStartVelocity(velocityY)
+         }
+         addEndListener { anim, _, _, _ ->
++          // A replaced spring must not finish the controller of the spring that replaced it.
+           if (anim == currentSpringAnimation) {
+             currentSpringAnimation = null
++            // Once the animation has ended, finish the controller
++            finish()
+           }
+-          // Once the animation has ended, finish the controller
+-          finish()
+         }
+       }.also { it.start() }
+   }
 diff --git a/lib/commonjs/components/KeyboardAwareScrollView/index.js b/lib/commonjs/components/KeyboardAwareScrollView/index.js
-index 034a22f341a130aaa1d2b5b6c6c5aaf5abe64acd..5cbf6835713517713f28b5876d4808030a8e9354 100644
+index 07e7294cf395103e39c55d9b3f230c1bfa72ec4c..15edd0a2ab8865906ac2ae9906f83fd0e414f994 100644
 --- a/lib/commonjs/components/KeyboardAwareScrollView/index.js
 +++ b/lib/commonjs/components/KeyboardAwareScrollView/index.js
-@@ -169,6 +169,21 @@ const KeyboardAwareScrollView = /*#__PURE__*/(0, _react.forwardRef)(({
+@@ -180,6 +180,21 @@ const KeyboardAwareScrollView = /*#__PURE__*/(0, _react.forwardRef)(({
        return false;
      }
  
@@ -24,7 +113,7 @@ index 034a22f341a130aaa1d2b5b6c6c5aaf5abe64acd..5cbf6835713517713f28b5876d480803
      // insets mode: `ScrollViewWithBottomPadding` extends scrollable area without
      // changing layout, so when the keyboard hides and we're at the end of the
      // ScrollView we must manually scroll back.
-@@ -177,7 +192,7 @@ const KeyboardAwareScrollView = /*#__PURE__*/(0, _react.forwardRef)(({
+@@ -188,7 +203,7 @@ const KeyboardAwareScrollView = /*#__PURE__*/(0, _react.forwardRef)(({
        return true;
      }
      return false;
@@ -33,34 +122,35 @@ index 034a22f341a130aaa1d2b5b6c6c5aaf5abe64acd..5cbf6835713517713f28b5876d480803
    const performScrollWithPositionRestoration = (0, _react.useCallback)(newPosition => {
      "worklet";
  
-@@ -341,13 +356,13 @@ const KeyboardAwareScrollView = /*#__PURE__*/(0, _react.forwardRef)(({
-     onMove: e => {
-       "worklet";
- 
--      if (removeGhostPadding(e.height)) {
--        return;
+@@ -354,15 +369,14 @@ const KeyboardAwareScrollView = /*#__PURE__*/(0, _react.forwardRef)(({
+       if (pendingSelectionForFocus.value && ((_lastSelection$value6 = lastSelection.value) === null || _lastSelection$value6 === void 0 ? void 0 : _lastSelection$value6.target) !== tag.value) {
+         return;
+       }
 +      // Shrink keyboard space before clamping, including the final move frame.
 +      if (mode === "layout" || (disableScrollOnKeyboardHide && !keyboardWillAppear.value)) {
 +        syncKeyboardFrame(e);
++      }
+       if (removeGhostPadding(e.height)) {
+         return;
        }
  
 -      // layout mode: drive the spacer view animation frame-by-frame
 -      if (mode === "layout") {
 -        syncKeyboardFrame(e);
-+      if (removeGhostPadding(e.height)) {
-+        return;
-       }
- 
+-      }
+-
        // if the user has set disableScrollOnKeyboardHide, only auto-scroll when the keyboard opens
-@@ -358,6 +373,7 @@ const KeyboardAwareScrollView = /*#__PURE__*/(0, _react.forwardRef)(({
+       if (!disableScrollOnKeyboardHide || keyboardWillAppear.value) {
+         maybeScroll(e.height);
+@@ -371,6 +385,7 @@ const KeyboardAwareScrollView = /*#__PURE__*/(0, _react.forwardRef)(({
      onEnd: e => {
        "worklet";
  
 +      syncKeyboardFrame(e);
-       removeGhostPadding(e.height);
-       keyboardHeight.value = e.height;
-       scrollPosition.value = position.value;
-@@ -371,7 +387,6 @@ const KeyboardAwareScrollView = /*#__PURE__*/(0, _react.forwardRef)(({
+       if (e.height === 0) {
+         removeGhostPadding(e.height);
+       }
+@@ -386,7 +401,6 @@ const KeyboardAwareScrollView = /*#__PURE__*/(0, _react.forwardRef)(({
          // onSelectionChange has a chance to process it.
          pendingSelectionForFocus.value = false;
        }
@@ -69,10 +159,10 @@ index 034a22f341a130aaa1d2b5b6c6c5aaf5abe64acd..5cbf6835713517713f28b5876d480803
    }, [mode, maybeScroll, removeGhostPadding, disableScrollOnKeyboardHide, syncKeyboardFrame]);
    const synchronize = (0, _react.useCallback)(async () => {
 diff --git a/lib/module/components/KeyboardAwareScrollView/index.js b/lib/module/components/KeyboardAwareScrollView/index.js
-index a90f0e85a67af7c0a4bf99746d36368bb53059ee..f19b268c4d1582b35b6e99ca41ffea59de89c438 100644
+index fb4608b0ba8a5148fd51cfe48f0fee0a8a64d814..c4a5682ed0c81911a3dfd8390a867abf73fbf10b 100644
 --- a/lib/module/components/KeyboardAwareScrollView/index.js
 +++ b/lib/module/components/KeyboardAwareScrollView/index.js
-@@ -161,6 +161,21 @@ const KeyboardAwareScrollView = /*#__PURE__*/forwardRef(({
+@@ -172,6 +172,21 @@ const KeyboardAwareScrollView = /*#__PURE__*/forwardRef(({
        return false;
      }
  
@@ -94,7 +184,7 @@ index a90f0e85a67af7c0a4bf99746d36368bb53059ee..f19b268c4d1582b35b6e99ca41ffea59
      // insets mode: `ScrollViewWithBottomPadding` extends scrollable area without
      // changing layout, so when the keyboard hides and we're at the end of the
      // ScrollView we must manually scroll back.
-@@ -169,7 +184,7 @@ const KeyboardAwareScrollView = /*#__PURE__*/forwardRef(({
+@@ -180,7 +195,7 @@ const KeyboardAwareScrollView = /*#__PURE__*/forwardRef(({
        return true;
      }
      return false;
@@ -103,34 +193,35 @@ index a90f0e85a67af7c0a4bf99746d36368bb53059ee..f19b268c4d1582b35b6e99ca41ffea59
    const performScrollWithPositionRestoration = useCallback(newPosition => {
      "worklet";
  
-@@ -333,13 +348,13 @@ const KeyboardAwareScrollView = /*#__PURE__*/forwardRef(({
-     onMove: e => {
-       "worklet";
- 
--      if (removeGhostPadding(e.height)) {
--        return;
+@@ -346,15 +361,14 @@ const KeyboardAwareScrollView = /*#__PURE__*/forwardRef(({
+       if (pendingSelectionForFocus.value && ((_lastSelection$value6 = lastSelection.value) === null || _lastSelection$value6 === void 0 ? void 0 : _lastSelection$value6.target) !== tag.value) {
+         return;
+       }
 +      // Shrink keyboard space before clamping, including the final move frame.
 +      if (mode === "layout" || (disableScrollOnKeyboardHide && !keyboardWillAppear.value)) {
 +        syncKeyboardFrame(e);
++      }
+       if (removeGhostPadding(e.height)) {
+         return;
        }
  
 -      // layout mode: drive the spacer view animation frame-by-frame
 -      if (mode === "layout") {
 -        syncKeyboardFrame(e);
-+      if (removeGhostPadding(e.height)) {
-+        return;
-       }
- 
+-      }
+-
        // if the user has set disableScrollOnKeyboardHide, only auto-scroll when the keyboard opens
-@@ -350,6 +365,7 @@ const KeyboardAwareScrollView = /*#__PURE__*/forwardRef(({
+       if (!disableScrollOnKeyboardHide || keyboardWillAppear.value) {
+         maybeScroll(e.height);
+@@ -363,6 +377,7 @@ const KeyboardAwareScrollView = /*#__PURE__*/forwardRef(({
      onEnd: e => {
        "worklet";
  
 +      syncKeyboardFrame(e);
-       removeGhostPadding(e.height);
-       keyboardHeight.value = e.height;
-       scrollPosition.value = position.value;
-@@ -363,7 +379,6 @@ const KeyboardAwareScrollView = /*#__PURE__*/forwardRef(({
+       if (e.height === 0) {
+         removeGhostPadding(e.height);
+       }
+@@ -378,7 +393,6 @@ const KeyboardAwareScrollView = /*#__PURE__*/forwardRef(({
          // onSelectionChange has a chance to process it.
          pendingSelectionForFocus.value = false;
        }
@@ -139,10 +230,10 @@ index a90f0e85a67af7c0a4bf99746d36368bb53059ee..f19b268c4d1582b35b6e99ca41ffea59
    }, [mode, maybeScroll, removeGhostPadding, disableScrollOnKeyboardHide, syncKeyboardFrame]);
    const synchronize = useCallback(async () => {
 diff --git a/src/components/KeyboardAwareScrollView/index.tsx b/src/components/KeyboardAwareScrollView/index.tsx
-index 90586e84b3dda6aa39cddb32925e657ba49769ce..f0194da7b03d4ffda454a23e05e1145b9a486f4b 100644
+index 0f37d920cdc0baed9addc544fe3f1cc2301bc5a1..848c8d3e7762f43810f301aff28a872ee7ef6adf 100644
 --- a/src/components/KeyboardAwareScrollView/index.tsx
 +++ b/src/components/KeyboardAwareScrollView/index.tsx
-@@ -231,6 +231,21 @@ const KeyboardAwareScrollView = forwardRef<
+@@ -243,6 +243,21 @@ const KeyboardAwareScrollView = forwardRef<
            return false;
          }
  
@@ -164,7 +255,7 @@ index 90586e84b3dda6aa39cddb32925e657ba49769ce..f0194da7b03d4ffda454a23e05e1145b
          // insets mode: `ScrollViewWithBottomPadding` extends scrollable area without
          // changing layout, so when the keyboard hides and we're at the end of the
          // ScrollView we must manually scroll back.
-@@ -252,7 +267,7 @@ const KeyboardAwareScrollView = forwardRef<
+@@ -264,7 +279,7 @@ const KeyboardAwareScrollView = forwardRef<
  
          return false;
        },
@@ -173,9 +264,9 @@ index 90586e84b3dda6aa39cddb32925e657ba49769ce..f0194da7b03d4ffda454a23e05e1145b
      );
      const performScrollWithPositionRestoration = useCallback(
        (newPosition: number) => {
-@@ -476,13 +491,13 @@ const KeyboardAwareScrollView = forwardRef<
-         onMove: (e) => {
-           "worklet";
+@@ -494,13 +509,13 @@ const KeyboardAwareScrollView = forwardRef<
+             return;
+           }
  
 -          if (removeGhostPadding(e.height)) {
 -            return;
@@ -192,18 +283,19 @@ index 90586e84b3dda6aa39cddb32925e657ba49769ce..f0194da7b03d4ffda454a23e05e1145b
            }
  
            // if the user has set disableScrollOnKeyboardHide, only auto-scroll when the keyboard opens
-@@ -493,6 +508,7 @@ const KeyboardAwareScrollView = forwardRef<
+@@ -511,6 +526,7 @@ const KeyboardAwareScrollView = forwardRef<
          onEnd: (e) => {
            "worklet";
  
 +          syncKeyboardFrame(e);
-           removeGhostPadding(e.height);
- 
-           keyboardHeight.value = e.height;
-@@ -509,7 +525,6 @@ const KeyboardAwareScrollView = forwardRef<
+           if (e.height === 0) {
+             removeGhostPadding(e.height);
+           }
+@@ -528,8 +544,6 @@ const KeyboardAwareScrollView = forwardRef<
+             // onSelectionChange has a chance to process it.
              pendingSelectionForFocus.value = false;
            }
- 
+-
 -          syncKeyboardFrame(e);
          },
        },

@@ -2,7 +2,9 @@
 
 GoAhead is an early source-available project maintained on a best-effort basis.
 
-- Use GitHub Issues for reproducible bugs and focused feature requests.
+- Use the GitHub issue forms for reproducible bugs and focused feature requests. We close issues
+  that do not come from a form or that do not answer the required fields. See
+  [Report a problem](docs/TROUBLESHOOTING.md#report-a-problem) for the data that a bug report needs.
 - Use GitHub Discussions for setup questions, ideas, and general help.
 - Use the private process in `SECURITY.md` for vulnerabilities.
 

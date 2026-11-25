@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-GoAhead is currently a development preview. Security fixes are made on `main` and included in the
+GoAhead ships a new release almost every day. Security fixes are made on `main` and included in the
 next release. No older release line is guaranteed to receive backports.
 
 | Version | Supported |

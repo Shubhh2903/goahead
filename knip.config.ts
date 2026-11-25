@@ -1,7 +1,5 @@
 import type { KnipConfig } from "knip";
 
-// Stylesheets load packages with `@import`. Knip reads only script files, so this turns each
-// `@import "<package>"` into a script import that it can follow.
 const CSS_IMPORT = /@import\s+["']([^"']+)["']/g;
 
 function compileCss(text: string): string {
@@ -10,100 +8,130 @@ function compileCss(text: string): string {
 
 const config: KnipConfig = {
   compilers: { css: compileCss },
-  // A released Team API protocol keeps its whole frozen codec, including the parts that no current
-  // code uses (packages/contracts/AGENTS.md).
   ignoreIssues: {
     "packages/contracts/src/team-protocol/v*.ts": ["exports", "types"],
     "packages/contracts/src/team-protocol/*-v*.ts": ["exports", "types"],
-    // A generator writes this file, and `build-plugin-catalog.test.ts` requires its exact output.
+    "packages/contracts/src/team-protocol/provider-aware-codec.ts": ["exports", "types"],
+    "src/backend/migrations/[0-9]*.ts": ["exports"],
     "apps/auth-api/src/lib/plugin-catalog.generated.ts": ["exports", "types"],
   },
-  // Host tools that scripts and tests call. They are not npm packages.
   ignoreBinaries: [
-    // Opens the interactive provider sign-in CLI on Linux.
     "xterm",
+    "ssh-keygen",
+    "ssh-keyscan",
+    "ssh-add",
     // Builds the remote desktop runtime.
     "cmake",
-    // Rewrite and inspect macOS dylib load paths.
+    "ccache",
     "otool",
     "install_name_tool",
-    // Fastlane runs on the system Ruby.
-    "ruby",
-    // Stops a stuck packaged app during Windows package verification.
+    "ldd",
     "taskkill.exe",
-    // Makes throwaway certificates for the Sunshine port isolation test.
-    "openssl",
-    // Tunnels Slack to the local Signal and account API in `bun run dev:slack`.
+    "tasklist",
     "cloudflared",
+    "sqlite3",
+    "ditto",
+    "say",
+    "pgrep",
+    "screencapture",
+    "osascript",
+    "mkfifo",
+    "browser-harness",
+    "vm_stat",
+    "dbus-run-session",
+    "xcode-select",
+    "sips",
+    "iconutil",
+    "Xvfb",
+    "xdpyinfo",
+    "openbox",
+    "wmctrl",
+    "picom",
+    "ffmpeg",
+    "gdbus",
+    "import",
   ],
   workspaces: {
     ".": {
-      entry: [
-        // electron-vite inputs in electron.vite.config.ts.
-        "src/main/index.ts",
-        "src/backend/agent-data/agent-database-host.ts",
-        "src/main/voice-transcription-host.ts",
-        "src/preload/index.ts",
-        "src/preload/team-webrtc.ts",
-        // Modules that the renderer HTML pages load with <script type="module">.
-        "src/renderer/src/index.tsx",
-        "src/renderer/src/features/browser/browser-pip.tsx",
-        "src/renderer/src/features/browser/browser-pip-controls.tsx",
-        "src/renderer/src/features/team/team-webrtc.ts",
-        // Each file in scripts/ is a command that package.json, CI or another script runs.
-        "scripts/**/*.ts",
-        "tools/**/*.ts",
-      ],
+      entry: ["scripts/**/*.ts", "tools/**/*.ts", "src/renderer/stories/prototype-support.tsx"],
       project: ["src/**/*.{ts,tsx,css}", "scripts/**/*.ts", "tools/**/*.ts"],
       ignoreDependencies: [
-        // `packages/ui` declares and imports these. The root copies date from before the UI moved to
-        // that package; removing them changes what electron-builder packs, so it needs a package check.
         "@speed-highlight/core",
-        "@tanstack/virtual-core",
         "class-variance-authority",
         "marked",
-        "qrcode",
         "solid-recharts",
         "solid-sonner",
-        // `scripts/mobile-ios.ts` resolves the Expo CLI that `apps/mobile` installs.
         "expo",
-        // `@openbot/team-client` imports it, and the main bundle keeps it external through this
-        // entry. Bundled, a JSDoc `import` line in it takes the `__dirname` shim of electron-vite.
         "@noble/hashes",
+        "@cacheable/node-cache",
+        "@hapi/boom",
+        "@noble/curves",
+        "async-mutex",
+        "long",
+        "lru-cache",
+        "music-metadata",
+        "p-queue",
+        "pino",
+        "protobufjs",
       ],
-      // Scripts start other scripts by path (`bun scripts/<name>.ts`), relative to the repository
-      // root. Every file in scripts/ is already an entry.
       ignoreUnresolved: ["scripts/.+\\.ts"],
     },
     "apps/auth-api": {
-      entry: ["src/worker-entry.ts", "*.ts"],
-      project: ["src/**/*.{ts,tsx,css}", "test/**/*.ts", "*.ts"],
-      // `cloudflare:workers` is a runtime module of the Workers platform, not an npm package.
+      entry: ["*.ts", "src/email-relay-entry.ts", "scripts/*.ts"],
+      project: ["src/**/*.{ts,tsx,css}", "test/**/*.ts", "scripts/**/*.ts", "*.ts"],
       ignoreDependencies: ["cloudflare"],
     },
+    "apps/browser-extension": {
+      entry: ["src/x-content.ts"],
+    },
     "apps/site-router": {
-      entry: ["src/index.ts"],
-      project: ["src/**/*.ts", "test/**/*.ts"],
+      project: ["src/**/*.ts"],
+    },
+    "apps/mobile-updates": {
+      entry: ["scripts/*.ts"],
+      project: ["src/**/*.ts", "scripts/**/*.ts"],
     },
     "apps/mobile": {
       entry: [
         "src/app/**/*.{ts,tsx}",
         "plugins/**/*.{js,ts}",
-        // metro.config.js maps `solid-js` and `@solidjs/web` to these files by path.
-        "src/shims/*.ts",
+        "src/shims/*.{ts,js}",
+        "global.css",
+        "src/features/share/extension/share-sender.ts",
       ],
       project: ["src/**/*.{ts,tsx}", "plugins/**/*.{js,ts}"],
       ignoreDependencies: [
-        // `expo` installs it; Expo config plugins import it by this name.
+        "openbot-original-react-native",
         "@expo/config-plugins",
-        // A native module that `expo-router` imports. The direct entry keeps its native version
-        // pinned to the Expo SDK and visible to autolinking.
+        "expo-device-hub",
+        "@expo/plist",
         "expo-symbols",
       ],
     },
     "remote/api": {
-      entry: ["src/index.ts"],
-      project: ["src/**/*.ts", "test/**/*.ts"],
+      entry: ["src/capacity-report.ts"],
+      project: ["src/**/*.ts"],
+    },
+    "packages/i18n": {
+      entry: ["src/lazy-catalogs.ts", "src/mobile-catalogs.native.ts"],
+      project: ["src/**/*.{ts,tsx,css}"],
+    },
+    "packages/whatsapp": {
+      entry: ["src/*.ts", "scripts/*.ts"],
+      project: ["src/**/*.ts", "scripts/*.ts"],
+      ignoreDependencies: [
+        "@cacheable/node-cache",
+        "@hapi/boom",
+        "async-mutex",
+        "long",
+        "lru-cache",
+        "music-metadata",
+        "p-queue",
+        "pino",
+        "protobufjs",
+        "ws",
+        "@types/ws",
+      ],
     },
     "packages/*": {
       project: ["src/**/*.{ts,tsx,css}"],
