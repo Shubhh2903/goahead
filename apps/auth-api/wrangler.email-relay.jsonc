@@ -11,5 +11,16 @@
   },
   "placement": {
     "host": "mail.privateemail.com:465"
+  },
+  "env": {
+    // GoAhead's relay: the goahead env of wrangler.jsonc binds EMAIL_RELAY to this name.
+    "goahead": {
+      "name": "goahead-email-relay",
+      "workers_dev": false,
+      "preview_urls": false,
+      "placement": {
+        "host": "smtp.zoho.in:465"
+      }
+    }
   }
 }
