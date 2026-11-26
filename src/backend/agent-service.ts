@@ -57,6 +57,7 @@ import type {
   McpServerConfig,
   McpTestResult,
   ProviderCodeLoginStart,
+  QueueDelivery,
   QueuedMessageReceipt,
   QueueSnapshot,
   RemoveAgentProjectFolderInput,
@@ -129,7 +130,7 @@ import { ConversationRuntime } from "./agent/conversation-runtime";
 import { CustomEndpoints } from "./agent/custom-endpoints";
 import { agentNamesById, displayMessageReferences } from "./agent/delivery-content";
 import { DeltaBuffer } from "./agent/delta-buffer";
-import { DrainScheduler } from "./agent/drain-scheduler";
+import { DrainScheduler, type TurnModelChoice } from "./agent/drain-scheduler";
 import { DuplicationGate } from "./agent/duplication-gate";
 import { HandoffActivity, type HandoffRecord } from "./agent/handoff-activity";
 import { readCapturedSteps } from "./agent/handoff-tool-steps";
@@ -155,6 +156,7 @@ import { projectFolderStates, projectMapLine } from "./agent/project-folders";
 import { isPlanLimitDiagnostic } from "./agent/provider-diagnostics";
 import { type AgentClientFactory, ProviderRuntime } from "./agent/provider-runtime";
 import { QueueControls } from "./agent/queue-controls";
+import type { RunConditionCommand } from "./agent/routine-run-condition";
 import { type RoutineMutationOptions, RoutineScheduler } from "./agent/routine-scheduler";
 import { buildRuntimeSnapshot } from "./agent/runtime-snapshot";
 import type { AgentSidebar } from "./agent/sidebar-tools";
@@ -221,7 +223,7 @@ export type { ResolvedSharedFile, ResolvedWorkspaceFile } from "./workspace-path
  * Where Continue on a turn-limit or install card goes: the chat, channel or messaging conversation of
  * the stopped turn, as the person's next message there. Read while the turn still runs.
  */
-type StoppedTurnRoute =
+type StoppedTurnRoute = (
   | { kind: "chat"; threadId: string }
   | {
       kind: "channel";
@@ -231,7 +233,11 @@ type StoppedTurnRoute =
       taskRevision: number;
       requestMessageId: string;
     }
-  | { kind: "messaging"; threadId: string; linkId: string; origin: MessagingOrigin };
+  | { kind: "messaging"; threadId: string; linkId: string; origin: MessagingOrigin }
+) & {
+  /** How the stopped turn chose its model; null when it is not known. The continued turn keeps it. */
+  modelChoice: TurnModelChoice | null;
+};
 
 interface AgentServiceEvents {
   event: [event: AgentEvent];
@@ -248,6 +254,11 @@ export interface AgentServiceOptions {
   mailbox: MailboxStore;
   browser: AgentBrowserHost;
   requestTimeoutMs?: number;
+  /**
+   * Runs the check command of a routine's run condition. Tests set it: a login shell can print a line
+   * with the time before the command's output.
+   */
+  routineRunConditionCommand?: RunConditionCommand;
   preferredProvider?: AgentProvider;
   /** The model chosen beside `preferredProvider`, or `null` for that provider's own default. */
   preferredModel?: AgentModelId | null;
@@ -381,6 +392,13 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
   readonly #localOwnerDeliveries = new Set<string>();
   /** Deliveries that an agent sent in a turn of the local owner, to pass on the owner's request. */
   readonly #ownerHandOffDeliveries = new Set<string>();
+  /**
+   * The Continue of a turn that a turn limit or an install card stopped, with how that turn chose its
+   * model: the continued turn keeps the choice. By `delivery:<id>` for a chat message, and by
+   * `task:<channelId>:<taskId>:<revision>` for the channel task revision that the Continue makes. In
+   * memory only: after a restart, the Continue is the person's own message.
+   */
+  readonly #continuedChoices = new Map<string, TurnModelChoice>();
   readonly #busyMessageMode: () => BusyMessageMode;
   readonly #channelActor: (() => { id: string; name: string }) | null;
   /** The last turn of each agent's chat that the user stopped. One per agent, so it needs no clean-up. */
@@ -495,6 +513,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     );
     this.#routines = new RoutineScheduler({
       timer: this.#routineTimer,
+      ...(options.routineRunConditionCommand ? { runConditionCommand: options.routineRunConditionCommand } : {}),
       store,
       mailbox,
       conversation: this.#conversation,
@@ -869,6 +888,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     });
     this.#channelRoutines = new ChannelRoutineScheduler({
       channels: this.channels,
+      ...(options.routineRunConditionCommand ? { runConditionCommand: options.routineRunConditionCommand } : {}),
       runConditionCwd: () => store.sharedRoot,
       hooks: {
         changed: (channelId) => {
@@ -944,6 +964,8 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         // The project map: only the owner's own messages in the app. A Slack message frames the map
         // itself, and asking Chief from the inbox adds it to its prompt. The Gmail rules: a mail
         // agent's turn that may use the Google tools, while Google is connected.
+        deliveryOrigin: (delivery) => this.#deliveryOrigin(delivery),
+        keepsTurnModel: (deliveryId) => this.#continuedChoice(deliveryId) === "own",
         turnContext: (agentId, deliveryIds) => {
           const parts = [
             deliveryIds.some((id) => this.#localOwnerDeliveries.has(id))
@@ -2454,6 +2476,45 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     }
   }
 
+  #noteContinuedChoice(key: string, choice: TurnModelChoice): void {
+    this.#continuedChoices.set(key, choice);
+    const [oldest] = this.#continuedChoices.keys();
+    if (this.#continuedChoices.size > LOCAL_OWNER_DELIVERY_LIMIT && oldest !== undefined)
+      this.#continuedChoices.delete(oldest);
+  }
+
+  #continuedChoice(deliveryId: string): TurnModelChoice | undefined {
+    const assignment = this.channels.store.assignmentForDelivery(deliveryId);
+    return assignment
+      ? this.#continuedChoices.get(`task:${assignment.channelId}:${assignment.taskId}:${assignment.taskRevision}`)
+      : this.#continuedChoices.get(`delivery:${deliveryId}`);
+  }
+
+  /**
+   * Who started the work of a delivery, for the model choice of its turn. A Continue takes the
+   * origin of the turn it continues. A channel assignment always has sender `user`: the task's
+   * origin tells who started it. A teammate's answer to a request that this agent sent takes the
+   * origin of the turn that sent the request: an answer to the person's own request is the person's
+   * work. When that turn is not known, the answer is a teammate's.
+   */
+  #deliveryOrigin(delivery: QueueDelivery, depth = 0): "person" | "teammate" | "routine" {
+    const continued = this.#continuedChoice(delivery.id);
+    if (continued === "teammate" || continued === "routine") return continued;
+    const channel = this.channels.deliveryOrigin(delivery.id);
+    if (channel) return channel;
+    if (delivery.sender.kind === "user") return "person";
+    if (delivery.sender.kind === "routine") return "routine";
+    // A chain of answers is short; the limit only ends a loop in damaged data.
+    if (delivery.replyToMessageId && depth < 8) {
+      const origins = this.#mailbox
+        .requestTurnDeliveries(delivery.replyToMessageId, delivery.recipientAgentId)
+        .map((handled) => this.#deliveryOrigin(handled, depth + 1));
+      if (origins.includes("person")) return "person";
+      if (origins.includes("routine")) return "routine";
+    }
+    return "teammate";
+  }
+
   async #sendMessage(
     input: SendMessageInput,
     sender: ConversationMessageSender | undefined,
@@ -2461,6 +2522,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     localOwner: boolean,
     slackAsk?: ConversationSlackAsk,
     idempotencyKey?: string,
+    continuedChoice?: TurnModelChoice | null,
   ): Promise<QueuedMessageReceipt> {
     const validateRecipient = this.#mailbox.prepareDelivery([input.agentId]);
     if (this.#duplication.isPending(input.agentId))
@@ -2482,6 +2544,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
     const delivery = queued ? this.#mailbox.getDelivery(queued.id) : null;
     if (!delivery) throw new Error(sourceText("error.agent.queuedMessageCreateFailed"));
     if (timezone !== undefined) this.#routines.noteDeliveryTimezone(delivery.delivery.id, timezone);
+    if (continuedChoice) this.#noteContinuedChoice(`delivery:${delivery.delivery.id}`, continuedChoice);
     if (localOwner) {
       this.#localOwnerDeliveries.add(delivery.delivery.id);
       const [oldest] = this.#localOwnerDeliveries;
@@ -2796,8 +2859,9 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
    * takes no message from the person, such as a Slack auto-reply.
    */
   #stoppedTurnRoute(agentId: string, threadId: string, turnId: string): StoppedTurnRoute | null {
+    const modelChoice = this.#drain.modelChoiceForTurn(agentId, turnId);
     if (this.#store.list().find((agent) => agent.id === agentId)?.threadId === threadId) {
-      return { kind: "chat", threadId };
+      return { kind: "chat", threadId, modelChoice };
     }
     const channelId = this.channels.store.channelForThread(threadId);
     if (channelId) {
@@ -2813,13 +2877,14 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
         taskId: task.id,
         taskRevision: assignment.taskRevision,
         requestMessageId: task.requestMessageId,
+        modelChoice,
       };
     }
     const link = this.messaging.store.executionLink(threadId);
     if (!link) return null;
     const running = this.messaging.runningOrigin(link.linkId);
     if (!running || running.turnId !== turnId) return null;
-    return { kind: "messaging", threadId, linkId: link.linkId, origin: running.origin };
+    return { kind: "messaging", threadId, linkId: link.linkId, origin: running.origin, modelChoice };
   }
 
   /**
@@ -2959,7 +3024,7 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       );
     if (runsTurn) return;
     if (route.kind === "chat") {
-      await this.sendMessage({ agentId, text });
+      await this.#sendMessage({ agentId, text }, undefined, undefined, false, undefined, undefined, route.modelChoice);
       return;
     }
     if (route.kind === "messaging") {
@@ -2979,6 +3044,9 @@ export class AgentService extends EventEmitter<AgentServiceEvents> {
       !this.channels.store.message(route.channelId, route.requestMessageId)
     )
       return;
+    // The reply makes the next revision of the paused task; its turn keeps the stopped turn's choice.
+    const taskKey = `task:${route.channelId}:${route.taskId}:${route.taskRevision + 1}`;
+    if (route.modelChoice) this.#noteContinuedChoice(taskKey, route.modelChoice);
     await this.channels.command(
       {
         type: "send",

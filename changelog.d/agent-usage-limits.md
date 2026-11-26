@@ -46,3 +46,33 @@
   than medium. A turn with a message from you, or from a person in Slack, keeps the agent's model.
   The answer shows "Answered by" with the model name. Agent settings has a new switch for this, "Use
   the smaller model for teammate and routine turns". It is on by default and stays on this computer.
+- A teammate's answer to a request that an agent sent uses the model rule of the turn that sent the
+  request. When you started that turn, the answer turn keeps the agent's model. When a teammate or a
+  routine started it, the answer turn can use the smaller model.
+- When you allow a turn to continue after a turn limit or an install card, the continued turn uses
+  the same model as the stopped turn: the smaller model for a teammate or routine turn, and the
+  agent's model for your turn. This applies in the chat, in a channel and in Slack. After an app
+  restart, a "Continue" message that still waits counts as your message.
+- A scheduled routine run that is skipped again for the same reason, such as a run condition that
+  finds no change, now adds no new "Cancelled routine" row to the chat. The routine history keeps
+  each run, and the Usage tab still counts each skipped run. A new row appears when the reason
+  changes or after a run that was not skipped. One exception: a run that the plan limit skips adds
+  no row when the run before it was cancelled with no reason, for example a run that you cancelled.
+- A routine can now run one time. On desktop, choose "Once" and a date and time in the schedule
+  picker, or ask an agent for a one-time routine. The routine runs at that time. If GoAhead was
+  closed then, a routine set to run missed times once runs one time when GoAhead opens; other
+  routines record the time as missed. Then the routine turns off and shows "Done". A run that waits
+  for the plan reset keeps the routine on until the run ends.
+- When a one-time routine cannot run at its time, because an earlier run of it is still in progress,
+  or because the plan limit is reached and the routine skips runs then, GoAhead records the time as
+  a cancelled run with the reason. The chat shows the row, and the routine turns off.
+- The phone app cannot create a one-time routine. This includes the v0.40 phone app.
+- GoAhead keeps a one-time routine as an interval of 100,000 days that starts at its time. The v0.40
+  desktop app shows it as "Every 100000 days". The v0.40 phone app shows it as the custom schedule
+  `0 0 */31 * *` with its note that the schedule is kept. Both keep the schedule when you do not
+  change it. A v0.40 host runs the routine one time, but does not turn it off: it shows a next time
+  about 270 years later. A v0.40 host does not refuse a time that has passed. A routine with such a
+  time never runs.
+- An agent that you install from the marketplace or from a template keeps the time of its one-time
+  routines. When that time has passed, GoAhead installs the routine off, with its time kept, and the
+  install continues. An imported agent or channel archive does the same.

@@ -11,7 +11,7 @@ import type {
   UpdateChannelRoutineInput,
 } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
-import { collapseMissedOccurrences } from "@openbot/team-client/routine-schedule";
+import { collapseMissedOccurrences, isOnceRoutineSchedule } from "@openbot/team-client/routine-schedule";
 import { decideRunCondition, type RunConditionCommand, runConditionCommand } from "./agent/routine-run-condition";
 import { ChannelRoutineStore } from "./channel-routine-store";
 import type { ChannelService } from "./channel-service";
@@ -209,8 +209,19 @@ export class ChannelRoutineScheduler implements RoutineDueSource {
         // The trigger advances whether or not the fire succeeds, so a channel builds no backlog.
         this.#routines.advanceTrigger(due.routine.id, due.triggerId, nextRunAt.toISOString());
         changed.add(due.routine.channelId);
-        // A routine set to skip drops the occurrence while a spent plan would only make it wait.
-        if (due.routine.limitPolicy === "skip" && this.#hooks.usageLimited(due.routine.channelId)) continue;
+        // A routine set to skip drops the occurrence while a spent plan would only make it wait. A
+        // one-time routine has no later occurrence, so its history records the dropped one.
+        if (due.routine.limitPolicy === "skip" && this.#hooks.usageLimited(due.routine.channelId)) {
+          if (isOnceRoutineSchedule(due.schedule)) {
+            const run = this.#routines.createRun(due.routine, due.triggerId, "scheduled", scheduledFor.toISOString());
+            this.#routines.updateRunStatus(
+              run.id,
+              "cancelled",
+              sourceText("error.backend.routineOnceSkippedPlanLimit"),
+            );
+          }
+          continue;
+        }
         await this.#fire(due.routine, due.triggerId, scheduledFor.toISOString());
       }
     } finally {

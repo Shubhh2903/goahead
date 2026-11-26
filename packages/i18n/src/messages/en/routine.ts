@@ -182,6 +182,7 @@ export const messages = defineMessages("routine", {
   "routine.settings.loading": "Loading routines…",
   "routine.settings.empty": "No routines yet.",
   "routine.settings.paused": "Paused",
+  "routine.settings.done": "Done",
   "routine.settings.active": "Active",
   "routine.settings.activeToggle": "Routine active",
   "routine.settings.deleteNow": "Delete now",

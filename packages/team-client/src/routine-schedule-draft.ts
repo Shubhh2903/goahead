@@ -4,11 +4,12 @@
 
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type { RoutineSchedule } from "@openbot/contracts/ipc";
+import { onceRoutineSchedule, routineOnceAt } from "./routine-schedule";
 
 /*
- * The schedule the trigger row edits. It is a UI shape, not `RoutineSchedule`: it covers
- * kinds the saved schedule cannot hold yet (once, yearly, an hours window, several days for
- * a daily run), so the design can be judged before the contract changes.
+ * The schedule the trigger row edits. It is a UI shape, not `RoutineSchedule`: it covers kinds
+ * that the saved schedule holds in another shape (once, yearly, an hours window, several days for
+ * a daily run).
  */
 
 /** "HH:mm" on a 24-hour clock, the same format as `RoutineSchedule` times. */
@@ -46,7 +47,10 @@ export const ROUTINE_DRAFT_KIND_VALUES: readonly RoutineDraftKind[] = [
   "custom",
 ];
 
-/** The kinds a routine can save today. A one-time run needs a new saved kind first. */
+/**
+ * The kinds the phone offers. Desktop offers every kind; the phone has no date field for a
+ * one-time run yet, so it reads one back but does not offer it.
+ */
 export const ROUTINE_SAVED_DRAFT_KIND_VALUES = ROUTINE_DRAFT_KIND_VALUES.filter((kind) => kind !== "once");
 
 export const ROUTINE_EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
@@ -206,13 +210,16 @@ export function routineYearlyDaysInMonth(month: number): number {
   return new Date(ROUTINE_YEARLY_CALENDAR_YEAR, month, 0).getDate();
 }
 
-/** Why the draft cannot be saved, or `null`. A save of such a draft would change when it runs. */
+/**
+ * Why the draft cannot be saved, or `null`. A save of such a draft would change when it runs.
+ * `once` is no longer returned: the phone's text table still names it.
+ */
 export type RoutineDraftProblem = "once" | "endBeforeStart" | "invalidDate" | "cronRequired" | "cronTooLong";
 
 export function routineDraftProblemCode(draft: RoutineScheduleDraft): RoutineDraftProblem | null {
   switch (draft.kind) {
     case "once":
-      return "once";
+      return null;
     case "hourly":
       return routineRunsPerDay(draft.window, draft.everyHours) === 0 ? "endBeforeStart" : null;
     case "yearly":
@@ -236,8 +243,13 @@ export function routineDraftProblemCode(draft: RoutineScheduleDraft): RoutineDra
 
 export function routineScheduleFromDraft(draft: RoutineScheduleDraft): RoutineSchedule {
   switch (draft.kind) {
-    case "once":
-      throw new Error("A one-time routine cannot be saved yet.");
+    case "once": {
+      // The date and the time are local to the device that edits them, as the picker shows them.
+      const date = parseRoutineDateKey(draft.date);
+      const minutes = routineTimeMinutes(draft.time);
+      date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+      return onceRoutineSchedule(date);
+    }
     case "hourly":
       return hourlySchedule(draft);
     case "daily": {
@@ -299,8 +311,14 @@ export function routineScheduleToDraft(schedule: RoutineSchedule): RoutineSchedu
       return { kind: "monthly", day: schedule.day, time: schedule.time };
     case "advanced":
       return advancedDraft(schedule);
-    case "interval":
+    case "interval": {
+      const once = routineOnceAt(schedule);
+      if (once) {
+        const minutes = once.getHours() * 60 + once.getMinutes();
+        return { kind: "once", date: routineDateKey(once), time: clock(Math.floor(minutes / 60), minutes % 60) };
+      }
       return { kind: "custom", expression: intervalCron(schedule) };
+    }
     case "custom":
       return hourlyCronDraft(schedule.expression) ?? { kind: "custom", expression: schedule.expression };
   }

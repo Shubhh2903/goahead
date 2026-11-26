@@ -1,4 +1,4 @@
-import { AGENT_PROVIDERS } from "@openbot/contracts/ipc";
+import { AGENT_PROVIDERS, type QueueDelivery } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import type { AgentProvider } from "../agent-client";
 import type { AgentStore } from "../agent-store";
@@ -6,7 +6,7 @@ import type { ChannelService } from "../channel-service";
 import type { DeliveryContext, MailboxStore } from "../mailbox-store";
 import type { MessagingThreads } from "../messaging/messaging-threads";
 import { decodeTurnResponse } from "../protocol";
-import { chooseTurnModel } from "./auto-model";
+import { type AutoModelMessage, chooseTurnModel } from "./auto-model";
 import type { ContextCompaction } from "./context-compaction";
 import type { ConversationRuntime } from "./conversation-runtime";
 import { agentNamesById, combinedPromptInput, deliveryPromptInput } from "./delivery-content";
@@ -49,7 +49,17 @@ export interface DrainHooks {
    * task. An external conversation's message is asked for too, in front of its framing.
    */
   turnContext(agentId: string, deliveryIds: readonly string[]): string | null;
+  /** Who started the work of a delivery, for the model choice of its turn: see `AgentService`. */
+  deliveryOrigin(delivery: QueueDelivery): AutoModelMessage["sender"];
+  /** A Continue of a stopped turn that ran on the model of its settings: its turn stays on that model. */
+  keepsTurnModel(deliveryId: string): boolean;
 }
+
+/**
+ * How a turn chose its model: the model of its settings, the small model by "Choose model
+ * automatically", or the small model for a turn that a teammate or a routine started.
+ */
+export type TurnModelChoice = "own" | "small" | "teammate" | "routine";
 
 export interface DrainSchedulerOptions {
   store: AgentStore;
@@ -105,7 +115,7 @@ export class DrainScheduler {
    * to another model while that turn runs, but the CLI keeps the session it opened, so this is the
    * endpoint a message steered into the turn would reach.
    */
-  readonly #turnModels = new Map<string, { turnId: string; model: string }>();
+  readonly #turnModels = new Map<string, { turnId: string; model: string; choice: TurnModelChoice }>();
   /**
    * How many deliveries are on their way to a turn, per provider.
    *
@@ -420,25 +430,33 @@ export class DrainScheduler {
       // With "Choose model automatically" on, a short chat message runs on the provider's small
       // model, for this turn only, on the same session. A turn whose every message comes from a
       // teammate or a routine runs there too, unless the agent turned that off. Otherwise this is
-      // `turnSettings` unchanged. A small-model turn is labelled "Answered by" below either way.
+      // `turnSettings` unchanged. A small-model turn is labelled "Answered by" below either way. A
+      // Continue of a stopped turn keeps the choice of that turn.
+      const messages = batch.map(({ delivery: item }) => ({
+        sender: this.#hooks.deliveryOrigin(item),
+        text: item.text,
+        attachmentCount: item.attachments.length,
+      }));
       const turnModel = chooseTurnModel({
         agent,
         settings: turnSettings,
         relay: channelDelivery || messagingDelivery,
-        messages: batch.map(({ delivery: item }) => ({
-          // A channel assignment always has sender `user`: the task's origin tells who started it.
-          sender:
-            this.#channels?.deliveryOrigin(item.id) ??
-            (item.sender.kind === "user" ? "person" : item.sender.kind === "agent" ? "teammate" : "routine"),
-          text: item.text,
-          attachmentCount: item.attachments.length,
-        })),
+        messages,
         models: () => this.#providers.listModels(),
         catalogListed: this.#providers.hasListedCatalog(agent.provider),
         servesModel: (model) => this.#hooks.servesModel(model),
         lastTurn: this.#conversation.lastTurn(threadId),
         now: this.#conversation.now(),
+        keepTurnModel: batch.some(({ delivery: item }) => this.#hooks.keepsTurnModel(item.id)),
       });
+      const turnChoice: TurnModelChoice =
+        turnModel.reason === "delegated-small-model"
+          ? messages.some((message) => message.sender === "routine")
+            ? "routine"
+            : "teammate"
+          : turnModel.smallModelName
+            ? "small"
+            : "own";
       if (turnModel.smallModelName) requestedModel = turnModel.model;
 
       const agentNames = agentNamesById(this.#store.list());
@@ -558,7 +576,7 @@ export class DrainScheduler {
       // Only an accepted start counts as the thread's last turn: a failed one warmed no cache.
       this.#conversation.recordAcceptedTurn(threadId, turnModel.model);
       if (turnModel.smallModelName) this.#conversation.labelAutoModelTurn(response.turn.id, turnModel.smallModelName);
-      this.#turnModels.set(agent.id, { turnId: response.turn.id, model: turnModel.model });
+      this.#turnModels.set(agent.id, { turnId: response.turn.id, model: turnModel.model, choice: turnChoice });
       for (const item of batch) await this.#mailbox.markRunning(item.delivery.id, response.turn.id);
       this.#channels?.accepted(delivery.id, threadId, response.turn.id);
       const currentDelivery = this.#mailbox.getDelivery(delivery.id)?.delivery;
@@ -635,6 +653,12 @@ export class DrainScheduler {
   modelForTurn(agentId: string, turnId: string): string | null {
     const running = this.#turnModels.get(agentId);
     return running?.turnId === turnId ? running.model : null;
+  }
+
+  /** How this turn chose its model, or `null` when this agent's running turn is not the one asked for. */
+  modelChoiceForTurn(agentId: string, turnId: string): TurnModelChoice | null {
+    const running = this.#turnModels.get(agentId);
+    return running?.turnId === turnId ? running.choice : null;
   }
 
   /** True while a delivery for this provider is between its first await and its turn. */

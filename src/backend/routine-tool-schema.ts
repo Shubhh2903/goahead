@@ -44,5 +44,18 @@ export const routineScheduleZodSchema = z
       })
       .strict(),
     z.object({ kind: z.literal("custom"), expression: z.string().min(1).max(INPUT_LIMITS.routineCron) }).strict(),
+    z
+      .object({
+        kind: z.literal("once"),
+        at: z
+          .string()
+          .describe(
+            "An ISO 8601 date-time later than now, such as 2026-08-25T09:30. Without Z or an offset it is a clock time in the routine's timezone. A date alone is refused.",
+          ),
+      })
+      .strict()
+      .describe("Runs one time at `at`, then the routine turns itself off."),
   ])
-  .describe("Routine schedule. Weekdays use 0 for Sunday through 6 for Saturday; clock values use HH:mm local time.");
+  .describe(
+    "Routine schedule. Weekdays use 0 for Sunday through 6 for Saturday; clock values use HH:mm local time. Use `once` for a routine that must run only one time.",
+  );

@@ -13,6 +13,7 @@ import {
   routineScheduleFromDraft,
   routineScheduleToDraft,
 } from "./routine-schedule-saved";
+import { routineScheduleSummary } from "./routine-schedule-ui";
 
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
@@ -142,9 +143,21 @@ describe("routine schedule mapping", () => {
     });
   });
 
-  it("does not offer a one-time run, which has no saved kind", () => {
-    expect(ROUTINE_SAVED_DRAFT_KINDS.map((option) => option.value)).not.toContain("once");
-    expect(() => routineScheduleFromDraft({ kind: "once", date: "2026-10-01", time: "09:00" })).toThrow();
+  it("saves a one-time run as an interval that a released reader accepts, and reads it back", () => {
+    expect(ROUTINE_SAVED_DRAFT_KINDS.map((option) => option.value)).toContain("once");
+    const draft: RoutineScheduleDraft = { kind: "once", date: "2026-10-01", time: "09:00" };
+    const saved = routineScheduleFromDraft(draft);
+    expect(saved).toEqual({
+      kind: "interval",
+      amount: 100_000,
+      unit: "days",
+      anchorAt: new Date(2026, 9, 1, 9, 0).toISOString(),
+    });
+    expect(isRoutineSchedule(saved)).toBe(true);
+    expect(routineScheduleToDraft(saved)).toEqual(draft);
+    expect(routineDraftProblem(draft)).toBeNull();
+    // The calendar and the diagrams read the saved schedule, not the draft.
+    expect(routineScheduleSummary(saved)).toBe(routineDraftSummary(draft));
   });
 });
 

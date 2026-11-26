@@ -23,6 +23,7 @@ import {
   nextValidRoutineOccurrence,
   normalizeRoutineSchedule,
   RoutineInputError,
+  routineOnceAt,
   validateRoutineSchedule,
 } from "@openbot/team-client/routine-schedule";
 import {
@@ -153,6 +154,7 @@ export class RoutineStore {
     const routineId = randomUUID();
     const createdAt = now.toISOString();
     const schedule = normalizeRoutineSchedule(input.schedule, now);
+    if (input.active) requireOnceTimeAhead(schedule, now);
     const { commandPrefix, eventPrefix, routineAggregate, routineTable, ownerColumn } = this.tables;
     return this.database.dispatch(
       `${commandPrefix}:create:${routineId}`,
@@ -207,6 +209,9 @@ export class RoutineStore {
     // A changed command or mode starts its comparison again, so its first check runs the agent.
     const conditionChanged = runCondition !== runConditionColumn(current.runCondition ?? null);
     const reactivating = !current.active && active;
+    // A one-time routine that is on, or turned on, with a new time needs that time ahead. A done one
+    // can still be renamed while it stays off.
+    if (active && (input.schedule || reactivating)) requireOnceTimeAhead(schedule, now);
     const updatedAt = now.toISOString();
     const { commandPrefix, eventPrefix, routineAggregate, routineTable, triggerTable, ownerColumn } = this.tables;
     return this.database.dispatch(
@@ -294,6 +299,23 @@ export class RoutineStore {
         )
         .all(routineId, ownerId, safeLimit),
     ).map((row) => this.#run(row));
+  }
+
+  /**
+   * The newest finished run of one routine other than `exceptRunId`. Skipped-run records are left
+   * out: they never wrote a chat marker.
+   */
+  protected lastFinishedRunRow(ownerId: string, routineId: string, exceptRunId: string): OwnedRoutineRun | null {
+    const row = this.database.connection
+      .prepare(
+        `SELECT ${this.runColumns}
+         FROM ${this.tables.runTable}
+         WHERE routine_id = ? AND ${this.tables.ownerColumn} = ? AND run_id <> ? AND missed_count IS NULL
+           AND status NOT IN ('queued', 'running', 'needs-attention')
+         ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+      )
+      .get(routineId, ownerId, exceptRunId);
+    return isDynamicRecord(row) ? this.#run(row) : null;
   }
 
   /** Runs that were created but never got a handle - the crash window between the two writes. */
@@ -439,6 +461,10 @@ export class RoutineStore {
     return row && isString(row.next_run_at) ? row.next_run_at : null;
   }
 
+  /**
+   * Moves the trigger to its next time. A one-time routine whose trigger moves past its one time is
+   * done, so it turns off in the same transaction: it makes no more checks, runs or records.
+   */
   advanceTrigger(routineId: string, triggerId: string, nextRunAt: string): void {
     const { commandPrefix, eventPrefix, routineAggregate, triggerTable } = this.tables;
     this.database.dispatch(
@@ -456,6 +482,7 @@ export class RoutineStore {
           `UPDATE ${triggerTable} SET next_run_at = ?, updated_at = ?, last_event_sequence = ?
            WHERE trigger_id = ? AND routine_id = ?`,
         ).run(nextRunAt, new Date().toISOString(), sequences[0] ?? 0, triggerId, routineId);
+        this.#endOnceIfDone(db, routineId, triggerId, sequences[0] ?? 0);
         return null;
       },
     );
@@ -497,6 +524,34 @@ export class RoutineStore {
         this.#recordMissed(routine, { first, until: missed.last, count: missed.count }, missed.next);
       }
     }
+  }
+
+  /**
+   * Turns a one-time routine off when it is done: its trigger has moved past its one time and no
+   * scheduled run of that trigger is still open. A run that waits, for example for a spent plan to
+   * reset, keeps the routine on until the run ends; the trigger time is already past, so the
+   * routine makes no other run. The flag is the same column a person sets, so a release that does
+   * not know a one-time routine reads a done one as a paused routine.
+   */
+  #endOnceIfDone(db: OpenBotDatabase["connection"], routineId: string, triggerId: string, sequence: number): void {
+    const { triggerTable, runTable, routineTable } = this.tables;
+    const trigger = db
+      .prepare(`SELECT schedule_json, next_run_at FROM ${triggerTable} WHERE trigger_id = ?`)
+      .get(triggerId);
+    if (!isDynamicRecord(trigger)) return;
+    const at = routineOnceAt(scheduleColumn(trigger));
+    if (!at || Date.parse(requiredStringColumn(trigger, "next_run_at")) <= at.getTime()) return;
+    const open = db
+      .prepare(
+        `SELECT 1 FROM ${runTable}
+         WHERE trigger_id = ? AND status IN ('queued', 'running', 'needs-attention') LIMIT 1`,
+      )
+      .get(triggerId);
+    if (open) return;
+    db.prepare(
+      `UPDATE ${routineTable} SET active = 0, updated_at = ?, last_event_sequence = ?
+       WHERE routine_id = ? AND active = 1`,
+    ).run(new Date().toISOString(), sequence, routineId);
   }
 
   /** The newest scheduled run of the trigger at or after `from`. */
@@ -563,6 +618,7 @@ export class RoutineStore {
           `UPDATE ${triggerTable} SET next_run_at = ?, updated_at = ?, last_event_sequence = ?
            WHERE trigger_id = ? AND routine_id = ?`,
         ).run(next, timestamp, sequences[1] ?? 0, triggerId, routine.id);
+        this.#endOnceIfDone(db, routine.id, triggerId, sequences[1] ?? 0);
         return null;
       },
     );
@@ -632,6 +688,10 @@ export class RoutineStore {
         `UPDATE ${this.tables.runTable} SET status = ?, error = ?, updated_at = ?, last_event_sequence = ?
          WHERE run_id = ?`,
       ).run(status, error, now, sequence, runId);
+      // The scheduled run of a one-time routine that ends is the routine's last run.
+      if (current.triggerId && !OPEN_RUN_STATUSES.has(status)) {
+        this.#endOnceIfDone(db, current.routineId, current.triggerId, sequence);
+      }
     });
   }
 
@@ -787,6 +847,8 @@ export class RoutineStore {
   }
 }
 
+const OPEN_RUN_STATUSES: ReadonlySet<RoutineRunStatus> = new Set(["queued", "running", "needs-attention"]);
+
 /** The walk counts at most one past the exact limit, which reads as "more than the limit". */
 const MISSED_WALK_LIMIT = ROUTINE_MISSED_COUNT_LIMIT + 1;
 const HOUR_MS = 3_600_000;
@@ -841,6 +903,12 @@ function scheduleColumn(row: DynamicRecord): RoutineSchedule {
   const value = JSON.parse(requiredStringColumn(row, "schedule_json"));
   if (!isRoutineSchedule(value)) throw new Error("The stored routine schedule is invalid.");
   return value;
+}
+
+/** A one-time routine must not be saved on with a time that has passed: it would never run. */
+function requireOnceTimeAhead(schedule: RoutineSchedule, now: Date): void {
+  const at = routineOnceAt(schedule);
+  if (at && at.getTime() <= now.getTime()) throw new RoutineInputError(sourceText("error.backend.routineOncePassed"));
 }
 
 function isRoutineRunStatus(value: string): value is RoutineRunStatus {

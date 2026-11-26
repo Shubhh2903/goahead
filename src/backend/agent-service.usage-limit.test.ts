@@ -1,5 +1,7 @@
 // @vitest-environment node
-import type { AgentEvent } from "@openbot/contracts/ipc";
+import { type AgentEvent, routineRunConversationEvent } from "@openbot/contracts/ipc";
+import { sourceText } from "@openbot/i18n/source";
+import { onceRoutineSchedule } from "@openbot/team-client/routine-schedule";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isPlanLimitDiagnostic, isUsageLimitDiagnostic } from "./agent/provider-diagnostics";
 import { USAGE_LIMIT_RECHECK_MS } from "./agent/usage-limit-gate";
@@ -160,6 +162,68 @@ describe.sequential("AgentService: usage limit", () => {
     const late = await service.testRoutine({ agentId: "chief", routineId: routine.id });
     expect(late).toMatchObject({ status: "cancelled", deliveryId: null });
     expect(client.turnStarts).toBe(1);
+  });
+
+  it("keeps a one-time routine on while its run waits for the reset, and turns it off after the run", async () => {
+    const client = new PlanClient("codex");
+    const started = await startService(root, { provider: "codex", client: () => client });
+    service = started.service;
+    const events: AgentEvent[] = [];
+    service.on("event", (event) => events.push(event));
+    await service.sendMessage({ agentId: "chief", text: "Write the morning plan." });
+    await waitFor(() => events.some((event) => event.type === "usage-limit-reached"));
+
+    // The default limit policy waits for the reset. The routine timer uses the real clock.
+    const routine = service.createRoutine({
+      agentId: "chief",
+      name: "Release note",
+      instruction: "Write the release note.",
+      active: true,
+      timezone: "UTC",
+      schedule: onceRoutineSchedule(new Date(Date.now() + 500)),
+    });
+    const runs = () => service?.listRoutineRuns({ agentId: "chief", routineId: routine.id }) ?? [];
+    const active = () => service?.listRoutines("chief").find((entry) => entry.id === routine.id)?.active;
+    await waitFor(() => runs().length === 1);
+    expect(runs()[0]?.status).toBe("queued");
+    expect(active()).toBe(true);
+
+    client.limit = null;
+    await vi.advanceTimersByTimeAsync(USAGE_LIMIT_RECHECK_MS);
+    await waitFor(() => runs()[0]?.status === "succeeded");
+    expect(active()).toBe(false);
+    expect(runs()).toHaveLength(1);
+  });
+
+  it("records a one-time routine set to skip as a cancelled run when the plan is spent at its time", async () => {
+    const client = new PlanClient("codex");
+    const started = await startService(root, { provider: "codex", client: () => client });
+    service = started.service;
+    const events: AgentEvent[] = [];
+    service.on("event", (event) => events.push(event));
+    await service.sendMessage({ agentId: "chief", text: "Write the morning plan." });
+    await waitFor(() => events.some((event) => event.type === "usage-limit-reached"));
+
+    const routine = service.createRoutine({
+      agentId: "chief",
+      name: "Release note",
+      instruction: "Write the release note.",
+      active: true,
+      timezone: "UTC",
+      limitPolicy: "skip",
+      schedule: onceRoutineSchedule(new Date(Date.now() + 500)),
+    });
+    const runs = () => service?.listRoutineRuns({ agentId: "chief", routineId: routine.id }) ?? [];
+    await waitFor(() => runs().length === 1);
+    expect(runs()).toMatchObject([
+      { kind: "scheduled", status: "cancelled", error: sourceText("error.backend.routineOnceSkippedPlanLimit") },
+    ]);
+    expect(service.listRoutines("chief").find((entry) => entry.id === routine.id)?.active).toBe(false);
+    const markers = (await service.readConversation("chief")).messages.flatMap((message) => {
+      const event = routineRunConversationEvent(message);
+      return event && event.runId === runs()[0]?.id ? [event.status] : [];
+    });
+    expect(markers).toContain("cancelled");
   });
 
   it("holds work for a spent plan window, not for a throttle or a spent balance", () => {

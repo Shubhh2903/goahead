@@ -41,6 +41,7 @@ import {
 import {
   ROUTINE_SAVED_DRAFT_KINDS,
   routineDraftProblem,
+  routineIsDone,
   routineScheduleFromDraft,
   routineScheduleToDraft,
 } from "@openbot/ui/features/conversation/routine-schedule-saved";
@@ -553,7 +554,9 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                             <small>
                               {routine.active
                                 ? routineListSummary(routine.trigger.schedule, text)
-                                : t("routine.settings.paused")}
+                                : routineIsDone(routine.active, routine.trigger.schedule)
+                                  ? t("routine.settings.done")
+                                  : t("routine.settings.paused")}
                             </small>
                           </span>
                         </Button>
@@ -576,7 +579,11 @@ export function AgentRoutinesSettings(props: AgentRoutinesSettingsProps) {
                     onChange={(active) => changeDraft((value) => ({ ...value, active }))}
                   />
                   <label for="routine-active">
-                    {current().active ? t("routine.settings.active") : t("routine.settings.paused")}
+                    {current().active
+                      ? t("routine.settings.active")
+                      : routineIsDone(current().active, current().schedule)
+                        ? t("routine.settings.done")
+                        : t("routine.settings.paused")}
                   </label>
                 </div>
                 <div class="agent-routine-action-buttons">

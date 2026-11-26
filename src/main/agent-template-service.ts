@@ -36,7 +36,7 @@ import {
 import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
 import { redactText } from "@openbot/logging";
-import { imageMimeType, localSchedule, toArrayBuffer, validTimezone } from "./agent-marketplace-service";
+import { imageMimeType, localRoutine, toArrayBuffer, validTimezone } from "./agent-marketplace-service";
 import type { LocalSkillLibrary } from "./local-skill-library";
 import { inspectSkillMarkdown, normalizedFiles } from "./skill-package";
 
@@ -272,9 +272,8 @@ export class AgentTemplateService {
             agentId: agent.id,
             name: routine.name,
             instruction: routine.instruction,
-            active: routine.active,
             timezone: input.timezone,
-            schedule: localSchedule(routine.schedule),
+            ...localRoutine(routine),
           },
           { recordConversationEvent: false },
         );

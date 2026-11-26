@@ -1,7 +1,15 @@
 // @vitest-environment node
-import { type AgentEvent, routineConversationEvent, routineRunConversationEvent } from "@openbot/contracts/ipc";
+import { createHash } from "node:crypto";
+import {
+  type AgentEvent,
+  type Routine,
+  routineConversationEvent,
+  routineRunConversationEvent,
+} from "@openbot/contracts/ipc";
+import { sourceText } from "@openbot/i18n/source";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentProvider } from "../agent-client";
+import { AgentRoutineStore } from "../agent-routine-store";
 import type { AgentService } from "../agent-service";
 import {
   callOpenBotTool,
@@ -15,6 +23,19 @@ import {
   stores,
   waitFor,
 } from "../agent-service-test-harness";
+import type { RunConditionCommand } from "./routine-run-condition";
+
+/**
+ * The person's login shell can print a line with the time before the command's output, so a real
+ * check would see new output every second. This check answers `exit <code>` and `printf <text>`.
+ */
+const fakeRunCondition: RunConditionCommand = async (command) => {
+  const exit = /^exit (\d+)$/u.exec(command);
+  if (exit) return { exitCode: Number(exit[1]), output: "" };
+  const printed = /^printf (.*)$/u.exec(command);
+  if (printed) return { exitCode: 0, output: printed[1] ?? "" };
+  throw new Error(`No fake answer for the run condition "${command}".`);
+};
 
 let root: string;
 let service: AgentService | null = null;
@@ -506,5 +527,133 @@ describe.sequential("RoutineScheduler: routine mutations, runs and tools", () =>
     expect(service.listRoutineRuns({ agentId: agent.id, routineId: routine.id, limit: 10 })).toEqual(
       expect.arrayContaining([expect.objectContaining({ status: "interrupted" })]),
     );
+  });
+
+  describe("repeated cancelled scheduled runs", () => {
+    const NOT_MET = { command: "exit 1", when: "exit-zero" as const };
+    let shared: ReturnType<typeof stores>;
+
+    /**
+     * Starts the service with `count` scheduled runs left pending, as a restart finds them. The
+     * start checks the run condition of each one, so the test needs no clock.
+     */
+    async function startWithPendingRuns(routine: Routine, count: number): Promise<AgentService> {
+      await service?.stop();
+      const { store, mailbox } = shared;
+      const routines = new AgentRoutineStore(store.database);
+      // Each occurrence is new: a run for an occurrence that already has one is not made again.
+      const first = routines.listRuns(routine.agentId, routine.id).length;
+      for (let index = first; index < first + count; index++) {
+        routines.createRun(
+          routine,
+          routine.trigger.id,
+          "scheduled",
+          new Date(Date.UTC(2026, 10, 25, 11, index * 3)).toISOString(),
+        );
+      }
+      const started = createTestService({
+        store,
+        mailbox,
+        preferredProvider: "codex",
+        clientFactory: (provider) => new FakeAgentClient(provider, "Done."),
+        routineRunConditionCommand: fakeRunCondition,
+      });
+      service = started;
+      await started.initialize();
+      await waitFor(() =>
+        started
+          .listRoutineRuns({ agentId: routine.agentId, routineId: routine.id })
+          .every((run) => run.status !== "queued"),
+      );
+      return started;
+    }
+
+    async function createConditionRoutine(): Promise<Routine> {
+      shared = stores(root);
+      const { store, mailbox } = shared;
+      service = createTestService({
+        store,
+        mailbox,
+        preferredProvider: "codex",
+        clientFactory: (provider) => new FakeAgentClient(provider, "Done."),
+        routineRunConditionCommand: fakeRunCondition,
+      });
+      await service.initialize();
+      const agent = await store.getOrCreate("watch");
+      return service.createRoutine({
+        agentId: agent.id,
+        name: "Inbox watch",
+        instruction: "Check the inbox.",
+        active: true,
+        timezone: "UTC",
+        // Far ahead: no scheduled run comes from the clock. The test makes each pending run itself.
+        schedule: { kind: "interval", amount: 3, unit: "minutes", anchorAt: "2099-01-01T00:00:00.000Z" },
+        runCondition: NOT_MET,
+      });
+    }
+
+    async function cancelMarkers(running: AgentService, agentId: string): Promise<string[]> {
+      return (await running.readConversation(agentId)).messages.flatMap((message) => {
+        const event = routineRunConversationEvent(message);
+        return event?.status === "cancelled" ? [event.runId] : [];
+      });
+    }
+
+    it("writes every run record and one chat marker for ten cancels with the same reason", async () => {
+      const routine = await createConditionRoutine();
+      const running = await startWithPendingRuns(routine, 10);
+
+      const runs = running.listRoutineRuns({ agentId: routine.agentId, routineId: routine.id });
+      expect(runs).toHaveLength(10);
+      expect(
+        runs.every(
+          (run) => run.status === "cancelled" && run.error === sourceText("error.backend.routineRunConditionNotMet"),
+        ),
+      ).toBe(true);
+      expect(await cancelMarkers(running, routine.agentId)).toHaveLength(1);
+    });
+
+    it("adds a new marker after a finished run that was not cancelled", async () => {
+      const routine = await createConditionRoutine();
+      let running = await startWithPendingRuns(routine, 2);
+      expect(await cancelMarkers(running, routine.agentId)).toHaveLength(1);
+
+      // A test run ignores the run condition and finishes.
+      const test = await running.testRoutine({ agentId: routine.agentId, routineId: routine.id });
+      await waitFor(() =>
+        running
+          .listRoutineRuns({ agentId: routine.agentId, routineId: routine.id })
+          .some((run) => run.id === test.id && run.status === "succeeded"),
+      );
+
+      running = await startWithPendingRuns(routine, 2);
+      expect(await cancelMarkers(running, routine.agentId)).toHaveLength(2);
+    });
+
+    it("adds a new marker when the cancel reason changes", async () => {
+      const routine = await createConditionRoutine();
+      let running = await startWithPendingRuns(routine, 2);
+      expect(await cancelMarkers(running, routine.agentId)).toHaveLength(1);
+
+      // The same output as the last check: the next check finds it unchanged.
+      const unchanged = { command: "printf same", when: "output-changes" as const };
+      running.updateRoutine({ agentId: routine.agentId, routineId: routine.id, runCondition: unchanged });
+      const agent = await shared.store.getOrCreate(routine.agentId);
+      const output = await fakeRunCondition(unchanged.command, agent.workspacePath);
+      new AgentRoutineStore(shared.store.database).setRunConditionFingerprint(
+        routine.id,
+        createHash("sha256").update(output.output).digest("hex"),
+      );
+
+      running = await startWithPendingRuns(routine, 2);
+      const runs = running.listRoutineRuns({ agentId: routine.agentId, routineId: routine.id });
+      expect(runs.map((run) => run.error)).toEqual([
+        sourceText("error.backend.routineRunConditionUnchanged"),
+        sourceText("error.backend.routineRunConditionUnchanged"),
+        sourceText("error.backend.routineRunConditionNotMet"),
+        sourceText("error.backend.routineRunConditionNotMet"),
+      ]);
+      expect(await cancelMarkers(running, routine.agentId)).toHaveLength(2);
+    });
   });
 });

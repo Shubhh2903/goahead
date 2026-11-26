@@ -4,7 +4,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROUTINE_MISSED_COUNT_LIMIT } from "@openbot/contracts/ipc";
+import { sourceText } from "@openbot/i18n/source";
+import { onceRoutineSchedule, RoutineInputError } from "@openbot/team-client/routine-schedule";
 import { afterEach, describe, expect, it } from "vitest";
+import { routineToolSchedule, routineToolView } from "./agent/routine-tools";
 import { AgentRoutineStore } from "./agent-routine-store";
 import { AgentStore } from "./agent-store";
 import { ChannelRoutineStore } from "./channel-routine-store";
@@ -149,6 +152,147 @@ describe("AgentRoutineStore", () => {
   });
 
   // A crash after the run was made and before the trigger moved leaves a due time that already ran.
+  describe("one-time routines", () => {
+    const AT = "2026-08-25T11:00:00.000Z";
+    const createOnce = (routines: AgentRoutineStore, missedPolicy: "skip" | "run-once") =>
+      routines.create(
+        {
+          agentId: "chief",
+          name: "Release note",
+          instruction: "Write the release note.",
+          active: true,
+          timezone: "UTC",
+          schedule: onceRoutineSchedule(new Date(AT)),
+          missedPolicy,
+        },
+        new Date("2026-08-25T10:00:00.000Z"),
+      );
+
+    it("turns off when its trigger moves past its one time", async () => {
+      const { database, routines } = await setup();
+      const routine = createOnce(routines, "skip");
+      expect(routine.trigger.nextRunAt).toBe(AT);
+      const [due] = routines.due(new Date("2026-08-25T11:00:30.000Z"));
+      expect(due?.routine.id).toBe(routine.id);
+      routines.advanceTrigger(routine.id, routine.trigger.id, "2300-01-01T00:00:00.000Z");
+      expect(routines.get("chief", routine.id)?.active).toBe(false);
+      expect(routines.due(new Date("2400-01-01T00:00:00.000Z"))).toEqual([]);
+      database.close();
+    });
+
+    it("records a time missed while closed and turns off when the routine skips missed times", async () => {
+      const { database, routines } = await setup();
+      const routine = createOnce(routines, "skip");
+      routines.skipMissed(new Date("2026-08-25T13:00:00.000Z"));
+      expect(routines.get("chief", routine.id)?.active).toBe(false);
+      expect(routines.listRuns("chief", routine.id, 10, true)).toEqual([
+        expect.objectContaining({ status: "cancelled", scheduledFor: AT, missed: { count: 1, until: null } }),
+      ]);
+      database.close();
+    });
+
+    it("keeps a time missed while closed due when the routine runs a missed time once", async () => {
+      const { database, routines } = await setup();
+      const routine = createOnce(routines, "run-once");
+      const now = new Date("2026-08-25T13:00:00.000Z");
+      routines.skipMissed(now);
+      expect(routines.get("chief", routine.id)?.active).toBe(true);
+      expect(routines.due(now).map((due) => due.nextRunAt)).toEqual([AT]);
+      expect(routines.listRuns("chief", routine.id, 10, true)).toEqual([]);
+      database.close();
+    });
+
+    it("turns off when its one run ends after a crash left the trigger not moved", async () => {
+      const { database, routines } = await setup();
+      const routine = createOnce(routines, "run-once");
+      const run = routines.createRun(routine, routine.trigger.id, "scheduled", AT);
+      routines.skipMissed(new Date("2026-08-25T13:00:00.000Z"));
+      // The trigger is past its one time, so nothing else is due; the open run keeps it on.
+      expect(routines.get("chief", routine.id)?.active).toBe(true);
+      expect(routines.due(new Date("2026-08-25T13:00:00.000Z"))).toEqual([]);
+      routines.updateRunStatus(run.id, "succeeded");
+      expect(routines.get("chief", routine.id)?.active).toBe(false);
+      expect(routines.listRuns("chief", routine.id, 10, true)).toHaveLength(1);
+      database.close();
+    });
+
+    it("refuses to turn on a one-time routine whose time has passed", async () => {
+      const { database, routines } = await setup();
+      const routine = createOnce(routines, "skip");
+      routines.skipMissed(new Date("2026-08-25T13:00:00.000Z"));
+      expect(() =>
+        routines.update(
+          { agentId: "chief", routineId: routine.id, active: true },
+          new Date("2026-08-25T13:00:00.000Z"),
+        ),
+      ).toThrow(RoutineInputError);
+      // A done routine can still be renamed while it stays off.
+      expect(
+        routines.update(
+          { agentId: "chief", routineId: routine.id, name: "Old note" },
+          new Date("2026-08-25T13:00:00.000Z"),
+        ),
+      ).toMatchObject({ name: "Old note", active: false });
+      database.close();
+    });
+
+    it("reads a one-time time from the agent routine tool in the routine's zone", () => {
+      // A clock time without an offset is local to the routine's zone, not to the host process.
+      expect(routineToolSchedule({ kind: "once", at: "2026-08-25T09:30" }, "Pacific/Auckland")).toEqual(
+        onceRoutineSchedule(new Date("2026-08-24T21:30:00.000Z")),
+      );
+      expect(routineToolSchedule({ kind: "once", at: "2026-01-15T09:30:00" }, "America/New_York")).toEqual(
+        onceRoutineSchedule(new Date("2026-01-15T14:30:00.000Z")),
+      );
+      // An explicit offset or Z is kept as that instant, whatever the zone.
+      expect(routineToolSchedule({ kind: "once", at: "2026-08-25T09:30+02:00" }, "Pacific/Auckland")).toEqual(
+        onceRoutineSchedule(new Date("2026-08-25T07:30:00.000Z")),
+      );
+      expect(routineToolSchedule({ kind: "once", at: AT }, "Pacific/Auckland")).toEqual(
+        onceRoutineSchedule(new Date(AT)),
+      );
+      expect(() => routineToolSchedule({ kind: "once", at: "2026-08-25" }, "UTC")).toThrow(
+        sourceText("error.backend.routineOnceTimeDateOnly"),
+      );
+      expect(() => routineToolSchedule({ kind: "once", at: "soon" }, "UTC")).toThrow(RoutineInputError);
+      // A day that the month does not have is not a date, with or without an offset.
+      for (const at of ["2027-02-31T09:00", "2027-02-29T09:00Z", "2027-04-31T09:00+02:00"]) {
+        expect(() => routineToolSchedule({ kind: "once", at }, "UTC")).toThrow(
+          sourceText("error.backend.routineOnceTimeInvalid"),
+        );
+      }
+      expect(routineToolSchedule({ kind: "once", at: "2028-02-29T09:00Z" }, "UTC")).toEqual(
+        onceRoutineSchedule(new Date("2028-02-29T09:00:00.000Z")),
+      );
+    });
+
+    it("shows a one-time routine to the agent tool as once, not as its saved interval", async () => {
+      const { database, routines } = await setup();
+      const routine = createOnce(routines, "skip");
+      expect(routineToolView(routine).trigger.schedule).toEqual({ kind: "once", at: AT });
+      database.close();
+    });
+
+    it("keeps a repeating interval routine on after its trigger moves", async () => {
+      const { database, routines } = await setup();
+      const routine = routines.create(
+        {
+          agentId: "chief",
+          name: "Quarter hour",
+          instruction: "Run the check.",
+          active: true,
+          timezone: "UTC",
+          schedule: { kind: "interval", amount: 15, unit: "minutes", anchorAt: "2026-08-25T10:00:00.000Z" },
+        },
+        new Date("2026-08-25T10:00:00.000Z"),
+      );
+      routines.advanceTrigger(routine.id, routine.trigger.id, "2026-08-25T10:15:00.000Z");
+      routines.skipMissed(new Date("2026-08-25T13:00:00.000Z"));
+      expect(routines.get("chief", routine.id)?.active).toBe(true);
+      database.close();
+    });
+  });
+
   it("does not record a missed time that already has its run", async () => {
     const { database, routines } = await setup();
     const routine = routines.create(

@@ -94,6 +94,11 @@ export class AgentRoutineStore extends RoutineStore {
     return this.listRunRows(agentId, routineId, limit, withSkipped).map(toRun);
   }
 
+  lastFinishedRun(agentId: string, routineId: string, exceptRunId: string): RoutineRun | null {
+    const run = this.lastFinishedRunRow(agentId, routineId, exceptRunId);
+    return run ? toRun(run) : null;
+  }
+
   pendingRuns(): RoutineRun[] {
     return this.pendingRunRows().map(toRun);
   }

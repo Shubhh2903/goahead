@@ -1,4 +1,6 @@
+import type { RoutineSchedule } from "@openbot/contracts/ipc";
 import type { AppTextKey, AppTranslate } from "@openbot/i18n";
+import { routineOnceAt } from "@openbot/team-client/routine-schedule";
 import {
   type RoutineDraftProblem,
   type RoutineScheduleDraft,
@@ -10,8 +12,8 @@ import { ROUTINE_DRAFT_KINDS } from "./routine-schedule-draft";
 // The conversion between a draft and a saved schedule is shared with the phone.
 export { routineScheduleFromDraft, routineScheduleToDraft } from "@openbot/team-client/routine-schedule-draft";
 
-/** The kinds a routine can save today. A one-time run needs a new saved kind first. */
-export const ROUTINE_SAVED_DRAFT_KINDS = ROUTINE_DRAFT_KINDS.filter((option) => option.value !== "once");
+/** The kinds a routine can save. A one-time run saves as an interval that a released reader accepts. */
+export const ROUTINE_SAVED_DRAFT_KINDS = ROUTINE_DRAFT_KINDS;
 
 const PROBLEM_TEXT = {
   once: "routine.problem.once",
@@ -25,4 +27,10 @@ const PROBLEM_TEXT = {
 export function routineDraftProblem(draft: RoutineScheduleDraft, t: AppTranslate = currentText().t): string | null {
   const problem = routineDraftProblemCode(draft);
   return problem ? t(PROBLEM_TEXT[problem]) : null;
+}
+
+/** A one-time routine that is off after its time: it ran, or its time was missed. It shows as done, not paused. */
+export function routineIsDone(active: boolean, schedule: RoutineSchedule, now = new Date()): boolean {
+  const at = routineOnceAt(schedule);
+  return !active && at !== null && at.getTime() <= now.getTime();
 }

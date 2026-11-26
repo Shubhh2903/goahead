@@ -70,6 +70,10 @@ export const messages = defineMessages("error.backend", {
   "error.backend.routineGone": "This routine no longer exists.",
   "error.backend.routineRunConditionUnchanged": "Skipped: the run condition printed the same output as last time.",
   "error.backend.routineRunConditionNotMet": "Skipped: the run condition command did not succeed.",
+  "error.backend.routineOnceSkippedLiveRun":
+    "Skipped: an earlier run of this routine was still in progress at the one-time run's time.",
+  "error.backend.routineOnceSkippedPlanLimit":
+    "Skipped: the plan limit was reached at the one-time run's time, and this routine skips runs then.",
   "error.backend.channelMemoryLimit": "A channel can have up to {limit} memories.",
   "error.backend.channelRoutineLimit": "A channel can have at most {limit} routines.",
   "error.backend.agentRoutineLimit": "An agent can have at most {limit} routines.",
@@ -122,6 +126,13 @@ export const messages = defineMessages("error.backend", {
     "Routine intervals must be at least {minutes} minutes. Use {minutes} minutes or more, or a fixed time.",
   "error.backend.routineCronTooOften": "Custom schedules must run no more often than every {minutes} minutes.",
   "error.backend.routineAnchorInvalid": "The routine interval anchor is invalid.",
+  "error.backend.routineOncePassed": "The time of this one-time routine has passed. Choose a later time.",
+  "error.backend.routineOnceTimeInvalid":
+    "A one-time routine needs `at`, an ISO 8601 date-time such as 2026-08-25T09:30 or 2026-08-25T09:30+02:00.",
+  "error.backend.routineOnceTimeDateOnly":
+    "A one-time routine needs a time as well as a date in `at`, such as 2026-08-25T09:30.",
+  "error.backend.routineOnceTimeSkipped":
+    "That time does not occur in the routine's time zone because the clock changes then. Choose another time.",
   "error.backend.routineNoOccurrence": "The schedule has no occurrence within the next five years.",
   "error.backend.routineTimezoneInvalid": "The routine timezone is invalid.",
   "error.backend.routineCronFields": "Custom schedules must use five cron fields.",

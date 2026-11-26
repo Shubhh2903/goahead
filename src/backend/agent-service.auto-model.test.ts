@@ -1,19 +1,24 @@
 // @vitest-environment node
+
+import type { AgentEvent } from "@openbot/contracts/ipc";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CACHE_WARM_MS } from "./agent/auto-model";
 import type { AgentService } from "./agent-service";
 import {
+  callOpenBotTool,
   createTestService,
   FakeAgentClient,
   notification,
   paramsRecord,
   startAgentTestFixture,
+  startService,
   stopAgentTestFixture,
   stores,
   waitFor,
   waitForQueue,
 } from "./agent-service-test-harness";
 import type { AgentStore } from "./agent-store";
+import { type AppServerNotification, getRecord, getString } from "./protocol";
 
 let root: string;
 let service: AgentService | null = null;
@@ -331,5 +336,212 @@ describe.sequential("AgentService: small model for channel tasks of a teammate o
     );
     await runningTurn(service, "chief");
     expect(channelTurns(started.client)).toEqual([["gpt-6-luna", "medium"]]);
+  });
+});
+
+describe.sequential("AgentService: the model of a continued turn and of a teammate's answer", () => {
+  /** Chief on a larger model. Each turn stays running until the test ends it. */
+  async function runningService(autoModel: boolean) {
+    const started = await startService(root, { provider: "codex", autoComplete: false, now: () => clock });
+    service = started.service;
+    await started.store.getOrCreate("chief");
+    await started.service.updateAgent({ agentId: "chief", model: "gpt-5.6-sol", reasoningEffort: "high", autoModel });
+    const events: AgentEvent[] = [];
+    started.service.on("event", (event) => events.push(event));
+    const routine = started.service.createRoutine({
+      agentId: "chief",
+      name: "Daily report",
+      instruction: "Prepare the daily report.",
+      active: false,
+      timezone: "UTC",
+      schedule: { kind: "daily", time: "09:00" },
+    });
+    return { ...started, events, routineId: routine.id };
+  }
+
+  type Running = Awaited<ReturnType<typeof runningService>>;
+
+  /** The running turn of the agent's newest delivery, after the service saw it start. */
+  async function runningTurn(target: Running, agentId: string): Promise<{ turnId: string; threadId: string }> {
+    let turnId: string | null = null;
+    await waitForQueue(target.service, agentId, (queue) => {
+      turnId = queue.deliveries.findLast((delivery) => delivery.status === "running")?.turnId ?? null;
+      return turnId !== null;
+    });
+    const threadId = target.store.activeProviderSession(agentId)?.externalSessionId;
+    if (!turnId || !threadId) throw new Error(`No running turn for ${agentId}.`);
+    await waitFor(() => target.events.some((event) => event.type === "turn-started" && event.turnId === turnId));
+    return { turnId, threadId };
+  }
+
+  /** Stops chief's running turn at its 40th tool call, ends it, and allows the card a quiet time later. */
+  async function stopAndContinue(target: Running): Promise<void> {
+    const { turnId, threadId } = await runningTurn(target, "chief");
+    for (let index = 0; index < 40; index += 1) {
+      const item = { id: `${turnId}-tool-${index}`, type: "commandExecution", status: "inProgress" };
+      target.client.emit("notification", notification("item/started", { threadId, turnId, item }));
+    }
+    await waitFor(() => target.service.localOnlyApprovals().length === 1);
+    const [card] = target.service.localOnlyApprovals();
+    if (!card) throw new Error("No turn-limit card.");
+    target.client.emit(
+      "notification",
+      notification("turn/completed", { threadId, turn: { id: turnId, status: "interrupted" } }),
+    );
+    clock += CACHE_WARM_MS;
+    await target.service.respondToApproval({ requestId: card.requestId, decision: "accept" }, "local-owner");
+    await waitFor(() => turnStartsOf(target).length === 2);
+  }
+
+  function turnStartsOf(target: Running, threadId?: string): Array<[unknown, unknown]> {
+    return target.client.requests
+      .filter((request) => request.method === "turn/start")
+      .map((request) => paramsRecord(request.params))
+      .filter((params) => threadId === undefined || params?.threadId === threadId)
+      .map((params) => [params?.model, params?.effort]);
+  }
+
+  it("continues a routine turn that the limit stopped on the small model", async () => {
+    const target = await runningService(true);
+    await target.service.testRoutine({ agentId: "chief", routineId: target.routineId });
+    await stopAndContinue(target);
+    expect(turnStartsOf(target)).toEqual([
+      ["gpt-6-luna", "medium"],
+      ["gpt-6-luna", "medium"],
+    ]);
+  });
+
+  it("continues a person's turn that the limit stopped on the agent's own model", async () => {
+    const target = await runningService(true);
+    // "Choose model automatically" would run the short Continue text on the small model, after the
+    // quiet time, if the continued turn did not keep the model of the stopped one.
+    await target.service.sendMessage({ agentId: "chief", text: "Build the report." });
+    await stopAndContinue(target);
+    expect(turnStartsOf(target)).toEqual([
+      ["gpt-5.6-sol", "high"],
+      ["gpt-5.6-sol", "high"],
+    ]);
+  });
+
+  it("continues a routine's channel task that the limit stopped on the small model", async () => {
+    const actor = { id: "human", name: "Alex" };
+    const started = await startService(root, {
+      provider: "codex",
+      autoComplete: false,
+      now: () => clock,
+      channelActor: () => actor,
+    });
+    service = started.service;
+    await started.store.getOrCreate("chief");
+    await started.service.updateAgent({ agentId: "chief", model: "gpt-5.6-sol", reasoningEffort: "high" });
+    // A channel turn's events go to the channel: the fake's own `turn/started` is the barrier.
+    const announced: string[] = [];
+    started.client.on("notification", (message: AppServerNotification) => {
+      const id = message.method === "turn/started" ? getString(getRecord(message.params, "turn"), "id") : null;
+      if (id) announced.push(id);
+    });
+    await started.service.channels.command(
+      {
+        type: "save",
+        channelId: "channel-1",
+        operationId: "create",
+        draft: {
+          name: "Project",
+          title: "",
+          instructions: "Shared work",
+          members: [{ agentId: "chief" }],
+          leadAgentId: "chief",
+        },
+      },
+      actor,
+    );
+    await started.service.channels.command(
+      {
+        type: "request",
+        channelId: "channel-1",
+        operationId: "routine-run",
+        text: "Compare the two projects.",
+        recipientAgentId: "chief",
+        requestMessageId: "routine-request-1",
+        origin: { kind: "routine", routineId: "daily", routineName: "Daily", runId: "run-1" },
+      },
+      actor,
+    );
+    await waitFor(() => started.service.channels.store.assignments("channel-1").some((item) => item.turnId));
+    const turnId = started.service.channels.store.assignments("channel-1")[0]?.turnId;
+    const channelThreadId = started.service.channels.store.context("channel-1", "chief").threadId;
+    const threadId = started.store.database.activeProviderSession(channelThreadId, "codex")?.externalSessionId;
+    if (!turnId || !threadId) throw new Error("The channel turn did not start.");
+    await waitFor(() => announced.includes(turnId));
+    for (let index = 0; index < 40; index += 1) {
+      const item = { id: `channel-tool-${index}`, type: "commandExecution", status: "inProgress" };
+      started.client.emit("notification", notification("item/started", { threadId, turnId, item }));
+    }
+    await waitFor(() => started.service.localOnlyApprovals().length === 1);
+    const [card] = started.service.localOnlyApprovals();
+    if (!card) throw new Error("No turn-limit card.");
+    started.client.emit(
+      "notification",
+      notification("turn/completed", { threadId, turn: { id: turnId, status: "interrupted" } }),
+    );
+    await waitFor(() => started.service.channels.store.tasks("channel-1")[0]?.state === "paused");
+    await started.service.respondToApproval({ requestId: card.requestId, decision: "accept" }, "local-owner");
+    const starts = () =>
+      started.client.requests
+        .filter((request) => request.method === "turn/start")
+        .map((request) => paramsRecord(request.params))
+        .map((params) => [params?.model, params?.effort]);
+    await waitFor(() => starts().length === 2);
+    expect(starts()).toEqual([
+      ["gpt-6-luna", "medium"],
+      ["gpt-6-luna", "medium"],
+    ]);
+  });
+
+  /** Chief's running turn asks worker; worker answers; returns the models of chief's turns. */
+  async function answerTurns(target: Running): Promise<Array<[unknown, unknown]>> {
+    await target.store.getOrCreate("worker");
+    const chief = await runningTurn(target, "chief");
+    await callOpenBotTool(
+      target.client,
+      chief.threadId,
+      "send_message",
+      { recipientAgentIds: ["worker"], text: "Draft the summary." },
+      chief.turnId,
+    );
+    target.client.emit(
+      "notification",
+      notification("turn/completed", { threadId: chief.threadId, turn: { id: chief.turnId, status: "completed" } }),
+    );
+    const worker = await runningTurn(target, "worker");
+    const answer = { id: "worker-answer", type: "agentMessage", text: "The summary is ready.", phase: "final_answer" };
+    target.client.emit(
+      "notification",
+      notification("item/completed", { threadId: worker.threadId, turnId: worker.turnId, item: answer }),
+    );
+    target.client.emit(
+      "notification",
+      notification("turn/completed", { threadId: worker.threadId, turn: { id: worker.turnId, status: "completed" } }),
+    );
+    await waitFor(() => turnStartsOf(target, chief.threadId).length === 2);
+    return turnStartsOf(target, chief.threadId);
+  }
+
+  it("answers the person's own request on the agent's own model", async () => {
+    const target = await runningService(false);
+    await target.service.sendMessage({ agentId: "chief", text: "Ask worker for a summary." });
+    expect(await answerTurns(target)).toEqual([
+      ["gpt-5.6-sol", "high"],
+      ["gpt-5.6-sol", "high"],
+    ]);
+  });
+
+  it("answers a routine's request on the small model", async () => {
+    const target = await runningService(false);
+    await target.service.testRoutine({ agentId: "chief", routineId: target.routineId });
+    expect(await answerTurns(target)).toEqual([
+      ["gpt-6-luna", "medium"],
+      ["gpt-6-luna", "medium"],
+    ]);
   });
 });

@@ -60,7 +60,8 @@ export type AutoModelReason =
   | "small-model-unavailable"
   | "warm-cache"
   | "small-model"
-  | "delegated-small-model";
+  | "delegated-small-model"
+  | "continued-turn";
 
 export interface AutoModelMessage {
   sender: "person" | "teammate" | "routine";
@@ -90,6 +91,11 @@ export interface AutoModelInput {
    */
   lastTurn: { model: string; at: number } | null;
   now: number;
+  /**
+   * The turn continues a turn that a turn limit or an install card stopped, and that turn ran on the
+   * model of its settings. The continued turn stays on that model.
+   */
+  keepTurnModel?: boolean;
 }
 
 export interface AutoModelChoice {
@@ -108,6 +114,7 @@ export function chooseTurnModel(input: AutoModelInput): AutoModelChoice {
     smallModelName: null,
     reason,
   });
+  if (input.keepTurnModel) return keep("continued-turn");
   const delegated = chooseDelegatedModel(input, keep);
   if (delegated) return delegated;
   if (!agentAutoModelEnabled(agent)) return keep("off");

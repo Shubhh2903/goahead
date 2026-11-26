@@ -1,4 +1,5 @@
-import type { AgentSummary, MarketplaceAgentDetail } from "@openbot/contracts/ipc";
+import type { AgentSummary, CreateRoutineInput, MarketplaceAgentDetail } from "@openbot/contracts/ipc";
+import { onceRoutineSchedule } from "@openbot/team-client/routine-schedule";
 import { describe, expect, it, vi } from "vitest";
 import { AgentMarketplaceService } from "./agent-marketplace-service";
 
@@ -70,7 +71,9 @@ function service(overrides: { failSkill?: boolean } = {}) {
     createAgentProfile: vi.fn(async () => agent),
     updateAgent: vi.fn(async () => agent),
     setAvatar: vi.fn(async () => agent),
-    createRoutine: vi.fn(() => ({ id: "routine-marketplace-id" })),
+    createRoutine: vi.fn((_input: CreateRoutineInput, _options: { recordConversationEvent: boolean }) => ({
+      id: "routine-marketplace-id",
+    })),
     deleteRoutine: vi.fn(async () => undefined),
     setMarketplaceSource: vi.fn((_agentId, source) => ({ ...agent, marketplaceSource: source })),
     deleteAgent: vi.fn(async () => undefined),
@@ -165,6 +168,29 @@ describe("AgentMarketplaceService", () => {
       }),
       { recordConversationEvent: false },
     );
+  });
+
+  it("keeps a one-time routine's time, and installs one whose time has passed off", async () => {
+    const { marketplace, agents, auth } = service();
+    const ahead = onceRoutineSchedule(new Date(Date.now() + 24 * 60 * 60_000));
+    const passed = onceRoutineSchedule(new Date("2026-01-01T09:00:00.000Z"));
+    const listed = {
+      ...detail,
+      routines: [
+        { name: "Launch note", instruction: "Write the launch note.", active: true, schedule: ahead },
+        { name: "Old note", instruction: "Write the old note.", active: true, schedule: passed },
+      ],
+    };
+    vi.spyOn(auth, "requestAuthorized").mockImplementation(async (path, _init, decode) =>
+      decode(path.endsWith("/install") ? { installed: true } : listed),
+    );
+    await marketplace.install({ listingId: detail.id, timezone: "UTC", receiptId: "receipt-once" });
+
+    expect(agents.createRoutine.mock.calls.map(([input]) => [input.name, input.active, input.schedule])).toEqual([
+      ["Launch note", true, ahead],
+      ["Old note", false, passed],
+    ]);
+    expect(agents.deleteAgent).not.toHaveBeenCalled();
   });
 
   it("removes a partially created agent when a dependency fails", async () => {

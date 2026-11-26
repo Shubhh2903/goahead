@@ -8,6 +8,8 @@ import {
   routineConversationEvent,
   routineRunConversationEvent,
 } from "@openbot/contracts/ipc";
+import { sourceText } from "@openbot/i18n/source";
+import { onceRoutineSchedule } from "@openbot/team-client/routine-schedule";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentProvider } from "./agent-client";
 import type { AgentService } from "./agent-service";
@@ -121,6 +123,92 @@ describe.sequential("AgentService: routines", () => {
       expect(service.listRoutineRuns({ agentId: agent.id, routineId: routine.id })).toEqual([
         expect.objectContaining({ kind: "scheduled", scheduledFor: "2026-08-25T10:15:00.000Z" }),
       ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("runs a one-time routine exactly once and then turns it off", async () => {
+    const { store, mailbox } = stores(root);
+    service = createTestService({
+      store,
+      mailbox,
+      preferredProvider: "codex",
+      clientFactory: (provider) => new FakeAgentClient(provider, "Done."),
+    });
+    await service.initialize();
+    const agent = await store.getOrCreate("once");
+    vi.useFakeTimers({ now: new Date("2026-08-25T10:00:00.000Z") });
+    try {
+      const routine = service.createRoutine({
+        agentId: agent.id,
+        name: "Release note",
+        instruction: "Write the release note.",
+        active: true,
+        timezone: "UTC",
+        schedule: onceRoutineSchedule(new Date("2026-08-25T10:30:00.000Z")),
+      });
+      await vi.advanceTimersByTimeAsync(31 * 60_000);
+      expect(service.listRoutineRuns({ agentId: agent.id, routineId: routine.id })).toEqual([
+        expect.objectContaining({ kind: "scheduled", scheduledFor: "2026-08-25T10:30:00.000Z" }),
+      ]);
+      // The routine stays on until its one run ends.
+      await vi.waitFor(() =>
+        expect(service?.listRoutineRuns({ agentId: agent.id, routineId: routine.id })[0]?.status).toBe("succeeded"),
+      );
+      expect(service.listRoutines(agent.id).find((entry) => entry.id === routine.id)?.active).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+      expect(service.listRoutineRuns({ agentId: agent.id, routineId: routine.id })).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records a one-time routine's time as a cancelled run when an earlier run still runs", async () => {
+    const { store, mailbox } = stores(root);
+    service = createTestService({
+      store,
+      mailbox,
+      preferredProvider: "codex",
+      // The test run's turn stays open.
+      clientFactory: (provider) => new FakeAgentClient(provider, "", false),
+    });
+    await service.initialize();
+    const agent = await store.getOrCreate("once");
+    vi.useFakeTimers({ now: new Date("2026-08-25T10:00:00.000Z") });
+    try {
+      const routine = service.createRoutine({
+        agentId: agent.id,
+        name: "Release note",
+        instruction: "Write the release note.",
+        active: true,
+        timezone: "UTC",
+        schedule: onceRoutineSchedule(new Date("2026-08-25T10:30:00.000Z")),
+      });
+      const test = await service.testRoutine({ agentId: agent.id, routineId: routine.id });
+      await vi.waitFor(() => expect(mailbox.getDelivery(test.deliveryId ?? "")?.delivery.status).toBe("running"));
+      await vi.advanceTimersByTimeAsync(31 * 60_000);
+      const runs = service.listRoutineRuns({ agentId: agent.id, routineId: routine.id });
+      expect(runs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: test.id, kind: "manual" }),
+          expect.objectContaining({
+            kind: "scheduled",
+            scheduledFor: "2026-08-25T10:30:00.000Z",
+            status: "cancelled",
+            error: sourceText("error.backend.routineOnceSkippedLiveRun"),
+          }),
+        ]),
+      );
+      expect(runs).toHaveLength(2);
+      expect(service.listRoutines(agent.id).find((entry) => entry.id === routine.id)?.active).toBe(false);
+      const scheduled = runs.find((run) => run.kind === "scheduled");
+      const markers = (await service.readConversation(agent.id)).messages.flatMap((message) => {
+        const event = routineRunConversationEvent(message);
+        return event && event.runId === scheduled?.id ? [event.status] : [];
+      });
+      expect(markers).toContain("cancelled");
     } finally {
       vi.useRealTimers();
     }

@@ -25,7 +25,11 @@ import {
 } from "@openbot/contracts/ipc";
 import { type DynamicRecord, isBoolean } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
-import { collapseMissedOccurrences, RoutineInputError } from "@openbot/team-client/routine-schedule";
+import {
+  collapseMissedOccurrences,
+  isOnceRoutineSchedule,
+  RoutineInputError,
+} from "@openbot/team-client/routine-schedule";
 import { AgentRoutineStore } from "../agent-routine-store";
 import { AGENT_PREVIEW_MAX_LENGTH, type AgentStore } from "../agent-store";
 import type { MailboxStore } from "../mailbox-store";
@@ -45,6 +49,7 @@ import {
   routineToolArguments,
   routineToolSchedule,
   routineToolString,
+  routineToolView,
 } from "./routine-tools";
 
 export interface RoutineMutationOptions {
@@ -411,7 +416,7 @@ export class RoutineScheduler implements RoutineDueSource {
     if (params.tool === "list_routines") {
       const args = routineToolArguments(params.arguments, ["agentId"]);
       const agentId = this.#toolAgentId(args, senderAgentId);
-      return openBotToolResult({ routines: this.list(agentId) });
+      return openBotToolResult({ routines: this.list(agentId).map(routineToolView) });
     }
 
     if (params.tool === "create_routine") {
@@ -451,12 +456,12 @@ export class RoutineScheduler implements RoutineDueSource {
           ),
           active,
           timezone,
-          schedule: routineToolSchedule(args.schedule),
+          schedule: routineToolSchedule(args.schedule, timezone),
           ...(args.runCondition === undefined ? {} : { runCondition: routineToolRunCondition(args.runCondition) }),
         },
         { turnId: agentId === senderAgentId ? params.turnId : undefined },
       );
-      return openBotToolResult(routine);
+      return openBotToolResult(routineToolView(routine));
     }
 
     if (params.tool === "update_routine") {
@@ -493,7 +498,10 @@ export class RoutineScheduler implements RoutineDueSource {
         hasUpdate = true;
       }
       if (args.schedule !== undefined) {
-        input.schedule = routineToolSchedule(args.schedule);
+        // A `once` time without an offset is a clock time in the routine's zone. An unknown routine
+        // fails in the update with its own error.
+        const timezone = this.#routines.get(input.agentId, input.routineId)?.timezone ?? localTimezone();
+        input.schedule = routineToolSchedule(args.schedule, timezone);
         hasUpdate = true;
       }
       if (args.runCondition !== undefined) {
@@ -502,7 +510,7 @@ export class RoutineScheduler implements RoutineDueSource {
       }
       if (!hasUpdate) throw new RoutineInputError("At least one routine update is required.");
       return openBotToolResult(
-        this.update(input, { turnId: input.agentId === senderAgentId ? params.turnId : undefined }),
+        routineToolView(this.update(input, { turnId: input.agentId === senderAgentId ? params.turnId : undefined })),
       );
     }
 
@@ -611,14 +619,22 @@ export class RoutineScheduler implements RoutineDueSource {
         // A run that has not finished already does this routine's work. Another one would only
         // queue behind it, and after a sleep the queue drains as a burst of identical runs. A routine
         // set to skip drops the occurrence while a spent plan would only make it wait.
+        const dropped = this.#hasLiveRun(due.routine.agentId, due.routine.id)
+          ? "error.backend.routineOnceSkippedLiveRun"
+          : due.routine.limitPolicy === "skip" && this.#hooks.usageLimited(due.routine.agentId)
+            ? "error.backend.routineOnceSkippedPlanLimit"
+            : null;
+        // A one-time routine has no later occurrence: its dropped one is recorded as a cancelled run,
+        // so the routine does not show "Done" with no run and no chat row.
+        const once = isOnceRoutineSchedule(due.schedule);
         const run =
-          this.#hasLiveRun(due.routine.agentId, due.routine.id) ||
-          (due.routine.limitPolicy === "skip" && this.#hooks.usageLimited(due.routine.agentId))
+          dropped && !once
             ? null
             : this.#routines.createRun(due.routine, due.triggerId, "scheduled", scheduledFor.toISOString());
+        if (run && dropped) this.#cancelRun(run, sourceText(dropped));
         this.#routines.advanceTrigger(due.routine.id, due.triggerId, nextRunAt.toISOString());
         changedAgents.add(due.routine.agentId);
-        if (run && !run.deliveryId) {
+        if (run && !dropped && !run.deliveryId) {
           await this.#enqueueRun(run).catch((error) => {
             this.#hooks.emitError("routine_delivery_failed", error, due.routine.agentId);
           });
@@ -693,7 +709,7 @@ export class RoutineScheduler implements RoutineDueSource {
       this.#routines.get(run.agentId, run.routineId)?.limitPolicy === "skip" &&
       this.#hooks.usageLimited(run.agentId)
     ) {
-      const cancelled = this.#transitionRunWithConversation(run, "cancelled");
+      const cancelled = this.#cancelRun(run, null);
       this.stateChanged(run.agentId);
       return cancelled;
     }
@@ -765,9 +781,8 @@ export class RoutineScheduler implements RoutineDueSource {
       if (decision.fingerprint) this.#routines.setRunConditionFingerprint(run.routineId, decision.fingerprint);
       return null;
     }
-    const cancelled = this.#transitionRunWithConversation(
+    const cancelled = this.#cancelRun(
       run,
-      "cancelled",
       sourceText(
         decision.reason === "unchanged"
           ? "error.backend.routineRunConditionUnchanged"
@@ -776,6 +791,22 @@ export class RoutineScheduler implements RoutineDueSource {
     );
     this.stateChanged(run.agentId);
     return cancelled;
+  }
+
+  /**
+   * Cancels a run that starts no turn. The run record is written every time, so the history and the
+   * Usage count of skipped runs stay whole. A scheduled run adds a chat marker only when the routine's
+   * previous finished run was not cancelled for the same reason: a check that says no every few
+   * minutes would otherwise fill the chat with identical rows.
+   */
+  #cancelRun(run: RoutineRun, error: string | null): RoutineRun {
+    if (run.kind === "scheduled") {
+      const previous = this.#routines.lastFinishedRun(run.agentId, run.routineId, run.id);
+      if (previous?.status === "cancelled" && previous.error === error) {
+        return this.#routines.updateRunStatus(run.id, "cancelled", error);
+      }
+    }
+    return this.#transitionRunWithConversation(run, "cancelled", error);
   }
 
   async #interruptRunsBeforeDeletion(agentId: string, runs: RoutineRun[]): Promise<RoutineRun[]> {

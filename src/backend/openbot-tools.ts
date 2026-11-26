@@ -225,7 +225,7 @@ export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
   {
     name: "list_routines",
     description:
-      "List routines for this agent, or for another local agent when agentId is provided. Use this before updating or deleting a routine.",
+      "List routines for this agent, or for another local agent when agentId is provided. Use this before updating or deleting a routine. A one-time routine shows its schedule as `once` with its time; it turns itself off (active false) after its run.",
     shape: { agentId: z.string().min(1).max(INPUT_LIMITS.identifier).optional() },
   },
   {

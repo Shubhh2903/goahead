@@ -23,6 +23,7 @@ import {
 } from "@openbot/contracts/ipc";
 import { isBoolean, isDynamicRecord, isNumber, isOneOf, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
+import { routineOnceAt } from "@openbot/team-client/routine-schedule";
 
 interface AgentMarketplaceAuth {
   requestAuthorized<T>(path: string, init: RequestInit, decoder: (value: unknown) => T, timeoutMs?: number): Promise<T>;
@@ -200,9 +201,8 @@ export class AgentMarketplaceService {
             agentId: agent.id,
             name: routine.name,
             instruction: routine.instruction,
-            active: routine.active,
             timezone: input.timezone,
-            schedule: localSchedule(routine.schedule),
+            ...localRoutine(routine),
           },
           { recordConversationEvent: false },
         );
@@ -274,6 +274,26 @@ export class AgentMarketplaceService {
 
 export function localSchedule(schedule: RoutineSchedule): RoutineSchedule {
   return schedule.kind === "interval" ? { ...schedule, anchorAt: new Date().toISOString() } : structuredClone(schedule);
+}
+
+/** A one-time time closer than this is read as passed: the create that follows reads the clock again. */
+const ONCE_INSTALL_MARGIN_MS = 60_000;
+
+/**
+ * A listed routine as this computer installs it. A repeating interval starts now. A one-time routine
+ * keeps its time; when that time has passed, the routine is installed off with its time kept, so the
+ * install does not fail because of it.
+ */
+export function localRoutine(
+  routine: { active: boolean; schedule: RoutineSchedule },
+  now = new Date(),
+): { active: boolean; schedule: RoutineSchedule } {
+  const at = routineOnceAt(routine.schedule);
+  if (!at) return { active: routine.active, schedule: localSchedule(routine.schedule) };
+  return {
+    active: routine.active && at.getTime() > now.getTime() + ONCE_INSTALL_MARGIN_MS,
+    schedule: structuredClone(routine.schedule),
+  };
 }
 
 export function validTimezone(value: string): boolean {

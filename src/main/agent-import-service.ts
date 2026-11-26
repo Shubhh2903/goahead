@@ -39,6 +39,7 @@ import {
   type ImportAgent,
   type ImportChannel,
 } from "./agent-import-manifest";
+import { localRoutine } from "./agent-marketplace-service";
 import type { LocalSkillLibrary } from "./local-skill-library";
 import { inspectArchive, isUnsafeArchivePath } from "./skill-package";
 
@@ -368,7 +369,8 @@ export class AgentImportService {
             channelId: channel.id,
             name: routine.name,
             instruction: routine.instruction,
-            active: routine.active,
+            // A one-time routine whose time has passed comes in off, with its time kept.
+            active: localRoutine(routine).active,
             timezone: routine.timezone && validTimezone(routine.timezone) ? routine.timezone : context.timezone,
             schedule: routine.schedule,
           });
@@ -448,7 +450,8 @@ export class AgentImportService {
               agentId: agent.id,
               name: routine.name,
               instruction: routine.instruction,
-              active: routine.active,
+              // A one-time routine whose time has passed comes in off, with its time kept.
+              active: localRoutine(routine).active,
               timezone: routine.timezone && validTimezone(routine.timezone) ? routine.timezone : context.timezone,
               schedule: routine.schedule,
             },

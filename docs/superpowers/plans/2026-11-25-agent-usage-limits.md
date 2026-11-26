@@ -172,3 +172,20 @@
 ### Task 9: Install guard text: reuse an installed device
 
 - [ ] Change `status.agent.installGuardDenied` (en) so it says: do not run it again; to test on iOS, list installed simulators with `xcrun simctl list devices available`, boot one with `xcrun simctl boot <id>` and use it; on Android, list installed emulators with `emulator -list-avds` and start one; if none fits, ask the person. Keep `{…}` placeholders unchanged if any. Update a test only if one asserts the exact text. Run `bun run i18n:check`.
+
+## Added 2026-11-26: routine that repeats "Cancelled routine" every 3 minutes
+
+User report: a routine meant to run one time ran once at 11:45 and then wrote a "Cancelled routine" chat row every 3 minutes. GoAhead cannot save a one-time routine ("A one-time routine cannot be saved yet"), so the routine repeats, and each tick is cancelled (run condition, plan limit skip, or missed-run record). Exact cause on that Mac not confirmed.
+
+### Task 11: One chat row for repeated cancelled runs
+
+- [ ] A scheduled run that is cancelled (run condition says no, plan limit skip, missed runs) writes its run record as now, but adds a chat marker only when the previous run of the same routine was not cancelled for the same reason. Repeats update nothing in the chat. The Usage tab count of skipped runs stays correct.
+- [ ] Tests (routine scheduler test file): 10 consecutive condition cancels → 1 marker, 10 run records; a completed run between cancels → a new marker for the next cancel; a different reason → a new marker.
+- [ ] Desktop and mobile render existing markers unchanged (no wire change).
+
+### Task 12: Real one-time routines
+
+- [ ] "Once on <date> at <time>" can be saved from the desktop picker and by the agent routine tool (`src/backend/routine-tool-schema.ts`). The routine runs one time at that moment (or once when GoAhead opens if it was closed then), and then turns itself off (`active = false`). No more checks, runs or rows after that.
+- [ ] Storage must not add a schedule kind that a released Team API peer, an older stored-routine reader or the v0.40 mobile app rejects. Check `packages/team-client/src/routine-schedule.ts` validation, the routine Team API routes and adapters, and mobile. Preferred: store it as an existing schedule kind (an `interval` with `anchorAt` = the chosen moment) plus a new optional routine field such as `endsAfterFirstRun: true` that older readers ignore; an older peer then sees a repeating routine, never an error. If a released reader rejects unknown fields, report it and stop.
+- [ ] The routine list and settings show "Once on <date> at <time>"; after the run, "Done" (inactive).
+- [ ] Tests: a once routine runs exactly one time and becomes inactive; a missed once routine runs once when GoAhead opens if the missed policy says so, else is recorded as missed and becomes inactive; an older stored routine without the field is unchanged.

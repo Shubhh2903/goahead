@@ -855,6 +855,20 @@ export class MailboxStore {
     await this.#persist("reaction.updated");
   }
 
+  /**
+   * The deliveries that the turn of `agentId` handled when it sent this request. Empty when another
+   * agent sent the request, or its turn is not known.
+   */
+  requestTurnDeliveries(requestId: string, agentId: string): QueueDelivery[] {
+    const request = this.#state.messages.find((message) => message.id === requestId);
+    if (request?.sender.kind !== "agent" || request.sender.agentId !== agentId) return [];
+    const turnId = this.#sourceTurnId(requestId);
+    if (!turnId) return [];
+    return this.#state.deliveries
+      .filter((delivery) => delivery.recipientAgentId === agentId && delivery.turnId === turnId)
+      .map((delivery) => this.#context(delivery).delivery);
+  }
+
   #sourceTurnId(messageId: string): string | undefined {
     const key = Object.entries(this.#state.idempotency).find(([, value]) => value === messageId)?.[0];
     return key ? turnIdOfKey(key) : undefined;
