@@ -636,6 +636,12 @@ export function parseUpdateAgent(value: unknown): UpdateAgentInput {
     if (!isBoolean(value.autoModel)) throw new Error("Invalid automatic model value.");
     result.autoModel = value.autoModel;
   }
+  if (value.delegatedSmallModel !== undefined) {
+    if (value.delegatedSmallModel !== null && !isBoolean(value.delegatedSmallModel)) {
+      throw new Error("Invalid delegated small model value.");
+    }
+    result.delegatedSmallModel = value.delegatedSmallModel;
+  }
   if (value.avatarSeed !== undefined) {
     if (!isAvatarSeed(value.avatarSeed)) throw new Error("Invalid avatar seed.");
     result.avatarSeed = value.avatarSeed;

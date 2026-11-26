@@ -41,6 +41,7 @@ export function toAgentProfile(stored: AgentSummary): AgentProfile {
     weeklyTokenBudget: stored.weeklyTokenBudget,
     turnLimit: stored.turnLimit,
     autoModel: stored.autoModel,
+    delegatedSmallModel: stored.delegatedSmallModel,
     threadId: stored.threadId,
     workspacePath: stored.workspacePath,
     avatarSeed: stored.avatarSeed,
@@ -192,6 +193,7 @@ export function agentProfilesEqual(left: AgentProfile, right: AgentProfile): boo
     left.weeklyTokenBudget === right.weeklyTokenBudget &&
     left.turnLimit === right.turnLimit &&
     left.autoModel === right.autoModel &&
+    left.delegatedSmallModel === right.delegatedSmallModel &&
     left.threadId === right.threadId &&
     left.avatarSeed === right.avatarSeed &&
     left.avatarHue === right.avatarHue &&

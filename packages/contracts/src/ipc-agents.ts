@@ -41,6 +41,14 @@ export function agentAutoModelEnabled(agent: Pick<AgentSummary, "autoModel">): b
 }
 
 /**
+ * Whether a turn whose every message comes from a teammate or a routine runs on the provider's
+ * small model when the agent's own model is larger. Absent means on.
+ */
+export function agentDelegatedSmallModelEnabled(agent: Pick<AgentSummary, "delegatedSmallModel">): boolean {
+  return agent.delegatedSmallModel !== false;
+}
+
+/**
  * The providers that take a model for one turn on the same session: Claude through `setModel`, and
  * Codex through `turn/start`. For the others the automatic model choice has no effect.
  */
@@ -172,6 +180,11 @@ export interface AgentSummary {
    * means off; see `agentAutoModelEnabled`.
    */
   autoModel?: boolean;
+  /**
+   * Whether a teammate or routine turn may run on the provider's small model. Local-only, like
+   * `access`. Absent means on; see `agentDelegatedSmallModelEnabled`.
+   */
+  delegatedSmallModel?: boolean;
   threadId: string | null;
   workspacePath: string;
   preview: string;
@@ -209,6 +222,7 @@ export function isAgentSummary(value: unknown): value is AgentSummary {
     (value.weeklyTokenBudget === undefined || isAgentWeeklyTokenBudget(value.weeklyTokenBudget)) &&
     (value.turnLimit === undefined || isAgentTurnLimit(value.turnLimit)) &&
     (value.autoModel === undefined || isBoolean(value.autoModel)) &&
+    (value.delegatedSmallModel === undefined || isBoolean(value.delegatedSmallModel)) &&
     (value.threadId === null || isIdentifier(value.threadId)) &&
     isBoundedString(value.workspacePath, INPUT_LIMITS.path) &&
     isBoundedString(value.preview, INPUT_LIMITS.messageText) &&
@@ -309,6 +323,8 @@ export interface UpdateAgentInput {
   turnLimit?: AgentTurnLimit | null;
   /** `false` returns the agent to its own model for every turn. */
   autoModel?: boolean;
+  /** `null` returns the agent to the default: on. */
+  delegatedSmallModel?: boolean | null;
   avatarSeed?: string;
   avatarHue?: AvatarHue | null;
 }

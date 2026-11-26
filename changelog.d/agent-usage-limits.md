@@ -41,3 +41,8 @@
 - A new agent that you create with a role now receives the role as its instructions and "Greet me
   briefly." as its first message. This applies on desktop and on the web.
 - Agents get shorter instructions about their scope and shorter answers by default.
+- A turn that a teammate or a routine starts now runs on the provider's smaller model, such as
+  Claude Sonnet, when the agent uses a larger model. Its effort is the agent's effort, but not more
+  than medium. A turn with a message from you, or from a person in Slack, keeps the agent's model.
+  The answer shows "Answered by" with the model name. Agent settings has a new switch for this, "Use
+  the smaller model for teammate and routine turns". It is on by default and stays on this computer.

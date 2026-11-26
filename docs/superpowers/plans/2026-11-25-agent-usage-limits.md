@@ -143,3 +143,32 @@
 - [ ] Create `changelog.d/agent-usage-limits.md` (Added: turn limit, install guard, storage folders; Changed: compaction 120k default, Claude releases idle processes after 2 minutes, greeting, scope text). Plain words, as in `CHANGELOG.md` 0.40.0.
 - [ ] Mobile note in `apps/mobile/changelog.d/agent-usage-limits.md` only for the greeting change.
 - [ ] Update `docs/ARCHITECTURE.md` only where it describes compaction, approvals or storage scanning.
+
+---
+
+## Added 2026-11-25 (user decisions after the final review)
+
+- Turns that a teammate or a routine starts run on the provider's small model (Claude Sonnet 5.5, Codex small model) when the agent's model is larger (Claude Opus/Fable; Codex Terra/Sol/Astra). Turns that the person starts keep the agent's model. Per-agent setting to turn this off; default on.
+- When the install guard blocks a command, the agent gets the exact way to reuse an installed device.
+
+### Task 8: Small model for teammate and routine turns
+
+**Files:**
+- Modify: `src/backend/agent/auto-model.ts` (+ its test), `src/backend/agent/drain-scheduler.ts` (where the choice is applied)
+- Modify: `packages/contracts/src/ipc-agents.ts`, `src/backend/agent-store.ts`, `src/main/ipc/agent-inputs.ts` (setting, same pattern as `turnLimit`)
+- Modify: `packages/ui/src/features/conversation/AgentSettingsPanel.tsx`, `en/agentSettings.ts` (switch)
+- Modify: `changelog.d/agent-usage-limits.md`
+
+**Interfaces:**
+- Produces: `AgentSummary.delegatedSmallModel?: boolean` — absent or true = on; false = off. Update input `delegatedSmallModel?: boolean | null` (null = default).
+- New `AutoModelReason` `"delegated-small-model"`.
+
+- [ ] **Step 1: Failing tests in the auto-model test file:** an agent on `claude-fable-5-2` with `autoModel` off, every message of the turn from a teammate → small model with reason `delegated-small-model`; same with every message from a routine; one message from the person in the turn → own model; setting `delegatedSmallModel: false` → own model; agent already on Sonnet → own model (`not-larger-model`); small model not in a listed catalog → own model; a thread profile (Slack reply) → unchanged existing rule.
+- [ ] **Step 2: Run, expect FAIL. Step 3: implement** the rule before the existing `autoModel` rules: it needs neither `autoModel` nor the short-text / work-word checks, and it ignores the warm-cache rule (the small model is cheaper even on a cold read). Keep the catalog and availability checks. Effort: the agent's own effort, capped at medium.
+- [ ] **Step 4:** setting stored like `turnLimit`; UI switch "Use the smaller model for teammate and routine turns" with hint "Turns that you start keep this agent's model." under the Turn limit row.
+- [ ] **Step 5:** the answer shows "Answered by <model>" as v0.40 auto-model already does (check that the same path is used).
+- [ ] **Step 6:** run each test file alone; `typecheck:node`; `typecheck:renderer`; Biome. Changelog line under Changed.
+
+### Task 9: Install guard text: reuse an installed device
+
+- [ ] Change `status.agent.installGuardDenied` (en) so it says: do not run it again; to test on iOS, list installed simulators with `xcrun simctl list devices available`, boot one with `xcrun simctl boot <id>` and use it; on Android, list installed emulators with `emulator -list-avds` and start one; if none fits, ask the person. Keep `{…}` placeholders unchanged if any. Update a test only if one asserts the exact text. Run `bun run i18n:check`.

@@ -86,6 +86,7 @@ const OPTIONAL_SETTING_FIELDS = [
   "weeklyTokenBudget",
   "turnLimit",
   "autoModel",
+  "delegatedSmallModel",
 ] as const;
 type StoredAgentBase = Omit<PersistedStoredAgent, "avatarSeed" | "avatarHue"> & DynamicRecord;
 
@@ -363,6 +364,7 @@ export class AgentStore {
     if (source.weeklyTokenBudget) record.weeklyTokenBudget = source.weeklyTokenBudget;
     if (source.turnLimit !== undefined) record.turnLimit = source.turnLimit;
     if (source.autoModel) record.autoModel = true;
+    if (source.delegatedSmallModel === false) record.delegatedSmallModel = false;
     record.avatarSeed = source.avatarSeed;
     record.avatarHue = source.avatarHue;
     // The folders stay where they are: the copy works in the same projects, not in copies of them.
@@ -622,6 +624,14 @@ export class AgentStore {
       // Stored only when on, so an agent that turns it off again reads like one from before it existed.
       if (input.autoModel) next.autoModel = true;
       else delete next.autoModel;
+    }
+    if (input.delegatedSmallModel !== undefined) {
+      if (input.delegatedSmallModel !== null && !isBoolean(input.delegatedSmallModel)) {
+        throw new Error("Invalid delegated small model value.");
+      }
+      // Stored only when off: on is the default, so absent and on read the same.
+      if (input.delegatedSmallModel === false) next.delegatedSmallModel = false;
+      else delete next.delegatedSmallModel;
     }
     if (input.avatarSeed !== undefined) {
       if (!isAvatarSeed(input.avatarSeed)) throw new Error("Invalid avatar seed.");
@@ -1523,6 +1533,7 @@ function isStoredAgent(value: unknown): value is PersistedStoredAgent {
     (record.weeklyTokenBudget === undefined || isAgentWeeklyTokenBudget(record.weeklyTokenBudget)) &&
     (record.turnLimit === undefined || isAgentTurnLimit(record.turnLimit)) &&
     (record.autoModel === undefined || isBoolean(record.autoModel)) &&
+    (record.delegatedSmallModel === undefined || isBoolean(record.delegatedSmallModel)) &&
     isAvatarSeed(record.avatarSeed) &&
     (record.avatarHue === null || isAvatarHue(record.avatarHue)) &&
     isMarketplaceSource(record.marketplaceSource)
@@ -1611,6 +1622,10 @@ function readStoredAgent(value: unknown): ReadStoredAgent | UnreadableStoredAgen
       : reset("turnLimit", undefined);
   const autoModel =
     value.autoModel === undefined || isBoolean(value.autoModel) ? value.autoModel : reset("autoModel", undefined);
+  const delegatedSmallModel =
+    value.delegatedSmallModel === undefined || isBoolean(value.delegatedSmallModel)
+      ? value.delegatedSmallModel
+      : reset("delegatedSmallModel", undefined);
   let marketplaceSource: StoredAgent["marketplaceSource"];
   if (value.marketplaceSource !== undefined) {
     if (isMarketplaceSource(value.marketplaceSource)) {
@@ -1650,6 +1665,7 @@ function readStoredAgent(value: unknown): ReadStoredAgent | UnreadableStoredAgen
     ...(weeklyTokenBudget === undefined ? {} : { weeklyTokenBudget }),
     ...(turnLimit === undefined ? {} : { turnLimit }),
     ...(autoModel === undefined ? {} : { autoModel }),
+    ...(delegatedSmallModel === undefined ? {} : { delegatedSmallModel }),
     ...(marketplaceSource === undefined ? {} : { marketplaceSource }),
   };
   return { agent, repaired };

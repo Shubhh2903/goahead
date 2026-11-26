@@ -146,6 +146,7 @@ describe("Team API agent-host-settings-v1", () => {
           compactWindow: _c,
           weeklyTokenBudget: _w,
           turnLimit: _t,
+          delegatedSmallModel: _d,
           ...changes
         }) => {
           agent = { ...agent, ...changes };

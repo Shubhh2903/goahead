@@ -418,13 +418,18 @@ export class DrainScheduler {
         return;
       }
       // With "Choose model automatically" on, a short chat message runs on the provider's small
-      // model, for this turn only, on the same session. Off, this is `turnSettings` unchanged.
+      // model, for this turn only, on the same session. A turn whose every message comes from a
+      // teammate or a routine runs there too, unless the agent turned that off. Otherwise this is
+      // `turnSettings` unchanged. A small-model turn is labelled "Answered by" below either way.
       const turnModel = chooseTurnModel({
         agent,
         settings: turnSettings,
         relay: channelDelivery || messagingDelivery,
         messages: batch.map(({ delivery: item }) => ({
-          sender: item.sender.kind === "user" ? "person" : item.sender.kind === "agent" ? "teammate" : "routine",
+          // A channel assignment always has sender `user`: the task's origin tells who started it.
+          sender:
+            this.#channels?.deliveryOrigin(item.id) ??
+            (item.sender.kind === "user" ? "person" : item.sender.kind === "agent" ? "teammate" : "routine"),
           text: item.text,
           attachmentCount: item.attachments.length,
         })),

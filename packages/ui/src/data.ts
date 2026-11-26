@@ -197,6 +197,8 @@ export interface AgentProfile {
   turnLimit?: AgentSummary["turnLimit"];
   /** Absent means off. Absent for an agent on a remote host too, which does not share it. */
   autoModel?: boolean;
+  /** Absent means on. Absent for an agent on a remote host too, which does not share it. */
+  delegatedSmallModel?: boolean;
   threadId: string | null;
   /** The agent's working directory. Absent for profiles built before it was tracked. */
   workspacePath?: string;

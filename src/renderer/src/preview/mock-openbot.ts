@@ -1267,6 +1267,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
           weeklyTokenBudget,
           turnLimit,
           autoModel,
+          delegatedSmallModel,
           ...updates
         } = input;
         const updated: AgentSummary = { ...current, ...updates };
@@ -1282,6 +1283,9 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
         else if (turnLimit !== undefined) updated.turnLimit = turnLimit;
         if (autoModel === false) delete updated.autoModel;
         else if (autoModel) updated.autoModel = true;
+        // Stored only when off: on is the default.
+        if (delegatedSmallModel === false) updated.delegatedSmallModel = false;
+        else if (delegatedSmallModel !== undefined) delete updated.delegatedSmallModel;
         if (updated.disabledMcpServerIds?.length === 0) delete updated.disabledMcpServerIds;
         agents = agents.map((agent) => (agent.id === updated.id ? updated : agent));
         emitAgentEvent({ type: "agents-changed", agents });

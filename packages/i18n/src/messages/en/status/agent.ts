@@ -11,7 +11,7 @@ export const messages = defineMessages("status.agent", {
   "status.agent.installGuardRequest":
     "The agent wants to run a command that can download or install many gigabytes:\n{command}\nAllow lets this agent run commands of this kind for 60 minutes. Deny does not run it.",
   "status.agent.installGuardDenied":
-    "The person did not allow this command, because it can download or install many gigabytes. Do not run it again. Do the work another way, or ask the person.",
+    "The person did not allow this command, because it can download or install many gigabytes. Do not run it again. To test on iOS, list the installed simulators with `xcrun simctl list devices available`. Boot one with `xcrun simctl boot <id>` and use it. To test on Android, list the installed emulators with `emulator -list-avds` and start one. If none is suitable, ask the person.",
   "status.agent.installGuardContinue":
     "The person allowed this command. Run it again, then continue the work from where you stopped:\n{command}",
 });

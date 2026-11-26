@@ -10,6 +10,7 @@ import {
   startAgentTestFixture,
   stopAgentTestFixture,
   stores,
+  waitFor,
   waitForQueue,
 } from "./agent-service-test-harness";
 import type { AgentStore } from "./agent-store";
@@ -212,5 +213,123 @@ describe.sequential("AgentService: Choose model automatically", () => {
     await send(service, SHORT);
     // The built-in list names gpt-6-luna, but the CLI never confirmed it.
     expect(models(started.client)).toEqual(["gpt-5.6-sol"]);
+  });
+});
+
+describe.sequential("AgentService: small model for channel tasks of a teammate or a routine", () => {
+  const actor = { id: "human", name: "Alex" };
+
+  /** Two members on a larger model. Each turn stays running until the test completes it. */
+  async function channelService(): Promise<{ client: FakeAgentClient; service: AgentService }> {
+    const { store, mailbox } = stores(root);
+    const client = new FakeAgentClient("codex", "CODEX_DONE", false);
+    const next = createTestService({
+      store,
+      mailbox,
+      preferredProvider: "codex",
+      clientFactory: () => client,
+      now: () => clock,
+    });
+    await next.initialize();
+    await next.ensureProvider("codex");
+    for (const agentId of ["chief", "helper"]) {
+      await store.getOrCreate(agentId);
+      await next.updateAgent({ agentId, model: "gpt-5.6-sol", reasoningEffort: "high" });
+    }
+    await next.channels.command(
+      {
+        type: "save",
+        channelId: "channel-1",
+        operationId: "create",
+        draft: {
+          name: "Project",
+          title: "",
+          instructions: "Shared work",
+          members: [{ agentId: "chief" }, { agentId: "helper" }],
+          leadAgentId: "chief",
+        },
+      },
+      actor,
+    );
+    return { client, service: next };
+  }
+
+  function channelTurns(client: FakeAgentClient): Array<[unknown, unknown]> {
+    return client.requests
+      .filter((request) => request.method === "turn/start")
+      .map((request) => paramsRecord(request.params))
+      .map((params) => [params?.model, params?.effort]);
+  }
+
+  async function runningTurn(target: AgentService, agentId: string): Promise<string> {
+    let turnId: string | null = null;
+    await waitFor(() => {
+      turnId =
+        target.channels.store.assignments("channel-1").find((item) => item.agentId === agentId && item.turnId)
+          ?.turnId ?? null;
+      return turnId !== null;
+    });
+    if (!turnId) throw new Error(`No running channel turn for ${agentId}.`);
+    return turnId;
+  }
+
+  it("keeps the own model for a person's task and uses the small model for a teammate's task", async () => {
+    const started = await channelService();
+    service = started.service;
+    await service.channels.command(
+      {
+        type: "send",
+        channelId: "channel-1",
+        operationId: "send",
+        text: "Compare the two projects.",
+        recipientAgentId: "chief",
+        replyToMessageId: null,
+        attachmentDraftIds: [],
+      },
+      actor,
+    );
+    const parentTurn = await runningTurn(service, "chief");
+    expect(channelTurns(started.client)).toEqual([["gpt-5.6-sol", "high"]]);
+
+    const parent = service.channels.store.tasks("channel-1")[0];
+    if (!parent) throw new Error("The channel task is missing.");
+    await service.channels.tool("channel-1", "chief", parentTurn, "assign-1", "channel_assign", {
+      recipientAgentId: "helper",
+      task: "Inspect project B",
+      expectedResult: "Findings B",
+      sourceMessageIds: [parent.requestMessageId],
+      resources: ["none"],
+    });
+    const threadId = paramsRecord(
+      started.client.requests.find((request) => request.method === "turn/start")?.params,
+    )?.threadId;
+    started.client.emit(
+      "notification",
+      notification("turn/completed", { threadId, turn: { id: parentTurn, status: "completed" } }),
+    );
+    await runningTurn(service, "helper");
+    expect(channelTurns(started.client)).toEqual([
+      ["gpt-5.6-sol", "high"],
+      ["gpt-6-luna", "medium"],
+    ]);
+  });
+
+  it("uses the small model for a task that a routine requests", async () => {
+    const started = await channelService();
+    service = started.service;
+    await service.channels.command(
+      {
+        type: "request",
+        channelId: "channel-1",
+        operationId: "routine-run",
+        text: "Compare the two projects.",
+        recipientAgentId: "chief",
+        requestMessageId: "routine-request-1",
+        origin: { kind: "routine", routineId: "daily", routineName: "Daily", runId: "run-1" },
+      },
+      actor,
+    );
+    await runningTurn(service, "chief");
+    expect(channelTurns(started.client)).toEqual([["gpt-6-luna", "medium"]]);
   });
 });

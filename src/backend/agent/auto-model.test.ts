@@ -49,6 +49,14 @@ function input(overrides: Partial<AutoModelInput> = {}): AutoModelInput {
   };
 }
 
+const NO_DELEGATED: AutoModelInput["agent"] = {
+  provider: "claude",
+  model: "claude-opus-5-5",
+  reasoningEffort: "high",
+  autoModel: true,
+  delegatedSmallModel: false,
+};
+
 const OWN: Omit<AutoModelChoice, "reason"> = {
   model: "claude-opus-5-5",
   reasoningEffort: "high",
@@ -82,8 +90,14 @@ describe("chooseTurnModel", () => {
       { model: "claude-sonnet-5-5", reasoningEffort: "low", smallModelName: null },
     ],
     ["relay", input({ relay: true })],
-    ["not-from-person", input({ messages: [{ sender: "teammate", text: "Done.", attachmentCount: 0 }] })],
-    ["not-from-person", input({ messages: [{ sender: "routine", text: "Say hi.", attachmentCount: 0 }] })],
+    [
+      "not-from-person",
+      input({ agent: NO_DELEGATED, messages: [{ sender: "teammate", text: "Done.", attachmentCount: 0 }] }),
+    ],
+    [
+      "not-from-person",
+      input({ agent: NO_DELEGATED, messages: [{ sender: "routine", text: "Say hi.", attachmentCount: 0 }] }),
+    ],
     [
       "not-from-person",
       input({
@@ -163,6 +177,101 @@ describe("chooseTurnModel", () => {
     expect(chooseTurnModel(input({ models: () => models }))).toMatchObject({
       model: "claude-sonnet-5-5",
       reasoningEffort: "medium",
+    });
+  });
+
+  describe("teammate and routine turns", () => {
+    const FABLE_MODELS = [option("claude", "claude-fable-5-2", "Claude Fable 5.2"), ...MODELS];
+    const fable = (overrides: Partial<AutoModelInput["agent"]> = {}): AutoModelInput["agent"] => ({
+      provider: "claude",
+      model: "claude-fable-5-2",
+      reasoningEffort: "high",
+      ...overrides,
+    });
+    const delegated = (overrides: Partial<AutoModelInput> = {}) =>
+      input({
+        agent: fable(),
+        models: () => FABLE_MODELS,
+        messages: [
+          { sender: "teammate", text: "Please implement the parser and write the tests.", attachmentCount: 1 },
+          { sender: "teammate", text: "x".repeat(400), attachmentCount: 0 },
+        ],
+        // A warm cache on the agent's own model does not keep a delegated turn there.
+        lastTurn: { model: "claude-fable-5-2", at: JUST_NOW },
+        ...overrides,
+      });
+    const FABLE_OWN = { model: "claude-fable-5-2", reasoningEffort: "high", smallModelName: null };
+
+    it("runs every-teammate and every-routine turns on the small model, effort capped at medium", () => {
+      expect(chooseTurnModel(delegated())).toEqual({
+        model: "claude-sonnet-5-5",
+        reasoningEffort: "medium",
+        smallModelName: "Claude Sonnet 5.5",
+        reason: "delegated-small-model",
+      });
+      expect(
+        chooseTurnModel(delegated({ messages: [{ sender: "routine", text: "Write the report", attachmentCount: 0 }] })),
+      ).toMatchObject({ model: "claude-sonnet-5-5", reason: "delegated-small-model" });
+      // A lower own effort stays.
+      expect(chooseTurnModel(delegated({ agent: fable({ reasoningEffort: "low" }) }))).toMatchObject({
+        model: "claude-sonnet-5-5",
+        reasoningEffort: "low",
+        reason: "delegated-small-model",
+      });
+    });
+
+    it("never runs above medium when the small model does not list the capped effort", () => {
+      const withEfforts = (efforts: readonly AgentReasoningEffort[], fallback: AgentReasoningEffort = "medium") =>
+        FABLE_MODELS.map((model) =>
+          model.id === "claude-sonnet-5-5"
+            ? { ...option("claude", model.id, model.name, efforts), defaultReasoningEffort: fallback }
+            : model,
+        );
+      // No medium: the highest effort under it, not the default.
+      expect(chooseTurnModel(delegated({ models: () => withEfforts(["low", "high"], "high") }))).toMatchObject({
+        model: "claude-sonnet-5-5",
+        reasoningEffort: "low",
+        reason: "delegated-small-model",
+      });
+      // Nothing at or under medium, and a default above it: the turn keeps the agent's model.
+      expect(chooseTurnModel(delegated({ models: () => withEfforts(["high", "max"], "high") }))).toEqual({
+        ...FABLE_OWN,
+        reason: "small-model-unavailable",
+      });
+    });
+
+    it.each([
+      // One message from the person: the turn is the person's, and the existing rules decide.
+      [
+        "off",
+        delegated({
+          messages: [
+            { sender: "teammate", text: "Done.", attachmentCount: 0 },
+            { sender: "person", text: "Thanks!", attachmentCount: 0 },
+          ],
+        }),
+        FABLE_OWN,
+      ],
+      ["off", delegated({ agent: fable({ delegatedSmallModel: false }) }), FABLE_OWN],
+      [
+        "not-larger-model",
+        delegated({ agent: fable({ model: "claude-sonnet-5-5" }) }),
+        { ...FABLE_OWN, model: "claude-sonnet-5-5" },
+      ],
+      ["catalog-not-listed", delegated({ catalogListed: false }), FABLE_OWN],
+      [
+        "small-model-unavailable",
+        delegated({ models: () => FABLE_MODELS.filter((model) => model.id !== "claude-sonnet-5-5") }),
+        FABLE_OWN,
+      ],
+      // The Slack reply profile keeps its own model and effort.
+      [
+        "off",
+        delegated({ settings: { model: "claude-sonnet-5-5", reasoningEffort: "low" } }),
+        { model: "claude-sonnet-5-5", reasoningEffort: "low", smallModelName: null },
+      ],
+    ] as const)("keeps the turn's own model: %s", (reason, turn, own) => {
+      expect(chooseTurnModel(turn)).toEqual({ ...own, reason });
     });
   });
 });

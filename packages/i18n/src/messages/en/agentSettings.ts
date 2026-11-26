@@ -115,6 +115,8 @@ export const messages = defineMessages("agentSettings", {
   "agentSettings.turnLimit.off": "Off",
   "agentSettings.turnLimit.hint":
     "The agent stops and asks you to continue after this many tool calls or about 75,000 tokens per call in one turn.",
+  "agentSettings.delegatedSmallModel.title": "Use the smaller model for teammate and routine turns",
+  "agentSettings.delegatedSmallModel.hint": "Turns that you start keep this agent's model.",
   "agentSettings.weeklyBudget.title": "Weekly tokens",
   "agentSettings.weeklyBudget.label": "Weekly token budget",
   "agentSettings.weeklyBudget.none": "No budget",

@@ -19,6 +19,7 @@ import {
   agentAutoModelEnabled,
   agentAutomationAllowed,
   agentComputerUseEnabled,
+  agentDelegatedSmallModelEnabled,
   type BusyMessageMode,
   type CustomAgentSummary,
   type CustomProviderSummary,
@@ -174,6 +175,7 @@ interface AgentSettingsDraft {
   weeklyTokenBudget: WeeklyBudgetChoice;
   turnLimit: TurnLimitChoice;
   autoModel: boolean;
+  delegatedSmallModel: boolean;
   disabledMcpServerIds: string[];
   /** Widening to full access waits here for the confirmation. */
   confirmingFullAccess: boolean;
@@ -221,6 +223,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     weeklyTokenBudget: "none",
     turnLimit: DEFAULT_TURN_LIMIT,
     autoModel: false,
+    delegatedSmallModel: true,
     disabledMcpServerIds: [],
     confirmingFullAccess: false,
     runtime: untrack(() => ({ ...props.runtimeSettings })),
@@ -287,6 +290,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
           String(agent.weeklyTokenBudget ?? "none"),
           String(agent.turnLimit ?? DEFAULT_TURN_LIMIT),
           String(agentAutoModelEnabled(agent)),
+          String(agentDelegatedSmallModelEnabled(agent)),
           (agent.disabledMcpServerIds ?? []).join(","),
           runtimeSettings.provider,
           runtimeSettings.model,
@@ -328,6 +332,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
           state.weeklyTokenBudget = agent.weeklyTokenBudget ?? "none";
           state.turnLimit = agent.turnLimit ?? DEFAULT_TURN_LIMIT;
           state.autoModel = agentAutoModelEnabled(agent);
+          state.delegatedSmallModel = agentDelegatedSmallModelEnabled(agent);
           state.disabledMcpServerIds = [...(agent.disabledMcpServerIds ?? [])];
           if (agentChanged) state.confirmingFullAccess = false;
           state.runtime.provider = runtimeSettings.provider;
@@ -680,6 +685,19 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     if (!disposed && props.agent.id === agentId && draft.autoModel === next) {
       setDraft((state) => {
         state.autoModel = !next;
+      });
+    }
+  }
+
+  async function saveDelegatedSmallModel(next: boolean): Promise<void> {
+    const agentId = props.agent.id;
+    setDraft((state) => {
+      state.delegatedSmallModel = next;
+    });
+    if (await saveAgentPatch({ delegatedSmallModel: next ? null : false }, agentId)) return;
+    if (!disposed && props.agent.id === agentId && draft.delegatedSmallModel === next) {
+      setDraft((state) => {
+        state.delegatedSmallModel = !next;
       });
     }
   }
@@ -1193,6 +1211,19 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
               <Text as="p" class="agent-settings-runtime-note" variant="caption" tone="muted">
                 {t("agentSettings.turnLimit.hint")}
               </Text>
+              <div class="agent-settings-notifications">
+                <div>
+                  <strong>{t("agentSettings.delegatedSmallModel.title")}</strong>
+                  <span>{t("agentSettings.delegatedSmallModel.hint")}</span>
+                </div>
+                <Switch
+                  size="sm"
+                  aria-label={t("agentSettings.delegatedSmallModel.title")}
+                  checked={autoModelSupported() && draft.delegatedSmallModel}
+                  disabled={!autoModelSupported()}
+                  onChange={(next) => void saveDelegatedSmallModel(next)}
+                />
+              </div>
             </Show>
             <Show when={props.busyMessageModeEditable && steerUnsupported()}>
               <Text as="p" class="agent-settings-runtime-note" variant="caption" tone="muted">

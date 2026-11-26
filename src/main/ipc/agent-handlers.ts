@@ -285,7 +285,8 @@ export function agentIpcHandlers({
             input.disabledMcpServerIds !== undefined ||
             input.weeklyTokenBudget !== undefined ||
             input.turnLimit !== undefined ||
-            input.autoModel !== undefined
+            input.autoModel !== undefined ||
+            input.delegatedSmallModel !== undefined
           ) {
             throw new Error(sourceText("error.agent.tokenSettingsLocalOnly"));
           }
