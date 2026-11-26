@@ -33,6 +33,12 @@
 
 ### Changed
 
+- **After this update, every agent stops a turn after 40 tool calls and asks you to continue,
+  compacts its conversation at 120,000 tokens, and runs turns from a teammate or a routine on the
+  smaller model. You do not have to do anything. To keep the old behavior for an agent with long
+  unattended work, open its settings and set "Turn limit" to Off, "Compact early" to 200,000, and
+  turn off "Use the smaller model for teammate and routine turns".**
+- If you go back to v0.40, these three settings return to their v0.40 defaults. No data is lost.
 - Claude and Codex agents now compact their conversation at 120,000 tokens by default. The "Compact
   early" setting offers 80,000, 120,000 and 200,000. There is no "Off" option now. Codex also
   compacts in the middle of a turn.
