@@ -82,6 +82,7 @@ import { CHANNEL_PICTURE_CAPABILITY } from "./channel-picture-v1";
 import { CHANNEL_SEEN_SUBTASKS_CAPABILITY } from "./channel-seen-subtasks-v1";
 import { CHANNEL_TASK_WAITS_CAPABILITY } from "./channel-task-waits-v1";
 import { CHAT_COLORS_CAPABILITY } from "./chat-colors-v1";
+import { CHAT_FOLDERS_CAPABILITY } from "./chat-folders-v1";
 import { CHAT_HISTORY_CAPABILITY } from "./chat-history-v1";
 import { CLAUDE_API_KEY_CAPABILITY } from "./claude-api-key-v1";
 import { CLAUDE_COMPACT_WINDOW_CAPABILITY } from "./claude-compact-window-v1";
@@ -366,6 +367,7 @@ export {
   CHANNEL_TASK_CANCEL_CAPABILITY,
   CHANNEL_TASK_WAITS_CAPABILITY,
   CHAT_COLORS_CAPABILITY,
+  CHAT_FOLDERS_CAPABILITY,
   CHAT_HISTORY_CAPABILITY,
   COMPUTER_ACTIVITY_CAPABILITY,
   CONNECTORS_CAPABILITY,
@@ -539,6 +541,7 @@ const V8 = { since: 8, bootstrap: false } as const satisfies TeamCapabilityPlace
 const V9_BOOTSTRAP = { since: 9, bootstrap: true } as const satisfies TeamCapabilityPlacement;
 const V9 = { since: 9, bootstrap: false } as const satisfies TeamCapabilityPlacement;
 const V10 = { since: 10, bootstrap: false } as const satisfies TeamCapabilityPlacement;
+const V10_BOOTSTRAP = { since: 10, bootstrap: true } as const satisfies TeamCapabilityPlacement;
 
 const TEAM_CAPABILITY_REGISTRY = [
   [BROWSER_SECRET_CAPABILITY, ALL_BOOTSTRAP],
@@ -564,9 +567,9 @@ const TEAM_CAPABILITY_REGISTRY = [
   [TEAM_BROWSER_VIEW_CAPABILITY, ALL_BOOTSTRAP],
   [TEAM_BROWSER_VIEW_FRAME_POINT_CAPABILITY, ALL_BOOTSTRAP],
   [TEAM_BROWSER_VIEW_CURSOR_CAPABILITY, ALL_BOOTSTRAP],
-  [TEAM_BROWSER_VIEW_CLIPBOARD_CAPABILITY, ALL_BOOTSTRAP],
-  [TEAM_BROWSER_VIEW_VIEWPORT_CAPABILITY, ALL_BOOTSTRAP],
-  [TEAM_BROWSER_VIEW_CONTEXT_MENU_CAPABILITY, ALL_BOOTSTRAP],
+  [TEAM_BROWSER_VIEW_CLIPBOARD_CAPABILITY, ALL],
+  [TEAM_BROWSER_VIEW_VIEWPORT_CAPABILITY, ALL],
+  [TEAM_BROWSER_VIEW_CONTEXT_MENU_CAPABILITY, ALL],
   ["agent-profile-generation", ALL_BOOTSTRAP],
   ["agent-analytics", ALL_BOOTSTRAP],
   ["host-analytics", ALL_BOOTSTRAP],
@@ -584,7 +587,7 @@ const TEAM_CAPABILITY_REGISTRY = [
   [MCP_SERVERS_CAPABILITY, ALL_BOOTSTRAP],
   [STORAGE_CAPABILITY, ALL_BOOTSTRAP],
   [AGENT_ADMIN_CAPABILITY, ALL_BOOTSTRAP],
-  [AGENT_MEMORIES_CAPABILITY, V7],
+  [AGENT_MEMORIES_CAPABILITY, V7_BOOTSTRAP],
   [AGENT_SESSION_SETTINGS_CAPABILITY, V7],
   [ACP_REGISTRY_CAPABILITY, V7],
   [SKILLS_ADMIN_CAPABILITY, ALL_BOOTSTRAP],
@@ -613,7 +616,7 @@ const TEAM_CAPABILITY_REGISTRY = [
   [HOSTED_SITES_CAPABILITY, ALL_BOOTSTRAP],
   [TEAM_MESSAGE_CLIENT_ID_CAPABILITY, ALL_BOOTSTRAP],
   [WORKSPACE_DIRECTORY_CAPABILITY, ALL_BOOTSTRAP],
-  [AGENT_HOST_SETTINGS_CAPABILITY, ALL],
+  [AGENT_HOST_SETTINGS_CAPABILITY, ALL_BOOTSTRAP],
   [MCP_SIGN_IN_CAPABILITY, ALL],
   [PROVIDER_HOST_SIGN_IN_CAPABILITY, V7],
   [MCP_SIGN_IN_APP_CAPABILITY, V7],
@@ -840,9 +843,76 @@ const TEAM_CAPABILITY_REGISTRY = [
   [WHATSAPP_READ_ONLY_CAPABILITY, V10],
   [VOICE_TRANSCRIPTION_CAPABILITY, V10],
   [CLIENT_BROWSER_CAPABILITY, V10],
-  // GoAhead only: Android live updates through FCM.
-  [ANDROID_LIVE_UPDATE_PUSH_CAPABILITY, V10],
+  // GoAhead only. Protocol 6 and older get both through `GOAHEAD_PROTOCOL_6_CAPABILITIES`.
+  [ANDROID_LIVE_UPDATE_PUSH_CAPABILITY, V10_BOOTSTRAP],
+  [CHAT_FOLDERS_CAPABILITY, V10_BOOTSTRAP],
 ] as const satisfies readonly (readonly [string, TeamCapabilityPlacement])[];
+
+/**
+ * The capabilities that a host serves to a peer on protocol 6 or older: exactly the ones that
+ * released GoAhead v0.41 served (listed here in its order; the host sends them in registry order).
+ * Released GoAhead phones speak protocol 6 and refuse a list of more than 64. Frozen: do not add or
+ * remove an entry.
+ */
+export const GOAHEAD_PROTOCOL_6_CAPABILITIES = [
+  "browser-secret-handoff",
+  "agent-runtime-snapshots",
+  "browser-control",
+  "conversation-pagination",
+  "direct-messages",
+  "hosted-site-event-markers",
+  "remote-desktop",
+  "routine-event-markers",
+  "routine-run-event-markers",
+  "sidebar-layout",
+  "agent-duplication",
+  "opencode",
+  "local-providers",
+  "local-providers-v2",
+  "remote-desktop-setup",
+  "queue-edit-v1",
+  "browser-navigation",
+  "browser-view",
+  "browser-view-frame-point",
+  "agent-profile-generation",
+  "agent-analytics",
+  "host-analytics",
+  "installed-skills",
+  "agent-activity",
+  "conversation-unread",
+  "model-scoped-usage",
+  "agent-create-model",
+  "eml-attachments",
+  "media-attachments",
+  "channel-chats-v1",
+  "channel-delete-v1",
+  "mcp-servers-v1",
+  "storage-v1",
+  "agent-admin-v1",
+  "agent-host-settings-v1",
+  "agent-memories-v1",
+  "skills-admin-v1",
+  "skills-events-v1",
+  "shared-tables-v1",
+  "agent-install-v1",
+  "providers-v1",
+  "providers-v2",
+  "providers-v3",
+  "providers-v4",
+  "host-admin-v1",
+  "agent-update-v1",
+  "member-leave-v1",
+  "context-reset-v1",
+  "host-update-v1",
+  "agent-import-v1",
+  "agent-publish-v1",
+  "live-activity-push-v1",
+  "hosted-sites-v1",
+  "message-client-id-v1",
+  "android-live-update-push-v1",
+  "chat-folders-v1",
+] as const;
+const GOAHEAD_PROTOCOL_6_CAPABILITY_SET: ReadonlySet<string> = new Set<string>(GOAHEAD_PROTOCOL_6_CAPABILITIES);
 
 export const TEAM_CURRENT_CAPABILITIES = TEAM_CAPABILITY_REGISTRY.map(([capability]) => capability);
 
@@ -935,11 +1005,12 @@ export function teamCapabilitiesForProtocol(protocol: number | null | undefined)
   return protocol === 8 ? TEAM_PROTOCOL_V8_CURRENT_CAPABILITIES : TEAM_PROTOCOL_V7_CURRENT_CAPABILITIES;
 }
 export function teamCapabilitiesVisibleToProtocol<T extends string>(capabilities: readonly T[], protocol: number): T[] {
+  if (protocol < 7) return legacyTeamCapabilities(capabilities);
   const newest = protocol >= 10 ? 10 : protocol >= 9 ? 9 : 8;
   return capabilities.filter((capability) => capabilitySince(capability) <= newest);
 }
-export function legacyTeamCapabilities(capabilities: readonly string[]): string[] {
-  return capabilities.filter((capability) => capabilitySince(capability) === 1);
+export function legacyTeamCapabilities<T extends string>(capabilities: readonly T[]): T[] {
+  return capabilities.filter((capability) => GOAHEAD_PROTOCOL_6_CAPABILITY_SET.has(capability));
 }
 
 export function supportsTeamCapability(

@@ -211,6 +211,7 @@ import {
 } from "./cache-expiry-compaction-preference-store";
 import { type CentralAuthManager, isHostNotOnAccount } from "./central-auth-manager";
 import { type ChannelFolders, createChannelFolders } from "./channel-folders";
+import { ChatBackdropStore } from "./chat-backdrop-store";
 import { ChatVisualPreviewer } from "./chat-visual-preview";
 import {
   type ClaudeCompactWindowControl,
@@ -464,6 +465,7 @@ import { SERVER_TIMEZONE_PREFERENCE_FILE, ServerTimezonePreferenceStore } from "
 import {
   configureApplicationProtocol,
   configureAttachmentProtocol,
+  configureBackdropProtocol,
   configureServerLogoProtocols,
 } from "./session-configuration";
 import { readSetupState, writeSetupState } from "./setup-store";
@@ -793,6 +795,8 @@ export interface ApplicationServices {
   remoteSessionCache: RemoteSessionCache;
   appBehavior: AppBehaviorService;
   agentInitialization: AgentInitializationGate<AgentLifecycleFailed>;
+  /** The backdrop behind the window that GoAhead v0.40 and v0.41 saved: read, choose and remove only. */
+  chatBackdrops: ChatBackdropStore;
   sidebarLayout: SidebarLayoutStore;
   host: HostService;
   remoteDesktop: RemoteDesktopManager;
@@ -1553,6 +1557,7 @@ export async function createApplicationServices({
   const busyMessageMode = new BusyMessageModePreferenceStore(
     join(app.getPath("userData"), BUSY_MESSAGE_MODE_PREFERENCE_FILE),
   );
+  const chatBackdrops = new ChatBackdropStore(app.getPath("userData"));
   const agentMemoryLimit = new AgentMemoryLimitPreferenceStore(
     join(app.getPath("userData"), AGENT_MEMORY_LIMIT_PREFERENCE_FILE),
   );
@@ -1655,6 +1660,8 @@ export async function createApplicationServices({
       remoteNetworkRoute.load(),
       remoteControlPolicy.load(),
       appBehavior.load(),
+      // Never fails: an unreadable file reads as no backdrop.
+      Effect.promise(() => chatBackdrops.load()),
     ],
     { concurrency: "unbounded", discard: true },
   );
@@ -1741,6 +1748,8 @@ export async function createApplicationServices({
         )
         .pipe(Effect.asVoid, toProviderRuntimeFailure);
     },
+    // Read when an automatic update would start, after `service` exists.
+    isProviderIdle: (provider) => !service.isProviderBusy(provider),
   });
   let updateCheckWait: Fiber.Fiber<void> | null = null;
   let modelReasoningWait: Fiber.Fiber<void> | null = null;
@@ -2144,6 +2153,7 @@ export async function createApplicationServices({
   const storageSources = {
     roots: {
       database: store.database.path,
+      workspaceRoots: store.workspaceRoots,
       downloads: store.downloadsRoot,
       caches: ["remote-attachments", "remote-shared-files", "remote-workspace-files"].map((name) =>
         join(userData, name),
@@ -2376,6 +2386,8 @@ export async function createApplicationServices({
     webhookRoutines: () => agentWebhookRoutineWriter(events),
     approvalAutomation,
     busyMessageMode: () => busyMessageMode.get().mode,
+    // Read when the person answers a card, long after `host` exists.
+    channelActor: () => host.channelActor(),
     agentMemoryLimit: () => agentMemoryLimit.get().limit,
     memoryReviewInterval: () => memoryReview.get().interval,
     skillLearning: () => skillLearning.get().mode,
@@ -4088,6 +4100,7 @@ export async function createApplicationServices({
   }
   configureAttachmentProtocol({ mailbox, agents: service, remoteServers, slackInboxFiles: messaging });
   configureServerLogoProtocols({ teamStore, remoteServers });
+  configureBackdropProtocol(chatBackdrops);
   const browserView = new BrowserViewClient({
     servers: remoteServers,
     onEvent: (event, owner) => {
@@ -4580,6 +4593,7 @@ export async function createApplicationServices({
     interfaceSize,
     notificationPreference,
     busyMessageMode,
+    chatBackdrops,
     agentDefaults,
     agentMemoryLimit: agentMemoryLimitSetting,
     memoryReview,

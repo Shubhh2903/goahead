@@ -153,7 +153,7 @@ export const messages = defineMessages("error.agent", {
   "error.agent.busyMessageModeLocalOnly":
     "What messages do while the agent works can only be set on the computer that runs the agent.",
   "error.agent.tokenSettingsLocalOnly":
-    "Early compaction, MCP servers and the weekly token budget can only be set on the computer that runs the agent.",
+    "Early compaction, MCP servers, the weekly token budget and the automatic model choice can only be set on the computer that runs the agent.",
   "error.agent.backupModelsLocalOnly": "Backup models can only be set on the computer that runs the agent.",
   "error.agent.backupModelsAtLimit":
     "No backup model can take over now: each one reached its usage limit or failed a short time ago. Models of one account can share one limit. To continue now, add a backup model from another provider or another account, or wait for the reset.",

@@ -4,6 +4,7 @@ import { Linking } from "react-native";
 import type { AgentLiveActivityLoader, AgentLiveActivityNative } from "./agent-live-activity.types";
 import { ANDROID_LIVE_UPDATE_TASK } from "./android-live-update-task";
 import {
+  androidLiveUpdateResponseUrl,
   androidLiveUpdateShown,
   dismissAndroidLiveUpdate,
   ensureAndroidLiveUpdateChannel,
@@ -28,24 +29,29 @@ function createNative(): AgentLiveActivityNative {
   let current: LiveActivityInstance<AgentLiveActivityProps> | null = null;
   // A notification from an earlier launch shows old state. The app shows its own state now.
   void dismissAndroidLiveUpdate(nowSeconds()).catch(() => undefined);
-  // A tap opens the chat or the chat list, as the iPhone activity does.
+  // A tap opens the chat or the chat list, and a button opens its signed link, as the iPhone activity
+  // does. The app checks the signature, and asks before it approves.
   Notifications.addNotificationResponseReceivedListener((response) => {
-    const url = response.notification.request.content.data?.url;
-    if (typeof url === "string") void Linking.openURL(url).catch(() => undefined);
+    const url = androidLiveUpdateResponseUrl(
+      response.notification.request.content.data,
+      response.actionIdentifier,
+      nowSeconds(),
+    );
+    if (url) void Linking.openURL(url).catch(() => undefined);
   });
   return {
     starter: {
-      start: (props) => {
+      start: (props, staleDate) => {
         // Each update waits for the first show, so it does not find the notification missing.
-        const shown = prepare().then(() => showAndroidLiveUpdate(props, nowSeconds()));
+        const shown = prepare().then(() => showAndroidLiveUpdate(props, nowSeconds(), staleSeconds(staleDate)));
         const activity: LiveActivityInstance<AgentLiveActivityProps> = {
           startedAt: Date.now(),
           isActive: () => current === activity,
-          update: async (next) => {
+          update: async (next, staleDate) => {
             await shown;
             // The user can remove the notification. The sync then starts a new one.
             if (current !== activity || !(await androidLiveUpdateShown())) throw new Error("The notification ended.");
-            await showAndroidLiveUpdate(next, nowSeconds());
+            await showAndroidLiveUpdate(next, nowSeconds(), staleSeconds(staleDate));
           },
           end: async () => {
             if (current === activity) current = null;
@@ -99,4 +105,9 @@ function watchFcmToken(receive: (token: string) => void): () => void {
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
+}
+
+/** The out-of-date time that the app sets in the background, or the default of a host update. */
+function staleSeconds(staleDate: Date | undefined): number | undefined {
+  return staleDate ? Math.floor(staleDate.getTime() / 1000) : undefined;
 }

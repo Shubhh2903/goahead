@@ -25,6 +25,12 @@ import {
 } from "@openbot/contracts/ipc";
 import { isBoolean, isDynamicRecord, isNumber, isOneOf, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
+import {
+  legacyOnceRoutineSchedule,
+  onceRoutineSchedule,
+  routineOnceAt,
+  routineOnceInstant,
+} from "@openbot/team-client/routine-schedule";
 import { Effect, Result, Schema } from "effect";
 import type { AgentLifecycleFailed } from "../backend/agent-service";
 import { causeHelpers } from "../backend/effect-boundary";
@@ -49,6 +55,7 @@ interface AgentMarketplaceAgents {
     name: string;
     instruction: string;
     active: boolean;
+    timezone: string;
     trigger: { schedule: RoutineSchedule };
   }>;
   resolveAvatar(agentId: string): { path: string; mimeType: AvatarImageInput["mimeType"] } | null;
@@ -156,13 +163,12 @@ export class AgentMarketplaceService {
       if (!agent)
         return yield* new AgentMarketplaceFailure({ cause: new Error(sourceText("error.skill.chooseLocalAgent")) });
       const skills = yield* this.skills.listPublishable(agentId).pipe(toAgentMarketplaceFailure);
-      const routines = this.agents
-        .listRoutines(agentId)
-        .flatMap(({ name, instruction, active, trigger }) =>
-          isReleasedRoutineSchedule(trigger.schedule)
-            ? [{ name, instruction, active, schedule: trigger.schedule }]
-            : [],
-        );
+      const routines = this.agents.listRoutines(agentId).flatMap(({ name, instruction, active, timezone, trigger }) => {
+        // A one-time routine publishes in the shape that GoAhead v0.41 published and installs read.
+        const schedule =
+          trigger.schedule.kind === "once" ? legacyOnceRoutineSchedule(trigger.schedule, timezone) : trigger.schedule;
+        return isReleasedRoutineSchedule(schedule) ? [{ name, instruction, active, schedule }] : [];
+      });
       return {
         agentId: agentId,
         name: agent.name,
@@ -268,9 +274,8 @@ export class AgentMarketplaceService {
                     agentId: agent.id,
                     name: routine.name,
                     instruction: routine.instruction,
-                    active: routine.active,
                     timezone: input.timezone,
-                    schedule: localSchedule(routine.schedule),
+                    ...localRoutine(routine, input.timezone),
                   },
                   { recordConversationEvent: false },
                 ),
@@ -356,6 +361,50 @@ export class AgentMarketplaceService {
 
 export function localSchedule(schedule: RoutineSchedule): RoutineSchedule {
   return schedule.kind === "interval" ? { ...schedule, anchorAt: new Date().toISOString() } : structuredClone(schedule);
+}
+
+/** A one-time time closer than this is read as passed: the create that follows reads the clock again. */
+const ONCE_INSTALL_MARGIN_MS = 60_000;
+
+/**
+ * A listed routine as this computer installs it. A repeating interval starts now. A one-time routine
+ * follows `onceRoutine`.
+ */
+export function localRoutine(
+  routine: { active: boolean; schedule: RoutineSchedule },
+  timezone: string,
+  now = new Date(),
+): { active: boolean; schedule: RoutineSchedule } {
+  return onceRoutine(routine, timezone, now) ?? { active: routine.active, schedule: localSchedule(routine.schedule) };
+}
+
+/**
+ * A one-time routine as this computer installs or imports it, or `null` for a repeating one. It keeps
+ * its time, in the shape that GoAhead v0.40 and v0.41 read; when that time has passed, it comes in
+ * off with its time kept, so the install does not fail because of it.
+ */
+export function onceRoutine(
+  routine: { active: boolean; schedule: RoutineSchedule },
+  timezone: string,
+  now = new Date(),
+): { active: boolean; schedule: RoutineSchedule } | null {
+  const at = onceTime(routine.schedule, timezone);
+  if (!at) return null;
+  return {
+    active: routine.active && at.getTime() > now.getTime() + ONCE_INSTALL_MARGIN_MS,
+    schedule: onceRoutineSchedule(at),
+  };
+}
+
+/** The one time of a native or legacy one-time routine, or `null` for a repeating or invalid one. */
+function onceTime(schedule: RoutineSchedule, timezone: string): Date | null {
+  if (schedule.kind !== "once") return routineOnceAt(schedule);
+  try {
+    return routineOnceInstant(schedule, timezone);
+  } catch {
+    // The create that follows refuses the invalid time with its own error.
+    return null;
+  }
 }
 
 export function validTimezone(value: string): boolean {

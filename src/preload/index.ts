@@ -89,6 +89,7 @@ import {
   decodeSaveSkillSuggestionResult,
   decodeServerAuditLog,
   decodeTestCompanySignInResult,
+  decodeUnassignedFolders,
   decodeWorkspaceDirectory,
   type EventEndpoint,
   type GroupApi,
@@ -250,6 +251,7 @@ import {
   decodeVoid,
   decodeWorkflowNotificationOpenedEvent,
 } from "./app-decoding";
+import { decodeChatBackdropState } from "./backdrop-decoding";
 import { decodeBackgroundProcesses } from "./background-process-decoding";
 import {
   decodeBrowserBounds,
@@ -410,6 +412,7 @@ import {
   decodeTeamPresenceSnapshot,
   decodeTeamSessions,
 } from "./team-decoding";
+import { decodeLocalUsageDashboard } from "./usage-decoding";
 import { decodeVaultCodes, decodeVaultImportResult, decodeVaultSecret, decodeVaultState } from "./vault-decoding";
 import {
   decodeWorkflowDetail,
@@ -1186,6 +1189,14 @@ const openbotApi: OpenBotDesktopApi = {
     create: decodeRoutineFeed,
     remove: decodeRoutineFeed,
   }),
+  backdrops: bridgeGroup(IPC_ENDPOINTS.backdrops, {
+    getState: decodeChatBackdropState,
+    setChoice: decodeChatBackdropState,
+    remove: decodeChatBackdropState,
+  }),
+  usage: bridgeGroup(IPC_ENDPOINTS.usage, {
+    getDashboard: decodeLocalUsageDashboard,
+  }),
   billing: bridgeGroup(IPC_ENDPOINTS.billing, {
     getState: decodeBillingState,
     openPortal: decodeVoid,
@@ -1791,6 +1802,8 @@ const openbotApi: OpenBotDesktopApi = {
     changeLibraryFolders: decodeLibraryFoldersSnapshot,
     getRemovableRuntimes: decodeRemovableRuntimes,
     removeRemovableRuntimes: decodeRemovableRuntimes,
+    listUnassignedFolders: decodeUnassignedFolders,
+    trashUnassignedFolder: decodeVoid,
   }),
   remoteDesktop: bridgeGroup(IPC_ENDPOINTS.remoteDesktop, {
     checkSetup: decodeRemoteDesktopSetupFromMain,

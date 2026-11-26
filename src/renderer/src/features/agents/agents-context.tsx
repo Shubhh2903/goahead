@@ -26,6 +26,8 @@ import { createSimpleContext } from "../../simple-context";
 import { useUiErrors } from "../../ui-errors";
 import type { AgentSettingsRequest } from "../conversation/conversation-types";
 import { useDirectMessages } from "../conversation/direct-messages-context";
+import { firstAgentSkipped } from "../onboarding/first-run-wizard";
+import { useSetup } from "../onboarding/onboarding-context";
 import { remoteAdminServer } from "../servers/server-capabilities";
 import { useServers } from "../servers/servers-context";
 import { useWindowPage } from "../window/window-page-context";
@@ -45,6 +47,7 @@ const Agents = createSimpleContext({
     const { activeDirectMember, setDirectTyping } = useDirectMessages();
     const windowPage = useWindowPage();
     const { uiErrors, setUiErrors, appendUiError } = useUiErrors();
+    const { firstRunWizard } = useSetup();
 
     const [agentList, setAgentList] = createSignal<AgentProfile[]>([]);
     const [agentListSettled, setAgentListSettled] = createSignal(false);
@@ -187,7 +190,9 @@ const Agents = createSimpleContext({
         const hidden = untrack(userHiddenAgentIds);
         return (profiles.find((agent) => !hidden.has(agent.id)) ?? profiles[0])?.id ?? "";
       });
-      if (profiles.length === 0 && !agentSetupOpen()) {
+      // First-run setup can skip the first agent on this computer. The sidebar's action still opens it.
+      const skipped = activeServer()?.kind === "local" && firstAgentSkipped(untrack(firstRunWizard));
+      if (profiles.length === 0 && !agentSetupOpen() && !skipped) {
         setAgentSetupDraft(createFirstAgentDraft());
         setAgentSetupError(null);
         setAgentSetupOpen(true);
@@ -237,6 +242,14 @@ const Agents = createSimpleContext({
 
     function cancelAgentSetup(): void {
       if (creatingAgent() || agentList().length === 0) return;
+      setAgentSetupOpen(false);
+      setAgentSetupError(null);
+      setAgentSetupDraft(createFirstAgentDraft());
+    }
+
+    /** Closes the first-agent form on an empty roster, which `cancelAgentSetup` refuses to do. */
+    function skipFirstAgentSetup(): void {
+      if (creatingAgent()) return;
       setAgentSetupOpen(false);
       setAgentSetupError(null);
       setAgentSetupDraft(createFirstAgentDraft());
@@ -363,6 +376,7 @@ const Agents = createSimpleContext({
       ownAgentLevelsApplied: () => ownAgentLevelsApplied,
       openAgentSetup,
       cancelAgentSetup,
+      skipFirstAgentSetup,
       updateAgent,
       setAgentAvatar,
     };

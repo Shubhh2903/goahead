@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ManagedProviderId } from "@openbot/contracts/agent-providers";
@@ -25,6 +25,7 @@ interface Report {
   laterCheck?: { phases: Record<string, string[]> };
   turnedOn?: { phases: Record<string, string[]>; offerAfterOff: string | null };
   cancelled?: { phases: Record<string, string[]>; offer: string | null };
+  pinnedOnly?: { pinned: string; upstream: string; downloads: string[]; offer: string | null };
 }
 
 const root = await mkdtemp(join(tmpdir(), "openbot-provider-update-automatic-e2e-"));
@@ -52,14 +53,15 @@ async function startManager(
   name: string,
   providers: ManagedProviderId[],
   availableDiskBytes: () => Promise<number> = async () => Number.MAX_SAFE_INTEGER,
+  fetchImpl: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = async () => {
+    throw new TypeError("fetch failed");
+  },
 ) {
   const manager = new ProviderRuntimeManager({
     root: join(root, name),
-    isProviderOn: (provider) => provider !== OFF || offTurnedOn,
+    isProviderOn: (provider) => provider !== OFF || offTurnedOn || name === "pinned",
     availableDiskBytes,
-    fetchImpl: async () => {
-      throw new TypeError("fetch failed");
-    },
+    fetchImpl,
   });
   for (const provider of providers) {
     const pinned = manager.executablePath(provider);
@@ -176,6 +178,44 @@ try {
     "a cancelled update does not start again by itself",
   );
   assert.notEqual(afterCancel.offer, null, "a cancelled update stays offered");
+
+  // GoAhead: an automatic update installs only the version pinned in native-runtime.lock.json. A newer
+  // upstream release stays an offer that the user chooses.
+  const lock = JSON.parse(await readFile(resolve(import.meta.dirname, "../native-runtime.lock.json"), "utf8"));
+  const pinnedVersion: string = lock.grok.version;
+  const upstreamVersion = "99.0.0";
+  const downloads: string[] = [];
+  const pinnedManager = await startManager("pinned", [OFF], undefined, async (input, init) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === `${lock.grok.distribution}/stable`) return new Response(`${upstreamVersion}\n`);
+    // The release check reads one byte of the newest release to learn its size; that is no download.
+    if (new Headers(init?.headers).get("Range") === "bytes=0-0") {
+      return new Response(new Uint8Array(1), { status: 206, headers: { "content-range": "bytes 0-0/1024" } });
+    }
+    if (url.startsWith(`${lock.grok.distribution}/grok-`)) downloads.push(url);
+    return new Response(null, { status: 404 });
+  });
+  managers.push(pinnedManager.manager);
+  const pinnedEnded = nextStatus(
+    pinnedManager.manager,
+    "the pinned update to end",
+    (snapshot) => snapshot.providers[OFF].phase === "download-error",
+  );
+  pinnedManager.manager.startUpdateChecks();
+  await pinnedEnded;
+  const pinnedOnly = {
+    pinned: pinnedVersion,
+    upstream: upstreamVersion,
+    downloads,
+    offer: offer(pinnedManager.manager, OFF),
+  };
+  report.pinnedOnly = pinnedOnly;
+  assert.ok(downloads.length > 0, "the automatic update starts");
+  assert.ok(
+    downloads.every((url) => url.includes(`grok-${pinnedVersion}-`)),
+    "the automatic update asks only for the pinned version",
+  );
+  assert.equal(pinnedOnly.offer, upstreamVersion, "the newer upstream release stays an offer");
 
   report.passed = true;
 } finally {

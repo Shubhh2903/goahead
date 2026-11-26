@@ -1,5 +1,6 @@
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import { isRoutineDate, type RoutineSchedule } from "@openbot/contracts/ipc";
+import { routineOnceAt } from "./routine-schedule";
 
 export type RoutineClock = string;
 
@@ -271,8 +272,13 @@ export function routineScheduleToDraft(schedule: RoutineSchedule): RoutineSchedu
       return { kind: "monthly", day: schedule.day, time: schedule.time };
     case "advanced":
       return advancedDraft(schedule);
-    case "interval":
+    case "interval": {
+      // A GoAhead v0.40 or v0.41 host saves a one-time routine as a long interval. Show it as a
+      // one-time run, at its time on this device.
+      const once = routineOnceAt(schedule);
+      if (once) return { kind: "once", date: routineDateKey(once), time: clock(once.getHours(), once.getMinutes()) };
       return { kind: "custom", expression: intervalCron(schedule) };
+    }
     case "custom":
       return hourlyCronDraft(schedule.expression) ?? { kind: "custom", expression: schedule.expression };
   }

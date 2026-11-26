@@ -20,11 +20,16 @@ describe("buildContentSecurityPolicy", () => {
     expect(directives.find((directive) => directive.startsWith("script-src "))).toBe("script-src 'self'");
   });
 
-  it("lets the renderer play an attachment recording, but only from the attachment schemes", () => {
-    const policy = buildContentSecurityPolicy(true);
+  it("lets the renderer play an attachment recording or a backdrop video, but only from those schemes", () => {
+    const directives = buildContentSecurityPolicy(true).split("; ");
 
-    expect(policy).toContain("media-src 'self' blob: openbot-attachment: openbot-remote-attachment:");
-    expect(policy).not.toContain("media-src 'self' blob: openbot-attachment: openbot-remote-attachment: https:");
+    expect(directives.find((directive) => directive.startsWith("media-src "))).toBe(
+      "media-src 'self' blob: openbot-attachment: openbot-remote-attachment: openbot-backdrop:",
+    );
+    // A backdrop upload is an image or a video. It is never a frame, a script or a fetch target.
+    for (const name of ["frame-src ", "script-src ", "connect-src "]) {
+      expect(directives.find((directive) => directive.startsWith(name))).not.toContain("openbot-backdrop:");
+    }
   });
 
   it("keeps local development sources", () => {

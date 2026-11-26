@@ -132,6 +132,78 @@ export function routineOnceInstant(schedule: Extract<RoutineSchedule, { kind: "o
 
 const MAX_GAP_MINUTES = 3 * 60;
 
+/**
+ * GoAhead v0.41 saved a one-time routine as an interval of the longest step that the released
+ * readers accept, anchored at its one time. The released Team API adapters (v1 to v6) project an
+ * interval to `kind`, `amount`, `unit` and `anchorAt` only, so a new key would not reach a peer.
+ * With this shape a release that does not know a one-time routine reads a valid interval and runs
+ * it once: its next time is about 270 years later. The native shape is `{ kind: "once" }`; use
+ * `nativeOnceRoutineSchedule` to read a stored legacy row and `legacyOnceRoutineSchedule` to write
+ * the shape that v0.40 and v0.41 can read.
+ */
+export const ROUTINE_ONCE_INTERVAL_DAYS = 100_000;
+
+export type OnceRoutineSchedule = Extract<RoutineSchedule, { kind: "interval" }>;
+
+export function onceRoutineSchedule(at: Date): OnceRoutineSchedule {
+  return { kind: "interval", amount: ROUTINE_ONCE_INTERVAL_DAYS, unit: "days", anchorAt: at.toISOString() };
+}
+
+export function isOnceRoutineSchedule(schedule: RoutineSchedule): schedule is OnceRoutineSchedule {
+  return schedule.kind === "interval" && schedule.unit === "days" && schedule.amount === ROUTINE_ONCE_INTERVAL_DAYS;
+}
+
+/** The one time of a one-time routine, or `null` for a repeating one. */
+export function routineOnceAt(schedule: RoutineSchedule): Date | null {
+  if (!isOnceRoutineSchedule(schedule)) return null;
+  const at = Date.parse(schedule.anchorAt);
+  return Number.isFinite(at) ? new Date(at) : null;
+}
+
+/**
+ * The instant of a wall-clock time in `timezone`. A time that a clock change repeats gives the
+ * first instant; a time that a clock change skips has none, and gives `null`.
+ */
+export function zonedRoutineInstant(
+  local: { year: number; month: number; day: number; hour: number; minute: number; second: number },
+  timezone: string,
+): Date | null {
+  validateTimezone(timezone);
+  const [first] = zonedDateTimeCandidates({ ...local, weekday: 0 }, timezone).sort(
+    (left, right) => left.getTime() - right.getTime(),
+  );
+  return first ? new Date(first.getTime() + local.second * 1000) : null;
+}
+
+/**
+ * Reads a legacy one-time routine (a `ROUTINE_ONCE_INTERVAL_DAYS` interval) as the native
+ * `{ kind: "once" }` schedule, at its wall-clock time in `timezone`. Every other schedule comes
+ * back unchanged. Read only: the stored row keeps its shape.
+ */
+export function nativeOnceRoutineSchedule(schedule: RoutineSchedule, timezone: string): RoutineSchedule {
+  const at = routineOnceAt(schedule);
+  if (at === null) return schedule;
+  validateTimezone(timezone);
+  const local = zonedParts(at, timezone);
+  return {
+    kind: "once",
+    date: `${local.year}-${twoDigits(local.month)}-${twoDigits(local.day)}`,
+    time: `${twoDigits(local.hour)}:${twoDigits(local.minute)}`,
+  };
+}
+
+/** The shape of a native one-time routine that GoAhead v0.40 and v0.41 can read. */
+export function legacyOnceRoutineSchedule(
+  schedule: Extract<RoutineSchedule, { kind: "once" }>,
+  timezone: string,
+): OnceRoutineSchedule {
+  return onceRoutineSchedule(routineOnceInstant(schedule, timezone));
+}
+
+function twoDigits(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
 export function normalizeRoutineSchedule(schedule: RoutineSchedule, now = new Date()): RoutineSchedule {
   if (schedule.kind !== "interval") return structuredClone(schedule);
   const anchor = Number.isNaN(Date.parse(schedule.anchorAt)) ? now.toISOString() : schedule.anchorAt;

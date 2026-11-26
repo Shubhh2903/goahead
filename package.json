@@ -2,7 +2,7 @@
   "name": "openbot",
   "productName": "GoAhead",
   "desktopName": "openbot.desktop",
-  "version": "0.39.0",
+  "version": "0.41.0",
   "description": "A local-first multi-agent desktop workspace for Codex, Claude, and Grok.",
   "author": {
     "name": "Norbert Bodziony",
@@ -234,6 +234,9 @@
     "test:agent-browser-profile-tool": "bun scripts/agent-browser-profile-tool-e2e.ts",
     "test:agent-delete-tool": "bun scripts/agent-delete-tool-e2e.ts",
     "test:agent-commit-co-author-tool": "bun scripts/agent-commit-co-author-tool-e2e.ts",
+    "test:agent-install-receipt": "bun scripts/agent-install-receipt-e2e.ts",
+    "test:routine-legacy-once": "bun scripts/routine-legacy-once-e2e.ts",
+    "test:goahead-turn-controls": "bun scripts/goahead-turn-controls-e2e.ts",
     "test:browser:google-live": "bun scripts/browser-smoke.ts --google-live",
     "test:browser:whatsapp-live": "bun scripts/browser-smoke.ts --whatsapp-live",
     "test:browser:canva-live": "bun scripts/browser-smoke.ts --canva-live",

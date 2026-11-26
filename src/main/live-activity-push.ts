@@ -12,6 +12,7 @@ import { redactText, toLogValue } from "@openbot/logging";
 import { DynamicIslandCoordinator } from "@openbot/team-client/dynamic-island-coordinator";
 import {
   type AgentLiveActivityProps,
+  LIVE_ACTIVITY_STALE_AFTER_MS,
   type LiveActivityUnreadAgent,
   liveActivityBloubFile,
   liveActivityIslandText,
@@ -32,7 +33,6 @@ import type { markerExclusionsForCapabilities } from "./team-api/request-helpers
 
 const EVENT_DELAY_MS = 1_000;
 const SAME_MODE_INTERVAL_MS = 5_000;
-const STALE_AFTER_MS = 15 * 60 * 1000;
 const KEEPALIVE_MS = 10 * 60 * 1000;
 const RETRY_MS = 15_000;
 const RETRY_MAX_MS = 5 * 60 * 1000;
@@ -263,7 +263,7 @@ export class LiveActivityPushService {
       event: props ? ("update" as const) : ("end" as const),
       sealed: props ? this.#sealToFit(props, registration.keys, sealedLimit(value)) : null,
       timestamp,
-      staleAt: props ? Math.floor((now + STALE_AFTER_MS) / 1000) : null,
+      staleAt: props ? Math.floor((now + LIVE_ACTIVITY_STALE_AFTER_MS) / 1000) : null,
     };
     registration.sending = true;
     registration.sent = { key, mode, item, workers, at: now };

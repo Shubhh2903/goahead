@@ -611,7 +611,7 @@ export function createWorkspace(
     const profile = {
       name: draft.name.trim(),
       description: draft.purpose.trim(),
-      initialMessage: createAgentInitialMessage(draft, has(AGENT_WELCOME_CAPABILITY)),
+      initialMessage: createAgentInitialMessage(has(AGENT_WELCOME_CAPABILITY)),
       avatarSeed: draft.avatarSeed,
       avatarHue: draft.avatarHue,
       ...(withModel

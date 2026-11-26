@@ -1,13 +1,16 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createOpenBotLogger } from "@openbot/logging";
 
 function filesUnder(directory: string): string[] {
   return readdirSync(directory).flatMap((entry) => {
-    if (entry === "node_modules") return [];
+    // Generated native builds (CocoaPods) are git-ignored and hold symlinks that can dangle.
+    if (entry === "node_modules" || entry === "Pods") return [];
     const path = resolve(directory, entry);
-    return statSync(path).isDirectory() ? filesUnder(path) : [path];
+    const stats = lstatSync(path);
+    if (stats.isSymbolicLink()) return [];
+    return stats.isDirectory() ? filesUnder(path) : [path];
   });
 }
 

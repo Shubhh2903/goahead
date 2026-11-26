@@ -55,6 +55,7 @@ import {
   resetLiveActivityActions,
   setLiveActivityLinkKeys,
 } from "./model/live-activity-link";
+import { checkLiveActivityRequest, liveActivityRequestNeedsState } from "./model/live-activity-request";
 import { LiveActivitySync } from "./model/live-activity-sync";
 
 const STALE_AFTER_BACKGROUND_MS = 5 * 60 * 1000;
@@ -127,6 +128,12 @@ export function useLiveActivity({
   const sideThreadOfTurnRef = useRef(sideThreadOfTurn);
   sideThreadOfTurnRef.current = sideThreadOfTurn;
   const [request, setRequest] = useState<LiveActivityRequest | null>(null);
+  /**
+   * The servers whose runtime snapshot came after they last went online. A host sends one on each
+   * connection, so the app knows the waiting prompts of these servers before it answers one. It
+   * changes once for each connection, so later snapshots do not render the workspace.
+   */
+  const [knownServers, setKnownServers] = useState<ReadonlySet<string>>(() => new Set());
   const disposed = useRef(false);
   const registered = useRef<{ serverId: string; key: string } | null>(null);
   const registrationQueue = useRef<Promise<void>>(Promise.resolve());
@@ -302,6 +309,9 @@ export function useLiveActivity({
       if (!live || !isAgentEvent(event)) return;
       received.current = true;
       live.coordinator.applyEvent({ serverId, event }, serverId);
+      if (event.type === "runtime-snapshot") {
+        setKnownServers((known) => (known.has(serverId) ? known : new Set(known).add(serverId)));
+      }
       schedule();
     },
     [live, schedule],
@@ -367,13 +377,35 @@ export function useLiveActivity({
 
   useEffect(() => (live ? onLiveActivityAction(setRequest) : undefined), [live]);
 
+  // A server that goes offline can miss events. Its prompts are known again after its next snapshot,
+  // which can come before the server shows online.
+  const onlineServers = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    const online = new Set(servers.filter((server) => server.state === "online").map((server) => server.id));
+    const lost = [...onlineServers.current].filter((serverId) => !online.has(serverId));
+    onlineServers.current = online;
+    if (lost.length === 0) return;
+    setKnownServers((known) => {
+      const next = new Set([...known].filter((serverId) => !lost.includes(serverId)));
+      return next.size === known.size ? known : next;
+    });
+  }, [servers]);
+
+  // A button opens the app, which reconnects first. The answer waits for its server to be online,
+  // and an answer to a prompt also waits for the prompts of that server.
   useEffect(() => {
     if (!live || !request || !foreground || !resumed) return;
     const { action, command } = request;
     const server = servers.find((candidate) => candidate.id === action.serverId);
     if (server && server.state !== "online") return;
+    if (server && liveActivityRequestNeedsState(request) && !knownServers.has(server.id)) return;
     setRequest(null);
     if (!server) return;
+    const { t } = currentText();
+    const check = () =>
+      checkLiveActivityRequest(request, live.coordinator.serverState(action.serverId), liveActivityIslandText(t));
+    // The prompt was answered, or the host now has another request with the same id.
+    const changed = () => Alert.alert(t(ACTION_FAILURES[action.type][0]), t("mobile.liveActivity.requestChanged"));
     const perform = () =>
       void performAction(action, post).then(
         () => {
@@ -388,25 +420,26 @@ export function useLiveActivity({
           showFailureAlert(error, "other", t(title), errorMessage(error, t(fallback)));
         },
       );
-    if (action.type !== "respond-approval" || action.decision !== "accept") {
+    const result = check();
+    if (result === "changed") {
+      changed();
+      return;
+    }
+    if (result === "perform") {
       perform();
       return;
     }
-    const { t } = currentText();
-    if (!command) {
-      showFailureAlert(
-        undefined,
-        "other",
-        t("mobile.liveActivity.error.decision"),
-        t("mobile.liveActivity.requestChanged"),
-      );
-      return;
-    }
-    Alert.alert(t("mobile.liveActivity.confirm.title"), command, [
+    // A locked screen can hide the command, and the tap then unlocks straight into the app. So the
+    // user sees the command here before the host runs it. The signed link carries it, and the check
+    // found the same command waiting. The state can change while the alert shows, so it checks again.
+    Alert.alert(t("mobile.liveActivity.confirm.title"), command ?? "", [
       { text: t("mobile.liveActivity.confirm.cancel"), style: "cancel" },
-      { text: t("mobile.liveActivity.confirm.approve"), onPress: perform },
+      {
+        text: t("mobile.liveActivity.confirm.approve"),
+        onPress: () => (check() === "confirm" ? perform() : changed()),
+      },
     ]);
-  }, [live, request, servers, post, schedule, foreground, resumed]);
+  }, [live, request, servers, post, schedule, foreground, resumed, knownServers]);
 
   const [enabled, setEnabled] = useState(() => {
     const preference = useLiveActivitiesPreference.getState();

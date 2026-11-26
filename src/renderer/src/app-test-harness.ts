@@ -28,6 +28,8 @@ import {
   type ServerSummary,
   type TeamPresenceSnapshot,
   type UpdateStatus,
+  type UsageRange,
+  usageRangeStart,
 } from "@openbot/contracts/ipc";
 import { screen } from "@solidjs/testing-library";
 import { vi } from "vitest";
@@ -716,6 +718,20 @@ export function installOpenbotStub(): void {
     // No renderer test reaches routine flows yet; a request rejects as not stubbed.
     routineFlows: stubGroup(IPC_ENDPOINTS.routineFlows, "routineFlows", {}),
     routineFeed: stubGroup(IPC_ENDPOINTS.routineFeed, "routineFeed", {}),
+    // The window mounts its backdrop on start: none, as on a profile from before backdrops.
+    backdrops: stubGroup(IPC_ENDPOINTS.backdrops, "backdrops", {
+      getState: vi.fn().mockResolvedValue({ choice: null, uploads: [] }),
+    }),
+    // No usage recorded: the Usage tab shows its empty state.
+    usage: stubGroup(IPC_ENDPOINTS.usage, "usage", {
+      getDashboard: vi.fn(async (range: UsageRange) => ({
+        ...range,
+        startDate: usageRangeStart(range),
+        agents: [],
+        skippedChannelRuns: 0,
+        weeklyBudgets: [],
+      })),
+    }),
     voice: stubGroup(IPC_ENDPOINTS.voice, "voice", {
       getModelStatus: vi
         .fn()
@@ -1269,6 +1285,8 @@ export function installOpenbotStub(): void {
       clear: vi.fn().mockResolvedValue(undefined),
       openFile: vi.fn().mockResolvedValue(undefined),
       openLocation: vi.fn().mockResolvedValue(undefined),
+      listUnassignedFolders: vi.fn().mockResolvedValue([]),
+      trashUnassignedFolder: vi.fn().mockResolvedValue(undefined),
     }),
     agentImport: stubGroup(IPC_ENDPOINTS.agentImport, "agentImport", {}),
     // The custom providers context lists on mount, so every harnessed mount reaches this group.

@@ -26,10 +26,13 @@ import type { EventFilter, EventJsonValue, EventRoutineOwner } from "@openbot/co
 import { type DynamicRecord, isDynamicRecord, isOneOf, isString } from "@openbot/contracts/runtime-values";
 import { sourceText } from "@openbot/i18n/source";
 import {
+  legacyOnceRoutineSchedule,
+  nativeOnceRoutineSchedule,
   nextRoutineOccurrence,
   nextValidRoutineOccurrence,
   normalizeRoutineSchedule,
   RoutineInputError,
+  routineOnceAt,
   routineOnceInstant,
   validateRoutineSchedule,
   validateStoredRoutineSchedule,
@@ -610,6 +613,23 @@ export class RoutineStore {
     };
   }
 
+  /**
+   * The newest finished run of one routine other than `exceptRunId`. Skipped-run records are left
+   * out: they never wrote a chat marker.
+   */
+  protected lastFinishedRunRow(ownerId: string, routineId: string, exceptRunId: string): OwnedRoutineRun | null {
+    const row = this.database.connection
+      .prepare(
+        `SELECT ${this.runColumns}
+         FROM ${this.tables.runTable}
+         WHERE routine_id = ? AND ${this.tables.ownerColumn} = ? AND run_id <> ? AND missed_count IS NULL
+           AND status NOT IN ('queued', 'running', 'needs-attention')
+         ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+      )
+      .get(routineId, ownerId, exceptRunId);
+    return isDynamicRecord(row) ? this.#run(row) : null;
+  }
+
   protected pendingRunRows(): OwnedRoutineRun[] {
     return this.#queuedRunRows(`AND ${this.tables.handleColumn} IS NULL`);
   }
@@ -720,7 +740,7 @@ export class RoutineStore {
         routine: this.#routine(row),
         triggerId: requiredStringColumn(row, "trigger_id"),
         nextRunAt: requiredStringColumn(row, "next_run_at"),
-        schedule: scheduleColumn(row),
+        schedule: scheduleColumn(row, requiredStringColumn(row, "timezone")),
       }))
       .filter((due) => !excludedOwnerIds.has(due.routine.ownerId));
   }
@@ -834,6 +854,38 @@ export class RoutineStore {
         return null;
       },
     );
+  }
+
+  /**
+   * Turns off a one-time routine whose trigger GoAhead v0.41 already moved past its one time while
+   * a run of it stayed open. That release turned the routine off when the run ended, and this build
+   * does the same. A one-time routine of this build turns off when it fires (`completeTrigger`) and
+   * keeps its trigger time, so this changes nothing for it.
+   */
+  #endLegacyOnceIfDone(
+    db: OpenBotDatabase["connection"],
+    routineId: string,
+    triggerId: string,
+    sequence: number,
+  ): void {
+    const { triggerTable, runTable, routineTable } = this.tables;
+    const trigger = db
+      .prepare(`SELECT schedule_json, next_run_at FROM ${triggerTable} WHERE trigger_id = ?`)
+      .get(triggerId);
+    if (!isDynamicRecord(trigger)) return;
+    const at = routineOnceAt(storedScheduleColumn(trigger));
+    if (!at || Date.parse(requiredStringColumn(trigger, "next_run_at")) <= at.getTime()) return;
+    const open = db
+      .prepare(
+        `SELECT 1 FROM ${runTable}
+         WHERE trigger_id = ? AND status IN ('queued', 'running', 'needs-attention') LIMIT 1`,
+      )
+      .get(triggerId);
+    if (open) return;
+    db.prepare(
+      `UPDATE ${routineTable} SET active = 0, updated_at = ?, last_event_sequence = ?
+       WHERE routine_id = ? AND active = 1`,
+    ).run(new Date().toISOString(), sequence, routineId);
   }
 
   completeTrigger(routineId: string, triggerId: string, now = new Date()): void {
@@ -1142,6 +1194,10 @@ export class RoutineStore {
         `UPDATE ${this.tables.runTable} SET status = ?, error = ?, updated_at = ?, last_event_sequence = ?
          WHERE run_id = ?`,
       ).run(status, error, now, sequence, runId);
+      // A one-time routine that GoAhead v0.41 left on while its run waited ends with that run.
+      if (current.triggerId && !OPEN_RUN_STATUSES.has(status)) {
+        this.#endLegacyOnceIfDone(db, current.routineId, current.triggerId, sequence);
+      }
     });
   }
 
@@ -1164,7 +1220,7 @@ export class RoutineStore {
 
   #routine(row: DynamicRecord): OwnedRoutine {
     const fields = this.#fields(row);
-    return { ...fields, trigger: this.#scheduleTrigger(fields.id) };
+    return { ...fields, trigger: this.#scheduleTrigger(fields.id, fields.timezone) };
   }
 
   #record(row: DynamicRecord): OwnedRoutineRecord {
@@ -1176,7 +1232,7 @@ export class RoutineStore {
       )
       .get(fields.id);
     if (!isDynamicRecord(webhook))
-      return { ...fields, trigger: { kind: "schedule", ...this.#scheduleTrigger(fields.id) } };
+      return { ...fields, trigger: { kind: "schedule", ...this.#scheduleTrigger(fields.id, fields.timezone) } };
     return {
       ...fields,
       trigger: {
@@ -1227,7 +1283,7 @@ export class RoutineStore {
     db.prepare(`UPDATE ${this.tables.routineTable} SET run_in = ? WHERE routine_id = ?`).run(runIn, routineId);
   }
 
-  #scheduleTrigger(routineId: string): OwnedRoutine["trigger"] {
+  #scheduleTrigger(routineId: string, timezone: string): OwnedRoutine["trigger"] {
     const trigger = this.database.connection
       .prepare(
         `SELECT trigger_id, schedule_json, next_run_at, created_at, updated_at
@@ -1238,7 +1294,7 @@ export class RoutineStore {
     return {
       id: requiredStringColumn(trigger, "trigger_id"),
       routineId,
-      schedule: scheduleColumn(trigger),
+      schedule: scheduleColumn(trigger, timezone),
       nextRunAt: requiredStringColumn(trigger, "next_run_at"),
       createdAt: requiredStringColumn(trigger, "created_at"),
       updatedAt: requiredStringColumn(trigger, "updated_at"),
@@ -1344,7 +1400,7 @@ export class RoutineStore {
     ).run(
       randomUUID(),
       routineId,
-      JSON.stringify(schedule),
+      JSON.stringify(storedSchedule(schedule, timezone)),
       (schedule.kind === "once"
         ? routineOnceInstant(schedule, timezone)
         : nextRoutineOccurrence(schedule, timezone, now)
@@ -1445,11 +1501,29 @@ function defaultMissedPolicy(schedule: RoutineSchedule): RoutineMissedPolicy {
   return schedule.kind === "once" ? "run-once" : "skip";
 }
 
-function scheduleColumn(row: DynamicRecord): RoutineSchedule {
+/**
+ * The schedule as the routine shows it. GoAhead v0.40 and v0.41 store a one-time routine as an
+ * interval of 100,000 days; it reads as a one-time routine. The row is not rewritten.
+ */
+function scheduleColumn(row: DynamicRecord, timezone: string): RoutineSchedule {
+  return nativeOnceRoutineSchedule(storedScheduleColumn(row), timezone);
+}
+
+function storedScheduleColumn(row: DynamicRecord): RoutineSchedule {
   const value = JSON.parse(requiredStringColumn(row, "schedule_json"));
   if (!isRoutineSchedule(value)) throw new Error("The stored routine schedule is invalid.");
   return value;
 }
+
+/**
+ * The schedule as the row stores it. A one-time routine keeps the shape that GoAhead v0.40 and
+ * v0.41 read, so a downgrade does not refuse the routine.
+ */
+function storedSchedule(schedule: RoutineSchedule, timezone: string): RoutineSchedule {
+  return schedule.kind === "once" ? legacyOnceRoutineSchedule(schedule, timezone) : schedule;
+}
+
+const OPEN_RUN_STATUSES: ReadonlySet<RoutineRunStatus> = new Set(["queued", "running", "needs-attention"]);
 
 function runStartColumns(start: RoutineRunStart): Pick<RoutineRunFields, "kind" | "source"> {
   return start === "scheduled" ? { kind: "scheduled" } : { kind: "manual", source: start };

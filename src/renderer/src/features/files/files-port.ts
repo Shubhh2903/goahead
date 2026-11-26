@@ -12,6 +12,9 @@ export interface FilesPort {
         | "getDisk"
         | "getLibraryFolders"
         | "changeLibraryFolders"
+        // This computer only. A client with no `window.openbot`, such as the web client, leaves them out.
+        | "listUnassignedFolders"
+        | "trashUnassignedFolder"
       >
     >;
   hostAdmin?: Pick<OpenBotDesktopApi["hostAdmin"], "getMachineAlerts" | "setMachineAlerts">;

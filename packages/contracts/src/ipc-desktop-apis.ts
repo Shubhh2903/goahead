@@ -64,6 +64,8 @@ export type ReferralDesktopApi = GroupApi<IpcEndpoints["referral"]>;
 export type CreditsDesktopApi = GroupApi<IpcEndpoints["credits"]>;
 export type LicenseDesktopApi = GroupApi<IpcEndpoints["license"]>;
 export type RoutineFeedDesktopApi = GroupApi<IpcEndpoints["routineFeed"]>;
+export type BackdropsDesktopApi = GroupApi<IpcEndpoints["backdrops"]>;
+export type UsageDesktopApi = GroupApi<IpcEndpoints["usage"]>;
 
 export type HostedServersDesktopApi = GroupApi<IpcEndpoints["hostedServers"]>;
 

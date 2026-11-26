@@ -1,8 +1,9 @@
 import type { ExpressionId } from "@norbert_bodziony/bloub";
 import {
-  AVATAR_EXPRESSIONS,
   type AvatarStyle,
+  availableAvatarFace,
   avatarCandidateSeeds,
+  avatarExpressionsForShape,
   avatarSeedForFace,
   bloubAvatarProfile,
   SUPPORTED_AVATAR_SILHOUETTES,
@@ -24,7 +25,9 @@ export function createAvatarCandidates(seed: string, previous?: AvatarCandidates
 
 export type AvatarFace = { shape: SupportedAvatarSilhouetteId; expression: ExpressionId };
 
-export function avatarSeedForStyledFace(faceKey: string, face: AvatarFace, style: AvatarStyle): string {
+/** A seed for the face. A face that no seed draws keeps its shape and takes an expression that the shape can draw. */
+export function avatarSeedForStyledFace(faceKey: string, wanted: AvatarFace, style: AvatarStyle): string {
+  const face = availableAvatarFace(wanted);
   if (style === "plush") {
     const own = bloubAvatarProfile(faceKey, null);
     if (own.shape === face.shape && own.expression === face.expression) return faceKey;
@@ -33,10 +36,8 @@ export function avatarSeedForStyledFace(faceKey: string, face: AvatarFace, style
 }
 
 export function randomAvatarFace(current: AvatarFace): AvatarFace {
-  return {
-    shape: randomOther(SUPPORTED_AVATAR_SILHOUETTES, current.shape),
-    expression: randomOther(AVATAR_EXPRESSIONS, current.expression),
-  };
+  const shape = randomOther(SUPPORTED_AVATAR_SILHOUETTES, current.shape);
+  return { shape, expression: randomOther(avatarExpressionsForShape(shape), current.expression) };
 }
 
 function randomOther<T>(items: readonly T[], current: T): T {

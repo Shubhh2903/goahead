@@ -8,6 +8,7 @@ import {
   isBrowserTakeoverRequest,
 } from "./ipc-approvals";
 import { isBoundedString, isIdentifier, isNullableBoundedString, isRequestId } from "./ipc-bounded-values";
+import type { AgentPromptQuestion } from "./ipc-conversation-messages";
 import { isBoolean, isDynamicRecord, isNumber, isOneOf } from "./runtime-values";
 
 export const AGENT_RUNTIME_TEXT_LIMIT = 240;
@@ -241,6 +242,26 @@ export interface AgentRuntimeSnapshot {
   failedModels?: AgentModelChoice[];
   subagentTurns?: Array<{ agentId: string; turnId: string }>;
   backgroundWork?: Array<{ agentId: string; taskId: string | null; since: number }>;
+}
+
+/**
+ * A snapshot prompt as a `prompt` event: `multiSelect` is `true` or left out, as on the event and the
+ * wire. A `false` never reaches a `prompt` event, whose host encoder refuses it.
+ */
+export function runtimePromptEvent(prompt: AgentRuntimeSnapshot["pendingPrompts"][number]): Omit<
+  AgentRuntimeSnapshot["pendingPrompts"][number],
+  "questions"
+> & {
+  type: "prompt";
+  questions: AgentPromptQuestion[];
+} {
+  return {
+    ...prompt,
+    type: "prompt",
+    questions: prompt.questions.map(({ multiSelect, ...question }) =>
+      multiSelect === true ? { ...question, multiSelect } : question,
+    ),
+  };
 }
 
 export function isAgentRuntimeSnapshot(value: unknown): value is AgentRuntimeSnapshot {

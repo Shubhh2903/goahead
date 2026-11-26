@@ -2,7 +2,7 @@
 # YAML cannot import it, so keep the two the same.
 appId: com.multicodegenius.goahead
 productName: GoAhead
-copyright: Copyright © 2026 Synthetify Labs spółka z ograniczoną odpowiedzialnością
+copyright: "GoAhead. Copyright © 2026 Synthetify Labs spółka z ograniczoną odpowiedzialnością. Copyright © 2026 Norbert Bodziony. Copyright © 2026 Shubham Lilawala."
 protocols:
   - name: GoAhead links
     schemes:

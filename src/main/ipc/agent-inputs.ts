@@ -33,6 +33,7 @@ import {
   isAgentModel,
   isAgentProvider,
   isAgentTaskLimit,
+  isAgentTurnLimit,
   isAgentWeeklyTokenBudget,
   isArchivedAgentTasksCursor,
   isAvatarColor,
@@ -158,24 +159,13 @@ export function parseOptionalAgentId(value: unknown): string | undefined {
   return parseAgentId(value);
 }
 
+/**
+ * The folder actions of the desktop IPC and `/v1/sidebar-folders`. `parseSidebarLayoutAction` already
+ * reads `nest` and a folder parent, so one parser keeps both routes the same. Wire peers on
+ * `/v1/sidebar-layout/actions` cannot send `nest`: the wire codecs refuse it first.
+ */
 export function parseSidebarFolderAction(value: unknown): SidebarLayoutAction {
-  if (!isObject(value) || !isString(value.type)) throw new Error("Invalid sidebar layout action.");
-  if (value.type === "nest") {
-    const parentId = value.parentId;
-    const beforeSectionId = value.beforeSectionId;
-    if (parentId !== null && !isString(parentId)) throw new Error("Invalid sidebar folder parent.");
-    if (beforeSectionId !== null && !isString(beforeSectionId)) throw new Error("Invalid sidebar folder order target.");
-    return {
-      type: "nest",
-      sectionId: requireString(value.sectionId, "sectionId", INPUT_LIMITS.identifier),
-      parentId: parentId === null ? null : requireString(parentId, "parentId", INPUT_LIMITS.identifier),
-      beforeSectionId:
-        beforeSectionId === null ? null : requireString(beforeSectionId, "beforeSectionId", INPUT_LIMITS.identifier),
-    };
-  }
-  const action = parseSidebarLayoutAction(value);
-  if (action.type !== "create" || value.parentId === undefined) return action;
-  return { ...action, parentId: requireString(value.parentId, "parentId", INPUT_LIMITS.identifier) };
+  return parseSidebarLayoutAction(value);
 }
 
 export function parseSidebarLayoutAction(value: unknown): SidebarLayoutAction {
@@ -188,6 +178,9 @@ export function parseSidebarLayoutAction(value: unknown): SidebarLayoutAction {
         ...(value.agentId === undefined
           ? {}
           : { agentId: requireString(value.agentId, "agentId", INPUT_LIMITS.identifier) }),
+        ...(value.parentId === undefined
+          ? {}
+          : { parentId: requireString(value.parentId, "parentId", INPUT_LIMITS.identifier) }),
       };
     case "rename":
       return {
@@ -237,6 +230,19 @@ export function parseSidebarLayoutAction(value: unknown): SidebarLayoutAction {
         sectionId,
         beforeAgentId:
           beforeAgentId === null ? null : requireString(beforeAgentId, "beforeAgentId", INPUT_LIMITS.identifier),
+      };
+    }
+    case "nest": {
+      const parentId = value.parentId;
+      const beforeSectionId = value.beforeSectionId;
+      if (parentId !== null && !isString(parentId)) throw new Error("Invalid folder parent.");
+      if (beforeSectionId !== null && !isString(beforeSectionId)) throw new Error("Invalid folder order target.");
+      return {
+        type: "nest",
+        sectionId: requireString(value.sectionId, "sectionId", INPUT_LIMITS.identifier),
+        parentId: parentId === null ? null : requireString(parentId, "parentId", INPUT_LIMITS.identifier),
+        beforeSectionId:
+          beforeSectionId === null ? null : requireString(beforeSectionId, "beforeSectionId", INPUT_LIMITS.identifier),
       };
     }
     default:
@@ -896,6 +902,20 @@ export function parseUpdateAgent(value: unknown): UpdateAgentInput {
   if (value.leaveUsageLimit !== undefined) {
     if (!isBoolean(value.leaveUsageLimit)) throw new Error("Invalid usage limit switch.");
     result.leaveUsageLimit = value.leaveUsageLimit;
+  }
+  if (value.turnLimit !== undefined) {
+    if (value.turnLimit !== null && !isAgentTurnLimit(value.turnLimit)) throw new Error("Invalid turn limit.");
+    result.turnLimit = value.turnLimit;
+  }
+  if (value.autoModel !== undefined) {
+    if (!isBoolean(value.autoModel)) throw new Error("Invalid automatic model value.");
+    result.autoModel = value.autoModel;
+  }
+  if (value.delegatedSmallModel !== undefined) {
+    if (value.delegatedSmallModel !== null && !isBoolean(value.delegatedSmallModel)) {
+      throw new Error("Invalid delegated small model value.");
+    }
+    result.delegatedSmallModel = value.delegatedSmallModel;
   }
   if (value.avatarSeed !== undefined) {
     if (!isAvatarSeed(value.avatarSeed)) throw new Error("Invalid avatar seed.");

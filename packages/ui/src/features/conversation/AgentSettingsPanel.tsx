@@ -8,6 +8,7 @@ import {
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import {
   AGENT_COMPACT_WINDOWS,
+  AGENT_TURN_LIMITS,
   AGENT_WEEKLY_TOKEN_BUDGETS,
   type AgentBackupModels,
   type AgentBrowserProfile,
@@ -19,13 +20,16 @@ import {
   type AgentProviderId,
   type AgentReasoningEffort,
   type AgentStatus,
+  type AgentTurnLimit,
   type AgentWeeklyTokenBudget,
   type AvatarColor,
   type AvatarHue,
   type AvatarImageInput,
+  agentAutoModelEnabled,
   agentAutomationAllowed,
   agentBrowserProfile,
   agentComputerUseEnabled,
+  agentDelegatedSmallModelEnabled,
   agentMemoryEnabled,
   agentNewChatAllowed,
   agentNextProviderAccountId,
@@ -40,7 +44,11 @@ import {
   DEFAULT_AGENT_ACCESS,
   DEFAULT_AGENT_DEFAULTS,
   DEFAULT_BUSY_MESSAGE_MODE,
+  DEFAULT_COMPACT_WINDOW,
+  DEFAULT_TURN_LIMIT,
+  defaultProviderModel,
   type ProviderRuntimeStatus,
+  providerSupportsAutoModel,
   type ServerNotificationLevel,
   type UpdateAgentAdminSettingsInput,
   type UpdateAgentInput,
@@ -76,11 +84,12 @@ import {
 import { normalizeAvatarFile } from "@openbot/ui/avatar-image";
 import {
   AVATAR_COLOR_CHOICES,
-  AVATAR_EXPRESSIONS,
   AVATAR_STYLES,
   type AvatarColorChoice,
   type AvatarStyle,
+  availableAvatarFace,
   avatarDefaultSeed,
+  avatarExpressionsForShape,
   avatarHueForColor,
   avatarSeedForFace,
   avatarStyleForSeed,
@@ -265,6 +274,9 @@ interface AgentSettingsDraft {
   confirmingPermission: AgentPermissionLevel | null;
   compactWindow: CompactWindowChoice;
   weeklyTokenBudget: WeeklyBudgetChoice;
+  turnLimit: TurnLimitChoice;
+  autoModel: boolean;
+  delegatedSmallModel: boolean;
   disabledMcpServerIds: string[];
   runtime: AgentRuntimeSettings;
   saveError: string | null;
@@ -304,8 +316,11 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     busyMessage: "default",
     backupModels: null,
     confirmingPermission: null,
-    compactWindow: "off",
+    compactWindow: DEFAULT_COMPACT_WINDOW,
     weeklyTokenBudget: "none",
+    turnLimit: DEFAULT_TURN_LIMIT,
+    autoModel: false,
+    delegatedSmallModel: true,
     disabledMcpServerIds: [],
     runtime: untrack(() => ({ ...props.runtimeSettings })),
     saveError: null,
@@ -463,8 +478,11 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
           browserProfile,
           agent.busyMessageMode ?? "default",
           JSON.stringify(agent.backupModels ?? null),
-          String(agent.compactWindow ?? "off"),
+          String(agent.compactWindow ?? DEFAULT_COMPACT_WINDOW),
           String(agent.weeklyTokenBudget ?? "none"),
+          String(agent.turnLimit ?? DEFAULT_TURN_LIMIT),
+          String(agentAutoModelEnabled(agent)),
+          String(agentDelegatedSmallModelEnabled(agent)),
           (agent.disabledMcpServerIds ?? []).join(","),
           runtimeSettings.provider,
           runtimeSettings.model,
@@ -511,8 +529,11 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
           state.busyMessage = agent.busyMessageMode ?? "default";
           state.backupModels = agent.backupModels ?? null;
           if (agentChanged) state.confirmingPermission = null;
-          state.compactWindow = agent.compactWindow ?? "off";
+          state.compactWindow = agent.compactWindow ?? DEFAULT_COMPACT_WINDOW;
           state.weeklyTokenBudget = agent.weeklyTokenBudget ?? "none";
+          state.turnLimit = agent.turnLimit ?? DEFAULT_TURN_LIMIT;
+          state.autoModel = agentAutoModelEnabled(agent);
+          state.delegatedSmallModel = agentDelegatedSmallModelEnabled(agent);
           state.disabledMcpServerIds = [...(agent.disabledMcpServerIds ?? [])];
           state.runtime.provider = runtimeSettings.provider;
           state.runtime.model = runtimeSettings.model;
@@ -757,7 +778,10 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     style?: AvatarStyle;
   }): Promise<void> {
     const current = avatarFace();
-    const face = { shape: change.shape ?? current.shape, expression: change.expression ?? current.expression };
+    const face = availableAvatarFace({
+      shape: change.shape ?? current.shape,
+      expression: change.expression ?? current.expression,
+    });
     const style = change.style ?? avatarStyle();
     const own = bloubAvatarProfile(props.agent.id, null);
     const seed =
@@ -868,7 +892,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     setDraft((state) => {
       state.compactWindow = next;
     });
-    if (await saveAgentPatch({ compactWindow: next === "off" ? null : next }, agentId)) return;
+    if (await saveAgentPatch({ compactWindow: next === DEFAULT_COMPACT_WINDOW ? null : next }, agentId)) return;
     if (!disposed && props.agent.id === agentId && draft.compactWindow === next) {
       setDraft((state) => {
         state.compactWindow = previous;
@@ -890,6 +914,53 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
     }
   }
 
+  async function saveTurnLimit(next: TurnLimitChoice): Promise<void> {
+    const agentId = props.agent.id;
+    const previous = draft.turnLimit;
+    setDraft((state) => {
+      state.turnLimit = next;
+    });
+    if (await saveAgentPatch({ turnLimit: next === DEFAULT_TURN_LIMIT ? null : next }, agentId)) return;
+    if (!disposed && props.agent.id === agentId && draft.turnLimit === next) {
+      setDraft((state) => {
+        state.turnLimit = previous;
+      });
+    }
+  }
+
+  async function saveAutoModel(next: boolean): Promise<void> {
+    const agentId = props.agent.id;
+    setDraft((state) => {
+      state.autoModel = next;
+    });
+    if (await saveAgentPatch({ autoModel: next }, agentId)) return;
+    if (!disposed && props.agent.id === agentId && draft.autoModel === next) {
+      setDraft((state) => {
+        state.autoModel = !next;
+      });
+    }
+  }
+
+  async function saveDelegatedSmallModel(next: boolean): Promise<void> {
+    const agentId = props.agent.id;
+    setDraft((state) => {
+      state.delegatedSmallModel = next;
+    });
+    if (await saveAgentPatch({ delegatedSmallModel: next ? null : false }, agentId)) return;
+    if (!disposed && props.agent.id === agentId && draft.delegatedSmallModel === next) {
+      setDraft((state) => {
+        state.delegatedSmallModel = !next;
+      });
+    }
+  }
+
+  const autoModelSupported = () => providerSupportsAutoModel(draft.runtime.provider);
+  /** The small model a short message runs on, by the name the provider lists. */
+  const autoModelName = () => {
+    const id = defaultProviderModel(draft.runtime.provider);
+    return findModelOption(props.modelOptions, props.agentStatus.providers, draft.runtime.provider, id)?.name ?? id;
+  };
+
   async function saveMcpServer(serverId: string, enabled: boolean): Promise<void> {
     const agentId = props.agent.id;
     const previous = [...draft.disabledMcpServerIds];
@@ -907,13 +978,19 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
 
   const tokenCount = (value: number) => format.number(value, { notation: "compact", maximumFractionDigits: 1 });
   const compactWindowLabel = (choice: CompactWindowChoice) =>
-    choice === "off"
-      ? t("agentSettings.compactWindow.off")
-      : t("agentSettings.compactWindow.at", { tokens: tokenCount(choice) });
+    choice === DEFAULT_COMPACT_WINDOW
+      ? t("agentSettings.compactWindow.default", { tokens: format.number(choice) })
+      : t("agentSettings.compactWindow.tokens", { tokens: format.number(choice) });
   const weeklyBudgetLabel = (choice: WeeklyBudgetChoice) =>
     choice === "none"
       ? t("agentSettings.weeklyBudget.none")
       : t("agentSettings.weeklyBudget.amount", { tokens: tokenCount(choice) });
+  const turnLimitLabel = (choice: TurnLimitChoice) =>
+    choice === 0
+      ? t("agentSettings.turnLimit.off")
+      : choice === DEFAULT_TURN_LIMIT
+        ? t("agentSettings.turnLimit.default", { calls: choice })
+        : t("agentSettings.turnLimit.calls", { calls: choice });
 
   let backupModelsSave = 0;
   async function saveBackupModels(next: AgentBackupModels | null): Promise<void> {
@@ -1253,7 +1330,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
                       class="avatar-face-grid avatar-eyes-grid"
                       aria-label={t("agentSettings.avatar.eyesLabel")}
                     >
-                      <For each={AVATAR_EXPRESSIONS}>
+                      <For each={avatarExpressionsForShape(avatarFace().shape)}>
                         {(expression, index) => (
                           <Button
                             variant="ghost"
@@ -1643,7 +1720,7 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
                     >
                       <span class="agent-settings-runtime-label">{t("agentSettings.compactWindow.title")}</span>
                       <SelectValue<CompactWindowChoice>>
-                        {(state) => compactWindowLabel(state.selectedOption() ?? "off")}
+                        {(state) => compactWindowLabel(state.selectedOption() ?? DEFAULT_COMPACT_WINDOW)}
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent />
@@ -1674,6 +1751,28 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
                     <SelectContent />
                   </Select>
                 </Show>
+                <Show when={props.tokenSettingsEditable}>
+                  <Select<TurnLimitChoice>
+                    class="agent-settings-runtime-select"
+                    options={[...AGENT_TURN_LIMITS]}
+                    value={draft.turnLimit}
+                    onChange={(next) => {
+                      if (next === undefined || next === null || next === draft.turnLimit) return;
+                      void saveTurnLimit(next);
+                    }}
+                    itemComponent={(item) => (
+                      <SelectItem item={item.item}>{turnLimitLabel(item.item.rawValue)}</SelectItem>
+                    )}
+                  >
+                    <SelectTrigger class="agent-settings-runtime-row" aria-label={t("agentSettings.turnLimit.label")}>
+                      <span class="agent-settings-runtime-label">{t("agentSettings.turnLimit.title")}</span>
+                      <SelectValue<TurnLimitChoice>>
+                        {(state) => turnLimitLabel(state.selectedOption() ?? DEFAULT_TURN_LIMIT)}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent />
+                  </Select>
+                </Show>
                 <Show when={props.browserProfiles}>
                   {(options) => (
                     <BrowserProfileSelect
@@ -1697,6 +1796,41 @@ export default function AgentSettingsPanel(props: AgentSettingsPanelProps) {
                 <Text as="p" class="agent-settings-runtime-note" variant="caption" tone="warning" role="status">
                   {t("agentSettings.browserProfile.movedNote")}
                 </Text>
+              </Show>
+              <Show when={props.tokenSettingsEditable}>
+                <Text as="p" class="agent-settings-runtime-note" variant="caption" tone="muted">
+                  {t("agentSettings.turnLimit.hint")}
+                </Text>
+                <div class="agent-settings-notifications">
+                  <div>
+                    <strong>{t("agentSettings.autoModel.title")}</strong>
+                    <span>
+                      {autoModelSupported()
+                        ? t("agentSettings.autoModel.description", { model: autoModelName() })
+                        : t("agentSettings.autoModel.unsupported")}
+                    </span>
+                  </div>
+                  <Switch
+                    size="sm"
+                    aria-label={t("agentSettings.autoModel.title")}
+                    checked={autoModelSupported() && draft.autoModel}
+                    disabled={!autoModelSupported()}
+                    onChange={(next) => void saveAutoModel(next)}
+                  />
+                </div>
+                <div class="agent-settings-notifications">
+                  <div>
+                    <strong>{t("agentSettings.delegatedSmallModel.title")}</strong>
+                    <span>{t("agentSettings.delegatedSmallModel.hint")}</span>
+                  </div>
+                  <Switch
+                    size="sm"
+                    aria-label={t("agentSettings.delegatedSmallModel.title")}
+                    checked={autoModelSupported() && draft.delegatedSmallModel}
+                    disabled={!autoModelSupported()}
+                    onChange={(next) => void saveDelegatedSmallModel(next)}
+                  />
+                </div>
               </Show>
               <Show when={props.busyMessageModeEditable && steerUnsupported()}>
                 <Text as="p" class="agent-settings-runtime-note" variant="caption" tone="muted">
@@ -1892,11 +2026,14 @@ function sameRuntimeSettings(current: AgentRuntimeSettings, settings: AgentRunti
   );
 }
 
-const COMPACT_WINDOW_CHOICES = ["off", ...AGENT_COMPACT_WINDOWS] as const;
-type CompactWindowChoice = "off" | AgentCompactWindow;
+/** Absent is `DEFAULT_COMPACT_WINDOW`, so the default saves `null`. */
+const COMPACT_WINDOW_CHOICES = AGENT_COMPACT_WINDOWS;
+type CompactWindowChoice = AgentCompactWindow;
 
 const WEEKLY_BUDGET_CHOICES = ["none", ...AGENT_WEEKLY_TOKEN_BUDGETS] as const;
 type WeeklyBudgetChoice = "none" | AgentWeeklyTokenBudget;
+
+type TurnLimitChoice = AgentTurnLimit;
 
 const BUSY_MESSAGE_CHOICES = ["default", "queue", "steer"] as const;
 type BusyMessageChoice = (typeof BUSY_MESSAGE_CHOICES)[number];
@@ -1926,10 +2063,8 @@ function randomAvatarFace(current: { shape: SupportedAvatarSilhouetteId; express
   shape: SupportedAvatarSilhouetteId;
   expression: ExpressionId;
 } {
-  return {
-    shape: randomOther(SUPPORTED_AVATAR_SILHOUETTES, current.shape),
-    expression: randomOther(AVATAR_EXPRESSIONS, current.expression),
-  };
+  const shape = randomOther(SUPPORTED_AVATAR_SILHOUETTES, current.shape);
+  return { shape, expression: randomOther(avatarExpressionsForShape(shape), current.expression) };
 }
 
 function randomOther<T>(items: readonly T[], current: T): T {

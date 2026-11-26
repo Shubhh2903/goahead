@@ -6,6 +6,7 @@ import { createEffect, createMemo, createSignal } from "solid-js";
 import { useProviders } from "../../providers";
 import { useAuth } from "../account/account-context";
 import { useCustomAgents } from "../custom-agents/custom-agents-context";
+import { isFirstRunActive, skipFirstRunStep } from "../onboarding/first-run-wizard";
 import { useSetup } from "../onboarding/onboarding-context";
 import { serverCanAdminister } from "../servers/server-capabilities";
 import { useServerSettings } from "../servers/server-settings";
@@ -27,9 +28,10 @@ export function WorkspaceAgentSetup() {
     serverSetupChoice,
     hostAccountLimits,
     developmentCreation,
+    skipFirstAgentSetup,
   } = useAgents();
   const { createAgent } = useAgentActions();
-  const { setupState } = useSetup();
+  const { setupState, firstRunWizard, updateFirstRunWizard } = useSetup();
   const { customAgents } = useCustomAgents();
   const { activeServer, activeServerSupportsCapability } = useServers();
   const {
@@ -56,6 +58,16 @@ export function WorkspaceAgentSetup() {
     () => activeServer()?.kind !== "remote" || activeServerSupportsCapability(TEAM_AGENT_CREATE_MODEL_CAPABILITY),
   );
   const [modelTouched, setModelTouched] = createSignal(false);
+  /** The agent step of first-run setup, on this computer, which the user may skip. */
+  const firstRunAgentStep = createMemo(() => {
+    const wizard = firstRunWizard();
+    return (
+      isFirstRunActive(wizard) &&
+      wizard.step === "agent" &&
+      agentList().length === 0 &&
+      activeServer()?.kind === "local"
+    );
+  });
   createEffect(
     () => ({
       touched: modelTouched(),
@@ -116,6 +128,14 @@ export function WorkspaceAgentSetup() {
       }}
       onSubmit={createAgent}
       onCancel={agentList().length > 0 ? cancelAgentSetup : undefined}
+      onSkip={
+        firstRunAgentStep()
+          ? () => {
+              skipFirstAgentSetup();
+              updateFirstRunWizard(skipFirstRunStep);
+            }
+          : undefined
+      }
     />
   );
 }

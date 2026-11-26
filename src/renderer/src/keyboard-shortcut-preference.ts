@@ -16,13 +16,18 @@ import { createSignal } from "solid-js";
 import { currentDevicePlatform } from "./send-shortcut-preference";
 
 const KEYBOARD_SHORTCUTS_STORAGE_KEY = "openbot:keyboard-shortcuts";
+/** GoAhead v0.40/v0.41 saved the same JSON under this key. It is read until the new key is written. */
+const GOAHEAD_KEYBOARD_SHORTCUTS_STORAGE_KEY = "openbot:keyboard-shortcuts:v1";
 
 let unsavedOverrides: ShortcutOverrides | undefined;
 
 function readOverrides(): ShortcutOverrides {
   if (unsavedOverrides !== undefined) return unsavedOverrides;
   try {
-    return parseShortcutOverrides(window.localStorage.getItem(KEYBOARD_SHORTCUTS_STORAGE_KEY));
+    return parseShortcutOverrides(
+      window.localStorage.getItem(KEYBOARD_SHORTCUTS_STORAGE_KEY) ??
+        window.localStorage.getItem(GOAHEAD_KEYBOARD_SHORTCUTS_STORAGE_KEY),
+    );
   } catch {
     return {};
   }
@@ -30,8 +35,11 @@ function readOverrides(): ShortcutOverrides {
 
 function writeOverrides(overrides: ShortcutOverrides): void {
   try {
-    if (Object.keys(overrides).length === 0) window.localStorage.removeItem(KEYBOARD_SHORTCUTS_STORAGE_KEY);
-    else window.localStorage.setItem(KEYBOARD_SHORTCUTS_STORAGE_KEY, serializeShortcutOverrides(overrides));
+    if (Object.keys(overrides).length === 0) {
+      window.localStorage.removeItem(KEYBOARD_SHORTCUTS_STORAGE_KEY);
+      // A reset must not bring the GoAhead v0.41 choice back.
+      window.localStorage.removeItem(GOAHEAD_KEYBOARD_SHORTCUTS_STORAGE_KEY);
+    } else window.localStorage.setItem(KEYBOARD_SHORTCUTS_STORAGE_KEY, serializeShortcutOverrides(overrides));
     unsavedOverrides = undefined;
   } catch {
     unsavedOverrides = overrides;

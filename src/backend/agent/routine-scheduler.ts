@@ -1085,7 +1085,7 @@ export class RoutineScheduler implements RoutineDueSource {
     const record = yield* routineStep(() => this.#routines.getRecord(run.agentId, run.routineId));
     const skipped = yield* routineStep(() => {
       if (record?.limitPolicy !== "skip" || !this.#hooks.usageLimited(run.agentId)) return null;
-      const cancelled = this.#transitionRunWithConversation(run, "cancelled");
+      const cancelled = this.#cancelRun(run, null);
       this.stateChanged(run.agentId);
       return cancelled;
     });
@@ -1263,9 +1263,8 @@ export class RoutineScheduler implements RoutineDueSource {
         if (decision.fingerprint) this.#routines.setRunConditionFingerprint(run.routineId, decision.fingerprint);
         return null;
       }
-      const cancelled = this.#transitionRunWithConversation(
+      const cancelled = this.#cancelRun(
         run,
-        "cancelled",
         sourceText(
           decision.reason === "unchanged"
             ? "error.backend.routineRunConditionUnchanged"
@@ -1276,6 +1275,22 @@ export class RoutineScheduler implements RoutineDueSource {
       return cancelled;
     });
   });
+
+  /**
+   * Cancels a run that starts no turn. The run record is written every time, so the history and the
+   * Usage count of skipped runs stay whole. A scheduled run adds a chat marker only when the routine's
+   * previous finished run was not cancelled for the same reason: a check that says no every few
+   * minutes would otherwise fill the chat with identical rows.
+   */
+  #cancelRun(run: RoutineRun, error: string | null): RoutineRun {
+    if (run.kind === "scheduled") {
+      const previous = this.#routines.lastFinishedRun(run.agentId, run.routineId, run.id);
+      if (previous?.status === "cancelled" && previous.error === error) {
+        return this.#routines.updateRunStatus(run.id, "cancelled", error);
+      }
+    }
+    return this.#transitionRunWithConversation(run, "cancelled", error);
+  }
 
   readonly #interruptRunsEffect = Effect.fn("RoutineScheduler.interruptRuns")(function* (
     this: RoutineScheduler,

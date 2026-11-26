@@ -50,6 +50,12 @@ import { sourceText } from "@openbot/i18n/source";
 import { errorReference, referenceFrom } from "@openbot/user-errors/reference";
 import { Context, Deferred, Effect, Exit, Layer, ManagedRuntime, Result, Schema, Scope, Semaphore } from "effect";
 import { base64ToBytes, base64UrlToBytes, bytesToBase64Url } from "./base64";
+import {
+  type ConnectionPath,
+  connectionFailureReason,
+  connectionPathFromCandidates,
+  iceServerUrls,
+} from "./connection-path";
 import { createEd25519Identity, type Ed25519Identity, signEd25519, verifyEd25519Pem } from "./ed25519";
 
 class RemotePeerError extends Schema.TaggedError<RemotePeerError>()("RemotePeerError", {
@@ -307,6 +313,11 @@ export interface RemoteDownloadProgress {
 }
 
 export interface RemoteTeamPeerActions {
+  /**
+   * How this phone reaches the host, or why it cannot. Optional and local to the phone: it adds
+   * nothing to the wire, so every host version works the same.
+   */
+  onConnectionPath?: (update: { hostId: string; path: ConnectionPath }) => Promise<void>;
   onHostStreamData?: (data: string | ArrayBuffer) => void;
   onUploadProgress?: (progress: RemoteUploadProgress) => Promise<void>;
   onDownloadProgress?: (progress: RemoteDownloadProgress) => Promise<void>;
@@ -402,6 +413,14 @@ interface PeerState {
   offerPending: boolean;
   preparedAt: number;
   preparedIceServersAt: number;
+  /** Signal sent `ready` at least once on this peer. Facts for a connection failure reason. */
+  signalWasReady: boolean;
+  /** The host's answer to the offer arrived. */
+  hostAnswered: boolean;
+  /** The phone gathered a server-reflexive candidate, so a STUN server answered. */
+  gatheredServerReflexive: boolean;
+  /** The browser reported an error for a STUN URL. */
+  stunCandidateError: boolean;
 }
 
 const CHANNELS: ChannelKind[] = ["rpc", "events", "files", "desktop"];
@@ -647,6 +666,21 @@ export function createRemoteTeamPeer(
     void runPeerEffect(diagnosticCall(state, step, detail)).catch(() => undefined);
   }
 
+  /** The phone could not reach the host. The reason uses only what this peer saw. */
+  function reportConnectFailure(state: PeerState): void {
+    if (state.closed || peer !== state || state.authenticated) return;
+    const reason = connectionFailureReason({
+      signalWasReady: state.signalWasReady,
+      iceServerUrls: iceServerUrls(state.iceServers),
+      hostAnswered: state.hostAnswered,
+      gatheredServerReflexive: state.gatheredServerReflexive,
+      stunCandidateError: state.stunCandidateError,
+    });
+    void actions.current
+      .onConnectionPath?.({ hostId: state.hostId, path: { kind: "cannot-connect", reason } })
+      ?.catch(() => undefined);
+  }
+
   function notify<A, E>(operation: Effect.Effect<A, E, RemotePeerIO>) {
     return Effect.forkIn(operation.pipe(Effect.ignore), workScope, { startImmediately: true });
   }
@@ -654,7 +688,10 @@ export function createRemoteTeamPeer(
   function reportRoute(state: PeerState, connection: RTCPeerConnection) {
     return Effect.fn("RemotePeer.reportRoute")(function* () {
       const pair = selectedCandidates(yield* peerCall(() => connection.getStats()));
-      if (pair) yield* notify(diagnosticCall(state, "route", iceCandidateRoute(pair.local, pair.remote)));
+      if (!pair) return;
+      yield* notify(diagnosticCall(state, "route", iceCandidateRoute(pair.local, pair.remote)));
+      const path = connectionPathFromCandidates(pair.local?.candidateType, pair.remote?.candidateType);
+      if (path) yield* notify(peerCall(() => actions.current.onConnectionPath?.({ hostId: state.hostId, path })));
     })();
   }
 
@@ -1007,6 +1044,10 @@ export function createRemoteTeamPeer(
         ticketRequest: false,
         signalReady: false,
         answeredRequest: false,
+        signalWasReady: false,
+        hostAnswered: false,
+        gatheredServerReflexive: false,
+        stunCandidateError: false,
         fullSnapshotRequested: false,
         lastAnswerAt: 0,
         lastSignalClose: null,
@@ -1160,6 +1201,7 @@ export function createRemoteTeamPeer(
         "signal-closed",
         `code ${event?.code ?? "unknown"}${state.signalAnswered ? "" : state.signalOpenedAt ? `, no answer after ${Date.now() - state.signalOpenedAt} ms` : ", not opened"}`,
       );
+      if (!state.signalWasReady) reportConnectFailure(state);
       const refused = refusal === null ? sourceText("error.remote.signalClosed") : SIGNAL_ERROR_TEXT.get(refusal);
       if (
         refused !== undefined &&
@@ -1287,6 +1329,7 @@ export function createRemoteTeamPeer(
         lastSignal = { hostId: state.hostId, signalUrl: state.signalUrl, iceServers: state.iceServers, at: Date.now() };
         const connectionId = state.connectionId;
         state.signalReady = true;
+        state.signalWasReady = true;
         const preparedConnection = state.offerPending ? state.connection : null;
         if (preparedConnection) {
           const sdp = preparedConnection.localDescription?.sdp;
@@ -1377,6 +1420,7 @@ export function createRemoteTeamPeer(
         if (previousFingerprint && nextFingerprint !== previousFingerprint) {
           return yield* new RemotePeerError({ message: sourceText("error.remote.connectionDropped") });
         }
+        state.hostAnswered = true;
         yield* peerCall(() => state.connection?.setRemoteDescription({ type: "answer", sdp: message.sdp }));
         state.iceRestartSentAt = null;
         for (const line of sdpCandidateLines(message.sdp)) state.remoteCandidates.add(line);
@@ -1411,6 +1455,7 @@ export function createRemoteTeamPeer(
     state.iceRestartSentAt = null;
     state.iceRestartAt = null;
     connection.onicecandidate = (event) => {
+      if (event.candidate?.candidate.includes(" typ srflx")) state.gatheredServerReflexive = true;
       if (event.candidate?.candidate && state.connection === connection)
         state.localCandidates.add(event.candidate.candidate);
       if (!event.candidate?.candidate || !state.connectionId || !canSignal(state)) return;
@@ -1431,6 +1476,7 @@ export function createRemoteTeamPeer(
     const candidateErrors = new Set<string>();
     connection.onicecandidateerror = (event) => {
       if (state.connection !== connection || state.closed || peer !== state) return;
+      if (/^stuns?:/u.test(event.url)) state.stunCandidateError = true;
       const key = `${event.url} ${event.errorCode}`;
       if (candidateErrors.has(key)) return;
       candidateErrors.add(key);
@@ -1454,6 +1500,8 @@ export function createRemoteTeamPeer(
       const connectionState = connection.connectionState;
       diagnose(state, "peer-state", connectionState);
       if (connectionState === "connected") void runPeerEffect(reportRoute(state, connection)).catch(() => undefined);
+      // After authentication a failed path is a network change that an ICE restart can recover.
+      if (connectionState === "failed" && !state.authenticated) reportConnectFailure(state);
       if (canRecoverPeer(state)) {
         recoverIce(state, actions, connectionState === "failed" ? 0 : ICE_RESTART_DELAY_MS);
         return;
@@ -2290,6 +2338,7 @@ export function createRemoteTeamPeer(
     if (!state.connected || state.connectedTimer !== null) return;
     state.connectedTimer = setTimeout(() => {
       diagnose(state, "stalled", `connect deadline: ${connectionSnapshot(state)}`);
+      reportConnectFailure(state);
       failPeer(state, connectTimeout(state), actions);
     }, 30_000);
   }

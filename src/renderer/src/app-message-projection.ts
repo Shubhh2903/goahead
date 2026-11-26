@@ -140,6 +140,7 @@ export function toAgentMessage(message: ConversationMessage, ownerAgentId?: stri
     ...(memoryChanges && message.memoryChanges ? { memoryChanges: message.memoryChanges } : {}),
     ...(message.trace === undefined ? {} : { trace: message.trace }),
     ...(message.author === "user" && message.slackAsk ? { slackAsk: message.slackAsk } : {}),
+    ...(message.author === "assistant" && message.autoModelName ? { autoModelName: message.autoModelName } : {}),
     ...(status === undefined ? {} : { status }),
   };
 }
@@ -268,6 +269,9 @@ export function agentProfilesEqual(left: AgentProfile, right: AgentProfile): boo
     left.compactWindow === right.compactWindow &&
     (left.disabledMcpServerIds ?? []).join("\u0000") === (right.disabledMcpServerIds ?? []).join("\u0000") &&
     left.weeklyTokenBudget === right.weeklyTokenBudget &&
+    left.turnLimit === right.turnLimit &&
+    left.autoModel === right.autoModel &&
+    left.delegatedSmallModel === right.delegatedSmallModel &&
     left.threadId === right.threadId &&
     left.avatarSeed === right.avatarSeed &&
     left.avatarHue === right.avatarHue &&
@@ -337,7 +341,8 @@ export function agentMessagesEqual(left: AgentMessage, right: AgentMessage): boo
     sameJson(left.uiBlock, right.uiBlock) &&
     sameJson(left.memoryChanges, right.memoryChanges) &&
     sameJson(left.trace, right.trace) &&
-    sameJson(left.slackAsk, right.slackAsk)
+    sameJson(left.slackAsk, right.slackAsk) &&
+    left.autoModelName === right.autoModelName
   );
 }
 

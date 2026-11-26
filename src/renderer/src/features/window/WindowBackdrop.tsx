@@ -1,3 +1,8 @@
+import {
+  chatBackdropUploadUrl,
+  isChatBackdropScene as isLegacyBackdropScene,
+  uploadBackdropId,
+} from "@openbot/contracts/chat-backdrop";
 import { type ChatBackdropBubbles, chatBackdropBubbles } from "@openbot/contracts/chat-visual";
 import { ChatBackdrop } from "@openbot/ui/features/conversation/ChatBackdrop";
 import { CustomBackdrop, type CustomBackdropSource } from "@openbot/ui/features/conversation/CustomBackdrop";
@@ -7,6 +12,7 @@ import { useChatBackdrop } from "../../chat-backdrop-preference";
 import { hideChatBackgroundForBackdrop } from "../../chat-background";
 import { readCustomBackdrop, type CustomBackdrop as SavedBackdrop, useCustomBackdrops } from "../../custom-backdrops";
 import { setWindowGlass } from "../../window-glass";
+import { useChatBackdropState } from "../backdrop/backdrop-state";
 import { conversationPort, releaseFilePreviewPage } from "../conversation/conversation-port";
 import { setShownBackdropBubbles } from "./backdrop-bubbles";
 
@@ -21,9 +27,20 @@ function dataUrl(backdrop: SavedBackdrop): Promise<string> {
 
 export function WindowBackdrop(props: { pages?: "desktop" | "srcdoc" }) {
   const choice = useChatBackdrop();
+  /* The backdrop GoAhead v0.40/v0.41 saved in main shows until a backdrop is chosen here. */
+  const legacy = useChatBackdropState();
+  const legacyChoice = () => (choice() === null ? legacy().choice : null);
   const scene = () => {
     const current = choice();
-    return isChatBackdropScene(current) ? current : null;
+    if (isChatBackdropScene(current)) return current;
+    const old = legacyChoice();
+    return isLegacyBackdropScene(old) ? old : null;
+  };
+  const legacyUpload = (): CustomBackdropSource | null => {
+    const old = legacyChoice();
+    const id = old === null ? null : uploadBackdropId(old);
+    const upload = id === null ? undefined : legacy().uploads.find((item) => item.id === id);
+    return upload ? { kind: upload.kind, url: chatBackdropUploadUrl(upload.id) } : null;
   };
   const customId = () => {
     const current = choice();
@@ -117,7 +134,7 @@ export function WindowBackdrop(props: { pages?: "desktop" | "srcdoc" }) {
   });
 
   createEffect(
-    () => scene() !== null || custom() !== null,
+    () => scene() !== null || custom() !== null || legacyUpload() !== null,
     (active) => {
       if (!active) return;
       setWindowGlass("backdrop", true);
@@ -139,7 +156,12 @@ export function WindowBackdrop(props: { pages?: "desktop" | "srcdoc" }) {
     <Show
       when={scene()}
       fallback={
-        <Show when={custom()}>{(current) => <CustomBackdrop source={current().source} title={current().name} />}</Show>
+        <Show
+          when={custom()}
+          fallback={<Show when={legacyUpload()}>{(source) => <CustomBackdrop source={source()} title="" />}</Show>}
+        >
+          {(current) => <CustomBackdrop source={current().source} title={current().name} />}
+        </Show>
       }
     >
       {(current) => <ChatBackdrop scene={current()} />}

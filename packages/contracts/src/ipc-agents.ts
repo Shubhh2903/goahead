@@ -122,6 +122,29 @@ export function agentQuickAcknowledgementEnabled(
   return agent.quickAcknowledgement ?? defaults.quickAcknowledgement;
 }
 
+/** Whether GoAhead may run a simple turn of this agent on a smaller model. Absent means off. */
+export function agentAutoModelEnabled(agent: Pick<AgentSummary, "autoModel">): boolean {
+  return agent.autoModel === true;
+}
+
+/**
+ * Whether a turn whose every message comes from a teammate or a routine runs on the provider's
+ * small model when the agent's own model is larger. Absent means on.
+ */
+export function agentDelegatedSmallModelEnabled(agent: Pick<AgentSummary, "delegatedSmallModel">): boolean {
+  return agent.delegatedSmallModel !== false;
+}
+
+/**
+ * The providers that take a model for one turn on the same session: Claude through `setModel`, and
+ * Codex through `turn/start`. For the others the automatic model choice has no effect.
+ */
+export const AUTO_MODEL_PROVIDERS = ["claude", "codex"] as const satisfies readonly AgentProviderId[];
+
+export function providerSupportsAutoModel(provider: AgentProviderId): boolean {
+  return isOneOf(AUTO_MODEL_PROVIDERS, provider);
+}
+
 export function workspaceAccessEnforced(agent: { access?: AgentAccess | undefined }): boolean {
   return agent.access === "workspace";
 }
@@ -218,14 +241,35 @@ export function isAgentMarketplaceSource(value: unknown): value is NonNullable<A
 /**
  * The context windows, in tokens, at which an agent can compact its conversation early. A smaller
  * window makes each model call read less context, and the agent keeps a summary of the rest. Absent
- * means the provider's full window. Only Claude reads it; another provider keeps its own compaction.
+ * means `DEFAULT_COMPACT_WINDOW`. Only Claude reads the setting; Codex always compacts at
+ * `DEFAULT_COMPACT_WINDOW`, or earlier on a small model window.
+ *
+ * The value is local: released Team API adapters project agents through a key list that does not
+ * hold it, and an older build's agent loader reads a value it does not know as absent.
  */
-export const AGENT_COMPACT_WINDOWS = [80_000, 120_000] as const;
+export const AGENT_COMPACT_WINDOWS = [80_000, 120_000, 200_000] as const;
 export type AgentCompactWindow = (typeof AGENT_COMPACT_WINDOWS)[number];
+
+/** The context size, in tokens, at which an agent compacts when its settings name no window. */
+export const DEFAULT_COMPACT_WINDOW = 120_000;
 
 /** The weekly token budgets an agent can have. A budget only alerts; it never stops work. */
 export const AGENT_WEEKLY_TOKEN_BUDGETS = [5_000_000, 10_000_000, 25_000_000, 50_000_000, 100_000_000] as const;
 export type AgentWeeklyTokenBudget = (typeof AGENT_WEEKLY_TOKEN_BUDGETS)[number];
+
+/**
+ * The tool calls one turn may make before the host stops it and asks the person to continue. `0`
+ * is Off. Absent means 40. The token limit of a turn is the call limit times 75,000.
+ */
+export const AGENT_TURN_LIMITS = [40, 100, 200, 0] as const;
+export type AgentTurnLimit = (typeof AGENT_TURN_LIMITS)[number];
+
+/** The tool calls a turn may make when the agent has no `turnLimit`. */
+export const DEFAULT_TURN_LIMIT = 40 satisfies AgentTurnLimit;
+
+export function isAgentTurnLimit(value: unknown): value is AgentTurnLimit {
+  return isOneOf(AGENT_TURN_LIMITS, value);
+}
 
 export function isAgentCompactWindow(value: unknown): value is AgentCompactWindow {
   return isOneOf(AGENT_COMPACT_WINDOWS, value);
@@ -285,6 +329,18 @@ export interface AgentSummary {
   disabledMcpServerIds?: string[];
   /** The weekly token budget that alerts the user. Local-only, like `access`. Absent means no budget. */
   weeklyTokenBudget?: AgentWeeklyTokenBudget;
+  /** The tool calls a turn may make before it pauses. Local-only, like `access`. Absent means 40. */
+  turnLimit?: AgentTurnLimit;
+  /**
+   * Whether a simple turn may run on the provider's small model. Local-only, like `access`. Absent
+   * means off; see `agentAutoModelEnabled`.
+   */
+  autoModel?: boolean;
+  /**
+   * Whether a teammate or routine turn may run on the provider's small model. Local-only, like
+   * `access`. Absent means on; see `agentDelegatedSmallModelEnabled`.
+   */
+  delegatedSmallModel?: boolean;
   threadId: string | null;
   workspacePath: string;
   preview: string;
@@ -348,6 +404,9 @@ function hasAgentSummaryFields(value: DynamicRecord): boolean {
     (value.compactWindow === undefined || isAgentCompactWindow(value.compactWindow)) &&
     (value.disabledMcpServerIds === undefined || isDisabledMcpServerIds(value.disabledMcpServerIds)) &&
     (value.weeklyTokenBudget === undefined || isAgentWeeklyTokenBudget(value.weeklyTokenBudget)) &&
+    (value.turnLimit === undefined || isAgentTurnLimit(value.turnLimit)) &&
+    (value.autoModel === undefined || isBoolean(value.autoModel)) &&
+    (value.delegatedSmallModel === undefined || isBoolean(value.delegatedSmallModel)) &&
     (value.threadId === null || isIdentifier(value.threadId)) &&
     isBoundedString(value.workspacePath, INPUT_LIMITS.path) &&
     isBoundedString(value.preview, INPUT_LIMITS.messageText) &&
@@ -451,6 +510,12 @@ export interface UpdateAgentInput {
   disabledMcpServerIds?: string[];
   /** `null` removes the budget. */
   weeklyTokenBudget?: AgentWeeklyTokenBudget | null;
+  /** `null` returns the agent to the default limit. */
+  turnLimit?: AgentTurnLimit | null;
+  /** `false` returns the agent to its own model for every turn. */
+  autoModel?: boolean;
+  /** `null` returns the agent to the default: on. */
+  delegatedSmallModel?: boolean | null;
   avatarSeed?: string;
   avatarHue?: AvatarHue | null;
   avatarColor?: AvatarColor | null;

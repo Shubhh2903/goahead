@@ -932,7 +932,10 @@ export function agentIpcHandlers({
           if (
             input.compactWindow !== undefined ||
             input.disabledMcpServerIds !== undefined ||
-            input.weeklyTokenBudget !== undefined
+            input.weeklyTokenBudget !== undefined ||
+            input.turnLimit !== undefined ||
+            input.autoModel !== undefined ||
+            input.delegatedSmallModel !== undefined
           ) {
             throw new Error(sourceText("error.agent.tokenSettingsLocalOnly"));
           }

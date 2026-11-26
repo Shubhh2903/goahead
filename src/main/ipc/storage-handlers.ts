@@ -11,6 +11,7 @@ import {
   parseLibraryFolderAction,
   parseOpenStorageLocationInput,
   parseOpenStoredFileInput,
+  parseTrashUnassignedFolderInput,
   STORAGE_CAPABILITY,
 } from "@openbot/contracts/ipc";
 import { isDynamicRecord } from "@openbot/contracts/runtime-values";
@@ -60,13 +61,18 @@ interface StorageRemoteServers extends Pick<OpenAttachmentDependencies["remoteSe
 }
 
 export interface StorageIpcDependencies extends Omit<OpenAttachmentDependencies, "remoteServers"> {
-  storage: Pick<StorageUsageService, "usage" | "deleteFile" | "clear" | "disk">;
+  storage: Pick<
+    StorageUsageService,
+    "usage" | "deleteFile" | "clear" | "disk" | "unassignedFolders" | "trashUnassignedFolder"
+  >;
   libraryFolders: Pick<LibraryFoldersService, "snapshot" | "change" | "removeFiles">;
   machine: Pick<MachineAlertMonitor, "metrics">;
   providerRuntimes: Pick<ProviderRuntimeManager, "removableRuntimes" | "removeRemovableRuntimes">;
   remoteServers: StorageRemoteServers;
   agents: () => StorageAgent[];
   openPath: (path: string) => Promise<string>;
+  /** Electron `shell.trashItem`: the user can put the folder back from the Trash. */
+  trashItem: (path: string) => Promise<void>;
 }
 
 function decodeStorageChange(value: unknown): undefined {
@@ -86,6 +92,7 @@ export function storageIpcHandlers({
   translate,
   agents,
   openPath,
+  trashItem,
 }: StorageIpcDependencies): Pick<IpcGroupHandlers, "storage"> {
   async function remoteChange(serverId: string, path: string, body: unknown): Promise<void> {
     if (!remoteServers.supportsCapability(serverId, STORAGE_CAPABILITY))
@@ -201,6 +208,14 @@ export function storageIpcHandlers({
       }),
       getRemovableRuntimes: handler(() => runCauseEffect(providerRuntimes.removableRuntimes())),
       removeRemovableRuntimes: handler(() => runCauseEffect(providerRuntimes.removeRemovableRuntimes())),
+      // Local only: the rows are paths on this computer. No Team API route reaches these two.
+      listUnassignedFolders: handler(() => runCauseEffect(storage.unassignedFolders())),
+      // The sender check runs before the path is decoded. The service checks the path again from
+      // the disk and the current agents; the renderer's copy is never trusted, and this handler
+      // never calls the Trash itself.
+      trashUnassignedFolder: payloadHandler(parseTrashUnassignedFolderInput, ({ path }) =>
+        runCauseEffect(storage.trashUnassignedFolder(path, trashItem)),
+      ),
     },
   };
 }

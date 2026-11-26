@@ -102,6 +102,7 @@ export function serverFromHost(
     connectionFailure: previous?.connectionFailure,
     recoveryStatus: previous?.recoveryStatus,
     resuming: previous?.resuming,
+    connectionPath: previous?.connectionPath,
     address: null,
     accent: serverAccent(host.hostId),
     publicKey: host.devicePublicKey,

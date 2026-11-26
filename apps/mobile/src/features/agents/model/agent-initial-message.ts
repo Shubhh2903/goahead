@@ -5,18 +5,19 @@ import type { TranslatedLocale } from "@openbot/i18n/mobile";
 
 export type NewAgentInput = Omit<CreateAgentInput, "initialMessage"> & { firstTask?: string };
 
+/**
+ * The first message of a new agent. The role goes only in the instructions (`description`), so a
+ * role-only agent gets `greeting` ("Greet me briefly."), as GoAhead v0.41 sends.
+ */
 export function agentInitialMessage(
-  roleDescription: string,
   task: string,
   welcome: { locale: TranslatedLocale } | null,
+  greeting: string,
 ): string {
   if (welcome)
     return agentWelcomeMessage({
       language: appLanguageOption(welcome.locale).label,
       firstRequestFollows: task.trim().length > 0,
     });
-  const parts = [roleDescription.trim() ? `Your ongoing role is: ${roleDescription.trim()}` : "", task.trim()].filter(
-    Boolean,
-  );
-  return parts.length > 0 ? parts.join("\n\n") : "Greet me briefly.";
+  return task.trim() || greeting;
 }

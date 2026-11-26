@@ -16,7 +16,16 @@ import {
   type QueueSnapshot,
 } from "@openbot/contracts/ipc";
 
+/** The island keeps this much of a text, cut with `slice` and no mark. */
+export const DYNAMIC_ISLAND_TEXT_LIMIT = 600;
+
 type PromptEvent = Extract<AgentEvent, { type: "prompt" }>;
+/**
+ * A prompt as the island holds it. A runtime snapshot from the wire does not carry `multiSelect`, so
+ * such a prompt has `fromRuntimeSnapshot`, and its questions do not say whether they take one answer.
+ * The host's own snapshot carries it, so its prompts have no mark.
+ */
+export type DynamicIslandPromptSource = PromptEvent & { fromRuntimeSnapshot?: true };
 type BrowserTakeoverEvent = Extract<AgentEvent, { type: "browser-takeover-requested" }>;
 type AttentionCandidate =
   | { mode: "approval"; item: DynamicIslandApprovalItem }
@@ -37,11 +46,13 @@ export interface DynamicIslandText {
   approvalFileChange: string;
   approvalPermissions: string;
   /**
-   * The titles of a local-only send or booking card. Only the desktop shows these cards, so only it
-   * sets them; the card's reason does not repeat the question.
+   * The titles of a local-only send, booking, turn-limit or install card. Only the desktop shows these cards,
+   * so only it sets them; the card's reason does not repeat the question.
    */
   approvalSendMail?: string;
   approvalBookMeeting?: string;
+  approvalTurnLimit?: string;
+  approvalInstallGuard?: string;
   /** `userErrorMessage` in the interface language. `fallback` is already translated. */
   errorMessage: (error: unknown, fallback: string) => string;
 }
@@ -54,7 +65,7 @@ export interface DynamicIslandPresentationInput {
   unreadReplies: Record<string, number>;
   unreadMessageIds?: Record<string, string | null>;
   liveMessages: Record<string, DynamicIslandMessageSource[]>;
-  pendingPrompts: Record<string, PromptEvent | BrowserTakeoverEvent | undefined>;
+  pendingPrompts: Record<string, DynamicIslandPromptSource | BrowserTakeoverEvent | undefined>;
   pendingApprovals: Record<string, AgentApproval | undefined>;
   failedTurns: Record<string, string | undefined>;
   /** The local mail cards of `gmail_notify`. Only the desktop sets it, for the local server. */
@@ -184,7 +195,7 @@ function latestUnreadMessage(input: DynamicIslandPresentationInput, agents: read
       const text = message?.body.trim() || agent.preview?.trim();
       if (!messageId || !text) return [];
       const createdAt = message?.createdAt || agent.updatedAt || message?.time || new Date(0).toISOString();
-      return [{ agent: agentIdentity(agent), messageId, text: truncate(text, 600), createdAt }];
+      return [{ agent: agentIdentity(agent), messageId, text: truncate(text, DYNAMIC_ISLAND_TEXT_LIMIT), createdAt }];
     })
     .sort((left, right) => messageTimestamp(right.createdAt) - messageTimestamp(left.createdAt))[0];
 }
@@ -225,14 +236,14 @@ function collectAttention(
         truncated:
           ("truncated" in approval && approval.truncated === true) ||
           [approval.command, approval.cwd, approval.reason, approval.grantRoot].some(
-            (value) => value !== null && value.length > 600,
+            (value) => value !== null && value.length > DYNAMIC_ISLAND_TEXT_LIMIT,
           ) ||
           Boolean(
             approval.permissions &&
               (approval.permissions.fileSystem.read.length > 3 ||
                 approval.permissions.fileSystem.write.length > 3 ||
                 [...approval.permissions.fileSystem.read, ...approval.permissions.fileSystem.write].some(
-                  (path) => path.length > 600,
+                  (path) => path.length > DYNAMIC_ISLAND_TEXT_LIMIT,
                 )),
           ),
         approval: {
@@ -244,8 +255,12 @@ function collectAttention(
           permissions: approval.permissions
             ? {
                 fileSystem: {
-                  read: approval.permissions.fileSystem.read.slice(0, 3).map((path) => truncate(path, 600)),
-                  write: approval.permissions.fileSystem.write.slice(0, 3).map((path) => truncate(path, 600)),
+                  read: approval.permissions.fileSystem.read
+                    .slice(0, 3)
+                    .map((path) => truncate(path, DYNAMIC_ISLAND_TEXT_LIMIT)),
+                  write: approval.permissions.fileSystem.write
+                    .slice(0, 3)
+                    .map((path) => truncate(path, DYNAMIC_ISLAND_TEXT_LIMIT)),
                 },
                 network: approval.permissions.network,
               }
@@ -258,7 +273,7 @@ function collectAttention(
     const agent = agentsById.get(agentId);
     if (!agent || !event) continue;
     if (event.type === "prompt") {
-      const questions = normalizeQuestions(event.questions, text);
+      const questions = normalizeQuestions(event.questions, text, event.fromRuntimeSnapshot !== true);
       const question = questions[0];
       items.push({
         mode: "question",
@@ -302,20 +317,29 @@ function collectAttention(
 }
 
 function failureDetail(error: string | null | undefined, text: DynamicIslandText): string {
-  return truncate(text.errorMessage(error, text.failureDetail), 600);
+  return truncate(text.errorMessage(error, text.failureDetail), DYNAMIC_ISLAND_TEXT_LIMIT);
 }
 
 function truncate(value: string, length: number): string {
   return value.slice(0, length);
 }
 
-function normalizeQuestions(questions: PromptEvent["questions"], text: DynamicIslandText): DynamicIslandQuestionItem[] {
+/**
+ * The questions as the island shows them. The answer of a button names these ids and labels.
+ * Without `multiSelectKnown`, the questions leave `multiSelect` out, because the source does not say.
+ */
+export function normalizeQuestions(
+  questions: PromptEvent["questions"],
+  text: DynamicIslandText,
+  multiSelectKnown = true,
+): DynamicIslandQuestionItem[] {
   return questions.slice(0, INPUT_LIMITS.promptQuestions).map((question, questionIndex) => ({
     id: normalizeTechnical(question.id, `question-${questionIndex + 1}`, INPUT_LIMITS.identifier),
     header: normalizeRequired(question.header, text.questionHeader, INPUT_LIMITS.promptHeader),
     question: normalizeRequired(question.question, text.questionText, INPUT_LIMITS.promptQuestion),
     ...questionDetail(question.detail),
     isSecret: question.isSecret,
+    ...(multiSelectKnown ? { multiSelect: question.multiSelect === true } : {}),
     options:
       question.options?.slice(0, INPUT_LIMITS.promptOptions).map((option, optionIndex) => {
         const fallback = `Option ${optionIndex + 1}`;
@@ -348,13 +372,15 @@ function normalizeRequired(value: string, fallback: string, length: number): str
 
 function truncateNullable(value: string | null | undefined): string | null {
   if (!value) return null;
-  return truncate(value, 600);
+  return truncate(value, DYNAMIC_ISLAND_TEXT_LIMIT);
 }
 
 function approvalTitle(approval: AgentApproval, text: DynamicIslandText) {
   const localKind = localOnlyApprovalKind(approval.requestId);
   if (localKind === "send" && text.approvalSendMail) return text.approvalSendMail;
   if (localKind === "meeting" && text.approvalBookMeeting) return text.approvalBookMeeting;
+  if (localKind === "turn-limit" && text.approvalTurnLimit) return text.approvalTurnLimit;
+  if (localKind === "install-guard" && text.approvalInstallGuard) return text.approvalInstallGuard;
   if (approval.kind === "command") return text.approvalCommand;
   if (approval.kind === "file-change") return text.approvalFileChange;
   return text.approvalPermissions;

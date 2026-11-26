@@ -8,22 +8,11 @@ import {
 } from "@norbert_bodziony/bloub";
 import { type AvatarColor, type AvatarHue, nearestAvatarHue } from "@openbot/contracts/ipc";
 
-export type SupportedAvatarSilhouetteId = Exclude<ShapeId, "goutte">;
-
-export interface BloubAvatarProfile {
-  shape: SupportedAvatarSilhouetteId;
-  color: string;
-  expression: ExpressionId;
-}
-
-const AUTOMATIC_COLORS = ["rouge", "orange", "ambre", "vert", "turquoise", "bleu", "violet", "rose"] as const;
-const UNSUPPORTED_AVATAR_SILHOUETTE = "goutte" as const satisfies ShapeId;
-function isSupportedSilhouette<Silhouette extends ShapeId>(
-  silhouette: Silhouette,
-): silhouette is Exclude<Silhouette, typeof UNSUPPORTED_AVATAR_SILHOUETTE> {
-  return silhouette !== UNSUPPORTED_AVATAR_SILHOUETTE;
-}
-export const SUPPORTED_AVATAR_SILHOUETTES = SHAPES.map((option) => option.id).filter(isSupportedSilhouette);
+/**
+ * The shapes that the hash of a seed picks from: the eight shapes of bloub 0.4.1, in its order. Keep
+ * this list as it is. A longer list would give most existing agents a different shape, and a client
+ * on an older release would draw a different shape for the same agent.
+ */
 const SEEDED_AVATAR_SILHOUETTES = [
   "cercle",
   "galet",
@@ -33,20 +22,47 @@ const SEEDED_AVATAR_SILHOUETTES = [
   "hexagone",
   "nuage",
   "goutte",
-  "carre",
-  "losange",
-  "pentagone",
 ] as const satisfies readonly ShapeId[];
 type SeededSilhouette = (typeof SEEDED_AVATAR_SILHOUETTES)[number];
+const UNSUPPORTED_AVATAR_SILHOUETTE = "goutte" as const satisfies SeededSilhouette;
 type SeededSupportedSilhouette = Exclude<SeededSilhouette, typeof UNSUPPORTED_AVATAR_SILHOUETTE>;
-type NamedSilhouette = Exclude<ShapeId, SeededSilhouette>;
-const SEEDED_SUPPORTED_SILHOUETTES = SEEDED_AVATAR_SILHOUETTES.filter(isSupportedSilhouette);
-const NAMED_SILHOUETTE_LOOKALIKES: Readonly<Record<NamedSilhouette, SeededSupportedSilhouette>> = {
+
+/**
+ * The shapes that a seed names, as `<prefix>:<shape>:face:<n>` or `<prefix>:<shape>:flat:<n>`:
+ * ghost, jellyfish and octopus. Each has a lookalike among the seeded shapes, so a client on an
+ * older release draws a similar shape with the same eyes. bloub 0.7.0 also has `carre`, `losange`
+ * and `pentagone`; GoAhead does not offer them.
+ */
+const NAMED_SILHOUETTE_LOOKALIKES = {
   fantome: "squircle",
   meduse: "galet",
   poulpe: "nuage",
-};
+} as const satisfies Partial<Record<ShapeId, SeededSupportedSilhouette>>;
+type NamedSilhouette = keyof typeof NAMED_SILHOUETTE_LOOKALIKES;
 const NAMED_SILHOUETTE_SEED_PATTERN = /:([a-z]+):(?:face|flat):\d+$/;
+const NAMED_SEED_TRIES = 512;
+
+export type SupportedAvatarSilhouetteId = SeededSupportedSilhouette | NamedSilhouette;
+
+export interface BloubAvatarProfile {
+  shape: SupportedAvatarSilhouetteId;
+  color: string;
+  expression: ExpressionId;
+}
+
+const AUTOMATIC_COLORS = ["rouge", "orange", "ambre", "vert", "turquoise", "bleu", "violet", "rose"] as const;
+function isSeededSupportedSilhouette(silhouette: string): silhouette is SeededSupportedSilhouette {
+  return (
+    silhouette !== UNSUPPORTED_AVATAR_SILHOUETTE && SEEDED_AVATAR_SILHOUETTES.some((shape) => shape === silhouette)
+  );
+}
+function isSupportedSilhouette(silhouette: string): silhouette is SupportedAvatarSilhouetteId {
+  return isSeededSupportedSilhouette(silhouette) || isNamedSilhouette(silhouette);
+}
+/** The shapes a person can pick, in bloub's order. */
+export const SUPPORTED_AVATAR_SILHOUETTES = SHAPES.map((option) => option.id).filter(isSupportedSilhouette);
+const SEEDED_SUPPORTED_SILHOUETTES = SEEDED_AVATAR_SILHOUETTES.filter(isSeededSupportedSilhouette);
+const NAMED_SILHOUETTES = Object.keys(NAMED_SILHOUETTE_LOOKALIKES).filter(isNamedSilhouette);
 
 function isNamedSilhouette(silhouette: string): silhouette is NamedSilhouette {
   return Object.hasOwn(NAMED_SILHOUETTE_LOOKALIKES, silhouette);
@@ -68,6 +84,15 @@ function seededSilhouette(seed: string): SeededSupportedSilhouette {
         stableIndex(`${seed}:shape:replacement`, SEEDED_SUPPORTED_SILHOUETTES.length),
       )
     : silhouette;
+}
+
+/** A seed that draws the named shape here, and its lookalike on an older client. */
+function namedSilhouetteSeed(prefix: string, silhouette: NamedSilhouette): string | null {
+  for (let index = 0; index < NAMED_SEED_TRIES; index += 1) {
+    const candidate = `${prefix}:${silhouette}:face:${index}`;
+    if (seededSilhouette(candidate) === NAMED_SILHOUETTE_LOOKALIKES[silhouette]) return candidate;
+  }
+  return null;
 }
 
 function seededLookalike(silhouette: SupportedAvatarSilhouetteId): SeededSupportedSilhouette {
@@ -213,6 +238,14 @@ export function avatarCandidateSeeds(agentId: string, currentSeed: string, batch
     usedExpressions.add(profile.expression);
   }
 
+  for (const silhouette of NAMED_SILHOUETTES) {
+    if (silhouette === firstProfile.shape) continue;
+    const candidate = namedSilhouetteSeed(`${agentId}:avatar:${batch}`, silhouette);
+    if (candidate === null || candidates.includes(candidate)) continue;
+    candidates.push(candidate);
+    usedExpressions.add(bloubAvatarProfile(candidate, null).expression);
+  }
+
   while (candidates.length < 12) {
     const candidate = `${agentId}:avatar:${batch}:${index}`;
     index += 1;
@@ -246,6 +279,44 @@ export function avatarDefaultSeed(agentId: string, style: AvatarStyle): string {
   return avatarSeedForFace(agentId, { shape: face.shape, expression: face.expression }, style);
 }
 
+const FACE_PROBE_SEEDS = 2_048;
+let reachableExpressionsByShape: ReadonlyMap<SeededSupportedSilhouette, readonly ExpressionId[]> | null = null;
+
+/**
+ * The expressions that a seed can draw with this shape. The shape and the expression of a seed come
+ * from the low bits of one hash, so each of the eight seeded shapes reaches only a few expressions.
+ * The set does not depend on the agent id. Offer only these faces in a picker.
+ */
+export function avatarExpressionsForShape(shape: SupportedAvatarSilhouetteId): readonly ExpressionId[] {
+  if (reachableExpressionsByShape === null) {
+    const found = new Map<SeededSupportedSilhouette, Set<ExpressionId>>();
+    for (let index = 0; index < FACE_PROBE_SEEDS; index += 1) {
+      const seed = `avatar-probe:face:${index}`;
+      const expressions = found.get(seededSilhouette(seed)) ?? new Set<ExpressionId>();
+      expressions.add(seededExpression(seed));
+      found.set(seededSilhouette(seed), expressions);
+    }
+    reachableExpressionsByShape = new Map(
+      SEEDED_SUPPORTED_SILHOUETTES.map((silhouette) => [
+        silhouette,
+        AVATAR_EXPRESSIONS.filter((expression) => found.get(silhouette)?.has(expression) ?? false),
+      ]),
+    );
+  }
+  return reachableExpressionsByShape.get(seededLookalike(shape)) ?? [];
+}
+
+/** The face itself when a seed can draw it, else the same shape with an expression that it can draw. */
+export function availableAvatarFace(face: { shape: SupportedAvatarSilhouetteId; expression: ExpressionId }): {
+  shape: SupportedAvatarSilhouetteId;
+  expression: ExpressionId;
+} {
+  const expressions = avatarExpressionsForShape(face.shape);
+  if (expressions.includes(face.expression)) return face;
+  return { shape: face.shape, expression: expressions[0] ?? face.expression };
+}
+
+/** Throws when no seed draws the face. Pass a face from `availableAvatarFace`. */
 export function avatarSeedForFace(
   agentId: string,
   face: { shape: SupportedAvatarSilhouetteId; expression: ExpressionId },

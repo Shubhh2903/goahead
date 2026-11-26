@@ -118,6 +118,7 @@ export const messages = defineMessages("error.team", {
     "This routine canvas is too large to send to this device. Shorten the routine instructions on the computer that runs the server.",
   "error.team.conversationPageTooLarge":
     "A message in this conversation is too large to send to this device. Open the conversation on the computer that runs the server.",
+  "error.team.chatFoldersUnsupported": "Chat folders are not supported by this connection.",
   "error.team.agentImportUnsupported": "Importing agents is not supported by this connection.",
   "error.team.instanceTransferUnsupported": "Transferring agents is not supported by this connection.",
   "error.team.liveActivityUnsupported": "This host cannot update the Live Activity of a phone.",

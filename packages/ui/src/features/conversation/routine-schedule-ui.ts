@@ -1,5 +1,6 @@
 import type { RoutineSchedule } from "@openbot/contracts/ipc";
 import type { AppMessages } from "@openbot/i18n";
+import { routineOnceAt } from "@openbot/team-client/routine-schedule";
 import { currentText, type TextValue } from "../../text";
 
 export { routineTimeMinutes } from "@openbot/team-client/routine-schedule-draft";
@@ -68,8 +69,20 @@ export function routineScheduleSummary(
       const params = { day: schedule.day, time: formatRoutineClock(schedule.time, text) };
       return sentence ? t("routine.summary.monthlySentence", params) : t("routine.summary.monthly", params);
     }
-    case "interval":
+    case "interval": {
+      // A one-time routine is saved as an interval; it reads as its one time, in this device's time.
+      const once = routineOnceAt(schedule);
+      if (once) {
+        return t("routine.draftSummary.once", {
+          date: text.format.date(once, { weekday: "short", month: "short", day: "numeric" }),
+          time: formatRoutineClock(
+            `${String(once.getHours()).padStart(2, "0")}:${String(once.getMinutes()).padStart(2, "0")}`,
+            text,
+          ),
+        });
+      }
       return t(INTERVAL_SUMMARY[schedule.unit], { amount: schedule.amount });
+    }
     case "advanced":
       return t("routine.summary.advanced");
     case "custom":

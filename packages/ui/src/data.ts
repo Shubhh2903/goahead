@@ -234,6 +234,8 @@ export interface AgentMessage {
   trace?: ConversationTurnTrace | undefined;
   /** A message that GoAhead wrote to a Slack Orchestrator: the chat draws a card, not the text. */
   slackAsk?: ConversationSlackAsk | undefined;
+  /** The model that GoAhead chose for this answer, when it is not the agent's own model. */
+  autoModelName?: string | undefined;
 }
 
 export interface AgentProfile {
@@ -269,6 +271,12 @@ export interface AgentProfile {
   disabledMcpServerIds?: ClientAgentSummary["disabledMcpServerIds"];
   /** Absent means no budget. Absent for an agent on a remote host too, which does not share it. */
   weeklyTokenBudget?: ClientAgentSummary["weeklyTokenBudget"];
+  /** Absent means 40 tool calls; 0 is Off. Absent for an agent on a remote host too, which does not share it. */
+  turnLimit?: ClientAgentSummary["turnLimit"];
+  /** Absent means off. Absent for an agent on a remote host too, which does not share it. */
+  autoModel?: boolean | undefined;
+  /** Absent means on. Absent for an agent on a remote host too, which does not share it. */
+  delegatedSmallModel?: boolean | undefined;
   threadId: string | null;
   workspacePath?: string;
   avatarSeed: string;

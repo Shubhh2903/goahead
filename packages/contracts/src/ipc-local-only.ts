@@ -30,11 +30,44 @@ export function sharedConversationMessages<Content extends { messages: Conversat
 /** The key prefix of a Google send or booking card. The request id is `local-only:` and the key. */
 export const GOOGLE_APPROVAL_KEY_PREFIX = "google:";
 
-export type LocalOnlyApprovalKind = "send" | "meeting";
+/**
+ * The key prefix of the card that asks to continue a turn the host stopped at its limit. The key is
+ * the prefix, the agent id and the turn id.
+ */
+export const TURN_LIMIT_APPROVAL_KEY_PREFIX = "turn-limit:";
+
+/**
+ * The key prefix of the card that asks before an agent runs a command that can install gigabytes.
+ * The key is the prefix, the agent id, the turn id and the guard rule.
+ */
+export const INSTALL_GUARD_APPROVAL_KEY_PREFIX = "install-guard:";
+
+export type GoogleApprovalKind = "send" | "meeting";
+export type LocalOnlyApprovalKind = GoogleApprovalKind | "turn-limit" | "install-guard";
 
 /** The key of a Google card: its kind and the approval id of the Google state file. */
-export function googleApprovalKey(kind: LocalOnlyApprovalKind, approvalId: string): string {
+export function googleApprovalKey(kind: GoogleApprovalKind, approvalId: string): string {
   return `${GOOGLE_APPROVAL_KEY_PREFIX}${kind}:${approvalId}`;
+}
+
+/** The key prefix of every turn-limit card of one agent. */
+export function turnLimitApprovalAgentPrefix(agentId: string): string {
+  return `${TURN_LIMIT_APPROVAL_KEY_PREFIX}${agentId}:`;
+}
+
+/** The key of the card for one turn that its limit stopped. */
+export function turnLimitApprovalKey(agentId: string, turnId: string): string {
+  return `${turnLimitApprovalAgentPrefix(agentId)}${turnId}`;
+}
+
+/** The key prefix of every install-guard card of one agent. */
+export function installGuardApprovalAgentPrefix(agentId: string): string {
+  return `${INSTALL_GUARD_APPROVAL_KEY_PREFIX}${agentId}:`;
+}
+
+/** The key of the card for one guarded command of a turn. */
+export function installGuardApprovalKey(agentId: string, turnId: string, rule: string): string {
+  return `${installGuardApprovalAgentPrefix(agentId)}${turnId}:${rule}`;
 }
 
 /** What a local-only approval asks for, from its request id, or null for any other approval. */
@@ -43,6 +76,8 @@ export function localOnlyApprovalKind(requestId: string | number): LocalOnlyAppr
   const key = String(requestId).slice(LOCAL_ONLY_APPROVAL_PREFIX.length);
   if (key.startsWith(googleApprovalKey("send", ""))) return "send";
   if (key.startsWith(googleApprovalKey("meeting", ""))) return "meeting";
+  if (key.startsWith(TURN_LIMIT_APPROVAL_KEY_PREFIX)) return "turn-limit";
+  if (key.startsWith(INSTALL_GUARD_APPROVAL_KEY_PREFIX)) return "install-guard";
   return null;
 }
 

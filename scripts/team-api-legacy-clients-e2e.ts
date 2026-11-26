@@ -46,6 +46,7 @@ import {
 import { AGENT_BACKGROUND_WORK_CAPABILITY } from "@openbot/contracts/team-protocol/agent-background-work-v1";
 import { AGENT_NOTIFICATION_LEVELS_CAPABILITY } from "@openbot/contracts/team-protocol/agent-notification-levels-v1";
 import { teamProtocolCapabilityLimit } from "@openbot/contracts/team-protocol/capability-limits";
+import { CHAT_FOLDERS_CAPABILITY, CHAT_FOLDERS_ROUTES } from "@openbot/contracts/team-protocol/chat-folders-v1";
 import {
   BROWSER_VAULT_SKIP_CAPABILITY,
   TEAM_USAGE_GROUPS_CAPABILITY,
@@ -865,6 +866,52 @@ try {
       }
     },
   );
+
+  // GoAhead v0.40 and v0.41 phones speak protocol 6 and read folders from chat-folders-v1 (released in
+  // GoAhead v0.40). The route answers the layout with folder parents, without an agent the member
+  // cannot see, and refuses a connection that did not ask for the capability.
+  await step("chat-folders-v1: a GoAhead protocol 6 phone reads folders, without an agent it cannot see", async () => {
+    const chatIds = hostAgents.sidebarChatIds();
+    const created = await runCauseEffect(sidebar.mutate({ type: "create", name: "Core", agentId: source.id }, chatIds));
+    const sectionId = created.sections.find((section) => section.name === "Core")?.id ?? null;
+    assert.ok(sectionId, "The folder was not created.");
+    await runCauseEffect(
+      sidebar.mutate({ type: "move-agent", agentId: duplicate.copyId, sectionId, beforeAgentId: null }, chatIds),
+    );
+    const read = (capabilities: readonly string[]) =>
+      fetch(`http://127.0.0.1:${port}${CHAT_FOLDERS_ROUTES.read}`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${member.token}`,
+          "Content-Type": "application/json",
+          [TEAM_PROTOCOL_VERSION_HEADER]: "6",
+          [TEAM_APP_VERSION_HEADER]: CLIENT_VERSION,
+          [TEAM_CAPABILITIES_HEADER]: capabilities.join(","),
+        },
+        body: "{}",
+      });
+    const served = await current(6, [CHAT_FOLDERS_CAPABILITY], "/v1/compatibility");
+    assert.ok(
+      JSON.stringify(served.body).includes(CHAT_FOLDERS_CAPABILITY),
+      "The host does not offer chat-folders-v1 at protocol 6.",
+    );
+    const refused = await read([]);
+    assert.equal(refused.status, 400, "A connection without chat-folders-v1 was served.");
+    await setCopyAccess("none");
+    try {
+      const response = await read([CHAT_FOLDERS_CAPABILITY]);
+      assert.equal(response.status, 200);
+      const layout = record(await response.json(), "chat folders");
+      const order = layout.agentOrder;
+      assert.ok(Array.isArray(order) && order.includes(source.id), "The visible agent is missing.");
+      assert.ok(!order.includes(duplicate.copyId), "A hidden agent reached the member.");
+      assert.deepEqual(record(layout.agentAssignments, "assignments")[source.id], sectionId);
+      return { refused: refused.status, served: response.status, agents: order.length };
+    } finally {
+      await setCopyAccess("manage");
+    }
+  });
 
   await step("agent-background-work-v1: a WebRTC event follows the capability; a bad value fails closed", async () => {
     const wire = await currentRuntimeSnapshot(teamCapabilitiesForProtocol(TEAM_PROTOCOL_V10));

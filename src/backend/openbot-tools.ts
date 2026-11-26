@@ -41,6 +41,7 @@ import {
 } from "./agent/library-folder-tools";
 import { MCP_SERVER_TOOL_DEFINITIONS } from "./agent/mcp-tools";
 import { MEMORY_RECALL_TOOL_DEFINITIONS } from "./agent/memory-tool-inputs";
+import { mobileQaReservationInput } from "./agent/mobile-qa-reservation";
 import {
   createAgentToolSchema,
   listModelsToolSchema,
@@ -300,7 +301,7 @@ const routineRunConditionZodSchema = z
     when: z.enum(ROUTINE_RUN_CONDITION_MODES),
   })
   .describe(
-    "Optional check before each scheduled run, which saves a model turn when there is nothing to do. The command runs in this agent's working directory. Example: {command: 'git log -1 --format=%H', when: 'output-changes'} runs only after a new commit.",
+    "Optional check before each scheduled run, which saves a model turn when there is nothing to do. The command runs in this agent's working directory. Example: {command: 'git log -1 --format=%H', when: 'output-changes'} runs only after a new commit. Other templates (quote every value for a POSIX shell; the shell does not expand ~ inside quotes, so write a leading ~/ as \"$HOME\"/'rest' or use an absolute path): new file in a folder {command: \"ls -t '<folder>' | head -1\", when: 'output-changes'}; web page changed {command: \"curl -fsSL '<url>' | shasum\", when: 'output-changes'}; file exists {command: \"test -f '<path>'\", when: 'exit-zero'}.",
   );
 
 export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
@@ -496,6 +497,12 @@ export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
     description:
       "List the models each provider offers: id, name, reasoning efforts, and the default model that create_agent uses for a provider only. With no query, each provider lists its default, the models in use and its first models; omittedModels counts the rest. A provider with more than one account lists them: id, label and state, its own sign-in (id default) first. Read-only.",
     shape: listModelsToolSchema.shape,
+  },
+  {
+    name: "reserve_mobile_qa",
+    description:
+      "Acquire the shared mobile test environment before using its device, app data, API or bundler. If busy, defer the device check until handoff. After acquisition, verify the previous runner has exited before changing anything. Stop your runner and restore shared state before release. A reservation expires 30 minutes after the last acquire; acquire again to extend it.",
+    shape: mobileQaReservationInput.shape,
   },
   {
     name: "interrupt_agent",

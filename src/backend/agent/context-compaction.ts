@@ -5,6 +5,7 @@ import type {
   AgentContextCompactionReason,
   AgentContextState,
 } from "@openbot/contracts/ipc";
+import { DEFAULT_COMPACT_WINDOW } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger } from "@openbot/logging";
 import { Effect, Schema } from "effect";
@@ -344,7 +345,9 @@ export class ContextCompaction {
       this.#checkCompaction(budget, agentId);
     }
 
-    const pressured = usedTokens / contextWindow >= CONTEXT_COMPACTION_THRESHOLD;
+    // 80% of the model window, but never past `DEFAULT_COMPACT_WINDOW`: on a 272k window every call
+    // would otherwise re-read up to 218k tokens of cached input.
+    const pressured = usedTokens >= Math.min(CONTEXT_COMPACTION_THRESHOLD * contextWindow, DEFAULT_COMPACT_WINDOW);
     if (!pressured) {
       budget.pending = false;
       budget.lastCompactedTokens = null;

@@ -62,12 +62,18 @@ function readRailPinChoices(): RailPinChoices {
   }
 }
 
+const GOAHEAD_SIDEBAR_CHAT_ORDER_STORAGE_KEY = "openbot:sidebar-chat-order:v1";
+
 function readSidebarChatOrder(): SidebarChatOrder {
   try {
-    const saved = window.localStorage.getItem(SIDEBAR_CHAT_ORDER_STORAGE_KEY);
-    return SIDEBAR_CHAT_ORDERS.find((order) => order === saved) ?? "unread-group";
+    // GoAhead v0.40/v0.41 saved the choice under its own key; read it until the new key is written.
+    const saved =
+      window.localStorage.getItem(SIDEBAR_CHAT_ORDER_STORAGE_KEY) ??
+      window.localStorage.getItem(GOAHEAD_SIDEBAR_CHAT_ORDER_STORAGE_KEY);
+    // "manual" when the person never chose, as in GoAhead v0.41, so an upgrade does not reorder the chats.
+    return SIDEBAR_CHAT_ORDERS.find((order) => order === saved) ?? "manual";
   } catch {
-    return "unread-group";
+    return "manual";
   }
 }
 

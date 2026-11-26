@@ -1,11 +1,11 @@
 import type { ExpressionId } from "@norbert_bodziony/bloub";
 import {
   AVATAR_COLOR_CHOICES,
-  AVATAR_EXPRESSIONS,
   type AvatarColorChoice,
   type AvatarColorPresetId,
   type AvatarStyle,
   avatarDefaultSeed,
+  avatarExpressionsForShape,
   avatarHeadColor,
   avatarHueForColor,
   avatarStyleForSeed,
@@ -421,8 +421,12 @@ const AvatarEyesOptions = memo(function AvatarEyesOptions({
   onSelect,
 }: FaceOptionsProps) {
   const { t } = useText();
+  const expressions = avatarExpressionsForShape(shape);
   const seeds = useMemo(
-    () => AVATAR_EXPRESSIONS.map((option) => avatarSeedForStyledFace(faceKey, { shape, expression: option }, style)),
+    () =>
+      avatarExpressionsForShape(shape).map((option) =>
+        avatarSeedForStyledFace(faceKey, { shape, expression: option }, style),
+      ),
     [faceKey, shape, style],
   );
   const thumbnailHue = choiceHue(hue, color, shownColor);
@@ -433,7 +437,7 @@ const AvatarEyesOptions = memo(function AvatarEyesOptions({
         accessibilityRole="radiogroup"
         accessibilityLabel={t("mobile.agent.appearance.eyes")}
       >
-        {AVATAR_EXPRESSIONS.map((option, index) => (
+        {expressions.map((option, index) => (
           <ChoiceCell
             key={option}
             columns={EYES_COLUMNS}

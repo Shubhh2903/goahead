@@ -192,6 +192,7 @@ import { HistoryTools, historyCursorThread, isHistoryBrowse, MAIN_CHAT_TASK_ID }
 import type { HostedSiteCoordinator } from "./hosted-site-coordinator";
 import { isHostedSiteMutationTool } from "./hosted-site-events";
 import { type ImageFitter, READ_IMAGE_MAX_FILE_BYTES, readImageToolSchema } from "./image-reader";
+import { INSTALL_GUARD_METHOD } from "./install-guard";
 import {
   type AgentLibraryFolders,
   libraryFileAgents,
@@ -213,6 +214,7 @@ import {
   searchSignIns,
 } from "./mcp-tools";
 import type { AgentPinRefusal, MessagePins } from "./message-pins";
+import { MobileQaReservation, mobileQaReservationInput } from "./mobile-qa-reservation";
 import {
   agentAccountSetup,
   agentReasoningEffort,
@@ -468,6 +470,8 @@ export interface OpenBotToolRouterHooks {
   googleTurnOrigin(agentId: string, threadId: string, turnId: string): GoogleTurnOrigin;
   /** The agents that may use the Google tools. */
   googleMailAgents(): GoogleMailAgents;
+  /** Answers a Claude client's request to run a command that can install gigabytes (`INSTALL_GUARD_METHOD`). */
+  answerInstallGuard(client: AgentClient, request: AppServerRequest): void;
   /** Shows a Google send or booking card that only the person at this computer answers. */
   surfaceGoogleApproval(card: GoogleApprovalCard): void;
   /** An agent's `send_message` in a turn of the person carries that origin to its recipients. */
@@ -598,6 +602,7 @@ export class OpenBotToolRouter {
   readonly #apiKeys: AgentApiKeys | null;
   readonly #vaultItems: VaultItems | null;
   readonly #hooks: OpenBotToolRouterHooks;
+  readonly #mobileQa: MobileQaReservation;
   readonly #interruptTool: AgentInterruptTool;
   readonly #browserSchemasGiven = new Set<string>();
 
@@ -617,6 +622,7 @@ export class OpenBotToolRouter {
       recentThreads: (agentId, after, limit, last) => options.tasks.recent(agentId, after, limit, last),
     });
     this.#store = options.store;
+    this.#mobileQa = new MobileQaReservation(options.store.database.userDataPath);
     this.#mailbox = options.mailbox;
     this.#mailboxSync = options.mailboxSync;
     this.#conversation = options.conversation;
@@ -1082,6 +1088,9 @@ export class OpenBotToolRouter {
         }
         case "item/tool/requestUserInput":
           this.#attention.surfacePrompt(client, request);
+          return;
+        case INSTALL_GUARD_METHOD:
+          this.#hooks.answerInstallGuard(client, request);
           return;
         case "mcpServer/elicitation/request":
           this.#attention.surfaceMcpElicitation(client, request);
@@ -2329,6 +2338,24 @@ export class OpenBotToolRouter {
         },
       );
       return { success: true, contentItems: [{ type: "inputText", text: redactText(JSON.stringify(payload)) }] };
+    }
+
+    if (params.tool === "reserve_mobile_qa") {
+      const parsed = mobileQaReservationInput.safeParse(params.arguments);
+      if (!parsed.success)
+        return openBotToolFailure(`${z.prettifyError(parsed.error)}\nCorrect the arguments and retry.`);
+      const input = parsed.data;
+      // A failed reservation is a tool error the agent reads, not a defect of the turn.
+      return yield* Effect.tryPromise(() =>
+        this.#mobileQa.update(input, senderAgentId, (id) => this.#hooks.listAgents().some((agent) => agent.id === id)),
+      ).pipe(
+        Effect.map(openBotToolResult),
+        Effect.catch((failure) =>
+          Effect.succeed(
+            openBotToolFailure(failure.cause instanceof Error ? failure.cause.message : String(failure.cause)),
+          ),
+        ),
+      );
     }
 
     if (params.tool === "interrupt_agent")

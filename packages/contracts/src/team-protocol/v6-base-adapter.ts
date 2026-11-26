@@ -11,6 +11,7 @@ import {
   toWireAgentKeys,
   toWireAgentKeysObjectForPath,
 } from "./current-agent-keys";
+import { withQuestionMultiSelect } from "./question-multi-select-v6";
 import { withQuietTurn } from "./turn-quiet-v6";
 import {
   decodeTeamProtocolV6BaseEvent,
@@ -37,8 +38,11 @@ export function decodeTeamProtocolV6BaseCurrentEvent(value: unknown): TeamProtoc
   const decodedValue: TeamProtocolV6BaseJsonValue = JSON.parse(JSON.stringify(decoded.event));
   let current: unknown;
   try {
-    current = withQuietTurn(
-      withEventConversationPlans(restoreBrowserSecretMetadata(toCurrentAgentKeys(decodedValue), value), value),
+    current = withEventQuestionMultiSelect(
+      withQuietTurn(
+        withEventConversationPlans(restoreBrowserSecretMetadata(toCurrentAgentKeys(decodedValue), value), value),
+        value,
+      ),
       value,
     );
   } catch {
@@ -62,13 +66,52 @@ export function encodeTeamProtocolV6BaseCurrentEvent(
   const encoded = encodeTeamProtocolV6BaseEvent(decoded.event);
   if (
     !encoded ||
-    (!options.preserveBrowserSecrets && !eventConversationKey(event.type) && event.type !== "turn-completed")
+    (!options.preserveBrowserSecrets &&
+      !eventConversationKey(event.type) &&
+      event.type !== "turn-completed" &&
+      event.type !== "prompt")
   )
     return encoded;
-  const output = withQuietTurn(withEventConversationPlans(JSON.parse(encoded), wireValue), wireValue);
+  const output = withEventQuestionMultiSelect(
+    withQuietTurn(withEventConversationPlans(JSON.parse(encoded), wireValue), wireValue),
+    withoutFalseMultiSelect(wireValue),
+  );
   return JSON.stringify(options.preserveBrowserSecrets ? restoreBrowserSecretMetadata(output, wireValue) : output);
 }
 
+/** Puts `multiSelect` beside the frozen questions of a conversation event or a `prompt` event. */
+function withEventQuestionMultiSelect(
+  projected: TeamProtocolV6BaseJsonValue,
+  source: unknown,
+): TeamProtocolV6BaseJsonValue {
+  if (!isDynamicRecord(projected) || !isDynamicRecord(source)) return projected;
+  if (projected.type === "prompt") return withQuestionMultiSelect(projected, source);
+  const key = eventConversationKey(projected.type);
+  const conversation = key ? projected[key] : undefined;
+  if (!key || conversation === undefined) return projected;
+  return { ...projected, [key]: withQuestionMultiSelect(conversation, source[key]) };
+}
+
+/**
+ * The host types allow `multiSelect: false`, but the frozen v6 marker accepts only `true` and
+ * throws on any other value. Leave a `false` out before the encoder reads it: absent and `false`
+ * both mean one choice, so the wire meaning does not change.
+ */
+export function withoutFalseMultiSelect(value: TeamProtocolV6BaseJsonValue): TeamProtocolV6BaseJsonValue {
+  if (Array.isArray(value)) return value.map(withoutFalseMultiSelect);
+  if (!isDynamicRecord(value)) return value;
+  const result: TeamProtocolV6BaseJsonObject = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "multiSelect" && entry === false) continue;
+    result[key] = withoutFalseMultiSelect(entry);
+  }
+  return result;
+}
+
+/**
+ * Puts the plans and the senders of a conversation event beside its frozen projection. See
+ * `withConversationPlans` and `withConversationSenders`.
+ */
 function withEventConversationPlans(
   projected: TeamProtocolV6BaseJsonValue,
   source: unknown,

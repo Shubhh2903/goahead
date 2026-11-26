@@ -28,6 +28,12 @@ export function createMockStorage(onFoldersChanged: () => void = () => undefined
   let breakdown = structuredClone(FILES_BREAKDOWN);
   let removableRuntimes = structuredClone(FILES_REMOVABLE_RUNTIMES);
   let libraryFolders = structuredClone(EMPTY_LIBRARY_FOLDERS);
+  // A QA run left beside the agent workspaces, as in the incident that added this list.
+  let unassignedFolders = [
+    { path: "/Users/you/OpenBot/Agents/mobile-qa", bytes: Math.round(5.2 * GB) },
+    { path: "/Users/you/OpenBot/Bots/old-import", bytes: Math.round(1.4 * GB) },
+    { path: "/Users/you/OpenBot/Agents/notes", bytes: 12 * 1024 ** 2 },
+  ];
 
   const usage = (input: GetStorageUsageInput): StorageUsage => {
     const inScope = (agentId: string | null, conversationId: string | null) =>
@@ -90,6 +96,12 @@ export function createMockStorage(onFoldersChanged: () => void = () => undefined
       breakdown = breakdown.map((row) => (row.category === "runtimes" ? { ...row, bytes: row.bytes - bytes } : row));
       removableRuntimes = { bytes: 0, providers: [] };
       return structuredClone(removableRuntimes);
+    },
+    listUnassignedFolders: async () => structuredClone(unassignedFolders),
+    trashUnassignedFolder: async ({ path }) => {
+      if (!unassignedFolders.some((folder) => folder.path === path))
+        throw new Error("This folder cannot be moved to the Trash.");
+      unassignedFolders = unassignedFolders.filter((folder) => folder.path !== path);
     },
   };
 }

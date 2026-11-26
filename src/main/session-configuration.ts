@@ -9,11 +9,13 @@ import { runCauseEffect } from "../backend/effect-boundary";
 import type { MailboxStore } from "../backend/mailbox-store";
 import type { MessagingService } from "../backend/messaging/messaging-service";
 import { applicationContentType } from "./application-content-type";
+import type { ChatBackdropStore } from "./chat-backdrop-store";
 import { attachmentCorsHeaders, attachmentDocumentHeaders, chatVisualResponse } from "./chat-visual-protocol";
 import { inlineContentDisposition } from "./content-disposition";
 import { buildContentSecurityPolicy, readSelfHostedSignalOrigin } from "./content-security-policy";
 import { filePreviewPages } from "./file-preview-pages";
 import { bytesResponse, fileResponse } from "./file-response";
+import { rangedFileResponse } from "./ranged-file-response";
 import { canAnswerRemoteRanges } from "./remote-attachment-cache";
 import type { RemoteServerManager } from "./remote-server-manager";
 import { parseRemoteAvatarUrl, remoteAttachmentPreviewSize } from "./remote-server-urls";
@@ -228,6 +230,29 @@ async function slackInboxFileResponse(
       "Content-Disposition": "inline",
     }),
   );
+}
+
+/**
+ * `openbot-backdrop://file/<id>`: an image or video that the user uploaded as the window backdrop.
+ * Only an id in the store's index answers, so the renderer cannot name any other file.
+ */
+export function configureBackdropProtocol(backdrops: Pick<ChatBackdropStore, "resolveUpload">): void {
+  session.defaultSession.protocol.handle("openbot-backdrop", async (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== "file") return new Response("Not found", { status: 404 });
+      const upload = backdrops.resolveUpload(decodeURIComponent(url.pathname.split("/").filter(Boolean)[0] ?? ""));
+      if (!upload) return new Response("Not found", { status: 404 });
+      // Ranged, so a backdrop video can seek and loop without reading the whole file again.
+      return await rangedFileResponse(
+        upload.path,
+        { "Content-Type": upload.mimeType, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
+        request.headers.get("Range"),
+      );
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
+  });
 }
 
 export interface ServerLogoProtocolDependencies {

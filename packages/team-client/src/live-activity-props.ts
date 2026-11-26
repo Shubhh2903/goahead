@@ -84,6 +84,12 @@ export const LIVE_ACTIVITY_URL = `${PRODUCT_LINK_PREFIX}live-activity`;
 export const LIVE_ACTIVITY_LIST_URL = `${LIVE_ACTIVITY_URL}?list=1`;
 const THREAD_PARAM = "thread";
 
+/**
+ * Content older than this looks out of date, and its buttons go, as when the host computer sleeps and
+ * sends nothing. Old answers can target a request that is gone.
+ */
+export const LIVE_ACTIVITY_STALE_AFTER_MS = 15 * 60 * 1000;
+
 const TITLE_LIMIT = 80;
 const DETAIL_LIMIT = 180;
 const DETAIL_LEAD = 100;
@@ -339,6 +345,8 @@ export function liveActivityButtons(
     const [question, ...others] = item.questions;
     const options = question?.options ?? [];
     if (!question || others.length > 0 || question.isSecret || options.length === 0 || options.length > 3) return [];
+    // One tap sends one answer. A question with more answers, or one that may have more, goes to the chat.
+    if (question.multiSelect !== false) return [];
     return options.map((option, index) => ({
       label: limit(option.label, BUTTON_LIMIT),
       prominent: index === 0,

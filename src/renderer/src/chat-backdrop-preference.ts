@@ -1,5 +1,6 @@
 import { type ChatBackdropChoice, isChatBackdropChoice } from "@openbot/ui/features/conversation/chat-backdrop";
 import { createSignal } from "solid-js";
+import { clearLegacyBackdropChoice } from "./features/backdrop/backdrop-state";
 
 const CHAT_BACKDROP_STORAGE_KEY = "openbot:chat-backdrop";
 
@@ -47,4 +48,5 @@ export function useChatBackdrop(): () => ChatBackdropChoice | null {
 export function setChatBackdrop(scene: ChatBackdropChoice | null): void {
   writeChatBackdrop(scene);
   setChatBackdropSignal(scene);
+  clearLegacyBackdropChoice();
 }

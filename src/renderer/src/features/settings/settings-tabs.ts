@@ -2,6 +2,7 @@ import type { AppInfo } from "@openbot/contracts/ipc";
 import type { AppTextKey } from "@openbot/i18n";
 import {
   Bell,
+  ChartArea,
   CircleArrowDown,
   CreditCard,
   Gift,
@@ -34,6 +35,7 @@ export type SettingsTab =
   | "referral"
   | "mobile-connect"
   | "updates"
+  | "usage"
   | "hosted-servers";
 
 type SettingsRow = {
@@ -265,6 +267,14 @@ export const navItems: ReadonlyArray<SettingsNavItem> = [
       { titleKey: "settings.updates.allowRemote.title", descriptionKey: "settings.updates.allowRemote.description" },
       { titleKey: "settings.updates.managed.title", descriptionKey: "settings.updates.managed.description" },
     ],
+  },
+  {
+    value: "usage",
+    titleKey: "settings.tab.usage.title",
+    descriptionKey: "settings.tab.usage.description",
+    icon: ChartArea,
+    group: "settings.sections.group.thisComputer",
+    rows: [],
   },
   {
     value: "hosted-servers",

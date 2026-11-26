@@ -31,7 +31,12 @@ import type {
   TeamPresenceSnapshot,
   TeamRealtimeEvent,
 } from "@openbot/contracts/ipc";
-import { canAdministerServer, openExchangesOutside, withModelSources } from "@openbot/contracts/ipc";
+import {
+  canAdministerServer,
+  openExchangesOutside,
+  runtimePromptEvent,
+  withModelSources,
+} from "@openbot/contracts/ipc";
 import {
   AGENT_ACTIVE_QUEUES_CAPABILITY,
   AGENT_ACTIVE_QUEUES_LIMIT,
@@ -601,7 +606,7 @@ export function createWebWorkspace(
             );
             draft.prompts = reconcilePendingRequests(
               draft.prompts,
-              event.snapshot.pendingPrompts.map((prompt) => ({ ...prompt, type: "prompt" as const })),
+              event.snapshot.pendingPrompts.map(runtimePromptEvent),
               attentionComplete,
             );
             if (attentionComplete) listedPrompts = { generation, prompts: [] };

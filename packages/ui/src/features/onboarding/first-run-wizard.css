@@ -1,0 +1,67 @@
+/*
+ * The first-run wizard dialog: the steps after the first agent. Its body holds existing panels
+ * (connectors, phone pairing) unchanged, so the dialog is wide enough for a settings section and
+ * scrolls when a panel is taller than the window.
+ */
+
+.first-run-wizard-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--openbot-layer-dialog);
+  display: grid;
+  place-items: center;
+  padding: var(--openbot-space-6);
+}
+
+.first-run-wizard {
+  width: min(640px, 100%);
+  max-height: calc(100dvh - var(--openbot-space-6) * 2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--openbot-space-4);
+  outline: 0;
+  border-radius: var(--openbot-radius-xl);
+  background: var(--openbot-bg-control);
+  padding: var(--openbot-space-6);
+  color: var(--openbot-text-primary);
+}
+
+.first-run-wizard-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openbot-space-1);
+}
+
+.first-run-wizard-progress {
+  margin: 0;
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+}
+
+.first-run-wizard-title {
+  margin: 0;
+  font-size: var(--openbot-text-xl);
+}
+
+.first-run-wizard-description {
+  margin: 0;
+  color: var(--openbot-text-muted);
+}
+
+.first-run-wizard-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.first-run-wizard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--openbot-space-2);
+}
+
+.first-run-wizard-step-actions {
+  display: flex;
+  gap: var(--openbot-space-2);
+  margin-inline-start: auto;
+}

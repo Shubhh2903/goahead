@@ -53,6 +53,7 @@ import { createSettingsHostedServersStore } from "@openbot/ui/features/settings/
 import { createSettingsMobileConnectStore } from "@openbot/ui/features/settings/stores/mobile-connect-store";
 import { createSettingsProfileStore } from "@openbot/ui/features/settings/stores/profile-store";
 import { createSettingsUpdatesStore } from "@openbot/ui/features/settings/stores/updates-store";
+import { UsageDashboardPanel } from "@openbot/ui/features/usage/UsageDashboardPanel";
 import { createEffect, createSignal, Show, untrack } from "solid-js";
 import { useI18n } from "../../i18n-context";
 import { ComputerUseSetup } from "../computer-use/ComputerUseSetup";
@@ -69,6 +70,7 @@ import { SettingsKeyboardTab } from "./SettingsKeyboardTab";
 import { SettingsNotificationsTab } from "./SettingsNotificationsTab";
 import { SettingsVoiceTab } from "./SettingsVoiceTab";
 import { dynamicIslandSettingsShown, navItem, navItems, type SettingsTab, settingsTabShown } from "./settings-tabs";
+import { createSettingsUsageStore } from "./settings-usage-store";
 import { createSettingsVoiceStore } from "./settings-voice-store";
 
 export interface SettingsModalProps {
@@ -171,6 +173,7 @@ export function SettingsModal(props: SettingsModalProps) {
     visible: () => props.open && activeTab() === "notifications",
     servers: () => props.servers ?? [],
   });
+  const usage = createSettingsUsageStore(() => props.open && activeTab() === "usage");
   let handledHostedServerDeleteNonce = 0;
   createEffect(
     () => (props.open ? props.hostedServerDeleteRequest : null),
@@ -224,7 +227,8 @@ export function SettingsModal(props: SettingsModalProps) {
         value === "billing" ||
         value === "referral" ||
         value === "mobile-connect" ||
-        value === "updates"
+        value === "updates" ||
+        value === "usage"
       ) {
         setActiveTab(value);
       }
@@ -470,6 +474,16 @@ export function SettingsModal(props: SettingsModalProps) {
             value={props.value}
             onUpdateSetting={updateSetting}
             selectMount={modalElement}
+          />
+        </Tabs.Content>
+        <Tabs.Content value="usage" class="settings-modal-tab-panel" data-tab="usage">
+          <UsageDashboardPanel
+            dashboard={usage.state.dashboard}
+            phase={usage.state.phase}
+            days={usage.state.days}
+            onDaysChange={usage.setDays}
+            onRetry={usage.reload}
+            agentLabel={usage.agentLabel}
           />
         </Tabs.Content>
       </SettingsDialogShell>

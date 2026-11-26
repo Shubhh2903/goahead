@@ -9,6 +9,7 @@ import type {
   InstallMarketplaceAgentResult,
   MarketplaceAgentDetail,
 } from "@openbot/contracts/ipc";
+import { onceRoutineSchedule } from "@openbot/team-client/routine-schedule";
 import { Effect, Exit, Schema } from "effect";
 import { type AgentMarketplaceFailure, AgentMarketplaceService } from "../src/main/agent-marketplace-service";
 import { CentralAuthOperationError } from "../src/main/central-auth-effects";
@@ -28,6 +29,7 @@ interface ScenarioOptions {
   update?: boolean;
   modifiedSkills?: boolean;
   receiptAttempts?: number;
+  routines?: MarketplaceAgentDetail["routines"];
 }
 
 interface ScenarioState {
@@ -117,7 +119,11 @@ function summary(id: string, workspace: string, values: Partial<AgentSummary>): 
   };
 }
 
-function assertSaved(state: Pick<ScenarioState, "agents" | "routines">, agentId: string): AgentSummary {
+function assertSaved(
+  state: Pick<ScenarioState, "agents" | "routines">,
+  agentId: string,
+  listing: MarketplaceAgentDetail = detail,
+): AgentSummary {
   const agent = state.agents.get(agentId);
   assert.ok(agent);
   assert.equal(agent.name, detail.name);
@@ -129,12 +135,12 @@ function assertSaved(state: Pick<ScenarioState, "agents" | "routines">, agentId:
   assert.equal(source.versionId, detail.versionId);
   assert.equal(source.version, detail.version);
   assert.deepEqual(source.skillIds, [detail.skills[0]?.skillId]);
-  assert.equal(source.routineIds.length, detail.routines.length);
+  assert.equal(source.routineIds.length, listing.routines.length);
   for (const routineId of source.routineIds) {
     const routine = state.routines.get(routineId);
     assert.ok(routine);
     assert.equal(routine.agentId, agentId);
-    assert.equal(routine.name, detail.routines[0]?.name);
+    assert.ok(listing.routines.some((listed) => listed.name === routine.name));
     assert.equal(routine.timezone, timezone);
   }
   return agent;
@@ -145,6 +151,7 @@ async function scenario(
   options: ScenarioOptions,
   check: (state: ScenarioState, input: InstallMarketplaceAgentInput) => Promise<void>,
 ): Promise<void> {
+  const listing = options.routines ? { ...detail, routines: options.routines } : detail;
   const workspace = await mkdtemp(join(tmpdir(), "openbot-agent-receipt-"));
   const agents = new Map<string, AgentSummary>();
   const routines = new Map<string, RoutineInput>();
@@ -162,7 +169,7 @@ async function scenario(
       return Effect.gen(function* () {
         if (init.method === "GET") {
           assert.equal(path, `/v1/marketplace/agents/${detail.id}/listing`);
-          return decode(detail);
+          return decode(listing);
         }
         assert.equal(init.method, "POST");
         assert.equal(path, `/v1/marketplace/agents/${detail.id}/install`);
@@ -171,7 +178,7 @@ async function scenario(
         const { receiptId } = decodeReceipt(init.body);
         const saved = [...agents.values()].filter((agent) => agent.marketplaceSource?.listingId === detail.id);
         assert.equal(saved.length, 1);
-        assertSaved({ agents, routines }, saved[0]?.id ?? "");
+        assertSaved({ agents, routines }, saved[0]?.id ?? "", listing);
         if (options.receiptDefect) return yield* Effect.die(new Error("Test receipt defect."));
         if (options.receiptInterrupt) return yield* Effect.interrupt;
         receipts.push(receiptId);
@@ -363,6 +370,29 @@ await scenario(
     assert.equal(agent.marketplaceSource?.versionId, detail.versionId);
     assert.deepEqual(state.skillInstalls, []);
     assert.deepEqual(state.skillUninstalls, []);
+  },
+);
+// GoAhead: a one-time routine keeps its time; one whose time has passed installs off, time kept.
+// The marketplace wire carries only released schedules, so a listing has the v0.41 interval shape.
+const onceAhead = onceRoutineSchedule(new Date(Date.now() + 24 * 60 * 60_000));
+const oncePassed = onceRoutineSchedule(new Date("2026-01-01T09:00:00.000Z"));
+await scenario(
+  "one-time routines keep their time",
+  {
+    routines: [
+      { name: "Launch note", instruction: "Write the launch note.", active: true, schedule: onceAhead },
+      { name: "Old note", instruction: "Write the old note.", active: true, schedule: oncePassed },
+    ],
+  },
+  async (state) => {
+    assert.ok(Exit.isSuccess(state.result));
+    assert.deepEqual(
+      [...state.routines.values()].map((routine) => [routine.name, routine.active, routine.schedule]),
+      [
+        ["Launch note", true, onceAhead],
+        ["Old note", false, oncePassed],
+      ],
+    );
   },
 );
 await scenario("receipt defect", { receiptDefect: true }, async (state) => {

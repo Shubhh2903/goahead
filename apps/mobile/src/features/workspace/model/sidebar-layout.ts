@@ -5,6 +5,8 @@ import {
   sidebarFolderParents,
   sidebarFolderPath,
 } from "@openbot/contracts/ipc";
+import { CHAT_FOLDERS_CAPABILITY } from "@openbot/contracts/team-protocol/chat-folders-v1";
+import { SIDEBAR_FOLDERS_CAPABILITY } from "@openbot/contracts/team-protocol/sidebar-folders-v1";
 import type { MobileTranslate } from "@openbot/i18n/mobile";
 import { currentText } from "@/shared/lib/text";
 import type { MobileAgent } from "./workspace-types";
@@ -26,6 +28,17 @@ export type MobileSidebarItem =
   | { kind: "channel"; id: string; channel: ChannelSummary };
 
 type MobileChatItem = Extract<MobileSidebarItem, { kind: "agent" | "channel" }>;
+
+/**
+ * True for a GoAhead v0.40-v0.41 host: it sends folders in folders only on the released `chat-folders-v1`
+ * route, and its `sidebar-layout-changed` event and action answers have no parents. The phone then reads
+ * that route. A host with `sidebar-folders-v1` sends the parents itself.
+ */
+export function mobileChatFoldersSupported(capabilities: readonly string[] | undefined): boolean {
+  return (
+    (capabilities?.includes(CHAT_FOLDERS_CAPABILITY) ?? false) && !capabilities?.includes(SIDEBAR_FOLDERS_CAPABILITY)
+  );
+}
 
 export type MobileChatOrder = "manual" | "recent" | "unread-group" | "unread-first";
 

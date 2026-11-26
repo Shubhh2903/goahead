@@ -1,6 +1,6 @@
 import type { RoutineSchedule } from "@openbot/contracts/ipc";
 import type { AppTextKey, AppTranslate } from "@openbot/i18n";
-import { routineOnceInstant } from "@openbot/team-client/routine-schedule";
+import { routineOnceAt, routineOnceInstant } from "@openbot/team-client/routine-schedule";
 import {
   type RoutineDraftProblem,
   type RoutineScheduleDraft,
@@ -11,7 +11,11 @@ import { ROUTINE_DRAFT_KINDS } from "./routine-schedule-draft";
 
 export { routineScheduleFromDraft, routineScheduleToDraft } from "@openbot/team-client/routine-schedule-draft";
 
-export const ROUTINE_SAVED_DRAFT_KINDS = ROUTINE_DRAFT_KINDS.filter((option) => option.value !== "once");
+/**
+ * The kinds a routine can save. "Once" is offered on every host: a host without the native one-time
+ * kind gets the shape that released GoAhead readers accept (`legacyOnceRoutineSchedule`).
+ */
+export const ROUTINE_SAVED_DRAFT_KINDS = ROUTINE_DRAFT_KINDS;
 
 export const ROUTINE_LOCAL_DRAFT_KINDS = ROUTINE_DRAFT_KINDS;
 
@@ -26,8 +30,14 @@ export function routineDraftProblem(draft: RoutineScheduleDraft, t: AppTranslate
   return problem ? t(PROBLEM_TEXT[problem]) : null;
 }
 
+/** The one time of a native one-time routine, or of one that GoAhead v0.40/v0.41 saved as a long interval. */
+function routineOnceTime(schedule: RoutineSchedule, timezone: string): Date | null {
+  return schedule.kind === "once" ? routineOnceInstant(schedule, timezone) : routineOnceAt(schedule);
+}
+
 export function routineOncePassed(schedule: RoutineSchedule, timezone: string, now = new Date()): boolean {
-  return schedule.kind === "once" && routineOnceInstant(schedule, timezone).getTime() <= now.getTime();
+  const at = routineOnceTime(schedule, timezone);
+  return at !== null && at.getTime() <= now.getTime();
 }
 
 export function routineOnceCompleted(routine: {
@@ -36,6 +46,7 @@ export function routineOnceCompleted(routine: {
   schedule: RoutineSchedule;
   updatedAt: string;
 }): boolean {
-  if (routine.active || routine.schedule.kind !== "once") return false;
-  return Date.parse(routine.updatedAt) >= routineOnceInstant(routine.schedule, routine.timezone).getTime();
+  if (routine.active) return false;
+  const at = routineOnceTime(routine.schedule, routine.timezone);
+  return at !== null && Date.parse(routine.updatedAt) >= at.getTime();
 }

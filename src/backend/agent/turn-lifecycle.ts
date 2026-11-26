@@ -5,6 +5,7 @@ import {
   type AgentEvent,
   type AgentStepActivity,
   type AgentSummary,
+  agentAutoModelEnabled,
   agentProviderDescriptor,
   type BrowserControlState,
   type BrowserTab,
@@ -60,6 +61,7 @@ import {
   type ThreadItem,
 } from "../protocol";
 import { TEXT_PREVIEW_METHOD } from "../text-preview";
+import { finiteNumberOrNull } from "./account-usage";
 import type { AgentMemories } from "./agent-memories";
 import { answerFilePaths } from "./answer-file-paths";
 import type { AttentionBrowserHost, AttentionRegistry, CodexSubagentParent } from "./attention-registry";
@@ -80,6 +82,7 @@ import {
 import { readCapturedSteps } from "./handoff-tool-steps";
 import type { ImageGenRuntime } from "./image-gen-runtime";
 import { markIncompleteMediaGeneration } from "./image-generation";
+import { guardedInstall, type InstallGuardRule, providerCommandText } from "./install-guard";
 import { type InstructionsChanges, instructionsChangeMessage } from "./instructions-changes";
 import type { MailboxSync } from "./mailbox-sync";
 import { memoryChangesMessage } from "./memory-changes-message";
@@ -131,6 +134,7 @@ import {
   toolUsage,
   toThreadItem,
 } from "./thread-items";
+import { TURN_TOKENS_METHOD, TurnBudget, turnLimitFor } from "./turn-limit";
 import { type ToolOutcome, TurnTraces, traceMessage } from "./turn-traces";
 import { collectProviderUsage } from "./usage-collection";
 import { USAGE_LIMIT_METHOD, type UsageLimitGate } from "./usage-limit-gate";
@@ -270,6 +274,23 @@ export interface TurnHooks {
    * task, once. Null after a restart or for any other delivery.
    */
   takeRoutinePreview(deliveryId: string): { previous: string; shown: string } | null;
+  /**
+   * A running turn reached its tool-call or token limit, once per turn. `threadId` is the public
+   * thread. The host stops the turn and asks the person whether to continue.
+   */
+  turnLimitReached(agentId: string, threadId: string, turnId: string, usage: { calls: number; tokens: number }): void;
+  /**
+   * A Codex or ACP command that can install gigabytes started. `threadId` is the public thread. True
+   * while the host tries to stop the turn to ask the person: the guard waits, and the host calls
+   * `rearmInstallGuard` when no stop went. False when the person allowed the rule.
+   */
+  guardedCommandStarted(
+    agentId: string,
+    threadId: string,
+    turnId: string,
+    command: string,
+    rule: InstallGuardRule,
+  ): boolean;
   mayFailOver(agentId: string): boolean;
   backupReadyAt(agentId: string): number | null;
   backupsAtLimit(agentId: string): boolean;
@@ -382,6 +403,11 @@ export class TurnLifecycle {
   readonly #turnCauses = new Map<string, CauseCode>();
   readonly #turnRetries = new Map<string, number>();
   readonly #capacityNotices = new Set<string>();
+  /**
+   * Each running turn from its `turn/started`. `budget` counts the turn's tool calls and processed
+   * tokens against the agent's turn limit (GoAhead); null when the limit is Off. `countedItems` holds
+   * the tool items it counted, so no item counts twice.
+   */
   readonly #runningTurns = new Map<
     string,
     {
@@ -407,6 +433,12 @@ export class TurnLifecycle {
       unprompted: boolean;
       reports: Map<string, string>;
       continues: readonly string[];
+      budget: TurnBudget | null;
+      countedItems: Set<string>;
+      /** The install guard stopped this turn: its later commands are not checked again. */
+      installGuarded: boolean;
+      /** The items whose start this turn saw, so a completion with no start is checked too. */
+      startedItems: Set<string>;
     }
   >();
   readonly #unreadReports = new Map<string, Map<string, string>>();
@@ -417,6 +449,12 @@ export class TurnLifecycle {
   >();
   readonly #deliveryStarts = new Map<string, DeliveryStart>();
   readonly #turnTimings = new Map<string, TurnTiming>();
+  /**
+   * The last processed-token total that Codex reported for each provider thread. A new turn measures
+   * from it, so the first model call of the turn counts too.
+   */
+  readonly #threadTokenTotals = new Map<string, number>();
+  /** Running turns a provider plan refused, with the reset in epoch seconds when the provider gave it. */
   readonly #limitedTurns = new Map<string, number | null>();
   readonly #failoverTurns = new Map<string, HeldProviderError>();
   readonly #compactionFailures = new Map<string, HeldProviderError & { stalled?: true; loop?: true; exited?: true }>();
@@ -526,6 +564,21 @@ export class TurnLifecycle {
     });
   }
 
+  /**
+   * GoAhead: the host sent no stop for a guarded command (`guardedCommandStarted`): the guard reads
+   * the turn's next commands again, so it stays on for the rest of the turn.
+   */
+  rearmInstallGuard(turnId: string): void {
+    const running = this.#runningTurns.get(turnId);
+    if (running) running.installGuarded = false;
+  }
+
+  /** The client that runs this turn. Null for a turn that is not running. */
+  turnClient(turnId: string): AgentClient | null {
+    return this.#runningTurns.get(turnId)?.client ?? null;
+  }
+
+  /** When this running turn sent `turn/started`, in epoch milliseconds. Null for a turn that is not running. */
   turnStartedAt(turnId: string): number | null {
     return this.#runningTurns.get(turnId)?.startedAt ?? null;
   }
@@ -611,6 +664,7 @@ export class TurnLifecycle {
     this.#compactionFailures.clear();
     for (const timer of this.#compactionDeadlines.values()) clearTimeout(timer);
     this.#compactionDeadlines.clear();
+    this.#threadTokenTotals.clear();
   }).bind(this);
 
   readonly interruptTurnsOf = Effect.fn("TurnLifecycle.interruptTurnsOf")(function* (
@@ -1263,7 +1317,15 @@ export class TurnLifecycle {
       const usage = this.#usageSession(agentId, threadId, source);
       if (usage) {
         try {
-          collectProviderUsage(this.#store.database.usage, usage.agent, usage.session, notification.method, params);
+          // GoAhead: a turn that "Choose model automatically" moved to another model counts on that model.
+          const turnModel = agentAutoModelEnabled(usage.agent) ? this.#conversation.turnModel(threadId) : null;
+          collectProviderUsage(
+            this.#store.database.usage,
+            turnModel ? { id: usage.agent.id, model: turnModel } : usage.agent,
+            usage.session,
+            notification.method,
+            params,
+          );
         } catch {
           this.#hooks.emitError("usage_collection_failed", new Error("Usage data could not be saved."), agentId);
         }
@@ -1335,6 +1397,10 @@ export class TurnLifecycle {
           reports: new Map(),
           continues:
             unprompted && isRecord(params) && Array.isArray(params.continues) ? params.continues.filter(isString) : [],
+          budget: this.#newTurnBudget(agentId, threadId, source),
+          countedItems: new Set(),
+          installGuarded: false,
+          startedItems: new Set(),
         });
         this.#traces.begin(turnId, new Date().toISOString());
         const publicThreadId = this.#conversation.publicThreadId(agentId, threadId);
@@ -1466,8 +1532,10 @@ export class TurnLifecycle {
         }
         if (item.type === "collabAgentToolCall") this.#applyCodexSubagents(agentId, threadId, turnId, item);
         if (item.type === "subAgentActivity") this.#applyCodexSubagentActivity(agentId, threadId, turnId, item);
+        this.#guardCommand(agentId, threadId, turnId, item, notification.method === "item/started");
         const threadItem = toThreadItem(item);
         if (!threadItem) return;
+        this.#countToolCall(agentId, threadId, turnId, threadItem, notification.method === "item/completed");
         yield* this.#applyItem(agentId, threadId, turnId, threadItem, notification.method === "item/completed");
         return;
       }
@@ -1526,6 +1594,8 @@ export class TurnLifecycle {
             causeCode: classifyFailure(getRecord(turn, "error")),
           });
         }
+        // GoAhead: measured from here: the provider's prompt cache stays warm for a while after its last request.
+        this.#conversation.recordTurnEnded(threadId);
         this.#attention.clearForTurn(threadId, turnId, status === "completed");
         if (this.#observedCompactions.get(threadId) === turnId) {
           this.#observedCompactions.delete(threadId);
@@ -1564,6 +1634,19 @@ export class TurnLifecycle {
             usage.estimated === true,
             isAgentContextCategories(usage.categories) ? usage.categories : undefined,
           );
+        // GoAhead: the turn limit counts processed tokens.
+        const total = finiteNumberOrNull(getRecord(usage, "total")?.totalTokens);
+        if (total === null) return;
+        this.#threadTokenTotals.set(threadId, total);
+        this.#recordTurnTokens(agentId, threadId, getString(params, "turnId"), total);
+        return;
+      }
+      case TURN_TOKENS_METHOD: {
+        if (!threadId || !agentId) return;
+        const processed = finiteNumberOrNull(isRecord(params) ? params.processedTokens : null);
+        const turnId = getString(params, "turnId");
+        if (processed === null || !turnId) return;
+        this.#recordTurnTokens(agentId, threadId, turnId, processed);
         return;
       }
       case "openbot/turn-continues": {
@@ -2741,6 +2824,8 @@ export class TurnLifecycle {
     const running = this.#runningTurns.get(turnId);
     const runningThreadId = running?.threadId ?? threadId;
     if (running) this.#keepTurnTiming(turnId, running);
+    // GoAhead: as for `turn/completed`: the automatic model rule measures the prompt cache from the real end.
+    if (runningThreadId) this.#conversation.recordTurnEnded(runningThreadId);
     this.#showKeptSafetyBlock(agentId, turnId);
     this.#runningTurns.delete(turnId);
     this.#turnRetries.delete(turnId);
@@ -3179,7 +3264,7 @@ export class TurnLifecycle {
         sender: { kind: "agent", agentId },
         requesterIds: this.#mailbox.requesterIds(messageId),
         recipientAgentIds: [recipientAgentId],
-        text,
+        text: boundedRelayText(text, agentId),
         replyToMessageId: messageId,
         ...(taskId ? { taskId } : {}),
         expectsReply: false,
@@ -3207,6 +3292,74 @@ export class TurnLifecycle {
         ? { id: `routine:${threadId}`, provider: source.provider, createdAt: new Date().toISOString() }
         : undefined);
     return session ? { agent, session } : undefined;
+  }
+
+  /**
+   * The budget of a new turn, or null when the agent's limit is Off. Claude reports the tokens of
+   * the turn from zero; Codex reports thread totals, so a Codex turn measures from the last total.
+   */
+  #newTurnBudget(agentId: string, threadId: string, source: AgentClient): TurnBudget | null {
+    const agent = this.#store.list().find((entry) => entry.id === agentId);
+    const limit = turnLimitFor(agent?.turnLimit);
+    if (!limit) return null;
+    const budget = new TurnBudget(limit);
+    const baseline = source.provider === "claude" ? 0 : this.#threadTokenTotals.get(threadId);
+    if (baseline !== undefined) budget.recordProcessedTokens(baseline);
+    return budget;
+  }
+
+  /**
+   * Counts a tool item of a running turn once. A tool item counts when it starts, or when it
+   * completes if no start came for it. An item with no id counts only at its start.
+   */
+  #countToolCall(agentId: string, threadId: string, turnId: string, item: ThreadItem, completed: boolean): void {
+    const running = this.#runningTurns.get(turnId);
+    if (!running?.budget || !toolUsage(item)) return;
+    if (isString(item.id)) {
+      if (running.countedItems.has(item.id)) return;
+      running.countedItems.add(item.id);
+    } else if (completed) return;
+    if (running.budget.recordToolCall()) this.#reachTurnLimit(agentId, threadId, turnId, running.budget);
+  }
+
+  /** `turnId` is null when the provider does not name the turn: the thread's running turn takes it. */
+  #recordTurnTokens(agentId: string, threadId: string, turnId: string | null, total: number): void {
+    const runningTurnId =
+      turnId ?? [...this.#runningTurns].find(([, running]) => running.threadId === threadId)?.[0] ?? null;
+    const running = runningTurnId ? this.#runningTurns.get(runningTurnId) : undefined;
+    if (!runningTurnId || !running?.budget || running.threadId !== threadId) return;
+    if (running.budget.recordProcessedTokens(total)) {
+      this.#reachTurnLimit(agentId, threadId, runningTurnId, running.budget);
+    }
+  }
+
+  /**
+   * Stops a running turn at a command that can install gigabytes, unless the person allowed its rule.
+   * Codex and ACP agents give no hook before a command runs, so the stop follows its start. The
+   * Claude client asks before Bash runs (`INSTALL_GUARD_METHOD`), and its items name no command
+   * here. An ACP agent sends `item/started` again with each update, and the command can come in a
+   * later one, so each start is read until the turn stops. An ACP tool call can also be complete in
+   * its first update, which sends only `item/completed`: a completion with no start is read too.
+   */
+  #guardCommand(agentId: string, threadId: string, turnId: string, item: DynamicRecord, started: boolean): void {
+    const running = this.#runningTurns.get(turnId);
+    if (!running || running.installGuarded) return;
+    const itemId = getString(item, "id");
+    if (started) {
+      if (itemId) running.startedItems.add(itemId);
+    } else if (!itemId || running.startedItems.has(itemId)) return;
+    const command = providerCommandText(item);
+    const rule = command === null ? null : guardedInstall(command);
+    if (command === null || rule === null) return;
+    const publicThreadId = this.#conversation.publicThreadId(agentId, threadId);
+    running.installGuarded = this.#hooks.guardedCommandStarted(agentId, publicThreadId, turnId, command, rule);
+  }
+
+  #reachTurnLimit(agentId: string, threadId: string, turnId: string, budget: TurnBudget): void {
+    this.#hooks.turnLimitReached(agentId, this.#conversation.publicThreadId(agentId, threadId), turnId, {
+      calls: budget.calls,
+      tokens: budget.tokens,
+    });
   }
 
   readonly #recordSkillLoads = Effect.fn("TurnLifecycle.recordSkillLoads")(function* (
@@ -3769,4 +3922,19 @@ function endedTaskReportNote(reason: string | null, fallback: string): string {
     "Evidence: none",
     "Unblock: The teammate's chat has the task result. Send the request again if you still need the answer.",
   ].join("\n");
+}
+
+/**
+ * A relayed answer that fits one message. A longer one would make the enqueue throw, and the
+ * requester would get no answer at all. The teammate's own conversation keeps the whole text.
+ */
+function boundedRelayText(text: string, agentId: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= INPUT_LIMITS.messageText) return trimmed;
+  const note = `\n\n[${sourceText("status.agent.relayShortened", { agentId })}]`;
+  let end = INPUT_LIMITS.messageText - note.length;
+  // Not between the two halves of a surrogate pair.
+  const last = trimmed.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${trimmed.slice(0, end).trimEnd()}${note}`;
 }

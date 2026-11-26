@@ -16,6 +16,7 @@ import {
   type TestRoutineInput,
 } from "@openbot/contracts/ipc";
 import type { EventRoutine, EventRoutineOwner, EventRoutineTriggerInput } from "@openbot/contracts/ipc-events";
+import { legacyOnceRoutineSchedule } from "@openbot/team-client/routine-schedule";
 import type { EventRoutinesApi, RoutineWebhooksApi } from "./routine-webhooks-api";
 
 interface RoutineSaveInput {
@@ -33,6 +34,18 @@ interface RoutineSaveInput {
 }
 
 export type RoutineEditorRecord = RoutineFields | EventRoutine;
+
+/**
+ * The schedule to send to a host. A host without native one-time routines (GoAhead v0.40/v0.41, or
+ * a host without `routines-once-v1`) gets a one-time routine in the interval shape it reads.
+ */
+export function hostRoutineSchedule(
+  schedule: RoutineSchedule,
+  timezone: string,
+  onceSchedule: boolean,
+): RoutineSchedule {
+  return schedule.kind === "once" && !onceSchedule ? legacyOnceRoutineSchedule(schedule, timezone) : schedule;
+}
 
 interface RoutineSaveResult {
   routine: RoutineEditorRecord;
@@ -123,7 +136,8 @@ export function agentRoutinesPort(
     list: () => api.listRoutines(agentId),
     listRuns: (routineId, limit) => api.listRoutineRuns({ agentId, routineId, limit }),
     save: (input) => {
-      const { routineId, name, instruction, active, timezone, schedule, limitPolicy, missedPolicy, runIn } = input;
+      const { routineId, name, instruction, active, timezone, limitPolicy, missedPolicy, runIn } = input;
+      const schedule = hostRoutineSchedule(input.schedule, timezone, onceSchedule);
       const policy = {
         ...(localHost && limitPolicy ? { limitPolicy } : {}),
         ...(localHost && missedPolicy ? { missedPolicy } : {}),
@@ -194,7 +208,8 @@ export function channelRoutinesPort(
     list: () => api.listChannelRoutines(channelId),
     listRuns: (routineId, limit) => api.listChannelRoutineRuns({ channelId, routineId, limit }),
     save: (input) => {
-      const { routineId, name, instruction, active, timezone, schedule, limitPolicy, missedPolicy } = input;
+      const { routineId, name, instruction, active, timezone, limitPolicy, missedPolicy } = input;
+      const schedule = hostRoutineSchedule(input.schedule, timezone, onceSchedule);
       const policy = localHost
         ? { ...(limitPolicy ? { limitPolicy } : {}), ...(missedPolicy ? { missedPolicy } : {}) }
         : {};
@@ -285,7 +300,13 @@ export function eventRoutinesPort(
         instruction,
         active,
         timezone,
-        trigger: trigger ?? { kind: "schedule", schedule },
+        trigger:
+          trigger?.kind === "webhook"
+            ? trigger
+            : {
+                kind: "schedule",
+                schedule: hostRoutineSchedule(trigger?.schedule ?? schedule, timezone, legacy.onceSchedule),
+              },
         ...(limitPolicy ? { limitPolicy } : {}),
         ...(missedPolicyKept && missedPolicy ? { missedPolicy } : {}),
         ...(legacy.runIn && runIn ? { runIn } : {}),

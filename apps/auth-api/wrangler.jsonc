@@ -185,18 +185,49 @@
         "EMAIL_SMTP_PORT": "465",
         "EMAIL_SMTP_USERNAME": "no-reply@multicodegenius.com",
         "EMAIL_FROM": "no-reply@multicodegenius.com",
+        // Replies to account and feedback mail. Confirm that this inbox exists.
+        "EMAIL_REPLY_TO": "hello@goahead.multicodegenius.com",
+        // Empty: license mail uses EMAIL_FROM as sender and reply address. GoAhead sells no license.
+        "EMAIL_LICENSE_REPLY_TO": "",
+        "EMAIL_LICENSE_FROM": "",
         "SITE_PUBLISH_ENABLED": "false",
         "SITE_COOKIE_ISOLATION_READY": "false",
         "REMOTE_TICKET_KEY_ID": "goahead-remote-1",
         "REMOTE_SIGNAL_URL": "wss://goahead-signal.multicodegenius.com/v1/signal",
         "REMOTE_AUTH_WEBHOOK_URL": "https://goahead-signal.multicodegenius.com/internal/auth-events",
+        // GoAhead has one Signal server. Empty homes keep REMOTE_SIGNAL_URL as the only home, and an
+        // empty zone keeps the Signal entry failover (cron */1) off.
+        "REMOTE_SIGNAL_HOMES": "",
+        "REMOTE_SIGNAL_HOME_LOCATIONS": "",
+        "REMOTE_SIGNAL_HOME_COUNTRIES": "",
+        "REMOTE_AUTH_WEBHOOK_URLS": "",
+        "SIGNAL_ENTRY_ZONE_ID": "",
         "HOSTED_SERVERS_ENABLED": "false",
+        // The same values as the top level. Confirm them before the first deploy.
+        "LICENSE_TRIAL_END": "2026-12-01T00:00:00Z",
+        "BILLING_COUNTRY_REQUIRED": "true",
+        // Empty: a withdrawn feedback issue is not sent to a GitHub repository.
+        "FEEDBACK_WITHDRAWN_REPOSITORY": "",
         // The GoAhead phone app opens `/join` and `/agents/*` links. The desktop has no Associated
         // Domains entitlement, so it has no entry.
         "APPLE_MOBILE_APP_ID": "S29HD2MDR4.com.multicodegenius.goahead.mobile",
         "APNS_TEAM_ID": "S29HD2MDR4",
         "APNS_TOPIC": "com.multicodegenius.goahead.mobile"
       },
+      // Create the goahead-email-relay Worker (wrangler.email-relay.jsonc with the GoAhead SMTP host)
+      // and enable Email Routing for the sender address before the first deploy of this env.
+      "services": [
+        {
+          "binding": "EMAIL_RELAY",
+          "service": "goahead-email-relay"
+        }
+      ],
+      "send_email": [
+        {
+          "name": "EMAIL_FALLBACK",
+          "allowed_sender_addresses": ["no-reply@multicodegenius.com"]
+        }
+      ],
       "d1_databases": [
         {
           "binding": "DB",
@@ -249,6 +280,11 @@
           "name": "LIVE_ACTIVITY_RATE_LIMITER",
           "namespace_id": "2026100706",
           "simple": { "limit": 300, "period": 60 }
+        },
+        {
+          "name": "FEEDBACK_RATE_LIMITER",
+          "namespace_id": "2026100707",
+          "simple": { "limit": 3, "period": 60 }
         }
       ]
     },

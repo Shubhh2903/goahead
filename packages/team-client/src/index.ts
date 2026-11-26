@@ -4,6 +4,7 @@ export { readHostAnalytics } from "./host-analytics";
 export { createRemoteAccountRefresh } from "./remote-account-refresh";
 export type TeamClientFetch = typeof globalThis.fetch;
 
+export * from "./connection-path";
 export * from "./host-key-handover";
 export { saveReviewedAgentProfile } from "./profile-save";
 export * from "./remote-directory";

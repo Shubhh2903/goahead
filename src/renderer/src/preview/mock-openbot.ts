@@ -242,6 +242,7 @@ import {
 } from "./fixtures";
 import { mockAgentAnalytics, mockHostAnalytics } from "./mock-agent-analytics";
 import { createMockAuth, type MockAuthOptions } from "./mock-auth";
+import { createMockBackdrops } from "./mock-backdrops";
 import { createMockBilling, previewBillingServers } from "./mock-billing";
 import { createMockBitwardenConnector } from "./mock-bitwarden-connector";
 import { createMockBrowser, type MockBrowserOptions } from "./mock-browser";
@@ -276,6 +277,7 @@ import { createMockSlackClient } from "./mock-slack-client";
 import { createMockStorage } from "./mock-storage";
 import { clone, type Listener, type MockRuntime, matchesQuery } from "./mock-support";
 import { createMockTeam, type MockTeamOptions } from "./mock-team";
+import { createMockUsage } from "./mock-usage";
 import { createMockVault } from "./mock-vault";
 import { createMockVoice, type MockVoiceOptions } from "./mock-voice";
 import { type MockWorkflowSeed, mockWorkflows } from "./mock-workflows";
@@ -1777,6 +1779,8 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
     license: createMockLicense(),
     credits: createMockCredits(),
     routineFeed: createMockRoutineFeed(),
+    backdrops: createMockBackdrops(),
+    usage: createMockUsage(() => agents),
     hostedServers: createMockHostedServers(billingPlans),
     customProviders: {
       list: async () => clone(customProviders),
@@ -2758,6 +2762,9 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
           allowNewChat,
           quickAcknowledgement,
           chatColor,
+          turnLimit,
+          autoModel,
+          delegatedSmallModel,
           ...updates
         } = input;
         const updated: ClientAgentSummary = { ...current, ...updates };
@@ -2775,6 +2782,14 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
         else if (compactWindow) updated.compactWindow = compactWindow;
         if (weeklyTokenBudget === null) delete updated.weeklyTokenBudget;
         else if (weeklyTokenBudget) updated.weeklyTokenBudget = weeklyTokenBudget;
+        // `0` is Off, a value of its own.
+        if (turnLimit === null) delete updated.turnLimit;
+        else if (turnLimit !== undefined) updated.turnLimit = turnLimit;
+        if (autoModel === false) delete updated.autoModel;
+        else if (autoModel) updated.autoModel = true;
+        // Stored only when off: on is the default.
+        if (delegatedSmallModel === false) updated.delegatedSmallModel = false;
+        else if (delegatedSmallModel !== undefined) delete updated.delegatedSmallModel;
         if (updated.disabledMcpServerIds?.length === 0) delete updated.disabledMcpServerIds;
         if (busyMessageMode === null) delete updated.busyMessageMode;
         else if (busyMessageMode) updated.busyMessageMode = busyMessageMode;
@@ -3706,6 +3721,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
         emit(updateListeners, updateStatus);
         return clone(updateStatus);
       },
+      // The preview does not restart: "Restart now" only ends the wait.
       restartNow: async () => {
         const { idleRestart: _restarted, ...rest } = updateStatus;
         updateStatus = rest;

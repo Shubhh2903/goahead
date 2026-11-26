@@ -5,6 +5,7 @@ import type { AppLanguagePreference, SetAppLanguagePreferenceInput } from "./app
 import type { AppLogoColorPreference, SetAppLogoColorPreferenceInput } from "./app-logo-color";
 import type { BillingPortalRequest, BillingState, BillingStorageRequest } from "./billing";
 import type { BillingDetails, BillingDetailsRequest } from "./billing-details";
+import type { ChatBackdropChoice, ChatBackdropState } from "./chat-backdrop";
 import type { CreditActivity, CreditCheckoutRequest, CreditsState, CreditTransferRequest } from "./credits";
 import type { CustomServerCheckoutRequest, CustomServerCheckoutResult } from "./custom-server-plans";
 import type {
@@ -630,6 +631,8 @@ import type {
   RemovableRuntimes,
   StorageDisk,
   StorageUsage,
+  TrashUnassignedFolderInput,
+  UnassignedFolder,
 } from "./ipc-storage";
 import type {
   ConfigureHostInput,
@@ -668,6 +671,7 @@ import type {
   UpdateHostIdentityInput,
   UpdateTeamMemberInput,
 } from "./ipc-team-host";
+import type { UsageDashboard, UsageRange } from "./ipc-usage-dashboard";
 import type { VaultImportResult, VaultSaveInput, VaultSecretRequest, VaultState, VaultTwoStepCodes } from "./ipc-vault";
 import type {
   HostVoiceModel,
@@ -1522,6 +1526,17 @@ export const IPC_ENDPOINTS = {
     create: request<undefined, RoutineFeed>()("routine-feed:create"),
     remove: request<undefined, RoutineFeed>()("routine-feed:remove"),
   },
+  // The backdrop behind this computer's window that GoAhead v0.40 and v0.41 saved under userData.
+  // Read only, plus choose and remove: new uploads go to the renderer's custom backdrops.
+  backdrops: {
+    getState: request<undefined, ChatBackdropState>()("backdrops:get-state"),
+    setChoice: request<ChatBackdropChoice | null, ChatBackdropState>()("backdrops:set-choice"),
+    remove: request<string, ChatBackdropState>()("backdrops:remove"),
+  },
+  // The usage of this computer's agents by local day. Local only: a joined server's usage is the host report.
+  usage: {
+    getDashboard: request<UsageRange, UsageDashboard>()("usage:get-dashboard"),
+  },
   billing: {
     getState: request<undefined, BillingState>()("billing:get-state"),
     openPortal: request<BillingPortalRequest, void>()("billing:open-portal"),
@@ -2125,6 +2140,10 @@ export const IPC_ENDPOINTS = {
     ),
     getRemovableRuntimes: request<undefined, RemovableRuntimes>()("storage:get-removable-runtimes"),
     removeRemovableRuntimes: request<undefined, RemovableRuntimes>()("storage:remove-removable-runtimes"),
+    // Local only, like `openLocation`: the rows carry paths on this computer, and only the person at
+    // this computer moves one to the Trash. No Team API route serves either.
+    listUnassignedFolders: request<undefined, UnassignedFolder[]>()("storage:list-unassigned-folders"),
+    trashUnassignedFolder: request<TrashUnassignedFolderInput, void>()("storage:trash-unassigned-folder"),
   },
   agentImport: {
     choose: scopedQuery<AgentImportPreview | null, "required">()("agent-import:choose"),
@@ -2238,6 +2257,8 @@ export const IPC_GROUP_PATHS = {
   vault: "vault",
   hostedSites: "hostedSites",
   routineFeed: "routineFeed",
+  backdrops: "backdrops",
+  usage: "usage",
   routineFlows: "routineFlows",
   workflows: "workflows",
   crm: "crm",

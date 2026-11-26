@@ -121,6 +121,11 @@ export interface ProviderRuntimeManagerOptions {
     signal: AbortSignal,
     onWait: () => void,
   ) => Effect.Effect<void, ProviderRuntimeFailure>;
+  /**
+   * Whether the agents of a provider are idle. An automatic update starts only then; a busy provider
+   * gets it at a later check. Idle by default.
+   */
+  isProviderIdle?: (provider: ManagedProviderId) => boolean;
 }
 
 export function providerRuntimeRoot(input: { appData: string; userDataOverride: string }): string {
@@ -170,10 +175,12 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
   #revision = 0;
   #stopping = false;
   readonly #declined = new Map<ManagedRuntimeId, string>();
+  readonly #isProviderIdle: (provider: ManagedProviderId) => boolean;
 
   constructor(options: ProviderRuntimeManagerOptions) {
     super();
     this.#isProviderOn = options.isProviderOn ?? (() => true);
+    this.#isProviderIdle = options.isProviderIdle ?? (() => true);
     this.#root = options.root;
     this.#downloads = options.downloadRoot ?? join(options.root, ".downloads");
     this.#updateRuntime = options.updateRuntime ?? ((_runtime, install) => install().pipe(Effect.asVoid));
@@ -239,7 +246,10 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
         const missingCopy = this.#incompleteSystemClis.has(provider) && copy === null;
         const offer =
           missingCopy || (installed !== null && installed !== undefined && olderVersion(installed, version));
-        const automatic = this.#updatesAutomatically(provider, this.#target);
+        // An automatic update installs the pinned version without an offer. A newer release stays offered.
+        const automatic =
+          this.#updatesAutomatically(provider, this.#target) &&
+          runtimeSpec(provider, this.#target, this.#lock).version === version;
         providers[provider].availableVersion =
           offer && !configuredCliPath(provider) && !automatic && this.#isProviderOn(provider) ? version : null;
       }
@@ -434,7 +444,8 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
       this.#rejected.clear();
       yield* Effect.forEach(
         this.#stopping ? [] : repairs,
-        (provider) => Effect.ignore(this.#startDownload(provider, target)),
+        // A repair runs with no user action, so it installs only the pinned version (R6), never a newer release.
+        (provider) => Effect.ignore(this.#startDownload(provider, target, runtimeSpec(provider, target, this.#lock))),
         { discard: true },
       );
       this.#revision += 1;
@@ -452,23 +463,37 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
     });
   }
 
+  /**
+   * Updates each managed CLI that is older than the version this build pins, with no offer.
+   *
+   * Only ever the pinned version from `native-runtime.lock.json`: never the latest upstream release,
+   * which stays a choice the user makes. A provider whose agents are busy is left to a later check.
+   */
   #startAutomaticUpdates(target: RuntimeTarget): Effect.Effect<void> {
     return Effect.forEach(
-      this.#stopping ? [] : PROVIDERS.filter((provider) => this.#updatesAutomatically(provider, target)),
-      (provider) => Effect.ignore(this.#startDownload(provider, target)),
+      this.#stopping
+        ? []
+        : PROVIDERS.filter(
+            (provider) => this.#updatesAutomatically(provider, target) && this.#isProviderIdle(provider),
+          ),
+      (provider) => Effect.ignore(this.#startDownload(provider, target, runtimeSpec(provider, target, this.#lock))),
       { discard: true },
     );
   }
 
+  /**
+   * Whether the managed copy of `provider` updates by itself to the pinned version: never to a newer
+   * upstream release, never a downgrade, and not a version the user cancelled.
+   */
   #updatesAutomatically(provider: ManagedProviderId, target: RuntimeTarget): boolean {
     const { phase, version } = this.#statuses[provider];
-    const offered = this.#targetSpec(provider, target).version;
+    const pinned = runtimeSpec(provider, target, this.#lock).version;
     return (
       this.#checkTimer !== null &&
-      this.#declined.get(provider) !== offered &&
+      this.#declined.get(provider) !== pinned &&
       (phase === "ready" || phase === "not-downloaded") &&
       version !== null &&
-      (olderVersion(version, offered) || (version !== offered && this.#isBlocked(provider, version))) &&
+      (olderVersion(version, pinned) || (version !== pinned && this.#isBlocked(provider, version))) &&
       !this.#systemVersions.has(provider) &&
       !configuredCliPath(provider) &&
       this.#isProviderOn(provider)
@@ -621,12 +646,13 @@ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerE
   #startDownload(
     runtime: ManagedRuntimeId,
     target: RuntimeTarget,
+    requested?: RuntimeSpec,
   ): Effect.Effect<ProviderRuntimeSnapshot, ProviderRuntimeFailure> {
     return Effect.gen({ self: this }, function* (): Effect.fn.Return<ProviderRuntimeSnapshot, ProviderRuntimeFailure> {
       const removal = isManagedToolRuntime(runtime) ? undefined : this.#removals.get(runtime);
       if (removal) yield* Fiber.join(removal);
       if (this.#tasks.has(runtime)) return this.getStatus();
-      const spec = this.#targetSpec(runtime, target);
+      const spec = requested ?? this.#targetSpec(runtime, target);
       const current = this.#statuses[runtime];
       if (
         current.version &&

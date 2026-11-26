@@ -1,5 +1,6 @@
 import type { RoutineFields, RoutineSchedule } from "@openbot/contracts/ipc";
 import type { EventRoutine } from "@openbot/contracts/ipc-events";
+import { nativeOnceRoutineSchedule } from "@openbot/team-client/routine-schedule";
 import { routineDraftSummary } from "@openbot/ui/features/conversation/routine-schedule-draft";
 import { routineScheduleToDraft } from "@openbot/ui/features/conversation/routine-schedule-saved";
 import { type RoutineText, routineScheduleSummary } from "@openbot/ui/features/conversation/routine-schedule-ui";
@@ -9,11 +10,22 @@ export function isEventRoutine(routine: RoutineEditorRecord): routine is EventRo
   return "owner" in routine;
 }
 
+/**
+ * The routine's schedule as the editor shows it. A GoAhead v0.40/v0.41 host stores a one-time routine
+ * as a 100,000-day interval; it reads as `{ kind: "once" }` here. The stored row is not changed.
+ */
 export function routineScheduleOf(routine: RoutineEditorRecord): RoutineSchedule {
-  if (isEventRoutine(routine)) {
-    return routine.trigger.kind === "schedule" ? routine.trigger.schedule : { kind: "daily", time: "09:00" };
+  const schedule = isEventRoutine(routine)
+    ? routine.trigger.kind === "schedule"
+      ? routine.trigger.schedule
+      : ({ kind: "daily", time: "09:00" } as const)
+    : routine.trigger.schedule;
+  try {
+    return nativeOnceRoutineSchedule(schedule, routine.timezone);
+  } catch {
+    // An unknown timezone: show the stored shape.
+    return schedule;
   }
-  return routine.trigger.schedule;
 }
 
 export function routineListSummary(routine: RoutineEditorRecord, text: RoutineText): string {

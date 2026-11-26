@@ -305,6 +305,11 @@ export function ChatMessageRow(props: ChatMessageRowProps): JSX.Element {
             </Show>
           </MessageHeader>
         </Show>
+        <Show when={!person() && props.message.autoModelName}>
+          {(model) => (
+            <MessageHeader class="message-auto-model">{t("chat.row.autoModel", { model: model() })}</MessageHeader>
+          )}
+        </Show>
         <div class="message-shell">
           <Show when={person()} fallback={bubble(messageBody())}>
             <div class="message-stack">

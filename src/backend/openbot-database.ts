@@ -55,6 +55,7 @@ import { withTransaction } from "./database/sqlite-transaction";
 import { ThreadEventCompaction, type ThreadEventCompactionBatch } from "./database/thread-event-compaction";
 import { ThreadReplay } from "./database/thread-replay";
 import { type StoredThreadSummary, ThreadSummaries } from "./database/thread-summaries";
+import { UsageByAgent } from "./database/usage-by-agent";
 
 export type { OrchestrationEventInput } from "./database/database-core";
 export type {
@@ -91,6 +92,7 @@ export type StreamingMessageResult = { revision: number } | { error: unknown };
 export class OpenBotDatabase {
   readonly #core: DatabaseCore;
   readonly usage: AgentUsage;
+  readonly usageDashboard: UsageByAgent;
   readonly #conversations: ConversationQueries;
   readonly #roster: AgentRoster;
   readonly #conversationWrites: ConversationWriter;
@@ -109,6 +111,7 @@ export class OpenBotDatabase {
   ) {
     this.#core = new DatabaseCore({ userDataPath, checkIntegrity });
     this.usage = new AgentUsage(this.#core);
+    this.usageDashboard = new UsageByAgent(this.#core);
     this.#conversations = new ConversationQueries({ core: this.#core });
     this.#roster = new AgentRoster({ core: this.#core });
     this.#conversationWrites = new ConversationWriter({ core: this.#core, roster: this.#roster });

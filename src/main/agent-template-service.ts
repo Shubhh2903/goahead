@@ -33,7 +33,7 @@ import { containsSecret } from "@openbot/logging";
 import { Effect, Result, Schema } from "effect";
 import type { AgentLifecycleFailed } from "../backend/agent-service";
 import { causeHelpers } from "../backend/effect-boundary";
-import { imageMimeType, localSchedule, toArrayBuffer, validTimezone } from "./agent-marketplace-service";
+import { imageMimeType, localRoutine, toArrayBuffer, validTimezone } from "./agent-marketplace-service";
 import type { CentralAuthOperationError } from "./central-auth-effects";
 import type { LocalSkillLibrary } from "./local-skill-library";
 import { MANAGED_SKILL_SLUGS } from "./managed-skill-service";
@@ -316,9 +316,8 @@ export class AgentTemplateService {
                     agentId: agent.id,
                     name: routine.name,
                     instruction: routine.instruction,
-                    active: routine.active,
                     timezone: input.timezone,
-                    schedule: localSchedule(routine.schedule),
+                    ...localRoutine(routine, input.timezone),
                   },
                   { recordConversationEvent: false },
                 ),

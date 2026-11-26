@@ -332,6 +332,8 @@ export const messages = defineMessages("settings", {
   "settings.tab.voice.title": "Voice",
   "settings.tab.voice.description":
     "Dictation in the message box. Local models run on this computer; ElevenLabs and Groq run in the cloud.",
+  "settings.tab.usage.title": "Usage",
+  "settings.tab.usage.description": "See the tokens that the agents on this computer used.",
   "settings.tab.computerUse.title": "Computer Use",
   "settings.tab.computerUse.description":
     "Let agents on this computer's GoAhead see and use its apps. Agents on another server use that server's computer.",

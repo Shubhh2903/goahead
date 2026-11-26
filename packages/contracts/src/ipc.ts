@@ -106,6 +106,7 @@ export * from "./ipc-skills";
 export * from "./ipc-slack-client";
 export * from "./ipc-storage";
 export * from "./ipc-team-host";
+export * from "./ipc-usage-dashboard";
 export * from "./ipc-vault";
 export * from "./ipc-voice";
 export * from "./ipc-workflow-answer-paths";

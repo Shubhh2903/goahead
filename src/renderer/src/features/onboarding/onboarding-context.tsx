@@ -4,6 +4,7 @@ import { createSignal, createStore, onSettled } from "solid-js";
 import { type DesktopAnalyticsProperties, desktopAnalytics } from "../../analytics";
 import { createSimpleContext } from "../../simple-context";
 import { firstRunTransition } from "./first-run-transition";
+import { type FirstRunWizard, firstRunWizardForSetup, nextFirstRunStep } from "./first-run-wizard";
 import { onboardingPort } from "./onboarding-port";
 
 export type OnboardingJourney = Pick<DesktopAnalyticsProperties<"onboarding_completed">, "path" | "skipped">;
@@ -21,10 +22,23 @@ const Setup = createSimpleContext({
     const [setupState, setSetupState] = createSignal<AppSetupState | null>(null);
     const [read, setRead] = createStore<SetupRead>({ loaded: false, failed: false, retrying: false, reference: null });
     const [pendingInviteUrl, setPendingInviteUrl] = createSignal("");
+    /**
+     * The first-run wizard of this session, or null when it never shows. It is decided once, from
+     * the first setup read that answers: see `first-run-wizard.ts` for why nothing else is stored.
+     */
+    const [firstRunWizard, setFirstRunWizard] = createSignal<FirstRunWizard | null>(null);
+    let firstRunWizardDecided = false;
+
+    function decideFirstRunWizard(state: AppSetupState | null): void {
+      if (firstRunWizardDecided) return;
+      firstRunWizardDecided = true;
+      setFirstRunWizard(firstRunWizardForSetup(state));
+    }
 
     async function readSetupState(): Promise<void> {
       try {
         const state = await onboardingPort().getSetupState();
+        decideFirstRunWizard(state);
         setSetupState(state);
         setRead((current) => {
           current.loaded = true;
@@ -57,6 +71,7 @@ const Setup = createSimpleContext({
     }
 
     function setUpAgain(): void {
+      decideFirstRunWizard(null);
       setRead((current) => {
         current.failed = false;
         current.reference = null;
@@ -90,6 +105,20 @@ const Setup = createSimpleContext({
       }
     }
 
+    /** Step one of the wizard ends: the first-run flow saved its choice, and the agent step follows. */
+    async function saveFirstRunSetup(
+      preferredProvider: AgentProviderId,
+      preferredModel: AgentModelId | null,
+      journey: OnboardingJourney,
+    ) {
+      await saveSetup(preferredProvider, preferredModel, journey);
+      updateFirstRunWizard(nextFirstRunStep);
+    }
+
+    function updateFirstRunWizard(transform: (wizard: FirstRunWizard) => FirstRunWizard): void {
+      setFirstRunWizard((current) => (current ? transform(current) : current));
+    }
+
     async function previewInvite(input: { inviteUrl: string }) {
       return onboardingPort().servers.previewInvite(input);
     }
@@ -105,6 +134,9 @@ const Setup = createSimpleContext({
       pendingInviteUrl,
       setPendingInviteUrl,
       saveSetup,
+      firstRunWizard,
+      saveFirstRunSetup,
+      updateFirstRunWizard,
       previewInvite,
     };
   },

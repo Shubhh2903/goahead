@@ -135,6 +135,11 @@ export interface DynamicIslandQuestionItem {
   detail?: string;
   isSecret: boolean;
   options: Array<{ label: string; description: string }> | null;
+  /**
+   * True when the person may pick more than one option, false when only one. Absent when it is not
+   * known: a runtime snapshot does not carry it. Only a known single choice gets one-tap answers.
+   */
+  multiSelect?: boolean;
 }
 
 export interface DynamicIslandPromptItem {
@@ -509,6 +514,7 @@ function isQuestionItem(value: unknown): value is DynamicIslandQuestionItem {
     isShortString(value.question, INPUT_LIMITS.promptQuestion) &&
     (value.detail === undefined || isShortString(value.detail, INPUT_LIMITS.promptQuestion)) &&
     isBoolean(value.isSecret) &&
+    (value.multiSelect === undefined || isBoolean(value.multiSelect)) &&
     (value.options === null ||
       (Array.isArray(value.options) &&
         value.options.length <= INPUT_LIMITS.promptOptions &&

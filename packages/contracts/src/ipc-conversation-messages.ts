@@ -345,6 +345,11 @@ export interface ConversationMessage {
   trace?: ConversationTurnTrace | undefined;
   /** Set on a user message that GoAhead wrote to a Slack orchestrator. The chat draws a card. */
   slackAsk?: ConversationSlackAsk | undefined;
+  /**
+   * The name of the model that GoAhead chose for this answer's turn, when the agent chooses its model
+   * automatically and the turn did not run on the agent's own model. Local-only.
+   */
+  autoModelName?: string;
 }
 
 export function isConversationMessage(value: unknown): value is ConversationMessage {
@@ -397,7 +402,8 @@ export function isConversationMessage(value: unknown): value is ConversationMess
     (value.skillSuggestion === undefined || isConversationSkillSuggestion(value.skillSuggestion)) &&
     (value.uiBlock === undefined || isConversationUiBlock(value.uiBlock)) &&
     (value.trace === undefined || isConversationTurnTrace(value.trace)) &&
-    (value.slackAsk === undefined || isConversationSlackAsk(value.slackAsk))
+    (value.slackAsk === undefined || isConversationSlackAsk(value.slackAsk)) &&
+    (value.autoModelName === undefined || isBoundedString(value.autoModelName, INPUT_LIMITS.modelName))
   );
 }
 

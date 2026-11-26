@@ -5,6 +5,7 @@ import type { FirstAgentDraft } from "@openbot/ui/features/agents/FirstAgentSetu
 export type NewAgentDraft = Pick<FirstAgentDraft, "name" | "purpose" | "avatarSeed" | "avatarHue" | "avatarColor"> &
   Partial<Pick<FirstAgentDraft, "provider" | "model" | "reasoningEffort" | "providerAccountId">>;
 
+/** The role goes into the agent's description (its instructions), never into the first message. */
 export function newAgentInput(
   draft: NewAgentDraft,
   createModelSupported: boolean,
@@ -24,6 +25,6 @@ export function newAgentInput(
           ...(draft.providerAccountId ? { providerAccountId: draft.providerAccountId } : {}),
         }
       : {}),
-    initialMessage: createAgentInitialMessage(draft, welcomeSupported),
+    initialMessage: createAgentInitialMessage(welcomeSupported),
   };
 }

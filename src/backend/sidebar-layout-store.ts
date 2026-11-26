@@ -228,6 +228,10 @@ export class SidebarLayoutStore extends EventEmitter<SidebarLayoutStoreEvents> {
   });
 }
 
+/**
+ * Applies one action and puts the folders back in tree order. An action that changes nothing answers
+ * `current` itself, so the store does not write the file or raise the revision.
+ */
 function applySidebarLayoutAction(
   current: SidebarLayoutSnapshot,
   action: SidebarLayoutAction,

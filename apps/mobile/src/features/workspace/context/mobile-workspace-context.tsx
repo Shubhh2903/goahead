@@ -34,6 +34,7 @@ import { BROWSER_PROFILES_CAPABILITY } from "@openbot/contracts/team-protocol/br
 import { BROWSER_PROXIES_CAPABILITY } from "@openbot/contracts/team-protocol/browser-proxies-v1";
 import { BROWSING_MEMORY_CAPABILITY } from "@openbot/contracts/team-protocol/browsing-memory-v1";
 import { CHANNEL_FOLDERS_CAPABILITY } from "@openbot/contracts/team-protocol/channel-folders-v1";
+import { CHAT_FOLDERS_ROUTES, decodeChatFoldersLayout } from "@openbot/contracts/team-protocol/chat-folders-v1";
 import { CONNECTORS_CAPABILITY } from "@openbot/contracts/team-protocol/connectors-v1";
 import {
   AGENT_HIDDEN_WORK_CAPABILITY,
@@ -103,6 +104,7 @@ import { WEBHOOK_AGENT_SECRET_CAPABILITY } from "@openbot/contracts/team-protoco
 import { WHATSAPP_CONNECTOR_CAPABILITY } from "@openbot/contracts/team-protocol/whatsapp-connector-v1";
 import { sourceText } from "@openbot/i18n/source";
 import {
+  type ConnectionPath,
   createRemoteAccountRefresh,
   createRemoteReadRefresh,
   createWorkspacePreferences,
@@ -264,7 +266,7 @@ import {
   serverKind,
   showsOnline,
 } from "@/features/workspace/model/server-status";
-import { moveSidebarChat } from "@/features/workspace/model/sidebar-layout";
+import { mobileChatFoldersSupported, moveSidebarChat } from "@/features/workspace/model/sidebar-layout";
 import {
   taskThreadCheck,
   taskThreadMessages,
@@ -342,9 +344,11 @@ const EMPTY_SERVER: MobileServer = {
 function startWorkspaceReads(client: RemoteTeamTransportRef, capabilities: readonly string[]) {
   const sections = capabilities.includes(SIDEBAR_FOLDERS_CAPABILITY)
     ? client.request("POST", SIDEBAR_FOLDERS_ROUTES.read, decodeSidebarLayout, {})
-    : capabilities.includes(SIDEBAR_LAYOUT_CAPABILITY)
-      ? client.request("GET", TEAM_API_ROUTES.sidebarLayout.state, decodeSidebarLayout)
-      : null;
+    : mobileChatFoldersSupported(capabilities)
+      ? client.request("POST", CHAT_FOLDERS_ROUTES.read, decodeChatFoldersLayout, {})
+      : capabilities.includes(SIDEBAR_LAYOUT_CAPABILITY)
+        ? client.request("GET", TEAM_API_ROUTES.sidebarLayout.state, decodeSidebarLayout)
+        : null;
   const agents = client.request("GET", TEAM_API_ROUTES.agents.all, decodeAgentSummaries);
   const hidden = readHostHiddenAgents(
     (method, path, decode, body) => client.request(method, path, decode, body),
@@ -766,6 +770,26 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
       return client.request(method, path, decode, body, upload, onUploadProgress, largeDownload, download);
     },
     [connectionWaits],
+  );
+  /**
+   * Reads the layout with the folder parents from a host with `chat-folders-v1`. The released layout in
+   * `sidebar-layout-changed` and in an action answer has no parents, so the phone reads this route then.
+   */
+  const refreshChatFolders = useCallback(
+    async (serverId: string) => {
+      try {
+        const layout = await request("POST", CHAT_FOLDERS_ROUTES.read, decodeChatFoldersLayout, {}, serverId);
+        applySidebarLayout(serverId, layout);
+      } catch (error) {
+        const text = currentText();
+        const message = text.errorMessage(error, text.t("mobile.workspace.error.sectionsLoadFailed"));
+        setSidebarByServer((current) => ({
+          ...current,
+          [serverId]: { layout: current[serverId]?.layout ?? null, error: message },
+        }));
+      }
+    },
+    [request, applySidebarLayout],
   );
   const loadAgentAvatar = useCallback(
     (agentId: string, avatarUrl: string, serverId: string) =>
@@ -1487,6 +1511,9 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
   );
   const wakeAttempts = useRef(new Map<string, number>());
   const [recoveryCountdowns] = useState(createRecoveryCountdowns);
+  const handleConnectionPath = useCallback((hostId: string, connectionPath: ConnectionPath) => {
+    setServers((current) => current.map((server) => (server.id === hostId ? { ...server, connectionPath } : server)));
+  }, []);
   const handleConnectionStatus = useCallback(
     (hostId: string, status: RemoteRecoveryStatus, failure: RemoteConnectionFailure | null, resuming: boolean) => {
       recoveryCountdowns.publish(hostId, { status, message: remoteRecoveryMessage(status, failure?.message ?? null) });
@@ -1601,7 +1628,8 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
       });
       applyBrowserEvent(liveState, serverId, event);
       if (event.type === "sidebar-layout-changed") {
-        applySidebarLayout(serverId, event.layout);
+        if (mobileChatFoldersSupported(serverCapabilities.current.get(serverId))) void refreshChatFolders(serverId);
+        else applySidebarLayout(serverId, event.layout);
         return;
       }
       if (event.type === "hidden-agents-changed") {
@@ -1738,6 +1766,7 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
       applyLiveActivityEvent,
       channelStore,
       applySidebarLayout,
+      refreshChatFolders,
       applyHostHidden,
       applyHostColors,
       loadConversation,
@@ -1895,7 +1924,8 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
           action,
           serverId,
         );
-        applySidebarLayout(serverId, layout);
+        if (mobileChatFoldersSupported(serverCapabilities.current.get(serverId))) await refreshChatFolders(serverId);
+        else applySidebarLayout(serverId, layout);
       },
       moveSidebarChat: async (serverId, action) => {
         requireCapability(
@@ -1915,7 +1945,8 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
             action,
             serverId,
           );
-          applySidebarLayout(serverId, layout);
+          if (mobileChatFoldersSupported(serverCapabilities.current.get(serverId))) await refreshChatFolders(serverId);
+          else applySidebarLayout(serverId, layout);
         } catch (error) {
           if (previous && moved)
             setSidebarByServer((current) =>
@@ -2114,9 +2145,9 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
           avatarSeed: input.avatarSeed,
           avatarHue: input.avatarHue,
           initialMessage: agentInitialMessage(
-            input.description,
             firstTask,
             welcome ? { locale: currentText().locale } : null,
+            currentText().t("mobile.agent.add.firstGreeting"),
           ),
           ...(input.provider &&
           input.model &&
@@ -2435,6 +2466,7 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
     refreshMemberships,
     reorderServers,
     applySidebarLayout,
+    refreshChatFolders,
     channelStore,
     conversationStore,
     liveState,
@@ -2721,6 +2753,7 @@ export function MobileWorkspaceProvider({ children }: PropsWithChildren) {
               register={registerConnection}
               load={loadServer}
               onStatus={handleConnectionStatus}
+              onConnectionPath={handleConnectionPath}
               onMembershipChanged={refreshMemberships}
               onTeamEvent={handleTeamEvent}
               onUnavailable={handleServerUnavailable}

@@ -1,4 +1,10 @@
-import type { AgentApproval, AgentEvent, AgentRuntimePrompt, AgentRuntimeSnapshot } from "@openbot/contracts/ipc";
+import {
+  type AgentApproval,
+  type AgentEvent,
+  type AgentRuntimePrompt,
+  type AgentRuntimeSnapshot,
+  runtimePromptEvent,
+} from "@openbot/contracts/ipc";
 import { cleanAgentMessageText } from "@openbot/team-client/agent-message-text";
 import { keepWholeApprovals, reconcilePendingRequests } from "@openbot/team-client/runtime-attention";
 import type { AgentMessage } from "@openbot/ui/data";
@@ -72,7 +78,7 @@ export function reconcileAttentionPrompts(
   const next: PendingAttentionPrompts = snapshot.attentionComplete ? {} : { ...current };
   for (const prompt of snapshot.pendingPrompts) {
     if (!promptAnswerInFlight(prompt, submittedRequests)) {
-      next[attentionKey(prompt.agentId, prompt.threadId)] = { type: "prompt", ...prompt };
+      next[attentionKey(prompt.agentId, prompt.threadId)] = runtimePromptEvent(prompt);
     }
   }
   for (const request of snapshot.pendingBrowserTakeovers) {

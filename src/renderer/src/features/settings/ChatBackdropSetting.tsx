@@ -1,4 +1,8 @@
-import { customBackdropChoice, customBackdropId } from "@openbot/ui/features/conversation/chat-backdrop";
+import {
+  customBackdropChoice,
+  customBackdropId,
+  isChatBackdropScene,
+} from "@openbot/ui/features/conversation/chat-backdrop";
 import { ChatBackdropSelect } from "@openbot/ui/features/settings/ChatBackdropSelect";
 import { useText } from "@openbot/ui/text";
 import { createSignal } from "solid-js";
@@ -11,10 +15,20 @@ import {
   removeCustomBackdrop,
   useCustomBackdrops,
 } from "../../custom-backdrops";
+import { useChatBackdropState } from "../backdrop/backdrop-state";
 
 export function ChatBackdropSetting(props: { mount?: HTMLElement | undefined }) {
   const { t } = useText();
   const choice = useChatBackdrop();
+  // A built-in scene that GoAhead v0.40/v0.41 saved shows as the current choice until one is chosen
+  // here. An old upload has no option in this list, so it shows as "None".
+  const legacy = useChatBackdropState();
+  const shownChoice = () => {
+    const current = choice();
+    if (current !== null) return current;
+    const old = legacy().choice;
+    return isChatBackdropScene(old) ? old : null;
+  };
   const custom = useCustomBackdrops();
   const [busy, setBusy] = createSignal(false);
 
@@ -54,7 +68,7 @@ export function ChatBackdropSetting(props: { mount?: HTMLElement | undefined }) 
 
   return (
     <ChatBackdropSelect
-      value={choice()}
+      value={shownChoice()}
       onChange={setChatBackdrop}
       custom={custom()}
       accept={CUSTOM_BACKDROP_UPLOAD_TYPES.join(",")}

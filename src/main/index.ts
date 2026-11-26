@@ -86,6 +86,7 @@ import { agentInstructionsIpcHandlers } from "./ipc/agent-instructions-handlers"
 import { agentTemplateIpcHandlers } from "./ipc/agent-template-handlers";
 import { appIpcHandlers } from "./ipc/app-handlers";
 import { attachmentIpcHandlers } from "./ipc/attachment-handlers";
+import { backdropIpcHandlers } from "./ipc/backdrop-handlers";
 import { backgroundProcessIpcHandlers } from "./ipc/background-process-handlers";
 import { billingIpcHandlers } from "./ipc/billing-handlers";
 import { bitwardenConnectorIpcHandlers } from "./ipc/bitwarden-connector-handlers";
@@ -136,6 +137,7 @@ import { slackClientIpcHandlers } from "./ipc/slack-client-handlers";
 import { storageIpcHandlers } from "./ipc/storage-handlers";
 import { teamIpcHandlers } from "./ipc/team-handlers";
 import { updateIpcHandlers } from "./ipc/update-handlers";
+import { usageIpcHandlers } from "./ipc/usage-handlers";
 import { vaultIpcHandlers } from "./ipc/vault-handlers";
 import { voiceIpcHandlers } from "./ipc/voice-handlers";
 import { workflowIpcHandlers } from "./ipc/workflow-handlers";
@@ -478,6 +480,11 @@ protocol.registerSchemesAsPrivileged([
     scheme: "openbot-remote-avatar",
     privileges: { standard: true, secure: true, supportFetchAPI: true },
   },
+  // An uploaded backdrop image or video. `stream`, as for attachments, lets a <video> play it.
+  {
+    scheme: "openbot-backdrop",
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+  },
   {
     scheme: "openbot-server-logo",
     privileges: { standard: true, secure: true, supportFetchAPI: true },
@@ -770,6 +777,7 @@ function registerIpcHandlers({
   notificationPreference,
   busyMessageMode,
   agentDefaults,
+  chatBackdrops,
   agentMemoryLimit,
   memoryReview,
   skillLearning,
@@ -964,6 +972,8 @@ function registerIpcHandlers({
     ...creditsIpcHandlers({ credits }),
     ...routineFeedIpcHandlers({ routineFeed }),
     ...eventsIpcHandlers({ events, remoteServers }),
+    ...backdropIpcHandlers({ backdrops: chatBackdrops }),
+    ...usageIpcHandlers({ service }),
     ...hostedServerIpcHandlers({ hostedServers }),
     ...localServerIpcHandlers({ localServers }),
     ...customProviderIpcHandlers(customProviderChanges),
@@ -1129,6 +1139,7 @@ function registerIpcHandlers({
       translate: language.translate,
       agents: () => service.listAgents(),
       openPath: (path) => shell.openPath(path),
+      trashItem: (path) => shell.trashItem(path),
     }),
     ...agentIpcHandlers({
       service,

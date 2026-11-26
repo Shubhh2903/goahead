@@ -477,6 +477,8 @@ function approvalTitle(approval: AgentApproval | undefined) {
   const localKind = approval ? localOnlyApprovalKind(approval.requestId) : null;
   if (localKind === "send") return "prompt.approval.title.sendMail";
   if (localKind === "meeting") return "prompt.approval.title.bookMeeting";
+  if (localKind === "turn-limit") return "prompt.approval.title.turnLimit";
+  if (localKind === "install-guard") return "prompt.approval.title.installGuard";
   if (approval?.kind === "command") return "prompt.approval.title.command";
   if (approval?.kind === "file-change") return "prompt.approval.title.fileChange";
   return "prompt.approval.title.permissions";

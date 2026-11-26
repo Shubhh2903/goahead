@@ -12,7 +12,7 @@ import { PHONE_FEEDBACK_ROUTES } from "@openbot/contracts/team-protocol/phone-fe
 import { isQueueEditRoute, QueueEditRejectedError } from "@openbot/contracts/team-protocol/queue-edit-v1";
 import type { TeamProtocolV2Json } from "@openbot/contracts/team-protocol/v2";
 import { sourceText } from "@openbot/i18n/source";
-import type { RemoteTeamDirectoryClient } from "@openbot/team-client";
+import type { ConnectionPath, RemoteTeamDirectoryClient } from "@openbot/team-client";
 import { runTeamEffect } from "@openbot/team-client";
 import { bytesToBase64 } from "@openbot/team-client/base64";
 import {
@@ -100,6 +100,8 @@ interface RemoteTeamTransportProps {
   directory: RemoteTeamDirectoryClient;
   onConnectionUpdate: (update: RemoteTeamConnectionUpdate) => void;
   onDiagnostic?: (step: RemoteTeamDiagnostic["step"], detail: string | undefined) => void;
+  /** How the phone reaches the host, or why it cannot. */
+  onConnectionPath?: (update: { hostId: string; path: ConnectionPath }) => void;
   onMembershipChanged?: () => Promise<void>;
   onNetworkRestored?: () => void;
   onTeamEvent: (hostId: string, event: RemoteTeamEvent) => void;
@@ -500,6 +502,8 @@ export const RemoteTeamTransport = memo(
       },
       onAccountServersChanged: async () => latest.current.props.onMembershipChanged?.(),
       onConnectionUpdate: async (update: RemoteTeamConnectionUpdate) => latest.current.props.onConnectionUpdate(update),
+      onConnectionPath: async (update: { hostId: string; path: ConnectionPath }) =>
+        latest.current.props.onConnectionPath?.(update),
       onDiagnostic: async ({ hostId, step, detail }: RemoteTeamDiagnostic) => {
         supportLog.add(
           step === "failed" || step === "stalled" || step === "signal-error" || step === "ice-candidate-error"

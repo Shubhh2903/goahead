@@ -182,6 +182,14 @@
   order: -1;
 }
 
+/* The model "Choose model automatically" picked for this answer. Shown only when it is not the agent's own. */
+.message-auto-model {
+  padding-inline: var(--openbot-space-3);
+  color: var(--openbot-text-muted);
+  font-size: var(--openbot-text-sm);
+  line-height: var(--openbot-leading-sm);
+}
+
 .message-entry:hover .message-actions,
 .message-entry:focus-within .message-actions,
 .message-actions-open {

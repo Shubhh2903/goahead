@@ -1,8 +1,9 @@
 import { type DynamicRecord, isBoolean, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
-import type { AgentLiveActivityProps } from "@openbot/team-client/live-activity-props";
+import { type AgentLiveActivityProps, LIVE_ACTIVITY_STALE_AFTER_MS } from "@openbot/team-client/live-activity-props";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import { currentText } from "@/shared/lib/text";
+import { isLiveActivityLink } from "./live-activity-link";
 import { openSealedLiveActivity } from "./live-activity-open";
 
 /**
@@ -19,8 +20,23 @@ const STATE_KEY = "goahead.mobile.android-live-update.v1";
 /** The props that the notification shows. The host and the app send the whole `AgentLiveActivityProps`. */
 export type AndroidLiveUpdateView = Pick<
   AgentLiveActivityProps,
-  "title" | "label" | "detail" | "detailMarkdown" | "tint" | "tapUrl" | "rows" | "footer"
+  "mode" | "title" | "label" | "detail" | "detailMarkdown" | "tint" | "tapUrl" | "rows" | "footer" | "buttons"
 >;
+
+/** The modes in which a prompt waits for the user. Only they get buttons. */
+const PROMPT_MODES: ReadonlySet<AgentLiveActivityProps["mode"]> = new Set(["approval", "question"]);
+/** Android shows at most three action buttons on a notification. */
+const ACTION_LIMIT = 3;
+const OPEN_ACTION = "open";
+
+/** The buttons of the notification, and the link that each one opens. */
+export interface AndroidLiveUpdateActions {
+  /** Android category ids must not have `:` or `-`. */
+  categoryIdentifier: string;
+  actions: Notifications.NotificationAction[];
+  /** The link of each action id. */
+  links: Record<string, string>;
+}
 
 interface StoredState {
   seal: string;
@@ -50,9 +66,26 @@ export function ensureAndroidLiveUpdateChannel(): Promise<void> {
   return channelReady;
 }
 
-/** Shows `props` in the ongoing notification, or replaces what it shows. */
-export async function showAndroidLiveUpdate(props: AndroidLiveUpdateView, madeAt: number): Promise<void> {
+/**
+ * Shows `props` in the ongoing notification, or replaces what it shows. After `staleAt`, in seconds,
+ * the buttons only open the app, as the iPhone activity drops them: old answers can target a request
+ * that is gone. Without it, the content goes out of date after the same time as a host update.
+ */
+export async function showAndroidLiveUpdate(
+  props: AndroidLiveUpdateView,
+  madeAt: number,
+  staleAt = madeAt + LIVE_ACTIVITY_STALE_AFTER_MS / 1000,
+): Promise<void> {
   await ensureAndroidLiveUpdateChannel();
+  // Android reads the category when it shows the notification, so it gets the labels of this update.
+  // Without the category the update still shows, with no buttons.
+  const actions = androidLiveUpdateActions(props);
+  const buttons =
+    actions &&
+    (await Notifications.setNotificationCategoryAsync(actions.categoryIdentifier, actions.actions).then(
+      () => actions,
+      () => null,
+    ));
   await Notifications.scheduleNotificationAsync({
     identifier: NOTIFICATION_ID,
     content: {
@@ -60,7 +93,8 @@ export async function showAndroidLiveUpdate(props: AndroidLiveUpdateView, madeAt
       subtitle: props.label,
       body: notificationBody(props),
       color: props.tint,
-      data: { url: props.tapUrl },
+      data: { url: props.tapUrl, actions: buttons?.links ?? {}, staleAt },
+      ...(buttons ? { categoryIdentifier: buttons.categoryIdentifier } : {}),
       sticky: true,
       autoDismiss: false,
       priority: Notifications.AndroidNotificationPriority.LOW,
@@ -73,6 +107,46 @@ export async function showAndroidLiveUpdate(props: AndroidLiveUpdateView, madeAt
 export async function dismissAndroidLiveUpdate(madeAt: number): Promise<void> {
   await Notifications.dismissNotificationAsync(NOTIFICATION_ID);
   await markShown(madeAt);
+}
+
+/**
+ * The buttons of the notification, as the iPhone Live Activity has them: the signed answers of a
+ * waiting prompt, then Open. Other modes get none. Each button opens the app, which checks the
+ * signature and, for Approve, asks the user first. A button never acts in the background.
+ */
+export function androidLiveUpdateActions(view: AndroidLiveUpdateView): AndroidLiveUpdateActions | null {
+  if (!PROMPT_MODES.has(view.mode)) return null;
+  const answers = view.buttons.filter((button) => isLiveActivityLink(button.url)).slice(0, ACTION_LIMIT);
+  if (answers.length === 0) return null;
+  const { t } = currentText();
+  const entries = answers.map((button, index) => ({ id: `answer${index}`, title: button.label, url: button.url }));
+  if (entries.length < ACTION_LIMIT && isLiveActivityLink(view.tapUrl)) {
+    entries.push({ id: OPEN_ACTION, title: t("mobile.liveActivity.button.open"), url: view.tapUrl });
+  }
+  return {
+    categoryIdentifier: `goahead_live_update_${view.mode}`,
+    actions: entries.map((entry) => ({
+      identifier: entry.id,
+      buttonTitle: entry.title,
+      options: { opensAppToForeground: true },
+    })),
+    links: Object.fromEntries(entries.map((entry) => [entry.id, entry.url])),
+  };
+}
+
+/**
+ * The link to open for a tap on the notification or one of its buttons, or `null`. The app reads it
+ * as any Live Activity link, so only a valid signature can start an action. A button of out-of-date
+ * content, or of content with no date, opens what a tap opens.
+ */
+export function androidLiveUpdateResponseUrl(data: unknown, actionIdentifier: string, now: number): string | null {
+  if (!isDynamicRecord(data)) return null;
+  const tap = isString(data.url) ? data.url : null;
+  if (actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER) return tap;
+  if (!isNumber(data.staleAt) || now >= data.staleAt) return tap;
+  const link = isDynamicRecord(data.actions) ? data.actions[actionIdentifier] : undefined;
+  // An unknown button, or a link that is not ours, opens what a tap opens.
+  return isString(link) && isLiveActivityLink(link) ? link : tap;
 }
 
 /** Whether the ongoing notification is on screen now. The user can remove it on newer Android versions. */
@@ -110,7 +184,8 @@ export async function receiveAndroidLiveUpdate(data: DynamicRecord): Promise<voi
   const text = openSealedLiveActivity(data.sealed, state.seal, state.tag);
   if (text === null) return;
   const view = parseView(text);
-  if (view) await showAndroidLiveUpdate(view, timestamp);
+  const staleAt = Number(data.staleAt);
+  if (view) await showAndroidLiveUpdate(view, timestamp, Number.isSafeInteger(staleAt) ? staleAt : undefined);
 }
 
 async function markShown(madeAt: number): Promise<void> {
@@ -134,9 +209,12 @@ function writeState(state: StoredState): Promise<void> {
 function parseView(text: string): AndroidLiveUpdateView | null {
   const value = parseJson(text);
   if (!isDynamicRecord(value)) return null;
-  const { title, label, detail, detailMarkdown, tint, tapUrl, footer } = value;
+  const { mode, title, label, detail, detailMarkdown, tint, tapUrl, footer } = value;
   const rows = Array.isArray(value.rows) ? value.rows.flatMap(readRow) : null;
+  // The host drops the buttons when the seal is too long. The notification then has none.
+  const buttons = Array.isArray(value.buttons) ? value.buttons.flatMap(readButton) : [];
   if (
+    !isViewMode(mode) ||
     !isString(title) ||
     !isString(label) ||
     !isString(detail) ||
@@ -148,7 +226,27 @@ function parseView(text: string): AndroidLiveUpdateView | null {
   ) {
     return null;
   }
-  return { title, label, detail, detailMarkdown, tint, tapUrl, footer, rows };
+  return { mode, title, label, detail, detailMarkdown, tint, tapUrl, footer, rows, buttons };
+}
+
+const VIEW_MODES: ReadonlySet<string> = new Set<AgentLiveActivityProps["mode"]>([
+  "working",
+  "message",
+  "question",
+  "approval",
+  "takeover",
+  "failed",
+  "mail",
+]);
+
+function isViewMode(value: unknown): value is AgentLiveActivityProps["mode"] {
+  return isString(value) && VIEW_MODES.has(value);
+}
+
+function readButton(button: unknown): AndroidLiveUpdateView["buttons"] {
+  return isDynamicRecord(button) && isString(button.label) && isString(button.url) && isBoolean(button.prominent)
+    ? [{ label: button.label, url: button.url, prominent: button.prominent }]
+    : [];
 }
 
 function readRow(row: unknown): AndroidLiveUpdateView["rows"] {

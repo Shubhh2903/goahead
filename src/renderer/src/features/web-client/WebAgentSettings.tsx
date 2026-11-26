@@ -132,7 +132,7 @@ export function WebAgentSettings(props: {
       const agent = await props.runtime.createAgent({
         name: value.name,
         description: value.purpose,
-        initialMessage: createAgentInitialMessage(value, props.capabilities.includes(AGENT_WELCOME_CAPABILITY)),
+        initialMessage: createAgentInitialMessage(props.capabilities.includes(AGENT_WELCOME_CAPABILITY)),
         avatarSeed: value.avatarSeed,
         avatarHue: value.avatarHue,
         ...(supportsModelSelection() && selectedModel && isKnownAgentProvider(selectedModel.provider)

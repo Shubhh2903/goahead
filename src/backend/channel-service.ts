@@ -1921,6 +1921,24 @@ export class ChannelService {
     return resolved.flatMap((item) => (item ? [item.path] : []));
   });
 
+  /**
+   * Who started the channel task that a delivery runs, for the model choice of its turn only. A
+   * channel assignment is queued with sender `user` for every task, so the sender cannot tell. A
+   * task that a routine requested is a routine task. A child task, or a request that an agent wrote,
+   * is a teammate task. Every other task is the person's. A task that a teammate transferred keeps
+   * its request's origin. Null for a delivery that is not a channel assignment.
+   */
+  deliveryOrigin(deliveryId: string): "person" | "teammate" | "routine" | null {
+    const assignment = this.store.assignmentForDelivery(deliveryId);
+    if (!assignment) return null;
+    const task = this.store.tasks(assignment.channelId).find((item) => item.id === assignment.taskId);
+    if (!task) return "person";
+    const request = this.store.message(assignment.channelId, task.requestMessageId);
+    if (request?.author.kind === "member" && request.author.id.startsWith("routine:")) return "routine";
+    if (task.parentTaskId !== null || request?.author.kind === "agent") return "teammate";
+    return "person";
+  }
+
   mayDrain(agentId: string): boolean {
     return !this.store.hasAgentAssignmentInState(agentId, ACTIVE_ASSIGNMENT_STATES);
   }

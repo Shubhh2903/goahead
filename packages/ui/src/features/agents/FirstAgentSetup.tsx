@@ -19,6 +19,7 @@ import { Button, Field, Input, Textarea } from "@openbot/ui";
 import { createSignal, For, onSettled, Show } from "solid-js";
 import {
   AVATAR_COLOR_CHOICES,
+  availableAvatarFace,
   avatarHeadColor,
   avatarSeedForFace,
   isAvatarColorChoice,
@@ -75,24 +76,29 @@ export interface FirstAgentSetupProps {
   onChange: (value: FirstAgentDraft) => void;
   onSubmit: (value: FirstAgentDraft) => void | Promise<void>;
   onCancel?: (() => void) | undefined;
+  /** First-run setup only: closes the first-agent form without an agent. */
+  onSkip?: (() => void) | undefined;
 }
 
+// Faces that a seed can draw (`avatarExpressionsForShape`). `availableAvatarFace` keeps an import from throwing.
 const FIRST_AGENT_FACES: ReadonlyArray<{ shape: SupportedAvatarSilhouetteId; expression: ExpressionId }> = [
   { shape: "cercle", expression: "attentif" },
-  { shape: "squircle", expression: "curieux" },
+  { shape: "nuage", expression: "curieux" },
   { shape: "triangle", expression: "neutre" },
   { shape: "hexagone", expression: "surpris" },
-  { shape: "carre", expression: "attentif" },
-  { shape: "galet", expression: "curieux" },
-  { shape: "pentagone", expression: "neutre" },
-  { shape: "capsule", expression: "attentif" },
-  { shape: "losange", expression: "curieux" },
-  { shape: "nuage", expression: "surpris" },
+  { shape: "fantome", expression: "neutre" },
+  { shape: "galet", expression: "neutre" },
+  { shape: "meduse", expression: "neutre" },
+  { shape: "capsule", expression: "heureux" },
+  { shape: "poulpe", expression: "curieux" },
+  { shape: "nuage", expression: "excite" },
   { shape: "squircle", expression: "neutre" },
-  { shape: "cercle", expression: "curieux" },
+  { shape: "cercle", expression: "neutre" },
 ];
 
-export const FIRST_AGENT_AVATAR_SEEDS = FIRST_AGENT_FACES.map((face) => avatarSeedForFace("first-bot", face));
+export const FIRST_AGENT_AVATAR_SEEDS = FIRST_AGENT_FACES.map((face) =>
+  avatarSeedForFace("first-bot", availableAvatarFace(face)),
+);
 
 const SUGGESTION_MOMENTUM_FRICTION = 0.88;
 const SUGGESTION_MOMENTUM_MINIMUM = 0.01;
@@ -397,6 +403,18 @@ export function FirstAgentSetup(props: FirstAgentSetupProps) {
             onClick={() => props.onCancel?.()}
           >
             {t("common.cancel")}
+          </Button>
+        </Show>
+        <Show when={props.mode !== "additional" && props.onSkip}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            class="first-agent-cancel no-drag"
+            disabled={props.submitting}
+            onClick={() => props.onSkip?.()}
+          >
+            {t("onboarding.wizard.skipStep")}
           </Button>
         </Show>
       </header>

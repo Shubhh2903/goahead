@@ -1,5 +1,6 @@
 import { sourceText } from "@openbot/i18n/source";
 import {
+  type ConnectionPath,
   createRemoteConnectionRecovery,
   type RemoteConnectionFailure,
   type RemoteConnectionStage,
@@ -60,6 +61,7 @@ interface Props {
     failure: RemoteConnectionFailure | null,
     resuming: boolean,
   ): void;
+  onConnectionPath?(hostId: string, path: ConnectionPath): void;
   onMembershipChanged?(): Promise<void>;
   onTeamEvent(hostId: string, event: RemoteTeamEvent): void;
   onUnavailable?(hostId: string): void;
@@ -74,12 +76,15 @@ export const ServerConnection = memo(function ServerConnection({
   register,
   load,
   onStatus,
+  onConnectionPath,
   onTeamEvent,
   onMembershipChanged,
   onUnavailable,
 }: Props) {
   const onUnavailableRef = useRef(onUnavailable);
   onUnavailableRef.current = onUnavailable;
+  const onConnectionPathRef = useRef(onConnectionPath);
+  onConnectionPathRef.current = onConnectionPath;
   const [client, setClient] = useState<RemoteTeamTransportRef | null>(null);
   const controller = useRef<ReturnType<typeof createRemoteConnectionRecovery> | null>(null);
   const activeRef = useRef(active);
@@ -133,6 +138,12 @@ export const ServerConnection = memo(function ServerConnection({
       else networkMoved.current = true;
     });
   }, [client, hostId]);
+  const handleConnectionPath = useCallback(
+    (update: { hostId: string; path: ConnectionPath }) => {
+      if (update.hostId === hostId) onConnectionPathRef.current?.(hostId, update.path);
+    },
+    [hostId],
+  );
   const handleDiagnostic = useCallback(
     (step: RemoteTeamDiagnostic["step"], detail: string | undefined) => analytics.diagnostic(step, detail),
     [analytics],
@@ -278,6 +289,7 @@ export const ServerConnection = memo(function ServerConnection({
       active={active}
       directory={directory}
       onMembershipChanged={onMembershipChanged}
+      onConnectionPath={handleConnectionPath}
       onNetworkRestored={handleNetworkRestored}
       onTeamEvent={onTeamEvent}
       onConnectionUpdate={handleConnectionUpdate}

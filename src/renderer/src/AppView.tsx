@@ -147,7 +147,7 @@ export function AppAccessGate() {
                               setup.setupState() ?? { completed: false, preferredProvider: null, preferredModel: null }
                             }
                             platform={platform.appInfo()?.platform ?? "darwin"}
-                            onSave={setup.saveSetup}
+                            onSave={setup.saveFirstRunSetup}
                             onAnalyticsChoice={(enabled, chosen) =>
                               settings.updateGeneralSettings(
                                 { ...settings.generalSettings(), productAnalytics: enabled },

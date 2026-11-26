@@ -39,6 +39,7 @@ import { toCurrentAgentKeys, toCurrentAgentKeysObjectForPath, toWireAgentKeys } 
 import { decodeHostAnalyticsV1Response } from "./host-analytics-v1";
 import { decodeMessageClientId } from "./message-client-id-v1";
 import { decodeProfileV6Request, decodeProfileV6Response } from "./profile-v6";
+import { withQuestionMultiSelect } from "./question-multi-select-v6";
 import { decodeQueueEditRequest, isQueueEditRoute } from "./queue-edit-v1";
 import {
   decodeRemoteDesktopSetupRequest,
@@ -52,6 +53,7 @@ import {
   decodeTeamProtocolV6BaseCurrentHttpResponse,
   encodeTeamProtocolV6BaseCurrentHttpRequest,
   encodeTeamProtocolV6BaseCurrentHttpResponse,
+  withoutFalseMultiSelect,
 } from "./v6-base-adapter";
 
 const QUEUE_MARKS = { editing: "Invalid queue edit mark.", expectsReply: "Invalid queue reply mark." } as const;
@@ -238,15 +240,18 @@ export function encodeTeamProtocolV6CurrentHttpResponse(
     );
   if (isConversationRoute(method, path) && status < 400)
     return JSON.stringify(
-      withConversationSenders(
-        withConversationPlans(
-          withExchangeExpectsReply(
-            JSON.parse(encodeTeamProtocolV6BaseCurrentHttpResponse(method, path, status, value, options)),
+      withQuestionMultiSelect(
+        withConversationSenders(
+          withConversationPlans(
+            withExchangeExpectsReply(
+              JSON.parse(encodeTeamProtocolV6BaseCurrentHttpResponse(method, path, status, value, options)),
+              value,
+            ),
             value,
           ),
           value,
         ),
-        value,
+        withoutFalseMultiSelect(JSON.parse(JSON.stringify(value ?? null))),
       ),
     );
   if (isConversationUnreadRoute(method, path))
@@ -288,9 +293,12 @@ export function decodeTeamProtocolV6CurrentHttpResponse(
   if (isQueueSnapshotRoute(method, path) && status < 400)
     return withQueueMarks(decodeTeamProtocolV6BaseCurrentHttpResponse(method, path, status, value), value);
   if (isConversationRoute(method, path) && status < 400)
-    return withConversationSenders(
-      withConversationPlans(
-        withExchangeExpectsReply(decodeTeamProtocolV6BaseCurrentHttpResponse(method, path, status, value), value),
+    return withQuestionMultiSelect(
+      withConversationSenders(
+        withConversationPlans(
+          withExchangeExpectsReply(decodeTeamProtocolV6BaseCurrentHttpResponse(method, path, status, value), value),
+          value,
+        ),
         value,
       ),
       value,

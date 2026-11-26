@@ -83,19 +83,30 @@ host shows the setting.
 
 ### Token settings of an agent
 
-Three local-only agent settings lower token use. The Team API agent allowlist does not carry them, and
+Four local-only agent settings lower token use. The Team API agent allowlist does not carry them, and
 the remote IPC branch refuses them (`error.agent.tokenSettingsLocalOnly`).
 
-- `compactWindow` (80K or 120K tokens; absent means the full window). `ThreadLifecycle` sends it to
-  Claude as a thread param, and `claude-client.ts` sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, so Claude
-  Code summarizes the conversation sooner and each model call reads less context. A change restarts
-  the Claude query with the next turn. Other providers keep their own compaction.
+- `compactWindow` (80K, 120K or 200K tokens; absent means 120K, `DEFAULT_COMPACT_WINDOW`). `ThreadLifecycle`
+  sends it to Claude as a thread param, and `claude-client.ts` always sets
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, so Claude Code summarizes the conversation sooner and each model
+  call reads less context. A change restarts the Claude query with the next turn. For Codex,
+  `thread/start` and `thread/resume` send `model_auto_compact_token_limit` (120K), and host compaction
+  between turns starts at the smaller of the usual share of the window and 120K. Other providers keep
+  their own compaction.
 - `disabledMcpServerIds` (absent means every enabled MCP panel server). `agentMcpServers` leaves these
   servers out for Codex, Claude and the ACP clients, so a server added later still reaches every agent.
 - `weeklyTokenBudget` (5M to 100M tokens). `AgentTokenBudget` (`src/main/agent-token-budget.ts`)
   reads the agent's processed tokens since Monday after each completed turn and shows one desktop
   notification at 80% and one at 100% per week. It never stops work. The alerts already shown are
   kept in memory, so a restart can show a level once more.
+- `turnLimit` (40, 100, 200 or 0 for Off; absent means 40). The UI calls it "Tool calls per turn",
+  because upstream "turn limits" are the host concurrency limits. A turn stops at that many tool calls
+  or at 75,000 times that many processed tokens, and a local-only card (`turn-limit:`) offers
+  Continue, which sends a new message. The same stop-and-card path serves the install guard
+  (`install-guard.ts`): a Claude `Bash` hook asks before a guarded command runs, while Codex and Grok
+  stop the turn after the command starts, so the command can already be running. Allow lasts 60
+  minutes per agent and rule, in memory. Only the local owner answers these cards, so Turbo and auto
+  approve do not.
 
 #### Agent memories
 
@@ -168,6 +179,50 @@ service account and sends a data-only FCM message, with `high` priority for a ch
 the router, opens the message with the keys of the active host from secure storage and updates the
 notification. It ignores an update older than the shown content. Without `google-services.json` in
 the build, the phone has no FCM token and registers nothing.
+
+### Pinned provider CLI updates
+
+Main also updates a managed CLI with no offer, but only to the version that `native-runtime.lock.json`
+pins: never to the latest upstream release, which stays an offer. Each check (at start, then each
+hour) starts the download of each managed CLI that is older than its pin. It skips a CLI the user
+installed, a configured CLI path, a CLI with no managed copy, a provider whose agents are busy (a
+later check takes it), and a pinned version the user cancelled in this session (kept in memory only).
+An automatic update downloads, verifies and installs the pinned artifact first, and only then swaps
+it in, so new turns of that provider wait only for the swap. A failed automatic update stays in
+`download-error` and does not start again by itself.
+
+### Usage tab
+
+`UsageByAgent` (`database/usage-by-agent.ts`) owns the read-only queries of the desktop Settings >
+Usage tab, `usage:get-dashboard`. It is local only: no Team API route and no capability, and a joined
+server's usage stays in the host report. `usageByAgent(range)` sums the stored usage rows, which are
+already deltas of their counter, for the last 7 or 30 local days, by agent, provider and day. It reads
+one UTC day before and two after the range and puts each row on its local day with `analyticsDate`.
+It also counts the scheduled routine runs that a run condition skipped: cancelled runs whose error is
+one of the two run-condition `sourceText` reasons. A channel run has no agent and counts apart.
+The tab also lists every agent with a weekly token budget. `weeklyBudgetUsage` builds the same
+request as the budget alert (`tokenBudgetWeekInput`: Monday 00:00 to today in the computer's time zone)
+and reads the same `getAnalytics` total, so the tab and the alert cannot disagree.
+
+### Unassigned Agents folders
+
+The storage scan also counts folders in the Agents and legacy Bots roots that no agent owns. Folders
+of 1 GiB or more come back from a local IPC call (`storage:list-unassigned-folders`), not in
+`StorageUsage`, because the Team API answer carries no path. `storage:trash-unassigned-folder` moves
+one unowned direct child to the system Trash and refuses a folder with a registered workspace inside
+it.
+
+### Chat folders (released Team API)
+
+The optional `chat-folders-v1` capability (released in GoAhead v0.40) adds `POST /v1/chat-folders`
+with an empty body, for every member. It answers the sidebar layout of `/v1/sidebar-layout` plus the
+`parentId` of each folder (three levels at most), with the frozen codec in
+`team-protocol/chat-folders-v1.ts`. The route is read only: a client changes the layout through
+`/v1/sidebar-layout/actions` and reads the route again on `sidebar-layout-changed`. The host route is
+`src/main/team-api/route-chat-folders.ts`. The response goes through the same hidden-agent projection
+as every JSON response. A request without the capability gets 400. The capability is placed for all
+protocol versions, because released GoAhead phones speak protocol 6. Upstream `sidebar-folders-v1`
+(protocol 9) is a separate capability.
 
 ### Claude text preview
 

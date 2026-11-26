@@ -8,6 +8,7 @@ import {
   type AgentProviderId,
   composedCustomModelId,
   customProviderOfModel,
+  DEFAULT_COMPACT_WINDOW,
   DEFAULT_PROMPT_CACHE_TTL,
   type KeyOnlyProviderId,
   type PromptCacheTtl,
@@ -455,24 +456,29 @@ function codexVariableOverrides(variables: Readonly<Record<string, string>>): st
 }
 
 function withAccountEnvironment(
-  context: ProviderClientContext,
+  context: Pick<ProviderClientContext, "agentEnvironment" | "accountEnvironment">,
 ): ((inherited?: NodeJS.ProcessEnv) => Readonly<Record<string, string>>) | undefined {
   const { agentEnvironment, accountEnvironment } = context;
   if (!accountEnvironment) return agentEnvironment;
   return (inherited) => ({ ...agentEnvironment?.(inherited), ...accountEnvironment });
 }
 
-function claudeAgentEnvironment(
-  context: ProviderClientContext,
+/** Exported for its test: the host part of the Claude compact window order (see `claudeCompactWindowEnvironment`). */
+export function claudeAgentEnvironment(
+  context: Pick<
+    ProviderClientContext,
+    "agentEnvironment" | "accountEnvironment" | "claudeCompactWindow" | "promptCacheTtl" | "providerEnvironment"
+  >,
 ): (inherited?: NodeJS.ProcessEnv) => Readonly<Record<string, string>> {
   const environment = withAccountEnvironment(context);
   return (inherited) => {
-    const compactWindow = context.claudeCompactWindow?.() ?? null;
+    // GoAhead: no host setting compacts at `DEFAULT_COMPACT_WINDOW`. An agent's own window wins (claude-client).
+    const compactWindow = context.claudeCompactWindow?.() ?? DEFAULT_COMPACT_WINDOW;
     return {
       ...((context.promptCacheTtl?.() ?? DEFAULT_PROMPT_CACHE_TTL.ttl) === "1h"
         ? { ENABLE_PROMPT_CACHING_1H: "1" }
         : {}),
-      ...(compactWindow === null ? {} : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(compactWindow) }),
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(compactWindow),
       ...environment?.(inherited),
       ...context.providerEnvironment?.("claude"),
     };

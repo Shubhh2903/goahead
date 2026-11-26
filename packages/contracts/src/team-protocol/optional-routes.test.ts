@@ -7,7 +7,12 @@ import { AGENT_PUBLISH_ROUTES } from "./agent-publish-v1";
 import { AGENT_UPDATE_ROUTES } from "./agent-update-v1";
 import { ANDROID_LIVE_UPDATE_PUSH_ROUTES } from "./android-live-update-push-v1";
 import { CONTEXT_RESET_ROUTES } from "./context-reset-v1";
-import { TEAM_CURRENT_CAPABILITIES } from "./current";
+import {
+  GOAHEAD_PROTOCOL_6_CAPABILITIES,
+  legacyTeamCapabilities,
+  TEAM_BOOTSTRAP_CAPABILITIES,
+  TEAM_CURRENT_CAPABILITIES,
+} from "./current";
 import { HOST_ADMIN_ROUTES } from "./host-admin-v1";
 import { HOST_UPDATE_ROUTES, hostRestartEvent } from "./host-update-v1";
 import { HOSTED_SITES_ROUTES } from "./hosted-sites-v1";
@@ -93,9 +98,14 @@ describe("agent-host-settings-v1", () => {
 
   // A released host reads no capability from a header with more than 64, and a released client
   // refuses a host that advertises more than 64.
-  it("keeps the current capabilities within the 64 that a released peer accepts", () => {
-    expect(TEAM_CURRENT_CAPABILITIES).toContain(AGENT_HOST_SETTINGS_CAPABILITY);
-    expect(TEAM_CURRENT_CAPABILITIES.length).toBeLessThanOrEqual(64);
+  it("keeps the protocol 6 lists within the 64 that a released peer accepts", () => {
+    const served = legacyTeamCapabilities(TEAM_CURRENT_CAPABILITIES);
+    expect(served).toContain(AGENT_HOST_SETTINGS_CAPABILITY);
+    expect(new Set(served)).toEqual(new Set(GOAHEAD_PROTOCOL_6_CAPABILITIES));
+    expect(served.length).toBeLessThanOrEqual(64);
+    expect(TEAM_BOOTSTRAP_CAPABILITIES.length).toBeLessThanOrEqual(64);
+    // A released v0.41 host refuses a route whose capability the client did not send.
+    expect(TEAM_BOOTSTRAP_CAPABILITIES).toEqual(expect.arrayContaining([...GOAHEAD_PROTOCOL_6_CAPABILITIES]));
   });
 });
 

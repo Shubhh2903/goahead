@@ -113,4 +113,14 @@ export const messages = defineMessages("onboarding", {
   "onboarding.server.label": "Choose the AI provider of this server",
   "onboarding.server.hint": "The sign-in stays on the server. You can change the provider of each agent later.",
   "onboarding.server.continue": "Continue",
+  "onboarding.wizard.skipStep": "Skip",
+  "onboarding.wizard.skipAll": "Skip setup",
+  "onboarding.wizard.finish": "Finish",
+  "onboarding.wizard.progress": "Setup step {step} of {total}",
+  "onboarding.wizard.connect.title": "Connect Slack and Gmail",
+  "onboarding.wizard.connect.description":
+    "Optional. Your agents can then read and answer your messages and email. You can also do this later in Server settings.",
+  "onboarding.wizard.phone.title": "Connect your phone",
+  "onboarding.wizard.phone.description":
+    "Optional. Scan the code with the GoAhead phone app to talk to your agents from anywhere.",
 });

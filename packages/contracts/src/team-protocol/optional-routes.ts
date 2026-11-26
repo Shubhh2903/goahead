@@ -54,6 +54,7 @@ import { BROWSING_MEMORY_CODECS } from "./browsing-memory-v1";
 import { CACHE_EXPIRY_COMPACTION_CODECS } from "./cache-expiry-compaction-v1";
 import { CHANNEL_FOLDERS_CODECS } from "./channel-folders-v1";
 import { CHAT_COLORS_CODECS } from "./chat-colors-v1";
+import { CHAT_FOLDERS_CODECS } from "./chat-folders-v1";
 import { CHAT_HISTORY_CODECS } from "./chat-history-v1";
 import { CLAUDE_COMPACT_WINDOW_CODECS } from "./claude-compact-window-v1";
 import { CLAUDE_USER_SETUP_CODECS } from "./claude-user-setup-v1";
@@ -256,6 +257,7 @@ const CODECS: ReadonlyMap<string, OptionalRouteCodec> = new Map([
   ...AGENT_NEW_CHAT_CODECS,
   ...AGENT_FOLDERS_CODECS,
   ...CHANNEL_FOLDERS_CODECS,
+  ...CHAT_FOLDERS_CODECS,
   ...AGENT_FAST_MODE_CODECS,
   ...AGENT_SPEED_CODECS,
   ...CONTEXT_COMPACT_CODECS,

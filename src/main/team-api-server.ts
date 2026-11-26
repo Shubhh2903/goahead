@@ -422,6 +422,7 @@ import { routeCacheExpiryCompaction } from "./team-api/route-cache-expiry-compac
 import { routeChannelFolders } from "./team-api/route-channel-folders";
 import { routeChannels } from "./team-api/route-channels";
 import { chatColorsOf, routeChatColors, visibleChatColors } from "./team-api/route-chat-colors";
+import { routeChatFolders } from "./team-api/route-chat-folders";
 import { routeChatHistory } from "./team-api/route-chat-history";
 import { routeClaudeCompactWindow } from "./team-api/route-claude-compact-window";
 import { routeClaudeUserSetup } from "./team-api/route-claude-user-setup";
@@ -1402,6 +1403,7 @@ export class TeamApiServer {
         return;
       if ((await routeChatHistory(context, this.#options.agents, this.#options.channels, hidden)) === "handled") return;
       if ((await routeConversationUnreadFrom(context, this.#options.agents, hidden)) === "handled") return;
+      if ((await routeChatFolders(context, this.#options.sidebarLayout)) === "handled") return;
       if ((await routeAgentMemoryPage(context, this.#options.agents, hidden)) === "handled") return;
       if ((await routeWorkspaceDirectory(context, this.#options.agents, hidden)) === "handled") return;
       if ((await routeConversationFiles(context, this.#options.agents)) === "handled") return;

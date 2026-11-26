@@ -11,6 +11,7 @@ import {
   type CanUseTool,
   createSdkMcpServer,
   type ElicitationResult,
+  type HookCallbackMatcher,
   type ModelInfo,
   type OnElicitation,
   type Options,
@@ -43,6 +44,7 @@ import { Deferred, Effect, Exit, Fiber, Option, Scope } from "effect";
 import { z } from "zod";
 import { advertisedZodShape } from "./agent/advertised-json-schema";
 import { isTurnContextBlock } from "./agent/developer-instructions";
+import { guardedInstall, INSTALL_GUARD_METHOD, type InstallGuardRule } from "./agent/install-guard";
 import {
   type ClaudePlanState,
   foldClaudePlanCall,
@@ -68,6 +70,7 @@ import {
 } from "./agent/subagent-updates";
 import { claudeBridgedToolName, DIRECT_BROWSER_TOOL_DEFINITIONS, visibleToolDefinitions } from "./agent/tool-catalog";
 import { TurnContext } from "./agent/turn-context";
+import { TURN_TOKENS_METHOD } from "./agent/turn-limit";
 import { USAGE_LIMIT_METHOD } from "./agent/usage-limit-gate";
 import {
   type AgentProvider,
@@ -433,6 +436,12 @@ interface ActiveTurn {
   hostRequests: number;
   personRequests: number;
   stopRequested: boolean;
+  /**
+   * GoAhead: the processed tokens of each API message of this turn, by message id, subagents
+   * included. The SDK sends one assistant message per content block, and the blocks of one API
+   * message share its id and usage, so a message counts once, with its last usage.
+   */
+  processedTokens: Map<string, number>;
 }
 
 interface ThreadRuntime {
@@ -475,7 +484,8 @@ const CLAUDE_FAST_SERVICE_TIER = "fast";
 
 const AUTH_STATUS_TIMEOUT_MS = 20_000;
 
-const CLAUDE_THREAD_IDLE_RELEASE_MS = 5 * 60_000;
+/** GoAhead: allow a short follow-up before closing Claude and its MCP servers. The SDK resumes a saved session. */
+const CLAUDE_THREAD_IDLE_RELEASE_MS = 2 * 60_000;
 
 const CLAUDE_IDLE_THREAD_LIMIT = 1;
 
@@ -510,6 +520,14 @@ function startedTaskOrigin(
   const parentOrigin = isString(message.parent_task_id) ? taskTurns.get(message.parent_task_id) : undefined;
   return parentOrigin ?? turn?.id;
 }
+
+/** The usage fields of an API message that the turn limit counts as processed tokens. */
+const CLAUDE_PROCESSED_TOKEN_FIELDS = [
+  "input_tokens",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+  "output_tokens",
+] as const;
 
 interface ClaudeStreamMessage {
   type: string;
@@ -1588,12 +1606,19 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
               ? { settings: flagSettings }
               : {}),
           ...(sandbox && !settingsFile ? { sandbox } : {}),
-          ...(config.workspaceOnly
-            ? {
-                hooks: claudeWorkspaceHooks(config.cwd, config.additionalDirectories, config.excludedFolders),
-                managedSettings: CLAUDE_WORKSPACE_MANAGED_SETTINGS,
-              }
-            : {}),
+          // GoAhead: the install guard is a hook, not `canUseTool`: Claude skips `canUseTool` for a
+          // sandboxed Bash command and for one that a workspace allow rule permits, and the agent can
+          // write that rule. A hook runs in both cases.
+          hooks: {
+            PreToolUse: [
+              ...(config.workspaceOnly
+                ? (claudeWorkspaceHooks(config.cwd, config.additionalDirectories, config.excludedFolders).PreToolUse ??
+                  [])
+                : []),
+              this.#installGuardHook(threadId),
+            ],
+          },
+          ...(config.workspaceOnly ? { managedSettings: CLAUDE_WORKSPACE_MANAGED_SETTINGS } : {}),
           ...(plugins.length ? { plugins } : {}),
           mcpServers,
           env: {
@@ -1606,7 +1631,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
             CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
             // A per-agent compact window: Claude Code summarizes the conversation sooner, so each model
             // call reads less context. Claude Code clamps it to the model window.
-            ...(config.compactWindow === null ? {} : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(config.compactWindow) }),
+            ...claudeCompactWindowEnvironment(config.compactWindow),
             ...(handoff ? { CLAUDE_CODE_TERMINAL_MCP_TOOLS: claudeTerminalTools(config.channelTools).join(",") } : {}),
           },
         },
@@ -1810,6 +1835,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
       personRequests: 0,
       stopRequested: false,
       preview: { timer: null, sentAt: 0, shown: false },
+      processedTokens: new Map<string, number>(),
     };
     const continues =
       unprompted && !runtime.endedTaskTurns.includes(null) ? runtime.endedTaskTurns.filter(isString) : [];
@@ -2171,6 +2197,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     }
 
     if (message.type === "assistant" && message.parent_tool_use_id && message.uuid) {
+      this.#recordProcessedTokens(runtime, message.message);
       if (message.error === "rate_limit") this.#holdSubagentLimit(runtime, message);
       this.#emitSubagents(
         runtime,
@@ -2179,6 +2206,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
       return;
     }
     if (message.type === "assistant") {
+      this.#recordProcessedTokens(runtime, message.message);
       if (message.parent_tool_use_id !== null || !message.uuid || isClaudeNoResponsePlaceholder(message.message))
         return;
       const turn = this.#outputTurn(runtime);
@@ -2457,6 +2485,31 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     });
   }
 
+  /**
+   * GoAhead: reports the processed tokens of the turn so far after an assistant message, for the turn
+   * limit. The result message reports usage only at the end of the turn. A message with no usage
+   * reports nothing.
+   */
+  #recordProcessedTokens(runtime: ThreadRuntime, apiMessage: unknown): void {
+    const turn = runtime.activeTurn;
+    if (!turn || !isDynamicRecord(apiMessage) || !isString(apiMessage.id)) return;
+    const usage = apiMessage.usage;
+    if (!isDynamicRecord(usage)) return;
+    const tokens = CLAUDE_PROCESSED_TOKEN_FIELDS.reduce((sum, field) => {
+      const value = usage[field];
+      return isNumber(value) && Number.isFinite(value) && value > 0 ? sum + value : sum;
+    }, 0);
+    const previous = turn.processedTokens.get(apiMessage.id);
+    if (previous !== undefined && previous >= tokens) return;
+    turn.processedTokens.set(apiMessage.id, tokens);
+    let processedTokens = 0;
+    for (const value of turn.processedTokens.values()) processedTokens += value;
+    this.emit("notification", {
+      method: TURN_TOKENS_METHOD,
+      params: { threadId: runtime.id, turnId: turn.id, processedTokens },
+    });
+  }
+
   #emitToolCall(
     runtime: ThreadRuntime,
     id: string,
@@ -2611,7 +2664,7 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
    */
   #schedulePreview(runtime: ThreadRuntime): void {
     const turn = runtime.activeTurn;
-    if (!turn || turn.preview.timer) return;
+    if (!turn || turn.preview.timer || turn.stopRequested) return;
     const delay = Math.max(0, turn.preview.sentAt + TEXT_PREVIEW_INTERVAL_MS - Date.now());
     turn.preview.timer = setTimeout(() => {
       turn.preview.timer = null;
@@ -3052,6 +3105,55 @@ export class ClaudeAgentClient extends EventEmitter<ClientEvents> {
     return { behavior: "deny", message: "The user did not allow this write outside the workspace." };
   });
 
+  /**
+   * The `PreToolUse` hook that holds a Bash command that can install gigabytes until the host
+   * answers. The host answers at once when the person allowed the rule for this agent, and asks the
+   * person at this computer otherwise: auto approve and Turbo do not answer it. Any other command
+   * gets no decision. A Stop aborts `signal`; the host then removes the card, and the command is
+   * denied.
+   */
+  #installGuardHook(threadId: string): HookCallbackMatcher {
+    return {
+      matcher: "Bash",
+      hooks: [
+        async (input, _toolUseId, { signal }) => {
+          if (input.hook_event_name !== "PreToolUse" || input.tool_name !== "Bash") return {};
+          const command = isRecord(input.tool_input) ? input.tool_input.command : null;
+          const rule = isString(command) ? guardedInstall(command) : null;
+          if (!isString(command) || !rule) return {};
+          const accepted = await runCauseEffect(
+            this.#requestInstall(threadId, command, rule, signal).pipe(Effect.orElseSucceed(() => false)),
+          );
+          return {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: accepted ? "allow" : "deny",
+              ...(accepted ? {} : { permissionDecisionReason: sourceText("status.agent.installGuardDenied") }),
+            },
+          };
+        },
+      ],
+    };
+  }
+
+  readonly #requestInstall = Effect.fn("ClaudeAgentClient.requestInstall")(function* (
+    this: ClaudeAgentClient,
+    threadId: string,
+    command: string,
+    rule: InstallGuardRule,
+    signal: AbortSignal,
+  ) {
+    const result = yield* this.#awaitPerson(
+      threadId,
+      this.#serverRequests.call(
+        INSTALL_GUARD_METHOD,
+        { threadId, turnId: this.#threads.get(threadId)?.activeTurn?.id ?? randomUUID(), command, rule },
+        signal,
+      ),
+    );
+    return isRecord(result) && result.decision === "accept";
+  });
+
   #requireThread(threadId: string): ThreadRuntime {
     const runtime = this.#threads.get(threadId);
     if (!runtime) throw new Error(`Unknown Claude thread: ${threadId}`);
@@ -3469,6 +3571,17 @@ function readThreadConfig(params: unknown): ThreadConfig {
     agentId: mcpAgentParam(params),
     toolProfile: isRecord(params) && params.toolProfile === "slack-reply" ? "slack-reply" : "full",
   };
+}
+
+/**
+ * The thread part of the Claude compact window order: the agent's own window, put after the client
+ * environment, wins. With none, the client environment keeps the host setting, or
+ * `DEFAULT_COMPACT_WINDOW` (`claudeAgentEnvironment` in `provider-drivers.ts`).
+ */
+export function claudeCompactWindowEnvironment(agentWindow: number | null): {
+  CLAUDE_CODE_AUTO_COMPACT_WINDOW?: string;
+} {
+  return agentWindow === null ? {} : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(agentWindow) };
 }
 
 function compactWindowParam(params: unknown): number | null {

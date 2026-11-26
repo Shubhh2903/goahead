@@ -46,6 +46,7 @@ import { desktopProviderDetectionCalls } from "./features/custom-providers/custo
 import { useProviderDetection } from "./features/custom-providers/provider-detection-context";
 import { createProviderDetectionStore } from "./features/custom-providers/stores/provider-detection-store";
 import type { ServerStorageOptions } from "./features/files/ServerStoragePanel";
+import { FirstRunWizard } from "./features/onboarding/FirstRunWizard";
 import { useSetup } from "./features/onboarding/onboarding-context";
 import { useRemoteDesktop } from "./features/remote-desktop/remote-desktop-context";
 import { desktopScheduleSource } from "./features/schedule/schedule-port";
@@ -867,141 +868,145 @@ function ServerSettings() {
   });
 
   return (
-    <Show when={serverSettingsTarget()}>
-      {(server) => (
-        <ServerSettingsOverlay
-          open={serverSettingsOpen() && windowPage.settingsPlacement("server") !== undefined}
-          page={windowPage.settingsPlacement("server")}
-          sectionQuery={windowPage.serverSettingsQuery()}
-          openFirstSectionRequest={windowPage.openFirstServerSectionRequest()}
-          onFirstSectionOpened={() => windowPage.setServerSettingsQuery("")}
-          onOpenMarketplaceApps={
-            server().id === activeServer()?.id
-              ? () => {
-                  windowPage.setServerSettingsQuery("");
-                  setPendingPluginConnect(false);
-                  setPendingPluginSlug(null);
-                  setSkillsMarketplaceOpen(true);
-                }
-              : undefined
-          }
-          restoreFocusTarget={serverSettingsRestoreTarget()}
-          platform={platform.appInfo()?.platform ?? "darwin"}
-          server={server()}
-          hostStatus={server().kind === "local" ? hostStatus() : null}
-          members={serverSettingsMembers()}
-          invites={serverSettingsInvites()}
-          loading={serverSettingsLoading()}
-          loadError={serverSettingsError()}
-          onRetry={() => refreshServerSettings(server().id)}
-          onSaveIdentity={saveServerIdentity}
-          onSaveAppearance={saveServerAppearance}
-          onSetPublished={setServerPublished}
-          onRotateHostKey={serverRotatesHostKey(server()) ? rotateHostKey : undefined}
-          onCreateInvite={createServerInvite}
-          license={appPort().license}
-          companySignIn={appPort().auth}
-          ownerTransfer={
-            server().kind === "remote" &&
-            server().hosted !== true &&
-            hostedServersLoaded() &&
-            !hostedServerIds().has(server().id) &&
-            serverSupportsCapability(server(), OWNER_TRANSFER_CAPABILITY)
-              ? appPort().servers
-              : undefined
-          }
-          onContactUs={() => void appPort().openExternal("hosted-server-contact")}
-          onUpdateMember={updateServerMember}
-          onRemoveMember={removeServerMember}
-          onRevokeInvite={revokeServerInvite}
-          onLeaveServer={leaveServer}
-          onRemoveServer={hostedServersLoaded() && !hostedServerIds().has(server().id) ? leaveServer : undefined}
-          onOpenScreenRecordingSettings={() => appPort().openExternal("mac-screen-recording")}
-          onRecheckScreenRecording={recheckScreenRecording}
-          storage={storageOptions(server())}
-          providers={providerSettings(server())}
-          onSwitchToManageProviders={
-            !server().active && serverCanAdminister(server(), "providers-v1")
-              ? () => switchToManageProviders(server())
-              : undefined
-          }
-          hostedSites={
-            serverSupportsCapability(server(), "hosted-sites-v1")
-              ? {
-                  api: appPort().hostedSites,
-                  onOpenSite: (url) => void appPort().openUrl(url),
-                  trackDelete: trackHostedSiteDelete,
-                  onSeePlans: canOfferServerPlans(server()) ? openServerPlans : undefined,
-                }
-              : undefined
-          }
-          hostUpdate={{}}
-          hostTimezone={{}}
-          hostVoiceModel={{}}
-          hostSignalHome={{}}
-          hostTurnLimits={{}}
-          hostPersonality={{}}
-          hostMemoryLimit={{}}
-          memoryReview={{}}
-          skillLearning={{}}
-          browsingMemory={{}}
-          hostPromptCacheTtl={{}}
-          claudeUserSetup={{}}
-          claudeCompactWindow={{}}
-          providerEnvironment={{}}
-          hostModelVisibility={{}}
-          hostDefaultProvider={{}}
-          agentAccess={{ listAgents: () => appPort().agent.listAgents(server().id) }}
-          serverAudit={{ listAgents: () => appPort().agent.listAgents(server().id) }}
-          agentDefaults={{ listAgents: () => appPort().agent.listAgents(server().id) }}
-          initialSection={serverSettingsSection()}
-          initialSectionRequest={serverSettingsOpenRequest()}
-          onSectionChange={setServerSettingsShownSection}
-          agentImport={
-            serverSupportsCapability(server(), "agent-import-v1")
-              ? {
-                  onOpenAgent: (agentId) => openOnServer(server(), agentId, () => selectAgent(agentId)),
-                  onClose: () => setServerSettingsOpen(false),
-                }
-              : undefined
-          }
-          instanceTransfer={
-            server().kind === "local"
-              ? {
-                  onSignIn: (provider) => void connection.connect(provider),
-                  history: true,
-                  fullCopy: true,
-                  copy: copyOptions(),
-                }
-              : serverCanAdminister(server(), "instance-transfer-v1")
-                ? // Only the transfer in parts carries the chat history; the full copy chooses each part.
-                  {
-                    history: serverCanAdminister(server(), "instance-transfer-chunks-v1"),
-                    fullCopy:
-                      serverCanAdminister(server(), "instance-transfer-chunks-v1") &&
-                      serverCanAdminister(server(), "instance-transfer-full-copy-v1"),
-                    copy: copyOptions(),
+    <>
+      {/* First-run setup shows this computer's Google and Slack connections, the ones made here. */}
+      <FirstRunWizard google={google} slack={slack} />
+      <Show when={serverSettingsTarget()}>
+        {(server) => (
+          <ServerSettingsOverlay
+            open={serverSettingsOpen() && windowPage.settingsPlacement("server") !== undefined}
+            page={windowPage.settingsPlacement("server")}
+            sectionQuery={windowPage.serverSettingsQuery()}
+            openFirstSectionRequest={windowPage.openFirstServerSectionRequest()}
+            onFirstSectionOpened={() => windowPage.setServerSettingsQuery("")}
+            onOpenMarketplaceApps={
+              server().id === activeServer()?.id
+                ? () => {
+                    windowPage.setServerSettingsQuery("");
+                    setPendingPluginConnect(false);
+                    setPendingPluginSlug(null);
+                    setSkillsMarketplaceOpen(true);
                   }
                 : undefined
-          }
-          googleConnector={server().kind === "local" && google.status().available ? google : undefined}
-          slackConnector={server().kind === "local" ? slack : undefined}
-          connectorAgents={agentList()}
-          routineFeed={
-            server().kind === "local"
-              ? { api: appPort().routineFeed, listAgents: () => appPort().agent.listAgents(server().id) }
-              : undefined
-          }
-          browserProfiles={
-            serverCanAdminister(server(), BROWSER_PROFILES_CAPABILITY)
-              ? { store: browserProfiles(), listAgents: () => appPort().agent.listAgents(server().id) }
-              : undefined
-          }
-          vault={vault()}
-          crm={desktopCrmHost(server().id)}
-        />
-      )}
-    </Show>
+            }
+            restoreFocusTarget={serverSettingsRestoreTarget()}
+            platform={platform.appInfo()?.platform ?? "darwin"}
+            server={server()}
+            hostStatus={server().kind === "local" ? hostStatus() : null}
+            members={serverSettingsMembers()}
+            invites={serverSettingsInvites()}
+            loading={serverSettingsLoading()}
+            loadError={serverSettingsError()}
+            onRetry={() => refreshServerSettings(server().id)}
+            onSaveIdentity={saveServerIdentity}
+            onSaveAppearance={saveServerAppearance}
+            onSetPublished={setServerPublished}
+            onRotateHostKey={serverRotatesHostKey(server()) ? rotateHostKey : undefined}
+            onCreateInvite={createServerInvite}
+            license={appPort().license}
+            companySignIn={appPort().auth}
+            ownerTransfer={
+              server().kind === "remote" &&
+              server().hosted !== true &&
+              hostedServersLoaded() &&
+              !hostedServerIds().has(server().id) &&
+              serverSupportsCapability(server(), OWNER_TRANSFER_CAPABILITY)
+                ? appPort().servers
+                : undefined
+            }
+            onContactUs={() => void appPort().openExternal("hosted-server-contact")}
+            onUpdateMember={updateServerMember}
+            onRemoveMember={removeServerMember}
+            onRevokeInvite={revokeServerInvite}
+            onLeaveServer={leaveServer}
+            onRemoveServer={hostedServersLoaded() && !hostedServerIds().has(server().id) ? leaveServer : undefined}
+            onOpenScreenRecordingSettings={() => appPort().openExternal("mac-screen-recording")}
+            onRecheckScreenRecording={recheckScreenRecording}
+            storage={storageOptions(server())}
+            providers={providerSettings(server())}
+            onSwitchToManageProviders={
+              !server().active && serverCanAdminister(server(), "providers-v1")
+                ? () => switchToManageProviders(server())
+                : undefined
+            }
+            hostedSites={
+              serverSupportsCapability(server(), "hosted-sites-v1")
+                ? {
+                    api: appPort().hostedSites,
+                    onOpenSite: (url) => void appPort().openUrl(url),
+                    trackDelete: trackHostedSiteDelete,
+                    onSeePlans: canOfferServerPlans(server()) ? openServerPlans : undefined,
+                  }
+                : undefined
+            }
+            hostUpdate={{}}
+            hostTimezone={{}}
+            hostVoiceModel={{}}
+            hostSignalHome={{}}
+            hostTurnLimits={{}}
+            hostPersonality={{}}
+            hostMemoryLimit={{}}
+            memoryReview={{}}
+            skillLearning={{}}
+            browsingMemory={{}}
+            hostPromptCacheTtl={{}}
+            claudeUserSetup={{}}
+            claudeCompactWindow={{}}
+            providerEnvironment={{}}
+            hostModelVisibility={{}}
+            hostDefaultProvider={{}}
+            agentAccess={{ listAgents: () => appPort().agent.listAgents(server().id) }}
+            serverAudit={{ listAgents: () => appPort().agent.listAgents(server().id) }}
+            agentDefaults={{ listAgents: () => appPort().agent.listAgents(server().id) }}
+            initialSection={serverSettingsSection()}
+            initialSectionRequest={serverSettingsOpenRequest()}
+            onSectionChange={setServerSettingsShownSection}
+            agentImport={
+              serverSupportsCapability(server(), "agent-import-v1")
+                ? {
+                    onOpenAgent: (agentId) => openOnServer(server(), agentId, () => selectAgent(agentId)),
+                    onClose: () => setServerSettingsOpen(false),
+                  }
+                : undefined
+            }
+            instanceTransfer={
+              server().kind === "local"
+                ? {
+                    onSignIn: (provider) => void connection.connect(provider),
+                    history: true,
+                    fullCopy: true,
+                    copy: copyOptions(),
+                  }
+                : serverCanAdminister(server(), "instance-transfer-v1")
+                  ? // Only the transfer in parts carries the chat history; the full copy chooses each part.
+                    {
+                      history: serverCanAdminister(server(), "instance-transfer-chunks-v1"),
+                      fullCopy:
+                        serverCanAdminister(server(), "instance-transfer-chunks-v1") &&
+                        serverCanAdminister(server(), "instance-transfer-full-copy-v1"),
+                      copy: copyOptions(),
+                    }
+                  : undefined
+            }
+            googleConnector={server().kind === "local" && google.status().available ? google : undefined}
+            slackConnector={server().kind === "local" ? slack : undefined}
+            connectorAgents={agentList()}
+            routineFeed={
+              server().kind === "local"
+                ? { api: appPort().routineFeed, listAgents: () => appPort().agent.listAgents(server().id) }
+                : undefined
+            }
+            browserProfiles={
+              serverCanAdminister(server(), BROWSER_PROFILES_CAPABILITY)
+                ? { store: browserProfiles(), listAgents: () => appPort().agent.listAgents(server().id) }
+                : undefined
+            }
+            vault={vault()}
+            crm={desktopCrmHost(server().id)}
+          />
+        )}
+      </Show>
+    </>
   );
 }
 

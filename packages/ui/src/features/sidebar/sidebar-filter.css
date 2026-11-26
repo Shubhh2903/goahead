@@ -50,3 +50,13 @@
   margin: 0;
   padding: 0;
 }
+
+/*
+ * A long chat list uses less CPU: the browser does not draw a row that is off screen. Each row has a
+ * fixed height (62px in app-shell.css), so the size it keeps off screen is the size it has on screen,
+ * and a drag measures the same positions.
+ */
+.sidebar-section-body .agent-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 62px;
+}

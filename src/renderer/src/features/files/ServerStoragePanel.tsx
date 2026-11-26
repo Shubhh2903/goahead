@@ -4,11 +4,12 @@ import {
   type RemovableRuntimes,
   type StorageDisk,
   type TeamMemberSummary,
+  type UnassignedFolder,
 } from "@openbot/contracts/ipc";
 import { MachineResources } from "@openbot/ui/features/files/MachineResources";
 import { StorageOverview } from "@openbot/ui/features/files/StorageOverview";
 import { BackgroundProcessesSection } from "@openbot/ui/features/settings/BackgroundProcessesSection";
-import { createEffect, createSignal, Show } from "solid-js";
+import { createEffect, createSignal, Show, untrack } from "solid-js";
 import { type FilesPort, filesPort } from "./files-port";
 import { createMachineResources } from "./machine-resources";
 import { createServerBackgroundProcesses } from "./server-background-processes";
@@ -108,6 +109,38 @@ export function ServerStoragePanel(
 
   const usage = () => storage.state.usage;
 
+  // Folders with no agent are paths on this computer: only the local host lists them, and only
+  // where the port can move one to the Trash.
+  const folderCalls = () => {
+    const { listUnassignedFolders, trashUnassignedFolder } = calls().storage;
+    return props.serverId === LOCAL_SERVER_ID && listUnassignedFolders && trashUnassignedFolder
+      ? { list: listUnassignedFolders, trash: trashUnassignedFolder }
+      : null;
+  };
+  const [folders, setFolders] = createSignal<UnassignedFolder[]>([]);
+  // Read again after each scan; the host answers from the same scan, so this is quick.
+  createEffect(
+    () => usage()?.scannedAt ?? null,
+    (scannedAt) => {
+      let current = true;
+      const port = untrack(folderCalls);
+      if (!scannedAt || !port) setFolders([]);
+      else
+        port
+          .list()
+          .then((list) => {
+            if (current) setFolders(list);
+          })
+          // The section only hides; the storage read reports its own failure.
+          .catch(() => {
+            if (current) setFolders([]);
+          });
+      return () => {
+        current = false;
+      };
+    },
+  );
+
   return (
     <StorageOverview
       hostName={props.hostName}
@@ -132,6 +165,19 @@ export function ServerStoragePanel(
       runtimeBytes={runtimes() ? removableRuntimes().bytes : 0}
       runtimeProviders={removableRuntimes().providers}
       onRemoveRuntimes={removeRuntimes}
+      unassignedFolders={folders()}
+      onTrashFolder={
+        folderCalls()
+          ? async (path) => {
+              try {
+                await folderCalls()?.trash({ path });
+              } finally {
+                await storage.refresh(true);
+              }
+            }
+          : undefined
+      }
+      // Settings has no preview pane, so a preview opens the file in its app.
       onPreviewFile={(file) => void storage.fileAction(file, "open", { onShowInChat: () => undefined })}
       machine={
         <>

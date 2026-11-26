@@ -957,6 +957,11 @@ export class ProviderRuntime implements ProviderPort {
     return fresh;
   }).bind(this);
 
+  /** GoAhead: whether the provider's own CLI listed its models now in the catalogue, at its last read. */
+  hasListedCatalog(provider: AgentProvider): boolean {
+    return this.#modelCatalog.hasListed(provider);
+  }
+
   createProfileClient(provider: AgentProvider, accountId?: string): AgentClient {
     return this.#sideClient(provider, accountId, "profile");
   }

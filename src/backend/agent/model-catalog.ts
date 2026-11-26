@@ -40,6 +40,12 @@ export class ModelCatalog {
   #models = withPublicIds(structuredClone(FALLBACK_MODELS));
   readonly #sources = new Map<AgentProvider, ProviderModelSource>();
   readonly #startSettings = new WeakMap<AgentClient, string>();
+  /**
+   * GoAhead: the providers whose models in `#models` their CLI listed, and whose last list read did
+   * not fail. The others hold `FALLBACK_MODELS` or a list kept after a failed read, which the CLI may
+   * not serve. "Choose model automatically" picks a small model only from a listed catalogue.
+   */
+  readonly #listedCatalogs = new Set<AgentProvider>();
 
   constructor(options: ModelCatalogOptions) {
     this.#options = options;
@@ -47,6 +53,11 @@ export class ModelCatalog {
 
   list(): AgentModelOption[] {
     return structuredClone(this.#models);
+  }
+
+  /** Whether the provider's own CLI listed its models now in the catalogue, at its last read. */
+  hasListed(provider: AgentProvider): boolean {
+    return this.#listedCatalogs.has(provider);
   }
 
   source(provider: AgentProvider): ProviderModelSource | undefined {
@@ -153,7 +164,9 @@ export class ModelCatalog {
           const signedOut = this.#options.isSignedOut(provider);
           if (catalog.hiddenWhenSignedOut && signedOut && !client)
             return { provider, models: [], fresh: false, timedOut: false, failed: false };
-          if (!client) return { provider, models: previous, fresh: false, timedOut: false, failed: false };
+          // Not read at all: the list stays what it was, and so does where it came from.
+          if (!client)
+            return { provider, models: previous, fresh: false, timedOut: false, failed: false, unread: true };
           const startedAt = performance.now();
           return yield* Effect.gen({ self: this }, function* () {
             const [{ models: sorted, listed }, sourceChanged] = yield* Effect.all(
@@ -200,6 +213,10 @@ export class ModelCatalog {
       { concurrency: "unbounded" },
     );
     this.#models = withPublicIds(discovered.flatMap((entry) => entry.models));
+    for (const entry of discovered) {
+      if (entry.fresh) this.#listedCatalogs.add(entry.provider);
+      else if (!("unread" in entry)) this.#listedCatalogs.delete(entry.provider);
+    }
     return {
       fresh: new Set(discovered.filter((entry) => entry.fresh).map((entry) => entry.provider)),
       timedOut: timeouts,
@@ -241,6 +258,7 @@ export class ModelCatalog {
         id === provider ? models : current.filter((model) => model.provider === id),
       ),
     );
+    this.#listedCatalogs.add(provider);
     return true;
   });
 }

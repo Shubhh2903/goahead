@@ -6,6 +6,191 @@ All notable changes to OpenBot will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-11-26
+
+### Added
+
+- A turn now stops after 40 tool calls or about 3 million processed tokens, whichever comes first.
+  This applies to every turn: yours, an agent's, a routine's, a channel's and Slack's. A card appears
+  in the chat. Allow sends a "Continue" message to the same chat, channel task or Slack thread, and
+  the work starts again there. Allow sends nothing when that place already has a running turn or a
+  waiting message, or cannot take a message now. Deny keeps the turn stopped. A turn that you stop
+  gets no card. You answer the card on this computer only.
+- Grok and the other ACP providers do not send a token count. For them, only the tool-call limit
+  applies. After an app restart, GoAhead does not count the first Codex model call of a turn. An
+  open card does not stay after a restart.
+- Agent settings has a new "Turn limit" setting: 40 tool calls (default), 100, 200 or Off. The token
+  limit grows with it: 3 million, 7.5 million or 15 million. The setting stays on this computer.
+- GoAhead now asks before an agent runs a command that installs large tools: creating a simulator or
+  adding a simulator runtime, `xcodebuild -downloadPlatform` or `-downloadAllPlatforms`, `sdkmanager`
+  installs, `avdmanager create`, `pod install` and `pod repo update`. A card shows the command. You
+  answer it on this computer only. Allow lasts 60 minutes for that agent and that kind of command.
+- On Claude, the card appears before the command runs. On Codex, Grok and the other ACP providers,
+  GoAhead stops the turn when the command starts, so the command can start before the stop. Check
+  the Trash and disk space if you do not want a large download.
+- Settings > Storage now lists folders in the Agents folder that no agent in this GoAhead profile
+  uses, when a folder is 1 GB or more. Other GoAhead profiles and OpenBot installs on this Mac use the
+  same Agents folder, so GoAhead lists a folder only when no file in it changed in the last 7 days.
+  It warns when the listed folders use 5 GB or more in total. Move to Trash, with a confirmation,
+  puts a folder in the Trash, and you can put it back from there. GoAhead does not list, and does not
+  move, an agent's workspace or project folder, a folder that holds one, a folder that has the name
+  of an agent of this profile, an unfinished copy, or a folder that is too large to read to the end.
+  This works on this computer only.
+- The "Agent workspaces" total in Settings > Storage now also counts the folders and files in the
+  Agents folder that no agent uses. A joined server's Storage tab shows the same larger total.
+- Agents have a tool to reserve the shared mobile QA device. Only one agent holds it at a time, and
+  the reservation ends after 30 minutes unless the agent reserves it again.
+
+### Changed
+
+- **After this update, every agent stops a turn after 40 tool calls and asks you to continue,
+  compacts its conversation at 120,000 tokens, and runs turns from a teammate or a routine on the
+  smaller model. You do not have to do anything. To keep the old behavior for an agent with long
+  unattended work, open its settings and set "Turn limit" to Off, "Compact early" to 200,000, and
+  turn off "Use the smaller model for teammate and routine turns".**
+- If you go back to v0.40, these three settings return to their v0.40 defaults. No data is lost.
+- Claude and Codex agents now compact their conversation at 120,000 tokens by default. The "Compact
+  early" setting offers 80,000, 120,000 and 200,000. There is no "Off" option now. Codex also
+  compacts in the middle of a turn.
+- Claude releases an idle agent process after 2 minutes. Before, it waited 10 minutes. The agent
+  keeps its chat, workspace and session.
+- A new agent that you create with a role now receives the role as its instructions and "Greet me
+  briefly." as its first message. This applies on desktop and on the web.
+- Agents get shorter instructions about their scope and shorter answers by default.
+- A turn that a teammate or a routine starts now runs on the provider's smaller model, such as
+  Claude Sonnet, when the agent uses a larger model. Its effort is the agent's effort, but not more
+  than medium. A turn with a message from you, or from a person in Slack, keeps the agent's model.
+  The answer shows "Answered by" with the model name. Agent settings has a new switch for this, "Use
+  the smaller model for teammate and routine turns". It is on by default and stays on this computer.
+- A teammate's answer to a request that an agent sent uses the model rule of the turn that sent the
+  request. When you started that turn, the answer turn keeps the agent's model. When a teammate or a
+  routine started it, the answer turn can use the smaller model.
+- When you allow a turn to continue after a turn limit or an install card, the continued turn uses
+  the same model as the stopped turn: the smaller model for a teammate or routine turn, and the
+  agent's model for your turn. This applies in the chat, in a channel and in Slack. After an app
+  restart, a "Continue" message that still waits counts as your message.
+- A scheduled routine run that is skipped again for the same reason, such as a run condition that
+  finds no change, now adds no new "Cancelled routine" row to the chat. The routine history keeps
+  each run, and the Usage tab still counts each skipped run. A new row appears when the reason
+  changes or after a run that was not skipped. One exception: a run that the plan limit skips adds
+  no row when the run before it was cancelled with no reason, for example a run that you cancelled.
+- A routine can now run one time. On desktop, choose "Once" and a date and time in the schedule
+  picker, or ask an agent for a one-time routine. The routine runs at that time. If GoAhead was
+  closed then, a routine set to run missed times once runs one time when GoAhead opens; other
+  routines record the time as missed. Then the routine turns off and shows "Done". A run that waits
+  for the plan reset keeps the routine on until the run ends.
+- When a one-time routine cannot run at its time, because an earlier run of it is still in progress,
+  or because the plan limit is reached and the routine skips runs then, GoAhead records the time as
+  a cancelled run with the reason. The chat shows the row, and the routine turns off.
+- The phone app cannot create a one-time routine. This includes the v0.40 phone app.
+- GoAhead keeps a one-time routine as an interval of 100,000 days that starts at its time. The v0.40
+  desktop app shows it as "Every 100000 days". The v0.40 phone app shows it as the custom schedule
+  `0 0 */31 * *` with its note that the schedule is kept. Both keep the schedule when you do not
+  change it. A v0.40 host runs the routine one time, but does not turn it off: it shows a next time
+  about 270 years later. A v0.40 host does not refuse a time that has passed. A routine with such a
+  time never runs.
+- An agent that you install from the marketplace or from a template keeps the time of its one-time
+  routines. When that time has passed, GoAhead installs the routine off, with its time kept, and the
+  install continues. An imported agent or channel archive does the same.
+
+## [0.40.0] - 2026-11-25
+
+### Added
+
+- Agent settings have a new "Choose model automatically" switch for Claude and ChatGPT agents. It is
+  off for every agent until you turn it on, and it stays on this computer: a remote host does not get
+  it.
+- When it is on, a short chat message from you, with no attachments and no work words such as "fix"
+  or "plan", can run on the provider's cheaper model (Claude Sonnet 5.5 or GPT-6 Luna) at low effort.
+  Longer messages, attachments, routines, teammate messages and Slack or channel work keep the
+  agent's own model.
+- The switch happens only from a larger model: Opus or Fable on Claude, and Sol, Terra or Astra on
+  ChatGPT.
+- It happens only when the conversation has been quiet for 5 minutes, or when the cheaper model
+  answered just before.
+- The first turn on the other model reads the conversation without the provider's cache, so that
+  turn can cost more than usual.
+- The agent keeps its chat, workspace and session. The answer shows "Answered by" and the model name
+  when the cheaper model answered.
+- Settings > General has a new Backdrop row. Choose an animated scene (Koi pond, Jellyfish, Retro
+  sunset, Snowfall or Fireflies) or upload your own image or video to show behind the whole window.
+  Images can be PNG, JPEG, GIF, WebP or AVIF up to 20 MB. Videos can be MP4 or WebM up to 100 MB,
+  and play muted in a loop. GoAhead keeps up to 12 uploads on this computer, and an update keeps
+  them.
+- Scenes and videos stand still when the system asks for less motion, and stop while the window is
+  hidden.
+- Three new avatar shapes: ghost, jellyfish and octopus. Existing agents keep their shape. An older
+  GoAhead version shows a similar shape with the same eyes.
+- Put sidebar folders inside folders, three levels deep. A folder menu has "New folder inside" and
+  "Move to". A folder in a folder shows its path, such as "Work / Product". This works on your own
+  computer; a joined server keeps a flat list of folders.
+- Filter the chat list with the new filter button beside New: only agents or only channels, only
+  unread chats or chats with an agent at work, and only the chats in the folders you select. Rows do
+  not drag while a filter is set.
+- A first-run setup wizard for new users: sign in to Claude or ChatGPT, create the first agent, connect Slack and Gmail if you want, and scan a QR code to connect your phone. You can skip each step, or the whole wizard. After you finish or skip it, it does not show again. Existing users do not see it.
+- Settings has a new Keyboard tab. It shows the keyboard shortcuts, and you can change or reset
+  each one. The changes apply to this computer only. The tab refuses a key with no modifier, a key
+  that the system uses, and a key that another command uses.
+- New shortcuts: Cmd+Shift+E (Ctrl+Shift+E) adds an agent, Cmd+B (Ctrl+B) shows or hides the
+  sidebar, and Cmd+/ (Ctrl+/) opens the Keyboard tab.
+- Agents on all providers can ask a question that takes more than one answer. You tick the answers
+  in the question card and select Submit answer. In a channel, the question still shows as single
+  choice. Lock-screen and notification buttons do not answer a question that takes more than one
+  answer: open the chat to answer it.
+- Routine run conditions have a "Use a template" menu. Pick "A new git commit", "A new file in a
+  folder", "A web page changed" or "A file exists", and the command is filled in for you. GoAhead
+  asks for the folder, address or path first and quotes it safely.
+- Sort the sidebar chats by "Recent activity": each folder shows its most recent chat first. Pins
+  and "Needs you" stay on top, and your manual order does not change. Choose it in "Sort chats"
+  (right-click the free part of the chat list). While "Recent activity" is on, you cannot drag a chat
+  to reorder or pin it.
+- Settings > Providers has an "Update all" button. It shows when one or more providers have an update.
+  It starts each update once, and it shows the result for each provider. A failure on one provider does
+  not stop the others. On a joined server, it works for an owner or admin of that server.
+- When GoAhead waits for the agents to become idle before it installs an update or restarts,
+  Settings > Updates now has a "Restart now" button. A confirm tells you that agent turns and routine
+  runs that did not finish stop now. "Keep waiting" keeps the wait.
+- Settings has a new Usage tab. It shows the tokens that the agents on this computer used in the last
+  7 or 30 days: the total, cached input against uncached input, the top agents, and the tokens per
+  day for each agent and provider. Days follow your time zone.
+- The Usage tab also counts the scheduled routine runs that a run condition skipped. These runs used
+  no tokens.
+- The Usage tab shows only this computer. A joined server shows its usage in its own usage report.
+- The Usage tab lists each agent that has a weekly token budget, with the tokens of this week, the budget
+  and the percent used. Agents over the budget come first and show "Over budget"; agents at 80% or more
+  show "Near budget". The week starts on Monday at 00:00, as for the budget alert.
+
+### Changed
+
+- Sidebar sections are now called folders. When you delete a folder, its chats and folders move up one
+  level. No agent or channel is deleted.
+- A long chat list uses less CPU: the sidebar does not draw the rows that are off screen.
+- Hand-offs between agents use fewer turns. When an agent sends requests to several teammates in one
+  turn, their answers come back together in one turn, not one turn for each answer. An answer waits
+  at most 5 minutes for the slower teammates of the same turn, and it does not wait for a teammate
+  whose plan limit is used up. A message from you still takes the answers that are in with it.
+- Search everything (Cmd+K) and search in chat (Cmd+F) now use the shortcuts that you set in
+  Settings > Keyboard. A changed search shortcut does not work while the built-in browser has focus.
+- On macOS, Ctrl+K and Ctrl+F no longer open search. Use Cmd+K and Cmd+F.
+- GoAhead now updates the provider CLIs that it downloaded by itself to the version that this GoAhead
+  release ships with, at start and then each hour. It does not install a newer upstream release by
+  itself: that stays an "Update available" offer. It starts only when the agents of that provider are
+  idle. It downloads the new CLI first; new messages to that provider wait only for the short switch to
+  the new CLI, not for the download.
+  A CLI that you installed yourself and a CLI with a custom path are not changed. If you cancel an
+  automatic update, GoAhead does not start it again until GoAhead restarts.
+
+### Fixed
+
+- A teammate's answer longer than 100,000 characters no longer gets lost. The requesting agent gets
+  a shortened copy, and the full answer stays in the teammate's conversation.
+- A message that you send to a busy Claude agent now reaches it while a tool or a subagent runs. Before,
+  the agent read the message only after the tool was done. A message that you send while the agent
+  waits for your answer to a question or an approval still waits for that answer.
+- Stop now ends a Claude chat that stays "working" after Claude has stopped. The next message in the
+  queue then runs. Stop also removes the live text preview at once.
+- For a Claude agent on a joined server, that server must also run v0.40 to get these fixes.
+
 ## [0.39.0] - 2026-11-23
 
 ### Added

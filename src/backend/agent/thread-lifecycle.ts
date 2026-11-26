@@ -11,6 +11,7 @@ import {
   agentProviderDescriptor,
   agentQuickAcknowledgementEnabled,
   COMPUTER_USE_MCP_SERVER_ID,
+  DEFAULT_COMPACT_WINDOW,
   DEFAULT_RESPONSE_STYLE,
   GITHUB_CONNECTOR_MCP_SERVER_ID,
   type McpServerConfig,
@@ -67,6 +68,7 @@ import {
   memoryContext,
   type SectionTeammates,
   slackReplyInstructions,
+  TASK_SCOPE_INSTRUCTIONS,
   type VaultContents,
 } from "./developer-instructions";
 import {
@@ -137,6 +139,14 @@ const CODEX_COMPUTER_USE_PLUGINS_OFF = {
 const CODEX_MCP_STARTUP_GRACE_MS = 10_000;
 
 const CODEX_DIRECT_ONLY_NAMESPACES = [...visibleDynamicTools("codex").map((namespace) => namespace.name), "image_gen"];
+
+/**
+ * GoAhead: Codex compacts the thread inside a turn when its context reaches this many tokens. The
+ * host compaction in `context-compaction.ts` runs only between turns, and a long turn alone filled
+ * 270-350k-token contexts that every model call re-read. Codex reads the key from `ConfigToml`, so
+ * the app-server `config` override applies it.
+ */
+const CODEX_AUTO_COMPACT_TOKEN_LIMIT = DEFAULT_COMPACT_WINDOW;
 
 /**
  * GoAhead: the Codex configuration of a Slack reply context. The reply context only answers Slack in
@@ -899,6 +909,7 @@ export class ThreadLifecycle {
       config?: {
         mcp_servers?: Record<string, CodexMcpServer | CodexDisabledMcpServer>;
         tools: typeof CODEX_TOOLS_CONFIG;
+        model_auto_compact_token_limit: number;
         project_doc_max_bytes: number;
         mcp_optional_startup_grace_ms: number;
         "features.goals": false;
@@ -922,6 +933,7 @@ export class ThreadLifecycle {
       config: {
         ...(Object.keys(mcpServers).length > 0 ? { mcp_servers: mcpServers } : {}),
         tools: CODEX_TOOLS_CONFIG,
+        model_auto_compact_token_limit: CODEX_AUTO_COMPACT_TOKEN_LIMIT,
         ...CODEX_FEATURES_CONFIG,
         ...codexPromptSettings(own.read),
         ...(agentComputerUseEnabled(agent) ? {} : CODEX_COMPUTER_USE_PLUGINS_OFF),
@@ -1005,6 +1017,8 @@ export class ThreadLifecycle {
           approvals,
           [toolRuntimes.binDirectories, toolRuntimes.commandAliases],
           CODEX_MCP_ADAPTER_VERSION,
+          // GoAhead: a resumed Codex session keeps its original instructions, so the scope text counts.
+          TASK_SCOPE_INSTRUCTIONS,
           [
             agent.name,
             agent.title,
@@ -1157,7 +1171,8 @@ export class ThreadLifecycle {
   /**
    * Claude and the ACP clients read the servers themselves, so they are told to leave Computer Use and
    * the servers that the agent's settings turn off (GoAhead) out. Claude also gets the window where it
-   * compacts early (GoAhead); Codex keeps its own compaction.
+   * compacts early (GoAhead), and the client uses `DEFAULT_COMPACT_WINDOW` when there is none; Codex
+   * gets `CODEX_AUTO_COMPACT_TOKEN_LIMIT` in its config.
    */
   #computerUseParam(
     agent: AgentSummary,

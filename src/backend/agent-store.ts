@@ -56,6 +56,7 @@ import {
   isAgentSessionSettingOverrides,
   isAgentSessionSettingResets,
   isAgentTaskLimit,
+  isAgentTurnLimit,
   isAgentUsageLimitReturn,
   isAgentWeeklyTokenBudget,
   isAvatarColor,
@@ -120,6 +121,9 @@ const OPTIONAL_SETTING_FIELDS = [
   "compactWindow",
   "disabledMcpServerIds",
   "weeklyTokenBudget",
+  "turnLimit",
+  "autoModel",
+  "delegatedSmallModel",
 ] as const;
 type StoredAgentBase = Omit<PersistedStoredAgent, "avatarSeed" | "avatarHue"> & DynamicRecord;
 
@@ -229,6 +233,11 @@ export class AgentStore {
 
   get sharedRoot(): string {
     return this.#sharedRoot;
+  }
+
+  /** The current and the legacy parent folders of managed workspaces. Storage counts what is in them. */
+  get workspaceRoots(): readonly string[] {
+    return [this.#agentsRoot, this.#legacyAgentsRoot];
   }
 
   get downloadsRoot(): string {
@@ -409,6 +418,9 @@ export class AgentStore {
       if (source.compactWindow) record.compactWindow = source.compactWindow;
       if (source.disabledMcpServerIds?.length) record.disabledMcpServerIds = [...source.disabledMcpServerIds];
       if (source.weeklyTokenBudget) record.weeklyTokenBudget = source.weeklyTokenBudget;
+      if (source.turnLimit !== undefined) record.turnLimit = source.turnLimit;
+      if (source.autoModel) record.autoModel = true;
+      if (source.delegatedSmallModel === false) record.delegatedSmallModel = false;
       if (source.projectFolders?.length) record.projectFolders = source.projectFolders.map((folder) => ({ ...folder }));
       if (source.taskLimit !== undefined) record.taskLimit = source.taskLimit;
       if (source.backupModels) record.backupModels = structuredClone(source.backupModels);
@@ -803,6 +815,25 @@ export class AgentStore {
       else if (input.weeklyTokenBudget !== undefined) {
         if (!isAgentWeeklyTokenBudget(input.weeklyTokenBudget)) throw new Error("Invalid weekly token budget.");
         next.weeklyTokenBudget = input.weeklyTokenBudget;
+      }
+      if (input.turnLimit === null) delete next.turnLimit;
+      else if (input.turnLimit !== undefined) {
+        if (!isAgentTurnLimit(input.turnLimit)) throw new Error("Invalid turn limit.");
+        next.turnLimit = input.turnLimit;
+      }
+      if (input.autoModel !== undefined) {
+        if (!isBoolean(input.autoModel)) throw new Error("Invalid automatic model value.");
+        // Stored only when on, so an agent that turns it off again reads like one from before it existed.
+        if (input.autoModel) next.autoModel = true;
+        else delete next.autoModel;
+      }
+      if (input.delegatedSmallModel !== undefined) {
+        if (input.delegatedSmallModel !== null && !isBoolean(input.delegatedSmallModel)) {
+          throw new Error("Invalid delegated small model value.");
+        }
+        // Stored only when off: on is the default, so absent and on read the same.
+        if (input.delegatedSmallModel === false) next.delegatedSmallModel = false;
+        else delete next.delegatedSmallModel;
       }
       if (input.taskLimit === null) delete next.taskLimit;
       else if (input.taskLimit !== undefined) {
@@ -2009,6 +2040,9 @@ function isStoredAgent(value: unknown): value is PersistedStoredAgent {
     (record.pendingRuntime === undefined || isAgentPendingRuntime(record.pendingRuntime)) &&
     (record.pinnedAccountId === undefined || isProviderAccountId(record.pinnedAccountId)) &&
     (record.hiddenAt === undefined || isHiddenAt(record.hiddenAt)) &&
+    (record.turnLimit === undefined || isAgentTurnLimit(record.turnLimit)) &&
+    (record.autoModel === undefined || isBoolean(record.autoModel)) &&
+    (record.delegatedSmallModel === undefined || isBoolean(record.delegatedSmallModel)) &&
     isAvatarSeed(record.avatarSeed) &&
     (record.avatarHue === null || isAvatarHue(record.avatarHue)) &&
     (record.avatarColor === undefined || isAvatarColor(record.avatarColor)) &&
@@ -2143,6 +2177,16 @@ function readStoredAgent(value: unknown): ReadStoredAgent | UnreadableStoredAgen
       : reset("avatarColor", undefined);
   const chatColor =
     value.chatColor === undefined || isAvatarColor(value.chatColor) ? value.chatColor : reset("chatColor", undefined);
+  const turnLimit =
+    value.turnLimit === undefined || isAgentTurnLimit(value.turnLimit)
+      ? value.turnLimit
+      : reset("turnLimit", undefined);
+  const autoModel =
+    value.autoModel === undefined || isBoolean(value.autoModel) ? value.autoModel : reset("autoModel", undefined);
+  const delegatedSmallModel =
+    value.delegatedSmallModel === undefined || isBoolean(value.delegatedSmallModel)
+      ? value.delegatedSmallModel
+      : reset("delegatedSmallModel", undefined);
   let marketplaceSource: StoredAgent["marketplaceSource"];
   if (value.marketplaceSource !== undefined) {
     if (isMarketplaceSource(value.marketplaceSource)) {
@@ -2205,6 +2249,9 @@ function readStoredAgent(value: unknown): ReadStoredAgent | UnreadableStoredAgen
     ...(hiddenAt === undefined ? {} : { hiddenAt }),
     ...(sessionSettingOverrides === undefined ? {} : { sessionSettingOverrides }),
     ...(sessionSettingResets === undefined ? {} : { sessionSettingResets }),
+    ...(turnLimit === undefined ? {} : { turnLimit }),
+    ...(autoModel === undefined ? {} : { autoModel }),
+    ...(delegatedSmallModel === undefined ? {} : { delegatedSmallModel }),
     ...(marketplaceSource === undefined ? {} : { marketplaceSource }),
   };
   return { agent, repaired };

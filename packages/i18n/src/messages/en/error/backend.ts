@@ -209,6 +209,7 @@ export const messages = defineMessages("error.backend", {
   "error.backend.routineRunNoSession":
     "GoAhead cannot interrupt the active routine run because its provider session is unavailable.",
   "error.backend.interruptSelf": "An agent cannot interrupt itself.",
+  "error.backend.mobileQaReservationIdRequired": "Supply the reservation id to release the test environment.",
   "error.backend.interruptOtherWork":
     "This agent works on a task that your message did not start. Only the user or the sender of that task can stop it.",
   "error.backend.interruptSharedWork":
@@ -347,9 +348,9 @@ export const messages = defineMessages("error.backend", {
   "error.backend.oauthResponseUnreadable": "The response of the OAuth endpoint {origin} could not be read.",
   "error.backend.mcpOAuthPrivateEndpoint":
     "The OAuth endpoint {origin} is on a private network, but the MCP server is public, so the credentials were not sent.",
-  "error.backend.sidebarSectionLimit": "A server can have up to {limit} sidebar sections.",
-  "error.backend.sectionNameRequired": "Section name is required.",
-  "error.backend.sectionNameTooLong": "Section name is too long.",
+  "error.backend.sidebarSectionLimit": "A server can have up to {limit} sidebar folders.",
+  "error.backend.sectionNameRequired": "Folder name is required.",
+  "error.backend.sectionNameTooLong": "Folder name is too long.",
   "error.backend.sidebarFolderTooDeep": "Folders can go only three levels deep.",
   "error.backend.sidebarFolderMoveInvalid": "This folder cannot move there.",
   "error.backend.libraryFolderName": "A folder name must have 1 to {limit} characters.",
@@ -361,7 +362,7 @@ export const messages = defineMessages("error.backend", {
   "error.backend.libraryFolderMoveInvalid": "This folder cannot go there.",
   "error.backend.workflowFolderLimit": "A server can have up to {limit} workflow folders.",
   "error.backend.workflowFolderPlacementLimit": "Too many workflows are in folders.",
-  "error.backend.sectionNameDuplicate": "Section names must be unique.",
+  "error.backend.sectionNameDuplicate": "Folder names must be unique.",
   "error.backend.directMessageRequired": "Write a message first.",
   "error.backend.directMessageTooLong": "A direct message can have up to {limit} characters.",
   "error.backend.directMessageSelf": "You cannot send a direct message to yourself.",

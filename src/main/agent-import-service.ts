@@ -17,6 +17,7 @@ import {
   type CreateChannelRoutineInput,
   type CreateRoutineInput,
   isChannelDraft,
+  type RoutineSchedule,
 } from "@openbot/contracts/ipc";
 import { sourceText } from "@openbot/i18n/source";
 import { Deferred, Effect, Exit, Result } from "effect";
@@ -44,13 +45,25 @@ import {
   type ImportAgent,
   type ImportChannel,
 } from "./agent-import-manifest";
-import { validTimezone } from "./agent-marketplace-service";
+import { onceRoutine, validTimezone } from "./agent-marketplace-service";
 import { type ArchiveOperationError, archiveCall, archiveFailure, archiveSync } from "./archive-effects";
 import type { LocalSkillLibrary } from "./local-skill-library";
 import type { SkillMarketplaceFailure } from "./skill-marketplace-service";
 import { inspectArchive, SKILL_FRONTMATTER } from "./skill-package";
 
 const SKILL_STAGING = ".openbot/import-skills";
+
+/**
+ * The time zone, active flag and schedule of an imported routine. A one-time routine whose time has
+ * passed comes in off, with its time kept; a repeating one keeps its schedule.
+ */
+function importedRoutine(
+  routine: { active: boolean; timezone: string | null; schedule: RoutineSchedule },
+  fallbackTimezone: string,
+): { active: boolean; timezone: string; schedule: RoutineSchedule } {
+  const timezone = routine.timezone && validTimezone(routine.timezone) ? routine.timezone : fallbackTimezone;
+  return { timezone, ...(onceRoutine(routine, timezone) ?? { active: routine.active, schedule: routine.schedule }) };
+}
 const IMPORTED_FILES = "imported";
 const IMPORT_ARCHIVE: ArchiveLimits = {
   files: AGENT_IMPORT_LIMITS.files,
@@ -630,9 +643,7 @@ export class AgentImportService {
                   channelId: channel.id,
                   name: routine.name,
                   instruction: routine.instruction,
-                  active: routine.active,
-                  timezone: routine.timezone && validTimezone(routine.timezone) ? routine.timezone : context.timezone,
-                  schedule: routine.schedule,
+                  ...importedRoutine(routine, context.timezone),
                 });
               } catch (error) {
                 warnings.push(
@@ -796,9 +807,7 @@ export class AgentImportService {
                     agentId: agent.id,
                     name: routine.name,
                     instruction: routine.instruction,
-                    active: routine.active,
-                    timezone: routine.timezone && validTimezone(routine.timezone) ? routine.timezone : context.timezone,
-                    schedule: routine.schedule,
+                    ...importedRoutine(routine, context.timezone),
                   },
                   { recordConversationEvent: false },
                 );

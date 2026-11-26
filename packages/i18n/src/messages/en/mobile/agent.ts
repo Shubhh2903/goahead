@@ -8,6 +8,7 @@ export const messages = defineMessages("mobile.agent", {
   "mobile.agent.session.reset": "Reset {name}",
   "mobile.agent.session.unavailable": "Saved value {value} is not available. Select another value or reset it.",
   "mobile.agent.session.pending": "Changes apply on the next turn.",
+  "mobile.agent.add.firstGreeting": "Greet me briefly.",
   "mobile.agent.pin.pin": "Pin",
   "mobile.agent.pin.unpin": "Unpin",
   "mobile.agent.pin.pinNamed": "Pin {name}",

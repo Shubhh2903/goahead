@@ -213,7 +213,12 @@ import type {
 import type { ServerAppearance } from "@openbot/contracts/team-protocol/host-appearance-v1";
 import type { LiveVoiceSessionResponse, LiveVoiceStartRequest } from "@openbot/contracts/team-protocol/live-voice-v1";
 import type { QueueEditRequest } from "@openbot/contracts/team-protocol/queue-edit-v1";
-import type { RemoteConnectionFailure, RemoteRecoveryStatus, RemoteTeamDirectoryClient } from "@openbot/team-client";
+import type {
+  ConnectionPath,
+  RemoteConnectionFailure,
+  RemoteRecoveryStatus,
+  RemoteTeamDirectoryClient,
+} from "@openbot/team-client";
 import type { PlanLimits } from "@openbot/team-client/plan-limits";
 import type { RemoteDownloadWatch, RemoteFileUpload, RemoteLargeDownload } from "@openbot/team-client/remote-peer";
 import type {
@@ -265,6 +270,8 @@ export interface MobileServer {
   connectionFailure?: RemoteConnectionFailure | null;
   recoveryStatus?: RemoteRecoveryStatus;
   resuming?: boolean;
+  /** How this phone reaches the server, or why it cannot. Set by the connection; absent until known. */
+  connectionPath?: ConnectionPath;
   address: string | null;
   accent: string;
   publicKey: string;

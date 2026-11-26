@@ -6,6 +6,7 @@ import {
   type AgentModelOption,
   type AgentSummary,
   CHANNEL_RESUME_ITEM_TYPE,
+  type QueueDelivery,
 } from "@openbot/contracts/ipc";
 import { isFixedSourceText, matchingSourceKeys, sourceText } from "@openbot/i18n/source";
 import { createOpenBotLogger } from "@openbot/logging";
@@ -27,6 +28,7 @@ import { channelLane, type DeliveryContext, laneChannelId, type MailboxStore, ME
 import type { MessagingThreads } from "../messaging/messaging-threads";
 import { decodeTurnResponse } from "../protocol";
 import { ProviderSignInError } from "../provider-client-effects";
+import { type AutoModelMessage, chooseTurnModel } from "./auto-model";
 import type { ContextCompaction } from "./context-compaction";
 import type { ConversationRuntime } from "./conversation-runtime";
 import {
@@ -121,6 +123,10 @@ export interface DrainHooks {
    * task. An external conversation's message is asked for too, in front of its framing.
    */
   turnContext(agentId: string, deliveryIds: readonly string[]): string | null;
+  /** Who started the work of a delivery, for the model choice of its turn: see `AgentService`. */
+  deliveryOrigin(delivery: QueueDelivery): AutoModelMessage["sender"];
+  /** A Continue of a stopped turn that ran on the model of its settings: its turn stays on that model. */
+  keepsTurnModel(deliveryId: string): boolean;
 }
 
 export interface TaskLanes {
@@ -156,6 +162,12 @@ function laneOf(key: string): Lane {
 
 const mainLane = (agentId: string): Lane => ({ agentId, taskId: null });
 const messagingLane = (agentId: string): Lane => ({ agentId, taskId: MESSAGING_LANE });
+
+/**
+ * How a turn chose its model: the model of its settings, the small model by "Choose model
+ * automatically", or the small model for a turn that a teammate or a routine started.
+ */
+export type TurnModelChoice = "own" | "small" | "teammate" | "routine";
 
 export interface DrainSchedulerOptions {
   store: AgentStore;
@@ -205,7 +217,7 @@ export class DrainScheduler {
   readonly #busyRetries = new Map<string, SessionRetry>();
   readonly #drainCalls = new Map<string, number>();
   readonly #reportedHolds = new Map<string, string>();
-  readonly #turnModels = new Map<string, { turnId: string; model: string }>();
+  readonly #turnModels = new Map<string, { turnId: string; model: string; choice: TurnModelChoice }>();
   readonly #startingDeliveries = new Map<AgentProvider, number>();
   readonly #scheduledDrains = new Set<string>();
   readonly #settlingTurns = new Set<string>();
@@ -214,6 +226,8 @@ export class DrainScheduler {
   readonly #startRetry = new RoutineStartRetry({
     retry: (deliveryId, agentId, provider) => Effect.runFork(this.#retryRoutineStart(deliveryId, agentId, provider)),
   });
+  /** GoAhead: one timer per agent for the time the hold cap releases its held teammate answers. */
+  readonly #groupHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(options: DrainSchedulerOptions) {
     this.#store = options.store;
@@ -635,6 +649,7 @@ export class DrainScheduler {
   }
 
   forgetAgent(agentId: string): void {
+    this.#clearGroupHoldTimer(agentId);
     const ofAgent = (key: string) => laneOf(key).agentId === agentId;
     for (const keys of [this.#drainingLanes, this.#scheduledDrains, this.#slotWaiters, this.#providerTurnHolds])
       for (const key of [...keys]) if (ofAgent(key)) keys.delete(key);
@@ -648,6 +663,8 @@ export class DrainScheduler {
   }
 
   dispose(): void {
+    for (const timer of this.#groupHoldTimers.values()) clearTimeout(timer);
+    this.#groupHoldTimers.clear();
     this.#startRetry.dispose();
     this.#busyRetries.clear();
     this.#drainingLanes.clear();
@@ -758,11 +775,39 @@ export class DrainScheduler {
           if (this.#requeuedAtLimit.delete(agentId) || this.#mailbox.nextQueued(agentId))
             this.#scheduleLane(mainLane(agentId));
           this.#scheduleSideLanes(agentId);
+          if (taskId === null) this.#armGroupHoldTimer(agentId);
           this.retrySlotWaiters();
         }),
       ),
     );
   }, Effect.uninterruptible);
+
+  /**
+   * GoAhead: a teammate answer that waits for the other requests of its turn waits at most
+   * `REQUEST_GROUP_HOLD_MS`. Nothing else may drain the agent at that time, so a timer does.
+   */
+  #armGroupHoldTimer(agentId: string): void {
+    this.#clearGroupHoldTimer(agentId);
+    if (this.#hooks.isStopping()) return;
+    const releaseAt = this.#mailbox.groupHoldReleaseAt(agentId);
+    if (releaseAt === null) return;
+    const timer = setTimeout(
+      () => {
+        this.#groupHoldTimers.delete(agentId);
+        this.scheduleDrain(agentId);
+      },
+      Math.max(0, releaseAt - Date.now()),
+    );
+    timer.unref?.();
+    this.#groupHoldTimers.set(agentId, timer);
+  }
+
+  #clearGroupHoldTimer(agentId: string): void {
+    const timer = this.#groupHoldTimers.get(agentId);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.#groupHoldTimers.delete(agentId);
+  }
 
   readonly endPlanContinuation = Effect.fn("DrainScheduler.endPlanContinuation")(
     function* (this: DrainScheduler, agentId: string, taskId: string | null) {
@@ -934,12 +979,48 @@ export class DrainScheduler {
         this.#mailboxSync.emitQueue(agent.id);
         return;
       }
+      // With "Choose model automatically" on, a short chat message runs on the provider's small
+      // model, for this turn only, on the same session. A turn whose every message comes from a
+      // teammate or a routine runs there too, unless the agent turned that off. Otherwise this is
+      // `turnSettings` unchanged. A small-model turn is labelled "Answered by" below either way. A
+      // Continue of a stopped turn keeps the choice of that turn.
+      const messages = batch.map(({ delivery: item }) => ({
+        sender: this.#hooks.deliveryOrigin(item),
+        text: item.text,
+        attachmentCount: item.attachments.length,
+      }));
+      const turnModel = chooseTurnModel({
+        agent,
+        settings: turnSettings,
+        relay: channelDelivery || messagingDelivery,
+        messages,
+        models: () => this.#providers.listModels(),
+        catalogListed: this.#providers.hasListedCatalog(agent.provider),
+        servesModel: (model) =>
+          this.#hooks.servesModel(model, providerForAgent(agent), this.#providers.configRevision(client)),
+        lastTurn: this.#conversation.lastTurn(threadId),
+        now: this.#conversation.now(),
+        keepTurnModel: batch.some(({ delivery: item }) => this.#hooks.keepsTurnModel(item.id)),
+      });
+      const turnChoice: TurnModelChoice =
+        turnModel.reason === "delegated-small-model"
+          ? messages.some((message) => message.sender === "routine")
+            ? "routine"
+            : "teammate"
+          : turnModel.smallModelName
+            ? "small"
+            : "own";
+      if (turnModel.smallModelName) requestedModel = turnModel.model;
 
       const agentNames = agentNamesById(this.#store.list());
       const tags = this.#hooks.tagReferences(agent.id, this.#conversation.publicThreadId(agent.id, threadId));
+      // GoAhead: every request of the group the answers belong to, so a teammate of the same fan-out
+      // that ended with no answer is named too.
       const requestIds = new Set(
         batch.flatMap(({ delivery: item }) =>
-          item.sender.kind === "agent" && item.replyToMessageId ? [item.replyToMessageId] : [],
+          item.sender.kind === "agent" && item.replyToMessageId
+            ? this.#mailbox.requestGroupIds(item.replyToMessageId)
+            : [],
         ),
       );
       const stillWorking = new Set(
@@ -1072,6 +1153,8 @@ export class DrainScheduler {
       const startTurn = (providerThreadId: string) =>
         Effect.gen({ self: this }, function* () {
           yield* drainStep(requireServedModel(this.#providers.configRevision(client)));
+          // GoAhead: the turn's `turn/started` counts on the model this turn runs on.
+          this.#conversation.setStartingTurnModel(providerThreadId, turnModel.model);
           return yield* this.#threads
             .requestWithArchivedThreadRecovery(
               agent,
@@ -1079,8 +1162,8 @@ export class DrainScheduler {
               "turn/start",
               {
                 threadId: providerThreadId,
-                model: turnSettings.model,
-                effort: turnSettings.reasoningEffort,
+                model: turnModel.model,
+                effort: turnModel.reasoningEffort,
                 sessionSettings: sessionSettingsOverrides(
                   this.#store.list().find((current) => current.id === agent.id) ?? agent,
                 ),
@@ -1101,7 +1184,10 @@ export class DrainScheduler {
               },
               decodeTurnResponse,
             )
-            .pipe(toDeliveryStartFailed);
+            .pipe(
+              toDeliveryStartFailed,
+              Effect.ensuring(Effect.sync(() => this.#conversation.setStartingTurnModel(providerThreadId, null))),
+            );
         });
       this.#hooks.turnRestarting(delivery.id);
       const firstStart = yield* Effect.result(startTurn(threadId));
@@ -1128,10 +1214,14 @@ export class DrainScheduler {
       }
       if (!this.#hooks.turnEnded(response.turn.id)) snapshot.activeTurnId = response.turn.id;
       confirmedTurnId = response.turn.id;
+      // GoAhead: only an accepted start counts as the thread's last turn: a failed one warmed no cache.
+      this.#conversation.recordAcceptedTurn(threadId, turnModel.model);
+      if (turnModel.smallModelName) this.#conversation.labelAutoModelTurn(response.turn.id, turnModel.smallModelName);
       this.#busyRetries.delete(agent.id);
       this.#turnModels.set(laneKey({ agentId: agent.id, taskId: laneId }), {
         turnId: response.turn.id,
-        model: turnSettings.model,
+        model: turnModel.model,
+        choice: turnChoice,
       });
       for (const item of batch)
         yield* this.#mailbox.markRunning(item.delivery.id, response.turn.id).pipe(toDeliveryStartFailed);
@@ -1504,6 +1594,13 @@ export class DrainScheduler {
   modelForTurn(agentId: string, turnId: string): string | null {
     for (const [key, running] of this.#turnModels)
       if (running.turnId === turnId && laneOf(key).agentId === agentId) return running.model;
+    return null;
+  }
+
+  /** How this turn chose its model, or `null` when this agent runs no turn with that id. */
+  modelChoiceForTurn(agentId: string, turnId: string): TurnModelChoice | null {
+    for (const [key, running] of this.#turnModels)
+      if (running.turnId === turnId && laneOf(key).agentId === agentId) return running.choice;
     return null;
   }
 
