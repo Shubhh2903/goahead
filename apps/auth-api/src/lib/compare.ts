@@ -16,7 +16,7 @@ export const COMPARE_COLLECTION: ContentCollection<"compare"> = {
   feedTitle: "GoAhead comparisons",
   backLabel: "All comparisons",
   moreTitle: "More comparisons",
-  imageEyebrow: "OPENBOT · COMPARE",
+  imageEyebrow: "GOAHEAD · COMPARE",
   articles: publishedFirst([
     {
       slug: "paperclip",

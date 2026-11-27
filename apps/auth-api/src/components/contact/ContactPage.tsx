@@ -10,7 +10,6 @@ import { SiteHeader } from "../landing/SiteHeader";
 import type { ContactPageText } from "./contact-page-text";
 
 const CONTACT_CHANNELS = [
-  { id: "discord", label: "Discord", href: OPENBOT_LINKS.discord },
   { id: "github", label: "GitHub", href: `${OPENBOT_LINKS.repository}/issues/new/choose` },
   { id: "x", label: "X", href: OPENBOT_LINKS.x },
 ] as const;

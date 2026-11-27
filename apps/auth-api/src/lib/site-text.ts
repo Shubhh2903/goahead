@@ -83,10 +83,8 @@ export function siteText(t: AppTranslate) {
     resources: {
       download: { label: download, description: t("sitePage.site.download.description") },
       changelog: { label: changelog, description: t("sitePage.site.changelog.description") },
-      community: { label: t("sitePage.site.community"), description: t("sitePage.site.community.description") },
       documentation: { label: documentation, description: t("sitePage.site.documentation.description") },
       brand: { label: brand, description: t("sitePage.site.brand.description") },
-      status: { label: status, description: t("sitePage.site.status.description") },
     },
     links,
     cta: {

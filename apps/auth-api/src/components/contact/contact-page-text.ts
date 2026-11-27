@@ -15,7 +15,6 @@ export function contactPageText(t: AppTranslate) {
     heading: t("sitePage.contact.heading"),
     intro: t("sitePage.contact.intro"),
     channels: {
-      discord: t("sitePage.contact.channel.discord"),
       github: t("sitePage.contact.channel.github"),
       x: t("sitePage.contact.channel.x"),
     },

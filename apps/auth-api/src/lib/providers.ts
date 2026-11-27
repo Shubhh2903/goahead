@@ -16,7 +16,7 @@ export const PROVIDERS_COLLECTION: ContentCollection<"providers"> = {
   feedTitle: "GoAhead providers",
   backLabel: "All providers",
   moreTitle: "More providers",
-  imageEyebrow: "OPENBOT · PROVIDERS",
+  imageEyebrow: "GOAHEAD · PROVIDERS",
   articles: publishedFirst([
     {
       slug: "claude-code",

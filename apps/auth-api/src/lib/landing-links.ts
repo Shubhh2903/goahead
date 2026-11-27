@@ -27,8 +27,6 @@ export const OPENBOT_DOWNLOAD_PAGE_LINKS = {
 export const OPENBOT_LINKS = {
   contact: "https://x.com/SLilawala",
   x: "https://x.com/SLilawala",
-  discord: "https://discord.openbot.run",
-  status: "https://status.openbot.run",
   download: "#download",
   news: "/news",
   guides: "/guides",

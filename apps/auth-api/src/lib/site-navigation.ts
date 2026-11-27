@@ -73,10 +73,8 @@ export const SITE_NAVIGATION_SECTIONS: readonly SiteNavigationSection[] = [
     links: [
       { id: "download", seed: "Download", icon: "download", to: "/download" },
       { id: "changelog", seed: "Changelog", icon: "refresh", to: CHANGELOG_ROUTE },
-      { id: "community", seed: "Community", icon: "contact", href: OPENBOT_LINKS.discord },
       { id: "documentation", seed: "Documentation", icon: "folder", href: OPENBOT_LINKS.documentation },
       { id: "brand", seed: "Brand", icon: "logo", to: BRAND_ROUTE },
-      { id: "status", seed: "Status", icon: "cloud", href: OPENBOT_LINKS.status },
     ],
   },
 ];

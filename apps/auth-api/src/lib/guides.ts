@@ -16,7 +16,7 @@ export const GUIDES_COLLECTION: ContentCollection<"guides"> = {
   feedTitle: "GoAhead guides",
   backLabel: "All guides",
   moreTitle: "More guides",
-  imageEyebrow: "OPENBOT · GUIDES",
+  imageEyebrow: "GOAHEAD · GUIDES",
   articles: publishedFirst([
     {
       slug: "ai-agent-productivity",
@@ -104,14 +104,6 @@ export const GUIDES_COLLECTION: ContentCollection<"guides"> = {
       description:
         "What is agentic AI? Compare GoAhead agents with a typical chatbot: ongoing tasks, saved files, source checking and handoffs between agents.",
       publishedAt: "2026-10-13",
-      author: NEWS_AUTHOR,
-    },
-    {
-      slug: "openbot-hosted-servers",
-      title: "GoAhead Hosted Servers: Plans, Pricing, and How They Work",
-      description:
-        "Compare GoAhead hosted server plans, pricing, storage, and team limits. Learn how to set one up and when self-hosting may suit you better.",
-      publishedAt: "2026-10-07",
       author: NEWS_AUTHOR,
     },
     {

@@ -236,7 +236,6 @@ const LINK_DESTINATIONS = new Map<string, LandingDestination>([
     [localizedPagePath(locale, "/pricing"), "pricing"] as const,
   ]),
   [OPENBOT_LINKS.x, "x"],
-  [OPENBOT_LINKS.discord, "discord"],
   [OPENBOT_LINKS.repository, "repository"],
   [OPENBOT_LINKS.releases, "releases"],
   [OPENBOT_LINKS.changelog, "releases"],

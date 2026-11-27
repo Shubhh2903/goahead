@@ -1,5 +1,3 @@
-import { Link } from "@tanstack/solid-router";
-
 export function RunTheTeamServerYourself() {
   return (
     <>
@@ -21,11 +19,7 @@ export function RunTheTeamServerYourself() {
       <p>
         The account service is separate from the team server. With self-hosting, the host and your work run on hardware
         you control. With a GoAhead hosted server, GoAhead provides the Linux machine and your team's work stays there
-        instead of on your own computer. The account service still handles memberships and invitations. See our{" "}
-        <Link to="/guides/$slug" params={{ slug: "openbot-hosted-servers" }}>
-          guide to GoAhead hosted servers
-        </Link>{" "}
-        for the plans and setup.
+        instead of on your own computer. The account service still handles memberships and invitations.
       </p>
       <p>
         In other words, the account service handles the connection between people and servers; the team server is where

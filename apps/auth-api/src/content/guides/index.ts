@@ -11,7 +11,6 @@ import { ImportGrokBotAgents } from "./import-grok-bot-agents";
 import { ImportHermesAgents } from "./import-hermes-agents";
 import { InstallOpenBotVPS } from "./install-openbot-vps";
 import { OpenBot101 } from "./openbot-101";
-import { OpenBotHostedServers } from "./openbot-hosted-servers";
 import { OpenBotMarketplace } from "./openbot-marketplace";
 import { WhatAreAIAgents } from "./what-are-ai-agents";
 import { WtfIsOpenBot } from "./wtf-is-openbot";
@@ -30,7 +29,6 @@ export const GUIDE_BODIES: Readonly<Record<string, ArticleBody>> = {
   "agentic-ai-definition": AgenticAIDefinition,
   "what-are-ai-agents": WhatAreAIAgents,
   "openbot-101": OpenBot101,
-  "openbot-hosted-servers": OpenBotHostedServers,
   "openbot-marketplace": OpenBotMarketplace,
   "wtf-is-openbot": WtfIsOpenBot,
 };

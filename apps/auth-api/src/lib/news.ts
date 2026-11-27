@@ -17,7 +17,7 @@ export const NEWS_COLLECTION: ContentCollection<"news"> = {
   feedTitle: "GoAhead news",
   backLabel: "All news",
   moreTitle: "More from GoAhead",
-  imageEyebrow: "OPENBOT · NEWS",
+  imageEyebrow: "GOAHEAD · NEWS",
   articles: publishedFirst([
     {
       slug: "introducing-openbot",
