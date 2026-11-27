@@ -7,6 +7,36 @@ the [root changelog](../../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [1.3.0] - In review
+
+### Added
+
+- Android shows agent work, messages, questions, and approvals in one ongoing notification. A tap
+  opens the chat. Turn it off in Settings > General > Live updates.
+- The Android live update notification has buttons when an agent waits for you: Decline and
+  Approve for an approval, the answers for a short question, and Open. Each button opens GoAhead.
+  Approve shows the command and asks you to confirm it first.
+- Agents can have the new ghost, jellyfish and octopus avatar shapes. Existing agents keep their
+  shape.
+- Show folders inside folders from a computer that has them. Each folder shows its path, such as
+  "Work / Product", and a folder hides while the folder that holds it is collapsed. An older computer
+  shows the flat list as before.
+- Choose more than one answer when an agent asks a question that takes more than one, then tap Done.
+  A typed reply also sends the chosen answers. Lock-screen and notification buttons do not answer
+  such a question: open the chat to answer it.
+- The server list shows how the phone reaches your computer: Direct or Relay. If the phone cannot connect, it shows the reason, such as no STUN server or no relay.
+- Sort the chat list by "Recent activity": each folder shows its most recent chat first. Your
+  manual order does not change. Choose it in "Sort chats" in the chat options menu.
+
+### Changed
+
+- On iPhone and Android, a notification or Live Activity button acts only when the agent still waits
+  for the same request. If the request has changed, the app tells you, and it does not send the
+  answer. On Android, buttons on out-of-date content only open the app.
+- Sections are now called folders.
+- A new agent that you create with a role now receives the role as its instructions and "Greet me
+  briefly." as its first message.
+
 ## [1.2.0] - 2026-10-17
 
 ### Added
