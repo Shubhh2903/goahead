@@ -6,6 +6,14 @@ All notable changes to OpenBot will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.42.1] - 2026-11-27
+
+### Fixed
+
+- Claude agents work again. In v0.42.0, every message to a Claude agent stopped with the error
+  "Tool search_memories is already registered", because two GoAhead tools were listed two times.
+  The HTML preview and HTML page tools were also listed two times; each is now listed once.
+
 ## [0.42.0] - 2026-11-26
 
 ### Changed
