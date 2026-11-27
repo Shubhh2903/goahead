@@ -426,16 +426,6 @@ export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
     shape: readImageToolShape,
   },
   {
-    name: "html_preview",
-    description: `Draw an HTML page out of view and get a screenshot, the content height and the console output. The user does not see it. Use it to check a page before you call html_render, and correct what the screenshot or the console shows. ${VISUAL_PAGE_RULES}`,
-    shape: htmlPreviewToolSchema.shape,
-  },
-  {
-    name: "html_render",
-    description: `Show a finished HTML page (chart, table, diagram, collage, mockup) in this conversation, above your final text reply; call it before you write that reply. The user already sees the page, so the reply must not announce it or restate it: add only what the page does not say. GoAhead fits the frame to the page height. A height lower than the page caps the frame, and the rest scrolls in it. ${VISUAL_PAGE_RULES}`,
-    shape: htmlRenderToolSchema.shape,
-  },
-  {
     name: "list_sections",
     description:
       "List sidebar sections (folders), their stable ids, and assigned agents and channels before choosing message recipients or grouping.",
@@ -657,7 +647,6 @@ export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
       routineId: z.string().min(1).max(INPUT_LIMITS.identifier),
     },
   },
-  ...MEMORY_RECALL_TOOL_DEFINITIONS,
   {
     name: ROUTINE_NO_UPDATE_TOOL,
     description:
