@@ -489,7 +489,7 @@ One-time setup:
    profile: the app, `ExpoWidgetsTarget` (`com.multicodegenius.goahead.mobile.ExpoWidgetsTarget`),
    `OpenBotNotificationService` (`com.multicodegenius.goahead.mobile.NotificationService`, the Notification Service
    Extension) and `expo-sharing-extension` (`com.multicodegenius.goahead.mobile.ShareExtension`, the share extension).
-   Each extension needs the App Group `group.run.openbot.mobile`. When a release adds a
+   Each extension needs the App Group `group.com.multicodegenius.goahead.mobile`. When a release adds a
    target, set up its profile interactively once (`bunx eas-cli credentials -p ios`) before CI builds
    it. Keep the saved push key; do not let EAS make a new one.
 4. Keep the OpenPanel variables in EAS `production` with `Plain text` or `Sensitive` visibility.

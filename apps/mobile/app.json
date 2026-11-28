@@ -143,7 +143,7 @@
         {
           "ios": {
             "enabled": true,
-            "appGroupId": "group.run.openbot.mobile",
+            "appGroupId": "group.com.multicodegenius.goahead.mobile",
             "extensionBundleIdentifier": "com.multicodegenius.goahead.mobile.ShareExtension",
             "activationRule": {
               "supportsText": true,
@@ -245,7 +245,7 @@
         {
           "targetName": "OpenBotNotificationService",
           "bundleIdentifier": "com.multicodegenius.goahead.mobile.NotificationService",
-          "groupIdentifier": "group.run.openbot.mobile"
+          "groupIdentifier": "group.com.multicodegenius.goahead.mobile"
         }
       ],
       "./plugins/with-shortcuts",

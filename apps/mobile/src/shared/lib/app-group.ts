@@ -1,7 +1,7 @@
 import { isDynamicRecord } from "@openbot/contracts/runtime-values";
 import { Directory, File, Paths } from "expo-file-system";
 
-const APP_GROUP = "group.run.openbot.mobile";
+const APP_GROUP = "group.com.multicodegenius.goahead.mobile";
 
 export function appGroupFile(name: string): File | null {
   const container = Paths.appleSharedContainers[APP_GROUP];

@@ -37,7 +37,7 @@ struct ShortcutDirectory: Decodable {
   /// The app's accent color, as `#rrggbb`.
   let accent: String
 
-  private static let appGroup = "group.run.openbot.mobile"
+  private static let appGroup = "group.com.multicodegenius.goahead.mobile"
   private static let directoryFile = "shortcuts.json"
   /// `src/features/share/model/share-extension.ts` writes this file and this folder.
   private static let shareDirectoryFile = "share-extension.json"
